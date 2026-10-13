@@ -5,6 +5,7 @@ import {
   BOOSTED_MODEL_KIND,
   CURATOR_MODEL_KIND,
   NARRATIVE_BLEND_MODEL_KIND,
+  NARRATIVE_LED_MODEL_KIND,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
   TOP_SLICE_MODEL_KIND,
@@ -65,6 +66,7 @@ const LEARNER_KINDS: readonly string[] = [
   BOOSTED_MODEL_KIND,
   TWO_STAGE_MODEL_KIND,
   NARRATIVE_BLEND_MODEL_KIND,
+  NARRATIVE_LED_MODEL_KIND,
 ];
 
 function isLearnerParams(p: ContestantParams | null): p is TrainedCuratorParams {
@@ -156,6 +158,16 @@ export function recipeFacts(params: ContestantParams, metrics: Partial<StoredEva
         { label: "Shape", value: "Two steps: the market's read, then TokenSage's on top" },
         ...familyFacts("Market step: ", params.market),
         ...familyFacts("Narrative step: ", params.blend),
+      );
+      break;
+    case NARRATIVE_LED_MODEL_KIND:
+      facts.push(
+        {
+          label: "Shape",
+          value: `Two models blended at fixed weights: ${Math.round(params.storyWeight * 100)}% the story, ${Math.round((1 - params.storyWeight) * 100)}% a safety check`,
+        },
+        ...familyFacts("Story: ", params.story),
+        ...familyFacts("Safety check: ", params.safety),
       );
       break;
     case STACKED_MODEL_KIND:

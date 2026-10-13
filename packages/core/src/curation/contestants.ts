@@ -10,6 +10,7 @@ import {
   type CandidateFeatureName,
 } from "./features.js";
 import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
+import { NARRATIVE_STORY_WEIGHT } from "./narrativeLed.js";
 import type { CuratorLearner } from "./trainer.js";
 
 /**
@@ -45,8 +46,9 @@ import type { CuratorLearner } from "./trainer.js";
  *    every row plus the second looks. Not a "learner": the combiners don't stack on it, it
  *    doesn't breed, and the other seats never train on its second-look rows. Lives behind
  *    TOKENSAGE_ENABLED. Two seats hold the role: Narrative (the narrative and the safety readings,
- *    no price, volume or age; user decision 2026-10-10) and Narrative Blend (the market and the
- *    narrative in two steps).
+ *    no price, volume or age, user decision 2026-10-10; since 2026-10-13 a story model and a
+ *    safety model blended at a fixed 70/30, narrativeLed.ts) and Narrative Blend (the market and
+ *    the narrative in two steps).
  *
  * Ids are stable storage keys (CuratedAlert.model, CuratorModel.contestant, User.curatedModel):
  * never rename one; retire it and add a new id instead.
@@ -70,6 +72,11 @@ export interface CuratorRecipe {
   twoStage?: boolean;
   /** Two-step narrative shape (see NarrativeBlendCuratorParams in trainer.ts): narrative seats only. */
   narrativeBlend?: boolean;
+  /**
+   * Story-led narrative shape (see NarrativeLedCuratorParams in narrativeLed.ts), gbdt only: the
+   * story stage gets this fixed share of the decision and the safety readings the rest.
+   */
+  narrativeLed?: number;
   /**
    * The seat's own cutoff anchor, as a share of decision moments (PrecisionTargets.targetShare,
    * moved within HIGH_PRECISION_SHARE_BAND by hit rate): its exam and its cutoff use it in place
@@ -156,8 +163,10 @@ export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = learnerSubse
 ]);
 
 /**
- * The Narrative seat's inputs: every TokenSage input the learners read, plus the safety readings
- * (SAFETY_FEATURES) and no other market data. User decision 2026-10-10: the seat decides on the
+ * The Narrative seat's inputs: every TokenSage input the learners read, whether the coin links an X
+ * account and a website, plus the safety readings (SAFETY_FEATURES) and no other market data. The
+ * seat's model (narrativeLed.ts) splits them: the safety readings feed its safety check, the rest
+ * its story stage, which carries NARRATIVE_STORY_WEIGHT of the decision (user ask 2026-10-13). User decision 2026-10-10: the seat decides on the
  * narrative, with market data only as safety checks (Narrative Blend keeps its market stage).
  * Before, it also read age, volume acceleration, 10-minute holder growth and the 15-minute price
  * path, and shuffling those four moved 68% of its top-10% picks: most of its edge was the
@@ -169,6 +178,7 @@ export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = learnerSubse
 export const NARRATIVE_SEAT_FEATURES: readonly CandidateFeatureName[] = [
   ...SAFETY_FEATURES,
   ...LEARNER_FEATURE_NAMES.filter((name) => name.startsWith("ns")),
+  ...learnerSubset(["hasTwitter", "hasWebsite"]),
 ];
 
 /**
@@ -412,11 +422,11 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: NARRATIVE_CONTESTANT,
     name: "Narrative",
     description:
-      "Gradient-boosted trees trained on deep-read coins that decide only once TokenSage's deep read of the coin is in, reading every TokenSage input plus the safety readings (holder concentration, fresh, empty and sniper wallets, launch bundles, the dev's buy, RugCheck risk) and no price, volume or age",
+      "Two boosted-tree models trained on deep-read coins, blended at fixed weights: 70% the story (TokenSage's theme, lineage, trend match, X post, logo and creator fee, and the coin's socials) and 30% a safety check (holder concentration, fresh, empty and sniper wallets, launch bundles, the dev's buy, RugCheck risk); no price, volume or age. Decides only once TokenSage's deep read is in",
     summary:
-      "Waits for the deep read of what the coin is about (its theme, its X post, copycat signs), then decides from that, with the market used only as a safety check.",
+      "Waits for the deep read of what the coin is about (its theme, its X post, copycat signs), then decides mostly from that, with a safety check holding 30% of the say.",
     role: "narrative",
-    recipe: { learner: "gbdt", featureNames: NARRATIVE_SEAT_FEATURES },
+    recipe: { learner: "gbdt", featureNames: NARRATIVE_SEAT_FEATURES, narrativeLed: NARRATIVE_STORY_WEIGHT },
   },
   {
     // The Narrative seat's two-step sibling (user decision 2026-10-08): the market and the

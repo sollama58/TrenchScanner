@@ -55,13 +55,19 @@ describe("contestant roster", () => {
     expect(CONTESTANTS.find((c) => c.id === "narrative")?.role).toBe("narrative");
   });
 
-  it("points the Narrative model at every TokenSage input and only the safety readings", () => {
+  it("points the Narrative model at every TokenSage input, the socials and the safety readings", () => {
     const recipe = CONTESTANTS.find((c) => c.id === "narrative")?.recipe;
     expect(recipe?.featureNames).toBe(NARRATIVE_SEAT_FEATURES);
     const tokenSage = LEARNER_FEATURE_NAMES.filter((f) => f.startsWith("ns"));
     expect(tokenSage.length).toBeGreaterThan(30);
     expect(NARRATIVE_SEAT_FEATURES.filter((f) => f.startsWith("ns"))).toEqual(tokenSage);
-    expect(NARRATIVE_SEAT_FEATURES.filter((f) => !f.startsWith("ns"))).toEqual(SAFETY_FEATURES);
+    expect(NARRATIVE_SEAT_FEATURES.filter((f) => !f.startsWith("ns"))).toEqual([
+      ...SAFETY_FEATURES,
+      "hasTwitter",
+      "hasWebsite",
+    ]);
+    // The story carries a fixed 70% of the decision, the safety readings the rest.
+    expect(recipe?.narrativeLed).toBe(0.7);
     // No price, volume or age.
     for (const market of ["ageMinutes", "volumeAccel", "holderGrowth10mPct", "pathRet15mPct", "mcapUsd"]) {
       expect(NARRATIVE_SEAT_FEATURES).not.toContain(market);

@@ -4,6 +4,7 @@ import {
   CURATOR_MODEL_KIND,
   TWO_STAGE_MODEL_KIND,
   NARRATIVE_BLEND_MODEL_KIND,
+  isNarrativeLedParams,
   FRIENDLY_FEATURE_LABELS,
   HEURISTIC_CURATOR_SOURCE,
   contestantSpec,
@@ -59,7 +60,7 @@ export interface FeatureImportance {
  * descriptive, not causal.
  */
 export function featureImportance(
-  params: LogisticCuratorParams | BoostedCuratorParams,
+  params: LogisticCuratorParams | BoostedCuratorParams | Omit<BoostedCuratorParams, "threshold">,
   limit = TOP_FEATURES,
 ): FeatureImportance[] {
   const names = params.featureNames;
@@ -246,9 +247,41 @@ type Importance = {
 const importanceCache = new Map<string, Importance | null>();
 const IMPORTANCE_CACHE_MAX = 16;
 
+/**
+ * The Narrative seat's model (narrativeLed.ts) as one importance list: each stage's shares scaled
+ * by its fixed weight in the blend, so the story's inputs add up to its weight.
+ */
+export function narrativeLedImportance(
+  params: unknown,
+  limit = TOP_FEATURES,
+): { threshold: number; features: FeatureImportance[] } | null {
+  if (!isNarrativeLedParams(params)) return null;
+  const w = params.storyWeight;
+  const merged = [
+    ...featureImportance(params.story, Infinity).map((f) => ({ ...f, sharePct: f.sharePct * w })),
+    ...featureImportance(params.safety, Infinity).map((f) => ({ ...f, sharePct: f.sharePct * (1 - w) })),
+  ];
+  return {
+    threshold: params.threshold,
+    features: merged
+      .sort((a, b) => b.sharePct - a.sharePct)
+      .slice(0, limit)
+      .map((f) => ({ ...f, sharePct: Math.round(f.sharePct * 10) / 10 })),
+  };
+}
+
 async function importanceFor(id: string): Promise<Importance | null> {
   if (importanceCache.has(id)) return importanceCache.get(id) ?? null;
   const row = await prisma.curatorModel.findUnique({ where: { id }, select: { params: true } });
+  const led = row ? narrativeLedImportance(row.params) : null;
+  if (led) {
+    const importance: Importance = { modelId: id, learner: "gbdt", ...led };
+    if (importanceCache.size >= IMPORTANCE_CACHE_MAX) {
+      importanceCache.delete(importanceCache.keys().next().value as string);
+    }
+    importanceCache.set(id, importance);
+    return importance;
+  }
   const params = row ? explainable(row.params) : null;
   const threshold = row ? (row.params as { threshold?: unknown } | null)?.threshold : undefined;
   const importance: Importance | null = params
