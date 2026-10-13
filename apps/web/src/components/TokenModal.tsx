@@ -8,12 +8,12 @@ import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, useScoreWeights } from "../scoreWeights";
 import {
-  barWidthMs,
-  groupBars,
+  linePoints,
   MARKER_KINDS,
-  type Bar,
+  pointWidthMs,
   type MarkerKind,
   type MarkerTrade,
+  type Point,
 } from "../priceChart";
 import {
   cardReadings,
@@ -27,7 +27,18 @@ import {
   WalletStat,
 } from "./AlertCard";
 import { MARKER_LABEL, PriceChart, type ChartEvent } from "./PriceChart";
-import { categoryText, LINEAGE, LineageText, words, type SageView } from "./SageView";
+import {
+  categoryText,
+  CrowdChart,
+  LINEAGE,
+  LineageText,
+  pct0,
+  TREND_SOURCE,
+  words,
+  type SageRead,
+  type SageView,
+} from "./SageView";
+import { WeekChart } from "./WeekChart";
 import { Skeleton } from "./Charts";
 import {
   BrainIcon,
@@ -44,7 +55,8 @@ import {
 /** Mirrors apps/api/src/routes/tokens.ts TokenChart. */
 interface TokenChart {
   mint: string;
-  candles: Bar[] | null;
+  /** Pump.fun's minute candles as market cap (apps/api/src/tokenChart.ts McapCandle). */
+  candles: { t: number; o: number; h: number; l: number; c: number }[] | null;
   marketCap: { t: number; usd: number }[];
   /** Absent from an API older than this page. */
   tape?: { status: string; anchorAt: number; windowEnd: number; readAt: number } | null;
@@ -80,8 +92,8 @@ const RANGES: { id: Range; label: string }[] = [
 ];
 /** How much of the run-up the "From alert" view shows before the alert. */
 const LEAD_IN_MS = 10 * 60_000;
-/** Bars drawn at most: a bar a few pixels wide on a phone, wider on a desktop. */
-const MAX_BARS = 90;
+/** Points drawn at most: enough for a smooth line, few enough that each one stays hoverable. */
+const MAX_POINTS = 200;
 const CHART_POLL_MS = 30_000;
 
 const LINKS = [
@@ -241,7 +253,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         <CallCard card={card} />
       </div>
 
-      <SageCard mint={mint} />
+      <SageSection mint={mint} />
 
       <footer className="tm-foot">
         <button className="mint" onClick={copy} title="Copy mint address">
@@ -310,12 +322,12 @@ function ChartCard({
 
   const view = useMemo(() => {
     if (!data) return null;
-    const candles = data.candles;
-    const source: Bar[] =
-      candles && candles.length > 0
-        ? candles
-        : data.marketCap.map((p) => ({ t: p.t, o: p.usd, h: p.usd, l: p.usd, c: p.usd }));
-    if (source.length < 2) return { bars: [] as Bar[], mode: "line" as const, step: undefined };
+    const fromCandles = !!data.candles && data.candles.length > 0;
+    // The line runs through each minute's close, else through the scan's readings.
+    const source: Point[] = fromCandles
+      ? data.candles!.map((c) => ({ t: c.t, v: c.c }))
+      : data.marketCap.map((p) => ({ t: p.t, v: p.usd }));
+    if (source.length < 2) return { points: [] as Point[], fromCandles, step: undefined };
     const first = source[0]!.t;
     const last = source[source.length - 1]!.t;
     const from =
@@ -327,11 +339,8 @@ function ChartCard({
             alertAt - LEAD_IN_MS > first
             ? alertAt - LEAD_IN_MS
             : first;
-    if (!candles || candles.length === 0) {
-      return { bars: source.filter((b) => b.t >= from), mode: "line" as const, step: undefined };
-    }
-    const step = barWidthMs(last - Math.max(from, first) + 60_000, MAX_BARS);
-    return { bars: groupBars(candles, from, step), mode: "candles" as const, step };
+    const step = pointWidthMs(last - Math.max(from, first) + 60_000, MAX_POINTS);
+    return { points: linePoints(source, from, step), fromCandles, step: fromCandles ? step : undefined };
   }, [data, range, alertAt]);
 
   const flagged = useMemo(() => data?.wallets ?? [], [data]);
@@ -359,7 +368,7 @@ function ChartCard({
       <section className="sage-card tm-chart">
         <h4>
           <ChartIcon size={14} /> Market cap
-          {view && view.mode === "line" && view.bars.length > 1 && (
+          {view && !view.fromCandles && view.points.length > 1 && (
             <span className="sage-tag" title="Pump.fun had no candles for this coin; these are our scans">
               Scan readings
             </span>
@@ -387,20 +396,19 @@ function ChartCard({
         {error && !data && !locked && (
           <p className="error small">Couldn&apos;t load the chart: {error.message}</p>
         )}
-        {view && view.bars.length < 2 && (
+        {view && view.points.length < 2 && (
           <p className="muted small tm-chart-empty">
             No trades to chart yet{range !== "all" ? " in this range" : ""}.
           </p>
         )}
-        {view && view.bars.length >= 2 && (
+        {view && view.points.length >= 2 && (
           <PriceChart
-            bars={view.bars}
+            points={view.points}
             stepMs={view.step}
-            mode={view.mode}
             events={events}
             markers={markers}
             height={height}
-            ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.bars[0]!.o)} to ${usd(view.bars[view.bars.length - 1]!.c)}`}
+            ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
           />
         )}
         {data && (
@@ -717,13 +725,32 @@ function CallCard({ card }: { card: Card }) {
   );
 }
 
-/** TokenSage's read in brief: the referent, theme, copy mark, summary, flags and X link. */
-function SageCard({ mint }: { mint: string }) {
+/**
+ * TokenSage's part of the modal: its read in brief, then the coin's lineage and crowd, what it is
+ * trending on, and how calls on coins like it (its narrative) did this week.
+ */
+function SageSection({ mint }: { mint: string }) {
   const { data, error } = usePolling<SageView>(`/tokens/${encodeURIComponent(mint)}/sage`, 120_000);
+  const r = data?.read ?? null;
+  return (
+    <>
+      <SageCard mint={mint} data={data} error={error} />
+      {r && (
+        <div className="tm-grid">
+          <LineageCard read={r} />
+          <TrendCard read={r} />
+        </div>
+      )}
+      {data?.track && <WeekChart track={data.track} />}
+    </>
+  );
+}
+
+/** TokenSage's read in brief: the referent, theme, copy mark, summary, flags and X link. */
+function SageCard({ mint, data, error }: { mint: string; data: SageView | null; error: Error | null }) {
   const r = data?.read ?? null;
   const locked = error && !data ? lockedText(error, "TokenSage read") : null;
   const ref = r?.referent ?? null;
-  const lineage = r?.lineage ? LINEAGE[r.lineage.kind] : undefined;
   const copyMark = r?.copyMark ? (LINEAGE[r.copyMark] ?? LINEAGE.copy) : undefined;
   const flags = r ? [...r.flags].sort((a, b) => rank(a.severity) - rank(b.severity)).slice(0, 5) : [];
   return (
@@ -733,7 +760,6 @@ function SageCard({ mint }: { mint: string }) {
           <SageIcon size={14} /> TokenSage
         </span>
         {r && <span className="sage-tag">{r.depth === "full" ? "Deep read" : "Quick read"}</span>}
-        {lineage && <span className={`sage-tag tone-${lineage.tone}`}>{lineage.text}</span>}
         <button type="button" className="tm-link" onClick={() => openSage(mint)}>
           Full read
         </button>
@@ -774,7 +800,6 @@ function SageCard({ mint }: { mint: string }) {
             </div>
           )}
           {r.summary && <blockquote className="sage-summary">{r.summary}</blockquote>}
-          <LineageText read={r} />
           {flags.length > 0 && (
             <ul className="sage-flags">
               {flags.map((f) => (
@@ -801,6 +826,81 @@ function SageCard({ mint }: { mint: string }) {
             </p>
           )}
         </>
+      )}
+    </section>
+  );
+}
+
+/** Where the coin comes from: what it copies or builds on, and how crowded its name and theme are. */
+function LineageCard({ read: r }: { read: SageRead }) {
+  const l = r.lineage;
+  const lineage = l ? LINEAGE[l.kind] : undefined;
+  const of = l?.ofMint && l.kind !== "original" && l.kind !== "unknown" ? l.ofMint : null;
+  const ofLabel = l?.ofTicker ? `$${l.ofTicker}` : (l?.ofName ?? "the original");
+  const has = !!l || !!r.referent?.wave || r.copyOf.length > 0;
+  return (
+    <section className="sage-card tm-lineage">
+      <h4>
+        Lineage
+        {lineage && <span className={`sage-tag tone-${lineage.tone}`}>{lineage.text}</span>}
+      </h4>
+      {has ? (
+        <>
+          <LineageText read={r} />
+          <CrowdChart read={r} />
+          {of && (
+            <button type="button" className="tm-link tm-of" onClick={() => openSage(of)}>
+              TokenSage on {ofLabel}
+            </button>
+          )}
+        </>
+      ) : (
+        <p className="small muted">TokenSage didn&apos;t tie it to any earlier coin or crowd.</p>
+      )}
+    </section>
+  );
+}
+
+/** What the coin is riding: the trending terms TokenSage matched it to, where, and how high. */
+function TrendCard({ read: r }: { read: SageRead }) {
+  const t = r.trend;
+  const terms = t?.terms.slice(0, 6) ?? [];
+  return (
+    <section className="sage-card tm-trend">
+      <h4>
+        Trending
+        {t?.score != null && (t.matched || terms.length > 0) && (
+          <span className={`sage-tag ${t.score >= 0.6 ? "tone-good" : "tone-neutral"}`}>
+            strength {pct0(t.score)}
+          </span>
+        )}
+      </h4>
+      {terms.length > 0 ? (
+        <ul className="tm-terms">
+          {terms.map((x, i) => (
+            <li key={`${x.term}-${x.source}-${i}`}>
+              <span className="tm-term-head">
+                <strong>{x.term}</strong>
+                <span className="tm-term-src">
+                  {TREND_SOURCE[x.source] ?? words(x.source)}
+                  {x.rank !== null && <span className="num"> #{x.rank}</span>}
+                </span>
+              </span>
+              {x.score !== null && (
+                <span className="tm-term-bar" aria-hidden="true">
+                  <span style={{ width: `${Math.max(4, Math.min(1, x.score) * 100)}%` }} />
+                </span>
+              )}
+              {x.headline && <span className="tm-term-line muted small">{x.headline}</span>}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="small muted">
+          {t === null
+            ? "Trends weren't checked on this read."
+            : "Not trending: nothing it refers to is up on Wikipedia, Google Trends, the news or X right now."}
+        </p>
       )}
     </section>
   );

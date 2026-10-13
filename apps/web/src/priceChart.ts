@@ -1,47 +1,39 @@
 /**
  * The token modal's price chart, the parts that are plain arithmetic (so they are unit-tested in
- * priceChart.test.ts): grouping minute candles into bars, and the market-cap axis.
+ * priceChart.test.ts): thinning minute candles into a line's points, and the market-cap axis.
  */
 
-/** One bar, priced as market cap. Mirrors apps/api/src/tokenChart.ts McapCandle. */
-export interface Bar {
-  /** The bar's start, epoch ms. */
-  t: number;
-  o: number;
-  h: number;
-  l: number;
-  c: number;
-}
-
 const MINUTE = 60_000;
-/** Bar widths the chart picks from, in minutes. */
-const BAR_MINUTES = [1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 480, 1440];
+/** Point spacings the chart picks from, in minutes. */
+const POINT_MINUTES = [1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 480, 1440];
 
-/** The narrowest bar width that fits `spanMs` into at most `maxBars` bars, in ms. */
-export function barWidthMs(spanMs: number, maxBars: number): number {
-  const need = spanMs / Math.max(1, maxBars);
-  const m = BAR_MINUTES.find((b) => b * MINUTE >= need) ?? BAR_MINUTES[BAR_MINUTES.length - 1]!;
+/** The narrowest spacing that fits `spanMs` into at most `maxPoints` points, in ms. */
+export function pointWidthMs(spanMs: number, maxPoints: number): number {
+  const need = spanMs / Math.max(1, maxPoints);
+  const m = POINT_MINUTES.find((b) => b * MINUTE >= need) ?? POINT_MINUTES[POINT_MINUTES.length - 1]!;
   return m * MINUTE;
 }
 
+/** One point of the line: a market cap at a moment. */
+export interface Point {
+  t: number;
+  v: number;
+}
+
 /**
- * The candles from `fromMs` on, grouped into bars `widthMs` wide (aligned to the epoch, so a bar
- * keeps its place as new minutes arrive). A bar opens at its first candle's open and closes at its
- * last candle's close; minutes with no trade simply have no candle, as on Pump.fun's own chart.
+ * The closes from `fromMs` on, thinned to one point per `widthMs` (aligned to the epoch, so a point
+ * keeps its place as new minutes arrive): each point is its slot's last close, at that close's
+ * time, so the line ends exactly on the latest reading.
  */
-export function groupBars(candles: readonly Bar[], fromMs: number, widthMs: number): Bar[] {
-  const out: Bar[] = [];
-  for (const c of candles) {
-    if (c.t < fromMs) continue;
-    const t = Math.floor(c.t / widthMs) * widthMs;
-    const last = out[out.length - 1];
-    if (last && last.t === t) {
-      last.h = Math.max(last.h, c.h);
-      last.l = Math.min(last.l, c.l);
-      last.c = c.c;
-    } else {
-      out.push({ t, o: c.o, h: c.h, l: c.l, c: c.c });
-    }
+export function linePoints(closes: readonly Point[], fromMs: number, widthMs: number): Point[] {
+  const out: Point[] = [];
+  let slot = Number.NaN;
+  for (const p of closes) {
+    if (p.t < fromMs) continue;
+    const s = Math.floor(p.t / widthMs);
+    if (s === slot) out[out.length - 1] = { t: p.t, v: p.v };
+    else out.push({ t: p.t, v: p.v });
+    slot = s;
   }
   return out;
 }
@@ -134,9 +126,10 @@ export interface MarkerTrade {
   kind: MarkerKind;
 }
 
-/** The marked trades of one kind and side inside one bar, drawn as one marker. */
+/** The marked trades of one kind and side at one point of the line, drawn as one marker. */
 export interface MarkerGroup {
-  bar: number;
+  /** The point's index. */
+  at: number;
   kind: MarkerKind;
   side: 1 | -1;
   trades: MarkerTrade[];
@@ -146,33 +139,26 @@ export interface MarkerGroup {
 }
 
 /**
- * Exported for tests. The trades grouped onto the bars they fall in: per bar, kind and side, so a
- * busy bot shows one marker a bar rather than a smear. Candles own [t, t + step); a line's
- * readings own the trades nearest them, within a step and a half. Trades off the bars are left out.
+ * Exported for tests. The trades grouped onto the line's points: each trade goes to the nearest
+ * point within a step and a half, then per point, kind and side, so a busy bot shows one marker a
+ * point rather than a smear. Trades off the line are left out.
  */
 export function groupMarkers(
-  bars: readonly Bar[],
+  points: readonly Point[],
   stepMs: number,
-  mode: "candles" | "line",
   trades: readonly MarkerTrade[],
 ): MarkerGroup[] {
-  if (bars.length === 0) return [];
+  if (points.length === 0) return [];
   const groups = new Map<string, MarkerGroup & { seen: Set<string> }>();
   for (const tr of trades) {
-    const i = barAt(bars, tr.t);
-    let bar = -1;
-    if (mode === "candles") {
-      if (i >= 0 && tr.t < bars[i]!.t + stepMs) bar = i;
-    } else {
-      const near = [i, i + 1].filter((j) => j >= 0 && j < bars.length);
-      const best = near.sort((a, b) => Math.abs(bars[a]!.t - tr.t) - Math.abs(bars[b]!.t - tr.t))[0];
-      if (best !== undefined && Math.abs(bars[best]!.t - tr.t) <= stepMs * 1.5) bar = best;
-    }
-    if (bar < 0) continue;
-    const key = `${bar}|${tr.kind}|${tr.side}`;
+    const i = pointAt(points, tr.t);
+    const near = [i, i + 1].filter((j) => j >= 0 && j < points.length);
+    const at = near.sort((a, b) => Math.abs(points[a]!.t - tr.t) - Math.abs(points[b]!.t - tr.t))[0];
+    if (at === undefined || Math.abs(points[at]!.t - tr.t) > stepMs * 1.5) continue;
+    const key = `${at}|${tr.kind}|${tr.side}`;
     let g = groups.get(key);
     if (!g) {
-      g = { bar, kind: tr.kind, side: tr.side, trades: [], sol: 0, wallets: 0, seen: new Set() };
+      g = { at, kind: tr.kind, side: tr.side, trades: [], sol: 0, wallets: 0, seen: new Set() };
       groups.set(key, g);
     }
     g.trades.push(tr);
@@ -182,17 +168,17 @@ export function groupMarkers(
   }
   return [...groups.values()]
     .map(({ seen: _seen, ...g }) => g)
-    .sort((a, b) => a.bar - b.bar || MARKER_KINDS.indexOf(a.kind) - MARKER_KINDS.indexOf(b.kind));
+    .sort((a, b) => a.at - b.at || MARKER_KINDS.indexOf(a.kind) - MARKER_KINDS.indexOf(b.kind));
 }
 
-/** The last bar starting at or before `t`, or -1. */
-function barAt(bars: readonly Bar[], t: number): number {
+/** The last point at or before `t`, or -1. */
+function pointAt(points: readonly Point[], t: number): number {
   let lo = 0;
-  let hi = bars.length - 1;
+  let hi = points.length - 1;
   let found = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (bars[mid]!.t <= t) {
+    if (points[mid]!.t <= t) {
       found = mid;
       lo = mid + 1;
     } else {

@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { change, shortAddress, signedPct, usd } from "../format";
 import {
   groupMarkers,
   mcapAxis,
   timeLabel,
-  type Bar,
   type MarkerGroup,
   type MarkerTrade,
+  type Point,
 } from "../priceChart";
 
 /** A moment marked on the time axis: an alert or a model's call. */
@@ -17,7 +17,7 @@ export interface ChartEvent {
   mcap?: number | null;
 }
 
-const PAD = { l: 8, r: 58, t: 22, b: 24 };
+const PAD = { l: 8, r: 62, t: 24, b: 24 };
 
 /** What each marker kind is called in its readout. */
 export const MARKER_LABEL: Record<MarkerTrade["kind"], string> = {
@@ -26,12 +26,12 @@ export const MARKER_LABEL: Record<MarkerTrade["kind"], string> = {
   linked: "Linked wallet",
 };
 
-/** A marker's size: bigger for more SOL, within a few pixels so a whale doesn't hide the candles. */
+/** A marker's size: bigger for more SOL, within a few pixels so a whale doesn't hide the line. */
 function markerSize(sol: number): number {
   return 4.5 + Math.min(4, Math.sqrt(Math.max(0, sol)) * 1.5);
 }
 
-/** A triangle pointing up (a buy, under the bar) or down (a sell, over it), centred on (x, y). */
+/** A triangle pointing up (a buy, under the line) or down (a sell, over it), centred on (x, y). */
 function triangle(x: number, y: number, r: number, up: boolean): string {
   const h = r * 1.15;
   return up
@@ -40,30 +40,30 @@ function triangle(x: number, y: number, r: number, up: boolean): string {
 }
 
 /**
- * The token modal's market-cap chart: candles when Pump.fun sent them, else a line through the
- * scan's readings. Sized to its box in real pixels (a ResizeObserver), so text and candle edges
- * stay crisp at any width. Hover (or drag on a touch screen) reads one bar out.
+ * The token modal's market-cap chart: one line, green above its baseline and red below it, with
+ * the area between them shaded. The baseline is the alert's market cap while the alert is in view,
+ * else where the view starts, so the colour always answers "up or down since then?". Sized to its
+ * box in real pixels (a ResizeObserver), so text stays crisp at any width. Hover (or drag on a touch
+ * screen) reads one point out.
  */
 export function PriceChart({
-  bars,
+  points,
   stepMs,
-  mode,
   events,
   markers = [],
   height,
   ariaLabel,
 }: {
-  bars: Bar[];
-  /** Each bar's width (bars can be missing where nothing traded); a line estimates its own. */
+  points: Point[];
+  /** The spacing the points were thinned to; scan readings, which come unevenly, estimate their own. */
   stepMs?: number;
-  /** "candles" draws each bar; "line" joins the closes (scan readings have no open/high/low). */
-  mode: "candles" | "line";
   events: ChartEvent[];
-  /** Flagged wallets' trades, drawn as triangles: buys under the bar, sells over it. */
+  /** Flagged wallets' trades, drawn as triangles: buys under the line, sells over it. */
   markers?: MarkerTrade[];
   height: number;
   ariaLabel: string;
 }) {
+  const id = useId().replace(/:/g, "");
   const boxRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
   const [hover, setHover] = useState<number | null>(null);
@@ -80,74 +80,78 @@ export function PriceChart({
   }, []);
 
   const geo = useMemo(() => {
-    if (bars.length === 0) return null;
-    const t0 = bars[0]!.t;
-    const lastT = bars[bars.length - 1]!.t;
-    // One bar's width past the last start, so the newest bar isn't drawn on the edge.
-    const step = stepMs ?? (bars.length > 1 ? Math.max(1, (lastT - t0) / (bars.length - 1)) : 60_000);
-    const t1 = lastT + step;
+    if (points.length < 2) return null;
+    const t0 = points[0]!.t;
+    const t1 = points[points.length - 1]!.t;
+    const step = stepMs ?? Math.max(1, (t1 - t0) / (points.length - 1));
     const plotW = width - PAD.l - PAD.r;
-    const x = (t: number) => PAD.l + ((t - t0) / (t1 - t0)) * plotW;
-    const lo = Math.min(...bars.map((b) => b.l));
-    const hi = Math.max(...bars.map((b) => b.h));
+    const x = (t: number) => PAD.l + ((t - t0) / Math.max(1, t1 - t0)) * plotW;
+    const lead = events[0];
+    const leadShown = lead !== undefined && lead.t >= t0 && lead.t <= t1;
+    const base = leadShown && lead.mcap ? lead.mcap : points[0]!.v;
+    const values = points.map((p) => p.v);
+    const lo = Math.min(...values, base);
+    const hi = Math.max(...values, base);
     const axis = mcapAxis(lo, hi, PAD.t, height - PAD.b);
-    const slot = plotW / Math.max(1, (t1 - t0) / step);
-    const body = Math.max(1, Math.min(14, slot * 0.68));
-    const hiIdx = bars.reduce((best, b, i) => (b.h > bars[best]!.h ? i : best), 0);
-    return { t0, t1, step, x, axis, body, hiIdx };
-  }, [bars, stepMs, width, height]);
+    const hiIdx = points.reduce((best, p, i) => (p.v > points[best]!.v ? i : best), 0);
+    return { t0, t1, step, x, axis, base, fromAlert: leadShown && !!lead.mcap, hiIdx };
+  }, [points, stepMs, width, height, events]);
 
-  const groups = useMemo(
-    () => (geo ? groupMarkers(bars, geo.step, mode, markers) : []),
-    [bars, geo, mode, markers],
-  );
+  const groups = useMemo(() => (geo ? groupMarkers(points, geo.step, markers) : []), [points, geo, markers]);
 
   if (!geo) return null;
   const { x, axis } = geo;
   const span = geo.t1 - geo.t0;
-  // Candles sit centred in their slot; a line's points sit on their reading's time.
-  const cx = (b: Bar) => (mode === "candles" ? x(b.t + geo.step / 2) : x(b.t));
-  const line =
-    mode === "line"
-      ? bars.map((b, i) => `${i ? "L" : "M"}${cx(b).toFixed(1)},${axis.y(b.c).toFixed(1)}`).join(" ")
-      : "";
   const bottom = height - PAD.b;
-  const area =
-    mode === "line" && bars.length > 1
-      ? `${line} L${cx(bars[bars.length - 1]!).toFixed(1)},${bottom} L${cx(bars[0]!).toFixed(1)},${bottom} Z`
-      : "";
+  const px = (p: Point) => x(p.t);
+  const py = (p: Point) => axis.y(p.v);
+  const line = points.map((p, i) => `${i ? "L" : "M"}${px(p).toFixed(1)},${py(p).toFixed(1)}`).join(" ");
+  const baseY = axis.y(geo.base);
+  const first = points[0]!;
+  const last = points[points.length - 1]!;
+  const area = `${line} L${px(last).toFixed(1)},${baseY.toFixed(1)} L${px(first).toFixed(1)},${baseY.toFixed(1)} Z`;
+  // Where the baseline falls in the plot's height, for the colour split of the line and the area.
+  const split = Math.min(1, Math.max(0, (baseY - PAD.t) / (bottom - PAD.t)));
+  const up = last.v >= geo.base;
+  const lastY = py(last);
   const shown = events.filter((e) => e.t >= geo.t0 && e.t <= geo.t1);
+  const lead = shown[0];
   // Five time labels on a desktop, three on a phone, where five would run into each other.
   const fractions = width < 520 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
-  const timeTicks = fractions.map((f) => geo.t0 + f * (geo.t1 - geo.t0 - geo.step));
-  const h = hover !== null ? bars[hover] : undefined;
-  const hx = h ? cx(h) : 0;
-  const peak = bars[geo.hiIdx]!;
-  const lead = shown[0];
-  // Each bar's markers stack away from it: buys downward from its low, sells upward from its high.
+  const timeTicks = fractions.map((f) => geo.t0 + f * span);
+  // Value ticks that would sit under the latest value's or the baseline's tag are left out.
+  const tags = [lastY, ...(geo.fromAlert ? [baseY] : [])];
+  const ticks = axis.ticks.filter((v) => tags.every((y) => Math.abs(axis.y(v) - y) > 14));
+  const h = hover !== null ? points[hover] : undefined;
+  const peak = points[geo.hiIdx]!;
+  // The peak gets a label unless it is the latest point (its tag already says it) or right by it.
+  const showPeak = points.length > 2 && geo.hiIdx < points.length - 1 && Math.abs(py(peak) - lastY) > 16;
+  // Each point's markers stack away from the line: buys downward, sells upward.
   const stacked = new Map<string, number>();
   const placed = groups.map((g) => {
-    const b = bars[g.bar]!;
+    const p = points[g.at]!;
     const r = markerSize(g.sol);
-    const key = `${g.bar}|${g.side}`;
+    const key = `${g.at}|${g.side}`;
     const offset = stacked.get(key) ?? 0;
     stacked.set(key, offset + r * 2 + 3);
-    const base = mode === "candles" ? (g.side === 1 ? axis.y(b.l) : axis.y(b.h)) : axis.y(b.c);
-    const y = g.side === 1 ? base + 6 + r + offset : base - 6 - r - offset;
-    return { g, x: cx(b), y: Math.min(bottom - r, Math.max(PAD.t - 6 + r, y)), r };
+    const ly = py(p);
+    const y = g.side === 1 ? ly + 9 + r + offset : ly - 9 - r - offset;
+    return { g, x: px(p), ly, y: Math.min(bottom - r, Math.max(PAD.t - 8 + r, y)), r };
   });
   const mark = hoverMark !== null ? placed[hoverMark] : undefined;
 
   const pick = (clientX: number) => {
     const box = boxRef.current?.getBoundingClientRect();
     if (!box) return;
-    const px = clientX - box.left;
+    const cx = clientX - box.left;
     let best = 0;
-    for (let i = 1; i < bars.length; i++) {
-      if (Math.abs(cx(bars[i]!) - px) < Math.abs(cx(bars[best]!) - px)) best = i;
+    for (let i = 1; i < points.length; i++) {
+      if (Math.abs(px(points[i]!) - cx) < Math.abs(px(points[best]!) - cx)) best = i;
     }
     setHover(best);
   };
+  const hx = h ? px(h) : 0;
+  const hUp = h ? h.v >= geo.base : true;
 
   return (
     <div className="pc" ref={boxRef}>
@@ -163,24 +167,44 @@ export function PriceChart({
         onPointerLeave={() => setHover(null)}
       >
         <defs>
-          <linearGradient id="pc-area" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="var(--series-1)" stopOpacity="0.32" />
-            <stop offset="1" stopColor="var(--series-1)" stopOpacity="0" />
+          <linearGradient
+            id={`${id}-stroke`}
+            gradientUnits="userSpaceOnUse"
+            x1="0"
+            y1={PAD.t}
+            x2="0"
+            y2={bottom}
+          >
+            <stop offset={split} stopColor="var(--good)" />
+            <stop offset={split} stopColor="var(--bad)" />
+          </linearGradient>
+          <linearGradient
+            id={`${id}-area`}
+            gradientUnits="userSpaceOnUse"
+            x1="0"
+            y1={PAD.t}
+            x2="0"
+            y2={bottom}
+          >
+            <stop offset="0" stopColor="var(--good)" stopOpacity="0.34" />
+            <stop offset={split} stopColor="var(--good)" stopOpacity="0.03" />
+            <stop offset={split} stopColor="var(--bad)" stopOpacity="0.03" />
+            <stop offset="1" stopColor="var(--bad)" stopOpacity="0.34" />
           </linearGradient>
         </defs>
-        {axis.ticks.map((v) => (
+
+        {ticks.map((v) => (
           <g key={v}>
             <line x1={PAD.l} x2={width - PAD.r} y1={axis.y(v)} y2={axis.y(v)} className="pc-grid" />
-            <text x={width - PAD.r + 8} y={axis.y(v)} dy="0.35em" className="pc-tick">
+            <text x={width - PAD.r + 10} y={axis.y(v)} dy="0.35em" className="pc-tick">
               {axisUsd(v)}
             </text>
           </g>
         ))}
-        <line x1={PAD.l} x2={width - PAD.r} y1={bottom} y2={bottom} className="pc-axis" />
         {timeTicks.map((t, i) => (
           <text
             key={i}
-            x={Math.min(width - PAD.r, Math.max(PAD.l, x(t)))}
+            x={x(t)}
             y={height - 6}
             className="pc-tick"
             textAnchor={i === 0 ? "start" : i === timeTicks.length - 1 ? "end" : "middle"}
@@ -190,71 +214,69 @@ export function PriceChart({
         ))}
 
         {shown.map((e, i) => (
-          <g key={`${e.t}-${i}`} className={i === 0 ? "pc-event lead" : "pc-event"}>
-            <line x1={x(e.t)} x2={x(e.t)} y1={PAD.t - 4} y2={bottom} />
-          </g>
+          <line
+            key={`${e.t}-${i}`}
+            className={i === 0 ? "pc-event lead" : "pc-event"}
+            x1={x(e.t)}
+            x2={x(e.t)}
+            y1={PAD.t - 6}
+            y2={bottom}
+          />
         ))}
 
-        {mode === "line" ? (
-          <>
-            <path d={area} fill="url(#pc-area)" />
-            <path d={line} className="pc-line" />
-          </>
-        ) : (
-          bars.map((b, i) => {
-            const up = b.c >= b.o;
-            const yo = axis.y(b.o);
-            const yc = axis.y(b.c);
-            const top = Math.min(yo, yc);
-            const c = cx(b);
-            return (
-              <g key={b.t} className={`pc-candle ${up ? "up" : "down"}${hover === i ? " on" : ""}`}>
-                <line x1={c} x2={c} y1={axis.y(b.h)} y2={axis.y(b.l)} />
-                <rect
-                  x={c - geo.body / 2}
-                  y={top}
-                  width={geo.body}
-                  height={Math.max(1, Math.abs(yc - yo))}
-                  rx={geo.body > 4 ? 1 : 0}
-                />
-              </g>
-            );
-          })
-        )}
+        <path d={area} fill={`url(#${id}-area)`} />
+        <line x1={PAD.l} x2={width - PAD.r} y1={baseY} y2={baseY} className="pc-base" />
+        <path d={line} className="pc-glow" stroke={`url(#${id}-stroke)`} />
+        <path d={line} className="pc-line" stroke={`url(#${id}-stroke)`} />
 
-        {/* The highest point in view, labelled once it is clear of the alert flag. */}
-        {bars.length > 2 && (
+        {showPeak && (
           <g className="pc-peak">
-            <circle cx={cx(peak)} cy={axis.y(peak.h)} r={3} />
+            <circle cx={px(peak)} cy={py(peak)} r={3.5} />
             <text
-              x={Math.min(width - PAD.r - 4, Math.max(PAD.l + 4, cx(peak)))}
-              y={axis.y(peak.h) - 8}
-              textAnchor={cx(peak) > width - PAD.r - 40 ? "end" : cx(peak) < PAD.l + 40 ? "start" : "middle"}
+              x={Math.min(width - PAD.r - 4, Math.max(PAD.l + 4, px(peak)))}
+              y={py(peak) - 9}
+              textAnchor={px(peak) > width - PAD.r - 50 ? "end" : px(peak) < PAD.l + 50 ? "start" : "middle"}
             >
-              {usd(peak.h)}
+              Peak {usd(peak.v)}
             </text>
           </g>
         )}
 
         {placed.map((p, i) => (
-          <path
-            key={`${p.g.bar}-${p.g.kind}-${p.g.side}`}
-            d={triangle(p.x, p.y, p.r, p.g.side === 1)}
-            className={`pc-mark k-${p.g.kind} ${p.g.side === 1 ? "buy" : "sell"}${hoverMark === i ? " on" : ""}`}
+          <g
+            key={`${p.g.at}-${p.g.kind}-${p.g.side}`}
+            className={`pc-mark k-${p.g.kind}${hoverMark === i ? " on" : ""}`}
             onPointerEnter={() => setHoverMark(i)}
             onPointerLeave={() => setHoverMark(null)}
             onPointerDown={() => setHoverMark(i)}
-          />
+          >
+            <line x1={p.x} x2={p.x} y1={p.ly} y2={p.y} className="pc-stem" />
+            <path d={triangle(p.x, p.y, p.r, p.g.side === 1)} />
+          </g>
         ))}
 
-        {h && (
-          <g className="pc-cross">
-            <line x1={hx} x2={hx} y1={PAD.t - 4} y2={bottom} />
-            <line x1={PAD.l} x2={width - PAD.r} y1={axis.y(h.c)} y2={axis.y(h.c)} />
-            <rect x={width - PAD.r + 2} y={axis.y(h.c) - 9} width={PAD.r - 4} height={18} rx={4} />
-            <text x={width - PAD.r + 8} y={axis.y(h.c)} dy="0.35em">
-              {usd(h.c)}
+        {/* The latest reading: a dot on the line's end and its value on the axis. */}
+        <g className={`pc-last ${up ? "up" : "down"}`}>
+          <circle cx={px(last)} cy={lastY} r={8} className="pc-halo" />
+          <circle cx={px(last)} cy={lastY} r={3.5} />
+          <rect x={width - PAD.r + 3} y={lastY - 10} width={PAD.r - 4} height={20} rx={5} />
+          <text x={width - PAD.r + 10} y={lastY} dy="0.35em">
+            {axisUsd(last.v)}
+          </text>
+        </g>
+        {geo.fromAlert && Math.abs(baseY - lastY) > 14 && (
+          <g className="pc-base-tag">
+            <rect x={width - PAD.r + 3} y={baseY - 10} width={PAD.r - 4} height={20} rx={5} />
+            <text x={width - PAD.r + 10} y={baseY} dy="0.35em">
+              {axisUsd(geo.base)}
             </text>
+          </g>
+        )}
+
+        {h && (
+          <g className={`pc-cross ${hUp ? "up" : "down"}`}>
+            <line x1={hx} x2={hx} y1={PAD.t - 6} y2={bottom} />
+            <circle cx={hx} cy={py(h)} r={4.5} />
           </g>
         )}
       </svg>
@@ -263,7 +285,7 @@ export function PriceChart({
         <span
           key={`${e.t}-${i}-flag`}
           className={`pc-flag${i === 0 ? " lead" : ""}`}
-          style={{ left: Math.min(width - PAD.r, x(e.t)) }}
+          style={{ left: Math.min(width - PAD.r, Math.max(PAD.l + 24, x(e.t))) }}
           title={e.mcap ? `${e.label} at ${usd(e.mcap)}` : e.label}
         >
           {e.label}
@@ -276,20 +298,15 @@ export function PriceChart({
         <div
           className="pc-tip"
           style={{
-            left: hx > width / 2 ? undefined : hx + 12,
-            right: hx > width / 2 ? width - hx + 12 : undefined,
+            left: hx > width / 2 ? undefined : hx + 14,
+            right: hx > width / 2 ? width - hx + 14 : undefined,
           }}
         >
           <span className="faint">{timeLabel(h.t, span > 36 * 3_600_000 ? span : 0)}</span>
-          <strong className="num">{usd(h.c)}</strong>
-          {mode === "candles" && (
-            <span className="pc-ohlc num">
-              H {usd(h.h)} · L {usd(h.l)}
-            </span>
-          )}
+          <strong className="num">{usd(h.v)}</strong>
           {lead?.mcap ? (
-            <span className={`num ${h.c >= lead.mcap ? "up" : "down"}`}>
-              {signedPct(change(lead.mcap, h.c))} vs {lead.label.toLowerCase()}
+            <span className={`num ${h.v >= lead.mcap ? "up" : "down"}`}>
+              {signedPct(change(lead.mcap, h.v))} vs {lead.label.toLowerCase()}
             </span>
           ) : null}
         </div>
@@ -337,7 +354,7 @@ function MarkerTip({ group: g, x, y, width }: { group: MarkerGroup; x: number; y
 }
 
 /** An axis label: usd() without the trailing zeros ($5K, $12.5K, $1M). */
-function axisUsd(v: number): string {
+export function axisUsd(v: number): string {
   return usd(v)
     .replace(/\.0+(?=[KMB]?$)/, "")
     .replace(/(\.\d*?)0+(?=[KMB]?$)/, "$1");
