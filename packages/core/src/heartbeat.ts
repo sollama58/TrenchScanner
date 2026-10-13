@@ -55,7 +55,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "score-weights": "trainer",
   "lighthouse-rollup": "trainer",
   "label-regrade": "trainer",
-  "trade-tape": "trainer",
+  // The scanner: the service with the Helius key the tape reads with (the trainer has none).
+  "trade-tape": "scanner",
   "wallet-risk": "trainer",
 };
 

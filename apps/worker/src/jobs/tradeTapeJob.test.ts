@@ -284,4 +284,35 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
       source: "helius",
     });
   });
+  it("has Helius read the newest call and Pump.fun the oldest, whatever their age", async () => {
+    const older = await seedCalled("older", null);
+    const newer = await seedCalled("newer", null);
+    await prisma.curatedAlert.updateMany({
+      where: { tokenId: newer.token.id },
+      data: { createdAt: new Date(ANCHOR + MIN) },
+    });
+    const asked: string[] = [];
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m) => {
+        asked.push(m);
+        return { status: "failed" };
+      },
+    };
+    const { stub, calls } = pumpFunStub(older.token.mintAddress, [
+      pumpTrade("a", "buy", 1, 1_000_000, LAUNCH),
+    ]);
+    // Days after the call: no longer "recent", and still Helius's to read.
+    const meta = await runTradeTapeJob(
+      { helius, pumpFun: stub },
+      { heliusPagesPerRun: 1, pumpFunCallsPerRun: 4, spacingMs: 0, now: () => NOW + 3 * 24 * 60 * MIN },
+    );
+    expect(meta.heliusUsable).toBe(true);
+    expect(asked).toEqual([newer.token.mintAddress]);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: older.token.id } })).toMatchObject({
+      source: "pumpfun",
+    });
+  });
 });

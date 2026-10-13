@@ -25,28 +25,28 @@ const logger = createLogger("trade-tape");
  * For every coin a seat called, and a sample of uncalled decision moments for comparison, this
  * reads every trade from the launch to 30 minutes past the call once the call's row is final, and
  * stores what each wallet did in the coin (TokenWalletActivity) and, for each stopped call, who
- * sold between the call and the stop (CandidateOutcome.stopCause). It runs on the trainer, behind
- * the scan: no decision waits on it.
+ * sold between the call and the stop (CandidateOutcome.stopCause). It runs on the scanner worker,
+ * the service that holds the Helius key (on the trainer, which has none, it fell back to Pump.fun
+ * alone and the backlog never drained), behind the scan: no decision waits on it.
  *
  * Two sources, each its own lane, run side by side:
  *  - Helius getTransactionsForAddress on the mint, oldest first (10 credits a page of 100), the
- *    main source (user decision 2026-10-13, over the cost below): every coin first called within
- *    HELIUS_RECENT_MS. TRADE_TAPE_HELIUS_PAGES_PER_RUN caps the pages a one-minute run. A full read
+ *    main source (user decision 2026-10-13, over the cost below): every coin, newest call first, so
+ *    new calls are read within minutes and the backlog with what is left.
+ *    TRADE_TAPE_HELIUS_PAGES_PER_RUN caps the pages a one-minute run. A full read
  *    averages 20+ pages a coin (2026-10-13 sample of 26 called coins: median ~700 trades, a quarter
  *    over 4,000), so at ~600 called coins a day this is ~125k+ credits a day. A coin past
  *    HELIUS_MAX_PAGES_PER_COIN is left to Pump.fun.
  *  - Pump.fun's trade API, free but quick to answer 429: read backwards from the end of the window
  *    (a cursor at a timestamp skips everything after it), spaced calls a run
- *    (TRADE_TAPE_PUMPFUN_CALLS_PER_RUN), paused for a minute on a 429. The backlog (coins called
- *    before Helius could reach them, so no one-off charge for it), coins Helius couldn't read, and
- *    one coin in SAMPLE_EVERY from the uncalled sample. Without Helius it takes every coin.
+ *    (TRADE_TAPE_PUMPFUN_CALLS_PER_RUN), paused for a minute on a 429. Coins Helius couldn't read,
+ *    the oldest of the backlog (working from the other end), and one coin in SAMPLE_EVERY from the
+ *    uncalled sample. Without Helius it takes every coin.
  * Each lane works one coin at a time and carries it over to the next run until it's read.
  */
 
 /** Called coins this far back are read (the backlog goes to Pump.fun). */
 const LOOKBACK_MS = 10 * 24 * 3_600_000;
-/** Coins first called this recently are Helius's; older ones (the backlog) are Pump.fun's. */
-const HELIUS_RECENT_MS = 6 * 3_600_000;
 /** Calls within this long of a coin's first call share its tape (and get a stop cause from it). */
 const SHARED_CALL_SPAN_MS = 2 * 3_600_000;
 /** A window is read this long after it closes, so the indexers have the last trades. */
@@ -393,11 +393,10 @@ async function runHeliusLane(
 ) {
   while (budget > 0 && deps.helius.gtfaUsable) {
     if (!state.helius) {
+      // Newest first (`called` is), so new calls are read within minutes and the backlog with
+      // what's left of the budget.
       const coin = called.find(
-        (c) =>
-          now() - c.anchorAtMs <= HELIUS_RECENT_MS &&
-          c.failedSource !== "helius" &&
-          state.pumpFun?.coin.tokenId !== c.tokenId,
+        (c) => c.failedSource !== "helius" && state.pumpFun?.coin.tokenId !== c.tokenId,
       );
       if (!coin) return;
       called.splice(called.indexOf(coin), 1);
@@ -456,7 +455,7 @@ async function runHeliusLane(
 async function runPumpFunLane(
   deps: TradeTapeDeps,
   called: TapeCoin[],
-  heliusTakesRecent: boolean,
+  heliusOn: boolean,
   calls: number,
   spacingMs: number,
   counts: RunCounts,
@@ -468,11 +467,10 @@ async function runPumpFunLane(
     if (!state.pumpFun) {
       let coin: TapeCoin | null | undefined;
       if (state.coinsStarted % SAMPLE_EVERY === SAMPLE_EVERY - 1) coin = await pendingSampleCoin(now());
-      coin ??= called.find(
-        (c) =>
-          state.helius?.coin.tokenId !== c.tokenId &&
-          (!heliusTakesRecent || now() - c.anchorAtMs > HELIUS_RECENT_MS || c.failedSource === "helius"),
-      );
+      const free = called.filter((c) => state.helius?.coin.tokenId !== c.tokenId);
+      // Beside Helius: the coins Helius couldn't read, else the oldest of the backlog, so the two
+      // lanes work from opposite ends. Without Helius: every coin, newest first.
+      coin ??= heliusOn ? (free.find((c) => c.failedSource === "helius") ?? free.at(-1)) : free[0];
       if (!coin) return;
       state.coinsStarted += 1;
       if (called.includes(coin)) called.splice(called.indexOf(coin), 1);
@@ -555,7 +553,7 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
   const inProgress = new Set([state.helius?.coin.tokenId, state.pumpFun?.coin.tokenId]);
   const called = (await pendingCalledCoins(now())).filter((c) => !inProgress.has(c.tokenId));
   const pending = called.length + (inProgress.size - (inProgress.has(undefined) ? 1 : 0));
-  const heliusTakesRecent = opts.heliusPagesPerRun > 0 && deps.helius.gtfaUsable;
+  const heliusOn = opts.heliusPagesPerRun > 0 && deps.helius.gtfaUsable;
   await Promise.all([
     opts.heliusPagesPerRun > 0
       ? runHeliusLane(deps, called, opts.heliusPagesPerRun, counts, now)
@@ -564,7 +562,7 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
       ? runPumpFunLane(
           deps,
           called,
-          heliusTakesRecent,
+          heliusOn,
           opts.pumpFunCallsPerRun,
           opts.spacingMs ?? PUMPFUN_SPACING_MS,
           counts,
@@ -575,6 +573,9 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
   const rpc = deps.helius.takeCallStats();
   const meta: JobRunMeta = {
     pendingCalledCoins: pending,
+    // False means Helius can't serve the read here (no key, or the method stood down): the tape
+    // then runs on Pump.fun alone, a few coins an hour.
+    heliusUsable: deps.helius.gtfaUsable,
     ...counts,
     heliusCredits: (rpc.getTransactionsForAddress ?? 0) * 10,
   };
