@@ -333,9 +333,21 @@ export function walletChecksKnown(
 }
 
 /**
+ * Under this age the event pre-gate skips its buy-ratio test (user decision 2026-10-13). In a
+ * coin's first minutes the hour's trade count is mostly sniper bots selling in many small trades
+ * while a few large buys move the price, so the ratio separates nothing: on hourly rows
+ * 2026-10-08..12, moments under 10 minutes old with buys under 55% of trades doubled within 15
+ * minutes as often as or more than the ones over it (21.8% vs 18.2% at 0-3 minutes), and the test
+ * dropped 287 of 657 runners. Past an hour it does separate (3.4% vs 2.1%), so older coins keep it
+ * (notes/hit-catch-2026-10-13/misses.md, finding 2).
+ */
+export const PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES = 10;
+
+/**
  * The cheap "looks ready" test that marks an EVENT moment (CandidateOutcome.sampleKind = "event"):
- * in the band, not older than MAX_EVENT_AGE_MINUTES, buyers in control of the hour's flow, and
- * the last five minutes not falling. An unknown age passes, like an unobserved 5m candle.
+ * in the band, not older than MAX_EVENT_AGE_MINUTES, buyers in control of the hour's flow (from
+ * PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES on; any trades before that), and the last five minutes not
+ * falling. An unknown age passes, like an unobserved 5m candle.
  * Curators decide only at the first such moment per token per CANDIDATE_EVENT_SPACING_MINUTES, and
  * the trainer calibrates on exactly those rows, so the model is examined on the same moments it is
  * asked about live - not on an hourly sample of everything in the band, which is a different and
@@ -349,6 +361,10 @@ export function passesEventPreGate(
   if (!inMcapBand(scored.marketCapUsd, band)) return false;
   if (scored.ageMinutes !== undefined && scored.ageMinutes > MAX_EVENT_AGE_MINUTES) return false;
   const totalTxns1h = (scored.buys1h ?? 0) + (scored.sells1h ?? 0);
-  if (!(totalTxns1h > 0 && (scored.buys1h ?? 0) / totalTxns1h >= MIN_BUY_RATIO)) return false;
+  if (!(totalTxns1h > 0)) return false;
+  const buyTestApplies = !(
+    scored.ageMinutes !== undefined && scored.ageMinutes < PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES
+  );
+  if (buyTestApplies && (scored.buys1h ?? 0) / totalTxns1h < MIN_BUY_RATIO) return false;
   return scored.priceChange5mPct === undefined || scored.priceChange5mPct >= 0;
 }

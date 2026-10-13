@@ -2,7 +2,13 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv } from "@trenchscanner/core";
-import { LIVE_LAUNCH_MAX, liveLaunchSource, newestLaunches, selectWatchlist } from "./scanJob.js";
+import {
+  LIVE_LAUNCH_MAX,
+  candidateAgeMinutes,
+  liveLaunchSource,
+  newestLaunches,
+  selectWatchlist,
+} from "./scanJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -290,5 +296,14 @@ describe("liveLaunchSource", () => {
   it("is off without a live source, or with no young launch", () => {
     expect(liveLaunchSource(undefined, [{ mintAddress: "a", firstSeenAt: at(1) }], now)).toBeUndefined();
     expect(liveLaunchSource(source, [{ mintAddress: "a", firstSeenAt: at(30) }], now)).toBeUndefined();
+  });
+});
+
+describe("candidateAgeMinutes", () => {
+  const now = Date.parse("2026-10-13T01:00:00Z");
+  it("takes the earlier of the pair's creation and the first sighting", () => {
+    expect(candidateAgeMinutes(new Date(now - 3 * 60_000), new Date(now - 5 * 60_000), now)).toBe(5);
+    expect(candidateAgeMinutes(new Date(now - 3 * 60_000), undefined, now)).toBe(3);
+    expect(candidateAgeMinutes(undefined, undefined, now)).toBeUndefined();
   });
 });
