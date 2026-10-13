@@ -1,3 +1,4 @@
+import { linkedCountText } from "../bubbleMap";
 import {
   createContext,
   useContext,
@@ -29,12 +30,15 @@ import {
 } from "../priceChart";
 import {
   cardReadings,
+  cexCountText,
   LINKED_WARN_PCT,
   linkedSeed,
   nowReading,
   recordedPeakOf,
   SAFETY_MAX_FRESH_WALLET_PCT,
+  SAFETY_REJECT_CEX_FUNDED_COUNT,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
+  SAFETY_REJECT_LINKED_COUNT,
   SAFETY_REJECT_SNIPER_WALLET_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   WalletStat,
@@ -949,12 +953,30 @@ function StatsCard({ card }: { card: Card }) {
           explain="top-10 holder wallets that were among the first 25 buyers after launch"
         />
         <div
-          className={r.linkedPct !== null && r.linkedPct >= LINKED_WARN_PCT ? "risky" : undefined}
-          title="Share of supply held by top holders one wallet funded (or that funded each other)"
+          className={
+            (r.linkedPct !== null && r.linkedPct >= LINKED_WARN_PCT) ||
+            (r.linkedCount !== null && r.linkedCount.linked >= SAFETY_REJECT_LINKED_COUNT)
+              ? "risky"
+              : undefined
+          }
+          title={`Top holders one wallet funded (or that funded each other)${
+            r.linkedPct === null ? "" : `, holding ${pct(r.linkedPct)} of supply`
+          }. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more of the top 20.`}
         >
           <dt>Linked</dt>
           <dd className={r.linkedPct === null ? "muted" : "num"}>
-            {r.linkedPct === null ? "Not checked" : pct(r.linkedPct)}
+            {r.linkedPct === null ? "Not checked" : (linkedCountText(r.linkedCount) ?? pct(r.linkedPct))}
+          </dd>
+        </div>
+        <div
+          className={
+            r.cexCount !== null && r.cexCount >= SAFETY_REJECT_CEX_FUNDED_COUNT ? "risky" : undefined
+          }
+          title={`Of the 20 largest holders, how many were opened from an exchange (or a busy service like a bridge). The safety screen rejects ${SAFETY_REJECT_CEX_FUNDED_COUNT} or more.`}
+        >
+          <dt>CEX-funded</dt>
+          <dd className={r.cexPct === null ? "muted" : "num"}>
+            {r.cexPct === null ? "Not checked" : (cexCountText(r.cexCount, r.cexHolders) ?? pct(r.cexPct))}
           </dd>
         </div>
         <div title="How many of the launch's first 25 buyers still hold it">

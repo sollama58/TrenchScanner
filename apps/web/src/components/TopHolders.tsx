@@ -111,7 +111,11 @@ export function TopHolders({
       )}
       <p className="faint small th-note">
         Pool aside. The dot is the holder&apos;s cluster in the bubble map; grey is linked to no other holder.
-        {total > 0 && graph.linkedPct !== null && ` ${graph.linkedPct.toFixed(1)}% of supply is linked.`}
+        {total > 0 &&
+          graph.linkedPct !== null &&
+          (graph.linkedCount
+            ? ` ${graph.linkedCount.linked} of the ${graph.linkedCount.of} top holders are linked, holding ${graph.linkedPct.toFixed(1)}% of supply.`
+            : ` ${graph.linkedPct.toFixed(1)}% of supply is linked.`)}
       </p>
     </section>
   );

@@ -2528,6 +2528,8 @@ export function withLinkedWallets(
     ...withCex,
     linkedWalletPct: linked.linkedWalletPct,
     linkedClusterCount: linked.linkedClusterCount,
+    linkedWalletCount: linked.linkedWalletCount,
+    linkedWalletsChecked: linked.linkedWalletsChecked,
     linkedLargestClusterPct: linked.linkedLargestClusterPct,
     linkedCreatorPct: linked.linkedCreatorPct,
     linkedClusters: linked.clusters,

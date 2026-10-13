@@ -75,15 +75,24 @@ export async function renderBubbleCard(
   ctx.fillText(clip(ctx, name, leftW), PAD, 210);
 
   const linked = graph.linkedPct;
-  ctx.fillStyle = linked !== null && linked >= 30 ? "#ff8080" : INK;
+  ctx.fillStyle =
+    (linked !== null && linked >= 30) || (graph.linkedCount !== null && graph.linkedCount.linked >= 15)
+      ? "#ff8080"
+      : INK;
   ctx.font = `800 76px ${FONT}`;
-  const big = linked === null ? "–" : pctText(linked);
+  const count = graph.linkedCount;
+  const big = linked === null ? "–" : count ? `${count.linked}/${count.of}` : pctText(linked);
   ctx.fillText(big, PAD, 300);
   const bigW = ctx.measureText(big).width;
   ctx.fillStyle = MUTED;
   ctx.font = `500 19px ${FONT}`;
-  ctx.fillText("of supply in", PAD + bigW + 16, 272);
-  ctx.fillText("linked wallets", PAD + bigW + 16, 296);
+  if (count && linked !== null) {
+    ctx.fillText("top holders linked,", PAD + bigW + 16, 272);
+    ctx.fillText(`holding ${pctText(linked)}`, PAD + bigW + 16, 296);
+  } else {
+    ctx.fillText("of supply in", PAD + bigW + 16, 272);
+    ctx.fillText("linked wallets", PAD + bigW + 16, 296);
+  }
 
   let y = 350;
   const rows = graph.clusters.slice(0, 4);

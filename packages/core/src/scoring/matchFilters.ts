@@ -93,16 +93,16 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   }
 
   if (
-    filter.minCexFundedPct != null &&
-    token.cexFundedPct !== undefined &&
-    token.cexFundedPct < filter.minCexFundedPct
+    filter.minCexFundedCount != null &&
+    token.cexFundedCount !== undefined &&
+    token.cexFundedCount < filter.minCexFundedCount
   ) {
     return false;
   }
   if (
-    filter.maxCexFundedPct != null &&
-    token.cexFundedPct !== undefined &&
-    token.cexFundedPct > filter.maxCexFundedPct
+    filter.maxCexFundedCount != null &&
+    token.cexFundedCount !== undefined &&
+    token.cexFundedCount > filter.maxCexFundedCount
   ) {
     return false;
   }
@@ -111,6 +111,13 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     filter.maxLinkedWalletPct != null &&
     token.linkedWalletPct !== undefined &&
     token.linkedWalletPct > filter.maxLinkedWalletPct
+  ) {
+    return false;
+  }
+  if (
+    filter.maxLinkedWalletCount != null &&
+    token.linkedWalletCount !== undefined &&
+    token.linkedWalletCount > filter.maxLinkedWalletCount
   ) {
     return false;
   }

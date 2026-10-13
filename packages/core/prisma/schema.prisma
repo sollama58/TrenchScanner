@@ -267,6 +267,9 @@ model UserFilter {
   /// Max % of supply held by linked top holders: wallets one funder paid for, or that funded each
   /// other (TokenSnapshot.linkedWalletPct, core's wallets/linkedWallets.ts). Skipped while unknown.
   maxLinkedWalletPct         Float?
+  /// Max how many of the top-20 holders are linked (TokenSnapshot.linkedWalletCount, "N/20").
+  /// Skipped while unknown.
+  maxLinkedWalletCount       Int?
   /// Max % of supply held by top holders funded within a minute of each other, from any funders
   /// (TokenSnapshot.sameTimeFundedPct). Skipped while unknown.
   maxSameTimeFundedPct       Float?
@@ -277,10 +280,14 @@ model UserFilter {
   /// Min holders as Jupiter counts them at the decision (the fresh quote's holderCount, seconds
   /// old). Fails closed without a quote, like the other floors.
   minLiveHolderCount         Int?
-  /// Bounds on the % of the largest holders an exchange or a busy service paid for
-  /// (TokenSnapshot.cexFundedPct, core's cexFundedReading). Skipped while unknown.
+  /// Superseded by the counts below (user ask 2026-10-13, "#/20"); kept, read by nothing, as the
+  /// migration copied them across.
   minCexFundedPct            Float?
   maxCexFundedPct            Float?
+  /// Bounds on how many of the 20 largest holders an exchange or a busy service paid for
+  /// (TokenSnapshot.cexFundedCount, core's cexFundedReading). Skipped while unknown.
+  minCexFundedCount          Int?
+  maxCexFundedCount          Int?
   /// Max SOL flagged wallets (risky or known dumpers) bought in the coin's newest trades
   /// (TokenSnapshot.flaggedBuySol, core's wallets/liveFlags.ts). Skipped while unknown.
   maxFlaggedBuySol           Float?
@@ -991,6 +998,8 @@ model TokenSnapshot {
   // wallets and their %) for the alert card's list; null when there are none.
   linkedWalletPct         Float?
   linkedClusterCount      Int?
+  linkedWalletCount       Int?
+  linkedWalletsChecked    Int?
   linkedLargestClusterPct Float?
   linkedCreatorPct        Float?
   linkedClusters          Json?

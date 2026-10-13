@@ -487,6 +487,8 @@ export function serializeCuratedAlert(
     sniperTop10WalletPct: null,
     linkedWalletPct: null,
     linkedClusterCount: null,
+    linkedWalletCount: null,
+    linkedWalletsChecked: null,
     linkedLargestClusterPct: null,
     linkedCreatorPct: null,
     linkedClusters: null,
