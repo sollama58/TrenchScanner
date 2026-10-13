@@ -9451,6 +9451,11 @@ img.tm-avatar {
   stroke: rgba(0, 0, 0, 0.3);
   stroke-width: 2px;
 }
+/* A Pump.fun username: light green, as in the lists (.pumpfun-name). */
+.bm-name.pumpfun {
+  fill: #4ade80;
+  stroke: rgba(0, 0, 0, 0.6);
+}
 .bm-badge circle {
   stroke: var(--surface-solid);
   stroke-width: 1.5;

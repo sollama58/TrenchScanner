@@ -276,6 +276,12 @@ describe("bubbleNameFit", () => {
     expect(fit?.text.endsWith("…")).toBe(true);
     expect(fit!.text.length).toBeLessThan(30);
   });
+  it("keeps a Pump.fun name's quotes, clipped or not", () => {
+    expect(bubbleNameFit(40, "degen", true)?.text).toBe('"degen"');
+    const clipped = bubbleNameFit(18, "averyveryverylongusername", true)!.text;
+    expect(clipped.startsWith('"')).toBe(true);
+    expect(clipped.endsWith('…"')).toBe(true);
+  });
   it("leaves a bubble too small for a few letters without one", () => {
     expect(bubbleNameFit(12, "Binance")).toBeNull();
   });

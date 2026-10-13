@@ -673,6 +673,8 @@ export function holderFreshness(takenAt: string, now: number): { last: number; n
 export function bubbleNameFit(
   r: number,
   name: string,
+  /** A Pump.fun username: shown in quotes, which stay on when the name is clipped. */
+  quoted = false,
 ): { text: string; size: number; radius: number } | null {
   if (r < 15) return null;
   const size = Math.min(10, Math.max(7, r * 0.2));
@@ -680,5 +682,7 @@ export function bubbleNameFit(
   // About 80% of the lower half-circle, at roughly 0.56em a character.
   const fits = Math.floor((Math.PI * radius * 0.8) / (size * 0.56));
   if (fits < 4) return null;
-  return { text: name.length > fits ? `${name.slice(0, fits - 1)}…` : name, size, radius };
+  const room = quoted ? fits - 2 : fits;
+  const shown = name.length > room ? `${name.slice(0, room - 1)}…` : name;
+  return { text: quoted ? `"${shown}"` : shown, size, radius };
 }
