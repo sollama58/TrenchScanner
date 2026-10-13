@@ -699,3 +699,64 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
     expect((await client.getLargestHoldersBatch(["mintA"])).get("mintA")).toEqual({ status: "failed" });
   });
 });
+
+describe("HeliusClient.getFundersBatch", () => {
+  const SOL = 1_000_000_000;
+  /** A token account opened for the wallet by someone else: no SOL moves to it. */
+  const ataOpened = {
+    blockTime: SECONDS,
+    meta: { err: null, preBalances: [5 * SOL, 0, 0], postBalances: [5 * SOL - 2_000_000, 0, 2_000_000] },
+    transaction: {
+      message: { accountKeys: ["opener", "w", "ata"], header: { numRequiredSignatures: 1 } },
+    },
+  };
+  const funded = {
+    blockTime: SECONDS + 60,
+    meta: { err: null, preBalances: [3 * SOL, 0], postBalances: [2 * SOL - 5000, 1 * SOL] },
+    transaction: { message: { accountKeys: ["F", "w"], header: { numRequiredSignatures: 1 } } },
+  };
+
+  it("walks past a first transaction that paid no SOL in, to the funding", async () => {
+    const txs: Record<string, unknown> = { s1: ataOpened, s2: funded };
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) =>
+        c.method === "getSignaturesForAddress"
+          ? {
+              jsonrpc: "2.0",
+              id: c.id,
+              // Newest first; s0 failed and is skipped.
+              result: [
+                { signature: "s3", blockTime: SECONDS + 120 },
+                { signature: "s2", blockTime: SECONDS + 60 },
+                { signature: "s1", blockTime: SECONDS },
+                { signature: "s0", blockTime: SECONDS - 1, err: { InstructionError: [0, "x"] } },
+              ],
+            }
+          : { jsonrpc: "2.0", id: c.id, result: txs[c.params[0] as string] ?? null },
+      ),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    const result = await client.getFundersBatch(["w"]);
+    expect(result.get("w")).toMatchObject({ status: "found", funder: "F", amountSol: 1, reads: 2 });
+    const asked = requests.flatMap((r) => r.body as { method: string; params: unknown[] }[]);
+    expect(asked.filter((c) => c.method === "getTransaction").map((c) => c.params[0])).toEqual(["s1", "s2"]);
+  });
+
+  it("reads a busy wallet's oldest transactions in one sorted lookup", async () => {
+    const page = Array.from({ length: 1000 }, (_, i) => ({ signature: `s${i}`, blockTime: SECONDS + i }));
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) =>
+        c.method === "getSignaturesForAddress"
+          ? { jsonrpc: "2.0", id: c.id, result: page }
+          : { jsonrpc: "2.0", id: c.id, result: { data: [ataOpened, funded] } },
+      ),
+    );
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+    const result = await client.getFundersBatch(["w"]);
+    expect(result.get("w")).toMatchObject({ status: "found", funder: "F", sorted: true });
+    const sorted = requests
+      .flatMap((r) => r.body as { method: string; params: [string, Record<string, unknown>] }[])
+      .find((c) => c.method === "getTransactionsForAddress");
+    expect(sorted!.params[1]).toMatchObject({ sortOrder: "asc", limit: 4 });
+  });
+});

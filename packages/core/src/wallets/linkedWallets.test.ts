@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  funderFromEarliestTransactions,
   funderFromFirstTransaction,
   HOT_FUNDER_DENYLIST,
   isHotFunder,
@@ -37,6 +38,55 @@ describe("funderFromFirstTransaction", () => {
       transaction: { message: { accountKeys: ["payer", "wallet"] } },
     };
     expect(funderFromFirstTransaction("wallet", tx)).toBeNull();
+  });
+});
+
+describe("funderFromEarliestTransactions", () => {
+  const keys = (accountKeys: string[], signers = 1) => ({
+    message: { accountKeys, header: { numRequiredSignatures: signers } },
+  });
+  // Someone opened a token account for the wallet: it got no SOL.
+  const opened = {
+    meta: { preBalances: [5 * SOL, 0], postBalances: [4.99 * SOL, 0] },
+    transaction: keys(["opener", "wallet"]),
+  };
+
+  it("walks past a first transaction that paid nothing in", () => {
+    const funded = {
+      meta: { preBalances: [3 * SOL, 0], postBalances: [2 * SOL, 1 * SOL] },
+      transaction: keys(["F", "wallet"]),
+    };
+    expect(funderFromEarliestTransactions("wallet", [opened, funded])).toMatchObject({
+      found: { funder: "F", amountSol: 1 },
+      decided: true,
+    });
+  });
+
+  it("stops at the wallet's own first signature, and never names a fee sponsor", () => {
+    // A swap the wallet signed, its fee sponsored by a relayer: the pool paid out more than the
+    // wallet got, so nobody funded it here.
+    const swap = {
+      meta: { preBalances: [1 * SOL, 0, 9 * SOL], postBalances: [1 * SOL, 0.002 * SOL, 8.9 * SOL] },
+      transaction: keys(["relayer", "wallet", "pool"], 2),
+    };
+    const later = {
+      meta: { preBalances: [3 * SOL, 0], postBalances: [2 * SOL, 1 * SOL] },
+      transaction: keys(["G", "wallet"]),
+    };
+    expect(funderFromEarliestTransactions("wallet", [opened, swap, later])).toEqual({
+      found: null,
+      decided: true,
+    });
+    // A claim the wallet signed while a relayer paid the fee: the sender is the funder.
+    const claim = {
+      meta: { preBalances: [1 * SOL, 0, 2 * SOL], postBalances: [1 * SOL, 0.5 * SOL, 1.5 * SOL] },
+      transaction: keys(["relayer", "wallet", "vault"], 2),
+    };
+    expect(funderFromEarliestTransactions("wallet", [claim]).found?.funder).toBe("vault");
+  });
+
+  it("is undecided when nothing given paid in and the wallet never signed", () => {
+    expect(funderFromEarliestTransactions("wallet", [opened])).toEqual({ found: null, decided: false });
   });
 });
 

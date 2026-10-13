@@ -133,4 +133,20 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
       funder: w("H"),
     });
   });
+
+  it("reads a wallet stored with no funder by the first-transaction-only read again", async () => {
+    await prisma.walletFunder.create({
+      data: { wallet: w("early"), status: "none", checkedAt: new Date("2026-10-13T12:00:00Z") },
+    });
+    const group = { mintAddress: w("m4"), holders: [{ owner: w("early"), pct: 7 }] };
+    const helius = fakeHelius({ [w("early")]: { ...found(w("K")), reads: 2 } });
+    const lookups = await resolveLinkedWallets([group], helius, { maxNewLookups: 10 });
+    expect(helius.getFundersBatch).toHaveBeenCalledWith([w("early")]);
+    expect(lookups.funderOf.get(w("early"))).toBe(w("K"));
+    expect(takeLinkedWalletStats().getTransaction).toBe(2);
+    expect(await prisma.walletFunder.findUnique({ where: { wallet: w("early") } })).toMatchObject({
+      status: "found",
+      funder: w("K"),
+    });
+  });
 });

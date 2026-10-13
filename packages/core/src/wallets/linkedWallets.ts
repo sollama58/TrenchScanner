@@ -53,10 +53,10 @@ export const HOT_FUNDER_MAX_FUNDED_24H = 50;
 export const MIN_FUNDING_SOL = 0.001;
 
 /**
- * The funder in a wallet's first transaction: whoever's SOL paid for it. The fee payer, when that
- * is someone else (a plain transfer, or a program call a bot signs); else the account whose
- * balance fell the most while the wallet's rose. Null when nobody else paid in: a wallet that
- * started by receiving tokens, say, or a transaction the provider gave without balances.
+ * The funder in one transaction: whoever's SOL paid the wallet in it. The fee payer, when that is
+ * someone else (a plain transfer, or a program call a bot signs); else the account whose balance
+ * fell the most while the wallet's rose. Null when the wallet gained less than MIN_FUNDING_SOL, or
+ * nobody else paid in (a transaction the provider gave without balances, say).
  */
 export function funderFromFirstTransaction(
   wallet: string,
@@ -74,13 +74,84 @@ export function funderFromFirstTransaction(
   if (received < MIN_FUNDING_SOL) return null;
   const payer = keys[0];
   if (payer && payer !== wallet) return { funder: payer, amountSol: received, atMs };
+  const best = biggestSender(keys, pre, post, self);
+  return best ? { funder: best.key, amountSol: received, atMs } : null;
+}
+
+/** The account whose SOL fell the most in a transaction, the wallet at `self` aside. */
+function biggestSender(
+  keys: readonly string[],
+  pre: readonly number[],
+  post: readonly number[],
+  self: number,
+): { key: string; drop: number } | null {
   let best: { key: string; drop: number } | null = null;
   for (let i = 0; i < keys.length; i += 1) {
     if (i === self || !keys[i]) continue;
     const drop = ((pre[i] ?? 0) - (post[i] ?? 0)) / LAMPORTS_PER_SOL;
     if (drop >= MIN_FUNDING_SOL && (!best || drop > best.drop)) best = { key: keys[i]!, drop };
   }
-  return best ? { funder: best.key, amountSol: received, atMs } : null;
+  return best;
+}
+
+/** How many of a wallet's oldest transactions the funder read walks before giving up. */
+export const FUNDER_TXS_WALKED = 4;
+
+/**
+ * A wallet's funder from its oldest transactions, oldest first: the first one that paid SOL into
+ * it. A wallet's first transaction is often not its funding: someone opening a token account for
+ * it (an exchange's token withdrawal, a sender's airdrop) moves no SOL, and the SOL arrives a
+ * transaction or two later. The walk stops at the first transaction the wallet signed itself: by
+ * then it is spending its own SOL, and SOL coming in from then on is a trade, not its funding. That
+ * one transaction still names a funder when it is a plain transfer in (one account sent what the
+ * wallet received: a claim or withdrawal it signed while someone else paid the fee); its fee payer
+ * never does, as that is only a relayer sponsoring the fee.
+ *
+ * `decided`: whether the answer is final. False only when every transaction given was walked
+ * without finding the funding or the wallet's own first signature: the next ones may hold it.
+ */
+export function funderFromEarliestTransactions(
+  wallet: string,
+  txs: readonly (ChainTx & { blockTime?: number | null })[],
+): { found: { funder: string; amountSol: number; atMs: number | null } | null; decided: boolean } {
+  for (const tx of txs) {
+    if (tx.meta?.err) continue;
+    if (!signedBy(tx, wallet)) {
+      const found = funderFromFirstTransaction(wallet, tx);
+      if (found) return { found, decided: true };
+      continue;
+    }
+    return { found: transferIn(wallet, tx), decided: true };
+  }
+  return { found: null, decided: false };
+}
+
+/** A plain transfer into the wallet: the one account whose SOL fell by what the wallet received. */
+function transferIn(
+  wallet: string,
+  tx: ChainTx & { blockTime?: number | null },
+): { funder: string; amountSol: number; atMs: number | null } | null {
+  const keys = keysOf(tx);
+  const pre = tx.meta?.preBalances ?? null;
+  const post = tx.meta?.postBalances ?? null;
+  const self = keys.indexOf(wallet);
+  if (!pre || !post || self < 0) return null;
+  const received = ((post[self] ?? 0) - (pre[self] ?? 0)) / LAMPORTS_PER_SOL;
+  if (received < MIN_FUNDING_SOL) return null;
+  const best = biggestSender(keys, pre, post, self);
+  // Within a hundredth (rent and fees aside): more out than in is a swap's pool, not a sender.
+  if (!best || Math.abs(best.drop - received) > Math.max(0.01 * received, 0.003)) return null;
+  const at = tx.blockTime;
+  return { funder: best.key, amountSol: received, atMs: typeof at === "number" ? at * 1000 : null };
+}
+
+/** Whether the wallet signed the transaction (a signer key; signers come first in the key list). */
+function signedBy(tx: ChainTx, wallet: string): boolean {
+  const keys = keysOf(tx);
+  const i = keys.indexOf(wallet);
+  if (i < 0) return false;
+  const signers = tx.transaction?.message?.header?.numRequiredSignatures;
+  return typeof signers === "number" ? i < signers : i === 0;
 }
 
 /**
