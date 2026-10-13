@@ -14,6 +14,7 @@ import {
   pill,
   roundRect,
 } from "../shareCard";
+import { drawPricingChange } from "../pricingChange";
 
 /**
  * The Models tab's week share image: up to five picked models' chosen measure over the last seven
@@ -30,6 +31,8 @@ export interface WeekCardData {
   lines: { label: string; tone: string; values: (number | null)[]; week: number | null }[];
   /** Graded calls across all models over the week. */
   graded: number;
+  /** Where pricing changed, in points from the first day (pricingChangePoint). */
+  pricingChange?: number | null;
 }
 
 const MARKET = "rgba(255, 255, 255, 0.55)";
@@ -82,6 +85,8 @@ function chart(ctx: CanvasRenderingContext2D, d: WeekCardData, x0: number, x1: n
     ctx.textAlign = i === 0 ? "left" : i === n - 1 ? "right" : "center";
     ctx.fillText(label, x(i), base + 10);
   });
+
+  if (d.pricingChange != null && n > 1) drawPricingChange(ctx, x(d.pricingChange), top, base, FONT, x1);
 
   const line = (vals: (number | null)[], color: string, width: number) => {
     ctx.strokeStyle = color;

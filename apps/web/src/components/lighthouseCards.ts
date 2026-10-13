@@ -23,6 +23,7 @@ import {
   roundRect,
 } from "../shareCard";
 import { drawNarrativesPay } from "../tokensage/shareCards";
+import { drawPricingChange, pricingChangeSlot } from "../pricingChange";
 import { prettyLabel } from "../tokensage/showcase";
 
 /**
@@ -399,6 +400,9 @@ export async function renderScreenedCard(s: Screened, span: string): Promise<HTM
   }
   const slot = (right - left) / buckets.length;
   const bw = Math.max(2, Math.min(16, (slot * 0.78) / 3));
+  const starts = buckets.map((b) => Date.parse(b.at));
+  const change = pricingChangeSlot(starts, s.bucketHours * 3_600_000);
+  if (change !== null) drawPricingChange(ctx, left + slot * change, top, y(0), FONT, right);
   const every = Math.ceil(buckets.length / 8);
   buckets.forEach((b, i) => {
     const gx = left + slot * i + (slot - bw * 3 - 4) / 2;
@@ -657,6 +661,8 @@ export interface TrendCardData {
   labels: { short: string; full: string }[];
   series: Series[];
   kind: "line" | "bars" | "stacked";
+  /** Where pricing changed, in bucket widths from the left edge (pricingChangeSlot). */
+  pricingChange?: number | null;
 }
 
 const fmt = (v: number, unit: Unit) =>
@@ -779,6 +785,7 @@ export async function renderTrendCard(d: TrendCardData): Promise<HTMLCanvasEleme
   ctx.fillStyle = MUTED;
   ctx.font = `500 14px ${FONT}`;
   for (let i = 0; i < n_; i += every) ctx.fillText(d.labels[i]!.short, xOf(i), base + 8);
+  if (d.pricingChange != null) drawPricingChange(ctx, left + slotW * d.pricingChange, top, base, FONT, right);
 
   if (d.kind === "line") {
     for (const s of d.series) {
