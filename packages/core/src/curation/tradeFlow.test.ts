@@ -186,7 +186,7 @@ describe("order-flow features in the vector", () => {
       names
         .slice(start + TRADE_FLOW_FEATURES.length)
         .every((n) =>
-          /^(text|path|mkt|ctx|buys5m|sells5m|buyRatio5m|ns[A-Z]|scoreNarrativeV2$|livestream|pairAgeMinutes$|sniperTop10WalletPct$|firstBuyersSupplyPct$|launchBundledBuyers$|devBuySupplyPct$|freshGapPct$|jup|freshLaunchBuyerPct$|walletRisk|knownDumperFirstBuyers$|linked|flagged)/.test(
+          /^(text|path|mkt|ctx|buys5m|sells5m|buyRatio5m|ns[A-Z]|scoreNarrativeV2$|livestream|pairAgeMinutes$|sniperTop10WalletPct$|firstBuyersSupplyPct$|launchBundledBuyers$|devBuySupplyPct$|freshGapPct$|jup|freshLaunchBuyerPct$|walletRisk|knownDumperFirstBuyers$|linked|flagged|cexFunded)/.test(
             n,
           ),
         ),

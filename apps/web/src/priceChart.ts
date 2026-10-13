@@ -114,8 +114,8 @@ export function timeLabel(t: number, spanMs: number): string {
 }
 
 /** What a flagged wallet is, for its marker's colour: the coin's creator, a risky one, or linked. */
-export type MarkerKind = "dev" | "risky" | "linked";
-export const MARKER_KINDS: readonly MarkerKind[] = ["dev", "risky", "linked"];
+export type MarkerKind = "dev" | "risky" | "kol" | "linked";
+export const MARKER_KINDS: readonly MarkerKind[] = ["dev", "risky", "kol", "linked"];
 
 /** One flagged wallet's trade, to mark on the chart. */
 export interface MarkerTrade {

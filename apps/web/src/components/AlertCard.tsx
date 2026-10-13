@@ -100,6 +100,10 @@ export function AlertCard({
     linkedPct,
     linkedAtAlert,
     linkedClusters,
+    cexPct,
+    cexAtAlert,
+    cexCount,
+    cexHolders,
     firstHolding,
     firstSeen,
     buyersAtAlert,
@@ -121,6 +125,7 @@ export function AlertCard({
         "snipers",
         "sniperTop10",
         "linked",
+        "cexFunded",
         "dev",
       ] as const
     ).filter(show).length + (show("vol") ? 3 : 0);
@@ -388,6 +393,22 @@ export function AlertCard({
               onOpen={() => openBubbleMap(mint, linkedSeed(card))}
             />
           )}
+          {show("cexFunded") && (
+            <div
+              title={
+                cexPct === null
+                  ? "CEX-funded: not checked yet. Funder reads are limited per scan, and tokens closest to alerting go first."
+                  : `CEX-funded: ${cexCount ?? "?"} of the ${cexHolders ?? 20} largest holders were opened from an exchange (or a busy service like a bridge), ${
+                      cexAtAlert ? "at alert time" : "from a scan after the alert"
+                    }.`
+              }
+            >
+              <dt>CEX-funded</dt>
+              <dd className={cexPct === null ? "muted" : "num"}>
+                {cexPct === null ? "Not checked" : pct(cexPct)}
+              </dd>
+            </div>
+          )}
           {show("dev") && (
             <div
               title={
@@ -511,6 +532,8 @@ export function cardReadings(card: Card) {
   // Linked wallets: top holders one funder paid for (or that funded each other), at alert time or
   // from a later scan, with the clusters behind the share for the list under the tiles.
   const linkedFrom = s.linkedWalletPct != null ? s : card.latestSnapshot;
+  // Exchange-funded share of the largest holders, the same way.
+  const cexFrom = s.cexFundedPct != null ? s : card.latestSnapshot;
   // The same fallback for the first-buyers count, read from the launch's first transactions.
   const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
@@ -531,6 +554,10 @@ export function cardReadings(card: Card) {
     linkedPct: linkedFrom?.linkedWalletPct ?? null,
     linkedAtAlert: linkedFrom === s,
     linkedClusters: linkedFrom?.linkedClusters ?? [],
+    cexPct: cexFrom?.cexFundedPct ?? null,
+    cexAtAlert: cexFrom === s,
+    cexCount: cexFrom?.cexFundedCount ?? null,
+    cexHolders: cexFrom?.cexFundedHolders ?? null,
     firstHolding: buyersFrom?.firstBuyersHolding ?? null,
     firstSeen: buyersFrom?.firstBuyersSeen ?? null,
     buyersAtAlert: buyersFrom === s,
@@ -619,9 +646,9 @@ function LinkedTile({
   const summary = linkedSummary(clusters);
   const title =
     value === null
-      ? "Linked: not checked yet. Who paid for each top-10 wallet is read a few tokens per scan."
+      ? "Linked: not checked yet. Who paid for each top-20 wallet is read a few tokens per scan."
       : value === 0
-        ? `Linked: no two top-10 wallets share a funder, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
+        ? `Linked: no two top-20 wallets share a funder, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
         : `Linked: ${summary ?? `${pct(value)} of supply in linked wallets`}, ${atAlert ? "at alert time" : "from a scan after the alert"}. Tap for the bubble map.`;
   const canOpen = value !== null && clusters.length > 0;
   return (

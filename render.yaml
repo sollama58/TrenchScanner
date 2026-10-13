@@ -43,6 +43,9 @@
 #         The outcome watcher and the empty-wallet check price on Jupiter's Tokens API first (100
 #         mints a call, a per-account limit) and on DexScreener only for what it missed, so
 #         DexScreener's per-IP budget goes to the scan's refresh and fast-match.
+#   - SOLANA_TRACKER_API_KEY (worker)               optional: a Solana Tracker key (free plan is enough)
+#         The worker reads Solana Tracker's KOL roster once a day (jobs/kolWalletsJob.ts), and the
+#         dashboard labels those wallets as KOLs with their name and X handle.
 #   - SOLANA_RPC_URL (both api + worker)           optional: leave empty to use Helius
 #         Verifies and reconciles burns. Empty (or a public endpoint) means the Helius RPC built
 #         from HELIUS_API_KEY; set it only to use a different paid RPC.
@@ -208,6 +211,10 @@ services:
       # Optional: a Jupiter API key (portal.jup.ag, free plan). The outcome watcher and the
       # empty-wallet check then price on Jupiter first, leaving DexScreener to the scan.
       - key: JUPITER_API_KEY
+        sync: false
+      # Optional: a Solana Tracker key (solanatracker.io, free plan). The worker reads its KOL
+      # roster once a day, and the dashboard labels those wallets as KOLs.
+      - key: SOLANA_TRACKER_API_KEY
         sync: false
       # The burn reconciler's endpoint - see the note on this var on the API above. Empty means
       # Helius via HELIUS_API_KEY.

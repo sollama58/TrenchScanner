@@ -122,6 +122,16 @@ describe("maxSniperTop10WalletPct", () => {
   });
 });
 
+describe("CEX-funded bounds", () => {
+  it("keeps the exchange-funded share within the bounds, and skips an unknown share", () => {
+    const filter = { ...baseFilter, minCexFundedPct: 20, maxCexFundedPct: 60 };
+    expect(matchesFilter(baseToken({ cexFundedPct: 10 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ cexFundedPct: 70 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ cexFundedPct: 40 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ cexFundedPct: undefined }), filter)).toBe(true);
+  });
+});
+
 describe("maxEmptyTop10WalletPct", () => {
   it("rejects a token whose top-10 are mostly wallets holding nothing else", () => {
     const token = baseToken({ emptyTop10WalletPct: 80 });

@@ -3,6 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma, type FunderActivityResult, type FunderResult } from "@trenchscanner/core";
 import {
+  cexReadingOf,
   linkedHoldersOf,
   linkedReadingOf,
   resetLinkedWallets,
@@ -87,6 +88,33 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     expect(linkedReadingOf(group, cached)).toMatchObject({ linkedWalletPct: 21 });
   });
 
+  it("reads the exchange-funded share from the same holders", async () => {
+    const group = {
+      mintAddress: w("m3"),
+      holders: [
+        { owner: w("p"), pct: 10 },
+        { owner: w("q"), pct: 8 },
+        { owner: w("r"), pct: 2 },
+        { owner: w("s"), pct: 1 },
+      ],
+    };
+    const helius = fakeHelius(
+      {
+        [w("p")]: found(w("EX")),
+        [w("q")]: found(w("H")),
+        [w("r")]: found(w("EX")),
+        [w("s")]: { status: "none" },
+      },
+      { [w("EX")]: true },
+    );
+    const lookups = await resolveLinkedWallets([group], helius, { maxNewLookups: 10 });
+    expect(cexReadingOf(group, lookups)).toEqual({
+      cexFundedPct: 50,
+      cexFundedCount: 2,
+      cexFundedHolders: 4,
+    });
+  });
+
   it("leaves a group over the budget unread, and its reading unknown", async () => {
     const group = {
       mintAddress: w("m2"),
@@ -101,20 +129,12 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     expect(linkedReadingOf(group, lookups)).toBeNull();
   });
 
-  it("takes the top-10 holders with their shares", () => {
-    expect(
-      linkedHoldersOf({
-        top10HolderAddresses: ["a", "b"],
-        topHolderShares: [
-          { owner: "a", pct: 3 },
-          { owner: "b", pct: 2 },
-          { owner: "z", pct: 1 },
-        ],
-      }),
-    ).toEqual([
-      { owner: "a", pct: 3 },
-      { owner: "b", pct: 2 },
-    ]);
+  it("takes up to the top-20 holders with their shares", () => {
+    const shares = Array.from({ length: 22 }, (_, i) => ({ owner: `h${i}`, pct: 22 - i }));
+    const holders = linkedHoldersOf({ top10HolderAddresses: ["h0"], topHolderShares: shares });
+    expect(holders).toHaveLength(20);
+    expect(holders[19]).toEqual({ owner: "h19", pct: 3 });
+    expect(linkedHoldersOf({ top10HolderAddresses: ["h0"] })).toEqual([]);
   });
   it("reads a wallet stored as busy again once the sorted lookup can reach it", async () => {
     await prisma.walletFunder.create({ data: { wallet: w("old"), status: "busy" } });

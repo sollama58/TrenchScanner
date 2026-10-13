@@ -65,6 +65,16 @@ describe("bubble map graph", () => {
     expect(g.nodes.find((n) => n.kind === "rest")).toMatchObject({ count: 5, pct: 14 });
   });
 
+  it("names a KOL holder without ringing it as risky", () => {
+    const g = buildGraph(snapshot, [
+      { wallet: A, tags: ["kol", "linked"], score: null, dumps: null, heldPct: 12, kol: "Cupsey" },
+      { wallet: R, tags: ["kol"], score: null, dumps: null, heldPct: 3, kol: "" },
+    ]);
+    expect(g.nodes.find((n) => n.wallet === A)).toMatchObject({ flags: [], kol: "Cupsey" });
+    expect(g.nodes.find((n) => n.wallet === R)).toMatchObject({ cluster: null, flags: [], kol: "" });
+    expect(g.nodes.find((n) => n.wallet === B)?.kol).toBeNull();
+  });
+
   it("lays out without overlaps, the same way every time", () => {
     const one = layoutGraph(buildGraph(snapshot));
     const two = layoutGraph(buildGraph(snapshot));

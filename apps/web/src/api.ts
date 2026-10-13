@@ -168,6 +168,10 @@ export interface Snapshot {
     | null;
   /** Every holder behind the linked reading and its %, largest first; stored with the clusters only. */
   linkedHolders?: { wallet: string; pct: number }[] | null;
+  /** Of the largest holders (up to 20), the % an exchange or a busy service paid for; null when not read. */
+  cexFundedPct?: number | null;
+  cexFundedCount?: number | null;
+  cexFundedHolders?: number | null;
   /** Of the launch's first 25 buyers (firstBuyersSeen while fewer), how many still hold it. */
   firstBuyersHolding?: number | null;
   firstBuyersSeen?: number | null;
@@ -787,6 +791,8 @@ export interface FilterInput {
   maxSniperTop10WalletPct: number | null;
   maxLinkedWalletPct: number | null;
   maxFlaggedBuySol: number | null;
+  minCexFundedPct: number | null;
+  maxCexFundedPct: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
   /** TokenSage narrative criteria; every one fails closed until the coin has a read. */
@@ -1179,6 +1185,7 @@ export type CardField =
   | "snipers"
   | "sniperTop10"
   | "linked"
+  | "cexFunded"
   | "dev"
   | "reasons"
   | "mint"
@@ -1215,6 +1222,8 @@ export interface FeedAppearance {
   reasons: boolean;
   /** The Top-10 snipers tile; off by default. */
   sniperTop10: boolean;
+  /** The CEX-funded tile; off by default (absent from older API builds: off). */
+  cexFunded: boolean;
   /**
    * The Narrative model's "agrees" / "warns" pill on other models' cards (and the line in Telegram
    * alerts). Null follows the automatic default (GET /config/narrative-note).

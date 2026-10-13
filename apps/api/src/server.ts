@@ -12,6 +12,7 @@ import {
   DexScreenerClient,
   GeckoTerminalClient,
   HeliusClient,
+  HeliusIdentityClient,
   SolanaRpc,
   resolveAccess,
   decideAccess,
@@ -49,6 +50,7 @@ import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerUtilityRoutes } from "./routes/utilities.js";
 import { registerWalletRoutes } from "./routes/wallets.js";
 import { WalletLiveReader } from "./walletProfile.js";
+import { WalletIdentityReader } from "./walletIdentity.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
 import { OnDemandLiveRefresher } from "./liveRefresh.js";
@@ -518,7 +520,15 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   const walletLive = env.HELIUS_API_KEY
     ? new WalletLiveReader(new HeliusClient({ apiKey: env.HELIUS_API_KEY }))
     : null;
-  await app.register(registerWalletRoutes, { prefix: "/wallets", live: walletLive });
+  // Helius's name for it (exchanges, protocols, services): its identity API, on paid plans.
+  const walletIdentity = env.HELIUS_API_KEY
+    ? new WalletIdentityReader(new HeliusIdentityClient(env.HELIUS_API_KEY))
+    : null;
+  await app.register(registerWalletRoutes, {
+    prefix: "/wallets",
+    live: walletLive,
+    identity: walletIdentity,
+  });
   await app.register(registerLeaderboardRoutes, { prefix: "/leaderboard" });
   await app.register(registerSubscriptionRoutes, { prefix: "/subscription", env, rpc });
   // The Utilities tab: token and wallet lookups paid for with Burn Credits.

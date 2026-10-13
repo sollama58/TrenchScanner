@@ -1,10 +1,13 @@
 import {
+  CEX_FUNDED_TOP_N,
+  cexFundedReading,
   createLogger,
   HOT_FUNDER_WINDOW_MS,
   isHotFunder,
   linkedWallets,
   prisma,
   type HeliusClient,
+  type CexFundedReading,
   type LinkedWalletsReading,
 } from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
@@ -14,7 +17,7 @@ const logger = createLogger("linked-wallets");
 
 /**
  * The linked-wallets reading for each candidate (core's wallets/linkedWallets.ts): who paid for
- * each of its top-10 holders and its creator, and whether those funders are exchanges.
+ * each of its top-20 holders and its creator, and whether those funders are exchanges.
  *
  * Every answer is cached. A wallet's funder never changes (WalletFunder, kept for good like
  * WalletActivityCache); a funder's hot verdict is re-read after a week (FunderActivity). So the
@@ -264,13 +267,15 @@ async function fundedLast24h(funders: string[], now: number): Promise<Map<string
   return new Map(rows.map((r) => [r.funder!, r._count._all]));
 }
 
-/** The reading's holders: the top-10 list with each one's share, when the profile has both. */
+/**
+ * The reading's holders: the largest holders RugCheck listed, with each one's share, up to
+ * CEX_FUNDED_TOP_N (top 20 since 2026-10-13, user decision; the top 10 before). Empty without the list.
+ */
 export function linkedHoldersOf(profile: {
   top10HolderAddresses?: string[];
   topHolderShares?: { owner: string; pct: number }[];
 }): { owner: string; pct: number }[] {
-  const top = new Set(profile.top10HolderAddresses ?? []);
-  return (profile.topHolderShares ?? []).filter((h) => top.has(h.owner));
+  return (profile.topHolderShares ?? []).slice(0, CEX_FUNDED_TOP_N);
 }
 
 /**
@@ -291,4 +296,20 @@ export function linkedReadingOf(
   const creatorFunder = creator ? (lookups.funderOf.get(creator) ?? null) : null;
   if (creatorFunder && !lookups.hotKnown(creatorFunder)) return null;
   return linkedWallets(group.holders, lookups.funderOf, { hot: lookups.hot, creator, creatorFunder });
+}
+
+/**
+ * The exchange-funded share for one candidate (core's cexFundedReading), over the same holders as
+ * the linked reading, or null while any of their funders, or any funder's hot verdict, is unknown.
+ */
+export function cexReadingOf(group: LinkedGroup, lookups: LinkedWalletLookups): CexFundedReading | null {
+  const holders = group.holders;
+  if (holders.length === 0) return null;
+  for (const h of holders) {
+    if (h.owner === group.creator) continue;
+    if (!lookups.funderOf.has(h.owner)) return null;
+    const f = lookups.funderOf.get(h.owner);
+    if (f && !lookups.hotKnown(f)) return null;
+  }
+  return cexFundedReading(holders, lookups.funderOf, { hot: lookups.hot, creator: group.creator ?? null });
 }

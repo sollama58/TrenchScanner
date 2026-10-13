@@ -68,6 +68,7 @@ const PROVIDERS: [suffix: string, provider: string][] = [
   ["jup.ag", "jupiter"],
   ["pump.fun", "pumpfun"],
   ["rugcheck.xyz", "rugcheck"],
+  ["solanatracker.io", "solanatracker"],
   ["api.telegram.org", "telegram"],
   ["api.anthropic.com", "anthropic"],
   ["solana-rpc.publicnode.com", "solana-public-rpc"],

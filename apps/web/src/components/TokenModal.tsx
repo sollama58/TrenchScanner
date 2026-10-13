@@ -71,21 +71,24 @@ interface TokenChart {
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
 interface FlaggedWallet {
   wallet: string;
-  tags: ("risky" | "dumper" | "linked" | "creator")[];
+  tags: ("risky" | "dumper" | "linked" | "creator" | "kol")[];
   score: number | null;
   dumps: number | null;
   coins: number | null;
   funder: string | null;
+  /** A known KOL's name ("" when unnamed). Absent from older API builds. */
+  kol?: string | null;
   solIn: number;
   solOut: number;
   heldPct: number | null;
   trades: [number, 1 | -1, number | null][];
 }
 
-/** The marker colour a flagged wallet gets: the creator first, then a risky one, else linked. */
+/** The marker colour a flagged wallet gets: the creator first, then a risky one, a KOL, else linked. */
 function kindOf(w: FlaggedWallet): MarkerKind {
   if (w.tags.includes("creator")) return "dev";
   if (w.tags.includes("risky") || w.tags.includes("dumper")) return "risky";
+  if (w.tags.includes("kol")) return "kol";
   return "linked";
 }
 
@@ -534,6 +537,7 @@ const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: stri
   risky: { text: "Risky", tone: "risky" },
   dumper: { text: "Known dumper", tone: "risky" },
   linked: { text: "Linked", tone: "linked" },
+  kol: { text: "KOL", tone: "kol" },
 };
 
 /** The flagged wallets behind the markers: what each is, its score, and what it did in the coin. */
@@ -573,7 +577,7 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                           : undefined
                     }
                   >
-                    {TAG_TEXT[t].text}
+                    {t === "kol" && w.kol ? `KOL: ${w.kol}` : TAG_TEXT[t].text}
                   </span>
                 ))}
               </span>

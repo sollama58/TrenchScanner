@@ -60,6 +60,8 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "trade-tape": 30 * 60_000,
   // Hourly: rebuilds the wallet risk scores from the trade tape (walletRiskJob.ts).
   "wallet-risk": 3 * 3_600_000,
+  // Daily: the KOL roster from Solana Tracker (kolWalletsJob.ts). Nothing user-facing waits on it.
+  "kol-wallets": 26 * 3_600_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 /**

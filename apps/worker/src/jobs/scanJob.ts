@@ -38,6 +38,7 @@ import {
   type HeliusClient,
   type MintAuthorityResult,
   type OnChainProfile,
+  type CexFundedReading,
   type LinkedWalletsReading,
   type LiveFlagsReading,
   type OnChainHolders,
@@ -71,6 +72,7 @@ import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
 import { refreshWalletRiskBook, walletRiskLookup } from "./walletRiskBook.js";
 import {
+  cexReadingOf,
   linkedHoldersOf,
   linkedReadingOf,
   resolveLinkedWallets,
@@ -917,7 +919,7 @@ async function scanCycle(
     );
   const sniperStageStartedAt = Date.now();
   const sniperWork = startSniperStage(sniperGroups, deps.helius, env);
-  // The linked-wallets reading: who paid for each top-10 holder and the creator, in the wallet
+  // The linked-wallets reading: who paid for each top-20 holder and the creator, in the wallet
   // stage's order (contenders first), on its own budget and the same wait.
   const linkedGroups: LinkedGroup[] = walletGroups.map((g) => {
     const profile = onChainByMint.get(g.mintAddress) as
@@ -1064,6 +1066,9 @@ async function scanCycle(
       ? linkedGroups.map((g) => [g.mintAddress, linkedReadingOf(g, linkedLookups!)] as const)
       : [],
   );
+  const cexByMint = new Map(
+    linkedLookups ? linkedGroups.map((g) => [g.mintAddress, cexReadingOf(g, linkedLookups!)] as const) : [],
+  );
   lap("linkedWallets");
   await withinBudget(liveTapeWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));
   const riskLookup = walletRiskLookup();
@@ -1139,6 +1144,7 @@ async function scanCycle(
           freshQuotes.get(candidate.mintAddress),
           linkedByMint.get(candidate.mintAddress) ?? null,
           liveFlagsOf(candidate.mintAddress, riskLookup),
+          cexByMint.get(candidate.mintAddress) ?? null,
         ),
       );
     } catch (err) {
@@ -2039,12 +2045,14 @@ async function processCandidate(
   freshQuote?: FreshQuote,
   linked: LinkedWalletsReading | null = null,
   flags: LiveFlagsReading | null = null,
+  cex: CexFundedReading | null = null,
 ): Promise<number> {
   const existingToken = prior.token;
   const onChain = withLiveFlags(
     withLinkedWallets(
       withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env, sniperWallets),
       linked,
+      cex,
     ),
     flags,
   );
@@ -2456,10 +2464,20 @@ export function withWalletSignals(
 export function withLinkedWallets(
   onChain: OnChainProfile | null,
   linked: LinkedWalletsReading | null,
+  cex: CexFundedReading | null = null,
 ): OnChainProfile | null {
-  if (!onChain || !linked) return onChain;
+  if (!onChain) return onChain;
+  const withCex = cex
+    ? {
+        ...onChain,
+        cexFundedPct: cex.cexFundedPct,
+        cexFundedCount: cex.cexFundedCount,
+        cexFundedHolders: cex.cexFundedHolders,
+      }
+    : onChain;
+  if (!linked) return withCex;
   return {
-    ...onChain,
+    ...withCex,
     linkedWalletPct: linked.linkedWalletPct,
     linkedClusterCount: linked.linkedClusterCount,
     linkedLargestClusterPct: linked.linkedLargestClusterPct,
