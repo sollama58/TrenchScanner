@@ -27,6 +27,7 @@ import {
 import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES, withCurrentNarrativeTiming } from "./features.js";
 import {
   CONSENSUS_CONTESTANT,
+  HIGH_PRECISION_SHARE_BAND,
   RULES_CONTESTANT,
   type ContestantSpec,
   type CuratorRecipe,
@@ -445,11 +446,18 @@ async function sitRecipeExam(
 ): Promise<RecipeTrial> {
   const recipe = narrowRecipe(wholeRecipe, usable);
   const cooldown = { cooldownMs: cfg.cooldownHours * 3_600_000 };
-  // A paced seat is examined and calibrated at its own pace floor (CuratorRecipe.callsPerHour);
+  // A high-precision seat is examined and calibrated at its own share of moments
+  // (CuratorRecipe.cutoffShare), with no share floor or coverage tolerance pulling it looser;
   // it is still scored against the field's targets.
   const targets: PrecisionTargets =
-    recipe.callsPerHour !== undefined
-      ? { ...cfg.targets, minCallsPerHour: recipe.callsPerHour }
+    recipe.cutoffShare !== undefined
+      ? {
+          ...cfg.targets,
+          targetShare: recipe.cutoffShare,
+          shareBand: HIGH_PRECISION_SHARE_BAND,
+          minSupportShare: 0,
+          coverageTolerance: 0,
+        }
       : cfg.targets;
   const recencyHalfLifeDays = recipe.recencyHalfLifeDays ?? cfg.recencyHalfLifeDays;
   const evaluation = await walkForwardEvaluate(rows, {
@@ -465,6 +473,7 @@ async function sitRecipeExam(
     cooldownHours: cfg.cooldownHours,
     // Both sides are graded at the hit-rate cutoffs production holds them to, not at a pace.
     targets,
+    heuristicTargets: cfg.targets,
     heuristicPrecisionGate: cfg.heuristicPrecisionGate,
     learner: recipe.learner,
     featureNames: recipe.featureNames,

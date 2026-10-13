@@ -9,7 +9,7 @@ import {
   ORDER_FLOW_FEATURES,
   TREES_NO_TOKENSAGE_CONTESTANT,
   TREES_NO_TOKENSAGE_FEATURES,
-  HIGH_PRECISION_CALLS_PER_HOUR,
+  HIGH_PRECISION_CUTOFF_SHARE,
   SHARP_DEEP_TREES_CONTESTANT,
   SHARP_TREES_CONTESTANT,
   enabledContestants,
@@ -94,13 +94,13 @@ describe("contestant roster", () => {
 });
 
 describe("the high-precision seats", () => {
-  it("are learners at a pace floor, outside the combiners and evolution, and can be the default", () => {
+  it("are learners at their own share cutoff, outside the combiners and evolution, and can be the default", () => {
     for (const id of [SHARP_TREES_CONTESTANT, SHARP_DEEP_TREES_CONTESTANT]) {
       const spec = contestantSpec(id)!;
       expect(spec.role).toBe("learner");
       expect(spec.standalone).toBe(true);
       expect(spec.control).toBeUndefined();
-      expect(spec.recipe?.callsPerHour).toBe(HIGH_PRECISION_CALLS_PER_HOUR);
+      expect(spec.recipe?.cutoffShare).toBe(HIGH_PRECISION_CUTOFF_SHARE);
       expect(isMemberLearner(spec)).toBe(false);
       expect(ACTIVE_CONTESTANT_IDS).toContain(id);
     }
@@ -250,28 +250,36 @@ describe("runContestTraining", () => {
   }, 60_000);
 });
 
-describe("a paced seat in the contest", () => {
-  it("sends at least its floor in the exam and is stacked by no combiner", async () => {
+describe("a high-precision seat in the contest", () => {
+  it("calls a narrower slice than the field and is stacked by no combiner", async () => {
     const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 11 });
     const results = await runContestTraining(rows, {
-      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+      // The field's rule as production runs it: anchored on the top third of moments.
+      targets: {
+        winRate: 0.75,
+        goalRate: 0.5,
+        minSupport: 30,
+        confidenceZ: 1,
+        targetShare: 0.33,
+        shareBand: 0.1,
+        shareHurdle: 0.01,
+      },
       targetPerHour: 6,
       heuristicMinScore: 55,
       minRowsToPromote: 1500,
       recencyHalfLifeDays: 14,
       cooldownHours: 24,
       heuristicPrecisionGate: true,
-      // The synthetic market brings a few tokens an hour, so the floor is scaled down to match.
       contestants: enabledContestants(["consensus", "linear", "trees", SHARP_TREES_CONTESTANT]).map((c) =>
         c.id === SHARP_TREES_CONTESTANT
-          ? { ...c, recipe: { learner: "gbdt" as const, callsPerHour: 0.6 } }
+          ? { ...c, recipe: { learner: "gbdt" as const, cutoffShare: HIGH_PRECISION_CUTOFF_SHARE } }
           : c,
       ),
     });
     const trees = results.find((r) => r.contestant === "trees")!;
     const sharp = results.find((r) => r.contestant === SHARP_TREES_CONTESTANT)!;
     expect(sharp.metrics.exam!.calls).toBeGreaterThan(0);
-    expect(sharp.metrics.precisionCalibration!.support).toBeGreaterThan(
+    expect(sharp.metrics.precisionCalibration!.support).toBeLessThan(
       trees.metrics.precisionCalibration!.support,
     );
     const consensus = results.find((r) => r.contestant === "consensus")!.params as StackedCuratorParams;
