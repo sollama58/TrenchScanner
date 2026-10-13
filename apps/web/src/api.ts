@@ -141,6 +141,18 @@ export interface Snapshot {
   emptyTop10WalletPct?: number | null;
   /** Share of the top 10 holders (pool and LP aside) that were among the first 25 buyers; null when not checked. */
   sniperTop10WalletPct?: number | null;
+  /**
+   * Flagged wallets (risky or known dumpers) in the coin's newest trades, read before the call:
+   * distinct buyers and sellers, the SOL each way, and the trades themselves, newest first. Null
+   * or absent when not read.
+   */
+  flaggedBuyers?: number | null;
+  flaggedSellers?: number | null;
+  flaggedBuySol?: number | null;
+  flaggedSellSol?: number | null;
+  flaggedTrades?:
+    | { wallet: string; side: "buy" | "sell"; sol: number; atMs: number; score: number; dumps: number }[]
+    | null;
   /** % of supply held by linked top-10 holders (one funder paid for them); null when not checked. */
   linkedWalletPct?: number | null;
   /** The clusters behind it, largest first; null or absent with none. */
@@ -770,6 +782,7 @@ export interface FilterInput {
   maxEmptyTop10WalletPct: number | null;
   maxSniperTop10WalletPct: number | null;
   maxLinkedWalletPct: number | null;
+  maxFlaggedBuySol: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
   /** TokenSage narrative criteria; every one fails closed until the coin has a read. */

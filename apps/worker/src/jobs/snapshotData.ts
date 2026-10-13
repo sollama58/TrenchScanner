@@ -73,6 +73,14 @@ export function snapshotDataFor(
     linkedClusters: scored.linkedClusters?.length
       ? (scored.linkedClusters as unknown as Prisma.InputJsonValue)
       : undefined,
+    flaggedBuyers: scored.flaggedBuyers,
+    flaggedSellers: scored.flaggedSellers,
+    flaggedBuySol: scored.flaggedBuySol,
+    flaggedSellSol: scored.flaggedSellSol,
+    // Only when there is a flagged trade to list, as for the clusters above.
+    flaggedTrades: scored.flaggedTrades?.length
+      ? (scored.flaggedTrades as unknown as Prisma.InputJsonValue)
+      : undefined,
     top10WalletsChecked: scored.top10WalletsChecked,
     firstBuyersHolding: scored.tradeFlow?.firstBuyersHolding ?? null,
     firstBuyersSeen: scored.tradeFlow?.firstBuyersSeen ?? null,

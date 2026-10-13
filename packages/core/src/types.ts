@@ -1,4 +1,5 @@
 import type { LinkedCluster } from "./wallets/linkedWallets.js";
+import type { FlaggedTrade } from "./wallets/liveFlags.js";
 import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
 import type { MarketContextFeatures, PricePathFeatures } from "./curation/pricePath.js";
 import type { NarrativeRead } from "./curation/narrativeFeatures.js";
@@ -190,6 +191,17 @@ export interface OnChainProfile {
   linkedCreatorPct?: number;
   linkedClusters?: LinkedCluster[];
   /**
+   * Flagged wallets (risky or known dumpers) in the coin's newest page of trades, read from Helius
+   * before the decision (core's wallets/liveFlags.ts, worker's liveTape.ts): distinct buyers and
+   * sellers, the SOL each way, and the trades themselves for the modal. Undefined without a recent
+   * page or the wallet scores.
+   */
+  flaggedBuyers?: number;
+  flaggedSellers?: number;
+  flaggedBuySol?: number;
+  flaggedSellSol?: number;
+  flaggedTrades?: FlaggedTrade[];
+  /**
    * Whether this mint was launched in Pump.fun's Mayhem Mode - see mayhemStateAddress() in
    * solana.ts for how it's detected and why nothing cheaper works. `undefined` means the check
    * hasn't been run or failed, which the rug screen treats as a rejection rather than an
@@ -329,6 +341,8 @@ export interface FilterCriteria {
   maxSniperTop10WalletPct?: number | null;
   /** Max % of supply held by linked top holders (one funder, or funded each other). */
   maxLinkedWalletPct?: number | null;
+  /** Max SOL flagged wallets bought in the coin's newest trades (flaggedBuySol). Skipped while unknown. */
+  maxFlaggedBuySol?: number | null;
   /** Bounds on how many of the launch's first 25 buyers still hold it (tradeFlow.firstBuyersHolding). */
   minFirstBuyersHolding?: number | null;
   maxFirstBuyersHolding?: number | null;

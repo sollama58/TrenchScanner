@@ -1,0 +1,100 @@
+import {
+  createLogger,
+  liveFlags,
+  tradesFromChainTransactions,
+  type HeliusClient,
+  type LiveFlagsReading,
+  type ScoredWallet,
+  type TapeTrade,
+} from "@trenchscanner/core";
+
+const logger = createLogger("live-tape");
+
+/**
+ * The live tape: each coin close to a call has its newest page of trades read from Helius (one
+ * 10-credit getTransactionsForAddress, up to 100 trades), so the flagged wallets trading it
+ * (core's wallets/liveFlags.ts) are known before the decision, not half an hour after it as on
+ * the post-call trade tape. User decision 2026-10-13: Helius, for coins close to a call.
+ *
+ * Contenders and alerts held for a wallet figure come first, as in the wallet stage. A coin's
+ * page is read again once it is LIVE_TAPE_REFRESH_SECONDS old, and at most
+ * LIVE_TAPE_PAGES_PER_CYCLE pages go out a cycle: that cap is the credit ceiling.
+ */
+
+/** A page older than this says nothing about now: the reading is unknown again. */
+const MAX_PAGE_AGE_MS = 15 * 60_000;
+const MAX_ENTRIES = 2_000;
+
+const pages = new Map<string, { atMs: number; trades: TapeTrade[] }>();
+let pagesRead = 0;
+let pagesFailed = 0;
+
+/** Pages read and failed since the last call, for the scan's heartbeat (10 credits a page read). */
+export function takeLiveTapeStats(): { pages: number; failed: number; credits: number; coins: number } {
+  const out = {
+    pages: pagesRead,
+    failed: pagesFailed,
+    credits: 10 * (pagesRead + pagesFailed),
+    coins: pages.size,
+  };
+  pagesRead = 0;
+  pagesFailed = 0;
+  return out;
+}
+
+/** Test hook. */
+export function resetLiveTape(): void {
+  pages.clear();
+  takeLiveTapeStats();
+}
+
+/**
+ * Reads the newest page for the first `maxPages` of `mints` (priority order) whose page is
+ * missing or older than `refreshMs`. Never rejects.
+ */
+export async function readLiveTape(
+  mints: readonly string[],
+  helius: Pick<HeliusClient, "getMintTransactionsPage" | "gtfaUsable">,
+  opts: { maxPages: number; refreshMs: number; nowMs?: number },
+): Promise<void> {
+  if (!helius.gtfaUsable || opts.maxPages <= 0) return;
+  const now = opts.nowMs ?? Date.now();
+  const due = mints
+    .filter((m) => {
+      const page = pages.get(m);
+      return !page || now - page.atMs >= opts.refreshMs;
+    })
+    .slice(0, opts.maxPages);
+  await Promise.all(
+    due.map(async (mint) => {
+      try {
+        const page = await helius.getMintTransactionsPage(mint, { newest: true });
+        if (page.status !== "ok") {
+          if (page.status === "failed") pagesFailed += 1;
+          return;
+        }
+        pagesRead += 1;
+        pages.delete(mint);
+        pages.set(mint, { atMs: now, trades: tradesFromChainTransactions(mint, page.txs).trades });
+        if (pages.size > MAX_ENTRIES) {
+          const oldest = pages.keys().next().value;
+          if (oldest !== undefined) pages.delete(oldest);
+        }
+      } catch (err) {
+        pagesFailed += 1;
+        logger.warn("live tape page failed", { mint, error: String(err) });
+      }
+    }),
+  );
+}
+
+/** The flagged-wallet reading for a coin, or null without a recent page or the risk scores. */
+export function liveFlagsOf(
+  mint: string,
+  lookup: ((wallet: string) => ScoredWallet | undefined) | undefined,
+  nowMs = Date.now(),
+): LiveFlagsReading | null {
+  const page = pages.get(mint);
+  if (!lookup || !page || nowMs - page.atMs > MAX_PAGE_AGE_MS) return null;
+  return liveFlags(page.trades, lookup);
+}
