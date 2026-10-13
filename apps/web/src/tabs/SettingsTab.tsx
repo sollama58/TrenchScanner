@@ -37,7 +37,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters") => void }) {
 
 /** Optional tabs, off until switched on here. Saved with the feed appearance, so it follows the wallet. */
 function TabsPanel() {
-  const { streamTab } = useAppearance();
+  const { streamTab, lighthouseTab } = useAppearance();
   return (
     <section className="panel">
       <header className="section-head">
@@ -64,6 +64,24 @@ function TabsPanel() {
         <p className="muted small">
           A tab showing every new token the moment it passes the safety screen inside the band, newest first,
           on the same cards as your Live feed.
+        </p>
+      </div>
+      <div className="tab-option">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={lighthouseTab}
+          className={`switch${lighthouseTab ? " on" : ""}`}
+          onClick={() => setAppearance({ lighthouseTab: !lighthouseTab })}
+        >
+          <span className="switch-track">
+            <span className="switch-thumb" />
+          </span>
+          Lighthouse
+        </button>
+        <p className="muted small">
+          A tab with the Market Lighthouse in full: how screened tokens are doing, and its trends over time.
+          The Lighthouse button on the Live feed opens it either way.
         </p>
       </div>
     </section>

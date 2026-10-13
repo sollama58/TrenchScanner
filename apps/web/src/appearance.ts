@@ -30,6 +30,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   cexFunded: false,
   narrativeNote: null,
   streamTab: false,
+  lighthouseTab: false,
   quickLinks: ["terminal"],
   // Off by default, both switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, and the TokenSage button (the token view keeps its own). An account that
@@ -207,6 +208,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     cexFunded: typeof r.cexFunded === "boolean" ? r.cexFunded : d.cexFunded,
     narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
     streamTab: typeof r.streamTab === "boolean" ? r.streamTab : d.streamTab,
+    lighthouseTab: typeof r.lighthouseTab === "boolean" ? r.lighthouseTab : d.lighthouseTab,
     quickLinks: Array.isArray(r.quickLinks)
       ? [
           ...new Set(
@@ -222,7 +224,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
 
 /** A preset applied on top of the default, keeping the user's theme and colors. */
 export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance>): FeedAppearance {
-  const { theme, accent, mine, win, loss, quickLinks, narrativeNote, streamTab } = current;
+  const { theme, accent, mine, win, loss, quickLinks, narrativeNote, streamTab, lighthouseTab } = current;
   return normalizeAppearance({
     ...DEFAULT_APPEARANCE,
     ...look,
@@ -234,13 +236,14 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     quickLinks,
     narrativeNote,
     streamTab,
+    lighthouseTab,
   });
 }
 
 /** Whether two appearances look the same (hidden fields in any order). */
-/** The default look, keeping the reader's tab choice (the Stream tab isn't part of how cards look). */
+/** The default look, keeping the reader's tab choices (optional tabs aren't part of how cards look). */
 export function defaultLook(current: FeedAppearance): FeedAppearance {
-  return { ...DEFAULT_APPEARANCE, streamTab: current.streamTab };
+  return { ...DEFAULT_APPEARANCE, streamTab: current.streamTab, lighthouseTab: current.lighthouseTab };
 }
 
 export function sameAppearance(a: FeedAppearance, b: FeedAppearance): boolean {
