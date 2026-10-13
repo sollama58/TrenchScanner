@@ -95,7 +95,7 @@ describe.skipIf(!dbAvailable)("label regrade job", () => {
     }
   });
 
-  it("leaves a row a curated alert points at, and puts back the old grade on one already re-graded", async () => {
+  it("keeps the published grade on a row a curated alert points at, with its rule-4 grade beside it", async () => {
     const { token, row } = await seed("alerted");
     const alertOn = (candidateOutcomeId: string, tokenId: string) =>
       prisma.curatedAlert.create({
@@ -114,11 +114,18 @@ describe.skipIf(!dbAvailable)("label regrade job", () => {
       { minuteCandles: async (mint) => (mint === token.mintAddress ? candles : []) },
       { spacingMs: 0, now: () => NOW, coinsPerRun: 1000 },
     );
-    expect(await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } })).toMatchObject({
+    const kept = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
+    expect(kept).toMatchObject({
       labelRule: 3,
-      regradedAt: null,
       anchorPriceUsd: 1,
+      hit2xIn1h: true,
+      labelValue: 1.3,
+      rule3Grade: null,
     });
+    expect(kept.regradedAt).not.toBeNull();
+    expect((kept.features as Record<string, unknown>).freshGapPct).toBeUndefined();
+    expect(kept.rule4Grade).toMatchObject({ anchorPriceUsd: 1.6, hit2xIn1h: false, labelValue: 0 });
+    expect((kept.rule4Grade as Record<string, number>).freshGapPct).toBeCloseTo(60);
 
     // Re-graded before alerts were left alone: restored from rule3Grade on the next run.
     const late = await seed("alerted-late");
@@ -143,6 +150,8 @@ describe.skipIf(!dbAvailable)("label regrade job", () => {
       labelValue: 1.3,
       rule3Grade: null,
     });
+    expect(back.rule4Grade).toMatchObject({ anchorPriceUsd: 1.6, hit2xIn1h: false });
+    expect((back.rule4Grade as Record<string, number>).freshGapPct).toBeCloseTo(60);
     expect(back.hit2xAt?.getTime()).toBe(ANCHOR + 3 * 60_000);
     expect((back.features as Record<string, unknown>).freshGapPct).toBeUndefined();
   });

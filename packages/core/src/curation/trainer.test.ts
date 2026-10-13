@@ -212,6 +212,21 @@ describe("walkForwardEvaluate", () => {
     expect(result.verdict.promote).toBe(true);
   });
 
+  it("grades the newest examShare of the decision rows", async () => {
+    const rows = syntheticRows(3_000);
+    const opts = { targetPerHour: 5, heuristicMinScore: 55, minRowsToPromote: 1_500 };
+    const half = await walkForwardEvaluate(rows, opts);
+    const most = await walkForwardEvaluate(rows, { ...opts, examShare: 0.7 });
+    expect(half.decisionReference.length).toBeCloseTo(rows.length * 0.5, -1);
+    expect(most.decisionReference.length).toBeCloseTo(rows.length * 0.7, -1);
+    // The extra rows are the older ones: the newest stay graded either way.
+    const newest = Math.max(...rows.map((r) => r.anchorAt.getTime()));
+    expect(Math.max(...most.decisionReference.map((r) => r.anchorAt.getTime()))).toBe(newest);
+    expect(new Date(most.folds[0]!.testFrom).getTime()).toBeLessThan(
+      new Date(half.folds[0]!.testFrom).getTime(),
+    );
+  }, 60_000);
+
   it("keeps out-of-band rows out of both sides' emissions, matching production", async () => {
     // Every row is far above the band ceiling: with the band passed (as the training job passes
     // it), neither curator may emit a single one, however strong the model's signal is.

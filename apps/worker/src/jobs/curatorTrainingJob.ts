@@ -23,6 +23,7 @@ import {
   maskKnownBadInputs,
   trainingWeightByAge,
   MAX_EVENT_AGE_MINUTES,
+  FRESH_ANCHOR_LABEL_RULE,
   CANDIDATE_FEATURE_NAMES,
   ALL_NARRATIVE_FEATURES,
   Prisma,
@@ -170,6 +171,7 @@ export async function runCuratorTrainingJob(
       legacyLabelWeight: env.CURATOR_LEGACY_LABEL_WEIGHT,
       runWeightPerDoubling: env.CURATOR_RUN_WEIGHT_PER_DOUBLING,
       minTestWins: env.CURATOR_EXAM_MIN_FOLD_WINS,
+      examShare: env.CURATOR_EXAM_SHARE,
       highConvictionRank: env.CURATED_HIGH_CONVICTION_RANK,
       calibrationWindowDays: env.CURATOR_CALIBRATION_WINDOW_DAYS,
       featureOnsetGuard: env.CURATOR_FEATURE_ONSET_GUARD,
@@ -907,6 +909,53 @@ interface LoadedRow {
   peak1hReturnPct: number | null;
   peakBeforeStopPriceUsd: number | null;
   hit10xIn1h: boolean | null;
+  rule4Grade: unknown;
+}
+
+/** The grade fields trainingGradeOf reads from a stored rule4Grade. */
+type GradedFields = Pick<
+  LoadedRow,
+  | "labelValue"
+  | "labelRule"
+  | "anchorPriceUsd"
+  | "signalPriceUsd"
+  | "anchorMcapUsd"
+  | "maxDrawdown1hPct"
+  | "peak1hReturnPct"
+  | "peakBeforeStopPriceUsd"
+  | "hit10xIn1h"
+>;
+
+/**
+ * The grade a row trains and is examined on. A row a curated alert points at keeps the rule-3
+ * verdict the alert was published with, and its rule-4 re-grade sits in rule4Grade
+ * (labelRegradeJob.ts): that one is read instead, with its fresh-price gap, so the moments the
+ * models called are graded on the same rule as the rest. Every other row is returned as it is.
+ */
+export function trainingGradeOf<R extends GradedFields & { features: unknown; rule4Grade: unknown }>(
+  r: R,
+): R {
+  const g = r.rule4Grade;
+  if (r.labelRule !== 3 || g === null || typeof g !== "object") return r;
+  const grade = g as Record<string, unknown>;
+  if (typeof grade.labelValue !== "number" || typeof grade.anchorPriceUsd !== "number") return r;
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  return {
+    ...r,
+    labelRule: FRESH_ANCHOR_LABEL_RULE,
+    labelValue: grade.labelValue,
+    anchorPriceUsd: grade.anchorPriceUsd,
+    signalPriceUsd: num(grade.signalPriceUsd),
+    anchorMcapUsd: num(grade.anchorMcapUsd) ?? r.anchorMcapUsd,
+    maxDrawdown1hPct: num(grade.maxDrawdown1hPct),
+    peak1hReturnPct: num(grade.peak1hReturnPct),
+    peakBeforeStopPriceUsd: num(grade.peakBeforeStopPriceUsd),
+    hit10xIn1h: typeof grade.hit10xIn1h === "boolean" ? grade.hit10xIn1h : null,
+    features: {
+      ...(r.features as Record<string, number | null>),
+      freshGapPct: num(grade.freshGapPct),
+    },
+  };
 }
 
 /** Every name a stored vector can carry, in vector order: the shape withFixedShape builds. */
@@ -969,7 +1018,7 @@ async function loadRowsOfKind(
     const page = await prisma.$queryRaw<LoadedRow[]>`
       SELECT "id", "tokenId", "anchorAt", "features", "labelValue", "anchorPriceUsd",
              "signalPriceUsd", "anchorMcapUsd", "sampleKind", "labelRule", "maxDrawdown1hPct",
-             "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h"
+             "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h", "rule4Grade"
       FROM "CandidateOutcome"
       WHERE "finalizedAt" IS NOT NULL
         AND "anchorAt" >= ${windowStart}
@@ -980,7 +1029,8 @@ async function loadRowsOfKind(
         ${cursor !== undefined ? Prisma.sql`AND ("anchorAt", "id") < (${cursor.anchorAt}, ${cursor.id})` : Prisma.empty}
       ORDER BY "anchorAt" DESC, "id" DESC
       LIMIT ${take}`;
-    for (const r of page) {
+    for (const loaded of page) {
+      const r = trainingGradeOf(loaded);
       // Inputs known to be wrong on old rows (fake order-flow zeros) read as missing.
       const features = maskKnownBadInputs(
         r.anchorAt,

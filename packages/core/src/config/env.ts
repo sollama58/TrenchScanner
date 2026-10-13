@@ -466,6 +466,12 @@ const envSchema = z.object({
   // Fewest wins a walk-forward fold's decision rows must hold before it is judged (the fold count
   // shrinks until each has this many; a fold still short of it is skipped).
   CURATOR_EXAM_MIN_FOLD_WINS: z.coerce.number().int().min(0).default(30),
+  // The share of the decision moments, newest first, the walk-forward exam grades; the rest only
+  // trains. 0.7 since 2026-10-13 (was a fixed half): with rule 4 the only graded rule, the exam
+  // had shrunk to 300-800 calls a seat. On the 10-05..10-12 rule-4 rows a 70% exam held 40% more
+  // moments, and its oldest fold (trained on ~4 days) hit 21-23% 2x against 18-20% for the later
+  // ones, so the thinner early training cost nothing visible (notes/hit-catch-2026-10-13/models.md).
+  CURATOR_EXAM_SHARE: z.coerce.number().min(0.1).max(0.9).default(0.7),
   // Calls ranked in the top (1 - this) share of decision moments are tiered "high conviction" on
   // the card and tracked separately in the hit rates. 0.995 = the top half-percent.
   CURATED_HIGH_CONVICTION_RANK: z.coerce.number().min(0.5).max(0.9999).default(0.995),
