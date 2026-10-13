@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { withApiFeature } from "@trenchscanner/core";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
+import type { WalletIdentityReader } from "../walletIdentity.js";
 
 /**
  * The wallet modal's read (GET /wallets/:wallet): one wallet in full, for anyone with access
@@ -13,7 +14,10 @@ const walletSchema = z.object({ wallet: address });
 /** Each open reads the chain once (two 1-credit calls, cached): well above what a person clicks. */
 const WALLET_ROUTE_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 
-export async function registerWalletRoutes(app: FastifyInstance, opts: { live: WalletLiveReader | null }) {
+export async function registerWalletRoutes(
+  app: FastifyInstance,
+  opts: { live: WalletLiveReader | null; identity?: WalletIdentityReader | null },
+) {
   app.addHook("preHandler", app.authenticateSubscriber);
 
   app.get("/:wallet", { config: { rateLimit: WALLET_ROUTE_RATE_LIMIT } }, async (request, reply) => {
@@ -22,6 +26,8 @@ export async function registerWalletRoutes(app: FastifyInstance, opts: { live: W
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     reply.header("Cache-Control", "private, max-age=30");
     // Its chain reads count as "wallet-modal" in Admin > API usage.
-    return withApiFeature("wallet-modal", () => loadWalletProfile(parsed.data.wallet, opts.live));
+    return withApiFeature("wallet-modal", () =>
+      loadWalletProfile(parsed.data.wallet, opts.live, opts.identity ?? null),
+    );
   });
 }

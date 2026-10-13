@@ -19,6 +19,7 @@ export * from "./datasources/pumpfun.js";
 export * from "./datasources/rugcheck.js";
 export * from "./datasources/onChainHolders.js";
 export * from "./datasources/helius.js";
+export * from "./datasources/walletIdentity.js";
 export * from "./datasources/launchBuyers.js";
 export * from "./wallets/tradeTape.js";
 export * from "./wallets/riskScore.js";
