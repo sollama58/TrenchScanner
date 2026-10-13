@@ -21,6 +21,8 @@ import {
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
 import { openWallet } from "../walletModal";
+import { useWalletNames, walletText, type WalletNames } from "../walletNames";
+import { WalletText } from "./WalletText";
 import { LINKED_WARN_PCT, SAFETY_REJECT_LINKED_COUNT } from "./AlertCard";
 import { ShareButton } from "./ShareImageDialog";
 import { BubblesIcon, CheckIcon, CloseIcon, LinkIcon, LockIcon } from "./Icons";
@@ -30,6 +32,16 @@ type TokenDetail = Token & { snapshots: Snapshot[] };
 
 /** How many cluster colours there are (styles.css .bm-modal --bm-0..4); more clusters reuse them. */
 export const CLUSTER_COLOURS = 5;
+
+/** The names of every wallet on the map (holders and funders), in one read. */
+function useGraphNames(graph: BubbleGraph | null): WalletNames {
+  return useWalletNames(
+    useMemo(
+      () => (graph ? [...graph.nodes.map((n) => n.wallet), ...graph.clusters.map((c) => c.funder)] : []),
+      [graph],
+    ),
+  );
+}
 
 /**
  * The linked-wallets bubble map in a dialog, opened from a card's or the token modal's Linked tile,
@@ -148,6 +160,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
     () => (snapshot ? layoutGraph(buildGraph(snapshot, flagged)) : null),
     [snapshot, flagged],
   );
+  const names = useGraphNames(graph);
 
   const [copied, setCopied] = useState(false);
   const copyLink = () => {
@@ -170,7 +183,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
           fileName={`trenchscanner-bubbles-${(loaded.token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
           caption={`${label} linked wallets on TrenchScanner`}
           disabled={!hasMap}
-          render={() => renderBubbleCard(graph, loaded.token)}
+          render={() => renderBubbleCard(graph, loaded.token, names)}
         />
       )}
       <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
@@ -210,12 +223,20 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
             : "No two top holders share a funder: nothing linked to map."}
         </p>
       )}
-      {graph && hasMap && <MapView graph={graph} />}
+      {graph && hasMap && <MapView graph={graph} names={names} />}
     </div>
   );
 }
 
-function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boolean }) {
+function MapView({
+  graph,
+  names,
+  compact = false,
+}: {
+  graph: BubbleGraph;
+  names: WalletNames;
+  compact?: boolean;
+}) {
   const [picked, setPicked] = useState<string | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
   const node = graph.nodes.find((n) => n.id === picked) ?? null;
@@ -267,6 +288,7 @@ function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boo
       </dl>
       <BubbleSvg
         graph={graph}
+        names={names}
         compact={compact}
         picked={picked}
         lit={lit}
@@ -279,7 +301,7 @@ function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boo
           if (wallet) openWallet(wallet);
         }}
       />
-      <NodeDetail node={node} graph={graph} />
+      <NodeDetail node={node} graph={graph} names={names} />
       <ul className="bm-clusters">
         {graph.clusters.map((c, i) => (
           <li key={c.funder}>
@@ -295,7 +317,7 @@ function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boo
             >
               <i className="bm-dot" aria-hidden="true" />
               <span className="bm-cluster-name">
-                Funder <span className="num">{shortAddress(c.funder)}</span>
+                Funder <WalletText wallet={c.funder} names={names} />
               </span>
               <span className="muted small">
                 {c.wallets.length} wallets{c.creatorLinked ? " · tied to the creator" : ""}
@@ -341,12 +363,14 @@ function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boo
 
 function BubbleSvg({
   graph,
+  names,
   compact,
   picked,
   lit,
   onPick,
 }: {
   graph: BubbleGraph;
+  names: WalletNames;
   compact: boolean;
   picked: string | null;
   lit: number | null;
@@ -439,7 +463,7 @@ function BubbleSvg({
             style={{ animationDelay: `${Math.min(i, 24) * 22}ms` }}
             role="button"
             tabIndex={0}
-            aria-label={nodeLabel(n, graph)}
+            aria-label={nodeLabel(n, graph, names)}
             onClick={() => onPick(n.id)}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
@@ -448,9 +472,10 @@ function BubbleSvg({
               }
             }}
           >
-            <title>{nodeLabel(n, graph)}</title>
+            <title>{nodeLabel(n, graph, names)}</title>
             <Bubble
               node={n}
+              names={names}
               fill={n.cluster === null ? `url(#${uid}-gn)` : `url(#${uid}-g${n.cluster % CLUSTER_COLOURS})`}
             />
           </g>
@@ -460,7 +485,7 @@ function BubbleSvg({
   );
 }
 
-function Bubble({ node: n, fill }: { node: MapNode; fill: string }) {
+function Bubble({ node: n, fill, names }: { node: MapNode; fill: string; names: WalletNames }) {
   const colour = n.cluster === null ? "var(--bm-none)" : `var(--bm-${n.cluster % CLUSTER_COLOURS})`;
   if (n.kind === "funder") {
     const s = n.r * 1.25;
@@ -477,7 +502,7 @@ function Bubble({ node: n, fill }: { node: MapNode; fill: string }) {
           style={{ stroke: colour }}
         />
         <text x={n.x} y={n.y + n.r + 12} className="bm-funder-label">
-          {shortAddress(n.wallet ?? "")}
+          {clipName(walletText(n.wallet, names))}
         </text>
       </>
     );
@@ -552,11 +577,16 @@ function sameTimeFunders(g: SameTimeGroup): string {
   return funders.size === 1 ? " · one funder" : ` · from ${funders.size} funders`;
 }
 
-function nodeLabel(n: MapNode, graph: BubbleGraph): string {
+/** A name short enough to sit under a bubble. */
+function clipName(text: string, max = 16): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames): string {
   if (n.kind === "rest") return `${n.count} other top holders, ${pctText(n.pct)} together`;
   const cluster = n.cluster === null ? null : graph.clusters[n.cluster];
   if (n.kind === "funder")
-    return `Funder ${shortAddress(n.wallet ?? "")}, paid for ${cluster?.wallets.length ?? 0} top holders`;
+    return `Funder ${walletText(n.wallet, names)}, paid for ${cluster?.wallets.length ?? 0} top holders`;
   const what = [
     n.flags.includes("creator") ? "the creator" : null,
     n.flags.includes("risky") ? "risky" : null,
@@ -564,15 +594,23 @@ function nodeLabel(n: MapNode, graph: BubbleGraph): string {
     typeof n.kol === "string" ? (n.kol ? `KOL ${n.kol}` : "a KOL") : null,
   ].filter(Boolean);
   const same = n.sameTime === null ? null : graph.sameTimeGroups[n.sameTime];
-  return `Holder ${shortAddress(n.wallet ?? "")}, ${pctText(n.pct)} of supply${
-    cluster ? `, funded by ${shortAddress(cluster.funder)}` : ""
+  return `Holder ${walletText(n.wallet, names)}, ${pctText(n.pct)} of supply${
+    cluster ? `, funded by ${walletText(cluster.funder, names)}` : ""
   }${same ? `, funded in the same minute as ${same.wallets.length - 1} other top holders` : ""}${
     what.length ? `, ${what.join(", ")}` : ""
   }`;
 }
 
 /** What a tapped bubble is, under the map. */
-function NodeDetail({ node: n, graph }: { node: MapNode | null; graph: BubbleGraph }) {
+function NodeDetail({
+  node: n,
+  graph,
+  names,
+}: {
+  node: MapNode | null;
+  graph: BubbleGraph;
+  names: WalletNames;
+}) {
   if (!n) {
     return (
       <p className="bm-detail muted small">
@@ -593,18 +631,23 @@ function NodeDetail({ node: n, graph }: { node: MapNode | null; graph: BubbleGra
   if (n.flags.includes("creator")) tags.push({ text: "Dev", tone: "dev" });
   if (n.flags.includes("risky")) tags.push({ text: "Risky", tone: "risky" });
   if (n.flags.includes("dumper")) tags.push({ text: "Known dumper", tone: "risky" });
-  if (typeof n.kol === "string") tags.push({ text: n.kol ? `KOL: ${n.kol}` : "KOL", tone: "kol" });
+  if (typeof n.kol === "string")
+    tags.push({
+      // The KOL's name is already the wallet's name above: the tag just says what it is.
+      text: n.kol && n.wallet && names[n.wallet]?.name !== n.kol ? `KOL: ${n.kol}` : "KOL",
+      tone: "kol",
+    });
   if (cluster?.creatorLinked) tags.push({ text: "Tied to the creator", tone: "dev" });
   return (
     <div className="bm-detail small">
       <button
         type="button"
-        className="num tm-wallet-btn"
+        className="tm-wallet-btn"
         onClick={() => n.wallet && openWallet(n.wallet)}
         title="Open this wallet's details"
       >
         {n.kind === "funder" ? "Funder " : ""}
-        {shortAddress(n.wallet ?? "")}
+        <WalletText wallet={n.wallet} names={names} />
       </button>
       {n.kind === "holder" && <span className="num">{pctText(n.pct)} of supply</span>}
       {n.kind === "funder" && cluster && (
@@ -614,7 +657,7 @@ function NodeDetail({ node: n, graph }: { node: MapNode | null; graph: BubbleGra
       )}
       {n.kind === "holder" && cluster && (
         <span className="muted">
-          {n.hub ? "funded the others in its cluster" : `funded by ${shortAddress(cluster.funder)}`}
+          {n.hub ? "funded the others in its cluster" : `funded by ${walletText(cluster.funder, names)}`}
         </span>
       )}
       {n.kind === "holder" && n.sameTime !== null && graph.sameTimeGroups[n.sameTime] && (
@@ -655,6 +698,7 @@ export function BubbleMapSection({ token, snapshot }: { token: Token; snapshot: 
     () => (snapshot ? layoutGraph(buildGraph(snapshot, flagged)) : null),
     [snapshot, flagged],
   );
+  const names = useGraphNames(graph);
   if (!graph || !graph.nodes.some((n) => n.kind === "holder") || graph.clusters.length === 0) return null;
   const label = tokenLabel(token);
   return (
@@ -667,7 +711,7 @@ export function BubbleMapSection({ token, snapshot }: { token: Token; snapshot: 
             fileName={`trenchscanner-bubbles-${(token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
             caption={`${label} linked wallets on TrenchScanner`}
             iconOnly
-            render={() => renderBubbleCard(graph, token)}
+            render={() => renderBubbleCard(graph, token, names)}
           />
           <button
             type="button"
@@ -679,7 +723,7 @@ export function BubbleMapSection({ token, snapshot }: { token: Token; snapshot: 
           </button>
         </span>
       </h4>
-      <MapView graph={graph} compact />
+      <MapView graph={graph} names={names} compact />
     </section>
   );
 }

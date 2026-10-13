@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError } from "../api";
 import { cachedGet } from "../cache";
 import { ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink } from "../walletModal";
+import { useWalletNames, type WalletNames } from "../walletNames";
+import { WalletText } from "./WalletText";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, LinkIcon, LockIcon, WalletIcon } from "./Icons";
 
 /** Mirrors apps/api/src/walletProfile.ts WalletProfile. */
@@ -265,6 +267,10 @@ function age(iso: string | null, floor: boolean): string {
 function Profile({ p }: { p: WalletProfile }) {
   const risky = p.risk !== null && p.risk.score >= RISKY_SCORE;
   const winner = p.risk !== null && (p.risk.winScore ?? 0) >= WINNER_SCORE;
+  // One read names its funder and every linked wallet.
+  const names = useWalletNames(
+    useMemo(() => [p.funder?.wallet ?? null, ...p.linked.map((l) => l.wallet)], [p]),
+  );
   return (
     <>
       {p.kol && <Kol kol={p.kol} />}
@@ -321,7 +327,7 @@ function Profile({ p }: { p: WalletProfile }) {
         )}
       </p>
 
-      <Funding p={p} />
+      <Funding p={p} names={names} />
       {p.risk && <Risk risk={p.risk} />}
       <Coins
         title="Tracked coins"
@@ -331,33 +337,35 @@ function Profile({ p }: { p: WalletProfile }) {
       />
       {p.trades.length > 0 && <Trades trades={p.trades} />}
       {p.launches.length > 0 && <Coins title="Coins it launched" coins={p.launches} />}
-      <Linked p={p} />
+      <Linked p={p} names={names} />
     </>
   );
 }
 
-function WalletButton({ wallet }: { wallet: string }) {
+function WalletButton({ wallet, names }: { wallet: string; names: WalletNames }) {
   return (
     <button
       type="button"
-      className="tm-link num wm-wallet"
+      className="tm-link wm-wallet"
       onClick={() => openWallet(wallet)}
       title="Open this wallet"
     >
-      {shortAddress(wallet)}
+      <WalletText wallet={wallet} names={names} />
     </button>
   );
 }
 
-function Funding({ p }: { p: WalletProfile }) {
+function Funding({ p, names }: { p: WalletProfile; names: WalletNames }) {
   const f = p.funder;
   let body: React.ReactNode;
   if (!f) body = <span className="muted">Not read yet.</span>;
   else if (f.status === "found" && f.wallet)
     body = (
       <>
-        <WalletButton wallet={f.wallet} />
-        {f.label && <span className="tm-tag wm-tone-info">{f.label}</span>}
+        <WalletButton wallet={f.wallet} names={names} />
+        {f.label && f.label !== names[f.wallet]?.name && (
+          <span className="tm-tag wm-tone-info">{f.label}</span>
+        )}
         <span className="muted">
           sent {sol(f.amountSol, 3)}
           {f.fundedAt ? ` · ${ago(f.fundedAt)}` : ""}
@@ -552,7 +560,7 @@ function Trades({ trades }: { trades: WalletProfile["trades"] }) {
   );
 }
 
-function Linked({ p }: { p: WalletProfile }) {
+function Linked({ p, names }: { p: WalletProfile; names: WalletNames }) {
   const siblings = p.linked.filter((l) => l.relation === "sibling");
   const funded = p.linked.filter((l) => l.relation === "funded");
   const sameMinute = p.linked.filter((l) => l.relation === "same-minute");
@@ -572,7 +580,7 @@ function Linked({ p }: { p: WalletProfile }) {
     <ul className="wm-linked small">
       {rows.map((l) => (
         <li key={l.wallet}>
-          <WalletButton wallet={l.wallet} />
+          <WalletButton wallet={l.wallet} names={names} />
           <span className="muted num">{sol(l.amountSol, 3)}</span>
           {l.fundedAt && <span className="faint">{ago(l.fundedAt)}</span>}
           {l.score !== null && (
@@ -591,7 +599,9 @@ function Linked({ p }: { p: WalletProfile }) {
       </h4>
       {siblings.length > 0 && (
         <>
-          <p className="faint small wm-note">Same funder ({shortAddress(p.funder?.wallet ?? "")})</p>
+          <p className="faint small wm-note">
+            Same funder (<WalletText wallet={p.funder?.wallet} names={names} />)
+          </p>
           {list(siblings)}
         </>
       )}

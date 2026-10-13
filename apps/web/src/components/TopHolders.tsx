@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import type { Snapshot } from "../api";
-import { shortAddress } from "../format";
 import { buildGraph, type FlaggedHolder } from "../bubbleMap";
 import { openWallet } from "../walletModal";
+import { useWalletNames, walletText } from "../walletNames";
 import { CLUSTER_COLOURS } from "./BubbleMap";
+import { WalletText } from "./WalletText";
 
 /** Holders listed before "Show all". */
 const SHOWN = 12;
@@ -26,6 +27,13 @@ export function TopHolders({
   const holders = useMemo(
     () => (graph ? graph.nodes.filter((n) => n.kind === "holder").sort((a, b) => b.pct - a.pct) : []),
     [graph],
+  );
+  // One read names every holder and funder on the list (KOLs, exchanges, named services).
+  const names = useWalletNames(
+    useMemo(
+      () => [...holders.map((h) => h.wallet), ...(graph?.clusters.map((c) => c.funder) ?? [])],
+      [holders, graph],
+    ),
   );
   if (!graph || holders.length === 0) return null;
   const rest = graph.nodes.find((n) => n.kind === "rest");
@@ -58,16 +66,18 @@ export function TopHolders({
                   className="th-dot"
                   style={{ background: colour, opacity: h.cluster === null ? 0.55 : 1 }}
                   title={
-                    cluster ? `Funded by ${shortAddress(cluster.funder)}` : "Linked to no other top holder"
+                    cluster
+                      ? `Funded by ${walletText(cluster.funder, names)}`
+                      : "Linked to no other top holder"
                   }
                 />
                 <button
                   type="button"
-                  className="num th-wallet tm-wallet-btn"
+                  className="th-wallet tm-wallet-btn"
                   onClick={() => h.wallet && openWallet(h.wallet)}
                   title="Open this wallet's details"
                 >
-                  {shortAddress(h.wallet ?? "")}
+                  <WalletText wallet={h.wallet} names={names} />
                 </button>
                 {h.flags.includes("creator") && <span className="tm-tag k-dev">Dev</span>}
                 {h.flags.includes("risky") && <span className="tm-tag k-risky">Risky</span>}

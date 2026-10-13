@@ -5,7 +5,8 @@ const logger = createLogger("wallet-identity");
 
 /**
  * Who a wallet is, from Helius's identity list (exchanges, protocols, known services), for the
- * wallet modal. Read one wallet at a time, when someone opens it; the API caches the answers.
+ * wallet modal (one wallet, when someone opens it) and the dashboard's holder lists (a batch of up
+ * to 100). The API caches the answers.
  */
 
 /** "unavailable": the plan or key can't read it (a 401/403). */
@@ -24,6 +25,20 @@ const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length > 0) : [];
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim().length > 0 ? v.trim() : null);
 
+/** One identity entry, or null when Helius names nothing (no name and no tags). */
+function parseIdentity(raw: Record<string, unknown>): HeliusIdentity | null {
+  const value: HeliusIdentity = {
+    type: str(raw.type),
+    name: str(raw.name),
+    category: str(raw.category),
+    tags: strings(raw.tags),
+  };
+  return value.name || value.tags.length > 0 ? value : null;
+}
+
+/** The most addresses one batch-identity call takes. */
+export const IDENTITY_BATCH_MAX = 100;
+
 /** Helius's Wallet API identity lookup (GET /v1/wallet/{address}/identity). Needs a paid plan; 100 credits a call. */
 export class HeliusIdentityClient {
   constructor(
@@ -37,20 +52,45 @@ export class HeliusIdentityClient {
         `${this.baseUrl}/v1/wallet/${encodeURIComponent(wallet)}/identity`,
         { headers: { "X-Api-Key": this.apiKey }, timeoutMs: 8_000, retries: 1 },
       );
-      const value: HeliusIdentity = {
-        type: str(raw.type),
-        name: str(raw.name),
-        category: str(raw.category),
-        tags: strings(raw.tags),
-      };
-      if (!value.name && value.tags.length === 0) return { status: "none" };
-      return { status: "found", value };
+      const value = parseIdentity(raw);
+      return value ? { status: "found", value } : { status: "none" };
     } catch (err) {
       // 404 is the documented answer for a wallet nobody has named.
       if (err instanceof HttpError && err.status === 404) return { status: "none" };
       if (err instanceof HttpError && (err.status === 401 || err.status === 403))
         return { status: "unavailable" };
       logger.warn("Helius identity read failed", { error: String(err) });
+      return { status: "failed" };
+    }
+  }
+
+  /**
+   * Up to IDENTITY_BATCH_MAX wallets in one call (POST /v1/wallet/batch-identity): every wallet
+   * asked for, mapped to its identity or null when Helius names nothing.
+   */
+  async batchIdentity(wallets: readonly string[]): Promise<IdentityRead<Map<string, HeliusIdentity | null>>> {
+    const asked = wallets.slice(0, IDENTITY_BATCH_MAX);
+    try {
+      const raw = await fetchJson<unknown>(`${this.baseUrl}/v1/wallet/batch-identity`, {
+        method: "POST",
+        headers: { "X-Api-Key": this.apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ addresses: asked }),
+        timeoutMs: 10_000,
+        retries: 1,
+      });
+      const out = new Map<string, HeliusIdentity | null>(asked.map((w) => [w, null]));
+      if (Array.isArray(raw))
+        for (const entry of raw) {
+          if (!entry || typeof entry !== "object") continue;
+          const e = entry as Record<string, unknown>;
+          const address = str(e.address);
+          if (address && out.has(address)) out.set(address, parseIdentity(e));
+        }
+      return { status: "found", value: out };
+    } catch (err) {
+      if (err instanceof HttpError && (err.status === 401 || err.status === 403))
+        return { status: "unavailable" };
+      logger.warn("Helius batch identity read failed", { error: String(err) });
       return { status: "failed" };
     }
   }
