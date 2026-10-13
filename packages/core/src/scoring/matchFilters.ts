@@ -93,16 +93,16 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   }
 
   if (
-    filter.minCexFundedPct != null &&
-    token.cexFundedPct !== undefined &&
-    token.cexFundedPct < filter.minCexFundedPct
+    filter.minCexFundedCount != null &&
+    token.cexFundedCount !== undefined &&
+    token.cexFundedCount < filter.minCexFundedCount
   ) {
     return false;
   }
   if (
-    filter.maxCexFundedPct != null &&
-    token.cexFundedPct !== undefined &&
-    token.cexFundedPct > filter.maxCexFundedPct
+    filter.maxCexFundedCount != null &&
+    token.cexFundedCount !== undefined &&
+    token.cexFundedCount > filter.maxCexFundedCount
   ) {
     return false;
   }

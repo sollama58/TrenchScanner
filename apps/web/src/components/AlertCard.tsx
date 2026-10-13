@@ -397,17 +397,20 @@ export function AlertCard({
           )}
           {show("cexFunded") && (
             <div
+              className={
+                cexCount !== null && cexCount >= SAFETY_REJECT_CEX_FUNDED_COUNT ? "risky" : undefined
+              }
               title={
                 cexPct === null
                   ? "CEX-funded: not checked yet. Funder reads are limited per scan, and tokens closest to alerting go first."
                   : `CEX-funded: ${cexCount ?? "?"} of the ${cexHolders ?? 20} largest holders were opened from an exchange (or a busy service like a bridge), ${
                       cexAtAlert ? "at alert time" : "from a scan after the alert"
-                    }.`
+                    }. The safety screen rejects ${SAFETY_REJECT_CEX_FUNDED_COUNT} or more.`
               }
             >
               <dt>CEX-funded</dt>
               <dd className={cexPct === null ? "muted" : "num"}>
-                {cexPct === null ? "Not checked" : pct(cexPct)}
+                {cexPct === null ? "Not checked" : (cexCountText(cexCount, cexHolders) ?? pct(cexPct))}
               </dd>
             </div>
           )}
@@ -579,6 +582,13 @@ export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 export const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
 export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
 export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
+/** SAFETY_REJECT_CEX_FUNDED_COUNT: 17 or more of the top 20 holders funded from an exchange fails. */
+export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
+
+/** The CEX-funded tile's reading, "N/20", or null when not read. */
+export function cexCountText(count: number | null, holders: number | null): string | null {
+  return count === null ? null : `${count}/${holders ?? 20}`;
+}
 
 /** One wallet-check tile (Fresh, Empty or Top-10 snipers): the share, where it was read, or that it wasn't checked. */
 export function WalletStat({

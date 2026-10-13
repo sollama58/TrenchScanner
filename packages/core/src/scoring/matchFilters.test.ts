@@ -123,12 +123,12 @@ describe("maxSniperTop10WalletPct", () => {
 });
 
 describe("CEX-funded bounds", () => {
-  it("keeps the exchange-funded share within the bounds, and skips an unknown share", () => {
-    const filter = { ...baseFilter, minCexFundedPct: 20, maxCexFundedPct: 60 };
-    expect(matchesFilter(baseToken({ cexFundedPct: 10 }), filter)).toBe(false);
-    expect(matchesFilter(baseToken({ cexFundedPct: 70 }), filter)).toBe(false);
-    expect(matchesFilter(baseToken({ cexFundedPct: 40 }), filter)).toBe(true);
-    expect(matchesFilter(baseToken({ cexFundedPct: undefined }), filter)).toBe(true);
+  it("keeps the exchange-funded count within the bounds, and skips an unknown count", () => {
+    const filter = { ...baseFilter, minCexFundedCount: 4, maxCexFundedCount: 12 };
+    expect(matchesFilter(baseToken({ cexFundedCount: 2 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ cexFundedCount: 14 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ cexFundedCount: 8 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ cexFundedCount: undefined }), filter)).toBe(true);
   });
 });
 

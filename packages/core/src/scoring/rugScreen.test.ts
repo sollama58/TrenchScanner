@@ -22,6 +22,15 @@ describe("runRugScreen", () => {
     expect(result.reasons).toHaveLength(0);
   });
 
+  it("rejects a token with 17 or more of its top 20 holders funded from an exchange, once measured", () => {
+    const at = (n: number | undefined) =>
+      runRugScreen({ ...safeProfile, cexFundedCount: n, cexFundedHolders: 20 });
+    expect(at(17).passed).toBe(false);
+    expect(at(17).reasons[0]).toMatch(/17 of the 20 top holders were funded from an exchange/);
+    expect(at(16).passed).toBe(true);
+    expect(at(undefined).passed).toBe(true);
+  });
+
   it("rejects a token whose top-10 holders are over 70% fresh wallets, and only once measured", () => {
     expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: 80 }).passed).toBe(false);
     expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: 80 }).reasons[0]).toMatch(/fresh wallets/);
@@ -178,6 +187,8 @@ describe("passesWalletSafetyCuts", () => {
   it("applies today's wallet cuts to a banked row's stored features", () => {
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 90, freshTop10WalletPct: 0 })).toBe(false);
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 80 })).toBe(false);
+    expect(passesWalletSafetyCuts({ cexFundedPct: 85 })).toBe(false);
+    expect(passesWalletSafetyCuts({ cexFundedPct: 80 })).toBe(true);
     expect(passesWalletSafetyCuts({ freshTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 70, freshTop10WalletPct: 70 })).toBe(true);
     expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 80 })).toBe(false);

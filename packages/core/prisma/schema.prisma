@@ -270,10 +270,14 @@ model UserFilter {
   /// Max % of supply held by top holders funded within a minute of each other, from any funders
   /// (TokenSnapshot.sameTimeFundedPct). Skipped while unknown.
   maxSameTimeFundedPct       Float?
-  /// Bounds on the % of the largest holders an exchange or a busy service paid for
-  /// (TokenSnapshot.cexFundedPct, core's cexFundedReading). Skipped while unknown.
+  /// Superseded by the counts below (user ask 2026-10-13, "#/20"); kept, read by nothing, as the
+  /// migration copied them across.
   minCexFundedPct            Float?
   maxCexFundedPct            Float?
+  /// Bounds on how many of the 20 largest holders an exchange or a busy service paid for
+  /// (TokenSnapshot.cexFundedCount, core's cexFundedReading). Skipped while unknown.
+  minCexFundedCount          Int?
+  maxCexFundedCount          Int?
   /// Max SOL flagged wallets (risky or known dumpers) bought in the coin's newest trades
   /// (TokenSnapshot.flaggedBuySol, core's wallets/liveFlags.ts). Skipped while unknown.
   maxFlaggedBuySol           Float?

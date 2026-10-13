@@ -265,6 +265,9 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
       "armedAt",
       "bestRank",
       "deletedAt",
+      // Superseded by minCexFundedCount/maxCexFundedCount (2026-10-13); read by nothing.
+      "minCexFundedPct",
+      "maxCexFundedPct",
     ]);
     const criteria = Object.keys(row).filter((k) => !notCriteria.has(k));
     expect(criteria.sort()).toEqual([...FILTER_CRITERIA_KEYS].sort());

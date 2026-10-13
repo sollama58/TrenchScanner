@@ -806,8 +806,8 @@ export interface FilterInput {
   maxSniperTop10WalletPct: number | null;
   maxLinkedWalletPct: number | null;
   maxFlaggedBuySol: number | null;
-  minCexFundedPct: number | null;
-  maxCexFundedPct: number | null;
+  minCexFundedCount: number | null;
+  maxCexFundedCount: number | null;
   maxSameTimeFundedPct: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
@@ -1546,6 +1546,7 @@ export interface MarketLighthouse {
       sniperWalletRejectPct?: number;
       /** Rejected when the top 10 holders own this share of supply or more. */
       top10HolderRejectPct?: number;
+      cexFundedRejectCount?: number;
       mcapMinUsd: number;
       mcapMaxUsd: number;
       maxAgeMinutes: number;

@@ -363,9 +363,9 @@ export interface FilterCriteria {
   maxLinkedWalletPct?: number | null;
   /** Max % of supply held by top holders funded within a minute of each other (sameTimeFundedPct). */
   maxSameTimeFundedPct?: number | null;
-  /** Bounds on the % of the largest holders an exchange paid for (cexFundedPct). Skipped while unknown. */
-  minCexFundedPct?: number | null;
-  maxCexFundedPct?: number | null;
+  /** Bounds on how many of the 20 largest holders an exchange paid for (cexFundedCount). Skipped while unknown. */
+  minCexFundedCount?: number | null;
+  maxCexFundedCount?: number | null;
   /** Max SOL flagged wallets bought in the coin's newest trades (flaggedBuySol). Skipped while unknown. */
   maxFlaggedBuySol?: number | null;
   /** Bounds on how many of the launch's first 25 buyers still hold it (tradeFlow.firstBuyersHolding). */
