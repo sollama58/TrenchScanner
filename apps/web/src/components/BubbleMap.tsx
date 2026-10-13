@@ -5,6 +5,7 @@ import { ago, pct, shortAddress, tokenLabel } from "../format";
 import {
   bubbleNameFit,
   cexGroupsOf,
+  cexLayout,
   MAP_COLOURS,
   nodeSlot,
   sameTimeSlot,
@@ -266,6 +267,9 @@ function MapView({
   const { bubbleCexLinks } = useAppearance();
   const [cexOn, setCexOn] = useState<boolean | null>(null);
   const showCex = (cexOn ?? bubbleCexLinks) && graph.cexLinks.length > 0;
+  // With the ties on, the bubbles rearrange so each exchange's holders sit together (user ask
+  // 2026-10-13); off, the usual layout comes back as it was.
+  const cexGraph = useMemo(() => (showCex ? cexLayout(graph) : null), [graph, showCex]);
   const cex = graph.cexCount;
 
   return (
@@ -332,7 +336,7 @@ function MapView({
         </label>
       )}
       <BubbleSvg
-        graph={graph}
+        graph={cexGraph ?? graph}
         names={names}
         compact={compact}
         picked={picked}

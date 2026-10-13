@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   bubbleNameFit,
   cexGroupsOf,
+  cexLayout,
   cexLinksOf,
   MAP_COLOURS,
   nodeSlot,
@@ -348,5 +349,26 @@ describe("colour slots", () => {
     expect(nodeSlot({ cluster: null, sameTime: 1 }, graph)).toBe(3);
     expect(nodeSlot({ cluster: null, sameTime: null }, graph)).toBeNull();
     expect(sameTimeSlot(graph, MAP_COLOURS - 2)).toBe(0);
+  });
+});
+
+describe("cexLayout", () => {
+  it("pulls an exchange's holders closer, and leaves the usual layout as it was", () => {
+    const holders = [A, B, C, D, F, R].map((w, i) => ({
+      wallet: w,
+      pct: 6 - i * 0.5,
+      ...(w === A || w === R ? { cexFunder: "EX1" } : {}),
+    }));
+    const g = layoutGraph(
+      buildGraph({ linkedHolders: holders, top10HolderPct: null, top10WalletsChecked: null }),
+    );
+    const at = (graph: typeof g, w: string) => graph.nodes.find((n) => n.wallet === w)!;
+    const gap = (graph: typeof g) =>
+      Math.hypot(at(graph, A).x - at(graph, R).x, at(graph, A).y - at(graph, R).y);
+    const before = { x: at(g, A).x, y: at(g, A).y, gap: gap(g) };
+    const pulled = cexLayout(g);
+    expect(gap(pulled)).toBeLessThanOrEqual(before.gap);
+    expect(gap(pulled)).toBeLessThan(at(pulled, A).r + at(pulled, R).r + 40);
+    expect(at(g, A)).toMatchObject({ x: before.x, y: before.y });
   });
 });

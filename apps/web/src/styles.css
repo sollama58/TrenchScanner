@@ -10090,10 +10090,11 @@ img.tm-avatar {
   font-weight: 650;
 }
 
-/* Holders: the bubble map beside the top-holder list. */
+/* Holders: the bubble map across the full width (user ask 2026-10-13: beside the list it was too
+   small to read), the top-holder list under it. */
 .tm-holders {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
@@ -10101,7 +10102,23 @@ img.tm-avatar {
   margin-top: 0;
 }
 .tm-holders .bm-section .bm-stats {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.tm-holders .bm-stage.compact .bm-svg {
+  height: min(560px, 64dvh);
+}
+@media (max-width: 760px) {
+  .tm-holders .bm-section .bm-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 480px) {
+  .tm-holders .bm-section .bm-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tm-holders .bm-stage.compact .bm-svg {
+    height: min(400px, 52dvh);
+  }
 }
 .th-list {
   display: grid;
@@ -10302,9 +10319,6 @@ img.tm-avatar {
   }
   .tm-modal .tm-fig > span.num {
     font-size: 18px;
-  }
-  .tm-holders {
-    grid-template-columns: minmax(0, 1fr);
   }
   .fw-row {
     grid-template-columns: minmax(0, 1fr) 40px 64px;
