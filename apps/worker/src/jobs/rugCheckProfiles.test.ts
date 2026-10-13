@@ -254,6 +254,40 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     expect(next.stats).toMatchObject({ cached: 1, fetched: 0 });
   });
 
+  it("re-checks an absent mint behind the cycle unless a decision this cycle waits on it", async () => {
+    // A batch of absent answers expiring together held whole cycles 8-11 s (2026-10-13).
+    const [below, contender] = [mint("absent-below"), mint("absent-contender")];
+    const answers: Record<string, RugCheckProfileResult> = {
+      [below]: { status: "absent" },
+      [contender]: { status: "absent" },
+    };
+    const { client, calls } = fakeClient(answers);
+    await resolveRugProfiles([below, contender], client, 5);
+    await prisma.rugCheckCache.updateMany({
+      where: { mintAddress: { in: [below, contender] } },
+      data: { checkedAt: new Date(Date.now() - 10 * 60_000) },
+    });
+    calls.length = 0;
+    answers[below] = { status: "found", profile: profile(below, 40) };
+    answers[contender] = { status: "found", profile: profile(contender, 50) };
+
+    const result = await resolveRugProfiles([below, contender], client, 5, Infinity, {
+      refreshStaleInBackground: true,
+      awaitAbsentOnly: new Set([contender]),
+    });
+    // The contender's re-check was waited on; the other keeps "absent" for this cycle.
+    expect(result.profiles.get(contender)?.holderCount).toBe(50);
+    expect(result.profiles.has(below)).toBe(false);
+    expect(result.absent.has(below)).toBe(true);
+    expect(result.stats).toMatchObject({ fetched: 1, reused: 1, refreshing: 1 });
+    expect(calls[0]).toEqual([contender]);
+
+    // Its re-check lands behind the cycle, for the next one.
+    await settleRugCheckRefresh();
+    const next = await resolveRugProfiles([below], client, 5, Infinity, { refreshStaleInBackground: true });
+    expect(next.profiles.get(below)?.holderCount).toBe(40);
+  });
+
   it("does not stack a second background refresh on one still running", async () => {
     const a = mint("swr-busy");
     let release: () => void = () => {};

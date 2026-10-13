@@ -160,7 +160,16 @@ export async function resolveRugProfiles(
   ttlMinutes: number | ((mintAddress: string) => number),
   /** Most network lookups this call makes - see the budget note below. */
   maxLookups: number = Infinity,
-  opts: { refreshStaleInBackground?: boolean; awaitDeadlineMs?: number } = {},
+  opts: {
+    refreshStaleInBackground?: boolean;
+    awaitDeadlineMs?: number;
+    /**
+     * With refreshStaleInBackground: the mints a decision may wait on this cycle. A mint last seen
+     * absent that is not among them keeps that answer and is re-checked behind the cycle, like a
+     * stale report. Unset, every absent mint is waited on.
+     */
+    awaitAbsentOnly?: Set<string>;
+  } = {},
 ): Promise<RugProfileResolution> {
   const unique = [...new Set(mintAddresses)];
   const profiles = new Map<string, RugCheckProfile>();
@@ -241,13 +250,21 @@ export async function resolveRugProfiles(
   // and refreshed behind the cycle. Only mints with no usable report - never checked, or last
   // seen absent (RugCheck may have indexed them since, and without a report they can't be
   // curated) - are worth the wait.
+  //
+  // And of the absent ones, only those a decision can use this cycle (awaitAbsentOnly). Absent
+  // answers written together expire together, and re-checking a whole batch in front of the
+  // cycle held its decisions 8-11 s (worker health, 2026-10-13 01:14-01:17: 35-100 awaited
+  // lookups a cycle, against 1-10 otherwise) for mints mostly below the band that no decision
+  // was waiting on.
   let awaited = budgeted;
   let background: string[] = [];
   if (opts.refreshStaleInBackground) {
     awaited = [];
+    const waitedOn = opts.awaitAbsentOnly;
     for (const mint of budgeted) {
       const row = staleRows.get(mint);
-      if (row && row.profile !== null && reuseStale(mint)) background.push(mint);
+      const behind = row && (row.profile !== null || (waitedOn !== undefined && !waitedOn.has(mint)));
+      if (behind && reuseStale(mint)) background.push(mint);
       else awaited.push(mint);
     }
     // The previous cycle's refresh still going: its answers land in the cache for the next
