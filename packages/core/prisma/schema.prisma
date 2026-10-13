@@ -267,6 +267,10 @@ model UserFilter {
   /// Max % of supply held by linked top holders: wallets one funder paid for, or that funded each
   /// other (TokenSnapshot.linkedWalletPct, core's wallets/linkedWallets.ts). Skipped while unknown.
   maxLinkedWalletPct         Float?
+  /// Bounds on the % of the largest holders an exchange or a busy service paid for
+  /// (TokenSnapshot.cexFundedPct, core's cexFundedReading). Skipped while unknown.
+  minCexFundedPct            Float?
+  maxCexFundedPct            Float?
   /// Max SOL flagged wallets (risky or known dumpers) bought in the coin's newest trades
   /// (TokenSnapshot.flaggedBuySol, core's wallets/liveFlags.ts). Skipped while unknown.
   maxFlaggedBuySol           Float?
@@ -983,6 +987,11 @@ model TokenSnapshot {
   // Every top holder the linked reading covered (the creator aside) and its %, largest first, for
   // the bubble map; stored only alongside linkedClusters.
   linkedHolders           Json?
+  // Of the largest holders (up to 20, the creator aside), the % an exchange or a busy service paid
+  // for (core's cexFundedReading), how many, and how many were read. Null until all were read.
+  cexFundedPct            Float?
+  cexFundedCount          Int?
+  cexFundedHolders        Int?
   // Flagged wallets (risky or known dumpers) in the coin's newest page of trades, read from Helius
   // before the decision (core's wallets/liveFlags.ts, worker's liveTape.ts): distinct buyers and
   // sellers and the SOL each way. flaggedTrades keeps the trades themselves (wallet, side, SOL,

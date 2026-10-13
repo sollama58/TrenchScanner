@@ -31,6 +31,7 @@ export const CARD_FIELDS = [
   "snipers",
   "sniperTop10",
   "linked",
+  "cexFunded",
   "dev",
   "reasons",
   "mint",
@@ -79,6 +80,8 @@ export const feedAppearanceSchema = z
     reasons: z.boolean().default(false),
     /** The Top-10 snipers tile; hidden by default, as are accounts saved before it. */
     sniperTop10: z.boolean().default(false),
+    /** The CEX-funded tile (share of the top 20 an exchange paid for); hidden by default. */
+    cexFunded: z.boolean().default(false),
     /**
      * The Narrative seat's "agrees"/"warns" note on other models' cards and Telegram alerts. Null
      * (the default) follows curation/narrativeNote.ts: off until the seat proves itself live.
@@ -121,6 +124,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   scoreColor: true,
   reasons: false,
   sniperTop10: false,
+  cexFunded: false,
   narrativeNote: null,
   streamTab: false,
   quickLinks: ["terminal"],

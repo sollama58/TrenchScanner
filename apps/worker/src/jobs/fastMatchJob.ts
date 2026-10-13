@@ -89,6 +89,7 @@ function profileFromSnapshot(
     emptyTop10WalletPct: number | null;
     sniperTop10WalletPct: number | null;
     linkedWalletPct?: number | null;
+    cexFundedPct?: number | null;
     flaggedBuySol?: number | null;
     devHolding: boolean | null;
   },
@@ -120,6 +121,7 @@ function profileFromSnapshot(
     emptyTop10WalletPct: snapshot.emptyTop10WalletPct ?? undefined,
     sniperTop10WalletPct: snapshot.sniperTop10WalletPct ?? undefined,
     linkedWalletPct: snapshot.linkedWalletPct ?? undefined,
+    cexFundedPct: snapshot.cexFundedPct ?? undefined,
     flaggedBuySol: snapshot.flaggedBuySol ?? undefined,
     // The scan's resolved answer, carried forward; the fast path has no trade-stream view of its own.
     creatorHolding: snapshot.devHolding ?? undefined,

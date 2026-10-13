@@ -180,7 +180,7 @@ export interface OnChainProfile {
   walletRiskHighSupplyPct?: number;
   knownDumperFirstBuyers?: number;
   /**
-   * Linked wallets among the top-10 holders (core's wallets/linkedWallets.ts): % of supply held by
+   * Linked wallets among the top-20 holders (top 10 before 2026-10-13) (core's wallets/linkedWallets.ts): % of supply held by
    * holders in a cluster (one funder paid for them, or one funded another), the cluster count,
    * the largest cluster's %, and the % tied to the creator. Undefined until every holder's funder
    * is read. linkedClusters lists the clusters for the alert card.
@@ -192,6 +192,14 @@ export interface OnChainProfile {
   linkedClusters?: LinkedCluster[];
   /** The holders the linked reading covers, with each one's share (LinkedWalletsReading.holders), for the bubble map. */
   linkedHolders?: { wallet: string; pct: number }[];
+  /**
+   * Of the largest holders (up to 20, the creator aside), the % an exchange or a busy service paid
+   * for (core's cexFundedReading), how many, and how many were read. Undefined until every one of
+   * their funders is read.
+   */
+  cexFundedPct?: number;
+  cexFundedCount?: number;
+  cexFundedHolders?: number;
   /**
    * Flagged wallets (risky or known dumpers) in the coin's newest page of trades, read from Helius
    * before the decision (core's wallets/liveFlags.ts, worker's liveTape.ts): distinct buyers and
@@ -343,6 +351,9 @@ export interface FilterCriteria {
   maxSniperTop10WalletPct?: number | null;
   /** Max % of supply held by linked top holders (one funder, or funded each other). */
   maxLinkedWalletPct?: number | null;
+  /** Bounds on the % of the largest holders an exchange paid for (cexFundedPct). Skipped while unknown. */
+  minCexFundedPct?: number | null;
+  maxCexFundedPct?: number | null;
   /** Max SOL flagged wallets bought in the coin's newest trades (flaggedBuySol). Skipped while unknown. */
   maxFlaggedBuySol?: number | null;
   /** Bounds on how many of the launch's first 25 buyers still hold it (tradeFlow.firstBuyersHolding). */

@@ -51,7 +51,7 @@ export const WALLET_RISK_FEATURES = [
 ] as const;
 
 /**
- * Added 2026-10-13 (the same brief, item 3): linked wallets among the top-10 holders, from who
+ * Added 2026-10-13 (the same brief, item 3): linked wallets among the top holders (top 10, then top 20 from later on 2026-10-13), from who
  * paid for each one (core's wallets/linkedWallets.ts). The % of supply held by holders in a
  * cluster (one funder, or one funded another), the cluster count, the largest cluster's %, and the
  * % tied to the creator. Null until every holder's funder is read, and on every row banked before.
@@ -63,6 +63,14 @@ export const LINKED_WALLET_FEATURES = [
   "linkedLargestClusterPct",
   "linkedCreatorPct",
 ] as const;
+
+/**
+ * Added 2026-10-13: the % of the largest holders (up to 20, the creator aside) whose funder is an
+ * exchange or a busy service (core's cexFundedReading): wallets opened from a withdrawal, the way
+ * retail arrives. Null until every one of their funders is read, and on every row banked before.
+ * Recorded only (RETIRED_LEARNER_INPUTS) until it holds up on later days.
+ */
+export const CEX_FUNDED_FEATURES = ["cexFundedPct"] as const;
 
 /**
  * Added 2026-10-13: flagged wallets (risky or known dumpers, core's wallets/liveFlags.ts) trading
@@ -290,6 +298,8 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...WALLET_RISK_FEATURES,
   ...LINKED_WALLET_FEATURES,
   ...LIVE_FLAG_FEATURES,
+  // Appended last: the vector's order is fixed, so a saved model reads every older input where it was.
+  ...CEX_FUNDED_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -379,6 +389,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   ...WALLET_RISK_FEATURES,
   // The linked-wallet readings (added 2026-10-13): recorded first, on the same terms.
   ...LINKED_WALLET_FEATURES,
+  // The exchange-funded share (added 2026-10-13): recorded first, on the same terms.
+  ...CEX_FUNDED_FEATURES,
   // The live flagged-wallet trades (added 2026-10-13): recorded first, on the same terms.
   ...LIVE_FLAG_FEATURES,
 ]);
@@ -704,6 +716,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   linkedClusterCount: "linked-wallet clusters",
   linkedLargestClusterPct: "largest linked cluster",
   linkedCreatorPct: "supply linked to the creator",
+  cexFundedPct: "top holders funded from an exchange",
   flaggedBuyers: "flagged wallets buying",
   flaggedSellers: "flagged wallets selling",
   flaggedBuySol: "SOL bought by flagged wallets",
@@ -903,6 +916,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     linkedClusterCount: scored.linkedClusterCount ?? null,
     linkedLargestClusterPct: scored.linkedLargestClusterPct ?? null,
     linkedCreatorPct: scored.linkedCreatorPct ?? null,
+    cexFundedPct: scored.cexFundedPct ?? null,
     flaggedBuyers: scored.flaggedBuyers ?? null,
     flaggedSellers: scored.flaggedSellers ?? null,
     flaggedBuySol: scored.flaggedBuySol ?? null,

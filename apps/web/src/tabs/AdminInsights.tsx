@@ -1009,6 +1009,8 @@ const CRITERIA: [string, string, (v: number) => string][] = [
   ["maxSniperTop10WalletPct", "snipers in top 10 ≤", (v) => `${v}%`],
   ["maxLinkedWalletPct", "linked wallets ≤", (v) => `${v}%`],
   ["maxFlaggedBuySol", "flagged-wallet buys ≤", (v) => `${v} SOL`],
+  ["minCexFundedPct", "CEX-funded ≥", (v) => `${v}%`],
+  ["maxCexFundedPct", "CEX-funded ≤", (v) => `${v}%`],
   ["maxTop10HolderPct", "top10 ≤", (v) => `${v}%`],
   ["maxDevWalletPct", "dev ≤", (v) => `${v}%`],
   ["maxRiskScore", "risk ≤", (v) => String(v)],

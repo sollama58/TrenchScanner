@@ -2,6 +2,7 @@ import { fetchJson, HttpError } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import type { OnChainProfile } from "../types.js";
+import { CEX_FUNDED_TOP_N } from "../wallets/linkedWallets.js";
 
 const logger = createLogger("rugcheck");
 
@@ -28,8 +29,9 @@ export interface RugCheckProfile extends OnChainProfile {
   riskScore?: number;
   riskFlags: string[];
   /**
-   * The market-excluded holders behind top10HolderPct, owner and % of supply, one more than the
-   * ten: enough to recompute the top ten without one of them (withoutVenueHolder). Absent on
+   * The market-excluded holders behind top10HolderPct, owner and % of supply, up to
+   * CEX_FUNDED_TOP_N: at least one more than the ten, enough to recompute the top ten without one
+   * of them (withoutVenueHolder), and the list the exchange-funded share reads. Absent on
    * profiles cached before it existed, or when the shares can't be trusted.
    */
   topHolderShares?: { owner: string; pct: number }[];
@@ -277,7 +279,7 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     ...(sharesConsistent && realHolders.length > 0
       ? {
           topHolderShares: realHolders
-            .slice(0, TOP_N_FOR_CONCENTRATION + 1)
+            .slice(0, Math.max(TOP_N_FOR_CONCENTRATION + 1, CEX_FUNDED_TOP_N))
             .map((h) => ({ owner: h.owner ?? h.address, pct: h.pct ?? 0 })),
         }
       : {}),

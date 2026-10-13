@@ -307,3 +307,44 @@ function dedupeHolders(holders: readonly { owner: string; pct: number }[]) {
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/** How many of the largest holders the exchange-funded share reads (RugCheck lists about 20). */
+export const CEX_FUNDED_TOP_N = 20;
+
+export interface CexFundedReading {
+  /** % of the holders read whose funder is an exchange or a busy service (isHotFunder). */
+  cexFundedPct: number;
+  /** How many of them. */
+  cexFundedCount: number;
+  /** How many holders the reading covers: up to CEX_FUNDED_TOP_N, the creator aside. */
+  cexFundedHolders: number;
+}
+
+/**
+ * The share of the largest holders (up to CEX_FUNDED_TOP_N, by count, the creator aside) that an
+ * exchange or a busy service paid for: wallets opened from a withdrawal, the way retail buyers
+ * arrive, rather than from another wallet. A wallet with no funder (it funded itself, or has no
+ * history) counts as not exchange-funded. Null while any holder's funder is unknown, or with no
+ * holders: a share of a part-read list would read wrong.
+ */
+export function cexFundedReading(
+  holders: readonly { owner: string; pct: number }[],
+  funderOf: ReadonlyMap<string, string | null>,
+  opts: { hot: (funder: string) => boolean; creator?: string | null },
+): CexFundedReading | null {
+  const list = dedupeHolders(holders)
+    .filter((h) => h.owner !== opts.creator)
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, CEX_FUNDED_TOP_N);
+  if (list.length === 0) return null;
+  if (list.some((h) => !funderOf.has(h.owner))) return null;
+  const count = list.filter((h) => {
+    const f = funderOf.get(h.owner);
+    return !!f && opts.hot(f);
+  }).length;
+  return {
+    cexFundedPct: Math.round((count / list.length) * 1000) / 10,
+    cexFundedCount: count,
+    cexFundedHolders: list.length,
+  };
+}

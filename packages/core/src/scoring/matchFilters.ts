@@ -93,6 +93,21 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   }
 
   if (
+    filter.minCexFundedPct != null &&
+    token.cexFundedPct !== undefined &&
+    token.cexFundedPct < filter.minCexFundedPct
+  ) {
+    return false;
+  }
+  if (
+    filter.maxCexFundedPct != null &&
+    token.cexFundedPct !== undefined &&
+    token.cexFundedPct > filter.maxCexFundedPct
+  ) {
+    return false;
+  }
+
+  if (
     filter.maxLinkedWalletPct != null &&
     token.linkedWalletPct !== undefined &&
     token.linkedWalletPct > filter.maxLinkedWalletPct

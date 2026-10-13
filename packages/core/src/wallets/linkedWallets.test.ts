@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  cexFundedReading,
+  CEX_FUNDED_TOP_N,
   funderFromEarliestTransactions,
   funderFromFirstTransaction,
   HOT_FUNDER_DENYLIST,
@@ -156,5 +158,30 @@ describe("linkedWallets", () => {
     expect(r.holders.map((h) => h.wallet)).not.toContain("creator");
     expect(r.holders).toHaveLength(5);
     expect(r.holders.map((h) => h.pct)).toEqual([...r.holders.map((h) => h.pct)].sort((x, y) => y - x));
+  });
+});
+
+describe("cexFundedReading", () => {
+  const hot = (f: string) => f === "Binance";
+  const holders = Array.from({ length: 25 }, (_, i) => ({ owner: `H${i}`, pct: 25 - i }));
+
+  it("counts the largest holders an exchange paid for, up to the top 20, creator aside", () => {
+    const funderOf = new Map<string, string | null>(
+      holders.map((h, i) => [h.owner, i % 4 === 0 ? "Binance" : i % 4 === 1 ? "Someone" : null]),
+    );
+    const r = cexFundedReading(holders, funderOf, { hot, creator: "H1" })!;
+    // H1 is the creator: H0..H20 less H1 is the top 20, of which H0, H4, H8, H12, H16, H20 are exchange-funded.
+    expect(r).toEqual({ cexFundedPct: 30, cexFundedCount: 6, cexFundedHolders: CEX_FUNDED_TOP_N });
+  });
+
+  it("waits while any holder's funder is unknown, and needs holders", () => {
+    const funderOf = new Map<string, string | null>([["H0", "Binance"]]);
+    expect(cexFundedReading(holders.slice(0, 2), funderOf, { hot })).toBeNull();
+    expect(cexFundedReading([], funderOf, { hot })).toBeNull();
+    expect(cexFundedReading(holders.slice(0, 1), funderOf, { hot })).toEqual({
+      cexFundedPct: 100,
+      cexFundedCount: 1,
+      cexFundedHolders: 1,
+    });
   });
 });

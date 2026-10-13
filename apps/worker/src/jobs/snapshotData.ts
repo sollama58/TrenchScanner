@@ -69,6 +69,9 @@ export function snapshotDataFor(
     linkedClusterCount: scored.linkedClusterCount,
     linkedLargestClusterPct: scored.linkedLargestClusterPct,
     linkedCreatorPct: scored.linkedCreatorPct,
+    cexFundedPct: scored.cexFundedPct,
+    cexFundedCount: scored.cexFundedCount,
+    cexFundedHolders: scored.cexFundedHolders,
     // Only when there is a cluster to list: most coins have none, and this is a column per scan.
     linkedClusters: scored.linkedClusters?.length
       ? (scored.linkedClusters as unknown as Prisma.InputJsonValue)
