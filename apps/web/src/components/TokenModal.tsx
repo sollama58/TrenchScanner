@@ -470,20 +470,20 @@ function FlowSummary({ trades }: { trades: readonly MarkerTrade[] }) {
       ? `Net ${net > 0 ? "buying" : "selling"} ${solText(Math.abs(net))}`
       : `More ${net > 0 ? "buys" : "sells"} than ${net > 0 ? "sells" : "buys"}`;
   return (
-    <div className={`tm-flow ${even ? "even" : net > 0 ? "buying" : "selling"}`}>
-      <div className="tm-flow-head">
-        <span className="tm-flow-title">Flagged wallets in view</span>
-        <strong className="tm-flow-verdict">{verdict}</strong>
+    <div className={`tm-bal ${even ? "even" : net > 0 ? "buying" : "selling"}`}>
+      <div className="tm-bal-head">
+        <span className="tm-bal-title">Flagged wallets in view</span>
+        <strong className="tm-bal-verdict">{verdict}</strong>
       </div>
       <div
-        className="tm-flow-bar"
+        className="tm-bal-bar"
         role="img"
         aria-label={`${Math.round(buyShare * 100)}% buys, ${Math.round((1 - buyShare) * 100)}% sells`}
       >
         <span className="buy" style={{ flexGrow: Math.max(0.02, buyShare) }} />
         <span className="sell" style={{ flexGrow: Math.max(0.02, 1 - buyShare) }} />
       </div>
-      <div className="tm-flow-sides small num">
+      <div className="tm-bal-sides small num">
         <span className="buy">
           {buys.length} buy{buys.length === 1 ? "" : "s"}
           {bySol ? ` · ${solText(b)}` : ""}
@@ -586,7 +586,14 @@ function ChartCard({
       ? candleCloses(data.candles!)
       : data.marketCap.map((p) => ({ t: p.t, v: p.usd }));
     if (source.length < 2)
-      return { points: [] as Point[], fromCandles, step: undefined, scans: [] as Point[] };
+      return {
+        points: [] as Point[],
+        fromCandles,
+        step: undefined,
+        live: true,
+        latest: 0,
+        scans: [] as Point[],
+      };
     const first = source[0]!.t;
     const last = source[source.length - 1]!.t;
     const from =
@@ -609,6 +616,9 @@ function ChartCard({
       points: callPriced ? withCallPoint(line, { t: alertAt, v: alertMcap }) : line,
       fromCandles,
       step: fromCandles ? step : undefined,
+      // Whether the view runs to the latest reading (Model View's window can end before it).
+      live: to >= last,
+      latest: source[source.length - 1]!.v,
       // The scans the model read before calling it, drawn as dots in Model View.
       scans:
         range === "model"
@@ -616,6 +626,15 @@ function ChartCard({
           : [],
     };
   }, [data, range, alertAt, alertMcap, callPriced]);
+
+  // Model View opens by default; a coin with nothing to draw around its call (too new, or no
+  // candles there) falls back to its whole history rather than an empty chart. A range the viewer
+  // picked stays put.
+  const picked = useRef(false);
+  const modelEmpty = range === "model" && !!view && view.points.length < 2;
+  useEffect(() => {
+    if (modelEmpty && !picked.current) setRange("all");
+  }, [modelEmpty]);
 
   const markers = useMemo<MarkerTrade[]>(
     () =>
@@ -656,7 +675,10 @@ function ChartCard({
                 className={`tm-range${range === r.id ? " on" : ""}`}
                 aria-pressed={range === r.id}
                 title={r.title}
-                onClick={() => setRange(r.id)}
+                onClick={() => {
+                  picked.current = true;
+                  setRange(r.id);
+                }}
               >
                 {utility && r.id === "alert" ? "From scan" : r.label}
               </button>
@@ -684,6 +706,8 @@ function ChartCard({
             events={events}
             markers={markers}
             seenUntil={range === "model" ? alertAt : undefined}
+            live={view.live}
+            now={view.latest}
             scans={view.scans}
             names={names}
             height={height}
@@ -694,9 +718,9 @@ function ChartCard({
           <p className="faint small tm-model-note">
             <i className="tm-scan-dot" aria-hidden="true" />{" "}
             {view.scans.length > 0
-              ? `The ${view.scans.length} scan${view.scans.length === 1 ? "" : "s"} the model read before the call. `
+              ? `${view.scans.length} scan${view.scans.length === 1 ? "" : "s"} the model read · `
               : ""}
-            Up to 5 minutes either side of the call; the shaded part came after it, so the model never saw it.
+            5 minutes either side of the call; shaded is after it, which the model never saw.
           </p>
         )}
         {data && (

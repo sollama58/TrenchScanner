@@ -74,6 +74,8 @@ export function PriceChart({
   markers = [],
   seenUntil,
   scans = [],
+  live = true,
+  now,
   names,
   height,
   ariaLabel,
@@ -90,6 +92,10 @@ export function PriceChart({
   scans?: Point[];
   /** Names for the markers' wallets (KOLs, exchanges), shown in place of their addresses. */
   names?: WalletNames;
+  /** Whether the line runs to the latest reading; false when the view ends earlier (Model View). */
+  live?: boolean;
+  /** The latest reading, tagged "NOW:" under the end tag when the view ends before it. */
+  now?: number;
   height: number;
   ariaLabel: string;
 }) {
@@ -158,12 +164,30 @@ export function PriceChart({
   const fractions = width < 520 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
   const timeTicks = fractions.map((f) => geo.t0 + f * span);
   // Value ticks that would sit under the latest value's or the baseline's tag are left out.
-  const tags = [lastY, ...(geo.fromAlert ? [baseY] : [])];
-  const ticks = axis.ticks.filter((v) => tags.every((y) => Math.abs(axis.y(v) - y) > 14));
+  // Model View cut off before now: the latest reading goes under the end tag, or over it when
+  // the baseline's tag sits below.
+  const nowTag =
+    !live && now !== undefined && now > 0
+      ? (() => {
+          const text = `NOW: ${axisUsd(now)}`;
+          const w = Math.max(PAD.r - 4, Math.round(text.length * 6.1 + 14));
+          const below = lastY + 22;
+          const clash = geo.fromAlert && Math.abs(baseY - below) < 20;
+          const y = clash || below > bottom ? lastY - 22 : below;
+          return { text, w, y, up: now >= geo.base };
+        })()
+      : null;
+  const tags = [lastY, ...(geo.fromAlert ? [baseY] : []), ...(nowTag ? [nowTag.y] : [])];
+  const ticks = axis.ticks.filter((v) => tags.every((y) => Math.abs(axis.y(v) - y) > 18));
   const h = hover !== null ? points[hover] : undefined;
   const peak = points[geo.hiIdx]!;
-  // The peak gets a label unless it is the latest point (its tag already says it) or right by it.
-  const showPeak = points.length > 2 && geo.hiIdx < points.length - 1 && Math.abs(py(peak) - lastY) > 16;
+  // The peak gets a label unless it is the latest point (its tag already says it) or right by it,
+  // and not in Model View, where the window's high isn't the coin's peak.
+  const showPeak =
+    seenUntil === undefined &&
+    points.length > 2 &&
+    geo.hiIdx < points.length - 1 &&
+    Math.abs(py(peak) - lastY) > 16;
   // Each marker sits off the line (buys below, sells above) and steps further out while it would
   // overlap one already placed, so trades bunched around the call fan out instead of piling up.
   const placed: { g: MarkerGroup; lx: number; x: number; ly: number; y: number; r: number }[] = [];
@@ -244,10 +268,10 @@ export function PriceChart({
             x2="0"
             y2={bottom}
           >
-            <stop offset="0" stopColor="var(--good)" stopOpacity="0.34" />
+            <stop offset="0" stopColor="var(--good)" stopOpacity="0.2" />
             <stop offset={split} stopColor="var(--good)" stopOpacity="0.03" />
             <stop offset={split} stopColor="var(--bad)" stopOpacity="0.03" />
-            <stop offset="1" stopColor="var(--bad)" stopOpacity="0.34" />
+            <stop offset="1" stopColor="var(--bad)" stopOpacity="0.2" />
           </linearGradient>
         </defs>
 
@@ -290,22 +314,11 @@ export function PriceChart({
               width={width - PAD.r - x(seenUntil)}
               height={bottom - PAD.t + 6}
             />
-            {x(seenUntil) - PAD.l > 90 && (
-              <text x={x(seenUntil) - 8} y={PAD.t + 28} textAnchor="end" className="pc-zone seen">
-                What the model saw
-              </text>
-            )}
-            {width - PAD.r - x(seenUntil) > 90 && (
-              <text x={x(seenUntil) + 8} y={PAD.t + 28} className="pc-zone">
-                After the call
-              </text>
-            )}
           </g>
         )}
 
         <path d={area} fill={`url(#${id}-area)`} />
         <line x1={PAD.l} x2={width - PAD.r} y1={baseY} y2={baseY} className="pc-base" />
-        <path d={line} className="pc-glow" stroke={`url(#${id}-stroke)`} />
         <path d={line} className="pc-line" stroke={`url(#${id}-stroke)`} />
 
         {scans
@@ -416,15 +429,24 @@ export function PriceChart({
           </g>
         ))}
 
-        {/* The latest reading: a dot on the line's end and its value on the axis. */}
-        <g className={`pc-last ${up ? "up" : "down"}`}>
-          <circle cx={px(last)} cy={lastY} r={8} className="pc-halo" />
+        {/* The latest reading: a dot on the line's end and its value on the axis. A view that ends
+            before the latest reading (Model View) tags its end plainly, so it doesn't read as now. */}
+        <g className={`pc-last ${up ? "up" : "down"}${live ? "" : " end"}`}>
+          {live && <circle cx={px(last)} cy={lastY} r={8} className="pc-halo" />}
           <circle cx={px(last)} cy={lastY} r={3.5} />
           <rect x={width - PAD.r + 3} y={lastY - 10} width={PAD.r - 4} height={20} rx={5} />
           <text x={width - PAD.r + 10} y={lastY} dy="0.35em">
             {axisUsd(last.v)}
           </text>
         </g>
+        {nowTag && (
+          <g className={`pc-now ${nowTag.up ? "up" : "down"}`}>
+            <rect x={width - 1 - nowTag.w} y={nowTag.y - 10} width={nowTag.w} height={20} rx={5} />
+            <text x={width - 1 - nowTag.w / 2} y={nowTag.y} dy="0.35em" textAnchor="middle">
+              {nowTag.text}
+            </text>
+          </g>
+        )}
         {geo.fromAlert && Math.abs(baseY - lastY) > 14 && (
           <g className="pc-base-tag">
             <rect x={width - PAD.r + 3} y={baseY - 10} width={PAD.r - 4} height={20} rx={5} />
