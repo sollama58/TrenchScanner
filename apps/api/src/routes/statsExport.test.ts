@@ -24,6 +24,8 @@ describe("export query", () => {
     expect(q.format).toBe("jsonl");
     expect(exportQuerySchema.safeParse({ dataset: "outcomes", sampleKind: "bogus" }).success).toBe(false);
     expect(exportQuerySchema.safeParse({ dataset: "tokens" }).success).toBe(false);
+    expect(exportQuerySchema.parse({ dataset: "wallets" }).dataset).toBe("wallets");
+    expect(exportQuerySchema.parse({ dataset: "wallet-activity" }).dataset).toBe("wallet-activity");
   });
 
   it("pulls the narrative's names out of a stored TokenSage analysis", () => {
