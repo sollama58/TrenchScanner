@@ -379,7 +379,7 @@ function tradeFlowLines(scored: ScoredToken): string[] {
   }
   if (typeof f.freshLaunchBuyerPct === "number") {
     lines.push(
-      `- launch buyers on brand-new wallets (first used within 24h before launch): ${f.freshLaunchBuyerPct.toFixed(0)}% of the first ${FRESH_LAUNCH_BUYERS}`,
+      `- launch buyers on fresh wallets (first used, or used again after a week or more idle, within 24h before launch): ${f.freshLaunchBuyerPct.toFixed(0)}% of the first ${FRESH_LAUNCH_BUYERS}`,
     );
   }
   if (typeof f.devBuySupplyPct === "number") {

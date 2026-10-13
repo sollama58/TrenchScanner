@@ -175,7 +175,7 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             <li>Nobody can freeze your coins</li>
             <li>Primary LP Locked</li>
             <li>Not a Mayhem Mode launch</li>
-            <li>Top holders aren&apos;t mostly brand-new wallets</li>
+            <li>Top holders aren&apos;t mostly fresh wallets (new, or woken after a week idle)</li>
             <li>Top holders aren&apos;t mostly empty wallets</li>
             <li>Early snipers don&apos;t own most of the top bags</li>
             <li>The top 10 holders own under 40% of the supply</li>
@@ -255,7 +255,7 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
           <li>Who called it: your filter, or a model and how sure it is.</li>
           <li>Market cap when it alerted, right now, and the best it has reached.</li>
           <li>
-            Who holds it: the biggest 10 wallets&apos; share, and how many are brand-new or empty. Lower is
+            Who holds it: the biggest 10 wallets&apos; share, and how many are fresh or empty. Lower is
             usually safer.
           </li>
           <li>

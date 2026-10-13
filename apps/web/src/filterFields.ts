@@ -71,7 +71,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         min: 0,
         max: 100,
         label: "Max fresh wallets",
-        hint: "top-10 holders on wallets under a day old",
+        hint: "top-10 holders on wallets first used, or used again after a week idle, in the last day",
         unit: "%",
       },
       {
