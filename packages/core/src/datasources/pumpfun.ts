@@ -2,6 +2,7 @@ import { fetchJson, HttpError } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { normalizeSocialUrl } from "./tokensage.js";
 import type { MinuteCandle } from "../curation/regrade.js";
+import { tradesFromPumpFun, type PumpFunTradesPage } from "../wallets/tradeTape.js";
 
 const logger = createLogger("pumpfun");
 
@@ -209,6 +210,50 @@ export class PumpFunClient {
       );
       const mcap = coin?.usd_market_cap ?? coin?.market_cap_usd;
       return typeof mcap === "number" && Number.isFinite(mcap) && mcap > 0 ? mcap : null;
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * One page of a coin's trades, newest first, starting before `cursor` (pumpFunCursorBefore for a
+   * point in time, or the last page's nextCursor) - the trade tape's free source. Rate-limited
+   * hard (429 after a burst, Retry-After 10-50 s), so callers space their calls. Null when Pump.fun
+   * has no such coin; throws on a transport failure (a 429 included).
+   */
+  async coinTrades(
+    mintAddress: string,
+    cursor: string,
+    timeoutMs = 10_000,
+  ): Promise<PumpFunTradesPage | null> {
+    try {
+      const body = await fetchJson<unknown>(
+        `${this.swapBaseUrl}/v2/coins/${encodeURIComponent(mintAddress)}/trades?limit=100&cursor=${encodeURIComponent(cursor)}`,
+        { timeoutMs, retries: 0 },
+      );
+      return tradesFromPumpFun(body);
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * A coin's creator and launch time, from the single-coin endpoint. Null when Pump.fun has no
+   * such coin; throws on a transport failure.
+   */
+  async coinOrigin(mintAddress: string): Promise<{ creator: string | null; createdAt: Date | null } | null> {
+    try {
+      const coin = await fetchJson<(PumpFunCoin & { creator?: unknown }) | null>(
+        `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
+        { timeoutMs: 5000, retries: 0 },
+      );
+      if (!coin) return null;
+      return {
+        creator: typeof coin.creator === "string" && coin.creator ? coin.creator : null,
+        createdAt: launchDate(coin.created_timestamp) ?? null,
+      };
     } catch (err) {
       if (err instanceof HttpError && err.status === 404) return null;
       throw err;

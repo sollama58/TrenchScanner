@@ -1,0 +1,403 @@
+import { isWalletAddress } from "../solana.js";
+import type { RawLaunchTx } from "../datasources/launchBuyers.js";
+
+/**
+ * A coin's trade tape: every buy and sell from its launch to 30 minutes past the moment a seat
+ * called it, and what each wallet did in it. The red-flags study (notes/hit-catch-2026-10-13/
+ * red-flags.md) found the calls that stop out look like the winners on every input recorded at the
+ * call, so the signal has to come from who holds and who sells. This file is the pure half: turning
+ * a source's answer into trades, trades into per-wallet rows with their roles, and a stopped call's
+ * window into its stop cause. apps/worker/src/jobs/tradeTapeJob.ts does the reading and writing.
+ */
+
+/** Pump.fun coins mint one billion tokens. */
+export const PUMP_SUPPLY_TOKENS = 1_000_000_000;
+/** Pump.fun's token decimals, for amounts a source gives in base units without saying. */
+const PUMP_DECIMALS = 6;
+const LAMPORTS_PER_SOL = 1_000_000_000;
+
+/** The window read past the anchor: the label window (30 minutes), which holds every stop. */
+export const TAPE_WINDOW_AFTER_ANCHOR_MS = 30 * 60_000;
+/** Bought within this long of the launch: a launch sniper. */
+export const LAUNCH_SNIPER_MS = 5_000;
+/** The launch's first buyers, as launchSnipers.ts counts them. */
+export const TAPE_FIRST_BUYERS = 25;
+/** Sold within this long of its own first buy: a fast exit. */
+export const FAST_EXIT_MS = 3 * 60_000;
+/**
+ * Wallets that moved less SOL than this either way, and hold no role, are left out of the stored
+ * rows: they are mostly dust and bots, and a row per wallet per coin is the table's whole size.
+ * They still count in the stop cause, which is worked out from every trade.
+ */
+export const TAPE_MIN_SOL = 0.05;
+
+export interface TapeTrade {
+  wallet: string;
+  side: "buy" | "sell";
+  /** SOL paid (a buy) or received (a sell). */
+  sol: number;
+  /** Whole tokens. */
+  tokens: number;
+  atMs: number;
+  /** Signature, for de-duplication. */
+  tx: string;
+}
+
+export interface ChainTx extends RawLaunchTx {
+  meta?:
+    | (NonNullable<RawLaunchTx["meta"]> & {
+        preBalances?: number[] | null;
+        postBalances?: number[] | null;
+      })
+    | null;
+  transaction?: {
+    signatures?: string[];
+    message?: { accountKeys?: (string | { pubkey?: string })[] };
+  } | null;
+}
+
+interface RawBalance {
+  accountIndex: number;
+  mint?: string;
+  owner?: string;
+  uiTokenAmount?: { amount?: string; decimals?: number };
+}
+
+function keysOf(tx: ChainTx): string[] {
+  const keys = (tx.transaction?.message?.accountKeys ?? []).map((k) =>
+    typeof k === "string" ? k : (k?.pubkey ?? ""),
+  );
+  const loaded = tx.meta?.loadedAddresses;
+  if (loaded) keys.push(...(loaded.writable ?? []), ...(loaded.readonly ?? []));
+  return keys;
+}
+
+/**
+ * The trades in a page of a mint's transactions (Helius getTransactionsForAddress, full details,
+ * oldest first). Every wallet whose balance of the mint moved is a trader in that transaction: up
+ * is a buy, down a sell, and the SOL is its own lamport change (fees and tips included, so a buy
+ * reads a little dear). Program accounts (the bonding curve, a pool, a vault) are off the ed25519
+ * curve and left out, so the curve never reads as the biggest seller. A token move with no SOL
+ * beside it is a transfer, kept: it changes who holds what.
+ *
+ * Also returns the launch, when the page starts at it: the transaction that minted the supply
+ * (no balance of the mint before it), its time, and its fee payer, the creator.
+ */
+export function tradesFromChainTransactions(
+  mint: string,
+  txs: readonly ChainTx[],
+  walletCheck: (address: string) => boolean = isWalletAddress,
+): { trades: TapeTrade[]; launch: { atMs: number | null; creator: string | null } | null } {
+  const isWallet = new Map<string, boolean>();
+  const wallet = (a: string) => {
+    let v = isWallet.get(a);
+    if (v === undefined) isWallet.set(a, (v = walletCheck(a)));
+    return v;
+  };
+  const trades: TapeTrade[] = [];
+  let launch: { atMs: number | null; creator: string | null } | null = null;
+  let first = true;
+  for (const tx of txs) {
+    if (!tx?.meta || tx.meta.err) continue;
+    const keys = keysOf(tx);
+    const atMs = typeof tx.blockTime === "number" ? tx.blockTime * 1000 : null;
+    const sig = tx.transaction?.signatures?.[0] ?? "";
+    const pre = ((tx.meta.preTokenBalances ?? []) as RawBalance[]).filter((b) => b.mint === mint);
+    const post = ((tx.meta.postTokenBalances ?? []) as RawBalance[]).filter((b) => b.mint === mint);
+    if (first) {
+      first = false;
+      if (pre.length === 0 && post.length > 0) launch = { atMs, creator: keys[0] || null };
+    }
+    if (atMs === null) continue;
+    const deltas = new Map<string, number>();
+    const add = (b: RawBalance, sign: 1 | -1) => {
+      if (!b.owner) return;
+      const raw = Number(b.uiTokenAmount?.amount ?? 0);
+      if (!Number.isFinite(raw)) return;
+      const tokens = raw / 10 ** (b.uiTokenAmount?.decimals ?? PUMP_DECIMALS);
+      deltas.set(b.owner, (deltas.get(b.owner) ?? 0) + sign * tokens);
+    };
+    for (const b of pre) add(b, -1);
+    for (const b of post) add(b, 1);
+    for (const [owner, delta] of deltas) {
+      if (delta === 0 || !wallet(owner)) continue;
+      const i = keys.indexOf(owner);
+      const lamports = i >= 0 ? (tx.meta.postBalances?.[i] ?? 0) - (tx.meta.preBalances?.[i] ?? 0) : 0;
+      const side = delta > 0 ? "buy" : "sell";
+      const sol = side === "buy" ? Math.max(0, -lamports) : Math.max(0, lamports);
+      trades.push({
+        wallet: owner,
+        side,
+        sol: sol / LAMPORTS_PER_SOL,
+        tokens: Math.abs(delta),
+        atMs,
+        tx: sig,
+      });
+    }
+  }
+  return { trades, launch };
+}
+
+/** One page of Pump.fun's trade API (swap-api /v2/coins/{mint}/trades), newest first. */
+export interface PumpFunTradesPage {
+  trades: TapeTrade[];
+  /** Pass back as `cursor` for the next (older) page; null when there is none. */
+  nextCursor: string | null;
+}
+
+/** Parses a Pump.fun trades answer; unusable entries are dropped. */
+export function tradesFromPumpFun(body: unknown): PumpFunTradesPage {
+  const b = body as { trades?: unknown; pagination?: { nextCursor?: unknown; hasMore?: unknown } } | null;
+  const trades: TapeTrade[] = [];
+  for (const t of Array.isArray(b?.trades) ? (b.trades as Record<string, unknown>[]) : []) {
+    const wallet = typeof t?.userAddress === "string" ? t.userAddress : "";
+    const side = t?.type === "buy" || t?.type === "sell" ? t.type : null;
+    const atMs = typeof t?.timestamp === "string" ? Date.parse(t.timestamp) : Number.NaN;
+    const sol = Number(t?.amountSol);
+    const tokens = Number(t?.baseAmount);
+    if (!wallet || !side || !Number.isFinite(atMs) || !Number.isFinite(sol) || !Number.isFinite(tokens))
+      continue;
+    trades.push({ wallet, side, sol: Math.abs(sol), tokens: Math.abs(tokens), atMs, tx: String(t.tx ?? "") });
+  }
+  const next = b?.pagination?.nextCursor;
+  return {
+    trades,
+    nextCursor: b?.pagination?.hasMore === true && typeof next === "string" && next ? next : null,
+  };
+}
+
+/** The cursor that starts Pump.fun's trade API at the trades just before `atMs`. */
+export function pumpFunCursorBefore(atMs: number): string {
+  return `${"9".repeat(26)}-${Math.floor(atMs)}`;
+}
+
+export interface TapeContext {
+  /** The reference anchor: roles at the anchor (top 10, held) are read here. */
+  anchorAtMs: number;
+  /** The reference row's stop, when it stopped. */
+  stoppedAtMs: number | null;
+  /** Whether the trades run from the launch: launch roles need it. */
+  complete: boolean;
+  launchAtMs: number | null;
+  creator: string | null;
+  supply?: number;
+}
+
+export interface WalletSummary {
+  wallet: string;
+  buys: number;
+  sells: number;
+  solIn: number;
+  solOut: number;
+  tokensBought: number;
+  tokensSold: number;
+  firstBuyAtMs: number | null;
+  firstSellAtMs: number | null;
+  heldAtAnchor: number | null;
+  heldPctAtAnchor: number | null;
+  boughtPct: number;
+  isCreator: boolean;
+  firstBuyerRank: number | null;
+  launchSniper: boolean;
+  top10AtAnchor: boolean;
+  fastExit: boolean;
+  dumpedIntoStop: boolean;
+  dumpSol: number;
+}
+
+/** Trades oldest first, each once (two sources, or two pages that overlap, can repeat one). */
+export function orderTrades(trades: readonly TapeTrade[]): TapeTrade[] {
+  const seen = new Set<string>();
+  const out: TapeTrade[] = [];
+  for (const t of trades) {
+    const key = `${t.tx}|${t.wallet}|${t.side}|${t.tokens}`;
+    if (t.tx && seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  // Stable: trades in the same second keep the order the source gave (chain order once a
+  // newest-first source is reversed by the caller).
+  return out
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => a.t.atMs - b.t.atMs || a.i - b.i)
+    .map((x) => x.t);
+}
+
+/**
+ * Every wallet's row for a coin, from its trades oldest first (orderTrades). Launch roles (first
+ * buyers, snipers) and holdings at the anchor need the whole tape from the launch, so they stay
+ * unknown on an incomplete one; what happened after the anchor doesn't.
+ */
+export function summarizeTape(trades: readonly TapeTrade[], ctx: TapeContext): WalletSummary[] {
+  const supply = ctx.supply ?? PUMP_SUPPLY_TOKENS;
+  const byWallet = new Map<string, WalletSummary>();
+  const held = new Map<string, number>();
+  const firstBuyers: string[] = [];
+  for (const t of trades) {
+    let w = byWallet.get(t.wallet);
+    if (!w) {
+      w = {
+        wallet: t.wallet,
+        buys: 0,
+        sells: 0,
+        solIn: 0,
+        solOut: 0,
+        tokensBought: 0,
+        tokensSold: 0,
+        firstBuyAtMs: null,
+        firstSellAtMs: null,
+        heldAtAnchor: null,
+        heldPctAtAnchor: null,
+        boughtPct: 0,
+        isCreator: ctx.creator !== null && t.wallet === ctx.creator,
+        firstBuyerRank: null,
+        launchSniper: false,
+        top10AtAnchor: false,
+        fastExit: false,
+        dumpedIntoStop: false,
+        dumpSol: 0,
+      };
+      byWallet.set(t.wallet, w);
+    }
+    if (t.side === "buy") {
+      w.buys += 1;
+      w.solIn += t.sol;
+      w.tokensBought += t.tokens;
+      if (w.firstBuyAtMs === null) {
+        w.firstBuyAtMs = t.atMs;
+        if (!w.isCreator && firstBuyers.length < TAPE_FIRST_BUYERS) firstBuyers.push(t.wallet);
+      }
+    } else {
+      w.sells += 1;
+      w.solOut += t.sol;
+      w.tokensSold += t.tokens;
+      if (w.firstSellAtMs === null) w.firstSellAtMs = t.atMs;
+      if (ctx.stoppedAtMs !== null && t.atMs > ctx.anchorAtMs && t.atMs <= ctx.stoppedAtMs) {
+        w.dumpedIntoStop = true;
+        w.dumpSol += t.sol;
+      }
+    }
+    if (t.atMs <= ctx.anchorAtMs) {
+      held.set(t.wallet, (held.get(t.wallet) ?? 0) + (t.side === "buy" ? t.tokens : -t.tokens));
+    }
+  }
+  if (ctx.complete) {
+    firstBuyers.forEach((wallet, i) => (byWallet.get(wallet)!.firstBuyerRank = i + 1));
+    const top10 = [...held]
+      .filter(([, n]) => n > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([wallet]) => wallet);
+    for (const wallet of top10) byWallet.get(wallet)!.top10AtAnchor = true;
+  }
+  for (const w of byWallet.values()) {
+    w.boughtPct = (w.tokensBought / supply) * 100;
+    if (ctx.complete) {
+      const h = Math.max(0, held.get(w.wallet) ?? 0);
+      w.heldAtAnchor = h;
+      w.heldPctAtAnchor = (h / supply) * 100;
+      w.launchSniper =
+        !w.isCreator &&
+        ctx.launchAtMs !== null &&
+        w.firstBuyAtMs !== null &&
+        w.firstBuyAtMs - ctx.launchAtMs <= LAUNCH_SNIPER_MS;
+    }
+    w.fastExit =
+      w.firstBuyAtMs !== null && w.firstSellAtMs !== null && w.firstSellAtMs - w.firstBuyAtMs <= FAST_EXIT_MS;
+  }
+  return [...byWallet.values()];
+}
+
+/** Whether a wallet's row is worth storing (see TAPE_MIN_SOL). */
+export function keepWalletRow(w: WalletSummary): boolean {
+  return (
+    w.solIn >= TAPE_MIN_SOL ||
+    w.solOut >= TAPE_MIN_SOL ||
+    w.isCreator ||
+    w.firstBuyerRank !== null ||
+    w.launchSniper ||
+    w.top10AtAnchor
+  );
+}
+
+/** The roles a seller is counted under, most telling first; each seller counts once, under its first. */
+export const STOP_ROLES = ["creator", "launchSnipers", "firstBuyers", "top10", "other"] as const;
+export type StopRole = (typeof STOP_ROLES)[number];
+
+export interface StopCause {
+  v: 1;
+  /** The tape the cause was read from: "done" or "partial" (launch roles unknown). */
+  tape: "done" | "partial";
+  anchorAt: string;
+  stoppedAt: string;
+  /** Distinct wallets that sold in the window, and what they sold. */
+  sellers: number;
+  soldSol: number;
+  soldTokens: number;
+  /** Each role's share of the SOL sold (0-1, summing to 1 when anything sold). */
+  shares: Record<StopRole, number>;
+  /** The role with the largest share; null when nothing sold. */
+  lead: StopRole | null;
+  /** The largest sellers, by SOL. */
+  top: { wallet: string; sol: number; tokens: number; role: StopRole }[];
+}
+
+function roleOf(w: WalletSummary | undefined): StopRole {
+  if (!w) return "other";
+  if (w.isCreator) return "creator";
+  if (w.launchSniper) return "launchSnipers";
+  if (w.firstBuyerRank !== null) return "firstBuyers";
+  if (w.top10AtAnchor) return "top10";
+  return "other";
+}
+
+/**
+ * Who sold a stopped row's coin between its anchor and its stop, and each role's share of the
+ * selling by SOL. Roles come from the tape's own summary (summarizeTape), read at the tape's
+ * reference anchor.
+ */
+export function stopCauseOf(
+  trades: readonly TapeTrade[],
+  summaries: ReadonlyMap<string, WalletSummary>,
+  window: { anchorAtMs: number; stoppedAtMs: number; complete: boolean },
+  topN = 10,
+): StopCause {
+  const sellers = new Map<string, { sol: number; tokens: number }>();
+  for (const t of trades) {
+    if (t.side !== "sell" || t.atMs <= window.anchorAtMs || t.atMs > window.stoppedAtMs) continue;
+    const s = sellers.get(t.wallet) ?? { sol: 0, tokens: 0 };
+    s.sol += t.sol;
+    s.tokens += t.tokens;
+    sellers.set(t.wallet, s);
+  }
+  const shares = Object.fromEntries(STOP_ROLES.map((r) => [r, 0])) as Record<StopRole, number>;
+  let soldSol = 0;
+  let soldTokens = 0;
+  const ranked = [...sellers].map(([wallet, s]) => ({ wallet, ...s, role: roleOf(summaries.get(wallet)) }));
+  for (const s of ranked) {
+    soldSol += s.sol;
+    soldTokens += s.tokens;
+    shares[s.role] += s.sol;
+  }
+  let lead: StopRole | null = null;
+  for (const r of STOP_ROLES) {
+    shares[r] = soldSol > 0 ? shares[r] / soldSol : 0;
+    if (soldSol > 0 && (lead === null || shares[r] > shares[lead])) lead = r;
+  }
+  const round = (n: number, d = 4) => Math.round(n * 10 ** d) / 10 ** d;
+  return {
+    v: 1,
+    tape: window.complete ? "done" : "partial",
+    anchorAt: new Date(window.anchorAtMs).toISOString(),
+    stoppedAt: new Date(window.stoppedAtMs).toISOString(),
+    sellers: sellers.size,
+    soldSol: round(soldSol),
+    soldTokens: Math.round(soldTokens),
+    shares: Object.fromEntries(STOP_ROLES.map((r) => [r, round(shares[r])])) as Record<StopRole, number>,
+    lead,
+    top: ranked
+      .sort((a, b) => b.sol - a.sol)
+      .slice(0, topN)
+      .map((s) => ({ wallet: s.wallet, sol: round(s.sol), tokens: Math.round(s.tokens), role: s.role })),
+  };
+}

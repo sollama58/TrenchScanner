@@ -48,6 +48,7 @@ import {
 import { registerShutdown } from "./processExit.js";
 import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
+import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
@@ -334,6 +335,26 @@ async function main() {
       { deadlineMinutes: 15 },
     ),
   );
+  // The trade tape of called coins (tradeTapeJob.ts): who bought and sold each one, for the wallet
+  // risk score and the stop causes. Its own Helius client, so the heartbeat's credit count is its own.
+  schedule("trade-tape", () => {
+    const tapeDeps = {
+      helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
+      pumpFun: deps.pumpFun,
+    };
+    return scheduleInterval(
+      "trade-tape",
+      () =>
+        withJobLock("trade-tape", () =>
+          runTradeTapeJob(tapeDeps, {
+            heliusPagesPerRun: env.TRADE_TAPE_HELIUS_PAGES_PER_RUN,
+            pumpFunCallsPerRun: env.TRADE_TAPE_PUMPFUN_CALLS_PER_RUN,
+          }),
+        ),
+      1,
+      { deadlineMinutes: 15 },
+    );
+  });
   // Cleanup, outcome tracking and the AI judge each run under a lock shared by every worker
   // process (see withJobLock): a deploy's old and new trainer side by side ran each of them twice.
   schedule("cleanup", () =>

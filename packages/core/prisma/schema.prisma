@@ -408,6 +408,8 @@ model Token {
   snapshots              TokenSnapshot[]
   matches                Match[]
   candidateOutcomes      CandidateOutcome[]
+  tradeTape              TokenTradeTape?
+  walletActivity         TokenWalletActivity[]
   curatedAlerts          CuratedAlert[]
   curatedShadowEmissions CuratedShadowEmission[]
   aiReviews              AiReview[]
@@ -882,6 +884,11 @@ model CandidateOutcome {
   /// trailing exit or the hold cap for one that sold. Null until then, when ungraded, or when the
   /// close price is unknown.
   simReturnPct     Float?
+  /// Why a stopped row stopped: who sold between the anchor and the stop, from the coin's trade
+  /// tape (apps/worker/src/jobs/tradeTapeJob.ts, stopCauseOf in core's wallets/tradeTape.ts) -
+  /// the sellers ranked by SOL and each role's share of the selling. Written once the row is
+  /// final and its coin's tape is read; null on rows that didn't stop or whose tape isn't read.
+  stopCause        Json?
 
   curatedAlerts   CuratedAlert[]
   shadowEmissions CuratedShadowEmission[]
@@ -1746,4 +1753,84 @@ model CuratedPeakCorrection {
   peakMcapUsd Float
   peakMcapAt  DateTime
   correctedAt DateTime @default(now())
+}
+
+/// One read of a coin's trades, from launch to 30 minutes past its reference anchor (the first
+/// moment a seat called it, or a sampled uncalled decision moment): what the per-wallet rows in
+/// TokenWalletActivity and the stop causes on CandidateOutcome were built from. One row per coin;
+/// a coin is read once, after its reference row is final. See apps/worker/src/jobs/tradeTapeJob.ts.
+model TokenTradeTape {
+  tokenId String @id
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+
+  /// The CandidateOutcome the roles are read against (who held what at its anchor).
+  outcomeId  String?
+  anchorAt   DateTime
+  /// "called": a seat called the coin. "sample": an uncalled decision moment, for comparison.
+  reason     String
+  /// "done": every trade from launch to windowEnd. "partial": the read stopped short of the
+  /// launch (too many trades), so launch roles (first buyers, snipers) are unknown, while who sold
+  /// after the anchor is still right. "failed": no usable read (retried after retryAt).
+  status     String
+  /// "helius" (getTransactionsForAddress on the mint) or "pumpfun" (Pump.fun's trade API).
+  source     String?
+  windowEnd  DateTime
+  launchAt   DateTime?
+  creator    String?
+  trades     Int      @default(0)
+  wallets    Int      @default(0)
+  /// Helius pages or Pump.fun calls the read took.
+  calls      Int      @default(0)
+  readAt     DateTime @default(now())
+  retryAt    DateTime?
+
+  @@index([readAt])
+  @@index([status, retryAt])
+}
+
+/// What one wallet did in one coin, from the coin's trade tape (TokenTradeTape): the raw
+/// material of the per-wallet risk score. Amounts are in SOL and whole tokens (Pump.fun coins
+/// have a supply of one billion). Wallets that only dusted the coin are left out (see
+/// TAPE_MIN_SOL in core's wallets/tradeTape.ts) unless they hold a role.
+model TokenWalletActivity {
+  id      String @id @default(cuid())
+  tokenId String
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  wallet  String
+
+  buys         Int       @default(0)
+  sells        Int       @default(0)
+  solIn        Float     @default(0)
+  solOut       Float     @default(0)
+  tokensBought Float     @default(0)
+  tokensSold   Float     @default(0)
+  firstBuyAt   DateTime?
+  firstSellAt  DateTime?
+  /// Tokens held at the tape's anchor, and that as a % of supply.
+  heldAtAnchor    Float?
+  heldPctAtAnchor Float?
+  /// % of supply bought, across the window.
+  boughtPct       Float?
+
+  isCreator    Boolean  @default(false)
+  /// 1-25 when among the launch's first 25 buyers (the creator aside). Null otherwise, and on a
+  /// partial tape, where the launch wasn't read.
+  firstBuyerRank Int?
+  /// Bought within the launch's first 5 seconds.
+  launchSniper Boolean  @default(false)
+  /// Among the ten largest holders at the anchor.
+  top10AtAnchor Boolean @default(false)
+  /// Sold within 3 minutes of its own first buy.
+  fastExit     Boolean  @default(false)
+  /// Sold between the reference anchor and the stop, on a reference row that stopped.
+  dumpedIntoStop Boolean @default(false)
+  /// SOL it took out in that window.
+  dumpSol      Float    @default(0)
+
+  /// When the tape was read: the activity counts toward wallet scores computed after this.
+  createdAt    DateTime @default(now())
+
+  @@unique([tokenId, wallet])
+  @@index([wallet])
+  @@index([createdAt])
 }
