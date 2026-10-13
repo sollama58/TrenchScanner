@@ -63,6 +63,8 @@ interface TokenChart {
   marketCap: { t: number; usd: number }[];
   /** Absent from an API older than this page. */
   tape?: { status: string; anchorAt: number; windowEnd: number; readAt: number } | null;
+  /** When the coin's trades were last read live, before a call; null when never. */
+  live?: { readAt: number } | null;
   wallets?: FlaggedWallet[];
 }
 
@@ -438,9 +440,15 @@ function ChartCard({
                       {k !== "dev" && <span className="num">{n}</span>}
                     </button>
                   ))}
+                {!data.tape && card.curated && (
+                  <span className="faint small tm-legend-note">
+                    From trades read before the call. Linked and dev wallets join once its full trade history
+                    is read.
+                  </span>
+                )}
               </>
             ) : (
-              <span className="faint small">{tapeNote(data.tape ?? null, card)}</span>
+              <span className="faint small">{walletNote(data.tape ?? null, data.live ?? null, card)}</span>
             )}
           </div>
         )}
@@ -450,15 +458,30 @@ function ChartCard({
   );
 }
 
-/** Why the chart has no wallet markers. */
-function tapeNote(tape: TokenChart["tape"], card: Card): string {
-  if (!tape) {
-    return card.curated
-      ? "Flagged-wallet trades show here once this coin's trades are read, about half an hour after the call."
-      : "Flagged-wallet trades are read for called coins only.";
+/**
+ * Why the chart has no wallet markers. Risky wallets and known dumpers are read live before a
+ * call (`live`); the full trade history, which adds linked and dev wallets, is read after it.
+ */
+function walletNote(tape: TokenChart["tape"], live: TokenChart["live"], card: Card): string {
+  const before = live ? "No risky wallets or known dumpers traded it before the call" : null;
+  if (tape?.status === "failed") {
+    return before
+      ? `${before}, and its later trades couldn't be read.`
+      : "This coin's trades couldn't be read, so there are no wallet markers.";
   }
-  if (tape.status === "failed") return "This coin's trades couldn't be read, so there are no wallet markers.";
-  return "No risky, linked or dev wallets traded this coin in the half hour after the call.";
+  if (tape) {
+    return before
+      ? "No risky, linked or dev wallets traded it before the call or in the half hour after."
+      : "No risky, linked or dev wallets traded it in the half hour after the call.";
+  }
+  if (before) {
+    return card.curated
+      ? `${before}. Linked and dev wallets join once its full trade history is read.`
+      : `${before}.`;
+  }
+  return card.curated
+    ? "Its trades weren't read before the call. Flagged wallets show once its full trade history is read."
+    : "Flagged-wallet trades are read for coins close to a call.";
 }
 
 const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: string }> = {
@@ -521,11 +544,14 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
               </span>
               <span className="tm-flow num" title="SOL in and out of this coin">
                 {w.solIn.toFixed(2)} → {w.solOut.toFixed(2)}
-                <span className={net >= 0 ? "up" : "down"}>
-                  {" "}
-                  ({net >= 0 ? "+" : ""}
-                  {net.toFixed(2)})
-                </span>
+                {/* Before it sells, its SOL in is a position, not a loss. */}
+                {w.solOut > 0 && (
+                  <span className={net >= 0 ? "up" : "down"}>
+                    {" "}
+                    ({net >= 0 ? "+" : ""}
+                    {net.toFixed(2)})
+                  </span>
+                )}
               </span>
             </li>
           );

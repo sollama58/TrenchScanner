@@ -4,7 +4,9 @@ import {
   KeyedCache,
   markedWallets,
   MAX_MARKED_WALLETS,
+  parseLiveTrades,
   parseMcapCandles,
+  withLiveTrades,
   type ActivityRow,
   type McapCandle,
 } from "./tokenChart.js";
@@ -194,5 +196,67 @@ describe("KeyedCache", () => {
     expect(await cache.get("a", fill)).toBe(3);
     await expect(cache.get("c", () => Promise.reject(new Error("db")))).rejects.toThrow("db");
     expect(await cache.get("c", fill)).toBe(4);
+  });
+});
+
+describe("withLiveTrades", () => {
+  const opts = { riskyScore: 70, dumperDumps: 2 };
+  const live = parseLiveTrades([
+    { wallet: "Dumper", side: "sell", sol: 1.5, atMs: 90_000, score: 40, dumps: 3 },
+    { wallet: "Risky", side: "buy", sol: 2, atMs: 61_000, score: 80, dumps: 0 },
+    { wallet: "Risky", side: "buy", sol: 2, atMs: 61_000, score: 80, dumps: 0 }, // a later reading's copy
+    { wallet: "Dumper", side: "buy", sol: 1, atMs: 30_000, score: 40, dumps: 3 },
+    { wallet: "Bad", side: "swap", sol: 1, atMs: 1 },
+  ]);
+
+  it("marks the live tape's wallets before the post-call tape has read the coin", () => {
+    const out = withLiveTrades([], live, new Map(), opts);
+    expect(out.map((w) => [w.wallet, w.tags, w.trades])).toEqual([
+      ["Risky", ["risky"], [[61_000, 1, 2]]],
+      [
+        "Dumper",
+        ["dumper"],
+        [
+          [30_000, 1, 1],
+          [90_000, -1, 1.5],
+        ],
+      ],
+    ]);
+    expect(out[1]).toMatchObject({ solIn: 1, solOut: 1.5, score: 40, heldPct: null });
+  });
+
+  it("adds only the trades the post-call tape doesn't hold, and takes the current score", () => {
+    const tape = markedWallets(
+      [
+        {
+          wallet: "Risky",
+          isCreator: false,
+          solIn: 2,
+          solOut: 3,
+          heldPctAtAnchor: 1,
+          firstBuyAt: null,
+          firstSellAt: null,
+          trades: [
+            [60_500, 1, 2, 10],
+            [200_000, -1, 3, 10],
+          ],
+        },
+      ],
+      new Map([["Risky", { score: 75, dumps: 0, appearances: 4 }]]),
+      [],
+      opts,
+    );
+    const risk = new Map([
+      ["Risky", { score: 75, dumps: 0, appearances: 4 }],
+      ["Dumper", { score: 20, dumps: 5, appearances: 9 }],
+    ]);
+    const out = withLiveTrades(tape, live, risk, opts);
+    const risky = out.find((w) => w.wallet === "Risky")!;
+    expect(risky.trades).toEqual([
+      [60_500, 1, 2],
+      [200_000, -1, 3],
+    ]);
+    expect(risky).toMatchObject({ solIn: 2, solOut: 3, heldPct: 1 });
+    expect(out.find((w) => w.wallet === "Dumper")).toMatchObject({ score: 20, dumps: 5, coins: 9 });
   });
 });

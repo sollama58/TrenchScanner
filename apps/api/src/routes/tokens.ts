@@ -13,7 +13,9 @@ import {
   KeyedCache,
   type CandleFetcher,
   markedWallets,
+  parseLiveTrades,
   pumpFunCandleFetcher,
+  withLiveTrades,
   type MarkedWallet,
   type McapCandle,
 } from "../tokenChart.js";
@@ -47,9 +49,17 @@ export interface TokenChart {
   marketCap: { t: number; usd: number }[];
   /** The coin's trade tape (TokenTradeTape): null until it is read, which is only for called coins. */
   tape: { status: string; anchorAt: number; windowEnd: number; readAt: number } | null;
-  /** Flagged wallets in the tape, with their trades to mark. */
+  /**
+   * When the newest live-tape reading was taken (the coin's newest trades, read before a call):
+   * null when its trades were never read live.
+   */
+  live: { readAt: number } | null;
+  /** Flagged wallets in the live readings and the tape, with their trades to mark. */
   wallets: MarkedWallet[];
 }
+
+/** Snapshots whose live-tape readings the chart folds in, newest first: hours of a busy coin. */
+const LIVE_SNAPSHOTS = 60;
 
 /** One coin's flagged wallets change hourly at most (scores) or once (the tape): a minute's reuse. */
 const WALLETS_CACHE_MS = 60_000;
@@ -61,14 +71,17 @@ let candleCache = new CandleCache(pumpFunCandleFetcher());
 export function setCandleFetcherForTests(fetcher: CandleFetcher): void {
   candleCache = new CandleCache(fetcher);
 }
-const walletCache = new KeyedCache<Pick<TokenChart, "tape" | "wallets">>(WALLETS_CACHE_MS);
+type ChartWallets = Pick<TokenChart, "tape" | "live" | "wallets">;
+const walletCache = new KeyedCache<ChartWallets>(WALLETS_CACHE_MS);
 
 /**
- * The coin's flagged wallets and their trades, from its trade tape (TokenWalletActivity), the
- * wallet risk scores (WalletRisk) and the linked clusters on its newest snapshot that has them.
+ * The coin's flagged wallets and their trades: the risky wallets and known dumpers the live tape
+ * read before the call (TokenSnapshot.flaggedTrades), then everything the post-call trade tape
+ * read (TokenWalletActivity), with the wallet risk scores (WalletRisk) and the linked clusters on
+ * its newest snapshot that has them.
  */
-async function chartWallets(tokenId: string): Promise<Pick<TokenChart, "tape" | "wallets">> {
-  const [tape, rows, clustered] = await Promise.all([
+async function chartWallets(tokenId: string): Promise<ChartWallets> {
+  const [tape, rows, clustered, liveSnaps] = await Promise.all([
     prisma.tokenTradeTape.findUnique({
       where: { tokenId },
       select: { status: true, anchorAt: true, windowEnd: true, readAt: true },
@@ -91,14 +104,25 @@ async function chartWallets(tokenId: string): Promise<Pick<TokenChart, "tape" | 
       orderBy: { takenAt: "desc" },
       select: { linkedClusters: true },
     }),
+    // A reading with no flagged trades still counts: it says none traded before the call.
+    prisma.tokenSnapshot.findMany({
+      where: { tokenId, flaggedBuyers: { not: null } },
+      orderBy: { takenAt: "desc" },
+      take: LIVE_SNAPSHOTS,
+      select: { takenAt: true, flaggedTrades: true },
+    }),
   ]);
+  const live = liveSnaps.flatMap((s) => parseLiveTrades(s.flaggedTrades));
+  const wallets = [...new Set([...rows.map((r) => r.wallet), ...live.map((t) => t.wallet)])];
   const scores =
-    rows.length > 0
+    wallets.length > 0
       ? await prisma.walletRisk.findMany({
-          where: { wallet: { in: rows.map((r) => r.wallet) } },
+          where: { wallet: { in: wallets } },
           select: { wallet: true, score: true, dumps: true, appearances: true },
         })
       : [];
+  const risk = new Map(scores.map((w) => [w.wallet, w]));
+  const opts = { riskyScore: RISKY_WALLET_SCORE, dumperDumps: KNOWN_DUMPER_DUMPS };
   const clusters = Array.isArray(clustered?.linkedClusters)
     ? (clustered.linkedClusters as { funder: string; wallets: { wallet: string }[] }[]).filter(
         (c) => typeof c?.funder === "string" && Array.isArray(c.wallets),
@@ -113,10 +137,8 @@ async function chartWallets(tokenId: string): Promise<Pick<TokenChart, "tape" | 
           readAt: tape.readAt.getTime(),
         }
       : null,
-    wallets: markedWallets(rows, new Map(scores.map((w) => [w.wallet, w])), clusters, {
-      riskyScore: RISKY_WALLET_SCORE,
-      dumperDumps: KNOWN_DUMPER_DUMPS,
-    }),
+    live: liveSnaps[0] ? { readAt: liveSnaps[0].takenAt.getTime() } : null,
+    wallets: withLiveTrades(markedWallets(rows, risk, clusters, opts), live, risk, opts),
   };
 }
 
@@ -170,7 +192,7 @@ export async function registerTokenRoutes(app: FastifyInstance) {
           }),
           walletCache.get(token.id, () => chartWallets(token.id)),
         ])
-      : [[], { tape: null, wallets: [] }];
+      : [[], { tape: null, live: null, wallets: [] }];
     // The browser may reuse it for a few seconds; the candles themselves are cached here for 30.
     reply.header("Cache-Control", "private, max-age=15");
     return {
