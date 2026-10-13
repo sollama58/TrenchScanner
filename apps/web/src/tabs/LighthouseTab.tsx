@@ -4,6 +4,7 @@ import { usePolling } from "../hooks";
 import { ago } from "../format";
 import { Skeleton } from "../components/Charts";
 import { TrendChart } from "../components/TrendChart";
+import { bucketMsOf, pricingChangeSlot } from "../pricingChange";
 import { renderTrendCard, type TrendCardData } from "../components/lighthouseCards";
 import { ShareButton } from "../components/ShareImageDialog";
 import { LighthouseBody, WINDOWS as NOW_WINDOWS, type Days } from "../components/MarketLighthouse";
@@ -542,8 +543,12 @@ function MetricsChart({
   const bucket = history.window.bucket;
   const labels = useMemo(() => history.series.map((p) => bucketLabel(p.at, bucket)), [history, bucket]);
   const series = useMemo(() => metricSeries(history, panel.metrics, targets), [history, panel, targets]);
-  useEffect(() => onDrawn({ labels, series, kind: panel.kind }), [labels, series, panel.kind, onDrawn]);
-  return <TrendChart labels={labels} series={series} kind={panel.kind} partialLast />;
+  const change = useMemo(() => changeSlot(history.series.map((p) => p.at)), [history]);
+  useEffect(
+    () => onDrawn({ labels, series, kind: panel.kind, pricingChange: change }),
+    [labels, series, panel.kind, change, onDrawn],
+  );
+  return <TrendChart labels={labels} series={series} kind={panel.kind} partialLast pricingChange={change} />;
 }
 
 /**
@@ -570,10 +575,11 @@ function BreakdownChart({
   const bucket = h.labels.bucket;
   const labels = useMemo(() => h.labels.buckets.map((p) => bucketLabel(p.at, bucket)), [h, bucket]);
   const series = useMemo(() => breakdownSeries(h, panel.breakdown), [h, panel.breakdown]);
+  const change = useMemo(() => changeSlot(h.labels.buckets.map((p) => p.at)), [h]);
   const kind = panel.kind === "bars" ? "stacked" : "line";
   useEffect(() => {
-    if (history) onDrawn({ labels, series, kind });
-  }, [history, labels, series, kind, onDrawn]);
+    if (history) onDrawn({ labels, series, kind, pricingChange: change });
+  }, [history, labels, series, kind, change, onDrawn]);
   if (!history) {
     if (own.error) return <p className="error">Couldn&apos;t load this breakdown: {own.error.message}</p>;
     return <Skeleton lines={5} />;
@@ -581,9 +587,15 @@ function BreakdownChart({
   const stale = own.stale || (!own.data && !!history);
   return (
     <div className={stale ? "stale" : undefined} aria-busy={stale}>
-      <TrendChart labels={labels} series={series} kind={kind} partialLast />
+      <TrendChart labels={labels} series={series} kind={kind} partialLast pricingChange={change} />
     </div>
   );
+}
+
+/** Where pricing changed on a chart of these buckets (pricingChange.ts). */
+function changeSlot(ats: readonly string[]): number | null {
+  const starts = ats.map((a) => Date.parse(a));
+  return pricingChangeSlot(starts, bucketMsOf(starts, 3_600_000));
 }
 
 /** Hands the window's sums to the browser as a file. */
