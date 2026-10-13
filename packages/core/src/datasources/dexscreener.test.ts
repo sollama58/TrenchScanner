@@ -307,7 +307,8 @@ describe("getTokensByAddresses rate limiting", () => {
     const client = new DexScreenerClient();
     const startedAt = Date.now();
     // One batch at a time until the 429 lands, so the pause is the only thing holding the rest.
-    const result = await client.getTokensByAddresses(mints, 1, { retries: 1 });
+    // A priority lookup (the band refresh), so the budget's reserve doesn't hold them as well.
+    const result = await client.getTokensByAddresses(mints, 1, { retries: 1, priority: true });
     expect(result).toHaveLength(90);
     // The 429, its retry and the two other batches - none of the later ones before the pause ran out.
     expect(calls).toHaveLength(4);

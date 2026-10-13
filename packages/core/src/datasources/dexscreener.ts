@@ -63,6 +63,13 @@ export const DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE = 180;
  */
 const GATE_BURST = 30;
 /**
+ * Of that burst, the slots only the scan's band refresh (a `priority` lookup) may take. The other
+ * jobs on this client - the outcome watcher's fallback, live prices, fast-match, wallet valuation -
+ * leave them, so a refresh starting just after one of their bursts is not paced at 3 a second:
+ * on 2026-10-13 that held the refresh at 8-10 s (instead of ~1.3 s) on 2 of 13 sampled cycles.
+ */
+export const DEXSCREENER_PRIORITY_RESERVE = 20;
+/**
  * How long a pair DexScreener returned is reused for another lookup of the same mint.
  *
  * Every job in a process shares this client, and several price the same mints within a minute:
@@ -127,8 +134,9 @@ export interface TokenLookupOptions {
    */
   freshSources?: Set<string>;
   /**
-   * The scan's own watchlist refresh: first call on the fallback's budget while DexScreener is
-   * blank (see GeckoTerminalClient). DexScreener itself ignores it.
+   * The scan's own watchlist refresh: may take the rate budget's reserved slots (see
+   * DEXSCREENER_PRIORITY_RESERVE), and first call on the fallback's budget while DexScreener is
+   * blank (see GeckoTerminalClient).
    */
   priority?: boolean;
   /**
@@ -136,9 +144,10 @@ export interface TokenLookupOptions {
    * the scan's newest launches. DexScreener lists a new Pump.fun launch a median ~43 s after it, and
    * GeckoTerminal ~22 s (both measured 2026-10-12), while most launch runs that double do it in the
    * first two minutes. At most one fallback batch (30 mints), in the order given. Only read on a
-   * `priority` lookup.
+   * `priority` lookup. A promise is awaited once DexScreener has answered, so the caller can work
+   * the list out alongside the lookup (the band refresh's live launch read).
    */
-  fallbackIfUnlisted?: string[];
+  fallbackIfUnlisted?: string[] | Promise<string[]>;
   /**
    * The mints asked for may well have no pair at all (a holder's other holdings: airdrops,
    * NFTs, dead coins - see walletValuation). An all-empty answer to such a lookup is then not
@@ -180,6 +189,7 @@ export class DexScreenerClient {
       name: "dexscreener",
       perMinute: options.requestsPerMinute ?? DEFAULT_DEXSCREENER_REQUESTS_PER_MINUTE,
       burst: GATE_BURST,
+      reserve: DEXSCREENER_PRIORITY_RESERVE,
     });
     this.fallback = options.fallback;
   }
@@ -304,9 +314,12 @@ export class DexScreenerClient {
     remainingMs: number | undefined,
   ): Promise<CandidateToken[]> {
     const listed = new Set(results.map((t) => t.mintAddress));
+    const startedAt = Date.now();
+    const unlisted = options.fallbackIfUnlisted ? await options.fallbackIfUnlisted : [];
+    if (remainingMs !== undefined) remainingMs -= Date.now() - startedAt;
     const ask = [
       ...results.filter((t) => t.priceUsd <= 0 && t.marketCapUsd <= 0).map((t) => t.mintAddress),
-      ...(options.fallbackIfUnlisted ?? []).filter((m) => answered.has(m) && !listed.has(m)),
+      ...unlisted.filter((m) => answered.has(m) && !listed.has(m)),
     ].slice(0, BATCH_SIZE);
     if (ask.length === 0 || (remainingMs !== undefined && remainingMs <= 0)) return results;
     const priced = await fallback
@@ -448,7 +461,7 @@ export class DexScreenerClient {
       deadlineMs,
       seenAt,
       failed,
-      priority: _priority,
+      priority,
       fresh,
       fallbackIfUnlisted: _fallbackIfUnlisted,
       freshSources: _freshSources,
@@ -491,7 +504,7 @@ export class DexScreenerClient {
     const deadline = deadlineMs === undefined ? Infinity : Date.now() + deadlineMs;
     let skipped = 0;
     const gate = {
-      acquire: () => this.gate.acquire(deadline),
+      acquire: () => this.gate.acquire(deadline, priority === true),
       throttled: (delayMs: number) => this.gate.throttled(delayMs),
     };
     const work = forEachWithConcurrency(chunks, concurrency, async (chunk) => {

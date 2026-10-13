@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import { RateGate, RateGateDeadlineError } from "./rateGate.js";
 
 /** A gate on a fake clock: sleeping advances time instead of waiting. */
-function fakeGate(perMinute: number, burst: number) {
+function fakeGate(perMinute: number, burst: number, reserve?: number) {
   let now = 1_000_000;
   const gate = new RateGate({
     name: "test",
     perMinute,
     burst,
+    reserve,
     now: () => now,
     sleep: async (ms) => {
       now += ms;
@@ -49,6 +50,39 @@ describe("RateGate", () => {
     await expect(gate.acquire(start + 5_000)).rejects.toBeInstanceOf(RateGateDeadlineError);
     expect(clock()).toBe(start);
     expect(gate.takeStats()).toMatchObject({ requests: 1, gaveUp: 1 });
+  });
+
+  it("keeps its reserve for priority requests: ordinary ones wait, priority ones go at once", async () => {
+    const { gate, clock } = fakeGate(60, 5, 3);
+    const start = clock();
+    // Two ordinary requests take the slots above the reserve.
+    await gate.acquire();
+    await gate.acquire();
+    expect(clock()).toBe(start);
+    // The three reserved slots are there for priority requests, back to back.
+    for (let i = 0; i < 3; i++) await gate.acquire(Infinity, true);
+    expect(clock()).toBe(start);
+    // Empty now: an ordinary request waits for the reserve to refill as well as its own slot.
+    await gate.acquire();
+    expect(clock() - start).toBe(4_000);
+  });
+
+  it("gives an ordinary request up at once when the reserve would hold it past the deadline", async () => {
+    const { gate, clock } = fakeGate(60, 5, 3);
+    await gate.acquire();
+    await gate.acquire();
+    const start = clock();
+    await expect(gate.acquire(start + 500)).rejects.toBeInstanceOf(RateGateDeadlineError);
+    // A priority request still has the reserve.
+    await gate.acquire(start + 500, true);
+    expect(clock()).toBe(start);
+  });
+
+  it("never reserves the whole burst", async () => {
+    const { gate, clock } = fakeGate(60, 2, 5);
+    const start = clock();
+    await gate.acquire();
+    expect(clock()).toBe(start);
   });
 
   it("resets its counts on each read", async () => {
