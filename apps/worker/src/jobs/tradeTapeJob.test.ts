@@ -166,7 +166,7 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     });
   });
 
-  it("reads every coin from Helius, page by page, when Pump.fun is off", async () => {
+  it("reads a recent called coin from Helius, page by page", async () => {
     const { token, row } = await seedCalled("helius", new Date(ANCHOR + 5 * MIN));
     const mint = token.mintAddress;
     const bal = (accountIndex: number, owner: string, amount: number) => ({
@@ -224,16 +224,16 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
     expect(outcome!.stopCause).toMatchObject({ sellers: 1, soldSol: 2.5, lead: "launchSnipers" });
   });
 
-  it("uses Helius only as the backup for a coin Pump.fun couldn't read", async () => {
+  it("leaves a coin Helius couldn't read to Pump.fun", async () => {
+    const failed = await seedCalled("helius-failed", null);
     const fresh = await seedCalled("fresh", null);
-    const failed = await seedCalled("pf-failed", null);
     await prisma.tokenTradeTape.create({
       data: {
         tokenId: failed.token.id,
         anchorAt: new Date(ANCHOR),
         reason: "called",
         status: "failed",
-        source: "pumpfun",
+        source: "helius",
         windowEnd: new Date(ANCHOR + 30 * MIN),
         retryAt: new Date(NOW - MIN),
       },
@@ -266,22 +266,22 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
         };
       },
     };
-    const { stub, calls } = pumpFunStub(fresh.token.mintAddress, [
+    const { stub, calls } = pumpFunStub(failed.token.mintAddress, [
       pumpTrade("a", "buy", 1, 1_000_000, LAUNCH),
     ]);
     await runTradeTapeJob(
       { helius, pumpFun: stub },
       { heliusPagesPerRun: 1, pumpFunCallsPerRun: 4, spacingMs: 0, now: () => NOW },
     );
-    expect(asked).toEqual([failed.token.mintAddress]);
+    expect(asked).toEqual([fresh.token.mintAddress]);
     expect(calls.length).toBeGreaterThan(0);
     expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: failed.token.id } })).toMatchObject({
       status: "done",
-      source: "helius",
+      source: "pumpfun",
     });
     expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: fresh.token.id } })).toMatchObject({
       status: "done",
-      source: "pumpfun",
+      source: "helius",
     });
   });
 });
