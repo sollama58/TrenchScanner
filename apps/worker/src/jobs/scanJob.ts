@@ -2552,6 +2552,7 @@ export function withLinkedWallets(
     sameTimeFundedPct: linked.sameTimeFundedPct,
     sameTimeClusterCount: linked.sameTimeClusterCount,
     sameTimeFundedCount: linked.sameTimeFundedCount,
+    bundledWalletCount: linked.bundledWalletCount,
     sameTimeClusters: linked.sameTimeClusters,
   };
 }

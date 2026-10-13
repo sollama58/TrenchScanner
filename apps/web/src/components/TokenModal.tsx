@@ -1005,6 +1005,12 @@ function StatsCard({ card }: { card: Card }) {
             {r.cexPct === null ? "Not checked" : (cexCountText(r.cexCount, r.cexHolders) ?? pct(r.cexPct))}
           </dd>
         </div>
+        <div title="Top holders that share a funder or a funding minute with another top holder, each counted once">
+          <dt>Bundled</dt>
+          <dd className={r.bundledCount === null ? "muted" : "num"}>
+            {r.bundledCount === null ? "Not checked" : linkedCountText(r.bundledCount)}
+          </dd>
+        </div>
         <div title="How many of the launch's first 25 buyers still hold it">
           <dt>First buyers holding</dt>
           <dd className="num">{r.firstHolding === null ? "–" : `${r.firstHolding}/${r.firstSeen ?? 25}`}</dd>

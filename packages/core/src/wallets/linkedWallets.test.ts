@@ -211,6 +211,28 @@ describe("same-time funding", () => {
     ["e", null],
   ]);
 
+  it("counts a holder once as bundled when it shares both a funder and a funding minute", () => {
+    const shared = new Map<string, string | null>([
+      ["a", "F1"],
+      ["b", "F1"],
+      ["c", "F3"],
+      ["d", "F4"],
+      ["e", "F4"],
+    ]);
+    const at = new Map<string, number | null>([
+      ["a", t0],
+      ["b", t0 + 10_000],
+      ["c", t0 + 30_000],
+      ["d", t0 + 600_000],
+      ["e", t0 + 1_200_000],
+    ]);
+    const r = linkedWallets(holders, shared, { hot: notHot, fundedAtOf: at })!;
+    // Linked: a+b (F1) and d+e (F4). Same minute: a, b, c. a and b are in both, counted once.
+    expect(r.linkedWalletCount).toBe(4);
+    expect(r.sameTimeFundedCount).toBe(3);
+    expect(r.bundledWalletCount).toBe(5);
+  });
+
   it("groups holders funded within a minute of each other, whoever paid", () => {
     const at = new Map<string, number | null>([
       ["a", t0],
@@ -225,6 +247,7 @@ describe("same-time funding", () => {
     expect(r.sameTimeClusterCount).toBe(1);
     expect(r.sameTimeFundedPct).toBe(15);
     expect(r.sameTimeFundedCount).toBe(3);
+    expect(r.bundledWalletCount).toBe(3);
     expect(r.sameTimeClusters[0]).toMatchObject({ atMs: t0, spanMs: 59_000, pct: 15 });
     expect(r.sameTimeClusters[0]!.wallets.map((w) => [w.wallet, w.funder])).toEqual([
       ["a", "F1"],
