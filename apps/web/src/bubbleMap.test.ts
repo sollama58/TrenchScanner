@@ -8,6 +8,7 @@ import {
   sameTimeCount,
   clusterHalos,
   graphBounds,
+  hasHolderList,
   layoutGraph,
   pickReading,
 } from "./bubbleMap";
@@ -135,6 +136,18 @@ describe("bubble map graph", () => {
     expect(pickReading(rows)?.id).toBe(3);
     expect(pickReading(rows.slice(0, 2))?.id).toBe(2);
     expect(pickReading([])).toBeNull();
+  });
+
+  it("falls back to a reading that only kept the holder list", () => {
+    const holders = [{ wallet: A, pct: 12 }];
+    const rows = [
+      { linkedWalletPct: null, linkedClusters: null, linkedHolders: null, id: 1 },
+      { linkedWalletPct: null, linkedClusters: null, linkedHolders: holders, id: 2 },
+      { linkedWalletPct: 0, linkedClusters: null, linkedHolders: null, id: 3 },
+    ];
+    expect(pickReading(rows)?.id).toBe(2);
+    expect(hasHolderList(rows[1]!)).toBe(true);
+    expect(hasHolderList(rows[0]!)).toBe(false);
   });
 });
 
