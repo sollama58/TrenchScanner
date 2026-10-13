@@ -89,6 +89,8 @@ export const feedAppearanceSchema = z
     narrativeNote: z.boolean().nullable().default(null),
     /** The Stream tab (every new token that passes the safety screen in the band); off by default. */
     streamTab: z.boolean().default(false),
+    /** The Lighthouse tab; off by default (the Live feed's Lighthouse button and #lighthouse still open it). */
+    lighthouseTab: z.boolean().default(false),
     /** Trading sites each card links to, in this order; Padre's Trading Terminal by default. */
     quickLinks: z
       .array(z.enum(QUICK_LINKS))
@@ -127,6 +129,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   cexFunded: false,
   narrativeNote: null,
   streamTab: false,
+  lighthouseTab: false,
   quickLinks: ["terminal"],
   // Off by default, both switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, and the TokenSage button (the token view keeps its own). An account that

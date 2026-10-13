@@ -74,6 +74,8 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   // Filters sits right after Live: it is where the feed is tuned and where alerts are set up.
   { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
+  // Hidden unless switched on in Settings (FeedAppearance.lighthouseTab); the Live feed's Lighthouse
+  // button and #lighthouse links still open it.
   { id: "lighthouse", label: "Lighthouse", Icon: LighthouseIcon },
   // Lookups paid for with Burn Credits, on top of a subscription.
   { id: "utilities", label: "Utilities", Icon: ToolsIcon },
@@ -220,8 +222,14 @@ export function App() {
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
   const isAdmin = signedIn && session.user.isAdmin;
   // The Stream tab only for a signed-in reader who switched it on in Settings.
-  const streamOn = useAppearance().streamTab && signedIn;
-  const shownTabs = TABS.filter((t) => t.id !== "stream" || streamOn);
+  const appearance = useAppearance();
+  const streamOn = appearance.streamTab && signedIn;
+  // The Lighthouse tab when switched on, or while the reader is on it (a link from the Live feed's
+  // Lighthouse view, or a #lighthouse URL), so the open page always has its tab highlighted.
+  const lighthouseOn = appearance.lighthouseTab || wantedTab === "lighthouse";
+  const shownTabs = TABS.filter(
+    (t) => (t.id !== "stream" || streamOn) && (t.id !== "lighthouse" || lighthouseOn),
+  );
   const tabs = isAdmin ? [...shownTabs, ADMIN_TAB] : shownTabs;
   // #admin without an admin wallet, or #stream with the tab off, reads as the Live tab, so a tab
   // is always the highlighted one.
@@ -237,7 +245,7 @@ export function App() {
   return (
     <div className="app">
       <div className="backdrop" aria-hidden />
-      <header className={`topbar${streamOn ? " packed" : ""}`}>
+      <header className={`topbar${streamOn && lighthouseOn ? " packed" : ""}`}>
         <div className="topbar-inner">
           <a className="brand" href="#" onClick={() => goTo("live")}>
             <LogoMark />
