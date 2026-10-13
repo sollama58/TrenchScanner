@@ -464,11 +464,16 @@ const envSchema = z.object({
   // When no cutoff meets the targets, the cutoff is anchored on this share of the exam's moments
   // and moves at most CURATED_CUTOFF_SHARE_BAND either way, to wherever in that band the 2x lower
   // bound is best (tighter when that buys hit rate, looser when hit rate holds); the coverage
-  // tolerance no longer applies then. User decision 2026-10-13: "based around 33%". Before it the
+  // tolerance no longer applies then. 0 = no anchor (the coverage-tolerance rule).
+  // User decision 2026-10-13 (morning): "based around 33%", with a 10-point band. Before it the
   // cutoffs sat near 60% of moments for about 19% 2x; the forward test is in
-  // notes/hit-catch-2026-10-13/models.md. 0 = no anchor (the coverage-tolerance rule).
-  CURATED_CUTOFF_TARGET_SHARE: z.coerce.number().min(0).max(1).default(0.33),
-  CURATED_CUTOFF_SHARE_BAND: z.coerce.number().min(0).max(0.5).default(0.1),
+  // notes/hit-catch-2026-10-13/models.md. User decision 2026-10-13 (17:08 UTC): a fixed 20%, no
+  // band. Over the first 13 hours of the band every non-paced seat drifted to its loose edge
+  // (41-43% of moments) for 15-18% 2x and an average call losing about 22%, while the seats' top
+  // quarter of calls hit 19-24% and their top tenth 27-38%; the band also sent two seats to 1-5
+  // calls an hour for six hours when the tighter branch fired (notes/model-review-2026-10-13).
+  CURATED_CUTOFF_TARGET_SHARE: z.coerce.number().min(0).max(1).default(0.2),
+  CURATED_CUTOFF_SHARE_BAND: z.coerce.number().min(0).max(0.5).default(0),
   // How much a tighter cutoff in the band must raise the 2x lower bound before the cutoff moves
   // to it (0.01 = 1 point); a looser one is taken when its bound is no lower. Forward test
   // (train to 10-11 12:00, judge to 10-13 00:00, seat means): today's rule 19.4% 2x / 78% catch;
