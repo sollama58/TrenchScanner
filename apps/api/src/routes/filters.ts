@@ -50,9 +50,10 @@ function buildFilterInputSchema(env: Env) {
     maxEmptyTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     maxSniperTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     maxLinkedWalletPct: z.number().min(0).max(100).nullable().optional(),
+    maxLinkedWalletCount: z.number().int().min(0).max(20).nullable().optional(),
     maxFlaggedBuySol: z.number().min(0).max(10_000).nullable().optional(),
-    minCexFundedPct: z.number().min(0).max(100).nullable().optional(),
-    maxCexFundedPct: z.number().min(0).max(100).nullable().optional(),
+    minCexFundedCount: z.number().int().min(0).max(20).nullable().optional(),
+    maxCexFundedCount: z.number().int().min(0).max(20).nullable().optional(),
     maxSameTimeFundedPct: z.number().min(0).max(100).nullable().optional(),
     maxLinkedCreatorPct: z.number().min(0).max(100).nullable().optional(),
     minLiveHolderCount: z.number().int().min(0).max(100_000).nullable().optional(),
@@ -107,6 +108,8 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     maxTokenAgeMinutes?: number | null;
     minFirstBuyersHolding?: number | null;
     maxFirstBuyersHolding?: number | null;
+    minCexFundedCount?: number | null;
+    maxCexFundedCount?: number | null;
   }): string | null {
     const mcap = mcapRangeError(f.mcapMin, f.mcapMax);
     if (mcap) return mcap;
@@ -117,6 +120,9 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     }
     if (above(f.minFirstBuyersHolding, f.maxFirstBuyersHolding)) {
       return "Minimum first buyers holding must not be above the maximum - the filter could never match";
+    }
+    if (above(f.minCexFundedCount, f.maxCexFundedCount)) {
+      return "Minimum exchange-funded holders must not be above the maximum - the filter could never match";
     }
     return null;
   }

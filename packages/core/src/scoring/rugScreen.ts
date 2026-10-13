@@ -35,6 +35,23 @@ export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
 export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
 
 /**
+ * At or above this many of the top-20 holders (the creator aside) funded from an exchange or a
+ * busy service (core's cexFundedReading), a token is never alerted (user decision 2026-10-13,
+ * "17/20", first asked at 15). Banked rows keep the share only (cexFundedPct, of the holders read, nearly always 20),
+ * so the training and report cut reads it as SAFETY_REJECT_CEX_FUNDED_PCT.
+ */
+export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
+
+/**
+ * At or above this many of the top-20 holders linked (one funder paid for them, or they funded
+ * each other: core's linkedWallets, linkedWalletCount), a token is never alerted (user decision
+ * 2026-10-13, "15/20"). Banked rows carry it as the linkedWalletCount feature since 2026-10-13;
+ * older rows have none and pass.
+ */
+export const SAFETY_REJECT_LINKED_COUNT = 15;
+export const SAFETY_REJECT_CEX_FUNDED_PCT = 85;
+
+/**
  * A graduated token must have spent at least this long on its bonding curve (user decision
  * 2026-10-11, 10s at first, then 5s). A curve filled within seconds of launch is a coordinated bundle - the launcher's
  * own wallets buying the whole curve in the first blocks - and the bundle sells into whoever buys
@@ -102,6 +119,22 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
       profile.top10HolderPct,
     ),
   );
+  if (
+    typeof profile.linkedWalletCount === "number" &&
+    profile.linkedWalletCount >= SAFETY_REJECT_LINKED_COUNT
+  ) {
+    reasons.push(
+      `${profile.linkedWalletCount} of the ${profile.linkedWalletsChecked ?? 20} top holders are linked (${SAFETY_REJECT_LINKED_COUNT} or more)`,
+    );
+  }
+  if (
+    typeof profile.cexFundedCount === "number" &&
+    profile.cexFundedCount >= SAFETY_REJECT_CEX_FUNDED_COUNT
+  ) {
+    reasons.push(
+      `${profile.cexFundedCount} of the ${profile.cexFundedHolders ?? 20} top holders were funded from an exchange (${SAFETY_REJECT_CEX_FUNDED_COUNT} or more)`,
+    );
+  }
 
   return { passed: reasons.length === 0, reasons };
 }
@@ -158,7 +191,12 @@ export function passesWalletSafetyCuts(features: Record<string, number | null | 
       features.emptyTop10WalletPct,
       features.sniperTop10WalletPct,
       features.top10HolderPct,
-    ).length === 0
+    ).length === 0 &&
+    !(typeof features.cexFundedPct === "number" && features.cexFundedPct >= SAFETY_REJECT_CEX_FUNDED_PCT) &&
+    !(
+      typeof features.linkedWalletCount === "number" &&
+      features.linkedWalletCount >= SAFETY_REJECT_LINKED_COUNT
+    )
   );
 }
 
@@ -217,5 +255,7 @@ export function walletSafetyCutsSql(features: Prisma.Sql = Prisma.raw('"features
   return Prisma.sql`COALESCE((${features}->>'emptyTop10WalletPct')::float8 < ${SAFETY_REJECT_EMPTY_WALLET_PCT}, true)
     AND COALESCE((${features}->>'freshTop10WalletPct')::float8 <= ${SAFETY_MAX_FRESH_WALLET_PCT}, true)
     AND COALESCE((${features}->>'sniperTop10WalletPct')::float8 < ${SAFETY_REJECT_SNIPER_WALLET_PCT}, true)
-    AND COALESCE((${features}->>'top10HolderPct')::float8 < ${SAFETY_REJECT_TOP10_HOLDER_PCT}, true)`;
+    AND COALESCE((${features}->>'top10HolderPct')::float8 < ${SAFETY_REJECT_TOP10_HOLDER_PCT}, true)
+    AND COALESCE((${features}->>'cexFundedPct')::float8 < ${SAFETY_REJECT_CEX_FUNDED_PCT}, true)
+    AND COALESCE((${features}->>'linkedWalletCount')::float8 < ${SAFETY_REJECT_LINKED_COUNT}, true)`;
 }

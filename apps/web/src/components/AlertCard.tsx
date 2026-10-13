@@ -13,7 +13,7 @@ import {
   SlidersIcon,
 } from "./Icons";
 import { openSage } from "../sage";
-import { openBubbleMap, type BubbleSeed } from "../bubbleMap";
+import { linkedCount, linkedCountText, openBubbleMap, type BubbleSeed } from "../bubbleMap";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -98,6 +98,7 @@ export function AlertCard({
     sniperPct,
     sniperAtAlert,
     linkedPct,
+    linkedCount: linkedN,
     linkedAtAlert,
     linkedClusters,
     cexPct,
@@ -388,6 +389,7 @@ export function AlertCard({
           {show("linked") && (
             <LinkedTile
               pct={linkedPct}
+              count={linkedN}
               clusters={linkedClusters}
               atAlert={linkedAtAlert && linkedPct !== null}
               onOpen={() => openBubbleMap(mint, linkedSeed(card))}
@@ -395,17 +397,20 @@ export function AlertCard({
           )}
           {show("cexFunded") && (
             <div
+              className={
+                cexCount !== null && cexCount >= SAFETY_REJECT_CEX_FUNDED_COUNT ? "risky" : undefined
+              }
               title={
                 cexPct === null
                   ? "CEX-funded: not checked yet. Funder reads are limited per scan, and tokens closest to alerting go first."
                   : `CEX-funded: ${cexCount ?? "?"} of the ${cexHolders ?? 20} largest holders were opened from an exchange (or a busy service like a bridge), ${
                       cexAtAlert ? "at alert time" : "from a scan after the alert"
-                    }.`
+                    }. The safety screen rejects ${SAFETY_REJECT_CEX_FUNDED_COUNT} or more.`
               }
             >
               <dt>CEX-funded</dt>
               <dd className={cexPct === null ? "muted" : "num"}>
-                {cexPct === null ? "Not checked" : pct(cexPct)}
+                {cexPct === null ? "Not checked" : (cexCountText(cexCount, cexHolders) ?? pct(cexPct))}
               </dd>
             </div>
           )}
@@ -552,6 +557,7 @@ export function cardReadings(card: Card) {
     sniperPct,
     sniperAtAlert,
     linkedPct: linkedFrom?.linkedWalletPct ?? null,
+    linkedCount: linkedFrom ? linkedCount(linkedFrom) : null,
     linkedAtAlert: linkedFrom === s,
     linkedClusters: linkedFrom?.linkedClusters ?? [],
     cexPct: cexFrom?.cexFundedPct ?? null,
@@ -576,6 +582,15 @@ export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 export const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
 export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
 export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
+/** SAFETY_REJECT_LINKED_COUNT: 15 or more of the top 20 holders linked fails. */
+export const SAFETY_REJECT_LINKED_COUNT = 15;
+/** SAFETY_REJECT_CEX_FUNDED_COUNT: 17 or more of the top 20 holders funded from an exchange fails. */
+export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
+
+/** The CEX-funded tile's reading, "N/20", or null when not read. */
+export function cexCountText(count: number | null, holders: number | null): string | null {
+  return count === null ? null : `${count}/${holders ?? 20}`;
+}
 
 /** One wallet-check tile (Fresh, Empty or Top-10 snipers): the share, where it was read, or that it wasn't checked. */
 export function WalletStat({
@@ -631,14 +646,19 @@ export function linkedSeed(card: Card): BubbleSeed | undefined {
   return from ? { token: card.token, snapshot: from } : undefined;
 }
 
-/** The Linked tile: the share of supply held by linked top holders. Tapping it opens the bubble map. */
+/**
+ * The Linked tile: how many top holders are linked, "N/20" (user ask 2026-10-13), with the supply
+ * they hold in the tooltip. Tapping it opens the bubble map.
+ */
 function LinkedTile({
   pct: value,
+  count,
   clusters,
   atAlert,
   onOpen,
 }: {
   pct: number | null;
+  count: { linked: number; of: number } | null;
   clusters: readonly LinkedClusterView[];
   atAlert: boolean;
   onOpen: () => void;
@@ -649,12 +669,12 @@ function LinkedTile({
       ? "Linked: not checked yet. Who paid for each top-20 wallet is read a few tokens per scan."
       : value === 0
         ? `Linked: no two top-20 wallets share a funder, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
-        : `Linked: ${summary ?? `${pct(value)} of supply in linked wallets`}, ${atAlert ? "at alert time" : "from a scan after the alert"}. Tap for the bubble map.`;
+        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more. Tap for the bubble map.`;
   const canOpen = value !== null && clusters.length > 0;
   return (
     <div
       className={
-        `${value !== null && value >= LINKED_WARN_PCT ? "risky" : ""}${canOpen ? " tile-opens" : ""}`.trim() ||
+        `${(value !== null && value >= LINKED_WARN_PCT) || (count !== null && count.linked >= SAFETY_REJECT_LINKED_COUNT) ? "risky" : ""}${canOpen ? " tile-opens" : ""}`.trim() ||
         undefined
       }
       title={title}
@@ -686,7 +706,9 @@ function LinkedTile({
         Linked
         {canOpen && <BubblesIcon size={12} className="tile-opens-icon" />}
       </dt>
-      <dd className={value === null ? "muted" : "num"}>{value === null ? "Not checked" : pct(value)}</dd>
+      <dd className={value === null ? "muted" : "num"}>
+        {value === null ? "Not checked" : (linkedCountText(count) ?? pct(value))}
+      </dd>
     </div>
   );
 }

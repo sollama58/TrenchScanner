@@ -12,6 +12,7 @@ import {
   openBubbleMap,
   graphBounds,
   layoutGraph,
+  linkedCountText,
   pickReading,
   type BubbleGraph,
   type SameTimeGroup,
@@ -20,7 +21,7 @@ import {
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
 import { openWallet } from "../walletModal";
-import { LINKED_WARN_PCT } from "./AlertCard";
+import { LINKED_WARN_PCT, SAFETY_REJECT_LINKED_COUNT } from "./AlertCard";
 import { ShareButton } from "./ShareImageDialog";
 import { BubblesIcon, CheckIcon, CloseIcon, LinkIcon, LockIcon } from "./Icons";
 
@@ -226,9 +227,21 @@ function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boo
   return (
     <>
       <dl className="bm-stats">
-        <div className={graph.linkedPct !== null && graph.linkedPct >= LINKED_WARN_PCT ? "risky" : undefined}>
+        <div
+          className={
+            (graph.linkedPct !== null && graph.linkedPct >= LINKED_WARN_PCT) ||
+            (graph.linkedCount !== null && graph.linkedCount.linked >= SAFETY_REJECT_LINKED_COUNT)
+              ? "risky"
+              : undefined
+          }
+        >
           <dt>Linked</dt>
-          <dd className="num">{pct(graph.linkedPct, 1)}</dd>
+          <dd
+            className="num"
+            title={graph.linkedPct === null ? undefined : `${pct(graph.linkedPct, 1)} of supply`}
+          >
+            {linkedCountText(graph.linkedCount) ?? pct(graph.linkedPct, 1)}
+          </dd>
         </div>
         <div>
           <dt>Clusters</dt>

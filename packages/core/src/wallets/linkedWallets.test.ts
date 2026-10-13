@@ -126,12 +126,20 @@ describe("linkedWallets", () => {
     expect(r.clusters[0]).toMatchObject({ funder: "F", pct: 18 });
     expect(r.clusters[1]!.funder).toBe("d");
     expect(r.clusters[1]!.wallets.map((w) => w.wallet)).toEqual(["c", "d"]);
+    // Four of the five holders sit in a cluster: the Linked tile's "4/5".
+    expect(r.linkedWalletCount).toBe(4);
+    expect(r.linkedWalletsChecked).toBe(5);
   });
 
   it("links nobody through a hot funder", () => {
     const funders = new Map<string, string | null>(holders.map((h) => [h.owner, "EXCHANGE"]));
     const r = linkedWallets(holders, funders, { hot: (f) => f === "EXCHANGE" })!;
-    expect(r).toMatchObject({ linkedClusterCount: 0, linkedWalletPct: 0, linkedLargestClusterPct: 0 });
+    expect(r).toMatchObject({
+      linkedClusterCount: 0,
+      linkedWalletCount: 0,
+      linkedWalletPct: 0,
+      linkedLargestClusterPct: 0,
+    });
   });
 
   it("is unknown while any holder's funder is unread", () => {

@@ -995,10 +995,11 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     linkedLargestClusterPct: scored.linkedLargestClusterPct ?? null,
     linkedCreatorPct: scored.linkedCreatorPct ?? null,
     linkedWalletCount:
-      scored.linkedClusters === undefined
+      scored.linkedWalletCount ??
+      (scored.linkedClusters === undefined
         ? null
-        : scored.linkedClusters.reduce((n, c) => n + c.wallets.length, 0),
-    linkedWalletsChecked: scored.linkedHolders?.length ?? null,
+        : scored.linkedClusters.reduce((n, c) => n + c.wallets.length, 0)),
+    linkedWalletsChecked: scored.linkedWalletsChecked ?? scored.linkedHolders?.length ?? null,
     cexFundedPct: scored.cexFundedPct ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,

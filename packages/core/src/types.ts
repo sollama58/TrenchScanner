@@ -210,6 +210,9 @@ export interface OnChainProfile {
    */
   linkedWalletPct?: number;
   linkedClusterCount?: number;
+  /** Holders in any cluster, of linkedWalletsChecked holders read (user ask 2026-10-13: Linked as "N/20"). */
+  linkedWalletCount?: number;
+  linkedWalletsChecked?: number;
   linkedLargestClusterPct?: number;
   linkedCreatorPct?: number;
   linkedClusters?: LinkedCluster[];
@@ -385,15 +388,17 @@ export interface FilterCriteria {
   maxSniperTop10WalletPct?: number | null;
   /** Max % of supply held by linked top holders (one funder, or funded each other). */
   maxLinkedWalletPct?: number | null;
+  /** Max how many of the top-20 holders are linked (linkedWalletCount). Skipped while unknown. */
+  maxLinkedWalletCount?: number | null;
   /** Max % of supply held by top holders funded within a minute of each other (sameTimeFundedPct). */
   maxSameTimeFundedPct?: number | null;
   /** Max % of supply held by top holders tied to the creator (linkedCreatorPct). Skipped while unknown. */
   maxLinkedCreatorPct?: number | null;
   /** Min holders as Jupiter counts them at the decision (freshQuote.holderCount). Fails closed without a quote. */
   minLiveHolderCount?: number | null;
-  /** Bounds on the % of the largest holders an exchange paid for (cexFundedPct). Skipped while unknown. */
-  minCexFundedPct?: number | null;
-  maxCexFundedPct?: number | null;
+  /** Bounds on how many of the 20 largest holders an exchange paid for (cexFundedCount). Skipped while unknown. */
+  minCexFundedCount?: number | null;
+  maxCexFundedCount?: number | null;
   /** Max SOL flagged wallets bought in the coin's newest trades (flaggedBuySol). Skipped while unknown. */
   maxFlaggedBuySol?: number | null;
   /** Bounds on how many of the launch's first 25 buyers still hold it (tradeFlow.firstBuyersHolding). */

@@ -179,6 +179,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             <li>Top holders aren&apos;t mostly empty wallets</li>
             <li>Early snipers don&apos;t own most of the top bags</li>
             <li>The top 10 holders own under 40% of the supply</li>
+            <li>Under 15 of the top 20 holders are linked to each other</li>
+            <li>Under 17 of the top 20 holders were funded from an exchange</li>
           </ul>
         </>
       ),
