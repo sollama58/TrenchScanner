@@ -513,6 +513,23 @@ describe("calibrateThresholdForPrecision", () => {
     ).toBe(best.support);
   });
 
+  it("with a target share, starts at it and moves within the band by hit rate", () => {
+    const field = { ...targets, minSupport: 20, coverageTolerance: 0.5, targetShare: 0.25, shareBand: 0.1 };
+    // The top 30 of 200 all win, the rest 1 in 10: tighter buys hit rate, so the cutoff goes to
+    // the strict edge of the band (15% = 30 calls), and the wide tolerance doesn't loosen it.
+    const steep = calls(200, (i) => (i < 30 || i % 10 === 5 ? 1 : 0));
+    expect(calibrateThresholdForPrecision(steep, field).support).toBe(30);
+    // A hurdle larger than that gain keeps it at the target share.
+    expect(calibrateThresholdForPrecision(steep, { ...field, shareHurdle: 0.5 }).support).toBe(50);
+    // 3 in 10 win all the way down to 35%, then none: hit rate holds, so it goes to the loose edge.
+    const flat = calls(200, (i) => (i < 70 && i % 10 >= 7 ? 1 : 0));
+    expect(calibrateThresholdForPrecision(flat, field).support).toBe(70);
+    // No band: the cutoff sits at the target share.
+    expect(calibrateThresholdForPrecision(flat, { ...field, shareBand: 0 }).support).toBe(50);
+    // With no judged cutoff inside the band, the one nearest the target share is used.
+    expect(calibrateThresholdForPrecision(flat, { ...field, minSupport: 100 }).support).toBe(100);
+  });
+
   it("at a pace floor, picks the best record among cutoffs that sent at least that many an hour", () => {
     // 100 calls, one every 6 minutes over 10 hours: 10 an hour in all. The top 12 all win, then
     // 4 in 10. Without a floor the best record is the sure winners at the top; at 4 an hour no

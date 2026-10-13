@@ -779,6 +779,24 @@ export interface PrecisionTargets {
    * the floor (a quiet stretch), every cutoff is a candidate. 0 or omitted = no floor.
    */
   minCallsPerHour?: number;
+  /**
+   * A volume anchor for the best-effort cutoff, as a share of the calls the cutoff is calibrated
+   * on (0.25 = the top quarter). When no cutoff meets the targets, only cutoffs sending
+   * targetShare +/- shareBand of the calls are candidates, with no coverageTolerance: the cutoff
+   * starts at the one nearest targetShare and moves tighter when that buys hit rate (shareHurdle),
+   * looser when hit rate holds (user ask 2026-10-13: "based around 33%").
+   * Ignored under minCallsPerHour. 0 or omitted = no anchor.
+   */
+  targetShare?: number;
+  /** How far, as a share of calls, the cutoff may move from targetShare. 0 or omitted = none. */
+  shareBand?: number;
+  /**
+   * How much (0.02 = 2 points) a tighter cutoff in the band must raise the 2x lower bound over the
+   * one at targetShare before the cutoff moves to it. A looser one is taken when its bound is no
+   * lower. Without a hurdle the best bound in the band wins outright, and on the 10-11..10-13
+   * forward test that tightened on noise: 0.2 points more 2x for 5 points less catch on average.
+   */
+  shareHurdle?: number;
 }
 
 /**
@@ -822,6 +840,8 @@ export interface PrecisionCalibration {
 /** One candidate cutoff's record in the evidence. */
 interface CutoffRecord {
   cutoff: number;
+  /** The share of the calibration calls at or above the cutoff, before any cooldown. */
+  share: number;
   n: number;
   wins: number;
   goals: number;
@@ -845,6 +865,8 @@ interface CutoffRecord {
  *    from the targets. With coverageTolerance, the loosest cutoff whose 2x bound is within that
  *    much of the best one is chosen instead: hit rate barely moves between the top 5% and top 30%
  *    of moments, so the best record alone tends to be a narrow slice that lets runners slip by.
+ *  - With targetShare, the best-effort pick starts at the cutoff sending targetShare of the calls
+ *    and moves within shareBand of it by the 2x lower bound - see PrecisionTargets.targetShare.
  */
 function chooseCutoff(records: CutoffRecord[], targets: PrecisionTargets): PrecisionCalibration {
   const point = (r: CutoffRecord, meets: boolean): PrecisionCalibration => ({
@@ -866,24 +888,48 @@ function chooseCutoff(records: CutoffRecord[], targets: PrecisionTargets): Preci
   if (lastQualifying !== null) return point(lastQualifying, true);
 
   const z = Math.max(1, targets.confidenceZ ?? 0);
-  let best = judged[0]!;
+  const anchor = targets.targetShare ?? 0;
+  if (anchor > 0) {
+    // Start at the cutoff nearest targetShare; move within the band only on the evidence.
+    const start = judged.reduce((a, b) => (Math.abs(b.share - anchor) < Math.abs(a.share - anchor) ? b : a));
+    const band = targets.shareBand ?? 0;
+    const pool = judged.filter((r) => Math.abs(r.share - anchor) <= band + 1e-9);
+    const bound = (r: CutoffRecord) => wilsonLowerBound(r.wins, r.n, z);
+    const startBound = bound(start);
+    const tighter = pool.filter((r) => r.share < start.share);
+    if (tighter.length > 0) {
+      const best = bestRecord(tighter, z);
+      if (bound(best) >= startBound + (targets.shareHurdle ?? 0)) return point(best, false);
+    }
+    let pick = start;
+    for (const r of pool) if (r.share > pick.share && bound(r) >= startBound) pick = r;
+    return point(pick, false);
+  }
+  let best = bestRecord(judged, z);
+  const bestBound = wilsonLowerBound(best.wins, best.n, z);
+  // Catching runners counts too: the loosest cutoff whose 2x lower bound is within
+  // coverageTolerance of the best one sends more of the runners for about the same hit rate.
+  const tolerance = targets.coverageTolerance ?? 0;
+  if (tolerance > 0) {
+    for (const r of judged) {
+      if (r.n > best.n && wilsonLowerBound(r.wins, r.n, z) >= bestBound - tolerance) best = r;
+    }
+  }
+  return point(best, false);
+}
+
+/** The record with the highest Wilson lower bound of its 2x rate, the 4x bound breaking ties. */
+function bestRecord(records: CutoffRecord[], z: number): CutoffRecord {
+  let best = records[0]!;
   let bestScore = [wilsonLowerBound(best.wins, best.n, z), wilsonLowerBound(best.goals, best.n, z)];
-  for (const r of judged.slice(1)) {
+  for (const r of records.slice(1)) {
     const score = [wilsonLowerBound(r.wins, r.n, z), wilsonLowerBound(r.goals, r.n, z)];
     if (score[0]! > bestScore[0]! || (score[0] === bestScore[0] && score[1]! > bestScore[1]!)) {
       best = r;
       bestScore = score;
     }
   }
-  // Catching runners counts too: the loosest cutoff whose 2x lower bound is within
-  // coverageTolerance of the best one sends more of the runners for about the same hit rate.
-  const tolerance = targets.coverageTolerance ?? 0;
-  if (tolerance > 0) {
-    for (const r of judged) {
-      if (r.n > best.n && wilsonLowerBound(r.wins, r.n, z) >= bestScore[0]! - tolerance) best = r;
-    }
-  }
-  return point(best, false);
+  return best;
 }
 
 /**
@@ -900,7 +946,9 @@ export function calibrateThresholdForPrecision(
 ): PrecisionCalibration {
   const paced = paceFloor(calls, targets);
   const floored =
-    paced === null ? withShareFloor(targets, calls.length) : { ...targets, coverageTolerance: 0 };
+    paced === null
+      ? withShareFloor(targets, calls.length)
+      : { ...targets, coverageTolerance: 0, targetShare: 0 };
   let records: CutoffRecord[];
   if (
     opts.cooldownMs !== undefined &&
@@ -920,7 +968,7 @@ export function calibrateThresholdForPrecision(
       // Only judge at a boundary between distinct probabilities - a cutoff can't split a tie.
       const next = sorted[i + 1];
       if (next !== undefined && next.probability === call.probability) continue;
-      records.push({ cutoff: call.probability, n: i + 1, wins, goals });
+      records.push({ cutoff: call.probability, share: (i + 1) / sorted.length, n: i + 1, wins, goals });
     }
   }
   const atPace = paced === null ? [] : records.filter((r) => r.n >= paced);
@@ -977,11 +1025,13 @@ function cooldownRecords(calls: ScoredOutcome[], cooldownMs: number): CutoffReco
   const records: CutoffRecord[] = [];
   for (const cutoff of cutoffs) {
     const lastSent = new Map<string, number>();
+    let above = 0;
     let n = 0;
     let wins = 0;
     let goals = 0;
     for (const call of byTime) {
       if (call.probability < cutoff) continue;
+      above += 1;
       const t = call.anchorAt!.getTime();
       const last = lastSent.get(call.tokenId!);
       if (last !== undefined && t - last < cooldownMs) continue;
@@ -990,7 +1040,7 @@ function cooldownRecords(calls: ScoredOutcome[], cooldownMs: number): CutoffReco
       if (call.labelValue > 0) wins += 1;
       if (call.labelValue >= GOAL_LABEL) goals += 1;
     }
-    records.push({ cutoff, n, wins, goals });
+    records.push({ cutoff, share: above / byTime.length, n, wins, goals });
   }
   return records;
 }

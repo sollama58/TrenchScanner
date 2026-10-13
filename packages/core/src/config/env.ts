@@ -445,6 +445,20 @@ const envSchema = z.object({
   // (user decision 2026-10-12): on the 10-07..10-11 replay, trees caught 65-66% of runners
   // against 44-57% at 1 point, for 0.7-1.5 points of 2x rate (notes/audit-2026-10-12/training.md).
   CURATED_CUTOFF_COVERAGE_TOLERANCE: z.coerce.number().min(0).max(0.1).default(0.02),
+  // When no cutoff meets the targets, the cutoff is anchored on this share of the exam's moments
+  // and moves at most CURATED_CUTOFF_SHARE_BAND either way, to wherever in that band the 2x lower
+  // bound is best (tighter when that buys hit rate, looser when hit rate holds); the coverage
+  // tolerance no longer applies then. User decision 2026-10-13: "based around 33%". Before it the
+  // cutoffs sat near 60% of moments for about 19% 2x; the forward test is in
+  // notes/hit-catch-2026-10-13/models.md. 0 = no anchor (the coverage-tolerance rule).
+  CURATED_CUTOFF_TARGET_SHARE: z.coerce.number().min(0).max(1).default(0.33),
+  CURATED_CUTOFF_SHARE_BAND: z.coerce.number().min(0).max(0.5).default(0.1),
+  // How much a tighter cutoff in the band must raise the 2x lower bound before the cutoff moves
+  // to it (0.01 = 1 point); a looser one is taken when its bound is no lower. Forward test
+  // (train to 10-11 12:00, judge to 10-13 00:00, seat means): today's rule 19.4% 2x / 78% catch;
+  // fixed 33% 20.8 / 65; band with no hurdle 21.0 / 60 (it tightened on noise); 1 point 20.8 / 65;
+  // 2 points 20.3 / 69.
+  CURATED_CUTOFF_SHARE_HURDLE: z.coerce.number().min(0).max(0.1).default(0.01),
   // How sure a cutoff's out-of-sample record must make us that it meets the targets, as a normal
   // z-score: a cutoff counts as meeting them when the Wilson LOWER BOUND of its hit rates does.
   // Choosing the lowest of hundreds of cutoffs that shows 75% favours lucky ones; the bound
