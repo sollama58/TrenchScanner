@@ -125,12 +125,17 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               <td>Top-20 holders funded from an exchange</td>
               <td>17 of 20 or more</td>
             </tr>
+            <tr>
+              <td>Bonding curve fill time</td>
+              <td>Graduated in under 5 seconds from launch (a bundled launch)</td>
+            </tr>
           </tbody>
         </table>
         <p>
-          The three wallet checks cost a paid lookup per wallet, so they are rationed: tokens closest to
-          alerting go first, then tokens already alerted on, then the rest as room allows. Until a check has
-          run, the card says &ldquo;Not checked&rdquo;. That means not looked at yet, not clean.
+          The wallet checks (fresh, empty, snipers, linked and exchange-funded) cost a paid lookup per wallet,
+          so they are rationed: tokens closest to alerting go first, then tokens already alerted on, then the
+          rest as room allows. Until a check has run, the card says &ldquo;Not checked&rdquo;. That means not
+          looked at yet, not clean.
         </p>
       </section>
 

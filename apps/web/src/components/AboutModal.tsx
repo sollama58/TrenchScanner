@@ -181,6 +181,7 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             <li>The top 10 holders own under 40% of the supply</li>
             <li>Under 15 of the top 20 holders are linked to each other</li>
             <li>Under 17 of the top 20 holders were funded from an exchange</li>
+            <li>The bonding curve wasn&apos;t bought out within 5 seconds of launch</li>
           </ul>
         </>
       ),
