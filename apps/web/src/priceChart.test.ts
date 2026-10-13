@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { groupMarkers, linearTicks, linePoints, logTicks, mcapAxis, pointWidthMs } from "./priceChart";
+import {
+  candleCloses,
+  groupMarkers,
+  linearTicks,
+  linePoints,
+  logTicks,
+  mcapAxis,
+  pointWidthMs,
+  withCallPoint,
+} from "./priceChart";
 
 const M = 60_000;
 
@@ -8,6 +17,47 @@ describe("pointWidthMs", () => {
     expect(pointWidthMs(60 * M, 120)).toBe(M);
     expect(pointWidthMs(6 * 60 * M, 120)).toBe(3 * M);
     expect(pointWidthMs(16 * 60 * M, 90)).toBe(15 * M);
+  });
+});
+
+describe("candleCloses", () => {
+  it("puts each close at its minute's end, not the start Pump.fun stamps it with", () => {
+    expect(
+      candleCloses([
+        { t: 0, c: 5 },
+        { t: 2 * M, c: 8 },
+      ]),
+    ).toEqual([
+      { t: M, v: 5 },
+      { t: 3 * M, v: 8 },
+    ]);
+  });
+});
+
+describe("withCallPoint", () => {
+  const line = [
+    { t: M, v: 10 },
+    { t: 2 * M, v: 14 },
+    { t: 3 * M, v: 9 },
+  ];
+
+  it("adds the call's price at its time, in order", () => {
+    expect(withCallPoint(line, { t: 2.5 * M, v: 12 })).toEqual([
+      { t: M, v: 10 },
+      { t: 2 * M, v: 14 },
+      { t: 2.5 * M, v: 12 },
+      { t: 3 * M, v: 9 },
+    ]);
+  });
+
+  it("replaces a close at the call's exact time", () => {
+    expect(withCallPoint(line, { t: 2 * M, v: 12 }).map((p) => p.v)).toEqual([10, 12, 9]);
+  });
+
+  it("leaves the line alone when the call is outside it or has no price", () => {
+    expect(withCallPoint(line, { t: 5 * M, v: 12 })).toEqual(line);
+    expect(withCallPoint(line, { t: 0, v: 12 })).toEqual(line);
+    expect(withCallPoint(line, { t: 2.5 * M, v: 0 })).toEqual(line);
   });
 });
 

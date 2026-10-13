@@ -18,7 +18,9 @@ import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, useScoreWeights } from "../scoreWeights";
 import {
+  candleCloses,
   linePoints,
+  withCallPoint,
   MARKER_KINDS,
   pointWidthMs,
   type MarkerKind,
@@ -541,12 +543,14 @@ function ChartCard({
     return out;
   }, [alertAt, alertMcap, what, card.curated?.calledBy]);
 
+  // A call card's alert price is the call's own anchor; a filter alert's can be a scan's reading.
+  const callPriced = card.kind === "curated" && alertMcap > 0;
   const view = useMemo(() => {
     if (!data) return null;
     const fromCandles = !!data.candles && data.candles.length > 0;
-    // The line runs through each minute's close, else through the scan's readings.
+    // The line runs through each minute's close at the minute's end, else through the scan's readings.
     const source: Point[] = fromCandles
-      ? data.candles!.map((c) => ({ t: c.t, v: c.c }))
+      ? candleCloses(data.candles!)
       : data.marketCap.map((p) => ({ t: p.t, v: p.usd }));
     if (source.length < 2)
       return { points: [] as Point[], fromCandles, step: undefined, scans: [] as Point[] };
@@ -565,8 +569,11 @@ function ChartCard({
               : first;
     const to = range === "model" ? alertAt + MODEL_SPAN_MS : last;
     const step = pointWidthMs(Math.min(to, last) - Math.max(from, first) + 60_000, MAX_POINTS);
+    const line = linePoints(source, from, step, to);
     return {
-      points: linePoints(source, from, step, to),
+      // A call is priced from a fresh quote (its anchor), so its price goes on the line at its
+      // time: the "Called" marker then sits on the price the call and its grade start from.
+      points: callPriced ? withCallPoint(line, { t: alertAt, v: alertMcap }) : line,
       fromCandles,
       step: fromCandles ? step : undefined,
       // The scans the model read before calling it, drawn as dots in Model View.
@@ -575,7 +582,7 @@ function ChartCard({
           ? data.marketCap.filter((p) => p.t >= from && p.t <= alertAt).map((p) => ({ t: p.t, v: p.usd }))
           : [],
     };
-  }, [data, range, alertAt]);
+  }, [data, range, alertAt, alertMcap, callPriced]);
 
   const markers = useMemo<MarkerTrade[]>(
     () =>
