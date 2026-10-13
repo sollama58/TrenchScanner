@@ -36,6 +36,7 @@ import { AlertNotifier, resetSettings } from "./alerts";
 import { AnnouncementBar } from "./components/AnnouncementBar";
 import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { useSageMint } from "./sage";
+import { useBubblesMint } from "./bubbleMap";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
 import { StreamView } from "./components/StreamView";
@@ -52,6 +53,10 @@ const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 // The burn button (and its transaction builder) only matters to someone without access.
 // The TokenSage view (and its charts) loads the first time a card or a Telegram link opens one.
 const SageHost = lazy(() => import("./components/SageView").then((m) => ({ default: m.SageHost })));
+// The linked-wallets bubble map loads the first time a Linked tile or a ?bubbles= link opens it.
+const BubbleMapHost = lazy(() =>
+  import("./components/BubbleMap").then((m) => ({ default: m.BubbleMapHost })),
+);
 const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ default: m.BurnPanel })));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
@@ -89,6 +94,7 @@ export function App() {
   });
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
   const sageMint = useSageMint();
+  const bubblesMint = useBubblesMint();
 
   const checkSession = (maxAgeMs: number) => {
     // index.html already started this request; cachedGet adopts it rather than sending another.
@@ -381,6 +387,11 @@ export function App() {
             <SageHost key={sageMint} mint={sageMint} guest onConnect={connectWallet} />
           </Suspense>
         )}
+        {guest && bubblesMint && (
+          <Suspense fallback={null}>
+            <BubbleMapHost key={bubblesMint} mint={bubblesMint} guest onConnect={connectWallet} />
+          </Suspense>
+        )}
         {signedIn && (
           <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
             <AlertNotifier />
@@ -398,6 +409,11 @@ export function App() {
             {sageMint && (
               <Suspense fallback={null}>
                 <SageHost key={sageMint} mint={sageMint} guest={false} onConnect={connectWallet} />
+              </Suspense>
+            )}
+            {bubblesMint && (
+              <Suspense fallback={null}>
+                <BubbleMapHost key={bubblesMint} mint={bubblesMint} guest={false} onConnect={connectWallet} />
               </Suspense>
             )}
           </AccessGate>

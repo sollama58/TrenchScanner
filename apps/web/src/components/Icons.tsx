@@ -304,3 +304,20 @@ export const SageIcon = (p: IconProps) => (
     <path d="M19 2.5v3M17.5 4h3" />
   </Svg>
 );
+
+/** Three linked bubbles: the linked-wallets bubble map. */
+export const BubblesIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="8" cy="9" r="5" />
+    <circle cx="17.5" cy="7" r="2.5" />
+    <circle cx="16" cy="17" r="3.5" />
+    <path d="M12.3 11.6l1.6 2.4M12.6 7.9l2.5-.5" />
+  </Svg>
+);
+
+export const LinkIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+    <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+  </Svg>
+);
