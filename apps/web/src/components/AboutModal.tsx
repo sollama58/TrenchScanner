@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { AboutDetails } from "./AboutDetails";
 import { BrainIcon, CloseIcon, SlidersIcon } from "./Icons";
-import { BouncerArt, CompeteArt, FunnelArt, GradeArt, GuestArt, TwoWaysArt, WeatherArt } from "./TourArt";
+import {
+  BouncerArt,
+  BubblesArt,
+  CompeteArt,
+  FunnelArt,
+  GradeArt,
+  GuestArt,
+  TwoWaysArt,
+  WeatherArt,
+} from "./TourArt";
 import { GUEST_DELAY_MINUTES } from "../session";
 
 type Targets = { hitRate2xPct: number; hitRate4xPct: number };
@@ -252,6 +261,26 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
           </li>
           <li>The grade so far.</li>
         </ol>
+      ),
+    },
+    {
+      title: "Spot one buyer behind many wallets",
+      art: <BubblesArt />,
+      body: (
+        <>
+          <p className="tour-lead">
+            Top holders can look spread out when one person is behind several of them. For each top-10 wallet
+            we look up who paid for it. Wallets with the same funder count as one: four wallets from one
+            funder holding 31% is really one holder with 31%. Exchange withdrawals don&apos;t count as a link.
+          </p>
+          <p className="tour-lead">
+            The Linked tile on each card shows that share and turns red at 30% or more. When it finds a
+            cluster, the tile shows a bubble icon: tap it for the bubble map, where each bubble is a top
+            holder sized by its share, wallets from one funder share a colour, and risky wallets are ringed in
+            red.
+          </p>
+          {guest && <p className="tour-note">The bubble map comes with a connected wallet.</p>}
+        </>
       ),
     },
     {

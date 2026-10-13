@@ -241,6 +241,12 @@ export function AboutDetails({ targets }: { targets: Targets }) {
             Share of the top 10 holders (pool aside) that were among those first 25 buyers. 80% or more is
             always rejected.
           </dd>
+          <dt>Linked</dt>
+          <dd>
+            Share of supply held by top-10 wallets that one funder paid for (exchange withdrawals don&apos;t
+            count as a link). Red at 30% or more. When it finds a cluster, tap the tile for the bubble map.
+            &ldquo;Not checked&rdquo; means that coin&apos;s wallets haven&apos;t been looked up yet.
+          </dd>
           <dt>DH · DS</dt>
           <dd>Dev Holding: the creator still holds the token. Dev Sold: they hold none.</dd>
           <dt>Narrative: agrees · warns</dt>
