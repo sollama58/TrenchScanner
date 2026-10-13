@@ -27,9 +27,10 @@ const random = (bytes: number) =>
 
 describe.skipIf(!dbAvailable)("utility routes", () => {
   let app: FastifyInstance;
-  const env = loadEnv({ ...process.env });
+  const adminWallet = random(32);
+  const env = loadEnv({ ...process.env, ADMIN_WALLET_ADDRESSES: adminWallet });
   const signer = createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS);
-  const wallets: string[] = [];
+  const wallets: string[] = [adminWallet];
   const mints: string[] = [];
 
   beforeAll(async () => {
@@ -49,9 +50,8 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
   });
 
   /** A signed-in wallet, subscribed unless asked otherwise (Utilities sits behind the paywall). */
-  async function signIn({ subscribed = true } = {}) {
-    const walletAddress = random(32);
-    wallets.push(walletAddress);
+  async function signIn({ subscribed = true, walletAddress = random(32) } = {}) {
+    if (!wallets.includes(walletAddress)) wallets.push(walletAddress);
     const user = await prisma.user.create({
       data: {
         walletAddress,
@@ -257,5 +257,40 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
 
     const overview = await app.inject({ method: "GET", url: "/utilities", cookies: me.cookies });
     expect(overview.json()).toMatchObject({ balance: 1, prices: { tokensPerCredit: 500 } });
+  });
+
+  it("lets an admin award credits to any wallet, while the admin's own lookups still cost credits", async () => {
+    const admin = await signIn({ walletAddress: adminWallet });
+    const me = await signIn();
+    const award = await app.inject({
+      method: "POST",
+      url: "/admin/credits/grant",
+      cookies: admin.cookies,
+      payload: { wallet: me.walletAddress, delta: 5, note: TAG },
+    });
+    expect(award.statusCode).toBe(200);
+    expect(award.json()).toMatchObject({ wallet: me.walletAddress, balance: 5 });
+
+    // Only admins can award.
+    const refused = await app.inject({
+      method: "POST",
+      url: "/admin/credits/grant",
+      cookies: me.cookies,
+      payload: { wallet: me.walletAddress, delta: 5 },
+    });
+    expect(refused.statusCode).toBe(403);
+
+    // Being an admin doesn't make a lookup free.
+    vi.spyOn(DexScreenerClient.prototype, "getTokensByAddresses").mockImplementation(async (mints) =>
+      mints.map(reading),
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/utilities/token",
+      cookies: admin.cookies,
+      payload: { mint: random(32) },
+    });
+    expect(res.statusCode).toBe(402);
+    expect(res.json()).toMatchObject({ code: "not_enough_credits", balance: 0 });
   });
 });

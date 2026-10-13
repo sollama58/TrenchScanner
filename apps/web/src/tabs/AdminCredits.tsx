@@ -179,8 +179,8 @@ function Grant({ onDone }: { onDone: () => void }) {
   };
   return (
     <Panel
-      title="Give credits"
-      note="A negative number takes credits back. Every grant is kept on the ledger."
+      title="Award credits"
+      note="Award Burn Credits to any wallet, yours included. Admins pay for lookups like everyone else, so this is how an admin wallet gets credits too. A negative number takes credits back, and every award is kept on the ledger."
     >
       <div className="admin-form">
         <input
@@ -209,7 +209,7 @@ function Grant({ onDone }: { onDone: () => void }) {
           disabled={busy || !wallet.trim() || !Number.isInteger(count) || count === 0}
           onClick={() => void grant()}
         >
-          {count < 0 ? `Take ${-count} credits` : `Give ${Number.isInteger(count) ? count : 0} credits`}
+          {count < 0 ? `Take ${-count} credits` : `Award ${Number.isInteger(count) ? count : 0} credits`}
         </button>
       </div>
       {result && <p className="small muted">{result}</p>}
