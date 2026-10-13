@@ -6,7 +6,6 @@ import {
   linkedCount,
   linkedCountText,
   sameTimeCount,
-  bundledCount,
   clusterHalos,
   graphBounds,
   hasHolderList,
@@ -245,24 +244,5 @@ describe("sameTimeCount", () => {
       }),
     ).toEqual({ linked: 2, of: 20 });
     expect(sameTimeCount({ sameTimeFundedPct: null })).toBeNull();
-  });
-});
-
-describe("bundledCount", () => {
-  it("reads the stored count, and counts linked and same-minute wallets once on older scans", () => {
-    expect(bundledCount({ bundledWalletCount: 5, linkedWalletPct: 3, linkedWalletsChecked: 20 })).toEqual({
-      linked: 5,
-      of: 20,
-    });
-    const g = (w: string) => ({ wallet: w, pct: 1, fundedAtMs: 0, funder: null });
-    const c = (w: string) => ({ wallet: w, pct: 1 });
-    expect(
-      bundledCount({
-        linkedWalletPct: 2,
-        linkedClusters: [{ funder: "F", wallets: [c("a"), c("b")], pct: 2 }],
-        sameTimeClusters: [{ atMs: 0, spanMs: 10_000, wallets: [g("b"), g("c")], pct: 2 }],
-      } as Parameters<typeof bundledCount>[0]),
-    ).toEqual({ linked: 3, of: 20 });
-    expect(bundledCount({ linkedWalletPct: null })).toBeNull();
   });
 });

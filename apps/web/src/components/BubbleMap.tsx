@@ -283,12 +283,6 @@ function MapView({
             <dd className="num">{linkedCountText(graph.sameTimeCount) ?? pct(graph.sameTimePct, 1)}</dd>
           </div>
         )}
-        {graph.bundledCount && (
-          <div title="Top holders that share a funder or a funding minute with another top holder, each counted once">
-            <dt>Bundled</dt>
-            <dd className="num">{linkedCountText(graph.bundledCount)}</dd>
-          </div>
-        )}
         <div className={risky.length > 0 ? "risky" : undefined}>
           <dt>Risky holders</dt>
           <dd className="num">{risky.length}</dd>

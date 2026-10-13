@@ -148,8 +148,6 @@ export interface BubbleGraph {
   sameTimePct: number | null;
   /** How many top holders are in a same-minute group, of how many were read. */
   sameTimeCount: { linked: number; of: number } | null;
-  /** How many top holders share a funder or a funding minute with another, each once, of how many were read. */
-  bundledCount: { linked: number; of: number } | null;
   /** Share of supply in linked wallets, and the top 10's share, as read. */
   linkedPct: number | null;
   /** How many top holders are linked, of how many were read. */
@@ -201,7 +199,6 @@ export function buildGraph(
     | "sameTimeClusters"
     | "sameTimeFundedPct"
     | "sameTimeFundedCount"
-    | "bundledWalletCount"
   >,
   flagged: readonly FlaggedHolder[] = [],
 ): BubbleGraph {
@@ -344,7 +341,6 @@ export function buildGraph(
     sameTimeGroups,
     sameTimePct: snapshot.sameTimeFundedPct ?? null,
     sameTimeCount: sameTimeCount(snapshot),
-    bundledCount: bundledCount(snapshot),
     linkedPct: snapshot.linkedWalletPct ?? null,
     linkedCount: linkedCount(snapshot),
     top10Pct: top10,
@@ -532,12 +528,12 @@ export function clusterHalos(graph: BubbleGraph): ClusterHalo[] {
   return out;
 }
 
-/** Holders the linked reading covers when the scan didn't keep the count: the top 20. */
+/** Holders the linked reading covered on scans that didn't keep the count: RugCheck's top 20. */
 const LINKED_HOLDERS_READ = 20;
 
 /**
  * Linked as a count (user ask 2026-10-13): how many top holders are in a linked cluster, of how
- * many were read, shown "N/20". Scans before the count was kept count the clusters' wallets. Null
+ * many were read, shown "N/25". Scans before the count was kept count the clusters' wallets. Null
  * when the reading isn't in.
  */
 export function linkedCount(
@@ -556,7 +552,7 @@ export function linkedCount(
 
 /**
  * Same-minute funding as a count (user ask 2026-10-13): how many top holders sit in a same-minute
- * group, of how many were read, "N/20". Scans before the count was kept count the groups' wallets.
+ * group, of how many were read, "N/25". Scans before the count was kept count the groups' wallets.
  */
 export function sameTimeCount(
   s: Pick<
@@ -575,33 +571,6 @@ export function sameTimeCount(
   const of = linkedCount(s)?.of ?? (s.linkedWalletsChecked || s.linkedHolders?.length || LINKED_HOLDERS_READ);
   if (s.sameTimeFundedCount != null) return { linked: s.sameTimeFundedCount, of };
   const wallets = new Set((s.sameTimeClusters ?? []).flatMap((g) => (g?.wallets ?? []).map((w) => w.wallet)));
-  return { linked: wallets.size, of };
-}
-
-/**
- * Bundled (user ask 2026-10-13): how many top holders share a funder or a funding minute with any
- * other top holder, each wallet counted once (the union of linked and same-minute), "N/20". Scans
- * before the count was kept count the union of the stored clusters' and groups' wallets.
- */
-export function bundledCount(
-  s: Pick<
-    Snapshot,
-    | "bundledWalletCount"
-    | "sameTimeClusters"
-    | "linkedWalletPct"
-    | "linkedWalletCount"
-    | "linkedWalletsChecked"
-    | "linkedClusters"
-    | "linkedHolders"
-  >,
-): { linked: number; of: number } | null {
-  const of = linkedCount(s)?.of;
-  if (of === undefined) return null;
-  if (s.bundledWalletCount != null) return { linked: s.bundledWalletCount, of };
-  const wallets = new Set([
-    ...(s.linkedClusters ?? []).flatMap((c) => (c?.wallets ?? []).map((w) => w.wallet)),
-    ...(s.sameTimeClusters ?? []).flatMap((g) => (g?.wallets ?? []).map((w) => w.wallet)),
-  ]);
   return { linked: wallets.size, of };
 }
 

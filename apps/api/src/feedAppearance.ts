@@ -32,7 +32,6 @@ export const CARD_FIELDS = [
   "sniperTop10",
   "linked",
   "cexFunded",
-  "bundled",
   "dev",
   "reasons",
   "mint",
@@ -83,8 +82,8 @@ export const feedAppearanceSchema = z
     sniperTop10: z.boolean().default(false),
     /** The CEX-funded tile (share of the top 20 an exchange paid for); hidden by default. */
     cexFunded: z.boolean().default(false),
-    /** The Bundled tile (top-20 holders sharing a funder or funding minute); hidden by default. */
-    bundled: z.boolean().default(false),
+    /** The retired Bundled tile (folded into Linked, 2026-10-13): accepted from older tabs, ignored. */
+    bundled: z.boolean().optional(),
     /**
      * The Narrative seat's "agrees"/"warns" note on other models' cards and Telegram alerts. Null
      * (the default) follows curation/narrativeNote.ts: off until the seat proves itself live.
@@ -130,7 +129,6 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   reasons: false,
   sniperTop10: false,
   cexFunded: false,
-  bundled: false,
   narrativeNote: null,
   streamTab: false,
   lighthouseTab: false,

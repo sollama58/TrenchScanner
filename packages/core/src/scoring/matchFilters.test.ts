@@ -138,15 +138,6 @@ describe("maxSameTimeFundedCount", () => {
   });
 });
 
-describe("maxBundledWalletCount", () => {
-  it("caps how many top holders are bundled, and skips an unknown count", () => {
-    const filter = { ...baseFilter, maxBundledWalletCount: 6 };
-    expect(matchesFilter(baseToken({ bundledWalletCount: 7 }), filter)).toBe(false);
-    expect(matchesFilter(baseToken({ bundledWalletCount: 6 }), filter)).toBe(true);
-    expect(matchesFilter(baseToken({ bundledWalletCount: undefined }), filter)).toBe(true);
-  });
-});
-
 describe("maxLinkedWalletCount", () => {
   it("caps how many top holders are linked, and skips an unknown count", () => {
     const filter = { ...baseFilter, maxLinkedWalletCount: 5 };

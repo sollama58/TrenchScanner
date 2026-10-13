@@ -637,7 +637,7 @@ function BaselineChart({
             <strong>Passes the safety screen</strong>: mint and freeze authority renounced, liquidity burned
             or locked, not a Mayhem Mode token, no more than 70% of the top 10 holders on fresh wallets, under
             80% on empty wallets or launch snipers, the top 10 owning under 40% of supply, no single holder
-            over 10%, under 15 of the top 20 holders linked and under 17 funded from an exchange, and a
+            over 10%, under 20 of the top 25 holders linked and under 17 funded from an exchange, and a
             bonding curve that took at least 5 seconds to fill. A token that fails is never sampled at all.
           </li>
           <li>

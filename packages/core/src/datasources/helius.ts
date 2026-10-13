@@ -6,7 +6,12 @@ import { mayhemStateAddress } from "../solana.js";
 import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from "./launchBuyers.js";
 import type { ChainTx } from "../wallets/tradeTape.js";
 import { funderFromEarliestTransactions, FUNDER_TXS_WALKED } from "../wallets/linkedWallets.js";
-import { holdersFromLargestAccounts, type LargestAccount, type OnChainHolders } from "./onChainHolders.js";
+import {
+  holdersFromLargestAccounts,
+  topWalletsFromAccounts,
+  type LargestAccount,
+  type OnChainHolders,
+} from "./onChainHolders.js";
 
 const logger = createLogger("helius");
 
@@ -184,6 +189,10 @@ export type MintAuthorityResult =
 
 /** A mint's largest holders read from the chain (see holdersFromLargestAccounts); "failed" when any read had no usable answer. */
 export type LargestHoldersResult = { status: "found"; holders: OnChainHolders } | { status: "failed" };
+
+/** A mint's largest wallets, pools aside, with each one's % of supply; "failed" without a full read. */
+export type TopHoldersResult =
+  { status: "found"; holders: { owner: string; pct: number }[] } | { status: "failed" };
 
 /** Whether a mint was launched in Pump.fun's Mayhem Mode. "failed" is kept distinct from a
  *  definitive false for the same reason as EarliestActivityResult: the rug screen treats an
@@ -779,6 +788,81 @@ export class HeliusClient {
         withOwners.push({ owner, amount: a.amount });
       }
       const holders = complete ? holdersFromLargestAccounts(withOwners, supplyByMint.get(mint)!) : null;
+      out.set(mint, holders ? { status: "found", holders } : { status: "failed" });
+    }
+    return out;
+  }
+
+  /**
+   * The `n` largest wallets of each mint, pools aside, and their % of supply: past the 20 token
+   * accounts RugCheck and getTokenLargestAccounts stop at, of which the pool takes one to three
+   * (user ask 2026-10-13: linked wallets over the top 25 without the LP). Per mint, one
+   * getProgramAccounts over its token program, filtered to the mint and sliced to each account's
+   * owner and amount (10 credits, however many holders), after one getMultipleAccounts for every
+   * mint's program and supply (1 credit per 100 mints).
+   */
+  async getTopHoldersBatch(mintAddresses: string[], n: number): Promise<Map<string, TopHoldersResult>> {
+    const unique = [...new Set(mintAddresses)];
+    const out = new Map<string, TopHoldersResult>();
+    if (unique.length === 0) return out;
+    const mints = await this.getMultipleAccounts<{
+      owner?: unknown;
+      data?: { parsed?: { info?: { supply?: unknown } } };
+    }>(unique, { encoding: "jsonParsed" });
+    const programOf = new Map<string, string>();
+    const supplyOf = new Map<string, bigint>();
+    for (const mint of unique) {
+      const account = mints.get(mint);
+      const value = account && account !== "failed" ? account.value : null;
+      const supply = value?.data?.parsed?.info?.supply;
+      if (
+        typeof value?.owner !== "string" ||
+        !(TOKEN_PROGRAM_IDS as readonly string[]).includes(value.owner) ||
+        typeof supply !== "string" ||
+        !/^\d+$/.test(supply)
+      ) {
+        out.set(mint, { status: "failed" });
+        continue;
+      }
+      programOf.set(mint, value.owner);
+      supplyOf.set(mint, BigInt(supply));
+    }
+    const calls: RpcCall[] = [...programOf].map(([mint, program]) => ({
+      id: `gpa-${mint}`,
+      method: "getProgramAccounts",
+      params: [
+        program,
+        {
+          commitment: "confirmed",
+          encoding: "base64",
+          // The owner (bytes 32-63) and amount (64-71) of each account; both token programs lay
+          // out the first 165 bytes alike.
+          dataSlice: { offset: 32, length: 40 },
+          filters: [{ memcmp: { offset: 0, bytes: mint } }],
+        },
+      ],
+    }));
+    const responses = await this.sendBatched<{ account?: { data?: unknown } }[]>(calls, 30_000, {
+      batchSize: 1,
+    });
+    for (const mint of programOf.keys()) {
+      const res = responses.get(`gpa-${mint}`);
+      const rows = res?.result;
+      if (!res || res.error || !Array.isArray(rows)) {
+        if (res?.error) logger.warn("rpc error on getProgramAccounts", { mint, error: res.error });
+        out.set(mint, { status: "failed" });
+        continue;
+      }
+      const accounts: LargestAccount[] = [];
+      for (const row of rows) {
+        const data = row?.account?.data;
+        const b64 = Array.isArray(data) && typeof data[0] === "string" ? data[0] : null;
+        if (!b64) continue;
+        const bytes = Buffer.from(b64, "base64");
+        if (bytes.length < 40) continue;
+        accounts.push({ owner: bs58.encode(bytes.subarray(0, 32)), amount: bytes.readBigUInt64LE(32) });
+      }
+      const holders = topWalletsFromAccounts(accounts, supplyOf.get(mint)!, n);
       out.set(mint, holders ? { status: "found", holders } : { status: "failed" });
     }
     return out;

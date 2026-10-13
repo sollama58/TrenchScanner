@@ -985,9 +985,9 @@ function StatsCard({ card }: { card: Card }) {
               ? "risky"
               : undefined
           }
-          title={`Top holders one wallet funded (or that funded each other)${
+          title={`Top holders one wallet funded, that funded each other, or that were funded within a minute of each other${
             r.linkedPct === null ? "" : `, holding ${pct(r.linkedPct)} of supply`
-          }. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more of the top 20.`}
+          }. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more of the top 25.`}
         >
           <dt>Linked</dt>
           <dd className={r.linkedPct === null ? "muted" : "num"}>
@@ -1003,12 +1003,6 @@ function StatsCard({ card }: { card: Card }) {
           <dt>CEX-funded</dt>
           <dd className={r.cexPct === null ? "muted" : "num"}>
             {r.cexPct === null ? "Not checked" : (cexCountText(r.cexCount, r.cexHolders) ?? pct(r.cexPct))}
-          </dd>
-        </div>
-        <div title="Top holders that share a funder or a funding minute with another top holder, each counted once">
-          <dt>Bundled</dt>
-          <dd className={r.bundledCount === null ? "muted" : "num"}>
-            {r.bundledCount === null ? "Not checked" : linkedCountText(r.bundledCount)}
           </dd>
         </div>
         <div title="How many of the launch's first 25 buyers still hold it">

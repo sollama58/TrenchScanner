@@ -155,7 +155,7 @@ export interface Snapshot {
   flaggedTrades?:
     | { wallet: string; side: "buy" | "sell"; sol: number; atMs: number; score: number; dumps: number }[]
     | null;
-  /** % of supply held by linked top-20 holders (one funder paid for them); null when not checked. */
+  /** % of supply held by linked top-25 holders (one funder paid for them); null when not checked. */
   linkedWalletPct?: number | null;
   /** How many top holders are linked, of how many were read; null on scans before it was kept. */
   linkedWalletCount?: number | null;
@@ -816,7 +816,6 @@ export interface FilterInput {
   maxCexFundedCount: number | null;
   maxSameTimeFundedPct: number | null;
   maxSameTimeFundedCount: number | null;
-  maxBundledWalletCount: number | null;
   maxLinkedCreatorPct: number | null;
   minLiveHolderCount: number | null;
   minFirstBuyersHolding: number | null;
@@ -1212,7 +1211,6 @@ export type CardField =
   | "sniperTop10"
   | "linked"
   | "cexFunded"
-  | "bundled"
   | "dev"
   | "reasons"
   | "mint"
@@ -1251,8 +1249,6 @@ export interface FeedAppearance {
   sniperTop10: boolean;
   /** The CEX-funded tile; off by default (absent from older API builds: off). */
   cexFunded: boolean;
-  /** The Bundled tile; off by default (absent from older API builds: off). */
-  bundled: boolean;
   /**
    * The Narrative model's "agrees" / "warns" pill on other models' cards (and the line in Telegram
    * alerts). Null follows the automatic default (GET /config/narrative-note).

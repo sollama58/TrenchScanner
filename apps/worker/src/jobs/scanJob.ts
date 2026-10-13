@@ -81,6 +81,8 @@ import {
   cexReadingOf,
   linkedHoldersOf,
   linkedReadingOf,
+  cachedTopHolders,
+  readTopHolders,
   resolveLinkedWallets,
   takeLinkedWalletStats,
   type LinkedGroup,
@@ -433,12 +435,15 @@ function startLinkedWalletStage(
     });
   if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0) return Promise.resolve(null);
   if (linkedStageInFlight) return cacheOnly();
-  const work = resolveLinkedWallets(groups, helius, {
-    maxNewLookups: env.LINKED_WALLET_LOOKUPS_PER_CYCLE,
-  }).catch((err: unknown) => {
-    logger.warn("linked-wallet reads failed - using cached funders", { error: String(err) });
-    return cacheOnly();
-  });
+  const work = readTopHolders(groups, helius, { maxReads: env.LINKED_HOLDER_READS_PER_CYCLE })
+    .catch((err: unknown) =>
+      logger.warn("top-holder reads failed - using RugCheck's list", { error: String(err) }),
+    )
+    .then(() => resolveLinkedWallets(groups, helius, { maxNewLookups: env.LINKED_WALLET_LOOKUPS_PER_CYCLE }))
+    .catch((err: unknown) => {
+      logger.warn("linked-wallet reads failed - using cached funders", { error: String(err) });
+      return cacheOnly();
+    });
   linkedStageInFlight = work;
   void work.finally(() => {
     if (linkedStageInFlight === work) linkedStageInFlight = null;
@@ -948,17 +953,20 @@ async function scanCycle(
     );
   const sniperStageStartedAt = Date.now();
   const sniperWork = startSniperStage(sniperGroups, deps.helius, env);
-  // The linked-wallets reading: who paid for each top-20 holder and the creator, in the wallet
+  // The linked-wallets reading: who paid for each top-25 holder and the creator, in the wallet
   // stage's order (contenders first), on its own budget and the same wait.
   const linkedGroups: LinkedGroup[] = walletGroups.map((g) => {
     const profile = onChainByMint.get(g.mintAddress) as
       { topHolderShares?: { owner: string; pct: number }[]; creator?: string } | undefined;
     return {
       mintAddress: g.mintAddress,
-      holders: linkedHoldersOf({
-        top10HolderAddresses: g.addresses,
-        topHolderShares: profile?.topHolderShares,
-      }),
+      // The chain's top 25 when read (readTopHolders, in the stage), else RugCheck's 20 accounts.
+      holders:
+        cachedTopHolders(g.mintAddress) ??
+        linkedHoldersOf({
+          top10HolderAddresses: g.addresses,
+          topHolderShares: profile?.topHolderShares,
+        }),
       creator: profile?.creator ?? null,
     };
   });

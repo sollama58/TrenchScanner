@@ -22,12 +22,12 @@ describe("runRugScreen", () => {
     expect(result.reasons).toHaveLength(0);
   });
 
-  it("rejects a token with 15 or more of its top 20 holders linked, once measured", () => {
+  it("rejects a token with 20 or more of its top 25 holders linked, once measured", () => {
     const at = (n: number | undefined) =>
-      runRugScreen({ ...safeProfile, linkedWalletCount: n, linkedWalletsChecked: 20 });
-    expect(at(15).passed).toBe(false);
-    expect(at(15).reasons[0]).toMatch(/15 of the 20 top holders are linked/);
-    expect(at(14).passed).toBe(true);
+      runRugScreen({ ...safeProfile, linkedWalletCount: n, linkedWalletsChecked: 25 });
+    expect(at(20).passed).toBe(false);
+    expect(at(20).reasons[0]).toMatch(/20 of the 25 top holders are linked/);
+    expect(at(19).passed).toBe(true);
     expect(at(undefined).passed).toBe(true);
   });
 
@@ -206,8 +206,8 @@ describe("passesWalletSafetyCuts", () => {
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ cexFundedPct: 85 })).toBe(false);
     expect(passesWalletSafetyCuts({ cexFundedPct: 80 })).toBe(true);
-    expect(passesWalletSafetyCuts({ linkedWalletCount: 15 })).toBe(false);
-    expect(passesWalletSafetyCuts({ linkedWalletCount: 14 })).toBe(true);
+    expect(passesWalletSafetyCuts({ linkedWalletCount: 20 })).toBe(false);
+    expect(passesWalletSafetyCuts({ linkedWalletCount: 19 })).toBe(true);
     expect(passesWalletSafetyCuts({ freshTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 70, freshTop10WalletPct: 70 })).toBe(true);
     expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 80 })).toBe(false);

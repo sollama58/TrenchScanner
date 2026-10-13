@@ -53,3 +53,34 @@ export function holdersFromLargestAccounts(
     top10HolderAddresses: top.map(([owner]) => owner),
   };
 }
+
+/** The system program's address: the owner a closed token account reads as, never a holder. */
+const SYSTEM_PROGRAM = "11111111111111111111111111111111";
+
+/**
+ * The `n` largest wallets among every token account of a mint, with each one's % of supply,
+ * largest first. Accounts owned by a program-derived address (the bonding curve, an AMM pool's
+ * vault) are left out, as RugCheck leaves out the pools its markets list names; one wallet's
+ * several accounts count once, summed. Only the largest owners are tested for the curve, so a
+ * coin with thousands of holders costs a few dozen checks. Null when the supply is unknown or zero.
+ */
+export function topWalletsFromAccounts(
+  accounts: readonly LargestAccount[],
+  supply: bigint,
+  n: number,
+): { owner: string; pct: number }[] | null {
+  if (supply <= 0n) return null;
+  const byOwner = new Map<string, bigint>();
+  for (const a of accounts) {
+    if (a.amount <= 0n || a.owner === SYSTEM_PROGRAM) continue;
+    byOwner.set(a.owner, (byOwner.get(a.owner) ?? 0n) + a.amount);
+  }
+  const sorted = [...byOwner.entries()].sort((x, y) => (y[1] > x[1] ? 1 : y[1] < x[1] ? -1 : 0));
+  const out: { owner: string; pct: number }[] = [];
+  for (const [owner, amount] of sorted) {
+    if (out.length >= n) break;
+    if (!isWalletAddress(owner)) continue;
+    out.push({ owner, pct: Number((amount * 1_000_000n) / supply) / 10_000 });
+  }
+  return out;
+}

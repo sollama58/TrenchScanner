@@ -28,7 +28,6 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   reasons: false,
   sniperTop10: false,
   cexFunded: false,
-  bundled: false,
   narrativeNote: null,
   streamTab: false,
   lighthouseTab: false,
@@ -82,7 +81,6 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
       { id: "sniperTop10", label: "Snipers in top 10" },
       { id: "linked", label: "Linked wallets" },
       { id: "cexFunded", label: "CEX-funded holders" },
-      { id: "bundled", label: "Bundled holders" },
       { id: "dev", label: "Dev" },
     ],
   },
@@ -98,20 +96,19 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
 ];
 
 // "vol" is listed apart from the groups: it is opt-in (FeedAppearance.volume), not hide-able.
-// "reasons", "sniperTop10", "cexFunded" and "bundled" are listed in the groups but are opt-in too
-// (FeedAppearance.reasons, .sniperTop10, .cexFunded and .bundled).
+// "reasons", "sniperTop10" and "cexFunded" are listed in the groups but are opt-in too
+// (FeedAppearance.reasons, FeedAppearance.sniperTop10, FeedAppearance.cexFunded).
 const CARD_FIELDS = new Set<string>([...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)), "vol"]);
 
 /** The card fields not to draw: the ones the user hid, plus the opt-in ones not switched on. */
 export function cardHideSet(
-  look: Pick<FeedAppearance, "hidden" | "volume" | "reasons" | "sniperTop10" | "cexFunded" | "bundled">,
+  look: Pick<FeedAppearance, "hidden" | "volume" | "reasons" | "sniperTop10" | "cexFunded">,
 ): ReadonlySet<CardField> {
   const out = new Set<CardField>(look.hidden);
   if (!look.volume) out.add("vol");
   if (!look.reasons) out.add("reasons");
   if (!look.sniperTop10) out.add("sniperTop10");
   if (!look.cexFunded) out.add("cexFunded");
-  if (!look.bundled) out.add("bundled");
   return out;
 }
 
@@ -209,7 +206,6 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     reasons: typeof r.reasons === "boolean" ? r.reasons : d.reasons,
     sniperTop10: typeof r.sniperTop10 === "boolean" ? r.sniperTop10 : d.sniperTop10,
     cexFunded: typeof r.cexFunded === "boolean" ? r.cexFunded : d.cexFunded,
-    bundled: typeof r.bundled === "boolean" ? r.bundled : d.bundled,
     narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
     streamTab: typeof r.streamTab === "boolean" ? r.streamTab : d.streamTab,
     lighthouseTab: typeof r.lighthouseTab === "boolean" ? r.lighthouseTab : d.lighthouseTab,
