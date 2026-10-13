@@ -132,7 +132,13 @@ export async function renderBubbleCard(graph: BubbleGraph, token: Token): Promis
     ctx.fillStyle = INK2;
     ctx.font = `600 18px ${FONT}`;
     ctx.fillText(
-      clip(ctx, `${pctText(graph.sameTimePct)} in ${sameWallets} wallets funded the same minute`, leftW),
+      clip(
+        ctx,
+        graph.sameTimeCount
+          ? `${graph.sameTimeCount.linked}/${graph.sameTimeCount.of} funded the same minute, holding ${pctText(graph.sameTimePct)}`
+          : `${pctText(graph.sameTimePct)} in ${sameWallets} wallets funded the same minute`,
+        leftW,
+      ),
       PAD,
       y + 4,
     );

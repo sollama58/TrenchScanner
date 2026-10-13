@@ -146,6 +146,8 @@ export interface BubbleGraph {
   sameTimeGroups: readonly SameTimeGroup[];
   /** Share of supply in same-minute groups, as read. */
   sameTimePct: number | null;
+  /** How many top holders are in a same-minute group, of how many were read. */
+  sameTimeCount: { linked: number; of: number } | null;
   /** Share of supply in linked wallets, and the top 10's share, as read. */
   linkedPct: number | null;
   /** How many top holders are linked, of how many were read. */
@@ -196,6 +198,7 @@ export function buildGraph(
     | "top10WalletsChecked"
     | "sameTimeClusters"
     | "sameTimeFundedPct"
+    | "sameTimeFundedCount"
   >,
   flagged: readonly FlaggedHolder[] = [],
 ): BubbleGraph {
@@ -337,6 +340,7 @@ export function buildGraph(
     sameTimeLinks,
     sameTimeGroups,
     sameTimePct: snapshot.sameTimeFundedPct ?? null,
+    sameTimeCount: sameTimeCount(snapshot),
     linkedPct: snapshot.linkedWalletPct ?? null,
     linkedCount: linkedCount(snapshot),
     top10Pct: top10,
@@ -544,6 +548,30 @@ export function linkedCount(
   }
   const wallets = new Set((s.linkedClusters ?? []).flatMap((c) => (c?.wallets ?? []).map((w) => w.wallet)));
   return { linked: wallets.size, of: s.linkedHolders?.length || LINKED_HOLDERS_READ };
+}
+
+/**
+ * Same-minute funding as a count (user ask 2026-10-13): how many top holders sit in a same-minute
+ * group, of how many were read, "N/20". Scans before the count was kept count the groups' wallets.
+ */
+export function sameTimeCount(
+  s: Pick<
+    Snapshot,
+    | "sameTimeFundedPct"
+    | "sameTimeFundedCount"
+    | "sameTimeClusters"
+    | "linkedWalletPct"
+    | "linkedWalletCount"
+    | "linkedWalletsChecked"
+    | "linkedClusters"
+    | "linkedHolders"
+  >,
+): { linked: number; of: number } | null {
+  if (s.sameTimeFundedPct == null) return null;
+  const of = linkedCount(s)?.of ?? (s.linkedWalletsChecked || s.linkedHolders?.length || LINKED_HOLDERS_READ);
+  if (s.sameTimeFundedCount != null) return { linked: s.sameTimeFundedCount, of };
+  const wallets = new Set((s.sameTimeClusters ?? []).flatMap((g) => (g?.wallets ?? []).map((w) => w.wallet)));
+  return { linked: wallets.size, of };
 }
 
 /** "4/20", or null without a reading. */

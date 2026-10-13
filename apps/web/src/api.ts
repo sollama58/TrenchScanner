@@ -176,6 +176,8 @@ export interface Snapshot {
   /** % of supply held by top holders funded within a minute of each other (any funders); null when not checked. */
   sameTimeFundedPct?: number | null;
   sameTimeClusterCount?: number | null;
+  /** How many top holders are in a same-minute group; null on scans before it was kept. */
+  sameTimeFundedCount?: number | null;
   /** The same-minute groups, largest first; null or absent with none. */
   sameTimeClusters?:
     | {
@@ -810,6 +812,7 @@ export interface FilterInput {
   minCexFundedCount: number | null;
   maxCexFundedCount: number | null;
   maxSameTimeFundedPct: number | null;
+  maxSameTimeFundedCount: number | null;
   maxLinkedCreatorPct: number | null;
   minLiveHolderCount: number | null;
   minFirstBuyersHolding: number | null;

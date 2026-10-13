@@ -224,6 +224,7 @@ describe("same-time funding", () => {
     expect(r.linkedClusterCount).toBe(0);
     expect(r.sameTimeClusterCount).toBe(1);
     expect(r.sameTimeFundedPct).toBe(15);
+    expect(r.sameTimeFundedCount).toBe(3);
     expect(r.sameTimeClusters[0]).toMatchObject({ atMs: t0, spanMs: 59_000, pct: 15 });
     expect(r.sameTimeClusters[0]!.wallets.map((w) => [w.wallet, w.funder])).toEqual([
       ["a", "F1"],

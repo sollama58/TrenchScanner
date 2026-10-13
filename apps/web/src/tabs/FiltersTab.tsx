@@ -50,6 +50,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     minCexFundedCount: null,
     maxCexFundedCount: null,
     maxSameTimeFundedPct: null,
+    maxSameTimeFundedCount: null,
     maxLinkedCreatorPct: null,
     minLiveHolderCount: null,
     minFirstBuyersHolding: null,
@@ -411,28 +412,30 @@ function FilterEditor({
           <legend>{g.title}</legend>
           <p className="muted small">{g.blurb}</p>
           <div className="grid2">
-            {g.fields.map((f) => (
-              // htmlFor: a field with an info button inside its label still focuses its input.
-              <label className="field" key={f.key} htmlFor={`filter-${f.key}`}>
-                <span>
-                  {f.label}
-                  {f.unit ? ` (${f.unit})` : ""}
-                  {f.explainScore && <ScoreExplainer />}
-                </span>
-                <input
-                  id={`filter-${f.key}`}
-                  type="number"
-                  inputMode="decimal"
-                  step={f.step ?? "any"}
-                  min={f.min}
-                  max={f.max}
-                  placeholder="any"
-                  value={draft[f.key] ?? ""}
-                  onChange={(e) => set(f.key, num(e.target.value))}
-                />
-                <small className="faint">{f.hint}</small>
-              </label>
-            ))}
+            {g.fields
+              .filter((f) => !f.retired || draft[f.key] != null)
+              .map((f) => (
+                // htmlFor: a field with an info button inside its label still focuses its input.
+                <label className="field" key={f.key} htmlFor={`filter-${f.key}`}>
+                  <span>
+                    {f.label}
+                    {f.unit ? ` (${f.unit})` : ""}
+                    {f.explainScore && <ScoreExplainer />}
+                  </span>
+                  <input
+                    id={`filter-${f.key}`}
+                    type="number"
+                    inputMode="decimal"
+                    step={f.step ?? "any"}
+                    min={f.min}
+                    max={f.max}
+                    placeholder="any"
+                    value={draft[f.key] ?? ""}
+                    onChange={(e) => set(f.key, num(e.target.value))}
+                  />
+                  <small className="faint">{f.hint}</small>
+                </label>
+              ))}
           </div>
           {g.title === "Safety" && (
             <label className="check">

@@ -254,10 +254,12 @@ function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boo
         {graph.sameTimeGroups.length > 0 && (
           <div
             className="bm-same-stat"
-            title="Top holders funded within a minute of each other, from any funders"
+            title={`Top holders funded within a minute of each other, from any funders${
+              graph.sameTimePct === null ? "" : `, holding ${pct(graph.sameTimePct, 1)} of supply`
+            }`}
           >
             <dt>Same minute</dt>
-            <dd className="num">{pct(graph.sameTimePct, 1)}</dd>
+            <dd className="num">{linkedCountText(graph.sameTimeCount) ?? pct(graph.sameTimePct, 1)}</dd>
           </div>
         )}
         <div className={risky.length > 0 ? "risky" : undefined}>
