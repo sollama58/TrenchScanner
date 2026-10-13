@@ -198,6 +198,8 @@ describe("passesWalletSafetyCuts", () => {
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ cexFundedPct: 85 })).toBe(false);
     expect(passesWalletSafetyCuts({ cexFundedPct: 80 })).toBe(true);
+    expect(passesWalletSafetyCuts({ linkedWalletCount: 15 })).toBe(false);
+    expect(passesWalletSafetyCuts({ linkedWalletCount: 14 })).toBe(true);
     expect(passesWalletSafetyCuts({ freshTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 70, freshTop10WalletPct: 70 })).toBe(true);
     expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 80 })).toBe(false);

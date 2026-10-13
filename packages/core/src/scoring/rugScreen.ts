@@ -45,7 +45,8 @@ export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
 /**
  * At or above this many of the top-20 holders linked (one funder paid for them, or they funded
  * each other: core's linkedWallets, linkedWalletCount), a token is never alerted (user decision
- * 2026-10-13, "15/20"). Banked rows keep no count, so the training and report cut leaves it out.
+ * 2026-10-13, "15/20"). Banked rows carry it as the linkedWalletCount feature since 2026-10-13;
+ * older rows have none and pass.
  */
 export const SAFETY_REJECT_LINKED_COUNT = 15;
 export const SAFETY_REJECT_CEX_FUNDED_PCT = 85;
@@ -191,7 +192,11 @@ export function passesWalletSafetyCuts(features: Record<string, number | null | 
       features.sniperTop10WalletPct,
       features.top10HolderPct,
     ).length === 0 &&
-    !(typeof features.cexFundedPct === "number" && features.cexFundedPct >= SAFETY_REJECT_CEX_FUNDED_PCT)
+    !(typeof features.cexFundedPct === "number" && features.cexFundedPct >= SAFETY_REJECT_CEX_FUNDED_PCT) &&
+    !(
+      typeof features.linkedWalletCount === "number" &&
+      features.linkedWalletCount >= SAFETY_REJECT_LINKED_COUNT
+    )
   );
 }
 
@@ -251,5 +256,6 @@ export function walletSafetyCutsSql(features: Prisma.Sql = Prisma.raw('"features
     AND COALESCE((${features}->>'freshTop10WalletPct')::float8 <= ${SAFETY_MAX_FRESH_WALLET_PCT}, true)
     AND COALESCE((${features}->>'sniperTop10WalletPct')::float8 < ${SAFETY_REJECT_SNIPER_WALLET_PCT}, true)
     AND COALESCE((${features}->>'top10HolderPct')::float8 < ${SAFETY_REJECT_TOP10_HOLDER_PCT}, true)
-    AND COALESCE((${features}->>'cexFundedPct')::float8 < ${SAFETY_REJECT_CEX_FUNDED_PCT}, true)`;
+    AND COALESCE((${features}->>'cexFundedPct')::float8 < ${SAFETY_REJECT_CEX_FUNDED_PCT}, true)
+    AND COALESCE((${features}->>'linkedWalletCount')::float8 < ${SAFETY_REJECT_LINKED_COUNT}, true)`;
 }
