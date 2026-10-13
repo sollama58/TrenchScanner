@@ -5,11 +5,14 @@ import type {
   Leaderboard,
   LeaderboardEntry,
   ModelRun,
+  ModelWeights,
   ModelRunHistory,
   RecordSummary,
 } from "../api";
 import { runExamRates } from "../api";
+import { CutoffCurve, HBarChart } from "../components/Charts";
 import { CloseIcon } from "../components/Icons";
+import { cutoffPoints, perHourText } from "../cutoffCurve";
 import { toggledModels } from "../components/ModelPicker";
 import { ScoreBar } from "../components/ScoreBar";
 import { usePolling } from "../hooks";
@@ -37,8 +40,9 @@ const RUN_ROWS = 8;
 /**
  * One model, everything about it, in a native modal dialog (a centered panel on desktop, a sheet
  * from the bottom on phones): its record over the picked window against the random-pick baseline,
- * the same record over every window, live against its backtest exam, its latest exam fold by fold,
- * its training runs and the recipes that held its seat before, and its latest calls.
+ * the same record over every window, live against its backtest exam, what it weighs most, its
+ * cutoff curve, its latest exam fold by fold, its training runs and the recipes that held its seat
+ * before, and its latest calls.
  */
 export function ModelDetailModal({
   entry,
@@ -165,6 +169,7 @@ function ModelDetail({
   const latestExam = latestRun ? runExamRates(latestRun) : null;
   const seat = board.evolution.history.filter((h) => h.slot === e.id);
   const basis = e.composite.basis ?? null;
+  const weights = usePolling<ModelWeights>(`${api}/models/${encodeURIComponent(e.id)}/weights`, 600_000);
 
   return (
     <div className="about-body model-detail">
@@ -268,6 +273,11 @@ function ModelDetail({
           {basis.proven10xPct != null ? `, 10x ${pct(basis.proven10xPct, 1)}` : ""}.
         </p>
       )}
+
+      <Weightings weights={weights.data} error={weights.error !== null} role={e.role} />
+
+      <h3>Its cutoffs</h3>
+      <CutoffSection run={latestRun} weights={weights.data} targets={t} />
 
       {e.rules && (
         <>
@@ -437,6 +447,191 @@ function ModelDetail({
         </footer>
       )}
     </div>
+  );
+}
+
+/**
+ * What the model leans on: a learner's top inputs by share of its score's total push over recent
+ * decision moments, or a combiner's members by their weight (consensus) or how often each backed
+ * its calls. Rules has neither; its checks are listed below instead.
+ */
+function Weightings({
+  weights: w,
+  error,
+  role,
+}: {
+  weights: ModelWeights | null;
+  error: boolean;
+  role: LeaderboardEntry["role"];
+}) {
+  if (role === "rules") return null;
+  const heading = <h3>What it weighs most</h3>;
+  if (!w) {
+    return (
+      <>
+        {heading}
+        <p className="faint small">{error ? "Couldn't load its weightings." : "Loading…"}</p>
+      </>
+    );
+  }
+  if (w.inputs && w.inputs.length > 0) {
+    // Only a linear model's inputs push one way throughout.
+    const linear = w.inputs.some((f) => f.direction !== null);
+    return (
+      <>
+        {heading}
+        <p className="muted small">
+          Each signal&apos;s share of the push on its score over the last{" "}
+          {(w.inputSample?.rows ?? 0).toLocaleString()} decision moments.{" "}
+          {linear
+            ? "▲ more of it pushes toward a call, ▼ less of it does."
+            : "▲ it pushed toward a call on the coins it called, ▼ against."}
+        </p>
+        <HBarChart
+          data={w.inputs.map((f) => {
+            const dir = f.direction ?? (f.onCalls == null || f.onCalls === 0 ? null : f.onCalls > 0 ? 1 : -1);
+            return {
+              label: `${dir === 1 ? "▲ " : dir === -1 ? "▼ " : ""}${f.label}`,
+              value: f.sharePct,
+              display: `${f.sharePct.toFixed(1)}%`,
+            };
+          })}
+        />
+      </>
+    );
+  }
+  if (w.members && w.members.length > 0) {
+    const weighted = w.members.some((m) => m.weightPct !== null);
+    const rows = [
+      ...w.members.map((m) => ({
+        label: `${weighted ? (m.direction === 1 ? "▲ " : m.direction === -1 ? "▼ " : "") : ""}${m.name}`,
+        value: (weighted ? m.weightPct : m.backingPct) ?? 0,
+        detail: m.callsTopPct !== null ? `calls the top ${m.callsTopPct}% on its own` : undefined,
+      })),
+      ...(w.otherSignals ?? []).map((o) => ({
+        label: `${o.direction === 1 ? "▲ " : "▼ "}${o.label}`,
+        value: o.weightPct,
+        detail: undefined,
+      })),
+    ].sort((a, b) => b.value - a.value);
+    const any = rows.some((r) => r.value > 0);
+    return (
+      <>
+        {heading}
+        {w.rule && <p className="muted small">{w.rule}</p>}
+        {any ? (
+          <>
+            <p className="faint small">
+              {weighted
+                ? "Each signal's share of the weight in its combining model; ▲ a higher rank pushes toward a call."
+                : `How often each member was calling too, on the ${w.inputSample?.calls ?? 0} recent moments it called.`}
+            </p>
+            <HBarChart
+              data={rows.map((r) => ({
+                label: r.label,
+                value: r.value,
+                display: `${r.value.toFixed(1)}%`,
+                detail: r.detail,
+              }))}
+            />
+          </>
+        ) : (
+          <p className="faint small">
+            It hasn&apos;t called any of the recent moments its weightings are read on.
+          </p>
+        )}
+      </>
+    );
+  }
+  return (
+    <>
+      {heading}
+      <p className="faint small">Appears once it has a trained model.</p>
+    </>
+  );
+}
+
+/**
+ * Hit rate against how picky the cutoff is, from its latest training run's exam, with what each
+ * cutoff would send per hour at today's flow of decision moments and the live cutoff marked.
+ */
+function CutoffSection({
+  run,
+  weights: w,
+  targets: t,
+}: {
+  run: ModelRun | null;
+  weights: ModelWeights | null;
+  targets: Leaderboard["targets"];
+}) {
+  const points = run ? cutoffPoints(run.precisionCurve, w?.momentsPerHour ?? null) : [];
+  if (points.length === 0) {
+    return (
+      <p className="faint small">
+        {run
+          ? "Its latest exam had too few calls to draw the curve."
+          : "Appears after its first training run."}
+      </p>
+    );
+  }
+  const share = w?.cutoff.callsTopPct ?? null;
+  const live = share !== null && share > 0 ? { sharePct: share, perHour: w!.callsPerHour24h } : null;
+  // Graded at cutoffs set on other parts of the exam, as the Latest exam paragraph reads it.
+  const exam = run ? runExamRates(run) : null;
+  return (
+    <>
+      <p className="muted small">
+        Calling only its most confident slice of decision moments trades volume for hit rate. Each point is
+        its latest exam, out of sample; the figure under it is about how many calls an hour that cutoff would
+        send at today&apos;s {w ? `${w.momentsPerHour.toLocaleString()} moments an hour` : "flow"}.
+      </p>
+      <CutoffCurve points={points} aTarget={t.hitRate2xPct} bTarget={t.hitRate4xPct} live={live} />
+      <div className="table-wrap">
+        <table className="model-compare">
+          <thead>
+            <tr>
+              <th>Cutoff</th>
+              <th className="r">Calls/hour</th>
+              <th className="r">Exam calls</th>
+              <th className="r">2x</th>
+              <th className="r">4x</th>
+            </tr>
+          </thead>
+          <tbody>
+            {points.map((p) => (
+              <tr key={p.sharePct}>
+                <td>Top {p.sharePct}%</td>
+                <td className="r num">{perHourText(p.perHour)}</td>
+                <td className="r num">{p.calls.toLocaleString()}</td>
+                <td className={`r num ${rateTone(p.winRatePct, t.hitRate2xPct)}`}>{pct(p.winRatePct)}</td>
+                <td className={`r num ${rateTone(p.goalRatePct, t.hitRate4xPct)}`}>{pct(p.goalRatePct)}</td>
+              </tr>
+            ))}
+            {live && (
+              <tr className="selected">
+                <td>
+                  Live: top {live.sharePct < 10 ? live.sharePct.toFixed(1) : Math.round(live.sharePct)}%
+                </td>
+                <td className="r num">{perHourText(live.perHour)}</td>
+                <td className="r num">{exam?.calls?.toLocaleString() ?? "–"}</td>
+                <td className={`r num ${rateTone(exam?.winRatePct ?? null, t.hitRate2xPct)}`}>
+                  {pct(exam?.winRatePct)}
+                </td>
+                <td className={`r num ${rateTone(exam?.goalRatePct ?? null, t.hitRate4xPct)}`}>
+                  {pct(exam?.goalRatePct)}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      {live && (
+        <p className="faint small model-cutoff-note">
+          The live row is its cutoff now and what it actually sent an hour over the last day, with its exam
+          graded at cutoffs set on other parts of the exam.
+        </p>
+      )}
+    </>
   );
 }
 

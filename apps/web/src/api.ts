@@ -474,6 +474,52 @@ export interface ModelRun {
   }[];
 }
 
+/** GET .../models/:id/weights: what one model leans on and where its cutoff sits (modelExplain.ts). */
+export interface ModelWeights {
+  model: string;
+  builtAt: string;
+  role: string;
+  kind: string | null;
+  /** Decision moments per hour over the last 24 hours that this model decides on. */
+  momentsPerHour: number;
+  cutoff: {
+    /** Share of decision moments its cutoff calls, in percent. */
+    callsTopPct: number | null;
+    fromExam: boolean;
+    examWinRatePct: number | null;
+    examCalls: number | null;
+    meetsTargets: boolean | null;
+    highTopPct: number | null;
+    sampleCallsPct: number | null;
+  };
+  callsPerHour24h: number;
+  /** Learners: their top inputs by share of the score's total push over recent moments. */
+  inputs:
+    | {
+        feature: string;
+        label: string;
+        sharePct: number;
+        direction: 1 | -1 | null;
+        /** Mean push (log-odds) on the moments it called; null without any. */
+        onCalls: number | null;
+      }[]
+    | null;
+  inputSample: { rows: number; calls: number } | null;
+  /** Combiners: each member, its weight (consensus) or how often it backed the call. */
+  members:
+    | {
+        contestant: string;
+        name: string;
+        callsTopPct: number | null;
+        weightPct: number | null;
+        direction: 1 | -1 | null;
+        backingPct: number | null;
+      }[]
+    | null;
+  otherSignals: { label: string; weightPct: number; direction: 1 | -1 }[] | null;
+  rule: string | null;
+}
+
 /** GET .../models/:id/runs: one model's training runs, newest first. */
 export interface ModelRunHistory {
   contestant: string;

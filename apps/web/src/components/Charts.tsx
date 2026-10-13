@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { signedPct } from "../format";
 import { PricingChangeMark } from "./PricingChangeMark";
+import { perHourText, shareAt, type CutoffPoint } from "../cutoffCurve";
 
 /**
  * Small hand-drawn charts. Colors come from CSS tokens (styles.css): --series-1 (blue) and
@@ -574,6 +575,155 @@ export function MarkerBars({
           <span />
           {onOpen && <span />}
         </div>
+      </div>
+    </figure>
+  );
+}
+
+/**
+ * The cutoff curve: hit rate (2x, 4x) against how picky the cutoff is, on a log axis of the share
+ * of decision moments called, with what each cutoff would send per hour under it and the live
+ * cutoff marked.
+ */
+export function CutoffCurve({
+  points,
+  aTarget,
+  bTarget,
+  live,
+  height = 220,
+}: {
+  points: CutoffPoint[];
+  aTarget: number;
+  bTarget: number;
+  /** The live cutoff: the share it calls, and what it sent per hour over the last day. */
+  live: { sharePct: number; perHour: number | null } | null;
+  height?: number;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(560);
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(
+      ([entry]) => entry && setWidth(Math.max(280, Math.round(entry.contentRect.width))),
+    );
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const padL = 40;
+  const padR = 22;
+  const padT = 24;
+  const padB = 38;
+  const plotW = width - padL - padR;
+  const plotH = height - padT - padB;
+  const x = (share: number) => padL + shareAt(share) * plotW;
+  const y = (v: number) => padT + plotH - (Math.min(100, Math.max(0, v)) / 100) * plotH;
+  const narrow = plotW < 420;
+  const line = (key: "winRatePct" | "goalRatePct") =>
+    points.map((p, i) => `${i ? "L" : "M"}${x(p.sharePct).toFixed(1)},${y(p[key]).toFixed(1)}`).join("");
+  // Each point's hover band runs halfway to its neighbours.
+  const edges = points.map((p) => x(p.sharePct));
+  const band = (i: number) => {
+    const left = i === 0 ? padL : (edges[i - 1]! + edges[i]!) / 2;
+    const right = i === edges.length - 1 ? width - padR : (edges[i]! + edges[i + 1]!) / 2;
+    return { left, w: right - left };
+  };
+  const hovered = hover !== null ? points[hover] : undefined;
+  const tipX = hovered ? Math.min(Math.max(x(hovered.sharePct), 90), Math.max(90, width - 90)) : 0;
+  const liveX = live ? x(live.sharePct) : null;
+  const flip = liveX !== null && liveX > width - 130;
+
+  return (
+    <figure className="chart">
+      <div className="legend">
+        <span className="key">
+          <i className="swatch s1" /> Doubled (2x)
+        </span>
+        <span className="key">
+          <i className="swatch s2" /> Reached 4x
+        </span>
+        <span className="key muted">
+          - - targets {aTarget}% / {bTarget}%
+        </span>
+        {live && (
+          <span className="key">
+            <i className="marker-key live" /> Live cutoff
+          </span>
+        )}
+      </div>
+      <div className="chart-box" ref={boxRef}>
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          height={height}
+          role="img"
+          aria-label="2x and 4x hit rate at each cutoff, by share of decision moments called"
+        >
+          {[0, 25, 50, 75, 100].map((t) => (
+            <g key={t}>
+              <line className="grid" x1={padL} x2={width - padR} y1={y(t)} y2={y(t)} />
+              <text className="tick" x={padL - 6} y={y(t) + 3} textAnchor="end">
+                {t}%
+              </text>
+            </g>
+          ))}
+          <line className="target t1" x1={padL} x2={width - padR} y1={y(aTarget)} y2={y(aTarget)} />
+          <line className="target t2" x1={padL} x2={width - padR} y1={y(bTarget)} y2={y(bTarget)} />
+          {liveX !== null && live && (
+            <g className="cutoff-live">
+              <line x1={liveX} x2={liveX} y1={padT - 6} y2={padT + plotH} />
+              <text x={flip ? liveX - 5 : liveX + 5} y={padT - 10} textAnchor={flip ? "end" : "start"}>
+                Live: top {live.sharePct < 10 ? live.sharePct.toFixed(1) : Math.round(live.sharePct)}%
+                {live.perHour !== null ? `, ${perHourText(live.perHour)}` : ""}
+              </text>
+            </g>
+          )}
+          <path className="line s1" d={line("winRatePct")} />
+          <path className="line s2" d={line("goalRatePct")} />
+          {points.map((p, i) => {
+            const b = band(i);
+            const anchor = i === 0 ? "start" : i === points.length - 1 ? "end" : "middle";
+            return (
+              <g key={p.sharePct} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+                <rect className="hit" x={b.left} y={padT} width={b.w} height={plotH + padB} />
+                <circle
+                  className="dot s1"
+                  cx={x(p.sharePct)}
+                  cy={y(p.winRatePct)}
+                  r={hover === i ? 4.5 : 3}
+                />
+                <circle
+                  className="dot s2"
+                  cx={x(p.sharePct)}
+                  cy={y(p.goalRatePct)}
+                  r={hover === i ? 4.5 : 3}
+                />
+                <text className="tick" x={x(p.sharePct)} y={height - 20} textAnchor={anchor}>
+                  {narrow ? `${p.sharePct}%` : `Top ${p.sharePct}%`}
+                </text>
+                <text className="tick faint" x={x(p.sharePct)} y={height - 6} textAnchor={anchor}>
+                  {perHourText(p.perHour)}
+                </text>
+              </g>
+            );
+          })}
+          <line className="axis" x1={padL} x2={width - padR} y1={padT + plotH} y2={padT + plotH} />
+        </svg>
+        {hovered && (
+          <div className="tooltip" style={{ left: `${(tipX / width) * 100}%` }}>
+            <strong>Top {hovered.sharePct}% of moments</strong>
+            <span>
+              <i className="swatch s1" /> Doubled (2x): {hovered.winRatePct.toFixed(1)}%
+            </span>
+            <span>
+              <i className="swatch s2" /> Reached 4x: {hovered.goalRatePct.toFixed(1)}%
+            </span>
+            <span className="muted">
+              {hovered.calls.toLocaleString()} exam calls
+              {hovered.perHour !== null ? ` · about ${perHourText(hovered.perHour)} live` : ""}
+            </span>
+          </div>
+        )}
       </div>
     </figure>
   );

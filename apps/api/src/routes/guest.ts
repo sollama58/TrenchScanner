@@ -10,7 +10,13 @@ import {
   withLatestSnapshots,
 } from "../curatedFeed.js";
 import { contestState, modelLabel } from "../contest.js";
-import { leaderboardDaysSchema, modelRunsRoute, reportDaysSchema, type ReportCaches } from "./curated.js";
+import {
+  leaderboardDaysSchema,
+  modelRunsRoute,
+  modelWeightsRoute,
+  reportDaysSchema,
+  type ReportCaches,
+} from "./curated.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { SharedCache } from "../sharedCache.js";
 import { lighthouseQuerySchema, lighthouseSignalsQuerySchema } from "../marketLighthouse.js";
@@ -179,6 +185,11 @@ export async function registerGuestRoutes(
   /** One model's training runs: exam results only, nothing that names a token. */
   app.get("/models/:id/runs", { config: { rateLimit: GUEST_RATE_LIMIT } }, (request, reply) =>
     modelRunsRoute(opts.env, opts.reports, request, reply),
+  );
+
+  /** What one model leans on and its cutoff: weights and exam figures, nothing that names a token. */
+  app.get("/models/:id/weights", { config: { rateLimit: GUEST_RATE_LIMIT } }, (request, reply) =>
+    modelWeightsRoute(opts.env, opts.reports, request, reply),
   );
 
   /**
