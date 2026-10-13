@@ -22,6 +22,15 @@ describe("runRugScreen", () => {
     expect(result.reasons).toHaveLength(0);
   });
 
+  it("rejects a token with 15 or more of its top 20 holders linked, once measured", () => {
+    const at = (n: number | undefined) =>
+      runRugScreen({ ...safeProfile, linkedWalletCount: n, linkedWalletsChecked: 20 });
+    expect(at(15).passed).toBe(false);
+    expect(at(15).reasons[0]).toMatch(/15 of the 20 top holders are linked/);
+    expect(at(14).passed).toBe(true);
+    expect(at(undefined).passed).toBe(true);
+  });
+
   it("rejects a token with 17 or more of its top 20 holders funded from an exchange, once measured", () => {
     const at = (n: number | undefined) =>
       runRugScreen({ ...safeProfile, cexFundedCount: n, cexFundedHolders: 20 });

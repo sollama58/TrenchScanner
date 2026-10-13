@@ -267,6 +267,9 @@ model UserFilter {
   /// Max % of supply held by linked top holders: wallets one funder paid for, or that funded each
   /// other (TokenSnapshot.linkedWalletPct, core's wallets/linkedWallets.ts). Skipped while unknown.
   maxLinkedWalletPct         Float?
+  /// Max how many of the top-20 holders are linked (TokenSnapshot.linkedWalletCount, "N/20").
+  /// Skipped while unknown.
+  maxLinkedWalletCount       Int?
   /// Max % of supply held by top holders funded within a minute of each other, from any funders
   /// (TokenSnapshot.sameTimeFundedPct). Skipped while unknown.
   maxSameTimeFundedPct       Float?

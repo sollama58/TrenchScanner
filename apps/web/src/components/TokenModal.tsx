@@ -38,6 +38,7 @@ import {
   SAFETY_MAX_FRESH_WALLET_PCT,
   SAFETY_REJECT_CEX_FUNDED_COUNT,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
+  SAFETY_REJECT_LINKED_COUNT,
   SAFETY_REJECT_SNIPER_WALLET_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   WalletStat,
@@ -937,10 +938,15 @@ function StatsCard({ card }: { card: Card }) {
           explain="top-10 holder wallets that were among the first 25 buyers after launch"
         />
         <div
-          className={r.linkedPct !== null && r.linkedPct >= LINKED_WARN_PCT ? "risky" : undefined}
+          className={
+            (r.linkedPct !== null && r.linkedPct >= LINKED_WARN_PCT) ||
+            (r.linkedCount !== null && r.linkedCount.linked >= SAFETY_REJECT_LINKED_COUNT)
+              ? "risky"
+              : undefined
+          }
           title={`Top holders one wallet funded (or that funded each other)${
             r.linkedPct === null ? "" : `, holding ${pct(r.linkedPct)} of supply`
-          }`}
+          }. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more of the top 20.`}
         >
           <dt>Linked</dt>
           <dd className={r.linkedPct === null ? "muted" : "num"}>

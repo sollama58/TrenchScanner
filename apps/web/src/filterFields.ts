@@ -99,6 +99,15 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
+        key: "maxLinkedWalletCount",
+        min: 0,
+        max: 20,
+        label: "Max linked top holders",
+        hint: "of the 20 largest holders, how many one funder paid for, or that funded each other; 15 and over is always rejected; tokens not checked yet wait",
+        unit: "of 20",
+        step: 1,
+      },
+      {
         key: "maxSameTimeFundedPct",
         min: 0,
         max: 100,

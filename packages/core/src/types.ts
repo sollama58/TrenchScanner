@@ -361,6 +361,8 @@ export interface FilterCriteria {
   maxSniperTop10WalletPct?: number | null;
   /** Max % of supply held by linked top holders (one funder, or funded each other). */
   maxLinkedWalletPct?: number | null;
+  /** Max how many of the top-20 holders are linked (linkedWalletCount). Skipped while unknown. */
+  maxLinkedWalletCount?: number | null;
   /** Max % of supply held by top holders funded within a minute of each other (sameTimeFundedPct). */
   maxSameTimeFundedPct?: number | null;
   /** Bounds on how many of the 20 largest holders an exchange paid for (cexFundedCount). Skipped while unknown. */

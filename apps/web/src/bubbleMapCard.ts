@@ -69,7 +69,10 @@ export async function renderBubbleCard(graph: BubbleGraph, token: Token): Promis
   ctx.fillText(clip(ctx, name, leftW), PAD, 210);
 
   const linked = graph.linkedPct;
-  ctx.fillStyle = linked !== null && linked >= 30 ? "#ff8080" : INK;
+  ctx.fillStyle =
+    (linked !== null && linked >= 30) || (graph.linkedCount !== null && graph.linkedCount.linked >= 15)
+      ? "#ff8080"
+      : INK;
   ctx.font = `800 76px ${FONT}`;
   const count = graph.linkedCount;
   const big = linked === null ? "–" : count ? `${count.linked}/${count.of}` : pctText(linked);

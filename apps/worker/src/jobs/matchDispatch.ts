@@ -56,6 +56,7 @@ export function awaitsWalletFigure(
     | "emptyTop10WalletPct"
     | "sniperTop10WalletPct"
     | "linkedWalletPct"
+    | "linkedWalletCount"
     | "flaggedBuySol"
     | "cexFundedCount"
     | "sameTimeFundedPct"
@@ -66,6 +67,7 @@ export function awaitsWalletFigure(
     | "maxEmptyTop10WalletPct"
     | "maxSniperTop10WalletPct"
     | "maxLinkedWalletPct"
+    | "maxLinkedWalletCount"
     | "maxFlaggedBuySol"
     | "minCexFundedCount"
     | "maxCexFundedCount"
@@ -77,6 +79,7 @@ export function awaitsWalletFigure(
     (filter.maxEmptyTop10WalletPct != null && scored.emptyTop10WalletPct === undefined) ||
     (filter.maxSniperTop10WalletPct != null && scored.sniperTop10WalletPct === undefined) ||
     (filter.maxLinkedWalletPct != null && scored.linkedWalletPct === undefined) ||
+    (filter.maxLinkedWalletCount != null && scored.linkedWalletCount === undefined) ||
     (filter.maxFlaggedBuySol != null && scored.flaggedBuySol === undefined) ||
     ((filter.minCexFundedCount != null || filter.maxCexFundedCount != null) &&
       scored.cexFundedCount === undefined) ||

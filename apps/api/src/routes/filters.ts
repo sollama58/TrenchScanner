@@ -50,6 +50,7 @@ function buildFilterInputSchema(env: Env) {
     maxEmptyTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     maxSniperTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
     maxLinkedWalletPct: z.number().min(0).max(100).nullable().optional(),
+    maxLinkedWalletCount: z.number().int().min(0).max(20).nullable().optional(),
     maxFlaggedBuySol: z.number().min(0).max(10_000).nullable().optional(),
     minCexFundedCount: z.number().int().min(0).max(20).nullable().optional(),
     maxCexFundedCount: z.number().int().min(0).max(20).nullable().optional(),

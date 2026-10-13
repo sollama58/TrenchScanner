@@ -41,6 +41,13 @@ export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
  * so the training and report cut reads it as SAFETY_REJECT_CEX_FUNDED_PCT.
  */
 export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
+
+/**
+ * At or above this many of the top-20 holders linked (one funder paid for them, or they funded
+ * each other: core's linkedWallets, linkedWalletCount), a token is never alerted (user decision
+ * 2026-10-13, "15/20"). Banked rows keep no count, so the training and report cut leaves it out.
+ */
+export const SAFETY_REJECT_LINKED_COUNT = 15;
 export const SAFETY_REJECT_CEX_FUNDED_PCT = 85;
 
 /**
@@ -111,6 +118,14 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
       profile.top10HolderPct,
     ),
   );
+  if (
+    typeof profile.linkedWalletCount === "number" &&
+    profile.linkedWalletCount >= SAFETY_REJECT_LINKED_COUNT
+  ) {
+    reasons.push(
+      `${profile.linkedWalletCount} of the ${profile.linkedWalletsChecked ?? 20} top holders are linked (${SAFETY_REJECT_LINKED_COUNT} or more)`,
+    );
+  }
   if (
     typeof profile.cexFundedCount === "number" &&
     profile.cexFundedCount >= SAFETY_REJECT_CEX_FUNDED_COUNT

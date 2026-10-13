@@ -122,6 +122,15 @@ describe("maxSniperTop10WalletPct", () => {
   });
 });
 
+describe("maxLinkedWalletCount", () => {
+  it("caps how many top holders are linked, and skips an unknown count", () => {
+    const filter = { ...baseFilter, maxLinkedWalletCount: 5 };
+    expect(matchesFilter(baseToken({ linkedWalletCount: 6 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ linkedWalletCount: 5 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ linkedWalletCount: undefined }), filter)).toBe(true);
+  });
+});
+
 describe("CEX-funded bounds", () => {
   it("keeps the exchange-funded count within the bounds, and skips an unknown count", () => {
     const filter = { ...baseFilter, minCexFundedCount: 4, maxCexFundedCount: 12 };
