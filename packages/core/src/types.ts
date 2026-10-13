@@ -256,6 +256,8 @@ export interface FreshQuote {
   updatedAt?: Date;
   stats5m?: FreshQuoteStats;
   stats1h?: FreshQuoteStats;
+  /** Holders as Jupiter counts them, seconds old. */
+  holderCount?: number;
 }
 
 export interface RugScreenResult {

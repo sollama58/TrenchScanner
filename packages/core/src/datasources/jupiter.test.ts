@@ -119,6 +119,7 @@ describe("parseJupiterQuotes", () => {
           holderChange: 7,
         },
         stats1h: { priceChange: 80, holderChange: 60 },
+        holderCount: 412,
       },
       { id: "b", usdPrice: 0, mcap: 1_000 },
       { id: "c", usdPrice: 1, mcap: null, fdv: null },
@@ -139,11 +140,13 @@ describe("parseJupiterQuotes", () => {
         holderChange: 7,
       },
       stats1h: { priceChangePct: 80, holderChange: 60 },
+      holderCount: 412,
     });
     expect(quotes[1]!.quote).toMatchObject({
       marketCapUsd: 10_000,
       updatedAt: undefined,
       stats5m: undefined,
+      holderCount: undefined,
     });
   });
 });

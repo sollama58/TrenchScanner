@@ -41,6 +41,7 @@ interface JupiterToken {
   graduatedAt?: string | null;
   /** The mint's first pool: for a Pump.fun launch, its bonding curve, opened at launch. */
   firstPool?: { id?: string; createdAt?: string | null } | null;
+  holderCount?: number | null;
 }
 
 /** The search endpoint takes up to 100 comma-separated mints a call. */
@@ -325,6 +326,7 @@ export function parseJupiterQuotes(
         updatedAt: updatedAt && !Number.isNaN(updatedAt.getTime()) ? updatedAt : undefined,
         stats5m: parseStats(t.stats5m),
         stats1h: parseStats(t.stats1h),
+        holderCount: finite(t.holderCount),
       },
     });
   }
