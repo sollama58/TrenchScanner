@@ -191,6 +191,8 @@ export interface LinkedWalletsReading {
   /** How many holders the reading covers. */
   linkedWalletsChecked: number;
   clusters: LinkedCluster[];
+  /** Every holder the reading covers (the creator aside) and its share, %, largest first: the bubble map's bubbles. */
+  holders: { wallet: string; pct: number }[];
 }
 
 /**
@@ -281,6 +283,7 @@ export function linkedWallets(
     linkedCreatorPct: round2(list.filter((h) => tiedToCreator(h.owner)).reduce((s, h) => s + h.pct, 0)),
     linkedWalletsChecked: list.length,
     clusters,
+    holders: [...list].sort((a, b) => b.pct - a.pct).map((h) => ({ wallet: h.owner, pct: round2(h.pct) })),
   };
 }
 

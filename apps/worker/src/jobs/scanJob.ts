@@ -2460,6 +2460,7 @@ export function withLinkedWallets(
     linkedLargestClusterPct: linked.linkedLargestClusterPct,
     linkedCreatorPct: linked.linkedCreatorPct,
     linkedClusters: linked.clusters,
+    linkedHolders: linked.holders,
   };
 }
 

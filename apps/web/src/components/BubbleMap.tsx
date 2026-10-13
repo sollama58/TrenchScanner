@@ -275,8 +275,10 @@ function MapView({ graph }: { graph: BubbleGraph }) {
       </ul>
       <p className="faint small bm-note">
         Each bubble is a top holder, sized by its share of supply. Wallets one funder paid for share a colour
-        and a line to that funder. A red ring marks a risky wallet or known dumper. The grey dashed bubble is
-        the rest of the top 10 together.
+        and a line to that funder; grey ones are linked to no other. A red ring marks a risky wallet or known
+        dumper.
+        {graph.nodes.some((n) => n.kind === "rest") &&
+          " The dashed bubble is the rest of the top 10 together."}
       </p>
     </>
   );
