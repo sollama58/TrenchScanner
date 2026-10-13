@@ -2047,6 +2047,13 @@ model WalletFunder {
   amountSol Float?
   fundedAt  DateTime?
   checkedAt DateTime  @default(now())
+  /// The wallet's newest transaction when read. The row holds until this plus a week idle
+  /// (WALLET_DORMANT_GAP_MS), the earliest the wallet could be revived and paid by someone new.
+  /// Null on rows from before it was kept: those are read again.
+  lastActivityAt DateTime?
+  /// The funder is who paid the wallet when it started again after a week or more idle
+  /// (getFundersBatch, REVIVED_FUNDING_WITHIN_MS), not who first paid it.
+  revived        Boolean?
 
   @@index([funder])
   @@index([checkedAt])
