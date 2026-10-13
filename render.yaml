@@ -369,6 +369,9 @@ databases:
     # size (15GB) is more than this app needs at v1 scale.
     # Raised one tier on 2026-10-04: at 256MB with ~3.9GB of data the database was crashing and
     # restarting repeatedly under the scan's write load.
-    plan: basic-1gb
+    # Raised to basic-4gb (2 CPU, 4 GB RAM) on 2026-10-13: at 1 GB with ~4.5 GB of data, heavy
+    # background reads went to disk and queued behind each other, and page loads that normally take
+    # 0.3-0.6 s took 5-20 s in those bursts (notes/server-load-audit-2026-10-13.md in the project).
+    plan: basic-4gb
     databaseName: trenchscanner
     user: trenchscanner
