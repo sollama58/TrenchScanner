@@ -246,8 +246,12 @@ function MapView({ graph, compact = false }: { graph: BubbleGraph; compact?: boo
         picked={picked}
         lit={lit}
         onPick={(id) => {
-          setPicked((p) => (p === id ? null : id));
+          setPicked(id);
           setFocus(null);
+          // A wallet's bubble (a holder, or the funder behind a cluster) opens that wallet's modal;
+          // the "others" bubble has no one wallet, so it only lights up.
+          const wallet = graph.nodes.find((n) => n.id === id)?.wallet;
+          if (wallet) openWallet(wallet);
         }}
       />
       <NodeDetail node={node} graph={graph} />
@@ -459,7 +463,9 @@ function nodeLabel(n: MapNode, graph: BubbleGraph): string {
 function NodeDetail({ node: n, graph }: { node: MapNode | null; graph: BubbleGraph }) {
   if (!n) {
     return (
-      <p className="bm-detail muted small">Tap a bubble for the wallet, or a cluster below to light it up.</p>
+      <p className="bm-detail muted small">
+        Tap a bubble to open that wallet, or a cluster below to light it up.
+      </p>
     );
   }
   if (n.kind === "rest") {
