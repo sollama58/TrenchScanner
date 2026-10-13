@@ -21,6 +21,29 @@ export interface Point {
 }
 
 /**
+ * Minute candles as the line's readings: each close at its minute's end, when that price held.
+ * Pump.fun stamps a candle with its minute's start, so a close drawn there runs the line a minute
+ * ahead of time: at a call's marker it showed where the price went in the minute after the call.
+ */
+export function candleCloses(candles: readonly { t: number; c: number }[]): Point[] {
+  return candles.map((c) => ({ t: c.t + MINUTE, v: c.c }));
+}
+
+/**
+ * The line with the call's own price added at its time, so the line meets the baseline at the call
+ * marker instead of cutting between two minute closes on either side of it. Left as it is when the
+ * call is outside the line's span.
+ */
+export function withCallPoint(points: readonly Point[], call: Point): Point[] {
+  if (points.length < 2 || !(call.v > 0)) return [...points];
+  if (call.t < points[0]!.t || call.t > points[points.length - 1]!.t) return [...points];
+  const out = points.filter((p) => p.t !== call.t);
+  const i = out.findIndex((p) => p.t > call.t);
+  out.splice(i < 0 ? out.length : i, 0, { t: call.t, v: call.v });
+  return out;
+}
+
+/**
  * The closes from `fromMs` on (up to `toMs`, when given), thinned to one point per `widthMs` (aligned to the epoch, so a point
  * keeps its place as new minutes arrive): each point is its slot's last close, at that close's
  * time, so the line ends exactly on the latest reading.
