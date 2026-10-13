@@ -55,6 +55,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every minute while history is being re-graded to label rule 4 (labelRegradeJob.ts), then a
   // no-op; nothing user-facing waits on it.
   "label-regrade": 30 * 60_000,
+  // Every minute: reads called coins' trades for the wallet risk score (tradeTapeJob.ts). Nothing
+  // user-facing waits on it.
+  "trade-tape": 30 * 60_000,
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 /**

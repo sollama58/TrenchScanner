@@ -4,6 +4,7 @@ import { forEachWithConcurrency } from "../concurrency.js";
 import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
 import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from "./launchBuyers.js";
+import type { ChainTx } from "../wallets/tradeTape.js";
 import { holdersFromLargestAccounts, type LargestAccount, type OnChainHolders } from "./onChainHolders.js";
 
 const logger = createLogger("helius");
@@ -963,6 +964,62 @@ export class HeliusClient {
       pending = next;
     }
     return out;
+  }
+
+  /**
+   * One page of a mint's transactions, oldest first, with full details - the trade tape's read
+   * (apps/worker/src/jobs/tradeTapeJob.ts). getTransactionsForAddress on the mint, failed ones
+   * filtered out server-side, up to 100 a page for 10 credits, from `paginationToken` when given.
+   * `untilBlockTime` (unix seconds) asks the server to stop there; the caller still filters by time,
+   * so a server that ignores it costs pages, not correctness. Helius-only: "unsupported" elsewhere.
+   */
+  async getMintTransactionsPage(
+    mint: string,
+    opts: { paginationToken?: string; untilBlockTime?: number } = {},
+  ): Promise<
+    | { status: "ok"; txs: ChainTx[]; paginationToken: string | null }
+    | { status: "unsupported" }
+    | { status: "failed" }
+  > {
+    if (!this.gtfaUsable) return { status: "unsupported" };
+    const responses = await this.sendBatch<{ data?: ChainTx[]; paginationToken?: string | null }>(
+      [
+        {
+          id: mint,
+          method: "getTransactionsForAddress",
+          params: [
+            mint,
+            {
+              transactionDetails: "full",
+              sortOrder: "asc",
+              limit: LAUNCH_TX_PAGE,
+              encoding: "json",
+              maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
+              filters: {
+                status: "succeeded",
+                ...(opts.untilBlockTime !== undefined ? { blockTime: { lte: opts.untilBlockTime } } : {}),
+              },
+              ...(opts.paginationToken ? { paginationToken: opts.paginationToken } : {}),
+            },
+          ],
+        },
+      ],
+      20_000,
+      // A timed-out page of full transactions was most likely served and billed anyway.
+      { retryOnTimeout: false },
+    );
+    const res = responses.get(mint);
+    if (res?.error?.code === RPC_METHOD_NOT_FOUND) {
+      this.gtfaUnavailable = true;
+      return { status: "unsupported" };
+    }
+    if (!res || res.error || !Array.isArray(res.result?.data)) {
+      if (res?.error) logger.warn("rpc error on mint transactions page", { mint, error: res.error });
+      return { status: "failed" };
+    }
+    const data = res.result.data;
+    const token = res.result.paginationToken ?? null;
+    return { status: "ok", txs: data, paginationToken: data.length < LAUNCH_TX_PAGE ? null : token };
   }
 
   /**

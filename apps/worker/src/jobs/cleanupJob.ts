@@ -483,6 +483,26 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     ),
   };
 
+  // The trade tape's per-wallet rows and reads (tradeTapeJob.ts), on the snapshot horizon: the
+  // wallet risk score looks back over them, and a month of called coins is plenty for it.
+  const deletedWalletActivity = await stage("walletActivity", 0, () =>
+    deleteInBatches(
+      `SELECT "id" FROM "TokenWalletActivity" WHERE "createdAt" < $1`,
+      "TokenWalletActivity",
+      [snapshotCutoff],
+      batch,
+    ),
+  );
+  const deletedTradeTapes = await stage("tradeTapes", 0, () =>
+    deleteInBatches(
+      `SELECT "tokenId" FROM "TokenTradeTape" WHERE "readAt" < $1`,
+      "TokenTradeTape",
+      [snapshotCutoff],
+      batch,
+      "tokenId",
+    ),
+  );
+
   // Old non-active curator models: one is minted every CURATOR_TRAINING_INTERVAL_HOURS (several a
   // day), so keep the recent history (which the learning panel and any postmortem want) and drop
   // the deep past. The active model is never touched here, whatever its age.
@@ -651,6 +671,8 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedMatchOutcomes,
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,
+    deletedWalletActivity,
+    deletedTradeTapes,
     deletedAiReviews: deletedAiReviews.count,
     deletedCuratorModels: deletedCuratorModels.count,
     strippedCuratorModels,
