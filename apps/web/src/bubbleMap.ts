@@ -487,11 +487,22 @@ export function cexLayout(graph: BubbleGraph): BubbleGraph {
   return regroupLayout(graph, { cex: true });
 }
 
-/** A KOL and the holders tied to it as its possible side wallets (possibleSides.ts sideGroups). */
+/**
+ * A KOL and the holders tied to it (possibleSides.ts sideGroups): its possible side wallets, and
+ * the wallets it funded (`funded`, a KOL Funded Wallet: shown without the question mark).
+ */
 export interface SideGroup {
   kolWallet: string;
   kolName: string | null;
-  wallets: readonly { wallet: string; pct: number }[];
+  wallets: readonly { wallet: string; pct: number; funded?: boolean }[];
+}
+
+/** The side wallets of a group that show on the map (the KOL's own bubble aside), split by kind. */
+export function sideCounts(members: readonly MapNode[], g: SideGroup): { funded: number; possible: number } {
+  const funded = new Set(g.wallets.filter((w) => w.funded).map((w) => w.wallet));
+  const sides = members.filter((n) => n.wallet !== g.kolWallet);
+  const f = sides.filter((n) => !!n.wallet && funded.has(n.wallet)).length;
+  return { funded: f, possible: sides.length - f };
 }
 
 /** A side group's bubbles on the map: the KOL's own when it holds, then its possible side wallets. */
@@ -500,9 +511,14 @@ export function sideMembers(graph: Pick<BubbleGraph, "nodes">, g: SideGroup): Ma
   return graph.nodes.filter((n) => n.kind === "holder" && !!n.wallet && wallets.has(n.wallet));
 }
 
-/** A KOL pill's word: "side?" when one possible side wallet shows on the map, else "sides?". */
+/**
+ * A KOL pill's word: "funded" when every side wallet on the map is one the KOL funded (no question
+ * mark: the tie is on chain), else "side?" for one possible side wallet and "sides?" for more.
+ */
 export function sideWord(members: readonly MapNode[], g: SideGroup): string {
-  return members.filter((n) => n.wallet !== g.kolWallet).length > 1 ? "sides?" : "side?";
+  const { funded, possible } = sideCounts(members, g);
+  if (possible === 0 && funded > 0) return "funded";
+  return funded + possible > 1 ? "sides?" : "side?";
 }
 
 /** The ties a side group draws, as the layout pulls them: each member to the KOL, else to the largest. */

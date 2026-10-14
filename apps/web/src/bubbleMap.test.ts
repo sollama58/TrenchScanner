@@ -492,6 +492,17 @@ describe("sideWord", () => {
   it("says sides? for two or more", () => {
     expect(sideWord([n("kol"), n("a"), n("b")], g)).toBe("sides?");
   });
+  it("drops the question mark when every side wallet on the map is one the KOL funded", () => {
+    const f = {
+      ...g,
+      wallets: [
+        { wallet: "a", pct: 0, funded: true },
+        { wallet: "b", pct: 90 },
+      ],
+    };
+    expect(sideWord([n("kol"), n("a")], f)).toBe("funded");
+    expect(sideWord([n("kol"), n("a"), n("b")], f)).toBe("sides?");
+  });
 });
 
 describe("bubble % labels", () => {

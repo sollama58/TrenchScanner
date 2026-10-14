@@ -364,6 +364,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       computedAt: await lastRebuiltAt("kol-side-wallets", row.computedAt),
       coins: { "24h": row.coins24h, "7d": row.coins7d, "30d": row.coins30d },
       sides: Object.fromEntries(SIDE_WINDOWS.map((w) => [w, sides[w].map(withRisk)])),
+      // Wallets taken off this KOL's lists as likely bots (strongly matched with 4+ KOLs).
+      likelyBots: (row.sides as { likelyBots?: string[] }).likelyBots ?? [],
       rules: sideWalletRules(),
     };
   });

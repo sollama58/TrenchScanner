@@ -25,6 +25,7 @@ export interface SideRules {
   minShared: Record<SideWindow, number>;
   minPct: number;
   bot: { minCoins: number; minPct: number; days: number };
+  likelyBot?: { minKols: number; minPct: number; minShared: number; window: SideWindow };
   tiers: { hours: number; minPct: number; minShared: number }[];
   holdDays: number;
 }
@@ -35,6 +36,7 @@ const DEFAULT_RULES: SideRules = {
   minShared: { "24h": 5, "7d": 15, "30d": 25 },
   minPct: 50,
   bot: { minCoins: 200, minPct: 75, days: 30 },
+  likelyBot: { minKols: 4, minPct: 60, minShared: 50, window: "7d" },
   tiers: [
     { hours: 24, minPct: 100, minShared: 10 },
     { hours: 48, minPct: 90, minShared: 25 },
@@ -71,6 +73,8 @@ interface KolSides {
   coins: Record<SideWindow, number>;
   sides: Record<SideWindow, SideWallet[]>;
   rules?: SideRules;
+  /** Wallets taken off its lists as likely bots (absent from older API builds). */
+  likelyBots?: string[];
 }
 
 /** Rows shown before "Show all". */
@@ -211,7 +215,7 @@ export function SideWalletChecker() {
                         </span>
                         {k.sides["30d"] > 0 && (
                           <span className="pill side-found" title="Wallets listed for it over 30 days">
-                            {plural(k.sides["30d"], "wallet")}
+                            {plural(k.sides["30d"], "possible wallet")}
                           </span>
                         )}
                       </span>
@@ -296,7 +300,7 @@ function SideRulesCard({ rules }: { rules: SideRules }) {
         </ul>
         <p className="faint small">
           Any one tier. Shown on the wallet and the bubble map for {rules.holdDays} days after it last
-          qualifies.
+          qualifies. A wallet the KOL funded is labeled KOL Funded Wallet whatever its trades.
         </p>
       </div>
       <div className="side-rule">
@@ -307,6 +311,13 @@ function SideRulesCard({ rules }: { rules: SideRules }) {
           <strong>Bots:</strong> {rules.bot.minCoins}+ coins and over {rules.bot.minPct}% of every tracked
           coin in {rules.bot.days} days.
         </p>
+        {rules.likelyBot && (
+          <p className="small">
+            <strong>Likely bots:</strong> over {rules.likelyBot.minShared} coins at over{" "}
+            {rules.likelyBot.minPct}% with each of {rules.likelyBot.minKols}+ KOLs in {rules.likelyBot.window}
+            .
+          </p>
+        )}
         <p className="faint small">Other KOLs and known exchange wallets.</p>
       </div>
     </div>
@@ -404,6 +415,12 @@ function SideWallets({
             </button>
           )}
         </>
+      )}
+      {data && (data.likelyBots?.length ?? 0) > 0 && (
+        <p className="faint small side-hidden-bots">
+          {plural(data.likelyBots!.length, "likely bot")} hidden: strongly matched with{" "}
+          {rules.likelyBot?.minKols ?? 4}+ KOLs, which fits a copy-trade bot more than a side wallet.
+        </p>
       )}
       {showAll && (
         <SideWalletsModal
@@ -506,9 +523,9 @@ function SideRows({
           <li
             key={s.wallet}
             className={[label ? "labeled" : "", isOpen ? "open" : ""].join(" ").trim() || undefined}
-            // The whole row opens its trades; the address and the toggle are its own buttons.
+            // The row opens and closes its trades; the address, the toggle and the open panel itself don't.
             onClick={(e) => {
-              if (!(e.target as HTMLElement).closest("button, a")) toggle();
+              if (!(e.target as HTMLElement).closest("button, a, .sm-body")) toggle();
             }}
           >
             <span className="side-rank num faint">{i + 1}</span>
@@ -537,13 +554,22 @@ function SideRows({
               <span title="Every tracked coin it bought in the window">· {s.coins} total</span>
             </span>
             <span className="side-tags">
-              {label && (
+              {label?.funded ? (
                 <span
-                  className="pill side-label"
-                  title={`Met a Possible Side tier: ${Math.round(label.pct)}% of the KOL's coins over ${label.hours ?? 24} hours`}
+                  className="pill side-label side-funded"
+                  title="The KOL paid for this wallet's first SOL"
                 >
-                  <TargetIcon size={11} /> Possible Side
+                  <TargetIcon size={11} /> KOL Funded Wallet
                 </span>
+              ) : (
+                label && (
+                  <span
+                    className="pill side-label"
+                    title={`Met a Possible Side tier: ${Math.round(label.pct)}% of the KOL's coins over ${label.hours ?? 24} hours`}
+                  >
+                    <TargetIcon size={11} /> Possible Side
+                  </span>
+                )
               )}
               {s.risk?.winner && (
                 <span

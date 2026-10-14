@@ -191,12 +191,21 @@ export function walletLabels(input: {
 }): WalletLabel[] {
   const out: WalletLabel[] = [];
   for (const s of input.possibleSides ?? [])
-    out.push({
-      text: possibleSideText(s),
-      tone: "linked",
-      source: "TrenchScanner Side Wallet Checker",
-      detail: `In the last ${s.hours} hours it bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it. Not confirmed as the KOL's wallet.`,
-    });
+    out.push(
+      s.funded
+        ? {
+            text: possibleSideText(s),
+            tone: "linked",
+            source: "TrenchScanner Side Wallet Checker",
+            detail: `The KOL paid for this wallet's first SOL${s.fundedSol != null ? ` (${Math.round(s.fundedSol * 1000) / 1000} SOL` : ""}${s.fundedAt ? `${s.fundedSol != null ? ", " : " ("}${s.fundedAt.toISOString().slice(0, 10)})` : s.fundedSol != null ? ")" : ""}.${s.shared > 0 ? ` It also bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it in the last ${s.hours} hours.` : ""}`,
+          }
+        : {
+            text: possibleSideText(s),
+            tone: "linked",
+            source: "TrenchScanner Side Wallet Checker",
+            detail: `In the last ${s.hours} hours it bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it. Not confirmed as the KOL's wallet.`,
+          },
+    );
   const exchange = KNOWN_EXCHANGE_WALLETS.get(input.wallet);
   if (exchange)
     out.push({ text: `${exchange} hot wallet`, tone: "info", source: "TrenchScanner exchange list" });

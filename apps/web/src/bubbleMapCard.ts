@@ -12,6 +12,7 @@ import {
   regroupLayout,
   sameTimeSlot,
   sideMembers,
+  sideCounts,
   sideWord,
   bubbleNameLines,
   showsPct,
@@ -190,8 +191,11 @@ export async function renderBubbleCard(
     ctx.arc(PAD + 9, y - 7, 7.5, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
-    const sideCount = members.filter((m) => m.wallet !== g.kolWallet).length;
-    const lead = `${sideCount} side${sideCount === 1 ? "" : "s"}?`;
+    const { funded, possible } = sideCounts(members, g);
+    const lead =
+      possible === 0
+        ? `${funded} funded`
+        : `${funded + possible} side${funded + possible === 1 ? "" : "s"}${funded > 0 ? "" : "?"}`;
     ctx.fillStyle = INK;
     ctx.font = `600 20px ${FONT}`;
     ctx.fillText(lead, PAD + 30, y);
