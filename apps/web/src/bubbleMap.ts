@@ -473,7 +473,52 @@ export function cexLinksOf(
  * the original layout stands untouched for when the ties are switched off.
  */
 export function cexLayout(graph: BubbleGraph): BubbleGraph {
-  return layoutGraph({ ...graph, nodes: graph.nodes.map((n) => ({ ...n })) }, undefined, { cex: true });
+  return regroupLayout(graph, { cex: true });
+}
+
+/** A KOL and the holders tied to it as its possible side wallets (possibleSides.ts sideGroups). */
+export interface SideGroup {
+  kolWallet: string;
+  kolName: string | null;
+  wallets: readonly { wallet: string; pct: number }[];
+}
+
+/** A side group's bubbles on the map: the KOL's own when it holds, then its possible side wallets. */
+export function sideMembers(graph: Pick<BubbleGraph, "nodes">, g: SideGroup): MapNode[] {
+  const wallets = new Set([g.kolWallet, ...g.wallets.map((w) => w.wallet)]);
+  return graph.nodes.filter((n) => n.kind === "holder" && !!n.wallet && wallets.has(n.wallet));
+}
+
+/** The ties a side group draws, as the layout pulls them: each member to the KOL, else to the largest. */
+export function sideTiesOf(
+  graph: Pick<BubbleGraph, "nodes">,
+  groups: readonly SideGroup[],
+): { from: string; to: string }[] {
+  const out: { from: string; to: string }[] = [];
+  for (const g of groups) {
+    const members = sideMembers(graph, g);
+    if (members.length < 2) continue;
+    const top =
+      members.find((n) => n.wallet === g.kolWallet) ?? [...members].sort((a, b) => b.pct - a.pct)[0]!;
+    for (const n of members) if (n !== top) out.push({ from: n.id, to: top.id });
+  }
+  return out;
+}
+
+/**
+ * The map laid out again with the ties that are switched on pulled together (each exchange's
+ * holders; each KOL and its possible side wallets), on copies of the nodes: the original layout
+ * stands untouched for when they're off.
+ */
+export function regroupLayout(
+  graph: BubbleGraph,
+  opts: { cex?: boolean; sides?: readonly SideGroup[] },
+): BubbleGraph {
+  const copy = { ...graph, nodes: graph.nodes.map((n) => ({ ...n })) };
+  return layoutGraph(copy, undefined, {
+    cex: opts.cex,
+    sideTies: opts.sides && opts.sides.length > 0 ? sideTiesOf(copy, opts.sides) : undefined,
+  });
 }
 
 /** The same-exchange groups behind the ties: each exchange, its holders on the map, and their share; largest first. */
@@ -502,22 +547,41 @@ export function cexGroupsOf(graph: Pick<BubbleGraph, "nodes" | "cexLinks">): {
 
 /** Gap between bubbles, map units. */
 const GAP = 9;
+/** How far a line between two bubbles keeps off any other bubble's edge, map units. */
+const LINE_CLEARANCE = 6;
 
 /**
  * Places the nodes with a small fixed-step force layout: each cluster starts around its own spot
  * on a ring, holders are pulled to their funder, every bubble pushes overlapping ones apart, and
- * a light pull keeps it all near the middle. Deterministic (no randomness), so the dialog and the
- * share image draw the same map. Mutates and returns `graph`.
+ * a light pull keeps it all near the middle. Bubbles that sit on a line between two others are
+ * pushed off it, so no line runs under a bubble it doesn't belong to (user ask 2026-10-14).
+ * Deterministic (no randomness), so the dialog and the share image draw the same map. Mutates
+ * and returns `graph`.
  */
 export function layoutGraph(
   graph: BubbleGraph,
   iterations = 320,
-  /** Pull holders the same exchange funded together too (the map's same-exchange toggle). */
-  opts: { cex?: boolean } = {},
+  opts: {
+    /** Pull holders the same exchange funded together too (the map's same-exchange toggle). */
+    cex?: boolean;
+    /** Pull each KOL's possible side wallets to it (sideTiesOf; the map's side-wallet toggle). */
+    sideTies?: readonly { from: string; to: string }[];
+  } = {},
 ): BubbleGraph {
   const { nodes, links } = graph;
   if (nodes.length === 0) return graph;
   const index = new Map(nodes.map((n) => [n.id, n]));
+  // Every line the map draws between two bubbles, for keeping other bubbles off them.
+  const segments = [
+    ...links,
+    ...graph.sameTimeLinks,
+    ...(opts.cex ? graph.cexLinks : []),
+    ...(opts.sideTies ?? []),
+  ].flatMap((l) => {
+    const a = index.get(l.from);
+    const b = index.get(l.to);
+    return a && b && a !== b ? [[a, b] as const] : [];
+  });
   const groups = graph.clusters.length + (nodes.some((n) => n.cluster === null) ? 1 : 0);
   const ring = groups <= 1 ? 0 : 70 + 26 * groups;
 
@@ -601,6 +665,56 @@ export function layoutGraph(
         b.y -= dy * k * 0.5;
       }
     }
+    // Side-wallet ties, when drawn: as firm as the exchange ties.
+    for (const l of opts.sideTies ?? []) {
+      const a = index.get(l.from);
+      const b = index.get(l.to);
+      if (!a || !b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy) || 0.01;
+      const want = a.r + b.r + 18;
+      if (dist <= want) continue;
+      const k = ((dist - want) / dist) * 0.09;
+      a.x += dx * k;
+      a.y += dy * k;
+      b.x -= dx * k * 0.5;
+      b.y -= dy * k * 0.5;
+    }
+    // Lines: once the groups have formed, a bubble lying on another pair's line moves off it,
+    // and the line's ends give a little the other way.
+    if (it >= iterations * 0.3) {
+      for (const [a, b] of segments) {
+        const sx = b.x - a.x;
+        const sy = b.y - a.y;
+        const len2 = sx * sx + sy * sy;
+        if (len2 < 1) continue;
+        for (const n of nodes) {
+          if (n === a || n === b) continue;
+          const t = Math.max(0, Math.min(1, ((n.x - a.x) * sx + (n.y - a.y) * sy) / len2));
+          const px = a.x + sx * t;
+          const py = a.y + sy * t;
+          let dx = n.x - px;
+          let dy = n.y - py;
+          let dist = Math.hypot(dx, dy);
+          const want = n.r + LINE_CLEARANCE;
+          if (dist >= want) continue;
+          if (dist < 0.01) {
+            // Dead on the line: step off to its left.
+            dx = -sy;
+            dy = sx;
+            dist = Math.sqrt(len2);
+          }
+          const push = ((want - dist) / dist) * 0.3;
+          n.x += dx * push;
+          n.y += dy * push;
+          a.x -= dx * push * 0.15 * (1 - t);
+          a.y -= dy * push * 0.15 * (1 - t);
+          b.x -= dx * push * 0.15 * t;
+          b.y -= dy * push * 0.15 * t;
+        }
+      }
+    }
     // Gravity toward the middle, stronger for the unlinked so clusters keep their room.
     for (const n of nodes) {
       const g = n.cluster === null ? 0.012 : 0.02;
@@ -648,6 +762,8 @@ export interface MapLabel {
   r: number;
   w: number;
   h: number;
+  /** A hub's wallets, each tied to the label by a line: a spot whose lines cross other bubbles costs more. */
+  members?: readonly Pick<MapNode, "id" | "x" | "y">[];
 }
 
 /** A placed label: its box's centre, and whether it moved off its anchor far enough to want a leader line. */
@@ -691,7 +807,30 @@ export function placeLabels(
     if (a && b) sample(a.x, a.y, b.x, b.y, 0.12);
   }
   // Bubbles with their rings (same-minute and risk rings reach about 9 past the edge, plus their stroke).
-  const circles = graph.nodes.map((n) => ({ x: n.x, y: n.y, r: n.kind === "funder" ? n.r * 0.95 : n.r + 9 }));
+  const circles = graph.nodes.map((n) => ({
+    id: n.id,
+    x: n.x,
+    y: n.y,
+    r: n.kind === "funder" ? n.r * 0.95 : n.r + 9,
+    // The bubble itself, for the hub lines: they may pass its rings, not cut through it.
+    body: n.r + 2,
+  }));
+  /** Bubbles the lines from (x, y) to a hub's wallets cut through, other than those wallets. */
+  const crossings = (x: number, y: number, members: readonly Pick<MapNode, "id" | "x" | "y">[]): number => {
+    const own = new Set(members.map((m) => m.id));
+    let c = 0;
+    for (const m of members) {
+      const sx = m.x - x;
+      const sy = m.y - y;
+      const len2 = sx * sx + sy * sy || 1;
+      for (const k of circles) {
+        if (own.has(k.id)) continue;
+        const t = Math.max(0, Math.min(1, ((k.x - x) * sx + (k.y - y) * sy) / len2));
+        if (Math.hypot(k.x - (x + sx * t), k.y - (y + sy * t)) < k.body) c += 1;
+      }
+    }
+    return c;
+  };
 
   const placed: PlacedLabel[] = [];
   const cost = (x: number, y: number, w: number, h: number): number => {
@@ -703,10 +842,10 @@ export function placeLabels(
     for (const k of circles) {
       const dx = k.x - Math.max(x0, Math.min(k.x, x1));
       const dy = k.y - Math.max(y0, Math.min(k.y, y1));
-      if (dx * dx + dy * dy < k.r * k.r) c += 10;
+      if (dx * dx + dy * dy < k.r * k.r) c += 30;
     }
     for (const p of placed) {
-      if (Math.abs(p.x - x) * 2 < p.w + w + 4 && Math.abs(p.y - y) * 2 < p.h + h + 4) c += 10;
+      if (Math.abs(p.x - x) * 2 < p.w + w + 4 && Math.abs(p.y - y) * 2 < p.h + h + 4) c += 30;
     }
     for (const p of points) if (p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1) c += 1;
     return c;
@@ -721,16 +860,24 @@ export function placeLabels(
     [-0.7, 0.7],
     [0.7, -0.7],
     [-0.7, -0.7],
+    [0.92, 0.38],
+    [-0.92, 0.38],
+    [0.92, -0.38],
+    [-0.92, -0.38],
+    [0.38, 0.92],
+    [-0.38, 0.92],
+    [0.38, -0.92],
+    [-0.38, -0.92],
   ] as const;
   for (const l of labels) {
     let best: { x: number; y: number; c: number; far: boolean } | null = null;
-    search: for (const step of [0, 10, 22, 38, 58, 84, 116]) {
+    search: for (const step of [0, 10, 22, 38, 58, 84, 116, 150]) {
       for (const [dx, dy] of dirs) {
         // Out from the anchor's edge until the box clears it along that direction.
         const reach = l.r + step + 3 + Math.abs(dx) * (l.w / 2) + Math.abs(dy) * (l.h / 2);
         const x = l.x + dx * reach;
         const y = l.y + dy * reach;
-        const c = cost(x, y, l.w, l.h);
+        const c = cost(x, y, l.w, l.h) + (l.members ? crossings(x, y, l.members) * 2 : 0);
         if (!best || c < best.c) best = { x, y, c, far: step >= 22 };
         if (c === 0) break search;
       }
@@ -922,7 +1069,9 @@ export function bubbleNameLines(
   const lines: string[] = [];
   let rest = text.trim();
   while (rest.length > 0 && lines.length < 2) {
-    if (rest.length <= perLine) {
+    // A word only a few letters too long stays whole rather than leave them on a line alone
+    // ("Moonwalke" / "r"): the backing widens to hold it.
+    if (rest.length <= perLine || (rest.length <= perLine + 3 && !rest.includes(" "))) {
       lines.push(rest);
       rest = "";
       break;

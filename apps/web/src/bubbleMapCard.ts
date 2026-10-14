@@ -2,7 +2,6 @@ import type { Token } from "./api";
 import {
   centreOf,
   cexGroupsOf,
-  cexLayout,
   cexSlots,
   clusterHalos,
   exchangeName,
@@ -10,7 +9,10 @@ import {
   HALO_PAD,
   nodeSlot,
   placeLabels,
+  regroupLayout,
   sameTimeSlot,
+  sideMembers,
+  type SideGroup,
   type BubbleGraph,
   type MapNode,
 } from "./bubbleMap";
@@ -43,6 +45,8 @@ const PILL_H = 28;
 
 /** The exchanges' colours (styles.css --bm-cex-0 to --bm-cex-3; bubbleMap CEX_COLOURS). */
 const CEX = ["#a5b4fc", "#5eead4", "#fda4af", "#f0abfc"];
+/** KOLs' possible side wallets: the map's dotted gold (styles.css --bm-side). */
+const SIDE = "#f5b324";
 
 /** A colour slot's colour (nodeSlot / sameTimeSlot); grey for none. */
 const slotColour = (slot: number | null) => (slot === null ? OTHER : CLUSTER[slot % CLUSTER.length]!);
@@ -70,8 +74,11 @@ export async function renderBubbleCard(
   graph: BubbleGraph,
   token: Token,
   names: WalletNames = {},
-  /** cex: draw the same-exchange ties, laid out by exchange, as the map shows them when they're on. */
-  opts: { cex?: boolean } = {},
+  /**
+   * cex: draw the same-exchange ties, laid out by exchange, as the map shows them when they're on.
+   * sides: the KOLs whose possible side wallets the map ties to them, drawn and listed the same way.
+   */
+  opts: { cex?: boolean; sides?: readonly SideGroup[] } = {},
 ): Promise<HTMLCanvasElement> {
   const { canvas, ctx, icon } = await cardCanvas();
   if (!ctx) return canvas;
@@ -130,8 +137,13 @@ export async function renderBubbleCard(
     ctx.fillText("linked wallets", PAD + bigW + 16, 296);
   }
 
+  // Each KOL's possible side wallets on the map, listed like a funder's cluster (user ask 2026-10-14).
+  const sideRows = (opts.sides ?? [])
+    .map((g) => ({ g, members: sideMembers(graph, g) }))
+    .filter((s) => s.members.length >= 2);
   let y = 350;
-  const rows = graph.clusters.slice(0, 4);
+  // Room for five rows: up to four clusters, or three and up to two KOLs.
+  const rows = graph.clusters.slice(0, sideRows.length > 0 ? 3 : 4);
   for (const [i, c] of rows.entries()) {
     const col = CLUSTER[i % CLUSTER.length]!;
     ctx.fillStyle = col;
@@ -153,6 +165,33 @@ export async function renderBubbleCard(
     ctx.fillStyle = INK;
     ctx.font = `700 20px ${FONT}`;
     ctx.fillText(pctText(c.pct), PAD + leftW, y);
+    ctx.textAlign = "left";
+    y += 40;
+  }
+  const sideShown = sideRows.slice(0, Math.min(2, 5 - rows.length));
+  for (const { g, members } of sideShown) {
+    // A gold ring with a dotted edge: the map's side-wallet key.
+    ctx.strokeStyle = SIDE;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath();
+    ctx.arc(PAD + 9, y - 7, 7.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const sideCount = members.filter((m) => m.wallet !== g.kolWallet).length;
+    const lead = `${sideCount} side${sideCount === 1 ? "" : "s"}?`;
+    ctx.fillStyle = INK;
+    ctx.font = `600 20px ${FONT}`;
+    ctx.fillText(lead, PAD + 30, y);
+    const w1 = ctx.measureText(lead).width;
+    ctx.fillStyle = SIDE;
+    ctx.font = `500 17px ${MONO}`;
+    const kolName = names[g.kolWallet]?.name ?? g.kolName ?? walletText(g.kolWallet, names);
+    ctx.fillText(clip(ctx, ` ← ${kolName}`, leftW - 120 - w1), PAD + 30 + w1, y);
+    ctx.textAlign = "right";
+    ctx.fillStyle = INK;
+    ctx.font = `700 20px ${FONT}`;
+    ctx.fillText(pctText(members.reduce((t, m) => t + m.pct, 0)), PAD + leftW, y);
     ctx.textAlign = "left";
     y += 40;
   }
@@ -222,8 +261,9 @@ export async function renderBubbleCard(
     }
   }
 
-  // Right: the map, fitted into its box; regrouped by exchange when the ties show, as on the map.
-  const map = cex ? cexLayout(graph) : graph;
+  // Right: the map, fitted into its box; regrouped by exchange and by KOL when those ties show, as on the map.
+  const sideGroups = sideRows.map((s) => s.g);
+  const map = cex || sideGroups.length > 0 ? regroupLayout(graph, { cex, sides: sideGroups }) : graph;
   const area = { x: PAD + leftW + 40, y: 122, w: CARD_W - PAD - (PAD + leftW + 40), h: CARD_H - 112 - 122 };
   // The pills are sized in pixels on the card (readable at share size), so in map units they shrink
   // as the map scales up: estimate the scale without them first, then place them at that size.
@@ -249,6 +289,7 @@ export async function renderBubbleCard(
         colour: slotColour(sameTimeSlot(map, i)),
         members,
         dashed: false,
+        dotted: false,
       },
     ];
   });
@@ -266,8 +307,26 @@ export async function renderBubbleCard(
         colour: CEX[(cexSlot.get(g.funder) ?? 0) % CEX.length]!,
         members: [...g.nodes],
         dashed: true,
+        dotted: false,
       });
     }
+  }
+  // Each KOL's pill, tied to it and its possible side wallets by dotted gold lines.
+  for (const g of sideGroups) {
+    const members = sideMembers(map, g);
+    const kolName = names[g.kolWallet]?.name ?? g.kolName ?? walletText(g.kolWallet, names);
+    const text = `${kolName.length > 16 ? `${kolName.slice(0, 15)}…` : kolName} sides?`;
+    hubs.push({
+      id: `side:${g.kolWallet}`,
+      ...centreOf(members),
+      r: 0,
+      ...pillSize(text),
+      text,
+      colour: SIDE,
+      members,
+      dashed: false,
+      dotted: true,
+    });
   }
   const placed = placeLabels(map, hubs);
   const box = graphBounds(map, 10, placed);
@@ -333,8 +392,8 @@ export async function renderBubbleCard(
   ctx.lineWidth = Math.max(1.5, 1.6 * scale);
   hubs.forEach((hub, i) => {
     const p = placed[i]!;
-    ctx.strokeStyle = alpha(hub.colour, hub.dashed ? 0.9 : 0.6);
-    ctx.setLineDash(hub.dashed ? [7, 6] : []);
+    ctx.strokeStyle = alpha(hub.colour, hub.dashed || hub.dotted ? 0.9 : 0.6);
+    ctx.setLineDash(hub.dashed ? [7, 6] : hub.dotted ? [2, 5] : []);
     for (const m of hub.members) {
       const mx = (p.x + m.x) / 2 + (m.y - p.y) * 0.12;
       const my = (p.y + m.y) / 2 - (m.x - p.x) * 0.12;
@@ -458,7 +517,7 @@ export async function renderBubbleCard(
     ctx.fillStyle = "#1b1e28";
     ctx.strokeStyle = hub.colour;
     ctx.lineWidth = 2;
-    ctx.setLineDash(hub.dashed ? [5, 4] : []);
+    ctx.setLineDash(hub.dashed ? [5, 4] : hub.dotted ? [2, 3] : []);
     ctx.beginPath();
     ctx.roundRect(X(p.x) - w / 2, Y(p.y) - h / 2, w, h, h / 2);
     ctx.fill();

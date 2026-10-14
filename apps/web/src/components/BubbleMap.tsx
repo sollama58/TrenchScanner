@@ -9,7 +9,9 @@ import {
   cexGroupsOf,
   centreOf,
   exchangeName,
-  cexLayout,
+  regroupLayout,
+  sideMembers,
+  type SideGroup,
   MAP_COLOURS,
   nodeSlot,
   sameTimeSlot,
@@ -35,7 +37,14 @@ import {
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
 import { openWallet } from "../walletModal";
-import { isPumpfunName, useWalletNames, walletText, type WalletNames } from "../walletNames";
+import {
+  isFomoName,
+  isPumpfunName,
+  isUsername,
+  useWalletNames,
+  walletText,
+  type WalletNames,
+} from "../walletNames";
 import { WalletText } from "./WalletText";
 import {
   cexCountText,
@@ -145,6 +154,36 @@ function useCexToggle(graph: BubbleGraph | null): { showCex: boolean; setCexOn: 
   return { showCex: !!graph && (cexOn ?? bubbleCexLinks) && graph.cexLinks.length > 0, setCexOn };
 }
 
+/**
+ * KOLs' possible side wallets among the holders (the Side Wallet Checker's 24-hour matches), and
+ * whether their ties show: on by default, switchable like the exchange ties (user ask 2026-10-14).
+ * Held above the map so its share image draws and lists them too. Drawn only: never in the Linked
+ * count, the safety screen or the models.
+ */
+function useSideToggle(graph: BubbleGraph | null): SideToggle {
+  const { bubbleSideLinks } = useAppearance();
+  const holderWallets = useMemo(
+    () => (graph ? graph.nodes.flatMap((n) => (n.kind === "holder" && n.wallet ? [n.wallet] : [])) : []),
+    [graph],
+  );
+  const sides = usePossibleSides(holderWallets);
+  const groups = useMemo(() => sideGroups(holderWallets, sides), [holderWallets, sides]);
+  const [sideOn, setSideOn] = useState<boolean | null>(null);
+  const showSides = (sideOn ?? bubbleSideLinks) && groups.length > 0;
+  return { sides, groups, showSides, shown: showSides ? groups : NO_SIDES, setSideOn };
+}
+interface SideToggle {
+  /** Each holder's possible-side matches, for its title and detail. */
+  sides: PossibleSides;
+  /** The KOLs with possible side wallets on the map, whether shown or not. */
+  groups: SideGroup[];
+  showSides: boolean;
+  /** The groups to draw: `groups` while they show, else none. */
+  shown: readonly SideGroup[];
+  setSideOn: (on: boolean) => void;
+}
+const NO_SIDES: readonly SideGroup[] = [];
+
 function Head({ title, sub, actions }: { title: string; sub?: string; actions: React.ReactNode }) {
   return (
     <header className="about-head bm-head">
@@ -225,6 +264,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
   );
   const names = useGraphNames(graph);
   const { showCex, setCexOn } = useCexToggle(graph);
+  const side = useSideToggle(graph);
 
   const [copied, setCopied] = useState(false);
   const copyLink = () => {
@@ -247,7 +287,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
           fileName={`trenchscanner-bubbles-${(loaded.token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
           caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
           disabled={!hasMap}
-          render={() => renderBubbleCard(graph, loaded.token, names, { cex: showCex })}
+          render={() => renderBubbleCard(graph, loaded.token, names, { cex: showCex, sides: side.shown })}
         />
       )}
       <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
@@ -287,7 +327,9 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
             : "No two top holders share a funder: nothing linked to map."}
         </p>
       )}
-      {graph && hasMap && <MapView graph={graph} names={names} showCex={showCex} setCexOn={setCexOn} />}
+      {graph && hasMap && (
+        <MapView graph={graph} names={names} showCex={showCex} setCexOn={setCexOn} side={side} />
+      )}
     </div>
   );
 }
@@ -298,6 +340,7 @@ function MapView({
   compact = false,
   showCex,
   setCexOn,
+  side,
 }: {
   graph: BubbleGraph;
   names: WalletNames;
@@ -305,6 +348,8 @@ function MapView({
   /** Whether the same-exchange ties show (useCexToggle). */
   showCex: boolean;
   setCexOn: (on: boolean) => void;
+  /** KOLs' possible side wallets and whether they show (useSideToggle). */
+  side: SideToggle;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
@@ -313,21 +358,15 @@ function MapView({
   const lit = node ? node.cluster : focus;
   const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator"));
   const largest = graph.clusters[0]?.pct ?? null;
-  const { bubbleSideLinks } = useAppearance();
-  // KOLs' possible side wallets (the Side Wallet Checker's 24-hour matches): tied to a pill named
-  // for the KOL, on by default and switchable like the exchange ties (user ask 2026-10-14). Drawn
-  // only: never in the Linked count, the safety screen or the models.
-  const holderWallets = useMemo(
-    () => graph.nodes.flatMap((n) => (n.kind === "holder" && n.wallet ? [n.wallet] : [])),
-    [graph],
-  );
-  const sides = usePossibleSides(holderWallets);
-  const groups = useMemo(() => sideGroups(holderWallets, sides), [holderWallets, sides]);
-  const [sideOn, setSideOn] = useState<boolean | null>(null);
-  const showSides = (sideOn ?? bubbleSideLinks) && groups.length > 0;
+  const { sides, groups, showSides, setSideOn } = side;
   // With the ties on, the bubbles rearrange so each exchange's holders sit together (user ask
   // 2026-10-13); off, the usual layout comes back as it was.
-  const cexGraph = useMemo(() => (showCex ? cexLayout(graph) : null), [graph, showCex]);
+  // KOLs' side wallets gather round them the same way while their ties show.
+  const regrouped = useMemo(
+    () =>
+      showCex || side.shown.length > 0 ? regroupLayout(graph, { cex: showCex, sides: side.shown }) : null,
+    [graph, showCex, side.shown],
+  );
   const cex = graph.cexCount;
 
   return (
@@ -405,13 +444,13 @@ function MapView({
         </label>
       )}
       <BubbleSvg
-        graph={cexGraph ?? graph}
+        graph={regrouped ?? graph}
         names={names}
         compact={compact}
         picked={picked}
         lit={lit}
         cexLinks={showCex}
-        sideGroups={showSides ? groups : []}
+        sideGroups={side.shown}
         sides={sides}
         onPick={(id) => {
           setPicked(id);
@@ -551,7 +590,7 @@ function BubbleSvg({
   /** Draw the same-exchange ties. */
   cexLinks: boolean;
   /** The KOLs whose possible side wallets to tie to them (empty when switched off). */
-  sideGroups: ReturnType<typeof sideGroups>;
+  sideGroups: readonly SideGroup[];
   /** Each holder's possible-side matches, for its title. */
   sides: PossibleSides;
   onPick: (id: string) => void;
@@ -575,6 +614,7 @@ function BubbleSvg({
     const hub = (id: string, members: MapNode[], text: string, kind: Label["kind"], colour: string) => {
       if (members.length === 0) return;
       list.push({ id, ...centreOf(members), r: 0, ...pill(text), text, kind, colour, members });
+      // (placeLabels reads `members` too: it keeps the pill where its lines cross fewest bubbles.)
     };
     for (const n of graph.nodes) {
       if (n.kind !== "funder") continue;
@@ -612,8 +652,7 @@ function BubbleSvg({
     }
     for (const g of kolSides) {
       // The KOL's own bubble, when it holds, joins its possible side wallets on the pill.
-      const wallets = new Set([g.kolWallet, ...g.wallets.map((w) => w.wallet)]);
-      const members = graph.nodes.filter((n) => n.kind === "holder" && n.wallet && wallets.has(n.wallet));
+      const members = sideMembers(graph, g);
       const kolName = names[g.kolWallet]?.name ?? g.kolName;
       hub(
         `side:${g.kolWallet}`,
@@ -817,7 +856,10 @@ function Bubble({
   const by = n.y - n.r * 0.72;
   const named = n.wallet ? names[n.wallet] : undefined;
   const pumpfun = isPumpfunName(named);
-  const fit = named ? bubbleNameLines(n.r, named.name, pumpfun) : null;
+  // A KOL's name always gets its gold backing, so it stands out (user ask 2026-10-14).
+  const kol = named?.source === "kol";
+  const fomo = isFomoName(named);
+  const fit = named ? bubbleNameLines(n.r, named.name, isUsername(named)) : null;
   // The % moves up to make room for the name under it.
   const lineH = fit ? fit.size * 1.15 : 0;
   const pctY = fit ? n.y - (fit.lines.length * lineH) / 2 - 1 : n.y;
@@ -851,9 +893,12 @@ function Bubble({
         </text>
       )}
       {fit && (
-        <g className={`bm-name${pumpfun ? " pumpfun" : ""}`} style={{ fontSize: fit.size }}>
+        <g
+          className={`bm-name${pumpfun ? " pumpfun" : ""}${fomo ? " fomo" : ""}${kol ? " kol" : ""}`}
+          style={{ fontSize: fit.size }}
+        >
           {/* A backing when the name runs past the bubble's edge, so it reads over whatever is behind. */}
-          {fit.wide && (
+          {(fit.wide || kol) && (
             <rect
               className="bm-name-bg"
               x={n.x - fit.w / 2 - 4}
@@ -1052,6 +1097,7 @@ export function BubbleMapSection({
   );
   const names = useGraphNames(graph);
   const { showCex, setCexOn } = useCexToggle(graph);
+  const side = useSideToggle(graph);
   const label = tokenLabel(token);
   if (!graph || !graph.nodes.some((n) => n.kind === "holder")) {
     // Every token view shows the map (user ask 2026-10-13); a coin no scan read holders for says so.
@@ -1078,7 +1124,7 @@ export function BubbleMapSection({
             fileName={`trenchscanner-bubbles-${(token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
             caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
             iconOnly
-            render={() => renderBubbleCard(graph, token, names, { cex: showCex })}
+            render={() => renderBubbleCard(graph, token, names, { cex: showCex, sides: side.shown })}
           />
           <button
             type="button"
@@ -1090,7 +1136,7 @@ export function BubbleMapSection({
           </button>
         </span>
       </h4>
-      <MapView graph={graph} names={names} compact showCex={showCex} setCexOn={setCexOn} />
+      <MapView graph={graph} names={names} compact showCex={showCex} setCexOn={setCexOn} side={side} />
     </section>
   );
 }

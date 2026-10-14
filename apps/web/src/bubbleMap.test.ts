@@ -339,6 +339,9 @@ describe("bubbleNameLines", () => {
     expect(clipped[0]!.startsWith('"')).toBe(true);
     expect(clipped[clipped.length - 1]!.endsWith('…"')).toBe(true);
   });
+  it("keeps a word only a few letters too long whole", () => {
+    expect(bubbleNameLines(18, "Moonwalker")?.lines).toEqual(["Moonwalker"]);
+  });
   it("leaves a bubble too small for a name without one", () => {
     expect(bubbleNameLines(10, "Binance")).toBeNull();
   });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanWalletName, HeliusIdentityClient, isPumpfunName } from "./walletIdentity.js";
+import { cleanWalletName, HeliusIdentityClient, isPumpfunName, usernameApp } from "./walletIdentity.js";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -75,6 +75,10 @@ describe("cleanWalletName", () => {
     expect(cleanWalletName('"degenking" on Pumpfun')).toBe("degenking");
     expect(cleanWalletName("\u201cMoon Boy\u201d on Pump.fun")).toBe("Moon Boy");
     expect(cleanWalletName('"x" on pump fun')).toBe("x");
+    expect(cleanWalletName('"apeKing" on FOMO')).toBe("apeKing");
+    expect(usernameApp('"apeKing" on FOMO')).toBe("fomo");
+    expect(usernameApp('"degenking" on Pumpfun')).toBe("pumpfun");
+    expect(usernameApp("Binance Hot Wallet")).toBeNull();
   });
 
   it("marks a Pump.fun username, in a batch read too", async () => {

@@ -21,27 +21,39 @@ export interface HeliusIdentity {
   tags: string[];
   /** The name is a Pump.fun username (Helius's `"NAME" on Pumpfun`), shortened to NAME. */
   pumpfun?: boolean;
+  /** The name is a FOMO app username (`"NAME" on FOMO`), shortened to NAME. */
+  fomo?: boolean;
 }
 
 const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.length > 0) : [];
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim().length > 0 ? v.trim() : null);
 
-/** `"NAME" on Pumpfun` (Pump.fun usernames, as Helius names them), with straight or curly quotes. */
-const PUMPFUN_NAME_RE = /^["\u201c\u201d](.+?)["\u201c\u201d]\s+on\s+pump\.?\s?fun$/i;
+/**
+ * `"NAME" on Pumpfun` (Pump.fun usernames, as Helius names them) or `"NAME" on FOMO` (the FOMO
+ * app's; inferred to follow the same pattern), with straight or curly quotes.
+ */
+const USERNAME_RE = /^["\u201c\u201d](.+?)["\u201c\u201d]\s+on\s+(pump\.?\s?fun|fomo(?:\.family)?)$/i;
+
+/** The app a Helius name is a username on, if it is one. */
+export function usernameApp(name: string): "pumpfun" | "fomo" | null {
+  const m = USERNAME_RE.exec(name.trim());
+  if (!m) return null;
+  return m[2]!.toLowerCase().startsWith("fomo") ? "fomo" : "pumpfun";
+}
 
 /** Whether Helius's name is a Pump.fun username (`"NAME" on Pumpfun`). */
 export function isPumpfunName(name: string): boolean {
-  return PUMPFUN_NAME_RE.test(name.trim());
+  return usernameApp(name) === "pumpfun";
 }
 
 /**
- * A wallet's name as the dashboard keeps it: a Pump.fun username labelled `"NAME" on Pumpfun`
- * becomes just NAME (user ask 2026-10-13; the dashboard quotes and tints it); anything else is
- * left as it is.
+ * A wallet's name as the dashboard keeps it: a Pump.fun or FOMO username labelled
+ * `"NAME" on Pumpfun` / `"NAME" on FOMO` becomes just NAME (user asks 2026-10-13 and 14; the
+ * dashboard quotes and tints it); anything else is left as it is.
  */
 export function cleanWalletName(name: string): string {
-  const m = PUMPFUN_NAME_RE.exec(name.trim());
+  const m = USERNAME_RE.exec(name.trim());
   return m ? m[1]!.trim() : name.trim();
 }
 
@@ -54,7 +66,9 @@ function parseIdentity(raw: Record<string, unknown>): HeliusIdentity | null {
     category: str(raw.category),
     tags: strings(raw.tags).map(cleanWalletName),
   };
-  if (name && isPumpfunName(name)) value.pumpfun = true;
+  const app = name ? usernameApp(name) : null;
+  if (app === "pumpfun") value.pumpfun = true;
+  if (app === "fomo") value.fomo = true;
   return value.name || value.tags.length > 0 ? value : null;
 }
 
