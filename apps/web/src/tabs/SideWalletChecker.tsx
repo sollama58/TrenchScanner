@@ -370,7 +370,14 @@ function SideRows({ list, coins, onOpen }: { list: SideWallet[]; coins: number; 
             <span title="Every tracked coin it bought in the window">· {s.coins} total</span>
           </span>
           <span className="side-tags">
-            {s.risk?.winner && <span className="pill side-good">Winner</span>}
+            {s.risk?.winner && (
+              <span
+                className="pill"
+                title="Winner: 60%+ of the called coins it bought doubled. Presence only, not a buy signal."
+              >
+                Winner
+              </span>
+            )}
             {s.risk?.dumper && <span className="pill pill-warn">Dumper</span>}
             {s.risk?.sniper && <span className="pill">Sniper</span>}
           </span>

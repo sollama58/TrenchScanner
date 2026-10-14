@@ -159,9 +159,9 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
             <p className="small muted returns-focus">
               {topBy === "model"
                 ? data.showModelAlerts
-                  ? "No AI KOL call in your feed has run above its alert this week."
+                  ? "No AI KOL call in your feed has hit 2x this week."
                   : "Model alerts are off on your feed, so it has no AI KOL calls."
-                : "No alert from your filters has run above its alert price this week."}
+                : "No alert from your filters has hit 2x this week."}
             </p>
           )}
           <ol className="returns-top">
@@ -204,8 +204,8 @@ export function FeedReturns({ pollKey }: { pollKey: string }) {
       <p className="faint small stats-note">
         Each alert&apos;s return under the fixed exit plan (half sold at 2x, the rest on a trailing stop, stop
         at −50%), averaged by when it alerted. An alert counts once its return settles, from 30 minutes to 3
-        hours after it fires, so the last hour fills in late. The top 3 are ranked by Peak, the figure each
-        feed card shows.
+        hours after it fires, so the last hour fills in late. The top 3 are the calls that passed (hit 2x
+        before a 50% drop), ranked by Peak, the figure each feed card shows.
       </p>
     </section>
   );

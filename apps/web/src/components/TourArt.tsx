@@ -222,7 +222,7 @@ export function GradeArt() {
     .map(([m, v], i) => `${i ? "L" : "M"}${x(m!).toFixed(1)} ${y(v!).toFixed(1)}`)
     .join(" ");
   return (
-    <Art label="A coin that doubles in 15 minutes is a win; one that halves first is stopped out">
+    <Art label="A coin that doubles in 15 minutes is a win; one that halves first is a loss">
       <rect className="zone bad" x={x(0)} y={y(0.5)} width={x(60) - x(0)} height={214 - y(0.5)} />
       {levels.map(([m, label]) => (
         <g key={label}>

@@ -9110,7 +9110,8 @@ img.tm-avatar {
   }
 }
 
-/* Flagged-wallet markers: dev amber, risky magenta, KOL green, winner teal, linked blue (chart slots 4, 5, 3, 2 and 1). */
+/* Flagged-wallet markers: dev amber, risky magenta, linked blue (chart slots 4, 5 and 1). KOL and
+   winner are neutral grey: they mark who is in, not a buy signal, so no good-news green. */
 .k-dev {
   --mk: var(--series-4);
 }
@@ -9120,11 +9121,9 @@ img.tm-avatar {
 .k-linked {
   --mk: var(--series-1);
 }
-.k-kol {
-  --mk: var(--series-3);
-}
+.k-kol,
 .k-winner {
-  --mk: var(--series-2);
+  --mk: var(--ink-2);
 }
 /* The volume lane under the plot: a bar per slice, green where the price rose across it. */
 .pc-vol-floor {

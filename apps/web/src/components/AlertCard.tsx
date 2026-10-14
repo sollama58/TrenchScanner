@@ -181,6 +181,7 @@ export function AlertCard({
             {labelSource && card.kind === "match" && (
               <span
                 className="pill pill-mine pill-icon"
+                role="img"
                 title="Caught by your own filter"
                 aria-label="Your alert"
               >
@@ -236,7 +237,12 @@ export function AlertCard({
           </div>
         </div>
         {resultMark && show("result") && (
-          <span className={`badge card-result ${badge.tone}`} title={badge.text} aria-label={badge.text}>
+          <span
+            className={`badge card-result ${badge.tone}`}
+            role="img"
+            title={badge.text}
+            aria-label={badge.text}
+          >
             {/* Inter has no ⊘, and the fallback font draws it larger than the other marks. */}
             {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
           </span>
@@ -265,7 +271,8 @@ export function AlertCard({
             </div>
           )}
           {show("peak") && (
-            <div className={`fig peak ${hasPeak && peak >= 100 ? "hot" : ""}`}>
+            // Green only on a call that passed: a stop-out or a miss can still have peaked past 2x.
+            <div className={`fig peak ${hasPeak && peak >= 100 && result === "pass" ? "hot" : ""}`}>
               <label>Peak</label>
               <span
                 className="num"

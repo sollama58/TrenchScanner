@@ -235,8 +235,9 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             We start the clock at the price when it alerted. Doubling within 15 minutes is a win{" "}
             <b className="good">✓</b>. Reaching 4x within 30 minutes is <b className="good">✓✓</b>, and 10x
             within an hour is <b className="good">✓✓✓</b>. If it misses, or halves before doubling, it&apos;s
-            a loss <b className="bad">✕</b>, marked stopped out <b className="bad">⊘</b> when it doubles
-            anyway after halving. <b>↗</b> marks a miss that never halved and doubled later.
+            a loss <b className="bad">✕</b>, marked stopped out <b className="bad">⊘</b> when it halved and
+            also doubled within the day. <b>↗</b> marks a miss that didn&apos;t halve in its first 30 minutes
+            and doubled later.
           </p>
           <div className="tour-goal">
             <span className="num">{t.hitRate2xPct}%</span>
@@ -260,8 +261,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             usually safer.
           </li>
           <li>
-            Snipers: of the first 25 buyers, how many still hold. DS means the creator sold, DH means they
-            still hold.
+            First buyers: of the first 25 buyers, how many still hold. DS means the creator sold, DH means
+            they still hold.
           </li>
           <li>The grade so far.</li>
         </ol>
@@ -273,15 +274,15 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
       body: (
         <>
           <p className="tour-lead">
-            Top holders can look spread out when one person is behind several of them. For each top-10 wallet
+            Top holders can look spread out when one person is behind several of them. For each top-25 wallet
             we look up who paid for it. Wallets with the same funder count as one: four wallets from one
             funder holding 31% is really one holder with 31%. Exchange withdrawals don&apos;t count as a link.
           </p>
           <p className="tour-lead">
-            The Linked tile on each card shows that share and turns red at 30% or more. When it finds a
-            cluster, the tile shows a bubble icon: tap it for the bubble map, where each bubble is a top
-            holder sized by its share, wallets from one funder share a colour, and risky wallets are ringed in
-            red.
+            The Linked tile on each card counts the linked wallets among the top 25, as 10/25, and turns red
+            at 20/25 or more (the share they hold is in its tooltip). When it finds a cluster, the tile shows
+            a bubble icon: tap it for the bubble map, where each bubble is a top holder sized by its share,
+            wallets from one funder share a colour, and risky wallets are ringed in red.
           </p>
           {guest && <p className="tour-note">The bubble map comes with a connected wallet.</p>}
         </>
@@ -363,7 +364,7 @@ function CardMock() {
         <Spot n={3} />
       </div>
       <div className="tour-card-chips">
-        <span className="pill">Snipers · 4/25</span>
+        <span className="pill">First buyers · 4/25</span>
         <span className="pill">DS</span>
         <Spot n={4} />
         <span className="tour-card-grade">
