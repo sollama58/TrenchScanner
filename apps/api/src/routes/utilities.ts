@@ -28,6 +28,7 @@ import {
 } from "@trenchscanner/core";
 import { creatorFeesByMint, TOKEN_CARD_SELECT } from "../curatedFeed.js";
 import { readKolRows } from "../kolRoster.js";
+import { loadLabeledSides } from "../possibleSides.js";
 import { currentMarketCap } from "./matches.js";
 import { readTokenChart, readTokenSage } from "./tokens.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
@@ -46,6 +47,7 @@ import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
  * - GET  /utilities/side-wallets/:wallet one KOL's top side wallets per window (free)
  * - GET  /utilities/side-wallets/:wallet/:side the coins a KOL and one listed wallet bought together,
  *                               leg by leg, with both funders: what a person needs to judge a link
+ * - GET  /utilities/side-labels          every labeled side wallet, numbered per KOL: the count and export
  *
  * A lookup stays open for LOOKUP_REOPEN_MS after it is paid for: the view's own reads, and
  * looking the same thing up again, are free inside it and refused (402) outside it.
@@ -328,6 +330,17 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
         };
       }),
     };
+  });
+
+  /**
+   * Every wallet carrying a side label (Possible Side, Known Side or KOL Funded Wallet), each once
+   * under its KOL and numbered there ("Cupsey_1"): the checker's count and export (user ask
+   * 2026-10-14). A read of what is stored: no outside calls.
+   */
+  app.get("/side-labels", async (_request, reply) => {
+    const wallets = await loadLabeledSides();
+    reply.header("Cache-Control", "private, max-age=300");
+    return { count: wallets.length, wallets };
   });
 
   /** One KOL's top side wallets in each window, with the risk labels each carries. */
