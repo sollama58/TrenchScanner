@@ -28,6 +28,9 @@ import { wilsonLowerBound } from "./trainer.js";
  *    place to the next-ranked model that can, rather than holding a silent slot until the next pick;
  *  - with fewer than TOP_MODELS_COUNT qualifying models the default stays on the single champion.
  *
+ * The champion always holds a place in the default feed (resolveDefaultModels, feedModels.ts; user
+ * decision 2026-10-14): when it did not rank into the pick, it takes the last slot.
+ *
  * The same read also names the "best" model (user decision 2026-10-12): the best average return
  * under the fixed exit plan over the last 24 hours, and gives each model's 24h record for the
  * dropdown, both under the 24h floor (TOP_MODELS_MIN_GRADED).

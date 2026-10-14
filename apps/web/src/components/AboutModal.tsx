@@ -220,8 +220,9 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
         <>
           <p className="tour-lead">
             Every few hours each model studies the latest coins, then sits a test on weeks it has never seen.
-            The three with the best proven 2x rate over the last three days make up your default feed. New
-            models are bred from the winners, and a newcomer that beats the weakest takes its seat.
+            The three with the best proven 2x rate over the last three days make up your default feed, and the
+            champion always holds one of the three. New models are bred from the winners, and a newcomer that
+            beats the weakest takes its seat.
           </p>
         </>
       ),

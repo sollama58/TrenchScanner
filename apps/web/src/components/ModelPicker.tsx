@@ -237,10 +237,11 @@ export function ModelPicker({
               Rows are numbered by 2x rate over the 24h to {dayEnd}.{" "}
               <span className="mp-rank top mp-key">1</span> The top {board.defaultRule?.count ?? 3} by 2x rate
               at the low end of its range, over the last {board.defaultRule?.rankWindowHours ?? 72}h with{" "}
-              {board.defaultRule?.rankMinGraded ?? 90} graded calls, make up the default feed.{" "}
-              <span className="mp-badge best">★ best 24h return</span> has the highest average return under
-              the exit plan, with {minGraded} graded calls in that window. Both are picked every{" "}
-              {Math.round((board.defaultRule?.refreshMinutes ?? 360) / 60)} hours (00, 06, 12 and 18 UTC).
+              {board.defaultRule?.rankMinGraded ?? 90} graded calls, make up the default feed; the champion
+              always holds one of those places. <span className="mp-badge best">★ best 24h return</span> has
+              the highest average return under the exit plan, with {minGraded} graded calls in that window.
+              Both are picked every {Math.round((board.defaultRule?.refreshMinutes ?? 360) / 60)} hours (00,
+              06, 12 and 18 UTC).
             </p>
           )}
           {board.followBest === false && (

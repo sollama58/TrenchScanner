@@ -182,7 +182,7 @@ export function contestState(env: Env): Promise<ContestState> {
       current,
       champion,
       defaultModel,
-      defaultModels: resolveDefaultModels(top, defaultModel),
+      defaultModels: resolveDefaultModels(top, defaultModel, champion?.contestant ?? null),
       bestModel: best,
       last24h,
     };

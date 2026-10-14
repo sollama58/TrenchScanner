@@ -130,12 +130,33 @@ describe("default feed", () => {
   const state = {
     roster,
     defaultModel: "rules",
-    defaultModels: resolveDefaultModels(["trees", "linear", "rules"], "rules"),
+    defaultModels: resolveDefaultModels(["trees", "linear", "rules"], "rules", "rules"),
     bestModel: null,
   };
 
   it("falls back to the single default when too few models qualify", () => {
-    expect(resolveDefaultModels(null, "rules")).toEqual(["rules"]);
+    expect(resolveDefaultModels(null, "rules", "rules")).toEqual(["rules"]);
+  });
+
+  it("always gives the champion a place, in the last slot when it did not rank in", () => {
+    expect(resolveDefaultModels(["trees", "linear", "forest"], "rules", "rules")).toEqual([
+      "trees",
+      "linear",
+      "rules",
+    ]);
+    expect(resolveDefaultModels(["trees", "rules", "forest"], "rules", "rules")).toEqual([
+      "trees",
+      "rules",
+      "forest",
+    ]);
+  });
+
+  it("does not pin a fallback standing in for a silent champion", () => {
+    expect(resolveDefaultModels(["trees", "linear", "forest"], "consensus", "rules")).toEqual([
+      "trees",
+      "linear",
+      "forest",
+    ]);
   });
 
   it("is what a follower and a reader with no picks see", () => {
