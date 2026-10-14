@@ -14,14 +14,16 @@
  * learned it as present, live candidates arrive without it.
  *
  * So a run trains only on inputs whose coverage across the decision rows the lines are set on
- * (the newest half) is close to their coverage on the newest rows - what live candidates look
- * like. A new input joins once it has covered enough of that reference span (about a third of
+ * (the exam's span, the newest examShare of them) is close to their coverage on the newest rows -
+ * what live candidates look like. Until 2026-10-14 the reference was the newest half while the exam
+ * and its cutoffs used the newest 70% (CURATOR_EXAM_SHARE), so an input could be admitted while
+ * still missing on rows its cutoff was set on (notes/full-audit-2026-10-14, lane 4 M-7). A new input joins once it has covered enough of that reference span (about a third of
  * it as of 2026-10-05, a few days), and every run re-checks. Pure and cheap: one pass per input.
  */
 
 export interface HeldFeature {
   feature: string;
-  /** Share of the reference decision rows (the newest half) carrying the input, in percent. */
+  /** Share of the reference decision rows (the exam's span) carrying the input, in percent. */
   referencePct: number;
   /** Share of the newest decision rows carrying it, in percent. */
   recentPct: number;
@@ -49,6 +51,8 @@ const RECENT_SHARE = 0.1;
 const MIN_RECENT_ROWS = 50;
 /** Fewest decision rows to judge on; with fewer, every row (hourly too) is used. */
 const MIN_DECISION_ROWS = 200;
+/** The reference span when the caller names none: the exam's own default share (trainer.ts). */
+const DEFAULT_REFERENCE_SHARE = 0.5;
 
 type Row = {
   anchorAt: Date;
@@ -58,34 +62,62 @@ type Row = {
 
 const present = (v: number | null | undefined) => v !== null && v !== undefined && Number.isFinite(v);
 
-export function featureOnset(rows: readonly Row[], featureNames: readonly string[]): FeatureOnsetResult {
+/** The decision rows coverage is judged on: the reference span and the newest rows. Null on thin history. */
+function spans(
+  rows: readonly Row[],
+  referenceShare: number,
+): { reference: readonly Row[]; recent: readonly Row[] } | null {
   const decisions = rows.filter((r) => r.sampleKind === "event");
   const judged = [...(decisions.length >= MIN_DECISION_ROWS ? decisions : rows)].sort(
     (a, b) => a.anchorAt.getTime() - b.anchorAt.getTime(),
   );
+  if (judged.length < 2 * MIN_RECENT_ROWS) return null;
+  // Clamped as the exam clamps its share (walkForwardEvaluate).
+  const share = Math.min(0.9, Math.max(0.1, referenceShare));
+  return {
+    reference: judged.slice(Math.floor(judged.length * (1 - share))),
+    recent: judged.slice(judged.length - Math.max(MIN_RECENT_ROWS, Math.floor(judged.length * RECENT_SHARE))),
+  };
+}
+
+const coverage = (span: readonly Row[], feature: string) =>
+  span.reduce((n, r) => n + (present(r.features[feature]) ? 1 : 0), 0) / span.length;
+const roundPct = (share: number) => Math.round(share * 1000) / 10;
+
+/** Each input's coverage on the reference span and the newest rows, in percent (empty on thin history). */
+export function inputFills(
+  rows: readonly Row[],
+  featureNames: readonly string[],
+  referenceShare: number = DEFAULT_REFERENCE_SHARE,
+): HeldFeature[] {
+  const s = spans(rows, referenceShare);
+  if (s === null) return [];
+  return featureNames.map((feature) => ({
+    feature,
+    referencePct: roundPct(coverage(s.reference, feature)),
+    recentPct: roundPct(coverage(s.recent, feature)),
+  }));
+}
+
+export function featureOnset(
+  rows: readonly Row[],
+  featureNames: readonly string[],
+  /** The newest share of decision rows the exam grades and sets cutoffs on (examShare). */
+  referenceShare: number = DEFAULT_REFERENCE_SHARE,
+): FeatureOnsetResult {
+  const s = spans(rows, referenceShare);
   // Too little history to tell an onset from noise: hold nothing back.
-  if (judged.length < 2 * MIN_RECENT_ROWS) return { usable: [...featureNames], held: [] };
-  const reference = judged.slice(Math.floor(judged.length / 2));
-  const recent = judged.slice(
-    judged.length - Math.max(MIN_RECENT_ROWS, Math.floor(judged.length * RECENT_SHARE)),
-  );
-  const coverage = (span: readonly Row[], feature: string) =>
-    span.reduce((n, r) => n + (present(r.features[feature]) ? 1 : 0), 0) / span.length;
+  if (s === null) return { usable: [...featureNames], held: [] };
 
   const usable: string[] = [];
   const held: HeldFeature[] = [];
   for (const feature of featureNames) {
-    const ref = coverage(reference, feature);
-    const now = coverage(recent, feature);
+    const ref = coverage(s.reference, feature);
+    const now = coverage(s.recent, feature);
     const hi = Math.max(ref, now);
     const lo = Math.min(ref, now);
     if (hi >= MIN_COVERAGE && lo >= MIN_COVERAGE_RATIO * hi) usable.push(feature);
-    else
-      held.push({
-        feature,
-        referencePct: Math.round(ref * 1000) / 10,
-        recentPct: Math.round(now * 1000) / 10,
-      });
+    else held.push({ feature, referencePct: roundPct(ref), recentPct: roundPct(now) });
   }
   return { usable, held };
 }

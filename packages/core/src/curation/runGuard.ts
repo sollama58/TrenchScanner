@@ -1,3 +1,4 @@
+import type { HeldFeature } from "./featureOnset.js";
 import { NEVER_EMIT_THRESHOLD, RULES_MODEL_KIND } from "./trainingRun.js";
 
 /**
@@ -123,4 +124,122 @@ export function firstNonFinite(value: unknown, path = "params"): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Alarms, never holds (lane 4 M-5, notes/full-audit-2026-10-14): the guard above only catches runs
+ * that are plainly broken, so a run whose exam fell sharply, a seat calling far more of the market
+ * than its cutoff share, most seats going quiet, or an input the learners read going dead all went
+ * through unremarked. These say so in the log and on the job's run meta; nothing waits on them.
+ */
+
+/** A seat's exam 2x rate, new run against the model it replaces. */
+export interface SeatExam {
+  contestant: string;
+  wins: number;
+  graded: number;
+}
+
+/** A drop this many points or more, with the new rate's 95% upper bound under the old rate, alarms. */
+export const EXAM_DROP_POINTS = 5;
+/** Fewest graded exam calls, on both sides, before a drop is judged. */
+const MIN_EXAM_GRADED = 50;
+
+function wilsonBounds(k: number, n: number, z = 1.96): [number, number] {
+  const p = k / n;
+  const d = 1 + (z * z) / n;
+  const c = (p + (z * z) / (2 * n)) / d;
+  const h = (z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n))) / d;
+  return [c - h, c + h];
+}
+
+const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
+/** Seats whose exam 2x rate fell sharply against the model they replace. */
+export function examRegressionAlarms(
+  incumbents: readonly SeatExam[],
+  results: readonly SeatExam[],
+): string[] {
+  const before = new Map(incumbents.map((s) => [s.contestant, s]));
+  const out: string[] = [];
+  for (const now of results) {
+    const was = before.get(now.contestant);
+    if (!was || was.graded < MIN_EXAM_GRADED || now.graded < MIN_EXAM_GRADED) continue;
+    const oldRate = was.wins / was.graded;
+    const newRate = now.wins / now.graded;
+    if (oldRate - newRate >= EXAM_DROP_POINTS / 100 && wilsonBounds(now.wins, now.graded)[1] < oldRate) {
+      out.push(
+        `${now.contestant}: exam 2x ${pct(newRate)} (${now.wins}/${now.graded}) against ${pct(oldRate)} for the model it replaces`,
+      );
+    }
+  }
+  return out;
+}
+
+/** A seat's live calls against the decision moments of the same window. */
+export interface SeatLiveShare {
+  contestant: string;
+  /** Distinct decision moments the seat called in the window. */
+  calls: number;
+  /** Whether the seat called anything in the day before the window (a quiet seat that never calls isn't judged). */
+  calledBefore: boolean;
+}
+
+/** A seat calling this many times its cutoff share of decision moments (95% lower bound) alarms. */
+export const LIVE_SHARE_ALARM_RATIO = 1.75;
+/** Fewest decision moments in the window before shares are judged. */
+const MIN_WINDOW_DECISIONS = 200;
+
+/**
+ * Seats calling far more of the market than their cutoff share (in 2026-10-13's run the loose
+ * seats called 35-48% of decision moments against 20%), and most seats going quiet at once.
+ */
+export function liveShareAlarms(
+  seats: readonly SeatLiveShare[],
+  decisions: number,
+  targetShare: number,
+): string[] {
+  if (decisions < MIN_WINDOW_DECISIONS || !(targetShare > 0)) return [];
+  const out: string[] = [];
+  for (const s of seats) {
+    const [lo] = wilsonBounds(Math.min(s.calls, decisions), decisions);
+    if (lo > targetShare * LIVE_SHARE_ALARM_RATIO) {
+      out.push(
+        `${s.contestant}: called ${pct(s.calls / decisions)} of ${decisions} decision moments against a ${pct(targetShare)} share`,
+      );
+    }
+  }
+  const active = seats.filter((s) => s.calledBefore);
+  const quiet = active.filter((s) => s.calls === 0);
+  if (active.length >= 4 && quiet.length * 2 > active.length) {
+    out.push(
+      `${quiet.length} of ${active.length} calling seats made no call in ${decisions} decision moments`,
+    );
+  }
+  return out;
+}
+
+/** An input read by the learners whose fill on the newest rows fell under this share of its reference fill. */
+export const FILL_DROP_RATIO = 0.4;
+
+/**
+ * Inputs the learners read that went dead lately (a source down), and retired inputs that came
+ * back to life (worth judging again). The onset guard already keeps a dead input out of the run;
+ * this makes it visible.
+ */
+export function fillRateAlarms(
+  /** inputFills (featureOnset.ts): each input's fill on the reference span and the newest rows. */
+  fills: readonly HeldFeature[],
+  read: ReadonlySet<string>,
+  retired: ReadonlySet<string>,
+): string[] {
+  const out: string[] = [];
+  for (const f of fills) {
+    if (read.has(f.feature) && f.referencePct >= 20 && f.recentPct < f.referencePct * FILL_DROP_RATIO) {
+      out.push(`${f.feature} went dead: ${f.recentPct}% of the newest rows against ${f.referencePct}%`);
+    } else if (retired.has(f.feature) && f.referencePct < 2 && f.recentPct >= 20) {
+      out.push(`${f.feature} (retired as dead) is filled again on ${f.recentPct}% of the newest rows`);
+    }
+  }
+  return out;
 }

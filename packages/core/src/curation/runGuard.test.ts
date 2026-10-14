@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { assessTrainingRun, firstNonFinite, type IncumbentModel } from "./runGuard.js";
+import {
+  assessTrainingRun,
+  examRegressionAlarms,
+  fillRateAlarms,
+  firstNonFinite,
+  liveShareAlarms,
+  type IncumbentModel,
+} from "./runGuard.js";
 import { NEVER_EMIT_THRESHOLD, RULES_MODEL_KIND, runContestTraining } from "./trainingRun.js";
 import { enabledContestants, CONTESTANT_IDS } from "./contestants.js";
 import { syntheticMarket } from "./syntheticMarket.js";
@@ -127,4 +134,68 @@ describe("firstNonFinite", () => {
     expect(results.length).toBeGreaterThan(3);
     for (const r of results) expect(firstNonFinite(r.params)).toBeNull();
   }, 120_000);
+});
+
+describe("run alarms", () => {
+  it("flags a seat whose exam fell sharply against the model it replaces", () => {
+    const alarms = examRegressionAlarms(
+      [
+        { contestant: "trees", wins: 60, graded: 250 },
+        { contestant: "forest", wins: 55, graded: 250 },
+      ],
+      [
+        { contestant: "trees", wins: 30, graded: 250 },
+        { contestant: "forest", wins: 50, graded: 250 },
+        { contestant: "new-seat", wins: 1, graded: 250 },
+      ],
+    );
+    expect(alarms).toHaveLength(1);
+    expect(alarms[0]).toMatch(/^trees: exam 2x 12\.0% \(30\/250\) against 24\.0%/);
+  });
+
+  it("leaves thin exams alone", () => {
+    expect(
+      examRegressionAlarms(
+        [{ contestant: "a", wins: 10, graded: 40 }],
+        [{ contestant: "a", wins: 0, graded: 40 }],
+      ),
+    ).toEqual([]);
+  });
+
+  it("flags a seat calling far over its share, and most seats gone quiet", () => {
+    const seat = (contestant: string, calls: number, calledBefore = true) => ({
+      contestant,
+      calls,
+      calledBefore,
+    });
+    // 1,000 decision moments at a 20% share: 450 calls is far over, 230 is not.
+    expect(liveShareAlarms([seat("loose", 450), seat("tight", 230)], 1000, 0.2)).toEqual([
+      "loose: called 45.0% of 1000 decision moments against a 20.0% share",
+    ]);
+    expect(
+      liveShareAlarms(
+        [seat("a", 0), seat("b", 0), seat("c", 0), seat("d", 150), seat("never", 0, false)],
+        1000,
+        0.2,
+      ),
+    ).toEqual(["3 of 4 calling seats made no call in 1000 decision moments"]);
+    expect(liveShareAlarms([seat("loose", 90)], 150, 0.2)).toEqual([]);
+  });
+
+  it("flags a read input gone dead and a retired one filled again", () => {
+    const alarms = fillRateAlarms(
+      [
+        { feature: "liveInput", referencePct: 95, recentPct: 10 },
+        { feature: "steady", referencePct: 95, recentPct: 93 },
+        { feature: "textMemeAppeal", referencePct: 0, recentPct: 80 },
+        { feature: "sparse", referencePct: 5, recentPct: 0 },
+      ],
+      new Set(["liveInput", "steady", "sparse"]),
+      new Set(["textMemeAppeal"]),
+    );
+    expect(alarms).toEqual([
+      "liveInput went dead: 10% of the newest rows against 95%",
+      "textMemeAppeal (retired as dead) is filled again on 80% of the newest rows",
+    ]);
+  });
 });

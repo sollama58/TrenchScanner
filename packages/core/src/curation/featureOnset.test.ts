@@ -36,6 +36,14 @@ describe("featureOnset", () => {
     expect(featureOnset(r, ["dead", "never"]).usable).toEqual([]);
   });
 
+  it("measures coverage over the exam's span when given one", () => {
+    // Present on the newest 120 rows: half of the newest-half reference, but only 36% of the
+    // newest 70% the exam sets its cutoffs on.
+    const r = rows((i) => ({ x: i >= 360 ? 1 : null }));
+    expect(featureOnset(r, ["x"], 0.5).usable).toEqual(["x"]);
+    expect(featureOnset(r, ["x"], 0.7).usable).toEqual([]);
+  });
+
   it("keeps a sparse input whose coverage is steady", () => {
     const r = rows((i) => ({ sparse: i % 5 === 0 ? 1 : null }));
     expect(featureOnset(r, ["sparse"]).usable).toEqual(["sparse"]);

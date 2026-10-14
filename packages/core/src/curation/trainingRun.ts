@@ -311,10 +311,11 @@ function servedExtras(
  */
 function runFeatures(
   rows: TrainingRow[],
-  cfg: Pick<CuratorTrainingConfig, "featureOnsetGuard">,
+  cfg: Pick<CuratorTrainingConfig, "featureOnsetGuard" | "examShare">,
 ): { usable: ReadonlySet<string> | null; held: HeldFeature[] } {
   if (!cfg.featureOnsetGuard) return { usable: null, held: [] };
-  const { usable, held } = featureOnset(rows, CANDIDATE_FEATURE_NAMES);
+  // The reference span is the exam's: the rows the cutoffs are set on.
+  const { usable, held } = featureOnset(rows, CANDIDATE_FEATURE_NAMES, cfg.examShare);
   return { usable: new Set(usable), held };
 }
 
