@@ -1,7 +1,6 @@
 import {
   prisma,
   compositeScore,
-  curatedTargets,
   defaultContestant,
   loadChampion,
   loadTopModels,
@@ -12,6 +11,9 @@ import {
   TOP_MODELS_MIN_GRADED,
   TOP_MODELS_REFRESH_MINUTES,
   TOP_MODELS_WINDOW_HOURS,
+  TOP_MODELS_RANK_WINDOW_HOURS,
+  TOP_MODELS_RANK_MIN_GRADED,
+  sittingOutCombiners,
   resolveFeedModels as resolveFeedModelsShared,
   emptyRecord,
   enabledContestants,
@@ -81,7 +83,7 @@ export interface ContestState {
   /** The single best performer: the champion while it can call, else the fallback. */
   defaultModel: string;
   /**
-   * Whose calls a user who hasn't picked (and a guest) sees: the top models by 24h 2x hit rate
+   * Whose calls a user who hasn't picked (and a guest) sees: the top models by 2x lower bound
    * (core curation/topModels.ts), best first; [defaultModel] while too few qualify.
    */
   defaultModels: string[];
@@ -157,10 +159,12 @@ export function contestState(env: Env): Promise<ContestState> {
       });
     }
     const consensusEnabled = roster.some((c) => c.id === CONSENSUS_CONTESTANT);
+    const sittingOut = await sittingOutCombiners(roster);
     const canCall = (id: string) => {
       const spec = roster.find((c) => c.id === id);
       if (!spec) return false;
       if (spec.role === "rules") return true;
+      if (sittingOut.has(id)) return false;
       const threshold = current.get(id)?.threshold;
       return typeof threshold === "number" && threshold < NEVER_EMIT_THRESHOLD;
     };
@@ -169,8 +173,7 @@ export function contestState(env: Env): Promise<ContestState> {
       canCall,
       defaultContestant(consensusEnabled ? current.get(CONSENSUS_CONTESTANT)?.threshold : null),
     );
-    const exams = new Map(roster.map((c) => [c.id, current.get(c.id)?.metrics.exam]));
-    const { top, best, last24h } = await loadTopModels(roster, lanes, canCall, exams, curatedTargets(env));
+    const { top, best, last24h } = await loadTopModels(roster, lanes, canCall);
     return {
       roster,
       lanes,
@@ -363,7 +366,22 @@ export interface Leaderboard {
   defaultModels: string[];
   /** The best average exit-plan return over the default rule's window; null when none qualify. */
   bestModel: string | null;
-  defaultRule: { count: number; windowHours: number; minGraded: number; refreshMinutes: number };
+  /**
+   * The default feed's rule: the top `count` models by 2x Wilson lower bound (at
+   * rankConfidencePct) over the last rankWindowHours, among those with rankMinGraded graded calls
+   * there, re-picked every refreshMinutes. windowHours and minGraded are the 24h records' window
+   * and floor (the dropdown's ranking and "best").
+   */
+  defaultRule: {
+    count: number;
+    windowHours: number;
+    minGraded: number;
+    refreshMinutes: number;
+    rankedBy: "2x-lower-bound";
+    rankWindowHours: number;
+    rankMinGraded: number;
+    rankConfidencePct: number;
+  };
   /** When and why the default was last (re-)chosen; null before the first pick. */
   champion: {
     id: string;
@@ -574,6 +592,10 @@ export async function buildLeaderboard(
       windowHours: TOP_MODELS_WINDOW_HOURS,
       minGraded: TOP_MODELS_MIN_GRADED,
       refreshMinutes: TOP_MODELS_REFRESH_MINUTES,
+      rankedBy: "2x-lower-bound" as const,
+      rankWindowHours: TOP_MODELS_RANK_WINDOW_HOURS,
+      rankMinGraded: TOP_MODELS_RANK_MIN_GRADED,
+      rankConfidencePct: 95,
     },
     champion:
       state.champion && state.champion.contestant === state.defaultModel

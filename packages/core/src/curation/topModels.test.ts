@@ -1,38 +1,41 @@
 import { describe, expect, it } from "vitest";
-import { pickBestReturnModel, pickTopModels, topModelsWindow, TOP_MODELS_MIN_GRADED } from "./topModels.js";
-import { resolveDefaultModels, resolveFeedModels, resolveTelegramModels } from "./feedModels.js";
+import {
+  pickBestReturnModel,
+  pickTopModels,
+  rankTopModels,
+  servableTopModels,
+  topModelsLowerBound,
+  topModelsWindow,
+  TOP_MODELS_RANK_MIN_GRADED,
+} from "./topModels.js";
+import {
+  feedCallsKey,
+  feedCallsWhere,
+  highConvictionCalls,
+  isFeedCall,
+  resolveDefaultModels,
+  resolveFeedCalls,
+  resolveFeedModels,
+  resolveTelegramModels,
+} from "./feedModels.js";
 import { CONTESTANTS } from "./contestants.js";
 
-const s = (id: string, wins: number, graded: number, calling = true, score: number | null = wins) => ({
-  id,
-  wins,
-  graded,
-  calling,
-  score,
-});
+const N = TOP_MODELS_RANK_MIN_GRADED;
+const s = (id: string, wins: number, graded: number, calling = true) => ({ id, wins, graded, calling });
 
 describe("pickTopModels", () => {
-  it("ranks by score, not by the 24h 2x rate", () => {
-    // "hot" hit 2x on 45% of its last day but scores 30; the others hit less often and score more.
-    const hot = s("hot", 18, 40, true, 30);
+  it("ranks by the 2x lower bound, so a short hot streak loses to a longer good record", () => {
+    // "hot" hits 2x on 28% of a short record; "steady" on 25% of four times as many calls.
+    const hot = s("hot", Math.round(0.28 * N), N);
+    const steady = s("steady", N, 4 * N);
+    expect(topModelsLowerBound(steady)).toBeGreaterThan(topModelsLowerBound(hot));
     expect(
-      pickTopModels([hot, s("a", 10, 40, true, 39), s("b", 11, 40, true, 38), s("c", 9, 40, true, 36)]),
-    ).toEqual(["a", "b", "c"]);
+      pickTopModels([hot, steady, s("c", Math.round(0.2 * N), N), s("d", Math.round(0.1 * N), N)]),
+    ).toEqual(["steady", "hot", "c"]);
   });
 
-  it("puts a model with no score last, then breaks ties on the 2x rate", () => {
-    expect(
-      pickTopModels([
-        s("none", 30, 40, true, null),
-        s("a", 10, 40, true, 35),
-        s("b", 12, 40, true, 35),
-        s("c", 1, 40, true, 20),
-      ]),
-    ).toEqual(["b", "a", "c"]);
-  });
-
-  it("ranks best first", () => {
-    expect(pickTopModels([s("a", 10, 40), s("b", 20, 40), s("c", 15, 40), s("d", 5, 40)])).toEqual([
+  it("ranks best first on equal volume, which is the 2x rate", () => {
+    expect(pickTopModels([s("a", 10, N), s("b", 20, N), s("c", 15, N), s("d", 5, N)])).toEqual([
       "b",
       "c",
       "a",
@@ -41,27 +44,48 @@ describe("pickTopModels", () => {
 
   it("skips models under the graded-call floor and models that can't call", () => {
     const lucky = s("lucky", 2, 2);
-    const silent = s("silent", 30, 40, false);
-    expect(pickTopModels([lucky, silent, s("a", 10, 40), s("b", 9, 40), s("c", 8, 40)])).toEqual([
+    const silent = s("silent", N, N, false);
+    expect(pickTopModels([lucky, silent, s("a", 10, N), s("b", 9, N), s("c", 8, N)])).toEqual([
       "a",
       "b",
       "c",
     ]);
-    expect(
-      pickTopModels([s("a", 10, TOP_MODELS_MIN_GRADED - 1), s("b", 9, 40), s("c", 8, 40), s("d", 1, 40)]),
-    ).toEqual(["b", "c", "d"]);
+    expect(pickTopModels([s("a", N - 1, N - 1), s("b", 9, N), s("c", 8, N), s("d", 1, N)])).toEqual([
+      "b",
+      "c",
+      "d",
+    ]);
   });
 
   it("returns null when fewer than three qualify", () => {
-    expect(pickTopModels([s("a", 10, 40), s("b", 9, 40), s("c", 9, 5)])).toBeNull();
+    expect(pickTopModels([s("a", 10, N), s("b", 9, N), s("c", 9, 5)])).toBeNull();
   });
 
-  it("breaks ties on the longer record", () => {
-    expect(pickTopModels([s("a", 10, 40), s("b", 20, 80), s("c", 1, 40), s("d", 2, 40)])).toEqual([
-      "b",
-      "a",
-      "d",
-    ]);
+  it("breaks ties on the longer record, then the id", () => {
+    expect(rankTopModels([s("b", 0, N), s("a", 0, N), s("c", 0, 2 * N)])).toEqual(["c", "a", "b"]);
+  });
+});
+
+describe("servableTopModels", () => {
+  const ranked = ["a", "b", "c", "d", "e"];
+
+  it("serves the held pick whole while every model can call", () => {
+    expect(servableTopModels(["c", "a", "b"], ranked, ranked)).toEqual(["c", "a", "b"]);
+  });
+
+  it("gives a model that can't call its place to the next-ranked one that can", () => {
+    expect(servableTopModels(["a", "b", "c"], ["a", "c", "d", "e"], ranked)).toEqual(["a", "c", "d"]);
+    // d can't call either: e.
+    expect(servableTopModels(["a", "b", "c"], ["a", "c", "e"], ranked)).toEqual(["a", "c", "e"]);
+  });
+
+  it("keeps what it can when nothing ranked can fill in, and nothing when nothing can call", () => {
+    expect(servableTopModels(["a", "b", "c"], ["a"], ["a", "b", "c"])).toEqual(["a"]);
+    expect(servableTopModels(["a", "b", "c"], [], ranked)).toBeNull();
+  });
+
+  it("leaves an empty pick (too few qualified at the slot's start) empty", () => {
+    expect(servableTopModels([], ranked, ranked)).toBeNull();
   });
 });
 
@@ -86,13 +110,14 @@ describe("pickBestReturnModel", () => {
 });
 
 describe("topModelsWindow", () => {
-  it("aligns the 24h window to the 6-hour slot, ending before calls still being graded", () => {
+  it("aligns the windows to the 6-hour slot, ending before calls still being graded", () => {
     const a = topModelsWindow(new Date("2026-10-12T06:00:00Z"));
     const b = topModelsWindow(new Date("2026-10-12T11:59:59Z"));
     expect(a).toEqual(b);
     expect(new Date(a.slot).toISOString()).toBe("2026-10-12T06:00:00.000Z");
     expect(a.until.toISOString()).toBe("2026-10-12T05:15:00.000Z");
     expect(a.since.toISOString()).toBe("2026-10-11T05:15:00.000Z");
+    expect(a.rankSince.toISOString()).toBe("2026-10-09T05:15:00.000Z");
     // The next slot starts at 12:00 UTC.
     expect(new Date(topModelsWindow(new Date("2026-10-12T12:00:00Z")).slot).toISOString()).toBe(
       "2026-10-12T12:00:00.000Z",
@@ -148,5 +173,35 @@ describe("default feed", () => {
     expect(resolveTelegramModels(state, feed, { sameAsFeed: false, models: ["gone"] }).followsDefault).toBe(
       true,
     );
+  });
+});
+
+describe("high-conviction tier", () => {
+  const roster = CONTESTANTS.filter((c) => ["rules", "linear", "trees"].includes(c.id));
+
+  it("is every roster model's high calls, whatever the reader follows", () => {
+    const calls = highConvictionCalls({ roster });
+    expect(calls).toEqual({ models: roster.map((c) => c.id), tier: "high" });
+    expect(resolveFeedCalls({ roster }, ["linear"], true)).toEqual(calls);
+    expect(feedCallsWhere(calls)).toEqual({ model: { in: calls.models }, tier: "high" });
+    expect(isFeedCall(calls, { model: "trees", tier: "high" })).toBe(true);
+    expect(isFeedCall(calls, { model: "trees", tier: "standard" })).toBe(false);
+    expect(isFeedCall(calls, { model: "gone", tier: "high" })).toBe(false);
+  });
+
+  it("leaves a reader's own feed calls untiered when not asked for", () => {
+    const calls = resolveFeedCalls({ roster }, ["linear", "trees"], false);
+    expect(calls).toEqual({ models: ["linear", "trees"], tier: null });
+    expect(feedCallsWhere(calls)).toEqual({ model: { in: ["linear", "trees"] } });
+    expect(isFeedCall(calls, { model: "trees", tier: null })).toBe(true);
+    expect(isFeedCall(calls, { model: "rules", tier: null })).toBe(false);
+  });
+
+  it("keys the two apart, with the model list last", () => {
+    const own = resolveFeedCalls({ roster }, ["linear", "trees"], false);
+    const high = highConvictionCalls({ roster });
+    expect(feedCallsKey(own)).toBe("linear,trees");
+    expect(feedCallsKey(high)).not.toBe(feedCallsKey({ ...high, tier: null }));
+    expect(feedCallsKey(high).split(":").at(-1)).toBe(high.models.join(","));
   });
 });

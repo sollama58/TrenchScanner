@@ -1157,14 +1157,28 @@ export interface Leaderboard {
   /** The single best performer (the champion). */
   defaultModel: string;
   /**
-   * The default feed: the top models by score, best first (absent from
+   * The default feed: the top models by 2x lower bound, best first (absent from
    * older API builds, where the default was defaultModel alone).
    */
   defaultModels?: string[];
   /** The best average exit-plan return over the last 24h; null when none qualify (absent from older API builds). */
   bestModel?: string | null;
   /** How defaultModels is picked (absent from older API builds). */
-  defaultRule?: { count: number; windowHours: number; minGraded: number; refreshMinutes: number };
+  /**
+   * The default feed's rule. `windowHours`/`minGraded`: the 24h records' window and floor (the
+   * dropdown's ranking and "best"). The rank* fields: the top `count` by 2x lower bound (absent
+   * from older API builds, which ranked by score).
+   */
+  defaultRule?: {
+    count: number;
+    windowHours: number;
+    minGraded: number;
+    refreshMinutes: number;
+    rankedBy?: "2x-lower-bound";
+    rankWindowHours?: number;
+    rankMinGraded?: number;
+    rankConfidencePct?: number;
+  };
   /** The first of selectedModels (the single-model feed other clients read). */
   selectedModel: string;
   /** Every model whose calls this user's combined feed shows, in roster order. */
