@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  bubbleNameFit,
+  bubbleNameLines,
+  NAME_MAX_W,
+  placeLabels,
+  type MapNode,
   cexGroupsOf,
   cexLayout,
   cexLinksOf,
@@ -269,26 +272,61 @@ describe("holderFreshness", () => {
   });
 });
 
-describe("bubbleNameFit", () => {
-  it("fits a short name whole, small", () => {
-    const fit = bubbleNameFit(40, "Binance");
-    expect(fit?.text).toBe("Binance");
-    expect(fit!.size).toBeLessThanOrEqual(10);
-    expect(fit!.radius).toBeLessThan(40);
+describe("bubbleNameLines", () => {
+  it("keeps a short name on one line, small", () => {
+    const fit = bubbleNameLines(40, "Binance");
+    expect(fit?.lines).toEqual(["Binance"]);
+    expect(fit!.size).toBeLessThanOrEqual(10.5);
+    expect(fit!.wide).toBe(false);
   });
-  it("clips a long name to what the arc holds", () => {
-    const fit = bubbleNameFit(18, "A very long wallet name indeed");
-    expect(fit?.text.endsWith("…")).toBe(true);
-    expect(fit!.text.length).toBeLessThan(30);
+  it("wraps a long name at a space onto two lines, clipping the rest, never past the widest", () => {
+    const fit = bubbleNameLines(20, "Jupiter Aggregator Authority Wallet")!;
+    expect(fit.lines.length).toBe(2);
+    expect(fit.lines[0]).toBe("Jupiter");
+    expect(fit.lines[1]!.endsWith("…")).toBe(true);
+    expect(fit.w).toBeLessThanOrEqual(NAME_MAX_W);
+    expect(fit.wide).toBe(true);
   });
   it("keeps a Pump.fun name's quotes, clipped or not", () => {
-    expect(bubbleNameFit(40, "degen", true)?.text).toBe('"degen"');
-    const clipped = bubbleNameFit(18, "averyveryverylongusername", true)!.text;
-    expect(clipped.startsWith('"')).toBe(true);
-    expect(clipped.endsWith('…"')).toBe(true);
+    expect(bubbleNameLines(40, "degen", true)?.lines).toEqual(['"degen"']);
+    const clipped = bubbleNameLines(14, "averyveryverylongusernameindeedyes", true)!.lines;
+    expect(clipped[0]!.startsWith('"')).toBe(true);
+    expect(clipped[clipped.length - 1]!.endsWith('…"')).toBe(true);
   });
-  it("leaves a bubble too small for a few letters without one", () => {
-    expect(bubbleNameFit(12, "Binance")).toBeNull();
+  it("leaves a bubble too small for a name without one", () => {
+    expect(bubbleNameLines(10, "Binance")).toBeNull();
+  });
+});
+
+describe("placeLabels", () => {
+  const node = (id: string, x: number, y: number, r: number) =>
+    ({ id, kind: "holder", x, y, r }) as unknown as MapNode;
+  it("puts a label below its anchor when that is clear", () => {
+    const [p] = placeLabels({ nodes: [node("a", 0, 0, 10)], links: [], sameTimeLinks: [], cexLinks: [] }, [
+      { id: "l", x: 0, y: 0, r: 10, w: 40, h: 16 },
+    ]);
+    expect(p!.x).toBe(0);
+    expect(p!.y).toBeGreaterThan(10);
+  });
+  it("moves off a bubble sitting under the anchor, and off a line", () => {
+    const g = {
+      nodes: [node("a", 0, 0, 10), node("b", 0, 40, 20), node("c", 60, 0, 10)],
+      links: [{ from: "a", to: "c", cluster: 0 }],
+      sameTimeLinks: [],
+      cexLinks: [],
+    };
+    const [p] = placeLabels(g, [{ id: "l", x: 0, y: 0, r: 10, w: 40, h: 16 }]);
+    // Not below (bubble b) and not to the right (the line to c): above.
+    expect(p!.y).toBeLessThan(0);
+  });
+  it("keeps two labels apart", () => {
+    const g = { nodes: [node("a", 0, 0, 10)], links: [], sameTimeLinks: [], cexLinks: [] };
+    const [p, q] = placeLabels(g, [
+      { id: "l1", x: 0, y: 0, r: 10, w: 40, h: 16 },
+      { id: "l2", x: 0, y: 0, r: 10, w: 40, h: 16 },
+    ]);
+    const overlap = Math.abs(p!.x - q!.x) * 2 < 80 && Math.abs(p!.y - q!.y) * 2 < 32;
+    expect(overlap).toBe(false);
   });
 });
 

@@ -3,7 +3,9 @@ import { ApiError, type Snapshot, type Token } from "../api";
 import { cachedGet } from "../cache";
 import { ago, pct, shortAddress, tokenLabel } from "../format";
 import {
-  bubbleNameFit,
+  bubbleNameLines,
+  cexSlots,
+  CEX_COLOURS,
   cexGroupsOf,
   cexLayout,
   MAP_COLOURS,
@@ -17,6 +19,8 @@ import {
   HALO_PAD,
   openBubbleMap,
   graphBounds,
+  placeLabels,
+  type MapLabel,
   layoutGraph,
   linkedCountText,
   pickReading,
@@ -379,9 +383,17 @@ function MapView({
       </ul>
       {showCex && (
         <ul className="bm-clusters bm-cex-groups">
-          {cexGroupsOf(graph).map((g) => (
+          {cexGroupsOf(graph).map((g, i) => (
             <li key={g.funder}>
-              <div className="bm-cluster bm-same" style={{ "--bm": "var(--bm-none)" } as React.CSSProperties}>
+              <div
+                className="bm-cluster bm-same"
+                style={
+                  {
+                    "--bm": "var(--bm-none)",
+                    "--bm-cex": `var(--bm-cex-${i % CEX_COLOURS})`,
+                  } as React.CSSProperties
+                }
+              >
                 <i className="bm-cex-key bm-cex-dot" aria-hidden="true" />
                 <span className="bm-cluster-name">
                   Exchange <WalletText wallet={g.funder} names={names} />
@@ -449,8 +461,48 @@ function BubbleSvg({
   onPick: (id: string) => void;
 }) {
   const uid = useId().replace(/:/g, "");
-  const box = graphBounds(graph);
   const index = new Map(graph.nodes.map((n) => [n.id, n]));
+  const cexSlot = useMemo(() => cexSlots(graph), [graph]);
+  // Funders' names, and each exchange's name when its ties show, as pills placed where they cover
+  // nothing (user ask 2026-10-14: they sat on bubbles, text and lines).
+  const { labels, placed } = useMemo(() => {
+    const list: (MapLabel & { text: string; kind: "funder" | "cex"; colour: string | null })[] = [];
+    const pill = (text: string) => ({ w: text.length * 5.6 + 14, h: 16 });
+    for (const n of graph.nodes) {
+      if (n.kind !== "funder") continue;
+      const text = clipName(walletText(n.wallet, names));
+      const slot = nodeSlot(n, graph);
+      list.push({
+        id: n.id,
+        x: n.x,
+        y: n.y,
+        r: n.r,
+        ...pill(text),
+        text,
+        kind: "funder",
+        colour: slot === null ? null : `var(--bm-${slot})`,
+      });
+    }
+    if (cexLinks) {
+      for (const g of cexGroupsOf(graph)) {
+        const top = [...g.nodes].sort((a, b) => b.pct - a.pct)[0];
+        if (!top) continue;
+        const text = clipName(walletText(g.funder, names), 18);
+        list.push({
+          id: `cex:${g.funder}`,
+          x: top.x,
+          y: top.y,
+          r: top.r + 7,
+          ...pill(text),
+          text,
+          kind: "cex",
+          colour: `var(--bm-cex-${cexSlot.get(g.funder) ?? 0})`,
+        });
+      }
+    }
+    return { labels: list, placed: placeLabels(graph, list, { cex: cexLinks }) };
+  }, [graph, names, cexLinks, cexSlot]);
+  const box = graphBounds(graph, 18, placed);
   const dim = (n: MapNode) => lit !== null && n.cluster !== lit;
   // Bigger bubbles first so the small ones draw on top and stay tappable.
   const order = [...graph.nodes].sort((a, b) => b.r - a.r);
@@ -514,6 +566,7 @@ function BubbleSvg({
         {cexLinks && (
           <g className="bm-cex-links">
             {graph.cexLinks.map((l) => {
+              const stroke = `var(--bm-cex-${cexSlot.get(l.funder) ?? 0})`;
               const a = index.get(l.from);
               const b = index.get(l.to);
               if (!a || !b) return null;
@@ -525,6 +578,7 @@ function BubbleSvg({
                   x2={b.x}
                   y2={b.y}
                   className={`bm-cex-link${lit !== null ? " dim" : ""}`}
+                  style={{ stroke }}
                 />
               );
             })}
@@ -575,30 +629,33 @@ function BubbleSvg({
             />
           </g>
         ))}
-        {cexLinks && (
-          // Drawn last, over the bubbles, so a name never hides behind one.
-          <g className="bm-cex-tags">
-            {cexGroupsOf(graph).map((g) => {
-              // The exchange's name, on the group's first tie.
-              const l = graph.cexLinks.find((x) => x.funder === g.funder);
-              const a = l && index.get(l.from);
-              const b = l && index.get(l.to);
-              if (!a || !b) return null;
-              const text = clipName(walletText(g.funder, names), 14);
-              const w = text.length * 5.1 + 10;
-              const x = (a.x + b.x) / 2;
-              const y = (a.y + b.y) / 2;
-              return (
-                <g key={`tag-${g.funder}`} className="bm-cex-tag">
-                  <rect x={x - w / 2} y={y - 7} width={w} height={14} rx={7} />
-                  <text x={x} y={y}>
-                    {text}
-                  </text>
-                </g>
-              );
-            })}
-          </g>
-        )}
+        {/* Funder and exchange names, drawn last in spots placeLabels found clear of bubbles, text and lines. */}
+        <g className="bm-labels">
+          {placed.map((p) => {
+            const l = labels.find((x) => x.id === p.id)!;
+            return (
+              <g
+                key={p.id}
+                className={`bm-label ${l.kind}`}
+                style={l.colour ? ({ "--lc": l.colour } as React.CSSProperties) : undefined}
+              >
+                {p.far && (
+                  <line
+                    className="bm-leader"
+                    x1={l.x + ((p.x - l.x) * l.r) / (Math.hypot(p.x - l.x, p.y - l.y) || 1)}
+                    y1={l.y + ((p.y - l.y) * l.r) / (Math.hypot(p.x - l.x, p.y - l.y) || 1)}
+                    x2={p.x}
+                    y2={p.y}
+                  />
+                )}
+                <rect x={p.x - p.w / 2} y={p.y - p.h / 2} width={p.w} height={p.h} rx={p.h / 2} />
+                <text x={p.x} y={p.y}>
+                  {l.text}
+                </text>
+              </g>
+            );
+          })}
+        </g>
       </svg>
     </div>
   );
@@ -619,7 +676,6 @@ function Bubble({
   /** The map's id prefix, for the bubble gradients. */
   uid: string;
 }) {
-  const arcId = `bm-arc${useId().replace(/:/g, "")}`;
   const colour = slot === null ? "var(--bm-none)" : `var(--bm-${slot})`;
   const fill = slot === null ? `url(#${uid}-gn)` : `url(#${uid}-g${slot})`;
   if (n.kind === "funder") {
@@ -636,9 +692,6 @@ function Bubble({
           className="bm-funder"
           style={{ stroke: colour }}
         />
-        <text x={n.x} y={n.y + n.r + 12} className="bm-funder-label">
-          {clipName(walletText(n.wallet, names))}
-        </text>
       </>
     );
   }
@@ -662,7 +715,11 @@ function Bubble({
   const by = n.y - n.r * 0.72;
   const named = n.wallet ? names[n.wallet] : undefined;
   const pumpfun = isPumpfunName(named);
-  const fit = named ? bubbleNameFit(n.r, named.name, pumpfun) : null;
+  const fit = named ? bubbleNameLines(n.r, named.name, pumpfun) : null;
+  // The % moves up to make room for the name under it.
+  const lineH = fit ? fit.size * 1.15 : 0;
+  const pctY = fit ? n.y - (fit.lines.length * lineH) / 2 - 1 : n.y;
+  const nameY = pctY + fontSize * 0.62 + (fit ? fit.size * 0.62 : 0);
   return (
     <>
       {n.sameTime !== null && (
@@ -687,24 +744,31 @@ function Bubble({
       />
       {n.hub && <circle cx={n.x} cy={n.y} r={n.r - 3.5} className="bm-hub-ring" />}
       {n.r >= 17 && (
-        <text x={n.x} y={n.y} className="bm-pct" style={{ fontSize }}>
+        <text x={n.x} y={n.r >= 17 ? pctY : n.y} className="bm-pct" style={{ fontSize }}>
           {pctText(n.pct)}
         </text>
       )}
       {fit && (
-        <>
-          {/* Left to right through the bottom, so the name reads upright along the inside edge. */}
-          <path
-            id={arcId}
-            d={`M ${n.x - fit.radius} ${n.y} A ${fit.radius} ${fit.radius} 0 0 0 ${n.x + fit.radius} ${n.y}`}
-            fill="none"
-          />
-          <text className={`bm-name${pumpfun ? " pumpfun" : ""}`} style={{ fontSize: fit.size }}>
-            <textPath href={`#${arcId}`} startOffset="50%">
-              {fit.text}
-            </textPath>
+        <g className={`bm-name${pumpfun ? " pumpfun" : ""}`} style={{ fontSize: fit.size }}>
+          {/* A backing when the name runs past the bubble's edge, so it reads over whatever is behind. */}
+          {fit.wide && (
+            <rect
+              className="bm-name-bg"
+              x={n.x - fit.w / 2 - 4}
+              y={(n.r >= 17 ? nameY : n.y) - fit.size * 0.7}
+              width={fit.w + 8}
+              height={fit.lines.length * lineH + fit.size * 0.35}
+              rx={4}
+            />
+          )}
+          <text x={n.x} y={n.r >= 17 ? nameY : n.y}>
+            {fit.lines.map((line, i) => (
+              <tspan key={i} x={n.x} dy={i === 0 ? 0 : lineH}>
+                {line}
+              </tspan>
+            ))}
           </text>
-        </>
+        </g>
       )}
       {(flaggedRisk || dev) && (
         <g className={`bm-badge ${dev ? "dev" : "risk"}`}>
