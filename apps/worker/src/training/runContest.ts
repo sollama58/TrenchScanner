@@ -1,5 +1,11 @@
 import { Worker } from "node:worker_threads";
-import { createLogger, getScoreAnchor, getScoreWeights, runEvolvingContest } from "@trenchscanner/core";
+import {
+  createLogger,
+  getScoreAnchor,
+  getScoreWeights,
+  runEvolvingContest,
+  type ContestProgress,
+} from "@trenchscanner/core";
 import { toEvolutionPlan, type ContestPlan } from "./contestPlan.js";
 
 const logger = createLogger("curator-training");
@@ -7,6 +13,11 @@ const logger = createLogger("curator-training");
 type Rows = Parameters<typeof runEvolvingContest>[0];
 type Cfg = Parameters<typeof runEvolvingContest>[1];
 type Outcome = Awaited<ReturnType<typeof runEvolvingContest>>;
+
+type ThreadMessage =
+  | { ok: true; outcome: Outcome }
+  | { ok: false; error: string }
+  | { progress: { step: string; done: number; total: number } };
 
 /** Heap ceiling for the training thread: a runaway run fails on its own, not the whole worker. */
 const THREAD_MAX_HEAP_MB = 1024;
@@ -28,9 +39,12 @@ export async function runContestOffThread(
   rows: Rows,
   cfg: Cfg,
   plan: ContestPlan | undefined,
+  onProgress?: ContestProgress,
 ): Promise<Outcome> {
   const threadUrl = new URL("./contestThread.js", import.meta.url);
-  if (import.meta.url.endsWith(".ts")) return runEvolvingContest(rows, cfg, plan && toEvolutionPlan(plan));
+  if (import.meta.url.endsWith(".ts")) {
+    return runEvolvingContest(rows, cfg, plan && toEvolutionPlan(plan), onProgress);
+  }
 
   return new Promise<Outcome>((resolve, reject) => {
     const worker = new Worker(threadUrl, {
@@ -40,7 +54,13 @@ export async function runContestOffThread(
       resourceLimits: { maxOldGenerationSizeMb: THREAD_MAX_HEAP_MB },
     });
     let settled = false;
-    worker.once("message", (msg: { ok: true; outcome: Outcome } | { ok: false; error: string }) => {
+    worker.on("message", (msg: ThreadMessage) => {
+      // The thread says where it has got to before each exam (see contestThread.ts).
+      if ("progress" in msg) {
+        onProgress?.(msg.progress.step, msg.progress.done, msg.progress.total);
+        return;
+      }
+      if (settled) return;
       settled = true;
       if (msg.ok) resolve(msg.outcome);
       else reject(new Error(`curator contest failed on its thread: ${msg.error}`));

@@ -1,5 +1,5 @@
 import { runningSinceFrom } from "@trenchscanner/core";
-import { SHUTDOWN_INTERRUPTED_ERROR } from "./scheduler.js";
+import { DEADLINE_ERROR, SHUTDOWN_INTERRUPTED_ERROR, STOPPED_ERROR } from "./scheduler.js";
 
 /**
  * How long to settle after a boot before a training run that a restart cut short is run again:
@@ -15,7 +15,9 @@ export const INTERRUPTED_RUN_RETRY_MS = 15 * 60_000;
  * or still carries the run's start with nothing after it (the process was killed) - and going by
  * it put the next run a whole interval out: the 17:08 run on 2026-10-12 was lost to a deploy four
  * minutes in, and nothing trained until 21:11. Such a run is redone INTERRUPTED_RUN_RETRY_MS after
- * boot instead.
+ * boot instead. So is a run the worker ended itself - past its deadline, or stopped from the admin
+ * panel: its heartbeat was stamped as a failed run just before the restart, and going by that put
+ * the retry a whole interval out too.
  */
 export function trainingFirstRunDelayMs(
   heartbeat: { lastRunAt: Date; lastError: string | null; meta: unknown } | null,
@@ -25,6 +27,8 @@ export function trainingFirstRunDelayMs(
   if (!heartbeat) return 0;
   const cutShort =
     heartbeat.lastError === SHUTDOWN_INTERRUPTED_ERROR ||
+    heartbeat.lastError?.startsWith(DEADLINE_ERROR) === true ||
+    heartbeat.lastError?.startsWith(STOPPED_ERROR) === true ||
     runningSinceFrom(heartbeat.meta, heartbeat.lastRunAt) !== null;
   return cutShort ? INTERRUPTED_RUN_RETRY_MS : heartbeat.lastRunAt.getTime() + intervalMs - nowMs;
 }

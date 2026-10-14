@@ -952,6 +952,12 @@ export interface ProbationStart extends Replacement {
 }
 
 /**
+ * Told as each exam starts: what is being examined, how many exams are done, and how many the run
+ * sits in all (an upper bound: the narrative seats sit theirs only once they have rows enough).
+ */
+export type ContestProgress = (step: string, done: number, total: number) => void;
+
+/**
  * One contest training run, minus the IO: every learner contestant sits the same walk-forward
  * exam and ships its own model at its own hit-rate cutoff; the rules contestant gets its cutoff
  * from the same exam; then the consensus is stacked on the learners' out-of-sample calls. Results
@@ -969,6 +975,7 @@ export async function runEvolvingContest(
   storedRows: TrainingRow[],
   cfg: ContestTrainingConfig,
   plan?: EvolutionPlan,
+  onProgress?: ContestProgress,
 ): Promise<ContestRunOutcome> {
   // Every seat but the narrative ones learns TokenSage's read only from rows where it arrived
   // as it does live (see withCurrentNarrativeTiming); the narrative seats read storedRows.
@@ -1003,8 +1010,18 @@ export async function runEvolvingContest(
   const features = runFeatures(rows, cfg);
   const heldFeatures = cfg.featureOnsetGuard ? { heldFeatures: features.held } : {};
 
-  for (const spec of cfg.contestants) {
-    if (spec.role !== "learner" || !spec.recipe) continue;
+  // Progress for the admin panel: one step per exam sat (seats, narrative seats, challengers).
+  const learnerSpecs = cfg.contestants.filter((c) => c.role === "learner" && c.recipe);
+  const examsTotal =
+    learnerSpecs.length +
+    cfg.contestants.filter((c) => c.role === "narrative" && c.recipe).length +
+    (plan?.challengers.length ?? 0);
+  let examsDone = 0;
+  const examining = (name: string) => onProgress?.(`examining ${name}`, examsDone++, examsTotal);
+
+  for (const spec of learnerSpecs) {
+    if (!spec.recipe) continue;
+    examining(spec.name);
     const exam = await examineLearner(rows, cfg, spec.id, spec.name, spec.recipe, reference, features.usable);
     if (reference === null) {
       reference = exam.evaluation.decisionReference;
@@ -1043,6 +1060,7 @@ export async function runEvolvingContest(
       // picks trained on every row, 69% on the deep-read rows; 2026-10-07 to 10-10). Narrative
       // Blend's market stage still learns from every row.
       const seatRows = spec.recipe!.narrativeBlend ? own : deepRead;
+      examining(spec.name);
       const exam = await examineLearner(
         seatRows,
         cfg,
@@ -1065,6 +1083,7 @@ export async function runEvolvingContest(
   // (or probation) actually needs it, rather than three discarded fits per loser.
   let bestChallenger: { index: number; trial: LearnerTrial } | null = null;
   for (const [i, bred] of (plan?.challengers ?? []).entries()) {
+    examining(`challenger ${bred.name}`);
     const trial = await sitLearnerExam(rows, cfg, bred.recipe, reference, features.usable);
     challengerScores.push(trial.examScore);
     challengerCalls.push(trial.calls);

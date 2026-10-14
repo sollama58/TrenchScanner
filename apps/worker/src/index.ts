@@ -77,6 +77,11 @@ const AI_JUDGE_INTERVAL_MINUTES = 10;
  * within the hour. Also the start-up choice: the first run is immediate.
  */
 const CHAMPION_REFRESH_MINUTES = 60;
+
+/** An admin's retrain request no training run has picked up yet (see adminRetrain.ts in the API). */
+async function retrainRequested(): Promise<boolean> {
+  return (await prisma.curatorRetrainRequest.count({ where: { startedAt: null } })) > 0;
+}
 const MODEL_BACKUP_CHECK_MINUTES = 60;
 /** How often the Lighthouse's history is summed (runLighthouseRollupJob re-sums the trailing days). */
 const LIGHTHOUSE_ROLLUP_MINUTES = 60;
@@ -448,10 +453,12 @@ async function main() {
         // never answers) would otherwise stop training for good and block "Retrain now".
         deadlineMinutes: 90,
         // The admin panel's "Retrain now" (POST /admin/curator/retrain) leaves a request row.
-        runEarly: {
-          everyMs: 60_000,
-          due: async () => (await prisma.curatorRetrainRequest.count({ where: { startedAt: null } })) > 0,
-        },
+        runEarly: { everyMs: 60_000, due: retrainRequested },
+        // "Stop and retrain": the same row, left while a run is going (each run marks the requests
+        // pending at its start as started, and Retrain now is refused mid-run, so a pending row
+        // here is a stop). The worker restarts, the cut-short run is redone, and the row starts it
+        // within a minute of boot (runEarly) rather than after INTERRUPTED_RUN_RETRY_MS.
+        stopWhileRunning: { everyMs: 60_000, due: retrainRequested },
         // Not straight away on every boot: a retrain on each restart (several on 2026-10-04)
         // is a retrain nobody asked for, and while the scanner and trainer were one process it
         // landed on the cold first scan cycles too. The first run waits for the slot the last

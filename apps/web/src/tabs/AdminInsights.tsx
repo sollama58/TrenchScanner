@@ -180,27 +180,64 @@ interface RetrainState {
     lastSuccessAt: string | null;
     lastError: string | null;
     runningForMs: number | null;
+    /** Running well past what a run takes (45 minutes): the panel offers the stop. */
+    hung?: boolean;
+    /** The step under way, and when it began. */
+    runningStep?: { step: string; since: string | null } | null;
+    /** The stages this run has finished so far, with their times. */
+    runningStagesMs?: Record<string, number> | null;
     durationMs: number | null;
+    /** The last finished run's stages. */
+    stagesMs?: Record<string, number> | null;
   } | null;
 }
+
+/** The training job's stages, in the order a run goes through them (curatorTrainingJob.ts). */
+const TRAINING_STAGES = ["score weights", "load rows", "plan", "exams", "store models", "re-choose default"];
+const stageOrder = (name: string) => {
+  const i = TRAINING_STAGES.indexOf(name);
+  return i === -1 ? TRAINING_STAGES.length : i;
+};
+
+const minutes = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`);
 
 /**
  * "Retrain now": queues a training run the trainer worker starts within a minute, instead of
  * waiting for its next slot. One at a time; the cadence restarts from the forced run.
+ *
+ * While a run is going the panel shows where it has got to (the stage, and which exam), and the
+ * button becomes "Stop and retrain": the trainer ends the run, restarts and starts a fresh one
+ * within a minute or two. For a run that looks stuck - the worker would end it on its own at 90
+ * minutes, this is for not waiting that out.
  */
 function RetrainNow() {
   const q = usePolling<RetrainState>("/admin/curator/retrain", 15_000);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const s = q.data;
-  const running = s?.job?.runningForMs != null;
+  const job = s?.job;
+  const running = job?.runningForMs != null;
+  const stopping = running && !!s?.pending;
   const queue = async () => {
-    if (!window.confirm("Retrain every model now? It runs on the trainer and takes a while.")) return;
+    const question = running
+      ? "Stop the training run in progress and start a fresh one? The trainer worker restarts to do it, " +
+        "so its other jobs pause for a minute or two."
+      : "Retrain every model now? It runs on the trainer and takes a while.";
+    if (!window.confirm(question)) return;
     setBusy(true);
     setResult(null);
     try {
-      const r = await post<RetrainState & { queued: boolean; reason?: string }>("/admin/curator/retrain", {});
-      setResult(r.queued ? "Queued. The trainer starts it within a minute." : `Not queued: ${r.reason}.`);
+      const r = await post<RetrainState & { queued: boolean; stopping?: boolean; reason?: string }>(
+        "/admin/curator/retrain",
+        running ? { stop: true } : {},
+      );
+      setResult(
+        !r.queued
+          ? `Not queued: ${r.reason}.`
+          : r.stopping
+            ? "Stop requested. The trainer ends the run within a minute, restarts and starts a fresh one."
+            : "Queued. The trainer starts it within a minute.",
+      );
       q.reload();
     } catch (e) {
       setResult(`Failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -208,32 +245,58 @@ function RetrainNow() {
       setBusy(false);
     }
   };
-  const state = running
-    ? `Training now, started ${Math.round((s!.job!.runningForMs ?? 0) / 60_000)}m ago.`
-    : s?.pending
-      ? `Queued ${ago(s.pending.requestedAt)}, waiting for the trainer to pick it up.`
-      : s?.job
-        ? `Last run ${ago(s.job.lastRunAt)}${s.job.durationMs ? `, took ${Math.round(s.job.durationMs / 60_000)}m` : ""}${s.job.lastError ? ", failed" : ""}.`
-        : q.error
-          ? `Couldn't load the trainer's status: ${q.error.message}`
-          : q.loading
-            ? "Loading…"
-            : "No training run recorded yet.";
+  const typical = job?.durationMs ? ` A run usually takes about ${minutes(job.durationMs)}.` : "";
+  const state = stopping
+    ? `Stop requested ${ago(s!.pending!.requestedAt)}. The trainer ends this run and restarts within a minute.`
+    : running
+      ? `Training now, started ${minutes(job!.runningForMs ?? 0)} ago.${typical}`
+      : s?.pending
+        ? `Queued ${ago(s.pending.requestedAt)}, waiting for the trainer to pick it up.`
+        : job
+          ? `Last run ${ago(job.lastRunAt)}${job.durationMs ? `, took ${minutes(job.durationMs)}` : ""}${job.lastError ? `, failed: ${job.lastError}` : ""}.`
+          : q.error
+            ? `Couldn't load the trainer's status: ${q.error.message}`
+            : q.loading
+              ? "Loading…"
+              : "No training run recorded yet.";
+  // In run order (the heartbeat's JSON doesn't keep it); a stage this list doesn't know goes last.
+  const stages = Object.entries((running ? job?.runningStagesMs : job?.stagesMs) ?? {}).sort(
+    ([a], [b]) => stageOrder(a) - stageOrder(b),
+  );
   return (
     <Panel
       title="Retrain models"
-      note="Training runs on a fixed schedule. Retrain now starts a run on the trainer within a minute and the schedule restarts from it."
+      note="Training runs on a fixed schedule. Retrain now starts a run on the trainer within a minute and the schedule restarts from it. While a run is going, Stop and retrain ends it and starts a fresh one."
       actions={
         <button
-          className="button primary"
-          disabled={busy || running || !!s?.pending}
+          className={running ? "button" : "button primary"}
+          disabled={busy || !!s?.pending || !s}
           onClick={() => void queue()}
         >
-          {running ? "Training…" : s?.pending ? "Queued" : "Retrain now"}
+          {stopping ? "Stopping…" : running ? "Stop and retrain" : s?.pending ? "Queued" : "Retrain now"}
         </button>
       }
     >
-      <p className="small">{state}</p>
+      <p className="small">
+        {running && job?.hung && !stopping && (
+          <>
+            <Tag tone="bad">looks stuck</Tag>{" "}
+          </>
+        )}
+        {state}
+      </p>
+      {running && job?.runningStep && (
+        <p className="small">
+          Now: <b>{job.runningStep.step}</b>
+          {job.runningStep.since ? `, started ${ago(job.runningStep.since)}` : ""}
+        </p>
+      )}
+      {stages.length > 0 && (
+        <p className="small faint">
+          {running ? "Done so far: " : "Last run: "}
+          {stages.map(([name, t]) => `${name} ${minutes(t)}`).join(" · ")}
+        </p>
+      )}
       {result && <p className="small faint">{result}</p>}
     </Panel>
   );

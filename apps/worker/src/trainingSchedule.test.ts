@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { INTERRUPTED_RUN_RETRY_MS, trainingFirstRunDelayMs } from "./trainingSchedule.js";
-import { SHUTDOWN_INTERRUPTED_ERROR } from "./scheduler.js";
+import { DEADLINE_ERROR, SHUTDOWN_INTERRUPTED_ERROR, STOPPED_ERROR } from "./scheduler.js";
 
 const H = 3_600_000;
 const NOW = Date.parse("2026-10-12T17:20:00Z");
@@ -32,5 +32,23 @@ describe("trainingFirstRunDelayMs", () => {
       meta: { runningSince: new Date(NOW - 12 * 60_000).toISOString() },
     };
     expect(trainingFirstRunDelayMs(hb, 24 * H, NOW)).toBe(INTERRUPTED_RUN_RETRY_MS);
+  });
+
+  it("redoes a run the worker ended past its deadline soon after boot", () => {
+    const hb = {
+      lastRunAt: new Date(NOW - 60_000),
+      lastError: `${DEADLINE_ERROR} after 5400s; worker restarted`,
+      meta: { durationMs: 5_400_000 },
+    };
+    expect(trainingFirstRunDelayMs(hb, 6 * H, NOW)).toBe(INTERRUPTED_RUN_RETRY_MS);
+  });
+
+  it("redoes a run stopped from the admin panel soon after boot", () => {
+    const hb = {
+      lastRunAt: new Date(NOW - 60_000),
+      lastError: `${STOPPED_ERROR} after 2700s; worker restarted`,
+      meta: { durationMs: 2_700_000 },
+    };
+    expect(trainingFirstRunDelayMs(hb, 6 * H, NOW)).toBe(INTERRUPTED_RUN_RETRY_MS);
   });
 });

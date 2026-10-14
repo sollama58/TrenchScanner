@@ -252,6 +252,49 @@ describe("scheduleInterval", () => {
     }
   });
 
+  it("stops a run in flight on request through the worker's shutdown, saying so on its row", async () => {
+    const calls: [number, unknown][] = [];
+    registerShutdown(async (code, request) => void calls.push([code, request]));
+    let asked = false;
+    try {
+      const job = scheduleInterval("curator-training", () => new Promise(() => {}), 360, {
+        deadlineMinutes: 90,
+        stopWhileRunning: { everyMs: 60_000, due: async () => asked },
+      });
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect(calls).toEqual([]);
+      asked = true;
+      await vi.advanceTimersByTimeAsync(61_000);
+      job.stop();
+      expect(heartbeats.at(-1)).toMatchObject({ job: "curator-training", success: false });
+      expect((heartbeats.at(-1) as { error?: string }).error).toMatch(
+        /^run stopped from the admin panel after 3\d\ds/,
+      );
+      expect(calls).toEqual([
+        [1, { reason: "curator-training run stopped on request", keepHeartbeatOf: "curator-training" }],
+      ]);
+    } finally {
+      registerShutdown(undefined);
+    }
+  });
+
+  it("never checks for a stop while no run is in flight", async () => {
+    let checks = 0;
+    const job = scheduleInterval("curator-training", jobTaking(55_000, []), 60, {
+      stopWhileRunning: {
+        everyMs: 10_000,
+        due: async () => {
+          checks++;
+          return false;
+        },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    job.stop();
+    // Five checks during the 55-second run, none in the idle minutes after it.
+    expect(checks).toBe(5);
+  });
+
   it("writes nothing for a run skipped because another process holds the job", async () => {
     const runs: number[] = [];
     const job = scheduleInterval(

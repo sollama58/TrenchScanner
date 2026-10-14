@@ -49,6 +49,7 @@ import {
   type Challenger,
   type TrainedCuratorParams,
 } from "@trenchscanner/core";
+import { RunProgress } from "../runProgress.js";
 import { runContestOffThread } from "../training/runContest.js";
 import type { ContestPlan } from "../training/contestPlan.js";
 
@@ -75,11 +76,30 @@ export { NEVER_EMIT_THRESHOLD, type StoredEvalMetrics };
  */
 export async function runCuratorTrainingJob(
   env: Env,
+): Promise<{ stored?: boolean; heldBack?: string; stagesMs: Record<string, number> }> {
+  // Each stage is written to the heartbeat as the run reaches it, so the admin panel can say where
+  // a run has got to - and where a stuck one stopped (runProgress.ts).
+  const progress = new RunProgress("curator-training");
+  try {
+    const result = await trainCurators(env, progress);
+    return { ...result, stagesMs: progress.finish() };
+  } catch (err) {
+    progress.finish();
+    throw err;
+  }
+}
+
+async function trainCurators(
+  env: Env,
+  progress: RunProgress,
 ): Promise<{ stored: boolean; heldBack?: string } | void> {
   const startedAt = Date.now();
   const windowStart = new Date(startedAt - env.CURATOR_TRAINING_WINDOW_DAYS * 86_400_000);
   // The Rules seat's exam replays the composite score with today's weights (scoreWeights.ts).
+  progress.stage("score weights");
   await refreshScoreWeights();
+
+  progress.stage("load rows");
 
   const trainingRows = await loadTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS, LOAD_PAGE_ROWS, {
     min: env.MCAP_FILTER_MIN,
@@ -127,6 +147,7 @@ export async function runCuratorTrainingJob(
   // never had a lane stored (first run after the evolution deploy) start from their founding
   // recipe, stored with this run.
   const now = new Date(startedAt);
+  progress.stage("plan");
   const stored = await loadCurrentLanes();
   const roster = enabledContestants(env.CURATOR_CONTESTANTS);
   const storedSlots = new Set(stored.map((l) => l.slot));
@@ -159,6 +180,7 @@ export async function runCuratorTrainingJob(
   // Every learner contestant sits the same walk-forward exam and ships its own model at its own
   // cutoff; challengers sit it too; the consensus is stacked on the final lineup's out-of-sample
   // calls (see runEvolvingContest in packages/core/src/curation/trainingRun.ts for all the math).
+  progress.stage("exams");
   const outcome = await runContestOffThread(
     trainingRows,
     {
@@ -184,6 +206,7 @@ export async function runCuratorTrainingJob(
       narrativeRows,
     },
     plan ?? undefined,
+    (step, done, total) => progress.step(`${step} (${done + 1} of up to ${total})`),
   );
   const { results } = outcome;
   // The Narrative seat sits out until it has rows enough (NARRATIVE_MIN_ROWS); its running
@@ -198,6 +221,7 @@ export async function runCuratorTrainingJob(
 
   // The guard (curation/runGuard.ts): a plainly broken run - non-finite weights, a training set
   // that lost half its rows, every calling seat gone silent - keeps the running models instead.
+  progress.stage("store models");
   if (env.CURATOR_TRAINING_GUARD) {
     const verdict = assessTrainingRun({
       // A seat that sat out keeps its running model, so it neither goes silent nor counts as a
@@ -300,6 +324,7 @@ export async function runCuratorTrainingJob(
   }
   // The new exams (and the live records since the last run) can change who leads: re-choose the
   // default model now, so users following the best performer switch with this run.
+  progress.stage("re-choose default");
   await rechooseDefaultModel(env).catch((err: unknown) =>
     logger.warn("couldn't re-choose the default model", { error: String(err) }),
   );
