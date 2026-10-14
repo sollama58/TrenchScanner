@@ -265,7 +265,7 @@ export function AboutDetails({ targets }: { targets: Targets }) {
             or more. Fresh and empty wallets are common signs of snipers or insiders. &ldquo;Not
             checked&rdquo; means that check hasn&apos;t run yet.
           </dd>
-          <dt>Buyers</dt>
+          <dt>1st Buyers Holding</dt>
           <dd>
             Of the first 25 buyers after launch (dev aside), how many still hold, as 12/25. Ones still holding
             can dump on you. Read once from the launch on chain, then rechecked every few minutes.

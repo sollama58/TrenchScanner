@@ -48,10 +48,10 @@ describe("parseFeedAppearance", () => {
     });
     expect(saved.reasons).toBe(false);
     expect(saved.quickLinks).toEqual(["terminal"]);
-    // The Top-10 snipers tile is opt-in, for new and older accounts alike.
-    expect(saved.sniperTop10).toBe(false);
-    expect(DEFAULT_FEED_APPEARANCE.sniperTop10).toBe(false);
-    expect(parseFeedAppearance({ sniperTop10: true }).sniperTop10).toBe(true);
+    // The Snipers tile is on by default (in place of 1st Buyers Holding), and can be switched off.
+    expect(saved.sniperTop10).toBe(true);
+    expect(DEFAULT_FEED_APPEARANCE.sniperTop10).toBe(true);
+    expect(parseFeedAppearance({ sniperTop10: false }).sniperTop10).toBe(false);
     // CEX-funded took the Dev tile's default place: Dev is opt-in, for older accounts too, and the
     // old CEX-funded switch is ignored.
     expect(DEFAULT_FEED_APPEARANCE.devTile).toBe(false);
@@ -88,7 +88,7 @@ describe("parseFeedAppearance", () => {
     for (const bad of [2_000, 21_000, 4_500, "8000"])
       expect(parseFeedAppearance({ hideBelowMcapUsd: bad }).hideBelowMcapUsd).toBe(5_000);
     // The score tile and TokenSage button are hidden by default; a saved field list is kept as is.
-    expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage", "calibrated"]);
+    expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage", "calibrated", "snipers"]);
     // Dark until the user picks a theme; a saved "auto" keeps following the device.
     expect(parseFeedAppearance({}).theme).toBe("dark");
     expect(parseFeedAppearance({ theme: "auto" }).theme).toBe("auto");

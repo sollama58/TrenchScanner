@@ -1405,7 +1405,17 @@ img.avatar {
 }
 .card-stats dd {
   margin: 0;
+  margin-top: auto;
   font-weight: 600;
+}
+/* A label too long for one line (1st Buyers Holding): a size smaller, wrapped whole rather than cut.
+   The dd's margin-top: auto keeps the row's values level. */
+.card-stats dt.dt-long {
+  font-size: 8.5px;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 /* "Not checked" wraps onto two lines rather than being cut in a narrow box. */
 .card-stats dd.muted {

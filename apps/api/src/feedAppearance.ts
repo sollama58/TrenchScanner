@@ -88,8 +88,8 @@ export const feedAppearanceSchema = z
     scoreColor: z.boolean().default(true),
     /** The model's reasons under a model call; hidden by default, as are accounts saved before it. */
     reasons: z.boolean().default(false),
-    /** The Top-10 snipers tile; hidden by default, as are accounts saved before it. */
-    sniperTop10: z.boolean().default(false),
+    /** The Snipers tile (launch snipers in the top holders); on by default since 2026-10-14, in place of 1st Buyers Holding. */
+    sniperTop10: z.boolean().default(true),
     /**
      * The opt-in CEX-funded switch from before the tile took the Dev tile's default place (user ask
      * 2026-10-13): accepted from older tabs, ignored. CEX-funded is a default tile now, hidden like
@@ -169,7 +169,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   volume: false,
   scoreColor: true,
   reasons: false,
-  sniperTop10: false,
+  sniperTop10: true,
   devTile: false,
   largest: false,
   kolBundled: false,
@@ -184,9 +184,10 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],
   // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
-  // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own) and the header's
-  // "≈N% 2x" pill (user ask 2026-10-14). An account that saved its own field list keeps that list.
-  hidden: ["score", "sage", "calibrated"],
+  // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own), the header's
+  // "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
+  // An account that saved its own field list keeps that list.
+  hidden: ["score", "sage", "calibrated", "snipers"],
 };
 
 /** The stored JSON as an appearance, field by field: a bad or missing field takes its default. */

@@ -411,7 +411,7 @@ export function AlertCard({
                     }`
               }
             >
-              <dt>Buyers</dt>
+              <dt className="dt-long">1st Buyers Holding</dt>
               <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
             </div>
           )}
