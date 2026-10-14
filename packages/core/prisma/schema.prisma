@@ -2184,3 +2184,25 @@ model KolPossibleSide {
   @@id([wallet, kolWallet])
   @@index([kolWallet])
 }
+
+/// A model-alerted coin's bubble map over its top 50 holders (user ask 2026-10-14): the top 25 as
+/// the linked reading has them, plus every holder ranked 26 to 50 whose funder WalletFunder already
+/// holds, clustered by the same rules. One row a coin, rewritten on each top-holder refresh.
+/// Shown only: never read by the models, the safety screen or the linked-holder counts (N/25).
+model BubbleMapHolders {
+  mintAddress      String   @id
+  /// When the top 50 was read.
+  readAt           DateTime
+  /// How many holders the read listed (pools and the creator aside), at most 50.
+  holdersRead      Int
+  /// Of those past the top 25, how many are on the map (funder known).
+  knownExtra       Int
+  /// [{ wallet, pct, rank?, cexFunder? }], largest first; rank only on those past the top 25.
+  holders          Json
+  /// Same shapes as TokenSnapshot.linkedClusters and sameTimeClusters.
+  clusters         Json
+  sameTimeClusters Json
+  computedAt       DateTime
+
+  @@index([computedAt])
+}

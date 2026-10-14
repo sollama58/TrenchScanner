@@ -12,7 +12,9 @@ import {
   linkedReadingOf,
   resetLinkedWallets,
   resolveLinkedWallets,
+  storeWideMapReadings,
   takeLinkedWalletStats,
+  wideMapReadings,
 } from "./linkedWallets.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -288,6 +290,65 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     await resolveLinkedWallets([group], quiet, { maxNewLookups: 10 });
     expect(quiet.getFundersBatch).not.toHaveBeenCalled();
   });
+
+  it("puts an alerted coin's known top-50 wallets on its bubble map, and nobody new", async () => {
+    const mint = w("wide-mint");
+    const top = Array.from({ length: 26 }, (_, i) => ({ owner: w(`t${i}`), pct: 40 - i }));
+    const extra = (i: number) => ({ owner: w(`x${i}`), pct: 1 - i / 100 });
+    const wideList = [...top, extra(0), extra(1), extra(2), extra(3)];
+    const funders: Record<string, FunderResult> = Object.fromEntries(
+      top.map((h, i) => [h.owner, found(w(`own${i}`))]),
+    );
+    // t0 and t1 share F1: one cluster on the top 25.
+    funders[w("t0")] = found(w("F1"));
+    funders[w("t1")] = found(w("F1"));
+    const helius = {
+      ...fakeHelius(funders),
+      getTopHoldersBatch: vi.fn(async (mints: string[], n: number) => {
+        expect(n).toBe(51);
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: wideList }]));
+      }),
+    };
+    const group: LinkedGroup = { mintAddress: mint, holders: [] };
+    await readTopHolders([group], helius, { maxReads: 4, wideMints: new Set([mint]) });
+    expect(group.holders).toHaveLength(26);
+    const lookups = await resolveLinkedWallets([group], helius, { maxNewLookups: 100 });
+
+    // Stored already: x0 by F1 (joins the cluster), x1 by an unread funder (left off), x2 a busy
+    // row (left off); x3 never read (left off, and not read now).
+    await prisma.walletFunder.createMany({
+      data: [
+        { wallet: w("x0"), status: "found", funder: w("F1"), fundedAt: new Date(), checkedAt: new Date() },
+        {
+          wallet: w("x1"),
+          status: "found",
+          funder: w("unread"),
+          fundedAt: new Date(),
+          checkedAt: new Date(),
+        },
+        { wallet: w("x2"), status: "busy", checkedAt: new Date() },
+      ],
+    });
+    const calls = helius.getFundersBatch.mock.calls.length;
+    const [reading] = await wideMapReadings([group], lookups, new Set([mint]));
+    expect(helius.getFundersBatch.mock.calls.length).toBe(calls);
+    expect(reading).toMatchObject({ mintAddress: mint, holdersRead: 30, knownExtra: 1 });
+    expect(reading!.holders.map((h) => h.wallet)).toContain(w("x0"));
+    expect(reading!.holders.find((h) => h.wallet === w("x0"))).toMatchObject({ rank: 27 });
+    expect(reading!.holders.some((h) => [w("x1"), w("x2"), w("x3")].includes(h.wallet))).toBe(false);
+    expect(reading!.clusters[0]!.wallets.map((x) => x.wallet)).toEqual([w("t0"), w("t1"), w("x0")]);
+    // The top-25 reading is as it was.
+    expect(linkedReadingOf(group, lookups)!.clusters[0]!.wallets).toHaveLength(2);
+
+    // Not for a coin no model called.
+    expect(await wideMapReadings([group], lookups, new Set())).toEqual([]);
+
+    expect(await storeWideMapReadings([reading!])).toBe(1);
+    expect(await storeWideMapReadings([reading!])).toBe(0);
+    const row = await prisma.bubbleMapHolders.findUnique({ where: { mintAddress: mint } });
+    expect(row).toMatchObject({ holdersRead: 30, knownExtra: 1 });
+    await prisma.bubbleMapHolders.delete({ where: { mintAddress: mint } });
+  });
 });
 
 describe("readTopHolders", () => {
@@ -317,6 +378,26 @@ describe("readTopHolders", () => {
     expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mB"], 26);
     await readTopHolders(groups, helius, { maxReads: 2, nowMs: TOP_HOLDERS_REFRESH_MS });
     expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mA"], 26);
+  });
+
+  it("reads an alerted coin's top 50 in the same call, keeping the readings on the top 25", async () => {
+    const wide = Array.from({ length: 101 }, (_, i) => ({ owner: `w${i}`, pct: 101 - i }));
+    const helius = {
+      getTopHoldersBatch: vi.fn(async (mints: string[]) => {
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: wide }]));
+      }),
+    };
+    const groups: LinkedGroup[] = [{ mintAddress: "mW", holders: [] }];
+    await readTopHolders(groups, helius, { maxReads: 4, nowMs: 0 });
+    expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mW"], 26);
+    // Called a moment later: read again at once for its top 50 (the read at alert time).
+    await readTopHolders(groups, helius, { maxReads: 4, nowMs: 1, wideMints: new Set(["mW"]) });
+    expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mW"], 51);
+    expect(groups[0]!.holders).toHaveLength(26);
+    expect(cachedTopHolders("mW", 2)).toHaveLength(26);
+    // Then on the usual cadence only.
+    await readTopHolders(groups, helius, { maxReads: 4, nowMs: 2, wideMints: new Set(["mW"]) });
+    expect(helius.getTopHoldersBatch).toHaveBeenCalledTimes(2);
   });
 
   it("leaves a group on RugCheck's list when the read fails", async () => {

@@ -77,6 +77,50 @@ export function useBubblesMint(): string | null {
 }
 
 // ---------------------------------------------------------------------------------------------
+// The top 50, for model-alerted coins
+
+/** A holder on the wider map: rank only on those past the top 25. */
+export interface WideHolder {
+  wallet: string;
+  pct: number;
+  rank?: number;
+  cexFunder?: string;
+}
+
+/**
+ * A model-alerted coin's map over its top 50 (GET /tokens/:mint/bubble-holders, user ask
+ * 2026-10-14): the top 25, plus every holder ranked 26 to 50 whose funder we already know,
+ * clustered by the same rules. Wallets we have never read are left off.
+ */
+export interface WideMap {
+  readAt: string;
+  /** How many holders the read listed (pools and the creator aside). */
+  holdersRead: number;
+  /** Of those past the top 25, how many are on the map. */
+  knownExtra: number;
+  holders: WideHolder[];
+  clusters: NonNullable<Snapshot["linkedClusters"]>;
+  sameTimeClusters: NonNullable<Snapshot["sameTimeClusters"]>;
+}
+
+/**
+ * The reading the map draws: the snapshot's, with the wider map's holders, clusters and
+ * same-minute groups in place of its own when the coin has one. Every count (Linked N/25,
+ * Same minute, CEX-funded) stays the snapshot's: the top 50 is for the picture only.
+ */
+export function withWideMap<
+  S extends Pick<Snapshot, "linkedClusters" | "linkedHolders" | "sameTimeClusters">,
+>(snapshot: S, wide: WideMap | null | undefined): S {
+  if (!wide || !Array.isArray(wide.holders) || wide.holders.length === 0) return snapshot;
+  return {
+    ...snapshot,
+    linkedHolders: wide.holders,
+    linkedClusters: Array.isArray(wide.clusters) ? wide.clusters : [],
+    sameTimeClusters: Array.isArray(wide.sameTimeClusters) ? wide.sameTimeClusters : [],
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
 // The graph
 
 export type Cluster = NonNullable<Snapshot["linkedClusters"]>[number];
@@ -118,6 +162,8 @@ export interface MapNode {
   dumps: number | null;
   /** On "rest": how many holders it stands for. */
   count: number;
+  /** Its rank among the top 50 when the map took it in from past the top 25 (alerted coins); else absent. */
+  rank?: number;
   r: number;
   x: number;
   y: number;
@@ -242,6 +288,12 @@ export function buildGraph(
     (c) => c && typeof c.funder === "string" && Array.isArray(c.wallets) && c.wallets.length > 0,
   );
   const byWallet = new Map(flagged.map((w) => [w.wallet, w]));
+  // Holders the top-50 map took in past the top 25 carry their rank (withWideMap).
+  const rankOf = new Map(
+    (snapshot.linkedHolders ?? []).flatMap((h) =>
+      h && typeof h.rank === "number" ? [[h.wallet, h.rank]] : [],
+    ),
+  );
   const nodes: MapNode[] = [];
   const links: MapLink[] = [];
   const seen = new Set<string>();
@@ -260,6 +312,7 @@ export function buildGraph(
       score: f?.score ?? null,
       dumps: f?.dumps ?? null,
       count: 1,
+      ...(rankOf.has(wallet) ? { rank: rankOf.get(wallet)! } : {}),
       r: radiusFor(pct),
       x: 0,
       y: 0,

@@ -1,4 +1,5 @@
 import {
+  BUBBLE_WIDE_TOP_N,
   CEX_FUNDED_TOP_N,
   cexFundedReading,
   createLogger,
@@ -13,6 +14,7 @@ import {
   type KnownFunder,
   type LinkedWalletsReading,
 } from "@trenchscanner/core";
+import type { Prisma } from "@prisma/client";
 import { FailureBackoff } from "./failureBackoff.js";
 import { SettledAnswers } from "./settledAnswers.js";
 
@@ -91,6 +93,9 @@ export function resetLinkedWallets(): void {
   settledFunders.clear();
   hotFunders.clear();
   topHolderLists.clear();
+  wideHolderLists.clear();
+  storedWide.clear();
+  alertedMints = null;
   failureBackoff.clear();
   takeLinkedWalletStats();
 }
@@ -382,40 +387,245 @@ export function topHolderWalletsOf(
 }
 
 /**
+ * Each model-alerted mint's top 50 holders (BUBBLE_WIDE_TOP_N and one more, for the creator) and
+ * when read: the same read as its top 25 (the whole token-account list comes back either way, so
+ * the wider cut costs nothing), kept only for the bubble map.
+ */
+const wideHolderLists = new Map<string, { holders: { owner: string; pct: number }[]; atMs: number }>();
+const MAX_WIDE_LISTS = 1_000;
+
+/**
  * Reads the top-25 holder list (pools aside) for groups without a fresh one, in the groups' order
  * (contenders first), at most `maxReads` mints, and puts each list read on its group: the linked
  * reading's holders past RugCheck's 20 accounts. A failed read leaves the group as it was.
+ * `wideMints` (the model-alerted coins) keep their top 50 too, for the bubble map, and one with
+ * no top 50 yet is read now even when its top 25 is fresh: the read at alert time.
  * Answers how many mints it asked about.
  */
 export async function readTopHolders(
   groups: LinkedGroup[],
   helius: Pick<HeliusClient, "getTopHoldersBatch">,
-  opts: { maxReads: number; nowMs?: number },
+  opts: { maxReads: number; nowMs?: number; wideMints?: ReadonlySet<string> },
 ): Promise<number> {
   const now = opts.nowMs ?? Date.now();
+  const wide = opts.wideMints ?? new Set<string>();
   const due = groups
     .filter((g) => {
       const entry = topHolderLists.get(g.mintAddress);
+      if (wide.has(g.mintAddress) && !wideHolderLists.has(g.mintAddress)) return true;
       return !entry || now - entry.atMs >= TOP_HOLDERS_REFRESH_MS;
     })
     .slice(0, Math.max(0, opts.maxReads));
   if (due.length === 0) return 0;
+  const anyWide = due.some((g) => wide.has(g.mintAddress));
   const read = await helius.getTopHoldersBatch(
     due.map((g) => g.mintAddress),
-    LINKED_TOP_N + 1,
+    (anyWide ? BUBBLE_WIDE_TOP_N : LINKED_TOP_N) + 1,
   );
   for (const g of due) {
     const r = read.get(g.mintAddress);
     if (r?.status !== "found" || r.holders.length === 0) continue;
+    // The readings stay on the top 25 (and one more, for the creator), however many were read.
+    const top = r.holders.length > LINKED_TOP_N + 1 ? r.holders.slice(0, LINKED_TOP_N + 1) : r.holders;
     if (topHolderLists.size >= MAX_TOP_HOLDER_LISTS) {
       const oldest = topHolderLists.keys().next().value;
       if (oldest !== undefined) topHolderLists.delete(oldest);
     }
     topHolderLists.delete(g.mintAddress);
-    topHolderLists.set(g.mintAddress, { holders: r.holders, atMs: now });
-    g.holders = r.holders;
+    topHolderLists.set(g.mintAddress, { holders: top, atMs: now });
+    g.holders = top;
+    if (wide.has(g.mintAddress)) {
+      if (wideHolderLists.size >= MAX_WIDE_LISTS) {
+        const oldest = wideHolderLists.keys().next().value;
+        if (oldest !== undefined) wideHolderLists.delete(oldest);
+      }
+      wideHolderLists.delete(g.mintAddress);
+      wideHolderLists.set(g.mintAddress, { holders: r.holders, atMs: now });
+    }
   }
   return due.length;
+}
+
+/** How far back a model call puts its coin on the wider bubble map. */
+export const WIDE_MAP_ALERT_DAYS = 3;
+const ALERTED_REFRESH_MS = 60_000;
+let alertedMints: { mints: Set<string>; atMs: number } | null = null;
+
+/**
+ * The mints a model called within WIDE_MAP_ALERT_DAYS (CuratedAlert), read at most once a minute:
+ * the coins whose bubble map takes in their top 50. Empty when the read fails.
+ */
+export async function wideMapMints(nowMs = Date.now()): Promise<Set<string>> {
+  if (alertedMints && nowMs - alertedMints.atMs < ALERTED_REFRESH_MS) return alertedMints.mints;
+  try {
+    const rows = await prisma.curatedAlert.findMany({
+      where: { createdAt: { gte: new Date(nowMs - WIDE_MAP_ALERT_DAYS * DAY_MS) } },
+      select: { token: { select: { mintAddress: true } } },
+      distinct: ["tokenId"],
+    });
+    alertedMints = { mints: new Set(rows.map((r) => r.token.mintAddress)), atMs: nowMs };
+  } catch (err) {
+    logger.warn("failed to read the alerted mints for the bubble map", { error: String(err) });
+    alertedMints = { mints: alertedMints?.mints ?? new Set(), atMs: nowMs };
+  }
+  return alertedMints.mints;
+}
+
+/** One holder on the wider map: its share, and its rank in the top 50 when past the top 25. */
+export interface WideHolder {
+  wallet: string;
+  pct: number;
+  /** 1-based rank among the holders read (pools aside), on the ones the top 25 doesn't have. */
+  rank?: number;
+  cexFunder?: string;
+}
+
+/** A model-alerted coin's bubble map over its top 25 and every known wallet in its top 50. */
+export interface WideMapReading {
+  mintAddress: string;
+  /** When the top 50 was read. */
+  readAt: Date;
+  /** How many holders the top-50 read listed (pools and the creator aside). */
+  holdersRead: number;
+  /** Of those past the top 25, how many we know the funder of (on the map). */
+  knownExtra: number;
+  holders: WideHolder[];
+  clusters: LinkedWalletsReading["clusters"];
+  sameTimeClusters: LinkedWalletsReading["sameTimeClusters"];
+}
+
+/**
+ * The wider bubble map for each model-alerted group with a top 50 in hand and a complete top-25
+ * reading: the top 25 as the reading has them, plus every holder ranked 26 to 50 whose funder is
+ * already stored (WalletFunder "found", with its funding time) and whose funder's exchange verdict
+ * is known, linked by the same rules (core's linkedWallets, over the wider list). Nothing new is
+ * read from the chain: a wallet we have never read stays off the map. Display only.
+ */
+export async function wideMapReadings(
+  groups: readonly LinkedGroup[],
+  lookups: LinkedWalletLookups,
+  wideMints: ReadonlySet<string>,
+): Promise<WideMapReading[]> {
+  const todo = groups.flatMap((g) => {
+    const wide = wideMints.has(g.mintAddress) ? wideHolderLists.get(g.mintAddress) : undefined;
+    // Only on the chain's top 25 (RugCheck's 20 stand in until it is read), with every funder in.
+    const top = topHolderLists.get(g.mintAddress)?.holders;
+    const onTop =
+      !!top && top.length === g.holders.length && top.every((h, i) => h.owner === g.holders[i]?.owner);
+    return wide && onTop && linkedReadingOf(g, lookups) ? [{ g, wide }] : [];
+  });
+  if (todo.length === 0) return [];
+
+  const extrasOf = (g: LinkedGroup, wide: { owner: string; pct: number }[]) => {
+    const top = new Set(g.holders.map((h) => h.owner));
+    return wide
+      .filter((h) => h.owner !== g.creator)
+      .map((h, i) => ({ ...h, rank: i + 1 }))
+      .slice(0, BUBBLE_WIDE_TOP_N)
+      .filter((h) => !top.has(h.owner));
+  };
+  // Stored funders for the wallets the cycle's lookups don't hold: one query, no chain reads.
+  const funderOf = new Map(lookups.funderOf);
+  const fundedAtOf = new Map(lookups.fundedAtOf);
+  const unread = [
+    ...new Set(todo.flatMap(({ g, wide }) => extrasOf(g, wide.holders).map((h) => h.owner))),
+  ].filter((w) => !funderOf.has(w));
+  if (unread.length > 0) {
+    const rows = await prisma.walletFunder.findMany({
+      where: { wallet: { in: unread }, status: "found", funder: { not: null } },
+      select: { wallet: true, funder: true, fundedAt: true },
+    });
+    for (const r of rows) {
+      funderOf.set(r.wallet, r.funder);
+      fundedAtOf.set(r.wallet, r.fundedAt?.getTime() ?? null);
+    }
+  }
+  // Exchange verdicts for their funders, from the table where memory doesn't have them.
+  const funders = [
+    ...new Set(
+      todo.flatMap(({ g, wide }) =>
+        extrasOf(g, wide.holders).flatMap((h) => {
+          const f = funderOf.get(h.owner);
+          return f ? [f] : [];
+        }),
+      ),
+    ),
+  ].filter((f) => !lookups.hotKnown(f) && !hotFunders.has(f));
+  if (funders.length > 0) {
+    const rows = await prisma.funderActivity.findMany({ where: { address: { in: funders } } });
+    for (const r of rows) rememberHot(r.address, r.hot, r.checkedAt.getTime());
+  }
+  const hotKnown = (f: string) => lookups.hotKnown(f) || hotFunders.has(f);
+  const hot = (f: string) => lookups.hot(f) || hotFunders.get(f)?.hot === true;
+
+  const out: WideMapReading[] = [];
+  for (const { g, wide } of todo) {
+    const extras = extrasOf(g, wide.holders).filter((h) => {
+      const f = funderOf.get(h.owner);
+      return !!f && hotKnown(f);
+    });
+    const list = [...g.holders, ...extras.map(({ owner, pct }) => ({ owner, pct }))];
+    const creator = g.creator ?? null;
+    const creatorFunder = creator ? (funderOf.get(creator) ?? null) : null;
+    const topN = list.length;
+    const reading = linkedWallets(list, funderOf, { hot, creator, creatorFunder, fundedAtOf, topN });
+    if (!reading) continue;
+    const cex = cexFundedReading(list, funderOf, { hot, creator, topN });
+    const cexOf = new Map((cex?.cexFunders ?? []).map((c) => [c.wallet, c.funder]));
+    const rankOf = new Map(extras.map((h) => [h.owner, h.rank]));
+    out.push({
+      mintAddress: g.mintAddress,
+      readAt: new Date(wide.atMs),
+      holdersRead: wide.holders.filter((h) => h.owner !== creator).slice(0, BUBBLE_WIDE_TOP_N).length,
+      knownExtra: extras.length,
+      holders: reading.holders.map((h) => ({
+        ...h,
+        ...(rankOf.has(h.wallet) ? { rank: rankOf.get(h.wallet)! } : {}),
+        ...(cexOf.has(h.wallet) ? { cexFunder: cexOf.get(h.wallet)! } : {}),
+      })),
+      clusters: reading.clusters,
+      sameTimeClusters: reading.sameTimeClusters,
+    });
+  }
+  return out;
+}
+
+/** What was last stored for each mint, so an unchanged reading isn't written again. */
+const storedWide = new Map<string, string>();
+
+/** Saves the wider readings (BubbleMapHolders), one row a mint, skipping any unchanged since the last save. */
+export async function storeWideMapReadings(readings: readonly WideMapReading[]): Promise<number> {
+  let written = 0;
+  for (const r of readings) {
+    const key = JSON.stringify([r.readAt.getTime(), r.holders, r.clusters, r.sameTimeClusters]);
+    if (storedWide.get(r.mintAddress) === key) continue;
+    const data = {
+      readAt: r.readAt,
+      holdersRead: r.holdersRead,
+      knownExtra: r.knownExtra,
+      holders: r.holders as unknown as Prisma.InputJsonValue,
+      clusters: r.clusters as unknown as Prisma.InputJsonValue,
+      sameTimeClusters: r.sameTimeClusters as unknown as Prisma.InputJsonValue,
+      computedAt: new Date(),
+    };
+    try {
+      await prisma.bubbleMapHolders.upsert({
+        where: { mintAddress: r.mintAddress },
+        create: { mintAddress: r.mintAddress, ...data },
+        update: data,
+      });
+      if (storedWide.size >= MAX_WIDE_LISTS) {
+        const oldest = storedWide.keys().next().value;
+        if (oldest !== undefined) storedWide.delete(oldest);
+      }
+      storedWide.delete(r.mintAddress);
+      storedWide.set(r.mintAddress, key);
+      written += 1;
+    } catch (err) {
+      logger.warn("failed to store a bubble map reading", { mint: r.mintAddress, error: String(err) });
+    }
+  }
+  return written;
 }
 
 /**

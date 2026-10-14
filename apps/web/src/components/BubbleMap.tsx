@@ -30,6 +30,8 @@ import {
   type SameTimeGroup,
   type FlaggedHolder,
   type MapNode,
+  type WideMap,
+  withWideMap,
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
 import { openWallet } from "../walletModal";
@@ -51,6 +53,30 @@ type TokenDetail = Token & { snapshots: Snapshot[] };
 
 /** How many cluster colours there are (styles.css .bm-modal --bm-0..4); more clusters reuse them. */
 export const CLUSTER_COLOURS = MAP_COLOURS;
+
+/**
+ * A model-alerted coin's map over its top 50 (withWideMap), when it has one: null for any other
+ * coin, or while it loads. The map stands without it.
+ */
+function useWideMap(mint: string): WideMap | null {
+  const [wide, setWide] = useState<WideMap | null>(null);
+  useEffect(() => {
+    let live = true;
+    setWide(null);
+    cachedGet<{ map?: WideMap | null }>(`/tokens/${encodeURIComponent(mint)}/bubble-holders`, 60_000)
+      .then((r) => live && setWide(r.map ?? null))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [mint]);
+  return wide;
+}
+
+/** "· +12 known from top 50", for the map's subtitle; empty without the wider map. */
+function wideText(wide: WideMap | null): string {
+  return wide ? ` · +${wide.knownExtra} known from top ${wide.holdersRead}` : "";
+}
 
 /** The names of every wallet on the map (holders and funders), in one read. */
 function useGraphNames(graph: BubbleGraph | null): WalletNames {
@@ -192,9 +218,10 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
 
   const label = loaded ? tokenLabel(loaded.token) : shortAddress(mint);
   const snapshot = loaded?.snapshot ?? null;
+  const wide = useWideMap(mint);
   const graph = useMemo(
-    () => (snapshot ? layoutGraph(buildGraph(snapshot, flagged)) : null),
-    [snapshot, flagged],
+    () => (snapshot ? layoutGraph(buildGraph(withWideMap(snapshot, wide), flagged)) : null),
+    [snapshot, wide, flagged],
   );
   const names = useGraphNames(graph);
   const { showCex, setCexOn } = useCexToggle(graph);
@@ -229,7 +256,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
     </>
   );
 
-  const sub = snapshot ? `${label} · read ${ago(snapshot.takenAt)}` : label;
+  const sub = snapshot ? `${label} · read ${ago(wide?.readAt ?? snapshot.takenAt)}${wideText(wide)}` : label;
   if (error) {
     const locked = error instanceof ApiError && (error.status === 401 || error.status === 402);
     return (
@@ -497,6 +524,8 @@ function MapView({
             " A dotted gold line ties a holder to a KOL it bought alongside on more than 90% of the KOL's coins over the last day (more than 25 coins), or on every one of at least 10: a possible side wallet, not confirmed."}
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
+          {graph.nodes.some((n) => n.rank !== undefined) &&
+            " A model called this coin, so the map also takes in every wallet in its top 50 whose funder we already know; the counts above stay on the top 25."}
         </p>
       )}
     </>
@@ -896,7 +925,7 @@ function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames, sides: Po
     ...(n.wallet ? (sides[n.wallet] ?? []).map(possibleSideText) : []),
   ].filter(Boolean);
   const same = n.sameTime === null ? null : graph.sameTimeGroups[n.sameTime];
-  return `Holder ${walletText(n.wallet, names)}, ${pctText(n.pct)} of supply${
+  return `Holder ${walletText(n.wallet, names)}${n.rank !== undefined ? ` (#${n.rank})` : ""}, ${pctText(n.pct)} of supply${
     cluster ? `, funded by ${walletText(cluster.funder, names)}` : ""
   }${same ? `, funded in the same minute as ${same.wallets.length - 1} other top holders` : ""}${
     what.length ? `, ${what.join(", ")}` : ""
@@ -960,6 +989,11 @@ function NodeDetail({
         <WalletText wallet={n.wallet} names={names} />
       </button>
       {n.kind === "holder" && <span className="num">{pctText(n.pct)} of supply</span>}
+      {n.kind === "holder" && n.rank !== undefined && (
+        <span className="muted num" title="Past the top 25: on the map because we already know its funder">
+          #{n.rank} holder
+        </span>
+      )}
       {n.kind === "funder" && cluster && (
         <span className="muted">
           paid for {cluster.wallets.length} top holders with {pctText(cluster.pct)}
@@ -1011,9 +1045,10 @@ export function BubbleMapSection({
       live = false;
     };
   }, [mint]);
+  const wide = useWideMap(mint);
   const graph = useMemo(
-    () => (snapshot ? layoutGraph(buildGraph(snapshot, flagged)) : null),
-    [snapshot, flagged],
+    () => (snapshot ? layoutGraph(buildGraph(withWideMap(snapshot, wide), flagged)) : null),
+    [snapshot, wide, flagged],
   );
   const names = useGraphNames(graph);
   const { showCex, setCexOn } = useCexToggle(graph);

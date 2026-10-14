@@ -85,6 +85,9 @@ import {
   cachedTopHolders,
   topHolderWalletsOf,
   readTopHolders,
+  storeWideMapReadings,
+  wideMapMints,
+  wideMapReadings,
   resolveLinkedWallets,
   takeLinkedWalletStats,
   type LinkedGroup,
@@ -470,6 +473,8 @@ function startLinkedWalletStage(
   waitedCount: number,
   helius: HeliusClient,
   env: Env,
+  /** Model-alerted coins: their bubble map reads the top 50 too (readTopHolders). */
+  wideMints: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0 || linkedStageInFlight) {
     return Promise.resolve();
@@ -482,10 +487,12 @@ function startLinkedWalletStage(
   let lookupsLeft = env.LINKED_WALLET_LOOKUPS_PER_CYCLE;
   const pass = async (part: LinkedGroup[]) => {
     if (part.length === 0) return;
-    readsLeft -= await readTopHolders(part, helius, { maxReads: readsLeft }).catch((err: unknown) => {
-      logger.warn("top-holder reads failed - using RugCheck's list", { error: String(err) });
-      return 0;
-    });
+    readsLeft -= await readTopHolders(part, helius, { maxReads: readsLeft, wideMints }).catch(
+      (err: unknown) => {
+        logger.warn("top-holder reads failed - using RugCheck's list", { error: String(err) });
+        return 0;
+      },
+    );
     await resolveLinkedWallets(part, helius, {
       maxNewLookups: lookupsLeft,
       onLookups: (n) => (lookupsLeft -= n),
@@ -1037,7 +1044,9 @@ async function scanCycle(
   const linkedWaited = linkedFiltersActive
     ? linkedGroups.length
     : walletGroups.filter((g) => g.contender || g.alerted).length;
-  const linkedWork = startLinkedWalletStage(linkedGroups, linkedWaited, deps.helius, env);
+  // Model-alerted coins, whose bubble map takes in the known wallets of their top 50 (display only).
+  const wideMints = env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0 ? await wideMapMints() : new Set<string>();
+  const linkedWork = startLinkedWalletStage(linkedGroups, linkedWaited, deps.helius, env, wideMints);
   // The live tape: the newest trades of each coin close to a call (contenders, then alerts held
   // for a wallet figure), for the flagged wallets trading it - on the same wait.
   const liveTapeWork = startLiveTapeStage(
@@ -1173,6 +1182,12 @@ async function scanCycle(
       .filter((g) => !linkedByMint.get(g.mintAddress) || !cexByMint.get(g.mintAddress))
       .map((g) => g.mintAddress),
   );
+  // The alerted coins' wider bubble maps, saved behind the cycle: nothing here waits on them.
+  if (linkedLookups && wideMints.size > 0) {
+    void wideMapReadings(linkedGroups, linkedLookups, wideMints)
+      .then(storeWideMapReadings)
+      .catch((err: unknown) => logger.warn("bubble map top-50 reading failed", { error: String(err) }));
+  }
   lap("linkedWallets");
   await withinBudget(liveTapeWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));
   const riskLookup = walletRiskLookup();
