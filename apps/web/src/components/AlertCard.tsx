@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Card, CardField, Snapshot } from "../api";
+import type { Card, CardField, FeedAppearance, Snapshot } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import {
   BrainIcon,
@@ -1040,6 +1040,20 @@ export function nowReading(card: Card): number | null {
   const calledAt = Date.parse(pricedAt);
   if (!Number.isFinite(at) || !Number.isFinite(calledAt)) return mcap;
   return at >= calledAt + CALL_READING_LAG_MS ? mcap : null;
+}
+
+/**
+ * Whether the Live feed's "hide below this market cap" setting hides this card: its "Now" market cap
+ * is known and under the line. Display only - stats and grading still count the alert. A card with
+ * no reading yet stays shown.
+ */
+export function belowMcapLine(
+  card: Card,
+  look: Pick<FeedAppearance, "hideBelowMcap" | "hideBelowMcapUsd">,
+): boolean {
+  if (!look.hideBelowMcap) return false;
+  const mcap = nowReading(card);
+  return mcap !== null && mcap < look.hideBelowMcapUsd;
 }
 
 /** The "Now" figure's tooltip: why it is blank in a call's first minute, or how old it is. */

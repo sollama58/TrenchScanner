@@ -5713,6 +5713,12 @@ button.small-btn {
 .text-size-note {
   flex-basis: 100%;
 }
+.mcap-line {
+  margin: 0;
+}
+.mcap-hidden-note {
+  margin: 10px 0 0;
+}
 .color-row {
   display: flex;
   align-items: center;

@@ -1339,6 +1339,13 @@ export interface FeedAppearance {
   outline: string | null;
   /** The outline turns green on a pass and red on a fail once graded (absent from older API builds: on). */
   outlineResult: boolean;
+  /**
+   * Hide Live feed alerts whose current market cap is below hideBelowMcapUsd. Display only: stats
+   * and grading still count them (absent from older API builds: off).
+   */
+  hideBelowMcap: boolean;
+  /** USD, 3k-20k in 1k steps (absent from older API builds: 5k). */
+  hideBelowMcapUsd: number;
   /** Trading sites each card links to; Padre's Trading Terminal by default. */
   quickLinks: QuickLink[];
   hidden: CardField[];

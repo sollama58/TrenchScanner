@@ -37,6 +37,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   lighthouseTab: false,
   outline: null,
   outlineResult: true,
+  hideBelowMcap: false,
+  hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],
   // Off by default, both switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, and the TokenSage button (the token view keeps its own). An account that
@@ -50,6 +52,9 @@ export const QUICK_LINK_SITES: { id: QuickLink; label: string; href: (mint: stri
   { id: "axiom", label: "Axiom", href: (m) => `https://axiom.trade/t/${m}` },
   { id: "gmgn", label: "GMGN", href: (m) => `https://gmgn.ai/sol/token/${m}` },
 ];
+/** The Live feed's "hide below this market cap" slider, in USD (apps/api/src/feedAppearance.ts has the same). */
+export const HIDE_BELOW_MCAP = { min: 3_000, max: 20_000, step: 1_000 } as const;
+
 const QUICK_LINK_IDS = new Set<string>(QUICK_LINK_SITES.map((l) => l.id));
 
 /** Every hideable card field, grouped as the Settings tab lists them. */
@@ -222,6 +227,11 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     lighthouseTab: typeof r.lighthouseTab === "boolean" ? r.lighthouseTab : d.lighthouseTab,
     outline: hex(r.outline),
     outlineResult: typeof r.outlineResult === "boolean" ? r.outlineResult : d.outlineResult,
+    hideBelowMcap: typeof r.hideBelowMcap === "boolean" ? r.hideBelowMcap : d.hideBelowMcap,
+    hideBelowMcapUsd:
+      typeof r.hideBelowMcapUsd === "number" && r.hideBelowMcapUsd % HIDE_BELOW_MCAP.step === 0
+        ? intIn(r.hideBelowMcapUsd, HIDE_BELOW_MCAP.min, HIDE_BELOW_MCAP.max, d.hideBelowMcapUsd)
+        : d.hideBelowMcapUsd,
     quickLinks: Array.isArray(r.quickLinks)
       ? [
           ...new Set(
@@ -249,6 +259,8 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     narrativeNote,
     streamTab,
     lighthouseTab,
+    hideBelowMcap,
+    hideBelowMcapUsd,
   } = current;
   return normalizeAppearance({
     ...DEFAULT_APPEARANCE,
@@ -264,6 +276,8 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     narrativeNote,
     streamTab,
     lighthouseTab,
+    hideBelowMcap,
+    hideBelowMcapUsd,
   });
 }
 

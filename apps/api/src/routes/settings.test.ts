@@ -79,14 +79,31 @@ describe("parseFeedAppearance", () => {
       outlineResult: false,
     });
     expect(parseFeedAppearance({ outline: "grey" }).outline).toBe(null);
+    // Hiding low market caps is off by default, at 5k; the slider runs 3k-20k in whole 1k steps.
+    expect(parseFeedAppearance({})).toMatchObject({ hideBelowMcap: false, hideBelowMcapUsd: 5_000 });
+    expect(parseFeedAppearance({ hideBelowMcap: true, hideBelowMcapUsd: 12_000 })).toMatchObject({
+      hideBelowMcap: true,
+      hideBelowMcapUsd: 12_000,
+    });
+    for (const bad of [2_000, 21_000, 4_500, "8000"])
+      expect(parseFeedAppearance({ hideBelowMcapUsd: bad }).hideBelowMcapUsd).toBe(5_000);
     // The score tile and TokenSage button are hidden by default; a saved field list is kept as is.
     expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage"]);
     expect(parseFeedAppearance({ hidden: [] }).hidden).toEqual([]);
   });
 
   it("lets an older dashboard build save without the options added since", () => {
-    const { volume, scoreColor, reasons, quickLinks, outline, outlineResult, ...older } =
-      DEFAULT_FEED_APPEARANCE;
+    const {
+      volume,
+      scoreColor,
+      reasons,
+      quickLinks,
+      outline,
+      outlineResult,
+      hideBelowMcap,
+      hideBelowMcapUsd,
+      ...older
+    } = DEFAULT_FEED_APPEARANCE;
     const parsed = feedAppearanceSchema.safeParse(older);
     expect(parsed.success && parsed.data).toEqual({
       ...older,
@@ -96,6 +113,8 @@ describe("parseFeedAppearance", () => {
       quickLinks,
       outline,
       outlineResult,
+      hideBelowMcap,
+      hideBelowMcapUsd,
     });
   });
 });
