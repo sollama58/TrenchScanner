@@ -663,7 +663,8 @@ const envSchema = z.object({
   CURATED_CONTENDER_RETRY_MINUTES: z.coerce.number().min(0).default(15),
 
   // The AI reviewer (apps/worker/src/ai/reviewer.ts): a buy/no-buy second opinion from Claude on
-  // every curated pick the governor selects. "shadow" (the default) asks and records the answer
+  // the high-conviction picks the governor selects, from any seat, one review per token (user
+  // decision 2026-10-14; see AI_REVIEW_STANDARD_PICKS). "shadow" (the default) asks and records the answer
   // without changing what is sent, so its calls get graded by the same labels before they are
   // trusted; "gate" only sends alerts it says to buy; "off" never calls it. Without
   // ANTHROPIC_API_KEY it is off whatever the mode says. A pick it passes on is not re-asked for
@@ -674,9 +675,10 @@ const envSchema = z.object({
   AI_REVIEW_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("medium"),
   AI_REVIEW_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   AI_REVIEW_VETO_COOLDOWN_MINUTES: z.coerce.number().positive().default(30),
-  // Gate mode has to be EARNED: until at least this many of the reviewer's "buy" calls are
-  // graded and they meet CURATED_TARGET_WIN_RATE_PCT / CURATED_TARGET_GOAL_RATE_PCT, "gate"
-  // behaves as "shadow" (see aiGateQualified in apps/worker/src/ai/reviewer.ts).
+  // Gate mode has to be EARNED: until at least this many of the reviewer's "buy" calls under the
+  // current playbook are graded (one per token) and they beat the pool it reviewed with a 95%
+  // lower bound above 0 (user decision 2026-10-14, "lift with intervals"), "gate" behaves as
+  // "shadow" (see aiGateQualified in apps/worker/src/ai/reviewer.ts).
   AI_REVIEW_MIN_GRADED_BUYS: z.coerce.number().int().positive().default(50),
   // The AI judge's learning loop (apps/worker/src/jobs/aiJudgeJob.ts), all inert without
   // ANTHROPIC_API_KEY. Every AI_PLAYBOOK_EVOLUTION_HOURS the reviewer's graded record is reviewed
@@ -695,20 +697,22 @@ const envSchema = z.object({
   AI_REPLAY_HOLDOUT_DAYS: z.coerce.number().positive().default(3),
   AI_REPLAY_MAX_ROWS: z.coerce.number().int().positive().default(150),
   // The learned blend of the default model's odds and the reviewer's (curation/aiBlend.ts), refit
-  // with the curator training cadence. It needs AI_BLEND_MIN_ROWS graded reviews; once its
-  // out-of-sample record beats the model alone, gate mode holds back picks the blend scores below
-  // its cutoff instead of using the reviewer's bare buy/no-buy.
+  // with the curator training cadence. It needs AI_BLEND_MIN_ROWS graded reviews; once it beats the
+  // model alone walking forward and on the newest rows held out of every fit and of its cutoff,
+  // gate mode holds back picks the blend scores below its cutoff instead of using the reviewer's
+  // bare buy/no-buy.
   AI_BLEND_MIN_ROWS: z.coerce.number().int().positive().default(150),
   // Claude's read of each in-band mint's name and description (apps/worker/src/ai/textScorer.ts),
   // scored once per mint and fed to the models as features. AI_TEXT_MAX_PER_HOUR caps the calls
-  // (the cost knob); "false" stops new reads. Haiku by default (user's call, 2026-10-05): a few
-  // tenths of a cent a read, so 60 an hour fits well inside the daily AI budget. AI_TEXT_EFFORT
-  // applies only to models that take an effort setting (not Haiku).
+  // (the cost knob); "false" stops new reads. Haiku by default (user's call, 2026-10-05; Haiku 5.5
+  // from 2026-10-14, about a tenth of Haiku 4.5's price): well under a tenth of a cent a read, so
+  // 60 an hour fits easily inside the daily AI budget. AI_TEXT_EFFORT applies to models that take
+  // an effort setting (Haiku 5.5 does; Haiku 4.5 doesn't).
   AI_TEXT_FEATURES: z
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
-  AI_TEXT_MODEL: z.string().default("claude-haiku-4-5"),
+  AI_TEXT_MODEL: z.string().default("claude-haiku-5-5"),
   AI_TEXT_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
   AI_TEXT_MAX_PER_HOUR: z.coerce.number().int().min(0).default(60),
   // TokenSage (https://github.com/sollama58/TokenSage): the user's own API that reads a token's
@@ -760,13 +764,15 @@ const envSchema = z.object({
   // Admin tab). The last AI_BUDGET_REVIEW_RESERVE_PCT of the cap is kept for reviews of
   // high-conviction picks - background work (text reads, playbook tests, reviews of standard
   // picks) pauses once spend reaches the rest. 0 stops every AI call.
-  AI_DAILY_BUDGET_USD: z.coerce.number().min(0).default(10),
+  // $15 since 2026-10-14 (user decision, with AI_REVIEW_STANDARD_PICKS "never").
+  AI_DAILY_BUDGET_USD: z.coerce.number().min(0).default(15),
   AI_BUDGET_REVIEW_RESERVE_PCT: z.coerce.number().min(0).max(100).default(40),
-  // Which picks the reviewer is pointed at. It always reviews the default model's high-conviction
-  // picks (tier "high", or every pick when the model has no high-conviction cutoff yet).
-  // "spare": standard picks are reviewed too, but only out of the budget left above the
-  // high-conviction reserve. "never": standard picks are never reviewed.
-  AI_REVIEW_STANDARD_PICKS: z.enum(["spare", "never"]).default("spare"),
+  // Which picks the reviewer is pointed at. It always reviews the high-conviction tier: picks any
+  // seat rates tier "high". "never" (the default since 2026-10-14, user decision: live picks only):
+  // nothing else is reviewed. "spare": the default seat's other picks (standard, or from a model
+  // with no high-conviction cutoff) are reviewed too, but only out of the budget left above the
+  // high-conviction reserve.
+  AI_REVIEW_STANDARD_PICKS: z.enum(["spare", "never"]).default("never"),
 
   API_PORT: z.coerce.number().positive().default(4000),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),

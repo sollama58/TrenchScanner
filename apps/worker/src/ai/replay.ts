@@ -12,10 +12,14 @@ import {
   aiSpendDay,
   usageCostUsd,
   CANDIDATE_WATCH_WINDOW_MINUTES,
+  BRIEF_WALLET_FIELDS,
+  FRESH_ANCHOR_LABEL_RULE,
   type CurationDecision,
   type Env,
+  type ScoredToken,
   type JudgeRecordSummary,
   type JudgedCall,
+  HIGH_CONVICTION_TIER,
 } from "@trenchscanner/core";
 import { anthropicClient, describeAnthropicError } from "./client.js";
 import { aiBudgetRoomUsd, estimateCallUsd, reserveAiSpend, settleAiSpend } from "./budget.js";
@@ -39,9 +43,10 @@ const logger = createLogger("ai-replay");
  * alerts, briefed exactly as the live reviewer would have been briefed AT THE TIME, with
  * comparables drawn only from outcomes that had already finished by then (no peeking).
  *
- * Known gaps from live: RugCheck flag strings and the curator's reasons are what the alert row
- * kept, and narrative tags/description are the token's current ones. The numbers are the alert's
- * own stored feature vector.
+ * The numbers are the alert's own stored feature vector, wallet stage included; the RugCheck
+ * flags are the alert's own scan's (its TokenSnapshot); a call graded from a fresh quote is
+ * briefed with both market caps, as live. Known gaps from live: narrative tags and description
+ * are the token's current ones, and the curator's reasons are what the alert row kept.
  */
 
 /** A pool row counts as known at time t once its label window (plus slack) has closed. */
@@ -58,9 +63,10 @@ export interface ReplayItem {
 }
 
 /**
- * The past alerts a replay re-asks about: curated alerts sent in [from, to) on any ledger - the
- * population the reviewer exists to filter - whose label window has closed, one per anchor,
- * newest first, at most `take`. Each comes back briefed as the live reviewer would have seen it.
+ * The past alerts a replay re-asks about: high-conviction calls sent in [from, to) on any ledger -
+ * the population the live reviewer judges (reviewPriority) - whose label window has closed, one
+ * per anchor and one per token, newest first, at most `take`. Each comes back briefed as the live
+ * reviewer would have seen it.
  */
 export async function loadReplayItems(
   env: Env,
@@ -69,6 +75,7 @@ export async function loadReplayItems(
   const alerts = await prisma.curatedAlert.findMany({
     where: {
       createdAt: { gte: range.from, lt: range.to },
+      tier: HIGH_CONVICTION_TIER,
       candidateOutcome: { is: { finalizedAt: { not: null } } },
     },
     orderBy: { createdAt: "desc" },
@@ -78,11 +85,21 @@ export async function loadReplayItems(
       confidence: true,
       calibratedPct: true,
       reasons: true,
+      tier: true,
+      snapshot: { select: { riskFlags: true } },
       candidateOutcome: {
-        select: { id: true, anchorAt: true, anchorPriceUsd: true, anchorMcapUsd: true, features: true },
+        select: {
+          id: true,
+          anchorAt: true,
+          anchorPriceUsd: true,
+          anchorMcapUsd: true,
+          labelRule: true,
+          features: true,
+        },
       },
       token: {
         select: {
+          id: true,
           mintAddress: true,
           symbol: true,
           name: true,
@@ -97,12 +114,15 @@ export async function loadReplayItems(
   });
 
   const seen = new Set<string>();
+  const seenTokens = new Set<string>();
   const picked = alerts.filter((a) => {
     const id = a.candidateOutcome?.id;
-    if (!id || seen.has(id)) return false;
+    // Live, a token is reviewed once however many seats call it (curatedAlerts.ts reviewOnce).
+    if (!id || seen.has(id) || seenTokens.has(a.token.id)) return false;
     // A token the safety screen now rejects is never put to the reviewer live, so it is not replayed.
     if (!passesWalletSafetyCuts(a.candidateOutcome!.features as Record<string, number | null>)) return false;
     seen.add(id);
+    seenTokens.add(a.token.id);
     return true;
   });
   const chosen = picked.slice(0, range.take);
@@ -118,21 +138,27 @@ export async function loadReplayItems(
   return chosen.map((a) => {
     const co = a.candidateOutcome!;
     const features = co.features as Record<string, number | null>;
-    const scored = {
-      ...scoredFromFeatures(features, co.anchorPriceUsd, co.anchorMcapUsd),
+    const scored: ScoredToken = {
+      ...replayedMarket(features, co),
       mintAddress: a.token.mintAddress,
       symbol: a.token.symbol ?? undefined,
       name: a.token.name ?? undefined,
       description: a.token.description ?? undefined,
       narrativeTags: a.token.narrativeTags,
+      riskFlags: a.snapshot?.riskFlags,
       // The pool's open time, back from the recorded pair age, so the brief reads it as it stood.
       pairCreatedAt:
         typeof features.pairAgeMinutes === "number"
           ? new Date(co.anchorAt.getTime() - features.pairAgeMinutes * 60_000)
           : undefined,
     };
+    for (const k of BRIEF_WALLET_FIELDS) {
+      const v = features[k];
+      if (typeof v === "number") scored[k] = v;
+    }
     const decision: CurationDecision = {
       curate: true,
+      tier: a.tier === "high" ? "high" : undefined,
       confidence: a.confidence,
       calibratedPct: a.calibratedPct ?? undefined,
       reasons: a.reasons,
@@ -144,6 +170,27 @@ export async function loadReplayItems(
       brief: buildAiReviewBrief(scored, decision, comparablesAsOf(features, pool, co.anchorAt), co.anchorAt),
     };
   });
+}
+
+/**
+ * The token's market as the decision saw it. A call graded from a fresh quote (labelRule
+ * FRESH_ANCHOR_LABEL_RULE) is anchored on the quote's price, and DexScreener's lagging price is
+ * that over 1 + freshGapPct (the decision row's own gap): both are put back, so the brief shows the
+ * two market caps the live one did instead of the quote alone as "market cap".
+ */
+export function replayedMarket(
+  features: Record<string, number | null>,
+  co: { anchorAt: Date; anchorPriceUsd: number; anchorMcapUsd: number; labelRule: number },
+): ScoredToken {
+  const gap = features.freshGapPct;
+  if (co.labelRule !== FRESH_ANCHOR_LABEL_RULE || typeof gap !== "number" || !(1 + gap / 100 > 0)) {
+    return scoredFromFeatures(features, co.anchorPriceUsd, co.anchorMcapUsd);
+  }
+  const lag = 1 + gap / 100;
+  return {
+    ...scoredFromFeatures(features, co.anchorPriceUsd / lag, co.anchorMcapUsd / lag),
+    freshQuote: { priceUsd: co.anchorPriceUsd, marketCapUsd: co.anchorMcapUsd, fetchedAt: co.anchorAt },
+  };
 }
 
 /** The pick's nearest graded rows among those whose outcome was already known at `at`. */

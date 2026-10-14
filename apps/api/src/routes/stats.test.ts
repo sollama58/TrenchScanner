@@ -146,6 +146,7 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
   let app: FastifyInstance;
   let tokenId: string;
   let userId: string;
+  const aiTokenIds: string[] = [];
 
   /** One graded (or pending) anchor row. */
   async function outcome(
@@ -240,18 +241,30 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
       });
     }
 
-    // AI reviewer: a right buy, a wrong buy, a right veto, and a failed call.
+    // AI reviewer: a right buy, a wrong buy, a right veto, and a failed call, each on its own
+    // token - and the first token reviewed again later, which counts once (its first review).
     const reviews = [
-      { decision: "buy", p: 0.82, verdict: { hit2x: true } },
-      { decision: "buy", p: 0.71, verdict: { hit2x: false } },
-      { decision: "no_buy", p: 0.2, verdict: { hit2x: false } },
-      { decision: null, p: null, verdict: null },
+      { decision: "buy", p: 0.82, verdict: { hit2x: true }, token: 0 },
+      { decision: "buy", p: 0.71, verdict: { hit2x: false }, token: 1 },
+      { decision: "no_buy", p: 0.2, verdict: { hit2x: false }, token: 2 },
+      { decision: null, p: null, verdict: null, token: 3 },
+      { decision: "no_buy", p: 0.1, verdict: null, token: 0, sameOutcomeAs: 0 },
     ];
+    const reviewOutcomes: (string | null)[] = [];
+    for (let t = 0; t < 4; t++) {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-ai-${t}` } });
+      aiTokenIds.push(token.id);
+    }
     for (const [i, r] of reviews.entries()) {
       await prisma.aiReview.create({
         data: {
-          tokenId,
-          candidateOutcomeId: r.verdict ? await outcome(20 + i, "event", r.verdict) : null,
+          tokenId: aiTokenIds[r.token]!,
+          candidateOutcomeId: (reviewOutcomes[i] =
+            "sameOutcomeAs" in r
+              ? reviewOutcomes[r.sameOutcomeAs!]!
+              : r.verdict
+                ? await outcome(20 + i, "event", r.verdict)
+                : null),
           createdAt: at(20 + i),
           mode: "shadow",
           model: "test",
@@ -305,6 +318,7 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
   afterAll(async () => {
     if (userId) await prisma.user.delete({ where: { id: userId } });
     if (tokenId) await prisma.token.delete({ where: { id: tokenId } });
+    await prisma.token.deleteMany({ where: { id: { in: aiTokenIds } } });
     await app?.close();
   });
 
@@ -344,6 +358,10 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
 
     expect(body.aiReviewer.buys).toMatchObject({ calls: 2, graded: 2, won2x: 1, hitRate2xPct: 50 });
     expect(body.aiReviewer.allReviewed).toMatchObject({ calls: 3, graded: 3, won2x: 1 });
+    // Buys 1/2 against passes 0/1: +16.7 points over the pool, an interval far too wide to gate on.
+    expect(body.aiReviewer.liftPts).toBeCloseTo(16.7, 1);
+    expect(body.aiReviewer.liftLowPts).toBeLessThan(0);
+    expect(body.aiReviewer.liftHighPts).toBeGreaterThan(body.aiReviewer.liftPts);
     expect(body.aiReviewer.byDecision).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ decision: "error", calls: 1, graded: 0 }),

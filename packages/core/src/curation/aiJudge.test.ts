@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildReflectionBrief,
   decidePlaybookPromotion,
+  firstReviewPerToken,
+  judgeGateOpens,
+  judgeLift,
+  wilsonInterval,
   summarizeJudgeRecord,
   MAX_REFLECTION_CALLS,
   type JudgedCall,
@@ -101,7 +105,7 @@ describe("buildReflectionBrief", () => {
     stoppedOut: decision === "buy" && labelValue === 0,
     peak1hReturnPct: labelValue > 0 ? 150 : 10,
     curatorProbability: 0.3,
-    features: { mcapUsd: 90_000, uniqueBuyers5m: 25, devSoldShare: 0.5 },
+    features: { mcapUsd: 90_000, walletRiskTop10Max: 75, devSoldShare: 0.5 },
   });
 
   it("lists the costliest mistakes first and summarizes the record", () => {
@@ -116,7 +120,9 @@ describe("buildReflectionBrief", () => {
     const rows = brief.split("\n").filter((l) => /^(buy|no_buy) \|/.test(l));
     expect(rows[0]).toMatch(/^buy .*STOPPED OUT$/);
     expect(rows[1]).toMatch(/^no_buy .*WON/);
-    expect(brief).toContain("distinct buyers 5m");
+    expect(brief).toContain("riskiest top-10 wallet score");
+    // The 5-minute trade-stream columns are gone with the stream.
+    expect(brief).not.toContain("distinct buyers 5m");
   });
 
   it("caps how many calls it lists", () => {
@@ -124,5 +130,53 @@ describe("buildReflectionBrief", () => {
     const brief = buildReflectionBrief("", many);
     expect(brief.split("\n").filter((l) => l.startsWith("no_buy |"))).toHaveLength(MAX_REFLECTION_CALLS);
     expect(brief).toContain("(empty");
+  });
+});
+
+describe("the judge's lift and the gate rule", () => {
+  const calls = (buyWins: number, buys: number, passWins: number, passes: number) => [
+    ...Array.from({ length: buys }, (_, i) => ({
+      decision: "buy" as const,
+      labelValue: i < buyWins ? 1 : 0,
+    })),
+    ...Array.from({ length: passes }, (_, i) => ({
+      decision: "no_buy" as const,
+      labelValue: i < passWins ? 1 : 0,
+    })),
+  ];
+
+  it("gives the Wilson interval", () => {
+    const w = wilsonInterval(38, 50);
+    expect(w.low).toBeCloseTo(0.626, 2);
+    expect(w.high).toBeGreaterThan(0.76);
+    expect(wilsonInterval(0, 0)).toEqual({ low: 0, high: 1 });
+  });
+
+  it("measures lift over the whole pool, with its interval", () => {
+    // Buys 30% of 100, passes 20% of 200: pool 23.3%, lift +6.7 points.
+    const lift = judgeLift(calls(30, 100, 40, 200));
+    expect(lift.liftPts).toBeCloseTo(6.667, 2);
+    expect(lift.liftLowPts!).toBeLessThan(lift.liftPts!);
+    expect(lift.liftHighPts!).toBeGreaterThan(lift.liftPts!);
+  });
+
+  it("opens the gate only on enough buys and a lower bound above 0", () => {
+    // A clear edge on 200 buys: open.
+    expect(judgeGateOpens(judgeLift(calls(80, 200, 40, 200)), 50)).toBe(true);
+    // The same point lift on a handful of rows: the interval straddles 0.
+    expect(judgeGateOpens(judgeLift(calls(4, 10, 2, 10)), 5)).toBe(false);
+    // Too few buys, however good.
+    expect(judgeGateOpens(judgeLift(calls(40, 40, 10, 200)), 50)).toBe(false);
+    // A judge that never passes has no pool to beat.
+    expect(judgeLift(calls(30, 100, 0, 0)).liftPts).toBeNull();
+  });
+
+  it("counts each token once, its earliest review", () => {
+    const rows = [
+      { tokenId: "a", n: 1 },
+      { tokenId: "b", n: 2 },
+      { tokenId: "a", n: 3 },
+    ];
+    expect(firstReviewPerToken(rows).map((r) => r.n)).toEqual([1, 2]);
   });
 });

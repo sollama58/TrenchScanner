@@ -10,8 +10,15 @@ import {
   clampProbability,
   formatComparables,
   nearestOutcomes,
+  safetyScreenSummary,
   type GradedRow,
 } from "./aiReview.js";
+import {
+  SAFETY_COUNT_CUT_HOLDERS,
+  SAFETY_MAX_LARGEST_HOLDER_PCT,
+  SAFETY_REJECT_CEX_FUNDED_COUNT,
+  SAFETY_REJECT_LINKED_COUNT,
+} from "../scoring/rugScreen.js";
 import type { ScoredToken } from "../types.js";
 import type { CurationDecision } from "./curator.js";
 
@@ -44,6 +51,68 @@ describe("AI review brief", () => {
     expect(AI_REVIEW_SYSTEM_PROMPT).toContain("2x the alert price within 15 minutes");
     expect(AI_REVIEW_SYSTEM_PROMPT).toContain("at least 75%");
     expect(AI_REVIEW_SYSTEM_PROMPT).toContain("4x within 30 minutes");
+  });
+
+  it("states the safety screen from the screen's own cuts", () => {
+    expect(safetyScreenSummary()).toContain(
+      `fewer than ${SAFETY_REJECT_LINKED_COUNT} of the top ${SAFETY_COUNT_CUT_HOLDERS} holders linked`,
+    );
+    expect(safetyScreenSummary()).toContain(
+      `fewer than ${SAFETY_REJECT_CEX_FUNDED_COUNT} funded from an exchange`,
+    );
+    expect(safetyScreenSummary()).toContain(
+      `no single holder over ${SAFETY_MAX_LARGEST_HOLDER_PCT}% of supply`,
+    );
+    expect(AI_REVIEW_SYSTEM_PROMPT).toContain(safetyScreenSummary());
+    expect(AI_REVIEW_SYSTEM_PROMPT).not.toContain("15 of the top 20");
+    expect(AI_REVIEW_SYSTEM_PROMPT).toContain("<tokensage>");
+  });
+
+  it("gives the wallet stage, only the readings it has", () => {
+    const brief = buildAiReviewBrief(
+      {
+        ...scored,
+        walletRiskTop10Max: 82.4,
+        walletRiskFirstBuyersMean: 41,
+        walletRiskHighSupplyPct: 6.5,
+        knownDumperFirstBuyers: 2,
+        winnerRecentBuyers: 3,
+        winnerRecentSellers: 0,
+        kolTopHolders: 1,
+        kolTopHolderPct: 1.2,
+        kolFirstBuyers: 0,
+        kolRecentBuyers: 1,
+        kolRecentSellers: 0,
+        flaggedBuyers: 1,
+        flaggedSellers: 4,
+        flaggedBuySol: 0.5,
+        flaggedSellSol: 12.25,
+        linkedWalletCount: 6,
+        linkedWalletsChecked: 25,
+        linkedWalletPct: 14.2,
+        linkedClusterCount: 2,
+        cexFundedCount: 9,
+        cexFundedHolders: 25,
+        cexFundedPct: 30,
+      } as ScoredToken,
+      decision,
+    );
+    expect(brief).toContain(
+      "riskiest top-10 holder 82; launch's first buyers average 41; supply held by risky holders 6.5%; known dumpers among the first buyers 2",
+    );
+    expect(brief).toContain("winner wallets in the newest trades: 3 buying, 0 selling");
+    expect(brief).toContain("known KOL wallets: 1 among the top 20 holders (1.2% of supply)");
+    expect(brief).toContain("4 selling (12.25 SOL)");
+    expect(brief).toContain(
+      "linked by funding (one funder paid for them, or they funded each other): 6 of the top 25",
+    );
+    expect(brief).toContain(
+      "funded from an exchange (how retail usually arrives): 9 of the top 25, 30.0% of supply",
+    );
+    // No winner scores and no same-minute reading: those lines are left out, not "unknown".
+    expect(brief).not.toContain("winner wallets (wallets whose coins keep doubling");
+    expect(brief).not.toContain("same minute");
+    expect(buildAiReviewBrief(scored, decision)).not.toContain("wallets:");
   });
 
   it("shows the market cap the call is graded from beside DexScreener's lagging one", () => {
@@ -210,6 +279,10 @@ describe("AI review brief", () => {
       "trades against $BULL instead of SOL (launched into its community); it is itself a pump.fun coin",
     );
     expect(paired).toContain("the logo looks like: dog (91%");
+    // TokenSage's labels can carry launcher text, so the read sits in its own data block.
+    const block = paired.slice(paired.indexOf("<tokensage>"), paired.indexOf("</tokensage>"));
+    expect(block).toContain("what it refers to: Moo Deng");
+    expect(block).toContain("the logo looks like: dog");
   });
 
   it("prints only the order-flow lines whose figures are known", () => {
@@ -384,9 +457,10 @@ describe("AI review brief - model odds and trade flow", () => {
 
   it("lists the trade-by-trade flow when the token was tracked, and omits the section when not", () => {
     const brief = buildAiReviewBrief({ ...scored, tradeFlow: flow } as ScoredToken, decision);
-    expect(brief).toContain("distinct buyers in the last 5 minutes: 42 (80% of them new to this token)");
-    expect(brief).toContain("buys per buying wallet (5m): 1.4");
-    expect(brief).toContain("net SOL flow over 5 minutes vs market cap: 1.23%");
+    // The 5-minute buyer figures are dead upstream, so the brief leaves them out even when set.
+    expect(brief).not.toContain("distinct buyers in the last 5 minutes");
+    expect(brief).not.toContain("buys per buying wallet (5m)");
+    expect(brief).not.toContain("net SOL flow over 5 minutes");
     expect(brief).toContain(
       "launch snipers (bought within 30s of launch): 6 wallets, still holding 9.5% of supply, sold 40%",
     );
