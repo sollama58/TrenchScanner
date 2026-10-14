@@ -30,8 +30,8 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
     setCandleFetcherForTests(async (mint) =>
       mint === MINT
         ? [
-            { t: 60_000, o: 10_000, h: 12_000, l: 9_000, c: 11_000 },
-            { t: 120_000, o: 11_000, h: 20_000, l: 11_000, c: 19_000 },
+            { t: 60_000, o: 10_000, h: 12_000, l: 9_000, c: 11_000, vol: 500 },
+            { t: 120_000, o: 11_000, h: 20_000, l: 11_000, c: 19_000, vol: 900 },
           ]
         : null,
     );

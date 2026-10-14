@@ -588,9 +588,10 @@ export function layoutGraph(
 /** A label to place near an anchor (a funder's diamond, an exchange's tie): its box size in map units. */
 export interface MapLabel {
   id: string;
+  /** Its anchor: a bubble, or the middle of the wallets a hub label ties together. */
   x: number;
   y: number;
-  /** How far from the anchor's centre the box may start (the anchor's own radius). */
+  /** How far from the anchor's centre the box may start (the anchor's own radius; 0 for a hub). */
   r: number;
   w: number;
   h: number;
@@ -612,9 +613,8 @@ export interface PlacedLabel {
  * label with no clear spot takes the one that covers least. Deterministic, like the layout.
  */
 export function placeLabels(
-  graph: Pick<BubbleGraph, "nodes" | "links" | "sameTimeLinks" | "cexLinks">,
+  graph: Pick<BubbleGraph, "nodes" | "links">,
   labels: readonly MapLabel[],
-  opts: { cex?: boolean } = {},
 ): PlacedLabel[] {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   // Every drawn line as sample points (funding links bend, as the map draws them).
@@ -631,15 +631,11 @@ export function placeLabels(
       });
     }
   };
-  const lines = [
-    ...graph.links.map((l) => ({ ...l, bend: 0.12 })),
-    ...graph.sameTimeLinks.map((l) => ({ ...l, bend: 0 })),
-    ...(opts.cex ? graph.cexLinks.map((l) => ({ ...l, bend: 0 })) : []),
-  ];
-  for (const l of lines) {
+  // The funding links (hub labels' own spokes depend on where they land, so they aren't known yet).
+  for (const l of graph.links) {
     const a = byId.get(l.from);
     const b = byId.get(l.to);
-    if (a && b) sample(a.x, a.y, b.x, b.y, l.bend);
+    if (a && b) sample(a.x, a.y, b.x, b.y, 0.12);
   }
   // Bubbles with their rings (same-minute and risk rings reach about 9 past the edge, plus their stroke).
   const circles = graph.nodes.map((n) => ({ x: n.x, y: n.y, r: n.kind === "funder" ? n.r * 0.95 : n.r + 9 }));
@@ -904,4 +900,24 @@ export const CEX_COLOURS = 4;
 /** Each exchange's colour slot, in cexGroupsOf's order (largest first), so its lines, label and row match. */
 export function cexSlots(graph: Pick<BubbleGraph, "nodes" | "cexLinks">): Map<string, number> {
   return new Map(cexGroupsOf(graph).map((g, i) => [g.funder, i % CEX_COLOURS]));
+}
+
+/** Words that end an exchange's name in a wallet label: "Binance Hot Wallet 2" is Binance's. */
+const EXCHANGE_SUFFIX =
+  /^(hot|cold|wallet|wallets|deposit|withdraw|withdrawal|withdrawals|exchange|treasury|main|old|new|#?\d+|\(.*)$/i;
+
+/** An exchange wallet's label cut to the exchange's name ("Binance Hot Wallet 2" → "Binance"). */
+export function exchangeName(label: string): string {
+  const words = label.trim().split(/\s+/);
+  const end = words.findIndex((w, i) => i > 0 && EXCHANGE_SUFFIX.test(w.replace(/[:,.-]+$/, "")));
+  return (end < 0 ? words : words.slice(0, end)).join(" ").replace(/[:,.-]+$/, "") || label;
+}
+
+/** The middle of some bubbles: where a hub label tying them together starts its search. */
+export function centreOf(nodes: readonly Pick<MapNode, "x" | "y">[]): { x: number; y: number } {
+  if (nodes.length === 0) return { x: 0, y: 0 };
+  return {
+    x: nodes.reduce((s, n) => s + n.x, 0) / nodes.length,
+    y: nodes.reduce((s, n) => s + n.y, 0) / nodes.length,
+  };
 }

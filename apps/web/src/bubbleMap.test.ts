@@ -3,6 +3,8 @@ import {
   bubbleNameLines,
   NAME_MAX_W,
   placeLabels,
+  exchangeName,
+  centreOf,
   type MapNode,
   cexGroupsOf,
   cexLayout,
@@ -302,7 +304,7 @@ describe("placeLabels", () => {
   const node = (id: string, x: number, y: number, r: number) =>
     ({ id, kind: "holder", x, y, r }) as unknown as MapNode;
   it("puts a label below its anchor when that is clear", () => {
-    const [p] = placeLabels({ nodes: [node("a", 0, 0, 10)], links: [], sameTimeLinks: [], cexLinks: [] }, [
+    const [p] = placeLabels({ nodes: [node("a", 0, 0, 10)], links: [] }, [
       { id: "l", x: 0, y: 0, r: 10, w: 40, h: 16 },
     ]);
     expect(p!.x).toBe(0);
@@ -312,15 +314,13 @@ describe("placeLabels", () => {
     const g = {
       nodes: [node("a", 0, 0, 10), node("b", 0, 40, 20), node("c", 60, 0, 10)],
       links: [{ from: "a", to: "c", cluster: 0 }],
-      sameTimeLinks: [],
-      cexLinks: [],
     };
     const [p] = placeLabels(g, [{ id: "l", x: 0, y: 0, r: 10, w: 40, h: 16 }]);
     // Not below (bubble b) and not to the right (the line to c): above.
     expect(p!.y).toBeLessThan(0);
   });
   it("keeps two labels apart", () => {
-    const g = { nodes: [node("a", 0, 0, 10)], links: [], sameTimeLinks: [], cexLinks: [] };
+    const g = { nodes: [node("a", 0, 0, 10)], links: [] };
     const [p, q] = placeLabels(g, [
       { id: "l1", x: 0, y: 0, r: 10, w: 40, h: 16 },
       { id: "l2", x: 0, y: 0, r: 10, w: 40, h: 16 },
@@ -408,5 +408,27 @@ describe("cexLayout", () => {
     expect(gap(pulled)).toBeLessThanOrEqual(before.gap);
     expect(gap(pulled)).toBeLessThan(at(pulled, A).r + at(pulled, R).r + 40);
     expect(at(g, A)).toMatchObject({ x: before.x, y: before.y });
+  });
+});
+
+describe("exchangeName", () => {
+  it("cuts a wallet label to the exchange's name", () => {
+    expect(exchangeName("Binance Hot Wallet 2")).toBe("Binance");
+    expect(exchangeName("Coinbase Hot Wallet 2")).toBe("Coinbase");
+    expect(exchangeName("Binance 2")).toBe("Binance");
+    expect(exchangeName("Crypto.com Withdrawal")).toBe("Crypto.com");
+    expect(exchangeName("OKX")).toBe("OKX");
+    expect(exchangeName("Gate.io Deposit #3")).toBe("Gate.io");
+  });
+});
+
+describe("centreOf", () => {
+  it("averages the bubbles' centres", () => {
+    expect(
+      centreOf([
+        { x: 0, y: 0 },
+        { x: 10, y: 20 },
+      ]),
+    ).toEqual({ x: 5, y: 10 });
   });
 });

@@ -1,7 +1,16 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { change, signedPct, usd } from "../format";
-import { isPumpfunName, walletText, type WalletNames } from "../walletNames";
-import { mcapAxis, timeLabel, type MarkerTrade, type Point } from "../priceChart";
+import {
+  FLOW_WINDOW_MS,
+  flowAt,
+  mcapAxis,
+  timeLabel,
+  volumeBars,
+  type Point,
+  type ScanFlow,
+  type VolumeBar,
+  type VolumeCandle,
+} from "../priceChart";
 
 /** A moment marked on the time axis: an alert or a model's call. */
 export interface ChartEvent {
@@ -13,66 +22,26 @@ export interface ChartEvent {
 
 const PAD = { l: 8, r: 62, t: 24, b: 24 };
 
-/** What each marker kind is called in its readout. */
-export const MARKER_LABEL: Record<MarkerTrade["kind"], string> = {
-  dev: "Dev",
-  risky: "Risky wallet",
-  kol: "KOL",
-  winner: "Winner wallet",
-  linked: "Linked wallet",
-};
-
-/** The height of the flow lane under the plot, when there are marked trades. */
+/** The height of the volume lane under the plot, when there are candles to sum. */
 const LANE = 40;
-
-/** One slice of the flow lane: what the flagged wallets bought and sold in it, and the trades behind each. */
-interface FlowBucket {
-  buy: number;
-  sell: number;
-  buys: MarkerTrade[];
-  sells: MarkerTrade[];
-}
-
-/**
- * The marked trades summed into `n` even slices of [t0, t1], weighed by SOL; by trade count when
- * no amount is known, so the lane still shows which way they traded.
- */
-function flowBuckets(trades: readonly MarkerTrade[], t0: number, t1: number, n: number): FlowBucket[] {
-  const out = Array.from({ length: n }, (): FlowBucket => ({ buy: 0, sell: 0, buys: [], sells: [] }));
-  const inView = trades.filter((t) => t.t >= t0 && t.t <= t1);
-  const bySol = inView.some((t) => (t.sol ?? 0) > 0);
-  for (const t of inView) {
-    const i = Math.min(n - 1, Math.floor(((t.t - t0) / Math.max(1, t1 - t0)) * n));
-    const w = bySol ? (t.sol ?? 0) : 1;
-    const b = out[i]!;
-    if (t.side === 1) {
-      b.buy += w;
-      b.buys.push(t);
-    } else {
-      b.sell += w;
-      b.sells.push(t);
-    }
-  }
-  return out;
-}
 
 /**
  * The token modal's market-cap chart: one line, green above its baseline and red below it, with
  * the area between them shaded. The baseline is the alert's market cap while the alert is in view,
  * else where the view starts, so the colour always answers "up or down since then?". Sized to its
  * box in real pixels (a ResizeObserver), so text stays crisp at any width. Hover (or drag on a touch
- * screen) reads one point out; hovering (or tapping) a bar in the flow lane reads out its trades.
+ * screen) reads one point out; hovering (or tapping) a bar in the volume lane reads out its minutes.
  */
 export function PriceChart({
   points,
   stepMs,
   events,
-  markers = [],
+  candles = [],
+  flow = [],
   seenUntil,
   scans = [],
   live = true,
   now,
-  names,
   height,
   ariaLabel,
 }: {
@@ -80,14 +49,14 @@ export function PriceChart({
   /** The spacing the points were thinned to; scan readings, which come unevenly, estimate their own. */
   stepMs?: number;
   events: ChartEvent[];
-  /** Flagged wallets' trades, summed into buy and sell bars in a lane under the plot. */
-  markers?: MarkerTrade[];
+  /** Minute candles with their USD volume, summed into bars in a lane under the plot. */
+  candles?: VolumeCandle[];
+  /** The scans' 5-minute buy and sell counts: the readouts give the buy share where one covers. */
+  flow?: ScanFlow[];
   /** Model View: the call's time. Everything after it is shaded as what the model didn't see. */
   seenUntil?: number;
   /** Model View: the scan readings the model read, drawn as dots on their market caps. */
   scans?: Point[];
-  /** Names for the markers' wallets (KOLs, exchanges), shown in place of their addresses. */
-  names?: WalletNames;
   /** Whether the line runs to the latest reading; false when the view ends earlier (Model View). */
   live?: boolean;
   /** The latest reading, tagged "NOW:" under the end tag when the view ends before it. */
@@ -99,8 +68,8 @@ export function PriceChart({
   const boxRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
   const [hover, setHover] = useState<number | null>(null);
-  /** The flow bar under the pointer: its slice and side. */
-  const [bar, setBar] = useState<{ i: number; side: 1 | -1 } | null>(null);
+  /** The volume bar under the pointer (or last tapped): its slice. */
+  const [bar, setBar] = useState<number | null>(null);
 
   useEffect(() => {
     const el = boxRef.current;
@@ -130,18 +99,21 @@ export function PriceChart({
     return { t0, t1, step, x, axis, base, fromAlert: leadShown && !!lead.mcap, hiIdx };
   }, [points, stepMs, width, height, events]);
 
-  // About one flow bar per 10px of plot.
-  const slices = Math.max(12, Math.round((width - PAD.l - PAD.r) / 10));
-  const flow = useMemo(
-    () => (geo && markers.length > 0 ? flowBuckets(markers, geo.t0, geo.t1, slices) : null),
-    [geo, markers, slices],
+  // About one bar per 6px of plot, and no more bars than the view has minutes.
+  const plotW = width - PAD.l - PAD.r;
+  const slices = geo
+    ? Math.max(1, Math.min(Math.round(plotW / 6), Math.round((geo.t1 - geo.t0) / 60_000)))
+    : 1;
+  const vols = useMemo(
+    () => (geo && candles.some((k) => k.vol > 0) ? volumeBars(candles, geo.t0, geo.t1, slices) : null),
+    [geo, candles, slices],
   );
 
   if (!geo) return null;
   const { x, axis } = geo;
   const span = geo.t1 - geo.t0;
   const bottom = height - PAD.b;
-  const lane = flow ? LANE : 0;
+  const lane = vols ? LANE : 0;
   const fullH = height + lane;
   const px = (p: Point) => x(p.t);
   const py = (p: Point) => axis.y(p.v);
@@ -197,14 +169,13 @@ export function PriceChart({
   };
   const hx = h ? px(h) : 0;
   const hUp = h ? h.v >= geo.base : true;
-  // The flow lane: buys rise green from its middle, sells drop red, per slice of time.
+  // The volume lane: a bar per slice rising from its floor, green where the price rose across it.
   const laneTop = bottom + 8;
-  const laneMid = laneTop + (LANE - 8) / 2;
-  const laneHalf = (LANE - 8) / 2 - 2;
-  const flowMax = flow ? Math.max(1e-9, ...flow.map((b) => Math.max(b.buy, b.sell))) : 1;
-  const sliceW = (width - PAD.l - PAD.r) / slices;
-  const barTrades = bar && flow ? (bar.side === 1 ? flow[bar.i]?.buys : flow[bar.i]?.sells) : undefined;
-  const mark = barTrades && barTrades.length > 0 ? barTrades : undefined;
+  const laneBottom = laneTop + LANE - 10;
+  const volMax = vols ? Math.max(1e-9, ...vols.map((b) => b?.usd ?? 0)) : 1;
+  const sliceW = plotW / slices;
+  const mark = bar !== null && vols ? (vols[bar] ?? undefined) : undefined;
+  const hFlow = h ? flowAt(flow, h.t - 60_000, h.t) : null;
 
   return (
     <div className="pc" ref={boxRef}>
@@ -320,74 +291,47 @@ export function PriceChart({
           </g>
         )}
 
-        {flow && (
-          <g className="pc-flow">
-            <line x1={PAD.l} x2={width - PAD.r} y1={laneMid} y2={laneMid} className="pc-flow-mid" />
-            {flow.map((b, i) => {
-              const bx = PAD.l + i * sliceW + 1;
-              const bw = Math.max(1.5, sliceW - 2);
-              const hb = (b.buy / flowMax) * laneHalf;
-              const hs = (b.sell / flowMax) * laneHalf;
-              const on = (side: 1 | -1) => (bar?.i === i && bar.side === side ? " on" : "");
-              // Hit targets span the slice and the whole half of the lane, so a thin bar is easy to find.
-              const hit = (side: 1 | -1) => (
-                <rect
-                  className="pc-flow-hit"
-                  x={PAD.l + i * sliceW}
-                  width={sliceW}
-                  y={side === 1 ? laneTop : laneMid}
-                  height={LANE / 2 - 4}
-                  onPointerEnter={(e) => e.pointerType === "mouse" && setBar({ i, side })}
-                  onPointerLeave={(e) => e.pointerType === "mouse" && setBar(null)}
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                    setHover(null);
-                    setBar({ i, side });
-                  }}
-                />
-              );
+        {vols && (
+          <g className="pc-vol">
+            <line x1={PAD.l} x2={width - PAD.r} y1={laneBottom} y2={laneBottom} className="pc-vol-floor" />
+            {vols.map((b, i) => {
+              if (!b || b.usd <= 0) return null;
+              const hb = Math.max(2, (b.usd / volMax) * (laneBottom - laneTop));
+              // Thin bars even when a short view has few minutes: a wide block reads as a level, not a bar.
+              const bw = Math.min(14, Math.max(1.5, sliceW - 1.5));
               return (
                 <g key={i}>
-                  {b.buy > 0 && (
-                    <rect
-                      className={`pc-flow-buy${on(1)}`}
-                      x={bx}
-                      width={bw}
-                      y={laneMid - Math.max(2, hb)}
-                      height={Math.max(2, hb)}
-                      rx={1.5}
-                    />
-                  )}
-                  {b.sell > 0 && (
-                    <rect
-                      className={`pc-flow-sell${on(-1)}`}
-                      x={bx}
-                      width={bw}
-                      y={laneMid}
-                      height={Math.max(2, hs)}
-                      rx={1.5}
-                    />
-                  )}
-                  {b.buy > 0 && hit(1)}
-                  {b.sell > 0 && hit(-1)}
+                  <rect
+                    className={`pc-vol-bar ${b.c >= b.o ? "up" : "down"}${bar === i ? " on" : ""}`}
+                    x={PAD.l + i * sliceW + (sliceW - bw) / 2}
+                    width={bw}
+                    y={laneBottom - hb}
+                    height={hb}
+                    rx={1}
+                  />
+                  {/* The hit target spans the whole lane, so a short bar is as easy to find as a tall one. */}
+                  <rect
+                    className="pc-vol-hit"
+                    x={PAD.l + i * sliceW}
+                    width={sliceW}
+                    y={laneTop - 4}
+                    height={LANE - 4}
+                    onPointerEnter={(e) => e.pointerType === "mouse" && setBar(i)}
+                    onPointerLeave={(e) => e.pointerType === "mouse" && setBar(null)}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      setHover(null);
+                      setBar(i);
+                    }}
+                  />
                 </g>
               );
             })}
-            <text
-              x={width - PAD.r + 10}
-              y={laneMid - laneHalf / 2}
-              dy="0.35em"
-              className="pc-tick pc-flow-label buy"
-            >
-              Buys
+            <text x={width - PAD.r + 10} y={laneTop + 4} dy="0.35em" className="pc-tick pc-vol-label">
+              Vol
             </text>
-            <text
-              x={width - PAD.r + 10}
-              y={laneMid + laneHalf / 2}
-              dy="0.35em"
-              className="pc-tick pc-flow-label sell"
-            >
-              Sells
+            <text x={width - PAD.r + 10} y={laneTop + 16} dy="0.35em" className="pc-tick pc-vol-label">
+              {axisUsd(volMax)}
             </text>
           </g>
         )}
@@ -438,14 +382,13 @@ export function PriceChart({
         </span>
       ))}
 
-      {mark && bar && (
+      {mark && bar !== null && (
         <BarTip
-          trades={mark}
-          side={bar.side}
-          x={PAD.l + (bar.i + 0.5) * sliceW}
+          bar={mark}
+          flow={flowAt(flow, mark.from, mark.to)}
+          x={PAD.l + (bar + 0.5) * sliceW}
           bottom={fullH - laneTop + 6}
           width={width}
-          names={names}
         />
       )}
 
@@ -464,46 +407,45 @@ export function PriceChart({
               {signedPct(change(lead.mcap, h.v))} vs {lead.label.toLowerCase()}
             </span>
           ) : null}
+          {hFlow && <FlowLine flow={hFlow} />}
         </div>
       )}
     </div>
   );
 }
 
-/** What one flow bar stands for: who traded, which way, and how much. */
+/** A scan's buy share: "64% buys · 120 buys, 68 sells in the 5 min to 4:32 AM". */
+function FlowLine({ flow }: { flow: ScanFlow }) {
+  const share = flow.buys / (flow.buys + flow.sells);
+  return (
+    <span className="pc-flow-line">
+      <span className={`num ${share >= 0.5 ? "up" : "down"}`}>{Math.round(share * 100)}% buys</span>
+      <span className="faint">
+        {flow.buys} buys, {flow.sells} sells in the {FLOW_WINDOW_MS / 60_000} min to {timeLabel(flow.t, 0)}
+      </span>
+    </span>
+  );
+}
+
+/** What one volume bar stands for: its minutes, their volume, the move across them, and the buy share. */
 function BarTip({
-  trades,
-  side,
+  bar,
+  flow,
   x,
   bottom,
   width,
-  names,
 }: {
-  trades: readonly MarkerTrade[];
-  side: 1 | -1;
+  bar: VolumeBar;
+  flow: ScanFlow | null;
   x: number;
   /** Distance from the chart box's bottom edge, so the readout sits above the lane. */
   bottom: number;
   width: number;
-  names?: WalletNames;
 }) {
-  const known = trades.some((t) => t.sol !== null);
-  const sol = trades.reduce((s, t) => s + (t.sol ?? 0), 0);
-  // The wallets in it, the biggest traders first.
-  const byWallet = new Map<string, { sol: number; kind: MarkerTrade["kind"] }>();
-  for (const t of trades) {
-    const w = byWallet.get(t.wallet);
-    byWallet.set(t.wallet, { sol: (w?.sol ?? 0) + (t.sol ?? 0), kind: w?.kind ?? t.kind });
-  }
-  const wallets = [...byWallet.entries()].sort((a, b) => b[1].sol - a[1].sol);
-  const kinds = new Set(trades.map((t) => t.kind));
-  const kind = kinds.size === 1 ? trades[0]!.kind : null;
-  const ts = trades.map((t) => t.t);
-  const from = Math.min(...ts);
-  const to = Math.max(...ts);
+  const mins = Math.round((bar.to - bar.from) / 60_000);
   return (
     <div
-      className={`pc-tip pc-mark-tip${kind ? ` k-${kind}` : ""}`}
+      className="pc-tip"
       style={{
         top: "auto",
         bottom,
@@ -511,29 +453,15 @@ function BarTip({
         right: x > width / 2 ? width - x + 10 : undefined,
       }}
     >
-      <span className="pc-mark-head">
-        {kind && <i className={`pc-swatch k-${kind}`} aria-hidden="true" />}
-        {kind ? MARKER_LABEL[kind] : "Flagged wallets"} {side === 1 ? "bought" : "sold"}
-      </span>
-      <strong className="num">
-        {known ? `${sol.toFixed(sol >= 10 ? 0 : 2)} SOL` : "Amount not recorded"}
-      </strong>
       <span className="faint">
-        {trades.length} trade{trades.length === 1 ? "" : "s"}
-        {wallets.length > 1 ? ` by ${wallets.length} wallets` : ""} · {timeLabel(from, 0)}
-        {to - from >= 60_000 ? `–${timeLabel(to, 0)}` : ""}
+        {timeLabel(bar.from, 0)}
+        {mins > 1 ? `–${timeLabel(bar.to, 0)}` : ""}
       </span>
-      {wallets.slice(0, 3).map(([w, v]) => (
-        <span
-          key={w}
-          className={`pc-mark-wallet${names?.[w] ? "" : " num"}${isPumpfunName(names?.[w]) ? " pumpfun-name" : ""}`}
-        >
-          {!kind && <i className={`pc-swatch k-${v.kind}`} aria-hidden="true" />}
-          {walletText(w, names)}
-          {known ? ` · ${v.sol.toFixed(v.sol >= 10 ? 0 : 2)} SOL` : ""}
-        </span>
-      ))}
-      {wallets.length > 3 && <span className="faint">and {wallets.length - 3} more</span>}
+      <strong className="num">{usd(bar.usd)} volume</strong>
+      <span className={`num ${bar.c >= bar.o ? "up" : "down"}`}>
+        {signedPct(change(bar.o, bar.c))} market cap{mins > 1 ? ` over ${mins} min` : ""}
+      </span>
+      {flow ? <FlowLine flow={flow} /> : <span className="faint">No buy/sell count from a scan here</span>}
     </div>
   );
 }

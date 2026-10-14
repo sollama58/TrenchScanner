@@ -10,6 +10,8 @@ export interface McapCandle {
   h: number;
   l: number;
   c: number;
+  /** The minute's traded volume in USD (0 when Pump.fun sent none). */
+  vol: number;
 }
 
 /** Minutes per answer of Pump.fun's candle API: its most recent minutes with a trade. */
@@ -29,6 +31,7 @@ export function parseMcapCandles(body: unknown, supply = PUMP_SUPPLY_TOKENS): Mc
     const h = num(raw?.high);
     const l = num(raw?.low);
     const c = num(raw?.close);
+    const vol = num(raw?.volume);
     if (![t, o, h, l, c].every(Number.isFinite) || Math.min(o, h, l, c) <= 0) continue;
     out.push({
       t,
@@ -37,6 +40,7 @@ export function parseMcapCandles(body: unknown, supply = PUMP_SUPPLY_TOKENS): Mc
       h: Math.max(h, o, c) * supply,
       l: Math.min(l, o, c) * supply,
       c: c * supply,
+      vol: Number.isFinite(vol) && vol > 0 ? vol : 0,
     });
   }
   return out.sort((a, b) => a.t - b.t);

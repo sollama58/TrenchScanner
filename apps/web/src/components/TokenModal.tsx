@@ -23,11 +23,11 @@ import {
   candleCloses,
   linePoints,
   withCallPoint,
-  MARKER_KINDS,
   pointWidthMs,
   type MarkerKind,
-  type MarkerTrade,
   type Point,
+  type ScanFlow,
+  type VolumeCandle,
 } from "../priceChart";
 import {
   cardReadings,
@@ -45,7 +45,7 @@ import {
   SniperTile,
   WalletStat,
 } from "./AlertCard";
-import { MARKER_LABEL, PriceChart, type ChartEvent } from "./PriceChart";
+import { PriceChart, type ChartEvent } from "./PriceChart";
 import {
   categoryText,
   CrowdChart,
@@ -80,8 +80,9 @@ import {
 interface TokenChart {
   mint: string;
   /** Pump.fun's minute candles as market cap (apps/api/src/tokenChart.ts McapCandle). */
-  candles: { t: number; o: number; h: number; l: number; c: number }[] | null;
-  marketCap: { t: number; usd: number }[];
+  candles: { t: number; o: number; h: number; l: number; c: number; vol?: number }[] | null;
+  /** buys/sells: the 5-minute counts before the scan; absent from older API builds. */
+  marketCap: { t: number; usd: number; buys?: number | null; sells?: number | null }[];
   /** Absent from an API older than this page. */
   tape?: { status: string; anchorAt: number; windowEnd: number; readAt: number } | null;
   /** When the coin's trades were last read live, before a call; null when never. */
@@ -105,7 +106,7 @@ interface FlaggedWallet {
   trades: [number, 1 | -1, number | null][];
 }
 
-/** The marker colour a flagged wallet gets: the creator first, then a risky one, a KOL, a winner, else linked. */
+/** The swatch colour a flagged wallet gets: the creator first, then a risky one, a KOL, a winner, else linked. */
 function kindOf(w: FlaggedWallet): MarkerKind {
   if (w.tags.includes("creator")) return "dev";
   if (w.tags.includes("risky") || w.tags.includes("dumper")) return "risky";
@@ -344,14 +345,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
       </section>
 
       <section id={`${ids}-chart`} className="tm-group" aria-label="Chart">
-        <ChartCard
-          card={card}
-          chart={chart}
-          flagged={flagged}
-          alertAt={alertAt}
-          alertMcap={alertMcap}
-          what={what}
-        />
+        <ChartCard card={card} chart={chart} alertAt={alertAt} alertMcap={alertMcap} what={what} />
       </section>
 
       <section id={`${ids}-holders`} className="tm-group" aria-labelledby={`${ids}-holders-h`}>
@@ -508,14 +502,12 @@ function lockedText(error: Error, what: string): string | null {
 function ChartCard({
   card,
   chart: { data, error },
-  flagged,
   alertAt,
   alertMcap,
   what,
 }: {
   card: Card;
   chart: { data: TokenChart | null; error: Error | null };
-  flagged: FlaggedWallet[];
   alertAt: number;
   alertMcap: number;
   what: string;
@@ -523,7 +515,6 @@ function ChartCard({
   const utility = useContext(UtilityContext);
   // Every token view opens on the coin's whole history; Model View is a click away.
   const [range, setRange] = useState<Range>("all");
-  const [hidden, setHidden] = useState<ReadonlySet<MarkerKind>>(() => new Set());
   const [height, setHeight] = useState(() => (window.innerWidth <= 640 ? 180 : 220));
   useEffect(() => {
     const onResize = () => setHeight(window.innerWidth <= 640 ? 180 : 220);
@@ -559,6 +550,7 @@ function ChartCard({
         live: true,
         latest: 0,
         scans: [] as Point[],
+        candles: [] as VolumeCandle[],
       };
     const first = source[0]!.t;
     const last = source[source.length - 1]!.t;
@@ -590,28 +582,23 @@ function ChartCard({
         range === "model"
           ? data.marketCap.filter((p) => p.t >= from && p.t <= alertAt).map((p) => ({ t: p.t, v: p.usd }))
           : [],
+      // The minutes in view, for the volume lane.
+      candles: fromCandles
+        ? data
+            .candles!.filter((k) => k.t + 60_000 >= from && k.t <= to)
+            .map((k) => ({ ...k, vol: k.vol ?? 0 }))
+        : [],
     };
   }, [data, range, alertAt, alertMcap, callPriced]);
 
-  const markers = useMemo<MarkerTrade[]>(
+  // The scans' buy and sell counts, for the buy share in the chart's readouts.
+  const flow = useMemo<ScanFlow[]>(
     () =>
-      flagged.flatMap((w) => {
-        const kind = kindOf(w);
-        if (hidden.has(kind)) return [];
-        return w.trades.map(([t, side, sol]) => ({ t, side, sol, wallet: w.wallet, kind }));
-      }),
-    [flagged, hidden],
+      (data?.marketCap ?? []).flatMap((p) =>
+        p.buys != null && p.sells != null ? [{ t: p.t, buys: p.buys, sells: p.sells }] : [],
+      ),
+    [data],
   );
-  // The marker tips name the wallets that traded (the flagged list below reads the same names).
-  const names = useWalletNames(useMemo(() => flagged.map((w) => w.wallet), [flagged]));
-  const counts = MARKER_KINDS.map((k) => ({ k, n: flagged.filter((w) => kindOf(w) === k).length }));
-  const toggle = (k: MarkerKind) =>
-    setHidden((h) => {
-      const next = new Set(h);
-      if (next.has(k)) next.delete(k);
-      else next.add(k);
-      return next;
-    });
 
   const locked = error && !data ? lockedText(error, "chart") : null;
   return (
@@ -658,12 +645,12 @@ function ChartCard({
             points={view.points}
             stepMs={view.step}
             events={events}
-            markers={markers}
+            candles={view.candles}
+            flow={flow}
             seenUntil={range === "model" ? alertAt : undefined}
             live={view.live}
             now={view.latest}
             scans={view.scans}
-            names={names}
             height={height}
             ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
           />
@@ -677,67 +664,9 @@ function ChartCard({
             5 minutes either side of the call; shaded is after it, which the model never saw.
           </p>
         )}
-        {data && (
-          <div className="tm-legend">
-            {flagged.length > 0 ? (
-              <>
-                {counts
-                  .filter((c) => c.n > 0)
-                  .map(({ k, n }) => (
-                    <button
-                      key={k}
-                      type="button"
-                      className={`tm-chip k-${k}${hidden.has(k) ? " off" : ""}`}
-                      aria-pressed={!hidden.has(k)}
-                      onClick={() => toggle(k)}
-                      title={`${hidden.has(k) ? "Show" : "Hide"} ${MARKER_LABEL[k].toLowerCase()} trades`}
-                    >
-                      <i className={`pc-swatch k-${k}`} aria-hidden="true" />
-                      {MARKER_LABEL[k]}
-                      {k !== "dev" && <span className="num">{n}</span>}
-                    </button>
-                  ))}
-                {!data.tape && card.curated && (
-                  <span className="faint small tm-legend-note">
-                    From trades read before the call. Linked and dev wallets join once its full trade history
-                    is read.
-                  </span>
-                )}
-              </>
-            ) : (
-              <span className="faint small">{walletNote(data.tape ?? null, data.live ?? null, card)}</span>
-            )}
-          </div>
-        )}
       </section>
     </>
   );
-}
-
-/**
- * Why the chart has no wallet markers. Risky wallets and known dumpers are read live before a
- * call (`live`); the full trade history, which adds linked and dev wallets, is read after it.
- */
-function walletNote(tape: TokenChart["tape"], live: TokenChart["live"], card: Card): string {
-  const before = live ? "No risky wallets or known dumpers traded it before the call" : null;
-  if (tape?.status === "failed") {
-    return before
-      ? `${before}, and its later trades couldn't be read.`
-      : "This coin's trades couldn't be read, so there are no wallet markers.";
-  }
-  if (tape) {
-    return before
-      ? "No risky, linked or dev wallets traded it before the call or in the half hour after."
-      : "No risky, linked or dev wallets traded it in the half hour after the call.";
-  }
-  if (before) {
-    return card.curated
-      ? `${before}. Linked and dev wallets join once its full trade history is read.`
-      : `${before}.`;
-  }
-  return card.curated
-    ? "Its trades weren't read before the call. Flagged wallets show once its full trade history is read."
-    : "Flagged-wallet trades are read for coins close to a call.";
 }
 
 const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: string }> = {
@@ -749,7 +678,7 @@ const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: stri
   winner: { text: "Winner", tone: "winner" },
 };
 
-/** The flagged wallets behind the markers: what each is, its score, and what it did in the coin. */
+/** The flagged wallets in the coin: what each is, its score, and what it did in the coin. */
 function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
   const [all, setAll] = useState(false);
   const shown = all ? wallets : wallets.slice(0, 6);

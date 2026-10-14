@@ -14,7 +14,14 @@ import {
 describe("parseMcapCandles", () => {
   it("prices candles as market cap, oldest first, dropping unusable ones", () => {
     const out = parseMcapCandles([
-      { timestamp: 120_000, open: "0.00002", high: "0.00003", low: "0.00001", close: "0.000025" },
+      {
+        timestamp: 120_000,
+        open: "0.00002",
+        high: "0.00003",
+        low: "0.00001",
+        close: "0.000025",
+        volume: "412.5",
+      },
       { timestamp: 60_000, open: "0.00001", high: "0.00001", low: "0.00001", close: "0.00001" },
       { timestamp: 180_000, open: "0", high: "1", low: "0", close: "1" },
       { timestamp: "x", open: "1", high: "1", low: "1", close: "1" },
@@ -22,6 +29,8 @@ describe("parseMcapCandles", () => {
     expect(out.map((c) => c.t)).toEqual([60_000, 120_000]);
     expect(out[1]!.c).toBeCloseTo(25_000);
     expect(out[1]!.h).toBeCloseTo(30_000);
+    expect(out[1]!.vol).toBeCloseTo(412.5);
+    expect(out[0]!.vol).toBe(0);
   });
 
   it("widens a high or low that doesn't bracket the open and close", () => {
@@ -35,7 +44,7 @@ describe("parseMcapCandles", () => {
 });
 
 describe("CandleCache", () => {
-  const candle: McapCandle = { t: 1, o: 1, h: 1, l: 1, c: 1 };
+  const candle: McapCandle = { t: 1, o: 1, h: 1, l: 1, c: 1, vol: 0 };
 
   it("shares one call per coin within the TTL", async () => {
     let calls = 0;

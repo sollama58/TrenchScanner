@@ -44,8 +44,11 @@ export interface TokenChart {
   mint: string;
   /** Pump.fun's one-minute candles as market cap, oldest first; null when unavailable. */
   candles: McapCandle[] | null;
-  /** The scan's market-cap readings, oldest first: drawn when there are no candles. */
-  marketCap: { t: number; usd: number }[];
+  /**
+   * The scan's market-cap readings, oldest first: drawn when there are no candles. Each carries the
+   * buys and sells DexScreener counted in the 5 minutes before it, when it had them.
+   */
+  marketCap: { t: number; usd: number; buys: number | null; sells: number | null }[];
   /** The coin's trade tape (TokenTradeTape): null until it is read, which is only for called coins. */
   tape: { status: string; anchorAt: number; windowEnd: number; readAt: number } | null;
   /**
@@ -223,7 +226,7 @@ export async function readTokenChart(mintAddress: string): Promise<TokenChart> {
           where: { tokenId: token.id },
           orderBy: { takenAt: "desc" },
           take: CHART_SNAPSHOT_POINTS,
-          select: { takenAt: true, marketCapUsd: true },
+          select: { takenAt: true, marketCapUsd: true, buys5m: true, sells5m: true },
         }),
         walletCache.get(token.id, () => chartWallets(token.id)),
       ])
@@ -234,7 +237,7 @@ export async function readTokenChart(mintAddress: string): Promise<TokenChart> {
     marketCap: snapshots
       .filter((s) => Number.isFinite(s.marketCapUsd) && s.marketCapUsd > 0)
       .reverse()
-      .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd })),
+      .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd, buys: s.buys5m, sells: s.sells5m })),
     ...flagged,
   };
 }

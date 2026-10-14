@@ -7,6 +7,8 @@ import {
   cexSlots,
   CEX_COLOURS,
   cexGroupsOf,
+  centreOf,
+  exchangeName,
   cexLayout,
   MAP_COLOURS,
   nodeSlot,
@@ -467,11 +469,23 @@ function BubbleSvg({
   const uid = useId().replace(/:/g, "");
   const index = new Map(graph.nodes.map((n) => [n.id, n]));
   const cexSlot = useMemo(() => cexSlots(graph), [graph]);
-  // Funders' names, and each exchange's name when its ties show, as pills placed where they cover
-  // nothing (user ask 2026-10-14: they sat on bubbles, text and lines).
+  // Funders' names, each exchange's name when its ties show, and each same-minute group's, as pills
+  // placed where they cover nothing (user ask 2026-10-14: they sat on bubbles, text and lines). An
+  // exchange's and a group's pill is a hub, tied to each of its wallets by a line, as a funder is.
   const { labels, placed } = useMemo(() => {
-    const list: (MapLabel & { text: string; kind: "funder" | "cex"; colour: string | null })[] = [];
+    type Label = MapLabel & {
+      text: string;
+      kind: "funder" | "cex" | "same";
+      colour: string | null;
+      /** A hub's wallets, each tied to the pill by a line. */
+      members: MapNode[];
+    };
+    const list: Label[] = [];
     const pill = (text: string) => ({ w: text.length * 5.6 + 14, h: 16 });
+    const hub = (id: string, members: MapNode[], text: string, kind: Label["kind"], colour: string) => {
+      if (members.length === 0) return;
+      list.push({ id, ...centreOf(members), r: 0, ...pill(text), text, kind, colour, members });
+    };
     for (const n of graph.nodes) {
       if (n.kind !== "funder") continue;
       const text = clipName(walletText(n.wallet, names));
@@ -485,26 +499,28 @@ function BubbleSvg({
         text,
         kind: "funder",
         colour: slot === null ? null : `var(--bm-${slot})`,
+        members: [],
       });
     }
+    graph.sameTimeGroups.forEach((g, i) => {
+      const members = graph.nodes.filter((n) => n.kind === "holder" && n.sameTime === i);
+      hub(
+        `same:${i}`,
+        members,
+        `Funded together ${clockTime(g.atMs)}`,
+        "same",
+        `var(--bm-${sameTimeSlot(graph, i)})`,
+      );
+    });
     if (cexLinks) {
       for (const g of cexGroupsOf(graph)) {
-        const top = [...g.nodes].sort((a, b) => b.pct - a.pct)[0];
-        if (!top) continue;
-        const text = clipName(walletText(g.funder, names), 18);
-        list.push({
-          id: `cex:${g.funder}`,
-          x: top.x,
-          y: top.y,
-          r: top.r + 7,
-          ...pill(text),
-          text,
-          kind: "cex",
-          colour: `var(--bm-cex-${cexSlot.get(g.funder) ?? 0})`,
-        });
+        // The exchange's name alone, in full ("Binance Hot Wallet 2" reads "Binance").
+        const named = names[g.funder];
+        const text = named ? exchangeName(named.name) : walletText(g.funder, names);
+        hub(`cex:${g.funder}`, [...g.nodes], text, "cex", `var(--bm-cex-${cexSlot.get(g.funder) ?? 0})`);
       }
     }
-    return { labels: list, placed: placeLabels(graph, list, { cex: cexLinks }) };
+    return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list) };
   }, [graph, names, cexLinks, cexSlot]);
   const box = graphBounds(graph, 18, placed);
   const dim = (n: MapNode) => lit !== null && n.cluster !== lit;
@@ -567,44 +583,32 @@ function BubbleSvg({
             );
           })}
         </g>
-        {cexLinks && (
-          <g className="bm-cex-links">
-            {graph.cexLinks.map((l) => {
-              const stroke = `var(--bm-cex-${cexSlot.get(l.funder) ?? 0})`;
-              const a = index.get(l.from);
-              const b = index.get(l.to);
-              if (!a || !b) return null;
+        {/* Each hub pill's ties to its wallets: dashed in the exchange's colour, solid in a group's. */}
+        <g className="bm-spokes">
+          {placed.map((p) => {
+            const l = labels.get(p.id)!;
+            // A funder's pill that had to move off its bubble keeps a line back to it, drawn under the bubbles.
+            if (l.kind === "funder") {
+              if (!p.far) return null;
               return (
-                <line
-                  key={`${l.from}-${l.to}`}
-                  x1={a.x}
-                  y1={a.y}
-                  x2={b.x}
-                  y2={b.y}
-                  className={`bm-cex-link${lit !== null ? " dim" : ""}`}
-                  style={{ stroke }}
+                <g key={p.id} style={l.colour ? ({ "--lc": l.colour } as React.CSSProperties) : undefined}>
+                  <line className="bm-leader" x1={l.x} y1={l.y} x2={p.x} y2={p.y} />
+                </g>
+              );
+            }
+            return l.members.map((m) => {
+              // The same bend as the funding links, so the two read alike.
+              const mx = (p.x + m.x) / 2 + (m.y - p.y) * 0.12;
+              const my = (p.y + m.y) / 2 - (m.x - p.x) * 0.12;
+              return (
+                <path
+                  key={`${p.id}-${m.id}`}
+                  d={`M${p.x},${p.y} Q${mx},${my} ${m.x},${m.y}`}
+                  className={`${l.kind === "cex" ? "bm-cex-link" : "bm-link"}${lit !== null ? " dim" : ""}`}
+                  style={{ stroke: l.colour ?? undefined }}
                 />
               );
-            })}
-          </g>
-        )}
-        <g className="bm-same-links">
-          {graph.sameTimeLinks.map((l) => {
-            const stroke = `var(--bm-${sameTimeSlot(graph, l.group)})`;
-            const a = index.get(l.from);
-            const b = index.get(l.to);
-            if (!a || !b) return null;
-            return (
-              <line
-                key={`${l.from}-${l.to}`}
-                x1={a.x}
-                y1={a.y}
-                x2={b.x}
-                y2={b.y}
-                className={`bm-same-link${lit !== null ? " dim" : ""}`}
-                style={{ stroke }}
-              />
-            );
+            });
           })}
         </g>
         {order.map((n, i) => (
@@ -636,22 +640,13 @@ function BubbleSvg({
         {/* Funder and exchange names, drawn last in spots placeLabels found clear of bubbles, text and lines. */}
         <g className="bm-labels">
           {placed.map((p) => {
-            const l = labels.find((x) => x.id === p.id)!;
+            const l = labels.get(p.id)!;
             return (
               <g
                 key={p.id}
                 className={`bm-label ${l.kind}`}
                 style={l.colour ? ({ "--lc": l.colour } as React.CSSProperties) : undefined}
               >
-                {p.far && (
-                  <line
-                    className="bm-leader"
-                    x1={l.x + ((p.x - l.x) * l.r) / (Math.hypot(p.x - l.x, p.y - l.y) || 1)}
-                    y1={l.y + ((p.y - l.y) * l.r) / (Math.hypot(p.x - l.x, p.y - l.y) || 1)}
-                    x2={p.x}
-                    y2={p.y}
-                  />
-                )}
                 <rect x={p.x - p.w / 2} y={p.y - p.h / 2} width={p.w} height={p.h} rx={p.h / 2} />
                 <text x={p.x} y={p.y}>
                   {l.text}
@@ -802,6 +797,11 @@ function fundingTime(atMs: number): string {
 function sameTimeFunders(g: SameTimeGroup): string {
   const funders = new Set(g.wallets.map((w) => w.funder ?? `?${w.wallet}`));
   return funders.size === 1 ? " · one funder" : ` · from ${funders.size} funders`;
+}
+
+/** A funding minute's clock time, for a same-minute group's pill. */
+function clockTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 /** A name short enough to sit under a bubble. */
