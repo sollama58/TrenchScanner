@@ -9060,35 +9060,39 @@ img.tm-avatar {
 .k-winner {
   --mk: var(--series-2);
 }
-/* The flow lane under the plot: flagged buys up in green, sells down in red. */
-.pc-flow-mid {
+/* The volume lane under the plot: a bar per slice, green where the price rose across it. */
+.pc-vol-floor {
   stroke: var(--grid);
   stroke-width: 1;
 }
-.pc-flow-buy {
-  fill: var(--good);
-  opacity: 0.6;
-}
-.pc-flow-sell {
-  fill: var(--bad);
-  opacity: 0.6;
-}
-.pc-flow-buy,
-.pc-flow-sell {
+.pc-vol-bar {
   pointer-events: none;
+  opacity: 0.5;
   transition: opacity 0.12s;
 }
-.pc-flow-buy.on,
-.pc-flow-sell.on {
+.pc-vol-bar.up {
+  fill: var(--good);
+}
+.pc-vol-bar.down {
+  fill: var(--bad);
+}
+.pc-vol-bar.on {
   opacity: 1;
 }
-.pc-flow-hit {
+.pc-vol-hit {
   fill: transparent;
   cursor: pointer;
 }
-.pc-flow-label {
+.pc-vol-label {
   font-size: 10px;
   fill: var(--muted);
+}
+.pc-flow-line {
+  display: flex;
+  flex-direction: column;
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px solid var(--border);
 }
 .pc-swatch {
   display: inline-block;
@@ -9097,56 +9101,6 @@ img.tm-avatar {
   border-radius: 3px;
   background: var(--mk);
   flex: none;
-}
-.pc-mark-tip {
-  gap: 2px;
-  border-color: color-mix(in srgb, var(--mk) 55%, var(--border-strong));
-}
-.pc-mark-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
-}
-.pc-mark-wallet {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--ink-2);
-  font-size: 11.5px;
-}
-.tm-legend {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-  min-height: 24px;
-}
-.tm-chip {
-  gap: 6px;
-  padding: 2px 9px;
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--ink);
-  background: color-mix(in srgb, var(--mk) 12%, transparent);
-  border-color: color-mix(in srgb, var(--mk) 45%, transparent);
-}
-.tm-chip:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--mk) 20%, transparent);
-  border-color: color-mix(in srgb, var(--mk) 65%, transparent);
-}
-.tm-chip .num {
-  color: var(--ink-2);
-}
-.tm-chip.off {
-  color: var(--muted);
-  background: transparent;
-  border-color: var(--border);
-}
-.tm-chip.off .pc-swatch {
-  opacity: 0.35;
 }
 .tm-wallets ul {
   display: grid;
@@ -9536,12 +9490,12 @@ img.tm-avatar {
 .bm-same-ring {
   fill: none;
   stroke: var(--ink-2);
-  stroke-width: 2.6;
-  stroke-dasharray: 0.1 4.5;
-  stroke-linecap: round;
+  stroke-width: 1.8;
+  stroke-opacity: 0.85;
 }
 /* Same-exchange ties: drawn only, behind a toggle (off by default; Settings sets the default). */
 .bm-cex-link {
+  fill: none;
   stroke: var(--bm-cex);
   stroke-width: 1.6;
   stroke-dasharray: 5 4;
@@ -9598,23 +9552,12 @@ img.tm-avatar {
   width: 18px;
   border-top: 2px dashed var(--bm-cex);
 }
-.bm-same-link {
-  stroke: var(--ink-2);
-  stroke-width: 2.6;
-  stroke-dasharray: 0.1 5;
-  stroke-linecap: round;
-  stroke-opacity: 0.95;
-  transition: stroke-opacity 0.2s;
-}
-.bm-same-link.dim {
-  stroke-opacity: 0.12;
-}
 .bm-same-dot {
   grid-area: dot;
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 2px dotted var(--bm, var(--ink-2));
+  border: 2px solid var(--bm, var(--ink-2));
 }
 .bm-same {
   cursor: default;
@@ -10098,9 +10041,6 @@ img.tm-avatar {
   .wm-facts {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
-}
-.tm-legend-note {
-  flex-basis: 100%;
 }
 /* The bubble map as a section of the token modal. */
 .bm-section h4 .icon {

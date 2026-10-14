@@ -141,15 +141,73 @@ export function timeLabel(t: number, spanMs: number): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-/** What a flagged wallet is, for its marker's colour: the coin's creator, a risky one, or linked. */
+/** What a flagged wallet is, for its swatch's colour: the coin's creator, a risky one, or linked. */
 export type MarkerKind = "dev" | "risky" | "kol" | "winner" | "linked";
-export const MARKER_KINDS: readonly MarkerKind[] = ["dev", "risky", "kol", "winner", "linked"];
 
-/** One flagged wallet's trade, to mark on the chart. */
-export interface MarkerTrade {
+/** One minute candle's traded volume: its start, open and close (market cap), and USD volume. */
+export interface VolumeCandle {
   t: number;
-  side: 1 | -1;
-  sol: number | null;
-  wallet: string;
-  kind: MarkerKind;
+  o: number;
+  c: number;
+  vol: number;
+}
+
+/** One bar of the volume lane: the minutes it spans, their USD volume, and the move across them. */
+export interface VolumeBar {
+  from: number;
+  to: number;
+  usd: number;
+  o: number;
+  c: number;
+}
+
+/**
+ * Exported for tests. The candles' volume summed into `n` even slices of [t0, t1], each candle by
+ * the middle of its minute; a slice with no candles is null. A slice's open is its first candle's
+ * open and its close its last candle's close, so its colour says whether the price rose across it.
+ */
+export function volumeBars(
+  candles: readonly VolumeCandle[],
+  t0: number,
+  t1: number,
+  n: number,
+): (VolumeBar | null)[] {
+  const span = Math.max(1, t1 - t0);
+  const out: (VolumeBar | null)[] = Array.from({ length: n }, () => null);
+  for (const k of candles) {
+    const mid = k.t + MINUTE / 2;
+    if (mid < t0 - MINUTE || mid > t1 + MINUTE / 2) continue;
+    const i = Math.min(n - 1, Math.max(0, Math.floor(((mid - t0) / span) * n)));
+    const b = out[i];
+    if (!b) out[i] = { from: k.t, to: k.t + MINUTE, usd: k.vol, o: k.o, c: k.c };
+    else {
+      b.usd += k.vol;
+      b.to = k.t + MINUTE;
+      b.c = k.c;
+    }
+  }
+  return out;
+}
+
+/** A scan's count of the buys and sells in the 5 minutes before it. */
+export interface ScanFlow {
+  t: number;
+  buys: number;
+  sells: number;
+}
+
+/** How far back a scan's buy and sell counts reach. */
+export const FLOW_WINDOW_MS = 5 * MINUTE;
+
+/**
+ * Exported for tests. The scan whose 5-minute count best covers [from, to]: of the scans whose
+ * window reaches into it, the one taken nearest its end. Null when no scan covers it.
+ */
+export function flowAt(flow: readonly ScanFlow[], from: number, to: number): ScanFlow | null {
+  let best: ScanFlow | null = null;
+  for (const f of flow) {
+    if (f.t <= from || f.t > to + FLOW_WINDOW_MS || f.buys + f.sells <= 0) continue;
+    if (!best || Math.abs(f.t - to) < Math.abs(best.t - to)) best = f;
+  }
+  return best;
 }

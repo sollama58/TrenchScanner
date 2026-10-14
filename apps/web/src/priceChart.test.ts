@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   candleCloses,
+  flowAt,
   linearTicks,
   linePoints,
   logTicks,
   mcapAxis,
   pointWidthMs,
+  volumeBars,
   withCallPoint,
 } from "./priceChart";
 
@@ -121,5 +123,39 @@ describe("ticks", () => {
   });
   it("keeps linear ticks within the range", () => {
     expect(linearTicks(0.5, 9.5, 5)).toEqual([2.5, 5, 7.5]);
+  });
+});
+
+describe("volumeBars", () => {
+  const k = (t: number, o: number, c: number, vol: number) => ({ t, o, c, vol });
+
+  it("sums each slice's minutes and keeps the move across them", () => {
+    const bars = volumeBars([k(0, 10, 11, 100), k(60_000, 11, 9, 50), k(240_000, 9, 12, 30)], 0, 300_000, 3);
+    expect(bars[0]).toEqual({ from: 0, to: 120_000, usd: 150, o: 10, c: 9 });
+    expect(bars[1]).toBeNull();
+    expect(bars[2]).toEqual({ from: 240_000, to: 300_000, usd: 30, o: 9, c: 12 });
+  });
+
+  it("leaves out minutes outside the view", () => {
+    const bars = volumeBars([k(-600_000, 1, 1, 5), k(900_000, 1, 1, 5)], 0, 300_000, 2);
+    expect(bars).toEqual([null, null]);
+  });
+});
+
+describe("flowAt", () => {
+  const flow = [
+    { t: 100_000, buys: 10, sells: 5 },
+    { t: 400_000, buys: 3, sells: 9 },
+    { t: 900_000, buys: 0, sells: 0 },
+  ];
+
+  it("picks the scan whose 5-minute count covers the range, nearest its end", () => {
+    expect(flowAt(flow, 50_000, 60_000)).toEqual(flow[0]);
+    expect(flowAt(flow, 350_000, 390_000)).toEqual(flow[1]);
+  });
+
+  it("answers null where no scan covers the range or the count is empty", () => {
+    expect(flowAt(flow, 400_000, 400_000 + 10)).toBeNull();
+    expect(flowAt(flow, 800_000, 850_000)).toBeNull();
   });
 });
