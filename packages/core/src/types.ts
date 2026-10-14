@@ -237,6 +237,12 @@ export interface OnChainProfile {
   linkedWalletsChecked?: number;
   linkedLargestClusterPct?: number;
   linkedCreatorPct?: number;
+  /**
+   * KOL Bundled % (user ask 2026-10-14, core's wallets/kolBundled.ts): % of supply held by KOLs
+   * and the top holders tied to them (funded by them, possible side wallets, or one step out by
+   * funder or funding minute). Undefined until the linked reading lands and the KOL roster loads.
+   */
+  kolBundledPct?: number;
   linkedClusters?: LinkedCluster[];
   /**
    * The top holders the scan read (up to CEX_FUNDED_TOP_N, the creator aside), largest first,
@@ -427,6 +433,8 @@ export interface FilterCriteria {
   maxSameTimeFundedCount?: number | null;
   /** Max % of supply held by top holders tied to the creator (linkedCreatorPct). Skipped while unknown. */
   maxLinkedCreatorPct?: number | null;
+  /** Max KOL Bundled % (kolBundledPct). Skipped while unknown. */
+  maxKolBundledPct?: number | null;
   /** Min holders as Jupiter counts them at the decision (freshQuote.holderCount). Fails closed without a quote. */
   minLiveHolderCount?: number | null;
   /** Bounds on how many of the 20 largest holders an exchange paid for (cexFundedCount). Skipped while unknown. */

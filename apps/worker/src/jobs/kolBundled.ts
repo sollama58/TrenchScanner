@@ -1,0 +1,67 @@
+import { createLogger, kolBundledPct, prisma, type LinkedWalletsReading } from "@trenchscanner/core";
+
+const logger = createLogger("kol-bundled");
+
+/** A holder tied to a KOL: a possible side wallet (KolPossibleSide), or one the KOL funded. */
+export interface KolTie {
+  wallet: string;
+  kolWallet: string;
+}
+
+/** The possible-side rows for these wallets (the hourly table the bubble map reads too). */
+async function possibleSideTies(wallets: readonly string[]): Promise<KolTie[]> {
+  if (wallets.length === 0) return [];
+  return prisma.kolPossibleSide.findMany({
+    where: { wallet: { in: [...wallets] } },
+    select: { wallet: true, kolWallet: true },
+  });
+}
+
+/**
+ * KOL Bundled % for each coin with a linked reading (core's wallets/kolBundled.ts), from the KOL
+ * roster, the holders' funders (a holder a KOL funded is a KOL Funded Wallet) and one read of the
+ * possible side wallets for every holder at once. Left off (unknown) for every coin while the
+ * roster isn't loaded or that read fails, and for a coin without a reading.
+ */
+export async function kolBundledByMint(
+  readings: ReadonlyMap<string, LinkedWalletsReading | null>,
+  funderOf: ReadonlyMap<string, string | null>,
+  isKol: ((wallet: string) => boolean) | undefined,
+  loadSides: (wallets: readonly string[]) => Promise<KolTie[]> = possibleSideTies,
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!isKol) return out;
+  const live = [...readings].filter((e): e is [string, LinkedWalletsReading] => e[1] !== null);
+  if (live.length === 0) return out;
+  const wallets = [...new Set(live.flatMap(([, r]) => r.holders.map((h) => h.wallet)))];
+  let sides: KolTie[];
+  try {
+    sides = await loadSides(wallets);
+  } catch (err) {
+    logger.warn("possible side wallets read failed - KOL Bundled % left unknown", { error: String(err) });
+    return out;
+  }
+  const sidesOf = new Map<string, KolTie[]>();
+  for (const t of sides) sidesOf.set(t.wallet, [...(sidesOf.get(t.wallet) ?? []), t]);
+  for (const [mint, r] of live) {
+    const ties: KolTie[] = [];
+    for (const h of r.holders) {
+      ties.push(...(sidesOf.get(h.wallet) ?? []));
+      const funder = funderOf.get(h.wallet);
+      // A KOL Funded Wallet; a KOL another KOL funded is a KOL in its own right, not a side.
+      if (funder && funder !== h.wallet && isKol(funder) && !isKol(h.wallet))
+        ties.push({ wallet: h.wallet, kolWallet: funder });
+    }
+    out.set(
+      mint,
+      kolBundledPct({
+        holders: r.holders,
+        clusters: r.clusters,
+        sameTimeClusters: r.sameTimeClusters,
+        isKol,
+        ties,
+      }),
+    );
+  }
+  return out;
+}

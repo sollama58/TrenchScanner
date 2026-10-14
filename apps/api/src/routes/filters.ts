@@ -59,6 +59,7 @@ function buildFilterInputSchema(env: Env) {
     maxSameTimeFundedPct: z.number().min(0).max(100).nullable().optional(),
     maxSameTimeFundedCount: z.number().int().min(0).max(25).nullable().optional(),
     maxLinkedCreatorPct: z.number().min(0).max(100).nullable().optional(),
+    maxKolBundledPct: z.number().min(0).max(100).nullable().optional(),
     minLiveHolderCount: z.number().int().min(0).max(100_000).nullable().optional(),
     minFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
     maxFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),

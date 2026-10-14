@@ -435,6 +435,7 @@ export const BRIEF_WALLET_FIELDS = [
   "kolFirstBuyers",
   "kolRecentBuyers",
   "kolRecentSellers",
+  "kolBundledPct",
   "flaggedBuyers",
   "flaggedSellers",
   "flaggedBuySol",
@@ -483,10 +484,11 @@ function walletLines(s: ScoredToken): string[] {
     known(s.kolTopHolders) ||
     known(s.kolFirstBuyers) ||
     known(s.kolRecentBuyers) ||
-    known(s.kolRecentSellers)
+    known(s.kolRecentSellers) ||
+    known(s.kolBundledPct)
   ) {
     lines.push(
-      `- known KOL wallets: ${fmtNum(s.kolTopHolders)} among the top 20 holders (${fmtPct(s.kolTopHolderPct)} of supply), ${fmtNum(s.kolFirstBuyers)} among the first buyers, ${fmtNum(s.kolRecentBuyers)} buying and ${fmtNum(s.kolRecentSellers)} selling in the newest trades`,
+      `- known KOL wallets: ${fmtNum(s.kolTopHolders)} among the top 20 holders (${fmtPct(s.kolTopHolderPct)} of supply), ${fmtNum(s.kolFirstBuyers)} among the first buyers, ${fmtNum(s.kolRecentBuyers)} buying and ${fmtNum(s.kolRecentSellers)} selling in the newest trades; supply bundled by KOLs (their wallets, wallets they funded, possible side wallets and holders sharing a funder or funding minute with those) ${fmtPct(s.kolBundledPct)}`,
     );
   }
   if (known(s.flaggedBuyers) || known(s.flaggedSellers)) {

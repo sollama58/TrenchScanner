@@ -63,6 +63,7 @@ export function awaitsWalletFigure(
     | "sameTimeFundedPct"
     | "sameTimeFundedCount"
     | "linkedCreatorPct"
+    | "kolBundledPct"
   >,
   filter: Pick<
     FilterCriteria,
@@ -78,6 +79,7 @@ export function awaitsWalletFigure(
     | "maxSameTimeFundedPct"
     | "maxSameTimeFundedCount"
     | "maxLinkedCreatorPct"
+    | "maxKolBundledPct"
   >,
 ): boolean {
   return (
@@ -92,7 +94,8 @@ export function awaitsWalletFigure(
       scored.cexFundedCount === undefined) ||
     (filter.maxSameTimeFundedPct != null && scored.sameTimeFundedPct === undefined) ||
     (filter.maxSameTimeFundedCount != null && scored.sameTimeFundedCount === undefined) ||
-    (filter.maxLinkedCreatorPct != null && scored.linkedCreatorPct === undefined)
+    (filter.maxLinkedCreatorPct != null && scored.linkedCreatorPct === undefined) ||
+    (filter.maxKolBundledPct != null && scored.kolBundledPct === undefined)
   );
 }
 

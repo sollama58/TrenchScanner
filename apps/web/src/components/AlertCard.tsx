@@ -109,6 +109,8 @@ export function AlertCard({
     cexAtAlert,
     cexCount,
     cexHolders,
+    kolBundledPct,
+    kolBundledAtAlert,
     firstHolding,
     firstSeen,
     buyersAtAlert,
@@ -132,6 +134,7 @@ export function AlertCard({
         "sniperTop10",
         "linked",
         "cexFunded",
+        "kolBundled",
         "dev",
       ] as const
     ).filter(show).length + (show("vol") ? 3 : 0);
@@ -443,6 +446,22 @@ export function AlertCard({
               </dd>
             </div>
           )}
+          {show("kolBundled") && (
+            <div
+              title={
+                kolBundledPct === null
+                  ? "KOL Bundled %: not checked yet. It comes with the linked-wallet reading."
+                  : `KOL Bundled %: supply held by KOLs and the top holders tied to them (wallets a KOL funded, possible side wallets, and holders sharing a funder or funding minute with those), ${
+                      kolBundledAtAlert ? "at alert time" : "from a scan after the alert"
+                    }.`
+              }
+            >
+              <dt>KOL bundled</dt>
+              <dd className={kolBundledPct === null ? "muted" : "num"}>
+                {kolBundledPct === null ? "Not checked" : pct(kolBundledPct, 1)}
+              </dd>
+            </div>
+          )}
           {show("dev") && (
             <div
               title={
@@ -587,6 +606,8 @@ export function cardReadings(card: Card) {
   const linkedFrom = s.linkedWalletPct != null ? s : latest;
   // Exchange-funded share of the largest holders, the same way.
   const cexFrom = s.cexFundedPct != null ? s : latest;
+  // KOL Bundled %, the same way.
+  const kolFrom = s.kolBundledPct != null ? s : latest;
   // The same fallback for the first-buyers count, read from the launch's first transactions.
   const buyersFrom = s.firstBuyersHolding != null ? s : latest;
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
@@ -617,6 +638,8 @@ export function cardReadings(card: Card) {
     cexAtAlert: cexFrom === s,
     cexCount: cexFrom?.cexFundedCount ?? null,
     cexHolders: cexFrom?.cexFundedHolders ?? null,
+    kolBundledPct: kolFrom?.kolBundledPct ?? null,
+    kolBundledAtAlert: kolFrom === s,
     firstHolding: buyersFrom?.firstBuyersHolding ?? null,
     firstSeen: buyersFrom?.firstBuyersSeen ?? null,
     buyersAtAlert: buyersFrom === s,

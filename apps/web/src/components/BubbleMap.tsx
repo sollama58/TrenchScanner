@@ -6,6 +6,7 @@ import {
   bubbleNameLines,
   showsPct,
   kolControl,
+  kolBundledShare,
   type KolControl,
   type KolTie,
   cexSlots,
@@ -178,6 +179,33 @@ function useSideToggle(graph: BubbleGraph | null): SideToggle {
   const showSides = (sideOn ?? bubbleSideLinks) && groups.length > 0;
   return { sides, groups, showSides, shown: showSides ? groups : NO_SIDES, setSideOn };
 }
+/** Each KOL on the map with the holders tied to it (kolControl); none without a map. */
+function useKols(graph: BubbleGraph | null, groups: readonly SideGroup[], names: WalletNames): KolControl[] {
+  return useMemo(
+    () =>
+      graph
+        ? kolControl(
+            graph,
+            groups,
+            graph.nodes.flatMap((n) =>
+              n.kind === "holder" && n.wallet && names[n.wallet]?.source === "kol"
+                ? [{ wallet: n.wallet, name: names[n.wallet]!.name }]
+                : [],
+            ),
+          )
+        : [],
+    [graph, groups, names],
+  );
+}
+
+/**
+ * KOL Bundled % for the share image: the scan's figure (what the filters and models read), else
+ * the map's own groups, else unknown.
+ */
+function kolBundledFor(snapshot: Snapshot | null | undefined, kols: readonly KolControl[]): number | null {
+  return snapshot?.kolBundledPct ?? (kols.length > 0 ? kolBundledShare(kols) : null);
+}
+
 interface SideToggle {
   /** Each holder's possible-side matches, for its title and detail. */
   sides: PossibleSides;
@@ -277,6 +305,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
   const names = useGraphNames(graph);
   const { showCex, setCexOn } = useCexToggle(graph);
   const side = useSideToggle(graph);
+  const kols = useKols(graph, side.groups, names);
 
   const [copied, setCopied] = useState(false);
   const copyLink = () => {
@@ -300,7 +329,12 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
           caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
           disabled={!hasMap}
           render={() =>
-            renderBubbleCard(graph, loaded.token, names, { cex: showCex, sides: side.shown, flags })
+            renderBubbleCard(graph, loaded.token, names, {
+              cex: showCex,
+              sides: side.shown,
+              flags,
+              kolBundled: kolBundledFor(snapshot, kols),
+            })
           }
         />
       )}
@@ -386,19 +420,7 @@ function MapView({
   const largest = graph.clusters[0]?.pct ?? null;
   const { sides, groups, showSides, setSideOn } = side;
   // Each KOL and the supply it may control: side wallets, KOL funded wallets and their linked holders.
-  const kols = useMemo(
-    () =>
-      kolControl(
-        graph,
-        groups,
-        graph.nodes.flatMap((n) =>
-          n.kind === "holder" && n.wallet && names[n.wallet]?.source === "kol"
-            ? [{ wallet: n.wallet, name: names[n.wallet]!.name }]
-            : [],
-        ),
-      ),
-    [graph, groups, names],
-  );
+  const kols = useKols(graph, groups, names);
   // With the ties on, the bubbles rearrange so each exchange's holders sit together (user ask
   // 2026-10-13); off, the usual layout comes back as it was.
   // KOLs' side wallets gather round them the same way while their ties show.
@@ -1371,6 +1393,7 @@ export function BubbleMapSection({
   const names = useGraphNames(graph);
   const { showCex, setCexOn } = useCexToggle(graph);
   const side = useSideToggle(graph);
+  const kols = useKols(graph, side.groups, names);
   const label = tokenLabel(token);
   if (!graph || !graph.nodes.some((n) => n.kind === "holder")) {
     // Every token view shows the map (user ask 2026-10-13); a coin no scan read holders for says so.
@@ -1402,7 +1425,14 @@ export function BubbleMapSection({
             fileName={`trenchscanner-bubbles-${(token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
             caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
             iconOnly
-            render={() => renderBubbleCard(graph, token, names, { cex: showCex, sides: side.shown, flags })}
+            render={() =>
+              renderBubbleCard(graph, token, names, {
+                cex: showCex,
+                sides: side.shown,
+                flags,
+                kolBundled: kolBundledFor(snapshot, kols),
+              })
+            }
           />
           <button
             type="button"

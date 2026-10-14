@@ -30,6 +30,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   sniperTop10: false,
   devTile: false,
   largest: false,
+  kolBundled: false,
   bubbleCexLinks: false,
   bubbleSideLinks: true,
   narrativeNote: null,
@@ -88,6 +89,7 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
       { id: "sniperTop10", label: "Snipers in top holders" },
       { id: "linked", label: "Linked wallets" },
       { id: "cexFunded", label: "CEX-funded holders" },
+      { id: "kolBundled", label: "KOL Bundled %" },
       { id: "dev", label: "Dev holding / sold" },
     ],
   },
@@ -103,13 +105,16 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
 ];
 
 // "vol" is listed apart from the groups: it is opt-in (FeedAppearance.volume), not hide-able.
-// "reasons", "sniperTop10", "largest" and "dev" are listed in the groups but are opt-in too
-// (FeedAppearance.reasons, .sniperTop10, .largest, .devTile).
+// "reasons", "sniperTop10", "largest", "kolBundled" and "dev" are listed in the groups but are
+// opt-in too (FeedAppearance.reasons, .sniperTop10, .largest, .kolBundled, .devTile).
 const CARD_FIELDS = new Set<string>([...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)), "vol"]);
 
 /** The card fields not to draw: the ones the user hid, plus the opt-in ones not switched on. */
 export function cardHideSet(
-  look: Pick<FeedAppearance, "hidden" | "volume" | "reasons" | "sniperTop10" | "devTile" | "largest">,
+  look: Pick<
+    FeedAppearance,
+    "hidden" | "volume" | "reasons" | "sniperTop10" | "devTile" | "largest" | "kolBundled"
+  >,
 ): ReadonlySet<CardField> {
   const out = new Set<CardField>(look.hidden);
   if (!look.volume) out.add("vol");
@@ -117,6 +122,7 @@ export function cardHideSet(
   if (!look.sniperTop10) out.add("sniperTop10");
   if (!look.devTile) out.add("dev");
   if (!look.largest) out.add("largest");
+  if (!look.kolBundled) out.add("kolBundled");
   return out;
 }
 
@@ -215,6 +221,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     sniperTop10: typeof r.sniperTop10 === "boolean" ? r.sniperTop10 : d.sniperTop10,
     devTile: typeof r.devTile === "boolean" ? r.devTile : d.devTile,
     largest: typeof r.largest === "boolean" ? r.largest : d.largest,
+    kolBundled: typeof r.kolBundled === "boolean" ? r.kolBundled : d.kolBundled,
     bubbleCexLinks: typeof r.bubbleCexLinks === "boolean" ? r.bubbleCexLinks : d.bubbleCexLinks,
     bubbleSideLinks: typeof r.bubbleSideLinks === "boolean" ? r.bubbleSideLinks : d.bubbleSideLinks,
     narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
