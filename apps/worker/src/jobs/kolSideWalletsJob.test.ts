@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
-import { prisma } from "@trenchscanner/core";
+import { POSSIBLE_SIDE_RULES_VERSION, prisma } from "@trenchscanner/core";
 import {
   isBot,
   likelyBots,
@@ -197,6 +197,7 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
       kolCoins: 10,
       hours: 24,
       computedAt: new Date(now - ageMs),
+      rulesVersion: POSSIBLE_SIDE_RULES_VERSION,
     });
     await prisma.kolPossibleSide.createMany({
       data: [row(recent, POSSIBLE_SIDE_HOLD_MS - 3_600_000), row(old, POSSIBLE_SIDE_HOLD_MS + 3_600_000)],
@@ -206,5 +207,28 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
     await runKolSideWalletsJob({ now: () => now });
     const left = await prisma.kolPossibleSide.findMany({ where: { kolWallet: kol } });
     expect(left.map((r) => r.wallet)).toEqual([recent]);
+  });
+
+  it("drops a held label earned under older rules, even inside the hold", async () => {
+    const now = Date.now();
+    const kol = `${TAG}-oldrules`;
+    await prisma.kolWallet.create({ data: { wallet: kol, name: "Old Rules KOL", seenAt: new Date() } });
+    const row = (wallet: string, rulesVersion: number) => ({
+      wallet,
+      kolWallet: kol,
+      pct: 100,
+      shared: 10,
+      kolCoins: 10,
+      hours: 24,
+      computedAt: new Date(now - 3_600_000),
+      rulesVersion,
+    });
+    await prisma.kolPossibleSide.createMany({
+      data: [row(`${TAG}-current`, POSSIBLE_SIDE_RULES_VERSION), row(`${TAG}-stale`, 0)],
+    });
+
+    await runKolSideWalletsJob({ now: () => now });
+    const left = await prisma.kolPossibleSide.findMany({ where: { kolWallet: kol } });
+    expect(left.map((r) => r.wallet)).toEqual([`${TAG}-current`]);
   });
 });

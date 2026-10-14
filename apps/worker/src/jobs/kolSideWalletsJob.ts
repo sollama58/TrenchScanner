@@ -3,6 +3,7 @@ import {
   createLogger,
   KNOWN_EXCHANGE_WALLETS,
   POSSIBLE_SIDE_HOLD_DAYS,
+  POSSIBLE_SIDE_RULES_VERSION,
   POSSIBLE_SIDE_TIERS,
   SIDE_BOT_MIN_COINS,
   SIDE_BOT_SHARE,
@@ -333,7 +334,12 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     })
       // A likely bot is no one's side wallet: no label.
       .filter((p) => !botLike.has(p.wallet))
-      .map((p) => ({ ...p, kolWallet: k.wallet, computedAt: now })),
+      .map((p) => ({
+        ...p,
+        kolWallet: k.wallet,
+        computedAt: now,
+        rulesVersion: POSSIBLE_SIDE_RULES_VERSION,
+      })),
   );
 
   let possibleHeld = 0;
@@ -343,11 +349,18 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
       ({ written } = await replaceRows(tx, KOL_SIDE_WALLETS_TABLE, data));
       // Labels that qualify this run are rewritten with this run's figures; the rest are kept until
       // POSSIBLE_SIDE_HOLD_MS past the last run they qualified.
+      // Labels earned under older rules aren't held: they return only if they qualify again.
       await tx.kolPossibleSide.deleteMany({
-        where: { computedAt: { lt: new Date(now.getTime() - POSSIBLE_SIDE_HOLD_MS) } },
+        where: {
+          OR: [
+            { computedAt: { lt: new Date(now.getTime() - POSSIBLE_SIDE_HOLD_MS) } },
+            { rulesVersion: { not: POSSIBLE_SIDE_RULES_VERSION } },
+          ],
+        },
       });
-      // A wallet now read as a likely bot loses the labels it held.
-      if (botLike.size) await tx.kolPossibleSide.deleteMany({ where: { wallet: { in: [...botLike] } } });
+      // A wallet now read as a bot or a likely bot loses the labels it held, hold or not.
+      const unlabeled = [...new Set([...bots, ...botLike])];
+      if (unlabeled.length) await tx.kolPossibleSide.deleteMany({ where: { wallet: { in: unlabeled } } });
       for (let i = 0; i < possible.length; i += POSSIBLE_SIDE_DELETE_CHUNK) {
         const chunk = possible.slice(i, i + POSSIBLE_SIDE_DELETE_CHUNK);
         await tx.kolPossibleSide.deleteMany({
