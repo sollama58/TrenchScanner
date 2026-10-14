@@ -11,6 +11,7 @@ import {
   exchangeName,
   regroupLayout,
   sideMembers,
+  sideWord,
   type SideGroup,
   MAP_COLOURS,
   nodeSlot,
@@ -719,7 +720,7 @@ function BubbleSvg({
       hub(
         `side:${g.kolWallet}`,
         members,
-        `${clipName(kolName ?? walletText(g.kolWallet, names))} sides?`,
+        `${clipName(kolName ?? walletText(g.kolWallet, names))} ${sideWord(members, g)}`,
         "side",
         "var(--bm-side)",
       );
