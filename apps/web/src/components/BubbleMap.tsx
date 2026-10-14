@@ -461,6 +461,7 @@ function MapView({
           if (wallet) openWallet(wallet);
         }}
       />
+      <NameLegend graph={graph} names={names} />
       <NodeDetail node={node} graph={graph} names={names} sides={sides} />
       <ul className="bm-clusters">
         {graph.clusters.map((c, i) => (
@@ -568,6 +569,32 @@ function MapView({
         </p>
       )}
     </>
+  );
+}
+
+/** What each colour of name on the bubbles means; only the kinds this map shows. */
+function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }) {
+  const kinds = new Set(
+    graph.nodes.flatMap((n) =>
+      n.kind === "holder" && n.wallet && names[n.wallet] ? [names[n.wallet]!.source] : [],
+    ),
+  );
+  const items: { cls: string; sample: string; label: string }[] = [];
+  if (kinds.has("kol")) items.push({ cls: "kol", sample: "Name", label: "KOL" });
+  if (kinds.has("pumpfun")) items.push({ cls: "pumpfun", sample: '"name"', label: "Pump.fun" });
+  if (kinds.has("fomo")) items.push({ cls: "fomo", sample: '"name"', label: "FOMO" });
+  if (kinds.has("identity") || kinds.has("exchange"))
+    items.push({ cls: "", sample: "Name", label: "Helius / exchange" });
+  if (!items.length) return null;
+  return (
+    <ul className="bm-legend" aria-label="Name colours">
+      {items.map((it) => (
+        <li key={it.label}>
+          <span className={`bm-legend-chip ${it.cls}`}>{it.sample}</span>
+          {it.label}
+        </li>
+      ))}
+    </ul>
   );
 }
 

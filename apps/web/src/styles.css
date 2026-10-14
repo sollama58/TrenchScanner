@@ -9699,6 +9699,41 @@ img.tm-avatar {
   fill: #4ade80;
   stroke: rgba(0, 0, 0, 0.6);
 }
+/* Key to the name colours under the map (beats .about-body ul's grid). */
+.about-body ul.bm-legend,
+.bm-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+.bm-legend li {
+  display: flex;
+  color: var(--muted);
+  align-items: center;
+  gap: 6px;
+}
+.bm-legend-chip {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(12, 14, 20, 0.82);
+  color: #fff;
+  font-weight: 650;
+}
+.bm-legend-chip.kol {
+  background: var(--bm-side);
+  color: #1a1300;
+}
+.bm-legend-chip.pumpfun {
+  color: #4ade80;
+}
+.bm-legend-chip.fomo {
+  color: #c4b5fd;
+}
 .bm-badge circle {
   stroke: var(--surface-solid);
   stroke-width: 1.5;
