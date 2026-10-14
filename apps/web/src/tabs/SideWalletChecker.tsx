@@ -211,7 +211,7 @@ export function SideWalletChecker() {
                         </span>
                         {k.sides["30d"] > 0 && (
                           <span className="pill side-found" title="Wallets listed for it over 30 days">
-                            {plural(k.sides["30d"], "wallet")}
+                            {plural(k.sides["30d"], "possible wallet")}
                           </span>
                         )}
                       </span>
