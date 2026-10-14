@@ -108,6 +108,10 @@ export function snapshotDataFor(
     winnerRecentBuyers: scored.winnerRecentBuyers,
     winnerRecentSellers: scored.winnerRecentSellers,
     top10WalletsChecked: scored.top10WalletsChecked,
+    sniperTopHolderCount: scored.sniperTopHolderCount,
+    sniperTopHoldersChecked: scored.sniperTopHoldersChecked,
+    // Jupiter's count from the fresh quote, the one the "Min holders (live)" filter reads.
+    liveHolderCount: scored.freshQuote?.holderCount ?? undefined,
     firstBuyersHolding: scored.tradeFlow?.firstBuyersHolding ?? null,
     firstBuyersSeen: scored.tradeFlow?.firstBuyersSeen ?? null,
     devHolding: resolveDevHolding(scored),

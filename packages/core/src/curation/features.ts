@@ -133,6 +133,24 @@ export const KOL_FEATURES = [
   "kolRecentSellers",
 ] as const;
 
+/**
+ * Added 2026-10-13 (user ask, notes/stat-formats-2026-10-13/report.md): the holder figures the
+ * safety screen and the cards read, so the training cut can apply every screen and each can be
+ * judged as a count. The largest single holder's % of supply (pools aside), the exchange-funded
+ * count and how many holders it read (the top 25, the creator aside), how many of the top 25
+ * holders (pools aside) were among the launch's first 25 buyers and how many holders that read,
+ * and how many top-10 wallets the fresh and empty checks read. Null on every row banked before.
+ * Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ */
+export const HOLDER_SET_FEATURES = [
+  "largestHolderPct",
+  "cexFundedCount",
+  "cexFundedHolders",
+  "sniperTopHolderCount",
+  "sniperTopHoldersChecked",
+  "top10WalletsChecked",
+] as const;
+
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
   "flaggedSellers",
@@ -363,6 +381,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   // refresh, and on every row banked before. Never backfilled.
   ...NARRATIVE_FEATURES_V8,
   ...BUNDLED_FEATURES,
+  ...HOLDER_SET_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -468,6 +487,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   ...NARRATIVE_FEATURES_V8,
   // The same-minute and bundled holder counts (added 2026-10-13): recorded first, on the same terms.
   ...BUNDLED_FEATURES,
+  // The screen's holder figures as counts, and the largest holder (added 2026-10-13): recorded
+  // first, on the same terms.
+  ...HOLDER_SET_FEATURES,
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -794,6 +816,12 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   linkedWalletCount: "linked top wallets",
   linkedWalletsChecked: "top wallets checked for links",
   cexFundedPct: "top holders funded from an exchange",
+  largestHolderPct: "largest holder",
+  cexFundedCount: "exchange-funded top holders",
+  cexFundedHolders: "top holders checked for exchange funding",
+  sniperTopHolderCount: "launch snipers among the top 25",
+  sniperTopHoldersChecked: "top holders checked for snipers",
+  top10WalletsChecked: "top-10 wallets checked",
   sameTimeFundedPct: "supply funded in the same minute",
   sameTimeClusterCount: "same-minute funding groups",
   sameTimeFundedCount: "top holders funded in the same minute",
@@ -1015,6 +1043,12 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
         : scored.linkedClusters.reduce((n, c) => n + c.wallets.length, 0)),
     linkedWalletsChecked: scored.linkedWalletsChecked ?? scored.linkedHolders?.length ?? null,
     cexFundedPct: scored.cexFundedPct ?? null,
+    largestHolderPct: scored.largestHolderPct ?? null,
+    cexFundedCount: scored.cexFundedCount ?? null,
+    cexFundedHolders: scored.cexFundedHolders ?? null,
+    sniperTopHolderCount: scored.sniperTopHolderCount ?? null,
+    sniperTopHoldersChecked: scored.sniperTopHoldersChecked ?? null,
+    top10WalletsChecked: scored.top10WalletsChecked ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,
     sameTimeFundedCount: scored.sameTimeFundedCount ?? null,

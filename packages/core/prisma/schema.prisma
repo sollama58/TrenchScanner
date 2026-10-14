@@ -267,6 +267,9 @@ model UserFilter {
   /// Max % of the top-10 holders (pool and LP aside) that were among the launch's first 25
   /// buyers (TokenSnapshot.sniperTop10WalletPct). Skipped while unknown, like the two above.
   maxSniperTop10WalletPct    Float?
+  /// Max how many of the top-25 holders (pools aside) were among the launch's first 25 buyers
+  /// (TokenSnapshot.sniperTopHolderCount, "N/25"). Skipped while unknown.
+  maxSniperTopHolderCount    Int?
   /// Max % of supply held by linked top holders: wallets one funder paid for, or that funded each
   /// other (TokenSnapshot.linkedWalletPct, core's wallets/linkedWallets.ts). Skipped while unknown.
   /// Off the Filters tab since 2026-10-13 (maxLinkedWalletCount replaced it); a saved value still
@@ -1034,8 +1037,9 @@ model TokenSnapshot {
   /// Top holders sharing a funder or a funding minute with another, each once ("Bundled", N/20).
   bundledWalletCount      Int?
   sameTimeClusters        Json?
-  // Of the largest holders (up to 20, the creator aside), the % an exchange or a busy service paid
-  // for (core's cexFundedReading), how many, and how many were read. Null until all were read.
+  // Of the largest holders (up to 25 since 2026-10-13, 20 before; the creator aside), the % an
+  // exchange or a busy service paid for (core's cexFundedReading), how many, and how many were
+  // read. Null until all were read.
   cexFundedPct            Float?
   cexFundedCount          Int?
   cexFundedHolders        Int?
@@ -1064,6 +1068,14 @@ model TokenSnapshot {
   // to say "4 of 10" needs the real denominator rather than assuming ten. Null on snapshots
   // written before this column existed, and on any snapshot with no holder list at all.
   top10WalletsChecked     Int?
+  /// How many of the top holders the linked reading covers (the chain's top 25, pools aside) were
+  /// among the launch's first 25 buyers, of how many holders read ("N/25"). Null until the first
+  /// buyers are read, and on scans before 2026-10-14.
+  sniperTopHolderCount    Int?
+  sniperTopHoldersChecked Int?
+  /// Holders as Jupiter counts them, from the fresh quote seconds before the decision (the count
+  /// the "Min holders (live)" filter reads). Null without a quote, and on scans before 2026-10-14.
+  liveHolderCount         Int?
   // Of the first 25 wallets to buy after launch (the dev aside), how many still hold it, out of
   // firstBuyersSeen (under 25 only while the launch has had fewer buyers). From the worker's
   // PumpPortal trade stream (curation/tradeFlow.ts), so null for a launch it didn't see.

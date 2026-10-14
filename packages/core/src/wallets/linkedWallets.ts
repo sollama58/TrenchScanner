@@ -413,7 +413,11 @@ const round2 = (v: number) => Math.round(v * 100) / 100;
  */
 export const LINKED_TOP_N = 25;
 
-/** How many of the largest holders the exchange-funded share reads (RugCheck lists about 20). */
+/**
+ * How many top-holder accounts are kept from RugCheck's report (it lists about 20): the list the
+ * readings fall back on until the chain's top 25 is read. The exchange-funded count itself reads
+ * LINKED_TOP_N, the same 25 holders as Linked (user decision 2026-10-13, "N/25"; it was the top 20).
+ */
 export const CEX_FUNDED_TOP_N = 20;
 
 export interface CexFundedReading {
@@ -421,14 +425,14 @@ export interface CexFundedReading {
   cexFundedPct: number;
   /** How many of them. */
   cexFundedCount: number;
-  /** How many holders the reading covers: up to CEX_FUNDED_TOP_N, the creator aside. */
+  /** How many holders the reading covers: up to LINKED_TOP_N, the creator aside. */
   cexFundedHolders: number;
   /** Each exchange-funded holder and the exchange (or busy service) that paid for it, largest first. */
   cexFunders: { wallet: string; funder: string }[];
 }
 
 /**
- * The share of the largest holders (up to CEX_FUNDED_TOP_N, by count, the creator aside) that an
+ * The share of the largest holders (up to LINKED_TOP_N, by count, the creator aside) that an
  * exchange or a busy service paid for: wallets opened from a withdrawal, the way retail buyers
  * arrive, rather than from another wallet. A wallet with no funder (it funded itself, or has no
  * history) counts as not exchange-funded. Null while any holder's funder is unknown, or with no
@@ -442,7 +446,7 @@ export function cexFundedReading(
   const list = dedupeHolders(holders)
     .filter((h) => h.owner !== opts.creator)
     .sort((a, b) => b.pct - a.pct)
-    .slice(0, CEX_FUNDED_TOP_N);
+    .slice(0, LINKED_TOP_N);
   if (list.length === 0) return null;
   if (list.some((h) => !funderOf.has(h.owner))) return null;
   const cexFunders = list.flatMap((h) => {

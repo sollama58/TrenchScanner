@@ -31,7 +31,7 @@ import { isPumpfunName, useWalletNames, walletText, type WalletNames } from "../
 import { WalletText } from "./WalletText";
 import {
   cexCountText,
-  LINKED_WARN_PCT,
+  countCutFor,
   SAFETY_REJECT_CEX_FUNDED_COUNT,
   SAFETY_REJECT_LINKED_COUNT,
 } from "./AlertCard";
@@ -277,8 +277,8 @@ function MapView({
       <dl className="bm-stats">
         <div
           className={
-            (graph.linkedPct !== null && graph.linkedPct >= LINKED_WARN_PCT) ||
-            (graph.linkedCount !== null && graph.linkedCount.linked >= SAFETY_REJECT_LINKED_COUNT)
+            graph.linkedCount !== null &&
+            graph.linkedCount.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, graph.linkedCount.of)
               ? "risky"
               : undefined
           }
@@ -315,7 +315,11 @@ function MapView({
           <dd className="num">{risky.length}</dd>
         </div>
         <div
-          className={cex !== null && cex.linked >= SAFETY_REJECT_CEX_FUNDED_COUNT ? "risky" : undefined}
+          className={
+            cex !== null && cex.linked >= countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cex.of)
+              ? "risky"
+              : undefined
+          }
           title={
             cex === null
               ? "CEX-funded: not checked yet"

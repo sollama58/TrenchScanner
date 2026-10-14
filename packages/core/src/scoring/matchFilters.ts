@@ -101,6 +101,14 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   }
 
   if (
+    filter.maxSniperTopHolderCount != null &&
+    token.sniperTopHolderCount !== undefined &&
+    token.sniperTopHolderCount > filter.maxSniperTopHolderCount
+  ) {
+    return false;
+  }
+
+  if (
     filter.minCexFundedCount != null &&
     token.cexFundedCount !== undefined &&
     token.cexFundedCount < filter.minCexFundedCount

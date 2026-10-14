@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cexFundedReading,
-  CEX_FUNDED_TOP_N,
+  LINKED_TOP_N,
   funderFromEarliestTransactions,
   funderFromFirstTransaction,
   HOT_FUNDER_DENYLIST,
@@ -173,14 +173,15 @@ describe("cexFundedReading", () => {
   const hot = (f: string) => f === "Binance";
   const holders = Array.from({ length: 25 }, (_, i) => ({ owner: `H${i}`, pct: 25 - i }));
 
-  it("counts the largest holders an exchange paid for, up to the top 20, creator aside", () => {
+  it("counts the largest holders an exchange paid for, up to the top 25, creator aside", () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ owner: `H${i}`, pct: 30 - i }));
     const funderOf = new Map<string, string | null>(
-      holders.map((h, i) => [h.owner, i % 4 === 0 ? "Binance" : i % 4 === 1 ? "Someone" : null]),
+      many.map((h, i) => [h.owner, i % 4 === 0 ? "Binance" : i % 4 === 1 ? "Someone" : null]),
     );
-    const r = cexFundedReading(holders, funderOf, { hot, creator: "H1" })!;
-    // H1 is the creator: H0..H20 less H1 is the top 20, of which H0, H4, H8, H12, H16, H20 are exchange-funded.
-    expect(r).toMatchObject({ cexFundedPct: 30, cexFundedCount: 6, cexFundedHolders: CEX_FUNDED_TOP_N });
-    expect(r.cexFunders.map((c) => c.wallet)).toEqual(["H0", "H4", "H8", "H12", "H16", "H20"]);
+    const r = cexFundedReading(many, funderOf, { hot, creator: "H1" })!;
+    // H1 is the creator: H0..H25 less H1 is the top 25, of which H0, H4, ..., H24 are exchange-funded.
+    expect(r).toMatchObject({ cexFundedPct: 28, cexFundedCount: 7, cexFundedHolders: LINKED_TOP_N });
+    expect(r.cexFunders.map((c) => c.wallet)).toEqual(["H0", "H4", "H8", "H12", "H16", "H20", "H24"]);
     expect(r.cexFunders.every((c) => c.funder === "Binance")).toBe(true);
   });
 

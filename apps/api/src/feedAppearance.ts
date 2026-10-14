@@ -32,6 +32,7 @@ export const CARD_FIELDS = [
   "sniperTop10",
   "linked",
   "cexFunded",
+  "largest",
   "dev",
   "reasons",
   "mint",
@@ -80,8 +81,10 @@ export const feedAppearanceSchema = z
     reasons: z.boolean().default(false),
     /** The Top-10 snipers tile; hidden by default, as are accounts saved before it. */
     sniperTop10: z.boolean().default(false),
-    /** The CEX-funded tile (share of the top 20 an exchange paid for); hidden by default. */
+    /** The CEX-funded tile (how many of the top 25 an exchange paid for); hidden by default. */
     cexFunded: z.boolean().default(false),
+    /** The Largest holder tile (one wallet's share of supply, pools aside); hidden by default. */
+    largest: z.boolean().default(false),
     /** On bubble maps, ties between holders the same exchange funded (drawn only); off by default. */
     bubbleCexLinks: z.boolean().default(false),
     /** The retired Bundled tile (folded into Linked, 2026-10-13): accepted from older tabs, ignored. */
@@ -131,6 +134,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   reasons: false,
   sniperTop10: false,
   cexFunded: false,
+  largest: false,
   bubbleCexLinks: false,
   narrativeNote: null,
   streamTab: false,

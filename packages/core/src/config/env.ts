@@ -203,6 +203,11 @@ const envSchema = z.object({
   // Only coins that passed the safety screen are read. At most 40 credits a cycle at 4. 0 keeps
   // RugCheck's list.
   LINKED_HOLDER_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(4),
+  // The longest a curated decision waits for the Linked and CEX-funded counts to be read over the
+  // chain's top 25 once the token is otherwise ready (worker's linkedListReady; user ask 2026-10-13).
+  // Coins under SNIPER_SHARE_WAIT_MIN_AGE_MINUTES don't wait. Past it the decision goes ahead on
+  // the reading there is, cut at the same share of the holders read. 0 = don't wait.
+  LINKED_LIST_MAX_WAIT_SECONDS: z.coerce.number().nonnegative().default(60),
   // The live tape (worker's liveTape.ts): each coin close to a call (a contender, or an alert held
   // for a wallet figure) has its newest page of trades read from Helius, 10 credits a page, so the
   // flagged wallets trading it are known at the decision. At most this many pages a cycle (the

@@ -175,6 +175,14 @@ export interface OnChainProfile {
    */
   top10WalletsChecked?: number;
   /**
+   * How many of the top holders the linked reading covers (the chain's top 25, pools aside, or
+   * RugCheck's accounts until that is read) were among the launch's first 25 buyers, and how many
+   * holders that read (user ask 2026-10-13: snipers as "N/25"). Undefined until the launch's first
+   * buyers have been read, or with no holder list.
+   */
+  sniperTopHolderCount?: number;
+  sniperTopHoldersChecked?: number;
+  /**
    * The wallet risk readings (core's wallets/riskScore.ts, coinWalletRisk), from the worker's
    * in-memory copy of WalletRisk: the riskiest top-10 holder, the first buyers' mean score, the %
    * of supply held by risky top holders, and the known dumpers among the first buyers. Undefined
@@ -240,7 +248,7 @@ export interface OnChainProfile {
   bundledWalletCount?: number;
   sameTimeClusters?: SameTimeCluster[];
   /**
-   * Of the largest holders (up to 20, the creator aside), the % an exchange or a busy service paid
+   * Of the largest holders (up to 25, the creator aside), the % an exchange or a busy service paid
    * for (core's cexFundedReading), how many, and how many were read. Undefined until every one of
    * their funders is read.
    */
@@ -398,6 +406,8 @@ export interface FilterCriteria {
   maxEmptyTop10WalletPct?: number | null;
   /** Max % of the top-10 holders that were among the launch's first 25 buyers. */
   maxSniperTop10WalletPct?: number | null;
+  /** Max how many of the top-25 holders were among the launch's first 25 buyers (sniperTopHolderCount). Skipped while unknown. */
+  maxSniperTopHolderCount?: number | null;
   /** Max % of supply held by linked top holders (one funder, or funded each other). */
   maxLinkedWalletPct?: number | null;
   /** Max how many of the top-25 holders are linked (linkedWalletCount). Skipped while unknown. */

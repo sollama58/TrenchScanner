@@ -35,12 +35,13 @@ export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
 export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
 
 /**
- * At or above this many of the top-20 holders (the creator aside) funded from an exchange or a
- * busy service (core's cexFundedReading), a token is never alerted (user decision 2026-10-13,
- * "17/20", first asked at 15). Banked rows keep the share only (cexFundedPct, of the holders read, nearly always 20),
- * so the training and report cut reads it as SAFETY_REJECT_CEX_FUNDED_PCT.
+ * At or above this many of the top-25 holders (pools and the creator aside) funded from an
+ * exchange or a busy service (core's cexFundedReading), a token is never alerted (user decision
+ * 2026-10-13, "17/20", first asked at 15; moved to the same 25 holders as Linked the same day, so
+ * 21/25, the same 84-85%). Banked rows before the count was recorded keep the share only
+ * (cexFundedPct), so the training and report cut reads those as SAFETY_REJECT_CEX_FUNDED_PCT.
  */
-export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
+export const SAFETY_REJECT_CEX_FUNDED_COUNT = 21;
 
 /**
  * At or above this many of the top-25 holders (pools aside) linked (one funder paid for them, or
@@ -49,7 +50,21 @@ export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
  * as the linkedWalletCount feature since 2026-10-13; older rows have none and pass.
  */
 export const SAFETY_REJECT_LINKED_COUNT = 20;
-export const SAFETY_REJECT_CEX_FUNDED_PCT = 85;
+export const SAFETY_REJECT_CEX_FUNDED_PCT = 84;
+
+/** The holder list the count cuts are set on: the top 25, pools aside (core's LINKED_TOP_N). */
+export const SAFETY_COUNT_CUT_HOLDERS = 25;
+
+/**
+ * A count cut set on the top 25, for a reading that covered fewer holders: the same share of the
+ * list, rounded up. A coin with 19 holders past its pools, or one read from RugCheck's 20 accounts
+ * before the chain's top 25 came in, would otherwise need 20 of its 19 linked to fail - a cut that
+ * can never fire. 20/25 on 19 read is 16/19; on 25 or more the cut stands as set.
+ */
+export function countCutFor(cut: number, checked: number | null | undefined): number {
+  if (typeof checked !== "number" || checked <= 0 || checked >= SAFETY_COUNT_CUT_HOLDERS) return cut;
+  return Math.ceil((cut * checked) / SAFETY_COUNT_CUT_HOLDERS);
+}
 
 /**
  * Over this share of the supply in one holder's hands (pools and LP aside, one wallet's token
@@ -136,20 +151,16 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
       `largest holder owns ${profile.largestHolderPct.toFixed(1)}% of supply (over ${SAFETY_MAX_LARGEST_HOLDER_PCT}%)`,
     );
   }
-  if (
-    typeof profile.linkedWalletCount === "number" &&
-    profile.linkedWalletCount >= SAFETY_REJECT_LINKED_COUNT
-  ) {
+  const linkedCut = countCutFor(SAFETY_REJECT_LINKED_COUNT, profile.linkedWalletsChecked);
+  if (typeof profile.linkedWalletCount === "number" && profile.linkedWalletCount >= linkedCut) {
     reasons.push(
-      `${profile.linkedWalletCount} of the ${profile.linkedWalletsChecked ?? 25} top holders are linked (${SAFETY_REJECT_LINKED_COUNT} or more)`,
+      `${profile.linkedWalletCount} of the ${profile.linkedWalletsChecked ?? SAFETY_COUNT_CUT_HOLDERS} top holders are linked (${linkedCut} or more)`,
     );
   }
-  if (
-    typeof profile.cexFundedCount === "number" &&
-    profile.cexFundedCount >= SAFETY_REJECT_CEX_FUNDED_COUNT
-  ) {
+  const cexCut = countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, profile.cexFundedHolders);
+  if (typeof profile.cexFundedCount === "number" && profile.cexFundedCount >= cexCut) {
     reasons.push(
-      `${profile.cexFundedCount} of the ${profile.cexFundedHolders ?? 20} top holders were funded from an exchange (${SAFETY_REJECT_CEX_FUNDED_COUNT} or more)`,
+      `${profile.cexFundedCount} of the ${profile.cexFundedHolders ?? SAFETY_COUNT_CUT_HOLDERS} top holders were funded from an exchange (${cexCut} or more)`,
     );
   }
 
@@ -202,6 +213,11 @@ function walletScreenReasons(
  * the score's fit leave such rows out rather than learn from tokens that are mostly farm rugs.
  */
 export function passesWalletSafetyCuts(features: Record<string, number | null | undefined>): boolean {
+  const num = (v: number | null | undefined): v is number => typeof v === "number";
+  // The exchange-funded cut on the count where the row banked it, else on the share.
+  const cexFails = num(features.cexFundedCount)
+    ? features.cexFundedCount >= countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, features.cexFundedHolders)
+    : num(features.cexFundedPct) && features.cexFundedPct >= SAFETY_REJECT_CEX_FUNDED_PCT;
   return (
     walletScreenReasons(
       features.freshTop10WalletPct,
@@ -209,11 +225,12 @@ export function passesWalletSafetyCuts(features: Record<string, number | null | 
       features.sniperTop10WalletPct,
       features.top10HolderPct,
     ).length === 0 &&
-    !(typeof features.cexFundedPct === "number" && features.cexFundedPct >= SAFETY_REJECT_CEX_FUNDED_PCT) &&
+    !cexFails &&
     !(
-      typeof features.linkedWalletCount === "number" &&
-      features.linkedWalletCount >= SAFETY_REJECT_LINKED_COUNT
-    )
+      num(features.linkedWalletCount) &&
+      features.linkedWalletCount >= countCutFor(SAFETY_REJECT_LINKED_COUNT, features.linkedWalletsChecked)
+    ) &&
+    !(num(features.largestHolderPct) && features.largestHolderPct > SAFETY_MAX_LARGEST_HOLDER_PCT)
   );
 }
 
@@ -273,6 +290,17 @@ export function walletSafetyCutsSql(features: Prisma.Sql = Prisma.raw('"features
     AND COALESCE((${features}->>'freshTop10WalletPct')::float8 <= ${SAFETY_MAX_FRESH_WALLET_PCT}, true)
     AND COALESCE((${features}->>'sniperTop10WalletPct')::float8 < ${SAFETY_REJECT_SNIPER_WALLET_PCT}, true)
     AND COALESCE((${features}->>'top10HolderPct')::float8 < ${SAFETY_REJECT_TOP10_HOLDER_PCT}, true)
-    AND COALESCE((${features}->>'cexFundedPct')::float8 < ${SAFETY_REJECT_CEX_FUNDED_PCT}, true)
-    AND COALESCE((${features}->>'linkedWalletCount')::float8 < ${SAFETY_REJECT_LINKED_COUNT}, true)`;
+    AND COALESCE(
+      (${features}->>'cexFundedCount')::float8 < ${countCutSql(SAFETY_REJECT_CEX_FUNDED_COUNT, Prisma.sql`(${features}->>'cexFundedHolders')::float8`)},
+      (${features}->>'cexFundedPct')::float8 < ${SAFETY_REJECT_CEX_FUNDED_PCT},
+      true
+    )
+    AND COALESCE((${features}->>'linkedWalletCount')::float8 < ${countCutSql(SAFETY_REJECT_LINKED_COUNT, Prisma.sql`(${features}->>'linkedWalletsChecked')::float8`)}, true)
+    AND COALESCE((${features}->>'largestHolderPct')::float8 <= ${SAFETY_MAX_LARGEST_HOLDER_PCT}, true)`;
+}
+
+/** countCutFor in SQL, over a holders-read expression (null or 25 and over keep the cut as set). */
+function countCutSql(cut: number, checked: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`(CASE WHEN ${checked} > 0 AND ${checked} < ${SAFETY_COUNT_CUT_HOLDERS}
+    THEN CEIL(${cut}::float8 * ${checked} / ${SAFETY_COUNT_CUT_HOLDERS}) ELSE ${cut} END)`;
 }

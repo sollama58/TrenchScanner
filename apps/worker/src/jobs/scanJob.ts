@@ -55,6 +55,7 @@ import {
   type PricePathBook,
   parseTextScores,
   EMPTY_TRADE_FLOW,
+  LINKED_TOP_N,
   type NarrativeRead,
 } from "@trenchscanner/core";
 import type { Token } from "@prisma/client";
@@ -308,16 +309,55 @@ const sniperWaitSince = new Map<string, number>();
 /** A wait older than this belongs to a token that left the band or the watchlist. */
 const SNIPER_WAIT_FORGET_MS = 60 * 60_000;
 
+/** When each token waiting on its top-25 linked reading started waiting - see linkedListReady. */
+const linkedWaitSince = new Map<string, number>();
+
 /** Drops waits for tokens no longer being decided on. Once a cycle. */
 function pruneSniperWaits(now: number): void {
-  for (const [mint, since] of sniperWaitSince) {
-    if (now - since > SNIPER_WAIT_FORGET_MS) sniperWaitSince.delete(mint);
+  for (const waits of [sniperWaitSince, linkedWaitSince]) {
+    for (const [mint, since] of waits) {
+      if (now - since > SNIPER_WAIT_FORGET_MS) waits.delete(mint);
+    }
   }
 }
 
 /** Test hook. */
 export function resetSniperWaits(): void {
   sniperWaitSince.clear();
+  linkedWaitSince.clear();
+}
+
+/**
+ * Whether a curated decision on this token should go ahead rather than wait for its Linked and
+ * CEX-funded counts to be read over the chain's top 25 (user ask 2026-10-13: the counts are N/25,
+ * and a reading over RugCheck's 20 accounts read N/19 and could barely meet the 20-of-25 cut).
+ * Goes ahead once the chain's list is in and the reading over it landed, when the reads are off,
+ * for a coin younger than minAgeMinutes (as for the snipers share, its ready moment is too short
+ * to spend waiting), or after maxMs - then on whatever reading there is, which the screen cuts at
+ * the same share of the holders it read (rugScreen's countCutFor). The first call starts the wait.
+ * Exported for tests.
+ */
+export function linkedListReady(
+  scored: Pick<ScoredToken, "mintAddress" | "linkedWalletCount" | "cexFundedCount" | "ageMinutes">,
+  listRead: boolean,
+  wait: { maxMs: number; minAgeMinutes: number; readsOn: boolean },
+  now = Date.now(),
+): boolean {
+  const mint = scored.mintAddress;
+  const young = scored.ageMinutes !== undefined && scored.ageMinutes < wait.minAgeMinutes;
+  const landed = listRead && scored.linkedWalletCount !== undefined && scored.cexFundedCount !== undefined;
+  if (landed || !wait.readsOn || young) {
+    linkedWaitSince.delete(mint);
+    return true;
+  }
+  const since = linkedWaitSince.get(mint);
+  if (since === undefined) {
+    linkedWaitSince.set(mint, now);
+    return wait.maxMs <= 0;
+  }
+  if (now - since < wait.maxMs) return false;
+  linkedWaitSince.delete(mint);
+  return true;
 }
 
 /**
@@ -2134,6 +2174,7 @@ async function processCandidate(
       withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env, sniperWallets),
       linked,
       cex,
+      sniperWallets,
     ),
     flags,
     kolTraders,
@@ -2355,13 +2396,22 @@ async function processCandidate(
     // most and not for young coins (sniperShareReady): the safety cut reads it, and a decision row banked without it
     // would teach the models its absence. Checked after the pre-gate, so the wait starts when the
     // token is otherwise ready to be decided on.
-    const walletReady = () =>
-      !env.CURATED_REQUIRE_WALLET_CHECKS ||
-      (walletChecksKnown(scored) &&
-        sniperShareReady(scored, sniperChainAvailable, {
-          maxMs: env.SNIPER_SHARE_MAX_WAIT_SECONDS * 1000,
-          minAgeMinutes: env.SNIPER_SHARE_WAIT_MIN_AGE_MINUTES,
-        }));
+    // And the Linked and CEX-funded counts over the chain's top 25, on the same terms (linkedListReady).
+    // Both waits are asked each time, so they run side by side rather than one after the other.
+    const walletReady = () => {
+      if (!env.CURATED_REQUIRE_WALLET_CHECKS) return true;
+      if (!walletChecksKnown(scored)) return false;
+      const snipersIn = sniperShareReady(scored, sniperChainAvailable, {
+        maxMs: env.SNIPER_SHARE_MAX_WAIT_SECONDS * 1000,
+        minAgeMinutes: env.SNIPER_SHARE_WAIT_MIN_AGE_MINUTES,
+      });
+      const linkedIn = linkedListReady(scored, cachedTopHolders(scored.mintAddress) !== undefined, {
+        maxMs: env.LINKED_LIST_MAX_WAIT_SECONDS * 1000,
+        minAgeMinutes: env.SNIPER_SHARE_WAIT_MIN_AGE_MINUTES,
+        readsOn: env.LINKED_HOLDER_READS_PER_CYCLE > 0 && env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0,
+      });
+      return snipersIn && linkedIn;
+    };
     if (passesEventPreGate(scored, band) && walletReady()) {
       const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
       // A pick that lost an earlier governor pass re-contends while its event is spent - see
@@ -2583,6 +2633,7 @@ export function withLinkedWallets(
   onChain: OnChainProfile | null,
   linked: LinkedWalletsReading | null,
   cex: CexFundedReading | null = null,
+  sniperWallets?: ReadonlySet<string>,
 ): OnChainProfile | null {
   if (!onChain) return onChain;
   // The top holders the scan read, kept whether or not their funders were (user ask 2026-10-13):
@@ -2609,7 +2660,26 @@ export function withLinkedWallets(
   const tagged = withCex.linkedHolders
     ? { ...withCex, linkedHolders: tagCex(withCex.linkedHolders) }
     : withCex;
-  if (!linked) return tagged;
+  const read = linked ? withLinkedReading(tagged, linked, tagCex) : tagged;
+  // Launch snipers among the same top holders (user ask 2026-10-13, "N/25"): the linked reading's
+  // list when it has one (the chain's top 25, pools and the creator aside), else the list read.
+  const list = (linked?.holders ?? read.linkedHolders?.map((h) => ({ wallet: h.wallet })) ?? []).slice(
+    0,
+    LINKED_TOP_N,
+  );
+  if (!sniperWallets || list.length === 0) return read;
+  return {
+    ...read,
+    sniperTopHolderCount: list.filter((h) => sniperWallets.has(h.wallet)).length,
+    sniperTopHoldersChecked: list.length,
+  };
+}
+
+function withLinkedReading(
+  tagged: OnChainProfile,
+  linked: LinkedWalletsReading,
+  tagCex: (list: { wallet: string; pct: number }[]) => { wallet: string; pct: number; cexFunder?: string }[],
+): OnChainProfile {
   return {
     ...tagged,
     linkedWalletPct: linked.linkedWalletPct,

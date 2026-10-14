@@ -41,3 +41,46 @@ describe("withLinkedWallets: exchange funders on the holder list", () => {
     ]);
   });
 });
+
+describe("withLinkedWallets: launch snipers among the top holders", () => {
+  const onChain = {
+    topHolderShares: [
+      { owner: "A", pct: 5 },
+      { owner: "B", pct: 3 },
+      { owner: "C", pct: 1 },
+    ],
+  } as unknown as OnChainProfile;
+  const linked = {
+    linkedWalletPct: 0,
+    linkedClusterCount: 0,
+    linkedWalletCount: 0,
+    linkedWalletsChecked: 4,
+    linkedLargestClusterPct: 0,
+    linkedCreatorPct: 0,
+    clusters: [],
+    holders: [
+      { wallet: "A", pct: 5 },
+      { wallet: "B", pct: 3 },
+      { wallet: "D", pct: 2 },
+      { wallet: "C", pct: 1 },
+    ],
+    sameTimeFundedPct: 0,
+    sameTimeClusterCount: 0,
+    sameTimeFundedCount: 0,
+    bundledWalletCount: 0,
+    sameTimeClusters: [],
+  };
+
+  it("counts the first buyers on the linked reading's list (N of the holders read)", () => {
+    const out = withLinkedWallets(onChain, linked, null, new Set(["B", "D", "Z"]))!;
+    expect(out.sniperTopHolderCount).toBe(2);
+    expect(out.sniperTopHoldersChecked).toBe(4);
+  });
+
+  it("falls back to the list the scan read, and stays unknown without the first buyers", () => {
+    const out = withLinkedWallets(onChain, null, null, new Set(["A"]))!;
+    expect(out.sniperTopHolderCount).toBe(1);
+    expect(out.sniperTopHoldersChecked).toBe(3);
+    expect(withLinkedWallets(onChain, linked)!.sniperTopHolderCount).toBeUndefined();
+  });
+});

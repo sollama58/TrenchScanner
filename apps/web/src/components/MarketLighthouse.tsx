@@ -866,7 +866,7 @@ function Screened({
   const latest = buckets.length - 1;
   const shown = hover !== null && hover <= latest ? hover : latest;
   const focus = buckets[shown];
-  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh, under ${s.checks.emptyWalletRejectPct}% empty and under ${s.checks.sniperWalletRejectPct ?? 80}% launch-sniper top-10 wallets, top 10 owning under ${s.checks.top10HolderRejectPct ?? 40}%, no single holder over ${s.checks.largestHolderMaxPct ?? 10}%, under ${s.checks.linkedRejectCount ?? 20} of the top 25 linked and under ${s.checks.cexFundedRejectCount ?? 17} funded from an exchange${(s.checks.minPreBondSeconds ?? 5) > 0 ? `, bonding curve not filled inside ${s.checks.minPreBondSeconds ?? 5}s of launch` : ""}) and looks ready to decide on.`;
+  const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh, under ${s.checks.emptyWalletRejectPct}% empty and under ${s.checks.sniperWalletRejectPct ?? 80}% launch-sniper top-10 wallets, top 10 owning under ${s.checks.top10HolderRejectPct ?? 40}%, no single holder over ${s.checks.largestHolderMaxPct ?? 10}%, under ${s.checks.linkedRejectCount ?? 20} of the top 25 linked and under ${s.checks.cexFundedRejectCount ?? 21} funded from an exchange${(s.checks.minPreBondSeconds ?? 5) > 0 ? `, bonding curve not filled inside ${s.checks.minPreBondSeconds ?? 5}s of launch` : ""}) and looks ready to decide on.`;
 
   return (
     <section className="lh-section lh-screened">
@@ -1227,7 +1227,7 @@ function PreChecks({ s }: { s: ScreenedData }) {
             Under {c.linkedRejectCount ?? 20} of the top 25 holders linked (one funder, funded each other, or
             funded the same minute).
           </li>
-          <li>Under {c.cexFundedRejectCount ?? 17} of the top 20 holders funded from an exchange.</li>
+          <li>Under {c.cexFundedRejectCount ?? 21} of the top 25 holders funded from an exchange.</li>
           {(c.minPreBondSeconds ?? 5) > 0 && (
             <li>
               If graduated, its bonding curve took at least {c.minPreBondSeconds ?? 5}s to fill, so the launch

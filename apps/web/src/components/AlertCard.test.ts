@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Card } from "../api";
-import { nowReading, recordedPeakOf } from "./AlertCard";
+import { countCutFor, nowReading, recordedPeakOf, sniperReading, walletCountText } from "./AlertCard";
 
 /** Just the fields recordedPeakOf reads. */
 function card(over: {
@@ -107,5 +107,41 @@ describe("nowReading", () => {
 
   it("shows the reading when it has no time (older API builds)", () => {
     expect(nowReading(call("curated", null))).toBe(47_500);
+  });
+});
+
+describe("holder counts", () => {
+  it("shows a top-10 check as N of the wallets the list held", () => {
+    expect(walletCountText(40, 10)).toBe("4/10");
+    expect(walletCountText(77.78, 9)).toBe("7/9");
+    expect(walletCountText(30, null)).toBe("3/10");
+    expect(walletCountText(null, 10)).toBeNull();
+  });
+
+  it("cuts a count over fewer than 25 holders at the same share, as the screen does", () => {
+    expect(countCutFor(20, 25)).toBe(20);
+    expect(countCutFor(20, 19)).toBe(16);
+    expect(countCutFor(21, 20)).toBe(17);
+    expect(countCutFor(21, null)).toBe(21);
+  });
+
+  it("reads snipers over the top 25, else the top-10 share as a count", () => {
+    expect(
+      sniperReading(
+        {
+          sniperTopHolderCount: 6,
+          sniperTopHoldersChecked: 25,
+          sniperTop10WalletPct: 40,
+          top10WalletsChecked: 10,
+        },
+        true,
+      ),
+    ).toMatchObject({ count: 6, of: 25, top25: true, top10Pct: 40 });
+    expect(sniperReading({ sniperTop10WalletPct: 30, top10WalletsChecked: 10 }, false)).toMatchObject({
+      count: 3,
+      of: 10,
+      top25: false,
+    });
+    expect(sniperReading({}, true)).toBeNull();
   });
 });
