@@ -1441,6 +1441,8 @@ export interface TelegramModels {
   sameAsFeed: boolean;
   /** Telegram's own picks while sameAsFeed is off; empty = follow the top models. */
   models: string[];
+  /** Only the high-conviction tier's calls, from any model, in place of the models above. */
+  highConvictionOnly?: boolean;
 }
 
 /** POST /telegram/link/code: a one-time code inside the two t.me deep links. */

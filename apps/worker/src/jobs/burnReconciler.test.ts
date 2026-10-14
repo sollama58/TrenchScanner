@@ -8,7 +8,7 @@ import {
   type Env,
   type SolanaRpc,
 } from "@trenchscanner/core";
-import { reconcileBurns } from "./burnReconciler.js";
+import { reconcileBurns, STUCK_SIGNATURE_PASSES } from "./burnReconciler.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -235,6 +235,57 @@ describe.skipIf(!dbAvailable)("reconcileBurns: Burn Credits burns", () => {
     await prisma.burnCreditEntry.deleteMany({ where: { wallet: WALLET } });
     await prisma.burnEvent.deleteMany({ where: { burnerWallet: WALLET } });
     await prisma.burnScanCursor.deleteMany({ where: { id: "burn-scan" } });
+  });
+
+  it("steps over a transaction the RPC never returns, and reads it later once it does", async () => {
+    await prisma.burnScanCursor.create({ data: { id: "burn-scan", lastSignature: "sig-base" } });
+    let poisonReadable = false;
+    const rpc = {
+      async getSignaturesForAddress(_mint: string, opts: { limit: number; until?: string }) {
+        const rows = ["sig-new", "sig-poison", "sig-base"];
+        const end = opts.until ? rows.indexOf(opts.until) : rows.length;
+        return rows.slice(0, end === -1 ? rows.length : end).map((signature) => ({
+          signature,
+          blockTime: Math.floor(Date.now() / 1000),
+          err: null,
+        }));
+      },
+      async getParsedTransactions(sigs: string[]) {
+        return new Map(
+          sigs.map((sig) => [
+            sig,
+            sig === "sig-poison" && !poisonReadable ? null : { meta: { err: null }, transaction: {} },
+          ]),
+        );
+      },
+    } as unknown as SolanaRpc;
+
+    for (let pass = 1; pass < STUCK_SIGNATURE_PASSES; pass += 1) {
+      const result = await reconcileBurns(env, rpc);
+      expect(result.stoppedEarly).toBe(true);
+      const cursor = await prisma.burnScanCursor.findUniqueOrThrow({ where: { id: "burn-scan" } });
+      expect(cursor).toMatchObject({
+        lastSignature: "sig-base",
+        stuckSignature: "sig-poison",
+        stuckPasses: pass,
+      });
+    }
+    // The last allowed failure: stepped over from now on.
+    expect((await reconcileBurns(env, rpc)).skipped).toBe(1);
+    let cursor = await prisma.burnScanCursor.findUniqueOrThrow({ where: { id: "burn-scan" } });
+    expect(cursor).toMatchObject({ stuckSignature: null, stuckPasses: 0, skippedSignatures: ["sig-poison"] });
+
+    // The walk now goes on past it.
+    expect((await reconcileBurns(env, rpc)).stoppedEarly).toBe(false);
+    cursor = await prisma.burnScanCursor.findUniqueOrThrow({ where: { id: "burn-scan" } });
+    expect(cursor.lastSignature).toBe("sig-new");
+    expect(cursor.skippedSignatures).toEqual(["sig-poison"]);
+
+    // Once the RPC returns it, it is read and dropped from the list.
+    poisonReadable = true;
+    expect((await reconcileBurns(env, rpc)).recovered).toBe(1);
+    cursor = await prisma.burnScanCursor.findUniqueOrThrow({ where: { id: "burn-scan" } });
+    expect(cursor.skippedSignatures).toEqual([]);
   });
 
   it("puts a memo-tagged burn in the credit ledger and buys no months with it", async () => {

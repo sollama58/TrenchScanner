@@ -37,11 +37,16 @@ import { createMatchPeaksRunner } from "./jobs/matchPeaks.js";
 import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
-import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
+import {
+  rechooseDefaultModel,
+  runCuratorTrainingJob,
+  seatLiveShareAlarms,
+} from "./jobs/curatorTrainingJob.js";
 import { runScoreWeightsJob } from "./jobs/scoreWeightsJob.js";
 import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { aiReviewEnabled } from "./ai/reviewer.js";
+import { drainShadowReviews } from "./jobs/curatedAlerts.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
@@ -262,29 +267,34 @@ async function main() {
   schedule("telegram-dispatch", () => {
     /** When each alert not yet covered by a pass was written, oldest first. */
     const written: number[] = [];
+    /** No early pass before this: set when a pass's horizon stopped short of a written alert. */
+    let retryAt = 0;
     onAlertWritten(() => {
       if (written.length < 1_000) written.push(Date.now());
     });
     return scheduleInterval(
       "telegram-dispatch",
       async () => {
-        // A pass starting now sends everything written up to the grace before now.
-        const covered = Date.now() - COMMIT_GRACE_MS;
+        const startedAt = Date.now();
+        // A pass that throws leaves the wake-ups; this keeps them from re-running it every 100 ms.
+        retryAt = startedAt + 1_000;
+        const { horizon, ...summary } = await runTelegramDispatch(env, {
+          // Artwork for a token that didn't come through Pump.fun: DexScreener's, when it has one.
+          lookupImages: async (mints) => {
+            const found = await deps.dexScreener.getTokensByAddresses(mints, 1, {
+              retries: 0,
+              deadlineMs: 5_000,
+            });
+            return new Map(found.flatMap((t) => (t.imageUrl ? [[t.mintAddress, t.imageUrl] as const] : [])));
+          },
+        });
+        // The pass sent what was written up to its horizon. One a still-open transaction held
+        // short of a written alert keeps that wake-up, and tries again a second later rather than
+        // waiting out the whole interval (or re-running every 100 ms).
+        const covered = horizon ? horizon.getTime() : startedAt - COMMIT_GRACE_MS;
         while (written.length > 0 && written[0]! <= covered) written.shift();
-        return {
-          ...(await runTelegramDispatch(env, {
-            // Artwork for a token that didn't come through Pump.fun: DexScreener's, when it has one.
-            lookupImages: async (mints) => {
-              const found = await deps.dexScreener.getTokensByAddresses(mints, 1, {
-                retries: 0,
-                deadlineMs: 5_000,
-              });
-              return new Map(
-                found.flatMap((t) => (t.imageUrl ? [[t.mintAddress, t.imageUrl] as const] : [])),
-              );
-            },
-          })),
-        };
+        retryAt = written.length > 0 ? Date.now() + 1_000 : 0;
+        return summary;
       },
       env.TELEGRAM_DISPATCH_INTERVAL_SECONDS / 60,
       {
@@ -292,7 +302,8 @@ async function main() {
         runEarly: {
           everyMs: 100,
           quiet: true,
-          due: async () => written.length > 0 && Date.now() >= written[0]! + COMMIT_GRACE_MS,
+          due: async () =>
+            written.length > 0 && Date.now() >= Math.max(written[0]! + COMMIT_GRACE_MS, retryAt),
         },
       },
     );
@@ -509,7 +520,10 @@ async function main() {
   schedule("champion-refresh", () =>
     scheduleInterval(
       "champion-refresh",
-      async (): Promise<JobRunMeta> => rechooseDefaultModel(env),
+      async (): Promise<JobRunMeta> => ({
+        ...(await rechooseDefaultModel(env)),
+        ...(await seatLiveShareAlarms(env)),
+      }),
       CHAMPION_REFRESH_MINUTES,
     ),
   );
@@ -583,9 +597,15 @@ async function main() {
     for (const { job } of jobs) job.stop();
     stream?.stop();
     stopNarrativePolling?.();
-    const outcomes = await Promise.all(
-      jobs.map(async ({ name, job }) => ({ name, outcome: await job.settle(SHUTDOWN_GRACE_MS) })),
-    );
+    // Detached shadow AI reviews get the same grace: one cut off is paid for and never recorded.
+    const [outcomes, reviewsLeft] = await Promise.all([
+      Promise.all(
+        jobs.map(async ({ name, job }) => ({ name, outcome: await job.settle(SHUTDOWN_GRACE_MS) })),
+      ),
+      drainShadowReviews(SHUTDOWN_GRACE_MS),
+    ]);
+    if (reviewsLeft > 0)
+      logger.warn("shadow ai reviews still in flight at shutdown", { reviews: reviewsLeft });
     // The run that passed its deadline already says so on its row; "interrupted" would hide it.
     const interrupted = outcomes
       .filter((o) => o.outcome === "interrupted" && o.name !== keepHeartbeatOf)

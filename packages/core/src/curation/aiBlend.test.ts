@@ -43,9 +43,20 @@ describe("fitAiBlend", () => {
     expect(params.wAi).toBeGreaterThan(0);
     expect(metrics.brierBlend!).toBeLessThan(metrics.brierCurator!);
     expect(metrics.keptWinRatePct!).toBeGreaterThan(metrics.baseWinRatePct!);
+    expect(metrics.liftLowPts!).toBeGreaterThan(0);
     expect(params.cutoff).not.toBeNull();
     // A pick the blend scores below its cutoff would be held back; one above would not.
     expect(predictAiBlend(params, 0.3, 0.9)).toBeGreaterThan(predictAiBlend(params, 0.3, 0.1));
+  });
+
+  it("is judged on the newest rows, which no fit and no cutoff saw", () => {
+    // Informative for the first 420 rows, noise for the newest 180 (the held-out 30%): an
+    // in-sample or two-sided fold check would still pass it.
+    const drifted = [...market(420, true, 3), ...market(180, false, 5)];
+    const { params, metrics } = fitAiBlend(drifted, targets, { minRows: 150 });
+    expect(params.usable).toBe(false);
+    expect(metrics.holdoutRows).toBe(180);
+    expect(metrics.brierBlendWalkForward!).toBeLessThan(metrics.brierCuratorWalkForward!);
   });
 
   it("stays out of the way when the reviewer is noise", () => {

@@ -11,11 +11,12 @@ import { summarizeFeed, type FeedStatsCard } from "./feedStats.js";
 import { MATCH_OUTCOME_SELECT, currentMarketCap, matchOutcome } from "./routes/matches.js";
 
 /**
- * The numbers behind the bot's /alerts and /trenchboard, for one linked chat: the tokens that
- * chat was actually sent (TelegramAlertSent, one row per token per chat), each graded as its
- * Live-tab card is - by the model call that raised it when there was one (a call folded into a
- * filter match shows the call), else by the filter match - with resolveOutcome and summarizeFeed,
- * so a hit rate here is the dashboard's hit rate.
+ * The numbers behind the bot's /alerts and /trenchboard, for one linked chat: the alerts that
+ * chat was actually sent (TelegramAlertSent, one row per send, re-alerts included), each graded as
+ * its Live-tab card is - by the model call the alert carried (a call folded into a filter match
+ * shows the call), else by the filter match - with resolveOutcome and summarizeFeed, so a hit rate
+ * here is the dashboard's hit rate. The dispatcher records which call or match each send carried;
+ * rows from before it did fall back to the earliest alert on the token around the send.
  */
 
 /**
@@ -109,7 +110,7 @@ async function gradedAlerts(chatRowId: string, since: Date) {
     where: { chatId: chatRowId, sentAt: { gte: since } },
     orderBy: { sentAt: "desc" },
     take: MAX_SENT_ROWS,
-    select: { tokenId: true, sentAt: true },
+    select: { tokenId: true, sentAt: true, curatedAlertId: true, matchId: true },
   });
   if (sent.length === 0) return { chat, alerts: [] as GradedAlert[] };
   const tokenIds = [...new Set(sent.map((s) => s.tokenId))];
@@ -161,8 +162,12 @@ async function gradedAlerts(chatRowId: string, since: Date) {
       name: token.name,
       sentAt: s.sentAt,
     };
+    // The alert the send carried; on an older row, the earliest around it.
+    const recordedCall = s.curatedAlertId ? calls.find((c) => c.id === s.curatedAlertId) : undefined;
+    const recordedMatch = s.matchId ? matches.find((m) => m.id === s.matchId) : undefined;
+    const recorded = recordedCall !== undefined || recordedMatch !== undefined;
     // The call, as the Live tab shows a call folded into a filter match.
-    const call = alertFor(calls, (c) => c.createdAt, s.tokenId, s.sentAt);
+    const call = recorded ? recordedCall : alertFor(calls, (c) => c.createdAt, s.tokenId, s.sentAt);
     if (call) {
       const outcome = resolveOutcome(call);
       alerts.push({
@@ -177,7 +182,7 @@ async function gradedAlerts(chatRowId: string, since: Date) {
       });
       continue;
     }
-    const match = alertFor(matches, (m) => m.matchedAt, s.tokenId, s.sentAt);
+    const match = recorded ? recordedMatch : alertFor(matches, (m) => m.matchedAt, s.tokenId, s.sentAt);
     if (match) {
       const row = match.candidateOutcomeId ? (rowById.get(match.candidateOutcomeId) ?? null) : null;
       const outcome = matchOutcome(match, rowById);

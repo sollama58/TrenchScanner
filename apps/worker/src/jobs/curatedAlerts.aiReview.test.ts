@@ -7,6 +7,7 @@ import {
   emitCuratedCycle,
   newCuratedCycle,
   resetCuratorModelCache,
+  resetSharedReviews,
 } from "./curatedAlerts.js";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
 import type { AiReviewResult } from "../ai/reviewer.js";
@@ -19,6 +20,8 @@ vi.mock("../ai/reviewer.js", () => ({
   aiReviewEnabled: (env: Env) => env.AI_REVIEW_MODE !== "off" && env.ANTHROPIC_API_KEY !== "",
   aiGateQualified: () => gateQualified(),
   reviewPick: () => reviewPick(),
+  // The heuristic's picks carry no tier; every one counts as a pick the reviewer is pointed at here.
+  reviewPriority: () => "live",
 }));
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -86,6 +89,7 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
 
   beforeEach(async () => {
     reviewPick.mockReset();
+    resetSharedReviews();
     const hourAgo = new Date(Date.now() - 3_600_000);
     const shifted = new Date(Date.now() - 2 * 3_600_000);
     await prisma.curatedAlert.updateMany({
@@ -132,6 +136,23 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
     expect(review.reasoning).toBe("said buy");
     expect(review.curatedAlertId).toBe(alert.id);
     expect(review.candidateOutcomeId).toBe(alert.candidateOutcomeId);
+  });
+
+  it("gate mode: a token called again inside the cooldown reuses its review, and records it once", async () => {
+    reviewPick.mockResolvedValue(verdict("buy"));
+    const { token, emitted } = await run(gate, "shared");
+    expect(emitted).toBe(1);
+    // The ledger's own cooldown lapses (another seat, or a later call): the coin goes out again on
+    // the review it already has.
+    await prisma.curatedAlert.updateMany({
+      where: { tokenId: token.id },
+      data: { createdAt: new Date(Date.now() - 7 * 86_400_000) },
+    });
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, fixture(token.mintAddress), null, gate);
+    expect(await emitCuratedCycle(cycle, gate)).toBe(1);
+    expect(reviewPick).toHaveBeenCalledTimes(1);
+    expect(await prisma.aiReview.count({ where: { tokenId: token.id } })).toBe(1);
   });
 
   it("gate mode: a failed review fails open and records the error", async () => {

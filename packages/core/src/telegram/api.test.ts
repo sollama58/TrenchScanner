@@ -182,6 +182,7 @@ describe("isPublicAddress", () => {
   it("tells public from private", () => {
     expect(isPublicAddress("93.184.216.34")).toBe(true);
     expect(isPublicAddress("2606:4700::1111")).toBe(true);
+    expect(isPublicAddress("2001:4860:4860::8888")).toBe(true);
     for (const a of [
       "10.0.0.1",
       "172.20.1.1",
@@ -193,6 +194,9 @@ describe("isPublicAddress", () => {
       "::1",
       "fd00::1",
       "fe80::1",
+      "2002:7f00:1::1",
+      "2001:0:4136:e378::1",
+      "2001:db8::1",
       "::ffff:127.0.0.1",
       "not-an-ip",
     ])
