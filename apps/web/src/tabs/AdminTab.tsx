@@ -8,6 +8,7 @@ import { ModelsAdmin } from "./AdminModels";
 import { WalletsAdmin } from "./AdminWallets";
 import { UsageAdmin } from "./AdminUsage";
 import { CreditsAdmin } from "./AdminCredits";
+import { RunNow } from "./AdminRunNow";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
 
@@ -697,6 +698,7 @@ function Worker() {
               ])}
             />
           </Panel>
+          <RunNow />
           {d.jobs
             .filter(
               (j) =>

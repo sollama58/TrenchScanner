@@ -2048,6 +2048,22 @@ model CuratorRetrainRequest {
   @@index([startedAt])
 }
 
+/// An admin's "Run now" for a scheduled worker job (Admin > Worker, routes/adminJobRuns.ts): the
+/// worker that owns the job checks for an unstarted row every 30 seconds while it waits for its
+/// next slot, runs the job early and marks the row started. Only the jobs in core's
+/// MANUAL_RUN_JOBS take one; curator training keeps its own CuratorRetrainRequest.
+model JobRunRequest {
+  id          String    @id @default(cuid())
+  job         String
+  requestedAt DateTime  @default(now())
+  /// The admin wallet that asked.
+  requestedBy String?
+  /// When a run of the job picked it up; null while it waits.
+  startedAt   DateTime?
+
+  @@index([job, startedAt])
+}
+
 /// CuratedAlert.peakMcapUsd/peakMcapAt as they were before migration 20261012170000 corrected them:
 /// highs banked from a DexScreener reading taken in the first minute after a call, which still
 /// showed the market from before it (CALL_PEAK_READING_LAG_MS). Kept so the correction can be read

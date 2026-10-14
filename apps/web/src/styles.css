@@ -4725,6 +4725,65 @@ button.small-btn {
   font-family: var(--mono);
   word-break: break-word;
 }
+/* Admin > Worker > Run a job now: one row per job - what it is, its last run, the button - that
+   wraps to stacked lines on a phone rather than scrolling the button out of view. */
+.admin-run-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.admin-run-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  gap: 6px 16px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+.admin-run-row:first-child {
+  border-top: 0;
+}
+.admin-run-what,
+.admin-run-last {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.admin-run-last {
+  align-items: flex-start;
+}
+.admin-run-job {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.admin-run-error {
+  display: block;
+  color: var(--bad-ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.admin-run-action {
+  justify-self: end;
+  width: 7.5rem;
+  text-align: right;
+}
+@media (max-width: 640px) {
+  .admin-run-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .admin-run-last {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .admin-run-action {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
 .admin-query {
   display: inline-block;
   white-space: normal;

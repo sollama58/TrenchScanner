@@ -562,6 +562,50 @@ describe("scheduleDailyAt", () => {
     expect(runs).toEqual([T0, T0 + 30 * 60_000, Date.UTC(2026, 9, 4, 5, 0, 0)]);
   });
 
+  it("runs early on request, then keeps its daily slot", async () => {
+    const runs: number[] = [];
+    let requested = false;
+    const job = scheduleDailyAt("kol-wallets", async () => void runs.push(Date.now()), 4, {
+      catchUpAfterHours: 26,
+      lastRunAt: async () => new Date(T0 - 6 * HOUR),
+      runEarly: {
+        everyMs: 30_000,
+        due: async () => {
+          const due = requested;
+          requested = false;
+          return due;
+        },
+      },
+    });
+    await vi.advanceTimersByTimeAsync(HOUR);
+    expect(runs).toEqual([]);
+    requested = true;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runs).toEqual([T0 + HOUR + 30_000]);
+    // The 04:00 slot still comes, once - the early run left one timer, not two.
+    await vi.advanceTimersByTimeAsync(24 * HOUR);
+    job.stop();
+    expect(runs).toEqual([T0 + HOUR + 30_000, Date.UTC(2026, 9, 4, 4, 0, 0)]);
+  });
+
+  it("never starts an early run while a run is in flight", async () => {
+    const runs: number[] = [];
+    const due = vi.fn(async () => true);
+    const job = scheduleDailyAt(
+      "kol-wallets",
+      async () => {
+        runs.push(Date.now());
+        await new Promise((resolve) => setTimeout(resolve, HOUR));
+      },
+      4,
+      { catchUpAfterHours: 26, lastRunAt: async () => null, runEarly: { everyMs: 30_000, due } },
+    );
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+    job.stop();
+    expect(runs).toEqual([T0]);
+    expect(due).not.toHaveBeenCalled();
+  });
+
   it("never stacks a run that overruns its day - the next one takes the following slot", async () => {
     const runs: number[] = [];
     const job = scheduleDailyAt(

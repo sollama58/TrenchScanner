@@ -35,6 +35,7 @@ import { registerAdminOpsRoutes } from "./routes/adminOps.js";
 import { registerAdminCreditRoutes } from "./routes/adminCredits.js";
 import { registerAdminUsageRoutes } from "./routes/adminUsage.js";
 import { registerAdminRetrainRoutes } from "./routes/adminRetrain.js";
+import { registerAdminJobRunRoutes } from "./routes/adminJobRuns.js";
 import { registerAdminInsightRoutes } from "./routes/adminInsights.js";
 import { registerAdminModelRoutes } from "./routes/adminModels.js";
 import { registerAdminWalletRoutes } from "./routes/adminWallets.js";
@@ -572,6 +573,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       await registerAdminWalletRoutes(instance);
       // The "Retrain now" button: a request row the trainer picks up within a minute.
       await registerAdminRetrainRoutes(instance);
+      // Admin > Worker's "Run now": a request row the worker that owns the job picks up.
+      await registerAdminJobRunRoutes(instance);
       // Outside API calls and Helius credits per provider, endpoint and feature.
       await registerAdminUsageRoutes(instance, { env });
     },

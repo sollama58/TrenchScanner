@@ -5,6 +5,7 @@ export * from "./config/env.js";
 export * from "./config/workerConfig.js";
 export * from "./db.js";
 export * from "./heartbeat.js";
+export * from "./manualRuns.js";
 export * from "./apiUsage.js";
 export * from "./concurrency.js";
 export * from "./solana.js";

@@ -363,6 +363,11 @@ export function scheduleDailyAt(
     lastRunAt?: (job: HeartbeatJob) => Promise<Date | null>;
     retryAfterMinutes?: number;
     maxRetries?: number;
+    /**
+     * Checked every `everyMs` while the job waits for its slot: true runs it now (an admin's "Run
+     * now"), and the slot after that run is the next one as usual. Never while a run is in flight.
+     */
+    runEarly?: { everyMs: number; due: () => Promise<boolean> };
   } = {},
 ): ScheduledJob {
   const { retryAfterMinutes = 30, maxRetries = 3 } = opts;
@@ -377,6 +382,9 @@ export function scheduleDailyAt(
 
   const scheduleNext = () => {
     if (stopped) return;
+    // Only ever one slot pending: an early run can finish while start() is still settling the
+    // first one, and both would otherwise leave a timer.
+    if (next) clearTimeout(next);
     const untilSlot = msUntilNextHour(hourUtc);
     const retryMs = retryAfterMinutes * 60_000;
     if (failuresInARow > 0 && failuresInARow <= maxRetries && retryMs < untilSlot) {
@@ -510,11 +518,35 @@ export function scheduleDailyAt(
   };
   void start();
 
+  let checkingEarly = false;
+  const early =
+    opts.runEarly === undefined
+      ? undefined
+      : setInterval(() => {
+          if (stopped || running || checkingEarly) return;
+          checkingEarly = true;
+          void opts
+            .runEarly!.due()
+            .catch(() => false)
+            .then((due) => {
+              if (!due || stopped || running) return;
+              if (next) clearTimeout(next);
+              next = undefined;
+              logger.info("running early on request", { job: name });
+              void run();
+            })
+            .finally(() => {
+              checkingEarly = false;
+            });
+        }, opts.runEarly.everyMs);
+  early?.unref?.();
+
   return {
     stop: () => {
       stopped = true;
       if (next) clearTimeout(next);
       if (readRetry) clearTimeout(readRetry);
+      if (early) clearInterval(early);
     },
     settle: settleWith(() => inFlight),
   };
