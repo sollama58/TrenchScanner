@@ -11,6 +11,7 @@ import {
   REALERT_AFTER_MS,
   dashboardUrl,
   oldestOpenTransaction,
+  PICKS_FALLBACK_TEXT,
   runTelegramDispatch,
   TELEGRAM_DISPATCH_LOCK,
 } from "./dispatch.js";
@@ -177,7 +178,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
   it("does nothing without a token", async () => {
     const api = new FakeTelegramApi();
     const summary = await runTelegramDispatch({ ...env, TELEGRAM_BOT_TOKEN: "" }, { api });
-    expect(summary).toEqual({ chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0 });
+    expect(summary).toEqual({ chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0, accessErrors: 0 });
     expect(api.calls).toHaveLength(0);
   });
 
@@ -226,6 +227,14 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.sentThrough.getTime()).toBe(at.getTime() + 1_000);
     expect(row?.lastSentAt).not.toBeNull();
+    // The send is recorded with the call it led with (Rules, the chat's model) and the match.
+    const rules = await prisma.curatedAlert.findFirst({
+      where: { tokenId, model: "rules", createdAt: { gt: at } },
+    });
+    const match = await prisma.match.findFirst({ where: { userId, tokenId, matchedAt: at } });
+    expect(await prisma.telegramAlertSent.findMany({ where: { chatId: chatRowId } })).toEqual([
+      expect.objectContaining({ tokenId, curatedAlertId: rules!.id, matchId: match!.id }),
+    ]);
 
     // A second pass finds nothing new and sends nothing.
     const again = await run(api);
@@ -330,11 +339,14 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     });
     const api = new FakeTelegramApi();
     expect((await run(api)).sent).toBe(1);
-    // The record now dates from this send, so the window starts again.
-    const row = await prisma.telegramAlertSent.findUnique({
-      where: { chatId_tokenId: { chatId: chatRowId, tokenId } },
+    // A send of its own: the first one stays on the record, and the new one carries the call.
+    const rows = await prisma.telegramAlertSent.findMany({
+      where: { chatId: chatRowId, tokenId },
+      orderBy: { sentAt: "asc" },
     });
-    expect(Date.now() - row!.sentAt.getTime()).toBeLessThan(60_000);
+    expect(rows).toHaveLength(2);
+    expect(Date.now() - rows[1]!.sentAt.getTime()).toBeLessThan(60_000);
+    expect(rows[1]!.curatedAlertId).not.toBeNull();
   });
 
   it("sends Telegram its own models when they differ from the Live Feed's", async () => {
@@ -367,6 +379,35 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
         where: { id: userId },
         data: { showModelAlerts: true, telegramSameAsFeed: true, telegramModels: [] },
       });
+    }
+  });
+
+  it("sends only the high-conviction tier's calls, from any model, when the account asks for that", async () => {
+    await rewind();
+    const at = new Date(Date.now() - 30_000);
+    // Telegram follows the Live Feed (Rules), but wants the high-conviction tier only.
+    await prisma.user.update({ where: { id: userId }, data: { telegramHighConvictionOnly: true } });
+    try {
+      await prisma.curatedAlert.createMany({
+        data: [
+          { model: "rules", modelName: "Rules", tier: null },
+          { model: "trees", modelName: "Trees", tier: "high" },
+        ].map((c, i) => ({
+          tokenId,
+          source: "test",
+          confidence: 80,
+          anchorPriceUsd: 0.001,
+          anchorMcapUsd: 50_000,
+          ...c,
+          createdAt: new Date(at.getTime() + i * 1_000),
+        })),
+      });
+      const api = new FakeTelegramApi();
+      expect((await run(api)).sent).toBe(1);
+      expect(api.sent()[0]!.text).toContain("Trees");
+      expect(api.sent()[0]!.text).not.toContain("Rules");
+    } finally {
+      await prisma.user.update({ where: { id: userId }, data: { telegramHighConvictionOnly: false } });
     }
   });
 
@@ -430,10 +471,97 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       data: { userId, filterId, tokenId, snapshotId, matchedAt: new Date(Date.now() - 20_000), score: 71 },
     });
     const summary = await run(api, false);
-    expect(summary.skipped).toBe(1);
+    // Other test files' chats can be in the same pass.
+    expect(summary.skipped).toBeGreaterThanOrEqual(1);
     expect(api.sent()).toHaveLength(0);
     const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(Date.now() - row!.sentThrough.getTime()).toBeLessThan(COMMIT_GRACE_MS + 5_000);
+  });
+
+  it("leaves a chat whose access couldn't be read for the next pass, cursor and alerts kept", async () => {
+    const api = new FakeTelegramApi();
+    await rewind();
+    const before = (await prisma.telegramChat.findUnique({ where: { id: chatRowId } }))!.sentThrough;
+    await prisma.match.create({
+      data: { userId, filterId, tokenId, snapshotId, matchedAt: new Date(Date.now() - 20_000), score: 71 },
+    });
+    const summary = await runTelegramDispatch(env, {
+      api,
+      sleep: noSleep,
+      hasAccess: async () => {
+        throw new Error("pool timeout");
+      },
+      oldestOpenTransaction: async () => null,
+      feedModelState: async () => state,
+    });
+    // At least this chat (other test files' chats can be in the same pass).
+    expect(summary.accessErrors).toBeGreaterThanOrEqual(1);
+    expect(summary).toMatchObject({ skipped: 0, sent: 0 });
+    const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+    expect(row!.sentThrough).toEqual(before);
+    // The next pass, with the lookup back, sends it.
+    expect((await run(api)).sent).toBe(1);
+  });
+
+  it("tells a chat once when its own Telegram picks have all left the roster", async () => {
+    await rewind();
+    await prisma.user.update({
+      where: { id: userId },
+      data: { telegramSameAsFeed: false, telegramModels: ["retired-model"] },
+    });
+    try {
+      await prisma.curatedAlert.create({
+        data: {
+          tokenId,
+          source: "test",
+          confidence: 80,
+          anchorPriceUsd: 0.001,
+          anchorMcapUsd: 50_000,
+          model: "rules",
+          modelName: "Rules",
+          createdAt: new Date(Date.now() - 30_000),
+        },
+      });
+      const api = new FakeTelegramApi();
+      expect((await run(api)).sent).toBe(1);
+      const texts = api.sent().map((m) => m.text);
+      expect(texts).toContain(PICKS_FALLBACK_TEXT);
+      expect(texts.some((t) => t.includes("Rules"))).toBe(true);
+      const noted = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+      expect(noted!.picksFallbackNoticedAt).not.toBeNull();
+
+      // Not again on the next pass with calls.
+      await prisma.curatedAlert.create({
+        data: {
+          tokenId,
+          source: "test",
+          confidence: 80,
+          anchorPriceUsd: 0.001,
+          anchorMcapUsd: 50_000,
+          model: "rules",
+          modelName: "Rules",
+          createdAt: new Date(Date.now() - 10_000),
+        },
+      });
+      await rewind();
+      await prisma.telegramAlertSent.deleteMany({ where: { chatId: chatRowId } });
+      const again = new FakeTelegramApi();
+      await run(again);
+      expect(again.sent().map((m) => m.text)).not.toContain(PICKS_FALLBACK_TEXT);
+
+      // A pick back on the roster clears it, so a later fallback is told again.
+      await prisma.user.update({ where: { id: userId }, data: { telegramModels: ["rules"] } });
+      await rewind();
+      await prisma.telegramAlertSent.deleteMany({ where: { chatId: chatRowId } });
+      await run(new FakeTelegramApi());
+      const cleared = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+      expect(cleared!.picksFallbackNoticedAt).toBeNull();
+    } finally {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { telegramSameAsFeed: true, telegramModels: [] },
+      });
+    }
   });
 
   it("holds the cursor behind a transaction still open, so its late commit is not skipped", async () => {
@@ -664,7 +792,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     const summary = await run(api);
     release();
     await holder;
-    expect(summary).toEqual({ chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0 });
+    expect(summary).toEqual({ chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0, accessErrors: 0 });
     expect(api.calls).toHaveLength(0);
   });
 });

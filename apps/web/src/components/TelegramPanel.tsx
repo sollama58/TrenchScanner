@@ -169,7 +169,11 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
   ) => run(chat.id, () => patch(`/telegram/chats/${encodeURIComponent(chat.id)}`, body));
 
   const models: TelegramModels = tg?.models ?? { sameAsFeed: true, models: [] };
-  const saveModels = (body: { sameAsFeed?: boolean; models?: string[] | null }) =>
+  const saveModels = (body: {
+    sameAsFeed?: boolean;
+    models?: string[] | null;
+    highConvictionOnly?: boolean;
+  }) =>
     put<{ models: TelegramModels }>("/telegram/models", body).then((r) =>
       setTg((t) => (t ? { ...t, models: r.models } : t)),
     );
@@ -306,6 +310,24 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
                   />
                 )}
               </div>
+              {tg.models && (
+                <div className="tg-models-head">
+                  <Switch
+                    on={models.highConvictionOnly === true}
+                    label="High-conviction calls only"
+                    disabled={busy !== null}
+                    onToggle={() =>
+                      void run("models", () => saveModels({ highConvictionOnly: !models.highConvictionOnly }))
+                    }
+                  />
+                </div>
+              )}
+              {models.highConvictionOnly && (
+                <p className="muted small">
+                  Telegram gets only high-conviction calls, from any model. The model choice below applies
+                  again when this is off.
+                </p>
+              )}
               {models.sameAsFeed ? (
                 <p className="muted small">
                   {board && board.showModelAlerts === false ? (

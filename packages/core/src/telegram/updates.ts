@@ -112,9 +112,11 @@ const lastReplyAt = new Map<string, number>();
 /**
  * Takes the chat's reply slot, or says it was taken less than CHAT_REPLY_COOLDOWN_MS ago. Every
  * take re-inserts its key, so the map is in time order and pruning stops at the first live entry.
+ * A group admin's changes (/mincap 10k, /show x) take the "admin" lane, checked after the admin
+ * check, so a member sending /alerts every few seconds can't swallow them.
  */
-export function takeReplySlot(chatId: bigint | number, t: number): boolean {
-  const key = String(chatId);
+export function takeReplySlot(chatId: bigint | number, t: number, lane: "" | "admin" = ""): boolean {
+  const key = lane ? `${chatId}:${lane}` : String(chatId);
   const last = lastReplyAt.get(key);
   if (last !== undefined && t - last >= 0 && t - last < CHAT_REPLY_COOLDOWN_MS) return false;
   lastReplyAt.delete(key);
@@ -217,14 +219,16 @@ export async function handleTelegramUpdate(
     case "link": {
       if (!looksLikeTelegramCode(parsed.arg)) {
         if (parsed.command === "start" || isPrivate) {
+          if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
           await api.sendMessage(chatId, isPrivate ? HELP_PRIVATE : HELP_GROUP);
           return { action: "help" };
         }
         return { action: "ignored" };
       }
-      return link(api, message, parsed.arg);
+      return link(api, message, parsed.arg, opts);
     }
     case "status": {
+      if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
       const row = await prisma.telegramChat.findFirst({
         where: { chatId, revokedAt: null },
         select: {
@@ -253,6 +257,11 @@ export async function handleTelegramUpdate(
     }
     case "show":
     case "hide": {
+      const words = parsed.arg.toLowerCase().split(/\s+/).filter(Boolean);
+      const now = (opts.now ?? Date.now)();
+      // A change is an admin's, in a group: checked first, so only its reply uses the admin lane.
+      const admin = words.length > 0 && (!isGroup || (await isGroupAdmin(api, message)));
+      if (!takeReplySlot(chatId, now, admin ? "admin" : "")) return { action: "throttled" };
       const row = await prisma.telegramChat.findFirst({
         where: { chatId, revokedAt: null },
         select: { id: true, hidden: true },
@@ -264,12 +273,11 @@ export async function handleTelegramUpdate(
         );
         return { action: "parts" };
       }
-      const words = parsed.arg.toLowerCase().split(/\s+/).filter(Boolean);
       if (words.length === 0) {
         await api.sendMessage(chatId, partsText(row.hidden));
         return { action: "parts" };
       }
-      if (isGroup && !(await isGroupAdmin(api, message))) {
+      if (!admin) {
         await api.sendMessage(chatId, "Only a group admin can change what the alerts here include.");
         return { action: "refused" };
       }
@@ -343,7 +351,11 @@ export async function handleTelegramUpdate(
     case "settings":
     case "customize":
     case "mincap": {
-      if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
+      const changing = parsed.command === "mincap" && parsed.arg.trim() !== "";
+      const admin = changing && (!isGroup || (await isGroupAdmin(api, message)));
+      if (!takeReplySlot(chatId, (opts.now ?? Date.now)(), admin ? "admin" : "")) {
+        return { action: "throttled" };
+      }
       const row = await prisma.telegramChat.findFirst({
         where: { chatId, revokedAt: null },
         select: { id: true, ...SETTINGS_SELECT },
@@ -364,7 +376,7 @@ export async function handleTelegramUpdate(
           );
           return { action: "settings" };
         }
-        if (isGroup && !(await isGroupAdmin(api, message))) {
+        if (!admin) {
           await api.sendMessage(chatId, "Only a group admin can change the settings here.");
           return { action: "refused" };
         }
@@ -383,6 +395,7 @@ export async function handleTelegramUpdate(
     case "stop":
     case "unlink": {
       if (isGroup && !(await isGroupAdmin(api, message))) {
+        if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
         await api.sendMessage(chatId, "Only a group admin can stop alerts here.");
         return { action: "refused" };
       }
@@ -611,13 +624,19 @@ async function isGroupAdmin(api: TelegramApi, message: TelegramMessage): Promise
   return member.ok && GROUP_ADMIN_STATUSES.has(member.result.status);
 }
 
-async function link(api: TelegramApi, message: TelegramMessage, code: string): Promise<UpdateOutcome> {
+async function link(
+  api: TelegramApi,
+  message: TelegramMessage,
+  code: string,
+  opts: { now?: () => number },
+): Promise<UpdateOutcome> {
   const chat = message.chat;
   const chatId = BigInt(chat.id);
   const isGroup = chat.type !== "private";
   // In a group, only an admin may point the group at an account: anyone can be in a group, and
   // whoever links it decides whose alerts everyone there reads.
   if (isGroup && !(await isGroupAdmin(api, message))) {
+    if (!takeReplySlot(chatId, (opts.now ?? Date.now)())) return { action: "throttled" };
     await api.sendMessage(chatId, "Only a group admin can link this group to a TrenchScanner account.");
     return { action: "refused" };
   }
@@ -648,8 +667,8 @@ async function link(api: TelegramApi, message: TelegramMessage, code: string): P
     chatId,
     `✅ Linked to wallet <code>${escapeHtml(shortWallet(result.walletAddress))}</code>. ` +
       (isGroup ? "This group" : "This chat") +
-      " now gets that account's Live Feed alerts: its filter matches and the calls of the models in its feed. " +
-      "Choose which, pause, or unlink from the Filters tab.",
+      " now gets that account's alerts: its filter matches and the calls of the models it picked for Telegram " +
+      "(the Live Feed's, unless it chose others). Choose which, pause, or unlink from the Filters tab.",
   );
   return { action: "linked" };
 }

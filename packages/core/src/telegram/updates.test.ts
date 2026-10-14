@@ -81,7 +81,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const api = new FakeTelegramApi();
     const chatId = nextChat--;
     const { code } = await issueTelegramLinkCode(userId);
-    const outcome = await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    const outcome = await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
     expect(outcome.action).toBe("linked");
     expect(api.sent()[0]!.text).toContain("✅ Linked");
     const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
@@ -95,7 +95,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
   it("explains itself on a bare /start and refuses a dead code", async () => {
     const api = new FakeTelegramApi();
     const chatId = nextChat--;
-    expect((await handleTelegramUpdate(api, message(chatId, "/start"))).action).toBe("help");
+    expect((await handleTelegramUpdate(api, message(chatId, "/start"), { now: tick })).action).toBe("help");
     expect(api.sent()[0]!.text).toContain("Filters → Telegram alerts");
     expect((await handleTelegramUpdate(api, message(chatId, `/start ${"x".repeat(32)}`))).action).toBe(
       "refused",
@@ -110,13 +110,15 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     api.answers.set("getChatMember", { ok: true, result: { status: "member" } });
     const first = await issueTelegramLinkCode(userId);
     expect(
-      (await handleTelegramUpdate(api, message(chatId, `/start ${first.code}`, "supergroup"))).action,
+      (await handleTelegramUpdate(api, message(chatId, `/start ${first.code}`, "supergroup"), { now: tick }))
+        .action,
     ).toBe("refused");
     expect(api.sent()[0]!.text).toContain("Only a group admin");
     // The code was not spent by the refusal.
     api.answers.set("getChatMember", { ok: true, result: { status: "administrator" } });
     expect(
-      (await handleTelegramUpdate(api, message(chatId, `/link ${first.code}`, "supergroup"))).action,
+      (await handleTelegramUpdate(api, message(chatId, `/link ${first.code}`, "supergroup"), { now: tick }))
+        .action,
     ).toBe("linked");
     expect(api.calls.filter((c) => c.method === "getChatMember")).toHaveLength(2);
     const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
@@ -127,13 +129,17 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
   it("answers /status, and /stop unlinks", async () => {
     const api = new FakeTelegramApi();
     const chatId = nextChat--;
-    expect((await handleTelegramUpdate(api, message(chatId, "/status"))).action).toBe("status");
+    expect((await handleTelegramUpdate(api, message(chatId, "/status"), { now: tick })).action).toBe(
+      "status",
+    );
     expect(api.sent()[0]!.text).toContain("Not linked");
     const { code } = await issueTelegramLinkCode(userId);
-    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
-    await handleTelegramUpdate(api, message(chatId, "/status"));
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
+    await handleTelegramUpdate(api, message(chatId, "/status"), { now: tick });
     expect(api.sent()[2]!.text).toContain("Sending filter matches and model calls");
-    expect((await handleTelegramUpdate(api, message(chatId, "/stop"))).action).toBe("unlinked");
+    expect((await handleTelegramUpdate(api, message(chatId, "/stop"), { now: tick })).action).toBe(
+      "unlinked",
+    );
     const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     expect(row?.revokedAt).not.toBeNull();
   });
@@ -143,7 +149,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const chatId = nextChat--;
     const { code } = await issueTelegramLinkCode(userId);
     api.answers.set("getChatMember", { ok: true, result: { status: "administrator" } });
-    await handleTelegramUpdate(api, message(chatId, `/start ${code}`, "supergroup"));
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`, "supergroup"), { now: tick });
     const opts = { botUsername: async () => "TrenchBot" };
     expect(
       (await handleTelegramUpdate(api, message(chatId, "/stop@OtherBot", "supergroup"), opts)).action,
@@ -181,20 +187,20 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const api = new FakeTelegramApi();
     const chatId = nextChat--;
     const { code } = await issueTelegramLinkCode(userId);
-    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
-    expect((await handleTelegramUpdate(api, message(chatId, "/show"))).action).toBe("parts");
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
+    expect((await handleTelegramUpdate(api, message(chatId, "/show"), { now: tick })).action).toBe("parts");
     expect(api.sent().at(-1)!.text).toContain("✅ <b>reasons</b>");
-    await handleTelegramUpdate(api, message(chatId, "/hide reasons links"));
+    await handleTelegramUpdate(api, message(chatId, "/hide reasons links"), { now: tick });
     let row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     expect(row?.hidden.sort()).toEqual(["links", "reasons"]);
     expect(api.sent().at(-1)!.text).toContain("▫️ <b>reasons</b>");
-    await handleTelegramUpdate(api, message(chatId, "/show picture off"));
-    await handleTelegramUpdate(api, message(chatId, "/show reasons"));
+    await handleTelegramUpdate(api, message(chatId, "/show picture off"), { now: tick });
+    await handleTelegramUpdate(api, message(chatId, "/show reasons"), { now: tick });
     row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     expect(row?.hidden.sort()).toEqual(["image", "links"]);
-    await handleTelegramUpdate(api, message(chatId, "/hide nonsense"));
+    await handleTelegramUpdate(api, message(chatId, "/hide nonsense"), { now: tick });
     expect(api.sent().at(-1)!.text).toContain("I don't know “nonsense”");
-    await handleTelegramUpdate(api, message(chatId, "/show all"));
+    await handleTelegramUpdate(api, message(chatId, "/show all"), { now: tick });
     row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     expect(row?.hidden).toEqual([]);
   });
@@ -204,13 +210,15 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const chatId = nextChat--;
     const { code } = await issueTelegramLinkCode(userId);
     api.answers.set("getChatMember", { ok: true, result: { status: "administrator" } });
-    await handleTelegramUpdate(api, message(chatId, `/start ${code}`, "supergroup"));
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`, "supergroup"), { now: tick });
     api.answers.set("getChatMember", { ok: true, result: { status: "member" } });
     // Anyone may ask; only an admin may change.
-    expect((await handleTelegramUpdate(api, message(chatId, "/show", "supergroup"))).action).toBe("parts");
-    expect((await handleTelegramUpdate(api, message(chatId, "/hide mint", "supergroup"))).action).toBe(
-      "refused",
-    );
+    expect(
+      (await handleTelegramUpdate(api, message(chatId, "/show", "supergroup"), { now: tick })).action,
+    ).toBe("parts");
+    expect(
+      (await handleTelegramUpdate(api, message(chatId, "/hide mint", "supergroup"), { now: tick })).action,
+    ).toBe("refused");
     const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     expect(row?.hidden).toEqual([]);
   });
@@ -219,7 +227,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const api = new FakeTelegramApi();
     const chatId = nextChat--;
     const { code } = await issueTelegramLinkCode(userId);
-    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
     const kicked: TelegramUpdate = {
       update_id: 2,
       my_chat_member: {
@@ -249,7 +257,9 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
 
   it("ignores ordinary chatter and channels", async () => {
     const api = new FakeTelegramApi();
-    expect((await handleTelegramUpdate(api, message(nextChat--, "gm", "group"))).action).toBe("ignored");
+    expect((await handleTelegramUpdate(api, message(nextChat--, "gm", "group"), { now: tick })).action).toBe(
+      "ignored",
+    );
     const channel: TelegramUpdate = {
       update_id: 4,
       message: {
@@ -300,7 +310,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     expect(asked).toHaveLength(0);
 
     const { code } = await issueTelegramLinkCode(userId);
-    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
     const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
 
     await handleTelegramUpdate(api, message(chatId, "/alerts"), opts);
@@ -361,7 +371,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
       },
     };
     const { code } = await issueTelegramLinkCode(userId);
-    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
     let t = clock + 1_000_000;
     const opts = { boards, hasAccess: async () => true, now: () => t };
     expect((await handleTelegramUpdate(api, message(chatId, "/alerts"), opts)).action).toBe("alerts");
@@ -422,7 +432,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
       },
     };
     const { code } = await issueTelegramLinkCode(owner.id);
-    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
     // The real rule (resolveAccess), not the seam.
     const opts = { boards, now: tick };
     expect((await handleTelegramUpdate(api, message(chatId, "/trenchboard"), opts)).action).toBe("expired");
@@ -460,7 +470,9 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
 
   it("leaves /alerts and /trenchboard alone when the boards aren't wired in", async () => {
     const api = new FakeTelegramApi();
-    expect((await handleTelegramUpdate(api, message(nextChat--, "/alerts"))).action).toBe("ignored");
+    expect((await handleTelegramUpdate(api, message(nextChat--, "/alerts"), { now: tick })).action).toBe(
+      "ignored",
+    );
     expect(api.sent()).toHaveLength(0);
   });
 
@@ -468,7 +480,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const api = new FakeTelegramApi();
     const chatId = nextChat--;
     const { code } = await issueTelegramLinkCode(userId);
-    await handleTelegramUpdate(api, message(chatId, `/start ${code}`));
+    await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
     let row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     // Nothing changes for a chat until it changes a setting.
     expect(row).toMatchObject({
@@ -526,7 +538,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const superId = nextChat--;
     const { code } = await issueTelegramLinkCode(userId);
     api.answers.set("getChatMember", { ok: true, result: { status: "administrator" } });
-    await handleTelegramUpdate(api, message(groupId, `/link ${code}`, "group"));
+    await handleTelegramUpdate(api, message(groupId, `/link ${code}`, "group"), { now: tick });
     const upgrade: TelegramUpdate = {
       update_id: 12,
       message: {
@@ -541,9 +553,9 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(superId) } });
     expect(row).toMatchObject({ userId, kind: "supergroup", revokedAt: null });
     expect(await prisma.telegramChat.count({ where: { chatId: BigInt(groupId) } })).toBe(0);
-    expect((await handleTelegramUpdate(api, message(superId, "/status", "supergroup"))).action).toBe(
-      "status",
-    );
+    expect(
+      (await handleTelegramUpdate(api, message(superId, "/status", "supergroup"), { now: tick })).action,
+    ).toBe("status");
     expect(api.sent().at(-1)!.text).toContain("Linked to wallet");
   });
 
@@ -552,7 +564,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const chatId = nextChat--;
     const { code } = await issueTelegramLinkCode(userId);
     api.answers.set("getChatMember", { ok: true, result: { status: "administrator" } });
-    await handleTelegramUpdate(api, message(chatId, `/link ${code}`, "supergroup"));
+    await handleTelegramUpdate(api, message(chatId, `/link ${code}`, "supergroup"), { now: tick });
     api.answers.set("getChatMember", { ok: true, result: { status: "member" } });
     const press: TelegramUpdate = {
       update_id: 11,
@@ -565,9 +577,9 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     };
     expect((await handleTelegramUpdate(api, press)).action).toBe("refused");
     expect(api.calls.at(-1)).toMatchObject({ method: "answerCallbackQuery" });
-    expect((await handleTelegramUpdate(api, message(chatId, "/mincap 50k", "supergroup"))).action).toBe(
-      "refused",
-    );
+    expect(
+      (await handleTelegramUpdate(api, message(chatId, "/mincap 50k", "supergroup"), { now: tick })).action,
+    ).toBe("refused");
     const row = await prisma.telegramChat.findUnique({ where: { chatId: BigInt(chatId) } });
     expect(row).toMatchObject({ layout: "full", alertsMinMcapUsd: 5000 });
   });
