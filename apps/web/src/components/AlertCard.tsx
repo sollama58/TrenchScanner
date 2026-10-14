@@ -411,7 +411,7 @@ export function AlertCard({
                     }`
               }
             >
-              <dt>First buyers</dt>
+              <dt className="dt-long">1st Buyers Holding</dt>
               <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
             </div>
           )}
@@ -440,7 +440,7 @@ export function AlertCard({
                     }. The safety screen rejects ${countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cexHolders)} or more.`
               }
             >
-              <dt>CEX-funded</dt>
+              <dt>CEX</dt>
               <dd className={cexPct === null ? "muted" : "num"}>
                 {cexPct === null ? "Not checked" : (cexCountText(cexCount, cexHolders) ?? pct(cexPct))}
               </dd>

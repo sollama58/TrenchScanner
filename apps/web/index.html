@@ -39,11 +39,13 @@
     <meta name="twitter:image:alt" content="TrenchScanner by ASDFASDFA" />
     <script>
       // The theme picked in Settings › Feed appearance (src/appearance.ts keeps it under this key),
-      // set before the first paint so the page doesn't flash the other theme.
+      // set before the first paint so the page doesn't flash the other theme. Dark until one is
+      // picked (DEFAULT_APPEARANCE); "auto" follows the device.
       try {
         var look = JSON.parse(localStorage.getItem("ts.feedAppearance") || "null");
-        if (look && (look.theme === "dark" || look.theme === "light"))
-          document.documentElement.setAttribute("data-theme", look.theme);
+        var theme = look && look.theme;
+        if (theme !== "auto")
+          document.documentElement.setAttribute("data-theme", theme === "light" ? "light" : "dark");
       } catch (e) {}
     </script>
     <script>

@@ -9,7 +9,8 @@ import { put, type CardField, type FeedAppearance, type QuickLink } from "./api"
  */
 
 export const DEFAULT_APPEARANCE: FeedAppearance = {
-  theme: "auto",
+  // Dark until the user picks (user ask 2026-10-14); "auto" (Match device) stays a choice.
+  theme: "dark",
   accent: null,
   mine: null,
   win: null,
@@ -27,7 +28,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   volume: false,
   scoreColor: true,
   reasons: false,
-  sniperTop10: false,
+  sniperTop10: true,
   devTile: false,
   largest: false,
   kolBundled: false,
@@ -41,10 +42,11 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   hideBelowMcap: false,
   hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],
-  // Off by default, both switchable back on in Customize: the composite score tile, so the stat tiles
-  // fill a clean 4 x 2 grid, and the TokenSage button (the token view keeps its own). An account that
-  // saved its own field list keeps that list.
-  hidden: ["score", "sage"],
+  // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
+  // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own), the header's
+  // "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
+  // An account that saved its own field list keeps that list.
+  hidden: ["score", "sage", "calibrated", "snipers"],
 };
 
 /** Trading sites a card can open the token in, as Settings lists them. */
@@ -110,8 +112,8 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
 ];
 
 // "vol" is listed apart from the groups: it is opt-in (FeedAppearance.volume), not hide-able.
-// "reasons", "sniperTop10", "largest", "kolBundled" and "dev" are listed in the groups but are
-// opt-in too (FeedAppearance.reasons, .sniperTop10, .largest, .kolBundled, .devTile).
+// "reasons", "sniperTop10", "largest", "kolBundled" and "dev" are listed in the groups but have
+// their own switches too (FeedAppearance.reasons, .sniperTop10, .largest, .kolBundled, .devTile).
 const CARD_FIELDS = new Set<string>([...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)), "vol"]);
 
 /** The card fields not to draw: the ones the user hid, plus the opt-in ones not switched on. */
