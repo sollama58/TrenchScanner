@@ -55,7 +55,7 @@ import {
   type Env,
   type RulesCuratorParams,
   type DerivedRuleSet,
-  scoreRuleSet,
+  rankRuleSet,
   ruleSetReasons,
   HEURISTIC_CURATOR_SOURCE,
   type ScoredToken,
@@ -408,7 +408,8 @@ function rulesTableDecision(
   features: Record<string, number | null | undefined>,
   cutoff: number | undefined,
 ): CurationDecision {
-  const score = scoreRuleSet(set, features);
+  // Points with ties broken by the legacy composite (rankRuleSet), the scale the cutoff is set on.
+  const score = rankRuleSet(set, features);
   const curate = cutoff !== undefined && score > 0 && score >= cutoff;
   return {
     curate,

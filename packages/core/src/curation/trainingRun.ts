@@ -23,6 +23,7 @@ import {
   trainingWeightByAge,
   type ScoredOutcome,
   scoreCandidateWithModel,
+  wilsonLowerBound,
 } from "./trainer.js";
 import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES, withCurrentNarrativeTiming } from "./features.js";
 import {
@@ -52,6 +53,7 @@ import {
   distillRuleSet,
   examineRuleScores,
   scoreRuleSet,
+  rankRuleSet,
   teacherAgreementPct,
   type DerivedRuleSet,
 } from "./rulesDistill.js";
@@ -1403,7 +1405,7 @@ function pickRulesTeacher(cfg: ContestTrainingConfig, pool: RulesTeacherPool): s
  * The Rules seat's result for this run. The hand-tuned gates get their cutoff from the exam as
  * always; with CURATOR_RULES_FROM_BEST on, a points table is also learned from the best model
  * (curation/rulesDistill.ts) and graded on the same exam beside the table the seat already runs.
- * The seat keeps what it runs unless another option's exam scores strictly higher - ties keep
+ * The seat keeps what it runs unless another option's exam has a strictly higher 2x lower bound - ties keep
  * the incumbent, so the rules don't churn on noise - and a table needs a cutoff to call at.
  */
 function rulesSeatResult(
@@ -1446,10 +1448,15 @@ function rulesSeatResult(
     label: string;
     result: ContestantTrainingResult;
     examScore: number | null;
+    /** The exam's 2x Wilson lower bound, 0-1: what the options are chosen on. Null with no graded calls. */
+    examBound: number | null;
     set: DerivedRuleSet | null;
   }
+  const z = Math.max(1, cfg.targets.confidenceZ ?? 0);
+  const boundOf = (record: CallRecord) =>
+    record.graded > 0 ? wilsonLowerBound(record.wins, record.graded, z) : null;
   const examTable = (set: DerivedRuleSet, label: string): Option | null => {
-    const scores = pool.reference.map((r) => scoreRuleSet(set, r.features));
+    const scores = pool.reference.map((r) => rankRuleSet(set, r.features));
     const exam = examineRuleScores(
       pool.reference,
       evidence.folds,
@@ -1465,6 +1472,7 @@ function rulesSeatResult(
       label,
       set,
       examScore: recordScore(exam.record, cfg.targets),
+      examBound: boundOf(exam.record),
       result: {
         contestant: spec.id,
         params: {
@@ -1495,6 +1503,7 @@ function rulesSeatResult(
     label: "hand-tuned rules",
     result: hand,
     examScore: recordScore(handExam, cfg.targets),
+    examBound: boundOf(handExam),
     set: null,
   };
   const current = cfg.currentRules
@@ -1526,23 +1535,26 @@ function rulesSeatResult(
   const challengers = [current ? handOption : null, fresh].filter((o): o is Option => o !== null);
   let chosen = incumbent;
   for (const option of challengers) {
-    if (option.examScore !== null && (chosen.examScore === null || option.examScore > chosen.examScore)) {
+    // On the 2x lower bound, not the leaderboard score: its catch points made the loosest table win
+    // (model audit 2026-10-14, rules-score R3), the way they did for the Default before #509.
+    if (option.examBound !== null && (chosen.examBound === null || option.examBound > chosen.examBound)) {
       chosen = option;
     }
   }
   const options = [incumbent, ...challengers].map((o) => ({ label: o.label, examScore: o.examScore }));
-  const fmt = (score: number | null) => (score === null ? "no graded calls" : score.toFixed(1));
+  const fmt = (bound: number | null) =>
+    bound === null ? "no graded calls" : `2x lower bound ${(bound * 100).toFixed(1)}%`;
   const reason =
     chosen === incumbent
       ? cfg.currentRules && !current
-        ? `The learned rules found nowhere to call this run, so Rules went back to the hand-tuned gates (exam ${fmt(handOption.examScore)}).`
-        : `Kept the ${incumbent.label} (exam ${fmt(incumbent.examScore)})` +
+        ? `The learned rules found nowhere to call this run, so Rules went back to the hand-tuned gates (exam ${fmt(handOption.examBound)}).`
+        : `Kept the ${incumbent.label} (exam ${fmt(incumbent.examBound)})` +
           (challengers.length > 0
-            ? `: ${challengers.map((c) => `${c.label} scored ${fmt(c.examScore)}`).join(", ")}.`
+            ? `: ${challengers.map((c) => `${c.label} scored ${fmt(c.examBound)}`).join(", ")}.`
             : teacher === null
               ? ": no trained model to learn from this run."
               : ": couldn't learn a usable table this run.")
-      : `Switched to the ${chosen.label} (exam ${fmt(chosen.examScore)}, beating the ${incumbent.label} at ${fmt(incumbent.examScore)}).`;
+      : `Switched to the ${chosen.label} (exam ${fmt(chosen.examBound)}, beating the ${incumbent.label} at ${fmt(incumbent.examBound)}).`;
   const set = chosen.set;
   const rulesInUse: RulesInUse = set
     ? {
