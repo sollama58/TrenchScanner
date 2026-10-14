@@ -63,6 +63,17 @@ describe("walletLabels", () => {
     expect(other.map((l) => l.text)).toEqual(["Funded from an exchange or service"]);
   });
 
+  it("labels a KOL's possible side wallet with the share of trades it shared", () => {
+    const sides = [
+      { kolWallet: BINANCE, kolName: "Ansem", pct: 93.4, shared: 28, kolCoins: 30 },
+      { kolWallet: W, kolName: null, pct: 91, shared: 30, kolCoins: 33 },
+    ];
+    expect(walletLabels({ ...base, possibleSides: sides }).map((l) => l.text)).toEqual([
+      "Ansem Possible Side (93%)",
+      "Wa11…1111 Possible Side (91%)",
+    ]);
+  });
+
   it("marks a fresh wallet only when its whole history was read", () => {
     const fresh: Extract<WalletOverviewResult, { status: "found" }> = {
       status: "found",
