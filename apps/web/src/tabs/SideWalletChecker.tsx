@@ -4,7 +4,7 @@ import { usePolling } from "../hooks";
 import { ago, shortAddress } from "../format";
 import { openWallet } from "../walletModal";
 import { Skeleton } from "../components/Charts";
-import { ChevronDownIcon, CloseIcon, SearchIcon, UsersIcon } from "../components/Icons";
+import { ChevronDownIcon, CloseIcon, SearchIcon, UsersIcon, WalletIcon } from "../components/Icons";
 
 export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
 export type SideWindow = (typeof SIDE_WINDOWS)[number];
@@ -130,27 +130,39 @@ export function SideWalletChecker() {
               const isOpen = open === k.wallet;
               return (
                 <li key={k.wallet} className={isOpen ? "open" : undefined}>
-                  <button
-                    type="button"
-                    className="side-row"
-                    aria-expanded={isOpen}
-                    onClick={() => setOpen(isOpen ? null : k.wallet)}
-                  >
-                    <span className="side-rank num">{rank}</span>
-                    <span className="side-who">
-                      <strong>{k.name ?? shortAddress(k.wallet)}</strong>
-                      <span className="faint small num">
-                        {k.twitter ? `@${k.twitter} · ` : ""}
-                        {shortAddress(k.wallet)}
+                  <div className="side-line">
+                    <button
+                      type="button"
+                      className="side-row"
+                      aria-expanded={isOpen}
+                      onClick={() => setOpen(isOpen ? null : k.wallet)}
+                    >
+                      <span className="side-rank num">{rank}</span>
+                      <span className="side-who">
+                        <strong>{k.name ?? shortAddress(k.wallet)}</strong>
+                        <span className="faint small num">
+                          {k.twitter ? `@${k.twitter} · ` : ""}
+                          {shortAddress(k.wallet)}
+                        </span>
                       </span>
-                    </span>
-                    {SIDE_WINDOWS.map((w) => (
-                      <span key={w} className={`num side-count${w === "30d" ? " main" : ""}`}>
-                        {k.coins[w].toLocaleString("en-US")}
-                      </span>
-                    ))}
-                    <ChevronDownIcon size={16} className="side-chevron" />
-                  </button>
+                      {SIDE_WINDOWS.map((w) => (
+                        <span key={w} className={`num side-count${w === "30d" ? " main" : ""}`}>
+                          {k.coins[w].toLocaleString("en-US")}
+                        </span>
+                      ))}
+                      <ChevronDownIcon size={16} className="side-chevron" />
+                    </button>
+                    {/* Its wallet profile (user ask 2026-10-14), beside the row: a button can't hold another. */}
+                    <button
+                      type="button"
+                      className="ghost icon-btn side-profile"
+                      title={`Open ${k.name ?? shortAddress(k.wallet)}'s wallet profile`}
+                      aria-label={`Open ${k.name ?? shortAddress(k.wallet)}'s wallet profile`}
+                      onClick={() => openWallet(k.wallet)}
+                    >
+                      <WalletIcon size={15} />
+                    </button>
+                  </div>
                   {isOpen && (
                     <SideWallets
                       kol={k.wallet}
