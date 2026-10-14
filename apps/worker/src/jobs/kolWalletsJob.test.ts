@@ -1,8 +1,8 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { KOL_OVERRIDES, prisma, type KolEntry, type KolPage } from "@trenchscanner/core";
-import { runKolWalletsJob } from "./kolWalletsJob.js";
+import { KOL_MAINS, KOL_OVERRIDES, prisma, type KolEntry, type KolPage } from "@trenchscanner/core";
+import { applyKnownSides, runKolWalletsJob } from "./kolWalletsJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 // Base58 addresses unique to this run.
@@ -24,7 +24,9 @@ describe.skipIf(!dbAvailable)("kol-wallets job", () => {
   afterAll(async () => {
     if (!dbAvailable) return;
     await prisma.kolWallet.deleteMany({ where: { wallet: { startsWith: `Ko1${tag}` } } });
-    await prisma.kolWallet.deleteMany({ where: { wallet: { in: [...KOL_OVERRIDES.keys()] } } });
+    await prisma.kolWallet.deleteMany({
+      where: { wallet: { in: [...KOL_OVERRIDES.keys(), ...KOL_MAINS.map((m) => m.wallet)] } },
+    });
   });
 
   it("reads every page into the table and drops wallets gone from the roster for a week", async () => {
@@ -77,5 +79,25 @@ describe.skipIf(!dbAvailable)("kol-wallets job", () => {
     );
     row = await prisma.kolWallet.findUnique({ where: { wallet } });
     expect(row?.name).toBe(override.name);
+  });
+
+  it("points a KOL's other roster entries at its main wallet, and clears one that stops matching", async () => {
+    const main = KOL_MAINS[0]!;
+    const side = w("side");
+    await prisma.kolWallet.upsert({
+      where: { wallet: side },
+      create: { wallet: side, name: `${main.names[0]} 2`, seenAt: new Date() },
+      update: { name: `${main.names[0]} 2`, mainWallet: null },
+    });
+    const sides = await applyKnownSides();
+    expect(sides).toContain(side);
+    expect(sides).not.toContain(main.wallet);
+    expect((await prisma.kolWallet.findUnique({ where: { wallet: side } }))?.mainWallet).toBe(main.wallet);
+    expect(await prisma.kolWallet.findUnique({ where: { wallet: main.wallet } })).toMatchObject({
+      mainWallet: null,
+    });
+    await prisma.kolWallet.update({ where: { wallet: side }, data: { name: "Someone else", twitter: null } });
+    await applyKnownSides();
+    expect((await prisma.kolWallet.findUnique({ where: { wallet: side } }))?.mainWallet).toBeNull();
   });
 });

@@ -3,6 +3,7 @@ import { isFomoName, isPumpfunName, walletNameText, type WalletNames } from "../
 
 const SOURCE_TEXT = {
   kol: "KOL",
+  "kol-side": "KOL Known Side",
   identity: "Helius",
   pumpfun: "Pump.fun",
   fomo: "FOMO",

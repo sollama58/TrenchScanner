@@ -1,5 +1,7 @@
 import {
+  KOL_MAINS,
   KOL_OVERRIDES,
+  knownSideMain,
   prisma,
   createLogger,
   type KolEntry,
@@ -20,6 +22,7 @@ const logger = createLogger("kol-wallets");
  *
  * The hand-named KOLs (KOL_OVERRIDES) are written on every run, roster read or not, with their
  * own name over the roster's, and never go stale. applyKolOverrides also runs ahead of each hourly side-wallet rebuild (index.ts).
+ * So does applyKnownSides, which points each Known Side (KOL_MAINS) at its KOL's main wallet.
  */
 
 const MAX_PAGES = 30;
@@ -47,7 +50,8 @@ export async function runKolWalletsJob(
   if (kols.length === 0) {
     logger.warn("KOL roster read came back empty; keeping the table as it is", { pages });
     const overrides = await applyKolOverrides(now);
-    return { pages, kols: 0, removed: 0, overrides };
+    const knownSides = await applyKnownSides(now);
+    return { pages, kols: 0, removed: 0, overrides, knownSides: knownSides.join(",") };
   }
   await prisma.$transaction(
     kols.map((k) => {
@@ -72,11 +76,13 @@ export async function runKolWalletsJob(
     where: { seenAt: { lt: new Date(now.getTime() - STALE_AFTER_MS) } },
   });
   const overrides = await applyKolOverrides(now);
+  const knownSides = await applyKnownSides(now);
   const meta: JobRunMeta = {
     pages,
     kols: kols.length,
     removed: removed.count,
     overrides,
+    knownSides: knownSides.join(","),
     complete: cursor === null,
   };
   logger.info("KOL roster refreshed", meta);
@@ -101,4 +107,43 @@ export async function applyKolOverrides(now = new Date()): Promise<number> {
     }),
   );
   return KOL_OVERRIDES.size;
+}
+
+/**
+ * Sorts the roster entries of each KOL in KOL_MAINS (user ask 2026-10-14): the main wallet is put
+ * on the roster if it isn't (and never goes stale), and every other entry that is the same KOL
+ * (knownSideMain: its name, X handle, or a listed side) gets KolWallet.mainWallet set to it. An
+ * entry that no longer matches is cleared. Returns the Known Sides, for the run's heartbeat.
+ */
+export async function applyKnownSides(now = new Date()): Promise<string[]> {
+  if (KOL_MAINS.length === 0) return [];
+  await prisma.$transaction(
+    KOL_MAINS.map((m) =>
+      prisma.kolWallet.upsert({
+        where: { wallet: m.wallet },
+        create: {
+          wallet: m.wallet,
+          name: m.name,
+          twitter: m.twitter[0] ?? null,
+          source: "manual",
+          seenAt: now,
+        },
+        update: { mainWallet: null, seenAt: now },
+      }),
+    ),
+  );
+  const rows = await prisma.kolWallet.findMany({
+    select: { wallet: true, name: true, twitter: true, mainWallet: true },
+  });
+  const sides: string[] = [];
+  const writes = [];
+  for (const r of rows) {
+    const main = knownSideMain(r)?.wallet ?? null;
+    if (main) sides.push(r.wallet);
+    if (main !== r.mainWallet)
+      writes.push(prisma.kolWallet.update({ where: { wallet: r.wallet }, data: { mainWallet: main } }));
+  }
+  if (writes.length > 0) await prisma.$transaction(writes);
+  if (writes.length > 0) logger.info("KOL Known Sides sorted", { knownSides: sides, changed: writes.length });
+  return sides.sort();
 }

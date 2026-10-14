@@ -100,6 +100,8 @@ interface FlaggedWallet {
   funder: string | null;
   /** A known KOL's name ("" when unnamed). Absent from older API builds. */
   kol?: string | null;
+  /** A KOL's Known Side: the KOL's main wallet (`kol` is then the KOL's name). */
+  knownSideOf?: string;
   solIn: number;
   solOut: number;
   heldPct: number | null;
@@ -776,12 +778,18 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                             ? `Sold into the stop on ${w.dumps} of its called coins (4+, three quarters of them, 10+ coins on record)`
                             : t === "winner"
                               ? "3 or more of the called coins it bought doubled, 60% of them or more, with 10+ coins on record"
-                              : undefined
+                              : t === "kol" && w.knownSideOf
+                                ? `One of ${w.kol || "a KOL"}'s own wallets, not its main one`
+                                : undefined
                       }
                     >
-                      {t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
-                        ? `KOL: ${w.kol}`
-                        : TAG_TEXT[t].text}
+                      {t === "kol" && w.knownSideOf
+                        ? names[w.wallet]?.source === "kol-side" || !w.kol
+                          ? "Known Side"
+                          : `${w.kol} Known Side`
+                        : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
+                          ? `KOL: ${w.kol}`
+                          : TAG_TEXT[t].text}
                     </span>
                   ))}
                 </span>
