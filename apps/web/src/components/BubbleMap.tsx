@@ -494,7 +494,7 @@ function MapView({
           {graph.sameTimeGroups.length > 0 &&
             " Holders whose wallets were funded within the same minute, whoever paid, share a dotted ring and line in their group's colour."}
           {showSides &&
-            " A dotted gold line ties a holder to a KOL it bought alongside on more than 90% of the KOL's coins over the last day: a possible side wallet, not confirmed."}
+            " A dotted gold line ties a holder to a KOL it bought alongside on more than 90% of the KOL's coins over the last day (more than 25 coins), or on every one of at least 10: a possible side wallet, not confirmed."}
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
         </p>

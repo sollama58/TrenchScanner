@@ -5,6 +5,7 @@ import { ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
+import { KolSideWallets } from "../tabs/SideWalletChecker";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, LinkIcon, LockIcon, WalletIcon } from "./Icons";
 
 /** Mirrors apps/api/src/walletProfile.ts WalletProfile. */
@@ -340,6 +341,7 @@ function Profile({ p }: { p: WalletProfile }) {
       {p.trades.length > 0 && <Trades trades={p.trades} />}
       {p.launches.length > 0 && <Coins title="Coins it launched" coins={p.launches} />}
       <Linked p={p} names={names} />
+      {p.kol && <KolSideWallets wallet={p.wallet} kolName={p.kol.name ?? shortAddress(p.wallet)} />}
     </>
   );
 }

@@ -2632,6 +2632,13 @@ legend {
   background: var(--surface-2);
   border: 1px solid var(--border);
 }
+/* In a KOL's wallet modal the section card is the frame. */
+.wm-sides .side-drop {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+}
 .side-drop-head {
   display: flex;
   align-items: center;

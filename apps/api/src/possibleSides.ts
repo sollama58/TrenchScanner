@@ -3,7 +3,7 @@ import { prisma } from "@trenchscanner/core";
 /**
  * Possible KOL side wallets (KolPossibleSide, rebuilt hourly by the worker's kolSideWalletsJob.ts):
  * wallets that, over the last 24 hours, bought more than 90% of a KOL's tracked coins within a few
- * minutes of it, on more than 25 coins. For display only (the wallet modal's label, the bubble
+ * minutes of it, on more than 25 coins (or all of them, on at least 10). For display only (the wallet modal's label, the bubble
  * map's ties); nothing scores or screens on it.
  */
 

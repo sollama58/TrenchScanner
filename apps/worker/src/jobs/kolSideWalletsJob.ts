@@ -28,11 +28,13 @@ const BOT_MIN_COINS = 25;
 const DAY_MS = 86_400_000;
 
 /**
- * A possible side wallet (KolPossibleSide, user ask 2026-10-14): in the last 24 hours it bought
- * more than this % of the KOL's coins alongside it, on more than POSSIBLE_SIDE_MIN_SHARED coins.
+ * A possible side wallet (KolPossibleSide, user asks 2026-10-14): in the last 24 hours it bought
+ * more than this % of the KOL's coins alongside it, on more than POSSIBLE_SIDE_MIN_SHARED coins;
+ * or every one of them, on at least POSSIBLE_SIDE_FULL_MIN_SHARED coins.
  */
 export const POSSIBLE_SIDE_MIN_PCT = 90;
 export const POSSIBLE_SIDE_MIN_SHARED = 25;
+export const POSSIBLE_SIDE_FULL_MIN_SHARED = 10;
 
 export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
 export type SideWindow = (typeof SIDE_WINDOWS)[number];
@@ -89,7 +91,11 @@ export function possibleSides(
   if (kolCoins <= 0) return [];
   return pairs
     .map((p) => ({ wallet: p.side, shared: p.shared, pct: (Math.min(p.shared, kolCoins) / kolCoins) * 100 }))
-    .filter((p) => p.shared > POSSIBLE_SIDE_MIN_SHARED && p.pct > POSSIBLE_SIDE_MIN_PCT)
+    .filter(
+      (p) =>
+        (p.shared > POSSIBLE_SIDE_MIN_SHARED && p.pct > POSSIBLE_SIDE_MIN_PCT) ||
+        (p.shared >= POSSIBLE_SIDE_FULL_MIN_SHARED && p.shared >= kolCoins),
+    )
     .map((p) => ({ ...p, pct: Math.round(p.pct * 10) / 10 }));
 }
 
