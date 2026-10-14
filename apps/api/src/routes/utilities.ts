@@ -380,7 +380,7 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
 const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
 type SideWindow = (typeof SIDE_WINDOWS)[number];
 const SIDE_GAP_MINUTES = 5;
-const SIDE_MIN_SHARED = 2;
+const SIDE_MIN_SHARED = 10;
 const SIDE_LEADERBOARD_MAX = 200;
 
 /** One side wallet as the worker stores it (SideWallet in kolSideWalletsJob.ts). */

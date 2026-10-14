@@ -6,30 +6,31 @@ import {
   isBot,
   possibleSides,
   rankSideWallets,
+  POSSIBLE_SIDE_HOLD_MS,
   runKolSideWalletsJob,
   type SideWallet,
 } from "./kolSideWalletsJob.js";
 
 describe("rankSideWallets", () => {
-  it("needs two coins in common, then ranks by % shared, coins in common and timing", () => {
+  it("needs ten coins in common, then ranks by % shared, coins in common and timing", () => {
     const ranked = rankSideWallets(
       [
-        { side: "once", shared: 1, gapSec: 2 },
-        { side: "late", shared: 3, gapSec: 200 },
-        { side: "close", shared: 3, gapSec: -4 },
-        { side: "half", shared: 2, gapSec: 10 },
+        { side: "nine", shared: 9, gapSec: 2 },
+        { side: "late", shared: 15, gapSec: 200 },
+        { side: "close", shared: 15, gapSec: -4 },
+        { side: "half", shared: 10, gapSec: 10 },
       ],
-      4,
-      new Map([["close", 9]]),
+      20,
+      new Map([["close", 30]]),
     );
     expect(ranked.map((r) => r.wallet)).toEqual(["close", "late", "half"]);
-    expect(ranked[0]).toEqual({ wallet: "close", shared: 3, pct: 75, coins: 9, gapSec: -4 });
+    expect(ranked[0]).toEqual({ wallet: "close", shared: 15, pct: 75, coins: 30, gapSec: -4 });
     // A wallet's own count is never below what it shared.
-    expect(ranked[1]!.coins).toBe(3);
+    expect(ranked[1]!.coins).toBe(15);
   });
 
   it("keeps the top hundred", () => {
-    const pairs = Array.from({ length: 120 }, (_, i) => ({ side: `w${i}`, shared: 2 + i, gapSec: 0 }));
+    const pairs = Array.from({ length: 120 }, (_, i) => ({ side: `w${i}`, shared: 10 + i, gapSec: 0 }));
     const ranked = rankSideWallets(pairs, 200, new Map());
     expect(ranked).toHaveLength(100);
     expect(ranked[0]!.wallet).toBe("w119");
@@ -102,6 +103,7 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.kolWallet.deleteMany({ where: { wallet: { startsWith: TAG } } });
     await prisma.kolSideWallets.deleteMany({ where: { wallet: { startsWith: TAG } } });
+    await prisma.kolPossibleSide.deleteMany({ where: { wallet: { startsWith: TAG } } });
   });
 
   it("lists wallets that bought the KOL's coins within minutes of it, other KOLs left out", async () => {
@@ -116,9 +118,9 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
         { wallet: otherKol, seenAt: new Date() },
       ],
     });
-    // Four coins: one two hours ago, three ten days ago. The side wallet is in three of them, a
+    // Twelve coins: one two hours ago, eleven ten days ago. The side wallet is in eleven of them, a
     // minute behind; the far wallet buys an hour later, the other KOL alongside.
-    const ages = [2 * 3_600_000, 10 * 86_400_000, 10 * 86_400_000 + 1, 10 * 86_400_000 + 2];
+    const ages = [2 * 3_600_000, ...Array.from({ length: 11 }, (_, i) => 10 * 86_400_000 + i)];
     for (const [i, age] of ages.entries()) {
       const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${i}` } });
       await prisma.tokenTradeTape.create({
@@ -136,7 +138,7 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
         { wallet: otherKol, firstBuyAt: new Date(at.getTime() + 5_000) },
         { wallet: far, firstBuyAt: new Date(at.getTime() + 3_600_000) },
       ];
-      if (i < 3) rows.push({ wallet: side, firstBuyAt: new Date(at.getTime() + 60_000) });
+      if (i < 11) rows.push({ wallet: side, firstBuyAt: new Date(at.getTime() + 60_000) });
       await prisma.tokenWalletActivity.createMany({
         data: rows.map((r) => ({ tokenId: token.id, buys: 1, solIn: 1, ...r })),
       });
@@ -144,11 +146,36 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
 
     await runKolSideWalletsJob({ now: () => now });
     const row = await prisma.kolSideWallets.findUnique({ where: { wallet: kol } });
-    expect(row).toMatchObject({ coins24h: 1, coins7d: 1, coins30d: 4 });
+    expect(row).toMatchObject({ coins24h: 1, coins7d: 1, coins30d: 12 });
     const sides = row!.sides as unknown as Record<string, SideWallet[]>;
-    expect(sides["30d"]).toEqual([{ wallet: side, shared: 3, pct: 75, coins: 3, gapSec: 60 }]);
-    // One coin in common in the last day is under the two a listing needs.
+    expect(sides["30d"]).toEqual([{ wallet: side, shared: 11, pct: 91.7, coins: 11, gapSec: 60 }]);
+    // One coin in common in the last day is under the ten a listing needs.
     expect(sides["24h"]).toEqual([]);
     expect(sides["7d"]).toEqual([]);
+  });
+
+  it("keeps a possible-side label 14 days past the last run it qualified, then drops it", async () => {
+    const now = Date.now();
+    const kol = `${TAG}-holdkol`;
+    const recent = `${TAG}-held`;
+    const old = `${TAG}-expired`;
+    await prisma.kolWallet.create({ data: { wallet: kol, name: "Hold KOL", seenAt: new Date() } });
+    const row = (wallet: string, ageMs: number) => ({
+      wallet,
+      kolWallet: kol,
+      pct: 100,
+      shared: 10,
+      kolCoins: 10,
+      hours: 24,
+      computedAt: new Date(now - ageMs),
+    });
+    await prisma.kolPossibleSide.createMany({
+      data: [row(recent, POSSIBLE_SIDE_HOLD_MS - 3_600_000), row(old, POSSIBLE_SIDE_HOLD_MS + 3_600_000)],
+    });
+
+    // Neither qualifies on this run (no tape for this KOL).
+    await runKolSideWalletsJob({ now: () => now });
+    const left = await prisma.kolPossibleSide.findMany({ where: { kolWallet: kol } });
+    expect(left.map((r) => r.wallet)).toEqual([recent]);
   });
 });

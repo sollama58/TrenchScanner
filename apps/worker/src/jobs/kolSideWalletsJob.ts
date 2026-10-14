@@ -11,7 +11,8 @@ const logger = createLogger("kol-side-wallets");
  * - A shared coin: another wallet first bought the same coin within SIDE_GAP_MS of the KOL's own
  *   first buy, before or after it.
  * - % shared: shared coins over the KOL's coins in the window. Only wallets sharing at least
- *   MIN_SHARED coins in the window are listed, so one coincidence never reads as 100%.
+ *   MIN_SHARED coins in the window are listed, so a handful of coincidences never reads as a match
+ *   (user ask 2026-10-14: no wallet under 10 coins in common).
  *
  * Left out of the lists: other KOLs, known exchange wallets, and bots, read as any wallet that
  * bought more than BOT_SHARE of every tracked coin in the last 30 days (a copy-trade or sniping
@@ -20,13 +21,20 @@ const logger = createLogger("kol-side-wallets");
  */
 
 export const SIDE_GAP_MS = 5 * 60_000;
-export const MIN_SHARED = 2;
+export const MIN_SHARED = 10;
 /** Wallets kept per KOL and window: the dropdown shows ten, "Show all" the rest. */
 export const TOP_SIDES = 100;
 const BOT_SHARE = 0.75;
 const BOT_MIN_COINS = 25;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
+/**
+ * A possible-side label stays this long after the last hourly run the wallet met a tier, then drops
+ * (user decision 2026-10-14). KolPossibleSide.computedAt is that last run.
+ */
+export const POSSIBLE_SIDE_HOLD_MS = 14 * DAY_MS;
+/** Wallet pairs per delete when refreshing the labels that qualify again. */
+const POSSIBLE_SIDE_DELETE_CHUNK = 500;
 
 /**
  * A possible side wallet (KolPossibleSide, user asks 2026-10-14): over one of these recent spans it
@@ -270,12 +278,24 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     }).map((p) => ({ ...p, kolWallet: k.wallet, computedAt: now })),
   );
 
+  let possibleHeld = 0;
   await prisma.$transaction(
     async (tx) => {
       await tx.kolSideWallets.deleteMany({});
       if (data.length) await tx.kolSideWallets.createMany({ data });
-      await tx.kolPossibleSide.deleteMany({});
+      // Labels that qualify this run are rewritten with this run's figures; the rest are kept until
+      // POSSIBLE_SIDE_HOLD_MS past the last run they qualified.
+      await tx.kolPossibleSide.deleteMany({
+        where: { computedAt: { lt: new Date(now.getTime() - POSSIBLE_SIDE_HOLD_MS) } },
+      });
+      for (let i = 0; i < possible.length; i += POSSIBLE_SIDE_DELETE_CHUNK) {
+        const chunk = possible.slice(i, i + POSSIBLE_SIDE_DELETE_CHUNK);
+        await tx.kolPossibleSide.deleteMany({
+          where: { OR: chunk.map((p) => ({ wallet: p.wallet, kolWallet: p.kolWallet })) },
+        });
+      }
       if (possible.length) await tx.kolPossibleSide.createMany({ data: possible });
+      possibleHeld = await tx.kolPossibleSide.count();
     },
     { timeout: 60_000 },
   );
@@ -284,6 +304,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     kols: data.length,
     withSides: data.filter((d) => (d.sides as Record<SideWindow, SideWallet[]>)["30d"].length > 0).length,
     possibleSides: possible.length,
+    possibleSidesHeld: possibleHeld,
     pairs: pairs.length,
     bots: bots.size,
     totalCoins,

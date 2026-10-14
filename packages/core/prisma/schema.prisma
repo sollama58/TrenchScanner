@@ -2187,6 +2187,7 @@ model KolPossibleSide {
   kolCoins   Int
   /// The span the match was read over: 24, 36 or 48 hours (the tier it met).
   hours      Int      @default(24)
+  /// The last hourly run the wallet met a tier. The label is kept 14 days past it (POSSIBLE_SIDE_HOLD_MS).
   computedAt DateTime
 
   @@id([wallet, kolWallet])

@@ -43,7 +43,7 @@ const FIRST_ROWS = 25;
 /** Side wallets shown in a dropdown; more open in a modal. */
 const DROP_ROWS = 10;
 /** The fewest coins in common a listing needs (apps/api/src/routes/utilities.ts SIDE_MIN_SHARED). */
-const MIN_SHARED = 2;
+const MIN_SHARED = 10;
 
 const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
 
@@ -330,8 +330,8 @@ function SideWalletsModal({
           </button>
         </header>
         <p className="muted small">
-          All {list.length} wallets that shared at least two of its {plural(coins, "coin")}, by % shared. Not
-          confirmed side wallets: matched on timing only.
+          All {list.length} wallets that shared at least {MIN_SHARED} of its {plural(coins, "coin")}, by %
+          shared. Not confirmed side wallets: matched on timing only.
         </p>
         {/* The wallet modal opens over the page, so this one closes first. */}
         <SideRows list={list} coins={coins} onOpen={onClose} />
