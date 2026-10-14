@@ -483,8 +483,12 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The wallet risk readings (added 2026-10-13): recorded to be judged out of sample first, the
   // models thread's call (notes/hit-catch-2026-10-13/wallet-risk-brief.md).
   ...WALLET_RISK_FEATURES,
-  // The linked-wallet readings (added 2026-10-13): recorded first, on the same terms.
-  ...LINKED_WALLET_FEATURES,
+  // The linked-wallet readings (added 2026-10-13): recorded first, on the same terms. All but
+  // linkedCreatorPct, which the learners read from 2026-10-14 (user decision): rows with supply
+  // tied to the creator doubled 5.4% (n=74) against 15.5% over 10-13..14, in both windows checked
+  // (notes/full-audit-2026-10-14/lane3-safety-wallets.md, section 3). Null on rows banked before
+  // 2026-10-13 04:52 and until the funders are read; the trainer's missing indicator covers that.
+  ...LINKED_WALLET_FEATURES.filter((name) => name !== "linkedCreatorPct"),
   // The exchange-funded share (added 2026-10-13): recorded first, on the same terms.
   ...CEX_FUNDED_FEATURES,
   // The live flagged-wallet trades (added 2026-10-13): recorded first, on the same terms.
