@@ -133,6 +133,31 @@ export function publicErrorText(error: string): string {
  */
 const WORKER_HEALTH_CACHE_MS = 5_000;
 
+/**
+ * What `GET /health/worker?strict=1` holds to its status code: the alert path's jobs, and
+ * pipeline-watch - the scanner's own once-a-minute pulse, so a scanner that is down or cut off
+ * from the database reads as one even while its last scan row is still young. The watcher lives
+ * in the process it watches and can't say that itself; an outside uptime monitor pointed here can.
+ */
+export const STRICT_WORKER_JOBS: readonly HeartbeatJob[] = [
+  "scan",
+  "fast-match",
+  "candidate-watch",
+  "telegram-dispatch",
+  "pipeline-watch",
+];
+
+/**
+ * The strict jobs that are stale or have no heartbeat row at all, by the same `stale` the body
+ * reports. Pure, so the route's status code and its tests agree on one definition.
+ */
+export function strictWorkerFailures(jobs: { job: string; stale: boolean }[]): string[] {
+  return STRICT_WORKER_JOBS.filter((job) => {
+    const row = jobs.find((j) => j.job === job);
+    return !row || row.stale;
+  });
+}
+
 /** The later of two optional times. */
 function latest(a: Date | null, b: Date | null): Date | null {
   if (!a || !b) return a ?? b;
@@ -196,13 +221,21 @@ export async function registerHealthRoutes(
   };
   const heartbeatCache = new SharedCache<Awaited<ReturnType<typeof readHeartbeats>>>(WORKER_HEALTH_CACHE_MS);
 
-  app.get("/worker", async () => {
+  // `?strict=1`: the same body, but a 503 while any of STRICT_WORKER_JOBS is stale or missing, so
+  // a monitor that only reads status codes can alert on it. Without it the route always answers
+  // 200 and the dashboard reads the flags from the body, as it always has.
+  app.get<{ Querystring: { strict?: string } }>("/worker", async (request, reply) => {
     const { heartbeats, aiBudget, pipeline } = await heartbeatCache.get(readHeartbeats);
     // Ages are measured now, not when the rows were read, so the cache never makes a job look fresher.
     const now = Date.now();
+    const jobs = heartbeats.map((h) => summarizeHeartbeat(h, now));
+    const strict = request.query.strict === "1" || request.query.strict === "true";
+    const failing = strict ? strictWorkerFailures(jobs) : [];
+    if (failing.length > 0) reply.code(503);
 
     return {
-      jobs: heartbeats.map((h) => summarizeHeartbeat(h, now)),
+      ...(strict ? { failing } : {}),
+      jobs,
       pipeline,
       // Today's AI spend against the daily cap (AI_DAILY_BUDGET_USD): totals only here - the
       // per-source split is on the admin panel.

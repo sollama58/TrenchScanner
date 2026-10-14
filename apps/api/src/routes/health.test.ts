@@ -1,7 +1,14 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { describe, expect, it } from "vitest";
-import { publicErrorText, staleThresholdMs, summarizeHeartbeat } from "./health.js";
+import { prisma } from "@trenchscanner/core";
+import {
+  publicErrorText,
+  staleThresholdMs,
+  STRICT_WORKER_JOBS,
+  strictWorkerFailures,
+  summarizeHeartbeat,
+} from "./health.js";
 
 /**
  * GET /health/worker needs no sign-in, so a job's last error reaches it without the hosts and
@@ -202,5 +209,80 @@ describe("GET /health while the report caches fill", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
     await app.close();
+  });
+});
+
+/**
+ * `?strict=1` puts the alert path's staleness into the status code, for an outside uptime
+ * monitor that reads nothing else; without it the route answers 200 exactly as before.
+ */
+describe("GET /health/worker?strict=1: which jobs fail it", () => {
+  const fresh = (job: string) => ({ job, stale: false });
+
+  it("passes when every alert-path job and the scanner's pulse are fresh", () => {
+    expect(strictWorkerFailures(STRICT_WORKER_JOBS.map(fresh))).toEqual([]);
+  });
+
+  it("names a stale alert-path job, and ignores stale jobs off the alert path", () => {
+    const jobs = [
+      ...STRICT_WORKER_JOBS.map((job) => (job === "fast-match" ? { job, stale: true } : fresh(job))),
+      { job: "cleanup", stale: true },
+      { job: "curator-training", stale: true },
+    ];
+    expect(strictWorkerFailures(jobs)).toEqual(["fast-match"]);
+  });
+
+  it("counts a missing row as failing: the scanner never wrote one", () => {
+    const jobs = STRICT_WORKER_JOBS.filter((j) => j !== "pipeline-watch").map(fresh);
+    expect(strictWorkerFailures(jobs)).toEqual(["pipeline-watch"]);
+  });
+});
+
+const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
+
+describe.skipIf(!dbAvailable)("GET /health/worker?strict=1 against the database", () => {
+  const app = async () => {
+    const { default: Fastify } = await import("fastify");
+    const { registerHealthRoutes } = await import("./health.js");
+    const instance = Fastify();
+    await instance.register(registerHealthRoutes, { prefix: "/health" });
+    return instance;
+  };
+  const ranAt = (at: Date) =>
+    Promise.all(
+      STRICT_WORKER_JOBS.map((job) =>
+        prisma.systemHeartbeat.upsert({
+          where: { job },
+          create: { job, lastRunAt: at },
+          update: { lastRunAt: at, meta: {} },
+        }),
+      ),
+    );
+
+  it("answers 200 while the alert path is fresh, 503 naming the stale job once it isn't", async () => {
+    await ranAt(new Date());
+    const first = await app();
+    const ok = await first.inject({ url: "/health/worker?strict=1" });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toMatchObject({ failing: [] });
+    await first.close();
+
+    await prisma.systemHeartbeat.update({
+      where: { job: "scan" },
+      data: { lastRunAt: new Date(Date.now() - 60 * 60_000) },
+    });
+    // A fresh instance, so the five-second heartbeat cache doesn't answer from the first read.
+    const second = await app();
+    const bad = await second.inject({ url: "/health/worker?strict=1" });
+    expect(bad.statusCode).toBe(503);
+    expect(bad.json()).toMatchObject({ failing: ["scan"] });
+    expect(bad.json().jobs.find((j: { job: string }) => j.job === "scan").stale).toBe(true);
+
+    // Without strict: the same staleness, still a 200, and the body as it always was.
+    const plain = await second.inject({ url: "/health/worker" });
+    expect(plain.statusCode).toBe(200);
+    expect(plain.json()).not.toHaveProperty("failing");
+    await second.close();
+    await ranAt(new Date());
   });
 });
