@@ -129,7 +129,9 @@ async function deleteStaleTokens(cutoff: Date, opts: BatchOptions): Promise<numb
         AND NOT EXISTS (SELECT 1 FROM "CandidateOutcome" x WHERE x."tokenId" = t."id")
         AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."tokenId" = t."id")
         AND NOT EXISTS (SELECT 1 FROM "CuratedShadowEmission" x WHERE x."tokenId" = t."id")
-        AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."tokenId" = t."id")`;
+        AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."tokenId" = t."id")
+        AND NOT EXISTS (SELECT 1 FROM "MatchArchive" x
+                         WHERE x."tokenId" = t."id" AND x."hitHundredPctAt" IS NOT NULL)`;
     total += n;
     if (page.length < opts.rowsPerBatch) return total;
     after = ids[ids.length - 1]!;
@@ -179,6 +181,71 @@ async function forEachOldNarrativePage(
     total += await act(mints);
     if (page.length < opts.rowsPerBatch) return total;
     after = mints[mints.length - 1]!;
+    await sleep(opts.pauseMs);
+  }
+}
+
+/** The MatchArchive columns copied straight from Match, in order (see archiveOldMatches). */
+const ARCHIVED_MATCH_COLUMNS = [
+  "id",
+  "userId",
+  "filterId",
+  "tokenId",
+  "snapshotId",
+  "matchedAt",
+  "score",
+  "deliveredDashboard",
+  "peakMcapUsd",
+  "peakMcapAt",
+  "alertMcapUsd",
+  "peakReturnPct",
+  "hitHundredPctAt",
+  "candidateOutcomeId",
+  "peak1hReturnPct",
+  "maxDrawdown1hPct",
+  "hit2xIn1h",
+  "hit4xIn1h",
+  "hit10xIn1h",
+  "disqualified",
+  "peak24hReturnPct",
+] as const;
+
+/**
+ * Moves Match rows matched before `cutoff` into MatchArchive, oldest first, at most `rowsPerBatch`
+ * per statement. Each statement deletes its batch and inserts the copies in one transaction, so a
+ * row is never in both tables or in neither. The copy takes the coin's mint, symbol and name and
+ * the alert snapshot's market cap with it: the archive has no foreign key to Token or
+ * TokenSnapshot, so both can age out once no live Match pins them. The joins always find their
+ * row: Match's own foreign keys cascade, so a match whose token or snapshot is gone is gone too.
+ *
+ * Nothing references Match (no foreign key points at it), so deleting a row takes nothing else
+ * with it.
+ */
+async function archiveOldMatches(cutoff: Date, opts: BatchOptions): Promise<number> {
+  const copied = ARCHIVED_MATCH_COLUMNS.map((c) => `"${c}"`).join(", ");
+  const fromMoved = ARCHIVED_MATCH_COLUMNS.map((c) => `m."${c}"`).join(", ");
+  const sql = `
+    WITH moved AS (
+      DELETE FROM "Match" WHERE "id" IN (
+        SELECT "id" FROM "Match" WHERE "matchedAt" < $1 ORDER BY "matchedAt" LIMIT $2
+      )
+      RETURNING *
+    ), archived AS (
+      INSERT INTO "MatchArchive" (${copied}, "mintAddress", "symbol", "name", "snapshotMarketCapUsd")
+      SELECT ${fromMoved}, t."mintAddress", t."symbol", t."name", s."marketCapUsd"
+      FROM moved m
+      JOIN "Token" t ON t."id" = m."tokenId"
+      JOIN "TokenSnapshot" s ON s."id" = m."snapshotId"
+      ON CONFLICT ("id") DO NOTHING
+      RETURNING 1
+    )
+    SELECT (SELECT count(*) FROM moved)::int AS moved`;
+  let total = 0;
+  for (;;) {
+    const rows = await prisma.$queryRawUnsafe<{ moved: number }[]>(sql, cutoff, opts.rowsPerBatch);
+    const n = rows[0]?.moved ?? 0;
+    total += n;
+    if (n < opts.rowsPerBatch) return total;
     await sleep(opts.pauseMs);
   }
 }
@@ -354,6 +421,8 @@ async function deleteExpiredSnapshots(
  *     else here despite being individually tiny.
  *  5. Spent and expired Mobile Connect link codes, and long-revoked devices - one code row is
  *     written per QR rendered, so this is the fastest-filling table of the lot per active user.
+ *  6. Match rows older than MATCH_ARCHIVE_DAYS, moved to MatchArchive (archiveOldMatches), which
+ *     releases their alert snapshots and tokens to the sweeps above on later nights.
  */
 export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promise<JobRunMeta> {
   const startedAt = Date.now();
@@ -450,6 +519,19 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         AND (m."hit2xIn1h" IS NULL OR (m."hit10xIn1h" IS NULL AND o."hit10xIn1h" IS NOT NULL))`;
     return true;
   });
+  // Matches older than MATCH_ARCHIVE_DAYS move to MatchArchive (user decision P21), and with them
+  // the pin they held on their alert snapshot and their Token. Only once the copies above landed,
+  // so every archived row carries its verdict and run peak, and never inside the snapshot horizon,
+  // where the peak passes still move a match's peak (matchPeaks.ts).
+  const archiveDays =
+    env.MATCH_ARCHIVE_DAYS > 0 ? Math.max(env.MATCH_ARCHIVE_DAYS, env.SNAPSHOT_RETENTION_DAYS) : 0;
+  const archivedMatches =
+    archiveDays > 0 && matchCopiesLanded
+      ? await stage("matchArchive", 0, () =>
+          archiveOldMatches(new Date(startedAt - archiveDays * DAY_MS), batch),
+        )
+      : 0;
+
   // Only once the copies above landed: the age sweep would otherwise take match anchors whose
   // verdict never reached their Match.
   const deletedCandidateOutcomes = {
@@ -577,6 +659,8 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   //  - AiReview: pruned on the outcome horizon above, but a "no buy" on a token no curator alerted
   //    is held by nothing else once the token's outcome row ages out, so a row still inside that
   //    horizon must keep its token too.
+  //  - MatchArchive (no foreign key): an archived match that reached 2x is still on the all-time
+  //    Leaderboard, whose card reads the Token row. Other archived matches hold nothing.
   const tokenCutoff = new Date(startedAt - env.STALE_TOKEN_RETENTION_DAYS * DAY_MS);
   const deletedTokens = { count: await stage("staleTokens", 0, () => deleteStaleTokens(tokenCutoff, batch)) };
 
@@ -745,6 +829,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedWalletFunders: deletedWalletFunders.count,
     deletedFunderActivity: deletedFunderActivity.count,
     deletedMatchOutcomes,
+    archivedMatches,
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,
     deletedWalletActivity,

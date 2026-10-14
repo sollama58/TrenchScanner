@@ -392,6 +392,14 @@ const envSchema = z.object({
   // CANDIDATE_OUTCOME_RETENTION_DAYS horizon.
   // 7 days: user decision 2026-10-05.
   MATCH_OUTCOME_RETENTION_DAYS: z.coerce.number().nonnegative().default(7),
+  // Match rows older than this many days are moved to MatchArchive by the nightly cleanup (the
+  // "matchArchive" stage; full audit 2026-10-14 F11, user decision P21): Match was never pruned,
+  // and every row kept its alert-time snapshot and its Token out of the sweeps. The archive keeps
+  // the verdict and peak columns the Leaderboard and the hit-rate report read; the Live feed's
+  // history pages, which need the card's snapshot, end at this age. Never less than
+  // SNAPSHOT_RETENTION_DAYS (the stage waits that long): a match's peak is tracked from its
+  // token's snapshots until then. 0 keeps every match in Match.
+  MATCH_ARCHIVE_DAYS: z.coerce.number().nonnegative().default(60),
 
   // Curated Alerts feed (see packages/core/src/curation/curator.ts). CURATED_MIN_SCORE is the
   // heuristic curator's composite-score floor - env-tunable so emission volume can be steered in

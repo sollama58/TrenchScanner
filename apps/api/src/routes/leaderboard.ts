@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { prisma } from "@trenchscanner/core";
+import { prisma, type Prisma } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { TOKEN_CARD_SELECT } from "../curatedFeed.js";
 
@@ -48,25 +48,62 @@ async function buildLeaderboard() {
   // Doing it in SQL also fixes the crowd-out this endpoint originally had: taking the top N
   // rows and de-duplicating by token afterwards meant one token that a hundred users' filters
   // all matched could fill the whole board with near-identical rows.
-  const ranked = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT best.id
+  //
+  // Matches older than MATCH_ARCHIVE_DAYS live in MatchArchive (cleanupJob.ts), with the same
+  // columns and the alert snapshot's market cap copied in; the board is all-time, so it ranks both.
+  const ranked = await prisma.$queryRaw<{ id: string; archived: boolean }[]>`
+    SELECT best.id, best.archived
     FROM (
-      SELECT DISTINCT ON (m."tokenId") m.id, m."peakReturnPct"
-      FROM "Match" m
-      WHERE m."hitHundredPctAt" IS NOT NULL
-        AND m."peakReturnPct" IS NOT NULL
-      ORDER BY m."tokenId", m."peakReturnPct" DESC
+      SELECT DISTINCT ON (u."tokenId") u.id, u."peakReturnPct", u.archived
+      FROM (
+        SELECT m.id, m."tokenId", m."peakReturnPct", false AS archived
+        FROM "Match" m
+        WHERE m."hitHundredPctAt" IS NOT NULL
+          AND m."peakReturnPct" IS NOT NULL
+        UNION ALL
+        SELECT a.id, a."tokenId", a."peakReturnPct", true AS archived
+        FROM "MatchArchive" a
+        WHERE a."hitHundredPctAt" IS NOT NULL
+          AND a."peakReturnPct" IS NOT NULL
+      ) u
+      ORDER BY u."tokenId", u."peakReturnPct" DESC
     ) best
     ORDER BY best."peakReturnPct" DESC
     LIMIT ${LEADERBOARD_SIZE}
   `;
   if (ranked.length === 0) return { entries: [] };
 
-  const rows = await prisma.match.findMany({
-    where: { id: { in: ranked.map((r) => r.id) } },
-    include: { token: { select: TOKEN_CARD_SELECT }, snapshot: { select: { marketCapUsd: true } } },
-  });
-  const byId = new Map(rows.map((row) => [row.id, row]));
+  const liveIds = ranked.filter((r) => !r.archived).map((r) => r.id);
+  const archivedIds = ranked.filter((r) => r.archived).map((r) => r.id);
+  const [rows, archivedRows] = await Promise.all([
+    liveIds.length === 0
+      ? []
+      : prisma.match.findMany({
+          where: { id: { in: liveIds } },
+          include: { token: { select: TOKEN_CARD_SELECT }, snapshot: { select: { marketCapUsd: true } } },
+        }),
+    archivedIds.length === 0 ? [] : prisma.matchArchive.findMany({ where: { id: { in: archivedIds } } }),
+  ]);
+  // An archived row has no relation to its Token (it may be swept); the stale-token sweep keeps
+  // the Token of every archived row that reached 2x, so the card reads as it did.
+  const archivedTokens =
+    archivedRows.length === 0
+      ? []
+      : await prisma.token.findMany({
+          where: { id: { in: [...new Set(archivedRows.map((r) => r.tokenId))] } },
+          select: TOKEN_CARD_SELECT,
+        });
+  const tokenById = new Map(archivedTokens.map((t) => [t.id, t]));
+  const byId = new Map<string, Entry>();
+  for (const row of rows) {
+    // The price the alert was priced at (see Match.alertMcapUsd), which returnPct counts from.
+    byId.set(row.id, { ...row, alertMcapUsd: row.alertMcapUsd ?? row.snapshot.marketCapUsd });
+  }
+  for (const row of archivedRows) {
+    const token = tokenById.get(row.tokenId);
+    if (token)
+      byId.set(row.id, { ...row, token, alertMcapUsd: row.alertMcapUsd ?? row.snapshotMarketCapUsd });
+  }
 
   // Rendered in the ranked order - `rows` comes back in whatever order Postgres found them.
   return {
@@ -77,8 +114,7 @@ async function buildLeaderboard() {
         {
           matchId: match.id,
           token: match.token,
-          // The price the alert was priced at (see Match.alertMcapUsd), which returnPct counts from.
-          alertMcapUsd: match.alertMcapUsd ?? match.snapshot.marketCapUsd,
+          alertMcapUsd: match.alertMcapUsd,
           peakMcapUsd: match.peakMcapUsd,
           peakMcapAt: match.peakMcapAt,
           returnPct: match.peakReturnPct,
@@ -88,4 +124,16 @@ async function buildLeaderboard() {
       ];
     }),
   };
+}
+
+/** One board row before it is shaped: a live or an archived match, with its token's card. */
+interface Entry {
+  id: string;
+  token: Prisma.TokenGetPayload<{ select: typeof TOKEN_CARD_SELECT }>;
+  alertMcapUsd: number;
+  peakMcapUsd: number | null;
+  peakMcapAt: Date | null;
+  peakReturnPct: number | null;
+  matchedAt: Date;
+  hitHundredPctAt: Date | null;
 }

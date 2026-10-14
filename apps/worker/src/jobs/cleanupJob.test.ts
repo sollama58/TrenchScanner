@@ -752,3 +752,142 @@ describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
     ]);
   });
 });
+
+/**
+ * Matches past MATCH_ARCHIVE_DAYS move to MatchArchive (user decision P21), releasing their alert
+ * snapshot and token to the sweeps - except the token of an archived 2x, which the all-time
+ * Leaderboard still shows.
+ */
+describe.skipIf(!dbAvailable)("runCleanupJob: match archive", () => {
+  const TAG = "CleanupMatchArchiveTest";
+  const WALLET = "CleanupMatchArchiveTestWallet1111111111111";
+  const DAY = 86_400_000;
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 30,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
+    STALE_TOKEN_RETENTION_DAYS: 90,
+    MATCH_ARCHIVE_DAYS: 60,
+  } as never;
+
+  const cleanUp = async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    // Cascades to the user's filters, matches and archived matches.
+    await prisma.user.deleteMany({ where: { walletAddress: WALLET } });
+  };
+  beforeEach(cleanUp);
+  afterAll(cleanUp);
+
+  it("moves old matches with their verdicts, then lets their snapshots and tokens go", async () => {
+    const user = await prisma.user.create({ data: { walletAddress: WALLET } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id } });
+    const coin = async (name: string, ageDays: number) => {
+      const token = await prisma.token.create({
+        data: {
+          mintAddress: `${TAG}-${name}`,
+          symbol: name.toUpperCase(),
+          name,
+          firstSeenAt: new Date(Date.now() - (ageDays + 1) * DAY),
+        },
+      });
+      const snapshot = await prisma.tokenSnapshot.create({
+        data: {
+          tokenId: token.id,
+          priceUsd: 1,
+          marketCapUsd: 20_000,
+          takenAt: new Date(Date.now() - ageDays * DAY),
+        },
+      });
+      return { token, snapshot };
+    };
+    const match = (c: Awaited<ReturnType<typeof coin>>, ageDays: number, extra: object = {}) =>
+      prisma.match.create({
+        data: {
+          userId: user.id,
+          filterId: filter.id,
+          tokenId: c.token.id,
+          snapshotId: c.snapshot.id,
+          score: 60,
+          matchedAt: new Date(Date.now() - ageDays * DAY),
+          ...extra,
+        },
+      });
+    const winner = await coin("winner", 100);
+    const loser = await coin("loser", 100);
+    const recent = await coin("recent", 10);
+    const won = await match(winner, 100, {
+      peakMcapUsd: 70_000,
+      peakReturnPct: 250,
+      hitHundredPctAt: new Date(Date.now() - 100 * DAY),
+      hit2xIn1h: true,
+      hit4xIn1h: false,
+      disqualified: false,
+    });
+    const lost = await match(loser, 100, { hit2xIn1h: false, alertMcapUsd: 21_000 });
+    const kept = await match(recent, 10);
+
+    // One row a statement, so the loop's "fewer than a batch" exit is crossed.
+    const first = await runCleanupJob(env, { rowsPerBatch: 1, pauseMs: 0, fullSnapshotWalk: true });
+    expect(first.archivedMatches).toBe(2);
+    expect(await prisma.match.findMany({ where: { userId: user.id }, select: { id: true } })).toEqual([
+      { id: kept.id },
+    ]);
+    const archived = await prisma.matchArchive.findMany({
+      where: { userId: user.id },
+      orderBy: { id: "asc" },
+    });
+    expect(archived.map((a) => a.id).sort()).toEqual([won.id, lost.id].sort());
+    expect(archived.find((a) => a.id === won.id)).toMatchObject({
+      filterId: filter.id,
+      tokenId: winner.token.id,
+      mintAddress: `${TAG}-winner`,
+      symbol: "WINNER",
+      snapshotId: winner.snapshot.id,
+      snapshotMarketCapUsd: 20_000,
+      matchedAt: won.matchedAt,
+      peakReturnPct: 250,
+      hitHundredPctAt: won.hitHundredPctAt,
+      hit2xIn1h: true,
+      hit4xIn1h: false,
+    });
+    expect(archived.find((a) => a.id === lost.id)).toMatchObject({ alertMcapUsd: 21_000, hit2xIn1h: false });
+    // The snapshot sweep ran before the move, so the alert snapshots go on the next run.
+    expect(await prisma.tokenSnapshot.count({ where: { id: winner.snapshot.id } })).toBe(1);
+
+    const second = await runCleanupJob(env, { rowsPerBatch: 1, pauseMs: 0, fullSnapshotWalk: true });
+    expect(second.archivedMatches).toBe(0);
+    expect(
+      await prisma.tokenSnapshot.count({ where: { id: { in: [winner.snapshot.id, loser.snapshot.id] } } }),
+    ).toBe(0);
+    // The archived 2x keeps its coin for the Leaderboard's card; the other coin is swept.
+    expect(await prisma.token.findUnique({ where: { id: winner.token.id } })).not.toBeNull();
+    expect(await prisma.token.findUnique({ where: { id: loser.token.id } })).toBeNull();
+    expect(await prisma.matchArchive.count({ where: { userId: user.id } })).toBe(2);
+  });
+
+  it("is off at 0, and never archives inside the snapshot horizon", async () => {
+    const user = await prisma.user.create({ data: { walletAddress: WALLET } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id } });
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-young` } });
+    const snapshot = await prisma.tokenSnapshot.create({
+      data: { tokenId: token.id, priceUsd: 1, marketCapUsd: 20_000, takenAt: new Date() },
+    });
+    await prisma.match.create({
+      data: {
+        userId: user.id,
+        filterId: filter.id,
+        tokenId: token.id,
+        snapshotId: snapshot.id,
+        score: 60,
+        matchedAt: new Date(Date.now() - 20 * DAY),
+      },
+    });
+    const off = await runCleanupJob({ ...(env as object), MATCH_ARCHIVE_DAYS: 0 } as never, { pauseMs: 0 });
+    expect(off.archivedMatches).toBe(0);
+    // 10 days asked for, but a match is archived no sooner than SNAPSHOT_RETENTION_DAYS (30).
+    const early = await runCleanupJob({ ...(env as object), MATCH_ARCHIVE_DAYS: 10 } as never, {
+      pauseMs: 0,
+    });
+    expect(early.archivedMatches).toBe(0);
+    expect(await prisma.match.count({ where: { userId: user.id } })).toBe(1);
+  });
+});

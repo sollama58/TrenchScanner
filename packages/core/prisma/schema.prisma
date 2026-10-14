@@ -79,6 +79,7 @@ model User {
 
   filters           UserFilter[]
   matches           Match[]
+  archivedMatches   MatchArchive[]
   subscription      Subscription?
   burns             BurnEvent[]
   linkCodes         MobileLinkCode[]
@@ -349,8 +350,9 @@ model UserFilter {
   /// KEEP_IF_EVER_RANKED_WITHIN in apps/api/src/routes/filters.ts).
   deletedAt          DateTime?
 
-  matches   Match[]
-  baselines FilterBaseline[]
+  matches         Match[]
+  archivedMatches MatchArchive[]
+  baselines       FilterBaseline[]
 
   @@index([userId])
 }
@@ -1233,9 +1235,60 @@ model Match {
   @@index([filterId])
   @@index([snapshotId])
   // The match-peaks pass repairs rows by "peak recorded in the last few minutes" every cycle, and
-  // the peak passes pick matches by matchedAt; both scanned all of Match, which is never pruned.
+  // the peak passes pick matches by matchedAt; both scanned all of Match, which keeps every match
+  // until MATCH_ARCHIVE_DAYS (then MatchArchive).
   @@index([peakMcapAt])
   @@index([matchedAt])
+}
+
+/// Match rows older than MATCH_ARCHIVE_DAYS, moved here by the nightly cleanup (cleanupJob.ts,
+/// stage "matchArchive"; full audit 2026-10-14 F11, user decision P21). Match was never pruned, and
+/// every row pinned its alert-time TokenSnapshot and its Token against the sweeps. An archived row
+/// keeps what the track record reads - the verdict and peak columns, as on Match - with the alert
+/// snapshot's market cap and the coin's mint, symbol and name copied in, and no foreign key to
+/// Token or TokenSnapshot, so those age out on their own horizons. The two readers that look back
+/// past the archive age read this table too: the Leaderboard (all-time; the stale-token sweep keeps
+/// the Token of an archived row that qualified, for its card) and the hit-rate report (up to 180
+/// days). User and filter keep their cascades, so deleting either still deletes its history.
+model MatchArchive {
+  /// The Match row's own id.
+  id                   String     @id
+  userId               String
+  user                 User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  filterId             String
+  filter               UserFilter @relation(fields: [filterId], references: [id], onDelete: Cascade)
+  /// Plain values: the Token and its snapshots may be swept once the match is archived.
+  tokenId              String
+  mintAddress          String
+  symbol               String?
+  name                 String?
+  snapshotId           String
+  /// The alert-time snapshot's market cap (Match.snapshot.marketCapUsd), the baseline every peak
+  /// figure counts from when alertMcapUsd is null.
+  snapshotMarketCapUsd Float
+  matchedAt            DateTime
+  score                Float
+  deliveredDashboard   Boolean
+  peakMcapUsd          Float?
+  peakMcapAt           DateTime?
+  alertMcapUsd         Float?
+  peakReturnPct        Float?
+  hitHundredPctAt      DateTime?
+  candidateOutcomeId   String?
+  peak1hReturnPct      Float?
+  maxDrawdown1hPct     Float?
+  hit2xIn1h            Boolean?
+  hit4xIn1h            Boolean?
+  hit10xIn1h           Boolean?
+  disqualified         Boolean?
+  peak24hReturnPct     Float?
+  archivedAt           DateTime   @default(now())
+
+  @@index([userId, matchedAt])
+  @@index([filterId])
+  @@index([matchedAt])
+  /// The stale-token sweep's "an archived Leaderboard entry still shows this coin" check.
+  @@index([tokenId])
 }
 
 /// Caches a wallet's earliest-ever transaction timestamp, keyed by address - not scoped to any
