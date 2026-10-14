@@ -2,15 +2,20 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma, loadEnv, type Env } from "@trenchscanner/core";
-import { JobFailure } from "../scheduler.js";
+import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR } from "../scheduler.js";
 import {
+  clearedKeys,
   findProblems,
+  findTrainerProblems,
   notificationText,
   restartStep,
   runPipelineWatch,
+  TRAINER_JOBS,
+  trainerOverdueAfterMs,
   WATCH_ANNOUNCER,
   WATCHED_JOBS,
   type FlowCheck,
+  type TrainerJobCheck,
 } from "./pipelineWatchJob.js";
 
 const MIN = 60_000;
@@ -75,6 +80,135 @@ describe("pipeline watch: what counts as stalled", () => {
   });
 });
 
+const HOUR = 60 * MIN;
+
+/** A trainer job's row: ran `agoMs` before NOW, cleanly, on the given cadence. */
+const trainer = (
+  job: TrainerJobCheck["job"],
+  agoMs: number,
+  cadence: { intervalMs?: number; dailyAtHourUtc?: number },
+  extra: Partial<TrainerJobCheck> = {},
+): TrainerJobCheck => ({
+  job,
+  lastRunAt: new Date(NOW - agoMs),
+  lastSuccessAt: new Date(NOW - agoMs),
+  lastError: null,
+  intervalMs: cadence.intervalMs ?? null,
+  dailyAtHourUtc: cadence.dailyAtHourUtc ?? null,
+  ...extra,
+});
+
+describe("pipeline watch: the trainer's jobs", () => {
+  it("watches every trainer job and none of the scanner's", () => {
+    expect(TRAINER_JOBS).toEqual(
+      expect.arrayContaining([
+        "cleanup",
+        "outcome-tracking",
+        "curator-training",
+        "ai-judge",
+        "model-backup",
+        "label-regrade",
+        "wallet-risk",
+        "kol-side-wallets",
+      ]),
+    );
+    for (const job of WATCHED_JOBS) expect(TRAINER_JOBS).not.toContain(job);
+  });
+
+  it("gives each job room for its own schedule", () => {
+    expect(trainerOverdueAfterMs({ intervalMs: null, dailyAtHourUtc: 4 })).toBe(27 * HOUR);
+    expect(trainerOverdueAfterMs({ intervalMs: HOUR, dailyAtHourUtc: null })).toBe(4 * HOUR);
+    // Training every 6 hours: two intervals and room for a long run.
+    expect(trainerOverdueAfterMs({ intervalMs: 6 * HOUR, dailyAtHourUtc: null })).toBe(14 * HOUR);
+    // No cadence on the row: the longest guess, never a false alarm.
+    expect(trainerOverdueAfterMs({ intervalMs: null, dailyAtHourUtc: null })).toBe(27 * HOUR);
+  });
+
+  it("flags a job that stopped running, and leaves one on schedule alone", () => {
+    const problems = findTrainerProblems(
+      [
+        trainer("cleanup", 25 * HOUR, { dailyAtHourUtc: 4 }),
+        trainer("outcome-tracking", 30 * HOUR, { dailyAtHourUtc: 5 }),
+        trainer("curator-training", 13 * HOUR, { intervalMs: 6 * HOUR }),
+        trainer("wallet-risk", 5 * HOUR, { intervalMs: HOUR }),
+        trainer("ai-judge", 15 * MIN, { intervalMs: 10 * MIN }),
+        // Never ran here: nothing to judge.
+        { ...trainer("model-backup", 0, {}), lastRunAt: null, lastSuccessAt: null },
+      ],
+      NOW,
+    );
+    expect(problems.map((p) => p.key)).toEqual(["job:outcome-tracking", "job:wallet-risk"]);
+    expect(problems.every((p) => p.trainer)).toBe(true);
+    expect(problems[0]!.text).toBe("Trainer job outcome-tracking: no run for 30 h");
+  });
+
+  it("takes a skipped run (the AI judge with no key) as the job being alive", () => {
+    expect(findTrainerProblems([trainer("ai-judge", 10 * MIN, { intervalMs: 10 * MIN })], NOW)).toEqual([]);
+  });
+
+  it("flags a failed run, but not one a deploy or an admin cut short", () => {
+    const failed = trainer(
+      "wallet-risk",
+      10 * MIN,
+      { intervalMs: HOUR },
+      { lastSuccessAt: new Date(NOW - 2 * HOUR), lastError: "Timed out fetching a connection\nstack" },
+    );
+    const cut = trainer(
+      "curator-training",
+      10 * MIN,
+      { intervalMs: 6 * HOUR },
+      { lastSuccessAt: new Date(NOW - 6 * HOUR), lastError: SHUTDOWN_INTERRUPTED_ERROR },
+    );
+    const problems = findTrainerProblems([failed, cut], NOW);
+    expect(problems).toEqual([
+      {
+        key: "failed:wallet-risk",
+        text: "Trainer job wallet-risk: last run failed: Timed out fetching a connection",
+        trainer: true,
+      },
+    ]);
+  });
+
+  it("tells each night's partial cleanup failure once, under that night's key", () => {
+    const night = (day: number) =>
+      trainer(
+        "cleanup",
+        0,
+        { dailyAtHourUtc: 4 },
+        {
+          lastRunAt: new Date(Date.UTC(2026, 9, day, 4, 20)),
+          lastSuccessAt: new Date(Date.UTC(2026, 9, day, 4, 20)),
+          lastError: "matchOutcomeCopies: canceling statement due to statement timeout",
+        },
+      );
+    const first = findTrainerProblems([night(8)], NOW);
+    expect(first.map((p) => p.key)).toEqual(["failed:cleanup@2026-10-08"]);
+    expect(first[0]!.text).toContain("last run partly failed: matchOutcomeCopies");
+    // The next night fails again: a new key, so a new notice; the old one is not "flowing again".
+    const second = findTrainerProblems([night(9)], NOW + 24 * HOUR);
+    expect(second.map((p) => p.key)).toEqual(["failed:cleanup@2026-10-09"]);
+    expect(
+      clearedKeys(new Set(["failed:cleanup@2026-10-08"]), new Set(["failed:cleanup@2026-10-09"])),
+    ).toEqual([]);
+    // A clean night clears it.
+    expect(clearedKeys(new Set(["failed:cleanup@2026-10-09", "job:scan"]), new Set())).toEqual([
+      "failed:cleanup@2026-10-09",
+      "job:scan",
+    ]);
+  });
+
+  it("words a trainer notice apart from a pipeline stall", () => {
+    const text = notificationText(
+      [{ key: "job:cleanup", text: "Trainer job cleanup: no run for 30 h", trainer: true }],
+      [],
+      [{ key: "job:cleanup", text: "...", trainer: true }],
+    );
+    expect(text).toContain("trainer needs a look");
+    expect(text).not.toContain("pipeline stalled");
+    expect(text).toContain("no run for 30 h");
+  });
+});
+
 describe("pipeline watch: restarting on a long stall", () => {
   it("warns at 5 minutes, warns again and restarts at 9, then holds off", () => {
     expect(restartStep(null, 0, null, NOW)).toBe("none");
@@ -118,7 +252,8 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
 
   beforeEach(async () => {
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
-    await prisma.systemHeartbeat.deleteMany({ where: { job: "pipeline-watch" } });
+    // Trainer rows other test files left behind would read as overdue trainer jobs here.
+    await prisma.systemHeartbeat.deleteMany({ where: { job: { in: [...TRAINER_JOBS, "pipeline-watch"] } } });
     await prisma.announcement.deleteMany({ where: { createdBy: WATCH_ANNOUNCER } });
   });
   afterAll(async () => {
@@ -235,6 +370,58 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
       lastRestartAt,
     });
     await prisma.user.delete({ where: { id: user.id } });
+  });
+
+  it("tells the admins about a trainer job once, with no banner and no restart", async () => {
+    const now = Date.now();
+    const wallet = `${TAG}-admin3`;
+    const user = await prisma.user.create({ data: { walletAddress: wallet } });
+    await prisma.telegramChat.create({
+      data: { chatId: BigInt(now) + 11n, kind: "private", userId: user.id },
+    });
+    // Every flow quiet-or-flowing: only the trainer job is wrong.
+    await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.tokenNarrative.create({
+      data: { mintAddress: `${TAG}-g`, depth: "basic", status: "complete", checkedAt: new Date(now - MIN) },
+    });
+    await jobsRanAt(now);
+    try {
+      await prisma.systemHeartbeat.create({
+        data: {
+          job: "cleanup",
+          lastRunAt: new Date(now - 30 * 3_600_000),
+          lastSuccessAt: new Date(now - 30 * 3_600_000),
+          meta: { dailyAtHourUtc: 4 },
+        },
+      });
+      const restart = vi.fn();
+      const sendMessage = vi.fn().mockResolvedValue({ ok: true, result: {} });
+      const run = async (at: number) => {
+        const out = await runPipelineWatch(
+          { ...env, ADMIN_WALLET_ADDRESSES: wallet },
+          { now: at, telegram: { sendMessage }, restart },
+        ).catch((e: unknown) => e);
+        const meta = out instanceof JobFailure ? out.meta : (out as Record<string, unknown>);
+        await prisma.systemHeartbeat.upsert({
+          where: { job: "pipeline-watch" },
+          create: { job: "pipeline-watch", lastRunAt: new Date(at), meta: meta as object },
+          update: { lastRunAt: new Date(at), meta: meta as object },
+        });
+        return meta;
+      };
+      expect(await run(now)).toMatchObject({ stalledKeys: "job:cleanup", stalledSince: null, warned: 0 });
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(String(sendMessage.mock.calls[0]![1])).toContain("Trainer job cleanup: no run for 30 h");
+      // Minutes on, still overdue: no second message, and never a banner or a restart.
+      await jobsRanAt(now + 10 * MIN);
+      await run(now + 10 * MIN);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(restart).not.toHaveBeenCalled();
+      expect(await prisma.announcement.count({ where: { createdBy: WATCH_ANNOUNCER } })).toBe(0);
+    } finally {
+      await prisma.systemHeartbeat.deleteMany({ where: { job: "cleanup" } });
+      await prisma.user.delete({ where: { id: user.id } });
+    }
   });
 
   it("warns visitors, restarts once, and takes the banner down when it flows again", async () => {

@@ -3,12 +3,13 @@ import {
   adminWalletSet,
   createLogger,
   escapeHtml,
+  HEARTBEAT_JOB_ROLE,
   runningSinceFrom,
   TelegramApi,
   type Env,
   type HeartbeatJob,
 } from "@trenchscanner/core";
-import { JobFailure, type JobRunMeta } from "../scheduler.js";
+import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR, STOPPED_ERROR, type JobRunMeta } from "../scheduler.js";
 import { exitForRestart } from "../processExit.js";
 
 const logger = createLogger("pipeline-watch");
@@ -27,6 +28,11 @@ const logger = createLogger("pipeline-watch");
  * A flagged stage makes the run fail with a message naming it, so it shows as this job's error
  * on /health/worker and on the admin panel, and the admin wallets' private Telegram chats get one
  * message when it starts and one when it clears.
+ *
+ * The trainer's jobs are watched from here too: the trainer has no Telegram token to say anything
+ * itself, and a trainer that stopped quietly freezes the models and lets the nightly sweeps lapse
+ * (the disk-full incidents). Those only notify the admins - restarting the scanner would not
+ * help them, and visitors' alerts are not delayed by them.
  */
 
 export interface FlowCheck {
@@ -77,6 +83,100 @@ const JOB_HUNG_MS = 15 * 60_000;
 export interface Problem {
   key: string;
   text: string;
+  /** A trainer job's problem: notified, but not a stall of the alert path (no banner, no restart). */
+  trainer?: boolean;
+}
+
+/** The jobs the trainer process runs (see HEARTBEAT_JOB_ROLE), all watched from here. */
+export const TRAINER_JOBS: HeartbeatJob[] = (Object.keys(HEARTBEAT_JOB_ROLE) as HeartbeatJob[]).filter(
+  (job) => HEARTBEAT_JOB_ROLE[job] === "trainer",
+);
+
+export interface TrainerJobCheck {
+  job: HeartbeatJob;
+  lastRunAt: Date | null;
+  lastSuccessAt: Date | null;
+  lastError: string | null;
+  /** The cadence an interval job reported (scheduler meta.intervalMs). */
+  intervalMs: number | null;
+  /** A daily job's slot (scheduler meta.dailyAtHourUtc). */
+  dailyAtHourUtc: number | null;
+}
+
+const HOUR_MS = 3_600_000;
+/**
+ * A daily job (cleanup, outcome-tracking) is overdue a day and three hours after its last run: the
+ * slot's own run takes up to half an hour, and a boot's catch-up or a failed run's retries only
+ * ever move the next run earlier.
+ */
+const TRAINER_DAILY_OVERDUE_MS = 27 * HOUR_MS;
+/**
+ * An interval job is overdue after two of its intervals plus this: room for one missed slot and
+ * a long run (training's deadline is 90 minutes), so a deploy never reads as a stopped trainer.
+ */
+const TRAINER_INTERVAL_SLACK_MS = 2 * HOUR_MS;
+/** Errors that say a person or a deploy cut the run, not that the job is failing. */
+const BENIGN_TRAINER_ERRORS = [SHUTDOWN_INTERRUPTED_ERROR, STOPPED_ERROR];
+const TRAINER_ERROR_LENGTH = 200;
+
+/**
+ * How long a trainer job may go without a run before it is called overdue, from the cadence its
+ * own heartbeat reports. A row with neither (a run its deadline cut writes no cadence) gets the
+ * daily figure: past every interval the trainer runs on by default, so the guess errs late.
+ */
+export function trainerOverdueAfterMs(j: Pick<TrainerJobCheck, "intervalMs" | "dailyAtHourUtc">): number {
+  if (j.dailyAtHourUtc !== null || j.intervalMs === null || j.intervalMs <= 0)
+    return TRAINER_DAILY_OVERDUE_MS;
+  return 2 * j.intervalMs + TRAINER_INTERVAL_SLACK_MS;
+}
+
+/**
+ * Pure: the trainer jobs that are overdue or whose last run failed. A skipped run (the AI judge
+ * with no API key, "reviewer off") is a run, so a job that is off on purpose never alarms. A failed
+ * run's key is the job's for an interval job, so a run of failures is one notice and its recovery
+ * another; for a daily job it carries the run's day, so each night's failure (a cleanup stage that
+ * failed while the rest ran, kept as lastError - PartialJobFailure) is told once, and only once.
+ */
+export function findTrainerProblems(jobs: TrainerJobCheck[], now: number): Problem[] {
+  const out: Problem[] = [];
+  for (const j of jobs) {
+    if (j.lastRunAt === null) continue;
+    const since = now - j.lastRunAt.getTime();
+    if (since > trainerOverdueAfterMs(j)) {
+      out.push({
+        key: `job:${j.job}`,
+        text: `Trainer job ${j.job}: no run for ${formatAge(since)}`,
+        trainer: true,
+      });
+    }
+    const error = j.lastError;
+    if (error === null || BENIGN_TRAINER_ERRORS.some((e) => error.startsWith(e))) continue;
+    // A PartialJobFailure is recorded as a success, so its lastSuccessAt is the run's own time.
+    const partial = j.lastSuccessAt !== null && j.lastSuccessAt.getTime() >= j.lastRunAt.getTime();
+    const day = j.dailyAtHourUtc !== null ? `@${j.lastRunAt.toISOString().slice(0, 10)}` : "";
+    const firstLine = (error.split("\n")[0] ?? "").slice(0, TRAINER_ERROR_LENGTH);
+    out.push({
+      key: `failed:${j.job}${day}`,
+      text: `Trainer job ${j.job}: ${partial ? "last run partly failed" : "last run failed"}: ${firstLine}`,
+      trainer: true,
+    });
+  }
+  return out;
+}
+
+/** "50 min", or "27 h" once it is past two hours. */
+function formatAge(ms: number): string {
+  return ms < 2 * HOUR_MS ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / HOUR_MS)} h`;
+}
+
+/**
+ * The keys that cleared, less a failed daily run's that a newer day's failure of the same job took
+ * over: that one is not "flowing again", the new notice says what it is now.
+ */
+export function clearedKeys(before: Set<string>, now: Set<string>): string[] {
+  const base = (key: string) => key.split("@")[0];
+  const current = new Set([...now].map(base));
+  return [...before].filter((k) => !now.has(k) && !(k.includes("@") && current.has(base(k))));
 }
 
 /**
@@ -166,6 +266,23 @@ async function readJobs(): Promise<JobCheck[]> {
   });
 }
 
+async function readTrainerJobs(): Promise<TrainerJobCheck[]> {
+  const rows = await prisma.systemHeartbeat.findMany({ where: { job: { in: TRAINER_JOBS } } });
+  return TRAINER_JOBS.map((job) => {
+    const row = rows.find((r) => r.job === job);
+    const meta = (row?.meta ?? null) as Record<string, unknown> | null;
+    const num = (k: string) => (meta && typeof meta[k] === "number" ? (meta[k] as number) : null);
+    return {
+      job,
+      lastRunAt: row?.lastRunAt ?? null,
+      lastSuccessAt: row?.lastSuccessAt ?? null,
+      lastError: row?.lastError ?? null,
+      intervalMs: num("intervalMs"),
+      dailyAtHourUtc: num("dailyAtHourUtc"),
+    };
+  });
+}
+
 async function oldestChatCursor(): Promise<Date | null> {
   const row = await prisma.telegramChat.findFirst({
     where: { enabled: true, revokedAt: null },
@@ -217,9 +334,16 @@ async function adminChats(env: Env): Promise<bigint[]> {
 
 export function notificationText(started: Problem[], cleared: string[], still: Problem[]): string {
   const lines: string[] = [];
-  if (started.length > 0) {
+  const stalled = started.filter((p) => !p.trainer);
+  const trainer = started.filter((p) => p.trainer);
+  if (stalled.length > 0) {
     lines.push("<b>⚠️ TrenchScanner pipeline stalled</b>");
-    for (const p of started) lines.push(`• ${escapeHtml(p.text)}`);
+    for (const p of stalled) lines.push(`• ${escapeHtml(p.text)}`);
+  }
+  if (trainer.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("<b>⚠️ TrenchScanner trainer needs a look</b>");
+    for (const p of trainer) lines.push(`• ${escapeHtml(p.text)}`);
   }
   if (cleared.length > 0) {
     if (lines.length > 0) lines.push("");
@@ -346,19 +470,26 @@ async function watchOnce(
   const now = deps.now ?? Date.now();
   const before = await previousState();
   remember(before);
-  const [flows, jobs, cursor] = await Promise.all([countFlows(now), readJobs(), oldestChatCursor()]);
-  const problems = findProblems(flows, jobs, now, cursor);
+  const [flows, jobs, trainerJobs, cursor] = await Promise.all([
+    countFlows(now),
+    readJobs(),
+    readTrainerJobs(),
+    oldestChatCursor(),
+  ]);
+  const problems = [...findProblems(flows, jobs, now, cursor), ...findTrainerProblems(trainerJobs, now)];
+  // Only the alert path's own problems are a stall: they alone start the clock towards the
+  // visitors' banner and the scanner restart, neither of which a trainer job's problem calls for.
+  const stalls = problems.filter((p) => !p.trainer);
   const keys = new Set(problems.map((p) => p.key));
   const started = problems.filter((p) => !before.keys.has(p.key));
-  const cleared = [...before.keys].filter((k) => !keys.has(k));
-  const stalledSince =
-    problems.length === 0 ? null : before.keys.size > 0 ? (before.stalledSince ?? now) : now;
-  let warned = problems.length === 0 ? 0 : before.warned;
+  const cleared = clearedKeys(before.keys, keys);
+  const stalledSince = stalls.length === 0 ? null : (before.stalledSince ?? now);
+  let warned = stalls.length === 0 ? 0 : before.warned;
   let lastRestartAt = before.lastRestartAt;
 
   const notices: string[] = [];
   if (started.length > 0 || cleared.length > 0) notices.push(notificationText(started, cleared, problems));
-  if (problems.length === 0 && before.keys.size > 0) await endBanners(now);
+  if (stalls.length === 0 && before.stalledSince !== null) await endBanners(now);
 
   // From here on a failure keeps this run's warning level and any restart it scheduled. The
   // stalled keys stay the previous run's until the notices go out, so a failed send is retried.
