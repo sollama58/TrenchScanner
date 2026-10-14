@@ -2569,7 +2569,24 @@ legend {
 }
 .side-head {
   padding: 0 8px 6px;
+  /* Room for each row's wallet profile button. */
+  margin-right: 40px;
   border-bottom: 1px solid var(--border);
+}
+.side-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.side-line .side-row {
+  flex: 1;
+  min-width: 0;
+}
+.side-profile {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  color: var(--muted);
 }
 .side-list,
 .side-sides {
