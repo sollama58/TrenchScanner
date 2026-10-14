@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WALLET_LINKS, walletFromUrl, walletLink } from "./walletModal";
+import { WALLET_LINKS, walletFromUrl, walletLink, xSearchLink } from "./walletModal";
 
 const W = "Wa11et1111111111111111111111111111111111111";
 
@@ -18,5 +18,9 @@ describe("wallet modal URL", () => {
 
   it("puts the wallet in every outside link", () => {
     for (const l of WALLET_LINKS) expect(l.href(W)).toContain(W);
+  });
+
+  it("searches X for the address, top posts first", () => {
+    expect(xSearchLink(W)).toBe(`https://x.com/search?q=${W}&f=top`);
   });
 });

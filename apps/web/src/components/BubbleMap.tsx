@@ -4,6 +4,7 @@ import { cachedGet } from "../cache";
 import { ago, pct, shortAddress, tokenLabel } from "../format";
 import {
   bubbleNameLines,
+  showsPct,
   cexSlots,
   CEX_COLOURS,
   cexGroupsOf,
@@ -373,6 +374,9 @@ function MapView({
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
+  // The group under the map whose wallets are listed open: "c:", "x:" or "t:" and its key.
+  const [listed, setListed] = useState<string | null>(null);
+  const toggleList = (key: string) => setListed((k) => (k === key ? null : key));
   const node = graph.nodes.find((n) => n.id === picked) ?? null;
   // A picked bubble's cluster lights up; so does a cluster picked from the list.
   const lit = node ? node.cluster : focus;
@@ -502,15 +506,18 @@ function MapView({
       <NodeDetail node={node} graph={graph} names={names} sides={sides} />
       <ul className="bm-clusters">
         {graph.clusters.map((c, i) => (
-          <li key={c.funder}>
+          <li key={c.funder} className={listed === `c:${c.funder}` ? "bm-open" : undefined}>
             <button
               type="button"
               className={`bm-cluster${lit === i ? " on" : ""}`}
               style={{ "--bm": `var(--bm-${i % CLUSTER_COLOURS})` } as React.CSSProperties}
               aria-pressed={lit === i}
+              aria-expanded={listed === `c:${c.funder}`}
               onClick={() => {
+                const open = listed !== `c:${c.funder}`;
                 setPicked(null);
-                setFocus((f) => (f === i ? null : i));
+                setFocus(open ? i : null);
+                setListed(open ? `c:${c.funder}` : null);
               }}
             >
               <i className="bm-dot" aria-hidden="true" />
@@ -522,15 +529,21 @@ function MapView({
               </span>
               <span className="num bm-cluster-pct">{pct(c.pct, 1)}</span>
             </button>
+            {listed === `c:${c.funder}` && (
+              <GroupWallets wallets={c.wallets} names={names} funder={c.funder} />
+            )}
           </li>
         ))}
       </ul>
       {showCex && (
         <ul className="bm-clusters bm-cex-groups">
           {cexGroupsOf(graph).map((g, i) => (
-            <li key={g.funder}>
-              <div
-                className="bm-cluster bm-same"
+            <li key={g.funder} className={listed === `x:${g.funder}` ? "bm-open" : undefined}>
+              <button
+                type="button"
+                className={`bm-cluster bm-same${listed === `x:${g.funder}` ? " on" : ""}`}
+                aria-expanded={listed === `x:${g.funder}`}
+                onClick={() => toggleList(`x:${g.funder}`)}
                 style={
                   {
                     "--bm": "var(--bm-none)",
@@ -544,7 +557,14 @@ function MapView({
                 </span>
                 <span className="muted small">{g.nodes.length} wallets it funded</span>
                 <span className="num bm-cluster-pct">{pct(g.pct, 1)}</span>
-              </div>
+              </button>
+              {listed === `x:${g.funder}` && (
+                <GroupWallets
+                  wallets={g.nodes.flatMap((n) => (n.wallet ? [{ wallet: n.wallet, pct: n.pct }] : []))}
+                  names={names}
+                  funder={g.funder}
+                />
+              )}
             </li>
           ))}
         </ul>
@@ -571,10 +591,13 @@ function MapView({
       {graph.sameTimeGroups.length > 0 && (
         <ul className="bm-clusters bm-same-groups">
           {graph.sameTimeGroups.map((g, i) => (
-            <li key={g.atMs}>
-              <div
-                className="bm-cluster bm-same"
+            <li key={g.atMs} className={listed === `t:${g.atMs}` ? "bm-open" : undefined}>
+              <button
+                type="button"
+                className={`bm-cluster bm-same${listed === `t:${g.atMs}` ? " on" : ""}`}
                 style={{ "--bm": `var(--bm-${sameTimeSlot(graph, i)})` } as React.CSSProperties}
+                aria-expanded={listed === `t:${g.atMs}`}
+                onClick={() => toggleList(`t:${g.atMs}`)}
               >
                 <i className="bm-same-dot" aria-hidden="true" />
                 <span className="bm-cluster-name">
@@ -585,7 +608,8 @@ function MapView({
                   {sameTimeFunders(g)}
                 </span>
                 <span className="num bm-cluster-pct">{pct(g.pct, 1)}</span>
-              </div>
+              </button>
+              {listed === `t:${g.atMs}` && <GroupWallets wallets={g.wallets} names={names} />}
             </li>
           ))}
         </ul>
@@ -607,6 +631,44 @@ function MapView({
         </p>
       )}
     </>
+  );
+}
+
+/**
+ * The wallets in a group under the map, largest first, each with its share of supply and opening
+ * its own wallet modal; the funder that paid for them last (user ask 2026-10-14).
+ */
+function GroupWallets({
+  wallets,
+  names,
+  funder,
+}: {
+  wallets: readonly { wallet: string; pct: number }[];
+  names: WalletNames;
+  funder?: string;
+}) {
+  const rows = [...wallets].sort((a, b) => b.pct - a.pct);
+  return (
+    <ol className="bm-group-wallets">
+      {rows.map((w) => (
+        <li key={w.wallet}>
+          <button type="button" onClick={() => openWallet(w.wallet)} title="Open this wallet">
+            <WalletText wallet={w.wallet} names={names} />
+            <span className="num">{pctText(w.pct)}</span>
+          </button>
+        </li>
+      ))}
+      {funder && (
+        <li className="bm-group-funder">
+          <button type="button" onClick={() => openWallet(funder)} title="Open the funder">
+            <span>
+              <span className="muted">Funder</span> <WalletText wallet={funder} names={names} />
+            </span>
+            <span className="muted small">paid for them</span>
+          </button>
+        </li>
+      )}
+    </ol>
   );
 }
 
@@ -947,7 +1009,9 @@ function Bubble({
   }
   const flaggedRisk = n.flags.some((f) => f !== "creator");
   const dev = n.flags.includes("creator");
-  const fontSize = Math.max(8, Math.min(17, n.r * 0.46));
+  // Every bubble down to 0.1% of supply carries its amount; under 1% in smaller type (user ask 2026-10-14).
+  const showPct = showsPct(n.pct);
+  const fontSize = n.pct < 1 ? Math.max(6, Math.min(7.5, n.r * 0.44)) : Math.max(8, Math.min(17, n.r * 0.46));
   const bx = n.x + n.r * 0.72;
   const by = n.y - n.r * 0.72;
   const named = n.wallet ? names[n.wallet] : undefined;
@@ -983,8 +1047,8 @@ function Bubble({
         className="bm-gloss"
       />
       {n.hub && <circle cx={n.x} cy={n.y} r={n.r - 3.5} className="bm-hub-ring" />}
-      {n.r >= 17 && (
-        <text x={n.x} y={n.r >= 17 ? pctY : n.y} className="bm-pct" style={{ fontSize }}>
+      {showPct && (
+        <text x={n.x} y={fit ? pctY : n.y} className="bm-pct" style={{ fontSize }}>
           {pctText(n.pct)}
         </text>
       )}
@@ -998,13 +1062,13 @@ function Bubble({
             <rect
               className="bm-name-bg"
               x={n.x - fit.w / 2 - 4}
-              y={(n.r >= 17 ? nameY : n.y) - fit.size * 0.7}
+              y={(showPct ? nameY : n.y) - fit.size * 0.7}
               width={fit.w + 8}
               height={fit.lines.length * lineH + fit.size * 0.35}
               rx={4}
             />
           )}
-          <text x={n.x} y={n.r >= 17 ? nameY : n.y}>
+          <text x={n.x} y={showPct ? nameY : n.y}>
             {fit.lines.map((line, i) => (
               <tspan key={i} x={n.x} dy={i === 0 ? 0 : lineH}>
                 {line}
@@ -1089,7 +1153,7 @@ function NodeDetail({
     return (
       <p className="bm-detail muted small">
         {graph.clusters.length > 0
-          ? "Tap a bubble to open that wallet, or a cluster below to light it up."
+          ? "Tap a bubble to open that wallet, or a cluster below to light it up and list its wallets."
           : graph.linkedPct === 0
             ? "No two of these holders share a funder. Tap a bubble to open that wallet."
             : "Tap a bubble to open that wallet."}

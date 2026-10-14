@@ -56,6 +56,11 @@ export function useWalletAddress(): string | null {
   return wallet;
 }
 
+/** X's search for a wallet's address, sorted by Top (user ask 2026-10-14): who has posted it. */
+export function xSearchLink(wallet: string): string {
+  return `https://x.com/search?q=${encodeURIComponent(wallet)}&f=top`;
+}
+
 /** Outside links for a wallet: explorers and trackers that show it. */
 export const WALLET_LINKS: { label: string; href: (w: string) => string }[] = [
   { label: "Solscan", href: (w) => `https://solscan.io/account/${w}` },
