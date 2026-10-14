@@ -891,3 +891,56 @@ describe.skipIf(!dbAvailable)("runCleanupJob: match archive", () => {
     expect(await prisma.match.count({ where: { userId: user.id } })).toBe(1);
   });
 });
+
+/**
+ * A run cut off by a deploy: the next boot's catch-up skips the stages it already finished, so a
+ * trainer restarting every few minutes still gets through the whole sweep over a few attempts.
+ */
+describe.skipIf(!dbAvailable)("runCleanupJob: resuming a cut-off run", () => {
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 3650,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
+    STALE_TOKEN_RETENTION_DAYS: 3650,
+  } as never;
+  const hour = 3_600_000;
+
+  const setResume = (startedAt: Date, done: string[]) =>
+    prisma.systemHeartbeat.upsert({
+      where: { job: "cleanup" },
+      create: {
+        job: "cleanup",
+        lastRunAt: startedAt,
+        meta: { cleanupResume: { startedAt: startedAt.toISOString(), done } },
+      },
+      update: { meta: { cleanupResume: { startedAt: startedAt.toISOString(), done } } },
+    });
+  const resumeState = async () => {
+    const row = await prisma.systemHeartbeat.findUnique({ where: { job: "cleanup" } });
+    return (row?.meta as Record<string, unknown> | null)?.cleanupResume ?? null;
+  };
+
+  beforeEach(async () => {
+    await prisma.systemHeartbeat.deleteMany({ where: { job: "cleanup" } });
+  });
+  afterAll(async () => {
+    await prisma.systemHeartbeat.deleteMany({ where: { job: "cleanup" } });
+  });
+
+  it("skips the stages a recent cut-off run finished, then clears the note", async () => {
+    await setResume(new Date(Date.now() - hour), ["snapshots", "matchOutcomeCopies", "nonces"]);
+
+    const meta = (await runCleanupJob(env)) as Record<string, unknown>;
+
+    expect(meta.resumedSkippedStages).toBe("snapshots, matchOutcomeCopies, nonces");
+    expect(await resumeState()).toBeNull();
+  });
+
+  it("starts from the first stage when the cut-off run is from an earlier night", async () => {
+    await setResume(new Date(Date.now() - 22 * hour), ["snapshots"]);
+
+    const meta = (await runCleanupJob(env)) as Record<string, unknown>;
+
+    expect(meta.resumedSkippedStages).toBeUndefined();
+    expect(await resumeState()).toBeNull();
+  });
+});

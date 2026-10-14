@@ -75,6 +75,45 @@ const DEFAULT_BATCH: Required<Omit<CleanupOptions, "fullSnapshotWalk">> = {
 };
 type BatchOptions = typeof DEFAULT_BATCH;
 
+/**
+ * How long a cut-off run's finished stages stay finished. The trainer restarts on every deploy that
+ * touches it, and on 2026-10-14 it restarted often enough that the nightly sweep, started again
+ * from its first stage after each boot, never reached its last ones. So each stage that completes
+ * is noted on the cleanup heartbeat row, and a run that starts within this window of the cut one
+ * skips what that run already finished. Under a day, so the next night's run always does every
+ * stage.
+ */
+const RESUME_WINDOW_MS = 20 * 3_600_000;
+const RESUME_KEY = "cleanupResume";
+
+interface ResumeState {
+  startedAt: string;
+  done: string[];
+}
+
+/** The finished stages of a cut-off run that started within RESUME_WINDOW_MS, if any. */
+async function readResumeState(now: number): Promise<ResumeState | null> {
+  const row = await prisma.systemHeartbeat.findUnique({ where: { job: "cleanup" }, select: { meta: true } });
+  const meta = row?.meta;
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
+  const raw = (meta as Record<string, unknown>)[RESUME_KEY];
+  if (typeof raw !== "object" || raw === null) return null;
+  const { startedAt, done } = raw as Partial<ResumeState>;
+  if (typeof startedAt !== "string" || !Array.isArray(done)) return null;
+  const at = new Date(startedAt).getTime();
+  if (!Number.isFinite(at) || now - at > RESUME_WINDOW_MS || at > now) return null;
+  return { startedAt, done: done.filter((d): d is string => typeof d === "string") };
+}
+
+/** Notes the stages finished so far on the heartbeat row; leaves the rest of meta alone. */
+async function writeResumeState(state: ResumeState | null): Promise<void> {
+  const patch = state === null ? `{"${RESUME_KEY}": null}` : JSON.stringify({ [RESUME_KEY]: state });
+  await prisma.$executeRaw`
+    UPDATE "SystemHeartbeat"
+    SET meta = COALESCE(meta, '{}'::jsonb) || ${patch}::jsonb
+    WHERE job = 'cleanup'`;
+}
+
 const sleep = (ms: number) => (ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve());
 
 /**
@@ -435,10 +474,30 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // reported at the end, on the heartbeat's lastError - see the end of the run.
   const failedStages: Record<string, string> = {};
   let stagesRun = 0;
-  const stage = async <T>(name: string, fallback: T, run: () => Promise<T>): Promise<T> => {
+  // A run cut off earlier (a deploy, a restart) leaves the stages it finished on the heartbeat
+  // row; this run skips those and picks up from the first one it didn't - see RESUME_WINDOW_MS.
+  // Every stage is an idempotent sweep, so a skipped one only waits for tomorrow's run.
+  const resumed = await readResumeState(startedAt).catch(() => null);
+  const progress: ResumeState = resumed ?? { startedAt: new Date(startedAt).toISOString(), done: [] };
+  const skippedStages = [...progress.done];
+  if (resumed)
+    logger.info("resuming a cut-off cleanup run", { startedAt: resumed.startedAt, done: resumed.done });
+  /** `whenDone` is what a stage the cut-off run already finished stands in as (its fallback by default). */
+  const stage = async <T>(
+    name: string,
+    fallback: T,
+    run: () => Promise<T>,
+    whenDone: T = fallback,
+  ): Promise<T> => {
+    if (progress.done.includes(name)) return whenDone;
     stagesRun += 1;
     try {
-      return await run();
+      const result = await run();
+      progress.done.push(name);
+      await writeResumeState(progress).catch((err: unknown) =>
+        logger.warn("failed to note cleanup progress", { stage: name, error: String(err) }),
+      );
+      return result;
     } catch (err) {
       failedStages[name] = err instanceof Error ? err.message : String(err);
       logger.error("cleanup stage failed - continuing with the rest", { stage: name, error: String(err) });
@@ -491,8 +550,11 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     env.MATCH_OUTCOME_RETENTION_DAYS > 0 && matchOutcomeCutoff > candidateOutcomeCutoff
       ? matchOutcomeCutoff
       : candidateOutcomeCutoff;
-  const matchCopiesLanded = await stage("matchOutcomeCopies", false, async () => {
-    await prisma.$executeRaw`
+  const matchCopiesLanded = await stage(
+    "matchOutcomeCopies",
+    false,
+    async () => {
+      await prisma.$executeRaw`
       UPDATE "Match" m
       SET "peak24hReturnPct" = o."peak24hReturnPct"
       FROM "CandidateOutcome" o
@@ -500,11 +562,11 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         AND o."peak24hReturnPct" IS NOT NULL
         AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
         AND m."peak24hReturnPct" IS NULL`;
-    // The verdict too, for an alert whose copy never landed (a crash between the old split writes,
-    // or an anchor attached after its window closed). The watcher repairs curated alerts this
-    // way every sweep; match alerts had no such pass, and once the anchor below was gone the
-    // alert counted as pending in every hit rate forever.
-    await prisma.$executeRaw`
+      // The verdict too, for an alert whose copy never landed (a crash between the old split writes,
+      // or an anchor attached after its window closed). The watcher repairs curated alerts this
+      // way every sweep; match alerts had no such pass, and once the anchor below was gone the
+      // alert counted as pending in every hit rate forever.
+      await prisma.$executeRaw`
       UPDATE "Match" m
       SET "hit2xIn1h" = o."hit2xIn1h",
           "hit4xIn1h" = o."hit4xIn1h",
@@ -517,8 +579,10 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         AND o."finalizedAt" IS NOT NULL
         AND m."tokenId" = o."tokenId" AND m."candidateOutcomeId" = o."id"
         AND (m."hit2xIn1h" IS NULL OR (m."hit10xIn1h" IS NULL AND o."hit10xIn1h" IS NOT NULL))`;
-    return true;
-  });
+      return true;
+    },
+    true,
+  );
   // Matches older than MATCH_ARCHIVE_DAYS move to MatchArchive (user decision P21), and with them
   // the pin they held on their alert snapshot and their Token. Only once the copies above landed,
   // so every archived row carries its verdict and run peak, and never inside the snapshot horizon,
@@ -854,6 +918,9 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     strippedNarrativeDocs,
     strippedUntrackedNarrativeDocs,
   };
+  // The run reached its end: tomorrow's starts from the first stage again.
+  await writeResumeState(null).catch(() => {});
+  if (skippedStages.length > 0) Object.assign(counts, { resumedSkippedStages: skippedStages.join(", ") });
   const failed = Object.keys(failedStages);
   if (failed.length > 0) {
     logger.error("cleanup job finished with failed stages", {
