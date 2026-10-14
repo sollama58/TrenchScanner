@@ -119,6 +119,8 @@ import { resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
 import { noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
 import { settledRejects } from "./settledRejects.js";
+import { flushScreenRejects, foldRejectExtremes, noteScreenReject } from "./rejectExtremes.js";
+import { noteDecisionHold, takeDecisionHolds } from "./decisionHolds.js";
 import { loadMarketContext } from "./marketContext.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
 import type { JobRunMeta } from "../scheduler.js";
@@ -774,6 +776,9 @@ async function scanCycle(
     for (const [mint, at] of refreshed.seenAt) readingSeenAt.set(mint, at);
     // The stamp the liveness-prioritized selection above runs on.
     await stampLiveMarketCaps(refreshed.liveMarketCaps, env);
+    // Rejected coins' 60-minute peak and low, from the readings just taken (measurement only; see
+    // rejectExtremes.ts). Never waited on: nothing in the cycle reads it.
+    void foldRejectExtremes(refreshed.marketData, refreshed.seenAt);
   } catch (err) {
     logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
     return { stagesMs, ...earlyExitMeta(env) };
@@ -1311,6 +1316,8 @@ async function scanCycle(
   const curatedEmitted = contenderEmitted + (await emitCurated(lateCycle));
   const matchCount = perCandidateMatches.reduce((sum, n) => sum + n, 0);
   markScanVerdictsPopulated();
+  // This cycle's first safety-screen rejections, which the next refreshes fold prices into.
+  void flushScreenRejects();
   // Every in-band token has now been evaluated against these filters: a filter armed before
   // this cycle loaded them has its backlog baselined and alerts from here on. Unless the refresh
   // lost a batch (a DexScreener timeout past its deadline): the tokens in it were never looked
@@ -1366,6 +1373,7 @@ async function scanCycle(
   const liveLaunchQuotes = deps.liveLaunches?.takeStats?.();
   // Band-entry checks between cycles, and the cycles they started early (this one among them).
   const bandEntryWatch = deps.bandEntryWatch?.takeStats();
+  const holds = takeDecisionHolds();
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
     tracked: tracked.length,
@@ -1402,6 +1410,9 @@ async function scanCycle(
     settledRejects: settled.size,
     // Epoch ms of the newest rug-screen (pre-check) pass: the header pill's "last passed pre-check".
     ...(lastScreenPassAt > 0 ? { lastScreenPassAt } : {}),
+    // Ready coins held back from a decision, by what held them: this cycle's and since boot.
+    decisionHolds: holds.cycle,
+    decisionHoldsSinceBoot: holds.sinceBoot,
   };
 }
 
@@ -2309,6 +2320,7 @@ async function processCandidate(
           update: changes,
         });
 
+  if (!scored.rugScreen.passed) noteScreenReject(token, scored);
   if (!scored.rugScreen.passed && !persistSnapshot(token.id, prior)) {
     // Out of the fast lane exactly as a failing verdict would put it - see vettedTokens.ts.
     dropScanVerdict(token.id);
@@ -2412,7 +2424,10 @@ async function processCandidate(
     // Both waits are asked each time, so they run side by side rather than one after the other.
     const walletReady = () => {
       if (!env.CURATED_REQUIRE_WALLET_CHECKS) return true;
-      if (!walletChecksKnown(scored)) return false;
+      if (!walletChecksKnown(scored)) {
+        noteDecisionHold("walletChecks");
+        return false;
+      }
       const snipersIn = sniperShareReady(scored, sniperChainAvailable, {
         maxMs: env.SNIPER_SHARE_MAX_WAIT_SECONDS * 1000,
         minAgeMinutes: env.SNIPER_SHARE_WAIT_MIN_AGE_MINUTES,
@@ -2422,9 +2437,16 @@ async function processCandidate(
         minAgeMinutes: env.SNIPER_SHARE_WAIT_MIN_AGE_MINUTES,
         readsOn: env.LINKED_HOLDER_READS_PER_CYCLE > 0 && env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0,
       });
+      if (!snipersIn) noteDecisionHold("sniperWait");
+      if (!linkedIn) noteDecisionHold("linkedWait");
       return snipersIn && linkedIn;
     };
-    if (passesEventPreGate(scored, band) && walletReady()) {
+    const preGate = passesEventPreGate(scored, band);
+    // Held by the pre-gate's 5-minute test alone: everything else about the moment was ready.
+    if (!preGate && passesEventPreGate({ ...scored, priceChange5mPct: undefined }, band)) {
+      noteDecisionHold("preGate5m");
+    }
+    if (preGate && walletReady()) {
       const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
       // A pick that lost an earlier governor pass re-contends while its event is spent - see
       // takeContenderRetry. A fresh event decides from scratch and supersedes any retry.
