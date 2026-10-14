@@ -190,7 +190,8 @@ model TelegramChat {
   @@index([userId])
 }
 
-/// One alert sent to a chat about a token. The dispatcher sends one alert per token per chat
+/// One alert sent to a chat about a token, written as a claim just before the send (dedupeKey).
+/// The dispatcher sends one alert per token per chat
 /// within REALERT_AFTER_MS: a model calling the coin after another model (or the chat's filter)
 /// already did is not sent again. A re-alert after that is a row of its own, so /trenchboard counts
 /// both sends. Swept after a week by the cleanup job.
@@ -206,6 +207,10 @@ model TelegramAlertSent {
   curatedAlertId String?
   /// The filter match it carried when it carried no call.
   matchId        String?
+  /// The send's idempotency key: the chat, the token and the alert it carries (dispatch.ts
+  /// sendKey). The row is written as a claim before the message goes out, so a pass run twice, or
+  /// a send whose answer was lost, can't put the same alert in a chat again. Null on older rows.
+  dedupeKey      String?      @unique
 
   @@id([chatId, tokenId, sentAt])
   @@index([sentAt])
