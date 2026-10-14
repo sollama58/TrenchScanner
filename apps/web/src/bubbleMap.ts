@@ -242,7 +242,6 @@ const MIN_FLAGGED_HELD_PCT = 0.5;
 /** The other top holders together are drawn only above this share. */
 const MIN_REST_PCT = 0.2;
 
-/** A bubble's radius in map units from its share of supply: area grows with the share. */
 /** The smallest share of supply whose bubble still carries its amount (user ask 2026-10-14). */
 export const MIN_LABEL_PCT = 0.1;
 
@@ -251,6 +250,7 @@ export function showsPct(pct: number): boolean {
   return pct >= MIN_LABEL_PCT - 1e-9;
 }
 
+/** A bubble's radius in map units from its share of supply: area grows with the share. */
 export function radiusFor(pct: number): number {
   return 9 + 8.5 * Math.sqrt(Math.max(0, pct));
 }
@@ -503,6 +503,73 @@ export function sideCounts(members: readonly MapNode[], g: SideGroup): { funded:
   const sides = members.filter((n) => n.wallet !== g.kolWallet);
   const f = sides.filter((n) => !!n.wallet && funded.has(n.wallet)).length;
   return { funded: f, possible: sides.length - f };
+}
+
+/** How a wallet in a KOL's holdings ties to the KOL. */
+export type KolTie = "kol" | "funded" | "side" | "cluster" | "same-minute";
+
+/** A KOL on the map and the supply it may control: its own wallet, its side wallets and theirs. */
+export interface KolControl {
+  kolWallet: string;
+  kolName: string | null;
+  /** Whether the KOL's own wallet is a holder on the map. */
+  holds: boolean;
+  /** Holders on the map, largest first, each with how it ties to the KOL. */
+  wallets: { wallet: string; pct: number; tie: KolTie }[];
+  /** Their share of supply together. */
+  pct: number;
+}
+
+/**
+ * Each KOL with at least one other holder tied to it (user ask 2026-10-14): its KOL Funded Wallets
+ * and possible side wallets (`groups`), and any holder that shares a funder or a funding minute
+ * with the KOL's wallet or one of those. A KOL holding alone, tied to no one, is left off.
+ * `kols`: holders named as KOLs, for KOLs on the map with no side wallets. Largest share first.
+ */
+export function kolControl(
+  graph: Pick<BubbleGraph, "nodes">,
+  groups: readonly SideGroup[],
+  kols: readonly { wallet: string; name: string | null }[] = [],
+): KolControl[] {
+  const holders = new Map(
+    graph.nodes.flatMap((n) => (n.kind === "holder" && n.wallet ? [[n.wallet, n] as const] : [])),
+  );
+  const seeds = new Map<string, { kolName: string | null; ties: Map<string, KolTie> }>();
+  for (const g of groups) {
+    const ties = new Map<string, KolTie>();
+    for (const w of g.wallets) if (w.wallet !== g.kolWallet) ties.set(w.wallet, w.funded ? "funded" : "side");
+    seeds.set(g.kolWallet, { kolName: g.kolName, ties });
+  }
+  for (const k of kols) {
+    if (!seeds.has(k.wallet)) seeds.set(k.wallet, { kolName: k.name, ties: new Map() });
+  }
+  const out: KolControl[] = [];
+  for (const [kolWallet, seed] of seeds) {
+    const tie = new Map<string, KolTie>();
+    if (holders.has(kolWallet)) tie.set(kolWallet, "kol");
+    for (const [w, t] of seed.ties) if (holders.has(w) && !tie.has(w)) tie.set(w, t);
+    // One step out: holders sharing a funder cluster or a funding minute with any of those.
+    for (const w of [...tie.keys()]) {
+      const n = holders.get(w)!;
+      for (const o of holders.values()) {
+        if (!o.wallet || tie.has(o.wallet)) continue;
+        if (n.cluster !== null && o.cluster === n.cluster) tie.set(o.wallet, "cluster");
+        else if (n.sameTime !== null && o.sameTime === n.sameTime) tie.set(o.wallet, "same-minute");
+      }
+    }
+    const wallets = [...tie]
+      .map(([wallet, t]) => ({ wallet, pct: holders.get(wallet)!.pct, tie: t }))
+      .sort((a, b) => Number(b.tie === "kol") - Number(a.tie === "kol") || b.pct - a.pct);
+    if (wallets.filter((w) => w.tie !== "kol").length === 0) continue;
+    out.push({
+      kolWallet,
+      kolName: seed.kolName,
+      holds: tie.has(kolWallet),
+      wallets,
+      pct: Math.round(wallets.reduce((t, w) => t + w.pct, 0) * 100) / 100,
+    });
+  }
+  return out.sort((a, b) => b.pct - a.pct);
 }
 
 /** A side group's bubbles on the map: the KOL's own when it holds, then its possible side wallets. */
