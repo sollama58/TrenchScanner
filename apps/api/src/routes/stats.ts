@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  KOL_MAINS,
   prisma,
   Prisma,
   createLogger,
@@ -380,6 +381,31 @@ export async function registerStatsRoutes(
     reply.header("cache-control", "no-store");
     return buildDbReport();
   });
+
+  /**
+   * Each KOL main wallet in core's KOL_MAINS and the roster entries the worker sorted as its Known
+   * Sides (KolWallet.mainWallet): how to check a new KOL_MAINS entry matched the wallets it should.
+   */
+  app.get(
+    "/kol-known-sides",
+    { config: { rateLimit: STATS_RATE_LIMIT }, preHandler: guard },
+    async (_request, reply) => {
+      reply.header("cache-control", "no-store");
+      const mains = KOL_MAINS.map((m) => m.wallet);
+      const rows = await prisma.kolWallet.findMany({
+        where: { OR: [{ wallet: { in: mains } }, { mainWallet: { in: mains } }] },
+        select: { wallet: true, name: true, twitter: true, mainWallet: true, source: true },
+        orderBy: { wallet: "asc" },
+      });
+      return {
+        mains: mains.map((wallet) => ({
+          wallet,
+          row: rows.find((r) => r.wallet === wallet) ?? null,
+          knownSides: rows.filter((r) => r.mainWallet === wallet),
+        })),
+      };
+    },
+  );
 
   /**
    * Where the database's disk goes and how fast each table fills: every table's heap, TOAST and

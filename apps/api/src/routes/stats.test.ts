@@ -105,6 +105,27 @@ describe("GET /stats/routes", () => {
   });
 });
 
+describe("GET /stats/kol-known-sides", () => {
+  it("lists each KOL main wallet and its Known Sides, behind the stats token", async () => {
+    const app = await buildServer({ ...loadEnv(), STATS_API_TOKEN: TOKEN });
+    try {
+      expect((await app.inject({ method: "GET", url: "/stats/kol-known-sides" })).statusCode).toBe(401);
+      const res = await app.inject({
+        method: "GET",
+        url: "/stats/kol-known-sides",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      if (res.statusCode === 500) return; // no database here
+      expect(res.statusCode).toBe(200);
+      expect(res.json().mains.map((m: { wallet: string }) => m.wallet)).toContain(
+        "2fg5QD1eD7rzNNCsvnhmXFm5hqNgwTTG8p7kQ6f3rx6f",
+      );
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe("GET /stats/hit-rates gating", () => {
   it("does not exist without a token, or with one too short to trust", async () => {
     for (const STATS_API_TOKEN of ["", "short-token"]) {
