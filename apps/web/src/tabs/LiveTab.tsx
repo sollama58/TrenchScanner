@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
-import { AlertCard } from "../components/AlertCard";
+import { AlertCard, belowMcapLine } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
 import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
 import { AboutModal } from "../components/AboutModal";
@@ -85,6 +85,10 @@ export function LiveTab({
   const matchesLive = useNudgeStream("/matches/stream", nudged);
   // "Now" on each card, seconds old rather than as old as the last feed poll.
   const cards = useLiveMarketCaps(feedPage.data?.matches);
+  // The "hide below this market cap" setting only takes cards off the screen: the page, its stats
+  // and its paging are the API's, unchanged.
+  const shownCards = useMemo(() => cards?.filter((c) => !belowMcapLine(c, look)), [cards, look]);
+  const hiddenCount = (cards?.length ?? 0) - (shownCards?.length ?? 0);
 
   const t = lb?.targets ?? { hitRate2xPct: 75, hitRate4xPct: 50 };
   const chosen = lb ? lb.entries.filter((e) => lb.selectedModels.includes(e.id)) : [];
@@ -244,10 +248,19 @@ export function LiveTab({
           aria-busy={feedPage.stale}
           {...feedGridProps(look)}
         >
-          {cards?.map((card) => (
+          {shownCards?.map((card) => (
             <AlertCard key={card.id} card={card} now={now} labelSource hide={hidden} />
           ))}
         </div>
+        {hiddenCount > 0 && (
+          <p className="muted small center mcap-hidden-note">
+            {hiddenCount === 1 ? "1 alert" : `${hiddenCount} alerts`} on this page{" "}
+            {hiddenCount === 1 ? "is" : "are"} hidden: now under ${look.hideBelowMcapUsd / 1000}K market cap.{" "}
+            <button type="button" className="link" onClick={() => setCustomizing(true)}>
+              Change
+            </button>
+          </p>
+        )}
         {feedPage.data && feedPage.data.matches.length === 0 && page > 1 && (
           <p className="muted small center">Nothing older here.</p>
         )}
