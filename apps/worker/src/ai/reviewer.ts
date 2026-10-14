@@ -12,12 +12,16 @@ import {
   passesWalletSafetyCuts,
   DISQUALIFYING_DRAWDOWN_FRACTION,
   clampProbability,
+  firstReviewPerToken,
+  judgeGateOpens,
+  judgeLift,
   type ComparableOutcome,
   type GradedRow,
   type AiReviewVerdict,
   type CurationDecision,
   type Env,
   type ScoredToken,
+  HIGH_CONVICTION_TIER,
 } from "@trenchscanner/core";
 import { anthropicClient, describeAnthropicError } from "./client.js";
 import {
@@ -169,11 +173,13 @@ const QUALIFICATION_CACHE_TTL_MS = 10 * 60_000;
 let qualificationCache: { fetchedAt: number; qualified: boolean } | null = null;
 
 /**
- * Whether the reviewer has EARNED gate mode: at least AI_REVIEW_MIN_GRADED_BUYS of its "buy"
- * calls have been graded, and they hit the feed's own targets (CURATED_TARGET_WIN_RATE_PCT at
- * 2x, CURATED_TARGET_GOAL_RATE_PCT at 4x). Until then AI_REVIEW_MODE=gate behaves as shadow -
- * the reviewer keeps being asked and graded, but cannot hold back an alert on an unproven
- * record. A failed lookup counts as not qualified.
+ * Whether the reviewer has EARNED gate mode (user decision 2026-10-14, "lift with intervals"):
+ * under the playbook it runs with now, at least AI_REVIEW_MIN_GRADED_BUYS graded "buy" calls,
+ * one review per token, and its buys beat the pool it reviewed with a 95% lower bound above 0
+ * (judgeLift). Until then AI_REVIEW_MODE=gate behaves as shadow - the reviewer keeps being
+ * asked and graded, but cannot hold back an alert on an unproven record. Another playbook's
+ * record doesn't count: it is the current instructions that would be doing the gating. A failed
+ * lookup counts as not qualified.
  */
 export async function aiGateQualified(env: Env): Promise<boolean> {
   if (qualificationCache && Date.now() - qualificationCache.fetchedAt < QUALIFICATION_CACHE_TTL_MS) {
@@ -181,18 +187,33 @@ export async function aiGateQualified(env: Env): Promise<boolean> {
   }
   let qualified = false;
   try {
+    // No playbook read, no record to judge it by: the reviewer runs, but doesn't gate.
+    const playbook = await activePlaybook();
+    if (!playbook) throw new Error("no active playbook");
     const graded = await prisma.aiReview.findMany({
-      where: { decision: "buy", candidateOutcome: { is: { finalizedAt: { not: null } } } },
-      select: { candidateOutcome: { select: { labelValue: true } } },
+      where: {
+        decision: { not: null },
+        playbookId: playbook.id,
+        candidateOutcome: { is: { finalizedAt: { not: null } } },
+      },
+      orderBy: { createdAt: "asc" },
+      select: { tokenId: true, decision: true, candidateOutcome: { select: { labelValue: true } } },
     });
-    const labels = graded.map((g) => g.candidateOutcome?.labelValue ?? 0);
-    const n = labels.length;
-    if (n >= env.AI_REVIEW_MIN_GRADED_BUYS) {
-      const winRate = (labels.filter((l) => l > 0).length / n) * 100;
-      const goalRate = (labels.filter((l) => l >= 2).length / n) * 100;
-      qualified = winRate >= env.CURATED_TARGET_WIN_RATE_PCT && goalRate >= env.CURATED_TARGET_GOAL_RATE_PCT;
+    const lift = judgeLift(
+      firstReviewPerToken(graded).map((g) => ({
+        decision: g.decision === "buy" ? ("buy" as const) : ("no_buy" as const),
+        labelValue: g.candidateOutcome?.labelValue ?? 0,
+      })),
+    );
+    qualified = judgeGateOpens(lift, env.AI_REVIEW_MIN_GRADED_BUYS);
+    if (!qualified) {
+      logger.info("ai reviewer not yet qualified to gate", {
+        playbookId: playbook.id,
+        gradedBuys: lift.buys,
+        liftPts: lift.liftPts,
+        liftLowPts: lift.liftLowPts,
+      });
     }
-    if (!qualified) logger.info("ai reviewer not yet qualified to gate", { gradedBuys: n });
   } catch (err) {
     logger.warn("could not check ai reviewer record", { error: String(err) });
   }
@@ -207,14 +228,19 @@ export function aiReviewEnabled(env: Env): boolean {
 
 /**
  * How much of the budget a pick's review may use, or null when it isn't reviewed at all. The
- * reviewer is pointed at high-conviction calls first: a pick the model rates high-conviction (or
- * any pick, while the model has no high-conviction cutoff to rate it by) is reviewed out of the
- * whole daily budget; a standard pick only out of what is left above the high-conviction reserve
- * (AI_REVIEW_STANDARD_PICKS "spare"), or never.
+ * reviewer judges the high-conviction tier (user decision 2026-10-14): a pick any seat rates
+ * high-conviction is reviewed out of the whole daily budget. A pick with no high-conviction
+ * rating - a standard pick, or one from a model with no cutoff to rate it by - is not part of that
+ * tier: with AI_REVIEW_STANDARD_PICKS "spare" the default seat's are reviewed out of what is left
+ * above the high-conviction reserve; otherwise ("never", the default) none are.
  */
-export function reviewPriority(decision: CurationDecision, env: Env): "live" | "background" | null {
-  if (decision.tier !== "standard") return "live";
-  return env.AI_REVIEW_STANDARD_PICKS === "spare" ? "background" : null;
+export function reviewPriority(
+  decision: CurationDecision,
+  env: Env,
+  isDefault = false,
+): "live" | "background" | null {
+  if (decision.tier === HIGH_CONVICTION_TIER) return "live";
+  return isDefault && env.AI_REVIEW_STANDARD_PICKS === "spare" ? "background" : null;
 }
 
 /**
@@ -229,11 +255,12 @@ export async function reviewPick(
   env: Env,
   /**
    * Gate mode awaits the verdict inside the scan's emission cycle: no client retry there, so a
-   * slow call costs one timeout at most before the pick fails open, not two.
+   * slow call costs one timeout at most before the pick fails open, not two. isDefault: the pick
+   * is the default seat's (see reviewPriority).
    */
-  opts: { gate?: boolean } = {},
+  opts: { gate?: boolean; isDefault?: boolean } = {},
 ): Promise<AiReviewResult | null> {
-  const priority = reviewPriority(decision, env);
+  const priority = reviewPriority(decision, env, opts.isDefault);
   if (priority === null) return null;
   const reservation = await reserveAiSpend(
     env,

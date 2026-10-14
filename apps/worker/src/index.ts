@@ -37,11 +37,16 @@ import { createMatchPeaksRunner } from "./jobs/matchPeaks.js";
 import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
-import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
+import {
+  rechooseDefaultModel,
+  runCuratorTrainingJob,
+  seatLiveShareAlarms,
+} from "./jobs/curatorTrainingJob.js";
 import { runScoreWeightsJob } from "./jobs/scoreWeightsJob.js";
 import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { aiReviewEnabled } from "./ai/reviewer.js";
+import { drainShadowReviews } from "./jobs/curatedAlerts.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
@@ -509,7 +514,10 @@ async function main() {
   schedule("champion-refresh", () =>
     scheduleInterval(
       "champion-refresh",
-      async (): Promise<JobRunMeta> => rechooseDefaultModel(env),
+      async (): Promise<JobRunMeta> => ({
+        ...(await rechooseDefaultModel(env)),
+        ...(await seatLiveShareAlarms(env)),
+      }),
       CHAMPION_REFRESH_MINUTES,
     ),
   );
@@ -583,9 +591,15 @@ async function main() {
     for (const { job } of jobs) job.stop();
     stream?.stop();
     stopNarrativePolling?.();
-    const outcomes = await Promise.all(
-      jobs.map(async ({ name, job }) => ({ name, outcome: await job.settle(SHUTDOWN_GRACE_MS) })),
-    );
+    // Detached shadow AI reviews get the same grace: one cut off is paid for and never recorded.
+    const [outcomes, reviewsLeft] = await Promise.all([
+      Promise.all(
+        jobs.map(async ({ name, job }) => ({ name, outcome: await job.settle(SHUTDOWN_GRACE_MS) })),
+      ),
+      drainShadowReviews(SHUTDOWN_GRACE_MS),
+    ]);
+    if (reviewsLeft > 0)
+      logger.warn("shadow ai reviews still in flight at shutdown", { reviews: reviewsLeft });
     // The run that passed its deadline already says so on its row; "interrupted" would hide it.
     const interrupted = outcomes
       .filter((o) => o.outcome === "interrupted" && o.name !== keepHeartbeatOf)

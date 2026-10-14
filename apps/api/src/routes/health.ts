@@ -172,7 +172,7 @@ export async function registerHealthRoutes(
     warming?: () => boolean;
   } = {},
 ) {
-  const budgetEnv = opts.env ?? { AI_DAILY_BUDGET_USD: 10, AI_BUDGET_REVIEW_RESERVE_PCT: 40 };
+  const budgetEnv = opts.env ?? { AI_DAILY_BUDGET_USD: 15, AI_BUDGET_REVIEW_RESERVE_PCT: 40 };
   /** Plain liveness check - what Render's healthCheckPath hits. */
   // A fresh instance reports unhealthy until its report caches are filled (capped in server.ts), so
   // a deploy keeps traffic on the old instance meanwhile and no reader meets an empty cache.

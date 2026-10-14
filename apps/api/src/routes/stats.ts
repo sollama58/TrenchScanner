@@ -14,6 +14,7 @@ import {
   walletSafetyCutsSql,
   firstCallOnRowSql,
   notRetiredModelSql,
+  judgeLiftFromCounts,
   type Env,
   type MarketRow,
 } from "@trenchscanner/core";
@@ -60,6 +61,19 @@ const querySchema = z
   });
 
 /** One group of graded calls - the shape every section of the report is built from. */
+/**
+ * AiReview rows created in [since, until), one per token: its first review with a verdict, else
+ * its first row. A token re-reviewed after its veto cooled down still has one outcome, so the
+ * reviewer's record counts it once.
+ */
+function aiReviewsOnePerToken(since: Date, until: Date): Prisma.Sql {
+  return Prisma.sql`
+    SELECT DISTINCT ON ("tokenId") *
+    FROM "AiReview"
+    WHERE "createdAt" >= ${since} AND "createdAt" < ${until}
+    ORDER BY "tokenId", ("decision" IS NULL), "createdAt"`;
+}
+
 export interface GradedCounts {
   /** Calls made in the window. */
   calls: number;
@@ -689,9 +703,8 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop,
            count(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS sim_calls,
            sum(co."simReturnPct") FILTER (WHERE co."hit2xIn1h" IS NOT NULL)::float8 AS sim_sum
-    FROM "AiReview" r
+    FROM (${aiReviewsOnePerToken(since, until)}) r
     LEFT JOIN "CandidateOutcome" co ON co."id" = r."candidateOutcomeId"
-    WHERE r."createdAt" >= ${since} AND r."createdAt" < ${until}
     GROUP BY 1, 2
     ORDER BY 1, 2`;
 
@@ -706,9 +719,9 @@ export async function buildHitRateReport(
            count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL
                               AND (co."hit10xIn1h" IS NOT NULL OR NOT (co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false)))) AS ten_x_graded,
            count(*) FILTER (WHERE co."disqualified") AS doubled_after_stop
-    FROM "AiReview" r
+    FROM (${aiReviewsOnePerToken(since, until)}) r
     LEFT JOIN "CandidateOutcome" co ON co."id" = r."candidateOutcomeId"
-    WHERE r."createdAt" >= ${since} AND r."createdAt" < ${until} AND r."probability2x" IS NOT NULL
+    WHERE r."probability2x" IS NOT NULL
     GROUP BY 1
     ORDER BY 1`;
 
@@ -727,9 +740,9 @@ export async function buildHitRateReport(
       SELECT r."playbookId", r."decision", r."probability2x", r."curatorProbability",
              co."hit2xIn1h", co."hit4xIn1h", co."disqualified",
              CASE WHEN co."hit2xIn1h" AND NOT COALESCE(co."disqualified", false) THEN 1 ELSE 0 END AS won
-      FROM "AiReview" r
+      FROM (${aiReviewsOnePerToken(since, until)}) r
       LEFT JOIN "CandidateOutcome" co ON co."id" = r."candidateOutcomeId"
-      WHERE r."createdAt" >= ${since} AND r."createdAt" < ${until} AND r."decision" IS NOT NULL
+      WHERE r."decision" IS NOT NULL
     )
     SELECT COALESCE("playbookId", '') AS "playbookId",
            count(*) FILTER (WHERE "decision" = 'buy') AS calls,
@@ -894,6 +907,15 @@ export async function buildHitRateReport(
     aiPlaybooks.reduce((acc, r) => acc + r[key], BigInt(0));
   const buyRates = rated(buys, env.AI_REVIEW_MIN_GRADED_BUYS);
   const allRates = rated(allReviewed);
+  // The gate's own test (aiGateQualified): buys against passes, graded rows only, 95% interval.
+  const passes = sumCounts(aiCounts.filter((r) => r.decision === "no_buy"));
+  const lift = judgeLiftFromCounts({
+    buys: buys.graded,
+    buyWins: buys.won2x,
+    passes: passes.graded,
+    passWins: passes.won2x,
+  });
+  const roundPts = (v: number | null) => (v === null ? null : Math.round(v * 10) / 10);
 
   // Per filter, largest first and capped so one heavy user can't bloat the reply.
   const byFilter = new Map<string, { name: string; all: GradedCounts[] }>();
@@ -945,14 +967,15 @@ export async function buildHitRateReport(
     curatorConfidenceBands: confidence.map((r) => ({ side: r.side, band: r.band, ...rated(toCounts(r)) })),
     aiReviewer: {
       mode: env.AI_REVIEW_MODE,
-      // Gate mode needs AI_REVIEW_MIN_GRADED_BUYS graded buys meeting both targets.
+      // Gate mode needs AI_REVIEW_MIN_GRADED_BUYS graded buys under the current playbook, with
+      // the lift's lower bound above 0.
       buys: buyRates,
       allReviewed: allRates,
-      // What the reviewer adds: its buys' 2x rate over the rate of every pick it reviewed, in points.
-      liftPts:
-        buyRates.hitRate2xPct !== null && allRates.hitRate2xPct !== null
-          ? Math.round((buyRates.hitRate2xPct - allRates.hitRate2xPct) * 10) / 10
-          : null,
+      // What the reviewer adds: its buys' 2x rate over the rate of every pick it reviewed, in
+      // points, with a 95% interval (judgeLift). One review per token throughout this section.
+      liftPts: roundPts(lift.liftPts),
+      liftLowPts: roundPts(lift.liftLowPts),
+      liftHighPts: roundPts(lift.liftHighPts),
       brier: brierOf(sumBy("brier_sum"), countBy("brier_n")),
       curatorBrier: brierOf(sumBy("curator_brier_sum"), countBy("curator_brier_n")),
       byPlaybook: aiPlaybooks.map((r) => ({

@@ -60,7 +60,13 @@ import {
   type TrainedCuratorParams,
 } from "@trenchscanner/core";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
-import { aiGateQualified, aiReviewEnabled, reviewPick, type AiReviewResult } from "../ai/reviewer.js";
+import {
+  aiGateQualified,
+  aiReviewEnabled,
+  reviewPick,
+  reviewPriority,
+  type AiReviewResult,
+} from "../ai/reviewer.js";
 import { blendVetoes, usableAiBlend } from "../ai/blend.js";
 
 /** Gate-mode AI reviews in flight at once per ledger pass. */
@@ -798,9 +804,10 @@ function rationaleColumn(r: NarrativeRationale | null): Prisma.InputJsonObject |
  * curator's job - each holds its picks to the hit-rate cutoff its own out-of-sample record
  * earned - so the governor's pace is a ceiling only.
  *
- * The default feed's contestant goes first: it is the one the AI reviewer checks (and, in gate
- * mode, can veto). Every other ledger's calls go out without a review. Contestants calling the
- * same token in the same pass share one anchor, so their grades are measured from the same price.
+ * The default feed's contestant goes first. The AI reviewer checks every ledger's high-conviction
+ * picks (and, in gate mode, can veto them), one review per token however many seats call it -
+ * see reviewOnce. Contestants calling the same token in the same pass share one anchor, so their
+ * grades are measured from the same price.
  *
  * Returns the number of calls sent across every ledger.
  */
@@ -974,18 +981,22 @@ async function emitForModel(
       ])
     : [0, 0];
   const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
-  const reviewing = isDefault && aiReviewEnabled(env);
+  // Every seat's picks can be reviewed: which ones is reviewPriority's call (the high-conviction
+  // tier, user decision 2026-10-14), not the seat's.
+  const reviewing = aiReviewEnabled(env);
   // Gate mode only once the reviewer has earned it, one of two ways: a learned blend of its odds
-  // and the model's that beat the model alone out of sample (ai/blend.ts) - which then decides
-  // what is held back - or, before there is one, a graded "buy" record that meets the feed's
-  // targets (aiGateQualified), with its bare no_buy as the veto. Until then a gate-mode reviewer
-  // runs as shadow.
+  // and the model's that beat the model alone walking forward and on held-out rows (ai/blend.ts) -
+  // which then decides what is held back - or, before there is one, a graded record whose buys
+  // beat the pool it reviewed with a 95% lower bound above 0 (aiGateQualified), with its bare
+  // no_buy as the veto. Until then a gate-mode reviewer runs as shadow.
   const blend = reviewing && env.AI_REVIEW_MODE === "gate" ? await usableAiBlend() : null;
   const gating =
     reviewing && env.AI_REVIEW_MODE === "gate" && (blend !== null || (await aiGateQualified(env)));
   // A token the reviewer just passed on doesn't contend again until its veto cools down -
   // otherwise it would win the same slot and buy the same review every minute.
-  const contenders = onePerToken(gating ? await withoutRecentVetoes(contendersIn, env) : contendersIn);
+  const contenders = onePerToken(
+    gating ? await withoutRecentVetoes(contendersIn, env, isDefault) : contendersIn,
+  );
   const picks = selectEmissions(contenders, capacity);
   // Lost on capacity alone - the curator still vouches for these, so they try again next
   // cycle. (Vetoed tokens are out of `contenders` already, and a pick vetoed below isn't here.)
@@ -1002,9 +1013,16 @@ async function emitForModel(
   // at or the day's AI budget can't pay for (reviewPick's null): it goes out unreviewed. Picks
   // come best first, so the budget goes to the strongest of them.
   const gateReviews: (AiReviewResult | null)[] = picks.map(() => null);
+  // Whether this seat's call made the review (and so writes its row) or reused another seat's.
+  const gateFresh: boolean[] = picks.map(() => false);
   if (gating) {
     await forEachWithConcurrency([...picks.entries()], GATE_REVIEW_CONCURRENCY, async ([i, p]) => {
-      gateReviews[i] = await reviewPick(p.scored, p.decision, env, { gate: true });
+      // A pick the reviewer isn't pointed at goes out unreviewed - and must not pick up another
+      // seat's verdict on the same coin either: the veto judges the high-conviction call.
+      if (reviewPriority(p.decision, env, isDefault) === null) return;
+      const shared = reviewOnce(p, env, { gate: true, isDefault });
+      gateReviews[i] = await shared.result.catch(() => null);
+      gateFresh[i] = shared.fresh;
     });
   }
 
@@ -1018,9 +1036,11 @@ async function emitForModel(
         ? blendVetoes(blend, review.curatorProbability, review.verdict.probability2x)
         : review.verdict.decision === "no_buy");
     if (review && held) {
-      await recordAiReview(pick, review, "gate", null, null, env).catch((err) =>
-        logger.warn("failed to record ai veto", { error: String(err) }),
-      );
+      if (gateFresh[i]) {
+        await recordAiReview(pick, review, "gate", null, null, env).catch((err) =>
+          logger.warn("failed to record ai veto", { error: String(err) }),
+        );
+      }
       logger.info("curated pick vetoed by ai reviewer", {
         mint: pick.token.mintAddress,
         reasoning: review.verdict?.reasoning,
@@ -1069,15 +1089,24 @@ async function emitForModel(
     emitted += 1;
 
     if (review) {
-      await recordAiReview(pick, review, "gate", result.anchor, result.alertId, env).catch((err) =>
-        logger.warn("failed to record ai review", { error: String(err) }),
-      );
-    } else if (reviewing && !gating) {
+      if (gateFresh[i]) {
+        await recordAiReview(pick, review, "gate", result.anchor, result.alertId, env).catch((err) =>
+          logger.warn("failed to record ai review", { error: String(err) }),
+        );
+      }
+    } else if (reviewing && !gating && reviewPriority(pick.decision, env, isDefault) !== null) {
       // Shadow mode: the alert is already out; the review is bookkeeping and must never hold
-      // up the scan cycle, so it runs detached.
-      void reviewPick(pick.scored, pick.decision, env)
-        .then((r) => (r ? recordAiReview(pick, r, "shadow", result.anchor, result.alertId, env) : undefined))
-        .catch((err) => logger.warn("failed to record shadow ai review", { error: String(err) }));
+      // up the scan cycle, so it runs detached - tracked, so a shutdown can wait for it.
+      const shared = reviewOnce(pick, env, { isDefault });
+      if (shared.fresh) {
+        trackShadowReview(
+          shared.result
+            .then((r) =>
+              r ? recordAiReview(pick, r, "shadow", result.anchor, result.alertId, env) : undefined,
+            )
+            .catch((err) => logger.warn("failed to record shadow ai review", { error: String(err) })),
+        );
+      }
     }
   }
 
@@ -1212,10 +1241,86 @@ async function emitCuratedAlert(
 }
 
 /**
- * Drops contenders gate mode held back within AI_REVIEW_VETO_COOLDOWN_MINUTES - a gate-mode
- * review with no alert behind it (held back by the bare no_buy or by the blend).
+ * A token's review, shared by every seat that calls it within AI_REVIEW_VETO_COOLDOWN_MINUTES:
+ * the seats call 84-95% of the same rows, so without it one coin bought a review per seat. Only
+ * a review that came back with a verdict is shared; a failed one, or one the budget turned away,
+ * is dropped so the next seat's call can ask again. In-process, so a restart clears it.
  */
-async function withoutRecentVetoes(contenders: CuratedContender[], env: Env): Promise<CuratedContender[]> {
+const sharedReviews = new Map<string, { at: number; result: Promise<AiReviewResult | null> }>();
+
+/** Test hook. */
+export function resetSharedReviews(): void {
+  sharedReviews.clear();
+}
+
+/**
+ * The pick's review: a new call (fresh, and its caller records the row) or the one another seat
+ * made for the same token (not fresh: its row is already written, and one review per token is
+ * what the record counts).
+ */
+function reviewOnce(
+  pick: CuratedContender,
+  env: Env,
+  opts: { gate?: boolean; isDefault: boolean },
+): { result: Promise<AiReviewResult | null>; fresh: boolean } {
+  const now = Date.now();
+  const ttlMs = env.AI_REVIEW_VETO_COOLDOWN_MINUTES * 60_000;
+  for (const [tokenId, held] of sharedReviews) {
+    if (now - held.at >= ttlMs) sharedReviews.delete(tokenId);
+  }
+  const held = sharedReviews.get(pick.token.id);
+  if (held) return { result: held.result, fresh: false };
+  const tokenId = pick.token.id;
+  const result = reviewPick(pick.scored, pick.decision, env, opts).then(
+    (r) => {
+      if (!r?.verdict) sharedReviews.delete(tokenId);
+      return r;
+    },
+    (err: unknown) => {
+      sharedReviews.delete(tokenId);
+      throw err;
+    },
+  );
+  sharedReviews.set(tokenId, { at: now, result });
+  return { result, fresh: true };
+}
+
+/** Shadow reviews still running detached - a shutdown waits for them (drainShadowReviews). */
+const shadowReviews = new Set<Promise<unknown>>();
+
+function trackShadowReview(p: Promise<unknown>): void {
+  shadowReviews.add(p);
+  void p.finally(() => shadowReviews.delete(p));
+}
+
+/**
+ * Waits up to `timeoutMs` for the shadow reviews in flight to finish and write their rows. A
+ * review cut off by the exit is paid for and never recorded, which thins the record gate mode is
+ * judged on. Returns how many were still running when the wait ended.
+ */
+export async function drainShadowReviews(timeoutMs: number): Promise<number> {
+  if (shadowReviews.size === 0) return 0;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    Promise.allSettled([...shadowReviews]),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+  return shadowReviews.size;
+}
+
+/**
+ * Drops contenders gate mode held back within AI_REVIEW_VETO_COOLDOWN_MINUTES - a gate-mode
+ * review with no alert behind it (held back by the bare no_buy or by the blend). Only from the
+ * picks the reviewer is pointed at: a veto is a judgment on the high-conviction call, so the same
+ * coin's standard call on another seat, which the gate never reviews, still goes out.
+ */
+async function withoutRecentVetoes(
+  contenders: CuratedContender[],
+  env: Env,
+  isDefault: boolean,
+): Promise<CuratedContender[]> {
   if (contenders.length === 0) return contenders;
   const vetoed = await prisma.aiReview.findMany({
     where: {
@@ -1228,7 +1333,9 @@ async function withoutRecentVetoes(contenders: CuratedContender[], env: Env): Pr
     select: { tokenId: true },
   });
   const blocked = new Set(vetoed.map((v) => v.tokenId));
-  return contenders.filter((c) => !blocked.has(c.token.id));
+  return contenders.filter(
+    (c) => !blocked.has(c.token.id) || reviewPriority(c.decision, env, isDefault) === null,
+  );
 }
 
 /**

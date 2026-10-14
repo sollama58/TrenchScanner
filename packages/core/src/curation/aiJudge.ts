@@ -101,6 +101,116 @@ export function summarizeJudgeRecord(calls: JudgedCall[], targets: PrecisionTarg
   };
 }
 
+/** 95% two-sided, the intervals every lift is reported and gated with. */
+export const JUDGE_INTERVAL_Z = 1.96;
+
+/** Wilson score interval for hits of n, as shares 0-1; [0, 1] for n = 0. */
+export function wilsonInterval(hits: number, n: number, z = JUDGE_INTERVAL_Z): { low: number; high: number } {
+  if (n <= 0) return { low: 0, high: 1 };
+  const p = hits / n;
+  const z2 = z * z;
+  const centre = p + z2 / (2 * n);
+  const margin = z * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
+  const denom = 1 + z2 / n;
+  return { low: Math.max(0, (centre - margin) / denom), high: Math.min(1, (centre + margin) / denom) };
+}
+
+/** The judge's lift over the pool it filters, with its interval - see judgeLift. */
+export interface JudgeLift {
+  /** Graded calls with a verdict, each token once (firstReviewPerToken). */
+  reviewed: number;
+  buys: number;
+  buyWins: number;
+  passes: number;
+  passWins: number;
+  /** buy 2x rate minus the whole pool's, in points; null without both a buy and a pass. */
+  liftPts: number | null;
+  /** 95% interval on liftPts (Newcombe's hybrid score interval, from the two Wilson intervals). */
+  liftLowPts: number | null;
+  liftHighPts: number | null;
+}
+
+/**
+ * What the judge's "buy" adds over sending its whole pool: the buys' 2x rate minus the pool's.
+ * Buys are part of the pool, so the two rates aren't independent; but buy - pool is exactly
+ * (passes / reviewed) x (buy - pass), and buys and passes are disjoint. So the interval is
+ * Newcombe's hybrid score interval on buy - pass (two independent Wilson intervals), scaled by
+ * the pass share: its lower bound is above 0 exactly when the buys beat the passes. Win = the
+ * graded 2x (labelValue > 0: a 2x in the window, before the stop).
+ */
+export function judgeLift(
+  calls: { decision: "buy" | "no_buy" | null; labelValue: number }[],
+  z = JUDGE_INTERVAL_Z,
+): JudgeLift {
+  const buys = calls.filter((c) => c.decision === "buy");
+  const passes = calls.filter((c) => c.decision === "no_buy");
+  return judgeLiftFromCounts(
+    {
+      buys: buys.length,
+      buyWins: buys.filter((c) => c.labelValue > 0).length,
+      passes: passes.length,
+      passWins: passes.filter((c) => c.labelValue > 0).length,
+    },
+    z,
+  );
+}
+
+/** judgeLift from graded counts, for callers that aggregate in SQL. */
+export function judgeLiftFromCounts(
+  c: { buys: number; buyWins: number; passes: number; passWins: number },
+  z = JUDGE_INTERVAL_Z,
+): JudgeLift {
+  const out: JudgeLift = {
+    reviewed: c.buys + c.passes,
+    buys: c.buys,
+    buyWins: c.buyWins,
+    passes: c.passes,
+    passWins: c.passWins,
+    liftPts: null,
+    liftLowPts: null,
+    liftHighPts: null,
+  };
+  if (c.buys === 0 || c.passes === 0) return out;
+  const p1 = c.buyWins / c.buys;
+  const p2 = c.passWins / c.passes;
+  const w1 = wilsonInterval(c.buyWins, c.buys, z);
+  const w2 = wilsonInterval(c.passWins, c.passes, z);
+  const diff = p1 - p2;
+  const low = diff - Math.sqrt((p1 - w1.low) ** 2 + (w2.high - p2) ** 2);
+  const high = diff + Math.sqrt((w1.high - p1) ** 2 + (p2 - w2.low) ** 2);
+  const passShare = c.passes / (c.buys + c.passes);
+  return {
+    ...out,
+    liftPts: diff * passShare * 100,
+    liftLowPts: low * passShare * 100,
+    liftHighPts: high * passShare * 100,
+  };
+}
+
+/**
+ * Whether the judge has earned gate mode (user decision 2026-10-14, "lift with intervals"): at
+ * least minBuys graded buys, and their lift over the pool has a 95% lower bound above 0. 75%
+ * absolute is not reachable from a ~22% pool, so the bar is "measurably better than sending
+ * everything", not the feed's targets.
+ */
+export function judgeGateOpens(lift: JudgeLift, minBuys: number): boolean {
+  return lift.buys >= minBuys && lift.liftLowPts !== null && lift.liftLowPts > 0;
+}
+
+/**
+ * One row per token, the earliest: a token re-reviewed after its veto cooled down, or by a second
+ * seat, would otherwise count twice in the record (and its outcome is one outcome). Rows must come
+ * oldest first.
+ */
+export function firstReviewPerToken<T extends { tokenId: string }>(rowsOldestFirst: T[]): T[] {
+  const seen = new Set<string>();
+  return rowsOldestFirst.filter((r) => {
+    if (seen.has(r.tokenId)) return false;
+    seen.add(r.tokenId);
+    return true;
+  });
+}
+
 export interface PromotionRules {
   /** Composite points a candidate must beat the incumbent by. */
   minGain: number;
@@ -180,7 +290,7 @@ export interface ReflectionCall {
 
 /**
  * The inputs the review reads per call, with the label the reviewer's own brief uses for each -
- * so a lesson the review writes ("distinct buyers in the last 5 minutes under 20") names
+ * so a lesson the review writes ("riskiest top-10 wallet score over 80") names
  * something the reviewer can actually see.
  */
 const REFLECTION_COLUMNS: { key: string; label: string; fmt: (v: number) => string }[] = [
@@ -197,15 +307,19 @@ const REFLECTION_COLUMNS: { key: string; label: string; fmt: (v: number) => stri
   { key: "emptyTop10WalletPct", label: "top-10 empty wallets %", fmt: (v) => v.toFixed(0) },
   { key: "sniperTop10WalletPct", label: "top-10 launch snipers %", fmt: (v) => v.toFixed(0) },
   { key: "freshLaunchBuyerPct", label: "launch buyers on fresh wallets %", fmt: (v) => v.toFixed(0) },
-  { key: "uniqueBuyers5m", label: "distinct buyers 5m", fmt: (v) => v.toFixed(0) },
-  { key: "buysPerBuyer5m", label: "buys per buyer 5m", fmt: (v) => v.toFixed(1) },
-  { key: "topBuyerShare5m", label: "biggest buyer share %", fmt: (v) => (v * 100).toFixed(0) },
-  { key: "netFlow5mToMcap", label: "net SOL flow 5m vs mcap %", fmt: (v) => (v * 100).toFixed(2) },
   { key: "earlyBuyerHoldPct", label: "launch snipers hold %", fmt: (v) => v.toFixed(1) },
   { key: "earlyBuyerSoldShare", label: "launch snipers sold %", fmt: (v) => (v * 100).toFixed(0) },
   { key: "devSoldShare", label: "dev sold %", fmt: (v) => (v * 100).toFixed(0) },
   { key: "devHolding", label: "dev still holding", fmt: (v) => (v === 1 ? "y" : "n") },
   { key: "firstBuyersHolding", label: "first 25 buyers still holding", fmt: (v) => v.toFixed(0) },
+  // The wallet stage the brief now carries (aiReview.ts walletLines); the 5-minute trade-stream
+  // columns that sat above are gone with the stream (dead since 2026-10-04).
+  { key: "walletRiskTop10Max", label: "riskiest top-10 wallet score", fmt: (v) => v.toFixed(0) },
+  { key: "walletWinTop10Max", label: "best top-10 winner wallet score", fmt: (v) => v.toFixed(0) },
+  { key: "kolTopHolders", label: "KOLs among top holders", fmt: (v) => v.toFixed(0) },
+  { key: "flaggedSellers", label: "flagged wallets selling", fmt: (v) => v.toFixed(0) },
+  { key: "linkedWalletCount", label: "top holders linked", fmt: (v) => v.toFixed(0) },
+  { key: "cexFundedCount", label: "top holders exchange-funded", fmt: (v) => v.toFixed(0) },
 ];
 
 /** How many calls one review reads - the wrong ones first, see buildReflectionBrief. */

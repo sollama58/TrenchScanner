@@ -3,7 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma, loadEnv, type ScoredToken } from "@trenchscanner/core";
 import type { MessageBatchIndividualResponse } from "@anthropic-ai/sdk/resources/messages/batches";
-import { loadReplayItems, replayVerdictRow } from "./replay.js";
+import { loadReplayItems, replayedMarket, replayVerdictRow } from "./replay.js";
 import { recordCandidateSample } from "../jobs/candidateOutcomeJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -93,6 +93,7 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
     alert: boolean,
     mcap: number,
     peak = labelValue > 0 ? 150 : 10,
+    tier: "high" | "standard" = "high",
   ) {
     const token = await prisma.token.create({
       data: { mintAddress: `${TAG}-${name}`, symbol: name.toUpperCase(), description: `the ${name} coin` },
@@ -126,6 +127,7 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
           model: "consensus",
           confidence: 42,
           calibratedPct: 27,
+          tier,
           reasons: ["backed by Trees"],
           anchorPriceUsd: 0.0001,
           anchorMcapUsd: 150_000,
@@ -143,6 +145,8 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
     // Graded AFTER the alert was made: must not leak into its brief.
     await gradedRow("later", 120, 0, false, 160_000);
     const alertId = await gradedRow("alert", 300, 1, true, 150_000);
+    // A standard call: not the population the live reviewer judges, so never replayed.
+    const standardId = await gradedRow("standard", 250, 1, true, 150_000, 150, "standard");
 
     const items = await loadReplayItems(env, {
       from: new Date(Date.now() - 400 * 60_000),
@@ -159,5 +163,24 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
     expect(item!.brief).toContain("WON (peak +150%)");
     expect(item!.brief).toContain("missed (peak +40%)");
     expect(item!.brief).not.toContain("missed (peak +10%)");
+    expect(items.some((i) => i.candidateOutcomeId === standardId)).toBe(false);
+  });
+});
+
+describe("replayedMarket", () => {
+  const co = { anchorAt: new Date(), anchorPriceUsd: 0.00012, anchorMcapUsd: 120_000, labelRule: 4 };
+
+  it("puts DexScreener's lagging price back beside a fresh-quote anchor", () => {
+    const scored = replayedMarket({ freshGapPct: 20 }, co);
+    expect(scored.freshQuote?.priceUsd).toBe(0.00012);
+    expect(scored.priceUsd).toBeCloseTo(0.0001);
+    expect(scored.marketCapUsd).toBeCloseTo(100_000);
+  });
+
+  it("leaves a DexScreener-anchored call as it was", () => {
+    const scored = replayedMarket({ freshGapPct: 20 }, { ...co, labelRule: 3 });
+    expect(scored.freshQuote).toBeUndefined();
+    expect(scored.marketCapUsd).toBe(120_000);
+    expect(replayedMarket({}, co).freshQuote).toBeUndefined();
   });
 });
