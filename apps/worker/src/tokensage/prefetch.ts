@@ -14,7 +14,7 @@ import {
   type TokenSageDepth,
   type TokenSageHints,
 } from "@trenchscanner/core";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { forgetNarrativeRead } from "./heldNarrativeReads.js";
 import { flushNowReads } from "./nowReads.js";
 
@@ -361,11 +361,17 @@ async function storeAnalysis(
       return;
     }
   }
+  // The raw document is kept only where something will show it: full reads (asked for coins in
+  // the band) and basic reads of coins that have reached the band. A basic read of a launch that
+  // never gets there is 94% of rows and most of the table's bytes (db-size-audit-2026-10-14), and
+  // only the derived columns of those are ever read. If the coin enters the band later, the full
+  // read asked then brings its document.
+  const keepDocument = fields.depth === "full" || (await tokenInBand(mint));
   const data = {
     ...fields,
     categories: fields.categories as unknown as Prisma.InputJsonValue,
     failReason: null,
-    analysis: (storableAnalysis(analysis) ?? {}) as Prisma.InputJsonValue,
+    analysis: keepDocument ? ((storableAnalysis(analysis) ?? {}) as Prisma.InputJsonValue) : Prisma.DbNull,
     checkedAt: new Date(),
   };
   await prisma.tokenNarrative.upsert({
@@ -377,6 +383,12 @@ async function storeAnalysis(
   stats.stored += 1;
   failCounts.delete(mint);
   settle(mint, fields.depth, status === "partial");
+}
+
+/** Whether the coin has ever been in the curated band (Token.firstInBandAt); false with no Token row. */
+async function tokenInBand(mintAddress: string): Promise<boolean> {
+  const token = await prisma.token.findUnique({ where: { mintAddress }, select: { firstInBandAt: true } });
+  return token?.firstInBandAt != null;
 }
 
 async function storeFailure(mintAddress: string, depth: TokenSageDepth, reason: string): Promise<void> {

@@ -28,6 +28,13 @@ const CURATOR_MODEL_PARAMS_RETENTION_DAYS = 7;
  * a day, keeping the documents for 90 days would add about 4 GB.
  */
 const NARRATIVE_DOC_RETENTION_DAYS = 21;
+/**
+ * The document of a coin that never reached the curated band is dropped this long after its read
+ * (the untracked-snapshot horizon): nothing shows it, the models and the Lighthouse read the
+ * derived columns, and these are 94% of rows (db-size-audit-2026-10-14). New reads of such coins
+ * store no document at all (tokensage/prefetch.ts storeAnalysis); this is for the rows from before.
+ */
+const NARRATIVE_UNTRACKED_DOC_RETENTION_HOURS = 48;
 
 /**
  * How long a revoked LinkedDevice row is kept after somebody switches it off.
@@ -147,6 +154,33 @@ async function untrackedTokenIds(ids: string[]): Promise<string[]> {
       AND NOT EXISTS (SELECT 1 FROM "CuratedShadowEmission" x WHERE x."tokenId" = t."id")
       AND NOT EXISTS (SELECT 1 FROM "AiReview" x WHERE x."tokenId" = t."id")`;
   return rows.map((r) => r.id);
+}
+
+/**
+ * TokenNarrative rows checked before `cutoff`, walked in mintAddress order with a cursor (the primary
+ * key), a page at a time, so a pass over the whole table reads it once whatever each page changes.
+ * `act` gets each page's mints and returns how many rows it changed.
+ */
+async function forEachOldNarrativePage(
+  cutoff: Date,
+  opts: BatchOptions,
+  act: (mints: string[]) => Promise<number>,
+): Promise<number> {
+  let total = 0;
+  let after = "";
+  for (;;) {
+    const page = await prisma.$queryRaw<{ mintAddress: string }[]>`
+      SELECT n."mintAddress" FROM "TokenNarrative" n
+      WHERE n."mintAddress" > ${after} AND n."checkedAt" < ${cutoff}
+      ORDER BY n."mintAddress"
+      LIMIT ${opts.rowsPerBatch}`;
+    if (page.length === 0) return total;
+    const mints = page.map((r) => r.mintAddress);
+    total += await act(mints);
+    if (page.length < opts.rowsPerBatch) return total;
+    after = mints[mints.length - 1]!;
+    await sleep(opts.pauseMs);
+  }
 }
 
 /** The tokens among `ids` that hold any snapshot taken before `before`. */
@@ -648,8 +682,40 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     new Date(startedAt - RUGCHECK_CACHE_RETENTION_DAYS * DAY_MS),
   );
   // TokenSage narratives (tokensage/prefetch.ts): kept as long as the RPC caches, past the
-  // models' training window, so new inputs can be derived from them later.
+  // models' training window, so new inputs can be derived from them later...
   const deletedNarratives = await sweepCache("TokenNarrative", "mintAddress");
+  // ...unless the coin itself is gone: the stale-token sweep above removed its Token row (nothing
+  // referenced it after STALE_TOKEN_RETENTION_DAYS), so the row's derived columns have no coin to
+  // describe and nothing reads them past the Lighthouse's 72-hour window. Same age bar as the
+  // tokens, so a narrative read is never dropped ahead of its coin.
+  const deletedOrphanNarratives = await stage("orphanNarratives", 0, () =>
+    forEachOldNarrativePage(
+      tokenCutoff,
+      batch,
+      (mints) =>
+        prisma.$executeRaw`
+        DELETE FROM "TokenNarrative" n
+        WHERE n."mintAddress" = ANY(${mints})
+          AND NOT EXISTS (SELECT 1 FROM "Token" t WHERE t."mintAddress" = n."mintAddress")`,
+    ),
+  );
+  // The raw document of a coin that never reached the band, two days after the read. Every row
+  // older than the bar is walked, nightly: the walk is one pass over the primary key, and after the
+  // first night only the newest day's rows still hold a document.
+  const untrackedDocCutoff = new Date(startedAt - NARRATIVE_UNTRACKED_DOC_RETENTION_HOURS * 3_600_000);
+  const strippedUntrackedNarrativeDocs = await stage("untrackedNarrativeDocs", 0, () =>
+    forEachOldNarrativePage(
+      untrackedDocCutoff,
+      batch,
+      (mints) =>
+        prisma.$executeRaw`
+        UPDATE "TokenNarrative" n SET "analysis" = NULL
+        WHERE n."mintAddress" = ANY(${mints})
+          AND n."analysis" IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM "Token" t WHERE t."mintAddress" = n."mintAddress" AND t."firstInBandAt" IS NOT NULL)`,
+    ),
+  );
   // Nightly, only the few days that newly crossed the line: re-reading every older row for a NULL
   // this already set would be most of the statement's work. The weekly full walk covers the rest.
   const docCutoff = new Date(startedAt - NARRATIVE_DOC_RETENTION_DAYS * DAY_MS);
@@ -693,7 +759,9 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedMayhemCache: deletedMayhemCache.count,
     deletedRugCheckCache: deletedRugCheckCache.count,
     deletedNarratives: deletedNarratives.count,
+    deletedOrphanNarratives,
     strippedNarrativeDocs,
+    strippedUntrackedNarrativeDocs,
   };
   const failed = Object.keys(failedStages);
   if (failed.length > 0) {

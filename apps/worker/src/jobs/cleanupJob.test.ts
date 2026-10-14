@@ -668,6 +668,7 @@ describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
 
   afterAll(async () => {
     await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
   });
 
   it("drops the raw document after the training window, keeps the row, and deletes it at 90 days", async () => {
@@ -682,6 +683,12 @@ describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
           checkedAt: new Date(Date.now() - ageDays * day),
         },
       });
+    // Every row here has a coin in the band, so only the age rules apply to it.
+    for (const suffix of ["fresh", "old", "older", "gone"]) {
+      await prisma.token.create({
+        data: { mintAddress: `${TAG}-${suffix}`, firstInBandAt: new Date(Date.now() - 100 * day) },
+      });
+    }
     // "old" crossed the 21-day line recently (the nightly strip only looks a few days back);
     // "older" is a row the nightly pass missed, which the weekly full walk picks up.
     await Promise.all([row("fresh", 5), row("old", 22), row("older", 40), row("gone", 100)]);
@@ -704,6 +711,44 @@ describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
       ["fresh", { summary: "a dog coin" }, "token"],
       ["old", null, "token"],
       ["older", null, "token"],
+    ]);
+  });
+
+  it("drops the document of a coin that never reached the band after two days, and the row once its coin is gone", async () => {
+    const T = `${TAG}-u`;
+    const row = (suffix: string, ageHours: number, depth = "basic") =>
+      prisma.tokenNarrative.create({
+        data: {
+          mintAddress: `${T}-${suffix}`,
+          depth,
+          status: "complete",
+          pairKind: "sol",
+          analysis: { summary: "a frog coin" },
+          checkedAt: new Date(Date.now() - ageHours * 3_600_000),
+        },
+      });
+    // A coin still outside the band, one that reached it, and one whose Token row the stale sweep
+    // already removed (its read is older than STALE_TOKEN_RETENTION_DAYS, 3650 days here).
+    await prisma.token.create({ data: { mintAddress: `${T}-outside` } });
+    await prisma.token.create({ data: { mintAddress: `${T}-inband`, firstInBandAt: new Date() } });
+    await Promise.all([
+      row("outside", 72),
+      row("outside-young", 12),
+      row("inband", 72),
+      row("gone", 3651 * 24),
+      row("gone-young", 72),
+    ]);
+    await runCleanupJob(env, { rowsPerBatch: 10, pauseMs: 0, fullSnapshotWalk: false });
+    const left = await prisma.tokenNarrative.findMany({
+      where: { mintAddress: { startsWith: T } },
+      orderBy: { mintAddress: "asc" },
+    });
+    expect(left.map((r) => [r.mintAddress.slice(T.length + 1), r.analysis !== null, r.pairKind])).toEqual([
+      // No Token row and younger than the token horizon: the document goes, the row stays for now.
+      ["gone-young", false, "sol"],
+      ["inband", true, "sol"],
+      ["outside", false, "sol"],
+      ["outside-young", true, "sol"],
     ]);
   });
 });
