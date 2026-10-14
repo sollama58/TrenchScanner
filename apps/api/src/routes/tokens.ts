@@ -62,6 +62,30 @@ export interface BubbleHoldersMap {
 }
 export interface BubbleHolders {
   map: BubbleHoldersMap | null;
+  /**
+   * The map as it stood at the coin's first model call (BubbleMapAtAlert): kept once, never
+   * updated. Null for a coin with none (never called, or called before it was kept).
+   */
+  atAlert: (BubbleHoldersMap & { alertAt: string }) | null;
+}
+
+/** A stored map row (BubbleMapHolders or BubbleMapAtAlert) as the API sends it. */
+function bubbleMapOf(row: {
+  readAt: Date;
+  holdersRead: number;
+  knownExtra: number;
+  holders: unknown;
+  clusters: unknown;
+  sameTimeClusters: unknown;
+}): BubbleHoldersMap {
+  return {
+    readAt: row.readAt.toISOString(),
+    holdersRead: row.holdersRead,
+    knownExtra: row.knownExtra,
+    holders: row.holders as BubbleHoldersMap["holders"],
+    clusters: row.clusters as BubbleHoldersMap["clusters"],
+    sameTimeClusters: row.sameTimeClusters as BubbleHoldersMap["sameTimeClusters"],
+  };
 }
 
 /** GET /tokens/:mint/chart: the token modal's price chart (web src/components/TokenModal.tsx). */
@@ -229,7 +253,8 @@ export async function registerTokenRoutes(app: FastifyInstance) {
 
   /**
    * A model-alerted coin's bubble map over its top 50 holders (BubbleMapHolders): the top 25 and
-   * every known wallet past them, clustered alike. `{ map: null }` for a coin with none.
+   * every known wallet past them, clustered alike, now and as it stood at the coin's first call.
+   * Null for either the coin has none of.
    */
   app.get("/:mintAddress/bubble-holders", async (request, reply): Promise<BubbleHolders | undefined> => {
     const { mintAddress } = request.params as { mintAddress: string };
@@ -238,17 +263,13 @@ export async function registerTokenRoutes(app: FastifyInstance) {
       return;
     }
     reply.header("Cache-Control", "private, max-age=30");
-    const row = await prisma.bubbleMapHolders.findUnique({ where: { mintAddress } });
-    if (!row) return { map: null };
+    const [row, frozen] = await Promise.all([
+      prisma.bubbleMapHolders.findUnique({ where: { mintAddress } }),
+      prisma.bubbleMapAtAlert.findUnique({ where: { mintAddress } }),
+    ]);
     return {
-      map: {
-        readAt: row.readAt.toISOString(),
-        holdersRead: row.holdersRead,
-        knownExtra: row.knownExtra,
-        holders: row.holders as unknown as BubbleHoldersMap["holders"],
-        clusters: row.clusters as unknown as BubbleHoldersMap["clusters"],
-        sameTimeClusters: row.sameTimeClusters as unknown as BubbleHoldersMap["sameTimeClusters"],
-      },
+      map: row ? bubbleMapOf(row) : null,
+      atAlert: frozen ? { ...bubbleMapOf(frozen), alertAt: frozen.alertAt.toISOString() } : null,
     };
   });
 

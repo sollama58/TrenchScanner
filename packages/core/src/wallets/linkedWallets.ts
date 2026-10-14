@@ -423,6 +423,14 @@ export const LINKED_TOP_N = 25;
 export const BUBBLE_WIDE_TOP_N = 50;
 
 /**
+ * How long after a coin's first model call its bubble map can still be kept as the map at the
+ * alert (BubbleMapAtAlert, user ask 2026-10-14). The top 50 is read within a cycle or two of the
+ * call; a reading later than this (the worker was down, or the coin was called before the map was
+ * kept) is a later moment, so none is kept rather than one mislabelled.
+ */
+export const BUBBLE_AT_ALERT_WINDOW_MS = 15 * 60_000;
+
+/**
  * How many top-holder accounts are kept from RugCheck's report (it lists about 20): the list the
  * readings fall back on until the chain's top 25 is read. The exchange-funded count itself reads
  * LINKED_TOP_N, the same 25 holders as Linked (user decision 2026-10-13, "N/25"; it was the top 20).
