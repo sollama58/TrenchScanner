@@ -126,6 +126,19 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
     expect(reviewPick).not.toHaveBeenCalled();
   });
 
+  it("no model files a call on a relaunch farm, while the same coin without one is filed", async () => {
+    const filed = async (name: string, extra: Partial<ScoredToken>) => {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${name}` } });
+      const cycle = newCuratedCycle();
+      await collectCuratedContender(cycle, token, { ...fixture(token.mintAddress), ...extra }, null, shadow);
+      return [...cycle.byModel.values()].reduce((n, list) => n + list.length, 0);
+    };
+    expect(await filed("farm", { relaunchSiblings: 5, relaunchSiblingPeakMcapUsd: 14_705 })).toBe(0);
+    expect(await filed("wave", { relaunchSiblings: 5, relaunchSiblingPeakMcapUsd: 90_000 })).toBeGreaterThan(
+      0,
+    );
+  });
+
   it("gate mode: a buy is sent without the reviewer's reasoning on the public card, and linked to its review", async () => {
     reviewPick.mockResolvedValue(verdict("buy"));
     const { token, emitted } = await run(gate, "buy");
