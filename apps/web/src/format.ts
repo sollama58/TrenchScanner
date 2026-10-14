@@ -105,12 +105,36 @@ export function tokenLabel(token: {
  * card falls back to the original URL if the thumbnail fails to load.
  */
 export function tokenThumb(url: string, size = 96): string {
-  const cid =
-    /^https:\/\/[^/]+\/ipfs\/([A-Za-z0-9]{46,})\/?(?:[?#].*)?$/.exec(url)?.[1] ??
-    /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?(?:[?#].*)?$/.exec(url)?.[1];
+  const cid = ipfsCid(url);
   if (cid)
     return `https://pump.mypinata.cloud/ipfs/${cid}?img-width=${size}&img-height=${size}&img-fit=cover`;
   return dexScreenerThumb(url, size) ?? url;
+}
+
+function ipfsCid(url: string): string | undefined {
+  return (
+    /^https:\/\/[^/]+\/ipfs\/([A-Za-z0-9]{46,})\/?(?:[?#].*)?$/.exec(url)?.[1] ??
+    /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?(?:[?#].*)?$/.exec(url)?.[1]
+  );
+}
+
+/**
+ * Where to load a token's image from, in order, for an `<img>` that moves to the next on error
+ * (TokenImage), and shows the initials when none loads. First the small thumbnail (tokenThumb);
+ * then the launcher's own URL; for an IPFS image, then the file on a second public gateway, so
+ * one gateway's 429s or a pin it has not picked up yet leave the picture missing only when
+ * neither has it. Empty for anything but https.
+ */
+export function tokenImageSources(url: string | null | undefined, size = 96): string[] {
+  const safe = url?.trim() ?? "";
+  if (!/^https:\/\/\S+$/.test(safe)) return [];
+  const out = [tokenThumb(safe, size), safe];
+  const cid = ipfsCid(safe);
+  if (cid) {
+    const host = new URL(safe).hostname;
+    out.push(host === "ipfs.io" ? `https://dweb.link/ipfs/${cid}` : `https://ipfs.io/ipfs/${cid}`);
+  }
+  return [...new Set(out)];
 }
 
 /** The square sizes cdn.dexscreener.com resizes to (checked 2026-10-14; 96, 200, 512 and others are refused). */

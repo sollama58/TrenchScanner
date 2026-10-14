@@ -342,6 +342,8 @@ export interface TokenSageAnalysis {
   } | null;
   image?: {
     status?: string;
+    /** The logo URL TokenSage fetched ("ok") or tried to ("failed"). */
+    source_url?: string | null;
     phash?: string | null;
     ocr?: string[];
     near_duplicates?: unknown[];
@@ -665,6 +667,26 @@ export function tokenSageHints(token: {
     hints.created_at = token.firstSeenAt.toISOString();
   }
   return Object.keys(hints).length > 0 ? hints : undefined;
+}
+
+const MAX_IMAGE_URL_CHARS = 500;
+
+/**
+ * The coin's logo as TokenSage resolved it: the URL it downloaded the logo from when that worked,
+ * else the one the coin's metadata names. TokenSage reads every analysed coin's on-chain metadata
+ * (and falls back to it when our hinted URL fails), so this is the artwork for a coin that came
+ * in without one (DexScreener-discovered, or a Pump.fun row with no image_uri yet) at no extra
+ * fetch. Https only; null when neither is usable.
+ */
+export function tokenSageImageUrl(
+  analysis: Pick<TokenSageAnalysis, "image" | "raw"> | null | undefined,
+): string | null {
+  const usable = (u: unknown): u is string =>
+    typeof u === "string" && u.length <= MAX_IMAGE_URL_CHARS && /^https:\/\/\S+$/.test(u);
+  const fetched = analysis?.image?.status === "ok" ? analysis.image.source_url : null;
+  if (usable(fetched)) return fetched;
+  const named = analysis?.raw?.image_url;
+  return usable(named) ? named : null;
 }
 
 /** What a TokenNarrative row stores, derived from one Analysis document. */

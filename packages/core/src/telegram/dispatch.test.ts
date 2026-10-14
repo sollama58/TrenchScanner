@@ -12,6 +12,7 @@ import {
   dashboardUrl,
   oldestOpenTransaction,
   PICKS_FALLBACK_TEXT,
+  resetArtworkMisses,
   runTelegramDispatch,
   sendKey,
   TELEGRAM_DISPATCH_LOCK,
@@ -151,6 +152,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
 
   // The tests share one token, so each starts as if the chat had never been alerted about it.
   beforeEach(async () => {
+    resetArtworkMisses();
     if (chatRowId) await prisma.telegramAlertSent.deleteMany({ where: { chatId: chatRowId } });
   });
 
@@ -713,6 +715,40 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(api.sent()).toHaveLength(1);
     const row = await prisma.token.findUnique({ where: { id: bare.id } });
     expect(row?.imageUrl).toBe("https://cdn.example/bare.png");
+  });
+
+  it("does not ask again each pass for a token the lookup had no artwork for", async () => {
+    await rewind();
+    const blank = await prisma.token.create({ data: { mintAddress: `${TAG}-blank`, symbol: "BLANK" } });
+    await prisma.match.create({
+      data: {
+        userId,
+        filterId,
+        tokenId: blank.id,
+        snapshotId,
+        matchedAt: new Date(Date.now() - 15_000),
+        score: 88,
+      },
+    });
+    const asked: string[][] = [];
+    const lookupImages = async (mints: string[]) => {
+      asked.push(mints);
+      return new Map<string, string>();
+    };
+    // Telegram unreachable before the send left (so never delivered): the card stays pending for
+    // the next pass, as a held card would.
+    const api = new FakeTelegramApi();
+    const refused = {
+      ok: false as const,
+      code: 0,
+      description: "connection refused",
+      undelivered: true as const,
+    };
+    api.answers.set("sendPhoto", refused);
+    api.answers.set("sendMessage", refused);
+    await runTelegramDispatch(env, { api, hasAccess: async () => true, lookupImages });
+    await runTelegramDispatch(env, { api, hasAccess: async () => true, lookupImages });
+    expect(asked.flat().filter((m) => m === `${TAG}-blank`)).toHaveLength(1);
   });
 
   it("never resends an alert whose send timed out: Telegram may have delivered it", async () => {

@@ -10,6 +10,7 @@ import {
   signedPct,
   stakes,
   tokenLabel,
+  tokenImageSources,
   tokenThumb,
   usd,
 } from "./format";
@@ -79,6 +80,33 @@ describe("tokenThumb", () => {
     expect(tokenThumb(tw)).toBe(tw);
     const sub = `https://ipfs.io/ipfs/${cid}/image.png`;
     expect(tokenThumb(sub)).toBe(sub);
+  });
+});
+
+describe("tokenImageSources", () => {
+  const cid = "bafkreihxafgbuv2tw7icchpr27buj42hltprkndct4544qkrtsylsxqovy";
+  const thumb = `https://pump.mypinata.cloud/ipfs/${cid}?img-width=96&img-height=96&img-fit=cover`;
+
+  it("tries the thumbnail, the original, then a second IPFS gateway", () => {
+    expect(tokenImageSources(`https://ipfs.io/ipfs/${cid}`)).toEqual([
+      thumb,
+      `https://ipfs.io/ipfs/${cid}`,
+      `https://dweb.link/ipfs/${cid}`,
+    ]);
+    expect(tokenImageSources(`https://gateway.pinata.cloud/ipfs/${cid}`)).toEqual([
+      thumb,
+      `https://gateway.pinata.cloud/ipfs/${cid}`,
+      `https://ipfs.io/ipfs/${cid}`,
+    ]);
+  });
+
+  it("has just the original for other hosts, and nothing for non-https", () => {
+    expect(tokenImageSources("https://pbs.twimg.com/media/abc.jpg")).toEqual([
+      "https://pbs.twimg.com/media/abc.jpg",
+    ]);
+    expect(tokenImageSources("http://plain.example/x.png")).toEqual([]);
+    expect(tokenImageSources(null)).toEqual([]);
+    expect(tokenImageSources("  ")).toEqual([]);
   });
 });
 

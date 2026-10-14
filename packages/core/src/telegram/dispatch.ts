@@ -135,6 +135,21 @@ const KNOWN_PHOTO_IDS_MAX = 500;
 const IMAGE_LOOKUP_MAX = 30;
 
 /**
+ * Mint -> when to ask again, for mints the lookup found no artwork for. DexScreener has none for
+ * almost every new coin, and a card can stay pending for several passes: without this each pass
+ * asked again for the same mints (caching review 2026-10-08, #12). TokenSage's logo, when it
+ * lands, reaches the Token row on its own (prefetch backfillTokenImage), so nothing is lost.
+ */
+const noArtworkUntil = new Map<string, number>();
+const NO_ARTWORK_RETRY_MS = 30 * 60_000;
+const NO_ARTWORK_MAX = 2_000;
+
+/** For tests. */
+export function resetArtworkMisses(): void {
+  noArtworkUntil.clear();
+}
+
+/**
  * Fills in the picture for pending cards whose token has none, and remembers what it found on
  * the Token row so the dashboard and the next alert have it too. Best effort and bounded.
  */
@@ -152,16 +167,23 @@ async function backfillImages(queues: { pending: Pending[] }[], lookup: Dispatch
       }
     }
   }
-  if (missing.size === 0) return;
+  const now = Date.now();
+  for (const [mint, until] of noArtworkUntil) if (until <= now) noArtworkUntil.delete(mint);
+  const asked = [...missing.keys()].filter((mint) => !noArtworkUntil.has(mint)).slice(0, IMAGE_LOOKUP_MAX);
+  if (asked.length === 0) return;
   let found: Map<string, string>;
   try {
-    found = await lookup([...missing.keys()].slice(0, IMAGE_LOOKUP_MAX));
+    found = await lookup(asked);
   } catch (err) {
     logger.warn("token artwork lookup failed", { error: String(err) });
     return;
   }
-  for (const [mint, url] of found) {
-    if (!/^https:\/\/\S+$/.test(url)) continue;
+  for (const mint of asked) {
+    const url = found.get(mint);
+    if (!url || !/^https:\/\/\S+$/.test(url)) {
+      if (noArtworkUntil.size < NO_ARTWORK_MAX) noArtworkUntil.set(mint, now + NO_ARTWORK_RETRY_MS);
+      continue;
+    }
     for (const token of missing.get(mint) ?? []) token.imageUrl = url;
     await prisma.token.updateMany({ where: { mintAddress: mint, imageUrl: null }, data: { imageUrl: url } });
   }

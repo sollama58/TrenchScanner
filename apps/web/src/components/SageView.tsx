@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, lookupRequired } from "../api";
 import { usePolling } from "../hooks";
-import { ago, shortAddress, tokenThumb, usd } from "../format";
+import { ago, shortAddress, usd } from "../format";
+import { TokenImage } from "./TokenImage";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, LockIcon, SageIcon } from "./Icons";
 import { Skeleton } from "./Charts";
 import { closeSage, SAGE_PARAM } from "../sage";
@@ -364,7 +365,6 @@ function SageBody({ mint, onClose }: { mint: string; onClose: () => void }) {
   const t = data?.token;
   const r = data?.read ?? null;
   const label = t?.symbol ? `$${t.symbol}` : (t?.name ?? shortAddress(mint));
-  const img = t?.imageUrl?.startsWith("https://") ? tokenThumb(t.imageUrl, 128) : null;
 
   const copyLink = () => {
     const url = new URL(window.location.href);
@@ -386,19 +386,15 @@ function SageBody({ mint, onClose }: { mint: string; onClose: () => void }) {
     <div className="about-body sage-body">
       <header className="sage-head">
         <div className="sage-token">
-          {img ? (
-            <img
-              className="avatar"
-              src={img}
-              alt=""
-              width={44}
-              height={44}
-              decoding="async"
-              referrerPolicy="no-referrer"
-            />
-          ) : (
-            <span className="avatar placeholder">{label.replace("$", "").slice(0, 2)}</span>
-          )}
+          <TokenImage
+            url={t?.imageUrl}
+            size={128}
+            className="avatar"
+            width={44}
+            height={44}
+            eager
+            fallback={<span className="avatar placeholder">{label.replace("$", "").slice(0, 2)}</span>}
+          />
           <div>
             <h2 id="sage-title" className="sage-title" tabIndex={-1} autoFocus>
               {label}

@@ -22,6 +22,8 @@ const IMAGE_TIMEOUT_MS = 6_000;
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 /** Hops followed when fetching artwork; each one is checked like the first URL. */
 const IMAGE_MAX_REDIRECTS = 3;
+/** What Telegram takes as a photo; a fallback image of any other type is passed over. */
+const PHOTO_TYPES = new Set(["image/jpeg", "image/png"]);
 
 /** A host name's addresses, as the fetch would connect to them. Injectable for tests. */
 export type HostResolver = (hostname: string) => Promise<string[]>;
@@ -457,13 +459,15 @@ export class TelegramApi {
   /**
    * An alert: the token's picture with the text as its caption when there is a picture and the
    * text fits a caption, else the text alone. A picture Telegram already holds (`photos`) goes by
-   * its file_id; otherwise it is fetched here and uploaded; if that fails the URL is handed to
-   * Telegram to try; a picture Telegram won't take (a 400) costs nothing but the retry as plain
-   * text, so an alert is never lost to its artwork.
+   * its file_id; otherwise it is fetched here and uploaded, from `imageFallbacks` in order when
+   * the main URL fails (only a JPEG or PNG from those: they are full-size originals, and Telegram
+   * refuses the GIFs and WebPs launchers upload); if all fail the URL is handed to Telegram to
+   * try; a picture Telegram won't take (a 400) costs nothing but the retry as plain text, so an
+   * alert is never lost to its artwork.
    */
   async sendAlert(
     chatId: number | bigint,
-    message: { html: string; imageUrl: string | null },
+    message: { html: string; imageUrl: string | null; imageFallbacks?: string[] },
     opts: { silent?: boolean; photos?: PhotoCache } = {},
   ): Promise<TelegramResult<TelegramMessage>> {
     const { photos, ...sendOpts } = opts;
@@ -476,7 +480,15 @@ export class TelegramApi {
         // A file_id Telegram no longer takes: forget it and go the long way.
         photos!.fileIds.delete(url);
       }
-      const fetched = await this.fetchImageOnce(url, photos);
+      let fetched = await this.fetchImageOnce(url, photos);
+      for (const fallback of message.imageFallbacks ?? []) {
+        if (fetched) break;
+        const got = await this.fetchImageOnce(fallback, photos);
+        if (got && PHOTO_TYPES.has(got.contentType)) {
+          logger.info("token artwork read from a fallback", { url, fallback });
+          fetched = got;
+        }
+      }
       const withPhoto = await this.sendPhoto(chatId, fetched ?? url, message.html, sendOpts);
       if (withPhoto.ok) {
         const fileId = withPhoto.result.photo?.at(-1)?.file_id;

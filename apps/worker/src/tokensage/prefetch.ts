@@ -9,6 +9,7 @@ import {
   storableAnalysis,
   tokenSageEnabled,
   tokenSageHints,
+  tokenSageImageUrl,
   type Env,
   type TokenSageAnalysis,
   type TokenSageDepth,
@@ -383,6 +384,21 @@ async function storeAnalysis(
   stats.stored += 1;
   failCounts.delete(mint);
   settle(mint, fields.depth, status === "partial");
+  await backfillTokenImage(mint, analysis);
+}
+
+/**
+ * A coin with no artwork on its Token row takes the logo TokenSage resolved for it. TokenSage
+ * owns the metadata lookup for every coin it reads, so nothing here fetches anything: the
+ * dashboard, alerts and Telegram reuse what it found. Only rows still missing an image are
+ * touched, so a Pump.fun image already stored is never replaced.
+ */
+async function backfillTokenImage(mintAddress: string, analysis: TokenSageAnalysis): Promise<void> {
+  const imageUrl = tokenSageImageUrl(analysis);
+  if (!imageUrl) return;
+  await prisma.token
+    .updateMany({ where: { mintAddress, imageUrl: null }, data: { imageUrl } })
+    .catch((err) => logger.warn("token image backfill failed", { mint: mintAddress, error: String(err) }));
 }
 
 /** Whether the coin has ever been in the curated band (Token.firstInBandAt); false with no Token row. */

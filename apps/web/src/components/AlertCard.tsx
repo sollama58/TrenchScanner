@@ -1,7 +1,18 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Card, CardField, FeedAppearance, Snapshot } from "../api";
-import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
+import {
+  ago,
+  change,
+  minutes,
+  multiple,
+  pct,
+  shortAddress,
+  tokenImageSources,
+  tokenLabel,
+  tokenThumb,
+  usd,
+} from "../format";
 import {
   BrainIcon,
   BubblesIcon,
@@ -920,17 +931,17 @@ function previewSpot(rect: DOMRect): PreviewSpot {
 }
 
 /**
- * The token's image as a small thumbnail, falling back to the original URL, then to its initials.
+ * The token's image as a small thumbnail, falling back through tokenImageSources (the original
+ * URL, a second IPFS gateway), then to its initials.
  * On desktop, hovering it shows a large preview; phones get a bigger avatar instead.
  */
 function TokenAvatar({ url, symbol }: { url: string | null; symbol: string | null }) {
-  // 0: thumbnail, 1: original URL, 2: give up.
+  // An index into tokenImageSources; past its end, the initials.
   const [attempt, setAttempt] = useState(0);
   const [spot, setSpot] = useState<PreviewSpot | null>(null);
   const ref = useRef<HTMLImageElement>(null);
   const safe = url?.startsWith("https://") ? url : null;
-  const thumb = safe ? tokenThumb(safe, THUMB_PX) : null;
-  const src = !safe ? null : attempt === 0 ? thumb : attempt === 1 && thumb !== safe ? safe : null;
+  const src = tokenImageSources(safe, THUMB_PX)[attempt] ?? null;
 
   // A scroll or resize moves the avatar out from under the preview; close it rather than chase it.
   useEffect(() => {
