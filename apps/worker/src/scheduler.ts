@@ -141,6 +141,17 @@ export function scheduleInterval(
       /** Don't log each early run: for a job woken by routine events rather than a person. */
       quiet?: boolean;
     };
+    /**
+     * Checked every `everyMs` while a run is in flight: true ends the run the way a deadline does
+     * (heartbeat says so, then the worker restarts) - an admin's "Stop and retrain" on a run that
+     * looks stuck. Polled from the event loop, so it reaches a run waiting on I/O or on its
+     * training thread, as the deadline does.
+     */
+    stopWhileRunning?: {
+      everyMs: number;
+      due: () => Promise<boolean>;
+      onStop?: (job: HeartbeatJob, runningForMs: number) => void;
+    };
   } = {},
 ): ScheduledJob {
   const intervalMs = intervalMinutes * 60_000;
@@ -193,6 +204,29 @@ export function scheduleInterval(
             onDeadline(name, now - startedAt);
           }, DEADLINE_TICK_MS);
     deadline?.unref?.();
+    const stopper = opts.stopWhileRunning;
+    let stopping = false;
+    let checkingStop = false;
+    const stopCheck =
+      stopper === undefined
+        ? undefined
+        : setInterval(() => {
+            if (stopping || checkingStop) return;
+            checkingStop = true;
+            void stopper
+              .due()
+              .catch(() => false)
+              .then((due) => {
+                if (!due || stopping) return;
+                stopping = true;
+                clearInterval(stopCheck);
+                (stopper.onStop ?? exitOnStopRequest)(name, Date.now() - startedAt);
+              })
+              .finally(() => {
+                checkingStop = false;
+              });
+          }, stopper.everyMs);
+    stopCheck?.unref?.();
     try {
       await recordRunStart(name, new Date(startedAt)).catch(() => {
         // Visibility only - never worth not running the job over.
@@ -232,6 +266,7 @@ export function scheduleInterval(
     } finally {
       clearInterval(watchdog);
       if (deadline) clearInterval(deadline);
+      if (stopCheck) clearInterval(stopCheck);
       const elapsed = Date.now() - startedAt;
       if (elapsed > intervalMs) {
         logger.warn("run took longer than its interval, starting the next one now", {
@@ -490,19 +525,44 @@ const EXIT_HEARTBEAT_TIMEOUT_MS = 5_000;
  */
 function exitOnDeadline(job: HeartbeatJob, runningForMs: number): void {
   logger.error("job run passed its deadline - exiting so the worker restarts", { job, runningForMs });
+  endRunAndRestart(
+    job,
+    runningForMs,
+    `${DEADLINE_ERROR} after ${Math.round(runningForMs / 1000)}s; worker restarted`,
+    `${job} run passed its deadline`,
+  );
+}
+
+/**
+ * The default stop action (stopWhileRunning): the same exit as a deadline, under its own message,
+ * so the heartbeat and the panel say a person stopped the run rather than that it hung.
+ */
+function exitOnStopRequest(job: HeartbeatJob, runningForMs: number): void {
+  logger.warn("job run stopped on request - exiting so the worker restarts", { job, runningForMs });
+  endRunAndRestart(
+    job,
+    runningForMs,
+    `${STOPPED_ERROR} after ${Math.round(runningForMs / 1000)}s; worker restarted`,
+    `${job} run stopped on request`,
+  );
+}
+
+/** The heartbeat error a run past its deadline leaves (followed by how long it ran). */
+export const DEADLINE_ERROR = "run passed its deadline";
+/** The heartbeat error a run stopped from the admin panel leaves (followed by how long it ran). */
+export const STOPPED_ERROR = "run stopped from the admin panel";
+
+/** Writes `error` to the job's heartbeat (best effort, briefly), then restarts the worker. */
+function endRunAndRestart(job: HeartbeatJob, runningForMs: number, error: string, reason: string): void {
   let exiting = false;
   const exit = () => {
     if (exiting) return;
     exiting = true;
-    exitForRestart({ reason: `${job} run passed its deadline`, keepHeartbeatOf: job });
+    exitForRestart({ reason, keepHeartbeatOf: job });
   };
   const giveUp = setTimeout(exit, EXIT_HEARTBEAT_TIMEOUT_MS);
   giveUp.unref?.();
-  void recordHeartbeat(job, {
-    success: false,
-    error: `run passed its deadline after ${Math.round(runningForMs / 1000)}s; worker restarted`,
-    meta: { durationMs: runningForMs },
-  })
+  void recordHeartbeat(job, { success: false, error, meta: { durationMs: runningForMs } })
     .catch(() => {})
     .finally(() => {
       clearTimeout(giveUp);

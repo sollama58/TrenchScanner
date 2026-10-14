@@ -22,7 +22,9 @@ const { rows, cfg, plan, scoreWeights, scoreAnchor } = workerData as {
 setScoreWeights(scoreWeights);
 setScoreAnchor(scoreAnchor);
 
-runEvolvingContest(rows, cfg, plan && toEvolutionPlan(plan)).then(
+runEvolvingContest(rows, cfg, plan && toEvolutionPlan(plan), (step, done, total) =>
+  parentPort?.postMessage({ progress: { step, done, total } }),
+).then(
   (outcome) => parentPort?.postMessage({ ok: true, outcome }),
   (err: unknown) =>
     parentPort?.postMessage({ ok: false, error: err instanceof Error ? err.stack : String(err) }),

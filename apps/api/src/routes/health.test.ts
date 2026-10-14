@@ -88,6 +88,40 @@ describe("public worker health: stale threshold", () => {
   });
 });
 
+describe("public worker health: a training run in flight", () => {
+  const row = (runningMin: number) => ({
+    job: "curator-training",
+    lastRunAt: new Date(0),
+    lastSuccessAt: new Date(0),
+    lastError: null,
+    meta: {
+      intervalMs: 6 * 3_600_000,
+      runningSince: new Date(3_600_000 - runningMin * 60_000).toISOString(),
+      runningStagesMs: { "load rows": 40_000, plan: 2_000 },
+      runningStep: "exams: examining Trees (5 of up to 24)",
+      runningStepAt: new Date(3_600_000 - 60_000).toISOString(),
+    },
+  });
+  const at = (runningMin: number) =>
+    summarizeHeartbeat(row(runningMin) as unknown as Parameters<typeof summarizeHeartbeat>[0], 3_600_000);
+
+  it("reports the stages done and the step under way", () => {
+    const s = at(12);
+    expect(s.runningForMs).toBe(12 * 60_000);
+    expect(s.runningStagesMs).toEqual({ "load rows": 40_000, plan: 2_000 });
+    expect(s.runningStep).toEqual({
+      step: "exams: examining Trees (5 of up to 24)",
+      since: new Date(3_600_000 - 60_000).toISOString(),
+    });
+  });
+
+  it("is hung after 45 minutes, long before its 18-hour stale threshold", () => {
+    expect(at(44).hung).toBe(false);
+    expect(at(46).hung).toBe(true);
+    expect(at(46).staleAfterMs).toBe(18 * 3_600_000);
+  });
+});
+
 /** The scan's TokenSage counters reach the public summary, numbers only. */
 describe("public worker health: TokenSage counters", () => {
   it("carries the scan's tokensage counts and drops anything that isn't a number", () => {

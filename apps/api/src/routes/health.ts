@@ -67,6 +67,15 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
 };
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 /**
+ * A run in flight is hung after its job's stale threshold - unless the job's runs are far shorter
+ * than that. Training's threshold is a whole interval and more (it runs every six hours), but a run
+ * takes about fifteen minutes and the worker gives up on one at 90: going by the threshold, a stuck
+ * run read "running" on the admin panel until the worker restarted under it.
+ */
+const HUNG_AFTER_MS: Record<string, number> = {
+  "curator-training": 45 * 60_000,
+};
+/**
  * A job whose heartbeat says how often it runs (the scheduler writes `intervalMs`, see
  * apps/worker/src/scheduler.ts) is stale after this many of its own intervals - the table above
  * is only a floor for it. The intervals are env-tunable (CURATOR_TRAINING_INTERVAL_HOURS, say),
@@ -235,12 +244,15 @@ export function summarizeHeartbeat(h: HeartbeatRow, now: number, opts: { fullErr
     stale: now - h.lastRunAt.getTime() > threshold,
     staleAfterMs: threshold,
     runningForMs,
-    hung: runningForMs !== null && runningForMs > threshold,
+    hung: runningForMs !== null && runningForMs > Math.min(threshold, HUNG_AFTER_MS[h.job] ?? threshold),
     // How long the last run took, and for the scan cycle where that time went - timings
     // only, nothing about tokens or users.
     lastRun: lastRunSummary(h.meta),
     // While a run is in flight, the stages it has finished so far - see recordRunProgress.
     runningStagesMs: runningSince ? stageTimings(h.meta, "runningStagesMs") : null,
+    // And the step under way now, with when it began (training's "exams: examining Trees (5 of up
+    // to 24)") - a step that has sat unchanged for a long while is where a stuck run is stuck.
+    runningStep: runningSince ? runningStep(h.meta) : null,
   };
 }
 
@@ -293,6 +305,13 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
 }
 
 /** A `{ stage: ms }` object from a heartbeat's meta, numbers only, or null. */
+function runningStep(meta: unknown): { step: string; since: string | null } | null {
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
+  const m = meta as Record<string, unknown>;
+  if (typeof m.runningStep !== "string") return null;
+  return { step: m.runningStep, since: typeof m.runningStepAt === "string" ? m.runningStepAt : null };
+}
+
 function stageTimings(meta: unknown, key: string): Record<string, number> | null {
   if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
   const value = (meta as Record<string, unknown>)[key];

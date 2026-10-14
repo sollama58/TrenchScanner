@@ -126,12 +126,22 @@ export async function recordRunStart(job: HeartbeatJob, at: Date = new Date()): 
 /**
  * Stamps the stages a run in flight has finished so far onto its heartbeat row, next to
  * runningSince - so a run that never returns says which stage it is stuck after, rather than only
- * how long it has been going. Cleared with the rest of meta by the end-of-run heartbeat.
+ * how long it has been going. `step` is the stage under way now (training's "examining Trees, 5 of
+ * 24"), so the admin panel can show where a long run has got to. Cleared with the rest of meta by
+ * the end-of-run heartbeat.
  */
-export async function recordRunProgress(job: HeartbeatJob, stagesMs: Record<string, number>): Promise<void> {
+export async function recordRunProgress(
+  job: HeartbeatJob,
+  stagesMs: Record<string, number>,
+  step?: string,
+): Promise<void> {
+  const progress =
+    step === undefined
+      ? { runningStagesMs: stagesMs }
+      : { runningStagesMs: stagesMs, runningStep: step, runningStepAt: new Date().toISOString() };
   await prisma.$executeRaw`
     UPDATE "SystemHeartbeat"
-    SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object('runningStagesMs', ${JSON.stringify(stagesMs)}::jsonb)
+    SET meta = COALESCE(meta, '{}'::jsonb) || ${JSON.stringify(progress)}::jsonb
     WHERE job = ${job}`;
 }
 
