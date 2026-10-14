@@ -6977,6 +6977,65 @@ button.small-btn {
   }
 }
 
+/* ---------- Update banner (a newer deploy is live; src/version.ts) ---------- */
+.update-banner {
+  position: fixed;
+  left: 50%;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 8px 8px 8px 16px;
+  border: 1px solid color-mix(in srgb, var(--brand-a) 40%, var(--border));
+  border-radius: var(--radius-s);
+  background: var(--surface-solid);
+  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.6);
+  transform: translateX(-50%);
+  animation: update-banner-in 0.28s ease-out;
+}
+.update-banner-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ink);
+}
+.update-banner-reload {
+  flex: none;
+}
+.update-banner-close,
+.update-banner-close:hover:not(:disabled) {
+  flex: none;
+  padding: 6px;
+  border: none;
+  background: transparent;
+}
+@keyframes update-banner-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-banner {
+    animation: none;
+  }
+}
+@media (max-width: 640px) {
+  .update-banner {
+    left: 16px;
+    right: 16px;
+    width: auto;
+    max-width: none;
+    transform: none;
+  }
+  .update-banner-text {
+    flex: 1;
+    font-size: 13.5px;
+  }
+}
+
 /* ---------- Announcement bar (the Admin tab's broadcast) ---------- */
 .announcement {
   --tone: var(--series-1);
