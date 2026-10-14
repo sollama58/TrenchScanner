@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   countStillHolding,
+  devStillHolding,
   launchFigures,
   parseLaunchBuyers,
   sniperShareOfTop10,
@@ -98,6 +99,7 @@ describe("parseLaunchBuyers", () => {
     const reading = parseLaunchBuyers(MINT, [createAt, bundled, later], 25)!;
     expect(reading.supply).toBe(1000);
     expect(reading.devBought).toBe(200);
+    expect(reading.devAccounts).toEqual([{ wallet: DEV, tokenAccount: "devAta", bought: 200, slot: 100 }]);
     expect(reading.createSlot).toBe(100);
     expect(reading.buyers.map((b) => b.slot)).toEqual([100, 103]);
     expect(launchFigures(reading)).toEqual({
@@ -110,6 +112,7 @@ describe("parseLaunchBuyers", () => {
   it("figures: no dev buy reads 0, no slots leave the bundle unknown, no supply leaves all unknown", () => {
     const devless = parseLaunchBuyers(MINT, [tx([[CURVE, "curveAta", null, 1000]]), buy("a", 10, 1000)], 25)!;
     expect(devless.devBought).toBe(0);
+    expect(devless.devAccounts).toEqual([]);
     expect(launchFigures(devless)).toEqual({
       firstBuyersSupplyPct: 1,
       launchBundledBuyers: null,
@@ -306,5 +309,48 @@ describe("HeliusClient.getLaunchBuyersBatch", () => {
     expect((await client().getLaunchBuyersBatch([MINT], 25)).get(MINT)).toEqual({ status: "failed" });
     const plain = new HeliusClient({ rpcUrl: "https://solana-rpc.publicnode.com" });
     expect((await plain.getLaunchBuyersBatch([MINT], 25)).get(MINT)).toEqual({ status: "unsupported" });
+  });
+});
+
+describe("devStillHolding", () => {
+  const dev = [
+    { wallet: DEV, tokenAccount: "devAta", bought: 200, slot: null },
+    { wallet: "dev2", tokenAccount: "dev2Ata", bought: 100, slot: null },
+  ];
+
+  it("holds while more than dust of the launch buy is left, across the dev's accounts", () => {
+    expect(
+      devStillHolding(
+        dev,
+        new Map([
+          ["devAta", 0],
+          ["dev2Ata", 50],
+        ]),
+      ),
+    ).toBe(true);
+    expect(
+      devStillHolding(
+        dev,
+        new Map([
+          ["devAta", 2],
+          ["dev2Ata", 0],
+        ]),
+      ),
+    ).toBe(false);
+    expect(
+      devStillHolding(
+        dev,
+        new Map([
+          ["devAta", 0],
+          ["dev2Ata", 0],
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  it("is unknown with no launch buy or a missing balance", () => {
+    expect(devStillHolding([], new Map())).toBeNull();
+    expect(devStillHolding(undefined, new Map())).toBeNull();
+    expect(devStillHolding(dev, new Map([["devAta", 200]]))).toBeNull();
   });
 });

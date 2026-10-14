@@ -551,6 +551,21 @@ export function withLaunchSnipers(
   };
 }
 
+/**
+ * The profile with the dev's holding read from the chain (the launch read's dev accounts, see
+ * LaunchSnipers.devHolding) when there is one: fresher than RugCheck's creator balance, and there
+ * on the coins RugCheck has no report for yet - most of them in the minutes they are called, which
+ * left the Dev tile blank on nearly every alert. RugCheck's answer stands when the chain has none.
+ */
+export function withChainDevHolding(
+  profile: OnChainProfile | null,
+  snipers: Pick<LaunchSnipers, "devHolding"> | undefined,
+): OnChainProfile | null {
+  const devHolding = snipers?.devHolding ?? null;
+  if (!profile || devHolding === null) return profile;
+  return { ...profile, creatorHolding: devHolding };
+}
+
 export function runScanCycle(deps: ScanDeps, env: Env): Promise<ScanCycleMeta> {
   // Each outside call is counted under the stage it was made in ("scan/wallets"), named as lap()
   // closes the stage - see withApiStages in core's apiUsage.ts.
@@ -1259,7 +1274,10 @@ async function scanCycle(
           candidate,
           priors.get(candidate.mintAddress) ?? NO_PRIORS,
           firstSeenByMint.get(candidate.mintAddress),
-          onChainByMint.get(candidate.mintAddress) ?? null,
+          withChainDevHolding(
+            onChainByMint.get(candidate.mintAddress) ?? null,
+            sniperByMint.get(candidate.mintAddress),
+          ),
           activeFilters,
           earliestActivityByAddress,
           holdingsByAddress,

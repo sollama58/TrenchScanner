@@ -38,6 +38,12 @@ export interface LaunchBuyersReading {
    * dev's initial buy, which rides in the create on Pump.fun. 0 when the dev bought nothing.
    */
   devBought: number;
+  /**
+   * The token accounts the create credited besides the curve's - the dev's initial buy, with what
+   * each took - so whether the dev still holds is one balance read of them, like the buyers'.
+   * Empty when the dev bought nothing; absent on readings built without it.
+   */
+  devAccounts?: LaunchBuyer[];
   /** Slot of the create transaction, when the provider gave one. */
   createSlot: number | null;
 }
@@ -160,9 +166,13 @@ export function parseLaunchBuyers(
   // credited is the dev's initial buy (the dev's wallet, or several).
   let supply = 0;
   let curveDelta = 0;
-  for (const { delta } of launch.owners.values()) {
+  let curveOwner: string | null = null;
+  for (const [owner, { delta }] of launch.owners) {
     supply += delta;
-    curveDelta = Math.max(curveDelta, delta);
+    if (delta > curveDelta) {
+      curveDelta = delta;
+      curveOwner = owner;
+    }
   }
   const slotOf = (tx: RawLaunchTx): number | null =>
     typeof tx.slot === "number" && Number.isFinite(tx.slot) ? tx.slot : null;
@@ -183,11 +193,22 @@ export function parseLaunchBuyers(
       }
     }
   }
+  const devAccounts: LaunchBuyer[] = [];
+  for (const [owner, change] of launch.owners) {
+    if (owner === curveOwner || change.delta <= 0 || !change.account) continue;
+    devAccounts.push({
+      wallet: owner,
+      tokenAccount: change.account,
+      bought: change.delta,
+      slot: slotOf(create),
+    });
+  }
   return {
     buyers: [...buyers.values()],
     launchAt: create.blockTime ? new Date(create.blockTime * 1000) : null,
     supply,
     devBought: Math.max(0, supply - curveDelta),
+    devAccounts,
     createSlot: slotOf(create),
   };
 }
@@ -206,6 +227,28 @@ export function sniperShareOfTop10(
   if (top10Holders.length === 0) return null;
   const snipers = top10Holders.filter((w) => sniperWallets.has(w)).length;
   return (snipers / top10Holders.length) * 100;
+}
+
+/**
+ * Whether the dev still holds what their launch buy took, from the current balances of the token
+ * accounts it landed in (base units; a closed account is 0): holding while more than
+ * LAUNCH_HOLDING_DUST_SHARE of it is left, the cut the first buyers' count uses. Null when the
+ * dev bought nothing at launch (nothing to follow here) or a balance is missing.
+ */
+export function devStillHolding(
+  devAccounts: readonly LaunchBuyer[] | undefined,
+  balances: ReadonlyMap<string, number>,
+): boolean | null {
+  if (!devAccounts || devAccounts.length === 0) return null;
+  let held = 0;
+  let bought = 0;
+  for (const a of devAccounts) {
+    const balance = balances.get(a.tokenAccount);
+    if (balance === undefined) return null;
+    held += balance;
+    bought += a.bought;
+  }
+  return held > bought * LAUNCH_HOLDING_DUST_SHARE;
 }
 
 /**

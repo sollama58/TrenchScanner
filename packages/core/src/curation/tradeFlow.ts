@@ -430,7 +430,8 @@ const DEV_SOLD_OUT_SHARE = 0.99;
 
 /**
  * Whether the dev still holds the token: from the trade stream when it watched the dev's own
- * buys and sells, otherwise from RugCheck's creator balance. Null when neither knows.
+ * buys and sells, otherwise from the creator holding on the profile (the chain's read of the dev's
+ * launch buy, else RugCheck's creator balance). Null when none knows.
  */
 export function resolveDevHolding(token: {
   tradeFlow?: Pick<TradeFlowFeatures, "devSoldShare">;

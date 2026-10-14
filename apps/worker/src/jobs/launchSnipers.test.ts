@@ -12,6 +12,7 @@ import {
   linkedListReady,
   resetSniperWaits,
   sniperShareReady,
+  withChainDevHolding,
   withLaunchSnipers,
   withWalletSignals,
 } from "./scanJob.js";
@@ -31,6 +32,8 @@ function fakeHelius(opts: {
   /** Mints whose read comes back complete whatever the count (a history with no curve launch). */
   complete?: Record<string, boolean>;
   balance?: (account: string) => number | undefined;
+  /** Mints whose dev bought in the create, into `${mint}-dev` (2,000, LAUNCH's devBought). */
+  dev?: string[];
 }) {
   const getLaunchBuyersBatch = vi.fn(async (mints: string[]) => {
     const out = new Map<string, LaunchBuyersResult>();
@@ -46,6 +49,13 @@ function fakeHelius(opts: {
               buyers: buyers(m, n),
               launchAt: null,
               ...LAUNCH,
+              ...(opts.dev?.includes(m)
+                ? {
+                    devAccounts: [
+                      { wallet: `${m}-devw`, tokenAccount: `${m}-dev`, bought: 2_000, slot: 100 },
+                    ],
+                  }
+                : {}),
             },
       );
     }
@@ -81,6 +91,7 @@ describe("resolveLaunchSnipers", () => {
     expect((await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 })).get("A")).toEqual({
       holding: 12,
       seen: 25,
+      devHolding: null,
       firstBuyersSupplyPct: 25,
       launchBundledBuyers: 1,
       devBuySupplyPct: 2,
@@ -146,6 +157,7 @@ describe("resolveLaunchSnipers", () => {
     expect((await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 })).get("A")).toEqual({
       holding: 10,
       seen: 10,
+      devHolding: null,
       firstBuyersSupplyPct: 10,
       launchBundledBuyers: 1,
       devBuySupplyPct: 2,
@@ -154,6 +166,28 @@ describe("resolveLaunchSnipers", () => {
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(1);
     await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 301_000 });
     expect(f.getLaunchBuyersBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads whether the dev still holds with the buyers' balances, and follows a dev who sells", async () => {
+    let devBalance = 1_500;
+    const f = fakeHelius({
+      found: { A: 25, B: 25 },
+      dev: ["A"],
+      balance: (a) => (a.endsWith("-dev") ? devBalance : 1000),
+    });
+    const groups = [
+      { mintAddress: "A", contender: true },
+      { mintAddress: "B", contender: true },
+    ];
+    const first = await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 });
+    expect(first.get("A")?.devHolding).toBe(true);
+    // No dev buy at launch: nothing on the chain to follow, so unknown (RugCheck's answer stands).
+    expect(first.get("B")?.devHolding).toBeNull();
+    expect(f.getTokenAccountBalances.mock.calls[0]![0]).toContain("A-dev");
+    // Down to dust (under 1% of the 2,000 bought): sold.
+    devBalance = 10;
+    const later = await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 61_000 });
+    expect(later.get("A")?.devHolding).toBe(false);
   });
 
   it("drops a reading once it is too old to trust", async () => {
@@ -169,6 +203,7 @@ describe("withLaunchSnipers", () => {
     const snipers = {
       holding: 7,
       seen: 25,
+      devHolding: true,
       firstBuyersSupplyPct: 25,
       launchBundledBuyers: 3,
       devBuySupplyPct: 2,
@@ -190,6 +225,27 @@ describe("withLaunchSnipers", () => {
       devBuySupplyPct: 2,
     });
     expect(withLaunchSnipers(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe("withChainDevHolding", () => {
+  const profile = {
+    mintAddress: "A",
+    mintAuthorityActive: false,
+    freezeAuthorityActive: false,
+    lpBurned: true,
+  };
+
+  it("fills the dev's holding from the chain, ahead of RugCheck's, and keeps RugCheck's without one", () => {
+    expect(withChainDevHolding(profile, { devHolding: false })?.creatorHolding).toBe(false);
+    expect(
+      withChainDevHolding({ ...profile, creatorHolding: true }, { devHolding: false })?.creatorHolding,
+    ).toBe(false);
+    expect(
+      withChainDevHolding({ ...profile, creatorHolding: true }, { devHolding: null })?.creatorHolding,
+    ).toBe(true);
+    expect(withChainDevHolding(profile, undefined)).toBe(profile);
+    expect(withChainDevHolding(null, { devHolding: true })).toBeNull();
   });
 });
 
