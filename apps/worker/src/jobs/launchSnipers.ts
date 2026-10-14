@@ -1,6 +1,7 @@
 import {
   countStillHolding,
   createLogger,
+  devStillHolding,
   FIRST_BUYERS,
   launchFigures,
   type HeliusClient,
@@ -27,6 +28,8 @@ const logger = createLogger("launch-snipers");
 
 interface Entry {
   buyers: LaunchBuyer[];
+  /** The token accounts the dev's launch buy landed in (LaunchBuyersReading.devAccounts). */
+  devAccounts: LaunchBuyer[];
   /** The launch's shape, from the same read (launchFigures). */
   figures: LaunchFigures;
   /** Block time of the create transaction, when the read gave one. */
@@ -36,6 +39,8 @@ interface Entry {
   /** Re-reads of an incomplete launch so far: each waits twice as long as the last. */
   rereads: number;
   holding: number | null;
+  /** Whether the dev still holds their launch buy, from the same balance read as `holding`. */
+  devHolding: boolean | null;
   holdingAt: number;
 }
 
@@ -74,6 +79,13 @@ export interface LaunchSnipers extends LaunchFigures {
   holding: number;
   /** How many first buyers there were (25, or fewer while the launch has had fewer). */
   seen: number;
+  /**
+   * Whether the dev still holds their launch buy (devStillHolding), read with the first buyers'
+   * balances. Null when the dev bought nothing at launch or the balance read missed their account.
+   * RugCheck's creator balance used to be the only source, and it has no report for most coins in
+   * their first minutes - exactly when they are called - so the card's Dev tile read "–".
+   */
+  devHolding: boolean | null;
 }
 
 export interface SniperGroup {
@@ -130,7 +142,7 @@ export function launchSnipersFromCache(
   for (const mint of mints) {
     const e = entries.get(mint);
     if (!e || e.holding === null || now - e.holdingAt > MAX_HOLDING_AGE_MS) continue;
-    out.set(mint, { holding: e.holding, seen: e.buyers.length, ...e.figures });
+    out.set(mint, { holding: e.holding, seen: e.buyers.length, devHolding: e.devHolding, ...e.figures });
   }
   return out;
 }
@@ -229,12 +241,14 @@ export async function resolveLaunchSnipers(
           prev.buyers.every((b, i) => b.tokenAccount === r.buyers[i]?.tokenAccount);
         remember(mint, {
           buyers: r.buyers,
+          devAccounts: r.devAccounts ?? [],
           figures: launchFigures(r),
           launchAt: r.launchAt,
           complete: r.complete,
           readAt: now,
           rereads: prev ? prev.rereads + 1 : 0,
           holding: sameBuyers ? prev.holding : null,
+          devHolding: sameBuyers ? prev.devHolding : null,
           holdingAt: sameBuyers ? prev.holdingAt : 0,
         });
         fresh.add(mint);
@@ -261,19 +275,24 @@ export async function resolveLaunchSnipers(
     const maxAge = g.contender ? opts.contenderRefreshMs : opts.refreshMs;
     if (!fresh.has(g.mintAddress) && e.holding !== null && now - e.holdingAt < maxAge) continue;
     // Past the cap this group waits for the next call; a smaller one behind it may still fit.
-    if (accounts + e.buyers.length > opts.maxRefreshAccounts) continue;
-    accounts += e.buyers.length;
+    const size = e.buyers.length + e.devAccounts.length;
+    if (accounts + size > opts.maxRefreshAccounts) continue;
+    accounts += size;
     refresh.push(g.mintAddress);
   }
   if (refresh.length > 0) {
     const balances = await helius.getTokenAccountBalances(
-      refresh.flatMap((mint) => entries.get(mint)!.buyers.map((b) => b.tokenAccount)),
+      refresh.flatMap((mint) => {
+        const e = entries.get(mint)!;
+        return [...e.buyers, ...e.devAccounts].map((b) => b.tokenAccount);
+      }),
     );
     for (const mint of refresh) {
       const e = entries.get(mint)!;
       const holding = countStillHolding(e.buyers, balances);
       if (holding !== null) {
         e.holding = holding;
+        e.devHolding = devStillHolding(e.devAccounts, balances);
         e.holdingAt = now;
       }
     }

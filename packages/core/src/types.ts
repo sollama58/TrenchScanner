@@ -125,8 +125,9 @@ export interface OnChainProfile {
   largestHolderPct?: number;
   devWalletPct?: number;
   /**
-   * Whether the creator's wallet still holds any of the token, from RugCheck's creatorBalance.
-   * Undefined when RugCheck named no creator or gave no balance. See resolveDevHolding for the
+   * Whether the creator's wallet still holds any of the token: from the chain's read of the dev's
+   * launch buy when the scan has one (withChainDevHolding in the worker's scanJob), else from
+   * RugCheck's creatorBalance. Undefined when neither knows. See resolveDevHolding for the
    * trade-stream reading that takes precedence.
    */
   creatorHolding?: boolean;
