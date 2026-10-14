@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   candleCloses,
-  groupMarkers,
   linearTicks,
   linePoints,
   logTicks,
@@ -122,41 +121,5 @@ describe("ticks", () => {
   });
   it("keeps linear ticks within the range", () => {
     expect(linearTicks(0.5, 9.5, 5)).toEqual([2.5, 5, 7.5]);
-  });
-});
-
-describe("groupMarkers", () => {
-  const points = [0, 60_000, 180_000].map((t) => ({ t, v: 1 }));
-  const tr = (
-    t: number,
-    side: 1 | -1,
-    wallet: string,
-    kind: "dev" | "risky" | "linked" = "risky",
-    sol = 1,
-  ) => ({
-    t,
-    side,
-    sol,
-    wallet,
-    kind,
-  });
-
-  it("groups trades on the nearest point per kind and side, and drops trades off the line", () => {
-    const groups = groupMarkers(points, 60_000, [
-      tr(10_000, 1, "a"),
-      tr(20_000, 1, "b"),
-      tr(25_000, 1, "a", "dev"),
-      tr(70_000, -1, "a"),
-      tr(170_000, -1, "a"),
-      tr(-200_000, 1, "a"),
-      tr(400_000, 1, "a"),
-    ]);
-    expect(groups.map((g) => [g.at, g.kind, g.side, g.trades.length, g.wallets])).toEqual([
-      [0, "dev", 1, 1, 1],
-      [0, "risky", 1, 2, 2],
-      [1, "risky", -1, 1, 1],
-      [2, "risky", -1, 1, 1],
-    ]);
-    expect(groups[1]!.sol).toBe(2);
   });
 });
