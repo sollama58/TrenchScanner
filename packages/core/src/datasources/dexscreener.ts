@@ -570,6 +570,7 @@ export class DexScreenerClient {
   private async quoteUsdPrices(
     mints: string[],
     gate: { acquire: () => Promise<void>; throttled: (delayMs: number) => void },
+    hops = 0,
   ): Promise<Map<string, number>> {
     const now = Date.now();
     const out = new Map<string, number>();
@@ -581,22 +582,46 @@ export class DexScreenerClient {
       } else ask.push(mint);
     }
     if (ask.length === 0) return out;
+    const batch = ask.slice(0, BATCH_SIZE);
     try {
       const pairs = await fetchJson<DexScreenerPair[]>(
-        `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${ask.slice(0, BATCH_SIZE).join(",")}`,
+        `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${batch.join(",")}`,
         { timeoutMs: 5000, retries: 0, gate },
       );
       if (this.quoteUsd.size > QUOTE_PRICE_MAX_MINTS) this.quoteUsd.clear();
-      for (const mint of ask.slice(0, BATCH_SIZE)) {
+      // A quote coin can itself trade only against another coin (2XLONGINU on LONGINU, on SOL):
+      // it is priced through that coin in turn, up to MAX_QUOTE_HOPS deep.
+      const chained = new Map<string, { quote: string; native: number }>();
+      for (const mint of batch) {
         let best: DexScreenerPair | undefined;
+        let viaQuote: DexScreenerPair | undefined;
         for (const p of pairs ?? []) {
-          if (p.chainId !== SOLANA_CHAIN_ID || p.baseToken?.address !== mint || !(Number(p.priceUsd) > 0))
-            continue;
-          if (!best || (p.liquidity?.usd ?? 0) > (best.liquidity?.usd ?? 0)) best = p;
+          if (p.chainId !== SOLANA_CHAIN_ID || p.baseToken?.address !== mint) continue;
+          if (Number(p.priceUsd) > 0) {
+            if (!best || (p.liquidity?.usd ?? 0) > (best.liquidity?.usd ?? 0)) best = p;
+          } else if (Number(p.priceNative) > 0 && p.quoteToken?.address && p.quoteToken.address !== mint) {
+            viaQuote ??= p;
+          }
         }
         const usd = best ? Number(best.priceUsd) : 0;
+        if (usd <= 0 && viaQuote && hops < MAX_QUOTE_HOPS) {
+          chained.set(mint, { quote: viaQuote.quoteToken.address, native: Number(viaQuote.priceNative) });
+          continue;
+        }
         this.quoteUsd.set(mint, { usd, at: now });
         if (usd > 0) out.set(mint, usd);
+      }
+      if (chained.size > 0) {
+        const next = await this.quoteUsdPrices(
+          [...new Set([...chained.values()].map((c) => c.quote))],
+          gate,
+          hops + 1,
+        );
+        for (const [mint, { quote, native }] of chained) {
+          const usd = native * (next.get(quote) ?? 0);
+          this.quoteUsd.set(mint, { usd, at: now });
+          if (usd > 0) out.set(mint, usd);
+        }
       }
     } catch (err) {
       logger.warn("quote-token price lookup failed", { error: String(err) });
@@ -846,6 +871,8 @@ const USD_PRICED_QUOTES = new Set([
 const PUMP_FUN_SUPPLY = 1_000_000_000;
 /** How long a quote coin's USD price is reused - see quoteUsdPrices. */
 const QUOTE_PRICE_TTL_MS = 30_000;
+/** How many coins deep a quote coin is priced through its own quote coin - see quoteUsdPrices. */
+const MAX_QUOTE_HOPS = 2;
 /** Quote coins' prices remembered at once. */
 const QUOTE_PRICE_MAX_MINTS = 2_000;
 /**

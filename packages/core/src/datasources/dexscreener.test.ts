@@ -819,6 +819,60 @@ describe("getTokensByAddresses: the fallback prices what DexScreener can't", () 
     expect(urls.filter((u) => u.endsWith("/DOPE"))).toHaveLength(1);
   });
 
+  it("prices a pair whose quote coin is itself quoted in another coin, a tokenized stock included", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      const list = url.split("/").pop()!.split("?")[0]!.split(",");
+      const pairs = [
+        // A launch on 2XLONGINU, which trades only on LONGINU, which trades on SOL.
+        {
+          dexId: "pumpfun",
+          pairAddress: "c1",
+          baseToken: { address: "kid" },
+          quoteToken: { address: "TWOX" },
+          priceNative: "0.5",
+        },
+        {
+          dexId: "pumpfun",
+          pairAddress: "c2",
+          baseToken: { address: "TWOX" },
+          quoteToken: { address: "LONG" },
+          priceNative: "0.2",
+        },
+        {
+          dexId: "pumpswap",
+          pairAddress: "c3",
+          baseToken: { address: "LONG" },
+          quoteToken: SOL,
+          priceUsd: "0.01",
+          liquidity: { usd: 9_000 },
+        },
+        // A launch on a tokenized stock.
+        {
+          dexId: "pumpfun",
+          pairAddress: "c4",
+          baseToken: { address: "onNvda" },
+          quoteToken: { address: "NVDAx" },
+          priceNative: "0.00000002",
+        },
+        {
+          dexId: "raydium",
+          pairAddress: "c5",
+          baseToken: { address: "NVDAx" },
+          quoteToken: { address: "USDC" },
+          priceUsd: "180",
+          liquidity: { usd: 2e6 },
+        },
+      ]
+        .map((p) => ({ chainId: "solana", ...p }))
+        .filter((p) => list.includes(p.baseToken.address));
+      return Promise.resolve(new Response(JSON.stringify(pairs)));
+    });
+    const tokens = await new DexScreenerClient().getTokensByAddresses(["kid", "onNvda"], 5, { retries: 0 });
+    const by = new Map(tokens.map((t) => [t.mintAddress, t]));
+    expect(by.get("kid")!.priceUsd).toBeCloseTo(0.5 * 0.2 * 0.01, 12);
+    expect(by.get("onNvda")!.marketCapUsd).toBeCloseTo(0.00000002 * 180 * 1e9, 6);
+  });
+
   it("leaves other jobs' lookups to DexScreener alone", async () => {
     const asked: string[][] = [];
     stub(asked);
