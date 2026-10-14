@@ -415,6 +415,14 @@ export function cexLinksOf(
   return out;
 }
 
+/**
+ * The map laid out again with its same-exchange holders pulled together, on copies of the nodes:
+ * the original layout stands untouched for when the ties are switched off.
+ */
+export function cexLayout(graph: BubbleGraph): BubbleGraph {
+  return layoutGraph({ ...graph, nodes: graph.nodes.map((n) => ({ ...n })) }, undefined, { cex: true });
+}
+
 /** The same-exchange groups behind the ties: each exchange, its holders on the map, and their share; largest first. */
 export function cexGroupsOf(graph: Pick<BubbleGraph, "nodes" | "cexLinks">): {
   funder: string;
@@ -448,7 +456,12 @@ const GAP = 6;
  * a light pull keeps it all near the middle. Deterministic (no randomness), so the dialog and the
  * share image draw the same map. Mutates and returns `graph`.
  */
-export function layoutGraph(graph: BubbleGraph, iterations = 320): BubbleGraph {
+export function layoutGraph(
+  graph: BubbleGraph,
+  iterations = 320,
+  /** Pull holders the same exchange funded together too (the map's same-exchange toggle). */
+  opts: { cex?: boolean } = {},
+): BubbleGraph {
   const { nodes, links } = graph;
   if (nodes.length === 0) return graph;
   const index = new Map(nodes.map((n) => [n.id, n]));
@@ -516,6 +529,24 @@ export function layoutGraph(graph: BubbleGraph, iterations = 320): BubbleGraph {
       a.y += dy * k;
       b.x -= dx * k;
       b.y -= dy * k;
+    }
+    // Same-exchange ties, when drawn: a firmer pull, so each exchange's holders gather.
+    if (opts.cex) {
+      for (const l of graph.cexLinks) {
+        const a = index.get(l.from);
+        const b = index.get(l.to);
+        if (!a || !b) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.hypot(dx, dy) || 0.01;
+        const want = a.r + b.r + 18;
+        if (dist <= want) continue;
+        const k = ((dist - want) / dist) * 0.09;
+        a.x += dx * k;
+        a.y += dy * k;
+        b.x -= dx * k * 0.5;
+        b.y -= dy * k * 0.5;
+      }
     }
     // Gravity toward the middle, stronger for the unlinked so clusters keep their room.
     for (const n of nodes) {
