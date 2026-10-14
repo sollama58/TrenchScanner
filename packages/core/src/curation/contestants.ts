@@ -47,8 +47,8 @@ import type { CuratorLearner } from "./trainer.js";
  *    doesn't breed, and the other seats never train on its second-look rows. Lives behind
  *    TOKENSAGE_ENABLED. Two seats hold the role: Narrative (the narrative and the safety readings,
  *    no price, volume or age, user decision 2026-10-10; since 2026-10-13 a story model and a
- *    safety model blended at a fixed 70/30, narrativeLed.ts) and Narrative Blend (the market and
- *    the narrative in two steps).
+ *    safety model blended at a fixed weight, 30/70 since 2026-10-14, narrativeLed.ts) and
+ *    Narrative Blend (the market and the narrative in two steps).
  *
  * Ids are stable storage keys (CuratedAlert.model, CuratorModel.contestant, User.curatedModel):
  * never rename one; retire it and add a new id instead.
@@ -166,7 +166,8 @@ export const ORDER_FLOW_FEATURES: readonly CandidateFeatureName[] = learnerSubse
  * The Narrative seat's inputs: every TokenSage input the learners read, whether the coin links an X
  * account and a website, plus the safety readings (SAFETY_FEATURES) and no other market data. The
  * seat's model (narrativeLed.ts) splits them: the safety readings feed its safety check, the rest
- * its story stage, which carries NARRATIVE_STORY_WEIGHT of the decision (user ask 2026-10-13). User decision 2026-10-10: the seat decides on the
+ * its story stage, which carries NARRATIVE_STORY_WEIGHT of the decision (user ask 2026-10-13; 30% since
+ * 2026-10-14, see the constant). User decision 2026-10-10: the seat decides on the
  * narrative, with market data only as safety checks (Narrative Blend keeps its market stage).
  * Before, it also read age, volume acceleration, 10-minute holder growth and the 15-minute price
  * path, and shuffling those four moved 68% of its top-10% picks: most of its edge was the
@@ -422,9 +423,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: NARRATIVE_CONTESTANT,
     name: "Narrative",
     description:
-      "Two boosted-tree models trained on deep-read coins, blended at fixed weights: 70% the story (TokenSage's theme, lineage, trend match, X post, logo and creator fee, and the coin's socials) and 30% a safety check (holder concentration, fresh, empty and sniper wallets, launch bundles, the dev's buy, RugCheck risk); no price, volume or age. Decides only once TokenSage's deep read is in",
+      "Two boosted-tree models trained on deep-read coins, blended at fixed weights: 30% the story (TokenSage's theme, lineage, trend match, X post, logo and creator fee, and the coin's socials) and 70% a safety check (holder concentration, fresh, empty and sniper wallets, launch bundles, the dev's buy, RugCheck risk); no price, volume or age. Decides only once TokenSage's deep read is in",
     summary:
-      "Waits for the deep read of what the coin is about (its theme, its X post, copycat signs), then decides mostly from that, with a safety check holding 30% of the say.",
+      "Waits for the deep read of what the coin is about (its theme, its X post, copycat signs), then decides from that and a safety check, the safety check holding 70% of the say.",
     role: "narrative",
     recipe: { learner: "gbdt", featureNames: NARRATIVE_SEAT_FEATURES, narrativeLed: NARRATIVE_STORY_WEIGHT },
   },
@@ -436,7 +437,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: NARRATIVE_BLEND_CONTESTANT,
     name: "Narrative Blend",
     description:
-      "Two steps: boosted trees score the coin from every market input, then shallow trees trained on deep-read coins weigh that score against TokenSage's read; decides only once the deep read is in",
+      "Two steps: boosted trees score the coin from every market input, then shallow trees trained on deep-read coins adjust that score by TokenSage's read, only as far as that beat the market score on the newest coins; decides only once the deep read is in",
     summary:
       "Takes the market's read of the coin and TokenSage's deep read of its story, and weighs the two together.",
     role: "narrative",

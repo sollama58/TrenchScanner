@@ -6,6 +6,7 @@ import { featureHealthReport, runnerTraitsReport } from "./featureReport.js";
 import {
   bootstrapDrawsFor,
   chooseReplacement,
+  equalShareCalls,
   selectionAdjustedConfidence,
   pairedBootstrapConfidence,
   seededRng,
@@ -527,14 +528,14 @@ describe("two-stage model", () => {
 describe("narrative blend model", () => {
   // Heat drives the market; on the coins TokenSage read deeply, a story it rates (nsStory) lifts
   // the odds on top of that.
-  const market = (deepShare: number) => {
-    const rand = rng(33);
+  const market = (deepShare: number, storyLift = 3, seed = 33) => {
+    const rand = rng(seed);
     const rows: TrainingRow[] = [];
     for (let i = 0; i < 2000; i++) {
       const heat = rand();
       const deep = rand() < deepShare;
       const story = deep ? rand() : null;
-      const p = (heat > 0.6 ? 0.25 : 0.04) * (story !== null && story > 0.7 ? 3 : 1);
+      const p = (heat > 0.6 ? 0.25 : 0.04) * (story !== null && story > 0.7 ? storyLift : 1);
       rows.push({
         tokenId: `t${Math.floor(i / 2)}`,
         anchorAt: new Date(T0 + i * MIN),
@@ -556,7 +557,10 @@ describe("narrative blend model", () => {
     expect(scoreCandidateWithModel(params.market, { heat: 0.9, nsStory: 0.9 })).toBe(
       scoreCandidateWithModel(params.market, { heat: 0.9, nsStory: 0.1 }),
     );
-    expect(params.blend.featureNames).toEqual([MARKET_SCORE_INPUT, "nsDepthFull", "nsStory"]);
+    // It starts from the market's log-odds and splits on TokenSage's inputs only.
+    expect(params.blend.featureNames).toEqual(["nsDepthFull", "nsStory"]);
+    expect(params.blend.offset?.input).toBe(MARKET_SCORE_INPUT);
+    expect(params.blend.trees.length).toBeGreaterThan(0);
     const hotStory = scoreCandidateWithModel(params, { heat: 0.9, nsDepthFull: 1, nsStory: 0.9 });
     const hotFlat = scoreCandidateWithModel(params, { heat: 0.9, nsDepthFull: 1, nsStory: 0.1 });
     const coldStory = scoreCandidateWithModel(params, { heat: 0.1, nsDepthFull: 1, nsStory: 0.9 });
@@ -565,6 +569,61 @@ describe("narrative blend model", () => {
     expect(hotStory).toBeLessThanOrEqual(1);
     const why = modelRationale(params, { heat: 0.9, nsDepthFull: 1, nsStory: 0.9 });
     expect(JSON.stringify(why)).not.toContain(MARKET_SCORE_INPUT);
+  });
+
+  it("adds nothing to the market's ranking when the deep read carries no signal", async () => {
+    const rows = market(0.5, 1, 34);
+    const params = await trainCuratorModel(rows, { narrativeBlend: true, featureNames: names });
+    if (params.kind !== NARRATIVE_BLEND_MODEL_KIND) throw new Error("wrong kind");
+    // Every deep-read pair the market stage orders, the whole model orders the same way.
+    const deep = rows.filter((r) => r.features.nsDepthFull === 1).slice(0, 200);
+    const m = deep.map((r) => scoreCandidateWithModel(params.market, r.features));
+    const s = deep.map((r) => scoreCandidateWithModel(params, r.features));
+    let flipped = 0;
+    let pairs = 0;
+    for (let i = 0; i < deep.length; i++) {
+      for (let j = i + 1; j < deep.length; j++) {
+        if (m[i] === m[j]) continue;
+        pairs++;
+        if (Math.sign(m[i]! - m[j]!) !== Math.sign(s[i]! - s[j]!)) flipped++;
+      }
+    }
+    expect(flipped / pairs).toBeLessThan(0.02);
+  });
+
+  it("scores a pre-2026-10-14 blend stage (the market score as a split input) as before", async () => {
+    const params = await trainCuratorModel(market(0.5), { narrativeBlend: true, featureNames: names });
+    if (params.kind !== NARRATIVE_BLEND_MODEL_KIND) throw new Error("wrong kind");
+    // One tree splitting on the market score, no offset: what the old trainer stored.
+    const legacy = {
+      ...params,
+      blend: {
+        kind: params.blend.kind,
+        featureNames: [MARKET_SCORE_INPUT, "nsStory"],
+        transform: params.blend.transform,
+        baseScore: -2,
+        trees: [
+          // Thresholds are in transformed units (signed log1p): this one is a raw log-odds of -1.5.
+          {
+            feature: [0, -1, -1],
+            threshold: [-Math.log1p(1.5), 0, 0],
+            missingLeft: [1, 0, 0],
+            left: [1, -1, -1],
+            right: [2, -1, -1],
+            value: [0, -0.5, 0.5],
+          },
+        ],
+      },
+    };
+    const hot = { heat: 0.9, nsDepthFull: 1, nsStory: 0.5 };
+    const cold = { heat: 0.1, nsDepthFull: 1, nsStory: 0.5 };
+    const z = (f: typeof hot) =>
+      Math.log(scoreCandidateWithModel(legacy, f) / (1 - scoreCandidateWithModel(legacy, f)));
+    const marketLogit = (f: typeof hot) => {
+      const p = scoreCandidateWithModel(params.market, f);
+      return Math.log(p / (1 - p));
+    };
+    for (const f of [hot, cold]) expect(z(f)).toBeCloseTo(marketLogit(f) <= -1.5 ? -2.5 : -1.5, 9);
   });
 
   it("ships the market stage alone without enough deep reads", async () => {
@@ -578,43 +637,43 @@ describe("takeover evidence", () => {
   const good = Uint8Array.from({ length: 400 }, (_, i) => (i % 10 === 0 || i % 40 === 1 ? 1 : 0));
   const poor = Uint8Array.from({ length: 400 }, (_, i) => (i % 4 === 0 ? 1 : 0));
   it("paired bootstrap confidence separates a clearly better call set from an equal one", () => {
-    expect(pairedBootstrapConfidence(labels, good, poor, targets, seededRng(1))!).toBeGreaterThan(0.95);
-    expect(pairedBootstrapConfidence(labels, poor, good, targets, seededRng(1))!).toBeLessThan(0.05);
-    expect(pairedBootstrapConfidence(labels, poor, poor, targets, seededRng(1))).toBe(0);
-    expect(pairedBootstrapConfidence(labels, new Uint8Array(400), poor, targets, seededRng(1))).toBeNull();
+    expect(pairedBootstrapConfidence(labels, good, poor, seededRng(1))!).toBeGreaterThan(0.95);
+    expect(pairedBootstrapConfidence(labels, poor, good, seededRng(1))!).toBeLessThan(0.05);
+    expect(pairedBootstrapConfidence(labels, poor, poor, seededRng(1))).toBe(0);
+    expect(pairedBootstrapConfidence(labels, new Uint8Array(400), poor, seededRng(1))).toBeNull();
+    // Mismatched lengths are no evidence.
+    expect(pairedBootstrapConfidence(labels, good, new Uint8Array(3), seededRng(1))).toBeNull();
   });
 
-  it("scores resamples on run size and the 10x tier too, like the exam", () => {
-    // Two call sets with the same 2x and 4x record; only the runs behind them differ.
-    const n = 400;
-    const rowLabels = Float64Array.from({ length: n }, (_, i) => (i % 8 === 0 ? 1.2 : 0));
-    const left = Uint8Array.from({ length: n }, (_, i) => (i % 2 === 0 ? 1 : 0));
-    const right = Uint8Array.from({ length: n }, (_, i) => (i % 2 === 1 || i % 8 === 0 ? 1 : 0));
-    // Same record on labels alone: both sides call every winner, right calls more misses.
-    const onLabels = pairedBootstrapConfidence(rowLabels, right, left, targets, seededRng(2))!;
-    expect(onLabels).toBeLessThan(0.5);
-    // The right side's extra rows are late runners (survived, ran to 8x) that hit 10x - rows
-    // whose label is 0 but whose run and tier count: now it wins almost every resample.
-    const runs = Float64Array.from({ length: n }, (_, i) => (i % 8 === 0 ? 1.2 : i % 2 === 1 ? 3 : 0));
-    const tenX = Int8Array.from({ length: n }, (_, i) => (i % 2 === 1 ? 1 : 0));
-    const withRuns = pairedBootstrapConfidence(
-      { labels: rowLabels, runs, tenX },
-      right,
-      left,
-      targets,
-      seededRng(2),
-    )!;
-    expect(withRuns).toBeGreaterThan(0.95);
-    // Mismatched lengths are no evidence.
-    expect(
-      pairedBootstrapConfidence(
-        { labels: rowLabels, runs: new Float64Array(3) },
-        right,
-        left,
-        targets,
-        seededRng(2),
-      ),
-    ).toBeNull();
+  it("judges the 2x rate alone: calling more runners at the same rate is no lead", () => {
+    // Winners on every 10th row. Both sides double on half their calls; the wide side calls twice
+    // as many rows and so catches twice the runners - under the old catch-scored bootstrap it led
+    // in nearly every resample (user decision 2026-10-14).
+    const narrow = Uint8Array.from({ length: 400 }, (_, i) => (i % 20 === 0 || i % 20 === 1 ? 1 : 0));
+    const wide = Uint8Array.from({ length: 400 }, (_, i) => (i % 10 === 0 || i % 10 === 1 ? 1 : 0));
+    expect(pairedBootstrapConfidence(labels, wide, narrow, seededRng(3))!).toBeLessThan(0.6);
+    // A better 2x rate on fewer calls still leads.
+    const sharp = Uint8Array.from({ length: 400 }, (_, i) => (i % 20 === 0 ? 1 : 0));
+    expect(pairedBootstrapConfidence(labels, sharp, wide, seededRng(3))!).toBeGreaterThan(0.95);
+  });
+
+  it("calls each side's top k moments, one call per token inside the cooldown", () => {
+    const hour = 3_600_000;
+    const moments = [
+      { tokenId: "a", anchorMs: 0 },
+      { tokenId: "a", anchorMs: hour },
+      { tokenId: "b", anchorMs: 0 },
+      { tokenId: "c", anchorMs: 0 },
+      { anchorMs: 0 },
+    ];
+    const scores = [0.9, 0.8, 0.7, 0.6, 0.95];
+    expect([...equalShareCalls(scores, moments, 3, 24 * hour)]).toEqual([1, 0, 1, 0, 1]);
+    // Without a cooldown, a token's second moment is a call of its own.
+    expect([...equalShareCalls(scores, moments, 3, 0)]).toEqual([1, 1, 0, 0, 1]);
+    // Fewer than k only when the cooldown leaves fewer; mismatched or empty asks call nothing.
+    expect(equalShareCalls(scores, moments, 9, 24 * hour).reduce((n, c) => n + c, 0)).toBe(4);
+    expect(equalShareCalls(scores, moments.slice(1), 3, 0).reduce((n, c) => n + c, 0)).toBe(0);
+    expect(equalShareCalls(scores, moments, 0, 0).reduce((n, c) => n + c, 0)).toBe(0);
   });
 
   it("refuses a takeover on thin wins, low confidence, or too soon after the last", () => {

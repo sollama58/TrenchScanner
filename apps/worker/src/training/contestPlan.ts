@@ -1,11 +1,11 @@
 import {
   bootstrapDrawsFor,
   chooseReplacement,
+  equalShareCalls,
   pairedBootstrapConfidence,
   seededRng,
   type Challenger,
   type EvolutionPlan,
-  type PrecisionTargets,
   type ReplacementInput,
 } from "@trenchscanner/core";
 
@@ -32,7 +32,6 @@ export interface ContestPlan {
       confidence: number;
       lastTakeoverAt: Date | null;
       minTakeoverIntervalMs: number;
-      targets: PrecisionTargets;
       /** Seeds the paired bootstrap, so a run's decision is reproducible from its log. */
       seed: number;
     };
@@ -64,13 +63,16 @@ export function toEvolutionPlan(plan: ContestPlan): EvolutionPlan {
           challengerExamWins: exam.challengerExamWins,
           pairedConfidence: (slot, challenger, required) => {
             const lane = exam.laneCalls.get(slot);
-            const bred = exam.challengerCalls[challenger];
-            if (!lane || !bred) return null;
+            const laneRanks = exam.laneRanks.get(slot);
+            const bredRanks = exam.challengerRanks[challenger];
+            if (!lane || !laneRanks || !exam.challengerCalls[challenger] || !bredRanks) return null;
+            // Both at the seat's share: each its own top calls, as many as the seat's exam sent.
+            const k = lane.reduce((n, c) => n + c, 0);
+            const at = (ranks: Float64Array) => equalShareCalls(ranks, exam.moments, k, exam.cooldownMs);
             return pairedBootstrapConfidence(
-              { labels: exam.labels, runs: exam.runs, tenX: exam.tenX },
-              bred,
-              lane,
-              ev.targets,
+              exam.labels,
+              at(bredRanks),
+              at(laneRanks),
               seededRng(ev.seed + challenger),
               bootstrapDrawsFor(required),
             );

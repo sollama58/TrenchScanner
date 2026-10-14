@@ -234,13 +234,18 @@ export const MARKET_SCORE_INPUT = "marketScoreLogit";
 /**
  * The two-step narrative model (the Narrative Blend seat, contestants.ts): a market stage scores
  * the coin from every non-TokenSage input, trained on every row; a blend stage, trained only on
- * rows that carry TokenSage's deep read, decides from that score and the TokenSage inputs. The
- * market's view and the narrative's each get a stage of their own, so neither drowns the other.
+ * rows that carry TokenSage's deep read, starts from that score and corrects it by the TokenSage
+ * inputs only where that beat the market score on held-out rows. The market's view and the
+ * narrative's each get a stage of their own, so neither drowns the other, and the narrative can't
+ * make the market's ranking worse than its training holdout allows.
  */
 export interface NarrativeBlendCuratorParams {
   kind: typeof NARRATIVE_BLEND_MODEL_KIND;
   market: Omit<LogisticCuratorParams, "threshold"> | Omit<BoostedCuratorParams, "threshold">;
-  /** Reads MARKET_SCORE_INPUT plus the TokenSage inputs. */
+  /**
+   * Starts from MARKET_SCORE_INPUT (its `offset`) and splits on the TokenSage inputs. Stored before
+   * 2026-10-14: no offset, MARKET_SCORE_INPUT one of its split inputs; both score the same way.
+   */
   blend: Omit<BoostedCuratorParams, "threshold">;
   /** Emit when the blend stage's probability >= this. */
   threshold: number;
@@ -394,8 +399,24 @@ export async function trainTwoStageCurator(
   return { kind: TWO_STAGE_MODEL_KIND, survival, win };
 }
 
-/** The blend stage's tree depth: it adjusts one score by the narrative, so shallow trees do. */
-const BLEND_STAGE_MAX_DEPTH = 2;
+/**
+ * The blend stage's knobs. It starts from the market stage's log-odds and learns only a correction
+ * from the TokenSage inputs, so it is held on a short leash: shallow trees (depth 2), a slow
+ * learning rate, a heavy L2 on every leaf and big leaves, and early stopping on the newest deep-read
+ * rows that keeps no tree at all unless one beats the market score there (BoostingOptions.offsetInput).
+ * With no narrative signal it is the market stage. Until 2026-10-14 it was a depth-2 model at the
+ * trainer's defaults that split on the market score like any input; on the audit's walk-forward of
+ * the seat's own rows (deep-read decisions plus second looks, test days 10-10..10-14) it re-ordered
+ * a good market score with inputs that carry no signal: AUC 0.652 and top 10% 18.9% against the
+ * market stage's 0.675 and 22.4%. This design: 0.673 and 22.2%, top 1% 23.4% (old 14.9%)
+ * (notes/model-audit-2026-10-14/narrative.md B1).
+ */
+const BLEND_STAGE_OPTIONS = {
+  maxDepth: 2,
+  learningRate: 0.02,
+  l2: 20,
+  minLeafRows: 100,
+} as const satisfies BoostingOptions;
 
 function logOdds(p: number): number {
   const q = Math.min(1 - 1e-4, Math.max(1e-4, p));
@@ -405,10 +426,15 @@ function logOdds(p: number): number {
 /**
  * The two-step narrative trainer - see NarrativeBlendCuratorParams. The market stage trains on
  * every row with the inputs that are not TokenSage's. The blend stage trains on the rows with the
- * deep read (nsDepthFull = 1), each carrying the market stage's score for it as MARKET_SCORE_INPUT
- * - cross-fitted: the deep-read tokens split in two halves, and each half is scored by a market
- * stage that never trained on its tokens, so the blend stage learns how far to trust the market
- * score from the scores a live coin would get, not from memorized ones. With too few deep-read
+ * deep read (nsDepthFull = 1), each starting from the market stage's log-odds for it
+ * (MARKET_SCORE_INPUT, BLEND_STAGE_OPTIONS) - cross-fitted: the deep-read tokens split in two
+ * halves, and each half is scored by a market stage that never trained on its tokens, so the
+ * correction is learned against the scores an unseen coin gets, not memorized ones. Live, the
+ * full-data market stage gives the start. The stage never splits on the market score (it is the
+ * start, not an input), so the full-data stage being a little sharper than the half-data ones moves
+ * no split; it only makes the narrative correction weigh slightly less live. Serving the two
+ * half-data stages' mean instead, so training and live share one scale exactly, measured worse on
+ * the walk-forward (AUC 0.670 against 0.673, top 1% 14.9% against 23.4%). With too few deep-read
  * rows for the blend stage, the market stage ships alone.
  */
 export async function trainNarrativeBlendCurator(
@@ -459,12 +485,13 @@ export async function trainNarrativeBlendCurator(
   }));
   const blend = await trainBoostedCurator(blendRows, {
     ...opts.boosting,
-    maxDepth: BLEND_STAGE_MAX_DEPTH,
+    ...BLEND_STAGE_OPTIONS,
     objective: "logistic",
+    offsetInput: MARKET_SCORE_INPUT,
     recencyHalfLifeDays: opts.recencyHalfLifeDays,
     legacyLabelWeight: opts.legacyLabelWeight,
     runWeightPerDoubling: opts.runWeightPerDoubling,
-    featureNames: [MARKET_SCORE_INPUT, ...names.filter((n) => n.startsWith("ns"))],
+    featureNames: names.filter((n) => n.startsWith("ns")),
   });
   return { kind: NARRATIVE_BLEND_MODEL_KIND, market, blend };
 }

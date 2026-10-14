@@ -315,6 +315,8 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
           reasons: ["volume, rising", 'said "hi"'],
           anchorPriceUsd: 1,
           anchorMcapUsd: 50_000,
+          narrativeVerdict: "warns",
+          narrativeNotedAt: at(1),
         },
       })
     ).id;
@@ -467,6 +469,10 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
     expect(lines[1]).toContain('"volume, rising|said ""hi"""');
     const json = JSON.parse((await get("dataset=alerts")).text);
     expect(json).toMatchObject({ symbol: "EXP", candidateOutcomeId: outcomeIds[0] });
+    // The Narrative seat's note rides along, so it can be graded against the card's outcome.
+    expect(json).toMatchObject({ narrativeVerdict: "warns", narrativeNotedAt: at(1).toISOString() });
+    expect(lines[0]).toMatch(/,narrativeVerdict,narrativeNotedAt$/);
+    expect(lines[1]).toMatch(new RegExp(`,warns,${at(1).toISOString()}$`));
   });
 
   it("exports the stored Top Models pick per slot", async () => {

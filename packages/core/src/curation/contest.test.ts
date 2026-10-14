@@ -18,7 +18,12 @@ import {
 import { foundingLanes } from "./evolution.js";
 import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
 import { LEARNER_FEATURE_NAMES, SAFETY_FEATURES } from "./features.js";
-import { NARRATIVE_BACKGROUND_KIND, NARRATIVE_MIN_ROWS, narrativeTrainingSet } from "./trainingRun.js";
+import {
+  NARRATIVE_BACKGROUND_KIND,
+  NARRATIVE_MIN_ROWS,
+  narrativeTrainingSet,
+  type ExamEvidence,
+} from "./trainingRun.js";
 import { isDecisionRow, type TrainingRow } from "./trainer.js";
 import { STACKED_MODEL_KIND } from "./stacking.js";
 import {
@@ -66,8 +71,8 @@ describe("contestant roster", () => {
       "hasTwitter",
       "hasWebsite",
     ]);
-    // The story carries a fixed 70% of the decision, the safety readings the rest.
-    expect(recipe?.narrativeLed).toBe(0.7);
+    // The story carries a fixed 30% of the decision, the safety readings the rest.
+    expect(recipe?.narrativeLed).toBe(0.3);
     // No price, volume or age.
     for (const market of ["ageMinutes", "volumeAccel", "holderGrowth10mPct", "pathRet15mPct", "mcapUsd"]) {
       expect(NARRATIVE_SEAT_FEATURES).not.toContain(market);
@@ -358,12 +363,12 @@ describe("takeover probation and the exam's calls", () => {
 
   it("holds a decided takeover on probation, with both models frozen, and leaves the seat alone", async () => {
     const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 12 });
-    let callsSeen: { lane: Map<string, Uint8Array>; challenger: (Uint8Array | null)[] } | null = null;
+    let callsSeen: ExamEvidence | null = null;
     const outcome = await runEvolvingContest(rows, cfg, {
       challengers: [bred],
       probation: true,
       decide: (_lanes, challengerScores, exam) => {
-        callsSeen = { lane: exam.laneCalls, challenger: exam.challengerCalls };
+        callsSeen = exam;
         return challengerScores[0] === null ? null : { slot: "order-flow", challenger: 0, reason: "test" };
       },
     });
@@ -377,8 +382,14 @@ describe("takeover probation and the exam's calls", () => {
     expect(seat.metrics.contestantName).toBe("Order Flow");
     // The bootstrap's masks are the calls the exam record counts: one call per mask entry.
     const linear = outcome.results.find((r) => r.contestant === "linear")!;
-    const mask = callsSeen!.lane.get("linear");
+    const seen = callsSeen!;
+    const mask = seen.laneCalls.get("linear");
     if (mask) expect(mask.reduce((n, c) => n + c, 0)).toBe(linear.metrics.exam!.calls);
+    // And the rank arrays the takeover's equal-share comparison draws from line up with them.
+    expect(seen.moments).toHaveLength(seen.labels.length);
+    expect(seen.cooldownMs).toBe(24 * 3_600_000);
+    expect(seen.laneRanks.get("linear")).toHaveLength(seen.labels.length);
+    if (seen.challengerCalls[0]) expect(seen.challengerRanks[0]).toHaveLength(seen.labels.length);
   }, 60_000);
 
   it("reports a decided takeover it can't carry out instead of dropping it silently", async () => {

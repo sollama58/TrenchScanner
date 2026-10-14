@@ -626,10 +626,11 @@ type ProbationState =
 /**
  * Settles the pending takeover probation, if any (curation/probation.ts). Once it has run
  * CURATOR_EVOLUTION_PROBATION_HOURS, the challenger and the seat - both frozen as they stood when
- * it was picked - are scored once on the decision moments that arrived since: a pass seats the
- * challenger this run, anything else retires the probation. Before then the run waits (no
- * breeding: one takeover is already in hand). A seat that changed hands meanwhile (a restore), or
- * probation turned off, abandons it.
+ * it was picked - are scored once on the decision moments that arrived since, each calling the
+ * field's target share of them and judged on its 2x rate there: a pass seats the challenger this
+ * run, anything else retires the probation. Before then the run waits (no breeding: one takeover
+ * is already in hand). A seat that changed hands meanwhile (a restore), or probation turned off,
+ * abandons it.
  */
 async function settleProbation(
   env: Env,
@@ -669,7 +670,7 @@ async function settleProbation(
     lane: pending.laneParams as unknown as TrainedCuratorParams,
     mcapBand: { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX },
     cooldownMs: env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000,
-    targets,
+    share: targets.targetShare ?? 0,
     minWins: env.CURATOR_EVOLUTION_PROBATION_MIN_WINS,
     confidence: env.CURATOR_EVOLUTION_CONFIDENCE,
     rng: seededRng(pending.startedAt.getTime() % 2_147_483_647),
@@ -759,7 +760,6 @@ async function evolutionPlan(
         confidence: env.CURATOR_EVOLUTION_CONFIDENCE,
         lastTakeoverAt: lastTakeover._max.bornAt ?? null,
         minTakeoverIntervalMs: env.CURATOR_EVOLUTION_MIN_TAKEOVER_INTERVAL_HOURS * 3_600_000,
-        targets,
         seed,
       },
     },

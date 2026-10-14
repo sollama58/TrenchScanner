@@ -596,21 +596,23 @@ const envSchema = z.object({
   CURATOR_EVOLUTION_MIN_AGE_HOURS: z.coerce.number().min(0).default(12),
   CURATOR_EVOLUTION_MARGIN: z.coerce.number().min(0).max(50).default(3),
   // A takeover also needs evidence (curation/evolution.ts, TakeoverEvidence): the challenger's
-  // exam must hold at least this many wins, it must out-score the seat it replaces in this share
-  // of paired bootstrap resamples of the same exam rows (0 = off), and seats change hands at most
-  // once per this many hours. MIN_EXAM_WINS 0 = off (no wins needed); MIN_TAKEOVER_INTERVAL 0 =
-  // off (a takeover every run).
+  // exam must hold at least this many wins, its 2x rate must beat the seat's, both calling the
+  // seat's share of the same exam rows, in this share of paired bootstrap resamples (0 = off; on
+  // the 2x rate alone since 2026-10-14, user decision), and seats change hands at most once per
+  // this many hours. MIN_EXAM_WINS 0 = off (no wins needed); MIN_TAKEOVER_INTERVAL 0 = off (a
+  // takeover every run).
   // 15 since 2026-10-06 (user decision): at 30, a precise challenger (100 exam calls at 28%) could
   // never take a seat while a loose one (300 at 20%) could; the bootstrap already guards noise.
   CURATOR_EVOLUTION_MIN_EXAM_WINS: z.coerce.number().int().min(0).default(15),
   CURATOR_EVOLUTION_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.9),
   CURATOR_EVOLUTION_MIN_TAKEOVER_INTERVAL_HOURS: z.coerce.number().min(0).default(24),
   // Probation (curation/probation.ts, user decision 2026-10-06): a challenger that wins a seat on
-  // the exam waits this many hours, then takes it only if it also beats the seat on the decision
-  // moments that arrived since - the only rows that had no say in picking it - with at least
-  // MIN_WINS wins there and CURATOR_EVOLUTION_CONFIDENCE in paired resamples. No breeding while
-  // one is pending (seats change hands at most once a day anyway). 0 = seat it straight away.
-  // PROBATION_MIN_WINS 0 = off (the probation needs no wins).
+  // the exam waits this many hours, then takes it only if its 2x rate also beats the seat's on the
+  // decision moments that arrived since - the only rows that had no say in picking it - both
+  // calling CURATED_CUTOFF_TARGET_SHARE of them, with at least MIN_WINS wins there and
+  // CURATOR_EVOLUTION_CONFIDENCE in paired resamples. No breeding while one is pending (seats
+  // change hands at most once a day anyway). 0 = seat it straight away. PROBATION_MIN_WINS 0 = off
+  // (the probation needs no wins).
   CURATOR_EVOLUTION_PROBATION_HOURS: z.coerce.number().min(0).max(72).default(18),
   CURATOR_EVOLUTION_PROBATION_MIN_WINS: z.coerce.number().int().min(0).default(8),
   // The default model is the leaderboard's best performer, re-chosen after each training run

@@ -14,7 +14,7 @@ import {
   trainCuratorModel,
   type TrainingRow,
 } from "./trainer.js";
-import { BOOSTED_MODEL_KIND } from "./boosting.js";
+import { BOOSTED_MODEL_KIND, averageBoosted, trainBoostedCurator } from "./boosting.js";
 
 /** A deterministic PRNG so the rows (and the forests) are the same every run. */
 function rng(seed: number): () => number {
@@ -102,6 +102,30 @@ describe("trainNarrativeLedCurator", () => {
       }
     }
     expect(story / (story + safety)).toBeCloseTo(0.7, 2);
+  });
+
+  it("ships the two cross-fit fold models its rank tables were read from, as their mean", async () => {
+    const data = rows(600);
+    const m = (await trainNarrativeLedCurator(data, { featureNames: FEATURES, storyWeight: 0.3 }))!;
+    // One token per row, so the halves alternate; fold h trains on the other half's rows.
+    const folds = [0, 1].map((h) =>
+      trainBoostedCurator(
+        data.filter((_, i) => i % 2 !== h),
+        { featureNames: ["nsXFit", "nsCatAnimal"] },
+      ),
+    );
+    expect(m.story).toEqual(averageBoosted(await Promise.all(folds)));
+  });
+
+  it("with too few rows to hold a half out, reads its tables off the one model per stage it ships", async () => {
+    const data = rows(80);
+    const m = (await trainNarrativeLedCurator(data, { featureNames: FEATURES, storyWeight: 0.3 }))!;
+    expect(m).not.toBeNull();
+    for (const row of data.slice(0, 20)) {
+      const score = scoreNarrativeLed(m, row.features);
+      expect(score).toBeGreaterThanOrEqual(0);
+      expect(score).toBeLessThanOrEqual(1);
+    }
   });
 
   it("is not built on too few rows", async () => {

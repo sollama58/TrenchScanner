@@ -272,6 +272,8 @@ describe("the forest and objective families", () => {
     expect(recipeFamily({ learner: "gbdt", boosting: { objective: "lambdarank" } })).toBe("gbdt:lambdarank");
     expect(recipeFamily({ learner: "gbdt" })).toBe("gbdt");
     expect(recipeFamily({ learner: "forest" })).toBe("forest");
+    // Survivor's two-stage question is a family of its own, so its last seat is protected.
+    expect(recipeFamily({ learner: "gbdt", twoStage: true })).toBe("gbdt:twoStage");
   });
 
   it("guards a ranker's last seat like any other family's", () => {
@@ -288,5 +290,17 @@ describe("the forest and objective families", () => {
     const base = { lanes, challengerScores: [50], now, minAgeMs: 0, margin: 3 };
     expect(chooseReplacement({ ...base, challengerLearners: ["gbdt"] })?.slot).toBe("t1");
     expect(chooseReplacement({ ...base, challengerLearners: ["gbdt:lambdarank"] })?.slot).toBe("rk");
+  });
+
+  it("guards Survivor's last seat from a one-stage gbdt child", () => {
+    const now = new Date(t0.getTime() + 48 * 3_600_000);
+    const lanes = [
+      { lane: lane("survivor", { learner: "gbdt", twoStage: true }), composite: 10, examScore: 20 },
+      { lane: lane("t1", { learner: "gbdt" }), composite: 30, examScore: 20 },
+      { lane: lane("t2", { learner: "gbdt" }), composite: 40, examScore: 20 },
+    ];
+    const base = { lanes, challengerScores: [50], now, minAgeMs: 0, margin: 3 };
+    expect(chooseReplacement({ ...base, challengerLearners: ["gbdt"] })?.slot).toBe("t1");
+    expect(chooseReplacement({ ...base, challengerLearners: ["gbdt:twoStage"] })?.slot).toBe("survivor");
   });
 });

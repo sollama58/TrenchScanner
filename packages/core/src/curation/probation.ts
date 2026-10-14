@@ -1,12 +1,11 @@
 import { inMcapBand, type McapBand } from "./curator.js";
-import { pairedBootstrapConfidence, type Rng } from "./evolution.js";
+import { equalShareCalls, pairedBootstrapConfidence, type Rng } from "./evolution.js";
 import { GOAL_MULTIPLE, isCurrentLabelRule, runDoublings } from "./labels.js";
-import { recordScore, type CallRecord } from "./leaderboard.js";
+import type { CallRecord } from "./leaderboard.js";
 import {
   applyCooldown,
   isDecisionRow,
   scoreCandidateWithModel,
-  type PrecisionTargets,
   type TrainedCuratorParams,
   type TrainingRow,
 } from "./trainer.js";
@@ -21,10 +20,18 @@ import {
  *
  * So the challenger's model and the seat's model are both frozen as they stood in the run that
  * picked the challenger, and once the probation has run its course both are scored on the
- * decision moments that arrived since: each at its own shipped cutoff, with the per-token
- * cooldown, as live would have called them. The challenger takes the seat only when it out-scores
- * the seat there too, with enough wins and in enough paired bootstrap resamples. One look, at the
+ * decision moments that arrived since, and each calls its own top `share` of them, with the
+ * per-token cooldown (equalShareCalls). The challenger takes the seat only when its 2x rate there
+ * beats the seat's, with enough wins and in enough paired bootstrap resamples. One look, at the
  * end, so the answer is not shopped for run after run.
+ *
+ * Equal share, 2x alone (user decision 2026-10-14): each side used to call at its own shipped
+ * cutoff and be scored with a catch part, so the side whose cutoff called more rows led on the
+ * runners it swept up - Forest #34 took the Momentum seat "ahead in 100% of paired resamples"
+ * calling 44% of fresh moments at 18.5% 2x, against the seat's 21% at 19.5%. And the seat's
+ * cutoff is the one frozen run's: the seat retrains every run, and a frozen Linear cutoff made 13
+ * calls on 788 fresh moments while the live seat made 127. At an equal share neither cutoff
+ * matters; what is still frozen is the seat's weights, not its volume.
  */
 
 export interface ProbationInput {
@@ -35,10 +42,14 @@ export interface ProbationInput {
   lane: TrainedCuratorParams;
   mcapBand?: McapBand;
   cooldownMs: number;
-  targets: PrecisionTargets;
+  /**
+   * The share of fresh moments each side calls (the field's CURATED_CUTOFF_TARGET_SHARE). 0 = as
+   * many as the seat's frozen model calls at its shipped cutoff.
+   */
+  share: number;
   /** Wins the challenger's fresh record must hold. */
   minWins: number;
-  /** Share of paired bootstrap resamples it must lead in (0 = off). */
+  /** Share of paired bootstrap resamples its 2x rate must lead in (0 = off). */
   confidence: number;
   rng: Rng;
 }
@@ -108,29 +119,36 @@ function maskRecord(rows: TrainingRow[], mask: Uint8Array): CallRecord {
 
 export function judgeProbation(input: ProbationInput): ProbationVerdict {
   const rows = freshDecisionRows(input.rows, input.startedAt, input.mcapBand);
-  const challengerMask = frozenCalls(input.challenger, rows, input.cooldownMs);
-  const laneMask = frozenCalls(input.lane, rows, input.cooldownMs);
+  const k =
+    input.share > 0
+      ? Math.round(input.share * rows.length)
+      : frozenCalls(input.lane, rows, input.cooldownMs).reduce((n, c) => n + c, 0);
+  const moments = rows.map((r) => ({ tokenId: r.tokenId, anchorMs: r.anchorAt.getTime() }));
+  const topShare = (params: TrainedCuratorParams) =>
+    equalShareCalls(
+      rows.map((r) => scoreCandidateWithModel(params, r.features)),
+      moments,
+      k,
+      input.cooldownMs,
+    );
+  const challengerMask = topShare(input.challenger);
+  const laneMask = topShare(input.lane);
   const challenger = maskRecord(rows, challengerMask);
   const lane = maskRecord(rows, laneMask);
   const pairedConfidence = pairedBootstrapConfidence(
-    {
-      labels: Float64Array.from(rows, (r) => r.labelValue),
-      runs: Float64Array.from(rows, (r) => runDoublings(r)),
-      tenX: Int8Array.from(rows, (r) =>
-        r.labelValue <= 0 ? 0 : r.hit10x === undefined ? -1 : r.hit10x ? 1 : 0,
-      ),
-    },
+    Float64Array.from(rows, (r) => r.labelValue),
     challengerMask,
     laneMask,
-    input.targets,
     input.rng,
   );
-  const cs = recordScore(challenger, input.targets);
-  const ls = recordScore(lane, input.targets);
-  const fmt = (score: number | null) => (score === null ? "none" : score.toFixed(1));
+  const rate = (r: CallRecord) => (r.calls === 0 ? null : r.wins / r.calls);
+  const cr = rate(challenger);
+  const lr = rate(lane);
+  const fmt = (r: CallRecord) =>
+    `${r.wins}/${r.calls}` + (r.calls === 0 ? "" : ` (2x ${((r.wins / r.calls) * 100).toFixed(1)}%)`);
   const summary =
-    `on ${rows.length} fresh decision moments: challenger ${challenger.wins}/${challenger.calls} (score ${fmt(cs)}), ` +
-    `seat ${lane.wins}/${lane.calls} (score ${fmt(ls)})` +
+    `on ${rows.length} fresh decision moments, each side's top ${k}: challenger ${fmt(challenger)}, ` +
+    `seat ${fmt(lane)}` +
     (pairedConfidence === null
       ? ""
       : `, ahead in ${(pairedConfidence * 100).toFixed(0)}% of paired resamples`);
@@ -143,7 +161,7 @@ export function judgeProbation(input: ProbationInput): ProbationVerdict {
     pairedConfidence,
   });
   if (challenger.wins < input.minWins) return verdict(false, `too few fresh wins (need ${input.minWins})`);
-  if (ls !== null && (cs === null || cs <= ls)) return verdict(false, "did not out-score the seat");
+  if (lr !== null && (cr === null || cr <= lr)) return verdict(false, "did not beat the seat's 2x rate");
   // A seat with no fresh calls of its own to pair against is beaten on the wins floor alone.
   if (input.confidence > 0 && pairedConfidence !== null && pairedConfidence < input.confidence)
     return verdict(false, `not ahead in ${Math.round(input.confidence * 100)}% of paired resamples`);
