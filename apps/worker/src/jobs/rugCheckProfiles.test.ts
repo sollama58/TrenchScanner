@@ -7,7 +7,12 @@ import {
   type RugCheckProfile,
   type RugCheckProfileResult,
 } from "@trenchscanner/core";
-import { resetRugCheckBackoff, resolveRugProfiles, settleRugCheckRefresh } from "./rugCheckProfiles.js";
+import {
+  STALE_MAX_AGE_MS,
+  resetRugCheckBackoff,
+  resolveRugProfiles,
+  settleRugCheckRefresh,
+} from "./rugCheckProfiles.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -93,6 +98,33 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     expect(calls.flat().sort()).toEqual([fresh, old].sort());
     expect(result.profiles.get(newer)?.holderCount).toBe(3);
     expect(result.stats).toMatchObject({ fetched: 2, reused: 1 });
+  });
+
+  it("serves no report older than STALE_MAX_AGE_MS: past the budget it is missing, in the background path awaited", async () => {
+    const [ancient, fresh] = [mint("age-old"), mint("age-new")];
+    const { client, calls } = fakeClient({
+      [ancient]: { status: "found", profile: profile(ancient, 7) },
+      [fresh]: { status: "found", profile: profile(fresh, 8) },
+    });
+    await resolveRugProfiles([ancient], client, 5);
+    await prisma.rugCheckCache.update({
+      where: { mintAddress: ancient },
+      data: { checkedAt: new Date(Date.now() - STALE_MAX_AGE_MS - 60_000) },
+    });
+    calls.length = 0;
+
+    // Budget of one, spent on the never-checked mint: the old report does not stand in.
+    const capped = await resolveRugProfiles([fresh, ancient], client, 5, 1);
+    expect(calls.flat()).toEqual([fresh]);
+    expect(capped.profiles.has(ancient)).toBe(false);
+    expect(capped.stats).toMatchObject({ reused: 0 });
+
+    // Stale-while-revalidate: too old to serve, so it is waited on like a never-checked mint.
+    calls.length = 0;
+    const swr = await resolveRugProfiles([ancient], client, 5, Infinity, { refreshStaleInBackground: true });
+    expect(calls.flat()).toEqual([ancient]);
+    expect(swr.profiles.get(ancient)?.holderCount).toBe(7);
+    expect(swr.stats).toMatchObject({ fetched: 1, reused: 0 });
   });
 
   it("re-fetches once the TTL has elapsed", async () => {

@@ -59,7 +59,8 @@ describe.skipIf(!dbAvailable)("combined feed", () => {
       data: [
         { ...base, tokenId: tokens.A, model: "rules", modelName: "Rules", createdAt: soon(0) },
         { ...base, tokenId: tokens.A, model: "trees", modelName: "Trees", createdAt: soon(10) },
-        { ...base, tokenId: tokens.B, model: "trees", modelName: "Trees", createdAt: soon(5) },
+        // Over Trees' high-conviction line: the one call the high-conviction tier carries.
+        { ...base, tokenId: tokens.B, model: "trees", modelName: "Trees", tier: "high", createdAt: soon(5) },
       ],
     });
     app = await buildServer(env);
@@ -106,6 +107,21 @@ describe.skipIf(!dbAvailable)("combined feed", () => {
     const cards = await myCards();
     expect(cards.map((c) => c.tokenId)).toEqual([tokens.A]);
     expect(cards[0]!.curated!.calledBy.map((c) => c.model)).toEqual(["rules"]);
+  });
+
+  it("shows the high-conviction tier alone on request, whatever models are checked", async () => {
+    // Rules alone is checked (above), and Rules never called B; Trees' high call on B is the tier.
+    const res = await call("GET", "/matches?page=1&includeCurated=saved&highConviction=1");
+    expect(res.statusCode).toBe(200);
+    const cards = (
+      res.json() as { matches: { tokenId: string; curated: { model: string } | null }[] }
+    ).matches.filter((c) => c.tokenId === tokens.A || c.tokenId === tokens.B);
+    expect(cards.map((c) => [c.tokenId, c.curated?.model])).toEqual([[tokens.B, "trees"]]);
+    // The tiles and returns read the same calls.
+    expect((await call("GET", "/matches/stats?hours=24&highConviction=1")).statusCode).toBe(200);
+    expect((await call("GET", "/matches/returns?highConviction=1")).statusCode).toBe(200);
+    // Without the flag the feed is the checked models again.
+    expect((await myCards()).map((c) => c.tokenId)).toEqual([tokens.A]);
   });
 
   it("leaves model calls out when the switch is off", async () => {

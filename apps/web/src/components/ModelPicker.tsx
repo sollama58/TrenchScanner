@@ -228,9 +228,11 @@ export function ModelPicker({
           })}
           {daily && (
             <p className="mp-foot faint small">
-              <span className="mp-rank top mp-key">1</span> The top {board.defaultRule?.count ?? 3} by score
-              make up the default feed. <span className="mp-badge best">★ best</span> has the highest average
-              return under the exit plan. Both need {minGraded} graded calls in the last 24h; picked every{" "}
+              <span className="mp-rank top mp-key">1</span> The top {board.defaultRule?.count ?? 3} by 2x rate
+              at the low end of its range, over the last {board.defaultRule?.rankWindowHours ?? 72}h with{" "}
+              {board.defaultRule?.rankMinGraded ?? 90} graded calls, make up the default feed.{" "}
+              <span className="mp-badge best">★ best</span> has the highest average return under the exit
+              plan, with {minGraded} graded calls in the last 24h. Both are picked every{" "}
               {Math.round((board.defaultRule?.refreshMinutes ?? 360) / 60)} hours (00, 06, 12 and 18 UTC).
             </p>
           )}

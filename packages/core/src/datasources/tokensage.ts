@@ -941,7 +941,10 @@ export function narrativeFieldsFromAnalysis(
     xPredatesTokenS: xRead ? count(x.predates_token_by_s) : null,
     xReuseCount: xRead ? count(x.reuse_count) : null,
     ...engagementFields(xRead ? x : null),
-    trendMatched: trend !== null && typeof trend.matched === "boolean" ? trend.matched : null,
+    // A basic read never runs the trend match: its false means unread, not "not in the news" (audit
+    // 2026-10-14, L10 M1). The model input was already null there; the AI brief and Lighthouse were not.
+    trendMatched:
+      doc.depth === "full" && trend !== null && typeof trend.matched === "boolean" ? trend.matched : null,
     highFlagCount: severityCount("high"),
     warnFlagCount: severityCount("warn"),
     rulesVersion: clip(asRecord(doc.versions)?.rules),

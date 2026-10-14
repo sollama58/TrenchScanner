@@ -1,5 +1,11 @@
 import "./bootstrap-env.js"; // must run before any @trenchscanner/core import - see file comment
-import { loadEnv, createLogger, installApiUsageMeter, nameApiHost } from "@trenchscanner/core";
+import {
+  loadEnv,
+  createLogger,
+  installApiUsageMeter,
+  nameApiHost,
+  startEventLoopWatch,
+} from "@trenchscanner/core";
 import { buildServer } from "./server.js";
 
 const logger = createLogger("api");
@@ -17,6 +23,8 @@ async function main() {
   // candles, Telegram), before the server builds any client.
   if (env.TOKENSAGE_API_URL) nameApiHost(env.TOKENSAGE_API_URL, "tokensage");
   const stopApiUsageMeter = installApiUsageMeter({ processName: "api" });
+  // A held event loop (every request waiting on one synchronous step) is logged with its length.
+  startEventLoopWatch();
 
   if (env.JWT_SECRET === INSECURE_DEFAULT_JWT_SECRET || env.JWT_SECRET === EXAMPLE_JWT_SECRET) {
     if (process.env.NODE_ENV === "production") {

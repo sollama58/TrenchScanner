@@ -208,6 +208,17 @@ describe("runRugScreen - Pump.fun Mayhem Mode", () => {
     expect(result.reasons.join(" ")).toMatch(/unverified/i);
   });
 
+  it("doesn't call Mayhem unverified on a coin a local check already rejected (it was never looked up)", () => {
+    const { isMayhemMode: _omitted, ...unchecked } = safeProfile;
+    const result = runRugScreen({ ...unchecked, lpBurned: false });
+    expect(result.passed).toBe(false);
+    expect(result.reasons.join(" ")).not.toMatch(/Mayhem/i);
+    // A known Mayhem coin still says so alongside the local reason.
+    expect(runRugScreen({ ...safeProfile, lpBurned: false, isMayhemMode: true }).reasons.join(" ")).toMatch(
+      /Mayhem Mode token/,
+    );
+  });
+
   it("rejects a Mayhem token that is otherwise completely clean", () => {
     // The whole point: these tokens look great on every other axis precisely because their
     // volume and holder activity are manufactured by Pump.fun's AI agents.

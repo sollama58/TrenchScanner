@@ -1,6 +1,8 @@
 import "./bootstrap-env.js"; // must run before any @trenchscanner/core import - see file comment
 import {
   installApiUsageMeter,
+  startEventLoopWatch,
+  eventLoopReport,
   nameApiHost,
   withApiFeature,
   loadEnv,
@@ -51,6 +53,7 @@ import {
   scheduleInterval,
   scheduleDailyAt,
   SHUTDOWN_INTERRUPTED_ERROR,
+  runningJobsNow,
   type JobRunMeta,
   type ScheduledJob,
 } from "./scheduler.js";
@@ -105,6 +108,21 @@ const SCORE_WEIGHTS_INTERVAL_HOURS = 6;
  * decides which of the schedules are actually started, so "all" (local dev, tests) behaves
  * exactly as the single worker always did.
  */
+/** The scanner's event-loop stalls since boot, compact for the scan heartbeat. */
+function loopStallMeta(): Record<string, string | number | null> {
+  const { stalls, worst, last } = eventLoopReport();
+  return {
+    count: stalls,
+    worstMs: worst?.blockedMs ?? null,
+    worstAt: worst?.at ?? null,
+    worstGcMs: worst?.gcMs ?? null,
+    worstDuring: worst ? JSON.stringify(worst.during) : null,
+    lastMs: last?.blockedMs ?? null,
+    lastAt: last?.at ?? null,
+    lastDuring: last ? JSON.stringify(last.during) : null,
+  };
+}
+
 async function main() {
   const env = loadEnv();
   const role = env.WORKER_ROLE;
@@ -112,6 +130,8 @@ async function main() {
   // outside a job (startup, the stream's side reads) count under the process's own name.
   if (env.TOKENSAGE_API_URL) nameApiHost(env.TOKENSAGE_API_URL, "tokensage");
   const stopApiUsageMeter = installApiUsageMeter({ processName: `worker-${role}` });
+  // A held event loop is logged with the jobs that were running (see startEventLoopWatch).
+  const stopLoopWatch = startEventLoopWatch({ context: () => runningJobsNow() });
   const jobs: { name: HeartbeatJob; job: ScheduledJob }[] = [];
   /** Starts a schedule only when this process's role owns the job. */
   const schedule = (job: HeartbeatJob, start: () => ScheduledJob) => {
@@ -195,7 +215,8 @@ async function main() {
   schedule("scan", () =>
     scheduleInterval(
       "scan",
-      async () => ({ ...(await runScanCycle(deps, env)), ...configMeta }),
+      // The process's event-loop stalls ride on the scan's row, so /health/worker shows them.
+      async () => ({ ...(await runScanCycle(deps, env)), ...configMeta, loopStalls: loopStallMeta() }),
       env.SCAN_INTERVAL_MINUTES,
       {
         deadlineMinutes: 20,
@@ -584,6 +605,7 @@ async function main() {
         ),
       );
     }
+    stopLoopWatch();
     await stopApiUsageMeter();
     await prisma.$disconnect().catch(() => {});
     process.exit(code);

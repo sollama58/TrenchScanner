@@ -122,6 +122,29 @@ describe("buildOnChainProfile without a RugCheck report", () => {
     expect(runRugScreen({ ...profile!, isMayhemMode: false }).passed).toBe(false);
   });
 
+  it("takes the Pump.fun venue's LP answer when the RugCheck report lists no market yet", () => {
+    const early = new Map<string, RugCheckProfile>([
+      [
+        "Pre",
+        {
+          mintAddress: "Pre",
+          mintAuthorityActive: false,
+          freezeAuthorityActive: false,
+          lpBurned: false,
+          marketsListed: false,
+          riskFlags: [],
+        },
+      ],
+    ]);
+    const pump = buildOnChainProfile({ mintAddress: "Pre", dexId: "pumpfun" }, early, authorities);
+    expect(pump?.lpBurned).toBe(true);
+    expect(runRugScreen({ ...pump!, isMayhemMode: false }).passed).toBe(true);
+    // Off a Pump.fun venue the report's answer stands until RugCheck lists the pool.
+    expect(buildOnChainProfile({ mintAddress: "Pre", dexId: "raydium" }, early, authorities)?.lpBurned).toBe(
+      false,
+    );
+  });
+
   it("still fails closed when the authority lookup itself failed", () => {
     expect(buildOnChainProfile({ mintAddress: "Unknown", dexId: "pumpfun" }, none, authorities)).toBeNull();
   });

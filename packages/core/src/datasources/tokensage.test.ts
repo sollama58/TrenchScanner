@@ -116,6 +116,16 @@ describe("narrativeFieldsFromAnalysis", () => {
       analyzedAt: null,
     });
   });
+
+  it("reads trend.matched only at full depth: a basic read's false is unread", () => {
+    const trend = { matched: false, score: 0 };
+    expect(
+      narrativeFieldsFromAnalysis({ mint: "M", depth: "basic", trend }, "partial").trendMatched,
+    ).toBeNull();
+    expect(narrativeFieldsFromAnalysis({ mint: "M", depth: "full", trend }, "complete").trendMatched).toBe(
+      false,
+    );
+  });
 });
 
 describe("narrativeDepthCovers", () => {
