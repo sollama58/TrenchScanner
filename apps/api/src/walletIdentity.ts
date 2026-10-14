@@ -34,42 +34,105 @@ export function identityLabels(identity: HeliusIdentity | null): WalletLabel[] {
 /** How long a plan that said "not on this plan" is left alone before it is asked again. */
 const UNAVAILABLE_BACKOFF_MS = 60 * 60_000;
 
+/** Who a call is charged to: one signed-in account. */
+export type IdentityUserKey = string;
+
+export interface WalletIdentityOptions {
+  ttlMs: number;
+  /** Calls a minute across everyone (a batch counts as one). */
+  perMinute: number;
+  maxEntries: number;
+  /**
+   * One account's share of `perMinute`, and its calls a day: one subscriber posting random lists
+   * could otherwise spend the whole minute's budget (about 2,000 credits a minute) and leave
+   * everyone else's lists unnamed. A bubble map is one batch call, often answered from the cache.
+   */
+  perUserPerMinute: number;
+  perUserPerDay: number;
+}
+
+const DEFAULT_OPTIONS: WalletIdentityOptions = {
+  ttlMs: 12 * 3_600_000,
+  perMinute: 20,
+  maxEntries: 5_000,
+  perUserPerMinute: 4,
+  perUserPerDay: 150,
+};
+const DAY_MS = 24 * 3_600_000;
+/** Accounts whose use is remembered at once; the least recent is forgotten past it. */
+const MAX_TRACKED_USERS = 5_000;
+
 /**
  * Reads Helius's identity for a wallet at most once per TTL, with at most `perMinute` calls a
- * minute (a batch counts as one).
+ * minute (a batch counts as one), and within each account's own share when the caller names one.
  * A plan that can't read it is skipped for an hour, then tried again. Failed reads are not cached.
+ * The cache drops its least recently used entry when full, not everything at once.
  */
 export class WalletIdentityReader {
   private cache = new Map<string, { at: number; value: HeliusIdentity | null }>();
   private window: number[] = [];
+  /** Each account's calls in the last day, oldest first. */
+  private users = new Map<IdentityUserKey, number[]>();
   private offUntil = 0;
+  private readonly opts: WalletIdentityOptions;
 
   constructor(
     private readonly helius: Pick<HeliusIdentityClient, "identity" | "batchIdentity">,
-    private readonly opts: { ttlMs: number; perMinute: number; maxEntries: number } = {
-      ttlMs: 12 * 3_600_000,
-      perMinute: 20,
-      maxEntries: 5_000,
-    },
-  ) {}
+    opts: Partial<WalletIdentityOptions> = {},
+  ) {
+    this.opts = { ...DEFAULT_OPTIONS, ...opts };
+  }
 
-  /** Whether one more call fits the minute's cap and the plan isn't backed off; counts it if so. */
-  private take(now: number): boolean {
+  /**
+   * Whether one more call fits the minute's cap, the account's share and day, and the plan isn't
+   * backed off; counts it if so.
+   */
+  private take(now: number, user?: IdentityUserKey): boolean {
     if (now < this.offUntil) return false;
     this.window = this.window.filter((t) => now - t < 60_000);
     if (this.window.length >= this.opts.perMinute) return false;
+    if (user !== undefined) {
+      const mine = (this.users.get(user) ?? []).filter((t) => now - t < DAY_MS);
+      const lastMinute = mine.filter((t) => now - t < 60_000).length;
+      if (lastMinute >= this.opts.perUserPerMinute || mine.length >= this.opts.perUserPerDay) {
+        this.users.set(user, mine);
+        return false;
+      }
+      mine.push(now);
+      // Re-inserted so the map stays in order of last use, and the oldest is forgotten first.
+      this.users.delete(user);
+      this.users.set(user, mine);
+      if (this.users.size > MAX_TRACKED_USERS) {
+        const oldest = this.users.keys().next().value;
+        if (oldest !== undefined) this.users.delete(oldest);
+      }
+    }
     this.window.push(now);
     return true;
   }
 
+  /** A fresh cached answer, moved to the back so the least recently used goes first. */
+  private cached(wallet: string, now: number) {
+    const hit = this.cache.get(wallet);
+    if (!hit || now - hit.at >= this.opts.ttlMs) return undefined;
+    this.cache.delete(wallet);
+    this.cache.set(wallet, hit);
+    return hit;
+  }
+
   private remember(wallet: string, value: HeliusIdentity | null, now: number) {
-    if (this.cache.size >= this.opts.maxEntries) this.cache.clear();
+    this.cache.delete(wallet);
+    while (this.cache.size >= this.opts.maxEntries) {
+      const oldest = this.cache.keys().next().value;
+      if (oldest === undefined) break;
+      this.cache.delete(oldest);
+    }
     this.cache.set(wallet, { at: now, value });
   }
 
   async labels(wallet: string, now = Date.now()): Promise<WalletLabel[]> {
-    const hit = this.cache.get(wallet);
-    if (hit && now - hit.at < this.opts.ttlMs) return identityLabels(hit.value);
+    const hit = this.cached(wallet, now);
+    if (hit) return identityLabels(hit.value);
     if (!this.take(now)) return [];
     const res = await this.helius
       .identity(wallet)
@@ -86,21 +149,23 @@ export class WalletIdentityReader {
 
   /**
    * Helius's identity for each of `wallets` it could answer: cached ones from the cache, the rest
-   * in batches of up to 100 while the minute's cap allows. A wallet left out was not read.
+   * in batches of up to 100 while the minute's cap (and `user`'s share of it) allows. A wallet
+   * left out was not read.
    */
   async identities(
     wallets: readonly string[],
     now = Date.now(),
+    user?: IdentityUserKey,
   ): Promise<Map<string, HeliusIdentity | null>> {
     const out = new Map<string, HeliusIdentity | null>();
     const misses: string[] = [];
     for (const w of new Set(wallets)) {
-      const hit = this.cache.get(w);
-      if (hit && now - hit.at < this.opts.ttlMs) out.set(w, hit.value);
+      const hit = this.cached(w, now);
+      if (hit) out.set(w, hit.value);
       else misses.push(w);
     }
     for (let i = 0; i < misses.length; i += IDENTITY_BATCH_MAX) {
-      if (!this.take(now)) break;
+      if (!this.take(now, user)) break;
       const res = await this.helius
         .batchIdentity(misses.slice(i, i + IDENTITY_BATCH_MAX))
         .catch((): IdentityRead<Map<string, HeliusIdentity | null>> => ({ status: "failed" }));

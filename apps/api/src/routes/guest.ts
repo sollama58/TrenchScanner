@@ -187,9 +187,9 @@ export async function registerGuestRoutes(
     modelRunsRoute(opts.env, opts.reports, request, reply),
   );
 
-  /** What one model leans on and its cutoff: weights and exam figures, nothing that names a token. */
+  /** One model's cutoff and call rate; never what it leans on (admins only, see modelWeightsRoute). */
   app.get("/models/:id/weights", { config: { rateLimit: GUEST_RATE_LIMIT } }, (request, reply) =>
-    modelWeightsRoute(opts.env, opts.reports, request, reply),
+    modelWeightsRoute(opts.env, opts.reports, request, reply, false),
   );
 
   /**

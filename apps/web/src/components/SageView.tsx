@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError } from "../api";
+import { ApiError, lookupRequired } from "../api";
 import { usePolling } from "../hooks";
 import { ago, shortAddress, tokenThumb, usd } from "../format";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, LockIcon, SageIcon } from "./Icons";
@@ -430,11 +430,13 @@ function SageBody({ mint, onClose }: { mint: string; onClose: () => void }) {
       {!data && !error && <Skeleton lines={6} />}
       {error && !data && (
         <p className="error">
-          {error instanceof ApiError && error.status === 402
-            ? "TokenSage reads come with a subscription."
-            : error instanceof ApiError && error.status === 401
-              ? "Sign in to open TokenSage reads."
-              : `Couldn't load the read: ${error.message}`}
+          {lookupRequired(error)
+            ? error.message
+            : error instanceof ApiError && error.status === 402
+              ? "TokenSage reads come with a subscription."
+              : error instanceof ApiError && error.status === 401
+                ? "Sign in to open TokenSage reads."
+                : `Couldn't load the read: ${error.message}`}
         </p>
       )}
       {data && !r && (

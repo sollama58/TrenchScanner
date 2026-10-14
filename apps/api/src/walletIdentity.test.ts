@@ -74,4 +74,41 @@ describe("WalletIdentityReader", () => {
     expect(batch).toHaveBeenCalledTimes(2);
     expect((await reader.labels("a", 2_000)).map((l) => l.text)).toEqual(["OKX"]);
   });
+
+  const named = (wallets: readonly string[]) => ({
+    status: "found" as const,
+    value: new Map<string, HeliusIdentity | null>(wallets.map((w) => [w, null])),
+  });
+
+  it("keeps each account to its own share of the minute and its day", async () => {
+    const batch = vi.fn(async (wallets: readonly string[]) => named(wallets));
+    const reader = new WalletIdentityReader(
+      { identity: vi.fn(), batchIdentity: batch },
+      { perMinute: 20, perUserPerMinute: 2, perUserPerDay: 3 },
+    );
+    await reader.identities(["a"], 0, "u1");
+    await reader.identities(["b"], 1_000, "u1");
+    expect((await reader.identities(["c"], 2_000, "u1")).size).toBe(0);
+    // Another account still has its share.
+    expect((await reader.identities(["c"], 2_000, "u2")).size).toBe(1);
+    // A new minute, but u1 has one call left today.
+    expect((await reader.identities(["d"], 61_000, "u1")).size).toBe(1);
+    expect((await reader.identities(["e"], 122_000, "u1")).size).toBe(0);
+    // A day on, the account's budget is back.
+    expect((await reader.identities(["e"], 86_400_000 + 2_000, "u1")).size).toBe(1);
+  });
+
+  it("drops the least recently used answer when full, not the whole cache", async () => {
+    const batch = vi.fn(async (wallets: readonly string[]) => named(wallets));
+    const reader = new WalletIdentityReader(
+      { identity: vi.fn(), batchIdentity: batch },
+      { maxEntries: 2, perMinute: 100 },
+    );
+    await reader.identities(["a", "b"], 0);
+    await reader.identities(["a"], 1); // a is now the most recent
+    await reader.identities(["c"], 2); // evicts b only
+    batch.mockClear();
+    await reader.identities(["a", "b", "c"], 3);
+    expect(batch).toHaveBeenCalledWith(["b"]);
+  });
 });
