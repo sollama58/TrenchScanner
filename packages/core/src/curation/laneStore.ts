@@ -65,8 +65,8 @@ export const RUN_DOUBLINGS = Prisma.sql`
 /**
  * One model's live record: its calls since `since`, graded exactly like the hit-rate report -
  * the alert's outcome copies when they've landed, else the linked training row. Returns in
- * doublings use the row's labelValue, or - once the row is pruned - the copied window peak, capped
- * the same way.
+ * doublings come from the same grade as the win: the row's labelValue when the row graded it,
+ * the copied window peak (capped the same way) when the alert's copy did or the row is pruned.
  */
 export async function liveCallRecord(model: string, since: Date): Promise<CallRecord> {
   const [r] = await prisma.$queryRaw<LiveRow[]>`
@@ -75,7 +75,10 @@ export async function liveCallRecord(model: string, since: Date): Promise<CallRe
              COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
              COALESCE(a."hit10xIn1h", co."hit10xIn1h") AS hit10x,
              COALESCE(a."disqualified", co."disqualified", false) AS dq,
-             co."labelValue" AS label,
+             -- The run size comes from the same grade as the win: a call graded from its own
+             -- published copy reads that copy's peak (below), not its row's label, which the
+             -- re-grade may have moved to another rule (notes/full-audit-2026-10-14, lane 1 1.7).
+             CASE WHEN a."hit2xIn1h" IS NULL THEN co."labelValue" END AS label,
              COALESCE(a."peak1hReturnPct", co."peak1hReturnPct") AS peak,
              COALESCE(a."peak24hReturnPct", co."peak24hReturnPct") AS run,
              COALESCE(a."maxDrawdown1hPct", co."maxDrawdown1hPct") AS dd,
@@ -152,7 +155,7 @@ export async function liveCallRecords(
              COALESCE(a."hit4xIn1h", co."hit4xIn1h") AS hit4x,
              COALESCE(a."hit10xIn1h", co."hit10xIn1h") AS hit10x,
              COALESCE(a."disqualified", co."disqualified", false) AS dq,
-             co."labelValue" AS label,
+             CASE WHEN a."hit2xIn1h" IS NULL THEN co."labelValue" END AS label, -- as in liveCallRecord
              COALESCE(a."peak1hReturnPct", co."peak1hReturnPct") AS peak,
              COALESCE(a."peak24hReturnPct", co."peak24hReturnPct") AS run,
              COALESCE(a."maxDrawdown1hPct", co."maxDrawdown1hPct") AS dd,

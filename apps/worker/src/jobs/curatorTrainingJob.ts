@@ -17,6 +17,12 @@ import {
   MODEL_WRITE_TX_OPTIONS,
   COMBINER_MODEL_KINDS,
   assessTrainingRun,
+  examRegressionAlarms,
+  fillRateAlarms,
+  inputFills,
+  liveShareAlarms,
+  LEARNER_FEATURE_NAMES,
+  RETIRED_LEARNER_INPUTS,
   lockCuratorModelWrites,
   DISQUALIFYING_DRAWDOWN_FRACTION,
   walletSafetyCutsSql,
@@ -76,7 +82,7 @@ export { NEVER_EMIT_THRESHOLD, type StoredEvalMetrics };
  */
 export async function runCuratorTrainingJob(
   env: Env,
-): Promise<{ stored?: boolean; heldBack?: string; stagesMs: Record<string, number> }> {
+): Promise<{ stored?: boolean; heldBack?: string; alarms?: string; stagesMs: Record<string, number> }> {
   // Each stage is written to the heartbeat as the run reaches it, so the admin panel can say where
   // a run has got to - and where a stuck one stopped (runProgress.ts).
   const progress = new RunProgress("curator-training");
@@ -92,7 +98,7 @@ export async function runCuratorTrainingJob(
 async function trainCurators(
   env: Env,
   progress: RunProgress,
-): Promise<{ stored: boolean; heldBack?: string } | void> {
+): Promise<{ stored: boolean; heldBack?: string; alarms?: string } | void> {
   const startedAt = Date.now();
   const windowStart = new Date(startedAt - env.CURATOR_TRAINING_WINDOW_DAYS * 86_400_000);
   // The Rules seat's exam replays the composite score with today's weights (scoreWeights.ts).
@@ -219,6 +225,27 @@ async function trainCurators(
     return;
   }
 
+  // Alarms only (runGuard.ts): an exam that fell sharply against the model it replaces, and an
+  // input the learners read gone dead (or a retired one filled again). Nothing waits on them.
+  const incumbentExams = await loadIncumbentExams();
+  const alarms = [
+    ...examRegressionAlarms(
+      incumbentExams,
+      results.flatMap((r) =>
+        r.metrics.exam
+          ? [{ contestant: r.contestant, wins: r.metrics.exam.wins, graded: r.metrics.exam.graded }]
+          : [],
+      ),
+    ),
+    ...fillRateAlarms(
+      inputFills(trainingRows, CANDIDATE_FEATURE_NAMES, env.CURATOR_EXAM_SHARE),
+      new Set<string>(LEARNER_FEATURE_NAMES),
+      RETIRED_LEARNER_INPUTS as ReadonlySet<string>,
+    ),
+  ];
+  if (alarms.length > 0) logger.warn("training run alarms", { alarms });
+  const alarmMeta = alarms.length > 0 ? { alarms: alarms.join("; ") } : {};
+
   // The guard (curation/runGuard.ts): a plainly broken run - non-finite weights, a training set
   // that lost half its rows, every calling seat gone silent - keeps the running models instead.
   progress.stage("store models");
@@ -241,7 +268,7 @@ async function trainCurators(
         heldForHours: Math.round(verdict.heldSinceMs / 360_000) / 10,
         rows: trainingRows.length,
       });
-      return { stored: false, heldBack: verdict.reason };
+      return { stored: false, heldBack: verdict.reason, ...alarmMeta };
     }
     if (verdict.reason) logger.warn("training run let through by the guard", { reason: verdict.reason });
   }
@@ -255,7 +282,7 @@ async function trainCurators(
   );
   if (modelIds === null) {
     logger.warn("models were replaced while this run trained (a restore) - its results were not stored");
-    return { stored: false, heldBack: "models were replaced while this run trained" };
+    return { stored: false, heldBack: "models were replaced while this run trained", ...alarmMeta };
   }
 
   if (probation.kind === "confirm") {
@@ -373,10 +400,68 @@ async function trainCurators(
         }
       : null,
   });
-  return { stored: true };
+  return { stored: true, ...alarmMeta };
 }
 
-/** The models running now, as the guard sees them. */
+/** The running models' exam 2x records, for the regression alarm. */
+async function loadIncumbentExams() {
+  const rows = await prisma.curatorModel.findMany({
+    where: { status: "active", contestant: { not: null } },
+    select: { contestant: true, evalMetrics: true },
+  });
+  return rows.flatMap((r) => {
+    const exam = (r.evalMetrics as Partial<StoredEvalMetrics> | null)?.exam;
+    return exam && typeof exam.wins === "number" && typeof exam.graded === "number"
+      ? [{ contestant: r.contestant!, wins: exam.wins, graded: exam.graded }]
+      : [];
+  });
+}
+
+/** The window the live-share alarm counts calls over. */
+const LIVE_SHARE_WINDOW_HOURS = 6;
+
+/**
+ * Each seat's live calls over the last few hours against the decision moments in them (alarm
+ * only, runGuard.ts liveShareAlarms): a seat calling far more than its cutoff share, or most seats
+ * gone quiet. Runs with the hourly champion refresh.
+ */
+export async function seatLiveShareAlarms(env: Env, now = new Date()): Promise<{ shareAlarms?: string }> {
+  try {
+    return await countSeatShares(env, now);
+  } catch (err) {
+    // An alarm's own failure never fails the champion refresh it rides on.
+    logger.warn("seat live-share check failed", { error: String(err) });
+    return {};
+  }
+}
+
+async function countSeatShares(env: Env, now: Date): Promise<{ shareAlarms?: string }> {
+  const since = new Date(now.getTime() - LIVE_SHARE_WINDOW_HOURS * 3_600_000);
+  const dayBefore = new Date(since.getTime() - 86_400_000);
+  const [decisions, calls, before] = await Promise.all([
+    prisma.candidateOutcome.count({ where: { sampleKind: "event", anchorAt: { gte: since, lt: now } } }),
+    prisma.$queryRaw<{ model: string; calls: bigint }[]>`
+      SELECT a."model", count(DISTINCT a."candidateOutcomeId") AS calls
+      FROM "CuratedAlert" a
+      JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId" AND co."sampleKind" = 'event'
+      WHERE a."createdAt" >= ${since} AND a."createdAt" < ${now}
+      GROUP BY a."model"`,
+    prisma.$queryRaw<{ model: string }[]>`
+      SELECT DISTINCT "model" FROM "CuratedAlert" WHERE "createdAt" >= ${dayBefore} AND "createdAt" < ${since}`,
+  ]);
+  const called = new Map(calls.map((c) => [c.model, Number(c.calls)]));
+  const earlier = new Set(before.map((b) => b.model));
+  const seats = [...new Set([...called.keys(), ...earlier])].map((contestant) => ({
+    contestant,
+    calls: called.get(contestant) ?? 0,
+    calledBefore: earlier.has(contestant),
+  }));
+  const alarms = liveShareAlarms(seats, decisions, env.CURATED_CUTOFF_TARGET_SHARE);
+  if (alarms.length > 0)
+    logger.warn("seat live-share alarms", { alarms, windowHours: LIVE_SHARE_WINDOW_HOURS });
+  return alarms.length > 0 ? { shareAlarms: alarms.join("; ") } : {};
+}
+
 async function loadIncumbents() {
   const rows = await prisma.curatorModel.findMany({
     where: { status: "active" },

@@ -509,6 +509,18 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // first, on the same terms.
   ...HOLDER_SET_FEATURES,
   ...FRESH_TOP_HOLDER_FEATURES,
+  // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
+  // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
+  // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
+  // carries it. The onset guard already kept the empty ones out of each run; this makes it
+  // explicit. The training run's fill-rate alarm (runGuard.ts fillRateAlarms) says when one of
+  // them fills again.
+  "textCopycatRisk",
+  "textNarrativeStrength",
+  "textMemeAppeal",
+  "textScamSignals",
+  "nsXCredibility",
+  "nsFeeMutable",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */

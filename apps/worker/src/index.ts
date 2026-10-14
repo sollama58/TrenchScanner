@@ -37,7 +37,11 @@ import { createMatchPeaksRunner } from "./jobs/matchPeaks.js";
 import { runFastMatchCycle } from "./jobs/fastMatchJob.js";
 import { runLivePriceJob } from "./jobs/livePriceJob.js";
 import { runCandidateWatchJob } from "./jobs/candidateOutcomeJob.js";
-import { rechooseDefaultModel, runCuratorTrainingJob } from "./jobs/curatorTrainingJob.js";
+import {
+  rechooseDefaultModel,
+  runCuratorTrainingJob,
+  seatLiveShareAlarms,
+} from "./jobs/curatorTrainingJob.js";
 import { runScoreWeightsJob } from "./jobs/scoreWeightsJob.js";
 import { runModelBackupJob } from "./jobs/modelBackupJob.js";
 import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
@@ -509,7 +513,10 @@ async function main() {
   schedule("champion-refresh", () =>
     scheduleInterval(
       "champion-refresh",
-      async (): Promise<JobRunMeta> => rechooseDefaultModel(env),
+      async (): Promise<JobRunMeta> => ({
+        ...(await rechooseDefaultModel(env)),
+        ...(await seatLiveShareAlarms(env)),
+      }),
       CHAMPION_REFRESH_MINUTES,
     ),
   );
