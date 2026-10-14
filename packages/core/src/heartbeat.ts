@@ -22,6 +22,7 @@ export type HeartbeatJob =
   | "label-regrade"
   | "trade-tape"
   | "wallet-risk"
+  | "kol-side-wallets"
   | "kol-wallets"
   | "telegram-dispatch"
   | "pipeline-watch";
@@ -59,6 +60,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   // The scanner: the service with the Helius key the tape reads with (the trainer has none).
   "trade-tape": "scanner",
   "wallet-risk": "trainer",
+  // Batch SQL over the trade tape, like wallet-risk.
+  "kol-side-wallets": "trainer",
   // The scanner: the service SOLANA_TRACKER_API_KEY is set on, beside the other provider keys.
   "kol-wallets": "scanner",
 };
