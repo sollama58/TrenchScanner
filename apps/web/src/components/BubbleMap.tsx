@@ -621,6 +621,9 @@ function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }
   if (!items.length) return null;
   return (
     <ul className="bm-legend" aria-label="Name colours">
+      <li className="bm-legend-title" aria-hidden>
+        Legend
+      </li>
       {items.map((it) => (
         <li key={it.text}>
           <span className={`bm-legend-chip ${it.cls}`}>{it.text}</span>
