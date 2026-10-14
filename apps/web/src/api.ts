@@ -1249,6 +1249,7 @@ export interface FeedAppearance {
   textSize: number;
   corners: "square" | "rounded" | "round";
   avatar: "small" | "normal" | "large";
+  /** Retired: the old colored left edge, replaced by the outline. Kept so older API builds accept saves. */
   sourceStripe: boolean;
   learningNote: boolean;
   /** Volume tiles (5m / 1h / 24h) on the cards; off by default, the score tile takes their place. */
@@ -1274,6 +1275,10 @@ export interface FeedAppearance {
   streamTab: boolean;
   /** The Lighthouse tab, switched on in Settings (absent from older API builds: off). */
   lighthouseTab: boolean;
+  /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
+  outline: string | null;
+  /** The outline turns green on a pass and red on a fail once graded (absent from older API builds: on). */
+  outlineResult: boolean;
   /** Trading sites each card links to; Padre's Trading Terminal by default. */
   quickLinks: QuickLink[];
   hidden: CardField[];

@@ -21,6 +21,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   textSize: 100,
   corners: "rounded",
   avatar: "normal",
+  // Retired (the old colored left edge); kept so an older API build still accepts the save.
   sourceStripe: true,
   learningNote: true,
   volume: false,
@@ -33,6 +34,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   narrativeNote: null,
   streamTab: false,
   lighthouseTab: false,
+  outline: null,
+  outlineResult: true,
   quickLinks: ["terminal"],
   // Off by default, both switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, and the TokenSage button (the token view keeps its own). An account that
@@ -215,6 +218,8 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
     streamTab: typeof r.streamTab === "boolean" ? r.streamTab : d.streamTab,
     lighthouseTab: typeof r.lighthouseTab === "boolean" ? r.lighthouseTab : d.lighthouseTab,
+    outline: hex(r.outline),
+    outlineResult: typeof r.outlineResult === "boolean" ? r.outlineResult : d.outlineResult,
     quickLinks: Array.isArray(r.quickLinks)
       ? [
           ...new Set(
@@ -230,7 +235,19 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
 
 /** A preset applied on top of the default, keeping the user's theme and colors. */
 export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance>): FeedAppearance {
-  const { theme, accent, mine, win, loss, quickLinks, narrativeNote, streamTab, lighthouseTab } = current;
+  const {
+    theme,
+    accent,
+    mine,
+    win,
+    loss,
+    outline,
+    outlineResult,
+    quickLinks,
+    narrativeNote,
+    streamTab,
+    lighthouseTab,
+  } = current;
   return normalizeAppearance({
     ...DEFAULT_APPEARANCE,
     ...look,
@@ -239,6 +256,8 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     mine,
     win,
     loss,
+    outline,
+    outlineResult,
     quickLinks,
     narrativeNote,
     streamTab,
@@ -382,7 +401,7 @@ async function save() {
 
 // ---- Applying it ----
 
-const COLOR_SLOTS = ["win", "loss", "accent", "mine"] as const;
+const COLOR_SLOTS = ["win", "loss", "accent", "mine", "outline"] as const;
 
 /**
  * The attributes and CSS variables the feed's card grid takes. Only what differs from the default
@@ -405,6 +424,8 @@ export function feedGridProps(a: FeedAppearance): Record<string, string | CSSPro
     } else if (slot === "accent") {
       style["--brand-a"] = c;
       style["--brand-ink"] = `color-mix(in srgb, ${c} 65%, var(--ink))`;
+    } else if (slot === "outline") {
+      style["--card-outline"] = c;
     } else {
       style["--series-1"] = c;
     }
@@ -418,7 +439,7 @@ export function feedGridProps(a: FeedAppearance): Record<string, string | CSSPro
     "data-phone-cols": a.phoneColumns !== d.phoneColumns ? String(a.phoneColumns) : undefined,
     "data-corners": a.corners !== d.corners ? a.corners : undefined,
     "data-avatar": a.avatar !== d.avatar ? a.avatar : undefined,
-    "data-stripe": a.sourceStripe ? undefined : "off",
+    "data-outline-result": a.outlineResult ? undefined : "off",
     style: style as CSSProperties,
   };
 }

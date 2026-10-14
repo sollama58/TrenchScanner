@@ -14,7 +14,7 @@ import {
 } from "./Icons";
 import { openSage } from "../sage";
 import { linkedCount, linkedCountText, openBubbleMap, type BubbleSeed } from "../bubbleMap";
-import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
+import { matchOutcome, outcomeAt, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
@@ -67,6 +67,7 @@ export function AlertCard({
   // Re-derived from the alert time, so a call whose window ran out by the clock stops reading as pending.
   const outcome = curated ? outcomeAt(curated.outcome, curated.alertedAt, now) : matchOutcome(card, now);
   const badge = outcomeBadge(outcome);
+  const result = outcomeResult(outcome);
   const isModel = curated && !curated.source.startsWith("heuristic");
   const calls = curated?.calledBy ?? [];
   const { pct: recordedPeak, isRunPeak } = recordedPeakOf(card);
@@ -151,7 +152,7 @@ export function AlertCard({
 
   return (
     <article
-      className={`card tone-${badge.tone}${compact ? " compact" : ""}${labelSource ? (card.kind === "match" ? " src-mine" : " src-model") : ""}${detail ? " opens" : ""}`}
+      className={`card tone-${badge.tone}${result ? ` result-${result}` : ""}${compact ? " compact" : ""}${detail ? " opens" : ""}`}
       onClick={openDetail}
     >
       <header className="card-head">

@@ -167,16 +167,30 @@ export function AppearanceControls() {
         />
         <ColorRow
           label="Model calls"
-          hint="Model pills, reasons and the model card edge"
+          hint="Model pills and reasons"
           value={look.accent}
           onChange={(accent) => setAppearance({ accent })}
         />
         <ColorRow
           label="Your filter"
-          hint="Your filter's pill and card edge"
+          hint="Your filter's pill"
           value={look.mine}
           onChange={(mine) => setAppearance({ mine })}
         />
+        <ColorRow
+          label="Card outline"
+          hint="Around each card while its alert is still grading (A is a neutral grey)"
+          value={look.outline}
+          onChange={(outline) => setAppearance({ outline })}
+        />
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.outlineResult}
+            onChange={() => setAppearance({ outlineResult: !look.outlineResult })}
+          />
+          Turn the outline green when an alert passes and red when it fails
+        </label>
       </fieldset>
 
       <fieldset>
@@ -245,14 +259,6 @@ export function AppearanceControls() {
           ]}
           onChange={(avatar) => setAppearance({ avatar })}
         />
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.sourceStripe}
-            onChange={() => setAppearance({ sourceStripe: !look.sourceStripe })}
-          />
-          Colored edge for your filter vs model calls
-        </label>
         <label className="check">
           <input
             type="checkbox"
