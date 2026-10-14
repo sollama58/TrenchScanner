@@ -38,7 +38,7 @@ export const KEEP_IF_EVER_RANKED_WITHIN = 3;
 
 /**
  * The fields that decide what a filter matches - what "Copy" copies, and what resets the
- * leaderboard record when edited. Name, isActive and shareOnLeaderboard are not criteria.
+ * leaderboard record when edited. Name, color, icon, isActive and shareOnLeaderboard are not criteria.
  */
 export const FILTER_CRITERIA_KEYS = [
   "mcapMin",

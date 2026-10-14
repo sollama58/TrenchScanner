@@ -11620,3 +11620,54 @@ button.bm-same {
 .side-hidden-bots {
   margin: 8px 0 0;
 }
+
+/* A saved filter's own style (filterStyle.ts): its icon pill on the cards it raises and in the
+   Filters tab list, tinted with its color. */
+.pill-filter {
+  color: color-mix(in srgb, var(--filter-color) 72%, var(--ink));
+  border-color: color-mix(in srgb, var(--filter-color) 45%, transparent);
+  background: color-mix(in srgb, var(--filter-color) 14%, transparent);
+}
+.filter-style-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.filter-style-pick button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink);
+  cursor: pointer;
+}
+.filter-style-pick button.swatch {
+  background: var(--swatch);
+  border-color: color-mix(in srgb, var(--swatch) 70%, var(--ink));
+}
+.filter-style-pick button.none {
+  font-size: 11px;
+  width: auto;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+.filter-style-pick button[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 2px var(--surface-solid),
+    0 0 0 4px var(--ink);
+}
+.filter-style-pick button.icon-choice[aria-pressed="true"] {
+  color: color-mix(in srgb, var(--filter-color, var(--brand-a)) 72%, var(--ink));
+  background: color-mix(in srgb, var(--filter-color, var(--brand-a)) 16%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--filter-color, var(--brand-a)) 55%, transparent);
+}
+.filter-main .filter-mark {
+  margin-right: 6px;
+  vertical-align: 1px;
+}
