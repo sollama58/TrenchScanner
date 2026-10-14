@@ -4,6 +4,7 @@ import {
   describeRuleSet,
   distillRuleSet,
   examineRuleScores,
+  rankRuleSet,
   ruleSetReasons,
   scoreRuleSet,
   teacherAgreementPct,
@@ -80,6 +81,16 @@ describe("distillRuleSet", () => {
     ).toBeNull();
   });
 
+  it("won't put a check on a thinly filled input", () => {
+    // The teacher's favourite input is known on only 30% of rows: a check on it would leave the
+    // rest tied one check short of the top, so the table learns from the filled inputs instead.
+    const { rows, ranks } = teacherWorld(2000);
+    const thin = rows.map((r, i) => (i % 10 < 3 ? r : { ...r, features: { ...r.features, buys5m: null } }));
+    const conditions = distillRuleSet(thin, ranks, ["buys5m", "freshTop10WalletPct", "mcapUsd"])!;
+    expect(conditions.some((c) => c.feature === "buys5m")).toBe(false);
+    expect(conditions.some((c) => c.feature === "freshTop10WalletPct")).toBe(true);
+  });
+
   it("copies the teacher closely enough to agree on most of its top picks", () => {
     const { rows, ranks } = teacherWorld(2000);
     const conditions = distillRuleSet(rows, ranks, ["buys5m", "freshTop10WalletPct", "mcapUsd"])!;
@@ -100,6 +111,15 @@ describe("rule tables", () => {
     expect(scoreRuleSet(set, { buys5m: 50, freshTop10WalletPct: 10 })).toBe(100);
     expect(scoreRuleSet(set, { buys5m: 50, freshTop10WalletPct: null })).toBe(70);
     expect(scoreRuleSet(set, {})).toBe(0);
+  });
+
+  it("ranks by points, ties broken by the legacy composite inside a fraction of one point", () => {
+    expect(rankRuleSet(set, { buys5m: 50, freshTop10WalletPct: 10, scoreTotal: 80 })).toBeCloseTo(100.08);
+    expect(rankRuleSet(set, { buys5m: 50, freshTop10WalletPct: 10, scoreTotal: 20 })).toBeCloseTo(100.02);
+    // The tie-break never lifts a token over a block above it, nor makes a zero-point token callable.
+    expect(rankRuleSet(set, { buys5m: 50, scoreTotal: 100 })).toBeLessThan(71);
+    expect(rankRuleSet(set, { scoreTotal: 100 })).toBe(0);
+    expect(rankRuleSet(set, { buys5m: 50 })).toBe(70);
   });
 
   it("reads in plain words, biggest points first", () => {

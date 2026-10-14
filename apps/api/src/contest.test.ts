@@ -122,14 +122,12 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
     const result = await rechooseChampion({
       roster: state.roster,
       lanes,
-      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 10 },
       rules: { minLiveGraded: 10_000, margin: 2 },
     });
     expect(result).toMatchObject({ changed: true, pick: { id: "consensus", qualified: false } });
     const again = await rechooseChampion({
       roster: state.roster,
       lanes,
-      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 10 },
       rules: { minLiveGraded: 10_000, margin: 2 },
     });
     expect(again.changed).toBe(false);

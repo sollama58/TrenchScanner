@@ -490,12 +490,6 @@ export async function rechooseDefaultModel(
   const { champion, changed, pick } = await rechooseChampion({
     roster: withLanes(enabledContestants(env.CURATOR_CONTESTANTS), lanes),
     lanes,
-    targets: {
-      winRate: env.CURATED_TARGET_WIN_RATE_PCT / 100,
-      goalRate: env.CURATED_TARGET_GOAL_RATE_PCT / 100,
-      minSupport: env.CURATED_MIN_CALIBRATION_ALERTS,
-      confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
-    },
     rules: { minLiveGraded: env.CURATOR_CHAMPION_MIN_LIVE_GRADED, margin: env.CURATOR_CHAMPION_MARGIN },
   });
   logger.info(changed ? "default model re-chosen" : "default model unchanged", {

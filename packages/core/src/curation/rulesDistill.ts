@@ -61,6 +61,13 @@ export interface DerivedRuleSet {
 export const MAX_RULE_CONDITIONS = 6;
 /** A check must pass (or fail) on at least this share of the moments - no rules for rare corners. */
 const MIN_SUPPORT_SHARE = 0.05;
+/**
+ * An input must be known on at least this share of the moments to carry a check. An unknown input
+ * passes nothing, so a check on a thinly filled one caps most moments one check short of the top:
+ * the 10-13 table's 10-minute holder growth check (28% filled) left 48-53% of all moments tied at
+ * 84 points, one block the cutoff couldn't split (model audit 2026-10-14, rules-score R2).
+ */
+const MIN_FILL_SHARE = 0.6;
 /** A step that closes less than this share of the starting gap to the teacher ends the table. */
 const MIN_GAIN_SHARE = 0.005;
 /** Thresholds are tried at these quantiles of each input. */
@@ -116,6 +123,24 @@ export function scoreRuleSet(
   let score = 0;
   for (const c of set.conditions) if (conditionMet(c, features)) score += c.points;
   return score;
+}
+
+/**
+ * A token's rank under a table: its points, with ties inside a points block broken by the legacy
+ * composite (features' scoreTotal, a fixed formula, 0-100) as a fraction of one point. A table
+ * scores in a few coarse steps, so without it a cutoff could only take or leave a whole block:
+ * the 10-13 table's 84-point block held half of all moments, and the "20%" seat called about 50%
+ * of them (model audit 2026-10-14, rules-score R1, user decision 2026-10-14). Zero points ranks
+ * 0: a token that passes no check is never called.
+ */
+export function rankRuleSet(
+  set: Pick<DerivedRuleSet, "conditions">,
+  features: Record<string, number | null | undefined>,
+): number {
+  const points = scoreRuleSet(set, features);
+  if (points <= 0) return 0;
+  const composite = readFeature(features, "scoreTotal");
+  return points + (composite === null ? 0 : Math.min(100, Math.max(0, composite)) / 1000);
 }
 
 /** Two significant figures: thresholds a person can read, and the ones the table actually tests. */
@@ -187,7 +212,7 @@ function buildColumn(
     const v = readFeature(rows[i]!.features, feature);
     if (v !== null) known.push({ i, v });
   }
-  if (known.length < minSupport) return null;
+  if (known.length < Math.max(minSupport, Math.ceil(rows.length * MIN_FILL_SHARE))) return null;
   known.sort((a, b) => a.v - b.v);
   const values = Float64Array.from(known, (k) => k.v);
   const thresholds = [

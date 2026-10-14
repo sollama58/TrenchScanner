@@ -2,7 +2,12 @@ import { prisma } from "../db.js";
 import { CONSENSUS_CONTESTANT, RULES_CONTESTANT, type ContestantSpec } from "./contestants.js";
 import type { Lane } from "./evolution.js";
 import { liveCallRecords } from "./laneStore.js";
-import { compositeScore, emptyRecord, rankByComposite, type CompositeScore } from "./leaderboard.js";
+import { emptyRecord } from "./leaderboard.js";
+import {
+  TOP_MODELS_GRADE_LAG_MINUTES,
+  TOP_MODELS_RANK_WINDOW_HOURS,
+  topModelsLowerBound,
+} from "./topModels.js";
 import type { Env } from "../config/env.js";
 import type { PrecisionTargets } from "./trainer.js";
 import { defaultContestant, NEVER_EMIT_THRESHOLD, type StoredEvalMetrics } from "./trainingRun.js";
@@ -15,17 +20,24 @@ import { defaultContestant, NEVER_EMIT_THRESHOLD, type StoredEvalMetrics } from 
  * pick is stored (CuratorChampion) so the worker and the API read the same answer and the
  * dashboard can say when it last changed.
  *
+ * It is ranked the way the Default trio is (topModels.ts, user decision 2026-10-14, full audit
+ * P9): the 2x Wilson lower bound over the last TOP_MODELS_RANK_WINDOW_HOURS of graded live calls.
+ * It used to be the leaderboard's composite score, which pays 15 points for catching runners, so
+ * Rules - calling about half of all moments on a tied points block - took it at 17:20 on 10-14
+ * while ranking 15th of 19 on the lower bound (model audit 2026-10-14, rules-score R4; user
+ * decision 2026-10-14: "champion ranked on the 2x lower bound like the Default").
+ *
  * Two guards keep it from flapping on noise:
- *  - a model needs `minLiveGraded` graded live calls before it can hold the default, so a
- *    newcomer (or an evolved seat, which starts with a clean record) can't take it on a lucky
- *    streak or on its backtest alone;
- *  - a challenger has to beat the sitting champion by `margin` composite points to take over.
+ *  - a model needs `minLiveGraded` graded live calls in the window before it can hold the
+ *    default, so a newcomer (or an evolved seat, which starts with a clean record) can't take it
+ *    on a lucky streak;
+ *  - a challenger has to beat the sitting champion's lower bound by `margin` percentage points.
  * Until some model qualifies, the default stays on the old rule: the consensus once it can call,
  * else Rules (defaultContestant).
  */
 
-/** The live window the champion is judged on - the leaderboard's default window. */
-export const CHAMPION_WINDOW_DAYS = 30;
+/** The live window the champion is judged on - the Default trio's ranking window. */
+export const CHAMPION_WINDOW_HOURS = TOP_MODELS_RANK_WINDOW_HOURS;
 
 export interface ChampionRules {
   minLiveGraded: number;
@@ -37,7 +49,9 @@ export interface ChampionStanding {
   name: string;
   /** Has a cutoff it can send at (the rules contestant always can). */
   calling: boolean;
-  composite: CompositeScore;
+  /** Graded live calls in the window, and the clean 2x among them. */
+  graded: number;
+  wins: number;
 }
 
 export interface ChampionPick {
@@ -54,9 +68,7 @@ export function pickChampion(
   fallback: string,
 ): ChampionPick {
   const nameOf = (id: string) => standings.find((s) => s.id === id)?.name ?? id;
-  const eligible = standings.filter(
-    (s) => s.calling && s.composite.score !== null && s.composite.live.graded >= rules.minLiveGraded,
-  );
+  const eligible = standings.filter((s) => s.calling && s.graded > 0 && s.graded >= rules.minLiveGraded);
   if (eligible.length === 0) {
     return {
       id: fallback,
@@ -64,27 +76,27 @@ export function pickChampion(
       reason: `No model has ${rules.minLiveGraded} graded live calls yet, so the default stays on ${nameOf(fallback)}.`,
     };
   }
-  const top = rankByComposite(eligible)[0]!;
-  const topScore = top.composite.score!;
+  const pct = (s: ChampionStanding) => topModelsLowerBound(s) * 100;
+  const top = [...eligible].sort(
+    (a, b) => pct(b) - pct(a) || b.graded - a.graded || a.id.localeCompare(b.id),
+  )[0]!;
   const held =
     incumbent !== null && incumbent !== top.id ? eligible.find((s) => s.id === incumbent) : undefined;
-  // The margin only guards against noise between models judged alike. A seasoned leader outranks
-  // a warming-up incumbent outright (the leaderboard ranks it first whatever the scores), or a
-  // champion picked on a mostly-backtest score could never be unseated by the board's #1.
-  const sameTier = held !== undefined && held.composite.warmingUp === top.composite.warmingUp;
-  if (held && sameTier && topScore - held.composite.score! < rules.margin) {
+  if (held && pct(top) - pct(held) < rules.margin) {
     return {
       id: held.id,
       qualified: true,
       reason:
-        `${held.name} keeps the default: ${top.name} leads by ${(topScore - held.composite.score!).toFixed(1)} ` +
+        `${held.name} keeps the default: ${top.name}'s 2x lower bound leads by ${(pct(top) - pct(held)).toFixed(1)} ` +
         `points, under the ${rules.margin}-point margin a challenger needs.`,
     };
   }
   return {
     id: top.id,
     qualified: true,
-    reason: `Best score on the leaderboard (${topScore.toFixed(1)}) among models with at least ${rules.minLiveGraded} graded live calls.`,
+    reason:
+      `Best 2x lower bound (${pct(top).toFixed(1)}%, ${top.wins} of ${top.graded} doubled) over the last ` +
+      `${CHAMPION_WINDOW_HOURS} hours among models with at least ${rules.minLiveGraded} graded live calls.`,
   };
 }
 
@@ -170,16 +182,17 @@ export async function activeModelCutoffs(
 export async function rechooseChampion(input: {
   roster: readonly ContestantSpec[];
   lanes: readonly Lane[];
-  targets: PrecisionTargets;
   rules: ChampionRules;
   now?: Date;
 }): Promise<{ champion: ChampionRecord; changed: boolean; pick: ChampionPick }> {
   const now = input.now ?? new Date();
   const ids = input.roster.map((c) => c.id);
-  const since = new Date(now.getTime() - CHAMPION_WINDOW_DAYS * 86_400_000);
+  // Ending the grade lag before now, so every call in the window has been graded.
+  const until = new Date(now.getTime() - TOP_MODELS_GRADE_LAG_MINUTES * 60_000);
+  const since = new Date(until.getTime() - CHAMPION_WINDOW_HOURS * 3_600_000);
   const [current, live, incumbent] = await Promise.all([
     activeModelCutoffs(ids),
-    liveCallRecords(ids, since, input.lanes),
+    liveCallRecords(ids, since, input.lanes, { until }),
     loadChampion(),
   ]);
   const standings: ChampionStanding[] = input.roster.map((spec) => {
@@ -192,11 +205,8 @@ export async function rechooseChampion(input: {
         spec.control !== true &&
         (spec.role === "rules" ||
           (model !== undefined && model.threshold !== null && model.threshold < NEVER_EMIT_THRESHOLD)),
-      composite: compositeScore(
-        live.get(spec.id) ?? emptyRecord(),
-        model?.metrics.exam ?? emptyRecord(),
-        input.targets,
-      ),
+      graded: (live.get(spec.id) ?? emptyRecord()).graded,
+      wins: (live.get(spec.id) ?? emptyRecord()).wins,
     };
   });
   const consensusEnabled = ids.includes(CONSENSUS_CONTESTANT);
@@ -212,8 +222,9 @@ export async function rechooseChampion(input: {
     data: {
       contestant: pick.id,
       name: chosen?.name ?? pick.id,
-      score: chosen?.composite.score ?? null,
-      liveGraded: chosen?.composite.live.graded ?? 0,
+      // The lower bound it was chosen on, in percent (the composite score before 2026-10-14).
+      score: chosen && chosen.graded > 0 ? Math.round(topModelsLowerBound(chosen) * 1000) / 10 : null,
+      liveGraded: chosen?.graded ?? 0,
       previous: incumbent?.contestant ?? null,
       reason: pick.reason,
       chosenAt: now,

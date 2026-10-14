@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decidePlaybookPromotion, summarizeJudgeRecord, type JudgedCall } from "./aiJudge.js";
 import { trainBoostedCurator } from "./boosting.js";
-import { pickChampion, type ChampionStanding } from "./champion.js";
-import { scoreBand, type CompositeScore } from "./leaderboard.js";
 import { scoreCandidateWithModel, trainCurator, type PrecisionTargets, type TrainingRow } from "./trainer.js";
 
 /** Fixes from the 2026-10-04 models-and-training bug audit. */
@@ -43,43 +41,6 @@ describe("a legacy weight of 0 on an all-legacy slice", () => {
     expect(Number.isFinite(logistic.bias)).toBe(true);
     const boosted = await trainBoostedCurator(legacy, { legacyLabelWeight: 0 });
     expect(Number.isFinite(scoreCandidateWithModel(boosted, legacy[0]!.features))).toBe(true);
-  });
-});
-
-function standing(id: string, score: number, liveGraded: number): ChampionStanding {
-  const summary = {
-    calls: liveGraded,
-    graded: liveGraded,
-    winRatePct: null,
-    goalRatePct: null,
-    proven2xPct: null,
-    proven4xPct: null,
-    tenXRatePct: null,
-    avgReturnDoublings: null,
-    avgRunDoublings: null,
-    provenRunDoublings: null,
-    simCalls: 0,
-    avgSimReturnPct: null,
-    totalSimReturnPct: null,
-    score,
-  };
-  const composite: CompositeScore = {
-    score,
-    band: scoreBand(score),
-    liveWeight: 0.5,
-    warmingUp: liveGraded < 50,
-    basis: null,
-    live: summary,
-    exam: summary,
-  };
-  return { id, name: id.toUpperCase(), calling: true, composite };
-}
-
-describe("pickChampion across tiers", () => {
-  it("lets a seasoned leader unseat a warming-up incumbent with a higher score", () => {
-    const field = [standing("seasoned", 40, 80), standing("newcomer", 45, 12)];
-    const pick = pickChampion(field, "newcomer", { minLiveGraded: 10, margin: 2 }, "rules");
-    expect(pick.id).toBe("seasoned");
   });
 });
 

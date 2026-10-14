@@ -620,7 +620,9 @@ const envSchema = z.object({
   // of each other at 300-400 calls, so the default flipped on noise. 50 is the leaderboard's own
   // rank floor (MIN_LIVE_CALLS_TO_RANK). MIN_LIVE_GRADED 0 = off (an ungraded model can hold it).
   CURATOR_CHAMPION_MIN_LIVE_GRADED: z.coerce.number().int().min(0).default(50),
-  CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(5),
+  // Since 2026-10-14 the champion is ranked on the 2x lower bound (curation/champion.ts), so MARGIN
+  // is in percentage points of that bound: 1 is about the gap between the top seats over 72 hours.
+  CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(1),
   // The training run's guard (curation/runGuard.ts): a run that would ship broken weights, train on
   // under half the rows the running models saw, or silence every seat that was calling is held
   // back and the running models kept. A held run is let through once the running models are this
