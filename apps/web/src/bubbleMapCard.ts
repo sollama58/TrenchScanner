@@ -12,6 +12,7 @@ import {
   regroupLayout,
   sameTimeSlot,
   sideMembers,
+  sideWord,
   bubbleNameLines,
   type SideGroup,
   type BubbleGraph,
@@ -364,7 +365,7 @@ export async function renderBubbleCard(
   for (const g of sideGroups) {
     const members = sideMembers(map, g);
     const kolName = names[g.kolWallet]?.name ?? g.kolName ?? walletText(g.kolWallet, names);
-    const text = `${kolName.length > 16 ? `${kolName.slice(0, 15)}…` : kolName} sides?`;
+    const text = `${kolName.length > 16 ? `${kolName.slice(0, 15)}…` : kolName} ${sideWord(members, g)}`;
     hubs.push({
       id: `side:${g.kolWallet}`,
       ...centreOf(members),
