@@ -195,8 +195,14 @@ const envSchema = z.object({
   // worker's linkedWallets.ts): two 1-credit calls each (11 for a wallet with 1,000+ transactions,
   // whose first one takes the 10-credit sorted lookup), plus one per new funder for the exchange
   // check. Every answer is cached for good, so the steady state pays only for wallets never seen
-  // before. A candidate's top ten and creator go together or wait a cycle. 0 turns the reading off.
+  // before. A candidate's top 25 and creator go together or wait a cycle. 0 turns the reading off.
   LINKED_WALLET_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
+  // The same for contenders (the coins about to be decided on, read first), on top of the above
+  // (user decision 2026-10-14, audit D1 "bigger budget"): a cold coin's top 25 needs about that
+  // many new funders, so the shared 30 covered about one a cycle. Spent only on the pass the cycle
+  // already waits on, inside the same wallet-stage budget, so it adds no wait. About 80 credits a
+  // cycle at most (~$35 a month on Developer + overage).
+  LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
   // Mints per scan cycle whose whole holder list is read for the linked reading's top 25 (user ask
   // 2026-10-13: RugCheck's 20 accounts hold the pool, leaving 19): one getProgramAccountsV2 page
   // each (1 credit; a mint with over 10,000 holders takes a second), kept for TOP_HOLDERS_REFRESH_MS

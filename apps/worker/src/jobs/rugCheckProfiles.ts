@@ -70,6 +70,17 @@ function readAt(profile: RugCheckProfile, at: Date): RugCheckProfile {
   return { ...profile, holderCountAt: at };
 }
 
+/**
+ * The oldest report served in place of a fresh one while lookups are over budget, held off or
+ * refreshing behind the cycle. RugCheck being down for an hour used to leave a coin passing the
+ * top-10 cut on a report from before the outage, up to the 2-day cache sweep. Several TTLs, so an
+ * ordinary over-budget cycle or a slow refresh still serves what it has.
+ */
+export const STALE_MAX_AGE_MS = 30 * 60_000;
+
+/** The cache TTL of a report that listed no market - see resolveRugProfiles. */
+export const NO_MARKETS_TTL_MINUTES = 1;
+
 /** Added to the awaited lookups' deadline for the requests already in flight when it passes. */
 const AWAIT_GRACE_MS = 2_000;
 
@@ -183,8 +194,15 @@ export async function resolveRugProfiles(
   const rows = await prisma.rugCheckCache.findMany({ where: { mintAddress: { in: unique } } });
   const asOf = Date.now();
   const ttlOf = typeof ttlMinutes === "number" ? () => ttlMinutes : ttlMinutes;
-  const isFresh = (r: { mintAddress: string; checkedAt: Date }) =>
-    r.checkedAt.getTime() > asOf - ttlOf(r.mintAddress) * 60_000;
+  // A report that listed no market yet (RugCheckProfile.marketsListed) is re-read every minute:
+  // its LP answer is missing, not "not burned", until RugCheck lists the coin's venue.
+  const ttlFor = (r: { mintAddress: string; profile: unknown }) => {
+    const ttl = ttlOf(r.mintAddress);
+    const unlisted = (r.profile as { marketsListed?: unknown } | null)?.marketsListed === false;
+    return unlisted ? Math.min(ttl, NO_MARKETS_TTL_MINUTES) : ttl;
+  };
+  const isFresh = (r: { mintAddress: string; checkedAt: Date; profile: unknown }) =>
+    r.checkedAt.getTime() > asOf - ttlFor(r) * 60_000;
   const fresh = rows.filter(isFresh);
   const staleRows = new Map(rows.filter((r) => !isFresh(r)).map((r) => [r.mintAddress, r]));
 
@@ -235,6 +253,10 @@ export async function resolveRugProfiles(
       reused += 1;
       return true;
     }
+    // Too old to stand in: the holder cuts would read figures from long before (audit 2026-10-14,
+    // L6-10 / L3 M5). Past the budget or held off, the mint then has no report this cycle, as on
+    // a failed lookup; in the background path it is waited on instead of served.
+    if (row.checkedAt.getTime() <= asOf - STALE_MAX_AGE_MS) return false;
     const parsed = cachedProfileSchema.safeParse(row.profile);
     if (!parsed.success) return false;
     profiles.set(mint, readAt(parsed.data as RugCheckProfile, row.checkedAt));

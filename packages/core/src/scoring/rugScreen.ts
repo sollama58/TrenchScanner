@@ -159,7 +159,12 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
   // outright, in both bonding-curve and graduated state, rather than scored on figures that
   // aren't comparable. `!== false` rather than `=== true`: an unverified mint (undefined, the
   // check errored) is rejected too, consistent with this screen failing closed everywhere else.
-  if (profile.isMayhemMode !== false) {
+  // Unchecked is not "unverified" when a local check already failed: Mayhem is looked up only for
+  // coins passing those (the scan's two-pass assembly), so every LP or authority reject read
+  // "Mayhem unverified" too and the per-rule counts overstated it (audit 2026-10-14, L3 M3). The
+  // verdict is the same either way.
+  const mayhemUnchecked = profile.isMayhemMode === undefined && reasons.length > 0;
+  if (profile.isMayhemMode !== false && !mayhemUnchecked) {
     reasons.push(
       profile.isMayhemMode === true
         ? "Pump.fun Mayhem Mode token (AI-driven supply and trading)"

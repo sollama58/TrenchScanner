@@ -135,6 +135,21 @@ describe("feature attribution", () => {
     const rug = rows.find((r) => r.provider === "rugcheck")!;
     expect(rug.counter).toMatchObject({ calls: 2, requests: 2, errors: 2, rateLimited: 1 });
   });
+
+  it("charges credits only for answered calls, not errors or 429s", async () => {
+    apiUsageMeter.take();
+    const statuses = [200, 429, 503];
+    const inner = (async () => new Response("{}", { status: statuses.shift()! })) as typeof fetch;
+    const f = meteredFetch(inner);
+    for (let i = 0; i < 3; i++) await f(helius, { method: "POST", body: rpcBody("getBalance") });
+    await expect(
+      meteredFetch((async () => {
+        throw new Error("socket hang up");
+      }) as typeof fetch)(helius, { method: "POST", body: rpcBody("getBalance") }),
+    ).rejects.toThrow();
+    const row = apiUsageMeter.take().find((r) => r.provider === "helius")!;
+    expect(row.counter).toMatchObject({ calls: 4, errors: 3, rateLimited: 1, credits: 1 });
+  });
 });
 
 describe.skipIf(!dbAvailable)("flushApiUsage", () => {
