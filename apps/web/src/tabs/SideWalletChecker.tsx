@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { usePolling } from "../hooks";
 import { ago, shortAddress } from "../format";
 import { openWallet } from "../walletModal";
 import { Skeleton } from "../components/Charts";
-import { ChevronDownIcon, UsersIcon } from "../components/Icons";
+import { ChevronDownIcon, CloseIcon, UsersIcon } from "../components/Icons";
 
 export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
 export type SideWindow = (typeof SIDE_WINDOWS)[number];
@@ -40,6 +40,8 @@ interface KolSides {
 
 /** Rows shown before "Show all". */
 const FIRST_ROWS = 25;
+/** Side wallets shown in a dropdown; more open in a modal. */
+const DROP_ROWS = 10;
 
 const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
 
@@ -53,7 +55,7 @@ export function gapText(sec: number): string {
 
 /**
  * The Side Wallet Checker, free on the Utilities tab: the KOLs we track, ranked by how many of
- * our coins they bought in the last 30 days. Opening one lists the ten wallets that bought the
+ * our coins they bought in the last 30 days. Opening one lists the top wallets that bought the
  * most of the same coins within a few minutes of it, sorted by % shared in the period picked.
  */
 export function SideWalletChecker() {
@@ -79,6 +81,11 @@ export function SideWalletChecker() {
         KOLs ranked by how many of our tracked coins they bought in the last 30 days. Open one to see the
         wallets that bought the same coins within {data?.gapMinutes ?? 5} minutes of it, by the share of the
         KOL&apos;s coins they were in. Other KOLs, exchanges and bots are left out.
+      </p>
+      <p className="side-note small" role="note">
+        These are possible side wallets, matched only by buying the same coins at about the same time. None is
+        confirmed to belong to the KOL: a wallet here may be a copy trader, a friend, a bot or chance. Not
+        financial advice.
       </p>
       {error && !data ? (
         <p className="error small">Couldn&apos;t load the KOLs: {error.message}</p>
@@ -154,7 +161,7 @@ export function SideWalletChecker() {
   );
 }
 
-/** One KOL's dropdown: its top ten side wallets in the period picked. */
+/** One KOL's dropdown: its top ten side wallets in the period picked, and the rest in a modal. */
 function SideWallets({
   kol,
   kolName,
@@ -170,6 +177,7 @@ function SideWallets({
 }) {
   const [data, setData] = useState<KolSides | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   useEffect(() => {
     let live = true;
     api<KolSides>(`/utilities/side-wallets/${encodeURIComponent(kol)}`)
@@ -212,38 +220,114 @@ function SideWallets({
             : `No wallet shared ${minShared} or more of its ${plural(coins, "coin")} in the last ${period}.`}
         </p>
       ) : (
-        <ol className="side-sides">
-          {list.map((s, i) => (
-            <li key={s.wallet}>
-              <span className="side-rank num faint">{i + 1}</span>
-              <button
-                type="button"
-                className="link side-wallet num"
-                title={`Open ${s.wallet}`}
-                onClick={() => openWallet(s.wallet)}
-              >
-                {shortAddress(s.wallet)}
-              </button>
-              <span className="side-bar" aria-hidden="true">
-                <span style={{ width: `${Math.min(100, s.pct)}%` }} />
-              </span>
-              <span className="side-pct num">{s.pct.toFixed(s.pct >= 10 ? 0 : 1)}%</span>
-              <span className="side-meta faint small num">
-                <span title="Coins it bought with the KOL, of the KOL's coins in the window">
-                  {s.shared}/{coins} coins
-                </span>
-                <span title="Median time from the KOL's buy to its own">· {gapText(s.gapSec)}</span>
-                <span title="Every tracked coin it bought in the window">· {s.coins} total</span>
-              </span>
-              <span className="side-tags">
-                {s.risk?.winner && <span className="pill side-good">Winner</span>}
-                {s.risk?.dumper && <span className="pill pill-warn">Dumper</span>}
-                {s.risk?.sniper && <span className="pill">Sniper</span>}
-              </span>
-            </li>
-          ))}
-        </ol>
+        <>
+          <SideRows list={list.slice(0, DROP_ROWS)} coins={coins} />
+          {list.length > DROP_ROWS && (
+            <button type="button" className="ghost small-btn side-all" onClick={() => setShowAll(true)}>
+              Show all {list.length} wallets
+            </button>
+          )}
+        </>
+      )}
+      {showAll && (
+        <SideWalletsModal
+          kolName={kolName}
+          period={period}
+          list={list}
+          coins={coins}
+          onClose={() => setShowAll(false)}
+        />
       )}
     </div>
+  );
+}
+
+/** Every listed side wallet for one KOL and window, in a native modal (a sheet on phones). */
+function SideWalletsModal({
+  kolName,
+  period,
+  list,
+  coins,
+  onClose,
+}: {
+  kolName: string;
+  period: SideWindow;
+  list: SideWallet[];
+  coins: number;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      className="about-modal sheet-modal side-modal"
+      aria-labelledby="side-modal-title"
+      onClose={onClose}
+      // A click on the backdrop lands on the dialog element itself; clicks inside land on its content.
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="about-body">
+        <header className="about-head">
+          <h2 id="side-modal-title">
+            {kolName}&apos;s possible side wallets · {period}
+          </h2>
+          <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
+            <CloseIcon size={16} />
+          </button>
+        </header>
+        <p className="muted small">
+          All {list.length} wallets that shared at least two of its {plural(coins, "coin")}, by % shared. Not
+          confirmed side wallets: matched on timing only.
+        </p>
+        {/* The wallet modal opens over the page, so this one closes first. */}
+        <SideRows list={list} coins={coins} onOpen={onClose} />
+      </div>
+    </dialog>
+  );
+}
+
+/** Side wallet rows: address (opens the wallet modal), % shared bar, coins, timing and labels. */
+function SideRows({ list, coins, onOpen }: { list: SideWallet[]; coins: number; onOpen?: () => void }) {
+  return (
+    <ol className="side-sides">
+      {list.map((s, i) => (
+        <li key={s.wallet}>
+          <span className="side-rank num faint">{i + 1}</span>
+          <button
+            type="button"
+            className="link side-wallet num"
+            title={`Open ${s.wallet}`}
+            onClick={() => {
+              onOpen?.();
+              openWallet(s.wallet);
+            }}
+          >
+            {shortAddress(s.wallet)}
+          </button>
+          <span className="side-bar" aria-hidden="true">
+            <span style={{ width: `${Math.min(100, s.pct)}%` }} />
+          </span>
+          <span className="side-pct num">{s.pct.toFixed(s.pct >= 10 ? 0 : 1)}%</span>
+          <span className="side-meta faint small num">
+            <span title="Coins it bought with the KOL, of the KOL's coins in the window">
+              {s.shared}/{coins} coins
+            </span>
+            <span title="Median time from the KOL's buy to its own">· {gapText(s.gapSec)}</span>
+            <span title="Every tracked coin it bought in the window">· {s.coins} total</span>
+          </span>
+          <span className="side-tags">
+            {s.risk?.winner && <span className="pill side-good">Winner</span>}
+            {s.risk?.dumper && <span className="pill pill-warn">Dumper</span>}
+            {s.risk?.sniper && <span className="pill">Sniper</span>}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }

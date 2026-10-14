@@ -2719,6 +2719,19 @@ legend {
 .side-foot {
   margin: 10px 0 0;
 }
+.util-side > p.side-note {
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--ink-2);
+}
+.side-all {
+  margin-top: 8px;
+}
+.side-modal .about-body > p {
+  margin: 0 0 8px;
+}
 @media (max-width: 640px) {
   .util-side .section-head {
     flex-direction: row;
