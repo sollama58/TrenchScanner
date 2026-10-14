@@ -209,11 +209,16 @@ export async function recordCandidateSample(
   // createMatchesForTargets) - each anchoring after its own locked match insert. Both would read
   // "no recent match row" and both would create one, so the spacing check and the create are
   // serialized under a per-token advisory lock; transaction-scoped, so it releases on commit or
-  // rollback with no cleanup path. The other kinds are written by one lane each and need none.
-  if (kind === "match" && !opts.bypassSpacing) {
+  // rollback with no cleanup path. Event and second-look rows are written by the scan alone, but
+  // during a deploy the old and new scanner run side by side, and both banked the same decision
+  // 0-1.1 s apart (5 pairs in 7 days, audit 2026-10-14 L2 L1); they take the same lock, per kind.
+  // Hourly rows need none: a twin there is one more sample an hour, not a doubled decision.
+  const locked = kind === "match" || ((kind === "event" || kind === "second") && !opts.db);
+  if (locked && !opts.bypassSpacing) {
+    const lockKey = kind === "match" ? `match-anchor:${tokenId}` : `${kind}-anchor:${tokenId}`;
     return prisma.$transaction(
       async (tx) => {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"match-anchor:" + tokenId}))`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
         return sample(tx);
       },
       { maxWait: 10_000, timeout: 15_000 },
