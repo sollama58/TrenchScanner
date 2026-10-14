@@ -1604,7 +1604,8 @@ function HowItWorks({ board }: { board: Leaderboard }) {
               among those with at least {board.defaultRule.rankMinGraded ?? board.defaultRule.minGraded}{" "}
               graded calls over the last {board.defaultRule.rankWindowHours ?? board.defaultRule.windowHours}
               h, picked every {Math.round(board.defaultRule.refreshMinutes / 60)} hours (00, 06, 12 and 18
-              UTC) and held until the next pick. Everyone who follows the default sees their calls combined.
+              UTC) and held until the next pick. The champion always holds one of those places, taking the
+              last one when it did not rank in. Everyone who follows the default sees their calls combined.
               Until enough models qualify, it is the best performer on this board alone.
             </>
           ) : (

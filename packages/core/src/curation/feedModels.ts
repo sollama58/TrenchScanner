@@ -25,17 +25,31 @@ export interface FeedModelState {
   /** The single best performer (champion.ts): the AI reviewer's model, and the fallback below. */
   defaultModel: string;
   /**
-   * The default feed: the top models by 2x lower bound (topModels.ts), best first; just
-   * [defaultModel] while too few models qualify.
+   * The default feed: the top models by 2x lower bound (topModels.ts), best first, with the
+   * champion always holding a place; just [defaultModel] while too few models qualify.
    */
   defaultModels: string[];
   /** The best average exit-plan return over the same 24h (the "best" marker); null when none qualify. */
   bestModel: string | null;
 }
 
-/** The default feed: the top models when enough qualify, else the single default. */
-export function resolveDefaultModels(top: readonly string[] | null, defaultModel: string): string[] {
-  return top && top.length > 0 ? [...top] : [defaultModel];
+/**
+ * The default feed: the top models when enough qualify, else the single default. The champion
+ * always holds a place (user decision 2026-10-14): when it can call (`defaultModel` is the
+ * champion) but did not rank into the top, it takes the last slot. A fallback default standing in
+ * for a silent champion is not pinned.
+ */
+export function resolveDefaultModels(
+  top: readonly string[] | null,
+  defaultModel: string,
+  champion: string | null,
+): string[] {
+  if (!top || top.length === 0) return [defaultModel];
+  const models = [...top];
+  if (champion !== null && champion === defaultModel && !models.includes(champion)) {
+    models[models.length - 1] = champion;
+  }
+  return models;
 }
 
 /** What a user saved about their feed: the User columns the feeds read. */
@@ -213,5 +227,10 @@ export async function loadFeedModelState(env: Env): Promise<FeedModelState> {
     defaultContestant(consensusEnabled ? cutoffs.get(CONSENSUS_CONTESTANT)?.threshold : null),
   );
   const { top, best } = await loadTopModels(roster, lanes, canCall);
-  return { roster, defaultModel, defaultModels: resolveDefaultModels(top, defaultModel), bestModel: best };
+  return {
+    roster,
+    defaultModel,
+    defaultModels: resolveDefaultModels(top, defaultModel, champion?.contestant ?? null),
+    bestModel: best,
+  };
 }
