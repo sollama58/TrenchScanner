@@ -413,7 +413,10 @@ function MapView({
                 : `${graph.linkedCount ? `${graph.linkedCount.linked} of the top ${graph.linkedCount.of} holders, holding ` : ""}${pct(graph.linkedPct, 1)} of supply`
             }
           >
-            {linkedCountText(graph.linkedCount) ?? pct(graph.linkedPct, 1)}
+            {/* N/25 and, beside it, the share of supply those linked holders hold (user ask 2026-10-14). */}
+            {graph.linkedCount && graph.linkedPct !== null
+              ? `${linkedCountText(graph.linkedCount)} (${pct(graph.linkedPct, 1)})`
+              : (linkedCountText(graph.linkedCount) ?? pct(graph.linkedPct, 1))}
           </dd>
         </div>
         <div>
