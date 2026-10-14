@@ -278,42 +278,302 @@ export function WeatherArt() {
   );
 }
 
-/** One funder paying for several top holders, drawn as the bubble map draws it, beside lone holders. */
+/** A bubble (x, y, radius, % of supply) on the tour's pictures of the bubble map. */
+type Bub = [number, number, number, string];
+
+function Bubble({ b: [x, y, r, label], tone = "" }: { b: Bub; tone?: string }) {
+  return (
+    <g>
+      <circle className={`bm-bubble ${tone}`} cx={x} cy={y} r={r} />
+      <text x={x} y={y + (r >= 15 ? 4 : 3)} className={`bm-pct${r < 15 ? " small" : ""}`} textAnchor="middle">
+        {label}
+      </text>
+    </g>
+  );
+}
+
+/** A funder, drawn as the map draws it: a small diamond. */
+function Funder({ x, y, tone }: { x: number; y: number; tone: string }) {
+  return (
+    <rect
+      className={`bm-funder ${tone}`}
+      x="-6"
+      y="-6"
+      width="12"
+      height="12"
+      rx="2"
+      transform={`translate(${x} ${y}) rotate(45)`}
+    />
+  );
+}
+
+/** The bubble map as it reads now: clusters with their shares, the Linked tile and the group list. */
 export function BubblesArt() {
-  const funder = { x: 70, y: 110 };
-  const cluster: [number, number, number][] = [
-    [190, 62, 26],
-    [228, 128, 32],
-    [168, 168, 20],
-    [262, 54, 16],
+  const fa = { x: 120, y: 100 };
+  const a: Bub[] = [
+    [70, 52, 24, "4.2%"],
+    [176, 58, 20, "2.1%"],
+    [60, 150, 16, "0.8%"],
+    [150, 160, 13, "0.5%"],
   ];
-  const lone: [number, number, number, boolean][] = [
-    [380, 70, 22, false],
-    [440, 132, 18, true],
-    [372, 158, 14, false],
-    [478, 64, 12, false],
-    [500, 150, 10, false],
+  const fb = { x: 262, y: 150 };
+  const b: Bub[] = [
+    [230, 110, 22, "3.1%"],
+    [306, 122, 15, "1.4%"],
+    [290, 186, 10, "0.6%"],
+  ];
+  const lone: Bub[] = [
+    [300, 40, 18, "2.4%"],
+    [345, 78, 9, "0.3%"],
+    [350, 170, 8, "0.2%"],
+  ];
+  const rows = [
+    { tone: "a", name: "Funder 7Kq…", sub: "4 wallets", pct: "7.6%", on: true },
+    { tone: "b", name: "Funder Hx2…", sub: "3 wallets", pct: "5.1%", on: false },
+    { tone: "kol", name: "KOL", sub: "3 wallets", pct: "4.7%", on: false },
   ];
   return (
-    <Art label="One funder paid for four top holders, drawn as one coloured cluster beside unlinked grey holders, one ringed as risky">
-      {cluster.map(([x, y], i) => (
-        <path key={`l${i}`} className="bm-link" d={`M${funder.x} ${funder.y} L${x} ${y}`} />
+    <Art label="A bubble map: two coloured clusters of top holders, each tied to the funder that paid for them and labelled with its share of supply, a risky wallet ringed in red, the Linked tile reading 7 of 25 holding 12.7%, and the list of groups beside it">
+      {a.map(([x, y], i) => (
+        <path key={`la${i}`} className="bm-link a" d={`M${fa.x} ${fa.y} L${x} ${y}`} />
       ))}
-      <circle className="bm-funder" cx={funder.x} cy={funder.y} r="9" />
-      {cluster.map(([x, y, r], i) => (
-        <circle key={`c${i}`} className="bm-bubble linked" cx={x} cy={y} r={r} />
+      {b.map(([x, y], i) => (
+        <path key={`lb${i}`} className="bm-link b" d={`M${fb.x} ${fb.y} L${x} ${y}`} />
       ))}
-      {lone.map(([x, y, r, risky], i) => (
-        <circle key={`o${i}`} className={`bm-bubble${risky ? " risky" : ""}`} cx={x} cy={y} r={r} />
+      {a.map((n, i) => (
+        <Bubble key={`a${i}`} b={n} tone="a" />
       ))}
-      <text x={funder.x} y="146" className="cap small" textAnchor="middle">
-        One funder
+      {b.map((n, i) => (
+        <Bubble key={`b${i}`} b={n} tone="b" />
+      ))}
+      {lone.map((n, i) => (
+        <Bubble key={`o${i}`} b={n} />
+      ))}
+      <Bubble b={[222, 30, 12, "0.9%"]} tone="risky" />
+      <Funder x={fa.x} y={fa.y} tone="a" />
+      <Funder x={fb.x} y={fb.y} tone="b" />
+      <text x="185" y="212" className="cap" textAnchor="middle">
+        Same colour, same funder
       </text>
-      <text x="214" y="212" className="cap bad" textAnchor="middle">
-        4 wallets, one buyer: 31%
+
+      <g transform="translate(380 14)">
+        <rect className="bm-tile" width="168" height="48" rx="10" />
+        <text x="12" y="19" className="cap small">
+          Linked
+        </text>
+        <text x="12" y="38" className="label">
+          7/25 (12.7%)
+        </text>
+      </g>
+      <text x="380" y="82" className="cap small">
+        CLUSTERS AND KOLS
       </text>
-      <text x="440" y="212" className="cap" textAnchor="middle">
-        Not linked
+      {rows.map((r, i) => (
+        <g key={r.name} transform={`translate(380 ${90 + i * 36})`}>
+          <rect className={`bm-row ${r.tone}${r.on ? " on" : ""}`} width="168" height="30" rx="8" />
+          <circle className={`bm-dot ${r.tone}`} cx="14" cy="15" r="5" />
+          <text x="26" y="13" className="bm-row-name">
+            {r.name}
+          </text>
+          <text x="26" y="25" className="cap small">
+            {r.sub}
+          </text>
+          <text x="158" y="19" className="bm-row-pct" textAnchor="end">
+            {r.pct}
+          </text>
+        </g>
+      ))}
+      <text x="464" y="212" className="cap" textAnchor="middle">
+        Tap one for its wallets
+      </text>
+    </Art>
+  );
+}
+
+/** A KOL on the map with the wallets tied to it, and the supply they hold together. */
+export function KolArt() {
+  const kol: Bub = [150, 104, 30, "6.5%"];
+  const known: Bub = [56, 52, 16, "2.1%"];
+  const funded: Bub = [62, 160, 14, "1.4%"];
+  const side: Bub = [268, 50, 15, "1.2%"];
+  const same: Bub = [292, 160, 13, "0.9%"];
+  const fx = { x: 228, y: 150 };
+  const tied = [
+    ["kol", "1 Known Side"],
+    ["kol", "1 KOL Funded"],
+    ["side", "1 possible side"],
+    ["a", "1 same funder"],
+  ];
+  return (
+    <Art label="A KOL's bubble in gold, tied to a Known Side and a wallet it funded, a possible side wallet on a dotted gold line, and a holder sharing its funder: together 12.1% of supply">
+      <path className="bm-link kol" d={`M${kol[0]} ${kol[1]} L${known[0]} ${known[1]}`} />
+      <path className="bm-link kol" d={`M${kol[0]} ${kol[1]} L${funded[0]} ${funded[1]}`} />
+      <path className="bm-link side" d={`M${kol[0]} ${kol[1]} L${side[0]} ${side[1]}`} />
+      <path className="bm-link a" d={`M${fx.x} ${fx.y} L${kol[0]} ${kol[1]}`} />
+      <path className="bm-link a" d={`M${fx.x} ${fx.y} L${same[0]} ${same[1]}`} />
+      <Bubble b={kol} tone="kol" />
+      <Bubble b={known} tone="kol" />
+      <Bubble b={funded} tone="kol" />
+      <Bubble b={side} />
+      <Bubble b={same} tone="a" />
+      <Funder x={fx.x} y={fx.y} tone="a" />
+      <g transform={`translate(${kol[0]} ${kol[1] + 44})`}>
+        <rect className="bm-tag kol" x="-18" y="-10" width="36" height="16" rx="4" />
+        <text y="2" className="bm-tag-text" textAnchor="middle">
+          KOL
+        </text>
+      </g>
+      <g transform={`translate(${side[0] + 48} ${side[1] - 4})`}>
+        <rect className="bm-tag side" x="-24" y="-11" width="48" height="18" rx="9" />
+        <text y="2" className="bm-tag-text" textAnchor="middle">
+          side?
+        </text>
+      </g>
+      <text x={known[0]} y={known[1] - 24} className="cap small" textAnchor="middle">
+        Known Side
+      </text>
+      <text x={funded[0]} y={funded[1] + 30} className="cap small" textAnchor="middle">
+        KOL Funded
+      </text>
+      <text x={same[0]} y={same[1] + 28} className="cap small" textAnchor="middle">
+        Same funder
+      </text>
+
+      <g transform="translate(360 18)">
+        <rect className="bm-row kol on" width="188" height="176" rx="12" />
+        <circle className="bm-dot kol" cx="18" cy="22" r="5" />
+        <text x="30" y="26" className="bm-row-name">
+          KOL group
+        </text>
+        <text x="16" y="62" className="label big">
+          12.1%
+        </text>
+        <text x="16" y="80" className="cap small">
+          of supply it may control
+        </text>
+        {tied.map(([tone, text], i) => (
+          <g key={text} transform={`translate(16 ${102 + i * 18})`}>
+            <circle className={`bm-dot ${tone}`} cx="4" cy="-4" r="4" />
+            <text x="14" y="0" className="cap small">
+              {text}
+            </text>
+          </g>
+        ))}
+      </g>
+    </Art>
+  );
+}
+
+/** A KOL's buys and a wallet's, minutes apart on the same coins, and the labels that follow. */
+export function SideCheckArt() {
+  const kolBuys = [72, 138, 206, 272, 336];
+  const walletBuys = [86, 152, 220, 286];
+  const tags = [
+    { cls: "side", text: "Possible Side", off: false },
+    { cls: "kol", text: "KOL Funded", off: false },
+    { cls: "", text: "Likely bot", off: true },
+  ];
+  return (
+    <Art label="A KOL's buys on one line and a wallet's on another, each a couple of minutes after the KOL's on the same coins: a possible side wallet. Likely bots are left out">
+      <text x="16" y="66" className="label kol">
+        KOL
+      </text>
+      <text x="16" y="144" className="label">
+        Wallet
+      </text>
+      <path className="grid" d="M66 62 H360 M66 140 H360" />
+      {walletBuys.map((x, i) => (
+        <path key={`t${i}`} className="bm-link side" d={`M${kolBuys[i]} 72 L${x} 130`} />
+      ))}
+      {kolBuys.map((x, i) => (
+        <Coin key={`k${i}`} x={x} y={62} r={10} tone="kol" />
+      ))}
+      {walletBuys.map((x, i) => (
+        <Coin key={`w${i}`} x={x} y={140} r={10} />
+      ))}
+      <text x="210" y="104" className="cap small" textAnchor="middle">
+        minutes apart
+      </text>
+      <text x="210" y="190" className="cap" textAnchor="middle">
+        4 of the KOL&apos;s 5 coins, again and again
+      </text>
+      {tags.map((t, i) => (
+        <g key={t.text} transform={`translate(392 ${34 + i * 50})`}>
+          <rect className={`bm-tag big ${t.cls}${t.off ? " off" : ""}`} width="156" height="32" rx="16" />
+          <text x="78" y="21" className={`bm-tag-text big${t.off ? " off" : ""}`} textAnchor="middle">
+            {t.text}
+          </text>
+          {t.off && <path className="strike" d="M30 16 H126" />}
+        </g>
+      ))}
+      <text x="470" y="190" className="cap" textAnchor="middle">
+        Bots left out
+      </text>
+    </Art>
+  );
+}
+
+/** Filters switched on and off, the hide-below slider, and Telegram on its own models. */
+export function YoursArt() {
+  const filters: [string, boolean][] = [
+    ["Fast movers", true],
+    ["Low KOL bundled", true],
+    ["Big volume", false],
+  ];
+  return (
+    <Art label="Three saved filters, two switched on and one off; a slider hiding alerts below a market cap; Telegram sending its own models' picks">
+      {filters.map(([name, on], i) => (
+        <g key={name} transform={`translate(16 ${28 + i * 44})`}>
+          <rect className="box mine" width="172" height="34" rx="10" />
+          <text x="12" y="22" className={`cap${on ? "" : " off"}`}>
+            {name}
+          </text>
+          <g transform="translate(130 9)" className={`tour-switch${on ? " on" : ""}`}>
+            <rect width="30" height="16" rx="8" />
+            <circle cx={on ? 22 : 8} cy="8" r="6" />
+          </g>
+        </g>
+      ))}
+      <text x="102" y="206" className="cap" textAnchor="middle">
+        Each filter on or off
+      </text>
+
+      <text x="212" y="40" className="cap small">
+        Hide below
+      </text>
+      <text x="364" y="40" className="label" textAnchor="end">
+        $10k
+      </text>
+      <path className="slider-track" d="M212 58 H364" />
+      <path className="slider-fill" d="M212 58 H262" />
+      <circle className="slider-knob" cx="262" cy="58" r="8" />
+      <g transform="translate(212 82)" opacity="0.35">
+        <rect className="card front" width="152" height="40" rx="10" />
+        <rect className="line strong" x="12" y="12" width="56" height="8" rx="4" />
+        <text x="140" y="27" className="cap small" textAnchor="end">
+          Now $6k
+        </text>
+      </g>
+      <g transform="translate(212 132)">
+        <rect className="card front" width="152" height="40" rx="10" />
+        <rect className="line strong" x="12" y="12" width="56" height="8" rx="4" />
+        <text x="140" y="27" className="cap small good" textAnchor="end">
+          Now $48k
+        </text>
+      </g>
+      <text x="288" y="206" className="cap" textAnchor="middle">
+        Fallen coins tucked away
+      </text>
+
+      <g transform="translate(392 40)">
+        <rect className="box model" width="156" height="132" rx="16" />
+        <path className="plane" d="M30 54 L94 28 L80 92 L64 70 Z M64 70 L94 28" />
+        <text x="78" y="112" className="label model" textAnchor="middle">
+          Telegram
+        </text>
+      </g>
+      <text x="470" y="206" className="cap" textAnchor="middle">
+        Its own models
       </text>
     </Art>
   );

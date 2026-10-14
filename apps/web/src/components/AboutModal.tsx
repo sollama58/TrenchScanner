@@ -8,8 +8,11 @@ import {
   FunnelArt,
   GradeArt,
   GuestArt,
+  KolArt,
+  SideCheckArt,
   TwoWaysArt,
   WeatherArt,
+  YoursArt,
 } from "./TourArt";
 import { GUEST_DELAY_MINUTES } from "../session";
 
@@ -197,8 +200,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
               <SlidersIcon size={12} /> Your alert
             </span>
             <p>
-              A coin that matches the rules you set on the Filters tab. If a rule needs a wallet check, it
-              waits for that check before it pings you.
+              A coin that matches one of the filters you&apos;ve switched on in the Filters tab. If a rule
+              needs a wallet check, it waits for that check before it pings you.
             </p>
           </div>
           <div>
@@ -270,25 +273,112 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
       ),
     },
     {
-      title: "Spot one buyer behind many wallets",
+      title: "See who really holds the coin",
       art: <BubblesArt />,
       body: (
         <>
           <p className="tour-lead">
             Top holders can look spread out when one person is behind several of them. For each top-25 wallet
-            we look up who paid for it. Wallets with the same funder count as one: four wallets from one
-            funder holding 31% is really one holder with 31%. Exchange withdrawals don&apos;t count as a link.
+            we look up who paid for it, and wallets with the same funder count as one buyer.
           </p>
-          <p className="tour-lead">
-            The Linked tile on each card counts the linked wallets among the top 25, as 10/25, and turns red
-            at 20/25 or more (the share they hold is in its tooltip). When it finds a cluster, the tile shows
-            a bubble icon: tap it for the bubble map, where each bubble is a top holder sized by its share,
-            wallets from one funder share a colour, and risky wallets are ringed in red.
-          </p>
+          <ul className="tour-keys">
+            <li>
+              <b>The Linked tile</b> on each card counts the top 25 that share a funder or a funding minute,
+              as 13/25, and turns red at 20/25. Tap it for the bubble map, where Linked also gives the supply
+              they hold: <span className="num">13/25 (16.2%)</span>.
+            </li>
+            <li>
+              <b>On the map</b>, each bubble is a holder, sized and labelled with its share down to 0.1%. One
+              colour means one funder, a red ring marks a risky wallet or known dumper, and a dotted ring
+              means funded within the same minute. A coin a model called also brings in known wallets from its
+              top 50.
+            </li>
+            <li>
+              <b>Under the map</b>, tap a cluster, KOL, exchange or funding minute to list its wallets with
+              their shares. Any wallet opens its own page, with a Search X button to see who&apos;s talking
+              about it.
+            </li>
+          </ul>
           {guest && <p className="tour-note">The bubble map comes with a connected wallet.</p>}
         </>
       ),
     },
+    {
+      title: "Know when a KOL is in",
+      art: <KolArt />,
+      body: (
+        <>
+          <p className="tour-lead">
+            KOLs (the traders people follow) show in gold on the map, gathered with every wallet tied to them,
+            and the share of supply they may control together.
+          </p>
+          <ul className="tour-keys">
+            <li>
+              <b>Known Side</b>: another wallet we know is the same KOL&apos;s.
+            </li>
+            <li>
+              <b>KOL Funded</b>: a wallet the KOL paid for.
+            </li>
+            <li>
+              <b>Possible side</b> (a dotted gold line, &ldquo;side?&rdquo;): a wallet that keeps buying the
+              KOL&apos;s coins within minutes of it. Likely, not confirmed.
+            </li>
+            <li>
+              <b>Same funder or same minute</b>: a holder funded alongside any of those.
+            </li>
+          </ul>
+          <p className="tour-note">
+            That share is the card&apos;s KOL bundled figure too. Add it as a tile from Customize, or cap it
+            in a filter.
+          </p>
+        </>
+      ),
+    },
+    ...(guest
+      ? []
+      : [
+          {
+            title: "Who trades alongside the KOLs",
+            art: <SideCheckArt />,
+            body: (
+              <>
+                <p className="tour-lead">
+                  The Side Wallet Checker on the Utilities tab is free. It ranks the KOLs by how many of our
+                  coins they bought in the last 30 days. Open one to see the wallets that bought the same
+                  coins within minutes of it, and compare any of them with the KOL trade by trade.
+                </p>
+                <p className="tour-lead">
+                  Wallets that clear the bar earn the Possible Side label you see on the bubble map. Bots and
+                  likely bots (wallets that shadow many KOLs at once) are left out, and the labelled wallets
+                  export in one tap.
+                </p>
+              </>
+            ),
+          },
+          {
+            title: "Make the feed yours",
+            art: <YoursArt />,
+            body: (
+              <ul className="tour-keys">
+                <li>
+                  <b>Filters</b>: keep up to ten and switch each one on or off by itself. Several can alert at
+                  once, and a paused one keeps its settings.
+                </li>
+                <li>
+                  <b>Customize</b>, beside the feed: hide alerts whose market cap has fallen below a line you
+                  set, and pick which tiles each card shows.
+                </li>
+                <li>
+                  <b>Telegram</b>: send alerts from the Live feed&apos;s models, or pick a different set just
+                  for Telegram on the Filters tab.
+                </li>
+                <li>
+                  <b>Updates</b>: when we ship a new version, a banner offers a one-tap reload.
+                </li>
+              </ul>
+            ),
+          },
+        ]),
     {
       title: "Check the weather in the Lighthouse",
       art: <WeatherArt />,
@@ -316,7 +406,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
               <>
                 <p className="tour-lead">
                   You see the top models&apos; calls {GUEST_DELAY_MINUTES} minutes after it makes them.
-                  Connect a wallet to get them live, plus your own filters, model picks, alerts and stats.
+                  Connect a wallet to get them live, plus your own filters, model picks, alerts and stats, the
+                  bubble map and the free Side Wallet Checker.
                 </p>
                 <p className="tour-note">Tap the ⓘ by the feed title to see this tour again.</p>
               </>

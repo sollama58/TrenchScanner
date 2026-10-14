@@ -3,8 +3,9 @@
  * itself once: per wallet for signed-in readers, once per browser for guests. Reopened any time
  * from the info button by the feed heading.
  */
-// Bump the version to show the tour once more to everyone (v2: the weather gauge moved to the Lighthouse).
-const PREFIX = "ts-intro-seen:v2:";
+// Bump the version to show the tour once more to everyone (v2: the weather gauge moved to the Lighthouse;
+// v3: the bubble map, KOL, Side Wallet Checker and feed-settings pages).
+const PREFIX = "ts-intro-seen:v3:";
 
 /** The storage key for a wallet, or for guests when there's none. */
 export function introKey(walletAddress: string | null): string {

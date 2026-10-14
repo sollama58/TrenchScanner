@@ -8296,6 +8296,34 @@ button.small-btn {
   top: 0;
 }
 
+.about-body ul.tour-keys {
+  margin: 4px 0 10px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+.about-body .tour-keys li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.tour-keys li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.6em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brand-a);
+}
+.tour-keys b {
+  color: var(--ink);
+}
+
 /* The pretend card on "Reading a card" */
 .tour-card {
   display: grid;
@@ -8471,27 +8499,212 @@ button.small-btn {
 .tour-art .arrow-head.bad {
   fill: var(--bad-ink);
 }
+/* The tour's bubble-map pictures: cluster a/b in the map's first two colours, KOLs in its gold. */
+.tour-art {
+  --tour-a: var(--series-1);
+  --tour-b: var(--series-3);
+  --tour-kol: #f5b324;
+  --tour-none: #6b7280;
+}
 .tour-art .bm-link {
-  stroke: color-mix(in srgb, var(--series-2) 60%, transparent);
+  fill: none;
+  stroke: color-mix(in srgb, var(--tour-none) 60%, transparent);
   stroke-width: 1.5;
+}
+.tour-art .bm-link.a {
+  stroke: color-mix(in srgb, var(--tour-a) 65%, transparent);
+}
+.tour-art .bm-link.b {
+  stroke: color-mix(in srgb, var(--tour-b) 65%, transparent);
+}
+.tour-art .bm-link.kol {
+  stroke: var(--tour-kol);
+  stroke-width: 2;
+}
+.tour-art .bm-link.side {
+  stroke: var(--tour-kol);
+  stroke-width: 2;
+  stroke-dasharray: 2 4;
+  stroke-linecap: round;
 }
 .tour-art .bm-funder {
   fill: var(--surface-solid);
-  stroke: var(--series-2);
-  stroke-width: 3;
+  stroke-width: 2.5;
+}
+.tour-art .bm-funder.a {
+  stroke: var(--tour-a);
+}
+.tour-art .bm-funder.b {
+  stroke: var(--tour-b);
 }
 .tour-art .bm-bubble {
-  fill: color-mix(in srgb, #6b7280 22%, var(--surface-solid));
-  stroke: color-mix(in srgb, #6b7280 60%, transparent);
+  fill: color-mix(in srgb, var(--tour-none) 24%, var(--surface-solid));
+  stroke: color-mix(in srgb, var(--tour-none) 60%, transparent);
   stroke-width: 1.5;
 }
-.tour-art .bm-bubble.linked {
-  fill: color-mix(in srgb, var(--series-2) 30%, var(--surface-solid));
-  stroke: var(--series-2);
+.tour-art .bm-bubble.a {
+  fill: color-mix(in srgb, var(--tour-a) 32%, var(--surface-solid));
+  stroke: var(--tour-a);
+}
+.tour-art .bm-bubble.b {
+  fill: color-mix(in srgb, var(--tour-b) 32%, var(--surface-solid));
+  stroke: var(--tour-b);
+}
+.tour-art .bm-bubble.kol {
+  fill: color-mix(in srgb, var(--tour-kol) 34%, var(--surface-solid));
+  stroke: var(--tour-kol);
+  stroke-width: 2;
 }
 .tour-art .bm-bubble.risky {
   stroke: var(--bad-ink);
   stroke-width: 3;
+}
+.tour-art .bm-pct {
+  font-size: 11px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.tour-art .bm-pct.small {
+  font-size: 8.5px;
+}
+.tour-art .bm-tile {
+  fill: var(--surface-solid);
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+.tour-art .bm-row {
+  fill: var(--surface-solid);
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+.tour-art .bm-row.on.a {
+  fill: color-mix(in srgb, var(--tour-a) 14%, var(--surface-solid));
+  stroke: color-mix(in srgb, var(--tour-a) 60%, transparent);
+}
+.tour-art .bm-row.on.kol {
+  fill: color-mix(in srgb, var(--tour-kol) 10%, var(--surface-solid));
+  stroke: color-mix(in srgb, var(--tour-kol) 55%, transparent);
+}
+.tour-art .bm-dot {
+  fill: var(--tour-none);
+}
+.tour-art .bm-dot.a {
+  fill: var(--tour-a);
+}
+.tour-art .bm-dot.b {
+  fill: var(--tour-b);
+}
+.tour-art .bm-dot.kol {
+  fill: var(--tour-kol);
+}
+.tour-art .bm-dot.side {
+  fill: none;
+  stroke: var(--tour-kol);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 2;
+}
+.tour-art .bm-row-name {
+  font-size: 12px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+.tour-art .bm-row-pct {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.tour-art .bm-tag {
+  fill: color-mix(in srgb, var(--tour-none) 14%, var(--surface-solid));
+  stroke: color-mix(in srgb, var(--tour-none) 50%, transparent);
+  stroke-width: 1.5;
+}
+.tour-art .bm-tag.kol {
+  fill: var(--tour-kol);
+  stroke: var(--tour-kol);
+}
+.tour-art .bm-tag.side {
+  fill: color-mix(in srgb, var(--tour-kol) 12%, var(--surface-solid));
+  stroke: var(--tour-kol);
+  stroke-dasharray: 2 3;
+}
+.tour-art .bm-tag.big.kol {
+  fill: color-mix(in srgb, var(--tour-kol) 22%, var(--surface-solid));
+}
+.tour-art .bm-tag.off {
+  opacity: 0.6;
+}
+.tour-art .bm-tag-text {
+  font-size: 10px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.tour-art .bm-tag.kol + .bm-tag-text {
+  fill: #1f1600;
+}
+.tour-art .bm-tag.big.kol + .bm-tag-text {
+  fill: var(--ink);
+}
+.tour-art .bm-tag-text.big {
+  font-size: 13px;
+}
+.tour-art .bm-tag-text.off,
+.tour-art .cap.off {
+  fill: var(--muted);
+}
+.tour-art .strike {
+  stroke: var(--bad-ink);
+  stroke-width: 2;
+}
+.tour-art .label.kol {
+  fill: color-mix(in srgb, var(--tour-kol) 70%, var(--ink));
+}
+.tour-art .label.big {
+  font-size: 30px;
+  fill: color-mix(in srgb, var(--tour-kol) 70%, var(--ink));
+}
+.tour-art .coin.kol circle {
+  fill: color-mix(in srgb, var(--tour-kol) 30%, var(--surface-solid));
+  stroke: var(--tour-kol);
+}
+.tour-art .coin.kol .coin-ring {
+  fill: none;
+}
+.tour-art .tour-switch rect {
+  fill: var(--surface-3);
+  stroke: var(--border-strong);
+}
+.tour-art .tour-switch circle {
+  fill: var(--surface-solid);
+  stroke: var(--axis);
+}
+.tour-art .tour-switch.on rect {
+  fill: var(--series-1);
+  stroke: var(--series-1);
+}
+.tour-art .tour-switch.on circle {
+  stroke: none;
+}
+.tour-art .slider-track {
+  stroke: var(--surface-3);
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+.tour-art .slider-fill {
+  stroke: var(--series-1);
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+.tour-art .slider-knob {
+  fill: var(--surface-solid);
+  stroke: var(--series-1);
+  stroke-width: 3;
+}
+.tour-art .plane {
+  fill: color-mix(in srgb, var(--brand-a) 22%, var(--surface-solid));
+  stroke: var(--brand-ink);
+  stroke-width: 3;
+  stroke-linejoin: round;
 }
 .tour-art .funnel {
   fill: color-mix(in srgb, var(--brand-a) 18%, var(--surface-solid));
