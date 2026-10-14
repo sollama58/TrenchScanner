@@ -1,4 +1,5 @@
 import {
+  BUBBLE_AT_ALERT_WINDOW_MS,
   BUBBLE_WIDE_TOP_N,
   CEX_FUNDED_TOP_N,
   cexFundedReading,
@@ -95,6 +96,7 @@ export function resetLinkedWallets(): void {
   topHolderLists.clear();
   wideHolderLists.clear();
   storedWide.clear();
+  frozenAtAlert.clear();
   alertedMints = null;
   failureBackoff.clear();
   takeLinkedWalletStats();
@@ -449,7 +451,8 @@ export async function readTopHolders(
 /** How far back a model call puts its coin on the wider bubble map. */
 export const WIDE_MAP_ALERT_DAYS = 3;
 const ALERTED_REFRESH_MS = 60_000;
-let alertedMints: { mints: Set<string>; atMs: number } | null = null;
+/** The alerted mints, and when each was first called within the window (ms epoch). */
+let alertedMints: { mints: Set<string>; calledAt: Map<string, number>; atMs: number } | null = null;
 
 /**
  * The mints a model called within WIDE_MAP_ALERT_DAYS (CuratedAlert), read at most once a minute:
@@ -458,15 +461,25 @@ let alertedMints: { mints: Set<string>; atMs: number } | null = null;
 export async function wideMapMints(nowMs = Date.now()): Promise<Set<string>> {
   if (alertedMints && nowMs - alertedMints.atMs < ALERTED_REFRESH_MS) return alertedMints.mints;
   try {
+    // Oldest first, so the one row `distinct` keeps for each coin is its first call.
     const rows = await prisma.curatedAlert.findMany({
       where: { createdAt: { gte: new Date(nowMs - WIDE_MAP_ALERT_DAYS * DAY_MS) } },
-      select: { token: { select: { mintAddress: true } } },
+      select: { createdAt: true, token: { select: { mintAddress: true } } },
+      orderBy: { createdAt: "asc" },
       distinct: ["tokenId"],
     });
-    alertedMints = { mints: new Set(rows.map((r) => r.token.mintAddress)), atMs: nowMs };
+    alertedMints = {
+      mints: new Set(rows.map((r) => r.token.mintAddress)),
+      calledAt: new Map(rows.map((r) => [r.token.mintAddress, r.createdAt.getTime()])),
+      atMs: nowMs,
+    };
   } catch (err) {
     logger.warn("failed to read the alerted mints for the bubble map", { error: String(err) });
-    alertedMints = { mints: alertedMints?.mints ?? new Set(), atMs: nowMs };
+    alertedMints = {
+      mints: alertedMints?.mints ?? new Set(),
+      calledAt: alertedMints?.calledAt ?? new Map(),
+      atMs: nowMs,
+    };
   }
   return alertedMints.mints;
 }
@@ -593,10 +606,57 @@ export async function wideMapReadings(
 /** What was last stored for each mint, so an unchanged reading isn't written again. */
 const storedWide = new Map<string, string>();
 
-/** Saves the wider readings (BubbleMapHolders), one row a mint, skipping any unchanged since the last save. */
-export async function storeWideMapReadings(readings: readonly WideMapReading[]): Promise<number> {
+/** Mints whose map at the alert is stored (or was found stored), so it isn't tried again. */
+const frozenAtAlert = new Set<string>();
+
+/**
+ * Keeps a reading as the coin's map at the alert (BubbleMapAtAlert) when it is the first one read
+ * within BUBBLE_AT_ALERT_WINDOW_MS of the coin's first call. Written once: a later reading never
+ * replaces it (skipDuplicates), so the token view can show the holders as they stood at the call.
+ */
+async function freezeAtAlert(r: WideMapReading, calledAtMs: number | undefined): Promise<void> {
+  if (calledAtMs === undefined || frozenAtAlert.has(r.mintAddress)) return;
+  const after = r.readAt.getTime() - calledAtMs;
+  // A list read a moment before the call landed in the table still stands for it.
+  if (after < -ALERTED_REFRESH_MS || after > BUBBLE_AT_ALERT_WINDOW_MS) return;
+  try {
+    await prisma.bubbleMapAtAlert.createMany({
+      data: [
+        {
+          mintAddress: r.mintAddress,
+          alertAt: new Date(calledAtMs),
+          readAt: r.readAt,
+          holdersRead: r.holdersRead,
+          knownExtra: r.knownExtra,
+          holders: r.holders as unknown as Prisma.InputJsonValue,
+          clusters: r.clusters as unknown as Prisma.InputJsonValue,
+          sameTimeClusters: r.sameTimeClusters as unknown as Prisma.InputJsonValue,
+        },
+      ],
+      skipDuplicates: true,
+    });
+    if (frozenAtAlert.size >= MAX_WIDE_LISTS) {
+      const oldest = frozenAtAlert.values().next().value;
+      if (oldest !== undefined) frozenAtAlert.delete(oldest);
+    }
+    frozenAtAlert.add(r.mintAddress);
+  } catch (err) {
+    logger.warn("failed to keep a bubble map at the alert", { mint: r.mintAddress, error: String(err) });
+  }
+}
+
+/**
+ * Saves the wider readings (BubbleMapHolders), one row a mint, skipping any unchanged since the
+ * last save, and keeps each coin's first one near its call as its map at the alert (freezeAtAlert).
+ * `calledAt`: each mint's first call (ms epoch), wideMapMints' by default.
+ */
+export async function storeWideMapReadings(
+  readings: readonly WideMapReading[],
+  calledAt: ReadonlyMap<string, number> = alertedMints?.calledAt ?? new Map(),
+): Promise<number> {
   let written = 0;
   for (const r of readings) {
+    await freezeAtAlert(r, calledAt.get(r.mintAddress));
     const key = JSON.stringify([r.readAt.getTime(), r.holders, r.clusters, r.sameTimeClusters]);
     if (storedWide.get(r.mintAddress) === key) continue;
     const data = {

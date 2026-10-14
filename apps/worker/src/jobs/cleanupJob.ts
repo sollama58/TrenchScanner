@@ -795,6 +795,10 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     stage("bubbleMapHolders", none, () =>
       prisma.bubbleMapHolders.deleteMany({ where: { computedAt: { lt: snapshotCutoff } } }),
     ),
+    // Their maps as they stood at the call: kept as long as the alert's own snapshot.
+    stage("bubbleMapAtAlert", none, () =>
+      prisma.bubbleMapAtAlert.deleteMany({ where: { alertAt: { lt: snapshotCutoff } } }),
+    ),
   ]);
 
   // One row per distinct wallet/mint ever looked up, so these can be large; same batching.

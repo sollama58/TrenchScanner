@@ -2360,3 +2360,24 @@ model BubbleMapHolders {
 
   @@index([computedAt])
 }
+
+/// A model-called coin's bubble map as it stood at its first call (user ask 2026-10-14): the first
+/// BubbleMapHolders reading read within BUBBLE_AT_ALERT_WINDOW_MS of the call, frozen. Written once
+/// and never updated, so the token view can show the holders at the alert beside the live map.
+/// Shown only, like BubbleMapHolders.
+model BubbleMapAtAlert {
+  mintAddress      String   @id
+  /// The coin's first model call (CuratedAlert.createdAt) the reading is pinned to.
+  alertAt          DateTime
+  /// When the top 50 was read; at most BUBBLE_AT_ALERT_WINDOW_MS after alertAt.
+  readAt           DateTime
+  holdersRead      Int
+  knownExtra       Int
+  /// Same shapes as BubbleMapHolders.
+  holders          Json
+  clusters         Json
+  sameTimeClusters Json
+  createdAt        DateTime @default(now())
+
+  @@index([alertAt])
+}
