@@ -9,7 +9,8 @@ import { put, type CardField, type FeedAppearance, type QuickLink } from "./api"
  */
 
 export const DEFAULT_APPEARANCE: FeedAppearance = {
-  theme: "auto",
+  // Dark until the user picks (user ask 2026-10-14); "auto" (Match device) stays a choice.
+  theme: "dark",
   accent: null,
   mine: null,
   win: null,

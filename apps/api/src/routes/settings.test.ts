@@ -89,6 +89,9 @@ describe("parseFeedAppearance", () => {
       expect(parseFeedAppearance({ hideBelowMcapUsd: bad }).hideBelowMcapUsd).toBe(5_000);
     // The score tile and TokenSage button are hidden by default; a saved field list is kept as is.
     expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage", "calibrated"]);
+    // Dark until the user picks a theme; a saved "auto" keeps following the device.
+    expect(parseFeedAppearance({}).theme).toBe("dark");
+    expect(parseFeedAppearance({ theme: "auto" }).theme).toBe("auto");
     expect(parseFeedAppearance({ hidden: [] }).hidden).toEqual([]);
   });
 

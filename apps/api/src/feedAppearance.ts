@@ -151,7 +151,8 @@ export const feedAppearanceSchema = z
 export type FeedAppearance = z.infer<typeof feedAppearanceSchema>;
 
 export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
-  theme: "auto",
+  // Dark until the user picks (user ask 2026-10-14); "auto" (Match device) stays a choice.
+  theme: "dark",
   accent: null,
   mine: null,
   win: null,
