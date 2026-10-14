@@ -198,10 +198,11 @@ const envSchema = z.object({
   // before. A candidate's top ten and creator go together or wait a cycle. 0 turns the reading off.
   LINKED_WALLET_LOOKUPS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
   // Mints per scan cycle whose whole holder list is read for the linked reading's top 25 (user ask
-  // 2026-10-13: RugCheck's 20 accounts hold the pool, leaving 19): one getProgramAccounts each,
-  // 10 credits, kept for TOP_HOLDERS_REFRESH_MS (the worker's linkedWallets.ts), contenders first.
-  // Only coins that passed the safety screen are read. At most 40 credits a cycle at 4. 0 keeps
-  // RugCheck's list.
+  // 2026-10-13: RugCheck's 20 accounts hold the pool, leaving 19): one getProgramAccountsV2 page
+  // each (1 credit; a mint with over 10,000 holders takes a second), kept for TOP_HOLDERS_REFRESH_MS
+  // (the worker's linkedWallets.ts), contenders first. Only coins that passed the safety screen are
+  // read. About 4 credits a cycle at 4 (it was 40 on the unpaged 10-credit method until
+  // 2026-10-14). 0 keeps RugCheck's list.
   LINKED_HOLDER_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(4),
   // The live tape (worker's liveTape.ts): each coin close to a call (a contender, or an alert held
   // for a wallet figure) has its newest page of trades read from Helius, 10 credits a page, so the

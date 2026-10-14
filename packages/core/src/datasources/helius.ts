@@ -238,6 +238,15 @@ const MAX_TRANSACTION_VERSION = 1;
 /** JSON-RPC's standard "Method not found" - what a non-Helius endpoint returns for a Helius-only method. */
 const RPC_METHOD_NOT_FOUND = -32601;
 
+/** One token account row of getProgramAccounts(V2), sliced to TOKEN_ACCOUNT_OWNER_AMOUNT_SLICE. */
+type GpaRow = { account?: { data?: unknown } };
+/** The owner (bytes 32-63) and amount (64-71) of a token account; both token programs lay out the first 165 bytes alike. */
+const TOKEN_ACCOUNT_OWNER_AMOUNT_SLICE = { offset: 32, length: 40 };
+/** getProgramAccountsV2's page: Helius allows up to 10,000, and a page is 1 credit whatever it holds. */
+const GPA_V2_PAGE_LIMIT = 10_000;
+/** Pages read per mint before its holder list is given up as too long (a mint in the band holds far fewer). */
+const GPA_V2_MAX_PAGES = 5;
+
 /**
  * Page size for the getSignaturesForAddress fallback. The method allows 1000, and asking for
  * 1000 is what this used to do - but the answer being extracted is only ever "is this wallet's
@@ -531,6 +540,8 @@ export class HeliusClient {
   private dasBarrenRounds = 0;
   /** Set once the endpoint answers "method not found" to getTokenAccountsByOwnerV2 - permanent. */
   private taboV2Unavailable = false;
+  /** Set once the endpoint answers "method not found" to getProgramAccountsV2 - permanent. */
+  private gpaV2Unavailable = false;
   /**
    * Set when a whole round of getTokenAccountsByOwnerV2 calls was answered with nothing but
    * errors - a plan tier that refuses it some other way, say. The unpaged method stands in until
@@ -796,10 +807,11 @@ export class HeliusClient {
   /**
    * The `n` largest wallets of each mint, pools aside, and their % of supply: past the 20 token
    * accounts RugCheck and getTokenLargestAccounts stop at, of which the pool takes one to three
-   * (user ask 2026-10-13: linked wallets over the top 25 without the LP). Per mint, one
-   * getProgramAccounts over its token program, filtered to the mint and sliced to each account's
-   * owner and amount (10 credits, however many holders), after one getMultipleAccounts for every
-   * mint's program and supply (1 credit per 100 mints).
+   * (user ask 2026-10-13: linked wallets over the top 25 without the LP). Per mint, its token
+   * accounts under its program, filtered to the mint and sliced to each account's owner and amount
+   * (tokenAccountsOfMints: getProgramAccountsV2 on Helius, 1 credit a page of up to 10,000; the
+   * unpaged getProgramAccounts elsewhere), after one getMultipleAccounts for every mint's program
+   * and supply (1 credit per 100 mints).
    */
   async getTopHoldersBatch(mintAddresses: string[], n: number): Promise<Map<string, TopHoldersResult>> {
     const unique = [...new Set(mintAddresses)];
@@ -827,29 +839,10 @@ export class HeliusClient {
       programOf.set(mint, value.owner);
       supplyOf.set(mint, BigInt(supply));
     }
-    const calls: RpcCall[] = [...programOf].map(([mint, program]) => ({
-      id: `gpa-${mint}`,
-      method: "getProgramAccounts",
-      params: [
-        program,
-        {
-          commitment: "confirmed",
-          encoding: "base64",
-          // The owner (bytes 32-63) and amount (64-71) of each account; both token programs lay
-          // out the first 165 bytes alike.
-          dataSlice: { offset: 32, length: 40 },
-          filters: [{ memcmp: { offset: 0, bytes: mint } }],
-        },
-      ],
-    }));
-    const responses = await this.sendBatched<{ account?: { data?: unknown } }[]>(calls, 30_000, {
-      batchSize: 1,
-    });
+    const rowsByMint = await this.tokenAccountsOfMints(programOf);
     for (const mint of programOf.keys()) {
-      const res = responses.get(`gpa-${mint}`);
-      const rows = res?.result;
-      if (!res || res.error || !Array.isArray(rows)) {
-        if (res?.error) logger.warn("rpc error on getProgramAccounts", { mint, error: res.error });
+      const rows = rowsByMint.get(mint);
+      if (!rows) {
         out.set(mint, { status: "failed" });
         continue;
       }
@@ -864,6 +857,99 @@ export class HeliusClient {
       }
       const holders = topWalletsFromAccounts(accounts, supplyOf.get(mint)!, n);
       out.set(mint, holders ? { status: "found", holders } : { status: "failed" });
+    }
+    return out;
+  }
+
+  /**
+   * Every token account of each mint under its program, sliced to owner and amount
+   * (TOKEN_ACCOUNT_OWNER_AMOUNT_SLICE). On Helius this pages through getProgramAccountsV2, 1 credit
+   * a page of up to GPA_V2_PAGE_LIMIT accounts, so a mint in the band (a few thousand holders at
+   * most) is one or two credits where getProgramAccounts was ten. Helius ends pagination only with
+   * a null key or an empty page, and a page may be shorter than the limit, so the walk follows the
+   * key until either, capped at GPA_V2_MAX_PAGES. An endpoint that doesn't serve V2 (the public
+   * fallback, or "method not found") latches to the unpaged method for good. Per mint: its rows,
+   * or undefined when any page of it got no usable answer, never a partial list read as complete.
+   */
+  private async tokenAccountsOfMints(programOf: ReadonlyMap<string, string>): Promise<Map<string, GpaRow[]>> {
+    const out = new Map<string, GpaRow[]>();
+    if (programOf.size === 0) return out;
+    const config = (mint: string) => ({
+      commitment: "confirmed",
+      encoding: "base64",
+      dataSlice: TOKEN_ACCOUNT_OWNER_AMOUNT_SLICE,
+      filters: [{ memcmp: { offset: 0, bytes: mint } }],
+    });
+
+    if (this.usingHelius && !this.gpaV2Unavailable) {
+      const rows = new Map<string, GpaRow[]>([...programOf.keys()].map((mint) => [mint, []]));
+      const cursor = new Map<string, string>();
+      let pending = [...programOf.keys()];
+      let methodMissing = false;
+      for (let page = 1; page <= GPA_V2_MAX_PAGES && pending.length > 0; page += 1) {
+        const calls: RpcCall[] = pending.map((mint) => ({
+          id: `gpa-${mint}`,
+          method: "getProgramAccountsV2",
+          params: [
+            programOf.get(mint)!,
+            {
+              ...config(mint),
+              limit: GPA_V2_PAGE_LIMIT,
+              ...(cursor.has(mint) ? { paginationKey: cursor.get(mint) } : {}),
+            },
+          ],
+        }));
+        const responses = await this.sendBatched<{ accounts?: GpaRow[]; paginationKey?: string | null }>(
+          calls,
+          30_000,
+          { batchSize: 1 },
+        );
+        const next: string[] = [];
+        for (const mint of pending) {
+          const res = responses.get(`gpa-${mint}`);
+          if (res?.error?.code === RPC_METHOD_NOT_FOUND) {
+            methodMissing = true;
+            continue;
+          }
+          const accounts = res?.result?.accounts;
+          if (!res || res.error || !Array.isArray(accounts)) {
+            if (res?.error) logger.warn("rpc error on getProgramAccountsV2", { mint, error: res.error });
+            rows.delete(mint);
+            continue;
+          }
+          rows.get(mint)!.push(...accounts);
+          const key = res.result?.paginationKey;
+          if (accounts.length === 0 || typeof key !== "string" || key.length === 0) continue;
+          if (page === GPA_V2_MAX_PAGES) {
+            logger.warn("getProgramAccountsV2 hit the page cap - holder list incomplete", { mint });
+            rows.delete(mint);
+            continue;
+          }
+          cursor.set(mint, key);
+          next.push(mint);
+        }
+        if (methodMissing) break;
+        pending = next;
+      }
+      if (!methodMissing) return rows;
+      this.gpaV2Unavailable = true;
+      logger.info("getProgramAccountsV2 not served by this endpoint - reading holder lists unpaged");
+    }
+
+    const calls: RpcCall[] = [...programOf].map(([mint, program]) => ({
+      id: `gpa-${mint}`,
+      method: "getProgramAccounts",
+      params: [program, config(mint)],
+    }));
+    const responses = await this.sendBatched<GpaRow[]>(calls, 30_000, { batchSize: 1 });
+    for (const mint of programOf.keys()) {
+      const res = responses.get(`gpa-${mint}`);
+      const rows = res?.result;
+      if (!res || res.error || !Array.isArray(rows)) {
+        if (res?.error) logger.warn("rpc error on getProgramAccounts", { mint, error: res.error });
+        continue;
+      }
+      out.set(mint, rows);
     }
     return out;
   }

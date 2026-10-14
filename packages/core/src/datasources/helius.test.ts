@@ -7,6 +7,7 @@ import { mayhemStateAddress } from "../solana.js";
 
 const WALLET = bs58.encode(ed25519.getPublicKey(new Uint8Array(32).fill(7)));
 const CURVE = mayhemStateAddress(WALLET);
+const OTHER = bs58.encode(ed25519.getPublicKey(new Uint8Array(32).fill(9)));
 
 /**
  * These run against a real local HTTP server rather than a mocked fetch, so they exercise the
@@ -714,33 +715,120 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     return { pubkey: "acct", account: { data: [bytes.toString("base64"), "base64"] } };
   };
 
-  it("reads every account of the mint under its program and keeps the largest wallets", async () => {
+  const mintAccount = (c: { id: string }) => ({
+    jsonrpc: "2.0",
+    id: c.id,
+    result: {
+      value: [
+        {
+          owner: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+          data: { parsed: { info: { supply: "1000" } } },
+        },
+      ],
+    },
+  });
+
+  it("reads every account of the mint under its program, one 1-credit V2 page, and keeps the largest wallets", async () => {
     const seen: { method: string; params: unknown[] }[] = [];
     const { url } = await startServer((calls) =>
       calls.map((c) => {
         seen.push({ method: c.method, params: c.params });
-        if (c.method === "getMultipleAccounts")
-          return {
-            jsonrpc: "2.0",
-            id: c.id,
-            result: {
-              value: [
-                {
-                  owner: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
-                  data: { parsed: { info: { supply: "1000" } } },
-                },
-              ],
-            },
-          };
+        if (c.method === "getMultipleAccounts") return mintAccount(c);
+        return {
+          jsonrpc: "2.0",
+          id: c.id,
+          result: { accounts: [row(CURVE, 800n), row(WALLET, 150n)], paginationKey: null },
+        };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url, isHelius: true });
+    const result = await client.getTopHoldersBatch(["mintA"], 25);
+    expect(result.get("mintA")).toEqual({ status: "found", holders: [{ owner: WALLET, pct: 15 }] });
+    expect(seen.map((c) => c.method)).toEqual(["getMultipleAccounts", "getProgramAccountsV2"]);
+    const gpa = seen.find((c) => c.method === "getProgramAccountsV2")!;
+    expect(gpa.params[0]).toBe("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+    expect(gpa.params[1]).toMatchObject({
+      limit: 10_000,
+      dataSlice: { offset: 32, length: 40 },
+      filters: [{ memcmp: { offset: 0, bytes: "mintA" } }],
+    });
+    expect(gpa.params[1]).not.toHaveProperty("paginationKey");
+  });
+
+  it("follows the V2 pagination key until the last page, and gives up on a mint that errors mid-walk", async () => {
+    const seen: { method: string; params: unknown[] }[] = [];
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        seen.push({ method: c.method, params: c.params });
+        if (c.method === "getMultipleAccounts") return mintAccount(c);
+        const key = (c.params[1] as { paginationKey?: string }).paginationKey;
+        if (key === "page2") return { jsonrpc: "2.0", id: c.id, result: { accounts: [row(WALLET, 150n)] } };
+        return {
+          jsonrpc: "2.0",
+          id: c.id,
+          result: { accounts: [row(CURVE, 800n), row(OTHER, 20n)], paginationKey: "page2" },
+        };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url, isHelius: true });
+    const result = await client.getTopHoldersBatch(["mintA"], 25);
+    expect(result.get("mintA")).toEqual({
+      status: "found",
+      holders: [
+        { owner: WALLET, pct: 15 },
+        { owner: OTHER, pct: 2 },
+      ],
+    });
+    expect(seen.filter((c) => c.method === "getProgramAccountsV2")).toHaveLength(2);
+
+    const failing = await startServer((calls) =>
+      calls.map((c) => {
+        if (c.method === "getMultipleAccounts") return mintAccount(c);
+        const key = (c.params[1] as { paginationKey?: string }).paginationKey;
+        if (key === "page2") return { jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } };
+        return { jsonrpc: "2.0", id: c.id, result: { accounts: [row(CURVE, 800n)], paginationKey: "page2" } };
+      }),
+    );
+    const partial = new HeliusClient({ rpcUrl: failing.url, isHelius: true });
+    expect((await partial.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({ status: "failed" });
+  });
+
+  it("falls back to the unpaged getProgramAccounts for good when the endpoint doesn't serve V2", async () => {
+    const seen: string[] = [];
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        seen.push(c.method);
+        if (c.method === "getMultipleAccounts") return mintAccount(c);
+        if (c.method === "getProgramAccountsV2")
+          return { jsonrpc: "2.0", id: c.id, error: { code: -32601, message: "Method not found" } };
+        return { jsonrpc: "2.0", id: c.id, result: [row(CURVE, 800n), row(WALLET, 150n)] };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url, isHelius: true });
+    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
+      status: "found",
+      holders: [{ owner: WALLET, pct: 15 }],
+    });
+    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")?.status).toBe("found");
+    expect(seen.filter((m) => m === "getProgramAccountsV2")).toHaveLength(1);
+    expect(seen.filter((m) => m === "getProgramAccounts")).toHaveLength(2);
+  });
+
+  it("uses the unpaged getProgramAccounts on a non-Helius endpoint", async () => {
+    const seen: string[] = [];
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        seen.push(c.method);
+        if (c.method === "getMultipleAccounts") return mintAccount(c);
         return { jsonrpc: "2.0", id: c.id, result: [row(CURVE, 800n), row(WALLET, 150n)] };
       }),
     );
     const client = new HeliusClient({ rpcUrl: url });
-    const result = await client.getTopHoldersBatch(["mintA"], 25);
-    expect(result.get("mintA")).toEqual({ status: "found", holders: [{ owner: WALLET, pct: 15 }] });
-    const gpa = seen.find((c) => c.method === "getProgramAccounts")!;
-    expect(gpa.params[0]).toBe("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
-    expect(JSON.stringify(gpa.params[1])).toContain('"bytes":"mintA"');
+    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
+      status: "found",
+      holders: [{ owner: WALLET, pct: 15 }],
+    });
+    expect(seen).toEqual(["getMultipleAccounts", "getProgramAccounts"]);
   });
 
   it("fails a mint that isn't a token mint, or whose accounts didn't come back", async () => {
