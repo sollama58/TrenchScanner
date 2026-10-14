@@ -3,6 +3,7 @@ import type { Card, CardField, NarrativeNoteReadiness, QuickLink } from "../api"
 import {
   CARD_FIELD_GROUPS,
   defaultLook,
+  HIDE_BELOW_MCAP,
   PRESETS,
   QUICK_LINK_SITES,
   SWATCHES,
@@ -271,6 +272,26 @@ export function AppearanceControls() {
       </fieldset>
 
       <fieldset>
+        <legend>Hide alerts</legend>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.hideBelowMcap}
+            onChange={() => setAppearance({ hideBelowMcap: !look.hideBelowMcap })}
+          />
+          Hide alerts on the Live feed whose market cap has fallen below
+        </label>
+        <McapLine
+          value={look.hideBelowMcapUsd}
+          on={look.hideBelowMcap}
+          onCommit={(hideBelowMcapUsd) => setAppearance({ hideBelowMcapUsd })}
+        />
+        <p className="faint small check-hint">
+          Only hides them from view. Stats, hit rates and grading still count every alert.
+        </p>
+      </fieldset>
+
+      <fieldset>
         <legend>What cards show</legend>
         <div className="field-groups">
           {CARD_FIELD_GROUPS.map((g) => (
@@ -521,6 +542,39 @@ function TextSize({ value, onCommit }: { value: number; onCommit: (v: number) =>
       />
       <span className="num small volume-value">{draft}%</span>
       <small className="faint text-size-note">Phones go up to 105% so numbers aren&apos;t cut short.</small>
+    </label>
+  );
+}
+
+/** The "hide below" market cap: the slider moves freely and saves when let go. */
+function McapLine({ value, on, onCommit }: { value: number; on: boolean; onCommit: (v: number) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const ref = useRef<HTMLInputElement>(null);
+  const commit = useRef(onCommit);
+  commit.current = onCommit;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const done = () => commit.current(Number(el.value));
+    el.addEventListener("change", done);
+    return () => el.removeEventListener("change", done);
+  }, []);
+  return (
+    <label className={`volume mcap-line${on ? "" : " off"}`}>
+      <span className="small muted">Market cap</span>
+      <input
+        ref={ref}
+        type="range"
+        min={HIDE_BELOW_MCAP.min}
+        max={HIDE_BELOW_MCAP.max}
+        step={HIDE_BELOW_MCAP.step}
+        value={draft}
+        aria-label="Hide alerts below this market cap"
+        aria-valuetext={`$${draft / 1000}K`}
+        onChange={(e) => setDraft(Number(e.target.value))}
+      />
+      <span className="num small volume-value">${draft / 1000}K</span>
     </label>
   );
 }

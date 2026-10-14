@@ -519,6 +519,49 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     expect(new Set(alerts.map((a) => a.candidateOutcomeId))).toEqual(new Set([sample!.id]));
   });
 
+  it("banks every seat's score on a new decision moment, and tiers on the seat's live line", async () => {
+    // Shipped line above anything the model scores (sigmoid(5) = 0.993): on it alone, never high.
+    await activeModel("linear", CURATOR_MODEL_KIND, {
+      ...alwaysYesParams(),
+      highConvictionThreshold: 0.9999,
+    });
+    const history = await prisma.token.create({ data: { mintAddress: `${TAG}-line-history` } });
+    // A day of live scores far below it: the seat's top half-percent sits near 0.25.
+    await prisma.candidateOutcome.createMany({
+      data: Array.from({ length: 250 }, (_, i) => ({
+        tokenId: history.id,
+        sampleKind: "event",
+        anchorAt: new Date(Date.now() - 3_600_000 - i * 60_000),
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 100_000,
+        features: {},
+        nextCheckAt: new Date(),
+        peak1hPriceUsd: 0.0001,
+        low1hPriceUsd: 0.0001,
+        lowBefore2xPriceUsd: 0.0001,
+        peak24hPriceUsd: 0.0001,
+        seatScores: { linear: i / 1000 },
+      })),
+    });
+
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-line-live` } });
+    const scored = curatableFixture(token.mintAddress);
+    const sample = await recordCandidateSample(token.id, scored, env);
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, sample, env);
+    expect(await emitCuratedCycle(cycle, env)).toBe(2);
+
+    const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: sample!.id } });
+    const banked = row.seatScores as Record<string, number>;
+    expect(banked.linear).toBeCloseTo(0.9933, 3);
+    // Rules decides on points, not a probability.
+    expect(banked).not.toHaveProperty(RULES_CONTESTANT);
+    const alert = await prisma.curatedAlert.findFirstOrThrow({
+      where: { tokenId: token.id, model: "linear" },
+    });
+    expect(alert.tier).toBe("high");
+  });
+
   it("holds the cooldown per ledger: one contestant's call doesn't block another's", async () => {
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-ledger-cooldown` } });
     const scored = curatableFixture(token.mintAddress);

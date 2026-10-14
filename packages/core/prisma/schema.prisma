@@ -887,6 +887,11 @@ model CandidateOutcome {
   /// banked just after a deploy restart - empty in-memory books, sniper and launch-buyer reads
   /// not yet back - can be measured apart (audit 2026-10-14, lane 7 F2). Null before 2026-10-14.
   bootAgeSeconds Int?
+  /// Every seat's probability at this decision moment ({contestant: probability}), written on
+  /// "event" rows when the seats decide. The high-conviction line is the top slice of each seat's
+  /// last 24 hours of these (curation/convictionLine.ts), so it follows the live score scale
+  /// instead of a line drawn on the training rows. Null on other kinds and before 2026-10-14.
+  seatScores     Json?
 
   // ---- Watch state (driven by apps/worker/src/jobs/candidateOutcomeJob.ts) ----
   /// When the watcher should next price-check this row. Advances every tick whether or not

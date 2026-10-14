@@ -108,6 +108,7 @@ const OUTCOME_COLUMNS = [
   "anchorMcapUsd",
   "score",
   "bootAgeSeconds",
+  "seatScores",
   "peak1hPriceUsd",
   "peak1hAt",
   "low1hPriceUsd",

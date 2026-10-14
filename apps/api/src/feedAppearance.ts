@@ -44,6 +44,11 @@ export const CARD_FIELDS = [
 /** Trading sites a card can link the token to (apps/web/src/appearance.ts has their URLs). */
 export const QUICK_LINKS = ["terminal", "axiom", "gmgn"] as const;
 
+/** The Live feed's "hide below this market cap" slider: its range and step, in USD. */
+export const HIDE_BELOW_MCAP_MIN = 3_000;
+export const HIDE_BELOW_MCAP_MAX = 20_000;
+export const HIDE_BELOW_MCAP_STEP = 1_000;
+
 /** A color the user picked, as #rrggbb; null keeps the theme's own. */
 const color = z
   .string()
@@ -116,6 +121,19 @@ export const feedAppearanceSchema = z
     outline: color.default(null),
     /** Turn the outline green on a pass and red on a fail once the alert resolves; on by default. */
     outlineResult: z.boolean().default(true),
+    /**
+     * Hide Live feed alerts whose current market cap has fallen below hideBelowMcapUsd. Display only:
+     * stats, grading and every count still include them. Off by default.
+     */
+    hideBelowMcap: z.boolean().default(false),
+    /** The market cap, in USD, below which an alert is hidden when hideBelowMcap is on (3k-20k, 1k steps). */
+    hideBelowMcapUsd: z
+      .number()
+      .int()
+      .min(HIDE_BELOW_MCAP_MIN)
+      .max(HIDE_BELOW_MCAP_MAX)
+      .refine((v) => v % HIDE_BELOW_MCAP_STEP === 0, "not a whole step")
+      .default(5_000),
     /** Trading sites each card links to, in this order; Padre's Trading Terminal by default. */
     quickLinks: z
       .array(z.enum(QUICK_LINKS))
@@ -161,6 +179,8 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   lighthouseTab: false,
   outline: null,
   outlineResult: true,
+  hideBelowMcap: false,
+  hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],
   // Off by default, both switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, and the TokenSage button (the token view keeps its own). An account that

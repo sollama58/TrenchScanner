@@ -550,7 +550,9 @@ const envSchema = z.object({
   // ones, so the thinner early training cost nothing visible (notes/hit-catch-2026-10-13/models.md).
   CURATOR_EXAM_SHARE: z.coerce.number().min(0.1).max(0.9).default(0.7),
   // Calls ranked in the top (1 - this) share of decision moments are tiered "high conviction" on
-  // the card and tracked separately in the hit rates. 0.995 = the top half-percent.
+  // the card and tracked separately in the hit rates. 0.995 = the top half-percent. Live, the share
+  // is of the seat's own last 24 hours of decision-moment scores (curation/convictionLine.ts); the
+  // run's line, drawn on its training rows, applies only until a seat has enough of them.
   CURATED_HIGH_CONVICTION_RANK: z.coerce.number().min(0.5).max(0.9999).default(0.995),
   // How far back the per-model calibration table (the "2x rate of calls like this one" on the
   // card) looks over the exam's out-of-sample calls.
