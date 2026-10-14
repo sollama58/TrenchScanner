@@ -22,7 +22,7 @@ const logger = createLogger("kol-side-wallets");
 export const SIDE_GAP_MS = 5 * 60_000;
 export const MIN_SHARED = 2;
 export const TOP_SIDES = 10;
-const BOT_SHARE = 0.25;
+const BOT_SHARE = 0.75;
 const BOT_MIN_COINS = 25;
 const DAY_MS = 86_400_000;
 
