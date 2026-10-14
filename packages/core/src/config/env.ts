@@ -466,7 +466,8 @@ const envSchema = z.object({
   // equal-weighted 60-day window means a third of the gradient comes from a regime that no
   // longer exists. The window still sets what history is SEEN (and what the walk-forward folds
   // are graded on); this only tilts training toward the part of it that still describes the
-  // present. Two seats (Linear Recent, Trees Recent) run a 3-day half-life regardless, and
+  // present. Two seats run their own short half-life regardless (Linear Recent 3 days, Trees Recent
+  // 1.5 days since 2026-10-14, a trial), and
   // evolution breeds half-lives of 1-60 days, so the field, not this default, decides how short
   // a memory pays. Checked 2026-10-08 on production rows (notes/recency-weighting-2026-10-08.md):
   // with five days of current-rule history, half-lives of 1-7 days and no decay all scored within

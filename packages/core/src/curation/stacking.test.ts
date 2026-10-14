@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   AGREEMENT_SIGNAL,
   agreementCount,
+  CONSENSUS_MIN_BACKERS,
+  consensusBacked,
+  consensusBackersNeeded,
+  stackedCalls,
+  type StackedCuratorParams,
   quantileTable,
   rankFromQuantiles,
   scoreStacked,
@@ -9,7 +14,13 @@ import {
   trainStackedCurator,
 } from "./stacking.js";
 import { syntheticMarket } from "./syntheticMarket.js";
-import { confidenceRanks, scoreCandidateWithModel, trainCurator, type TrainingRow } from "./trainer.js";
+import {
+  confidenceRanks,
+  CURATOR_MODEL_KIND,
+  scoreCandidateWithModel,
+  trainCurator,
+  type TrainingRow,
+} from "./trainer.js";
 
 describe("quantile ranks", () => {
   it("matches the confidenceRanks convention on the full table", () => {
@@ -108,14 +119,11 @@ describe("trainStackedCurator", () => {
     );
     expect(high).toBeGreaterThan(low);
     expect(stacked!.examChunks).toBeGreaterThan(0);
-    // The exam carries the 10x and run-size evidence a single model's does, on the same scale.
-    expect(stacked!.exam.graded).toBeGreaterThan(0);
-    // Synthetic rows carry no 10x verdict, so only the losses settle the 10x tier.
-    expect(stacked!.exam.tenXGraded).toBe(stacked!.exam.graded - stacked!.exam.wins);
-    expect(stacked!.exam.sumRun).toBeGreaterThanOrEqual(stacked!.exam.sumLabel - 1e-9);
-    // Without member cutoffs the agreement signal is flat and the member cutoffs are not stored.
+    // Without member cutoffs the agreement signal is flat and the member cutoffs are not stored -
+    // and no member can back a call, so the member-backing gate leaves the exam empty.
     expect(params.meta.featureNames).toContain("agreement:share");
     expect(params.members.every((m) => m.callRank === undefined)).toBe(true);
+    expect(stacked!.exam.calls).toBe(0);
   });
 
   it("stores each member's cutoff and reads how many members call at serve time", async () => {
@@ -199,5 +207,129 @@ describe("trainStackedCurator", () => {
     expect(strict.outOfSample).toEqual(loose.outOfSample);
     // What ships still reads the stored cutoffs.
     expect(strict.params.members.map((m) => m.callRank)).toEqual([0.99, 0.99]);
+  });
+});
+
+describe("the member-backing gate (user decision 2026-10-14)", () => {
+  // Quantiles 0..0.99, so a member's probability is its rank; every member calls from rank 0.9.
+  const quantiles = Array.from({ length: 100 }, (_, i) => i / 100);
+  const member = (contestant: string, callRank?: number) => ({
+    contestant,
+    modelId: "",
+    quantiles,
+    ...(callRank !== undefined ? { callRank } : {}),
+  });
+  const params = (members: StackedCuratorParams["members"]): StackedCuratorParams => ({
+    kind: "stacked-v1",
+    members,
+    rules: { quantiles: [], minScore: 55 },
+    meta: { kind: CURATOR_MODEL_KIND, featureNames: [], means: [], stdevs: [], weights: [], bias: 0 },
+    threshold: 0.5,
+  });
+  const probs = (entries: [string, number][]) => new Map(entries);
+
+  it("needs three members calling at their own cutoffs, or every member of a smaller roster", () => {
+    expect(CONSENSUS_MIN_BACKERS).toBe(3);
+    expect(consensusBackersNeeded(10)).toBe(3);
+    expect(consensusBackersNeeded(2)).toBe(2);
+    const p = params(["a", "b", "c", "d"].map((c) => member(c, 0.9)));
+    const two = probs([
+      ["a", 0.95],
+      ["b", 0.95],
+      ["c", 0.5],
+      ["d", 0.5],
+    ]);
+    const three = probs([
+      ["a", 0.95],
+      ["b", 0.95],
+      ["c", 0.92],
+      ["d", 0.5],
+    ]);
+    expect(consensusBacked(p.members, two)).toBe(false);
+    expect(consensusBacked(p.members, three)).toBe(true);
+    // A meta score over the line is not enough on its own (the Rules-backed, member-weak call)...
+    expect(stackedCalls(p, 0.99, two)).toBe(false);
+    // ...and backing is not enough below the line.
+    expect(stackedCalls(p, 0.4, three)).toBe(false);
+    expect(stackedCalls(p, 0.6, three)).toBe(true);
+  });
+
+  it("never counts a member without a cutoff or missing from the scores", () => {
+    const p = params([member("a", 0.9), member("b", 0.9), member("c"), member("d", 0.9)]);
+    expect(
+      consensusBacked(
+        p.members,
+        probs([
+          ["a", 0.95],
+          ["b", 0.95],
+          ["c", 0.99],
+        ]),
+      ),
+    ).toBe(false);
+    expect(
+      consensusBacked(
+        p.members,
+        probs([
+          ["a", 0.95],
+          ["b", 0.95],
+          ["d", 0.95],
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it("gates the meta exam's calls the same way, leaving the meta model's inputs as they are", async () => {
+    const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 0 };
+    const rows = syntheticMarket({ tokens: 2000, days: 20, truth: "linear", seed: 9 }).sort(
+      (a, b) => a.anchorAt.getTime() - b.anchorAt.getTime(),
+    );
+    const half = Math.floor(rows.length / 2);
+    const model = await trainCurator(rows.slice(0, half));
+    const reference: TrainingRow[] = rows.slice(half);
+    const good = Float64Array.from(
+      confidenceRanks(reference.map((r) => scoreCandidateWithModel(model, r.features))),
+    );
+    const run = (thirdCutoff: number | null) =>
+      trainStackedCurator(
+        {
+          reference,
+          memberFoldRanks: new Map([
+            ["a", good],
+            ["b", good],
+            ["c", good],
+          ]),
+          memberShippedProbabilities: new Map([
+            ["a", good],
+            ["b", good],
+            ["c", good],
+          ]),
+          memberCallRanks: new Map([
+            ["a", 0.8],
+            ["b", 0.8],
+            ["c", thirdCutoff],
+          ]),
+          heuristicMinScore: 55,
+          targets,
+          cooldownHours: 24,
+          targetPerHour: 6,
+        },
+        1.01,
+      );
+    const backed = (await run(0.8))!;
+    const unbacked = (await run(null))!;
+    expect(backed.examChunks).toBeGreaterThan(0);
+    // With three members able to call, the exam calls - and carries the 10x and run-size evidence
+    // a single model's exam does, on the same scale.
+    expect(backed.exam.graded).toBeGreaterThan(0);
+    // Synthetic rows carry no 10x verdict, so only the losses settle the 10x tier.
+    expect(backed.exam.tenXGraded).toBe(backed.exam.graded - backed.exam.wins);
+    expect(backed.exam.sumRun).toBeGreaterThanOrEqual(backed.exam.sumLabel - 1e-9);
+    // With only two members able to call, no moment has three backers: the exam calls nothing.
+    expect(unbacked.exam.calls).toBe(0);
+    // The meta model still reads every member's rank and Rules' two signals.
+    expect(unbacked.params.meta.featureNames).toEqual(backed.params.meta.featureNames);
+    expect(backed.params.meta.featureNames).toEqual(
+      expect.arrayContaining(["a:rank", "b:rank", "c:rank", "rules:rank", "rules:gate", AGREEMENT_SIGNAL]),
+    );
   });
 });

@@ -35,6 +35,10 @@ import { emptyRecord, GOAL_LABEL, noteRunners, type CallRecord } from "./leaderb
  * chunks, judge the later ones. At serve time each member's shipped model is scored and turned
  * into a rank through the quantile table stored here, built from that member's shipped model over
  * the same reference rows.
+ *
+ * Member backing (user decision 2026-10-14): whatever the meta model scores, a moment is a call
+ * only when at least CONSENSUS_MIN_BACKERS members call it at their own cutoffs - live
+ * (stackedCalls) and on the meta exam alike, so the two agree.
  */
 
 export const STACKED_MODEL_KIND = "stacked-v1";
@@ -122,6 +126,48 @@ export function agreementCount(members: readonly StackedMember[], ranks: readonl
     if (memberCalls(m.callRank, ranks[i]!)) n += 1;
   });
   return n;
+}
+
+/**
+ * The member-backing gate (user decision 2026-10-14): Consensus calls a moment only when at least
+ * this many of its members call that same moment at their own live cutoffs (StackedMember.callRank),
+ * whatever the meta model scores it. The meta model still reads Rules' rank and gate, but those
+ * can no longer carry a call on their own: after the members' live scores drifted below their
+ * reference scale (2026-10-14 audit, notes/model-audit-2026-10-14/combiners.md, D3), the meta
+ * model kept reaching its line on Rules-backed moments the members no longer backed. Over 7 days
+ * the Consensus calls no member made hit 11.0% (n=100), the market's rate, and after the 09:49
+ * retrain the calls with at most 2 members behind them went 1 for 24. A roster with fewer members
+ * than this needs every member (consensusBackersNeeded).
+ */
+export const CONSENSUS_MIN_BACKERS = 3;
+
+/** How many members must call a moment for Consensus to call it - see CONSENSUS_MIN_BACKERS. */
+export function consensusBackersNeeded(memberCount: number): number {
+  return Math.max(1, Math.min(CONSENSUS_MIN_BACKERS, memberCount));
+}
+
+/** Whether enough members call the candidate at their own cutoffs for Consensus to call it. */
+export function consensusBacked(
+  members: readonly StackedMember[],
+  memberProbabilities: ReadonlyMap<string, number>,
+): boolean {
+  return (
+    agreementCount(members, memberRanks(members, memberProbabilities)) >=
+    consensusBackersNeeded(members.length)
+  );
+}
+
+/**
+ * Consensus's live call for one candidate: the meta score clears its threshold AND the
+ * member-backing gate passes. The one rule every caller uses (the worker, the replay scripts),
+ * so the exam's gate in trainStackedCurator and the live feed agree.
+ */
+export function stackedCalls(
+  params: StackedCuratorParams,
+  probability: number,
+  memberProbabilities: ReadonlyMap<string, number>,
+): boolean {
+  return probability >= params.threshold && consensusBacked(params.members, memberProbabilities);
 }
 
 /** An ascending sample of `values` at QUANTILE_POINTS evenly spaced positions. */
@@ -318,7 +364,10 @@ export async function trainStackedCurator(
   const cooldownMs = input.cooldownHours * 3_600_000;
   const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
   const chunkSize = Math.floor(n / META_CHUNKS);
-  const judged: { rows: TrainingRow[]; ranks: number[]; spanHours: number }[] = [];
+  // The member-backing gate, as live: a judged row is a call only when enough members call it at
+  // the cutoffs that chunk's agreement signal reads (CONSENSUS_MIN_BACKERS).
+  const backersNeeded = consensusBackersNeeded(members.length);
+  const judged: { rows: TrainingRow[]; ranks: number[]; backed: boolean[]; spanHours: number }[] = [];
   for (let k = 1; k < META_CHUNKS && chunkSize > 0; k++) {
     const start = k * chunkSize;
     const test = metaRows.slice(start, k === META_CHUNKS - 1 ? n : start + chunkSize);
@@ -339,8 +388,15 @@ export async function trainStackedCurator(
     const meta = await train(trainIndexes.map((i) => chunkRows[i]!));
     const chunkTest = chunkRows.slice(start, start + test.length);
     const ranks = confidenceRanks(chunkTest.map((r) => scoreCandidateWithModel(meta, r.features)));
+    const backed = test.map((_, j) => {
+      let backers = 0;
+      for (const [c, foldRanks] of callingMembers) {
+        if (memberCalls(cutoffs.get(c), foldRanks[start + j]!)) backers += 1;
+      }
+      return backers >= backersNeeded;
+    });
     const spanMs = test[test.length - 1]!.anchorAt.getTime() - testStartMs;
-    judged.push({ rows: test, ranks, spanHours: Math.max(1, spanMs / 3_600_000) });
+    judged.push({ rows: test, ranks, backed, spanHours: Math.max(1, spanMs / 3_600_000) });
   }
 
   const calls = (chunks: typeof judged): ScoredOutcome[] =>
@@ -369,7 +425,7 @@ export async function trainStackedCurator(
     const budget = paceBudget(input.targetPerHour, chunk.spanHours);
     const sent = applyCooldown(
       chunk.rows.flatMap((row, i) =>
-        chunk.ranks[i]! >= cutoff ? [{ row, confidence: chunk.ranks[i]! }] : [],
+        chunk.ranks[i]! >= cutoff && chunk.backed[i]! ? [{ row, confidence: chunk.ranks[i]! }] : [],
       ),
       cooldownMs,
     )

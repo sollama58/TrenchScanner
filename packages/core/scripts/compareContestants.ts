@@ -12,7 +12,7 @@
  */
 import { runContestTraining, type ContestantParams } from "../src/curation/trainingRun.js";
 import { enabledContestants, CONTESTANT_IDS } from "../src/curation/contestants.js";
-import { addCall, rulesSignal, scoreStacked } from "../src/curation/stacking.js";
+import { addCall, rulesSignal, scoreStacked, stackedCalls } from "../src/curation/stacking.js";
 import { recordScore, emptyRecord, type CallRecord } from "../src/curation/leaderboard.js";
 import { scoreCandidateWithModel, type TrainedCuratorParams } from "../src/curation/trainer.js";
 import { scoredFromFeatures } from "../src/curation/features.js";
@@ -74,7 +74,11 @@ for (const truth of truths) {
           const gate = evaluateCandidateHeuristic(scored, 55).curate;
           calls = gate && (p.rankCutoff === null || curationRankScore(scored) >= p.rankCutoff);
         } else if (p.kind === "stacked-v1") {
-          calls = scoreStacked(p, probabilities, rulesSignal(scored, p.rules.minScore)) >= p.threshold;
+          calls = stackedCalls(
+            p,
+            scoreStacked(p, probabilities, rulesSignal(scored, p.rules.minScore)),
+            probabilities,
+          );
         } else {
           calls = probabilities.get(id)! >= (p as TrainedCuratorParams).threshold;
         }

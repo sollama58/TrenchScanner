@@ -26,6 +26,7 @@ import {
   rankFromQuantiles,
   rulesSignal,
   scoreStacked,
+  stackedCalls,
   scoreBlend,
   scoreAgreement,
   agreeingFromScore,
@@ -607,7 +608,9 @@ function decideCurations(
     if (entry.role !== "stacked") continue;
     const { params, id } = entry.model;
     const probability = scoreStacked(params, probabilities, rulesSignal(scored, params.rules.minScore));
-    const curate = probability >= params.threshold;
+    // The member-backing gate (user decision 2026-10-14): at least CONSENSUS_MIN_BACKERS members
+    // must call this moment at their own cutoffs, so Rules' inputs can't carry a call alone.
+    const curate = stackedCalls(params, probability, probabilities);
     let reasons: string[] = [];
     if (curate) {
       // Who is behind the call, then what the most convinced of them sees.

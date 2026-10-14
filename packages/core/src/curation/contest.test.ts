@@ -10,12 +10,15 @@ import {
   TREES_NO_TOKENSAGE_CONTESTANT,
   TREES_NO_TOKENSAGE_FEATURES,
   HIGH_PRECISION_CUTOFF_SHARE,
+  RECENT_HALF_LIFE_DAYS,
   SHARP_DEEP_TREES_CONTESTANT,
+  SHARP_SURVIVOR_CONTESTANT,
   SHARP_TREES_CONTESTANT,
+  TREES_RECENT_HALF_LIFE_DAYS,
   enabledContestants,
   isMemberLearner,
 } from "./contestants.js";
-import { foundingLanes } from "./evolution.js";
+import { foundingLanes, recipeFamily, traitName } from "./evolution.js";
 import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
 import { LEARNER_FEATURE_NAMES, SAFETY_FEATURES } from "./features.js";
 import {
@@ -106,7 +109,7 @@ describe("contestant roster", () => {
 
 describe("the high-precision seats", () => {
   it("are learners at their own share cutoff, outside the combiners and evolution, and can be the default", () => {
-    for (const id of [SHARP_TREES_CONTESTANT, SHARP_DEEP_TREES_CONTESTANT]) {
+    for (const id of [SHARP_TREES_CONTESTANT, SHARP_SURVIVOR_CONTESTANT]) {
       const spec = contestantSpec(id)!;
       expect(spec.role).toBe("learner");
       expect(spec.standalone).toBe(true);
@@ -116,21 +119,60 @@ describe("the high-precision seats", () => {
       expect(ACTIVE_CONTESTANT_IDS).toContain(id);
     }
     expect(contestantSpec(SHARP_TREES_CONTESTANT)!.recipe?.boosting?.minLeafRows).toBe(100);
-    expect(contestantSpec(SHARP_DEEP_TREES_CONTESTANT)!.recipe?.boosting).toEqual(
-      contestantSpec("deep-trees")!.recipe?.boosting,
-    );
+    // Sharp Survivor is Survivor's two-stage recipe at the tight cutoff, not a copy of a member.
+    expect(contestantSpec(SHARP_SURVIVOR_CONTESTANT)!.recipe).toEqual({
+      learner: "gbdt",
+      twoStage: true,
+      cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+    });
+    expect(contestantSpec(SHARP_SURVIVOR_CONTESTANT)!.name).toBe("Sharp Survivor");
     expect(enabledContestants(["consensus", "linear", SHARP_TREES_CONTESTANT]).map((c) => c.id)).toEqual([
       "rules",
       "linear",
       SHARP_TREES_CONTESTANT,
     ]);
     expect(foundingLanes(CONTESTANTS, new Date(0)).map((l) => l.slot)).not.toContain(SHARP_TREES_CONTESTANT);
+    expect(foundingLanes(CONTESTANTS, new Date(0)).map((l) => l.slot)).not.toContain(
+      SHARP_SURVIVOR_CONTESTANT,
+    );
+  });
+
+  it("retires Sharp Deep Trees, a copy of Deep Trees, under its own id instead of reusing it", () => {
+    const old = contestantSpec(SHARP_DEEP_TREES_CONTESTANT)!;
+    expect(old.retired).toBe(true);
+    expect(old.name).toBe("Sharp Deep Trees");
+    expect(RETIRED_CONTESTANT_IDS).toContain(SHARP_DEEP_TREES_CONTESTANT);
+    expect(ACTIVE_CONTESTANT_IDS).not.toContain(SHARP_DEEP_TREES_CONTESTANT);
+    expect(SHARP_SURVIVOR_CONTESTANT).not.toBe(SHARP_DEEP_TREES_CONTESTANT);
+    // A configured roster that still names it drops it rather than training it.
+    expect(
+      enabledContestants(["linear", "trees", SHARP_DEEP_TREES_CONTESTANT]).map((c) => c.id),
+    ).not.toContain(SHARP_DEEP_TREES_CONTESTANT);
+  });
+});
+
+describe("Trees Recent", () => {
+  it("runs a 1.5-day half-life trial of its own while Linear Recent keeps 3 days, in the same family", () => {
+    expect(TREES_RECENT_HALF_LIFE_DAYS).toBe(1.5);
+    expect(contestantSpec("trees-recent")!.recipe).toEqual({
+      learner: "gbdt",
+      recencyHalfLifeDays: TREES_RECENT_HALF_LIFE_DAYS,
+    });
+    expect(contestantSpec("linear-recent")!.recipe?.recencyHalfLifeDays).toBe(RECENT_HALF_LIFE_DAYS);
+    expect(RECENT_HALF_LIFE_DAYS).toBe(3);
+    // Still a member learner on its founding lane: the change reaches it, under the same name.
+    const recipe = contestantSpec("trees-recent")!.recipe!;
+    expect(recipeFamily(recipe)).toBe(recipeFamily(contestantSpec("trees")!.recipe!));
+    expect(traitName(recipe, 14)).toBe("Trees Recent");
+    expect(foundingLanes(CONTESTANTS, new Date(0)).find((l) => l.slot === "trees-recent")?.recipe).toEqual(
+      recipe,
+    );
   });
 });
 
 describe("a retired seat", () => {
   it("leaves the roster, the combiners' members and the default list, but keeps its spec", () => {
-    expect(RETIRED_CONTESTANT_IDS).toEqual(["ranker"]);
+    expect(RETIRED_CONTESTANT_IDS).toEqual(["ranker", SHARP_DEEP_TREES_CONTESTANT]);
     expect(contestantSpec("ranker")?.name).toBe("Ranker");
     expect(enabledContestants(["consensus", "linear", "trees", "ranker"]).map((c) => c.id)).toEqual([
       "consensus",
