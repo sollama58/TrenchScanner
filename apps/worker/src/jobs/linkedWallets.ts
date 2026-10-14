@@ -10,6 +10,7 @@ import {
   WALLET_DORMANT_GAP_MS,
   type HeliusClient,
   type CexFundedReading,
+  type KnownFunder,
   type LinkedWalletsReading,
 } from "@trenchscanner/core";
 import { FailureBackoff } from "./failureBackoff.js";
@@ -130,6 +131,10 @@ export async function resolveLinkedWallets(
   const fundedAtOf = new Map<string, number | null>(settled.map(([w, v]) => [w, v.fundedAtMs]));
 
   const fromTable = all.filter((w) => !funderOf.has(w));
+  // Answers that aged past the dormant gap: read again, but the first transactions of a wallet
+  // that did not revive are what they were, so the stored answer is handed to the read and only
+  // the 1-credit page is paid for it (getFundersBatch knownOf).
+  const knownOf = new Map<string, KnownFunder>();
   if (fromTable.length > 0) {
     const rows = await prisma.walletFunder.findMany({
       where: { wallet: { in: fromTable } },
@@ -138,6 +143,7 @@ export async function resolveLinkedWallets(
         funder: true,
         status: true,
         checkedAt: true,
+        amountSol: true,
         fundedAt: true,
         lastActivityAt: true,
       },
@@ -152,7 +158,11 @@ export async function resolveLinkedWallets(
       // Idle a week since the read (or read before that was kept): it may have been paid again.
       // A busy row without the sorted lookup stays as it is: reading it again would answer busy.
       const validUntilMs = validUntil(r.lastActivityAt);
-      if (validUntilMs <= now && (r.status !== "busy" || rereadBusy)) continue;
+      if (validUntilMs <= now && (r.status !== "busy" || rereadBusy)) {
+        if (r.status === "found" || r.status === "none")
+          knownOf.set(r.wallet, { funder: r.funder, amountSol: r.amountSol, fundedAt: r.fundedAt });
+        continue;
+      }
       const fundedAtMs = r.fundedAt?.getTime() ?? null;
       funderOf.set(r.wallet, r.funder);
       fundedAtOf.set(r.wallet, fundedAtMs);
@@ -177,7 +187,7 @@ export async function resolveLinkedWallets(
 
   opts.onLookups?.(toFetch.length);
   if (toFetch.length > 0) {
-    const fetched = await helius.getFundersBatch(toFetch, { nowMs: now });
+    const fetched = await helius.getFundersBatch(toFetch, { nowMs: now, knownOf });
     calls.getSignaturesForAddress += toFetch.length;
     const rows: {
       wallet: string;

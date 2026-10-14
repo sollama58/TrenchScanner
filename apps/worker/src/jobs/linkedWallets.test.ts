@@ -164,6 +164,33 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     });
   });
 
+  it("hands a wallet's aged answer to the re-read, so an unrevived wallet costs only its page", async () => {
+    const stale = new Date(Date.now() - 10 * 86_400_000);
+    await prisma.walletFunder.create({
+      data: {
+        wallet: w("aged"),
+        status: "found",
+        funder: w("A"),
+        amountSol: 1.5,
+        fundedAt: stale,
+        lastActivityAt: stale,
+      },
+    });
+    const group = { mintAddress: w("m4b"), holders: [{ owner: w("aged"), pct: 7 }] };
+    const helius = fakeHelius({ [w("aged")]: { ...found(w("A")), reads: 0 } });
+    const lookups = await resolveLinkedWallets([group], helius, { maxNewLookups: 10 });
+    expect(helius.getFundersBatch).toHaveBeenCalledWith([w("aged")], {
+      nowMs: expect.any(Number),
+      knownOf: new Map([[w("aged"), { funder: w("A"), amountSol: 1.5, fundedAt: stale }]]),
+    });
+    expect(lookups.funderOf.get(w("aged"))).toBe(w("A"));
+    const stats = takeLinkedWalletStats();
+    // One page for the wallet, one activity check for its funder: no walk, no sorted read.
+    expect(stats.getSignaturesForAddress).toBe(2);
+    expect(stats.getTransaction).toBe(0);
+    expect(stats.getTransactionsForAddress).toBe(0);
+  });
+
   it("reads a wallet stored with no funder by the first-transaction-only read again", async () => {
     await prisma.walletFunder.create({
       data: { wallet: w("early"), status: "none", checkedAt: new Date("2026-10-13T12:00:00Z") },
