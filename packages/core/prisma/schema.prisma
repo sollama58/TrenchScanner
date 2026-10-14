@@ -2180,11 +2180,13 @@ model KolSideWallets {
 model KolPossibleSide {
   wallet     String
   kolWallet  String
-  /// % of the KOL's coins in the last 24 hours that this wallet bought alongside it.
+  /// % of the KOL's coins in the last `hours` hours that this wallet bought alongside it.
   pct        Float
-  /// Coins it bought alongside the KOL in the last 24 hours, and the KOL's own.
+  /// Coins it bought alongside the KOL in the last `hours` hours, and the KOL's own.
   shared     Int
   kolCoins   Int
+  /// The span the match was read over: 24, 36 or 48 hours (the tier it met).
+  hours      Int      @default(24)
   computedAt DateTime
 
   @@id([wallet, kolWallet])

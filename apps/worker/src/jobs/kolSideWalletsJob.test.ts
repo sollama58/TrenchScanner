@@ -35,25 +35,55 @@ describe("rankSideWallets", () => {
     expect(ranked[0]!.wallet).toBe("w119");
   });
 
-  it("labels a possible side wallet above 90% shared on more than 25 coins in the day", () => {
-    const pairs = [
-      { side: "side", shared: 27, gapSec: 3 },
-      { side: "few", shared: 25, gapSec: 3 }, // 25 of 29 is 86.2%
-      { side: "share", shared: 26, gapSec: 3 }, // 26 of 29 is 89.7%
+  const span = (pairs: { side: string; shared: number }[], kolCoins: number) => ({
+    pairs: pairs.map((p) => ({ ...p, gapSec: 3 })),
+    kolCoins,
+  });
+  const none = span([], 0);
+
+  it("labels a 100% match on ten or more coins over 24 hours", () => {
+    const day = [
+      { side: "all10", shared: 10 },
+      { side: "nine", shared: 9 },
     ];
-    expect(possibleSides(pairs, 29)).toEqual([{ wallet: "side", shared: 27, pct: 93.1 }]);
+    expect(possibleSides({ 24: span(day, 10), 36: none, 48: none })).toEqual([
+      { wallet: "all10", shared: 10, pct: 100, kolCoins: 10, hours: 24 },
+    ]);
+    // 9 of 9 is every coin, but under ten; 10 of 11 is not every coin.
+    expect(possibleSides({ 24: span(day.slice(1), 9), 36: none, 48: none })).toEqual([]);
+    expect(possibleSides({ 24: span(day.slice(0, 1), 11), 36: none, 48: none })).toEqual([]);
   });
 
-  it("also labels a 100% match on ten or more coins in the day", () => {
+  it("labels 90% on 25 or more coins over 36 hours", () => {
     const pairs = [
-      { side: "all10", shared: 10, gapSec: 3 },
-      { side: "nine", shared: 9, gapSec: 3 },
+      { side: "side", shared: 27 }, // 27 of 30 is 90%
+      { side: "few", shared: 24 }, // under 25
+      { side: "share", shared: 26 }, // 26 of 30 is 86.7%
     ];
-    expect(possibleSides(pairs, 10)).toEqual([{ wallet: "all10", shared: 10, pct: 100 }]);
-    // 9 of 9 is every coin, but under ten.
-    expect(possibleSides(pairs.slice(1), 9)).toEqual([]);
-    // 10 of 11 is neither.
-    expect(possibleSides(pairs.slice(0, 1), 11)).toEqual([]);
+    expect(possibleSides({ 24: none, 36: span(pairs, 30), 48: none })).toEqual([
+      { wallet: "side", shared: 27, pct: 90, kolCoins: 30, hours: 36 },
+    ]);
+  });
+
+  it("labels 80% on 50 or more coins over 48 hours", () => {
+    const pairs = [
+      { side: "side", shared: 50 }, // 50 of 62 is 80.6%
+      { side: "share", shared: 49 }, // under 50
+    ];
+    expect(possibleSides({ 24: none, 36: none, 48: span(pairs, 62) })).toEqual([
+      { wallet: "side", shared: 50, pct: 80.6, kolCoins: 62, hours: 48 },
+    ]);
+    // 55 of 70 is 78.6%.
+    expect(possibleSides({ 24: none, 36: none, 48: span([{ side: "low", shared: 55 }], 70) })).toEqual([]);
+  });
+
+  it("keeps the first tier a wallet meets", () => {
+    const out = possibleSides({
+      24: span([{ side: "w", shared: 12 }], 12),
+      36: span([{ side: "w", shared: 30 }], 32),
+      48: span([{ side: "w", shared: 60 }], 70),
+    });
+    expect(out).toEqual([{ wallet: "w", shared: 12, pct: 100, kolCoins: 12, hours: 24 }]);
   });
 
   it("reads a wallet in a large share of every coin as a bot", () => {

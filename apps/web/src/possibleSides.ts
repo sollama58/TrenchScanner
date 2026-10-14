@@ -3,8 +3,8 @@ import { ApiError, post } from "./api";
 
 /**
  * Possible KOL side wallets (POST /wallets/possible-sides): wallets the Side Wallet Checker found
- * buying more than 90% of a KOL's coins alongside it over the last 24 hours on more than 25 coins, or
- * all of them on at least 10.
+ * buying a KOL's coins alongside it: all of them on 10+ coins over 24 hours, 90%+ on 25+ over
+ * 36 hours, or 80%+ on 50+ over 48 hours.
  * For the bubble map's ties and tags only. Answers are kept for the session, like wallet names.
  */
 
@@ -14,6 +14,8 @@ export interface PossibleSide {
   pct: number;
   shared: number;
   kolCoins: number;
+  /** The span the match was read over: 24, 36 or 48 hours (absent from older API builds). */
+  hours?: number;
 }
 
 export type PossibleSides = Readonly<Record<string, readonly PossibleSide[]>>;

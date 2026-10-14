@@ -194,7 +194,7 @@ export function walletLabels(input: {
       text: possibleSideText(s),
       tone: "linked",
       source: "TrenchScanner Side Wallet Checker",
-      detail: `In the last 24 hours it bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it. Not confirmed as the KOL's wallet.`,
+      detail: `In the last ${s.hours} hours it bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it. Not confirmed as the KOL's wallet.`,
     });
   const exchange = KNOWN_EXCHANGE_WALLETS.get(input.wallet);
   if (exchange)

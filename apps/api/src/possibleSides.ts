@@ -2,8 +2,8 @@ import { prisma } from "@trenchscanner/core";
 
 /**
  * Possible KOL side wallets (KolPossibleSide, rebuilt hourly by the worker's kolSideWalletsJob.ts):
- * wallets that, over the last 24 hours, bought more than 90% of a KOL's tracked coins within a few
- * minutes of it, on more than 25 coins (or all of them, on at least 10). For display only (the wallet modal's label, the bubble
+ * wallets that bought a KOL's tracked coins within a few minutes of it: all of them on 10+ coins
+ * over 24 hours, 90%+ on 25+ coins over 36 hours, or 80%+ on 50+ coins over 48 hours. For display only (the wallet modal's label, the bubble
  * map's ties); nothing scores or screens on it.
  */
 
@@ -14,6 +14,8 @@ export interface PossibleSide {
   pct: number;
   shared: number;
   kolCoins: number;
+  /** The span the match was read over: 24, 36 or 48 hours. */
+  hours: number;
 }
 
 const shortAddress = (a: string) => (a.length > 10 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a);
@@ -45,6 +47,7 @@ export async function loadPossibleSides(wallets: readonly string[]): Promise<Rec
       pct: r.pct,
       shared: r.shared,
       kolCoins: r.kolCoins,
+      hours: r.hours,
     });
   }
   return out;
