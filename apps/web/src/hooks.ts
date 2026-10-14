@@ -441,6 +441,8 @@ export function useNudgeStream(
 
 /** How often an open feed asks for fresh market caps. The API keeps each reading under 8s old. */
 const LIVE_TICK_MS = 10_000;
+/** The least time between two ticks when the tokens on screen change. */
+const MIN_RETICK_MS = 3_000;
 
 /**
  * Keeps the "Now" market cap on `cards` seconds old: polls GET /live/market for the tokens on
@@ -459,6 +461,12 @@ export function useLiveMarketCaps(
   // screen); the rest keep the feed's own figure.
   const tickIds = tickTokenIds ?? cards?.map((c) => c.tokenId);
   const ids = tickIds ? [...new Set(tickIds)].sort().join(",") : "";
+  // Every token the cards hold: a reading is kept while its card is here, ticked or not, so a card
+  // that drops out of the tick keeps its last reading instead of jumping back to the feed's older one.
+  const held = cards ? [...new Set(cards.map((c) => c.tokenId))].sort().join(",") : "";
+  const heldRef = useRef(held);
+  heldRef.current = held;
+  const lastTickAt = useRef(0);
 
   useEffect(() => {
     if (!ids) return;
@@ -467,12 +475,13 @@ export function useLiveMarketCaps(
     const tick = () => {
       if (busy || document.visibilityState !== "visible") return;
       busy = true;
+      lastTickAt.current = Date.now();
       api<LiveMarket>(`/live/market?tokens=${encodeURIComponent(ids)}`)
         .then((res) => {
           if (stopped) return;
           setLive((prev) => {
-            // Only the tokens on screen: a long-open feed must not keep every token it ever showed.
-            const keep = new Set(ids.split(","));
+            // Only the cards' tokens: a long-open feed must not keep every token it ever showed.
+            const keep = new Set([...ids.split(","), ...heldRef.current.split(",")]);
             const next = new Map([...prev].filter(([id]) => keep.has(id)));
             for (const t of res.tokens) next.set(t.id, { marketCapUsd: t.marketCapUsd, at: t.at });
             return next;
@@ -483,7 +492,11 @@ export function useLiveMarketCaps(
           busy = false;
         });
     };
-    tick();
+    // A new set of tokens ticks at once, unless a tick just went out: the set can change several
+    // times in a row (a page filling in), and each must not cost a request of its own.
+    const sinceLast = Date.now() - lastTickAt.current;
+    const first =
+      sinceLast >= MIN_RETICK_MS ? (tick(), undefined) : window.setTimeout(tick, MIN_RETICK_MS - sinceLast);
     const timer = window.setInterval(tick, LIVE_TICK_MS);
     const onVisible = () => {
       if (document.visibilityState === "visible") tick();
@@ -491,6 +504,7 @@ export function useLiveMarketCaps(
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       stopped = true;
+      if (first !== undefined) window.clearTimeout(first);
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
