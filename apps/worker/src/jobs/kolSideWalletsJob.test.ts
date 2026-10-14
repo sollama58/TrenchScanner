@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
 import {
   isBot,
+  likelyBots,
   possibleSides,
   rankSideWallets,
   POSSIBLE_SIDE_HOLD_MS,
@@ -88,6 +89,25 @@ describe("rankSideWallets", () => {
       72: span([{ side: "w", shared: 60 }], 70),
     });
     expect(out).toEqual([{ wallet: "w", shared: 12, pct: 100, kolCoins: 12, hours: 24 }]);
+  });
+
+  it("reads a wallet strongly matched with four or more KOLs over 7 days as a likely bot", () => {
+    const entry = (wallet: string, shared: number, pct: number): SideWallet => ({
+      wallet,
+      shared,
+      pct,
+      coins: shared,
+      gapSec: 3,
+    });
+    const kol = (week: SideWallet[]) => ({ "24h": [], "7d": week, "30d": [] });
+    const lists = [
+      kol([entry("bot", 60, 70), entry("three", 60, 70), entry("thin", 50, 90)]),
+      kol([entry("bot", 55, 65), entry("three", 60, 70), entry("thin", 50, 90)]),
+      kol([entry("bot", 51, 61), entry("three", 60, 70), entry("thin", 50, 90)]),
+      kol([entry("bot", 80, 99), entry("weak", 80, 60), entry("thin", 50, 90)]),
+    ];
+    // "three" is in only three KOLs' lists; "thin" shares 50 coins, not more; "weak" is 60%, not over.
+    expect([...likelyBots(lists)]).toEqual(["bot"]);
   });
 
   it("reads a wallet in a large share of every coin as a bot", () => {

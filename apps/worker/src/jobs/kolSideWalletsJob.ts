@@ -7,6 +7,9 @@ import {
   SIDE_BOT_MIN_COINS,
   SIDE_BOT_SHARE,
   SIDE_GAP_MINUTES,
+  SIDE_LIKELY_BOT_MIN_KOLS,
+  SIDE_LIKELY_BOT_MIN_SHARED,
+  SIDE_LIKELY_BOT_PCT,
   SIDE_MIN_PCT,
   SIDE_MIN_SHARED,
   SIDE_WINDOWS,
@@ -77,6 +80,22 @@ export interface SideWallet {
   coins: number;
   /** Median seconds from the KOL's first buy to its own, over the shared coins (negative: before). */
   gapSec: number;
+}
+
+/**
+ * The wallets that, in the 7-day lists, shared more than SIDE_LIKELY_BOT_MIN_SHARED coins at over
+ * SIDE_LIKELY_BOT_PCT % with each of SIDE_LIKELY_BOT_MIN_KOLS or more KOLs: likely copy-trade
+ * bots, not anyone's side wallet. Exported for tests.
+ */
+export function likelyBots(
+  lists: Iterable<Readonly<Record<SideWindow, readonly SideWallet[]>>>,
+): Set<string> {
+  const kolsOf = new Map<string, number>();
+  for (const byWindow of lists)
+    for (const s of byWindow["7d"])
+      if (s.pct > SIDE_LIKELY_BOT_PCT && s.shared > SIDE_LIKELY_BOT_MIN_SHARED)
+        kolsOf.set(s.wallet, (kolsOf.get(s.wallet) ?? 0) + 1);
+  return new Set([...kolsOf].filter(([, n]) => n >= SIDE_LIKELY_BOT_MIN_KOLS).map(([w]) => w));
 }
 
 /** A KOL's wallets sharing coins with it, from the pair counts, for one window. */
@@ -275,7 +294,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     }
   }
 
-  const data = kols.map((k) => {
+  const rankedByKol = kols.map((k) => {
     const coins = { "24h": Number(k.c24), "7d": Number(k.c7), "30d": Number(k.c30) };
     const lists = byKol.get(k.wallet);
     const ranked = Object.fromEntries(
@@ -284,12 +303,24 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
         lists ? rankSideWallets(lists[w], coins[w], sideCoins[w], SIDE_MIN_SHARED[w]) : [],
       ]),
     ) as Record<SideWindow, SideWallet[]>;
+    return { k, coins, ranked };
+  });
+  // A wallet strongly matched with four or more KOLs is a likely bot: off every list, which keeps
+  // the wallets it hid (sides.likelyBots) so the dashboard can say so.
+  const botLike = likelyBots(rankedByKol.map((r) => r.ranked));
+  const data = rankedByKol.map(({ k, coins, ranked }) => {
+    const hidden = new Set<string>();
+    for (const w of SIDE_WINDOWS) {
+      for (const s of ranked[w]) if (botLike.has(s.wallet)) hidden.add(s.wallet);
+      ranked[w] = ranked[w].filter((s) => !botLike.has(s.wallet));
+    }
+    const sides = { ...ranked, likelyBots: [...hidden].sort() };
     return {
       wallet: k.wallet,
       coins24h: coins["24h"],
       coins7d: coins["7d"],
       coins30d: coins["30d"],
-      sides: ranked as unknown as object,
+      sides: sides as unknown as object,
       computedAt: now,
     };
   });
@@ -299,7 +330,10 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
       24: { pairs: byKol.get(k.wallet)?.["24h"] ?? [], kolCoins: Number(k.c24) },
       48: { pairs: tierPairs.get(k.wallet)?.[48] ?? [], kolCoins: Number(k.c48) },
       72: { pairs: tierPairs.get(k.wallet)?.[72] ?? [], kolCoins: Number(k.c72) },
-    }).map((p) => ({ ...p, kolWallet: k.wallet, computedAt: now })),
+    })
+      // A likely bot is no one's side wallet: no label.
+      .filter((p) => !botLike.has(p.wallet))
+      .map((p) => ({ ...p, kolWallet: k.wallet, computedAt: now })),
   );
 
   let possibleHeld = 0;
@@ -312,6 +346,8 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
       await tx.kolPossibleSide.deleteMany({
         where: { computedAt: { lt: new Date(now.getTime() - POSSIBLE_SIDE_HOLD_MS) } },
       });
+      // A wallet now read as a likely bot loses the labels it held.
+      if (botLike.size) await tx.kolPossibleSide.deleteMany({ where: { wallet: { in: [...botLike] } } });
       for (let i = 0; i < possible.length; i += POSSIBLE_SIDE_DELETE_CHUNK) {
         const chunk = possible.slice(i, i + POSSIBLE_SIDE_DELETE_CHUNK);
         await tx.kolPossibleSide.deleteMany({
@@ -332,6 +368,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     possibleSidesHeld: possibleHeld,
     pairs: pairs.length,
     bots: bots.size,
+    likelyBots: botLike.size,
     totalCoins,
   };
   logger.info("kol side wallets rebuilt", meta);

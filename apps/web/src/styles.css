@@ -11172,3 +11172,6 @@ ol.bm-group-wallets {
   font-family: var(--font);
   font-variant-numeric: tabular-nums;
 }
+.side-hidden-bots {
+  margin: 8px 0 0;
+}

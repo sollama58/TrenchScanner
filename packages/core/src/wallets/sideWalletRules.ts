@@ -25,6 +25,17 @@ export const SIDE_BOT_MIN_COINS = 200;
 export const SIDE_BOT_SHARE = 0.75;
 
 /**
+ * A likely bot (user asks 2026-10-14): a wallet that, over the last 7 days, shared more than
+ * SIDE_LIKELY_BOT_MIN_SHARED coins at over SIDE_LIKELY_BOT_PCT % with each of at least
+ * SIDE_LIKELY_BOT_MIN_KOLS KOLs (more than three). One person rarely runs side wallets for four
+ * KOLs; a copy-trade bot follows them all. It is taken off every list (each KOL's list counts the
+ * ones hidden) and never carries the Possible Side label.
+ */
+export const SIDE_LIKELY_BOT_MIN_KOLS = 4;
+export const SIDE_LIKELY_BOT_PCT = 60;
+export const SIDE_LIKELY_BOT_MIN_SHARED = 50;
+
+/**
  * A possible side wallet (KolPossibleSide, the "Possible Side" label): over one of these recent
  * spans it bought at least minPct % of the KOL's coins alongside it, on at least minShared coins.
  * The first tier a wallet meets is the one stored.
@@ -45,6 +56,7 @@ export interface SideWalletRules {
   minShared: Record<SideWindow, number>;
   minPct: number;
   bot: { minCoins: number; minPct: number; days: number };
+  likelyBot: { minKols: number; minPct: number; minShared: number; window: SideWindow };
   tiers: { hours: number; minPct: number; minShared: number }[];
   holdDays: number;
 }
@@ -55,6 +67,12 @@ export function sideWalletRules(): SideWalletRules {
     minShared: { ...SIDE_MIN_SHARED },
     minPct: SIDE_MIN_PCT,
     bot: { minCoins: SIDE_BOT_MIN_COINS, minPct: SIDE_BOT_SHARE * 100, days: 30 },
+    likelyBot: {
+      minKols: SIDE_LIKELY_BOT_MIN_KOLS,
+      minPct: SIDE_LIKELY_BOT_PCT,
+      minShared: SIDE_LIKELY_BOT_MIN_SHARED,
+      window: "7d",
+    },
     tiers: POSSIBLE_SIDE_TIERS.map((t) => ({ ...t })),
     holdDays: POSSIBLE_SIDE_HOLD_DAYS,
   };
