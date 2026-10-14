@@ -28,6 +28,9 @@
   --series-5: #d55181;
   --good: #0ca30c;
   --good-ink: #4ade80;
+  /* FOMO app usernames (.fomo-name): purple, as Pump.fun's are green. */
+  --fomo: #8b5cf6;
+  --fomo-ink: #c4b5fd;
   --good-wash: rgba(34, 197, 94, 0.1);
   --warn: #fab219;
   /* --warn as text: the fill colour is too pale to read on the light theme's white. */
@@ -70,6 +73,7 @@
     --series-4: #eda100;
     --series-5: #e87ba4;
     --good-ink: #067a2a;
+    --fomo-ink: #6d28d9;
     --good-wash: rgba(12, 163, 12, 0.08);
     --bad-ink: #b42626;
     --warn-ink: #9a6700;
@@ -102,6 +106,7 @@
   --series-4: #eda100;
   --series-5: #e87ba4;
   --good-ink: #067a2a;
+  --fomo-ink: #6d28d9;
   --good-wash: rgba(12, 163, 12, 0.08);
   --bad-ink: #b42626;
   --warn-ink: #9a6700;
@@ -9676,6 +9681,19 @@ img.tm-avatar {
   fill: rgba(12, 14, 20, 0.82);
   stroke: none;
 }
+/* A KOL's name: dark on gold, so it stands out from the other names (user ask 2026-10-14). */
+.bm-name.kol {
+  fill: #1a1300;
+  stroke: none;
+}
+.bm-name.kol .bm-name-bg {
+  fill: var(--bm-side);
+}
+/* A FOMO username: light purple, as in the lists (.fomo-name). */
+.bm-name.fomo {
+  fill: #c4b5fd;
+  stroke: rgba(0, 0, 0, 0.6);
+}
 /* A Pump.fun username: light green, as in the lists (.pumpfun-name). */
 .bm-name.pumpfun {
   fill: #4ade80;
@@ -9962,6 +9980,10 @@ img.tm-avatar {
   --mk: var(--good);
   color: var(--good-ink);
 }
+.wm-tone-fomo {
+  --mk: var(--fomo);
+  color: var(--fomo-ink);
+}
 .wm-sub {
   margin: -4px 0 4px !important;
 }
@@ -10117,6 +10139,13 @@ img.tm-avatar {
   border-radius: 5px;
   color: var(--good-ink);
   background: color-mix(in srgb, var(--good) 14%, transparent);
+}
+/* A FOMO app username: as a Pump.fun one, in purple (user ask 2026-10-14). */
+.fomo-name {
+  padding: 0 5px;
+  border-radius: 5px;
+  color: var(--fomo-ink);
+  background: color-mix(in srgb, var(--fomo) 14%, transparent);
 }
 @media (max-width: 640px) {
   .wallet-name {

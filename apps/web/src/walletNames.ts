@@ -12,7 +12,7 @@ import { shortAddress } from "./format";
 
 export interface WalletName {
   name: string;
-  source: "kol" | "identity" | "pumpfun" | "exchange";
+  source: "kol" | "identity" | "pumpfun" | "fomo" | "exchange";
 }
 
 /** Wallet to name, for the wallets that have one. */
@@ -83,9 +83,15 @@ export function useWalletNames(wallets: readonly (string | null | undefined)[]):
 /** Whether a name is a Pump.fun username: shown quoted, with the `pumpfun-name` class. */
 export const isPumpfunName = (n: WalletName | null | undefined): boolean => n?.source === "pumpfun";
 
-/** A name as the dashboard shows it: a Pump.fun username in quotes ("NAME"), any other as it is. */
+/** Whether a name is a FOMO app username: shown quoted, with the `fomo-name` class (purple). */
+export const isFomoName = (n: WalletName | null | undefined): boolean => n?.source === "fomo";
+
+/** Whether a name is an app username (Pump.fun or FOMO), which shows in quotes. */
+export const isUsername = (n: WalletName | null | undefined): boolean => isPumpfunName(n) || isFomoName(n);
+
+/** A name as the dashboard shows it: a Pump.fun or FOMO username in quotes ("NAME"), any other as it is. */
 export function walletNameText(n: WalletName): string {
-  return isPumpfunName(n) ? `"${n.name}"` : n.name;
+  return isUsername(n) ? `"${n.name}"` : n.name;
 }
 
 /** A wallet as plain text: its name when it has one (see walletNameText), else its short address. */

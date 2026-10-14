@@ -7,8 +7,11 @@ import type { WalletIdentityReader } from "./walletIdentity.js";
  * TrenchScanner's own exchange label. Read for a whole list at once.
  */
 
-/** "pumpfun": Helius's name is a Pump.fun username, which the dashboard quotes and tints green. */
-export type WalletNameSource = "kol" | "identity" | "pumpfun" | "exchange";
+/**
+ * "pumpfun": Helius's name is a Pump.fun username, which the dashboard quotes and tints green;
+ * "fomo": a FOMO app username, quoted and tinted purple.
+ */
+export type WalletNameSource = "kol" | "identity" | "pumpfun" | "fomo" | "exchange";
 
 export interface WalletName {
   name: string;
@@ -24,7 +27,11 @@ export function pickWalletName(input: {
   const kol = input.kol?.trim();
   if (kol) return { name: kol, source: "kol" };
   const identity = input.identity?.name?.trim();
-  if (identity) return { name: identity, source: input.identity?.pumpfun ? "pumpfun" : "identity" };
+  if (identity)
+    return {
+      name: identity,
+      source: input.identity?.pumpfun ? "pumpfun" : input.identity?.fomo ? "fomo" : "identity",
+    };
   const exchange = input.exchange?.trim();
   if (exchange) return { name: exchange, source: "exchange" };
   return null;
