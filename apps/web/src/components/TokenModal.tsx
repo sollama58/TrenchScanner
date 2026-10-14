@@ -636,8 +636,12 @@ function AlertHoldersWhen({
         {word === "call" ? "Called" : "Alerted"} {day}
         {hm(alertAt)}
       </b>{" "}
-      · Holders read {fromAlertText(readAt, alertAt, word)}
-      {frozen && <>, top {frozen.holdersRead}</>} · Kept as it stood
+      ·{" "}
+      <span>
+        Holders read {fromAlertText(readAt, alertAt, word)}
+        {frozen && <>, top {frozen.holdersRead}</>}
+      </span>{" "}
+      · <span>Kept as it stood</span>
     </p>
   );
 }
