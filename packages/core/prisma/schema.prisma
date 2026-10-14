@@ -2165,3 +2165,22 @@ model KolSideWallets {
 
   @@index([coins30d])
 }
+
+/// Likely side wallets of a KOL (user ask 2026-10-14): a wallet that, over the last 24 hours, first
+/// bought more than POSSIBLE_SIDE_MIN_PCT of the KOL's tracked coins within a few minutes of it,
+/// on more than POSSIBLE_SIDE_MIN_SHARED coins (kolSideWalletsJob.ts). Rebuilt whole every hour.
+/// Shown only: the wallet modal's "[KOL] Possible Side (%)" label and the bubble map's ties. Never
+/// read by the models, the safety screen or the linked-holder counts.
+model KolPossibleSide {
+  wallet     String
+  kolWallet  String
+  /// % of the KOL's coins in the last 24 hours that this wallet bought alongside it.
+  pct        Float
+  /// Coins it bought alongside the KOL in the last 24 hours, and the KOL's own.
+  shared     Int
+  kolCoins   Int
+  computedAt DateTime
+
+  @@id([wallet, kolWallet])
+  @@index([kolWallet])
+}

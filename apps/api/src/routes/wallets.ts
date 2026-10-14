@@ -4,12 +4,15 @@ import { withApiFeature } from "@trenchscanner/core";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 import type { WalletIdentityReader } from "../walletIdentity.js";
 import { loadWalletNames } from "../walletNames.js";
+import { loadPossibleSides } from "../possibleSides.js";
 
 /**
  * The wallet modal's read (GET /wallets/:wallet): one wallet in full, for anyone with access
  * (authenticateSubscriber, like the token modal it opens from). See walletProfile.ts.
  * The holder lists' names (POST /wallets/names): the KOL, identity or exchange name of each wallet
  * on one list, in one read. See walletNames.ts.
+ * The bubble map's possible KOL side wallets (POST /wallets/possible-sides): which of a list's
+ * wallets the Side Wallet Checker marks as a KOL's possible side wallet. See possibleSides.ts.
  */
 
 const address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "not a Solana address");
@@ -48,5 +51,13 @@ export async function registerWalletRoutes(
       loadWalletNames(parsed.data.wallets, opts.identity ?? null),
     );
     return { names };
+  });
+
+  // A read of the hourly table only: no outside calls.
+  app.post("/possible-sides", { config: { rateLimit: NAMES_ROUTE_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = namesSchema.safeParse(request.body);
+    if (!parsed.success)
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    return { sides: await loadPossibleSides(parsed.data.wallets) };
   });
 }

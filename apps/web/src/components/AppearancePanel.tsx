@@ -332,6 +332,14 @@ export function AppearanceControls() {
           />
           Bubble maps: tie together wallets funded by the same exchange
         </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.bubbleSideLinks}
+            onChange={() => setAppearance({ bubbleSideLinks: !look.bubbleSideLinks })}
+          />
+          Bubble maps: tie KOLs&apos; possible side wallets to them
+        </label>
         <div className="field-group">
           <h4>Quick links</h4>
           {QUICK_LINK_SITES.map((l) => (

@@ -42,6 +42,7 @@ import {
   SAFETY_REJECT_LINKED_COUNT,
 } from "./AlertCard";
 import { useAppearance } from "../appearance";
+import { possibleSideText, sideGroups, usePossibleSides, type PossibleSides } from "../possibleSides";
 import { ShareButton } from "./ShareImageDialog";
 import { BubblesIcon, CheckIcon, CloseIcon, LinkIcon, LockIcon } from "./Icons";
 
@@ -270,7 +271,18 @@ function MapView({
   const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator"));
   const largest = graph.clusters[0]?.pct ?? null;
   // Same-exchange ties: the viewer's default from Settings, switchable here (user ask 2026-10-13).
-  const { bubbleCexLinks } = useAppearance();
+  const { bubbleCexLinks, bubbleSideLinks } = useAppearance();
+  // KOLs' possible side wallets (the Side Wallet Checker's 24-hour matches): tied to a pill named
+  // for the KOL, on by default and switchable like the exchange ties (user ask 2026-10-14). Drawn
+  // only: never in the Linked count, the safety screen or the models.
+  const holderWallets = useMemo(
+    () => graph.nodes.flatMap((n) => (n.kind === "holder" && n.wallet ? [n.wallet] : [])),
+    [graph],
+  );
+  const sides = usePossibleSides(holderWallets);
+  const groups = useMemo(() => sideGroups(holderWallets, sides), [holderWallets, sides]);
+  const [sideOn, setSideOn] = useState<boolean | null>(null);
+  const showSides = (sideOn ?? bubbleSideLinks) && groups.length > 0;
   const [cexOn, setCexOn] = useState<boolean | null>(null);
   const showCex = (cexOn ?? bubbleCexLinks) && graph.cexLinks.length > 0;
   // With the ties on, the bubbles rearrange so each exchange's holders sit together (user ask
@@ -345,6 +357,13 @@ function MapView({
           Link wallets funded by the same exchange
         </label>
       )}
+      {groups.length > 0 && (
+        <label className="bm-cex-toggle">
+          <input type="checkbox" checked={showSides} onChange={() => setSideOn(!showSides)} />
+          <span className="bm-cex-key bm-side-key" aria-hidden />
+          Link KOLs&apos; possible side wallets
+        </label>
+      )}
       <BubbleSvg
         graph={cexGraph ?? graph}
         names={names}
@@ -352,6 +371,8 @@ function MapView({
         picked={picked}
         lit={lit}
         cexLinks={showCex}
+        sideGroups={showSides ? groups : []}
+        sides={sides}
         onPick={(id) => {
           setPicked(id);
           setFocus(null);
@@ -361,7 +382,7 @@ function MapView({
           if (wallet) openWallet(wallet);
         }}
       />
-      <NodeDetail node={node} graph={graph} names={names} />
+      <NodeDetail node={node} graph={graph} names={names} sides={sides} />
       <ul className="bm-clusters">
         {graph.clusters.map((c, i) => (
           <li key={c.funder}>
@@ -411,6 +432,25 @@ function MapView({
           ))}
         </ul>
       )}
+      {showSides && (
+        <ul className="bm-clusters bm-cex-groups bm-side-groups">
+          {groups.map((g) => (
+            <li key={g.kolWallet}>
+              <div className="bm-cluster bm-same" style={{ "--bm": "var(--bm-none)" } as React.CSSProperties}>
+                <i className="bm-cex-key bm-side-key bm-cex-dot" aria-hidden="true" />
+                <span className="bm-cluster-name">
+                  KOL <WalletText wallet={g.kolWallet} names={names} />
+                  {!names[g.kolWallet] && g.kolName ? ` ${g.kolName}` : ""}
+                </span>
+                <span className="muted small">
+                  {g.wallets.length} possible side wallet{g.wallets.length === 1 ? "" : "s"} · not confirmed
+                </span>
+                <span className="num bm-cluster-pct">{Math.round(g.wallets[0]!.pct)}%</span>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
       {graph.sameTimeGroups.length > 0 && (
         <ul className="bm-clusters bm-same-groups">
           {graph.sameTimeGroups.map((g, i) => (
@@ -440,6 +480,8 @@ function MapView({
           or known dumper.
           {graph.sameTimeGroups.length > 0 &&
             " Holders whose wallets were funded within the same minute, whoever paid, share a dotted ring and line in their group's colour."}
+          {showSides &&
+            " A dotted gold line ties a holder to a KOL it bought alongside on more than 90% of the KOL's coins over the last day: a possible side wallet, not confirmed."}
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
         </p>
@@ -455,6 +497,8 @@ function BubbleSvg({
   picked,
   lit,
   cexLinks,
+  sideGroups: kolSides,
+  sides,
   onPick,
 }: {
   graph: BubbleGraph;
@@ -464,6 +508,10 @@ function BubbleSvg({
   lit: number | null;
   /** Draw the same-exchange ties. */
   cexLinks: boolean;
+  /** The KOLs whose possible side wallets to tie to them (empty when switched off). */
+  sideGroups: ReturnType<typeof sideGroups>;
+  /** Each holder's possible-side matches, for its title. */
+  sides: PossibleSides;
   onPick: (id: string) => void;
 }) {
   const uid = useId().replace(/:/g, "");
@@ -475,7 +523,7 @@ function BubbleSvg({
   const { labels, placed } = useMemo(() => {
     type Label = MapLabel & {
       text: string;
-      kind: "funder" | "cex" | "same";
+      kind: "funder" | "cex" | "same" | "side";
       colour: string | null;
       /** A hub's wallets, each tied to the pill by a line. */
       members: MapNode[];
@@ -520,8 +568,21 @@ function BubbleSvg({
         hub(`cex:${g.funder}`, [...g.nodes], text, "cex", `var(--bm-cex-${cexSlot.get(g.funder) ?? 0})`);
       }
     }
+    for (const g of kolSides) {
+      // The KOL's own bubble, when it holds, joins its possible side wallets on the pill.
+      const wallets = new Set([g.kolWallet, ...g.wallets.map((w) => w.wallet)]);
+      const members = graph.nodes.filter((n) => n.kind === "holder" && n.wallet && wallets.has(n.wallet));
+      const kolName = names[g.kolWallet]?.name ?? g.kolName;
+      hub(
+        `side:${g.kolWallet}`,
+        members,
+        `${clipName(kolName ?? walletText(g.kolWallet, names))} sides?`,
+        "side",
+        "var(--bm-side)",
+      );
+    }
     return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list) };
-  }, [graph, names, cexLinks, cexSlot]);
+  }, [graph, names, cexLinks, cexSlot, kolSides]);
   const box = graphBounds(graph, 18, placed);
   const dim = (n: MapNode) => lit !== null && n.cluster !== lit;
   // Bigger bubbles first so the small ones draw on top and stay tappable.
@@ -604,7 +665,7 @@ function BubbleSvg({
                 <path
                   key={`${p.id}-${m.id}`}
                   d={`M${p.x},${p.y} Q${mx},${my} ${m.x},${m.y}`}
-                  className={`${l.kind === "cex" ? "bm-cex-link" : "bm-link"}${lit !== null ? " dim" : ""}`}
+                  className={`${l.kind === "cex" ? "bm-cex-link" : l.kind === "side" ? "bm-side-link" : "bm-link"}${lit !== null ? " dim" : ""}`}
                   style={{ stroke: l.colour ?? undefined }}
                 />
               );
@@ -618,7 +679,7 @@ function BubbleSvg({
             style={{ animationDelay: `${Math.min(i, 24) * 22}ms` }}
             role="button"
             tabIndex={0}
-            aria-label={nodeLabel(n, graph, names)}
+            aria-label={nodeLabel(n, graph, names, sides)}
             onClick={() => onPick(n.id)}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
@@ -627,7 +688,7 @@ function BubbleSvg({
               }
             }}
           >
-            <title>{nodeLabel(n, graph, names)}</title>
+            <title>{nodeLabel(n, graph, names, sides)}</title>
             <Bubble
               node={n}
               names={names}
@@ -809,7 +870,7 @@ function clipName(text: string, max = 16): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames): string {
+function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames, sides: PossibleSides = {}): string {
   if (n.kind === "rest") return `${n.count} other top holders, ${pctText(n.pct)} together`;
   const cluster = n.cluster === null ? null : graph.clusters[n.cluster];
   if (n.kind === "funder")
@@ -819,6 +880,7 @@ function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames): string {
     n.flags.includes("risky") ? "risky" : null,
     n.flags.includes("dumper") ? "known dumper" : null,
     typeof n.kol === "string" ? (n.kol ? `KOL ${n.kol}` : "a KOL") : null,
+    ...(n.wallet ? (sides[n.wallet] ?? []).map(possibleSideText) : []),
   ].filter(Boolean);
   const same = n.sameTime === null ? null : graph.sameTimeGroups[n.sameTime];
   return `Holder ${walletText(n.wallet, names)}, ${pctText(n.pct)} of supply${
@@ -833,10 +895,12 @@ function NodeDetail({
   node: n,
   graph,
   names,
+  sides,
 }: {
   node: MapNode | null;
   graph: BubbleGraph;
   names: WalletNames;
+  sides: PossibleSides;
 }) {
   if (!n) {
     return (
@@ -869,6 +933,8 @@ function NodeDetail({
       tone: "kol",
     });
   if (cluster?.creatorLinked) tags.push({ text: "Tied to the creator", tone: "dev" });
+  for (const s of n.wallet ? (sides[n.wallet] ?? []) : [])
+    tags.push({ text: possibleSideText(s), tone: "side" });
   return (
     <div className="bm-detail small">
       <button

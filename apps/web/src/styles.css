@@ -9365,6 +9365,8 @@ img.tm-avatar {
   --bm-cex-1: #5eead4;
   --bm-cex-2: #fda4af;
   --bm-cex-3: #f0abfc;
+  /* KOLs' possible side wallets: a dotted gold tie, apart from the clusters and exchange dashes. */
+  --bm-side: #f5b324;
 }
 @media (min-width: 641px) {
   .bm-modal {
@@ -9525,6 +9527,29 @@ img.tm-avatar {
 }
 .bm-cex-link.dim {
   stroke-opacity: 0.12;
+}
+.bm-side-link {
+  fill: none;
+  stroke: var(--bm-side);
+  stroke-width: 1.8;
+  stroke-dasharray: 1.5 4;
+  stroke-linecap: round;
+  stroke-opacity: 0.95;
+  transition: stroke-opacity 0.2s;
+}
+.bm-side-link.dim {
+  stroke-opacity: 0.12;
+}
+.bm-label.side rect {
+  stroke-dasharray: 1.5 2.5;
+}
+.bm-side-key {
+  border-top: 2px dotted var(--bm-side);
+}
+.tm-tag.k-side {
+  color: color-mix(in srgb, var(--bm-side, #f5b324) 75%, var(--ink));
+  border-color: color-mix(in srgb, var(--bm-side, #f5b324) 45%, transparent);
+  background: color-mix(in srgb, var(--bm-side, #f5b324) 12%, transparent);
 }
 /* Funder and exchange names: pills placed clear of bubbles, text and lines (bubbleMap placeLabels). */
 .bm-label rect {

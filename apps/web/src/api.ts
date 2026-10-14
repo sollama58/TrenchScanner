@@ -1266,6 +1266,8 @@ export interface FeedAppearance {
   largest: boolean;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */
   bubbleCexLinks: boolean;
+  /** Bubble maps open with KOLs' possible side wallets tied to them; on by default (absent from older API builds: on). */
+  bubbleSideLinks: boolean;
   /**
    * The Narrative model's "agrees" / "warns" pill on other models' cards (and the line in Telegram
    * alerts). Null follows the automatic default (GET /config/narrative-note).

@@ -1,4 +1,5 @@
 import type { WalletIdentityReader } from "./walletIdentity.js";
+import { loadPossibleSides, possibleSideText, type PossibleSide } from "./possibleSides.js";
 import {
   prisma,
   isHotFunder,
@@ -184,8 +185,17 @@ export function walletLabels(input: {
   snipes: number;
   live: Extract<WalletOverviewResult, { status: "found" }> | null;
   fundedCount: number;
+  /** KOLs it may be a side wallet of (KolPossibleSide), strongest first. */
+  possibleSides?: readonly PossibleSide[];
 }): WalletLabel[] {
   const out: WalletLabel[] = [];
+  for (const s of input.possibleSides ?? [])
+    out.push({
+      text: possibleSideText(s),
+      tone: "linked",
+      source: "TrenchScanner Side Wallet Checker",
+      detail: `In the last 24 hours it bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it. Not confirmed as the KOL's wallet.`,
+    });
   const exchange = KNOWN_EXCHANGE_WALLETS.get(input.wallet);
   if (exchange)
     out.push({ text: `${exchange} hot wallet`, tone: "info", source: "TrenchScanner exchange list" });
@@ -358,6 +368,7 @@ export async function loadWalletProfile(
   identity: WalletIdentityReader | null = null,
 ): Promise<WalletProfile> {
   const identityRead = identity ? identity.labels(wallet).catch(() => []) : Promise.resolve([]);
+  const sidesRead = loadPossibleSides([wallet]).catch(() => ({}) as Record<string, PossibleSide[]>);
   const [risk, funderRow, activityCache, holdings, activity, fundedRows, overview, kol] = await Promise.all([
     prisma.walletRisk.findUnique({ where: { wallet } }),
     prisma.walletFunder.findUnique({ where: { wallet } }),
@@ -512,7 +523,7 @@ export async function loadWalletProfile(
     firstSeenIsFloor = true;
   }
 
-  const outside = await identityRead;
+  const [outside, sides] = await Promise.all([identityRead, sidesRead]);
   const ownLabels = walletLabels({
     wallet,
     risk,
@@ -522,6 +533,7 @@ export async function loadWalletProfile(
     snipes: Math.max(risk?.snipes ?? 0, coins.filter((c) => c.roles.includes("sniper")).length),
     live: liveFound,
     fundedCount: fundedRows.length,
+    possibleSides: sides[wallet] ?? [],
   });
   if (kol)
     ownLabels.unshift({

@@ -2,7 +2,13 @@
 import "../bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { isBot, rankSideWallets, runKolSideWalletsJob, type SideWallet } from "./kolSideWalletsJob.js";
+import {
+  isBot,
+  possibleSides,
+  rankSideWallets,
+  runKolSideWalletsJob,
+  type SideWallet,
+} from "./kolSideWalletsJob.js";
 
 describe("rankSideWallets", () => {
   it("needs two coins in common, then ranks by % shared, coins in common and timing", () => {
@@ -27,6 +33,16 @@ describe("rankSideWallets", () => {
     const ranked = rankSideWallets(pairs, 200, new Map());
     expect(ranked).toHaveLength(100);
     expect(ranked[0]!.wallet).toBe("w119");
+  });
+
+  it("labels a possible side wallet above 90% shared on more than 25 coins in the day", () => {
+    const pairs = [
+      { side: "side", shared: 27, gapSec: 3 },
+      { side: "few", shared: 25, gapSec: 3 }, // 25 of 25 is 100%, but not more than 25 coins
+      { side: "share", shared: 26, gapSec: 3 }, // 26 of 29 is 89.7%
+    ];
+    expect(possibleSides(pairs, 29)).toEqual([{ wallet: "side", shared: 27, pct: 93.1 }]);
+    expect(possibleSides(pairs.slice(1, 2), 25)).toEqual([]);
   });
 
   it("reads a wallet in a large share of every coin as a bot", () => {

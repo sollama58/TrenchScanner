@@ -96,6 +96,8 @@ export const feedAppearanceSchema = z
     largest: z.boolean().default(false),
     /** On bubble maps, ties between holders the same exchange funded (drawn only); off by default. */
     bubbleCexLinks: z.boolean().default(false),
+    /** On bubble maps, ties from KOLs' possible side wallets (drawn only, never counted); on by default. */
+    bubbleSideLinks: z.boolean().default(true),
     /** The retired Bundled tile (folded into Linked, 2026-10-13): accepted from older tabs, ignored. */
     bundled: z.boolean().optional(),
     /**
@@ -149,6 +151,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   devTile: false,
   largest: false,
   bubbleCexLinks: false,
+  bubbleSideLinks: true,
   narrativeNote: null,
   streamTab: false,
   lighthouseTab: false,

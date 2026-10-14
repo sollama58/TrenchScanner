@@ -27,6 +27,13 @@ const BOT_SHARE = 0.75;
 const BOT_MIN_COINS = 25;
 const DAY_MS = 86_400_000;
 
+/**
+ * A possible side wallet (KolPossibleSide, user ask 2026-10-14): in the last 24 hours it bought
+ * more than this % of the KOL's coins alongside it, on more than POSSIBLE_SIDE_MIN_SHARED coins.
+ */
+export const POSSIBLE_SIDE_MIN_PCT = 90;
+export const POSSIBLE_SIDE_MIN_SHARED = 25;
+
 export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
 export type SideWindow = (typeof SIDE_WINDOWS)[number];
 const WINDOW_MS: Record<SideWindow, number> = { "24h": DAY_MS, "7d": 7 * DAY_MS, "30d": 30 * DAY_MS };
@@ -72,6 +79,18 @@ export function rankSideWallets(
     }))
     .sort((a, b) => b.pct - a.pct || b.shared - a.shared || Math.abs(a.gapSec) - Math.abs(b.gapSec))
     .slice(0, TOP_SIDES);
+}
+
+/** The 24-hour pairs strong enough to label the wallet a possible side wallet of the KOL. Exported for tests. */
+export function possibleSides(
+  pairs: readonly PairRow[],
+  kolCoins: number,
+): { wallet: string; pct: number; shared: number }[] {
+  if (kolCoins <= 0) return [];
+  return pairs
+    .map((p) => ({ wallet: p.side, shared: p.shared, pct: (Math.min(p.shared, kolCoins) / kolCoins) * 100 }))
+    .filter((p) => p.shared > POSSIBLE_SIDE_MIN_SHARED && p.pct > POSSIBLE_SIDE_MIN_PCT)
+    .map((p) => ({ ...p, pct: Math.round(p.pct * 10) / 10 }));
 }
 
 /** Whether a wallet's coin count in a window marks it as a bot (in a large share of everything). */
@@ -203,10 +222,21 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     };
   });
 
+  const possible = kols.flatMap((k) =>
+    possibleSides(byKol.get(k.wallet)?.["24h"] ?? [], Number(k.c24)).map((p) => ({
+      ...p,
+      kolWallet: k.wallet,
+      kolCoins: Number(k.c24),
+      computedAt: now,
+    })),
+  );
+
   await prisma.$transaction(
     async (tx) => {
       await tx.kolSideWallets.deleteMany({});
       if (data.length) await tx.kolSideWallets.createMany({ data });
+      await tx.kolPossibleSide.deleteMany({});
+      if (possible.length) await tx.kolPossibleSide.createMany({ data: possible });
     },
     { timeout: 60_000 },
   );
@@ -214,6 +244,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   const meta: JobRunMeta = {
     kols: data.length,
     withSides: data.filter((d) => (d.sides as Record<SideWindow, SideWallet[]>)["30d"].length > 0).length,
+    possibleSides: possible.length,
     pairs: pairs.length,
     bots: bots.size,
     totalCoins,
