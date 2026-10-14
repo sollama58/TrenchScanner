@@ -6719,6 +6719,23 @@ button.small-btn {
 .tg-code .cp-status {
   margin: 0 0 0 auto;
 }
+.tg-models {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+.tg-models-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+.tg-models h3,
+.tg-models p {
+  margin: 0;
+}
 .tg-chats {
   margin-top: 16px;
 }

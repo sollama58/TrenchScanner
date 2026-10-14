@@ -21,6 +21,7 @@ import {
   type TelegramUpdate,
 } from "@trenchscanner/core";
 import { clientIp } from "../clientIp.js";
+import { contestState, resolveFeedModels, SAVED_FEED_SELECT, toSavedFeed } from "../contest.js";
 import { createTelegramBoards } from "../telegramBoards.js";
 
 /**
@@ -54,6 +55,13 @@ const CHAT_SELECT = {
   lastError: true,
   createdAt: true,
 } as const;
+
+/** Which models' calls go to this account's chats (curation/feedModels.ts resolveTelegramModels). */
+const TELEGRAM_MODELS_SELECT = { telegramSameAsFeed: true, telegramModels: true } as const;
+
+function toTelegramModels(user: { telegramSameAsFeed: boolean; telegramModels: string[] } | null) {
+  return { sameAsFeed: user?.telegramSameAsFeed ?? true, models: user?.telegramModels ?? [] };
+}
 
 /** Constant-time compare of the webhook's secret header, as routes/stats.ts does for its bearer. */
 export function secretMatches(header: string | string[] | undefined, secret: string): boolean {
@@ -97,18 +105,20 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
 
   /** What the Filters tab shows: whether the bot exists, and this account's chats. */
   app.get("/", { preHandler: app.authenticate }, async (request) => {
-    const [bot, chats] = await Promise.all([
+    const [bot, chats, user] = await Promise.all([
       lookupBot(),
       prisma.telegramChat.findMany({
         where: { userId: request.user!.userId, revokedAt: null },
         orderBy: { createdAt: "asc" },
         select: CHAT_SELECT,
       }),
+      prisma.user.findUnique({ where: { id: request.user!.userId }, select: TELEGRAM_MODELS_SELECT }),
     ]);
     return {
       configured,
       botUsername: bot,
       chats,
+      models: toTelegramModels(user),
       linkTtlMs: TELEGRAM_LINK_CODE_TTL_MS,
     };
   });
@@ -194,6 +204,56 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
     if (updated.count === 0) return reply.code(404).send({ error: "not_found" });
     const chat = await prisma.telegramChat.findUnique({ where: { id }, select: CHAT_SELECT });
     return { chat };
+  });
+
+  const modelsSchema = z
+    .object({
+      /** Telegram carries the Live Feed's models; false = the picks below. */
+      sameAsFeed: z.boolean(),
+      /** Telegram's own picks; null or [] = follow the top models. */
+      models: z.array(z.string().min(1).max(64)).max(64).nullable(),
+    })
+    .partial()
+    .strict()
+    .refine((v) => Object.keys(v).length > 0, "nothing to change");
+
+  /**
+   * Which models' calls go to this account's Telegram chats: the same as the Live Feed (the
+   * default), or a list of their own. Turning "same as feed" off with no picks yet starts from the
+   * feed's own hand picks, so nothing changes until a box is ticked.
+   */
+  app.put("/models", { preHandler: app.authenticate }, async (request, reply) => {
+    const parsed = modelsSchema.safeParse(request.body);
+    if (!parsed.success)
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    const { sameAsFeed, models } = parsed.data;
+    const state = await contestState(env);
+    const data: { telegramSameAsFeed?: boolean; telegramModels?: string[] } = {};
+    if (models !== undefined) {
+      const wanted = new Set(models ?? []);
+      if ([...wanted].some((id) => !state.roster.some((c) => c.id === id))) {
+        return reply.code(400).send({ error: "unknown model" });
+      }
+      // Roster order, as the feed stores its picks.
+      data.telegramModels = state.roster.filter((c) => wanted.has(c.id)).map((c) => c.id);
+    }
+    if (sameAsFeed !== undefined) data.telegramSameAsFeed = sameAsFeed;
+    const userId = request.user!.userId;
+    const user = await prisma.$transaction(async (tx) => {
+      if (sameAsFeed === false && models === undefined) {
+        // Read under the row lock, so a concurrent save of the picks isn't overwritten by the seed.
+        const rows = await tx.$queryRaw<{ telegramModels: string[] }[]>`
+          SELECT "telegramModels" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+        const feed = await tx.user.findUnique({ where: { id: userId }, select: SAVED_FEED_SELECT });
+        if (rows.length > 0 && rows[0]!.telegramModels.length === 0 && feed) {
+          const resolved = resolveFeedModels(state, toSavedFeed(feed));
+          if (!resolved.followsDefault) data.telegramModels = resolved.models;
+        }
+      }
+      return tx.user.update({ where: { id: userId }, data, select: TELEGRAM_MODELS_SELECT });
+    });
+    request.log.info({ userId, sameAsFeed: user.telegramSameAsFeed }, "changed telegram models");
+    return { models: toTelegramModels(user) };
   });
 
   /** Unlink a chat. The bot is told, so the people there know why it went quiet. */

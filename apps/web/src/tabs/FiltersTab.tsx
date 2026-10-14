@@ -312,7 +312,7 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
           </div>
         </header>
         <div className="delivery-grid">
-          <TelegramPanel />
+          <TelegramPanel board={board.data} />
           <ModelPanel
             board={board.data}
             stale={board.stale}

@@ -4,13 +4,18 @@ import {
   del,
   patch,
   post,
+  put,
   TELEGRAM_ALERT_PARTS,
+  type Leaderboard,
   type TelegramAlertPart,
   type TelegramChat,
   type TelegramLinkCode,
+  type TelegramModels,
   type TelegramState,
 } from "../api";
 import { ago } from "../format";
+import { Switch } from "./AlertDeliveryPanels";
+import { ModelPicker } from "./ModelPicker";
 import { CheckIcon, CopyIcon, ExternalIcon, SendIcon, TrashIcon, UsersIcon } from "./Icons";
 
 /**
@@ -21,7 +26,8 @@ import { CheckIcon, CopyIcon, ExternalIcon, SendIcon, TrashIcon, UsersIcon } fro
  * the t.me link carries it to Telegram, and the bot redeems it the moment it arrives in a chat.
  * The link is only ever good once and for a few minutes, so there is nothing long-lived to leak;
  * in a group the bot also insists the person sending it is a group admin. Every chat here can
- * be paused, pointed at only matches or only model calls, tested, or unlinked.
+ * be paused, pointed at only matches or only model calls, tested, or unlinked. Model calls come
+ * from the Live Feed's models, or from a set picked here for Telegram alone.
  */
 
 /** How often the card asks whether the code on screen has been used, while one is up. */
@@ -35,7 +41,22 @@ type Code =
   /** `chat` is null for a chat that was already listed: it was linked again under the same id. */
   | { state: "linked"; chat: TelegramChat | null };
 
-export function TelegramPanel() {
+/**
+ * The leaderboard as Telegram's picker sees it: Telegram's picks (still on the board) as the
+ * checked models, or the top models while it has none, so the shared ModelPicker draws it as is.
+ */
+export function telegramBoard(board: Leaderboard, models: TelegramModels): Leaderboard {
+  const picked = board.entries.filter((e) => models.models.includes(e.id)).map((e) => e.id);
+  const following = picked.length === 0;
+  return {
+    ...board,
+    selectedModels: following ? (board.defaultModels ?? [board.defaultModel]) : picked,
+    followBest: following,
+    followsDefault: following,
+  };
+}
+
+export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) {
   const [tg, setTg] = useState<TelegramState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [code, setCode] = useState<Code>({ state: "idle" });
@@ -146,6 +167,15 @@ export function TelegramPanel() {
     chat: TelegramChat,
     body: Partial<Pick<TelegramChat, "filterMatches" | "modelCalls" | "enabled" | "hidden">>,
   ) => run(chat.id, () => patch(`/telegram/chats/${encodeURIComponent(chat.id)}`, body));
+
+  const models: TelegramModels = tg?.models ?? { sameAsFeed: true, models: [] };
+  const saveModels = (body: { sameAsFeed?: boolean; models?: string[] | null }) =>
+    put<{ models: TelegramModels }>("/telegram/models", body).then((r) =>
+      setTg((t) => (t ? { ...t, models: r.models } : t)),
+    );
+  const feedNames = board
+    ? board.entries.filter((e) => board.selectedModels.includes(e.id)).map((e) => e.name)
+    : [];
 
   // The API replaces the whole list, and the chat's /show, /hide and /settings change it too, so the
   // toggle starts from the chat's current list rather than the one this panel loaded.
@@ -263,6 +293,59 @@ export function TelegramPanel() {
             </p>
           </div>
 
+          {chats.length > 0 && (
+            <div className="tg-models">
+              <div className="tg-models-head">
+                <h3>Models sent to Telegram</h3>
+                {tg.models && (
+                  <Switch
+                    on={models.sameAsFeed}
+                    label="Same as Live Feed"
+                    disabled={busy !== null}
+                    onToggle={() => void run("models", () => saveModels({ sameAsFeed: !models.sameAsFeed }))}
+                  />
+                )}
+              </div>
+              {models.sameAsFeed ? (
+                <p className="muted small">
+                  {board && board.showModelAlerts === false ? (
+                    <>
+                      Your Live Feed shows no model calls, so Telegram gets none either. Switch this off to
+                      send Telegram calls from models of its own.
+                    </>
+                  ) : (
+                    <>
+                      Telegram gets calls from the models in your Live Feed
+                      {feedNames.length > 0 ? (
+                        <>
+                          : <strong>{feedNames.join(", ")}</strong>
+                        </>
+                      ) : null}
+                      . Switch this off to pick a different set for Telegram.
+                    </>
+                  )}
+                </p>
+              ) : (
+                <>
+                  <p className="muted small">
+                    Telegram gets calls from the models picked here. Your Live Feed keeps its own.
+                  </p>
+                  {board ? (
+                    <ModelPicker
+                      board={telegramBoard(board, models)}
+                      disabled={busy !== null}
+                      onChanged={() => undefined}
+                      save={(picked) => saveModels({ models: picked })}
+                      menuLabel="Models sent to Telegram"
+                    />
+                  ) : (
+                    <p className="faint small">Loading the models…</p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
           <div className="tg-chats">
             <h3>Linked chats{chats.length > 0 ? ` (${chats.length})` : ""}</h3>
             {chats.length === 0 ? (
@@ -320,7 +403,9 @@ export function TelegramPanel() {
                           disabled={busy !== null}
                           onChange={() => void change(c, { modelCalls: !c.modelCalls })}
                         />
-                        Calls from the models in my feed
+                        {models.sameAsFeed
+                          ? "Calls from the models in my feed"
+                          : "Calls from my Telegram models"}
                       </label>
                     </div>
                     <div className="tg-chat-parts">

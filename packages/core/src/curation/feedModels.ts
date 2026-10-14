@@ -60,6 +60,36 @@ export function resolveFeedModels(
   return { models: [...state.defaultModels], followsDefault: true };
 }
 
+/** What a user saved about Telegram's models: the User columns the dispatcher reads. */
+export interface SavedTelegramModels {
+  /** Telegram carries the Live Feed's models (the default); off = `models` below decide. */
+  sameAsFeed: boolean;
+  /** Telegram's own picks while sameAsFeed is off; empty = follow the top models. */
+  models: string[];
+}
+
+/**
+ * The models whose calls go to a user's Telegram chats. While Telegram follows the Live Feed it is
+ * the feed's list, and nothing when the feed shows no model calls. With its own picks it is those
+ * still on the roster, else the top models; the feed's on/off switch doesn't apply then, so the
+ * Live Feed can be filter matches only while Telegram still gets calls.
+ */
+export function resolveTelegramModels(
+  state: FeedModelState,
+  feed: SavedFeedModels & { showModelAlerts: boolean },
+  telegram: SavedTelegramModels,
+): { models: string[]; followsDefault: boolean } {
+  if (telegram.sameAsFeed) {
+    const resolved = resolveFeedModels(state, feed);
+    return feed.showModelAlerts ? resolved : { models: [], followsDefault: resolved.followsDefault };
+  }
+  return resolveFeedModels(state, {
+    model: null,
+    models: telegram.models,
+    followBest: telegram.models.length === 0,
+  });
+}
+
 /**
  * The roster and the default feed as the worker sees them: the same reads the API's
  * contestState makes (lanes, the champion, each contestant's active cutoff, the 24h top models),

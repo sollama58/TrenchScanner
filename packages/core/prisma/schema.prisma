@@ -64,6 +64,12 @@ model User {
   /// and switches when a new one is chosen. Picking models by hand turns it off; feedModels then
   /// decides. Kept separate from feedModels so switching back keeps the user's hand picks.
   followBestModel Boolean  @default(true)
+  /// Telegram alerts carry the same models as the Live Feed (the settings above). Off = the
+  /// Telegram picks below decide which models' calls reach this user's linked chats.
+  telegramSameAsFeed Boolean @default(true)
+  /// The models whose calls go to Telegram while telegramSameAsFeed is off, in roster order.
+  /// Empty = follow the top models (the default feed).
+  telegramModels  String[] @default([])
   /// How alerts reach this user in the dashboard (sound, volume, browser notifications) - see
   /// alertPrefs.ts in apps/api for the shape. Null = defaults.
   alertPrefs      Json?

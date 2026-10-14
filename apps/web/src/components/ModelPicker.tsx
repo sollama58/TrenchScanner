@@ -59,10 +59,18 @@ export function ModelPicker({
   board,
   disabled = false,
   onChanged,
+  save: saveModels = (models) => saveFeedSettings({ models }),
+  menuLabel = "Models in your feed",
 }: {
   board: Leaderboard;
   disabled?: boolean;
   onChanged: () => void;
+  /**
+   * Stores a new list (null = follow the top models). The Live Feed's by default; the Telegram
+   * card passes its own, with a board whose selectedModels and followBest are Telegram's.
+   */
+  save?: (models: string[] | null) => Promise<unknown>;
+  menuLabel?: string;
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +101,7 @@ export function ModelPicker({
     // Following the default shows the current top models at once rather than an empty list.
     setPending(models ?? board.defaultModels ?? [board.defaultModel]);
     try {
-      await saveFeedSettings({ models });
+      await saveModels(models);
       onChanged();
     } catch (e) {
       setPending(null);
@@ -133,7 +141,7 @@ export function ModelPicker({
           <span className="checklist-summary">{summary}</span>
           <span className="chev">▾</span>
         </summary>
-        <div className="checklist-menu" role="group" aria-label="Models in your feed">
+        <div className="checklist-menu" role="group" aria-label={menuLabel}>
           {following && (
             <p className="faint small checklist-note">
               Following the top models. Ticking a model switches to your own picks.
