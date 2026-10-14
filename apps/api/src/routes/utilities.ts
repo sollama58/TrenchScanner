@@ -10,6 +10,7 @@ import {
   LOOKUP_REOPEN_MS,
   openLookup,
   parseCreditBurnTransaction,
+  KNOWN_EXCHANGE_WALLETS,
   prisma,
   spendCredits,
   sideWalletRules,
@@ -42,6 +43,8 @@ import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
  *                               dashboard then opens it in the wallet modal (GET /wallets/:wallet)
  * - GET  /utilities/side-wallets         the Side Wallet Checker's KOL leaderboard (free)
  * - GET  /utilities/side-wallets/:wallet one KOL's top side wallets per window (free)
+ * - GET  /utilities/side-wallets/:wallet/:side the coins a KOL and one listed wallet bought together,
+ *                               leg by leg, with both funders: what a person needs to judge a link
  *
  * A lookup stays open for LOOKUP_REOPEN_MS after it is paid for: the view's own reads, and
  * looking the same thing up again, are free inside it and refused (402) outside it.
@@ -365,6 +368,87 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     };
   });
 
+  /**
+   * One KOL and one listed wallet, coin by coin (user ask 2026-10-14): every tracked coin both first
+   * bought within the gap in the window, each leg's buys, sells, SOL and launch roles, and who
+   * funded each wallet. Read from what is stored: no outside calls.
+   */
+  app.get("/side-wallets/:wallet/:side", async (request, reply) => {
+    const { wallet: kol = "", side = "" } = request.params as { wallet?: string; side?: string };
+    if (!ADDRESS_RE.test(kol) || !ADDRESS_RE.test(side) || kol === side)
+      return reply.code(400).send({ error: "not a valid pair of addresses" });
+    const windowParam = (request.query as { window?: string }).window ?? "30d";
+    const window = (SIDE_WINDOWS as readonly string[]).includes(windowParam)
+      ? (windowParam as SideWindow)
+      : "30d";
+    const kolRow = await prisma.kolWallet.findUnique({ where: { wallet: kol }, select: { wallet: true } });
+    if (!kolRow) return reply.code(404).send({ error: "That wallet isn't on the KOL roster." });
+
+    const since = new Date(Date.now() - SIDE_WINDOW_MS[window]);
+    const gapSeconds = SIDE_GAP_MINUTES * 60;
+    const rows = await prisma.$queryRaw<SideMatchRow[]>`
+      SELECT t."mintAddress" AS mint, t."symbol", t."name", t."imageUrl",
+             k."firstBuyAt" AS "kFirstBuyAt", k."firstSellAt" AS "kFirstSellAt", k."buys" AS "kBuys",
+             k."sells" AS "kSells", k."solIn" AS "kSolIn", k."solOut" AS "kSolOut",
+             k."boughtPct" AS "kBoughtPct", k."firstBuyerRank" AS "kRank", k."launchSniper" AS "kSniper",
+             k."fastExit" AS "kFastExit",
+             s."firstBuyAt" AS "sFirstBuyAt", s."firstSellAt" AS "sFirstSellAt", s."buys" AS "sBuys",
+             s."sells" AS "sSells", s."solIn" AS "sSolIn", s."solOut" AS "sSolOut",
+             s."boughtPct" AS "sBoughtPct", s."firstBuyerRank" AS "sRank", s."launchSniper" AS "sSniper",
+             s."fastExit" AS "sFastExit"
+      FROM "TokenWalletActivity" k
+      JOIN "TokenTradeTape" tape ON tape."tokenId" = k."tokenId" AND tape."status" IN ('done', 'partial')
+      JOIN "TokenWalletActivity" s
+        ON s."tokenId" = k."tokenId"
+       AND s."wallet" = ${side}
+       AND s."buys" > 0
+       AND s."firstBuyAt" BETWEEN k."firstBuyAt" - make_interval(secs => ${gapSeconds})
+                              AND k."firstBuyAt" + make_interval(secs => ${gapSeconds})
+      JOIN "Token" t ON t."id" = k."tokenId"
+      WHERE k."wallet" = ${kol} AND k."buys" > 0 AND k."firstBuyAt" >= ${since}
+      ORDER BY k."firstBuyAt" DESC
+      LIMIT ${SIDE_MATCH_MAX}`;
+    const [kolCoins, funders, names] = await Promise.all([
+      prisma.$queryRaw<{ n: bigint }[]>`
+        SELECT COUNT(*) AS n
+        FROM "TokenWalletActivity" a
+        JOIN "TokenTradeTape" tape ON tape."tokenId" = a."tokenId" AND tape."status" IN ('done', 'partial')
+        WHERE a."wallet" = ${kol} AND a."buys" > 0 AND a."firstBuyAt" >= ${since}`,
+      prisma.walletFunder.findMany({
+        where: { wallet: { in: [kol, side] } },
+        select: { wallet: true, status: true, funder: true, amountSol: true, fundedAt: true },
+      }),
+      kolNames([kol]),
+    ]);
+    const funderOf = (w: string) => {
+      const f = funders.find((x) => x.wallet === w);
+      return f
+        ? {
+            status: f.status,
+            funder: f.funder,
+            exchange: f.funder ? (KNOWN_EXCHANGE_WALLETS.get(f.funder) ?? null) : null,
+            amountSol: f.amountSol,
+            fundedAt: f.fundedAt,
+          }
+        : null;
+    };
+    const kf = funderOf(kol);
+    const sf = funderOf(side);
+    const trades = rows.map(sideMatchTrade);
+    reply.header("Cache-Control", "private, max-age=300");
+    return {
+      kol: { wallet: kol, name: names.get(kol)?.name ?? null, funding: kf },
+      side: { wallet: side, funding: sf },
+      window,
+      gapMinutes: SIDE_GAP_MINUTES,
+      kolCoins: Number(kolCoins[0]?.n ?? 0),
+      fundingLink: fundingLink(kol, side, kf?.funder ?? null, sf?.funder ?? null),
+      summary: sideMatchSummary(trades),
+      trades,
+      truncated: rows.length >= SIDE_MATCH_MAX,
+    };
+  });
+
   /** A paid lookup's token view: the card the modal draws, and whether the fresh scan has landed. */
   app.get("/token/:mint", async (request, reply) => {
     const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
@@ -391,6 +475,161 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
 }
 
 const SIDE_LEADERBOARD_MAX = 200;
+/** Most coins one KOL/wallet comparison lists, newest first. */
+const SIDE_MATCH_MAX = 200;
+const SIDE_WINDOW_MS: Record<SideWindow, number> = {
+  "24h": 86_400_000,
+  "7d": 7 * 86_400_000,
+  "30d": 30 * 86_400_000,
+};
+
+/** One coin both wallets bought within the gap, as the comparison query reads it. */
+interface SideMatchRow {
+  mint: string;
+  symbol: string | null;
+  name: string | null;
+  imageUrl: string | null;
+  kFirstBuyAt: Date;
+  kFirstSellAt: Date | null;
+  kBuys: number;
+  kSells: number;
+  kSolIn: number;
+  kSolOut: number;
+  kBoughtPct: number | null;
+  kRank: number | null;
+  kSniper: boolean;
+  kFastExit: boolean;
+  sFirstBuyAt: Date;
+  sFirstSellAt: Date | null;
+  sBuys: number;
+  sSells: number;
+  sSolIn: number;
+  sSolOut: number;
+  sBoughtPct: number | null;
+  sRank: number | null;
+  sSniper: boolean;
+  sFastExit: boolean;
+}
+
+/** One wallet's side of a shared coin. */
+export interface SideMatchLeg {
+  firstBuyAt: Date;
+  firstSellAt: Date | null;
+  buys: number;
+  sells: number;
+  solIn: number;
+  solOut: number;
+  /** % of supply it bought; null when not read. */
+  boughtPct: number | null;
+  /** 1-25 among the launch's first buyers, else null. */
+  firstBuyerRank: number | null;
+  launchSniper: boolean;
+  fastExit: boolean;
+}
+
+export interface SideMatchTrade {
+  mint: string;
+  symbol: string | null;
+  name: string | null;
+  imageUrl: string | null;
+  kol: SideMatchLeg;
+  side: SideMatchLeg;
+  /** Seconds from the KOL's first buy to the wallet's (negative: the wallet bought first). */
+  gapSec: number;
+  /** Seconds from the KOL's first sell to the wallet's, when both sold. */
+  sellGapSec: number | null;
+}
+
+function sideMatchTrade(r: SideMatchRow): SideMatchTrade {
+  const kol: SideMatchLeg = {
+    firstBuyAt: r.kFirstBuyAt,
+    firstSellAt: r.kFirstSellAt,
+    buys: Number(r.kBuys),
+    sells: Number(r.kSells),
+    solIn: Number(r.kSolIn),
+    solOut: Number(r.kSolOut),
+    boughtPct: r.kBoughtPct,
+    firstBuyerRank: r.kRank,
+    launchSniper: r.kSniper,
+    fastExit: r.kFastExit,
+  };
+  const side: SideMatchLeg = {
+    firstBuyAt: r.sFirstBuyAt,
+    firstSellAt: r.sFirstSellAt,
+    buys: Number(r.sBuys),
+    sells: Number(r.sSells),
+    solIn: Number(r.sSolIn),
+    solOut: Number(r.sSolOut),
+    boughtPct: r.sBoughtPct,
+    firstBuyerRank: r.sRank,
+    launchSniper: r.sSniper,
+    fastExit: r.sFastExit,
+  };
+  return {
+    mint: r.mint,
+    symbol: r.symbol,
+    name: r.name,
+    imageUrl: r.imageUrl,
+    kol,
+    side,
+    gapSec: Math.round((side.firstBuyAt.getTime() - kol.firstBuyAt.getTime()) / 1000),
+    sellGapSec:
+      kol.firstSellAt && side.firstSellAt
+        ? Math.round((side.firstSellAt.getTime() - kol.firstSellAt.getTime()) / 1000)
+        : null,
+  };
+}
+
+const median = (xs: number[]): number | null => {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+};
+
+/** Seconds within which two first sells read as one exit. */
+export const SIDE_EXIT_TOGETHER_SEC = 5 * 60;
+
+/**
+ * The patterns a person weighs when judging a link, over the shared coins: which wallet buys
+ * first, how close, whether they exit together, and how the sizes compare. Exported for tests.
+ */
+export function sideMatchSummary(trades: readonly SideMatchTrade[]) {
+  const gaps = trades.map((t) => t.gapSec);
+  const bothSold = trades.filter((t) => t.sellGapSec !== null);
+  const ratios = trades.filter((t) => t.kol.solIn > 0).map((t) => t.side.solIn / t.kol.solIn);
+  return {
+    shared: trades.length,
+    medianGapSec: median(gaps),
+    /** Coins the wallet bought before the KOL, within a second of it, and after it. */
+    before: gaps.filter((g) => g < -1).length,
+    sameSecond: gaps.filter((g) => Math.abs(g) <= 1).length,
+    after: gaps.filter((g) => g > 1).length,
+    bothSold: bothSold.length,
+    exitedTogether: bothSold.filter((t) => Math.abs(t.sellGapSec!) <= SIDE_EXIT_TOGETHER_SEC).length,
+    medianSellGapSec: median(bothSold.map((t) => t.sellGapSec!)),
+    /** The wallet's SOL in over the KOL's, per coin, at the median. */
+    medianSizeRatio: median(ratios),
+    kolSolIn: trades.reduce((n, t) => n + t.kol.solIn, 0),
+    sideSolIn: trades.reduce((n, t) => n + t.side.solIn, 0),
+    kolPnlSol: trades.reduce((n, t) => n + t.kol.solOut - t.kol.solIn, 0),
+    sidePnlSol: trades.reduce((n, t) => n + t.side.solOut - t.side.solIn, 0),
+  };
+}
+
+/** How the two wallets' funders tie them, if they do. Exported for tests. */
+export function fundingLink(
+  kol: string,
+  side: string,
+  kolFunder: string | null,
+  sideFunder: string | null,
+): "same-funder" | "kol-funded-wallet" | "wallet-funded-kol" | "exchange" | null {
+  if (sideFunder && sideFunder === kol) return "kol-funded-wallet";
+  if (kolFunder && kolFunder === side) return "wallet-funded-kol";
+  if (kolFunder && sideFunder && kolFunder === sideFunder)
+    return KNOWN_EXCHANGE_WALLETS.has(kolFunder) ? "exchange" : "same-funder";
+  return null;
+}
 
 /** One side wallet as the worker stores it (SideWallet in kolSideWalletsJob.ts). */
 interface StoredSideWallet {

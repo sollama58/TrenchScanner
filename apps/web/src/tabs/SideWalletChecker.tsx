@@ -4,6 +4,7 @@ import { usePolling } from "../hooks";
 import { ago, shortAddress } from "../format";
 import { openWallet } from "../walletModal";
 import { usePossibleSides } from "../possibleSides";
+import { SideMatch } from "./SideMatch";
 import { Skeleton } from "../components/Charts";
 import {
   ChevronDownIcon,
@@ -390,7 +391,13 @@ function SideWallets({
         </p>
       ) : (
         <>
-          <SideRows kol={kol} list={list.slice(0, DROP_ROWS)} coins={coins} />
+          <SideRows
+            kol={kol}
+            kolName={kolName}
+            period={period}
+            list={list.slice(0, DROP_ROWS)}
+            coins={coins}
+          />
           {list.length > DROP_ROWS && (
             <button type="button" className="ghost small-btn side-all" onClick={() => setShowAll(true)}>
               Show all {list.length} wallets
@@ -462,31 +469,48 @@ function SideWalletsModal({
           matched on timing only.
         </p>
         {/* The wallet modal opens over the page, so this one closes first. */}
-        <SideRows kol={kol} list={list} coins={coins} onOpen={onClose} />
+        <SideRows kol={kol} kolName={kolName} period={period} list={list} coins={coins} onOpen={onClose} />
       </div>
     </dialog>
   );
 }
 
-/** Side wallet rows: address (opens the wallet modal), % shared bar, coins, timing and labels. */
+/**
+ * Side wallet rows: address (opens the wallet modal), % shared bar, coins, timing and labels. A row
+ * opens the coins it bought with the KOL, leg by leg (SideMatch).
+ */
 function SideRows({
   kol,
+  kolName,
+  period,
   list,
   coins,
   onOpen,
 }: {
   kol: string;
+  kolName: string;
+  period: SideWindow;
   list: SideWallet[];
   coins: number;
   onOpen?: () => void;
 }) {
   const labels = usePossibleSides(list.map((s) => s.wallet));
+  const [open, setOpen] = useState<string | null>(null);
   return (
     <ol className="side-sides">
       {list.map((s, i) => {
         const label = labels[s.wallet]?.find((p) => p.kolWallet === kol);
+        const isOpen = open === s.wallet;
+        const toggle = () => setOpen(isOpen ? null : s.wallet);
         return (
-          <li key={s.wallet} className={label ? "labeled" : undefined}>
+          <li
+            key={s.wallet}
+            className={[label ? "labeled" : "", isOpen ? "open" : ""].join(" ").trim() || undefined}
+            // The whole row opens its trades; the address and the toggle are its own buttons.
+            onClick={(e) => {
+              if (!(e.target as HTMLElement).closest("button, a")) toggle();
+            }}
+          >
             <span className="side-rank num faint">{i + 1}</span>
             <button
               type="button"
@@ -532,6 +556,18 @@ function SideRows({
               {s.risk?.dumper && <span className="pill pill-warn">Dumper</span>}
               {s.risk?.sniper && <span className="pill">Sniper</span>}
             </span>
+            <button
+              type="button"
+              className="ghost small-btn side-trades-btn"
+              aria-expanded={isOpen}
+              onClick={toggle}
+            >
+              {isOpen ? "Hide trades" : `Compare ${s.shared} trades`}
+              <ChevronDownIcon size={13} className="side-chevron" />
+            </button>
+            {isOpen && (
+              <SideMatch kol={kol} kolName={kolName} side={s.wallet} period={period} onOpen={onOpen} />
+            )}
           </li>
         );
       })}

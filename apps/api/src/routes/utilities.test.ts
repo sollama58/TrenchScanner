@@ -402,4 +402,93 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
       await prisma.walletRisk.deleteMany({ where: { wallet: side } });
     }
   });
+
+  it("compares a KOL and one wallet coin by coin, with both funders", async () => {
+    const me = await signIn();
+    const kol = random(32);
+    const side = random(32);
+    const funder = random(32);
+    wallets.push(kol, side);
+    await prisma.kolWallet.create({ data: { wallet: kol, name: "Pair KOL", seenAt: new Date() } });
+    await prisma.walletFunder.createMany({
+      data: [
+        { wallet: kol, status: "found", funder, amountSol: 5, fundedAt: new Date() },
+        { wallet: side, status: "found", funder, amountSol: 1, fundedAt: new Date() },
+      ],
+    });
+    const now = Date.now();
+    const mints: string[] = [];
+    // Two coins together (the wallet 30s after, then 20s before), one an hour apart.
+    for (const [i, gapMs] of [30_000, -20_000, 3_600_000].entries()) {
+      const mint = random(32);
+      mints.push(mint);
+      const token = await prisma.token.create({ data: { mintAddress: mint, symbol: `PAIR${i}` } });
+      await prisma.tokenTradeTape.create({
+        data: {
+          tokenId: token.id,
+          anchorAt: new Date(),
+          reason: "called",
+          status: "done",
+          windowEnd: new Date(),
+        },
+      });
+      const at = now - (i + 1) * 3_600_000;
+      await prisma.tokenWalletActivity.createMany({
+        data: [
+          {
+            tokenId: token.id,
+            wallet: kol,
+            buys: 1,
+            sells: 1,
+            solIn: 2,
+            solOut: 3,
+            firstBuyAt: new Date(at),
+            firstSellAt: new Date(at + 600_000),
+          },
+          {
+            tokenId: token.id,
+            wallet: side,
+            buys: 1,
+            sells: 1,
+            solIn: 1,
+            solOut: 1.5,
+            firstBuyAt: new Date(at + gapMs),
+            firstSellAt: new Date(at + 660_000),
+          },
+        ],
+      });
+    }
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/utilities/side-wallets/${kol}/${side}?window=7d`,
+        cookies: me.cookies,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.fundingLink).toBe("same-funder");
+      expect(body.kolCoins).toBe(3);
+      expect(body.trades.map((t: { symbol: string }) => t.symbol)).toEqual(["PAIR0", "PAIR1"]);
+      expect(body.trades[0]).toMatchObject({ gapSec: 30, sellGapSec: 60 });
+      expect(body.summary).toMatchObject({
+        shared: 2,
+        before: 1,
+        after: 1,
+        bothSold: 2,
+        exitedTogether: 2,
+        medianSizeRatio: 0.5,
+      });
+
+      const bad = await app.inject({
+        method: "GET",
+        url: `/utilities/side-wallets/${random(32)}/${side}`,
+        cookies: me.cookies,
+      });
+      expect(bad.statusCode).toBe(404);
+    } finally {
+      await prisma.token.deleteMany({ where: { mintAddress: { in: mints } } });
+      await prisma.walletFunder.deleteMany({ where: { wallet: { in: [kol, side] } } });
+      await prisma.kolWallet.deleteMany({ where: { wallet: kol } });
+    }
+  });
 });
