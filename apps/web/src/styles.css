@@ -2729,6 +2729,33 @@ legend {
 .side-all {
   margin-top: 8px;
 }
+.side-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.side-search:focus-within {
+  border-color: var(--border-strong);
+}
+.side-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  padding: 9px 0;
+  font-size: 13px;
+  box-shadow: none;
+  outline: none;
+}
+.side-none {
+  margin: 10px 8px 0;
+}
 .side-modal .about-body > p {
   margin: 0 0 8px;
 }

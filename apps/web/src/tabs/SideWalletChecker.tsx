@@ -4,7 +4,7 @@ import { usePolling } from "../hooks";
 import { ago, shortAddress } from "../format";
 import { openWallet } from "../walletModal";
 import { Skeleton } from "../components/Charts";
-import { ChevronDownIcon, CloseIcon, UsersIcon } from "../components/Icons";
+import { ChevronDownIcon, CloseIcon, SearchIcon, UsersIcon } from "../components/Icons";
 
 export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
 export type SideWindow = (typeof SIDE_WINDOWS)[number];
@@ -63,8 +63,14 @@ export function SideWalletChecker() {
   const [open, setOpen] = useState<string | null>(null);
   const [all, setAll] = useState(false);
   const [period, setPeriod] = useState<SideWindow>("30d");
+  const [query, setQuery] = useState("");
   const kols = data?.kols ?? [];
-  const shown = all ? kols : kols.slice(0, FIRST_ROWS);
+  const q = query.trim().toLowerCase().replace(/^@/, "");
+  // A search shows every match, each at its own leaderboard rank.
+  const matches = kols
+    .map((k, i) => ({ k, rank: i + 1 }))
+    .filter(({ k }) => !q || [k.name, k.twitter, k.wallet].some((v) => v?.toLowerCase().includes(q)));
+  const shown = all || q ? matches : matches.slice(0, FIRST_ROWS);
 
   return (
     <section className="panel util-side">
@@ -97,6 +103,18 @@ export function SideWalletChecker() {
         </p>
       ) : (
         <>
+          <label className="side-search">
+            <SearchIcon size={14} />
+            <input
+              type="search"
+              placeholder="Search KOLs by name, @handle or wallet"
+              aria-label="Search KOLs"
+              autoComplete="off"
+              spellCheck={false}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
           <div className="side-head faint small" aria-hidden="true">
             <span>#</span>
             <span>KOL</span>
@@ -106,7 +124,7 @@ export function SideWalletChecker() {
             <span />
           </div>
           <ol className="side-list">
-            {shown.map((k, i) => {
+            {shown.map(({ k, rank }) => {
               const isOpen = open === k.wallet;
               return (
                 <li key={k.wallet} className={isOpen ? "open" : undefined}>
@@ -116,7 +134,7 @@ export function SideWalletChecker() {
                     aria-expanded={isOpen}
                     onClick={() => setOpen(isOpen ? null : k.wallet)}
                   >
-                    <span className="side-rank num">{i + 1}</span>
+                    <span className="side-rank num">{rank}</span>
                     <span className="side-who">
                       <strong>{k.name ?? shortAddress(k.wallet)}</strong>
                       <span className="faint small num">
@@ -144,8 +162,11 @@ export function SideWalletChecker() {
               );
             })}
           </ol>
+          {q && matches.length === 0 && (
+            <p className="muted small side-none">No KOL matches “{query.trim()}”.</p>
+          )}
           <p className="faint small side-foot">
-            {kols.length > FIRST_ROWS && (
+            {!q && kols.length > FIRST_ROWS && (
               <>
                 <button type="button" className="link" onClick={() => setAll((a) => !a)}>
                   {all ? "Show fewer" : `Show all ${kols.length} KOLs`}
