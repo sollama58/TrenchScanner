@@ -180,7 +180,7 @@ export interface Snapshot {
       }[]
     | null;
   /** Every holder behind the linked reading and its %, largest first; stored with the clusters only. */
-  linkedHolders?: { wallet: string; pct: number; cexFunder?: string }[] | null;
+  linkedHolders?: { wallet: string; pct: number; cexFunder?: string; rank?: number }[] | null;
   /** Of the largest holders (up to 20), the % an exchange or a busy service paid for; null when not read. */
   cexFundedPct?: number | null;
   /** % of supply held by top holders funded within a minute of each other (any funders); null when not checked. */

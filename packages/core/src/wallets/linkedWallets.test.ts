@@ -169,6 +169,20 @@ describe("linkedWallets", () => {
   });
 });
 
+describe("wider readings (topN)", () => {
+  it("reads past the top 25 when asked, for the bubble map's top 100", () => {
+    const holders = Array.from({ length: 40 }, (_, i) => ({ owner: `h${i}`, pct: 40 - i }));
+    const funders = new Map<string, string | null>(holders.map((h) => [h.owner, `own-${h.owner}`]));
+    funders.set("h0", "F");
+    funders.set("h35", "F");
+    expect(linkedWallets(holders, funders, { hot: notHot })!.linkedWalletsChecked).toBe(LINKED_TOP_N);
+    const wide = linkedWallets(holders, funders, { hot: notHot, topN: 100 })!;
+    expect(wide.linkedWalletsChecked).toBe(40);
+    expect(wide.clusters[0]!.wallets.map((w) => w.wallet)).toEqual(["h0", "h35"]);
+    expect(cexFundedReading(holders, funders, { hot: (f) => f === "F", topN: 100 })!.cexFundedCount).toBe(2);
+  });
+});
+
 describe("cexFundedReading", () => {
   const hot = (f: string) => f === "Binance";
   const holders = Array.from({ length: 25 }, (_, i) => ({ owner: `H${i}`, pct: 25 - i }));

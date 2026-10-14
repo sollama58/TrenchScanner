@@ -24,6 +24,7 @@ import {
   holderFreshness,
   layoutGraph,
   pickReading,
+  withWideMap,
 } from "./bubbleMap";
 
 const A = "Aaaa1111111111111111111111111111111111111111";
@@ -171,6 +172,49 @@ describe("bubble map link", () => {
     expect(bubblesLink(A, "https://trenchscanner.app/?sage=x#lighthouse")).toBe(
       `https://trenchscanner.app/?bubbles=${A}`,
     );
+  });
+});
+
+describe("bubble map top 100", () => {
+  const wide = {
+    readAt: "2026-10-14T02:00:00Z",
+    holdersRead: 100,
+    knownExtra: 1,
+    holders: [
+      { wallet: A, pct: 12 },
+      { wallet: B, pct: 9 },
+      { wallet: R, pct: 0.4, rank: 57 },
+    ],
+    clusters: [
+      {
+        funder: F,
+        wallets: [
+          { wallet: A, pct: 12 },
+          { wallet: B, pct: 9 },
+          { wallet: R, pct: 0.4 },
+        ],
+        pct: 21.4,
+        creatorLinked: false,
+      },
+    ],
+    sameTimeClusters: [],
+  };
+
+  it("draws an alerted coin's known top-100 wallets in their clusters, with their rank, counts unchanged", () => {
+    const g = buildGraph({ ...snapshot, linkedWalletCount: 4, linkedWalletsChecked: 25 } as never);
+    const w = buildGraph(withWideMap({ ...snapshot, linkedWalletCount: 4, linkedWalletsChecked: 25 }, wide));
+    const r = w.nodes.find((n) => n.wallet === R)!;
+    expect(r).toMatchObject({ kind: "holder", cluster: 0, rank: 57 });
+    expect(w.links).toContainEqual({ from: `h:${R}`, to: `f:${F}`, cluster: 0 });
+    expect(w.nodes.find((n) => n.wallet === A)!.rank).toBeUndefined();
+    expect(w.linkedCount).toEqual(g.linkedCount);
+    expect(w.linkedPct).toBe(31);
+  });
+
+  it("leaves the snapshot as it is without a wider map", () => {
+    const s = { ...snapshot, linkedHolders: [{ wallet: A, pct: 12 }] };
+    expect(withWideMap(s, null)).toBe(s);
+    expect(withWideMap(s, { ...wide, holders: [] })).toBe(s);
   });
 });
 

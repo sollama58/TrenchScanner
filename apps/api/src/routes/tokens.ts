@@ -39,6 +39,29 @@ const TRACK_CACHE_MS = 10 * 60_000;
 /** Scan market caps sent with the token modal's chart: its fallback when Pump.fun has no candles. */
 const CHART_SNAPSHOT_POINTS = 240;
 
+/** GET /tokens/:mint/bubble-holders: a model-alerted coin's bubble map over its top 100 (web src/bubbleMap.ts). */
+export interface BubbleHoldersMap {
+  readAt: string;
+  holdersRead: number;
+  knownExtra: number;
+  holders: { wallet: string; pct: number; rank?: number; cexFunder?: string }[];
+  clusters: {
+    funder: string;
+    wallets: { wallet: string; pct: number }[];
+    pct: number;
+    creatorLinked: boolean;
+  }[];
+  sameTimeClusters: {
+    atMs: number;
+    spanMs: number;
+    wallets: { wallet: string; pct: number; fundedAtMs: number; funder: string | null }[];
+    pct: number;
+  }[];
+}
+export interface BubbleHolders {
+  map: BubbleHoldersMap | null;
+}
+
 /** GET /tokens/:mint/chart: the token modal's price chart (web src/components/TokenModal.tsx). */
 export interface TokenChart {
   mint: string;
@@ -198,6 +221,31 @@ export async function registerTokenRoutes(app: FastifyInstance) {
     // The browser may reuse it for a few seconds; the candles themselves are cached here for 30.
     reply.header("Cache-Control", "private, max-age=15");
     return readTokenChart(mintAddress);
+  });
+
+  /**
+   * A model-alerted coin's bubble map over its top 100 holders (BubbleMapHolders): the top 25 and
+   * every known wallet past them, clustered alike. `{ map: null }` for a coin with none.
+   */
+  app.get("/:mintAddress/bubble-holders", async (request, reply): Promise<BubbleHolders | undefined> => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    if (!MINT_RE.test(mintAddress)) {
+      reply.code(400).send({ error: "not a valid mint" });
+      return;
+    }
+    reply.header("Cache-Control", "private, max-age=30");
+    const row = await prisma.bubbleMapHolders.findUnique({ where: { mintAddress } });
+    if (!row) return { map: null };
+    return {
+      map: {
+        readAt: row.readAt.toISOString(),
+        holdersRead: row.holdersRead,
+        knownExtra: row.knownExtra,
+        holders: row.holders as unknown as BubbleHoldersMap["holders"],
+        clusters: row.clusters as unknown as BubbleHoldersMap["clusters"],
+        sameTimeClusters: row.sameTimeClusters as unknown as BubbleHoldersMap["sameTimeClusters"],
+      },
+    };
   });
 
   /** TokenSage's read of the token, for the card's TokenSage view (src/tokenSageView.ts). */

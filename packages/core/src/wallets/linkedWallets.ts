@@ -287,12 +287,14 @@ export function linkedWallets(
     creatorFunder?: string | null;
     /** When each wallet was funded, ms epoch, for the same-time groups; none without it. */
     fundedAtOf?: ReadonlyMap<string, number | null>;
+    /** How many of the largest holders to read: LINKED_TOP_N, or more for the bubble map's wider list. */
+    topN?: number;
   },
 ): LinkedWalletsReading | null {
   const list = dedupeHolders(holders)
     .filter((h) => h.owner !== opts.creator)
     .sort((a, b) => b.pct - a.pct)
-    .slice(0, LINKED_TOP_N);
+    .slice(0, opts.topN ?? LINKED_TOP_N);
   if (list.length === 0) return null;
   if (list.some((h) => !funderOf.has(h.owner))) return null;
   const usable = (f: string | null | undefined): f is string => !!f && !opts.hot(f);
@@ -414,6 +416,13 @@ const round2 = (v: number) => Math.round(v * 100) / 100;
 export const LINKED_TOP_N = 25;
 
 /**
+ * How many of the largest holders (pools aside) the bubble map reads for a model-alerted coin
+ * (user ask 2026-10-14): those past the top 25 whose funder we already know join the map, drawn
+ * with the same clusters and ties. For display only: every count stays on LINKED_TOP_N.
+ */
+export const BUBBLE_WIDE_TOP_N = 100;
+
+/**
  * How many top-holder accounts are kept from RugCheck's report (it lists about 20): the list the
  * readings fall back on until the chain's top 25 is read. The exchange-funded count itself reads
  * LINKED_TOP_N, the same 25 holders as Linked (user decision 2026-10-13, "N/25"; it was the top 20).
@@ -441,12 +450,12 @@ export interface CexFundedReading {
 export function cexFundedReading(
   holders: readonly { owner: string; pct: number }[],
   funderOf: ReadonlyMap<string, string | null>,
-  opts: { hot: (funder: string) => boolean; creator?: string | null },
+  opts: { hot: (funder: string) => boolean; creator?: string | null; topN?: number },
 ): CexFundedReading | null {
   const list = dedupeHolders(holders)
     .filter((h) => h.owner !== opts.creator)
     .sort((a, b) => b.pct - a.pct)
-    .slice(0, LINKED_TOP_N);
+    .slice(0, opts.topN ?? LINKED_TOP_N);
   if (list.length === 0) return null;
   if (list.some((h) => !funderOf.has(h.owner))) return null;
   const cexFunders = list.flatMap((h) => {

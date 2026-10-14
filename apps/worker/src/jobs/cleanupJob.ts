@@ -599,6 +599,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedNonces,
     deletedFilterBaselines,
     deletedTelegramAlertsSent,
+    deletedBubbleMaps,
   ] = await Promise.all([
     stage("linkCodes", none, () =>
       prisma.mobileLinkCode.deleteMany({
@@ -641,6 +642,10 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
       prisma.telegramAlertSent.deleteMany({
         where: { sentAt: { lt: new Date(startedAt - TELEGRAM_ALERT_SENT_RETENTION_DAYS * DAY_MS) } },
       }),
+    ),
+    // Alerted coins' top-100 bubble maps: one row a coin, kept as long as its snapshots.
+    stage("bubbleMapHolders", none, () =>
+      prisma.bubbleMapHolders.deleteMany({ where: { computedAt: { lt: snapshotCutoff } } }),
     ),
   ]);
 
@@ -753,6 +758,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedNonces: deletedNonces.count,
     deletedFilterBaselines: deletedFilterBaselines.count,
     deletedTelegramAlertsSent: deletedTelegramAlertsSent.count,
+    deletedBubbleMaps: deletedBubbleMaps.count,
     deletedTokens: deletedTokens.count,
     deletedWalletCache: deletedWalletCache.count,
     deletedMintAuthorityCache: deletedMintAuthorityCache.count,
