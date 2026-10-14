@@ -2909,6 +2909,203 @@ legend {
 .side-sides li.labeled .side-wallet {
   font-weight: 700;
 }
+/* A side wallet row opens its trades with the KOL (SideMatch). */
+.side-sides li {
+  cursor: pointer;
+}
+.side-sides li:hover {
+  background: color-mix(in srgb, var(--surface-3) 45%, transparent);
+}
+.side-sides li.open {
+  background: color-mix(in srgb, var(--brand-a) 6%, transparent);
+}
+.side-trades-btn {
+  grid-column: 2 / -1;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--brand-ink);
+}
+.side-sides li.open .side-trades-btn .side-chevron {
+  transform: rotate(180deg);
+}
+.sm-body {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  cursor: default;
+}
+.sm-signals {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.sm-signal {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.sm-signal strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13.5px;
+}
+.sm-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.sm-funding.strong {
+  border-color: color-mix(in srgb, var(--good) 45%, transparent);
+  background: var(--good-wash);
+}
+.sm-funding.strong strong {
+  color: var(--good-ink);
+}
+.sm-funding.weak strong {
+  color: var(--warn-ink);
+}
+.sm-funder {
+  overflow-wrap: anywhere;
+}
+.sm-hint {
+  margin: 10px 0 0;
+  color: var(--ink-2);
+}
+.sm-hint summary {
+  cursor: pointer;
+  color: var(--brand-ink);
+}
+.sm-hint ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.sm-hint li {
+  margin: 2px 0;
+}
+.sm-caption {
+  margin: 10px 0 6px;
+}
+.sm-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.2fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 8px 4px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.sm-headrow {
+  border-top: none;
+  padding-top: 0;
+}
+.sm-coin {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.sm-coin img,
+.sm-coin-dot {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  object-fit: cover;
+  background: var(--surface-3);
+}
+.sm-coin-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.sm-coin-text a {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sm-legs {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: 1px;
+  align-items: baseline;
+}
+.sm-legs > span:nth-child(odd) {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sm-headrow .num,
+.sm-pnl {
+  text-align: right;
+}
+.sm-pnl {
+  grid-template-columns: auto auto;
+  justify-content: end;
+}
+.sm-gap.before,
+.sm-together {
+  color: var(--brand-ink);
+  font-weight: 600;
+}
+.sm-roles {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: -2px;
+}
+@media (max-width: 860px) {
+  .sm-signals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .sm-body {
+    padding: 10px 8px;
+  }
+  .sm-headrow {
+    display: none;
+  }
+  .sm-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    row-gap: 8px;
+  }
+  .sm-coin {
+    grid-column: 1 / -1;
+  }
+  .sm-legs::before {
+    content: attr(data-label);
+    grid-column: 1 / -1;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .sm-pnl {
+    justify-items: start;
+    text-align: left;
+  }
+}
 .side-label {
   color: var(--brand-ink);
   border-color: color-mix(in srgb, var(--brand-a) 45%, transparent);
