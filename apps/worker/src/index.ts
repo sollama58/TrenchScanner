@@ -482,7 +482,9 @@ async function main() {
             return null;
           });
           const meta = await runKolSideWalletsJob();
-          return knownSides ? { ...meta, knownSides: knownSides.join(",") } : meta;
+          return knownSides
+            ? { ...meta, knownSides: knownSides.join(","), knownSideCount: knownSides.length }
+            : meta;
         }),
       ),
       60,
