@@ -5,12 +5,15 @@ import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 import type { WalletIdentityReader } from "../walletIdentity.js";
 import { loadWalletNames } from "../walletNames.js";
 import { loadPossibleSides } from "../possibleSides.js";
+import { allowLookupRead } from "../lookupGate.js";
 
 /**
  * The wallet modal's read (GET /wallets/:wallet): one wallet in full, for anyone with access
- * (authenticateSubscriber, like the token modal it opens from). See walletProfile.ts.
+ * (authenticateSubscriber, like the token modal it opens from). See walletProfile.ts. A wallet
+ * TrenchScanner has never come across needs the reader's own paid lookup first (lookupGate.ts).
  * The holder lists' names (POST /wallets/names): the KOL, identity or exchange name of each wallet
- * on one list, in one read. See walletNames.ts.
+ * on one list, in one read. Helius is asked only about wallets the database has seen, within each
+ * account's own share of the budget. See walletNames.ts.
  * The bubble map's possible KOL side wallets (POST /wallets/possible-sides): which of a list's
  * wallets the Side Wallet Checker marks as a KOL's possible side wallet. See possibleSides.ts.
  */
@@ -35,6 +38,7 @@ export async function registerWalletRoutes(
     const parsed = walletSchema.safeParse(request.params);
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    if (!(await allowLookupRead(request, reply, "wallet", parsed.data.wallet))) return reply;
     reply.header("Cache-Control", "private, max-age=30");
     // Its chain reads count as "wallet-modal" in Admin > API usage.
     return withApiFeature("wallet-modal", () =>
@@ -47,10 +51,9 @@ export async function registerWalletRoutes(
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     // Its Helius reads count as "wallet-names" in Admin > API usage.
-    const names = await withApiFeature("wallet-names", () =>
-      loadWalletNames(parsed.data.wallets, opts.identity ?? null),
+    return withApiFeature("wallet-names", () =>
+      loadWalletNames(parsed.data.wallets, opts.identity ?? null, request.user!.userId),
     );
-    return { names };
   });
 
   // A read of the hourly table only: no outside calls.

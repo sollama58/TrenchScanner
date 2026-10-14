@@ -5,7 +5,7 @@ import { prisma, loadEnv } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
-import { setCandleFetcherForTests, type TokenChart } from "./tokens.js";
+import { readTokenChart, setCandleFetcherForTests, type TokenChart } from "./tokens.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -26,15 +26,19 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
   let cookie: string;
   let userId: string;
 
+  /** Every mint the candle fetcher was asked about. */
+  const fetched: string[] = [];
+
   beforeAll(async () => {
-    setCandleFetcherForTests(async (mint) =>
-      mint === MINT
+    setCandleFetcherForTests(async (mint) => {
+      fetched.push(mint);
+      return mint === MINT
         ? [
             { t: 60_000, o: 10_000, h: 12_000, l: 9_000, c: 11_000, vol: 500 },
             { t: 120_000, o: 11_000, h: 20_000, l: 11_000, c: 19_000, vol: 900 },
           ]
-        : null,
-    );
+        : null;
+    });
     const env = loadEnv();
     const user = await prisma.user.create({ data: { walletAddress: `${TAG}-wallet` } });
     userId = user.id;
@@ -139,16 +143,19 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
     expect(body.wallets[2]).toMatchObject({ tags: ["linked"], funder: "Fundr", trades: [[80_000, 1, null]] });
   });
 
-  it("answers an unknown coin with no candles and nothing to mark", async () => {
-    const res = await get(address(`${TAG}-unknown`));
-    expect(res.statusCode).toBe(200);
-    expect(res.json<TokenChart>()).toMatchObject({
+  it("asks for a paid lookup for a coin the scanner doesn't track, and reads no candles for it", async () => {
+    const unknown = address(`${TAG}-unknown`);
+    const res = await get(unknown);
+    expect(res.statusCode).toBe(402);
+    expect(res.json()).toMatchObject({ code: "lookup_required", utility: "token" });
+    expect(await readTokenChart(unknown)).toMatchObject({
       candles: null,
       marketCap: [],
       tape: null,
       live: null,
       wallets: [],
     });
+    expect(fetched).not.toContain(unknown);
   });
 
   it("refuses a malformed mint and a reader without a session", async () => {

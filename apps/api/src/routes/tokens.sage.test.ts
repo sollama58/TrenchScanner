@@ -75,6 +75,10 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
         },
       },
     });
+    // Tracked coins (the scanner found them), so their reads are free to any subscriber.
+    await prisma.token.createMany({
+      data: [NONE, EXPIRED, FAILED].map((m) => ({ mintAddress: m, discoverySource: "pumpportal" })),
+    });
     // Read more than three weeks ago: the cleanup dropped the document and kept the row.
     await prisma.tokenNarrative.create({
       data: {
@@ -104,7 +108,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
     await prisma.whitelist.deleteMany({ where: { walletAddress: `${TAG}-wallet` } });
     await app?.close();
     await prisma.tokenNarrative.deleteMany({ where: { mintAddress: { in: [READ, EXPIRED, FAILED] } } });
-    await prisma.token.deleteMany({ where: { mintAddress: READ } });
+    await prisma.token.deleteMany({ where: { mintAddress: { in: [READ, NONE, EXPIRED, FAILED] } } });
     await prisma.user.deleteMany({ where: { id: userId } });
   });
 
@@ -134,7 +138,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
 
   it("says when there is no read, and turns away bad mints and visitors", async () => {
     const none = (await get(NONE)).json() as SageView;
-    expect(none).toMatchObject({ status: "none", read: null, token: null, marketCap: [], narrative: null });
+    expect(none).toMatchObject({ status: "none", read: null, marketCap: [], narrative: null });
     const expired = (await get(EXPIRED)).json() as SageView;
     expect(expired).toMatchObject({ status: "expired", read: null });
     // Only the failure's code, never TokenSage's raw text behind it.
@@ -142,5 +146,11 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/sage", () => {
     expect(failed).toMatchObject({ status: "failed", failReason: "not_found", read: null });
     expect((await get("not-a-mint")).statusCode).toBe(400);
     expect((await get(READ, false)).statusCode).toBe(401);
+  });
+
+  it("asks for a paid lookup for a coin the scanner doesn't track", async () => {
+    const res = await get(mint(`${TAG}-untracked`));
+    expect(res.statusCode).toBe(402);
+    expect(res.json()).toMatchObject({ code: "lookup_required", utility: "token" });
   });
 });
