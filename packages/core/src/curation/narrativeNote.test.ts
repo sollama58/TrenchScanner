@@ -11,19 +11,38 @@ import {
 const record = (graded: number, wins: number) => ({ ...emptyRecord(), calls: graded, graded, wins });
 
 describe("the Narrative note's automatic default", () => {
-  it("turns on above a 40% hit rate once enough calls are graded", () => {
-    expect(narrativeNoteReadiness(record(50, 21)).ready).toBe(true); // 42%
-    expect(narrativeNoteReadiness(record(50, 20)).ready).toBe(false); // exactly 40% is not above it
+  it("turns on only once the 90% interval's lower bound clears 40%", () => {
+    // 60% of 50: the interval is about 48-71%, clear of 40%.
+    expect(narrativeNoteReadiness(record(50, 30)).ready).toBe(true);
+    // 42% of 50 is above 40% but its interval (about 31-54%) straddles it: not proven.
+    expect(narrativeNoteReadiness(record(50, 21)).ready).toBe(false);
     expect(narrativeNoteReadiness(record(50, 15)).ready).toBe(false);
+    const r = narrativeNoteReadiness(record(50, 30));
+    expect(r.lowerPct!).toBeGreaterThan(40);
+    expect(r.upperPct!).toBeGreaterThan(r.winRatePct!);
+  });
+
+  it("keeps its previous state inside the band, and turns off only when the upper bound drops below 40%", () => {
+    // 42% of 50 is inside the band: it holds whatever it was.
+    expect(narrativeNoteReadiness(record(50, 21), true).ready).toBe(true);
+    expect(narrativeNoteReadiness(record(50, 21), false).ready).toBe(false);
+    // 30% of 200: the interval (about 25-36%) is wholly below 40%, so it turns off.
+    expect(narrativeNoteReadiness(record(200, 60), true).ready).toBe(false);
+    // Clearly proven: on whatever it was.
+    expect(narrativeNoteReadiness(record(200, 120), false).ready).toBe(true);
   });
 
   it("can't flip on from a few lucky calls", () => {
     const few = NARRATIVE_NOTE_MIN_GRADED - 1;
     expect(narrativeNoteReadiness(record(few, few)).ready).toBe(false);
-    expect(narrativeNoteReadiness(record(NARRATIVE_NOTE_MIN_GRADED, 10)).ready).toBe(true);
+    expect(narrativeNoteReadiness(record(few, few), true).ready).toBe(false);
+    // 10 of 20 (50%) read on in the old rule; its interval (about 32-68%) proves nothing.
+    expect(narrativeNoteReadiness(record(NARRATIVE_NOTE_MIN_GRADED, 10)).ready).toBe(false);
     expect(narrativeNoteReadiness(emptyRecord())).toMatchObject({
       ready: false,
       winRatePct: null,
+      lowerPct: null,
+      upperPct: null,
       graded: 0,
     });
   });

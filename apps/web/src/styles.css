@@ -1327,6 +1327,11 @@ img.avatar {
 .down {
   color: var(--bad-ink);
 }
+/* A rate on fewer graded calls than rates.ts MIN_GRADED_FOR_RATE: muted, never coloured as goal met. */
+.rate-early {
+  color: var(--muted);
+  font-style: italic;
+}
 /* Eight small boxes, four to a row: market (Vol, Holders, Age, Top 10), then wallets and dev. */
 .card-stats {
   display: grid;
@@ -1747,6 +1752,10 @@ tr.muted td {
 .bar.s2 {
   background: var(--series-2);
   fill: var(--series-2);
+}
+/* A bucket on too few calls to read (rates.ts MIN_GRADED_FOR_RATE): drawn, but faded. */
+.bar.thin {
+  opacity: 0.4;
 }
 .grid {
   stroke: var(--grid);

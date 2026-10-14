@@ -8,6 +8,14 @@ import { ScoreExplainer } from "./ScoreExplainer";
 import { ScoreBar } from "./ScoreBar";
 import { CopyIcon, TrophyIcon } from "./Icons";
 import { Skeleton } from "./Charts";
+import { intervalText, isEarly, MIN_GRADED_FOR_RATE, wilsonOfRate } from "../rates";
+
+/** Green only on a meaningful sample: below the floor a rate is greyed, whatever it reads. */
+function filterRateTone(rate: number | null, target: number, graded: number): string {
+  if (rate === null) return "";
+  if (isEarly(graded)) return "rate-early";
+  return rate >= target ? "up" : "";
+}
 
 /**
  * The public filter leaderboard: filters their owners chose to share, ranked by how far their
@@ -152,11 +160,16 @@ function BoardEntry({
           }
         />
         <p className="small muted board-stats">
-          <strong className={`num ${(e.winRatePct ?? 0) >= targets.hitRate2xPct ? "up" : ""}`}>
+          <strong
+            className={`num ${filterRateTone(e.winRatePct, targets.hitRate2xPct, e.graded)}`}
+            title={`${intervalText(wilsonOfRate(e.winRatePct, e.graded))}${
+              isEarly(e.graded) ? ` · early: under ${MIN_GRADED_FOR_RATE} graded alerts` : ""
+            }`}
+          >
             {pct(e.winRatePct)}
           </strong>{" "}
           2x ·{" "}
-          <strong className={`num ${(e.goalRatePct ?? 0) >= targets.hitRate4xPct ? "up" : ""}`}>
+          <strong className={`num ${filterRateTone(e.goalRatePct, targets.hitRate4xPct, e.graded)}`}>
             {pct(e.goalRatePct)}
           </strong>{" "}
           4x ·{" "}

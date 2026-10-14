@@ -4,6 +4,7 @@ import { usePolling } from "../hooks";
 import { lighthousePath } from "../routes";
 import { ago, halfHour, pct, signedPct, usd } from "../format";
 import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } from "../lighthouseMetrics";
+import { intervalText, MIN_GRADED_FOR_RATE, RULE_NOTE_UNFILTERED, wilson } from "../rates";
 import { HBarChart, Skeleton } from "./Charts";
 import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
 import {
@@ -43,7 +44,7 @@ const spanOf = (days: number) => (days === 1 ? "24 hours" : `${days} days`);
 const fileFor = (name: string, days: number) => `trenchscanner-${name}-${windowLabel(days)}`;
 
 /** Graded alerts below which a narrative's hit rate shows as early rather than as a verdict. */
-export const MIN_GRADED = 5;
+export const MIN_GRADED = MIN_GRADED_FOR_RATE;
 
 /** TokenSage's codes ("x_link_reused", "about_this_coin") as words. */
 export const words = (code: string) => code.replace(/[_-]+/g, " ").trim();
@@ -301,7 +302,7 @@ function TokenSageSections({
             render={() => renderNarrativesPayCard(d.outcomes, span)}
           />
         }
-        note={`Model calls in the last ${span} by their coin's narrative, against the average of every call: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Narratives under ${MIN_GRADED} graded calls stay faded. TokenSage can answer after a call, so this shows what wins, not what a model knew.`}
+        note={`Model calls in the last ${span} by their coin's narrative, against the average of every call: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Narratives under ${MIN_GRADED} graded calls stay faded; hover one for its 2x rate's 90% range. TokenSage can answer after a call, so this shows what wins, not what a model knew. ${RULE_NOTE_UNFILTERED}`}
       >
         <HitRates rows={narratives(d.outcomes.byCategory)} cls={cls} baseline={base} />
         <p className="faint small lh-foot">
@@ -464,7 +465,7 @@ function TokenSageGlance({ d, cls }: { d: MarketLighthouse; cls: (l: string) => 
         </Section>
         <Section
           title="Best-performing narratives"
-          note="Points of average return under the exit plan above or below the average of every model call (each token once), with each narrative's own return and 2x rate."
+          note={`Points of average return under the exit plan above or below the average of every model call (each token once), with each narrative's own return and 2x rate. ${RULE_NOTE_UNFILTERED}`}
         >
           <HitRates rows={best} cls={cls} baseline={narrativeBaseline(d.outcomes.byCategory)} />
         </Section>
@@ -761,7 +762,7 @@ export function HitRates({
         const tone = gap === null ? "" : gap < 0 ? "loss" : "gain";
         const valueTone = gap === null ? "" : relative && early ? "muted" : gap < 0 ? "lh-down" : "lh-up";
         const title = relative
-          ? `${words(r.label)}: average return ${signedPct(ret)} against ${signedPct(base)} for all narratives (${signedPts(gap)}); 2x rate ${pct(r2x)} against ${pct(baseline.rate2x)}; 10x rate ${tier(r.won10x, tenXOver)}.${early ? " Too few graded calls to call it yet." : ""}`
+          ? `${words(r.label)}: average return ${signedPct(ret)} against ${signedPct(base)} for all narratives (${signedPts(gap)}); 2x rate ${pct(r2x)} (${intervalText(wilson(r.won2x, r.graded))}) against ${pct(baseline.rate2x)}; 10x rate ${tier(r.won10x, tenXOver)}.${early ? " Too few graded calls to call it yet." : ""}`
           : undefined;
         return (
           <div key={r.label} className={`lh-hit${early ? " early" : ""}`} title={title}>
@@ -1104,7 +1105,7 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
       <p className="faint small">
         Every screened token in our history by the hour it was decided on, in your local time zone (
         {clock.name}): how many tokens each hour brings, how often they doubled, and what they returned on the
-        exit plan. Hours with fewer than {MIN_HOUR_GRADED} graded tokens are faded.
+        exit plan. Hours with fewer than {MIN_HOUR_GRADED} graded tokens are faded. {RULE_NOTE_UNFILTERED}
       </p>
       <div className="lh-readout" aria-live="polite">
         <strong>

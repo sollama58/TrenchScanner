@@ -358,7 +358,7 @@ export async function renderScreenedCard(s: Screened, span: string): Promise<HTM
     "Every token that passed our safety pre-checks, graded from when it looked ready.",
     {
       badge: windowBadge(`Last ${span}`),
-      footer: `${n(s.graded)} tokens graded on a fixed exit plan`,
+      footer: `${n(s.graded)} tokens graded on a fixed exit plan, rules 3-4`,
       link: LINK,
       time: true,
     },
@@ -601,7 +601,7 @@ export async function renderNarrativesPayCard(
     `Model calls by narrative: return and 2x rate against the average call.`,
     {
       badge: windowBadge(`Last ${span}`),
-      footer: `${n(outcomes.graded)} graded model calls`,
+      footer: `${n(outcomes.graded)} graded model calls · 2x in 15 min before a 50% stop, rules 3-4`,
       link: LINK,
       time: true,
     },

@@ -17,6 +17,7 @@ import { linkedCount, linkedCountText, openBubbleMap, type BubbleSeed } from "..
 import { matchOutcome, outcomeAt, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
+import { cardCalibratedRate } from "../rates";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
 
 // The token modal (and its chart) loads the first time a card is opened.
@@ -53,7 +54,7 @@ export function AlertCard({
   const { weights, scale } = useScoreWeights();
   // Red at recent alerts' 10th percentile through to green at their 90th (Customize can turn it off).
   const { scoreColor, quickLinks } = useAppearance();
-  // Customize's Narrative toggle, else on once the Narrative model's 7-day hit rate passes 40%.
+  // Customize's Narrative toggle, else on once the Narrative model's 7-day hit rate reliably passes 40%.
   const showNarrative = useShowNarrativeNote();
   const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
   const tone = scoreColor ? scoreTone(s.score ?? null, scale) : null;
@@ -192,8 +193,8 @@ export function AlertCard({
                 className={`pill ${isModel || labelSource ? "pill-model" : "pill-heur"}`}
                 title={
                   calls.length > 1
-                    ? calls.map((c) => `${c.modelName ?? "Model"}: ${c.confidence.toFixed(0)}`).join("\n")
-                    : "Model confidence, 0-100"
+                    ? `${calls.map((c) => `${c.modelName ?? "Model"}: score ${c.confidence.toFixed(0)}`).join("\n")}\n${SCORE_HINT}`
+                    : SCORE_HINT
                 }
               >
                 <BrainIcon size={12} />
@@ -201,7 +202,7 @@ export function AlertCard({
                   {labelSource && "Model · "}
                   {calls.length > 1
                     ? calls.map((c) => c.modelName ?? "Model").join(" + ")
-                    : `${curated.modelName ?? (isModel ? "Model" : "Heuristic")} · ${curated.confidence.toFixed(0)}`}
+                    : `${curated.modelName ?? (isModel ? "Model" : "Heuristic")} · Score ${curated.confidence.toFixed(0)}`}
                 </span>
               </span>
             )}
@@ -224,12 +225,14 @@ export function AlertCard({
                 <span className="pill-text">Narrative: {curated.narrative.verdict}</span>
               </span>
             )}
-            {curated && show("calibrated") && calibratedRate(curated, calls) !== null && (
+            {curated && show("calibrated") && cardCalibratedRate(curated, calls) !== null && (
               <span
                 className="pill"
-                title="Of recent out-of-sample calls ranked like this one, the share that doubled within 15 minutes"
+                title={`Of recent out-of-sample calls ranked like this one, the share that hit 2x within 15 min of the alert, before a 50% stop${
+                  calls.length > 1 ? " (the middle of the calling models' rates)" : ""
+                }`}
               >
-                <span className="pill-text">≈{calibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
+                <span className="pill-text">≈{cardCalibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
               </span>
             )}
             {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
@@ -972,16 +975,8 @@ function AvatarPreview({
   );
 }
 
-/** The best calibrated 2x rate among the calls on a card (the lead call's when alone), or null. */
-function calibratedRate(
-  curated: { calibratedPct?: number | null },
-  calls: { calibratedPct?: number | null }[],
-): number | null {
-  const rates = [curated.calibratedPct, ...calls.map((c) => c.calibratedPct)].filter(
-    (r): r is number => typeof r === "number",
-  );
-  return rates.length > 0 ? Math.max(...rates) : null;
-}
+/** The model pill's tooltip: the number beside a model's name is a rank, not odds. */
+const SCORE_HINT = "Rank score 0-100, not a probability";
 
 /**
  * The highest of every peak the card knows, as a return on the alert market cap it shows - the
