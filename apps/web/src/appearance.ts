@@ -41,10 +41,10 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   hideBelowMcap: false,
   hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],
-  // Off by default, both switchable back on in Customize: the composite score tile, so the stat tiles
-  // fill a clean 4 x 2 grid, and the TokenSage button (the token view keeps its own). An account that
-  // saved its own field list keeps that list.
-  hidden: ["score", "sage"],
+  // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
+  // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own) and the header's
+  // "≈N% 2x" pill (user ask 2026-10-14). An account that saved its own field list keeps that list.
+  hidden: ["score", "sage", "calibrated"],
 };
 
 /** Trading sites a card can open the token in, as Settings lists them. */

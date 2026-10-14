@@ -265,8 +265,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             usually safer.
           </li>
           <li>
-            First buyers: of the first 25 buyers, how many still hold. DS means the creator sold, DH means
-            they still hold.
+            Buyers: of the first 25 buyers, how many still hold. DS means the creator sold, DH means they
+            still hold.
           </li>
           <li>The grade so far.</li>
         </ol>
@@ -456,7 +456,7 @@ function CardMock() {
         <Spot n={3} />
       </div>
       <div className="tour-card-chips">
-        <span className="pill">First buyers · 4/25</span>
+        <span className="pill">Buyers · 4/25</span>
         <span className="pill">DS</span>
         <Spot n={4} />
         <span className="tour-card-grade">

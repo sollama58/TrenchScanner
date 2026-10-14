@@ -265,7 +265,7 @@ export function AboutDetails({ targets }: { targets: Targets }) {
             or more. Fresh and empty wallets are common signs of snipers or insiders. &ldquo;Not
             checked&rdquo; means that check hasn&apos;t run yet.
           </dd>
-          <dt>First buyers</dt>
+          <dt>Buyers</dt>
           <dd>
             Of the first 25 buyers after launch (dev aside), how many still hold, as 12/25. Ones still holding
             can dump on you. Read once from the launch on chain, then rechecked every few minutes.
@@ -299,7 +299,8 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           <dt>≈41% 2x</dt>
           <dd>
             Of the model&apos;s recent calls ranked like this one, on data it wasn&apos;t trained on, the
-            share that doubled within 15 minutes. With several models, the best of their rates.
+            share that doubled within 15 minutes. With several models, the middle of their rates. Off by
+            default: turn it on in Customize.
           </dd>
         </dl>
         <p className="fp-note">

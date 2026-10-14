@@ -88,7 +88,7 @@ describe("parseFeedAppearance", () => {
     for (const bad of [2_000, 21_000, 4_500, "8000"])
       expect(parseFeedAppearance({ hideBelowMcapUsd: bad }).hideBelowMcapUsd).toBe(5_000);
     // The score tile and TokenSage button are hidden by default; a saved field list is kept as is.
-    expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage"]);
+    expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage", "calibrated"]);
     expect(parseFeedAppearance({ hidden: [] }).hidden).toEqual([]);
   });
 
