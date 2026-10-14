@@ -90,6 +90,17 @@ describe("matchesFilter", () => {
     expect(matchesFilter(baseToken({ freshTop10WalletPct: undefined }), filter)).toBe(true);
   });
 
+  it("reads maxFreshTop10WalletPct over the top 25 when counted: a cap saved as 5 of 10 lets 12 of 25 through", () => {
+    const filter = { ...baseFilter, maxFreshTop10WalletPct: 50 };
+    const at = (count: number) =>
+      matchesFilter(
+        baseToken({ freshTop10WalletPct: 90, freshTopHolderCount: count, freshTopHoldersChecked: 25 }),
+        filter,
+      );
+    expect(at(12)).toBe(true);
+    expect(at(13)).toBe(false);
+  });
+
   it("applies min/max token age", () => {
     const filter = { ...baseFilter, minTokenAgeMinutes: 30, maxTokenAgeMinutes: 720 };
     expect(matchesFilter(baseToken({ ageMinutes: 5 }), filter)).toBe(false);

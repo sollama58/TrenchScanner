@@ -108,6 +108,16 @@ describe("evaluateCandidateHeuristic", () => {
     expect(evaluateCandidateHeuristic(strongCandidate(overrides), MIN_SCORE).curate).toBe(false);
   });
 
+  it("caps fresh wallets over the top 25 when counted: 7 of 25 passes, 8 vetoes", () => {
+    const at = (count: number) =>
+      evaluateCandidateHeuristic(
+        strongCandidate({ freshTop10WalletPct: 0, freshTopHolderCount: count, freshTopHoldersChecked: 25 }),
+        MIN_SCORE,
+      ).curate;
+    expect(at(7)).toBe(true);
+    expect(at(8)).toBe(false);
+  });
+
   it("tolerates a mostly-empty holder list up to the bar, since the figure is a floor", () => {
     // 70 is deliberately lenient: unpriced holdings read as $0, so this number overstates
     // emptiness. A list at the bar still curates; only a clearly bare one is vetoed.

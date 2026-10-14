@@ -55,6 +55,8 @@ export function resetYoungHolderRecheck(): void {
 function holderFigures(profile: OnChainProfile): Record<string, number | null | undefined> {
   return {
     freshTop10WalletPct: profile.freshTop10WalletPct,
+    freshTopHolderCount: profile.freshTopHolderCount,
+    freshTopHoldersChecked: profile.freshTopHoldersChecked,
     emptyTop10WalletPct: profile.emptyTop10WalletPct,
     sniperTop10WalletPct: profile.sniperTop10WalletPct,
     top10HolderPct: profile.top10HolderPct,

@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Card } from "../api";
-import { countCutFor, nowReading, recordedPeakOf, sniperReading, walletCountText } from "./AlertCard";
+import { shownValue } from "../filterFields";
+import {
+  cardReadings,
+  countCutFor,
+  nowReading,
+  recordedPeakOf,
+  sniperReading,
+  walletCountText,
+} from "./AlertCard";
 
 /** Just the fields recordedPeakOf reads. */
 function card(over: {
@@ -143,5 +151,31 @@ describe("holder counts", () => {
       top25: false,
     });
     expect(sniperReading({}, true)).toBeNull();
+  });
+
+  it("reads Fresh over the top 25 where the scan counted it, else the top 10", () => {
+    const readings = (snapshot: object, latest: object | null = null) =>
+      cardReadings({ snapshot, latestSnapshot: latest, token: {} } as unknown as Card);
+    const r = readings({
+      freshTop10WalletPct: 80,
+      top10WalletsChecked: 10,
+      freshTopHolderCount: 6,
+      freshTopHoldersChecked: 25,
+    });
+    expect(walletCountText(r.freshPct, r.freshOf)).toBe("6/25");
+    expect(r.freshAtAlert).not.toBeNull();
+    const old = readings({ freshTop10WalletPct: 30, top10WalletsChecked: 10 });
+    expect(walletCountText(old.freshPct, old.freshOf)).toBe("3/10");
+    const later = readings({}, { freshTopHolderCount: 18, freshTopHoldersChecked: 25 });
+    expect(walletCountText(later.freshPct, later.freshOf)).toBe("18/25");
+    expect(later.freshAtAlert).toBeNull();
+  });
+
+  it("shows a saved share as the count it lets through", () => {
+    expect(shownValue({ scale: 4 }, 50)).toBe(12);
+    expect(shownValue({ scale: 4 }, 72)).toBe(18);
+    expect(shownValue({ scale: 10 }, 40)).toBe(4);
+    expect(shownValue({ scale: 10 }, 45)).toBe(4);
+    expect(shownValue({}, 45)).toBe(45);
   });
 });

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { Card, CardField } from "../api";
+import type { Card, CardField, Snapshot } from "../api";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import {
   BrainIcon,
@@ -374,7 +374,7 @@ export function AlertCard({
               of={freshOf}
               failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
               atAlert={freshAtAlert !== null}
-              explain="top-10 holder wallets first used, or used again after a week or more idle, in the last 24h"
+              explain="top-holder wallets first used, or used again after a week or more idle, in the last 24h"
             />
           )}
           {show("empty") && (
@@ -536,6 +536,13 @@ export function AlertCard({
   );
 }
 
+/** Fresh over the top 25 as a share, where the scan counted it; null otherwise. */
+function freshTopShare(x: Pick<Snapshot, "freshTopHolderCount" | "freshTopHoldersChecked">): number | null {
+  return x.freshTopHolderCount != null && x.freshTopHoldersChecked
+    ? (x.freshTopHolderCount / x.freshTopHoldersChecked) * 100
+    : null;
+}
+
 /**
  * The wallet and holder readings a card shows, each from the alert's snapshot when the lookup
  * made it in time, else from a later scan (both wallet checks are paid lookups with a per-scan
@@ -544,10 +551,15 @@ export function AlertCard({
 export function cardReadings(card: Card) {
   const s = card.snapshot;
   const latest = card.latestSnapshot;
-  // Each top-10 check with the size of the list it read, from the same scan as the share.
-  const freshFrom = s.freshTop10WalletPct != null ? s : latest?.freshTop10WalletPct != null ? latest : null;
-  const freshAtAlert = s.freshTop10WalletPct ?? null;
-  const freshPct = freshFrom?.freshTop10WalletPct ?? card.token.lastFreshTop10WalletPct ?? null;
+  // Each wallet check with the size of the list it read, from the same scan as the share. Fresh
+  // reads the top 25 where the scan counted them (user decision 2026-10-14, "N/25"), else the top 10.
+  const freshFrom =
+    [s, latest].find((x) => x && (freshTopShare(x) !== null || x.freshTop10WalletPct != null)) ?? null;
+  const freshPct =
+    (freshFrom && (freshTopShare(freshFrom) ?? freshFrom.freshTop10WalletPct)) ??
+    card.token.lastFreshTop10WalletPct ??
+    null;
+  const freshAtAlert = freshFrom === s ? freshPct : null;
   const emptyFrom = s.emptyTop10WalletPct != null ? s : latest?.emptyTop10WalletPct != null ? latest : null;
   const emptyAtAlert = s.emptyTop10WalletPct ?? null;
   const emptyPct = emptyFrom?.emptyTop10WalletPct ?? card.token.lastEmptyTop10WalletPct ?? null;
@@ -576,7 +588,10 @@ export function cardReadings(card: Card) {
     : null;
   return {
     freshPct,
-    freshOf: freshFrom?.top10WalletsChecked ?? null,
+    freshOf:
+      freshFrom && freshTopShare(freshFrom) !== null
+        ? freshFrom.freshTopHoldersChecked!
+        : (freshFrom?.top10WalletsChecked ?? null),
     freshAtAlert,
     emptyPct,
     emptyOf: emptyFrom?.top10WalletsChecked ?? null,
@@ -633,7 +648,7 @@ export function cexCountText(count: number | null, holders: number | null): stri
 }
 
 /**
- * A top-10 wallet check as a count, "N/10", of the wallets the list held (9 when one owner held two
+ * A wallet check as a count, "N/10" or "N/25" (Fresh over the top 25), of the wallets the list held (9 when one owner held two
  * of the ten accounts); null without a reading. Rows without the list size read as ten.
  */
 export function walletCountText(value: number | null, of: number | null): string | null {
@@ -654,7 +669,7 @@ export function WalletStat({
 }: {
   label: string;
   value: number | null;
-  /** How many top-10 wallets the check read. */
+  /** How many wallets the check read (the top 10, or the top 25 for Fresh). */
   of?: number | null;
   atAlert: boolean;
   explain: string;
