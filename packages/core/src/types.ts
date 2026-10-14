@@ -299,9 +299,10 @@ export interface OnChainProfile {
   /** The pre-bond floor the screen applies (SAFETY_MIN_PREBOND_SECONDS); undefined = the default. */
   minPreBondSeconds?: number;
   /**
-   * Other mints with this one's ticker first seen in the SAFETY_RELAUNCH_WINDOW_MINUTES before it,
+   * Other mints with this one's ticker first seen in the RELAUNCH_FARM_WINDOW_MINUTES before it,
    * and the highest market cap any of them has been seen at (the worker's relaunchFarms.ts), for
-   * the screen's relaunch-farm cut. Undefined = not read; the cut applies only once known.
+   * the block on model calls (curation/relaunchFarm.ts). Not a safety-screen cut. Undefined = not
+   * read; the block applies only once known.
    */
   relaunchSiblings?: number;
   relaunchSiblingPeakMcapUsd?: number;

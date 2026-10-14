@@ -186,10 +186,6 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             <li>Under 20 of the top 25 holders share a funder or a funding minute</li>
             <li>Under 21 of the top 25 holders were funded from an exchange</li>
             <li>The bonding curve wasn&apos;t bought out within 5 seconds of launch</li>
-            <li>
-              The ticker isn&apos;t being relaunched over and over by a farm (4 or more dead copies in 15
-              minutes)
-            </li>
           </ul>
         </>
       ),

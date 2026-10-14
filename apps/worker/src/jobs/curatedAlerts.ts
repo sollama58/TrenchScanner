@@ -1,5 +1,6 @@
 import {
   prisma,
+  relaunchFarmReason,
   forEachWithConcurrency,
   createLogger,
   evaluateCandidateHeuristic,
@@ -799,6 +800,16 @@ export async function collectCuratedContender(
     ([model, d]) => d.curate && (retry === undefined || retry.models.includes(model)),
   );
   if (calling.length === 0) return;
+  // A relaunch farm is never called by any model (user decision 2026-10-14). Checked after the
+  // seat scores are banked and the Narrative note is made, so the moment still trains and grades.
+  const farm = relaunchFarmReason(scored);
+  if (farm) {
+    logger.info("curated pick on a relaunch farm - not calling it", {
+      mint: token.mintAddress,
+      reason: farm,
+    });
+    return;
+  }
 
   // The per-token cooldown is per ledger: one contestant having called this token says nothing
   // about whether another may.
