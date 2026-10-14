@@ -1256,8 +1256,8 @@ export interface FeedAppearance {
   reasons: boolean;
   /** The snipers-in-top-holders tile (field id kept from when it read the top 10); off by default. */
   sniperTop10: boolean;
-  /** The CEX-funded tile; off by default (absent from older API builds: off). */
-  cexFunded: boolean;
+  /** The Dev holding / sold tile; off by default since CEX-funded took its place (absent from older API builds: off). */
+  devTile: boolean;
   /** The Largest holder tile; off by default (absent from older API builds: off). */
   largest: boolean;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */

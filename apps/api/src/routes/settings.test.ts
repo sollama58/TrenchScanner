@@ -52,6 +52,11 @@ describe("parseFeedAppearance", () => {
     expect(saved.sniperTop10).toBe(false);
     expect(DEFAULT_FEED_APPEARANCE.sniperTop10).toBe(false);
     expect(parseFeedAppearance({ sniperTop10: true }).sniperTop10).toBe(true);
+    // CEX-funded took the Dev tile's default place: Dev is opt-in, for older accounts too, and the
+    // old CEX-funded switch is ignored.
+    expect(DEFAULT_FEED_APPEARANCE.devTile).toBe(false);
+    expect(parseFeedAppearance({ cexFunded: false }).devTile).toBe(false);
+    expect(parseFeedAppearance({ devTile: true }).devTile).toBe(true);
     // The Stream tab is opt-in, and an account saved before it has it off.
     expect(DEFAULT_FEED_APPEARANCE.streamTab).toBe(false);
     expect(parseFeedAppearance({}).streamTab).toBe(false);

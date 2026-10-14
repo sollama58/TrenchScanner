@@ -81,8 +81,14 @@ export const feedAppearanceSchema = z
     reasons: z.boolean().default(false),
     /** The Top-10 snipers tile; hidden by default, as are accounts saved before it. */
     sniperTop10: z.boolean().default(false),
-    /** The CEX-funded tile (how many of the top 25 an exchange paid for); hidden by default. */
-    cexFunded: z.boolean().default(false),
+    /**
+     * The opt-in CEX-funded switch from before the tile took the Dev tile's default place (user ask
+     * 2026-10-13): accepted from older tabs, ignored. CEX-funded is a default tile now, hidden like
+     * any other through `hidden`.
+     */
+    cexFunded: z.boolean().optional(),
+    /** The Dev Holding / Dev Sold tile; hidden by default since CEX-funded took its place. */
+    devTile: z.boolean().default(false),
     /** The Largest holder tile (one wallet's share of supply, pools aside); hidden by default. */
     largest: z.boolean().default(false),
     /** On bubble maps, ties between holders the same exchange funded (drawn only); off by default. */
@@ -133,7 +139,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   scoreColor: true,
   reasons: false,
   sniperTop10: false,
-  cexFunded: false,
+  devTile: false,
   largest: false,
   bubbleCexLinks: false,
   narrativeNote: null,
