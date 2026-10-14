@@ -312,6 +312,10 @@ model UserFilter {
   /// funded the creator, or with the creator's funder (TokenSnapshot.linkedCreatorPct). Skipped
   /// while unknown.
   maxLinkedCreatorPct        Float?
+  /// Max KOL Bundled %: supply held by KOLs and the top holders tied to them (funded by them,
+  /// possible side wallets, or one step out by funder or funding minute;
+  /// TokenSnapshot.kolBundledPct). Skipped while unknown.
+  maxKolBundledPct           Float?
   /// Min holders as Jupiter counts them at the decision (the fresh quote's holderCount, seconds
   /// old). Fails closed without a quote, like the other floors.
   minLiveHolderCount         Int?
@@ -1108,6 +1112,9 @@ model TokenSnapshot {
   kolFirstBuyers          Int?
   kolRecentBuyers         Int?
   kolRecentSellers        Int?
+  /// KOL Bundled % (core's wallets/kolBundled.ts): supply held by KOLs and the top holders tied to
+  /// them, one step out. Null until the linked reading lands and the KOL roster loads.
+  kolBundledPct           Float?
   winnerRecentBuyers      Int?
   winnerRecentSellers     Int?
   // How many holders the two percentages above were computed over. The list is "top 10" by

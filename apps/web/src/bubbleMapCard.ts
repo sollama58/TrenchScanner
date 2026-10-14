@@ -87,7 +87,13 @@ export async function renderBubbleCard(
    * flags: whether the flagged-wallet read came back; until it does the risky count isn't known,
    * and the card says so instead of implying none.
    */
-  opts: { cex?: boolean; sides?: readonly SideGroup[]; flags?: FlagsRead } = {},
+  opts: {
+    cex?: boolean;
+    sides?: readonly SideGroup[];
+    flags?: FlagsRead;
+    /** KOL Bundled %, listed under the readings when KOLs bundle any supply. */
+    kolBundled?: number | null;
+  } = {},
 ): Promise<HTMLCanvasElement> {
   const { canvas, ctx, icon } = await cardCanvas();
   if (!ctx) return canvas;
@@ -256,6 +262,14 @@ export async function renderBubbleCard(
       PAD,
       y + 4,
     );
+    y += 32;
+  }
+  // KOL Bundled % (user ask 2026-10-14): supply held by KOLs and the holders tied to them.
+  if (opts.kolBundled != null && opts.kolBundled > 0 && y < CARD_H - 110) {
+    ctx.fillStyle = SIDE;
+    ctx.font = `600 18px ${FONT}`;
+    ctx.fillText(`KOL bundled ${pctText(opts.kolBundled)} of supply`, PAD, y + 4);
+    y += 32;
   }
 
   // With the exchange ties on: which exchanges funded which holders, in their colours.

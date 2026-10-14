@@ -1079,6 +1079,7 @@ const CRITERIA: [string, string, (v: number) => string][] = [
   ["maxSameTimeFundedPct", "funded same minute ≤", (v) => `${v}%`],
   ["maxSameTimeFundedCount", "funded same minute ≤", (v) => `${v}/25`],
   ["maxLinkedCreatorPct", "creator-tied ≤", (v) => `${v}%`],
+  ["maxKolBundledPct", "KOL bundled ≤", (v) => `${v}%`],
   ["minLiveHolderCount", "live holders ≥", (v) => String(v)],
   ["maxTop10HolderPct", "top10 ≤", (v) => `${v}%`],
   ["maxLargestHolderPct", "largest holder ≤", (v) => `${v}%`],

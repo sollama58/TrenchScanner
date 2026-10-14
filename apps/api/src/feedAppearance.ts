@@ -32,6 +32,7 @@ export const CARD_FIELDS = [
   "sniperTop10",
   "linked",
   "cexFunded",
+  "kolBundled",
   "largest",
   "dev",
   "reasons",
@@ -99,6 +100,8 @@ export const feedAppearanceSchema = z
     devTile: z.boolean().default(false),
     /** The Largest holder tile (one wallet's share of supply, pools aside); hidden by default. */
     largest: z.boolean().default(false),
+    /** The KOL Bundled % tile (supply held by KOLs and the holders tied to them); hidden by default. */
+    kolBundled: z.boolean().default(false),
     /** On bubble maps, ties between holders the same exchange funded (drawn only); off by default. */
     bubbleCexLinks: z.boolean().default(false),
     /** On bubble maps, ties from KOLs' possible side wallets (drawn only, never counted); on by default. */
@@ -168,6 +171,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   sniperTop10: false,
   devTile: false,
   largest: false,
+  kolBundled: false,
   bubbleCexLinks: false,
   bubbleSideLinks: true,
   narrativeNote: null,

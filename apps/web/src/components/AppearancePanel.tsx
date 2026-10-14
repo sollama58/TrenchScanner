@@ -104,9 +104,10 @@ export function AppearanceControls() {
     (f !== "reasons" || look.reasons) &&
     (f !== "sniperTop10" || look.sniperTop10) &&
     (f !== "dev" || look.devTile) &&
-    (f !== "largest" || look.largest);
+    (f !== "largest" || look.largest) &&
+    (f !== "kolBundled" || look.kolBundled);
   const toggleField = (f: CardField) =>
-    f === "reasons" || f === "sniperTop10" || f === "largest" || f === "dev"
+    f === "reasons" || f === "sniperTop10" || f === "largest" || f === "kolBundled" || f === "dev"
       ? // Opt-in: switching it on also unhides it, in case an older preset hid it.
         setAppearance({
           [f === "dev" ? "devTile" : f]: !shown(f),

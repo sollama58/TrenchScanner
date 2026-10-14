@@ -581,6 +581,12 @@ export function kolControl(
   return out.sort((a, b) => b.pct - a.pct);
 }
 
+/** KOL Bundled % as the map draws it: every KOL group's holders, each counted once (core's kolBundledPct). */
+export function kolBundledShare(kols: readonly KolControl[]): number {
+  const pct = new Map(kols.flatMap((k) => k.wallets.map((w) => [w.wallet, w.pct] as const)));
+  return Math.round([...pct.values()].reduce((t, p) => t + p, 0) * 100) / 100;
+}
+
 /** A side group's bubbles on the map: the KOL's own when it holds, then its possible side wallets. */
 export function sideMembers(graph: Pick<BubbleGraph, "nodes">, g: SideGroup): MapNode[] {
   const wallets = new Set([g.kolWallet, ...g.wallets.map((w) => w.wallet)]);

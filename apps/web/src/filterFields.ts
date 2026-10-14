@@ -177,6 +177,14 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
+        key: "maxKolBundledPct",
+        min: 0,
+        max: 100,
+        label: "Max KOL Bundled %",
+        hint: "supply held by KOLs and the top holders tied to them: wallets a KOL funded, possible side wallets, and holders sharing a funder or funding minute with those; tokens not checked yet wait",
+        unit: "%",
+      },
+      {
         key: "minLiveHolderCount",
         min: 0,
         label: "Min holders (live)",

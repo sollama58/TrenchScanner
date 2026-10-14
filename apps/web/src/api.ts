@@ -195,6 +195,8 @@ export interface Snapshot {
   linkedHolders?: { wallet: string; pct: number; cexFunder?: string; rank?: number }[] | null;
   /** Of the largest holders (up to 20), the % an exchange or a busy service paid for; null when not read. */
   cexFundedPct?: number | null;
+  /** KOL Bundled %: supply held by KOLs and the top holders tied to them; null when not read. */
+  kolBundledPct?: number | null;
   /** % of supply held by top holders funded within a minute of each other (any funders); null when not checked. */
   sameTimeFundedPct?: number | null;
   sameTimeClusterCount?: number | null;
@@ -852,6 +854,7 @@ export interface FilterInput {
   maxSameTimeFundedPct: number | null;
   maxSameTimeFundedCount: number | null;
   maxLinkedCreatorPct: number | null;
+  maxKolBundledPct: number | null;
   minLiveHolderCount: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
@@ -1280,6 +1283,7 @@ export type CardField =
   | "sniperTop10"
   | "linked"
   | "cexFunded"
+  | "kolBundled"
   | "largest"
   | "dev"
   | "reasons"
@@ -1322,6 +1326,8 @@ export interface FeedAppearance {
   devTile: boolean;
   /** The Largest holder tile; off by default (absent from older API builds: off). */
   largest: boolean;
+  /** The KOL Bundled % tile; off by default (absent from older API builds: off). */
+  kolBundled: boolean;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */
   bubbleCexLinks: boolean;
   /** Bubble maps open with KOLs' possible side wallets tied to them; on by default (absent from older API builds: on). */

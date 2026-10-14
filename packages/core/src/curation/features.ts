@@ -164,6 +164,14 @@ export const HOLDER_SET_FEATURES = [
  */
 export const FRESH_TOP_HOLDER_FEATURES = ["freshTopHolderCount", "freshTopHoldersChecked"] as const;
 
+/**
+ * Added 2026-10-14 (user ask): KOL Bundled %, the share of supply KOLs hold through bundles among
+ * the top holders (core's wallets/kolBundled.ts). Null until the linked reading lands and the KOL
+ * roster loads, and on every row banked before. Recorded only (RETIRED_LEARNER_INPUTS) until it
+ * holds up on later days.
+ */
+export const KOL_BUNDLED_FEATURES = ["kolBundledPct"] as const;
+
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
   "flaggedSellers",
@@ -396,6 +404,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...BUNDLED_FEATURES,
   ...HOLDER_SET_FEATURES,
   ...FRESH_TOP_HOLDER_FEATURES,
+  ...KOL_BUNDLED_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -509,6 +518,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // first, on the same terms.
   ...HOLDER_SET_FEATURES,
   ...FRESH_TOP_HOLDER_FEATURES,
+  // KOL Bundled % (added 2026-10-14): recorded first, on the same terms.
+  ...KOL_BUNDLED_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
@@ -855,6 +866,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   top10WalletsChecked: "top-10 wallets checked",
   freshTopHolderCount: "fresh wallets among the top 25",
   freshTopHoldersChecked: "top holders checked for fresh wallets",
+  kolBundledPct: "supply bundled by KOLs",
   sameTimeFundedPct: "supply funded in the same minute",
   sameTimeClusterCount: "same-minute funding groups",
   sameTimeFundedCount: "top holders funded in the same minute",
@@ -1084,6 +1096,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     top10WalletsChecked: scored.top10WalletsChecked ?? null,
     freshTopHolderCount: scored.freshTopHolderCount ?? null,
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
+    kolBundledPct: scored.kolBundledPct ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,
     sameTimeFundedCount: scored.sameTimeFundedCount ?? null,
