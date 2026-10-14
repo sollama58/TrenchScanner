@@ -64,7 +64,7 @@ import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
-import { applyKolOverrides, runKolWalletsJob } from "./jobs/kolWalletsJob.js";
+import { applyKnownSides, applyKolOverrides, runKolWalletsJob } from "./jobs/kolWalletsJob.js";
 import { trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
@@ -431,7 +431,8 @@ async function main() {
   );
   // The Side Wallet Checker's lists (Utilities tab), rebuilt from the trade tape
   // (kolSideWalletsJob.ts). Immediate on boot. The hand-named KOLs (KOL_OVERRIDES) are written
-  // first, so they are on the roster even without a Solana Tracker key or before its daily read.
+  // first, so they are on the roster even without a Solana Tracker key or before its daily read,
+  // then each KOL's Known Sides are pointed at its main wallet (KOL_MAINS).
   schedule("kol-side-wallets", () =>
     scheduleInterval(
       "kol-side-wallets",
@@ -440,7 +441,12 @@ async function main() {
           await applyKolOverrides().catch((err: unknown) =>
             logger.warn("KOL overrides not written", { error: String(err) }),
           );
-          return runKolSideWalletsJob();
+          const knownSides = await applyKnownSides().catch((err: unknown) => {
+            logger.warn("KOL Known Sides not sorted", { error: String(err) });
+            return null;
+          });
+          const meta = await runKolSideWalletsJob();
+          return knownSides ? { ...meta, knownSides: knownSides.join(",") } : meta;
         }),
       60,
       { deadlineMinutes: 30 },

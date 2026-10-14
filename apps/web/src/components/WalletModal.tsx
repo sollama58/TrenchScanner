@@ -32,6 +32,8 @@ export interface WalletProfile {
     twitter: string | null;
     realizedPnlUsd: number | null;
     winRate: number | null;
+    /** A KOL's Known Side: the KOL's main wallet and its name. Absent from older API builds. */
+    knownSideOf?: { wallet: string; name: string | null } | null;
   } | null;
   live: {
     readAt: string;
@@ -366,7 +368,16 @@ function Profile({ p }: { p: WalletProfile }) {
       {p.trades.length > 0 && <Trades trades={p.trades} />}
       {p.launches.length > 0 && <Coins title="Coins it launched" coins={p.launches} />}
       <Linked p={p} names={names} />
-      {p.kol && <KolSideWallets wallet={p.wallet} kolName={p.kol.name ?? shortAddress(p.wallet)} />}
+      {p.kol && (
+        <KolSideWallets
+          wallet={p.wallet}
+          kolName={
+            p.kol.knownSideOf
+              ? `${p.kol.knownSideOf.name ?? shortAddress(p.kol.knownSideOf.wallet)} Known Side`
+              : (p.kol.name ?? shortAddress(p.wallet))
+          }
+        />
+      )}
     </>
   );
 }
@@ -653,6 +664,23 @@ function Linked({ p, names }: { p: WalletProfile; names: WalletNames }) {
 }
 
 function Kol({ kol }: { kol: NonNullable<WalletProfile["kol"]> }) {
+  const main = kol.knownSideOf;
+  if (main) {
+    // One of a KOL's own wallets, not its main one: says whose, and opens the main wallet.
+    return (
+      <p className="wm-identity" title="Another of this KOL's entries on Solana Tracker's KOL list">
+        <strong>{main.name ?? "KOL"} Known Side</strong>
+        <button
+          type="button"
+          className="link"
+          onClick={() => openWallet(main.wallet)}
+          title="Open the KOL's main wallet"
+        >
+          Main wallet {shortAddress(main.wallet)}
+        </button>
+      </p>
+    );
+  }
   const stats = [
     kol.realizedPnlUsd !== null && `${usd(kol.realizedPnlUsd)} realised`,
     kol.winRate !== null && `${Math.round(kol.winRate)}% win rate`,

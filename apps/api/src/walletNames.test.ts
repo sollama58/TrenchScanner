@@ -19,6 +19,13 @@ describe("pickWalletName", () => {
     });
   });
 
+  it("names a KOL's Known Side as one, ahead of any other name", () => {
+    expect(pickWalletName({ kol: null, kolSide: "Cupsey Known Side", identity, exchange: "OKX" })).toEqual({
+      name: "Cupsey Known Side",
+      source: "kol-side",
+    });
+  });
+
   it("names nobody it knows nothing about", () => {
     expect(
       pickWalletName({ kol: null, identity: { ...identity, name: null }, exchange: undefined }),

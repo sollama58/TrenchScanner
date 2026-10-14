@@ -1,17 +1,19 @@
 import { KNOWN_EXCHANGE_WALLETS, prisma, type HeliusIdentity } from "@trenchscanner/core";
 import type { IdentityUserKey, WalletIdentityReader } from "./walletIdentity.js";
+import { knownSideName, readKolRows } from "./kolRoster.js";
 
 /**
  * The name a holder list shows for a wallet in place of its address (POST /wallets/names): a
  * KOL's name from Solana Tracker's roster (KolWallet), else Helius's identity name, else
- * TrenchScanner's own exchange label. Read for a whole list at once.
+ * TrenchScanner's own exchange label. Read for a whole list at once. A KOL's Known Side (another
+ * roster wallet of a KOL whose main wallet is set, core's KOL_MAINS) is "<KOL> Known Side".
  */
 
 /**
  * "pumpfun": Helius's name is a Pump.fun username, which the dashboard quotes and tints green;
- * "fomo": a FOMO app username, quoted and tinted purple.
+ * "fomo": a FOMO app username, quoted and tinted purple; "kol-side": a KOL's Known Side.
  */
-export type WalletNameSource = "kol" | "identity" | "pumpfun" | "fomo" | "exchange";
+export type WalletNameSource = "kol" | "kol-side" | "identity" | "pumpfun" | "fomo" | "exchange";
 
 export interface WalletName {
   name: string;
@@ -21,9 +23,13 @@ export interface WalletName {
 /** The name a wallet goes by, highest priority first. Exported for tests. */
 export function pickWalletName(input: {
   kol: string | null | undefined;
+  /** "Cupsey Known Side", on a KOL's Known Side. */
+  kolSide?: string | null;
   identity: HeliusIdentity | null | undefined;
   exchange: string | null | undefined;
 }): WalletName | null {
+  const kolSide = input.kolSide?.trim();
+  if (kolSide) return { name: kolSide, source: "kol-side" };
   const kol = input.kol?.trim();
   if (kol) return { name: kol, source: "kol" };
   const identity = input.identity?.name?.trim();
@@ -72,11 +78,12 @@ export async function loadWalletNames(
 ): Promise<WalletNamesRead> {
   const unique = [...new Set(wallets)];
   if (unique.length === 0) return { names: {}, unread: [] };
-  const kols = await prisma.kolWallet.findMany({
-    where: { wallet: { in: unique } },
-    select: { wallet: true, name: true },
-  });
-  const kolName = new Map(kols.flatMap((k) => (k.name?.trim() ? [[k.wallet, k.name] as const] : [])));
+  const kols = await readKolRows(unique);
+  const kolName = new Map(
+    [...kols.values()].flatMap((k) =>
+      k.main ? [[k.wallet, knownSideName(k.main)] as const] : k.name ? [[k.wallet, k.name] as const] : [],
+    ),
+  );
   // Helius is asked only about wallets the KOL roster doesn't name, and only those TrenchScanner
   // has seen.
   const unnamed = unique.filter((w) => !kolName.has(w));
@@ -88,7 +95,8 @@ export async function loadWalletNames(
   const names: Record<string, WalletName> = {};
   for (const w of unique) {
     const name = pickWalletName({
-      kol: kolName.get(w),
+      kol: kols.get(w)?.main ? null : kolName.get(w),
+      kolSide: kols.get(w)?.main ? kolName.get(w) : null,
       identity: identities.get(w),
       exchange: KNOWN_EXCHANGE_WALLETS.get(w),
     });

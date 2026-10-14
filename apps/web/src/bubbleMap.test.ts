@@ -27,6 +27,7 @@ import {
   layoutGraph,
   pickReading,
   withWideMap,
+  sideCounts,
   sideWord,
 } from "./bubbleMap";
 
@@ -503,6 +504,20 @@ describe("sideWord", () => {
     };
     expect(sideWord([n("kol"), n("a")], f)).toBe("funded");
     expect(sideWord([n("kol"), n("a"), n("b")], f)).toBe("sides?");
+  });
+  it("says side or sides, with no question mark, for the KOL's Known Sides", () => {
+    const k = {
+      ...g,
+      wallets: [
+        { wallet: "a", pct: 100, known: true },
+        { wallet: "b", pct: 0, funded: true },
+        { wallet: "c", pct: 90 },
+      ],
+    };
+    expect(sideWord([n("kol"), n("a")], k)).toBe("side");
+    expect(sideWord([n("a"), n("b")], k)).toBe("sides");
+    expect(sideWord([n("a"), n("c")], k)).toBe("sides?");
+    expect(sideCounts([n("kol"), n("a"), n("b"), n("c")], k)).toEqual({ known: 1, funded: 1, possible: 1 });
   });
 });
 

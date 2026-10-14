@@ -559,6 +559,7 @@ function MapView({
 /** How each tie to a KOL reads in its wallet list. */
 const KOL_TIE_TEXT: Record<KolTie, string> = {
   kol: "KOL",
+  known: "Known side",
   funded: "KOL funded",
   side: "Possible side",
   cluster: "Same funder",
@@ -568,11 +569,13 @@ const KOL_TIE_TEXT: Record<KolTie, string> = {
 /** "4 wallets · 1 KOL funded · 2 possible sides": what a KOL's row holds. */
 function kolSummary(k: KolControl): string {
   const count = (t: KolTie) => k.wallets.filter((w) => w.tie === t).length;
+  const known = count("known");
   const funded = count("funded");
   const side = count("side");
   const linked = count("cluster") + count("same-minute");
   return [
     `${k.wallets.length} wallet${k.wallets.length === 1 ? "" : "s"}`,
+    known > 0 ? `${known} known side${known === 1 ? "" : "s"}` : null,
     funded > 0 ? `${funded} KOL funded` : null,
     side > 0 ? `${side} possible side${side === 1 ? "" : "s"}` : null,
     linked > 0 ? `${linked} linked` : null,
@@ -815,6 +818,7 @@ function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }
   // Each kind's own name, written the way its names are (user ask 2026-10-14): KOL, "Pump.fun", "FOMO".
   const items: { cls: string; text: string }[] = [];
   if (kinds.has("kol")) items.push({ cls: "kol", text: "KOL" });
+  if (kinds.has("kol-side")) items.push({ cls: "kol", text: "KOL Known Side" });
   if (kinds.has("pumpfun")) items.push({ cls: "pumpfun", text: '"Pump.fun"' });
   if (kinds.has("fomo")) items.push({ cls: "fomo", text: '"FOMO"' });
   if (kinds.has("identity") || kinds.has("exchange")) items.push({ cls: "", text: "Helius / exchange" });
@@ -1120,8 +1124,9 @@ function Bubble({
   const by = n.y - n.r * 0.72;
   const named = n.wallet ? names[n.wallet] : undefined;
   const pumpfun = isPumpfunName(named);
-  // A KOL's name always gets its gold backing, so it stands out (user ask 2026-10-14).
-  const kol = named?.source === "kol";
+  // A KOL's name always gets its gold backing, so it stands out (user ask 2026-10-14); so does a
+  // Known Side's, one of the KOL's own wallets.
+  const kol = named?.source === "kol" || named?.source === "kol-side";
   const fomo = isFomoName(named);
   const fit = named ? bubbleNameLines(n.r, named.name, isUsername(named)) : null;
   // The % moves up to make room for the name under it.

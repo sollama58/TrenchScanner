@@ -18,6 +18,8 @@ export interface PossibleSide {
   hours?: number;
   /** The KOL funded this wallet (paid for its first SOL): a KOL Funded Wallet, not a "possible" one. */
   funded?: boolean;
+  /** One of the KOL's own wallets (a Known Side: another roster entry of a KOL with a main wallet set). */
+  known?: boolean;
 }
 
 export type PossibleSides = Readonly<Record<string, readonly PossibleSide[]>>;
@@ -76,9 +78,12 @@ export function usePossibleSides(wallets: readonly (string | null | undefined)[]
   }, [key, v]);
 }
 
-/** "Ansem Possible Side (93%)", or "Ansem KOL Funded Wallet" for a wallet the KOL funded. */
-export function possibleSideText(s: Pick<PossibleSide, "kolWallet" | "kolName" | "pct" | "funded">): string {
+/** "Ansem Possible Side (93%)", "Ansem KOL Funded Wallet" for a wallet the KOL funded, "Ansem Known Side" for its own. */
+export function possibleSideText(
+  s: Pick<PossibleSide, "kolWallet" | "kolName" | "pct" | "funded" | "known">,
+): string {
   const who = s.kolName ?? `${s.kolWallet.slice(0, 4)}…${s.kolWallet.slice(-4)}`;
+  if (s.known) return `${who} Known Side`;
   return s.funded ? `${who} KOL Funded Wallet` : `${who} Possible Side (${Math.round(s.pct)}%)`;
 }
 
@@ -89,24 +94,30 @@ export function sideGroups(
 ): {
   kolWallet: string;
   kolName: string | null;
-  wallets: { wallet: string; pct: number; funded: boolean }[];
+  wallets: { wallet: string; pct: number; funded: boolean; known: boolean }[];
 }[] {
   const byKol = new Map<
     string,
-    { kolWallet: string; kolName: string | null; wallets: { wallet: string; pct: number; funded: boolean }[] }
+    {
+      kolWallet: string;
+      kolName: string | null;
+      wallets: { wallet: string; pct: number; funded: boolean; known: boolean }[];
+    }
   >();
   for (const w of holders) {
     for (const s of sides[w] ?? []) {
       let g = byKol.get(s.kolWallet);
       if (!g) byKol.set(s.kolWallet, (g = { kolWallet: s.kolWallet, kolName: s.kolName, wallets: [] }));
-      g.wallets.push({ wallet: w, pct: s.pct, funded: !!s.funded });
+      g.wallets.push({ wallet: w, pct: s.pct, funded: !!s.funded, known: !!s.known });
     }
   }
   return [...byKol.values()]
     .map((g) => ({
       ...g,
-      // Funded wallets first: the confirmed tie.
-      wallets: g.wallets.sort((a, b) => Number(b.funded) - Number(a.funded) || b.pct - a.pct),
+      // Known Sides, then funded wallets first: the confirmed ties.
+      wallets: g.wallets.sort(
+        (a, b) => Number(b.known) - Number(a.known) || Number(b.funded) - Number(a.funded) || b.pct - a.pct,
+      ),
     }))
     .sort((a, b) => b.wallets.length - a.wallets.length || b.wallets[0]!.pct - a.wallets[0]!.pct);
 }

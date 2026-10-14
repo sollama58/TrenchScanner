@@ -10750,7 +10750,8 @@ button.bm-same {
   font-family: var(--font);
   font-weight: 650;
 }
-.wallet-name.src-kol {
+.wallet-name.src-kol,
+.wallet-name.src-kol-side {
   color: color-mix(in srgb, var(--series-3) 70%, var(--ink));
 }
 /* A Pump.fun username, wherever a wallet name shows: in quotes (walletNameText), shaded light green. */

@@ -12,7 +12,8 @@ import { shortAddress } from "./format";
 
 export interface WalletName {
   name: string;
-  source: "kol" | "identity" | "pumpfun" | "fomo" | "exchange";
+  /** "kol-side": a KOL's Known Side, named "<KOL> Known Side". */
+  source: "kol" | "kol-side" | "identity" | "pumpfun" | "fomo" | "exchange";
 }
 
 /** Wallet to name, for the wallets that have one. */
