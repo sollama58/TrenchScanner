@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Card, Outcome } from "./api";
 import {
+  cardOutcome,
   matchOutcome,
   minutesLeftAt,
   outcomeAt,
@@ -155,5 +156,29 @@ describe("matchOutcome", () => {
     expect(matchOutcome(match(40, { hit2xIn1h: true, disqualified: true }), now)?.status).toBe(
       "disqualified",
     );
+  });
+});
+
+describe("cardOutcome", () => {
+  const missed = watching({ status: "missed", peak1hReturnPct: 19, finalized: true, minutesLeft: null });
+  const callWon = watching({
+    status: "won",
+    hit2x: true,
+    hitGoal: false,
+    finalized: true,
+    minutesLeft: null,
+  });
+  const call = { outcome: callWon, alertedAt: at(44) } as NonNullable<Card["curated"]>;
+
+  it("grades a filter alert a call folded into by the filter alert, whose price the card shows", () => {
+    // boi: the call at $11K doubled; the reader's filter alert at $22.4K peaked at 1.2x.
+    const folded = { kind: "match", matchedAt: at(40), outcome: missed, curated: call } as Card;
+    expect(cardOutcome(folded, now)).toBe(missed);
+    expect(outcomeResult(cardOutcome(folded, now))).toBe("fail");
+  });
+
+  it("grades a model call's own card by the call", () => {
+    const curated = { kind: "curated", matchedAt: at(44), curated: call } as Card;
+    expect(cardOutcome(curated, now)).toBe(callWon);
   });
 });

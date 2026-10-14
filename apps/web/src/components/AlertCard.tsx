@@ -14,7 +14,7 @@ import {
 } from "./Icons";
 import { openSage } from "../sage";
 import { linkedCount, linkedCountText, openBubbleMap, type BubbleSeed } from "../bubbleMap";
-import { matchOutcome, outcomeAt, outcomeBadge, outcomeResult } from "../outcome";
+import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { cardCalibratedRate } from "../rates";
@@ -66,7 +66,7 @@ export function AlertCard({
   const move = change(alertMcap, nowMcap);
   const curated = card.curated;
   // Re-derived from the alert time, so a call whose window ran out by the clock stops reading as pending.
-  const outcome = curated ? outcomeAt(curated.outcome, curated.alertedAt, now) : matchOutcome(card, now);
+  const outcome = cardOutcome(card, now);
   const badge = outcomeBadge(outcome);
   const result = outcomeResult(outcome);
   const isModel = curated && !curated.source.startsWith("heuristic");

@@ -91,6 +91,17 @@ export function outcomeAt(outcome: Outcome, alertedAt: string, now: number): Out
 }
 
 /**
+ * The verdict a feed card shows, graded from the same alert as the price it shows. A filter alert
+ * a model call folded into keeps the filter alert's market cap (and re-bases the call's Peak onto
+ * it), so it keeps that alert's own verdict too: boi's call at $11K doubled, and the reader's
+ * filter alert at $22.4K, which peaked at 1.2x, read "2x win" under the call's verdict.
+ */
+export function cardOutcome(card: Card, now: number): Outcome | null {
+  if (card.kind === "match") return matchOutcome(card, now);
+  return card.curated ? outcomeAt(card.curated.outcome, card.curated.alertedAt, now) : null;
+}
+
+/**
  * A filter match's verdict. The API grades it from its open grading row (`card.outcome`), ticked
  * here like a model call's; a card from an older API build carries only the columns the outcome
  * job writes onto the Match row when the window closes, and before they're written a match inside

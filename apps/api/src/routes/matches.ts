@@ -590,7 +590,9 @@ export async function registerMatchRoutes(
         return { ...card, id: lead.id, matchedAt: lead.createdAt, curated: { alertId: lead.id, card } };
       },
     );
-    // A model call on a token the reader's filter also caught is one card showing the call.
+    // A model call on a token the reader's filter also caught is one card. It keeps the filter
+    // alert's price, so it keeps that alert's verdict too, as the feed card grades it: a call at
+    // $11K that doubled must not count a filter alert at $22.4K that peaked at 1.2x as a win.
     const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
       (c): FeedStatsCard =>
         c.kind === "match" && c.curated
@@ -598,6 +600,7 @@ export async function registerMatchRoutes(
               ...c.curated.card,
               kind: "match",
               tokenId: c.tokenId,
+              outcome: c.outcome,
               // The better of the two alerts' runs, as the card shows it.
               peakPct: maxPct(c.peakPct, c.curated.card.peakPct),
             }

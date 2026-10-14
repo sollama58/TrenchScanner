@@ -14,7 +14,7 @@ import {
 import { ApiError, lookupRequired, type Card, type Snapshot } from "../api";
 import { usePolling } from "../hooks";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
-import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
+import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -209,7 +209,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const mint = card.token.mintAddress;
   const s = card.snapshot;
   const curated = card.curated;
-  const outcome = curated ? outcomeAt(curated.outcome, curated.alertedAt, now) : matchOutcome(card, now);
+  const outcome = cardOutcome(card, now);
   const badge = outcomeBadge(outcome);
   const showVerdict = outcome !== null && !(outcome.status === "watching" && !outcome.hit2x);
   const alertAt = Date.parse(curated?.alertedAt ?? card.matchedAt);
