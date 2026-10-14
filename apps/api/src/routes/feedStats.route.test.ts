@@ -103,7 +103,8 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
       disqualified: false,
       peakReturnPct: 900,
     });
-    // A model call on token B is the same card as the filter alert, graded as the call (a 2x win).
+    // A model call on token B is the same card as the filter alert. The card shows the filter
+    // alert's price, so it keeps the filter alert's verdict (a miss), not the call's 2x win.
     await prisma.curatedAlert.create({
       data: {
         source: "test",
@@ -146,8 +147,9 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
       fromModels: 0,
       graded: 2,
       pending: 1,
-      hit2x: 2,
-      hit2xPct: 100,
+      // Token B's filter alert missed: the call's 2x from its own price is not this card's verdict.
+      hit2x: 1,
+      hit2xPct: 50,
       hit4x: 1,
       // Token B's model call, folded into its filter twin, carries the banked 12x high.
       best: { symbol: "BBB", peakPct: 1100 },
@@ -157,7 +159,7 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
   it("leaves model calls out when the reader's switch is off", async () => {
     await call("PUT", "/curated/feed", { showModelAlerts: false });
     const body = (await call("GET", "/matches/stats")).json() as { hit2x: number; showModelAlerts: boolean };
-    // Token B is now just the filter alert: a miss.
+    // Token B is just the filter alert: the same miss as when the call folded into it.
     expect(body).toMatchObject({ hit2x: 1, showModelAlerts: false });
   });
 
