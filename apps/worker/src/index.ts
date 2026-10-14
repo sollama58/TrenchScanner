@@ -55,6 +55,7 @@ import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
+import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
 import { runKolWalletsJob } from "./jobs/kolWalletsJob.js";
 import { trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
@@ -382,6 +383,16 @@ async function main() {
     scheduleInterval("wallet-risk", () => withJobLock("wallet-risk", () => runWalletRiskJob()), 60, {
       deadlineMinutes: 30,
     }),
+  );
+  // The Side Wallet Checker's lists (Utilities tab), rebuilt from the trade tape
+  // (kolSideWalletsJob.ts). Immediate on boot.
+  schedule("kol-side-wallets", () =>
+    scheduleInterval(
+      "kol-side-wallets",
+      () => withJobLock("kol-side-wallets", () => runKolSideWalletsJob()),
+      60,
+      { deadlineMinutes: 30 },
+    ),
   );
   // Solana Tracker's KOL roster, daily (kolWalletsJob.ts); immediate on a boot that missed a day.
   // Only with SOLANA_TRACKER_API_KEY: without it the dashboard shows no KOL labels.

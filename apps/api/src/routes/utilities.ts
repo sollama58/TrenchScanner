@@ -35,6 +35,8 @@ import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
  * - GET  /utilities/token/:mint the token view of a paid lookup, plus its chart and TokenSage read
  * - POST /utilities/wallet      look up any wallet: 1 credit, taken once its profile loads; the
  *                               dashboard then opens it in the wallet modal (GET /wallets/:wallet)
+ * - GET  /utilities/side-wallets         the Side Wallet Checker's KOL leaderboard (free)
+ * - GET  /utilities/side-wallets/:wallet one KOL's top side wallets per window (free)
  *
  * A lookup stays open for LOOKUP_REOPEN_MS after it is paid for: the view's own reads, and
  * looking the same thing up again, are free inside it and refused (402) outside it.
@@ -274,6 +276,81 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     };
   });
 
+  /**
+   * The Side Wallet Checker, free: the KOLs on the roster ranked by tracked coins bought in the
+   * last 30 days, from the worker's hourly rebuild (KolSideWallets, kolSideWalletsJob.ts). A read
+   * of what is stored: no outside calls.
+   */
+  app.get("/side-wallets", async (_request, reply) => {
+    const rows = await prisma.kolSideWallets.findMany({
+      where: { coins30d: { gt: 0 } },
+      orderBy: [{ coins30d: "desc" }, { coins7d: "desc" }, { wallet: "asc" }],
+      take: SIDE_LEADERBOARD_MAX,
+      select: { wallet: true, coins24h: true, coins7d: true, coins30d: true, sides: true, computedAt: true },
+    });
+    const names = await kolNames(rows.map((r) => r.wallet));
+    reply.header("Cache-Control", "private, max-age=300");
+    return {
+      computedAt: rows[0]?.computedAt ?? null,
+      gapMinutes: SIDE_GAP_MINUTES,
+      minShared: SIDE_MIN_SHARED,
+      kols: rows.map((r) => {
+        const sides = r.sides as Partial<Record<SideWindow, unknown[]>>;
+        return {
+          wallet: r.wallet,
+          name: names.get(r.wallet)?.name ?? null,
+          twitter: names.get(r.wallet)?.twitter ?? null,
+          coins: { "24h": r.coins24h, "7d": r.coins7d, "30d": r.coins30d },
+          sides: {
+            "24h": sides["24h"]?.length ?? 0,
+            "7d": sides["7d"]?.length ?? 0,
+            "30d": sides["30d"]?.length ?? 0,
+          },
+        };
+      }),
+    };
+  });
+
+  /** One KOL's top side wallets in each window, with the risk labels each carries. */
+  app.get("/side-wallets/:wallet", async (request, reply) => {
+    const kol = (request.params as { wallet?: string }).wallet ?? "";
+    if (!ADDRESS_RE.test(kol)) return reply.code(400).send({ error: "not a valid address" });
+    const row = await prisma.kolSideWallets.findUnique({ where: { wallet: kol } });
+    if (!row) return reply.code(404).send({ error: "That wallet isn't on the KOL leaderboard." });
+    const stored = row.sides as Partial<Record<SideWindow, StoredSideWallet[]>>;
+    const sides = Object.fromEntries(SIDE_WINDOWS.map((w) => [w, stored[w] ?? []])) as Record<
+      SideWindow,
+      StoredSideWallet[]
+    >;
+    const wallets = [...new Set(SIDE_WINDOWS.flatMap((w) => sides[w].map((s) => s.wallet)))];
+    const [risk, names] = await Promise.all([
+      wallets.length
+        ? prisma.walletRisk.findMany({
+            where: { wallet: { in: wallets } },
+            select: { wallet: true, score: true, dumper: true, winner: true, sniper: true },
+          })
+        : [],
+      kolNames([kol]),
+    ]);
+    const riskBy = new Map(risk.map((r) => [r.wallet, r]));
+    const withRisk = (s: StoredSideWallet) => {
+      const r = riskBy.get(s.wallet);
+      return {
+        ...s,
+        risk: r ? { score: Math.round(r.score), dumper: r.dumper, winner: r.winner, sniper: r.sniper } : null,
+      };
+    };
+    reply.header("Cache-Control", "private, max-age=300");
+    return {
+      wallet: kol,
+      name: names.get(kol)?.name ?? null,
+      twitter: names.get(kol)?.twitter ?? null,
+      computedAt: row.computedAt,
+      coins: { "24h": row.coins24h, "7d": row.coins7d, "30d": row.coins30d },
+      sides: Object.fromEntries(SIDE_WINDOWS.map((w) => [w, sides[w].map(withRisk)])),
+    };
+  });
+
   /** A paid lookup's token view: the card the modal draws, and whether the fresh scan has landed. */
   app.get("/token/:mint", async (request, reply) => {
     const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
@@ -297,6 +374,35 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
     return readTokenSage(lookup.subject);
   });
+}
+
+/** The Side Wallet Checker's windows and rules, as the worker's kolSideWalletsJob.ts builds them. */
+const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
+type SideWindow = (typeof SIDE_WINDOWS)[number];
+const SIDE_GAP_MINUTES = 5;
+const SIDE_MIN_SHARED = 2;
+const SIDE_LEADERBOARD_MAX = 200;
+
+/** One side wallet as the worker stores it (SideWallet in kolSideWalletsJob.ts). */
+interface StoredSideWallet {
+  wallet: string;
+  shared: number;
+  pct: number;
+  coins: number;
+  gapSec: number;
+}
+
+async function kolNames(
+  wallets: string[],
+): Promise<Map<string, { name: string | null; twitter: string | null }>> {
+  if (wallets.length === 0) return new Map();
+  const rows = await prisma.kolWallet.findMany({
+    where: { wallet: { in: wallets } },
+    select: { wallet: true, name: true, twitter: true },
+  });
+  return new Map(
+    rows.map((r) => [r.wallet, { name: r.name?.trim() || null, twitter: r.twitter?.trim() || null }]),
+  );
 }
 
 function notEnough(

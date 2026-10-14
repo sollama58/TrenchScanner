@@ -21,6 +21,7 @@ import { openWallet } from "../walletModal";
 import { Skeleton } from "../components/Charts";
 import { TokenModal } from "../components/TokenModal";
 import { ChartIcon, FlameIcon, SearchIcon, ToolsIcon } from "../components/Icons";
+import { SideWalletChecker } from "./SideWalletChecker";
 
 /** Mirrors apps/api/src/routes/utilities.ts GET /utilities. */
 export interface UtilitiesOverview {
@@ -99,7 +100,8 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
         <h1>Look up any coin or wallet</h1>
         <p className="muted">
           Each lookup costs Burn Credits, which you get by burning {SYMBOL} from this wallet. A credit is only
-          taken once the lookup works, and you can re-open it free for an hour.
+          taken once the lookup works, and you can re-open it free for an hour. The Side Wallet Checker is
+          free.
         </p>
       </header>
 
@@ -109,6 +111,8 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
         <LookupCard utility="token" data={data} onOpened={(mint) => (setOpenMint(mint), reload())} />
         <LookupCard utility="wallet" data={data} onOpened={(wallet) => (openWallet(wallet), reload())} />
       </div>
+
+      <SideWalletChecker />
 
       <RecentLookups
         data={data}

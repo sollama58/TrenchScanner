@@ -2142,3 +2142,21 @@ model KolWallet {
 
   @@index([seenAt])
 }
+
+/// The Side Wallet Checker (Utilities tab): each KOL on the roster (KolWallet) with the tracked
+/// coins it bought in the last 24 hours, 7 days and 30 days (coins whose trade tape was read,
+/// TokenWalletActivity), and the wallets that bought the most of the same coins within a few
+/// minutes of it. Rebuilt whole every hour by the worker's kolSideWalletsJob.ts; the dashboard
+/// only reads it, so a page view costs no outside calls.
+model KolSideWallets {
+  wallet     String   @id
+  coins24h   Int
+  coins7d    Int
+  coins30d   Int
+  /// The top side wallets per window, best first: { "24h": SideWallet[], "7d": ..., "30d": ... }
+  /// (SideWallet in the worker's kolSideWalletsJob.ts).
+  sides      Json
+  computedAt DateTime
+
+  @@index([coins30d])
+}

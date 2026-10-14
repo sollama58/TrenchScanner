@@ -326,4 +326,74 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
     const overview = await app.inject({ method: "GET", url: "/utilities", cookies: me.cookies });
     expect(overview.json().lookups[0]).toMatchObject({ utility: "wallet", subject: target, open: true });
   });
+  it("serves the Side Wallet Checker free, with each side wallet's labels", async () => {
+    const me = await signIn();
+    const kol = random(32);
+    const side = random(32);
+    wallets.push(kol, side);
+    await prisma.kolWallet.create({
+      data: { wallet: kol, name: "Route KOL", twitter: "routekol", seenAt: new Date() },
+    });
+    const entry = { wallet: side, shared: 3, pct: 75, coins: 5, gapSec: 12 };
+    await prisma.kolSideWallets.create({
+      data: {
+        wallet: kol,
+        coins24h: 1,
+        coins7d: 2,
+        coins30d: 4,
+        sides: { "24h": [], "7d": [], "30d": [entry] },
+        computedAt: new Date(),
+      },
+    });
+    await prisma.walletRisk.create({
+      data: {
+        wallet: side,
+        score: 61.4,
+        appearances: 5,
+        dumps: 3,
+        fastExits: 0,
+        snipes: 0,
+        dumper: true,
+        solIn: 1,
+        solOut: 1,
+        lastSeenAt: new Date(),
+        computedAt: new Date(),
+      },
+    });
+    try {
+      const board = await app.inject({ method: "GET", url: "/utilities/side-wallets", cookies: me.cookies });
+      expect(board.statusCode).toBe(200);
+      expect(board.json().kols.find((k: { wallet: string }) => k.wallet === kol)).toEqual({
+        wallet: kol,
+        name: "Route KOL",
+        twitter: "routekol",
+        coins: { "24h": 1, "7d": 2, "30d": 4 },
+        sides: { "24h": 0, "7d": 0, "30d": 1 },
+      });
+
+      const one = await app.inject({
+        method: "GET",
+        url: `/utilities/side-wallets/${kol}`,
+        cookies: me.cookies,
+      });
+      expect(one.statusCode).toBe(200);
+      expect(one.json().sides["30d"]).toEqual([
+        { ...entry, risk: { score: 61, dumper: true, winner: false, sniper: false } },
+      ]);
+      // Free: no credit is taken.
+      const overview = await app.inject({ method: "GET", url: "/utilities", cookies: me.cookies });
+      expect(overview.json()).toMatchObject({ balance: 0, lookups: [] });
+
+      const missing = await app.inject({
+        method: "GET",
+        url: `/utilities/side-wallets/${random(32)}`,
+        cookies: me.cookies,
+      });
+      expect(missing.statusCode).toBe(404);
+    } finally {
+      await prisma.kolSideWallets.deleteMany({ where: { wallet: kol } });
+      await prisma.kolWallet.deleteMany({ where: { wallet: kol } });
+      await prisma.walletRisk.deleteMany({ where: { wallet: side } });
+    }
+  });
 });
