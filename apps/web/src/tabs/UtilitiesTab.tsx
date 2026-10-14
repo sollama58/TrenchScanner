@@ -15,7 +15,8 @@ import {
   type PendingBurn,
 } from "../burn";
 import { usePolling } from "../hooks";
-import { ago, shortAddress, tokenLabel, tokenThumb } from "../format";
+import { ago, shortAddress, tokenLabel } from "../format";
+import { TokenImage } from "../components/TokenImage";
 import { onWalletsChanged } from "../wallet";
 import { openWallet } from "../walletModal";
 import { Skeleton } from "../components/Charts";
@@ -606,23 +607,18 @@ function RecentLookups({
         {lookups.map((l, i) => {
           const subject = l.subject ?? "";
           const label = l.token ? tokenLabel(l.token) : shortAddress(subject);
-          const img = l.token?.imageUrl?.startsWith("https://") ? tokenThumb(l.token.imageUrl, 64) : null;
           return (
             <li key={`${subject}-${l.at}-${i}`}>
-              {img ? (
-                <img
-                  className="avatar util-avatar"
-                  src={img}
-                  alt=""
-                  width={28}
-                  height={28}
-                  loading="lazy"
-                  decoding="async"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <span className="avatar placeholder util-avatar">{label.replace("$", "").slice(0, 2)}</span>
-              )}
+              <TokenImage
+                url={l.token?.imageUrl}
+                size={64}
+                className="avatar util-avatar"
+                width={28}
+                height={28}
+                fallback={
+                  <span className="avatar placeholder util-avatar">{label.replace("$", "").slice(0, 2)}</span>
+                }
+              />
               <span className="util-what">
                 <strong>{label}</strong>
                 <span className="faint small num">

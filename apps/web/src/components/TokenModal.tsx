@@ -13,7 +13,8 @@ import {
 } from "react";
 import { ApiError, lookupRequired, type Card, type Snapshot } from "../api";
 import { usePolling } from "../hooks";
-import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
+import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
+import { TokenImage } from "./TokenImage";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
@@ -221,8 +222,6 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const { pct: recordedPeak } = recordedPeakOf(card);
   const peak = move !== null && move > 0 ? Math.max(recordedPeak ?? 0, move) : recordedPeak;
   const hasPeak = peak !== null && peak > 0;
-  const img = card.token.imageUrl?.startsWith("https://") ? tokenThumb(card.token.imageUrl, 160) : null;
-  const [imgFailed, setImgFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const { quickLinks } = useAppearance();
   const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
@@ -249,19 +248,17 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
       <header className="tm-head">
         <div className="tm-token">
           <div className={`avatar-wrap tone-${badge.tone}`}>
-            {img && !imgFailed ? (
-              <img
-                className="avatar tm-avatar"
-                src={img}
-                alt=""
-                width={56}
-                height={56}
-                referrerPolicy="no-referrer"
-                onError={() => setImgFailed(true)}
-              />
-            ) : (
-              <span className="avatar placeholder tm-avatar">{label.replace("$", "").slice(0, 2)}</span>
-            )}
+            <TokenImage
+              url={card.token.imageUrl}
+              size={160}
+              className="avatar tm-avatar"
+              width={56}
+              height={56}
+              eager
+              fallback={
+                <span className="avatar placeholder tm-avatar">{label.replace("$", "").slice(0, 2)}</span>
+              }
+            />
           </div>
           <div className="tm-title-block">
             <h2 id="tm-title" className="tm-title" tabIndex={-1} autoFocus>

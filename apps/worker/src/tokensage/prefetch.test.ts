@@ -325,6 +325,59 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     await prisma.token.deleteMany({ where: { mintAddress: { in: [outside, inBand] } } });
   });
 
+  it("gives an imageless Token row the logo TokenSage resolved, and never replaces one", async () => {
+    const { client, batch } = fakeClient();
+    const bare = `${TAG}-img-bare`;
+    const named = `${TAG}-img-named`;
+    const has = `${TAG}-img-has`;
+    await prisma.token.deleteMany({ where: { mintAddress: { in: [bare, named, has] } } });
+    await prisma.token.create({ data: { mintAddress: bare } });
+    await prisma.token.create({ data: { mintAddress: named } });
+    await prisma.token.create({ data: { mintAddress: has, imageUrl: "https://ipfs.io/ipfs/mine" } });
+    const logo = (mint: string, image: unknown, raw: unknown) => ({ ...analysis(mint, "basic"), image, raw });
+    batch.mockResolvedValueOnce(
+      ok([
+        {
+          ca: bare,
+          status: "complete",
+          analysis: logo(
+            bare,
+            { status: "ok", source_url: "https://cdn.example/ok.png" },
+            { image_url: "https://x/raw.png" },
+          ),
+        },
+        // The fetch failed on TokenSage's side: the URL the metadata names is still the best we have.
+        {
+          ca: named,
+          status: "complete",
+          analysis: logo(
+            named,
+            { status: "failed", source_url: "https://cdn.example/f.png" },
+            { image_url: "https://cdn.example/f.png" },
+          ),
+        },
+        {
+          ca: has,
+          status: "complete",
+          analysis: logo(has, { status: "ok", source_url: "https://cdn.example/other.png" }, null),
+        },
+      ]),
+    );
+    for (const m of [bare, named, has]) noteNarrativeWanted(m, "basic", env);
+    await flushNarrativeRequests(env, client);
+    const rows = await prisma.token.findMany({
+      where: { mintAddress: { in: [bare, named, has] } },
+      orderBy: { mintAddress: "asc" },
+      select: { mintAddress: true, imageUrl: true },
+    });
+    expect(rows).toEqual([
+      { mintAddress: bare, imageUrl: "https://cdn.example/ok.png" },
+      { mintAddress: has, imageUrl: "https://ipfs.io/ipfs/mine" },
+      { mintAddress: named, imageUrl: "https://cdn.example/f.png" },
+    ]);
+    await prisma.token.deleteMany({ where: { mintAddress: { in: [bare, named, has] } } });
+  });
+
   it("stores a real TokenSage answer under the CA we asked about, and survives odd items", async () => {
     const { client, batch } = fakeClient();
     const real = JSON.parse(

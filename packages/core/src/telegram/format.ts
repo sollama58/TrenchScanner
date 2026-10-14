@@ -116,6 +116,8 @@ export const ALL_PARTS: AlertParts = alertParts();
 export interface AlertMessage {
   html: string;
   imageUrl: string | null;
+  /** Where else the same picture can be read when imageUrl fails, in order (alertImageFallbacks). */
+  imageFallbacks?: string[];
 }
 
 /** The longest side of the picture sent with an alert, in px. Telegram shows it at about this size. */
@@ -130,14 +132,38 @@ export const ALERT_IMAGE_PX = 640;
 export function alertImage(token: Pick<AlertToken, "imageUrl">): string | null {
   const url = token.imageUrl?.trim() ?? "";
   if (!/^https:\/\/\S+$/.test(url)) return null;
-  const cid =
-    /^https:\/\/[^/]+\/ipfs\/([A-Za-z0-9]{46,})\/?(?:[?#].*)?$/.exec(url)?.[1] ??
-    /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?(?:[?#].*)?$/.exec(url)?.[1];
+  const cid = ipfsCid(url);
   // Also re-encoded as JPEG there: Telegram takes JPEG and PNG as a photo but balks at the GIFs,
   // WebPs and SVGs launchers upload, and a JPEG is the smallest of the lot.
   return cid
     ? `https://pump.mypinata.cloud/ipfs/${cid}?img-width=${ALERT_IMAGE_PX}&img-height=${ALERT_IMAGE_PX}&img-fit=scale-down&img-format=jpeg`
     : url;
+}
+
+function ipfsCid(url: string): string | undefined {
+  return (
+    /^https:\/\/[^/]+\/ipfs\/([A-Za-z0-9]{46,})\/?(?:[?#].*)?$/.exec(url)?.[1] ??
+    /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?(?:[?#].*)?$/.exec(url)?.[1]
+  );
+}
+
+/**
+ * Where else to read the alert's picture when alertImage's URL fails (Pinata down, or the pin not
+ * there yet): the launcher's own URL, then for an IPFS file a second public gateway. Full-size
+ * originals, so the sender keeps only the ones Telegram takes as a photo. Empty when alertImage
+ * already is the original.
+ */
+export function alertImageFallbacks(token: Pick<AlertToken, "imageUrl">): string[] {
+  const primary = alertImage(token);
+  if (!primary) return [];
+  const url = token.imageUrl!.trim();
+  const out = [url];
+  const cid = ipfsCid(url);
+  if (cid)
+    out.push(
+      new URL(url).hostname === "ipfs.io" ? `https://dweb.link/ipfs/${cid}` : `https://ipfs.io/ipfs/${cid}`,
+    );
+  return [...new Set(out)].filter((u) => u !== primary);
 }
 
 /**
@@ -421,6 +447,7 @@ export function alertMessage(
   return {
     html: formatAlert(card, links, now, parts, style),
     imageUrl: parts.image ? alertImage(card.token) : null,
+    imageFallbacks: parts.image ? alertImageFallbacks(card.token) : [],
   };
 }
 
@@ -479,7 +506,11 @@ export function digestMessage(
   style: AlertStyle = DEFAULT_STYLE,
 ): AlertMessage {
   const top = parts.image ? sortCards(cards).find((c) => alertImage(c.token) !== null) : undefined;
-  return { html: formatDigest(cards, links, parts, style), imageUrl: top ? alertImage(top.token) : null };
+  return {
+    html: formatDigest(cards, links, parts, style),
+    imageUrl: top ? alertImage(top.token) : null,
+    imageFallbacks: top ? alertImageFallbacks(top.token) : [],
+  };
 }
 
 /** The sample alert the Filters tab sends, pictured with the app's own icon. */

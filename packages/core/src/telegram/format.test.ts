@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ageText,
   alertImage,
+  alertImageFallbacks,
   alertMessage,
   alertParts,
   CAPTION_MAX_CHARS,
@@ -147,6 +148,17 @@ describe("telegram alert text", () => {
     expect(alertImage({ imageUrl: `https://ipfs.io/ipfs/${cid}` })).toBe(resized);
     expect(alertImage({ imageUrl: `https://${cid}.ipfs.nftstorage.link/` })).toBe(resized);
     expect(alertImage({ imageUrl: `https://cf-ipfs.com/ipfs/${cid}?x=1` })).toBe(resized);
+    // Then the original, then a second gateway; nothing else for a plain https image.
+    expect(alertImageFallbacks({ imageUrl: `https://ipfs.io/ipfs/${cid}` })).toEqual([
+      `https://ipfs.io/ipfs/${cid}`,
+      `https://dweb.link/ipfs/${cid}`,
+    ]);
+    expect(alertImageFallbacks({ imageUrl: `https://cf-ipfs.com/ipfs/${cid}` })).toEqual([
+      `https://cf-ipfs.com/ipfs/${cid}`,
+      `https://ipfs.io/ipfs/${cid}`,
+    ]);
+    expect(alertImageFallbacks({ imageUrl: "https://cdn.example/doge.png" })).toEqual([]);
+    expect(alertImageFallbacks({ imageUrl: null })).toEqual([]);
     expect(alertImage({ imageUrl: "  " })).toBeNull();
     expect(alertImage({ imageUrl: null })).toBeNull();
     const noArt = card({ token: { ...token, imageUrl: null } });

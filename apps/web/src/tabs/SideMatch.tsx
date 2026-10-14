@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { shortAddress, tokenThumb } from "../format";
+import { shortAddress } from "../format";
+import { TokenImage } from "../components/TokenImage";
 import { openWallet } from "../walletModal";
 import { Skeleton } from "../components/Charts";
 import { ExternalIcon, LinkIcon } from "../components/Icons";
@@ -277,11 +278,13 @@ export function SideMatch({
           return (
             <div key={t.mint} className="sm-row" role="row">
               <span className="sm-coin" role="cell">
-                {t.imageUrl ? (
-                  <img src={tokenThumb(t.imageUrl, 48)} alt="" width={24} height={24} loading="lazy" />
-                ) : (
-                  <span className="sm-coin-dot" aria-hidden="true" />
-                )}
+                <TokenImage
+                  url={t.imageUrl}
+                  size={48}
+                  width={24}
+                  height={24}
+                  fallback={<span className="sm-coin-dot" aria-hidden="true" />}
+                />
                 <span className="sm-coin-text">
                   <a
                     href={`https://dexscreener.com/solana/${t.mint}`}

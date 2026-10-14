@@ -64,6 +64,31 @@ describe("sendAlert", () => {
     expect(photos.fileIds.get("https://cdn.example/a.png")).toBe("fresh");
   });
 
+  it("reads the picture from a fallback when the main URL fails, keeping only a photo type", async () => {
+    const seen: string[] = [];
+    const api = new FakeTelegramApi(async (url) => {
+      const u = String(url);
+      seen.push(u);
+      if (u.startsWith("https://pinata.example/")) return image(503, "text/plain");
+      if (u === "https://orig.example/a.gif") return image(200, "image/gif");
+      return image();
+    });
+    const result = await api.sendAlert(7, {
+      html: "x",
+      imageUrl: "https://pinata.example/a.jpg",
+      imageFallbacks: ["https://orig.example/a.gif", "https://gw.example/a.png"],
+    });
+    expect(result.ok).toBe(true);
+    expect(seen).toEqual([
+      "https://pinata.example/a.jpg",
+      "https://orig.example/a.gif",
+      "https://gw.example/a.png",
+    ]);
+    expect(api.sent()).toEqual([{ chatId: "7", text: "x", photo: "upload" }]);
+    const call = api.calls.find((c) => c.method === "sendPhoto")!;
+    expect((call.params.photo as Blob).type).toBe("image/png");
+  });
+
   it("hands Telegram the URL when the fetch fails, then falls back to text on a 400", async () => {
     for (const bad of [
       () => Promise.reject(new Error("ECONNRESET")),
