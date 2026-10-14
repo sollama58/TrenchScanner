@@ -13,6 +13,7 @@ import {
   oldestOpenTransaction,
   PICKS_FALLBACK_TEXT,
   runTelegramDispatch,
+  sendKey,
   TELEGRAM_DISPATCH_LOCK,
 } from "./dispatch.js";
 import { FakeTelegramApi } from "./fakeApi.js";
@@ -178,7 +179,16 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
   it("does nothing without a token", async () => {
     const api = new FakeTelegramApi();
     const summary = await runTelegramDispatch({ ...env, TELEGRAM_BOT_TOKEN: "" }, { api });
-    expect(summary).toEqual({ chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0, accessErrors: 0 });
+    expect(summary).toEqual({
+      chats: 0,
+      sent: 0,
+      digests: 0,
+      failed: 0,
+      skipped: 0,
+      accessErrors: 0,
+      unconfirmed: 0,
+      duplicates: 0,
+    });
     expect(api.calls).toHaveLength(0);
   });
 
@@ -705,18 +715,93 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(row?.imageUrl).toBe("https://cdn.example/bare.png");
   });
 
+  it("never resends an alert whose send timed out: Telegram may have delivered it", async () => {
+    const api = new FakeTelegramApi();
+    await rewind();
+    const at = new Date(Date.now() - 15_000);
+    await prisma.match.create({ data: { userId, filterId, tokenId, snapshotId, matchedAt: at, score: 71 } });
+    const timedOut = { ok: false as const, code: 0, description: "timed out" };
+    api.answers.set("sendPhoto", timedOut);
+    api.answers.set("sendMessage", timedOut);
+    expect(await run(api)).toMatchObject({ failed: 1, unconfirmed: 1 });
+    const tries = api.sent().length;
+    expect(tries).toBeGreaterThan(0);
+    // Telegram answers again. The next passes step over the alert instead of sending it again.
+    api.answers.delete("sendPhoto");
+    api.answers.delete("sendMessage");
+    for (let i = 0; i < 3; i++) expect((await run(api)).sent).toBe(0);
+    expect(api.sent()).toHaveLength(tries);
+    const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+    expect(row?.sentThrough.getTime()).toBeGreaterThanOrEqual(at.getTime());
+    // A Telegram 5xx may also come after it took the message: the same.
+    await rewind();
+    await prisma.telegramAlertSent.deleteMany({ where: { chatId: chatRowId } });
+    const at2 = new Date(Date.now() - 10_000);
+    await prisma.match.create({ data: { userId, filterId, tokenId, snapshotId, matchedAt: at2, score: 72 } });
+    const badGateway = { ok: false as const, code: 502, description: "Bad Gateway" };
+    api.answers.set("sendPhoto", badGateway);
+    api.answers.set("sendMessage", badGateway);
+    expect(await run(api)).toMatchObject({ unconfirmed: 1 });
+    api.answers.delete("sendPhoto");
+    api.answers.delete("sendMessage");
+    const before = api.sent().length;
+    expect((await run(api)).sent).toBe(0);
+    expect(api.sent()).toHaveLength(before);
+  });
+
+  it("sends an alert once even when two passes run it (a claim already taken is skipped)", async () => {
+    const api = new FakeTelegramApi();
+    await rewind();
+    // A coin of its own, so nothing the other tests left in the window rides on the card.
+    const dup = await prisma.token.create({
+      data: { mintAddress: `${TAG}-dup`, symbol: "DUP", name: "Dup" },
+    });
+    const dupSnapshot = await prisma.tokenSnapshot.create({
+      data: { tokenId: dup.id, priceUsd: 0.001, marketCapUsd: 50_000, score: 60 },
+    });
+    const at = new Date(Date.now() - 15_000);
+    const match = await prisma.match.create({
+      data: { userId, filterId, tokenId: dup.id, snapshotId: dupSnapshot.id, matchedAt: at, score: 71 },
+    });
+    // Another process already claimed this exact alert. Its row is dated outside the re-alert
+    // window, so only the claim's key (not the pass's read of what was sent) can stop the repeat.
+    await prisma.telegramAlertSent.create({
+      data: {
+        chatId: chatRowId,
+        tokenId: dup.id,
+        matchId: match.id,
+        sentAt: new Date(Date.now() - REALERT_AFTER_MS - 60_000),
+        dedupeKey: sendKey(chatRowId, { tokenId: dup.id, curatedAlertId: null, matchId: match.id }, at),
+      },
+    });
+    const summary = await run(api);
+    expect(summary.duplicates).toBe(1);
+    expect(api.sent().filter((m) => m.text.includes("$DUP"))).toHaveLength(0);
+    const row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
+    expect(row?.sentThrough.getTime()).toBeGreaterThanOrEqual(at.getTime());
+  });
+
   it("unlinks a chat that blocked the bot, and keeps the cursor on a transient failure", async () => {
     const api = new FakeTelegramApi();
     await rewind();
     const at = new Date(Date.now() - 15_000);
     await prisma.match.create({ data: { userId, filterId, tokenId, snapshotId, matchedAt: at, score: 71 } });
     // Whichever way the message goes out (photo, or text when the digest outgrows a caption).
-    api.answers.set("sendPhoto", { ok: false, code: 0, description: "timed out" });
-    api.answers.set("sendMessage", { ok: false, code: 0, description: "timed out" });
+    // Telegram couldn't be reached at all, so nothing was delivered and the alert is retried.
+    const unreachable = {
+      ok: false as const,
+      code: 0,
+      description: "fetch failed",
+      undelivered: true as const,
+    };
+    api.answers.set("sendPhoto", unreachable);
+    api.answers.set("sendMessage", unreachable);
     expect((await run(api)).failed).toBe(1);
     let row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.sentThrough.getTime()).toBeLessThan(at.getTime());
-    expect(row?.lastError).toContain("timed out");
+    expect(row?.lastError).toContain("fetch failed");
+    // Its claim was given back, so a later pass can still send it.
+    expect(await prisma.telegramAlertSent.count({ where: { chatId: chatRowId } })).toBe(0);
     // Nothing got through in that pass, so it may be Telegram's fault, not the chat's: not counted.
     expect(row?.failures).toBe(0);
     expect(row?.revokedAt).toBeNull();
@@ -727,9 +812,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       data: { chatId: otherChatId, kind: "private", userId, sentThrough: new Date(Date.now() - 60_000) },
     });
     const failOnlyMine = (params: Record<string, unknown>) =>
-      params.chat_id === String(chatId)
-        ? { ok: false as const, code: 0, description: "timed out" }
-        : { ok: true as const, result: {} };
+      params.chat_id === String(chatId) ? unreachable : { ok: true as const, result: {} };
     api.answers.set("sendPhoto", failOnlyMine);
     api.answers.set("sendMessage", failOnlyMine);
     await run(api);
@@ -792,7 +875,16 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     const summary = await run(api);
     release();
     await holder;
-    expect(summary).toEqual({ chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0, accessErrors: 0 });
+    expect(summary).toEqual({
+      chats: 0,
+      sent: 0,
+      digests: 0,
+      failed: 0,
+      skipped: 0,
+      accessErrors: 0,
+      unconfirmed: 0,
+      duplicates: 0,
+    });
     expect(api.calls).toHaveLength(0);
   });
 });
@@ -903,10 +995,12 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch fan-out", () => {
     await runTelegramDispatch(env, {
       api,
       now: () => t,
-      // Each sleep also yields for a moment of real time, so the database writes keep pace.
+      // Each sleep yields for a moment of real time before the clock moves, so the database
+      // writes keep pace (each send claims its row first) and a send already under way isn't
+      // stamped as if it had waited out a wait that was only racing it.
       sleep: async (ms) => {
+        await new Promise((resolve) => setTimeout(resolve, ms >= 1_000 ? 100 : 5));
         t += ms;
-        await new Promise((resolve) => setTimeout(resolve, 5));
       },
       hasAccess: async () => true,
       oldestOpenTransaction: async () => null,
