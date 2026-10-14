@@ -12,7 +12,7 @@ import {
 } from "./kolSideWalletsJob.js";
 
 describe("rankSideWallets", () => {
-  it("needs ten coins in common, then ranks by % shared, coins in common and timing", () => {
+  it("needs the window's coins in common and half the KOL's coins, then ranks by % shared, coins in common and timing", () => {
     const ranked = rankSideWallets(
       [
         { side: "nine", shared: 9, gapSec: 2 },
@@ -22,16 +22,19 @@ describe("rankSideWallets", () => {
       ],
       20,
       new Map([["close", 30]]),
+      10,
     );
     expect(ranked.map((r) => r.wallet)).toEqual(["close", "late", "half"]);
     expect(ranked[0]).toEqual({ wallet: "close", shared: 15, pct: 75, coins: 30, gapSec: -4 });
     // A wallet's own count is never below what it shared.
     expect(ranked[1]!.coins).toBe(15);
+    // 10 of 21 is under half the KOL's coins.
+    expect(rankSideWallets([{ side: "half", shared: 10, gapSec: 0 }], 21, new Map(), 5)).toEqual([]);
   });
 
   it("keeps the top hundred", () => {
-    const pairs = Array.from({ length: 120 }, (_, i) => ({ side: `w${i}`, shared: 10 + i, gapSec: 0 }));
-    const ranked = rankSideWallets(pairs, 200, new Map());
+    const pairs = Array.from({ length: 120 }, (_, i) => ({ side: `w${i}`, shared: 100 + i, gapSec: 0 }));
+    const ranked = rankSideWallets(pairs, 200, new Map(), 25);
     expect(ranked).toHaveLength(100);
     expect(ranked[0]!.wallet).toBe("w119");
   });
@@ -47,50 +50,50 @@ describe("rankSideWallets", () => {
       { side: "all10", shared: 10 },
       { side: "nine", shared: 9 },
     ];
-    expect(possibleSides({ 24: span(day, 10), 36: none, 48: none })).toEqual([
+    expect(possibleSides({ 24: span(day, 10), 48: none, 72: none })).toEqual([
       { wallet: "all10", shared: 10, pct: 100, kolCoins: 10, hours: 24 },
     ]);
     // 9 of 9 is every coin, but under ten; 10 of 11 is not every coin.
-    expect(possibleSides({ 24: span(day.slice(1), 9), 36: none, 48: none })).toEqual([]);
-    expect(possibleSides({ 24: span(day.slice(0, 1), 11), 36: none, 48: none })).toEqual([]);
+    expect(possibleSides({ 24: span(day.slice(1), 9), 48: none, 72: none })).toEqual([]);
+    expect(possibleSides({ 24: span(day.slice(0, 1), 11), 48: none, 72: none })).toEqual([]);
   });
 
-  it("labels 90% on 25 or more coins over 36 hours", () => {
+  it("labels 90% on 25 or more coins over 48 hours", () => {
     const pairs = [
       { side: "side", shared: 27 }, // 27 of 30 is 90%
       { side: "few", shared: 24 }, // under 25
       { side: "share", shared: 26 }, // 26 of 30 is 86.7%
     ];
-    expect(possibleSides({ 24: none, 36: span(pairs, 30), 48: none })).toEqual([
-      { wallet: "side", shared: 27, pct: 90, kolCoins: 30, hours: 36 },
+    expect(possibleSides({ 24: none, 48: span(pairs, 30), 72: none })).toEqual([
+      { wallet: "side", shared: 27, pct: 90, kolCoins: 30, hours: 48 },
     ]);
   });
 
-  it("labels 80% on 50 or more coins over 48 hours", () => {
+  it("labels 80% on 50 or more coins over 72 hours", () => {
     const pairs = [
       { side: "side", shared: 50 }, // 50 of 62 is 80.6%
       { side: "share", shared: 49 }, // under 50
     ];
-    expect(possibleSides({ 24: none, 36: none, 48: span(pairs, 62) })).toEqual([
-      { wallet: "side", shared: 50, pct: 80.6, kolCoins: 62, hours: 48 },
+    expect(possibleSides({ 24: none, 48: none, 72: span(pairs, 62) })).toEqual([
+      { wallet: "side", shared: 50, pct: 80.6, kolCoins: 62, hours: 72 },
     ]);
     // 55 of 70 is 78.6%.
-    expect(possibleSides({ 24: none, 36: none, 48: span([{ side: "low", shared: 55 }], 70) })).toEqual([]);
+    expect(possibleSides({ 24: none, 48: none, 72: span([{ side: "low", shared: 55 }], 70) })).toEqual([]);
   });
 
   it("keeps the first tier a wallet meets", () => {
     const out = possibleSides({
       24: span([{ side: "w", shared: 12 }], 12),
-      36: span([{ side: "w", shared: 30 }], 32),
-      48: span([{ side: "w", shared: 60 }], 70),
+      48: span([{ side: "w", shared: 30 }], 32),
+      72: span([{ side: "w", shared: 60 }], 70),
     });
     expect(out).toEqual([{ wallet: "w", shared: 12, pct: 100, kolCoins: 12, hours: 24 }]);
   });
 
   it("reads a wallet in a large share of every coin as a bot", () => {
-    expect(isBot(80, 100)).toBe(true);
-    expect(isBot(20, 24)).toBe(false); // too few coins to judge
-    expect(isBot(70, 100)).toBe(false);
+    expect(isBot(240, 300)).toBe(true);
+    expect(isBot(190, 200)).toBe(false); // under 200 coins
+    expect(isBot(225, 300)).toBe(false); // exactly 75% is not more than it
   });
 });
 
@@ -118,9 +121,9 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
         { wallet: otherKol, seenAt: new Date() },
       ],
     });
-    // Twelve coins: one two hours ago, eleven ten days ago. The side wallet is in eleven of them, a
-    // minute behind; the far wallet buys an hour later, the other KOL alongside.
-    const ages = [2 * 3_600_000, ...Array.from({ length: 11 }, (_, i) => 10 * 86_400_000 + i)];
+    // Thirty-one coins: one two hours ago, thirty ten days ago. The side wallet is in twenty-eight of
+    // them, a minute behind; the far wallet buys an hour later, the other KOL alongside.
+    const ages = [2 * 3_600_000, ...Array.from({ length: 30 }, (_, i) => 10 * 86_400_000 + i)];
     for (const [i, age] of ages.entries()) {
       const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${i}` } });
       await prisma.tokenTradeTape.create({
@@ -138,7 +141,7 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
         { wallet: otherKol, firstBuyAt: new Date(at.getTime() + 5_000) },
         { wallet: far, firstBuyAt: new Date(at.getTime() + 3_600_000) },
       ];
-      if (i < 11) rows.push({ wallet: side, firstBuyAt: new Date(at.getTime() + 60_000) });
+      if (i < 28) rows.push({ wallet: side, firstBuyAt: new Date(at.getTime() + 60_000) });
       await prisma.tokenWalletActivity.createMany({
         data: rows.map((r) => ({ tokenId: token.id, buys: 1, solIn: 1, ...r })),
       });
@@ -146,10 +149,10 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
 
     await runKolSideWalletsJob({ now: () => now });
     const row = await prisma.kolSideWallets.findUnique({ where: { wallet: kol } });
-    expect(row).toMatchObject({ coins24h: 1, coins7d: 1, coins30d: 12 });
+    expect(row).toMatchObject({ coins24h: 1, coins7d: 1, coins30d: 31 });
     const sides = row!.sides as unknown as Record<string, SideWallet[]>;
-    expect(sides["30d"]).toEqual([{ wallet: side, shared: 11, pct: 91.7, coins: 11, gapSec: 60 }]);
-    // One coin in common in the last day is under the ten a listing needs.
+    expect(sides["30d"]).toEqual([{ wallet: side, shared: 28, pct: 90.3, coins: 28, gapSec: 60 }]);
+    // One coin in common in the last day or week is under the five or fifteen a listing needs.
     expect(sides["24h"]).toEqual([]);
     expect(sides["7d"]).toEqual([]);
 
@@ -160,7 +163,7 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
     expect(await prisma.kolSideWallets.findUnique({ where: { wallet: kol } })).toEqual(row);
   });
 
-  it("keeps a possible-side label 14 days past the last run it qualified, then drops it", async () => {
+  it("keeps a possible-side label 90 days past the last run it qualified, then drops it", async () => {
     const now = Date.now();
     const kol = `${TAG}-holdkol`;
     const recent = `${TAG}-held`;

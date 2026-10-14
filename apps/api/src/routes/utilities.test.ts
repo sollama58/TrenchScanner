@@ -370,6 +370,12 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
         coins: { "24h": 1, "7d": 2, "30d": 4 },
         sides: { "24h": 0, "7d": 0, "30d": 1 },
       });
+      expect(board.json().rules).toMatchObject({
+        minShared: { "24h": 5, "7d": 15, "30d": 25 },
+        minPct: 50,
+        bot: { minCoins: 200, minPct: 75 },
+        holdDays: 90,
+      });
 
       const one = await app.inject({
         method: "GET",

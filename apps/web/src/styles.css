@@ -2606,6 +2606,108 @@ legend {
 .util-side > p {
   margin: 0 0 12px;
 }
+.util-side .side-lead {
+  max-width: 72ch;
+}
+/* Headline counts over the leaderboard. */
+.side-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.side-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.side-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+/* The cutoffs the lists and labels are built with. */
+.side-rules {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.side-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.side-rule-label {
+  border-color: color-mix(in srgb, var(--brand-a) 35%, transparent);
+  background: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--brand-a) 10%, var(--surface-2)),
+    var(--surface-2) 70%
+  );
+}
+.side-rule h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.side-rule-label h3 {
+  color: var(--brand-ink);
+}
+.side-rule p {
+  margin: 0;
+}
+.side-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.side-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.side-tiers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.side-tiers li {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-3) 70%, transparent);
+  font-size: 12.5px;
+}
+.side-tiers strong {
+  color: var(--brand-ink);
+}
 .side-head,
 .side-row {
   display: grid;
@@ -2661,16 +2763,59 @@ legend {
   color: var(--muted);
   font-size: 12px;
 }
+.side-row .side-rank.top {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  font-weight: 700;
+  color: var(--ink);
+  background: var(--surface-3);
+}
+.side-row .side-rank.top-1 {
+  background: color-mix(in srgb, var(--warn) 28%, transparent);
+}
+.side-row .side-rank.top-2 {
+  background: color-mix(in srgb, var(--ink-2) 22%, transparent);
+}
+.side-row .side-rank.top-3 {
+  background: color-mix(in srgb, var(--series-2) 24%, transparent);
+}
 .side-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.side-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+}
+.side-who-text {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
-.side-who strong,
-.side-who span {
+.side-who-text strong,
+.side-who-text span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.side-found {
+  flex: none;
+  color: var(--brand-ink);
+  border-color: color-mix(in srgb, var(--brand-a) 40%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 12%, transparent);
 }
 .side-count {
   text-align: right;
@@ -2687,6 +2832,9 @@ legend {
 }
 .side-list > li.open .side-chevron {
   transform: rotate(180deg);
+}
+.side-list > li.open .side-row {
+  background: var(--surface-2);
 }
 .side-drop {
   margin: 0 8px 12px;
@@ -2754,6 +2902,17 @@ legend {
   text-align: right;
   font-weight: 700;
   font-size: 13px;
+}
+.side-pct.strong {
+  color: var(--brand-ink);
+}
+.side-sides li.labeled .side-wallet {
+  font-weight: 700;
+}
+.side-label {
+  color: var(--brand-ink);
+  border-color: color-mix(in srgb, var(--brand-a) 45%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 14%, transparent);
 }
 .side-meta {
   grid-area: meta;
@@ -2824,10 +2983,29 @@ legend {
     flex-direction: row;
     align-items: center;
   }
+  .side-stats {
+    gap: 6px;
+  }
+  .side-stat {
+    padding: 10px;
+  }
+  .side-stat-value {
+    font-size: 18px;
+  }
+  .side-rules {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .side-head,
   .side-row {
     grid-template-columns: 22px minmax(0, 1fr) 40px 40px 44px 16px;
     gap: 6px;
+  }
+  /* The name needs the room more than the avatar does. */
+  .side-avatar {
+    display: none;
+  }
+  .side-found {
+    display: none;
   }
   .side-row {
     padding: 9px 4px;

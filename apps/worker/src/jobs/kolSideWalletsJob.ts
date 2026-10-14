@@ -1,4 +1,18 @@
-import { prisma, createLogger, KNOWN_EXCHANGE_WALLETS } from "@trenchscanner/core";
+import {
+  prisma,
+  createLogger,
+  KNOWN_EXCHANGE_WALLETS,
+  POSSIBLE_SIDE_HOLD_DAYS,
+  POSSIBLE_SIDE_TIERS,
+  SIDE_BOT_MIN_COINS,
+  SIDE_BOT_SHARE,
+  SIDE_GAP_MINUTES,
+  SIDE_MIN_PCT,
+  SIDE_MIN_SHARED,
+  SIDE_WINDOWS,
+  type SideTierHours,
+  type SideWindow,
+} from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 import { replaceRows, type ReplaceRowsSpec } from "./replaceRows.js";
 
@@ -12,28 +26,24 @@ const logger = createLogger("kol-side-wallets");
  * - A shared coin: another wallet first bought the same coin within SIDE_GAP_MS of the KOL's own
  *   first buy, before or after it.
  * - % shared: shared coins over the KOL's coins in the window. Only wallets sharing at least
- *   MIN_SHARED coins in the window are listed, so a handful of coincidences never reads as a match
- *   (user ask 2026-10-14: no wallet under 10 coins in common).
+ *   SIDE_MIN_SHARED[window] coins and SIDE_MIN_PCT % of the KOL's coins are listed, so a handful of
+ *   coincidences never reads as a match.
  *
- * Left out of the lists: other KOLs, known exchange wallets, and bots, read as any wallet that
- * bought more than BOT_SHARE of every tracked coin in the last 30 days (a copy-trade or sniping
- * bot is in nearly everything; a side wallet follows its owner). Pools and program accounts are
- * never on the tape (tradesFromChainTransactions in core).
+ * Left out of the lists: other KOLs, known exchange wallets, and bots (SIDE_BOT_MIN_COINS and
+ * SIDE_BOT_SHARE). Pools and program accounts are never on the tape (tradesFromChainTransactions in
+ * core). Every cutoff lives in core's wallets/sideWalletRules.ts, which the Utilities tab shows.
  */
 
-export const SIDE_GAP_MS = 5 * 60_000;
-export const MIN_SHARED = 10;
+export const SIDE_GAP_MS = SIDE_GAP_MINUTES * 60_000;
 /** Wallets kept per KOL and window: the dropdown shows ten, "Show all" the rest. */
 export const TOP_SIDES = 100;
-const BOT_SHARE = 0.75;
-const BOT_MIN_COINS = 25;
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 /**
  * A possible-side label stays this long after the last hourly run the wallet met a tier, then drops
- * (user decision 2026-10-14). KolPossibleSide.computedAt is that last run.
+ * (user decision 2026-10-14: 90 days). KolPossibleSide.computedAt is that last run.
  */
-export const POSSIBLE_SIDE_HOLD_MS = 14 * DAY_MS;
+export const POSSIBLE_SIDE_HOLD_MS = POSSIBLE_SIDE_HOLD_DAYS * DAY_MS;
 /**
  * KolSideWallets is brought to the new set writing only the KOLs whose lists changed (replaceRows.ts):
  * computedAt is the run that last changed a row, the job's heartbeat the last rebuild.
@@ -54,20 +64,6 @@ const KOL_SIDE_WALLETS_TABLE: ReplaceRowsSpec = {
 /** Wallet pairs per delete when refreshing the labels that qualify again. */
 const POSSIBLE_SIDE_DELETE_CHUNK = 500;
 
-/**
- * A possible side wallet (KolPossibleSide, user asks 2026-10-14): over one of these recent spans it
- * bought at least minPct % of the KOL's coins alongside it, on at least minShared coins. The first
- * tier a wallet meets is the one stored.
- */
-export const POSSIBLE_SIDE_TIERS = [
-  { hours: 24, minPct: 100, minShared: 10 },
-  { hours: 36, minPct: 90, minShared: 25 },
-  { hours: 48, minPct: 80, minShared: 50 },
-] as const;
-export type SideTierHours = (typeof POSSIBLE_SIDE_TIERS)[number]["hours"];
-
-export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
-export type SideWindow = (typeof SIDE_WINDOWS)[number];
 const WINDOW_MS: Record<SideWindow, number> = { "24h": DAY_MS, "7d": 7 * DAY_MS, "30d": 30 * DAY_MS };
 
 /** One wallet in a KOL's list, as stored in KolSideWallets.sides and served to the dashboard. */
@@ -91,17 +87,20 @@ export interface PairRow {
 }
 
 /**
- * The top side wallets for one KOL and window: at least MIN_SHARED coins in common, by % shared,
- * then coins in common, then the closest timing. Exported for tests.
+ * The top side wallets for one KOL and window: at least minShared coins in common and SIDE_MIN_PCT %
+ * of the KOL's coins, by % shared, then coins in common, then the closest timing. Exported for tests.
  */
 export function rankSideWallets(
   pairs: readonly PairRow[],
   kolCoins: number,
   sideCoins: ReadonlyMap<string, number>,
+  minShared: number,
 ): SideWallet[] {
   if (kolCoins <= 0) return [];
   return pairs
-    .filter((p) => p.shared >= MIN_SHARED)
+    .filter(
+      (p) => p.shared >= minShared && (Math.min(p.shared, kolCoins) / kolCoins) * 100 + 1e-9 >= SIDE_MIN_PCT,
+    )
     .map((p) => ({
       wallet: p.side,
       shared: p.shared,
@@ -145,7 +144,7 @@ export function possibleSides(
 
 /** Whether a wallet's coin count in a window marks it as a bot (in a large share of everything). */
 export function isBot(coins: number, totalCoins: number): boolean {
-  return coins >= BOT_MIN_COINS && coins > totalCoins * BOT_SHARE;
+  return coins >= SIDE_BOT_MIN_COINS && coins > totalCoins * SIDE_BOT_SHARE;
 }
 
 export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): Promise<JobRunMeta> {
@@ -154,18 +153,18 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     SIDE_WINDOWS.map((w) => [w, new Date(now.getTime() - WINDOW_MS[w])]),
   ) as Record<SideWindow, Date>;
   const gapSeconds = SIDE_GAP_MS / 1000;
-  // The possible-side tiers' 36- and 48-hour spans (24 hours is the lists' own window).
-  const since36 = new Date(now.getTime() - 36 * HOUR_MS);
+  // The possible-side tiers' 48- and 72-hour spans (24 hours is the lists' own window).
   const since48 = new Date(now.getTime() - 48 * HOUR_MS);
+  const since72 = new Date(now.getTime() - 72 * HOUR_MS);
 
   // Each KOL's coins in each window.
   const kols = await prisma.$queryRaw<
-    { wallet: string; c24: bigint; c36: bigint; c48: bigint; c7: bigint; c30: bigint }[]
+    { wallet: string; c24: bigint; c48: bigint; c72: bigint; c7: bigint; c30: bigint }[]
   >`
     SELECT a."wallet",
            COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since["24h"]}) AS c24,
-           COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since36}) AS c36,
            COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since48}) AS c48,
+           COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since72}) AS c72,
            COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since["7d"]}) AS c7,
            COUNT(*) AS c30
     FROM "TokenWalletActivity" a
@@ -180,8 +179,8 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
       kol: string;
       side: string;
       s24: bigint;
-      s36: bigint;
       s48: bigint;
+      s72: bigint;
       s7: bigint;
       s30: bigint;
       g24: number | null;
@@ -209,8 +208,8 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     )
     SELECT kol, side,
            COUNT(*) FILTER (WHERE at >= ${since["24h"]}) AS s24,
-           COUNT(*) FILTER (WHERE at >= ${since36}) AS s36,
            COUNT(*) FILTER (WHERE at >= ${since48}) AS s48,
+           COUNT(*) FILTER (WHERE at >= ${since72}) AS s72,
            COUNT(*) FILTER (WHERE at >= ${since["7d"]}) AS s7,
            COUNT(*) AS s30,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) FILTER (WHERE at >= ${since["24h"]}) AS g24,
@@ -218,7 +217,11 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
            percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) AS g30
     FROM pair
     GROUP BY kol, side
-    HAVING COUNT(*) >= ${MIN_SHARED}`;
+    -- Only pairs that can reach a list. The tiers' spans sit inside 7 days and ask for no fewer
+    -- coins than the 24-hour or 7-day lists do, so a pair a tier labels always passes here.
+    HAVING COUNT(*) FILTER (WHERE at >= ${since["24h"]}) >= ${SIDE_MIN_SHARED["24h"]}
+        OR COUNT(*) FILTER (WHERE at >= ${since["7d"]}) >= ${SIDE_MIN_SHARED["7d"]}
+        OR COUNT(*) >= ${SIDE_MIN_SHARED["30d"]}`;
 
   // The listed wallets' own coin counts, and every tracked coin's, for the bot rule and the lists.
   const sides = [...new Set(pairs.map((p) => p.side))];
@@ -255,15 +258,15 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   }
 
   const byKol = new Map<string, Record<SideWindow, PairRow[]>>();
-  const tierPairs = new Map<string, Record<36 | 48, PairRow[]>>();
+  const tierPairs = new Map<string, Record<48 | 72, PairRow[]>>();
   for (const p of pairs) {
     if (bots.has(p.side) || KNOWN_EXCHANGE_WALLETS.has(p.side)) continue;
     let lists = byKol.get(p.kol);
     if (!lists) byKol.set(p.kol, (lists = { "24h": [], "7d": [], "30d": [] }));
     let tiers = tierPairs.get(p.kol);
-    if (!tiers) tierPairs.set(p.kol, (tiers = { 36: [], 48: [] }));
-    if (Number(p.s36) > 0) tiers[36].push({ side: p.side, shared: Number(p.s36), gapSec: 0 });
+    if (!tiers) tierPairs.set(p.kol, (tiers = { 48: [], 72: [] }));
     if (Number(p.s48) > 0) tiers[48].push({ side: p.side, shared: Number(p.s48), gapSec: 0 });
+    if (Number(p.s72) > 0) tiers[72].push({ side: p.side, shared: Number(p.s72), gapSec: 0 });
     const counts = { "24h": [p.s24, p.g24], "7d": [p.s7, p.g7], "30d": [p.s30, p.g30] } as const;
     for (const w of SIDE_WINDOWS) {
       const [shared, gap] = counts[w];
@@ -276,7 +279,10 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     const coins = { "24h": Number(k.c24), "7d": Number(k.c7), "30d": Number(k.c30) };
     const lists = byKol.get(k.wallet);
     const ranked = Object.fromEntries(
-      SIDE_WINDOWS.map((w) => [w, lists ? rankSideWallets(lists[w], coins[w], sideCoins[w]) : []]),
+      SIDE_WINDOWS.map((w) => [
+        w,
+        lists ? rankSideWallets(lists[w], coins[w], sideCoins[w], SIDE_MIN_SHARED[w]) : [],
+      ]),
     ) as Record<SideWindow, SideWallet[]>;
     return {
       wallet: k.wallet,
@@ -291,8 +297,8 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   const possible = kols.flatMap((k) =>
     possibleSides({
       24: { pairs: byKol.get(k.wallet)?.["24h"] ?? [], kolCoins: Number(k.c24) },
-      36: { pairs: tierPairs.get(k.wallet)?.[36] ?? [], kolCoins: Number(k.c36) },
       48: { pairs: tierPairs.get(k.wallet)?.[48] ?? [], kolCoins: Number(k.c48) },
+      72: { pairs: tierPairs.get(k.wallet)?.[72] ?? [], kolCoins: Number(k.c72) },
     }).map((p) => ({ ...p, kolWallet: k.wallet, computedAt: now })),
   );
 
