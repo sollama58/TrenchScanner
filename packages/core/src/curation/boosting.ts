@@ -68,9 +68,9 @@ export interface BoostedCuratorParams {
  *    each pair weighted by how much swapping them would move the hour's NDCG, truncated to pairs
  *    that touch the top of the hour's current ranking - so the fit spends itself on getting the
  *    top of each hour right, which is the only part of the ranking the feed ever acts on.
- *  - "runSize": how far a winner runs - its peak over the label window in doublings, any other
- *    loss 0 and a stop-out -1 - by squared error. A model of the run, not just of the win: it
- *    ranks a likely 5x above a sure 2x.
+ *  - "runSize": how far a winner runs - its peak over the label window in doublings, any loss
+ *    0 - by squared error. A model of the run, not just of the win: it ranks a likely 5x above a
+ *    sure 2x.
  * Either non-default objective leaves the tree sum on its own scale; trainBoostedCurator then
  * fits a one-dimensional logistic map from that sum to the clean-2x label (Platt scaling) and
  * folds it into the trees, so every stored model still scores as a probability of a clean 2x.
@@ -88,8 +88,6 @@ export interface BoostingRow {
   runPeakMultiple?: number;
   /** Same meaning as TrainingRow.hit10x: the "lambdarank" objective's top relevance tier. */
   hit10x?: boolean;
-  /** Same meaning as TrainingRow.survived: a loss that fell through the stop is "runSize"'s -1. */
-  survived?: boolean;
 }
 
 export interface BoostingOptions {
@@ -421,20 +419,24 @@ export function recencyWeights(
 }
 
 /**
- * A row's target under the "runSize" objective: its run in doublings, a stop-out counting -1.
- * A winner counts as runDoublings credits it; a loss that fell through the stop counts -1 even
- * when the window's peak (runPeakMultiple, measured past the stop) came later; any other loss
- * counts 0, however high it peaked. Until 2026-10-09 such a loss counted its peak (a 1.9x, or a
- * 5x that came after the 15-minute win window, scored like a 2x or better), so Runner learned to
- * rank coins that run late or almost double above the ones that double in time: on 2x-in-15
- * minutes its ranking fell below chance (AUC 0.47) after 2026-10-08 18:00 and its top 3% doubled
- * 11%. Counting those losses as 0: AUC 0.55, top 3% 30% (walk-forward on production rows,
- * 6-hour blocks 10-06 12:00 to 10-09 18:00, better or equal on 12 of 13 blocks;
- * notes/runner-target-2026-10-09.md).
+ * A row's target under the "runSize" objective: a winner's run in doublings (runDoublings), any
+ * loss 0, however high it peaked outside the win and whether or not it fell through the stop.
+ * Until 2026-10-09 a loss counted its peak (a 1.9x, or a 5x after the 15-minute win window,
+ * scored like a 2x or better), so Runner ranked late runners and near-misses above coins that
+ * double in time (notes/runner-target-2026-10-09.md).
+ * Until 2026-10-14 a stop-out counted -1. Fresh launches are the volatile ones: on decision rows
+ * 10-05..10-13 under five minutes old, 79% fell through the stop and 19.5% doubled (mean target
+ * -0.33), while coins three to six hours old stopped out 6% and doubled 1.9% (mean -0.03). So the
+ * -1 taught Runner that a stagnant old coin which can no longer fall far beats a fresh launch
+ * that doubles ten times as often, and it kept calling hours-old coins that had stopped moving
+ * (84 of its 661 calls 10-12..10-14 were an hour or more old; 1 of 27 graded doubled). Counting a
+ * stop-out 0: walk-forward on production rows, 6-hour blocks 10-10 00:00 to 10-13 18:00, AUC 0.56
+ * to 0.68 (better on all 15 blocks), top 5% doubled 20.3% to 24.4%, 5x+ runners in the top 5%
+ * 21 to 25, and no call on a coin an hour or more old (was 15 of 217)
+ * (notes/runner-old-tokens-2026-10-14.md).
  */
 function runSizeTarget(row: BoostingRow): number {
-  if (row.labelValue > 0) return runDoublings(row);
-  return row.survived === false ? -1 : 0;
+  return row.labelValue > 0 ? runDoublings(row) : 0;
 }
 
 const TEN_X_LABEL = Math.log2(TEN_X_MULTIPLE);

@@ -383,7 +383,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: "runner",
     name: "Runner",
     description:
-      "Boosted trees that predict how far a token runs - its peak in doublings, stop-outs counting against - not whether it doubles",
+      "Boosted trees that predict how far a token runs - its peak in doublings, any loss counting 0 - not whether it doubles",
     summary: "Predicts how big the run will be, so a likely 5x ranks above a sure 2x.",
     role: "learner",
     recipe: { learner: "gbdt", boosting: { objective: "runSize" } },
