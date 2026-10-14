@@ -125,3 +125,76 @@ async function kolFunded(
       AND NOT EXISTS (SELECT 1 FROM "KolWallet" k2 WHERE k2."wallet" = f."wallet")`;
   return rows;
 }
+
+/** One wallet with a side label, under the KOL it is strongest for, numbered within that KOL. */
+export interface LabeledSide {
+  wallet: string;
+  kolWallet: string;
+  kolName: string | null;
+  kind: "known" | "funded" | "possible";
+  /** % shared on a Possible Side; 100 on a Known Side; the trade match (or 0) on a funded one. */
+  pct: number;
+  /** "Cupsey_1": the KOL's name (spaces and commas as underscores) and the wallet's number under it. */
+  name: string;
+}
+
+const KIND_RANK: Record<LabeledSide["kind"], number> = { known: 0, funded: 1, possible: 2 };
+const kindOf = (s: PossibleSide): LabeledSide["kind"] =>
+  s.known ? "known" : s.funded ? "funded" : "possible";
+const nameStem = (kolWallet: string, kolName: string | null) =>
+  (kolName?.trim() || kolWallet.slice(0, 6)).replace(/[\s,]+/g, "_");
+
+/**
+ * Numbers each wallet's strongest label within its KOL (user ask 2026-10-14, the Side Wallet
+ * Checker's export): Known Sides first, then funded wallets, then Possible Sides by % shared. KOLs
+ * in name order, so the list reads grouped. Exported for tests.
+ */
+export function numberLabeledSides(sides: Record<string, PossibleSide[]>): LabeledSide[] {
+  const byKol = new Map<string, Omit<LabeledSide, "name">[]>();
+  for (const [wallet, entries] of Object.entries(sides)) {
+    const top = entries[0];
+    if (!top) continue;
+    const list = byKol.get(top.kolWallet) ?? [];
+    list.push({ wallet, kolWallet: top.kolWallet, kolName: top.kolName, kind: kindOf(top), pct: top.pct });
+    byKol.set(top.kolWallet, list);
+  }
+  const groups = [...byKol.values()].sort((a, b) => {
+    const an = nameStem(a[0]!.kolWallet, a[0]!.kolName).toLowerCase();
+    const bn = nameStem(b[0]!.kolWallet, b[0]!.kolName).toLowerCase();
+    return an < bn ? -1 : an > bn ? 1 : a[0]!.kolWallet < b[0]!.kolWallet ? -1 : 1;
+  });
+  return groups.flatMap((list) =>
+    list
+      .sort(
+        (a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.pct - a.pct || (a.wallet < b.wallet ? -1 : 1),
+      )
+      .map((s, i) => ({ ...s, name: `${nameStem(s.kolWallet, s.kolName)}_${i + 1}` })),
+  );
+}
+
+/**
+ * Every wallet that carries a side label today: a Possible Side (KolPossibleSide, which already
+ * leaves bots and likely bots out), a KOL's Known Side, or a wallet a KOL funded. Each is counted
+ * once, under the KOL its strongest label names (loadPossibleSides' order).
+ */
+export async function loadLabeledSides(): Promise<LabeledSide[]> {
+  const [possible, known, funded] = await Promise.all([
+    prisma.kolPossibleSide.findMany({ select: { wallet: true } }),
+    prisma.kolWallet.findMany({
+      where: { mainWallet: { not: null } },
+      select: { wallet: true, mainWallet: true },
+    }),
+    prisma.$queryRaw<{ wallet: string }[]>`
+      SELECT DISTINCT f."wallet"
+      FROM "WalletFunder" f
+      JOIN "KolWallet" k ON k."wallet" = f."funder"
+      WHERE f."funder" <> f."wallet"
+        AND NOT EXISTS (SELECT 1 FROM "KolWallet" k2 WHERE k2."wallet" = f."wallet")`,
+  ]);
+  const wallets = [
+    ...possible.map((r) => r.wallet),
+    ...known.filter((k) => k.mainWallet !== k.wallet).map((k) => k.wallet),
+    ...funded.map((r) => r.wallet),
+  ];
+  return numberLabeledSides(await loadPossibleSides(wallets));
+}

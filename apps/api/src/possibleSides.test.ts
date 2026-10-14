@@ -2,7 +2,12 @@
 import "./bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { loadPossibleSides, possibleSideText } from "./possibleSides.js";
+import {
+  loadLabeledSides,
+  loadPossibleSides,
+  numberLabeledSides,
+  possibleSideText,
+} from "./possibleSides.js";
 
 describe("possibleSideText", () => {
   it("names a funded wallet without the possible", () => {
@@ -17,6 +22,38 @@ describe("possibleSideText", () => {
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `kol-funded-test-${Date.now()}`;
+
+describe("numberLabeledSides", () => {
+  const entry = (kolWallet: string, kolName: string | null, pct: number, extra = {}) => ({
+    kolWallet,
+    kolName,
+    pct,
+    shared: 0,
+    kolCoins: 0,
+    hours: 0,
+    ...extra,
+  });
+
+  it("numbers each wallet under its strongest KOL: Known, then funded, then by % shared", () => {
+    const out = numberLabeledSides({
+      w1: [entry("K1", "Cup sey", 80)],
+      w2: [entry("K1", "Cup sey", 95)],
+      w3: [entry("K1", "Cup sey", 100, { known: true })],
+      w4: [entry("K1", "Cup sey", 0, { funded: true })],
+      w5: [entry("K2", "Ansem", 90), entry("K1", "Cup sey", 99)],
+      w6: [entry("K3abcdefg", null, 70)],
+    });
+    expect(out.map((s) => `${s.wallet},${s.name}`)).toEqual([
+      "w5,Ansem_1",
+      "w3,Cup_sey_1",
+      "w4,Cup_sey_2",
+      "w2,Cup_sey_3",
+      "w1,Cup_sey_4",
+      "w6,K3abcd_1",
+    ]);
+    expect(out.find((s) => s.wallet === "w3")).toMatchObject({ kind: "known", kolWallet: "K1" });
+  });
+});
 
 describe.skipIf(!dbAvailable)("loadPossibleSides", () => {
   afterAll(async () => {
@@ -69,5 +106,39 @@ describe.skipIf(!dbAvailable)("loadPossibleSides", () => {
     expect(sides[both]).toHaveLength(1);
     expect(sides[both]![0]).toMatchObject({ funded: true, pct: 95, shared: 30, hours: 48 });
     expect(sides[stranger]).toBeUndefined();
+  });
+
+  it("lists every labeled wallet once: Possible Sides, Known Sides and funded wallets", async () => {
+    const kol = `${TAG}-lkol`;
+    const alt = `${TAG}-lalt`;
+    const possible = `${TAG}-lpossible`;
+    const funded = `${TAG}-lfunded`;
+    await prisma.kolWallet.createMany({
+      data: [
+        { wallet: kol, name: "Label KOL", seenAt: new Date() },
+        { wallet: alt, name: "Label KOL alt", mainWallet: kol, seenAt: new Date() },
+      ],
+    });
+    await prisma.walletFunder.create({
+      data: { wallet: funded, status: "found", funder: kol, amountSol: 1, fundedAt: new Date() },
+    });
+    await prisma.kolPossibleSide.create({
+      data: {
+        wallet: possible,
+        kolWallet: kol,
+        pct: 90,
+        shared: 27,
+        kolCoins: 30,
+        hours: 48,
+        computedAt: new Date(),
+      },
+    });
+
+    const mine = (await loadLabeledSides()).filter((s) => s.kolWallet === kol);
+    expect(mine.map((s) => [s.wallet, s.name, s.kind])).toEqual([
+      [alt, "Label_KOL_1", "known"],
+      [funded, "Label_KOL_2", "funded"],
+      [possible, "Label_KOL_3", "possible"],
+    ]);
   });
 });

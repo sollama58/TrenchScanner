@@ -9,6 +9,7 @@ import { Skeleton } from "../components/Charts";
 import {
   ChevronDownIcon,
   CloseIcon,
+  DownloadIcon,
   SearchIcon,
   ShieldIcon,
   TargetIcon,
@@ -17,6 +18,28 @@ import {
 } from "../components/Icons";
 
 export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
+
+/** GET /utilities/side-labels: every labeled side wallet, once, numbered under its KOL. */
+export interface SideLabels {
+  count: number;
+  wallets: { wallet: string; kolWallet: string; kolName: string | null; kind: string; name: string }[];
+}
+
+/** The export (user ask 2026-10-14): one WALLET_ADDRESS,KOL_N per line. */
+export function sideLabelsText(labels: SideLabels): string {
+  return labels.wallets.map((w) => `${w.wallet},${w.name}\n`).join("");
+}
+
+function exportSideLabels(labels: SideLabels) {
+  const url = URL.createObjectURL(new Blob([sideLabelsText(labels)], { type: "text/plain" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `kol-side-wallets-${new Date().toISOString().slice(0, 10)}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
 export type SideWindow = (typeof SIDE_WINDOWS)[number];
 
 /** Mirrors SideWalletRules in core's wallets/sideWalletRules.ts: every cutoff the lists and labels use. */
@@ -107,6 +130,7 @@ const initial = (name: string) => (name.match(/[\p{L}\p{N}]/u)?.[0] ?? "?").toUp
  */
 export function SideWalletChecker() {
   const { data, error } = usePolling<SideLeaderboard>("/utilities/side-wallets", 600_000);
+  const { data: labels } = usePolling<SideLabels>("/utilities/side-labels", 600_000);
   const [open, setOpen] = useState<string | null>(null);
   const [all, setAll] = useState(false);
   const [period, setPeriod] = useState<SideWindow>("30d");
@@ -158,7 +182,7 @@ export function SideWalletChecker() {
           </div>
         </div>
       )}
-      <SideRulesCard rules={rules} />
+      <SideRulesCard rules={rules} labels={labels} />
       <p className="side-note small" role="note">
         These are possible side wallets, matched only by buying the same coins at about the same time. None is
         confirmed to belong to the KOL: a wallet here may be a copy trader, a friend, a bot or chance. Not
@@ -281,7 +305,7 @@ export function SideWalletChecker() {
 }
 
 /** The cutoffs a wallet must meet to be listed, to carry the label, and to be left out. */
-function SideRulesCard({ rules }: { rules: SideRules }) {
+function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels | null | undefined }) {
   return (
     <div className="side-rules" aria-label="Match rules">
       <div className="side-rule">
@@ -335,6 +359,24 @@ function SideRulesCard({ rules }: { rules: SideRules }) {
           </p>
         )}
         <p className="faint small">Other KOLs and known exchange wallets.</p>
+      </div>
+      <div className="side-rule side-rule-export">
+        <h3>
+          <WalletIcon size={14} /> Labeled sides
+        </h3>
+        <strong className="side-stat-value num">{labels ? labels.count.toLocaleString("en-US") : "—"}</strong>
+        <p className="faint small">
+          High-confidence (Possible Side), Known and KOL Funded wallets, each once under its KOL. Exported as
+          one address,KOL_N per line.
+        </p>
+        <button
+          type="button"
+          className="ghost small-btn side-export"
+          disabled={!labels || labels.count === 0}
+          onClick={() => labels && exportSideLabels(labels)}
+        >
+          <DownloadIcon size={14} /> Export
+        </button>
       </div>
     </div>
   );
