@@ -51,6 +51,33 @@ describe("pickCanonicalPair", () => {
     expect(pickCanonicalPair([staleCurve, dust])).toBe(staleCurve);
   });
 
+  it("reads a curve quoted in another coin as trading from its trade count, not its USD volume", () => {
+    // DexScreener reports such a curve's USD volume as 0 however much it trades.
+    const tokenCurve = { dexId: "pumpfun", volume: { h1: 0 }, txns: { h1: { buys: 40, sells: 30 } } };
+    const side = { dexId: "meteora", liquidity: { usd: 5_000 }, volume: { h1: 50 } };
+    expect(pickCanonicalPair([tokenCurve, side])).toBe(tokenCurve);
+  });
+
+  it("moves a curve quoted in another coin to its pumpswap pool in that coin once it trades", () => {
+    const DOPE = { address: "DOPEmint" };
+    const frozen = {
+      dexId: "pumpfun",
+      quoteToken: DOPE,
+      volume: { h1: 0 },
+      txns: { h1: { buys: 9, sells: 3 } },
+    };
+    const pool = {
+      dexId: "pumpswap",
+      quoteToken: DOPE,
+      volume: { h1: 0 },
+      txns: { h1: { buys: 50, sells: 20 } },
+    };
+    expect(pickCanonicalPair([frozen, pool])).toBe(pool);
+    // A dust pool quoted in some other coin is no graduation.
+    const stray = { ...pool, quoteToken: { address: "OTHERmint" } };
+    expect(pickCanonicalPair([frozen, stray])).toBe(frozen);
+  });
+
   it("falls back to the deepest pair when nothing is funded", () => {
     const a = { dexId: "meteora", liquidity: { usd: 10 } };
     const b = { dexId: "raydium", liquidity: { usd: 500 } };
@@ -742,6 +769,108 @@ describe("getTokensByAddresses: the fallback prices what DexScreener can't", () 
     expect(by.get("newLaunch")).toMatchObject({ marketCapUsd: 12_000 });
     expect(by.get("listed")).toMatchObject({ marketCapUsd: 9_000 });
     expect(by.has("oldDead")).toBe(false);
+  });
+
+  it("prices a pair quoted in another coin off that coin's USD price, for every lookup", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      urls.push(url);
+      const list = url.split("/").pop()!.split("?")[0]!.split(",");
+      const pairs = [
+        {
+          chainId: "solana",
+          dexId: "pumpfun",
+          pairAddress: "curve",
+          baseToken: { address: "pedo" },
+          quoteToken: { address: "DOPE" },
+          priceNative: "0.004",
+          volume: { m5: 0, h1: 0, h24: 0 },
+          txns: { h1: { buys: 400, sells: 300 } },
+        },
+        // The quote coin trades against SOL in two pools; the deeper one prices it.
+        {
+          chainId: "solana",
+          dexId: "pumpswap",
+          baseToken: { address: "DOPE" },
+          quoteToken: SOL,
+          priceUsd: "0.0037",
+          liquidity: { usd: 230_000 },
+        },
+        {
+          chainId: "solana",
+          dexId: "meteora",
+          baseToken: { address: "DOPE" },
+          quoteToken: SOL,
+          priceUsd: "0.0029",
+          liquidity: { usd: 4_000 },
+        },
+      ].filter((p) => list.includes(p.baseToken.address));
+      return Promise.resolve(new Response(JSON.stringify(pairs)));
+    });
+    const c = new DexScreenerClient();
+    const [token] = await c.getTokensByAddresses(["pedo"], 5, { retries: 0 });
+    expect(token!.priceUsd).toBeCloseTo(0.004 * 0.0037, 12);
+    expect(token!.marketCapUsd).toBeCloseTo(0.004 * 0.0037 * 1e9, 3);
+    // Unknown rather than a dead coin's zero.
+    expect(token!.volume1hUsd).toBeUndefined();
+    expect(token!.dexId).toBe("pumpfun");
+    // The quote coin's price is reused for the next lookup.
+    await c.getTokensByAddresses(["pedo"], 5, { retries: 0, fresh: true });
+    expect(urls.filter((u) => u.endsWith("/DOPE"))).toHaveLength(1);
+  });
+
+  it("prices a pair whose quote coin is itself quoted in another coin, a tokenized stock included", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      const list = url.split("/").pop()!.split("?")[0]!.split(",");
+      const pairs = [
+        // A launch on 2XLONGINU, which trades only on LONGINU, which trades on SOL.
+        {
+          dexId: "pumpfun",
+          pairAddress: "c1",
+          baseToken: { address: "kid" },
+          quoteToken: { address: "TWOX" },
+          priceNative: "0.5",
+        },
+        {
+          dexId: "pumpfun",
+          pairAddress: "c2",
+          baseToken: { address: "TWOX" },
+          quoteToken: { address: "LONG" },
+          priceNative: "0.2",
+        },
+        {
+          dexId: "pumpswap",
+          pairAddress: "c3",
+          baseToken: { address: "LONG" },
+          quoteToken: SOL,
+          priceUsd: "0.01",
+          liquidity: { usd: 9_000 },
+        },
+        // A launch on a tokenized stock.
+        {
+          dexId: "pumpfun",
+          pairAddress: "c4",
+          baseToken: { address: "onNvda" },
+          quoteToken: { address: "NVDAx" },
+          priceNative: "0.00000002",
+        },
+        {
+          dexId: "raydium",
+          pairAddress: "c5",
+          baseToken: { address: "NVDAx" },
+          quoteToken: { address: "USDC" },
+          priceUsd: "180",
+          liquidity: { usd: 2e6 },
+        },
+      ]
+        .map((p) => ({ chainId: "solana", ...p }))
+        .filter((p) => list.includes(p.baseToken.address));
+      return Promise.resolve(new Response(JSON.stringify(pairs)));
+    });
+    const tokens = await new DexScreenerClient().getTokensByAddresses(["kid", "onNvda"], 5, { retries: 0 });
+    const by = new Map(tokens.map((t) => [t.mintAddress, t]));
+    expect(by.get("kid")!.priceUsd).toBeCloseTo(0.5 * 0.2 * 0.01, 12);
+    expect(by.get("onNvda")!.marketCapUsd).toBeCloseTo(0.00000002 * 180 * 1e9, 6);
   });
 
   it("leaves other jobs' lookups to DexScreener alone", async () => {
