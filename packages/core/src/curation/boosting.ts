@@ -58,6 +58,13 @@ export interface BoostedCuratorParams {
   objective?: Exclude<BoostingObjective, "logistic">;
   /** Set when the trees are a random forest (forest.ts) rather than a boosted sequence. */
   family?: "forest";
+  /**
+   * Set when the trees were fitted on top of a given log-odds (BoostingOptions.offsetInput): every
+   * prediction starts from the candidate's own value of `input` instead of one shared rate, and
+   * baseScore is `centre`, the training rows' mean of it (a missing value starts there). With no
+   * trees the model scores exactly that input.
+   */
+  offset?: { input: string; centre: number };
 }
 
 /**
@@ -122,6 +129,13 @@ export interface BoostingOptions {
   runWeightPerDoubling?: number;
   /** The inputs the forest may split on - see TrainOptions.featureNames. Omitted = LEARNER_FEATURE_NAMES. */
   featureNames?: readonly string[];
+  /**
+   * A feature holding a log-odds to start every row from (LightGBM's init_score), logistic
+   * objective only. The trees then learn a correction to it, and early stopping may keep none:
+   * a correction that doesn't beat the given log-odds on the held-out newest rows is not grown,
+   * and with too few rows to hold out none is. See BoostedCuratorParams.offset.
+   */
+  offsetInput?: string;
 }
 
 /**
@@ -129,9 +143,7 @@ export interface BoostingOptions {
  * pressure AND few snipers") while staying far from memorizing tokens; 0.05 x a few hundred trees
  * is the usual slow-and-many trade; min 30 rows a leaf keeps every leaf a statistic.
  */
-export const DEFAULT_BOOSTING_OPTIONS: Required<
-  Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight" | "runWeightPerDoubling" | "featureNames">
-> = {
+export const DEFAULT_BOOSTING_OPTIONS: ResolvedBoostingOptions = {
   maxTrees: 300,
   learningRate: 0.05,
   maxDepth: 3,
@@ -261,7 +273,10 @@ interface Split {
 }
 
 export type ResolvedBoostingOptions = Required<
-  Omit<BoostingOptions, "recencyHalfLifeDays" | "legacyLabelWeight" | "runWeightPerDoubling" | "featureNames">
+  Omit<
+    BoostingOptions,
+    "recencyHalfLifeDays" | "legacyLabelWeight" | "runWeightPerDoubling" | "featureNames" | "offsetInput"
+  >
 >;
 
 export interface GrowContext {
@@ -531,6 +546,7 @@ async function boost(
   legacyLabelWeight: number | undefined,
   runWeightPerDoubling: number | undefined,
   featureNames: string[],
+  offsetInput: string | undefined,
 ): Promise<{
   baseScore: number;
   trees: BoostedTree[];
@@ -569,8 +585,29 @@ async function boost(
     const baseRate = Math.min(1 - 1e-4, Math.max(1e-4, wPos / wSum));
     baseScore = Math.log(baseRate / (1 - baseRate));
   }
+  // A given starting log-odds per row (offsetInput): baseScore becomes its weighted mean over the
+  // fitting rows, which is where a row without it starts.
+  const offsetOf = (r: BoostingRow) => {
+    const v = offsetInput === undefined ? undefined : r.features[offsetInput];
+    return v === null || v === undefined || !Number.isFinite(v) ? NaN : v;
+  };
+  if (offsetInput !== undefined) {
+    let oSum = 0;
+    let oW = 0;
+    for (let i = 0; i < fit.length; i++) {
+      const v = offsetOf(fit[i]!);
+      if (Number.isNaN(v)) continue;
+      oSum += weights[i]! * v;
+      oW += weights[i]!;
+    }
+    if (oW > 0) baseScore = oSum / oW;
+  }
+  const startOf = (r: BoostingRow) => {
+    const v = offsetOf(r);
+    return Number.isNaN(v) ? baseScore : v;
+  };
 
-  const margin = new Float64Array(fit.length).fill(baseScore);
+  const margin = Float64Array.from(fit, startOf);
   const grad = new Float64Array(fit.length);
   const hess = new Float64Array(fit.length);
 
@@ -587,11 +624,20 @@ async function boost(
   const validGains =
     objective === "lambdarank" ? Float64Array.from(valid, (r) => 2 ** relevanceTier(r) - 1) : null;
   const validGroups = objective === "lambdarank" ? hourGroups(valid) : null;
-  const validMargin = new Float64Array(valid.length).fill(baseScore);
+  const validMargin = Float64Array.from(valid, startOf);
+  const validLogLoss = () => {
+    let loss = 0;
+    for (let i = 0; i < valid.length; i++) {
+      const p = Math.min(1 - 1e-12, Math.max(1e-12, sigmoid(validMargin[i]!)));
+      loss -= validW[i]! * (validY[i]! * Math.log(p) + (1 - validY[i]!) * Math.log(1 - p));
+    }
+    return loss;
+  };
 
   const rand = prng(opts.seed);
   const trees: BoostedTree[] = [];
-  let bestLoss = Infinity;
+  // On a given log-odds, no trees at all is a candidate too: a tree must beat the start to be kept.
+  let bestLoss = offsetInput !== undefined && valid.length > 0 ? validLogLoss() : Infinity;
   let bestTrees = 0;
   const allFeatures = featureNames.map((_, j) => j);
 
@@ -645,10 +691,7 @@ async function boost(
     } else if (validTargets) {
       for (let i = 0; i < valid.length; i++) loss += validW[i]! * (validMargin[i]! - validTargets[i]!) ** 2;
     } else {
-      for (let i = 0; i < valid.length; i++) {
-        const p = Math.min(1 - 1e-12, Math.max(1e-12, sigmoid(validMargin[i]!)));
-        loss -= validW[i]! * (validY[i]! * Math.log(p) + (1 - validY[i]!) * Math.log(1 - p));
-      }
+      loss = validLogLoss();
     }
     if (loss < bestLoss - 1e-9) {
       bestLoss = loss;
@@ -776,6 +819,10 @@ export async function trainBoostedCurator(
   if (rows.length === 0) throw new Error("cannot train on zero rows");
   const opts = { ...DEFAULT_BOOSTING_OPTIONS, ...stripUndefined(options) };
   const featureNames = [...(options.featureNames ?? LEARNER_FEATURE_NAMES)];
+  const offsetInput = options.offsetInput;
+  if (offsetInput !== undefined && opts.objective !== "logistic") {
+    throw new Error("a starting log-odds (offsetInput) needs the logistic objective");
+  }
   const sorted = [...rows].sort((a, b) => a.anchorAt.getTime() - b.anchorAt.getTime());
 
   const cut = Math.floor(sorted.length * (1 - opts.validationFraction));
@@ -784,7 +831,8 @@ export async function trainBoostedCurator(
   const fit = sorted.slice(0, cut).filter((r) => r.tokenId === undefined || !validTokens.has(r.tokenId));
   const validWins = valid.filter((r) => r.labelValue > 0).length;
 
-  let treeCount = FALLBACK_TREES;
+  // On a given log-odds, too little data to hold out means no evidence the trees improve on it.
+  let treeCount = offsetInput !== undefined ? 0 : FALLBACK_TREES;
   if (
     valid.length >= MIN_VALIDATION_ROWS &&
     validWins >= MIN_VALIDATION_WINS &&
@@ -799,9 +847,11 @@ export async function trainBoostedCurator(
       options.legacyLabelWeight,
       options.runWeightPerDoubling,
       featureNames,
+      offsetInput,
     );
     // At least a handful: a forest that "stops" at 1-2 trees is barely more than the base rate.
-    treeCount = Math.max(10, probe.bestTrees);
+    // On a given log-odds that start is the point, so as few as none are kept.
+    treeCount = offsetInput !== undefined ? probe.bestTrees : Math.max(10, probe.bestTrees);
   }
   const final = await boost(
     sorted,
@@ -812,6 +862,7 @@ export async function trainBoostedCurator(
     options.legacyLabelWeight,
     options.runWeightPerDoubling,
     featureNames,
+    offsetInput,
   );
   let baseScore = final.baseScore;
   let trees = final.trees;
@@ -836,6 +887,38 @@ export async function trainBoostedCurator(
     baseScore,
     trees,
     ...(opts.objective !== "logistic" ? { objective: opts.objective } : {}),
+    ...(offsetInput !== undefined ? { offset: { input: offsetInput, centre: baseScore } } : {}),
+  };
+}
+
+/**
+ * Several boosted models of the same inputs as one: the mean of their log-odds, as a single model
+ * (every tree kept, its values scaled by 1/n), so it scores and explains through the same entry
+ * points. Used to serve cross-fit fold models as they were measured (narrativeLed.ts).
+ */
+export function averageBoosted(
+  models: readonly Omit<BoostedCuratorParams, "threshold">[],
+): Omit<BoostedCuratorParams, "threshold"> {
+  const first = models[0];
+  if (first === undefined) throw new Error("nothing to average");
+  for (const m of models) {
+    if (
+      m.featureNames.join("\u0000") !== first.featureNames.join("\u0000") ||
+      JSON.stringify(m.transform) !== JSON.stringify(first.transform) ||
+      m.objective !== undefined ||
+      m.offset !== undefined ||
+      m.family !== undefined
+    ) {
+      throw new Error("only plain boosted models of the same inputs can be averaged");
+    }
+  }
+  const k = 1 / models.length;
+  return {
+    kind: BOOSTED_MODEL_KIND,
+    featureNames: [...first.featureNames],
+    transform: first.transform,
+    baseScore: models.reduce((s, m) => s + m.baseScore, 0) * k,
+    trees: models.flatMap((m) => m.trees.map((t) => ({ ...t, value: t.value.map((v) => v * k) }))),
   };
 }
 
@@ -855,13 +938,23 @@ function transformedVector(
   });
 }
 
+/** How far this candidate's own starting log-odds sits from the model's centre (0 without one). */
+function offsetShift(
+  params: Pick<BoostedCuratorParams, "offset">,
+  features: Record<string, number | null | undefined>,
+): number {
+  if (params.offset === undefined) return 0;
+  const v = features[params.offset.input];
+  return v === null || v === undefined || !Number.isFinite(v) ? 0 : v - params.offset.centre;
+}
+
 /** Predicted probability of a clean 2x-within-1-hour. */
 export function scoreBoosted(
   params: Omit<BoostedCuratorParams, "threshold">,
   features: Record<string, number | null | undefined>,
 ): number {
   const x = transformedVector(params, features);
-  let z = params.baseScore;
+  let z = params.baseScore + offsetShift(params, features);
   for (const tree of params.trees) z += tree.value[leafOf(tree, x)]!;
   return sigmoid(z);
 }
@@ -878,6 +971,8 @@ export function boostedContributions(
 ): Map<string, number> {
   const x = transformedVector(params, features);
   const out = new Map<string, number>();
+  // A given starting log-odds is credited to its input, so the sum still reaches the score.
+  if (params.offset !== undefined) out.set(params.offset.input, offsetShift(params, features));
   for (const tree of params.trees) {
     let node = 0;
     while (tree.feature[node]! >= 0) {

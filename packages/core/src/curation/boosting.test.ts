@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  averageBoosted,
   binColumn,
   boostedContributions,
   scoreBoosted,
@@ -219,5 +220,103 @@ describe("binColumn", () => {
         expect(Array.from(got.bins)).toEqual(Array.from(want.bins));
       }
     }
+  });
+});
+
+describe("boosting from a given log-odds (offsetInput)", () => {
+  /** The label follows `start` (a log-odds); `extra` lifts it on top when lift > 1. */
+  function offsetRows(count: number, lift: number, seed: number): BoostingRow[] {
+    const rand = rng(seed);
+    return Array.from({ length: count }, (_, i) => {
+      const start = -3 + rand() * 3;
+      const extra = rand();
+      const p = Math.min(0.95, (1 / (1 + Math.exp(-start))) * (extra > 0.7 ? lift : 1));
+      return {
+        tokenId: `t${i}`,
+        anchorAt: new Date(T0 + i * 60_000),
+        features: { start, extra, noise: rand() },
+        labelValue: rand() < p ? 1 : 0,
+      };
+    });
+  }
+  const logit = (p: number) => Math.log(p / (1 - p));
+
+  it("keeps no trees when nothing beats the start, and then scores exactly the start", async () => {
+    const model = await trainBoostedCurator(offsetRows(3000, 1, 5), {
+      featureNames: ["noise"],
+      offsetInput: "start",
+      maxDepth: 2,
+      learningRate: 0.02,
+      l2: 20,
+      minLeafRows: 100,
+    });
+    expect(model.offset?.input).toBe("start");
+    expect(model.trees).toHaveLength(0);
+    for (const start of [-2.5, -1, 0]) {
+      expect(scoreBoosted(model, { start, noise: 0.5 })).toBeCloseTo(1 / (1 + Math.exp(-start)), 12);
+    }
+    // A candidate without the start begins at the training rows' mean of it.
+    expect(logit(scoreBoosted(model, { noise: 0.5 }))).toBeCloseTo(model.baseScore, 9);
+  });
+
+  it("learns the correction a real input carries, credited to the start and that input", async () => {
+    const model = await trainBoostedCurator(offsetRows(3000, 3, 6), {
+      featureNames: ["extra"],
+      offsetInput: "start",
+    });
+    expect(model.trees.length).toBeGreaterThan(0);
+    const lifted = scoreBoosted(model, { start: -1.5, extra: 0.9 });
+    const flat = scoreBoosted(model, { start: -1.5, extra: 0.2 });
+    expect(lifted).toBeGreaterThan(flat);
+    const parts = boostedContributions(model, { start: -1.5, extra: 0.9 });
+    expect(parts.get("start")).toBeCloseTo(-1.5 - model.offset!.centre, 12);
+    const total = [...parts.values()].reduce((a, b) => a + b, 0);
+    // Path attribution sums to the score less the model's start and the trees' root values.
+    const roots = model.trees.reduce((a, t) => a + t.value[0]!, 0);
+    expect(total).toBeCloseTo(logit(lifted) - model.baseScore - roots, 9);
+  });
+
+  it("with too few rows to hold out, keeps no trees rather than a fixed count", async () => {
+    const model = await trainBoostedCurator(offsetRows(200, 3, 7), {
+      featureNames: ["extra"],
+      offsetInput: "start",
+    });
+    expect(model.trees).toHaveLength(0);
+  });
+
+  it("is refused for an objective other than logistic", async () => {
+    await expect(
+      trainBoostedCurator(offsetRows(300, 1, 8), {
+        featureNames: ["extra"],
+        offsetInput: "start",
+        objective: "runSize",
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+describe("averageBoosted", () => {
+  it("scores the mean of the models' log-odds and explains as their mean", async () => {
+    const a = await trainBoostedCurator(interactionRows(800, 3), { seed: 1 });
+    const b = await trainBoostedCurator(interactionRows(800, 4), { seed: 2 });
+    const mean = averageBoosted([a, b]);
+    const logit = (p: number) => Math.log(p / (1 - p));
+    for (const row of interactionRows(20, 9)) {
+      expect(logit(scoreBoosted(mean, row.features))).toBeCloseTo(
+        (logit(scoreBoosted(a, row.features)) + logit(scoreBoosted(b, row.features))) / 2,
+        9,
+      );
+      const ca = boostedContributions(a, row.features);
+      const cb = boostedContributions(b, row.features);
+      for (const [name, v] of boostedContributions(mean, row.features)) {
+        expect(v).toBeCloseTo(((ca.get(name) ?? 0) + (cb.get(name) ?? 0)) / 2, 9);
+      }
+    }
+  });
+
+  it("refuses models of different inputs", async () => {
+    const a = await trainBoostedCurator(interactionRows(400, 3), { featureNames: ["buyRatio24h"] });
+    const b = await trainBoostedCurator(interactionRows(400, 3), { featureNames: ["ageMinutes"] });
+    expect(() => averageBoosted([a, b])).toThrow();
   });
 });

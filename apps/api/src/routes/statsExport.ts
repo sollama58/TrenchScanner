@@ -624,6 +624,10 @@ const ALERT_COLUMNS = [
   "peak24hReturnPct",
   "runPeakMinutes",
   "outcomeFinalizedAt",
+  // The Narrative seat's note on another seat's card ("agrees" / "warns", curatedAlerts.ts), so it
+  // can be graded against the card's outcome. Null where no deep read decided on the card.
+  "narrativeVerdict",
+  "narrativeNotedAt",
 ] as const;
 
 const SHADOW_COLUMNS = [

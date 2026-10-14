@@ -71,8 +71,8 @@ describe("contestant roster", () => {
       "hasTwitter",
       "hasWebsite",
     ]);
-    // The story carries a fixed 70% of the decision, the safety readings the rest.
-    expect(recipe?.narrativeLed).toBe(0.7);
+    // The story carries a fixed 30% of the decision, the safety readings the rest.
+    expect(recipe?.narrativeLed).toBe(0.3);
     // No price, volume or age.
     for (const market of ["ageMinutes", "volumeAccel", "holderGrowth10mPct", "pathRet15mPct", "mcapUsd"]) {
       expect(NARRATIVE_SEAT_FEATURES).not.toContain(market);

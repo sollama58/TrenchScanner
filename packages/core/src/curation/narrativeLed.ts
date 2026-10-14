@@ -1,5 +1,6 @@
 import {
   BOOSTED_MODEL_KIND,
+  averageBoosted,
   boostedContributions,
   scoreBoosted,
   trainBoostedCurator,
@@ -27,14 +28,29 @@ import { SAFETY_FEATURES } from "./features.js";
  * learned, so the story always carries storyWeight of the decision and safety acts as the check.
  *
  * Ranks come from each stage's cross-fitted probabilities over the training decision rows (a
- * quantile table), so a stage's in-sample overconfidence doesn't tilt the weight. The score is a
- * rank blend in [0, 1], not a probability: cutoffs, the high-conviction line and the shown 2x rate
- * all work in rank units already (calibration.ts), like every other seat's.
+ * quantile table), so a stage's in-sample overconfidence doesn't tilt the weight. Each stage that
+ * ships is the mean of the same two cross-fit fold models the table was read from (averageBoosted),
+ * so a live coin is ranked by the models that built the table. Until 2026-10-14 the table came from
+ * the folds and live scores from a third, full-data model per stage: early stopping on more rows
+ * grows more trees and wider scores, so live ranks bunched at the ends and the effective weight
+ * drifted (notes/model-audit-2026-10-14/narrative.md D3). The score is a rank blend in [0, 1], not a
+ * probability: cutoffs, the high-conviction line and the shown 2x rate all work in rank units
+ * already (calibration.ts), like every other seat's.
  */
 export const NARRATIVE_LED_MODEL_KIND = "narrative-led-v1";
 
-/** The story's share of the Narrative seat's decision (see NarrativeLedCuratorParams). */
-export const NARRATIVE_STORY_WEIGHT = 0.7;
+/**
+ * The story's share of the Narrative seat's decision (see NarrativeLedCuratorParams). 0.7 until
+ * 2026-10-14. The audit's purged walk-forward on the seat's own rows (deep-read decisions plus
+ * second looks, test days 10-10..10-14) found the story stage close to chance (AUC 0.527) and the
+ * safety stage carrying what ranking there is (0.576), so 70/30 ranked below safety alone: pooled
+ * AUC 0.559, top 2% 8.6%. 30/70 measured AUC 0.578, top 1% 17.0%, top 2% 18.3%, level with one
+ * joint model on AUC (0.580) and above it at the top of the list (8.5% / 14.0%), where the cutoff
+ * acts. Either way the seat stays near its picks' age-matched base (top 10% 16.3% against 17.9%):
+ * the weight stops the story dragging the ranking down, it does not find signal in it
+ * (notes/model-audit-2026-10-14/narrative.md).
+ */
+export const NARRATIVE_STORY_WEIGHT = 0.3;
 
 /** Points in each stage's rank table. */
 const RANK_TABLE_POINTS = 200;
@@ -126,11 +142,9 @@ export async function trainNarrativeLedCurator<R extends BoostingRow & { sampleK
       runWeightPerDoubling: opts.runWeightPerDoubling,
       featureNames,
     });
-  const story = await fit(rows, storyNames);
-  const safety = await fit(rows, safetyNames);
-
   // Cross-fitted rank tables: the decision rows' tokens split in two, each stage trains on
-  // everything but one half's tokens and scores that half.
+  // everything but one half's tokens and scores that half. The two fold models of each stage are
+  // what ships (their mean), so the table and the live score come from the same models.
   const decisions = rows.filter(isDecision);
   const halfOf = new Map<string, number>();
   const half = decisions.map((r, i) => {
@@ -142,22 +156,41 @@ export async function trainNarrativeLedCurator<R extends BoostingRow & { sampleK
     }
     return h;
   });
-  const storyOof = Float64Array.from(decisions, (r) => scoreBoosted(story, r.features));
-  const safetyOof = Float64Array.from(decisions, (r) => scoreBoosted(safety, r.features));
+  const storyOof = new Float64Array(decisions.length);
+  const safetyOof = new Float64Array(decisions.length);
+  const storyFolds: Omit<BoostedCuratorParams, "threshold">[] = [];
+  const safetyFolds: Omit<BoostedCuratorParams, "threshold">[] = [];
   for (const h of [0, 1]) {
     const held = new Set<string>();
     decisions.forEach((r, i) => {
       if (half[i] === h && r.tokenId !== undefined) held.add(r.tokenId);
     });
     const train = rows.filter((r) => r.tokenId === undefined || !held.has(r.tokenId));
-    if (train.length < MIN_STAGE_ROWS || train.length === rows.length) continue;
-    if (train.filter((r) => r.labelValue > 0).length < MIN_STAGE_WINS) continue;
+    if (train.length < MIN_STAGE_ROWS || train.length === rows.length) break;
+    if (train.filter((r) => r.labelValue > 0).length < MIN_STAGE_WINS) break;
     const s = await fit(train, storyNames);
     const f = await fit(train, safetyNames);
+    storyFolds.push(s);
+    safetyFolds.push(f);
     decisions.forEach((r, i) => {
       if (half[i] !== h) return;
       storyOof[i] = scoreBoosted(s, r.features);
       safetyOof[i] = scoreBoosted(f, r.features);
+    });
+  }
+  let story: Omit<BoostedCuratorParams, "threshold">;
+  let safety: Omit<BoostedCuratorParams, "threshold">;
+  if (storyFolds.length === 2) {
+    story = averageBoosted(storyFolds);
+    safety = averageBoosted(safetyFolds);
+  } else {
+    // Too few rows to hold a half out: one model per stage on every row, its table read off the
+    // same model (in-sample, but the table and the live score still agree).
+    story = await fit(rows, storyNames);
+    safety = await fit(rows, safetyNames);
+    decisions.forEach((r, i) => {
+      storyOof[i] = scoreBoosted(story, r.features);
+      safetyOof[i] = scoreBoosted(safety, r.features);
     });
   }
 

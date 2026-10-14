@@ -528,14 +528,14 @@ describe("two-stage model", () => {
 describe("narrative blend model", () => {
   // Heat drives the market; on the coins TokenSage read deeply, a story it rates (nsStory) lifts
   // the odds on top of that.
-  const market = (deepShare: number) => {
-    const rand = rng(33);
+  const market = (deepShare: number, storyLift = 3, seed = 33) => {
+    const rand = rng(seed);
     const rows: TrainingRow[] = [];
     for (let i = 0; i < 2000; i++) {
       const heat = rand();
       const deep = rand() < deepShare;
       const story = deep ? rand() : null;
-      const p = (heat > 0.6 ? 0.25 : 0.04) * (story !== null && story > 0.7 ? 3 : 1);
+      const p = (heat > 0.6 ? 0.25 : 0.04) * (story !== null && story > 0.7 ? storyLift : 1);
       rows.push({
         tokenId: `t${Math.floor(i / 2)}`,
         anchorAt: new Date(T0 + i * MIN),
@@ -557,7 +557,10 @@ describe("narrative blend model", () => {
     expect(scoreCandidateWithModel(params.market, { heat: 0.9, nsStory: 0.9 })).toBe(
       scoreCandidateWithModel(params.market, { heat: 0.9, nsStory: 0.1 }),
     );
-    expect(params.blend.featureNames).toEqual([MARKET_SCORE_INPUT, "nsDepthFull", "nsStory"]);
+    // It starts from the market's log-odds and splits on TokenSage's inputs only.
+    expect(params.blend.featureNames).toEqual(["nsDepthFull", "nsStory"]);
+    expect(params.blend.offset?.input).toBe(MARKET_SCORE_INPUT);
+    expect(params.blend.trees.length).toBeGreaterThan(0);
     const hotStory = scoreCandidateWithModel(params, { heat: 0.9, nsDepthFull: 1, nsStory: 0.9 });
     const hotFlat = scoreCandidateWithModel(params, { heat: 0.9, nsDepthFull: 1, nsStory: 0.1 });
     const coldStory = scoreCandidateWithModel(params, { heat: 0.1, nsDepthFull: 1, nsStory: 0.9 });
@@ -566,6 +569,61 @@ describe("narrative blend model", () => {
     expect(hotStory).toBeLessThanOrEqual(1);
     const why = modelRationale(params, { heat: 0.9, nsDepthFull: 1, nsStory: 0.9 });
     expect(JSON.stringify(why)).not.toContain(MARKET_SCORE_INPUT);
+  });
+
+  it("adds nothing to the market's ranking when the deep read carries no signal", async () => {
+    const rows = market(0.5, 1, 34);
+    const params = await trainCuratorModel(rows, { narrativeBlend: true, featureNames: names });
+    if (params.kind !== NARRATIVE_BLEND_MODEL_KIND) throw new Error("wrong kind");
+    // Every deep-read pair the market stage orders, the whole model orders the same way.
+    const deep = rows.filter((r) => r.features.nsDepthFull === 1).slice(0, 200);
+    const m = deep.map((r) => scoreCandidateWithModel(params.market, r.features));
+    const s = deep.map((r) => scoreCandidateWithModel(params, r.features));
+    let flipped = 0;
+    let pairs = 0;
+    for (let i = 0; i < deep.length; i++) {
+      for (let j = i + 1; j < deep.length; j++) {
+        if (m[i] === m[j]) continue;
+        pairs++;
+        if (Math.sign(m[i]! - m[j]!) !== Math.sign(s[i]! - s[j]!)) flipped++;
+      }
+    }
+    expect(flipped / pairs).toBeLessThan(0.02);
+  });
+
+  it("scores a pre-2026-10-14 blend stage (the market score as a split input) as before", async () => {
+    const params = await trainCuratorModel(market(0.5), { narrativeBlend: true, featureNames: names });
+    if (params.kind !== NARRATIVE_BLEND_MODEL_KIND) throw new Error("wrong kind");
+    // One tree splitting on the market score, no offset: what the old trainer stored.
+    const legacy = {
+      ...params,
+      blend: {
+        kind: params.blend.kind,
+        featureNames: [MARKET_SCORE_INPUT, "nsStory"],
+        transform: params.blend.transform,
+        baseScore: -2,
+        trees: [
+          // Thresholds are in transformed units (signed log1p): this one is a raw log-odds of -1.5.
+          {
+            feature: [0, -1, -1],
+            threshold: [-Math.log1p(1.5), 0, 0],
+            missingLeft: [1, 0, 0],
+            left: [1, -1, -1],
+            right: [2, -1, -1],
+            value: [0, -0.5, 0.5],
+          },
+        ],
+      },
+    };
+    const hot = { heat: 0.9, nsDepthFull: 1, nsStory: 0.5 };
+    const cold = { heat: 0.1, nsDepthFull: 1, nsStory: 0.5 };
+    const z = (f: typeof hot) =>
+      Math.log(scoreCandidateWithModel(legacy, f) / (1 - scoreCandidateWithModel(legacy, f)));
+    const marketLogit = (f: typeof hot) => {
+      const p = scoreCandidateWithModel(params.market, f);
+      return Math.log(p / (1 - p));
+    };
+    for (const f of [hot, cold]) expect(z(f)).toBeCloseTo(marketLogit(f) <= -1.5 ? -2.5 : -1.5, 9);
   });
 
   it("ships the market stage alone without enough deep reads", async () => {
