@@ -1066,14 +1066,16 @@ export async function buildStorageReport() {
         heap: bigint;
         indexes: bigint;
         total: bigint;
+        estimated_rows: number;
       }[]
     >`
-      SELECT relname AS table, n_live_tup AS live_rows, n_dead_tup AS dead_rows,
-             n_tup_ins AS inserted, n_tup_del AS deleted,
-             pg_relation_size(relid) AS heap, pg_indexes_size(relid) AS indexes,
-             pg_total_relation_size(relid) AS total
-      FROM pg_stat_user_tables
-      ORDER BY pg_total_relation_size(relid) DESC`,
+      SELECT s.relname AS table, s.n_live_tup AS live_rows, s.n_dead_tup AS dead_rows,
+             s.n_tup_ins AS inserted, s.n_tup_del AS deleted,
+             pg_relation_size(s.relid) AS heap, pg_indexes_size(s.relid) AS indexes,
+             pg_total_relation_size(s.relid) AS total,
+             c.reltuples::float8 AS estimated_rows
+      FROM pg_stat_user_tables s JOIN pg_class c ON c.oid = s.relid
+      ORDER BY pg_total_relation_size(s.relid) DESC`,
     // A week of new rows per day, each through an index on its own timestamp.
     prisma.$queryRaw<{ day: Date; table: string; rows: bigint }[]>`
       SELECT date_trunc('day', "firstSeenAt") AS day, 'Token' AS table, count(*) AS rows
@@ -1081,6 +1083,12 @@ export async function buildStorageReport() {
       UNION ALL
       SELECT date_trunc('day', "createdAt"), 'CuratedAlert', count(*)
         FROM "CuratedAlert" WHERE "createdAt" >= date_trunc('day', now()) - interval '7 days' GROUP BY 1
+      UNION ALL
+      SELECT date_trunc('day', "checkedAt"), 'TokenNarrative', count(*)
+        FROM "TokenNarrative" WHERE "checkedAt" >= date_trunc('day', now()) - interval '7 days' GROUP BY 1
+      UNION ALL
+      SELECT date_trunc('day', "createdAt"), 'TokenWalletActivity', count(*)
+        FROM "TokenWalletActivity" WHERE "createdAt" >= date_trunc('day', now()) - interval '7 days' GROUP BY 1
       ORDER BY 2, 1`,
     prisma.$queryRaw<{ day: Date; kind: string; rows: bigint; avg_features_bytes: number | null }[]>`
       SELECT date_trunc('day', "anchorAt") AS day, "sampleKind" AS kind, count(*) AS rows,
@@ -1112,13 +1120,75 @@ export async function buildStorageReport() {
       FROM "TokenSnapshot" s TABLESAMPLE SYSTEM (1)
       GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`,
   ]);
+  // Two more passes, after the first batch so the report never holds more than six connections.
+  const [narratives, snapshotColumns] = await Promise.all([
+    // TokenNarrative, the second-largest table: one row per launch TokenSage read, most of them a
+    // basic read of a coin that never reached the band. The raw document (analysis) is TOAST and
+    // the bulk of the table; pg_column_size reads its stored size off the pointer, no detoast.
+    prisma.$queryRaw<
+      {
+        depth: string;
+        in_band: boolean;
+        age: string;
+        rows: bigint;
+        with_doc: bigint;
+        avg_doc_bytes: number | null;
+        doc_bytes: bigint | null;
+      }[]
+    >`
+      SELECT n."depth" AS depth,
+             (t."firstInBandAt" IS NOT NULL) AS in_band,
+             CASE WHEN n."checkedAt" > now() - interval '2 days' THEN '0-2d'
+                  WHEN n."checkedAt" > now() - interval '7 days' THEN '2-7d'
+                  WHEN n."checkedAt" > now() - interval '21 days' THEN '7-21d'
+                  ELSE '21d+' END AS age,
+             count(*) AS rows,
+             count(n."analysis") AS with_doc,
+             avg(pg_column_size(n."analysis"))::float8 AS avg_doc_bytes,
+             sum(pg_column_size(n."analysis"))::bigint AS doc_bytes
+      FROM "TokenNarrative" n
+      LEFT JOIN "Token" t ON t."mintAddress" = n."mintAddress"
+      GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`,
+    // What a day of snapshots carries in its list columns (the holder list, clusters, flagged
+    // trades), from the same kind of 1% block sample: how many rows have each and their size.
+    prisma.$queryRaw<
+      {
+        rows: bigint;
+        avg_row_bytes: number | null;
+        with_holders: bigint;
+        avg_holders_bytes: number | null;
+        with_clusters: bigint;
+        avg_clusters_bytes: number | null;
+        with_same_time: bigint;
+        avg_same_time_bytes: number | null;
+        with_flagged: bigint;
+        avg_flagged_bytes: number | null;
+      }[]
+    >`
+      SELECT count(*) AS rows,
+             avg(pg_column_size(s.*))::float8 AS avg_row_bytes,
+             count(s."linkedHolders") AS with_holders,
+             avg(pg_column_size(s."linkedHolders"))::float8 AS avg_holders_bytes,
+             count(s."linkedClusters") AS with_clusters,
+             avg(pg_column_size(s."linkedClusters"))::float8 AS avg_clusters_bytes,
+             count(s."sameTimeClusters") AS with_same_time,
+             avg(pg_column_size(s."sameTimeClusters"))::float8 AS avg_same_time_bytes,
+             count(s."flaggedTrades") AS with_flagged,
+             avg(pg_column_size(s."flaggedTrades"))::float8 AS avg_flagged_bytes
+      FROM "TokenSnapshot" s TABLESAMPLE SYSTEM (1)
+      WHERE s."takenAt" > now() - interval '1 day'`,
+  ]);
   const n = (v: bigint | number | null | undefined) => Number(v ?? 0);
   return {
     databaseMb: mb(db[0]?.bytes ?? 0),
     statsResetAt: db[0]?.stats_reset ?? null,
     tables: tables.map((t) => ({
       table: t.table,
+      // n_live_tup starts over at a stats reset (a restart, a plan change) and is only corrected by
+      // the next vacuum or analyze of the table, so it undercounts for a while; estimatedRows is
+      // the planner's last estimate, which survives a reset (-1 on a table never analyzed).
       liveRows: n(t.live_rows),
+      estimatedRows: Math.round(t.estimated_rows),
       deadRows: n(t.dead_rows),
       insertedSinceReset: n(t.inserted),
       deletedSinceReset: n(t.deleted),
@@ -1148,5 +1218,37 @@ export async function buildStorageReport() {
       rows: n(s.rows),
       avgBytes: Math.round(s.avg_bytes),
     })),
+    // Exact counts: inBand says whether the coin ever entered the curated band (Token.firstInBandAt;
+    // false too for a coin whose Token row is gone), docBytes the stored documents' total size.
+    narratives: narratives.map((r) => ({
+      depth: r.depth,
+      inBand: r.in_band,
+      age: r.age,
+      rows: n(r.rows),
+      withDoc: n(r.with_doc),
+      avgDocBytes: r.avg_doc_bytes === null ? null : Math.round(r.avg_doc_bytes),
+      docMb: mb(r.doc_bytes),
+    })),
+    // The last day's snapshots, 1% block sample: multiply rows by ~100 for the day's estimate.
+    snapshotColumns: {
+      rows: n(snapshotColumns[0]?.rows),
+      avgRowBytes: Math.round(snapshotColumns[0]?.avg_row_bytes ?? 0),
+      linkedHolders: {
+        rows: n(snapshotColumns[0]?.with_holders),
+        avgBytes: Math.round(snapshotColumns[0]?.avg_holders_bytes ?? 0),
+      },
+      linkedClusters: {
+        rows: n(snapshotColumns[0]?.with_clusters),
+        avgBytes: Math.round(snapshotColumns[0]?.avg_clusters_bytes ?? 0),
+      },
+      sameTimeClusters: {
+        rows: n(snapshotColumns[0]?.with_same_time),
+        avgBytes: Math.round(snapshotColumns[0]?.avg_same_time_bytes ?? 0),
+      },
+      flaggedTrades: {
+        rows: n(snapshotColumns[0]?.with_flagged),
+        avgBytes: Math.round(snapshotColumns[0]?.avg_flagged_bytes ?? 0),
+      },
+    },
   };
 }

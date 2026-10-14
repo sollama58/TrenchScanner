@@ -458,6 +458,9 @@ describe.skipIf(!dbAvailable)("buildStorageReport", () => {
     expect(report.tables.map((t) => t.table)).toContain("TokenSnapshot");
     expect(typeof report.tokens.neverLive).toBe("number");
     expect(Array.isArray(report.snapshotSample)).toBe(true);
+    expect(report.tables.every((t) => Number.isFinite(t.estimatedRows))).toBe(true);
+    expect(Array.isArray(report.narratives)).toBe(true);
+    expect(typeof report.snapshotColumns.linkedHolders.rows).toBe("number");
     expect(() => JSON.stringify(report)).not.toThrow();
   });
 });
