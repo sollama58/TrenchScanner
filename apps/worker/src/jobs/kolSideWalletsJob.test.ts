@@ -22,11 +22,11 @@ describe("rankSideWallets", () => {
     expect(ranked[1]!.coins).toBe(3);
   });
 
-  it("keeps the top ten", () => {
-    const pairs = Array.from({ length: 14 }, (_, i) => ({ side: `w${i}`, shared: 2 + i, gapSec: 0 }));
-    const ranked = rankSideWallets(pairs, 20, new Map());
-    expect(ranked).toHaveLength(10);
-    expect(ranked[0]!.wallet).toBe("w13");
+  it("keeps the top hundred", () => {
+    const pairs = Array.from({ length: 120 }, (_, i) => ({ side: `w${i}`, shared: 2 + i, gapSec: 0 }));
+    const ranked = rankSideWallets(pairs, 200, new Map());
+    expect(ranked).toHaveLength(100);
+    expect(ranked[0]!.wallet).toBe("w119");
   });
 
   it("reads a wallet in a large share of every coin as a bot", () => {
