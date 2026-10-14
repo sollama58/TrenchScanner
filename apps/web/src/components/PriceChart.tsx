@@ -1,14 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { change, signedPct, usd } from "../format";
 import { isPumpfunName, walletText, type WalletNames } from "../walletNames";
-import {
-  groupMarkers,
-  mcapAxis,
-  timeLabel,
-  type MarkerGroup,
-  type MarkerTrade,
-  type Point,
-} from "../priceChart";
+import { mcapAxis, timeLabel, type MarkerTrade, type Point } from "../priceChart";
 
 /** A moment marked on the time axis: an alert or a model's call. */
 export interface ChartEvent {
@@ -29,18 +22,15 @@ export const MARKER_LABEL: Record<MarkerTrade["kind"], string> = {
   linked: "Linked wallet",
 };
 
-/** A marker's radius: bigger for more SOL, within a few pixels so a whale doesn't hide the line. */
-function markerSize(sol: number): number {
-  return 7 + Math.min(4.5, Math.sqrt(Math.max(0, sol)) * 1.6);
-}
-
 /** The height of the flow lane under the plot, when there are marked trades. */
 const LANE = 40;
 
-/** One slice of the flow lane: what the flagged wallets bought and sold in it. */
+/** One slice of the flow lane: what the flagged wallets bought and sold in it, and the trades behind each. */
 interface FlowBucket {
   buy: number;
   sell: number;
+  buys: MarkerTrade[];
+  sells: MarkerTrade[];
 }
 
 /**
@@ -48,14 +38,20 @@ interface FlowBucket {
  * no amount is known, so the lane still shows which way they traded.
  */
 function flowBuckets(trades: readonly MarkerTrade[], t0: number, t1: number, n: number): FlowBucket[] {
-  const out = Array.from({ length: n }, () => ({ buy: 0, sell: 0 }));
+  const out = Array.from({ length: n }, (): FlowBucket => ({ buy: 0, sell: 0, buys: [], sells: [] }));
   const inView = trades.filter((t) => t.t >= t0 && t.t <= t1);
   const bySol = inView.some((t) => (t.sol ?? 0) > 0);
   for (const t of inView) {
     const i = Math.min(n - 1, Math.floor(((t.t - t0) / Math.max(1, t1 - t0)) * n));
     const w = bySol ? (t.sol ?? 0) : 1;
-    if (t.side === 1) out[i]!.buy += w;
-    else out[i]!.sell += w;
+    const b = out[i]!;
+    if (t.side === 1) {
+      b.buy += w;
+      b.buys.push(t);
+    } else {
+      b.sell += w;
+      b.sells.push(t);
+    }
   }
   return out;
 }
@@ -65,7 +61,7 @@ function flowBuckets(trades: readonly MarkerTrade[], t0: number, t1: number, n: 
  * the area between them shaded. The baseline is the alert's market cap while the alert is in view,
  * else where the view starts, so the colour always answers "up or down since then?". Sized to its
  * box in real pixels (a ResizeObserver), so text stays crisp at any width. Hover (or drag on a touch
- * screen) reads one point out.
+ * screen) reads one point out; hovering (or tapping) a bar in the flow lane reads out its trades.
  */
 export function PriceChart({
   points,
@@ -84,7 +80,7 @@ export function PriceChart({
   /** The spacing the points were thinned to; scan readings, which come unevenly, estimate their own. */
   stepMs?: number;
   events: ChartEvent[];
-  /** Flagged wallets' trades, drawn as B and S badges (buys under the line, sells over it) and summed in a lane under the plot. */
+  /** Flagged wallets' trades, summed into buy and sell bars in a lane under the plot. */
   markers?: MarkerTrade[];
   /** Model View: the call's time. Everything after it is shaded as what the model didn't see. */
   seenUntil?: number;
@@ -103,7 +99,8 @@ export function PriceChart({
   const boxRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
   const [hover, setHover] = useState<number | null>(null);
-  const [hoverMark, setHoverMark] = useState<number | null>(null);
+  /** The flow bar under the pointer: its slice and side. */
+  const [bar, setBar] = useState<{ i: number; side: 1 | -1 } | null>(null);
 
   useEffect(() => {
     const el = boxRef.current;
@@ -133,7 +130,6 @@ export function PriceChart({
     return { t0, t1, step, x, axis, base, fromAlert: leadShown && !!lead.mcap, hiIdx };
   }, [points, stepMs, width, height, events]);
 
-  const groups = useMemo(() => (geo ? groupMarkers(points, geo.step, markers) : []), [points, geo, markers]);
   // About one flow bar per 10px of plot.
   const slices = Math.max(12, Math.round((width - PAD.l - PAD.r) / 10));
   const flow = useMemo(
@@ -188,33 +184,6 @@ export function PriceChart({
     points.length > 2 &&
     geo.hiIdx < points.length - 1 &&
     Math.abs(py(peak) - lastY) > 16;
-  // Each marker sits off the line (buys below, sells above) and steps further out while it would
-  // overlap one already placed, so trades bunched around the call fan out instead of piling up.
-  const placed: { g: MarkerGroup; lx: number; x: number; ly: number; y: number; r: number }[] = [];
-  for (const g of groups) {
-    const p = points[g.at]!;
-    const r = markerSize(g.sol);
-    const lx = px(p);
-    let x = Math.min(width - PAD.r - r - 2, Math.max(PAD.l + r + 2, lx));
-    const ly = py(p);
-    const dir = g.side === 1 ? 1 : -1;
-    // Clear of the event flags along the top and of the flow lane along the bottom.
-    const top = PAD.t + 6 + r;
-    const low = bottom - r - 2;
-    let y = ly + dir * (9 + r);
-    for (let tries = 0; tries < 24; tries++) {
-      if (y < top || y > low) {
-        // Out of room above or below the line: start a new column beside it, toward the middle.
-        x += (lx > width / 2 ? -1 : 1) * (r * 2 + 3);
-        y = ly + dir * (9 + r);
-      }
-      const hit = placed.find((q) => Math.hypot(q.x - x, q.y - y) < q.r + r + 3);
-      if (!hit) break;
-      y = hit.y + dir * (hit.r + r + 3);
-    }
-    placed.push({ g, lx, x, ly, y: Math.min(low, Math.max(top, y)), r });
-  }
-  const mark = hoverMark !== null ? placed[hoverMark] : undefined;
 
   const pick = (clientX: number) => {
     const box = boxRef.current?.getBoundingClientRect();
@@ -234,6 +203,8 @@ export function PriceChart({
   const laneHalf = (LANE - 8) / 2 - 2;
   const flowMax = flow ? Math.max(1e-9, ...flow.map((b) => Math.max(b.buy, b.sell))) : 1;
   const sliceW = (width - PAD.l - PAD.r) / slices;
+  const barTrades = bar && flow ? (bar.side === 1 ? flow[bar.i]?.buys : flow[bar.i]?.sells) : undefined;
+  const mark = barTrades && barTrades.length > 0 ? barTrades : undefined;
 
   return (
     <div className="pc" ref={boxRef}>
@@ -245,8 +216,15 @@ export function PriceChart({
         role="img"
         aria-label={ariaLabel}
         onPointerMove={(e) => pick(e.clientX)}
-        onPointerDown={(e) => pick(e.clientX)}
-        onPointerLeave={() => setHover(null)}
+        onPointerDown={(e) => {
+          setBar(null);
+          pick(e.clientX);
+        }}
+        onPointerLeave={(e) => {
+          setHover(null);
+          // A tapped bar's readout stays up after the finger lifts, until the next tap.
+          if (e.pointerType === "mouse") setBar(null);
+        }}
       >
         <defs>
           <linearGradient
@@ -343,18 +321,36 @@ export function PriceChart({
         )}
 
         {flow && (
-          <g className="pc-flow" aria-hidden="true">
+          <g className="pc-flow">
             <line x1={PAD.l} x2={width - PAD.r} y1={laneMid} y2={laneMid} className="pc-flow-mid" />
             {flow.map((b, i) => {
               const bx = PAD.l + i * sliceW + 1;
               const bw = Math.max(1.5, sliceW - 2);
               const hb = (b.buy / flowMax) * laneHalf;
               const hs = (b.sell / flowMax) * laneHalf;
+              const on = (side: 1 | -1) => (bar?.i === i && bar.side === side ? " on" : "");
+              // Hit targets span the slice and the whole half of the lane, so a thin bar is easy to find.
+              const hit = (side: 1 | -1) => (
+                <rect
+                  className="pc-flow-hit"
+                  x={PAD.l + i * sliceW}
+                  width={sliceW}
+                  y={side === 1 ? laneTop : laneMid}
+                  height={LANE / 2 - 4}
+                  onPointerEnter={(e) => e.pointerType === "mouse" && setBar({ i, side })}
+                  onPointerLeave={(e) => e.pointerType === "mouse" && setBar(null)}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    setHover(null);
+                    setBar({ i, side });
+                  }}
+                />
+              );
               return (
                 <g key={i}>
                   {b.buy > 0 && (
                     <rect
-                      className="pc-flow-buy"
+                      className={`pc-flow-buy${on(1)}`}
                       x={bx}
                       width={bw}
                       y={laneMid - Math.max(2, hb)}
@@ -364,7 +360,7 @@ export function PriceChart({
                   )}
                   {b.sell > 0 && (
                     <rect
-                      className="pc-flow-sell"
+                      className={`pc-flow-sell${on(-1)}`}
                       x={bx}
                       width={bw}
                       y={laneMid}
@@ -372,6 +368,8 @@ export function PriceChart({
                       rx={1.5}
                     />
                   )}
+                  {b.buy > 0 && hit(1)}
+                  {b.sell > 0 && hit(-1)}
                 </g>
               );
             })}
@@ -393,41 +391,6 @@ export function PriceChart({
             </text>
           </g>
         )}
-
-        {/* Stems first, so no stem crosses a badge. */}
-        {placed.map((p, i) => (
-          <line
-            key={`stem-${p.g.at}-${p.g.kind}-${p.g.side}`}
-            x1={p.lx}
-            x2={p.x}
-            y1={p.ly}
-            y2={p.y}
-            className={`pc-stem k-${p.g.kind}${hoverMark === i ? " on" : ""}`}
-          />
-        ))}
-        {placed.map((p, i) => (
-          <g
-            key={`${p.g.at}-${p.g.kind}-${p.g.side}`}
-            className={`pc-mark k-${p.g.kind} ${p.g.side === 1 ? "buy" : "sell"}${hoverMark === i ? " on" : ""}`}
-            onPointerEnter={() => setHoverMark(i)}
-            onPointerLeave={() => setHoverMark(null)}
-            onPointerDown={() => setHoverMark(i)}
-          >
-            <g className="pc-badge" style={{ transformOrigin: `${p.x}px ${p.y}px` }}>
-              <circle cx={p.x} cy={p.y} r={p.r + 2} className="pc-badge-back" />
-              <circle cx={p.x} cy={p.y} r={p.r} className="pc-badge-face" />
-              <text
-                x={p.x}
-                y={p.y}
-                dy="0.36em"
-                textAnchor="middle"
-                style={{ fontSize: Math.round(p.r * 1.15) }}
-              >
-                {p.g.side === 1 ? "B" : "S"}
-              </text>
-            </g>
-          </g>
-        ))}
 
         {/* The latest reading: a dot on the line's end and its value on the axis. A view that ends
             before the latest reading (Model View) tags its end plainly, so it doesn't read as now. */}
@@ -475,7 +438,16 @@ export function PriceChart({
         </span>
       ))}
 
-      {mark && <MarkerTip group={mark.g} x={mark.x} y={mark.y} width={width} names={names} />}
+      {mark && bar && (
+        <BarTip
+          trades={mark}
+          side={bar.side}
+          x={PAD.l + (bar.i + 0.5) * sliceW}
+          bottom={fullH - laneTop + 6}
+          width={width}
+          names={names}
+        />
+      )}
 
       {h && !mark && (
         <div
@@ -498,52 +470,67 @@ export function PriceChart({
   );
 }
 
-/** What one marker stands for: who traded, which way, and how much. */
-function MarkerTip({
-  group: g,
+/** What one flow bar stands for: who traded, which way, and how much. */
+function BarTip({
+  trades,
+  side,
   x,
-  y,
+  bottom,
   width,
   names,
 }: {
-  group: MarkerGroup;
+  trades: readonly MarkerTrade[];
+  side: 1 | -1;
   x: number;
-  y: number;
+  /** Distance from the chart box's bottom edge, so the readout sits above the lane. */
+  bottom: number;
   width: number;
   names?: WalletNames;
 }) {
-  const known = g.trades.some((t) => t.sol !== null);
+  const known = trades.some((t) => t.sol !== null);
+  const sol = trades.reduce((s, t) => s + (t.sol ?? 0), 0);
   // The wallets in it, the biggest traders first.
-  const byWallet = new Map<string, number>();
-  for (const t of g.trades) byWallet.set(t.wallet, (byWallet.get(t.wallet) ?? 0) + (t.sol ?? 0));
-  const wallets = [...byWallet.entries()].sort((a, b) => b[1] - a[1]);
+  const byWallet = new Map<string, { sol: number; kind: MarkerTrade["kind"] }>();
+  for (const t of trades) {
+    const w = byWallet.get(t.wallet);
+    byWallet.set(t.wallet, { sol: (w?.sol ?? 0) + (t.sol ?? 0), kind: w?.kind ?? t.kind });
+  }
+  const wallets = [...byWallet.entries()].sort((a, b) => b[1].sol - a[1].sol);
+  const kinds = new Set(trades.map((t) => t.kind));
+  const kind = kinds.size === 1 ? trades[0]!.kind : null;
+  const ts = trades.map((t) => t.t);
+  const from = Math.min(...ts);
+  const to = Math.max(...ts);
   return (
     <div
-      className={`pc-tip pc-mark-tip k-${g.kind}`}
+      className={`pc-tip pc-mark-tip${kind ? ` k-${kind}` : ""}`}
       style={{
-        top: Math.max(0, y - 30),
-        left: x > width / 2 ? undefined : x + 14,
-        right: x > width / 2 ? width - x + 14 : undefined,
+        top: "auto",
+        bottom,
+        left: x > width / 2 ? undefined : x + 10,
+        right: x > width / 2 ? width - x + 10 : undefined,
       }}
     >
       <span className="pc-mark-head">
-        <i className={`pc-swatch k-${g.kind}`} aria-hidden="true" />
-        {MARKER_LABEL[g.kind]} {g.side === 1 ? "bought" : "sold"}
+        {kind && <i className={`pc-swatch k-${kind}`} aria-hidden="true" />}
+        {kind ? MARKER_LABEL[kind] : "Flagged wallets"} {side === 1 ? "bought" : "sold"}
       </span>
       <strong className="num">
-        {known ? `${g.sol.toFixed(g.sol >= 10 ? 0 : 2)} SOL` : "Amount not recorded"}
+        {known ? `${sol.toFixed(sol >= 10 ? 0 : 2)} SOL` : "Amount not recorded"}
       </strong>
       <span className="faint">
-        {g.trades.length} trade{g.trades.length === 1 ? "" : "s"}
-        {g.wallets > 1 ? ` by ${g.wallets} wallets` : ""} · {timeLabel(g.trades[0]!.t, 0)}
+        {trades.length} trade{trades.length === 1 ? "" : "s"}
+        {wallets.length > 1 ? ` by ${wallets.length} wallets` : ""} · {timeLabel(from, 0)}
+        {to - from >= 60_000 ? `–${timeLabel(to, 0)}` : ""}
       </span>
-      {wallets.slice(0, 3).map(([w, sol]) => (
+      {wallets.slice(0, 3).map(([w, v]) => (
         <span
           key={w}
           className={`pc-mark-wallet${names?.[w] ? "" : " num"}${isPumpfunName(names?.[w]) ? " pumpfun-name" : ""}`}
         >
+          {!kind && <i className={`pc-swatch k-${v.kind}`} aria-hidden="true" />}
           {walletText(w, names)}
-          {known ? ` · ${sol.toFixed(sol >= 10 ? 0 : 2)} SOL` : ""}
+          {known ? ` · ${v.sol.toFixed(v.sol >= 10 ? 0 : 2)} SOL` : ""}
         </span>
       ))}
       {wallets.length > 3 && <span className="faint">and {wallets.length - 3} more</span>}

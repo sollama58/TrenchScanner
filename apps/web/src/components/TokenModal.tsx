@@ -447,57 +447,6 @@ function useActiveSection(bodyRef: RefObject<HTMLDivElement | null>, ids: string
   return active;
 }
 
-/** SOL with two decimals under 10, none above. */
-const solText = (v: number) => `${v.toFixed(v >= 10 ? 0 : 2)} SOL`;
-
-/**
- * Whether the flagged wallets bought or sold more in the chart's view: a green and red bar split by
- * SOL (by trade count when no amount is known), with the net in words.
- */
-function FlowSummary({ trades }: { trades: readonly MarkerTrade[] }) {
-  if (trades.length === 0) return null;
-  const buys = trades.filter((t) => t.side === 1);
-  const sells = trades.filter((t) => t.side === -1);
-  const sum = (ts: readonly MarkerTrade[]) => ts.reduce((s, t) => s + (t.sol ?? 0), 0);
-  const bySol = trades.some((t) => (t.sol ?? 0) > 0);
-  const b = bySol ? sum(buys) : buys.length;
-  const v = bySol ? sum(sells) : sells.length;
-  const buyShare = b + v > 0 ? b / (b + v) : 0.5;
-  const net = b - v;
-  const even = Math.abs(net) <= (b + v) * 0.05;
-  const verdict = even
-    ? "Buying and selling about even"
-    : bySol
-      ? `Net ${net > 0 ? "buying" : "selling"} ${solText(Math.abs(net))}`
-      : `More ${net > 0 ? "buys" : "sells"} than ${net > 0 ? "sells" : "buys"}`;
-  return (
-    <div className={`tm-bal ${even ? "even" : net > 0 ? "buying" : "selling"}`}>
-      <div className="tm-bal-head">
-        <span className="tm-bal-title">Flagged wallets in view</span>
-        <strong className="tm-bal-verdict">{verdict}</strong>
-      </div>
-      <div
-        className="tm-bal-bar"
-        role="img"
-        aria-label={`${Math.round(buyShare * 100)}% buys, ${Math.round((1 - buyShare) * 100)}% sells`}
-      >
-        <span className="buy" style={{ flexGrow: Math.max(0.02, buyShare) }} />
-        <span className="sell" style={{ flexGrow: Math.max(0.02, 1 - buyShare) }} />
-      </div>
-      <div className="tm-bal-sides small num">
-        <span className="buy">
-          {buys.length} buy{buys.length === 1 ? "" : "s"}
-          {bySol ? ` · ${solText(b)}` : ""}
-        </span>
-        <span className="sell">
-          {sells.length} sell{sells.length === 1 ? "" : "s"}
-          {bySol ? ` · ${solText(v)}` : ""}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 /**
  * The reading the bubble map and the top holders draw: the card's newest that kept a holder list,
  * else the newest of the coin's scans that did (fetched; a lookup's card is already its latest
@@ -574,9 +523,9 @@ function ChartCard({
   // Every token view opens on the coin's whole history; Model View is a click away.
   const [range, setRange] = useState<Range>("all");
   const [hidden, setHidden] = useState<ReadonlySet<MarkerKind>>(() => new Set());
-  const [height, setHeight] = useState(() => (window.innerWidth <= 640 ? 210 : 260));
+  const [height, setHeight] = useState(() => (window.innerWidth <= 640 ? 180 : 220));
   useEffect(() => {
-    const onResize = () => setHeight(window.innerWidth <= 640 ? 210 : 260);
+    const onResize = () => setHeight(window.innerWidth <= 640 ? 180 : 220);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -731,23 +680,6 @@ function ChartCard({
           <div className="tm-legend">
             {flagged.length > 0 ? (
               <>
-                {view && view.points.length >= 2 && (
-                  <FlowSummary
-                    trades={markers.filter(
-                      (m) => m.t >= view.points[0]!.t && m.t <= view.points[view.points.length - 1]!.t,
-                    )}
-                  />
-                )}
-                <span className="tm-legend-key faint small">
-                  <i className="tm-bs buy" aria-hidden="true">
-                    B
-                  </i>{" "}
-                  buy
-                  <i className="tm-bs sell" aria-hidden="true">
-                    S
-                  </i>{" "}
-                  sell
-                </span>
                 {counts
                   .filter((c) => c.n > 0)
                   .map(({ k, n }) => (

@@ -8876,49 +8876,6 @@ img.tm-avatar {
 .k-winner {
   --mk: var(--series-2);
 }
-.pc-mark {
-  cursor: pointer;
-}
-/* A marked trade: a B (green) or S (red) badge ringed in the wallet kind's colour. */
-.pc-mark.buy {
-  --side: var(--good);
-}
-.pc-mark.sell {
-  --side: var(--bad);
-}
-.pc-badge {
-  transition: transform 0.12s;
-}
-.pc-badge-back {
-  fill: var(--surface-2);
-}
-.pc-badge-face {
-  fill: color-mix(in srgb, var(--side) 88%, #000);
-  stroke: var(--mk);
-  stroke-width: 1.6;
-}
-.pc-badge text {
-  fill: #fff;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  pointer-events: none;
-}
-.pc-stem {
-  pointer-events: none;
-  stroke: var(--mk);
-  stroke-width: 1.2;
-  stroke-dasharray: 2 2;
-  opacity: 0.6;
-}
-.pc-mark.on .pc-badge {
-  transform: scale(1.2);
-}
-.pc-mark.on .pc-badge-face {
-  stroke: var(--ink);
-}
-.pc-stem.on {
-  opacity: 1;
-}
 /* The flow lane under the plot: flagged buys up in green, sells down in red. */
 .pc-flow-mid {
   stroke: var(--grid);
@@ -8931,6 +8888,19 @@ img.tm-avatar {
 .pc-flow-sell {
   fill: var(--bad);
   opacity: 0.6;
+}
+.pc-flow-buy,
+.pc-flow-sell {
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+.pc-flow-buy.on,
+.pc-flow-sell.on {
+  opacity: 1;
+}
+.pc-flow-hit {
+  fill: transparent;
+  cursor: pointer;
 }
 .pc-flow-label {
   font-size: 10px;
@@ -8955,6 +8925,9 @@ img.tm-avatar {
   font-weight: 600;
 }
 .pc-mark-wallet {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   color: var(--ink-2);
   font-size: 11.5px;
 }
@@ -8965,12 +8938,6 @@ img.tm-avatar {
   gap: 6px;
   margin-top: 8px;
   min-height: 24px;
-}
-.tm-legend-key {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-right: 4px;
 }
 .tm-chip {
   gap: 6px;
@@ -10385,83 +10352,6 @@ img.tm-avatar {
   opacity: 0.1;
 }
 
-/* The chart's buy/sell balance: who's winning among the flagged wallets in view. */
-.tm-bal {
-  flex: 1 1 100%;
-  display: grid;
-  gap: 5px;
-  padding: 2px 0 8px;
-  margin-bottom: 2px;
-  border-bottom: 1px solid var(--border);
-}
-.tm-bal-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-}
-.tm-bal-title {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.tm-bal-verdict {
-  font-size: 12.5px;
-  color: var(--ink);
-}
-.tm-bal.buying .tm-bal-verdict {
-  color: var(--good);
-}
-.tm-bal.selling .tm-bal-verdict {
-  color: var(--bad);
-}
-.tm-bal-bar {
-  display: flex;
-  gap: 2px;
-  height: 4px;
-}
-.tm-bal-bar > span {
-  flex-basis: 0;
-  border-radius: 999px;
-}
-.tm-bal-bar .buy {
-  background: var(--good);
-}
-.tm-bal-bar .sell {
-  background: var(--bad);
-}
-.tm-bal-sides {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-.tm-bal-sides .buy {
-  color: var(--good);
-}
-.tm-bal-sides .sell {
-  color: var(--bad);
-}
-.tm-bs {
-  display: inline-grid;
-  place-items: center;
-  width: 15px;
-  height: 15px;
-  margin-left: 4px;
-  border-radius: 50%;
-  font-size: 9px;
-  font-style: normal;
-  font-weight: 800;
-  color: #fff;
-}
-.tm-bs.buy {
-  background: color-mix(in srgb, var(--good) 88%, #000);
-}
-.tm-bs.sell {
-  background: color-mix(in srgb, var(--bad) 88%, #000);
-}
 .pc-cross,
 .pc-last,
 .pc-peak {
