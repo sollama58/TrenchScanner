@@ -822,15 +822,16 @@ async function* topModelsPages(since: Date, until: Date, pageSize = EXPORT_PAGE_
 }
 
 /**
- * What the Telegram bot sent (TelegramAlertSent): one row per token per chat, with the alert
- * behind it found as /alerts and /trenchboard find it (alertFor in telegramBoards.ts) - the model
- * call when there was one, else the user-filter match. Windowed on sentAt.
+ * What the Telegram bot sent (TelegramAlertSent): one row per send, re-alerts included, with the
+ * alert it carried - the model call when there was one, else the user-filter match. Sends since
+ * 2026-10-14 store both ids; for older rows the alert is found as /alerts and /trenchboard find it
+ * (alertFor in telegramBoards.ts). Windowed on sentAt.
  *
  * Token- and chat-id only: `chatId` is our own TelegramChat row id, never Telegram's chat id (a
  * private chat's is the person's Telegram user id), and nothing about the chat's owner, title or
  * who linked it is read. A filter match is given by its id, not its filter's user-written name.
- * A re-alert moves its row's sentAt to the newer send, and a chat that is re-linked starts over,
- * so each row is a chat's latest send of the token. Recorded from 2026-10-10 21:30 UTC on.
+ * A chat that is re-linked starts over. Recorded from 2026-10-10 21:30 UTC on; before 2026-10-14
+ * a re-alert moved the row's sentAt to the newer send, so those rows are each a chat's latest send.
  */
 const TELEGRAM_SENT_COLUMNS = [
   "sentAt",
@@ -854,6 +855,8 @@ type SentRow = {
   tokenId: string;
   mintAddress: string | null;
   symbol: string | null;
+  storedCallId: string | null;
+  storedMatchId: string | null;
 };
 
 async function* telegramSentPages(since: Date, until: Date, pageSize = EXPORT_PAGE_SIZE) {
@@ -863,7 +866,8 @@ async function* telegramSentPages(since: Date, until: Date, pageSize = EXPORT_PA
     // a token swept since is kept with a null mint.
     const rows: SentRow[] = await prisma.$queryRaw`
       SELECT s."sentAt", s."chatId", c."kind" AS "chatKind", c."userId", s."tokenId",
-             tk."mintAddress", tk."symbol"
+             tk."mintAddress", tk."symbol",
+             s."curatedAlertId" AS "storedCallId", s."matchId" AS "storedMatchId"
       FROM "TelegramAlertSent" s
       LEFT JOIN "TelegramChat" c ON c."id" = s."chatId"
       LEFT JOIN "Token" tk ON tk."id" = s."tokenId"
@@ -877,9 +881,15 @@ async function* telegramSentPages(since: Date, until: Date, pageSize = EXPORT_PA
     const userIds = [...new Set(rows.flatMap((r) => (r.userId ? [r.userId] : [])))];
     const from = new Date(rows[0]!.sentAt.getTime() - ALERT_LOOKBACK_MS);
     const to = new Date(rows[rows.length - 1]!.sentAt.getTime() + ALERT_LOOKAHEAD_MS);
+    const storedCallIds = [...new Set(rows.flatMap((r) => (r.storedCallId ? [r.storedCallId] : [])))];
     const [calls, matches] = await Promise.all([
       prisma.curatedAlert.findMany({
-        where: { tokenId: { in: tokenIds }, createdAt: { gte: from, lte: to } },
+        where: {
+          OR: [
+            { tokenId: { in: tokenIds }, createdAt: { gte: from, lte: to } },
+            { id: { in: storedCallIds } },
+          ],
+        },
         select: { id: true, tokenId: true, createdAt: true, model: true, modelName: true },
       }),
       userIds.length === 0
@@ -889,16 +899,25 @@ async function* telegramSentPages(since: Date, until: Date, pageSize = EXPORT_PA
             select: { id: true, tokenId: true, userId: true, matchedAt: true },
           }),
     ]);
-    yield rows.map(({ userId, ...r }) => {
-      const call = alertFor(calls, (c) => c.createdAt, r.tokenId, r.sentAt);
+    const callsById = new Map(calls.map((c) => [c.id, c]));
+    yield rows.map(({ userId, storedCallId, storedMatchId, ...r }) => {
+      // The ids the send stored win; the time-window lookup is for rows from before they were kept.
+      const stored = storedCallId !== null || storedMatchId !== null;
+      const call = stored
+        ? storedCallId !== null
+          ? (callsById.get(storedCallId) ?? { id: storedCallId, model: null, modelName: null })
+          : undefined
+        : alertFor(calls, (c) => c.createdAt, r.tokenId, r.sentAt);
       const match = call
         ? undefined
-        : alertFor(
-            matches.filter((m) => m.userId === userId),
-            (m) => m.matchedAt,
-            r.tokenId,
-            r.sentAt,
-          );
+        : stored
+          ? { id: storedMatchId! }
+          : alertFor(
+              matches.filter((m) => m.userId === userId),
+              (m) => m.matchedAt,
+              r.tokenId,
+              r.sentAt,
+            );
       return {
         ...r,
         alertKind: call ? "model" : match ? "filter" : null,

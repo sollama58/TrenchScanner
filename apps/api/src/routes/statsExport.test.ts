@@ -327,7 +327,7 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
       });
     }
     // Three chats sent the token: two a minute after the call (a tie on sentAt), and one long after,
-    // which no alert explains.
+    // which no time window explains but whose send stored the call it carried.
     userId = (await prisma.user.create({ data: { walletAddress: `export-test-wallet-${Date.now()}` } })).id;
     const telegramIdBase = 9_000_000_000_000 + Date.now();
     for (const [i, minute] of [
@@ -346,7 +346,9 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
         },
       });
       chatIds.push(chat.id);
-      await prisma.telegramAlertSent.create({ data: { chatId: chat.id, tokenId, sentAt: at(minute) } });
+      await prisma.telegramAlertSent.create({
+        data: { chatId: chat.id, tokenId, sentAt: at(minute), curatedAlertId: i === 2 ? alertId : null },
+      });
     }
   });
 
@@ -507,7 +509,12 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
       modelName: "Rules",
       matchId: null,
     });
-    expect(byChat.get(chatIds[2]!)).toMatchObject({ alertKind: null, curatedAlertId: null, model: null });
+    // The stored id wins over the time window.
+    expect(byChat.get(chatIds[2]!)).toMatchObject({
+      alertKind: "model",
+      curatedAlertId: alertId,
+      model: "rules",
+    });
     expect(JSON.stringify(rows)).not.toContain("Someone Personal");
 
     // Tied sends page on the chat id without skipping or repeating one.
