@@ -35,7 +35,7 @@ import {
 } from "./routes";
 import { AlertNotifier, resetSettings } from "./alerts";
 import { AnnouncementBar } from "./components/AnnouncementBar";
-import { hasPendingLink, redeemLinkCode, takeLinkCode } from "./deviceLink";
+import { currentSignIn, hasPendingLink, mayReplaceSignIn, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { useSageMint } from "./sage";
 import { useBubblesMint } from "./bubbleMap";
 import { useWalletAddress } from "./walletModal";
@@ -83,6 +83,8 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
 ];
 /** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
 const ADMIN_TAB = { id: "admin" as Tab, label: "Admin", Icon: ShieldIcon };
+/** The open tab's view, which the selected tab button controls. */
+const TAB_PANEL_ID = "tab-panel";
 
 type Session =
   | { state: "loading" }
@@ -154,8 +156,18 @@ export function App() {
       setSession({ state: "linking", error: failed });
       return;
     }
-    redeemLinkCode(code)
+    // Someone already signed in here is asked before the link swaps them for the paired account;
+    // saying no keeps their sign-in and drops the code unredeemed.
+    currentSignIn()
+      .then((current) => {
+        if (!mayReplaceSignIn(current, (q) => window.confirm(q))) {
+          leaveLinking();
+          return null;
+        }
+        return redeemLinkCode(code);
+      })
       .then((user) => {
+        if (!user) return;
         setGuest(false);
         invalidate();
         resetSettings();
@@ -241,6 +253,23 @@ export function App() {
     session.state === "signed-in" || session.state === "guest"
       ? `Loading ${tabs.find((t) => t.id === tab)?.label ?? "TrenchScanner"}`
       : "Loading TrenchScanner";
+  const tabLabel = TABS.find((t) => t.id === tab)?.label ?? (tab === "admin" ? ADMIN_TAB.label : "");
+  // The tab bar's button for this view, when it shows one (a hidden Lighthouse tab opened from a
+  // link has none): it names the tab panel.
+  const tabButtonShown = (guest ? shownTabs : tabs).some((t) => t.id === tab);
+  const panelProps = {
+    role: "tabpanel",
+    id: TAB_PANEL_ID,
+    ...(tabButtonShown ? { "aria-labelledby": `tab-${tab}` } : { "aria-label": tabLabel }),
+  };
+  // One <h1> per view, for screen readers and outlines; the design shows the brand and the tab bar
+  // instead. The sign-in page and the Utilities tab have their own visible one.
+  const heading =
+    session.state === "signed-out" || (signedIn && tab === "utilities")
+      ? null
+      : guest || signedIn
+        ? `TrenchScanner: ${tabLabel}`
+        : "TrenchScanner";
 
   return (
     <div className="app">
@@ -254,7 +283,7 @@ export function App() {
             </span>
           </a>
           {guest && (
-            <nav className="tabs" role="tablist">
+            <nav className="tabs" role="tablist" aria-label="Sections">
               {shownTabs.map(({ id, label, Icon }) => {
                 // Live, Models and the Lighthouse work read-only without a wallet; the rest are
                 // saved to one.
@@ -262,8 +291,10 @@ export function App() {
                 return (
                   <button
                     key={id}
+                    id={`tab-${id}`}
                     role="tab"
                     aria-selected={tab === id}
+                    aria-controls={tab === id ? TAB_PANEL_ID : undefined}
                     aria-disabled={locked || undefined}
                     className={`${tab === id ? "on" : ""}${locked ? " locked" : ""}`}
                     title={locked ? `Connect a wallet to use ${label}` : undefined}
@@ -277,19 +308,25 @@ export function App() {
             </nav>
           )}
           {signedIn && (
-            <nav className="tabs" role="tablist">
-              {tabs.map(({ id, label, Icon }) => (
-                <button
-                  key={id}
-                  role="tab"
-                  aria-selected={tab === id}
-                  className={tab === id ? "on" : ""}
-                  onClick={() => goTo(id)}
-                >
-                  <Icon size={15} />
-                  <span>{label}</span>
-                </button>
-              ))}
+            <nav className="tabs" aria-label="Sections">
+              {/* The tabs proper; the HolDEX link sits beside them in the same bar, outside the
+                  tablist (display: contents keeps the bar's layout). */}
+              <div className="tablist" role="tablist">
+                {tabs.map(({ id, label, Icon }) => (
+                  <button
+                    key={id}
+                    id={`tab-${id}`}
+                    role="tab"
+                    aria-selected={tab === id}
+                    aria-controls={tab === id ? TAB_PANEL_ID : undefined}
+                    className={tab === id ? "on" : ""}
+                    onClick={() => goTo(id)}
+                  >
+                    <Icon size={15} />
+                    <span>{label}</span>
+                  </button>
+                ))}
+              </div>
               {/* A link out to HolDEX, not a tab of this app: it opens in a new browser tab. */}
               <a
                 className="button tab-link"
@@ -323,6 +360,7 @@ export function App() {
       </header>
 
       <main className="content">
+        {heading && <h1 className="sr-only">{heading}</h1>}
         <PageLoader label={loaderLabel} />
         {/* The Admin tab's broadcast: for everyone, signed in, guest or signed out. */}
         {session.state !== "linking" && <AnnouncementBar />}
@@ -382,7 +420,7 @@ export function App() {
           </Suspense>
         )}
         {guest && (
-          <div className="tab-view" key={tab}>
+          <div className="tab-view" key={tab} {...panelProps}>
             {tab === "live" ? (
               <GuestLiveTab onConnect={connectWallet} />
             ) : tab === "model" ? (
@@ -419,7 +457,7 @@ export function App() {
         {signedIn && (
           <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
             <AlertNotifier />
-            <div className="tab-view" key={tab}>
+            <div className="tab-view" key={tab} {...panelProps}>
               <Suspense fallback={<Boot />}>
                 {tab === "live" && <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} />}
                 {tab === "stream" && <StreamView />}
@@ -495,7 +533,17 @@ function WorkerStatus({ showJobs }: { showJobs: boolean }) {
     return () => clearInterval(id);
   }, [open]);
   const scan = data?.jobs.find((j) => j.job === "scan");
-  if (!data) return null;
+  // Until the heartbeat lands, an invisible pill of the usual size holds its place, so the topbar
+  // doesn't shift when the real one appears.
+  if (!data)
+    return (
+      <span className="status-wrap" aria-hidden style={{ visibility: "hidden" }}>
+        <span className="status-pill">
+          <span className="pulse" />
+          Scanning<span className="faint"> · 10s ago</span>
+        </span>
+      </span>
+    );
   // Only the scan loop decides the pill: daily jobs (cleanup, outcome tracking) read as stale for
   // most of the day by design, and the user is asking "is it finding tokens right now".
   const bad = !scan || scan.stale || scan.hung;

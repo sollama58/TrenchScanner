@@ -18,7 +18,10 @@ export function CustomizeDrawer({ open, onClose }: { open: boolean; onClose: () 
     if (!open) return;
     // The page shifts left on wide screens so the drawer doesn't cover the cards.
     document.body.classList.add("drawer-open");
-    ref.current?.focus();
+    // Whatever opened the drawer (the Customize button) gets focus back when it closes.
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const drawer = ref.current;
+    drawer?.focus();
     const onKey = (e: KeyboardEvent) => {
       // Escape in a popup opened over the drawer (Stats, How this works) closes that popup only.
       if (e.key === "Escape" && !document.querySelector("dialog[open]")) onClose();
@@ -27,6 +30,11 @@ export function CustomizeDrawer({ open, onClose }: { open: boolean; onClose: () 
     return () => {
       document.body.classList.remove("drawer-open");
       window.removeEventListener("keydown", onKey);
+      // Only when focus went down with the drawer (Escape, the close button), not when the reader
+      // has since moved on to something else on the page.
+      const now = document.activeElement;
+      const lost = !now || now === document.body || (drawer?.contains(now) ?? false);
+      if (lost && opener?.isConnected) opener.focus();
     };
   }, [open, onClose]);
 

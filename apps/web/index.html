@@ -71,7 +71,9 @@
           } catch (e) {}
           return base + "/lighthouse?days=7" + (tz ? "&tz=" + encodeURIComponent(tz) : "");
         };
-        var paths = ["/auth/me", "/subscription", "/health/worker", "/settings"].concat(
+        // /announcement is the broadcast bar above every tab (src/components/AnnouncementBar.tsx):
+        // early, it is up before the feed paints rather than pushing the feed down after.
+        var paths = ["/auth/me", "/subscription", "/health/worker", "/settings", "/announcement"].concat(
           h === "model"
             ? ["/curated/insights?days=7", "/curated/models?days=7"]
             : h === "stream"
@@ -108,7 +110,7 @@
           // A guest (src/session.ts, isGuest) has no session: only the public guest feed is worth
           // starting, and the session calls would only come back 401.
           if (localStorage.getItem("ts-guest") === "1")
-            paths = ["/health/worker"].concat(
+            paths = ["/health/worker", "/announcement"].concat(
               h === "model"
                 ? ["/guest/insights?days=7", "/guest/models?days=7"]
                 : h === "lighthouse"

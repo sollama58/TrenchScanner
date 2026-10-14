@@ -771,7 +771,7 @@ function BubbleSvg({
       <svg
         className="bm-svg"
         viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
-        role="img"
+        role="group"
         aria-label={`Bubble map of ${graph.nodes.filter((n) => n.kind === "holder").length} top holders in ${graph.clusters.length} linked clusters`}
       >
         <defs>

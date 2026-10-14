@@ -65,8 +65,10 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
           {SECTIONS.map((s) => (
             <button
               key={s.id}
+              id={`admin-section-${s.id}`}
               role="tab"
               aria-selected={section === s.id}
+              aria-controls={section === s.id ? "admin-section-panel" : undefined}
               className={section === s.id ? "on" : ""}
               onClick={() => setSection(s.id)}
             >
@@ -75,25 +77,33 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
           ))}
         </div>
       </section>
-      {section === "overview" && <Overview />}
-      {section === "worker" && <Worker />}
-      {section === "alerts" && <Alerts />}
-      {section === "models" && <ModelsAdmin />}
-      {section === "wallets" && <WalletsAdmin />}
-      {section === "training" && <Training />}
-      {section === "tokensage" && <TokenSageAdmin />}
-      {section === "screen" && <SafetyScreen />}
-      {section === "filters" && <FiltersAdmin />}
-      {section === "users" && <Users />}
-      {section === "access" && <Access />}
-      {section === "credits" && <CreditsAdmin />}
-      {section === "announce" && <AnnouncementsAdmin />}
-      {section === "ai" && <Ai />}
-      {section === "backups" && <Backups />}
-      {section === "database" && <Database />}
-      {section === "api" && <ApiInstance />}
-      {section === "usage" && <UsageAdmin />}
-      {section === "config" && <Config />}
+      {/* One section at a time, labelled by its button above. */}
+      <div
+        className="stack"
+        role="tabpanel"
+        id="admin-section-panel"
+        aria-labelledby={`admin-section-${section}`}
+      >
+        {section === "overview" && <Overview />}
+        {section === "worker" && <Worker />}
+        {section === "alerts" && <Alerts />}
+        {section === "models" && <ModelsAdmin />}
+        {section === "wallets" && <WalletsAdmin />}
+        {section === "training" && <Training />}
+        {section === "tokensage" && <TokenSageAdmin />}
+        {section === "screen" && <SafetyScreen />}
+        {section === "filters" && <FiltersAdmin />}
+        {section === "users" && <Users />}
+        {section === "access" && <Access />}
+        {section === "credits" && <CreditsAdmin />}
+        {section === "announce" && <AnnouncementsAdmin />}
+        {section === "ai" && <Ai />}
+        {section === "backups" && <Backups />}
+        {section === "database" && <Database />}
+        {section === "api" && <ApiInstance />}
+        {section === "usage" && <UsageAdmin />}
+        {section === "config" && <Config />}
+      </div>
     </div>
   );
 }
@@ -1254,6 +1264,13 @@ function Levers({ onDone }: { onDone: () => void }) {
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const act = async (what: "grant" | "whitelist") => {
+    // A pasted wrong address would get free access: name the wallet and what it gets first.
+    const who = shortAddress(wallet.trim());
+    const question =
+      what === "grant"
+        ? `Grant ${who} ${dayCount} days of access?`
+        : `Whitelist ${who}? That is access with no end date.`;
+    if (!window.confirm(question)) return;
     setBusy(true);
     setResult(null);
     try {

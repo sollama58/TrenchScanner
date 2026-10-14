@@ -59,7 +59,19 @@ export function AnnouncementsAdmin() {
   };
 
   const send = async () => {
-    if (live && !window.confirm("This replaces the announcement showing now. Post it?")) return;
+    // Every visitor sees it, signed in or not: always show what is about to go out.
+    const lasts = hours
+      ? `for ${EXPIRY_OPTIONS.find((o) => o.hours === hours)?.label ?? `${hours} hours`}`
+      : "until you end it";
+    const question = [
+      live ? "This replaces the announcement showing now." : "This shows to every visitor right away.",
+      "",
+      `${severity === "warning" ? "Warning" : "Info"}, ${lasts}:`,
+      `“${trimmed}”`,
+      "",
+      "Post it?",
+    ].join("\n");
+    if (!window.confirm(question)) return;
     setBusy(true);
     setResult(null);
     try {

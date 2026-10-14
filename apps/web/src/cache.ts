@@ -33,6 +33,9 @@ const PERSIST = new Set([
   "/auth/me",
   "/subscription",
   "/health/worker",
+  // The admin's broadcast bar sits above every tab: shown from the start on a return visit, it
+  // doesn't push the page down when this visit's answer lands.
+  "/announcement",
   "/matches?page=1&includeCurated=saved",
   "/guest/feed?page=1",
   "/guest/models?days=30",
