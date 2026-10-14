@@ -133,6 +133,91 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
   return { data, stale, error, loading, reload };
 }
 
+/**
+ * Several paths polled together, all at once: on mount, when the paths or `key` change, on
+ * reload(), and every `intervalMs` while the tab is visible. Each path keeps its last answer
+ * (null until the first lands) while the next is in flight or if it fails. Overlapping reloads
+ * coalesce into one follow-up round, as in usePolling.
+ */
+export function usePollingAll<T>(
+  paths: readonly string[],
+  intervalMs: number,
+  key = "",
+): { data: (T | null)[]; error: Error | null; reload: () => void } {
+  const [held, setHeld] = useState<ReadonlyMap<string, T>>(() => new Map());
+  const [error, setError] = useState<Error | null>(null);
+  const joined = paths.join("\n");
+  const pathsRef = useRef(paths);
+  pathsRef.current = paths;
+  const seq = useRef(0);
+  const busy = useRef(false);
+  const again = useRef(false);
+
+  const run = useCallback((maxAgeMs: number) => {
+    const list = pathsRef.current;
+    if (list.length === 0) return;
+    const mine = ++seq.current;
+    busy.current = true;
+    Promise.allSettled(list.map((p) => cachedGet<T>(p, maxAgeMs)))
+      .then((results) => {
+        if (mine !== seq.current) return;
+        setHeld((prev) => {
+          const next = new Map(prev);
+          results.forEach((r, i) => {
+            if (r.status === "fulfilled") next.set(list[i]!, r.value);
+          });
+          return next;
+        });
+        const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+        setError(
+          failed ? (failed.reason instanceof Error ? failed.reason : new Error(String(failed.reason))) : null,
+        );
+      })
+      .finally(() => {
+        if (mine !== seq.current) return;
+        busy.current = false;
+        if (again.current) {
+          again.current = false;
+          run(-1);
+        }
+      });
+  }, []);
+
+  const reload = useCallback(() => {
+    if (busy.current) again.current = true;
+    else run(-1);
+  }, [run]);
+
+  const firstKey = useRef(key);
+  useEffect(() => {
+    const forced = key !== firstKey.current;
+    firstKey.current = key;
+    if (forced) setHeld(new Map());
+    again.current = false;
+    busy.current = false;
+    run(forced ? -1 : FRESH_ON_MOUNT_MS);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") reload();
+    }, intervalMs);
+    return () => {
+      window.clearInterval(timer);
+      seq.current++;
+      busy.current = false;
+    };
+  }, [joined, key, intervalMs, run, reload]);
+
+  // Keyed on the joined paths, not the array, which a caller may rebuild every render.
+  const data = useMemo(
+    () =>
+      joined
+        .split("\n")
+        .filter(Boolean)
+        .map((p) => held.get(p) ?? null),
+    [joined, held],
+  );
+  return { data, error, reload };
+}
+
 /** First wait before reopening a dropped nudge stream; doubles per failure up to the cap. */
 const STREAM_RETRY_MS = 5_000;
 const STREAM_RETRY_MAX_MS = 300_000;
@@ -365,9 +450,15 @@ const LIVE_TICK_MS = 10_000;
  *
  * A failed tick just leaves the last numbers up; the next one tries again.
  */
-export function useLiveMarketCaps(cards: Card[] | undefined): Card[] | undefined {
+export function useLiveMarketCaps(
+  cards: Card[] | undefined,
+  tickTokenIds?: readonly string[],
+): Card[] | undefined {
   const [live, setLive] = useState<Map<string, { marketCapUsd: number; at: string }>>(() => new Map());
-  const ids = cards ? [...new Set(cards.map((c) => c.tokenId))].sort().join(",") : "";
+  // `tickTokenIds` narrows the tick to some of the cards (a feed holding more cards than are on
+  // screen); the rest keep the feed's own figure.
+  const tickIds = tickTokenIds ?? cards?.map((c) => c.tokenId);
+  const ids = tickIds ? [...new Set(tickIds)].sort().join(",") : "";
 
   useEffect(() => {
     if (!ids) return;
