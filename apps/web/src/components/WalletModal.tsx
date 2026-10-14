@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ApiError } from "../api";
+import { ApiError, lookupRequired } from "../api";
 import { cachedGet } from "../cache";
 import { ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink } from "../walletModal";
@@ -229,12 +229,17 @@ function Body({ wallet, onClose }: { wallet: string; onClose: () => void }) {
   );
 
   if (error) {
-    const locked = error instanceof ApiError && (error.status === 401 || error.status === 402);
+    const lookup = lookupRequired(error);
+    const locked = !lookup && error instanceof ApiError && (error.status === 401 || error.status === 402);
     return (
       <div className="about-body bm-body">
         <Head wallet={wallet} actions={actions} />
         <p className={locked ? "tm-locked muted" : "error small"}>
-          {locked ? (
+          {lookup ? (
+            <>
+              <LockIcon size={14} /> {error.message}
+            </>
+          ) : locked ? (
             <>
               <LockIcon size={14} /> Wallet details come with access.
             </>

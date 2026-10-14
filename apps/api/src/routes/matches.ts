@@ -1,7 +1,16 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
-import { prisma, corsOriginList, CALL_PEAK_READING_LAG_MS, type Env } from "@trenchscanner/core";
+import {
+  prisma,
+  corsOriginList,
+  feedCallsKey,
+  feedCallsWhere,
+  resolveFeedCalls,
+  CALL_PEAK_READING_LAG_MS,
+  type Env,
+  type FeedCalls,
+} from "@trenchscanner/core";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import {
   attachAiReviewsForAdmin,
@@ -157,6 +166,17 @@ const matchInclude = {
 /** What ordering and slicing the feed needs from a match - the page's own rows load in full. */
 const MATCH_ORDER_SELECT = { id: true, matchedAt: true, tokenId: true } satisfies Prisma.MatchSelect;
 
+/**
+ * `?highConviction=1`: the model calls a feed answer carries are the high-conviction tier alone
+ * (every model's calls that cleared its high-conviction line, core feedModels.highConvictionCalls)
+ * instead of the models the reader follows. It narrows the model-call half only: with model calls
+ * off it changes nothing. Parsed by hand for the reason given on includeCurated below.
+ */
+const highConvictionParam = z
+  .string()
+  .optional()
+  .transform((v) => v === "true" || v === "1");
+
 export const listQuerySchema = z.object({
   // Capped: the merge below reads page * PAGE_SIZE rows of each source, so an unbounded page was
   // an unbounded query (and past 2^53 a Prisma error).
@@ -179,6 +199,7 @@ export const listQuerySchema = z.object({
     .transform((v): "on" | "off" | "saved" =>
       v === "true" || v === "1" ? "on" : v === "saved" ? "saved" : "off",
     ),
+  highConviction: highConvictionParam,
 });
 
 /**
@@ -196,7 +217,10 @@ export const feedStatsQuerySchema = z.object({
       message: `hours must be one of ${FEED_STATS_HOURS.join(", ")}`,
     })
     .default(24),
+  highConviction: highConvictionParam,
 });
+
+export const feedReturnsQuerySchema = z.object({ highConviction: highConvictionParam });
 
 /** Per source: far above any real feed's day, so it only bounds a runaway window. */
 const FEED_STATS_MAX_ROWS = 5_000;
@@ -459,19 +483,32 @@ export async function registerMatchRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const { hours } = parsed.data;
+    const { hours, highConviction } = parsed.data;
     const saved = await savedFeed(request);
-    const models = saved.showModelAlerts ? resolveFeedModels(await contestState(opts.env), saved).models : [];
+    const calls = await readerCalls(saved, highConviction);
     const userId = request.user!.userId;
     // Everything the answer depends on, so a settings change never reads a stale answer.
-    const key = `${userId}:${hours}:${saved.showModelAlerts ? "on" : "off"}:${models.join(",")}`;
-    return statsCache.for(key).get(() => buildFeedStats(userId, hours, models, saved.showModelAlerts));
+    const key = `${userId}:${hours}:${saved.showModelAlerts ? "on" : "off"}:${feedCallsKey(calls)}`;
+    return statsCache.for(key).get(() => buildFeedStats(userId, hours, calls, saved.showModelAlerts));
   });
+
+  /**
+   * The model calls a reader's feed answers carry: none with their model-alerts switch off, else
+   * their followed models' calls, or the high-conviction tier when they asked for it alone.
+   */
+  async function readerCalls(
+    saved: Awaited<ReturnType<typeof savedFeed>>,
+    highConviction: boolean,
+  ): Promise<FeedCalls> {
+    if (!saved.showModelAlerts) return { models: [], tier: null };
+    const state = await contestState(opts.env);
+    return resolveFeedCalls(state, resolveFeedModels(state, saved).models, highConviction);
+  }
 
   async function buildFeedStats(
     userId: string,
     hours: number,
-    models: string[],
+    feedCalls: FeedCalls,
     showModelAlerts: boolean,
   ): Promise<FeedStatsResponse> {
     const since = new Date(Date.now() - hours * 3_600_000);
@@ -489,11 +526,11 @@ export async function registerMatchRoutes(
           token: { select: { symbol: true } },
         },
       }),
-      models.length === 0
+      feedCalls.models.length === 0
         ? Promise.resolve([])
-        : sharedCallRead(`stats:${hours}:${models.join(",")}`, () =>
+        : sharedCallRead(`stats:${hours}:${feedCallsKey(feedCalls)}`, () =>
             prisma.curatedAlert.findMany({
-              where: { model: { in: models }, createdAt: { gte: since } },
+              where: { ...feedCallsWhere(feedCalls), createdAt: { gte: since } },
               orderBy: { createdAt: "desc" },
               take: FEED_STATS_MAX_ROWS,
               select: {
@@ -582,17 +619,21 @@ export async function registerMatchRoutes(
    * read, both reads ride an index ((userId, matchedAt) and (model, createdAt)), and the panel
    * asks only while it is open.
    */
-  app.get("/returns", async (request) => {
+  app.get("/returns", async (request, reply) => {
+    const parsed = feedReturnsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
     const saved = await savedFeed(request);
-    const models = saved.showModelAlerts ? resolveFeedModels(await contestState(opts.env), saved).models : [];
+    const calls = await readerCalls(saved, parsed.data.highConviction);
     const userId = request.user!.userId;
-    const key = `${userId}:${saved.showModelAlerts ? "on" : "off"}:${models.join(",")}`;
-    return returnsCache.for(key).get(() => buildFeedReturns(userId, models, saved.showModelAlerts));
+    const key = `${userId}:${saved.showModelAlerts ? "on" : "off"}:${feedCallsKey(calls)}`;
+    return returnsCache.for(key).get(() => buildFeedReturns(userId, calls, saved.showModelAlerts));
   });
 
   async function buildFeedReturns(
     userId: string,
-    models: string[],
+    feedCalls: FeedCalls,
     showModelAlerts: boolean,
   ): Promise<FeedReturnsResponse> {
     const now = Date.now();
@@ -612,11 +653,11 @@ export async function registerMatchRoutes(
           peak24hReturnPct: true,
         },
       }),
-      models.length === 0
+      feedCalls.models.length === 0
         ? Promise.resolve([])
-        : sharedCallRead(`returns:${models.join(",")}`, () =>
+        : sharedCallRead(`returns:${feedCallsKey(feedCalls)}`, () =>
             prisma.curatedAlert.findMany({
-              where: { model: { in: models }, createdAt: { gte: since } },
+              where: { ...feedCallsWhere(feedCalls), createdAt: { gte: since } },
               orderBy: { createdAt: "desc" },
               take: FEED_STATS_MAX_ROWS,
               select: {
@@ -795,7 +836,7 @@ export async function registerMatchRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const { page, includeCurated } = parsed.data;
+    const { page, includeCurated, highConviction } = parsed.data;
     const where = { userId: request.user!.userId };
 
     /*
@@ -827,23 +868,25 @@ export async function registerMatchRoutes(
     const pastMergeDepth = wantsCurated && !interleave;
 
     // The curated calls interleaved are every model the reader checked (else their single pick,
-    // else the default) - the same list the Models tab marks as in their feed.
+    // else the default) - the same list the Models tab marks as in their feed - or, with
+    // ?highConviction=1, the high-conviction tier alone.
     // Fetched alongside the matches rather than after them: the two halves are independent.
-    const feedModels = async () => {
+    const feedCalls = async (): Promise<FeedCalls> => {
       const [state, feed] = await Promise.all([contestState(opts.env), saved ?? savedFeed(request)]);
-      return resolveFeedModels(state, feed).models;
+      return resolveFeedCalls(state, resolveFeedModels(state, feed).models, highConviction);
     };
     const loadCurated = async (depth = mergeDepth) => {
-      const models = await feedModels();
+      const calls = await feedCalls();
       // Several models calling one token collapse into one card (at most one call per model), so
       // the newest page * models calls always hold this page's cards whole - see
       // groupSameTokenCalls. Only the columns grouping needs; the page's own rows are loaded in
       // full below.
-      const take = depth * models.length;
+      const take = depth * calls.models.length;
+      const key = feedCallsKey(calls);
       const [rows, total] = await Promise.all([
-        sharedCallRead(`feed:${take}:${models.join(",")}`, () =>
+        sharedCallRead(`feed:${take}:${key}`, () =>
           prisma.curatedAlert.findMany({
-            where: { model: { in: models } },
+            where: feedCallsWhere(calls),
             orderBy: { createdAt: "desc" },
             take,
             select: CALL_SELECT,
@@ -851,19 +894,19 @@ export async function registerMatchRoutes(
         ),
         // Only the legacy flag reports a count; the dashboard pages on hasMore instead.
         includeCurated === "on"
-          ? sharedCallRead(`count:${models.join(",")}`, () =>
-              prisma.curatedAlert.count({ where: { model: { in: models } } }),
-            )
+          ? sharedCallRead(`count:${key}`, () => prisma.curatedAlert.count({ where: feedCallsWhere(calls) }))
           : 0,
       ]);
-      return { models, rows, total, hitLimit: rows.length === take };
+      return { calls, rows, total, hitLimit: rows.length === take };
     };
 
     // How many of the first MAX_MERGE_DEPTH merged items were matches: where the matches-only
     // tail starts. The same two bare reads page MAX_MERGE_DEPTH / PAGE_SIZE itself makes.
     const matchesInMergedRun = async (): Promise<number> => {
-      const models = await feedModels();
-      return mergedRunCache.for(`${where.userId}:${models.join(",")}`).get(() => countMatchesInMergedRun());
+      const calls = await feedCalls();
+      return mergedRunCache
+        .for(`${where.userId}:${feedCallsKey(calls)}`)
+        .get(() => countMatchesInMergedRun());
     };
     const countMatchesInMergedRun = async (): Promise<number> => {
       const [run, calls] = await Promise.all([
@@ -936,8 +979,8 @@ export async function registerMatchRoutes(
         const tokenIds = [...new Set(open.map((g) => g.newest.tokenId))];
         const older = await prisma.curatedAlert.findMany({
           where: {
+            ...feedCallsWhere(curated.calls),
             tokenId: { in: tokenIds },
-            model: { in: curated.models },
             createdAt: { gte: new Date(Math.min(...open.map(reach))), lt: horizon },
           },
           orderBy: { createdAt: "desc" },

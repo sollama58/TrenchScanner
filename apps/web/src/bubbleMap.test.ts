@@ -25,6 +25,7 @@ import {
   layoutGraph,
   pickReading,
   withWideMap,
+  sideWord,
 } from "./bubbleMap";
 
 const A = "Aaaa1111111111111111111111111111111111111111";
@@ -477,5 +478,17 @@ describe("centreOf", () => {
         { x: 10, y: 20 },
       ]),
     ).toEqual({ x: 5, y: 10 });
+  });
+});
+
+describe("sideWord", () => {
+  const g = { kolWallet: "kol", kolName: "Kol", wallets: [] };
+  const n = (wallet: string) => ({ wallet }) as unknown as MapNode;
+  it("says side? for one possible side wallet, with or without the KOL's own bubble", () => {
+    expect(sideWord([n("a")], g)).toBe("side?");
+    expect(sideWord([n("kol"), n("a")], g)).toBe("side?");
+  });
+  it("says sides? for two or more", () => {
+    expect(sideWord([n("kol"), n("a"), n("b")], g)).toBe("sides?");
   });
 });

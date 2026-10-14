@@ -269,7 +269,10 @@ export class ApiUsageMeter {
     c.requests += o.requests;
     c.errors += o.ok ? 0 : line.calls;
     c.rateLimited += o.rateLimited ? line.calls : 0;
-    c.credits += line.credits;
+    // Only answered calls are billed: an error or a 429 charged its credits too, so the cost panel
+    // over-read during exactly the incidents it should explain (audit 2026-10-14, L6-9). The
+    // calls, errors and rate-limited columns still count every attempt.
+    c.credits += o.ok ? line.credits : 0;
     c.msTotal += Math.round(o.ms);
     this.rows.set(k, c);
   }

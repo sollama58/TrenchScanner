@@ -535,6 +535,43 @@ describe("HeliusClient.getMintAuthorityStatusBatch", () => {
   });
 });
 
+describe("HeliusClient 429 pause", () => {
+  it("holds every client on the same endpoint after a 429, not just the request that got it", async () => {
+    const arrivals: number[] = [];
+    let limitedAt = 0;
+    let started: Promise<unknown> | undefined;
+    let url = "";
+    ({ url } = await startServer((calls) => {
+      arrivals.push(Date.now());
+      if (arrivals.length === 1) {
+        limitedAt = Date.now();
+        // Another job's client asks the same endpoint a moment after the 429.
+        started = new Promise((resolve) => setTimeout(resolve, 20)).then(() =>
+          new HeliusClient({ rpcUrl: url }).getMintAuthorityStatusBatch(["b"]),
+        );
+        return { __status: 429 };
+      }
+      return calls.map((c) => ({
+        jsonrpc: "2.0",
+        id: c.id,
+        result: {
+          context: { slot: 1 },
+          value: (c.params[0] as string[]).map(() => ({
+            data: { parsed: { info: { mintAuthority: null, freezeAuthority: null } } },
+          })),
+        },
+      }));
+    }));
+    const first = await new HeliusClient({ rpcUrl: url }).getMintAuthorityStatusBatch(["a"]);
+    expect(first.get("a")?.status).toBe("found");
+    const second = (await started) as Map<string, { status: string }>;
+    expect(second.get("b")?.status).toBe("found");
+    // fetchJson's first backoff is at least 250 ms: neither later request went out inside it.
+    expect(arrivals).toHaveLength(3);
+    for (const at of arrivals.slice(1)) expect(at - limitedAt).toBeGreaterThanOrEqual(240);
+  });
+});
+
 describe("HeliusClient.getMayhemModeBatch", () => {
   const MAYHEM_MINT = "GuYxhafeew241DThgKquTXEEBpt8FRPdRq6xfstdpump";
   const MAYHEM_PDA = "HmT6rHQvnpx8nk6WqtZbzeThLmSwhsZQUJeVoEdWJWTr";

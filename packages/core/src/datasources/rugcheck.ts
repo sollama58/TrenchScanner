@@ -37,6 +37,13 @@ export interface RugCheckProfile extends OnChainProfile {
   topHolderShares?: { owner: string; pct: number }[];
   /** The creator's wallet, as RugCheck names it. Absent on profiles cached before it was kept. */
   creator?: string;
+  /**
+   * False when the report listed no market at all, so lpBurned (false) is not a reading: a report
+   * fetched in a launch's first seconds has no Pump.fun market yet. The scan then takes the venue's
+   * own answer, as the chain fallback does, and the report is re-read every minute (audit
+   * 2026-10-14, L2 H2 / L3 L3). Absent otherwise.
+   */
+  marketsListed?: false;
 }
 
 /**
@@ -287,6 +294,7 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     lpBurned,
     riskScore: report.score_normalised,
     riskFlags,
+    ...(markets.length === 0 ? { marketsListed: false as const } : {}),
     // For the linked-wallets reading (whose holders the creator funded, or shares a funder with).
     ...(report.creator ? { creator: report.creator } : {}),
     // Feeds the worker's wallet-freshness check (apps/worker/src/jobs/walletFreshness.ts) - a

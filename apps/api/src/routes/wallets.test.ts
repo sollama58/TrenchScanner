@@ -126,6 +126,7 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
     await prisma.walletRisk.deleteMany({ where: { wallet: { in: WALLETS } } });
     await prisma.walletFunder.deleteMany({ where: { wallet: { in: WALLETS } } });
     await prisma.whitelist.deleteMany({ where: { walletAddress: `${TAG}-user` } });
+    await prisma.burnCreditEntry.deleteMany({ where: { wallet: `${TAG}-user` } });
     await app?.close();
     await prisma.token.deleteMany({ where: { mintAddress: { in: [MINT, LAUNCH] } } });
     await prisma.user.deleteMany({ where: { id: userId } });
@@ -161,16 +162,27 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
     expect(p.firstSeenAt).not.toBeNull();
   });
 
-  it("answers a wallet it never saw with an empty profile", async () => {
-    const res = await get(address(`${TAG}-unknown`));
-    expect(res.statusCode).toBe(200);
-    expect(res.json<WalletProfile>()).toMatchObject({
+  it("asks for a paid lookup for a wallet it never saw, and opens it once one is paid for", async () => {
+    const unknown = address(`${TAG}-unknown`);
+    const res = await get(unknown);
+    expect(res.statusCode).toBe(402);
+    expect(res.json()).toMatchObject({ code: "lookup_required", utility: "wallet" });
+    await prisma.burnCreditEntry.create({
+      data: { wallet: `${TAG}-user`, delta: -1, kind: "spend", utility: "wallet", subject: unknown },
+    });
+    const paid = await get(unknown);
+    expect(paid.statusCode).toBe(200);
+    expect(paid.json<WalletProfile>()).toMatchObject({
       risk: null,
       funder: null,
       coins: [],
       linked: [],
       labels: [],
     });
+  });
+
+  it("opens a funder TrenchScanner only knows as a funder", async () => {
+    expect((await get(FUNDER)).statusCode).toBe(200);
   });
 
   it("refuses a malformed address and a reader without access", async () => {

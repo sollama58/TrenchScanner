@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { allowLookupRead } from "../lookupGate.js";
 import {
   NARRATIVE_CONTESTANT,
   Prisma,
@@ -194,6 +195,9 @@ export async function registerTokenRoutes(app: FastifyInstance) {
 
   app.get("/:mintAddress", async (request, reply) => {
     const { mintAddress } = request.params as { mintAddress: string };
+    if (!MINT_RE.test(mintAddress)) return reply.code(400).send({ error: "not a valid mint" });
+    // A coin the scanner doesn't track on its own needs the reader's paid lookup (lookupGate.ts).
+    if (!(await allowLookupRead(request, reply, "token", mintAddress))) return reply;
     const row = await prisma.token.findUnique({ where: { mintAddress } });
     if (!row) {
       return reply.code(404).send({ error: "token not found" });
@@ -218,6 +222,7 @@ export async function registerTokenRoutes(app: FastifyInstance) {
       reply.code(400).send({ error: "not a valid mint" });
       return;
     }
+    if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
     // The browser may reuse it for a few seconds; the candles themselves are cached here for 30.
     reply.header("Cache-Control", "private, max-age=15");
     return readTokenChart(mintAddress);
@@ -255,6 +260,7 @@ export async function registerTokenRoutes(app: FastifyInstance) {
       reply.code(400).send({ error: "not a valid mint" });
       return;
     }
+    if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
     return readTokenSage(mintAddress);
   });
 }
@@ -264,12 +270,12 @@ export async function registerTokenRoutes(app: FastifyInstance) {
  * lookup): Pump.fun's minute candles, the scan's market caps, and the coin's flagged wallets.
  */
 export async function readTokenChart(mintAddress: string): Promise<TokenChart> {
-  const [candles, token] = await Promise.all([
-    candleCache.get(mintAddress),
-    prisma.token.findUnique({ where: { mintAddress }, select: { id: true } }),
-  ]);
-  const [snapshots, flagged] = token
+  // Token first: Pump.fun's candles are read only for a coin on Token, so a loop over random mints
+  // can't spend the shared candle budget everyone's token modal draws from.
+  const token = await prisma.token.findUnique({ where: { mintAddress }, select: { id: true } });
+  const [candles, snapshots, flagged] = token
     ? await Promise.all([
+        candleCache.get(mintAddress),
         prisma.tokenSnapshot.findMany({
           where: { tokenId: token.id },
           orderBy: { takenAt: "desc" },
@@ -278,7 +284,7 @@ export async function readTokenChart(mintAddress: string): Promise<TokenChart> {
         }),
         walletCache.get(token.id, () => chartWallets(token.id)),
       ])
-    : [[], { tape: null, live: null, wallets: [] }];
+    : [null, [], { tape: null, live: null, wallets: [] }];
   return {
     mint: mintAddress,
     candles: candles && candles.length > 0 ? candles : null,

@@ -487,7 +487,10 @@ function startLinkedWalletStage(
   const rest = groups.slice(waitedCount).map((g) => ({ ...g, holders: [...g.holders] }));
   let readsLeft = env.LINKED_HOLDER_READS_PER_CYCLE;
   let lookupsLeft = env.LINKED_WALLET_LOOKUPS_PER_CYCLE;
-  const pass = async (part: LinkedGroup[]) => {
+  // Contenders' own extra (LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE), spent before the shared
+  // budget and only on the waited pass; what they leave of it is not carried to the rest.
+  let contenderLeft = env.LINKED_WALLET_CONTENDER_LOOKUPS_PER_CYCLE;
+  const pass = async (part: LinkedGroup[], contenders: boolean) => {
     if (part.length === 0) return;
     readsLeft -= await readTopHolders(part, helius, { maxReads: readsLeft, wideMints }).catch(
       (err: unknown) => {
@@ -495,15 +498,20 @@ function startLinkedWalletStage(
         return 0;
       },
     );
+    const extra = contenders ? contenderLeft : 0;
     await resolveLinkedWallets(part, helius, {
-      maxNewLookups: lookupsLeft,
-      onLookups: (n) => (lookupsLeft -= n),
+      maxNewLookups: lookupsLeft + extra,
+      onLookups: (n) => {
+        const fromExtra = Math.min(n, contenders ? contenderLeft : 0);
+        contenderLeft -= fromExtra;
+        lookupsLeft -= n - fromExtra;
+      },
     }).catch((err: unknown) =>
       logger.warn("linked-wallet reads failed - using cached funders", { error: String(err) }),
     );
   };
-  const first = pass(waited);
-  const work = first.then(() => pass(rest));
+  const first = pass(waited, true);
+  const work = first.then(() => pass(rest, false));
   linkedStageInFlight = work;
   void work.finally(() => {
     if (linkedStageInFlight === work) linkedStageInFlight = null;
@@ -2536,8 +2544,16 @@ export function buildOnChainProfile(
   // rug screen rejects - so a candidate that never gets checked is never accidentally admitted.
   const { mintAddress } = candidate;
   const rugProfile = rugProfiles.get(mintAddress);
-  // The coin's own pool out of the holder list, for a report written before RugCheck listed it.
-  if (rugProfile) return withoutVenueHolder(rugProfile, candidate.pairAddress);
+  if (rugProfile) {
+    // The coin's own pool out of the holder list, for a report written before RugCheck listed it.
+    const profile = withoutVenueHolder(rugProfile, candidate.pairAddress);
+    // A report listing no market at all hasn't read the LP: a Pump.fun venue's is locked by the
+    // protocol, the same answer the chain fallback gives below. It used to read "LP not burned",
+    // so the coin also never earned its Mayhem and pre-bond reads (audit 2026-10-14, L2 H2).
+    return rugProfile.marketsListed === false && pumpVenue(candidate.dexId)
+      ? { ...profile, lpBurned: true }
+      : profile;
+  }
 
   const authorities = mintAuthorities.get(mintAddress);
   if (!authorities || authorities.status !== "found") return null;

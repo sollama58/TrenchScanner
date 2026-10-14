@@ -31,7 +31,7 @@ import {
   type ModelRunHistory,
 } from "../modelInsights.js";
 import { createMarketRows } from "../marketRows.js";
-import { buildModelLineup, seatWeights, type ModelLineup } from "../modelExplain.js";
+import { buildModelLineup, seatWeights, type ModelLineup, type SeatWeights } from "../modelExplain.js";
 import {
   createLighthouseCache,
   lighthouseQuerySchema,
@@ -319,14 +319,18 @@ export async function modelRunsRoute(
 }
 
 /**
- * GET .../models/:id/weights, for subscribers and guests alike: what one model leans on and where
- * its cutoff sits (seatWeights in modelExplain.ts). Nothing in it names a token.
+ * GET .../models/:id/weights: where one model's cutoff sits and how often it calls (seatWeights in
+ * modelExplain.ts), for the model detail view's cutoff curve. What it leans on - its inputs and
+ * their weights, a combiner's members and rule - is the model's recipe, and goes to admins only
+ * (P24, 2026-10-14); everyone else gets it with those emptied and `recipeHidden` set. Nothing in
+ * it names a token.
  */
 export async function modelWeightsRoute(
   env: Env,
   reports: ReportCaches,
   request: FastifyRequest,
   reply: FastifyReply,
+  admin: boolean,
 ) {
   const parsed = modelParamsSchema.safeParse(request.params);
   if (!parsed.success) {
@@ -336,7 +340,21 @@ export async function modelWeightsRoute(
   const state = await contestState(env);
   if (!state.roster.some((c) => c.id === id)) return reply.code(404).send({ error: "unknown model" });
   const weights = seatWeights(await reports.lineup(), id);
-  return weights ?? reply.code(404).send({ error: "unknown model" });
+  if (!weights) return reply.code(404).send({ error: "unknown model" });
+  return admin ? { ...weights, recipeHidden: false } : withoutRecipe(weights);
+}
+
+/** A seat's weights without what it leans on: the cutoff and call rate only. Exported for tests. */
+export function withoutRecipe(w: SeatWeights): SeatWeights & { recipeHidden: boolean } {
+  return {
+    ...w,
+    inputs: null,
+    inputSample: null,
+    members: null,
+    otherSignals: null,
+    rule: null,
+    recipeHidden: true,
+  };
 }
 
 export async function registerCuratedRoutes(
@@ -530,7 +548,7 @@ export async function registerCuratedRoutes(
   app.get("/models/:id/runs", (request, reply) => modelRunsRoute(opts.env, opts.reports, request, reply));
   /** What one model leans on and its cutoff (the model detail view's weightings and cutoff curve). */
   app.get("/models/:id/weights", (request, reply) =>
-    modelWeightsRoute(opts.env, opts.reports, request, reply),
+    modelWeightsRoute(opts.env, opts.reports, request, reply, request.access?.reason === "admin"),
   );
 
   /**

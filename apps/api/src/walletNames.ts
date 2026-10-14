@@ -1,5 +1,5 @@
 import { KNOWN_EXCHANGE_WALLETS, prisma, type HeliusIdentity } from "@trenchscanner/core";
-import type { WalletIdentityReader } from "./walletIdentity.js";
+import type { IdentityUserKey, WalletIdentityReader } from "./walletIdentity.js";
 
 /**
  * The name a holder list shows for a wallet in place of its address (POST /wallets/names): a
@@ -37,27 +37,62 @@ export function pickWalletName(input: {
   return null;
 }
 
-/** Names for the wallets that have one; wallets without a name are left out. */
+/**
+ * Which of `wallets` TrenchScanner has come across: a holder whose age or funder a scan read, a
+ * funder of one, a trader on a read trade tape, or a wallet with a risk score. Helius is asked only
+ * about these, so a list of random addresses costs nothing. Indexed lookups only.
+ */
+export async function seenWallets(wallets: readonly string[]): Promise<Set<string>> {
+  if (wallets.length === 0) return new Set();
+  const list = [...wallets];
+  const rows = await prisma.$queryRaw<{ wallet: string }[]>`
+    SELECT "wallet" FROM "WalletFunder" WHERE "wallet" = ANY(${list})
+    UNION SELECT "funder" FROM "WalletFunder" WHERE "funder" = ANY(${list})
+    UNION SELECT "address" FROM "WalletActivityCache" WHERE "address" = ANY(${list})
+    UNION SELECT "address" FROM "WalletHoldingsCache" WHERE "address" = ANY(${list})
+    UNION SELECT "wallet" FROM "WalletRisk" WHERE "wallet" = ANY(${list})
+    UNION SELECT DISTINCT "wallet" FROM "TokenWalletActivity" WHERE "wallet" = ANY(${list})`;
+  return new Set(rows.map((r) => r.wallet));
+}
+
+export interface WalletNamesRead {
+  /** Names for the wallets that have one; wallets without a name are left out. */
+  names: Record<string, WalletName>;
+  /**
+   * Wallets Helius would be asked about but wasn't, this time (the minute's or the account's
+   * budget ran out): not "no name", so the dashboard asks again later.
+   */
+  unread: string[];
+}
+
 export async function loadWalletNames(
   wallets: readonly string[],
   identity: WalletIdentityReader | null,
-): Promise<Record<string, WalletName>> {
+  user?: IdentityUserKey,
+): Promise<WalletNamesRead> {
   const unique = [...new Set(wallets)];
-  if (unique.length === 0) return {};
-  const [kols, identities] = await Promise.all([
-    prisma.kolWallet.findMany({ where: { wallet: { in: unique } }, select: { wallet: true, name: true } }),
-    // Helius is asked only about wallets the KOL roster doesn't already name.
-    identity ? identity.identities(unique).catch(() => new Map<string, HeliusIdentity | null>()) : null,
-  ]);
-  const kolName = new Map(kols.map((k) => [k.wallet, k.name]));
-  const out: Record<string, WalletName> = {};
+  if (unique.length === 0) return { names: {}, unread: [] };
+  const kols = await prisma.kolWallet.findMany({
+    where: { wallet: { in: unique } },
+    select: { wallet: true, name: true },
+  });
+  const kolName = new Map(kols.flatMap((k) => (k.name?.trim() ? [[k.wallet, k.name] as const] : [])));
+  // Helius is asked only about wallets the KOL roster doesn't name, and only those TrenchScanner
+  // has seen.
+  const unnamed = unique.filter((w) => !kolName.has(w));
+  const ask = identity && unnamed.length > 0 ? [...(await seenWallets(unnamed))] : [];
+  const identities =
+    identity && ask.length > 0
+      ? await identity.identities(ask, Date.now(), user).catch(() => new Map<string, HeliusIdentity | null>())
+      : new Map<string, HeliusIdentity | null>();
+  const names: Record<string, WalletName> = {};
   for (const w of unique) {
     const name = pickWalletName({
       kol: kolName.get(w),
-      identity: identities?.get(w),
+      identity: identities.get(w),
       exchange: KNOWN_EXCHANGE_WALLETS.get(w),
     });
-    if (name) out[w] = name;
+    if (name) names[w] = name;
   }
-  return out;
+  return { names, unread: ask.filter((w) => !identities.has(w)) };
 }
