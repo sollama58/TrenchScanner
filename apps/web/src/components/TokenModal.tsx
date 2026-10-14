@@ -571,8 +571,8 @@ function ChartCard({
   what: string;
 }) {
   const utility = useContext(UtilityContext);
-  // A lookup has no call to look around or start from: it opens on the coin's whole history.
-  const [range, setRange] = useState<Range>(utility ? "all" : "model");
+  // Every token view opens on the coin's whole history; Model View is a click away.
+  const [range, setRange] = useState<Range>("all");
   const [hidden, setHidden] = useState<ReadonlySet<MarkerKind>>(() => new Set());
   const [height, setHeight] = useState(() => (window.innerWidth <= 640 ? 210 : 260));
   useEffect(() => {
@@ -643,15 +643,6 @@ function ChartCard({
     };
   }, [data, range, alertAt, alertMcap, callPriced]);
 
-  // Model View opens by default; a coin with nothing to draw around its call (too new, or no
-  // candles there) falls back to its whole history rather than an empty chart. A range the viewer
-  // picked stays put.
-  const picked = useRef(false);
-  const modelEmpty = range === "model" && !!view && view.points.length < 2;
-  useEffect(() => {
-    if (modelEmpty && !picked.current) setRange("all");
-  }, [modelEmpty]);
-
   const markers = useMemo<MarkerTrade[]>(
     () =>
       flagged.flatMap((w) => {
@@ -691,10 +682,7 @@ function ChartCard({
                 className={`tm-range${range === r.id ? " on" : ""}`}
                 aria-pressed={range === r.id}
                 title={r.title}
-                onClick={() => {
-                  picked.current = true;
-                  setRange(r.id);
-                }}
+                onClick={() => setRange(r.id)}
               >
                 {utility && r.id === "alert" ? "From scan" : r.label}
               </button>
