@@ -110,7 +110,7 @@ describe("boosting objectives", () => {
     expect(scoreBoosted(copy, test[0]!.features)).toBe(scores[0]);
   });
 
-  it("the run-size objective counts a loss that fell through the stop as -1, not its later peak", async () => {
+  it("the run-size objective counts a loss that fell through the stop as 0, not its later peak", async () => {
     // Three segments: plain losses, clean 2.2x winners (60% of the time), and dump-then-pump
     // losers that fell through the stop and only then ran to 6x.
     const rand = rng(11);
@@ -123,7 +123,6 @@ describe("boosting objectives", () => {
         anchorAt: new Date(T0 + i * 20_000),
         features: { buyRatio24h: segment, ageMinutes: rand() * 300 },
         labelValue: win ? Math.log2(2.2) : 0,
-        survived: segment !== 2,
         runPeakMultiple: segment === 2 ? 6 : win ? 2.2 : 1.2,
       });
     }
@@ -146,7 +145,6 @@ describe("boosting objectives", () => {
         anchorAt: new Date(T0 + i * 20_000),
         features: { buyRatio24h: segment, ageMinutes: rand() * 300 },
         labelValue: win ? Math.log2(2.2) : 0,
-        survived: true,
         runPeakMultiple: segment === 2 ? 5 : win ? 2.2 : 1.2,
       });
     }
@@ -154,6 +152,30 @@ describe("boosting objectives", () => {
     const score = (segment: number) => scoreBoosted(runner, { buyRatio24h: segment, ageMinutes: 150 });
     expect(score(1)).toBeGreaterThan(score(2));
     expect(score(1)).toBeGreaterThan(score(0));
+  });
+
+  it("the run-size objective ranks a volatile fresh launch above a stagnant old coin", async () => {
+    // Fresh launches double 20% of the time and fall through the stop 70%; old coins never
+    // double and never fall far. Counting the stop-out -1 put the old coins on top (2026-10-14).
+    const rand = rng(13);
+    // Rows carry `survived` as training rows do; the objective must not read it.
+    const rows: (BoostingRow & { survived: boolean })[] = [];
+    for (let i = 0; i < 3000; i++) {
+      const fresh = i % 2 === 0;
+      const win = fresh && rand() < 0.2;
+      rows.push({
+        tokenId: `t${i}`,
+        anchorAt: new Date(T0 + i * 20_000),
+        features: { ageMinutes: fresh ? rand() * 5 : 180 + rand() * 180, buyRatio24h: rand() },
+        labelValue: win ? Math.log2(2.2) : 0,
+        runPeakMultiple: win ? 2.2 : 1.1,
+        survived: !fresh || win || rand() > 0.7,
+      });
+    }
+    const runner = await trainBoostedCurator(rows, { objective: "runSize" });
+    expect(scoreBoosted(runner, { ageMinutes: 2, buyRatio24h: 0.5 })).toBeGreaterThan(
+      scoreBoosted(runner, { ageMinutes: 270, buyRatio24h: 0.5 }),
+    );
   });
 
   it("objectives ride the recipe's boosting options through trainCuratorModel", async () => {
