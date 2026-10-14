@@ -344,6 +344,13 @@ model UserFilter {
   requireTrendMatch          Boolean  @default(false)
   excludeLateCopies          Boolean  @default(false)
 
+  /// How the feed cards this filter raises look, picked by its owner: a #rrggbb color for the card
+  /// outline and accent, and an icon id from FILTER_ICONS (apps/api/src/routes/filters.ts). Null
+  /// keeps the owner's Customize styling. Not criteria: changing either neither re-arms the filter
+  /// nor resets its leaderboard record.
+  color String?
+  icon  String?
+
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

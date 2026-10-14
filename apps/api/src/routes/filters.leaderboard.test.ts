@@ -257,6 +257,9 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
       "id",
       "userId",
       "name",
+      // Card style, not criteria: a copy starts with the copier's own look.
+      "color",
+      "icon",
       "isActive",
       "shareOnLeaderboard",
       "createdAt",

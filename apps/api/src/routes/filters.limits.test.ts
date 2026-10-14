@@ -105,7 +105,7 @@ describe.skipIf(!dbAvailable)("filter cap and per-filter on/off switches", () =>
     expect(await activeIds()).toHaveLength(2);
   });
 
-  it("re-arms a filter when its rules change or it is switched on, not when it is renamed", async () => {
+  it("re-arms a filter when its rules change or it is switched on, not when it is renamed or restyled", async () => {
     const created = (await call("POST", "/filters", { name: "arming", isActive: false })).json() as {
       id: string;
       armedAt: string;
@@ -118,6 +118,19 @@ describe.skipIf(!dbAvailable)("filter cap and per-filter on/off switches", () =>
     await age();
     await call("PATCH", `/filters/${created.id}`, { name: "renamed" });
     expect(await armedAt()).toBe(longAgo.getTime());
+
+    // A card style is not a rule either.
+    const styled = await call("PATCH", `/filters/${created.id}`, { color: "#3B82F6", icon: "rocket" });
+    expect(styled.json()).toMatchObject({ color: "#3b82f6", icon: "rocket" });
+    expect(await armedAt()).toBe(longAgo.getTime());
+    expect((await call("PATCH", `/filters/${created.id}`, { color: "blue" })).statusCode).toBe(400);
+    expect((await call("PATCH", `/filters/${created.id}`, { icon: "skull" })).statusCode).toBe(400);
+    expect((await call("PATCH", `/filters/${created.id}`, { color: null, icon: null })).json()).toMatchObject(
+      {
+        color: null,
+        icon: null,
+      },
+    );
 
     await call("PATCH", `/filters/${created.id}`, { minScore: 40 });
     expect(await armedAt()).toBeGreaterThan(longAgo.getTime());
@@ -156,6 +169,7 @@ describe("rearms", () => {
   const stored = { name: "a", isActive: true, minScore: null, narrativeKeywords: ["ai"], mcapMin: 8000 };
   it("ignores renames and unchanged values", () => {
     expect(rearms(stored, { name: "b" })).toBe(false);
+    expect(rearms(stored, { color: "#3b82f6", icon: "rocket" })).toBe(false);
     expect(rearms(stored, { minScore: null, narrativeKeywords: ["ai"], mcapMin: 8000, isActive: true })).toBe(
       false,
     );

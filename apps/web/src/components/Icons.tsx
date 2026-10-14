@@ -362,3 +362,35 @@ export const XLogoIcon = (p: IconProps) => (
     />
   </Svg>
 );
+
+/** A rocket: one of the icons a saved filter's cards can carry. */
+export const RocketIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M5 15c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2.1-.1-2.9-.8-.8-2.1-.8-2.9-.1z" />
+    <path d="M12 15l-3-3a22 22 0 0 1 2-4A13 13 0 0 1 22 2c0 2.7-.8 7.5-6 11a22 22 0 0 1-4 2z" />
+    <path d="M9 12H4s.6-3 2-4c1.6-1.1 5 0 5 0M12 15v5s3-.6 4-2c1.1-1.6 0-5 0-5" />
+  </Svg>
+);
+
+/** A star: one of the icons a saved filter's cards can carry. */
+export const StarIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9z" />
+  </Svg>
+);
+
+/** A cut gem: one of the icons a saved filter's cards can carry. */
+export const GemIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6 3h12l4 6-10 12L2 9z" />
+    <path d="M2 9h20M12 21L8 9l4-6 4 6z" />
+  </Svg>
+);
+
+/** A crown: one of the icons a saved filter's cards can carry. */
+export const CrownIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 7l4 4 5-6 5 6 4-4-2 11H5z" />
+    <path d="M5 21h14" />
+  </Svg>
+);

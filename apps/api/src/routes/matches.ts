@@ -161,7 +161,8 @@ const matchInclude = {
   // The latest snapshot is attached by withLatestSnapshots, not a nested include - see there.
   token: { select: TOKEN_CARD_SELECT },
   snapshot: true,
-  filter: { select: { id: true, name: true } },
+  // color and icon: the owner's style for this filter's cards (null keeps Customize's).
+  filter: { select: { id: true, name: true, color: true, icon: true } },
 } satisfies Prisma.MatchInclude;
 
 /** What ordering and slicing the feed needs from a match - the page's own rows load in full. */
