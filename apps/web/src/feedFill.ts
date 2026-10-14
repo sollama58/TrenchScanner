@@ -23,20 +23,24 @@ export interface FilledPage {
   moreLoaded: boolean;
   /**
    * Tokens to keep "Now" seconds old: this page's cards first, then the hidden ones among them,
-   * which come back the moment they climb over the line. Within the live tick's limit.
+   * which come back once they climb over the line. Within the live tick's limit.
    */
   tickTokenIds: string[];
+  /** The alerts hidden now: pass it back as `wasHidden` next time, so hiding holds steady at the line. */
+  hidden: ReadonlySet<string>;
 }
 
 /**
  * One page of the Live feed with the "hide below this market cap" cards taken out and later ones
  * moved up in their place, from the alerts read so far (`buffer`, newest first). A hidden card
- * that climbs back over the line takes its own place again, pushing the rest back down.
+ * that climbs back over the line (with MCAP_RESHOW_MARGIN to spare) takes its own place again,
+ * pushing the rest back down. `wasHidden` is the last call's `hidden`.
  */
 export function fillPage(
   buffer: readonly Card[],
   look: Pick<FeedAppearance, "hideBelowMcap" | "hideBelowMcapUsd">,
   page: number,
+  wasHidden: ReadonlySet<string> = new Set(),
   pageSize = FEED_PAGE_SIZE,
 ): FilledPage {
   const start = (page - 1) * pageSize;
@@ -45,8 +49,12 @@ export function fillPage(
   const hiddenIds: string[] = [];
   let visible = 0;
   let moreLoaded = false;
+  const hiddenNow = new Set<string>();
+  let read = 0;
   for (const card of buffer) {
-    const hidden = belowMcapLine(card, look);
+    const hidden = belowMcapLine(card, look, wasHidden.has(card.id));
+    if (hidden) hiddenNow.add(card.id);
+    read++;
     if (!hidden) {
       if (visible >= end) {
         moreLoaded = true;
@@ -59,8 +67,10 @@ export function fillPage(
       hiddenIds.push(card.tokenId);
     }
   }
+  // Cards past this page weren't looked at: they keep what they were.
+  for (const card of buffer.slice(read)) if (wasHidden.has(card.id)) hiddenNow.add(card.id);
   const tickTokenIds = [...new Set([...shown.map((c) => c.tokenId), ...hiddenIds])].slice(0, MAX_TICK_TOKENS);
-  return { shown, hiddenHere: hiddenIds.length, moreLoaded, tickTokenIds };
+  return { shown, hiddenHere: hiddenIds.length, moreLoaded, tickTokenIds, hidden: hiddenNow };
 }
 
 /** The feed's pages read so far as one list, newest first, each alert once. */

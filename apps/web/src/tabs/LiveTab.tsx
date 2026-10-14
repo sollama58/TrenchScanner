@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
@@ -106,11 +106,16 @@ export function LiveTab({
   const cards = useLiveMarketCaps(buffer, fill ? tickIds : undefined);
   // The "hide below this market cap" setting only takes cards off the screen: the feed's stats and
   // grading are the API's, unchanged. Older alerts move up into the gaps, and a card that climbs
-  // back over the line takes its own place again.
+  // back over the line (with a margin, so a coin trading at the line doesn't flicker) takes its own
+  // place again. Which cards were hidden last time carries over for that margin.
+  const wasHidden = useRef<ReadonlySet<string>>(new Set());
   const filled = useMemo(
-    () => (fill && cards ? fillPage(cards, look, page) : null),
+    () => (fill && cards ? fillPage(cards, look, page, wasHidden.current) : null),
     [fill, cards, look, page],
   );
+  useEffect(() => {
+    wasHidden.current = filled?.hidden ?? new Set();
+  }, [filled]);
   const tickKey = filled?.tickTokenIds.join(",") ?? "";
   useEffect(() => setTickIds(tickKey ? tickKey.split(",") : undefined), [tickKey]);
   const lastLoaded = loadedPages.length > 0 ? loadedPages[loadedPages.length - 1] : null;

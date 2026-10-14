@@ -1066,17 +1066,26 @@ export function nowReading(card: Card): number | null {
 }
 
 /**
+ * How far over the "hide below" line a hidden card has to climb before it shows again, so a coin
+ * trading right at the line doesn't flick in and out with every reading.
+ */
+export const MCAP_RESHOW_MARGIN = 1.1;
+
+/**
  * Whether the Live feed's "hide below this market cap" setting hides this card: its "Now" market cap
- * is known and under the line. Display only - stats and grading still count the alert. A card with
- * no reading yet stays shown.
+ * is known and under the line - or, for a card already hidden (`wasHidden`), not yet back over the
+ * line plus MCAP_RESHOW_MARGIN. Display only - stats and grading still count the alert. A card with
+ * no reading keeps what it was (shown, the first time).
  */
 export function belowMcapLine(
   card: Card,
   look: Pick<FeedAppearance, "hideBelowMcap" | "hideBelowMcapUsd">,
+  wasHidden = false,
 ): boolean {
   if (!look.hideBelowMcap) return false;
   const mcap = nowReading(card);
-  return mcap !== null && mcap < look.hideBelowMcapUsd;
+  if (mcap === null) return wasHidden;
+  return mcap < look.hideBelowMcapUsd * (wasHidden ? MCAP_RESHOW_MARGIN : 1);
 }
 
 /** The "Now" figure's tooltip: why it is blank in a call's first minute, or how old it is. */
