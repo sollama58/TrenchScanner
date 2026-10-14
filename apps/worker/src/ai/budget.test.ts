@@ -76,10 +76,19 @@ describe("which picks the reviewer is pointed at", () => {
   const pick = (tier?: "high" | "standard") =>
     ({ curate: true, confidence: 70, reasons: [], tier }) as unknown as CurationDecision;
 
-  it("reviews high-conviction picks from the whole budget and standard ones from what's spare", () => {
+  it("reviews any seat's high-conviction picks from the whole budget", () => {
     expect(reviewPriority(pick("high"), env)).toBe("live");
-    expect(reviewPriority(pick(), env)).toBe("live");
-    expect(reviewPriority(pick("standard"), env)).toBe("background");
-    expect(reviewPriority(pick("standard"), { ...env, AI_REVIEW_STANDARD_PICKS: "never" })).toBeNull();
+    expect(reviewPriority(pick("high"), env, true)).toBe("live");
+    expect(reviewPriority(pick("high"), { ...env, AI_REVIEW_STANDARD_PICKS: "never" })).toBe("live");
+  });
+
+  it("reviews nothing else by default, and only the default seat's other picks from what's spare", () => {
+    const never = { ...env, AI_REVIEW_STANDARD_PICKS: "never" } as Env;
+    // An untiered pick (a model with no high-conviction cutoff) is not in the tier.
+    expect(reviewPriority(pick(), never, true)).toBeNull();
+    expect(reviewPriority(pick("standard"), never, true)).toBeNull();
+    expect(reviewPriority(pick("standard"), env, true)).toBe("background");
+    expect(reviewPriority(pick(), env, true)).toBe("background");
+    expect(reviewPriority(pick("standard"), env, false)).toBeNull();
   });
 });

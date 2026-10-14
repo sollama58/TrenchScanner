@@ -1,5 +1,6 @@
 import { GOAL_LABEL } from "./leaderboard.js";
 import { wilsonLowerBound, type PrecisionTargets } from "./trainer.js";
+import { judgeLift, JUDGE_INTERVAL_Z } from "./aiJudge.js";
 
 /**
  * The learned AI blend: rather than a hand-set rule for how far to trust the reviewer ("veto
@@ -8,10 +9,12 @@ import { wilsonLowerBound, type PrecisionTargets } from "./trainer.js";
  *
  *   P(win) = sigmoid(b0 + b1 * logit(model probability) + b2 * logit(reviewer probability))
  *
- * It is judged out of sample (time-ordered folds), and only counts as USABLE when its odds beat
- * the model's own (lower Brier) AND the picks it would keep beat the pool it filters. A usable
- * blend replaces the reviewer's bare buy/no_buy in gate mode: picks it scores below its cutoff
- * are held back. An unusable one changes nothing.
+ * It is judged forward in time only (user decision 2026-10-14): walk-forward folds, each predicted
+ * by a fit on the folds before it, pick the cutoff; then the newest rows, which neither the fits
+ * nor the cutoff saw, test it. It only counts as USABLE when its odds beat the model's own (lower
+ * Brier) on both, AND on the held-out rows the picks it keeps beat the ones it drops with a 95%
+ * lower bound above 0. A usable blend replaces the reviewer's bare buy/no_buy in gate mode: picks
+ * it scores below its cutoff are held back. An unusable one changes nothing.
  */
 
 export const AI_BLEND_KIND = "ai-blend-v1";
@@ -38,18 +41,27 @@ export interface AiBlendParams {
 export interface AiBlendMetrics {
   rows: number;
   /**
-   * Out-of-sample Brier on the same rows: the blend; the model's odds alone, recalibrated by the
+   * Brier on the held-out newest rows: the blend; the model's odds alone, recalibrated by the
    * same fit; and the reviewer's raw odds.
    */
   brierBlend: number | null;
   brierCurator: number | null;
   brierAi: number | null;
-  /** The pool's 2x / 4x rates, %. */
+  /** The held-out rows' 2x rate, %. */
   baseWinRatePct: number | null;
-  /** What the picks at or above the cutoff did out of sample, %. */
+  /** What the held-out picks at or above the cutoff did, %. */
   keptRows: number;
   keptWinRatePct: number | null;
   keptGoalRatePct: number | null;
+  /** How many of the newest rows were held out of every fit and of the cutoff. */
+  holdoutRows?: number;
+  /** The same Brier pair on the walk-forward folds the cutoff was picked on. */
+  brierBlendWalkForward?: number | null;
+  brierCuratorWalkForward?: number | null;
+  /** Held out: kept picks' 2x rate over the held-out pool, in points, with its 95% interval. */
+  liftPts?: number | null;
+  liftLowPts?: number | null;
+  liftHighPts?: number | null;
   /** Why it is or isn't usable - one line. */
   reason: string;
 }
@@ -140,76 +152,26 @@ const brier = (preds: number[], rows: AiBlendRow[]) =>
 export interface AiBlendOptions {
   /** Graded reviews needed before a blend is fitted at all. */
   minRows: number;
-  /** Time-ordered folds for the out-of-sample predictions. */
+  /** Time-ordered walk-forward folds over the rows before the held-out tail. */
   folds?: number;
+  /** Share of the newest rows held out of every fit and of the cutoff, to test the blend on. */
+  holdoutShare?: number;
 }
 
-/**
- * Fits the blend on time-ordered graded reviews (oldest first) and judges it out of sample: each
- * fold is predicted by a fit on every earlier and later fold. The cutoff is the lowest blend
- * probability whose kept picks meet both targets on at least targets.minSupport picks (Wilson
- * bound at targets.confidenceZ); when none does, the one that keeps at least half the pool with
- * the best 2x lower bound - the targets are an aim, so the gate never silences most of the feed.
- */
-export function fitAiBlend(
+/** The cutoff the walk-forward predictions pick - see fitAiBlend. */
+function pickCutoff(
+  preds: number[],
   rows: AiBlendRow[],
   targets: PrecisionTargets,
-  options: AiBlendOptions,
-): { params: AiBlendParams; metrics: AiBlendMetrics } {
+): { cut: number; kept: number } | null {
   const n = rows.length;
-  const base = n > 0 ? (rows.filter((r) => r.labelValue > 0).length / n) * 100 : null;
-  const unusable = (
-    reason: string,
-    extra: Partial<AiBlendMetrics> = {},
-  ): { params: AiBlendParams; metrics: AiBlendMetrics } => ({
-    params: { kind: AI_BLEND_KIND, ...fitLogistic(rows.length > 0 ? rows : []), cutoff: null, usable: false },
-    metrics: {
-      rows: n,
-      brierBlend: null,
-      brierCurator: null,
-      brierAi: null,
-      baseWinRatePct: base,
-      keptRows: 0,
-      keptWinRatePct: null,
-      keptGoalRatePct: null,
-      reason,
-      ...extra,
-    },
-  });
-  if (n < options.minRows) return unusable(`${n} graded reviews; needs ${options.minRows}`);
-
-  // The blend is compared with the model's odds RECALIBRATED the same way (the model alone through
-  // the same fit), so the reviewer is credited only for what it adds, not for a recalibration the
-  // model's own probability could have had without it.
-  const k = Math.max(2, Math.min(options.folds ?? 5, n));
-  const oos = new Array<number>(n);
-  const oosCurator = new Array<number>(n);
-  for (let f = 0; f < k; f++) {
-    const lo = Math.floor((f * n) / k);
-    const hi = Math.floor(((f + 1) * n) / k);
-    const train = rows.filter((_, i) => i < lo || i >= hi);
-    const fit = fitLogistic(train);
-    const curatorOnly = fitLogistic(train, false);
-    for (let i = lo; i < hi; i++) {
-      oos[i] = predictAiBlend(fit, rows[i]!.curatorProbability, rows[i]!.aiProbability);
-      oosCurator[i] = predictAiBlend(curatorOnly, rows[i]!.curatorProbability, 0.5);
-    }
-  }
-  const brierBlend = brier(oos, rows);
-  const brierCurator = brier(oosCurator, rows);
-  const brierAi = brier(
-    rows.map((r) => clampP(r.aiProbability)),
-    rows,
-  );
-  const scores = { brierBlend, brierCurator, brierAi };
-
-  // Cutoffs, lowest first: a pick is kept at cutoff c when its out-of-sample blend is >= c.
-  const order = oos.map((p, i) => ({ p, i })).sort((a, b) => b.p - a.p);
+  // Cutoffs, lowest first: a pick is kept at cutoff c when its blend is >= c.
+  const order = preds.map((p, i) => ({ p, i })).sort((a, b) => b.p - a.p);
   const z = targets.confidenceZ ?? 1;
   let wins = 0;
   let goals = 0;
-  let targetCut: { cut: number; kept: number; wins: number; goals: number } | null = null;
-  let bestCut: { cut: number; kept: number; wins: number; goals: number; lb: number } | null = null;
+  let targetCut: { cut: number; kept: number } | null = null;
+  let bestCut: { cut: number; kept: number; lb: number } | null = null;
   const halfPool = Math.ceil(n / 2);
   for (let j = 0; j < order.length; j++) {
     const row = rows[order[j]!.i]!;
@@ -224,38 +186,152 @@ export function fitAiBlend(
       wilsonLowerBound(wins, kept, z) >= targets.winRate &&
       wilsonLowerBound(goals, kept, z) >= targets.goalRate
     ) {
-      targetCut = { cut, kept, wins, goals };
+      targetCut = { cut, kept };
     }
     if (kept >= Math.max(targets.minSupport, halfPool)) {
       const lb = wilsonLowerBound(wins, kept, z);
-      if (bestCut === null || lb > bestCut.lb) bestCut = { cut, kept, wins, goals, lb };
+      if (bestCut === null || lb > bestCut.lb) bestCut = { cut, kept, lb };
     }
   }
-  const chosen = targetCut ?? bestCut;
-  if (chosen === null) return unusable("too few graded reviews to place a cutoff", scores);
+  return targetCut ?? bestCut;
+}
 
-  const keptWinRatePct = (chosen.wins / chosen.kept) * 100;
-  const kept = {
-    keptRows: chosen.kept,
-    keptWinRatePct,
-    keptGoalRatePct: (chosen.goals / chosen.kept) * 100,
-  };
-  if (brierBlend === null || brierCurator === null || brierBlend >= brierCurator) {
-    return unusable("its odds were no better than the model's own out of sample", { ...scores, ...kept });
+/**
+ * Fits the blend on time-ordered graded reviews (oldest first) and judges it forward in time only.
+ * The newest holdoutShare of the rows is set aside. The rest is cut into time-ordered folds, and
+ * each fold after the first is predicted by a fit on the folds before it (walk-forward: never on
+ * later rows). The cutoff is placed on those walk-forward predictions: the lowest blend
+ * probability whose kept picks meet both targets on at least targets.minSupport picks (Wilson
+ * bound at targets.confidenceZ), or when none does, the one keeping at least half of them with
+ * the best 2x lower bound. Then a fit on every row before the tail scores the tail, and the
+ * blend is usable only if its Brier beats the model's recalibrated odds on the walk-forward folds
+ * and on the tail, and the tail's picks at or above the cutoff beat the ones below it with a 95%
+ * lower bound above 0 (judgeLift). The stored weights are refit on every row; the cutoff stays.
+ */
+export function fitAiBlend(
+  rows: AiBlendRow[],
+  targets: PrecisionTargets,
+  options: AiBlendOptions,
+): { params: AiBlendParams; metrics: AiBlendMetrics } {
+  const n = rows.length;
+  const unusable = (
+    reason: string,
+    extra: Partial<AiBlendMetrics> = {},
+  ): { params: AiBlendParams; metrics: AiBlendMetrics } => ({
+    params: { kind: AI_BLEND_KIND, ...fitLogistic(rows.length > 0 ? rows : []), cutoff: null, usable: false },
+    metrics: {
+      rows: n,
+      brierBlend: null,
+      brierCurator: null,
+      brierAi: null,
+      baseWinRatePct: null,
+      keptRows: 0,
+      keptWinRatePct: null,
+      keptGoalRatePct: null,
+      reason,
+      ...extra,
+    },
+  });
+  if (n < options.minRows) return unusable(`${n} graded reviews; needs ${options.minRows}`);
+
+  const holdoutRows = Math.max(1, Math.floor(n * (options.holdoutShare ?? 0.3)));
+  const dev = rows.slice(0, n - holdoutRows);
+  const tail = rows.slice(n - holdoutRows);
+  const k = Math.max(2, Math.min(options.folds ?? 5, dev.length));
+
+  // The blend is compared with the model's odds RECALIBRATED the same way (the model alone through
+  // the same fit), so the reviewer is credited only for what it adds, not for a recalibration the
+  // model's own probability could have had without it.
+  const wfRows: AiBlendRow[] = [];
+  const wfBlend: number[] = [];
+  const wfCurator: number[] = [];
+  for (let f = 1; f < k; f++) {
+    const lo = Math.floor((f * dev.length) / k);
+    const hi = Math.floor(((f + 1) * dev.length) / k);
+    const train = dev.slice(0, lo);
+    if (train.length === 0) continue;
+    const fit = fitLogistic(train);
+    const curatorOnly = fitLogistic(train, false);
+    for (let i = lo; i < hi; i++) {
+      const r = dev[i]!;
+      wfRows.push(r);
+      wfBlend.push(predictAiBlend(fit, r.curatorProbability, r.aiProbability));
+      wfCurator.push(predictAiBlend(curatorOnly, r.curatorProbability, 0.5));
+    }
   }
-  if (base === null || keptWinRatePct <= base) {
-    return unusable("the picks it would keep did no better than the pool", { ...scores, ...kept });
+  const walkForward = {
+    brierBlendWalkForward: brier(wfBlend, wfRows),
+    brierCuratorWalkForward: brier(wfCurator, wfRows),
+  };
+
+  const devFit = fitLogistic(dev);
+  const devCurator = fitLogistic(dev, false);
+  const tailBlend = tail.map((r) => predictAiBlend(devFit, r.curatorProbability, r.aiProbability));
+  const tailCurator = tail.map((r) => predictAiBlend(devCurator, r.curatorProbability, 0.5));
+  const scores = {
+    holdoutRows,
+    ...walkForward,
+    brierBlend: brier(tailBlend, tail),
+    brierCurator: brier(tailCurator, tail),
+    brierAi: brier(
+      tail.map((r) => clampP(r.aiProbability)),
+      tail,
+    ),
+    baseWinRatePct: (tail.filter((r) => r.labelValue > 0).length / tail.length) * 100,
+  };
+
+  const chosen = pickCutoff(wfBlend, wfRows, targets);
+  if (chosen === null) return unusable("too few walk-forward rows to place a cutoff", scores);
+
+  const keptTail = tail.filter((_, i) => tailBlend[i]! >= chosen.cut);
+  const lift = judgeLift(
+    tail.map((r, i) => ({
+      decision: tailBlend[i]! >= chosen.cut ? "buy" : "no_buy",
+      labelValue: r.labelValue,
+    })),
+    JUDGE_INTERVAL_Z,
+  );
+  const kept = {
+    keptRows: keptTail.length,
+    keptWinRatePct:
+      keptTail.length > 0 ? (keptTail.filter((r) => r.labelValue > 0).length / keptTail.length) * 100 : null,
+    keptGoalRatePct:
+      keptTail.length > 0
+        ? (keptTail.filter((r) => r.labelValue >= GOAL_LABEL).length / keptTail.length) * 100
+        : null,
+    liftPts: lift.liftPts,
+    liftLowPts: lift.liftLowPts,
+    liftHighPts: lift.liftHighPts,
+  };
+  const beats = (a: number | null, b: number | null) => a !== null && b !== null && a < b;
+  if (!beats(walkForward.brierBlendWalkForward, walkForward.brierCuratorWalkForward)) {
+    return unusable("its odds were no better than the model's own on the walk-forward folds", {
+      ...scores,
+      ...kept,
+    });
+  }
+  if (!beats(scores.brierBlend, scores.brierCurator)) {
+    return unusable("its odds were no better than the model's own on the held-out rows", {
+      ...scores,
+      ...kept,
+    });
+  }
+  if (lift.liftLowPts === null || lift.liftLowPts <= 0) {
+    return unusable(
+      lift.liftLowPts === null
+        ? "on the held-out rows its cutoff kept everything or nothing"
+        : "on the held-out rows the picks it would keep did not clearly beat the ones it would drop",
+      { ...scores, ...kept },
+    );
   }
   return {
     params: { kind: AI_BLEND_KIND, ...fitLogistic(rows), cutoff: chosen.cut, usable: true },
     metrics: {
       rows: n,
       ...scores,
-      baseWinRatePct: base,
       ...kept,
-      reason: targetCut
-        ? "beats the model's odds and its kept picks meet both targets out of sample"
-        : "beats the model's odds and lifts the hit rate out of sample",
+      reason:
+        "beats the model's odds walking forward and on held-out rows, and its kept picks beat the dropped ones",
     },
   };
 }
