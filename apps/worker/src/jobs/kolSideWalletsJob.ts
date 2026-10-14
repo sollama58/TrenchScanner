@@ -1,5 +1,6 @@
 import { prisma, createLogger, KNOWN_EXCHANGE_WALLETS } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
+import { replaceRows, type ReplaceRowsSpec } from "./replaceRows.js";
 
 const logger = createLogger("kol-side-wallets");
 
@@ -33,6 +34,23 @@ const DAY_MS = 24 * HOUR_MS;
  * (user decision 2026-10-14). KolPossibleSide.computedAt is that last run.
  */
 export const POSSIBLE_SIDE_HOLD_MS = 14 * DAY_MS;
+/**
+ * KolSideWallets is brought to the new set writing only the KOLs whose lists changed (replaceRows.ts):
+ * computedAt is the run that last changed a row, the job's heartbeat the last rebuild.
+ */
+const KOL_SIDE_WALLETS_TABLE: ReplaceRowsSpec = {
+  table: "KolSideWallets",
+  key: "wallet",
+  columns: [
+    { name: "wallet", type: "text" },
+    { name: "coins24h", type: "integer" },
+    { name: "coins7d", type: "integer" },
+    { name: "coins30d", type: "integer" },
+    { name: "sides", type: "jsonb" },
+    { name: "computedAt", type: "timestamp(3)" },
+  ],
+  stampColumns: ["computedAt"],
+};
 /** Wallet pairs per delete when refreshing the labels that qualify again. */
 const POSSIBLE_SIDE_DELETE_CHUNK = 500;
 
@@ -279,10 +297,10 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   );
 
   let possibleHeld = 0;
+  let written = 0;
   await prisma.$transaction(
     async (tx) => {
-      await tx.kolSideWallets.deleteMany({});
-      if (data.length) await tx.kolSideWallets.createMany({ data });
+      ({ written } = await replaceRows(tx, KOL_SIDE_WALLETS_TABLE, data));
       // Labels that qualify this run are rewritten with this run's figures; the rest are kept until
       // POSSIBLE_SIDE_HOLD_MS past the last run they qualified.
       await tx.kolPossibleSide.deleteMany({
@@ -302,6 +320,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
 
   const meta: JobRunMeta = {
     kols: data.length,
+    written,
     withSides: data.filter((d) => (d.sides as Record<SideWindow, SideWallet[]>)["30d"].length > 0).length,
     possibleSides: possible.length,
     possibleSidesHeld: possibleHeld,

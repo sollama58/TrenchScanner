@@ -177,3 +177,16 @@ export async function lastSuccessfulRunAt(job: HeartbeatJob): Promise<Date | nul
   const row = await prisma.systemHeartbeat.findUnique({ where: { job }, select: { lastSuccessAt: true } });
   return row?.lastSuccessAt ?? null;
 }
+
+/**
+ * When a table that `job` rebuilds was last rebuilt, for a reader showing "updated X ago": the
+ * later of a row's own stamp and the job's last successful run. The wallet-risk and kol-side-wallets
+ * jobs rewrite only the rows whose figures changed, so a row's computedAt is the run that last
+ * changed it, not the last run; the heartbeat carries that. A missing or unreadable heartbeat
+ * falls back to the row's stamp.
+ */
+export async function lastRebuiltAt(job: HeartbeatJob, rowStamp: Date | null): Promise<Date | null> {
+  const ran = await lastSuccessfulRunAt(job).catch(() => null);
+  if (!ran) return rowStamp;
+  return rowStamp && rowStamp > ran ? rowStamp : ran;
+}

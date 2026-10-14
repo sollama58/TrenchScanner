@@ -2040,7 +2040,7 @@ model TokenWalletActivity {
 
 /// Each wallet's composite risk score (0-100), from what it did in the coins whose trade tape was
 /// read (TokenWalletActivity): how often it sold into a stop, against the market's rate, nudged up
-/// by fast exits and launch snipes. Rebuilt whole every hour by the trainer's walletRiskJob.ts
+/// by fast exits and launch snipes. Rebuilt every hour by the trainer's walletRiskJob.ts
 /// (formula: walletRiskScore in core's wallets/riskScore.ts). Wallets seen in fewer than two coins
 /// are left out. The scan reads it as it stands, so a reading at a decision only ever uses coins
 /// whose outcome was final before the last rebuild - never the coin's own result.
@@ -2071,6 +2071,8 @@ model WalletRisk {
   solIn           Float
   solOut          Float
   lastSeenAt      DateTime
+  /// The hourly rebuild that last changed this row: unchanged rows are not rewritten (R6, db-size
+  /// audit 2026-10-14). The last rebuild itself is the "wallet-risk" heartbeat.
   computedAt      DateTime
 
   @@index([score])
@@ -2157,8 +2159,8 @@ model KolWallet {
 /// The Side Wallet Checker (Utilities tab): each KOL on the roster (KolWallet) with the tracked
 /// coins it bought in the last 24 hours, 7 days and 30 days (coins whose trade tape was read,
 /// TokenWalletActivity), and the wallets that bought the most of the same coins within a few
-/// minutes of it. Rebuilt whole every hour by the worker's kolSideWalletsJob.ts; the dashboard
-/// only reads it, so a page view costs no outside calls.
+/// minutes of it. Rebuilt every hour by the worker's kolSideWalletsJob.ts, writing only the rows
+/// that changed; the dashboard only reads it, so a page view costs no outside calls.
 model KolSideWallets {
   wallet     String   @id
   coins24h   Int
@@ -2167,6 +2169,7 @@ model KolSideWallets {
   /// The top side wallets per window, best first: { "24h": SideWallet[], "7d": ..., "30d": ... }
   /// (SideWallet in the worker's kolSideWalletsJob.ts).
   sides      Json
+  /// The hourly rebuild that last changed this row; the last rebuild is the "kol-side-wallets" heartbeat.
   computedAt DateTime
 
   @@index([coins30d])
