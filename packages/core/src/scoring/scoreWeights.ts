@@ -4,20 +4,21 @@ import { IDENTITY_SCORE_ANCHOR, type ScoreAnchor, type ScoreWeights } from "./sc
  * The composite score's adaptive weights (user ask 2026-10-06: "the scoring weighting changing to
  * better reflect tokens that end up performing well").
  *
- * Each run takes the newest graded outcomes - decision moments (the Rules seat's population) and
- * filter matches (what users' min scores act on) - and searches the weight simplex for the blend
- * of the three live parts that best ranks the tokens that went on to 2x, 4x and 10x. The hunt
- * rewards big runs on purpose: the objective averages the rank quality (AUC) for all three tiers,
- * so a weight that finds 10x runners counts as much as one that finds plain doubles.
+ * Each run takes the newest graded decision moments (the Rules seat's population) and searches the
+ * weight simplex for the blend of the three live parts that best ranks the tokens that went on to a
+ * clean 2x inside 15 minutes - the goal's own question (user decision 2026-10-14, audit P15). Until
+ * then the objective averaged the AUC for 2x, 4x and 10x over decision moments and filter matches,
+ * which gave the goal a sixth of the vote (notes/full-audit-2026-10-14, lane 4 M-10). Filter matches
+ * are still loaded: the rescale is set on them.
  *
  * Guard rails, so a noisy day can't swing everyone's scores:
  * - fitted on the older 70% of the rows, judged on the newest 30% it never saw;
  * - each run moves only STEP_SHARE of the way from today's weights toward the fit;
  * - adopted only when that step ranks the unseen rows better than today's weights do;
- * - every part keeps at least MIN_PART_WEIGHT, and the narrative part's weight stays where it is
- *   until TokenSage's read (scorer.ts scoreNarrative, live since 2026-10-07) has shown on graded
- *   rows that it ranks winners; until then most rows carry the midpoint and a fit over it would
- *   only measure how many rows had a read;
+ * - every part keeps at least MIN_PART_WEIGHT; the narrative part's weight is NARRATIVE_WEIGHT (0
+ *   since 2026-10-14, user decision: five evaluations found no lift from it, and the replay found
+ *   none either - notes/thread-c-replay-2026-10-14/report.md). A stored set with another narrative
+ *   weight is moved to it once, its share spread over the live parts and rescaled like any adoption;
  * - an adopted set comes with a rescale (ScoreAnchor) that keeps the score's 10th and 90th
  *   percentiles on the window's filter matches where they were, so a saved min score keeps letting
  *   through about the same share of tokens (user decision 2026-10-10).
@@ -67,8 +68,10 @@ export const MIN_PART_WEIGHT = 0.05;
 const GRID_STEP = 0.05;
 /** Newest share of the rows held out to judge the step. */
 const HOLDOUT_SHARE = 0.3;
-/** A population needs this many 2x wins in a slice to have a say. */
+/** The decision moments need this many 2x wins in a slice to be judged. */
 const MIN_POPULATION_WINS = 20;
+/** The narrative part's weight (see the module comment). */
+export const NARRATIVE_WEIGHT = 0;
 /** A tier needs this many hits (and misses) in a slice to be scored. */
 const MIN_TIER_HITS = 5;
 /** The step must beat today's weights by at least this much rank quality on the unseen rows. */
@@ -100,29 +103,14 @@ export function rankAuc(scores: readonly number[], labels: readonly boolean[]): 
   return (rankSumPos - (pos * (pos + 1)) / 2) / (pos * neg);
 }
 
-/** Mean AUC over the tiers that have enough hits, then over the populations with enough wins. */
+/** How well a weight set ranks the decision moments that went on to a clean 15-minute 2x (AUC). */
 export function rankQuality(rows: readonly ScoreFitRow[], w: Pick<ScoreWeights, Part>): number | null {
-  const perPopulation: number[] = [];
-  for (const population of ["event", "match"] as const) {
-    const pop = rows.filter((r) => r.population === population);
-    if (pop.filter((r) => r.win).length < MIN_POPULATION_WINS) continue;
-    const scores = pop.map(
-      (r) => w.momentum * r.momentum + w.freshness * r.freshness + w.holderQuality * r.holderQuality,
-    );
-    const tiers: number[] = [];
-    for (const label of [pop.map((r) => r.win), pop.map((r) => r.goal)]) {
-      const auc = rankAuc(scores, label);
-      if (auc !== null) tiers.push(auc);
-    }
-    const known = pop.map((r, k) => [r.tenX, scores[k]!] as const).filter(([t]) => t !== undefined);
-    const tenAuc = rankAuc(
-      known.map(([, s]) => s),
-      known.map(([t]) => t === true),
-    );
-    if (tenAuc !== null) tiers.push(tenAuc);
-    if (tiers.length > 0) perPopulation.push(tiers.reduce((a, b) => a + b, 0) / tiers.length);
-  }
-  return perPopulation.length === 0 ? null : perPopulation.reduce((a, b) => a + b, 0) / perPopulation.length;
+  const pop = rows.filter((r) => r.population === "event");
+  if (pop.filter((r) => r.win).length < MIN_POPULATION_WINS) return null;
+  return rankAuc(
+    pop.map((r) => w.momentum * r.momentum + w.freshness * r.freshness + w.holderQuality * r.holderQuality),
+    pop.map((r) => r.win),
+  );
 }
 
 /** Every weight split of `total` over the three live parts on the grid, each part at least the floor. */
@@ -206,6 +194,38 @@ export function fitScoreWeights(
     rows: counts,
     ...extra,
   });
+
+  // A stored set with another narrative weight moves to NARRATIVE_WEIGHT once, whatever the fit:
+  // the share is spread over the live parts as they stand, and rescaled so saved min scores keep
+  // letting through about the same share of tokens.
+  if (Math.abs(current.narrative - NARRATIVE_WEIGHT) >= 0.005) {
+    const curLive = current.momentum + current.freshness + current.holderQuality;
+    const live = 1 - NARRATIVE_WEIGHT;
+    const spread = (v: number) => (curLive > 0 ? (v / curLive) * live : live / 3);
+    const moved: ScoreWeights = {
+      momentum: round2(spread(current.momentum)),
+      freshness: round2(spread(current.freshness)),
+      holderQuality: 0,
+      narrative: NARRATIVE_WEIGHT,
+    };
+    moved.holderQuality = round2(live - moved.momentum - moved.freshness);
+    const anchor = anchorForWeights(sorted, current, currentAnchor, moved);
+    if (anchor === null) {
+      return keep(
+        "The narrative weight change is held: the new spread couldn't be matched to today's score.",
+      );
+    }
+    return {
+      weights: moved,
+      anchor,
+      adopted: true,
+      reason: `Narrative weight set to ${NARRATIVE_WEIGHT} (user decision 2026-10-14), its share spread over the other parts.`,
+      fitted: null,
+      holdoutCurrent: null,
+      holdoutProposed: null,
+      rows: counts,
+    };
+  }
 
   const cut = Math.floor(sorted.length * (1 - HOLDOUT_SHARE));
   const train = sorted.slice(0, cut);
