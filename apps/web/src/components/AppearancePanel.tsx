@@ -191,7 +191,7 @@ export function AppearanceControls() {
             checked={look.outlineResult}
             onChange={() => setAppearance({ outlineResult: !look.outlineResult })}
           />
-          Turn the outline green when an alert passes and red when it fails
+          Mark graded cards: a heavier green or red outline with a halo when an alert passes or fails
         </label>
       </fieldset>
 

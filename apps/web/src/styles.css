@@ -1134,11 +1134,22 @@ input[type="checkbox"] {
   transform: translateY(-2px);
   box-shadow: 0 16px 32px -20px rgba(0, 0, 0, 0.6);
 }
-.cards:not([data-outline-result="off"]) .card.result-pass {
-  border-color: var(--good);
+/* A graded card's result reads as a result, not as an outline color someone picked: a heavier
+   border, a halo ring outside it and a wash over the card's top, none of which a chosen outline
+   (Customize or a filter's color) ever gets - so a red or green pick still looks like a plain line. */
+.cards:not([data-outline-result="off"]) .card.result-pass,
+.cards:not([data-outline-result="off"]) .card.result-fail {
+  --result: var(--good);
+  border-width: 2px;
+  border-color: var(--result);
+  outline: 2px solid color-mix(in srgb, var(--result) 38%, transparent);
+  outline-offset: 1px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--result) 14%, transparent), transparent 120px),
+    linear-gradient(180deg, var(--surface-2), color-mix(in srgb, var(--surface-2) 70%, var(--page)));
 }
 .cards:not([data-outline-result="off"]) .card.result-fail {
-  border-color: var(--bad);
+  --result: var(--bad);
 }
 .card-head {
   display: flex;
