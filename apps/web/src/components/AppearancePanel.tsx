@@ -528,11 +528,15 @@ function TextSize({ value, onCommit }: { value: number; onCommit: (v: number) =>
 /** What the automatic Narrative default is doing, and why. */
 function narrativeAutoHint(n: NarrativeNoteReadiness | null): string {
   if (!n) return "off until the Narrative model's record loads.";
-  const rule = `turns on once the Narrative model's ${n.windowDays}-day 2x hit rate is above ${n.minRatePct}% on at least ${n.minGraded} graded calls`;
+  const rule = `turns on once the Narrative model's ${n.windowDays}-day 2x hit rate is reliably above ${n.minRatePct}% (the bottom of its 90% range, on at least ${n.minGraded} graded calls), and off once it is reliably below`;
+  const range =
+    n.lowerPct != null && n.upperPct != null
+      ? ` (range ${n.lowerPct.toFixed(0)}-${n.upperPct.toFixed(0)}%)`
+      : "";
   const record =
     n.winRatePct === null
       ? "no graded calls yet"
-      : `${n.winRatePct.toFixed(0)}% over ${n.graded} graded call${n.graded === 1 ? "" : "s"}`;
+      : `${n.winRatePct.toFixed(0)}%${range} over ${n.graded} graded call${n.graded === 1 ? "" : "s"}`;
   return n.ready ? `on, ${record}. It ${rule}.` : `off for now, ${record}. It ${rule}.`;
 }
 

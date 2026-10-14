@@ -5,9 +5,10 @@ import { useAppearance } from "./appearance";
 /**
  * Whether the Narrative model's "agrees" / "warns" pill shows on other models' cards. The reader's
  * Customize toggle (FeedAppearance.narrativeNote) when they set it; otherwise the automatic
- * default from GET /config/narrative-note, which turns on once the Narrative model's 7-day 2x hit
- * rate passes 40% (packages/core/src/curation/narrativeNote.ts). Fetched once per page and
- * re-read now and then, like the score weights.
+ * default from GET /config/narrative-note, which turns on once the 90% interval on the Narrative
+ * model's 7-day 2x hit rate clears 40%, and off only once it falls wholly below 40%; in between it
+ * holds (packages/core/src/curation/narrativeNote.ts). The band lives on the server, so this just
+ * reads `ready`. Fetched once per page and re-read now and then, like the score weights.
  */
 const REFRESH_MS = 10 * 60_000;
 

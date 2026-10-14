@@ -169,8 +169,12 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               <BrainIcon size={12} /> Model
             </span>
             <p>
-              A call from a model you follow, with its name and confidence (0 to 100). If several models call
-              the same token, it shows once with all of them. Each model calls a token at most once a day.
+              A call from a model you follow, with its name and its score (&quot;Score 87&quot;): a 0-100 rank
+              score in that model&apos;s own units, not a probability, so it doesn&apos;t compare across
+              models. The &quot;≈NN% 2x&quot; beside it is the share of the model&apos;s recent out-of-sample
+              calls ranked like this one that hit 2x within 15 minutes of the alert, before a 50% stop (the
+              middle of the calling models&apos; rates when several call it). If several models call the same
+              token, it shows once with all of them. Each model calls a token at most once a day.
             </p>
           </div>
         </div>

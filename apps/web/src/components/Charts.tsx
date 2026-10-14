@@ -57,6 +57,10 @@ export interface GroupDatum {
   /** Shorter forms used when the buckets are too narrow for the full ones (phones). */
   shortLabel?: string;
   shortSub?: string;
+  /** Too few calls to read: the bars are faded. */
+  thin?: boolean;
+  /** An extra tooltip line, e.g. the rate's interval. */
+  note?: string;
 }
 
 /**
@@ -143,9 +147,17 @@ export function TargetBars({
             return (
               <g key={d.label} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
                 <rect className="hit" x={padL + i * group} y={padT} width={group} height={plotH + padB} />
-                {d.a !== null && <path className="bar s1" d={barPath(x0, y(d.a), barW, padT + plotH)} />}
+                {d.a !== null && (
+                  <path
+                    className={`bar s1${d.thin ? " thin" : ""}`}
+                    d={barPath(x0, y(d.a), barW, padT + plotH)}
+                  />
+                )}
                 {d.b !== null && (
-                  <path className="bar s2" d={barPath(x0 + barW + 2, y(d.b), barW, padT + plotH)} />
+                  <path
+                    className={`bar s2${d.thin ? " thin" : ""}`}
+                    d={barPath(x0 + barW + 2, y(d.b), barW, padT + plotH)}
+                  />
                 )}
                 <text className="tick" x={padL + i * group + group / 2} y={height - 18} textAnchor="middle">
                   {narrow ? (d.shortLabel ?? d.label) : d.label}
@@ -175,6 +187,7 @@ export function TargetBars({
               <i className="swatch s2" /> {bLabel}: {hovered.b === null ? "–" : `${hovered.b.toFixed(1)}%`}
             </span>
             {hovered.sub && <span className="muted">{hovered.sub}</span>}
+            {hovered.note && <span className="muted">{hovered.note}</span>}
           </div>
         )}
       </div>

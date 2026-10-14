@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Leaderboard, LighthouseDimension, LighthouseHistory, LighthouseHistoryBucket } from "../api";
 import { usePolling } from "../hooks";
 import { ago } from "../format";
+import { MIN_GRADED_FOR_RATE, RULE_NOTE_UNFILTERED } from "../rates";
 import { Skeleton } from "../components/Charts";
 import { TrendChart } from "../components/TrendChart";
 import { bucketMsOf, pricingChangeSlot } from "../pricingChange";
@@ -486,8 +487,8 @@ function ChartPanel({
             </div>
             <p className="faint small">
               The biggest five labels get their own series; the rest are &quot;other&quot;. The menu beside
-              the chart type picks what to break down by. A label&apos;s 2x rate shows once it has five graded
-              calls in a bucket.
+              the chart type picks what to break down by. A label&apos;s 2x rate shows once it has{" "}
+              {MIN_GRADED_FOR_RATE} graded calls in a bucket. {RULE_NOTE_UNFILTERED}
             </p>
           </div>
         ) : (

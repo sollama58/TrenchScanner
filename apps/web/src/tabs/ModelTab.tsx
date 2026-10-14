@@ -11,6 +11,7 @@ import {
   type LearningRates,
   type LearningTrend,
   type AiJudgeState,
+  IN_SAMPLE_LABEL,
   runExamRates,
 } from "../api";
 import { HBarChart, MarkerBars, MultiLines, Skeleton, TargetBars } from "../components/Charts";
@@ -42,10 +43,15 @@ import {
   windowShort,
   type WindowDays,
   doublings,
+  bestReturnTitle,
   liftTone,
   profitTone,
+  rateTitle,
   rateTone,
+  recordSince,
+  shortDate,
 } from "./modelShared";
+import { MIN_GRADED_FOR_RATE, RULE_NOTE, intervalText, isEarly, wilson, wilsonOfRate } from "../rates";
 import { ModelDetailModal } from "./ModelDetail";
 import { renderWeekCard, type WeekCardData } from "./weekCard";
 import { DAY_MS, dayStarts, pricingChangePoint } from "../pricingChange";
@@ -90,10 +96,12 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
   const following = lb.entries.filter((e) => lb.selectedModels.includes(e.id));
   const consensus = lb.entries.find((e) => e.role === "stacked") ?? null;
   const contenders = lb.entries.filter((e) => e.role !== "stacked");
+  // The board's order is vs market (hour-matched lift): its first row is "top by lift".
   const leader = lb.entries[0] ?? null;
-  const bestContender = [...contenders].sort(
-    (a, b) => (b.composite.live.winRatePct ?? -1) - (a.composite.live.winRatePct ?? -1),
-  )[0];
+  // "best" in the pipeline: the highest live 2x rate among seasoned models with enough graded calls.
+  const bestContender = contenders
+    .filter((e) => !e.composite.warmingUp && e.composite.live.graded >= MIN_GRADED_FOR_RATE)
+    .sort((a, b) => (b.composite.live.winRatePct ?? -1) - (a.composite.live.winRatePct ?? -1))[0];
   // Same list, same save, as the Live tab's model checkboxes.
   const setFeedModels = async (models: string[] | null) => {
     if (guest) return;
@@ -103,6 +111,14 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
 
   const trend = data.learning.trend;
   const leadLive = leader?.composite.live ?? null;
+  const leadSince = leader ? recordSince(leader, lb) : null;
+  // The headline: what the default feed itself delivered, pooled, with its interval. An older API
+  // without the pooled record falls back to the top seat's own rate, labelled as such.
+  const feed = lb.defaultFeed ?? null;
+  const feedRate = feed && feed.graded > 0 ? (feed.wins / feed.graded) * 100 : null;
+  const feedRange = feed ? wilson(feed.wins, feed.graded) : null;
+  const feedRule4 = feed && feed.gradedRule4 > 0 ? (feed.winsRule4 / feed.gradedRule4) * 100 : null;
+  const feedYoung = feed ? Date.parse(feed.since) > Date.parse(lb.window.since) + 3_600_000 : false;
 
   return (
     <div className="stack">
@@ -115,7 +131,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
             <h2 className="hero-title">
               {leader && leader.composite.score !== null ? (
                 <>
-                  <span className="grad">{leader.name}</span> is calling it best right now
+                  <span className="grad">{leader.name}</span> is top by lift right now
                 </>
               ) : (
                 <>The models are still warming up</>
@@ -140,32 +156,72 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
 
         <div className="kpis glance">
           <div className="glance-tile">
-            <label>Best model</label>
+            <label title="The board's order: its 2x rate over the market's in the same hours">
+              Top by lift
+            </label>
             <span className="glance-value">{leader?.name ?? "–"}</span>
             <span className="muted small">
-              {leader?.composite.score != null
-                ? `Score ${leader.composite.score.toFixed(0)} of 100${
-                    leader.composite.band ? `: ${leader.composite.band.label.toLowerCase()}` : ""
+              {leader?.vsMarket?.lift != null
+                ? `${leader.vsMarket.lift.toFixed(1)}x the market's 2x rate in the hours it called`
+                : "No lift yet"}
+              {leadLive && leadLive.graded > 0
+                ? ` · its own 2x ${pct(leadLive.winRatePct)} on ${leadLive.graded} graded${
+                    leadSince ? ` since ${shortDate(leadSince)}` : ` in ${days} days`
                   }`
-                : "No score yet"}
+                : ""}
+              {leader?.composite.score != null
+                ? ` · rank score ${leader.composite.score.toFixed(0)} of 100${
+                    leader.composite.band ? ` (${leader.composite.band.label.toLowerCase()})` : ""
+                  }: how far it has proven itself toward the goal, not a rate`
+                : ""}
             </span>
           </div>
-          <div className="glance-tile">
-            <label>Its calls that doubled</label>
+          <div
+            className="glance-tile"
+            title={feed ? RULE_NOTE : rateTitle(leadLive?.winRatePct, leadLive?.graded ?? 0)}
+          >
+            <label>
+              {feed
+                ? `${guest ? "Guest" : "Default"} feed's calls that doubled`
+                : `${leader?.name ?? "Top model"}'s calls that doubled`}
+            </label>
             <span
-              className={`glance-value num ${leadLive ? rateTone(leadLive.winRatePct, t.hitRate2xPct) : ""}`}
+              className={`glance-value num ${
+                feed
+                  ? rateTone(feedRate, t.hitRate2xPct, feed.graded)
+                  : leadLive
+                    ? rateTone(leadLive.winRatePct, t.hitRate2xPct, leadLive.graded)
+                    : ""
+              }`}
             >
-              {pct(leadLive?.winRatePct)}
+              {pct(feed ? feedRate : leadLive?.winRatePct)}
             </span>
             <span className="muted small">
-              Goal {t.hitRate2xPct}% · reached 4x on {pct(leadLive?.goalRatePct)} (goal {t.hitRate4xPct}%)
-              {leadLive?.tenXRatePct != null
-                ? ` · 10x within an hour on ${pct(leadLive.tenXRatePct, 1)}`
-                : ""}
-              {leader?.liveCatch?.pct != null
-                ? ` · caught ${pct(leader.liveCatch.pct)} of runners (goal ${lb.scoring.catchTargetPct ?? 75}%)`
-                : ""}
-              {leadLive ? ` · ${leadLive.graded} graded calls in ${days} days` : ""}
+              {feed ? (
+                <>
+                  {feedRange ? `${intervalText(feedRange)} · ` : ""}
+                  {feed.graded.toLocaleString()} graded calls{" "}
+                  {feedYoung ? `since ${shortDate(feed.since)}` : `in ${days} days`}, each token once · goal{" "}
+                  {t.hitRate2xPct}%
+                  {feedRule4 !== null
+                    ? ` · rule 4 alone: ${pct(feedRule4)} of ${feed.gradedRule4.toLocaleString()}`
+                    : ""}
+                  {feed.fallbackSlots > 0
+                    ? ` · ${feed.fallbackSlots} slot${feed.fallbackSlots === 1 ? "" : "s"} on the single champion not counted`
+                    : ""}
+                  {!guest && !lb.followsDefault ? " · your feed follows your own picks" : ""}
+                </>
+              ) : (
+                <>
+                  {leadLive && leadLive.graded > 0
+                    ? `${intervalText(wilsonOfRate(leadLive.winRatePct, leadLive.graded))} · `
+                    : ""}
+                  Goal {t.hitRate2xPct}%
+                  {leadLive
+                    ? ` · ${leadLive.graded} graded calls${leadSince ? ` since ${shortDate(leadSince)}` : ` in ${days} days`}`
+                    : ""}
+                </>
+              )}
             </span>
           </div>
           <div className="glance-tile">
@@ -182,6 +238,10 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
             </span>
           </div>
         </div>
+        <p className="faint small rule-note">
+          {RULE_NOTE} Ranges are 90% Wilson intervals; rates on fewer than {MIN_GRADED_FOR_RATE} graded calls
+          are muted as early.
+        </p>
       </section>
 
       <BaselinePanel
@@ -231,7 +291,11 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
             <PipelineStage
               Icon={BrainIcon}
               title={`${contenders.length} models`}
-              caption={bestContender ? `best: ${bestContender.name}` : "calls"}
+              caption={
+                bestContender
+                  ? `best 2x (${MIN_GRADED_FOR_RATE}+ graded): ${bestContender.name}`
+                  : `none with ${MIN_GRADED_FOR_RATE}+ graded yet`
+              }
               count={undefined}
               rate={bestContender?.composite.live.winRatePct}
             />
@@ -255,7 +319,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
             </li>
           </ol>
           <p className="faint small">
-            Live 2x rate over the last {days} days at each step. Entry: {data.rules.fill}.
+            Live 2x rate over the last {days} days at each step. Entry: {data.rules.fill}. {RULE_NOTE}
           </p>
         </section>
 
@@ -435,15 +499,25 @@ function BaselineChart({
           ? (e.composite.live.tenXRatePct ?? null)
           : (e.liveCatch?.pct ?? null);
   // Seasoned records first: a 33% on three calls shouldn't sit above a 15% on a hundred.
-  const thin = (e: LeaderboardEntry) => e.composite.warmingUp === true || e.composite.live.graded === 0;
+  const thin = (e: LeaderboardEntry) => e.composite.warmingUp === true || isEarly(e.composite.live.graded);
   const rows = [...board.entries].sort(
     (a, b) => Number(thin(a)) - Number(thin(b)) || (rateOf(b) ?? -1) - (rateOf(a) ?? -1),
   );
-  const liftOf = (rate: number | null) =>
-    rate === null || baseRate === null || baseRate <= 0 ? null : rate / baseRate;
-  const selected = rows.find((e) => e.id === picked) ?? rows[0] ?? null;
+  // Until the reader picks, the readout narrates their own feed's first model (the guest feed's
+  // for a guest), else the board's leader - not whichever bar happens to be tallest.
+  const selected =
+    rows.find((e) => e.id === picked) ??
+    board.entries.find((e) => board.selectedModels.includes(e.id)) ??
+    board.entries[0] ??
+    null;
   const selRate = selected ? rateOf(selected) : null;
-  const selLift = liftOf(selRate);
+  // The 2x lift is the board's own, hour-matched over the hours the model called (its "vs market"),
+  // so the same model reads the same lift here as in the leaderboard. The 4x and 10x have no
+  // hour-matched market, so they are read against the window's baseline without a multiple.
+  const selLift = metric === "2x" ? (selected?.vsMarket?.lift ?? null) : null;
+  const selMarket = metric === "2x" ? (selected?.vsMarket?.marketRatePct ?? null) : null;
+  const selGraded = selected?.composite.live.graded ?? 0;
+  const selSince = selected ? recordSince(selected, board) : null;
   const hit =
     metric === "4x"
       ? "reached 4x within 30 minutes"
@@ -582,17 +656,25 @@ function BaselineChart({
                         }`
                     : selRate === null
                       ? `no graded calls in the last ${windowLong(days)} yet.`
-                      : `${pct(selRate, 1)} of its ${selected.composite.live.graded} graded calls ${hit}${
-                          selLift === null
-                            ? "."
-                            : selLift >= 1
-                              ? `, ${selLift.toFixed(1)}x the baseline's ${pct(baseRate, 1)}.`
-                              : `, below the baseline's ${pct(baseRate, 1)}: worse than picking at random.`
+                      : `${pct(selRate, 1)} of its ${selGraded} graded calls${
+                          selSince ? ` since ${shortDate(selSince)}` : ""
+                        } ${hit} (${intervalText(wilsonOfRate(selRate, selGraded))})${
+                          metric !== "2x"
+                            ? baseRate === null
+                              ? "."
+                              : `, against the baseline's ${pct(baseRate, 1)}.`
+                            : selLift === null
+                              ? "."
+                              : selLift >= 1
+                                ? `, ${selLift.toFixed(1)}x the market's ${pct(selMarket, 1)} in the hours it called.`
+                                : `, below the market's ${pct(selMarket, 1)} in the hours it called: worse than picking at random.`
                         }`}
                   {selected.composite.live.avgSimReturnPct != null
                     ? ` Following every call averaged ${signedPct(selected.composite.live.avgSimReturnPct)} a call.`
                     : ""}
-                  {selected.composite.warmingUp ? " Still too few calls to lean on." : ""}
+                  {selected.composite.warmingUp || isEarly(selGraded)
+                    ? " Still too few calls to lean on."
+                    : ""}
                 </p>
               )}
               <p className="faint small">
@@ -600,7 +682,7 @@ function BaselineChart({
                 {caught ? "every model's catch together" : "the baseline"} over the same window. Under each
                 rate is its average profit per call, following every call with one fixed exit plan. Faded bars
                 rest on too few calls. <strong>Tap or click a model</strong> for its full record, past
-                versions and exam results.
+                versions and exam results. {RULE_NOTE}
               </p>
               <ModelDetailModal
                 entry={board.entries.find((e) => e.id === opened) ?? null}
@@ -686,8 +768,9 @@ function WinnerRunsPanel({ data, days }: { data: ModelInsights; days: number }) 
       <p className="muted small">
         Every call that doubles inside 15 minutes is watched for another day to see how high it goes.
         {shown === samples && samples
-          ? " Your feed has no finished runs yet in this window, so these are all the winning moments the models learn from."
-          : ` Your feed's winners over the last ${days} days.`}
+          ? " The models have no finished runs yet in this window, so these are all the winning moments the models learn from."
+          : ` All models' winners over the last ${days} days, every model's calls pooled, not just your feed's.`}{" "}
+        The 4x and 10x figures are shares of those winners, by their peak within 24 hours, not hit rates.
       </p>
       {shown && shown.finished > 0 ? (
         <div className="family-figs">
@@ -696,11 +779,11 @@ function WinnerRunsPanel({ data, days }: { data: ModelInsights; days: number }) 
             <span className="num">{mult(shown.medianPeakMultiple)}</span>
           </div>
           <div>
-            <label>Went on to 4x</label>
+            <label>Of winners, 4x peak within 24h</label>
             <span className="num">{pct(shown.reached4xPct, 0)}</span>
           </div>
           <div>
-            <label>Went on to 10x</label>
+            <label>Of winners, 10x peak within 24h</label>
             <span className="num">{pct(shown.reached10xPct, 0)}</span>
           </div>
           <div>
@@ -942,7 +1025,7 @@ function LeaderboardPanel({
               Ranked by <strong>vs market</strong>: how much more often a model&apos;s calls doubled than the
               average coin in the same hours, so models that started on different days compare fairly. The
               score runs from 0 to 100: 100 means a model&apos;s calls have reliably hit the goal. Profit is
-              what following every call with one fixed exit plan would have returned.{" "}
+              what following every call with one fixed exit plan would have returned. {RULE_NOTE}{" "}
               {guest ? (
                 <>
                   Connect a wallet to pick which models&apos; alerts you get with <strong>In feed</strong>.
@@ -978,7 +1061,9 @@ function LeaderboardPanel({
         <table className="leaderboard">
           <thead>
             <tr>
-              <th className="r">#</th>
+              <th className="r" title="Ranked by vs market (lift); warming-up models rank last">
+                #
+              </th>
               <th>Model</th>
               <th title="How far the model has proven itself toward the goal, 0-100">Score</th>
               <th className="r">{detailed ? "Live calls" : "Calls"}</th>
@@ -1044,11 +1129,8 @@ function LeaderboardPanel({
                       <span className="rank-inline num">#{e.rank}</span>
                       <strong>{e.name}</strong>
                       {e.isBest && (
-                        <span
-                          className="chip chip-model"
-                          title="The best average return under the exit plan over the last day"
-                        >
-                          best
+                        <span className="chip chip-model" title={bestReturnTitle(board, now)}>
+                          best 24h return
                         </span>
                       )}
                       {e.isDefault && (
@@ -1097,8 +1179,9 @@ function LeaderboardPanel({
                     {live.calls > live.graded && <span className="faint"> ({live.graded} graded)</span>}
                   </td>
                   <td
-                    className={`r num ${rateTone(live.winRatePct, t.hitRate2xPct)}`}
+                    className={`r num ${rateTone(live.winRatePct, t.hitRate2xPct, live.graded)}`}
                     data-label={detailed ? "2x" : "Doubled"}
+                    title={rateTitle(live.winRatePct, live.graded)}
                   >
                     {pct(live.winRatePct)}
                   </td>
@@ -1125,8 +1208,9 @@ function LeaderboardPanel({
                     {pct(e.liveCatch?.pct ?? null)}
                   </td>
                   <td
-                    className={`r num ${rateTone(live.goalRatePct, t.hitRate4xPct)}`}
+                    className={`r num ${rateTone(live.goalRatePct, t.hitRate4xPct, live.graded)}`}
                     data-label={detailed ? "4x" : "Hit 4x"}
+                    title={rateTitle(live.goalRatePct, live.graded)}
                   >
                     {pct(live.goalRatePct)}
                   </td>
@@ -1163,7 +1247,7 @@ function LeaderboardPanel({
                         {exam.graded > 0 && <span className="faint"> · {exam.graded}</span>}
                       </td>
                       <td
-                        className={`r num ${e.highConviction ? rateTone(e.highConviction.winRatePct, t.hitRate2xPct) : "muted"}`}
+                        className={`r num ${e.highConviction ? rateTone(e.highConviction.winRatePct, t.hitRate2xPct, e.highConviction.graded) : "muted"}`}
                         data-label="High-conv 2x"
                       >
                         {e.highConviction ? pct(e.highConviction.winRatePct) : "–"}
@@ -1219,7 +1303,8 @@ function LeaderboardPanel({
             0. It is shown for context and not scored. Avg and total profit follow every live call with one
             fixed exit plan, so a feed whose losers lose a lot shows it even when its hit rate looks fine; see{" "}
             <GuideLink id="profit-guide">what profit means</GuideLink>. Backtest figures are the latest
-            training run's walk-forward exam, with the number of calls it made.
+            training run's walk-forward exam, with the number of calls it made. {RULE_NOTE} Rates on fewer
+            than {MIN_GRADED_FOR_RATE} graded calls are muted as early; hover one for its 90% range.
           </p>
           <ScoreGuide board={board} />
           <ProfitGuide board={board} />
@@ -1927,7 +2012,7 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
       <p className="faint small">
         {m.note} A model&apos;s day shows once it has {MIN_CALLS_PER_POINT} graded calls; fewer leave a gap.
         The table pools each line&apos;s calls over the {WEEK_DAYS} days. For the market, &quot;graded&quot;
-        counts decision moments.
+        counts decision moments. {RULE_NOTE}
       </p>
 
       {sharing && (
@@ -2006,11 +2091,16 @@ function TrainingPanel({
             Calling only the top slice by confidence trades volume for hit rate. This is the out-of-sample
             record of each slice
             {examRates?.calls
-              ? `; graded at cutoffs set on other parts of the exam, the model made ${examRates.calls} exam calls at ${pct(
-                  examRates.winRatePct,
-                )} / ${pct(examRates.goalRatePct)}`
+              ? examRates.heldOut
+                ? `; graded at cutoffs set on other parts of the exam, the model made ${examRates.calls} exam calls at ${pct(
+                    examRates.winRatePct,
+                  )} / ${pct(examRates.goalRatePct)}`
+                : `; this run stored no held-out exam, so its cutoff's figure is ${IN_SAMPLE_LABEL}: ${examRates.calls} calls at ${pct(
+                    examRates.winRatePct,
+                  )} / ${pct(examRates.goalRatePct)}, picked on those same calls, so it reads high`
               : ""}
-            .
+            . Slices on fewer than {MIN_GRADED_FOR_RATE} calls are faded as early; hover a slice for its 90%
+            range.
           </p>
           {run.precisionCurve.length > 0 ? (
             <TargetBars
@@ -2024,8 +2114,10 @@ function TrainingPanel({
                 shortLabel: `${CURVE_SLICES[CURVE_SLICES.length - run.precisionCurve.length + i] ?? "?"}%`,
                 a: p.winRatePct,
                 b: p.goalRatePct,
-                sub: `${p.alerts} calls`,
+                sub: `${p.alerts} calls${isEarly(p.alerts) ? " · early" : ""}`,
                 shortSub: `${p.alerts}`,
+                thin: isEarly(p.alerts),
+                note: `2x ${intervalText(wilsonOfRate(p.winRatePct, p.alerts))}`,
               }))}
             />
           ) : (
@@ -2101,7 +2193,15 @@ function TrainingPanel({
                       </td>
                       <td className="r num">{pct(runExamRates(r).winRatePct)}</td>
                       <td className="r num">{pct(runExamRates(r).goalRatePct)}</td>
-                      <td className="r num">{runExamRates(r).calls ?? "–"}</td>
+                      <td className="r num">
+                        {runExamRates(r).calls ?? "–"}
+                        {runExamRates(r).calls != null && !runExamRates(r).heldOut && (
+                          <span className="faint" title={IN_SAMPLE_LABEL}>
+                            {" "}
+                            in-sample
+                          </span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -2129,6 +2229,11 @@ const OUTCOME_TEXT: Record<ModelInsights["recentAiReviews"][number]["outcome"], 
 function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
   const t = data.targets;
   const buys = data.aiReviewer.buys;
+  // The API reports the configured mode, not whether the reviewer runs: the mode defaults to
+  // "shadow" while nothing runs without an API key. No review at all in the window reads as off.
+  const running =
+    data.curator.aiReviewMode !== "off" &&
+    (data.aiReviewer.allReviewed.calls > 0 || buys.calls > 0 || data.recentAiReviews.length > 0);
   return (
     <section className="panel secondary">
       <details>
@@ -2136,7 +2241,18 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
           <span className="row">
             <RobotIcon size={15} />
             <strong>AI reviewer</strong>
-            <span className="chip">{data.curator.aiReviewMode}</span>
+            <span
+              className="chip"
+              title={
+                running
+                  ? `Running in ${data.curator.aiReviewMode} mode`
+                  : data.curator.aiReviewMode === "off"
+                    ? "Switched off"
+                    : `Set to ${data.curator.aiReviewMode} mode, but it made no reviews in this window: it runs only with an API key set`
+              }
+            >
+              {running ? data.curator.aiReviewMode : "off"}
+            </span>
           </span>
           <span className="muted small">
             {buys.calls > 0
@@ -2148,7 +2264,8 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
           A second opinion from Claude on each call the default feed makes. In shadow mode it records a buy /
           no-buy without blocking anything; in gate mode it holds back its no-buys once{" "}
           {data.curator.aiReviewMinGradedBuys} of its buys are graded and meet both targets.
-          {buys.calls === 0 && " It isn't connected yet (no API key set), so it has made no calls."}
+          {!running &&
+            " It is off: it runs only with an API key set, and it has made no calls in this window."}
         </p>
         <div className="table-wrap">
           <table>

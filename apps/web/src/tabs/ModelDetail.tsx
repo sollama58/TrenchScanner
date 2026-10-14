@@ -9,7 +9,7 @@ import type {
   ModelRunHistory,
   RecordSummary,
 } from "../api";
-import { runExamRates } from "../api";
+import { IN_SAMPLE_LABEL, runExamRates } from "../api";
 import { CutoffCurve, HBarChart } from "../components/Charts";
 import { CloseIcon } from "../components/Icons";
 import { cutoffPoints, perHourText } from "../cutoffCurve";
@@ -26,10 +26,15 @@ import {
   WINDOWS,
   windowLong,
   windowShort,
+  bestReturnTitle,
   doublings,
   profitTone,
+  rateTitle,
   rateTone,
+  recordSince,
+  shortDate as shortMonthDay,
 } from "./modelShared";
+import { MIN_GRADED_FOR_RATE, RULE_NOTE } from "../rates";
 
 /** Latest calls the detail view lists. */
 const RECENT_CALLS = 8;
@@ -157,8 +162,6 @@ function ModelDetail({
     }
   };
 
-  const liftOf = (rate: number | null | undefined, baseRate: number | null | undefined) =>
-    rate == null || baseRate == null || baseRate <= 0 ? null : rate / baseRate;
   // Its own run history; the field-wide recent runs stand in until that loads.
   const history = usePolling<ModelRunHistory>(`${api}/models/${encodeURIComponent(e.id)}/runs`, 300_000);
   const myRuns = history.data?.runs ?? runs.filter((r) => r.contestant === e.id);
@@ -186,7 +189,11 @@ function ModelDetail({
       </header>
       <div className="row model-detail-chips">
         <span className={`badge ${STATUS_TEXT[e.status].tone}`}>{STATUS_TEXT[e.status].text}</span>
-        {e.isBest && <span className="badge info">best 24h return</span>}
+        {e.isBest && (
+          <span className="badge info" title={bestReturnTitle(board, now)}>
+            best 24h return
+          </span>
+        )}
         {e.isDefault && <span className="badge info">default feed</span>}
         {mine && <span className="badge">{guest ? "guest feed" : "in your feed"}</span>}
         {e.composite.warmingUp && <span className="badge">warming up</span>}
@@ -200,26 +207,35 @@ function ModelDetail({
 
       <h3>Last {windowLong(days)}, live</h3>
       <div className="model-figs">
+        {/* The 2x lift is the board's hour-matched "vs market", the same figure the leaderboard
+            ranks on; the 4x and 10x have no hour-matched market, so they show the window's
+            random-pick rate beside them without a multiple. */}
         <RateFig
           label="Doubled (2x)"
           rate={live.winRatePct}
           goal={t.hitRate2xPct}
-          lift={liftOf(live.winRatePct, base?.hitRate2xPct)}
-          baseRate={base?.hitRate2xPct ?? null}
+          graded={live.graded}
+          lift={e.vsMarket?.lift ?? null}
+          baseRate={e.vsMarket?.marketRatePct ?? null}
+          baseLabel="market in its hours"
         />
         <RateFig
           label="Hit 4x"
           rate={live.goalRatePct}
           goal={t.hitRate4xPct}
-          lift={liftOf(live.goalRatePct, base?.hitRate4xPct)}
+          graded={live.graded}
+          lift={null}
           baseRate={base?.hitRate4xPct ?? null}
+          baseLabel="random"
         />
         <RateFig
           label="Hit 10x"
           rate={live.tenXRatePct ?? null}
           goal={tenXGoal}
-          lift={liftOf(live.tenXRatePct, base?.hitRate10xPct)}
+          graded={live.graded}
+          lift={null}
           baseRate={base?.hitRate10xPct ?? null}
+          baseLabel="random"
           digits={1}
         />
         <div className="model-fig">
@@ -238,7 +254,10 @@ function ModelDetail({
         {e.highConviction
           ? ` · high-conviction calls doubled ${pct(e.highConviction.winRatePct)} of ${e.highConviction.graded}`
           : ""}
-        . The small figure is lift: how many times a random pick&apos;s rate it hits.
+        {recordSince(e, board) ? `, since it took its seat on ${shortMonthDay(recordSince(e, board)!)}` : ""}.
+        The 2x tile&apos;s small figure is its lift, the board&apos;s &quot;vs market&quot;: how many times
+        the market&apos;s 2x rate in the same hours it hit. The 4x and 10x show the random-pick rate over the
+        window. {RULE_NOTE}
       </p>
       {board.exitPlan && <p className="faint small">Profit follows one fixed exit plan: {board.exitPlan}</p>}
 
@@ -293,9 +312,13 @@ function ModelDetail({
             Trained {ago(latestRun.createdAt, now)} as {LEARNER_NAME[latestRun.learner].toLowerCase()} on{" "}
             {latestRun.trainingRows.toLocaleString()} graded moments.
             {latestExam?.calls
-              ? ` At its live cutoff it made ${latestExam.calls} exam calls: ${pct(
-                  latestExam.winRatePct,
-                )} doubled, ${pct(latestExam.goalRatePct)} hit 4x.`
+              ? latestExam.heldOut
+                ? ` At its live cutoff it made ${latestExam.calls} exam calls: ${pct(
+                    latestExam.winRatePct,
+                  )} doubled, ${pct(latestExam.goalRatePct)} hit 4x.`
+                : ` This run stored no held-out exam. At its live cutoff, ${IN_SAMPLE_LABEL}: ${latestExam.calls} calls, ${pct(
+                    latestExam.winRatePct,
+                  )} doubled, ${pct(latestExam.goalRatePct)} hit 4x, on the same calls the cutoff was picked on, so it reads high.`
               : ""}
             {latestRun.verdict ? ` ${latestRun.verdict.reason}` : ""}
           </p>
@@ -321,10 +344,15 @@ function ModelDetail({
                         </td>
                         <td className="r num faint">{pct(f.baseWinRatePct, 1)}</td>
                         <td className="r num">{side.emitted}</td>
-                        <td className={`r num ${rateTone(side.precisionPct, t.hitRate2xPct)}`}>
+                        <td
+                          className={`r num ${rateTone(side.precisionPct, t.hitRate2xPct, side.emitted)}`}
+                          title={rateTitle(side.precisionPct, side.emitted)}
+                        >
                           {pct(side.precisionPct)}
                         </td>
-                        <td className={`r num ${rateTone(side.goalPrecisionPct, t.hitRate4xPct)}`}>
+                        <td
+                          className={`r num ${rateTone(side.goalPrecisionPct, t.hitRate4xPct, side.emitted)}`}
+                        >
                           {pct(side.goalPrecisionPct)}
                         </td>
                       </tr>
@@ -372,7 +400,15 @@ function ModelDetail({
                     <td>
                       <span className={`chip ${r.status === "active" ? "chip-model" : ""}`}>{r.status}</span>
                     </td>
-                    <td className="r num">{runExamRates(r).calls ?? "–"}</td>
+                    <td className="r num">
+                      {runExamRates(r).calls ?? "–"}
+                      {runExamRates(r).calls != null && !runExamRates(r).heldOut && (
+                        <span className="faint" title={IN_SAMPLE_LABEL}>
+                          {" "}
+                          in-sample
+                        </span>
+                      )}
+                    </td>
                     <td className="r num">{pct(runExamRates(r).winRatePct)}</td>
                     <td className="r num">{pct(runExamRates(r).goalRatePct)}</td>
                   </tr>
@@ -603,8 +639,15 @@ function CutoffSection({
                 <td>Top {p.sharePct}%</td>
                 <td className="r num">{perHourText(p.perHour)}</td>
                 <td className="r num">{p.calls.toLocaleString()}</td>
-                <td className={`r num ${rateTone(p.winRatePct, t.hitRate2xPct)}`}>{pct(p.winRatePct)}</td>
-                <td className={`r num ${rateTone(p.goalRatePct, t.hitRate4xPct)}`}>{pct(p.goalRatePct)}</td>
+                <td
+                  className={`r num ${rateTone(p.winRatePct, t.hitRate2xPct, p.calls)}`}
+                  title={rateTitle(p.winRatePct, p.calls)}
+                >
+                  {pct(p.winRatePct)}
+                </td>
+                <td className={`r num ${rateTone(p.goalRatePct, t.hitRate4xPct, p.calls)}`}>
+                  {pct(p.goalRatePct)}
+                </td>
               </tr>
             ))}
             {live && (
@@ -613,11 +656,24 @@ function CutoffSection({
                   Live: top {live.sharePct < 10 ? live.sharePct.toFixed(1) : Math.round(live.sharePct)}%
                 </td>
                 <td className="r num">{perHourText(live.perHour)}</td>
-                <td className="r num">{exam?.calls?.toLocaleString() ?? "–"}</td>
-                <td className={`r num ${rateTone(exam?.winRatePct ?? null, t.hitRate2xPct)}`}>
+                <td className="r num">
+                  {exam?.calls?.toLocaleString() ?? "–"}
+                  {exam && exam.calls != null && !exam.heldOut && (
+                    <span className="faint" title={IN_SAMPLE_LABEL}>
+                      {" "}
+                      in-sample
+                    </span>
+                  )}
+                </td>
+                <td
+                  className={`r num ${rateTone(exam?.winRatePct ?? null, t.hitRate2xPct, exam?.calls ?? 0)}`}
+                  title={rateTitle(exam?.winRatePct, exam?.calls ?? 0)}
+                >
                   {pct(exam?.winRatePct)}
                 </td>
-                <td className={`r num ${rateTone(exam?.goalRatePct ?? null, t.hitRate4xPct)}`}>
+                <td
+                  className={`r num ${rateTone(exam?.goalRatePct ?? null, t.hitRate4xPct, exam?.calls ?? 0)}`}
+                >
                   {pct(exam?.goalRatePct)}
                 </td>
               </tr>
@@ -628,39 +684,57 @@ function CutoffSection({
       {live && (
         <p className="faint small model-cutoff-note">
           The live row is its cutoff now and what it actually sent an hour over the last day, with its exam
-          graded at cutoffs set on other parts of the exam.
+          {exam?.heldOut === false
+            ? ` figure ${IN_SAMPLE_LABEL}: picked on the same calls, so it reads high.`
+            : " graded at cutoffs set on other parts of the exam."}
         </p>
       )}
+      <p className="faint small">
+        Slices on fewer than {MIN_GRADED_FOR_RATE} exam calls are muted as early, never green; hover a rate
+        for its 90% range.
+      </p>
     </>
   );
 }
 
-/** A live rate as a tile: the rate, its lift over a random pick, and the goal. */
+/**
+ * A live rate as a tile: the rate (muted as early on too few graded calls, with its 90% range on
+ * hover), its lift over the market where there is an hour-matched one, else the reference rate,
+ * and the goal.
+ */
 function RateFig({
   label,
   rate,
   goal,
+  graded,
   lift,
   baseRate,
+  baseLabel,
   digits = 0,
 }: {
   label: string;
   rate: number | null;
   goal: number;
+  graded: number;
   lift: number | null;
   baseRate: number | null;
+  baseLabel: string;
   digits?: number;
 }) {
   return (
     <div className="model-fig">
       <label>{label}</label>
-      <span className={`num ${rateTone(rate, goal)}`}>{pct(rate, digits)}</span>
+      <span className={`num ${rateTone(rate, goal, graded)}`} title={rateTitle(rate, graded)}>
+        {pct(rate, digits)}
+      </span>
       <small className="faint">
         {lift !== null ? (
           <>
-            <strong className={lift >= 1 ? "up" : "down"}>{lift.toFixed(1)}x</strong> random (
+            <strong className={lift >= 1 ? "up" : "down"}>{lift.toFixed(1)}x</strong> {baseLabel} (
             {pct(baseRate, 1)})
           </>
+        ) : baseRate !== null ? (
+          `${baseLabel} ${pct(baseRate, 1)}`
         ) : (
           "No baseline yet"
         )}
@@ -675,8 +749,13 @@ function RecordRow({ name, r, t }: { name: string; r: RecordSummary; t: Leaderbo
     <tr>
       <td>{name}</td>
       <td className="r num">{r.graded.toLocaleString()}</td>
-      <td className={`r num ${rateTone(r.winRatePct, t.hitRate2xPct)}`}>{pct(r.winRatePct)}</td>
-      <td className={`r num ${rateTone(r.goalRatePct, t.hitRate4xPct)}`}>{pct(r.goalRatePct)}</td>
+      <td
+        className={`r num ${rateTone(r.winRatePct, t.hitRate2xPct, r.graded)}`}
+        title={rateTitle(r.winRatePct, r.graded)}
+      >
+        {pct(r.winRatePct)}
+      </td>
+      <td className={`r num ${rateTone(r.goalRatePct, t.hitRate4xPct, r.graded)}`}>{pct(r.goalRatePct)}</td>
       <td className="r num">{pct(r.tenXRatePct, 1)}</td>
       <td className={`r num ${profitTone(r.avgSimReturnPct)}`}>{signedPct(r.avgSimReturnPct)}</td>
     </tr>
@@ -726,8 +805,13 @@ function WindowsTable({
                 {r ? (
                   <>
                     <td className="r num">{r.graded.toLocaleString()}</td>
-                    <td className={`r num ${rateTone(r.winRatePct, t.hitRate2xPct)}`}>{pct(r.winRatePct)}</td>
-                    <td className={`r num ${rateTone(r.goalRatePct, t.hitRate4xPct)}`}>
+                    <td
+                      className={`r num ${rateTone(r.winRatePct, t.hitRate2xPct, r.graded)}`}
+                      title={rateTitle(r.winRatePct, r.graded)}
+                    >
+                      {pct(r.winRatePct)}
+                    </td>
+                    <td className={`r num ${rateTone(r.goalRatePct, t.hitRate4xPct, r.graded)}`}>
                       {pct(r.goalRatePct)}
                     </td>
                     <td className="r num">{pct(r.tenXRatePct, 1)}</td>

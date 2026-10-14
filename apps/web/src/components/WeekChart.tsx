@@ -1,7 +1,11 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { RULE_NOTE_UNFILTERED } from "../rates";
 import { count, pct0, words, type SageTrack, type TrackDay } from "./SageView";
 
 const PAD = { l: 36, r: 12, t: 14, b: 26 };
+
+/** Graded calls on the narrative's coins before the "+N pts vs all calls" tag shows. */
+export const EDGE_MIN_GRADED = 20;
 const HEIGHT = 180;
 
 /** A day's 2x rate: the share of its graded calls that doubled, or null with none graded. */
@@ -55,7 +59,12 @@ export function WeekChart({ track }: { track: SageTrack }) {
   const all = track.all.reduce((s, d) => ({ g: s.g + d.graded, w: s.w + d.won2x }), { g: 0, w: 0 });
   const mineRate = mine.g > 0 ? mine.w / mine.g : null;
   const allRate = all.g > 0 ? all.w / all.g : null;
-  const edge = mineRate !== null && allRate !== null ? Math.round((mineRate - allRate) * 100) : null;
+  // The "+N pts" tag only once the narrative's own calls are enough to tell a gap from noise: on
+  // 3 graded calls one win is 33 points.
+  const edge =
+    mineRate !== null && allRate !== null && mine.g >= EDGE_MIN_GRADED
+      ? Math.round((mineRate - allRate) * 100)
+      : null;
 
   const days = track.days.map((d, i) => ({
     d,
@@ -124,7 +133,11 @@ export function WeekChart({ track }: { track: SageTrack }) {
             <i className="swatch s1" /> {name} calls 2x&apos;d
           </label>
           <span className="num">{mineRate === null ? "–" : pct0(mineRate)}</span>
-          <small className="muted num">{mine.g > 0 ? `${mine.w} of ${mine.g}` : "no graded calls"}</small>
+          <small className="muted num">
+            {mine.g > 0
+              ? `${mine.w} of ${mine.g}${mine.g < EDGE_MIN_GRADED ? ", early" : ""}`
+              : "no graded calls"}
+          </small>
         </div>
         <div className="tm-week-fig b">
           <label>
@@ -247,7 +260,8 @@ export function WeekChart({ track }: { track: SageTrack }) {
       </div>
       <p className="faint small tm-week-note">
         Each day, the share of the models&apos; graded calls that doubled: on {name.toLowerCase()} coins and
-        on all coins. Bars are the {name.toLowerCase()} coins TokenSage read.
+        on all coins. Bars are the {name.toLowerCase()} coins TokenSage read. The gap to all calls shows once{" "}
+        {EDGE_MIN_GRADED} of its calls are graded. {RULE_NOTE_UNFILTERED}
       </p>
     </section>
   );

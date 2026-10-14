@@ -1,3 +1,4 @@
+import { MIN_GRADED_FOR_RATE } from "./rates";
 import type {
   LighthouseDimension,
   LighthouseHistory,
@@ -320,8 +321,11 @@ export interface Series {
   target?: number;
 }
 
-/** Graded calls under which a label's 2x rate for a bucket is withheld rather than drawn. */
-export const MIN_GRADED = 5;
+/**
+ * Graded calls under which a label's 2x rate for a bucket is withheld rather than drawn: the
+ * dashboard's one sample-size floor (at 5 calls one win moved the rate 20 points).
+ */
+export const MIN_GRADED = MIN_GRADED_FOR_RATE;
 
 /** The series a metrics panel draws from the history. */
 export function metricSeries(

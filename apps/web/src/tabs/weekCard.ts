@@ -167,9 +167,9 @@ function side(ctx: CanvasRenderingContext2D, d: WeekCardData, x0: number) {
 }
 
 const SUB: Record<CardMetric, string> = {
-  "2x": "How often each model's calls doubled, day by day, next to the market.",
-  "4x": "How often each model's calls reached 4x, day by day, next to the market.",
-  "10x": "How often each model's calls reached 10x, day by day, next to the market.",
+  "2x": "How often each model's calls doubled within 15 min, before a 50% stop, next to the market.",
+  "4x": "How often each model's calls reached 4x within 30 min, before a 50% stop, next to the market.",
+  "10x": "How often each model's calls reached 10x within an hour, before a 50% stop, next to the market.",
   ret: "Average return per call, day by day, next to the market.",
 };
 
@@ -178,7 +178,7 @@ export async function renderWeekCard(d: WeekCardData): Promise<HTMLCanvasElement
   if (!ctx) return canvas;
   frame(ctx, icon, "Is it getting better?", SUB[d.metric], {
     badge: (c, right, cy) => pill(c, right, cy, `Last ${d.labels.length} days`),
-    footer: `${d.graded.toLocaleString("en-US")} live calls · market = a random pick from the same moments`,
+    footer: `${d.graded.toLocaleString("en-US")} live calls, graded rule 3+ · market = a random pick from the same moments`,
     link: "trenchscanner.app",
   });
   const split = CARD_W - PAD - 340;
