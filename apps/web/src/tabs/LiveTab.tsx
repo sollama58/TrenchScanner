@@ -10,7 +10,7 @@ import { LighthouseButton } from "../components/MarketLighthouse";
 import { ArrowRightIcon, BrainIcon, ChartIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, usePollingAll, useNow, useNudgeStream } from "../hooks";
-import { fillPage, joinPages, MAX_FILL_PAGES } from "../feedFill";
+import { fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES } from "../feedFill";
 import { ago, pct } from "../format";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { CustomizeDrawer } from "../components/CustomizeDrawer";
@@ -68,13 +68,13 @@ export function LiveTab({
   // highConviction those calls are every model's high-conviction tier instead.
   const hc = highConviction ? "&highConviction=1" : "";
   const feedPath = (n: number) => `/matches?page=${n}&includeCurated=saved${hc}`;
-  // Hiding low market caps fills each page from older alerts, so the feed reads the API's pages
-  // from the first and pages through them here: page 1 below, and `depth - 1` more after it, read
-  // as far as the page on screen needs.
-  const fill = look.hideBelowMcap;
+  // The API's pages can come up short (a model call folded into your filter's card for the same
+  // token, a card whose token was pruned), and hiding low market caps takes more cards out, so the
+  // feed reads the API's pages from the first and lays out full pages of its own here: page 1
+  // below, and `depth - 1` more after it, read as far as the page on screen needs.
   const [depth, setDepth] = useState(1);
-  const feedPage = usePolling<MatchPage>(feedPath(fill ? 1 : page), 30_000, String(pick));
-  const morePaths = fill ? Array.from({ length: depth - 1 }, (_, i) => feedPath(i + 2)) : [];
+  const feedPage = usePolling<MatchPage>(feedPath(1), 30_000, String(pick));
+  const morePaths = Array.from({ length: depth - 1 }, (_, i) => feedPath(i + 2));
   const morePages = usePollingAll<MatchPage>(morePaths, 30_000, String(pick));
   const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
   // The stats follow the same feed settings as the cards, so they refetch with them.
@@ -93,52 +93,48 @@ export function LiveTab({
   };
   const curatedLive = useNudgeStream("/curated/stream", nudged, modelsOn);
   const matchesLive = useNudgeStream("/matches/stream", nudged);
-  const loadedPages = fill ? [feedPage.data, ...morePages.data] : [];
+  const loadedPages = [feedPage.data, ...morePages.data];
   const buffer = useMemo(
-    () => (fill ? joinPages(loadedPages) : feedPage.data?.matches),
+    () => (feedPage.data ? joinPages(loadedPages) : undefined),
     // loadedPages is rebuilt every render; its parts are what change.
-    [fill, feedPage.data, morePages.data],
+    [feedPage.data, morePages.data],
   );
   // The live tick covers the page on screen and the hidden cards among it (which can climb back),
   // not every alert read ahead. Which those are depends on the tick itself, so it follows a render.
   const [tickIds, setTickIds] = useState<string[] | undefined>(undefined);
   // "Now" on each card, seconds old rather than as old as the last feed poll.
-  const cards = useLiveMarketCaps(buffer, fill ? tickIds : undefined);
+  const cards = useLiveMarketCaps(buffer, tickIds);
   // The "hide below this market cap" setting only takes cards off the screen: the feed's stats and
   // grading are the API's, unchanged. Older alerts move up into the gaps, and a card that climbs
   // back over the line (with a margin, so a coin trading at the line doesn't flicker) takes its own
   // place again. Which cards were hidden last time carries over for that margin.
   const wasHidden = useRef<ReadonlySet<string>>(new Set());
   const filled = useMemo(
-    () => (fill && cards ? fillPage(cards, look, page, wasHidden.current) : null),
-    [fill, cards, look, page],
+    () => (cards ? fillPage(cards, look, page, wasHidden.current) : null),
+    [cards, look, page],
   );
   useEffect(() => {
     wasHidden.current = filled?.hidden ?? new Set();
   }, [filled]);
   const tickKey = filled?.tickTokenIds.join(",") ?? "";
   useEffect(() => setTickIds(tickKey ? tickKey.split(",") : undefined), [tickKey]);
-  const lastLoaded = loadedPages.length > 0 ? loadedPages[loadedPages.length - 1] : null;
+  const lastLoaded = loadedPages[loadedPages.length - 1] ?? null;
+  // Paging further back reads further: as many API pages as the page on screen, plus room to fill.
+  const maxDepth = Math.min(page + MAX_FILL_PAGES - 1, MAX_READ_PAGES);
   const allLoaded = loadedPages.every((p) => p !== null);
   const apiHasMore = lastLoaded ? (lastLoaded.hasMore ?? false) : false;
   // Read one more API page while this one is short and the API has older alerts.
   useEffect(() => {
-    if (filled && !filled.moreLoaded && allLoaded && apiHasMore && depth < MAX_FILL_PAGES)
-      setDepth((d) => d + 1);
-  }, [filled, allLoaded, apiHasMore, depth]);
-  // Back to reading the first page alone when the setting goes off or the feed changes.
-  useEffect(() => setDepth(1), [fill, pick, highConviction]);
-  const shownCards = filled ? filled.shown : cards;
+    if (filled && !filled.moreLoaded && allLoaded && apiHasMore && depth < maxDepth) setDepth((d) => d + 1);
+  }, [filled, allLoaded, apiHasMore, depth, maxDepth]);
+  // Back to reading the first page alone when the feed changes.
+  useEffect(() => setDepth(1), [pick, highConviction]);
+  const shownCards = filled?.shown;
   const hiddenCount = filled?.hiddenHere ?? 0;
 
   const t = lb?.targets ?? { hitRate2xPct: 75, hitRate4xPct: 50 };
   const chosen = lb ? lb.entries.filter((e) => lb.selectedModels.includes(e.id)) : [];
-  // Older API builds (mid-deploy) only send totalCount.
-  const hasMore = filled
-    ? filled.moreLoaded || (apiHasMore && depth < MAX_FILL_PAGES)
-    : feedPage.data
-      ? (feedPage.data.hasMore ?? page * feedPage.data.pageSize < feedPage.data.totalCount)
-      : false;
+  const hasMore = filled ? filled.moreLoaded || (apiHasMore && depth < maxDepth) : false;
   const chosenNames =
     chosen.length === 0
       ? "–"
@@ -317,8 +313,8 @@ export function LiveTab({
             <button
               disabled={!hasMore || feedPage.stale}
               // Start the next page on hover/focus so the click usually finds it already here.
-              onPointerEnter={() => !fill && prefetch(feedPath(page + 1))}
-              onFocus={() => !fill && prefetch(feedPath(page + 1))}
+              onPointerEnter={() => prefetch(feedPath(depth + 1))}
+              onFocus={() => prefetch(feedPath(depth + 1))}
               onClick={() => setPage((p) => p + 1)}
             >
               Older →
