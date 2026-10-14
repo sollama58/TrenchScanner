@@ -463,7 +463,7 @@ services:
     headers:
       - path: /*
         name: Content-Security-Policy
-        value: "script-src 'self' 'sha256-ahIBo/E0W+F/K3AwS3zCAVSpPbdrUZgGazD+UhQnkAk=' 'sha256-3nD+ydCS3TwKmSUuD7/+O2kAwuQFvvhpDs2d4nuTEkI=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
+        value: "script-src 'self' 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-3nD+ydCS3TwKmSUuD7/+O2kAwuQFvvhpDs2d4nuTEkI=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
       # HTTPS only from the first visit on. No includeSubDomains: only this host's own redirect is
       # certain here, and preload would lock that in for every subdomain.
       - path: /*

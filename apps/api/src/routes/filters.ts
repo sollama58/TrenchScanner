@@ -25,6 +25,23 @@ const narrativeLabelList = z
   .max(20)
   .default([]);
 
+/**
+ * The icons a filter's feed cards can carry (apps/web/src/components/Icons.tsx draws them; the
+ * Filters tab's FILTER_ICONS mirrors this list).
+ */
+export const FILTER_ICONS = [
+  "target",
+  "flame",
+  "bolt",
+  "rocket",
+  "star",
+  "gem",
+  "crown",
+  "shield",
+  "trophy",
+  "radar",
+] as const;
+
 function buildFilterInputSchema(env: Env) {
   return z.object({
     name: z.string().min(1).max(60).default("Default"),
@@ -73,6 +90,15 @@ function buildFilterInputSchema(env: Env) {
     excludeUnrelatedX: z.boolean().default(false),
     requireTrendMatch: z.boolean().default(false),
     excludeLateCopies: z.boolean().default(false),
+    // Card style (not criteria): any #rrggbb, though the Filters tab offers a fixed palette, and
+    // one of FILTER_ICONS. Null goes back to the owner's Customize styling.
+    color: z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/, "color must be a #rrggbb hex color")
+      .transform((c) => c.toLowerCase())
+      .nullable()
+      .optional(),
+    icon: z.enum(FILTER_ICONS).nullable().optional(),
     isActive: z.boolean().default(true),
     // Opt-in to the public filter leaderboard; off unless the owner turns it on.
     shareOnLeaderboard: z.boolean().default(false),
@@ -351,6 +377,8 @@ export function rearms(existing: Record<string, unknown>, change: Record<string,
   return Object.entries(change).some(
     ([key, value]) =>
       key !== "name" &&
+      key !== "color" &&
+      key !== "icon" &&
       key !== "isActive" &&
       key !== "shareOnLeaderboard" &&
       value !== undefined &&

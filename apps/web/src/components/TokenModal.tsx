@@ -64,6 +64,8 @@ import { openWallet } from "../walletModal";
 import { BubbleMapSection } from "./BubbleMap";
 import { TopHolders } from "./TopHolders";
 import { WalletText } from "./WalletText";
+import { FilterGlyph } from "./FilterBadge";
+import { filterCardStyle } from "../filterStyle";
 import { useWalletNames, walletText } from "../walletNames";
 import {
   BrainIcon,
@@ -277,7 +279,13 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
                 )}
               </span>
               {card.kind === "match" && card.filter && (
-                <span className="pill pill-mine">{card.filter.name}</span>
+                <span
+                  className={`pill ${card.filter.color ? "pill-filter" : "pill-mine"}`}
+                  style={filterCardStyle(card.filter.color) as React.CSSProperties}
+                >
+                  {card.filter.icon && <FilterGlyph icon={card.filter.icon} />}
+                  {card.filter.name}
+                </span>
               )}
             </div>
           </div>

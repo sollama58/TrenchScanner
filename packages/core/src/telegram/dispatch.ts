@@ -198,6 +198,13 @@ export interface DispatchSummary {
   /** Chats left for the next pass because their account's access couldn't be read. */
   accessErrors: number;
   /**
+   * Sends whose answer never came back (a timeout, a dropped connection, a Telegram 5xx). Telegram
+   * may have delivered them, so they are not sent again.
+   */
+  unconfirmed: number;
+  /** Sends skipped because their claim was already taken: the alert had gone out already. */
+  duplicates: number;
+  /**
    * How far the pass read (alerts stamped at or before this). The worker keeps a wake-up for an
    * alert written after it, so a pass the open-transaction bound held back is followed up soon.
    * Unset when the pass read nothing (no token, no chats, or another process holds the lock).
@@ -262,6 +269,29 @@ export interface SentAlert {
   tokenId: string;
   curatedAlertId: string | null;
   matchId: string | null;
+}
+
+/**
+ * A send's idempotency key (TelegramAlertSent.dedupeKey): the chat, the token, and the alert the
+ * card carries for it. Two passes that read the same cursor build the same key, and a later alert
+ * on the token (another model's call, a re-alert a day on) a new one.
+ */
+export function sendKey(chatRowId: string, send: SentAlert, through: Date): string {
+  const alert = send.curatedAlertId
+    ? `call:${send.curatedAlertId}`
+    : send.matchId
+      ? `match:${send.matchId}`
+      : `at:${through.toISOString()}`;
+  return `${chatRowId}:${send.tokenId}:${alert}`;
+}
+
+/**
+ * Whether a failed send may still have reached the chat: Telegram never answered (a timeout, a
+ * connection dropped mid-request) or answered with a server error after taking it. Resending
+ * those is what put the same alert in a chat over and over, so they are not resent.
+ */
+export function mayHaveDelivered(result: { code: number; undelivered?: true }): boolean {
+  return (result.code === 0 && !result.undelivered) || result.code >= 500;
 }
 
 /** Something to tell a chat about: one token, everything raised on it since the cursor. */
@@ -411,7 +441,16 @@ const PASS_TRANSACTION_TIMEOUT_MS = 120_000;
 
 /** One pass. Returns what it did, for the heartbeat. */
 export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Promise<DispatchSummary> {
-  const summary: DispatchSummary = { chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0, accessErrors: 0 };
+  const summary: DispatchSummary = {
+    chats: 0,
+    sent: 0,
+    digests: 0,
+    failed: 0,
+    skipped: 0,
+    accessErrors: 0,
+    unconfirmed: 0,
+    duplicates: 0,
+  };
   if (!telegramConfigured(env.TELEGRAM_BOT_TOKEN)) return summary;
   // A deploy runs the old scanner and the new one side by side, and two passes reading the same
   // cursors would send every alert twice. The lock is transaction-scoped, so it is held for the
@@ -680,32 +719,86 @@ async function dispatchPass(
   const rateLimited = new Set<string>();
   let lastSendAt = 0;
   const send = async (q: Queue) => {
-    const item = q.pending[0]!;
+    let item = q.pending[0]!;
+    const spacing = q.chat.kind === "private" ? PRIVATE_GAP_MS : GROUP_GAP_MS;
+    // Claimed before it goes out, one row per token under its idempotency key: a key already
+    // taken means the alert already went to this chat (a pass running twice, or one that resent
+    // after a lost answer), and it isn't sent again. The row is also the send /alerts and
+    // /trenchboard credit and grade (apps/api/src/telegramBoards.ts), a re-alert included.
+    const keys = item.sends.map((a) => sendKey(q.chat.id, a, item.through));
+    const claimedAt = new Date();
+    const claimed = new Set(
+      (
+        await prisma.telegramAlertSent.createManyAndReturn({
+          data: item.sends.map((a, i) => ({
+            chatId: q.chat.id,
+            sentAt: claimedAt,
+            ...a,
+            dedupeKey: keys[i],
+          })),
+          skipDuplicates: true,
+          select: { dedupeKey: true },
+        })
+      ).map((r) => r.dedupeKey),
+    );
+    if (claimed.size < keys.length) {
+      summary.duplicates += keys.length - claimed.size;
+      logger.warn("telegram alert already sent to this chat, not repeating it", {
+        chat: q.chat.id,
+        tokens: item.tokenIds.filter((_, i) => !claimed.has(keys[i]!)),
+      });
+      const keep = keys.map((k) => claimed.has(k));
+      if (claimed.size === 0) {
+        q.pending.shift();
+        await prisma.telegramChat.updateMany({
+          where: { id: q.chat.id, revokedAt: null, sentThrough: { lt: item.through } },
+          data: { sentThrough: item.through },
+        });
+        return;
+      }
+      // Only a digest carries more than one token: it goes out with the ones not yet sent.
+      if (isDigest(item.card)) {
+        const cards = item.card.digest.filter((_, i) => keep[i]);
+        item = {
+          ...item,
+          card: { ...cards[0]!, digest: cards } as DigestCard,
+          tokenIds: item.tokenIds.filter((_, i) => keep[i]),
+          sends: item.sends.filter((_, i) => keep[i]),
+        };
+      }
+    }
+    const mine = keys.filter((k) => claimed.has(k));
+    /** Gives the claims back when the message certainly didn't go out, so it can be sent later. */
+    const release = () => prisma.telegramAlertSent.deleteMany({ where: { dedupeKey: { in: mine } } });
+
     const parts = alertParts(q.chat.hidden);
     const style = alertStyle(q.chat);
     const message = isDigest(item.card)
       ? digestMessage(item.card.digest, links, parts, style)
       : alertMessage(item.card, links, now(), parts, style);
     const result = await api.sendAlert(q.chat.chatId, message, { photos });
-    const spacing = q.chat.kind === "private" ? PRIVATE_GAP_MS : GROUP_GAP_MS;
     if (result.ok) {
       q.pending.shift();
       q.nextAt = now() + spacing;
       if (isDigest(item.card)) summary.digests += 1;
       else summary.sent += 1;
-      // Before the cursor: if the cursor write fails, the next pass re-reads these and skips them.
-      // One row per send, a re-alert included, with the alert it carried: what /alerts and
-      // /trenchboard credit and grade (apps/api/src/telegramBoards.ts).
-      const sentAt = new Date();
-      await prisma.telegramAlertSent.createMany({
-        data: item.sends.map((a) => ({ chatId: q.chat.id, sentAt, ...a })),
-        skipDuplicates: true,
-      });
+      // If this write fails, the next pass re-reads these and the claims above skip them.
       await prisma.telegramChat.updateMany({
         where: { id: q.chat.id, revokedAt: null },
         data: { sentThrough: item.through, lastSentAt: new Date(), lastError: null, failures: 0 },
       });
       return;
+    }
+    if (mayHaveDelivered(result)) {
+      // The claims stay: the next pass reads this alert again and steps over it rather than
+      // sending it a second (third, fourth...) time. Missing one alert beats a chat full of copies.
+      summary.unconfirmed += 1;
+      logger.warn("telegram send unconfirmed, it may have gone through; not resending", {
+        chat: q.chat.id,
+        what: `${result.code}: ${result.description}`.slice(0, 300),
+      });
+    } else {
+      await release();
     }
     summary.failed += 1;
     const what = `${result.code}: ${result.description}`.slice(0, 300);
@@ -782,7 +875,8 @@ async function dispatchPass(
     busy.add(q);
     const p: Promise<void> = send(q)
       .catch((err: unknown) => {
-        // A failed bookkeeping write: the cursor stays where it was, so the next pass retries.
+        // A failed bookkeeping write: the cursor stays where it was, so the next pass retries what
+        // wasn't claimed. A claimed alert stays claimed, so a send that did go out isn't repeated.
         logger.warn("telegram send bookkeeping failed", { chat: q.chat.id, error: String(err) });
         q.pending = [];
       })

@@ -317,7 +317,8 @@ export interface Card {
   currentMarketCapUsd: number | null;
   /** When currentMarketCapUsd was read (absent from API builds before the live tick). */
   currentMarketCapAt?: string | null;
-  filter: { id: string; name: string } | null;
+  /** color and icon: the filter's own card style (absent from older API builds; null: Customize's). */
+  filter: { id: string; name: string; color?: string | null; icon?: FilterIconId | null } | null;
   curated: CuratedMeta | null;
   /**
    * A filter alert's outcome from its open grading row, so a 2x shows the moment it lands (API
@@ -866,6 +867,9 @@ export interface FilterInput {
   excludeUnrelatedX: boolean;
   requireTrendMatch: boolean;
   excludeLateCopies: boolean;
+  /** Its feed cards' color (#rrggbb) and icon; null keeps the Customize look. Not criteria. */
+  color: string | null;
+  icon: FilterIconId | null;
   isActive: boolean;
   /** Listed on the public filter leaderboard (off by default). */
   shareOnLeaderboard: boolean;
@@ -880,7 +884,11 @@ export interface Filter extends FilterInput {
 }
 
 /** The fields that decide what a filter matches: what "Copy" copies. */
-export type FilterCriteria = Omit<FilterInput, "name" | "isActive" | "shareOnLeaderboard">;
+export type FilterCriteria = Omit<FilterInput, "name" | "color" | "icon" | "isActive" | "shareOnLeaderboard">;
+
+/** The icons a filter's cards can carry (apps/api/src/routes/filters.ts FILTER_ICONS). */
+export type FilterIconId =
+  "target" | "flame" | "bolt" | "rocket" | "star" | "gem" | "crown" | "shield" | "trophy" | "radar";
 
 export interface FilterBoardEntry {
   id: string;

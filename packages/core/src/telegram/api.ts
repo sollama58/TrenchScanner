@@ -216,6 +216,11 @@ export type TelegramResult<T> =
       retryAfter?: number;
       /** From a 400 on a group that became a supergroup: its new chat id. */
       migrateToChatId?: number;
+      /**
+       * The request never reached Telegram (no connection was made), so nothing was delivered.
+       * Without it, a `code: 0` failure (a timeout, a dropped connection) may have gone through.
+       */
+      undelivered?: true;
     };
 
 /** The bot's token: non-empty means Telegram is configured. */
@@ -231,6 +236,29 @@ export function telegramConfigured(token: string): boolean {
  */
 export function webhookSecret(token: string): string {
   return createHash("sha256").update(`trenchscanner-telegram-webhook:${token}`).digest("hex");
+}
+
+/** Connection errors that mean the request never left this process for Telegram. */
+const NOT_CONNECTED = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/**
+ * Whether a fetch error certainly happened before Telegram had the request: no connection, or a
+ * URL fetch refused to build. A timeout or a connection lost mid-request is not: Telegram may
+ * have delivered the message and only the answer was lost.
+ */
+export function neverSent(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (err.name === "AbortError") return false;
+  if (/Failed to parse URL/.test(err.message)) return true;
+  const code = (err as { cause?: { code?: unknown } }).cause?.code;
+  return typeof code === "string" && NOT_CONNECTED.has(code);
 }
 
 export class TelegramApi {
@@ -294,7 +322,9 @@ export class TelegramApi {
       let description = err instanceof Error && err.name === "AbortError" ? "timed out" : String(err);
       if (this.token) description = description.split(this.token).join("<token>");
       logger.warn("telegram call failed", { method, error: description });
-      return { ok: false, code: 0, description };
+      const failure: Extract<TelegramResult<T>, { ok: false }> = { ok: false, code: 0, description };
+      if (neverSent(err)) failure.undelivered = true;
+      return failure;
     } finally {
       clearTimeout(timer);
     }

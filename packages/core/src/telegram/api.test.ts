@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeTelegramApi } from "./fakeApi.js";
-import { TelegramApi, isPublicAddress, newPhotoCache } from "./api.js";
+import { TelegramApi, isPublicAddress, neverSent, newPhotoCache } from "./api.js";
 
 const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
 const image = (status = 200, type = "image/png", body: Uint8Array = png) =>
@@ -226,5 +226,29 @@ describe("isPublicAddress", () => {
       "not-an-ip",
     ])
       expect(isPublicAddress(a), a).toBe(false);
+  });
+});
+
+describe("neverSent", () => {
+  const withCause = (code: string) => Object.assign(new TypeError("fetch failed"), { cause: { code } });
+  it("is true only when the request never reached Telegram", () => {
+    expect(neverSent(withCause("ECONNREFUSED"))).toBe(true);
+    expect(neverSent(withCause("ENOTFOUND"))).toBe(true);
+    expect(neverSent(new TypeError("Failed to parse URL from https://api.telegram.org/bot/x"))).toBe(true);
+    // Telegram may have delivered these and only the answer was lost.
+    expect(neverSent(withCause("ECONNRESET"))).toBe(false);
+    expect(neverSent(Object.assign(new Error("aborted"), { name: "AbortError" }))).toBe(false);
+    expect(neverSent("boom")).toBe(false);
+  });
+
+  it("marks a call that never connected as undelivered, and a timeout as not", async () => {
+    const refused = new TelegramApi("1:a", () => Promise.reject(withCause("ECONNREFUSED")));
+    expect(await refused.sendMessage(1, "hi")).toMatchObject({ ok: false, code: 0, undelivered: true });
+    const aborted = new TelegramApi("1:a", () =>
+      Promise.reject(Object.assign(new Error("aborted"), { name: "AbortError" })),
+    );
+    const result = await aborted.sendMessage(1, "hi");
+    expect(result).toMatchObject({ ok: false, code: 0, description: "timed out" });
+    expect("undelivered" in result).toBe(false);
   });
 });

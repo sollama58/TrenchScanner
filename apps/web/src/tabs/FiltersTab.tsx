@@ -18,6 +18,8 @@ import { BellIcon, EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../compone
 import { TopFiltersPanel } from "../components/TopFiltersPanel";
 import { AlertsPanel, ModelPanel } from "../components/AlertDeliveryPanels";
 import { TelegramPanel } from "../components/TelegramPanel";
+import { FilterGlyph } from "../components/FilterBadge";
+import { FILTER_COLORS, FILTER_ICONS, filterCardStyle } from "../filterStyle";
 
 /** Mirrors MAX_FILTERS_PER_USER in apps/api/src/routes/filters.ts. */
 const MAX_FILTERS = 10;
@@ -65,6 +67,8 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     excludeUnrelatedX: false,
     requireTrendMatch: false,
     excludeLateCopies: false,
+    color: null,
+    icon: null,
     isActive: true,
     shareOnLeaderboard: false,
   };
@@ -83,6 +87,8 @@ function toInput(f: Filter): FilterInput {
     excludeUnrelatedX: rest.excludeUnrelatedX ?? false,
     requireTrendMatch: rest.requireTrendMatch ?? false,
     excludeLateCopies: rest.excludeLateCopies ?? false,
+    color: rest.color ?? null,
+    icon: rest.icon ?? null,
   };
 }
 
@@ -186,6 +192,7 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
                 <li
                   key={f.id}
                   className={`filter-item ${f.isActive ? "active" : ""} ${editing?.id === f.id ? "editing" : ""}`}
+                  style={filterCardStyle(f.color) as React.CSSProperties}
                 >
                   <div className="filter-main">
                     <button
@@ -220,6 +227,16 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
                       </span>
                     </button>
                     <span>
+                      {(f.color || f.icon) && (
+                        <span
+                          className={`pill pill-icon filter-mark ${f.color ? "pill-filter" : "pill-mine"}`}
+                          role="img"
+                          aria-label="Card style"
+                          title="Its alerts' cards carry this color and icon"
+                        >
+                          <FilterGlyph icon={f.icon} />
+                        </span>
+                      )}
                       <strong>{f.name}</strong>
                       {!f.isActive && <span className="pill">Off</span>}
                       {f.shareOnLeaderboard && <span className="pill">Shared</span>}
@@ -390,6 +407,65 @@ function FilterEditor({
         <span>Name</span>
         <input value={draft.name} maxLength={60} required onChange={(e) => set("name", e.target.value)} />
       </label>
+
+      <fieldset style={filterCardStyle(draft.color) as React.CSSProperties}>
+        <legend>Card style</legend>
+        <p className="muted small">
+          A color and icon for the feed cards this filter raises. They replace your Customize outline and
+          accent on those cards; leave both on Default to keep the Customize look.
+        </p>
+        <div className="field">
+          <span>Color</span>
+          <div className="filter-style-pick" role="group" aria-label="Card color">
+            <button
+              type="button"
+              className="none"
+              aria-pressed={draft.color === null}
+              onClick={() => set("color", null)}
+            >
+              Default
+            </button>
+            {FILTER_COLORS.map((c) => (
+              <button
+                type="button"
+                key={c.hex}
+                className="swatch"
+                style={{ "--swatch": c.hex } as React.CSSProperties}
+                title={c.label}
+                aria-label={c.label}
+                aria-pressed={draft.color === c.hex}
+                onClick={() => set("color", c.hex)}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="field">
+          <span>Icon</span>
+          <div className="filter-style-pick" role="group" aria-label="Card icon">
+            <button
+              type="button"
+              className="none"
+              aria-pressed={draft.icon === null}
+              onClick={() => set("icon", null)}
+            >
+              Default
+            </button>
+            {FILTER_ICONS.map((i) => (
+              <button
+                type="button"
+                key={i.id}
+                className="icon-choice"
+                title={i.label}
+                aria-label={i.label}
+                aria-pressed={draft.icon === i.id}
+                onClick={() => set("icon", i.id)}
+              >
+                <FilterGlyph icon={i.id} size={15} />
+              </button>
+            ))}
+          </div>
+        </div>
+      </fieldset>
 
       <fieldset>
         <legend>Market cap</legend>

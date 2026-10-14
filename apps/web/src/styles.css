@@ -1134,11 +1134,22 @@ input[type="checkbox"] {
   transform: translateY(-2px);
   box-shadow: 0 16px 32px -20px rgba(0, 0, 0, 0.6);
 }
-.cards:not([data-outline-result="off"]) .card.result-pass {
-  border-color: var(--good);
+/* A graded card's result reads as a result, not as an outline color someone picked: a heavier
+   border, a halo ring outside it and a wash over the card's top, none of which a chosen outline
+   (Customize or a filter's color) ever gets - so a red or green pick still looks like a plain line. */
+.cards:not([data-outline-result="off"]) .card.result-pass,
+.cards:not([data-outline-result="off"]) .card.result-fail {
+  --result: var(--good);
+  border-width: 2px;
+  border-color: var(--result);
+  outline: 2px solid color-mix(in srgb, var(--result) 38%, transparent);
+  outline-offset: 1px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--result) 14%, transparent), transparent 120px),
+    linear-gradient(180deg, var(--surface-2), color-mix(in srgb, var(--surface-2) 70%, var(--page)));
 }
 .cards:not([data-outline-result="off"]) .card.result-fail {
-  border-color: var(--bad);
+  --result: var(--bad);
 }
 .card-head {
   display: flex;
@@ -1405,7 +1416,17 @@ img.avatar {
 }
 .card-stats dd {
   margin: 0;
+  margin-top: auto;
   font-weight: 600;
+}
+/* A label too long for one line (1st Buyers Holding): a size smaller, wrapped whole rather than cut.
+   The dd's margin-top: auto keeps the row's values level. */
+.card-stats dt.dt-long {
+  font-size: 8.5px;
+  letter-spacing: 0.03em;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 /* "Not checked" wraps onto two lines rather than being cut in a narrow box. */
 .card-stats dd.muted {
@@ -11609,4 +11630,55 @@ button.bm-same {
 }
 .side-hidden-bots {
   margin: 8px 0 0;
+}
+
+/* A saved filter's own style (filterStyle.ts): its icon pill on the cards it raises and in the
+   Filters tab list, tinted with its color. */
+.pill-filter {
+  color: color-mix(in srgb, var(--filter-color) 72%, var(--ink));
+  border-color: color-mix(in srgb, var(--filter-color) 45%, transparent);
+  background: color-mix(in srgb, var(--filter-color) 14%, transparent);
+}
+.filter-style-pick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.filter-style-pick button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink);
+  cursor: pointer;
+}
+.filter-style-pick button.swatch {
+  background: var(--swatch);
+  border-color: color-mix(in srgb, var(--swatch) 70%, var(--ink));
+}
+.filter-style-pick button.none {
+  font-size: 11px;
+  width: auto;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+.filter-style-pick button[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 2px var(--surface-solid),
+    0 0 0 4px var(--ink);
+}
+.filter-style-pick button.icon-choice[aria-pressed="true"] {
+  color: color-mix(in srgb, var(--filter-color, var(--brand-a)) 72%, var(--ink));
+  background: color-mix(in srgb, var(--filter-color, var(--brand-a)) 16%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--filter-color, var(--brand-a)) 55%, transparent);
+}
+.filter-main .filter-mark {
+  margin-right: 6px;
+  vertical-align: 1px;
 }

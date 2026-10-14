@@ -30,6 +30,8 @@ import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { cardCalibratedRate } from "../rates";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
+import { filterCardStyle } from "../filterStyle";
+import { FilterGlyph } from "./FilterBadge";
 
 // The token modal (and its chart) loads the first time a card is opened.
 const TokenModal = lazy(() => import("./TokenModal").then((m) => ({ default: m.TokenModal })));
@@ -83,6 +85,10 @@ export function AlertCard({
   const isModel = curated && !curated.source.startsWith("heuristic");
   const calls = curated?.calledBy ?? [];
   const { pct: recordedPeak, isRunPeak } = recordedPeakOf(card);
+  // The filter that raised it, when its owner gave it a color or icon: that style wins over
+  // Customize's outline and accent on this card, and its icon marks the card.
+  const filter = card.kind === "match" ? card.filter : null;
+  const styled = !!filter && (!!filter.color || !!filter.icon);
   // The recorded peak catches up on the worker's next pass; a "Now" above it is already a peak.
   const nowCounts = move !== null && move > 0;
   const peak = nowCounts ? Math.max(recordedPeak ?? 0, move) : recordedPeak;
@@ -168,6 +174,7 @@ export function AlertCard({
   return (
     <article
       className={`card tone-${badge.tone}${result ? ` result-${result}` : ""}${compact ? " compact" : ""}${detail ? " opens" : ""}`}
+      style={filter?.color ? (filterCardStyle(filter.color) as React.CSSProperties) : undefined}
       onClick={openDetail}
     >
       <header className="card-head">
@@ -193,15 +200,27 @@ export function AlertCard({
             )}
           </div>
           <div className="meta-row">
-            {labelSource && card.kind === "match" && (
+            {styled ? (
               <span
-                className="pill pill-mine pill-icon"
+                className={`pill pill-icon ${filter.color ? "pill-filter" : "pill-mine"}`}
                 role="img"
-                title="Caught by your own filter"
-                aria-label="Your alert"
+                title={`Caught by your filter “${filter.name}”`}
+                aria-label={`Your alert, from ${filter.name}`}
               >
-                <SlidersIcon size={12} />
+                <FilterGlyph icon={filter.icon} />
               </span>
+            ) : (
+              labelSource &&
+              card.kind === "match" && (
+                <span
+                  className="pill pill-mine pill-icon"
+                  role="img"
+                  title="Caught by your own filter"
+                  aria-label="Your alert"
+                >
+                  <SlidersIcon size={12} />
+                </span>
+              )
             )}
             {curated && show("modelPill") && (
               <span
@@ -422,7 +441,7 @@ export function AlertCard({
                     }`
               }
             >
-              <dt>First buyers</dt>
+              <dt className="dt-long">1st Buyers Holding</dt>
               <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
             </div>
           )}
@@ -451,7 +470,7 @@ export function AlertCard({
                     }. The safety screen rejects ${countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cexHolders)} or more.`
               }
             >
-              <dt>CEX-funded</dt>
+              <dt>CEX</dt>
               <dd className={cexPct === null ? "muted" : "num"}>
                 {cexPct === null ? "Not checked" : (cexCountText(cexCount, cexHolders) ?? pct(cexPct))}
               </dd>
