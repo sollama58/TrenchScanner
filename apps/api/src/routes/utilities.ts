@@ -6,6 +6,7 @@ import {
   creditBalance,
   creditBurnCredits,
   describeCreditRejection,
+  lastRebuiltAt,
   LOOKUP_REOPEN_MS,
   openLookup,
   parseCreditBurnTransaction,
@@ -291,7 +292,14 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     const names = await kolNames(rows.map((r) => r.wallet));
     reply.header("Cache-Control", "private, max-age=300");
     return {
-      computedAt: rows[0]?.computedAt ?? null,
+      // The last rebuild: the job rewrites only the KOLs whose lists changed.
+      computedAt:
+        rows.length > 0
+          ? await lastRebuiltAt(
+              "kol-side-wallets",
+              rows.reduce((t, r) => (r.computedAt > t ? r.computedAt : t), rows[0]!.computedAt),
+            )
+          : null,
       gapMinutes: SIDE_GAP_MINUTES,
       minShared: SIDE_MIN_SHARED,
       kols: rows.map((r) => {
@@ -345,7 +353,7 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       wallet: kol,
       name: names.get(kol)?.name ?? null,
       twitter: names.get(kol)?.twitter ?? null,
-      computedAt: row.computedAt,
+      computedAt: await lastRebuiltAt("kol-side-wallets", row.computedAt),
       coins: { "24h": row.coins24h, "7d": row.coins7d, "30d": row.coins30d },
       sides: Object.fromEntries(SIDE_WINDOWS.map((w) => [w, sides[w].map(withRisk)])),
     };

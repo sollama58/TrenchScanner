@@ -190,6 +190,9 @@ export async function recordCandidateSample(
         labelRule: anchor.labelRule,
         features: buildCandidateFeatures(scored) as Prisma.InputJsonValue,
         score: scored.score.total,
+        // How long this process had been up: rows banked just after a restart start from empty
+        // in-memory books, and this lets them be measured apart (CandidateOutcome.bootAgeSeconds).
+        bootAgeSeconds: Math.floor(process.uptime()),
         nextCheckAt: new Date(anchorAt.getTime() + env.CANDIDATE_WATCH_INTERVAL_MINUTES * 60_000),
         extended24h: opts.extended24h ?? false,
         peak1hPriceUsd: agg.peak1hPriceUsd,

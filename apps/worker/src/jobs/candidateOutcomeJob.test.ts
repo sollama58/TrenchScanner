@@ -86,6 +86,10 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(banked.peak1hPriceUsd).toBe(0.002);
     expect(banked.lowBefore2xPriceUsd).toBe(0.002);
     expect(banked.extended24h).toBe(false);
+    // Stamped with how long this process had been up (whole seconds).
+    expect(banked.bootAgeSeconds).toBe(Math.floor(banked.bootAgeSeconds!));
+    expect(banked.bootAgeSeconds).toBeGreaterThanOrEqual(0);
+    expect(banked.bootAgeSeconds).toBeLessThanOrEqual(Math.ceil(process.uptime()));
     // The stored score* inputs are the first composite's, recomputed from the token.
     expect((banked.features as Record<string, unknown>).scoreTotal).toBe(
       scoreTokenLegacy(scoredFixture(token.mintAddress, 0.002)).total,

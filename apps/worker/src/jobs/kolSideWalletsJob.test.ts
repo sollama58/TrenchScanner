@@ -152,6 +152,12 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
     // One coin in common in the last day is under the ten a listing needs.
     expect(sides["24h"]).toEqual([]);
     expect(sides["7d"]).toEqual([]);
+
+    // The same tapes a minute later: nothing changed, so nothing is rewritten and the row keeps
+    // the run that wrote it.
+    const again = await runKolSideWalletsJob({ now: () => now + 60_000 });
+    expect(again.written).toBe(0);
+    expect(await prisma.kolSideWallets.findUnique({ where: { wallet: kol } })).toEqual(row);
   });
 
   it("keeps a possible-side label 14 days past the last run it qualified, then drops it", async () => {

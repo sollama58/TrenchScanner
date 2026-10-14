@@ -459,8 +459,8 @@ export async function registerStatsRoutes(
 
   /**
    * Row-level data for offline research: training rows (with features, labels and the stored
-   * price aggregates), their snapshot price paths, curated alerts, shadow picks and AI reviews,
-   * for a date range, as gzipped JSONL or CSV. Read-only and streamed a page at a time, so a
+   * price aggregates), their snapshot price paths, curated alerts, shadow picks, AI reviews, the
+   * Top Models pick history and what Telegram sent, for a date range, as gzipped JSONL or CSV. Read-only and streamed a page at a time, so a
    * 60-day pull never sits in memory. See statsExport.ts for the datasets and their columns.
    */
   app.get(
@@ -787,9 +787,18 @@ export async function buildHitRateReport(
                                               WHERE o."id" = m."candidateOutcomeId"
                                                 AND o."finalized24hAt" IS NOT NULL
                                                 AND o."finalizedAt" IS NULL))) AS ungradable
-      FROM "Match" m
+      FROM (
+        SELECT "filterId", "matchedAt", "candidateOutcomeId", "hit2xIn1h", "hit4xIn1h", "hit10xIn1h", "disqualified"
+        FROM "Match"
+        WHERE "matchedAt" >= ${since} AND "matchedAt" < ${until}
+        -- Matches older than MATCH_ARCHIVE_DAYS were moved here by the cleanup, verdicts included;
+        -- this report reaches back MAX_WINDOW_DAYS.
+        UNION ALL
+        SELECT "filterId", "matchedAt", "candidateOutcomeId", "hit2xIn1h", "hit4xIn1h", "hit10xIn1h", "disqualified"
+        FROM "MatchArchive"
+        WHERE "matchedAt" >= ${since} AND "matchedAt" < ${until}
+      ) m
       JOIN "UserFilter" f ON f."id" = m."filterId"
-      WHERE m."matchedAt" >= ${since} AND m."matchedAt" < ${until}
       GROUP BY 1, 2`;
   });
 

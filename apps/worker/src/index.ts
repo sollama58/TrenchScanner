@@ -94,10 +94,18 @@ const MODEL_BACKUP_CHECK_MINUTES = 60;
 /** How often the Lighthouse's history is summed (runLighthouseRollupJob re-sums the trailing days). */
 const LIGHTHOUSE_ROLLUP_MINUTES = 60;
 /**
- * How long a shutdown waits for the runs in flight. Render allows about 30 seconds between
- * SIGTERM and SIGKILL; the rest is kept for the heartbeat writes and the disconnect.
+ * How long a shutdown waits for the runs in flight. Render's maxShutdownDelaySeconds (render.yaml)
+ * is the time between SIGTERM and SIGKILL; the rest is kept for the heartbeat writes and the
+ * disconnect, and for a shadow AI review's longer drain (REVIEW_DRAIN_SLACK_MS).
  */
 const SHUTDOWN_GRACE_MS = 20_000;
+/**
+ * What a shutdown gives a detached shadow AI review beyond its own timeout (AI_REVIEW_TIMEOUT_MS,
+ * 60s by default): a review cut off is paid for and never recorded, so reviews get their whole
+ * timeout rather than the jobs' grace. render.yaml's maxShutdownDelaySeconds on the worker and
+ * trainer covers this plus SHUTDOWN_WRITES_MS. With no review in flight the drain returns at once.
+ */
+const REVIEW_DRAIN_SLACK_MS = 2_000;
 /** What a shutdown allows the interrupted-run heartbeats and the disconnect after the grace. */
 const SHUTDOWN_WRITES_MS = 8_000;
 /** How often the composite score's weights are refit (runScoreWeightsJob). */
@@ -591,18 +599,20 @@ async function main() {
     // The runs' settle is bounded by the grace, but the writes after it are not: the restarts
     // that come through here are mostly for a dead connection, and a heartbeat write or the
     // disconnect on one can wait out the 180s socket timeout. The process ends regardless.
-    const hardExit = setTimeout(() => process.exit(code), SHUTDOWN_GRACE_MS + SHUTDOWN_WRITES_MS);
+    const reviewGraceMs = Math.max(SHUTDOWN_GRACE_MS, env.AI_REVIEW_TIMEOUT_MS + REVIEW_DRAIN_SLACK_MS);
+    const hardExit = setTimeout(() => process.exit(code), reviewGraceMs + SHUTDOWN_WRITES_MS);
     void hardExit;
     logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS, exitCode: code });
     for (const { job } of jobs) job.stop();
     stream?.stop();
     stopNarrativePolling?.();
-    // Detached shadow AI reviews get the same grace: one cut off is paid for and never recorded.
+    // Detached shadow AI reviews get their whole timeout (see REVIEW_DRAIN_SLACK_MS): one cut off
+    // is paid for and never recorded.
     const [outcomes, reviewsLeft] = await Promise.all([
       Promise.all(
         jobs.map(async ({ name, job }) => ({ name, outcome: await job.settle(SHUTDOWN_GRACE_MS) })),
       ),
-      drainShadowReviews(SHUTDOWN_GRACE_MS),
+      drainShadowReviews(reviewGraceMs),
     ]);
     if (reviewsLeft > 0)
       logger.warn("shadow ai reviews still in flight at shutdown", { reviews: reviewsLeft });

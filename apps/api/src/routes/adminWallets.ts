@@ -4,6 +4,7 @@ import {
   prisma,
   Prisma,
   KNOWN_DUMPER,
+  lastRebuiltAt,
   MIN_LABEL_APPEARANCES,
   RISKY_WALLET_SCORE,
   STOP_ROLES,
@@ -96,7 +97,8 @@ async function buildOverview(limit: number, minCoins: number) {
     }),
   ]);
   return {
-    computedAt: newest?.computedAt ?? null,
+    // The last rebuild: the job rewrites only rows whose figures changed, so the newest row can be older.
+    computedAt: newest ? await lastRebuiltAt("wallet-risk", newest.computedAt) : null,
     scoredWallets: await prisma.walletRisk.count(),
     riskyWallets: risky,
     riskyScore: RISKY_WALLET_SCORE,

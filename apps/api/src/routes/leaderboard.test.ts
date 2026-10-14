@@ -19,6 +19,7 @@ interface Entry {
   matchId: string;
   token: { id: string; symbol: string | null };
   returnPct: number | null;
+  alertMcapUsd: number;
 }
 
 describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
@@ -50,8 +51,12 @@ describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
     // So the fixture is lifted above the field. `base` is a clean thousand past the best return
     // already recorded, which puts these three tokens at the top of the board whatever else is
     // in there, without touching or deleting another row.
-    const { _max } = await prisma.match.aggregate({ _max: { peakReturnPct: true } });
-    const base = Math.ceil(Math.max(0, _max.peakReturnPct ?? 0) / 1_000) * 1_000 + 1_000;
+    const [{ _max }, { _max: archivedMax }] = await Promise.all([
+      prisma.match.aggregate({ _max: { peakReturnPct: true } }),
+      prisma.matchArchive.aggregate({ _max: { peakReturnPct: true } }),
+    ]);
+    const best = Math.max(0, _max.peakReturnPct ?? 0, archivedMax.peakReturnPct ?? 0);
+    const base = Math.ceil(best / 1_000) * 1_000 + 1_000;
 
     // Three tokens whose returns are deliberately awkward binary64 values, and one of them
     // carrying 80 near-duplicate matches - the shape that used to collapse the whole board to a
@@ -94,6 +99,34 @@ describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
       }
     }
 
+    // Matches past MATCH_ARCHIVE_DAYS live in MatchArchive, without a snapshot: ARCH ranks from
+    // there with its copied alert market cap, and MID's archived row (worse than its live best)
+    // must not add a second MID entry.
+    const arch = await prisma.token.create({
+      data: { mintAddress: `${TAG}-ARCH`, symbol: "ARCH", name: "ARCH" },
+    });
+    const mid = await prisma.token.findUniqueOrThrow({ where: { mintAddress: `${TAG}-MID` } });
+    const archived = (tokenId: string, mint: string, pct: number) =>
+      prisma.matchArchive.create({
+        data: {
+          id: `${TAG}-archived-${mint}`,
+          userId,
+          filterId: filter.id,
+          tokenId,
+          mintAddress: mint,
+          snapshotId: `${TAG}-gone`,
+          snapshotMarketCapUsd: 50_000,
+          matchedAt: new Date(Date.now() - 90 * 86_400_000),
+          score: 60,
+          deliveredDashboard: true,
+          peakMcapUsd: 50_000 * (1 + pct / 100),
+          peakReturnPct: pct,
+          hitHundredPctAt: new Date(Date.now() - 90 * 86_400_000),
+        },
+      });
+    await archived(arch.id, `${TAG}-ARCH`, base + 500);
+    await archived(mid.id, `${TAG}-MID`, midPct - 1);
+
     app = await buildServer(env);
     cookie = await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
       userId,
@@ -106,6 +139,7 @@ describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
     if (!dbAvailable) return;
     await app?.close();
     await prisma.match.deleteMany({ where: { userId } });
+    await prisma.matchArchive.deleteMany({ where: { userId } });
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.userFilter.deleteMany({ where: { userId } });
     await prisma.user.deleteMany({ where: { id: userId } });
@@ -122,7 +156,7 @@ describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
   }
 
   const ours = (entries: Entry[]) =>
-    entries.filter((e) => e.token.symbol && ["LOW", "MID", "TOP", "UNDER"].includes(e.token.symbol));
+    entries.filter((e) => e.token.symbol && ["LOW", "MID", "TOP", "UNDER", "ARCH"].includes(e.token.symbol));
 
   it("returns one entry per token however many matches that token has", async () => {
     const mine = ours(await board());
@@ -147,7 +181,12 @@ describe.skipIf(!dbAvailable)("GET /leaderboard", () => {
 
   it("ranks by return, descending", async () => {
     const mine = ours(await board());
-    expect(mine.map((e) => e.token.symbol)).toEqual(["TOP", "MID", "LOW"]);
+    expect(mine.map((e) => e.token.symbol)).toEqual(["TOP", "ARCH", "MID", "LOW"]);
+  });
+
+  it("ranks archived matches with the live ones, priced from the copied alert market cap", async () => {
+    const arch = ours(await board()).find((e) => e.token.symbol === "ARCH");
+    expect(arch).toMatchObject({ matchId: `${TAG}-archived-${TAG}-ARCH`, alertMcapUsd: 50_000 });
   });
 
   it("excludes anything that never reached +100%", async () => {

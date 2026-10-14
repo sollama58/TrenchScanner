@@ -3,6 +3,7 @@ import { createGzip } from "node:zlib";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma, createLogger, CANDIDATE_FEATURE_NAMES } from "@trenchscanner/core";
+import { ALERT_LOOKAHEAD_MS, ALERT_LOOKBACK_MS, alertFor } from "../telegramBoards.js";
 
 const logger = createLogger("stats-export");
 
@@ -43,6 +44,8 @@ export const EXPORT_DATASETS = [
   "narratives",
   "wallets",
   "wallet-activity",
+  "top-models",
+  "telegram-sent",
 ] as const;
 export type ExportDataset = (typeof EXPORT_DATASETS)[number];
 
@@ -104,6 +107,7 @@ const OUTCOME_COLUMNS = [
   "anchorPriceUsd",
   "anchorMcapUsd",
   "score",
+  "bootAgeSeconds",
   "peak1hPriceUsd",
   "peak1hAt",
   "low1hPriceUsd",
@@ -237,7 +241,26 @@ async function* pathPages(q: ExportQuery, since: Date, until: Date, pageSize = P
   }
 }
 
-type ScreenToken = { id: string; mintAddress: string; symbol: string | null; firstSeenAt: Date };
+/**
+ * What a rejected coin did in the hour after its first rejection (Token.screenRejectedAt and the
+ * reject*60m columns, folded in from every watchlist refresh): null on coins never rejected and on
+ * rejections before 2026-10-14. Covers the hour only while the coin stayed on the watchlist.
+ */
+const SCREEN_REJECT_COLUMNS = [
+  "screenRejectedAt",
+  "screenRejectedPriceUsd",
+  "screenRejectedMcapUsd",
+  "rejectPeak60mPriceUsd",
+  "rejectPeak60mMcapUsd",
+  "rejectPeak60mAt",
+  "rejectLow60mPriceUsd",
+  "rejectLow60mMcapUsd",
+] as const;
+
+type ScreenToken = { id: string; mintAddress: string; symbol: string | null; firstSeenAt: Date } & Record<
+  (typeof SCREEN_REJECT_COLUMNS)[number],
+  Date | number | null
+>;
 type ScreenTick = {
   token_id: string;
   taken_at: Date;
@@ -285,7 +308,16 @@ async function* screenPages(q: ExportQuery, since: Date, until: Date, pageSize =
       where: { AND: [{ firstSeenAt: { gte: since, lt: until } }, after("firstSeenAt", last)] },
       orderBy: [{ firstSeenAt: "asc" }, { id: "asc" }],
       take: pageSize,
-      select: { id: true, mintAddress: true, symbol: true, firstSeenAt: true },
+      select: {
+        id: true,
+        mintAddress: true,
+        symbol: true,
+        firstSeenAt: true,
+        ...(Object.fromEntries(SCREEN_REJECT_COLUMNS.map((c) => [c, true])) as Record<
+          (typeof SCREEN_REJECT_COLUMNS)[number],
+          true
+        >),
+      },
     });
     if (tokens.length === 0) return;
     const ids = tokens.map((t) => t.id);
@@ -315,6 +347,7 @@ async function* screenPages(q: ExportQuery, since: Date, until: Date, pageSize =
     for (const token of tokens) {
       const rows = byToken.get(token.id);
       if (!rows) continue;
+      const { id: _id, mintAddress: _m, symbol: _s, firstSeenAt: _f, ...rejected } = token;
       const sec = (d: Date) => Math.round((d.getTime() - token.firstSeenAt.getTime()) / 1000);
       const checks: Rec[] = [];
       let prevKey = "";
@@ -354,6 +387,7 @@ async function* screenPages(q: ExportQuery, since: Date, until: Date, pageSize =
           r.change_5m_pct,
         ]),
         checks,
+        ...rejected,
       });
     }
     if (page.length > 0) yield page;
@@ -625,11 +659,8 @@ const AI_REVIEW_COLUMNS = [
   "playbookId",
 ] as const;
 
-const SCREEN_COLUMNS = [
-  "tokenId",
-  "mintAddress",
-  "symbol",
-  "firstSeenAt",
+/** One screen tick's fields, in the order screenPages packs them. */
+const SCREEN_TICK_COLUMNS = [
   "tSec",
   "priceUsd",
   "marketCapUsd",
@@ -640,6 +671,15 @@ const SCREEN_COLUMNS = [
   "buys1h",
   "sells1h",
   "priceChange5mPct",
+];
+
+const SCREEN_COLUMNS = [
+  "tokenId",
+  "mintAddress",
+  "symbol",
+  "firstSeenAt",
+  ...SCREEN_TICK_COLUMNS,
+  ...SCREEN_REJECT_COLUMNS,
 ];
 
 const PATH_COLUMNS = [
@@ -757,6 +797,142 @@ async function* walletActivityPages(since: Date, until: Date, pageSize = EXPORT_
   }
 }
 
+/**
+ * The stored Top Models pick per refresh slot (TopModelsPick, curation/topModels.ts): the models
+ * the default feed followed from slotStart, as first decided for that slot. Windowed on slotStart.
+ * A model that later left the roster is still listed here; readers drop it when they read the pick.
+ */
+const TOP_MODELS_COLUMNS = ["slotStart", "models", "pickedAt"] as const;
+
+async function* topModelsPages(since: Date, until: Date, pageSize = EXPORT_PAGE_SIZE) {
+  let last: Date | null = null;
+  for (;;) {
+    const rows: { slotStart: Date; models: string[]; pickedAt: Date }[] = await prisma.topModelsPick.findMany(
+      {
+        where: { slotStart: last ? { gt: last, lt: until } : { gte: since, lt: until } },
+        orderBy: { slotStart: "asc" },
+        take: pageSize,
+      },
+    );
+    if (rows.length === 0) return;
+    yield rows as Rec[];
+    last = rows[rows.length - 1]!.slotStart;
+    if (rows.length < pageSize) return;
+  }
+}
+
+/**
+ * What the Telegram bot sent (TelegramAlertSent): one row per send, re-alerts included, with the
+ * alert it carried - the model call when there was one, else the user-filter match. Sends since
+ * 2026-10-14 store both ids; for older rows the alert is found as /alerts and /trenchboard find it
+ * (alertFor in telegramBoards.ts). Windowed on sentAt.
+ *
+ * Token- and chat-id only: `chatId` is our own TelegramChat row id, never Telegram's chat id (a
+ * private chat's is the person's Telegram user id), and nothing about the chat's owner, title or
+ * who linked it is read. A filter match is given by its id, not its filter's user-written name.
+ * A chat that is re-linked starts over. Recorded from 2026-10-10 21:30 UTC on; before 2026-10-14
+ * a re-alert moved the row's sentAt to the newer send, so those rows are each a chat's latest send.
+ */
+const TELEGRAM_SENT_COLUMNS = [
+  "sentAt",
+  "chatId",
+  "chatKind",
+  "tokenId",
+  "mintAddress",
+  "symbol",
+  "alertKind",
+  "curatedAlertId",
+  "model",
+  "modelName",
+  "matchId",
+] as const;
+
+type SentRow = {
+  sentAt: Date;
+  chatId: string;
+  chatKind: string | null;
+  userId: string | null;
+  tokenId: string;
+  mintAddress: string | null;
+  symbol: string | null;
+  storedCallId: string | null;
+  storedMatchId: string | null;
+};
+
+async function* telegramSentPages(since: Date, until: Date, pageSize = EXPORT_PAGE_SIZE) {
+  let last: { at: Date; chatId: string; tokenId: string } | null = null;
+  for (;;) {
+    // No relation from the sent row to Token (the stale-token sweep doesn't know this table), so
+    // a token swept since is kept with a null mint.
+    const rows: SentRow[] = await prisma.$queryRaw`
+      SELECT s."sentAt", s."chatId", c."kind" AS "chatKind", c."userId", s."tokenId",
+             tk."mintAddress", tk."symbol",
+             s."curatedAlertId" AS "storedCallId", s."matchId" AS "storedMatchId"
+      FROM "TelegramAlertSent" s
+      LEFT JOIN "TelegramChat" c ON c."id" = s."chatId"
+      LEFT JOIN "Token" tk ON tk."id" = s."tokenId"
+      WHERE s."sentAt" >= ${since} AND s."sentAt" < ${until}
+        AND (${last === null} OR (s."sentAt", s."chatId", s."tokenId") >
+             (${last?.at ?? since}, ${last?.chatId ?? ""}, ${last?.tokenId ?? ""}))
+      ORDER BY s."sentAt" ASC, s."chatId" ASC, s."tokenId" ASC
+      LIMIT ${pageSize}`;
+    if (rows.length === 0) return;
+    const tokenIds = [...new Set(rows.map((r) => r.tokenId))];
+    const userIds = [...new Set(rows.flatMap((r) => (r.userId ? [r.userId] : [])))];
+    const from = new Date(rows[0]!.sentAt.getTime() - ALERT_LOOKBACK_MS);
+    const to = new Date(rows[rows.length - 1]!.sentAt.getTime() + ALERT_LOOKAHEAD_MS);
+    const storedCallIds = [...new Set(rows.flatMap((r) => (r.storedCallId ? [r.storedCallId] : [])))];
+    const [calls, matches] = await Promise.all([
+      prisma.curatedAlert.findMany({
+        where: {
+          OR: [
+            { tokenId: { in: tokenIds }, createdAt: { gte: from, lte: to } },
+            { id: { in: storedCallIds } },
+          ],
+        },
+        select: { id: true, tokenId: true, createdAt: true, model: true, modelName: true },
+      }),
+      userIds.length === 0
+        ? []
+        : prisma.match.findMany({
+            where: { tokenId: { in: tokenIds }, userId: { in: userIds }, matchedAt: { gte: from, lte: to } },
+            select: { id: true, tokenId: true, userId: true, matchedAt: true },
+          }),
+    ]);
+    const callsById = new Map(calls.map((c) => [c.id, c]));
+    yield rows.map(({ userId, storedCallId, storedMatchId, ...r }) => {
+      // The ids the send stored win; the time-window lookup is for rows from before they were kept.
+      const stored = storedCallId !== null || storedMatchId !== null;
+      const call = stored
+        ? storedCallId !== null
+          ? (callsById.get(storedCallId) ?? { id: storedCallId, model: null, modelName: null })
+          : undefined
+        : alertFor(calls, (c) => c.createdAt, r.tokenId, r.sentAt);
+      const match = call
+        ? undefined
+        : stored
+          ? { id: storedMatchId! }
+          : alertFor(
+              matches.filter((m) => m.userId === userId),
+              (m) => m.matchedAt,
+              r.tokenId,
+              r.sentAt,
+            );
+      return {
+        ...r,
+        alertKind: call ? "model" : match ? "filter" : null,
+        curatedAlertId: call?.id ?? null,
+        model: call?.model ?? null,
+        modelName: call?.modelName ?? null,
+        matchId: match?.id ?? null,
+      };
+    });
+    const tail = rows[rows.length - 1]!;
+    last = { at: tail.sentAt, chatId: tail.chatId, tokenId: tail.tokenId };
+    if (rows.length < pageSize) return;
+  }
+}
+
 function pagesFor(q: ExportQuery, since: Date, until: Date, pageSize?: number): AsyncGenerator<Rec[]> {
   switch (q.dataset) {
     case "outcomes":
@@ -771,6 +947,10 @@ function pagesFor(q: ExportQuery, since: Date, until: Date, pageSize?: number): 
       return walletPages(pageSize);
     case "wallet-activity":
       return walletActivityPages(since, until, pageSize);
+    case "top-models":
+      return topModelsPages(since, until, pageSize);
+    case "telegram-sent":
+      return telegramSentPages(since, until, pageSize);
     case "alerts":
       return createdAtPages(
         async (where, take) =>
@@ -843,6 +1023,10 @@ export function csvColumns(dataset: ExportDataset): string[] {
       return [...WALLET_COLUMNS];
     case "wallet-activity":
       return [...WALLET_ACTIVITY_COLUMNS];
+    case "top-models":
+      return [...TOP_MODELS_COLUMNS];
+    case "telegram-sent":
+      return [...TELEGRAM_SENT_COLUMNS];
   }
 }
 
@@ -875,7 +1059,7 @@ export function csvLines(dataset: ExportDataset, rec: Rec, columns: string[]): s
     const ticks = rec.ticks as unknown[][];
     return ticks
       .map((t) => {
-        const tick: Rec = Object.fromEntries(SCREEN_COLUMNS.slice(4).map((c, i) => [c, t[i]]));
+        const tick: Rec = Object.fromEntries(SCREEN_TICK_COLUMNS.map((c, i) => [c, t[i]]));
         return `${columns.map((c) => csvCell(c in tick ? tick[c] : rec[c])).join(",")}\n`;
       })
       .join("");

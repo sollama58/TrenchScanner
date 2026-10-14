@@ -35,7 +35,10 @@
 #         it decides whether the Narrative model seat is on the roster in each process
 #         (packages/core/src/config/env.ts), so a flag set on the worker alone has the scanner
 #         wait on a seat the trainer never trains.
-#   - COINGECKO_API_KEY (both api + worker)        optional: a CoinGecko paid-plan key
+#   - TOKENSAGE_API_URL, TOKENSAGE_ADMIN_KEY (api)  optional: TokenSage's ADMIN_KEY
+#         Admin > API usage then shows TokenSage's own outside calls and Helius credits next to
+#         ours (apps/api/src/routes/adminUsage.ts). Unset, that panel says so.
+#   - COINGECKO_API_KEY (api, worker + trainer)    optional: a CoinGecko paid-plan key
 #         Market data falls back to GeckoTerminal whenever DexScreener answers lookups blank (it
 #         did on 2026-10-07). Free, that is 30 calls a minute; with this key it is CoinGecko's
 #         on-chain API on the plan's limit (COINGECKO_REQUESTS_PER_MINUTE, 200 by default).
@@ -58,12 +61,13 @@
 #         Backblaze B2, AWS S3); MODEL_BACKUP_S3_REGION defaults to "auto" (R2). Unset, backups
 #         stay in Postgres only (Admin tab -> Backups) and can still be downloaded from there.
 #
-# DATABASE_CONNECTION_LIMIT is set (not sync: false - it ships with a value) on both services
-# below. Verify the two values plus one LISTEN connection (the API's SSE push, held outside the
-# pool - see apps/api/src/matchStream.ts) against the actual connection ceiling on the Postgres
-# plan you deploy to (Render dashboard -> the database -> Info tab), and adjust downward if the
-# plan is smaller than `basic-256mb`, or if you scale either service to more than one instance -
-# every instance opens its own pool.
+# DATABASE_CONNECTION_LIMIT is set (not sync: false - it ships with a value) on all three Node
+# services below. Verify the three values plus one LISTEN connection (the API's SSE push, held
+# outside the pool - see apps/api/src/matchStream.ts) against the actual connection ceiling on the
+# Postgres plan you deploy to (Render dashboard -> the database -> Info tab), and adjust downward
+# if you move to a plan with a lower ceiling, or if you scale any service to more than one
+# instance - every instance opens its own pool, and during a deploy the old and new instances are
+# both connected for a while.
 #
 # See PLANNING.md and README.md for the full architecture and local dev setup.
 
@@ -87,9 +91,33 @@ services:
     runtime: node
     plan: standard
     region: oregon
+    # npm ci, as CI runs it: it installs exactly what package-lock.json pins, and fails rather than
+    # resolving something else when the lockfile and a package.json disagree.
     # --include=dev: NODE_ENV=production (set below) makes npm omit devDependencies by default,
     # but prisma/typescript/dotenv-cli - all needed just to build - are devDependencies here.
-    buildCommand: npm install --include=dev && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/api
+    buildCommand: npm ci --include=dev && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/api
+    # Deploys only when something this service runs changes. Every merge used to rebuild and
+    # restart all three Node services; a restart empties the scanner's in-memory books, cuts a
+    # training run short and drops AI reviews in flight, and on 2026-10-13 main took 68 merges, 19
+    # of them touching nothing the worker runs (full audit 2026-10-14, lane 7, F2). The paths are
+    # what the build and the preDeploy read: the app, packages/core (built into it, and the Prisma
+    # schema and migrations prisma:deploy applies), the root manifests and lockfile npm ci installs
+    # from, tsconfig.base.json the app's tsconfig extends, the Node version, the migration script,
+    # and this file. Tests and Markdown change nothing that runs. A manual deploy from the
+    # dashboard is not filtered.
+    buildFilter:
+      paths:
+        - apps/api/**
+        - packages/core/**
+        - package.json
+        - package-lock.json
+        - tsconfig.base.json
+        - .node-version
+        - scripts/migrate-deploy.sh
+        - render.yaml
+      ignoredPaths:
+        - "**/*.test.ts"
+        - "**/*.md"
     startCommand: npm run start -w @trenchscanner/api
     # Runs once per deploy, before the new instance takes traffic - applies any pending
     # migrations. The worker and trainer declare it too, so neither starts new code against a
@@ -105,11 +133,11 @@ services:
           name: trenchscanner-db
           property: connectionString
       # Sized explicitly rather than left to Prisma's own `num_physical_cpus * 2 + 1` default,
-      # which on a `starter` instance's shared/constrained CPU allocation computed out to 9 for
-      # BOTH services regardless of what either actually needed - too tight here, where the Live
-      # Feed route alone (apps/api/src/routes/matches.ts) fans out up to four concurrent Prisma
-      # calls per request and is polled by every open tab every 45s. 12 covers a real burst of
-      # concurrent requests on a single `starter` instance with room to spare.
+      # which computes from whatever CPUs the instance reports, not from what a service needs (on
+      # the `starter` instances these services first ran on it came out at 9 for both) - too tight
+      # here, where the Live Feed route alone (apps/api/src/routes/matches.ts) fans out up to four
+      # concurrent Prisma calls per request and is polled by every open tab every 45s. 12 covers a
+      # real burst of concurrent requests on a single instance with room to spare.
       #
       # Verify this against the ACTUAL number in Render's Postgres dashboard (Info tab) before
       # raising it: this plus the worker's own limit below, plus the one dedicated LISTEN
@@ -121,6 +149,12 @@ services:
         sync: false
       # Optional: a CoinGecko paid-plan key for the market-data fallback (see .env.example).
       - key: COINGECKO_API_KEY
+        sync: false
+      # Optional: TokenSage's URL and its ADMIN_KEY, for TokenSage's own meter on Admin > API usage
+      # (apps/api/src/routes/adminUsage.ts). The scanner's TOKENSAGE_API_KEY is not needed here.
+      - key: TOKENSAGE_API_URL
+        sync: false
+      - key: TOKENSAGE_ADMIN_KEY
         sync: false
       # Verifies burns for /subscription/claim and mints the blockhash the burn is signed
       # against. Empty (or a public endpoint) uses the Helius RPC built from HELIUS_API_KEY, so it
@@ -173,10 +207,30 @@ services:
     plan: standard
     region: oregon
     # See the api service's buildCommand comment above - same reason.
-    buildCommand: npm install --include=dev && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/worker
+    buildCommand: npm ci --include=dev && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/worker
+    # See the api service's buildFilter above. The scanner and the trainer are the same build, so
+    # they share one filter.
+    buildFilter:
+      paths:
+        - apps/worker/**
+        - packages/core/**
+        - package.json
+        - package-lock.json
+        - tsconfig.base.json
+        - .node-version
+        - scripts/migrate-deploy.sh
+        - render.yaml
+      ignoredPaths:
+        - "**/*.test.ts"
+        - "**/*.md"
     startCommand: npm run start -w @trenchscanner/worker
     # The same migration step as the api's (see there), so this never boots ahead of the schema.
     preDeployCommand: npm run prisma:deploy
+    # Seconds from SIGTERM to SIGKILL. Render's default is 30s; a shadow AI review in flight is given its whole
+    # AI_REVIEW_TIMEOUT_MS (60s) plus the heartbeat writes before the process ends (worker
+    # index.ts, REVIEW_DRAIN_SLACK_MS), so a deploy no longer cuts one off. Raise this with that
+    # timeout. A shutdown with no review in flight still ends as soon as its runs settle.
+    maxShutdownDelaySeconds: 75
     envVars:
       - fromGroup: trenchscanner-shared
       - key: DATABASE_URL
@@ -285,16 +339,36 @@ services:
   # never competes with the scan for the one CPU, the training set (CURATOR_TRAINING_MAX_ROWS,
   # held twice while the training thread runs) has 2GB to itself, and a run that dies takes
   # nothing on the alert path with it. Needs no Helius or RPC key: everything it reads is already
-  # in Postgres, plus DexScreener for the nightly outcome sweep.
+  # in Postgres, plus DexScreener (with the CoinGecko fallback) for the nightly outcome sweep.
   - type: worker
     name: trenchscanner-trainer
     runtime: node
     plan: standard
     region: oregon
-    buildCommand: npm install --include=dev && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/worker
+    # See the api service's buildCommand comment above - same reason.
+    buildCommand: npm ci --include=dev && npm run build -w @trenchscanner/core && npm run build -w @trenchscanner/worker
+    # The scanner's filter: the same build (see the api service's buildFilter).
+    buildFilter:
+      paths:
+        - apps/worker/**
+        - packages/core/**
+        - package.json
+        - package-lock.json
+        - tsconfig.base.json
+        - .node-version
+        - scripts/migrate-deploy.sh
+        - render.yaml
+      ignoredPaths:
+        - "**/*.test.ts"
+        - "**/*.md"
     startCommand: npm run start -w @trenchscanner/worker
     # The same migration step as the api's (see there), so this never boots ahead of the schema.
     preDeployCommand: npm run prisma:deploy
+    # Seconds from SIGTERM to SIGKILL. Render's default is 30s; a shadow AI review in flight is given its whole
+    # AI_REVIEW_TIMEOUT_MS (60s) plus the heartbeat writes before the process ends (worker
+    # index.ts, REVIEW_DRAIN_SLACK_MS), so a deploy no longer cuts one off. Raise this with that
+    # timeout. A shutdown with no review in flight still ends as soon as its runs settle.
+    maxShutdownDelaySeconds: 75
     envVars:
       - fromGroup: trenchscanner-shared
       - key: DATABASE_URL
@@ -309,6 +383,21 @@ services:
       - key: WORKER_ROLE
         value: trainer
       - key: ANTHROPIC_API_KEY
+        sync: false
+      # Optional: the same CoinGecko key as on the api and worker. The nightly outcome sweep
+      # (outcome-tracking) looks up thousands of mints on DexScreener, with GeckoTerminal behind it
+      # when DexScreener answers blank - 30 calls a minute without a key.
+      - key: COINGECKO_API_KEY
+        sync: false
+      # Optional: the S3-compatible bucket for off-site copies of the weekly model backups
+      # (model-backup runs here). MODEL_BACKUP_S3_REGION defaults to "auto" (R2).
+      - key: MODEL_BACKUP_S3_ENDPOINT
+        sync: false
+      - key: MODEL_BACKUP_S3_BUCKET
+        sync: false
+      - key: MODEL_BACKUP_S3_ACCESS_KEY_ID
+        sync: false
+      - key: MODEL_BACKUP_S3_SECRET_ACCESS_KEY
         sync: false
       # The settings the batch jobs read that the scanner also carries, kept identical: the
       # curated band is what training grades decision moments inside, and the retention values
@@ -334,7 +423,22 @@ services:
   - type: web
     runtime: static
     name: trenchscanner-web
-    buildCommand: npm install --include=dev && npm run build -w @trenchscanner/web
+    # See the api service's buildCommand comment above: vite and typescript are devDependencies.
+    buildCommand: npm ci --include=dev && npm run build -w @trenchscanner/web
+    # A backend-only merge leaves the dashboard as it is (see the api service's buildFilter). The
+    # web build reads only apps/web and the root manifests: it imports nothing from packages/, and
+    # its tsconfig extends nothing.
+    buildFilter:
+      paths:
+        - apps/web/**
+        - package.json
+        - package-lock.json
+        - .node-version
+        - render.yaml
+      ignoredPaths:
+        - "**/*.test.ts"
+        - "**/*.test.tsx"
+        - "**/*.md"
     staticPublishPath: apps/web/dist
     # The TokenSage page (apps/web/tokensage/index.html, unlisted for now) at /tokensage, with or
     # without the trailing slash.

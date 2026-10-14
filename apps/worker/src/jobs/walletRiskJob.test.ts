@@ -53,4 +53,53 @@ describe.skipIf(!dbAvailable)("wallet risk job", () => {
     expect(row!.score).toBeGreaterThan(0);
     expect(await prisma.walletRisk.findUnique({ where: { wallet: once } })).toBeNull();
   });
+
+  it("rewrites only rows whose figures changed, and deletes wallets that left the set", async () => {
+    const dumper = `${TAG}-dumper`;
+    const gone = `${TAG}-gone`;
+    // A stale row from an earlier rebuild, for a wallet no longer on any tape.
+    await prisma.walletRisk.create({
+      data: {
+        wallet: gone,
+        score: 50,
+        appearances: 2,
+        dumps: 0,
+        fastExits: 0,
+        snipes: 0,
+        solIn: 0,
+        solOut: 0,
+        lastSeenAt: new Date(),
+        computedAt: new Date(0),
+      },
+    });
+    const first = await runWalletRiskJob({ now: () => Date.parse("2026-10-14T10:00:00Z") });
+    expect(first.removed).toBeGreaterThanOrEqual(1);
+    expect(await prisma.walletRisk.findUnique({ where: { wallet: gone } })).toBeNull();
+    const before = await prisma.walletRisk.findUnique({ where: { wallet: dumper } });
+
+    // Nothing changed on the tapes: the second run writes nothing and keeps each row as it was.
+    const second = await runWalletRiskJob({ now: () => Date.parse("2026-10-14T11:00:00Z") });
+    expect(second).toMatchObject({ written: 0, removed: 0, wallets: first.wallets });
+    expect(await prisma.walletRisk.findUnique({ where: { wallet: dumper } })).toEqual(before);
+
+    // One more coin for the dumper: its row is rewritten, stamped with that run.
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-4` } });
+    await prisma.tokenTradeTape.create({
+      data: {
+        tokenId: token.id,
+        anchorAt: new Date(),
+        reason: "called",
+        status: "done",
+        windowEnd: new Date(),
+      },
+    });
+    await prisma.tokenWalletActivity.create({
+      data: { tokenId: token.id, wallet: dumper, buys: 1, solIn: 1, boughtPct: 4, dumpedIntoStop: true },
+    });
+    const third = await runWalletRiskJob({ now: () => Date.parse("2026-10-14T12:00:00Z") });
+    expect(third.written).toBeGreaterThanOrEqual(1);
+    const after = await prisma.walletRisk.findUnique({ where: { wallet: dumper } });
+    expect(after).toMatchObject({ appearances: 4, dumps: 4, medianSupplyPct: 2.5 });
+    expect(after!.computedAt.toISOString()).toBe("2026-10-14T12:00:00.000Z");
+  });
 });

@@ -7,6 +7,7 @@ import {
   RISKY_WALLET_SCORE,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
+import { replaceRows, type ReplaceRowsSpec } from "./replaceRows.js";
 
 const logger = createLogger("wallet-risk");
 
@@ -17,7 +18,9 @@ const logger = createLogger("wallet-risk");
  * what keeps a score the scan reads at a decision from carrying that coin's own result.
  *
  * Wallets seen in fewer than MIN_APPEARANCES coins are left out (most wallets; their score would
- * be the prior). The table is replaced whole, in one transaction.
+ * be the prior). The table is brought to the new set in one transaction, writing only the rows
+ * whose figures changed (replaceRows.ts): computedAt is the run that last changed a row, and the
+ * time of the last rebuild is the job's heartbeat (readers show the later of the two).
  *
  * The win side (user ask 2026-10-13): a coin counts as a win when its reference row (the tape's
  * outcome) hit 2x within 15 minutes and was not disqualified; an early win is one the wallet
@@ -27,7 +30,31 @@ const logger = createLogger("wallet-risk");
  */
 
 const MIN_APPEARANCES = 2;
-const INSERT_CHUNK = 5_000;
+
+const WALLET_RISK_TABLE: ReplaceRowsSpec = {
+  table: "WalletRisk",
+  key: "wallet",
+  columns: [
+    { name: "wallet", type: "text" },
+    { name: "score", type: "double precision" },
+    { name: "appearances", type: "integer" },
+    { name: "dumps", type: "integer" },
+    { name: "fastExits", type: "integer" },
+    { name: "snipes", type: "integer" },
+    { name: "wins", type: "integer" },
+    { name: "earlyWins", type: "integer" },
+    { name: "winScore", type: "double precision" },
+    { name: "dumper", type: "boolean" },
+    { name: "winner", type: "boolean" },
+    { name: "sniper", type: "boolean" },
+    { name: "medianSupplyPct", type: "double precision" },
+    { name: "solIn", type: "double precision" },
+    { name: "solOut", type: "double precision" },
+    { name: "lastSeenAt", type: "timestamp(3)" },
+    { name: "computedAt", type: "timestamp(3)" },
+  ],
+  stampColumns: ["computedAt"],
+};
 
 interface Agg {
   wallet: string;
@@ -114,18 +141,14 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
     };
   });
 
-  await prisma.$transaction(
-    async (tx) => {
-      await tx.walletRisk.deleteMany({});
-      for (let i = 0; i < data.length; i += INSERT_CHUNK) {
-        await tx.walletRisk.createMany({ data: data.slice(i, i + INSERT_CHUNK) });
-      }
-    },
-    { timeout: 120_000 },
-  );
+  const { written, deleted } = await prisma.$transaction((tx) => replaceRows(tx, WALLET_RISK_TABLE, data), {
+    timeout: 120_000,
+  });
 
   const meta: JobRunMeta = {
     wallets: data.length,
+    written,
+    removed: deleted,
     risky: data.filter((d) => d.score >= RISKY_WALLET_SCORE).length,
     dumpers: data.filter((d) => d.dumper).length,
     winners: data.filter((d) => d.winner).length,

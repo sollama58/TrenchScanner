@@ -23,9 +23,9 @@ import { MATCH_OUTCOME_SELECT, currentMarketCap, matchOutcome } from "./routes/m
  * How far before a send the alert behind it can be: the dispatcher steps over alerts older than
  * MAX_ALERT_AGE_MS, plus slack for the commit wait and the pass itself.
  */
-const ALERT_LOOKBACK_MS = MAX_ALERT_AGE_MS + 2 * 60_000;
+export const ALERT_LOOKBACK_MS = MAX_ALERT_AGE_MS + 2 * 60_000;
 /** The chat was sent the alert after it was raised; a little slack for clocks. */
-const ALERT_LOOKAHEAD_MS = 5_000;
+export const ALERT_LOOKAHEAD_MS = 5_000;
 /**
  * The bot has kept what each chat was sent since this (migration 20261010213000), so a window
  * reaching before it counts only what came after.

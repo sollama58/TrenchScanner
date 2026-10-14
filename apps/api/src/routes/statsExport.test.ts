@@ -233,6 +233,9 @@ const WINDOW = `since=${at(-1).toISOString()}&until=${at(600).toISOString()}`;
 describe.skipIf(!dbAvailable)("GET /stats/export", () => {
   let app: FastifyInstance;
   let tokenId: string;
+  let userId: string;
+  const chatIds: string[] = [];
+  let alertId: string;
   const outcomeIds: string[] = [];
 
   async function get(query: string) {
@@ -247,7 +250,20 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
   beforeAll(async () => {
     app = await buildServer({ ...loadEnv(), STATS_API_TOKEN: TOKEN });
     const token = await prisma.token.create({
-      data: { mintAddress: `export-test-${Date.now()}`, symbol: "EXP", firstSeenAt: BASE },
+      data: {
+        mintAddress: `export-test-${Date.now()}`,
+        symbol: "EXP",
+        firstSeenAt: BASE,
+        // The screen rejected it at minute 2; the hour after peaked at minute 20.
+        screenRejectedAt: at(2),
+        screenRejectedPriceUsd: 1,
+        screenRejectedMcapUsd: 50_000,
+        rejectPeak60mPriceUsd: 3,
+        rejectPeak60mMcapUsd: 150_000,
+        rejectPeak60mAt: at(20),
+        rejectLow60mPriceUsd: 0.5,
+        rejectLow60mMcapUsd: 25_000,
+      },
     });
     tokenId = token.id;
     // Three rows sharing one anchor time, so paging has to break ties on id; one more an hour on.
@@ -286,21 +302,60 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
         data: { tokenId, takenAt: at(minute), priceUsd: price, marketCapUsd: price * 50_000 },
       });
     }
-    await prisma.curatedAlert.create({
-      data: {
-        tokenId,
-        candidateOutcomeId: outcomeIds[0],
-        createdAt: at(0),
-        source: "heuristic-v1",
-        confidence: 70,
-        reasons: ["volume, rising", 'said "hi"'],
-        anchorPriceUsd: 1,
-        anchorMcapUsd: 50_000,
-      },
-    });
+    alertId = (
+      await prisma.curatedAlert.create({
+        data: {
+          tokenId,
+          candidateOutcomeId: outcomeIds[0],
+          createdAt: at(0),
+          source: "heuristic-v1",
+          model: "rules",
+          modelName: "Rules",
+          confidence: 70,
+          reasons: ["volume, rising", 'said "hi"'],
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 50_000,
+        },
+      })
+    ).id;
+    for (const [slot, models] of [
+      [0, ["rules", "trees"]],
+      [360, ["blend"]],
+    ] as const) {
+      await prisma.topModelsPick.create({
+        data: { slotStart: at(slot), models: [...models], pickedAt: at(slot + 1) },
+      });
+    }
+    // Three chats sent the token: two a minute after the call (a tie on sentAt), and one long after,
+    // which no time window explains but whose send stored the call it carried.
+    userId = (await prisma.user.create({ data: { walletAddress: `export-test-wallet-${Date.now()}` } })).id;
+    const telegramIdBase = 9_000_000_000_000 + Date.now();
+    for (const [i, minute] of [
+      [0, 1],
+      [1, 1],
+      [2, 100],
+    ] as const) {
+      const chat = await prisma.telegramChat.create({
+        data: {
+          chatId: BigInt(telegramIdBase + i),
+          kind: "private",
+          title: "Someone Personal",
+          userId,
+          linkedByTelegramId: BigInt(telegramIdBase + i),
+          linkedByName: "someone",
+        },
+      });
+      chatIds.push(chat.id);
+      await prisma.telegramAlertSent.create({
+        data: { chatId: chat.id, tokenId, sentAt: at(minute), curatedAlertId: i === 2 ? alertId : null },
+      });
+    }
   });
 
   afterAll(async () => {
+    // Chats and their sent rows cascade with the user.
+    await prisma.user.delete({ where: { id: userId } });
+    await prisma.topModelsPick.deleteMany({ where: { slotStart: { gte: at(-1), lt: at(600) } } });
     await prisma.curatedAlert.deleteMany({ where: { tokenId } });
     await prisma.tokenSnapshot.deleteMany({ where: { tokenId } });
     await prisma.candidateOutcome.deleteMany({ where: { tokenId } });
@@ -343,6 +398,8 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
     const [header, row, extra] = text.split("\n");
     const cols = header!.split(",");
     expect(cols).toContain("f_mcapUsd");
+    // How long the scanner had been up when the row was banked (null on these fixture rows).
+    expect(cols).toContain("bootAgeSeconds");
     expect(row!.split(",")[cols.indexOf("f_buyRatio24h")]).toBe("0.6");
     expect(extra).toBe("");
   });
@@ -383,11 +440,24 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
     ]);
     // Nothing the screen reads changed between snapshots: one check entry.
     expect(rows[0].checks).toHaveLength(1);
+    // The rejected coin's hour after its first rejection rides on the token's record.
+    expect(rows[0]).toMatchObject({
+      screenRejectedAt: at(2).toISOString(),
+      screenRejectedPriceUsd: 1,
+      rejectPeak60mPriceUsd: 3,
+      rejectPeak60mMcapUsd: 150_000,
+      rejectPeak60mAt: at(20).toISOString(),
+      rejectLow60mPriceUsd: 0.5,
+      rejectLow60mMcapUsd: 25_000,
+    });
 
     const csv = (await get("dataset=screen&format=csv&pathMinutes=360")).text.trim().split("\n");
     expect(csv).toHaveLength(6);
     expect(csv[0]).toContain("tSec,priceUsd,marketCapUsd,passed");
     expect(csv[5]).toContain(",9000,4,200000,false,scan,");
+    const cols = csv[0]!.split(",");
+    expect(csv[1]!.split(",")[cols.indexOf("rejectPeak60mPriceUsd")]).toBe("3");
+    expect(csv[1]!.split(",")[cols.indexOf("screenRejectedAt")]).toBe(at(2).toISOString());
   });
 
   it("exports curated alerts with the token and quoted reasons", async () => {
@@ -397,5 +467,64 @@ describe.skipIf(!dbAvailable)("GET /stats/export", () => {
     expect(lines[1]).toContain('"volume, rising|said ""hi"""');
     const json = JSON.parse((await get("dataset=alerts")).text);
     expect(json).toMatchObject({ symbol: "EXP", candidateOutcomeId: outcomeIds[0] });
+  });
+
+  it("exports the stored Top Models pick per slot", async () => {
+    const rows = (await get("dataset=top-models")).text
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(rows).toEqual([
+      { slotStart: at(0).toISOString(), models: ["rules", "trees"], pickedAt: at(1).toISOString() },
+      { slotStart: at(360).toISOString(), models: ["blend"], pickedAt: at(361).toISOString() },
+    ]);
+    const csv = (await get("dataset=top-models&format=csv")).text.trim().split("\n");
+    expect(csv).toEqual([
+      "slotStart,models,pickedAt",
+      `${at(0).toISOString()},rules|trees,${at(1).toISOString()}`,
+      `${at(360).toISOString()},blend,${at(361).toISOString()}`,
+    ]);
+  });
+
+  it("exports what Telegram sent with the alert behind it, by token and chat row id only", async () => {
+    const rows = (await get("dataset=telegram-sent")).text
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(rows).toHaveLength(3);
+    for (const r of rows) {
+      // Nothing about the person: no Telegram ids, names, titles or user.
+      expect(Object.keys(r).sort()).toEqual([...csvColumns("telegram-sent")].sort());
+      expect(chatIds).toContain(r.chatId);
+    }
+    const byChat = new Map(rows.map((r) => [r.chatId, r]));
+    expect(byChat.get(chatIds[0]!)).toMatchObject({
+      sentAt: at(1).toISOString(),
+      chatKind: "private",
+      tokenId,
+      symbol: "EXP",
+      alertKind: "model",
+      curatedAlertId: alertId,
+      model: "rules",
+      modelName: "Rules",
+      matchId: null,
+    });
+    // The stored id wins over the time window.
+    expect(byChat.get(chatIds[2]!)).toMatchObject({
+      alertKind: "model",
+      curatedAlertId: alertId,
+      model: "rules",
+    });
+    expect(JSON.stringify(rows)).not.toContain("Someone Personal");
+
+    // Tied sends page on the chat id without skipping or repeating one.
+    const q = exportQuerySchema.parse({ dataset: "telegram-sent", format: "jsonl" });
+    let text = "";
+    for await (const chunk of exportChunks(q, at(-1), at(600), 1)) text += chunk;
+    const paged = text
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l).chatId as string);
+    expect(paged.sort()).toEqual([...chatIds].sort());
   });
 });
