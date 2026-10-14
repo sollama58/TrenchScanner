@@ -1080,7 +1080,9 @@ input[type="checkbox"] {
     var(--surface-2),
     color-mix(in srgb, var(--surface-2) 70%, var(--page))
   );
-  border: 1px solid var(--border);
+  /* The outline: a neutral grey (or the reader's pick) until the alert resolves, then green on a
+     pass and red on a fail unless Customize switches that off. */
+  border: 1.5px solid var(--card-outline, color-mix(in srgb, var(--ink) 30%, transparent));
   border-radius: 14px;
   padding: 14px 14px 12px;
   display: flex;
@@ -1093,25 +1095,13 @@ input[type="checkbox"] {
 }
 .card:hover {
   transform: translateY(-2px);
-  border-color: var(--border-strong);
   box-shadow: 0 16px 32px -20px rgba(0, 0, 0, 0.6);
 }
-.card::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 2px;
-  background: var(--axis);
-  opacity: 0.8;
+.cards:not([data-outline-result="off"]) .card.result-pass {
+  border-color: var(--good);
 }
-.card.tone-good::before {
-  background: linear-gradient(90deg, var(--good), transparent);
-}
-.card.tone-bad::before {
-  background: linear-gradient(90deg, var(--bad), transparent);
-}
-.card.tone-info::before {
-  display: none;
+.cards:not([data-outline-result="off"]) .card.result-fail {
+  border-color: var(--bad);
 }
 .card-head {
   display: flex;
@@ -3267,12 +3257,6 @@ button.small-btn {
 .pill-icon {
   padding: 3px 6px;
 }
-.card.src-mine {
-  border-left: 3px solid color-mix(in srgb, var(--series-1) 70%, transparent);
-}
-.card.src-model {
-  border-left: 3px solid color-mix(in srgb, var(--brand-a) 70%, transparent);
-}
 
 /* Model alerts on/off */
 .switch {
@@ -5089,10 +5073,6 @@ button.small-btn {
 .cards[data-avatar="large"] .avatar {
   width: 56px;
   height: 56px;
-}
-.cards[data-stripe="off"] .card.src-mine,
-.cards[data-stripe="off"] .card.src-model {
-  border-left: 1px solid var(--border);
 }
 @media (max-width: 640px) {
   .cards[data-width],

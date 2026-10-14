@@ -28,6 +28,18 @@ export function outcomeBadge(outcome: Outcome | null): { text: string; tone: str
 }
 
 /**
+ * Whether an alert passed or failed, for the card outline: a 2x inside the win window passes (the
+ * card turns green as soon as it hits, before the window closes); a stop-out or a miss fails, a late
+ * runner included, since it counts as a miss in the hit rate. Null while it is still grading or ungraded.
+ */
+export function outcomeResult(outcome: Outcome | null): "pass" | "fail" | null {
+  if (!outcome) return null;
+  if (outcome.status === "won" || (outcome.status === "watching" && outcome.hit2x)) return "pass";
+  if (outcome.status === "missed" || outcome.status === "disqualified") return "fail";
+  return null;
+}
+
+/**
  * A late runner: missed the 2x inside the win window, never fell 50% inside the label window, and
  * its run peak (curated calls are watched for a day) still reached 2x. Still a miss in the hit
  * rate; the badge just doesn't hide that it ran. The same test as the stats report's ranLater.

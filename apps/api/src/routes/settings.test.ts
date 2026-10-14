@@ -72,15 +72,31 @@ describe("parseFeedAppearance", () => {
       quickLinks: ["gmgn", "axiom"],
     });
     expect(parseFeedAppearance({ quickLinks: [] }).quickLinks).toEqual([]);
+    // The card outline is the theme's neutral until picked, and colors by result by default.
+    expect(parseFeedAppearance({})).toMatchObject({ outline: null, outlineResult: true });
+    expect(parseFeedAppearance({ outline: "#AABBCC", outlineResult: false })).toMatchObject({
+      outline: "#aabbcc",
+      outlineResult: false,
+    });
+    expect(parseFeedAppearance({ outline: "grey" }).outline).toBe(null);
     // The score tile and TokenSage button are hidden by default; a saved field list is kept as is.
     expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage"]);
     expect(parseFeedAppearance({ hidden: [] }).hidden).toEqual([]);
   });
 
   it("lets an older dashboard build save without the options added since", () => {
-    const { volume, scoreColor, reasons, quickLinks, ...older } = DEFAULT_FEED_APPEARANCE;
+    const { volume, scoreColor, reasons, quickLinks, outline, outlineResult, ...older } =
+      DEFAULT_FEED_APPEARANCE;
     const parsed = feedAppearanceSchema.safeParse(older);
-    expect(parsed.success && parsed.data).toEqual({ ...older, volume, scoreColor, reasons, quickLinks });
+    expect(parsed.success && parsed.data).toEqual({
+      ...older,
+      volume,
+      scoreColor,
+      reasons,
+      quickLinks,
+      outline,
+      outlineResult,
+    });
   });
 });
 

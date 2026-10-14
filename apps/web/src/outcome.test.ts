@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Card, Outcome } from "./api";
-import { matchOutcome, minutesLeftAt, outcomeAt, outcomeBadge, ranLater, stoppedThenRan } from "./outcome";
+import {
+  matchOutcome,
+  minutesLeftAt,
+  outcomeAt,
+  outcomeBadge,
+  outcomeResult,
+  ranLater,
+  stoppedThenRan,
+} from "./outcome";
 
 const MIN = 60_000;
 const now = Date.UTC(2026, 9, 5, 12, 0, 0);
@@ -51,6 +59,18 @@ describe("outcomeAt", () => {
   it("leaves settled verdicts alone", () => {
     const won = watching({ status: "won", hit2x: true, hitGoal: true, minutesLeft: null });
     expect(outcomeAt(won, at(90), now)).toBe(won);
+  });
+});
+
+describe("outcomeResult", () => {
+  it("passes on a 2x, fails on a miss or stop-out, and stays neutral while grading", () => {
+    expect(outcomeResult(null)).toBe(null);
+    expect(outcomeResult(watching())).toBe(null);
+    expect(outcomeResult(watching({ hit2x: true }))).toBe("pass");
+    expect(outcomeResult(watching({ status: "won", hit2x: true }))).toBe("pass");
+    expect(outcomeResult(watching({ status: "missed" }))).toBe("fail");
+    expect(outcomeResult(watching({ status: "disqualified", hit2x: true }))).toBe("fail");
+    expect(outcomeResult(watching({ status: "unknown" }))).toBe(null);
   });
 });
 

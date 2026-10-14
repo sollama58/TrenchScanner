@@ -67,7 +67,10 @@ export const feedAppearanceSchema = z
     textSize: z.number().int().min(85).max(125),
     corners: z.enum(["square", "rounded", "round"]),
     avatar: z.enum(["small", "normal", "large"]),
-    /** The colored edge saying whether a card came from your filter or a model. */
+    /**
+     * The retired colored left edge for your filter vs model calls (replaced by the card outline,
+     * 2026-10-14). Still sent by every dashboard build, so it stays accepted; nothing reads it.
+     */
     sourceStripe: z.boolean(),
     /** The "Learning from N graded moments" note under the feed. */
     learningNote: z.boolean(),
@@ -104,6 +107,10 @@ export const feedAppearanceSchema = z
     streamTab: z.boolean().default(false),
     /** The Lighthouse tab; off by default (the Live feed's Lighthouse button and #lighthouse still open it). */
     lighthouseTab: z.boolean().default(false),
+    /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
+    outline: color.default(null),
+    /** Turn the outline green on a pass and red on a fail once the alert resolves; on by default. */
+    outlineResult: z.boolean().default(true),
     /** Trading sites each card links to, in this order; Padre's Trading Terminal by default. */
     quickLinks: z
       .array(z.enum(QUICK_LINKS))
@@ -145,6 +152,8 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   narrativeNote: null,
   streamTab: false,
   lighthouseTab: false,
+  outline: null,
+  outlineResult: true,
   quickLinks: ["terminal"],
   // Off by default, both switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, and the TokenSage button (the token view keeps its own). An account that
