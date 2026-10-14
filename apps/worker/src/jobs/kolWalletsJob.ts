@@ -1,4 +1,10 @@
-import { prisma, createLogger, type KolEntry, type SolanaTrackerClient } from "@trenchscanner/core";
+import {
+  KOL_OVERRIDES,
+  prisma,
+  createLogger,
+  type KolEntry,
+  type SolanaTrackerClient,
+} from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 
 const logger = createLogger("kol-wallets");
@@ -11,6 +17,9 @@ const logger = createLogger("kol-wallets");
  * plan's 10,000 requests a month; the pause between pages keeps under its 3 a second. A wallet
  * that has gone unseen for STALE_AFTER_MS has dropped off the roster and is removed. A run that
  * reads nothing removes nothing, so an outage never empties the table.
+ *
+ * The hand-named KOLs (KOL_OVERRIDES) are written on every run, roster read or not, with their
+ * own name over the roster's, and never go stale. applyKolOverrides also runs ahead of each hourly side-wallet rebuild (index.ts).
  */
 
 const MAX_PAGES = 30;
@@ -37,17 +46,19 @@ export async function runKolWalletsJob(
   const kols = [...byWallet.values()];
   if (kols.length === 0) {
     logger.warn("KOL roster read came back empty; keeping the table as it is", { pages });
-    return { pages, kols: 0, removed: 0 };
+    const overrides = await applyKolOverrides(now);
+    return { pages, kols: 0, removed: 0, overrides };
   }
   await prisma.$transaction(
     kols.map((k) => {
+      const override = KOL_OVERRIDES.get(k.wallet);
       const row = {
-        name: k.name,
-        twitter: k.twitter,
+        name: override?.name ?? k.name,
+        twitter: override?.twitter ?? k.twitter,
         realizedPnlUsd: k.realizedPnlUsd,
         winRate: k.winRate,
         lastTradeAt: k.lastTradeAt,
-        source: "solanatracker",
+        source: override ? "manual" : "solanatracker",
         seenAt: now,
       };
       return prisma.kolWallet.upsert({
@@ -60,7 +71,34 @@ export async function runKolWalletsJob(
   const removed = await prisma.kolWallet.deleteMany({
     where: { seenAt: { lt: new Date(now.getTime() - STALE_AFTER_MS) } },
   });
-  const meta: JobRunMeta = { pages, kols: kols.length, removed: removed.count, complete: cursor === null };
+  const overrides = await applyKolOverrides(now);
+  const meta: JobRunMeta = {
+    pages,
+    kols: kols.length,
+    removed: removed.count,
+    overrides,
+    complete: cursor === null,
+  };
   logger.info("KOL roster refreshed", meta);
   return meta;
+}
+
+/**
+ * Writes the hand-named KOLs (KOL_OVERRIDES) into KolWallet: their name, and their X handle when
+ * given, over whatever the roster says. Their roster stats, if any, are left as they are.
+ */
+export async function applyKolOverrides(now = new Date()): Promise<number> {
+  if (KOL_OVERRIDES.size === 0) return 0;
+  await prisma.$transaction(
+    [...KOL_OVERRIDES].map(([wallet, o]) => {
+      const row = {
+        name: o.name,
+        ...(o.twitter !== undefined ? { twitter: o.twitter } : {}),
+        source: "manual",
+        seenAt: now,
+      };
+      return prisma.kolWallet.upsert({ where: { wallet }, create: { wallet, ...row }, update: row });
+    }),
+  );
+  return KOL_OVERRIDES.size;
 }

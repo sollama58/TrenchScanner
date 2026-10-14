@@ -56,7 +56,7 @@ import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
-import { runKolWalletsJob } from "./jobs/kolWalletsJob.js";
+import { applyKolOverrides, runKolWalletsJob } from "./jobs/kolWalletsJob.js";
 import { trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
@@ -390,11 +390,18 @@ async function main() {
     }),
   );
   // The Side Wallet Checker's lists (Utilities tab), rebuilt from the trade tape
-  // (kolSideWalletsJob.ts). Immediate on boot.
+  // (kolSideWalletsJob.ts). Immediate on boot. The hand-named KOLs (KOL_OVERRIDES) are written
+  // first, so they are on the roster even without a Solana Tracker key or before its daily read.
   schedule("kol-side-wallets", () =>
     scheduleInterval(
       "kol-side-wallets",
-      () => withJobLock("kol-side-wallets", () => runKolSideWalletsJob()),
+      () =>
+        withJobLock("kol-side-wallets", async () => {
+          await applyKolOverrides().catch((err: unknown) =>
+            logger.warn("KOL overrides not written", { error: String(err) }),
+          );
+          return runKolSideWalletsJob();
+        }),
       60,
       { deadlineMinutes: 30 },
     ),

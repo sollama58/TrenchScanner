@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { prisma, type KolEntry, type KolPage } from "@trenchscanner/core";
+import { KOL_OVERRIDES, prisma, type KolEntry, type KolPage } from "@trenchscanner/core";
 import { runKolWalletsJob } from "./kolWalletsJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -24,6 +24,7 @@ describe.skipIf(!dbAvailable)("kol-wallets job", () => {
   afterAll(async () => {
     if (!dbAvailable) return;
     await prisma.kolWallet.deleteMany({ where: { wallet: { startsWith: `Ko1${tag}` } } });
+    await prisma.kolWallet.deleteMany({ where: { wallet: { in: [...KOL_OVERRIDES.keys()] } } });
   });
 
   it("reads every page into the table and drops wallets gone from the roster for a week", async () => {
@@ -59,5 +60,22 @@ describe.skipIf(!dbAvailable)("kol-wallets job", () => {
     );
     expect(meta).toMatchObject({ kols: 0, removed: 0 });
     expect(await prisma.kolWallet.count({ where: { wallet: { startsWith: `Ko1${tag}` } } })).toBe(2);
+  });
+
+  it("names the hand-named KOLs over the roster and never drops them", async () => {
+    const [wallet, override] = [...KOL_OVERRIDES][0]!;
+    await runKolWalletsJob(
+      { kolPage: async () => ({ kols: [kol(wallet, "Broken")], nextCursor: null }) },
+      { now: () => Date.parse("2026-12-01T00:00:00Z"), pauseMs: 0 },
+    );
+    let row = await prisma.kolWallet.findUnique({ where: { wallet } });
+    expect(row).toMatchObject({ name: override.name, source: "manual", realizedPnlUsd: 1_000 });
+    // Gone from the roster a month later: still there, still named.
+    await runKolWalletsJob(
+      { kolPage: async () => ({ kols: [kol(w("c"), "Gamma")], nextCursor: null }) },
+      { now: () => Date.parse("2027-01-01T00:00:00Z"), pauseMs: 0 },
+    );
+    row = await prisma.kolWallet.findUnique({ where: { wallet } });
+    expect(row?.name).toBe(override.name);
   });
 });
