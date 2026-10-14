@@ -19,7 +19,7 @@ export interface PossibleSide {
   pct: number;
   shared: number;
   kolCoins: number;
-  /** The span the match was read over: 24, 48 or 72 hours (36 on labels from before 2026-10-14); 0 on a funded-only entry. */
+  /** The span the match was read over: 24, 48 or 72 hours; 0 on a funded-only entry. */
   hours: number;
   /** The KOL funded this wallet; then pct/shared/kolCoins are its trade match, or 0 when it has none. */
   funded?: boolean;

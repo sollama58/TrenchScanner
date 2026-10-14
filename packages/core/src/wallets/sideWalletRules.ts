@@ -50,6 +50,14 @@ export type SideTierHours = (typeof POSSIBLE_SIDE_TIERS)[number]["hours"];
 /** A possible-side label stays this many days past the last hourly run the wallet met a tier. */
 export const POSSIBLE_SIDE_HOLD_DAYS = 90;
 
+/**
+ * The version of the label rules above (KolPossibleSide.rulesVersion). The hold keeps only labels
+ * earned under these rules: one stored under an older version is dropped on the next run and comes
+ * back only if the wallet qualifies again (user ask 2026-10-14: labels from the old cutoffs lingered).
+ * Bump it whenever POSSIBLE_SIDE_TIERS or the bot cutoffs change. 1: the 2026-10-14 cutoffs.
+ */
+export const POSSIBLE_SIDE_RULES_VERSION = 1;
+
 /** The cutoffs as the API serves them to the dashboard. */
 export interface SideWalletRules {
   gapMinutes: number;
