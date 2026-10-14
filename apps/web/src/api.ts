@@ -796,8 +796,11 @@ export interface ModelInsights {
     mode: string;
     buys: GradedRates;
     allReviewed: GradedRates;
-    /** Its buys' 2x rate minus the rate of every pick it reviewed, in points. */
+    /** Its buys' 2x rate minus its passes' (no-buys), in points, one review per coin. */
     liftPts: number | null;
+    /** The lift's 95% interval, in points (absent from older API builds). The gate opens only above 0. */
+    liftLowPts?: number | null;
+    liftHighPts?: number | null;
     /** Mean squared error of its 2x odds (0.25 = a coin flip), and of the default model's own. */
     brier: number | null;
     curatorBrier: number | null;

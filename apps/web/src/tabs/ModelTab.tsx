@@ -2234,7 +2234,7 @@ const OUTCOME_TEXT: Record<ModelInsights["recentAiReviews"][number]["outcome"], 
   unknown: "–",
 };
 
-/** The AI reviewer, kept small and collapsed: it reviews the default feed's calls and is a later focus. */
+/** The AI reviewer, kept small and collapsed: it reviews the high-conviction calls and is a later focus. */
 function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
   const t = data.targets;
   const buys = data.aiReviewer.buys;
@@ -2270,9 +2270,10 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
           </span>
         </summary>
         <p className="muted small">
-          A second opinion from Claude on each call the default feed makes. In shadow mode it records a buy /
-          no-buy without blocking anything; in gate mode it holds back its no-buys once{" "}
-          {data.curator.aiReviewMinGradedBuys} of its buys are graded and meet both targets.
+          A second opinion from Claude on each high-conviction call, from any model, once per coin. In shadow
+          mode it records a buy / no-buy without blocking anything; in gate mode it holds back its no-buys
+          only once {data.curator.aiReviewMinGradedBuys} of its buys under the current playbook are graded and
+          their 2x rate beats its passes' with the lift's 95% range above 0.
           {!running &&
             " It is off: it runs only with an API key set, and it has made no calls in this window."}
         </p>
@@ -2299,12 +2300,21 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
           </table>
         </div>
         <p className="muted small">
-          Lift over the picks it reviewed:{" "}
+          Lift of its buys over its passes:{" "}
           <strong>
             {data.aiReviewer.liftPts === null
               ? "–"
               : `${data.aiReviewer.liftPts > 0 ? "+" : ""}${data.aiReviewer.liftPts} pts`}
           </strong>
+          {data.aiReviewer.liftLowPts != null && data.aiReviewer.liftHighPts != null && (
+            <span
+              className={data.aiReviewer.liftLowPts > 0 ? "up" : undefined}
+              title="95% range of the lift. The gate opens only when the low end is above 0."
+            >
+              {" "}
+              (95% range {signedPts(data.aiReviewer.liftLowPts)} to {signedPts(data.aiReviewer.liftHighPts)})
+            </span>
+          )}
           {" · "}odds error (Brier, lower is better, 0.25 is a coin):{" "}
           <strong>{brier(data.aiReviewer.brier)}</strong> vs the model's own{" "}
           <strong>{brier(data.aiReviewer.curatorBrier)}</strong>
@@ -2498,4 +2508,9 @@ function PipelineStage({
       <ArrowRightIcon size={16} className="stage-arrow" />
     </li>
   );
+}
+
+/** "+1.2" / "-3.4" points, for the reviewer's lift range. */
+function signedPts(v: number): string {
+  return `${v > 0 ? "+" : ""}${v.toFixed(1)}`;
 }

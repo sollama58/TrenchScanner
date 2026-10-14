@@ -793,6 +793,8 @@ interface HitRates {
     buys: Rated;
     allReviewed: Rated;
     liftPts: number | null;
+    liftLowPts?: number | null;
+    liftHighPts?: number | null;
     brier: number | null;
     curatorBrier: number | null;
   };
@@ -1532,10 +1534,10 @@ function Ai() {
               <p className="small muted">
                 Last 30 days: buys hit 2x {pct(hits.data.aiReviewer.buys.hitRate2xPct, 1)} of{" "}
                 {hits.data.aiReviewer.buys.graded} graded, against{" "}
-                {pct(hits.data.aiReviewer.allReviewed.hitRate2xPct, 1)} for everything it reviewed (lift{" "}
-                {hits.data.aiReviewer.liftPts?.toFixed(1) ?? "–"} pts). Brier{" "}
-                {hits.data.aiReviewer.brier?.toFixed(3) ?? "–"} vs the model's{" "}
-                {hits.data.aiReviewer.curatorBrier?.toFixed(3) ?? "–"} (lower is better).
+                {pct(hits.data.aiReviewer.allReviewed.hitRate2xPct, 1)} for everything it reviewed (lift over
+                its passes {hits.data.aiReviewer.liftPts?.toFixed(1) ?? "–"} pts
+                {liftRange(hits.data.aiReviewer)}). Brier {hits.data.aiReviewer.brier?.toFixed(3) ?? "–"} vs
+                the model's {hits.data.aiReviewer.curatorBrier?.toFixed(3) ?? "–"} (lower is better).
               </p>
             )}
           </Panel>
@@ -1829,4 +1831,11 @@ function Config() {
       </Load>
     </Panel>
   );
+}
+
+/** ", 95% range a to b" for the reviewer's lift, or nothing when the API sent no interval. */
+function liftRange(r: { liftLowPts?: number | null; liftHighPts?: number | null }): string {
+  return r.liftLowPts == null || r.liftHighPts == null
+    ? ""
+    : `, 95% range ${r.liftLowPts.toFixed(1)} to ${r.liftHighPts.toFixed(1)}`;
 }
