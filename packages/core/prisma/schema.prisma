@@ -1193,8 +1193,9 @@ model Match {
   // Deliberately keyed off the recorded peak rather than off "this run saw a new high": a token
   // that 5x'd and then dumped has to stay eligible, and it is by definition never going to set
   // another high. Dated to peakMcapAt (when the qualifying peak was actually seen), not to the
-  // run that noticed. Marks this match as eligible for the public Leaderboard; indexed so that
-  // query never scans every Match - see apps/api/src/routes/leaderboard.ts.
+  // run that noticed. Marks this match as eligible for the public Leaderboard - see
+  // apps/api/src/routes/leaderboard.ts. Not indexed: the board's DISTINCT ON read never used the
+  // index, which made every peak update non-HOT (dropped 2026-10-14).
   hitHundredPctAt DateTime?
 
   // The curated feed's verdict, applied to this alert: graded by the CandidateOutcome row
@@ -1231,7 +1232,6 @@ model Match {
   // per deleted row without these.
   @@index([filterId])
   @@index([snapshotId])
-  @@index([hitHundredPctAt, peakReturnPct])
   // The match-peaks pass repairs rows by "peak recorded in the last few minutes" every cycle, and
   // the peak passes pick matches by matchedAt; both scanned all of Match, which is never pruned.
   @@index([peakMcapAt])
