@@ -183,6 +183,20 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
     expect(await prisma.kolSideWallets.findUnique({ where: { wallet: kol } })).toEqual(row);
   });
 
+  it("folds a Known Side into its KOL's row: no entry of its own, each coin counted once", async () => {
+    const now = Date.now();
+    const kol = `${TAG}-kol`;
+    const knownSide = `${TAG}-kol2`;
+    await prisma.kolWallet.update({ where: { wallet: knownSide }, data: { mainWallet: kol } });
+    await runKolSideWalletsJob({ now: () => now });
+    expect(await prisma.kolSideWallets.findUnique({ where: { wallet: knownSide } })).toBeNull();
+    const row = await prisma.kolSideWallets.findUnique({ where: { wallet: kol } });
+    expect(row).toMatchObject({ coins24h: 1, coins7d: 1, coins30d: 31 });
+    const sides = row!.sides as unknown as Record<string, SideWallet[]>;
+    expect(sides["30d"]!.map((s) => s.wallet)).toEqual([`${TAG}-side`]);
+    expect(await prisma.kolPossibleSide.count({ where: { kolWallet: knownSide } })).toBe(0);
+  });
+
   it("keeps a possible-side label 90 days past the last run it qualified, then drops it", async () => {
     const now = Date.now();
     const kol = `${TAG}-holdkol`;

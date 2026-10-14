@@ -1,4 +1,5 @@
 import {
+  Prisma,
   prisma,
   createLogger,
   KNOWN_EXCHANGE_WALLETS,
@@ -167,6 +168,20 @@ export function isBot(coins: number, totalCoins: number): boolean {
   return coins >= SIDE_BOT_MIN_COINS && coins > totalCoins * SIDE_BOT_SHARE;
 }
 
+/**
+ * Each KOL's first buy of each tracked coin since `since`, its Known Sides' buys folded into the
+ * KOL's main wallet (KolWallet.mainWallet): a Known Side is never a KOL of its own here.
+ */
+function kolBuys(since: Date): Prisma.Sql {
+  return Prisma.sql`
+    SELECT a."tokenId", COALESCE(k."mainWallet", a."wallet") AS "wallet", MIN(a."firstBuyAt") AS "firstBuyAt"
+    FROM "TokenWalletActivity" a
+    JOIN "KolWallet" k ON k."wallet" = a."wallet"
+    JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
+    WHERE a."buys" > 0 AND a."firstBuyAt" >= ${since}
+    GROUP BY a."tokenId", COALESCE(k."mainWallet", a."wallet")`;
+}
+
 export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): Promise<JobRunMeta> {
   const now = new Date((opts.now ?? Date.now)());
   const since = Object.fromEntries(
@@ -177,21 +192,20 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   const since48 = new Date(now.getTime() - 48 * HOUR_MS);
   const since72 = new Date(now.getTime() - 72 * HOUR_MS);
 
-  // Each KOL's coins in each window.
+  // Each KOL's coins in each window. A Known Side's buys are its KOL's (KolWallet.mainWallet,
+  // core's KOL_MAINS): one KOL, one row, each coin counted once at the KOL's first buy of it.
   const kols = await prisma.$queryRaw<
     { wallet: string; c24: bigint; c48: bigint; c72: bigint; c7: bigint; c30: bigint }[]
   >`
-    SELECT a."wallet",
-           COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since["24h"]}) AS c24,
-           COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since48}) AS c48,
-           COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since72}) AS c72,
-           COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since["7d"]}) AS c7,
+    WITH kol AS (${kolBuys(since["30d"])})
+    SELECT kol."wallet",
+           COUNT(*) FILTER (WHERE kol."firstBuyAt" >= ${since["24h"]}) AS c24,
+           COUNT(*) FILTER (WHERE kol."firstBuyAt" >= ${since48}) AS c48,
+           COUNT(*) FILTER (WHERE kol."firstBuyAt" >= ${since72}) AS c72,
+           COUNT(*) FILTER (WHERE kol."firstBuyAt" >= ${since["7d"]}) AS c7,
            COUNT(*) AS c30
-    FROM "TokenWalletActivity" a
-    JOIN "KolWallet" k ON k."wallet" = a."wallet"
-    JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
-    WHERE a."buys" > 0 AND a."firstBuyAt" >= ${since["30d"]}
-    GROUP BY a."wallet"`;
+    FROM kol
+    GROUP BY kol."wallet"`;
 
   // Every (KOL, wallet) pair that bought the same coins within the gap, counted per window.
   const pairs = await prisma.$queryRaw<
@@ -208,13 +222,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
       g30: number | null;
     }[]
   >`
-    WITH kol AS (
-      SELECT a."tokenId", a."wallet", a."firstBuyAt"
-      FROM "TokenWalletActivity" a
-      JOIN "KolWallet" k ON k."wallet" = a."wallet"
-      JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
-      WHERE a."buys" > 0 AND a."firstBuyAt" >= ${since["30d"]}
-    ), pair AS (
+    WITH kol AS (${kolBuys(since["30d"])}), pair AS (
       SELECT kol."wallet" AS kol, o."wallet" AS side, kol."firstBuyAt" AS at,
              EXTRACT(EPOCH FROM (o."firstBuyAt" - kol."firstBuyAt")) AS gap
       FROM kol
@@ -358,6 +366,10 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
           ],
         },
       });
+      // A Known Side is no KOL of its own: labels it earned as one go (its KOL's own carry on).
+      await tx.kolPossibleSide.deleteMany({
+        where: { kolWallet: { in: await knownSideWallets(tx) } },
+      });
       // A wallet now read as a bot or a likely bot loses the labels it held, hold or not.
       const unlabeled = [...new Set([...bots, ...botLike])];
       if (unlabeled.length) await tx.kolPossibleSide.deleteMany({ where: { wallet: { in: unlabeled } } });
@@ -386,4 +398,12 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   };
   logger.info("kol side wallets rebuilt", meta);
   return meta;
+}
+
+async function knownSideWallets(tx: Prisma.TransactionClient): Promise<string[]> {
+  const rows = await tx.kolWallet.findMany({
+    where: { mainWallet: { not: null } },
+    select: { wallet: true },
+  });
+  return rows.map((r) => r.wallet);
 }

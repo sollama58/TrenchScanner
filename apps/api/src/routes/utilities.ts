@@ -293,13 +293,16 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
    * of what is stored: no outside calls.
    */
   app.get("/side-wallets", async (_request, reply) => {
-    const rows = await prisma.kolSideWallets.findMany({
+    const stored = await prisma.kolSideWallets.findMany({
       where: { coins30d: { gt: 0 } },
       orderBy: [{ coins30d: "desc" }, { coins7d: "desc" }, { wallet: "asc" }],
       take: SIDE_LEADERBOARD_MAX,
       select: { wallet: true, coins24h: true, coins7d: true, coins30d: true, sides: true, computedAt: true },
     });
-    const names = await kolNames(rows.map((r) => r.wallet));
+    const names = await kolNames(stored.map((r) => r.wallet));
+    // A Known Side's buys count on its KOL's own row (kolSideWalletsJob.ts): it is never a second
+    // entry, even in a row left from before it was sorted as one.
+    const rows = stored.filter((r) => !names.get(r.wallet)?.knownSideOf);
     reply.header("Cache-Control", "private, max-age=300");
     return {
       // The last rebuild: the job rewrites only the KOLs whose lists changed.
