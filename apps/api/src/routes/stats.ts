@@ -445,8 +445,8 @@ export async function registerStatsRoutes(
 
   /**
    * Row-level data for offline research: training rows (with features, labels and the stored
-   * price aggregates), their snapshot price paths, curated alerts, shadow picks and AI reviews,
-   * for a date range, as gzipped JSONL or CSV. Read-only and streamed a page at a time, so a
+   * price aggregates), their snapshot price paths, curated alerts, shadow picks, AI reviews, the
+   * Top Models pick history and what Telegram sent, for a date range, as gzipped JSONL or CSV. Read-only and streamed a page at a time, so a
    * 60-day pull never sits in memory. See statsExport.ts for the datasets and their columns.
    */
   app.get(

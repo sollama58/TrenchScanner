@@ -457,6 +457,23 @@ model Token {
   /// selectWatchlist skips it; a token someone has open is still priced for its card.
   ignoredAt   DateTime?
 
+  /// Measurement only (notes/full-audit-2026-10-14 lane 3, M9): what a coin the safety screen
+  /// rejected did in the 60 minutes after its first rejection, so a cut can be judged on our own
+  /// data. Rejected coins are snapshotted only every few minutes and only while in band, so their
+  /// paths were too thin to grade. Folded in from the watchlist refresh the scan already runs
+  /// (apps/worker/src/jobs/rejectExtremes.ts), no extra upstream reads: the window is covered only
+  /// while the coin stays on the watchlist (a Mayhem coin leaves it at once). Price is the
+  /// extremes' criterion; each cap is the one read alongside that price. Null on coins never
+  /// rejected, and on rejections before 2026-10-14.
+  screenRejectedAt       DateTime?
+  screenRejectedPriceUsd Float?
+  screenRejectedMcapUsd  Float?
+  rejectPeak60mPriceUsd  Float?
+  rejectPeak60mMcapUsd   Float?
+  rejectPeak60mAt        DateTime?
+  rejectLow60mPriceUsd   Float?
+  rejectLow60mMcapUsd    Float?
+
   snapshots              TokenSnapshot[]
   matches                Match[]
   candidateOutcomes      CandidateOutcome[]
@@ -847,6 +864,10 @@ model CandidateOutcome {
   /// The heuristic composite score at anchor. Also inside `features`; duplicated as a real
   /// column so stats queries can aggregate on it without unpacking JSON.
   score    Float?
+  /// Seconds the scanner process had been up when the row was banked (process.uptime()), so rows
+  /// banked just after a deploy restart - empty in-memory books, sniper and launch-buyer reads
+  /// not yet back - can be measured apart (audit 2026-10-14, lane 7 F2). Null before 2026-10-14.
+  bootAgeSeconds Int?
 
   // ---- Watch state (driven by apps/worker/src/jobs/candidateOutcomeJob.ts) ----
   /// When the watcher should next price-check this row. Advances every tick whether or not
