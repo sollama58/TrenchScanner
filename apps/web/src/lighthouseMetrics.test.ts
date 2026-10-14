@@ -81,7 +81,7 @@ const history = (): LighthouseHistory => ({
       {
         at: "2026-10-06T00:00:00.000Z",
         rows: [
-          { label: "animal", count: 6, alerts: 6, graded: 6, won2x: 3, won4x: 0, won10x: 0 },
+          { label: "animal", count: 6, alerts: 30, graded: 30, won2x: 15, won4x: 0, won10x: 0 },
           { label: "tech", count: 2, alerts: 2, graded: 2, won2x: 2, won4x: 0, won10x: 0 },
           { label: "other", count: 2, alerts: 0, graded: 0, won2x: 0, won4x: 0, won10x: 0 },
         ],
@@ -162,7 +162,7 @@ describe("lighthouse metrics", () => {
     h.labels.buckets[1]!.described = 0;
     expect(breakdownSeries(h, "share")[0]!.values).toEqual([15, null]);
     const rates = breakdownSeries(h, "rate2x");
-    // tech has 2 graded calls: too few for a verdict; other has none and so no series.
+    // tech has 2 graded calls: under the 30-call floor, too few for a verdict; other has none and so no series.
     expect(rates.map((s) => [s.id, s.values])).toEqual([
       ["animal", [50, null]],
       ["tech", [null, null]],

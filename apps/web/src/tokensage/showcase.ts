@@ -2,6 +2,7 @@
  * The /tokensage page's data (GET /guest/tokensage, apps/api/src/tokenSageShowcase.ts) and the
  * small pure helpers that turn it into what the page draws.
  */
+import { MIN_GRADED_FOR_RATE } from "../rates";
 
 export interface ShowcaseLabel {
   label: string;
@@ -104,8 +105,11 @@ export function share(part: number, whole: number, digits = 0): string {
   return whole > 0 ? `${((part / whole) * 100).toFixed(digits)}%` : "–";
 }
 
-/** Fewer graded calls than this and a label's 2x rate is shown as "early", not as a number. */
-export const MIN_GRADED = 20;
+/**
+ * Fewer graded calls than this and a label's 2x rate is shown as "early", not as a number: the
+ * dashboard's one sample-size floor (rates.ts).
+ */
+export const MIN_GRADED = MIN_GRADED_FOR_RATE;
 
 /** A label's 2x rate on graded model calls, null below MIN_GRADED. */
 export function hitRate(l: Pick<ShowcaseLabel, "graded" | "won2x">, min = MIN_GRADED): number | null {

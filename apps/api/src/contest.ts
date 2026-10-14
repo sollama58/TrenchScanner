@@ -11,6 +11,8 @@ import {
   TOP_MODELS_MIN_GRADED,
   TOP_MODELS_REFRESH_MINUTES,
   TOP_MODELS_WINDOW_HOURS,
+  topModelsWindow,
+  CURRENT_LABEL_RULE,
   TOP_MODELS_RANK_WINDOW_HOURS,
   TOP_MODELS_RANK_MIN_GRADED,
   sittingOutCombiners,
@@ -381,7 +383,15 @@ export interface Leaderboard {
     rankWindowHours: number;
     rankMinGraded: number;
     rankConfidencePct: number;
+    /** The 24h window the current slot's top models and "best" were read on (topModelsWindow). */
+    window: { since: Date; until: Date };
   };
+  /**
+   * The default feed's own pooled record over the board's window: every call the stored top-model
+   * picks (TopModelsPick) delivered while they held their slot, each token once. Null when no slot
+   * in the window had a stored pick.
+   */
+  defaultFeed: DefaultFeedRecord | null;
   /** When and why the default was last (re-)chosen; null before the first pick. */
   champion: {
     id: string;
@@ -424,6 +434,90 @@ export interface EvolutionEvent {
 
 const EVOLUTION_HISTORY_LIMIT = 20;
 
+/** What the default feed (the stored top-model picks, slot by slot) delivered over a window. */
+export interface DefaultFeedRecord {
+  /** The first slot in the window with a stored pick: later than the window's start on a young record. */
+  since: Date;
+  /** Calls, each token once (its first call while a picked model held the slot). */
+  calls: number;
+  /** Graded and clean 2x wins, on the alert's own grade (rule 3 and up, as the board's records). */
+  graded: number;
+  wins: number;
+  /** The same on rule-4 rows alone (CURRENT_LABEL_RULE: the alert priced from a fresh quote). */
+  gradedRule4: number;
+  winsRule4: number;
+  /** Slots in the window whose stored pick was empty (too few models qualified; the single champion fed). */
+  fallbackSlots: number;
+}
+
+/**
+ * The default feed's pooled record since `since`: for each 6-hour slot's stored pick, the calls its
+ * models made inside that slot, first call per token, graded as the leaderboard grades a call (the
+ * alert's own verdict, else its outcome row's) and, separately, on rule-4 outcome rows alone.
+ */
+export async function defaultFeedRecord(
+  since: Date,
+  now: Date = new Date(),
+): Promise<DefaultFeedRecord | null> {
+  const slotMs = TOP_MODELS_REFRESH_MINUTES * 60_000;
+  const firstSlot = new Date(Math.floor(since.getTime() / slotMs) * slotMs);
+  const rows = await prisma.$queryRaw<
+    {
+      covered_from: Date | null;
+      fallback_slots: bigint;
+      calls: bigint;
+      graded: bigint;
+      wins: bigint;
+      graded4: bigint;
+      wins4: bigint;
+    }[]
+  >`
+    WITH slots AS (
+      SELECT p."slotStart" AS slot_start, p."models" AS models
+      FROM "TopModelsPick" p
+      WHERE p."slotStart" >= ${firstSlot} AND p."slotStart" <= ${now}
+    ),
+    picks AS (
+      SELECT slot_start, slot_start + make_interval(mins => ${TOP_MODELS_REFRESH_MINUTES}::int) AS slot_end,
+             unnest(models) AS model
+      FROM slots
+      WHERE cardinality(models) > 0
+    ),
+    calls AS (
+      SELECT DISTINCT ON (a."tokenId")
+             COALESCE(a."hit2xIn1h", co."hit2xIn1h") AS hit2x,
+             COALESCE(a."disqualified", co."disqualified", false) AS dq,
+             co."labelRule" AS rule,
+             co."hit2xIn1h" AS row_hit2x,
+             COALESCE(co."disqualified", false) AS row_dq
+      FROM "CuratedAlert" a
+      JOIN picks ON picks.model = a."model"
+        AND a."createdAt" >= picks.slot_start AND a."createdAt" < picks.slot_end
+      LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
+      WHERE a."createdAt" >= ${since}
+      ORDER BY a."tokenId", a."createdAt"
+    )
+    SELECT (SELECT min(slot_start) FROM slots WHERE cardinality(models) > 0) AS covered_from,
+           (SELECT count(*) FROM slots WHERE cardinality(models) = 0) AS fallback_slots,
+           count(*) AS calls,
+           count(*) FILTER (WHERE hit2x IS NOT NULL) AS graded,
+           count(*) FILTER (WHERE hit2x AND NOT dq) AS wins,
+           count(*) FILTER (WHERE rule >= ${CURRENT_LABEL_RULE} AND row_hit2x IS NOT NULL) AS graded4,
+           count(*) FILTER (WHERE rule >= ${CURRENT_LABEL_RULE} AND row_hit2x AND NOT row_dq) AS wins4
+    FROM calls`;
+  const r = rows[0];
+  if (!r?.covered_from) return null;
+  return {
+    since: r.covered_from > since ? r.covered_from : since,
+    calls: Number(r.calls),
+    graded: Number(r.graded),
+    wins: Number(r.wins),
+    gradedRule4: Number(r.graded4),
+    winsRule4: Number(r.wins4),
+    fallbackSlots: Number(r.fallback_slots),
+  };
+}
+
 export async function buildLeaderboard(
   env: Env,
   days: number,
@@ -438,7 +532,7 @@ export async function buildLeaderboard(
     confidenceZ: env.CURATED_CALIBRATION_CONFIDENCE_Z,
   };
   const [state, marketRows] = await Promise.all([contestState(env), market ? market(since) : null]);
-  const [live, liveHigh, history, probation, lifts, baseline, catches] = await Promise.all([
+  const [live, liveHigh, history, probation, lifts, baseline, catches, defaultFeed] = await Promise.all([
     liveCallRecords(
       state.roster.map((c) => c.id),
       since,
@@ -491,6 +585,8 @@ export async function buildLeaderboard(
       state.lanes,
       marketRows ?? undefined,
     ),
+    // Informational: a failed read leaves the headline on the board's own figures.
+    defaultFeedRecord(since).catch((): DefaultFeedRecord | null => null),
   ]);
   const laneBySlot = new Map(state.lanes.map((l) => [l.slot, l]));
 
@@ -596,7 +692,9 @@ export async function buildLeaderboard(
       rankWindowHours: TOP_MODELS_RANK_WINDOW_HOURS,
       rankMinGraded: TOP_MODELS_RANK_MIN_GRADED,
       rankConfidencePct: 95,
+      window: (({ since: from, until }) => ({ since: from, until }))(topModelsWindow(new Date())),
     },
+    defaultFeed,
     champion:
       state.champion && state.champion.contestant === state.defaultModel
         ? {

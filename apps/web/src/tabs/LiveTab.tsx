@@ -20,6 +20,17 @@ const MIN_TEASER = 10;
 /** The window the feed stats cover. */
 const STATS_HOURS = 24;
 
+/** This browser's "High conviction only" switch (the API takes it per request, not as a saved setting). */
+const HIGH_CONVICTION_KEY = "ts-feed-high-conviction";
+
+function readHighConviction(): boolean {
+  try {
+    return localStorage.getItem(HIGH_CONVICTION_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 /** The main tab: your own filter's catches and the model calls you follow, in one stream. */
 export function LiveTab({
   goTo,
@@ -34,6 +45,8 @@ export function LiveTab({
   const [pick, setPick] = useState(0);
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
+  // Model calls narrowed to every model's high-conviction tier instead of the followed models.
+  const [highConviction, setHighConviction] = useState(readHighConviction);
   // The tour opens by itself the first time this wallet lands here.
   const [aboutOpen, setAboutOpen] = useState(() => !introSeen(walletAddress));
   const closeAbout = () => {
@@ -45,12 +58,14 @@ export function LiveTab({
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const look = useAppearance();
   const hidden = useMemo(() => cardHideSet(look), [look]);
-  // "saved": the API mixes in model calls per this user's own switch and checked models.
-  const feedPath = (n: number) => `/matches?page=${n}&includeCurated=saved`;
+  // "saved": the API mixes in model calls per this user's own switch and checked models; with
+  // highConviction those calls are every model's high-conviction tier instead.
+  const hc = highConviction ? "&highConviction=1" : "";
+  const feedPath = (n: number) => `/matches?page=${n}&includeCurated=saved${hc}`;
   const feedPage = usePolling<MatchPage>(feedPath(page), 30_000, String(pick));
   const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
   // The stats follow the same feed settings as the cards, so they refetch with them.
-  const feedStats = usePolling<FeedStats>(`/matches/stats?hours=${STATS_HOURS}`, 30_000, String(pick));
+  const feedStats = usePolling<FeedStats>(`/matches/stats?hours=${STATS_HOURS}${hc}`, 30_000, String(pick));
   const fs = feedStats.data;
   const hours = fs?.hours ?? STATS_HOURS;
   const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000, String(pick));
@@ -84,6 +99,16 @@ export function LiveTab({
     setPage(1);
     setPick((n) => n + 1);
   };
+  const toggleHighConviction = () => {
+    const next = !highConviction;
+    try {
+      localStorage.setItem(HIGH_CONVICTION_KEY, next ? "1" : "0");
+    } catch {
+      // Private mode or blocked storage: the switch still applies for this visit.
+    }
+    setHighConviction(next);
+    setPage(1);
+  };
   const toggleModels = async () => {
     setToggling(true);
     setToggleError(null);
@@ -106,6 +131,7 @@ export function LiveTab({
         hours={hours}
         targets={t}
         pollKey={String(pick)}
+        highConviction={highConviction}
       />
       <CustomizeDrawer open={customizing} onClose={closeCustomize} />
       <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />
@@ -114,7 +140,10 @@ export function LiveTab({
           <div>
             <span className="eyebrow">Live feed</span>
             <div className="heading-row">
-              <h2>Your alerts{modelsOn ? " and model calls" : ""}</h2>
+              <h2>
+                Your alerts
+                {modelsOn ? (highConviction ? " and high-conviction calls" : " and model calls") : ""}
+              </h2>
               <button
                 type="button"
                 className="ghost icon-btn"
@@ -163,7 +192,25 @@ export function LiveTab({
               </span>
               Model alerts
             </button>
-            {lb && <ModelPicker board={lb} disabled={!modelsOn} onChanged={changed} />}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={highConviction}
+              className={`switch${highConviction ? " on" : ""}`}
+              disabled={!modelsOn}
+              onClick={toggleHighConviction}
+              title={
+                modelsOn
+                  ? "Show only the calls that cleared each model's high-conviction line, from every model, in place of the models you follow. Your filter's alerts still show."
+                  : "Turn on model alerts to narrow them to the high-conviction calls"
+              }
+            >
+              <span className="switch-track">
+                <span className="switch-thumb" />
+              </span>
+              High conviction only
+            </button>
+            {lb && <ModelPicker board={lb} disabled={!modelsOn || highConviction} onChanged={changed} />}
             <span className={`live-dot ${streamLive ? "on" : ""}`}>{streamLive ? "Live" : "Polling"}</span>
             {toggleError && <small className="error">Couldn&apos;t switch model alerts: {toggleError}</small>}
           </div>
@@ -177,7 +224,7 @@ export function LiveTab({
             <RadarIcon size={28} />
             <p>
               {modelsOn
-                ? `Nothing yet from your filter or ${chosenNames}. Alerts land here the moment one comes in.`
+                ? `Nothing yet from your filter or ${highConviction ? "the high-conviction calls" : chosenNames}. Alerts land here the moment one comes in.`
                 : "Nothing caught by your filter yet. Turn on model alerts to see the models' calls here too."}
             </p>
             <button className="ghost" onClick={() => goTo("filters")}>

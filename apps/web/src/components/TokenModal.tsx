@@ -350,9 +350,19 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
 
       <section id={`${ids}-holders`} className="tm-group" aria-labelledby={`${ids}-holders-h`}>
         <GroupLabel id={`${ids}-holders-h`}>Holders</GroupLabel>
-        {linked && hasHolderList(linked) && <HolderFreshness takenAt={linked.takenAt} now={now} />}
+        {linked && hasHolderList(linked) && (
+          <HolderFreshness
+            takenAt={linked.takenAt}
+            now={now}
+            moment={utility ? undefined : holdersMoment(card, linked)}
+          />
+        )}
         <div className="tm-holders">
-          <BubbleMapSection token={card.token} snapshot={linked} />
+          <BubbleMapSection
+            token={card.token}
+            snapshot={linked}
+            moment={utility ? undefined : holdersMoment(card, linked)}
+          />
           <TopHolders snapshot={linked} flagged={flagged} />
         </div>
         {flagged.length > 0 && <WalletsCard wallets={flagged} />}
@@ -468,12 +478,41 @@ function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot |
   return fetched?.mint === mint ? fetched.snapshot : undefined;
 }
 
+/**
+ * Which moment the Holders reading is from. The call's numbers are the alert's; this section reads
+ * the newest scan with a holder list, which can disagree with them (another moment, and often
+ * another holder set), so each says which it is.
+ */
+function holdersMoment(card: Card, reading: Snapshot | null | undefined) {
+  if (!reading) return undefined;
+  return reading.takenAt === card.snapshot.takenAt
+    ? {
+        label: "At the alert",
+        title:
+          "The alert's reading, the same one The call shows. Counts are over the top holders it read (the /25 or /10).",
+      }
+    : {
+        label: "Now",
+        title:
+          "The latest scan's reading, not the alert's: The call below shows the holders at the alert. Counts are over the top holders this scan read (the /25 or /10), which can be a different set.",
+      };
+}
+
 /** When the holder reading was saved, and when the next is due (user ask 2026-10-13). */
-function HolderFreshness({ takenAt, now }: { takenAt: string; now: number }) {
+function HolderFreshness({
+  takenAt,
+  now,
+  moment,
+}: {
+  takenAt: string;
+  now: number;
+  moment?: { label: string; title: string };
+}) {
   const { last, next } = holderFreshness(takenAt, now);
   const hm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return (
     <p className="tm-holders-when">
+      {moment && <b title={moment.title}>{moment.label} · </b>}
       Last updated {hm(last)} ·{" "}
       {next === null
         ? "No further updates: the coin is no longer being scanned"
@@ -783,7 +822,9 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
       )}
       <p className="faint small tm-wallets-note">
         Risky: a score of 70+ from selling into earlier calls&apos; stops. Linked: funded by the same wallet
-        as other top holders. SOL is what each wallet put into and took out of this coin.
+        as other top holders. KOL: a known KOL&apos;s wallet. Winner: 60%+ of the called coins it bought
+        doubled. KOL and Winner mark presence only, not a buy signal. SOL is what each wallet put into and
+        took out of this coin.
       </p>
     </section>
   );

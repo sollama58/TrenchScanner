@@ -138,6 +138,9 @@ export interface FlaggedHolder {
   kol?: string | null;
 }
 
+/** Where the flagged-wallet read stands: until it is "ok", no rings doesn't mean no risky holders. */
+export type FlagsRead = "loading" | "ok" | "failed";
+
 export type Flag = "risky" | "dumper" | "creator";
 
 export interface MapNode {

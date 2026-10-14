@@ -183,12 +183,21 @@ export function summarizeReturns(cards: readonly ReturnCard[], now: number): Fee
 }
 
 /**
+ * Whether a call passed, as its card's ✓ shows it: a 2x win, or a clean 2x still inside its window
+ * (the stop can't undo a 2x already hit, curatedFeed.ts). A stop-out or a miss did not.
+ */
+export function callPassed(outcome: Pick<OutcomeView, "status" | "hit2x">): boolean {
+  return outcome.status === "won" || (outcome.status === "watching" && outcome.hit2x);
+}
+
+/**
  * The feed's best runs over the week: the cards whose Peak (the figure the feed card shows, the
  * highest the token went above its alert price) is highest, one per token (a token alerted twice
- * shows its bigger run), best first. Each comes back as the card it was, so the caller keeps
- * whatever it carried (which model or filter alerted it).
+ * shows its bigger run), best first. Only calls that passed: the Top 3 is a shareable image, and a
+ * stopped-out or missed call's later run is not a win to show off. Each comes back as the card it
+ * was, so the caller keeps whatever it carried (which model or filter alerted it).
  */
-export function topReturns<T extends { at: Date; tokenId: string; peakPct: number | null }>(
+export function topReturns<T extends { at: Date; tokenId: string; peakPct: number | null; passed: boolean }>(
   cards: readonly T[],
   now: number,
   n = 3,
@@ -196,6 +205,7 @@ export function topReturns<T extends { at: Date; tokenId: string; peakPct: numbe
   const start = now - RETURN_WINDOW_MAX_HOURS * 3_600_000;
   const best = new Map<string, T & { peakPct: number }>();
   for (const c of cards) {
+    if (!c.passed) continue;
     if (c.peakPct === null || !Number.isFinite(c.peakPct) || c.peakPct <= 0) continue;
     if (c.at.getTime() <= start || c.at.getTime() > now) continue;
     const held = best.get(c.tokenId);

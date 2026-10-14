@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import { api, type LighthouseSignals } from "../api";
 import { HitRates, narratives, seriesClassFor } from "../components/MarketLighthouse";
 import { narrativeBaseline } from "../lighthouseMetrics";
+import { intervalText, RULE_NOTE_UNFILTERED, wilson } from "../rates";
 import { LogoMark, SageIcon, SendIcon } from "../components/Icons";
 import { ShareDialog } from "./ShareDialog";
 import type { ShareCardKind } from "./shareCards";
@@ -430,12 +431,15 @@ function Sections({
                     <span className="tsg-tile-note">
                       {rate === null
                         ? `model calls on them: ${r.graded} graded, too few to rate`
-                        : `${rate.toFixed(0)}% of ${compact(r.graded)} graded model calls doubled`}
+                        : `${rate.toFixed(0)}% (${intervalText(wilson(r.won2x, r.graded))}) of ${compact(r.graded)} graded model calls doubled`}
                     </span>
                   </div>
                 );
               })}
           </div>
+        ) : null}
+        {copyRows.length > 0 ? (
+          <p className="tsg-tile-note">{RULE_NOTE_UNFILTERED} Ranges are 90% intervals.</p>
         ) : null}
       </Section>
 

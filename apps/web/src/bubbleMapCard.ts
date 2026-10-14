@@ -15,9 +15,11 @@ import {
   sideWord,
   bubbleNameLines,
   type SideGroup,
+  type FlagsRead,
   type BubbleGraph,
   type MapNode,
 } from "./bubbleMap";
+import { countCutFor, SAFETY_REJECT_LINKED_COUNT } from "./components/AlertCard";
 import { shortAddress, tokenLabel } from "./format";
 import { isFomoName, isPumpfunName, isUsername, walletText, type WalletNames } from "./walletNames";
 import {
@@ -80,8 +82,10 @@ export async function renderBubbleCard(
   /**
    * cex: draw the same-exchange ties, laid out by exchange, as the map shows them when they're on.
    * sides: the KOLs whose possible side wallets the map ties to them, drawn and listed the same way.
+   * flags: whether the flagged-wallet read came back; until it does the risky count isn't known,
+   * and the card says so instead of implying none.
    */
-  opts: { cex?: boolean; sides?: readonly SideGroup[] } = {},
+  opts: { cex?: boolean; sides?: readonly SideGroup[]; flags?: FlagsRead } = {},
 ): Promise<HTMLCanvasElement> {
   const { canvas, ctx, icon } = await cardCanvas();
   if (!ctx) return canvas;
@@ -116,8 +120,9 @@ export async function renderBubbleCard(
   const count = graph.linkedCount;
   const holders = graph.nodes.filter((n) => n.kind === "holder").length;
   const held = graph.nodes.filter((n) => n.kind === "holder").reduce((t, n) => t + n.pct, 0);
+  // Red at the app's cut: the Linked tile's count against the screen's 20 of 25.
   ctx.fillStyle =
-    !holdersOnly && ((linked !== null && linked >= 30) || (count !== null && count.linked >= 15))
+    !holdersOnly && count !== null && count.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, count.of)
       ? "#ff8080"
       : INK;
   ctx.font = `800 62px ${FONT}`;
@@ -218,7 +223,13 @@ export async function renderBubbleCard(
     y += 28;
   }
   const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator")).length;
-  if (risky > 0 && y < CARD_H - 110) {
+  if ((opts.flags ?? "ok") !== "ok" && y < CARD_H - 110) {
+    // No ringless map passed off as clean: the flagged wallets weren't read.
+    ctx.fillStyle = MUTED;
+    ctx.font = `600 18px ${FONT}`;
+    ctx.fillText("Risky wallets: not read", PAD, y + 4);
+    y += 32;
+  } else if (risky > 0 && y < CARD_H - 110) {
     ctx.fillStyle = RISK;
     ctx.font = `600 18px ${FONT}`;
     ctx.fillText(`${risky} risky wallet${risky === 1 ? "" : "s"} among the holders`, PAD, y + 4);

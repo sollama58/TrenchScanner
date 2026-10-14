@@ -32,6 +32,7 @@ import {
   type BubbleGraph,
   type SameTimeGroup,
   type FlaggedHolder,
+  type FlagsRead,
   type MapNode,
   type WideMap,
   withWideMap,
@@ -234,6 +235,8 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
   );
   const [error, setError] = useState<Error | null>(null);
   const [flagged, setFlagged] = useState<FlaggedHolder[]>([]);
+  const [flagsFor, setFlagsFor] = useState<{ mint: string; read: FlagsRead } | null>(null);
+  const flags: FlagsRead = flagsFor?.mint === mint ? flagsFor.read : "loading";
   const path = `/tokens/${encodeURIComponent(mint)}`;
 
   useEffect(() => {
@@ -247,10 +250,14 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
         })
         .catch((e: unknown) => live && setError(e instanceof Error ? e : new Error(String(e))));
     }
-    // The flagged wallets ring the risky bubbles; the map stands without them.
+    // The flagged wallets ring the risky bubbles; the map stands without them, but says so.
     cachedGet<{ wallets?: FlaggedHolder[] }>(`${path}/chart`, 60_000)
-      .then((c) => live && setFlagged(c.wallets ?? []))
-      .catch(() => undefined);
+      .then((c) => {
+        if (!live) return;
+        setFlagged(c.wallets ?? []);
+        setFlagsFor({ mint, read: "ok" });
+      })
+      .catch(() => live && setFlagsFor({ mint, read: "failed" }));
     return () => {
       live = false;
     };
@@ -288,7 +295,9 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
           fileName={`trenchscanner-bubbles-${(loaded.token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
           caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
           disabled={!hasMap}
-          render={() => renderBubbleCard(graph, loaded.token, names, { cex: showCex, sides: side.shown })}
+          render={() =>
+            renderBubbleCard(graph, loaded.token, names, { cex: showCex, sides: side.shown, flags })
+          }
         />
       )}
       <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
@@ -329,7 +338,14 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
         </p>
       )}
       {graph && hasMap && (
-        <MapView graph={graph} names={names} showCex={showCex} setCexOn={setCexOn} side={side} />
+        <MapView
+          graph={graph}
+          names={names}
+          showCex={showCex}
+          setCexOn={setCexOn}
+          side={side}
+          flags={flags}
+        />
       )}
     </div>
   );
@@ -342,6 +358,7 @@ function MapView({
   showCex,
   setCexOn,
   side,
+  flags,
 }: {
   graph: BubbleGraph;
   names: WalletNames;
@@ -351,6 +368,8 @@ function MapView({
   setCexOn: (on: boolean) => void;
   /** KOLs' possible side wallets and whether they show (useSideToggle). */
   side: SideToggle;
+  /** Whether the flagged wallets (the risky rings) have been read. */
+  flags: FlagsRead;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
@@ -384,7 +403,11 @@ function MapView({
           <dt>Linked</dt>
           <dd
             className="num"
-            title={graph.linkedPct === null ? undefined : `${pct(graph.linkedPct, 1)} of supply`}
+            title={
+              graph.linkedPct === null
+                ? undefined
+                : `${graph.linkedCount ? `${graph.linkedCount.linked} of the top ${graph.linkedCount.of} holders, holding ` : ""}${pct(graph.linkedPct, 1)} of supply`
+            }
           >
             {linkedCountText(graph.linkedCount) ?? pct(graph.linkedPct, 1)}
           </dd>
@@ -393,8 +416,8 @@ function MapView({
           <dt>Clusters</dt>
           <dd className="num">{graph.clusters.length}</dd>
         </div>
-        <div>
-          <dt>Largest</dt>
+        <div title="Largest cluster: the share of supply held by the biggest group of wallets one funder paid for (not one wallet; the card's Largest is the largest single holder)">
+          <dt>Largest cluster</dt>
           <dd className="num">{pct(largest, 1)}</dd>
         </div>
         {graph.sameTimeGroups.length > 0 && (
@@ -408,9 +431,18 @@ function MapView({
             <dd className="num">{linkedCountText(graph.sameTimeCount) ?? pct(graph.sameTimePct, 1)}</dd>
           </div>
         )}
-        <div className={risky.length > 0 ? "risky" : undefined}>
+        <div
+          className={flags === "ok" && risky.length > 0 ? "risky" : undefined}
+          title={
+            flags === "ok"
+              ? undefined
+              : flags === "failed"
+                ? "Risky holders: couldn't load the flagged wallets, so no risky ones are ringed. Not a clean reading."
+                : "Risky holders: loading the flagged wallets"
+          }
+        >
           <dt>Risky holders</dt>
-          <dd className="num">{risky.length}</dd>
+          <dd className={flags === "ok" ? "num" : "muted"}>{flags === "ok" ? risky.length : "–"}</dd>
         </div>
         <div
           className={
@@ -563,6 +595,7 @@ function MapView({
           Each bubble is a top holder, sized by its share of supply. Wallets one funder paid for share a
           colour and a line to that funder; grey ones are linked to no other. A red ring marks a risky wallet
           or known dumper.
+          {flags === "failed" && " The flagged wallets couldn't be loaded, so no wallet is ringed."}
           {graph.sameTimeGroups.length > 0 &&
             " Holders whose wallets were funded within the same minute, whoever paid, share a dotted ring and line in their group's colour."}
           {showSides &&
@@ -570,7 +603,7 @@ function MapView({
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
           {graph.nodes.some((n) => n.rank !== undefined) &&
-            " A model called this coin, so the map also takes in every wallet in its top 50 whose funder we already know; the counts above stay on the top 25."}
+            " A model called this coin, so the map also takes in every wallet in its top 50 whose funder we already know. Linked, Same minute and CEX-funded above stay on the top holders the scan read (the /25 or /10); Clusters, Largest cluster and the lists below take in the top 50."}
         </p>
       )}
     </>
@@ -738,7 +771,7 @@ function BubbleSvg({
       <svg
         className="bm-svg"
         viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
-        role="img"
+        role="group"
         aria-label={`Bubble map of ${graph.nodes.filter((n) => n.kind === "holder").length} top holders in ${graph.clusters.length} linked clusters`}
       >
         <defs>
@@ -1136,19 +1169,28 @@ function NodeDetail({
 export function BubbleMapSection({
   token,
   snapshot,
+  moment,
 }: {
   token: Token;
   /** The reading to draw; undefined while it loads. */
   snapshot: Snapshot | null | undefined;
+  /** Which moment the reading is from ("Now", "At the alert"), headed on the map; none leaves it off. */
+  moment?: { label: string; title: string };
 }) {
   const [flagged, setFlagged] = useState<FlaggedHolder[]>([]);
+  const [flagsFor, setFlagsFor] = useState<{ mint: string; read: FlagsRead } | null>(null);
   const mint = token.mintAddress;
+  const flags: FlagsRead = flagsFor?.mint === mint ? flagsFor.read : "loading";
   useEffect(() => {
     let live = true;
     // The chart card asks for the same path; the cache hands both the one answer.
     cachedGet<{ wallets?: FlaggedHolder[] }>(`/tokens/${encodeURIComponent(mint)}/chart`, 60_000)
-      .then((c) => live && setFlagged(c.wallets ?? []))
-      .catch(() => undefined);
+      .then((c) => {
+        if (!live) return;
+        setFlagged(c.wallets ?? []);
+        setFlagsFor({ mint, read: "ok" });
+      })
+      .catch(() => live && setFlagsFor({ mint, read: "failed" }));
     return () => {
       live = false;
     };
@@ -1181,13 +1223,18 @@ export function BubbleMapSection({
     <section className="sage-card bm-section">
       <h4>
         <BubblesIcon size={14} /> Bubble map
+        {moment && (
+          <span className="sage-tag" title={moment.title}>
+            {moment.label}
+          </span>
+        )}
         <span className="bm-section-actions">
           <ShareButton
             title={`${label} bubble map`}
             fileName={`trenchscanner-bubbles-${(token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
             caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
             iconOnly
-            render={() => renderBubbleCard(graph, token, names, { cex: showCex, sides: side.shown })}
+            render={() => renderBubbleCard(graph, token, names, { cex: showCex, sides: side.shown, flags })}
           />
           <button
             type="button"
@@ -1199,7 +1246,15 @@ export function BubbleMapSection({
           </button>
         </span>
       </h4>
-      <MapView graph={graph} names={names} compact showCex={showCex} setCexOn={setCexOn} side={side} />
+      <MapView
+        graph={graph}
+        names={names}
+        compact
+        showCex={showCex}
+        setCexOn={setCexOn}
+        side={side}
+        flags={flags}
+      />
     </section>
   );
 }

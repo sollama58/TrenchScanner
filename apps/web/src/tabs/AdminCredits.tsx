@@ -92,6 +92,23 @@ export function CreditsAdmin() {
   );
 }
 
+/** The Save prices confirmation: each setting as old → new, with the unchanged ones marked so. */
+export function pricesChangeText(prices: CreditsAdminView["prices"], next: number[]): string {
+  const rows: [string, number, number | undefined][] = [
+    ["$ASDFASDFA per credit", prices.tokensPerCredit, next[0]],
+    ["Token lookup", prices.cost.token, next[1]],
+    ["Wallet lookup", prices.cost.wallet, next[2]],
+  ];
+  const lines = rows.map(([label, was, now]) => {
+    const unit = label.startsWith("$") ? "" : " credits";
+    return now === was
+      ? `${label}: ${n(was)}${unit} (unchanged)`
+      : `${label}: ${n(was)} → ${n(now ?? 0)}${unit}`;
+  });
+  const free = next[1] === 0 || next[2] === 0 ? "\n\nA cost of 0 makes that lookup free." : "";
+  return `Change Burn Credit prices for everyone?\n\n${lines.join("\n")}${free}\n\nNew burns and lookups use these from now on.`;
+}
+
 function Prices({ prices, onDone }: { prices: CreditsAdminView["prices"]; onDone: () => void }) {
   const [ratio, setRatio] = useState(String(prices.tokensPerCredit));
   const [token, setToken] = useState(String(prices.cost.token));
@@ -111,6 +128,9 @@ function Prices({ prices, onDone }: { prices: CreditsAdminView["prices"]; onDone
     values[1] !== prices.cost.token ||
     values[2] !== prices.cost.wallet;
   const save = async () => {
+    // One mistyped digit reprices every burn and lookup from now on, for everyone: show the change
+    // side by side before it goes out.
+    if (!window.confirm(pricesChangeText(prices, values))) return;
     setBusy(true);
     setResult(null);
     try {
@@ -161,6 +181,12 @@ function Grant({ onDone }: { onDone: () => void }) {
   const [result, setResult] = useState<string | null>(null);
   const count = Number(credits);
   const grant = async () => {
+    const who = shortAddress(wallet.trim());
+    const question =
+      count < 0
+        ? `Take ${n(-count)} credits back from ${who}?`
+        : `Award ${who} ${n(count)} Burn Credit${count === 1 ? "" : "s"}?`;
+    if (!window.confirm(question)) return;
     setBusy(true);
     setResult(null);
     try {

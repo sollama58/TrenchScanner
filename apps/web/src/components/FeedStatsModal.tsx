@@ -19,6 +19,7 @@ export function FeedStatsModal({
   hours,
   targets: t,
   pollKey,
+  highConviction,
 }: {
   open: boolean;
   onClose: () => void;
@@ -27,6 +28,8 @@ export function FeedStatsModal({
   targets: { hitRate2xPct: number; hitRate4xPct: number };
   /** Changes when the feed's makeup does (the models it follows), so the returns refetch. */
   pollKey: string;
+  /** The feed's model calls are the high-conviction tier alone (the Live tab's switch). */
+  highConviction?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
 
@@ -120,7 +123,7 @@ export function FeedStatsModal({
               Coins alerted in your feed over the last {hours} hours, graded from the alert price. Alerts
               still being graded don&apos;t count as misses.
             </p>
-            <FeedReturns pollKey={pollKey} />
+            <FeedReturns pollKey={pollKey} highConviction={highConviction} />
           </>
         )}
       </div>

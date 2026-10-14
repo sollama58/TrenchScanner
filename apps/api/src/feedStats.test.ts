@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { summarizeFeed, summarizeReturns, topReturns, type FeedStatsCard } from "./feedStats.js";
+import { callPassed, summarizeFeed, summarizeReturns, topReturns, type FeedStatsCard } from "./feedStats.js";
 
 const card = (
   status: FeedStatsCard["outcome"]["status"],
@@ -126,13 +126,13 @@ describe("topReturns", () => {
   it("keeps the week's three biggest runs, one per token, best first", () => {
     const top = topReturns(
       [
-        { tokenId: "a", at: ago(1), peakPct: 120 },
-        { tokenId: "a", at: ago(30), peakPct: 400 },
-        { tokenId: "b", at: ago(2), peakPct: 250 },
-        { tokenId: "c", at: ago(3), peakPct: null },
-        { tokenId: "d", at: ago(4), peakPct: -40 },
-        { tokenId: "e", at: ago(5), peakPct: 60 },
-        { tokenId: "f", at: ago(200), peakPct: 9000 },
+        { tokenId: "a", at: ago(1), peakPct: 120, passed: true },
+        { tokenId: "a", at: ago(30), peakPct: 400, passed: true },
+        { tokenId: "b", at: ago(2), peakPct: 250, passed: true },
+        { tokenId: "c", at: ago(3), peakPct: null, passed: true },
+        { tokenId: "d", at: ago(4), peakPct: -40, passed: true },
+        { tokenId: "e", at: ago(5), peakPct: 60, passed: true },
+        { tokenId: "f", at: ago(200), peakPct: 9000, passed: true },
       ],
       now,
     );
@@ -142,5 +142,28 @@ describe("topReturns", () => {
       ["e", 60],
     ]);
     expect(top[0]!.at).toEqual(ago(30));
+  });
+
+  it("leaves out calls that didn't pass, however far they ran", () => {
+    const top = topReturns(
+      [
+        { tokenId: "stopped", at: ago(1), peakPct: 900, passed: false },
+        { tokenId: "won", at: ago(2), peakPct: 150, passed: true },
+        // The same token's losing alert doesn't lift its winning one.
+        { tokenId: "won", at: ago(3), peakPct: 700, passed: false },
+      ],
+      now,
+    );
+    expect(top.map((t) => [t.tokenId, t.peakPct])).toEqual([["won", 150]]);
+  });
+});
+
+describe("callPassed", () => {
+  it("passes a win and a clean 2x still in its window, not a stop-out or a miss", () => {
+    expect(callPassed({ status: "won", hit2x: true })).toBe(true);
+    expect(callPassed({ status: "watching", hit2x: true })).toBe(true);
+    expect(callPassed({ status: "watching", hit2x: false })).toBe(false);
+    expect(callPassed({ status: "disqualified", hit2x: true })).toBe(false);
+    expect(callPassed({ status: "missed", hit2x: false })).toBe(false);
   });
 });

@@ -65,8 +65,10 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
           {SECTIONS.map((s) => (
             <button
               key={s.id}
+              id={`admin-section-${s.id}`}
               role="tab"
               aria-selected={section === s.id}
+              aria-controls={section === s.id ? "admin-section-panel" : undefined}
               className={section === s.id ? "on" : ""}
               onClick={() => setSection(s.id)}
             >
@@ -75,25 +77,33 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
           ))}
         </div>
       </section>
-      {section === "overview" && <Overview />}
-      {section === "worker" && <Worker />}
-      {section === "alerts" && <Alerts />}
-      {section === "models" && <ModelsAdmin />}
-      {section === "wallets" && <WalletsAdmin />}
-      {section === "training" && <Training />}
-      {section === "tokensage" && <TokenSageAdmin />}
-      {section === "screen" && <SafetyScreen />}
-      {section === "filters" && <FiltersAdmin />}
-      {section === "users" && <Users />}
-      {section === "access" && <Access />}
-      {section === "credits" && <CreditsAdmin />}
-      {section === "announce" && <AnnouncementsAdmin />}
-      {section === "ai" && <Ai />}
-      {section === "backups" && <Backups />}
-      {section === "database" && <Database />}
-      {section === "api" && <ApiInstance />}
-      {section === "usage" && <UsageAdmin />}
-      {section === "config" && <Config />}
+      {/* One section at a time, labelled by its button above. */}
+      <div
+        className="stack"
+        role="tabpanel"
+        id="admin-section-panel"
+        aria-labelledby={`admin-section-${section}`}
+      >
+        {section === "overview" && <Overview />}
+        {section === "worker" && <Worker />}
+        {section === "alerts" && <Alerts />}
+        {section === "models" && <ModelsAdmin />}
+        {section === "wallets" && <WalletsAdmin />}
+        {section === "training" && <Training />}
+        {section === "tokensage" && <TokenSageAdmin />}
+        {section === "screen" && <SafetyScreen />}
+        {section === "filters" && <FiltersAdmin />}
+        {section === "users" && <Users />}
+        {section === "access" && <Access />}
+        {section === "credits" && <CreditsAdmin />}
+        {section === "announce" && <AnnouncementsAdmin />}
+        {section === "ai" && <Ai />}
+        {section === "backups" && <Backups />}
+        {section === "database" && <Database />}
+        {section === "api" && <ApiInstance />}
+        {section === "usage" && <UsageAdmin />}
+        {section === "config" && <Config />}
+      </div>
     </div>
   );
 }
@@ -783,6 +793,8 @@ interface HitRates {
     buys: Rated;
     allReviewed: Rated;
     liftPts: number | null;
+    liftLowPts?: number | null;
+    liftHighPts?: number | null;
     brier: number | null;
     curatorBrier: number | null;
   };
@@ -1254,6 +1266,13 @@ function Levers({ onDone }: { onDone: () => void }) {
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const act = async (what: "grant" | "whitelist") => {
+    // A pasted wrong address would get free access: name the wallet and what it gets first.
+    const who = shortAddress(wallet.trim());
+    const question =
+      what === "grant"
+        ? `Grant ${who} ${dayCount} days of access?`
+        : `Whitelist ${who}? That is access with no end date.`;
+    if (!window.confirm(question)) return;
     setBusy(true);
     setResult(null);
     try {
@@ -1515,10 +1534,10 @@ function Ai() {
               <p className="small muted">
                 Last 30 days: buys hit 2x {pct(hits.data.aiReviewer.buys.hitRate2xPct, 1)} of{" "}
                 {hits.data.aiReviewer.buys.graded} graded, against{" "}
-                {pct(hits.data.aiReviewer.allReviewed.hitRate2xPct, 1)} for everything it reviewed (lift{" "}
-                {hits.data.aiReviewer.liftPts?.toFixed(1) ?? "–"} pts). Brier{" "}
-                {hits.data.aiReviewer.brier?.toFixed(3) ?? "–"} vs the model's{" "}
-                {hits.data.aiReviewer.curatorBrier?.toFixed(3) ?? "–"} (lower is better).
+                {pct(hits.data.aiReviewer.allReviewed.hitRate2xPct, 1)} for everything it reviewed (lift over
+                its passes {hits.data.aiReviewer.liftPts?.toFixed(1) ?? "–"} pts
+                {liftRange(hits.data.aiReviewer)}). Brier {hits.data.aiReviewer.brier?.toFixed(3) ?? "–"} vs
+                the model's {hits.data.aiReviewer.curatorBrier?.toFixed(3) ?? "–"} (lower is better).
               </p>
             )}
           </Panel>
@@ -1812,4 +1831,11 @@ function Config() {
       </Load>
     </Panel>
   );
+}
+
+/** ", 95% range a to b" for the reviewer's lift, or nothing when the API sent no interval. */
+function liftRange(r: { liftLowPts?: number | null; liftHighPts?: number | null }): string {
+  return r.liftLowPts == null || r.liftHighPts == null
+    ? ""
+    : `, 95% range ${r.liftLowPts.toFixed(1)} to ${r.liftHighPts.toFixed(1)}`;
 }

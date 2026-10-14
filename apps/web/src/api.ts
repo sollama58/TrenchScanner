@@ -484,6 +484,8 @@ export function runExamRates(run: Pick<ModelRun, "exam" | "precisionCalibration"
   calls: number | null;
   winRatePct: number | null;
   goalRatePct: number | null;
+  /** False when the figures are the in-sample fallback (no held-out exam stored on the run). */
+  heldOut: boolean;
 } {
   const exam = run.exam;
   if (exam && exam.graded > 0) {
@@ -491,6 +493,7 @@ export function runExamRates(run: Pick<ModelRun, "exam" | "precisionCalibration"
       calls: exam.graded,
       winRatePct: (exam.wins / exam.graded) * 100,
       goalRatePct: (exam.goals / exam.graded) * 100,
+      heldOut: true,
     };
   }
   const c = run.precisionCalibration;
@@ -498,8 +501,12 @@ export function runExamRates(run: Pick<ModelRun, "exam" | "precisionCalibration"
     calls: c?.support ?? null,
     winRatePct: c?.winRatePct ?? null,
     goalRatePct: c?.goalRatePct ?? null,
+    heldOut: false,
   };
 }
+
+/** How a run's exam figure is labelled when it is the in-sample fallback. */
+export const IN_SAMPLE_LABEL = "in-sample (no held-out exam)";
 
 export interface ModelRun {
   id: string;
@@ -789,8 +796,11 @@ export interface ModelInsights {
     mode: string;
     buys: GradedRates;
     allReviewed: GradedRates;
-    /** Its buys' 2x rate minus the rate of every pick it reviewed, in points. */
+    /** Its buys' 2x rate minus its passes' (no-buys), in points, one review per coin. */
     liftPts: number | null;
+    /** The lift's 95% interval, in points (absent from older API builds). The gate opens only above 0. */
+    liftLowPts?: number | null;
+    liftHighPts?: number | null;
     /** Mean squared error of its 2x odds (0.25 = a coin flip), and of the default model's own. */
     brier: number | null;
     curatorBrier: number | null;
@@ -1178,7 +1188,27 @@ export interface Leaderboard {
     rankWindowHours?: number;
     rankMinGraded?: number;
     rankConfidencePct?: number;
+    /** The 24h window the current slot's picks and "best" were read on (absent from older API builds). */
+    window?: { since: string; until: string };
   };
+  /**
+   * The default feed's own pooled record over the window: the calls the stored top-model picks
+   * delivered slot by slot, each token once. Null with no stored pick in the window; absent from
+   * older API builds.
+   */
+  defaultFeed?: {
+    /** The first slot with a stored pick: later than the window's start on a young record. */
+    since: string;
+    calls: number;
+    /** On the alert's own grade, rule 3 and up (as every rate on the board). */
+    graded: number;
+    wins: number;
+    /** Rule-4 outcome rows alone. */
+    gradedRule4: number;
+    winsRule4: number;
+    /** Slots in the window that fell back to the single champion (no stored top models). */
+    fallbackSlots: number;
+  } | null;
   /** The first of selectedModels (the single-model feed other clients read). */
   selectedModel: string;
   /** Every model whose calls this user's combined feed shows, in roster order. */
@@ -1319,6 +1349,9 @@ export interface NarrativeNoteReadiness {
   ready: boolean;
   /** The Narrative model's live 2x hit rate over the window, in percent; null with nothing graded. */
   winRatePct: number | null;
+  /** Its 90% Wilson interval: on once the lower bound clears minRatePct, off once the upper falls under it (absent from older API builds). */
+  lowerPct?: number | null;
+  upperPct?: number | null;
   graded: number;
   minRatePct: number;
   minGraded: number;

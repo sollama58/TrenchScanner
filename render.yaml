@@ -347,10 +347,24 @@ services:
         destination: /tokensage/index.html
     # Clickjacking and sniffing guards for the dashboard. frame-ancestors still lets the HolDEX site
     # frame it, in case its /trenches/ tab ever embeds this page rather than calling the API.
+    #
+    # The script policy is defence in depth for the session token src/session.ts can keep in
+    # localStorage: only this site's own bundles run, plus the inline <script>s of index.html (theme
+    # and boot prefetch) and tokensage/index.html (theme), allowed by their sha256. Editing one of
+    # those scripts, or VITE_API_URL below (the boot prefetch has it baked in), changes its hash:
+    # apps/web/src/csp.test.ts fails until the new hash is pasted here. connect-src is the API on
+    # both hosts (SAME_SITE_APIS in apps/web/src/api.ts and VITE_API_URL); burns are sent by the
+    # wallet extension, so no RPC host is needed. Images (token art from any https host, IPFS,
+    # data: and blob: share images), styles (React style attributes) and fonts stay unrestricted.
     headers:
       - path: /*
         name: Content-Security-Policy
-        value: "frame-ancestors 'self' https://holdex.live https://www.holdex.live"
+        value: "script-src 'self' 'sha256-ahIBo/E0W+F/K3AwS3zCAVSpPbdrUZgGazD+UhQnkAk=' 'sha256-3nD+ydCS3TwKmSUuD7/+O2kAwuQFvvhpDs2d4nuTEkI=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
+      # HTTPS only from the first visit on. No includeSubDomains: only this host's own redirect is
+      # certain here, and preload would lock that in for every subdomain.
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000
       - path: /*
         name: X-Content-Type-Options
         value: nosniff

@@ -33,6 +33,7 @@ import {
   summarizeFeed,
   summarizeReturns,
   topReturns,
+  callPassed,
   type FeedReturnWindow,
   type FeedStatsCard,
   type ReturnCard,
@@ -646,11 +647,10 @@ export async function registerMatchRoutes(
         select: {
           id: true,
           tokenId: true,
-          matchedAt: true,
-          candidateOutcomeId: true,
           filterId: true,
           peakReturnPct: true,
-          peak24hReturnPct: true,
+          // The verdict too: the Top 3 shows only calls that passed.
+          ...MATCH_OUTCOME_SELECT,
         },
       }),
       feedCalls.models.length === 0
@@ -663,10 +663,21 @@ export async function registerMatchRoutes(
               select: {
                 ...CALL_SELECT,
                 simReturnPct: true,
+                peak1hReturnPct: true,
+                maxDrawdown1hPct: true,
+                hit2xIn15m: true,
+                hit2xIn1h: true,
+                hit4xIn1h: true,
+                hit10xIn1h: true,
+                disqualified: true,
                 peak24hReturnPct: true,
+                runPeakMinutes: true,
+                outcomeFinalizedAt: true,
                 anchorMcapUsd: true,
                 peakMcapUsd: true,
-                candidateOutcome: { select: RUN_PEAK_SELECT },
+                candidateOutcome: {
+                  select: { ...curatedAlertInclude.candidateOutcome.select, ...RUN_PEAK_SELECT },
+                },
               },
             }),
           ),
@@ -683,6 +694,7 @@ export async function registerMatchRoutes(
             select: { id: true, ...RUN_PEAK_SELECT },
           });
     const outcomeById = new Map(outcomes.map((o) => [o.id, o]));
+    const rowById = await openOutcomeRows(matches);
 
     type ReturnFeedCard = ReturnCard & {
       id: string;
@@ -693,12 +705,15 @@ export async function registerMatchRoutes(
       source: { filterId: string } | { modelName: string };
       /** The Peak the feed card shows: the highest the token went above its alert price. */
       peakPct: number | null;
+      /** Whether the alert passed (callPassed): the Top 3 shows only those. */
+      passed: boolean;
       curated: {
         alertId: string;
         /** When the call was made. */
         at: Date;
         returnPct: number | null;
         peakPct: number | null;
+        passed: boolean;
         modelName: string;
       } | null;
     };
@@ -714,6 +729,7 @@ export async function registerMatchRoutes(
         // The card's Peak for a filter alert: its tracked ATH, else its grading row's run peak.
         peakPct: m.peakReturnPct ?? m.peak24hReturnPct ?? runPeakPct(row),
         source: { filterId: m.filterId },
+        passed: callPassed(matchOutcome(m, rowById)),
         curated: null,
       };
     });
@@ -731,6 +747,7 @@ export async function registerMatchRoutes(
         callPeakPct(lead.peak24hReturnPct ?? runPeakPct(lead.candidateOutcome), lead),
         callLive.get(lead.id) ?? null,
       );
+      const passed = callPassed(resolveOutcome(lead));
       return {
         id: lead.id,
         kind: "curated",
@@ -740,7 +757,8 @@ export async function registerMatchRoutes(
         returnPct,
         peakPct,
         source: { modelName },
-        curated: { alertId: lead.id, at: lead.createdAt, returnPct, peakPct, modelName },
+        passed,
+        curated: { alertId: lead.id, at: lead.createdAt, returnPct, peakPct, passed, modelName },
       };
     });
     type FoldedReturnCard = ReturnCard & {
@@ -749,6 +767,8 @@ export async function registerMatchRoutes(
       source: ReturnFeedCard["source"];
       /** When the alert that made the Peak came: the Top 3 shows that, not the card's time. */
       peakAt: Date;
+      /** Whether the alert that made the Peak passed. */
+      passed: boolean;
     };
     const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
       (c): FoldedReturnCard => {
@@ -765,6 +785,7 @@ export async function registerMatchRoutes(
           peakPct: maxPct(c.peakPct, c.curated.peakPct),
           source: callWins ? { modelName: c.curated.modelName } : c.source,
           peakAt: callWins ? c.curated.at : c.at,
+          passed: callWins ? c.curated.passed : c.passed,
         };
       },
     );

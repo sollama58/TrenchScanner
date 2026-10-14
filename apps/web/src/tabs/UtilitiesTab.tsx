@@ -616,6 +616,8 @@ function RecentLookups({
                   alt=""
                   width={28}
                   height={28}
+                  loading="lazy"
+                  decoding="async"
                   referrerPolicy="no-referrer"
                 />
               ) : (

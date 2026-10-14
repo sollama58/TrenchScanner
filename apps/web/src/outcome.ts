@@ -20,7 +20,7 @@ export function outcomeBadge(outcome: Outcome | null): { text: string; tone: str
       return { text: "⊘ Stopped out", tone: "bad" };
     case "missed":
       if (ranLater(outcome)) return { text: "↗ Ran later", tone: "info" };
-      if (stoppedThenRan(outcome)) return { text: "⊘ Stopped, ran later", tone: "bad" };
+      if (stoppedThenRan(outcome)) return { text: "⊘ Stopped out · hit 2x within 24h", tone: "bad" };
       return { text: "✕ Missed 2x", tone: "bad" };
     default:
       return { text: "Ungraded", tone: "neutral" };
@@ -55,9 +55,10 @@ export function ranLater(outcome: Outcome): boolean {
 }
 
 /**
- * A miss that fell through the stop (50% below the alert price) inside the label window and still
- * reached 2x on its run peak afterwards. A loss for the hit rate like any stop-out, and it carries the
- * stop-out's mark; the words say it ran, so it doesn't read as a coin that never went.
+ * A miss that fell through the stop (50% below the alert price) inside the label window and whose
+ * run peak reached 2x within the day. Which came first isn't known here (the feed sends no time for
+ * the low), so the words state no order. A loss for the hit rate like any stop-out, and it carries
+ * the stop-out's mark; the words say it reached 2x, so it doesn't read as a coin that never went.
  */
 export function stoppedThenRan(outcome: Outcome): boolean {
   return (

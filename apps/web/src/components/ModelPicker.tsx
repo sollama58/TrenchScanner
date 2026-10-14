@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { put, type Leaderboard, type LeaderboardEntry } from "../api";
 import { invalidate } from "../cache";
+import { utcClock } from "../rates";
+import { bestReturnTitle, lastDayEnd } from "../tabs/modelShared";
 
 /**
  * Saves the combined feed's settings (which models' calls it shows, and whether it shows model
@@ -115,6 +117,8 @@ export function ModelPicker({
   const daily = board.entries.some((e) => e.last24h !== undefined);
   const rows = daily ? byLast24h(board.entries) : board.entries;
   const minGraded = board.defaultRule?.minGraded ?? 30;
+  // The 24h window is fixed per 6-hour slot, so "last 24h" can be hours old: name its end.
+  const dayEnd = utcClock(lastDayEnd(board, Date.now()));
   // Bars are drawn against the best ranked 2x rate, so the spread between models shows. A model
   // without enough calls to rank gets no bar: its rate is too thin to compare.
   const scaleTop = Math.max(
@@ -149,7 +153,7 @@ export function ModelPicker({
           )}
           {daily ? (
             <div className="mp-head" aria-hidden>
-              <span>Last 24h</span>
+              <span title={`Numbered by 2x rate over the 24h to ${dayEnd}`}># by 24h 2x rate</span>
               <span>2x rate</span>
               <span>Avg return</span>
             </div>
@@ -179,14 +183,16 @@ export function ModelPicker({
                       <span className="checklist-name">
                         <span
                           className={`mp-rank num${e.isDefault ? " top" : ""}`}
-                          title={e.isDefault ? "One of the top models: the default feed" : undefined}
+                          title={`${ranked ? `#${i + 1} by 2x rate over the 24h to ${dayEnd}` : "Too few graded calls in the 24h to rank"}${
+                            e.isDefault ? "; one of the top models: the default feed" : ""
+                          }`}
                         >
                           {ranked ? i + 1 : "–"}
                         </span>
                         <span className="mp-name">{e.name}</span>
                         {e.isBest && (
-                          <span className="mp-badge best" title="Highest average return over the last 24h">
-                            ★<span className="mp-word"> best</span>
+                          <span className="mp-badge best" title={bestReturnTitle(board, Date.now())}>
+                            ★<span className="mp-word"> best 24h return</span>
                           </span>
                         )}
                       </span>
@@ -228,11 +234,12 @@ export function ModelPicker({
           })}
           {daily && (
             <p className="mp-foot faint small">
+              Rows are numbered by 2x rate over the 24h to {dayEnd}.{" "}
               <span className="mp-rank top mp-key">1</span> The top {board.defaultRule?.count ?? 3} by 2x rate
               at the low end of its range, over the last {board.defaultRule?.rankWindowHours ?? 72}h with{" "}
               {board.defaultRule?.rankMinGraded ?? 90} graded calls, make up the default feed.{" "}
-              <span className="mp-badge best">★ best</span> has the highest average return under the exit
-              plan, with {minGraded} graded calls in the last 24h. Both are picked every{" "}
+              <span className="mp-badge best">★ best 24h return</span> has the highest average return under
+              the exit plan, with {minGraded} graded calls in that window. Both are picked every{" "}
               {Math.round((board.defaultRule?.refreshMinutes ?? 360) / 60)} hours (00, 06, 12 and 18 UTC).
             </p>
           )}

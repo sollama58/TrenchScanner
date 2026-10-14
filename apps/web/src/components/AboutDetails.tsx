@@ -169,8 +169,12 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               <BrainIcon size={12} /> Model
             </span>
             <p>
-              A call from a model you follow, with its name and confidence (0 to 100). If several models call
-              the same token, it shows once with all of them. Each model calls a token at most once a day.
+              A call from a model you follow, with its name and its score (&quot;Score 87&quot;): a 0-100 rank
+              score in that model&apos;s own units, not a probability, so it doesn&apos;t compare across
+              models. The &quot;≈NN% 2x&quot; beside it is the share of the model&apos;s recent out-of-sample
+              calls ranked like this one that hit 2x within 15 minutes of the alert, before a 50% stop (the
+              middle of the calling models&apos; rates when several call it). If several models call the same
+              token, it shows once with all of them. Each model calls a token at most once a day.
             </p>
           </div>
         </div>
@@ -213,6 +217,8 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           <dd>Still inside its first 15 minutes.</dd>
           <dt className="fp-good">✓ 2x win</dt>
           <dd>Doubled within 15 minutes.</dd>
+          <dt className="fp-good">✓ 2x hit</dt>
+          <dd>Already doubled without falling 50% first, while its 15 minutes are still running.</dd>
           <dt className="fp-good">✓✓ 4x win</dt>
           <dd>Also reached 4x within 30 minutes.</dd>
           <dt className="fp-good">✓✓✓ 10x win</dt>
@@ -220,11 +226,17 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           <dt className="fp-bad">✕ Missed 2x</dt>
           <dd>The 15 minutes ran out before it doubled.</dd>
           <dt>↗ Ran later</dt>
-          <dd>Missed the 15 minutes without falling 50%, then doubled later in the day. Counts as a miss.</dd>
+          <dd>
+            Missed the 15 minutes without falling 50% in its first 30 minutes, and doubled later in the day.
+            Counts as a miss.
+          </dd>
           <dt className="fp-bad">⊘ Stopped out</dt>
           <dd>Fell 50% below the alert price, then doubled within its 15 minutes. It counts as a loss.</dd>
-          <dt className="fp-bad">⊘ Stopped, ran later</dt>
-          <dd>Fell 50% below the alert price, then doubled later in the day. Still a loss.</dd>
+          <dt className="fp-bad">⊘ Stopped out · hit 2x within 24h</dt>
+          <dd>
+            Missed the 15 minutes, fell 50% below the alert price in its first 30 minutes, and reached 2x at
+            some point within the day (before or after the fall). Still a loss.
+          </dd>
           <dt>Grading</dt>
           <dd>The window has closed and the result is being worked out.</dd>
         </dl>
@@ -249,25 +261,28 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           </dd>
           <dt>Empty</dt>
           <dd>
-            Share of the top 10 holding under $25 in other tokens (cash and SOL aside). Fresh and empty
-            wallets are common signs of snipers or insiders. &ldquo;–&rdquo; means that one hasn&apos;t run
-            yet.
+            How many of the top 10 hold under $25 in other tokens (cash and SOL aside), as 3/10. Red at 8/10
+            or more. Fresh and empty wallets are common signs of snipers or insiders. &ldquo;Not
+            checked&rdquo; means that check hasn&apos;t run yet.
           </dd>
-          <dt>Snipers</dt>
+          <dt>First buyers</dt>
           <dd>
             Of the first 25 buyers after launch (dev aside), how many still hold, as 12/25. Ones still holding
             can dump on you. Read once from the launch on chain, then rechecked every few minutes.
+            &ldquo;–&rdquo; means it hasn&apos;t been read yet.
           </dd>
-          <dt>Top-10 snipers</dt>
+          <dt>Snipers</dt>
           <dd>
-            Share of the top 10 holders (pool aside) that were among those first 25 buyers. 80% or more is
-            always rejected.
+            How many of the top 25 holders (pool aside) were among those first 25 buyers, as 6/25. Red when 8
+            or more of the top 10 were: that is always rejected.
           </dd>
           <dt>Linked</dt>
           <dd>
-            Share of supply held by top-10 wallets that one funder paid for (exchange withdrawals don&apos;t
-            count as a link). Red at 30% or more. When it finds a cluster, tap the tile for the bubble map.
-            &ldquo;Not checked&rdquo; means that coin&apos;s wallets haven&apos;t been looked up yet.
+            How many of the top 25 holders (pool aside) are linked: one funder paid for them, or they were
+            funded in the same minute (exchange withdrawals don&apos;t count as a link). Shown as 10/25, with
+            the supply they hold in the tooltip. Red at 20/25 or more. When it finds a cluster, tap the tile
+            for the bubble map. &ldquo;Not checked&rdquo; means that coin&apos;s wallets haven&apos;t been
+            looked up yet.
           </dd>
           <dt>DH · DS</dt>
           <dd>Dev Holding: the creator still holds the token. Dev Sold: they hold none.</dd>

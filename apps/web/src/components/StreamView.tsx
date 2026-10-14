@@ -25,7 +25,7 @@ export function StreamView() {
   const cards = useLiveMarketCaps(page.data?.launches);
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
-  const live = page.data !== undefined && !page.error;
+  const live = page.data != null && !page.error;
 
   return (
     <div className="stack">

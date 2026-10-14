@@ -22,7 +22,8 @@ describe("tokensage showcase helpers", () => {
   });
 
   it("holds a 2x rate back until enough calls are graded", () => {
-    expect(hitRate({ graded: 19, won2x: 10 })).toBeNull();
+    expect(hitRate({ graded: 29, won2x: 10 })).toBeNull();
+    expect(hitRate({ graded: 30, won2x: 6 })).toBe(20);
     expect(hitRate({ graded: 40, won2x: 10 })).toBe(25);
   });
 
