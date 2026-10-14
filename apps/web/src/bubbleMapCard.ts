@@ -268,7 +268,14 @@ export async function renderBubbleCard(
   // Right: the map, fitted into its box; regrouped by exchange and by KOL when those ties show, as on the map.
   const sideGroups = sideRows.map((s) => s.g);
   const map = cex || sideGroups.length > 0 ? regroupLayout(graph, { cex, sides: sideGroups }) : graph;
-  const area = { x: PAD + leftW + 16, y: 100, w: CARD_W - 20 - (PAD + leftW + 16), h: CARD_H - 96 - 100 };
+  // Which kinds of name the bubbles carry, for the legend under the map (user ask 2026-10-14).
+  const legend = nameLegend(graph, names);
+  const area = {
+    x: PAD + leftW + 16,
+    y: 100,
+    w: CARD_W - 20 - (PAD + leftW + 16),
+    h: CARD_H - 96 - 100 - (legend.length > 0 ? LEGEND_H : 0),
+  };
   // The pills are sized in pixels on the card (readable at share size), so in map units they shrink
   // as the map scales up: estimate the scale without them first, then place them at that size.
   const bare = graphBounds(map, 10);
@@ -610,7 +617,57 @@ export async function renderBubbleCard(
     ctx.fillStyle = INK;
     ctx.fillText(hub.text, X(p.x), Y(p.y) + 1);
   });
+  // The legend: one chip per kind of name on the map, drawn as the names are, centred under it.
+  if (legend.length > 0) {
+    ctx.font = `650 14px ${FONT}`;
+    const chips = legend.map((k) => ({ ...k, w: ctx.measureText(k.sample).width + 14 }));
+    ctx.font = `500 14px ${FONT}`;
+    const widths = chips.map((c) => c.w + 8 + ctx.measureText(c.label).width);
+    const total = widths.reduce((t, w) => t + w, 0) + (chips.length - 1) * 22;
+    let x = area.x + (area.w - total) / 2;
+    const ly = area.y + area.h + LEGEND_H / 2 + 2;
+    ctx.textBaseline = "middle";
+    chips.forEach((c, i) => {
+      ctx.fillStyle = c.bg;
+      ctx.beginPath();
+      ctx.roundRect(x, ly - 11, c.w, 22, 5);
+      ctx.fill();
+      ctx.textAlign = "center";
+      ctx.font = `650 14px ${FONT}`;
+      ctx.fillStyle = c.ink;
+      ctx.fillText(c.sample, x + c.w / 2, ly + 1);
+      ctx.textAlign = "left";
+      ctx.font = `500 14px ${FONT}`;
+      ctx.fillStyle = MUTED;
+      ctx.fillText(c.label, x + c.w + 8, ly + 1);
+      x += widths[i]! + 22;
+    });
+  }
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   return canvas;
+}
+
+/** The legend's height under the map, card pixels. */
+const LEGEND_H = 34;
+
+/** The kinds of wallet name on the map's holders, in a fixed order: a sample chip and what it means. */
+function nameLegend(
+  graph: BubbleGraph,
+  names: WalletNames,
+): { sample: string; label: string; bg: string; ink: string }[] {
+  const kinds = new Set(
+    graph.nodes.flatMap((n) =>
+      n.kind === "holder" && n.wallet && names[n.wallet] ? [names[n.wallet]!.source] : [],
+    ),
+  );
+  const out: { sample: string; label: string; bg: string; ink: string }[] = [];
+  if (kinds.has("kol")) out.push({ sample: "Name", label: "KOL", bg: SIDE, ink: "#1a1300" });
+  if (kinds.has("pumpfun"))
+    out.push({ sample: '"name"', label: "Pump.fun", bg: "rgba(12, 14, 20, 0.82)", ink: "#4ade80" });
+  if (kinds.has("fomo"))
+    out.push({ sample: '"name"', label: "FOMO", bg: "rgba(12, 14, 20, 0.82)", ink: "#c4b5fd" });
+  if (kinds.has("identity") || kinds.has("exchange"))
+    out.push({ sample: "Name", label: "Helius / exchange", bg: "rgba(12, 14, 20, 0.82)", ink: INK });
+  return out;
 }
