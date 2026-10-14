@@ -291,7 +291,7 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     expect(quiet.getFundersBatch).not.toHaveBeenCalled();
   });
 
-  it("puts an alerted coin's known top-100 wallets on its bubble map, and nobody new", async () => {
+  it("puts an alerted coin's known top-50 wallets on its bubble map, and nobody new", async () => {
     const mint = w("wide-mint");
     const top = Array.from({ length: 26 }, (_, i) => ({ owner: w(`t${i}`), pct: 40 - i }));
     const extra = (i: number) => ({ owner: w(`x${i}`), pct: 1 - i / 100 });
@@ -305,7 +305,7 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     const helius = {
       ...fakeHelius(funders),
       getTopHoldersBatch: vi.fn(async (mints: string[], n: number) => {
-        expect(n).toBe(101);
+        expect(n).toBe(51);
         return new Map(mints.map((m) => [m, { status: "found" as const, holders: wideList }]));
       }),
     };
@@ -380,7 +380,7 @@ describe("readTopHolders", () => {
     expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mA"], 26);
   });
 
-  it("reads an alerted coin's top 100 in the same call, keeping the readings on the top 25", async () => {
+  it("reads an alerted coin's top 50 in the same call, keeping the readings on the top 25", async () => {
     const wide = Array.from({ length: 101 }, (_, i) => ({ owner: `w${i}`, pct: 101 - i }));
     const helius = {
       getTopHoldersBatch: vi.fn(async (mints: string[]) => {
@@ -390,9 +390,9 @@ describe("readTopHolders", () => {
     const groups: LinkedGroup[] = [{ mintAddress: "mW", holders: [] }];
     await readTopHolders(groups, helius, { maxReads: 4, nowMs: 0 });
     expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mW"], 26);
-    // Called a moment later: read again at once for its top 100 (the read at alert time).
+    // Called a moment later: read again at once for its top 50 (the read at alert time).
     await readTopHolders(groups, helius, { maxReads: 4, nowMs: 1, wideMints: new Set(["mW"]) });
-    expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mW"], 101);
+    expect(helius.getTopHoldersBatch).toHaveBeenLastCalledWith(["mW"], 51);
     expect(groups[0]!.holders).toHaveLength(26);
     expect(cachedTopHolders("mW", 2)).toHaveLength(26);
     // Then on the usual cadence only.

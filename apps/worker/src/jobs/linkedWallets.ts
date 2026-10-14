@@ -387,7 +387,7 @@ export function topHolderWalletsOf(
 }
 
 /**
- * Each model-alerted mint's top 100 holders (BUBBLE_WIDE_TOP_N and one more, for the creator) and
+ * Each model-alerted mint's top 50 holders (BUBBLE_WIDE_TOP_N and one more, for the creator) and
  * when read: the same read as its top 25 (the whole token-account list comes back either way, so
  * the wider cut costs nothing), kept only for the bubble map.
  */
@@ -398,8 +398,8 @@ const MAX_WIDE_LISTS = 1_000;
  * Reads the top-25 holder list (pools aside) for groups without a fresh one, in the groups' order
  * (contenders first), at most `maxReads` mints, and puts each list read on its group: the linked
  * reading's holders past RugCheck's 20 accounts. A failed read leaves the group as it was.
- * `wideMints` (the model-alerted coins) keep their top 100 too, for the bubble map, and one with
- * no top 100 yet is read now even when its top 25 is fresh: the read at alert time.
+ * `wideMints` (the model-alerted coins) keep their top 50 too, for the bubble map, and one with
+ * no top 50 yet is read now even when its top 25 is fresh: the read at alert time.
  * Answers how many mints it asked about.
  */
 export async function readTopHolders(
@@ -453,7 +453,7 @@ let alertedMints: { mints: Set<string>; atMs: number } | null = null;
 
 /**
  * The mints a model called within WIDE_MAP_ALERT_DAYS (CuratedAlert), read at most once a minute:
- * the coins whose bubble map takes in their top 100. Empty when the read fails.
+ * the coins whose bubble map takes in their top 50. Empty when the read fails.
  */
 export async function wideMapMints(nowMs = Date.now()): Promise<Set<string>> {
   if (alertedMints && nowMs - alertedMints.atMs < ALERTED_REFRESH_MS) return alertedMints.mints;
@@ -471,7 +471,7 @@ export async function wideMapMints(nowMs = Date.now()): Promise<Set<string>> {
   return alertedMints.mints;
 }
 
-/** One holder on the wider map: its share, and its rank in the top 100 when past the top 25. */
+/** One holder on the wider map: its share, and its rank in the top 50 when past the top 25. */
 export interface WideHolder {
   wallet: string;
   pct: number;
@@ -480,12 +480,12 @@ export interface WideHolder {
   cexFunder?: string;
 }
 
-/** A model-alerted coin's bubble map over its top 25 and every known wallet in its top 100. */
+/** A model-alerted coin's bubble map over its top 25 and every known wallet in its top 50. */
 export interface WideMapReading {
   mintAddress: string;
-  /** When the top 100 was read. */
+  /** When the top 50 was read. */
   readAt: Date;
-  /** How many holders the top-100 read listed (pools and the creator aside). */
+  /** How many holders the top-50 read listed (pools and the creator aside). */
   holdersRead: number;
   /** Of those past the top 25, how many we know the funder of (on the map). */
   knownExtra: number;
@@ -495,8 +495,8 @@ export interface WideMapReading {
 }
 
 /**
- * The wider bubble map for each model-alerted group with a top 100 in hand and a complete top-25
- * reading: the top 25 as the reading has them, plus every holder ranked 26 to 100 whose funder is
+ * The wider bubble map for each model-alerted group with a top 50 in hand and a complete top-25
+ * reading: the top 25 as the reading has them, plus every holder ranked 26 to 50 whose funder is
  * already stored (WalletFunder "found", with its funding time) and whose funder's exchange verdict
  * is known, linked by the same rules (core's linkedWallets, over the wider list). Nothing new is
  * read from the chain: a wallet we have never read stays off the map. Display only.

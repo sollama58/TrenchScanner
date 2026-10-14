@@ -473,7 +473,7 @@ function startLinkedWalletStage(
   waitedCount: number,
   helius: HeliusClient,
   env: Env,
-  /** Model-alerted coins: their bubble map reads the top 100 too (readTopHolders). */
+  /** Model-alerted coins: their bubble map reads the top 50 too (readTopHolders). */
   wideMints: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   if (env.LINKED_WALLET_LOOKUPS_PER_CYCLE <= 0 || groups.length === 0 || linkedStageInFlight) {
@@ -1044,7 +1044,7 @@ async function scanCycle(
   const linkedWaited = linkedFiltersActive
     ? linkedGroups.length
     : walletGroups.filter((g) => g.contender || g.alerted).length;
-  // Model-alerted coins, whose bubble map takes in the known wallets of their top 100 (display only).
+  // Model-alerted coins, whose bubble map takes in the known wallets of their top 50 (display only).
   const wideMints = env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0 ? await wideMapMints() : new Set<string>();
   const linkedWork = startLinkedWalletStage(linkedGroups, linkedWaited, deps.helius, env, wideMints);
   // The live tape: the newest trades of each coin close to a call (contenders, then alerts held
@@ -1186,7 +1186,7 @@ async function scanCycle(
   if (linkedLookups && wideMints.size > 0) {
     void wideMapReadings(linkedGroups, linkedLookups, wideMints)
       .then(storeWideMapReadings)
-      .catch((err: unknown) => logger.warn("bubble map top-100 reading failed", { error: String(err) }));
+      .catch((err: unknown) => logger.warn("bubble map top-50 reading failed", { error: String(err) }));
   }
   lap("linkedWallets");
   await withinBudget(liveTapeWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));

@@ -39,7 +39,7 @@ const TRACK_CACHE_MS = 10 * 60_000;
 /** Scan market caps sent with the token modal's chart: its fallback when Pump.fun has no candles. */
 const CHART_SNAPSHOT_POINTS = 240;
 
-/** GET /tokens/:mint/bubble-holders: a model-alerted coin's bubble map over its top 100 (web src/bubbleMap.ts). */
+/** GET /tokens/:mint/bubble-holders: a model-alerted coin's bubble map over its top 50 (web src/bubbleMap.ts). */
 export interface BubbleHoldersMap {
   readAt: string;
   holdersRead: number;
@@ -224,7 +224,7 @@ export async function registerTokenRoutes(app: FastifyInstance) {
   });
 
   /**
-   * A model-alerted coin's bubble map over its top 100 holders (BubbleMapHolders): the top 25 and
+   * A model-alerted coin's bubble map over its top 50 holders (BubbleMapHolders): the top 25 and
    * every known wallet past them, clustered alike. `{ map: null }` for a coin with none.
    */
   app.get("/:mintAddress/bubble-holders", async (request, reply): Promise<BubbleHolders | undefined> => {

@@ -643,7 +643,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         where: { sentAt: { lt: new Date(startedAt - TELEGRAM_ALERT_SENT_RETENTION_DAYS * DAY_MS) } },
       }),
     ),
-    // Alerted coins' top-100 bubble maps: one row a coin, kept as long as its snapshots.
+    // Alerted coins' top-50 bubble maps: one row a coin, kept as long as its snapshots.
     stage("bubbleMapHolders", none, () =>
       prisma.bubbleMapHolders.deleteMany({ where: { computedAt: { lt: snapshotCutoff } } }),
     ),

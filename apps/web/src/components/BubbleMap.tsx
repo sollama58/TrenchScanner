@@ -55,7 +55,7 @@ type TokenDetail = Token & { snapshots: Snapshot[] };
 export const CLUSTER_COLOURS = MAP_COLOURS;
 
 /**
- * A model-alerted coin's map over its top 100 (withWideMap), when it has one: null for any other
+ * A model-alerted coin's map over its top 50 (withWideMap), when it has one: null for any other
  * coin, or while it loads. The map stands without it.
  */
 function useWideMap(mint: string): WideMap | null {
@@ -73,7 +73,7 @@ function useWideMap(mint: string): WideMap | null {
   return wide;
 }
 
-/** "· +12 known from top 100", for the map's subtitle; empty without the wider map. */
+/** "· +12 known from top 50", for the map's subtitle; empty without the wider map. */
 function wideText(wide: WideMap | null): string {
   return wide ? ` · +${wide.knownExtra} known from top ${wide.holdersRead}` : "";
 }
@@ -525,7 +525,7 @@ function MapView({
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
           {graph.nodes.some((n) => n.rank !== undefined) &&
-            " A model called this coin, so the map also takes in every wallet in its top 100 whose funder we already know; the counts above stay on the top 25."}
+            " A model called this coin, so the map also takes in every wallet in its top 50 whose funder we already know; the counts above stay on the top 25."}
         </p>
       )}
     </>

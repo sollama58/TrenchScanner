@@ -77,7 +77,7 @@ export function useBubblesMint(): string | null {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The top 100, for model-alerted coins
+// The top 50, for model-alerted coins
 
 /** A holder on the wider map: rank only on those past the top 25. */
 export interface WideHolder {
@@ -88,8 +88,8 @@ export interface WideHolder {
 }
 
 /**
- * A model-alerted coin's map over its top 100 (GET /tokens/:mint/bubble-holders, user ask
- * 2026-10-14): the top 25, plus every holder ranked 26 to 100 whose funder we already know,
+ * A model-alerted coin's map over its top 50 (GET /tokens/:mint/bubble-holders, user ask
+ * 2026-10-14): the top 25, plus every holder ranked 26 to 50 whose funder we already know,
  * clustered by the same rules. Wallets we have never read are left off.
  */
 export interface WideMap {
@@ -106,7 +106,7 @@ export interface WideMap {
 /**
  * The reading the map draws: the snapshot's, with the wider map's holders, clusters and
  * same-minute groups in place of its own when the coin has one. Every count (Linked N/25,
- * Same minute, CEX-funded) stays the snapshot's: the top 100 is for the picture only.
+ * Same minute, CEX-funded) stays the snapshot's: the top 50 is for the picture only.
  */
 export function withWideMap<
   S extends Pick<Snapshot, "linkedClusters" | "linkedHolders" | "sameTimeClusters">,
@@ -162,7 +162,7 @@ export interface MapNode {
   dumps: number | null;
   /** On "rest": how many holders it stands for. */
   count: number;
-  /** Its rank among the top 100 when the map took it in from past the top 25 (alerted coins); else absent. */
+  /** Its rank among the top 50 when the map took it in from past the top 25 (alerted coins); else absent. */
   rank?: number;
   r: number;
   x: number;
@@ -288,7 +288,7 @@ export function buildGraph(
     (c) => c && typeof c.funder === "string" && Array.isArray(c.wallets) && c.wallets.length > 0,
   );
   const byWallet = new Map(flagged.map((w) => [w.wallet, w]));
-  // Holders the top-100 map took in past the top 25 carry their rank (withWideMap).
+  // Holders the top-50 map took in past the top 25 carry their rank (withWideMap).
   const rankOf = new Map(
     (snapshot.linkedHolders ?? []).flatMap((h) =>
       h && typeof h.rank === "number" ? [[h.wallet, h.rank]] : [],

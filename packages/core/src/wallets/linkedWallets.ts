@@ -417,10 +417,10 @@ export const LINKED_TOP_N = 25;
 
 /**
  * How many of the largest holders (pools aside) the bubble map reads for a model-alerted coin
- * (user ask 2026-10-14): those past the top 25 whose funder we already know join the map, drawn
+ * (user ask 2026-10-14: the top 50, then the top 50): those past the top 25 whose funder we already know join the map, drawn
  * with the same clusters and ties. For display only: every count stays on LINKED_TOP_N.
  */
-export const BUBBLE_WIDE_TOP_N = 100;
+export const BUBBLE_WIDE_TOP_N = 50;
 
 /**
  * How many top-holder accounts are kept from RugCheck's report (it lists about 20): the list the

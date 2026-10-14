@@ -175,15 +175,15 @@ describe("bubble map link", () => {
   });
 });
 
-describe("bubble map top 100", () => {
+describe("bubble map top 50", () => {
   const wide = {
     readAt: "2026-10-14T02:00:00Z",
-    holdersRead: 100,
+    holdersRead: 50,
     knownExtra: 1,
     holders: [
       { wallet: A, pct: 12 },
       { wallet: B, pct: 9 },
-      { wallet: R, pct: 0.4, rank: 57 },
+      { wallet: R, pct: 0.4, rank: 37 },
     ],
     clusters: [
       {
@@ -200,11 +200,11 @@ describe("bubble map top 100", () => {
     sameTimeClusters: [],
   };
 
-  it("draws an alerted coin's known top-100 wallets in their clusters, with their rank, counts unchanged", () => {
+  it("draws an alerted coin's known top-50 wallets in their clusters, with their rank, counts unchanged", () => {
     const g = buildGraph({ ...snapshot, linkedWalletCount: 4, linkedWalletsChecked: 25 } as never);
     const w = buildGraph(withWideMap({ ...snapshot, linkedWalletCount: 4, linkedWalletsChecked: 25 }, wide));
     const r = w.nodes.find((n) => n.wallet === R)!;
-    expect(r).toMatchObject({ kind: "holder", cluster: 0, rank: 57 });
+    expect(r).toMatchObject({ kind: "holder", cluster: 0, rank: 37 });
     expect(w.links).toContainEqual({ from: `h:${R}`, to: `f:${F}`, cluster: 0 });
     expect(w.nodes.find((n) => n.wallet === A)!.rank).toBeUndefined();
     expect(w.linkedCount).toEqual(g.linkedCount);

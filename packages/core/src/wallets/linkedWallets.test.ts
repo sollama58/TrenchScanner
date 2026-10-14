@@ -170,7 +170,7 @@ describe("linkedWallets", () => {
 });
 
 describe("wider readings (topN)", () => {
-  it("reads past the top 25 when asked, for the bubble map's top 100", () => {
+  it("reads past the top 25 when asked, for the bubble map's top 50", () => {
     const holders = Array.from({ length: 40 }, (_, i) => ({ owner: `h${i}`, pct: 40 - i }));
     const funders = new Map<string, string | null>(holders.map((h) => [h.owner, `own-${h.owner}`]));
     funders.set("h0", "F");
