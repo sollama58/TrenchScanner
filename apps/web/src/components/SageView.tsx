@@ -387,7 +387,15 @@ function SageBody({ mint, onClose }: { mint: string; onClose: () => void }) {
       <header className="sage-head">
         <div className="sage-token">
           {img ? (
-            <img className="avatar" src={img} alt="" width={44} height={44} referrerPolicy="no-referrer" />
+            <img
+              className="avatar"
+              src={img}
+              alt=""
+              width={44}
+              height={44}
+              decoding="async"
+              referrerPolicy="no-referrer"
+            />
           ) : (
             <span className="avatar placeholder">{label.replace("$", "").slice(0, 2)}</span>
           )}

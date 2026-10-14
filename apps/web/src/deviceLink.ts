@@ -1,4 +1,6 @@
-import { post, type User } from "./api";
+import { api, ApiError, post, type User } from "./api";
+import { peek } from "./cache";
+import { shortAddress } from "./format";
 import { adoptSession } from "./sessionCheck";
 
 /**
@@ -84,6 +86,38 @@ export function takeLinkCode(): string | null | undefined {
 /** Whether this page load came from a pairing link that hasn't been taken yet. */
 export function hasPendingLink(): boolean {
   return pending !== undefined;
+}
+
+/**
+ * Who this browser is signed in as right now, or null for nobody. Asked before a pairing code is
+ * redeemed: redeeming replaces the session, and a code can come from anyone's link, not only the
+ * reader's own QR. A failed check (offline, a 5xx) falls back on what this browser remembers.
+ */
+export async function currentSignIn(): Promise<User | null> {
+  try {
+    return await api<User>("/auth/me");
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) return null;
+    return peek<User>("/auth/me")?.data ?? null;
+  }
+}
+
+/** The question a pairing link asks before it replaces `current`'s sign-in. */
+export function replaceSignInQuestion(current: User): string {
+  return (
+    `This browser is signed in as ${shortAddress(current.walletAddress)}. The pairing link signs it in to ` +
+    "the account that made the QR code instead.\n\nReplace your current sign-in with the paired account? " +
+    "Only say yes if you just scanned your own QR code."
+  );
+}
+
+/**
+ * Whether to go ahead with a pairing link: always when nobody is signed in here; otherwise only if
+ * the reader agrees to swap accounts (a link sent by someone else would otherwise sign this browser
+ * in to their account without a word, a login CSRF).
+ */
+export function mayReplaceSignIn(current: User | null, ask: (question: string) => boolean): boolean {
+  return current === null || ask(replaceSignInQuestion(current));
 }
 
 /** Phone side: trade the code for a session, and make sure that session sticks. */

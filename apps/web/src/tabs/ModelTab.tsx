@@ -726,7 +726,12 @@ function WinnerRunsPanel({ data, days }: { data: ModelInsights; days: number }) 
             winners, each of which ran to {mult(traits.bigRunnerMultiple)} or more). Lift is how much more
             often a winner with the signal high (or low) became one of them; 1 is no difference.
           </p>
-          <div className="table-wrap">
+          <div
+            className="table-wrap"
+            tabIndex={0}
+            role="region"
+            aria-label="What the biggest runners had in common"
+          >
             <table className="compact">
               <thead>
                 <tr>

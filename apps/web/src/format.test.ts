@@ -82,6 +82,27 @@ describe("tokenThumb", () => {
   });
 });
 
+describe("tokenThumb on DexScreener's CDN", () => {
+  const big =
+    "https://cdn.dexscreener.com/cms/images/iYfsGOoj9qej2LNa?width=800&height=800&quality=95&format=auto";
+
+  it("asks for the smallest size the CDN serves that covers the avatar", () => {
+    expect(tokenThumb(big)).toBe(
+      "https://cdn.dexscreener.com/cms/images/iYfsGOoj9qej2LNa?width=128&height=128&quality=80&format=auto",
+    );
+    expect(tokenThumb(big, 64)).toContain("width=64&height=64&quality=80");
+    expect(tokenThumb(big, 160)).toContain("width=160&height=160");
+  });
+
+  it("never asks for more than the original, and leaves size-less URLs alone", () => {
+    expect(tokenThumb(big, 512)).toBe(big);
+    const small = "https://cdn.dexscreener.com/cms/images/x?width=64&height=64&quality=95";
+    expect(tokenThumb(small)).toBe(small);
+    const plain = "https://cdn.dexscreener.com/token-images/og/solana/abc.png";
+    expect(tokenThumb(plain)).toBe(plain);
+  });
+});
+
 describe("until", () => {
   const now = Date.UTC(2026, 9, 5, 12, 0, 0);
   it("says how far off a future moment is", () => {

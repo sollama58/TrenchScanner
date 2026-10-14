@@ -11,7 +11,10 @@
   --surface-3: #1f2330;
   --ink: #f3f5fa;
   --ink-2: #aab1c2;
-  --muted: #6f7789;
+  /* --muted and --link are at least 4.5:1 (WCAG AA body text) on --page, --surface-2 and
+     --surface-3 in both themes. */
+  --muted: #8c94a7;
+  --link: #4f95ec;
   --grid: #232735;
   --axis: #343a4b;
   --border: rgba(255, 255, 255, 0.07);
@@ -60,7 +63,8 @@
     --surface-3: #eceef4;
     --ink: #0c0e14;
     --ink-2: #4b5263;
-    --muted: #6b7280;
+    --muted: #5d6471;
+    --link: #1e67bd;
     --grid: #e6e8ef;
     --axis: #c9cdd8;
     --border: rgba(12, 14, 20, 0.08);
@@ -93,7 +97,8 @@
   --surface-3: #eceef4;
   --ink: #0c0e14;
   --ink-2: #4b5263;
-  --muted: #6b7280;
+  --muted: #5d6471;
+  --link: #1e67bd;
   --grid: #e6e8ef;
   --axis: #c9cdd8;
   --border: rgba(12, 14, 20, 0.08);
@@ -127,11 +132,29 @@ body {
 }
 
 a {
-  color: var(--series-1);
+  color: var(--link);
   text-decoration: none;
 }
 a:hover {
   text-decoration: underline;
+}
+/* A plain link inside running text is underlined, so it doesn't rest on colour alone. Styled links
+   (buttons, tabs, pills, rows: anything with a class) keep their own look. */
+:is(p, .site-foot) a:not([class]) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* Screen-reader-only text, such as each view's <h1>. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 h1,
@@ -417,6 +440,10 @@ input[type="checkbox"] {
   border: 1px solid var(--border);
   border-radius: 12px;
 }
+/* The signed-in bar's tablist wrapper (App.tsx): its buttons lay out as if they were the bar's own. */
+.tabs > .tablist {
+  display: contents;
+}
 .tabs button,
 .tabs .tab-link {
   background: transparent;
@@ -576,6 +603,9 @@ input[type="checkbox"] {
   max-width: 1360px;
   margin: 0 auto;
   padding: 24px;
+  /* At least a screen tall, so the footer starts below the fold instead of showing under the
+     loading page and then jumping away when the feed lands (a layout shift on every load). */
+  min-height: 100vh;
 }
 .site-foot {
   text-align: center;
@@ -803,9 +833,11 @@ input[type="checkbox"] {
     background-position: -200% 0;
   }
 }
+/* About a real feed card's height with the default look (~360px), so the cards replace the
+   placeholders without the rows below jumping. */
 .card-skeleton {
   gap: 16px;
-  min-height: 190px;
+  min-height: 360px;
 }
 .empty-state {
   display: flex;

@@ -99,16 +99,40 @@ export function tokenLabel(token: {
  * A small thumbnail for a token's launcher-supplied image. Most Pump.fun images are IPFS files on
  * public gateways (ipfs.io rate-limits with 429s) at full size, often hundreds of KB for a 40px
  * avatar. An IPFS image is served instead through Pump.fun's Pinata gateway, resized there to
- * `size` px (96 by default, ~2-3 KB). Anything else is returned unchanged. The card falls back to
- * the original URL if the thumbnail fails to load.
+ * `size` px (96 by default, ~2-3 KB). DexScreener's CDN images carry their own size in the query
+ * (`?width=800&height=800&quality=95`, ~200 KB): those ask the CDN for the smallest size it serves
+ * that covers `size` (it answers other sizes with a 422). Anything else is returned unchanged. The
+ * card falls back to the original URL if the thumbnail fails to load.
  */
 export function tokenThumb(url: string, size = 96): string {
   const cid =
     /^https:\/\/[^/]+\/ipfs\/([A-Za-z0-9]{46,})\/?(?:[?#].*)?$/.exec(url)?.[1] ??
     /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?(?:[?#].*)?$/.exec(url)?.[1];
-  return cid
-    ? `https://pump.mypinata.cloud/ipfs/${cid}?img-width=${size}&img-height=${size}&img-fit=cover`
-    : url;
+  if (cid)
+    return `https://pump.mypinata.cloud/ipfs/${cid}?img-width=${size}&img-height=${size}&img-fit=cover`;
+  return dexScreenerThumb(url, size) ?? url;
+}
+
+/** The square sizes cdn.dexscreener.com resizes to (checked 2026-10-14; 96, 200, 512 and others are refused). */
+const DEXSCREENER_SIZES = [64, 128, 160, 256, 800];
+
+function dexScreenerThumb(url: string, size: number): string | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (u.hostname !== "cdn.dexscreener.com" || !u.searchParams.has("width")) return null;
+  const width = Number(u.searchParams.get("width"));
+  const fit = DEXSCREENER_SIZES.find((s) => s >= size) ?? 800;
+  // Never ask for more than the launcher's own URL did.
+  if (!Number.isFinite(width) || fit >= width) return null;
+  u.searchParams.set("width", String(fit));
+  // It needs both sides: a width alone is refused.
+  u.searchParams.set("height", String(fit));
+  u.searchParams.set("quality", "80");
+  return u.toString();
 }
 
 /**

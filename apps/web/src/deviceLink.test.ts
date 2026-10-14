@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { buildLinkUrl, describeDevice, isLinkHash, parseLinkHash } from "./deviceLink";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { User } from "./api";
+import {
+  buildLinkUrl,
+  currentSignIn,
+  describeDevice,
+  isLinkHash,
+  mayReplaceSignIn,
+  parseLinkHash,
+  replaceSignInQuestion,
+} from "./deviceLink";
 
 const CODE = "a".repeat(32) + "0123456789abcdef".repeat(2);
 
@@ -27,6 +36,42 @@ describe("pairing links", () => {
       expect(isLinkHash(h)).toBe(false);
       expect(parseLinkHash(h)).toBeNull();
     }
+  });
+});
+
+describe("a pairing link over an existing sign-in", () => {
+  const me: User = { id: "u1", walletAddress: "So11111111111111111111111111111111111111112", isAdmin: false };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("goes ahead without asking when nobody is signed in", () => {
+    const ask = vi.fn(() => false);
+    expect(mayReplaceSignIn(null, ask)).toBe(true);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("asks before replacing someone's sign-in, naming their wallet", () => {
+    const ask = vi.fn(() => true);
+    expect(mayReplaceSignIn(me, ask)).toBe(true);
+    expect(ask).toHaveBeenCalledOnce();
+    expect(ask.mock.calls[0]).toEqual([replaceSignInQuestion(me)]);
+    expect(replaceSignInQuestion(me)).toContain("So11…1112");
+    expect(replaceSignInQuestion(me)).toMatch(/Replace your current sign-in/);
+  });
+
+  it("keeps the current sign-in when the reader says no", () => {
+    expect(mayReplaceSignIn(me, () => false)).toBe(false);
+  });
+
+  it("reads who is signed in from /auth/me, and a 401 as nobody", async () => {
+    const reply = (status: number, body: unknown) =>
+      vi.fn(async () => new Response(JSON.stringify(body), { status }));
+    vi.stubGlobal("fetch", reply(200, me));
+    expect(await currentSignIn()).toEqual(me);
+    vi.stubGlobal("fetch", reply(401, { error: "Not signed in" }));
+    expect(await currentSignIn()).toBeNull();
   });
 });
 
