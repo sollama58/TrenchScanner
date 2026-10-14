@@ -109,6 +109,16 @@ export function BubbleMapHost({
   );
 }
 
+/**
+ * Whether the same-exchange ties show: the viewer's default from Settings, switchable on the map
+ * (user ask 2026-10-13). Held above the map so its share image draws the ties too (2026-10-14).
+ */
+function useCexToggle(graph: BubbleGraph | null): { showCex: boolean; setCexOn: (on: boolean) => void } {
+  const { bubbleCexLinks } = useAppearance();
+  const [cexOn, setCexOn] = useState<boolean | null>(null);
+  return { showCex: !!graph && (cexOn ?? bubbleCexLinks) && graph.cexLinks.length > 0, setCexOn };
+}
+
 function Head({ title, sub, actions }: { title: string; sub?: string; actions: React.ReactNode }) {
   return (
     <header className="about-head bm-head">
@@ -187,6 +197,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
     [snapshot, flagged],
   );
   const names = useGraphNames(graph);
+  const { showCex, setCexOn } = useCexToggle(graph);
 
   const [copied, setCopied] = useState(false);
   const copyLink = () => {
@@ -209,7 +220,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
           fileName={`trenchscanner-bubbles-${(loaded.token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
           caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
           disabled={!hasMap}
-          render={() => renderBubbleCard(graph, loaded.token, names)}
+          render={() => renderBubbleCard(graph, loaded.token, names, { cex: showCex })}
         />
       )}
       <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
@@ -249,7 +260,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
             : "No two top holders share a funder: nothing linked to map."}
         </p>
       )}
-      {graph && hasMap && <MapView graph={graph} names={names} />}
+      {graph && hasMap && <MapView graph={graph} names={names} showCex={showCex} setCexOn={setCexOn} />}
     </div>
   );
 }
@@ -258,10 +269,15 @@ function MapView({
   graph,
   names,
   compact = false,
+  showCex,
+  setCexOn,
 }: {
   graph: BubbleGraph;
   names: WalletNames;
   compact?: boolean;
+  /** Whether the same-exchange ties show (useCexToggle). */
+  showCex: boolean;
+  setCexOn: (on: boolean) => void;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
@@ -270,8 +286,7 @@ function MapView({
   const lit = node ? node.cluster : focus;
   const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator"));
   const largest = graph.clusters[0]?.pct ?? null;
-  // Same-exchange ties: the viewer's default from Settings, switchable here (user ask 2026-10-13).
-  const { bubbleCexLinks, bubbleSideLinks } = useAppearance();
+  const { bubbleSideLinks } = useAppearance();
   // KOLs' possible side wallets (the Side Wallet Checker's 24-hour matches): tied to a pill named
   // for the KOL, on by default and switchable like the exchange ties (user ask 2026-10-14). Drawn
   // only: never in the Linked count, the safety screen or the models.
@@ -283,8 +298,6 @@ function MapView({
   const groups = useMemo(() => sideGroups(holderWallets, sides), [holderWallets, sides]);
   const [sideOn, setSideOn] = useState<boolean | null>(null);
   const showSides = (sideOn ?? bubbleSideLinks) && groups.length > 0;
-  const [cexOn, setCexOn] = useState<boolean | null>(null);
-  const showCex = (cexOn ?? bubbleCexLinks) && graph.cexLinks.length > 0;
   // With the ties on, the bubbles rearrange so each exchange's holders sit together (user ask
   // 2026-10-13); off, the usual layout comes back as it was.
   const cexGraph = useMemo(() => (showCex ? cexLayout(graph) : null), [graph, showCex]);
@@ -1003,6 +1016,7 @@ export function BubbleMapSection({
     [snapshot, flagged],
   );
   const names = useGraphNames(graph);
+  const { showCex, setCexOn } = useCexToggle(graph);
   const label = tokenLabel(token);
   if (!graph || !graph.nodes.some((n) => n.kind === "holder")) {
     // Every token view shows the map (user ask 2026-10-13); a coin no scan read holders for says so.
@@ -1029,7 +1043,7 @@ export function BubbleMapSection({
             fileName={`trenchscanner-bubbles-${(token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
             caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
             iconOnly
-            render={() => renderBubbleCard(graph, token, names)}
+            render={() => renderBubbleCard(graph, token, names, { cex: showCex })}
           />
           <button
             type="button"
@@ -1041,7 +1055,7 @@ export function BubbleMapSection({
           </button>
         </span>
       </h4>
-      <MapView graph={graph} names={names} compact />
+      <MapView graph={graph} names={names} compact showCex={showCex} setCexOn={setCexOn} />
     </section>
   );
 }

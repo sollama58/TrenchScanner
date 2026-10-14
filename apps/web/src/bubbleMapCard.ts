@@ -1,7 +1,11 @@
 import type { Token } from "./api";
 import {
   centreOf,
+  cexGroupsOf,
+  cexLayout,
+  cexSlots,
   clusterHalos,
+  exchangeName,
   graphBounds,
   HALO_PAD,
   nodeSlot,
@@ -32,6 +36,14 @@ import {
 const CLUSTER = ["#3987e5", "#199e70", "#d95926", "#8b5cf6", "#06b6d4", "#84cc16", "#ec4899"];
 const RISK = "#ef4444";
 const DEV = "#fab219";
+/** The map's pills on the card: their text size, side padding and height, in card pixels. */
+const PILL_FONT = 16;
+const PILL_PAD = 11;
+const PILL_H = 28;
+
+/** The exchanges' colours (styles.css --bm-cex-0 to --bm-cex-3; bubbleMap CEX_COLOURS). */
+const CEX = ["#a5b4fc", "#5eead4", "#fda4af", "#f0abfc"];
+
 /** A colour slot's colour (nodeSlot / sameTimeSlot); grey for none. */
 const slotColour = (slot: number | null) => (slot === null ? OTHER : CLUSTER[slot % CLUSTER.length]!);
 const pctText = (v: number) => `${v < 10 ? v.toFixed(1) : v.toFixed(0)}%`;
@@ -58,6 +70,8 @@ export async function renderBubbleCard(
   graph: BubbleGraph,
   token: Token,
   names: WalletNames = {},
+  /** cex: draw the same-exchange ties, laid out by exchange, as the map shows them when they're on. */
+  opts: { cex?: boolean } = {},
 ): Promise<HTMLCanvasElement> {
   const { canvas, ctx, icon } = await cardCanvas();
   if (!ctx) return canvas;
@@ -182,11 +196,47 @@ export async function renderBubbleCard(
     );
   }
 
-  // Right: the map, fitted into its box.
+  // With the exchange ties on: which exchanges funded which holders, in their colours.
+  const cex = opts.cex && graph.cexLinks.length > 0;
+  const exchanges = cex ? cexGroupsOf(graph) : [];
+  const cexSlot = cex ? cexSlots(graph) : new Map<string, number>();
+  const exchangeText = (funder: string) => {
+    const named = names[funder];
+    return named ? exchangeName(named.name) : walletText(funder, names);
+  };
+  if (exchanges.length > 0) {
+    y += 36;
+    ctx.font = `600 18px ${FONT}`;
+    let x = PAD;
+    for (const g of exchanges.slice(0, 3)) {
+      const text = `${exchangeText(g.funder)} ${g.nodes.length}`;
+      const w = ctx.measureText(text).width;
+      if (x + 22 + w > PAD + leftW || y > CARD_H - 110) break;
+      ctx.fillStyle = CEX[(cexSlot.get(g.funder) ?? 0) % CEX.length]!;
+      ctx.beginPath();
+      ctx.arc(x + 7, y - 2, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = INK2;
+      ctx.fillText(text, x + 20, y + 4);
+      x += 20 + w + 22;
+    }
+  }
+
+  // Right: the map, fitted into its box; regrouped by exchange when the ties show, as on the map.
+  const map = cex ? cexLayout(graph) : graph;
   const area = { x: PAD + leftW + 40, y: 122, w: CARD_W - PAD - (PAD + leftW + 40), h: CARD_H - 112 - 122 };
+  // The pills are sized in pixels on the card (readable at share size), so in map units they shrink
+  // as the map scales up: estimate the scale without them first, then place them at that size.
+  const bare = graphBounds(map, 10);
+  const scale0 = Math.min(area.w / bare.w, area.h / bare.h, 2.4);
+  ctx.font = `600 ${PILL_FONT}px ${FONT}`;
+  const pillSize = (text: string) => ({
+    w: (ctx.measureText(text).width + PILL_PAD * 2) / scale0,
+    h: PILL_H / scale0,
+  });
   // Each same-minute group's pill, a hub tied to its wallets by solid lines, as the dialog draws it.
-  const hubs = graph.sameTimeGroups.flatMap((g, i) => {
-    const members = graph.nodes.filter((n): n is MapNode => n.kind === "holder" && n.sameTime === i);
+  const hubs = map.sameTimeGroups.flatMap((g, i) => {
+    const members = map.nodes.filter((n): n is MapNode => n.kind === "holder" && n.sameTime === i);
     if (members.length === 0) return [];
     const text = `Funded together ${new Date(g.atMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     return [
@@ -194,22 +244,39 @@ export async function renderBubbleCard(
         id: `same:${i}`,
         ...centreOf(members),
         r: 0,
-        w: text.length * 5.6 + 14,
-        h: 16,
+        ...pillSize(text),
         text,
-        colour: slotColour(sameTimeSlot(graph, i)),
+        colour: slotColour(sameTimeSlot(map, i)),
         members,
+        dashed: false,
       },
     ];
   });
-  const placed = placeLabels(graph, hubs);
-  const box = graphBounds(graph, 10, placed);
+  // Each exchange's pill, its name alone and in full, tied to its holders by dashed lines in its colour.
+  if (cex) {
+    for (const g of cexGroupsOf(map)) {
+      if (g.nodes.length === 0) continue;
+      const text = exchangeText(g.funder);
+      hubs.push({
+        id: `cex:${g.funder}`,
+        ...centreOf(g.nodes),
+        r: 0,
+        ...pillSize(text),
+        text,
+        colour: CEX[(cexSlot.get(g.funder) ?? 0) % CEX.length]!,
+        members: [...g.nodes],
+        dashed: true,
+      });
+    }
+  }
+  const placed = placeLabels(map, hubs);
+  const box = graphBounds(map, 10, placed);
   const scale = Math.min(area.w / box.w, area.h / box.h, 2.4);
   const ox = area.x + (area.w - box.w * scale) / 2 - box.x * scale;
   const oy = area.y + (area.h - box.h * scale) / 2 - box.y * scale;
   const X = (v: number) => ox + v * scale;
   const Y = (v: number) => oy + v * scale;
-  const index = new Map(graph.nodes.map((n) => [n.id, n]));
+  const index = new Map(map.nodes.map((n) => [n.id, n]));
 
   // Each cluster's halo, as in the dialog: drawn solid on a layer of its own, then laid down
   // faintly, so the overlapping bubbles and bands don't darken.
@@ -219,7 +286,7 @@ export async function renderBubbleCard(
   const lc = layer.getContext("2d");
   if (lc) {
     const ratio = canvas.width / CARD_W;
-    for (const h of clusterHalos(graph)) {
+    for (const h of clusterHalos(map)) {
       lc.setTransform(ratio, 0, 0, ratio, 0, 0);
       lc.clearRect(0, 0, CARD_W, CARD_H);
       const col = CLUSTER[h.cluster % CLUSTER.length]!;
@@ -248,7 +315,7 @@ export async function renderBubbleCard(
   }
 
   ctx.lineCap = "round";
-  for (const l of graph.links) {
+  for (const l of map.links) {
     const a = index.get(l.from);
     const b = index.get(l.to);
     if (!a || !b) continue;
@@ -262,11 +329,12 @@ export async function renderBubbleCard(
     ctx.stroke();
   }
 
-  // Same-minute ties: solid in the group's colour, from its pill to each of its wallets.
+  // Each pill's ties to its wallets: solid for a same-minute group, dashed for an exchange.
   ctx.lineWidth = Math.max(1.5, 1.6 * scale);
   hubs.forEach((hub, i) => {
     const p = placed[i]!;
-    ctx.strokeStyle = alpha(hub.colour, 0.6);
+    ctx.strokeStyle = alpha(hub.colour, hub.dashed ? 0.9 : 0.6);
+    ctx.setLineDash(hub.dashed ? [7, 6] : []);
     for (const m of hub.members) {
       const mx = (p.x + m.x) / 2 + (m.y - p.y) * 0.12;
       const my = (p.y + m.y) / 2 - (m.x - p.x) * 0.12;
@@ -276,15 +344,16 @@ export async function renderBubbleCard(
       ctx.stroke();
     }
   });
+  ctx.setLineDash([]);
 
-  const order = [...graph.nodes].sort((a, b) => b.r - a.r);
+  const order = [...map.nodes].sort((a, b) => b.r - a.r);
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   for (const n of order) {
     const cx = X(n.x);
     const cy = Y(n.y);
     const r = n.r * scale;
-    const col = slotColour(nodeSlot(n, graph));
+    const col = slotColour(nodeSlot(n, map));
     if (n.kind === "funder") {
       const s = r * 1.25;
       ctx.save();
@@ -346,7 +415,7 @@ export async function renderBubbleCard(
     ctx.fill();
     ctx.restore();
     if (n.sameTime !== null) {
-      ctx.strokeStyle = slotColour(sameTimeSlot(graph, n.sameTime));
+      ctx.strokeStyle = slotColour(sameTimeSlot(map, n.sameTime));
       ctx.lineWidth = 2.5;
       ctx.beginPath();
       ctx.arc(cx, cy, r + (risk ? 13 : 6), 0, Math.PI * 2);
@@ -383,16 +452,18 @@ export async function renderBubbleCard(
   // The groups' pills, over the bubbles, where placeLabels found them room.
   hubs.forEach((hub, i) => {
     const p = placed[i]!;
-    ctx.font = `600 ${Math.max(12, 9.5 * scale)}px ${FONT}`;
-    const w = Math.max(p.w * scale, ctx.measureText(hub.text).width + 16);
-    const h = Math.max(p.h * scale, 22);
+    ctx.font = `600 ${PILL_FONT}px ${FONT}`;
+    const w = ctx.measureText(hub.text).width + PILL_PAD * 2;
+    const h = PILL_H;
     ctx.fillStyle = "#1b1e28";
     ctx.strokeStyle = hub.colour;
     ctx.lineWidth = 2;
+    ctx.setLineDash(hub.dashed ? [5, 4] : []);
     ctx.beginPath();
     ctx.roundRect(X(p.x) - w / 2, Y(p.y) - h / 2, w, h, h / 2);
     ctx.fill();
     ctx.stroke();
+    ctx.setLineDash([]);
     ctx.fillStyle = INK;
     ctx.fillText(hub.text, X(p.x), Y(p.y) + 1);
   });
