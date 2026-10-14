@@ -201,9 +201,10 @@ const envSchema = z.object({
   // 2026-10-13: RugCheck's 20 accounts hold the pool, leaving 19): one getProgramAccountsV2 page
   // each (1 credit; a mint with over 10,000 holders takes a second), kept for TOP_HOLDERS_REFRESH_MS
   // (the worker's linkedWallets.ts), contenders first. Only coins that passed the safety screen are
-  // read. About 4 credits a cycle at 4 (it was 40 on the unpaged 10-credit method until
-  // 2026-10-14). 0 keeps RugCheck's list.
-  LINKED_HOLDER_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(4),
+  // read. 10 since 2026-10-14 (user decision): about 10 credits a cycle (it was 4 coins at 40 credits
+  // on the unpaged 10-credit method). The new holders these lists add go to the funder read, which
+  // LINKED_WALLET_LOOKUPS_PER_CYCLE still caps. 0 keeps RugCheck's list.
+  LINKED_HOLDER_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(10),
   // The longest a curated decision waits for the Linked and CEX-funded counts to be read over the
   // chain's top 25 once the token is otherwise ready (worker's linkedListReady; user ask 2026-10-13).
   // Coins under SNIPER_SHARE_WAIT_MIN_AGE_MINUTES don't wait. Past it the decision goes ahead on

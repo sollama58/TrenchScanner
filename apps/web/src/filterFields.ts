@@ -21,7 +21,8 @@ export interface FieldSpec {
   retired?: boolean;
   /**
    * The saved value is the shown one times this: the top-10 wallet checks are saved as a % of the
-   * top ten (the API's and the matcher's unit) and shown as "N of 10" (user ask 2026-10-13).
+   * top ten (the API's and the matcher's unit) and shown as "N of 10" (user ask 2026-10-13), and
+   * fresh wallets as "N of 25" (2026-10-14).
    */
   scale?: number;
 }
@@ -31,7 +32,10 @@ export function shownValue(f: Pick<FieldSpec, "scale">, saved: number): number;
 export function shownValue(f: Pick<FieldSpec, "scale">, saved: number | null | undefined): number | null;
 export function shownValue(f: Pick<FieldSpec, "scale">, saved: number | null | undefined): number | null {
   if (saved == null) return null;
-  return f.scale ? Math.round((saved / f.scale) * 100) / 100 : saved;
+  // Every scaled field is a cap on a share, so a saved share between two counts shows the lower
+  // one, the count it actually lets through: 50% of the top 25 is 12.5, and 12 of 25 is the most
+  // that passes.
+  return f.scale ? Math.floor(saved / f.scale + 1e-9) : saved;
 }
 
 /** The composite-score setting's label, so lists that show it can attach the explainer. */
@@ -92,12 +96,12 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxFreshTop10WalletPct",
         min: 0,
-        max: 10,
+        max: 25,
         label: "Max fresh wallets",
-        hint: "of the top-10 holders, how many are on wallets first used, or used again after a week idle, in the last day; 8 and over is always rejected",
-        unit: "of 10",
+        hint: "of the top-25 holders, how many are on wallets first used, or used again after a week idle, in the last day (the same share of the top 10 where only those were read); 18 and over is always rejected",
+        unit: "of 25",
         step: 1,
-        scale: 10,
+        scale: 4,
       },
       {
         key: "maxEmptyTop10WalletPct",

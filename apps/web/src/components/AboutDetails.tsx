@@ -103,9 +103,9 @@ export function AboutDetails({ targets }: { targets: Targets }) {
             </tr>
             <tr>
               <td>
-                Fresh top-10 wallets (first used, or used again after a week or more idle, in the last day)
+                Fresh top-25 wallets (first used, or used again after a week or more idle, in the last day)
               </td>
-              <td>8 of 10 or more (over 70%)</td>
+              <td>18 of 25 or more (over 70%; 8 of 10 where only the top 10 were read)</td>
             </tr>
             <tr>
               <td>Empty top-10 wallets</td>
@@ -243,7 +243,10 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           <dt>Top 10</dt>
           <dd>Share of supply held by the 10 largest wallets.</dd>
           <dt>Fresh</dt>
-          <dd>Share of the top 10 on wallets first used in the last 24 hours.</dd>
+          <dd>
+            How many of the top 25 holders are on wallets first used, or used again after a week idle, in the
+            last 24 hours (of the top 10 until the top 25 are read).
+          </dd>
           <dt>Empty</dt>
           <dd>
             Share of the top 10 holding under $25 in other tokens (cash and SOL aside). Fresh and empty

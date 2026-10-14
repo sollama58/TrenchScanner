@@ -151,6 +151,19 @@ export const HOLDER_SET_FEATURES = [
   "top10WalletsChecked",
 ] as const;
 
+/**
+ * Added 2026-10-14 (user decision, stat-formats thread): Fresh over the top 25 holders (pools and
+ * the creator aside) as a count, and how many holders it read. Null until the top-25 list and all
+ * its wallets are read, and on every row banked before.
+ *
+ * RETRAINING NOTE: recorded only (RETIRED_LEARNER_INPUTS). The models still read
+ * freshTop10WalletPct, the top-10 share, while the screen, the pick rule and the filters moved to
+ * the top-25 count (freshWalletShare). Once enough rows carry these, judge them on the feature
+ * report and retrain with them in place of (or beside) freshTop10WalletPct, together with the
+ * other 25-holder counts recorded only so far (HOLDER_SET_FEATURES: CEX-funded and snipers N/25).
+ */
+export const FRESH_TOP_HOLDER_FEATURES = ["freshTopHolderCount", "freshTopHoldersChecked"] as const;
+
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
   "flaggedSellers",
@@ -382,6 +395,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...NARRATIVE_FEATURES_V8,
   ...BUNDLED_FEATURES,
   ...HOLDER_SET_FEATURES,
+  ...FRESH_TOP_HOLDER_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -490,6 +504,7 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The screen's holder figures as counts, and the largest holder (added 2026-10-13): recorded
   // first, on the same terms.
   ...HOLDER_SET_FEATURES,
+  ...FRESH_TOP_HOLDER_FEATURES,
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -822,6 +837,8 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   sniperTopHolderCount: "launch snipers among the top 25",
   sniperTopHoldersChecked: "top holders checked for snipers",
   top10WalletsChecked: "top-10 wallets checked",
+  freshTopHolderCount: "fresh wallets among the top 25",
+  freshTopHoldersChecked: "top holders checked for fresh wallets",
   sameTimeFundedPct: "supply funded in the same minute",
   sameTimeClusterCount: "same-minute funding groups",
   sameTimeFundedCount: "top holders funded in the same minute",
@@ -1049,6 +1066,8 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     sniperTopHolderCount: scored.sniperTopHolderCount ?? null,
     sniperTopHoldersChecked: scored.sniperTopHoldersChecked ?? null,
     top10WalletsChecked: scored.top10WalletsChecked ?? null,
+    freshTopHolderCount: scored.freshTopHolderCount ?? null,
+    freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,
     sameTimeFundedCount: scored.sameTimeFundedCount ?? null,

@@ -1213,8 +1213,8 @@ function PreChecks({ s }: { s: ScreenedData }) {
           <li>Liquidity burned or locked on its own pool, so it can&apos;t be pulled.</li>
           <li>Not a Pump.fun Mayhem Mode token, whose early trading is run by bots.</li>
           <li>
-            No more than {c.freshWalletMaxPct}% of the top 10 holders on fresh wallets: first used, or used
-            again after a week or more idle, in the last day.
+            No more than {c.freshWalletMaxPct}% of the top 25 holders (the top 10 until those are read) on
+            fresh wallets: first used, or used again after a week or more idle, in the last day.
           </li>
           <li>Under {c.emptyWalletRejectPct}% of the top 10 holders on otherwise empty wallets.</li>
           <li>

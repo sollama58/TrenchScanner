@@ -1004,7 +1004,7 @@ const CRITERIA: [string, string, (v: number) => string][] = [
   ["minScore", "score ≥", (v) => String(v)],
   ["minTokenAgeMinutes", "age ≥", (v) => `${v}m`],
   ["maxTokenAgeMinutes", "age ≤", (v) => `${v}m`],
-  ["maxFreshTop10WalletPct", "fresh ≤", (v) => `${v / 10}/10`],
+  ["maxFreshTop10WalletPct", "fresh ≤", (v) => `${Math.floor(v / 4 + 1e-9)}/25`],
   ["maxEmptyTop10WalletPct", "empty ≤", (v) => `${v / 10}/10`],
   ["maxSniperTop10WalletPct", "snipers in top 10 ≤", (v) => `${v / 10}/10`],
   ["maxSniperTopHolderCount", "snipers in top 25 ≤", (v) => `${v}/25`],

@@ -150,6 +150,9 @@ export interface Snapshot {
   /** How many of the top 25 holders (pools aside) were among the first 25 buyers, of how many read; null when not checked. */
   sniperTopHolderCount?: number | null;
   sniperTopHoldersChecked?: number | null;
+  /** How many of the top 25 holders (pools and the creator aside) are on fresh wallets, of how many read; null when not checked. */
+  freshTopHolderCount?: number | null;
+  freshTopHoldersChecked?: number | null;
   /**
    * Flagged wallets (risky or known dumpers) in the coin's newest trades, read before the call:
    * distinct buyers and sellers, the SOL each way, and the trades themselves, newest first. Null

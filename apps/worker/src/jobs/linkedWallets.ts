@@ -351,6 +351,27 @@ export function cachedTopHolders(
 }
 
 /**
+ * The wallets of a mint's top 25 holders (pools and the creator aside), largest first, from the
+ * chain's list while it is fresh enough to use: the holders Fresh is counted over ("N/25", user
+ * decision 2026-10-14), the same ones as Linked, CEX-funded and Snipers. Undefined without a list.
+ */
+export function topHolderWalletsOf(
+  mintAddress: string,
+  creator: string | null | undefined,
+  nowMs = Date.now(),
+): string[] | undefined {
+  const holders = cachedTopHolders(mintAddress, nowMs);
+  if (!holders) return undefined;
+  const seen = new Set<string>();
+  const wallets = [...holders]
+    .sort((a, b) => b.pct - a.pct)
+    .map((h) => h.owner)
+    .filter((w) => w !== creator && !seen.has(w) && (seen.add(w), true))
+    .slice(0, LINKED_TOP_N);
+  return wallets.length > 0 ? wallets : undefined;
+}
+
+/**
  * Reads the top-25 holder list (pools aside) for groups without a fresh one, in the groups' order
  * (contenders first), at most `maxReads` mints, and puts each list read on its group: the linked
  * reading's holders past RugCheck's 20 accounts. A failed read leaves the group as it was.

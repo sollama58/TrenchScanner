@@ -1,4 +1,5 @@
 import type { ScoredToken } from "../types.js";
+import { freshWalletShare } from "../scoring/rugScreen.js";
 
 /**
  * The hand-tuned v1 curator behind the Curated Alerts feed - the gate that decides which
@@ -72,6 +73,7 @@ const MIN_AGE_MINUTES = 5;
 const MAX_AGE_MINUTES = 2_880;
 /** Risk caps - applied only when the underlying signal was actually observed. */
 const MAX_TOP10_HOLDER_PCT = 40;
+/** Over this share on fresh wallets: 8 of the top 25 or more (32%), or 4 of the top 10 (freshWalletShare). */
 const MAX_FRESH_TOP10_WALLET_PCT = 30;
 /**
  * Above this share of top-10 wallets holding under WALLET_HOLDINGS_MIN_USD of anything but cash
@@ -189,7 +191,8 @@ export function evaluateCandidateHeuristic(scored: ScoredToken, minScore: number
   // Risk caps - unknown skips, see above.
   if (scored.priceChange5mPct !== undefined && scored.priceChange5mPct < MAX_5M_DUMP_PCT) return no;
   if (scored.top10HolderPct !== undefined && scored.top10HolderPct > MAX_TOP10_HOLDER_PCT) return no;
-  if (scored.freshTop10WalletPct !== undefined && scored.freshTop10WalletPct > MAX_FRESH_TOP10_WALLET_PCT) {
+  const freshShare = freshWalletShare(scored);
+  if (freshShare !== undefined && freshShare > MAX_FRESH_TOP10_WALLET_PCT) {
     return no;
   }
   if (scored.emptyTop10WalletPct !== undefined && scored.emptyTop10WalletPct > MAX_EMPTY_TOP10_WALLET_PCT) {
@@ -293,8 +296,12 @@ function buildReasons(scored: ScoredToken, buyRatio: number | undefined): string
   if (scored.top10HolderPct !== undefined && scored.top10HolderPct <= 25 && !thinPreBondBook) {
     reasons.push(`top-10 wallets hold only ${scored.top10HolderPct.toFixed(0)}%`);
   }
-  if (scored.freshTop10WalletPct !== undefined && scored.freshTop10WalletPct === 0) {
-    reasons.push("no fresh-wallet snipers in the top 10");
+  if (freshWalletShare(scored) === 0) {
+    reasons.push(
+      scored.freshTopHoldersChecked
+        ? `no fresh-wallet snipers in the top ${scored.freshTopHoldersChecked}`
+        : "no fresh-wallet snipers in the top 10",
+    );
   }
   if (scored.ageMinutes !== undefined && scored.ageMinutes < 60) {
     reasons.push(`${Math.round(scored.ageMinutes)}m old`);

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { countCutFor, passesLocalRugScreen, passesWalletSafetyCuts, runRugScreen } from "./rugScreen.js";
+import {
+  countCutFor,
+  freshWalletShare,
+  passesLocalRugScreen,
+  passesWalletSafetyCuts,
+  runRugScreen,
+} from "./rugScreen.js";
 import type { OnChainProfile } from "../types.js";
 
 const safeProfile: OnChainProfile = {
@@ -61,6 +67,42 @@ describe("runRugScreen", () => {
     expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: 80 }).reasons[0]).toMatch(/fresh wallets/);
     expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: 70 }).passed).toBe(true);
     expect(runRugScreen({ ...safeProfile, freshTop10WalletPct: undefined }).passed).toBe(true);
+  });
+
+  it("reads Fresh over the top 25 when counted: 18 of 25 rejects, 17 passes, over the top-10 share", () => {
+    const at = (count: number, of = 25) =>
+      runRugScreen({
+        ...safeProfile,
+        freshTop10WalletPct: 0,
+        freshTopHolderCount: count,
+        freshTopHoldersChecked: of,
+      });
+    expect(at(18).passed).toBe(false);
+    expect(at(18).reasons[0]).toBe("18 of the 25 top holders are fresh wallets (over 70%)");
+    expect(at(17).passed).toBe(true);
+    // A shorter list keeps the share: 15 of 21 is 71%.
+    expect(at(15, 21).passed).toBe(false);
+    expect(at(14, 21).passed).toBe(true);
+    // The top-25 count wins over a top-10 share that would reject.
+    expect(
+      runRugScreen({
+        ...safeProfile,
+        freshTop10WalletPct: 80,
+        freshTopHolderCount: 10,
+        freshTopHoldersChecked: 25,
+      }).passed,
+    ).toBe(true);
+  });
+
+  it("freshWalletShare: the top-25 count as a share, else the top-10 share, else unknown", () => {
+    expect(
+      freshWalletShare({ freshTopHolderCount: 8, freshTopHoldersChecked: 25, freshTop10WalletPct: 0 }),
+    ).toBe(32);
+    expect(
+      freshWalletShare({ freshTopHolderCount: 8, freshTopHoldersChecked: 0, freshTop10WalletPct: 40 }),
+    ).toBe(40);
+    expect(freshWalletShare({ freshTopHolderCount: null, freshTop10WalletPct: 30 })).toBe(30);
+    expect(freshWalletShare({})).toBeUndefined();
   });
 
   it("rejects a token whose top-10 holders are 80% or more empty wallets, and only once measured", () => {
@@ -240,6 +282,16 @@ describe("passesWalletSafetyCuts", () => {
     expect(passesWalletSafetyCuts({ largestHolderPct: 10.5 })).toBe(false);
     expect(passesWalletSafetyCuts({ largestHolderPct: 10 })).toBe(true);
     expect(passesWalletSafetyCuts({ freshTop10WalletPct: 80 })).toBe(false);
+    expect(
+      passesWalletSafetyCuts({ freshTop10WalletPct: 0, freshTopHolderCount: 18, freshTopHoldersChecked: 25 }),
+    ).toBe(false);
+    expect(
+      passesWalletSafetyCuts({
+        freshTop10WalletPct: 80,
+        freshTopHolderCount: 17,
+        freshTopHoldersChecked: 25,
+      }),
+    ).toBe(true);
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 70, freshTop10WalletPct: 70 })).toBe(true);
     expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 70 })).toBe(true);

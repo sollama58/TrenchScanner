@@ -1,8 +1,49 @@
 import { Prisma } from "@prisma/client";
 import type { OnChainProfile, RugScreenResult } from "../types.js";
 
-/** Above this share of the top-10 holders on fresh wallets (new, or used again after a week idle, within a day), a token is never alerted. */
+/**
+ * Above this share of the top holders on fresh wallets (new, or used again after a week idle,
+ * within a day), a token is never alerted: 18 of 25 or more (72%), or 8 of 10 where only the top
+ * 10 were read (user decision 2026-10-14; read through freshWalletShare).
+ */
 export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
+
+/** The fresh-wallet fields freshWalletShare reads, on a profile, a scored token or banked features. */
+export interface FreshWalletFields {
+  freshTopHolderCount?: number | null;
+  freshTopHoldersChecked?: number | null;
+  freshTop10WalletPct?: number | null;
+}
+
+/**
+ * The share of the top holders on fresh wallets that the screen, the pick rule and the filters
+ * read: over the chain's top 25 when that count is in (user decision 2026-10-14, "N/25"), else
+ * over the top 10. Undefined while neither is known.
+ */
+export function freshWalletShare(f: FreshWalletFields): number | undefined {
+  if (
+    typeof f.freshTopHolderCount === "number" &&
+    typeof f.freshTopHoldersChecked === "number" &&
+    f.freshTopHoldersChecked > 0
+  ) {
+    return (f.freshTopHolderCount / f.freshTopHoldersChecked) * 100;
+  }
+  return typeof f.freshTop10WalletPct === "number" ? f.freshTop10WalletPct : undefined;
+}
+
+/** The fresh-wallet cut's reason, or null when it passes or is unknown. */
+function freshReason(f: FreshWalletFields): string | null {
+  const share = freshWalletShare(f);
+  if (share === undefined || share <= SAFETY_MAX_FRESH_WALLET_PCT) return null;
+  if (
+    typeof f.freshTopHolderCount === "number" &&
+    typeof f.freshTopHoldersChecked === "number" &&
+    f.freshTopHoldersChecked > 0
+  ) {
+    return `${f.freshTopHolderCount} of the ${f.freshTopHoldersChecked} top holders are fresh wallets (over ${SAFETY_MAX_FRESH_WALLET_PCT}%)`;
+  }
+  return `${share.toFixed(0)}% of top-10 holders are fresh wallets (over ${SAFETY_MAX_FRESH_WALLET_PCT}%)`;
+}
 
 /**
  * At or above this share of the top-10 holders on empty wallets (no other real holdings), a token
@@ -137,7 +178,7 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
 
   reasons.push(
     ...walletScreenReasons(
-      profile.freshTop10WalletPct,
+      profile,
       profile.emptyTop10WalletPct,
       profile.sniperTop10WalletPct,
       profile.top10HolderPct,
@@ -177,17 +218,14 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
  * (CURATED_REQUIRE_WALLET_CHECKS).
  */
 function walletScreenReasons(
-  freshPct: number | null | undefined,
+  fresh: FreshWalletFields,
   emptyPct: number | null | undefined,
   sniperPct?: number | null,
   top10Pct?: number | null,
 ): string[] {
   const reasons: string[] = [];
-  if (typeof freshPct === "number" && freshPct > SAFETY_MAX_FRESH_WALLET_PCT) {
-    reasons.push(
-      `${freshPct.toFixed(0)}% of top-10 holders are fresh wallets (over ${SAFETY_MAX_FRESH_WALLET_PCT}%)`,
-    );
-  }
+  const freshCut = freshReason(fresh);
+  if (freshCut) reasons.push(freshCut);
   if (typeof emptyPct === "number" && emptyPct >= SAFETY_REJECT_EMPTY_WALLET_PCT) {
     reasons.push(
       `${emptyPct.toFixed(0)}% of top-10 holders are empty wallets (${SAFETY_REJECT_EMPTY_WALLET_PCT}% or more)`,
@@ -220,7 +258,7 @@ export function passesWalletSafetyCuts(features: Record<string, number | null | 
     : num(features.cexFundedPct) && features.cexFundedPct >= SAFETY_REJECT_CEX_FUNDED_PCT;
   return (
     walletScreenReasons(
-      features.freshTop10WalletPct,
+      features,
       features.emptyTop10WalletPct,
       features.sniperTop10WalletPct,
       features.top10HolderPct,
@@ -287,7 +325,15 @@ export const CRITICAL_RISK_FLAGS = new Set(["Creator history of rugged tokens", 
  */
 export function walletSafetyCutsSql(features: Prisma.Sql = Prisma.raw('"features"')): Prisma.Sql {
   return Prisma.sql`COALESCE((${features}->>'emptyTop10WalletPct')::float8 < ${SAFETY_REJECT_EMPTY_WALLET_PCT}, true)
-    AND COALESCE((${features}->>'freshTop10WalletPct')::float8 <= ${SAFETY_MAX_FRESH_WALLET_PCT}, true)
+    AND COALESCE(
+      COALESCE(
+        CASE WHEN (${features}->>'freshTopHoldersChecked')::float8 > 0
+          THEN (${features}->>'freshTopHolderCount')::float8 * 100 / (${features}->>'freshTopHoldersChecked')::float8
+        END,
+        (${features}->>'freshTop10WalletPct')::float8
+      ) <= ${SAFETY_MAX_FRESH_WALLET_PCT},
+      true
+    )
     AND COALESCE((${features}->>'sniperTop10WalletPct')::float8 < ${SAFETY_REJECT_SNIPER_WALLET_PCT}, true)
     AND COALESCE((${features}->>'top10HolderPct')::float8 < ${SAFETY_REJECT_TOP10_HOLDER_PCT}, true)
     AND COALESCE(

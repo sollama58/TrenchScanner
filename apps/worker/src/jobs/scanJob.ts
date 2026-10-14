@@ -83,6 +83,7 @@ import {
   linkedHoldersOf,
   linkedReadingOf,
   cachedTopHolders,
+  topHolderWalletsOf,
   readTopHolders,
   resolveLinkedWallets,
   takeLinkedWalletStats,
@@ -225,6 +226,7 @@ export async function settleWalletBackfill(): Promise<void> {
  */
 function startWalletBackfill(
   groups: { mintAddress: string; addresses: string[] }[],
+  freshnessGroups: string[][],
   helius: HeliusClient,
   env: Env,
   budget: { freshness: number; holdings: number },
@@ -233,13 +235,7 @@ function startWalletBackfill(
   if (walletBackfillInFlight || groups.length === 0) return;
   const work: Promise<unknown>[] = [];
   if (budget.freshness > 0) {
-    work.push(
-      resolveEarliestActivity(
-        groups.map((g) => g.addresses),
-        helius,
-        { maxNewLookups: budget.freshness },
-      ),
-    );
+    work.push(resolveEarliestActivity(freshnessGroups, helius, { maxNewLookups: budget.freshness }));
   }
   if (budget.holdings > 0) {
     work.push(resolveWalletHoldings(groups, helius, env, { maxNewLookups: budget.holdings, valuation }));
@@ -1059,6 +1055,10 @@ async function scanCycle(
   const waitedGroups = walletFiltersActive
     ? walletGroups.length
     : walletGroups.filter((g) => g.contender).length;
+  // Fresh over the top 25 too, where the chain's list is in (user decision 2026-10-14, "N/25").
+  const freshness = freshnessGroupsOf(walletGroups, waitedGroups, (mint) =>
+    topHolderWalletsOf(mint, (onChainByMint.get(mint) as { creator?: string } | undefined)?.creator),
+  );
   // The two wallet signals are resolved together but independently: they ask different
   // questions of different APIs (transaction history on standard RPC, holdings via DAS), which
   // are metered and rate-limited separately, so they carry separate budgets and neither can
@@ -1094,11 +1094,7 @@ async function scanCycle(
   // every candidate's wallet figures.
   const fromCacheOnly = () =>
     Promise.all([
-      resolveEarliestActivity(
-        walletGroups.map((g) => g.addresses),
-        deps.helius,
-        { lookupGroups: 0 },
-      ),
+      resolveEarliestActivity(freshness.groups, deps.helius, { lookupGroups: 0 }),
       resolveWalletHoldings(walletGroups, deps.helius, env, { lookupGroups: 0 }),
     ]);
   if (walletStageInFlight) {
@@ -1108,15 +1104,11 @@ async function scanCycle(
     let freshnessUsed = 0;
     let holdingsUsed = 0;
     const work = Promise.all([
-      resolveEarliestActivity(
-        walletGroups.map((g) => g.addresses),
-        deps.helius,
-        {
-          maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
-          lookupGroups: waitedGroups,
-          onLookups: (n) => (freshnessUsed = n),
-        },
-      ),
+      resolveEarliestActivity(freshness.groups, deps.helius, {
+        maxNewLookups: env.WALLET_FRESHNESS_MAX_LOOKUPS_PER_CYCLE,
+        lookupGroups: freshness.waited,
+        onLookups: (n) => (freshnessUsed = n),
+      }),
       resolveWalletHoldings(walletGroups, deps.helius, env, {
         maxNewLookups: holdingsLookupBudget(env),
         lookupGroups: waitedGroups,
@@ -1141,6 +1133,7 @@ async function scanCycle(
     } else {
       startWalletBackfill(
         walletGroups,
+        freshness.groups,
         deps.helius,
         env,
         {
@@ -2171,7 +2164,11 @@ async function processCandidate(
   const existingToken = prior.token;
   const onChain = withLiveFlags(
     withLinkedWallets(
-      withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env, sniperWallets),
+      withFreshTopHolders(
+        withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env, sniperWallets),
+        topHolderWalletsOf(candidate.mintAddress, (onChainProfile as { creator?: string } | null)?.creator),
+        earliestActivityByAddress,
+      ),
       linked,
       cex,
       sniperWallets,
@@ -2602,6 +2599,50 @@ export function withWalletSignals(
     top10WalletsChecked: onChain.top10HolderAddresses.length,
     ...walletRiskSignals(onChain, sniperWallets),
     ...kolSignals(onChain, sniperWallets),
+  };
+}
+
+/**
+ * The wallet-freshness lookups' groups: each coin's top 10 as before, and its top 25 where the
+ * chain's list is in (Fresh as "N/25", user decision 2026-10-14). The waited coins' top 10s go
+ * first, then their top 25s, then everyone else's in the same order, so a top-25 group can't push
+ * a waited coin's top 10 out of the budget (a group is read whole or not at all). Answers the
+ * groups and how many of them lead as the waited part. Exported for tests.
+ */
+export function freshnessGroupsOf(
+  walletGroups: readonly { mintAddress: string; addresses: string[] }[],
+  waited: number,
+  top25Of: (mintAddress: string) => string[] | undefined,
+): { groups: string[][]; waited: number } {
+  const top25 = (list: readonly { mintAddress: string }[]) =>
+    list.map((g) => top25Of(g.mintAddress)).filter((w): w is string[] => !!w && w.length > 0);
+  const head = walletGroups.slice(0, waited);
+  const tail = walletGroups.slice(waited);
+  const headTop25 = top25(head);
+  return {
+    groups: [...head.map((g) => g.addresses), ...headTop25, ...tail.map((g) => g.addresses), ...top25(tail)],
+    waited: head.length + headTop25.length,
+  };
+}
+
+/**
+ * Fresh over the top 25 holders (pools and the creator aside) on the profile, as a count and how
+ * many holders it read: only once every one of those wallets is resolved, so a part-read list never
+ * reads low. Left off otherwise, and freshTop10WalletPct stands in (freshWalletShare). Exported
+ * for tests.
+ */
+export function withFreshTopHolders(
+  onChain: OnChainProfile | null,
+  wallets: string[] | undefined,
+  earliestActivityByAddress: Map<string, Date | null>,
+): OnChainProfile | null {
+  if (!onChain || !wallets?.length) return onChain;
+  const pct = computeFreshPct(wallets, earliestActivityByAddress);
+  if (pct === null) return onChain;
+  return {
+    ...onChain,
+    freshTopHolderCount: Math.round((pct * wallets.length) / 100),
+    freshTopHoldersChecked: wallets.length,
   };
 }
 

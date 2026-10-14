@@ -2,7 +2,7 @@
 import "../bootstrap-env.js";
 import { describe, expect, it } from "vitest";
 import type { OnChainProfile } from "@trenchscanner/core";
-import { withLinkedWallets } from "./scanJob.js";
+import { freshnessGroupsOf, withFreshTopHolders, withLinkedWallets } from "./scanJob.js";
 
 describe("withLinkedWallets: exchange funders on the holder list", () => {
   const onChain = {
@@ -82,5 +82,40 @@ describe("withLinkedWallets: launch snipers among the top holders", () => {
     expect(out.sniperTopHolderCount).toBe(1);
     expect(out.sniperTopHoldersChecked).toBe(3);
     expect(withLinkedWallets(onChain, linked)!.sniperTopHolderCount).toBeUndefined();
+  });
+});
+
+describe("Fresh over the top 25 (freshnessGroupsOf, withFreshTopHolders)", () => {
+  const top25 = (mint: string) => (mint === "M1" || mint === "M3" ? [`${mint}-a`, `${mint}-b`] : undefined);
+  const groups = [
+    { mintAddress: "M1", addresses: ["M1-a"] },
+    { mintAddress: "M2", addresses: ["M2-a"] },
+    { mintAddress: "M3", addresses: ["M3-a"] },
+  ];
+
+  it("puts the waited coins' top 10s first, then their top 25s, then the rest the same way", () => {
+    expect(freshnessGroupsOf(groups, 2, top25)).toEqual({
+      groups: [["M1-a"], ["M2-a"], ["M1-a", "M1-b"], ["M3-a"], ["M3-a", "M3-b"]],
+      waited: 3,
+    });
+    expect(freshnessGroupsOf(groups, 0, () => undefined)).toEqual({
+      groups: [["M1-a"], ["M2-a"], ["M3-a"]],
+      waited: 0,
+    });
+  });
+
+  it("counts fresh wallets over the list only once every wallet is resolved", () => {
+    const now = Date.now();
+    const onChain = { mintAddress: "M1" } as OnChainProfile;
+    const earliest = new Map<string, Date | null>([
+      ["a", new Date(now - 3_600_000)],
+      ["b", new Date(now - 30 * 86_400_000)],
+      ["c", null],
+    ]);
+    const out = withFreshTopHolders(onChain, ["a", "b", "c"], earliest)!;
+    expect(out.freshTopHolderCount).toBe(1);
+    expect(out.freshTopHoldersChecked).toBe(3);
+    expect(withFreshTopHolders(onChain, ["a", "d"], earliest)!.freshTopHolderCount).toBeUndefined();
+    expect(withFreshTopHolders(onChain, undefined, earliest)).toBe(onChain);
   });
 });

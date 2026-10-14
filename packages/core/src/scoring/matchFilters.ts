@@ -1,6 +1,6 @@
 import type { FilterCriteria, ScoredToken } from "../types.js";
 import { matchesNarrativeKeywords } from "../narratives/keywords.js";
-import { CRITICAL_RISK_FLAGS } from "./rugScreen.js";
+import { CRITICAL_RISK_FLAGS, freshWalletShare } from "./rugScreen.js";
 import {
   narrativeIsCopycat,
   narrativeIsLateCopy,
@@ -76,10 +76,13 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
+  // Over the top 25 when that count is in, else the top 10 (freshWalletShare): stored as a share,
+  // so a cap saved as "5 of 10" reads as 50% and lets 12 of 25 through.
+  const freshShare = freshWalletShare(token);
   if (
     filter.maxFreshTop10WalletPct != null &&
-    token.freshTop10WalletPct !== undefined &&
-    token.freshTop10WalletPct > filter.maxFreshTop10WalletPct
+    freshShare !== undefined &&
+    freshShare > filter.maxFreshTop10WalletPct
   ) {
     return false;
   }

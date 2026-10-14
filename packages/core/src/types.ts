@@ -183,6 +183,15 @@ export interface OnChainProfile {
   sniperTopHolderCount?: number;
   sniperTopHoldersChecked?: number;
   /**
+   * How many of the chain's top 25 holders (pools and the creator aside) are on fresh wallets
+   * (first used, or used again after a week idle, within the last day), and how many holders that
+   * read (user decision 2026-10-14: Fresh as "N/25"). Undefined until the top-25 list is in and
+   * every one of its wallets is resolved; freshTop10WalletPct stands in until then. The screen,
+   * the pick rule and the filters read freshWalletShare (scoring/rugScreen.ts), which prefers this.
+   */
+  freshTopHolderCount?: number;
+  freshTopHoldersChecked?: number;
+  /**
    * The wallet risk readings (core's wallets/riskScore.ts, coinWalletRisk), from the worker's
    * in-memory copy of WalletRisk: the riskiest top-10 holder, the first buyers' mean score, the %
    * of supply held by risky top holders, and the known dumpers among the first buyers. Undefined
