@@ -39,6 +39,8 @@ const LONG_SEGMENT = 24;
 export const HELIUS_CREDITS: Record<string, number> = {
   getTransactionsForAddress: 10,
   getProgramAccounts: 10,
+  // The paged version is a standard 1-credit call, a page at a time (the top-25 holder read).
+  getProgramAccountsV2: 1,
   getAsset: 10,
   getAssetBatch: 10,
   getAssetsByOwner: 10,
