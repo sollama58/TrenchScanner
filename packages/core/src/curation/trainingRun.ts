@@ -34,7 +34,7 @@ import {
   type CuratorRecipe,
 } from "./contestants.js";
 import { emptyRecord, recordScore, type CallRecord } from "./leaderboard.js";
-import type { Challenger, Replacement } from "./evolution.js";
+import type { Challenger, Replacement, ShareMoment } from "./evolution.js";
 import { quantileTable, trainStackedCurator, type StackedCuratorParams } from "./stacking.js";
 import { trainBlendCurator, type BlendCuratorParams } from "./blend.js";
 import { trainAgreementCurator, type AgreementCuratorParams, type AgreementCurvePoint } from "./agreement.js";
@@ -800,6 +800,8 @@ interface LearnerTrial {
   /** Whether its reference rows line up one to one with the run's (see sitLearnerExam). */
   aligned: boolean;
   calls: Uint8Array | null;
+  /** Its out-of-sample fold ranks per reference row (LearnerExam.foldRanks); null unless aligned. */
+  ranks: Float64Array | null;
 }
 
 async function sitLearnerExam(
@@ -825,6 +827,7 @@ async function sitLearnerExam(
     examScore: recordScore(record, cfg.targets),
     aligned,
     calls: aligned && evaluation.examCalls.some((c) => c === 1) ? evaluation.examCalls : null,
+    ranks: aligned ? Float64Array.from(evaluation.outOfSampleRanks, (c) => c.probability) : null,
   };
 }
 
@@ -873,7 +876,7 @@ async function shipLearner(
     result,
     examScore: sat.examScore,
     evaluation,
-    foldRanks: aligned ? Float64Array.from(evaluation.outOfSampleRanks, (c) => c.probability) : null,
+    foldRanks: sat.ranks,
     shipped: aligned ? exam.servedProbabilities : null,
     calls: sat.calls,
     callRank: rankCutoff,
@@ -899,14 +902,21 @@ async function examineLearner(
 export interface ExamEvidence {
   /** The reference rows' labels, in reference order. */
   labels: Float64Array;
-  /** Each reference row's run size in doublings (runDoublings), in reference order. */
-  runs: Float64Array;
-  /** Each reference row's 10x tier: 1 hit, 0 miss, -1 not settled (never counted), in reference order. */
-  tenX: Int8Array;
+  /** Each reference row's token and time, in reference order: what the cooldown replays over. */
+  moments: ShareMoment[];
+  /** The per-token alert cooldown the exam plays (ContestTrainingConfig.cooldownHours). */
+  cooldownMs: number;
   /** Per lane slot: 1 where its exam called the row. Absent when its exam set no cutoff. */
   laneCalls: Map<string, Uint8Array>;
   /** Per challenger, in breeding order; null when its exam set no cutoff. */
   challengerCalls: (Uint8Array | null)[];
+  /**
+   * Per lane slot and per challenger: its out-of-sample fold rank on each reference row (the share
+   * of its fold it scored lower), so the two can be compared at an equal share of the rows
+   * (equalShareCalls). Absent / null where the reference rows don't line up.
+   */
+  laneRanks: ReadonlyMap<string, Float64Array>;
+  challengerRanks: (Float64Array | null)[];
   /** Wins in each challenger's exam record, in breeding order. */
   challengerExamWins: number[];
 }
@@ -1081,6 +1091,7 @@ export async function runEvolvingContest(
 
   const challengerScores: (number | null)[] = [];
   const challengerCalls: (Uint8Array | null)[] = [];
+  const challengerRanks: (Float64Array | null)[] = [];
   const challengerExamWins: number[] = [];
   // Challengers only sit the exam: the model the winner ships is fitted below, once a takeover
   // (or probation) actually needs it, rather than three discarded fits per loser.
@@ -1090,6 +1101,7 @@ export async function runEvolvingContest(
     const trial = await sitLearnerExam(rows, cfg, bred.recipe, reference, features.usable);
     challengerScores.push(trial.examScore);
     challengerCalls.push(trial.calls);
+    challengerRanks.push(trial.ranks);
     challengerExamWins.push(trial.record.wins);
     if (
       trial.examScore !== null &&
@@ -1107,12 +1119,12 @@ export async function runEvolvingContest(
     plan && challengerScores.length > 0
       ? plan.decide(laneExamScores, challengerScores, {
           labels: Float64Array.from(reference ?? [], (r) => r.labelValue),
-          runs: Float64Array.from(reference ?? [], (r) => runDoublings(r)),
-          tenX: Int8Array.from(reference ?? [], (r) =>
-            r.labelValue <= 0 ? 0 : r.hit10x === undefined ? -1 : r.hit10x ? 1 : 0,
-          ),
+          moments: (reference ?? []).map((r) => ({ tokenId: r.tokenId, anchorMs: r.anchorAt.getTime() })),
+          cooldownMs: cfg.cooldownHours * 3_600_000,
           laneCalls,
           challengerCalls,
+          laneRanks: foldRanks,
+          challengerRanks,
           challengerExamWins,
         })
       : null;

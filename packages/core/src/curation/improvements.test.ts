@@ -6,6 +6,7 @@ import { featureHealthReport, runnerTraitsReport } from "./featureReport.js";
 import {
   bootstrapDrawsFor,
   chooseReplacement,
+  equalShareCalls,
   selectionAdjustedConfidence,
   pairedBootstrapConfidence,
   seededRng,
@@ -578,43 +579,43 @@ describe("takeover evidence", () => {
   const good = Uint8Array.from({ length: 400 }, (_, i) => (i % 10 === 0 || i % 40 === 1 ? 1 : 0));
   const poor = Uint8Array.from({ length: 400 }, (_, i) => (i % 4 === 0 ? 1 : 0));
   it("paired bootstrap confidence separates a clearly better call set from an equal one", () => {
-    expect(pairedBootstrapConfidence(labels, good, poor, targets, seededRng(1))!).toBeGreaterThan(0.95);
-    expect(pairedBootstrapConfidence(labels, poor, good, targets, seededRng(1))!).toBeLessThan(0.05);
-    expect(pairedBootstrapConfidence(labels, poor, poor, targets, seededRng(1))).toBe(0);
-    expect(pairedBootstrapConfidence(labels, new Uint8Array(400), poor, targets, seededRng(1))).toBeNull();
+    expect(pairedBootstrapConfidence(labels, good, poor, seededRng(1))!).toBeGreaterThan(0.95);
+    expect(pairedBootstrapConfidence(labels, poor, good, seededRng(1))!).toBeLessThan(0.05);
+    expect(pairedBootstrapConfidence(labels, poor, poor, seededRng(1))).toBe(0);
+    expect(pairedBootstrapConfidence(labels, new Uint8Array(400), poor, seededRng(1))).toBeNull();
+    // Mismatched lengths are no evidence.
+    expect(pairedBootstrapConfidence(labels, good, new Uint8Array(3), seededRng(1))).toBeNull();
   });
 
-  it("scores resamples on run size and the 10x tier too, like the exam", () => {
-    // Two call sets with the same 2x and 4x record; only the runs behind them differ.
-    const n = 400;
-    const rowLabels = Float64Array.from({ length: n }, (_, i) => (i % 8 === 0 ? 1.2 : 0));
-    const left = Uint8Array.from({ length: n }, (_, i) => (i % 2 === 0 ? 1 : 0));
-    const right = Uint8Array.from({ length: n }, (_, i) => (i % 2 === 1 || i % 8 === 0 ? 1 : 0));
-    // Same record on labels alone: both sides call every winner, right calls more misses.
-    const onLabels = pairedBootstrapConfidence(rowLabels, right, left, targets, seededRng(2))!;
-    expect(onLabels).toBeLessThan(0.5);
-    // The right side's extra rows are late runners (survived, ran to 8x) that hit 10x - rows
-    // whose label is 0 but whose run and tier count: now it wins almost every resample.
-    const runs = Float64Array.from({ length: n }, (_, i) => (i % 8 === 0 ? 1.2 : i % 2 === 1 ? 3 : 0));
-    const tenX = Int8Array.from({ length: n }, (_, i) => (i % 2 === 1 ? 1 : 0));
-    const withRuns = pairedBootstrapConfidence(
-      { labels: rowLabels, runs, tenX },
-      right,
-      left,
-      targets,
-      seededRng(2),
-    )!;
-    expect(withRuns).toBeGreaterThan(0.95);
-    // Mismatched lengths are no evidence.
-    expect(
-      pairedBootstrapConfidence(
-        { labels: rowLabels, runs: new Float64Array(3) },
-        right,
-        left,
-        targets,
-        seededRng(2),
-      ),
-    ).toBeNull();
+  it("judges the 2x rate alone: calling more runners at the same rate is no lead", () => {
+    // Winners on every 10th row. Both sides double on half their calls; the wide side calls twice
+    // as many rows and so catches twice the runners - under the old catch-scored bootstrap it led
+    // in nearly every resample (user decision 2026-10-14).
+    const narrow = Uint8Array.from({ length: 400 }, (_, i) => (i % 20 === 0 || i % 20 === 1 ? 1 : 0));
+    const wide = Uint8Array.from({ length: 400 }, (_, i) => (i % 10 === 0 || i % 10 === 1 ? 1 : 0));
+    expect(pairedBootstrapConfidence(labels, wide, narrow, seededRng(3))!).toBeLessThan(0.6);
+    // A better 2x rate on fewer calls still leads.
+    const sharp = Uint8Array.from({ length: 400 }, (_, i) => (i % 20 === 0 ? 1 : 0));
+    expect(pairedBootstrapConfidence(labels, sharp, wide, seededRng(3))!).toBeGreaterThan(0.95);
+  });
+
+  it("calls each side's top k moments, one call per token inside the cooldown", () => {
+    const hour = 3_600_000;
+    const moments = [
+      { tokenId: "a", anchorMs: 0 },
+      { tokenId: "a", anchorMs: hour },
+      { tokenId: "b", anchorMs: 0 },
+      { tokenId: "c", anchorMs: 0 },
+      { anchorMs: 0 },
+    ];
+    const scores = [0.9, 0.8, 0.7, 0.6, 0.95];
+    expect([...equalShareCalls(scores, moments, 3, 24 * hour)]).toEqual([1, 0, 1, 0, 1]);
+    // Without a cooldown, a token's second moment is a call of its own.
+    expect([...equalShareCalls(scores, moments, 3, 0)]).toEqual([1, 1, 0, 0, 1]);
+    // Fewer than k only when the cooldown leaves fewer; mismatched or empty asks call nothing.
+    expect(equalShareCalls(scores, moments, 9, 24 * hour).reduce((n, c) => n + c, 0)).toBe(4);
+    expect(equalShareCalls(scores, moments.slice(1), 3, 0).reduce((n, c) => n + c, 0)).toBe(0);
+    expect(equalShareCalls(scores, moments, 0, 0).reduce((n, c) => n + c, 0)).toBe(0);
   });
 
   it("refuses a takeover on thin wins, low confidence, or too soon after the last", () => {

@@ -8,9 +8,7 @@ import {
   type CuratorRecipe,
 } from "./contestants.js";
 import { LEARNER_FEATURE_NAMES, learnerSubset, type CandidateFeatureName } from "./features.js";
-import { MIN_LIVE_CALLS_TO_RANK, recordScore, type CallRecord } from "./leaderboard.js";
-import { GOAL_MULTIPLE } from "./labels.js";
-import type { PrecisionTargets } from "./trainer.js";
+import { MIN_LIVE_CALLS_TO_RANK } from "./leaderboard.js";
 
 /**
  * The curator contest, evolving. Every learner seat on the roster (contestants.ts) is a LANE: a
@@ -520,19 +518,21 @@ export interface ReplacementInput {
  * rises with the number of challengers (selectionAdjustedConfidence), absorbing best-of-several
  * luck; it and the wins floor absorb the exam's own noise: an exam of 12
  * calls can swing 20 points on two coin flips, so a lane is only unseated when the challenger's
- * exam has enough wins behind it and beats the lane's on the same rows in most paired bootstrap
- * resamples - and never twice in quick succession, so a seat is not churned run after run on
- * the same thin evidence.
+ * exam has enough wins behind it and its 2x rate beats the lane's, at an equal share of the same
+ * rows, in most paired bootstrap resamples - and never twice in quick succession, so a seat is
+ * not churned run after run on the same thin evidence. The 2x rate alone, with no catch part
+ * (user decision 2026-10-14): a takeover is judged the way the Default is picked.
  */
 export interface TakeoverEvidence {
   /** Wins the challenger's exam record must hold (a hit rate over three wins is noise). */
   minExamWins: number;
-  /** Share of paired bootstrap resamples in which the challenger must score higher, 0-1 (0 = off). */
+  /** Share of paired bootstrap resamples in which the challenger's 2x rate must be higher (0 = off). */
   confidence: number;
   /**
-   * The paired bootstrap confidence that challenger `index` beats lane `slot` on the same rows, or
-   * null when unmeasurable. `required` is the bar it will be held to (selectionAdjustedConfidence),
-   * so the caller can draw enough resamples to resolve it (bootstrapDrawsFor).
+   * The paired bootstrap confidence that challenger `index` beats lane `slot` on the 2x rate, both
+   * calling an equal share of the same rows (pairedBootstrapConfidence), or null when
+   * unmeasurable. `required` is the bar it will be held to (selectionAdjustedConfidence), so the
+   * caller can draw enough resamples to resolve it (bootstrapDrawsFor).
    */
   pairedConfidence: (slot: string, challenger: number, required: number) => number | null;
   /** Wins in each challenger's exam record, in breeding order. */
@@ -546,13 +546,16 @@ export interface TakeoverEvidence {
 /**
  * The family a recipe belongs to for the seat guard: its learner, and for boosted trees what
  * they fit - a ranker and a probability model share code but ask different questions, and the
- * field should keep one of each.
+ * field should keep one of each. A two-stage recipe (Survivor) asks its own question too, so it
+ * is a family of its own and its last seat is never handed to a one-stage child.
  */
 export function recipeFamily(recipe: CuratorRecipe): string {
   const objective: BoostingObjective | undefined = recipe.boosting?.objective;
-  return recipe.learner === "gbdt" && objective !== undefined && objective !== "logistic"
-    ? `gbdt:${objective}`
-    : recipe.learner;
+  const base =
+    recipe.learner === "gbdt" && objective !== undefined && objective !== "logistic"
+      ? `gbdt:${objective}`
+      : recipe.learner;
+  return recipe.twoStage ? `${base}:twoStage` : base;
 }
 
 /** Paired bootstrap resamples. 200 resolves a 0.9 confidence to about +/-0.02. */
@@ -575,42 +578,68 @@ export function bootstrapDrawsFor(required: number): number {
   if (!(required > 0) || required >= 1) return BOOTSTRAP_DRAWS;
   return Math.min(5_000, Math.max(BOOTSTRAP_DRAWS, Math.ceil(20 / (1 - required) - 1e-9)));
 }
-const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
+
+/** A decision moment as equalShareCalls needs it: whose it is and when, for the cooldown. */
+export interface ShareMoment {
+  tokenId?: string;
+  anchorMs: number;
+}
 
 /**
- * The exam's reference rows as the bootstrap scores them: per row, in reference order, the label
- * (doublings; 0 = a miss), the run size (runDoublings in labels.ts, what the exam's sumRun counts)
- * and the 10x tier (1 = hit, 0 = miss, -1 = not settled, so it counts neither way). Runs and the
- * tier are optional: without them a resample scores on the label alone, as older callers did.
+ * The `k` moments a model ranks highest, as a call mask over `moments`: walked from the highest
+ * score down, a moment is skipped when the same token already holds a call within `cooldownMs` of
+ * it (either side), so one token's run of high scores is one call, as the per-token cooldown makes
+ * it live. Fewer than k only when the cooldown leaves fewer. Two models given the same moments and
+ * the same k call the same share of them, so their 2x rates compare at equal volume (user decision
+ * 2026-10-14: a takeover is judged on the 2x rate at equal share, not on how many runners a wider
+ * cutoff happens to sweep up).
  */
-export interface BootstrapRows {
-  labels: ArrayLike<number>;
-  runs?: ArrayLike<number>;
-  tenX?: ArrayLike<number>;
+export function equalShareCalls(
+  scores: ArrayLike<number>,
+  moments: readonly ShareMoment[],
+  k: number,
+  cooldownMs: number,
+): Uint8Array {
+  const n = scores.length;
+  const mask = new Uint8Array(n);
+  if (moments.length !== n || k <= 0) return mask;
+  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => scores[b]! - scores[a]! || a - b);
+  const sent = new Map<string, number[]>();
+  let taken = 0;
+  for (const i of order) {
+    if (taken >= k) break;
+    const { tokenId, anchorMs } = moments[i]!;
+    if (tokenId !== undefined) {
+      const times = sent.get(tokenId) ?? [];
+      if (times.some((t) => Math.abs(t - anchorMs) < cooldownMs)) continue;
+      times.push(anchorMs);
+      sent.set(tokenId, times);
+    }
+    mask[i] = 1;
+    taken += 1;
+  }
+  return mask;
 }
 
 /**
  * The share of bootstrap resamples (rows drawn with replacement, the SAME draw for both sides)
- * in which the challenger's call record scores higher than the lane's. Both sides are given as
- * their call masks over the same rows - "would it have called row i" - so the comparison is
- * paired: both see the same lucky and unlucky rows in every resample. Each resample is scored
- * with recordScore, the exam's own score, on all five of its parts (2x, 4x, 10x, run size and
- * catch rate, here counted per winning moment drawn rather than per token), so a challenger that
- * out-examines a lane on run size or on runners caught is judged on that too. Null when either
- * side called nothing (no record to compare).
+ * in which the challenger's 2x rate is higher than the lane's. Both sides are given as their call
+ * masks over the same rows - "would it have called row i" - so the comparison is paired: both see
+ * the same lucky and unlucky rows in every resample. Only the 2x rate is compared (wins over calls
+ * drawn): no catch, run size or 4x/10x part, and the masks should call an equal share of the rows
+ * (equalShareCalls), so a side that calls more rows is not credited for the runners it sweeps up -
+ * the way the Default is picked on its 2x alone (user decision 2026-10-14). Null when either side
+ * called nothing (no record to compare).
  */
 export function pairedBootstrapConfidence(
-  rows: BootstrapRows | ArrayLike<number>,
+  labels: ArrayLike<number>,
   challengerCalls: ArrayLike<number>,
   laneCalls: ArrayLike<number>,
-  targets: PrecisionTargets,
   rng: Rng,
   draws = BOOTSTRAP_DRAWS,
 ): number | null {
-  const { labels, runs, tenX } = "labels" in rows ? rows : { labels: rows };
   const n = labels.length;
   if (n === 0 || challengerCalls.length !== n || laneCalls.length !== n) return null;
-  if ((runs !== undefined && runs.length !== n) || (tenX !== undefined && tenX.length !== n)) return null;
   let anyChallenger = false;
   let anyLane = false;
   for (let i = 0; i < n; i++) {
@@ -618,62 +647,28 @@ export function pairedBootstrapConfidence(
     if (laneCalls[i]) anyLane = true;
   }
   if (!anyChallenger || !anyLane) return null;
+  const rate = (wins: number, calls: number) => (calls === 0 ? 0 : wins / calls);
   let challengerWins = 0;
   for (let d = 0; d < draws; d++) {
-    const c = bootstrapRecord(tenX !== undefined);
-    const l = bootstrapRecord(tenX !== undefined);
+    let cCalls = 0;
+    let cWins = 0;
+    let lCalls = 0;
+    let lWins = 0;
     for (let k = 0; k < n; k++) {
       const i = Math.floor(rng() * n);
-      const label = labels[i]!;
-      // Every drawn winning moment is a runner both sides could have caught.
-      if (label > 0) {
-        c.runnersSeen! += 1;
-        l.runnersSeen! += 1;
-        if (challengerCalls[i]) c.runnersCaught! += 1;
-        if (laneCalls[i]) l.runnersCaught! += 1;
+      const win = labels[i]! > 0 ? 1 : 0;
+      if (challengerCalls[i]) {
+        cCalls += 1;
+        cWins += win;
       }
-      if (!challengerCalls[i] && !laneCalls[i]) continue;
-      const run = runs === undefined ? label : runs[i]!;
-      const ten = tenX === undefined ? undefined : tenX[i]!;
-      if (challengerCalls[i]) add(c, label, run, ten);
-      if (laneCalls[i]) add(l, label, run, ten);
+      if (laneCalls[i]) {
+        lCalls += 1;
+        lWins += win;
+      }
     }
-    const sc = recordScore(c, targets) ?? 0;
-    const sl = recordScore(l, targets) ?? 0;
-    if (sc > sl) challengerWins += 1;
+    if (rate(cWins, cCalls) > rate(lWins, lCalls)) challengerWins += 1;
   }
   return challengerWins / draws;
-}
-
-function bootstrapRecord(tracksTenX: boolean): CallRecord {
-  const record: CallRecord = {
-    calls: 0,
-    graded: 0,
-    wins: 0,
-    goals: 0,
-    sumLabel: 0,
-    sumRun: 0,
-    runnersSeen: 0,
-    runnersCaught: 0,
-  };
-  if (tracksTenX) {
-    record.tenX = 0;
-    record.tenXGraded = 0;
-  }
-  return record;
-}
-
-function add(record: CallRecord, label: number, run: number, tenX: number | undefined): void {
-  record.calls += 1;
-  record.graded += 1;
-  if (label > 0) record.wins += 1;
-  if (label >= GOAL_LABEL) record.goals += 1;
-  record.sumLabel += label;
-  record.sumRun! += run;
-  if (tenX !== undefined && tenX >= 0) {
-    record.tenXGraded! += 1;
-    if (tenX > 0) record.tenX! += 1;
-  }
 }
 
 export interface Replacement {
