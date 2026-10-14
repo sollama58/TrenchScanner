@@ -14,8 +14,10 @@ export interface PossibleSide {
   pct: number;
   shared: number;
   kolCoins: number;
-  /** The span the match was read over: 24, 48 or 72 hours (absent from older API builds). */
+  /** The span the match was read over: 24, 48 or 72 hours (absent from older API builds); 0 when funded only. */
   hours?: number;
+  /** The KOL funded this wallet (paid for its first SOL): a KOL Funded Wallet, not a "possible" one. */
+  funded?: boolean;
 }
 
 export type PossibleSides = Readonly<Record<string, readonly PossibleSide[]>>;
@@ -74,29 +76,37 @@ export function usePossibleSides(wallets: readonly (string | null | undefined)[]
   }, [key, v]);
 }
 
-/** "Ansem Possible Side (93%)". */
-export function possibleSideText(s: Pick<PossibleSide, "kolWallet" | "kolName" | "pct">): string {
+/** "Ansem Possible Side (93%)", or "Ansem KOL Funded Wallet" for a wallet the KOL funded. */
+export function possibleSideText(s: Pick<PossibleSide, "kolWallet" | "kolName" | "pct" | "funded">): string {
   const who = s.kolName ?? `${s.kolWallet.slice(0, 4)}…${s.kolWallet.slice(-4)}`;
-  return `${who} Possible Side (${Math.round(s.pct)}%)`;
+  return s.funded ? `${who} KOL Funded Wallet` : `${who} Possible Side (${Math.round(s.pct)}%)`;
 }
 
 /** The KOLs with possible side wallets among `holders`, each with those holders, strongest first. */
 export function sideGroups(
   holders: readonly string[],
   sides: PossibleSides,
-): { kolWallet: string; kolName: string | null; wallets: { wallet: string; pct: number }[] }[] {
+): {
+  kolWallet: string;
+  kolName: string | null;
+  wallets: { wallet: string; pct: number; funded: boolean }[];
+}[] {
   const byKol = new Map<
     string,
-    { kolWallet: string; kolName: string | null; wallets: { wallet: string; pct: number }[] }
+    { kolWallet: string; kolName: string | null; wallets: { wallet: string; pct: number; funded: boolean }[] }
   >();
   for (const w of holders) {
     for (const s of sides[w] ?? []) {
       let g = byKol.get(s.kolWallet);
       if (!g) byKol.set(s.kolWallet, (g = { kolWallet: s.kolWallet, kolName: s.kolName, wallets: [] }));
-      g.wallets.push({ wallet: w, pct: s.pct });
+      g.wallets.push({ wallet: w, pct: s.pct, funded: !!s.funded });
     }
   }
   return [...byKol.values()]
-    .map((g) => ({ ...g, wallets: g.wallets.sort((a, b) => b.pct - a.pct) }))
+    .map((g) => ({
+      ...g,
+      // Funded wallets first: the confirmed tie.
+      wallets: g.wallets.sort((a, b) => Number(b.funded) - Number(a.funded) || b.pct - a.pct),
+    }))
     .sort((a, b) => b.wallets.length - a.wallets.length || b.wallets[0]!.pct - a.wallets[0]!.pct);
 }

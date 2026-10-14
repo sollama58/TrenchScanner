@@ -296,7 +296,7 @@ function SideRulesCard({ rules }: { rules: SideRules }) {
         </ul>
         <p className="faint small">
           Any one tier. Shown on the wallet and the bubble map for {rules.holdDays} days after it last
-          qualifies.
+          qualifies. A wallet the KOL funded is labeled KOL Funded Wallet whatever its trades.
         </p>
       </div>
       <div className="side-rule">
@@ -506,9 +506,9 @@ function SideRows({
           <li
             key={s.wallet}
             className={[label ? "labeled" : "", isOpen ? "open" : ""].join(" ").trim() || undefined}
-            // The whole row opens its trades; the address and the toggle are its own buttons.
+            // The row opens and closes its trades; the address, the toggle and the open panel itself don't.
             onClick={(e) => {
-              if (!(e.target as HTMLElement).closest("button, a")) toggle();
+              if (!(e.target as HTMLElement).closest("button, a, .sm-body")) toggle();
             }}
           >
             <span className="side-rank num faint">{i + 1}</span>
@@ -537,13 +537,22 @@ function SideRows({
               <span title="Every tracked coin it bought in the window">· {s.coins} total</span>
             </span>
             <span className="side-tags">
-              {label && (
+              {label?.funded ? (
                 <span
-                  className="pill side-label"
-                  title={`Met a Possible Side tier: ${Math.round(label.pct)}% of the KOL's coins over ${label.hours ?? 24} hours`}
+                  className="pill side-label side-funded"
+                  title="The KOL paid for this wallet's first SOL"
                 >
-                  <TargetIcon size={11} /> Possible Side
+                  <TargetIcon size={11} /> KOL Funded Wallet
                 </span>
+              ) : (
+                label && (
+                  <span
+                    className="pill side-label"
+                    title={`Met a Possible Side tier: ${Math.round(label.pct)}% of the KOL's coins over ${label.hours ?? 24} hours`}
+                  >
+                    <TargetIcon size={11} /> Possible Side
+                  </span>
+                )
               )}
               {s.risk?.winner && (
                 <span

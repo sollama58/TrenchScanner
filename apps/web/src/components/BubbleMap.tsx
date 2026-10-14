@@ -579,10 +579,10 @@ function MapView({
                   KOL <WalletText wallet={g.kolWallet} names={names} />
                   {!names[g.kolWallet] && g.kolName ? ` ${g.kolName}` : ""}
                 </span>
-                <span className="muted small">
-                  {g.wallets.length} possible side wallet{g.wallets.length === 1 ? "" : "s"} · not confirmed
+                <span className="muted small">{sideSummary(g.wallets)}</span>
+                <span className="num bm-cluster-pct">
+                  {g.wallets[0]!.funded ? "Funded" : `${Math.round(g.wallets[0]!.pct)}%`}
                 </span>
-                <span className="num bm-cluster-pct">{Math.round(g.wallets[0]!.pct)}%</span>
               </div>
             </li>
           ))}
@@ -623,7 +623,7 @@ function MapView({
           {graph.sameTimeGroups.length > 0 &&
             " Holders whose wallets were funded within the same minute, whoever paid, share a dotted ring and line in their group's colour."}
           {showSides &&
-            " A dotted gold line ties a holder to a KOL it bought alongside on every one of the KOL's coins over the last 24 hours (10 or more), 90% over 48 hours (25 or more) or 80% over 72 hours (50 or more): a possible side wallet, not confirmed."}
+            " A dotted gold line ties a holder to a KOL it bought alongside on every one of the KOL's coins over the last 24 hours (10 or more), 90% over 48 hours (25 or more) or 80% over 72 hours (50 or more): a possible side wallet, not confirmed. A wallet the KOL funded is tied the same way as a KOL funded wallet, with no question mark."}
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
           {graph.nodes.some((n) => n.rank !== undefined) &&
@@ -1115,6 +1115,18 @@ function clockTime(ms: number): string {
 /** A name short enough to sit under a bubble. */
 function clipName(text: string, max = 16): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+/** "2 KOL funded wallets · 1 possible side, not confirmed": a KOL's ties in the legend. */
+function sideSummary(wallets: readonly { funded?: boolean }[]): string {
+  const funded = wallets.filter((w) => w.funded).length;
+  const possible = wallets.length - funded;
+  return [
+    funded > 0 ? `${funded} KOL funded wallet${funded === 1 ? "" : "s"}` : null,
+    possible > 0 ? `${possible} possible side wallet${possible === 1 ? "" : "s"} · not confirmed` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames, sides: PossibleSides = {}): string {
