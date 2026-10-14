@@ -17,6 +17,10 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    # A green run takes a few minutes (npm ci, every migration against a real Postgres, then
+    # lint, typecheck, build and the tests). Without a limit a hung step - a test waiting on a
+    # socket, a migration waiting on a lock - holds the runner for GitHub's default of six hours.
+    timeout-minutes: 30
 
     # A real Postgres, not a mock - prisma:deploy actually applies every migration against it,
     # which catches migration-file drift/corruption that a schema-only check would miss. It is the
@@ -56,16 +60,21 @@ jobs:
       - name: Build packages/core
         run: npm run build -w @trenchscanner/core
 
-      # Every key render.yaml sets must be one the config schema reads - see the script.
+      # Every key render.yaml sets must be one the config schema reads, each service must declare
+      # the keys it reads, and code reads process.env only through the schema - see the script.
       - name: Check render.yaml keys against the env schema
         run: ./scripts/check-env-keys.sh
 
       - name: Apply migrations to the CI database
         run: npm run prisma:deploy
 
-      # A new migration that ALTERs a large table must set a lock_timeout - see the script.
+      # A new migration that locks a large table must set a lock_timeout - see the script.
       - name: Check big-table migrations set a lock_timeout
         run: ./scripts/check-migration-locks.sh
+
+      # No two migrations may share a timestamp, so their order never falls to their names.
+      - name: Check migration timestamps are unique
+        run: ./scripts/check-migration-timestamps.sh
 
       - name: Check migrations re-run safely and match the schema
         run: |
@@ -87,5 +96,7 @@ jobs:
       - name: Test
         run: npm test
 
+      # Pinned: js-yaml is not a dependency here, so an unpinned npx would fetch whatever was
+      # published last, on every run.
       - name: Validate render.yaml
-        run: npx -y js-yaml render.yaml > /dev/null
+        run: npx -y js-yaml@4.3.2 render.yaml > /dev/null
