@@ -35,6 +35,10 @@ import {
   topSliceCallers,
   TOP_SLICE_MODEL_KIND,
   calibratedWinRate,
+  convictionTier,
+  liveConvictionLines,
+  LIVE_CONVICTION_WINDOW_HOURS,
+  type SeatScores,
   RULES_CONTESTANT,
   NARRATIVE_CONTESTANT,
   CONTESTANTS,
@@ -126,6 +130,7 @@ let modelCache: { fetchedAt: number; key: string; roster: CuratorRoster } | null
 export function resetCuratorModelCache(): void {
   modelCache = null;
   modelFill = null;
+  resetConvictionLineCache();
 }
 
 /**
@@ -134,6 +139,76 @@ export function resetCuratorModelCache(): void {
  * (whole GBDT forests) in parallel.
  */
 let modelFill: { key: string; promise: Promise<CuratorRoster> } | null = null;
+
+/**
+ * The seats' live high-conviction lines (curation/convictionLine.ts), redrawn every
+ * CONVICTION_LINE_TTL_MS from the last LIVE_CONVICTION_WINDOW_HOURS of decision moments. A failed
+ * read keeps the previous lines (or none, so every seat uses its shipped line) until the next try.
+ */
+const CONVICTION_LINE_TTL_MS = 10 * 60_000;
+let lineCache: { fetchedAt: number; lines: Map<string, number> } | null = null;
+let lineFill: Promise<Map<string, number>> | null = null;
+
+/** Test hook: forget the cached lines so the next decision re-reads them. */
+export function resetConvictionLineCache(): void {
+  lineCache = null;
+  lineFill = null;
+}
+
+async function convictionLines(env: Env): Promise<Map<string, number>> {
+  if (lineCache && Date.now() - lineCache.fetchedAt < CONVICTION_LINE_TTL_MS) return lineCache.lines;
+  if (lineFill) return lineFill;
+  const fill = loadConvictionLines(env);
+  lineFill = fill;
+  try {
+    return await fill;
+  } finally {
+    if (lineFill === fill) lineFill = null;
+  }
+}
+
+async function loadConvictionLines(env: Env): Promise<Map<string, number>> {
+  const previous = lineCache?.lines ?? new Map<string, number>();
+  try {
+    const rows = await prisma.candidateOutcome.findMany({
+      where: {
+        sampleKind: "event",
+        anchorAt: { gt: new Date(Date.now() - LIVE_CONVICTION_WINDOW_HOURS * 3_600_000) },
+        seatScores: { not: Prisma.DbNull },
+      },
+      select: { seatScores: true },
+    });
+    const lines = liveConvictionLines(
+      rows.map((r) => r.seatScores),
+      env.CURATED_HIGH_CONVICTION_RANK,
+    );
+    lineCache = { fetchedAt: Date.now(), lines };
+    return lines;
+  } catch (err) {
+    logger.warn("failed to read live high-conviction lines - keeping the previous ones", {
+      error: String(err),
+    });
+    lineCache = { fetchedAt: Date.now(), lines: previous };
+    return previous;
+  }
+}
+
+/** Every seat's probability at a decision moment, onto its row (CandidateOutcome.seatScores). */
+async function recordSeatScores(rowId: string, decisions: Map<string, CurationDecision>): Promise<void> {
+  const scores: SeatScores = {};
+  for (const [seat, decision] of decisions) {
+    // Rules decides on points, not a probability, and has no tier.
+    if (seat === RULES_CONTESTANT) continue;
+    if (Number.isFinite(decision.confidence)) scores[seat] = decision.confidence / 100;
+  }
+  if (Object.keys(scores).length === 0) return;
+  try {
+    await prisma.candidateOutcome.update({ where: { id: rowId }, data: { seatScores: scores } });
+  } catch (err) {
+    // A lost row costs one moment from the next lines, never the decision.
+    logger.warn("failed to record seat scores", { rowId, error: String(err) });
+  }
+}
 
 async function curatorRoster(env: Env): Promise<CuratorRoster> {
   const key = env.CURATOR_CONTESTANTS.join(",");
@@ -390,6 +465,8 @@ function decideCurations(
   roster: CuratorRoster,
   env: Env,
   population: DecisionPopulation = "event",
+  /** Each seat's high-conviction line on its live scores, where it has one (liveConvictionLines). */
+  lines: ReadonlyMap<string, number> = new Map(),
 ): Map<string, CurationDecision> {
   const features = buildCandidateFeatures(scored);
   const decisions = new Map<string, CurationDecision>();
@@ -412,7 +489,7 @@ function decideCurations(
         reasons: curate ? topModelReasons(params, features) : [],
         rationale: modelRationale(params, features),
         source: id,
-        ...servedFields(params, probability),
+        ...servedFields(params, probability, lines.get(entry.spec.id)),
       });
       continue;
     }
@@ -438,7 +515,7 @@ function decideCurations(
         confidence: probability * 100,
         reasons: curate ? topModelReasons(params, features) : [],
         source: id,
-        ...servedFields(params, probability),
+        ...servedFields(params, probability, lines.get(entry.spec.id)),
       });
     }
   }
@@ -493,7 +570,7 @@ function decideCurations(
         confidence: probability * 100,
         reasons,
         source: id,
-        ...servedFields(params, probability),
+        ...servedFields(params, probability, lines.get(entry.spec.id)),
       });
       continue;
     }
@@ -522,7 +599,7 @@ function decideCurations(
         confidence: probability * 100,
         reasons,
         source: id,
-        ...servedFields(params, probability),
+        ...servedFields(params, probability, lines.get(entry.spec.id)),
       });
       continue;
     }
@@ -551,21 +628,25 @@ function decideCurations(
       confidence: probability * 100,
       reasons,
       source: id,
-      ...servedFields(params, probability),
+      ...servedFields(params, probability, lines.get(entry.spec.id)),
     });
   }
   return decisions;
 }
 
-/** The tier and the calibrated 2x rate for a model's probability - see ServedCuratorExtras. */
+/**
+ * The tier and the calibrated 2x rate for a model's probability - see ServedCuratorExtras. The
+ * tier's line is the seat's live one when it has enough live scores, else the run's shipped one
+ * (curation/convictionLine.ts).
+ */
 function servedFields(
   params: ServedCuratorExtras,
   probability: number,
+  liveLine: number | undefined,
 ): Pick<CurationDecision, "tier" | "calibratedPct"> {
   const out: Pick<CurationDecision, "tier" | "calibratedPct"> = {};
-  if (params.highConvictionThreshold !== undefined) {
-    out.tier = probability >= params.highConvictionThreshold ? "high" : "standard";
-  }
+  const tier = convictionTier(probability, params.highConvictionThreshold, liveLine);
+  if (tier !== undefined) out.tier = tier;
   const rate = calibratedWinRate(params.calibration, probability);
   if (rate !== null) out.calibratedPct = Math.round(rate * 1000) / 10;
   return out;
@@ -689,7 +770,12 @@ export async function collectCuratedContender(
   }
 
   const roster = await curatorRoster(env);
-  const decisions = decideCurations(scored, roster, env, population);
+  const decisions = decideCurations(scored, roster, env, population, await convictionLines(env));
+  // A new decision moment banks every seat's score: the next lines are drawn on them. A retry or
+  // a moment the spacing window folded into an earlier row is not a new moment.
+  if (population === "event" && retry === undefined && cycleSample?.created) {
+    await recordSeatScores(cycleSample.id, decisions);
+  }
   const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
   const narrative = decisions.get(NARRATIVE_CONTESTANT);
   // A failed note costs only the Narrative seat's card on this coin, never every seat's decision.
