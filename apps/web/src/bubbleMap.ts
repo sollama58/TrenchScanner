@@ -448,7 +448,7 @@ export function cexGroupsOf(graph: Pick<BubbleGraph, "nodes" | "cexLinks">): {
 // The layout
 
 /** Gap between bubbles, map units. */
-const GAP = 6;
+const GAP = 9;
 
 /**
  * Places the nodes with a small fixed-step force layout: each cluster starts around its own spot
@@ -585,19 +585,134 @@ export function layoutGraph(
 }
 
 /** The box the laid-out map fills, with room for the badges and labels around the bubbles. */
-export function graphBounds(graph: BubbleGraph, pad = 18): { x: number; y: number; w: number; h: number } {
+/** A label to place near an anchor (a funder's diamond, an exchange's tie): its box size in map units. */
+export interface MapLabel {
+  id: string;
+  x: number;
+  y: number;
+  /** How far from the anchor's centre the box may start (the anchor's own radius). */
+  r: number;
+  w: number;
+  h: number;
+}
+
+/** A placed label: its box's centre, and whether it moved off its anchor far enough to want a leader line. */
+export interface PlacedLabel {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  far: boolean;
+}
+
+/**
+ * Places each label in the first spot around its anchor that covers no bubble, no other label and
+ * no drawn line: below first, then above, the sides and the diagonals, stepping further out. A
+ * label with no clear spot takes the one that covers least. Deterministic, like the layout.
+ */
+export function placeLabels(
+  graph: Pick<BubbleGraph, "nodes" | "links" | "sameTimeLinks" | "cexLinks">,
+  labels: readonly MapLabel[],
+  opts: { cex?: boolean } = {},
+): PlacedLabel[] {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  // Every drawn line as sample points (funding links bend, as the map draws them).
+  const points: { x: number; y: number }[] = [];
+  const sample = (ax: number, ay: number, bx: number, by: number, bend: number) => {
+    const mx = (ax + bx) / 2 + (by - ay) * bend;
+    const my = (ay + by) / 2 - (bx - ax) * bend;
+    const steps = Math.max(4, Math.ceil(Math.hypot(bx - ax, by - ay) / 3));
+    for (let i = 1; i < steps; i += 1) {
+      const t = i / steps;
+      points.push({
+        x: (1 - t) * (1 - t) * ax + 2 * (1 - t) * t * mx + t * t * bx,
+        y: (1 - t) * (1 - t) * ay + 2 * (1 - t) * t * my + t * t * by,
+      });
+    }
+  };
+  const lines = [
+    ...graph.links.map((l) => ({ ...l, bend: 0.12 })),
+    ...graph.sameTimeLinks.map((l) => ({ ...l, bend: 0 })),
+    ...(opts.cex ? graph.cexLinks.map((l) => ({ ...l, bend: 0 })) : []),
+  ];
+  for (const l of lines) {
+    const a = byId.get(l.from);
+    const b = byId.get(l.to);
+    if (a && b) sample(a.x, a.y, b.x, b.y, l.bend);
+  }
+  // Bubbles with their rings (same-minute and risk rings reach about 9 past the edge, plus their stroke).
+  const circles = graph.nodes.map((n) => ({ x: n.x, y: n.y, r: n.kind === "funder" ? n.r * 0.95 : n.r + 9 }));
+
+  const placed: PlacedLabel[] = [];
+  const cost = (x: number, y: number, w: number, h: number): number => {
+    const x0 = x - w / 2 - 2;
+    const x1 = x + w / 2 + 2;
+    const y0 = y - h / 2 - 2;
+    const y1 = y + h / 2 + 2;
+    let c = 0;
+    for (const k of circles) {
+      const dx = k.x - Math.max(x0, Math.min(k.x, x1));
+      const dy = k.y - Math.max(y0, Math.min(k.y, y1));
+      if (dx * dx + dy * dy < k.r * k.r) c += 10;
+    }
+    for (const p of placed) {
+      if (Math.abs(p.x - x) * 2 < p.w + w + 4 && Math.abs(p.y - y) * 2 < p.h + h + 4) c += 10;
+    }
+    for (const p of points) if (p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1) c += 1;
+    return c;
+  };
+  // Below, above, right, left, then the diagonals.
+  const dirs = [
+    [0, 1],
+    [0, -1],
+    [1, 0],
+    [-1, 0],
+    [0.7, 0.7],
+    [-0.7, 0.7],
+    [0.7, -0.7],
+    [-0.7, -0.7],
+  ] as const;
+  for (const l of labels) {
+    let best: { x: number; y: number; c: number; far: boolean } | null = null;
+    search: for (const step of [0, 10, 22, 38, 58, 84, 116]) {
+      for (const [dx, dy] of dirs) {
+        // Out from the anchor's edge until the box clears it along that direction.
+        const reach = l.r + step + 3 + Math.abs(dx) * (l.w / 2) + Math.abs(dy) * (l.h / 2);
+        const x = l.x + dx * reach;
+        const y = l.y + dy * reach;
+        const c = cost(x, y, l.w, l.h);
+        if (!best || c < best.c) best = { x, y, c, far: step >= 22 };
+        if (c === 0) break search;
+      }
+    }
+    placed.push({ id: l.id, x: best!.x, y: best!.y, w: l.w, h: l.h, far: best!.far });
+  }
+  return placed;
+}
+
+export function graphBounds(
+  graph: BubbleGraph,
+  pad = 18,
+  /** Placed labels the box must hold too. */
+  labels: readonly PlacedLabel[] = [],
+): { x: number; y: number; w: number; h: number } {
   if (graph.nodes.length === 0) return { x: -50, y: -50, w: 100, h: 100 };
   let x0 = Infinity;
   let y0 = Infinity;
   let x1 = -Infinity;
   let y1 = -Infinity;
   for (const n of graph.nodes) {
-    // Funders carry a label underneath.
-    const below = n.kind === "funder" ? 18 : 0;
     x0 = Math.min(x0, n.x - n.r);
     y0 = Math.min(y0, n.y - n.r);
     x1 = Math.max(x1, n.x + n.r);
-    y1 = Math.max(y1, n.y + n.r + below);
+    y1 = Math.max(y1, n.y + n.r);
+  }
+  for (const l of labels) {
+    x0 = Math.min(x0, l.x - l.w / 2);
+    y0 = Math.min(y0, l.y - l.h / 2);
+    x1 = Math.max(x1, l.x + l.w / 2);
+    y1 = Math.max(y1, l.y + l.h / 2);
   }
   // The cluster halos reach a little past their bubbles.
   for (const h of clusterHalos(graph)) {
@@ -738,23 +853,55 @@ export function holderFreshness(takenAt: string, now: number): { last: number; n
 }
 
 /**
- * How a wallet's name sits inside its bubble: small, curved along the inside of the bottom edge,
- * clipped to what the arc holds. Null when the bubble is too small to hold a few letters; its name
- * is still in the tooltip and the detail panel.
+ * How a wallet's name sits in its bubble (user ask 2026-10-14): under the %, wrapped onto at most
+ * two lines no wider than NAME_MAX_W map units, the second clipped with "…". `wide` when the block
+ * runs past the bubble's edge, so it gets a backing. Null for a bubble too small to carry one; its
+ * name is still in the tooltip and the detail panel.
  */
-export function bubbleNameFit(
+export function bubbleNameLines(
   r: number,
   name: string,
   /** A Pump.fun username: shown in quotes, which stay on when the name is clipped. */
   quoted = false,
-): { text: string; size: number; radius: number } | null {
-  if (r < 15) return null;
-  const size = Math.min(10, Math.max(7, r * 0.2));
-  const radius = r - size * 0.45 - 2;
-  // About 80% of the lower half-circle, at roughly 0.56em a character.
-  const fits = Math.floor((Math.PI * radius * 0.8) / (size * 0.56));
-  if (fits < 4) return null;
-  const room = quoted ? fits - 2 : fits;
-  const shown = name.length > room ? `${name.slice(0, room - 1)}…` : name;
-  return { text: quoted ? `"${shown}"` : shown, size, radius };
+): { lines: string[]; size: number; w: number; wide: boolean } | null {
+  if (r < 13) return null;
+  const size = Math.min(10.5, Math.max(8, r * 0.26));
+  const charW = size * 0.56;
+  const maxW = Math.min(NAME_MAX_W, Math.max(r * 1.6, 44));
+  const perLine = Math.max(4, Math.floor(maxW / charW));
+  const text = quoted ? `"${name}"` : name;
+  const lines: string[] = [];
+  let rest = text.trim();
+  while (rest.length > 0 && lines.length < 2) {
+    if (rest.length <= perLine) {
+      lines.push(rest);
+      rest = "";
+      break;
+    }
+    // Break at the last space that fits, else mid-word.
+    const cut = rest.lastIndexOf(" ", perLine);
+    const at = cut > perLine / 3 ? cut : perLine;
+    lines.push(rest.slice(0, at).trimEnd());
+    rest = rest.slice(at).trimStart();
+  }
+  if (rest.length > 0) {
+    const last = lines[lines.length - 1]!;
+    const keep = last.slice(0, Math.max(1, perLine - (quoted ? 2 : 1)));
+    lines[lines.length - 1] = `${keep}…${quoted ? '"' : ""}`;
+  }
+  const w = Math.max(...lines.map((l) => l.length)) * charW;
+  // The bubble's width where the name sits, about halfway down.
+  const chord = 2 * Math.sqrt(Math.max(0, r * r - (r * 0.45) ** 2));
+  return { lines, size, w, wide: w > chord - 4 };
+}
+
+/** The widest a name block may get, in map units (bubbles run about 18 to 75 across). */
+export const NAME_MAX_W = 64;
+
+/** The same-exchange colours (styles.css --bm-cex-0 to 3): light tints, apart from the cluster fills. */
+export const CEX_COLOURS = 4;
+
+/** Each exchange's colour slot, in cexGroupsOf's order (largest first), so its lines, label and row match. */
+export function cexSlots(graph: Pick<BubbleGraph, "nodes" | "cexLinks">): Map<string, number> {
+  return new Map(cexGroupsOf(graph).map((g, i) => [g.funder, i % CEX_COLOURS]));
 }

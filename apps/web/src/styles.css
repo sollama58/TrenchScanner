@@ -9235,6 +9235,11 @@ img.tm-avatar {
   --bm-none: #6b7280;
   /* Same-exchange ties: a neutral dash, apart from the cluster colours and the reserved markers. */
   --bm-cex: color-mix(in srgb, var(--ink-2) 75%, transparent);
+  /* One per exchange (bubbleMap CEX_COLOURS): light tints, so a dashed exchange tie never reads as a cluster's line. */
+  --bm-cex-0: #a5b4fc;
+  --bm-cex-1: #5eead4;
+  --bm-cex-2: #fda4af;
+  --bm-cex-3: #f0abfc;
 }
 @media (min-width: 641px) {
   .bm-modal {
@@ -9396,19 +9401,33 @@ img.tm-avatar {
 .bm-cex-link.dim {
   stroke-opacity: 0.12;
 }
-.bm-cex-tag rect {
+/* Funder and exchange names: pills placed clear of bubbles, text and lines (bubbleMap placeLabels). */
+.bm-label rect {
   fill: var(--surface-2);
-  stroke: var(--bm-cex);
-  stroke-width: 1;
+  stroke: var(--lc, var(--border-strong));
+  stroke-width: 1.2;
 }
-.bm-cex-tag text {
-  fill: var(--ink-2);
-  font-size: 8.5px;
+.bm-label.cex rect {
+  stroke-dasharray: 3 2;
+}
+.bm-label text {
+  fill: var(--ink);
+  stroke: none;
+  font-size: 9.5px;
   font-weight: 600;
   text-anchor: middle;
   dominant-baseline: central;
 }
-.bm-cex-tags {
+.bm-label.funder text {
+  font-family: var(--mono);
+  font-size: 9px;
+}
+.bm-leader {
+  stroke: var(--lc, var(--border-strong));
+  stroke-width: 1.2;
+  stroke-opacity: 0.85;
+}
+.bm-labels {
   pointer-events: none;
 }
 .bm-cex-dot {
@@ -9463,14 +9482,19 @@ img.tm-avatar {
   stroke-width: 2px;
 }
 .bm-name {
-  fill: rgba(255, 255, 255, 0.86);
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  fill: #fff;
+  font-weight: 650;
   text-anchor: middle;
+  dominant-baseline: central;
   pointer-events: none;
   paint-order: stroke;
-  stroke: rgba(0, 0, 0, 0.3);
+  stroke: rgba(0, 0, 0, 0.35);
   stroke-width: 2px;
+}
+/* Behind a name that runs past its bubble's edge. */
+.bm-name .bm-name-bg {
+  fill: rgba(12, 14, 20, 0.82);
+  stroke: none;
 }
 /* A Pump.fun username: light green, as in the lists (.pumpfun-name). */
 .bm-name.pumpfun {
@@ -9510,13 +9534,6 @@ img.tm-avatar {
 .bm-node.on .bm-funder,
 .bm-node:focus-visible .bm-funder {
   stroke: var(--ink) !important;
-}
-.bm-funder-label {
-  fill: var(--muted);
-  font-family: var(--mono);
-  font-size: 8.5px;
-  text-anchor: middle;
-  pointer-events: none;
 }
 .bm-rest {
   fill: color-mix(in srgb, var(--ink) 5%, transparent);
