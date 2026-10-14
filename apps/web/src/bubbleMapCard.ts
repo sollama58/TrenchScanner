@@ -625,10 +625,18 @@ export async function renderBubbleCard(
   if (legend.length > 0) {
     ctx.font = `650 14px ${FONT}`;
     const widths = legend.map((k) => ctx.measureText(k.text).width + 16);
-    const total = widths.reduce((t, w) => t + w, 0) + (legend.length - 1) * 10;
+    // A faint italic "Legend" before the chips (user ask 2026-10-14).
+    ctx.font = `italic 500 14px ${FONT}`;
+    const titleW = ctx.measureText("Legend").width + 12;
+    const total = titleW + widths.reduce((t, w) => t + w, 0) + (legend.length - 1) * 10;
     let x = area.x + (area.w - total) / 2;
     const ly = area.y + area.h + LEGEND_H / 2;
     ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    ctx.fillStyle = alpha("#ffffff", 0.5);
+    ctx.fillText("Legend", x, ly + 1);
+    x += titleW;
+    ctx.font = `650 14px ${FONT}`;
     ctx.textAlign = "center";
     legend.forEach((c, i) => {
       ctx.fillStyle = c.bg;

@@ -9749,6 +9749,11 @@ img.tm-avatar {
   align-items: center;
   gap: 6px;
 }
+/* The faint italic "Legend" before the chips (user ask 2026-10-14). */
+.bm-legend li.bm-legend-title {
+  font-style: italic;
+  opacity: 0.6;
+}
 .bm-legend-chip {
   padding: 1px 6px;
   border-radius: 4px;
