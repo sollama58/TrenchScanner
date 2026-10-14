@@ -191,11 +191,12 @@ export async function renderBubbleCard(
     ctx.arc(PAD + 9, y - 7, 7.5, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
-    const { funded, possible } = sideCounts(members, g);
+    const { known, funded, possible } = sideCounts(members, g);
+    const all = known + funded + possible;
     const lead =
-      possible === 0
+      possible === 0 && known === 0
         ? `${funded} funded`
-        : `${funded + possible} side${funded + possible === 1 ? "" : "s"}${funded > 0 ? "" : "?"}`;
+        : `${all} side${all === 1 ? "" : "s"}${funded + known > 0 ? "" : "?"}`;
     ctx.fillStyle = INK;
     ctx.font = `600 20px ${FONT}`;
     ctx.fillText(lead, PAD + 30, y);
@@ -585,7 +586,8 @@ export async function renderBubbleCard(
       ctx.font = `650 ${nameSize}px ${FONT}`;
       const text = fit.lines;
       const w = Math.max(...text.map((l) => ctx.measureText(l).width));
-      const kol = named.source === "kol";
+      // A KOL's Known Side is the KOL's own wallet: gold too.
+      const kol = named.source === "kol" || named.source === "kol-side";
       // A KOL's name on gold, as in the dialog; any other gets a dark backing when it runs past the edge.
       if (kol || w > r * 1.7) {
         ctx.fillStyle = kol ? SIDE : "rgba(12, 14, 20, 0.82)";
@@ -686,6 +688,7 @@ function nameLegend(graph: BubbleGraph, names: WalletNames): { text: string; bg:
   const dark = "rgba(12, 14, 20, 0.82)";
   const out: { text: string; bg: string; ink: string }[] = [];
   if (kinds.has("kol")) out.push({ text: "KOL", bg: SIDE, ink: "#1a1300" });
+  if (kinds.has("kol-side")) out.push({ text: "KOL Known Side", bg: SIDE, ink: "#1a1300" });
   if (kinds.has("pumpfun")) out.push({ text: '"Pump.fun"', bg: dark, ink: "#4ade80" });
   if (kinds.has("fomo")) out.push({ text: '"FOMO"', bg: dark, ink: "#c4b5fd" });
   if (kinds.has("identity") || kinds.has("exchange"))

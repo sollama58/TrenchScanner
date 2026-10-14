@@ -27,6 +27,7 @@ import {
   type UtilityKind,
 } from "@trenchscanner/core";
 import { creatorFeesByMint, TOKEN_CARD_SELECT } from "../curatedFeed.js";
+import { readKolRows } from "../kolRoster.js";
 import { currentMarketCap } from "./matches.js";
 import { readTokenChart, readTokenSage } from "./tokens.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
@@ -316,6 +317,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
           wallet: r.wallet,
           name: names.get(r.wallet)?.name ?? null,
           twitter: names.get(r.wallet)?.twitter ?? null,
+          // A Known Side of another KOL on the roster (core's KOL_MAINS): its main wallet and name.
+          knownSideOf: names.get(r.wallet)?.knownSideOf ?? null,
           coins: { "24h": r.coins24h, "7d": r.coins7d, "30d": r.coins30d },
           sides: {
             "24h": sides["24h"]?.length ?? 0,
@@ -642,16 +645,19 @@ interface StoredSideWallet {
   gapSec: number;
 }
 
-async function kolNames(
-  wallets: string[],
-): Promise<Map<string, { name: string | null; twitter: string | null }>> {
-  if (wallets.length === 0) return new Map();
-  const rows = await prisma.kolWallet.findMany({
-    where: { wallet: { in: wallets } },
-    select: { wallet: true, name: true, twitter: true },
-  });
+async function kolNames(wallets: string[]): Promise<
+  Map<
+    string,
+    {
+      name: string | null;
+      twitter: string | null;
+      knownSideOf: { wallet: string; name: string | null } | null;
+    }
+  >
+> {
+  const rows = await readKolRows(wallets);
   return new Map(
-    rows.map((r) => [r.wallet, { name: r.name?.trim() || null, twitter: r.twitter?.trim() || null }]),
+    [...rows.values()].map((r) => [r.wallet, { name: r.name, twitter: r.twitter, knownSideOf: r.main }]),
   );
 }
 

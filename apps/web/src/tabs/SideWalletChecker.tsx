@@ -54,6 +54,8 @@ interface SideLeaderboard {
     wallet: string;
     name: string | null;
     twitter: string | null;
+    /** Another wallet of a KOL whose main wallet is set: that main wallet. Absent from older API builds. */
+    knownSideOf?: { wallet: string; name: string | null } | null;
     coins: Record<SideWindow, number>;
     sides: Record<SideWindow, number>;
   }[];
@@ -118,6 +120,8 @@ export function SideWalletChecker() {
     .filter(({ k }) => !q || [k.name, k.twitter, k.wallet].some((v) => v?.toLowerCase().includes(q)));
   const shown = all || q ? matches : matches.slice(0, FIRST_ROWS);
   const withSides = kols.filter((k) => k.sides["30d"] > 0).length;
+  // The KOLs with a Known Side on the list: their own row says it is the main wallet.
+  const mains = new Set(kols.flatMap((k) => (k.knownSideOf ? [k.knownSideOf.wallet] : [])));
   const listed = kols.reduce((n, k) => n + k.sides["30d"], 0);
 
   return (
@@ -139,7 +143,9 @@ export function SideWalletChecker() {
       {data && kols.length > 0 && (
         <div className="side-stats">
           <div className="side-stat">
-            <span className="side-stat-value num">{kols.length.toLocaleString("en-US")}</span>
+            <span className="side-stat-value num">
+              {kols.filter((k) => !k.knownSideOf).length.toLocaleString("en-US")}
+            </span>
             <span className="faint small">KOLs active in 30 days</span>
           </div>
           <div className="side-stat">
@@ -191,7 +197,12 @@ export function SideWalletChecker() {
           <ol className="side-list">
             {shown.map(({ k, rank }) => {
               const isOpen = open === k.wallet;
-              const name = k.name ?? shortAddress(k.wallet);
+              // A KOL's Known Side reads as one, not as a second entry of the same KOL.
+              const side = k.knownSideOf ?? null;
+              const name = side
+                ? `${side.name ?? k.name ?? shortAddress(side.wallet)} Known Side`
+                : (k.name ?? shortAddress(k.wallet));
+              const isMain = !side && mains.has(k.wallet);
               return (
                 <li key={k.wallet} className={isOpen ? "open" : undefined}>
                   <div className="side-line">
@@ -209,6 +220,11 @@ export function SideWalletChecker() {
                         <span className="side-who-text">
                           <strong>{name}</strong>
                           <span className="faint small num">
+                            {side
+                              ? `Main wallet ${shortAddress(side.wallet)} · `
+                              : isMain
+                                ? "Main wallet · "
+                                : ""}
                             {k.twitter ? `@${k.twitter} · ` : ""}
                             {shortAddress(k.wallet)}
                           </span>

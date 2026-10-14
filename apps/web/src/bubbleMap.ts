@@ -136,6 +136,8 @@ export interface FlaggedHolder {
   heldPct: number | null;
   /** A known KOL's name ("" when unnamed), when its tags include "kol". */
   kol?: string | null;
+  /** A KOL's Known Side: the KOL's main wallet. Not a KOL bubble of its own; it joins its KOL's group. */
+  knownSideOf?: string;
 }
 
 /** Where the flagged-wallet read stands: until it is "ok", no rings doesn't mean no risky holders. */
@@ -257,7 +259,7 @@ export function radiusFor(pct: number): number {
 const FUNDER_R = 8;
 
 function kolOf(w: FlaggedHolder | undefined): string | null {
-  return w && w.tags.includes("kol") ? (w.kol ?? "") : null;
+  return w && w.tags.includes("kol") && !w.knownSideOf ? (w.kol ?? "") : null;
 }
 
 function flagsOf(w: FlaggedHolder | undefined): Flag[] {
@@ -488,25 +490,31 @@ export function cexLayout(graph: BubbleGraph): BubbleGraph {
 }
 
 /**
- * A KOL and the holders tied to it (possibleSides.ts sideGroups): its possible side wallets, and
- * the wallets it funded (`funded`, a KOL Funded Wallet: shown without the question mark).
+ * A KOL and the holders tied to it (possibleSides.ts sideGroups): its possible side wallets, the
+ * wallets it funded (`funded`, a KOL Funded Wallet: shown without the question mark), and its own
+ * other wallets (`known`, a Known Side).
  */
 export interface SideGroup {
   kolWallet: string;
   kolName: string | null;
-  wallets: readonly { wallet: string; pct: number; funded?: boolean }[];
+  wallets: readonly { wallet: string; pct: number; funded?: boolean; known?: boolean }[];
 }
 
 /** The side wallets of a group that show on the map (the KOL's own bubble aside), split by kind. */
-export function sideCounts(members: readonly MapNode[], g: SideGroup): { funded: number; possible: number } {
-  const funded = new Set(g.wallets.filter((w) => w.funded).map((w) => w.wallet));
+export function sideCounts(
+  members: readonly MapNode[],
+  g: SideGroup,
+): { known: number; funded: number; possible: number } {
+  const known = new Set(g.wallets.filter((w) => w.known).map((w) => w.wallet));
+  const funded = new Set(g.wallets.filter((w) => w.funded && !w.known).map((w) => w.wallet));
   const sides = members.filter((n) => n.wallet !== g.kolWallet);
+  const k = sides.filter((n) => !!n.wallet && known.has(n.wallet)).length;
   const f = sides.filter((n) => !!n.wallet && funded.has(n.wallet)).length;
-  return { funded: f, possible: sides.length - f };
+  return { known: k, funded: f, possible: sides.length - k - f };
 }
 
 /** How a wallet in a KOL's holdings ties to the KOL. */
-export type KolTie = "kol" | "funded" | "side" | "cluster" | "same-minute";
+export type KolTie = "kol" | "known" | "funded" | "side" | "cluster" | "same-minute";
 
 /** A KOL on the map and the supply it may control: its own wallet, its side wallets and theirs. */
 export interface KolControl {
@@ -537,7 +545,8 @@ export function kolControl(
   const seeds = new Map<string, { kolName: string | null; ties: Map<string, KolTie> }>();
   for (const g of groups) {
     const ties = new Map<string, KolTie>();
-    for (const w of g.wallets) if (w.wallet !== g.kolWallet) ties.set(w.wallet, w.funded ? "funded" : "side");
+    for (const w of g.wallets)
+      if (w.wallet !== g.kolWallet) ties.set(w.wallet, w.known ? "known" : w.funded ? "funded" : "side");
     seeds.set(g.kolWallet, { kolName: g.kolName, ties });
   }
   for (const k of kols) {
@@ -580,12 +589,14 @@ export function sideMembers(graph: Pick<BubbleGraph, "nodes">, g: SideGroup): Ma
 
 /**
  * A KOL pill's word: "funded" when every side wallet on the map is one the KOL funded (no question
- * mark: the tie is on chain), else "side?" for one possible side wallet and "sides?" for more.
+ * mark: the tie is on chain), "side" or "sides" when they are all its Known Sides or funded ones,
+ * else "side?" for one possible side wallet and "sides?" for more.
  */
 export function sideWord(members: readonly MapNode[], g: SideGroup): string {
-  const { funded, possible } = sideCounts(members, g);
+  const { known, funded, possible } = sideCounts(members, g);
+  if (possible === 0 && known > 0) return known + funded > 1 ? "sides" : "side";
   if (possible === 0 && funded > 0) return "funded";
-  return funded + possible > 1 ? "sides?" : "side?";
+  return known + funded + possible > 1 ? "sides?" : "side?";
 }
 
 /** The ties a side group draws, as the layout pulls them: each member to the KOL, else to the largest. */

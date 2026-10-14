@@ -367,6 +367,7 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
         wallet: kol,
         name: "Route KOL",
         twitter: "routekol",
+        knownSideOf: null,
         coins: { "24h": 1, "7d": 2, "30d": 4 },
         sides: { "24h": 0, "7d": 0, "30d": 1 },
       });

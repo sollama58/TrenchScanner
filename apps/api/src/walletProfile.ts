@@ -103,6 +103,8 @@ export interface WalletProfile {
     twitter: string | null;
     realizedPnlUsd: number | null;
     winRate: number | null;
+    /** On a Known Side: the KOL's main wallet and its name (KolWallet.mainWallet). */
+    knownSideOf: { wallet: string; name: string | null } | null;
   } | null;
   live: {
     readAt: string;
@@ -192,19 +194,27 @@ export function walletLabels(input: {
   const out: WalletLabel[] = [];
   for (const s of input.possibleSides ?? [])
     out.push(
-      s.funded
+      s.known
         ? {
             text: possibleSideText(s),
-            tone: "linked",
-            source: "TrenchScanner Side Wallet Checker",
-            detail: `The KOL paid for this wallet's first SOL${s.fundedSol != null ? ` (${Math.round(s.fundedSol * 1000) / 1000} SOL` : ""}${s.fundedAt ? `${s.fundedSol != null ? ", " : " ("}${s.fundedAt.toISOString().slice(0, 10)})` : s.fundedSol != null ? ")" : ""}.${s.shared > 0 ? ` It also bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it in the last ${s.hours} hours.` : ""}`,
+            tone: "good",
+            source: "TrenchScanner KOL list",
+            detail:
+              "One of the KOL's own wallets: another of its entries on Solana Tracker's KOL list, not its main wallet.",
           }
-        : {
-            text: possibleSideText(s),
-            tone: "linked",
-            source: "TrenchScanner Side Wallet Checker",
-            detail: `In the last ${s.hours} hours it bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it. Not confirmed as the KOL's wallet.`,
-          },
+        : s.funded
+          ? {
+              text: possibleSideText(s),
+              tone: "linked",
+              source: "TrenchScanner Side Wallet Checker",
+              detail: `The KOL paid for this wallet's first SOL${s.fundedSol != null ? ` (${Math.round(s.fundedSol * 1000) / 1000} SOL` : ""}${s.fundedAt ? `${s.fundedSol != null ? ", " : " ("}${s.fundedAt.toISOString().slice(0, 10)})` : s.fundedSol != null ? ")" : ""}.${s.shared > 0 ? ` It also bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it in the last ${s.hours} hours.` : ""}`,
+            }
+          : {
+              text: possibleSideText(s),
+              tone: "linked",
+              source: "TrenchScanner Side Wallet Checker",
+              detail: `In the last ${s.hours} hours it bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it. Not confirmed as the KOL's wallet.`,
+            },
     );
   const exchange = KNOWN_EXCHANGE_WALLETS.get(input.wallet);
   if (exchange)
@@ -550,7 +560,8 @@ export async function loadWalletProfile(
     fundedCount: fundedRows.length,
     possibleSides: sides[wallet] ?? [],
   });
-  if (kol)
+  // A Known Side carries its "<KOL> Known Side" label (possibleSides) in place of a KOL one.
+  if (kol && !kol.mainWallet)
     ownLabels.unshift({
       text: kol.name ? `KOL: ${kol.name}` : "KOL",
       tone: "good",
@@ -563,7 +574,20 @@ export async function loadWalletProfile(
     wallet,
     labels: [...ownLabels, ...outside.filter((l) => !ownTexts.has(l.text.toLowerCase()))],
     kol: kol
-      ? { name: kol.name, twitter: kol.twitter, realizedPnlUsd: kol.realizedPnlUsd, winRate: kol.winRate }
+      ? {
+          name: kol.name,
+          twitter: kol.twitter,
+          realizedPnlUsd: kol.realizedPnlUsd,
+          winRate: kol.winRate,
+          knownSideOf: kol.mainWallet
+            ? {
+                wallet: kol.mainWallet,
+                name:
+                  (sides[wallet] ?? []).find((s) => s.known && s.kolWallet === kol.mainWallet)?.kolName ??
+                  kol.name,
+              }
+            : null,
+        }
       : null,
     live: liveFound
       ? {

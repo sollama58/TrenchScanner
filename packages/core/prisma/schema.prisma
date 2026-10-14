@@ -2252,8 +2252,12 @@ model KolWallet {
   source         String    @default("solanatracker")
   firstSeenAt    DateTime  @default(now())
   seenAt         DateTime
+  /// Set on a Known Side: another roster entry of a KOL listed in core's KOL_MAINS, pointing at
+  /// that KOL's main wallet. Shown as "<KOL> Known Side" rather than as a KOL of its own.
+  mainWallet     String?
 
   @@index([seenAt])
+  @@index([mainWallet])
 }
 
 /// The Side Wallet Checker (Utilities tab): each KOL on the roster (KolWallet) with the tracked

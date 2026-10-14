@@ -12,16 +12,20 @@ const SEEN = `${TAG}-seen`;
 const FUNDER = `${TAG}-funder`;
 const KOL = `${TAG}-kol`;
 const RANDOM = `${TAG}-random`;
+const SIDE = `${TAG}-side`;
 
 describe.skipIf(!dbAvailable)("loadWalletNames", () => {
   beforeAll(async () => {
     await prisma.walletFunder.create({ data: { wallet: SEEN, status: "found", funder: FUNDER } });
     await prisma.kolWallet.create({ data: { wallet: KOL, name: "Cupsey", seenAt: new Date() } });
+    await prisma.kolWallet.create({
+      data: { wallet: SIDE, name: "cupseyy", mainWallet: KOL, seenAt: new Date() },
+    });
   });
 
   afterAll(async () => {
     await prisma.walletFunder.deleteMany({ where: { wallet: SEEN } });
-    await prisma.kolWallet.deleteMany({ where: { wallet: KOL } });
+    await prisma.kolWallet.deleteMany({ where: { wallet: { in: [KOL, SIDE] } } });
   });
 
   const reader = (perUserPerMinute = 4) => {
@@ -46,6 +50,12 @@ describe.skipIf(!dbAvailable)("loadWalletNames", () => {
     expect(read.names[SEEN]).toEqual({ name: `name of ${SEEN}`, source: "identity" });
     expect(read.names[RANDOM]).toBeUndefined();
     expect(read.unread).toEqual([]);
+  });
+
+  it("names a KOL's Known Side after the KOL's main wallet", async () => {
+    const read = await loadWalletNames([KOL, SIDE], null);
+    expect(read.names[KOL]).toEqual({ name: "Cupsey", source: "kol" });
+    expect(read.names[SIDE]).toEqual({ name: "Cupsey Known Side", source: "kol-side" });
   });
 
   it("reports what one account's spent share left unread, while others still get theirs", async () => {
