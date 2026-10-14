@@ -19,6 +19,19 @@ export interface FieldSpec {
   explainScore?: boolean;
   /** Replaced by another field: shown only on a filter that still has a value saved, so it can be cleared. */
   retired?: boolean;
+  /**
+   * The saved value is the shown one times this: the top-10 wallet checks are saved as a % of the
+   * top ten (the API's and the matcher's unit) and shown as "N of 10" (user ask 2026-10-13).
+   */
+  scale?: number;
+}
+
+/** A field's saved value as the editor and the lists show it. */
+export function shownValue(f: Pick<FieldSpec, "scale">, saved: number): number;
+export function shownValue(f: Pick<FieldSpec, "scale">, saved: number | null | undefined): number | null;
+export function shownValue(f: Pick<FieldSpec, "scale">, saved: number | null | undefined): number | null {
+  if (saved == null) return null;
+  return f.scale ? Math.round((saved / f.scale) * 100) / 100 : saved;
 }
 
 /** The composite-score setting's label, so lists that show it can attach the explainer. */
@@ -79,26 +92,41 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxFreshTop10WalletPct",
         min: 0,
-        max: 100,
+        max: 10,
         label: "Max fresh wallets",
-        hint: "top-10 holders on wallets first used, or used again after a week idle, in the last day; over 70% is always rejected",
-        unit: "%",
+        hint: "of the top-10 holders, how many are on wallets first used, or used again after a week idle, in the last day; 8 and over is always rejected",
+        unit: "of 10",
+        step: 1,
+        scale: 10,
       },
       {
         key: "maxEmptyTop10WalletPct",
         min: 0,
-        max: 100,
+        max: 10,
         label: "Max empty holder wallets",
-        hint: "top-10 holders with nothing else; 80% and over is always rejected",
-        unit: "%",
+        hint: "of the top-10 holders, how many hold nothing else; 8 and over is always rejected",
+        unit: "of 10",
+        step: 1,
+        scale: 10,
+      },
+      {
+        key: "maxSniperTopHolderCount",
+        min: 0,
+        max: 25,
+        label: "Max snipers in the top holders",
+        hint: "of the 25 largest holders (pool aside), how many were among the launch's first 25 buyers; tokens not checked yet wait",
+        unit: "of 25",
+        step: 1,
       },
       {
         key: "maxSniperTop10WalletPct",
         min: 0,
-        max: 100,
+        max: 10,
         label: "Max snipers in the top 10",
-        hint: "top-10 holders that were among the first 25 buyers; 80% and over is always rejected",
-        unit: "%",
+        hint: "of the top-10 holders, how many were among the first 25 buyers; 8 and over is always rejected",
+        unit: "of 10",
+        step: 1,
+        scale: 10,
       },
       {
         key: "maxLinkedWalletCount",
@@ -156,8 +184,8 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         min: 0,
         max: 20,
         label: "Min top holders funded from an exchange",
-        hint: "of the 20 largest holders, how many were opened from an exchange withdrawal, the way retail arrives; tokens not checked yet wait",
-        unit: "of 20",
+        hint: "of the 25 largest holders (pool aside), how many were opened from an exchange withdrawal, the way retail arrives; tokens not checked yet wait",
+        unit: "of 25",
         step: 1,
       },
       {
@@ -165,8 +193,8 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         min: 0,
         max: 20,
         label: "Max top holders funded from an exchange",
-        hint: "of the 20 largest holders, how many were opened from an exchange withdrawal; 17 and over is always rejected; tokens not checked yet wait",
-        unit: "of 20",
+        hint: "of the 25 largest holders (pool aside), how many were opened from an exchange withdrawal; 21 and over is always rejected; tokens not checked yet wait",
+        unit: "of 25",
         step: 1,
       },
       {
@@ -226,7 +254,7 @@ export function criteriaLines(c: FilterCriteria): string[] {
       const v = c[f.key as keyof FilterCriteria];
       if (v === null || v === undefined) continue;
       const unit = f.unit === "%" ? "%" : f.unit ? ` ${f.unit}` : "";
-      lines.push(`${f.label}: ${String(v)}${unit}`);
+      lines.push(`${f.label}: ${String(typeof v === "number" ? shownValue(f, v) : v)}${unit}`);
     }
   }
   if (c.excludeCriticalRiskFlags) lines.push("Skips critical RugCheck flags");

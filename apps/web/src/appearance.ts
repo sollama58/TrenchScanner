@@ -27,7 +27,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   scoreColor: true,
   reasons: false,
   sniperTop10: false,
-  cexFunded: false,
+  devTile: false,
+  largest: false,
   bubbleCexLinks: false,
   narrativeNote: null,
   streamTab: false,
@@ -76,13 +77,14 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
       { id: "holders", label: "Holders" },
       { id: "age", label: "Age" },
       { id: "top10", label: "Top 10" },
+      { id: "largest", label: "Largest holder" },
       { id: "fresh", label: "Fresh" },
       { id: "empty", label: "Empty" },
-      { id: "snipers", label: "Snipers" },
-      { id: "sniperTop10", label: "Snipers in top 10" },
+      { id: "snipers", label: "First buyers holding" },
+      { id: "sniperTop10", label: "Snipers in top holders" },
       { id: "linked", label: "Linked wallets" },
       { id: "cexFunded", label: "CEX-funded holders" },
-      { id: "dev", label: "Dev" },
+      { id: "dev", label: "Dev holding / sold" },
     ],
   },
   {
@@ -97,19 +99,20 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
 ];
 
 // "vol" is listed apart from the groups: it is opt-in (FeedAppearance.volume), not hide-able.
-// "reasons", "sniperTop10" and "cexFunded" are listed in the groups but are opt-in too
-// (FeedAppearance.reasons, FeedAppearance.sniperTop10, FeedAppearance.cexFunded).
+// "reasons", "sniperTop10", "largest" and "dev" are listed in the groups but are opt-in too
+// (FeedAppearance.reasons, .sniperTop10, .largest, .devTile).
 const CARD_FIELDS = new Set<string>([...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)), "vol"]);
 
 /** The card fields not to draw: the ones the user hid, plus the opt-in ones not switched on. */
 export function cardHideSet(
-  look: Pick<FeedAppearance, "hidden" | "volume" | "reasons" | "sniperTop10" | "cexFunded">,
+  look: Pick<FeedAppearance, "hidden" | "volume" | "reasons" | "sniperTop10" | "devTile" | "largest">,
 ): ReadonlySet<CardField> {
   const out = new Set<CardField>(look.hidden);
   if (!look.volume) out.add("vol");
   if (!look.reasons) out.add("reasons");
   if (!look.sniperTop10) out.add("sniperTop10");
-  if (!look.cexFunded) out.add("cexFunded");
+  if (!look.devTile) out.add("dev");
+  if (!look.largest) out.add("largest");
   return out;
 }
 
@@ -206,7 +209,8 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     scoreColor: typeof r.scoreColor === "boolean" ? r.scoreColor : d.scoreColor,
     reasons: typeof r.reasons === "boolean" ? r.reasons : d.reasons,
     sniperTop10: typeof r.sniperTop10 === "boolean" ? r.sniperTop10 : d.sniperTop10,
-    cexFunded: typeof r.cexFunded === "boolean" ? r.cexFunded : d.cexFunded,
+    devTile: typeof r.devTile === "boolean" ? r.devTile : d.devTile,
+    largest: typeof r.largest === "boolean" ? r.largest : d.largest,
     bubbleCexLinks: typeof r.bubbleCexLinks === "boolean" ? r.bubbleCexLinks : d.bubbleCexLinks,
     narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
     streamTab: typeof r.streamTab === "boolean" ? r.streamTab : d.streamTab,

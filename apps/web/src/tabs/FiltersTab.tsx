@@ -11,7 +11,7 @@ import {
 } from "../api";
 import { usePolling } from "../hooks";
 import { pct, usd } from "../format";
-import { GROUPS } from "../filterFields";
+import { GROUPS, shownValue } from "../filterFields";
 import { useSettings } from "../alerts";
 import { ScoreExplainer } from "../components/ScoreExplainer";
 import { BellIcon, EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
@@ -45,6 +45,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     maxFreshTop10WalletPct: 40,
     maxEmptyTop10WalletPct: 60,
     maxSniperTop10WalletPct: null,
+    maxSniperTopHolderCount: null,
     maxLinkedWalletPct: null,
     maxLinkedWalletCount: null,
     maxFlaggedBuySol: null,
@@ -431,8 +432,11 @@ function FilterEditor({
                     min={f.min}
                     max={f.max}
                     placeholder="any"
-                    value={draft[f.key] ?? ""}
-                    onChange={(e) => set(f.key, num(e.target.value))}
+                    value={shownValue(f, draft[f.key]) ?? ""}
+                    onChange={(e) => {
+                      const v = num(e.target.value);
+                      set(f.key, v === null || !f.scale ? v : v * f.scale);
+                    }}
                   />
                   <small className="faint">{f.hint}</small>
                 </label>

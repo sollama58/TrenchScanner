@@ -92,11 +92,13 @@ export function AlertCard({
       : null;
   const {
     freshPct,
+    freshOf,
     freshAtAlert,
     emptyPct,
+    emptyOf,
     emptyAtAlert,
-    sniperPct,
-    sniperAtAlert,
+    snipers,
+    largestPct,
     linkedPct,
     linkedCount: linkedN,
     linkedAtAlert,
@@ -121,6 +123,7 @@ export function AlertCard({
         "holders",
         "age",
         "top10",
+        "largest",
         "fresh",
         "empty",
         "snipers",
@@ -321,9 +324,15 @@ export function AlertCard({
             </>
           )}
           {show("holders") && (
-            <div>
+            <div
+              title={
+                s.liveHolderCount != null
+                  ? "Holders: Jupiter's count seconds before the alert (the count the Min holders filter reads)"
+                  : "Holders: RugCheck's count (no live count was read for this alert)"
+              }
+            >
               <dt>Holders</dt>
-              <dd className="num">{s.holderCount ?? "–"}</dd>
+              <dd className="num">{s.liveHolderCount ?? s.holderCount ?? "–"}</dd>
             </div>
           )}
           {show("age") && (
@@ -345,10 +354,24 @@ export function AlertCard({
               <dd className="num">{pct(s.top10HolderPct)}</dd>
             </div>
           )}
+          {show("largest") && (
+            <div
+              className={
+                largestPct !== null && largestPct > SAFETY_MAX_LARGEST_HOLDER_PCT ? "risky" : undefined
+              }
+              title={`Largest holder: one wallet's share of supply (pools aside, its accounts summed). The safety screen rejects over ${SAFETY_MAX_LARGEST_HOLDER_PCT}%.`}
+            >
+              <dt>Largest</dt>
+              <dd className={largestPct === null ? "muted" : "num"}>
+                {largestPct === null ? "–" : pct(largestPct)}
+              </dd>
+            </div>
+          )}
           {show("fresh") && (
             <WalletStat
               label="Fresh"
               value={freshPct}
+              of={freshOf}
               failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
               atAlert={freshAtAlert !== null}
               explain="top-10 holder wallets first used, or used again after a week or more idle, in the last 24h"
@@ -358,6 +381,7 @@ export function AlertCard({
             <WalletStat
               label="Empty"
               value={emptyPct}
+              of={emptyOf}
               failsAt={SAFETY_REJECT_EMPTY_WALLET_PCT}
               atAlert={emptyAtAlert !== null}
               explain="top-10 holder wallets with under $25 of other tokens"
@@ -367,25 +391,17 @@ export function AlertCard({
             <div
               title={
                 firstHolding === null
-                  ? "First 25 buyers still holding: not checked yet for this token"
-                  : `${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold it${
+                  ? "First buyers holding: not checked yet for this token"
+                  : `First buyers holding: ${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold it${
                       buyersAtAlert ? ", at alert time" : ", from a scan after the alert"
                     }`
               }
             >
-              <dt>Snipers</dt>
+              <dt>First buyers</dt>
               <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
             </div>
           )}
-          {show("sniperTop10") && (
-            <WalletStat
-              label="Top-10 snipers"
-              value={sniperPct}
-              failsAt={SAFETY_REJECT_SNIPER_WALLET_PCT}
-              atAlert={sniperAtAlert !== null}
-              explain="top-10 holder wallets that were among the first 25 buyers after launch"
-            />
-          )}
+          {show("sniperTop10") && <SniperTile reading={snipers} />}
           {show("linked") && (
             <LinkedTile
               pct={linkedPct}
@@ -398,14 +414,16 @@ export function AlertCard({
           {show("cexFunded") && (
             <div
               className={
-                cexCount !== null && cexCount >= SAFETY_REJECT_CEX_FUNDED_COUNT ? "risky" : undefined
+                cexCount !== null && cexCount >= countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cexHolders)
+                  ? "risky"
+                  : undefined
               }
               title={
                 cexPct === null
                   ? "CEX-funded: not checked yet. Funder reads are limited per scan, and tokens closest to alerting go first."
-                  : `CEX-funded: ${cexCount ?? "?"} of the ${cexHolders ?? 20} largest holders were opened from an exchange (or a busy service like a bridge), ${
+                  : `CEX-funded: ${cexCount ?? "?"} of the ${cexHolders ?? 25} largest holders were opened from an exchange (or a busy service like a bridge), ${
                       cexAtAlert ? "at alert time" : "from a scan after the alert"
-                    }. The safety screen rejects ${SAFETY_REJECT_CEX_FUNDED_COUNT} or more.`
+                    }. The safety screen rejects ${countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cexHolders)} or more.`
               }
             >
               <dt>CEX-funded</dt>
@@ -525,24 +543,31 @@ export function AlertCard({
  */
 export function cardReadings(card: Card) {
   const s = card.snapshot;
+  const latest = card.latestSnapshot;
+  // Each top-10 check with the size of the list it read, from the same scan as the share.
+  const freshFrom = s.freshTop10WalletPct != null ? s : latest?.freshTop10WalletPct != null ? latest : null;
   const freshAtAlert = s.freshTop10WalletPct ?? null;
-  const freshLater = card.latestSnapshot?.freshTop10WalletPct ?? null;
-  const freshPct = freshAtAlert ?? freshLater ?? card.token.lastFreshTop10WalletPct ?? null;
+  const freshPct = freshFrom?.freshTop10WalletPct ?? card.token.lastFreshTop10WalletPct ?? null;
+  const emptyFrom = s.emptyTop10WalletPct != null ? s : latest?.emptyTop10WalletPct != null ? latest : null;
   const emptyAtAlert = s.emptyTop10WalletPct ?? null;
-  const emptyPct =
-    emptyAtAlert ?? card.latestSnapshot?.emptyTop10WalletPct ?? card.token.lastEmptyTop10WalletPct ?? null;
-  // The share of the top 10 that were the launch's first buyers, at alert time or from a later scan.
-  const sniperAtAlert = s.sniperTop10WalletPct ?? null;
-  const sniperPct = sniperAtAlert ?? card.latestSnapshot?.sniperTop10WalletPct ?? null;
+  const emptyPct = emptyFrom?.emptyTop10WalletPct ?? card.token.lastEmptyTop10WalletPct ?? null;
+  // Launch snipers among the top holders: the top-25 count where the scan kept it, else the top-10
+  // share as a count; at alert time or from a later scan.
+  const sniperFrom =
+    s.sniperTopHolderCount != null || s.sniperTop10WalletPct != null
+      ? s
+      : latest?.sniperTopHolderCount != null || latest?.sniperTop10WalletPct != null
+        ? latest
+        : null;
   // Linked wallets: top holders one funder paid for (or that funded each other), at alert time or
   // from a later scan, with the clusters behind the share for the list under the tiles.
-  const linkedFrom = s.linkedWalletPct != null ? s : card.latestSnapshot;
+  const linkedFrom = s.linkedWalletPct != null ? s : latest;
   // Exchange-funded share of the largest holders, the same way.
-  const cexFrom = s.cexFundedPct != null ? s : card.latestSnapshot;
+  const cexFrom = s.cexFundedPct != null ? s : latest;
   // The same fallback for the first-buyers count, read from the launch's first transactions.
-  const buyersFrom = s.firstBuyersHolding != null ? s : card.latestSnapshot;
+  const buyersFrom = s.firstBuyersHolding != null ? s : latest;
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
-  const devHolding = card.latestSnapshot?.devHolding ?? s.devHolding ?? null;
+  const devHolding = latest?.devHolding ?? s.devHolding ?? null;
   // Where the creator fee goes (TokenSage), under the Dev tile's tooltip: about 14% of coins
   // send it to holders, a charity, a GitHub account or other wallets instead of the dev.
   const fee = card.token.creatorFee;
@@ -551,11 +576,13 @@ export function cardReadings(card: Card) {
     : null;
   return {
     freshPct,
+    freshOf: freshFrom?.top10WalletsChecked ?? null,
     freshAtAlert,
     emptyPct,
+    emptyOf: emptyFrom?.top10WalletsChecked ?? null,
     emptyAtAlert,
-    sniperPct,
-    sniperAtAlert,
+    snipers: sniperFrom ? sniperReading(sniperFrom, sniperFrom === s) : null,
+    largestPct: s.largestHolderPct ?? latest?.largestHolderPct ?? null,
     linkedPct: linkedFrom?.linkedWalletPct ?? null,
     linkedCount: linkedFrom ? linkedCount(linkedFrom) : null,
     linkedAtAlert: linkedFrom === s,
@@ -582,20 +609,44 @@ export const SAFETY_MAX_FRESH_WALLET_PCT = 70;
 export const SAFETY_REJECT_EMPTY_WALLET_PCT = 80;
 export const SAFETY_REJECT_SNIPER_WALLET_PCT = 80;
 export const SAFETY_REJECT_TOP10_HOLDER_PCT = 40;
+/** SAFETY_MAX_LARGEST_HOLDER_PCT: one holder owning over 10% of supply (pools aside) fails. */
+export const SAFETY_MAX_LARGEST_HOLDER_PCT = 10;
 /** SAFETY_REJECT_LINKED_COUNT: 20 or more of the top 25 holders (pools aside) linked fails. */
 export const SAFETY_REJECT_LINKED_COUNT = 20;
-/** SAFETY_REJECT_CEX_FUNDED_COUNT: 17 or more of the top 20 holders funded from an exchange fails. */
-export const SAFETY_REJECT_CEX_FUNDED_COUNT = 17;
+/** SAFETY_REJECT_CEX_FUNDED_COUNT: 21 or more of the top 25 holders funded from an exchange fails. */
+export const SAFETY_REJECT_CEX_FUNDED_COUNT = 21;
+/** SAFETY_COUNT_CUT_HOLDERS: the holder list the count cuts are set on. */
+export const SAFETY_COUNT_CUT_HOLDERS = 25;
 
-/** The CEX-funded tile's reading, "N/20", or null when not read. */
-export function cexCountText(count: number | null, holders: number | null): string | null {
-  return count === null ? null : `${count}/${holders ?? 20}`;
+/**
+ * countCutFor: a count cut set on the top 25, for a reading over fewer holders - the same share,
+ * rounded up (20 of 25 is 16 of 19). The screen applies it the same way.
+ */
+export function countCutFor(cut: number, checked: number | null | undefined): number {
+  if (checked == null || checked <= 0 || checked >= SAFETY_COUNT_CUT_HOLDERS) return cut;
+  return Math.ceil((cut * checked) / SAFETY_COUNT_CUT_HOLDERS);
 }
 
-/** One wallet-check tile (Fresh, Empty or Top-10 snipers): the share, where it was read, or that it wasn't checked. */
+/** The CEX-funded tile's reading, "N/25", or null when not read. */
+export function cexCountText(count: number | null, holders: number | null): string | null {
+  return count === null ? null : `${count}/${holders ?? SAFETY_COUNT_CUT_HOLDERS}`;
+}
+
+/**
+ * A top-10 wallet check as a count, "N/10", of the wallets the list held (9 when one owner held two
+ * of the ten accounts); null without a reading. Rows without the list size read as ten.
+ */
+export function walletCountText(value: number | null, of: number | null): string | null {
+  if (value === null) return null;
+  const n = of && of > 0 ? of : 10;
+  return `${Math.round((value * n) / 100)}/${n}`;
+}
+
+/** One wallet-check tile (Fresh or Empty): N of the top 10, where it was read, or that it wasn't checked. */
 export function WalletStat({
   label,
   value,
+  of = null,
   atAlert,
   explain,
   failsAbove,
@@ -603,6 +654,8 @@ export function WalletStat({
 }: {
   label: string;
   value: number | null;
+  /** How many top-10 wallets the check read. */
+  of?: number | null;
   atAlert: boolean;
   explain: string;
   /** The screen rejects strictly above this share. */
@@ -616,17 +669,79 @@ export function WalletStat({
   const title =
     value === null
       ? `${label}: not checked yet. Wallet checks are limited per scan, and tokens closest to alerting go first.`
-      : `${label}: ${explain}, ${atAlert ? "at alert time" : "from a scan after the alert"}.`;
+      : `${label}: ${walletCountText(value, of)} ${explain} (${pct(value)}), ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen rejects ${failsAbove !== undefined ? `over ${failsAbove}%` : `${failsAt ?? 0}% or more`}.`;
   return (
     <div className={risky ? "risky" : undefined} title={title}>
       <dt>{label}</dt>
-      <dd className={value === null ? "muted" : "num"}>{value === null ? "Not checked" : pct(value)}</dd>
+      <dd className={value === null ? "muted" : "num"}>
+        {value === null ? "Not checked" : walletCountText(value, of)}
+      </dd>
     </div>
   );
 }
 
-/** At or above this share held by linked wallets, the Linked tile reads as a warning. */
-export const LINKED_WARN_PCT = 30;
+/** Launch snipers among the top holders, as the Snipers tile reads them. */
+export interface SniperReading {
+  /** How many top holders were among the launch's first 25 buyers, of how many read. */
+  count: number;
+  of: number;
+  /** Whether the count is over the top 25 (else the top-10 share on a scan before it was kept). */
+  top25: boolean;
+  /** The top-10 share the safety screen cuts on, when read. */
+  top10Pct: number | null;
+  top10Of: number | null;
+  atAlert: boolean;
+}
+
+/** A scan's snipers reading: the top-25 count, else the top-10 share as a count; null without either. */
+export function sniperReading(
+  s: Pick<
+    Card["snapshot"],
+    "sniperTopHolderCount" | "sniperTopHoldersChecked" | "sniperTop10WalletPct" | "top10WalletsChecked"
+  >,
+  atAlert: boolean,
+): SniperReading | null {
+  const top10Pct = s.sniperTop10WalletPct ?? null;
+  const top10Of = s.top10WalletsChecked ?? null;
+  if (s.sniperTopHolderCount != null) {
+    return {
+      count: s.sniperTopHolderCount,
+      of: s.sniperTopHoldersChecked ?? SAFETY_COUNT_CUT_HOLDERS,
+      top25: true,
+      top10Pct,
+      top10Of,
+      atAlert,
+    };
+  }
+  if (top10Pct === null) return null;
+  const of = top10Of && top10Of > 0 ? top10Of : 10;
+  return { count: Math.round((top10Pct * of) / 100), of, top25: false, top10Pct, top10Of, atAlert };
+}
+
+/**
+ * The Snipers tile: how many top holders (the top 25, pools aside) were among the launch's first
+ * 25 buyers, "N/25". Red when the top ten would fail the safety screen's sniper cut, which still
+ * reads the top ten (8 or more of 10).
+ */
+export function SniperTile({ reading }: { reading: SniperReading | null }) {
+  const risky = reading?.top10Pct != null && reading.top10Pct >= SAFETY_REJECT_SNIPER_WALLET_PCT;
+  const top10 =
+    reading?.top10Pct != null ? ` In the top 10: ${walletCountText(reading.top10Pct, reading.top10Of)}.` : "";
+  const title =
+    reading === null
+      ? "Snipers: not checked yet. The launch's first buyers are read a few tokens per scan."
+      : `Snipers: ${reading.count} of the ${reading.of} largest holders${reading.top25 ? "" : " (top 10 only on this scan)"} were among the first 25 buyers after launch, ${
+          reading.atAlert ? "at alert time" : "from a scan after the alert"
+        }.${top10} The safety screen rejects ${SAFETY_REJECT_SNIPER_WALLET_PCT / 10} or more of the top 10.`;
+  return (
+    <div className={risky ? "risky" : undefined} title={title}>
+      <dt>Snipers</dt>
+      <dd className={reading === null ? "muted" : "num"}>
+        {reading === null ? "Not checked" : `${reading.count}/${reading.of}`}
+      </dd>
+    </div>
+  );
+}
 
 type LinkedClusterView = NonNullable<Card["snapshot"]["linkedClusters"]>[number];
 
@@ -669,12 +784,12 @@ function LinkedTile({
       ? "Linked: not checked yet. Who paid for each top-25 wallet is read a few tokens per scan."
       : value === 0
         ? `Linked: no two top-25 wallets share a funder or a funding minute, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
-        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more. Tap for the bubble map.`;
+        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of)} or more. Tap for the bubble map.`;
   const canOpen = value !== null && (value > 0 || clusters.length > 0);
   return (
     <div
       className={
-        `${(value !== null && value >= LINKED_WARN_PCT) || (count !== null && count.linked >= SAFETY_REJECT_LINKED_COUNT) ? "risky" : ""}${canOpen ? " tile-opens" : ""}`.trim() ||
+        `${count !== null && count.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, count.of) ? "risky" : ""}${canOpen ? " tile-opens" : ""}`.trim() ||
         undefined
       }
       title={title}

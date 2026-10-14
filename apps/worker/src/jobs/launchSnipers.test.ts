@@ -8,7 +8,13 @@ import {
   sniperShareUnobtainable,
   sniperWalletsFromCache,
 } from "./launchSnipers.js";
-import { resetSniperWaits, sniperShareReady, withLaunchSnipers, withWalletSignals } from "./scanJob.js";
+import {
+  linkedListReady,
+  resetSniperWaits,
+  sniperShareReady,
+  withLaunchSnipers,
+  withWalletSignals,
+} from "./scanJob.js";
 
 const buyers = (mint: string, n: number) =>
   Array.from({ length: n }, (_, i) => ({
@@ -363,5 +369,30 @@ describe("launchBuyersFromCache", () => {
     expect(launchBuyersFromCache("B", 10)).toBeUndefined();
     // A launch that had only three buyers in all.
     expect(launchBuyersFromCache("C", 10)?.wallets).toHaveLength(3);
+  });
+});
+
+describe("linkedListReady", () => {
+  beforeEach(() => resetSniperWaits());
+  const W = { maxMs: 60_000, minAgeMinutes: 10, readsOn: true };
+  const pending = { mintAddress: "L1", ageMinutes: 20 };
+
+  it("waits for the counts over the chain's top 25, then goes ahead", () => {
+    expect(linkedListReady(pending, false, W, 0)).toBe(false);
+    // A reading over RugCheck's list is in, but the top 25 isn't: still waiting.
+    expect(linkedListReady({ ...pending, linkedWalletCount: 3, cexFundedCount: 1 }, false, W, 1_000)).toBe(
+      false,
+    );
+    expect(linkedListReady({ ...pending, linkedWalletCount: 3, cexFundedCount: 1 }, true, W, 2_000)).toBe(
+      true,
+    );
+  });
+
+  it("stops waiting at the cap, and doesn't wait for young coins or with the reads off", () => {
+    expect(linkedListReady(pending, false, W, 0)).toBe(false);
+    expect(linkedListReady(pending, false, W, 59_000)).toBe(false);
+    expect(linkedListReady(pending, false, W, 60_000)).toBe(true);
+    expect(linkedListReady({ ...pending, mintAddress: "L2", ageMinutes: 3 }, false, W, 0)).toBe(true);
+    expect(linkedListReady({ ...pending, mintAddress: "L3" }, false, { ...W, readsOn: false }, 0)).toBe(true);
   });
 });

@@ -105,15 +105,15 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               <td>
                 Fresh top-10 wallets (first used, or used again after a week or more idle, in the last day)
               </td>
-              <td>Over 70%</td>
+              <td>8 of 10 or more (over 70%)</td>
             </tr>
             <tr>
               <td>Empty top-10 wallets</td>
-              <td>80% or more</td>
+              <td>8 of 10 or more</td>
             </tr>
             <tr>
-              <td>Top-10 snipers</td>
-              <td>80% or more</td>
+              <td>Top-10 holders among the launch&apos;s first 25 buyers</td>
+              <td>8 of 10 or more</td>
             </tr>
             <tr>
               <td>Top-10 holders&apos; share of supply</td>
@@ -128,8 +128,8 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               <td>20 of 25 or more</td>
             </tr>
             <tr>
-              <td>Top-20 holders funded from an exchange</td>
-              <td>17 of 20 or more</td>
+              <td>Top-25 holders funded from an exchange (pool aside)</td>
+              <td>21 of 25 or more</td>
             </tr>
             <tr>
               <td>Bonding curve fill time</td>

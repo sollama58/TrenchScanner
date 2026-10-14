@@ -32,16 +32,17 @@ import {
 import {
   cardReadings,
   cexCountText,
-  LINKED_WARN_PCT,
+  countCutFor,
   linkedSeed,
   nowReading,
   recordedPeakOf,
   SAFETY_MAX_FRESH_WALLET_PCT,
+  SAFETY_MAX_LARGEST_HOLDER_PCT,
   SAFETY_REJECT_CEX_FUNDED_COUNT,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
   SAFETY_REJECT_LINKED_COUNT,
-  SAFETY_REJECT_SNIPER_WALLET_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
+  SniperTile,
   WalletStat,
 } from "./AlertCard";
 import { MARKER_LABEL, PriceChart, type ChartEvent } from "./PriceChart";
@@ -959,13 +960,21 @@ function StatsCard({ card }: { card: Card }) {
             {s.score == null ? "–" : Math.round(s.score)}
           </dd>
         </div>
-        <div>
+        <div
+          title={
+            s.liveHolderCount != null
+              ? "Jupiter's count seconds before the alert (the count the Min holders filter reads); the arrow is the latest"
+              : "RugCheck's count (no live count was read for this alert); the arrow is the latest"
+          }
+        >
           <dt>Holders</dt>
           <dd className="num">
-            {s.holderCount ?? "–"}
-            {latest?.holderCount != null && latest.holderCount !== s.holderCount && (
-              <small className="muted"> → {latest.holderCount}</small>
-            )}
+            {s.liveHolderCount ?? s.holderCount ?? "–"}
+            {(() => {
+              const then = s.liveHolderCount ?? s.holderCount;
+              const now = latest ? (latest.liveHolderCount ?? latest.holderCount) : null;
+              return now != null && now !== then ? <small className="muted"> → {now}</small> : null;
+            })()}
           </dd>
         </div>
         <div>
@@ -997,9 +1006,21 @@ function StatsCard({ card }: { card: Card }) {
           <dt>Top 10</dt>
           <dd className="num">{pct(s.top10HolderPct)}</dd>
         </div>
+        <div
+          className={
+            r.largestPct !== null && r.largestPct > SAFETY_MAX_LARGEST_HOLDER_PCT ? "risky" : undefined
+          }
+          title={`One wallet's share of supply (pools aside, its accounts summed). The safety screen rejects over ${SAFETY_MAX_LARGEST_HOLDER_PCT}%.`}
+        >
+          <dt>Largest holder</dt>
+          <dd className={r.largestPct === null ? "muted" : "num"}>
+            {r.largestPct === null ? "–" : pct(r.largestPct)}
+          </dd>
+        </div>
         <WalletStat
           label="Fresh"
           value={r.freshPct}
+          of={r.freshOf}
           failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
           atAlert={r.freshAtAlert !== null}
           explain="top-10 holder wallets first used, or used again after a week or more idle, in the last 24h"
@@ -1007,27 +1028,22 @@ function StatsCard({ card }: { card: Card }) {
         <WalletStat
           label="Empty"
           value={r.emptyPct}
+          of={r.emptyOf}
           failsAt={SAFETY_REJECT_EMPTY_WALLET_PCT}
           atAlert={r.emptyAtAlert !== null}
           explain="top-10 holder wallets with under $25 of other tokens"
         />
-        <WalletStat
-          label="Top-10 snipers"
-          value={r.sniperPct}
-          failsAt={SAFETY_REJECT_SNIPER_WALLET_PCT}
-          atAlert={r.sniperAtAlert !== null}
-          explain="top-10 holder wallets that were among the first 25 buyers after launch"
-        />
+        <SniperTile reading={r.snipers} />
         <div
           className={
-            (r.linkedPct !== null && r.linkedPct >= LINKED_WARN_PCT) ||
-            (r.linkedCount !== null && r.linkedCount.linked >= SAFETY_REJECT_LINKED_COUNT)
+            r.linkedCount !== null &&
+            r.linkedCount.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, r.linkedCount.of)
               ? "risky"
               : undefined
           }
           title={`Top holders one wallet funded, that funded each other, or that were funded within a minute of each other${
             r.linkedPct === null ? "" : `, holding ${pct(r.linkedPct)} of supply`
-          }. The safety screen rejects ${SAFETY_REJECT_LINKED_COUNT} or more of the top 25.`}
+          }. The safety screen rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, r.linkedCount?.of)} or more of the ${r.linkedCount?.of ?? 25}.`}
         >
           <dt>Linked</dt>
           <dd className={r.linkedPct === null ? "muted" : "num"}>
@@ -1036,9 +1052,11 @@ function StatsCard({ card }: { card: Card }) {
         </div>
         <div
           className={
-            r.cexCount !== null && r.cexCount >= SAFETY_REJECT_CEX_FUNDED_COUNT ? "risky" : undefined
+            r.cexCount !== null && r.cexCount >= countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, r.cexHolders)
+              ? "risky"
+              : undefined
           }
-          title={`Of the ${r.cexHolders ?? 20} largest holders, how many were opened from an exchange (or a busy service like a bridge). The safety screen rejects ${SAFETY_REJECT_CEX_FUNDED_COUNT} or more.`}
+          title={`Of the ${r.cexHolders ?? 25} largest holders, how many were opened from an exchange (or a busy service like a bridge). The safety screen rejects ${countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, r.cexHolders)} or more.`}
         >
           <dt>CEX-funded</dt>
           <dd className={r.cexPct === null ? "muted" : "num"}>

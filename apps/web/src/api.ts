@@ -132,8 +132,12 @@ export interface Snapshot {
   buys24h: number | null;
   sells24h: number | null;
   holderCount: number | null;
+  /** Jupiter's holder count seconds before the decision (the "Min holders (live)" filter's); null without a quote. */
+  liveHolderCount?: number | null;
   holderGrowthPct: number | null;
   top10HolderPct: number | null;
+  /** One wallet's share of supply, pools aside; null when unknown and on scans before 2026-10-13. */
+  largestHolderPct?: number | null;
   /** How many holders the top-10 list held (pool and LP aside); null on older snapshots. */
   top10WalletsChecked?: number | null;
   devWalletPct: number | null;
@@ -143,6 +147,9 @@ export interface Snapshot {
   emptyTop10WalletPct?: number | null;
   /** Share of the top 10 holders (pool and LP aside) that were among the first 25 buyers; null when not checked. */
   sniperTop10WalletPct?: number | null;
+  /** How many of the top 25 holders (pools aside) were among the first 25 buyers, of how many read; null when not checked. */
+  sniperTopHolderCount?: number | null;
+  sniperTopHoldersChecked?: number | null;
   /**
    * Flagged wallets (risky or known dumpers) in the coin's newest trades, read before the call:
    * distinct buyers and sellers, the SOL each way, and the trades themselves, newest first. Null
@@ -809,6 +816,7 @@ export interface FilterInput {
   maxFreshTop10WalletPct: number | null;
   maxEmptyTop10WalletPct: number | null;
   maxSniperTop10WalletPct: number | null;
+  maxSniperTopHolderCount: number | null;
   maxLinkedWalletPct: number | null;
   maxLinkedWalletCount: number | null;
   maxFlaggedBuySol: number | null;
@@ -1211,6 +1219,7 @@ export type CardField =
   | "sniperTop10"
   | "linked"
   | "cexFunded"
+  | "largest"
   | "dev"
   | "reasons"
   | "mint"
@@ -1245,10 +1254,12 @@ export interface FeedAppearance {
   scoreColor: boolean;
   /** The model's reasons under a model call; off by default. */
   reasons: boolean;
-  /** The Top-10 snipers tile; off by default. */
+  /** The snipers-in-top-holders tile (field id kept from when it read the top 10); off by default. */
   sniperTop10: boolean;
-  /** The CEX-funded tile; off by default (absent from older API builds: off). */
-  cexFunded: boolean;
+  /** The Dev holding / sold tile; off by default since CEX-funded took its place (absent from older API builds: off). */
+  devTile: boolean;
+  /** The Largest holder tile; off by default (absent from older API builds: off). */
+  largest: boolean;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */
   bubbleCexLinks: boolean;
   /**

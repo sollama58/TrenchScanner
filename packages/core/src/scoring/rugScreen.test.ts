@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { passesLocalRugScreen, passesWalletSafetyCuts, runRugScreen } from "./rugScreen.js";
+import { countCutFor, passesLocalRugScreen, passesWalletSafetyCuts, runRugScreen } from "./rugScreen.js";
 import type { OnChainProfile } from "../types.js";
 
 const safeProfile: OnChainProfile = {
@@ -31,13 +31,29 @@ describe("runRugScreen", () => {
     expect(at(undefined).passed).toBe(true);
   });
 
-  it("rejects a token with 17 or more of its top 20 holders funded from an exchange, once measured", () => {
+  it("rejects a token with 21 or more of its top 25 holders funded from an exchange, once measured", () => {
     const at = (n: number | undefined) =>
-      runRugScreen({ ...safeProfile, cexFundedCount: n, cexFundedHolders: 20 });
-    expect(at(17).passed).toBe(false);
-    expect(at(17).reasons[0]).toMatch(/17 of the 20 top holders were funded from an exchange/);
-    expect(at(16).passed).toBe(true);
+      runRugScreen({ ...safeProfile, cexFundedCount: n, cexFundedHolders: 25 });
+    expect(at(21).passed).toBe(false);
+    expect(at(21).reasons[0]).toMatch(/21 of the 25 top holders were funded from an exchange \(21 or more\)/);
+    expect(at(20).passed).toBe(true);
     expect(at(undefined).passed).toBe(true);
+  });
+
+  it("cuts a reading over fewer than 25 holders at the same share, rounded up", () => {
+    expect(countCutFor(20, 25)).toBe(20);
+    expect(countCutFor(20, 30)).toBe(20);
+    expect(countCutFor(20, 19)).toBe(16);
+    expect(countCutFor(21, 20)).toBe(17);
+    expect(countCutFor(20, undefined)).toBe(20);
+    const linked = (n: number) =>
+      runRugScreen({ ...safeProfile, linkedWalletCount: n, linkedWalletsChecked: 19 });
+    expect(linked(16).passed).toBe(false);
+    expect(linked(16).reasons[0]).toMatch(/16 of the 19 top holders are linked \(16 or more\)/);
+    expect(linked(15).passed).toBe(true);
+    const cex = (n: number) => runRugScreen({ ...safeProfile, cexFundedCount: n, cexFundedHolders: 20 });
+    expect(cex(17).passed).toBe(false);
+    expect(cex(16).passed).toBe(true);
   });
 
   it("rejects a token whose top-10 holders are over 70% fresh wallets, and only once measured", () => {
@@ -208,6 +224,21 @@ describe("passesWalletSafetyCuts", () => {
     expect(passesWalletSafetyCuts({ cexFundedPct: 80 })).toBe(true);
     expect(passesWalletSafetyCuts({ linkedWalletCount: 20 })).toBe(false);
     expect(passesWalletSafetyCuts({ linkedWalletCount: 19 })).toBe(true);
+    expect(passesWalletSafetyCuts({ linkedWalletCount: 16, linkedWalletsChecked: 19 })).toBe(false);
+    expect(passesWalletSafetyCuts({ linkedWalletCount: 15, linkedWalletsChecked: 19 })).toBe(true);
+    // The count where the row banked it, over the share.
+    expect(passesWalletSafetyCuts({ cexFundedCount: 21, cexFundedHolders: 25, cexFundedPct: 84 })).toBe(
+      false,
+    );
+    expect(passesWalletSafetyCuts({ cexFundedCount: 20, cexFundedHolders: 25, cexFundedPct: 80 })).toBe(true);
+    expect(passesWalletSafetyCuts({ cexFundedCount: 16, cexFundedHolders: 18, cexFundedPct: 88.9 })).toBe(
+      false,
+    );
+    expect(passesWalletSafetyCuts({ cexFundedCount: 15, cexFundedHolders: 18, cexFundedPct: 83.3 })).toBe(
+      true,
+    );
+    expect(passesWalletSafetyCuts({ largestHolderPct: 10.5 })).toBe(false);
+    expect(passesWalletSafetyCuts({ largestHolderPct: 10 })).toBe(true);
     expect(passesWalletSafetyCuts({ freshTop10WalletPct: 80 })).toBe(false);
     expect(passesWalletSafetyCuts({ emptyTop10WalletPct: 70, freshTop10WalletPct: 70 })).toBe(true);
     expect(passesWalletSafetyCuts({ sniperTop10WalletPct: 80 })).toBe(false);
