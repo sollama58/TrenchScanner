@@ -9630,18 +9630,50 @@ img.tm-avatar {
   grid-area: dot;
   align-self: center;
 }
-.bm-cex-toggle {
+/* The map's tie switches: pills in a row, each with the app's switch and its line sample. */
+.bm-toggles {
   display: flex;
-  align-items: center;
-  gap: 7px;
-  margin: -4px 0 8px;
-  font-size: 12px;
-  color: var(--ink-2);
-  cursor: pointer;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -2px 0 10px;
+}
+.switch.bm-toggle {
+  gap: 9px;
+  padding: 5px 12px 5px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 12.5px;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.switch.bm-toggle:hover {
+  border-color: color-mix(in srgb, var(--brand-a) 45%, transparent);
+}
+.switch.bm-toggle.on {
+  background: color-mix(in srgb, var(--brand-a) 10%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--brand-a) 50%, transparent);
+}
+.switch.bm-toggle .bm-cex-key {
+  width: 16px;
+  border-top-width: 2.5px;
+  border-top-color: var(--bm-cex-0);
+}
+.switch.bm-toggle .bm-side-key {
+  border-top-style: dotted;
+  border-top-color: var(--bm-side);
+}
+.switch.bm-toggle:not(.on) .bm-cex-key {
+  opacity: 0.45;
 }
 .bm-cex-key {
   width: 18px;
   border-top: 2px dashed var(--bm-cex);
+}
+/* After .bm-cex-key, whose border shorthand would otherwise turn the side key grey and dashed. */
+.bm-cex-key.bm-side-key {
+  border-top: 2px dotted var(--bm-side);
 }
 .bm-same-dot {
   grid-area: dot;

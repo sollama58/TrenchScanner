@@ -429,19 +429,23 @@ function MapView({
           </dd>
         </div>
       </dl>
-      {graph.cexLinks.length > 0 && (
-        <label className="bm-cex-toggle">
-          <input type="checkbox" checked={showCex} onChange={() => setCexOn(!showCex)} />
-          <span className="bm-cex-key" aria-hidden />
-          Link wallets funded by the same exchange
-        </label>
-      )}
-      {groups.length > 0 && (
-        <label className="bm-cex-toggle">
-          <input type="checkbox" checked={showSides} onChange={() => setSideOn(!showSides)} />
-          <span className="bm-cex-key bm-side-key" aria-hidden />
-          Link KOLs&apos; possible side wallets
-        </label>
+      {(graph.cexLinks.length > 0 || groups.length > 0) && (
+        <div className="bm-toggles">
+          {graph.cexLinks.length > 0 && (
+            <MapToggle on={showCex} onToggle={() => setCexOn(!showCex)} keyClass="bm-cex-key">
+              Same-exchange ties
+            </MapToggle>
+          )}
+          {groups.length > 0 && (
+            <MapToggle
+              on={showSides}
+              onToggle={() => setSideOn(!showSides)}
+              keyClass="bm-cex-key bm-side-key"
+            >
+              KOL side wallets
+            </MapToggle>
+          )}
+        </div>
       )}
       <BubbleSvg
         graph={regrouped ?? graph}
@@ -572,6 +576,35 @@ function MapView({
   );
 }
 
+/** One of the map's tie switches: a pill with the app's switch, the tie's line sample and its name. */
+function MapToggle({
+  on,
+  onToggle,
+  keyClass,
+  children,
+}: {
+  on: boolean;
+  onToggle: () => void;
+  keyClass: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      className={`switch bm-toggle${on ? " on" : ""}`}
+      onClick={onToggle}
+    >
+      <span className="switch-track">
+        <span className="switch-thumb" />
+      </span>
+      <span className={keyClass} aria-hidden />
+      {children}
+    </button>
+  );
+}
+
 /** What each colour of name on the bubbles means; only the kinds this map shows. */
 function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }) {
   const kinds = new Set(
@@ -579,19 +612,18 @@ function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }
       n.kind === "holder" && n.wallet && names[n.wallet] ? [names[n.wallet]!.source] : [],
     ),
   );
-  const items: { cls: string; sample: string; label: string }[] = [];
-  if (kinds.has("kol")) items.push({ cls: "kol", sample: "Name", label: "KOL" });
-  if (kinds.has("pumpfun")) items.push({ cls: "pumpfun", sample: '"name"', label: "Pump.fun" });
-  if (kinds.has("fomo")) items.push({ cls: "fomo", sample: '"name"', label: "FOMO" });
-  if (kinds.has("identity") || kinds.has("exchange"))
-    items.push({ cls: "", sample: "Name", label: "Helius / exchange" });
+  // Each kind's own name, written the way its names are (user ask 2026-10-14): KOL, "Pump.fun", "FOMO".
+  const items: { cls: string; text: string }[] = [];
+  if (kinds.has("kol")) items.push({ cls: "kol", text: "KOL" });
+  if (kinds.has("pumpfun")) items.push({ cls: "pumpfun", text: '"Pump.fun"' });
+  if (kinds.has("fomo")) items.push({ cls: "fomo", text: '"FOMO"' });
+  if (kinds.has("identity") || kinds.has("exchange")) items.push({ cls: "", text: "Helius / exchange" });
   if (!items.length) return null;
   return (
     <ul className="bm-legend" aria-label="Name colours">
       {items.map((it) => (
-        <li key={it.label}>
-          <span className={`bm-legend-chip ${it.cls}`}>{it.sample}</span>
-          {it.label}
+        <li key={it.text}>
+          <span className={`bm-legend-chip ${it.cls}`}>{it.text}</span>
         </li>
       ))}
     </ul>

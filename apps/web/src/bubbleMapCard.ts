@@ -32,7 +32,6 @@ import {
   cardCanvas,
   clip,
   frame,
-  pill,
 } from "./shareCard";
 
 /** The map's cluster colours on the dark card: the dashboard's dark slots (styles.css .bm-modal). */
@@ -87,7 +86,9 @@ export async function renderBubbleCard(
   if (!ctx) return canvas;
   const label = tokenLabel(token);
   frame(ctx, icon, "", "", {
-    badge: (c, right, cy) => pill(c, right, cy, "Bubble map"),
+    // No badge: the map takes the card's top right too (user ask 2026-10-14, a larger map); the
+    // coin's line says "bubble map" instead.
+    badge: () => undefined,
     footer: `Top holders sized by share of supply · ${shortAddress(token.mintAddress)}`,
     link: "trenchscanner.app",
     time: true,
@@ -105,7 +106,7 @@ export async function renderBubbleCard(
   ctx.font = `500 21px ${FONT}`;
   // Without clusters the card is about the holders themselves (every token view has the map).
   const holdersOnly = graph.clusters.length === 0;
-  const topic = holdersOnly ? "top holders" : "linked wallets";
+  const topic = "bubble map";
   const name =
     token.name && token.symbol ? `${token.name} · ${topic}` : topic[0]!.toUpperCase() + topic.slice(1);
   ctx.fillText(clip(ctx, name, leftW), PAD, 210);
@@ -270,11 +271,12 @@ export async function renderBubbleCard(
   const map = cex || sideGroups.length > 0 ? regroupLayout(graph, { cex, sides: sideGroups }) : graph;
   // Which kinds of name the bubbles carry, for the legend under the map (user ask 2026-10-14).
   const legend = nameLegend(graph, names);
+  // From the card's top to the footer's rule (CARD_H - 82), less the legend under it.
   const area = {
-    x: PAD + leftW + 16,
-    y: 100,
-    w: CARD_W - 20 - (PAD + leftW + 16),
-    h: CARD_H - 96 - 100 - (legend.length > 0 ? LEGEND_H : 0),
+    x: PAD + leftW + 8,
+    y: 24,
+    w: CARD_W - 12 - (PAD + leftW + 8),
+    h: CARD_H - 92 - 24 - (legend.length > 0 ? LEGEND_H : 0),
   };
   // The pills are sized in pixels on the card (readable at share size), so in map units they shrink
   // as the map scales up: estimate the scale without them first, then place them at that size.
@@ -326,7 +328,8 @@ export async function renderBubbleCard(
   map.sameTimeGroups.forEach((g, i) => {
     const members = map.nodes.filter((n): n is MapNode => n.kind === "holder" && n.sameTime === i);
     if (members.length === 0) return;
-    const text = `Funded together ${new Date(g.atMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    // No time on the share image (user ask 2026-10-14): the group's colour tells them apart.
+    const text = "Funded together";
     hubs.push({
       id: `same:${i}`,
       ...centreOf(members),
@@ -617,30 +620,24 @@ export async function renderBubbleCard(
     ctx.fillStyle = INK;
     ctx.fillText(hub.text, X(p.x), Y(p.y) + 1);
   });
-  // The legend: one chip per kind of name on the map, drawn as the names are, centred under it.
+  // The legend: one chip per kind of name on the map, its own name written as those names are
+  // (user ask 2026-10-14: KOL, "Pump.fun", "FOMO"), centred under it.
   if (legend.length > 0) {
     ctx.font = `650 14px ${FONT}`;
-    const chips = legend.map((k) => ({ ...k, w: ctx.measureText(k.sample).width + 14 }));
-    ctx.font = `500 14px ${FONT}`;
-    const widths = chips.map((c) => c.w + 8 + ctx.measureText(c.label).width);
-    const total = widths.reduce((t, w) => t + w, 0) + (chips.length - 1) * 22;
+    const widths = legend.map((k) => ctx.measureText(k.text).width + 16);
+    const total = widths.reduce((t, w) => t + w, 0) + (legend.length - 1) * 10;
     let x = area.x + (area.w - total) / 2;
-    const ly = area.y + area.h + LEGEND_H / 2 + 2;
+    const ly = area.y + area.h + LEGEND_H / 2;
     ctx.textBaseline = "middle";
-    chips.forEach((c, i) => {
+    ctx.textAlign = "center";
+    legend.forEach((c, i) => {
       ctx.fillStyle = c.bg;
       ctx.beginPath();
-      ctx.roundRect(x, ly - 11, c.w, 22, 5);
+      ctx.roundRect(x, ly - 12, widths[i]!, 24, 6);
       ctx.fill();
-      ctx.textAlign = "center";
-      ctx.font = `650 14px ${FONT}`;
       ctx.fillStyle = c.ink;
-      ctx.fillText(c.sample, x + c.w / 2, ly + 1);
-      ctx.textAlign = "left";
-      ctx.font = `500 14px ${FONT}`;
-      ctx.fillStyle = MUTED;
-      ctx.fillText(c.label, x + c.w + 8, ly + 1);
-      x += widths[i]! + 22;
+      ctx.fillText(c.text, x + widths[i]! / 2, ly + 1);
+      x += widths[i]! + 10;
     });
   }
   ctx.textAlign = "left";
@@ -651,23 +648,19 @@ export async function renderBubbleCard(
 /** The legend's height under the map, card pixels. */
 const LEGEND_H = 34;
 
-/** The kinds of wallet name on the map's holders, in a fixed order: a sample chip and what it means. */
-function nameLegend(
-  graph: BubbleGraph,
-  names: WalletNames,
-): { sample: string; label: string; bg: string; ink: string }[] {
+/** The kinds of wallet name on the map's holders, in a fixed order: each kind's name, drawn as those names are. */
+function nameLegend(graph: BubbleGraph, names: WalletNames): { text: string; bg: string; ink: string }[] {
   const kinds = new Set(
     graph.nodes.flatMap((n) =>
       n.kind === "holder" && n.wallet && names[n.wallet] ? [names[n.wallet]!.source] : [],
     ),
   );
-  const out: { sample: string; label: string; bg: string; ink: string }[] = [];
-  if (kinds.has("kol")) out.push({ sample: "Name", label: "KOL", bg: SIDE, ink: "#1a1300" });
-  if (kinds.has("pumpfun"))
-    out.push({ sample: '"name"', label: "Pump.fun", bg: "rgba(12, 14, 20, 0.82)", ink: "#4ade80" });
-  if (kinds.has("fomo"))
-    out.push({ sample: '"name"', label: "FOMO", bg: "rgba(12, 14, 20, 0.82)", ink: "#c4b5fd" });
+  const dark = "rgba(12, 14, 20, 0.82)";
+  const out: { text: string; bg: string; ink: string }[] = [];
+  if (kinds.has("kol")) out.push({ text: "KOL", bg: SIDE, ink: "#1a1300" });
+  if (kinds.has("pumpfun")) out.push({ text: '"Pump.fun"', bg: dark, ink: "#4ade80" });
+  if (kinds.has("fomo")) out.push({ text: '"FOMO"', bg: dark, ink: "#c4b5fd" });
   if (kinds.has("identity") || kinds.has("exchange"))
-    out.push({ sample: "Name", label: "Helius / exchange", bg: "rgba(12, 14, 20, 0.82)", ink: INK });
+    out.push({ text: "Helius / exchange", bg: dark, ink: INK });
   return out;
 }
