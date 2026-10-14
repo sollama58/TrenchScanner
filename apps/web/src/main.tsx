@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { UpdateBanner } from "./components/UpdateBanner";
 import {
   loadAdminTab,
   loadFiltersTab,
@@ -10,8 +11,12 @@ import {
   loadSignIn,
   tabFromHash,
 } from "./routes";
+import { startVersionWatch } from "./version";
 import "./fonts.css";
 import "./styles.css";
+
+// Before anything lazy loads: a chunk removed by a deploy since this page loaded reloads the tab.
+startVersionWatch();
 
 // index.html has already started this screen's API calls (window.__boot); start its code too.
 const tab = tabFromHash();
@@ -31,6 +36,7 @@ void window.__boot?.["/auth/me"]?.then(
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />
+    <UpdateBanner />
   </StrictMode>,
 );
 
