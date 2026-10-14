@@ -283,6 +283,48 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     expect(batch).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a basic read's document only once the coin has reached the band", async () => {
+    const { client, batch } = fakeClient();
+    const outside = `${TAG}-doc-outside`;
+    const inBand = `${TAG}-doc-inband`;
+    const noToken = `${TAG}-doc-notoken`;
+    await prisma.token.deleteMany({ where: { mintAddress: { in: [outside, inBand] } } });
+    await prisma.token.create({ data: { mintAddress: outside } });
+    await prisma.token.create({ data: { mintAddress: inBand, firstInBandAt: new Date() } });
+    batch.mockResolvedValueOnce(
+      ok([
+        { ca: outside, status: "complete", analysis: analysis(outside, "basic") },
+        { ca: inBand, status: "complete", analysis: analysis(inBand, "basic") },
+        { ca: noToken, status: "complete", analysis: analysis(noToken, "basic") },
+      ]),
+    );
+    noteNarrativeWanted(outside, "basic", env);
+    noteNarrativeWanted(inBand, "basic", env);
+    noteNarrativeWanted(noToken, "basic", env);
+    await flushNarrativeRequests(env, client);
+    const rows = await prisma.tokenNarrative.findMany({
+      where: { mintAddress: { in: [outside, inBand, noToken] } },
+      orderBy: { mintAddress: "asc" },
+      select: { mintAddress: true, analysis: true, status: true, categories: true },
+    });
+    // The derived columns land for all three; the document only where the coin is in the band.
+    expect(rows.map((r) => [r.mintAddress, r.status, r.analysis !== null, r.categories !== null])).toEqual([
+      [inBand, "complete", true, true],
+      [noToken, "complete", false, true],
+      [outside, "complete", false, true],
+    ]);
+    // A full read keeps its document whatever the coin's band history.
+    batch.mockResolvedValueOnce(
+      ok([{ ca: outside, status: "complete", analysis: analysis(outside, "full") }]),
+    );
+    noteNarrativeWanted(outside, "full", env);
+    await flushNarrativeRequests(env, client);
+    const full = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: outside } });
+    expect(full.depth).toBe("full");
+    expect(full.analysis).not.toBeNull();
+    await prisma.token.deleteMany({ where: { mintAddress: { in: [outside, inBand] } } });
+  });
+
   it("stores a real TokenSage answer under the CA we asked about, and survives odd items", async () => {
     const { client, batch } = fakeClient();
     const real = JSON.parse(

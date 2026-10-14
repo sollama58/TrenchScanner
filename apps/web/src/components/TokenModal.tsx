@@ -1137,7 +1137,7 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
           {data.status === "failed"
             ? "TokenSage couldn't read this coin."
             : data.status === "expired"
-              ? "TokenSage's read of this coin has been cleared (reads are kept for three weeks)."
+              ? "TokenSage's full read isn't kept for this coin (reads are kept for three weeks, and only for coins that reached the band)."
               : utility
                 ? "TokenSage is reading this coin now. Its read shows here as soon as it lands."
                 : "TokenSage hasn't read this coin yet."}
