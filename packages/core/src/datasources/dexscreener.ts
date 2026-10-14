@@ -104,6 +104,12 @@ const BLANK_MIN_MINTS = 25;
 const FALLBACK_FILL_DEADLINE_MS = 4_000;
 /** How long a blank DexScreener is routed around before it must prove blank again. */
 const BLANK_HOLD_MS = 10 * 60_000;
+/**
+ * How long a failing DexScreener (every batch of a lookup erroring or timing out) is routed around
+ * before it is tried again. Shorter than BLANK_HOLD_MS: an outage is usually brief, and while
+ * routed around one batch still probes it on every lookup.
+ */
+const DOWN_HOLD_MS = 60_000;
 
 /** getTokensByAddresses' options. */
 export interface TokenLookupOptions {
@@ -277,7 +283,20 @@ export class DexScreenerClient {
     }
 
     const answered = new Set<string>();
-    const results = await this.lookup(unique, concurrency, options, answered);
+    // Collected here, not straight into the caller's set: a mint the fallback prices didn't fail.
+    const dexFailed = new Set<string>();
+    let results = await this.lookup(unique, concurrency, { ...options, failed: dexFailed }, answered);
+    if (dexFailed.size > 0 && !options.mayBeUnindexed) {
+      results = await this.answerFailedFromFallback(
+        fallback,
+        results,
+        dexFailed,
+        answered,
+        options,
+        remaining(),
+      );
+    }
+    if (options.failed) for (const mint of dexFailed) options.failed.add(mint);
     if (results.length > 0 || answered.size < BLANK_MIN_MINTS || options.mayBeUnindexed) {
       return options.priority
         ? this.fillFromFallback(fallback, results, answered, options, remaining())
@@ -296,6 +315,50 @@ export class DexScreenerClient {
     });
     if (options.failed) for (const mint of geckoFailed) options.failed.add(mint);
     return gecko;
+  }
+
+  /**
+   * Asks the fallback about the mints whose DexScreener batch failed (a 5xx, a timeout, a network
+   * error) rather than leaving them unpriced for the cycle: on a DexScreener outage the band
+   * refresh priced only what Jupiter's newest-launch read covered, so older watchlist coins fell
+   * out of the band (audit 2026-10-14, L6-4). When no batch answered at all, DexScreener is
+   * routed around for DOWN_HOLD_MS like a blank one, so the next lookups don't each wait out its
+   * timeouts first. Mints the fallback answers leave `failed`; the rest stay in it. Never throws.
+   */
+  private async answerFailedFromFallback(
+    fallback: GeckoTerminalClient,
+    results: CandidateToken[],
+    failed: Set<string>,
+    answered: Set<string>,
+    options: TokenLookupOptions,
+    remainingMs: number | undefined,
+  ): Promise<CandidateToken[]> {
+    if (answered.size === 0 && failed.size >= Math.min(BLANK_MIN_MINTS, BATCH_SIZE)) {
+      this.blankUntil = Date.now() + DOWN_HOLD_MS;
+      logger.warn("dexscreener lookups are failing - using geckoterminal", { failed: failed.size });
+    }
+    if (remainingMs !== undefined && remainingMs <= 0) return results;
+    const ask = [...failed];
+    const geckoFailed = new Set<string>();
+    const gecko = await fallback
+      .getTokensByAddresses(ask, {
+        timeoutMs: options.timeoutMs,
+        retries: options.retries,
+        deadlineMs: remainingMs,
+        seenAt: options.seenAt,
+        priority: options.priority,
+        failed: geckoFailed,
+      })
+      .catch((err: unknown) => {
+        logger.warn("fallback lookup for failed mints failed", { error: String(err) });
+        for (const mint of ask) geckoFailed.add(mint);
+        return [] as CandidateToken[];
+      });
+    // Answered by the fallback, priced or not: no longer unheard-from.
+    for (const mint of ask) if (!geckoFailed.has(mint)) failed.delete(mint);
+    if (gecko.length === 0) return results;
+    this.rememberQuotes(gecko, new Date());
+    return [...results, ...gecko.map((t) => ({ ...t }))];
   }
 
   /**

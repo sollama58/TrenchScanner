@@ -41,6 +41,18 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The API's answer for a coin or wallet TrenchScanner doesn't track: the reader's own paid lookup
+ * (the Utilities tab) opens it. Its message says so, with the price.
+ */
+export function lookupRequired(err: unknown): err is ApiError {
+  return (
+    err instanceof ApiError &&
+    err.status === 402 &&
+    (err.body as { code?: unknown } | null)?.code === "lookup_required"
+  );
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = authHeaders(new Headers(init.headers));
   if (init.body !== undefined && !headers.has("content-type"))
@@ -549,6 +561,8 @@ export interface ModelWeights {
     sampleCallsPct: number | null;
   };
   callsPerHour24h: number;
+  /** True for non-admins: the inputs, members and rule below are left out (admins only). */
+  recipeHidden?: boolean;
   /** Learners: their top inputs by share of the score's total push over recent moments. */
   inputs:
     | {
@@ -1150,18 +1164,27 @@ export interface Leaderboard {
   /** The single best performer (the champion). */
   defaultModel: string;
   /**
-   * The default feed: the top models by score, best first (absent from
+   * The default feed: the top models by 2x lower bound, best first (absent from
    * older API builds, where the default was defaultModel alone).
    */
   defaultModels?: string[];
   /** The best average exit-plan return over the last 24h; null when none qualify (absent from older API builds). */
   bestModel?: string | null;
   /** How defaultModels is picked (absent from older API builds). */
+  /**
+   * The default feed's rule. `windowHours`/`minGraded`: the 24h records' window and floor (the
+   * dropdown's ranking and "best"). The rank* fields: the top `count` by 2x lower bound (absent
+   * from older API builds, which ranked by score).
+   */
   defaultRule?: {
     count: number;
     windowHours: number;
     minGraded: number;
     refreshMinutes: number;
+    rankedBy?: "2x-lower-bound";
+    rankWindowHours?: number;
+    rankMinGraded?: number;
+    rankConfidencePct?: number;
     /** The 24h window the current slot's picks and "best" were read on (absent from older API builds). */
     window?: { since: string; until: string };
   };

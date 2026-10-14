@@ -59,6 +59,13 @@ describe("toProfile", () => {
     expect(profile.lpBurned).toBe(true);
   });
 
+  it("marks a report that lists no market as not having read the LP", () => {
+    const early = toProfile(MINT, baseReport({ markets: [] }));
+    expect(early.lpBurned).toBe(false);
+    expect(early.marketsListed).toBe(false);
+    expect(toProfile(MINT, baseReport()).marketsListed).toBeUndefined();
+  });
+
   it("treats LP as not burned when any market is below the lock threshold", () => {
     const report = baseReport({
       markets: [

@@ -452,6 +452,85 @@ describe("getTokensByAddresses fallback while DexScreener is blank", () => {
   });
 });
 
+describe("getTokensByAddresses fallback when DexScreener fails", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const geckoBody = (mints: string[]) => ({
+    data: mints.map((mint) => ({
+      attributes: { address: mint, symbol: "X", fdv_usd: "40000", market_cap_usd: null },
+      relationships: { top_pools: { data: [{ id: `solana_pool_${mint}` }] } },
+    })),
+    included: mints.map((mint) => ({
+      id: `solana_pool_${mint}`,
+      attributes: { base_token_price_usd: "0.00004", reserve_in_usd: "9000" },
+      relationships: { base_token: { data: { id: `solana_${mint}` } }, dex: { data: { id: "pump-fun" } } },
+    })),
+  });
+
+  /** DexScreener answers 503 for any batch holding a mint in `down`, pairs otherwise. */
+  function stub(down: (mint: string) => boolean) {
+    const geckoAsked: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      const list = url.split("/").pop()!.split("?")[0]!.split(",");
+      if (url.includes("geckoterminal")) {
+        geckoAsked.push(...list);
+        return Promise.resolve(new Response(JSON.stringify(geckoBody(list))));
+      }
+      if (list.some(down)) return Promise.resolve(new Response("down", { status: 503 }));
+      const pairs = list.map((mint) => ({
+        chainId: "solana",
+        dexId: "raydium",
+        baseToken: { address: mint },
+        marketCap: 1,
+      }));
+      return Promise.resolve(new Response(JSON.stringify(pairs)));
+    });
+    return geckoAsked;
+  }
+
+  it("prices a failed batch's mints from GeckoTerminal and leaves only unanswered ones failed", async () => {
+    const mints = Array.from({ length: 60 }, (_, i) => `mint${i}`);
+    // The second batch of 30 fails.
+    const geckoAsked = stub((m) => Number(m.slice(4)) >= 30);
+    const client = new DexScreenerClient({
+      fallback: new GeckoTerminalClient({ priorityPerMinute: 6000, backgroundPerMinute: 6000 }),
+    });
+    const failed = new Set<string>();
+    const out = await client.getTokensByAddresses(mints, 5, { retries: 0, failed, priority: true });
+    expect(out).toHaveLength(60);
+    expect(out.find((t) => t.mintAddress === "mint0")?.dexId).toBe("raydium");
+    expect(out.find((t) => t.mintAddress === "mint45")?.dexId).toBe("pumpfun");
+    expect(geckoAsked.sort()).toEqual(mints.slice(30).sort());
+    expect(failed.size).toBe(0);
+    // Part of the lookup answered: not an outage.
+    expect(client.usingFallback).toBe(false);
+  });
+
+  it("routes around DexScreener once every batch of a lookup fails", async () => {
+    const mints = Array.from({ length: 60 }, (_, i) => `mint${i}`);
+    stub(() => true);
+    const client = new DexScreenerClient({
+      fallback: new GeckoTerminalClient({ priorityPerMinute: 6000, backgroundPerMinute: 6000 }),
+    });
+    const out = await client.getTokensByAddresses(mints, 5, { retries: 0 });
+    expect(out).toHaveLength(60);
+    expect(client.usingFallback).toBe(true);
+  });
+
+  it("does not send mints that may be unindexed to the fallback", async () => {
+    const geckoAsked = stub(() => true);
+    const client = new DexScreenerClient({
+      fallback: new GeckoTerminalClient({ priorityPerMinute: 6000, backgroundPerMinute: 6000 }),
+    });
+    const failed = new Set<string>();
+    await client.getTokensByAddresses(["a", "b"], 5, { retries: 0, mayBeUnindexed: true, failed });
+    expect(geckoAsked).toEqual([]);
+    expect(failed.size).toBe(2);
+  });
+});
+
 describe("parseGeckoTokens", () => {
   it("prices only off a top pool the mint is the base of", () => {
     const body = {

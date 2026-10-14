@@ -492,6 +492,11 @@ export function sideMembers(graph: Pick<BubbleGraph, "nodes">, g: SideGroup): Ma
   return graph.nodes.filter((n) => n.kind === "holder" && !!n.wallet && wallets.has(n.wallet));
 }
 
+/** A KOL pill's word: "side?" when one possible side wallet shows on the map, else "sides?". */
+export function sideWord(members: readonly MapNode[], g: SideGroup): string {
+  return members.filter((n) => n.wallet !== g.kolWallet).length > 1 ? "sides?" : "side?";
+}
+
 /** The ties a side group draws, as the layout pulls them: each member to the KOL, else to the largest. */
 export function sideTiesOf(
   graph: Pick<BubbleGraph, "nodes">,

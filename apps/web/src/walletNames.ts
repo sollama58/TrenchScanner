@@ -41,8 +41,13 @@ async function load(wallets: readonly string[]) {
   if (ask.length === 0) return;
   for (const w of ask) asking.add(w);
   try {
-    const res = await post<{ names?: Record<string, WalletName> }>("/wallets/names", { wallets: ask });
-    for (const w of ask) known.set(w, res.names?.[w] ?? null);
+    const res = await post<{ names?: Record<string, WalletName>; unread?: string[] }>("/wallets/names", {
+      wallets: ask,
+    });
+    // A wallet the API didn't get to read this time (its budget ran out) isn't "no name": it is
+    // left unknown, so the list asks again the next time it opens.
+    const unread = new Set(res.unread ?? []);
+    for (const w of ask) if (!unread.has(w)) known.set(w, res.names?.[w] ?? null);
     notify();
   } catch (err) {
     // A failed read is asked again next time the list opens; no access means never.

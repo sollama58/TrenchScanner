@@ -1,4 +1,5 @@
 import { fetchJson } from "./httpClient.js";
+import { RateGate } from "./rateGate.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import bs58 from "bs58";
@@ -226,6 +227,30 @@ export interface HeliusClientOptions {
 }
 
 const PUBLIC_FALLBACK_RPC = "https://solana-rpc.publicnode.com";
+
+/**
+ * One pause per RPC endpoint, shared by every HeliusClient in the process (the scan, trade tape,
+ * burn scan and the API's wallet reader each build their own): a 429 holds every request to that
+ * endpoint until the backoff passes, so the other batches in flight stop firing into the same
+ * limit and a retry waits out the pause instead of hitting the wall again half a second later
+ * (audit 2026-10-14, L6 R4). The rate is set far above any plan's so the gate only ever pauses;
+ * pacing stays with each job's own per-cycle budgets.
+ */
+const rpcPauses = new Map<string, RateGate>();
+
+function rpcPauseFor(rpcUrl: string): RateGate {
+  let gate = rpcPauses.get(rpcUrl);
+  if (!gate) {
+    gate = new RateGate({ name: "helius", perMinute: 600_000, burst: 10_000 });
+    rpcPauses.set(rpcUrl, gate);
+  }
+  return gate;
+}
+
+/** Test hook: forgets every endpoint's pause. */
+export function resetRpcPauses(): void {
+  rpcPauses.clear();
+}
 
 /** How many JSON-RPC calls to put in one HTTP POST. Conservative enough that no provider rejects
  *  the payload, large enough that a full cycle's wallet lookups collapse into a handful of trips. */
@@ -510,6 +535,8 @@ export function parseTokenAccountSlice(entry: TokenAccountSlice): { mint: string
 export class HeliusClient {
   private readonly rpcUrl: string;
   readonly usingHelius: boolean;
+  /** The endpoint's shared 429 pause - see rpcPauseFor. */
+  private readonly pause: RateGate;
 
   /**
    * Set once getTransactionsForAddress is established as unusable - true for any non-Helius
@@ -574,6 +601,7 @@ export class HeliusClient {
       this.rpcUrl = PUBLIC_FALLBACK_RPC;
       this.usingHelius = false;
     }
+    this.pause = rpcPauseFor(this.rpcUrl);
     // Only Helius serves getTransactionsForAddress - don't even try it elsewhere.
     this.gtfaUnavailable = !this.usingHelius;
     // Same for the DAS API, which is a Helius extension rather than standard Solana RPC.
@@ -638,6 +666,7 @@ export class HeliusClient {
         retries: 1,
         // A retry is another billed request: counted like the first.
         onRetry: count,
+        gate: this.pause,
         ...(opts.retryOnTimeout === false ? { retryOnTimeout: false } : {}),
       });
 
@@ -1828,6 +1857,7 @@ export class HeliusClient {
         timeoutMs,
         retries: 1,
         onRetry: count,
+        gate: this.pause,
       });
     } catch (err) {
       logger.warn("rpc single request failed", { method, error: String(err) });

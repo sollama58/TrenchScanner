@@ -10,6 +10,14 @@ import { exitForRestart } from "./processExit.js";
 
 const logger = createLogger("scheduler");
 
+/** Runs in flight in this process, by job, with when each started - for the event-loop watch. */
+const inFlightRuns = new Map<HeartbeatJob, number>();
+
+/** The jobs running right now and for how long, e.g. { scan: 4210 } - what a stall line names. */
+export function runningJobsNow(now: number = Date.now()): Record<string, number> {
+  return Object.fromEntries([...inFlightRuns].map(([job, startedAt]) => [job, now - startedAt]));
+}
+
 export interface ScheduledJob {
   /** Cancels the next run. A run already in flight keeps going - see `settle`. */
   stop(): void;
@@ -173,6 +181,7 @@ export function scheduleInterval(
 
   const runOnce = async () => {
     const startedAt = Date.now();
+    inFlightRuns.set(name, startedAt);
     // A run that hangs is otherwise invisible: the heartbeat only advances when it returns, and
     // nothing else is ever scheduled behind it.
     const watchdog = setInterval(() => {
@@ -265,6 +274,7 @@ export function scheduleInterval(
       });
     } finally {
       clearInterval(watchdog);
+      inFlightRuns.delete(name);
       if (deadline) clearInterval(deadline);
       if (stopCheck) clearInterval(stopCheck);
       const elapsed = Date.now() - startedAt;
@@ -404,6 +414,7 @@ export function scheduleDailyAt(
   const runOnce = async () => {
     running = true;
     const startedAt = Date.now();
+    inFlightRuns.set(name, startedAt);
     const previousStartedAt = lastStartedAt;
     lastStartedAt = startedAt;
     let skipped = false;
@@ -452,6 +463,7 @@ export function scheduleDailyAt(
       }
     } finally {
       clearInterval(watchdog);
+      inFlightRuns.delete(name);
       running = false;
       if (skipped) recheckAfterSkip();
       else scheduleNext();

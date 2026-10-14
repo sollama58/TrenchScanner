@@ -11,7 +11,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ApiError, type Card, type Snapshot } from "../api";
+import { ApiError, lookupRequired, type Card, type Snapshot } from "../api";
 import { usePolling } from "../hooks";
 import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, tokenThumb, usd } from "../format";
 import { matchOutcome, outcomeAt, outcomeBadge } from "../outcome";
@@ -532,6 +532,7 @@ function GroupLabel({ id, children }: { id: string; children: ReactNode }) {
 
 /** Why an access-gated part couldn't load, in words. */
 function lockedText(error: Error, what: string): string | null {
+  if (lookupRequired(error)) return error.message;
   if (error instanceof ApiError && (error.status === 401 || error.status === 402)) {
     return `The ${what} comes with access. Connect a wallet with access to see it.`;
   }

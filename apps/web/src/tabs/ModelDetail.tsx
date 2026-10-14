@@ -500,7 +500,8 @@ function Weightings({
   error: boolean;
   role: LeaderboardEntry["role"];
 }) {
-  if (role === "rules") return null;
+  // What a model leans on is shown to admins only; the API leaves it out for everyone else.
+  if (role === "rules" || w?.recipeHidden) return null;
   const heading = <h3>What it weighs most</h3>;
   if (!w) {
     return (
