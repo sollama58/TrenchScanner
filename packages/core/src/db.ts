@@ -16,8 +16,8 @@ const DEFAULT_POOL_TIMEOUT_SECONDS = 20;
  * Prisma sets no socket timeout of its own, so a query in flight when the database went away
  * without closing the socket (a crash or restart of the host rather than of the postgres process)
  * waits forever. On 2026-10-04 that froze the worker's scan, fast-match and candidate-watch jobs
- * for ten hours after the 256MB database restarted under them. Past this, the query fails, the
- * connection is dropped, and the pool opens a fresh one on the next query.
+ * for ten hours after the database (then on the 256MB plan) restarted under them. Past this, the
+ * query fails, the connection is dropped, and the pool opens a fresh one on the next query.
  */
 const DEFAULT_SOCKET_TIMEOUT_SECONDS = 180;
 
