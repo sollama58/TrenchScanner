@@ -155,9 +155,8 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       await lockUserFilters(tx, userId);
       if ((await tx.userFilter.count({ where: { userId, deletedAt: null } })) >= MAX_FILTERS_PER_USER)
         return null;
-      const switchedOff = parsed.data.isActive ? await deactivateOthers(tx, userId, null) : false;
       const row = await tx.userFilter.create({ data: { ...parsed.data, userId } });
-      return { row, boardChanged: row.shareOnLeaderboard || switchedOff };
+      return { row, boardChanged: row.shareOnLeaderboard };
     });
     if (created?.boardChanged) filterLeaderboardCache.clear();
     if (!created) {
@@ -168,7 +167,11 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
     return reply.code(201).send(created.row);
   });
 
-  /** Makes this the user's one active filter, switching off whichever was active before. */
+  /**
+   * Switches this filter on. The user's other filters stay as they are: each saved filter is
+   * switched on and off on its own (PATCH isActive), and every one that is on alerts. Kept for
+   * dashboards from before per-filter switches, which posted here to pick their one active filter.
+   */
   app.post("/:id/activate", async (request, reply) => {
     const { id } = request.params as { id: string };
     const userId = request.user!.userId;
@@ -176,13 +179,12 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       await lockUserFilters(tx, userId);
       const existing = await tx.userFilter.findUnique({ where: { id } });
       if (!existing || existing.userId !== userId || existing.deletedAt) return null;
-      const switchedOff = await deactivateOthers(tx, userId, id);
       const row = await tx.userFilter.update({
         where: { id },
         // Switched on from off: it starts from what newly matches, not the backlog (armedAt).
         data: { isActive: true, ...(existing.isActive ? {} : { armedAt: new Date() }) },
       });
-      return { row, boardChanged: existing.shareOnLeaderboard || switchedOff };
+      return { row, boardChanged: existing.shareOnLeaderboard };
     });
     if (!activated) return reply.code(404).send({ error: "filter not found" });
     // The board shows which shared filters are active now.
@@ -217,8 +219,6 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       const merged = { ...existing, ...parsed.data };
       const rangeError = filterError(merged);
       if (rangeError) return { error: 400 as const, message: rangeError };
-      // Turning one filter on turns the user's other filters off: one active filter at a time.
-      const switchedOff = parsed.data.isActive ? await deactivateOthers(tx, userId, id) : false;
       // New criteria start a new leaderboard record: the record shown must be the one of the
       // settings a copier would get, not of whatever the filter used to be.
       const reset = criteriaChanged(existing, parsed.data);
@@ -232,7 +232,7 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       });
       return {
         updated,
-        boardChanged: existing.shareOnLeaderboard || updated.shareOnLeaderboard || switchedOff,
+        boardChanged: existing.shareOnLeaderboard || updated.shareOnLeaderboard,
       };
     });
     if ("updated" in result) {
@@ -358,26 +358,14 @@ export function rearms(existing: Record<string, unknown>, change: Record<string,
 }
 
 /**
- * How many filters a user can save. Only one is active at a time (see deactivateOthers): the rest
- * are saved setups to switch between, and every active filter is evaluated against every token on
- * each scan, which is why both limits exist.
+ * How many filters a user can save. Each one is switched on or off on its own, and every one
+ * that is on is evaluated against every token on each scan, which is why the cap exists.
  */
 export const MAX_FILTERS_PER_USER = 10;
 
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
-/** Serialises one user's filter writes, so two tabs can't both create the 11th or both activate. */
+/** Serialises one user's filter writes, so two tabs can't both create the 11th. */
 async function lockUserFilters(tx: Tx, userId: string): Promise<void> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"filters:" + userId}))`;
-}
-
-/**
- * Switches off every active filter of this user except `keepId`. Returns whether one of them is
- * on the public leaderboard, which shows each shared filter's active state.
- */
-async function deactivateOthers(tx: Tx, userId: string, keepId: string | null): Promise<boolean> {
-  const where = { userId, isActive: true, ...(keepId ? { id: { not: keepId } } : {}) };
-  const shared = await tx.userFilter.count({ where: { ...where, shareOnLeaderboard: true } });
-  await tx.userFilter.updateMany({ where, data: { isActive: false } });
-  return shared > 0;
 }

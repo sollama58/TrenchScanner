@@ -141,10 +141,7 @@ function BoardEntry({
             </span>
           ) : (
             !e.isActive && (
-              <span
-                className="pill"
-                title="Its owner has another filter active, so this one isn't alerting now"
-              >
+              <span className="pill" title="Its owner has switched this filter off, so it isn't alerting now">
                 Paused
               </span>
             )
