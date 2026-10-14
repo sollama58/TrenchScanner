@@ -1052,7 +1052,10 @@ function LeaderboardPanel({
                         </span>
                       )}
                       {e.isDefault && (
-                        <span className="chip" title="One of the top models by score: the default feed">
+                        <span
+                          className="chip"
+                          title="One of the top models by proven 2x rate: the default feed"
+                        >
                           top
                         </span>
                       )}
@@ -1506,12 +1509,13 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           <strong>The default.</strong>{" "}
           {board.defaultRule ? (
             <>
-              The default feed is the {board.defaultRule.count} models with the best score, among those with
-              at least {board.defaultRule.minGraded} graded calls over the last{" "}
-              {board.defaultRule.windowHours}h, picked every{" "}
-              {Math.round(board.defaultRule.refreshMinutes / 60)} hours (00, 06, 12 and 18 UTC) and held until
-              the next pick. Everyone who follows the default sees their calls combined. Until enough models
-              qualify, it is the best performer on this board alone.
+              The default feed is the {board.defaultRule.count} models with the best 2x rate at the low end of
+              its {board.defaultRule.rankConfidencePct ?? 95}% range (so a short record counts for less),
+              among those with at least {board.defaultRule.rankMinGraded ?? board.defaultRule.minGraded}{" "}
+              graded calls over the last {board.defaultRule.rankWindowHours ?? board.defaultRule.windowHours}
+              h, picked every {Math.round(board.defaultRule.refreshMinutes / 60)} hours (00, 06, 12 and 18
+              UTC) and held until the next pick. Everyone who follows the default sees their calls combined.
+              Until enough models qualify, it is the best performer on this board alone.
             </>
           ) : (
             <>
