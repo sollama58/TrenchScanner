@@ -52,6 +52,10 @@ for (const [net, prefix] of [
   ["::", 127],
   ["::ffff:0:0", 96],
   ["64:ff9b::", 96],
+  // Teredo and documentation (2001::/23 covers 2001::/32), and 6to4, which embeds any IPv4.
+  ["2001::", 23],
+  ["2001:db8::", 32],
+  ["2002::", 16],
   ["fc00::", 7],
   ["fe80::", 10],
   ["ff00::", 8],

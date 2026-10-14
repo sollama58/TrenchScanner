@@ -70,6 +70,9 @@ model User {
   /// The models whose calls go to Telegram while telegramSameAsFeed is off, in roster order.
   /// Empty = follow the top models (the default feed).
   telegramModels  String[] @default([])
+  /// Telegram gets only the high-conviction tier's calls, from any model (curation/feedModels.ts
+  /// resolveFeedCalls), whatever the models above say. Off by default.
+  telegramHighConvictionOnly Boolean @default(false)
   /// How alerts reach this user in the dashboard (sound, volume, browser notifications) - see
   /// alertPrefs.ts in apps/api for the shape. Null = defaults.
   alertPrefs      Json?
@@ -150,28 +153,31 @@ model TelegramChat {
   linkedByName       String?
 
   /// Which alerts this chat gets.
-  filterMatches    Boolean   @default(true)
-  modelCalls       Boolean   @default(true)
+  filterMatches          Boolean   @default(true)
+  modelCalls             Boolean   @default(true)
   /// Paused by the user from the dashboard; the chat stays linked.
-  enabled          Boolean   @default(true)
+  enabled                Boolean   @default(true)
   /// The parts of an alert this chat has switched off (ALERT_PARTS in telegram/format.ts:
   /// "image", "stats" (market cap), "holders", "volume", "age", "conviction", ...). Empty means the
   /// whole card. Set from the dashboard or with /show and /hide in the chat.
-  hidden           String[]  @default([])
+  hidden                 String[]  @default([])
   /// "full" (the whole card) or "compact" (a few lines: no rule, reasons or per-filter lines).
   /// Set with /settings in the chat.
-  layout           String    @default("full")
+  layout                 String    @default("full")
   /// Which trade and chart links an alert carries (ALERT_LINKS in telegram/format.ts), in order.
-  links            String[]  @default(["terminal", "axiom", "gmgn"])
+  links                  String[]  @default(["terminal", "axiom", "gmgn"])
   /// /alerts leaves out alerts whose market cap now is under this, in USD; 0 lists them all.
-  alertsMinMcapUsd Float     @default(5000)
+  alertsMinMcapUsd       Float     @default(5000)
   /// Alerts raised at or before this were sent (or never due) - the dispatcher's cursor per chat.
   /// Starts at link time, so linking never replays the backlog.
-  sentThrough      DateTime  @default(now())
-  lastSentAt       DateTime?
+  sentThrough            DateTime  @default(now())
+  lastSentAt             DateTime?
   /// What Telegram last answered when a send failed; cleared on the next success.
-  lastError        String?
-  failures         Int       @default(0)
+  lastError              String?
+  failures               Int       @default(0)
+  /// When the chat was told its account's own Telegram model picks have all left the roster, so
+  /// it gets the top models' calls instead (dispatch.ts). Cleared once a pick is back.
+  picksFallbackNoticedAt DateTime?
 
   createdAt DateTime  @default(now())
   /// Unlinked from the dashboard, or the bot was blocked / removed from the group. Kept for the
@@ -183,17 +189,24 @@ model TelegramChat {
   @@index([userId])
 }
 
-/// A token this chat has already had an alert about. The dispatcher sends one alert per token per
-/// chat: a model calling the coin after another model (or the chat's filter) already did is not
-/// sent again. Swept after a week by the cleanup job.
+/// One alert sent to a chat about a token. The dispatcher sends one alert per token per chat
+/// within REALERT_AFTER_MS: a model calling the coin after another model (or the chat's filter)
+/// already did is not sent again. A re-alert after that is a row of its own, so /trenchboard counts
+/// both sends. Swept after a week by the cleanup job.
 model TelegramAlertSent {
-  chatId  String
-  chat    TelegramChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId         String
+  chat           TelegramChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
   /// Token.id. No relation: the stale-token sweep shouldn't have to know about this table.
-  tokenId String
-  sentAt  DateTime     @default(now())
+  tokenId        String
+  sentAt         DateTime     @default(now())
+  /// The model call the alert carried (the earliest of the chat's models on the card), which
+  /// /alerts and /trenchboard credit and grade; null when it carried only filter matches. No
+  /// relation, like tokenId. Null on rows from before it was kept.
+  curatedAlertId String?
+  /// The filter match it carried when it carried no call.
+  matchId        String?
 
-  @@id([chatId, tokenId])
+  @@id([chatId, tokenId, sentAt])
   @@index([sentAt])
 }
 
@@ -1773,6 +1786,14 @@ model BurnScanCursor {
   /// the documented "walks across a few passes" true - each pass continues backwards from here
   /// until the floor is reached, then both this and scanFloor are cleared.
   backfillBefore String?
+
+  /// The signature the forward walk keeps failing to fetch, and for how many passes in a row. Past
+  /// STUCK_SIGNATURE_PASSES it is moved to skippedSignatures and the walk goes on past it, so one
+  /// transaction the RPC can't return doesn't hold every later burn back.
+  stuckSignature    String?
+  stuckPasses       Int      @default(0)
+  /// Signatures stepped over that way, retried every pass and dropped once read.
+  skippedSignatures String[] @default([])
 
   updatedAt DateTime @updatedAt
 }

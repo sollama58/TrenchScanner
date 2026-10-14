@@ -45,6 +45,18 @@ const FETCH_BATCH_SIZE = 50;
  */
 const BATCH_PAUSE_MS = 250;
 
+/**
+ * Passes in a row the walk may stop on the same unfetchable transaction before stepping over it.
+ * A transaction that is confirmed but not yet finalised reads as missing for seconds; one the RPC
+ * can never return (a newer transaction version, say) did so forever, and held every later burn
+ * back with it until someone changed the code. At the 3-minute default interval this is half an
+ * hour of retries. A stepped-over signature is kept in BurnScanCursor.skippedSignatures and tried
+ * again on every pass until it reads.
+ */
+export const STUCK_SIGNATURE_PASSES = 10;
+/** The most stepped-over signatures kept and retried; the oldest go first past it. */
+const MAX_SKIPPED_SIGNATURES = 50;
+
 export interface ReconcileResult {
   scanned: number;
   burnsFound: number;
@@ -55,6 +67,10 @@ export interface ReconcileResult {
   creditBurns: number;
   /** Whether a fetch failed and left part of this pass's ground for the next one - see index.ts. */
   stoppedEarly: boolean;
+  /** Transactions stepped over this pass after STUCK_SIGNATURE_PASSES failed fetches. */
+  skipped: number;
+  /** Stepped-over transactions that read on a retry and were processed. */
+  recovered: number;
 }
 
 /**
@@ -83,6 +99,8 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
     alreadyCredited: 0,
     creditBurns: 0,
     stoppedEarly: false,
+    skipped: 0,
+    recovered: 0,
   };
 
   const cursor = await prisma.burnScanCursor.upsert({
@@ -90,6 +108,25 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
     update: {},
     create: { id: "burn-scan", scanFloor: new Date(Date.now() - env.BURN_SCAN_COLD_START_DAYS * 86_400_000) },
   });
+
+  // Transactions given up on earlier: retried first, and stepped over by the walks below.
+  const skipped = new Set(cursor.skippedSignatures);
+  if (skipped.size > 0) {
+    const retry = await processSignatures(
+      cursor.skippedSignatures.map((signature) => ({ signature })),
+      rpc,
+      result,
+      "oldest-first",
+      skipped,
+    );
+    const stillMissing = new Set(retry.missing);
+    const read = cursor.skippedSignatures.filter((sig) => !stillMissing.has(sig));
+    if (read.length > 0) {
+      result.recovered = read.length;
+      for (const sig of read) skipped.delete(sig);
+      logger.info("read transactions stepped over earlier", { signatures: read });
+    }
+  }
 
   const floor = cursor.scanFloor ?? new Date(Date.now() - env.BURN_SCAN_COLD_START_DAYS * 86_400_000);
 
@@ -102,6 +139,8 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
   });
 
   if (forward.failed) result.stoppedEarly = true;
+  /** The signature a walk stopped on this pass, if one did. */
+  let stuck: string | null = null;
   // A forward walk that ran into the page cap before reaching lastSignature has a gap below it:
   // everything between lastSignature and the oldest signature it collected. Moving lastSignature
   // to the tip jumped that gap for good - a long worker outage or a trading spike on the mint was
@@ -116,7 +155,14 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
       : null;
 
   if (forward.pages > 0 || forward.pending.length > 0) {
-    const { lastProcessed } = await processSignatures(forward.pending, rpc, result);
+    const { lastProcessed, stuckOn } = await processSignatures(
+      forward.pending,
+      rpc,
+      result,
+      "oldest-first",
+      skipped,
+    );
+    stuck = stuckOn;
     if (lastProcessed || gap) {
       // The cold start clears its floor only once the backfill has actually reached it - see
       // below. Advancing lastSignature here is what keeps ordinary forward passes cheap.
@@ -159,7 +205,14 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
     // oldest-first, a stop anywhere left the resume point where it was, and the next pass
     // re-fetched the same ten thousand transactions - on a rate-limited endpoint, every pass
     // stopped somewhere, and the backfill never moved again.
-    const { lastProcessed, completed } = await processSignatures(older.pending, rpc, result, "newest-first");
+    const { lastProcessed, completed, stuckOn } = await processSignatures(
+      older.pending,
+      rpc,
+      result,
+      "newest-first",
+      skipped,
+    );
+    stuck ??= stuckOn;
 
     if (completed) {
       const done = older.reachedFloor || older.exhausted;
@@ -179,10 +232,46 @@ export async function reconcileBurns(env: Env, rpc: SolanaRpc): Promise<Reconcil
     }
   }
 
+  await trackStuck(cursor, stuck, skipped, result);
+
   if (result.burnsFound > 0 || result.scanned > 0) {
     logger.info("reconcile pass complete", { ...result });
   }
   return result;
+}
+
+/**
+ * Counts the passes a walk has stopped on the same transaction, and past STUCK_SIGNATURE_PASSES
+ * moves it to the stepped-over list so the next pass goes on past it.
+ */
+async function trackStuck(
+  cursor: { stuckSignature: string | null; stuckPasses: number; skippedSignatures: string[] },
+  stuck: string | null,
+  skipped: Set<string>,
+  result: ReconcileResult,
+): Promise<void> {
+  const passes = stuck === null ? 0 : stuck === cursor.stuckSignature ? cursor.stuckPasses + 1 : 1;
+  const giveUp = stuck !== null && passes >= STUCK_SIGNATURE_PASSES;
+  if (giveUp) {
+    skipped.add(stuck);
+    result.skipped += 1;
+    logger.error("stepping over a transaction the RPC keeps failing to return", { signature: stuck, passes });
+  }
+  const skippedSignatures = [...skipped].slice(-MAX_SKIPPED_SIGNATURES);
+  const unchanged =
+    (giveUp ? null : stuck) === cursor.stuckSignature &&
+    (giveUp ? 0 : passes) === cursor.stuckPasses &&
+    skippedSignatures.length === cursor.skippedSignatures.length &&
+    skippedSignatures.every((sig, i) => sig === cursor.skippedSignatures[i]);
+  if (unchanged) return;
+  await prisma.burnScanCursor.update({
+    where: { id: "burn-scan" },
+    data: {
+      stuckSignature: giveUp ? null : stuck,
+      stuckPasses: giveUp ? 0 : passes,
+      skippedSignatures,
+    },
+  });
 }
 
 /** One backwards walk over the mint's signatures, bounded by the page cap and optionally a floor. */
@@ -282,8 +371,18 @@ async function processSignatures(
   rpc: SolanaRpc,
   result: ReconcileResult,
   order: "oldest-first" | "newest-first" = "oldest-first",
-): Promise<{ lastProcessed: string | null; completed: boolean }> {
-  if (collected.length === 0) return { lastProcessed: null, completed: true };
+  /** Signatures given up on: one that still doesn't read is stepped over, not stopped on. */
+  skip: ReadonlySet<string> = new Set(),
+): Promise<{
+  lastProcessed: string | null;
+  completed: boolean;
+  /** The signature the run stopped on, when a fetch came back empty. */
+  stuckOn: string | null;
+  /** Signatures in `skip` that still didn't read. */
+  missing: string[];
+}> {
+  const missing: string[] = [];
+  if (collected.length === 0) return { lastProcessed: null, completed: true, stuckOn: null, missing };
 
   // Oldest first by default, so a failure part-way leaves the forward cursor on a contiguous
   // prefix and the next pass resumes exactly where this one stopped. The backfill goes the other
@@ -308,6 +407,7 @@ async function processSignatures(
 
   let lastProcessed: string | null = null;
   let completed = true;
+  let stuckOn: string | null = null;
 
   // Fetched a batch at a time. At this mint's measured rate (~53 transactions a day) a routine
   // pass has nothing to fetch at all, but a cold start has months of them, and one POST per
@@ -328,6 +428,11 @@ async function processSignatures(
       }
 
       const tx = fetched.get(signature) ?? null;
+      if (tx === null && skip.has(signature)) {
+        missing.push(signature);
+        lastProcessed = signature;
+        continue;
+      }
       if (tx === null) {
         // Could be an RPC hiccup, could be a transaction that is confirmed but not yet finalised.
         // Either way, stop advancing the cursor here: everything after this point stays
@@ -335,6 +440,7 @@ async function processSignatures(
         logger.warn("could not fetch transaction - stopping this pass here", { signature });
         completed = false;
         result.stoppedEarly = true;
+        stuckOn = signature;
         break outer;
       }
 
@@ -385,7 +491,7 @@ async function processSignatures(
     }
   }
 
-  return { lastProcessed, completed };
+  return { lastProcessed, completed, stuckOn, missing };
 }
 
 function earliest(a: Date | null, b: Date): Date {

@@ -4,7 +4,13 @@ import { adminWalletSet } from "../config/env.js";
 import { prisma, TRAINER_APPLICATION_NAME } from "../db.js";
 import { createLogger } from "../logger.js";
 import { resolveAccess } from "../subscription/access.js";
-import { loadFeedModelState, resolveTelegramModels, type FeedModelState } from "../curation/feedModels.js";
+import {
+  isFeedCall,
+  loadFeedModelState,
+  resolveFeedCalls,
+  resolveTelegramModels,
+  type FeedModelState,
+} from "../curation/feedModels.js";
 import {
   loadNarrativeNoteReadiness,
   narrativeNoteChoice,
@@ -101,13 +107,16 @@ export interface DispatchDeps {
  * When the oldest other transaction open in this database began, or null if none is (or unknown).
  * Run on the pass's own connection, so its own transaction doesn't count. The trainer's
  * connections don't either: it never writes an alert, and its training reads run for minutes,
- * which held every alert back by the full MAX_COMMIT_WAIT_MS while they did.
+ * which held every alert back by the full MAX_COMMIT_WAIT_MS while they did. Nor do Postgres's own
+ * processes (autovacuum, WAL senders): only client connections write alerts. A client transaction
+ * that hasn't written yet still counts, since a scan's row can carry its transaction's start.
  */
 export async function oldestOpenTransaction(tx: Prisma.TransactionClient): Promise<Date | null> {
   try {
     const [row] = await tx.$queryRaw<{ oldest: Date | null }[]>`
       SELECT min(xact_start) AS oldest FROM pg_stat_activity
       WHERE datname = current_database() AND pid <> pg_backend_pid() AND xact_start IS NOT NULL
+        AND backend_type = 'client backend'
         AND application_name IS DISTINCT FROM ${TRAINER_APPLICATION_NAME}`;
     return row?.oldest ?? null;
   } catch {
@@ -164,6 +173,14 @@ export interface DispatchSummary {
   digests: number;
   failed: number;
   skipped: number;
+  /** Chats left for the next pass because their account's access couldn't be read. */
+  accessErrors: number;
+  /**
+   * How far the pass read (alerts stamped at or before this). The worker keeps a wake-up for an
+   * alert written after it, so a pass the open-transaction bound held back is followed up soon.
+   * Unset when the pass read nothing (no token, no chats, or another process holds the lock).
+   */
+  horizon?: Date;
 }
 
 type ChatRow = Awaited<ReturnType<typeof loadChats>>[number];
@@ -183,6 +200,7 @@ function loadChats() {
       sentThrough: true,
       lastSentAt: true,
       failures: true,
+      picksFallbackNoticedAt: true,
       user: {
         select: {
           id: true,
@@ -193,6 +211,7 @@ function loadChats() {
           followBestModel: true,
           telegramSameAsFeed: true,
           telegramModels: true,
+          telegramHighConvictionOnly: true,
           feedAppearance: true,
         },
       },
@@ -203,13 +222,24 @@ function loadChats() {
 /**
  * Whether model calls can reach a chat: it takes them, and the account sends Telegram some. While
  * Telegram follows the Live Feed that needs the feed's model alerts on; Telegram's own picks
- * (curation/feedModels.ts resolveTelegramModels) don't depend on that switch.
+ * (curation/feedModels.ts resolveTelegramModels) and its high-conviction-only setting don't
+ * depend on that switch.
  */
 function takesCalls(chat: {
   modelCalls: boolean;
-  user: { showModelAlerts: boolean; telegramSameAsFeed: boolean };
+  user: { showModelAlerts: boolean; telegramSameAsFeed: boolean; telegramHighConvictionOnly: boolean };
 }): boolean {
-  return chat.modelCalls && (!chat.user.telegramSameAsFeed || chat.user.showModelAlerts);
+  return (
+    chat.modelCalls &&
+    (chat.user.telegramHighConvictionOnly || !chat.user.telegramSameAsFeed || chat.user.showModelAlerts)
+  );
+}
+
+/** One token's send as TelegramAlertSent records it. */
+export interface SentAlert {
+  tokenId: string;
+  curatedAlertId: string | null;
+  matchId: string | null;
 }
 
 /** Something to tell a chat about: one token, everything raised on it since the cursor. */
@@ -217,6 +247,11 @@ interface Pending {
   card: AlertCard;
   /** The tokens it is about: one, or a digest's several. */
   tokenIds: string[];
+  /**
+   * Per token, the alert the card carries that a board grades it by: its earliest call from the
+   * chat's models (whose figures the card leads with), else its earliest filter match.
+   */
+  sends: SentAlert[];
   /** The cursor moves here once this is sent. */
   through: Date;
 }
@@ -237,6 +272,7 @@ export function dashboardUrl(env: Env): string {
 export function buildPending(
   chat: { filterMatches: boolean; modelCalls: boolean; sentThrough: Date },
   matches: {
+    id?: string;
     tokenId: string;
     matchedAt: Date;
     score: number;
@@ -246,6 +282,7 @@ export function buildPending(
     snapshot: AlertCard["snapshot"];
   }[],
   calls: {
+    id?: string;
     tokenId: string;
     createdAt: Date;
     modelName: string | null;
@@ -269,6 +306,7 @@ export function buildPending(
       p = {
         card: { token, snapshot, filters: [], calls: [], raisedAt: at },
         tokenIds: [tokenId],
+        sends: [{ tokenId, curatedAlertId: null, matchId: null }],
         through: at,
       };
       byToken.set(tokenId, p);
@@ -291,6 +329,8 @@ export function buildPending(
           ? { ...m.snapshot, marketCapUsd: m.alertMcapUsd }
           : m.snapshot;
       const p = take(m.tokenId, m.matchedAt, m.token, snapshot);
+      // Read oldest first, so the first one kept is the earliest.
+      if (m.id && p.sends[0]!.matchId === null) p.sends[0]!.matchId = m.id;
       if (!p.card.filters.some((f) => f.name === m.filter.name)) {
         p.card.filters.push({ name: m.filter.name, score: m.score });
       }
@@ -302,6 +342,7 @@ export function buildPending(
     for (const c of calls) {
       if (!inWindow(c.createdAt)) continue;
       const p = take(c.tokenId, c.createdAt, c.token, c.snapshot);
+      if (c.id && p.sends[0]!.curatedAlertId === null) p.sends[0]!.curatedAlertId = c.id;
       // The call's price as it went out, over the scan snapshot's (a filter match's included):
       // that one is DexScreener's, 45-60s behind the market. Pump.fun's market cap at send when a
       // call on the coin has it (CuratedAlert.liveMcapUsd), else the first call's own anchor, the
@@ -348,7 +389,7 @@ const PASS_TRANSACTION_TIMEOUT_MS = 120_000;
 
 /** One pass. Returns what it did, for the heartbeat. */
 export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Promise<DispatchSummary> {
-  const summary: DispatchSummary = { chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0 };
+  const summary: DispatchSummary = { chats: 0, sent: 0, digests: 0, failed: 0, skipped: 0, accessErrors: 0 };
   if (!telegramConfigured(env.TELEGRAM_BOT_TOKEN)) return summary;
   // A deploy runs the old scanner and the new one side by side, and two passes reading the same
   // cursors would send every alert twice. The lock is transaction-scoped, so it is held for the
@@ -390,6 +431,7 @@ async function dispatchPass(
       Math.min(startedAt - COMMIT_GRACE_MS, openSince ? openSince.getTime() - 1 : Infinity),
     ),
   );
+  summary.horizon = horizon;
   const oldest = new Date(startedAt - MAX_ALERT_AGE_MS);
   // A chat whose cursor fell behind the window (the worker was down) skips the stale backlog.
   for (const chat of chats) if (chat.sentThrough < oldest) chat.sentThrough = oldest;
@@ -404,6 +446,7 @@ async function dispatchPass(
           where: { userId: { in: matchUsers }, matchedAt: { gt: since, lte: horizon } },
           orderBy: { matchedAt: "asc" },
           select: {
+            id: true,
             userId: true,
             tokenId: true,
             matchedAt: true,
@@ -420,6 +463,7 @@ async function dispatchPass(
           where: { createdAt: { gt: since, lte: horizon } },
           orderBy: { createdAt: "asc" },
           select: {
+            id: true,
             tokenId: true,
             createdAt: true,
             model: true,
@@ -461,25 +505,32 @@ async function dispatchPass(
   // called it, or its filter caught it, in an earlier pass) is not sent again when another model
   // calls it later. Each pass groups what it reads by token, but models call a coin minutes apart,
   // so without this the second model's call went out as a second alert for the same coin.
-  const realertBefore = startedAt - REALERT_AFTER_MS;
+  // Sent long enough ago to be news again: a re-alert, which is a row (a send) of its own.
+  const realertBefore = new Date(startedAt - REALERT_AFTER_MS);
   const alreadySent = new Set<string>();
-  /** Sent before, but long enough ago to be sent again; its row's sentAt moves up when it is. */
-  const sentLongAgo = new Set<string>();
   for (const r of await prisma.telegramAlertSent.findMany({
     where: {
       chatId: { in: chats.map((c) => c.id) },
       tokenId: { in: [...new Set([...matches, ...calls].map((a) => a.tokenId))] },
+      sentAt: { gt: realertBefore },
     },
-    select: { chatId: true, tokenId: true, sentAt: true },
+    select: { chatId: true, tokenId: true },
   })) {
-    (r.sentAt.getTime() > realertBefore ? alreadySent : sentLongAgo).add(`${r.chatId}:${r.tokenId}`);
+    alreadySent.add(`${r.chatId}:${r.tokenId}`);
   }
 
-  const access = new Map<string, Promise<boolean>>();
+  // A failed lookup is "unknown", not "no access": moving that chat's cursor would drop this
+  // pass's alerts for good on a database blip, so it is left for the next pass instead.
+  const access = new Map<string, Promise<boolean | "error">>();
   const accessOf = (wallet: string) => {
     let p = access.get(wallet);
     if (!p) {
-      p = hasAccess(wallet).catch(() => false);
+      p = hasAccess(wallet).catch((err: unknown) => {
+        logger.warn("telegram access lookup failed, leaving the chat for the next pass", {
+          error: String(err),
+        });
+        return "error" as const;
+      });
       access.set(wallet, p);
     }
     return p;
@@ -492,12 +543,19 @@ async function dispatchPass(
     await Promise.all(wallets.slice(i, i + ACCESS_CHECK_BATCH).map(accessOf));
   }
 
+  /** Chats whose Telegram picks just fell back to the top models, or came back. */
+  const picksNotices: { chat: ChatRow; fellBack: boolean }[] = [];
   // Chats with nothing to send this pass only need their cursor moved; one write for all of them.
   const caughtUp: string[] = [];
   // Each chat's queue, then the sends interleaved across chats under the spacing rules.
   const queues: { chat: ChatRow; pending: Pending[]; nextAt: number }[] = [];
   for (const chat of chats) {
-    if (!(await accessOf(chat.user.walletAddress))) {
+    const allowed = await accessOf(chat.user.walletAddress);
+    if (allowed === "error") {
+      summary.accessErrors += 1;
+      continue;
+    }
+    if (!allowed) {
       // No access, no real-time alerts (guests and lapsed subscriptions). The cursor still moves,
       // so access coming back doesn't deliver a backlog.
       summary.skipped += 1;
@@ -508,19 +566,27 @@ async function dispatchPass(
     const callsOn = takesCalls(chat);
     let theirs: typeof calls = [];
     if (callsOn && state) {
-      const models = new Set(
-        resolveTelegramModels(
-          state,
-          {
-            model: chat.user.curatedModel,
-            models: chat.user.feedModels,
-            followBest: chat.user.followBestModel,
-            showModelAlerts: chat.user.showModelAlerts,
-          },
-          { sameAsFeed: chat.user.telegramSameAsFeed, models: chat.user.telegramModels },
-        ).models,
+      const resolved = resolveTelegramModels(
+        state,
+        {
+          model: chat.user.curatedModel,
+          models: chat.user.feedModels,
+          followBest: chat.user.followBestModel,
+          showModelAlerts: chat.user.showModelAlerts,
+        },
+        { sameAsFeed: chat.user.telegramSameAsFeed, models: chat.user.telegramModels },
       );
-      theirs = calls.filter((c) => c.model !== null && models.has(c.model));
+      // "High-conviction only": the tier's calls from any model on the roster, instead of the picks.
+      const feedCalls = resolveFeedCalls(state, resolved.models, chat.user.telegramHighConvictionOnly);
+      theirs = calls.filter((c) => isFeedCall(feedCalls, c));
+      // Its own picks, every one off the roster now: it gets the top models' calls instead, and
+      // is told so once (and again if it happens again after a pick came back).
+      const fellBack =
+        !chat.user.telegramHighConvictionOnly &&
+        !chat.user.telegramSameAsFeed &&
+        chat.user.telegramModels.length > 0 &&
+        resolved.followsDefault;
+      if (fellBack !== (chat.picksFallbackNoticedAt !== null)) picksNotices.push({ chat, fellBack });
     }
     const pending = buildPending(
       { ...chat, modelCalls: callsOn },
@@ -542,6 +608,7 @@ async function dispatchPass(
           {
             card: { ...pending[0]!.card, digest: pending.map((p) => p.card) } as DigestCard,
             tokenIds: pending.flatMap((p) => p.tokenIds),
+            sends: pending.flatMap((p) => p.sends),
             through,
           },
         ],
@@ -605,19 +672,13 @@ async function dispatchPass(
       if (isDigest(item.card)) summary.digests += 1;
       else summary.sent += 1;
       // Before the cursor: if the cursor write fails, the next pass re-reads these and skips them.
+      // One row per send, a re-alert included, with the alert it carried: what /alerts and
+      // /trenchboard credit and grade (apps/api/src/telegramBoards.ts).
+      const sentAt = new Date();
       await prisma.telegramAlertSent.createMany({
-        data: item.tokenIds.map((tokenId) => ({ chatId: q.chat.id, tokenId })),
+        data: item.sends.map((a) => ({ chatId: q.chat.id, sentAt, ...a })),
         skipDuplicates: true,
       });
-      const resent = item.tokenIds.filter((tokenId) => sentLongAgo.has(`${q.chat.id}:${tokenId}`));
-      if (resent.length > 0) {
-        // A re-alert: the row now dates from this send, which restarts the window and is the send
-        // /alerts and /trenchboard grade.
-        await prisma.telegramAlertSent.updateMany({
-          where: { chatId: q.chat.id, tokenId: { in: resent } },
-          data: { sentAt: new Date() },
-        });
-      }
       await prisma.telegramChat.updateMany({
         where: { id: q.chat.id, revokedAt: null },
         data: { sentThrough: item.through, lastSentAt: new Date(), lastError: null, failures: 0 },
@@ -735,6 +796,17 @@ async function dispatchPass(
     lastSendAt = now();
     launch(ready[0]!);
   }
+  // After the alerts, so the notice doesn't spend a group's send spacing ahead of them.
+  for (const { chat, fellBack } of picksNotices) {
+    if (fellBack) {
+      const sent = await api.sendMessage(chat.chatId, PICKS_FALLBACK_TEXT).catch(() => null);
+      if (!sent?.ok) continue; // Told on a later pass.
+    }
+    await prisma.telegramChat.updateMany({
+      where: { id: chat.id },
+      data: { picksFallbackNoticedAt: fellBack ? new Date() : null },
+    });
+  }
   // Keep the newest file_ids for the next passes (a token often comes back with another call).
   for (const url of [...knownPhotoIds.keys()].slice(
     0,
@@ -758,6 +830,11 @@ async function dispatchPass(
   }
   return summary;
 }
+
+/** Sent once when every model a chat's account picked for Telegram has left the roster. */
+export const PICKS_FALLBACK_TEXT =
+  "ℹ️ The models this account picked for Telegram are no longer running, so this chat now gets the " +
+  "<b>top models'</b> calls instead. Pick again under <b>Filters → Telegram alerts</b>.";
 
 type DigestCard = AlertCard & { digest: AlertCard[] };
 function isDigest(card: AlertCard): card is DigestCard {
