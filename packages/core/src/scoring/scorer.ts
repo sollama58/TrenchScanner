@@ -31,12 +31,15 @@ export interface ScoreWeights {
   narrative: number;
 }
 
-/** The hand-set starting weights (notes/token-score-review-2026-10-06.md). Sum to 1. */
+/**
+ * The hand-set starting weights (notes/token-score-review-2026-10-06.md), with the narrative part's
+ * 0.15 spread over the others since its weight went to 0 (scoreWeights.ts NARRATIVE_WEIGHT). Sum to 1.
+ */
 export const DEFAULT_SCORE_WEIGHTS: Readonly<ScoreWeights> = Object.freeze({
-  momentum: 0.45,
-  freshness: 0.3,
-  holderQuality: 0.1,
-  narrative: 0.15,
+  momentum: 0.53,
+  freshness: 0.35,
+  holderQuality: 0.12,
+  narrative: 0,
 });
 
 let activeWeights: ScoreWeights = { ...DEFAULT_SCORE_WEIGHTS };

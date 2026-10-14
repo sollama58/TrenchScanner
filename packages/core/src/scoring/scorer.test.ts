@@ -288,15 +288,16 @@ describe("scoreNarrative", () => {
     );
   });
 
-  it("feeds the composite through the narrative weight", () => {
-    const plain = scoreToken(baseToken({ ageMinutes: 3 }));
-    const strong = scoreToken(
-      baseToken({
-        ageMinutes: 3,
-        narrative: read({ referentConfidence: 0.9, referentSupport: ["name", "x"] }),
-      }),
+  it("is still scored but feeds the composite only through a nonzero narrative weight", () => {
+    const token = (narrative?: ReturnType<typeof read>) =>
+      baseToken({ ageMinutes: 3, ...(narrative ? { narrative } : {}) });
+    const strongRead = read({ referentConfidence: 0.9, referentSupport: ["name", "x"] });
+    // Weight 0 by default (user decision 2026-10-14): the part shows, the total ignores it.
+    expect(scoreToken(token(strongRead)).narrative).toBe(65);
+    expect(scoreToken(token(strongRead)).total).toBe(scoreToken(token()).total);
+    const weighted = { momentum: 0.45, freshness: 0.3, holderQuality: 0.1, narrative: 0.15 };
+    expect(scoreToken(token(strongRead), weighted).total).toBeGreaterThan(
+      scoreToken(token(), weighted).total,
     );
-    expect(strong.narrative).toBe(65);
-    expect(strong.total).toBeGreaterThan(plain.total);
   });
 });

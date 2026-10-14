@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { anchorForWeights, fitScoreWeights, rankAuc, type ScoreFitRow } from "./scoreWeights.js";
+import { anchorForWeights, fitScoreWeights, rankAuc, rankQuality, type ScoreFitRow } from "./scoreWeights.js";
 import {
   DEFAULT_SCORE_WEIGHTS,
   getScoreAnchor,
@@ -51,7 +51,7 @@ describe("fitScoreWeights", () => {
     expect(result.weights.momentum).toBeLessThan(DEFAULT_SCORE_WEIGHTS.momentum);
     // Half way, not all the way, to the fit.
     expect(result.weights.holderQuality).toBeLessThan(result.fitted!.holderQuality);
-    // Narrative is held while it is a constant; everything still sums to 1 with a floor per part.
+    // Narrative stays at its fixed weight; everything still sums to 1 with a floor per part.
     expect(result.weights.narrative).toBe(DEFAULT_SCORE_WEIGHTS.narrative);
     const w = result.weights;
     expect(w.momentum + w.freshness + w.holderQuality + w.narrative).toBeCloseTo(1, 6);
@@ -67,7 +67,7 @@ describe("fitScoreWeights", () => {
 
   it("keeps today's weights when a change wouldn't rank the newest rows better", () => {
     // Already all-in on the predictive part: any step can only match or lose.
-    const current = { momentum: 0.75, freshness: 0.05, holderQuality: 0.05, narrative: 0.15 };
+    const current = { momentum: 0.9, freshness: 0.05, holderQuality: 0.05, narrative: 0 };
     const result = fitScoreWeights(rows("momentum"), current);
     expect(result.adopted).toBe(false);
     expect(result.weights).toEqual(current);
@@ -91,6 +91,39 @@ function matchQuantile(rs: ScoreFitRow[], w: ScoreWeights, a: ScoreAnchor, p: nu
   return scores[Math.round((scores.length - 1) * p)]!;
 }
 
+describe("narrative weight", () => {
+  it("moves a stored narrative weight to 0 once, spread pro rata and rescaled", () => {
+    const rs = rows("freshness").map((r, i) => ({ ...r, narrative: 30 + (i % 41) }));
+    const live = { momentum: 0.19, freshness: 0.39, holderQuality: 0.27, narrative: 0.15 };
+    const today = { scale: 1.1, offset: -6 };
+    const result = fitScoreWeights(rs, live, today);
+    expect(result.adopted).toBe(true);
+    expect(result.weights).toEqual({ momentum: 0.22, freshness: 0.46, holderQuality: 0.32, narrative: 0 });
+    for (const p of [0.1, 0.9]) {
+      expect(matchQuantile(rs, result.weights, result.anchor, p)).toBeCloseTo(
+        matchQuantile(rs, live, today, p),
+        0,
+      );
+    }
+    // The next run fits as usual from there.
+    expect(fitScoreWeights(rs, result.weights, result.anchor).weights.narrative).toBe(0);
+  });
+});
+
+describe("rankQuality", () => {
+  it("judges decision moments on the 15-minute 2x alone", () => {
+    const rs = rows("momentum");
+    const onMomentum = { momentum: 0.9, freshness: 0.05, holderQuality: 0.05 };
+    const q = rankQuality(rs, onMomentum)!;
+    // Flipping every match's outcome, or every 4x/10x, changes nothing.
+    const noisy = rs.map((r) =>
+      r.population === "match" ? { ...r, win: !r.win } : { ...r, goal: !r.goal, tenX: !r.tenX },
+    );
+    expect(rankQuality(noisy, onMomentum)).toBe(q);
+    expect(q).toBeGreaterThan(0.6);
+  });
+});
+
 describe("score rescale on adoption", () => {
   it("keeps the matches' 10th and 90th percentiles where today's score has them", () => {
     const rs = rows("holderQuality");
@@ -107,7 +140,7 @@ describe("score rescale on adoption", () => {
   it("chains from today's rescale, not from the raw sum", () => {
     const rs = rows("freshness");
     const today = { scale: 1.2, offset: -8 };
-    const next = { momentum: 0.2, freshness: 0.5, holderQuality: 0.15, narrative: 0.15 };
+    const next = { momentum: 0.25, freshness: 0.55, holderQuality: 0.2, narrative: 0 };
     const anchor = anchorForWeights(rs, DEFAULT_SCORE_WEIGHTS, today, next)!;
     expect(matchQuantile(rs, next, anchor, 0.9)).toBeCloseTo(
       matchQuantile(rs, DEFAULT_SCORE_WEIGHTS, today, 0.9),
@@ -117,7 +150,7 @@ describe("score rescale on adoption", () => {
 
   it("keeps today's rescale when nothing is adopted, and refuses too few rows", () => {
     const today = { scale: 1.1, offset: 3 };
-    const current = { momentum: 0.75, freshness: 0.05, holderQuality: 0.05, narrative: 0.15 };
+    const current = { momentum: 0.9, freshness: 0.05, holderQuality: 0.05, narrative: 0 };
     expect(fitScoreWeights(rows("momentum"), current, today).anchor).toEqual(today);
     expect(anchorForWeights(rows("momentum", 100), current, today, DEFAULT_SCORE_WEIGHTS)).toBeNull();
   });
