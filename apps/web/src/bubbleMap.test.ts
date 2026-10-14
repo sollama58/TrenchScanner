@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  showsPct,
   bubbleNameLines,
   NAME_MAX_W,
   placeLabels,
@@ -490,5 +491,14 @@ describe("sideWord", () => {
   });
   it("says sides? for two or more", () => {
     expect(sideWord([n("kol"), n("a"), n("b")], g)).toBe("sides?");
+  });
+});
+
+describe("bubble % labels", () => {
+  it("label every holder down to 0.1% of supply", () => {
+    expect(showsPct(0.1)).toBe(true);
+    expect(showsPct(0.45)).toBe(true);
+    expect(showsPct(12)).toBe(true);
+    expect(showsPct(0.09)).toBe(false);
   });
 });

@@ -9725,6 +9725,9 @@ img.tm-avatar {
 .bm-same {
   cursor: default;
 }
+button.bm-same {
+  cursor: pointer;
+}
 .k-same {
   --mk: var(--ink-2);
 }
@@ -9945,6 +9948,40 @@ img.tm-avatar {
   font-size: 15px;
   font-weight: 700;
 }
+/* A group opened from the list under the map: the row spans the grid and lists its wallets. */
+.bm-clusters > li.bm-open {
+  grid-column: 1 / -1;
+}
+.about-body ol.bm-group-wallets,
+ol.bm-group-wallets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px;
+  margin: 6px 0 4px !important;
+  padding: 0 !important;
+  list-style: none;
+}
+.bm-group-wallets li {
+  margin: 0;
+}
+.bm-group-wallets button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+.bm-group-wallets button .num {
+  font-weight: 650;
+}
+.bm-group-funder button {
+  background: transparent;
+  border-style: dashed;
+}
 .bm-note {
   margin: 12px 0 0 !important;
 }
@@ -10011,6 +10048,10 @@ img.tm-avatar {
 }
 .bm-head h2:focus {
   outline: none;
+}
+/* The wallet modal's Search X link, drawn as the ghost buttons beside it. */
+.button.wm-x-search {
+  background: transparent;
 }
 
 /* Wallet detail modal (components/WalletModal.tsx): the bubble map's dialog and stat tiles, then

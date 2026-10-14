@@ -351,3 +351,14 @@ export const WalletIcon = (p: IconProps) => (
     <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" />
   </Svg>
 );
+
+/** X (formerly Twitter): its letter mark, filled, for the Search X button. */
+export const XLogoIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path
+      fill="currentColor"
+      stroke="none"
+      d="M18.24 2.25h3.31l-7.23 8.26 8.5 11.24h-6.65l-5.21-6.82-5.97 6.82H1.68l7.73-8.84L1.25 2.25h6.83l4.71 6.23zm-1.16 17.52h1.83L7.08 4.13H5.12z"
+    />
+  </Svg>
+);

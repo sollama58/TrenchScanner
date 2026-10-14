@@ -23,7 +23,12 @@ const STATS_HOURS = 24;
 /** This browser's "High conviction only" switch (the API takes it per request, not as a saved setting). */
 const HIGH_CONVICTION_KEY = "ts-feed-high-conviction";
 
+/** The "High conviction only" switch is hidden for now; flip this to bring it back. While hidden the
+ *  saved choice stays in storage but isn't applied, so nobody is stuck on a filter they can't see. */
+const SHOW_HIGH_CONVICTION = false;
+
 function readHighConviction(): boolean {
+  if (!SHOW_HIGH_CONVICTION) return false;
   try {
     return localStorage.getItem(HIGH_CONVICTION_KEY) === "1";
   } catch {
@@ -192,24 +197,26 @@ export function LiveTab({
               </span>
               Model alerts
             </button>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={highConviction}
-              className={`switch${highConviction ? " on" : ""}`}
-              disabled={!modelsOn}
-              onClick={toggleHighConviction}
-              title={
-                modelsOn
-                  ? "Show only the calls that cleared each model's high-conviction line, from every model, in place of the models you follow. Your filter's alerts still show."
-                  : "Turn on model alerts to narrow them to the high-conviction calls"
-              }
-            >
-              <span className="switch-track">
-                <span className="switch-thumb" />
-              </span>
-              High conviction only
-            </button>
+            {SHOW_HIGH_CONVICTION && (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={highConviction}
+                className={`switch${highConviction ? " on" : ""}`}
+                disabled={!modelsOn}
+                onClick={toggleHighConviction}
+                title={
+                  modelsOn
+                    ? "Show only the calls that cleared each model's high-conviction line, from every model, in place of the models you follow. Your filter's alerts still show."
+                    : "Turn on model alerts to narrow them to the high-conviction calls"
+                }
+              >
+                <span className="switch-track">
+                  <span className="switch-thumb" />
+                </span>
+                High conviction only
+              </button>
+            )}
             {lb && <ModelPicker board={lb} disabled={!modelsOn || highConviction} onChanged={changed} />}
             <span className={`live-dot ${streamLive ? "on" : ""}`}>{streamLive ? "Live" : "Polling"}</span>
             {toggleError && <small className="error">Couldn&apos;t switch model alerts: {toggleError}</small>}

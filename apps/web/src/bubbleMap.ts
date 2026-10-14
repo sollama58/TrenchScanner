@@ -243,6 +243,14 @@ const MIN_FLAGGED_HELD_PCT = 0.5;
 const MIN_REST_PCT = 0.2;
 
 /** A bubble's radius in map units from its share of supply: area grows with the share. */
+/** The smallest share of supply whose bubble still carries its amount (user ask 2026-10-14). */
+export const MIN_LABEL_PCT = 0.1;
+
+/** Whether a holder's bubble shows its % of supply: down to MIN_LABEL_PCT, in smaller type under 1%. */
+export function showsPct(pct: number): boolean {
+  return pct >= MIN_LABEL_PCT - 1e-9;
+}
+
 export function radiusFor(pct: number): number {
   return 9 + 8.5 * Math.sqrt(Math.max(0, pct));
 }

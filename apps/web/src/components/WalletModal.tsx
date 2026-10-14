@@ -2,11 +2,20 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, lookupRequired } from "../api";
 import { cachedGet } from "../cache";
 import { ago, shortAddress, signedPct, usd } from "../format";
-import { closeWallet, openWallet, WALLET_LINKS, walletLink } from "../walletModal";
+import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
 import { KolSideWallets } from "../tabs/SideWalletChecker";
-import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, LinkIcon, LockIcon, WalletIcon } from "./Icons";
+import {
+  CheckIcon,
+  CloseIcon,
+  CopyIcon,
+  ExternalIcon,
+  LinkIcon,
+  LockIcon,
+  WalletIcon,
+  XLogoIcon,
+} from "./Icons";
 
 /** Mirrors apps/api/src/walletProfile.ts WalletProfile. */
 export interface WalletProfile {
@@ -159,7 +168,18 @@ function Head({ wallet, actions }: { wallet: string; actions: React.ReactNode })
           {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
         </button>
       </div>
-      <div className="bm-actions">{actions}</div>
+      <div className="bm-actions">
+        <a
+          className="button ghost share-btn wm-x-search"
+          href={xSearchLink(wallet)}
+          target="_blank"
+          rel="noreferrer"
+          title="Search X for this address, top posts first"
+        >
+          <XLogoIcon size={13} /> Search X
+        </a>
+        {actions}
+      </div>
     </header>
   );
 }

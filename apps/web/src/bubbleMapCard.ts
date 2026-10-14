@@ -14,6 +14,7 @@ import {
   sideMembers,
   sideWord,
   bubbleNameLines,
+  showsPct,
   type SideGroup,
   type FlagsRead,
   type BubbleGraph,
@@ -562,18 +563,21 @@ export async function renderBubbleCard(
     // The % and, under it, the wallet's name, sized and wrapped as the dialog does (bubbleNameLines).
     const named = n.wallet ? names[n.wallet] : undefined;
     const fit = named ? bubbleNameLines(n.r, named.name, isUsername(named)) : null;
-    const pctSize = Math.max(12, Math.min(28, r * 0.42));
+    // Every bubble down to 0.1% carries its amount, smaller under 1%, as on the map (showsPct).
+    const showPct = showsPct(n.pct);
+    const pctSize = n.pct < 1 ? Math.max(10, Math.min(13, r * 0.4)) : Math.max(12, Math.min(28, r * 0.42));
     const nameSize = fit ? Math.max(11, fit.size * scale) : 0;
     const lineH = nameSize * 1.15;
     const pctY = fit ? cy - (fit.lines.length * lineH) / 2 - 1 : cy + 1;
-    if (r >= 22) {
+    if (showPct) {
       ctx.fillStyle = INK;
       ctx.font = `750 ${pctSize}px ${FONT}`;
       ctx.fillText(pctText(n.pct), cx, pctY);
     }
     if (fit && named) {
-      const nameY =
-        r >= 22 ? pctY + pctSize * 0.62 + nameSize * 0.62 : cy - ((fit.lines.length - 1) * lineH) / 2;
+      const nameY = showPct
+        ? pctY + pctSize * 0.62 + nameSize * 0.62
+        : cy - ((fit.lines.length - 1) * lineH) / 2;
       ctx.font = `650 ${nameSize}px ${FONT}`;
       const text = fit.lines;
       const w = Math.max(...text.map((l) => ctx.measureText(l).width));
