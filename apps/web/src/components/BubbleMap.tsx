@@ -155,7 +155,7 @@ function useCexToggle(graph: BubbleGraph | null): { showCex: boolean; setCexOn: 
 }
 
 /**
- * KOLs' possible side wallets among the holders (the Side Wallet Checker's 24-hour matches), and
+ * KOLs' possible side wallets among the holders (the Side Wallet Checker's recent matches), and
  * whether their ties show: on by default, switchable like the exchange ties (user ask 2026-10-14).
  * Held above the map so its share image draws and lists them too. Drawn only: never in the Linked
  * count, the safety screen or the models.
@@ -561,7 +561,7 @@ function MapView({
           {graph.sameTimeGroups.length > 0 &&
             " Holders whose wallets were funded within the same minute, whoever paid, share a dotted ring and line in their group's colour."}
           {showSides &&
-            " A dotted gold line ties a holder to a KOL it bought alongside on more than 90% of the KOL's coins over the last day (more than 25 coins), or on every one of at least 10: a possible side wallet, not confirmed."}
+            " A dotted gold line ties a holder to a KOL it bought alongside on every one of the KOL's coins over the last 24 hours (10 or more), 90% over 36 hours (25 or more) or 80% over 48 hours (50 or more): a possible side wallet, not confirmed."}
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
           {graph.nodes.some((n) => n.rank !== undefined) &&

@@ -65,13 +65,12 @@ describe("walletLabels", () => {
 
   it("labels a KOL's possible side wallet with the share of trades it shared", () => {
     const sides = [
-      { kolWallet: BINANCE, kolName: "Ansem", pct: 93.4, shared: 28, kolCoins: 30 },
-      { kolWallet: W, kolName: null, pct: 91, shared: 30, kolCoins: 33 },
+      { kolWallet: BINANCE, kolName: "Ansem", pct: 93.4, shared: 28, kolCoins: 30, hours: 36 },
+      { kolWallet: W, kolName: null, pct: 91, shared: 30, kolCoins: 33, hours: 36 },
     ];
-    expect(walletLabels({ ...base, possibleSides: sides }).map((l) => l.text)).toEqual([
-      "Ansem Possible Side (93%)",
-      "Wa11…1111 Possible Side (91%)",
-    ]);
+    const labels = walletLabels({ ...base, possibleSides: sides });
+    expect(labels.map((l) => l.text)).toEqual(["Ansem Possible Side (93%)", "Wa11…1111 Possible Side (91%)"]);
+    expect(labels[0]!.detail).toContain("In the last 36 hours it bought 28 of the KOL's 30");
   });
 
   it("marks a fresh wallet only when its whole history was read", () => {
