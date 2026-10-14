@@ -31,8 +31,9 @@ function bucketLabel(at: string, bucketMinutes: number): string {
  * the last hour, 6 hours, day and week, and the selected window's bars. Mounted only while the
  * panel is open, so nobody's closed panel polls for it.
  */
-export function FeedReturns({ pollKey }: { pollKey: string }) {
-  const { data, error } = usePolling<FeedReturnsData>("/matches/returns", 60_000, pollKey);
+export function FeedReturns({ pollKey, highConviction }: { pollKey: string; highConviction?: boolean }) {
+  const path = highConviction ? "/matches/returns?highConviction=1" : "/matches/returns";
+  const { data, error } = usePolling<FeedReturnsData>(path, 60_000, pollKey);
   const [hours, setHours] = useState(24);
   const [hover, setHover] = useState<number | null>(null);
   // The shared row's token, not its rank: a poll can re-rank the list under an open preview.
