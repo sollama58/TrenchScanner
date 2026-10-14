@@ -774,9 +774,18 @@ export async function buildHitRateReport(
                                               WHERE o."id" = m."candidateOutcomeId"
                                                 AND o."finalized24hAt" IS NOT NULL
                                                 AND o."finalizedAt" IS NULL))) AS ungradable
-      FROM "Match" m
+      FROM (
+        SELECT "filterId", "matchedAt", "candidateOutcomeId", "hit2xIn1h", "hit4xIn1h", "hit10xIn1h", "disqualified"
+        FROM "Match"
+        WHERE "matchedAt" >= ${since} AND "matchedAt" < ${until}
+        -- Matches older than MATCH_ARCHIVE_DAYS were moved here by the cleanup, verdicts included;
+        -- this report reaches back MAX_WINDOW_DAYS.
+        UNION ALL
+        SELECT "filterId", "matchedAt", "candidateOutcomeId", "hit2xIn1h", "hit4xIn1h", "hit10xIn1h", "disqualified"
+        FROM "MatchArchive"
+        WHERE "matchedAt" >= ${since} AND "matchedAt" < ${until}
+      ) m
       JOIN "UserFilter" f ON f."id" = m."filterId"
-      WHERE m."matchedAt" >= ${since} AND m."matchedAt" < ${until}
       GROUP BY 1, 2`;
   });
 

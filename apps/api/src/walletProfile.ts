@@ -3,6 +3,7 @@ import { loadPossibleSides, possibleSideText, type PossibleSide } from "./possib
 import {
   prisma,
   isHotFunder,
+  lastRebuiltAt,
   LAUNCH_SNIPER,
   KNOWN_EXCHANGE_WALLETS,
   RISKY_WALLET_SCORE,
@@ -370,7 +371,12 @@ export async function loadWalletProfile(
   const identityRead = identity ? identity.labels(wallet).catch(() => []) : Promise.resolve([]);
   const sidesRead = loadPossibleSides([wallet]).catch(() => ({}) as Record<string, PossibleSide[]>);
   const [risk, funderRow, activityCache, holdings, activity, fundedRows, overview, kol] = await Promise.all([
-    prisma.walletRisk.findUnique({ where: { wallet } }),
+    // computedAt shown as the last rebuild: the job rewrites only rows whose figures changed.
+    prisma.walletRisk
+      .findUnique({ where: { wallet } })
+      .then(async (r) =>
+        r ? { ...r, computedAt: (await lastRebuiltAt("wallet-risk", r.computedAt))! } : null,
+      ),
     prisma.walletFunder.findUnique({ where: { wallet } }),
     prisma.walletActivityCache.findUnique({ where: { address: wallet } }),
     prisma.walletHoldingsCache.findUnique({ where: { address: wallet } }),

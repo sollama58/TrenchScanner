@@ -373,7 +373,11 @@ const envSchema = z.object({
   // and a few seconds a minute, well inside DexScreener's limits.
   // Retention is deliberately much longer than SNAPSHOT_RETENTION_DAYS - these rows ARE the
   // training set, they carry their own copy of the features precisely so snapshots can be pruned
-  // on the normal horizon, and 90 days keeps the 60-day training window plus room to look back (Match and CuratedAlert keep their own outcome copies).
+  // on the normal horizon (Match and CuratedAlert keep their own outcome copies). 60 days (90
+  // until 2026-10-14, user decision P21): training reads 21 days, the exam and calibration inside
+  // that, the Lighthouse 72 hours; features grew to ~3 KB a row, so 90 days headed for ~4 GB.
+  // What a shorter horizon loses: research exports and hit-rate reports over 60-180 days, and the
+  // curated panel's base rate, which pools every event row still kept.
   CANDIDATE_SAMPLE_SPACING_MINUTES: z.coerce.number().positive().default(60),
   // The "looks ready" sample (CandidateOutcome.sampleKind = "event"): at most one per token per
   // this window, taken the first scan the token passes passesEventPreGate. The curators decide
@@ -381,13 +385,21 @@ const envSchema = z.object({
   CANDIDATE_EVENT_SPACING_MINUTES: z.coerce.number().positive().default(60),
   CANDIDATE_WATCH_INTERVAL_MINUTES: z.coerce.number().min(0.25).default(1),
   CANDIDATE_WATCH_MAX_BATCH: z.coerce.number().int().positive().default(2000),
-  CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(90),
+  CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(60),
   // Graded "match" rows (the anchors user-filter alerts are graded from) are kept this long instead:
   // their verdict is copied onto the Match rows when the window closes, they never train a model,
   // and at ~6k rows (~28MB) a day they were 40% of the table's growth. 0 keeps them on the
   // CANDIDATE_OUTCOME_RETENTION_DAYS horizon.
   // 7 days: user decision 2026-10-05.
   MATCH_OUTCOME_RETENTION_DAYS: z.coerce.number().nonnegative().default(7),
+  // Match rows older than this many days are moved to MatchArchive by the nightly cleanup (the
+  // "matchArchive" stage; full audit 2026-10-14 F11, user decision P21): Match was never pruned,
+  // and every row kept its alert-time snapshot and its Token out of the sweeps. The archive keeps
+  // the verdict and peak columns the Leaderboard and the hit-rate report read; the Live feed's
+  // history pages, which need the card's snapshot, end at this age. Never less than
+  // SNAPSHOT_RETENTION_DAYS (the stage waits that long): a match's peak is tracked from its
+  // token's snapshots until then. 0 keeps every match in Match.
+  MATCH_ARCHIVE_DAYS: z.coerce.number().nonnegative().default(60),
 
   // Curated Alerts feed (see packages/core/src/curation/curator.ts). CURATED_MIN_SCORE is the
   // heuristic curator's composite-score floor - env-tunable so emission volume can be steered in

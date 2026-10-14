@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "./db.js";
 import {
   HEARTBEAT_JOB_ROLE,
+  lastRebuiltAt,
   recordHeartbeat,
   recordRunStart,
   runningSinceFrom,
@@ -72,6 +73,21 @@ describe.skipIf(!dbAvailable)("recordRunStart", () => {
     await prisma.systemHeartbeat.deleteMany({ where: { job } });
     await recordRunStart(job);
     expect(await prisma.systemHeartbeat.findUnique({ where: { job } })).toBeNull();
+  });
+
+  it("reads a rebuilt table's last rebuild as the later of a row's stamp and the last good run", async () => {
+    await prisma.systemHeartbeat.deleteMany({ where: { job } });
+    const row = new Date(Date.now() - 3_600_000);
+    // No heartbeat yet: the row's own stamp.
+    expect(await lastRebuiltAt(job, row)).toEqual(row);
+    expect(await lastRebuiltAt(job, null)).toBeNull();
+    // A later run that changed nothing: the run.
+    await recordHeartbeat(job, { success: true });
+    const ran = (await prisma.systemHeartbeat.findUniqueOrThrow({ where: { job } })).lastSuccessAt!;
+    expect(await lastRebuiltAt(job, row)).toEqual(ran);
+    // A row stamped after the heartbeat (the run that wrote it hasn't recorded yet): the row.
+    const newer = new Date(ran.getTime() + 60_000);
+    expect(await lastRebuiltAt(job, newer)).toEqual(newer);
   });
 });
 

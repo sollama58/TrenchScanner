@@ -300,6 +300,24 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
         candidateOutcomeId: unfilled,
       },
     });
+    // And a win the cleanup has since moved to MatchArchive (past MATCH_ARCHIVE_DAYS).
+    await prisma.matchArchive.create({
+      data: {
+        id: `${TAG}-archived`,
+        userId,
+        filterId: filter.id,
+        tokenId,
+        mintAddress: `${TAG}-mint`,
+        snapshotId: snapshot.id,
+        snapshotMarketCapUsd: 50_000,
+        matchedAt: at(33),
+        score: 60,
+        deliveredDashboard: true,
+        hit2xIn1h: true,
+        hit4xIn1h: false,
+        disqualified: false,
+      },
+    });
   });
 
   afterAll(async () => {
@@ -353,14 +371,14 @@ describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {
     expect(body.aiReviewer.probability2xBands.map((b: { band: number }) => b.band)).toEqual([20, 70, 80]);
 
     expect(body.filterMatches.total).toMatchObject({
-      calls: 3,
-      graded: 2,
-      won2x: 1,
+      calls: 4,
+      graded: 3,
+      won2x: 2,
       pending: 0,
       ungradable: 1,
     });
     expect(body.filterMatches.byFilter).toEqual([
-      expect.objectContaining({ name: `${TAG}-filter`, calls: 3 }),
+      expect.objectContaining({ name: `${TAG}-filter`, calls: 4 }),
     ]);
 
     expect(body.samples.byKind).toEqual(
