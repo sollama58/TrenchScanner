@@ -199,6 +199,18 @@ function mergeLiveLaunches(
         ? (pair.marketCapUsd / pair.priceUsd) * reading.token.priceUsd
         : reading.token.marketCapUsd;
     marketData[i] = { ...pair, priceUsd: reading.token.priceUsd, marketCapUsd };
+    // A pair quoted in another coin carries no USD volume or price change: the live reading's stand in.
+    if (pair.volume1hUsd === undefined) {
+      const r = reading.token;
+      marketData[i] = {
+        ...marketData[i]!,
+        volume5mUsd: r.volume5mUsd,
+        volume1hUsd: r.volume1hUsd,
+        volume24hUsd: r.volume24hUsd,
+        priceChange5mPct: pair.priceChange5mPct ?? r.priceChange5mPct,
+        priceChange1hPct: pair.priceChange1hPct ?? r.priceChange1hPct,
+      };
+    }
     seenAt.set(pair.mintAddress, reading.at);
   }
   for (const [mint, reading] of live) {

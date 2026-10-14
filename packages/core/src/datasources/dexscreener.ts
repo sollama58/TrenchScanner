@@ -188,6 +188,10 @@ export class DexScreenerClient {
    * found none - see repairFrozenCurves.
    */
   private readonly curveRechecks = new Map<string, { at: number; misses: number }>();
+  /** Quote tokens' USD prices by mint, with when they were read (0 = none found) - see priceInQuoteToken. */
+  private readonly quoteUsd = new Map<string, { usd: number; at: number }>();
+  /** Mints last priced through their quote coin, so with no USD volume yet - see fillFromFallback. */
+  private readonly quotePriced = new Set<string>();
 
   constructor(options: DexScreenerClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://api.dexscreener.com";
@@ -383,6 +387,10 @@ export class DexScreenerClient {
     const ask = [
       ...results.filter((t) => t.priceUsd <= 0 && t.marketCapUsd <= 0).map((t) => t.mintAddress),
       ...unlisted.filter((m) => answered.has(m) && !listed.has(m)),
+      // Priced through its quote coin (priceInQuoteToken), but with no volume or price change.
+      ...results
+        .filter((t) => this.quotePriced.has(t.mintAddress) && t.volume1hUsd === undefined)
+        .map((t) => t.mintAddress),
     ].slice(0, BATCH_SIZE);
     if (ask.length === 0 || (remainingMs !== undefined && remainingMs <= 0)) return results;
     const priced = await fallback
@@ -401,7 +409,18 @@ export class DexScreenerClient {
     // Other jobs reading these mints in the next few seconds get the priced answer too.
     this.rememberQuotes(priced, new Date());
     const byMint = new Map(results.map((t) => [t.mintAddress, t]));
-    for (const t of priced) byMint.set(t.mintAddress, { ...t });
+    for (const t of priced) {
+      // GeckoTerminal has no socials, logo or graduation time; DexScreener's pair keeps them.
+      const dex = byMint.get(t.mintAddress);
+      byMint.set(t.mintAddress, {
+        ...t,
+        hasTwitter: t.hasTwitter ?? dex?.hasTwitter,
+        hasTelegram: t.hasTelegram ?? dex?.hasTelegram,
+        hasWebsite: t.hasWebsite ?? dex?.hasWebsite,
+        imageUrl: t.imageUrl ?? dex?.imageUrl,
+        graduatedAt: t.graduatedAt ?? dex?.graduatedAt,
+      });
+    }
     return [...byMint.values()];
   }
 
@@ -501,6 +520,90 @@ export class DexScreenerClient {
     }
   }
 
+  /**
+   * Prices the pairs DexScreener answered without a USD price because they are quoted in another
+   * coin rather than SOL or a dollar: Pump.fun lets a launch pair its curve with any coin (PUMP,
+   * SPYx, another launch), and DexScreener then sends priceNative alone - no priceUsd, market cap,
+   * liquidity or volume. Every lookup but the scan's band refresh used to read such a coin as $0
+   * (the outcome watcher, live prices, fast-match, peaks): 301 of the 7,408 coins graded in the week
+   * to 2026-10-14. The price is priceNative times the quote coin's own USD price; the cap is that
+   * on Pump.fun's fixed 1B supply. Off Pump.fun the supply is unknown, so the cap stays 0 for the
+   * fallback to fill. Never throws: a quote that can't be priced leaves its pairs as they were.
+   */
+  private async priceInQuoteToken(
+    pairs: DexScreenerPair[],
+    tokens: CandidateToken[],
+    gate: { acquire: () => Promise<void>; throttled: (delayMs: number) => void },
+  ): Promise<CandidateToken[]> {
+    const byPair = new Map(pairs.map((p) => [p.pairAddress, p]));
+    const unpriced = tokens.flatMap((t) => {
+      const pair = t.priceUsd > 0 || !t.pairAddress ? undefined : byPair.get(t.pairAddress);
+      const quote = pair?.quoteToken?.address;
+      const native = Number(pair?.priceNative);
+      if (!quote || USD_PRICED_QUOTES.has(quote) || !(native > 0)) return [];
+      return [{ token: t, quote, native }];
+    });
+    if (unpriced.length === 0) return tokens;
+    const quoteUsd = await this.quoteUsdPrices([...new Set(unpriced.map((u) => u.quote))], gate);
+    const priced = new Map<string, CandidateToken>();
+    for (const { token, quote, native } of unpriced) {
+      const usd = quoteUsd.get(quote);
+      if (!usd) continue;
+      const priceUsd = native * usd;
+      const onPump = token.dexId === "pumpfun" || token.dexId === "pumpswap";
+      if (this.quotePriced.size >= QUOTE_PRICE_MAX_MINTS) this.quotePriced.clear();
+      this.quotePriced.add(token.mintAddress);
+      priced.set(token.mintAddress, {
+        ...token,
+        priceUsd,
+        marketCapUsd: onPump ? priceUsd * PUMP_FUN_SUPPLY : token.marketCapUsd,
+      });
+    }
+    return tokens.map((t) => priced.get(t.mintAddress) ?? t);
+  }
+
+  /**
+   * USD prices of quote coins, each off its deepest pair that has one. Reused for
+   * QUOTE_PRICE_TTL_MS: a handful of coins (PUMP, SPYx) quote most of these pairs, so a lookup
+   * rarely asks for one. A coin with no USD price is remembered as such for the same time.
+   */
+  private async quoteUsdPrices(
+    mints: string[],
+    gate: { acquire: () => Promise<void>; throttled: (delayMs: number) => void },
+  ): Promise<Map<string, number>> {
+    const now = Date.now();
+    const out = new Map<string, number>();
+    const ask: string[] = [];
+    for (const mint of mints) {
+      const known = this.quoteUsd.get(mint);
+      if (known && now - known.at < QUOTE_PRICE_TTL_MS) {
+        if (known.usd > 0) out.set(mint, known.usd);
+      } else ask.push(mint);
+    }
+    if (ask.length === 0) return out;
+    try {
+      const pairs = await fetchJson<DexScreenerPair[]>(
+        `${this.baseUrl}/tokens/v1/${SOLANA_CHAIN_ID}/${ask.slice(0, BATCH_SIZE).join(",")}`,
+        { timeoutMs: 5000, retries: 0, gate },
+      );
+      if (this.quoteUsd.size > QUOTE_PRICE_MAX_MINTS) this.quoteUsd.clear();
+      for (const mint of ask.slice(0, BATCH_SIZE)) {
+        let best: DexScreenerPair | undefined;
+        for (const p of pairs ?? []) {
+          if (p.chainId !== SOLANA_CHAIN_ID || p.baseToken?.address !== mint || !(Number(p.priceUsd) > 0))
+            continue;
+          if (!best || (p.liquidity?.usd ?? 0) > (best.liquidity?.usd ?? 0)) best = p;
+        }
+        const usd = best ? Number(best.priceUsd) : 0;
+        this.quoteUsd.set(mint, { usd, at: now });
+        if (usd > 0) out.set(mint, usd);
+      }
+    } catch (err) {
+      logger.warn("quote-token price lookup failed", { error: String(err) });
+    }
+    return out;
+  }
+
   /** Every pair DexScreener lists for one mint as its base token (/token-pairs/v1). */
   private async tokenPairs(
     mintAddress: string,
@@ -584,9 +687,13 @@ export class DexScreenerClient {
         const answered = new Date();
         for (const mint of chunk) settled.add(mint);
         for (const mint of chunk) answeredOut?.add(mint);
-        const tokens = await this.repairFrozenCurves(
+        const tokens = await this.priceInQuoteToken(
           pairs ?? [],
-          this.selectCanonicalPairs(pairs ?? [], new Set(chunk)),
+          await this.repairFrozenCurves(
+            pairs ?? [],
+            this.selectCanonicalPairs(pairs ?? [], new Set(chunk)),
+            gate,
+          ),
           gate,
         );
         if (seenAt) for (const t of tokens) seenAt.set(t.mintAddress, answered);
@@ -729,6 +836,18 @@ export function pumpSwapPoolCreatedAt(
 }
 
 const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
+/** Quotes DexScreener prices a pair in USD against: SOL, USDC and USDT. */
+const USD_PRICED_QUOTES = new Set([
+  WRAPPED_SOL_MINT,
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+]);
+/** Every Pump.fun mint's supply: its market cap is its price on this many tokens. */
+const PUMP_FUN_SUPPLY = 1_000_000_000;
+/** How long a quote coin's USD price is reused - see quoteUsdPrices. */
+const QUOTE_PRICE_TTL_MS = 30_000;
+/** Quote coins' prices remembered at once. */
+const QUOTE_PRICE_MAX_MINTS = 2_000;
 /**
  * A Pump.fun curve at or above this price (SOL per token) is at its graduation price or within a
  * few percent of it: a completed curve stops at about 4.11e-7 (85 SOL raised), and DexScreener's
@@ -765,14 +884,34 @@ const MIN_DRAINED_PUMPSWAP_LIQUIDITY_USD = 250;
  *  - otherwise (a non-Pump.fun token, or an older Raydium graduation) the deepest real pool,
  *    falling back to the deepest pair of any size.
  */
-export function pickCanonicalPair<P extends Pick<DexScreenerPair, "dexId" | "liquidity" | "volume">>(
-  pairs: P[],
-): P {
+export function pickCanonicalPair<
+  P extends Pick<DexScreenerPair, "dexId" | "liquidity" | "volume"> &
+    Partial<Pick<DexScreenerPair, "txns" | "quoteToken">>,
+>(pairs: P[]): P {
   const liq = (p: P) => p.liquidity?.usd ?? 0;
   const deepest = (list: P[]) => list.reduce((best, p) => (liq(p) > liq(best) ? p : best));
+  // A pair quoted in another coin reports no USD volume (0) while it trades, so its trade count
+  // says whether it is active.
+  const trades1h = (p: P) => (p.txns?.h1?.buys ?? 0) + (p.txns?.h1?.sells ?? 0);
+  const active = (p: P) => (p.volume?.h1 ?? 0) > 0 || trades1h(p) > 0;
   const pools = pairs.filter((p) => p.dexId !== "pumpfun" && liq(p) >= MIN_CANONICAL_POOL_LIQUIDITY_USD);
   if (pools.some((p) => p.dexId === "pumpswap")) return deepest(pools);
-  const curve = pairs.find((p) => p.dexId === "pumpfun" && (p.volume?.h1 ?? 0) > 0);
+  // A curve quoted in another coin graduates into a pumpswap pool quoted in that coin, which
+  // DexScreener can't value either (no liquidity figure): once it trades, it is the market.
+  const quote = (p: P) => p.quoteToken?.address;
+  const tokenQuotedPools = pairs.filter(
+    (p) =>
+      p.dexId === "pumpswap" &&
+      p.liquidity?.usd === undefined &&
+      trades1h(p) > 0 &&
+      quote(p) !== undefined &&
+      !USD_PRICED_QUOTES.has(quote(p)!) &&
+      pairs.some((c) => c.dexId === "pumpfun" && quote(c) === quote(p)),
+  );
+  if (tokenQuotedPools.length > 0) {
+    return tokenQuotedPools.reduce((best, p) => (trades1h(p) > trades1h(best) ? p : best));
+  }
+  const curve = pairs.find((p) => p.dexId === "pumpfun" && active(p));
   if (curve) return curve;
   // A quiet curve beside a drained pumpswap pool is a graduated coin: DexScreener keeps listing the
   // old curve frozen at the graduation price, so it must not win. A dust pool is still no signal.
@@ -788,6 +927,9 @@ export function pickCanonicalPair<P extends Pick<DexScreenerPair, "dexId" | "liq
 
 function toCandidateToken(pair: DexScreenerPair): CandidateToken {
   const socials = pair.info?.socials ?? [];
+  // A pair DexScreener can't price in USD (one quoted in another coin) reports its USD volume as
+  // 0 however much it trades: unknown, not a dead coin.
+  const usd = pair.priceUsd === undefined ? undefined : pair.volume;
   return {
     mintAddress: pair.baseToken.address,
     symbol: pair.baseToken.symbol,
@@ -796,15 +938,15 @@ function toCandidateToken(pair: DexScreenerPair): CandidateToken {
     priceUsd: Number(pair.priceUsd ?? 0),
     marketCapUsd: pair.marketCap ?? pair.fdv ?? 0,
     liquidityUsd: pair.liquidity?.usd,
-    volume24hUsd: pair.volume?.h24,
+    volume24hUsd: usd?.h24,
     buys24h: pair.txns?.h24?.buys,
     sells24h: pair.txns?.h24?.sells,
     priceChange5mPct: pair.priceChange?.m5,
     priceChange1hPct: pair.priceChange?.h1,
     priceChange6hPct: pair.priceChange?.h6,
     priceChange24hPct: pair.priceChange?.h24,
-    volume5mUsd: pair.volume?.m5,
-    volume1hUsd: pair.volume?.h1,
+    volume5mUsd: usd?.m5,
+    volume1hUsd: usd?.h1,
     buys5m: pair.txns?.m5?.buys,
     sells5m: pair.txns?.m5?.sells,
     buys1h: pair.txns?.h1?.buys,
