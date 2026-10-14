@@ -167,8 +167,8 @@ export const FRESH_TOP_HOLDER_FEATURES = ["freshTopHolderCount", "freshTopHolder
 /**
  * Added 2026-10-14 (user ask): KOL Bundled %, the share of supply KOLs hold through bundles among
  * the top holders (core's wallets/kolBundled.ts). Null until the linked reading lands and the KOL
- * roster loads, and on every row banked before. Recorded only (RETIRED_LEARNER_INPUTS) until it
- * holds up on later days.
+ * roster loads, and on every row banked before. The learners read it from 2026-10-14 (user
+ * decision); the trainer's missing indicator covers the rows without it.
  */
 export const KOL_BUNDLED_FEATURES = ["kolBundledPct"] as const;
 
@@ -518,8 +518,6 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // first, on the same terms.
   ...HOLDER_SET_FEATURES,
   ...FRESH_TOP_HOLDER_FEATURES,
-  // KOL Bundled % (added 2026-10-14): recorded first, on the same terms.
-  ...KOL_BUNDLED_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
