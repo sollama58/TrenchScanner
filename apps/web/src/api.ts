@@ -1351,7 +1351,7 @@ export interface FeedAppearance {
   lighthouseTab: boolean;
   /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
   outline: string | null;
-  /** The outline turns green on a pass and red on a fail once graded (absent from older API builds: on). */
+  /** Graded cards are marked green on a pass and red on a fail (absent from older API builds: off). */
   outlineResult: boolean;
   /**
    * Hide Live feed alerts whose current market cap is below hideBelowMcapUsd. Display only: stats
