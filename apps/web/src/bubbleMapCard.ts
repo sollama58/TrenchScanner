@@ -1,5 +1,15 @@
 import type { Token } from "./api";
-import { clusterHalos, graphBounds, HALO_PAD, nodeSlot, sameTimeSlot, type BubbleGraph } from "./bubbleMap";
+import {
+  centreOf,
+  clusterHalos,
+  graphBounds,
+  HALO_PAD,
+  nodeSlot,
+  placeLabels,
+  sameTimeSlot,
+  type BubbleGraph,
+  type MapNode,
+} from "./bubbleMap";
 import { shortAddress, tokenLabel } from "./format";
 import { walletText, type WalletNames } from "./walletNames";
 import {
@@ -174,7 +184,26 @@ export async function renderBubbleCard(
 
   // Right: the map, fitted into its box.
   const area = { x: PAD + leftW + 40, y: 122, w: CARD_W - PAD - (PAD + leftW + 40), h: CARD_H - 112 - 122 };
-  const box = graphBounds(graph, 10);
+  // Each same-minute group's pill, a hub tied to its wallets by solid lines, as the dialog draws it.
+  const hubs = graph.sameTimeGroups.flatMap((g, i) => {
+    const members = graph.nodes.filter((n): n is MapNode => n.kind === "holder" && n.sameTime === i);
+    if (members.length === 0) return [];
+    const text = `Funded together ${new Date(g.atMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+    return [
+      {
+        id: `same:${i}`,
+        ...centreOf(members),
+        r: 0,
+        w: text.length * 5.6 + 14,
+        h: 16,
+        text,
+        colour: slotColour(sameTimeSlot(graph, i)),
+        members,
+      },
+    ];
+  });
+  const placed = placeLabels(graph, hubs);
+  const box = graphBounds(graph, 10, placed);
   const scale = Math.min(area.w / box.w, area.h / box.h, 2.4);
   const ox = area.x + (area.w - box.w * scale) / 2 - box.x * scale;
   const oy = area.y + (area.h - box.h * scale) / 2 - box.y * scale;
@@ -233,20 +262,20 @@ export async function renderBubbleCard(
     ctx.stroke();
   }
 
-  // Same-minute ties: dotted in the group's colour, from each holder to its group's first-funded one.
-  ctx.lineWidth = Math.max(2.6, 2.6 * scale);
-  ctx.setLineDash([0.1, 7]);
-  for (const l of graph.sameTimeLinks) {
-    const a = index.get(l.from);
-    const b = index.get(l.to);
-    if (!a || !b) continue;
-    ctx.strokeStyle = slotColour(sameTimeSlot(graph, l.group));
-    ctx.beginPath();
-    ctx.moveTo(X(a.x), Y(a.y));
-    ctx.lineTo(X(b.x), Y(b.y));
-    ctx.stroke();
-  }
-  ctx.setLineDash([]);
+  // Same-minute ties: solid in the group's colour, from its pill to each of its wallets.
+  ctx.lineWidth = Math.max(1.5, 1.6 * scale);
+  hubs.forEach((hub, i) => {
+    const p = placed[i]!;
+    ctx.strokeStyle = alpha(hub.colour, 0.6);
+    for (const m of hub.members) {
+      const mx = (p.x + m.x) / 2 + (m.y - p.y) * 0.12;
+      const my = (p.y + m.y) / 2 - (m.x - p.x) * 0.12;
+      ctx.beginPath();
+      ctx.moveTo(X(p.x), Y(p.y));
+      ctx.quadraticCurveTo(X(mx), Y(my), X(m.x), Y(m.y));
+      ctx.stroke();
+    }
+  });
 
   const order = [...graph.nodes].sort((a, b) => b.r - a.r);
   ctx.textAlign = "center";
@@ -318,12 +347,10 @@ export async function renderBubbleCard(
     ctx.restore();
     if (n.sameTime !== null) {
       ctx.strokeStyle = slotColour(sameTimeSlot(graph, n.sameTime));
-      ctx.lineWidth = 3.5;
-      ctx.setLineDash([0.1, 7]);
+      ctx.lineWidth = 2.5;
       ctx.beginPath();
       ctx.arc(cx, cy, r + (risk ? 13 : 6), 0, Math.PI * 2);
       ctx.stroke();
-      ctx.setLineDash([]);
     }
     if (risk) {
       ctx.strokeStyle = RISK;
@@ -353,6 +380,22 @@ export async function renderBubbleCard(
       ctx.fillText(dev ? "DEV" : "!", bx, by + 1);
     }
   }
+  // The groups' pills, over the bubbles, where placeLabels found them room.
+  hubs.forEach((hub, i) => {
+    const p = placed[i]!;
+    ctx.font = `600 ${Math.max(12, 9.5 * scale)}px ${FONT}`;
+    const w = Math.max(p.w * scale, ctx.measureText(hub.text).width + 16);
+    const h = Math.max(p.h * scale, 22);
+    ctx.fillStyle = "#1b1e28";
+    ctx.strokeStyle = hub.colour;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.roundRect(X(p.x) - w / 2, Y(p.y) - h / 2, w, h, h / 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = INK;
+    ctx.fillText(hub.text, X(p.x), Y(p.y) + 1);
+  });
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   return canvas;
