@@ -5,6 +5,9 @@ import { ago, pct, shortAddress, tokenLabel } from "../format";
 import {
   bubbleNameLines,
   showsPct,
+  kolControl,
+  type KolControl,
+  type KolTie,
   cexSlots,
   CEX_COLOURS,
   cexGroupsOf,
@@ -376,13 +379,26 @@ function MapView({
   const [focus, setFocus] = useState<number | null>(null);
   // The group under the map whose wallets are listed open: "c:", "x:" or "t:" and its key.
   const [listed, setListed] = useState<string | null>(null);
-  const toggleList = (key: string) => setListed((k) => (k === key ? null : key));
   const node = graph.nodes.find((n) => n.id === picked) ?? null;
   // A picked bubble's cluster lights up; so does a cluster picked from the list.
   const lit = node ? node.cluster : focus;
   const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator"));
   const largest = graph.clusters[0]?.pct ?? null;
   const { sides, groups, showSides, setSideOn } = side;
+  // Each KOL and the supply it may control: side wallets, KOL funded wallets and their linked holders.
+  const kols = useMemo(
+    () =>
+      kolControl(
+        graph,
+        groups,
+        graph.nodes.flatMap((n) =>
+          n.kind === "holder" && n.wallet && names[n.wallet]?.source === "kol"
+            ? [{ wallet: n.wallet, name: names[n.wallet]!.name }]
+            : [],
+        ),
+      ),
+    [graph, groups, names],
+  );
   // With the ties on, the bubbles rearrange so each exchange's holders sit together (user ask
   // 2026-10-13); off, the usual layout comes back as it was.
   // KOLs' side wallets gather round them the same way while their ties show.
@@ -413,7 +429,10 @@ function MapView({
                 : `${graph.linkedCount ? `${graph.linkedCount.linked} of the top ${graph.linkedCount.of} holders, holding ` : ""}${pct(graph.linkedPct, 1)} of supply`
             }
           >
-            {linkedCountText(graph.linkedCount) ?? pct(graph.linkedPct, 1)}
+            {/* N/25 and, beside it, the share of supply those linked holders hold (user ask 2026-10-14). */}
+            {graph.linkedCount && graph.linkedPct !== null
+              ? `${linkedCountText(graph.linkedCount)} (${pct(graph.linkedPct, 1)})`
+              : (linkedCountText(graph.linkedCount) ?? pct(graph.linkedPct, 1))}
           </dd>
         </div>
         <div>
@@ -504,116 +523,19 @@ function MapView({
       />
       <NameLegend graph={graph} names={names} />
       <NodeDetail node={node} graph={graph} names={names} sides={sides} />
-      <ul className="bm-clusters">
-        {graph.clusters.map((c, i) => (
-          <li key={c.funder} className={listed === `c:${c.funder}` ? "bm-open" : undefined}>
-            <button
-              type="button"
-              className={`bm-cluster${lit === i ? " on" : ""}`}
-              style={{ "--bm": `var(--bm-${i % CLUSTER_COLOURS})` } as React.CSSProperties}
-              aria-pressed={lit === i}
-              aria-expanded={listed === `c:${c.funder}`}
-              onClick={() => {
-                const open = listed !== `c:${c.funder}`;
-                setPicked(null);
-                setFocus(open ? i : null);
-                setListed(open ? `c:${c.funder}` : null);
-              }}
-            >
-              <i className="bm-dot" aria-hidden="true" />
-              <span className="bm-cluster-name">
-                Funder <WalletText wallet={c.funder} names={names} />
-              </span>
-              <span className="muted small">
-                {c.wallets.length} wallets{c.creatorLinked ? " · tied to the creator" : ""}
-              </span>
-              <span className="num bm-cluster-pct">{pct(c.pct, 1)}</span>
-            </button>
-            {listed === `c:${c.funder}` && (
-              <GroupWallets wallets={c.wallets} names={names} funder={c.funder} />
-            )}
-          </li>
-        ))}
-      </ul>
-      {showCex && (
-        <ul className="bm-clusters bm-cex-groups">
-          {cexGroupsOf(graph).map((g, i) => (
-            <li key={g.funder} className={listed === `x:${g.funder}` ? "bm-open" : undefined}>
-              <button
-                type="button"
-                className={`bm-cluster bm-same${listed === `x:${g.funder}` ? " on" : ""}`}
-                aria-expanded={listed === `x:${g.funder}`}
-                onClick={() => toggleList(`x:${g.funder}`)}
-                style={
-                  {
-                    "--bm": "var(--bm-none)",
-                    "--bm-cex": `var(--bm-cex-${i % CEX_COLOURS})`,
-                  } as React.CSSProperties
-                }
-              >
-                <i className="bm-cex-key bm-cex-dot" aria-hidden="true" />
-                <span className="bm-cluster-name">
-                  Exchange <WalletText wallet={g.funder} names={names} />
-                </span>
-                <span className="muted small">{g.nodes.length} wallets it funded</span>
-                <span className="num bm-cluster-pct">{pct(g.pct, 1)}</span>
-              </button>
-              {listed === `x:${g.funder}` && (
-                <GroupWallets
-                  wallets={g.nodes.flatMap((n) => (n.wallet ? [{ wallet: n.wallet, pct: n.pct }] : []))}
-                  names={names}
-                  funder={g.funder}
-                />
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-      {showSides && (
-        <ul className="bm-clusters bm-cex-groups bm-side-groups">
-          {groups.map((g) => (
-            <li key={g.kolWallet}>
-              <div className="bm-cluster bm-same" style={{ "--bm": "var(--bm-none)" } as React.CSSProperties}>
-                <i className="bm-cex-key bm-side-key bm-cex-dot" aria-hidden="true" />
-                <span className="bm-cluster-name">
-                  KOL <WalletText wallet={g.kolWallet} names={names} />
-                  {!names[g.kolWallet] && g.kolName ? ` ${g.kolName}` : ""}
-                </span>
-                <span className="muted small">{sideSummary(g.wallets)}</span>
-                <span className="num bm-cluster-pct">
-                  {g.wallets[0]!.funded ? "Funded" : `${Math.round(g.wallets[0]!.pct)}%`}
-                </span>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-      {graph.sameTimeGroups.length > 0 && (
-        <ul className="bm-clusters bm-same-groups">
-          {graph.sameTimeGroups.map((g, i) => (
-            <li key={g.atMs} className={listed === `t:${g.atMs}` ? "bm-open" : undefined}>
-              <button
-                type="button"
-                className={`bm-cluster bm-same${listed === `t:${g.atMs}` ? " on" : ""}`}
-                style={{ "--bm": `var(--bm-${sameTimeSlot(graph, i)})` } as React.CSSProperties}
-                aria-expanded={listed === `t:${g.atMs}`}
-                onClick={() => toggleList(`t:${g.atMs}`)}
-              >
-                <i className="bm-same-dot" aria-hidden="true" />
-                <span className="bm-cluster-name">
-                  Funded together <span className="num">{fundingTime(g.atMs)}</span>
-                </span>
-                <span className="muted small">
-                  {g.wallets.length} wallets within {Math.max(1, Math.round(g.spanMs / 1000))}s
-                  {sameTimeFunders(g)}
-                </span>
-                <span className="num bm-cluster-pct">{pct(g.pct, 1)}</span>
-              </button>
-              {listed === `t:${g.atMs}` && <GroupWallets wallets={g.wallets} names={names} />}
-            </li>
-          ))}
-        </ul>
-      )}
+      <GroupPanel
+        graph={graph}
+        names={names}
+        kols={kols}
+        listed={listed}
+        lit={lit}
+        onSelect={(key, cluster) => {
+          const open = listed !== key;
+          setPicked(null);
+          setFocus(open && cluster !== undefined ? cluster : null);
+          setListed(open ? key : null);
+        }}
+      />
       {!compact && (
         <p className="faint small bm-note">
           Each bubble is a top holder, sized by its share of supply. Wallets one funder paid for share a
@@ -634,41 +556,223 @@ function MapView({
   );
 }
 
-/**
- * The wallets in a group under the map, largest first, each with its share of supply and opening
- * its own wallet modal; the funder that paid for them last (user ask 2026-10-14).
- */
-function GroupWallets({
-  wallets,
-  names,
-  funder,
-}: {
-  wallets: readonly { wallet: string; pct: number }[];
-  names: WalletNames;
+/** How each tie to a KOL reads in its wallet list. */
+const KOL_TIE_TEXT: Record<KolTie, string> = {
+  kol: "KOL",
+  funded: "KOL funded",
+  side: "Possible side",
+  cluster: "Same funder",
+  "same-minute": "Same minute",
+};
+
+/** "4 wallets · 1 KOL funded · 2 possible sides": what a KOL's row holds. */
+function kolSummary(k: KolControl): string {
+  const count = (t: KolTie) => k.wallets.filter((w) => w.tie === t).length;
+  const funded = count("funded");
+  const side = count("side");
+  const linked = count("cluster") + count("same-minute");
+  return [
+    `${k.wallets.length} wallet${k.wallets.length === 1 ? "" : "s"}`,
+    funded > 0 ? `${funded} KOL funded` : null,
+    side > 0 ? `${side} possible side${side === 1 ? "" : "s"}` : null,
+    linked > 0 ? `${linked} linked` : null,
+    k.holds ? null : "KOL not holding",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** One group under the map: a funder's cluster, a KOL's holdings, an exchange's, a funding minute. */
+interface PanelGroup {
+  key: string;
+  title: React.ReactNode;
+  sub: string;
+  pct: number;
+  style: React.CSSProperties;
+  dot: React.ReactNode;
+  wallets: readonly { wallet: string; pct: number; tag?: string }[];
+  /** The wallet that paid for them, listed last. */
   funder?: string;
+  /** A funder cluster's index, lit on the map while picked. */
+  cluster?: number;
+}
+
+/**
+ * The groups under the map in two columns (user ask 2026-10-14): on the left every cluster, KOL,
+ * exchange and funding minute with its share of supply; on the right the picked one's wallets,
+ * largest first, each opening its wallet modal. Stacked on a phone.
+ */
+function GroupPanel({
+  graph,
+  names,
+  kols,
+  listed,
+  lit,
+  onSelect,
+}: {
+  graph: BubbleGraph;
+  names: WalletNames;
+  kols: readonly KolControl[];
+  listed: string | null;
+  lit: number | null;
+  onSelect: (key: string, cluster?: number) => void;
 }) {
-  const rows = [...wallets].sort((a, b) => b.pct - a.pct);
+  const detail = useRef<HTMLDivElement>(null);
+  const sections: { title: string; groups: PanelGroup[] }[] = [
+    {
+      title: "Clusters",
+      groups: graph.clusters.map((c, i) => ({
+        key: `c:${c.funder}`,
+        title: (
+          <>
+            Funder <WalletText wallet={c.funder} names={names} />
+          </>
+        ),
+        sub: `${c.wallets.length} wallets${c.creatorLinked ? " · tied to the creator" : ""}`,
+        pct: c.pct,
+        style: { "--bm": `var(--bm-${i % CLUSTER_COLOURS})` } as React.CSSProperties,
+        dot: <i className="bm-dot" aria-hidden="true" />,
+        wallets: c.wallets,
+        funder: c.funder,
+        cluster: i,
+      })),
+    },
+    {
+      title: "KOLs",
+      groups: kols.map((k) => ({
+        key: `k:${k.kolWallet}`,
+        title: (
+          <>
+            KOL <WalletText wallet={k.kolWallet} names={names} />
+            {!names[k.kolWallet] && k.kolName ? ` ${k.kolName}` : ""}
+          </>
+        ),
+        sub: kolSummary(k),
+        pct: k.pct,
+        style: { "--bm": "var(--bm-side)" } as React.CSSProperties,
+        dot: <i className="bm-dot" aria-hidden="true" />,
+        wallets: k.wallets.map((w) => ({ wallet: w.wallet, pct: w.pct, tag: KOL_TIE_TEXT[w.tie] })),
+      })),
+    },
+    {
+      title: "Exchanges",
+      groups: cexGroupsOf(graph).map((g, i) => ({
+        key: `x:${g.funder}`,
+        title: (
+          <>
+            Exchange <WalletText wallet={g.funder} names={names} />
+          </>
+        ),
+        sub: `${g.nodes.length} wallets it funded`,
+        pct: g.pct,
+        style: {
+          "--bm": "var(--bm-none)",
+          "--bm-cex": `var(--bm-cex-${i % CEX_COLOURS})`,
+        } as React.CSSProperties,
+        dot: <i className="bm-cex-key bm-cex-dot" aria-hidden="true" />,
+        wallets: g.nodes.flatMap((n) => (n.wallet ? [{ wallet: n.wallet, pct: n.pct }] : [])),
+        funder: g.funder,
+      })),
+    },
+    {
+      title: "Funded together",
+      groups: graph.sameTimeGroups.map((g, i) => ({
+        key: `t:${g.atMs}`,
+        title: <span className="num">{fundingTime(g.atMs)}</span>,
+        sub: `${g.wallets.length} wallets within ${Math.max(1, Math.round(g.spanMs / 1000))}s${sameTimeFunders(g)}`,
+        pct: g.pct,
+        style: { "--bm": `var(--bm-${sameTimeSlot(graph, i)})` } as React.CSSProperties,
+        dot: <i className="bm-same-dot" aria-hidden="true" />,
+        wallets: g.wallets,
+      })),
+    },
+  ].filter((sec) => sec.groups.length > 0);
+  if (sections.length === 0) return null;
+  const picked = sections.flatMap((sec) => sec.groups).find((g) => g.key === listed) ?? null;
+  const pick = (g: PanelGroup) => {
+    onSelect(g.key, g.cluster);
+    // Stacked on a phone, the wallets sit under the list: bring them into view.
+    if (listed !== g.key && window.matchMedia("(max-width: 640px)").matches)
+      window.setTimeout(() => detail.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
+  };
   return (
-    <ol className="bm-group-wallets">
-      {rows.map((w) => (
-        <li key={w.wallet}>
-          <button type="button" onClick={() => openWallet(w.wallet)} title="Open this wallet">
-            <WalletText wallet={w.wallet} names={names} />
-            <span className="num">{pctText(w.pct)}</span>
-          </button>
-        </li>
-      ))}
-      {funder && (
-        <li className="bm-group-funder">
-          <button type="button" onClick={() => openWallet(funder)} title="Open the funder">
-            <span>
-              <span className="muted">Funder</span> <WalletText wallet={funder} names={names} />
-            </span>
-            <span className="muted small">paid for them</span>
-          </button>
-        </li>
-      )}
-    </ol>
+    <div className="bm-groups">
+      <div className="bm-group-list">
+        {sections.map((sec) => (
+          <section key={sec.title} className="bm-group-section">
+            <h4>{sec.title}</h4>
+            <ul>
+              {sec.groups.map((g) => {
+                const on = listed === g.key || (g.cluster !== undefined && lit === g.cluster);
+                return (
+                  <li key={g.key}>
+                    <button
+                      type="button"
+                      className={`bm-cluster${on ? " on" : ""}`}
+                      style={g.style}
+                      aria-pressed={listed === g.key}
+                      onClick={() => pick(g)}
+                    >
+                      {g.dot}
+                      <span className="bm-cluster-name">{g.title}</span>
+                      <span className="muted small">{g.sub}</span>
+                      <span className="num bm-cluster-pct">{pct(g.pct, 1)}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))}
+      </div>
+      <div className="bm-group-detail" ref={detail} aria-live="polite">
+        {picked ? (
+          <GroupWallets group={picked} names={names} />
+        ) : (
+          <p className="muted small bm-group-hint">
+            Pick a cluster or KOL to list its wallets and their share of supply. Each wallet opens its own
+            view.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A picked group's wallets, largest first, each opening its wallet modal; the funder last. */
+function GroupWallets({ group, names }: { group: PanelGroup; names: WalletNames }) {
+  const rows = [...group.wallets].sort((a, b) => b.pct - a.pct);
+  return (
+    <>
+      <header className="bm-detail-head" style={group.style}>
+        {group.dot}
+        <span className="bm-cluster-name">{group.title}</span>
+        <span className="num bm-cluster-pct">{pct(group.pct, 1)}</span>
+      </header>
+      <ol className="bm-group-wallets">
+        {rows.map((w, i) => (
+          <li key={w.wallet}>
+            <button type="button" onClick={() => openWallet(w.wallet)} title="Open this wallet">
+              <span className="num faint bm-rank">{i + 1}</span>
+              <WalletText wallet={w.wallet} names={names} />
+              {w.tag && <span className="bm-tie">{w.tag}</span>}
+              <span className="num bm-wallet-pct">{pctText(w.pct)}</span>
+            </button>
+          </li>
+        ))}
+        {group.funder && (
+          <li className="bm-group-funder">
+            <button type="button" onClick={() => openWallet(group.funder!)} title="Open the funder">
+              <span className="bm-rank" />
+              <span>
+                <span className="muted">Funder</span> <WalletText wallet={group.funder} names={names} />
+              </span>
+              <span className="muted small bm-wallet-pct">paid for them</span>
+            </button>
+          </li>
+        )}
+      </ol>
+    </>
   );
 }
 
@@ -1117,18 +1221,6 @@ function clipName(text: string, max = 16): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-/** "2 KOL funded wallets · 1 possible side, not confirmed": a KOL's ties in the legend. */
-function sideSummary(wallets: readonly { funded?: boolean }[]): string {
-  const funded = wallets.filter((w) => w.funded).length;
-  const possible = wallets.length - funded;
-  return [
-    funded > 0 ? `${funded} KOL funded wallet${funded === 1 ? "" : "s"}` : null,
-    possible > 0 ? `${possible} possible side wallet${possible === 1 ? "" : "s"} · not confirmed` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-}
-
 function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames, sides: PossibleSides = {}): string {
   if (n.kind === "rest") return `${n.count} other top holders, ${pctText(n.pct)} together`;
   const cluster = n.cluster === null ? null : graph.clusters[n.cluster];
@@ -1165,7 +1257,7 @@ function NodeDetail({
     return (
       <p className="bm-detail muted small">
         {graph.clusters.length > 0
-          ? "Tap a bubble to open that wallet, or a cluster below to light it up and list its wallets."
+          ? "Tap a bubble to open that wallet, or a group below to list its wallets (a cluster lights up on the map)."
           : graph.linkedPct === 0
             ? "No two of these holders share a funder. Tap a bubble to open that wallet."
             : "Tap a bubble to open that wallet."}

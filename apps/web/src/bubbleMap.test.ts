@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   showsPct,
+  kolControl,
   bubbleNameLines,
   NAME_MAX_W,
   placeLabels,
@@ -511,5 +512,46 @@ describe("bubble % labels", () => {
     expect(showsPct(0.45)).toBe(true);
     expect(showsPct(12)).toBe(true);
     expect(showsPct(0.09)).toBe(false);
+  });
+});
+
+describe("kolControl", () => {
+  const h = (wallet: string, pct: number, cluster: number | null = null, sameTime: number | null = null) =>
+    ({ kind: "holder", wallet, pct, cluster, sameTime }) as unknown as MapNode;
+  const graph = {
+    nodes: [
+      h("kol", 2),
+      h("side", 1.5, 0),
+      h("mate", 0.5, 0),
+      h("min", 0.3, null, 1),
+      h("fund", 1, null, 1),
+      h("x", 4),
+    ],
+  };
+  it("adds the KOL, its side and funded wallets, and holders sharing their funder or minute", () => {
+    const [k] = kolControl(graph, [
+      {
+        kolWallet: "kol",
+        kolName: "Ansem",
+        wallets: [
+          { wallet: "side", pct: 92 },
+          { wallet: "fund", pct: 0, funded: true },
+        ],
+      },
+    ]);
+    expect(k!.holds).toBe(true);
+    expect(k!.wallets.map((w) => [w.wallet, w.tie])).toEqual([
+      ["kol", "kol"],
+      ["side", "side"],
+      ["fund", "funded"],
+      ["mate", "cluster"],
+      ["min", "same-minute"],
+    ]);
+    expect(k!.pct).toBe(5.3);
+  });
+  it("lists a KOL with no side wallets only when another holder is tied to it", () => {
+    expect(kolControl(graph, [], [{ wallet: "x", name: "Solo" }])).toEqual([]);
+    const tied = { nodes: [h("k2", 1, 3), h("y", 0.4, 3)] };
+    expect(kolControl(tied, [], [{ wallet: "k2", name: "Two" }])[0]!.pct).toBe(1.4);
   });
 });
