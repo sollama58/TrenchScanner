@@ -21,9 +21,11 @@ import {
   SolanaTrackerClient,
   lastHeartbeatAt,
   lastSuccessfulRunAt,
+  manualRunRequested,
   recordHeartbeat,
   runsJob,
   runTelegramDispatch,
+  takeManualRunRequests,
   onAlertWritten,
   COMMIT_GRACE_MS,
   workerConfigMeta,
@@ -85,6 +87,30 @@ const AI_JUDGE_INTERVAL_MINUTES = 10;
  * within the hour. Also the start-up choice: the first run is immediate.
  */
 const CHAMPION_REFRESH_MINUTES = 60;
+
+/**
+ * How often a job an admin may start early (core's MANUAL_RUN_JOBS) checks for a "Run now" while
+ * it waits for its next run - one indexed count per job.
+ */
+const MANUAL_RUN_CHECK_MS = 30_000;
+
+/** The check that starts `job` early on an admin's "Run now" (see adminJobRuns.ts in the API). */
+function onRunNow(job: HeartbeatJob) {
+  return { everyMs: MANUAL_RUN_CHECK_MS, due: () => manualRunRequested(job) };
+}
+
+/**
+ * `fn`, marking `job`'s waiting "Run now" requests taken as the run begins - any run, early or on
+ * schedule, does what they asked for.
+ */
+function takingRunNow<T>(job: HeartbeatJob, fn: () => Promise<T>): () => Promise<T> {
+  return async () => {
+    await takeManualRunRequests(job).catch((err: unknown) =>
+      logger.warn("could not mark run-now requests taken", { job, error: String(err) }),
+    );
+    return fn();
+  };
+}
 
 /** An admin's retrain request no training run has picked up yet (see adminRetrain.ts in the API). */
 async function retrainRequested(): Promise<boolean> {
@@ -343,7 +369,7 @@ async function main() {
   schedule("burn-scan", () =>
     scheduleInterval(
       "burn-scan",
-      async () => {
+      takingRunNow("burn-scan", async () => {
         const { stoppedEarly, ...result } = await reconcileBurns(env, rpc);
         // Which endpoint answered (host only, never the key) and what the pass cost it, per
         // method - the same shape as the scan's rpcCalls, so Helius credits stay visible here too.
@@ -360,8 +386,9 @@ async function main() {
           throw new Error(`burn scan stopped early on an RPC failure (${JSON.stringify(counts)})`);
         }
         return counts;
-      },
+      }),
       env.BURN_SCAN_INTERVAL_MINUTES,
+      { runEarly: onRunNow("burn-scan") },
     ),
   );
   // Rolls match peaks forward from data already banked - no upstream calls. Off the scan cycle on
@@ -384,14 +411,20 @@ async function main() {
   // re-running it on every restart (four deploys in 40 minutes on 2026-10-13) stacked those reads
   // on top of the API's warm-up and slowed page loads to 5-20 s.
   schedule("lighthouse-rollup", () =>
-    scheduleInterval("lighthouse-rollup", () => runLighthouseRollupJob(), LIGHTHOUSE_ROLLUP_MINUTES, {
-      deadlineMinutes: 30,
-      firstRunDelayMs: async () => {
-        const last = await lastSuccessfulRunAt("lighthouse-rollup");
-        if (!last) return 0;
-        return Math.max(0, last.getTime() + LIGHTHOUSE_ROLLUP_MINUTES * 60_000 - Date.now());
+    scheduleInterval(
+      "lighthouse-rollup",
+      takingRunNow("lighthouse-rollup", () => runLighthouseRollupJob()),
+      LIGHTHOUSE_ROLLUP_MINUTES,
+      {
+        deadlineMinutes: 30,
+        runEarly: onRunNow("lighthouse-rollup"),
+        firstRunDelayMs: async () => {
+          const last = await lastSuccessfulRunAt("lighthouse-rollup");
+          if (!last) return 0;
+          return Math.max(0, last.getTime() + LIGHTHOUSE_ROLLUP_MINUTES * 60_000 - Date.now());
+        },
       },
-    }),
+    ),
   );
   // Re-grades history to label rule 4 from Pump.fun's minute candles (labelRegradeJob.ts), a
   // hundred-odd coins a minute under a lock like the batch jobs below, until nothing is left.
@@ -425,9 +458,12 @@ async function main() {
   });
   // The wallet risk scores, rebuilt from the trade tape (walletRiskJob.ts). Immediate on boot.
   schedule("wallet-risk", () =>
-    scheduleInterval("wallet-risk", () => withJobLock("wallet-risk", () => runWalletRiskJob()), 60, {
-      deadlineMinutes: 30,
-    }),
+    scheduleInterval(
+      "wallet-risk",
+      takingRunNow("wallet-risk", () => withJobLock("wallet-risk", () => runWalletRiskJob())),
+      60,
+      { deadlineMinutes: 30, runEarly: onRunNow("wallet-risk") },
+    ),
   );
   // The Side Wallet Checker's lists (Utilities tab), rebuilt from the trade tape
   // (kolSideWalletsJob.ts). Immediate on boot. The hand-named KOLs (KOL_OVERRIDES) are written
@@ -436,7 +472,7 @@ async function main() {
   schedule("kol-side-wallets", () =>
     scheduleInterval(
       "kol-side-wallets",
-      () =>
+      takingRunNow("kol-side-wallets", () =>
         withJobLock("kol-side-wallets", async () => {
           await applyKolOverrides().catch((err: unknown) =>
             logger.warn("KOL overrides not written", { error: String(err) }),
@@ -448,8 +484,9 @@ async function main() {
           const meta = await runKolSideWalletsJob();
           return knownSides ? { ...meta, knownSides: knownSides.join(",") } : meta;
         }),
+      ),
       60,
-      { deadlineMinutes: 30 },
+      { deadlineMinutes: 30, runEarly: onRunNow("kol-side-wallets") },
     ),
   );
   // Solana Tracker's KOL roster, daily (kolWalletsJob.ts); immediate on a boot that missed a day.
@@ -461,9 +498,9 @@ async function main() {
     schedule("kol-wallets", () =>
       scheduleDailyAt(
         "kol-wallets",
-        () => withJobLock("kol-wallets", () => runKolWalletsJob(solanaTracker)),
+        takingRunNow("kol-wallets", () => withJobLock("kol-wallets", () => runKolWalletsJob(solanaTracker))),
         KOL_WALLETS_HOUR_UTC,
-        { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS },
+        { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS, runEarly: onRunNow("kol-wallets") },
       ),
     );
   // Cleanup, outcome tracking and the AI judge each run under a lock shared by every worker
@@ -476,12 +513,13 @@ async function main() {
   schedule("outcome-tracking", () =>
     scheduleDailyAt(
       "outcome-tracking",
-      () =>
+      takingRunNow("outcome-tracking", () =>
         withJobLock("outcome-tracking", () =>
           runOutcomeTrackingJob(deps.dexScreener, env.SNAPSHOT_RETENTION_DAYS),
         ),
+      ),
       env.OUTCOME_TRACKING_HOUR_UTC,
-      { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS },
+      { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS, runEarly: onRunNow("outcome-tracking") },
     ),
   );
   // The self-learning half of Curated Alerts: walk-forward evaluation every
@@ -534,38 +572,49 @@ async function main() {
   schedule("champion-refresh", () =>
     scheduleInterval(
       "champion-refresh",
-      async (): Promise<JobRunMeta> => ({
+      takingRunNow("champion-refresh", async (): Promise<JobRunMeta> => ({
         ...(await rechooseDefaultModel(env)),
         ...(await seatLiveShareAlarms(env)),
-      }),
+      })),
       CHAMPION_REFRESH_MINUTES,
+      { runEarly: onRunNow("champion-refresh") },
     ),
   );
   // Weekly model backups, checked hourly (see runModelBackupJob). Held a few minutes after boot so
   // a restart doesn't put the snapshot's reads on top of the first training reads.
   schedule("model-backup", () =>
-    scheduleInterval("model-backup", () => runModelBackupJob(env), MODEL_BACKUP_CHECK_MINUTES, {
-      firstRunDelayMs: async () => 5 * 60_000,
-    }),
+    scheduleInterval(
+      "model-backup",
+      takingRunNow("model-backup", () => runModelBackupJob(env)),
+      MODEL_BACKUP_CHECK_MINUTES,
+      { firstRunDelayMs: async () => 5 * 60_000, runEarly: onRunNow("model-backup") },
+    ),
   );
   // The composite score's adaptive weights (scoring/scoreWeights.ts): refit on the newest graded
   // outcomes, adopted only when they rank the newest tokens better.
   schedule("score-weights", () =>
-    scheduleInterval("score-weights", () => runScoreWeightsJob(), SCORE_WEIGHTS_INTERVAL_HOURS * 60, {
-      firstRunDelayMs: async () => {
-        const last = await lastHeartbeatAt("score-weights");
-        if (!last) return 10 * 60_000;
-        return last.getTime() + SCORE_WEIGHTS_INTERVAL_HOURS * 3_600_000 - Date.now();
+    scheduleInterval(
+      "score-weights",
+      takingRunNow("score-weights", () => runScoreWeightsJob()),
+      SCORE_WEIGHTS_INTERVAL_HOURS * 60,
+      {
+        runEarly: onRunNow("score-weights"),
+        firstRunDelayMs: async () => {
+          const last = await lastHeartbeatAt("score-weights");
+          if (!last) return 10 * 60_000;
+          return last.getTime() + SCORE_WEIGHTS_INTERVAL_HOURS * 3_600_000 - Date.now();
+        },
       },
-    }),
+    ),
   );
   // The AI reviewer's learning loop: collects replay batches, runs playbook evolution and refits
   // the AI blend - see runAiJudgeJob. Inert without ANTHROPIC_API_KEY.
   schedule("ai-judge", () =>
     scheduleInterval(
       "ai-judge",
-      () => withJobLock("ai-judge", () => runAiJudgeJob(env)),
+      takingRunNow("ai-judge", () => withJobLock("ai-judge", () => runAiJudgeJob(env))),
       AI_JUDGE_INTERVAL_MINUTES,
+      { runEarly: onRunNow("ai-judge") },
     ),
   );
 
