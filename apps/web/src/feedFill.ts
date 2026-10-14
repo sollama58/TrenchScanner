@@ -5,11 +5,14 @@ import { belowMcapLine } from "./components/AlertCard";
 export const FEED_PAGE_SIZE = 12;
 
 /**
- * The most API pages the Live feed reads ahead to keep a page full while low market caps are
- * hidden. Each is polled with the feed, so this bounds what hiding costs; past it a page may come
- * up short.
+ * How many API pages the Live feed may read for the page on screen: that page's own number plus
+ * this many - 1, to fill in behind the cards hidden or folded away. Each is polled with the feed,
+ * so this bounds what filling costs; past it a page may come up short.
  */
 export const MAX_FILL_PAGES = 15;
+
+/** The most API pages the Live feed reads at all, however far back it is paged. */
+export const MAX_READ_PAGES = 40;
 
 /** The live tick's limit on tokens per request (LIVE_TICK_MAX_TOKENS in the API). */
 const MAX_TICK_TOKENS = 30;
