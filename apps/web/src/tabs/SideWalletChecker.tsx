@@ -3,17 +3,50 @@ import { api, ApiError } from "../api";
 import { usePolling } from "../hooks";
 import { ago, shortAddress } from "../format";
 import { openWallet } from "../walletModal";
+import { usePossibleSides } from "../possibleSides";
 import { Skeleton } from "../components/Charts";
-import { ChevronDownIcon, CloseIcon, SearchIcon, UsersIcon, WalletIcon } from "../components/Icons";
+import {
+  ChevronDownIcon,
+  CloseIcon,
+  SearchIcon,
+  ShieldIcon,
+  TargetIcon,
+  UsersIcon,
+  WalletIcon,
+} from "../components/Icons";
 
 export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
 export type SideWindow = (typeof SIDE_WINDOWS)[number];
+
+/** Mirrors SideWalletRules in core's wallets/sideWalletRules.ts: every cutoff the lists and labels use. */
+export interface SideRules {
+  gapMinutes: number;
+  minShared: Record<SideWindow, number>;
+  minPct: number;
+  bot: { minCoins: number; minPct: number; days: number };
+  tiers: { hours: number; minPct: number; minShared: number }[];
+  holdDays: number;
+}
+
+/** The cutoffs as of 2026-10-14, for an API build that doesn't send them yet. */
+const DEFAULT_RULES: SideRules = {
+  gapMinutes: 5,
+  minShared: { "24h": 5, "7d": 15, "30d": 25 },
+  minPct: 50,
+  bot: { minCoins: 200, minPct: 75, days: 30 },
+  tiers: [
+    { hours: 24, minPct: 100, minShared: 10 },
+    { hours: 48, minPct: 90, minShared: 25 },
+    { hours: 72, minPct: 80, minShared: 50 },
+  ],
+  holdDays: 90,
+};
 
 /** Mirrors apps/api/src/routes/utilities.ts GET /utilities/side-wallets. */
 interface SideLeaderboard {
   computedAt: string | null;
   gapMinutes: number;
-  minShared: number;
+  rules?: SideRules;
   kols: {
     wallet: string;
     name: string | null;
@@ -36,15 +69,13 @@ interface KolSides {
   wallet: string;
   coins: Record<SideWindow, number>;
   sides: Record<SideWindow, SideWallet[]>;
+  rules?: SideRules;
 }
 
 /** Rows shown before "Show all". */
 const FIRST_ROWS = 25;
 /** Side wallets shown in a dropdown; more open in a modal. */
 const DROP_ROWS = 10;
-/** The fewest coins in common a listing needs (apps/api/src/routes/utilities.ts SIDE_MIN_SHARED). */
-const MIN_SHARED = 10;
-
 const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
 
 /** "12s after", "2m 5s before", "same second". Exported for tests. */
@@ -55,10 +86,17 @@ export function gapText(sec: number): string {
   return `${text} ${sec < 0 ? "before" : "after"}`;
 }
 
+/** "24h", "2 days", "3 days": a tier's span in words. */
+const spanText = (hours: number) => (hours % 24 === 0 && hours > 24 ? `${hours / 24} days` : `${hours}h`);
+
+/** The first letter or digit of a KOL's name, for its avatar. */
+const initial = (name: string) => (name.match(/[\p{L}\p{N}]/u)?.[0] ?? "?").toUpperCase();
+
 /**
  * The Side Wallet Checker, free on the Utilities tab: the KOLs we track, ranked by how many of
  * our coins they bought in the last 30 days. Opening one lists the top wallets that bought the
  * most of the same coins within a few minutes of it, sorted by % shared in the period picked.
+ * The cutoffs those lists and the "Possible Side" labels use are shown above the list.
  */
 export function SideWalletChecker() {
   const { data, error } = usePolling<SideLeaderboard>("/utilities/side-wallets", 600_000);
@@ -67,29 +105,49 @@ export function SideWalletChecker() {
   const [period, setPeriod] = useState<SideWindow>("30d");
   const [query, setQuery] = useState("");
   const kols = data?.kols ?? [];
+  const rules = data?.rules ?? DEFAULT_RULES;
   const q = query.trim().toLowerCase().replace(/^@/, "");
   // A search shows every match, each at its own leaderboard rank.
   const matches = kols
     .map((k, i) => ({ k, rank: i + 1 }))
     .filter(({ k }) => !q || [k.name, k.twitter, k.wallet].some((v) => v?.toLowerCase().includes(q)));
   const shown = all || q ? matches : matches.slice(0, FIRST_ROWS);
+  const withSides = kols.filter((k) => k.sides["30d"] > 0).length;
+  const listed = kols.reduce((n, k) => n + k.sides["30d"], 0);
 
   return (
     <section className="panel util-side">
       <header className="section-head">
         <div>
-          <span className="eyebrow">
+          <span className="eyebrow brand-eyebrow">
             <UsersIcon size={13} /> Side Wallet Checker
           </span>
           <h2>Who trades alongside the KOLs</h2>
         </div>
         <span className="util-cost util-free">Free</span>
       </header>
-      <p className="muted small">
+      <p className="muted small side-lead">
         KOLs ranked by how many of our tracked coins they bought in the last 30 days. Open one to see the
-        wallets that bought the same coins within {data?.gapMinutes ?? 5} minutes of it, by the share of the
-        KOL&apos;s coins they were in. Other KOLs, exchanges and bots are left out.
+        wallets that bought the same coins within {rules.gapMinutes} minutes of it, by the share of the
+        KOL&apos;s coins they were in.
       </p>
+      {data && kols.length > 0 && (
+        <div className="side-stats">
+          <div className="side-stat">
+            <span className="side-stat-value num">{kols.length.toLocaleString("en-US")}</span>
+            <span className="faint small">KOLs active in 30 days</span>
+          </div>
+          <div className="side-stat">
+            <span className="side-stat-value num">{withSides.toLocaleString("en-US")}</span>
+            <span className="faint small">with wallets listed</span>
+          </div>
+          <div className="side-stat">
+            <span className="side-stat-value num">{listed.toLocaleString("en-US")}</span>
+            <span className="faint small">wallets listed in 30 days</span>
+          </div>
+        </div>
+      )}
+      <SideRulesCard rules={rules} />
       <p className="side-note small" role="note">
         These are possible side wallets, matched only by buying the same coins at about the same time. None is
         confirmed to belong to the KOL: a wallet here may be a copy trader, a friend, a bot or chance. Not
@@ -128,6 +186,7 @@ export function SideWalletChecker() {
           <ol className="side-list">
             {shown.map(({ k, rank }) => {
               const isOpen = open === k.wallet;
+              const name = k.name ?? shortAddress(k.wallet);
               return (
                 <li key={k.wallet} className={isOpen ? "open" : undefined}>
                   <div className="side-line">
@@ -137,13 +196,23 @@ export function SideWalletChecker() {
                       aria-expanded={isOpen}
                       onClick={() => setOpen(isOpen ? null : k.wallet)}
                     >
-                      <span className="side-rank num">{rank}</span>
+                      <span className={`side-rank num${rank <= 3 ? ` top top-${rank}` : ""}`}>{rank}</span>
                       <span className="side-who">
-                        <strong>{k.name ?? shortAddress(k.wallet)}</strong>
-                        <span className="faint small num">
-                          {k.twitter ? `@${k.twitter} · ` : ""}
-                          {shortAddress(k.wallet)}
+                        <span className="side-avatar" aria-hidden="true">
+                          {initial(name)}
                         </span>
+                        <span className="side-who-text">
+                          <strong>{name}</strong>
+                          <span className="faint small num">
+                            {k.twitter ? `@${k.twitter} · ` : ""}
+                            {shortAddress(k.wallet)}
+                          </span>
+                        </span>
+                        {k.sides["30d"] > 0 && (
+                          <span className="pill side-found" title="Wallets listed for it over 30 days">
+                            {plural(k.sides["30d"], "wallet")}
+                          </span>
+                        )}
                       </span>
                       {SIDE_WINDOWS.map((w) => (
                         <span key={w} className={`num side-count${w === "30d" ? " main" : ""}`}>
@@ -156,21 +225,15 @@ export function SideWalletChecker() {
                     <button
                       type="button"
                       className="ghost icon-btn side-profile"
-                      title={`Open ${k.name ?? shortAddress(k.wallet)}'s wallet profile`}
-                      aria-label={`Open ${k.name ?? shortAddress(k.wallet)}'s wallet profile`}
+                      title={`Open ${name}'s wallet profile`}
+                      aria-label={`Open ${name}'s wallet profile`}
                       onClick={() => openWallet(k.wallet)}
                     >
                       <WalletIcon size={15} />
                     </button>
                   </div>
                   {isOpen && (
-                    <SideWallets
-                      kol={k.wallet}
-                      kolName={k.name ?? shortAddress(k.wallet)}
-                      period={period}
-                      setPeriod={setPeriod}
-                      minShared={data.minShared}
-                    />
+                    <SideWallets kol={k.wallet} kolName={name} period={period} setPeriod={setPeriod} />
                   )}
                 </li>
               );
@@ -196,6 +259,59 @@ export function SideWalletChecker() {
   );
 }
 
+/** The cutoffs a wallet must meet to be listed, to carry the label, and to be left out. */
+function SideRulesCard({ rules }: { rules: SideRules }) {
+  return (
+    <div className="side-rules" aria-label="Match rules">
+      <div className="side-rule">
+        <h3>
+          <UsersIcon size={14} /> Listed
+        </h3>
+        <div className="side-chips">
+          {SIDE_WINDOWS.map((w) => (
+            <span key={w} className="side-chip">
+              <span className="faint">{w}</span>
+              <strong className="num">{rules.minShared[w]}+ coins</strong>
+            </span>
+          ))}
+        </div>
+        <p className="faint small">
+          Bought within {rules.gapMinutes} minutes of the KOL, on at least {rules.minPct}% of its coins in the
+          window.
+        </p>
+      </div>
+      <div className="side-rule side-rule-label">
+        <h3>
+          <TargetIcon size={14} /> Possible Side label
+        </h3>
+        <ul className="side-tiers">
+          {rules.tiers.map((t) => (
+            <li key={t.hours}>
+              <strong className="num">{t.minPct === 100 ? "All" : `${t.minPct}%+`}</strong>
+              <span className="num">{t.minShared}+ coins</span>
+              <span className="faint num">{spanText(t.hours)}</span>
+            </li>
+          ))}
+        </ul>
+        <p className="faint small">
+          Any one tier. Shown on the wallet and the bubble map for {rules.holdDays} days after it last
+          qualifies.
+        </p>
+      </div>
+      <div className="side-rule">
+        <h3>
+          <ShieldIcon size={14} /> Left out
+        </h3>
+        <p className="small">
+          <strong>Bots:</strong> {rules.bot.minCoins}+ coins and over {rules.bot.minPct}% of every tracked
+          coin in {rules.bot.days} days.
+        </p>
+        <p className="faint small">Other KOLs and known exchange wallets.</p>
+      </div>
+    </div>
+  );
+}
+
 /**
  * One KOL's top ten side wallets in the period picked, and the rest in a modal: the leaderboard's
  * dropdown, and the KOL's own wallet modal (KolSideWallets below).
@@ -205,13 +321,11 @@ function SideWallets({
   kolName,
   period,
   setPeriod,
-  minShared,
 }: {
   kol: string;
   kolName: string;
   period: SideWindow;
   setPeriod: (w: SideWindow) => void;
-  minShared: number;
 }) {
   const [data, setData] = useState<KolSides | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -232,12 +346,19 @@ function SideWallets({
     };
   }, [kol]);
 
+  const rules = data?.rules ?? DEFAULT_RULES;
   const list = data?.sides[period] ?? [];
   const coins = data?.coins[period] ?? 0;
   return (
     <div className="side-drop">
       <div className="side-drop-head">
-        <span className="small">Top wallets sharing {kolName}&apos;s trades, by % shared</span>
+        <span className="small">
+          Top wallets sharing {kolName}&apos;s trades, by % shared
+          <span className="faint">
+            {" "}
+            · {rules.minShared[period]}+ coins and {rules.minPct}%+ to list
+          </span>
+        </span>
         <div className="segmented small" role="tablist" aria-label="Window">
           {SIDE_WINDOWS.map((w) => (
             <button
@@ -262,14 +383,14 @@ function SideWallets({
       ) : !data ? (
         <Skeleton lines={3} />
       ) : list.length === 0 ? (
-        <p className="muted small">
+        <p className="muted small side-empty">
           {coins === 0
             ? `No tracked coins in the last ${period}.`
-            : `No wallet shared ${minShared} or more of its ${plural(coins, "coin")} in the last ${period}.`}
+            : `No wallet shared ${rules.minShared[period]} or more of its ${plural(coins, "coin")} (and ${rules.minPct}% or more) in the last ${period}.`}
         </p>
       ) : (
         <>
-          <SideRows list={list.slice(0, DROP_ROWS)} coins={coins} />
+          <SideRows kol={kol} list={list.slice(0, DROP_ROWS)} coins={coins} />
           {list.length > DROP_ROWS && (
             <button type="button" className="ghost small-btn side-all" onClick={() => setShowAll(true)}>
               Show all {list.length} wallets
@@ -279,10 +400,12 @@ function SideWallets({
       )}
       {showAll && (
         <SideWalletsModal
+          kol={kol}
           kolName={kolName}
           period={period}
           list={list}
           coins={coins}
+          rules={rules}
           onClose={() => setShowAll(false)}
         />
       )}
@@ -292,16 +415,20 @@ function SideWallets({
 
 /** Every listed side wallet for one KOL and window, in a native modal (a sheet on phones). */
 function SideWalletsModal({
+  kol,
   kolName,
   period,
   list,
   coins,
+  rules,
   onClose,
 }: {
+  kol: string;
   kolName: string;
   period: SideWindow;
   list: SideWallet[];
   coins: number;
+  rules: SideRules;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -330,59 +457,84 @@ function SideWalletsModal({
           </button>
         </header>
         <p className="muted small">
-          All {list.length} wallets that shared at least {MIN_SHARED} of its {plural(coins, "coin")}, by %
-          shared. Not confirmed side wallets: matched on timing only.
+          All {list.length} wallets that shared at least {rules.minShared[period]} of its{" "}
+          {plural(coins, "coin")} and {rules.minPct}% or more, by % shared. Not confirmed side wallets:
+          matched on timing only.
         </p>
         {/* The wallet modal opens over the page, so this one closes first. */}
-        <SideRows list={list} coins={coins} onOpen={onClose} />
+        <SideRows kol={kol} list={list} coins={coins} onOpen={onClose} />
       </div>
     </dialog>
   );
 }
 
 /** Side wallet rows: address (opens the wallet modal), % shared bar, coins, timing and labels. */
-function SideRows({ list, coins, onOpen }: { list: SideWallet[]; coins: number; onOpen?: () => void }) {
+function SideRows({
+  kol,
+  list,
+  coins,
+  onOpen,
+}: {
+  kol: string;
+  list: SideWallet[];
+  coins: number;
+  onOpen?: () => void;
+}) {
+  const labels = usePossibleSides(list.map((s) => s.wallet));
   return (
     <ol className="side-sides">
-      {list.map((s, i) => (
-        <li key={s.wallet}>
-          <span className="side-rank num faint">{i + 1}</span>
-          <button
-            type="button"
-            className="link side-wallet num"
-            title={`Open ${s.wallet}`}
-            onClick={() => {
-              onOpen?.();
-              openWallet(s.wallet);
-            }}
-          >
-            {shortAddress(s.wallet)}
-          </button>
-          <span className="side-bar" aria-hidden="true">
-            <span style={{ width: `${Math.min(100, s.pct)}%` }} />
-          </span>
-          <span className="side-pct num">{s.pct.toFixed(s.pct >= 10 ? 0 : 1)}%</span>
-          <span className="side-meta faint small num">
-            <span title="Coins it bought with the KOL, of the KOL's coins in the window">
-              {s.shared}/{coins} coins
+      {list.map((s, i) => {
+        const label = labels[s.wallet]?.find((p) => p.kolWallet === kol);
+        return (
+          <li key={s.wallet} className={label ? "labeled" : undefined}>
+            <span className="side-rank num faint">{i + 1}</span>
+            <button
+              type="button"
+              className="link side-wallet num"
+              title={`Open ${s.wallet}`}
+              onClick={() => {
+                onOpen?.();
+                openWallet(s.wallet);
+              }}
+            >
+              {shortAddress(s.wallet)}
+            </button>
+            <span className="side-bar" aria-hidden="true">
+              <span style={{ width: `${Math.min(100, s.pct)}%` }} />
             </span>
-            <span title="Median time from the KOL's buy to its own">· {gapText(s.gapSec)}</span>
-            <span title="Every tracked coin it bought in the window">· {s.coins} total</span>
-          </span>
-          <span className="side-tags">
-            {s.risk?.winner && (
-              <span
-                className="pill"
-                title="Winner: 60%+ of the called coins it bought doubled. Presence only, not a buy signal."
-              >
-                Winner
+            <span className={`side-pct num${s.pct >= 90 ? " strong" : ""}`}>
+              {s.pct.toFixed(s.pct >= 10 ? 0 : 1)}%
+            </span>
+            <span className="side-meta faint small num">
+              <span title="Coins it bought with the KOL, of the KOL's coins in the window">
+                {s.shared}/{coins} coins
               </span>
-            )}
-            {s.risk?.dumper && <span className="pill pill-warn">Dumper</span>}
-            {s.risk?.sniper && <span className="pill">Sniper</span>}
-          </span>
-        </li>
-      ))}
+              <span title="Median time from the KOL's buy to its own">· {gapText(s.gapSec)}</span>
+              <span title="Every tracked coin it bought in the window">· {s.coins} total</span>
+            </span>
+            <span className="side-tags">
+              {label && (
+                <span
+                  className="pill side-label"
+                  title={`Met a Possible Side tier: ${Math.round(label.pct)}% of the KOL's coins over ${label.hours ?? 24} hours`}
+                >
+                  <TargetIcon size={11} /> Possible Side
+                </span>
+              )}
+              {s.risk?.winner && (
+                <span
+                  className="pill"
+                  title="Winner: 60%+ of the called coins it bought doubled. Presence only, not a buy signal."
+                >
+                  Winner
+                </span>
+              )}
+              {s.risk?.dumper && <span className="pill pill-warn">Dumper</span>}
+              {s.risk?.sniper && <span className="pill">Sniper</span>}
+            </span>
+          </li>
+        );
+      })}
     </ol>
   );
 }
@@ -400,13 +552,7 @@ export function KolSideWallets({ wallet, kolName }: { wallet: string; kolName: s
         Wallets that bought the same coins within minutes of it. Not confirmed to belong to it: a wallet here
         may be a copy trader, a friend, a bot or chance.
       </p>
-      <SideWallets
-        kol={wallet}
-        kolName={kolName}
-        period={period}
-        setPeriod={setPeriod}
-        minShared={MIN_SHARED}
-      />
+      <SideWallets kol={wallet} kolName={kolName} period={period} setPeriod={setPeriod} />
     </section>
   );
 }

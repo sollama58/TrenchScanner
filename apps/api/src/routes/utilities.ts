@@ -12,11 +12,15 @@ import {
   parseCreditBurnTransaction,
   prisma,
   spendCredits,
+  sideWalletRules,
   withApiFeature,
   BURN_CREDIT_MEMO,
+  SIDE_GAP_MINUTES,
+  SIDE_WINDOWS,
   SUBSCRIPTION_MINT,
   SUBSCRIPTION_MINT_DECIMALS,
   type CandidateToken,
+  type SideWindow,
   type DexScreenerClient,
   type SolanaRpc,
   type UtilityKind,
@@ -301,7 +305,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
             )
           : null,
       gapMinutes: SIDE_GAP_MINUTES,
-      minShared: SIDE_MIN_SHARED,
+      // Every cutoff the lists and labels are built with (core's wallets/sideWalletRules.ts).
+      rules: sideWalletRules(),
       kols: rows.map((r) => {
         const sides = r.sides as Partial<Record<SideWindow, unknown[]>>;
         return {
@@ -356,6 +361,7 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       computedAt: await lastRebuiltAt("kol-side-wallets", row.computedAt),
       coins: { "24h": row.coins24h, "7d": row.coins7d, "30d": row.coins30d },
       sides: Object.fromEntries(SIDE_WINDOWS.map((w) => [w, sides[w].map(withRisk)])),
+      rules: sideWalletRules(),
     };
   });
 
@@ -384,11 +390,6 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
   });
 }
 
-/** The Side Wallet Checker's windows and rules, as the worker's kolSideWalletsJob.ts builds them. */
-const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
-type SideWindow = (typeof SIDE_WINDOWS)[number];
-const SIDE_GAP_MINUTES = 5;
-const SIDE_MIN_SHARED = 10;
 const SIDE_LEADERBOARD_MAX = 200;
 
 /** One side wallet as the worker stores it (SideWallet in kolSideWalletsJob.ts). */
