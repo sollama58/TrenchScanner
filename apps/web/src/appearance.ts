@@ -38,7 +38,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   streamTab: false,
   lighthouseTab: false,
   outline: null,
-  outlineResult: true,
+  // Off by default (user ask 2026-10-14); an account that saved it on keeps it on.
+  outlineResult: false,
   hideBelowMcap: false,
   hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],

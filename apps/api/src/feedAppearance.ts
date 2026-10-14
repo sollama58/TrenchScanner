@@ -119,8 +119,11 @@ export const feedAppearanceSchema = z
     lighthouseTab: z.boolean().default(false),
     /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
     outline: color.default(null),
-    /** Turn the outline green on a pass and red on a fail once the alert resolves; on by default. */
-    outlineResult: z.boolean().default(true),
+    /**
+     * Mark a graded card green on a pass and red on a fail (a heavier outline with a halo); off by
+     * default since 2026-10-14 (user ask), so an account that saved it on keeps it on.
+     */
+    outlineResult: z.boolean().default(false),
     /**
      * Hide Live feed alerts whose current market cap has fallen below hideBelowMcapUsd. Display only:
      * stats, grading and every count still include them. Off by default.
@@ -179,7 +182,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   streamTab: false,
   lighthouseTab: false,
   outline: null,
-  outlineResult: true,
+  outlineResult: false,
   hideBelowMcap: false,
   hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],

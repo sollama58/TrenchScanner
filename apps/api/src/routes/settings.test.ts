@@ -73,7 +73,7 @@ describe("parseFeedAppearance", () => {
     });
     expect(parseFeedAppearance({ quickLinks: [] }).quickLinks).toEqual([]);
     // The card outline is the theme's neutral until picked, and colors by result by default.
-    expect(parseFeedAppearance({})).toMatchObject({ outline: null, outlineResult: true });
+    expect(parseFeedAppearance({})).toMatchObject({ outline: null, outlineResult: false });
     expect(parseFeedAppearance({ outline: "#AABBCC", outlineResult: false })).toMatchObject({
       outline: "#aabbcc",
       outlineResult: false,
