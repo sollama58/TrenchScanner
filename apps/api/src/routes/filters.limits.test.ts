@@ -11,7 +11,7 @@ const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() =
 const TAG = `filters-limits-test-${Date.now()}`;
 const WALLET = `${TAG}-wallet`;
 
-describe.skipIf(!dbAvailable)("filter cap and single active filter", () => {
+describe.skipIf(!dbAvailable)("filter cap and per-filter on/off switches", () => {
   let app: FastifyInstance;
   let cookie: string;
   let userId: string;
@@ -77,28 +77,35 @@ describe.skipIf(!dbAvailable)("filter cap and single active filter", () => {
     await prisma.userFilter.deleteMany({ where: { userId } });
   });
 
-  it("keeps only the newest created filter active", async () => {
+  it("keeps every filter created on switched on", async () => {
     const a = (await call("POST", "/filters", { name: "a" })).json() as { id: string };
     const b = (await call("POST", "/filters", { name: "b" })).json() as { id: string };
+    expect((await activeIds()).sort()).toEqual([a.id, b.id].sort());
+  });
+
+  it("switches one filter off and on with PATCH isActive, leaving the others alone", async () => {
+    const a = await prisma.userFilter.findFirstOrThrow({ where: { userId, name: "a" } });
+    const b = await prisma.userFilter.findFirstOrThrow({ where: { userId, name: "b" } });
+    const off = await call("PATCH", `/filters/${a.id}`, { isActive: false });
+    expect(off.statusCode).toBe(200);
     expect(await activeIds()).toEqual([b.id]);
-    expect(a.id).not.toBe(b.id);
+    // Off keeps its settings: only the switch moved.
+    const stored = await prisma.userFilter.findUniqueOrThrow({ where: { id: a.id } });
+    expect({ ...stored, isActive: true, updatedAt: a.updatedAt }).toEqual({ ...a, updatedAt: a.updatedAt });
+
+    expect((await call("PATCH", `/filters/${a.id}`, { isActive: true })).statusCode).toBe(200);
+    expect((await activeIds()).sort()).toEqual([a.id, b.id].sort());
   });
 
-  it("switches the active filter with POST /:id/activate", async () => {
-    const first = await prisma.userFilter.findFirstOrThrow({ where: { userId, name: "a" } });
-    const res = await call("POST", `/filters/${first.id}/activate`);
+  it("switches a filter on with POST /:id/activate without switching the others off", async () => {
+    const a = await prisma.userFilter.findFirstOrThrow({ where: { userId, name: "a" } });
+    await prisma.userFilter.update({ where: { id: a.id }, data: { isActive: false } });
+    const res = await call("POST", `/filters/${a.id}/activate`);
     expect(res.statusCode).toBe(200);
-    expect(await activeIds()).toEqual([first.id]);
-  });
-
-  it("switches the active filter when PATCH sets isActive", async () => {
-    const second = await prisma.userFilter.findFirstOrThrow({ where: { userId, name: "b" } });
-    expect((await call("PATCH", `/filters/${second.id}`, { isActive: true })).statusCode).toBe(200);
-    expect(await activeIds()).toEqual([second.id]);
+    expect(await activeIds()).toHaveLength(2);
   });
 
   it("re-arms a filter when its rules change or it is switched on, not when it is renamed", async () => {
-    const [previouslyActive] = await activeIds();
     const created = (await call("POST", "/filters", { name: "arming", isActive: false })).json() as {
       id: string;
       armedAt: string;
@@ -125,9 +132,6 @@ describe.skipIf(!dbAvailable)("filter cap and single active filter", () => {
     expect(await armedAt()).toBe(longAgo.getTime());
 
     await prisma.userFilter.delete({ where: { id: created.id } });
-    if (previouslyActive) {
-      await prisma.userFilter.update({ where: { id: previouslyActive }, data: { isActive: true } });
-    }
   });
 
   it("404s activating a filter the user doesn't own", async () => {
@@ -143,8 +147,8 @@ describe.skipIf(!dbAvailable)("filter cap and single active filter", () => {
     const over = await call("POST", "/filters", { name: "one too many" });
     expect(over.statusCode).toBe(409);
     expect(await prisma.userFilter.count({ where: { userId } })).toBe(MAX_FILTERS_PER_USER);
-    // The refused create must not have switched off the active filter either.
-    expect(await activeIds()).toHaveLength(1);
+    // The refused create must not have switched anything either.
+    expect(await activeIds()).toHaveLength(2);
   });
 });
 

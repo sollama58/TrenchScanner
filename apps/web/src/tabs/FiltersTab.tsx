@@ -64,7 +64,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     excludeUnrelatedX: false,
     requireTrendMatch: false,
     excludeLateCopies: false,
-    isActive: count === 0,
+    isActive: true,
     shareOnLeaderboard: false,
   };
 }
@@ -86,7 +86,7 @@ function toInput(f: Filter): FilterInput {
 }
 
 /**
- * The Filters tab: up to ten saved setups, one active at a time; then how the alerts they raise
+ * The Filters tab: up to ten saved setups, each switched on or off on its own; then how the alerts they raise
  * reach you (Telegram, your preferred model, sound and browser notifications); then the
  * shared-filter leaderboard (Top filters).
  */
@@ -153,7 +153,8 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
               <span className="eyebrow">Filters</span>
               <h2>Your saved filters</h2>
               <p className="muted">
-                {list.length} of {MAX_FILTERS} saved. Only the active one alerts; switch whenever you like.
+                {list.length} of {MAX_FILTERS} saved, {list.filter((f) => f.isActive).length} on. Every filter
+                that&apos;s on alerts; switch one off to pause it without losing its settings.
               </p>
             </div>
             <button
@@ -185,35 +186,48 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
                   key={f.id}
                   className={`filter-item ${f.isActive ? "active" : ""} ${editing?.id === f.id ? "editing" : ""}`}
                 >
-                  <label className="radio">
-                    <input
-                      type="radio"
-                      name="active-filter"
-                      checked={f.isActive}
-                      disabled={busy}
-                      onChange={() =>
-                        void run(() => post(`/filters/${f.id}/activate`), `“${f.name}” is now active.`).then(
-                          (ok) => {
-                            // An open editor saves its whole draft, isActive included: keep it in step
-                            // so saving doesn't undo the switch just made here.
-                            if (ok)
-                              setEditing((e) =>
-                                e?.id ? { ...e, draft: { ...e.draft, isActive: e.id === f.id } } : e,
-                              );
-                          },
-                        )
+                  <div className="filter-main">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={f.isActive}
+                      aria-label={`Alerts from ${f.name}`}
+                      title={
+                        f.isActive
+                          ? "On: alerting. Switch off to pause it."
+                          : "Off: paused. Switch on to alert."
                       }
-                    />
+                      className={`switch${f.isActive ? " on" : ""}`}
+                      disabled={busy}
+                      onClick={() => {
+                        const on = !f.isActive;
+                        void run(
+                          () => patch(`/filters/${f.id}`, { isActive: on }),
+                          on ? `“${f.name}” is on.` : `“${f.name}” is off. Its settings are kept.`,
+                        ).then((ok) => {
+                          // An open editor saves its whole draft, isActive included: keep it in step
+                          // so saving doesn't undo the switch just made here.
+                          if (ok)
+                            setEditing((e) =>
+                              e?.id === f.id ? { ...e, draft: { ...e.draft, isActive: on } } : e,
+                            );
+                        });
+                      }}
+                    >
+                      <span className="switch-track">
+                        <span className="switch-thumb" />
+                      </span>
+                    </button>
                     <span>
                       <strong>{f.name}</strong>
-                      {f.isActive && <span className="pill pill-model">Active</span>}
+                      {!f.isActive && <span className="pill">Off</span>}
                       {f.shareOnLeaderboard && <span className="pill">Shared</span>}
                       <small className="muted block">
                         {usd(f.mcapMin)}–{usd(f.mcapMax)}
                         {f.narrativeKeywords.length > 0 && ` · ${f.narrativeKeywords.slice(0, 3).join(", ")}`}
                       </small>
                     </span>
-                  </label>
+                  </div>
                   <div className="filter-record">
                     {rec && rec.graded > 0 ? (
                       <span title="Last 30 days, graded alerts">
@@ -306,7 +320,7 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
             </span>
             <h2 id="alerts-band-title">How your alerts reach you</h2>
             <p className="muted">
-              Your active filter and your preferred model decide what alerts you; this is where they go.
+              The filters you have on and your preferred model decide what alerts you; this is where they go.
               Everything here is saved to your wallet.
             </p>
           </div>
@@ -540,7 +554,7 @@ function FilterEditor({
 
       <label className="check">
         <input type="checkbox" checked={draft.isActive} onChange={(e) => set("isActive", e.target.checked)} />
-        Make this my active filter (switches the others off)
+        On: alert me on what this filter catches (your other filters stay as they are)
       </label>
 
       <label className="check">

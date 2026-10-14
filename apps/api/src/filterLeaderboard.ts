@@ -119,7 +119,7 @@ export interface FilterLeaderboardEntry {
   provenRunDoublings: number | null;
   /** Where the record starts: the later of the window start and the last criteria change. */
   recordSince: string;
-  /** Whether it is its owner's active filter now (only an active filter raises alerts). */
+  /** Whether its owner has it switched on now (only a filter that is on raises alerts). */
   isActive: boolean;
   /** Its owner deleted it; kept for its record (it once ranked in the top few). Never alerts again. */
   retired: boolean;

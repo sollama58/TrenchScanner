@@ -2249,16 +2249,22 @@ g:hover > .hit {
 .filter-item.editing {
   box-shadow: 0 0 0 2px var(--brand-b);
 }
-.radio {
+/* Switched off: kept with its settings, just quieter than the ones alerting. */
+.filter-item:not(.active) .filter-main > span,
+.filter-item:not(.active) .filter-record {
+  opacity: 0.62;
+}
+.filter-main {
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  cursor: pointer;
+  min-width: 0;
 }
-.radio input {
-  margin-top: 3px;
+.filter-main .switch {
+  flex: none;
+  padding: 1px 0 0;
 }
-.radio strong {
+.filter-main strong {
   margin-right: 6px;
 }
 .filter-record {
@@ -3456,7 +3462,7 @@ legend {
   .filter-record {
     grid-column: 1;
     text-align: left;
-    padding-left: 28px;
+    padding-left: 46px;
   }
   .card-stats {
     gap: 5px;
