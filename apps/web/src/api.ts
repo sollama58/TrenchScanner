@@ -1373,6 +1373,16 @@ export interface TelegramState {
   botUsername: string | null;
   chats: TelegramChat[];
   linkTtlMs: number;
+  /** Which models' calls go to Telegram; absent from older API builds (= same as the feed). */
+  models?: TelegramModels;
+}
+
+/** GET /telegram's `models`, and PUT /telegram/models' answer. */
+export interface TelegramModels {
+  /** Telegram carries the Live Feed's models (the default). */
+  sameAsFeed: boolean;
+  /** Telegram's own picks while sameAsFeed is off; empty = follow the top models. */
+  models: string[];
 }
 
 /** POST /telegram/link/code: a one-time code inside the two t.me deep links. */

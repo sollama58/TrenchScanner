@@ -4,7 +4,7 @@ import { adminWalletSet } from "../config/env.js";
 import { prisma, TRAINER_APPLICATION_NAME } from "../db.js";
 import { createLogger } from "../logger.js";
 import { resolveAccess } from "../subscription/access.js";
-import { loadFeedModelState, resolveFeedModels, type FeedModelState } from "../curation/feedModels.js";
+import { loadFeedModelState, resolveTelegramModels, type FeedModelState } from "../curation/feedModels.js";
 import {
   loadNarrativeNoteReadiness,
   narrativeNoteChoice,
@@ -191,11 +191,25 @@ function loadChats() {
           feedModels: true,
           showModelAlerts: true,
           followBestModel: true,
+          telegramSameAsFeed: true,
+          telegramModels: true,
           feedAppearance: true,
         },
       },
     },
   });
+}
+
+/**
+ * Whether model calls can reach a chat: it takes them, and the account sends Telegram some. While
+ * Telegram follows the Live Feed that needs the feed's model alerts on; Telegram's own picks
+ * (curation/feedModels.ts resolveTelegramModels) don't depend on that switch.
+ */
+function takesCalls(chat: {
+  modelCalls: boolean;
+  user: { showModelAlerts: boolean; telegramSameAsFeed: boolean };
+}): boolean {
+  return chat.modelCalls && (!chat.user.telegramSameAsFeed || chat.user.showModelAlerts);
 }
 
 /** Something to tell a chat about: one token, everything raised on it since the cursor. */
@@ -382,7 +396,7 @@ async function dispatchPass(
   const since = new Date(Math.min(...chats.map((c) => c.sentThrough.getTime())));
 
   const matchUsers = [...new Set(chats.filter((c) => c.filterMatches).map((c) => c.user.id))];
-  const wantsCalls = chats.some((c) => c.modelCalls && c.user.showModelAlerts);
+  const wantsCalls = chats.some(takesCalls);
   const [matches, calls] = await Promise.all([
     matchUsers.length === 0
       ? []
@@ -491,19 +505,25 @@ async function dispatchPass(
       continue;
     }
     const mine = matches.filter((m) => m.userId === chat.user.id);
+    const callsOn = takesCalls(chat);
     let theirs: typeof calls = [];
-    if (chat.modelCalls && chat.user.showModelAlerts && state) {
+    if (callsOn && state) {
       const models = new Set(
-        resolveFeedModels(state, {
-          model: chat.user.curatedModel,
-          models: chat.user.feedModels,
-          followBest: chat.user.followBestModel,
-        }).models,
+        resolveTelegramModels(
+          state,
+          {
+            model: chat.user.curatedModel,
+            models: chat.user.feedModels,
+            followBest: chat.user.followBestModel,
+            showModelAlerts: chat.user.showModelAlerts,
+          },
+          { sameAsFeed: chat.user.telegramSameAsFeed, models: chat.user.telegramModels },
+        ).models,
       );
       theirs = calls.filter((c) => c.model !== null && models.has(c.model));
     }
     const pending = buildPending(
-      { ...chat, modelCalls: chat.modelCalls && chat.user.showModelAlerts },
+      { ...chat, modelCalls: callsOn },
       mine,
       showsNarrativeNote(narrativeNoteChoice(chat.user.feedAppearance), noteReady)
         ? theirs

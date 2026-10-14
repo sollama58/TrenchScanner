@@ -337,6 +337,39 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(Date.now() - row!.sentAt.getTime()).toBeLessThan(60_000);
   });
 
+  it("sends Telegram its own models when they differ from the Live Feed's", async () => {
+    await rewind();
+    const at = new Date(Date.now() - 30_000);
+    // The Live Feed shows no model calls at all; Telegram picks Trees.
+    await prisma.user.update({
+      where: { id: userId },
+      data: { showModelAlerts: false, telegramSameAsFeed: false, telegramModels: ["trees"] },
+    });
+    try {
+      await prisma.curatedAlert.createMany({
+        data: ["rules", "trees"].map((model, i) => ({
+          tokenId,
+          source: "test",
+          confidence: 80,
+          anchorPriceUsd: 0.001,
+          anchorMcapUsd: 50_000,
+          model,
+          modelName: model === "rules" ? "Rules" : "Trees",
+          createdAt: new Date(at.getTime() + i * 1_000),
+        })),
+      });
+      const api = new FakeTelegramApi();
+      expect((await run(api)).sent).toBe(1);
+      expect(api.sent()[0]!.text).toContain("Trees");
+      expect(api.sent()[0]!.text).not.toContain("Rules");
+    } finally {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { showModelAlerts: true, telegramSameAsFeed: true, telegramModels: [] },
+      });
+    }
+  });
+
   it("never reads the model state on a pass with nothing new", async () => {
     const api = new FakeTelegramApi();
     await prisma.telegramChat.update({ where: { id: chatRowId }, data: { sentThrough: new Date() } });

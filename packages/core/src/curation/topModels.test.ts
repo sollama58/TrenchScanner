@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pickBestReturnModel, pickTopModels, topModelsWindow, TOP_MODELS_MIN_GRADED } from "./topModels.js";
-import { resolveDefaultModels, resolveFeedModels } from "./feedModels.js";
+import { resolveDefaultModels, resolveFeedModels, resolveTelegramModels } from "./feedModels.js";
 import { CONTESTANTS } from "./contestants.js";
 
 const s = (id: string, wins: number, graded: number, calling = true, score: number | null = wins) => ({
@@ -126,5 +126,27 @@ describe("default feed", () => {
       models: ["linear"],
       followsDefault: false,
     });
+  });
+
+  it("sends Telegram the Live Feed's models until it gets its own picks", () => {
+    const feed = { model: "linear", models: ["linear"], followBest: false, showModelAlerts: true };
+    const same = { sameAsFeed: true, models: ["trees"] };
+    expect(resolveTelegramModels(state, feed, same)).toEqual({ models: ["linear"], followsDefault: false });
+    // Following the feed, the feed's off switch means no calls on Telegram either.
+    expect(resolveTelegramModels(state, { ...feed, showModelAlerts: false }, same).models).toEqual([]);
+    // Its own picks, in roster order, whatever the feed shows or whether it shows calls at all.
+    const own = { sameAsFeed: false, models: ["trees", "rules"] };
+    expect(resolveTelegramModels(state, { ...feed, showModelAlerts: false }, own)).toEqual({
+      models: ["rules", "trees"],
+      followsDefault: false,
+    });
+    // No picks, or none left on the roster: the top models.
+    expect(resolveTelegramModels(state, feed, { sameAsFeed: false, models: [] })).toEqual({
+      models: ["trees", "linear", "rules"],
+      followsDefault: true,
+    });
+    expect(resolveTelegramModels(state, feed, { sameAsFeed: false, models: ["gone"] }).followsDefault).toBe(
+      true,
+    );
   });
 });

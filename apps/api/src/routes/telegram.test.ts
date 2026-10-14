@@ -182,6 +182,32 @@ describe.skipIf(!dbAvailable)("telegram routes", () => {
     expect((await app.inject({ method: "GET", url: "/telegram", ...auth() })).json().chats).toEqual([]);
   });
 
+  it("keeps Telegram on the Live Feed's models until it gets its own", async () => {
+    const get = async () => (await app.inject({ method: "GET", url: "/telegram", ...auth() })).json().models;
+    expect(await get()).toEqual({ sameAsFeed: true, models: [] });
+    // The feed has hand picks: turning "same as feed" off starts Telegram from them.
+    await prisma.user.update({
+      where: { id: userId },
+      data: { followBestModel: false, feedModels: ["rules"], curatedModel: "rules" },
+    });
+    const put = (payload: object) =>
+      app.inject({ method: "PUT", url: "/telegram/models", payload, ...auth() });
+    const off = await put({ sameAsFeed: false });
+    expect(off.statusCode).toBe(200);
+    expect(off.json().models).toEqual({ sameAsFeed: false, models: ["rules"] });
+    // Clearing the picks follows the top models; the feed's own picks are untouched.
+    expect((await put({ models: null })).json().models).toEqual({ sameAsFeed: false, models: [] });
+    expect((await prisma.user.findUnique({ where: { id: userId } }))?.feedModels).toEqual(["rules"]);
+    expect((await put({ models: ["no-such-model"] })).statusCode).toBe(400);
+    expect((await put({})).statusCode).toBe(400);
+    expect((await put({ sameAsFeed: true })).json().models.sameAsFeed).toBe(true);
+    expect(await get()).toEqual({ sameAsFeed: true, models: [] });
+    expect(
+      (await app.inject({ method: "PUT", url: "/telegram/models", payload: { sameAsFeed: false } }))
+        .statusCode,
+    ).toBe(401);
+  });
+
   it("issues codes for the session's own account only", async () => {
     // The bot lookup needs Telegram; a code already minted shows the row shape without it.
     const { code } = await issueTelegramLinkCode(userId);
