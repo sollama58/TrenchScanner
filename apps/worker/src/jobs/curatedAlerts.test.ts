@@ -677,14 +677,20 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     expect(alerts.map((a) => a.model)).toEqual(["linear"]);
   });
 
-  /** Two always-yes members and a consensus over them that also always says yes. */
-  async function seedConsensus(): Promise<{ linearId: string; treesId: string }> {
+  /**
+   * Two always-yes members and a consensus over them that also always says yes. Each member calls
+   * at its cutoff unless `uncalled` names it (no cutoff stored), so by default both back the call.
+   */
+  async function seedConsensus(uncalled: string[] = []): Promise<{ linearId: string; treesId: string }> {
     const linearId = await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
     const treesId = await activeModel("trees", CURATOR_MODEL_KIND, alwaysYesParams());
-    const members = [
-      { contestant: "linear", modelId: linearId, quantiles: [0.2, 0.5, 0.8] },
-      { contestant: "trees", modelId: treesId, quantiles: [0.2, 0.5, 0.8] },
-    ];
+    const member = (contestant: string, modelId: string) => ({
+      contestant,
+      modelId,
+      quantiles: [0.2, 0.5, 0.8],
+      ...(uncalled.includes(contestant) ? {} : { callRank: 0.5 }),
+    });
+    const members = [member("linear", linearId), member("trees", treesId)];
     const featureNames = stackedFeatureNames(members);
     await activeModel(CONSENSUS_CONTESTANT, STACKED_MODEL_KIND, {
       kind: STACKED_MODEL_KIND,
@@ -712,6 +718,17 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     });
     expect(consensus.confidence).toBeGreaterThan(99);
     expect(consensus.reasons[0]).toBe("backed by Linear, Trees, Rules");
+  });
+
+  it("the consensus doesn't call a moment its members don't back, however sure its meta model is", async () => {
+    // The member-backing gate (user decision 2026-10-14): with two members both must call; Trees
+    // has no cutoff, so only Linear calls. The meta model (and Rules) would say yes.
+    await seedConsensus(["trees"]);
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-consensus-unbacked` } });
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, curatableFixture(token.mintAddress), null, env);
+    expect(cycle.byModel.has("linear")).toBe(true);
+    expect(cycle.byModel.has(CONSENSUS_CONTESTANT)).toBe(false);
   });
 
   it("the consensus sits out when a member is a different generation than it was stacked on", async () => {

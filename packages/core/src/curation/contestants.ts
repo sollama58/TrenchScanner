@@ -28,14 +28,16 @@ import type { CuratorLearner } from "./trainer.js";
  *    (recency, depth, feature subset). Diversity is the point: near-identical members teach the
  *    consensus nothing.
  *  - "stacked": the consensus - a second-order model trained on the other contestants' own
- *    out-of-sample calls (curation/stacking.ts). The default feed.
+ *    out-of-sample calls (curation/stacking.ts). The default feed. Since 2026-10-14 (user
+ *    decision) it calls only moments at least CONSENSUS_MIN_BACKERS of its members call too.
  *  - "blend": the learners' confidence ranks averaged, nothing fitted (curation/blend.ts) - the
  *    consensus's unlearned rival.
  *  - "agreement": how many learners call the token at their own cutoff, nothing fitted
  *    (curation/agreement.ts) - the tokens the room agrees on, most agreed first.
- *    Two learner seats are "standalone" (Sharp Trees, Sharp Deep Trees): a tree recipe whose
+ *    Two learner seats are "standalone" (Sharp Trees, Sharp Survivor): a tree recipe whose
  *    cutoff passes only its top 12% or so of decision moments, outside the combiners and
- *    evolution (see ContestantSpec.standalone).
+ *    evolution (see ContestantSpec.standalone). Sharp Survivor took over from Sharp Deep Trees
+ *    (retired, user decision 2026-10-14).
  *  - "topslice": only the most confident calls of the tree seats - a token one of them ranks in
  *    the top quarter of its own calls - at a fixed cutoff, nothing fitted (curation/topSlice.ts).
  *  - "narrative": a trained model that decides only once TokenSage's deep read of the coin is
@@ -131,10 +133,28 @@ export const NARRATIVE_BLEND_CONTESTANT = "narrative-blend";
 
 /** The high-precision seats - see HIGH_PRECISION_CUTOFF_SHARE. */
 export const SHARP_TREES_CONTESTANT = "sharp-trees";
+/** Survivor's two-stage recipe at the high-precision cutoff (user decision 2026-10-14). */
+export const SHARP_SURVIVOR_CONTESTANT = "sharp-survivor";
+/**
+ * Retired 2026-10-14 (user decision): Deep Trees' exact recipe, seed and rows at a tighter cutoff,
+ * so its exam matched Deep Trees' bit for bit and 99% of its live calls were Deep Trees' calls
+ * (notes/model-audit-2026-10-14/objectives-sharp.md, section 4). Its seat went to Sharp Survivor
+ * under a new id: a different model on the old id would have inherited Deep Trees' record.
+ */
 export const SHARP_DEEP_TREES_CONTESTANT = "sharp-deep-trees";
 
 /** "Recent" contestants forget fast: this meta rotates in days, and they bet on that. */
 export const RECENT_HALF_LIFE_DAYS = 3;
+
+/**
+ * Trees Recent's own half-life, shorter than RECENT_HALF_LIFE_DAYS (which Linear Recent keeps).
+ * A trial, user decision 2026-10-14: at 3 days the seat was not distinguishable from Trees (live
+ * 20.9%, n=1,383; exam 21.5%). In the audit's walk-forward replica a 1-1.5 day half-life sharpened
+ * the top 5% on the native fresh-quote rows by +4.8 [+0.2, +9.2] to +7.4 [+2.4, +12.2] points
+ * (paired token-cluster bootstrap against 14 days), while over all days the gain was +2 to +3
+ * points, inside noise (notes/model-audit-2026-10-14/trees-core.md). Judge it on its live record.
+ */
+export const TREES_RECENT_HALF_LIFE_DAYS = 1.5;
 
 /**
  * Order flow and short-window momentum only - what the last minutes of trading say, blind to
@@ -243,9 +263,10 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   {
     id: CONSENSUS_CONTESTANT,
     name: "Consensus",
-    description: "Learns how far to trust each other model, and calls when the room agrees",
+    description:
+      "Learns how far to trust each other model, and calls only when at least three of them call the token at their own cutoffs",
     summary:
-      "Doesn't read tokens itself: it learns which of the other models to trust and calls when they agree.",
+      "Doesn't read tokens itself: it learns which of the other models to trust, and calls only when at least three of them call it too.",
     role: "stacked",
   },
   {
@@ -335,10 +356,13 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   {
     id: "trees-recent",
     name: "Trees Recent",
-    description: "Gradient-boosted trees that mostly forget anything older than a few days",
-    summary: "If-then rules learned mostly from the last few days.",
+    description:
+      "Gradient-boosted trees where a row counts half after 1.5 days, so mostly the last day or two (a trial since 2026-10-14)",
+    summary: "If-then rules learned mostly from the last day or two.",
     role: "learner",
-    recipe: { learner: "gbdt", recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS },
+    // 1.5-day half-life since 2026-10-14 (was 3), a trial (user decision 2026-10-14): see
+    // TREES_RECENT_HALF_LIFE_DAYS. Same id and family - the seat keeps its record and its lane.
+    recipe: { learner: "gbdt", recencyHalfLifeDays: TREES_RECENT_HALF_LIFE_DAYS },
   },
   {
     id: "momentum",
@@ -417,6 +441,25 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
       boosting: { maxDepth: 5, minLeafRows: 50, maxTrees: 200 },
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
     },
+    standalone: true,
+    // User decision 2026-10-14: a bit-identical copy of Deep Trees; see SHARP_DEEP_TREES_CONTESTANT.
+    retired: true,
+  },
+  {
+    // Took Sharp Deep Trees' place (user decision 2026-10-14): the field's only tight,
+    // survival-first view. In the audit's walk-forward replica Survivor's ranking was the most
+    // distinct in the tree family (Jaccard 0.01-0.12 with Trees at the top 1-5%) with the most
+    // consistent small top-end edge (seed-averaged top 3% 24.3% vs 18.7%, top 5% 23.0% vs 19.9%,
+    // inside noise) and 16 points fewer stop-outs in its top 5%
+    // (notes/model-audit-2026-10-14/objectives-sharp.md, 4.6).
+    id: SHARP_SURVIVOR_CONTESTANT,
+    name: "Sharp Survivor",
+    description:
+      "Survivor's two boosted-tree stages (first whether it holds above the stop, then whether it doubles) calling only their surest tokens: about the top 12% of decision moments, moved by 2x record",
+    summary:
+      "Asks first whether a token will avoid a 50% drop, then whether it will double, and calls only the ones it is surest of, about 6-8 an hour.",
+    role: "learner",
+    recipe: { learner: "gbdt", twoStage: true, cutoffShare: HIGH_PRECISION_CUTOFF_SHARE },
     standalone: true,
   },
   {

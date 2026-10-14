@@ -23,7 +23,7 @@ import {
   withLanes,
   type Lane,
 } from "../src/curation/evolution.js";
-import { addCall, rulesSignal, scoreStacked } from "../src/curation/stacking.js";
+import { addCall, rulesSignal, scoreStacked, stackedCalls } from "../src/curation/stacking.js";
 import { compositeScore, emptyRecord, recordScore, type CallRecord } from "../src/curation/leaderboard.js";
 import {
   scoreCandidateWithModel,
@@ -66,7 +66,11 @@ function replay(params: Map<string, ContestantParams>, rows: TrainingRow[]): Map
         const gate = evaluateCandidateHeuristic(scored, 55).curate;
         calls = gate && (p.rankCutoff === null || curationRankScore(scored) >= p.rankCutoff);
       } else if (p.kind === "stacked-v1") {
-        calls = scoreStacked(p, probabilities, rulesSignal(scored, p.rules.minScore)) >= p.threshold;
+        calls = stackedCalls(
+          p,
+          scoreStacked(p, probabilities, rulesSignal(scored, p.rules.minScore)),
+          probabilities,
+        );
       } else {
         calls = probabilities.get(id)! >= (p as TrainedCuratorParams).threshold;
       }

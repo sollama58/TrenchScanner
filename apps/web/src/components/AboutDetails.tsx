@@ -197,7 +197,7 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           </li>
           <li>
             <b>Evolve.</b> New variants are bred from the leaders. One that beats the weakest model takes its
-            seat. Consensus learns which models to trust, and when.
+            seat. Consensus learns which models to trust, and calls only when at least three of them agree.
           </li>
         </ol>
         <p>

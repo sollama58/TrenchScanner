@@ -278,7 +278,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
             and is graded the same way: {data.rules.win}. The field evolves: every run breeds new variants of
             the leaders, and a variant that clearly beats the weakest model takes its seat. The{" "}
             <strong>Consensus</strong> doesn&apos;t read the market directly; it learns how far to trust each
-            of the others.
+            of the others, and calls a token only when at least three of them call it too.
           </p>
           <ol className="pipeline" aria-label="How a call is made">
             <PipelineStage
@@ -1593,7 +1593,8 @@ function HowItWorks({ board }: { board: Leaderboard }) {
         <li>
           <strong>Consensus.</strong> A second-order model trained on the others' out-of-sample calls: it
           learns which models to trust and when they agree, and gets its own exam on later weeks than it
-          trained on.
+          trained on. It calls a token only when at least three of the models it learns from call it at their
+          own cutoffs, so the Rules checks it also reads can&apos;t carry a call on their own.
         </li>
         <li>
           <strong>The default.</strong>{" "}
