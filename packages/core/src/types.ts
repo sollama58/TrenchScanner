@@ -298,6 +298,13 @@ export interface OnChainProfile {
   preBondSeconds?: number;
   /** The pre-bond floor the screen applies (SAFETY_MIN_PREBOND_SECONDS); undefined = the default. */
   minPreBondSeconds?: number;
+  /**
+   * Other mints with this one's ticker first seen in the SAFETY_RELAUNCH_WINDOW_MINUTES before it,
+   * and the highest market cap any of them has been seen at (the worker's relaunchFarms.ts), for
+   * the screen's relaunch-farm cut. Undefined = not read; the cut applies only once known.
+   */
+  relaunchSiblings?: number;
+  relaunchSiblingPeakMcapUsd?: number;
 }
 
 /** A CandidateToken enriched with on-chain data and derived metrics, ready to score. */

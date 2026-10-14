@@ -194,6 +194,29 @@ describe("runRugScreen", () => {
   });
 });
 
+describe("runRugScreen - relaunch farm", () => {
+  const at = (siblings: number | undefined, peak?: number) =>
+    runRugScreen({ ...safeProfile, relaunchSiblings: siblings, relaunchSiblingPeakMcapUsd: peak });
+
+  it("rejects a ticker launched 4 or more times in the window before it when none of them ran", () => {
+    // The DOBU farm, 2026-10-14: every earlier copy dumped to the curve floor (~$3k).
+    const farm = at(5, 14_705);
+    expect(farm.passed).toBe(false);
+    expect(farm.reasons[0]).toMatch(/ticker launched 5 other times in the 15 min before it, none past \$20k/);
+    expect(at(4, 0).passed).toBe(false);
+    expect(at(3, 0).passed).toBe(true);
+  });
+
+  it("passes a wave where one earlier copy has run", () => {
+    expect(at(8, 20_000).passed).toBe(true);
+    expect(at(8, 150_000).passed).toBe(true);
+  });
+
+  it("applies only once the siblings are read", () => {
+    expect(at(undefined).passed).toBe(true);
+  });
+});
+
 describe("runRugScreen - Pump.fun Mayhem Mode", () => {
   it("fails a Mayhem Mode token", () => {
     const result = runRugScreen({ ...safeProfile, isMayhemMode: true });

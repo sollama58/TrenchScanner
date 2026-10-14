@@ -125,6 +125,31 @@ export const SAFETY_MAX_LARGEST_HOLDER_PCT = 10;
 export const SAFETY_MIN_PREBOND_SECONDS = 5;
 
 /**
+ * A relaunch farm: the same ticker launched again and again within minutes, each launch bot-pumped
+ * to ~$10-15k in its first minute and dumped to the curve floor by its second, under a different
+ * creator each time so no creator history catches it. 2026-10-14 "Doge Bull" (DOBU): 13 launches in
+ * 15 minutes, three passed every other cut and were called at ~$10k, all at ~$3k two minutes later.
+ *
+ * A token is never alerted when at least SAFETY_RELAUNCH_MIN_SIBLINGS other mints with its ticker
+ * were first seen in the SAFETY_RELAUNCH_WINDOW_MINUTES before it AND none of them has been seen
+ * above SAFETY_RELAUNCH_SIBLING_RAN_USD. The second half keeps a real wave in: when one copy of a
+ * hot name has run, the copies after it are riding something, not being farmed. On the six hours
+ * to 2026-10-14 23:15 the cut caught 50 of ~740 screen passes (11 of ~200 called coins), and 0 of
+ * their 9 graded event rows doubled inside the hour against 17% for the rest.
+ */
+export const SAFETY_RELAUNCH_WINDOW_MINUTES = 15;
+export const SAFETY_RELAUNCH_MIN_SIBLINGS = 4;
+export const SAFETY_RELAUNCH_SIBLING_RAN_USD = 20_000;
+
+/** The relaunch-farm cut's reason, or null when it passes or the siblings are unknown. */
+function relaunchReason(profile: OnChainProfile): string | null {
+  const siblings = profile.relaunchSiblings;
+  if (typeof siblings !== "number" || siblings < SAFETY_RELAUNCH_MIN_SIBLINGS) return null;
+  if ((profile.relaunchSiblingPeakMcapUsd ?? 0) >= SAFETY_RELAUNCH_SIBLING_RAN_USD) return null;
+  return `ticker launched ${siblings} other times in the ${SAFETY_RELAUNCH_WINDOW_MINUTES} min before it, none past $${SAFETY_RELAUNCH_SIBLING_RAN_USD / 1000}k (relaunch farm, ${SAFETY_RELAUNCH_MIN_SIBLINGS} or more)`;
+}
+
+/**
  * Hard exclusion gate. A token must pass this before it's ever shown to a
  * user, independent of their filter settings - this is the "auto-filter
  * scams" behavior chosen in planning, not something users can turn off.
@@ -197,6 +222,8 @@ export function runRugScreen(profile: OnChainProfile | null | undefined): RugScr
       `largest holder owns ${profile.largestHolderPct.toFixed(1)}% of supply (over ${SAFETY_MAX_LARGEST_HOLDER_PCT}%)`,
     );
   }
+  const relaunch = relaunchReason(profile);
+  if (relaunch) reasons.push(relaunch);
   const linkedCut = countCutFor(SAFETY_REJECT_LINKED_COUNT, profile.linkedWalletsChecked);
   if (typeof profile.linkedWalletCount === "number" && profile.linkedWalletCount >= linkedCut) {
     reasons.push(

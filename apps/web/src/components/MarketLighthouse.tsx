@@ -1235,6 +1235,10 @@ function PreChecks({ s }: { s: ScreenedData }) {
               wasn&apos;t bundled.
             </li>
           )}
+          <li>
+            Its ticker wasn&apos;t launched 4 or more times in the 15 minutes before it with none of those
+            copies passing $20k (a relaunch farm).
+          </li>
         </ul>
         <p className="faint small">Anything that can&apos;t be checked fails.</p>
       </div>
