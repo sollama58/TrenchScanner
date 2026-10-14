@@ -166,6 +166,18 @@ export type FunderResult =
 export const REVIVED_FUNDING_WITHIN_MS = 24 * 3_600_000;
 
 /**
+ * A wallet's stored funder, handed back to getFundersBatch when the wallet comes up for its
+ * re-read (the caller's answer aged past WALLET_DORMANT_GAP_MS). A wallet's first transactions
+ * never change, so unless its page shows it revived, the stored answer stands and only the
+ * 1-credit page is paid - not the walk, and not the 10-credit sorted lookup of a busy wallet.
+ */
+export interface KnownFunder {
+  funder: string | null;
+  amountSol: number | null;
+  fundedAt: Date | null;
+}
+
+/**
  * One wallet as the chain has it now, for the wallet modal (getWalletOverview): its SOL balance and
  * its newest page of signatures. `txCount` is exact when `complete` (the page is its whole history,
  * so `firstAt` is its first transaction); otherwise it is the page size, a floor.
@@ -1093,9 +1105,10 @@ export class HeliusClient {
    */
   async getFundersBatch(
     wallets: string[],
-    opts: { nowMs?: number } = {},
+    opts: { nowMs?: number; knownOf?: ReadonlyMap<string, KnownFunder> } = {},
   ): Promise<Map<string, FunderResult>> {
     const nowMs = opts.nowMs ?? Date.now();
+    const knownOf = opts.knownOf ?? new Map<string, KnownFunder>();
     const unique = [...new Set(wallets)];
     const out = new Map<string, FunderResult>();
     if (unique.length === 0) return out;
@@ -1135,6 +1148,25 @@ export class HeliusClient {
         sigs.forEach((s, i) => {
           if (typeof s.blockTime === "number" && s.blockTime * 1000 >= since) start = i;
         });
+      }
+      // Not revived, and read before: its first transactions are what they were. The stored answer
+      // stands, with this page's newest transaction, for 1 credit instead of the walk or the sorted
+      // lookup.
+      const known = start < 0 ? knownOf.get(wallet) : undefined;
+      if (known) {
+        out.set(wallet, {
+          ...(known.funder
+            ? {
+                status: "found",
+                funder: known.funder,
+                amountSol: known.amountSol ?? 0,
+                fundedAt: known.fundedAt,
+              }
+            : { status: "none" }),
+          reads: 0,
+          ...this.stretchOf(wallet, revived, lastActivity),
+        });
+        continue;
       }
       const walk =
         start >= 0 ? sigs.slice(0, start + 1) : sigs.length >= FUNDER_SIGNATURES_LIMIT ? null : sigs;

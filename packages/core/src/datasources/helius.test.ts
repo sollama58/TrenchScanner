@@ -886,6 +886,49 @@ describe("HeliusClient.getFundersBatch", () => {
     expect(asked.filter((c) => c.method === "getTransaction").map((c) => c.params[0])).toEqual(["s1", "s2"]);
   });
 
+  it("keeps a known funder on a re-read, paying only the page, unless the wallet revived", async () => {
+    const now = (SECONDS + 200 * 86_400) * 1000;
+    const nowS = now / 1000;
+    // b: a busy wallet, active all along (a full page with no gap) - the stored funder stands.
+    const steady = Array.from({ length: 1000 }, (_, i) => ({ signature: `n${i}`, blockTime: nowS - 60 * i }));
+    // v: idle 200 days, paid again an hour ago - the stored funder is stale, so it is read.
+    const refund = {
+      blockTime: nowS - 3600,
+      meta: { err: null, preBalances: [9 * SOL, 0], postBalances: [7 * SOL - 5000, 2 * SOL] },
+      transaction: { message: { accountKeys: ["R", "v"], header: { numRequiredSignatures: 1 } } },
+    };
+    const revived = [
+      { signature: "b2", blockTime: nowS - 60 },
+      { signature: "r1", blockTime: nowS - 3600 },
+      { signature: "s1", blockTime: SECONDS },
+    ];
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) =>
+        c.method === "getSignaturesForAddress"
+          ? { jsonrpc: "2.0", id: c.id, result: c.params[0] === "b" ? steady : revived }
+          : { jsonrpc: "2.0", id: c.id, result: c.params[0] === "r1" ? refund : null },
+      ),
+    );
+    const client = new HeliusClient({ rpcUrl: `${url}/?helius=1` });
+    const knownOf = new Map([
+      ["b", { funder: "KB", amountSol: 2, fundedAt: new Date(SECONDS * 1000) }],
+      ["v", { funder: "KV", amountSol: 1, fundedAt: new Date(SECONDS * 1000) }],
+    ]);
+    const result = await client.getFundersBatch(["b", "v"], { nowMs: now, knownOf });
+    expect(result.get("b")).toMatchObject({
+      status: "found",
+      funder: "KB",
+      amountSol: 2,
+      reads: 0,
+      lastActivityAt: new Date((nowS - 0) * 1000),
+    });
+    expect(result.get("b")).not.toHaveProperty("sorted");
+    expect(result.get("v")).toMatchObject({ status: "found", funder: "R", revived: true });
+    const asked = requests.flatMap((r) => r.body as { method: string; params: unknown[] }[]);
+    expect(asked.filter((c) => c.method === "getTransactionsForAddress")).toHaveLength(0);
+    expect(asked.filter((c) => c.method === "getSignaturesForAddress")).toHaveLength(2);
+  });
+
   it("reads a wallet woken after a week idle for who paid it then, even on a full page", async () => {
     // An aged farm wallet: one transaction 200 days ago, then paid again an hour before the read.
     const now = (SECONDS + 200 * 86_400) * 1000;
