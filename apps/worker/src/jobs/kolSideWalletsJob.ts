@@ -358,8 +358,9 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
           ],
         },
       });
-      // A wallet now read as a likely bot loses the labels it held.
-      if (botLike.size) await tx.kolPossibleSide.deleteMany({ where: { wallet: { in: [...botLike] } } });
+      // A wallet now read as a bot or a likely bot loses the labels it held, hold or not.
+      const unlabeled = [...new Set([...bots, ...botLike])];
+      if (unlabeled.length) await tx.kolPossibleSide.deleteMany({ where: { wallet: { in: unlabeled } } });
       for (let i = 0; i < possible.length; i += POSSIBLE_SIDE_DELETE_CHUNK) {
         const chunk = possible.slice(i, i + POSSIBLE_SIDE_DELETE_CHUNK);
         await tx.kolPossibleSide.deleteMany({
