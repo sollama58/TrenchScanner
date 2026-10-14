@@ -2861,7 +2861,7 @@ legend {
 .side-drop p {
   margin: 6px 0;
 }
-.side-sides li {
+.side-sides > li {
   display: grid;
   grid-template-columns: 20px 92px minmax(60px, 1fr) 48px;
   grid-template-areas:
@@ -2873,7 +2873,7 @@ legend {
   padding: 7px 0;
   border-top: 1px solid var(--border);
 }
-.side-sides li:first-child {
+.side-sides > li:first-child {
   border-top: none;
 }
 .side-sides .side-rank {
@@ -2906,17 +2906,17 @@ legend {
 .side-pct.strong {
   color: var(--brand-ink);
 }
-.side-sides li.labeled .side-wallet {
+.side-sides > li.labeled .side-wallet {
   font-weight: 700;
 }
 /* A side wallet row opens its trades with the KOL (SideMatch). */
-.side-sides li {
+.side-sides > li {
   cursor: pointer;
 }
-.side-sides li:hover {
+.side-sides > li:hover {
   background: color-mix(in srgb, var(--surface-3) 45%, transparent);
 }
-.side-sides li.open {
+.side-sides > li.open {
   background: color-mix(in srgb, var(--brand-a) 6%, transparent);
 }
 .side-trades-btn {
@@ -2929,7 +2929,7 @@ legend {
   font-size: 12px;
   color: var(--brand-ink);
 }
-.side-sides li.open .side-trades-btn .side-chevron {
+.side-sides > li.open .side-trades-btn .side-chevron {
   transform: rotate(180deg);
 }
 .sm-body {
@@ -3222,7 +3222,7 @@ legend {
     margin: 0 0 12px;
     padding: 10px;
   }
-  .side-sides li {
+  .side-sides > li {
     grid-template-columns: 18px 84px minmax(40px, 1fr) 44px;
     column-gap: 8px;
   }
