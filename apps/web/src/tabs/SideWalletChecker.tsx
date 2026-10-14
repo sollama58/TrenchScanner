@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 import { usePolling } from "../hooks";
 import { ago, shortAddress } from "../format";
 import { openWallet } from "../walletModal";
@@ -42,6 +42,8 @@ interface KolSides {
 const FIRST_ROWS = 25;
 /** Side wallets shown in a dropdown; more open in a modal. */
 const DROP_ROWS = 10;
+/** The fewest coins in common a listing needs (apps/api/src/routes/utilities.ts SIDE_MIN_SHARED). */
+const MIN_SHARED = 2;
 
 const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
 
@@ -182,7 +184,10 @@ export function SideWalletChecker() {
   );
 }
 
-/** One KOL's dropdown: its top ten side wallets in the period picked, and the rest in a modal. */
+/**
+ * One KOL's top ten side wallets in the period picked, and the rest in a modal: the leaderboard's
+ * dropdown, and the KOL's own wallet modal (KolSideWallets below).
+ */
 function SideWallets({
   kol,
   kolName,
@@ -198,12 +203,18 @@ function SideWallets({
 }) {
   const [data, setData] = useState<KolSides | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [missing, setMissing] = useState(false);
   const [showAll, setShowAll] = useState(false);
   useEffect(() => {
     let live = true;
     api<KolSides>(`/utilities/side-wallets/${encodeURIComponent(kol)}`)
       .then((d) => live && setData(d))
-      .catch((e: unknown) => live && setError(e instanceof Error ? e.message : String(e)));
+      .catch((e: unknown) => {
+        if (!live) return;
+        // Not on the leaderboard: no tracked coin in the last 30 days, or the list hasn't rebuilt yet.
+        if (e instanceof ApiError && e.status === 404) setMissing(true);
+        else setError(e instanceof Error ? e.message : String(e));
+      });
     return () => {
       live = false;
     };
@@ -230,7 +241,11 @@ function SideWallets({
           ))}
         </div>
       </div>
-      {error ? (
+      {missing ? (
+        <p className="muted small">
+          No side wallets listed yet: the list covers KOLs that bought a tracked coin in the last 30 days.
+        </p>
+      ) : error ? (
         <p className="error small">Couldn&apos;t load its side wallets: {error}</p>
       ) : !data ? (
         <Skeleton lines={3} />
@@ -350,5 +365,29 @@ function SideRows({ list, coins, onOpen }: { list: SideWallet[]; coins: number; 
         </li>
       ))}
     </ol>
+  );
+}
+
+/**
+ * A KOL's likely side wallets in its own wallet modal (user ask 2026-10-14): the leaderboard's
+ * dropdown for that one wallet, with the same disclaimer.
+ */
+export function KolSideWallets({ wallet, kolName }: { wallet: string; kolName: string }) {
+  const [period, setPeriod] = useState<SideWindow>("30d");
+  return (
+    <section className="sage-card wm-section wm-sides">
+      <h4>Likely side wallets</h4>
+      <p className="faint small wm-note">
+        Wallets that bought the same coins within minutes of it. Not confirmed to belong to it: a wallet here
+        may be a copy trader, a friend, a bot or chance.
+      </p>
+      <SideWallets
+        kol={wallet}
+        kolName={kolName}
+        period={period}
+        setPeriod={setPeriod}
+        minShared={MIN_SHARED}
+      />
+    </section>
   );
 }

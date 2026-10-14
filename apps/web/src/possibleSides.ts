@@ -3,7 +3,8 @@ import { ApiError, post } from "./api";
 
 /**
  * Possible KOL side wallets (POST /wallets/possible-sides): wallets the Side Wallet Checker found
- * buying more than 90% of a KOL's coins alongside it over the last 24 hours, on more than 25 coins.
+ * buying more than 90% of a KOL's coins alongside it over the last 24 hours on more than 25 coins, or
+ * all of them on at least 10.
  * For the bubble map's ties and tags only. Answers are kept for the session, like wallet names.
  */
 
