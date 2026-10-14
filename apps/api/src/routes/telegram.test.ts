@@ -184,7 +184,7 @@ describe.skipIf(!dbAvailable)("telegram routes", () => {
 
   it("keeps Telegram on the Live Feed's models until it gets its own", async () => {
     const get = async () => (await app.inject({ method: "GET", url: "/telegram", ...auth() })).json().models;
-    expect(await get()).toEqual({ sameAsFeed: true, models: [] });
+    expect(await get()).toEqual({ sameAsFeed: true, models: [], highConvictionOnly: false });
     // The feed has hand picks: turning "same as feed" off starts Telegram from them.
     await prisma.user.update({
       where: { id: userId },
@@ -194,14 +194,25 @@ describe.skipIf(!dbAvailable)("telegram routes", () => {
       app.inject({ method: "PUT", url: "/telegram/models", payload, ...auth() });
     const off = await put({ sameAsFeed: false });
     expect(off.statusCode).toBe(200);
-    expect(off.json().models).toEqual({ sameAsFeed: false, models: ["rules"] });
+    expect(off.json().models).toEqual({ sameAsFeed: false, models: ["rules"], highConvictionOnly: false });
     // Clearing the picks follows the top models; the feed's own picks are untouched.
-    expect((await put({ models: null })).json().models).toEqual({ sameAsFeed: false, models: [] });
+    expect((await put({ models: null })).json().models).toEqual({
+      sameAsFeed: false,
+      models: [],
+      highConvictionOnly: false,
+    });
     expect((await prisma.user.findUnique({ where: { id: userId } }))?.feedModels).toEqual(["rules"]);
     expect((await put({ models: ["no-such-model"] })).statusCode).toBe(400);
     expect((await put({})).statusCode).toBe(400);
     expect((await put({ sameAsFeed: true })).json().models.sameAsFeed).toBe(true);
-    expect(await get()).toEqual({ sameAsFeed: true, models: [] });
+    expect(await get()).toEqual({ sameAsFeed: true, models: [], highConvictionOnly: false });
+    // High-conviction only is its own switch, kept apart from the model choice.
+    expect((await put({ highConvictionOnly: true })).json().models).toEqual({
+      sameAsFeed: true,
+      models: [],
+      highConvictionOnly: true,
+    });
+    expect((await put({ highConvictionOnly: false })).json().models.highConvictionOnly).toBe(false);
     expect(
       (await app.inject({ method: "PUT", url: "/telegram/models", payload: { sameAsFeed: false } }))
         .statusCode,

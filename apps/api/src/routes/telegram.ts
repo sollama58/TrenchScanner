@@ -57,10 +57,20 @@ const CHAT_SELECT = {
 } as const;
 
 /** Which models' calls go to this account's chats (curation/feedModels.ts resolveTelegramModels). */
-const TELEGRAM_MODELS_SELECT = { telegramSameAsFeed: true, telegramModels: true } as const;
+const TELEGRAM_MODELS_SELECT = {
+  telegramSameAsFeed: true,
+  telegramModels: true,
+  telegramHighConvictionOnly: true,
+} as const;
 
-function toTelegramModels(user: { telegramSameAsFeed: boolean; telegramModels: string[] } | null) {
-  return { sameAsFeed: user?.telegramSameAsFeed ?? true, models: user?.telegramModels ?? [] };
+function toTelegramModels(
+  user: { telegramSameAsFeed: boolean; telegramModels: string[]; telegramHighConvictionOnly: boolean } | null,
+) {
+  return {
+    sameAsFeed: user?.telegramSameAsFeed ?? true,
+    models: user?.telegramModels ?? [],
+    highConvictionOnly: user?.telegramHighConvictionOnly ?? false,
+  };
 }
 
 /** Constant-time compare of the webhook's secret header, as routes/stats.ts does for its bearer. */
@@ -212,6 +222,8 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
       sameAsFeed: z.boolean(),
       /** Telegram's own picks; null or [] = follow the top models. */
       models: z.array(z.string().min(1).max(64)).max(64).nullable(),
+      /** Only the high-conviction tier's calls, from any model, in place of the models above. */
+      highConvictionOnly: z.boolean(),
     })
     .partial()
     .strict()
@@ -226,9 +238,14 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
     const parsed = modelsSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
-    const { sameAsFeed, models } = parsed.data;
+    const { sameAsFeed, models, highConvictionOnly } = parsed.data;
     const state = await contestState(env);
-    const data: { telegramSameAsFeed?: boolean; telegramModels?: string[] } = {};
+    const data: {
+      telegramSameAsFeed?: boolean;
+      telegramModels?: string[];
+      telegramHighConvictionOnly?: boolean;
+    } = {};
+    if (highConvictionOnly !== undefined) data.telegramHighConvictionOnly = highConvictionOnly;
     if (models !== undefined) {
       const wanted = new Set(models ?? []);
       if ([...wanted].some((id) => !state.roster.some((c) => c.id === id))) {
