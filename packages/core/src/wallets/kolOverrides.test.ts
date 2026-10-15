@@ -36,4 +36,8 @@ describe("KOL overrides", () => {
     expect(KOL_OVERRIDES.get("7mHqL9GzGnbsYLoHLDzB7FiHAZbND2CZCJYFvU9PU1d3")?.name).toBe("Kimba");
     expect(KOL_OVERRIDES.get("5sNnKuWKUtZkdC1eFNyqz3XHpNoCRQ1D1DfHcNHMV7gn")?.name).toBe("cryptovillian26");
   });
+
+  it("names 2iPg…qADtFM as Jdn", () => {
+    expect(KOL_OVERRIDES.get("2iPgNgss7ow3v5YFkTpzABStfjFSyG3BGvP5sZqADtFM")?.name).toBe("Jdn");
+  });
 });
