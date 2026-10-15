@@ -5,6 +5,7 @@ import {
   isHotFunder,
   lastRebuiltAt,
   LAUNCH_SNIPER,
+  MIN_WIN_SOL,
   KNOWN_EXCHANGE_WALLETS,
   RISKY_WALLET_SCORE,
   SAME_TIME_FUNDING_MS,
@@ -246,7 +247,7 @@ export function walletLabels(input: {
       text: "Winner",
       tone: "good",
       source: "TrenchScanner win score",
-      detail: `${r.wins} of the ${r.appearances} called coins it bought doubled`,
+      detail: `${r.wins} of the ${r.appearances} called coins it bought doubled with ${MIN_WIN_SOL}+ SOL profit`,
     });
   // The book decides the sniper label with its rate rule; a wallet with no book row has fewer
   // than two coins read, so the count alone can't reach the bar.

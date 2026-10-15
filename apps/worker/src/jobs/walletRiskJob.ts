@@ -4,6 +4,7 @@ import {
   walletRiskScore,
   walletWinScore,
   walletLabels,
+  MIN_WIN_SOL,
   RISKY_WALLET_SCORE,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
@@ -23,7 +24,8 @@ const logger = createLogger("wallet-risk");
  * time of the last rebuild is the job's heartbeat (readers show the later of the two).
  *
  * The win side (user ask 2026-10-13): a coin counts as a win when its reference row (the tape's
- * outcome) hit 2x within 15 minutes and was not disqualified; an early win is one the wallet
+ * outcome) hit 2x within 15 minutes and was not disqualified, and the wallet's realized profit on
+ * it (solOut - solIn) was at least MIN_WIN_SOL (user ask 2026-10-15); an early win is one the wallet
  * first bought before that row's anchor, so a decision could have seen it holding. The win score
  * (walletWinScore) is built from those against the market's win rate, the way the risk score is
  * built from dumps.
@@ -76,7 +78,8 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
   const [totals] = await prisma.$queryRaw<{ appearances: bigint; dumps: bigint; wins: bigint }[]>`
     SELECT COUNT(*) FILTER (WHERE a."buys" > 0) AS appearances,
            COUNT(*) FILTER (WHERE a."buys" > 0 AND a."dumpedIntoStop") AS dumps,
-           COUNT(*) FILTER (WHERE a."buys" > 0 AND co."hit2xIn15m" AND NOT co."disqualified") AS wins
+           COUNT(*) FILTER (WHERE a."buys" > 0 AND co."hit2xIn15m" AND NOT co."disqualified"
+                              AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}) AS wins
     FROM "TokenWalletActivity" a
     JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
     LEFT JOIN "CandidateOutcome" co ON co."id" = t."outcomeId"`;
@@ -99,8 +102,10 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
            COUNT(*) FILTER (WHERE a."dumpedIntoStop") AS dumps,
            COUNT(*) FILTER (WHERE a."fastExit") AS "fastExits",
            COUNT(*) FILTER (WHERE a."launchSniper") AS snipes,
-           COUNT(*) FILTER (WHERE co."hit2xIn15m" AND NOT co."disqualified") AS wins,
            COUNT(*) FILTER (WHERE co."hit2xIn15m" AND NOT co."disqualified"
+                              AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}) AS wins,
+           COUNT(*) FILTER (WHERE co."hit2xIn15m" AND NOT co."disqualified"
+                              AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}
                               AND a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."anchorAt") AS "earlyWins",
            percentile_cont(0.5) WITHIN GROUP (ORDER BY a."boughtPct") AS "medianSupplyPct",
            SUM(a."solIn") AS "solIn",

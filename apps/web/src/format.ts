@@ -1,5 +1,8 @@
 /** Display formatting. Pure, so it is unit-tested (format.test.ts). */
 
+/** The smallest realized profit that counts as a wallet win (core's MIN_WIN_SOL, wallets/riskScore.ts); keep the two equal. */
+export const MIN_WIN_SOL = 0.5;
+
 export function usd(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "–";
   // The unit is picked on the value as it will be shown: $999.6K rounds to "1000K", which reads

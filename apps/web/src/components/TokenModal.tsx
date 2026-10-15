@@ -22,7 +22,7 @@ import {
 } from "react";
 import { ApiError, lookupRequired, type Card, type Snapshot } from "../api";
 import { usePolling } from "../hooks";
-import { ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
+import { MIN_WIN_SOL, ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import { TokenImage } from "./TokenImage";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
@@ -923,7 +923,7 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                           : t === "dumper" && w.dumps !== null
                             ? `Sold into the stop on ${w.dumps} of its called coins (4+, three quarters of them, 10+ coins on record)`
                             : t === "winner"
-                              ? "3 or more of the called coins it bought doubled, 60% of them or more, with 10+ coins on record"
+                              ? `3 or more of the called coins it bought doubled with ${MIN_WIN_SOL}+ SOL profit, 60% of them or more, with 10+ coins on record`
                               : t === "kol" && w.knownSideOf
                                 ? `One of ${w.kol || "a KOL"}'s own wallets, not its main one`
                                 : undefined
@@ -977,8 +977,8 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
       <p className="faint small tm-wallets-note">
         Risky: a score of 70+ from selling into earlier calls&apos; stops. Linked: funded by the same wallet
         as other top holders. KOL: a known KOL&apos;s wallet. Winner: 60%+ of the called coins it bought
-        doubled. KOL and Winner mark presence only, not a buy signal. SOL is what each wallet put into and
-        took out of this coin.
+        doubled with {MIN_WIN_SOL}+ SOL profit. KOL and Winner mark presence only, not a buy signal. SOL is
+        what each wallet put into and took out of this coin.
       </p>
     </section>
   );
