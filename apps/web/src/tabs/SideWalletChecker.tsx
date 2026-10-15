@@ -102,6 +102,8 @@ interface KolSides {
   rules?: SideRules;
   /** Wallets taken off its lists as likely bots (absent from older API builds). */
   likelyBots?: string[];
+  /** A Multi-Wallet-Bundle only (GET /utilities/bundle/:wallet): why there is none. */
+  skipped?: "kol" | "bot" | null;
 }
 
 /** Rows shown before "Show all". */
@@ -424,11 +426,14 @@ function SideWallets({
   kolName,
   period,
   setPeriod,
+  bundle = false,
 }: {
   kol: string;
   kolName: string;
   period: SideWindow;
   setPeriod: (w: SideWindow) => void;
+  /** Any other wallet's Multi-Wallet-Bundle, read on demand, in place of a KOL's stored lists. */
+  bundle?: boolean;
 }) {
   const [data, setData] = useState<KolSides | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -436,7 +441,7 @@ function SideWallets({
   const [showAll, setShowAll] = useState(false);
   useEffect(() => {
     let live = true;
-    api<KolSides>(`/utilities/side-wallets/${encodeURIComponent(kol)}`)
+    api<KolSides>(`/utilities/${bundle ? "bundle" : "side-wallets"}/${encodeURIComponent(kol)}`)
       .then((d) => live && setData(d))
       .catch((e: unknown) => {
         if (!live) return;
@@ -447,7 +452,7 @@ function SideWallets({
     return () => {
       live = false;
     };
-  }, [kol]);
+  }, [kol, bundle]);
 
   const rules = data?.rules ?? DEFAULT_RULES;
   const list = data?.sides[period] ?? [];
@@ -481,8 +486,15 @@ function SideWallets({
         <p className="muted small">
           No side wallets listed yet: the list covers KOLs that bought a tracked coin in the last 30 days.
         </p>
+      ) : data?.skipped === "bot" ? (
+        <p className="muted small side-empty">
+          No bundle read: this wallet itself reads as a bot (marked by hand, strongly matched with{" "}
+          {rules.likelyBot?.minKols ?? 4}+ KOLs, or in over {rules.bot.minPct}% of every tracked coin).
+        </p>
       ) : error ? (
-        <p className="error small">Couldn&apos;t load its side wallets: {error}</p>
+        <p className="error small">
+          Couldn&apos;t load its {bundle ? "bundle" : "side wallets"}: {error}
+        </p>
       ) : !data ? (
         <Skeleton lines={3} />
       ) : list.length === 0 ? (
@@ -509,8 +521,9 @@ function SideWallets({
       )}
       {data && (data.likelyBots?.length ?? 0) > 0 && (
         <p className="faint small side-hidden-bots">
-          {plural(data.likelyBots!.length, "likely bot")} hidden: strongly matched with{" "}
-          {rules.likelyBot?.minKols ?? 4}+ KOLs, which fits a copy-trade bot more than a side wallet.
+          {plural(data.likelyBots!.length, "likely bot")} hidden: {bundle ? "marked as bots or " : ""}strongly
+          matched with {rules.likelyBot?.minKols ?? 4}+ KOLs, which fits a copy-trade bot more than a side
+          wallet.
         </p>
       )}
       {showAll && (
@@ -689,6 +702,25 @@ function SideRows({
         );
       })}
     </ol>
+  );
+}
+
+/**
+ * Any other wallet's Multi-Wallet-Bundle in its wallet modal (user ask 2026-10-15): the same
+ * matching as a KOL's list, read when the modal opens. Kept apart from the KOL side wallets: it
+ * labels no one and never reaches the bubble map.
+ */
+export function WalletBundle({ wallet }: { wallet: string }) {
+  const [period, setPeriod] = useState<SideWindow>("30d");
+  return (
+    <section className="sage-card wm-section wm-sides">
+      <h4>Multi-Wallet-Bundle</h4>
+      <p className="faint small wm-note">
+        Wallets that bought the same coins within minutes of it. Not confirmed to be one person&apos;s
+        wallets: a wallet here may be a copy trader, a friend, a bot or chance.
+      </p>
+      <SideWallets kol={wallet} kolName={shortAddress(wallet)} period={period} setPeriod={setPeriod} bundle />
+    </section>
   );
 }
 

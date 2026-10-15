@@ -5,7 +5,7 @@ import { MIN_WIN_SOL, ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
-import { KolSideWallets, SideLabelsExport } from "../tabs/SideWalletChecker";
+import { KolSideWallets, SideLabelsExport, WalletBundle } from "../tabs/SideWalletChecker";
 import {
   CheckIcon,
   CloseIcon,
@@ -379,6 +379,8 @@ function Profile({ p }: { p: WalletProfile }) {
       {p.trades.length > 0 && <Trades trades={p.trades} />}
       {p.launches.length > 0 && <Coins title="Coins it launched" coins={p.launches} />}
       <Linked p={p} names={names} />
+      {/* Any wallet that isn't a KOL: its Multi-Wallet-Bundle, read now (never on the bubble map). */}
+      {!p.kol && <WalletBundle wallet={p.wallet} />}
       {p.kol && (
         <KolSideWallets
           wallet={p.wallet}

@@ -480,12 +480,14 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
         medianSizeRatio: 0.5,
       });
 
-      const bad = await app.inject({
+      // Any wallet, KOL or not (a Multi-Wallet-Bundle opens the same comparison): none shared here.
+      const other = await app.inject({
         method: "GET",
         url: `/utilities/side-wallets/${random(32)}/${side}`,
         cookies: me.cookies,
       });
-      expect(bad.statusCode).toBe(404);
+      expect(other.statusCode).toBe(200);
+      expect(other.json()).toMatchObject({ kolCoins: 0, trades: [] });
     } finally {
       await prisma.token.deleteMany({ where: { mintAddress: { in: mints } } });
       await prisma.walletFunder.deleteMany({ where: { wallet: { in: [kol, side] } } });
