@@ -25,8 +25,8 @@ describe("kolBundledByMint", () => {
     const out = await kolBundledByMint(readings, funderOf, isKol, async () => [
       { wallet: "side", kolWallet: "kol" },
     ]);
-    expect(out.get("A")).toBe(6);
-    expect(out.get("B")).toBe(0);
+    expect(out.get("A")).toEqual({ kolBundledPct: 6, bundledSupplyPct: 6, bundledSupplyCount: 3 });
+    expect(out.get("B")).toEqual({ kolBundledPct: 0, bundledSupplyPct: 0, bundledSupplyCount: 0 });
     expect(out.has("C")).toBe(false);
   });
   it("is unknown without the roster or when the side read fails", async () => {

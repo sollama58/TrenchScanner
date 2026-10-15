@@ -1,4 +1,10 @@
-import { createLogger, kolBundledPct, prisma, type LinkedWalletsReading } from "@trenchscanner/core";
+import {
+  bundledSupply,
+  createLogger,
+  kolBundledPct,
+  prisma,
+  type LinkedWalletsReading,
+} from "@trenchscanner/core";
 
 const logger = createLogger("kol-bundled");
 
@@ -17,21 +23,31 @@ async function possibleSideTies(wallets: readonly string[]): Promise<KolTie[]> {
   });
 }
 
+/** KOL Bundled % and Bundled % (linked holders and KOL bundles together) for one coin. */
+export interface KolBundledReading {
+  kolBundledPct: number;
+  bundledSupplyPct: number;
+  bundledSupplyCount: number;
+}
+
+/** The holder lists a KOL reading needs: the linked reading's, or a stored snapshot's. */
+export type KolBundledSource = Pick<LinkedWalletsReading, "holders" | "clusters" | "sameTimeClusters">;
+
 /**
- * KOL Bundled % for each coin with a linked reading (core's wallets/kolBundled.ts), from the KOL
+ * KOL Bundled % and Bundled % for each coin with a linked reading (core's wallets/kolBundled.ts), from the KOL
  * roster, the holders' funders (a holder a KOL funded is a KOL Funded Wallet) and one read of the
  * possible side wallets for every holder at once. Left off (unknown) for every coin while the
  * roster isn't loaded or that read fails, and for a coin without a reading.
  */
 export async function kolBundledByMint(
-  readings: ReadonlyMap<string, LinkedWalletsReading | null>,
+  readings: ReadonlyMap<string, KolBundledSource | null>,
   funderOf: ReadonlyMap<string, string | null>,
   isKol: ((wallet: string) => boolean) | undefined,
   loadSides: (wallets: readonly string[]) => Promise<KolTie[]> = possibleSideTies,
-): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
+): Promise<Map<string, KolBundledReading>> {
+  const out = new Map<string, KolBundledReading>();
   if (!isKol) return out;
-  const live = [...readings].filter((e): e is [string, LinkedWalletsReading] => e[1] !== null);
+  const live = [...readings].filter((e): e is [string, KolBundledSource] => e[1] !== null);
   if (live.length === 0) return out;
   const wallets = [...new Set(live.flatMap(([, r]) => r.holders.map((h) => h.wallet)))];
   let sides: KolTie[];
@@ -52,16 +68,19 @@ export async function kolBundledByMint(
       if (funder && funder !== h.wallet && isKol(funder) && !isKol(h.wallet))
         ties.push({ wallet: h.wallet, kolWallet: funder });
     }
-    out.set(
-      mint,
-      kolBundledPct({
-        holders: r.holders,
-        clusters: r.clusters,
-        sameTimeClusters: r.sameTimeClusters,
-        isKol,
-        ties,
-      }),
-    );
+    const input = {
+      holders: r.holders,
+      clusters: r.clusters,
+      sameTimeClusters: r.sameTimeClusters,
+      isKol,
+      ties,
+    };
+    const bundled = bundledSupply(input);
+    out.set(mint, {
+      kolBundledPct: kolBundledPct(input),
+      bundledSupplyPct: bundled.pct,
+      bundledSupplyCount: bundled.count,
+    });
   }
   return out;
 }

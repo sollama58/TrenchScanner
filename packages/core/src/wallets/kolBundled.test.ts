@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { kolBundledPct } from "./kolBundled.js";
+import { bundledSupply, kolBundledPct } from "./kolBundled.js";
 
 const holders = [
   { wallet: "kol", pct: 2 },
@@ -43,5 +43,30 @@ describe("kolBundledPct", () => {
   it("takes in a KOL's own cluster with no side wallets", () => {
     const c = [{ wallets: [{ wallet: "kol" }, { wallet: "x" }] }];
     expect(kolBundledPct({ holders, clusters: c, sameTimeClusters: [], isKol, ties: [] })).toBe(6);
+  });
+});
+
+describe("bundledSupply", () => {
+  it("takes in the linked holders and every KOL bundle, each once", () => {
+    const ties = [{ wallet: "fund", kolWallet: "kol" }];
+    // Linked: side, mate, far (clusters) and fund, min (minute) = 4. KOL bundle adds kol 2.
+    expect(bundledSupply({ holders, clusters, sameTimeClusters, isKol, ties })).toEqual({ pct: 6, count: 6 });
+  });
+  it("is the linked holders alone with no KOL bundle", () => {
+    expect(bundledSupply({ holders, clusters, sameTimeClusters, isKol: () => false, ties: [] })).toEqual({
+      pct: 4,
+      count: 5,
+    });
+  });
+  it("counts a KOL bundle with no linked holders", () => {
+    expect(
+      bundledSupply({
+        holders,
+        clusters: [],
+        sameTimeClusters: [],
+        isKol,
+        ties: [{ wallet: "x", kolWallet: "kol" }],
+      }),
+    ).toEqual({ pct: 6, count: 2 });
   });
 });

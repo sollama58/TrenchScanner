@@ -172,6 +172,20 @@ export const FRESH_TOP_HOLDER_FEATURES = ["freshTopHolderCount", "freshTopHolder
  */
 export const KOL_BUNDLED_FEATURES = ["kolBundledPct"] as const;
 
+/**
+ * Added 2026-10-15 (user ask): Bundled %, the share of supply held by top holders that are linked
+ * (a funder cluster or a funding minute) or in a KOL's bundle, each once (core's
+ * wallets/kolBundled.ts bundledSupply): what the alert card's Linked tile now shows. A separate
+ * input beside linkedWalletPct and kolBundledPct, which stay as they were. Null on the same terms
+ * as kolBundledPct. Rows from 2026-10-14 19:44 UTC (when KOL Bundled % started) carry it where the
+ * stored reading allows (bundledSupplyBackfill.ts in the worker); older rows read null.
+ *
+ * READ BY THE LEARNERS (user ask 2026-10-15: "have the models consider" it), so it is not in
+ * RETIRED_LEARNER_INPUTS. The onset guard (featureOnset.ts) keeps it out of a run until it covers
+ * enough of the exam's span, so the seats take it in on a scheduled retrain once it has.
+ */
+export const BUNDLED_SUPPLY_FEATURES = ["bundledSupplyPct"] as const;
+
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
   "flaggedSellers",
@@ -405,6 +419,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...HOLDER_SET_FEATURES,
   ...FRESH_TOP_HOLDER_FEATURES,
   ...KOL_BUNDLED_FEATURES,
+  ...BUNDLED_SUPPLY_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -867,6 +882,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   freshTopHolderCount: "fresh wallets among the top 25",
   freshTopHoldersChecked: "top holders checked for fresh wallets",
   kolBundledPct: "supply bundled by KOLs",
+  bundledSupplyPct: "supply bundled (linked holders and KOL bundles)",
   sameTimeFundedPct: "supply funded in the same minute",
   sameTimeClusterCount: "same-minute funding groups",
   sameTimeFundedCount: "top holders funded in the same minute",
@@ -1097,6 +1113,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     freshTopHolderCount: scored.freshTopHolderCount ?? null,
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
     kolBundledPct: scored.kolBundledPct ?? null,
+    bundledSupplyPct: scored.bundledSupplyPct ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,
     sameTimeFundedCount: scored.sameTimeFundedCount ?? null,
