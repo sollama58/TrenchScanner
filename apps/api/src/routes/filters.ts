@@ -395,6 +395,6 @@ export const MAX_FILTERS_PER_USER = 10;
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
 
 /** Serialises one user's filter writes, so two tabs can't both create the 11th. */
-async function lockUserFilters(tx: Tx, userId: string): Promise<void> {
+export async function lockUserFilters(tx: Tx, userId: string): Promise<void> {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${"filters:" + userId}))`;
 }

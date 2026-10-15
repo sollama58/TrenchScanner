@@ -10,6 +10,9 @@ import {
 import { SharedCache } from "../sharedCache.js";
 import { screenReasonLabel } from "../screenReasons.js";
 import { summarizeHeartbeat } from "./health.js";
+import { lockUserFilters } from "./filters.js";
+import { clearReaderCaches } from "./matches.js";
+import { filterLeaderboardCache } from "../filterLeaderboard.js";
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -676,6 +679,45 @@ export async function registerAdminInsightRoutes(app: FastifyInstance) {
 
   const filters = new SharedCache<Awaited<ReturnType<typeof buildFiltersReport>>>(LIVE_CACHE_MS);
   app.get("/filters", async () => filters.get(buildFiltersReport));
+
+  /**
+   * Admin > Filters' "Delete for good": removes a RETIRED filter (one its owner deleted that was kept
+   * on the leaderboard for its record, see routes/filters.ts) and, by cascade, every alert it raised,
+   * so it leaves the board. Only retired filters: a live one belongs to its owner. Needs
+   * `{ confirm: true }`, so a stray request can't wipe a record.
+   */
+  app.post<{ Params: { id: string }; Body: { confirm?: unknown } | null }>(
+    "/filters/:id/delete",
+    async (request, reply) => {
+      if (request.body?.confirm !== true) {
+        return reply.code(400).send({ error: "confirm the delete" });
+      }
+      const { id } = request.params;
+      const row = await prisma.$transaction(async (tx) => {
+        const found = await tx.userFilter.findUnique({ where: { id }, select: { userId: true } });
+        if (!found) return null;
+        // The owner's lock, so this can't interleave with their own filter writes.
+        await lockUserFilters(tx, found.userId);
+        const current = await tx.userFilter.findUnique({ where: { id } });
+        if (!current) return null;
+        if (!current.deletedAt) return "live" as const;
+        await tx.userFilter.delete({ where: { id } });
+        return current;
+      });
+      if (!row) return reply.code(404).send({ error: "filter not found" });
+      if (row === "live") {
+        return reply.code(409).send({ error: "only a retired filter can be deleted here" });
+      }
+      filters.clear();
+      filterLeaderboardCache.clear();
+      clearReaderCaches(row.userId);
+      request.log.info(
+        { by: request.user?.walletAddress ?? null, filterId: id, name: row.name },
+        "admin deleted a retired filter",
+      );
+      return reply.code(204).send();
+    },
+  );
 
   const lookups = new SharedCache<Awaited<ReturnType<typeof buildLookupsReport>>>(REPORT_CACHE_MS);
   app.get("/lookups", async () => lookups.get(buildLookupsReport));

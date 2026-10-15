@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { narrativeCriteriaLines } from "../filterFields";
-import { post, type FilterCriteria } from "../api";
+import { ApiError, post, type FilterCriteria } from "../api";
 import { usePolling } from "../hooks";
 import { ago, pct, shortAddress, usd } from "../format";
 import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
@@ -1106,7 +1106,33 @@ export function FiltersAdmin() {
   const q = usePolling<FiltersReport>("/admin/filters", 60_000);
   const rates = usePolling<{ filterMatches: { byFilter: FilterRate[] } }>("/admin/hit-rates?days=7", 120_000);
   const [search, setSearch] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
   const byId = new Map((rates.data?.filterMatches.byFilter ?? []).map((r) => [r.filterId, r]));
+
+  /** Delete a retired filter for good, after the admin confirms (routes/adminInsights.ts). */
+  const deleteRetired = async (f: AdminFilter) => {
+    if (
+      !window.confirm(
+        `Delete the retired filter "${f.name}" for good?\n\nIt leaves the Top filters board and every alert it raised is deleted with it. This can't be undone.`,
+      )
+    )
+      return;
+    setBusy(f.id);
+    setMessage(null);
+    try {
+      await post(`/admin/filters/${encodeURIComponent(f.id)}/delete`, { confirm: true });
+      setMessage({ text: `Deleted "${f.name}".`, tone: "ok" });
+      q.reload();
+    } catch (e) {
+      setMessage({
+        text: e instanceof ApiError || e instanceof Error ? e.message : String(e),
+        tone: "warn",
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
   return (
     <Load q={q}>
       {(d) => {
@@ -1119,6 +1145,12 @@ export function FiltersAdmin() {
         );
         return (
           <div className="stack">
+            {message && (
+              <p className="small" role="status">
+                <Tag tone={message.tone}>{message.tone === "ok" ? "deleted" : "not deleted"}</Tag>{" "}
+                {message.text}
+              </p>
+            )}
             <div className="kpis">
               <Kpi label="Saved filters" value={n(d.total)} sub={`${n(d.retired)} retired`} />
               <Kpi label="Active" value={n(d.active)} />
@@ -1131,7 +1163,7 @@ export function FiltersAdmin() {
             </div>
             <Panel
               title="Every filter"
-              note="All users' filters, newest first, with alerts sent and the 7-day hit rate (2x within 15 minutes)."
+              note="All users' filters, newest first, with alerts sent and the 7-day hit rate (2x within 15 minutes). A retired filter (deleted by its owner, kept on Top filters for its record) can be deleted for good."
               actions={
                 <input
                   placeholder="Search name or wallet"
@@ -1152,6 +1184,7 @@ export function FiltersAdmin() {
                   "Best rank",
                   "Settings",
                   "Created",
+                  "",
                 ]}
                 rows={rows.map((f) => {
                   const r = byId.get(f.id);
@@ -1177,6 +1210,16 @@ export function FiltersAdmin() {
                     f.bestRank === null ? "–" : `#${f.bestRank}`,
                     <span className="admin-note">{criteria(f) || "–"}</span>,
                     when(f.createdAt),
+                    f.deletedAt ? (
+                      <button
+                        className="ghost small"
+                        disabled={busy !== null}
+                        title="Delete this retired filter and its alerts for good"
+                        onClick={() => void deleteRetired(f)}
+                      >
+                        {busy === f.id ? "Deleting…" : "Delete"}
+                      </button>
+                    ) : null,
                   ];
                 })}
                 empty="No filters match."
