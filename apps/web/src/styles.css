@@ -3462,6 +3462,66 @@ legend {
     justify-content: center;
   }
 }
+/* Tablets: up to nine entries share the row (Stream, Admin and HolDEX on), so each stacks its icon
+   over a smaller label and gives up width rather than pushing the page sideways. */
+@media (min-width: 641px) and (max-width: 980px) {
+  .tabs button,
+  .tabs .tab-link {
+    flex: 1 1 0;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 2px;
+    font-size: 12px;
+  }
+  .tabs button span,
+  .tabs .tab-link span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+/* Narrow desktop windows: once brand, tabs and wallet no longer fit one row, the tabs take their
+   own row as on tablets. How wide that is depends on how many tabs show (Stream and Admin add one
+   each), so each count gets its own breakpoint. */
+@media (min-width: 981px) and (max-width: 1059px) {
+  .topbar-inner:has(.tablist > :nth-child(6)) {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .topbar-inner:has(.tablist > :nth-child(6)) > .tabs {
+    order: 3;
+    width: 100%;
+  }
+}
+@media (min-width: 981px) and (max-width: 1139px) {
+  .topbar-inner:has(.tablist > :nth-child(7)) {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .topbar-inner:has(.tablist > :nth-child(7)) > .tabs {
+    order: 3;
+    width: 100%;
+  }
+}
+@media (min-width: 981px) and (max-width: 1239px) {
+  .topbar-inner:has(.tablist > :nth-child(8)) {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .topbar-inner:has(.tablist > :nth-child(8)) > .tabs {
+    order: 3;
+    width: 100%;
+  }
+}
+@media (min-width: 981px) and (max-width: 1239px) {
+  .topbar-inner:has(.tablist > :nth-child(6)) > .tabs button,
+  .topbar-inner:has(.tablist > :nth-child(6)) > .tabs .tab-link {
+    flex: 1;
+    justify-content: center;
+  }
+}
 
 @media (max-width: 960px) {
   .columns,
