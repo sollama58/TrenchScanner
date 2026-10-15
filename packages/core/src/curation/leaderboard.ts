@@ -608,14 +608,52 @@ export interface MixCoverage extends LiveCatch {
   /** Per seat in the mix: the runners it caught, and how many of those no other seat in the mix did. */
   members: { id: string; caught: number; only: number }[];
   /**
-   * Seats outside the mix that would raise its share, best first (at most MIX_ADDITIONS): the
-   * share and the runners caught with that seat added.
+   * Seats outside the mix worth adding (see mixCatch), best first (at most MIX_ADDITIONS): the
+   * share and runners caught with it added, the runners it adds, the calls it would bring, and
+   * the record behind the pick.
    */
-  additions: { id: string; caught: number; runners: number; pct: number }[];
+  additions: MixAddition[];
+}
+
+/** A seat the meter suggests adding to a mix. */
+export interface MixAddition extends AddCandidate {
+  id: string;
+  /** The mix's runners caught and seen with this seat added, and the share. */
+  caught: number;
+  runners: number;
+  pct: number;
+  /** Runners it catches that the mix doesn't. */
+  adds: number;
+  /** adds per call it made: how much coverage each extra alert in the feed buys. */
+  addsPerCall: number;
+}
+
+/** What mixCatch weighs before suggesting a seat: its live record over the same window. */
+export interface AddCandidate {
+  /** Past warming up (enough graded live calls to rank on). */
+  seasoned: boolean;
+  /** Its live calls in the window: what adding it puts in the feed. */
+  calls: number;
+  /** Its live 2x rate, in percent; null with nothing graded. */
+  winRatePct: number | null;
+  /** Its 2x rate over the market's in the same hours; null without enough calls. */
+  lift: number | null;
+  /** Its average simulated return per call under the exit plan, in percent; null with none. */
+  avgReturnPct: number | null;
 }
 
 /** How many seats a mix's coverage suggests adding. */
 export const MIX_ADDITIONS = 3;
+
+/**
+ * Whether a seat is good enough to suggest: seasoned, beating the market's 2x rate in the hours it
+ * called (lift 1 or more), and making money on average under the exit plan. Coverage alone would
+ * reward volume: a seat that calls everything catches runners by firing often, and adding it
+ * would flood the feed with losers.
+ */
+export function worthAdding(c: AddCandidate): boolean {
+  return c.seasoned && c.calls > 0 && (c.lift ?? 0) >= 1 && (c.avgReturnPct ?? 0) > 0;
+}
 
 function mixCounts(ledger: CatchLedger, models: readonly string[]) {
   let from = Infinity;
@@ -634,7 +672,12 @@ function mixCounts(ledger: CatchLedger, models: readonly string[]) {
  * runners counted are those since the earliest seat in the mix started (liveCatch's rule for one
  * seat, applied to the mix). Seats not on the board are left out.
  */
-export function mixCatch(ledger: CatchLedger, models: readonly string[]): MixCoverage {
+export function mixCatch(
+  ledger: CatchLedger,
+  models: readonly string[],
+  /** Each seat's live record; only seats here that pass worthAdding are suggested. */
+  candidates: ReadonlyMap<string, AddCandidate>,
+): MixCoverage {
   const mix = [...new Set(models)].filter((m) => ledger.froms.has(m));
   const { from, runners, caught } = mixCounts(ledger, mix);
   const share = (got: number, seen: number) => (seen > 0 ? round1((got / seen) * 100) : null);
@@ -645,15 +688,27 @@ export function mixCatch(ledger: CatchLedger, models: readonly string[]): MixCov
     for (const t of own) if (!mix.some((o) => o !== id && ledger.caughtBy.get(o)?.has(t))) only += 1;
     return { id, caught: own.size, only };
   });
-  const additions: MixCoverage["additions"] = [];
+  // Suggested: seats good enough on their own record (worthAdding) that would raise the share,
+  // ranked by runners added per call (what each extra alert buys), then by the share reached.
+  const additions: MixAddition[] = [];
   for (const id of ledger.froms.keys()) {
-    if (mix.includes(id)) continue;
+    const record = candidates.get(id);
+    if (mix.includes(id) || !record || !worthAdding(record)) continue;
     const next = mixCounts(ledger, [...mix, id]);
     const nextPct = share(next.caught, next.runners);
     if (nextPct === null || next.caught <= caught || (pct !== null && nextPct <= pct)) continue;
-    additions.push({ id, caught: next.caught, runners: next.runners, pct: nextPct });
+    const adds = next.caught - caught;
+    additions.push({
+      id,
+      caught: next.caught,
+      runners: next.runners,
+      pct: nextPct,
+      adds,
+      addsPerCall: Math.round((adds / record.calls) * 1000) / 1000,
+      ...record,
+    });
   }
-  additions.sort((a, b) => b.pct - a.pct || b.caught - a.caught || a.id.localeCompare(b.id));
+  additions.sort((a, b) => b.addsPerCall - a.addsPerCall || b.pct - a.pct || a.id.localeCompare(b.id));
   return {
     runners,
     caught,

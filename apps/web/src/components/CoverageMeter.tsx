@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Leaderboard, MixCoverage } from "../api";
-import { pct } from "../format";
+import { pct, signedPct } from "../format";
 import { CheckIcon, PlusIcon, TargetIcon } from "./Icons";
 
 /** Runners below which the meter's share reads as early rather than as a verdict. */
@@ -20,8 +20,20 @@ export interface CoverageView {
   onGoal: boolean;
   /** "Trees", "Trees + Survivor", "Trees +2". */
   label: string;
-  /** The model that would raise the share most, by name, with the share it would reach. */
-  best: { id: string; name: string; pct: number; adds: number } | null;
+  /**
+   * The model most worth adding (most runners added per call, among those that beat the market
+   * and make money), by name, with the share it would reach and its record.
+   */
+  best: {
+    id: string;
+    name: string;
+    pct: number;
+    adds: number;
+    calls: number | null;
+    winRatePct: number | null;
+    lift: number | null;
+    avgReturnPct: number | null;
+  } | null;
   /** Each model in the mix by name, most runners first. */
   members: { id: string; name: string; caught: number; only: number }[];
 }
@@ -43,7 +55,18 @@ export function coverageView(board: Leaderboard): CoverageView | null {
     early: coverage.runners < MIN_RUNNERS_FOR_COVERAGE,
     onGoal: coverage.pct !== null && coverage.pct >= goal,
     label: names.length <= 2 ? names.join(" + ") : `${names[0]} +${names.length - 1}`,
-    best: top ? { id: top.id, name: name(top.id), pct: top.pct, adds: top.caught - coverage.caught } : null,
+    best: top
+      ? {
+          id: top.id,
+          name: name(top.id),
+          pct: top.pct,
+          adds: top.adds ?? top.caught - coverage.caught,
+          calls: top.calls ?? null,
+          winRatePct: top.winRatePct ?? null,
+          lift: top.lift ?? null,
+          avgReturnPct: top.avgReturnPct ?? null,
+        }
+      : null,
     members: coverage.members
       .map((m) => ({ ...m, name: name(m.id) }))
       .sort((a, b) => b.caught - a.caught || a.name.localeCompare(b.name)),
@@ -65,14 +88,34 @@ export function coverageSentence(v: CoverageView, days: number, guest = false): 
   return `${who} would have caught ${c.caught.toLocaleString()} of the ${plural(c.runners, "runner")} (tokens that doubled) in the last ${plural(days, "day")}.`;
 }
 
-function Track({ v, slim = false }: { v: CoverageView; slim?: boolean }) {
+type Best = NonNullable<CoverageView["best"]>;
+
+/** What the suggested model brings: the runners it adds, and the hit rate and return of its calls. */
+export function bestCost(b: Best): string {
+  const parts = [`+${plural(b.adds, "runner")}`];
+  if (b.winRatePct !== null) parts.push(`${pct(b.winRatePct)} hit 2x`);
+  if (b.avgReturnPct !== null) parts.push(`${signedPct(b.avgReturnPct)} avg return`);
+  return parts.join(" · ");
+}
+
+function bestTitle(b: Best): string {
   return (
-    <span className={`cov-track${slim ? " slim" : ""}`} aria-hidden>
+    `Add ${b.name} to your feed: ${plural(b.adds, "more runner")} caught` +
+    (b.calls !== null ? ` for ${plural(b.calls, "more call")} in the window` : "") +
+    (b.lift !== null ? `, its 2x rate ${b.lift.toFixed(1)}x the market's` : "") +
+    (b.avgReturnPct !== null ? `, ${signedPct(b.avgReturnPct)} a call on average under the exit plan` : "") +
+    ". Only models that beat the market and make money are suggested, the most runners per call first."
+  );
+}
+
+function Track({ v }: { v: CoverageView }) {
+  return (
+    <span className="cov-track" aria-hidden>
       <span
         className={`cov-fill${v.early ? " early" : ""}${v.onGoal ? " on-goal" : ""}`}
         style={{ width: `${Math.min(100, Math.max(0, v.share))}%` }}
       />
-      {!slim && v.field !== null && v.field > v.share && (
+      {v.field !== null && v.field > v.share && (
         <span className="cov-mark field" style={{ left: `${Math.min(100, v.field)}%` }} />
       )}
       <span className="cov-mark goal" style={{ left: `${Math.min(100, v.goal)}%` }} />
@@ -173,42 +216,26 @@ export function CoverageMeter({
                 className="cov-add"
                 disabled={disabled || adding !== null}
                 onClick={() => void add(v.best!.id)}
-                title={`Add ${v.best.name} to your feed: ${plural(v.best.adds, "more runner")} caught`}
+                title={bestTitle(v.best)}
               >
                 <PlusIcon size={12} />
-                {adding ? "Adding…" : `${v.best.name} lifts it to ${pct(v.best.pct)}`}
+                {adding ? (
+                  "Adding…"
+                ) : (
+                  <span>
+                    {v.best.name} lifts it to {pct(v.best.pct)}
+                    <span className="cov-add-cost">{bestCost(v.best)}</span>
+                  </span>
+                )}
               </button>
             ) : (
-              <span className="faint small">
-                Adding {v.best.name} would lift it to {pct(v.best.pct)}
+              <span className="faint small" title={bestTitle(v.best)}>
+                Adding {v.best.name} would lift it to {pct(v.best.pct)} · {bestCost(v.best)}
               </span>
             ))}
         </div>
       )}
       {error && <small className="error">Couldn&apos;t add the model: {error}</small>}
     </div>
-  );
-}
-
-/**
- * The meter as a chip, for the Live feed's header: the share and a slim bar. Opens the Models tab,
- * where the full meter and the switches are.
- */
-export function CoverageChip({ board, onOpen }: { board: Leaderboard; onOpen: () => void }) {
-  const v = coverageView(board);
-  if (!v || v.coverage.runners === 0) return null;
-  const c = v.coverage;
-  return (
-    <button
-      type="button"
-      className={`ghost cov-chip${v.early ? " early" : ""}`}
-      onClick={onOpen}
-      title={`Coverage: ${coverageSentence(v, board.window.days)} Goal ${v.goal}%. Tap to change your models.`}
-      aria-label={`Coverage ${pct(c.pct)} of runners caught by your models. Open the Models tab.`}
-    >
-      <TargetIcon size={13} />
-      <span className="num">{pct(c.pct)}</span>
-      <Track v={v} slim />
-    </button>
   );
 }

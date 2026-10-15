@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Leaderboard, MixCoverage } from "../api";
-import { coverageSentence, coverageView } from "./CoverageMeter";
+import { bestCost, coverageSentence, coverageView } from "./CoverageMeter";
 
 const board = (coverage: MixCoverage | undefined, field = 80): Leaderboard =>
   ({
@@ -25,7 +25,20 @@ const mix = (over: Partial<MixCoverage> = {}): MixCoverage => ({
     { id: "trees", caught: 12, only: 4 },
     { id: "linear", caught: 26, only: 18 },
   ],
-  additions: [{ id: "survivor", caught: 36, runners: 50, pct: 72 }],
+  additions: [
+    {
+      id: "survivor",
+      caught: 36,
+      runners: 50,
+      pct: 72,
+      adds: 6,
+      addsPerCall: 0.2,
+      calls: 30,
+      winRatePct: 41.2,
+      lift: 1.6,
+      avgReturnPct: 18.4,
+    },
+  ],
   ...over,
 });
 
@@ -38,7 +51,8 @@ describe("coverageView", () => {
     expect(v.field).toBe(80);
     expect(v.onGoal).toBe(false);
     expect(v.early).toBe(false);
-    expect(v.best).toEqual({ id: "survivor", name: "Survivor", pct: 72, adds: 6 });
+    expect(v.best).toMatchObject({ id: "survivor", name: "Survivor", pct: 72, adds: 6, calls: 30 });
+    expect(bestCost(v.best!)).toBe("+6 runners · 41% hit 2x · +18% avg return");
     expect(v.members.map((m) => m.name)).toEqual(["Linear", "Trees"]);
   });
 
@@ -51,6 +65,15 @@ describe("coverageView", () => {
     expect(coverageView(board(mix({ models: ["trees", "linear", "survivor"] })))!.label).toBe("Trees +2");
     expect(coverageView(board(undefined))).toBeNull();
     expect(coverageView(board(mix({ models: [] })))).toBeNull();
+  });
+});
+
+describe("bestCost", () => {
+  it("falls back to the catch count on an older API build without the record", () => {
+    const v = coverageView(
+      board(mix({ additions: [{ id: "survivor", caught: 31, runners: 50, pct: 62 }] })),
+    )!;
+    expect(bestCost(v.best!)).toBe("+1 runner");
   });
 });
 

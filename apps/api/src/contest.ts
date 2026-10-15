@@ -43,6 +43,7 @@ import {
   type CompositeScore,
   type Last24h,
   type MarketLift,
+  type AddCandidate,
   type CatchLedger,
   type LiveCatch,
   type MixCoverage,
@@ -536,7 +537,22 @@ export function readerBoard(
   models: readonly string[],
 ): Omit<Leaderboard, "catchLedger"> & { coverage: MixCoverage } {
   const { catchLedger, ...rest } = board;
-  return { ...rest, coverage: mixCatch(catchLedger, models) };
+  // What the meter weighs before suggesting a model: its live record over the same window. A
+  // silent or untrained model sends nothing, so it can't be "added" in any useful sense.
+  const candidates = new Map<string, AddCandidate>(
+    board.entries.map((e) => [
+      e.id,
+      {
+        seasoned: e.status === "calling" && !e.composite.warmingUp,
+        calls: e.composite.live.calls,
+        winRatePct:
+          e.composite.live.winRatePct === null ? null : Math.round(e.composite.live.winRatePct * 10) / 10,
+        lift: e.vsMarket?.lift ?? null,
+        avgReturnPct: e.composite.live.avgSimReturnPct,
+      },
+    ]),
+  );
+  return { ...rest, coverage: mixCatch(catchLedger, models, candidates) };
 }
 
 export async function buildLeaderboard(

@@ -1028,8 +1028,24 @@ export interface MixCoverage extends LiveCatch {
   since: string | null;
   /** Per model in the mix: the runners it caught, and how many of those no other model in the mix did. */
   members: { id: string; caught: number; only: number }[];
-  /** Models outside the mix that would raise its share, best first: the share and catches with it added. */
-  additions: { id: string; caught: number; runners: number; pct: number }[];
+  /**
+   * Models worth adding, best first: seasoned, beating the market's 2x rate and making money on
+   * average, that would raise the share; ranked by runners added per call. Each with the share
+   * and catches with it added and the record behind the pick.
+   */
+  additions: {
+    id: string;
+    caught: number;
+    runners: number;
+    pct: number;
+    /** Runners it catches that the mix doesn't (absent from older API builds). */
+    adds?: number;
+    addsPerCall?: number;
+    calls?: number;
+    winRatePct?: number | null;
+    lift?: number | null;
+    avgReturnPct?: number | null;
+  }[];
 }
 
 export interface ScoreBasis {
