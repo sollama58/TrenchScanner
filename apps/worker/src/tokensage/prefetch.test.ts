@@ -96,7 +96,10 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     noteNarrativeWanted(a, "basic", env, { name: "Dog", symbol: "DOG" });
     noteNarrativeWanted(b, "basic", env);
     await flushNarrativeRequests(env, client);
-    expect(batch.mock.calls[0]![0]).toEqual([{ ca: a, hints: { name: "Dog", symbol: "DOG" } }, { ca: b }]);
+    expect(batch.mock.calls[0]![0]).toEqual([
+      { ca: a, hints: { name: "Dog", symbol: "DOG" }, priority: "normal" },
+      { ca: b, priority: "normal" },
+    ]);
     expect(batch.mock.calls[0]![1]).toBe("basic");
     const rowA = await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: a } });
     expect(rowA).toMatchObject({
@@ -626,8 +629,54 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
           twitter: "https://x.com/dog",
           created_at: new Date(now - 5_000).toISOString(),
         },
+        priority: "low",
       },
     ]);
+  });
+
+  it("sends the watchlist's quick reads ahead of a backlog of queued launch reads", async () => {
+    // 2026-10-15: launch reads re-sent every flush filled the quick-read batch, and TokenSage ran
+    // them first too, so coins the scan was about to decide on waited behind them.
+    const { client, batch } = fakeClient();
+    batch.mockImplementation(async (entries: { ca: string }[]) =>
+      ok(entries.map((e) => ({ ca: e.ca, status: "pending", job_id: 1 }))),
+    );
+    const on = { ...env, TOKENSAGE_BASIC_AT_DISCOVERY: true, TOKENSAGE_MAX_BATCHES_PER_CYCLE: 1 };
+    const now = Date.now();
+    const launches = Array.from({ length: TOKENSAGE_PREFETCH_CHUNK }, (_, i) => ({
+      mintAddress: `${TAG}-tier-launch${i}`,
+      createdAt: new Date(now - 1_000),
+    }));
+    noteLaunchNarratives(launches, on, now);
+    await flushNarrativeRequests(on, client);
+    expect(new Set((batch.mock.calls[0]![0] as { priority: string }[]).map((e) => e.priority))).toEqual(
+      new Set(["low"]),
+    );
+
+    // A watchlist read goes first, and a launch read the scan now wants is raised to its tier.
+    const watch = `${TAG}-tier-watch`;
+    const raised = launches[5]!.mintAddress;
+    noteNarrativeWanted(watch, "basic", on);
+    noteNarrativeWanted(raised, "basic", on);
+    await flushNarrativeRequests(on, client);
+    const second = batch.mock.calls[1]![0] as { ca: string; priority: string }[];
+    expect(second.slice(0, 2)).toMatchObject([
+      { ca: raised, priority: "normal" },
+      { ca: watch, priority: "normal" },
+    ]);
+    expect(second.slice(2).every((e) => e.priority === "low")).toBe(true);
+
+    // A deep read is high, and a later launch note never lowers the watchlist's tier.
+    noteNarrativeWanted(watch, "full", on);
+    noteLaunchNarratives([{ mintAddress: `${TAG}-tier-x`, createdAt: new Date(now) }], on, now);
+    noteNarrativeWanted(`${TAG}-tier-x`, "basic", on);
+    noteLaunchNarratives([{ mintAddress: `${TAG}-tier-x`, createdAt: new Date(now) }], on, now);
+    await flushNarrativeRequests({ ...on, TOKENSAGE_MAX_BATCHES_PER_CYCLE: 2 }, client);
+    expect(batch.mock.calls[2]![1]).toBe("full");
+    expect(batch.mock.calls[2]![0]).toEqual([{ ca: watch, priority: "high" }]);
+    const fourth = batch.mock.calls[3]![0] as { ca: string; priority: string }[];
+    expect(fourth.find((e) => e.ca === `${TAG}-tier-x`)?.priority).toBe("normal");
+    expect(fourth.map((e) => e.priority).slice(0, 3)).toEqual(["normal", "normal", "normal"]);
   });
 
   it("asks for new mints while a backlog of queued ones fills the batches, and re-sends that backlog in turn", async () => {
