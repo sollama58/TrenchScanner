@@ -336,7 +336,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   },
   {
     id: TREES_NO_TOKENSAGE_CONTESTANT,
-    name: "Trees (no TokenSage)",
+    name: "Simple Trees",
     description:
       "Trees' twin on every input except TokenSage's, kept to measure what the read adds - in no combiner, never the default",
     summary:
