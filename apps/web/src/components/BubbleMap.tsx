@@ -401,6 +401,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
           setCexOn={setCexOn}
           side={side}
           flags={flags}
+          scanKolBundled={snapshot?.kolBundledPct ?? null}
         />
       )}
     </div>
@@ -415,6 +416,7 @@ function MapView({
   setCexOn,
   side,
   flags,
+  scanKolBundled,
 }: {
   graph: BubbleGraph;
   names: WalletNames;
@@ -426,6 +428,8 @@ function MapView({
   side: SideToggle;
   /** Whether the flagged wallets (the risky rings) have been read. */
   flags: FlagsRead;
+  /** The scan's KOL Bundled % (TokenSnapshot.kolBundledPct); null while unknown. */
+  scanKolBundled: number | null;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [focus, setFocus] = useState<number | null>(null);
@@ -439,6 +443,9 @@ function MapView({
   const { sides, groups, showSides, setSideOn } = side;
   // Each KOL and the supply it may control: side wallets, KOL funded wallets and their linked holders.
   const kols = useKols(graph, groups, names);
+  // KOL Bundled % in place of the old cluster count (user ask 2026-10-15): the scan's figure, else
+  // the map's own KOL groups, as the share image reads it.
+  const kolBundled = scanKolBundled ?? (kols.length > 0 ? kolBundledShare(kols) : null);
   // With the ties on, the bubbles rearrange so each exchange's holders sit together (user ask
   // 2026-10-13); off, the usual layout comes back as it was.
   // KOLs' side wallets gather round them the same way while their ties show.
@@ -475,9 +482,17 @@ function MapView({
               : (linkedCountText(graph.linkedCount) ?? pct(graph.linkedPct, 1))}
           </dd>
         </div>
-        <div>
-          <dt>Clusters</dt>
-          <dd className="num">{graph.clusters.length}</dd>
+        <div
+          title={
+            kolBundled === null
+              ? "KOL bundled: not checked yet. It comes with the linked-wallet reading."
+              : "KOL bundled: supply held by KOLs and the top holders tied to them (wallets a KOL funded, possible side wallets, and holders sharing a funder or funding minute with those)"
+          }
+        >
+          <dt>KOL bundled</dt>
+          <dd className={kolBundled === null ? "muted" : "num"}>
+            {kolBundled === null ? "–" : pct(kolBundled, 1)}
+          </dd>
         </div>
         <div title="Largest cluster: the share of supply held by the biggest group of wallets one funder paid for (not one wallet; the card's Largest is the largest single holder)">
           <dt>Largest cluster</dt>
@@ -1491,6 +1506,7 @@ export function BubbleMapSection({
         setCexOn={setCexOn}
         side={side}
         flags={flags}
+        scanKolBundled={snapshot?.kolBundledPct ?? null}
       />
     </section>
   );
