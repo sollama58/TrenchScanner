@@ -405,6 +405,39 @@ describe("instruction guard", () => {
     expect(check(ix(stranger, [wallet], [0]))).toThrow(/is not allowed/); // unknown program
   });
 
+  it("reads Jupiter's route slippage and platform fee, and refuses a wider slippage or any fee", () => {
+    // shared_accounts_route: discriminator, a route plan stand-in, in (u64), quoted out (u64),
+    // slippage 1500 (u16 LE), platform fee (u8).
+    const route = (slippage: number, fee: number) => [
+      193,
+      32,
+      155,
+      51,
+      65,
+      214,
+      156,
+      129,
+      0,
+      1,
+      0,
+      0,
+      0,
+      ...new Array(16).fill(7),
+      slippage & 0xff,
+      slippage >> 8,
+      fee,
+    ];
+    const jup = (data: number[], maxSlippageBps?: number) => {
+      const decoded = decodeMessage(parseWireTransaction(ix(PROGRAM.jupiterV6, [wallet], data)).message);
+      return () => checkInstructions(decoded, decoded.staticKeys, wallet, { maxSlippageBps });
+    };
+    expect(jup(route(1500, 0), 1500)()).toMatchObject({ jupiterRoutesChecked: 1 });
+    expect(jup(route(1501, 0), 1500)).toThrow(/1501bps slippage/);
+    expect(jup(route(1500, 50), 5000)).toThrow(/platform fee/);
+    // Any other Jupiter instruction is left to the simulation.
+    expect(jup([1, 2, 3], 1500)()).toMatchObject({ jupiterRoutesChecked: 0 });
+  });
+
   it("counts SOL sent to others and the priority fee, for the caller to bound", () => {
     const wsolAta = associatedTokenAddress(
       wallet,

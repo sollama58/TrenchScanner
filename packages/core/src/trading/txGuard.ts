@@ -92,6 +92,11 @@ interface TradeLimits {
   maxExternalLamports: bigint;
   /** The most the compute-budget instructions may set as priority fee. */
   maxPriorityFeeLamports: bigint;
+  /**
+   * For a Jupiter-built swap: the most slippage its route instruction may carry (the bot's own
+   * setting). Its platform fee must be 0: no one may take a cut of the trade.
+   */
+  maxSlippageBps?: number;
 }
 
 export type TradeExpectation =
@@ -136,6 +141,33 @@ export function associatedTokenAddress(owner: string, mint: string, tokenProgram
 export interface InstructionTotals {
   externalLamports: bigint;
   priorityFeeLamports: bigint;
+  /** Jupiter route instructions whose slippage and platform fee were read (preflight reports it). */
+  jupiterRoutesChecked: number;
+}
+
+/**
+ * Jupiter v6's route instructions (Anchor discriminators, sha256("global:<name>")[..8]). Each
+ * one's arguments end in quoted amount (u64), slippage_bps (u16), platform_fee_bps (u8), so the
+ * last three bytes are the slippage and the fee whichever variant it is.
+ */
+const JUPITER_ROUTE_DISCRIMINATORS = new Map<string, string>([
+  ["229,23,203,151,122,227,173,42", "route"],
+  ["150,86,71,116,167,93,14,104", "route_with_token_ledger"],
+  ["193,32,155,51,65,214,156,129", "shared_accounts_route"],
+  ["230,121,143,80,119,159,106,170", "shared_accounts_route_with_token_ledger"],
+  ["208,51,239,151,123,43,237,92", "exact_out_route"],
+  ["176,209,105,168,154,125,69,62", "shared_accounts_exact_out_route"],
+]);
+
+/** A Jupiter route instruction's slippage and platform fee, or null for any other instruction. */
+export function readJupiterRoute(
+  data: Uint8Array,
+): { name: string; slippageBps: number; platformFeeBps: number } | null {
+  if (data.length < 8 + 11) return null;
+  const name = JUPITER_ROUTE_DISCRIMINATORS.get([...data.subarray(0, 8)].join(","));
+  if (!name) return null;
+  const n = data.length;
+  return { name, slippageBps: data[n - 3]! | (data[n - 2]! << 8), platformFeeBps: data[n - 1]! };
 }
 
 /** The most SOL a sale may take from the wallet beyond its priority fee: base fees and rent. */
@@ -154,6 +186,7 @@ export function checkInstructions(
   decoded: DecodedMessage,
   keys: string[],
   wallet: string,
+  limits: { maxSlippageBps?: number } = {},
 ): InstructionTotals {
   if (decoded.staticKeys[0] !== wallet) throw new GuardRefusal("the wallet is not the fee payer");
   if (decoded.requiredSignatures !== 1)
@@ -162,6 +195,7 @@ export function checkInstructions(
   let externalLamports = 0n;
   let unitLimit: bigint | null = null;
   let microLamportsPerUnit = 0n;
+  let jupiterRoutesChecked = 0;
   decoded.instructions.forEach((ix, n) => {
     if (ix.programIdIndex >= decoded.staticKeys.length)
       throw new GuardRefusal(`instruction ${n}: bad program index`);
@@ -182,6 +216,24 @@ export function checkInstructions(
       if (d[0] === 2 && d.length >= 5)
         unitLimit = BigInt(u32(d, 1)); // SetComputeUnitLimit
       else if (d[0] === 3 && d.length >= 9) microLamportsPerUnit = u64(d, 1); // SetComputeUnitPrice
+      return;
+    }
+    if (program === PROGRAM.jupiterV6) {
+      // Its own route arguments, read rather than trusted: a hostile build can't widen the
+      // slippage past the bot's or take a platform fee. Other Jupiter instructions (and any newer
+      // route variant) are left to the simulation, which still checks what arrives.
+      const route = readJupiterRoute(d);
+      if (route) {
+        if (route.platformFeeBps !== 0)
+          throw new GuardRefusal(
+            `instruction ${n}: Jupiter ${route.name} takes a ${route.platformFeeBps}bps platform fee`,
+          );
+        if (limits.maxSlippageBps !== undefined && route.slippageBps > limits.maxSlippageBps)
+          throw new GuardRefusal(
+            `instruction ${n}: Jupiter ${route.name} allows ${route.slippageBps}bps slippage, over the ${limits.maxSlippageBps}bps asked for`,
+          );
+        jupiterRoutesChecked++;
+      }
       return;
     }
     if (SWAP_PROGRAMS.has(program)) return;
@@ -217,7 +269,11 @@ export function checkInstructions(
     throw new GuardRefusal(`instruction ${n}: program ${program} is not allowed`);
   });
   const limit: bigint = unitLimit ?? DEFAULT_COMPUTE_UNIT_LIMIT;
-  return { externalLamports, priorityFeeLamports: (microLamportsPerUnit * limit) / 1_000_000n };
+  return {
+    externalLamports,
+    priorityFeeLamports: (microLamportsPerUnit * limit) / 1_000_000n,
+    jupiterRoutesChecked,
+  };
 }
 
 function sum(list: (ParsedAccountState | null)[], indexes: number[]): bigint {
@@ -249,7 +305,7 @@ export async function guardSwapTransaction(
     });
   }
   const keys = resolveAccountKeys(decoded, tables);
-  const totals = checkInstructions(decoded, keys, wallet);
+  const totals = checkInstructions(decoded, keys, wallet, { maxSlippageBps: expect.maxSlippageBps });
   if (totals.externalLamports > expect.maxExternalLamports)
     throw new GuardRefusal(
       `it would send ${totals.externalLamports} lamports to others, more than the ${expect.maxExternalLamports} allowed`,

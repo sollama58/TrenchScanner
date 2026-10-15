@@ -181,6 +181,7 @@ async function main() {
               maxSolDrop: c.amount + prio + 5_000_000n + external(c.amount),
               maxExternalLamports: external(c.amount),
               maxPriorityFeeLamports: prio,
+              maxSlippageBps: 1500,
             }
           : {
               kind: "sell",
@@ -190,6 +191,7 @@ async function main() {
               feeAllowance: prio + 100_000n + external(out),
               maxExternalLamports: external(out),
               maxPriorityFeeLamports: prio,
+              maxSlippageBps: 1500,
             };
       const totals = await guardSwapTransaction(rpc, built.transaction, probe, expect);
       // A raised fee must be what the transaction pays (Jupiter spreads it over its unit limit).
@@ -203,9 +205,13 @@ async function main() {
         );
         continue;
       }
+      // The guard reads the route's slippage and platform fee from Jupiter's own route
+      // instruction; if Jupiter has moved to a route variant it doesn't know, say so.
+      if (totals.jupiterRoutesChecked === 0)
+        warn(c.label, "no known Jupiter route instruction to read slippage from (a newer variant?)");
       ok(
         c.label,
-        `built by Jupiter, passed the allowlist and the simulation (priority fee ${totals.priorityFeeLamports} lamports)`,
+        `built by Jupiter, passed the allowlist and the simulation (priority fee ${totals.priorityFeeLamports} lamports, ${totals.jupiterRoutesChecked} route instruction(s) checked)`,
       );
     } catch (err) {
       fail(c.label, errText(err));

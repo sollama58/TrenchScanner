@@ -498,13 +498,22 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
         req.priorityFeeLamports !== undefined ? Number(req.priorityFeeLamports) : undefined,
     });
     const minOut = BigInt(quote.otherAmountThreshold);
+    // Jupiter's route instruction must carry no more slippage than this swap asked for.
+    const jupiterLimits = { ...limits, maxSlippageBps: req.slippageBps };
     return {
       ...built,
       route: "jupiter",
       quotedOut: quote.outAmount,
       expect: buy
-        ? { kind: "buy", mint: req.mint, minOut, maxSolDrop, ...limits }
-        : { kind: "sell", mint: req.mint, amount: req.amount, minSolOut: minOut, feeAllowance, ...limits },
+        ? { kind: "buy", mint: req.mint, minOut, maxSolDrop, ...jupiterLimits }
+        : {
+            kind: "sell",
+            mint: req.mint,
+            amount: req.amount,
+            minSolOut: minOut,
+            feeAllowance,
+            ...jupiterLimits,
+          },
     };
   } catch (err) {
     const fallback = ctx.deps.fallback;

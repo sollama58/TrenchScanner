@@ -1007,6 +1007,7 @@ describe("a legacy transaction", () => {
     expect(checkInstructions(decoded, decoded.staticKeys, payer)).toEqual({
       externalLamports: 1_000n,
       priorityFeeLamports: 1_000n,
+      jupiterRoutesChecked: 0,
     });
     const account = generateWalletKeypair().publicKey;
     const close = buildCloseTokenAccount({
