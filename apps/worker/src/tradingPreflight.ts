@@ -67,11 +67,18 @@ async function main() {
   const rpc = new TradingRpc({
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
+    backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
+    jitoUrl: env.TRADING_JITO_URL || undefined,
   });
   if (!env.HELIUS_API_KEY && !env.SOLANA_RPC_URL) fail("RPC", "set HELIUS_API_KEY or SOLANA_RPC_URL");
   const height = await rpc.getBlockHeight();
   if (height) ok("block height", String(height));
   else fail("RPC", "no answer to getBlockHeight");
+  if (env.TRADING_BACKUP_RPC_URL) {
+    const backupHeight = await new TradingRpc({ rpcUrl: env.TRADING_BACKUP_RPC_URL }).getBlockHeight();
+    if (backupHeight) ok("backup RPC", `block height ${backupHeight}`);
+    else fail("backup RPC", "TRADING_BACKUP_RPC_URL gives no answer to getBlockHeight");
+  } else warn("backup RPC", "TRADING_BACKUP_RPC_URL not set: one RPC outage stalls every exit");
   const estimate = await rpc.getPriorityFeeEstimate([DEFAULT_PROBE_WALLET]);
   if (estimate !== null) ok("priority fee estimate", `${estimate} micro-lamports/unit (withdrawals, closes)`);
   else fail("priority fee estimate", "no answer to getRecentPrioritizationFees");
@@ -175,6 +182,7 @@ async function main() {
               maxSolDrop: c.amount + prio + 5_000_000n + external(c.amount),
               maxExternalLamports: external(c.amount),
               maxPriorityFeeLamports: prio,
+              maxSlippageBps: 1500,
             }
           : {
               kind: "sell",
@@ -184,6 +192,7 @@ async function main() {
               feeAllowance: prio + 100_000n + external(out),
               maxExternalLamports: external(out),
               maxPriorityFeeLamports: prio,
+              maxSlippageBps: 1500,
             };
       const totals = await guardSwapTransaction(rpc, built.transaction, probe, expect);
       // A raised fee must be what the transaction pays (Jupiter spreads it over its unit limit).
@@ -197,9 +206,13 @@ async function main() {
         );
         continue;
       }
+      // The guard reads the route's slippage and platform fee from Jupiter's own route
+      // instruction; if Jupiter has moved to a route variant it doesn't know, say so.
+      if (totals.jupiterRoutesChecked === 0)
+        warn(c.label, "no known Jupiter route instruction to read slippage from (a newer variant?)");
       ok(
         c.label,
-        `built by Jupiter, passed the allowlist and the simulation (priority fee ${totals.priorityFeeLamports} lamports)`,
+        `built by Jupiter, passed the allowlist and the simulation (priority fee ${totals.priorityFeeLamports} lamports, ${totals.jupiterRoutesChecked} route instruction(s) checked)`,
       );
     } catch (err) {
       fail(c.label, errText(err));

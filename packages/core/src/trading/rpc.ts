@@ -2,6 +2,31 @@ import { fetchJson } from "../datasources/httpClient.js";
 import { resolveSolanaRpcUrl, type SolanaRpcOptions } from "../subscription/solanaRpc.js";
 import type { GuardRpc, ParsedAccountState, WalletTokenAccount } from "./txGuard.js";
 import { PROGRAM } from "./txGuard.js";
+import { decodeMessage, parseWireTransaction } from "./transaction.js";
+
+/** Jito's tip accounts (getTipAccounts, mainnet): a transaction paying one is for its block engine. */
+export const JITO_TIP_ACCOUNTS = new Set([
+  "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
+  "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
+  "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
+  "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49",
+  "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",
+  "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
+  "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL",
+  "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT",
+]);
+
+export const DEFAULT_JITO_BLOCK_ENGINE_URL = "https://mainnet.block-engine.jito.wtf";
+
+/** Whether a signed transaction tips Jito (names a tip account in its own keys). */
+export function tipsJito(base64Tx: string): boolean {
+  try {
+    const keys = decodeMessage(parseWireTransaction(Buffer.from(base64Tx, "base64")).message).staticKeys;
+    return keys.some((k) => JITO_TIP_ACCOUNTS.has(k));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The chain calls the trading bot makes. Its own small client rather than more methods on
@@ -97,20 +122,43 @@ export interface MintInfo {
 
 export class TradingRpc implements GuardRpc {
   readonly url: string;
+  /** A second endpoint (TRADING_BACKUP_RPC_URL): asked when the first gives no answer, and sent every transaction too. */
+  readonly backupUrl: string | null;
 
-  constructor(options: SolanaRpcOptions = {}) {
+  /** Jito's block engine, for the transactions that tip it. */
+  readonly jitoUrl: string;
+
+  constructor(options: SolanaRpcOptions & { backupUrl?: string; jitoUrl?: string } = {}) {
     this.url = resolveSolanaRpcUrl(options);
+    this.backupUrl = options.backupUrl && options.backupUrl !== this.url ? options.backupUrl : null;
+    this.jitoUrl = (options.jitoUrl || DEFAULT_JITO_BLOCK_ENGINE_URL).replace(/\/$/, "");
   }
 
-  /** One JSON-RPC call. Throws RpcError when the node answered with an error; null on no answer. */
+  /**
+   * One JSON-RPC call. Throws RpcError when the node answered with an error; null on no answer.
+   * With a backup endpoint, a call the first one didn't answer (down, timed out, rate limited) is
+   * asked of the backup before giving up.
+   */
   protected async call<T>(
     method: string,
     params: unknown[],
     timeoutMs = 15_000,
     retries = 1,
   ): Promise<T | null> {
+    const first = await this.callAt<T>(this.url, method, params, timeoutMs, retries);
+    if (first.answered || !this.backupUrl) return first.result;
+    return (await this.callAt<T>(this.backupUrl, method, params, timeoutMs, retries)).result;
+  }
+
+  private async callAt<T>(
+    url: string,
+    method: string,
+    params: unknown[],
+    timeoutMs: number,
+    retries: number,
+  ): Promise<{ answered: boolean; result: T | null }> {
     try {
-      const body = await fetchJson<Envelope<T>>(this.url, {
+      const body = await fetchJson<Envelope<T>>(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -118,10 +166,10 @@ export class TradingRpc implements GuardRpc {
         retries,
       });
       if (body.error) throw new RpcError(method, body.error.code, body.error.message);
-      return body.result ?? null;
+      return { answered: true, result: body.result ?? null };
     } catch (err) {
       if (err instanceof RpcError) throw err;
-      return null;
+      return { answered: false, result: null };
     }
   }
 
@@ -276,17 +324,43 @@ export class TradingRpc implements GuardRpc {
    * forwarded. Returns the node's error text, if any, for the record.
    */
   async send(base64Tx: string): Promise<string | null> {
-    try {
-      await this.call<string>(
-        "sendTransaction",
-        [base64Tx, { encoding: "base64", skipPreflight: true, maxRetries: 0 }],
-        15_000,
-        0,
-      );
-      return null;
-    } catch (err) {
-      return String(err instanceof Error ? err.message : err);
+    // A swap that tips Jito goes to Jito's block engine alone: through an ordinary RPC it would be
+    // in reach of the sandwich bots the tip is paid to avoid. Only when Jito doesn't take it does
+    // it fall back to the RPCs.
+    if (tipsJito(base64Tx)) {
+      try {
+        const out = await this.callAt<string>(
+          `${this.jitoUrl}/api/v1/transactions`,
+          "sendTransaction",
+          [base64Tx, { encoding: "base64" }],
+          10_000,
+          0,
+        );
+        if (out.answered) return null;
+      } catch {
+        /* refused: try the RPCs */
+      }
     }
+    // To every endpoint at once: the same signed bytes can land only once, and two paths to the
+    // leader beat one.
+    const urls = this.backupUrl ? [this.url, this.backupUrl] : [this.url];
+    const results = await Promise.all(
+      urls.map(async (url) => {
+        try {
+          const out = await this.callAt<string>(
+            url,
+            "sendTransaction",
+            [base64Tx, { encoding: "base64", skipPreflight: true, maxRetries: 0 }],
+            15_000,
+            0,
+          );
+          return out.answered ? null : "no answer from the RPC";
+        } catch (err) {
+          return String(err instanceof Error ? err.message : err);
+        }
+      }),
+    );
+    return results.includes(null) ? null : results[0]!;
   }
 
   /** Where a signature stands: landed (ok or failed), or not seen (null status). Null when unknown. */

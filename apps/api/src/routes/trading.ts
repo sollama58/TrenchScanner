@@ -20,11 +20,13 @@ import {
   serverWithdrawTo,
   TradingRpc,
   tradingBotConfigSchema,
+  tradingBacktest,
+  type BacktestRow,
   type Env,
 } from "@trenchscanner/core";
 
 /**
- * The trading bot's tab (admin-only while it is new), in two scopes:
+ * The trading bot's section of the Admin tab, in two scopes:
  *
  *   /trading/*         the signed-in user's own custodial wallet (key sealed under KMS);
  *   /trading/server/*  the server wallet (key in the trader's environment), run by the admins
@@ -41,14 +43,15 @@ import {
  * The api never holds a key that can spend: it records requests, and the trader - the one
  * process with kms:Decrypt and the server wallet's secret - carries them out. Changing a bot and
  * withdrawing refuse sessions from a paired phone (QR device link): those tokens live a year on a
- * device. The server's ceilings (TRADING_MAX_*) bound whatever the settings say.
+ * device. The server's optional ceilings (TRADING_MAX_*), where set, bound whatever the settings say.
  *
- * With TRADING_BOT_ENABLED off only GET /trading/status is registered (admins: what the bot
+ * With TRADING_BOT_ENABLED off only GET /trading/status and /trading/backtest are registered (admins: what the bot
  * would need to run, and the limits it would run under); every other route answers 404, so no
  * wallet can be created, no bot changed and nothing sold or withdrawn.
  */
 
 const MAX_POSITIONS_SHOWN = 100;
+const BACKTEST_CACHE_MS = 5 * 60_000;
 
 const withdrawSchema = z.object({
   /** Lamports as a decimal string, or "max" for everything less the fee. */
@@ -77,7 +80,8 @@ interface Owner {
 }
 
 /**
- * Whether the bot runs on this deployment and what it is missing, for the Bot tab's status card.
+ * Whether the bot runs on this deployment and what it is missing, for the status card in
+ * Admin -> Trading bot.
  * Names settings, never their values: nothing here is secret.
  */
 export function tradingStatus(env: Env, keyProblem: string | null) {
@@ -120,11 +124,12 @@ export function tradingStatus(env: Env, keyProblem: string | null) {
             : "TRADING_SERVER_WALLET_WITHDRAW_TO not set: withdrawals are off",
       },
     ],
+    // Null where the server sets no ceiling (the default): the bot's own settings decide.
     limits: {
-      maxBuySol: env.TRADING_MAX_BUY_SOL,
-      maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL,
-      maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
-      maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL,
+      maxBuySol: env.TRADING_MAX_BUY_SOL ?? null,
+      maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL ?? null,
+      maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS ?? null,
+      maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL ?? null,
     },
     defaults: DEFAULT_TRADING_BOT_CONFIG,
     exitPlanSummary: describeExitPlan(EXIT_PLAN),
@@ -144,10 +149,26 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });
     return status;
   });
+  // What the models would have bought lately, with and without the AI gate: read-only, so it is
+  // there while the bot is off too. Cached a few minutes; the outcomes behind it settle slowly.
+  const backtests = new Map<number, { at: number; rows: Promise<BacktestRow[]> }>();
+  app.get<{ Querystring: { days?: string } }>("/backtest", async (request, reply) => {
+    if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });
+    const days = Math.min(30, Math.max(1, Math.round(Number(request.query.days ?? 7)) || 7));
+    let hit = backtests.get(days);
+    if (!hit || Date.now() - hit.at > BACKTEST_CACHE_MS) {
+      hit = { at: Date.now(), rows: tradingBacktest(days) };
+      hit.rows.catch(() => backtests.delete(days));
+      backtests.set(days, hit);
+    }
+    return { days, models: await hit.rows };
+  });
   if (!env.TRADING_BOT_ENABLED) return;
   const rpc = new TradingRpc({
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
+    backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
+    jitoUrl: env.TRADING_JITO_URL || undefined,
   });
   const models = enabledContestants(env.CURATOR_CONTESTANTS).map((c) => ({ id: c.id, name: c.name }));
   const serverAddress = looksLikeSolanaAddress(env.TRADING_SERVER_WALLET_ADDRESS)
@@ -257,10 +278,10 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
       defaults: {
         exitPlan: EXIT_PLAN,
         exitPlanSummary: describeExitPlan(EXIT_PLAN),
-        maxBuySol: env.TRADING_MAX_BUY_SOL,
-        maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL,
-        maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
-        maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL,
+        maxBuySol: env.TRADING_MAX_BUY_SOL ?? null,
+        maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL ?? null,
+        maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS ?? null,
+        maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL ?? null,
       },
       // A followed filter edited since the settings were saved is paused until they are saved again.
       sources: {
@@ -338,22 +359,17 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     const { userId } = owner;
     const limits = parsed.data.config;
     if (limits) {
-      if (limits.buySol > env.TRADING_MAX_BUY_SOL)
-        return reply
-          .code(400)
-          .send({ error: `buySol: at most ${env.TRADING_MAX_BUY_SOL} SOL on this server` });
-      if (limits.maxDailySpendSol > env.TRADING_MAX_DAILY_SPEND_SOL)
-        return reply
-          .code(400)
-          .send({ error: `maxDailySpendSol: at most ${env.TRADING_MAX_DAILY_SPEND_SOL} SOL on this server` });
-      if (limits.maxPriorityFeeSol > env.TRADING_MAX_PRIORITY_FEE_SOL)
-        return reply.code(400).send({
-          error: `maxPriorityFeeSol: at most ${env.TRADING_MAX_PRIORITY_FEE_SOL} SOL on this server`,
-        });
-      if (limits.slippageBps > env.TRADING_MAX_SLIPPAGE_BPS)
-        return reply
-          .code(400)
-          .send({ error: `slippageBps: at most ${env.TRADING_MAX_SLIPPAGE_BPS} on this server` });
+      // The optional TRADING_MAX_* ceilings, where the server sets them; unset, none applies.
+      const over = [
+        ["buySol", limits.buySol, env.TRADING_MAX_BUY_SOL, "SOL"],
+        ["maxDailySpendSol", limits.maxDailySpendSol, env.TRADING_MAX_DAILY_SPEND_SOL, "SOL"],
+        ["maxPriorityFeeSol", limits.maxPriorityFeeSol, env.TRADING_MAX_PRIORITY_FEE_SOL, "SOL"],
+        ["slippageBps", limits.slippageBps, env.TRADING_MAX_SLIPPAGE_BPS, "bps"],
+      ] as const;
+      for (const [field, value, cap, unit] of over) {
+        if (cap !== undefined && value > cap)
+          return reply.code(400).send({ error: `${field}: at most ${cap} ${unit} on this server` });
+      }
     }
     const existing = await prisma.tradingBot.findUnique({ where: { userId } });
     let config = parsed.data.config ?? readTradingBotConfig(existing?.config);

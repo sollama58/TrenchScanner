@@ -65,7 +65,7 @@ import { withWalletKey, type TradingWalletRow } from "./wallets.js";
  * its own signature until it lands or its blockhash is safely past expiry; only then is a new one
  * built - from a fresh quote, and with double the priority fee of the one that never landed
  * (feeForRetry). An entry is tried again (a send that expired, a buy that failed on chain, a
- * build that hit a transient error) up to MAX_ENTRY_TRIES times while its signal is fresh, never
+ * build that hit a transient error) up to the bot's maxEntryTries times while its signal is fresh, never
  * at a price that ran past its slippage since the first try; a sale until it goes through (more
  * slippage each time a protective exit fails on chain). A dependency that merely didn't answer
  * (TransientError, a rate limit, no price) is retried shortly without counting against anything.
@@ -106,8 +106,6 @@ const RECOVERY_SETTLE_MS = 2 * 60_000;
 const RECOVERY_RECHECK_MS = 5 * 60_000;
 /** An entry still "buying" with no order this long after creation was never sent. */
 const ORPHAN_ENTRY_MS = 2 * 60_000;
-/** Tries at an entry - sends that never landed or failed on chain, builds that failed - before it is given up. */
-const MAX_ENTRY_TRIES = 4;
 /** An entry is retried this long past its signal's age limit at most (its first try was in time). */
 const ENTRY_RETRY_GRACE_MS = 2 * 60_000;
 /** A try at an entry that failed before sending (a transient error) is repeated this soon. */
@@ -124,8 +122,6 @@ const MAX_WITHDRAWAL_SENDS = 3;
 const TRANSIENT_STUCK_AFTER_MINUTES = 30;
 /** A withdrawal claimed this long ago with no signature recorded was never sent. */
 const ORPHAN_WITHDRAWAL_MS = 5 * 60_000;
-/** Exits allow at least this slippage (30%): a stop must get out, not wait for a better fill. */
-const EXIT_SLIPPAGE_FLOOR_BPS = 3_000;
 /** Failed take-profit attempts before the rung is sold with the exit slippage instead. */
 const TAKE_PROFIT_TIGHT_ATTEMPTS = 3;
 /** Failed exits before a position past its hold time is called stuck (frees its slot). */
@@ -178,8 +174,8 @@ export interface TradingEngineDeps {
    * by the admins, so it may open positions whatever canTrade says.
    */
   serverWallet?: { userId: string; publicKey: string; seed: Uint8Array; withdrawTo: string | null } | null;
-  /** Server-wide ceilings, whatever a bot's config says (TRADING_MAX_*). */
-  maxBuyLamports: bigint;
+  /** Optional server-wide ceilings, whatever a bot's config says (TRADING_MAX_*); unset is no limit. */
+  maxBuyLamports?: bigint;
   maxDailySpendLamports?: bigint;
   maxSlippageBps?: number;
   now?: () => Date;
@@ -368,6 +364,11 @@ interface SwapRequest {
   maxPriorityFeeLamports: bigint;
   /** Exactly this priority fee, not the route's estimate: a retry after a send that never landed. */
   priorityFeeLamports?: bigint;
+  /**
+   * Land it through Jito with this tip instead of a priority fee (the bot's jitoTipSol), out of
+   * reach of sandwich bots. A retry's raised fee raises the tip instead.
+   */
+  jitoTipLamports?: bigint;
   /** Buy only: refuse a route that would deliver less (a retry must not chase the price). */
   minQuotedOut?: bigint;
   /**
@@ -383,6 +384,8 @@ interface BuiltSwap {
   route: "jupiter" | "pumpportal";
   quotedOut: string;
   expect: TradeExpectation;
+  /** The Jito tip it pays, when it lands through Jito. */
+  jitoTipLamports?: bigint;
 }
 
 /** The most any one trade may send to anyone but the wallet, whatever the trade's size or price. */
@@ -396,6 +399,11 @@ const MAX_EXTERNAL_LAMPORTS = 50_000_000n;
 function externalAllowance(tradeLamports: bigint): bigint {
   const share = tradeLamports / 50n;
   return (share > MAX_EXTERNAL_LAMPORTS ? MAX_EXTERNAL_LAMPORTS : share) + 1_000_000n;
+}
+
+/** The Jito tip a bot's swaps pay instead of a priority fee; undefined when it sends normally. */
+function jitoTip(config: TradingBotConfig): bigint | undefined {
+  return config.jitoTipSol > 0 ? solToLamports(config.jitoTipSol) : undefined;
 }
 
 /** The priority fee a bot may pay: its own setting, under the server's ceiling. */
@@ -475,8 +483,15 @@ async function fallbackFloor(ctx: PassContext, req: SwapRequest): Promise<bigint
 async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Promise<BuiltSwap> {
   const buy = req.side === "buy";
   const tradeLamports = buy ? req.amount : (req.valueHintLamports ?? 0n);
+  // A Jito tip is a transfer to a tip account: allowed on top of the route's usual allowance.
+  const jitoTip =
+    req.jitoTipLamports !== undefined && req.jitoTipLamports > 0n
+      ? req.priorityFeeLamports !== undefined && req.priorityFeeLamports > req.jitoTipLamports
+        ? req.priorityFeeLamports
+        : req.jitoTipLamports
+      : null;
   const limits = {
-    maxExternalLamports: externalAllowance(tradeLamports),
+    maxExternalLamports: externalAllowance(tradeLamports) + (jitoTip ?? 0n),
     maxPriorityFeeLamports: req.maxPriorityFeeLamports,
   };
   const maxSolDrop =
@@ -500,15 +515,26 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
       maxPriorityFeeLamports: Number(req.maxPriorityFeeLamports),
       priorityFeeLamports:
         req.priorityFeeLamports !== undefined ? Number(req.priorityFeeLamports) : undefined,
+      jitoTipLamports: jitoTip !== null ? Number(jitoTip) : undefined,
     });
     const minOut = BigInt(quote.otherAmountThreshold);
+    // Jupiter's route instruction must carry no more slippage than this swap asked for.
+    const jupiterLimits = { ...limits, maxSlippageBps: req.slippageBps };
     return {
       ...built,
       route: "jupiter",
       quotedOut: quote.outAmount,
+      ...(jitoTip !== null ? { jitoTipLamports: jitoTip } : {}),
       expect: buy
-        ? { kind: "buy", mint: req.mint, minOut, maxSolDrop, ...limits }
-        : { kind: "sell", mint: req.mint, amount: req.amount, minSolOut: minOut, feeAllowance, ...limits },
+        ? { kind: "buy", mint: req.mint, minOut, maxSolDrop, ...jupiterLimits }
+        : {
+            kind: "sell",
+            mint: req.mint,
+            amount: req.amount,
+            minSolOut: minOut,
+            feeAllowance,
+            ...jupiterLimits,
+          },
     };
   } catch (err) {
     const fallback = ctx.deps.fallback;
@@ -572,8 +598,9 @@ async function executeSwap(
       route: built.route,
       inAmount: req.amount.toString(),
       quotedOut: built.quotedOut,
-      // What this try pays to land: a retry after it never landed doubles it (feeForRetry).
-      priorityFeeLamports: totals.priorityFeeLamports,
+      // What this try pays to land (its Jito tip, through Jito): a retry after it never landed
+      // doubles it (feeForRetry).
+      priorityFeeLamports: built.jitoTipLamports ?? totals.priorityFeeLamports,
     },
   });
   const sendError = await ctx.deps.rpc.send(rawTx);
@@ -1426,14 +1453,17 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
   if (amount <= 0n) return;
 
   const configured = Math.min(config.slippageBps, ctx.deps.maxSlippageBps ?? config.slippageBps);
-  const exitSlippage = Math.max(configured, EXIT_SLIPPAGE_FLOOR_BPS);
+  const exitSlippage = Math.max(configured, config.exitSlippageBps);
   // A take-profit sells at the configured slippage; one that keeps failing (the price moved
   // before it landed) and every protective exit sells with room to get out.
   // Each failed attempt at a protective exit widens it by 5 points, up to 50%.
   const slippageBps =
     decision.reason === "take_profit" && position.failCount < TAKE_PROFIT_TIGHT_ATTEMPTS
       ? configured
-      : Math.min(5_000, exitSlippage + 500 * Math.min(position.failCount, 4));
+      : Math.min(
+          Math.max(config.exitSlippageMaxBps, exitSlippage),
+          exitSlippage + 500 * Math.min(position.failCount, 4),
+        );
   // What the tokens being sold are worth: by the price when there is one, else by their cost.
   const costOfAmount =
     position.swapInLamports && bought > 0n ? (position.swapInLamports * amount) / bought : 0n;
@@ -1459,6 +1489,7 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
       slippageBps,
       maxPriorityFeeLamports: maxFee,
       priorityFeeLamports: feeForRetry(maxFee, lastSale),
+      jitoTipLamports: jitoTip(config),
       valueHintLamports,
     },
   );
@@ -1566,6 +1597,77 @@ export async function loadSignals(
   };
 }
 
+/** An AI review this long before its signal still counts for it (the judge can run first, in gate mode). */
+const AI_REVIEW_LOOKBACK_MS = 10 * 60_000;
+
+export type AiGateOutcome =
+  { signal: TradeSignal; verdict: "buy" } | { signal: TradeSignal; verdict: "skip"; why: string };
+
+/**
+ * The AI judge's say on a window of signals (config.sources.requireAiBuy): each signal is bought
+ * only on a "buy" verdict (AiReview) for its token, at or above minAiProbability2x. A signal
+ * still fresh with no verdict yet holds the window there: `through` moves back to just before
+ * it, so it and everything after it are read again next pass, by when the review may be in.
+ * Fresh means younger than maxSignalAgeSeconds; past that, no verdict is a skip.
+ */
+export async function gateOnAiVerdicts(
+  signals: TradeSignal[],
+  through: Date,
+  config: TradingBotConfig,
+  now: Date,
+): Promise<{ outcomes: AiGateOutcome[]; through: Date }> {
+  if (!config.sources.requireAiBuy || signals.length === 0) {
+    return { outcomes: signals.map((signal) => ({ signal, verdict: "buy" as const })), through };
+  }
+  const earliest = Math.min(...signals.map((s) => s.at.getTime()));
+  const reviews = await prisma.aiReview.findMany({
+    where: {
+      token: { mintAddress: { in: [...new Set(signals.map((s) => s.mint))] } },
+      createdAt: { gte: new Date(earliest - AI_REVIEW_LOOKBACK_MS) },
+      decision: { not: null },
+    },
+    select: {
+      createdAt: true,
+      decision: true,
+      probability2x: true,
+      token: { select: { mintAddress: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  const outcomes: AiGateOutcome[] = [];
+  for (const signal of signals) {
+    // The newest verdict on this token from around the signal or after it.
+    const review = reviews.find(
+      (r) =>
+        r.token.mintAddress === signal.mint &&
+        r.createdAt.getTime() >= signal.at.getTime() - AI_REVIEW_LOOKBACK_MS,
+    );
+    if (!review) {
+      if (now.getTime() - signal.at.getTime() < config.maxSignalAgeSeconds * 1000) {
+        // Wait for it: read again from just before this signal.
+        return { outcomes, through: new Date(signal.at.getTime() - 1) };
+      }
+      outcomes.push({ signal, verdict: "skip", why: "no AI review before the signal went stale" });
+      continue;
+    }
+    if (review.decision !== "buy") {
+      outcomes.push({ signal, verdict: "skip", why: "the AI judge said no_buy" });
+      continue;
+    }
+    const p2x = review.probability2x ?? 0;
+    if (p2x < config.sources.minAiProbability2x) {
+      outcomes.push({
+        signal,
+        verdict: "skip",
+        why: `the AI judge's 2x estimate ${Math.round(p2x * 100)}% is under the bot's ${Math.round(config.sources.minAiProbability2x * 100)}%`,
+      });
+      continue;
+    }
+    outcomes.push({ signal, verdict: "buy" });
+  }
+  return { outcomes, through };
+}
+
 /**
  * How far signals may be read: a few seconds behind now, and behind the oldest transaction still
  * open elsewhere (it may yet commit a row stamped earlier) - but never more than 20s behind. Our
@@ -1636,20 +1738,33 @@ async function runBotEntries(
     const allowed = owners.filter((f) => ctx.deps.canTrade(f.user.walletAddress)).map((f) => f.id);
     sourceConfig = { ...config, sources: { ...config.sources, filterIds: allowed } };
   }
-  const { signals, through } = await loadSignals(
+  const loaded = await loadSignals(
     isServer ? null : bot.userId,
     sourceConfig,
     bot.signalsFrom,
     horizon,
     bot.configSavedAt,
   );
+  // With requireAiBuy, the AI judge's verdicts decide, and a signal still awaiting one holds the window.
+  const { outcomes, through } = await gateOnAiVerdicts(loaded.signals, loaded.through, config, now);
   // The window is consumed whatever happens to its signals: a skipped signal is never bought later.
-  await prisma.tradingBot.update({ where: { id: bot.id }, data: { signalsFrom: through } });
-  if (signals.length === 0) return;
-  ctx.summary.signals += signals.length;
+  if (through > bot.signalsFrom) {
+    await prisma.tradingBot.update({ where: { id: bot.id }, data: { signalsFrom: through } });
+  }
+  if (outcomes.length === 0) return;
+  ctx.summary.signals += outcomes.length;
+  const signals: TradeSignal[] = [];
+  for (const o of outcomes) {
+    if (o.verdict === "buy") signals.push(o.signal);
+    else {
+      ctx.summary.skipped++;
+      logger.info("signal skipped", { userId: bot.userId, mint: o.signal.mint, why: o.why });
+    }
+  }
 
   let buyLamports = solToLamports(config.buySol);
-  if (buyLamports > ctx.deps.maxBuyLamports) buyLamports = ctx.deps.maxBuyLamports;
+  if (ctx.deps.maxBuyLamports !== undefined && buyLamports > ctx.deps.maxBuyLamports)
+    buyLamports = ctx.deps.maxBuyLamports;
   const slippageBps = Math.min(config.slippageBps, ctx.deps.maxSlippageBps ?? config.slippageBps);
   const plan: ExitPlan = effectiveExitPlan(config);
 
@@ -1691,7 +1806,13 @@ async function runBotEntries(
       }
       throw err;
     }
-    if (await attemptEntry(ctx, wallet, position, { slippageBps, maxFee: priorityFee(ctx, config) })) {
+    if (
+      await attemptEntry(ctx, wallet, position, {
+        slippageBps,
+        maxFee: priorityFee(ctx, config),
+        jitoTip: jitoTip(config),
+      })
+    ) {
       logger.info("entry sent", { userId: bot.userId, mint: signal.mint, source: signal.label });
     }
   }
@@ -1707,7 +1828,13 @@ async function attemptEntry(
   ctx: PassContext,
   wallet: Wallet,
   position: PositionRow,
-  opts: { slippageBps: number; maxFee: bigint; exactFee?: bigint; minQuotedOut?: bigint },
+  opts: {
+    slippageBps: number;
+    maxFee: bigint;
+    exactFee?: bigint;
+    minQuotedOut?: bigint;
+    jitoTip?: bigint;
+  },
 ): Promise<boolean> {
   try {
     await executeSwap(
@@ -1724,6 +1851,7 @@ async function attemptEntry(
         maxPriorityFeeLamports: opts.maxFee,
         priorityFeeLamports: opts.exactFee,
         minQuotedOut: opts.minQuotedOut,
+        jitoTipLamports: opts.jitoTip,
       },
     );
     ctx.summary.buys++;
@@ -1757,7 +1885,7 @@ async function attemptEntry(
 /**
  * Entries whose last try didn't fill - it failed before sending, expired without landing, or
  * failed on chain - and that aren't waiting on a send: tried again, or given up. A retry needs
- * the bot still on and its owner still allowed to trade, fewer than MAX_ENTRY_TRIES failed tries,
+ * the bot still on and its owner still allowed to trade, fewer than the bot's maxEntryTries failed tries,
  * and the signal no older than its age limit plus ENTRY_RETRY_GRACE_MS; it re-reads the wallet
  * first (an earlier try that landed after all is recovered, never bought twice), pays double the
  * fee of a try that never landed, and refuses a price more than the slippage past the first
@@ -1810,7 +1938,7 @@ async function retryEntry(ctx: PassContext, position: PositionRow, now: Date) {
   if (!wallet) why = "no key available to buy with";
   else if (!bot?.enabled) why = "the bot was switched off before the entry filled";
   else if (!isServer && !ctx.deps.canTrade(bot.user.walletAddress)) why = "the owner may no longer trade";
-  else if (position.failCount >= MAX_ENTRY_TRIES) why = `the entry failed ${position.failCount} times`;
+  else if (position.failCount >= config.maxEntryTries) why = `the entry failed ${position.failCount} times`;
   else if (signalAge > config.maxSignalAgeSeconds * 1000 + ENTRY_RETRY_GRACE_MS)
     why = "the signal went stale before an entry filled";
   if (why) {
@@ -1842,6 +1970,7 @@ async function retryEntry(ctx: PassContext, position: PositionRow, now: Date) {
     slippageBps,
     maxFee,
     exactFee: feeForRetry(maxFee, orders[orders.length - 1] ?? null),
+    jitoTip: jitoTip(config),
     minQuotedOut: first ? (BigInt(first.quotedOut) * BigInt(10_000 - slippageBps)) / 10_000n : undefined,
   });
   if (sent) {

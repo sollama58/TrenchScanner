@@ -36,15 +36,32 @@ interface ExitPlan {
   trailMaxHoldMinutes: number;
 }
 interface BotConfig {
-  sources: { filterIds: string[]; models: string[]; highConvictionOnly: boolean };
+  sources: {
+    filterIds: string[];
+    models: string[];
+    highConvictionOnly: boolean;
+    requireAiBuy: boolean;
+    minAiProbability2x: number;
+  };
   buySol: number;
   maxOpenPositions: number;
   maxDailySpendSol: number;
   maxSignalAgeSeconds: number;
   slippageBps: number;
+  exitSlippageBps: number;
+  exitSlippageMaxBps: number;
+  maxEntryTries: number;
   maxPriorityFeeSol: number;
+  jitoTipSol: number;
   reserveSol: number;
   exitPlan: ExitPlan | null;
+}
+/** The server's optional ceilings: null where it sets none (the default). */
+interface Ceilings {
+  maxBuySol: number | null;
+  maxDailySpendSol: number | null;
+  maxSlippageBps: number | null;
+  maxPriorityFeeSol: number | null;
 }
 interface Position {
   id: string;
@@ -95,13 +112,9 @@ interface TradingState {
     lastError: string | null;
     exitPlanSummary: string;
   };
-  defaults: {
+  defaults: Ceilings & {
     exitPlan: ExitPlan;
     exitPlanSummary: string;
-    maxBuySol: number;
-    maxDailySpendSol: number;
-    maxSlippageBps: number;
-    maxPriorityFeeSol: number;
   };
   sources: {
     filters: { id: string; name: string; isActive: boolean; changedSinceSaved: boolean }[];
@@ -115,7 +128,7 @@ interface TradingState {
 interface TradingStatus {
   enabled: boolean;
   checks: { id: string; label: string; ok: boolean; detail: string }[];
-  limits: { maxBuySol: number; maxDailySpendSol: number; maxSlippageBps: number; maxPriorityFeeSol: number };
+  limits: Ceilings;
   defaults: BotConfig;
   exitPlanSummary: string;
   models: { id: string; name: string }[];
@@ -123,6 +136,7 @@ interface TradingStatus {
 }
 
 const LAMPORTS = 1_000_000_000;
+const ceiling = (v: number | null, unit: string) => (v === null ? "No limit" : `${v}${unit}`);
 const sol = (lamports: string | null | undefined, digits = 4) =>
   lamports === null || lamports === undefined ? "–" : `${(Number(lamports) / LAMPORTS).toFixed(digits)} SOL`;
 const solscan = (kind: "account" | "tx" | "token", id: string) => `https://solscan.io/${kind}/${id}`;
@@ -209,25 +223,28 @@ function BotOff({ status }: { status: TradingStatus }) {
               <LockIcon size={13} /> Limits it would run under
             </span>
             <h2>Server ceilings</h2>
-            <p className="muted small">No bot setting can go past these (TRADING_MAX_* on the trader).</p>
+            <p className="muted small">
+              None by default: each admin sets their own bot&apos;s limits. A TRADING_MAX_* setting on the
+              server adds a ceiling no bot can pass.
+            </p>
           </div>
         </header>
         <dl className="facts">
           <div>
             <dt>Largest buy</dt>
-            <dd className="num">{l.maxBuySol} SOL</dd>
+            <dd className="num">{ceiling(l.maxBuySol, " SOL")}</dd>
           </div>
           <div>
             <dt>Spend per 24 hours</dt>
-            <dd className="num">{l.maxDailySpendSol} SOL</dd>
+            <dd className="num">{ceiling(l.maxDailySpendSol, " SOL")}</dd>
           </div>
           <div>
             <dt>Slippage</dt>
-            <dd className="num">{l.maxSlippageBps / 100}%</dd>
+            <dd className="num">{ceiling(l.maxSlippageBps === null ? null : l.maxSlippageBps / 100, "%")}</dd>
           </div>
           <div>
             <dt>Priority fee per swap</dt>
-            <dd className="num">{l.maxPriorityFeeSol} SOL</dd>
+            <dd className="num">{ceiling(l.maxPriorityFeeSol, " SOL")}</dd>
           </div>
         </dl>
       </section>
@@ -274,11 +291,22 @@ function BotOff({ status }: { status: TradingStatus }) {
             <dd className="small">{status.exitPlanSummary}</dd>
           </div>
           <div>
+            <dt>Sends through</dt>
+            <dd className="small">{d.jitoTipSol > 0 ? `Jito, ${d.jitoTipSol} SOL tip` : "the RPC"}</dd>
+          </div>
+          <div>
+            <dt>AI judge</dt>
+            <dd className="small">
+              {d.sources.requireAiBuy ? "Buys only on its buy verdict" : "Not consulted"}
+            </dd>
+          </div>
+          <div>
             <dt>Models it can follow</dt>
             <dd className="small">{status.models.map((m) => m.name).join(", ") || "none"}</dd>
           </div>
         </dl>
       </section>
+      <BacktestPanel />
     </div>
   );
 }
@@ -364,6 +392,7 @@ function TradingConsole() {
       <WalletPanel state={state} reload={reload} />
       {state.wallet && state.canTrade && <BotPanel state={state} reload={reload} />}
       {state.wallet && <PositionsPanel state={state} reload={reload} />}
+      {state.canTrade && <BacktestPanel />}
     </div>
   );
 }
@@ -664,6 +693,38 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
             />
             Only high-conviction model calls
           </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={draft.sources.requireAiBuy}
+              onChange={(e) =>
+                edit({ ...draft, sources: { ...draft.sources, requireAiBuy: e.target.checked } })
+              }
+            />
+            Only buy what the AI judge calls a buy
+          </label>
+          {draft.sources.requireAiBuy && (
+            <label className="field">
+              <span>Least AI 2x estimate (%)</span>
+              <input
+                type="number"
+                step="any"
+                min={0}
+                max={100}
+                value={pct(draft.sources.minAiProbability2x)}
+                onChange={(e) =>
+                  edit({
+                    ...draft,
+                    sources: { ...draft.sources, minAiProbability2x: num(e.target.value) / 100 },
+                  })
+                }
+              />
+              <small className="faint">
+                A signal waits for its review while it is fresh. The judge reviews high-conviction picks, so
+                filter matches it never reviews are not bought.
+              </small>
+            </label>
+          )}
         </fieldset>
 
         <fieldset>
@@ -675,11 +736,13 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                 type="number"
                 step="any"
                 min={0}
-                max={state.defaults.maxBuySol}
+                max={state.defaults.maxBuySol ?? undefined}
                 value={draft.buySol}
                 onChange={(e) => edit({ ...draft, buySol: num(e.target.value) })}
               />
-              <small className="faint">Capped at {state.defaults.maxBuySol} SOL by the server.</small>
+              {state.defaults.maxBuySol !== null && (
+                <small className="faint">Capped at {state.defaults.maxBuySol} SOL by the server.</small>
+              )}
             </label>
             <label className="field">
               <span>Max open positions</span>
@@ -687,7 +750,6 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                 type="number"
                 step={1}
                 min={1}
-                max={50}
                 value={draft.maxOpenPositions}
                 onChange={(e) => edit({ ...draft, maxOpenPositions: num(e.target.value) })}
               />
@@ -698,11 +760,15 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                 type="number"
                 step="any"
                 min={0}
-                max={state.defaults.maxDailySpendSol}
+                max={state.defaults.maxDailySpendSol ?? undefined}
                 value={draft.maxDailySpendSol}
                 onChange={(e) => edit({ ...draft, maxDailySpendSol: num(e.target.value) })}
               />
-              <small className="faint">Capped at {state.defaults.maxDailySpendSol} SOL by the server.</small>
+              {state.defaults.maxDailySpendSol !== null && (
+                <small className="faint">
+                  Capped at {state.defaults.maxDailySpendSol} SOL by the server.
+                </small>
+              )}
             </label>
             <label className="field">
               <span>Skip signals older than (s)</span>
@@ -710,7 +776,7 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                 type="number"
                 step={1}
                 min={5}
-                max={3600}
+                max={86400}
                 value={draft.maxSignalAgeSeconds}
                 onChange={(e) => edit({ ...draft, maxSignalAgeSeconds: num(e.target.value) })}
               />
@@ -720,15 +786,55 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
               <input
                 type="number"
                 step="any"
-                min={0.1}
-                max={state.defaults.maxSlippageBps / 100}
+                min={0.01}
+                max={(state.defaults.maxSlippageBps ?? 10_000) / 100}
                 value={draft.slippageBps / 100}
                 onChange={(e) => edit({ ...draft, slippageBps: Math.round(num(e.target.value) * 100) })}
               />
+              {state.defaults.maxSlippageBps !== null && (
+                <small className="faint">
+                  At most {state.defaults.maxSlippageBps / 100}% on this server.
+                </small>
+              )}
+            </label>
+            <label className="field">
+              <span>Exit slippage (%)</span>
+              <input
+                type="number"
+                step="any"
+                min={0.01}
+                max={100}
+                value={draft.exitSlippageBps / 100}
+                onChange={(e) => edit({ ...draft, exitSlippageBps: Math.round(num(e.target.value) * 100) })}
+              />
               <small className="faint">
-                At most {state.defaults.maxSlippageBps / 100}% on this server. Stops and trailing exits allow
-                at least 30% so they get out.
+                The least a stop, trail or timed exit sells with, so it gets out.
               </small>
+            </label>
+            <label className="field">
+              <span>Exit slippage when retrying, up to (%)</span>
+              <input
+                type="number"
+                step="any"
+                min={0.01}
+                max={100}
+                value={draft.exitSlippageMaxBps / 100}
+                onChange={(e) =>
+                  edit({ ...draft, exitSlippageMaxBps: Math.round(num(e.target.value) * 100) })
+                }
+              />
+              <small className="faint">Each failed protective exit widens by 5 points up to this.</small>
+            </label>
+            <label className="field">
+              <span>Tries per entry</span>
+              <input
+                type="number"
+                step={1}
+                min={1}
+                max={20}
+                value={draft.maxEntryTries}
+                onChange={(e) => edit({ ...draft, maxEntryTries: num(e.target.value) })}
+              />
             </label>
             <label className="field">
               <span>Max priority fee (SOL)</span>
@@ -736,21 +842,37 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                 type="number"
                 step="any"
                 min={0}
-                max={state.defaults.maxPriorityFeeSol}
+                max={state.defaults.maxPriorityFeeSol ?? undefined}
                 value={draft.maxPriorityFeeSol}
                 onChange={(e) => edit({ ...draft, maxPriorityFeeSol: num(e.target.value) })}
               />
+              <small className="faint">Also caps how far a retry raises the Jito tip.</small>
+            </label>
+            <label className="field">
+              <span>Jito tip (SOL)</span>
+              <input
+                type="number"
+                step="any"
+                min={0}
+                value={draft.jitoTipSol}
+                onChange={(e) => edit({ ...draft, jitoTipSol: num(e.target.value) })}
+              />
+              <small className="faint">
+                Swaps go through Jito with this tip, out of reach of sandwich bots. 0 sends them normally.
+              </small>
             </label>
             <label className="field">
               <span>Keep in reserve (SOL)</span>
               <input
                 type="number"
                 step="any"
-                min={0.005}
+                min={0}
                 value={draft.reserveSol}
                 onChange={(e) => edit({ ...draft, reserveSol: num(e.target.value) })}
               />
-              <small className="faint">Fees and token-account rent come out of this.</small>
+              <small className="faint">
+                Fees and token-account rent come out of this. Too little, and a sale can&apos;t pay its fee.
+              </small>
             </label>
           </div>
         </fieldset>
@@ -817,7 +939,7 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                   </button>
                 </div>
               ))}
-              {plan.takeProfits.length < 6 && (
+              {plan.takeProfits.length < 20 && (
                 <button
                   type="button"
                   className="ghost"
@@ -899,7 +1021,7 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                   </button>
                 </div>
               ))}
-              {plan.trail.length < 6 && (
+              {plan.trail.length < 20 && (
                 <button
                   type="button"
                   className="ghost"
@@ -1078,6 +1200,119 @@ function PositionsPanel({ state, reload }: { state: TradingState; reload: () => 
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+interface BacktestSlice {
+  calls: number;
+  wins: number;
+  hitRate: number | null;
+  avgReturnPct: number | null;
+}
+interface BacktestRow {
+  model: string;
+  name: string;
+  all: BacktestSlice;
+  high: BacktestSlice;
+  aiBuy: BacktestSlice;
+  highAiBuy: BacktestSlice;
+}
+
+const BACKTEST_SLICES = [
+  ["all", "Every call"],
+  ["high", "High conviction"],
+  ["aiBuy", "AI buy"],
+  ["highAiBuy", "High + AI buy"],
+] as const;
+
+/**
+ * What each model's calls would have done lately, with and without the AI gate: how many were
+ * graded, the share that doubled in the win window, and the average return under the default
+ * exit plan. The evidence for picking sources (the project's goal is a 75% hit rate on 2x).
+ */
+function BacktestPanel() {
+  const [days, setDays] = useState(7);
+  const [rows, setRows] = useState<BacktestRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setRows(null);
+    api<{ models: BacktestRow[] }>(`/trading/backtest?days=${days}`)
+      .then((r) => {
+        setRows(r.models);
+        setError(null);
+      })
+      .catch((err: unknown) => setError(errorText(err)));
+  }, [days]);
+  const cell = (s: BacktestSlice) =>
+    s.calls === 0 ? (
+      <span className="faint">–</span>
+    ) : (
+      <>
+        <span className={s.hitRate !== null && s.hitRate >= 0.75 ? "up" : undefined}>
+          {Math.round((s.hitRate ?? 0) * 100)}%
+        </span>{" "}
+        <span className="faint">
+          of {s.calls}
+          {s.avgReturnPct !== null
+            ? `, ${s.avgReturnPct >= 0 ? "+" : ""}${s.avgReturnPct.toFixed(0)}% avg`
+            : ""}
+        </span>
+      </>
+    );
+  return (
+    <section className="panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">
+            <BoltIcon size={13} /> What it would have bought
+          </span>
+          <h2>Hit rate on 2x</h2>
+          <p className="muted small">
+            Each model&apos;s graded calls: the share that doubled in the win window, and the average return
+            under the default exit plan. The goal is 75% or better.
+          </p>
+        </div>
+        <div className="row" role="group" aria-label="Window" style={{ gap: 6 }}>
+          {[1, 7, 30].map((d) => (
+            <button key={d} className={d === days ? "primary" : "ghost"} onClick={() => setDays(d)}>
+              {d}d
+            </button>
+          ))}
+        </div>
+      </header>
+      {error ? (
+        <p className="error small">{error}</p>
+      ) : !rows ? (
+        <Skeleton lines={3} />
+      ) : rows.length === 0 ? (
+        <p className="muted small">No graded model calls in this window yet.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="small">
+            <thead>
+              <tr>
+                <th>Model</th>
+                {BACKTEST_SLICES.map(([, label]) => (
+                  <th key={label}>{label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.model}>
+                  <td>{r.name}</td>
+                  {BACKTEST_SLICES.map(([key]) => (
+                    <td key={key} className="num">
+                      {cell(r[key])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

@@ -83,6 +83,7 @@ class FakeChain {
   estimateFee = 20_000n;
   /** The exact priority fee each swap build was asked for (undefined: the estimate). */
   feeRequests: (number | undefined)[] = [];
+  tipRequests: (number | undefined)[] = [];
   private nonce = 1n;
 
   key = (owner: string, mint: string) => `${owner}:${mint}`;
@@ -283,10 +284,11 @@ class FakeChain {
         priceImpactPct: "0",
       } satisfies SwapQuote;
     },
-    swapTransaction: async ({ quote, userPublicKey, priorityFeeLamports }) => {
+    swapTransaction: async ({ quote, userPublicKey, priorityFeeLamports, jitoTipLamports }) => {
       const buying = quote.inputMint === WSOL_MINT;
       const mint = buying ? quote.outputMint : quote.inputMint;
       this.feeRequests.push(priorityFeeLamports);
+      this.tipRequests.push(jitoTipLamports);
       return {
         transaction: this.register(
           userPublicKey,
@@ -366,6 +368,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     await prisma.tradingBot.deleteMany({ where: { userId } });
     await prisma.tradingWallet.deleteMany({ where: { userId } });
     await prisma.curatedAlert.deleteMany({ where: { tokenId } });
+    await prisma.aiReview.deleteMany({ where: { tokenId } });
     await prisma.token.deleteMany({ where: { id: tokenId } });
     await prisma.user.deleteMany({ where: { id: userId } });
   });
@@ -374,6 +377,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     await prisma.tradingPosition.deleteMany({ where: { userId } });
     await prisma.tradingWithdrawal.deleteMany({ where: { userId } });
     await prisma.curatedAlert.deleteMany({ where: { tokenId } });
+    await prisma.aiReview.deleteMany({ where: { tokenId } });
     await prisma.curatedAlert.create({
       data: {
         tokenId,
@@ -388,7 +392,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     const data = {
       enabled: true,
       signalsFrom: new Date(clock.getTime() - 60_000),
-      config: { sources: { models: ["rules"] }, buySol: 0.05, ...config },
+      config: { sources: { models: ["rules"], requireAiBuy: false }, buySol: 0.05, jitoTipSol: 0, ...config },
     };
     await prisma.tradingBot.upsert({ where: { userId }, create: { userId, ...data }, update: data });
   }
@@ -405,6 +409,55 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     await tick();
     expect((await position()).status).toBe("open");
   };
+
+  const aiReview = (decision: "buy" | "no_buy", probability2x = 0.6) =>
+    prisma.aiReview.create({
+      data: {
+        tokenId,
+        mode: "shadow",
+        model: "test",
+        decision,
+        probability2x,
+        latencyMs: 1,
+        anchorPriceUsd: 0.00001,
+        anchorMcapUsd: 10_000,
+        createdAt: new Date(clock.getTime() - 5_000),
+      },
+    });
+  const gated = (extra: object = {}) =>
+    freshSignal({ sources: { models: ["rules"], requireAiBuy: true, ...extra } });
+
+  it("with the AI gate on, waits for the judge's verdict, then buys on a buy", async () => {
+    await gated();
+    // No review yet and the signal is fresh: nothing bought, and the window holds.
+    const first = await tick();
+    expect(first.buys).toBe(0);
+    expect(first.skipped).toBe(0);
+    await aiReview("buy");
+    expect((await tick()).buys).toBe(1);
+  });
+
+  it("with the AI gate on, skips a no_buy, a low 2x estimate, and a signal never reviewed", async () => {
+    await gated();
+    await aiReview("no_buy");
+    let run = await tick();
+    expect(run.buys).toBe(0);
+    expect(run.skipped).toBe(1);
+
+    await gated({ minAiProbability2x: 0.7 });
+    await aiReview("buy", 0.5);
+    run = await tick();
+    expect(run.buys).toBe(0);
+    expect(run.skipped).toBe(1);
+
+    await gated();
+    // Past the signal's age limit (120s by default) with no review: skipped, never bought.
+    run = await tick(3);
+    expect(run.buys).toBe(0);
+    expect(run.skipped).toBe(1);
+    await aiReview("buy");
+    expect((await tick()).buys).toBe(0);
+  });
 
   it("buys a followed model's call, then walks it through the default exit plan", async () => {
     await freshSignal();
@@ -660,6 +713,18 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     const p = await position();
     expect(p.status).toBe("open");
     expect(p.tokensBought).toBe("1000000000");
+  });
+
+  it("sends swaps through Jito with the bot's tip, recording the tip as what the try paid", async () => {
+    await freshSignal({ jitoTipSol: 0.0002 });
+    chain.tipRequests = [];
+    expect((await tick()).buys).toBe(1);
+    await tick();
+    const p = await position();
+    expect(p.status).toBe("open");
+    const [order] = await prisma.tradingOrder.findMany({ where: { positionId: p.id } });
+    expect(order!.priorityFeeLamports).toBe(200_000n);
+    expect(chain.tipRequests).toEqual([200_000]);
   });
 
   it("retries a buy that expired unlanded, doubling the fee it paid", async () => {
@@ -956,6 +1021,7 @@ describe("a legacy transaction", () => {
     expect(checkInstructions(decoded, decoded.staticKeys, payer)).toEqual({
       externalLamports: 1_000n,
       priorityFeeLamports: 1_000n,
+      jupiterRoutesChecked: 0,
     });
     const account = generateWalletKeypair().publicKey;
     const close = buildCloseTokenAccount({
@@ -1046,7 +1112,7 @@ describe.skipIf(!dbAvailable)("the server wallet", () => {
     const data = {
       enabled: true,
       signalsFrom: new Date(Date.now() - 60_000),
-      config: { sources: { models: ["rules"] }, buySol: 0.05 },
+      config: { sources: { models: ["rules"], requireAiBuy: false }, buySol: 0.05, jitoTipSol: 0 },
     };
     await prisma.tradingBot.upsert({
       where: { userId: serverId },

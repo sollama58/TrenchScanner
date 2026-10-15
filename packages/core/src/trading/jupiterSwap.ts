@@ -35,6 +35,59 @@ export interface SwapClientOptions {
   apiKey?: string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Second price source, for mints Jupiter's Price API has no price for or when it is down
+   * (DexScreener by default; null for none). A stop-loss that can't read a price can't fire.
+   */
+  backupPrices?: ((mints: string[]) => Promise<Map<string, number>>) | null;
+}
+
+/** A DexScreener pair must have at least this much liquidity (USD) to price a token. */
+const BACKUP_PRICE_MIN_LIQUIDITY_USD = 1_000;
+
+/**
+ * USD prices from DexScreener's tokens endpoint (keyless, 300 a minute), from each token's
+ * deepest Solana pair where the token is the base, and only from pairs with real liquidity, so a
+ * dust pool can't fake a price that trips an exit. Never throws: a mint it can't price is absent.
+ */
+export async function dexScreenerPricesUsd(
+  mints: string[],
+  fetchImpl: typeof fetch = fetch,
+): Promise<Map<string, number>> {
+  const prices = new Map<string, number>();
+  const unique = [...new Set(mints)];
+  for (let i = 0; i < unique.length; i += 30) {
+    const batch = unique.slice(i, i + 30);
+    try {
+      const res = await fetchImpl(`https://api.dexscreener.com/tokens/v1/solana/${batch.join(",")}`, {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(8_000),
+      });
+      if (!res.ok) continue;
+      const pairs = (await res.json()) as {
+        chainId?: string;
+        baseToken?: { address?: string };
+        priceUsd?: string;
+        liquidity?: { usd?: number };
+      }[];
+      if (!Array.isArray(pairs)) continue;
+      const best = new Map<string, number>();
+      for (const pair of pairs) {
+        const mint = pair.baseToken?.address;
+        const price = Number(pair.priceUsd);
+        const liquidity = pair.liquidity?.usd ?? 0;
+        if (pair.chainId !== "solana" || !mint || !batch.includes(mint)) continue;
+        if (!(Number.isFinite(price) && price > 0) || liquidity < BACKUP_PRICE_MIN_LIQUIDITY_USD) continue;
+        if (liquidity > (best.get(mint) ?? -1)) {
+          best.set(mint, liquidity);
+          prices.set(mint, price);
+        }
+      }
+    } catch {
+      /* this batch stays unpriced */
+    }
+  }
+  return prices;
 }
 
 export interface SwapClient {
@@ -51,6 +104,8 @@ export interface SwapClient {
     maxPriorityFeeLamports: number;
     /** Instead of the estimate, exactly this fee (a retry raising its fee); never over the max. */
     priorityFeeLamports?: number;
+    /** A Jito tip instead of any priority fee: the transaction is for Jito's block engine. */
+    jitoTipLamports?: number;
   }): Promise<{ transaction: Uint8Array; lastValidBlockHeight: number | null }>;
   /** USD prices for mints (SOL included when asked); a mint Jupiter has no reliable price for is absent. */
   pricesUsd(mints: string[]): Promise<Map<string, number>>;
@@ -140,6 +195,7 @@ export class JupiterSwapClient implements SwapClient {
   private readonly baseUrl: string;
   private readonly headers: Record<string, string>;
   private readonly fetchImpl: typeof fetch;
+  private readonly backupPrices: ((mints: string[]) => Promise<Map<string, number>>) | null;
 
   constructor(options: SwapClientOptions = {}) {
     this.baseUrl = (
@@ -147,6 +203,11 @@ export class JupiterSwapClient implements SwapClient {
     ).replace(/\/$/, "");
     this.headers = { accept: "application/json", ...(options.apiKey ? { "x-api-key": options.apiKey } : {}) };
     this.fetchImpl = options.fetchImpl ?? fetch;
+    const fetchImpl = this.fetchImpl;
+    this.backupPrices =
+      options.backupPrices !== undefined
+        ? options.backupPrices
+        : (mints) => dexScreenerPricesUsd(mints, fetchImpl);
   }
 
   async quote(input: { inputMint: string; outputMint: string; amount: bigint; slippageBps: number }) {
@@ -192,16 +253,18 @@ export class JupiterSwapClient implements SwapClient {
           // Jupiter's estimate from recent fees ("veryHigh": the 75th percentile) under our cap, or,
           // for a retry after a send that never landed, exactly the raised fee.
           prioritizationFeeLamports:
-            exact !== null
-              ? exact
-              : input.maxPriorityFeeLamports > 0
-                ? {
-                    priorityLevelWithMaxLamports: {
-                      maxLamports: input.maxPriorityFeeLamports,
-                      priorityLevel: "veryHigh",
-                    },
-                  }
-                : undefined,
+            input.jitoTipLamports !== undefined && input.jitoTipLamports > 0
+              ? { jitoTipLamports: input.jitoTipLamports }
+              : exact !== null
+                ? exact
+                : input.maxPriorityFeeLamports > 0
+                  ? {
+                      priorityLevelWithMaxLamports: {
+                        maxLamports: input.maxPriorityFeeLamports,
+                        priorityLevel: "veryHigh",
+                      },
+                    }
+                  : undefined,
         }),
       },
       "Jupiter swap",
@@ -218,7 +281,29 @@ export class JupiterSwapClient implements SwapClient {
     };
   }
 
+  /**
+   * Jupiter's prices, with the backup source filling the mints Jupiter has none for, or all of
+   * them while Jupiter is down. Throws Jupiter's error only when the backup priced nothing either.
+   */
   async pricesUsd(mints: string[]): Promise<Map<string, number>> {
+    let prices: Map<string, number>;
+    let failure: unknown = null;
+    try {
+      prices = await this.jupiterPricesUsd(mints);
+    } catch (err) {
+      failure = err;
+      prices = new Map();
+    }
+    const missing = [...new Set(mints)].filter((m) => !prices.has(m));
+    if (missing.length > 0 && this.backupPrices) {
+      const backup = await this.backupPrices(missing).catch(() => new Map<string, number>());
+      for (const [mint, price] of backup) prices.set(mint, price);
+    }
+    if (failure !== null && prices.size === 0) throw failure;
+    return prices;
+  }
+
+  private async jupiterPricesUsd(mints: string[]): Promise<Map<string, number>> {
     const prices = new Map<string, number>();
     const unique = [...new Set(mints)];
     for (let i = 0; i < unique.length; i += 50) {
