@@ -7,8 +7,9 @@ import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
 import { GuestLiveTab } from "./tabs/GuestLiveTab";
 import {
+  BookIcon,
   BrainIcon,
-  ExternalIcon,
+  FlameIcon,
   GearIcon,
   LighthouseIcon,
   ToolsIcon,
@@ -37,7 +38,6 @@ import { AlertNotifier, resetSettings } from "./alerts";
 import { AnnouncementBar } from "./components/AnnouncementBar";
 import { currentSignIn, hasPendingLink, mayReplaceSignIn, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { useSageMint } from "./sage";
-import { useBubblesMint } from "./bubbleMap";
 import { useWalletAddress } from "./walletModal";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
@@ -55,10 +55,6 @@ const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 // The burn button (and its transaction builder) only matters to someone without access.
 // The TokenSage view (and its charts) loads the first time a card or a Telegram link opens one.
 const SageHost = lazy(() => import("./components/SageView").then((m) => ({ default: m.SageHost })));
-// The linked-wallets bubble map loads the first time a Linked tile or a ?bubbles= link opens it.
-const BubbleMapHost = lazy(() =>
-  import("./components/BubbleMap").then((m) => ({ default: m.BubbleMapHost })),
-);
 // Utilities: its own chunk, loaded the first time the tab opens.
 const UtilitiesTab = lazy(() => import("./tabs/UtilitiesTab").then((m) => ({ default: m.UtilitiesTab })));
 // The wallet detail modal loads the first time a wallet or a ?wallet= link opens it.
@@ -107,7 +103,6 @@ export function App() {
   });
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
   const sageMint = useSageMint();
-  const bubblesMint = useBubblesMint();
   const walletAddress = useWalletAddress();
 
   const checkSession = (maxAgeMs: number) => {
@@ -308,8 +303,7 @@ export function App() {
           )}
           {signedIn && (
             <nav className="tabs" aria-label="Sections">
-              {/* The tabs proper; the HolDEX link sits beside them in the same bar, outside the
-                  tablist (display: contents keeps the bar's layout). */}
+              {/* The tablist wrapper uses display: contents, so its buttons lay out as the bar's own. */}
               <div className="tablist" role="tablist">
                 {tabs.map(({ id, label, Icon }) => (
                   <button
@@ -326,17 +320,6 @@ export function App() {
                   </button>
                 ))}
               </div>
-              {/* A link out to HolDEX, not a tab of this app: it opens in a new browser tab. */}
-              <a
-                className="button tab-link"
-                href="https://holdex.live"
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Open HolDEX in a new tab"
-              >
-                <ExternalIcon size={15} />
-                <span>HolDEX</span>
-              </a>
             </nav>
           )}
           <div className="topbar-right">
@@ -442,11 +425,6 @@ export function App() {
             <SageHost key={sageMint} mint={sageMint} guest onConnect={connectWallet} />
           </Suspense>
         )}
-        {guest && bubblesMint && (
-          <Suspense fallback={null}>
-            <BubbleMapHost key={bubblesMint} mint={bubblesMint} guest onConnect={connectWallet} />
-          </Suspense>
-        )}
         {guest && walletAddress && (
           <Suspense fallback={null}>
             <WalletModalHost key={walletAddress} wallet={walletAddress} guest onConnect={connectWallet} />
@@ -474,11 +452,6 @@ export function App() {
                 <SageHost key={sageMint} mint={sageMint} guest={false} onConnect={connectWallet} />
               </Suspense>
             )}
-            {bubblesMint && (
-              <Suspense fallback={null}>
-                <BubbleMapHost key={bubblesMint} mint={bubblesMint} guest={false} onConnect={connectWallet} />
-              </Suspense>
-            )}
             {walletAddress && (
               <Suspense fallback={null}>
                 <WalletModalHost
@@ -494,11 +467,30 @@ export function App() {
       </main>
 
       <footer className="site-foot faint small">
-        Alerts are for research, not financial advice. Memecoins can go to zero in minutes.
-        {" | "}
-        <a href="https://alonisthe.dev" target="_blank" rel="noopener noreferrer">
-          alonisthe.dev
-        </a>
+        <span>Alerts are for research, not financial advice. Memecoins can go to zero in minutes.</span>
+        {/* Links out, each opening in a new browser tab. */}
+        <span className="foot-links">
+          <a
+            className="foot-link"
+            href="https://holdex.live"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open HolDEX in a new tab"
+          >
+            <BookIcon size={13} />
+            <span>HolDEX</span>
+          </a>
+          <a
+            className="foot-link"
+            href="https://alonisthe.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open alonisthe.dev in a new tab"
+          >
+            <FlameIcon size={13} />
+            <span>alonisthe.dev</span>
+          </a>
+        </span>
       </footer>
     </div>
   );

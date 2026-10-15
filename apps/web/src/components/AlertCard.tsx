@@ -13,18 +13,9 @@ import {
   tokenThumb,
   usd,
 } from "../format";
-import {
-  BrainIcon,
-  BubblesIcon,
-  CheckIcon,
-  CopyIcon,
-  ExternalIcon,
-  RobotIcon,
-  SageIcon,
-  SlidersIcon,
-} from "./Icons";
+import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SageIcon, SlidersIcon } from "./Icons";
 import { openSage } from "../sage";
-import { linkedCount, linkedCountText, openBubbleMap, type BubbleSeed } from "../bubbleMap";
+import { linkedCount, linkedCountText } from "../bubbleMap";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -456,7 +447,6 @@ export function AlertCard({
               bundled={linkedBundled}
               clusters={linkedClusters}
               atAlert={linkedAtAlert && linkedPct !== null}
-              onOpen={() => openBubbleMap(mint, linkedSeed(card))}
             />
           )}
           {show("cexFunded") && (
@@ -871,17 +861,16 @@ export function linkedTileReading(
   return { linkedPct: s.linkedWalletPct ?? null, linkedCount: scan, linkedKols: false, linkedBundled: false };
 }
 
-/** The reading behind the Linked tile, for the bubble map to draw the same one. */
-export function linkedSeed(card: Card): BubbleSeed | undefined {
+/** The reading behind the Linked tile, for the token view's bubble map to draw the same one. */
+export function linkedReading(card: Card): Snapshot | null {
   const s = card.snapshot;
-  const from = s.linkedWalletPct != null ? s : card.latestSnapshot;
-  return from ? { token: card.token, snapshot: from } : undefined;
+  return s.linkedWalletPct != null ? s : (card.latestSnapshot ?? null);
 }
 
 /**
  * The Linked tile: how many top holders are linked, "N/25" (user ask 2026-10-13), KOLs' bundles
- * included, with the supply they hold beside it in smaller type (user ask 2026-10-15). Tapping it
- * opens the bubble map.
+ * included, with the supply they hold beside it in smaller type (user ask 2026-10-15). A plain
+ * tile: a tap opens the token view like the rest of the card (user ask 2026-10-15).
  */
 function LinkedTile({
   pct: value,
@@ -890,7 +879,6 @@ function LinkedTile({
   bundled,
   clusters,
   atAlert,
-  onOpen,
 }: {
   pct: number | null;
   count: { linked: number; of: number } | null;
@@ -900,7 +888,6 @@ function LinkedTile({
   bundled: boolean;
   clusters: readonly LinkedClusterView[];
   atAlert: boolean;
-  onOpen: () => void;
 }) {
   const summary = linkedSummary(clusters);
   const title =
@@ -908,43 +895,17 @@ function LinkedTile({
       ? "Linked: not checked yet. Who paid for each top-25 wallet is read a few tokens per scan."
       : value === 0
         ? `Linked: no two top-25 wallets share a funder or a funding minute${bundled ? ", and no KOL bundles any" : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
-        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${bundled ? ` (Bundled %), counting wallets in a funder's cluster, a funding minute or a KOL's bundle${kols ? " (KOLs' bundles add some)" : ""}` : ", KOLs' bundles not checked on this scan"}${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen counts linked holders without KOLs' bundles and rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of)} or more. Tap for the bubble map.`;
-  const canOpen = value !== null && (value > 0 || clusters.length > 0);
+        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${bundled ? ` (Bundled %), counting wallets in a funder's cluster, a funding minute or a KOL's bundle${kols ? " (KOLs' bundles add some)" : ""}` : ", KOLs' bundles not checked on this scan"}${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen counts linked holders without KOLs' bundles and rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of)} or more.`;
   return (
     <div
       className={
-        `${count !== null && count.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, count.of) ? "risky" : ""}${canOpen ? " tile-opens" : ""}`.trim() ||
-        undefined
+        count !== null && count.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, count.of)
+          ? "risky"
+          : undefined
       }
       title={title}
-      role={canOpen ? "button" : undefined}
-      tabIndex={canOpen ? 0 : undefined}
-      aria-haspopup={canOpen ? "dialog" : undefined}
-      onClick={
-        canOpen
-          ? (e) => {
-              // The card opens the token modal on a click; this tile opens the map instead.
-              e.stopPropagation();
-              onOpen();
-            }
-          : undefined
-      }
-      onKeyDown={
-        canOpen
-          ? (e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                e.stopPropagation();
-                onOpen();
-              }
-            }
-          : undefined
-      }
     >
-      <dt>
-        <span className="tile-opens-label">Linked</span>
-        {canOpen && <BubblesIcon size={12} className="tile-opens-icon" />}
-      </dt>
+      <dt>Linked</dt>
       <dd className={value === null ? "muted" : "num"}>
         {value === null ? (
           "Not checked"

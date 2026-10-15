@@ -26,6 +26,7 @@ import {
 } from "../components/Icons";
 import { ShareImageDialog } from "../components/ShareImageDialog";
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
+import { CoverageMeter } from "../components/CoverageMeter";
 import { BAND_TONE, ScoreBar } from "../components/ScoreBar";
 import { prefetch } from "../cache";
 import { CURVE_SLICES } from "../cutoffCurve";
@@ -148,6 +149,13 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
             </p>
           </div>
         </div>
+
+        <CoverageMeter
+          board={lb}
+          guest={guest}
+          disabled={board.stale}
+          onAdd={guest ? undefined : (id) => setFeedModels([...lb.selectedModels, id])}
+        />
 
         <div className="kpis glance">
           <div className="glance-tile">

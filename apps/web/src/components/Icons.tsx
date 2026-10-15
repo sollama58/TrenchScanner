@@ -51,6 +51,13 @@ export const FlameIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** The footer's HolDEX link: an open book. */
+export const BookIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M2 5h6a4 4 0 0 1 4 4v11a3 3 0 0 0-3-3H2zM22 5h-6a4 4 0 0 0-4 4v11a3 3 0 0 1 3-3h7z" />
+  </Svg>
+);
+
 /** A lookup: a magnifying glass. */
 export const SearchIcon = (p: IconProps) => (
   <Svg {...p}>
