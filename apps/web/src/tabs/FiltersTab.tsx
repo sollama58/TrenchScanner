@@ -15,7 +15,7 @@ import { GROUPS, shownValue } from "../filterFields";
 import { useSettings } from "../alerts";
 import { ScoreExplainer } from "../components/ScoreExplainer";
 import { BellIcon, EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
-import { TopFiltersPanel } from "../components/TopFiltersPanel";
+import { TopFiltersPick } from "../components/TopFilters";
 import { AlertsPanel, ModelPanel } from "../components/AlertDeliveryPanels";
 import { TelegramPanel } from "../components/TelegramPanel";
 import { FilterGlyph } from "../components/FilterBadge";
@@ -145,11 +145,6 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
     if (ok) setEditing(null);
     else setSaveError({ opened: editing.opened, text: lastError.current });
   };
-
-  // Old #top links land here; bring the leaderboard card into view for them.
-  useEffect(() => {
-    if (window.location.hash === "#top") document.getElementById("top-filters")?.scrollIntoView();
-  }, []);
 
   return (
     <div className="stack">
@@ -326,6 +321,7 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
                 Each filter's 2x / 4x / 10x rate uses the same rule as the curated feed: 2x within 15 minutes
                 (4x within 30, 10x within an hour) of the alert price, before a 50% drop.
               </p>
+              <TopFiltersPick onCopied={filters.reload} />
             </div>
           )}
         </section>
@@ -354,7 +350,6 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
           <AlertsPanel prefs={settings?.alerts ?? null} />
         </div>
       </section>
-      <TopFiltersPanel onCopied={filters.reload} />
     </div>
   );
 }

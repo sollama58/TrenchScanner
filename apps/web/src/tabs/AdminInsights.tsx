@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { narrativeCriteriaLines } from "../filterFields";
 import { ApiError, post, type FilterCriteria } from "../api";
 import { usePolling } from "../hooks";
+import { invalidate } from "../cache";
 import { ago, pct, shortAddress, usd } from "../format";
 import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
 
@@ -1123,6 +1124,8 @@ export function FiltersAdmin() {
     try {
       await post(`/admin/filters/${encodeURIComponent(f.id)}/delete`, { confirm: true });
       setMessage({ text: `Deleted "${f.name}".`, tone: "ok" });
+      // It's off the Top filters board now; don't let the Filters tab show the old board.
+      invalidate("/filters/leaderboard");
       q.reload();
     } catch (e) {
       setMessage({
