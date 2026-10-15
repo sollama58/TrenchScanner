@@ -7639,10 +7639,6 @@ html:has(dialog.about-modal[open]) {
 .settings .moved-note > svg {
   flex: none;
 }
-.feed-panel .feed-stats-title {
-  margin: 20px 0 8px;
-  font-size: 15px;
-}
 .settings .moved-note .link {
   font: inherit;
   font-weight: 600;

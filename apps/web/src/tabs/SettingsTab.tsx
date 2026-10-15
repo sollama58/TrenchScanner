@@ -10,7 +10,7 @@ import { useNow } from "../hooks";
 import { ago, shortAddress } from "../format";
 
 /**
- * Settings: your feed (the Model alerts switch and the feed's stats), extra tabs, your phones, and
+ * Settings: your feed's Model alerts switch, extra tabs, your phones, and
  * your account and access. How alerts reach you (sound, browser notifications, Telegram) lives on
  * the Filters tab, next to the filters they apply to; which models' calls you get is picked on the
  * Models tab; how the feed looks is the Live feed's Customize button.
