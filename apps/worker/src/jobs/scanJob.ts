@@ -2638,7 +2638,7 @@ async function processCandidate(
     };
     const preGate = passesEventPreGate(scored, band);
     // Held by the pre-gate's 5-minute test alone: everything else about the moment was ready.
-    if (!preGate && passesEventPreGate({ ...scored, priceChange5mPct: undefined }, band)) {
+    if (!preGate && passesEventPreGate(scored, band, { skip5m: true })) {
       noteDecisionHold("preGate5m");
     }
     if (preGate && walletReady()) {

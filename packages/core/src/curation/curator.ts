@@ -351,10 +351,23 @@ export function walletChecksKnown(
 export const PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES = 10;
 
 /**
+ * From this age on, "not falling" is not enough: the event pre-gate wants the last five minutes up
+ * at least PRE_GATE_OLD_COIN_MIN_5M_PCT, and an unobserved 5m candle fails. On event rows
+ * 2026-10-08..15, coins 1-6 hours old were 29% of decision moments and doubled within 15 minutes
+ * 3.4% of the time; those up 25%+ in five minutes doubled 7-18% on every one of the 8 days, the
+ * rest 0.7-3.1% (unknown: 0 of 201). Their calls won 2 of 70. Younger coins keep the plain test,
+ * which is close to neutral there (notes/decision-gates-2026-10-15/report.md).
+ */
+export const PRE_GATE_OLD_COIN_MIN_AGE_MINUTES = 60;
+export const PRE_GATE_OLD_COIN_MIN_5M_PCT = 25;
+
+/**
  * The cheap "looks ready" test that marks an EVENT moment (CandidateOutcome.sampleKind = "event"):
  * in the band, not older than MAX_EVENT_AGE_MINUTES, buyers in control of the hour's flow (from
  * PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES on; any trades before that), and the last five minutes not
- * falling. An unknown age passes, like an unobserved 5m candle.
+ * falling - up PRE_GATE_OLD_COIN_MIN_5M_PCT or more from PRE_GATE_OLD_COIN_MIN_AGE_MINUTES on. An
+ * unknown age passes, like an unobserved 5m candle on a younger coin.
+ * `skip5m` leaves the five-minute test out (the scan's preGate5m hold count asks "held by it alone?").
  * Curators decide only at the first such moment per token per CANDIDATE_EVENT_SPACING_MINUTES, and
  * the trainer calibrates on exactly those rows, so the model is examined on the same moments it is
  * asked about live - not on an hourly sample of everything in the band, which is a different and
@@ -364,6 +377,7 @@ export const PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES = 10;
 export function passesEventPreGate(
   scored: Pick<ScoredToken, "marketCapUsd" | "buys1h" | "sells1h" | "priceChange5mPct" | "ageMinutes">,
   band: McapBand,
+  opts: { skip5m?: boolean } = {},
 ): boolean {
   if (!inMcapBand(scored.marketCapUsd, band)) return false;
   if (scored.ageMinutes !== undefined && scored.ageMinutes > MAX_EVENT_AGE_MINUTES) return false;
@@ -373,5 +387,9 @@ export function passesEventPreGate(
     scored.ageMinutes !== undefined && scored.ageMinutes < PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES
   );
   if (buyTestApplies && (scored.buys1h ?? 0) / totalTxns1h < MIN_BUY_RATIO) return false;
+  if (opts.skip5m) return true;
+  if (scored.ageMinutes !== undefined && scored.ageMinutes >= PRE_GATE_OLD_COIN_MIN_AGE_MINUTES) {
+    return scored.priceChange5mPct !== undefined && scored.priceChange5mPct >= PRE_GATE_OLD_COIN_MIN_5M_PCT;
+  }
   return scored.priceChange5mPct === undefined || scored.priceChange5mPct >= 0;
 }

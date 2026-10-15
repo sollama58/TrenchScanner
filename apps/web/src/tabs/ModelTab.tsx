@@ -725,7 +725,8 @@ function BaselineChart({
           <li>
             <strong>Passes the pre-check</strong>: market cap inside the scanner&apos;s band ($10k to $1M),
             under 6 hours old, buyers making at least 55% of the last hour&apos;s trades, price not falling
-            over the last 5 minutes, and the fresh and empty wallet checks done.
+            over the last 5 minutes (up at least 25% once a token is an hour old), and the fresh and empty
+            wallet checks done.
           </li>
           <li>
             <strong>First time per token per hour</strong>: only the first moment a token passes counts, so a

@@ -5,6 +5,8 @@ import {
   notRetiredModelSql,
   MAX_EVENT_AGE_MINUTES,
   MIN_BUY_RATIO,
+  PRE_GATE_OLD_COIN_MIN_5M_PCT,
+  PRE_GATE_OLD_COIN_MIN_AGE_MINUTES,
   prisma,
   Prisma,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
@@ -228,6 +230,8 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
       mcapMaxUsd: env.MCAP_FILTER_MAX,
       maxAgeMinutes: MAX_EVENT_AGE_MINUTES,
       minBuySharePct: Math.round(MIN_BUY_RATIO * 100),
+      oldCoinMinAgeMinutes: PRE_GATE_OLD_COIN_MIN_AGE_MINUTES,
+      oldCoinMin5mPct: PRE_GATE_OLD_COIN_MIN_5M_PCT,
     },
   };
 }

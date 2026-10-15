@@ -257,7 +257,12 @@ describe("walkForwardEvaluate", () => {
 
   it("grades and calibrates only on event rows when asked, while still training on hourly ones", async () => {
     // Every third row is an event moment; the rest are hourly background samples.
-    const rows = syntheticRows(3_000).map((r, i) => ({ ...r, sampleKind: i % 3 === 0 ? "event" : "hourly" }));
+    // Up 30% in five minutes, so the old-coin momentum test (synthetic ages run to ~4 hours) passes.
+    const rows = syntheticRows(3_000).map((r, i) => ({
+      ...r,
+      sampleKind: i % 3 === 0 ? "event" : "hourly",
+      features: { ...r.features, priceChange5mPct: 30 },
+    }));
     const result = await walkForwardEvaluate(rows, {
       targetPerHour: 5,
       heuristicMinScore: 55,
@@ -288,7 +293,7 @@ describe("walkForwardEvaluate", () => {
       ...r,
       tokenId: `t${i}`,
       sampleKind: i % 3 === 0 ? "event" : "hourly",
-      features: { ...r.features, mcapUsd: 100_000, buys1h: 60, sells1h: 40, priceChange5mPct: 1 },
+      features: { ...r.features, mcapUsd: 100_000, buys1h: 60, sells1h: 40, priceChange5mPct: 30 },
     }));
     const opts = {
       targetPerHour: 5,
