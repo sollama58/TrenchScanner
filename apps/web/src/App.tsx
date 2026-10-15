@@ -7,8 +7,9 @@ import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
 import { GuestLiveTab } from "./tabs/GuestLiveTab";
 import {
+  BookIcon,
   BrainIcon,
-  ExternalIcon,
+  FlameIcon,
   GearIcon,
   LighthouseIcon,
   ToolsIcon,
@@ -302,8 +303,7 @@ export function App() {
           )}
           {signedIn && (
             <nav className="tabs" aria-label="Sections">
-              {/* The tabs proper; the HolDEX link sits beside them in the same bar, outside the
-                  tablist (display: contents keeps the bar's layout). */}
+              {/* The tablist wrapper uses display: contents, so its buttons lay out as the bar's own. */}
               <div className="tablist" role="tablist">
                 {tabs.map(({ id, label, Icon }) => (
                   <button
@@ -320,17 +320,6 @@ export function App() {
                   </button>
                 ))}
               </div>
-              {/* A link out to HolDEX, not a tab of this app: it opens in a new browser tab. */}
-              <a
-                className="button tab-link"
-                href="https://holdex.live"
-                target="_blank"
-                rel="noopener noreferrer"
-                title="Open HolDEX in a new tab"
-              >
-                <ExternalIcon size={15} />
-                <span>HolDEX</span>
-              </a>
             </nav>
           )}
           <div className="topbar-right">
@@ -478,11 +467,30 @@ export function App() {
       </main>
 
       <footer className="site-foot faint small">
-        Alerts are for research, not financial advice. Memecoins can go to zero in minutes.
-        {" | "}
-        <a href="https://alonisthe.dev" target="_blank" rel="noopener noreferrer">
-          alonisthe.dev
-        </a>
+        <span>Alerts are for research, not financial advice. Memecoins can go to zero in minutes.</span>
+        {/* Links out, each opening in a new browser tab. */}
+        <span className="foot-links">
+          <a
+            className="foot-link"
+            href="https://holdex.live"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open HolDEX in a new tab"
+          >
+            <BookIcon size={13} />
+            <span>HolDEX</span>
+          </a>
+          <a
+            className="foot-link"
+            href="https://alonisthe.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open alonisthe.dev in a new tab"
+          >
+            <FlameIcon size={13} />
+            <span>alonisthe.dev</span>
+          </a>
+        </span>
       </footer>
     </div>
   );
