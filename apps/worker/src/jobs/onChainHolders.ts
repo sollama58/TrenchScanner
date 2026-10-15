@@ -8,8 +8,10 @@ const logger = createLogger("onchain-holders");
  * RugCheck down or refusing us) gets its top-10 wallets read from the chain instead, so the safety
  * screen's concentration cut and the wallet checks a model call waits on
  * (CURATED_REQUIRE_WALLET_CHECKS) can run without RugCheck. Holder distribution is as mutable as
- * RugCheck's report, so an answer is reused for RUGCHECK_CACHE_TTL_MINUTES like one; failures
- * back off like the other on-chain lookups and are never cached.
+ * RugCheck's report, so an answer is reused for RUGCHECK_CACHE_TTL_MINUTES like one - or for the
+ * shorter TTL a young coin failing a holder cut gets (`ttlMinutesFor`, see youngHolderRecheck.ts),
+ * the same as its RugCheck report would; failures back off like the other on-chain lookups and are
+ * never cached.
  */
 const cache = new Map<string, { at: number; holders: OnChainHolders }>();
 const CACHE_MAX = 5_000;
@@ -26,6 +28,7 @@ export async function resolveOnChainHolders(
   helius: HeliusClient,
   env: Env,
   now = Date.now(),
+  ttlMinutesFor: (mintAddress: string) => number = () => env.RUGCHECK_CACHE_TTL_MINUTES,
 ): Promise<Map<string, OnChainHolders>> {
   const out = new Map<string, OnChainHolders>();
   if (env.ONCHAIN_HOLDERS_MAX_PER_CYCLE === 0) return out;
@@ -33,7 +36,7 @@ export async function resolveOnChainHolders(
   const toRead: string[] = [];
   for (const mint of new Set(mintAddresses)) {
     const hit = cache.get(mint);
-    if (hit && now - hit.at < ttl) out.set(mint, hit.holders);
+    if (hit && now - hit.at < ttlMinutesFor(mint) * 60_000) out.set(mint, hit.holders);
     else if (!failureBackoff.blocked(mint, now) && toRead.length < env.ONCHAIN_HOLDERS_MAX_PER_CYCLE)
       toRead.push(mint);
     // Past the budget, a stale answer still beats none: the next cycle refreshes it.
