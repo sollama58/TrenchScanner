@@ -191,8 +191,21 @@ export interface Snapshot {
         creatorLinked: boolean;
       }[]
     | null;
-  /** Every holder behind the linked reading and its %, largest first; stored with the clusters only. */
-  linkedHolders?: { wallet: string; pct: number; cexFunder?: string; rank?: number }[] | null;
+  /**
+   * Every holder behind the linked reading and its %, largest first; stored with the clusters only.
+   * sniper, fresh, empty: what the scan read of the wallet, on scans since 2026-10-15 (the map's icons).
+   */
+  linkedHolders?:
+    | {
+        wallet: string;
+        pct: number;
+        cexFunder?: string;
+        rank?: number;
+        sniper?: boolean;
+        fresh?: boolean;
+        empty?: boolean;
+      }[]
+    | null;
   /** Of the largest holders (up to 20), the % an exchange or a busy service paid for; null when not read. */
   cexFundedPct?: number | null;
   /** KOL Bundled %: supply held by KOLs and the top holders tied to them; null when not read. */

@@ -15,6 +15,10 @@ import {
   kolBundleNodes,
   largestSourceOnly,
   mapLinked,
+  TRAIT_ICON,
+  TRAIT_LABEL,
+  traitShares,
+  type WalletTrait,
   type KolControl,
   type ClusterHalo,
   sameTimeSlot,
@@ -50,6 +54,27 @@ import {
 const CLUSTER = ["#3987e5", "#199e70", "#d95926", "#8b5cf6", "#06b6d4", "#84cc16", "#ec4899"];
 const RISK = "#ef4444";
 const DEV = "#fab219";
+/** Each wallet trait's icon colour (styles.css --bm-trait-*, on the card's dark ground). */
+const TRAIT_INK: Record<WalletTrait, string> = { sniper: "#fb923c", fresh: "#4ade80", empty: "#cbd5e1" };
+
+/** A wallet trait's icon, `size` across, centred on x, y (TRAIT_ICON's 24px grid). */
+function drawTraitIcon(
+  ctx: CanvasRenderingContext2D,
+  trait: WalletTrait,
+  x: number,
+  y: number,
+  size: number,
+) {
+  ctx.save();
+  ctx.translate(x - size / 2, y - size / 2);
+  ctx.scale(size / 24, size / 24);
+  ctx.strokeStyle = TRAIT_INK[trait];
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const d of TRAIT_ICON[trait]) ctx.stroke(new Path2D(d));
+  ctx.restore();
+}
 /** The map's pills on the card: their text size, side padding and height, in card pixels. */
 const PILL_FONT = 16;
 const PILL_PAD = 11;
@@ -777,6 +802,19 @@ export async function renderBubbleCard(
             : INK;
       text.forEach((l, j) => ctx.fillText(l, cx, nameY + j * lineH));
     }
+    // The wallet's trait, bottom right: a dark disc and its icon, as on the map (user ask 2026-10-15).
+    if (n.trait) {
+      const tx = cx + r * 0.72;
+      const ty = cy + r * 0.72;
+      ctx.fillStyle = "#1b1e28";
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(tx, ty, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      drawTraitIcon(ctx, n.trait, tx, ty, 14);
+    }
     const dev = n.flags.includes("creator");
     if (risk || dev) {
       const bx = cx + r * 0.72;
@@ -813,7 +851,8 @@ export async function renderBubbleCard(
   // (user ask 2026-10-14: KOL, "Pump.fun", "FOMO"), centred under it.
   if (legend.length > 0) {
     ctx.font = `650 14px ${FONT}`;
-    const widths = legend.map((k) => ctx.measureText(k.text).width + 16);
+    // A trait's item is its icon and its words, no chip (user ask 2026-10-15: kept minimal).
+    const widths = legend.map((k) => ctx.measureText(k.text).width + (k.trait ? 20 : 16));
     // A faint italic "Legend" before the chips (user ask 2026-10-14).
     ctx.font = `italic 500 14px ${FONT}`;
     const titleW = ctx.measureText("Legend").width + 12;
@@ -828,12 +867,18 @@ export async function renderBubbleCard(
     ctx.font = `650 14px ${FONT}`;
     ctx.textAlign = "center";
     legend.forEach((c, i) => {
-      ctx.fillStyle = c.bg;
-      ctx.beginPath();
-      ctx.roundRect(x, ly - 12, widths[i]!, 24, 6);
-      ctx.fill();
-      ctx.fillStyle = c.ink;
-      ctx.fillText(c.text, x + widths[i]! / 2, ly + 1);
+      if (c.trait) {
+        drawTraitIcon(ctx, c.trait, x + 8, ly, 15);
+        ctx.fillStyle = c.ink;
+        ctx.fillText(c.text, x + 20 + (widths[i]! - 20) / 2, ly + 1);
+      } else {
+        ctx.fillStyle = c.bg;
+        ctx.beginPath();
+        ctx.roundRect(x, ly - 12, widths[i]!, 24, 6);
+        ctx.fill();
+        ctx.fillStyle = c.ink;
+        ctx.fillText(c.text, x + widths[i]! / 2, ly + 1);
+      }
       x += widths[i]! + 10;
     });
   }
@@ -846,19 +891,25 @@ export async function renderBubbleCard(
 const LEGEND_H = 34;
 
 /** The kinds of wallet name on the map's holders, in a fixed order: each kind's name, drawn as those names are. */
-function nameLegend(graph: BubbleGraph, names: WalletNames): { text: string; bg: string; ink: string }[] {
+function nameLegend(
+  graph: BubbleGraph,
+  names: WalletNames,
+): { text: string; bg: string; ink: string; trait?: WalletTrait }[] {
   const kinds = new Set(
     graph.nodes.flatMap((n) =>
       n.kind === "holder" && n.wallet && names[n.wallet] ? [names[n.wallet]!.source] : [],
     ),
   );
   const dark = "rgba(12, 14, 20, 0.82)";
-  const out: { text: string; bg: string; ink: string }[] = [];
+  const out: { text: string; bg: string; ink: string; trait?: WalletTrait }[] = [];
   if (kinds.has("kol")) out.push({ text: "KOL", bg: SIDE, ink: "#1a1300" });
   if (kinds.has("kol-side")) out.push({ text: "KOL Known Side", bg: SIDE, ink: "#1a1300" });
   if (kinds.has("pumpfun")) out.push({ text: '"Pump.fun"', bg: dark, ink: "#4ade80" });
   if (kinds.has("fomo")) out.push({ text: '"FOMO"', bg: dark, ink: "#c4b5fd" });
   if (kinds.has("identity") || kinds.has("exchange"))
     out.push({ text: "Helius / exchange", bg: dark, ink: INK });
+  // Each wallet trait on the map and the share of supply its holders hold (user ask 2026-10-15).
+  for (const t of traitShares(graph))
+    out.push({ text: `${TRAIT_LABEL[t.trait]} ${pctText(t.pct)}`, bg: dark, ink: INK2, trait: t.trait });
   return out;
 }

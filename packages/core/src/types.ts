@@ -250,8 +250,18 @@ export interface OnChainProfile {
    * with each one's share: the list the linked reading covers, kept on every scan that has one
    * (user ask 2026-10-13; before that only alongside a cluster), for the bubble map.
    */
-  /** cexFunder: the exchange (or busy service) that paid for the holder, when one did. */
-  linkedHolders?: { wallet: string; pct: number; cexFunder?: string }[];
+  /**
+   * cexFunder: the exchange (or busy service) that paid for the holder, when one did. sniper,
+   * fresh, empty: what the scan read of the wallet (scanJob withHolderKinds), for the map's icons.
+   */
+  linkedHolders?: {
+    wallet: string;
+    pct: number;
+    cexFunder?: string;
+    sniper?: boolean;
+    fresh?: boolean;
+    empty?: boolean;
+  }[];
   /**
    * Top holders funded within a minute of each other, whoever paid (core's sameTimeClusters): the
    * % of supply they hold, the group count, and the groups. Read with the linked reading.

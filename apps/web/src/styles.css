@@ -10212,6 +10212,10 @@ img.tm-avatar {
   --bm-kol-0: var(--bm-side);
   --bm-kol-1: color-mix(in srgb, var(--ink) 78%, transparent);
   --bm-kol-2: #34d399;
+  /* Wallet traits' icons (user ask 2026-10-15): a sniper's bullseye, a fresh wallet's leaf, an empty one's ghost. */
+  --bm-trait-sniper: #fb923c;
+  --bm-trait-fresh: #22c55e;
+  --bm-trait-empty: var(--ink-2);
 }
 @media (min-width: 641px) {
   .bm-modal {
@@ -10592,6 +10596,38 @@ button.bm-same {
 }
 .bm-legend-chip.fomo {
   color: #c4b5fd;
+}
+/* A bubble's wallet trait (user ask 2026-10-15): a small dark disc with the trait's icon. */
+.bm-trait circle {
+  fill: var(--surface-solid);
+  stroke: var(--border-strong);
+  stroke-width: 1;
+}
+.bm-trait path,
+.bm-trait-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.bm-trait {
+  pointer-events: none;
+}
+.bm-trait.trait-sniper,
+.bm-trait-icon.trait-sniper {
+  color: var(--bm-trait-sniper);
+}
+.bm-trait.trait-fresh,
+.bm-trait-icon.trait-fresh {
+  color: var(--bm-trait-fresh);
+}
+.bm-trait.trait-empty,
+.bm-trait-icon.trait-empty {
+  color: var(--bm-trait-empty);
+}
+.bm-legend li.bm-legend-trait {
+  gap: 4px;
 }
 .bm-badge circle {
   stroke: var(--surface-solid);

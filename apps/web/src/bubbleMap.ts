@@ -92,6 +92,9 @@ export interface WideHolder {
   pct: number;
   rank?: number;
   cexFunder?: string;
+  sniper?: boolean;
+  fresh?: boolean;
+  empty?: boolean;
 }
 
 /**
@@ -162,7 +165,7 @@ export function withWideMap<
     // What the scan counted as linked, and how many holders the wider read listed (mapLinked).
     scanLinkedWallets: clusterWallets(snapshot.linkedClusters),
     holdersRead: wide.holdersRead,
-    linkedHolders: wide.holders,
+    linkedHolders: withTraits(wide.holders, snapshot.linkedHolders),
     linkedClusters: Array.isArray(wide.clusters) ? wide.clusters : [],
     sameTimeClusters: Array.isArray(wide.sameTimeClusters) ? wide.sameTimeClusters : [],
   };
@@ -174,6 +177,21 @@ export interface WideReading {
   scanLinkedWallets?: string[];
   /** How many holders the wider read listed. */
   holdersRead?: number;
+}
+
+/** The wider map's holders, each with the scan's sniper, fresh and empty marks where it read them. */
+function withTraits(holders: WideHolder[], read: Snapshot["linkedHolders"] | undefined): WideHolder[] {
+  const byWallet = new Map((read ?? []).map((h) => [h.wallet, h]));
+  return holders.map((h) => {
+    const r = byWallet.get(h.wallet);
+    if (!r) return h;
+    return {
+      ...h,
+      ...(r.sniper ? { sniper: true } : {}),
+      ...(r.fresh ? { fresh: true } : {}),
+      ...(r.empty ? { empty: true } : {}),
+    };
+  });
 }
 
 function clusterWallets(clusters: Snapshot["linkedClusters"] | undefined): string[] {
@@ -205,6 +223,58 @@ export type FlagsRead = "loading" | "ok" | "failed";
 
 export type Flag = "risky" | "dumper" | "creator";
 
+/**
+ * What the scan read of a holder's wallet (user ask 2026-10-15), one per bubble: a launch sniper
+ * (among its first 25 buyers), else a fresh wallet, else an otherwise empty one.
+ */
+export type WalletTrait = "sniper" | "fresh" | "empty";
+export const WALLET_TRAITS: readonly WalletTrait[] = ["sniper", "fresh", "empty"];
+
+/** Each trait's word, for the legends. */
+export const TRAIT_LABEL: Record<WalletTrait, string> = { sniper: "Sniper", fresh: "Fresh", empty: "Empty" };
+
+/**
+ * Each trait's icon as stroke paths on a 24px grid, shared by the map's SVG and the share image's
+ * canvas (Path2D): a bullseye, a leaf, a ghost.
+ */
+export const TRAIT_ICON: Record<WalletTrait, readonly string[]> = {
+  sniper: [
+    "M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0Z",
+    "M17 12a5 5 0 1 1-10 0a5 5 0 1 1 10 0Z",
+    "M13 12a1 1 0 1 1-2 0a1 1 0 1 1 2 0Z",
+  ],
+  fresh: [
+    "M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z",
+    "M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12",
+  ],
+  empty: [
+    "M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8Z",
+    "M9 10h.01",
+    "M15 10h.01",
+  ],
+};
+
+/** A holder's trait from the scan's marks: sniper first, then fresh, then empty; null for none. */
+export function traitOf(
+  h: { sniper?: boolean; fresh?: boolean; empty?: boolean } | undefined,
+): WalletTrait | null {
+  if (!h) return null;
+  return h.sniper ? "sniper" : h.fresh ? "fresh" : h.empty ? "empty" : null;
+}
+
+/** Each trait on the map with its holders' count and share of supply together; in WALLET_TRAITS order. */
+export function traitShares(
+  graph: Pick<BubbleGraph, "nodes">,
+): { trait: WalletTrait; count: number; pct: number }[] {
+  return WALLET_TRAITS.flatMap((trait) => {
+    const nodes = graph.nodes.filter((n) => n.kind === "holder" && n.trait === trait);
+    if (nodes.length === 0) return [];
+    return [
+      { trait, count: nodes.length, pct: Math.round(nodes.reduce((t, n) => t + n.pct, 0) * 100) / 100 },
+    ];
+  });
+}
+
 export interface MapNode {
   id: string;
   /** A top holder; the funder that paid for a cluster (not itself a holder); the other top holders together. */
@@ -220,6 +290,8 @@ export interface MapNode {
   /** Index into the same-minute groups, or null for a holder in none. */
   sameTime: number | null;
   flags: Flag[];
+  /** A holder's wallet trait (traitOf), its icon on the bubble; absent or null for none. */
+  trait?: WalletTrait | null;
   /** On the KOL list: its name ("" when unnamed). Absent or null otherwise. */
   kol?: string | null;
   /** Risk score 0-100 from the wallet risk scores, when known. */
@@ -378,6 +450,7 @@ export function buildGraph(
       h && typeof h.rank === "number" ? [[h.wallet, h.rank]] : [],
     ),
   );
+  const traits = new Map((snapshot.linkedHolders ?? []).flatMap((h) => (h ? [[h.wallet, traitOf(h)]] : [])));
   const nodes: MapNode[] = [];
   const links: MapLink[] = [];
   const seen = new Set<string>();
@@ -392,6 +465,7 @@ export function buildGraph(
       hub,
       sameTime: null,
       flags: flagsOf(f),
+      trait: traits.get(wallet) ?? null,
       kol: kolOf(f),
       score: f?.score ?? null,
       dumps: f?.dumps ?? null,
