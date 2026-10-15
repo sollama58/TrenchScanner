@@ -444,16 +444,14 @@ input[type="checkbox"] {
 .tabs > .tablist {
   display: contents;
 }
-.tabs button,
-.tabs .tab-link {
+.tabs button {
   background: transparent;
   border: 1px solid transparent;
   color: var(--ink-2);
   border-radius: 9px;
   padding: 7px 14px;
 }
-.tabs button:hover:not(:disabled),
-.tabs .tab-link:hover:not(:disabled) {
+.tabs button:hover:not(:disabled) {
   background: transparent;
   border-color: transparent;
   color: var(--ink);
@@ -616,8 +614,50 @@ input[type="checkbox"] {
   min-height: 100vh;
 }
 .site-foot {
-  text-align: center;
-  padding: 24px 16px 40px;
+  max-width: 1360px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding: 24px 24px 40px;
+}
+/* HolDEX and alonisthe.dev, side by side at the footer's right end. */
+.foot-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.foot-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.foot-link:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+  text-decoration: none;
+}
+/* Phones: the note, then the links, both centred. */
+@media (max-width: 640px) {
+  .site-foot {
+    flex-direction: column;
+    text-align: center;
+    padding: 20px 16px 32px;
+  }
+  .foot-links {
+    margin-left: 0;
+    justify-content: center;
+  }
 }
 .boot {
   display: grid;
@@ -3456,8 +3496,7 @@ legend {
     order: 3;
     width: 100%;
   }
-  .tabs button,
-  .tabs .tab-link {
+  .tabs button {
     flex: 1;
     justify-content: center;
   }
@@ -3552,8 +3591,7 @@ legend {
     order: 3;
     width: 100%;
   }
-  .tabs button,
-  .tabs .tab-link {
+  .tabs button {
     flex: 1;
     justify-content: center;
     padding: 7px 6px;
@@ -4583,8 +4621,7 @@ button.small-btn {
     border-top: 1px solid var(--border);
     background: var(--surface-solid);
   }
-  .tabs button,
-  .tabs .tab-link {
+  .tabs button {
     flex: 1 1 0;
     min-width: 0;
     flex-direction: column;
@@ -4594,13 +4631,11 @@ button.small-btn {
     border: none;
   }
   /* Seven tabs (Stream on, or the admin tab) still fit "Lighthouse" whole on a 375px phone. */
-  .tabs:has(> :nth-child(7)) button,
-  .tabs:has(> :nth-child(7)) .tab-link {
+  .tabs:has(> :nth-child(7)) button {
     font-size: 10px;
     letter-spacing: -0.01em;
   }
-  .tabs button .icon,
-  .tabs .tab-link .icon {
+  .tabs button .icon {
     width: 20px;
     height: 20px;
   }
@@ -4609,8 +4644,7 @@ button.small-btn {
     box-shadow: none;
     color: var(--ink);
   }
-  .tabs button span,
-  .tabs .tab-link span {
+  .tabs button span {
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -9546,8 +9580,7 @@ button.small-btn {
    stops growing at 1360px): the tabs pad a little less, and the admin tag gives way, so the header
    row still fits. */
 @media (min-width: 981px) and (max-width: 1439px) {
-  .tabs button,
-  .tabs .tab-link {
+  .tabs button {
     padding: 7px 11px;
   }
   .topbar .wallet-pill .admin-tag {
@@ -9555,8 +9588,7 @@ button.small-btn {
   }
 }
 @media (min-width: 981px) {
-  .topbar.packed .tabs button,
-  .topbar.packed .tabs .tab-link {
+  .topbar.packed .tabs button {
     padding: 7px 11px;
   }
   .topbar.packed .wallet-pill .admin-tag {
