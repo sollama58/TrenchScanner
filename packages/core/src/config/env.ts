@@ -773,7 +773,10 @@ const envSchema = z.object({
   // that panel says so and the rest of the page is unaffected.
   TOKENSAGE_ADMIN_KEY: pastedKey,
   TOKENSAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
-  TOKENSAGE_MAX_BATCHES_PER_CYCLE: z.coerce.number().int().min(0).default(2),
+  // 4 since 2026-10-15 (user decision): at 2, with decisions at 50-70 an hour after the Jupiter
+  // discovery sources, the queue sat at 35-38 mints and a third of decision rows were banked
+  // before their read landed (notes/model-24h-eval-2026-10-15/report.md, section 3).
+  TOKENSAGE_MAX_BATCHES_PER_CYCLE: z.coerce.number().int().min(0).default(4),
   TOKENSAGE_EARLY_FULL_MAX_AGE_MINUTES: z.coerce.number().min(0).default(10),
   TOKENSAGE_POLL_SECONDS: z.coerce.number().min(0).default(8),
   // Quick read at launch instead of at the first watchlist scan (tokensage/prefetch.ts,

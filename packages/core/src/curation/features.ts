@@ -505,8 +505,13 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // under-five-minute coins above all (notes/hit-catch-2026-10-13/inputs.md).
   ...JUPITER_EXTRA_FEATURES,
   // The wallet risk readings (added 2026-10-13): recorded to be judged out of sample first, the
-  // models thread's call (notes/hit-catch-2026-10-13/wallet-risk-brief.md).
-  ...WALLET_RISK_FEATURES,
+  // models thread's call (notes/hit-catch-2026-10-13/wallet-risk-brief.md). All but
+  // walletRiskTop10Max, which the learners read from 2026-10-15 (user decision): on 10 days of
+  // decision rows it was the one recorded input that held on every reading, AUC 0.571
+  // [0.541-0.602], the same in both halves of its period, and +2.0 points of top-20% hit rate
+  // in a walk-forward ablation (notes/model-24h-eval-2026-10-15/report.md, section 4). The onset
+  // guard times its first run.
+  ...WALLET_RISK_FEATURES.filter((name) => name !== "walletRiskTop10Max"),
   // The linked-wallet readings (added 2026-10-13): recorded first, on the same terms. All but
   // linkedCreatorPct, which the learners read from 2026-10-14 (user decision): rows with supply
   // tied to the creator doubled 5.4% (n=74) against 15.5% over 10-13..14, in both windows checked
