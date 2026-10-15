@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
+import { ScanStatus } from "../components/ScanStatus";
 import { AboutModal } from "../components/AboutModal";
 import { ClockIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
@@ -101,6 +102,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
               <ClockIcon size={13} />
               Delayed {delay} min
             </span>
+            <ScanStatus />
           </div>
         </header>
         {feed.error && !data && <p className="error">Couldn&apos;t load the feed: {feed.error.message}</p>}

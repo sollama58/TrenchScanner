@@ -12,6 +12,7 @@ import { ago, pct } from "../format";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { CustomizeDrawer } from "../components/CustomizeDrawer";
 import { CaSearchBox, SearchResults } from "../components/CaSearch";
+import { ScanStatus } from "../components/ScanStatus";
 import { parseSearch } from "../caSearch";
 
 /** This browser's "High conviction only" switch (the API takes it per request, not as a saved setting). */
@@ -34,9 +35,12 @@ function readHighConviction(): boolean {
 export function LiveTab({
   goTo,
   walletAddress,
+  isAdmin = false,
 }: {
   goTo: (tab: "model" | "filters" | "settings") => void;
   walletAddress: string;
+  /** Admin wallets see the scanner's per-job rows in the Scanning pill's card. */
+  isAdmin?: boolean;
 }) {
   const now = useNow(15_000);
   const [page, setPage] = useState(1);
@@ -202,7 +206,7 @@ export function LiveTab({
               onChange={setSearchInput}
               title="Find a token in your feed by its contract address, ticker or name. Press / to jump here."
             />
-            <span className={`live-dot ${streamLive ? "on" : ""}`}>{streamLive ? "Live" : "Polling"}</span>
+            <ScanStatus showJobs={isAdmin} feed={{ live: streamLive, idle: "Polling" }} />
           </div>
         </header>
         {searching && (

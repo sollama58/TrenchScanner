@@ -10,6 +10,7 @@ import { CaSearchBox, SearchResults } from "./CaSearch";
 import { SkeletonCards } from "./Charts";
 import { CustomizeDrawer } from "./CustomizeDrawer";
 import { PaletteIcon, RadarIcon } from "./Icons";
+import { ScanStatus } from "./ScanStatus";
 
 /** How often the Stream asks for new arrivals. The scan writes a cycle's verdicts about a minute apart. */
 const STREAM_POLL_MS = 10_000;
@@ -26,7 +27,7 @@ const streamPath = (n: number) => (n === 1 ? STREAM_DATA : `${STREAM_DATA}?page=
  * time with older pages behind it. Hidden until the reader switches it on in Settings
  * (FeedAppearance.streamTab).
  */
-export function StreamView() {
+export function StreamView({ isAdmin = false }: { isAdmin?: boolean }) {
   const now = useNow(5_000);
   const look = useAppearance();
   const hidden = useMemo(() => cardHideSet(look), [look]);
@@ -72,7 +73,7 @@ export function StreamView() {
               onChange={setSearchInput}
               title="Find a token on the Stream by its contract address, ticker or name. Press / to jump here."
             />
-            <span className={`live-dot ${live ? "on" : ""}`}>{live ? "Live" : "Connecting"}</span>
+            <ScanStatus showJobs={isAdmin} feed={{ live, idle: "Connecting" }} />
           </div>
         </header>
         {searching ? (
