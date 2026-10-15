@@ -108,6 +108,7 @@ import { resolveOnChainHolders } from "./onChainHolders.js";
 import { rememberGraduations, rememberLaunchTimes, resolvePreBondSeconds } from "./launchTimes.js";
 import { ignoreMayhemMints, resolveMayhemMode } from "./mayhemMode.js";
 import { resolveRelaunchSiblings } from "./relaunchFarms.js";
+import { fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
 import {
   launchSnipersFromCache,
   resolveLaunchSnipers,
@@ -672,6 +673,19 @@ async function scanCycle(
     ),
   ]);
   const streamed = deps.stream?.drain() ?? [];
+  // The description and socials of streamed launches the coin list didn't carry, read one coin at
+  // a time behind the cycle (see launchDetails.ts); their rows are created bare below and filled
+  // in when the answers land.
+  const listed = new Set(newMints.map((c) => c.mintAddress));
+  void fillLaunchDetails(
+    streamed.filter((e) => e.kind === "create" && !listed.has(e.mintAddress)),
+    deps.pumpFun,
+    async (coins) => {
+      await addNewMintsToWatchlist(coins.map((c) => toWatchlistCandidate(c, "pumpportal")));
+      await ignoreMayhemMints(coins.filter((c) => c.mayhemMode).map((c) => c.mintAddress));
+      rememberLaunchTimes(coins);
+    },
+  ).catch((err: unknown) => logger.warn("launch details failed to save", { error: String(err) }));
 
   const discovered: WatchlistCandidate[] = [
     ...newMints.map((c) => toWatchlistCandidate(c, "pumpfun")),
@@ -731,7 +745,7 @@ async function scanCycle(
 
   if (tracked.length === 0) {
     logger.info("scan cycle complete (empty watchlist)", { durationMs: Date.now() - startedAt });
-    return { stagesMs, ...earlyExitMeta(env) };
+    return { stagesMs, ...earlyExitMeta(env, deps.pumpFun) };
   }
 
   // Tokens someone currently has open on a Live Feed page (see the comment on
@@ -809,7 +823,7 @@ async function scanCycle(
     void foldRejectExtremes(refreshed.marketData, refreshed.seenAt);
   } catch (err) {
     logger.error("dexscreener refresh failed, aborting cycle", { error: String(err) });
-    return { stagesMs, ...earlyExitMeta(env) };
+    return { stagesMs, ...earlyExitMeta(env, deps.pumpFun) };
   }
   lap("marketRefresh");
   logger.info("refreshed watchlist", {
@@ -848,7 +862,7 @@ async function scanCycle(
     logger.info("scan cycle complete (nothing in band or actively viewed)", {
       durationMs: Date.now() - startedAt,
     });
-    return { stagesMs, ...earlyExitMeta(env) };
+    return { stagesMs, ...earlyExitMeta(env, deps.pumpFun) };
   }
 
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
@@ -1451,6 +1465,7 @@ async function scanCycle(
   });
   return {
     stagesMs,
+    ...discoveryMeta(deps.pumpFun),
     rpcCalls,
     linkedWalletCalls,
     liveTape,
@@ -1507,11 +1522,25 @@ async function seedLastScreenPass(): Promise<void> {
  * counters - the Lighthouse tab and admin page then read TokenSage as off - and the last
  * pre-check pass, until the next full cycle.
  */
-function earlyExitMeta(env: Env): JobRunMeta {
+function earlyExitMeta(env: Env, pumpFun: Partial<Pick<PumpFunClient, "takeListStats">>): JobRunMeta {
   return {
+    ...discoveryMeta(pumpFun),
     ...(tokenSageEnabled(env) ? { tokensage: takeTokenSageStats(), tokensageNow: takeNowStats() } : {}),
     sniperReads: takeSniperReadStats(),
     ...scanFailureMeta(),
+  };
+}
+
+/**
+ * How Pump.fun's coin list and the one-coin fallback fared since the last run, on the heartbeat:
+ * a list failing every page (pumpfunList.failed equal to pages) means launches are arriving from
+ * the stream alone and leaning on launchDetails for their description and socials.
+ */
+function discoveryMeta(pumpFun: Partial<Pick<PumpFunClient, "takeListStats">>): JobRunMeta {
+  const list = pumpFun.takeListStats?.();
+  return {
+    ...(list ? { pumpfunList: { ...list } } : {}),
+    launchDetails: { ...takeLaunchDetailStats() },
   };
 }
 
@@ -1926,6 +1955,35 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
         .catch(() => undefined);
     });
     if (missing.length > 0) logger.info("backfilled token images", { count: missing.length });
+  }
+
+  // A launch the stream reported first has a row with no description or socials; when a source
+  // that has them reports it (the coin list a cycle later, or launchDetails' one-coin read), they
+  // are filled in. Touches only rows whose description was never recorded, so it settles to zero.
+  const detailBackfill = valid.filter((coin) => coin.description !== undefined);
+  if (detailBackfill.length > 0) {
+    const bare = await prisma.token.findMany({
+      where: { mintAddress: { in: detailBackfill.map((c) => c.mintAddress) }, description: null },
+      select: { id: true, mintAddress: true, hasTwitter: true, hasTelegram: true, hasWebsite: true },
+    });
+    const byMint = new Map(detailBackfill.map((c) => [c.mintAddress, c]));
+    await forEachWithConcurrency(bare, 4, async (token) => {
+      const coin = byMint.get(token.mintAddress);
+      if (!coin) return;
+      await prisma.token
+        .update({
+          where: { id: token.id },
+          data: {
+            description: (coin.description ?? "").slice(0, 2_000),
+            hasTwitter: token.hasTwitter || (coin.hasTwitter ?? false),
+            hasTelegram: token.hasTelegram || (coin.hasTelegram ?? false),
+            hasWebsite: token.hasWebsite || (coin.hasWebsite ?? false),
+            // The links and image are filled by the backfills below, on rows still missing them.
+          },
+        })
+        .catch(() => undefined);
+    });
+    if (bare.length > 0) logger.info("filled in launch details", { count: bare.length });
   }
 
   // Same for the launcher's X link, recorded since the TokenSage groundwork: mints discovered

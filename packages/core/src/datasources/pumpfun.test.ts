@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { PumpFunClient } from "./pumpfun.js";
+import { ipfsMetadataCid, parseLaunchMetadata, PumpFunClient } from "./pumpfun.js";
 
 let server: Server | undefined;
 
@@ -196,5 +196,90 @@ describe("PumpFunClient.liveMarketCap", () => {
     await new Promise<void>((resolve) => server!.close(() => resolve()));
     ({ url } = await serveCoin({}, 500));
     await expect(new PumpFunClient({ baseUrl: url }).liveMarketCap("m")).rejects.toThrow();
+  });
+});
+
+describe("PumpFunClient.takeListStats", () => {
+  it("counts failed coin-list pages and names a 403 as a block", async () => {
+    server = createServer((_req, res) => {
+      res.statusCode = 403;
+      res.setHeader("content-type", "text/html");
+      res.end("<!DOCTYPE html><title>Just a moment...</title>");
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const address = server.address() as { port: number };
+    const client = new PumpFunClient({ baseUrl: `http://127.0.0.1:${address.port}` });
+    expect(await client.discoverNewMints({ pages: 2 })).toEqual([]);
+    const stats = client.takeListStats();
+    expect(stats).toMatchObject({ pages: 2, failed: 2 });
+    expect(stats.lastError).toMatch(/403.*Cloudflare/);
+    expect(client.takeListStats()).toEqual({ pages: 0, failed: 0 });
+  });
+
+  it("counts answered pages as not failed", async () => {
+    const { url } = await serve([[{ mint: "a" }]]);
+    const client = new PumpFunClient({ baseUrl: url });
+    await client.discoverNewMints({ pages: 1 });
+    expect(client.takeListStats()).toEqual({ pages: 1, failed: 0 });
+  });
+});
+
+describe("PumpFunClient.coinDetails", () => {
+  it("reads one coin's description and socials", async () => {
+    server = createServer((req, res) => {
+      res.setHeader("content-type", "application/json");
+      if (req.url === "/coins-v2/Mint1") {
+        res.end(
+          JSON.stringify({ mint: "Mint1", symbol: "ONE", description: "hi", twitter: "https://x.com/one" }),
+        );
+        return;
+      }
+      res.statusCode = 404;
+      res.end("{}");
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const client = new PumpFunClient({
+      baseUrl: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+    });
+    expect(await client.coinDetails("Mint1")).toMatchObject({
+      mintAddress: "Mint1",
+      symbol: "ONE",
+      description: "hi",
+      hasTwitter: true,
+      twitterUrl: "https://x.com/one",
+    });
+    expect(await client.coinDetails("Missing")).toBeNull();
+  });
+});
+
+describe("launch metadata", () => {
+  const cid = "bafkreibuifrxzohrvlpgdztmwku4o7wggni72irolspurpn3toi5mfjq2q";
+
+  it("reads the CID of an IPFS-hosted URI only", () => {
+    expect(ipfsMetadataCid(`https://ipfs.io/ipfs/${cid}`)).toBe(cid);
+    expect(ipfsMetadataCid(`https://${cid}.ipfs.w3s.link`)).toBe(cid);
+    expect(ipfsMetadataCid("https://meta.uxento.io/data/33304f82")).toBeUndefined();
+    expect(ipfsMetadataCid(`http://ipfs.io/ipfs/${cid}`)).toBeUndefined();
+  });
+
+  it("maps the metadata JSON to a coin, an absent description as a known none", () => {
+    expect(
+      parseLaunchMetadata("M", {
+        name: "BITRIOT",
+        symbol: "BITRIOT",
+        image: "https://ipfs.io/ipfs/x",
+        twitter: "https://x.com/bitriottech",
+        website: "https://bitriot.tech",
+      }),
+    ).toMatchObject({
+      mintAddress: "M",
+      description: "",
+      hasTwitter: true,
+      hasWebsite: true,
+      hasTelegram: false,
+      imageUrl: "https://ipfs.io/ipfs/x",
+    });
+    expect(parseLaunchMetadata("M", [])).toBeNull();
+    expect(parseLaunchMetadata("M", "nope")).toBeNull();
   });
 });
