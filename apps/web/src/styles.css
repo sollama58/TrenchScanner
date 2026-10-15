@@ -2081,6 +2081,39 @@ g:hover > .hit {
   color: var(--ink);
   transform: translateX(2px);
 }
+/* A switch before each row (the model's calls on your live feed); the head and axis rows step in to match. */
+.mbar-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mbar-line > .mbar-row {
+  flex: 1;
+  min-width: 0;
+}
+.mbar.toggles > .mbar-row {
+  margin-left: 34px;
+  width: calc(100% - 34px);
+}
+.mbar-switch-gap {
+  flex: none;
+  width: 28px;
+}
+.switch.mini {
+  flex: none;
+  padding: 4px 0;
+}
+.switch.mini .switch-track {
+  width: 28px;
+  height: 16px;
+}
+.switch.mini .switch-thumb {
+  width: 10px;
+  height: 10px;
+}
+.switch.mini.on .switch-thumb {
+  transform: translateX(12px);
+}
 .mbar-row.head-row {
   cursor: default;
   padding-top: 0;
