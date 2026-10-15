@@ -14,6 +14,7 @@ import {
   bundleOutline,
   kolBundleNodes,
   largestSourceOnly,
+  mapLinked,
   type KolControl,
   type ClusterHalo,
   sameTimeSlot,
@@ -161,8 +162,8 @@ export async function renderBubbleCard(
     token.name && token.symbol ? `${token.name} · ${topic}` : topic[0]!.toUpperCase() + topic.slice(1);
   ctx.fillText(clip(ctx, name, leftW), PAD, 210);
 
-  const linked = graph.linkedPct;
-  const count = graph.linkedCount;
+  // KOLs' bundles and the wider map's links counted too, as the dialog's Linked tile (mapLinked).
+  const { pct: linked, count } = mapLinked(graph, opts.kols);
   const holders = graph.nodes.filter((n) => n.kind === "holder").length;
   const held = graph.nodes.filter((n) => n.kind === "holder").reduce((t, n) => t + n.pct, 0);
   // Red at the app's cut: the Linked tile's count against the screen's 20 of 25.

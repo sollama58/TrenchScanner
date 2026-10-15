@@ -155,14 +155,29 @@ export function fromAlertText(readAtMs: number, alertAtMs: number, what: string)
  */
 export function withWideMap<
   S extends Pick<Snapshot, "linkedClusters" | "linkedHolders" | "sameTimeClusters">,
->(snapshot: S, wide: WideMap | null | undefined): S {
+>(snapshot: S, wide: WideMap | null | undefined): S & WideReading {
   if (!wide || !Array.isArray(wide.holders) || wide.holders.length === 0) return snapshot;
   return {
     ...snapshot,
+    // What the scan counted as linked, and how many holders the wider read listed (mapLinked).
+    scanLinkedWallets: clusterWallets(snapshot.linkedClusters),
+    holdersRead: wide.holdersRead,
     linkedHolders: wide.holders,
     linkedClusters: Array.isArray(wide.clusters) ? wide.clusters : [],
     sameTimeClusters: Array.isArray(wide.sameTimeClusters) ? wide.sameTimeClusters : [],
   };
+}
+
+/** What withWideMap keeps of the scan's own reading once the wider map stands in for it. */
+export interface WideReading {
+  /** The wallets in the scan's own clusters: those its Linked count took in. */
+  scanLinkedWallets?: string[];
+  /** How many holders the wider read listed. */
+  holdersRead?: number;
+}
+
+function clusterWallets(clusters: Snapshot["linkedClusters"] | undefined): string[] {
+  return [...new Set((clusters ?? []).flatMap((c) => (c?.wallets ?? []).map((w) => w.wallet)))];
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -276,6 +291,10 @@ export interface BubbleGraph {
   linkedPct: number | null;
   /** How many top holders are linked, of how many were read. */
   linkedCount: { linked: number; of: number } | null;
+  /** The wallets the scan's Linked count took in (its own clusters'), for mapLinked. */
+  scanLinked: ReadonlySet<string>;
+  /** How many holders the wider map's read listed; null without one. */
+  holdersRead: number | null;
   top10Pct: number | null;
   /** Ties between holders the same exchange funded, on scans that kept it (drawn only, never counted). */
   cexLinks: CexLink[];
@@ -345,7 +364,8 @@ export function buildGraph(
     | "cexFundedPct"
     | "cexFundedCount"
     | "cexFundedHolders"
-  >,
+  > &
+    WideReading,
   flagged: readonly FlaggedHolder[] = [],
 ): BubbleGraph {
   const clusters = (snapshot.linkedClusters ?? []).filter(
@@ -502,6 +522,8 @@ export function buildGraph(
     sameTimeCount: sameTimeCount(snapshot),
     linkedPct: snapshot.linkedWalletPct ?? null,
     linkedCount: linkedCount(snapshot),
+    scanLinked: new Set(snapshot.scanLinkedWallets ?? clusterWallets(snapshot.linkedClusters)),
+    holdersRead: snapshot.holdersRead ?? null,
     top10Pct: top10,
   };
 }
@@ -771,9 +793,10 @@ export function cexGroupsOf(graph: Pick<BubbleGraph, "nodes" | "cexLinks">): {
 
 /**
  * The groups to list under the map, each holding only once (user ask 2026-10-15): when groups of
- * different kinds (a funder's cluster, a funding minute, a KOL's bundle, an exchange's) share a
+ * different kinds (a funder's cluster, a funding minute, a KOL's bundle) share a
  * wallet, only the largest by share of supply is kept, more wallets breaking a tie. Groups of the
- * same kind all stay. Keeps the order given.
+ * same kind all stay. Keeps the order given. Exchanges' groups aren't confirmed clusters, so
+ * callers leave them out (user ask 2026-10-15).
  */
 export function largestSourceOnly<T extends { kind: string; pct: number; wallets: readonly string[] }>(
   groups: readonly T[],
@@ -1591,6 +1614,36 @@ export function sameTimeCount(
   if (s.sameTimeFundedCount != null) return { linked: s.sameTimeFundedCount, of };
   const wallets = new Set((s.sameTimeClusters ?? []).flatMap((g) => (g?.wallets ?? []).map((w) => w.wallet)));
   return { linked: wallets.size, of };
+}
+
+/**
+ * Linked as the map shows it (user ask 2026-10-15): the scan's count, plus every holder on the map
+ * in a funder's cluster or a KOL's bundle (kolControl) that the scan didn't count: KOL-tied
+ * holders, and those the wider map links. When any of those ranks past the holders the scan read,
+ * the count is out of every holder the wider map read, so the ratio stays true. The safety screen
+ * and the models keep the scan's own count.
+ */
+export function mapLinked(
+  graph: Pick<BubbleGraph, "nodes" | "linkedCount" | "linkedPct" | "scanLinked" | "holdersRead">,
+  kols: readonly Pick<KolControl, "wallets">[] = [],
+): { count: { linked: number; of: number } | null; pct: number | null } {
+  const base = graph.linkedCount;
+  if (base === null || graph.linkedPct === null) return { count: base, pct: graph.linkedPct };
+  const holders = new Map(
+    graph.nodes.flatMap((n) => (n.kind === "holder" && n.wallet ? [[n.wallet, n] as const] : [])),
+  );
+  const linked = new Set(
+    graph.nodes.flatMap((n) => (n.kind === "holder" && n.cluster !== null && n.wallet ? [n.wallet] : [])),
+  );
+  for (const k of kols) for (const w of k.wallets) if (holders.has(w.wallet)) linked.add(w.wallet);
+  const extra = [...linked].filter((w) => !graph.scanLinked.has(w)).map((w) => holders.get(w)!);
+  if (extra.length === 0) return { count: base, pct: graph.linkedPct };
+  const past = extra.flatMap((n) => (n.rank !== undefined && n.rank > base.of ? [n.rank] : []));
+  const of = past.length > 0 ? Math.max(base.of, graph.holdersRead ?? 0, ...past) : base.of;
+  return {
+    count: { linked: base.linked + extra.length, of },
+    pct: Math.round((graph.linkedPct + extra.reduce((t, n) => t + n.pct, 0)) * 100) / 100,
+  };
 }
 
 /** "4/20", or null without a reading. */

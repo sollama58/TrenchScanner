@@ -45,6 +45,7 @@ import {
   type WideMap,
   withWideMap,
   largestSourceOnly,
+  mapLinked,
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
 import { openWallet } from "../walletModal";
@@ -459,14 +460,16 @@ function MapView({
     return needsRegroup(opts) ? regroupLayout(graph, opts) : null;
   }, [graph, showCex, side.shown, kols]);
   const cex = graph.cexCount;
+  // Linked takes in KOLs' bundles and the wider map's links, out of every holder read (mapLinked).
+  const linked = mapLinked(graph, kols);
 
   return (
     <>
       <dl className="bm-stats">
         <div
           className={
-            graph.linkedCount !== null &&
-            graph.linkedCount.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, graph.linkedCount.of)
+            linked.count !== null &&
+            linked.count.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, linked.count.of)
               ? "risky"
               : undefined
           }
@@ -475,15 +478,15 @@ function MapView({
           <dd
             className="num"
             title={
-              graph.linkedPct === null
+              linked.pct === null
                 ? undefined
-                : `${graph.linkedCount ? `${graph.linkedCount.linked} of the top ${graph.linkedCount.of} holders, holding ` : ""}${pct(graph.linkedPct, 1)} of supply`
+                : `${linked.count ? `${linked.count.linked} of the top ${linked.count.of} holders, holding ` : ""}${pct(linked.pct, 1)} of supply, counting wallets in a funder's cluster or a KOL's bundle`
             }
           >
             {/* N/25 and, beside it, the share of supply those linked holders hold (user ask 2026-10-14). */}
-            {graph.linkedCount && graph.linkedPct !== null
-              ? `${linkedCountText(graph.linkedCount)} (${pct(graph.linkedPct, 1)})`
-              : (linkedCountText(graph.linkedCount) ?? pct(graph.linkedPct, 1))}
+            {linked.count && linked.pct !== null
+              ? `${linkedCountText(linked.count)} (${pct(linked.pct, 1)})`
+              : (linkedCountText(linked.count) ?? pct(linked.pct, 1))}
           </dd>
         </div>
         <div
@@ -611,7 +614,7 @@ function MapView({
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
           {graph.nodes.some((n) => n.rank !== undefined) &&
-            " A model called this coin, so the map also takes in every wallet in its top 50 whose funder we already know. Linked, Same minute and CEX-funded above stay on the top holders the scan read (the /25 or /10); Clusters, Largest cluster and the lists below take in the top 50."}
+            " A model called this coin, so the map also takes in every wallet in its top 50 whose funder we already know. Same minute and CEX-funded above stay on the top holders the scan read (the /25 or /10); Linked, Largest cluster and the lists below take in the top 50, and Linked counts out of the top 50 once a holder past the top 25 is linked."}
         </p>
       )}
     </>
@@ -646,6 +649,9 @@ function kolSummary(k: KolControl): string {
     .filter(Boolean)
     .join(" · ");
 }
+
+/** The exchanges' section under the map: kept out of largestSourceOnly. */
+const EXCHANGES = "Exchanges";
 
 /** One group under the map: a funder's cluster, a KOL's holdings, an exchange's, a funding minute. */
 interface PanelGroup {
@@ -720,7 +726,7 @@ function GroupPanel({
       })),
     },
     {
-      title: "Exchanges",
+      title: EXCHANGES,
       groups: cexGroupsOf(graph).map((g, i) => ({
         key: `x:${g.funder}`,
         title: (
@@ -753,16 +759,27 @@ function GroupPanel({
     },
   ];
   // A group that falls under two kinds (a funding minute inside a funder's cluster, a cluster a KOL's
-  // bundle takes in) lists once, under the largest (user ask 2026-10-15).
+  // bundle takes in) lists once, under the largest (user ask 2026-10-15). An exchange's holders
+  // aren't a confirmed cluster, so they neither hide another group nor are hidden.
   const kept = new Set(
     largestSourceOnly(
-      all.flatMap((sec) =>
-        sec.groups.map((g) => ({ kind: sec.title, pct: g.pct, wallets: g.wallets.map((w) => w.wallet), g })),
-      ),
+      all
+        .filter((sec) => sec.title !== EXCHANGES)
+        .flatMap((sec) =>
+          sec.groups.map((g) => ({
+            kind: sec.title,
+            pct: g.pct,
+            wallets: g.wallets.map((w) => w.wallet),
+            g,
+          })),
+        ),
     ).map((x) => x.g),
   );
   const sections = all
-    .map((sec) => ({ ...sec, groups: sec.groups.filter((g) => kept.has(g)) }))
+    .map((sec) => ({
+      ...sec,
+      groups: sec.title === EXCHANGES ? sec.groups : sec.groups.filter((g) => kept.has(g)),
+    }))
     .filter((sec) => sec.groups.length > 0);
   if (sections.length === 0) return null;
   const picked = sections.flatMap((sec) => sec.groups).find((g) => g.key === listed) ?? null;
