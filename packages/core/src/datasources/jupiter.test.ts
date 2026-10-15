@@ -361,3 +361,26 @@ describe("JupiterClient.discoverMovingLaunches", () => {
     expect(urls).toHaveLength(6);
   });
 });
+
+describe("JupiterClient.recentLaunches", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reads the newest pools alone, keeping only Pump.fun's", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      urls.push(url);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify([
+            { id: "pumpMint", usdPrice: 0.00001, launchpad: "pump.fun" },
+            { id: "dbcMint", usdPrice: 0.00001, launchpad: "met-dbc" },
+          ]),
+        ),
+      );
+    });
+    const client = new JupiterClient({ apiKey: "k", requestsPerMinute: 6000 });
+    const coins = await client.recentLaunches();
+    expect(coins.map((c) => c.mintAddress)).toEqual(["pumpMint"]);
+    expect(urls).toEqual(["https://api.jup.ag/tokens/v2/recent"]);
+  });
+});

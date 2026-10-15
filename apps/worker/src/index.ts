@@ -72,6 +72,7 @@ import { applyKnownSides, applyKolOverrides, runKolWalletsJob } from "./jobs/kol
 import { trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
+import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
 import { startNarrativePolling } from "./tokensage/prefetch.js";
 
 const logger = createLogger("worker");
@@ -214,6 +215,10 @@ async function main() {
         burst: env.JUPITER_REQUESTS_PER_SECOND,
       })
     : undefined;
+  // The launches PumpPortal doesn't send, from Jupiter's newest pools - see JupiterLaunchPoller.
+  // Only the process that scans reads it, as with the stream.
+  const launchPoller = scans && jupiter ? new JupiterLaunchPoller(jupiter) : undefined;
+  launchPoller?.start();
   // The per-mint price tape behind the price-path model inputs - in memory, bounded.
   const pricePath = new PricePathBook();
   const deps = {
@@ -225,11 +230,14 @@ async function main() {
     liveLaunches: jupiter ? new LiveLaunchQuotes(jupiter, geckoTerminal) : undefined,
     // Starts the scan early when a young launch crosses into the band between cycles.
     bandEntryWatch: jupiter
-      ? new BandEntryWatch(jupiter, env.MCAP_FILTER_MIN, () => stream?.pendingLaunches() ?? [])
+      ? new BandEntryWatch(jupiter, env.MCAP_FILTER_MIN, () => [
+          ...new Set([...(stream?.pendingLaunches() ?? []), ...(launchPoller?.pendingLaunches() ?? [])]),
+        ])
       : undefined,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
     stream,
+    launchPoller,
     pricePath,
     // Puts the last hour of that tape back from the scan's snapshots after a deploy.
     pricePathSeeder: new PricePathSeeder(pricePath),
@@ -676,6 +684,7 @@ async function main() {
     logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS, exitCode: code });
     for (const { job } of jobs) job.stop();
     stream?.stop();
+    launchPoller?.stop();
     stopNarrativePolling?.();
     // Detached shadow AI reviews get their whole timeout (see REVIEW_DRAIN_SLACK_MS): one cut off
     // is paid for and never recorded.
