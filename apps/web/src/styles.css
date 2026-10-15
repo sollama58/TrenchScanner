@@ -5289,6 +5289,181 @@ button.small-btn {
   }
 }
 
+/* ---------- Coverage Meter: the share of runners a reader's models would have caught ---------- */
+.coverage {
+  position: relative;
+  z-index: 1;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cov-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.cov-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.cov-value {
+  font-size: 20px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  min-width: 3.2ch;
+  text-align: right;
+  flex-shrink: 0;
+}
+.cov-value.early {
+  color: var(--ink-2);
+}
+.cov-track {
+  position: relative;
+  flex: 1;
+  min-width: 60px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.cov-track.slim {
+  flex: none;
+  width: 44px;
+  min-width: 0;
+  height: 5px;
+}
+.cov-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand-a), var(--brand-b));
+  box-shadow: 0 0 12px -2px color-mix(in srgb, var(--brand-b) 60%, transparent);
+  transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.cov-fill.early {
+  background: var(--axis);
+  box-shadow: none;
+}
+.cov-fill.on-goal:not(.early) {
+  background: linear-gradient(90deg, var(--brand-b), var(--good));
+}
+.cov-mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+}
+.cov-track.slim .cov-mark {
+  top: -2px;
+  bottom: -2px;
+}
+.cov-mark.goal {
+  background: var(--ink-2);
+  opacity: 0.7;
+}
+.cov-mark.field {
+  width: 6px;
+  margin-left: -3px;
+  top: 1px;
+  bottom: 1px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-ink) 45%, transparent);
+}
+.cov-goal {
+  flex-shrink: 0;
+}
+.cov-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--good-ink);
+  background: var(--good-wash);
+}
+.cov-note {
+  margin: 0;
+}
+.cov-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.cov-members {
+  min-width: 0;
+}
+.cov-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--brand-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cov-add:hover:not(:disabled) {
+  border-style: solid;
+  background: var(--info-wash);
+}
+.cov-add:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.cov-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.cov-chip.early {
+  color: var(--muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cov-fill {
+    transition: none;
+  }
+}
+@media (max-width: 640px) {
+  .cov-head {
+    flex-wrap: wrap;
+    gap: 8px 10px;
+  }
+  .cov-track:not(.slim) {
+    order: 4;
+    flex-basis: 100%;
+    margin: 2px 0 4px;
+  }
+  .cov-value {
+    margin-left: auto;
+  }
+}
+
 /* ---------- Top filters: under Build a filter, and the leaderboard popup ---------- */
 .top-pick {
   margin-top: 18px;
