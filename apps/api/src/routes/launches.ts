@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
 import { prisma, type Env } from "@trenchscanner/core";
 import { TOKEN_CARD_SELECT, withLatestSnapshots } from "../curatedFeed.js";
-import { SharedCache } from "../sharedCache.js";
+import { SharedCacheMap } from "../sharedCache.js";
 import { currentMarketCap } from "./matches.js";
 import { LIVE_TICK_MAX_TOKENS } from "./live.js";
 
@@ -11,6 +12,24 @@ import { LIVE_TICK_MAX_TOKENS } from "./live.js";
  * kept seconds old by the same tick the Live feed uses.
  */
 export const LAUNCH_STREAM_SIZE = LIVE_TICK_MAX_TOKENS;
+
+/**
+ * How many pages back the Stream goes. Each page deeper looks at LAUNCH_STREAM_CANDIDATES more
+ * band entries, so this bounds what paging back costs; a day's passes fit well inside it.
+ */
+export const LAUNCH_STREAM_MAX_PAGES = 10;
+
+/** One cached answer per page and per searched address; far more than are ever open at once. */
+const LAUNCH_STREAM_CACHE_KEYS = 64;
+
+export const launchQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).max(LAUNCH_STREAM_MAX_PAGES).default(1),
+  /** A token's contract address: the Stream narrowed to that token (the dashboard's CA search). */
+  mint: z
+    .string()
+    .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "mint must be a Solana address")
+    .optional(),
+});
 
 /** How far back a band entry can be and still be on the Stream. */
 const LAUNCH_STREAM_HORIZON_MS = 24 * 3_600_000;
@@ -41,19 +60,27 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
   // Same gate as the feeds.
   app.addHook("preHandler", app.authenticateSubscriber);
 
-  const cache = new SharedCache<Awaited<ReturnType<typeof readLaunches>>>(LAUNCH_STREAM_CACHE_MS);
+  const cache = new SharedCacheMap<Awaited<ReturnType<typeof readLaunches>>>(
+    LAUNCH_STREAM_CACHE_MS,
+    LAUNCH_STREAM_CACHE_KEYS,
+  );
 
-  const readLaunches = async () => {
+  /** Page `page` of the Stream (or, with `mint`, that token's card alone), and whether an older page has any. */
+  const readLaunches = async (page: number, mint: string | undefined) => {
     const since = new Date(Date.now() - LAUNCH_STREAM_HORIZON_MS);
+    // A page deeper needs that many more passes, so it looks at that many more band entries.
+    const candidates = mint ? 1 : LAUNCH_STREAM_CANDIDATES * page;
+    const offset = mint ? 0 : (page - 1) * LAUNCH_STREAM_SIZE;
     // The newest band entries by Token(firstInBandAt), then each one's first passing in-band scan
-    // snapshot down its own (tokenId, takenAt) index.
+    // snapshot down its own (tokenId, takenAt) index. One past the page says whether there is another.
     const entries = await prisma.$queryRaw<{ tokenId: string; snapshotId: string }[]>(Prisma.sql`
       SELECT t.id AS "tokenId", s.id AS "snapshotId"
       FROM (
         SELECT id FROM "Token"
         WHERE "firstInBandAt" > ${since}
+          ${mint ? Prisma.sql`AND "mintAddress" = ${mint}` : Prisma.empty}
         ORDER BY "firstInBandAt" DESC
-        LIMIT ${LAUNCH_STREAM_CANDIDATES}
+        LIMIT ${candidates}
       ) t
       CROSS JOIN LATERAL (
         SELECT id, "takenAt" FROM "TokenSnapshot"
@@ -65,9 +92,12 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
         LIMIT 1
       ) s
       ORDER BY s."takenAt" DESC
-      LIMIT ${LAUNCH_STREAM_SIZE}
+      OFFSET ${offset}
+      LIMIT ${LAUNCH_STREAM_SIZE + 1}
     `);
-    if (entries.length === 0) return [];
+    const hasMore = !mint && entries.length > LAUNCH_STREAM_SIZE && page < LAUNCH_STREAM_MAX_PAGES;
+    entries.splice(LAUNCH_STREAM_SIZE);
+    if (entries.length === 0) return { launches: [], hasMore: false };
 
     const [snapshots, tokens] = await Promise.all([
       prisma.tokenSnapshot.findMany({ where: { id: { in: entries.map((e) => e.snapshotId) } } }),
@@ -85,7 +115,7 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
       return snapshot && token ? [{ snapshot, token }] : [];
     });
     const decorated = await withLatestSnapshots(rows);
-    return decorated.flatMap(({ snapshot, token: { snapshots: latest, ...token } }) => {
+    const launches = decorated.flatMap(({ snapshot, token: { snapshots: latest, ...token } }) => {
       const latestSnapshot = latest[0] ?? null;
       // Passed on the way in but failed since (a dev dump, a flag RugCheck added): not a pass now.
       if (latestSnapshot && !latestSnapshot.rugScreenPassed) return [];
@@ -110,7 +140,19 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
         },
       ];
     });
+    return { launches, hasMore };
   };
 
-  app.get("/", async () => ({ launches: await cache.get(readLaunches) }));
+  app.get("/", async (request, reply) => {
+    const parsed = launchQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { mint } = parsed.data;
+    const page = mint ? 1 : parsed.data.page;
+    const answer = await cache
+      .for(mint ? `mint:${mint}` : `page:${page}`)
+      .get(() => readLaunches(page, mint));
+    return { ...answer, page };
+  });
 }

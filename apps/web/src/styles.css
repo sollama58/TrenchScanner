@@ -11720,3 +11720,113 @@ button.bm-same {
   margin-right: 6px;
   vertical-align: 1px;
 }
+
+/* ---------- Live feed and Stream: CA search ---------- */
+/* A quiet pill among the feed controls that widens while in use, so a pasted address fits. */
+.ca-search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 150px;
+  transition: width 0.2s ease;
+}
+.ca-search.focused {
+  width: min(310px, 100%);
+}
+.ca-search input {
+  height: 32px;
+  padding: 0 30px 0 31px;
+  border-radius: 999px;
+  font-size: 13px;
+  background: transparent;
+  border-color: var(--border);
+  text-overflow: ellipsis;
+}
+.ca-search.filled input {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: -0.02em;
+}
+.ca-search input:hover {
+  border-color: var(--border-strong);
+}
+.ca-search input:focus,
+.ca-search.filled input {
+  background: var(--surface-2);
+}
+.ca-search-icon {
+  position: absolute;
+  left: 11px;
+  color: var(--muted);
+  pointer-events: none;
+  transition: color 0.15s;
+}
+.ca-search:focus-within .ca-search-icon,
+.ca-search.filled .ca-search-icon {
+  color: var(--brand-ink);
+}
+.ca-search-key {
+  position: absolute;
+  right: 9px;
+  min-width: 17px;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+.ca-search:focus-within .ca-search-key {
+  opacity: 0;
+}
+.ca-search-clear {
+  position: absolute;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  justify-content: center;
+  border: none;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--ink-2);
+}
+.ca-search-clear:hover:not(:disabled) {
+  color: var(--ink);
+}
+.ca-search-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 12px;
+}
+.ca-search-note .icon {
+  flex: none;
+  color: var(--brand-ink);
+}
+/* Touch screens have no "/" key to press. */
+@media (hover: none) {
+  .ca-search-key {
+    display: none;
+  }
+}
+@media (max-width: 640px) {
+  .ca-search,
+  .ca-search.focused,
+  .ca-search.filled {
+    width: 100%;
+    order: 10;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ca-search {
+    transition: none;
+  }
+}
+/* The feed's title keeps its line while the search widens beside it. */
+.section-head:has(.ca-search) > div:first-child {
+  min-width: min(300px, 100%);
+}
