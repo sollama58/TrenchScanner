@@ -312,7 +312,7 @@ export function AboutDetails({ targets }: { targets: Targets }) {
       <section id="fp-weather">
         <h3>Market weather</h3>
         <p>
-          The gauge at the top of the Lighthouse (the button beside Stats, and the Lighthouse tab) compares
+          The gauge at the top of the Lighthouse (the button on your feed, and the Lighthouse tab) compares
           two numbers: the share of graded launch moments that doubled within 15 minutes over the last 6
           hours, and the same share over the last 7 days.
         </p>
@@ -331,8 +331,8 @@ export function AboutDetails({ targets }: { targets: Targets }) {
         <h3>Staying current</h3>
         <p>
           New alerts arrive the moment they fire while the dot by the feed says Live, and every 30 seconds
-          otherwise. The Model alerts switch and the model picker choose whose calls you see. Your own alerts
-          always show.
+          otherwise. The Model alerts switch in Settings and the switches on the Models tab choose whose calls
+          you see. Your own alerts always show.
         </p>
       </section>
     </div>

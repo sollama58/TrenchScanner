@@ -134,14 +134,16 @@ describe("default feed", () => {
     bestModel: null,
   };
 
-  it("falls back to the single default when too few models qualify", () => {
+  it("falls back to the single default when no model qualifies", () => {
     expect(resolveDefaultModels(null, "rules", "rules")).toEqual(["rules"]);
+    expect(resolveDefaultModels([], "rules", "rules")).toEqual(["rules"]);
   });
 
-  it("always gives the champion a place, in the last slot when it did not rank in", () => {
+  it("is the top 3 plus the champion when it did not rank in: 4 at most", () => {
     expect(resolveDefaultModels(["trees", "linear", "forest"], "rules", "rules")).toEqual([
       "trees",
       "linear",
+      "forest",
       "rules",
     ]);
     expect(resolveDefaultModels(["trees", "rules", "forest"], "rules", "rules")).toEqual([
@@ -149,6 +151,11 @@ describe("default feed", () => {
       "rules",
       "forest",
     ]);
+  });
+
+  it("keeps a short pick and adds the champion", () => {
+    expect(resolveDefaultModels(["trees", "linear"], "rules", "rules")).toEqual(["trees", "linear", "rules"]);
+    expect(resolveDefaultModels(["rules"], "rules", "rules")).toEqual(["rules"]);
   });
 
   it("does not pin a fallback standing in for a silent champion", () => {

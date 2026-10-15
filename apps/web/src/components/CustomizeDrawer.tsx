@@ -23,7 +23,7 @@ export function CustomizeDrawer({ open, onClose }: { open: boolean; onClose: () 
     const drawer = ref.current;
     drawer?.focus();
     const onKey = (e: KeyboardEvent) => {
-      // Escape in a popup opened over the drawer (Stats, How this works) closes that popup only.
+      // Escape in a popup opened over the drawer (How this works) closes that popup only.
       if (e.key === "Escape" && !document.querySelector("dialog[open]")) onClose();
     };
     window.addEventListener("keydown", onKey);

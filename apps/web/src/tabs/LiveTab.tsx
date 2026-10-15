@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
+import { type CuratedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
-import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
 import { AboutModal } from "../components/AboutModal";
 import { introSeen, markIntroSeen } from "../intro";
-import { FeedStatsModal } from "../components/FeedStatsModal";
 import { LighthouseButton } from "../components/MarketLighthouse";
-import { ArrowRightIcon, BrainIcon, ChartIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
+import { ArrowRightIcon, BrainIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, usePollingAll, useNow, useNudgeStream } from "../hooks";
 import { fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES } from "../feedFill";
@@ -16,12 +14,6 @@ import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { CustomizeDrawer } from "../components/CustomizeDrawer";
 import { CaSearchBox, SearchResults } from "../components/CaSearch";
 import { parseSearch } from "../caSearch";
-
-/** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
-const MIN_TEASER = 10;
-
-/** The window the feed stats cover. */
-const STATS_HOURS = 24;
 
 /** This browser's "High conviction only" switch (the API takes it per request, not as a saved setting). */
 const HIGH_CONVICTION_KEY = "ts-feed-high-conviction";
@@ -49,10 +41,6 @@ export function LiveTab({
 }) {
   const now = useNow(15_000);
   const [page, setPage] = useState(1);
-  // Bumped when the user changes their feed settings, so every view keyed on them refetches at once.
-  const [pick, setPick] = useState(0);
-  const [toggling, setToggling] = useState(false);
-  const [toggleError, setToggleError] = useState<string | null>(null);
   // Model calls narrowed to every model's high-conviction tier instead of the followed models.
   const [highConviction, setHighConviction] = useState(readHighConviction);
   // The tour opens by itself the first time this wallet lands here.
@@ -61,7 +49,6 @@ export function LiveTab({
     setAboutOpen(false);
     markIntroSeen(walletAddress);
   };
-  const [statsOpen, setStatsOpen] = useState(false);
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const look = useAppearance();
@@ -80,23 +67,17 @@ export function LiveTab({
   // feed reads the API's pages from the first and lays out full pages of its own here: page 1
   // below, and `depth - 1` more after it, read as far as the page on screen needs.
   const [depth, setDepth] = useState(1);
-  const feedPage = usePolling<MatchPage>(feedPath(1), 30_000, String(pick));
+  const feedPage = usePolling<MatchPage>(feedPath(1), 30_000);
   const morePaths = Array.from({ length: depth - 1 }, (_, i) => feedPath(i + 2));
-  const morePages = usePollingAll<MatchPage>(morePaths, 30_000, String(pick));
+  const morePages = usePollingAll<MatchPage>(morePaths, 30_000);
   const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
-  // The stats follow the same feed settings as the cards, so they refetch with them.
-  const feedStats = usePolling<FeedStats>(`/matches/stats?hours=${STATS_HOURS}${hc}`, 30_000, String(pick));
-  const fs = feedStats.data;
-  const hours = fs?.hours ?? STATS_HOURS;
-  const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000, String(pick));
+  const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000);
   const lb = board.data;
   const modelsOn = lb?.showModelAlerts ?? true;
-  // A new alert changes the stats as well as the cards, so both refetch on a nudge.
   const nudged = () => {
     // Only the first page: the ones read ahead catch up on their own poll, and a burst of alerts
     // must not refetch all of them each time.
     feedPage.reload();
-    feedStats.reload();
   };
   const curatedLive = useNudgeStream("/curated/stream", nudged, modelsOn);
   const matchesLive = useNudgeStream("/matches/stream", nudged);
@@ -136,7 +117,7 @@ export function LiveTab({
     if (filled && !filled.moreLoaded && allLoaded && apiHasMore && depth < maxDepth) setDepth((d) => d + 1);
   }, [filled, allLoaded, apiHasMore, depth, maxDepth]);
   // Back to reading the first page alone when the feed changes.
-  useEffect(() => setDepth(1), [pick, highConviction]);
+  useEffect(() => setDepth(1), [highConviction]);
   const shownCards = filled?.shown;
   const hiddenCount = filled?.hiddenHere ?? 0;
 
@@ -151,10 +132,6 @@ export function LiveTab({
         : `${chosen[0]!.name} +${chosen.length - 1}`;
   const streamLive = matchesLive && (!modelsOn || curatedLive);
 
-  const changed = () => {
-    setPage(1);
-    setPick((n) => n + 1);
-  };
   const toggleHighConviction = () => {
     const next = !highConviction;
     try {
@@ -165,30 +142,9 @@ export function LiveTab({
     setHighConviction(next);
     setPage(1);
   };
-  const toggleModels = async () => {
-    setToggling(true);
-    setToggleError(null);
-    try {
-      await saveFeedSettings({ showModelAlerts: !modelsOn });
-      changed();
-    } catch (e) {
-      setToggleError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setToggling(false);
-    }
-  };
 
   return (
     <div className="stack">
-      <FeedStatsModal
-        open={statsOpen}
-        onClose={() => setStatsOpen(false)}
-        stats={fs ?? null}
-        hours={hours}
-        targets={t}
-        pollKey={String(pick)}
-        highConviction={highConviction}
-      />
       <CustomizeDrawer open={customizing} onClose={closeCustomize} />
       <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />
       <section className="panel feed">
@@ -212,18 +168,6 @@ export function LiveTab({
             </div>
           </div>
           <div className="feed-controls">
-            <button
-              type="button"
-              className="ghost stats-btn"
-              onClick={() => setStatsOpen(true)}
-              title={`Your feed's hit rates and best run over the last ${hours} hours`}
-            >
-              <ChartIcon size={14} />
-              Stats
-              {fs && fs.graded >= MIN_TEASER && fs.hit2xPct !== null && (
-                <span className="num stats-teaser">2x {pct(fs.hit2xPct, 0)}</span>
-              )}
-            </button>
             <LighthouseButton base="/curated" />
             <button
               type="button"
@@ -234,19 +178,6 @@ export function LiveTab({
             >
               <PaletteIcon size={14} />
               Customize
-            </button>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={modelsOn}
-              className={`switch${modelsOn ? " on" : ""}`}
-              disabled={!lb || toggling || board.stale}
-              onClick={() => void toggleModels()}
-            >
-              <span className="switch-track">
-                <span className="switch-thumb" />
-              </span>
-              Model alerts
             </button>
             {SHOW_HIGH_CONVICTION && (
               <button
@@ -268,14 +199,12 @@ export function LiveTab({
                 High conviction only
               </button>
             )}
-            {lb && <ModelPicker board={lb} disabled={!modelsOn || highConviction} onChanged={changed} />}
             <CaSearchBox
               value={searchInput}
               onChange={setSearchInput}
               title="Find a token in your feed by its contract address, ticker or name. Press / to jump here."
             />
             <span className={`live-dot ${streamLive ? "on" : ""}`}>{streamLive ? "Live" : "Polling"}</span>
-            {toggleError && <small className="error">Couldn&apos;t switch model alerts: {toggleError}</small>}
           </div>
         </header>
         {searching && (
@@ -283,7 +212,7 @@ export function LiveTab({
             input={searchInput}
             pathFor={(search, n) => (search ? `${feedPath(n)}&${search}` : feedPath(1))}
             pollMs={30_000}
-            pollKey={String(pick)}
+            pollKey=""
             cardsOf={(d) => d.matches}
             hasMoreOf={(d) => d.hasMore ?? false}
             noun="alert"
@@ -307,7 +236,7 @@ export function LiveTab({
                 <p>
                   {modelsOn
                     ? `Nothing yet from your filter or ${highConviction ? "the high-conviction calls" : chosenNames}. Alerts land here the moment one comes in.`
-                    : "Nothing caught by your filter yet. Turn on model alerts to see the models' calls here too."}
+                    : "Nothing caught by your filter yet. Turn on Model alerts in Settings to see the models' calls here too."}
                 </p>
                 <button className="ghost" onClick={() => goTo("filters")}>
                   Tune your filter <ArrowRightIcon size={13} />

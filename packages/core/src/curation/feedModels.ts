@@ -25,8 +25,8 @@ export interface FeedModelState {
   /** The single best performer (champion.ts): the AI reviewer's model, and the fallback below. */
   defaultModel: string;
   /**
-   * The default feed: the top models by 2x lower bound (topModels.ts), best first, with the
-   * champion always holding a place; just [defaultModel] while too few models qualify.
+   * The default feed: the top models by 2x lower bound (topModels.ts), best first, then the
+   * champion when it isn't among them; just [defaultModel] while no model qualifies.
    */
   defaultModels: string[];
   /** The best average exit-plan return over the same 24h (the "best" marker); null when none qualify. */
@@ -34,10 +34,11 @@ export interface FeedModelState {
 }
 
 /**
- * The default feed: the top models when enough qualify, else the single default. The champion
- * always holds a place (user decision 2026-10-14): when it can call (`defaultModel` is the
- * champion) but did not rank into the top, it takes the last slot. A fallback default standing in
- * for a silent champion is not pinned.
+ * The default feed: the top models by 2x lower bound (up to TOP_MODELS_COUNT), plus the champion
+ * when it did not rank among them - so 4 models at most, 3 when the champion is already in the top
+ * 3 (user decision 2026-10-15; before it the champion replaced the third pick, leaving 3). With no
+ * model ranked it is just the single default. A fallback default standing in for a silent
+ * champion is not added.
  */
 export function resolveDefaultModels(
   top: readonly string[] | null,
@@ -46,9 +47,7 @@ export function resolveDefaultModels(
 ): string[] {
   if (!top || top.length === 0) return [defaultModel];
   const models = [...top];
-  if (champion !== null && champion === defaultModel && !models.includes(champion)) {
-    models[models.length - 1] = champion;
-  }
+  if (champion !== null && champion === defaultModel && !models.includes(champion)) models.push(champion);
   return models;
 }
 
