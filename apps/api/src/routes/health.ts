@@ -311,7 +311,8 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // Who priced the newest launches (liveLaunchQuotes), and the band-entry checks between cycles
   // and the cycles they started early (bandEntryWatch). The cycle's RugCheck reports: cached, and
   // looked up while it waited (rugCheckLookups). The linked-wallet funder reads and their credits
-  // (linkedWalletCalls). The live tape's pages before a call (liveTape).
+  // (linkedWalletCalls). The live tape's pages before a call (liveTape). Jupiter's newest-launch
+  // reads between cycles and the launches they found (launchPoller).
   for (const key of [
     "dexScreenerCalls",
     "jupiterCalls",
@@ -322,6 +323,7 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "liveTape",
     "pumpfunList",
     "launchDetails",
+    "launchPoller",
   ] as const) {
     const calls = stageTimings(meta, key);
     if (calls) out[key] = calls;
