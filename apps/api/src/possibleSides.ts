@@ -1,4 +1,4 @@
-import { prisma } from "@trenchscanner/core";
+import { MARKED_BOT_WALLETS, prisma } from "@trenchscanner/core";
 import { readKolRows } from "./kolRoster.js";
 
 /**
@@ -47,7 +47,8 @@ export function possibleSideText(
 
 /** Each wallet's possible-side matches, strongest first; wallets with none are left out. */
 export async function loadPossibleSides(wallets: readonly string[]): Promise<Record<string, PossibleSide[]>> {
-  const unique = [...new Set(wallets)];
+  // A wallet marked as a bot is no one's side, whatever ties it has.
+  const unique = [...new Set(wallets)].filter((w) => !MARKED_BOT_WALLETS.has(w));
   if (unique.length === 0) return {};
   const [rows, fundedRows] = await Promise.all([
     prisma.kolPossibleSide.findMany({
