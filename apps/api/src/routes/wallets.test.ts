@@ -177,6 +177,7 @@ describe.skipIf(!dbAvailable)("GET /wallets/:wallet", () => {
       funder: null,
       coins: [],
       linked: [],
+      kolSides: [],
       labels: [],
     });
   });
