@@ -5,7 +5,7 @@ import { MIN_WIN_SOL, ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
-import { KolSideWallets, SideLabelsExport } from "../tabs/SideWalletChecker";
+import { bundleRead, KolSideWallets, SideLabelsExport, WalletBundle } from "../tabs/SideWalletChecker";
 import {
   CheckIcon,
   CloseIcon,
@@ -369,6 +369,7 @@ function Profile({ p }: { p: WalletProfile }) {
 
       <Funding p={p} names={names} />
       {p.kolSides && p.kolSides.length > 0 && <KolSides sides={p.kolSides} />}
+      {!p.kol && <BundleLabels wallet={p.wallet} />}
       {p.risk && <Risk risk={p.risk} />}
       <Coins
         title="Tracked coins"
@@ -379,6 +380,8 @@ function Profile({ p }: { p: WalletProfile }) {
       {p.trades.length > 0 && <Trades trades={p.trades} />}
       {p.launches.length > 0 && <Coins title="Coins it launched" coins={p.launches} />}
       <Linked p={p} names={names} />
+      {/* Any wallet that isn't a KOL: its Multi-Wallet-Bundle, read now (never on the bubble map). */}
+      {!p.kol && <WalletBundle wallet={p.wallet} />}
       {p.kol && (
         <KolSideWallets
           wallet={p.wallet}
@@ -472,6 +475,60 @@ function KolSides({ sides }: { sides: KolSide[] }) {
           </div>
         );
       })}
+    </section>
+  );
+}
+
+/** Mirrors BundleLabel in apps/api/src/walletBundle.ts. */
+interface BundleLabel {
+  wallet: string;
+  pct: number;
+  shared: number;
+  coins: number;
+  hours: number;
+  /** "7xKXtg_1". */
+  name: string;
+}
+
+/**
+ * A normal wallet's card like a KOL's labeled sides (user ask 2026-10-15): the wallets in its
+ * Multi-Wallet-Bundle that would qualify for a Possible Side label against it. Read with the bundle,
+ * never stored, never on the bubble map. Shown only when there are any.
+ */
+function BundleLabels({ wallet }: { wallet: string }) {
+  const [labels, setLabels] = useState<BundleLabel[]>([]);
+  useEffect(() => {
+    let live = true;
+    setLabels([]);
+    bundleRead<{ labeled?: BundleLabel[] }>(wallet)
+      .then((d) => live && setLabels(d.labeled ?? []))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [wallet]);
+  if (labels.length === 0) return null;
+  return (
+    <section className="sage-card wm-section">
+      <h4 className="wm-sides-head">
+        Labeled bundle wallets <span className="sage-tag">{labels.length}</span>
+        <SideLabelsExport labels={{ count: labels.length, wallets: labels }} />
+      </h4>
+      <p className="faint small wm-note">
+        Wallets in its Multi-Wallet-Bundle that would qualify for a label: they bought nearly all of its coins
+        within minutes of it. Not stored, and not on the bubble map.
+      </p>
+      <ul className="wm-linked small">
+        {labels.map((l) => (
+          <li key={l.wallet}>
+            <WalletButton wallet={l.wallet} names={{}} />
+            <span className="tm-tag wm-tone-linked">{l.name}</span>
+            <span className="muted num">
+              {Math.round(l.pct)}% of {l.coins} coins over {l.hours}h
+            </span>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

@@ -95,5 +95,6 @@ export * from "./telegram/index.js";
 export * from "./wallets/linkedWallets.js";
 export * from "./wallets/kolOverrides.js";
 export * from "./wallets/sideWalletRules.js";
+export * from "./wallets/sideWallets.js";
 export * from "./wallets/kolBundled.js";
 export * from "./trading/index.js";

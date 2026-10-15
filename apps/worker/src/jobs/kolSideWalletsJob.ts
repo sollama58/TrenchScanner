@@ -6,17 +6,17 @@ import {
   MARKED_BOT_WALLETS,
   POSSIBLE_SIDE_HOLD_DAYS,
   POSSIBLE_SIDE_RULES_VERSION,
-  POSSIBLE_SIDE_TIERS,
-  SIDE_BOT_MIN_COINS,
-  SIDE_BOT_SHARE,
   SIDE_GAP_MINUTES,
   SIDE_LIKELY_BOT_MIN_KOLS,
   SIDE_LIKELY_BOT_MIN_SHARED,
   SIDE_LIKELY_BOT_PCT,
-  SIDE_MIN_PCT,
   SIDE_MIN_SHARED,
   SIDE_WINDOWS,
-  type SideTierHours,
+  isBot,
+  possibleSides,
+  rankSideWallets,
+  type PairRow,
+  type SideWallet,
   type SideWindow,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
@@ -41,8 +41,15 @@ const logger = createLogger("kol-side-wallets");
  */
 
 export const SIDE_GAP_MS = SIDE_GAP_MINUTES * 60_000;
-/** Wallets kept per KOL and window: the dropdown shows ten, "Show all" the rest. */
-export const TOP_SIDES = 100;
+// The ranking lives in core (wallets/sideWallets.ts), shared with the API's Multi-Wallet-Bundle read.
+export {
+  isBot,
+  possibleSides,
+  rankSideWallets,
+  TOP_SIDES,
+  type PairRow,
+  type SideWallet,
+} from "@trenchscanner/core";
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 /**
@@ -72,19 +79,6 @@ const POSSIBLE_SIDE_DELETE_CHUNK = 500;
 
 const WINDOW_MS: Record<SideWindow, number> = { "24h": DAY_MS, "7d": 7 * DAY_MS, "30d": 30 * DAY_MS };
 
-/** One wallet in a KOL's list, as stored in KolSideWallets.sides and served to the dashboard. */
-export interface SideWallet {
-  wallet: string;
-  /** Coins it bought within SIDE_GAP_MS of the KOL, in the window. */
-  shared: number;
-  /** shared over the KOL's coins in the window, 0-100. */
-  pct: number;
-  /** Tracked coins it bought in the window, with the KOL or not. */
-  coins: number;
-  /** Median seconds from the KOL's first buy to its own, over the shared coins (negative: before). */
-  gapSec: number;
-}
-
 /**
  * The wallets that, in the 7-day lists, shared more than SIDE_LIKELY_BOT_MIN_SHARED coins at over
  * SIDE_LIKELY_BOT_PCT % with each of SIDE_LIKELY_BOT_MIN_KOLS or more KOLs: likely copy-trade
@@ -99,79 +93,6 @@ export function likelyBots(
       if (s.pct > SIDE_LIKELY_BOT_PCT && s.shared > SIDE_LIKELY_BOT_MIN_SHARED)
         kolsOf.set(s.wallet, (kolsOf.get(s.wallet) ?? 0) + 1);
   return new Set([...kolsOf].filter(([, n]) => n >= SIDE_LIKELY_BOT_MIN_KOLS).map(([w]) => w));
-}
-
-/** A KOL's wallets sharing coins with it, from the pair counts, for one window. */
-export interface PairRow {
-  side: string;
-  shared: number;
-  gapSec: number;
-}
-
-/**
- * The top side wallets for one KOL and window: at least minShared coins in common and SIDE_MIN_PCT %
- * of the KOL's coins, by % shared, then coins in common, then the closest timing. `carried` are the
- * wallets a shorter window listed (user ask 2026-10-15: a wallet in 24h is in 7d and 30d too):
- * they stay on whatever their figures over this window, ahead of the TOP_SIDES cut. Exported for tests.
- */
-export function rankSideWallets(
-  pairs: readonly PairRow[],
-  kolCoins: number,
-  sideCoins: ReadonlyMap<string, number>,
-  minShared: number,
-  carried: ReadonlySet<string> = new Set(),
-): SideWallet[] {
-  if (kolCoins <= 0) return [];
-  const passes = (p: PairRow) =>
-    p.shared >= minShared && (Math.min(p.shared, kolCoins) / kolCoins) * 100 + 1e-9 >= SIDE_MIN_PCT;
-  const ranked = pairs
-    .filter((p) => carried.has(p.side) || passes(p))
-    .map((p) => ({
-      wallet: p.side,
-      shared: p.shared,
-      pct: Math.round((Math.min(p.shared, kolCoins) / kolCoins) * 1000) / 10,
-      coins: Math.max(sideCoins.get(p.side) ?? p.shared, p.shared),
-      gapSec: Math.round(p.gapSec),
-    }))
-    .sort((a, b) => b.pct - a.pct || b.shared - a.shared || Math.abs(a.gapSec) - Math.abs(b.gapSec));
-  // The carried wallets always make the cut; the rest fill what is left of TOP_SIDES.
-  let room = Math.max(0, TOP_SIDES - ranked.filter((r) => carried.has(r.wallet)).length);
-  return ranked.filter((r) => carried.has(r.wallet) || room-- > 0);
-}
-
-/**
- * The wallets strong enough to label a possible side wallet of the KOL, from its pairs and coin
- * count over each tier's span. Exported for tests.
- */
-export function possibleSides(
-  spans: Readonly<Record<SideTierHours, { pairs: readonly PairRow[]; kolCoins: number }>>,
-): { wallet: string; pct: number; shared: number; kolCoins: number; hours: number }[] {
-  const out = new Map<
-    string,
-    { wallet: string; pct: number; shared: number; kolCoins: number; hours: number }
-  >();
-  for (const tier of POSSIBLE_SIDE_TIERS) {
-    const { pairs, kolCoins } = spans[tier.hours];
-    if (kolCoins <= 0) continue;
-    for (const p of pairs) {
-      if (out.has(p.side) || p.shared < tier.minShared) continue;
-      const pct = (Math.min(p.shared, kolCoins) / kolCoins) * 100;
-      if (pct + 1e-9 < tier.minPct) continue;
-      out.set(p.side, {
-        wallet: p.side,
-        shared: p.shared,
-        pct: Math.round(pct * 10) / 10,
-        kolCoins,
-        hours: tier.hours,
-      });
-    }
-  }
-  return [...out.values()];
-}
-
-/** Whether a wallet's coin count in a window marks it as a bot (in a large share of everything). */
-export function isBot(coins: number, totalCoins: number): boolean {
-  return coins >= SIDE_BOT_MIN_COINS && coins > totalCoins * SIDE_BOT_SHARE;
 }
 
 /**

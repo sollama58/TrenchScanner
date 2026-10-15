@@ -33,6 +33,7 @@ import { currentMarketCap } from "./matches.js";
 import { readTokenChart, readTokenSage } from "./tokens.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
+import { loadWalletBundle } from "../walletBundle.js";
 
 /**
  * The Utilities tab: lookups paid for with Burn Credits (core's subscription/credits.ts).
@@ -48,6 +49,7 @@ import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
  * - GET  /utilities/side-wallets/:wallet/:side the coins a KOL and one listed wallet bought together,
  *                               leg by leg, with both funders: what a person needs to judge a link
  * - GET  /utilities/side-labels          every labeled side wallet, numbered per KOL: the count and export
+ * - GET  /utilities/bundle/:wallet       any other wallet's Multi-Wallet-Bundle, read on demand (free)
  *
  * A lookup stays open for LOOKUP_REOPEN_MS after it is paid for: the view's own reads, and
  * looking the same thing up again, are free inside it and refused (402) outside it.
@@ -67,6 +69,9 @@ const claimSchema = z.object({ signature: z.string().regex(SIGNATURE_RE, "invali
 
 /** Lookups and claims each spend outside calls (DexScreener, the RPC); a person needs a handful. */
 const LOOKUP_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+
+/** One read per wallet modal opened; each is a database query (no outside calls), cached an hour. */
+const BUNDLE_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 
 /** A scan snapshot this close before the lookup still counts as the lookup's fresh scan. */
 const FRESH_SCAN_SLACK_MS = 60_000;
@@ -390,6 +395,18 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
   });
 
   /**
+   * A wallet's Multi-Wallet-Bundle (user ask 2026-10-15): the Side Wallet Checker's lists for any
+   * wallet that is not a KOL, read when its wallet modal opens and cached an hour (walletBundle.ts).
+   * Never stored or labeled, and never on the bubble map. A read of the trade tape: no outside calls.
+   */
+  app.get("/bundle/:wallet", { config: { rateLimit: BUNDLE_RATE_LIMIT } }, async (request, reply) => {
+    const wallet = (request.params as { wallet?: string }).wallet ?? "";
+    if (!ADDRESS_RE.test(wallet)) return reply.code(400).send({ error: "not a valid address" });
+    reply.header("Cache-Control", "private, max-age=300");
+    return loadWalletBundle(wallet);
+  });
+
+  /**
    * One KOL and one listed wallet, coin by coin (user ask 2026-10-14): every tracked coin both first
    * bought within the gap in the window, each leg's buys, sells, SOL and launch roles, and who
    * funded each wallet. Read from what is stored: no outside calls.
@@ -402,8 +419,7 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     const window = (SIDE_WINDOWS as readonly string[]).includes(windowParam)
       ? (windowParam as SideWindow)
       : "30d";
-    const kolRow = await prisma.kolWallet.findUnique({ where: { wallet: kol }, select: { wallet: true } });
-    if (!kolRow) return reply.code(404).send({ error: "That wallet isn't on the KOL roster." });
+    // Any wallet: a KOL's side wallets, or another wallet's Multi-Wallet-Bundle (GET /bundle/:wallet).
 
     const since = new Date(Date.now() - SIDE_WINDOW_MS[window]);
     const gapSeconds = SIDE_GAP_MINUTES * 60;
