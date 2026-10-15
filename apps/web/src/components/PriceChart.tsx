@@ -156,6 +156,8 @@ export function PriceChart({
     points.length > 2 &&
     geo.hiIdx < points.length - 1 &&
     Math.abs(py(peak) - lastY) > 16;
+  // Above its point the label would sit under a flag along the top ("Called"), so it goes below.
+  const peakBelow = py(peak) - 9 < PAD.t + 6 && shown.some((e) => Math.abs(x(e.t) - px(peak)) < 70);
 
   const pick = (clientX: number) => {
     const box = boxRef.current?.getBoundingClientRect();
@@ -283,7 +285,7 @@ export function PriceChart({
             <circle cx={px(peak)} cy={py(peak)} r={3.5} />
             <text
               x={Math.min(width - PAD.r - 4, Math.max(PAD.l + 4, px(peak)))}
-              y={py(peak) - 9}
+              y={peakBelow ? py(peak) + 17 : py(peak) - 9}
               textAnchor={px(peak) > width - PAD.r - 50 ? "end" : px(peak) < PAD.l + 50 ? "start" : "middle"}
             >
               Peak {usd(peak.v)}

@@ -2028,15 +2028,18 @@ g:hover > .hit {
   opacity: 0.45;
 }
 .mbar-label {
-  display: flex;
-  flex-direction: column;
+  display: block;
   min-width: 0;
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Its own line, cut with an ellipsis like the name above it ("1094 graded calls" on a phone). */
 .mbar-label small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--muted);
   font-size: 11px;
 }
@@ -2694,6 +2697,13 @@ legend {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Phones: beside "Look up again (1 credit)" the line would cut an address that is already
+   shortened ("6zbh…pum…"); it wraps between its parts instead. */
+@media (max-width: 640px) {
+  .util-what span.small {
+    white-space: normal;
+  }
 }
 .small-btn {
   flex: none;
@@ -4631,8 +4641,10 @@ html:has(dialog.about-modal[open]) {
     border-top: 1px solid var(--border);
     background: var(--surface-solid);
   }
+  /* Sized by their labels (flex-basis auto), so "Lighthouse" takes the room "Live" doesn't need
+     instead of every entry getting an equal, too-narrow share. */
   .tabs button {
-    flex: 1 1 0;
+    flex: 1 1 auto;
     min-width: 0;
     flex-direction: column;
     gap: 3px;
@@ -4640,10 +4652,17 @@ html:has(dialog.about-modal[open]) {
     font-size: 11px;
     border: none;
   }
-  /* Seven tabs (Stream on, or the admin tab) still fit "Lighthouse" whole on a 375px phone. */
-  .tabs:has(> :nth-child(7)) button {
+  /* Seven tabs (Stream on, or the admin tab) still fit "Lighthouse" whole on a 360px phone. Signed
+     in, the tabs sit inside .tablist, so count them there. */
+  .tabs:has(> :nth-child(7)) button,
+  .tabs:has(.tablist > :nth-child(7)) button {
     font-size: 10px;
     letter-spacing: -0.01em;
+  }
+  /* Eight (Stream and Admin both on). */
+  .tabs:has(.tablist > :nth-child(8)) button {
+    font-size: 9px;
+    letter-spacing: -0.02em;
   }
   .tabs button .icon {
     width: 20px;
@@ -9545,6 +9564,11 @@ html:has(dialog.about-modal[open]) {
   .week-table td:first-child {
     padding-left: 0;
   }
+  /* "7-day total" and "Vs market" over two lines, so all four columns fit a phone unscrolled. */
+  .week-table th {
+    white-space: normal;
+    vertical-align: bottom;
+  }
 }
 
 /* ---------- Lighthouse: safety screen scale ---------- */
@@ -11240,6 +11264,16 @@ button.bm-same {
   background: var(--surface-3);
   animation: pulse 1.4s ease-in-out infinite;
 }
+/* The smallest phones (360px): four tiles a row leave about 54px of label room, which cut
+   "Holders". Tighter padding and tracking fit it whole. */
+@media (max-width: 374px) {
+  .card-stats div {
+    padding: 6px;
+  }
+  .card-stats dt {
+    letter-spacing: 0.02em;
+  }
+}
 @media (max-width: 640px) {
   .bm-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -11267,6 +11301,14 @@ button.bm-same {
 .wm-short {
   color: var(--ink-2);
   font-weight: 600;
+  white-space: nowrap;
+}
+/* Phones: the heading's short address gives way to the Search X and Link buttons (it ran under them
+   at 360px); the full address sits right below it anyway. */
+@media (max-width: 640px) {
+  .wm-short {
+    display: none;
+  }
 }
 .wm-address {
   display: inline-flex;
@@ -11393,6 +11435,10 @@ button.bm-same {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Wins carries a long label and "19 (7 bought before the call)": two tiles wide, so neither is cut. */
+.wm-facts div.wm-fact-wide {
+  grid-column: span 2;
 }
 .wm-facts dd {
   margin: 0;
@@ -11910,6 +11956,19 @@ button.bm-same {
   margin: 2px 0 0;
   font-size: 14px;
   color: var(--ink);
+}
+/* Phones: three tiles a row cut "Largest holder" and "First buyers"; long labels wrap instead, and
+   the value keeps to the tile's foot so a row's figures stay level. */
+@media (max-width: 640px) {
+  .tm-modal .tm-stats dt {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
+  }
+  .tm-modal .tm-stats dd {
+    margin-top: auto;
+    padding-top: 2px;
+  }
 }
 
 /* TokenSage: the summary clamped until asked for. */

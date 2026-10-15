@@ -506,7 +506,7 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
           </div>
         )}
         {risk.wins !== undefined && (
-          <div>
+          <div className="wm-fact-wide">
             <dt>Wins (doubled, {MIN_WIN_SOL}+ SOL profit)</dt>
             <dd className="num">
               {risk.wins}
