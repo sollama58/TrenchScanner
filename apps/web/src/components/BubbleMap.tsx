@@ -732,6 +732,19 @@ function GroupPanel({
         wallets: k.wallets.map((w) => ({ wallet: w.wallet, pct: w.pct, tag: KOL_TIE_TEXT[w.tie] })),
       })),
     },
+    // Funded-together groups list above the exchanges (user ask 2026-10-15).
+    {
+      title: "Funded together",
+      groups: graph.sameTimeGroups.map((g, i) => ({
+        key: `t:${g.atMs}`,
+        title: <span className="num">{fundingTime(g.atMs)}</span>,
+        sub: `${g.wallets.length} wallets within ${Math.max(1, Math.round(g.spanMs / 1000))}s${sameTimeFunders(g)}`,
+        pct: g.pct,
+        style: { "--bm": `var(--bm-${sameTimeSlot(graph, i)})` } as React.CSSProperties,
+        dot: <i className="bm-same-dot" aria-hidden="true" />,
+        wallets: g.wallets,
+      })),
+    },
     {
       title: EXCHANGES,
       groups: cexGroupsOf(graph).map((g, i) => ({
@@ -750,18 +763,6 @@ function GroupPanel({
         dot: <i className="bm-cex-key bm-cex-dot" aria-hidden="true" />,
         wallets: g.nodes.flatMap((n) => (n.wallet ? [{ wallet: n.wallet, pct: n.pct }] : [])),
         funder: g.funder,
-      })),
-    },
-    {
-      title: "Funded together",
-      groups: graph.sameTimeGroups.map((g, i) => ({
-        key: `t:${g.atMs}`,
-        title: <span className="num">{fundingTime(g.atMs)}</span>,
-        sub: `${g.wallets.length} wallets within ${Math.max(1, Math.round(g.spanMs / 1000))}s${sameTimeFunders(g)}`,
-        pct: g.pct,
-        style: { "--bm": `var(--bm-${sameTimeSlot(graph, i)})` } as React.CSSProperties,
-        dot: <i className="bm-same-dot" aria-hidden="true" />,
-        wallets: g.wallets,
       })),
     },
   ];
