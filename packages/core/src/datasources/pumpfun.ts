@@ -107,10 +107,11 @@ export interface PumpFunListStats {
 
 /**
  * How long a blocked coin list (HTTP 403, a Cloudflare challenge) is left alone before it is asked
- * again: nine pages a cycle that are certain to fail cost a little time and look like abuse to the
- * block. One page is then tried, and the rest follow on the next cycle when it answers.
+ * again. A blocked page fails at once with nothing in it, so skipping it costs no coins; the wait
+ * only spares nine certain failures a cycle and is kept short so a lifted block is noticed within
+ * a minute. One page is then tried, and the rest follow on the next cycle when it answers.
  */
-export const LIST_BLOCK_BACKOFF_MS = 5 * 60_000;
+export const LIST_BLOCK_BACKOFF_MS = 60_000;
 
 export class PumpFunClient {
   private readonly baseUrl: string;
