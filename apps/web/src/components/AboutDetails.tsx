@@ -312,9 +312,8 @@ export function AboutDetails({ targets }: { targets: Targets }) {
       <section id="fp-weather">
         <h3>Market weather</h3>
         <p>
-          The gauge at the top of the Lighthouse (the button beside Stats, and the Lighthouse tab) compares
-          two numbers: the share of graded launch moments that doubled within 15 minutes over the last 6
-          hours, and the same share over the last 7 days.
+          The gauge at the top of the Lighthouse tab compares two numbers: the share of graded launch moments
+          that doubled within 15 minutes over the last 6 hours, and the same share over the last 7 days.
         </p>
         <div className="fp-weather">
           <span className="cold">Cold · 25%+ below the week</span>

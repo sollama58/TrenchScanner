@@ -1355,8 +1355,11 @@ export interface FeedAppearance {
   narrativeNote: boolean | null;
   /** The Stream tab, switched on in Settings (absent from older API builds: off). */
   streamTab: boolean;
-  /** The Lighthouse tab, switched on in Settings (absent from older API builds: off). */
-  lighthouseTab: boolean;
+  /**
+   * The Lighthouse tab, shown unless switched off in Settings (absent from older API builds: shown).
+   * Replaced lighthouseTab (opt-in) on 2026-10-15, so every account starts with the tab on.
+   */
+  hideLighthouseTab: boolean;
   /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
   outline: string | null;
   /** Graded cards are marked green on a pass and red on a fail (absent from older API builds: off). */

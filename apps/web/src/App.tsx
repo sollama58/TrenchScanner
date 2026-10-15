@@ -74,8 +74,7 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   // Filters sits right after Live: it is where the feed is tuned and where alerts are set up.
   { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
-  // Hidden unless switched on in Settings (FeedAppearance.lighthouseTab); the Live feed's Lighthouse
-  // button and #lighthouse links still open it.
+  // Shown unless switched off in Settings (FeedAppearance.hideLighthouseTab); #lighthouse links still open it.
   { id: "lighthouse", label: "Lighthouse", Icon: LighthouseIcon },
   // Lookups paid for with Burn Credits, on top of a subscription.
   { id: "utilities", label: "Utilities", Icon: ToolsIcon },
@@ -236,9 +235,9 @@ export function App() {
   // The Stream tab only for a signed-in reader who switched it on in Settings.
   const appearance = useAppearance();
   const streamOn = appearance.streamTab && signedIn;
-  // The Lighthouse tab when switched on, or while the reader is on it (a link from the Live feed's
-  // Lighthouse view, or a #lighthouse URL), so the open page always has its tab highlighted.
-  const lighthouseOn = appearance.lighthouseTab || wantedTab === "lighthouse";
+  // The Lighthouse tab unless switched off, or while the reader is on it (a #lighthouse URL), so the
+  // open page always has its tab highlighted.
+  const lighthouseOn = !appearance.hideLighthouseTab || wantedTab === "lighthouse";
   const shownTabs = TABS.filter(
     (t) => (t.id !== "stream" || streamOn) && (t.id !== "lighthouse" || lighthouseOn),
   );

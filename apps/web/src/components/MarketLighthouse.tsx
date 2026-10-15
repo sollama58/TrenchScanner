@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { LighthouseCount, LighthouseSignals, LighthouseTally, MarketLighthouse } from "../api";
 import { usePolling } from "../hooks";
 import { lighthousePath } from "../routes";
@@ -6,7 +6,7 @@ import { ago, halfHour, pct, signedPct, usd } from "../format";
 import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } from "../lighthouseMetrics";
 import { intervalText, MIN_GRADED_FOR_RATE, RULE_NOTE_UNFILTERED, wilson } from "../rates";
 import { HBarChart, Skeleton } from "./Charts";
-import { CloseIcon, InfoIcon, LighthouseIcon } from "./Icons";
+import { InfoIcon, LighthouseIcon } from "./Icons";
 import {
   renderNarrativeMixCard,
   renderNarrativesPayCard,
@@ -21,7 +21,7 @@ import { WeatherGauge } from "./WeatherGauge";
 import { PRICING_CHANGE_LABEL, pricingChangeSlot } from "../pricingChange";
 
 /**
- * The Market Lighthouse, beside Stats on the Live tab: how every token that passed the pre-checks
+ * The Market Lighthouse, at the top of the Lighthouse tab: how every token that passed the pre-checks
  * did, then what TokenSage sees across the new coins the scanner reads - which narratives are
  * rising, where their stories come from, what gets flagged - and how the models' calls did by
  * narrative. Aggregates only (see the API's marketLighthouse.ts), so guests read
@@ -59,111 +59,8 @@ export function seriesClassFor(order: string[]) {
   };
 }
 
-/**
- * The Live tab's Lighthouse button, beside Stats, and the modal it opens. Guests get it too: the
- * answer is aggregates only, so it gives nothing away ahead of their delayed feed.
- */
-export function LighthouseButton({ base }: { base: string }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button
-        type="button"
-        className="ghost stats-btn lh-btn"
-        onClick={() => setOpen(true)}
-        aria-haspopup="dialog"
-        title="Market Lighthouse: how screened tokens are doing and what TokenSage sees across new coins"
-      >
-        <LighthouseIcon size={14} />
-        Lighthouse
-      </button>
-      <MarketLighthouseModal open={open} onClose={() => setOpen(false)} base={base} />
-    </>
-  );
-}
-
-export function MarketLighthouseModal({
-  open,
-  onClose,
-  base,
-}: {
-  open: boolean;
-  onClose: () => void;
-  base: string;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  const [days, setDays] = useState<Days>(1);
-
-  useEffect(() => {
-    const dialog = ref.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
-
-  return (
-    <dialog
-      ref={ref}
-      className="about-modal sheet-modal lh-modal"
-      aria-labelledby="lh-title"
-      onClose={onClose}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="about-body lh-body">
-        <header className="lh-head">
-          <div className="lh-beam" aria-hidden />
-          <div className="lh-head-row">
-            <span className="lh-head-icon" aria-hidden>
-              <LighthouseIcon size={22} />
-            </span>
-            <div className="lh-head-text">
-              <h2 id="lh-title">Market Lighthouse</h2>
-              <p className="muted small">
-                At a glance: the market weather, how the tokens that pass our pre-checks are doing, and what
-                TokenSage sees across new coins. The Lighthouse tab has the charts, breakdowns and months of
-                history.
-              </p>
-            </div>
-            <button className="ghost icon-btn" onClick={onClose} aria-label="Close">
-              <CloseIcon size={16} />
-            </button>
-          </div>
-          <div className="segmented lh-window" role="tablist" aria-label="Window">
-            {WINDOWS.map((w) => (
-              <button
-                key={w}
-                role="tab"
-                aria-selected={w === days}
-                className={w === days ? "on" : ""}
-                onClick={() => setDays(w)}
-              >
-                {w === 1 ? "24h" : "7d"}
-              </button>
-            ))}
-          </div>
-        </header>
-        {open && <LighthouseBody base={base} days={days} compact />}
-        <p className="lh-more">
-          <a className="button" href="#lighthouse" onClick={onClose}>
-            <LighthouseIcon size={14} />
-            Open the Lighthouse tab
-          </a>
-          <span className="faint small">
-            charts per hour, day or week, breakdowns by narrative, CSV export
-          </span>
-        </p>
-      </div>
-    </dialog>
-  );
-}
-
-/**
- * One window's answer. The Lighthouse tab's "right now" shows the whole of it; the Live tab's
- * modal shows the compact form - the headline numbers only, with the tab a click away.
- */
-export function LighthouseBody(props: { base: string; days: Days; compact?: boolean }) {
+/** One window's answer, the Lighthouse tab's "right now". */
+export function LighthouseBody(props: { base: string; days: Days }) {
   // The weather gauge reads its own endpoint, so it shows whether or not the window has loaded.
   return (
     <div className="stack">
@@ -173,7 +70,7 @@ export function LighthouseBody(props: { base: string; days: Days; compact?: bool
   );
 }
 
-function LighthouseWindow({ base, days, compact = false }: { base: string; days: Days; compact?: boolean }) {
+function LighthouseWindow({ base, days }: { base: string; days: Days }) {
   const q = usePolling<MarketLighthouse>(lighthousePath(base, days), 300_000);
   if (!q.data) {
     if (q.error) return <p className="error">Couldn&apos;t load the Lighthouse: {q.error.message}</p>;
@@ -191,15 +88,15 @@ function LighthouseWindow({ base, days, compact = false }: { base: string; days:
 
   return (
     <div className={`stack lh-content${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
-      {!compact && d.safetyScreen && <SafetyGauge s={d.safetyScreen} span={span} days={days} />}
-      <Screened s={d.screened} span={span} days={days} compact={compact} />
+      {d.safetyScreen && <SafetyGauge s={d.safetyScreen} span={span} days={days} />}
+      <Screened s={d.screened} span={span} days={days} />
       <h3 className="lh-part">
         What TokenSage sees
         <span className={`lh-pill ${d.tokenSage.on ? "on" : "off"}`}>
           <span className="lh-pill-dot" aria-hidden />
           {d.tokenSage.on ? "live" : "off"}
         </span>
-        {!compact && d.reads.total > 0 && (
+        {d.reads.total > 0 && (
           <span className="lh-part-share">
             <ShareButton
               title={`What TokenSage sees, last ${span}`}
@@ -222,8 +119,6 @@ function LighthouseWindow({ base, days, compact = false }: { base: string; days:
               : "TokenSage isn't reading coins right now, so there is nothing to show here. This part fills in as soon as it is switched on."}
           </p>
         </div>
-      ) : compact ? (
-        <TokenSageGlance d={d} cls={cls} />
       ) : (
         <TokenSageSections d={d} base={base} days={days} span={span} cls={cls} />
       )}
@@ -433,43 +328,6 @@ function Signals({
           <HitRates rows={s.outcomes.byCopy} />
         </div>
       )}
-    </>
-  );
-}
-
-/**
- * The modal's TokenSage half: what the coins are (original or copy, what they trade against),
- * the narrative mix, and the narratives whose calls are doubling most. The read counts and
- * confidence figures stay on the Lighthouse tab, where someone digging in wants them.
- */
-function TokenSageGlance({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) {
-  const best = narratives(d.outcomes.byCategory).slice(0, 5);
-  return (
-    <>
-      {!d.tokenSage.on && (
-        <p className="notice">
-          TokenSage isn&apos;t reading new coins right now. These are the reads it stored before it went quiet
-          {d.reads.newestAt ? <> (newest {ago(d.reads.newestAt)})</> : null}.
-        </p>
-      )}
-      <div className="lh-splits">
-        <Split title="Original or copy" rows={d.copies} empty="Not said yet" />
-        <Split title="Trades against" rows={d.pairKinds} empty="Not said yet" />
-      </div>
-      <div className="lh-grid">
-        <Section
-          title="Narrative mix"
-          note={`Share of the ${d.reads.described.toLocaleString()} coins read.`}
-        >
-          <Donut d={d} cls={cls} />
-        </Section>
-        <Section
-          title="Best-performing narratives"
-          note={`Points of average return under the exit plan above or below the average of every model call (each token once), with each narrative's own return and 2x rate. ${RULE_NOTE_UNFILTERED}`}
-        >
-          <HitRates rows={best} cls={cls} baseline={narrativeBaseline(d.outcomes.byCategory)} />
-        </Section>
-      </div>
     </>
   );
 }
@@ -828,17 +686,7 @@ function screenedBucketLabel(iso: string, bucketHours: number) {
  * and the average return under the fixed exit plan, overall and per bucket. One axis per chart:
  * the rates share a 0-100% scale, the return gets its own chart around zero.
  */
-function Screened({
-  s,
-  span,
-  days,
-  compact = false,
-}: {
-  s: ScreenedData;
-  span: string;
-  days: number;
-  compact?: boolean;
-}) {
+function Screened({ s, span, days }: { s: ScreenedData; span: string; days: number }) {
   const [hover, setHover] = useState<number | null>(null);
   const [explain, setExplain] = useState(false);
   const buckets = s.byBucket.filter((b) => b.graded > 0);
@@ -885,15 +733,13 @@ function Screened({
             <InfoIcon size={14} />
             {explain ? "Hide the pre-checks" : "What are the pre-checks?"}
           </button>
-          {!compact && (
-            <ShareButton
-              title={`How screened tokens did, last ${span}`}
-              fileName={fileFor("screened", days)}
-              caption={`TrenchScanner: ${pct(s.hit2xPct, 1)} of screened tokens hit 2x in the last ${span}`}
-              disabled={s.graded === 0}
-              render={() => renderScreenedCard(s, span)}
-            />
-          )}
+          <ShareButton
+            title={`How screened tokens did, last ${span}`}
+            fileName={fileFor("screened", days)}
+            caption={`TrenchScanner: ${pct(s.hit2xPct, 1)} of screened tokens hit 2x in the last ${span}`}
+            disabled={s.graded === 0}
+            render={() => renderScreenedCard(s, span)}
+          />
         </div>
       </div>
       <p className="faint small">
@@ -927,7 +773,7 @@ function Screened({
         </div>
       </div>
 
-      {compact ? null : buckets.length === 0 ? (
+      {buckets.length === 0 ? (
         <p className="muted small">No screened tokens have been graded in this window yet.</p>
       ) : (
         <div className="lh-screened-charts" onMouseLeave={() => setHover(null)}>
@@ -1027,7 +873,7 @@ function Screened({
           </div>
         </div>
       )}
-      {!compact && s.byHourOfDay && <HourOfDay h={s.byHourOfDay} />}
+      {s.byHourOfDay && <HourOfDay h={s.byHourOfDay} />}
     </section>
   );
 }
