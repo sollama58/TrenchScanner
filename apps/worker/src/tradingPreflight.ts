@@ -67,11 +67,17 @@ async function main() {
   const rpc = new TradingRpc({
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
+    backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
   });
   if (!env.HELIUS_API_KEY && !env.SOLANA_RPC_URL) fail("RPC", "set HELIUS_API_KEY or SOLANA_RPC_URL");
   const height = await rpc.getBlockHeight();
   if (height) ok("block height", String(height));
   else fail("RPC", "no answer to getBlockHeight");
+  if (env.TRADING_BACKUP_RPC_URL) {
+    const backupHeight = await new TradingRpc({ rpcUrl: env.TRADING_BACKUP_RPC_URL }).getBlockHeight();
+    if (backupHeight) ok("backup RPC", `block height ${backupHeight}`);
+    else fail("backup RPC", "TRADING_BACKUP_RPC_URL gives no answer to getBlockHeight");
+  } else warn("backup RPC", "TRADING_BACKUP_RPC_URL not set: one RPC outage stalls every exit");
   const estimate = await rpc.getPriorityFeeEstimate([DEFAULT_PROBE_WALLET]);
   if (estimate !== null) ok("priority fee estimate", `${estimate} micro-lamports/unit (withdrawals, closes)`);
   else fail("priority fee estimate", "no answer to getRecentPrioritizationFees");

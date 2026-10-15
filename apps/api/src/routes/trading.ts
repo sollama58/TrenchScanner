@@ -41,7 +41,7 @@ import {
  * The api never holds a key that can spend: it records requests, and the trader - the one
  * process with kms:Decrypt and the server wallet's secret - carries them out. Changing a bot and
  * withdrawing refuse sessions from a paired phone (QR device link): those tokens live a year on a
- * device. The server's ceilings (TRADING_MAX_*) bound whatever the settings say.
+ * device. The server's optional ceilings (TRADING_MAX_*), where set, bound whatever the settings say.
  *
  * With TRADING_BOT_ENABLED off only GET /trading/status is registered (admins: what the bot
  * would need to run, and the limits it would run under); every other route answers 404, so no
@@ -120,11 +120,12 @@ export function tradingStatus(env: Env, keyProblem: string | null) {
             : "TRADING_SERVER_WALLET_WITHDRAW_TO not set: withdrawals are off",
       },
     ],
+    // Null where the server sets no ceiling (the default): the bot's own settings decide.
     limits: {
-      maxBuySol: env.TRADING_MAX_BUY_SOL,
-      maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL,
-      maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
-      maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL,
+      maxBuySol: env.TRADING_MAX_BUY_SOL ?? null,
+      maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL ?? null,
+      maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS ?? null,
+      maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL ?? null,
     },
     defaults: DEFAULT_TRADING_BOT_CONFIG,
     exitPlanSummary: describeExitPlan(EXIT_PLAN),
@@ -148,6 +149,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
   const rpc = new TradingRpc({
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
+    backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
   });
   const models = enabledContestants(env.CURATOR_CONTESTANTS).map((c) => ({ id: c.id, name: c.name }));
   const serverAddress = looksLikeSolanaAddress(env.TRADING_SERVER_WALLET_ADDRESS)
@@ -257,10 +259,10 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
       defaults: {
         exitPlan: EXIT_PLAN,
         exitPlanSummary: describeExitPlan(EXIT_PLAN),
-        maxBuySol: env.TRADING_MAX_BUY_SOL,
-        maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL,
-        maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
-        maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL,
+        maxBuySol: env.TRADING_MAX_BUY_SOL ?? null,
+        maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL ?? null,
+        maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS ?? null,
+        maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL ?? null,
       },
       // A followed filter edited since the settings were saved is paused until they are saved again.
       sources: {
@@ -338,22 +340,17 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     const { userId } = owner;
     const limits = parsed.data.config;
     if (limits) {
-      if (limits.buySol > env.TRADING_MAX_BUY_SOL)
-        return reply
-          .code(400)
-          .send({ error: `buySol: at most ${env.TRADING_MAX_BUY_SOL} SOL on this server` });
-      if (limits.maxDailySpendSol > env.TRADING_MAX_DAILY_SPEND_SOL)
-        return reply
-          .code(400)
-          .send({ error: `maxDailySpendSol: at most ${env.TRADING_MAX_DAILY_SPEND_SOL} SOL on this server` });
-      if (limits.maxPriorityFeeSol > env.TRADING_MAX_PRIORITY_FEE_SOL)
-        return reply.code(400).send({
-          error: `maxPriorityFeeSol: at most ${env.TRADING_MAX_PRIORITY_FEE_SOL} SOL on this server`,
-        });
-      if (limits.slippageBps > env.TRADING_MAX_SLIPPAGE_BPS)
-        return reply
-          .code(400)
-          .send({ error: `slippageBps: at most ${env.TRADING_MAX_SLIPPAGE_BPS} on this server` });
+      // The optional TRADING_MAX_* ceilings, where the server sets them; unset, none applies.
+      const over = [
+        ["buySol", limits.buySol, env.TRADING_MAX_BUY_SOL, "SOL"],
+        ["maxDailySpendSol", limits.maxDailySpendSol, env.TRADING_MAX_DAILY_SPEND_SOL, "SOL"],
+        ["maxPriorityFeeSol", limits.maxPriorityFeeSol, env.TRADING_MAX_PRIORITY_FEE_SOL, "SOL"],
+        ["slippageBps", limits.slippageBps, env.TRADING_MAX_SLIPPAGE_BPS, "bps"],
+      ] as const;
+      for (const [field, value, cap, unit] of over) {
+        if (cap !== undefined && value > cap)
+          return reply.code(400).send({ error: `${field}: at most ${cap} ${unit} on this server` });
+      }
     }
     const existing = await prisma.tradingBot.findUnique({ where: { userId } });
     let config = parsed.data.config ?? readTradingBotConfig(existing?.config);

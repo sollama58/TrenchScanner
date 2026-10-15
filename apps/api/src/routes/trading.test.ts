@@ -30,6 +30,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
   };
   let app: FastifyInstance;
   let off: FastifyInstance;
+  let capped: FastifyInstance;
   const ids = { admin: "", user: "" };
   const cookies = { admin: "", user: "" };
 
@@ -40,10 +41,12 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     cookies.user = await signer.sign({ userId: ids.user, walletAddress: userWallet, sessionVersion: 0 });
     app = await buildServer(env);
     off = await buildServer({ ...env, TRADING_BOT_ENABLED: false });
+    capped = await buildServer({ ...env, TRADING_MAX_SLIPPAGE_BPS: 2500 });
   });
   afterAll(async () => {
     await app?.close();
     await off?.close();
+    await capped?.close();
     if (!dbAvailable) return;
     const userIds = [ids.admin, ids.user].filter(Boolean);
     await prisma.tradingWithdrawal.deleteMany({ where: { userId: { in: userIds } } });
@@ -78,8 +81,9 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.enabled).toBe(false);
-    expect(body.limits.maxBuySol).toBe(env.TRADING_MAX_BUY_SOL);
-    expect(body.defaults.sources).toEqual({ filterIds: [], models: [], highConvictionOnly: false });
+    // No ceilings unless the server sets them.
+    expect(body.limits.maxBuySol).toBeNull();
+    expect(body.defaults.sources).toMatchObject({ filterIds: [], models: [], requireAiBuy: true });
     expect(body.checks.find((c: { id: string }) => c.id === "server-wallet").ok).toBe(true);
     expect(res.body).not.toContain(env.TRADING_LOCAL_MASTER_KEY);
     // The same route reports the bot on where it is.
@@ -162,8 +166,15 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(bad.statusCode).toBe(400);
   });
 
-  it("enforces the server's ceilings and refuses paired-phone sessions for bot changes", async () => {
-    const over = await app.inject({
+  it("has no ceilings by default, enforces one the server sets, and refuses paired-phone sessions", async () => {
+    const big = await app.inject({
+      method: "PUT",
+      url: "/trading/bot",
+      ...as("admin"),
+      payload: { config: { slippageBps: 4000, buySol: 50, maxDailySpendSol: 500, maxOpenPositions: 200 } },
+    });
+    expect(big.statusCode).toBe(200);
+    const over = await capped.inject({
       method: "PUT",
       url: "/trading/bot",
       ...as("admin"),

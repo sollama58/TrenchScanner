@@ -28,6 +28,7 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
   const rpc = new TradingRpc({
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
+    backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
   });
   const swap = new JupiterSwapClient({
     // The bot's own key only: sharing the scan's would let a price sweep rate-limit a stop-loss.
@@ -67,10 +68,11 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
       swap,
       fallback,
       keys: keys.provider,
-      maxPriorityFeeLamports: solToLamports(env.TRADING_MAX_PRIORITY_FEE_SOL),
+      // The TRADING_MAX_* ceilings are optional: unset, the bot's own settings decide.
+      maxPriorityFeeLamports: optionalLamports(env.TRADING_MAX_PRIORITY_FEE_SOL),
       canTrade: (wallet) => admins.has(wallet),
-      maxBuyLamports: solToLamports(env.TRADING_MAX_BUY_SOL),
-      maxDailySpendLamports: solToLamports(env.TRADING_MAX_DAILY_SPEND_SOL),
+      maxBuyLamports: optionalLamports(env.TRADING_MAX_BUY_SOL),
+      maxDailySpendLamports: optionalLamports(env.TRADING_MAX_DAILY_SPEND_SOL),
       maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
     });
     const meta: JobRunMeta = {
@@ -83,4 +85,8 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
       throw new JobFailure(`trading pass stages failed: ${failedStages.join(", ")}`, meta);
     return meta;
   };
+}
+
+function optionalLamports(sol: number | undefined): bigint | undefined {
+  return sol === undefined ? undefined : solToLamports(sol);
 }

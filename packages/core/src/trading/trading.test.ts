@@ -23,9 +23,16 @@ import {
   openWalletSecret,
   sealWalletSecret,
 } from "./keyVault.js";
+import { TradingRpc } from "./rpc.js";
 import { decideExit, ladderSoldFraction, sellAmount } from "./exitEngine.js";
 import { associatedTokenAddress, checkInstructions, PROGRAM } from "./txGuard.js";
-import { JupiterSwapClient, NoRouteError, RateLimitedError, type SwapQuote } from "./jupiterSwap.js";
+import {
+  dexScreenerPricesUsd,
+  JupiterSwapClient,
+  NoRouteError,
+  RateLimitedError,
+  type SwapQuote,
+} from "./jupiterSwap.js";
 import { TransientError } from "./errors.js";
 import {
   DEFAULT_TRADING_BOT_CONFIG,
@@ -544,17 +551,57 @@ describe("Jupiter swap client", () => {
       thrown++;
       throw new TypeError("fetch failed");
     }) as typeof fetch;
-    await expect(new JupiterSwapClient({ fetchImpl: down }).pricesUsd([OWNER])).rejects.toBeInstanceOf(
-      TransientError,
-    );
+    await expect(
+      new JupiterSwapClient({ fetchImpl: down, backupPrices: null }).pricesUsd([OWNER]),
+    ).rejects.toBeInstanceOf(TransientError);
     expect(thrown).toBe(2);
+  });
+
+  it("fills prices Jupiter lacks, or all of them while it is down, from the backup source", async () => {
+    const MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const backup = async (mints: string[]) => new Map(mints.map((m) => [m, 2] as const));
+    const partial = scripted([json({ [OWNER]: { usdPrice: 1 } })]);
+    const got = await new JupiterSwapClient({ fetchImpl: partial.fetchImpl, backupPrices: backup }).pricesUsd(
+      [OWNER, MINT],
+    );
+    expect([...got]).toEqual([
+      [OWNER, 1],
+      [MINT, 2],
+    ]);
+    const down = (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch;
+    const fromBackup = await new JupiterSwapClient({ fetchImpl: down, backupPrices: backup }).pricesUsd([
+      OWNER,
+    ]);
+    expect(fromBackup.get(OWNER)).toBe(2);
+    // Both down: Jupiter's error, so the engine still treats it as an outage.
+    const none = async () => new Map<string, number>();
+    await expect(
+      new JupiterSwapClient({ fetchImpl: down, backupPrices: none }).pricesUsd([OWNER]),
+    ).rejects.toBeInstanceOf(TransientError);
+  });
+
+  it("prices from DexScreener only off the deepest liquid Solana pair", async () => {
+    const pairs = [
+      { chainId: "solana", baseToken: { address: OWNER }, priceUsd: "9", liquidity: { usd: 500 } },
+      { chainId: "solana", baseToken: { address: OWNER }, priceUsd: "1.5", liquidity: { usd: 80_000 } },
+      { chainId: "solana", baseToken: { address: OWNER }, priceUsd: "1.4", liquidity: { usd: 20_000 } },
+      { chainId: "base", baseToken: { address: OWNER }, priceUsd: "7", liquidity: { usd: 900_000 } },
+    ];
+    const s = scripted([json(pairs)]);
+    expect((await dexScreenerPricesUsd([OWNER], s.fetchImpl)).get(OWNER)).toBe(1.5);
+    const broken = (async () => {
+      throw new TypeError("fetch failed");
+    }) as typeof fetch;
+    expect((await dexScreenerPricesUsd([OWNER], broken)).size).toBe(0);
   });
 
   it("does not repeat a rate limit or a missing route", async () => {
     let s = scripted([json({ error: "slow down" }, 429)]);
-    await expect(new JupiterSwapClient({ fetchImpl: s.fetchImpl }).pricesUsd([OWNER])).rejects.toBeInstanceOf(
-      RateLimitedError,
-    );
+    await expect(
+      new JupiterSwapClient({ fetchImpl: s.fetchImpl, backupPrices: null }).pricesUsd([OWNER]),
+    ).rejects.toBeInstanceOf(RateLimitedError);
     expect(s.calls()).toBe(1);
     s = scripted([json({ errorCode: "COULD_NOT_FIND_ANY_ROUTE", error: "no route" }, 400)]);
     await expect(
@@ -591,5 +638,47 @@ describe("Jupiter swap client", () => {
       400_000,
       2_000_000,
     ]);
+  });
+});
+
+describe("TradingRpc backup endpoint", () => {
+  /** A one-route JSON-RPC server: `answer` decides each reply. */
+  async function rpcServer(answer: (method: string) => { status: number; body?: unknown }) {
+    const { createServer } = await import("node:http");
+    const seen: string[] = [];
+    const server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c: Buffer) => (raw += c.toString()));
+      req.on("end", () => {
+        const { method } = JSON.parse(raw) as { method: string };
+        seen.push(method);
+        const out = answer(method);
+        res.writeHead(out.status, { "content-type": "application/json" });
+        res.end(JSON.stringify(out.body ?? {}));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as { port: number }).port;
+    return { url: `http://127.0.0.1:${port}`, seen, close: () => new Promise((r) => server.close(r)) };
+  }
+
+  it("reads from the backup when the first RPC doesn't answer, and sends to both", async () => {
+    const down = await rpcServer(() => ({ status: 503 }));
+    const backup = await rpcServer((method) => ({
+      status: 200,
+      body: { jsonrpc: "2.0", id: 1, result: method === "getBalance" ? { value: 42 } : "sig" },
+    }));
+    try {
+      const rpc = new TradingRpc({ rpcUrl: down.url, backupUrl: backup.url });
+      expect(await rpc.getBalance(OWNER)).toBe(42n);
+      expect(await rpc.send("AAAA")).toBeNull();
+      expect(down.seen).toContain("sendTransaction");
+      expect(backup.seen).toContain("sendTransaction");
+      // Without a backup the same outage is "no answer".
+      expect(await new TradingRpc({ rpcUrl: down.url }).getBalance(OWNER)).toBeNull();
+    } finally {
+      await down.close();
+      await backup.close();
+    }
   });
 });

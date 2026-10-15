@@ -14,28 +14,28 @@ const exitPlanSchema = z
     takeProfits: z
       .array(
         z.object({
-          multiple: z.number().gt(1).max(1000),
+          multiple: z.number().gt(1).max(1_000_000),
           sellFraction: z.number().gt(0).max(1),
         }),
       )
-      .max(6),
+      .max(20),
     stopFraction: z.number().min(0).lt(1),
     maxHoldMinutes: z
       .number()
       .positive()
-      .max(7 * 24 * 60),
+      .max(365 * 24 * 60),
     trail: z
       .array(
         z.object({
-          fromMultiple: z.number().gt(0).max(1000),
+          fromMultiple: z.number().gt(0).max(1_000_000),
           fraction: z.number().gt(0).lt(1),
         }),
       )
-      .max(6),
+      .max(20),
     trailMaxHoldMinutes: z
       .number()
       .positive()
-      .max(7 * 24 * 60),
+      .max(365 * 24 * 60),
   })
   .refine((p) => p.takeProfits.reduce((s, tp) => s + tp.sellFraction, 0) <= 1 + 1e-9, {
     message: "take-profit sell fractions add up to more than the whole position",
@@ -46,31 +46,51 @@ const exitPlanSchema = z
     path: ["takeProfits"],
   });
 
+/**
+ * Bounds here are only what keeps a value meaningful (a slippage can't pass 100%, a count is a
+ * whole number); the size of a bet is the admin's call (user decision 2026-10-15: no caps for
+ * admins). Optional TRADING_MAX_* ceilings on the server still bound it where they are set.
+ */
 export const tradingBotConfigSchema = z.object({
   sources: z
     .object({
       /** The user's own filters (UserFilter ids) whose matches it buys. */
-      filterIds: z.array(z.string().min(1).max(64)).max(10).default([]),
+      filterIds: z.array(z.string().min(1).max(64)).max(100).default([]),
       /** Model contestants (CuratedAlert.model) whose calls it buys. */
-      models: z.array(z.string().min(1).max(64)).max(20).default([]),
+      models: z.array(z.string().min(1).max(64)).max(100).default([]),
       /** Only model calls that cleared the model's high-conviction line. */
       highConvictionOnly: z.boolean().default(false),
+      /**
+       * Buy only what the AI judge reviewed and called "buy" (AiReview.decision). A signal waits
+       * for its review while it is fresh (maxSignalAgeSeconds); one with a "no_buy", or with no
+       * review by then, is skipped. The judge reviews high-conviction picks, so a source it never
+       * reviews (most filter matches) never buys with this on.
+       */
+      requireAiBuy: z.boolean().default(true),
+      /** With requireAiBuy: also skip a "buy" whose own 2x estimate is under this (0-1; 0 = any). */
+      minAiProbability2x: z.number().min(0).max(1).default(0),
     })
     .default({}),
   /** SOL spent per entry. */
-  buySol: z.number().positive().max(100).default(0.05),
+  buySol: z.number().positive().default(0.05),
   /** Positions held (or being bought) at once; signals past it are skipped, not queued. */
-  maxOpenPositions: z.number().int().min(1).max(50).default(3),
+  maxOpenPositions: z.number().int().min(1).default(3),
   /** SOL spent on entries per rolling 24 hours. */
-  maxDailySpendSol: z.number().positive().max(1000).default(0.5),
+  maxDailySpendSol: z.number().positive().default(0.5),
   /** A signal older than this when the bot reaches it is not bought: the move it called is gone. */
-  maxSignalAgeSeconds: z.number().int().min(5).max(3600).default(90),
+  maxSignalAgeSeconds: z.number().int().min(5).max(86_400).default(120),
   /** Swap slippage tolerance in basis points (100 = 1%). Memecoins move; default 15%. */
-  slippageBps: z.number().int().min(10).max(5000).default(1500),
+  slippageBps: z.number().int().min(1).max(10_000).default(1500),
+  /** The least slippage a stop, trail or timed exit sells with, so it gets out (bps). */
+  exitSlippageBps: z.number().int().min(1).max(10_000).default(3000),
+  /** How wide a protective exit that keeps failing may widen its slippage (bps). */
+  exitSlippageMaxBps: z.number().int().min(1).max(10_000).default(5000),
+  /** Tries at one entry before it is given up. */
+  maxEntryTries: z.number().int().min(1).max(20).default(4),
   /** The most priority fee one swap may pay, in SOL (Jupiter sizes it under this cap). */
-  maxPriorityFeeSol: z.number().min(0).max(0.1).default(0.002),
+  maxPriorityFeeSol: z.number().min(0).default(0.002),
   /** Never spend the wallet below this, in SOL: fees and token-account rent come out of it. */
-  reserveSol: z.number().min(0.005).max(10).default(0.02),
+  reserveSol: z.number().min(0).default(0.02),
   /** The exit plan; omitted means the project's default plan (EXIT_PLAN). */
   exitPlan: exitPlanSchema.nullable().default(null),
 });

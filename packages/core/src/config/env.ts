@@ -29,6 +29,12 @@ const pastedKey = z
       .trim(),
   );
 
+/** A number that may be left unset (or empty): undefined means "no limit". */
+const optionalPositive = z.preprocess(
+  (v) => (v === "" || v === undefined ? undefined : v),
+  z.coerce.number().positive().optional(),
+);
+
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
 
@@ -910,19 +916,22 @@ const envSchema = z.object({
   // price sweeps on a shared 60-a-minute plan.
   TRADING_JUPITER_API_KEY: pastedKey,
   TRADING_JUPITER_BASE_URL: z.string().optional().default(""),
+  // A second Solana RPC for the bot (another provider than SOLANA_RPC_URL / Helius): asked when
+  // the first gives no answer, and sent every transaction too. Empty: none.
+  TRADING_BACKUP_RPC_URL: z.string().optional().default(""),
   // How often the worker's trading-bot job runs (seconds): settles swaps, manages exits, buys.
   TRADING_BOT_INTERVAL_SECONDS: z.coerce.number().min(2).default(5),
-  // Server-wide ceilings, whatever a bot's settings say: they bound what a stolen admin session
-  // could make a bot do (buy into a pool the thief controls, at a slippage that pays them).
-  // One entry, in SOL.
-  TRADING_MAX_BUY_SOL: z.coerce.number().positive().default(1),
+  // Optional server-wide ceilings, whatever a bot's settings say. Unset (the default since
+  // 2026-10-15, user decision: admins set everything themselves), a bot runs on its own settings
+  // alone. Set one to bound what a stolen admin session could make a bot do (buy into a pool the
+  // thief controls, at a slippage that pays them). One entry, in SOL.
+  TRADING_MAX_BUY_SOL: optionalPositive,
   // Entries per rolling 24 hours, in SOL.
-  TRADING_MAX_DAILY_SPEND_SOL: z.coerce.number().positive().default(5),
-  // Priority fee on any one swap, in SOL. Fees go to validators, not to a thief, but a stolen
-  // session could otherwise set 0.1 SOL a transaction.
-  TRADING_MAX_PRIORITY_FEE_SOL: z.coerce.number().min(0).max(0.1).default(0.005),
+  TRADING_MAX_DAILY_SPEND_SOL: optionalPositive,
+  // Priority fee on any one swap, in SOL.
+  TRADING_MAX_PRIORITY_FEE_SOL: optionalPositive,
   // Slippage on any swap, in basis points (2500 = 25%).
-  TRADING_MAX_SLIPPAGE_BPS: z.coerce.number().int().min(50).max(5000).default(2500),
+  TRADING_MAX_SLIPPAGE_BPS: optionalPositive,
   // The server wallet (trading/serverWallet.ts): one wallet whose private key you supply here,
   // traded by a bot every admin controls from the Bot tab. The secret goes on the TRADER ONLY -
   // base58 as Phantom/Solflare export it, or a solana-keygen JSON byte array. The address is

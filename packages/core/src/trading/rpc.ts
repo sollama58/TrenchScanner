@@ -97,20 +97,39 @@ export interface MintInfo {
 
 export class TradingRpc implements GuardRpc {
   readonly url: string;
+  /** A second endpoint (TRADING_BACKUP_RPC_URL): asked when the first gives no answer, and sent every transaction too. */
+  readonly backupUrl: string | null;
 
-  constructor(options: SolanaRpcOptions = {}) {
+  constructor(options: SolanaRpcOptions & { backupUrl?: string } = {}) {
     this.url = resolveSolanaRpcUrl(options);
+    this.backupUrl = options.backupUrl && options.backupUrl !== this.url ? options.backupUrl : null;
   }
 
-  /** One JSON-RPC call. Throws RpcError when the node answered with an error; null on no answer. */
+  /**
+   * One JSON-RPC call. Throws RpcError when the node answered with an error; null on no answer.
+   * With a backup endpoint, a call the first one didn't answer (down, timed out, rate limited) is
+   * asked of the backup before giving up.
+   */
   protected async call<T>(
     method: string,
     params: unknown[],
     timeoutMs = 15_000,
     retries = 1,
   ): Promise<T | null> {
+    const first = await this.callAt<T>(this.url, method, params, timeoutMs, retries);
+    if (first.answered || !this.backupUrl) return first.result;
+    return (await this.callAt<T>(this.backupUrl, method, params, timeoutMs, retries)).result;
+  }
+
+  private async callAt<T>(
+    url: string,
+    method: string,
+    params: unknown[],
+    timeoutMs: number,
+    retries: number,
+  ): Promise<{ answered: boolean; result: T | null }> {
     try {
-      const body = await fetchJson<Envelope<T>>(this.url, {
+      const body = await fetchJson<Envelope<T>>(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
@@ -118,10 +137,10 @@ export class TradingRpc implements GuardRpc {
         retries,
       });
       if (body.error) throw new RpcError(method, body.error.code, body.error.message);
-      return body.result ?? null;
+      return { answered: true, result: body.result ?? null };
     } catch (err) {
       if (err instanceof RpcError) throw err;
-      return null;
+      return { answered: false, result: null };
     }
   }
 
@@ -276,17 +295,26 @@ export class TradingRpc implements GuardRpc {
    * forwarded. Returns the node's error text, if any, for the record.
    */
   async send(base64Tx: string): Promise<string | null> {
-    try {
-      await this.call<string>(
-        "sendTransaction",
-        [base64Tx, { encoding: "base64", skipPreflight: true, maxRetries: 0 }],
-        15_000,
-        0,
-      );
-      return null;
-    } catch (err) {
-      return String(err instanceof Error ? err.message : err);
-    }
+    // To every endpoint at once: the same signed bytes can land only once, and two paths to the
+    // leader beat one.
+    const urls = this.backupUrl ? [this.url, this.backupUrl] : [this.url];
+    const results = await Promise.all(
+      urls.map(async (url) => {
+        try {
+          const out = await this.callAt<string>(
+            url,
+            "sendTransaction",
+            [base64Tx, { encoding: "base64", skipPreflight: true, maxRetries: 0 }],
+            15_000,
+            0,
+          );
+          return out.answered ? null : "no answer from the RPC";
+        } catch (err) {
+          return String(err instanceof Error ? err.message : err);
+        }
+      }),
+    );
+    return results.includes(null) ? null : results[0]!;
   }
 
   /** Where a signature stands: landed (ok or failed), or not seen (null status). Null when unknown. */
