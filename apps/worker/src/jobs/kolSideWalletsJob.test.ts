@@ -40,6 +40,28 @@ describe("rankSideWallets", () => {
     expect(ranked[0]!.wallet).toBe("w119");
   });
 
+  it("keeps a wallet a shorter window listed, whatever its figures over this one, inside the top hundred", () => {
+    // 6 of 40 over 7 days is under the 15 coins and the half a 7d listing needs on its own.
+    const ranked = rankSideWallets(
+      [
+        { side: "from24h", shared: 6, gapSec: 1 },
+        { side: "own", shared: 30, gapSec: 1 },
+        { side: "weak", shared: 6, gapSec: 1 },
+      ],
+      40,
+      new Map(),
+      15,
+      new Set(["from24h"]),
+    );
+    expect(ranked.map((r) => r.wallet)).toEqual(["own", "from24h"]);
+    expect(ranked[1]).toMatchObject({ shared: 6, pct: 15 });
+
+    const pairs = Array.from({ length: 120 }, (_, i) => ({ side: `w${i}`, shared: 100 + i, gapSec: 0 }));
+    const full = rankSideWallets(pairs, 200, new Map(), 25, new Set(["w0"]));
+    expect(full).toHaveLength(100);
+    expect(full.at(-1)!.wallet).toBe("w0");
+  });
+
   const span = (pairs: { side: string; shared: number }[], kolCoins: number) => ({
     pairs: pairs.map((p) => ({ ...p, gapSec: 3 })),
     kolCoins,

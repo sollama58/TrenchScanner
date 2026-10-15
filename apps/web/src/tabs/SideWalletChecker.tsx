@@ -339,7 +339,7 @@ function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels
         </div>
         <p className="faint small">
           Bought within {rules.gapMinutes} minutes of the KOL, on at least {rules.minPct}% of its coins in the
-          window.
+          window. A wallet listed for 24h is listed for 7d and 30d too, and one listed for 7d for 30d.
         </p>
       </div>
       <div className="side-rule side-rule-label">
