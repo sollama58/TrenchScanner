@@ -174,6 +174,33 @@ describe.skipIf(!dbAvailable)("discovery metadata and revival", () => {
     expect((await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(2) } })).dexBoosted).toBe(true);
   });
 
+  it("fills in the description and socials of a row the stream created bare, once", async () => {
+    await addNewMintsToWatchlist([{ mintAddress: mint(90), symbol: "BARE", discoverySource: "pumpportal" }]);
+    expect(
+      (await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(90) } })).description,
+    ).toBeNull();
+
+    await addNewMintsToWatchlist([
+      {
+        mintAddress: mint(90),
+        description: "a cat",
+        hasTwitter: true,
+        twitterUrl: "https://x.com/cat",
+        discoverySource: "pumpportal",
+      },
+    ]);
+    const filled = await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(90) } });
+    expect(filled).toMatchObject({ description: "a cat", hasTwitter: true, twitterUrl: "https://x.com/cat" });
+
+    // A recorded description is never rewritten.
+    await addNewMintsToWatchlist([
+      { mintAddress: mint(90), description: "other", discoverySource: "pumpfun" },
+    ]);
+    expect((await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(90) } })).description).toBe(
+      "a cat",
+    );
+  });
+
   it("revives a known mint that is moving again, and ignores ones still at launch level", async () => {
     const stale = new Date(Date.now() - 6 * 3_600_000);
     await prisma.token.createMany({

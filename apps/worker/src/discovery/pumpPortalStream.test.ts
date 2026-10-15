@@ -15,6 +15,16 @@ describe("parsePumpPortalMessage", () => {
     expect(parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "migrate" }))?.kind).toBe("migrate");
   });
 
+  it("keeps a launch's metadata URI", () => {
+    const uri = "https://ipfs.io/ipfs/bafkreibuifrxzohrvlpgdztmwku4o7wggni72irolspurpn3toi5mfjq2q";
+    expect(parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "create", uri }))?.metadataUri).toBe(
+      uri,
+    );
+    expect(
+      parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "migrate", uri }))?.metadataUri,
+    ).toBeUndefined();
+  });
+
   it("ignores subscription acks, trades, malformed JSON and bad addresses", () => {
     expect(parsePumpPortalMessage(JSON.stringify({ message: "Successfully subscribed" }))).toBeNull();
     expect(parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "buy" }))).toBeNull();

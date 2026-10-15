@@ -32,6 +32,8 @@ export interface StreamEvent {
   mintAddress: string;
   symbol?: string;
   name?: string;
+  /** A launch's metadata URI (the token's on-chain `uri`): the fallback for its description and socials. */
+  metadataUri?: string;
   at: Date;
 }
 
@@ -52,6 +54,7 @@ interface PumpPortalMessage {
   initialBuy?: unknown;
   newTokenBalance?: unknown;
   marketCapSol?: unknown;
+  uri?: unknown;
   /** PumpPortal's own notices (subscription acks and refusals). */
   message?: unknown;
 }
@@ -132,6 +135,9 @@ export function parsePumpPortalMessage(raw: string, at: Date = new Date()): Stre
     mintAddress: msg.mint,
     symbol: typeof msg.symbol === "string" ? msg.symbol.slice(0, 40) : undefined,
     name: typeof msg.name === "string" ? msg.name.slice(0, 120) : undefined,
+    ...(kind === "create" && typeof msg.uri === "string" && msg.uri.length <= 500
+      ? { metadataUri: msg.uri }
+      : {}),
     at,
   };
 }

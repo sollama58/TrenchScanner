@@ -91,9 +91,17 @@ const PAGE_SIZE = 50;
 type SortField = "market_cap" | "created_timestamp" | "last_trade_timestamp";
 type SortOrder = "ASC" | "DESC";
 
+/** How the coin-list pages fared since the last takeListStats - see PumpFunClient.takeListStats. */
+export interface PumpFunListStats {
+  pages: number;
+  failed: number;
+  lastError?: string;
+}
+
 export class PumpFunClient {
   private readonly baseUrl: string;
   private readonly swapBaseUrl: string;
+  private listStats: PumpFunListStats = { pages: 0, failed: 0 };
 
   constructor(options: PumpFunClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://frontend-api-v3.pump.fun";
@@ -161,6 +169,37 @@ export class PumpFunClient {
       }
     }
     return [...seen.values()];
+  }
+
+  /**
+   * The coin-list pages (newest and recently-traded feeds) asked for and failed since the last
+   * call, for the scan's heartbeat. A failed page only logs a warning and reads as an empty page,
+   * so without this a blocked list looks like a quiet minute: from 2026-10-14 about 21:00 UTC the
+   * list answered every page with a Cloudflare challenge (HTTP 403) and launches reached the scan
+   * from the PumpPortal stream alone, with no description or socials.
+   */
+  takeListStats(): PumpFunListStats {
+    const out = this.listStats;
+    this.listStats = { pages: 0, failed: 0 };
+    return out;
+  }
+
+  /**
+   * One coin as the single-coin endpoint reports it - the same fields the coin list gives
+   * (description, socials, image, launch time, Mayhem flag), for a launch the list didn't show.
+   * Null when Pump.fun has no such coin; throws on a transport failure.
+   */
+  async coinDetails(mintAddress: string, timeoutMs = 4_000): Promise<DiscoveredCoin | null> {
+    try {
+      const coin = await fetchJson<PumpFunCoin | null>(
+        `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
+        { timeoutMs, retries: 0 },
+      );
+      return coin?.mint === mintAddress ? toDiscoveredCoin(coin) : null;
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
+    }
   }
 
   /**
@@ -349,16 +388,73 @@ export class PumpFunClient {
       order: params.order,
       includeNsfw: "false",
     });
+    this.listStats.pages += 1;
     try {
-      return await fetchJson<PumpFunCoin[]>(`${this.baseUrl}/coins?${query.toString()}`, {
+      const coins = await fetchJson<PumpFunCoin[]>(`${this.baseUrl}/coins?${query.toString()}`, {
         timeoutMs: 8000,
         retries: 1,
       });
+      if (Array.isArray(coins)) return coins;
+      throw new Error("coin list answered with something other than a list");
     } catch (err) {
-      logger.warn("listCoins failed", { params, error: String(err) });
+      this.listStats.failed += 1;
+      this.listStats.lastError = listErrorText(err);
+      logger.warn("listCoins failed", { params, error: this.listStats.lastError });
       return [];
     }
   }
+}
+
+/** A failed list page, named so a Cloudflare block reads as one on the heartbeat. */
+function listErrorText(err: unknown): string {
+  if (err instanceof HttpError && err.status === 403)
+    return `${err.message} (blocked - likely a Cloudflare challenge)`;
+  return String(err instanceof Error ? err.message : err).slice(0, 200);
+}
+
+/**
+ * The launch's metadata JSON (the token's on-chain URI, which the PumpPortal stream carries as
+ * `uri`): name, symbol, description, image and the launcher's socials, written once at launch.
+ * The fallback when Pump.fun's own endpoints don't answer. Only IPFS-hosted metadata is read,
+ * through Pump.fun's own Pinata gateway (ipfs.io answers 429 to repeated reads): the URI is
+ * whatever the launcher wrote, and the worker fetches nothing else a stranger names. Null when the
+ * URI isn't an IPFS one or the JSON has nothing usable; throws on a transport failure.
+ */
+export async function fetchLaunchMetadata(
+  mintAddress: string,
+  uri: string,
+  timeoutMs = 4_000,
+): Promise<DiscoveredCoin | null> {
+  const cid = ipfsMetadataCid(uri);
+  if (!cid) return null;
+  const body = await fetchJson<unknown>(`https://pump.mypinata.cloud/ipfs/${cid}`, { timeoutMs, retries: 0 });
+  return parseLaunchMetadata(mintAddress, body);
+}
+
+/** The IPFS CID an https metadata URI points at, or undefined for any other URI. Exported for tests. */
+export function ipfsMetadataCid(uri: string): string | undefined {
+  return (
+    /^https:\/\/[^/]+\/ipfs\/([A-Za-z0-9]{46,})\/?$/.exec(uri)?.[1] ??
+    /^https:\/\/([A-Za-z0-9]{46,})\.ipfs\.[^/]+\/?$/.exec(uri)?.[1]
+  );
+}
+
+/** A launch's metadata JSON as a discovered coin; null when it isn't an object. Exported for tests. */
+export function parseLaunchMetadata(mintAddress: string, body: unknown): DiscoveredCoin | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const m = body as Record<string, unknown>;
+  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  return toDiscoveredCoin({
+    mint: mintAddress,
+    name: str(m.name),
+    symbol: str(m.symbol),
+    // A Pump.fun launch writes the key even when empty; a missing one is the same known "none".
+    description: str(m.description) ?? "",
+    image_uri: str(m.image),
+    twitter: str(m.twitter),
+    telegram: str(m.telegram),
+    website: str(m.website),
+  });
 }
 
 /** Same caps as the PumpPortal stream applies (discovery/pumpPortalStream.ts). */
