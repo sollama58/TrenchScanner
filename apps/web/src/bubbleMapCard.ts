@@ -55,6 +55,24 @@ const MAX_SCALE = 3;
 /** KOLs' possible side wallets: the map's dotted gold (styles.css --bm-side). */
 const SIDE = "#f5b324";
 
+/** The left column's bundle list: its first baseline, row height, and the room it can't pass. */
+const LIST_TOP = 344;
+const ROW_H = 31;
+const MORE_H = 24;
+const NOTE_H = 27;
+const LEFT_BOTTOM = CARD_H - 98;
+/** The fewest bundle rows the card lists when there are that many (user ask 2026-10-15). */
+const MIN_ROWS = 6;
+
+/** A row in the card's bundle list: a funder's cluster, a same-minute group or a KOL's sides. */
+interface Bundle {
+  pct: number;
+  mark: { colour: string } | { side: true };
+  lead: string;
+  from: string;
+  fromColour: string;
+}
+
 /** A colour slot's colour (nodeSlot / sameTimeSlot); grey for none. */
 const slotColour = (slot: number | null) => (slot === null ? OTHER : CLUSTER[slot % CLUSTER.length]!);
 const pctText = (v: number) => `${v < 10 ? v.toFixed(1) : v.toFixed(0)}%`;
@@ -160,118 +178,6 @@ export async function renderBubbleCard(
   const sideRows = (opts.sides ?? [])
     .map((g) => ({ g, members: sideMembers(graph, g) }))
     .filter((s) => s.members.length >= 2);
-  let y = 350;
-  // Room for five rows: up to four clusters, or three and up to two KOLs.
-  const rows = graph.clusters.slice(0, sideRows.length > 0 ? 3 : 4);
-  for (const [i, c] of rows.entries()) {
-    const col = CLUSTER[i % CLUSTER.length]!;
-    ctx.fillStyle = col;
-    ctx.beginPath();
-    ctx.arc(PAD + 9, y - 7, 9, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = INK;
-    ctx.font = `600 20px ${FONT}`;
-    ctx.fillText(`${c.wallets.length} wallets`, PAD + 30, y);
-    const w1 = ctx.measureText(`${c.wallets.length} wallets`).width;
-    ctx.fillStyle = MUTED;
-    ctx.font = `500 17px ${MONO}`;
-    ctx.fillText(
-      clip(ctx, ` ← ${walletText(c.funder, names)}${c.creatorLinked ? " · dev" : ""}`, leftW - 120 - w1),
-      PAD + 30 + w1,
-      y,
-    );
-    ctx.textAlign = "right";
-    ctx.fillStyle = INK;
-    ctx.font = `700 20px ${FONT}`;
-    ctx.fillText(pctText(c.pct), PAD + leftW, y);
-    ctx.textAlign = "left";
-    y += 40;
-  }
-  const sideShown = sideRows.slice(0, Math.min(2, 5 - rows.length));
-  for (const { g, members } of sideShown) {
-    // A gold ring with a dotted edge: the map's side-wallet key.
-    ctx.strokeStyle = SIDE;
-    ctx.lineWidth = 3;
-    ctx.setLineDash([2, 3]);
-    ctx.beginPath();
-    ctx.arc(PAD + 9, y - 7, 7.5, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    const { known, funded, possible } = sideCounts(members, g);
-    const all = known + funded + possible;
-    const lead =
-      possible === 0 && known === 0
-        ? `${funded} funded`
-        : `${all} side${all === 1 ? "" : "s"}${funded + known > 0 ? "" : "?"}`;
-    ctx.fillStyle = INK;
-    ctx.font = `600 20px ${FONT}`;
-    ctx.fillText(lead, PAD + 30, y);
-    const w1 = ctx.measureText(lead).width;
-    ctx.fillStyle = SIDE;
-    ctx.font = `500 17px ${MONO}`;
-    const kolName = names[g.kolWallet]?.name ?? g.kolName ?? walletText(g.kolWallet, names);
-    ctx.fillText(clip(ctx, ` ← ${kolName}`, leftW - 120 - w1), PAD + 30 + w1, y);
-    ctx.textAlign = "right";
-    ctx.fillStyle = INK;
-    ctx.font = `700 20px ${FONT}`;
-    ctx.fillText(pctText(members.reduce((t, m) => t + m.pct, 0)), PAD + leftW, y);
-    ctx.textAlign = "left";
-    y += 40;
-  }
-  if (holdersOnly) {
-    ctx.fillStyle = INK2;
-    ctx.font = `500 19px ${FONT}`;
-    ctx.fillText(
-      linked === 0 ? "No two of them share a funder" : "Who funded them isn't checked yet",
-      PAD,
-      y,
-    );
-    y += 40;
-  }
-  if (graph.clusters.length > rows.length) {
-    ctx.fillStyle = MUTED;
-    ctx.font = `500 17px ${FONT}`;
-    ctx.fillText(`and ${graph.clusters.length - rows.length} more`, PAD + 30, y - 6);
-    y += 28;
-  }
-  const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator")).length;
-  if ((opts.flags ?? "ok") !== "ok" && y < CARD_H - 110) {
-    // No ringless map passed off as clean: the flagged wallets weren't read.
-    ctx.fillStyle = MUTED;
-    ctx.font = `600 18px ${FONT}`;
-    ctx.fillText("Risky wallets: not read", PAD, y + 4);
-    y += 32;
-  } else if (risky > 0 && y < CARD_H - 110) {
-    ctx.fillStyle = RISK;
-    ctx.font = `600 18px ${FONT}`;
-    ctx.fillText(`${risky} risky wallet${risky === 1 ? "" : "s"} among the holders`, PAD, y + 4);
-    y += 32;
-  }
-  const sameWallets = graph.nodes.filter((n) => n.sameTime !== null).length;
-  if (sameWallets > 0 && graph.sameTimePct !== null && y < CARD_H - 110) {
-    ctx.fillStyle = INK2;
-    ctx.font = `600 18px ${FONT}`;
-    ctx.fillText(
-      clip(
-        ctx,
-        graph.sameTimeCount
-          ? `${graph.sameTimeCount.linked}/${graph.sameTimeCount.of} funded the same minute, holding ${pctText(graph.sameTimePct)}`
-          : `${pctText(graph.sameTimePct)} in ${sameWallets} wallets funded the same minute`,
-        leftW,
-      ),
-      PAD,
-      y + 4,
-    );
-    y += 32;
-  }
-  // KOL Bundled % (user ask 2026-10-14): supply held by KOLs and the holders tied to them.
-  if (opts.kolBundled != null && opts.kolBundled > 0 && y < CARD_H - 110) {
-    ctx.fillStyle = SIDE;
-    ctx.font = `600 18px ${FONT}`;
-    ctx.fillText(`KOL bundled ${pctText(opts.kolBundled)} of supply`, PAD, y + 4);
-    y += 32;
-  }
-
   // With the exchange ties on: which exchanges funded which holders, in their colours.
   const cex = opts.cex && graph.cexLinks.length > 0;
   const exchanges = cex ? cexGroupsOf(graph) : [];
@@ -280,6 +186,124 @@ export async function renderBubbleCard(
     const named = names[funder];
     return named ? exchangeName(named.name) : walletText(funder, names);
   };
+
+  // Every bundle on the map in one list, largest share first (user ask 2026-10-15): funders'
+  // clusters, same-minute groups and KOLs' side wallets, in rows tight enough for at least six.
+  const bundles: Bundle[] = [
+    ...graph.clusters.map((c, i) => ({
+      pct: c.pct,
+      mark: { colour: slotColour(i % CLUSTER.length) },
+      lead: `${c.wallets.length} wallets`,
+      from: `${walletText(c.funder, names)}${c.creatorLinked ? " · dev" : ""}`,
+      fromColour: MUTED,
+    })),
+    ...graph.sameTimeGroups.flatMap((_, i) => {
+      const members = graph.nodes.filter((n) => n.kind === "holder" && n.sameTime === i);
+      if (members.length < 2) return [];
+      return [
+        {
+          pct: members.reduce((t, m) => t + m.pct, 0),
+          mark: { colour: slotColour(sameTimeSlot(graph, i)) },
+          lead: `${members.length} wallets`,
+          from: "same minute",
+          fromColour: MUTED,
+        },
+      ];
+    }),
+    ...sideRows.map(({ g, members }) => {
+      const { known, funded, possible } = sideCounts(members, g);
+      const all = known + funded + possible;
+      return {
+        pct: members.reduce((t, m) => t + m.pct, 0),
+        mark: { side: true as const },
+        lead:
+          possible === 0 && known === 0
+            ? `${funded} funded`
+            : `${all} side${all === 1 ? "" : "s"}${funded + known > 0 ? "" : "?"}`,
+        from: names[g.kolWallet]?.name ?? g.kolName ?? walletText(g.kolWallet, names),
+        fromColour: SIDE,
+      };
+    }),
+  ].sort((a, b) => b.pct - a.pct);
+
+  // The lines under the list, each on if it has something to say; the list takes the room left,
+  // never fewer than six rows (or every bundle when there are fewer).
+  const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator")).length;
+  const sameWallets = graph.nodes.filter((n) => n.sameTime !== null).length;
+  const notes: { colour: string; text: string }[] = [];
+  if ((opts.flags ?? "ok") !== "ok") notes.push({ colour: MUTED, text: "Risky wallets: not read" });
+  else if (risky > 0)
+    notes.push({ colour: RISK, text: `${risky} risky wallet${risky === 1 ? "" : "s"} among the holders` });
+  // KOL Bundled % (user ask 2026-10-14): supply held by KOLs and the holders tied to them.
+  if (opts.kolBundled != null && opts.kolBundled > 0)
+    notes.push({ colour: SIDE, text: `KOL bundled ${pctText(opts.kolBundled)} of supply` });
+  if (sameWallets > 0 && graph.sameTimePct !== null)
+    notes.push({
+      colour: INK2,
+      text: graph.sameTimeCount
+        ? `${graph.sameTimeCount.linked}/${graph.sameTimeCount.of} funded the same minute, holding ${pctText(graph.sameTimePct)}`
+        : `${pctText(graph.sameTimePct)} in ${sameWallets} wallets funded the same minute`,
+    });
+  const notesH = notes.length * NOTE_H + (exchanges.length > 0 ? 36 : 0) + (holdersOnly ? NOTE_H : 0);
+  const fits = (n: number) =>
+    LIST_TOP + n * ROW_H + (bundles.length > n ? MORE_H : 0) + notesH <= LEFT_BOTTOM;
+  let shown = Math.min(bundles.length, MIN_ROWS);
+  while (shown < bundles.length && fits(shown + 1)) shown++;
+
+  let y = LIST_TOP;
+  for (const b of bundles.slice(0, shown)) {
+    if ("colour" in b.mark) {
+      ctx.fillStyle = b.mark.colour;
+      ctx.beginPath();
+      ctx.arc(PAD + 8, y - 6, 8, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      // A gold ring with a dotted edge: the map's side-wallet key.
+      ctx.strokeStyle = SIDE;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath();
+      ctx.arc(PAD + 8, y - 6, 6.5, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.fillStyle = INK;
+    ctx.font = `600 18px ${FONT}`;
+    ctx.fillText(b.lead, PAD + 26, y);
+    const w1 = ctx.measureText(b.lead).width;
+    ctx.fillStyle = b.fromColour;
+    ctx.font = `500 15px ${MONO}`;
+    ctx.fillText(clip(ctx, ` ← ${b.from}`, leftW - 100 - w1), PAD + 26 + w1, y);
+    ctx.textAlign = "right";
+    ctx.fillStyle = INK;
+    ctx.font = `700 18px ${FONT}`;
+    ctx.fillText(pctText(b.pct), PAD + leftW, y);
+    ctx.textAlign = "left";
+    y += ROW_H;
+  }
+  if (bundles.length > shown) {
+    ctx.fillStyle = MUTED;
+    ctx.font = `500 15px ${FONT}`;
+    ctx.fillText(`and ${bundles.length - shown} more`, PAD + 26, y - 6);
+    y += MORE_H;
+  }
+  if (holdersOnly) {
+    ctx.fillStyle = INK2;
+    ctx.font = `500 18px ${FONT}`;
+    ctx.fillText(
+      linked === 0 ? "No two of them share a funder" : "Who funded them isn't checked yet",
+      PAD,
+      y,
+    );
+    y += NOTE_H;
+  }
+  for (const n of notes) {
+    if (y > LEFT_BOTTOM) break;
+    ctx.fillStyle = n.colour;
+    ctx.font = `600 17px ${FONT}`;
+    ctx.fillText(clip(ctx, n.text, leftW), PAD, y);
+    y += NOTE_H;
+  }
   if (exchanges.length > 0) {
     y += 36;
     ctx.font = `600 18px ${FONT}`;
