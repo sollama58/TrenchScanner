@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   largestSourceOnly,
+  mapLinked,
   showsPct,
   kolControl,
   bubbleNameLines,
@@ -672,5 +673,30 @@ describe("largestSourceOnly (user ask 2026-10-15)", () => {
     const k1 = g("kol", 5, ["a", "b"]);
     const k2 = g("kol", 4, ["b", "c"]);
     expect(largestSourceOnly([k1, k2])).toEqual([k1, k2]);
+  });
+});
+
+describe("mapLinked (user ask 2026-10-15)", () => {
+  const node = (wallet: string, pct: number, cluster: number | null, rank?: number) =>
+    ({ kind: "holder", wallet, pct, cluster, ...(rank ? { rank } : {}) }) as MapNode;
+  const graph = (nodes: MapNode[], holdersRead: number | null = null) => ({
+    nodes,
+    linkedCount: { linked: 2, of: 25 },
+    linkedPct: 3,
+    scanLinked: new Set(["a", "b"]),
+    holdersRead,
+  });
+  it("keeps the scan's reading when the map adds nothing", () => {
+    const g = graph([node("a", 2, 0), node("b", 1, 0), node("c", 5, null)]);
+    expect(mapLinked(g, [])).toEqual({ count: { linked: 2, of: 25 }, pct: 3 });
+  });
+  it("counts holders in a KOL's bundle", () => {
+    const g = graph([node("a", 2, 0), node("b", 1, 0), node("k", 5, null), node("s", 1.5, null)]);
+    const kols = [{ wallets: [{ wallet: "k" }, { wallet: "s" }, { wallet: "a" }] }];
+    expect(mapLinked(g, kols as never)).toEqual({ count: { linked: 4, of: 25 }, pct: 9.5 });
+  });
+  it("counts out of every holder read once a linked holder ranks past the top 25", () => {
+    const g = graph([node("a", 2, 0), node("b", 1, 0), node("w", 0.4, 0, 31)], 50);
+    expect(mapLinked(g, [])).toEqual({ count: { linked: 3, of: 50 }, pct: 3.4 });
   });
 });
