@@ -3,6 +3,7 @@ import "./bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { MARKED_BOT_WALLETS, prisma } from "@trenchscanner/core";
 import {
+  loadKolLabeledSides,
   loadLabeledSides,
   loadPossibleSides,
   numberLabeledSides,
@@ -140,6 +141,45 @@ describe.skipIf(!dbAvailable)("loadPossibleSides", () => {
       [funded, "Label_KOL_2", "funded"],
       [possible, "Label_KOL_3", "possible"],
     ]);
+  });
+
+  it("lists one KOL's labeled sides from its main wallet or a Known Side, numbered as the export", async () => {
+    const kol = `${TAG}-gkol`;
+    const alt = `${TAG}-galt`;
+    const altFunded = `${TAG}-galtfunded`;
+    const possible = `${TAG}-gpossible`;
+    const other = `${TAG}-gother`;
+    await prisma.kolWallet.createMany({
+      data: [
+        { wallet: kol, name: "Group KOL", seenAt: new Date() },
+        { wallet: alt, name: "Group KOL alt", mainWallet: kol, seenAt: new Date() },
+        { wallet: other, name: "Other KOL", seenAt: new Date() },
+      ],
+    });
+    await prisma.walletFunder.create({
+      data: { wallet: altFunded, status: "found", funder: alt, amountSol: 1, fundedAt: new Date() },
+    });
+    await prisma.kolPossibleSide.create({
+      data: {
+        wallet: possible,
+        kolWallet: kol,
+        pct: 85,
+        shared: 20,
+        kolCoins: 23,
+        hours: 48,
+        computedAt: new Date(),
+      },
+    });
+
+    const fromMain = await loadKolLabeledSides(kol);
+    expect(fromMain.map((s) => [s.wallet, s.name, s.kind])).toEqual([
+      [alt, "Group_KOL_1", "known"],
+      [altFunded, "Group_KOL_2", "funded"],
+      [possible, "Group_KOL_3", "possible"],
+    ]);
+    expect(await loadKolLabeledSides(alt)).toEqual(fromMain);
+    expect(await loadKolLabeledSides(other)).toEqual([]);
+    expect(await loadKolLabeledSides(`${TAG}-nobody`)).toEqual([]);
   });
 
   it("gives a wallet marked as a bot no side label", async () => {

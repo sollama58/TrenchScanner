@@ -1,5 +1,11 @@
 import type { WalletIdentityReader } from "./walletIdentity.js";
-import { loadPossibleSides, possibleSideText, type PossibleSide } from "./possibleSides.js";
+import {
+  loadKolLabeledSides,
+  loadPossibleSides,
+  possibleSideText,
+  type LabeledSide,
+  type PossibleSide,
+} from "./possibleSides.js";
 import {
   prisma,
   isHotFunder,
@@ -161,6 +167,11 @@ export interface WalletProfile {
   trades: WalletTrade[];
   launches: WalletCoin[];
   linked: LinkedWallet[];
+  /**
+   * On a KOL's wallet (its main or a Known Side): the KOL's labeled sides, numbered as the Side
+   * Wallet Checker's export (loadKolLabeledSides); empty on any other wallet.
+   */
+  kolSides: LabeledSide[];
 }
 
 interface RiskRow {
@@ -390,6 +401,7 @@ export async function loadWalletProfile(
 ): Promise<WalletProfile> {
   const identityRead = identity ? identity.labels(wallet).catch(() => []) : Promise.resolve([]);
   const sidesRead = loadPossibleSides([wallet]).catch(() => ({}) as Record<string, PossibleSide[]>);
+  const kolSidesRead = loadKolLabeledSides(wallet).catch(() => [] as LabeledSide[]);
   const [risk, funderRow, activityCache, holdings, activity, fundedRows, overview, kol] = await Promise.all([
     // computedAt shown as the last rebuild: the job rewrites only rows whose figures changed.
     prisma.walletRisk
@@ -549,7 +561,7 @@ export async function loadWalletProfile(
     firstSeenIsFloor = true;
   }
 
-  const [outside, sides] = await Promise.all([identityRead, sidesRead]);
+  const [outside, sides, kolSides] = await Promise.all([identityRead, sidesRead, kolSidesRead]);
   const ownLabels = walletLabels({
     wallet,
     risk,
@@ -668,5 +680,6 @@ export async function loadWalletProfile(
         score: scoreOf.get(r.wallet) ?? null,
       })),
     ],
+    kolSides,
   };
 }

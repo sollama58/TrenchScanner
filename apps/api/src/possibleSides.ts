@@ -199,3 +199,30 @@ export async function loadLabeledSides(): Promise<LabeledSide[]> {
   ];
   return numberLabeledSides(await loadPossibleSides(wallets));
 }
+
+/**
+ * One KOL's labeled sides, as the export numbers them (user ask 2026-10-15, the wallet modal under
+ * its first funder): `wallet` is the KOL's main wallet or one of its Known Sides, read as its KOL.
+ * Known Sides, the wallets it or a Known Side funded, and its Possible Sides; each wallet whose
+ * strongest label names another KOL is left to that KOL, as in the export.
+ */
+export async function loadKolLabeledSides(wallet: string): Promise<LabeledSide[]> {
+  const own = await prisma.kolWallet.findUnique({ where: { wallet }, select: { mainWallet: true } });
+  if (!own) return [];
+  const main = own.mainWallet ?? wallet;
+  const known = await prisma.kolWallet.findMany({ where: { mainWallet: main }, select: { wallet: true } });
+  const group = [main, ...known.map((k) => k.wallet).filter((w) => w !== main)];
+  const [funded, possible] = await Promise.all([
+    prisma.walletFunder.findMany({
+      where: { funder: { in: group }, status: "found", wallet: { notIn: group } },
+      select: { wallet: true },
+    }),
+    prisma.kolPossibleSide.findMany({ where: { kolWallet: { in: group } }, select: { wallet: true } }),
+  ]);
+  const wallets = [
+    ...group.filter((w) => w !== main),
+    ...funded.map((r) => r.wallet),
+    ...possible.map((r) => r.wallet),
+  ];
+  return numberLabeledSides(await loadPossibleSides(wallets)).filter((s) => s.kolWallet === main);
+}
