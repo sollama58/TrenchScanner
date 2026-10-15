@@ -174,6 +174,15 @@ describe("bubble map graph", () => {
     expect(hasHolderList(rows[1]!)).toBe(true);
     expect(hasHolderList(rows[0]!)).toBe(false);
   });
+
+  it("takes an earlier holder list whose funders were read over a newer one whose weren't", () => {
+    const holders = [{ wallet: A, pct: 12 }];
+    const rows = [
+      { linkedWalletPct: null, linkedClusters: null, linkedHolders: holders, id: 1 },
+      { linkedWalletPct: 0, linkedClusters: null, linkedHolders: holders, id: 2 },
+    ];
+    expect(pickReading(rows)?.id).toBe(2);
+  });
 });
 
 describe("bubble map link", () => {

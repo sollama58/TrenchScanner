@@ -180,8 +180,6 @@ export async function renderBubbleCard(
   ctx.fillText(clip(ctx, label, leftW), PAD, 176);
   ctx.fillStyle = INK2;
   ctx.font = `500 21px ${FONT}`;
-  // Without clusters the card is about the holders themselves (every token view has the map).
-  const holdersOnly = graph.clusters.length === 0;
   const topic = "bubble map";
   const name =
     token.name && token.symbol ? `${token.name} · ${topic}` : topic[0]!.toUpperCase() + topic.slice(1);
@@ -193,30 +191,26 @@ export async function renderBubbleCard(
   const held = graph.nodes.filter((n) => n.kind === "holder").reduce((t, n) => t + n.pct, 0);
   // Red at the app's cut: the Linked tile's count against the screen's 20 of 25.
   ctx.fillStyle =
-    !holdersOnly && count !== null && count.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, count.of)
-      ? "#ff8080"
-      : INK;
+    count !== null && count.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, count.of) ? "#ff8080" : INK;
   ctx.font = `800 62px ${FONT}`;
-  const big = holdersOnly
-    ? pctText(graph.top10Pct ?? held)
-    : linked === null
-      ? "–"
-      : count
-        ? `${count.linked}/${count.of}`
-        : pctText(linked);
+  // The headline is the bundled share (user ask 2026-10-15): supply in a funder's cluster or a
+  // KOL's bundle (mapLinked; same-exchange holders aren't a confirmed bundle), with the count
+  // beside it. Before the funders are read, the top holders' share stands in, said as such.
+  const big = linked !== null ? pctText(linked) : pctText(graph.top10Pct ?? held);
   ctx.fillText(big, PAD, 300);
   const bigW = ctx.measureText(big).width;
   ctx.fillStyle = MUTED;
   ctx.font = `500 17px ${FONT}`;
-  if (holdersOnly) {
+  if (linked !== null) {
+    ctx.fillText("of supply bundled,", PAD + bigW + 16, 272);
+    ctx.fillText(
+      count ? `${count.linked}/${count.of} top holders linked` : "KOL bundles counted",
+      PAD + bigW + 16,
+      296,
+    );
+  } else {
     ctx.fillText("of supply held by", PAD + bigW + 16, 272);
     ctx.fillText(`the top ${graph.top10Pct !== null ? 10 : holders} holders`, PAD + bigW + 16, 296);
-  } else if (count && linked !== null) {
-    ctx.fillText("top holders linked,", PAD + bigW + 16, 272);
-    ctx.fillText(`holding ${pctText(linked)}`, PAD + bigW + 16, 296);
-  } else {
-    ctx.fillText("of supply in", PAD + bigW + 16, 272);
-    ctx.fillText("linked wallets", PAD + bigW + 16, 296);
   }
 
   // Each KOL's possible side wallets on the map, listed like a funder's cluster (user ask 2026-10-14).
@@ -308,7 +302,14 @@ export async function renderBubbleCard(
         ? `${graph.sameTimeCount.linked}/${graph.sameTimeCount.of} funded the same minute, holding ${pctText(graph.sameTimePct)}`
         : `${pctText(graph.sameTimePct)} in ${sameWallets} wallets funded the same minute`,
     });
-  const notesH = notes.length * NOTE_H + (exchanges.length > 0 ? 36 : 0) + (holdersOnly ? NOTE_H : 0);
+  // Without a bundle to list, a line on why: no two share a funder, or the funders aren't read yet.
+  const holdersNote =
+    bundles.length > 0
+      ? null
+      : graph.linkedPct === null
+        ? "Who funded them isn't checked yet"
+        : "No two of them share a funder";
+  const notesH = notes.length * NOTE_H + (exchanges.length > 0 ? 36 : 0) + (holdersNote ? NOTE_H : 0);
   const fits = (n: number) =>
     LIST_TOP + n * ROW_H + (bundles.length > n ? MORE_H : 0) + notesH <= LEFT_BOTTOM;
   let shown = Math.min(bundles.length, MIN_ROWS);
@@ -351,14 +352,10 @@ export async function renderBubbleCard(
     ctx.fillText(`and ${bundles.length - shown} more`, PAD + 26, y - 6);
     y += MORE_H;
   }
-  if (holdersOnly) {
+  if (holdersNote) {
     ctx.fillStyle = INK2;
     ctx.font = `500 18px ${FONT}`;
-    ctx.fillText(
-      linked === 0 ? "No two of them share a funder" : "Who funded them isn't checked yet",
-      PAD,
-      y,
-    );
+    ctx.fillText(holdersNote, PAD, y);
     y += NOTE_H;
   }
   for (const n of notes) {
