@@ -1725,12 +1725,18 @@ export function linkedCountText(c: { linked: number; of: number } | null): strin
   return c ? `${c.linked}/${c.of}` : null;
 }
 
-/** The reading to draw: the newest with linked clusters, else with a holder list, else any linked reading. */
+/**
+ * The reading to draw: the newest with linked clusters, else the newest whose holder list came
+ * with its funders read, else with a holder list, else any linked reading. A scan whose funder
+ * lookups ran past the cycle keeps the holder list without the linked reading, so the newest list
+ * alone would read "not checked yet" while an earlier scan of the coin had checked them.
+ */
 export function pickReading<S extends Pick<Snapshot, "linkedWalletPct" | "linkedClusters" | "linkedHolders">>(
   snapshots: readonly S[],
 ): S | null {
   return (
     snapshots.find((s) => s.linkedWalletPct != null && (s.linkedClusters?.length ?? 0) > 0) ??
+    snapshots.find((s) => s.linkedWalletPct != null && hasHolderList(s)) ??
     snapshots.find(hasHolderList) ??
     snapshots.find((s) => s.linkedWalletPct != null) ??
     null
