@@ -21,6 +21,10 @@ import {
   scoreRuleSet,
   NEVER_EMIT_THRESHOLD,
   rankFromQuantiles,
+  loadLiveScales,
+  onLiveMembers,
+  seatLiveCutoff,
+  type LiveScales,
   scoreAgreement,
   scoreBlend,
   scoreCandidateWithModel,
@@ -437,7 +441,7 @@ async function callCounts() {
 export async function buildModelLineup(env: Env): Promise<ModelLineup> {
   const state = await contestState(env);
   const since = new Date(Date.now() - ATTRIBUTION_SAMPLE_HOURS * HOUR_MS);
-  const [calls, sampleRows, moments24h] = await Promise.all([
+  const [calls, sampleRows, moments24h, live] = await Promise.all([
     callCounts(),
     prisma.candidateOutcome.findMany({
       where: { sampleKind: "event", anchorAt: { gte: since } },
@@ -448,6 +452,8 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
     prisma.candidateOutcome.count({
       where: { sampleKind: "event", anchorAt: { gte: new Date(Date.now() - 24 * HOUR_MS) } },
     }),
+    // The cutoffs and member ranks the worker decides on (curation/liveScale.ts).
+    loadLiveScales(env.CURATED_HIGH_CONVICTION_RANK),
   ]);
   const sample = sampleRows.map((r) => asFeatures(r.features)).filter((f): f is Features => f !== null);
   const deepRead = sample.filter((f) => f.nsDepthFull === 1);
@@ -539,12 +545,12 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
       const narrative = spec.role === "narrative";
       const acc = accumulator();
       const probs = new Float64Array(sample.length);
+      for (let i = 0; i < sample.length; i++) probs[i] = scoreCandidateWithModel(params, sample[i]!);
+      const cutoff = seatLiveCutoff(spec.id, params, live);
       for (let i = 0; i < sample.length; i++) {
         const f = sample[i]!;
-        const p = scoreCandidateWithModel(params, f);
-        probs[i] = p;
         if (narrative && f.nsDepthFull !== 1) continue;
-        addContributions(acc, featureContributions(params, f), p >= params.threshold);
+        addContributions(acc, featureContributions(params, f), probs[i]! >= cutoff);
       }
       if (spec.role === "learner") probabilities.set(spec.id, probs);
       seat.inputs = inputWeights(acc, params);
@@ -567,7 +573,7 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
         params.kind === TOP_SLICE_MODEL_KIND ||
         params.kind === STACKED_MODEL_KIND)
     ) {
-      explainCombiner(seat, params, probabilities, sample.length, names);
+      explainCombiner(seat, onLiveMembers(params, live), probabilities, sample.length, names);
     }
     if (!seat.cutoff.fromExam) seat.cutoff.callsTopPct = seat.cutoff.sampleCallsPct;
     seats.set(spec.id, seat);
@@ -786,13 +792,16 @@ export async function explainCall(env: Env, alertId: string): Promise<CallExplai
         : "The model that made this call is no longer stored.";
     return out;
   }
+  // Read on today's live scales, as the worker decides now (curation/liveScale.ts).
+  const live: LiveScales = await loadLiveScales(env.CURATED_HIGH_CONVICTION_RANK);
   if (isLearnerParams(params)) {
     const p = scoreCandidateWithModel(params, features);
     const pushed = pushes(params, features);
+    const cutoff = alert.model ? seatLiveCutoff(alert.model, params, live) : params.threshold;
     Object.assign(out, {
       recomputed: true,
       score: Math.round(p * 1000) / 10,
-      cutoff: Math.round(params.threshold * 1000) / 10,
+      cutoff: Math.round(cutoff * 1000) / 10,
       pushesFor: pushed.for,
       pushesAgainst: pushed.against,
     });
@@ -807,7 +816,7 @@ export async function explainCall(env: Env, alertId: string): Promise<CallExplai
     const map = new Map<string, number>();
     const memberParams = new Map<string, TrainedCuratorParams>();
     const members: CallMember[] = [];
-    for (const m of params.members) {
+    for (const m of onLiveMembers(params, live).members) {
       const mp = await loadParams(m.modelId);
       const probability = isLearnerParams(mp) ? scoreCandidateWithModel(mp, features) : null;
       if (probability !== null && isLearnerParams(mp)) {
@@ -830,10 +839,10 @@ export async function explainCall(env: Env, alertId: string): Promise<CallExplai
     if (params.kind !== STACKED_MODEL_KIND) {
       const score =
         params.kind === AGREEMENT_MODEL_KIND
-          ? scoreAgreement(params, map)
+          ? scoreAgreement(onLiveMembers(params, live), map)
           : params.kind === BLEND_MODEL_KIND
-            ? scoreBlend(params, map)
-            : scoreTopSlice(params, map);
+            ? scoreBlend(onLiveMembers(params, live), map)
+            : scoreTopSlice(onLiveMembers(params, live), map);
       out.score = Math.round(score * 1000) / 10;
       out.cutoff = Math.round(params.threshold * 1000) / 10;
     } else {

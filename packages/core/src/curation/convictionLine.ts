@@ -13,8 +13,11 @@
  * CandidateOutcome row (seatScores). A seat with fewer than LIVE_CONVICTION_MIN_SAMPLES scores in
  * the window gets no live line and keeps its shipped one. A run that hasn't earned the tier ships
  * no line, and the live line doesn't change that: it moves where the line sits, not whether a
- * seat tiers.
+ * seat tiers. The worker draws these lines with the seats' other live scales (liveScale.ts), which
+ * also leave out a slot's scores from before evolution handed it a new recipe.
  */
+
+import { scoreAtRank } from "./liveScale.js";
 
 /** How far back a seat's live scores count toward its line. */
 export const LIVE_CONVICTION_WINDOW_HOURS = 24;
@@ -53,8 +56,7 @@ export function liveConvictionLines(
   for (const [seat, scores] of bySeat) {
     if (scores.length < Math.max(1, minSamples)) continue;
     scores.sort((a, b) => b - a);
-    const k = Math.min(scores.length, Math.max(1, Math.ceil(scores.length * (1 - rank))));
-    lines.set(seat, scores[k - 1]!);
+    lines.set(seat, scoreAtRank(scores, rank));
   }
   return lines;
 }

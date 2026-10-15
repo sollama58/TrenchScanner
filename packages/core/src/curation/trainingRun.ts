@@ -251,7 +251,8 @@ function recordAbove(calls: ScoredOutcome[], rankCutoff: number, cooldownMs: num
 }
 
 /**
- * What ships beside a model's cutoff: the high-conviction line (the probability at
+ * What ships beside a model's cutoff: the cutoff's own rank (cutoffRank, which the worker reads on
+ * live scores - curation/liveScale.ts), the high-conviction line (the probability at
  * cfg.highConvictionRank over the reference rows, the same way the cutoff is translated) and the
  * calibration table fitted on the newest out-of-sample calls (curation/calibration.ts).
  *
@@ -273,6 +274,7 @@ function servedExtras(
   cutoff: number | null,
 ): { extras: ServedCuratorExtras; highConviction: StoredEvalMetrics["highConviction"] } {
   const extras: ServedCuratorExtras = {};
+  if (cutoff !== null) extras.cutoffRank = cutoff;
   let highConviction: StoredEvalMetrics["highConviction"];
   if (cfg.highConvictionRank !== undefined && outOfSampleRanks.length > 0) {
     const cooldownMs = cfg.cooldownHours * 3_600_000;
