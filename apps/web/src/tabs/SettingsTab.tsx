@@ -2,7 +2,7 @@ import { type Settings } from "../api";
 import { loadSettings, useSettings } from "../alerts";
 import { Skeleton } from "../components/Charts";
 import { BurnPanel } from "../components/BurnPanel";
-import { AppearancePanel } from "../components/AppearancePanel";
+import { FeedPanel } from "../components/FeedPanel";
 import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
 import { ShieldIcon, SlidersIcon, StreamIcon } from "../components/Icons";
 import { setAppearance, useAppearance } from "../appearance";
@@ -10,25 +10,36 @@ import { useNow } from "../hooks";
 import { ago, shortAddress } from "../format";
 
 /**
- * Settings: how your feed looks, your phones, and your account and access. How alerts reach you
- * (sound, browser notifications, Telegram) and which model's calls you get live on the Filters
- * tab now, next to the filters they apply to.
+ * Settings: your feed (the Model alerts switch and the feed's stats), extra tabs, your phones, and
+ * your account and access. How alerts reach you (sound, browser notifications, Telegram) lives on
+ * the Filters tab, next to the filters they apply to; which models' calls you get is picked on the
+ * Models tab; how the feed looks is the Live feed's Customize button.
  */
-export function SettingsTab({ goTo }: { goTo: (tab: "filters") => void }) {
+export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live") => void }) {
   const settings = useSettings();
 
   return (
     <div className="stack settings">
       <p className="notice small moved-note">
-        <SlidersIcon size={13} /> Alert sounds, browser notifications, Telegram alerts and your preferred
-        model moved to the{" "}
-        <button type="button" className="link" onClick={() => goTo("filters")}>
-          Filters tab
-        </button>
-        .
+        <SlidersIcon size={13} />
+        <span>
+          Alert sounds, browser notifications and Telegram alerts are on the{" "}
+          <button type="button" className="link" onClick={() => goTo("filters")}>
+            Filters tab
+          </button>
+          , which models you follow on the{" "}
+          <button type="button" className="link" onClick={() => goTo("model")}>
+            Models tab
+          </button>
+          , and how your feed looks under <strong>Customize</strong> on the{" "}
+          <button type="button" className="link" onClick={() => goTo("live")}>
+            Live feed
+          </button>
+          .
+        </span>
       </p>
+      <FeedPanel goTo={goTo} />
       <TabsPanel />
-      <AppearancePanel />
       <ConnectPhonePanel />
       <AccountPanel account={settings?.account ?? null} />
     </div>

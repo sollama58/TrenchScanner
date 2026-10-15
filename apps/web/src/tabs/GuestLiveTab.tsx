@@ -3,7 +3,7 @@ import type { MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
 import { AboutModal } from "../components/AboutModal";
-import { ChartIcon, ClockIcon, InfoIcon, LockIcon, PaletteIcon, RadarIcon } from "../components/Icons";
+import { ClockIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { usePolling, useNow } from "../hooks";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
@@ -94,22 +94,8 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
           </div>
           <div className="feed-controls">
             <button type="button" className="ghost stats-btn" disabled title={lockTitle}>
-              <ChartIcon size={14} />
-              Stats
-            </button>
-            <button type="button" className="ghost stats-btn" disabled title={lockTitle}>
               <PaletteIcon size={14} />
               Customize
-            </button>
-            <button type="button" role="switch" aria-checked className="switch on" disabled title={lockTitle}>
-              <span className="switch-track">
-                <span className="switch-thumb" />
-              </span>
-              Model alerts
-            </button>
-            <button type="button" className="ghost stats-btn" disabled title={lockTitle}>
-              <LockIcon size={13} />
-              {many ? `Top ${models.length}` : data ? data.model.name : "Model"}
             </button>
             <span className="delay-pill" title={`Guests see each call ${delay} minutes after it is made`}>
               <ClockIcon size={13} />

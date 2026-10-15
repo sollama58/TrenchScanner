@@ -1,97 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Card, CardField, NarrativeNoteReadiness, QuickLink } from "../api";
+import type { CardField, NarrativeNoteReadiness, QuickLink } from "../api";
 import {
   CARD_FIELD_GROUPS,
-  defaultLook,
   HIDE_BELOW_MCAP,
   PRESETS,
   QUICK_LINK_SITES,
   SWATCHES,
-  feedGridProps,
   sameAppearance,
   setAppearance,
   useAppearance,
   useAppearanceSave,
   withPreset,
-  cardHideSet,
 } from "../appearance";
-import { AlertCard } from "./AlertCard";
-import { PaletteIcon } from "./Icons";
-import { useNow } from "../hooks";
 import { useNarrativeNoteReadiness } from "../narrativeNote";
 
 /**
- * Settings › Feed appearance: theme, colors, spacing, columns and which card fields show, with a
- * live preview card. Every change shows at once and is saved to the wallet's account, so the look
- * follows the user to their other devices.
- */
-export function AppearancePanel() {
-  const look = useAppearance();
-  const save = useAppearanceSave();
-  const now = useNow(60_000);
-  const [sample, setSample] = useState<"won" | "missed">("won");
-  const hidden = useMemo(() => cardHideSet(look), [look]);
-  const cards = useMemo(() => sampleCards(now), [now]);
-  const isDefault = sameAppearance(look, defaultLook(look));
-
-  return (
-    <section className="panel appearance" id="feed-appearance">
-      <header className="section-head">
-        <div>
-          <span className="eyebrow">
-            <PaletteIcon size={13} /> Feed appearance
-          </span>
-          <h2>How your feed looks</h2>
-          <p className="muted small">
-            Changes show at once and are saved to your wallet&apos;s account, so your feed looks the same on
-            every device you sign in on.
-          </p>
-        </div>
-        <div className="appearance-actions">
-          <SaveNote save={save} />
-          <button className="ghost" disabled={isDefault} onClick={() => setAppearance(defaultLook(look))}>
-            Reset to default
-          </button>
-        </div>
-      </header>
-
-      <div className="appearance-layout">
-        <div className="appearance-preview">
-          <div className="preview-head">
-            <span className="small muted">Preview</span>
-            <div className="segmented small" role="tablist" aria-label="Preview card">
-              <button
-                role="tab"
-                aria-selected={sample === "won"}
-                className={sample === "won" ? "on" : ""}
-                onClick={() => setSample("won")}
-              >
-                Model call, won
-              </button>
-              <button
-                role="tab"
-                aria-selected={sample === "missed"}
-                className={sample === "missed" ? "on" : ""}
-                onClick={() => setSample("missed")}
-              >
-                Your filter, missed
-              </button>
-            </div>
-          </div>
-          <div className="cards preview-cards" {...feedGridProps({ ...look, columns: 1, phoneColumns: 1 })}>
-            <AlertCard card={cards[sample]} now={now} labelSource hide={hidden} detail={false} />
-          </div>
-        </div>
-
-        <AppearanceControls />
-      </div>
-    </section>
-  );
-}
-
-/**
- * Every appearance control (presets, theme and colors, layout, card fields). Shared by the Settings
- * section and the Live tab's Customize panel, where the feed itself is the preview.
+ * Every appearance control (presets, theme and colors, layout, card fields), in the Live and Stream
+ * tabs' Customize panel, where the feed itself is the preview. Every change shows at once and is
+ * saved to the wallet's account, so the look follows the user to their other devices.
  */
 export function AppearanceControls() {
   const look = useAppearance();
@@ -579,7 +505,6 @@ function McapLine({ value, on, onCommit }: { value: number; on: boolean; onCommi
   );
 }
 
-/** Two made-up cards for the preview: a model call that ran to 4x, and a filter alert that missed. */
 /** What the automatic Narrative default is doing, and why. */
 function narrativeAutoHint(n: NarrativeNoteReadiness | null): string {
   if (!n) return "off until the Narrative model's record loads.";
@@ -593,103 +518,4 @@ function narrativeAutoHint(n: NarrativeNoteReadiness | null): string {
       ? "no graded calls yet"
       : `${n.winRatePct.toFixed(0)}%${range} over ${n.graded} graded call${n.graded === 1 ? "" : "s"}`;
   return n.ready ? `on, ${record}. It ${rule}.` : `off for now, ${record}. It ${rule}.`;
-}
-
-function sampleCards(now: number): { won: Card; missed: Card } {
-  const at = (minAgo: number) => new Date(now - minAgo * 60_000).toISOString();
-  const snapshot = (mcap: number, extra: Partial<Card["snapshot"]> = {}): Card["snapshot"] => ({
-    takenAt: at(42),
-    priceUsd: mcap / 1e9,
-    marketCapUsd: mcap,
-    liquidityUsd: 9_800,
-    volume24hUsd: 61_400,
-    volume5mUsd: 18_200,
-    volume1hUsd: 47_900,
-    volumeToMcapRatio: 2.4,
-    buys24h: 412,
-    sells24h: 233,
-    holderCount: 186,
-    holderGrowthPct: 12,
-    top10HolderPct: 24.6,
-    devWalletPct: 2.1,
-    riskScore: 1,
-    freshTop10WalletPct: 30,
-    emptyTop10WalletPct: 20,
-    sniperTop10WalletPct: 30,
-    firstBuyersHolding: 9,
-    firstBuyersSeen: 25,
-    devHolding: false,
-    ageMinutes: 14,
-    graduated: false,
-    score: 82,
-    ...extra,
-  });
-  const won: Card = {
-    id: "preview-won",
-    kind: "curated",
-    tokenId: "preview-1",
-    matchedAt: at(42),
-    score: 71,
-    peakReturnPct: 312,
-    token: {
-      id: "preview-1",
-      mintAddress: "PreviewMint111111111111111111111111111pump",
-      symbol: "SAMPLE",
-      name: "Sample Coin",
-      imageUrl: null,
-    },
-    snapshot: snapshot(24_500),
-    latestSnapshot: null,
-    currentMarketCapUsd: 78_900,
-    filter: null,
-    curated: {
-      alertId: "preview-won",
-      source: "model",
-      model: "preview",
-      modelName: "Gradient Boost",
-      confidence: 82,
-      tier: "high",
-      calibratedPct: 41,
-      reasons: ["Strong buy pressure", "Holders growing fast", "Low top 10 share"],
-      alertedAt: at(42),
-      narrative: { verdict: "agrees", at: at(30) },
-      outcome: {
-        status: "won",
-        hit2x: true,
-        hitGoal: true,
-        hitTenX: false,
-        peak1hReturnPct: 312,
-        maxDrawdown1hPct: -12,
-        peak24hReturnPct: 312,
-        runPeakMinutes: 21,
-        finalized: true,
-        minutesLeft: null,
-      },
-    },
-  };
-  const missed: Card = {
-    id: "preview-missed",
-    kind: "match",
-    tokenId: "preview-2",
-    matchedAt: at(35),
-    score: 58,
-    peakReturnPct: 38,
-    token: {
-      id: "preview-2",
-      mintAddress: "PreviewMint222222222222222222222222222pump",
-      symbol: "DEMO",
-      name: "Demo Token",
-      imageUrl: null,
-    },
-    snapshot: snapshot(18_200, { freshTop10WalletPct: 80, holderCount: 97, devHolding: true, score: 64 }),
-    latestSnapshot: null,
-    currentMarketCapUsd: 11_300,
-    filter: { id: "preview", name: "My filter" },
-    curated: null,
-    hit2xIn1h: false,
-    hit4xIn1h: false,
-    hit10xIn1h: false,
-    disqualified: false,
-  };
-  return { won, missed };
 }

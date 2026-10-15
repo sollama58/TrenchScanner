@@ -2094,6 +2094,26 @@ g:hover > .hit {
   color: var(--ink);
   transform: translateX(2px);
 }
+/* Above the Models vs baseline bars: what the reader's feed follows, and "Use the default". */
+.feed-pick-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 8px;
+}
+.feed-pick-row p {
+  margin: 0;
+}
+.feed-pick-row button {
+  flex: none;
+}
+@media (max-width: 640px) {
+  .feed-pick-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
 /* A switch before each row (the model's calls on your live feed); the head and axis rows step in to match. */
 .mbar-line {
   display: flex;
@@ -7316,6 +7336,13 @@ button.small-btn {
   align-items: center;
   gap: 8px;
   margin: 0;
+}
+.settings .moved-note > svg {
+  flex: none;
+}
+.feed-panel .feed-stats-title {
+  margin: 20px 0 8px;
+  font-size: 15px;
 }
 .settings .moved-note .link {
   font: inherit;

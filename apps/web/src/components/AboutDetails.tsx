@@ -330,8 +330,8 @@ export function AboutDetails({ targets }: { targets: Targets }) {
         <h3>Staying current</h3>
         <p>
           New alerts arrive the moment they fire while the dot by the feed says Live, and every 30 seconds
-          otherwise. The Model alerts switch and the model picker choose whose calls you see. Your own alerts
-          always show.
+          otherwise. The Model alerts switch in Settings and the switches on the Models tab choose whose calls
+          you see. Your own alerts always show.
         </p>
       </section>
     </div>

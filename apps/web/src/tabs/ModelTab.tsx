@@ -144,7 +144,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
               {guest
                 ? `, ${GUEST_DELAY_MINUTES} minutes after each call. Connect a wallet to pick models`
                 : ""}
-              {lb.showModelAlerts ? "" : ", though model alerts are switched off on Live"}.
+              {lb.showModelAlerts ? "" : ", though Model alerts are switched off in Settings"}.
             </p>
           </div>
         </div>
@@ -413,11 +413,12 @@ function BaselineChart({
   // same saved list as the Live tab's model picks; it changes only this reader's feed.
   const [busy, setBusy] = useState(false);
   const [feedError, setFeedError] = useState<string | null>(null);
-  const toggleFeed = async (id: string) => {
+  // null = follow the default (the top models plus the champion); else the models to show.
+  const saveFeed = async (models: string[] | null) => {
     setBusy(true);
     setFeedError(null);
     try {
-      await onSetModels(toggledModels(board, id));
+      await onSetModels(models);
     } catch (e) {
       setFeedError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -436,7 +437,7 @@ function BaselineChart({
         : on
           ? `Showing ${e.name}'s calls on your live feed. Switch off to hide them.`
           : `Show ${e.name}'s calls on your live feed`,
-      onChange: () => void toggleFeed(e.id),
+      onChange: () => void saveFeed(toggledModels(board, e.id)),
     };
   };
 
@@ -524,6 +525,35 @@ function BaselineChart({
             </div>
           </div>
 
+          {!guest && (
+            <div className="feed-pick-row">
+              <p className="muted small">
+                {board.followBest !== false ? (
+                  <>
+                    Your Live feed follows <strong>the default</strong>: the {board.defaultRule?.count ?? 3}{" "}
+                    models with the best proven 2x rate plus the champion (marked default below), updated as
+                    the ranking changes. Switching a model on or off switches you to your own picks.
+                  </>
+                ) : (
+                  <>
+                    Your Live feed shows <strong>your own picks</strong>, switched on below. It won&apos;t
+                    change when the top models do.
+                  </>
+                )}
+              </p>
+              {board.followBest === false && (
+                <button
+                  type="button"
+                  className="ghost small-btn"
+                  disabled={busy || refreshing || loading}
+                  onClick={() => void saveFeed(null)}
+                  title="Follow the top models plus the champion, updated as the ranking changes"
+                >
+                  Use the default
+                </button>
+              )}
+            </div>
+          )}
           {feedError && <p className="error small">Couldn&apos;t change your feed: {feedError}</p>}
           {rows.length > 0 ? (
             <>
@@ -536,9 +566,10 @@ function BaselineChart({
                     label: e.name,
                     value: rate,
                     sub:
-                      caught && e.liveCatch
+                      (e.isDefault ? "default · " : "") +
+                      (caught && e.liveCatch
                         ? `${e.liveCatch.caught} of ${e.liveCatch.runners} runner${e.liveCatch.runners === 1 ? "" : "s"}`
-                        : `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`,
+                        : `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`),
                     display: rate === null ? "–" : `${rate.toFixed(1)}%`,
                     note: `${signedPct(profit)} profit`,
                     noteTone: profit === null || profit === 0 ? undefined : profit > 0 ? "up" : "down",
@@ -1636,9 +1667,9 @@ function HowItWorks({ board }: { board: Leaderboard }) {
               among those with at least {board.defaultRule.rankMinGraded ?? board.defaultRule.minGraded}{" "}
               graded calls over the last {board.defaultRule.rankWindowHours ?? board.defaultRule.windowHours}
               h, picked every {Math.round(board.defaultRule.refreshMinutes / 60)} hours (00, 06, 12 and 18
-              UTC) and held until the next pick. The champion always holds one of those places, taking the
-              last one when it did not rank in. Everyone who follows the default sees their calls combined.
-              Until enough models qualify, it is the best performer on this board alone.
+              UTC) and held until the next pick. The champion joins them when it did not rank in, so the
+              default is 4 models at most. Everyone who follows the default sees their calls combined. With
+              fewer qualifying it is the ones that do plus the champion; with none, the best performer alone.
             </>
           ) : (
             <>

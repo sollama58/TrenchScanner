@@ -26,10 +26,12 @@ import { wilsonLowerBound } from "./trainer.js";
  *    the training runs in between;
  *  - a held model that can no longer call (its new run can't, or a combiner sits out) gives its
  *    place to the next-ranked model that can, rather than holding a silent slot until the next pick;
- *  - with fewer than TOP_MODELS_COUNT qualifying models the default stays on the single champion.
+ *  - with fewer than TOP_MODELS_COUNT qualifying models the pick is the ones that do; with none the
+ *    default stays on the single champion.
  *
- * The champion always holds a place in the default feed (resolveDefaultModels, feedModels.ts; user
- * decision 2026-10-14): when it did not rank into the pick, it takes the last slot.
+ * The champion always joins the default feed (resolveDefaultModels, feedModels.ts; user decisions
+ * 2026-10-14 and 2026-10-15): when it did not rank into the pick it is added after it, so the
+ * default feed is 4 models at most.
  *
  * The same read also names the "best" model (user decision 2026-10-12): the best average return
  * under the fixed exit plan over the last 24 hours, and gives each model's 24h record for the
@@ -91,7 +93,7 @@ export function last24hOf(s: TopModelStanding, minGraded = TOP_MODELS_MIN_GRADED
 }
 
 export interface TopModels {
-  /** The default feed's models, best lower bound first; null when too few qualify. */
+  /** The top models, best lower bound first (up to TOP_MODELS_COUNT); null when none qualify. */
   top: string[] | null;
   /** The best average exit-plan return; null when no model qualifies. */
   best: string | null;
@@ -132,7 +134,7 @@ export function pickTopModels(
 /**
  * A slot's held pick as it can be served now: its models that can still call, in held order,
  * topped back up from `ranked` (the ranking over the same fixed window) when one of them can't.
- * A held pick that was empty (too few qualified at the slot's start) stays empty. Null = none.
+ * A held pick that was empty (none qualified at the slot's start) stays empty. Null = none.
  */
 export function servableTopModels(
   held: readonly string[],
@@ -246,7 +248,9 @@ export function loadTopModels(
       });
     const daily = standingsOf(day);
     const ranked = rankTopModels(standingsOf(rankWindow));
-    const fresh = ranked.length >= TOP_MODELS_COUNT ? ranked.slice(0, TOP_MODELS_COUNT) : null;
+    // Fewer than TOP_MODELS_COUNT qualifying still makes a pick of the ones that do: before, two
+    // proven models were dropped for the champion alone.
+    const fresh = ranked.length > 0 ? ranked.slice(0, TOP_MODELS_COUNT) : null;
     return {
       top: await heldTopModels(new Date(slot), fresh, ranked, calling),
       best: pickBestReturnModel(daily),
