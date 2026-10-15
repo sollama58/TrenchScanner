@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
-import { ApiError, post, type Subscription, type User, type WorkerHealth } from "./api";
+import { ApiError, post, type Subscription, type User } from "./api";
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
 import { GUEST_DELAY_MINUTES, isGuest, setGuest, setSessionToken } from "./session";
 import { usePolling } from "./hooks";
@@ -340,7 +340,6 @@ export function App() {
             </nav>
           )}
           <div className="topbar-right">
-            <WorkerStatus showJobs={isAdmin} />
             {guest && (
               <button className="button primary connect-btn" onClick={connectWallet}>
                 Connect wallet
@@ -458,8 +457,10 @@ export function App() {
             <AlertNotifier />
             <div className="tab-view" key={tab} {...panelProps}>
               <Suspense fallback={<Boot />}>
-                {tab === "live" && <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} />}
-                {tab === "stream" && <StreamView />}
+                {tab === "live" && (
+                  <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} isAdmin={isAdmin} />
+                )}
+                {tab === "stream" && <StreamView isAdmin={isAdmin} />}
                 {tab === "model" && <ModelTab />}
                 {tab === "lighthouse" && <LighthouseTab />}
                 {tab === "filters" && <FiltersTab goTo={goTo} />}
@@ -500,115 +501,6 @@ export function App() {
         </a>
       </footer>
     </div>
-  );
-}
-
-/** A pill for the scanner's health, from the public worker heartbeat. */
-/** Past this, a stage that normally produces every few minutes reads as stalled in the tooltip. */
-const STAGE_STALE_MS = 15 * 60_000;
-
-/** "42s ago", "12m 5s ago", "3h 10m ago": finer than ago(), since a stall is minutes long. */
-function since(iso: string | null | undefined, now: number): string {
-  if (!iso) return "not yet";
-  const s = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s ago`;
-  const h = Math.floor(m / 60);
-  if (h < 48) return `${h}h ${m % 60}m ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
-/** `showJobs`: the per-job rows, for admin wallets only - everyone else sees the alert pipeline. */
-function WorkerStatus({ showJobs }: { showJobs: boolean }) {
-  const { data } = usePolling<WorkerHealth>("/health/worker", 30_000);
-  const [open, setOpen] = useState(false);
-  const [now, setNow] = useState(Date.now());
-  // The ages count up live while the tooltip is showing.
-  useEffect(() => {
-    if (!open) return;
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [open]);
-  const scan = data?.jobs.find((j) => j.job === "scan");
-  // Until the heartbeat lands, an invisible pill of the usual size holds its place, so the topbar
-  // doesn't shift when the real one appears.
-  if (!data)
-    return (
-      <span className="status-wrap" aria-hidden style={{ visibility: "hidden" }}>
-        <span className="status-pill">
-          <span className="pulse" />
-          Scanning<span className="faint"> · 10s ago</span>
-        </span>
-      </span>
-    );
-  // Only the scan loop decides the pill: daily jobs (cleanup, outcome tracking) read as stale for
-  // most of the day by design, and the user is asking "is it finding tokens right now".
-  const bad = !scan || scan.stale || scan.hung;
-  const p = data.pipeline;
-  const stages = p
-    ? [
-        { label: "Last alert by any model", at: p.lastAlertAt },
-        { label: "Last token passed pre-check", at: p.lastPreCheckPassAt },
-        { label: "Last token back from TokenSage", at: p.lastTokenSageAt },
-        { label: "Last token considered by any model", at: p.lastDecisionAt },
-      ]
-    : [];
-  return (
-    <span
-      className="status-wrap"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
-      onBlur={() => setOpen(false)}
-    >
-      <span
-        role="status"
-        tabIndex={0}
-        aria-label={bad ? "Scanner lagging" : "Scanning"}
-        aria-describedby="status-tip"
-        className={`status-pill ${bad ? "warn" : "ok"}`}
-      >
-        <span className="pulse" />
-        {bad ? "Scanner lagging" : "Scanning"}
-        {scan && <span className="faint"> · {ago(scan.lastSuccessAt)}</span>}
-      </span>
-      <span id="status-tip" role="tooltip" className={`status-tip${open ? " open" : ""}`}>
-        {stages.length > 0 && (
-          <>
-            <span className="status-tip-head">Alert pipeline</span>
-            {stages.map((st) => {
-              const late = !st.at || now - new Date(st.at).getTime() > STAGE_STALE_MS;
-              return (
-                <span key={st.label} className="status-tip-row">
-                  <span className={`status-tip-dot ${late ? "warn" : "ok"}`} />
-                  <span className="status-tip-label">{st.label}</span>
-                  <span className={`status-tip-val num${late ? " warn" : ""}`}>{since(st.at, now)}</span>
-                </span>
-              );
-            })}
-          </>
-        )}
-        {showJobs && (
-          <>
-            <span className="status-tip-head">Jobs</span>
-            {data.jobs.map((j) => {
-              const late = j.stale || j.hung;
-              return (
-                <span key={j.job} className="status-tip-row">
-                  <span className={`status-tip-dot ${late ? "warn" : "ok"}`} />
-                  <span className="status-tip-label">{j.job}</span>
-                  <span className={`status-tip-val num${late ? " warn" : ""}`}>
-                    {j.hung ? "running too long" : since(j.lastSuccessAt, now)}
-                  </span>
-                </span>
-              );
-            })}
-          </>
-        )}
-      </span>
-    </span>
   );
 }
 

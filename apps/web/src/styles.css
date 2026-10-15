@@ -491,11 +491,16 @@ input[type="checkbox"] {
 .status-pill.warn {
   color: var(--warn-ink);
 }
-/* The pill's hover/focus card: when each stage of the alert path last produced, then each job. A
-   sibling of the pill, not a child, so the phone layout's font-size: 0 on the pill doesn't hide it. */
+/* The Scanning pill in each feed's header (components/ScanStatus.tsx) and its card: how the feed is
+   updating, when each stage of the alert path last produced, then each job. */
 .status-wrap {
   position: relative;
   display: inline-flex;
+}
+.status-wrap .status-pill {
+  cursor: default;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 .status-pill:focus-visible {
   outline: 2px solid var(--border-strong);
@@ -562,6 +567,9 @@ input[type="checkbox"] {
 }
 .status-tip-dot.warn {
   background: var(--warn);
+}
+.status-tip-dot.idle {
+  background: var(--muted);
 }
 .status-tip-val {
   text-align: right;
@@ -1050,33 +1058,6 @@ input[type="checkbox"] {
 }
 
 /* ---------- Feed ---------- */
-.live-dot {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-}
-.live-dot::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--muted);
-}
-.live-dot.on {
-  color: var(--good-ink);
-  border-color: color-mix(in srgb, var(--good) 35%, transparent);
-  background: var(--good-wash);
-}
-.live-dot.on::before {
-  background: var(--good-ink);
-  animation: pulse 2s infinite;
-}
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
@@ -4518,15 +4499,6 @@ button.small-btn {
   .topbar-right {
     gap: 6px;
     min-width: 0;
-  }
-  .status-pill {
-    padding: 8px;
-    gap: 0;
-    font-size: 0;
-  }
-  .status-pill .pulse {
-    width: 8px;
-    height: 8px;
   }
   .wallet-pill {
     padding: 6px 10px;
@@ -9336,14 +9308,13 @@ button.small-btn {
 
 /* ---------- Stream tab (components/StreamView.tsx) ---------- */
 /* Narrower desktop windows, and any desktop width once the Stream tab is switched on (the header row
-   stops growing at 1360px): the tabs pad a little less, and the scanner pill and the admin tag give
-   up their extras, so the header row still fits. */
+   stops growing at 1360px): the tabs pad a little less, and the admin tag gives way, so the header
+   row still fits. */
 @media (min-width: 981px) and (max-width: 1439px) {
   .tabs button,
   .tabs .tab-link {
     padding: 7px 11px;
   }
-  .topbar .status-pill .faint,
   .topbar .wallet-pill .admin-tag {
     display: none;
   }
@@ -9353,7 +9324,6 @@ button.small-btn {
   .topbar.packed .tabs .tab-link {
     padding: 7px 11px;
   }
-  .topbar.packed .status-pill .faint,
   .topbar.packed .wallet-pill .admin-tag {
     display: none;
   }
