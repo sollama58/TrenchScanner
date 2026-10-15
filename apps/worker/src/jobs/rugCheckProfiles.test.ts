@@ -9,6 +9,8 @@ import {
 } from "@trenchscanner/core";
 import {
   STALE_MAX_AGE_MS,
+  YOUNG_ABSENT_RECHECK_MINUTES,
+  absentTtlFor,
   resetRugCheckBackoff,
   resolveRugProfiles,
   settleRugCheckRefresh,
@@ -307,6 +309,37 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     expect(next.stats).toMatchObject({ cached: 1, fetched: 0 });
   });
 
+  it("re-asks a young coin's 'no report' after a minute, an old coin's only after the TTL", async () => {
+    // RugCheck indexes a launch minutes after it is first seen: on the report TTL a coin seen at
+    // launch kept "no report" past most of its decision moments (2026-10-14/15).
+    const [young, old] = [mint("absent-young"), mint("absent-old")];
+    const answers: Record<string, RugCheckProfileResult> = {
+      [young]: { status: "absent" },
+      [old]: { status: "absent" },
+    };
+    const { client, calls } = fakeClient(answers);
+    await resolveRugProfiles([young, old], client, 5);
+    await prisma.rugCheckCache.updateMany({
+      where: { mintAddress: { in: [young, old] } },
+      data: { checkedAt: new Date(Date.now() - 90_000) },
+    });
+    calls.length = 0;
+    answers[young] = { status: "found", profile: profile(young, 60) };
+    answers[old] = { status: "found", profile: profile(old, 70) };
+    const firstSeen = new Map([
+      [young, new Date(Date.now() - 3 * 60_000)],
+      [old, new Date(Date.now() - (YOUNG_ABSENT_RECHECK_MINUTES + 5) * 60_000)],
+    ]);
+
+    const result = await resolveRugProfiles([young, old], client, 5, Infinity, {
+      absentTtlMinutes: absentTtlFor(firstSeen),
+    });
+    expect(result.profiles.get(young)?.holderCount).toBe(60);
+    expect(result.profiles.has(old)).toBe(false);
+    expect(result.absent.has(old)).toBe(true);
+    expect(calls).toEqual([[young]]);
+  });
+
   it("re-checks an absent mint behind the cycle unless a decision this cycle waits on it", async () => {
     // A batch of absent answers expiring together held whole cycles 8-11 s (2026-10-13).
     const [below, contender] = [mint("absent-below"), mint("absent-contender")];
@@ -434,5 +467,25 @@ describe.skipIf(!dbAvailable)("resolveRugProfiles", () => {
     const result = await resolveRugProfiles([], client, 5);
     expect(result.stats).toEqual({ requested: 0, cached: 0, fetched: 0, failed: 0 });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe("absentTtlFor", () => {
+  it("shortens the TTL only for a mint first seen recently", () => {
+    const now = Date.now();
+    const ttl = absentTtlFor(
+      new Map([
+        ["young", new Date(now - 2 * 60_000)],
+        ["old", new Date(now - 60 * 60_000)],
+        ["unknown", null],
+      ]),
+      now,
+    );
+    expect(ttl("young", 5)).toBe(1);
+    expect(ttl("old", 5)).toBe(5);
+    expect(ttl("unknown", 5)).toBe(5);
+    expect(ttl("never-seen", 5)).toBe(5);
+    // Never longer than the report TTL itself.
+    expect(ttl("young", 0.5)).toBe(0.5);
   });
 });
