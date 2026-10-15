@@ -252,13 +252,6 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
         refreshKey={String(pick)}
       />
 
-      <CoverageMeter
-        board={lb}
-        guest={guest}
-        disabled={board.stale}
-        onAdd={guest ? undefined : (id) => setFeedModels([...lb.selectedModels, id])}
-      />
-
       <WeekPanel learning={data.learning} board={lb} now={now} />
 
       <WinnerRunsPanel data={data} days={days} />
@@ -563,6 +556,14 @@ function BaselineChart({
             </div>
           )}
           {feedError && <p className="error small">Couldn&apos;t change your feed: {feedError}</p>}
+          {/* Your feed's models together, right under the line saying which they are; it follows the
+              chart's window. */}
+          <CoverageMeter
+            board={board}
+            guest={guest}
+            disabled={busy || refreshing || loading}
+            onAdd={guest ? undefined : (id) => saveFeed([...board.selectedModels, id])}
+          />
           {rows.length > 0 ? (
             <>
               <MarkerBars
