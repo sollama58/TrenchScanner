@@ -3,6 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   prisma,
+  Prisma,
   loadEnv,
   CANDIDATE_FEATURE_NAMES,
   CURATOR_MODEL_KIND,
@@ -493,6 +494,12 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     resetCuratorModelCache();
     resetDeferredContenders();
     await freeGovernorBudget();
+    // Each test draws its own live scales: an earlier test's banked scores would move the
+    // seats' live cutoffs and member ranks here.
+    await prisma.candidateOutcome.updateMany({
+      where: { seatScores: { not: Prisma.DbNull }, token: { mintAddress: { startsWith: TAG } } },
+      data: { seatScores: Prisma.DbNull },
+    });
   });
 
   afterAll(async () => {
@@ -560,6 +567,64 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
       where: { tokenId: token.id, model: "linear" },
     });
     expect(alert.tier).toBe("high");
+  });
+
+  /** A day of earlier decision moments carrying these seat scores, newest first. */
+  async function liveHistory(name: string, scores: (i: number) => Record<string, number>): Promise<void> {
+    const history = await prisma.token.create({ data: { mintAddress: `${TAG}-${name}` } });
+    await prisma.candidateOutcome.createMany({
+      data: Array.from({ length: 250 }, (_, i) => ({
+        tokenId: history.id,
+        sampleKind: "event",
+        anchorAt: new Date(Date.now() - 3_600_000 - i * 60_000),
+        anchorPriceUsd: 0.0001,
+        anchorMcapUsd: 100_000,
+        features: {},
+        nextCheckAt: new Date(),
+        peak1hPriceUsd: 0.0001,
+        low1hPriceUsd: 0.0001,
+        lowBefore2xPriceUsd: 0.0001,
+        peak24hPriceUsd: 0.0001,
+        seatScores: scores(i),
+      })),
+    });
+  }
+
+  it("calls at the seat's cutoff rank on its live scores, above a shipped line live scores never reach", async () => {
+    // Shipped at 0.9999, above anything the model scores (0.993): on it alone the seat never calls.
+    await activeModel("linear", CURATOR_MODEL_KIND, {
+      ...alwaysYesParams(),
+      threshold: 0.9999,
+      cutoffRank: 0.75,
+    });
+    // Live, the seat's scores run 0..0.249: its top quarter starts near 0.19.
+    await liveHistory("cutoff-low", (i) => ({ linear: i / 1000 }));
+
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-cutoff-low-live` } });
+    const scored = curatableFixture(token.mintAddress);
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, null, env);
+    expect(cycle.byModel.has("linear")).toBe(true);
+  });
+
+  it("holds back a call under the seat's live cutoff, though it clears the shipped one", async () => {
+    await activeModel("linear", CURATOR_MODEL_KIND, { ...alwaysYesParams(), cutoffRank: 0.75 });
+    // Live, the seat's scores sit at 0.9935 and up, above this coin's 0.9933.
+    await liveHistory("cutoff-high", (i) => ({ linear: 0.9935 + i / 1_000_000 }));
+
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-cutoff-high-live` } });
+    const scored = curatableFixture(token.mintAddress);
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, scored, null, env);
+    expect(cycle.byModel.has("linear")).toBe(false);
+  });
+
+  it("keeps the shipped cutoff while the seat has too few live scores", async () => {
+    await activeModel("linear", CURATOR_MODEL_KIND, { ...alwaysYesParams(), cutoffRank: 0.75 });
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-cutoff-none` } });
+    const cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, token, curatableFixture(token.mintAddress), null, env);
+    expect(cycle.byModel.has("linear")).toBe(true);
   });
 
   it("holds the cooldown per ledger: one contestant's call doesn't block another's", async () => {
@@ -681,13 +746,16 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
    * Two always-yes members and a consensus over them that also always says yes. Each member calls
    * at its cutoff unless `uncalled` names it (no cutoff stored), so by default both back the call.
    */
-  async function seedConsensus(uncalled: string[] = []): Promise<{ linearId: string; treesId: string }> {
+  async function seedConsensus(
+    uncalled: string[] = [],
+    quantiles: number[] = [0.2, 0.5, 0.8],
+  ): Promise<{ linearId: string; treesId: string }> {
     const linearId = await activeModel("linear", CURATOR_MODEL_KIND, alwaysYesParams());
     const treesId = await activeModel("trees", CURATOR_MODEL_KIND, alwaysYesParams());
     const member = (contestant: string, modelId: string) => ({
       contestant,
       modelId,
-      quantiles: [0.2, 0.5, 0.8],
+      quantiles,
       ...(uncalled.includes(contestant) ? {} : { callRank: 0.5 }),
     });
     const members = [member("linear", linearId), member("trees", treesId)];
@@ -729,6 +797,23 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     await collectCuratedContender(cycle, token, curatableFixture(token.mintAddress), null, env);
     expect(cycle.byModel.has("linear")).toBe(true);
     expect(cycle.byModel.has(CONSENSUS_CONTESTANT)).toBe(false);
+  });
+
+  it("the consensus reads its members' ranks on their live scores, not the tables they sit below", async () => {
+    // Shipped tables above anything the members score live (0.993): on them no member calls.
+    await seedConsensus([], [0.995, 0.996, 0.997]);
+    const unbacked = await prisma.token.create({ data: { mintAddress: `${TAG}-consensus-reference` } });
+    let cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, unbacked, curatableFixture(unbacked.mintAddress), null, env);
+    expect(cycle.byModel.has(CONSENSUS_CONTESTANT)).toBe(false);
+
+    // A day of live scores at 0..0.249: on them 0.993 is each member's very top, so both call.
+    await liveHistory("consensus-history", (i) => ({ linear: i / 1000, trees: i / 1000 }));
+    resetCuratorModelCache();
+    const backed = await prisma.token.create({ data: { mintAddress: `${TAG}-consensus-live` } });
+    cycle = newCuratedCycle();
+    await collectCuratedContender(cycle, backed, curatableFixture(backed.mintAddress), null, env);
+    expect(cycle.byModel.has(CONSENSUS_CONTESTANT)).toBe(true);
   });
 
   it("the consensus sits out when a member is a different generation than it was stacked on", async () => {

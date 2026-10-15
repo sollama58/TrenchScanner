@@ -523,7 +523,12 @@ const envSchema = z.object({
   // (41-43% of moments) for 15-18% 2x and an average call losing about 22%, while the seats' top
   // quarter of calls hit 19-24% and their top tenth 27-38%; the band also sent two seats to 1-5
   // calls an hour for six hours when the tighter branch fired (notes/model-review-2026-10-13).
-  CURATED_CUTOFF_TARGET_SHARE: z.coerce.number().min(0).max(1).default(0.2),
+  // User decision 2026-10-15 (23:09 UTC): 25%, with the cutoff read on each seat's live scores
+  // (curation/liveScale.ts) so the share is what the seats actually call. At a nominal 20% the
+  // tree seats had called 8-12% of decision moments live; on the 27 hours of live scores before
+  // the change the pooled 2x rate was flat from the top 5% to the top 20% (26.4% vs 25.4%) and
+  // 23.7% at the top 30% (notes/dynamic-cutoff-2026-10-15/report.md).
+  CURATED_CUTOFF_TARGET_SHARE: z.coerce.number().min(0).max(1).default(0.25),
   CURATED_CUTOFF_SHARE_BAND: z.coerce.number().min(0).max(0.5).default(0),
   // How much a tighter cutoff in the band must raise the 2x lower bound before the cutoff moves
   // to it (0.01 = 1 point); a looser one is taken when its bound is no lower. Forward test

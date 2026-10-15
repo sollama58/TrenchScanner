@@ -266,6 +266,12 @@ export interface ServedCuratorExtras {
   highConvictionThreshold?: number;
   /** The 2x rate by confidence rank over the newest out-of-sample calls - see curation/calibration.ts. */
   calibration?: IsotonicCalibration;
+  /**
+   * The cutoff as the run set it, in rank units (0.75 = the top 25% of the exam's decision
+   * moments) - the rank the shipped threshold translates. The worker reads it on the seat's live
+   * scores (curation/liveScale.ts). Absent on models stored before 2026-10-16.
+   */
+  cutoffRank?: number;
 }
 
 /**

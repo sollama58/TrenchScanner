@@ -94,15 +94,26 @@ function rankOf(quantiles: readonly number[], value: number): number {
 
 /**
  * The calibrated 2x rate for a served probability: its rank among the reference rows, then the
- * knot that rank falls in. Null when the table is empty (nothing fitted) - the caller shows the
+ * knot that rank falls in (calibratedWinRateAtRank). Null when the table is empty (nothing fitted) - the caller shows the
  * raw confidence alone rather than a made-up rate.
  */
 export function calibratedWinRate(
   calibration: IsotonicCalibration | undefined,
   probability: number,
 ): number | null {
+  if (!calibration) return null;
+  return calibratedWinRateAtRank(calibration, rankOf(calibration.quantiles, probability));
+}
+
+/**
+ * The calibrated 2x rate at a rank already known - a learner's live rank among its own live
+ * scores (curation/liveScale.ts), which is where its out-of-sample ranks were read too.
+ */
+export function calibratedWinRateAtRank(
+  calibration: IsotonicCalibration | undefined,
+  rank: number,
+): number | null {
   if (!calibration || calibration.knots.length === 0) return null;
-  const rank = rankOf(calibration.quantiles, probability);
   let rate = calibration.knots[0]!.rate;
   for (const knot of calibration.knots) {
     if (knot.rank <= rank) rate = knot.rate;

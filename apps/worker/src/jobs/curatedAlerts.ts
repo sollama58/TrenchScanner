@@ -37,9 +37,15 @@ import {
   topSliceCallers,
   TOP_SLICE_MODEL_KIND,
   calibratedWinRate,
+  calibratedWinRateAtRank,
   convictionTier,
-  liveConvictionLines,
-  LIVE_CONVICTION_WINDOW_HOURS,
+  EMPTY_LIVE_SCALES,
+  loadLiveScales,
+  onLiveMembers,
+  rankAmong,
+  seatLiveCutoff,
+  usableLiveScores,
+  type LiveScales,
   type SeatScores,
   RULES_CONTESTANT,
   NARRATIVE_CONTESTANT,
@@ -132,7 +138,7 @@ let modelCache: { fetchedAt: number; key: string; roster: CuratorRoster } | null
 export function resetCuratorModelCache(): void {
   modelCache = null;
   modelFill = null;
-  resetConvictionLineCache();
+  resetLiveScaleCache();
 }
 
 /**
@@ -143,65 +149,66 @@ export function resetCuratorModelCache(): void {
 let modelFill: { key: string; promise: Promise<CuratorRoster> } | null = null;
 
 /**
- * The seats' live high-conviction lines (curation/convictionLine.ts), redrawn every
- * CONVICTION_LINE_TTL_MS from the last LIVE_CONVICTION_WINDOW_HOURS of decision moments. A failed
- * read keeps the previous lines (or none, so every seat uses its shipped line) until the next try.
+ * The seats' live scales (curation/liveScale.ts): each seat's last LIVE_SCORE_WINDOW_HOURS of
+ * scores, the quantile tables the combiners read their members through, and the high-conviction
+ * lines (curation/convictionLine.ts), redrawn every LIVE_SCALE_TTL_MS. A slot evolution handed to
+ * a new recipe counts only the scores since the handover (CuratorLane.bornAt). A failed read keeps
+ * the previous scales, so a database blip never moves a cutoff or silences the tier.
  */
-const CONVICTION_LINE_TTL_MS = 10 * 60_000;
-let lineCache: { fetchedAt: number; lines: Map<string, number> } | null = null;
-let lineFill: Promise<Map<string, number>> | null = null;
+const LIVE_SCALE_TTL_MS = 10 * 60_000;
 
-/** Test hook: forget the cached lines so the next decision re-reads them. */
-export function resetConvictionLineCache(): void {
-  lineCache = null;
-  lineFill = null;
+let scaleCache: { fetchedAt: number; scales: LiveScales } | null = null;
+let scaleFill: Promise<LiveScales> | null = null;
+
+/** Test hook: forget the cached scales so the next decision re-reads them. */
+export function resetLiveScaleCache(): void {
+  scaleCache = null;
+  scaleFill = null;
 }
 
-async function convictionLines(env: Env): Promise<Map<string, number>> {
-  if (lineCache && Date.now() - lineCache.fetchedAt < CONVICTION_LINE_TTL_MS) return lineCache.lines;
-  if (lineFill) return lineFill;
-  const fill = loadConvictionLines(env);
-  lineFill = fill;
+async function liveScales(env: Env): Promise<LiveScales> {
+  if (scaleCache && Date.now() - scaleCache.fetchedAt < LIVE_SCALE_TTL_MS) return scaleCache.scales;
+  if (scaleFill) return scaleFill;
+  const fill = loadLiveScalesKeeping(env);
+  scaleFill = fill;
   try {
     return await fill;
   } finally {
-    if (lineFill === fill) lineFill = null;
+    if (scaleFill === fill) scaleFill = null;
   }
 }
 
-async function loadConvictionLines(env: Env): Promise<Map<string, number>> {
-  const previous = lineCache?.lines ?? new Map<string, number>();
+async function loadLiveScalesKeeping(env: Env): Promise<LiveScales> {
+  const previous = scaleCache?.scales ?? EMPTY_LIVE_SCALES;
   try {
-    const rows = await prisma.candidateOutcome.findMany({
-      where: {
-        sampleKind: "event",
-        anchorAt: { gt: new Date(Date.now() - LIVE_CONVICTION_WINDOW_HOURS * 3_600_000) },
-        seatScores: { not: Prisma.DbNull },
-      },
-      select: { seatScores: true },
-    });
-    const lines = liveConvictionLines(
-      rows.map((r) => r.seatScores),
-      env.CURATED_HIGH_CONVICTION_RANK,
-    );
-    lineCache = { fetchedAt: Date.now(), lines };
-    return lines;
+    const scales = await loadLiveScales(env.CURATED_HIGH_CONVICTION_RANK);
+    scaleCache = { fetchedAt: Date.now(), scales };
+    return scales;
   } catch (err) {
-    logger.warn("failed to read live high-conviction lines - keeping the previous ones", {
-      error: String(err),
-    });
-    lineCache = { fetchedAt: Date.now(), lines: previous };
+    logger.warn("failed to read live seat scales - keeping the previous ones", { error: String(err) });
+    scaleCache = { fetchedAt: Date.now(), scales: previous };
     return previous;
   }
 }
 
-/** Every seat's probability at a decision moment, onto its row (CandidateOutcome.seatScores). */
-async function recordSeatScores(rowId: string, decisions: Map<string, CurationDecision>): Promise<void> {
+/**
+ * Every seat's probability at a decision moment, onto its row (CandidateOutcome.seatScores). A
+ * retired seat still scoring for a combiner is banked too: the combiner reads it on its live
+ * scale like any other member.
+ */
+async function recordSeatScores(
+  rowId: string,
+  decisions: Map<string, CurationDecision>,
+  memberScores: ReadonlyMap<string, number>,
+): Promise<void> {
   const scores: SeatScores = {};
   for (const [seat, decision] of decisions) {
     // Rules decides on points, not a probability, and has no tier.
     if (seat === RULES_CONTESTANT) continue;
     if (Number.isFinite(decision.confidence)) scores[seat] = decision.confidence / 100;
+  }
+  for (const [seat, probability] of memberScores) {
+    if (!(seat in scores) && Number.isFinite(probability)) scores[seat] = probability;
   }
   if (Object.keys(scores).length === 0) return;
   try {
@@ -468,9 +475,12 @@ function decideCurations(
   roster: CuratorRoster,
   env: Env,
   population: DecisionPopulation = "event",
-  /** Each seat's high-conviction line on its live scores, where it has one (liveConvictionLines). */
-  lines: ReadonlyMap<string, number> = new Map(),
+  /** The seats' live scores, member tables and high-conviction lines (see liveScales). */
+  live: LiveScales = EMPTY_LIVE_SCALES,
+  /** Filled with every learner's probability, the retired ones scoring for a combiner included. */
+  memberScores: Map<string, number> = new Map(),
 ): Map<string, CurationDecision> {
+  const { lines } = live;
   const features = buildCandidateFeatures(scored);
   const decisions = new Map<string, CurationDecision>();
   const probabilities = new Map<string, number>();
@@ -485,14 +495,15 @@ function decideCurations(
       const { params, id } = entry.model;
       const probability = safeScore(entry.spec.id, id, () => scoreCandidateWithModel(params, features));
       if (probability === null) continue;
-      const curate = probability >= params.threshold;
+      const own = usableLiveScores(live.scores, entry.spec.id);
+      const curate = probability >= seatLiveCutoff(entry.spec.id, params, live);
       decisions.set(entry.spec.id, {
         curate,
         confidence: probability * 100,
         reasons: curate ? topModelReasons(params, features) : [],
         rationale: modelRationale(params, features),
         source: id,
-        ...servedFields(params, probability, lines.get(entry.spec.id)),
+        ...servedFields(params, probability, lines.get(entry.spec.id), own),
       });
       continue;
     }
@@ -509,16 +520,18 @@ function decideCurations(
       const probability = safeScore(entry.spec.id, id, () => scoreCandidateWithModel(params, features));
       if (probability === null) continue;
       probabilities.set(entry.spec.id, probability);
+      memberScores.set(entry.spec.id, probability);
       // A retired seat scores only for the combiners still trained beside it.
       if (entry.spec.retired) continue;
       learners.set(entry.spec.id, entry.model);
-      const curate = probability >= params.threshold;
+      const own = usableLiveScores(live.scores, entry.spec.id);
+      const curate = probability >= seatLiveCutoff(entry.spec.id, params, live);
       decisions.set(entry.spec.id, {
         curate,
         confidence: probability * 100,
         reasons: curate ? topModelReasons(params, features) : [],
         source: id,
-        ...servedFields(params, probability, lines.get(entry.spec.id)),
+        ...servedFields(params, probability, lines.get(entry.spec.id), own),
       });
     }
   }
@@ -526,7 +539,8 @@ function decideCurations(
   for (const entry of roster.entries) {
     if (population === "second") break;
     if (entry.role === "topslice") {
-      const { params, id } = entry.model;
+      const { id } = entry.model;
+      const params = onLiveMembers(entry.model.params, live);
       const probability = scoreTopSlice(params, probabilities);
       const curate = probability >= params.threshold;
       let reasons: string[] = [];
@@ -546,7 +560,8 @@ function decideCurations(
       continue;
     }
     if (entry.role === "agreement") {
-      const { params, id } = entry.model;
+      const { id } = entry.model;
+      const params = onLiveMembers(entry.model.params, live);
       const probability = scoreAgreement(params, probabilities);
       const curate = probability >= params.threshold;
       let reasons: string[] = [];
@@ -578,7 +593,8 @@ function decideCurations(
       continue;
     }
     if (entry.role === "blend") {
-      const { params, id } = entry.model;
+      const { id } = entry.model;
+      const params = onLiveMembers(entry.model.params, live);
       const probability = scoreBlend(params, probabilities);
       const curate = probability >= params.threshold;
       let reasons: string[] = [];
@@ -607,7 +623,8 @@ function decideCurations(
       continue;
     }
     if (entry.role !== "stacked") continue;
-    const { params, id } = entry.model;
+    const { id } = entry.model;
+    const params = onLiveMembers(entry.model.params, live);
     const probability = scoreStacked(params, probabilities, rulesSignal(scored, params.rules.minScore));
     // The member-backing gate (user decision 2026-10-14): at least CONSENSUS_MIN_BACKERS members
     // must call this moment at their own cutoffs, so Rules' inputs can't carry a call alone.
@@ -648,11 +665,16 @@ function servedFields(
   params: ServedCuratorExtras,
   probability: number,
   liveLine: number | undefined,
+  /** The seat's own live scores, when its rank is read on them (learners - see liveScale.ts). */
+  liveScores?: readonly number[],
 ): Pick<CurationDecision, "tier" | "calibratedPct"> {
   const out: Pick<CurationDecision, "tier" | "calibratedPct"> = {};
   const tier = convictionTier(probability, params.highConvictionThreshold, liveLine);
   if (tier !== undefined) out.tier = tier;
-  const rate = calibratedWinRate(params.calibration, probability);
+  const rate =
+    liveScores === undefined
+      ? calibratedWinRate(params.calibration, probability)
+      : calibratedWinRateAtRank(params.calibration, rankAmong(liveScores, probability));
   if (rate !== null) out.calibratedPct = Math.round(rate * 1000) / 10;
   return out;
 }
@@ -775,11 +797,12 @@ export async function collectCuratedContender(
   }
 
   const roster = await curatorRoster(env);
-  const decisions = decideCurations(scored, roster, env, population, await convictionLines(env));
-  // A new decision moment banks every seat's score: the next lines are drawn on them. A retry or
-  // a moment the spacing window folded into an earlier row is not a new moment.
+  const memberScores = new Map<string, number>();
+  const decisions = decideCurations(scored, roster, env, population, await liveScales(env), memberScores);
+  // A new decision moment banks every seat's score: the next cutoffs and lines are drawn on them.
+  // A retry or a moment the spacing window folded into an earlier row is not a new moment.
   if (population === "event" && retry === undefined && cycleSample?.created) {
-    await recordSeatScores(cycleSample.id, decisions);
+    await recordSeatScores(cycleSample.id, decisions, memberScores);
   }
   const cooldownCutoff = new Date(Date.now() - env.CURATED_ALERT_COOLDOWN_HOURS * 3_600_000);
   const narrative = decisions.get(NARRATIVE_CONTESTANT);
