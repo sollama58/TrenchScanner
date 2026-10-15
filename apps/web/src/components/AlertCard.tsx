@@ -121,6 +121,7 @@ export function AlertCard({
     linkedPct,
     linkedCount: linkedN,
     linkedKols,
+    linkedBundled,
     linkedAtAlert,
     linkedClusters,
     cexPct,
@@ -452,6 +453,7 @@ export function AlertCard({
               pct={linkedPct}
               count={linkedN}
               kols={linkedKols}
+              bundled={linkedBundled}
               clusters={linkedClusters}
               atAlert={linkedAtAlert && linkedPct !== null}
               onOpen={() => openBubbleMap(mint, linkedSeed(card))}
@@ -850,17 +852,23 @@ export function linkedTileReading(
     | "bundledSupplyPct"
     | "bundledSupplyCount"
   > | null,
-): { linkedPct: number | null; linkedCount: { linked: number; of: number } | null; linkedKols: boolean } {
-  if (!s) return { linkedPct: null, linkedCount: null, linkedKols: false };
+): {
+  linkedPct: number | null;
+  linkedCount: { linked: number; of: number } | null;
+  linkedKols: boolean;
+  linkedBundled: boolean;
+} {
+  if (!s) return { linkedPct: null, linkedCount: null, linkedKols: false, linkedBundled: false };
   const scan = linkedCount(s);
   if (s.linkedWalletPct != null && s.bundledSupplyPct != null && s.bundledSupplyCount != null && scan) {
     return {
       linkedPct: s.bundledSupplyPct,
       linkedCount: { linked: s.bundledSupplyCount, of: scan.of },
       linkedKols: s.bundledSupplyCount > scan.linked,
+      linkedBundled: true,
     };
   }
-  return { linkedPct: s.linkedWalletPct ?? null, linkedCount: scan, linkedKols: false };
+  return { linkedPct: s.linkedWalletPct ?? null, linkedCount: scan, linkedKols: false, linkedBundled: false };
 }
 
 /** The reading behind the Linked tile, for the bubble map to draw the same one. */
@@ -879,6 +887,7 @@ function LinkedTile({
   pct: value,
   count,
   kols,
+  bundled,
   clusters,
   atAlert,
   onOpen,
@@ -887,6 +896,8 @@ function LinkedTile({
   count: { linked: number; of: number } | null;
   /** Whether KOLs' bundles add holders the scan's own count leaves out. */
   kols: boolean;
+  /** Whether the reading is Bundled % (KOLs' bundles checked), not only the scan's own linked holders. */
+  bundled: boolean;
   clusters: readonly LinkedClusterView[];
   atAlert: boolean;
   onOpen: () => void;
@@ -896,8 +907,8 @@ function LinkedTile({
     value === null
       ? "Linked: not checked yet. Who paid for each top-25 wallet is read a few tokens per scan."
       : value === 0
-        ? `Linked: no two top-25 wallets share a funder or a funding minute, and no KOL bundles any, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
-        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply (Bundled %), counting wallets in a funder's cluster, a funding minute or a KOL's bundle${kols ? " (KOLs' bundles add some)" : ""}${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen counts linked holders without KOLs' bundles and rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of)} or more. Tap for the bubble map.`;
+        ? `Linked: no two top-25 wallets share a funder or a funding minute${bundled ? ", and no KOL bundles any" : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
+        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${bundled ? ` (Bundled %), counting wallets in a funder's cluster, a funding minute or a KOL's bundle${kols ? " (KOLs' bundles add some)" : ""}` : ", KOLs' bundles not checked on this scan"}${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen counts linked holders without KOLs' bundles and rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of)} or more. Tap for the bubble map.`;
   const canOpen = value !== null && (value > 0 || clusters.length > 0);
   return (
     <div
@@ -939,7 +950,7 @@ function LinkedTile({
           "Not checked"
         ) : count ? (
           <>
-            {linkedCountText(count)} <span className="dd-sub">({pct(value, 1)})</span>
+            {linkedCountText(count)} <span className="dd-sub">{pct(value)}</span>
           </>
         ) : (
           pct(value)
