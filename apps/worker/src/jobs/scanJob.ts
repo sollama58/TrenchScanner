@@ -183,6 +183,8 @@ export interface ScanDeps {
     /** Their order-flow features right now, when trade flow is on. */
     tradeFlow?(mint: string): TradeFlowFeatures | undefined;
   };
+  /** Jupiter's newest launches, read between cycles and drained once per cycle (JupiterLaunchPoller). Optional. */
+  launchPoller?: { drain(): DiscoveredCoin[]; takeStats?(): Record<string, number> };
   /** The per-mint price tape the price-path features read from (curation/pricePath.ts). Optional. */
   pricePath?: PricePathBook;
   /** Refills that tape from stored snapshots after a restart (pricePathSeed.ts). Optional. */
@@ -685,7 +687,14 @@ async function scanCycle(
       (coins) => saveMovingLaunches(coins, deps.pumpFun, env),
     ),
   ]);
-  await saveMovingLaunches(jupiterMoving, deps.pumpFun, env);
+  // The cycle's own read of Jupiter's lists, and the newest launches read between cycles.
+  const polled = deps.launchPoller?.drain() ?? [];
+  const seenMoving = new Set(jupiterMoving.map((c) => c.mintAddress));
+  await saveMovingLaunches(
+    [...jupiterMoving, ...polled.filter((c) => !seenMoving.has(c.mintAddress))],
+    deps.pumpFun,
+    env,
+  );
   // The livestreaming coins, from the one Pump.fun list still answering: discovered and revived
   // with their market cap like the recently-traded list's coins were.
   const liveCoins = [...(liveStreams?.values() ?? [])].flatMap((l) => (l.coin ? [l.coin] : []));
@@ -1473,6 +1482,8 @@ async function scanCycle(
   const liveLaunchQuotes = deps.liveLaunches?.takeStats?.();
   // Band-entry checks between cycles, and the cycles they started early (this one among them).
   const bandEntryWatch = deps.bandEntryWatch?.takeStats();
+  // Jupiter's newest-launch reads between cycles, and the launches they turned up.
+  const launchPoller = deps.launchPoller?.takeStats?.();
   const holds = takeDecisionHolds();
   logger.info("scan cycle complete", {
     durationMs: Date.now() - startedAt,
@@ -1496,6 +1507,7 @@ async function scanCycle(
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
     ...(liveLaunchQuotes ? { liveLaunchQuotes: { ...liveLaunchQuotes } } : {}),
     ...(bandEntryWatch ? { bandEntryWatch: { ...bandEntryWatch } } : {}),
+    ...(launchPoller ? { launchPoller: { ...launchPoller } } : {}),
     tracked: tracked.length,
     inBand: candidates.length,
     matches: matchCount,
