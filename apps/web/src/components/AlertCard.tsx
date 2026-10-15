@@ -942,7 +942,7 @@ function LinkedTile({
       }
     >
       <dt>
-        Linked
+        <span className="tile-opens-label">Linked</span>
         {canOpen && <BubblesIcon size={12} className="tile-opens-icon" />}
       </dt>
       <dd className={value === null ? "muted" : "num"}>
