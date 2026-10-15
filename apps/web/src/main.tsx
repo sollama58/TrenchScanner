@@ -13,11 +13,14 @@ import {
   tabFromHash,
 } from "./routes";
 import { startVersionWatch } from "./version";
+import { installTouchTips } from "./touchTips";
 import "./fonts.css";
 import "./styles.css";
 
 // Before anything lazy loads: a chunk removed by a deploy since this page loaded reloads the tab.
 startVersionWatch();
+// Phones and tablets: a tap shows what a desktop shows on hover.
+installTouchTips();
 
 // index.html has already started this screen's API calls (window.__boot); start its code too.
 const tab = tabFromHash();
