@@ -1088,7 +1088,7 @@ const CRITERIA: [string, string, (v: number) => string][] = [
   ["maxDevWalletPct", "dev ≤", (v) => `${v}%`],
   ["maxRiskScore", "risk ≤", (v) => String(v)],
   ["minVolumeMcapRatio", "vol/mcap ≥", (v) => String(v)],
-  ["minHolderGrowthPct", "holders ≥", (v) => `+${v}%`],
+  ["minHolderGrowthPct", "holders (10 min) ≥", (v) => `+${v}%`],
   ["minFirstBuyersHolding", "first buyers holding ≥", (v) => `${v}/25`],
   ["maxFirstBuyersHolding", "first buyers holding ≤", (v) => `${v}/25`],
 ];

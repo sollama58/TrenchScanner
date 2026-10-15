@@ -427,6 +427,7 @@ export interface FilterCriteria {
   mcapMin: number;
   mcapMax: number;
   minVolumeMcapRatio?: number | null;
+  /** Min holder growth over the last 10 minutes (holderGrowth10mPct, since 2026-10-15). Fails closed. */
   minHolderGrowthPct?: number | null;
   // maxTop10HolderPct/maxDevWalletPct/maxRiskScore/excludeCriticalRiskFlags used to only tighten
   // a baseline the automatic rug screen already enforced (see rugScreen.ts) - now they're the
@@ -487,7 +488,7 @@ export interface FilterCriteria {
   excludeCopycats?: boolean;
   /** No high-severity TokenSage flag. */
   excludeNarrativeRedFlags?: boolean;
-  /** Deep read: the linked X post must not be unrelated to the coin or spoofed. */
+  /** Deep read: the linked X post must not be unrelated to the coin. */
   excludeUnrelatedX?: boolean;
   /** Deep read: the name must be spiking on Wikipedia or in the news. */
   requireTrendMatch?: boolean;

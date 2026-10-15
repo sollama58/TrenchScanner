@@ -279,7 +279,7 @@ const OUTPUTS = [
   { title: "Lineage", text: "Original or copy, and its place in the wave" },
   { title: "X check", text: "Does the link match the coin? How credible is the account?" },
   { title: "Creator fee", text: "Where pump.fun's fee goes: the dev, holders, a charity" },
-  { title: "Flags", text: "Copycat, reused X link, spoofed account, mismatches" },
+  { title: "Flags", text: "Copycat, reused X link, mismatches" },
 ];
 
 function Anatomy({ data }: { data: TokenSageShowcase | null }) {

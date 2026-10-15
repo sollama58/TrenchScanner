@@ -152,7 +152,8 @@ export const LATE_COPY_PENALTY = 0;
  *    on the first live day the perfect fits were the launcher's own profiles, named after the
  *    coin and made with it, and they doubled least of any X read. So a profile link ("official
  *    account") is neutral, and a bare X link still earns nothing;
- *  - a post that is unrelated, spoofed or mismatched pulls it down;
+ *  - a post that is unrelated or mismatched pulls it down (a spoofed handle no longer counts,
+ *    user decision 2026-10-15: tokensage.ts DROPPED_X_RELATIONS);
  *  - a copycat as such is neutral: copycats doubled more often than other coins in every
  *    population on the first live day, because a copy of a coin that is running rides its
  *    narrative. A late copy (TokenSage's lineage: the 11th or later coin with the name, or a copy
@@ -176,8 +177,7 @@ export function scoreNarrative(token: EnrichedToken): number {
   }
   const xRead = read.depth === "full" && (read.xRelation !== null || read.xVerdict !== null);
   if (xRead) {
-    const spoofed = read.xRelation === "spoofed";
-    if (read.xVerdict === "unrelated" || spoofed) {
+    if (read.xVerdict === "unrelated") {
       part -= 25;
     } else if (read.flags.includes("x_content_mismatch")) {
       part -= 10;

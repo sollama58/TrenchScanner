@@ -36,8 +36,11 @@ describe("matchesFilter", () => {
 
   it("applies minHolderGrowthPct", () => {
     const filter = { ...baseFilter, minHolderGrowthPct: 10 };
-    expect(matchesFilter(baseToken({ holderGrowthPct: 5 }), filter)).toBe(false);
-    expect(matchesFilter(baseToken({ holderGrowthPct: 20 }), filter)).toBe(true);
+    // The 10-minute growth since 2026-10-15; the 30-minute one no longer decides.
+    expect(matchesFilter(baseToken({ holderGrowth10mPct: 5 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ holderGrowth10mPct: 20 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ holderGrowth10mPct: 20, holderGrowthPct: 0 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ holderGrowthPct: 20 }), filter)).toBe(false);
   });
 
   it("applies maxTop10HolderPct only when known", () => {
@@ -351,8 +354,9 @@ describe("TokenSage narrative criteria", () => {
     expect(matchesFilter(baseToken({ narrative: read({ depth: "full", xVerdict: "unrelated" }) }), x)).toBe(
       false,
     );
+    // A spoofed handle no longer counts (2026-10-15).
     expect(matchesFilter(baseToken({ narrative: read({ depth: "full", xRelation: "spoofed" }) }), x)).toBe(
-      false,
+      true,
     );
     const trend = { ...baseFilter, requireTrendMatch: true };
     expect(matchesFilter(baseToken({ narrative: read({ trendMatched: true }) }), trend)).toBe(false);
