@@ -242,11 +242,13 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
     expect(picked.last24h.get(lucky)).toMatchObject({ graded: 2, hitRate2xPct: 100, qualifies: false });
   });
 
-  it("leaves out models that can't call, and gives up below three", async () => {
+  it("leaves out models that can't call, keeps a short pick, and gives up with none", async () => {
     await forgetPicks();
     expect((await loadTopModels(roster, [], (id) => id !== b)).top).toEqual([a, c, d]);
     await forgetPicks();
-    expect((await loadTopModels(roster, [], (id) => id === a || id === b)).top).toBeNull();
+    expect((await loadTopModels(roster, [], (id) => id === a || id === b)).top).toEqual([a, b]);
+    await forgetPicks();
+    expect((await loadTopModels(roster, [], () => false)).top).toBeNull();
   });
 
   it("gives a held model's place to the next-ranked one once it can't call", async () => {
