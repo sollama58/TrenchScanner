@@ -13,6 +13,7 @@ import {
   needsRegroup,
   bundleOutline,
   kolBundleNodes,
+  largestSourceOnly,
   type KolControl,
   type ClusterHalo,
   sameTimeSlot,
@@ -81,6 +82,9 @@ interface Bundle {
   lead: string;
   from: string;
   fromColour: string;
+  /** What groups it (cluster, same minute, KOL) and its wallets, for largestSourceOnly. */
+  kind: string;
+  wallets: readonly string[];
 }
 
 /** A colour slot's colour (nodeSlot / sameTimeSlot); grey for none. */
@@ -204,8 +208,12 @@ export async function renderBubbleCard(
 
   // Every bundle on the map in one list, largest share first (user ask 2026-10-15): funders'
   // clusters, same-minute groups and KOLs' side wallets, in rows tight enough for at least six.
-  const bundles: Bundle[] = [
+  // A bundle under two kinds lists once, under the largest, as under the map (user ask 2026-10-15).
+  const walletsOf = (nodes: readonly MapNode[]) => nodes.flatMap((n) => (n.wallet ? [n.wallet] : []));
+  const bundles: Bundle[] = largestSourceOnly<Bundle>([
     ...graph.clusters.map((c, i) => ({
+      kind: "cluster",
+      wallets: c.wallets.map((w) => w.wallet),
       pct: c.pct,
       mark: { colour: slotColour(i % CLUSTER.length) },
       lead: `${c.wallets.length} wallets`,
@@ -217,6 +225,8 @@ export async function renderBubbleCard(
       if (members.length < 2) return [];
       return [
         {
+          kind: "same-minute",
+          wallets: walletsOf(members),
           pct: members.reduce((t, m) => t + m.pct, 0),
           mark: { colour: slotColour(sameTimeSlot(graph, i)) },
           lead: `${members.length} wallets`,
@@ -228,6 +238,8 @@ export async function renderBubbleCard(
     ...(opts.kols ?? [])
       .filter((k) => kolBundleNodes(graph, k).members.length >= 2)
       .map((k) => ({
+        kind: "kol",
+        wallets: k.wallets.map((w) => w.wallet),
         pct: k.pct,
         mark: { side: kolColour((opts.kols ?? []).indexOf(k)) },
         lead: `${k.wallets.length} wallets`,
@@ -238,6 +250,8 @@ export async function renderBubbleCard(
       const { known, funded, possible } = sideCounts(members, g);
       const all = known + funded + possible;
       return {
+        kind: "kol",
+        wallets: walletsOf(members),
         pct: members.reduce((t, m) => t + m.pct, 0),
         mark: { side: SIDE },
         lead:
@@ -248,7 +262,7 @@ export async function renderBubbleCard(
         fromColour: SIDE,
       };
     }),
-  ].sort((a, b) => b.pct - a.pct);
+  ]).sort((a, b) => b.pct - a.pct);
 
   // The lines under the list, each on if it has something to say; the list takes the room left,
   // never fewer than six rows (or every bundle when there are fewer).
