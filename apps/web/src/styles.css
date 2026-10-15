@@ -5278,10 +5278,52 @@ button.small-btn {
   }
 }
 
-/* ---------- Top filters: the shared-filter leaderboard card on the Filters tab ---------- */
-/* Old #top links scroll here; keep the card's title clear of the sticky top bar. */
-#top-filters {
-  scroll-margin-top: 140px;
+/* ---------- Top filters: under Build a filter, and the leaderboard popup ---------- */
+.top-pick {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.top-pick h4 {
+  margin: 0 0 4px;
+  align-items: center;
+}
+.top-pick > p {
+  margin: 0 0 10px;
+}
+.top-pick-card {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.top-pick-card button {
+  gap: 6px;
+  white-space: nowrap;
+}
+.top-pick .notice,
+.top-pick .error {
+  margin: 10px 0 0;
+}
+.top-pick-open {
+  margin-top: 10px;
+  gap: 6px;
+}
+.filter-board-modal {
+  width: min(760px, calc(100vw - 32px));
+}
+@media (max-width: 640px) {
+  .top-pick-card {
+    grid-template-columns: 2ch minmax(0, 1fr);
+  }
+  .top-pick-card button {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
 }
 .board-warming {
   margin-top: 14px;
