@@ -8,6 +8,7 @@ import {
   type MinuteCandle,
   type PumpFunClient,
   type RegradeSkip,
+  type ReplayedOutcome,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 
@@ -57,7 +58,7 @@ export function resetRegradeCursor(): void {
 }
 
 /** The fields a re-grade rewrites, which rule3Grade keeps the old values of. */
-const GRADE_FIELDS = [
+export const GRADE_FIELDS = [
   "anchorPriceUsd",
   "anchorMcapUsd",
   "entryAt",
@@ -107,6 +108,46 @@ type GradeRow = {
   features: Prisma.JsonValue;
   curatedAlerts: { id: string }[];
 } & Record<(typeof GRADE_FIELDS)[number], unknown> & { anchorPriceUsd: number; anchorMcapUsd: number };
+
+/** The grade fields a candle replay writes on a row (anchored at anchorPriceUsd on anchorMcapUsd). */
+export function gradeOfReplay(replay: ReplayedOutcome, anchorMcapUsd: number, anchorPriceUsd: number) {
+  const a = replay.agg;
+  return {
+    anchorPriceUsd: replay.anchorPriceUsd,
+    // Same supply: the cap moves with the price.
+    anchorMcapUsd: anchorMcapUsd * (replay.anchorPriceUsd / anchorPriceUsd),
+    entryAt: a.entryAt,
+    signalPriceUsd: a.signalPriceUsd,
+    peak1hPriceUsd: a.peak1hPriceUsd,
+    peak1hAt: a.peak1hAt,
+    low1hPriceUsd: a.low1hPriceUsd,
+    lowBefore2xPriceUsd: a.lowBefore2xPriceUsd,
+    hit2xAt: a.hit2xAt,
+    peak24hPriceUsd: a.peak24hPriceUsd,
+    peak24hAt: a.peak24hAt,
+    peakBeforeStopPriceUsd: a.peakBeforeStopPriceUsd ?? null,
+    stoppedAt: a.stoppedAt ?? null,
+    peakBeforeStop60mPriceUsd: a.peakBeforeStop60mPriceUsd ?? null,
+    stopped60mAt: a.stopped60mAt ?? null,
+    trailHighPriceUsd: a.trailHighPriceUsd ?? null,
+    trailExitAt: a.trailExitAt ?? null,
+    trailExitPriceUsd: a.trailExitPriceUsd ?? null,
+    finalizedAt: replay.finalizedAt,
+    finalized24hAt: replay.finalized24hAt,
+    extended24h: replay.extended24h,
+    peak1hReturnPct: replay.labels.peak1hReturnPct,
+    maxDrawdown1hPct: replay.labels.maxDrawdown1hPct,
+    hit2xIn15m: replay.labels.hit2xIn15m,
+    hit2xIn1h: replay.labels.hit2xIn1h,
+    hit4xIn1h: replay.labels.hit4xIn1h,
+    hit10xIn1h: replay.hit10xIn1h,
+    disqualified: replay.labels.disqualified,
+    labelValue: replay.labels.labelValue,
+    simReturnPct: replay.simReturnPct,
+    peak24hReturnPct: replay.peak24hReturnPct,
+    runPeakMinutes: replay.runPeakMinutes,
+  };
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -242,45 +283,10 @@ export async function runLabelRegradeJob(
         continue;
       }
       const { replay, gapPct } = result;
-      const a = replay.agg;
       counts.regraded! += 1;
       if (replay.labels.hit2xIn1h && !replay.labels.disqualified) counts.wins! += 1;
       if (row.hit2xIn1h === true && row.disqualified === false) counts.winsBefore! += 1;
-      const grade = {
-        anchorPriceUsd: replay.anchorPriceUsd,
-        // Same supply: the cap moves with the price.
-        anchorMcapUsd: row.anchorMcapUsd * (replay.anchorPriceUsd / row.anchorPriceUsd),
-        entryAt: a.entryAt,
-        signalPriceUsd: a.signalPriceUsd,
-        peak1hPriceUsd: a.peak1hPriceUsd,
-        peak1hAt: a.peak1hAt,
-        low1hPriceUsd: a.low1hPriceUsd,
-        lowBefore2xPriceUsd: a.lowBefore2xPriceUsd,
-        hit2xAt: a.hit2xAt,
-        peak24hPriceUsd: a.peak24hPriceUsd,
-        peak24hAt: a.peak24hAt,
-        peakBeforeStopPriceUsd: a.peakBeforeStopPriceUsd ?? null,
-        stoppedAt: a.stoppedAt ?? null,
-        peakBeforeStop60mPriceUsd: a.peakBeforeStop60mPriceUsd ?? null,
-        stopped60mAt: a.stopped60mAt ?? null,
-        trailHighPriceUsd: a.trailHighPriceUsd ?? null,
-        trailExitAt: a.trailExitAt ?? null,
-        trailExitPriceUsd: a.trailExitPriceUsd ?? null,
-        finalizedAt: replay.finalizedAt,
-        finalized24hAt: replay.finalized24hAt,
-        extended24h: replay.extended24h,
-        peak1hReturnPct: replay.labels.peak1hReturnPct,
-        maxDrawdown1hPct: replay.labels.maxDrawdown1hPct,
-        hit2xIn15m: replay.labels.hit2xIn15m,
-        hit2xIn1h: replay.labels.hit2xIn1h,
-        hit4xIn1h: replay.labels.hit4xIn1h,
-        hit10xIn1h: replay.hit10xIn1h,
-        disqualified: replay.labels.disqualified,
-        labelValue: replay.labels.labelValue,
-        simReturnPct: replay.simReturnPct,
-        peak24hReturnPct: replay.peak24hReturnPct,
-        runPeakMinutes: replay.runPeakMinutes,
-      };
+      const grade = gradeOfReplay(replay, row.anchorMcapUsd, row.anchorPriceUsd);
       if (row.curatedAlerts.length > 0) {
         // An alert's verdict was copied from this row: the row keeps it, and training reads this.
         counts.alertRows! += 1;

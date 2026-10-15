@@ -2089,6 +2089,20 @@ model CuratedPeakCorrection {
   correctedAt DateTime @default(now())
 }
 
+/// One CandidateOutcome re-graded from Pump.fun's minute candles because its coin trades only
+/// against another coin DexScreener prices in no USD (apps/worker/src/jobs/quoteRegrade.ts): before
+/// PR #551 every lookup but the band refresh read such a coin as $0, so its runs went unseen. One
+/// row per outcome, written in the same transaction as the outcome's new grade, and never again.
+/// `previous` is the outcome's grade fields, labelRule, regradedAt, rule3Grade and rule4Grade as
+/// they were, enough to put any of them back; `result` is "regraded", "alert" (only rule4Grade
+/// written) or why it was left alone (a RegradeSkip).
+model QuoteRegrade {
+  outcomeId  String   @id
+  previous   Json
+  result     String
+  regradedAt DateTime @default(now())
+}
+
 /// One read of a coin's trades, from launch to 30 minutes past its reference anchor (the first
 /// moment a seat called it, or a sampled uncalled decision moment): what the per-wallet rows in
 /// TokenWalletActivity and the stop causes on CandidateOutcome were built from. One row per coin;

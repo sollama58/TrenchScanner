@@ -63,6 +63,7 @@ import {
 import { registerShutdown } from "./processExit.js";
 import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
+import { runQuoteRegrade } from "./jobs/quoteRegrade.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
@@ -431,7 +432,13 @@ async function main() {
   schedule("label-regrade", () =>
     scheduleInterval(
       "label-regrade",
-      () => withJobLock("label-regrade", () => runLabelRegradeJob(deps.pumpFun)),
+      () =>
+        withJobLock("label-regrade", async () => {
+          const meta = await runLabelRegradeJob(deps.pumpFun);
+          // The one-time re-grade of coins paired with another coin (quoteRegrade.ts), same lock.
+          const quote = await runQuoteRegrade(deps.pumpFun);
+          return quote ? { ...meta, quoteRegrade: quote } : meta;
+        }),
       1,
       { deadlineMinutes: 15 },
     ),
