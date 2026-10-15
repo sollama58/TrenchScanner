@@ -104,6 +104,20 @@ describe.skipIf(!dbAvailable)("subscription routes", () => {
     return bs58.encode(Buffer.from(Array.from({ length: 64 }, () => Math.floor(Math.random() * 256))));
   }
 
+  it("answers /blockhash callers from one RPC read every few seconds, and retries a failed one", async () => {
+    const me = await signIn("blockhash");
+    const read = vi
+      .spyOn(SolanaRpc.prototype, "getLatestBlockhash")
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ blockhash: FIXTURE_BLOCKHASH, lastValidBlockHeight: 1 });
+    const get = () => app.inject({ method: "GET", url: "/subscription/blockhash", cookies: me.cookies });
+    expect((await get()).statusCode).toBe(503);
+    const [a, b] = await Promise.all([get(), get()]);
+    expect(a.statusCode).toBe(200);
+    expect(b.json()).toEqual(a.json());
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("credits the caller's own burn and reports their new access", async () => {
     const me = await signIn("own");
     const signature = newSignature();

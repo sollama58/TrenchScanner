@@ -6,6 +6,7 @@ import {
   CHAT_REPLY_COOLDOWN_MS,
   handleTelegramUpdate,
   parseCommand,
+  BOT_REPLIES_PER_SECOND,
   replyCooldownSize,
   takeReplySlot,
 } from "./updates.js";
@@ -64,6 +65,15 @@ describe("takeReplySlot", () => {
     expect(replyCooldownSize()).toBeLessThanOrEqual(5_000);
     takeReplySlot(-3, t + CHAT_REPLY_COOLDOWN_MS);
     expect(replyCooldownSize()).toBe(1);
+  });
+
+  it("caps replies across all chats each second, without spending a refused chat's slot", () => {
+    const t = clock + 120_000;
+    let given = 0;
+    for (let i = 0; i < 100; i++) if (takeReplySlot(-2_000_000 - i, t)) given++;
+    expect(given).toBe(BOT_REPLIES_PER_SECOND);
+    // A chat refused for the bot-wide cap is answered in the next second, not held 3s.
+    expect(takeReplySlot(-2_000_099, t + 1_000)).toBe(true);
   });
 });
 

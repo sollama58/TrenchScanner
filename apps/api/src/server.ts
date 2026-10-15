@@ -86,17 +86,50 @@ const SLOW_REQUEST_LOG_MS = 2_000;
  * 60 seconds, so a longer hold could turn a crash restart into a restart loop.
  */
 const REPORT_WARM_CAP_MS = 45_000;
+/**
+ * Largest request body any route takes unless it sets its own. Every body the API reads is a small
+ * JSON object (the biggest real one, POST /wallets/names with 200 addresses, is ~10KB), and a body
+ * is read and parsed BEFORE the auth preHandlers run, so Fastify's 1MB default let an anonymous
+ * caller make the API parse a megabyte of JSON per request on any authenticated POST before
+ * answering 401. The Telegram webhook and the admin backup import set their own larger limits.
+ */
+const BODY_LIMIT_BYTES = 64 * 1024;
+/**
+ * How long a client may take to send its whole request (headers and body). Fastify's default is
+ * no limit, so a client trickling a body a byte at a time held a socket open indefinitely. Two
+ * minutes leaves the 64MB admin backup import room on a slow upload. Responses are not covered:
+ * the live streams stay open as long as the tab does.
+ */
+const REQUEST_TIMEOUT_MS = 120_000;
+/**
+ * Rate-limit buckets held in memory, across every route (one entry per caller per route). The
+ * plugin's default of 5,000 is a least-recently-used map: a few thousand rotating source addresses
+ * pushed every real caller's bucket out, and an evicted bucket starts again at zero, so every
+ * limit - the sign-in ones and the per-user Helius budgets alike - stopped holding exactly when
+ * it mattered. An entry is a couple of hundred bytes, so this is ~20MB at the worst.
+ */
+const RATE_LIMIT_BUCKETS = 100_000;
 
 export async function buildServer(env: Env): Promise<FastifyInstance> {
-  const app = Fastify({ loggerInstance: fastifyLogger(), disableRequestLogging: true, trustProxy: true });
+  const app = Fastify({
+    loggerInstance: fastifyLogger(),
+    disableRequestLogging: true,
+    trustProxy: true,
+    bodyLimit: BODY_LIMIT_BYTES,
+    requestTimeout: REQUEST_TIMEOUT_MS,
+  });
 
   // Set before any route plugin is registered: Fastify hands each plugin the error handler in
   // force when it is registered, so a handler set at the end only covered the root context and
   // every routed 500 fell through to Fastify's default body - which carries the raw error
   // message (for Prisma, the database hostname). Details stay in the log; clients get a code.
   app.setErrorHandler((err: FastifyError, request, reply) => {
-    logger.error("unhandled route error", { url: request.url, error: err.message, stack: err.stack });
     const status = err.statusCode ?? 500;
+    // A 4xx here is the client's fault (a body over the cap, malformed JSON): one short line, no
+    // stack, so a caller sending junk on a loop can't fill the log with stack traces.
+    if (status >= 500)
+      logger.error("unhandled route error", { url: request.url, error: err.message, stack: err.stack });
+    else logger.warn("rejected request", { url: request.url, status, error: err.message });
     reply.code(status).send({ error: status >= 500 ? "internal_error" : err.message });
   });
 
@@ -226,6 +259,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(rateLimit, {
     max: 300,
     timeWindow: "1 minute",
+    cache: RATE_LIMIT_BUCKETS,
     keyGenerator: async (request) => {
       // Verified, never merely present: an unverified cookie would let one client mint a fresh
       // bucket per request simply by changing the value, which is no rate limit at all.

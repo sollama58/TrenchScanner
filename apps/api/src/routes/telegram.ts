@@ -36,8 +36,15 @@ import { createTelegramBoards } from "../telegramBoards.js";
 const LINK_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 /** A test message costs a Telegram call per press. */
 const TEST_ROUTE_RATE_LIMIT = { max: 6, timeWindow: "1 minute" };
-/** Telegram delivers from a handful of IPs; the global per-IP limit would throttle a busy bot. */
-const WEBHOOK_RATE_LIMIT = { max: 1_200, timeWindow: "1 minute" };
+/**
+ * Telegram delivers every update from a handful of IPs, so this is in effect the bot's whole
+ * inbound budget: at 1,200 a minute one busy group (an admin bot sees every message) could fill it,
+ * and the 429s made Telegram back off the one webhook queue every chat shares. The secret is
+ * checked before the body is read, so a caller without it costs next to nothing.
+ */
+const WEBHOOK_RATE_LIMIT = { max: 12_000, timeWindow: "1 minute" };
+/** An update is a few KB; Fastify's 1MB default, above the API's own 64KB, so none is ever cut. */
+const WEBHOOK_BODY_LIMIT = 1024 * 1024;
 
 const CHAT_SELECT = {
   id: true,
@@ -331,33 +338,36 @@ export async function registerTelegramRoutes(app: FastifyInstance, { env }: { en
    * here is already safe to run once.
    */
   async function guard(request: FastifyRequest, reply: FastifyReply) {
-    if (!configured) {
-      reply.code(404).send({ error: "not_found" });
-      return;
-    }
+    if (!configured) return reply.code(404).send({ error: "not_found" });
     if (!secretMatches(request.headers["x-telegram-bot-api-secret-token"], secret)) {
       request.log.warn({ ip: clientIp(request) }, "telegram webhook call with a bad secret");
-      reply.code(401).send({ error: "unauthorized" });
+      return reply.code(401).send({ error: "unauthorized" });
     }
   }
-  app.post("/webhook", { preHandler: guard, config: { rateLimit: WEBHOOK_RATE_LIMIT } }, async (request) => {
-    const update = request.body as TelegramUpdate | null;
-    if (!update || typeof update !== "object" || typeof update.update_id !== "number") return { ok: true };
-    try {
-      const outcome = await handleTelegramUpdate(api!, update, {
-        botUsername: lookupBot,
-        boards,
-        links: { dashboardUrl: dashboardUrl(env) },
-        admins,
-      });
-      // A throttled command is someone hammering it: not worth a log line each.
-      if (outcome.action !== "ignored" && outcome.action !== "throttled")
-        request.log.info({ action: outcome.action }, "telegram update handled");
-    } catch (err) {
-      request.log.error({ err }, "telegram update failed");
-    }
-    return { ok: true };
-  });
+  // onRequest, not preHandler: the secret is checked before the body is read, so a caller without
+  // it can't make the API download and parse a body first.
+  app.post(
+    "/webhook",
+    { onRequest: guard, bodyLimit: WEBHOOK_BODY_LIMIT, config: { rateLimit: WEBHOOK_RATE_LIMIT } },
+    async (request) => {
+      const update = request.body as TelegramUpdate | null;
+      if (!update || typeof update !== "object" || typeof update.update_id !== "number") return { ok: true };
+      try {
+        const outcome = await handleTelegramUpdate(api!, update, {
+          botUsername: lookupBot,
+          boards,
+          links: { dashboardUrl: dashboardUrl(env) },
+          admins,
+        });
+        // A throttled command is someone hammering it: not worth a log line each.
+        if (outcome.action !== "ignored" && outcome.action !== "throttled")
+          request.log.info({ action: outcome.action }, "telegram update handled");
+      } catch (err) {
+        request.log.error({ err }, "telegram update failed");
+      }
+      return { ok: true };
+    },
+  );
 
   /**
    * Tells Telegram where to deliver updates, once the server listens. Only when both the token

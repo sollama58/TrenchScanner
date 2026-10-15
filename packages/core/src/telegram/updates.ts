@@ -119,12 +119,34 @@ export function takeReplySlot(chatId: bigint | number, t: number, lane: "" | "ad
   const key = lane ? `${chatId}:${lane}` : String(chatId);
   const last = lastReplyAt.get(key);
   if (last !== undefined && t - last >= 0 && t - last < CHAT_REPLY_COOLDOWN_MS) return false;
+  if (!takeBotReply(t)) return false;
   lastReplyAt.delete(key);
   lastReplyAt.set(key, t);
   for (const [k, at] of lastReplyAt) {
     if (lastReplyAt.size <= MAX_COOLDOWN_CHATS && t - at < CHAT_REPLY_COOLDOWN_MS) break;
     lastReplyAt.delete(k);
   }
+  return true;
+}
+
+/**
+ * Command replies per second across EVERY chat. The per-chat cooldown holds one chat to one reply
+ * every 3s, but a few dozen chats (throwaway groups, or private chats from many accounts) each
+ * sending /status on that beat add up past Telegram's bot-wide send limit, and the 429s that
+ * follow land on the worker's real alerts too: it shares the bot. Past this, replies are dropped
+ * (the same "throttled" a busy chat gets) and the alerts keep their headroom.
+ */
+export const BOT_REPLIES_PER_SECOND = 15;
+let botWindowStart = 0;
+let botWindowReplies = 0;
+
+function takeBotReply(t: number): boolean {
+  if (t - botWindowStart >= 1_000 || t < botWindowStart) {
+    botWindowStart = t;
+    botWindowReplies = 0;
+  }
+  if (botWindowReplies >= BOT_REPLIES_PER_SECOND) return false;
+  botWindowReplies += 1;
   return true;
 }
 

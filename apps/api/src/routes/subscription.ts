@@ -41,6 +41,8 @@ const SEND_ROUTE_RATE_LIMIT = { max: 10, timeWindow: "1 minute" };
 // /blockhash and /claim each spend a paid RPC call (getTransaction retries on top) and need only a
 // free sign-in, so they get their own limit instead of the global 300/min.
 const RPC_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+/** How long one blockhash read answers every /blockhash caller. */
+const BLOCKHASH_REUSE_MS = 5_000;
 
 /**
  * The transaction's own id - its first signature - read straight off the signed wire bytes.
@@ -119,8 +121,26 @@ export async function registerSubscriptionRoutes(
    * point: a burn is irreversible, so finding out the backend is down AFTER destroying the tokens
    * is the one failure this whole feature is meant to avoid. Cheap pre-flight, no downside.
    */
+  // One RPC read every few seconds, shared by everyone: the route is open to any signed-in
+  // account, free ones included, and each read used to be a paid Helius call. A blockhash stays
+  // valid for about a minute, so a few seconds old changes nothing for the burn.
+  let blockhash: { at: number; value: Promise<Awaited<ReturnType<typeof rpc.getLatestBlockhash>>> } | null =
+    null;
   app.get("/blockhash", { config: { rateLimit: RPC_ROUTE_RATE_LIMIT } }, async (_request, reply) => {
-    const result = await rpc.getLatestBlockhash();
+    if (!blockhash || Date.now() - blockhash.at > BLOCKHASH_REUSE_MS) {
+      const entry = { at: Date.now(), value: rpc.getLatestBlockhash() };
+      blockhash = entry;
+      // A failed read isn't kept: the next caller asks again.
+      void entry.value.then(
+        (v) => {
+          if (!v && blockhash === entry) blockhash = null;
+        },
+        () => {
+          if (blockhash === entry) blockhash = null;
+        },
+      );
+    }
+    const result = await blockhash.value;
     if (!result) {
       return reply
         .code(503)
