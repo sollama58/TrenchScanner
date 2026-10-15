@@ -769,6 +769,26 @@ export function cexGroupsOf(graph: Pick<BubbleGraph, "nodes" | "cexLinks">): {
     .sort((a, b) => b.pct - a.pct);
 }
 
+/**
+ * The groups to list under the map, each holding only once (user ask 2026-10-15): when groups of
+ * different kinds (a funder's cluster, a funding minute, a KOL's bundle, an exchange's) share a
+ * wallet, only the largest by share of supply is kept, more wallets breaking a tie. Groups of the
+ * same kind all stay. Keeps the order given.
+ */
+export function largestSourceOnly<T extends { kind: string; pct: number; wallets: readonly string[] }>(
+  groups: readonly T[],
+): T[] {
+  const ranked = [...groups].sort((a, b) => b.pct - a.pct || b.wallets.length - a.wallets.length);
+  const owner = new Map<string, Set<string>>();
+  const kept = new Set<T>();
+  for (const g of ranked) {
+    if (g.wallets.some((w) => [...(owner.get(w) ?? [])].some((k) => k !== g.kind))) continue;
+    kept.add(g);
+    for (const w of g.wallets) owner.set(w, (owner.get(w) ?? new Set()).add(g.kind));
+  }
+  return groups.filter((g) => kept.has(g));
+}
+
 // ---------------------------------------------------------------------------------------------
 // The layout
 

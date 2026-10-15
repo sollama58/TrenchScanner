@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  largestSourceOnly,
   showsPct,
   kolControl,
   bubbleNameLines,
@@ -646,5 +647,30 @@ describe("bundleOutline", () => {
   });
   it("draws nothing for a lone bubble", () => {
     expect(bundleOutline([{ x: 0, y: 0, r: 10 }])).toEqual({ circles: [], bands: [] });
+  });
+});
+
+describe("largestSourceOnly (user ask 2026-10-15)", () => {
+  const g = (kind: string, pct: number, wallets: string[]) => ({ kind, pct, wallets });
+  it("lists a group under two kinds once, under the larger", () => {
+    const cluster = g("cluster", 3, ["a", "b", "c"]);
+    const minute = g("same-minute", 2, ["a", "b"]);
+    const other = g("same-minute", 1, ["x", "y"]);
+    expect(largestSourceOnly([cluster, minute, other])).toEqual([cluster, other]);
+  });
+  it("keeps the KOL bundle over the cluster it takes in", () => {
+    const cluster = g("cluster", 7.9, ["a", "b"]);
+    const kol = g("kol", 13.8, ["k", "a", "b"]);
+    expect(largestSourceOnly([cluster, kol])).toEqual([kol]);
+  });
+  it("breaks a tie on share by wallet count", () => {
+    const minute = g("same-minute", 2, ["a", "b"]);
+    const cluster = g("cluster", 2, ["a", "b", "c"]);
+    expect(largestSourceOnly([minute, cluster])).toEqual([cluster]);
+  });
+  it("keeps overlapping groups of the same kind", () => {
+    const k1 = g("kol", 5, ["a", "b"]);
+    const k2 = g("kol", 4, ["b", "c"]);
+    expect(largestSourceOnly([k1, k2])).toEqual([k1, k2]);
   });
 });

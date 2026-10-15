@@ -44,6 +44,7 @@ import {
   type BubbleMaps,
   type WideMap,
   withWideMap,
+  largestSourceOnly,
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
 import { openWallet } from "../walletModal";
@@ -682,7 +683,7 @@ function GroupPanel({
   onSelect: (key: string, cluster?: number) => void;
 }) {
   const detail = useRef<HTMLDivElement>(null);
-  const sections: { title: string; groups: PanelGroup[] }[] = [
+  const all: { title: string; groups: PanelGroup[] }[] = [
     {
       title: "Clusters",
       groups: graph.clusters.map((c, i) => ({
@@ -750,7 +751,19 @@ function GroupPanel({
         wallets: g.wallets,
       })),
     },
-  ].filter((sec) => sec.groups.length > 0);
+  ];
+  // A group that falls under two kinds (a funding minute inside a funder's cluster, a cluster a KOL's
+  // bundle takes in) lists once, under the largest (user ask 2026-10-15).
+  const kept = new Set(
+    largestSourceOnly(
+      all.flatMap((sec) =>
+        sec.groups.map((g) => ({ kind: sec.title, pct: g.pct, wallets: g.wallets.map((w) => w.wallet), g })),
+      ),
+    ).map((x) => x.g),
+  );
+  const sections = all
+    .map((sec) => ({ ...sec, groups: sec.groups.filter((g) => kept.has(g)) }))
+    .filter((sec) => sec.groups.length > 0);
   if (sections.length === 0) return null;
   const picked = sections.flatMap((sec) => sec.groups).find((g) => g.key === listed) ?? null;
   const pick = (g: PanelGroup) => {
