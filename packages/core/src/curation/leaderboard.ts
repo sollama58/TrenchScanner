@@ -721,6 +721,58 @@ export function mixCatch(
 }
 
 /**
+ * A reader's whole feed scored together: the share of the runners their models (the Coverage
+ * Meter's mix) and their switched-on filters caught between them. See feedCatch.
+ */
+export interface FeedCatch extends LiveCatch {
+  /** Where the runners counted start; null when the feed has neither models nor filters. */
+  since: Date | null;
+  /** The runners the models caught (the Coverage Meter's count, over the same runners). */
+  models: { count: number; caught: number };
+  /** The runners the filters caught, and how many of those no model in the mix did. */
+  filters: { count: number; caught: number; only: number };
+}
+
+/**
+ * The Coverage Meter's rule (mixCatch) with the reader's filters added: a runner counts as caught
+ * when any of their models called it at a winning moment or any of their filters alerted on it at
+ * a winning moment (a clean 2x). Filters count from `filtersSince` (their alerts are read from
+ * there), models from the earliest one's start; the runners are those since the earlier of the two.
+ * A filter's winning token is a runner even if the market read missed it, as a seat's call is.
+ */
+export function feedCatch(
+  ledger: CatchLedger,
+  models: readonly string[],
+  filters: { count: number; wins: readonly { token: string; at: Date }[]; since: Date },
+): FeedCatch {
+  const mix = [...new Set(models)].filter((m) => ledger.froms.has(m));
+  let from = Infinity;
+  for (const m of mix) from = Math.min(from, ledger.froms.get(m) ?? Infinity);
+  if (filters.count > 0) from = Math.min(from, filters.since.getTime());
+  const lastWin = new Map(ledger.lastWin);
+  const byFilters = new Set<string>();
+  for (const w of filters.wins) {
+    byFilters.add(w.token);
+    lastWin.set(w.token, Math.max(lastWin.get(w.token) ?? 0, w.at.getTime()));
+  }
+  let runners = 0;
+  if (from !== Infinity) for (const at of lastWin.values()) if (at >= from) runners += 1;
+  const byModels = new Set<string>();
+  for (const m of mix) for (const t of ledger.caughtBy.get(m) ?? []) byModels.add(t);
+  const any = new Set([...byModels, ...byFilters]);
+  let only = 0;
+  for (const t of byFilters) if (!byModels.has(t)) only += 1;
+  return {
+    runners,
+    caught: any.size,
+    pct: runners > 0 ? round1((any.size / runners) * 100) : null,
+    since: from === Infinity ? null : new Date(from),
+    models: { count: mix.length, caught: byModels.size },
+    filters: { count: filters.count, caught: byFilters.size, only },
+  };
+}
+
+/**
  * The board's order: seasoned contestants before warming-up ones (as rankByComposite); within
  * the seasoned, highest lift over the market first (user decision 2026-10-09), those without one
  * after; the rest keep the composite order they come in. The default feed is still picked on the

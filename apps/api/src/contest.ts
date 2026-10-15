@@ -22,6 +22,7 @@ import {
   liveCallRecords,
   liveMarketLift,
   liveCatchRates,
+  feedCatch,
   mixCatch,
   loadCurrentLanes,
   rankByMarketLift,
@@ -46,6 +47,7 @@ import {
   type AddCandidate,
   type CatchLedger,
   type LiveCatch,
+  type FeedCatch,
   type MixCoverage,
   type RecordSummary,
   type ContestantSpec,
@@ -528,14 +530,40 @@ export async function defaultFeedRecord(
 }
 
 /**
+ * The clean 2x alerts of a reader's switched-on filters since `since`, by token at its latest such
+ * alert: what their filters add to the feed's catch (feedCatch).
+ */
+export async function filterWins(
+  userId: string,
+  since: Date,
+): Promise<{ count: number; wins: { token: string; at: Date }[]; since: Date }> {
+  const filters = await prisma.userFilter.findMany({
+    where: { userId, isActive: true, deletedAt: null },
+    select: { id: true },
+  });
+  if (filters.length === 0) return { count: 0, wins: [], since };
+  const wins = await prisma.$queryRaw<{ token: string; at: Date }[]>`
+    SELECT "tokenId" AS token, max("matchedAt") AS at
+    FROM "Match"
+    WHERE "userId" = ${userId} AND "matchedAt" >= ${since}
+      AND "filterId" = ANY(${filters.map((f) => f.id)})
+      AND "hit2xIn1h" AND NOT COALESCE("disqualified", false)
+    GROUP BY 1`;
+  return { count: filters.length, wins, since };
+}
+
+/**
  * The board as one reader sees it: without the catch ledger, and with the Coverage Meter for the
  * models their feed shows - the share of the window's runners those models would have caught
- * together (mixCatch).
+ * together (mixCatch) - and, given their filters' wins (filterWins), the whole feed's catch with
+ * their filters added (feedCatch). `feedModels` is the models whose calls the feed actually
+ * shows: none while model alerts are off.
  */
 export function readerBoard(
   board: Leaderboard,
   models: readonly string[],
-): Omit<Leaderboard, "catchLedger"> & { coverage: MixCoverage } {
+  feed?: { models: readonly string[]; filters: Awaited<ReturnType<typeof filterWins>> },
+): Omit<Leaderboard, "catchLedger"> & { coverage: MixCoverage; feedCatch?: FeedCatch } {
   const { catchLedger, ...rest } = board;
   // What the meter weighs before suggesting a model: its live record over the same window. A
   // silent or untrained model sends nothing, so it can't be "added" in any useful sense.
@@ -552,7 +580,11 @@ export function readerBoard(
       },
     ]),
   );
-  return { ...rest, coverage: mixCatch(catchLedger, models, candidates) };
+  return {
+    ...rest,
+    coverage: mixCatch(catchLedger, models, candidates),
+    ...(feed ? { feedCatch: feedCatch(catchLedger, feed.models, feed.filters) } : {}),
+  };
 }
 
 export async function buildLeaderboard(

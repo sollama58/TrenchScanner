@@ -1,6 +1,8 @@
 import {
   type Env,
   type PrecisionTargets,
+  liveCatch,
+  marketRunners,
   prisma,
   recordScore,
   scoreBand,
@@ -119,6 +121,12 @@ export interface FilterLeaderboardEntry {
   avgRunDoublings: number | null;
   /** The run size the record proves (with the score's phantom misses), in doublings. */
   provenRunDoublings: number | null;
+  /**
+   * Its catch: of the runners since its record starts (tokens that doubled cleanly from a graded
+   * market moment, or from a shared filter's alert - the model board's rule, see liveCatch), how
+   * many it alerted on at a winning moment. Null `pct` with no runners yet.
+   */
+  catch: { runners: number; caught: number; pct: number | null };
   /** Where the record starts: the later of the window start and the last criteria change. */
   recordSince: string;
   /** Whether its owner has it switched on now (only a filter that is on raises alerts). */
@@ -219,6 +227,25 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
     WHERE f."shareOnLeaderboard"
     GROUP BY f."id"`;
 
+  // Catch, over the same alerts and window: each shared filter's clean 2x alerts, by token.
+  const [market, wins] = await Promise.all([
+    marketRunners(since),
+    prisma.$queryRaw<{ filterId: string; token: string; at: Date }[]>`
+      SELECT m."filterId", m."tokenId" AS token, max(m."matchedAt") AS at
+      FROM "UserFilter" sf
+      JOIN "Match" m
+        ON m."filterId" = sf."id"
+       AND m."hit2xIn1h" AND NOT COALESCE(m."disqualified", false)
+       AND m."matchedAt" >= GREATEST(sf."criteriaChangedAt", ${since})
+      WHERE sf."shareOnLeaderboard"
+      GROUP BY 1, 2`,
+  ]);
+  const catches = liveCatch(
+    [...market, ...wins],
+    wins.map((w) => ({ model: w.filterId, token: w.token })),
+    new Map(rows.map((r) => [r.id, r.criteriaChangedAt > since ? r.criteriaChangedAt : since] as const)),
+  ).byModel;
+
   const entries = rows.map((r) => {
     const graded = Number(r.graded);
     const won2x = Number(r.won2x);
@@ -257,6 +284,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       proven4xPct: graded > 0 ? round1(provenRate(won4x, graded) * 100) : null,
       avgRunDoublings: graded > 0 ? round2(sumRun / graded) : null,
       provenRunDoublings: graded > 0 ? round2(provenRate(sumRun, graded)) : null,
+      catch: catches.get(r.id) ?? { runners: 0, caught: 0, pct: null },
       recordSince: recordSince.toISOString(),
       isActive: r.isActive,
       retired: r.deletedAt !== null,

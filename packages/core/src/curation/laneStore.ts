@@ -261,6 +261,23 @@ function marketByHour(
 }
 
 /**
+ * The market's runners since `since`: each token that doubled cleanly from a graded decision
+ * moment past the safety screen (under a reported label rule), at its latest such moment. The
+ * runners liveCatchRates counts a seat against, and the filter leaderboard a filter against.
+ */
+export function marketRunners(since: Date): Promise<{ token: string; at: Date }[]> {
+  return prisma.$queryRaw<{ token: string; at: Date }[]>`
+    SELECT "tokenId" AS token, max("anchorAt") AS at
+    FROM "CandidateOutcome"
+    WHERE "sampleKind" = 'event'
+      AND "anchorAt" >= ${since}
+      AND "hit2xIn1h" AND NOT COALESCE("disqualified", false)
+      AND "labelRule" >= ${REPORTED_LABEL_RULE}
+      AND ${walletSafetyCutsSql()}
+    GROUP BY 1`;
+}
+
+/**
  * Each model's live catch rate (see liveCatch): of the tokens that doubled cleanly from a graded
  * market moment or a seat's call since its own start, the share it called at a winning moment;
  * and the same for every seat together. Over the same seats and calls liveCallRecords counts, and
@@ -283,17 +300,7 @@ export async function liveCatchRates(
   );
   if (models.length === 0) return liveCatch([], [], froms);
   const [market, calls] = await Promise.all([
-    marketRows
-      ? Promise.resolve(marketWinners(marketRows, since))
-      : prisma.$queryRaw<{ token: string; at: Date }[]>`
-      SELECT "tokenId" AS token, max("anchorAt") AS at
-      FROM "CandidateOutcome"
-      WHERE "sampleKind" = 'event'
-        AND "anchorAt" >= ${since}
-        AND "hit2xIn1h" AND NOT COALESCE("disqualified", false)
-        AND "labelRule" >= ${REPORTED_LABEL_RULE}
-        AND ${walletSafetyCutsSql()}
-      GROUP BY 1`,
+    marketRows ? Promise.resolve(marketWinners(marketRows, since)) : marketRunners(since),
     prisma.$queryRaw<{ model: string; token: string; at: Date }[]>`
       WITH seats AS (
         SELECT * FROM unnest(

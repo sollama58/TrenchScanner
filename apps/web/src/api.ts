@@ -933,6 +933,11 @@ export interface FilterBoardEntry {
   /** Average run size per graded alert, in doublings: 2 = calls ran to 4x on average. */
   avgRunDoublings: number | null;
   provenRunDoublings: number | null;
+  /**
+   * Of the runners since its record starts, how many it alerted on at a winning moment (absent
+   * from older API builds).
+   */
+  catch?: LiveCatch;
   recordSince: string;
   isActive: boolean;
   /** Its owner deleted it; kept on the board for its record (absent from older API builds). */
@@ -1018,6 +1023,14 @@ export interface LiveCatch {
   runners: number;
   caught: number;
   pct: number | null;
+}
+
+/** A reader's models and filters scored together (Leaderboard.feedCatch). */
+export interface FeedCatch extends LiveCatch {
+  since: string | null;
+  models: { count: number; caught: number };
+  /** `only`: runners the filters caught that no model did. */
+  filters: { count: number; caught: number; only: number };
 }
 
 /** A mix of models scored together: a runner counts as caught when any of them called it. */
@@ -1190,6 +1203,11 @@ export interface Leaderboard {
    * would have caught together. Absent from older API builds.
    */
   coverage?: MixCoverage;
+  /**
+   * The whole feed's catch: the share of the window's runners this reader's models (while model
+   * alerts are on) and switched-on filters caught between them. Absent from older API builds.
+   */
+  feedCatch?: FeedCatch;
   scoring: {
     weights: {
       winRate: number;
