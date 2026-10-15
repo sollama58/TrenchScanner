@@ -179,6 +179,28 @@ const highConvictionParam = z
   .optional()
   .transform((v) => v === "true" || v === "1");
 
+/**
+ * `?q=`: the text the dashboard's search box holds when it isn't a whole address - a ticker
+ * (a leading "$" is dropped), a name, or part of an address. Two characters at least: one
+ * matches nearly everything.
+ */
+export const tokenSearchParam = z
+  .string()
+  .transform((v) => v.trim().replace(/^\$/, "").trim())
+  .pipe(z.string().min(2, "search for at least 2 characters").max(64))
+  .optional();
+
+/** The tokens whose ticker, name or address holds `text`, in any case. */
+export function tokenTextWhere(text: string): Prisma.TokenWhereInput {
+  return {
+    OR: [
+      { symbol: { contains: text, mode: "insensitive" } },
+      { name: { contains: text, mode: "insensitive" } },
+      { mintAddress: { contains: text, mode: "insensitive" } },
+    ],
+  };
+}
+
 export const listQuerySchema = z.object({
   // Capped: the merge below reads page * PAGE_SIZE rows of each source, so an unbounded page was
   // an unbounded query (and past 2^53 a Prisma error).
@@ -211,6 +233,8 @@ export const listQuerySchema = z.object({
     .string()
     .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "mint must be a Solana address")
     .optional(),
+  /** A name, ticker or part of an address: the feed narrowed to the tokens that hold it. */
+  q: tokenSearchParam,
 });
 
 /**
@@ -870,18 +894,24 @@ export async function registerMatchRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const { page, includeCurated, highConviction, mint } = parsed.data;
+    const { page, includeCurated, highConviction, mint, q } = parsed.data;
     // The CA search: one token's alerts. Nobody has an alert on a token we never saw.
     const searched = mint
       ? await prisma.token.findUnique({ where: { mintAddress: mint }, select: { id: true } })
       : undefined;
     if (searched === null) return { matches: [], page, pageSize: PAGE_SIZE, totalCount: 0, hasMore: false };
     const tokenId = searched?.id;
-    const where = { userId: request.user!.userId, ...(tokenId ? { tokenId } : {}) };
+    // The name/ticker search: the tokens whose ticker, name or address holds the text.
+    const narrow = tokenId ? { tokenId } : q ? { token: tokenTextWhere(q) } : {};
+    const where = { userId: request.user!.userId, ...narrow };
     // Every model-call read below narrows the same way, and its cache key says so (ahead of the
     // model set, which keyFollowsModel reads off the end).
-    const callsWhere = (calls: FeedCalls) => ({ ...feedCallsWhere(calls), ...(tokenId ? { tokenId } : {}) });
+    const callsWhere = (calls: FeedCalls) => ({ ...feedCallsWhere(calls), ...narrow });
     const tokenKey = tokenId ? `token=${tokenId}:` : "";
+    // A typed search is one reader's passing question: it isn't cached, so a run of keystrokes
+    // can't push every reader's shared answers out of the bounded caches.
+    const callRead = <T>(key: string, read: () => Promise<T>): Promise<T> =>
+      q ? read() : sharedCallRead(key, read);
 
     /*
      * The curated feed can be interleaved into this one, for readers who ask for it
@@ -928,7 +958,7 @@ export async function registerMatchRoutes(
       const take = depth * calls.models.length;
       const key = tokenKey + feedCallsKey(calls);
       const [rows, total] = await Promise.all([
-        sharedCallRead(`feed:${take}:${key}`, () =>
+        callRead(`feed:${take}:${key}`, () =>
           prisma.curatedAlert.findMany({
             where: callsWhere(calls),
             orderBy: { createdAt: "desc" },
@@ -938,7 +968,7 @@ export async function registerMatchRoutes(
         ),
         // Only the legacy flag reports a count; the dashboard pages on hasMore instead.
         includeCurated === "on"
-          ? sharedCallRead(`count:${key}`, () => prisma.curatedAlert.count({ where: callsWhere(calls) }))
+          ? callRead(`count:${key}`, () => prisma.curatedAlert.count({ where: callsWhere(calls) }))
           : 0,
       ]);
       return { calls, rows, total, hitLimit: rows.length === take };
@@ -948,6 +978,7 @@ export async function registerMatchRoutes(
     // tail starts. The same two bare reads page MAX_MERGE_DEPTH / PAGE_SIZE itself makes.
     const matchesInMergedRun = async (): Promise<number> => {
       const calls = await feedCalls();
+      if (q) return countMatchesInMergedRun();
       return mergedRunCache
         .for(`${where.userId}:${tokenKey}${feedCallsKey(calls)}`)
         .get(() => countMatchesInMergedRun());

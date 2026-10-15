@@ -14,8 +14,8 @@ import { fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES } from "../feedFill
 import { ago, pct } from "../format";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { CustomizeDrawer } from "../components/CustomizeDrawer";
-import { CaSearchBox, CaSearchNote, CaSearchResults } from "../components/CaSearch";
-import { cardMatchesCa, parseCaQuery } from "../caSearch";
+import { CaSearchBox, SearchResults } from "../components/CaSearch";
+import { parseSearch } from "../caSearch";
 
 /** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
 const MIN_TEASER = 10;
@@ -66,12 +66,11 @@ export function LiveTab({
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const look = useAppearance();
   const hidden = useMemo(() => cardHideSet(look), [look]);
-  // The CA search: a whole address is looked up in the API across the whole feed; part of one
-  // narrows the alerts already read. Either way the paged feed underneath carries on as it was.
-  const [caInput, setCaInput] = useState("");
-  const clearCa = useCallback(() => setCaInput(""), []);
-  const ca = parseCaQuery(caInput);
-  const caPartial = ca.kind === "partial" ? ca.text : null;
+  // The search (address, ticker or name) is looked up in the API across the whole feed and shown
+  // in the feed's place; the paged feed underneath carries on as it was.
+  const [searchInput, setSearchInput] = useState("");
+  const clearSearch = useCallback(() => setSearchInput(""), []);
+  const searching = parseSearch(searchInput).kind !== "none";
   // "saved": the API mixes in model calls per this user's own switch and checked models; with
   // highConviction those calls are every model's high-conviction tier instead.
   const hc = highConviction ? "&highConviction=1" : "";
@@ -110,19 +109,9 @@ export function LiveTab({
   // The live tick covers the page on screen and the hidden cards among it (which can climb back),
   // not every alert read ahead. Which those are depends on the tick itself, so it follows a render.
   const [tickIds, setTickIds] = useState<string[] | undefined>(undefined);
-  // A part-address search shows the matching alerts read so far, so the tick follows those.
-  const caMatchIds = useMemo(
-    () =>
-      caPartial && buffer
-        ? buffer.filter((c) => cardMatchesCa(c, caPartial)).map((c) => c.tokenId)
-        : undefined,
-    [buffer, caPartial],
-  );
-  // "Now" on each card, seconds old rather than as old as the last feed poll. A whole-address
-  // search ticks its own cards (CaSearchResults), so the feed's tick rests meanwhile.
-  const cards = useLiveMarketCaps(buffer, ca.kind === "full" ? [] : (caMatchIds ?? tickIds));
-  // The search shows every match, hidden under the market cap line or not: it was asked for.
-  const caCards = caPartial ? cards?.filter((c) => cardMatchesCa(c, caPartial)) : undefined;
+  // "Now" on each card, seconds old rather than as old as the last feed poll. A search ticks its
+  // own cards (SearchResults), so the feed's tick rests meanwhile.
+  const cards = useLiveMarketCaps(buffer, searching ? [] : tickIds);
   // The "hide below this market cap" setting only takes cards off the screen: the feed's stats and
   // grading are the API's, unchanged. Older alerts move up into the gaps, and a card that climbs
   // back over the line (with a margin, so a coin trading at the line doesn't flicker) takes its own
@@ -281,49 +270,35 @@ export function LiveTab({
             )}
             {lb && <ModelPicker board={lb} disabled={!modelsOn || highConviction} onChanged={changed} />}
             <CaSearchBox
-              value={caInput}
-              onChange={setCaInput}
-              title="Find a token in your feed by its contract address. Press / to jump here."
+              value={searchInput}
+              onChange={setSearchInput}
+              title="Find a token in your feed by its contract address, ticker or name. Press / to jump here."
             />
             <span className={`live-dot ${streamLive ? "on" : ""}`}>{streamLive ? "Live" : "Polling"}</span>
             {toggleError && <small className="error">Couldn&apos;t switch model alerts: {toggleError}</small>}
           </div>
         </header>
-        {ca.kind === "full" && (
-          <CaSearchResults<MatchPage>
-            path={`${feedPath(1)}&mint=${ca.mint}`}
+        {searching && (
+          <SearchResults<MatchPage>
+            input={searchInput}
+            pathFor={(search, n) => (search ? `${feedPath(n)}&${search}` : feedPath(1))}
             pollMs={30_000}
             pollKey={String(pick)}
             cardsOf={(d) => d.matches}
-            mint={ca.mint}
+            hasMoreOf={(d) => d.hasMore ?? false}
+            noun="alert"
             where="your feed"
-            onClear={clearCa}
+            onClear={clearSearch}
             now={now}
             hide={hidden}
             look={look}
             labelSource
           />
         )}
-        {caCards && (
-          <>
-            <CaSearchNote
-              found={caCards.length}
-              mint={null}
-              partial={caPartial}
-              where="your feed"
-              onClear={clearCa}
-            />
-            <div className="cards" {...feedGridProps(look)}>
-              {caCards.map((card) => (
-                <AlertCard key={card.id} card={card} now={now} labelSource hide={hidden} />
-              ))}
-            </div>
-          </>
-        )}
-        {ca.kind === "none" && feedPage.error && !feedPage.data && (
+        {!searching && feedPage.error && !feedPage.data && (
           <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
         )}
-        {ca.kind === "none" && (
+        {!searching && (
           <>
             {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
             {feedPage.data && feedPage.data.matches.length === 0 && page === 1 && (

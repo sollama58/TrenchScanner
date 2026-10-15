@@ -153,6 +153,15 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
     expect((await get("/launches?mint=not-an-address")).statusCode).toBe(400);
   });
 
+  it("finds tokens by ticker, name or part of the address", async () => {
+    const get = (url: string) =>
+      app.inject({ method: "GET", url, cookies: { [SESSION_COOKIE_NAME]: cookie } });
+    const found = (await get("/launches?q=%24NEWE")).json() as { launches: { tokenId: string }[] };
+    expect(found.launches.map((c) => c.tokenId)).toEqual([ids.newer]);
+    // A % in the text is a character, not a wildcard.
+    expect(((await get("/launches?q=%25%25")).json() as { launches: unknown[] }).launches).toEqual([]);
+  });
+
   it("is behind sign-in like the feeds", async () => {
     expect((await app.inject({ method: "GET", url: "/launches" })).statusCode).toBe(401);
   });
