@@ -7,8 +7,13 @@ import {
 
 const logger = createLogger("jupiter-launch-poller");
 
-/** Jupiter's `recent` list spans about half a minute of Pump.fun launches; this reads it three times over. */
-export const LAUNCH_POLL_INTERVAL_MS = 10_000;
+/**
+ * Jupiter's `recent` list spans about half a minute of Pump.fun launches, so each launch shows in
+ * two reads. 4 calls a minute through the shared gate (50 a minute, PR #566), which the scan and
+ * the other jobs used about 26 of on 2026-10-15; background priority, so the scan's own price
+ * reads keep their reserve.
+ */
+export const LAUNCH_POLL_INTERVAL_MS = 15_000;
 const MAX_BUFFERED = 2_000;
 
 /**

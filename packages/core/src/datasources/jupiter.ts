@@ -180,7 +180,7 @@ export class JupiterClient {
 
   /**
    * Jupiter's newest Pump.fun pools alone (the `recent` list of discoverMovingLaunches), for the
-   * launch poller (apps/worker discovery/jupiterLaunchPoller.ts). The list holds the last 30 pools
+   * launch poller (apps/worker discovery/jupiterLaunchPoller.ts), through the same gate as every other call. The list holds the last 30 pools
    * on any launchpad, about half a minute of Pump.fun launches, so read once a minute it showed
    * half of them; PumpPortal's create feed is missing about 45% of launches (2026-10-15: 95 of 210
    * in four minutes, SOL- and coin-paired alike), so the rest were never discovered at all.
