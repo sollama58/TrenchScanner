@@ -14,6 +14,7 @@ import {
   JupiterClient,
   LiveLaunchQuotes,
   JupiterFirstLookup,
+  jupiterRequestsPerMinute,
   PumpFunClient,
   RugCheckClient,
   HeliusClient,
@@ -205,7 +206,13 @@ async function main() {
   // With a Jupiter key, the price-only jobs (candidate-watch, the empty-wallet check) ask Jupiter
   // first, so DexScreener's per-IP budget goes to the scan's refresh and fast-match.
   const jupiter = env.JUPITER_API_KEY
-    ? new JupiterClient({ apiKey: env.JUPITER_API_KEY, requestsPerMinute: env.JUPITER_REQUESTS_PER_MINUTE })
+    ? new JupiterClient({
+        apiKey: env.JUPITER_API_KEY,
+        requestsPerMinute:
+          env.JUPITER_REQUESTS_PER_MINUTE ??
+          jupiterRequestsPerMinute(env.JUPITER_MONTHLY_CREDITS, env.JUPITER_REQUESTS_PER_SECOND),
+        burst: env.JUPITER_REQUESTS_PER_SECOND,
+      })
     : undefined;
   // The per-mint price tape behind the price-path model inputs - in memory, bounded.
   const pricePath = new PricePathBook();

@@ -67,6 +67,16 @@ describe("classifyApiRequest", () => {
     expect(classifyApiRequest("https://api.helius.xyz/v0/transactions", "POST", "{}")[0]!.credits).toBe(100);
   });
 
+  it("charges Jupiter's credits by route: 10 a token search, 1 a price read, 0 to execute", () => {
+    const mint = "So11111111111111111111111111111111111111112";
+    const credits = (url: string) => classifyApiRequest(url, "GET", undefined)[0]!.credits;
+    expect(credits(`https://api.jup.ag/tokens/v2/search?query=${mint},${mint}`)).toBe(10);
+    expect(credits(`https://api.jup.ag/price/v3?ids=${mint}`)).toBe(1);
+    expect(credits("https://api.jup.ag/tokens/v2/toptrending/1h")).toBe(5);
+    expect(credits("https://api.jup.ag/swap/v2/execute")).toBe(0);
+    expect(credits("https://api.jup.ag/swap/v1/quote")).toBe(1);
+  });
+
   it("never keeps a Telegram bot token in the endpoint", () => {
     const [line] = classifyApiRequest(
       "https://api.telegram.org/bot123456:AAH-secret-token/sendMessage",

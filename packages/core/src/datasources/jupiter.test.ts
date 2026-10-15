@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   JupiterClient,
   JupiterFirstLookup,
+  jupiterPriorityReserve,
+  jupiterRequestsPerMinute,
   parseJupiterLaunches,
   parseJupiterQuotes,
   parseJupiterTokens,
@@ -194,7 +196,7 @@ describe("JupiterClient", () => {
       return Promise.resolve(new Response(JSON.stringify(list.map((id) => ({ id, usdPrice: 1, mcap: 1 })))));
     });
     // One call a second once the burst of 5 is spent; 2 of the 5 are reserved.
-    const client = new JupiterClient({ apiKey: "k", requestsPerMinute: 60 });
+    const client = new JupiterClient({ apiKey: "k", requestsPerMinute: 60, burst: 5 });
     const batch = (from: number) => Array.from({ length: 100 }, (_, i) => `m${from + i}`);
     // The outcome watcher's lookups take the three ordinary slots.
     await client.getTokensByAddresses([...batch(0), ...batch(100), ...batch(200)], 3, { retries: 0 });
@@ -229,6 +231,27 @@ describe("JupiterClient", () => {
     expect(found).toHaveLength(100);
     expect(failed.size).toBe(100);
     expect(failed.has("m150")).toBe(true);
+  });
+});
+
+describe("jupiterRequestsPerMinute", () => {
+  it("holds a paid plan to its credits, not its rate", () => {
+    // Developer: 25M credits at 10 a search, 90% over a 31-day month - not 10 a second.
+    expect(jupiterRequestsPerMinute(25_000_000, 8)).toBe(50);
+    expect(50 * 10 * 31 * 24 * 60).toBeLessThanOrEqual(25_000_000);
+    // Launch: 100M credits, 50 a second.
+    expect(jupiterRequestsPerMinute(100_000_000, 40)).toBe(201);
+  });
+
+  it("goes by the rate alone with no credit cap (the free plan), and never below 1", () => {
+    expect(jupiterRequestsPerMinute(0, 1)).toBe(54);
+    expect(jupiterRequestsPerMinute(1, 8)).toBe(1);
+  });
+
+  it("reserves half the burst for the scan's reads, at least 2", () => {
+    expect(jupiterPriorityReserve(8)).toBe(4);
+    expect(jupiterPriorityReserve(5)).toBe(2);
+    expect(jupiterPriorityReserve(1)).toBe(2);
   });
 });
 

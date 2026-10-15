@@ -56,6 +56,30 @@ export const HELIUS_CREDITS: Record<string, number> = {
 const DEFAULT_RPC_CREDITS = 1;
 /** Helius's REST APIs (api.helius.xyz/v0: Enhanced Transactions and the like) bill 100 a request. */
 const HELIUS_REST_CREDITS = 100;
+/**
+ * Jupiter's credits per call on a paid plan (developers.jup.ag/docs/portal/plans, checked
+ * 2026-10-15), by route; any other route costs 1. The free plan has no credit cap, but the count
+ * still shows what a paid plan would bill.
+ */
+export const JUPITER_CREDITS: Record<string, number> = {
+  "/tokens/v2/search": 10,
+  "/tokens/v2/tag": 50,
+  "/tokens/v2/recent": 1,
+  "/price/v3": 1,
+};
+const DEFAULT_JUPITER_CREDITS = 1;
+/** Swap execution is free on every plan. */
+const JUPITER_FREE_ROUTE = /\/execute$/;
+
+export function jupiterCredits(pathname: string): number {
+  if (JUPITER_FREE_ROUTE.test(pathname)) return 0;
+  const exact = JUPITER_CREDITS[pathname.replace(/\/+$/, "")];
+  if (exact !== undefined) return exact;
+  // The token category lists (/tokens/v2/{category}/{interval}) cost 5.
+  if (/^\/tokens\/v2\/[^/]+\/[^/]+$/.test(pathname)) return 5;
+  return DEFAULT_JUPITER_CREDITS;
+}
+
 /** CoinGecko's paid API bills one credit a call; the free GeckoTerminal API has no credits. */
 const COINGECKO_PRO_CREDITS = 1;
 
@@ -136,7 +160,7 @@ export interface ApiCallLine {
 
 /**
  * What one HTTP request is, for the counts: one line per JSON-RPC method in it (an RPC host), or
- * a single "METHOD /path" line. Credits are only known for Helius and CoinGecko's paid API.
+ * a single "METHOD /path" line. Credits are only known for Helius, Jupiter and CoinGecko's paid API.
  */
 export function classifyApiRequest(url: string, httpMethod: string, body: unknown): ApiCallLine[] {
   let parsed: URL;
@@ -161,9 +185,11 @@ export function classifyApiRequest(url: string, httpMethod: string, body: unknow
   const credits =
     provider === "helius"
       ? HELIUS_REST_CREDITS
-      : parsed.hostname === "pro-api.coingecko.com"
-        ? COINGECKO_PRO_CREDITS
-        : 0;
+      : provider === "jupiter"
+        ? jupiterCredits(parsed.pathname)
+        : parsed.hostname === "pro-api.coingecko.com"
+          ? COINGECKO_PRO_CREDITS
+          : 0;
   return [{ provider, endpoint, calls: 1, credits }];
 }
 

@@ -87,13 +87,21 @@ const envSchema = z.object({
   // The worker's share of the plan's calls a minute (the API process takes a small fixed share on
   // top). Only read with COINGECKO_API_KEY. 250 is the Basic plan's limit, less the API's.
   COINGECKO_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(200),
-  // A Jupiter API key (portal.jup.ag; the free plan is enough). With one, the jobs that only need a
-  // price - the outcome watcher and the empty-wallet check - ask Jupiter first and DexScreener only
-  // for what it missed, leaving DexScreener's per-IP budget to the scan and fast-match
-  // (datasources/jupiter.ts). Empty: every lookup goes to DexScreener, as before.
+  // A Jupiter API key (portal.jup.ag). With one, the jobs that only need a price - the outcome
+  // watcher and the empty-wallet check - ask Jupiter first and DexScreener only for what it missed,
+  // leaving DexScreener's per-IP budget to the scan and fast-match, and the scan reads young
+  // launches' prices and its fresh quotes from it (datasources/jupiter.ts). Empty: every lookup
+  // goes to DexScreener, as before. The key is the same on every plan; upgrading changes nothing here.
   JUPITER_API_KEY: pastedKey,
-  // Calls a minute to Jupiter. The free plan allows 60 per account.
-  JUPITER_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().default(50),
+  // The plan's requests a second, less headroom: how many calls may go out back to back. The
+  // Developer plan allows 10; the free plan 1 (set 1 there).
+  JUPITER_REQUESTS_PER_SECOND: z.coerce.number().int().positive().default(8),
+  // The plan's credits a month (Developer: 25M). Each search call costs 10, so this, not the
+  // rate, sets the sustained calls a minute (jupiterRequestsPerMinute). 0: no cap (free plan).
+  JUPITER_MONTHLY_CREDITS: z.coerce.number().int().nonnegative().default(25_000_000),
+  // Sustained calls a minute, overriding what the two above work out to (50 on the Developer
+  // plan's defaults). Raising it past that spends billed overage credits.
+  JUPITER_REQUESTS_PER_MINUTE: z.coerce.number().int().positive().optional(),
   // A Solana Tracker Data API key (solanatracker.io; the free plan is enough). With one, the worker
   // reads Solana Tracker's KOL roster once a day into KolWallet (jobs/kolWalletsJob.ts), and the
   // dashboard labels those wallets as KOLs with their name and X handle. Empty: no KOL labels.

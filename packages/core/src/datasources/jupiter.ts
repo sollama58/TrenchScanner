@@ -46,21 +46,60 @@ interface JupiterToken {
 
 /** The search endpoint takes up to 100 comma-separated mints a call. */
 const BATCH_SIZE = 100;
-/** The free plan allows 60 calls a minute per account; this leaves a little room. */
-export const DEFAULT_JUPITER_REQUESTS_PER_MINUTE = 50;
-const GATE_BURST = 5;
 /**
- * Of that burst, the slots only the scan's own reads (`priority`: the band refresh's launch prices
- * and the decision's fresh quotes) may take. The outcome watcher, wallet valuation and the
- * band-entry checks share this budget, and on 2026-10-13 a cycle's fresh quotes queued up to 2.5 s
- * behind them - every decision in that cycle waiting with them.
+ * Credits one /tokens/v2/search call costs on a paid plan, however many mints it carries
+ * (developers.jup.ag/docs/portal/plans, checked 2026-10-15). The free plan has no credit cap.
  */
-export const JUPITER_PRIORITY_RESERVE = 2;
+export const JUPITER_SEARCH_CREDITS = 10;
+/** The Developer plan's monthly credits (25M) and requests a second (10). */
+export const DEFAULT_JUPITER_MONTHLY_CREDITS = 25_000_000;
+/** Below the plan's 10 a second, so a burst never meets the cap. */
+export const DEFAULT_JUPITER_REQUESTS_PER_SECOND = 8;
+/** Of the monthly credits, the share the gate plans to spend: the rest is room for a long month. */
+const CREDIT_HEADROOM = 0.9;
+const MINUTES_IN_LONGEST_MONTH = 31 * 24 * 60;
+
+/**
+ * Sustained search calls a minute that fit the plan. On a paid plan the credits bind long before
+ * the rate does: 25M credits at 10 a search is about 58 calls a minute over a 31-day month, where
+ * 10 a second would be 600 (and ~260M credits). Overage is billed rather than refused, so the gate
+ * holds to the credits; 90% of them leaves 50 a minute. `monthlyCredits` 0 means no credit cap
+ * (the free plan), and the rate alone decides, also at 90%. Never below 1.
+ */
+export function jupiterRequestsPerMinute(monthlyCredits: number, requestsPerSecond: number): number {
+  const byRate = Math.floor(requestsPerSecond * 60 * CREDIT_HEADROOM);
+  if (monthlyCredits <= 0) return Math.max(1, byRate);
+  const byCredits = Math.floor(
+    (monthlyCredits * CREDIT_HEADROOM) / JUPITER_SEARCH_CREDITS / MINUTES_IN_LONGEST_MONTH,
+  );
+  return Math.max(1, Math.min(byRate, byCredits));
+}
+
+/** The gate's default: the Developer plan, at its defaults. */
+export const DEFAULT_JUPITER_REQUESTS_PER_MINUTE = jupiterRequestsPerMinute(
+  DEFAULT_JUPITER_MONTHLY_CREDITS,
+  DEFAULT_JUPITER_REQUESTS_PER_SECOND,
+);
+/**
+ * Of a burst, the slots only the scan's own reads (`priority`: the band refresh's launch prices
+ * and the decision's fresh quotes) may take: half, at least 2. The outcome watcher, wallet
+ * valuation and the band-entry checks share this budget, and on 2026-10-13 a cycle's fresh quotes
+ * queued up to 2.5 s behind them - every decision in that cycle waiting with them.
+ */
+export function jupiterPriorityReserve(burst: number): number {
+  return Math.max(2, Math.floor(burst / 2));
+}
 
 export interface JupiterClientOptions {
   apiKey: string;
   baseUrl?: string;
+  /** Sustained calls a minute (see jupiterRequestsPerMinute). */
   requestsPerMinute?: number;
+  /**
+   * Calls that may go out back to back: the plan's requests a second, less headroom. A cycle's
+   * reads go out together this many at a time rather than one per sustained interval.
+   */
+  burst?: number;
 }
 
 /**
@@ -80,11 +119,12 @@ export class JupiterClient {
   constructor(options: JupiterClientOptions) {
     this.baseUrl = options.baseUrl ?? "https://api.jup.ag";
     this.headers = { accept: "application/json", "x-api-key": options.apiKey };
+    const burst = Math.max(1, Math.floor(options.burst ?? DEFAULT_JUPITER_REQUESTS_PER_SECOND));
     this.gate = new RateGate({
       name: "jupiter",
       perMinute: options.requestsPerMinute ?? DEFAULT_JUPITER_REQUESTS_PER_MINUTE,
-      burst: GATE_BURST,
-      reserve: JUPITER_PRIORITY_RESERVE,
+      burst,
+      reserve: jupiterPriorityReserve(burst),
     });
   }
 
