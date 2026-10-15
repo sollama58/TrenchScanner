@@ -444,16 +444,14 @@ input[type="checkbox"] {
 .tabs > .tablist {
   display: contents;
 }
-.tabs button,
-.tabs .tab-link {
+.tabs button {
   background: transparent;
   border: 1px solid transparent;
   color: var(--ink-2);
   border-radius: 9px;
   padding: 7px 14px;
 }
-.tabs button:hover:not(:disabled),
-.tabs .tab-link:hover:not(:disabled) {
+.tabs button:hover:not(:disabled) {
   background: transparent;
   border-color: transparent;
   color: var(--ink);
@@ -616,8 +614,50 @@ input[type="checkbox"] {
   min-height: 100vh;
 }
 .site-foot {
-  text-align: center;
-  padding: 24px 16px 40px;
+  max-width: 1360px;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 20px;
+  padding: 24px 24px 40px;
+}
+/* HolDEX and alonisthe.dev, side by side at the footer's right end. */
+.foot-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.foot-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.foot-link:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+  text-decoration: none;
+}
+/* Phones: the note, then the links, both centred. */
+@media (max-width: 640px) {
+  .site-foot {
+    flex-direction: column;
+    text-align: center;
+    padding: 20px 16px 32px;
+  }
+  .foot-links {
+    margin-left: 0;
+    justify-content: center;
+  }
 }
 .boot {
   display: grid;
@@ -3456,8 +3496,67 @@ legend {
     order: 3;
     width: 100%;
   }
+  .tabs button {
+    flex: 1;
+    justify-content: center;
+  }
+}
+/* Tablets: up to nine entries share the row (Stream, Admin and HolDEX on), so each stacks its icon
+   over a smaller label and gives up width rather than pushing the page sideways. */
+@media (min-width: 641px) and (max-width: 980px) {
   .tabs button,
   .tabs .tab-link {
+    flex: 1 1 0;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 2px;
+    font-size: 12px;
+  }
+  .tabs button span,
+  .tabs .tab-link span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+/* Narrow desktop windows: once brand, tabs and wallet no longer fit one row, the tabs take their
+   own row as on tablets. How wide that is depends on how many tabs show (Stream and Admin add one
+   each), so each count gets its own breakpoint. */
+@media (min-width: 981px) and (max-width: 1059px) {
+  .topbar-inner:has(.tablist > :nth-child(6)) {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .topbar-inner:has(.tablist > :nth-child(6)) > .tabs {
+    order: 3;
+    width: 100%;
+  }
+}
+@media (min-width: 981px) and (max-width: 1139px) {
+  .topbar-inner:has(.tablist > :nth-child(7)) {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .topbar-inner:has(.tablist > :nth-child(7)) > .tabs {
+    order: 3;
+    width: 100%;
+  }
+}
+@media (min-width: 981px) and (max-width: 1239px) {
+  .topbar-inner:has(.tablist > :nth-child(8)) {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+  .topbar-inner:has(.tablist > :nth-child(8)) > .tabs {
+    order: 3;
+    width: 100%;
+  }
+}
+@media (min-width: 981px) and (max-width: 1239px) {
+  .topbar-inner:has(.tablist > :nth-child(6)) > .tabs button,
+  .topbar-inner:has(.tablist > :nth-child(6)) > .tabs .tab-link {
     flex: 1;
     justify-content: center;
   }
@@ -3492,8 +3591,7 @@ legend {
     order: 3;
     width: 100%;
   }
-  .tabs button,
-  .tabs .tab-link {
+  .tabs button {
     flex: 1;
     justify-content: center;
     padding: 7px 6px;
@@ -4533,8 +4631,7 @@ html:has(dialog.about-modal[open]) {
     border-top: 1px solid var(--border);
     background: var(--surface-solid);
   }
-  .tabs button,
-  .tabs .tab-link {
+  .tabs button {
     flex: 1 1 0;
     min-width: 0;
     flex-direction: column;
@@ -4544,13 +4641,11 @@ html:has(dialog.about-modal[open]) {
     border: none;
   }
   /* Seven tabs (Stream on, or the admin tab) still fit "Lighthouse" whole on a 375px phone. */
-  .tabs:has(> :nth-child(7)) button,
-  .tabs:has(> :nth-child(7)) .tab-link {
+  .tabs:has(> :nth-child(7)) button {
     font-size: 10px;
     letter-spacing: -0.01em;
   }
-  .tabs button .icon,
-  .tabs .tab-link .icon {
+  .tabs button .icon {
     width: 20px;
     height: 20px;
   }
@@ -4559,8 +4654,7 @@ html:has(dialog.about-modal[open]) {
     box-shadow: none;
     color: var(--ink);
   }
-  .tabs button span,
-  .tabs .tab-link span {
+  .tabs button span {
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -5316,6 +5410,181 @@ html:has(dialog.about-modal[open]) {
   .kpis.glance {
     grid-template-columns: 1fr;
     gap: 10px;
+  }
+}
+
+/* ---------- Coverage Meter: the share of runners a reader's models would have caught ---------- */
+.coverage {
+  position: relative;
+  z-index: 1;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cov-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.cov-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.cov-value {
+  font-size: 20px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  min-width: 3.2ch;
+  text-align: right;
+  flex-shrink: 0;
+}
+.cov-value.early {
+  color: var(--ink-2);
+}
+.cov-track {
+  position: relative;
+  flex: 1;
+  min-width: 60px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.cov-track.slim {
+  flex: none;
+  width: 44px;
+  min-width: 0;
+  height: 5px;
+}
+.cov-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand-a), var(--brand-b));
+  box-shadow: 0 0 12px -2px color-mix(in srgb, var(--brand-b) 60%, transparent);
+  transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.cov-fill.early {
+  background: var(--axis);
+  box-shadow: none;
+}
+.cov-fill.on-goal:not(.early) {
+  background: linear-gradient(90deg, var(--brand-b), var(--good));
+}
+.cov-mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+}
+.cov-track.slim .cov-mark {
+  top: -2px;
+  bottom: -2px;
+}
+.cov-mark.goal {
+  background: var(--ink-2);
+  opacity: 0.7;
+}
+.cov-mark.field {
+  width: 6px;
+  margin-left: -3px;
+  top: 1px;
+  bottom: 1px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand-ink) 45%, transparent);
+}
+.cov-goal {
+  flex-shrink: 0;
+}
+.cov-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--good-ink);
+  background: var(--good-wash);
+}
+.cov-note {
+  margin: 0;
+}
+.cov-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.cov-members {
+  min-width: 0;
+}
+.cov-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--brand-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cov-add:hover:not(:disabled) {
+  border-style: solid;
+  background: var(--info-wash);
+}
+.cov-add:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.cov-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.cov-chip.early {
+  color: var(--muted);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cov-fill {
+    transition: none;
+  }
+}
+@media (max-width: 640px) {
+  .cov-head {
+    flex-wrap: wrap;
+    gap: 8px 10px;
+  }
+  .cov-track:not(.slim) {
+    order: 4;
+    flex-basis: 100%;
+    margin: 2px 0 4px;
+  }
+  .cov-value {
+    margin-left: auto;
   }
 }
 
@@ -9341,8 +9610,7 @@ html:has(dialog.about-modal[open]) {
    stops growing at 1360px): the tabs pad a little less, and the admin tag gives way, so the header
    row still fits. */
 @media (min-width: 981px) and (max-width: 1439px) {
-  .tabs button,
-  .tabs .tab-link {
+  .tabs button {
     padding: 7px 11px;
   }
   .topbar .wallet-pill .admin-tag {
@@ -9350,8 +9618,7 @@ html:has(dialog.about-modal[open]) {
   }
 }
 @media (min-width: 981px) {
-  .topbar.packed .tabs button,
-  .topbar.packed .tabs .tab-link {
+  .topbar.packed .tabs button {
     padding: 7px 11px;
   }
   .topbar.packed .wallet-pill .admin-tag {
@@ -10953,9 +11220,6 @@ button.bm-same {
     position: static;
   }
 }
-.bm-note {
-  margin: 12px 0 0 !important;
-}
 .bm-empty {
   margin: 18px 0 !important;
 }
@@ -10965,46 +11229,6 @@ button.bm-same {
   border-radius: 14px;
   background: var(--surface-3);
   animation: pulse 1.4s ease-in-out infinite;
-}
-/* A stat tile that opens something (Linked opens the bubble map): an accent edge and a map icon,
-   so it reads as a button among the plain tiles. */
-.card-stats div.tile-opens {
-  cursor: pointer;
-  border-color: color-mix(in srgb, var(--brand-a) 35%, transparent);
-  background: color-mix(in srgb, var(--brand-a) 8%, var(--surface-3));
-  transition:
-    border-color 0.15s,
-    background 0.15s;
-}
-.card-stats div.tile-opens.risky {
-  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
-  background: var(--bad-wash);
-}
-.card-stats div.tile-opens:hover,
-.card-stats div.tile-opens:focus-visible {
-  border-color: var(--brand-a);
-  background: color-mix(in srgb, var(--brand-a) 14%, var(--surface-3));
-}
-.card-stats div.tile-opens.risky:hover,
-.card-stats div.tile-opens.risky:focus-visible {
-  border-color: var(--bad);
-}
-.card-stats div.tile-opens:focus-visible {
-  outline: 2px solid var(--brand-a);
-  outline-offset: 1px;
-}
-.card-stats div.tile-opens dt {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-}
-.tile-opens-icon {
-  flex: none;
-  color: var(--brand-ink);
-}
-.card-stats div.tile-opens.risky .tile-opens-icon {
-  color: var(--bad-ink);
 }
 @media (max-width: 640px) {
   .bm-stats {

@@ -1020,6 +1020,18 @@ export interface LiveCatch {
   pct: number | null;
 }
 
+/** A mix of models scored together: a runner counts as caught when any of them called it. */
+export interface MixCoverage extends LiveCatch {
+  /** The models in the mix, as selectedModels. */
+  models: string[];
+  /** The earliest start among them: the runners counted are those since. Null with none. */
+  since: string | null;
+  /** Per model in the mix: the runners it caught, and how many of those no other model in the mix did. */
+  members: { id: string; caught: number; only: number }[];
+  /** Models outside the mix that would raise its share, best first: the share and catches with it added. */
+  additions: { id: string; caught: number; runners: number; pct: number }[];
+}
+
 export interface ScoreBasis {
   points2x: number;
   points4x: number;
@@ -1157,6 +1169,11 @@ export interface Leaderboard {
   baseline?: GradedRates;
   /** Runners over the window and how many any model caught (absent from older API builds). */
   runners?: LiveCatch;
+  /**
+   * The Coverage Meter: the share of the window's runners this reader's models (selectedModels)
+   * would have caught together. Absent from older API builds.
+   */
+  coverage?: MixCoverage;
   scoring: {
     weights: {
       winRate: number;

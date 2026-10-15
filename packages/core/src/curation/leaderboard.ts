@@ -560,7 +560,7 @@ export function liveCatch(
   runners: readonly { token: string; at: Date }[],
   caught: readonly { model: string; token: string }[],
   froms: ReadonlyMap<string, Date>,
-): { byModel: Map<string, LiveCatch>; field: LiveCatch } {
+): { byModel: Map<string, LiveCatch>; field: LiveCatch; ledger: CatchLedger } {
   const lastWin = new Map<string, number>();
   for (const r of runners) lastWin.set(r.token, Math.max(lastWin.get(r.token) ?? 0, r.at.getTime()));
   const caughtBy = new Map<string, Set<string>>();
@@ -584,7 +584,85 @@ export function liveCatch(
   }
   const any = new Set<string>();
   for (const [model, set] of caughtBy) if (froms.has(model)) for (const t of set) any.add(t);
-  return { byModel, field: summary(lastWin.size, any.size) };
+  const fromMs = new Map([...froms].map(([model, from]) => [model, from.getTime()] as const));
+  return { byModel, field: summary(lastWin.size, any.size), ledger: { lastWin, caughtBy, froms: fromMs } };
+}
+
+/**
+ * What liveCatch counted, kept so any set of seats can be scored together (mixCatch) without
+ * another read: each runner's latest winning moment, the runners each seat caught, and each
+ * seat's start (epoch ms). Held in the API's process only - it names tokens.
+ */
+export interface CatchLedger {
+  lastWin: ReadonlyMap<string, number>;
+  caughtBy: ReadonlyMap<string, ReadonlySet<string>>;
+  froms: ReadonlyMap<string, number>;
+}
+
+/** A mix of seats scored together (mixCatch): the Coverage Meter's figures. */
+export interface MixCoverage extends LiveCatch {
+  /** The seats in the mix that are on the board, in the order given. */
+  models: string[];
+  /** The earliest start among them (the runners counted are those since); null with none. */
+  since: Date | null;
+  /** Per seat in the mix: the runners it caught, and how many of those no other seat in the mix did. */
+  members: { id: string; caught: number; only: number }[];
+  /**
+   * Seats outside the mix that would raise its share, best first (at most MIX_ADDITIONS): the
+   * share and the runners caught with that seat added.
+   */
+  additions: { id: string; caught: number; runners: number; pct: number }[];
+}
+
+/** How many seats a mix's coverage suggests adding. */
+export const MIX_ADDITIONS = 3;
+
+function mixCounts(ledger: CatchLedger, models: readonly string[]) {
+  let from = Infinity;
+  for (const m of models) from = Math.min(from, ledger.froms.get(m) ?? Infinity);
+  let runners = 0;
+  if (from !== Infinity) for (const at of ledger.lastWin.values()) if (at >= from) runners += 1;
+  const any = new Set<string>();
+  // A seat's catches are its own winning moments, after its start, so after the mix's too.
+  for (const m of models) for (const t of ledger.caughtBy.get(m) ?? []) any.add(t);
+  return { from, runners, caught: any.size, any };
+}
+
+/**
+ * The Coverage Meter: the share of the runners a mix of seats would have caught together - a
+ * runner counts as caught when any seat in the mix called it at a winning moment, and the
+ * runners counted are those since the earliest seat in the mix started (liveCatch's rule for one
+ * seat, applied to the mix). Seats not on the board are left out.
+ */
+export function mixCatch(ledger: CatchLedger, models: readonly string[]): MixCoverage {
+  const mix = [...new Set(models)].filter((m) => ledger.froms.has(m));
+  const { from, runners, caught } = mixCounts(ledger, mix);
+  const share = (got: number, seen: number) => (seen > 0 ? round1((got / seen) * 100) : null);
+  const pct = share(caught, runners);
+  const members = mix.map((id) => {
+    const own = ledger.caughtBy.get(id) ?? new Set<string>();
+    let only = 0;
+    for (const t of own) if (!mix.some((o) => o !== id && ledger.caughtBy.get(o)?.has(t))) only += 1;
+    return { id, caught: own.size, only };
+  });
+  const additions: MixCoverage["additions"] = [];
+  for (const id of ledger.froms.keys()) {
+    if (mix.includes(id)) continue;
+    const next = mixCounts(ledger, [...mix, id]);
+    const nextPct = share(next.caught, next.runners);
+    if (nextPct === null || next.caught <= caught || (pct !== null && nextPct <= pct)) continue;
+    additions.push({ id, caught: next.caught, runners: next.runners, pct: nextPct });
+  }
+  additions.sort((a, b) => b.pct - a.pct || b.caught - a.caught || a.id.localeCompare(b.id));
+  return {
+    runners,
+    caught,
+    pct,
+    models: mix,
+    since: from === Infinity ? null : new Date(from),
+    members,
+    additions: additions.slice(0, MIX_ADDITIONS),
+  };
 }
 
 /**
