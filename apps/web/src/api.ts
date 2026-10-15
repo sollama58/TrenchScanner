@@ -836,8 +836,6 @@ export interface ModelInsights {
   };
   /** Per-feature null rates and decile lifts from the newest training run, or null before one. */
   featureHealth?: FeatureHealthReport | null;
-  /** What the winners that ran furthest had in common, from the newest training run. */
-  runnerTraits?: RunnerTraitsReport | null;
   /** How far clean winners ran after the call: the feed's calls ("curated") and the training samples. */
   winnerRuns?: WinnerRuns[];
   /** Inputs the newest run held back as too new (or lately dead) to train on. */
@@ -1049,20 +1047,6 @@ export interface WinnerRuns {
   reached4xPct: number | null;
   reached10xPct: number | null;
   medianMinutesToPeak: number | null;
-}
-
-export interface RunnerTraitsReport {
-  winners: number;
-  /** A big runner went at least this far (the top quarter of winners by run peak). */
-  bigRunnerMultiple: number | null;
-  medianRunMultiple: number | null;
-  traits: {
-    feature: string;
-    label: string;
-    topThirdLift: number;
-    bottomThirdLift: number;
-    present: number;
-  }[];
 }
 
 export interface FeatureHealthReport {
