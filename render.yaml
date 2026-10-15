@@ -42,10 +42,12 @@
 #         Market data falls back to GeckoTerminal whenever DexScreener answers lookups blank (it
 #         did on 2026-10-07). Free, that is 30 calls a minute; with this key it is CoinGecko's
 #         on-chain API on the plan's limit (COINGECKO_REQUESTS_PER_MINUTE, 200 by default).
-#   - JUPITER_API_KEY (worker)                      optional: a Jupiter API key (free plan is enough)
+#   - JUPITER_API_KEY (worker)                      optional: a Jupiter API key (portal.jup.ag)
 #         The outcome watcher and the empty-wallet check price on Jupiter's Tokens API first (100
 #         mints a call, a per-account limit) and on DexScreener only for what it missed, so
-#         DexScreener's per-IP budget goes to the scan's refresh and fast-match.
+#         DexScreener's per-IP budget goes to the scan's refresh and fast-match. The limits default
+#         to the Developer plan (JUPITER_REQUESTS_PER_SECOND 8, JUPITER_MONTHLY_CREDITS 25M, which
+#         works out to 50 search calls a minute at 10 credits each). Free plan: set 1 and 0.
 #   - SOLANA_TRACKER_API_KEY (worker)               optional: a Solana Tracker key (free plan is enough)
 #         The worker reads Solana Tracker's KOL roster once a day (jobs/kolWalletsJob.ts), and the
 #         dashboard labels those wallets as KOLs with their name and X handle.
@@ -262,8 +264,10 @@ services:
       # Optional: a CoinGecko paid-plan key for the market-data fallback (see .env.example).
       - key: COINGECKO_API_KEY
         sync: false
-      # Optional: a Jupiter API key (portal.jup.ag, free plan). The outcome watcher and the
-      # empty-wallet check then price on Jupiter first, leaving DexScreener to the scan.
+      # Optional: a Jupiter API key (portal.jup.ag). The outcome watcher and the empty-wallet
+      # check then price on Jupiter first, leaving DexScreener to the scan. The limits default to
+      # the Developer plan (see the note at the top); JUPITER_REQUESTS_PER_SECOND and
+      # JUPITER_MONTHLY_CREDITS override them.
       - key: JUPITER_API_KEY
         sync: false
       # Optional: a Solana Tracker key (solanatracker.io, free plan). The worker reads its KOL
