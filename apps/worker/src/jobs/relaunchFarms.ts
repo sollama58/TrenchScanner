@@ -32,11 +32,18 @@ export async function resolveRelaunchSiblings(mints: string[]): Promise<Map<stri
       WITH sib AS (
         SELECT t."mintAddress", s."id", s."lastMcapUsd", s."liveMarketCapUsd", s."rejectPeak60mMcapUsd"
         FROM "Token" t
-        LEFT JOIN "Token" s
-          ON s."firstSeenAt" >= t."firstSeenAt" - make_interval(mins => ${RELAUNCH_FARM_WINDOW_MINUTES}::int)
-          AND s."firstSeenAt" < t."firstSeenAt"
-          AND s."id" <> t."id"
-          AND UPPER(BTRIM(s."symbol")) = UPPER(BTRIM(t."symbol"))
+        -- Per mint, its window on the firstSeenAt index. As a plain join the planner hashed the
+        -- ticker match instead and read the whole Token table every scan cycle (~370 MB, the
+        -- shared database's cache pushed out with it); OFFSET 0 keeps it from flattening this.
+        LEFT JOIN LATERAL (
+          SELECT s."id", s."lastMcapUsd", s."liveMarketCapUsd", s."rejectPeak60mMcapUsd"
+          FROM "Token" s
+          WHERE s."firstSeenAt" >= t."firstSeenAt" - make_interval(mins => ${RELAUNCH_FARM_WINDOW_MINUTES}::int)
+            AND s."firstSeenAt" < t."firstSeenAt"
+            AND s."id" <> t."id"
+            AND UPPER(BTRIM(s."symbol")) = UPPER(BTRIM(t."symbol"))
+          OFFSET 0
+        ) s ON true
         WHERE t."mintAddress" = ANY(${mints}::text[]) AND BTRIM(COALESCE(t."symbol", '')) <> ''
       ),
       counted AS (
