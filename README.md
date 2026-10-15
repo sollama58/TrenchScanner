@@ -59,6 +59,133 @@ To turn it on: create a bot with [@BotFather](https://t.me/BotFather) and set `T
 
 The Live tab's **Lighthouse** button shows how every token that passed the pre-checks did (2x/4x/10x hit rates and the average return under the exit plan) and what TokenSage sees across new coins, over the last day or week. The **Lighthouse tab** keeps that history for good: the trainer worker's hourly `lighthouse-rollup` job sums the same figures into `LighthouseHour` (one row an hour) and `LighthouseDayLabel` (one row per narrative, flag, referent kind and so on per day), which the nightly cleanup never touches, so trends can be read over weeks and months after the rows they were summed from (CandidateOutcome, TokenNarrative) are swept. The first run backfills from the oldest rows still present; every run re-sums the trailing three days so late grades land. `GET /curated/lighthouse/history` and `GET /guest/lighthouse/history` (`days` 7/30/90/365/0, `bucket` hour/day/week, `dimension` for the breakdown) serve the sums per bucket; the tab computes every rate, lets a reader compose charts from any metrics or breakdowns, remembers the layout in the browser, and exports the window as CSV. Aggregates only, so guests read the same answer.
 
+## Trading bot (admin-only preview)
+
+A **Bot** tab, shown only to wallets in `ADMIN_WALLET_ADDRESSES`, runs a Solana trading bot from a
+wallet the server holds for you (`packages/core/src/trading`). It buys the signals you pick - the
+matches of any of your filters (a filter produces matches while it is your active one) and the
+calls of any model, optionally only high-conviction ones - and sells each position on an exit
+plan: by default the same plan the Lighthouse and Models tab simulate (`EXIT_PLAN`: half at 2x,
+the rest on a trailing exit 35% off its high, out at 3 hours; -50% stop before the first sale;
+closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers and hold times.
+
+- **Custody.** Each wallet's key is sealed with AES-256-GCM under its own data key, and the data
+  key is stored only wrapped by **AWS KMS** (envelope encryption, bound to the user and the
+  wallet's address with a KMS encryption context). The database alone cannot spend anything; the
+  key never reaches the browser and is never logged.
+- **Access.** You reach the wallet by signing in with your own wallet (SIWS). Withdrawals go **only
+  to that sign-in wallet**: the address is sealed into the wallet's KMS encryption context when it
+  is created, and the trader sends only there - changing it in the database makes the wallet fail
+  to open, so even someone who can write the database (but not use KMS) can't redirect a
+  withdrawal, and a stolen session can only send your funds back to you. A withdrawal while
+  positions are open leaves the bot's reserve behind, so they can still be sold.
+- **What gets signed.** The bot signs transactions Jupiter (or PumpPortal) builds, so each one
+  passes a guard first (`trading/txGuard.ts`), **before** it is signed: every top-level
+  instruction must be one a swap needs (lookup tables resolved; no account reassignment, durable
+  nonces, token transfers, approvals, authority changes or closes to anyone but the wallet), and a
+  simulation watching the wallet and **every** token account it owns must show nothing changing
+  but the trade itself - other positions untouched, at least the quoted minimum received, no more
+  SOL spent than the trade allows.
+- **Limits a stolen admin session can't exceed.** `TRADING_MAX_BUY_SOL`,
+  `TRADING_MAX_DAILY_SPEND_SOL` and `TRADING_MAX_SLIPPAGE_BPS` cap every bot. Creating the wallet
+  and changing the bot refuse paired-phone sessions. A followed filter edited after the bot's
+  settings were saved is paused until they are saved again, so editing a filter can't silently
+  change what the bot buys.
+- **Split permissions.** The api creates wallets and needs only `kms:GenerateDataKey`; the
+  dedicated **`trenchscanner-trader`** worker (`WORKER_ROLE=trader`, its own Render service) signs
+  trades and withdrawals and is the only service holding `kms:Decrypt`. The internet-facing api
+  and the scanner can never open a wallet - a withdrawal is a request the trader carries out.
+- **Execution.** The trader's `trading-bot` job runs every `TRADING_BOT_INTERVAL_SECONDS`
+  (5): it settles earlier swaps from the chain, walks open positions through their exit plan, and
+  buys new signals within the bot's guards (buy size capped server-side by `TRADING_MAX_BUY_SOL`,
+  max open positions, 24h spend, a SOL reserve, maximum signal age, one entry per token ever).
+  Swaps are routed by Jupiter, with **PumpPortal as the fallback** for Pump.fun tokens Jupiter
+  can't route (a mint seconds old, or one migrating to PumpSwap). Each transaction is recorded by
+  its signature (and signed bytes) before it is sent and **rebroadcast** until it lands or its
+  blockhash is safely expired; a buy written off is checked against the wallet's real balance
+  first and recovered if its tokens arrived anyway. Positions only advance on a confirmed fill
+  read back from the chain, and holdings after a sale are re-read from the chain. An exit that
+  keeps failing backs off (5s, 15s, 45s, ... up to 10 minutes) and, once it plainly can't be sold,
+  is marked **stuck** (retried slowly, no longer holding an open slot). Emptied token accounts are
+  closed afterwards to recover their rent.
+- **Retries and fees.** Swap priority fees are **dynamic**: Jupiter's estimate from recent fees
+  ("veryHigh") under the bot's `maxPriorityFeeSol`, itself capped by `TRADING_MAX_PRIORITY_FEE_SOL`.
+  A transaction is never replaced while it can still land; once one has expired unlanded, the next
+  try is built from a fresh quote at **double the fee that one paid** (at least 0.0001 SOL, never
+  over the cap). Entries are retried - a send that expired, a buy that failed on chain, a build
+  that hit an outage - up to 4 tries while the signal is within its age limit plus 2 minutes,
+  never at a price more than the slippage past the first try's quote, and never once the wallet
+  shows the token (an earlier try landed after all). Sales retry until they go through, protective
+  exits with 5 more points of slippage per on-chain failure. Jupiter outages, RPC hiccups, rate
+  limits and missing prices retry within seconds without counting as failures. Withdrawals and
+  rent closes pay a priority fee too (recent fees, with a floor; a withdrawal that expires unlanded
+  is resent up to twice, each time at double the price). `npm run trading:preflight` checks the
+  raised-fee build and the priced transfer against mainnet. One pass runs at a time across processes (an advisory
+  lock, plus per-row claims). Pausing the bot stops new buys; exits keep running. **Sell all and
+  pause** is the panic button.
+
+### Setting it up
+
+1. AWS → KMS → **Create key**: symmetric, encrypt and decrypt. Note its ARN.
+2. AWS → IAM → create two users with access keys:
+   - `trenchscanner-api`: `{"Effect":"Allow","Action":"kms:GenerateDataKey","Resource":"<key ARN>"}`
+   - `trenchscanner-trader`: `{"Effect":"Allow","Action":"kms:Decrypt","Resource":"<key ARN>"}`
+3. On Render, sync the Blueprint (it adds the `trenchscanner-trader` worker), then set
+   `TRADING_KMS_KEY_ID` (the ARN), `TRADING_KMS_REGION`, and each service's own
+   `TRADING_AWS_ACCESS_KEY_ID` / `TRADING_AWS_SECRET_ACCESS_KEY` on `trenchscanner-api` and
+   `trenchscanner-trader`. The trader also needs `HELIUS_API_KEY` (or a paid `SOLANA_RPC_URL`),
+   `ADMIN_WALLET_ADDRESSES` and, recommended, its own `TRADING_JUPITER_API_KEY`. Then set
+   `TRADING_BOT_ENABLED=true` on both.
+4. Open the **Bot** tab, create the wallet, send it a little SOL, pick sources, save, **Start**.
+
+### Before real funds (launch checklist)
+
+1. Run the preflight on the trader (Render → `trenchscanner-trader` → Shell):
+   `npm run trading:preflight -w @trenchscanner/worker`. It builds real Jupiter swaps for a funded
+   probe wallet and runs them through the production guard against mainnet, and checks the RPC,
+   the Price API, KMS (it test-opens a custodial wallet) and the server wallet key - read-only,
+   nothing signed. Every check must pass; run it again after any change.
+2. Give the trader its own `TRADING_JUPITER_API_KEY` (never shared with the scan) and a paid RPC
+   (`HELIUS_API_KEY`).
+3. Start small: `buySol` ≤ 0.05, `maxOpenPositions` ≤ 3, and fund each wallet with about a day's
+   spend cap plus the reserve - keep the rest at the withdrawal address. Watch the first fills,
+   exits and rent reclaims on Solscan, and `/health/worker`'s `trading-bot` row.
+4. Keep the Render team small: the trader's environment can spend the server wallet and open
+   every custodial wallet.
+
+What the bot refuses to do, whatever its settings: sign a transaction the guard hasn't checked;
+buy a token with a live mint or freeze authority or a Token-2022 extension beyond metadata
+(permanent delegate, transfer hook, transfer fee, pausable, ...); send more than 0.05 SOL to
+anyone but itself in one trade; let a sale cost the wallet SOL beyond fees; exceed the
+`TRADING_MAX_*` ceilings (buy size, 24h spend, slippage, priority fee). The PumpPortal fallback
+is off by default (`TRADING_PUMPPORTAL_FALLBACK`): Jupiter routes Pump.fun tokens itself, and
+PumpPortal's proxy program is not on the guard's allowlist.
+
+### Server wallet
+
+Besides each admin's own wallet, there can be one **server wallet** whose private key you supply:
+a wallet you already have (or a fresh one made for it), traded by its own bot that every admin
+controls from **Bot tab → Server wallet** - the same settings, exit plan, positions, sell buttons
+and guard as the per-user bots.
+
+| Variable                            | Where                           | What                                                                                   |
+| ----------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------- |
+| `TRADING_SERVER_WALLET_SECRET_KEY`  | `trenchscanner-trader` **only** | The private key: base58 as Phantom/Solflare export it, or a `solana-keygen` JSON array |
+| `TRADING_SERVER_WALLET_ADDRESS`     | api + trader                    | Its public address. The trader refuses a key that doesn't match it                     |
+| `TRADING_SERVER_WALLET_WITHDRAW_TO` | api + trader                    | The only address withdrawals go to. Empty turns withdrawals off                        |
+
+The key never reaches the api, the database or the browser: the api shows the wallet from its
+public address and records requests, and the trader signs. Withdrawals go only to the configured
+address, so neither a stolen admin session nor a database write can send funds anywhere else.
+
+Unlike the per-user wallets (sealed under KMS), this key sits in Render's environment in plain
+form: anyone who can read the trader's environment variables - every member of the Render team
+with access to the service - can take the funds. Use a wallet made for this, fund it with what
+the bot should trade, and keep the rest elsewhere.
+
+For local development, `TRADING_KEY_PROVIDER=local` with `TRADING_LOCAL_MASTER_KEY`
+(`openssl rand -hex 32`) replaces KMS; it is refused when `NODE_ENV=production`.
+
 ## Admin Panel
 
 A wallet listed in `ADMIN_WALLET_ADDRESSES` (comma-separated base58 addresses; empty by default) sees an extra **Admin** tab in the dashboard, backed by `GET`/`POST /admin/*` on the API (every route 403s anyone else - see `apps/api/src/routes/admin.ts`). Admin status is config, not a DB column, so promoting/demoting an admin is a one-line env change rather than a manual DB write. It covers:

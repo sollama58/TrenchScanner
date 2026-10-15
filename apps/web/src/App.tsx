@@ -17,6 +17,7 @@ import {
   LogoutIcon,
   PhoneIcon,
   PulseIcon,
+  RobotIcon,
   ShieldIcon,
   SlidersIcon,
   StreamIcon,
@@ -24,6 +25,7 @@ import {
 import {
   TAB_DATA,
   loadAdminTab,
+  loadTradingTab,
   loadFiltersTab,
   loadLighthouseTab,
   loadModelTab,
@@ -50,6 +52,7 @@ const LazyLighthouseTab = lazy(() => loadLighthouseTab().then((m) => ({ default:
 const LazyFiltersTab = lazy(() => loadFiltersTab().then((m) => ({ default: m.FiltersTab })));
 const LazySettingsTab = lazy(() => loadSettingsTab().then((m) => ({ default: m.SettingsTab })));
 const LazyAdminTab = lazy(() => loadAdminTab().then((m) => ({ default: m.AdminTab })));
+const LazyTradingTab = lazy(() => loadTradingTab().then((m) => ({ default: m.TradingTab })));
 const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 // The burn button (and its transaction builder) only matters to someone without access.
 // The TokenSage view (and its charts) loads the first time a card or a Telegram link opens one.
@@ -79,6 +82,8 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
 const ADMIN_TAB = { id: "admin" as Tab, label: "Admin", Icon: ShieldIcon };
 /** The open tab's view, which the selected tab button controls. */
 const TAB_PANEL_ID = "tab-panel";
+/** The trading bot: admin-only while it is new; the /trading routes check the wallet again. */
+const TRADING_TAB = { id: "trading" as Tab, label: "Bot", Icon: RobotIcon };
 
 type Session =
   | { state: "loading" }
@@ -225,6 +230,7 @@ export function App() {
   const FiltersTab = loaded.filters?.FiltersTab ?? LazyFiltersTab;
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
+  const TradingTab = loaded.trading?.TradingTab ?? LazyTradingTab;
   const isAdmin = signedIn && session.user.isAdmin;
   // The Stream tab only for a signed-in reader who switched it on in Settings.
   const appearance = useAppearance();
@@ -235,18 +241,22 @@ export function App() {
   const shownTabs = TABS.filter(
     (t) => (t.id !== "stream" || streamOn) && (t.id !== "lighthouse" || lighthouseOn),
   );
-  const tabs = isAdmin ? [...shownTabs, ADMIN_TAB] : shownTabs;
-  // #admin without an admin wallet, or #stream with the tab off, reads as the Live tab, so a tab
-  // is always the highlighted one.
+  const tabs = isAdmin ? [...shownTabs, TRADING_TAB, ADMIN_TAB] : shownTabs;
+  // #admin or #trading without an admin wallet, or #stream with the tab off, reads as the Live tab,
+  // so a tab is always the highlighted one.
   const tab: Tab =
-    (wantedTab === "admin" && !isAdmin) || (wantedTab === "stream" && !streamOn) ? "live" : wantedTab;
+    ((wantedTab === "admin" || wantedTab === "trading") && !isAdmin) || (wantedTab === "stream" && !streamOn)
+      ? "live"
+      : wantedTab;
   // A new tab, or signing in or out, is a new page: its load gets the full loader.
   useEffect(markNavigation, [tab, session.state]);
   const loaderLabel =
     session.state === "signed-in" || session.state === "guest"
       ? `Loading ${tabs.find((t) => t.id === tab)?.label ?? "TrenchScanner"}`
       : "Loading TrenchScanner";
-  const tabLabel = TABS.find((t) => t.id === tab)?.label ?? (tab === "admin" ? ADMIN_TAB.label : "");
+  const tabLabel =
+    TABS.find((t) => t.id === tab)?.label ??
+    (tab === "admin" ? ADMIN_TAB.label : tab === "trading" ? TRADING_TAB.label : "");
   // The tab bar's button for this view, when it shows one (a hidden Lighthouse tab opened from a
   // link has none): it names the tab panel.
   const tabButtonShown = (guest ? shownTabs : tabs).some((t) => t.id === tab);
@@ -456,6 +466,7 @@ export function App() {
                 {tab === "utilities" && <UtilitiesTab walletAddress={session.user.walletAddress} />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
                 {tab === "admin" && <AdminTab goTo={goTo} />}
+                {tab === "trading" && <TradingTab />}
               </Suspense>
             </div>
             {sageMint && (

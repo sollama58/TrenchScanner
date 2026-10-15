@@ -52,6 +52,7 @@ import { registerUtilityRoutes } from "./routes/utilities.js";
 import { registerWalletRoutes } from "./routes/wallets.js";
 import { WalletLiveReader } from "./walletProfile.js";
 import { WalletIdentityReader } from "./walletIdentity.js";
+import { registerTradingRoutes } from "./routes/trading.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
 import { OnDemandLiveRefresher } from "./liveRefresh.js";
@@ -577,6 +578,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerSettingsRoutes, { prefix: "/settings", env });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
+  // The trading bot (admin-only; nothing is registered without TRADING_BOT_ENABLED).
+  await app.register(registerTradingRoutes, { prefix: "/trading", env });
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
   await app.register(registerStatsRoutes, { prefix: "/stats", env, timings, liveRefresher });
   await app.register(registerStatsModelRoutes, { prefix: "/stats", env });

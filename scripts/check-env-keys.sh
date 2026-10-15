@@ -35,6 +35,10 @@ DIRECT_READS=(
   PORT
   # The SSE subscriber ceiling, read once when apps/api/src/matchStream.ts loads (default 2000).
   MAX_STREAM_SUBSCRIBERS
+  # Optional overrides for the trading bot's one-off mainnet preflight
+  # (apps/worker/src/tradingPreflight.ts), run by hand, never by a service.
+  PREFLIGHT_PROBE_WALLET
+  PREFLIGHT_PUMP_MINT
 )
 
 # "service KEY" pairs: the service reads KEY, so render.yaml must declare it there (point 2).
