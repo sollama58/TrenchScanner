@@ -950,7 +950,7 @@ function LinkedTile({
           "Not checked"
         ) : count ? (
           <>
-            {linkedCountText(count)} <span className="dd-sub">({pct(value, 1)})</span>
+            {linkedCountText(count)} <span className="dd-sub">{pct(value)}</span>
           </>
         ) : (
           pct(value)
