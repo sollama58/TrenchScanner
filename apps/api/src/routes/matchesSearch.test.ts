@@ -16,7 +16,7 @@ const MINTS = {
   nobody: "MatchSearchNobody11111111111111111111111111",
 };
 
-describe.skipIf(!dbAvailable)("GET /matches?mint=", () => {
+describe.skipIf(!dbAvailable)("GET /matches?mint= and ?q=", () => {
   const env: Env = dbAvailable ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: WALLET } : (undefined as never);
   let app: FastifyInstance;
   let cookie = "";
@@ -82,6 +82,18 @@ describe.skipIf(!dbAvailable)("GET /matches?mint=", () => {
     };
     expect(body.matches.length).toBeGreaterThan(0);
     expect(body.matches.every((m) => m.tokenId === tokenIds.wanted)).toBe(true);
+  });
+
+  it("finds a token by ticker (with or without its $), name or part of its address, any case", async () => {
+    for (const q of ["$WANT", "want", "searchwanted"]) {
+      const body = (await get(`/matches?page=1&includeCurated=on&q=${encodeURIComponent(q)}`)).json() as {
+        matches: { tokenId: string }[];
+      };
+      expect(body.matches.map((m) => m.tokenId)).toEqual([tokenIds.wanted, tokenIds.wanted]);
+    }
+    const none = (await get("/matches?page=1&q=zzzz")).json() as { matches: unknown[] };
+    expect(none.matches).toEqual([]);
+    expect((await get("/matches?page=1&q=w")).statusCode).toBe(400);
   });
 
   it("leaves the whole feed as it was without a search", async () => {

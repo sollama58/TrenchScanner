@@ -11727,7 +11727,7 @@ button.bm-same {
   position: relative;
   display: inline-flex;
   align-items: center;
-  width: 150px;
+  width: 170px;
   transition: width 0.2s ease;
 }
 .ca-search.focused {
@@ -11742,7 +11742,7 @@ button.bm-same {
   border-color: var(--border);
   text-overflow: ellipsis;
 }
-.ca-search.filled input {
+.ca-search.address input {
   font-family: var(--mono);
   font-size: 11.5px;
   letter-spacing: -0.02em;

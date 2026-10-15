@@ -4,7 +4,7 @@ import { z } from "zod";
 import { prisma, type Env } from "@trenchscanner/core";
 import { TOKEN_CARD_SELECT, withLatestSnapshots } from "../curatedFeed.js";
 import { SharedCacheMap } from "../sharedCache.js";
-import { currentMarketCap } from "./matches.js";
+import { currentMarketCap, tokenSearchParam } from "./matches.js";
 import { LIVE_TICK_MAX_TOKENS } from "./live.js";
 
 /**
@@ -29,7 +29,12 @@ export const launchQuerySchema = z.object({
     .string()
     .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "mint must be a Solana address")
     .optional(),
+  /** A name, ticker or part of an address: the Stream narrowed to the tokens that hold it. */
+  q: tokenSearchParam,
 });
+
+/** `text` as an ILIKE pattern that matches it anywhere, its own % and _ taken literally. */
+const containsPattern = (text: string) => `%${text.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 /** How far back a band entry can be and still be on the Stream. */
 const LAUNCH_STREAM_HORIZON_MS = 24 * 3_600_000;
@@ -66,7 +71,7 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
   );
 
   /** Page `page` of the Stream (or, with `mint`, that token's card alone), and whether an older page has any. */
-  const readLaunches = async (page: number, mint: string | undefined) => {
+  const readLaunches = async (page: number, mint: string | undefined, q?: string) => {
     const since = new Date(Date.now() - LAUNCH_STREAM_HORIZON_MS);
     // A page deeper needs that many more passes, so it looks at that many more band entries.
     const candidates = mint ? 1 : LAUNCH_STREAM_CANDIDATES * page;
@@ -79,6 +84,12 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
         SELECT id FROM "Token"
         WHERE "firstInBandAt" > ${since}
           ${mint ? Prisma.sql`AND "mintAddress" = ${mint}` : Prisma.empty}
+          ${
+            q
+              ? Prisma.sql`AND ("symbol" ILIKE ${containsPattern(q)} OR "name" ILIKE ${containsPattern(q)}
+                  OR "mintAddress" ILIKE ${containsPattern(q)})`
+              : Prisma.empty
+          }
         ORDER BY "firstInBandAt" DESC
         LIMIT ${candidates}
       ) t
@@ -148,11 +159,13 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const { mint } = parsed.data;
+    const { mint, q } = parsed.data;
     const page = mint ? 1 : parsed.data.page;
-    const answer = await cache
-      .for(mint ? `mint:${mint}` : `page:${page}`)
-      .get(() => readLaunches(page, mint));
+    // A typed search isn't cached: a run of keystrokes would push the Stream's own pages out.
+    const answer =
+      q && !mint
+        ? await readLaunches(page, undefined, q)
+        : await cache.for(mint ? `mint:${mint}` : `page:${page}`).get(() => readLaunches(page, mint));
     return { ...answer, page };
   });
 }

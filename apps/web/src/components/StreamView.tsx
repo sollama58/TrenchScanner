@@ -4,9 +4,9 @@ import { STREAM_DATA } from "../routes";
 import { useLiveMarketCaps, useNow, usePolling } from "../hooks";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { prefetch } from "../cache";
-import { cardMatchesCa, parseCaQuery } from "../caSearch";
+import { parseSearch } from "../caSearch";
 import { AlertCard } from "./AlertCard";
-import { CaSearchBox, CaSearchNote, CaSearchResults } from "./CaSearch";
+import { CaSearchBox, SearchResults } from "./CaSearch";
 import { SkeletonCards } from "./Charts";
 import { CustomizeDrawer } from "./CustomizeDrawer";
 import { PaletteIcon, RadarIcon } from "./Icons";
@@ -35,19 +35,13 @@ export function StreamView() {
     streamPath(pageNo),
     pageNo === 1 ? STREAM_POLL_MS : STREAM_OLDER_POLL_MS,
   );
-  // The CA search: a whole address is looked up across the Stream; part of one narrows this page.
-  const [caInput, setCaInput] = useState("");
-  const clearCa = useCallback(() => setCaInput(""), []);
-  const ca = parseCaQuery(caInput);
-  const caPartial = ca.kind === "partial" ? ca.text : null;
-  const launches = page.data?.launches;
-  const pageCards = useMemo(
-    () => (caPartial && launches ? launches.filter((c) => cardMatchesCa(c, caPartial)) : launches),
-    [launches, caPartial],
-  );
-  // "Now" on each card, seconds old, from the same tick the Live feed uses. A whole-address search
-  // ticks its own card, so this one rests meanwhile.
-  const cards = useLiveMarketCaps(ca.kind === "full" ? undefined : pageCards);
+  // The search (address, ticker or name) is looked up across the Stream and shown in its place.
+  const [searchInput, setSearchInput] = useState("");
+  const clearSearch = useCallback(() => setSearchInput(""), []);
+  const searching = parseSearch(searchInput).kind !== "none";
+  // "Now" on each card, seconds old, from the same tick the Live feed uses. A search ticks its own
+  // cards, so this one rests meanwhile.
+  const cards = useLiveMarketCaps(searching ? undefined : page.data?.launches);
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const live = page.data != null && !page.error;
@@ -74,41 +68,34 @@ export function StreamView() {
               Customize
             </button>
             <CaSearchBox
-              value={caInput}
-              onChange={setCaInput}
-              title="Find a token on the Stream by its contract address. Press / to jump here."
+              value={searchInput}
+              onChange={setSearchInput}
+              title="Find a token on the Stream by its contract address, ticker or name. Press / to jump here."
             />
             <span className={`live-dot ${live ? "on" : ""}`}>{live ? "Live" : "Connecting"}</span>
           </div>
         </header>
-        {ca.kind === "full" ? (
-          <CaSearchResults<LaunchPage>
-            path={`${STREAM_DATA}?mint=${ca.mint}`}
+        {searching ? (
+          <SearchResults<LaunchPage>
+            input={searchInput}
+            pathFor={(search, n) => (search ? `${STREAM_DATA}?${search}&page=${n}` : STREAM_DATA)}
             pollMs={STREAM_POLL_MS}
             cardsOf={(d) => d.launches}
-            mint={ca.mint}
+            hasMoreOf={(d) => d.hasMore ?? false}
+            noun="token"
             where="the Stream"
-            onClear={clearCa}
+            onClear={clearSearch}
             now={now}
             hide={hidden}
             look={look}
           />
         ) : (
           <>
-            {caPartial && (
-              <CaSearchNote
-                found={cards ? cards.length : null}
-                mint={null}
-                partial={caPartial}
-                where="the Stream"
-                onClear={clearCa}
-              />
-            )}
             {page.error && !page.data && (
               <p className="error">Couldn&apos;t load the Stream: {page.error.message}</p>
             )}
             {!page.data && !page.error && <SkeletonCards count={4} />}
-            {!caPartial && page.data && page.data.launches.length === 0 && (
+            {page.data && page.data.launches.length === 0 && (
               <div className="empty-state">
                 <RadarIcon size={28} />
                 <p>
