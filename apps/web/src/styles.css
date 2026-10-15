@@ -1430,9 +1430,16 @@ img.avatar {
 }
 /* A figure's second half in smaller type beside it: the Linked tile's "(12.3%)". */
 .card-stats dd .dd-sub {
+  display: inline-block;
   font-size: 10.5px;
   font-weight: 500;
   opacity: 0.75;
+  white-space: nowrap;
+}
+/* A narrow tile puts the "(12.3%)" under the count rather than cutting it off. */
+.card-stats dd:has(.dd-sub) {
+  white-space: normal;
+  line-height: 1.15;
 }
 /* "Not checked" wraps onto two lines rather than being cut in a narrow box. */
 .card-stats dd.muted {
