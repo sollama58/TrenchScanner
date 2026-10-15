@@ -54,6 +54,11 @@ interface PumpFunCoin {
 export interface LiveStream {
   /** People watching right now; null when the feed didn't say. */
   viewers: number | null;
+  /**
+   * The coin as the feed reports it (market cap, description, socials): with the coin list
+   * blocked, the one Pump.fun list still answering, so it also feeds discovery and revival.
+   */
+  coin?: DiscoveredCoin;
 }
 
 export interface DiscoveredCoin {
@@ -95,13 +100,23 @@ type SortOrder = "ASC" | "DESC";
 export interface PumpFunListStats {
   pages: number;
   failed: number;
+  /** Pages not asked: the list answered with a block (HTTP 403) less than LIST_BLOCK_BACKOFF_MS ago. */
+  skipped: number;
   lastError?: string;
 }
+
+/**
+ * How long a blocked coin list (HTTP 403, a Cloudflare challenge) is left alone before it is asked
+ * again: nine pages a cycle that are certain to fail cost a little time and look like abuse to the
+ * block. One page is then tried, and the rest follow on the next cycle when it answers.
+ */
+export const LIST_BLOCK_BACKOFF_MS = 5 * 60_000;
 
 export class PumpFunClient {
   private readonly baseUrl: string;
   private readonly swapBaseUrl: string;
-  private listStats: PumpFunListStats = { pages: 0, failed: 0 };
+  private listStats: PumpFunListStats = { pages: 0, failed: 0, skipped: 0 };
+  private listBlockedUntil = 0;
 
   constructor(options: PumpFunClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://frontend-api-v3.pump.fun";
@@ -180,7 +195,7 @@ export class PumpFunClient {
    */
   takeListStats(): PumpFunListStats {
     const out = this.listStats;
-    this.listStats = { pages: 0, failed: 0 };
+    this.listStats = { pages: 0, failed: 0, skipped: 0 };
     return out;
   }
 
@@ -365,6 +380,7 @@ export class PumpFunClient {
         const viewers = coin.num_participants;
         live.set(coin.mint, {
           viewers: typeof viewers === "number" && Number.isFinite(viewers) && viewers >= 0 ? viewers : null,
+          coin: toDiscoveredCoin(coin),
         });
       }
       if (coins.length < limit) return live;
@@ -388,6 +404,10 @@ export class PumpFunClient {
       order: params.order,
       includeNsfw: "false",
     });
+    if (Date.now() < this.listBlockedUntil) {
+      this.listStats.skipped += 1;
+      return [];
+    }
     this.listStats.pages += 1;
     try {
       const coins = await fetchJson<PumpFunCoin[]>(`${this.baseUrl}/coins?${query.toString()}`, {
@@ -399,6 +419,8 @@ export class PumpFunClient {
     } catch (err) {
       this.listStats.failed += 1;
       this.listStats.lastError = listErrorText(err);
+      if (err instanceof HttpError && err.status === 403)
+        this.listBlockedUntil = Date.now() + LIST_BLOCK_BACKOFF_MS;
       logger.warn("listCoins failed", { params, error: this.listStats.lastError });
       return [];
     }

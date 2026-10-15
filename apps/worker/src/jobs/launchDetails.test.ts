@@ -1,7 +1,7 @@
 import type { DiscoveredCoin } from "@trenchscanner/core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "../discovery/pumpPortalStream.js";
-import { fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
+import { fillLaunchDetails, resetLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
 
 const at = new Date("2026-10-15T08:00:00Z");
 const launch = (mint: string, extra: Partial<StreamEvent> = {}): StreamEvent => ({
@@ -21,8 +21,9 @@ const coin = (mint: string, extra: Partial<DiscoveredCoin> = {}): DiscoveredCoin
 });
 
 describe("fillLaunchDetails", () => {
+  beforeEach(() => resetLaunchDetails());
+
   it("reads each launch from Pump.fun, falls back to its metadata, and saves what it found", async () => {
-    takeLaunchDetailStats();
     const coinDetails = vi.fn(async (mint: string) => {
       if (mint === "a") return coin("a", { description: "from pump" });
       if (mint === "b") throw new Error("HTTP 403");
@@ -57,6 +58,14 @@ describe("fillLaunchDetails", () => {
       missing: 1,
       dropped: 0,
     });
+  });
+
+  it("reads each mint once", async () => {
+    const coinDetails = vi.fn(async (mint: string) => coin(mint));
+    const save = vi.fn(async () => {});
+    await fillLaunchDetails([launch("x")], { coinDetails }, save);
+    await fillLaunchDetails([launch("x"), launch("y")], { coinDetails }, save);
+    expect(coinDetails.mock.calls.map((c) => c[0])).toEqual(["x", "y"]);
   });
 
   it("does nothing for no launches", async () => {

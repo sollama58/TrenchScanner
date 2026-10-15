@@ -11,6 +11,7 @@ import {
 } from "@trenchscanner/core";
 import {
   addNewMintsToWatchlist,
+  saveMovingLaunches,
   buildOnChainProfile,
   freshGraduatesOverCut,
   noteSnapshotWritten,
@@ -199,6 +200,47 @@ describe.skipIf(!dbAvailable)("discovery metadata and revival", () => {
     expect((await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(90) } })).description).toBe(
       "a cat",
     );
+  });
+
+  it("saves Jupiter's moving coins without claiming a description, reviving known ones", async () => {
+    const stale = new Date(Date.now() - 6 * 3_600_000);
+    await prisma.token.create({
+      data: { mintAddress: mint(91), lastLiveAt: stale, lastMcapUsd: 4_000, description: "kept" },
+    });
+    const coinDetails = async () => null;
+    await saveMovingLaunches(
+      [
+        {
+          mintAddress: mint(91),
+          graduated: false,
+          hasTwitter: false,
+          hasTelegram: false,
+          hasWebsite: false,
+          marketCapUsd: 80_000,
+        },
+        {
+          mintAddress: mint(92),
+          symbol: "NEW",
+          graduated: false,
+          hasTwitter: false,
+          hasTelegram: false,
+          hasWebsite: false,
+          marketCapUsd: 3_000,
+        },
+      ],
+      { coinDetails },
+      env,
+    );
+    const known = await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(91) } });
+    expect(known.description).toBe("kept");
+    expect(known.lastMcapUsd).toBe(80_000);
+    const fresh = await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(92) } });
+    expect(fresh).toMatchObject({
+      symbol: "NEW",
+      description: null,
+      discoverySource: "jupiter",
+      hasTwitter: false,
+    });
   });
 
   it("revives a known mint that is moving again, and ignores ones still at launch level", async () => {

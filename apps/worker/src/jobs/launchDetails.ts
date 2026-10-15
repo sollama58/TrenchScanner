@@ -35,6 +35,17 @@ const emptyStats = (): LaunchDetailStats => ({
 let stats = emptyStats();
 let inFlight = 0;
 
+/** Each mint is read once: the stream repeats, and Jupiter's lists show a young coin minute after minute. */
+const asked = new Set<string>();
+const ASKED_MAX = 20_000;
+
+/** Test hook. */
+export function resetLaunchDetails(): void {
+  asked.clear();
+  inFlight = 0;
+  stats = emptyStats();
+}
+
 /** The counts since the last call, for the scan's heartbeat. */
 export function takeLaunchDetailStats(): LaunchDetailStats {
   const out = stats;
@@ -62,7 +73,8 @@ export async function fillLaunchDetails(
   fetchMetadata: typeof fetchLaunchMetadata = fetchLaunchMetadata,
 ): Promise<void> {
   const byMint = new Map<string, StreamEvent>();
-  for (const e of launches) if (e.kind === "create") byMint.set(e.mintAddress, e);
+  for (const e of launches)
+    if (e.kind === "create" && !asked.has(e.mintAddress)) byMint.set(e.mintAddress, e);
   let todo = [...byMint.values()];
   const room = Math.max(0, MAX_IN_FLIGHT - inFlight);
   if (todo.length > room) {
@@ -70,6 +82,8 @@ export async function fillLaunchDetails(
     todo = todo.slice(0, room);
   }
   if (todo.length === 0) return;
+  if (asked.size + todo.length > ASKED_MAX) asked.clear();
+  for (const launch of todo) asked.add(launch.mintAddress);
   inFlight += todo.length;
   stats.asked += todo.length;
   const found: DiscoveredCoin[] = [];
