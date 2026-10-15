@@ -35,6 +35,13 @@ export const RISKY_WALLET_SCORE = 70;
  * wins) labelled 12% at 0.7-1.4x; this one labels 2% at 1.6x per appearance.
  */
 export const KNOWN_DUMPER = { minDumps: 4, minRate: 0.75 } as const;
+/**
+ * The smallest win that counts (user ask 2026-10-15): a coin it bought that doubled counts toward
+ * its wins - the win score, the early wins and the winner label - only if it took out at least
+ * this much more SOL than it put in on that coin (TokenWalletActivity solOut - solIn, realized
+ * within the tape). The market's win rate counts the same way, so the score stays comparable.
+ */
+export const MIN_WIN_SOL = 0.5;
 export const WINNER = { minWins: 3, minRate: 0.6 } as const;
 /** Launch sniper: 3+ coins bought in their first 5 seconds, and at least half of its coins. */
 export const LAUNCH_SNIPER = { minSnipes: 3, minRate: 0.5 } as const;

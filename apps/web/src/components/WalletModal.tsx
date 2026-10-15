@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, lookupRequired } from "../api";
 import { cachedGet } from "../cache";
-import { ago, shortAddress, signedPct, usd } from "../format";
+import { MIN_WIN_SOL, ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
@@ -455,7 +455,7 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
         )}
         {risk.wins !== undefined && (
           <div>
-            <dt>Coins that doubled</dt>
+            <dt>Wins (doubled, {MIN_WIN_SOL}+ SOL profit)</dt>
             <dd className="num">
               {risk.wins}
               {risk.earlyWins !== undefined ? ` (${risk.earlyWins} bought before the call)` : ""}
@@ -471,10 +471,10 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
       </dl>
       <p className="faint small wm-note">
         How often it sold into a call&apos;s stop, against the market&apos;s rate, nudged up by fast exits and
-        launch snipes. The win score is the mirror: how often the coins it bought doubled, against the market,
-        nudged up by being in before the call. Labels need 10+ called coins on record: Known dumper is 4+ sold
-        into the stop and three quarters of its coins, Winner is 3+ doubled and 60% of them, and a wallet
-        never carries both. Updated {ago(risk.computedAt)}.
+        launch snipes. The win score is the mirror: how often the coins it bought doubled and it took{" "}
+        {MIN_WIN_SOL}+ SOL profit, against the market, nudged up by being in before the call. Labels need 10+
+        called coins on record: Known dumper is 4+ sold into the stop and three quarters of its coins, Winner
+        is 3+ such wins and 60% of its coins, and a wallet never carries both. Updated {ago(risk.computedAt)}.
       </p>
     </section>
   );

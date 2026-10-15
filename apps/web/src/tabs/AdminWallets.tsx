@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { usePolling } from "../hooks";
-import { pct } from "../format";
+import { MIN_WIN_SOL, pct } from "../format";
 import { useWalletNames } from "../walletNames";
 import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
 
@@ -207,7 +207,7 @@ export function WalletsAdmin() {
             </Panel>
             <Panel
               title="Winning wallets"
-              note="Labelled winners seen in 3+ coins, by win score: how often the coins it bought doubled, against the market, nudged up by buying before the call. Tap a wallet for its coins."
+              note={`Labelled winners seen in 3+ coins, by win score: how often the coins it bought doubled with ${MIN_WIN_SOL}+ SOL profit, against the market, nudged up by buying before the call. Tap a wallet for its coins.`}
             >
               <Table
                 head={[
