@@ -335,6 +335,10 @@ export interface Card {
 /** GET /launches: the Stream - new tokens that passed the safety screen inside the band, newest first. */
 export interface LaunchPage {
   launches: Card[];
+  /** The page answered (older APIs: none, and one page only). */
+  page?: number;
+  /** Whether an older page has anything on it. */
+  hasMore?: boolean;
 }
 
 export interface CuratedPage {

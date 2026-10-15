@@ -14,6 +14,8 @@ import { fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES } from "../feedFill
 import { ago, pct } from "../format";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { CustomizeDrawer } from "../components/CustomizeDrawer";
+import { CaSearchBox, CaSearchNote, CaSearchResults } from "../components/CaSearch";
+import { cardMatchesCa, parseCaQuery } from "../caSearch";
 
 /** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
 const MIN_TEASER = 10;
@@ -64,6 +66,12 @@ export function LiveTab({
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const look = useAppearance();
   const hidden = useMemo(() => cardHideSet(look), [look]);
+  // The CA search: a whole address is looked up in the API across the whole feed; part of one
+  // narrows the alerts already read. Either way the paged feed underneath carries on as it was.
+  const [caInput, setCaInput] = useState("");
+  const clearCa = useCallback(() => setCaInput(""), []);
+  const ca = parseCaQuery(caInput);
+  const caPartial = ca.kind === "partial" ? ca.text : null;
   // "saved": the API mixes in model calls per this user's own switch and checked models; with
   // highConviction those calls are every model's high-conviction tier instead.
   const hc = highConviction ? "&highConviction=1" : "";
@@ -102,8 +110,19 @@ export function LiveTab({
   // The live tick covers the page on screen and the hidden cards among it (which can climb back),
   // not every alert read ahead. Which those are depends on the tick itself, so it follows a render.
   const [tickIds, setTickIds] = useState<string[] | undefined>(undefined);
-  // "Now" on each card, seconds old rather than as old as the last feed poll.
-  const cards = useLiveMarketCaps(buffer, tickIds);
+  // A part-address search shows the matching alerts read so far, so the tick follows those.
+  const caMatchIds = useMemo(
+    () =>
+      caPartial && buffer
+        ? buffer.filter((c) => cardMatchesCa(c, caPartial)).map((c) => c.tokenId)
+        : undefined,
+    [buffer, caPartial],
+  );
+  // "Now" on each card, seconds old rather than as old as the last feed poll. A whole-address
+  // search ticks its own cards (CaSearchResults), so the feed's tick rests meanwhile.
+  const cards = useLiveMarketCaps(buffer, ca.kind === "full" ? [] : (caMatchIds ?? tickIds));
+  // The search shows every match, hidden under the market cap line or not: it was asked for.
+  const caCards = caPartial ? cards?.filter((c) => cardMatchesCa(c, caPartial)) : undefined;
   // The "hide below this market cap" setting only takes cards off the screen: the feed's stats and
   // grading are the API's, unchanged. Older alerts move up into the gaps, and a card that climbs
   // back over the line (with a margin, so a coin trading at the line doesn't flicker) takes its own
@@ -261,65 +280,105 @@ export function LiveTab({
               </button>
             )}
             {lb && <ModelPicker board={lb} disabled={!modelsOn || highConviction} onChanged={changed} />}
+            <CaSearchBox
+              value={caInput}
+              onChange={setCaInput}
+              title="Find a token in your feed by its contract address. Press / to jump here."
+            />
             <span className={`live-dot ${streamLive ? "on" : ""}`}>{streamLive ? "Live" : "Polling"}</span>
             {toggleError && <small className="error">Couldn&apos;t switch model alerts: {toggleError}</small>}
           </div>
         </header>
-        {feedPage.error && !feedPage.data && (
+        {ca.kind === "full" && (
+          <CaSearchResults<MatchPage>
+            path={`${feedPath(1)}&mint=${ca.mint}`}
+            pollMs={30_000}
+            pollKey={String(pick)}
+            cardsOf={(d) => d.matches}
+            mint={ca.mint}
+            where="your feed"
+            onClear={clearCa}
+            now={now}
+            hide={hidden}
+            look={look}
+            labelSource
+          />
+        )}
+        {caCards && (
+          <>
+            <CaSearchNote
+              found={caCards.length}
+              mint={null}
+              partial={caPartial}
+              where="your feed"
+              onClear={clearCa}
+            />
+            <div className="cards" {...feedGridProps(look)}>
+              {caCards.map((card) => (
+                <AlertCard key={card.id} card={card} now={now} labelSource hide={hidden} />
+              ))}
+            </div>
+          </>
+        )}
+        {ca.kind === "none" && feedPage.error && !feedPage.data && (
           <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
         )}
-        {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
-        {feedPage.data && feedPage.data.matches.length === 0 && page === 1 && (
-          <div className="empty-state">
-            <RadarIcon size={28} />
-            <p>
-              {modelsOn
-                ? `Nothing yet from your filter or ${highConviction ? "the high-conviction calls" : chosenNames}. Alerts land here the moment one comes in.`
-                : "Nothing caught by your filter yet. Turn on model alerts to see the models' calls here too."}
-            </p>
-            <button className="ghost" onClick={() => goTo("filters")}>
-              Tune your filter <ArrowRightIcon size={13} />
-            </button>
-          </div>
-        )}
-        <div
-          className={`cards${feedPage.stale ? " stale" : ""}`}
-          aria-busy={feedPage.stale}
-          {...feedGridProps(look)}
-        >
-          {shownCards?.map((card) => (
-            <AlertCard key={card.id} card={card} now={now} labelSource hide={hidden} />
-          ))}
-        </div>
-        {hiddenCount > 0 && (
-          <p className="muted small center mcap-hidden-note">
-            {hiddenCount === 1 ? "1 alert" : `${hiddenCount} alerts`} now under $
-            {look.hideBelowMcapUsd / 1000}K market cap {hiddenCount === 1 ? "is" : "are"} hidden here, with
-            older alerts moved up in {hiddenCount === 1 ? "its" : "their"} place.{" "}
-            <button type="button" className="link" onClick={() => setCustomizing(true)}>
-              Change
-            </button>
-          </p>
-        )}
-        {feedPage.data && (shownCards?.length ?? 0) === 0 && page > 1 && (
-          <p className="muted small center">Nothing older here.</p>
-        )}
-        {(page > 1 || hasMore) && (
-          <nav className="pager">
-            <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-              ← Newer
-            </button>
-            <span className="muted small num">Page {page}</span>
-            <button
-              disabled={!hasMore || feedPage.stale}
-              // Start the next page on hover/focus so the click usually finds it already here.
-              onPointerEnter={() => prefetch(feedPath(depth + 1))}
-              onFocus={() => prefetch(feedPath(depth + 1))}
-              onClick={() => setPage((p) => p + 1)}
+        {ca.kind === "none" && (
+          <>
+            {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
+            {feedPage.data && feedPage.data.matches.length === 0 && page === 1 && (
+              <div className="empty-state">
+                <RadarIcon size={28} />
+                <p>
+                  {modelsOn
+                    ? `Nothing yet from your filter or ${highConviction ? "the high-conviction calls" : chosenNames}. Alerts land here the moment one comes in.`
+                    : "Nothing caught by your filter yet. Turn on model alerts to see the models' calls here too."}
+                </p>
+                <button className="ghost" onClick={() => goTo("filters")}>
+                  Tune your filter <ArrowRightIcon size={13} />
+                </button>
+              </div>
+            )}
+            <div
+              className={`cards${feedPage.stale ? " stale" : ""}`}
+              aria-busy={feedPage.stale}
+              {...feedGridProps(look)}
             >
-              Older →
-            </button>
-          </nav>
+              {shownCards?.map((card) => (
+                <AlertCard key={card.id} card={card} now={now} labelSource hide={hidden} />
+              ))}
+            </div>
+            {hiddenCount > 0 && (
+              <p className="muted small center mcap-hidden-note">
+                {hiddenCount === 1 ? "1 alert" : `${hiddenCount} alerts`} now under $
+                {look.hideBelowMcapUsd / 1000}K market cap {hiddenCount === 1 ? "is" : "are"} hidden here,
+                with older alerts moved up in {hiddenCount === 1 ? "its" : "their"} place.{" "}
+                <button type="button" className="link" onClick={() => setCustomizing(true)}>
+                  Change
+                </button>
+              </p>
+            )}
+            {feedPage.data && (shownCards?.length ?? 0) === 0 && page > 1 && (
+              <p className="muted small center">Nothing older here.</p>
+            )}
+            {(page > 1 || hasMore) && (
+              <nav className="pager">
+                <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                  ← Newer
+                </button>
+                <span className="muted small num">Page {page}</span>
+                <button
+                  disabled={!hasMore || feedPage.stale}
+                  // Start the next page on hover/focus so the click usually finds it already here.
+                  onPointerEnter={() => prefetch(feedPath(depth + 1))}
+                  onFocus={() => prefetch(feedPath(depth + 1))}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  Older →
+                </button>
+              </nav>
+            )}
+          </>
         )}
         {stats.data && look.learningNote && (
           <div className="learning-note">

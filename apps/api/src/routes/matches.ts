@@ -202,6 +202,15 @@ export const listQuerySchema = z.object({
       v === "true" || v === "1" ? "on" : v === "saved" ? "saved" : "off",
     ),
   highConviction: highConvictionParam,
+  /**
+   * A token's contract address: the feed narrowed to that one token's alerts (the dashboard's CA
+   * search), paged and merged exactly as the whole feed is. An address no token has answers an
+   * empty page.
+   */
+  mint: z
+    .string()
+    .regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "mint must be a Solana address")
+    .optional(),
 });
 
 /**
@@ -861,8 +870,18 @@ export async function registerMatchRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const { page, includeCurated, highConviction } = parsed.data;
-    const where = { userId: request.user!.userId };
+    const { page, includeCurated, highConviction, mint } = parsed.data;
+    // The CA search: one token's alerts. Nobody has an alert on a token we never saw.
+    const searched = mint
+      ? await prisma.token.findUnique({ where: { mintAddress: mint }, select: { id: true } })
+      : undefined;
+    if (searched === null) return { matches: [], page, pageSize: PAGE_SIZE, totalCount: 0, hasMore: false };
+    const tokenId = searched?.id;
+    const where = { userId: request.user!.userId, ...(tokenId ? { tokenId } : {}) };
+    // Every model-call read below narrows the same way, and its cache key says so (ahead of the
+    // model set, which keyFollowsModel reads off the end).
+    const callsWhere = (calls: FeedCalls) => ({ ...feedCallsWhere(calls), ...(tokenId ? { tokenId } : {}) });
+    const tokenKey = tokenId ? `token=${tokenId}:` : "";
 
     /*
      * The curated feed can be interleaved into this one, for readers who ask for it
@@ -907,11 +926,11 @@ export async function registerMatchRoutes(
       // groupSameTokenCalls. Only the columns grouping needs; the page's own rows are loaded in
       // full below.
       const take = depth * calls.models.length;
-      const key = feedCallsKey(calls);
+      const key = tokenKey + feedCallsKey(calls);
       const [rows, total] = await Promise.all([
         sharedCallRead(`feed:${take}:${key}`, () =>
           prisma.curatedAlert.findMany({
-            where: feedCallsWhere(calls),
+            where: callsWhere(calls),
             orderBy: { createdAt: "desc" },
             take,
             select: CALL_SELECT,
@@ -919,7 +938,7 @@ export async function registerMatchRoutes(
         ),
         // Only the legacy flag reports a count; the dashboard pages on hasMore instead.
         includeCurated === "on"
-          ? sharedCallRead(`count:${key}`, () => prisma.curatedAlert.count({ where: feedCallsWhere(calls) }))
+          ? sharedCallRead(`count:${key}`, () => prisma.curatedAlert.count({ where: callsWhere(calls) }))
           : 0,
       ]);
       return { calls, rows, total, hitLimit: rows.length === take };
@@ -930,7 +949,7 @@ export async function registerMatchRoutes(
     const matchesInMergedRun = async (): Promise<number> => {
       const calls = await feedCalls();
       return mergedRunCache
-        .for(`${where.userId}:${feedCallsKey(calls)}`)
+        .for(`${where.userId}:${tokenKey}${feedCallsKey(calls)}`)
         .get(() => countMatchesInMergedRun());
     };
     const countMatchesInMergedRun = async (): Promise<number> => {
@@ -1004,7 +1023,7 @@ export async function registerMatchRoutes(
         const tokenIds = [...new Set(open.map((g) => g.newest.tokenId))];
         const older = await prisma.curatedAlert.findMany({
           where: {
-            ...feedCallsWhere(curated.calls),
+            ...callsWhere(curated.calls),
             tokenId: { in: tokenIds },
             createdAt: { gte: new Date(Math.min(...open.map(reach))), lt: horizon },
           },

@@ -83,7 +83,7 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
   afterAll(async () => {
     if (!dbAvailable) return;
     await app?.close();
-    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.token.deleteMany({ where: { id: { in: Object.values(ids) } } });
     await prisma.user.deleteMany({ where: { id: userId } });
   });
 
@@ -114,6 +114,43 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
       filter: null,
       curated: null,
     });
+  });
+
+  it("says whether an older page has anything, and pages back", async () => {
+    const get = (url: string) =>
+      app.inject({ method: "GET", url, cookies: { [SESSION_COOKIE_NAME]: cookie } });
+    const first = (await get("/launches")).json() as { page: number; hasMore: boolean };
+    expect(first.page).toBe(1);
+    expect(typeof first.hasMore).toBe("boolean");
+    const deep = await get("/launches?page=10");
+    expect(deep.statusCode).toBe(200);
+    expect((deep.json() as { hasMore: boolean }).hasMore).toBe(false);
+    expect((await get("/launches?page=11")).statusCode).toBe(400);
+    expect((await get("/launches?page=0")).statusCode).toBe(400);
+  });
+
+  it("narrows to one token by its address", async () => {
+    const get = (url: string) =>
+      app.inject({ method: "GET", url, cookies: { [SESSION_COOKIE_NAME]: cookie } });
+    const older = await prisma.token.update({
+      where: { id: ids.older },
+      data: { mintAddress: "LaunchSearchMint1111111111111111111111111111" },
+    });
+    const found = (await get(`/launches?mint=${older.mintAddress}`)).json() as {
+      launches: { tokenId: string }[];
+      hasMore: boolean;
+    };
+    expect(found.launches.map((c) => c.tokenId)).toEqual([ids.older]);
+    expect(found.hasMore).toBe(false);
+    // Never passed: not on the Stream, searched or not.
+    const failing = await prisma.token.update({
+      where: { id: ids.failing },
+      data: { mintAddress: "LaunchSearchMint2222222222222222222222222222" },
+    });
+    expect(
+      ((await get(`/launches?mint=${failing.mintAddress}`)).json() as { launches: unknown[] }).launches,
+    ).toEqual([]);
+    expect((await get("/launches?mint=not-an-address")).statusCode).toBe(400);
   });
 
   it("is behind sign-in like the feeds", async () => {
