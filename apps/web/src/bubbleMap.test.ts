@@ -18,8 +18,6 @@ import {
   MAP_COLOURS,
   nodeSlot,
   sameTimeSlot,
-  bubblesFromUrl,
-  bubblesLink,
   buildGraph,
   linkedCount,
   linkedCountText,
@@ -184,16 +182,6 @@ describe("bubble map graph", () => {
       { linkedWalletPct: 0, linkedClusters: null, linkedHolders: holders, id: 2 },
     ];
     expect(pickReading(rows)?.id).toBe(2);
-  });
-});
-
-describe("bubble map link", () => {
-  it("reads a mint from the address bar and builds a clean link", () => {
-    expect(bubblesFromUrl(`?bubbles=${A}`)).toBe(A);
-    expect(bubblesFromUrl("?bubbles=nope")).toBeNull();
-    expect(bubblesLink(A, "https://trenchscanner.app/?sage=x#lighthouse")).toBe(
-      `https://trenchscanner.app/?bubbles=${A}`,
-    );
   });
 });
 

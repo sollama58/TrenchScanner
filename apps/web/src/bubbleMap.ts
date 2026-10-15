@@ -1,88 +1,15 @@
-import { useEffect, useState } from "react";
-import type { Snapshot, Token } from "./api";
+import type { Snapshot } from "./api";
 import type { WalletNames } from "./walletNames";
 
 /**
  * The linked-wallets bubble map: a coin's top holders as bubbles sized by their share of supply,
  * coloured by the cluster one funder paid for, with a line from each to that funder, and the
- * risky wallets ringed. Open in the address bar as `?bubbles=<mint>` (like `?sage=`, sage.ts), so
- * the map has a link of its own to copy and send.
+ * risky wallets ringed.
  *
- * This file is the pure half: the URL state, the graph built from a snapshot's linked clusters
+ * This file is the pure half: the graph built from a snapshot's linked clusters
  * (core's wallets/linkedWallets.ts) and the token chart's flagged wallets, and its layout, which
- * both the dialog's SVG (components/BubbleMap.tsx) and the share image (bubbleMapCard.ts) draw.
+ * both the token view's SVG (components/BubbleMap.tsx) and the share image (bubbleMapCard.ts) draw.
  */
-
-export const BUBBLES_PARAM = "bubbles";
-const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const EVENT = "bubbles:change";
-
-/** The mint in the address bar, or null when none (or not a mint). */
-export function bubblesFromUrl(search = window.location.search): string | null {
-  const mint = new URLSearchParams(search).get(BUBBLES_PARAM);
-  return mint && MINT_RE.test(mint) ? mint : null;
-}
-
-/** The map's own link, for the Copy link button: this page with only `?bubbles=<mint>`. */
-export function bubblesLink(mint: string, href = window.location.href): string {
-  const url = new URL(href);
-  url.search = "";
-  url.hash = "";
-  url.searchParams.set(BUBBLES_PARAM, mint);
-  return url.toString();
-}
-
-function write(mint: string | null) {
-  const url = new URL(window.location.href);
-  if (mint) url.searchParams.set(BUBBLES_PARAM, mint);
-  else url.searchParams.delete(BUBBLES_PARAM);
-  window.history.replaceState(window.history.state, "", url);
-  window.dispatchEvent(new Event(EVENT));
-}
-
-/** The reading a card already shows, so the map opened from it draws the same one. */
-export interface BubbleSeed {
-  token: Token;
-  snapshot: Snapshot;
-  /**
-   * The top-50 map to draw over it, when the opener already chose one (the token view's "At the
-   * alert" holds the map as it stood at the call): null for none. Absent: the coin's live one.
-   */
-  wide?: WideMap | null;
-  /** Which moment it is ("At the alert"), headed on the map. */
-  moment?: { label: string; title: string };
-}
-const seeds = new Map<string, BubbleSeed>();
-
-/** The seed left by openBubbleMap for this mint, if any. */
-export function bubbleSeed(mint: string): BubbleSeed | undefined {
-  return seeds.get(mint);
-}
-
-/** Opens the map. `seed`: the card's own reading, drawn instead of the newest scan's. */
-export function openBubbleMap(mint: string, seed?: BubbleSeed) {
-  if (seed) seeds.set(mint, seed);
-  write(mint);
-}
-
-export function closeBubbleMap() {
-  write(null);
-}
-
-/** The open map's mint, following openBubbleMap/closeBubbleMap and back/forward. */
-export function useBubblesMint(): string | null {
-  const [mint, setMint] = useState(bubblesFromUrl);
-  useEffect(() => {
-    const sync = () => setMint(bubblesFromUrl());
-    window.addEventListener(EVENT, sync);
-    window.addEventListener("popstate", sync);
-    return () => {
-      window.removeEventListener(EVENT, sync);
-      window.removeEventListener("popstate", sync);
-    };
-  }, []);
-  return mint;
-}
 
 // ---------------------------------------------------------------------------------------------
 // The top 50, for model-alerted coins

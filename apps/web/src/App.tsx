@@ -37,7 +37,6 @@ import { AlertNotifier, resetSettings } from "./alerts";
 import { AnnouncementBar } from "./components/AnnouncementBar";
 import { currentSignIn, hasPendingLink, mayReplaceSignIn, redeemLinkCode, takeLinkCode } from "./deviceLink";
 import { useSageMint } from "./sage";
-import { useBubblesMint } from "./bubbleMap";
 import { useWalletAddress } from "./walletModal";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
@@ -55,10 +54,6 @@ const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 // The burn button (and its transaction builder) only matters to someone without access.
 // The TokenSage view (and its charts) loads the first time a card or a Telegram link opens one.
 const SageHost = lazy(() => import("./components/SageView").then((m) => ({ default: m.SageHost })));
-// The linked-wallets bubble map loads the first time a Linked tile or a ?bubbles= link opens it.
-const BubbleMapHost = lazy(() =>
-  import("./components/BubbleMap").then((m) => ({ default: m.BubbleMapHost })),
-);
 // Utilities: its own chunk, loaded the first time the tab opens.
 const UtilitiesTab = lazy(() => import("./tabs/UtilitiesTab").then((m) => ({ default: m.UtilitiesTab })));
 // The wallet detail modal loads the first time a wallet or a ?wallet= link opens it.
@@ -107,7 +102,6 @@ export function App() {
   });
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
   const sageMint = useSageMint();
-  const bubblesMint = useBubblesMint();
   const walletAddress = useWalletAddress();
 
   const checkSession = (maxAgeMs: number) => {
@@ -442,11 +436,6 @@ export function App() {
             <SageHost key={sageMint} mint={sageMint} guest onConnect={connectWallet} />
           </Suspense>
         )}
-        {guest && bubblesMint && (
-          <Suspense fallback={null}>
-            <BubbleMapHost key={bubblesMint} mint={bubblesMint} guest onConnect={connectWallet} />
-          </Suspense>
-        )}
         {guest && walletAddress && (
           <Suspense fallback={null}>
             <WalletModalHost key={walletAddress} wallet={walletAddress} guest onConnect={connectWallet} />
@@ -472,11 +461,6 @@ export function App() {
             {sageMint && (
               <Suspense fallback={null}>
                 <SageHost key={sageMint} mint={sageMint} guest={false} onConnect={connectWallet} />
-              </Suspense>
-            )}
-            {bubblesMint && (
-              <Suspense fallback={null}>
-                <BubbleMapHost key={bubblesMint} mint={bubblesMint} guest={false} onConnect={connectWallet} />
               </Suspense>
             )}
             {walletAddress && (

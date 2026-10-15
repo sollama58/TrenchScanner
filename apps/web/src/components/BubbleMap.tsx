@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { ApiError, type Snapshot, type Token } from "../api";
+import type { Snapshot, Token } from "../api";
 import { cachedGet } from "../cache";
-import { ago, pct, shortAddress, tokenLabel } from "../format";
+import { pct, tokenLabel } from "../format";
 import {
   bubbleNameLines,
   showsPct,
@@ -23,19 +23,14 @@ import {
   MAP_COLOURS,
   nodeSlot,
   sameTimeSlot,
-  bubbleSeed,
-  bubblesLink,
   buildGraph,
-  closeBubbleMap,
   clusterHalos,
   HALO_PAD,
-  openBubbleMap,
   graphBounds,
   placeLabels,
   type MapLabel,
   layoutGraph,
   linkedCountText,
-  pickReading,
   type BubbleGraph,
   type SameTimeGroup,
   type FlaggedHolder,
@@ -73,12 +68,9 @@ import {
 import { useAppearance } from "../appearance";
 import { possibleSideText, sideGroups, usePossibleSides, type PossibleSides } from "../possibleSides";
 import { ShareButton } from "./ShareImageDialog";
-import { BubblesIcon, CheckIcon, CloseIcon, LinkIcon, LockIcon } from "./Icons";
+import { BubblesIcon } from "./Icons";
 
-/** GET /tokens/:mint: the token and its newest snapshots. */
-type TokenDetail = Token & { snapshots: Snapshot[] };
-
-/** How many cluster colours there are (styles.css .bm-modal --bm-0..4); more clusters reuse them. */
+/** How many cluster colours there are (styles.css --bm-0..4); more clusters reuse them. */
 export const CLUSTER_COLOURS = MAP_COLOURS;
 
 /**
@@ -107,11 +99,6 @@ export function useBubbleMaps(mint: string): BubbleMaps | null {
   return maps?.mint === mint ? maps.maps : null;
 }
 
-/** "· +12 known from top 50", for the map's subtitle; empty without the wider map. */
-function wideText(wide: WideMap | null): string {
-  return wide ? ` · +${wide.knownExtra} known from top ${wide.holdersRead}` : "";
-}
-
 /** The names of every wallet on the map (holders and funders), in one read. */
 function useGraphNames(graph: BubbleGraph | null): WalletNames {
   return useWalletNames(
@@ -126,46 +113,6 @@ function useGraphNames(graph: BubbleGraph | null): WalletNames {
           : [],
       [graph],
     ),
-  );
-}
-
-/**
- * The linked-wallets bubble map in a dialog, opened from a card's or the token modal's Linked tile,
- * or from a `?bubbles=<mint>` link. A guest sees what it is and how to get it; the data behind it
- * (the token's snapshots and its flagged wallets) comes with access.
- */
-export function BubbleMapHost({
-  mint,
-  guest,
-  onConnect,
-}: {
-  mint: string;
-  guest: boolean;
-  onConnect: () => void;
-}) {
-  const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const dialog = ref.current;
-    if (dialog && !dialog.open) dialog.showModal();
-  }, []);
-  const close = () => ref.current?.close();
-  return (
-    <dialog
-      ref={ref}
-      className="about-modal sheet-modal bm-modal"
-      aria-labelledby="bm-title"
-      onClose={closeBubbleMap}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (e.target === e.currentTarget) close();
-      }}
-    >
-      {guest ? (
-        <Locked mint={mint} onClose={close} onConnect={onConnect} />
-      ) : (
-        <Body mint={mint} onClose={close} />
-      )}
-    </dialog>
   );
 }
 
@@ -236,193 +183,9 @@ interface SideToggle {
 }
 const NO_SIDES: readonly SideGroup[] = [];
 
-function Head({ title, sub, actions }: { title: string; sub?: string; actions: React.ReactNode }) {
-  return (
-    <header className="about-head bm-head">
-      <div className="bm-head-text">
-        <h2 id="bm-title" tabIndex={-1} autoFocus>
-          <BubblesIcon size={18} /> {title}
-        </h2>
-        {sub && <p className="muted small">{sub}</p>}
-      </div>
-      <div className="bm-actions">{actions}</div>
-    </header>
-  );
-}
-
-function Locked({ mint, onClose, onConnect }: { mint: string; onClose: () => void; onConnect: () => void }) {
-  return (
-    <div className="about-body bm-body">
-      <Head
-        title="Linked wallets"
-        sub={shortAddress(mint)}
-        actions={
-          <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
-            <CloseIcon size={16} />
-          </button>
-        }
-      />
-      <p className="tm-locked muted">
-        <LockIcon size={14} /> The bubble map comes with access: each top holder as a bubble sized by its
-        share, the wallets one funder paid for drawn together, and the risky ones ringed.
-      </p>
-      <button type="button" onClick={onConnect}>
-        Connect a wallet
-      </button>
-    </div>
-  );
-}
-
-interface Loaded {
-  token: Token;
-  snapshot: Snapshot | null;
-}
-
-function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
-  const seed = bubbleSeed(mint);
-  const [loaded, setLoaded] = useState<Loaded | null>(() =>
-    seed ? { token: seed.token, snapshot: seed.snapshot } : null,
-  );
-  const [error, setError] = useState<Error | null>(null);
-  const [flagged, setFlagged] = useState<FlaggedHolder[]>([]);
-  const [flagsFor, setFlagsFor] = useState<{ mint: string; read: FlagsRead } | null>(null);
-  const flags: FlagsRead = flagsFor?.mint === mint ? flagsFor.read : "loading";
-  const path = `/tokens/${encodeURIComponent(mint)}`;
-
-  useEffect(() => {
-    let live = true;
-    if (!seed) {
-      cachedGet<TokenDetail>(path, 60_000)
-        .then((d) => {
-          if (!live) return;
-          const { snapshots, ...token } = d;
-          setLoaded({ token, snapshot: pickReading(snapshots ?? []) });
-        })
-        .catch((e: unknown) => live && setError(e instanceof Error ? e : new Error(String(e))));
-    }
-    // The flagged wallets ring the risky bubbles; the map stands without them, but says so.
-    cachedGet<{ wallets?: FlaggedHolder[] }>(`${path}/chart`, 60_000)
-      .then((c) => {
-        if (!live) return;
-        setFlagged(c.wallets ?? []);
-        setFlagsFor({ mint, read: "ok" });
-      })
-      .catch(() => live && setFlagsFor({ mint, read: "failed" }));
-    return () => {
-      live = false;
-    };
-  }, [mint]);
-
-  const label = loaded ? tokenLabel(loaded.token) : shortAddress(mint);
-  const snapshot = loaded?.snapshot ?? null;
-  // A seed that chose its top 50 (the token view's "At the alert") draws that one, not the live map.
-  const fetchedWide = useWideMap(mint);
-  const wide = seed && seed.wide !== undefined ? seed.wide : fetchedWide;
-  const moment = seed?.moment;
-  const graph = useMemo(
-    () => (snapshot ? layoutGraph(buildGraph(withWideMap(snapshot, wide), flagged)) : null),
-    [snapshot, wide, flagged],
-  );
-  const names = useGraphNames(graph);
-  const { showCex, setCexOn } = useCexToggle(graph);
-  const side = useSideToggle(graph);
-  const kols = useKols(graph, side.groups, names);
-
-  const [copied, setCopied] = useState(false);
-  const copyLink = () => {
-    void navigator.clipboard?.writeText(bubblesLink(mint)).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1400);
-    });
-  };
-
-  const hasMap = !!graph && graph.nodes.some((n) => n.kind === "holder");
-  const actions = (
-    <>
-      <button
-        type="button"
-        className="ghost share-btn"
-        onClick={copyLink}
-        title={moment ? "Copy a link to this coin's live map" : "Copy a link to this map"}
-      >
-        {copied ? <CheckIcon size={14} /> : <LinkIcon size={14} />}
-        {copied ? " Copied" : " Link"}
-      </button>
-      {graph && loaded && (
-        <ShareButton
-          title={`${label} bubble map`}
-          fileName={`trenchscanner-bubbles-${(loaded.token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
-          caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
-          disabled={!hasMap}
-          render={() =>
-            renderBubbleCard(graph, loaded.token, names, {
-              cex: showCex,
-              sides: side.shown,
-              flags,
-              kolBundled: kolBundledFor(snapshot, kols),
-              kols,
-            })
-          }
-        />
-      )}
-      <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
-        <CloseIcon size={16} />
-      </button>
-    </>
-  );
-
-  const sub = snapshot
-    ? `${label}${moment ? ` · ${moment.label}` : ""} · read ${ago(wide?.readAt ?? snapshot.takenAt)}${wideText(wide)}`
-    : label;
-  if (error) {
-    const locked = error instanceof ApiError && (error.status === 401 || error.status === 402);
-    return (
-      <div className="about-body bm-body">
-        <Head title="Linked wallets" sub={label} actions={actions} />
-        <p className={locked ? "tm-locked muted" : "error small"}>
-          {locked ? (
-            <>
-              <LockIcon size={14} /> The bubble map comes with access.
-            </>
-          ) : error instanceof ApiError && error.status === 404 ? (
-            "TrenchScanner hasn't seen this coin."
-          ) : (
-            `Couldn't load the map: ${error.message}`
-          )}
-        </p>
-      </div>
-    );
-  }
-  return (
-    <div className="about-body bm-body">
-      <Head title="Linked wallets" sub={sub} actions={actions} />
-      {!loaded && <div className="bm-skeleton" />}
-      {loaded && !hasMap && (
-        <p className="muted bm-empty">
-          {snapshot?.linkedWalletPct == null
-            ? "Who paid for this coin's top holders hasn't been read yet."
-            : "No two top holders share a funder: nothing linked to map."}
-        </p>
-      )}
-      {graph && hasMap && (
-        <MapView
-          graph={graph}
-          names={names}
-          showCex={showCex}
-          setCexOn={setCexOn}
-          side={side}
-          flags={flags}
-          scanKolBundled={snapshot?.kolBundledPct ?? null}
-        />
-      )}
-    </div>
-  );
-}
-
 function MapView({
   graph,
   names,
-  compact = false,
   showCex,
   setCexOn,
   side,
@@ -431,7 +194,6 @@ function MapView({
 }: {
   graph: BubbleGraph;
   names: WalletNames;
-  compact?: boolean;
   /** Whether the same-exchange ties show (useCexToggle). */
   showCex: boolean;
   setCexOn: (on: boolean) => void;
@@ -574,7 +336,6 @@ function MapView({
       <BubbleSvg
         graph={regrouped ?? graph}
         names={names}
-        compact={compact}
         picked={picked}
         lit={lit}
         cexLinks={showCex}
@@ -605,24 +366,6 @@ function MapView({
           setListed(open ? key : null);
         }}
       />
-      {!compact && (
-        <p className="faint small bm-note">
-          Each bubble is a top holder, sized by its share of supply. Wallets one funder paid for share a
-          colour and a line to that funder; grey ones are linked to no other. A red ring marks a risky wallet
-          or known dumper.
-          {flags === "failed" && " The flagged wallets couldn't be loaded, so no wallet is ringed."}
-          {graph.sameTimeGroups.length > 0 &&
-            " Holders whose wallets were funded within the same minute, whoever paid, share a dotted ring and line in their group's colour."}
-          {showSides &&
-            " A dotted line in the KOL's colour ties a holder to a KOL it bought alongside on every one of the KOL's coins over the last 24 hours (10 or more), 90% over 48 hours (25 or more) or 80% over 72 hours (50 or more): a possible side wallet, not confirmed. A wallet the KOL funded is tied the same way as a KOL funded wallet, with no question mark."}
-          {kols.length > 0 &&
-            " Each KOL's bundle (its own wallet, wallets it funded, possible side wallets, and holders sharing a funder or funding minute with those) is outlined in the KOL's colour, its pill giving the share of supply they hold together."}
-          {graph.nodes.some((n) => n.kind === "rest") &&
-            " The dashed bubble is the rest of the top 10 together."}
-          {graph.nodes.some((n) => n.rank !== undefined) &&
-            " A model called this coin, so the map also takes in every wallet in its top 50 whose funder we already know. Same minute and CEX-funded above stay on the top holders the scan read (the /25 or /10); Linked, Largest cluster and the lists below take in the top 50, and Linked counts out of the top 50 once a holder past the top 25 is linked."}
-        </p>
-      )}
     </>
   );
 }
@@ -951,7 +694,6 @@ function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }
 function BubbleSvg({
   graph,
   names,
-  compact,
   picked,
   lit,
   cexLinks,
@@ -962,7 +704,6 @@ function BubbleSvg({
 }: {
   graph: BubbleGraph;
   names: WalletNames;
-  compact: boolean;
   picked: string | null;
   lit: number | null;
   /** Draw the same-exchange ties. */
@@ -1063,7 +804,7 @@ function BubbleSvg({
   const ids = Array.from({ length: CLUSTER_COLOURS }, (_, i) => i);
 
   return (
-    <div className={`bm-stage${compact ? " compact" : ""}`}>
+    <div className="bm-stage compact">
       <svg
         className="bm-svg"
         viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
@@ -1563,9 +1304,8 @@ function NodeDetail({
 }
 
 /**
- * The bubble map inside the token modal: the same map, a little shorter, for the reading the
- * card shows, with Share and a button that opens it full size (with its link) in its own dialog.
- * Nothing when the coin has no linked cluster.
+ * The bubble map inside the token modal, for the reading the card shows, with Share. Says so when
+ * no scan has read the coin's holders.
  */
 export function BubbleMapSection({
   token,
@@ -1653,29 +1393,11 @@ export function BubbleMapSection({
               })
             }
           />
-          <button
-            type="button"
-            className="tm-link"
-            onClick={() =>
-              snapshot
-                ? openBubbleMap(mint, {
-                    token,
-                    snapshot,
-                    ...(chosenWide !== undefined ? { wide: chosenWide } : {}),
-                    ...(moment ? { moment } : {}),
-                  })
-                : openBubbleMap(mint)
-            }
-            title="Open the bubble map full size, with a link to share"
-          >
-            Expand
-          </button>
         </span>
       </h4>
       <MapView
         graph={graph}
         names={names}
-        compact
         showCex={showCex}
         setCexOn={setCexOn}
         side={side}

@@ -284,8 +284,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
           <ul className="tour-keys">
             <li>
               <b>The Linked tile</b> on each card counts the top 25 that share a funder or a funding minute,
-              as 13/25, and turns red at 20/25. Tap it for the bubble map, where Linked also gives the supply
-              they hold: <span className="num">13/25 (16.2%)</span>.
+              as 13/25, and turns red at 20/25. Open the coin for its bubble map, where Linked also gives the
+              supply they hold: <span className="num">13/25 (16.2%)</span>.
             </li>
             <li>
               <b>On the map</b>, each bubble is a holder, sized and labelled with its share down to 0.1%. One
