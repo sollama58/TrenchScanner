@@ -1134,22 +1134,21 @@ input[type="checkbox"] {
   transform: translateY(-2px);
   box-shadow: 0 16px 32px -20px rgba(0, 0, 0, 0.6);
 }
-/* A graded card's result reads as a result, not as an outline color someone picked: a heavier
-   border, a halo ring outside it and a wash over the card's top, none of which a chosen outline
-   (Customize or a filter's color) ever gets - so a red or green pick still looks like a plain line. */
-.cards:not([data-outline-result="off"]) .card.result-pass,
-.cards:not([data-outline-result="off"]) .card.result-fail {
-  --result: var(--good);
-  border-width: 2px;
-  border-color: var(--result);
-  outline: 2px solid color-mix(in srgb, var(--result) 38%, transparent);
-  outline-offset: 1px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--result) 14%, transparent), transparent 120px),
-    linear-gradient(180deg, var(--surface-2), color-mix(in srgb, var(--surface-2) 70%, var(--page)));
+/* A graded card's result, when Customize turns it on (off by default): a thin green or red strip
+   along the card's top edge. Minimal on purpose, and unlike any outline color someone picks
+   (Customize or a filter's), which always runs the whole way round. */
+.cards:not([data-outline-result="off"]) .card.result-pass::before,
+.cards:not([data-outline-result="off"]) .card.result-fail::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  background: var(--good);
+  opacity: 0.85;
+  pointer-events: none;
 }
-.cards:not([data-outline-result="off"]) .card.result-fail {
-  --result: var(--bad);
+.cards:not([data-outline-result="off"]) .card.result-fail::before {
+  background: var(--bad);
 }
 .card-head {
   display: flex;
