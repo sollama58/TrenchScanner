@@ -36,6 +36,16 @@ export const SIDE_LIKELY_BOT_PCT = 60;
 export const SIDE_LIKELY_BOT_MIN_SHARED = 50;
 
 /**
+ * Wallets marked as bots by hand (user ask 2026-10-15): treated as likely bots whatever their
+ * numbers, so they are off every KOL's list (counted in its "likely bots hidden") and never carry
+ * a Possible Side, Known Side or KOL Funded Wallet label.
+ */
+export const MARKED_BOT_WALLETS: ReadonlySet<string> = new Set([
+  "ssssswdk4RR8HqkE3uwUWzDbd6mXFTTPjcXBKNzQ57E",
+  "sssssDdMNAWKingjpEojkTNdVuZrBe7FsJLaGtexe7d",
+]);
+
+/**
  * A possible side wallet (KolPossibleSide, the "Possible Side" label): over one of these recent
  * spans it bought at least minPct % of the KOL's coins alongside it, on at least minShared coins.
  * The first tier a wallet meets is the one stored.

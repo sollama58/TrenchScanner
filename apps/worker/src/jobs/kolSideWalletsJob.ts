@@ -3,6 +3,7 @@ import {
   prisma,
   createLogger,
   KNOWN_EXCHANGE_WALLETS,
+  MARKED_BOT_WALLETS,
   POSSIBLE_SIDE_HOLD_DAYS,
   POSSIBLE_SIDE_RULES_VERSION,
   POSSIBLE_SIDE_TIERS,
@@ -316,7 +317,9 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   });
   // A wallet strongly matched with four or more KOLs is a likely bot: off every list, which keeps
   // the wallets it hid (sides.likelyBots) so the dashboard can say so.
+  // Wallets marked as bots by hand (core's MARKED_BOT_WALLETS) go the same way.
   const botLike = likelyBots(rankedByKol.map((r) => r.ranked));
+  for (const w of MARKED_BOT_WALLETS) botLike.add(w);
   const data = rankedByKol.map(({ k, coins, ranked }) => {
     const hidden = new Set<string>();
     for (const w of SIDE_WINDOWS) {

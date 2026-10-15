@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "./bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
-import { prisma } from "@trenchscanner/core";
+import { MARKED_BOT_WALLETS, prisma } from "@trenchscanner/core";
 import {
   loadLabeledSides,
   loadPossibleSides,
@@ -140,5 +140,28 @@ describe.skipIf(!dbAvailable)("loadPossibleSides", () => {
       [funded, "Label_KOL_2", "funded"],
       [possible, "Label_KOL_3", "possible"],
     ]);
+  });
+
+  it("gives a wallet marked as a bot no side label", async () => {
+    const kol = `${TAG}-mkol`;
+    const [marked] = [...MARKED_BOT_WALLETS];
+    await prisma.kolWallet.create({ data: { wallet: kol, name: "Marked KOL", seenAt: new Date() } });
+    await prisma.kolPossibleSide.create({
+      data: {
+        wallet: marked!,
+        kolWallet: kol,
+        pct: 90,
+        shared: 27,
+        kolCoins: 30,
+        hours: 48,
+        computedAt: new Date(),
+      },
+    });
+    try {
+      expect(await loadPossibleSides([marked!])).toEqual({});
+      expect((await loadLabeledSides()).some((s) => s.wallet === marked)).toBe(false);
+    } finally {
+      await prisma.kolPossibleSide.deleteMany({ where: { wallet: marked!, kolWallet: kol } });
+    }
   });
 });
