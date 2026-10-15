@@ -10207,6 +10207,11 @@ img.tm-avatar {
   --bm-cex-3: #f0abfc;
   /* KOLs' possible side wallets: a dotted gold tie, apart from the clusters and exchange dashes. */
   --bm-side: #f5b324;
+  /* Each KOL's bundle outline and pill, by its place among the map's KOLs: gold first, then
+     silver (the ink, so it holds in both themes) and mint, none of them a cluster's colour. */
+  --bm-kol-0: var(--bm-side);
+  --bm-kol-1: color-mix(in srgb, var(--ink) 78%, transparent);
+  --bm-kol-2: #34d399;
 }
 @media (min-width: 641px) {
   .bm-modal {
@@ -10380,8 +10385,28 @@ img.tm-avatar {
 .bm-side-link.dim {
   stroke-opacity: 0.12;
 }
-.bm-label.side rect {
+.bm-label.side rect,
+.bm-label.kol rect {
   stroke-dasharray: 1.5 2.5;
+}
+.bm-label.kol rect {
+  stroke-width: 1.5;
+}
+/* A KOL's bundle (bubbleMap bundleOutline): a faint fill and an outline in the KOL's colour. */
+.bm-kol-bundles {
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+.bm-kol-bundles.dim {
+  opacity: 0.25;
+}
+.bm-kol-fill {
+  color: var(--kc);
+  opacity: 0.08;
+}
+.bm-kol-edge {
+  fill: var(--kc);
+  opacity: 0.85;
 }
 .bm-side-key {
   border-top: 2px dotted var(--bm-side);

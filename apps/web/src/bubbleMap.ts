@@ -282,6 +282,12 @@ export interface BubbleGraph {
   /** How many top holders an exchange funded, of how many were read; and their share of that count. */
   cexCount: { linked: number; of: number } | null;
   cexPct: number | null;
+  /**
+   * Where the layout kept room for each pill (layoutGraph's label room): by the label's id (a
+   * funder node's id, "same:<i>", "cex:<funder>", "side:<kol>"), the centre of the room it holds.
+   * placeLabels tries it first. Absent before a layout.
+   */
+  labelSpots?: ReadonlyMap<string, { x: number; y: number }>;
 }
 
 /** Flagged holders held under this % of supply at the call are left off the map (not a top holder). */
@@ -666,20 +672,80 @@ export function sideTiesOf(
   return out;
 }
 
+/** A KOL's bundle on the map: its own bubble when it holds, and every holder tied to it (kolControl). */
+export function kolBundleNodes(
+  graph: Pick<BubbleGraph, "nodes">,
+  k: Pick<KolControl, "kolWallet" | "wallets">,
+): { kol: MapNode | null; members: MapNode[] } {
+  const wallets = new Set(k.wallets.map((w) => w.wallet));
+  const members = graph.nodes.filter((n) => n.kind === "holder" && !!n.wallet && wallets.has(n.wallet));
+  return { kol: members.find((n) => n.wallet === k.kolWallet) ?? null, members };
+}
+
 /**
  * The map laid out again with the ties that are switched on pulled together (each exchange's
  * holders; each KOL and its possible side wallets), on copies of the nodes: the original layout
- * stands untouched for when they're off.
+ * stands untouched for when they're off. Each KOL's bundle (`kols`) is pulled together too, and
+ * its pill kept by the KOL (user ask 2026-10-15: each KOL's bundle easy to pick out).
  */
 export function regroupLayout(
   graph: BubbleGraph,
-  opts: { cex?: boolean; sides?: readonly SideGroup[] },
+  opts: { cex?: boolean; sides?: readonly SideGroup[]; kols?: readonly KolControl[] },
 ): BubbleGraph {
   const copy = { ...graph, nodes: graph.nodes.map((n) => ({ ...n })) };
+  const kolTies: { from: string; to: string }[] = [];
+  const kolHubs: { id: string; anchor: string | null; members: string[] }[] = [];
+  for (const k of opts.kols ?? []) {
+    const { kol, members } = kolBundleNodes(copy, k);
+    if (members.length < 2) continue;
+    const top = kol ?? [...members].sort((a, b) => b.pct - a.pct)[0]!;
+    for (const n of members) if (n !== top) kolTies.push({ from: n.id, to: top.id });
+    kolHubs.push({ id: `kol:${k.kolWallet}`, anchor: kol?.id ?? null, members: members.map((n) => n.id) });
+  }
   return layoutGraph(copy, undefined, {
     cex: opts.cex,
     sideTies: opts.sides && opts.sides.length > 0 ? sideTiesOf(copy, opts.sides) : undefined,
+    kolTies,
+    kolHubs,
   });
+}
+
+/** Whether a map needs regroupLayout: a tie switched on, or a KOL bundling any holder. */
+export function needsRegroup(opts: {
+  cex?: boolean;
+  sides?: readonly SideGroup[];
+  kols?: readonly KolControl[];
+}): boolean {
+  return !!opts.cex || (opts.sides?.length ?? 0) > 0 || (opts.kols?.length ?? 0) > 0;
+}
+
+/**
+ * The shape round a KOL's bundle (user ask 2026-10-15): its bubbles grown by `pad`, joined by bands
+ * along the shortest ties that connect them all, so it hugs the bundle like a cluster's halo
+ * rather than boxing in the holders between. Drawn as an outline. Empty under two bubbles.
+ */
+export function bundleOutline(
+  nodes: readonly Pick<MapNode, "x" | "y" | "r">[],
+  pad = HALO_PAD + 5,
+): Pick<ClusterHalo, "circles" | "bands"> {
+  if (nodes.length < 2) return { circles: [], bands: [] };
+  const circles = nodes.map((n) => ({ x: n.x, y: n.y, r: n.r + pad }));
+  // Prim's tree over the gaps between bubbles: each joins the bundle by its nearest member.
+  const bands: ClusterHalo["bands"] = [];
+  const inTree = [0];
+  const rest = new Set(nodes.map((_, i) => i).slice(1));
+  const gap = (a: number, b: number) =>
+    Math.hypot(nodes[a]!.x - nodes[b]!.x, nodes[a]!.y - nodes[b]!.y) - nodes[a]!.r - nodes[b]!.r;
+  while (rest.size > 0) {
+    let best: [number, number] | null = null;
+    for (const a of inTree)
+      for (const b of rest) if (!best || gap(a, b) < gap(best[0], best[1])) best = [a, b];
+    const [a, b] = best!;
+    bands.push({ x1: nodes[a]!.x, y1: nodes[a]!.y, x2: nodes[b]!.x, y2: nodes[b]!.y });
+    inTree.push(b);
+    rest.delete(b);
+  }
+  return { circles, bands };
 }
 
 /** The same-exchange groups behind the ties: each exchange, its holders on the map, and their share; largest first. */
@@ -715,9 +781,11 @@ const LINE_CLEARANCE = 6;
  * Places the nodes with a small fixed-step force layout: each cluster starts around its own spot
  * on a ring, holders are pulled to their funder, every bubble pushes overlapping ones apart, and
  * a light pull keeps it all near the middle. Bubbles that sit on a line between two others are
- * pushed off it, so no line runs under a bubble it doesn't belong to (user ask 2026-10-14).
- * Deterministic (no randomness), so the dialog and the share image draw the same map. Mutates
- * and returns `graph`.
+ * pushed off it, so no line runs under a bubble it doesn't belong to (user ask 2026-10-14). Each
+ * pill gets a room too, a box by its funder's diamond, KOL or wallets that the bubbles make way
+ * for, and its spot goes on `labelSpots` for placeLabels (user ask 2026-10-15: less overlap,
+ * shorter label lines). Deterministic (no randomness), so the dialog and the share image draw the
+ * same map. Mutates and returns `graph`.
  */
 export function layoutGraph(
   graph: BubbleGraph,
@@ -727,11 +795,21 @@ export function layoutGraph(
     cex?: boolean;
     /** Pull each KOL's possible side wallets to it (sideTiesOf; the map's side-wallet toggle). */
     sideTies?: readonly { from: string; to: string }[];
+    /** Each KOL's bundle pulled toward the KOL (or its largest holder), gently. */
+    kolTies?: readonly { from: string; to: string }[];
+    /** Each KOL's pill: by the KOL's bubble when it holds, else by its bundle; for keeping room for it. */
+    kolHubs?: readonly { id: string; anchor: string | null; members: readonly string[] }[];
   } = {},
 ): BubbleGraph {
   const { nodes, links } = graph;
   if (nodes.length === 0) return graph;
   const index = new Map(nodes.map((n) => [n.id, n]));
+  const rooms = labelRooms(graph, index, opts);
+  const fundingLines = links.flatMap((l) => {
+    const a = index.get(l.from);
+    const b = index.get(l.to);
+    return a && b ? [[a, b] as const] : [];
+  });
   // Every line the map draws between two bubbles, for keeping other bubbles off them.
   const segments = [
     ...links,
@@ -743,7 +821,14 @@ export function layoutGraph(
     const b = index.get(l.to);
     return a && b && a !== b ? [[a, b] as const] : [];
   });
-  const groups = graph.clusters.length + (nodes.some((n) => n.cluster === null) ? 1 : 0);
+  // Each holder's starting group: its cluster; else its same-minute group, so the group starts
+  // together and its lines stay short (user ask 2026-10-15); else the unlinked.
+  const sameBase = graph.clusters.length;
+  const looseGroup = sameBase + graph.sameTimeGroups.length;
+  const groupOf = (n: MapNode) => n.cluster ?? (n.sameTime !== null ? sameBase + n.sameTime : looseGroup);
+  const used = [...new Set(nodes.map(groupOf))].sort((a, b) => a - b);
+  const slotOf = new Map(used.map((g, i) => [g, i]));
+  const groups = used.length;
   const ring = groups <= 1 ? 0 : 70 + 26 * groups;
 
   // Start: each cluster's hub on a ring, its members around it; the unclustered on the far side.
@@ -754,7 +839,7 @@ export function layoutGraph(
   }
   const members = new Map<number, MapNode[]>();
   for (const n of nodes) {
-    const g = n.cluster ?? graph.clusters.length;
+    const g = slotOf.get(groupOf(n))!;
     const list = members.get(g) ?? [];
     list.push(n);
     members.set(g, list);
@@ -800,9 +885,10 @@ export function layoutGraph(
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const dist = Math.hypot(dx, dy) || 0.01;
-      const want = a.r + b.r + 34;
+      const want = a.r + b.r + 24;
       if (dist <= want) continue;
-      const k = ((dist - want) / dist) * 0.04;
+      // Firmer between holders no cluster holds, so the group sits tight round its pill.
+      const k = ((dist - want) / dist) * (a.cluster === null && b.cluster === null ? 0.1 : 0.04);
       a.x += dx * k;
       a.y += dy * k;
       b.x -= dx * k;
@@ -842,6 +928,22 @@ export function layoutGraph(
       b.x -= dx * k * 0.5;
       b.y -= dy * k * 0.5;
     }
+    // Each KOL's bundle: a gentle pull, so it sits together without tearing its clusters apart.
+    for (const l of opts.kolTies ?? []) {
+      const a = index.get(l.from);
+      const b = index.get(l.to);
+      if (!a || !b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy) || 0.01;
+      const want = a.r + b.r + 26;
+      if (dist <= want) continue;
+      const k = ((dist - want) / dist) * 0.03;
+      a.x += dx * k;
+      a.y += dy * k;
+      b.x -= dx * k * 0.3;
+      b.y -= dy * k * 0.3;
+    }
     // Lines: once the groups have formed, a bubble lying on another pair's line moves off it,
     // and the line's ends give a little the other way.
     if (it >= iterations * 0.3) {
@@ -876,40 +978,313 @@ export function layoutGraph(
         }
       }
     }
+    // The pills' room: each pulled to its anchor or its wallets, kept clear of bubbles and of
+    // each other, so the labels land beside what they name (user ask 2026-10-15).
+    if (it > 0 && it % 40 === 0) for (const r of rooms) aimRoom(r, nodes);
+    stepRooms(rooms, nodes, fundingLines);
     // Gravity toward the middle, stronger for the unlinked so clusters keep their room.
     for (const n of nodes) {
       const g = n.cluster === null ? 0.012 : 0.02;
       n.x -= n.x * g * cool + n.x * 0.002;
       n.y -= n.y * g * cool + n.y * 0.002;
     }
-    // Collisions: bubbles in different clusters keep a wider berth.
-    for (let i = 0; i < nodes.length; i += 1) {
-      for (let j = i + 1; j < nodes.length; j += 1) {
-        const a = nodes[i]!;
-        const b = nodes[j]!;
-        const pad = a.cluster === b.cluster && a.cluster !== null ? GAP : GAP * 3;
-        const min = a.r + b.r + pad;
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let dist = Math.hypot(dx, dy);
-        if (dist >= min) continue;
-        if (dist < 0.01) {
-          // Same spot: part them along a fixed, index-based direction.
-          dx = Math.cos(i + j);
-          dy = Math.sin(i + j);
-          dist = 1;
-        }
-        const push = ((min - dist) / dist) * 0.5;
-        const wa = b.r / (a.r + b.r);
-        const wb = a.r / (a.r + b.r);
-        a.x -= dx * push * wa;
-        a.y -= dy * push * wa;
-        b.x += dx * push * wb;
-        b.y += dy * push * wb;
+    collide(nodes);
+  }
+  // The rooms pushed some bubbles about: part any that ended up touching, then settle the rooms
+  // round the bubbles as they now stand.
+  for (let i = 0; i < 30; i += 1) collide(nodes);
+  for (const r of rooms) aimRoom(r, nodes);
+  for (let i = 0; i < 40; i += 1) stepRooms(rooms, nodes, fundingLines, true);
+  // Then only out of the way, so no room is left a step inside a bubble's berth.
+  for (let i = 0; i < 12; i += 1) stepRooms(rooms, nodes, fundingLines, true, false);
+  graph.labelSpots = new Map(rooms.map((r) => [r.id, { x: r.x, y: r.y }]));
+  return graph;
+}
+
+/** Whether a bubble wears a ring past its edge: a same-minute group's, or a risky wallet's. */
+function ringed(n: Pick<MapNode, "sameTime" | "flags">): boolean {
+  return n.sameTime !== null || n.flags.some((f) => f !== "creator");
+}
+
+/** Collisions: bubbles in different clusters keep a wider berth. */
+function collide(nodes: readonly MapNode[]) {
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      const a = nodes[i]!;
+      const b = nodes[j]!;
+      const pad = a.cluster === b.cluster && a.cluster !== null ? GAP : GAP * 3;
+      const min = a.r + b.r + pad;
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let dist = Math.hypot(dx, dy);
+      if (dist >= min) continue;
+      if (dist < 0.01) {
+        // Same spot: part them along a fixed, index-based direction.
+        dx = Math.cos(i + j);
+        dy = Math.sin(i + j);
+        dist = 1;
+      }
+      const push = ((min - dist) / dist) * 0.5;
+      const wa = b.r / (a.r + b.r);
+      const wb = a.r / (a.r + b.r);
+      a.x -= dx * push * wa;
+      a.y -= dy * push * wa;
+      b.x += dx * push * wb;
+      b.y += dy * push * wb;
+    }
+  }
+}
+
+/**
+ * A pill's room in the layout: a box the size the pill will about be, tied to the funder's diamond
+ * it names (anchor) or to the middle of the wallets its lines reach (members).
+ */
+interface LabelRoom {
+  id: string;
+  w: number;
+  h: number;
+  x: number;
+  y: number;
+  anchor: MapNode | null;
+  members: MapNode[];
+  /** Whether it has a spot yet (set on the first step). */
+  set: boolean;
+  /** The way it sits off its anchor or wallets (aimRoom). */
+  dir: readonly [number, number];
+  /** Bubbles it may part to make its room, besides its own (a KOL's bundle). */
+  group?: ReadonlySet<MapNode>;
+}
+
+/**
+ * The rooms' nominal sizes, map units: about the dialog's pills (5.6 a character plus 14) for a
+ * typical name, so the dialog and the share image keep the same room whatever names load.
+ */
+const ROOM_H = 18;
+/** What placeLabels charges a pill for each map unit it sits off its anchor (against 1 a line point, 60 a bubble). */
+const LABEL_DISTANCE_COST = 0.15;
+/** How far past the middle of its wallets a hub's room aims, as a share of the group's reach. */
+const HUB_REACH = 0.4;
+/** How much of a room's overlap with its own group's bubbles the room takes; the bubbles take the rest. */
+const ROOM_SHARE = 0.2;
+const ROOM_W = { funder: 82, same: 150, cex: 70, side: 112 } as const;
+
+function labelRooms(
+  graph: BubbleGraph,
+  index: ReadonlyMap<string, MapNode>,
+  opts: {
+    cex?: boolean;
+    kolHubs?: readonly { id: string; anchor: string | null; members: readonly string[] }[];
+  },
+): LabelRoom[] {
+  const rooms: LabelRoom[] = [];
+  const hub = (id: string, members: MapNode[], w: number) => {
+    if (members.length === 0) return;
+    rooms.push({ id, w, h: ROOM_H, x: 0, y: 0, anchor: null, members, set: false, dir: [0, 1] });
+  };
+  for (const n of graph.nodes)
+    if (n.kind === "funder")
+      rooms.push({
+        id: n.id,
+        w: ROOM_W.funder,
+        h: ROOM_H,
+        x: 0,
+        y: 0,
+        anchor: n,
+        members: [],
+        set: false,
+        dir: [0, 1],
+      });
+  graph.sameTimeGroups.forEach((_, i) =>
+    hub(
+      `same:${i}`,
+      graph.nodes.filter((n) => n.kind === "holder" && n.sameTime === i),
+      ROOM_W.same,
+    ),
+  );
+  if (opts.cex) for (const g of cexGroupsOf(graph)) hub(`cex:${g.funder}`, g.nodes, ROOM_W.cex);
+  for (const k of opts.kolHubs ?? []) {
+    const anchor = k.anchor ? index.get(k.anchor) : undefined;
+    if (anchor)
+      rooms.push({
+        id: k.id,
+        w: ROOM_W.side,
+        h: ROOM_H,
+        x: 0,
+        y: 0,
+        anchor,
+        members: [],
+        set: false,
+        dir: [0, 1],
+        group: new Set(k.members.flatMap((id) => index.get(id) ?? [])),
+      });
+    else
+      hub(
+        k.id,
+        k.members.flatMap((id) => index.get(id) ?? []),
+        ROOM_W.side,
+      );
+  }
+  return rooms;
+}
+
+/** Where a room is pulled: just off its anchor, or a little out from its wallets' middle, its way (aimRoom). */
+function roomTarget(r: LabelRoom): { x: number; y: number } {
+  const c = r.anchor ? { x: r.anchor.x, y: r.anchor.y } : centreOf(r.members);
+  // A hub pill aims near the middle of its wallets (the room's push finds the nearest clear spot),
+  // which keeps its lines shortest; a funder's or KOL's pill sits off its bubble.
+  const reach = r.anchor
+    ? r.anchor.r
+    : HUB_REACH * Math.max(0, ...r.members.map((m) => Math.hypot(m.x - c.x, m.y - c.y) + m.r));
+  const [ux, uy] = r.dir;
+  // Clear of the anchor's rings (a holder's reach about 10 past its edge, a diamond's its own).
+  const ring = r.anchor && r.anchor.kind !== "funder" ? 12 : 4;
+  const out = reach + ring + Math.abs(ux) * (r.w / 2) + Math.abs(uy) * (r.h / 2);
+  return { x: c.x + ux * out, y: c.y + uy * out };
+}
+
+/** The directions a room may sit off its anchor or wallets: the sides first, then the diagonals. */
+const ROOM_DIRS: readonly (readonly [number, number])[] = [
+  [0, 1],
+  [0, -1],
+  [1, 0],
+  [-1, 0],
+  [0.7, 0.7],
+  [-0.7, 0.7],
+  [0.7, -0.7],
+  [-0.7, -0.7],
+];
+
+/**
+ * Points a room the way with most room: of the eight directions, the one whose spot covers the
+ * fewest other bubbles, leaning outward from the middle of the map on a tie (user ask 2026-10-15:
+ * a label beside what it names, not pushed out across the map).
+ */
+function aimRoom(r: LabelRoom, nodes: readonly MapNode[]) {
+  const own = new Set<MapNode>([...r.members, ...(r.anchor ? [r.anchor] : [])]);
+  const c = r.anchor ? { x: r.anchor.x, y: r.anchor.y } : centreOf(r.members);
+  const d = Math.hypot(c.x, c.y) || 1;
+  let best: { dir: readonly [number, number]; score: number } | null = null;
+  for (const dir of ROOM_DIRS) {
+    const t = roomTarget({ ...r, dir });
+    let score = -(dir[0] * c.x + dir[1] * c.y) / d;
+    for (const n of nodes) {
+      if (own.has(n)) continue;
+      const cx = Math.max(t.x - r.w / 2, Math.min(n.x, t.x + r.w / 2));
+      const cy = Math.max(t.y - r.h / 2, Math.min(n.y, t.y + r.h / 2));
+      const gap = Math.hypot(cx - n.x, cy - n.y) - (n.r + 10);
+      if (gap < 0) score += 2 + -gap / 10;
+    }
+    if (!best || score < best.score) best = { dir, score };
+  }
+  r.dir = best!.dir;
+}
+
+/**
+ * One step of the rooms: each pulled to its target (its wallets pulled a little toward it), pushed
+ * out of every bubble and every other room. `settle` moves only the rooms, once the bubbles are set.
+ */
+function stepRooms(
+  rooms: LabelRoom[],
+  nodes: readonly MapNode[],
+  lines: readonly (readonly [MapNode, MapNode])[],
+  settle = false,
+  pull = true,
+) {
+  for (const r of rooms) {
+    if (!pull) break;
+    if (!r.set) {
+      // First step: aimed the roomiest way, and placed there.
+      r.set = true;
+      aimRoom(r, nodes);
+      const t0 = roomTarget(r);
+      r.x = t0.x;
+      r.y = t0.y;
+    }
+    const t = roomTarget(r);
+    r.x += (t.x - r.x) * 0.1;
+    r.y += (t.y - r.y) * 0.1;
+    // A hub's wallets drawn in together a little, so its lines stay short; toward their own middle,
+    // not the room, which would walk the group off the map.
+    if (!settle && !r.anchor && r.members.length > 1) {
+      const c = centreOf(r.members);
+      for (const m of r.members) {
+        m.x += (c.x - m.x) * 0.015;
+        m.y += (c.y - m.y) * 0.015;
       }
     }
   }
-  return graph;
+  for (const r of rooms) {
+    for (const n of nodes) {
+      // The box's nearest point to the bubble, and how far inside the bubble's berth it is: clear
+      // of the rings round a bubble (about 9 past its edge), as placeLabels measures it.
+      const own = n === r.anchor || r.members.includes(n);
+      const want = (n.kind === "funder" ? n.r : n.r + (ringed(n) ? 10 : 4)) + (own ? 2 : 6);
+      const cx = Math.max(r.x - r.w / 2, Math.min(n.x, r.x + r.w / 2));
+      const cy = Math.max(r.y - r.h / 2, Math.min(n.y, r.y + r.h / 2));
+      let dx = cx - n.x;
+      let dy = cy - n.y;
+      let dist = Math.hypot(dx, dy);
+      if (dist >= want) continue;
+      if (dist < 0.01) {
+        // The bubble's centre is inside the box: out the nearer side, up or down.
+        dx = 0;
+        dy = r.y >= n.y ? 1 : -1;
+        dist = 1;
+      }
+      const push = (want - dist) / dist;
+      // The room parts only its own group (the anchor's cluster, or the wallets its lines reach),
+      // and makes way for everything else: pushing other bubbles would drive them off the map.
+      const group =
+        own ||
+        !!r.group?.has(n) ||
+        (r.anchor !== null && r.anchor.cluster !== null && n.cluster === r.anchor.cluster);
+      // A hub's own wallets mostly hold their place too: parting them would stretch its lines.
+      const share =
+        settle || n === r.anchor || !group ? 1 : !r.anchor && r.members.includes(n) ? 0.7 : ROOM_SHARE;
+      r.x += dx * push * share;
+      r.y += dy * push * share;
+      if (!settle) {
+        n.x -= dx * push * (1 - share);
+        n.y -= dy * push * (1 - share);
+      }
+    }
+  }
+  // Off the funding lines (bent as the map draws them), so no pill sits on one.
+  for (const r of rooms) {
+    for (const [a, b] of lines) {
+      const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12;
+      const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.12;
+      for (let k = 1; k < 8; k += 1) {
+        const t = k / 8;
+        const px = (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * mx + t * t * b.x;
+        const py = (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * my + t * t * b.y;
+        const ox = r.w / 2 + 4 - Math.abs(px - r.x);
+        const oy = r.h / 2 + 4 - Math.abs(py - r.y);
+        if (ox <= 0 || oy <= 0) continue;
+        if (oy < ox) r.y += (r.y >= py ? 1 : -1) * oy * 0.5;
+        else r.x += (r.x >= px ? 1 : -1) * ox * 0.5;
+      }
+    }
+  }
+  for (let i = 0; i < rooms.length; i += 1) {
+    for (let j = i + 1; j < rooms.length; j += 1) {
+      const a = rooms[i]!;
+      const b = rooms[j]!;
+      const ox = (a.w + b.w) / 2 + 6 - Math.abs(a.x - b.x);
+      const oy = (a.h + b.h) / 2 + 6 - Math.abs(a.y - b.y);
+      if (ox <= 0 || oy <= 0) continue;
+      // Apart along the shallower overlap.
+      if (oy < ox) {
+        const s = a.y <= b.y ? -1 : 1;
+        a.y += (s * oy) / 2;
+        b.y -= (s * oy) / 2;
+      } else {
+        const s = a.x <= b.x ? -1 : 1;
+        a.x += (s * ox) / 2;
+        b.x -= (s * ox) / 2;
+      }
+    }
+  }
 }
 
 /** The box the laid-out map fills, with room for the badges and labels around the bubbles. */
@@ -943,7 +1318,7 @@ export interface PlacedLabel {
  * label with no clear spot takes the one that covers least. Deterministic, like the layout.
  */
 export function placeLabels(
-  graph: Pick<BubbleGraph, "nodes" | "links">,
+  graph: Pick<BubbleGraph, "nodes" | "links" | "labelSpots">,
   labels: readonly MapLabel[],
 ): PlacedLabel[] {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
@@ -972,7 +1347,8 @@ export function placeLabels(
     id: n.id,
     x: n.x,
     y: n.y,
-    r: n.kind === "funder" ? n.r * 0.95 : n.r + 9,
+    // A ringed bubble (same minute, risky) reaches about 9 past its edge; a plain one about 3.
+    r: n.kind === "funder" ? n.r * 0.95 : n.r + (ringed(n) ? 9 : 3),
     // The bubble itself, for the hub lines: they may pass its rings, not cut through it.
     body: n.r + 2,
   }));
@@ -985,7 +1361,8 @@ export function placeLabels(
       const sy = m.y - y;
       const len2 = sx * sx + sy * sy || 1;
       for (const k of circles) {
-        if (own.has(k.id)) continue;
+        // Its own bubbles, and the one the line starts from (a leader's anchor), don't count.
+        if (own.has(k.id) || Math.abs(k.x - m.x) + Math.abs(k.y - m.y) < 0.5) continue;
         const t = Math.max(0, Math.min(1, ((k.x - x) * sx + (k.y - y) * sy) / len2));
         if (Math.hypot(k.x - (x + sx * t), k.y - (y + sy * t)) < k.body) c += 1;
       }
@@ -1003,7 +1380,7 @@ export function placeLabels(
     for (const k of circles) {
       const dx = k.x - Math.max(x0, Math.min(k.x, x1));
       const dy = k.y - Math.max(y0, Math.min(k.y, y1));
-      if (dx * dx + dy * dy < k.r * k.r) c += 30;
+      if (dx * dx + dy * dy < k.r * k.r) c += 60;
     }
     for (const p of placed) {
       if (Math.abs(p.x - x) * 2 < p.w + w + 4 && Math.abs(p.y - y) * 2 < p.h + h + 4) c += 30;
@@ -1030,16 +1407,46 @@ export function placeLabels(
     [0.38, -0.92],
     [-0.38, -0.92],
   ] as const;
+  // A funder's pill wants a leader line once its box sits this far off the diamond.
+  const farOff = (l: MapLabel, x: number, y: number) => {
+    const gx = Math.max(0, Math.abs(l.x - x) - l.w / 2);
+    const gy = Math.max(0, Math.abs(l.y - y) - l.h / 2);
+    return Math.hypot(gx, gy) - l.r >= 12;
+  };
   for (const l of labels) {
     let best: { x: number; y: number; c: number; far: boolean } | null = null;
-    search: for (const step of [0, 10, 22, 38, 58, 84, 116, 150]) {
+    // The room the layout kept for it, when it's clear (user ask 2026-10-15: labels by what they name).
+    const spot = graph.labelSpots?.get(l.id);
+    // Each spot's cost, plus a little for every map unit it sits off its anchor: a pill brushing a
+    // line beside what it names beats one clear across the map (user ask 2026-10-15).
+    // A pill off its bubble (a funder's or KOL's) has a leader line back to it: that line, too,
+    // should cross no other bubble.
+    const anchorAt = l.r > 0 ? [{ id: l.id, x: l.x, y: l.y }] : null;
+    const score = (x: number, y: number) => {
+      const lines = l.members ?? (anchorAt && farOff(l, x, y) ? anchorAt : null);
+      const c = cost(x, y, l.w, l.h) + (lines ? crossings(x, y, lines) * 6 : 0);
+      const gx = Math.max(0, Math.abs(l.x - x) - l.w / 2);
+      const gy = Math.max(0, Math.abs(l.y - y) - l.h / 2);
+      return { c, s: c + Math.max(0, Math.hypot(gx, gy) - l.r) * LABEL_DISTANCE_COST };
+    };
+    if (spot) {
+      const { c, s } = score(spot.x, spot.y);
+      best = { x: spot.x, y: spot.y, c: s, far: farOff(l, spot.x, spot.y) };
+      // Clear and close: taken as it is. Clear but pushed well off: the search below may beat it.
+      if (c === 0 && s - c < 3) {
+        placed.push({ id: l.id, x: best.x, y: best.y, w: l.w, h: l.h, far: best.far });
+        continue;
+      }
+    }
+    search: for (const step of [0, 6, 12, 20, 30, 42, 58, 84, 116, 150]) {
+      if (best && step * LABEL_DISTANCE_COST > best.c) break;
       for (const [dx, dy] of dirs) {
         // Out from the anchor's edge until the box clears it along that direction.
-        const reach = l.r + step + 3 + Math.abs(dx) * (l.w / 2) + Math.abs(dy) * (l.h / 2);
+        const reach = l.r + step + 6 + Math.abs(dx) * (l.w / 2) + Math.abs(dy) * (l.h / 2);
         const x = l.x + dx * reach;
         const y = l.y + dy * reach;
-        const c = cost(x, y, l.w, l.h) + (l.members ? crossings(x, y, l.members) * 2 : 0);
-        if (!best || c < best.c) best = { x, y, c, far: step >= 22 };
+        const { c, s } = score(x, y);
+        if (!best || s < best.c) best = { x, y, c: s, far: farOff(l, x, y) };
         if (c === 0) break search;
       }
     }

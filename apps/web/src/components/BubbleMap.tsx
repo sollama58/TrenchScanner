@@ -15,8 +15,10 @@ import {
   centreOf,
   exchangeName,
   regroupLayout,
+  needsRegroup,
+  bundleOutline,
+  kolBundleNodes,
   sideMembers,
-  sideWord,
   type SideGroup,
   MAP_COLOURS,
   nodeSlot,
@@ -350,6 +352,7 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
               sides: side.shown,
               flags,
               kolBundled: kolBundledFor(snapshot, kols),
+              kols,
             })
           }
         />
@@ -449,11 +452,11 @@ function MapView({
   // With the ties on, the bubbles rearrange so each exchange's holders sit together (user ask
   // 2026-10-13); off, the usual layout comes back as it was.
   // KOLs' side wallets gather round them the same way while their ties show.
-  const regrouped = useMemo(
-    () =>
-      showCex || side.shown.length > 0 ? regroupLayout(graph, { cex: showCex, sides: side.shown }) : null,
-    [graph, showCex, side.shown],
-  );
+  // Each KOL's bundle sits together too, its pill by the KOL (user ask 2026-10-15).
+  const regrouped = useMemo(() => {
+    const opts = { cex: showCex, sides: side.shown, kols };
+    return needsRegroup(opts) ? regroupLayout(graph, opts) : null;
+  }, [graph, showCex, side.shown, kols]);
   const cex = graph.cexCount;
 
   return (
@@ -566,6 +569,7 @@ function MapView({
         lit={lit}
         cexLinks={showCex}
         sideGroups={side.shown}
+        kols={kols}
         sides={sides}
         onPick={(id) => {
           setPicked(id);
@@ -600,7 +604,9 @@ function MapView({
           {graph.sameTimeGroups.length > 0 &&
             " Holders whose wallets were funded within the same minute, whoever paid, share a dotted ring and line in their group's colour."}
           {showSides &&
-            " A dotted gold line ties a holder to a KOL it bought alongside on every one of the KOL's coins over the last 24 hours (10 or more), 90% over 48 hours (25 or more) or 80% over 72 hours (50 or more): a possible side wallet, not confirmed. A wallet the KOL funded is tied the same way as a KOL funded wallet, with no question mark."}
+            " A dotted line in the KOL's colour ties a holder to a KOL it bought alongside on every one of the KOL's coins over the last 24 hours (10 or more), 90% over 48 hours (25 or more) or 80% over 72 hours (50 or more): a possible side wallet, not confirmed. A wallet the KOL funded is tied the same way as a KOL funded wallet, with no question mark."}
+          {kols.length > 0 &&
+            " Each KOL's bundle (its own wallet, wallets it funded, possible side wallets, and holders sharing a funder or funding minute with those) is outlined in the KOL's colour, its pill giving the share of supply they hold together."}
           {graph.nodes.some((n) => n.kind === "rest") &&
             " The dashed bubble is the rest of the top 10 together."}
           {graph.nodes.some((n) => n.rank !== undefined) &&
@@ -707,7 +713,7 @@ function GroupPanel({
         ),
         sub: kolSummary(k),
         pct: k.pct,
-        style: { "--bm": "var(--bm-side)" } as React.CSSProperties,
+        style: { "--bm": kolColour(kols.indexOf(k)) } as React.CSSProperties,
         dot: <i className="bm-dot" aria-hidden="true" />,
         wallets: k.wallets.map((w) => ({ wallet: w.wallet, pct: w.pct, tag: KOL_TIE_TEXT[w.tie] })),
       })),
@@ -900,6 +906,7 @@ function BubbleSvg({
   lit,
   cexLinks,
   sideGroups: kolSides,
+  kols,
   sides,
   onPick,
 }: {
@@ -912,6 +919,8 @@ function BubbleSvg({
   cexLinks: boolean;
   /** The KOLs whose possible side wallets to tie to them (empty when switched off). */
   sideGroups: readonly SideGroup[];
+  /** Each KOL's bundle (kolControl): outlined, with the KOL's name and share on a pill. */
+  kols: readonly KolControl[];
   /** Each holder's possible-side matches, for its title. */
   sides: PossibleSides;
   onPick: (id: string) => void;
@@ -925,10 +934,13 @@ function BubbleSvg({
   const { labels, placed } = useMemo(() => {
     type Label = MapLabel & {
       text: string;
-      kind: "funder" | "cex" | "same" | "side";
+      kind: "funder" | "cex" | "same" | "side" | "kol";
       colour: string | null;
       /** A hub's wallets, each tied to the pill by a line. */
       members: MapNode[];
+      /** A KOL's pill by its bubble: the KOL, and its side wallets tied to it by dotted lines. */
+      anchor?: MapNode;
+      tied?: MapNode[];
     };
     const list: Label[] = [];
     const pill = (text: string) => ({ w: text.length * 5.6 + 14, h: 16 });
@@ -953,6 +965,26 @@ function BubbleSvg({
         members: [],
       });
     }
+    // Each KOL's pill (placed ahead of the hubs, so it gets the spot by its KOL): its name and its bundle's share, by the KOL's own bubble when it holds (user
+    // ask 2026-10-15); its possible side wallets tied to the KOL's bubble, else to the pill.
+    const sideByKol = new Map(kolSides.map((g) => [g.kolWallet, g]));
+    kols.forEach((k, i) => {
+      const { kol, members } = kolBundleNodes(graph, k);
+      if (members.length < 2) return;
+      const g = sideByKol.get(k.kolWallet);
+      const tied = g ? sideMembers(graph, g).filter((n) => n !== kol) : [];
+      const text = `${clipName(names[k.kolWallet]?.name ?? k.kolName ?? walletText(k.kolWallet, names))} ${pctText(k.pct)}`;
+      list.push({
+        id: `kol:${k.kolWallet}`,
+        ...(kol ? { x: kol.x, y: kol.y, r: kol.r } : { ...centreOf(members), r: 0 }),
+        ...pill(text),
+        text,
+        kind: "kol",
+        colour: kolColour(i),
+        members: kol ? [] : tied,
+        ...(kol ? { anchor: kol, tied } : {}),
+      });
+    });
     graph.sameTimeGroups.forEach((g, i) => {
       const members = graph.nodes.filter((n) => n.kind === "holder" && n.sameTime === i);
       hub(
@@ -971,20 +1003,8 @@ function BubbleSvg({
         hub(`cex:${g.funder}`, [...g.nodes], text, "cex", `var(--bm-cex-${cexSlot.get(g.funder) ?? 0})`);
       }
     }
-    for (const g of kolSides) {
-      // The KOL's own bubble, when it holds, joins its possible side wallets on the pill.
-      const members = sideMembers(graph, g);
-      const kolName = names[g.kolWallet]?.name ?? g.kolName;
-      hub(
-        `side:${g.kolWallet}`,
-        members,
-        `${clipName(kolName ?? walletText(g.kolWallet, names))} ${sideWord(members, g)}`,
-        "side",
-        "var(--bm-side)",
-      );
-    }
     return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list) };
-  }, [graph, names, cexLinks, cexSlot, kolSides]);
+  }, [graph, names, cexLinks, cexSlot, kolSides, kols]);
   const box = graphBounds(graph, 18, placed);
   const dim = (n: MapNode) => lit !== null && n.cluster !== lit;
   // Bigger bubbles first so the small ones draw on top and stay tappable.
@@ -1028,6 +1048,51 @@ function BubbleSvg({
             </g>
           ))}
         </g>
+        {/* Each KOL's bundle: an outline round its bubbles, joined along the shortest ties (user ask
+            2026-10-15). The shape, masked by the same shape a stroke smaller, leaves the outline. */}
+        <g className={`bm-kol-bundles${lit !== null ? " dim" : ""}`}>
+          {kols.map((k, i) => {
+            const o = bundleOutline(kolBundleNodes(graph, k).members);
+            if (o.circles.length === 0) return null;
+            const shape = (inset: number, colour: string) => (
+              <>
+                {o.bands.map((b, j) => (
+                  <line
+                    key={`b${j}`}
+                    x1={b.x1}
+                    y1={b.y1}
+                    x2={b.x2}
+                    y2={b.y2}
+                    stroke={colour}
+                    strokeWidth={BUNDLE_BAND * 2 - inset * 2}
+                    strokeLinecap="round"
+                  />
+                ))}
+                {o.circles.map((c, j) => (
+                  <circle key={`c${j}`} cx={c.x} cy={c.y} r={c.r - inset} fill={colour} />
+                ))}
+              </>
+            );
+            const id = `${uid}-kol${i}`;
+            return (
+              <g key={k.kolWallet} style={{ "--kc": kolColour(i) } as React.CSSProperties}>
+                <mask id={id} maskUnits="userSpaceOnUse" x={box.x} y={box.y} width={box.w} height={box.h}>
+                  {shape(0, "white")}
+                  {shape(1.4, "black")}
+                </mask>
+                <g className="bm-kol-fill">{shape(0, "currentColor")}</g>
+                <rect
+                  className="bm-kol-edge"
+                  x={box.x}
+                  y={box.y}
+                  width={box.w}
+                  height={box.h}
+                  mask={`url(#${id})`}
+                />
+              </g>
+            );
+          })}
+        </g>
         <g className="bm-links">
           {graph.links.map((l) => {
             const a = index.get(l.from);
@@ -1050,12 +1115,26 @@ function BubbleSvg({
         <g className="bm-spokes">
           {placed.map((p) => {
             const l = labels.get(p.id)!;
-            // A funder's pill that had to move off its bubble keeps a line back to it, drawn under the bubbles.
-            if (l.kind === "funder") {
-              if (!p.far) return null;
+            // A funder's pill that had to move off its bubble keeps a line back to it, drawn under the
+            // bubbles; so does a KOL's, whose side wallets are tied to the KOL's bubble itself.
+            if (l.kind === "funder" || l.anchor) {
               return (
                 <g key={p.id} style={l.colour ? ({ "--lc": l.colour } as React.CSSProperties) : undefined}>
-                  <line className="bm-leader" x1={l.x} y1={l.y} x2={p.x} y2={p.y} />
+                  {p.far && <line className="bm-leader" x1={l.x} y1={l.y} x2={p.x} y2={p.y} />}
+                  {l.anchor &&
+                    (l.tied ?? []).map((m) => {
+                      const a = l.anchor!;
+                      const mx = (a.x + m.x) / 2 + (m.y - a.y) * 0.12;
+                      const my = (a.y + m.y) / 2 - (m.x - a.x) * 0.12;
+                      return (
+                        <path
+                          key={m.id}
+                          d={`M${a.x},${a.y} Q${mx},${my} ${m.x},${m.y}`}
+                          className={`bm-side-link${lit !== null ? " dim" : ""}`}
+                          style={{ stroke: l.colour ?? undefined }}
+                        />
+                      );
+                    })}
                 </g>
               );
             }
@@ -1067,7 +1146,7 @@ function BubbleSvg({
                 <path
                   key={`${p.id}-${m.id}`}
                   d={`M${p.x},${p.y} Q${mx},${my} ${m.x},${m.y}`}
-                  className={`${l.kind === "cex" ? "bm-cex-link" : l.kind === "side" ? "bm-side-link" : "bm-link"}${lit !== null ? " dim" : ""}`}
+                  className={`${l.kind === "cex" ? "bm-cex-link" : l.kind === "side" || l.kind === "kol" ? "bm-side-link" : "bm-link"}${lit !== null ? " dim" : ""}`}
                   style={{ stroke: l.colour ?? undefined }}
                 />
               );
@@ -1277,6 +1356,13 @@ function clockTime(ms: number): string {
 }
 
 /** A name short enough to sit under a bubble. */
+/** Each KOL's colour, by its place among the map's KOLs (styles.css --bm-kol-0 to --bm-kol-2). */
+function kolColour(i: number): string {
+  return `var(--bm-kol-${Math.max(0, i) % 3})`;
+}
+/** Half the width of the bands joining a KOL's bundle outline, map units. */
+const BUNDLE_BAND = 10;
+
 function clipName(text: string, max = 16): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
@@ -1476,6 +1562,7 @@ export function BubbleMapSection({
                 sides: side.shown,
                 flags,
                 kolBundled: kolBundledFor(snapshot, kols),
+                kols,
               })
             }
           />

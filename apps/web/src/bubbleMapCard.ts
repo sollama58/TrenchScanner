@@ -10,6 +10,11 @@ import {
   nodeSlot,
   placeLabels,
   regroupLayout,
+  needsRegroup,
+  bundleOutline,
+  kolBundleNodes,
+  type KolControl,
+  type ClusterHalo,
   sameTimeSlot,
   sideMembers,
   sideCounts,
@@ -54,6 +59,11 @@ const CEX = ["#a5b4fc", "#5eead4", "#fda4af", "#f0abfc"];
 const MAX_SCALE = 3;
 /** KOLs' possible side wallets: the map's dotted gold (styles.css --bm-side). */
 const SIDE = "#f5b324";
+/** Each KOL's colour on the card, by its place among the map's KOLs (styles.css --bm-kol-0 to 2). */
+const KOL_COLOURS = [SIDE, "#dfe3ea", "#34d399"];
+const kolColour = (i: number) => KOL_COLOURS[Math.max(0, i) % KOL_COLOURS.length]!;
+/** Half the width of the bands joining a KOL's bundle outline, map units (bundleOutline's pad less a little). */
+const BUNDLE_BAND = 10;
 
 /** The left column's bundle list: its first baseline, row height, and the room it can't pass. */
 const LIST_TOP = 344;
@@ -67,7 +77,7 @@ const MIN_ROWS = 6;
 /** A row in the card's bundle list: a funder's cluster, a same-minute group or a KOL's sides. */
 interface Bundle {
   pct: number;
-  mark: { colour: string } | { side: true };
+  mark: { colour: string } | { side: string };
   lead: string;
   from: string;
   fromColour: string;
@@ -111,6 +121,11 @@ export async function renderBubbleCard(
     flags?: FlagsRead;
     /** KOL Bundled %, listed under the readings when KOLs bundle any supply. */
     kolBundled?: number | null;
+    /**
+     * Each KOL's bundle (kolControl): outlined on the map with the KOL's name and share, and listed
+     * in place of its side wallets (user ask 2026-10-15).
+     */
+    kols?: readonly KolControl[];
   } = {},
 ): Promise<HTMLCanvasElement> {
   const { canvas, ctx, icon } = await cardCanvas();
@@ -210,12 +225,21 @@ export async function renderBubbleCard(
         },
       ];
     }),
-    ...sideRows.map(({ g, members }) => {
+    ...(opts.kols ?? [])
+      .filter((k) => kolBundleNodes(graph, k).members.length >= 2)
+      .map((k) => ({
+        pct: k.pct,
+        mark: { side: kolColour((opts.kols ?? []).indexOf(k)) },
+        lead: `${k.wallets.length} wallets`,
+        from: names[k.kolWallet]?.name ?? k.kolName ?? walletText(k.kolWallet, names),
+        fromColour: kolColour((opts.kols ?? []).indexOf(k)),
+      })),
+    ...(opts.kols ? [] : sideRows).map(({ g, members }) => {
       const { known, funded, possible } = sideCounts(members, g);
       const all = known + funded + possible;
       return {
         pct: members.reduce((t, m) => t + m.pct, 0),
-        mark: { side: true as const },
+        mark: { side: SIDE },
         lead:
           possible === 0 && known === 0
             ? `${funded} funded`
@@ -258,8 +282,8 @@ export async function renderBubbleCard(
       ctx.arc(PAD + 8, y - 6, 8, 0, Math.PI * 2);
       ctx.fill();
     } else {
-      // A gold ring with a dotted edge: the map's side-wallet key.
-      ctx.strokeStyle = SIDE;
+      // A ring with a dotted edge in the KOL's colour: the map's KOL key.
+      ctx.strokeStyle = b.mark.side;
       ctx.lineWidth = 3;
       ctx.setLineDash([2, 3]);
       ctx.beginPath();
@@ -324,7 +348,13 @@ export async function renderBubbleCard(
 
   // Right: the map, fitted into its box; regrouped by exchange and by KOL when those ties show, as on the map.
   const sideGroups = sideRows.map((s) => s.g);
-  const map = cex || sideGroups.length > 0 ? regroupLayout(graph, { cex, sides: sideGroups }) : graph;
+  const kols = opts.kols ?? [];
+  const regroup = { cex, sides: sideGroups, kols };
+  const map = needsRegroup(regroup) ? regroupLayout(graph, regroup) : graph;
+  // Each KOL's bundle on the laid-out map, with two or more of its holders there.
+  const kolBundles = kols
+    .map((k, i) => ({ k, colour: kolColour(i), ...kolBundleNodes(map, k) }))
+    .filter((b) => b.members.length >= 2);
   // Which kinds of name the bubbles carry, for the legend under the map (user ask 2026-10-14).
   const legend = nameLegend(graph, names);
   // From the card's top to the footer's rule (CARD_H - 82), less the legend under it.
@@ -380,6 +410,28 @@ export async function renderBubbleCard(
     });
   }
   ctx.font = `600 ${PILL_FONT}px ${FONT}`;
+  // Each KOL's pill, its name and its bundle's share, by the KOL's own bubble when it holds (user
+  // ask 2026-10-15); its possible side wallets tied to the KOL by dotted gold lines.
+  const sideByKol = new Map(sideGroups.map((g) => [g.kolWallet, g]));
+  const kolSpokes: { from: MapNode; to: MapNode; colour: string }[] = [];
+  for (const { k, kol, members, colour } of kolBundles) {
+    const kolName = names[k.kolWallet]?.name ?? k.kolName ?? walletText(k.kolWallet, names);
+    const text = `${kolName.length > 16 ? `${kolName.slice(0, 15)}…` : kolName} ${pctText(k.pct)}`;
+    const g = sideByKol.get(k.kolWallet);
+    const sides = g ? sideMembers(map, g).filter((n) => n !== kol) : [];
+    if (kol) for (const n of sides) kolSpokes.push({ from: kol, to: n, colour });
+    hubs.push({
+      id: `kol:${k.kolWallet}`,
+      ...(kol ? { x: kol.x, y: kol.y, r: kol.r } : { ...centreOf(members), r: 0 }),
+      ...pillSize(text),
+      text,
+      colour,
+      members: kol ? [] : sides,
+      dashed: false,
+      dotted: true,
+      funder: !!kol,
+    });
+  }
   // Each same-minute group's pill, a hub tied to its wallets by solid lines, as the dialog draws it.
   map.sameTimeGroups.forEach((g, i) => {
     const members = map.nodes.filter((n): n is MapNode => n.kind === "holder" && n.sameTime === i);
@@ -416,8 +468,8 @@ export async function renderBubbleCard(
       });
     }
   }
-  // Each KOL's pill, tied to it and its possible side wallets by dotted gold lines.
-  for (const g of sideGroups) {
+  // Without the bundles (an older caller), each KOL's side wallets on a pill of their own.
+  for (const g of kols.length > 0 ? [] : sideGroups) {
     const members = sideMembers(map, g);
     const kolName = names[g.kolWallet]?.name ?? g.kolName ?? walletText(g.kolWallet, names);
     const text = `${kolName.length > 16 ? `${kolName.slice(0, 15)}…` : kolName} ${sideWord(members, g)}`;
@@ -478,6 +530,57 @@ export async function renderBubbleCard(
     }
   }
 
+  // Each KOL's bundle: a gold outline round its bubbles, joined along the shortest ties, faintly
+  // filled (user ask 2026-10-15). Drawn on its own layer: the shape, less the same shape a stroke
+  // smaller, leaves the outline.
+  const outline = document.createElement("canvas");
+  outline.width = canvas.width;
+  outline.height = canvas.height;
+  const oc = outline.getContext("2d");
+  if (oc) {
+    const ratio = canvas.width / CARD_W;
+    const band = BUNDLE_BAND * 2 * scale;
+    const shape = (o: Pick<ClusterHalo, "circles" | "bands">, inset: number) => {
+      oc.lineCap = "round";
+      oc.lineWidth = Math.max(0.1, band - inset * 2);
+      for (const b of o.bands) {
+        oc.beginPath();
+        oc.moveTo(X(b.x1), Y(b.y1));
+        oc.lineTo(X(b.x2), Y(b.y2));
+        oc.stroke();
+      }
+      oc.beginPath();
+      for (const c of o.circles) {
+        const r = Math.max(0.1, c.r * scale - inset);
+        oc.moveTo(X(c.x) + r, Y(c.y));
+        oc.arc(X(c.x), Y(c.y), r, 0, Math.PI * 2);
+      }
+      oc.fill();
+    };
+    for (const b of kolBundles) {
+      const o = bundleOutline(b.members);
+      oc.setTransform(ratio, 0, 0, ratio, 0, 0);
+      oc.globalCompositeOperation = "source-over";
+      oc.clearRect(0, 0, CARD_W, CARD_H);
+      oc.fillStyle = b.colour;
+      oc.strokeStyle = b.colour;
+      shape(o, 0);
+      // The faint fill first, then the outline alone.
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 0.07;
+      ctx.drawImage(outline, 0, 0);
+      ctx.restore();
+      oc.globalCompositeOperation = "destination-out";
+      shape(o, 2.5);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 0.85;
+      ctx.drawImage(outline, 0, 0);
+      ctx.restore();
+    }
+  }
+
   ctx.lineCap = "round";
   for (const l of map.links) {
     const a = index.get(l.from);
@@ -517,6 +620,17 @@ export async function renderBubbleCard(
       ctx.stroke();
     }
   });
+  // A KOL's possible side wallets, each tied to the KOL's bubble.
+  ctx.setLineDash([2, 5]);
+  for (const { from: a, to: b, colour } of kolSpokes) {
+    ctx.strokeStyle = alpha(colour, 0.9);
+    const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12;
+    const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.12;
+    ctx.beginPath();
+    ctx.moveTo(X(a.x), Y(a.y));
+    ctx.quadraticCurveTo(X(mx), Y(my), X(b.x), Y(b.y));
+    ctx.stroke();
+  }
   ctx.setLineDash([]);
 
   const order = [...map.nodes].sort((a, b) => b.r - a.r);

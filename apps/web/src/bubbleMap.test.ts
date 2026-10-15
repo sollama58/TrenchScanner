@@ -31,6 +31,9 @@ import {
   fromAlertText,
   sideCounts,
   sideWord,
+  bundleOutline,
+  regroupLayout,
+  kolBundleNodes,
 } from "./bubbleMap";
 
 const A = "Aaaa1111111111111111111111111111111111111111";
@@ -373,7 +376,7 @@ describe("bubbleNameLines", () => {
 
 describe("placeLabels", () => {
   const node = (id: string, x: number, y: number, r: number) =>
-    ({ id, kind: "holder", x, y, r }) as unknown as MapNode;
+    ({ id, kind: "holder", x, y, r, sameTime: null, flags: [] }) as unknown as MapNode;
   it("puts a label below its anchor when that is clear", () => {
     const [p] = placeLabels({ nodes: [node("a", 0, 0, 10)], links: [] }, [
       { id: "l", x: 0, y: 0, r: 10, w: 40, h: 16 },
@@ -476,7 +479,8 @@ describe("cexLayout", () => {
       Math.hypot(at(graph, A).x - at(graph, R).x, at(graph, A).y - at(graph, R).y);
     const before = { x: at(g, A).x, y: at(g, A).y, gap: gap(g) };
     const pulled = cexLayout(g);
-    expect(gap(pulled)).toBeLessThanOrEqual(before.gap);
+    // No further apart (both may already sit as close as the bubbles' berth allows).
+    expect(gap(pulled)).toBeLessThanOrEqual(before.gap + 1e-3);
     expect(gap(pulled)).toBeLessThan(at(pulled, A).r + at(pulled, R).r + 40);
     expect(at(g, A)).toMatchObject({ x: before.x, y: before.y });
   });
@@ -588,5 +592,59 @@ describe("kolControl", () => {
     expect(kolControl(graph, [], [{ wallet: "x", name: "Solo" }])).toEqual([]);
     const tied = { nodes: [h("k2", 1, 3), h("y", 0.4, 3)] };
     expect(kolControl(tied, [], [{ wallet: "k2", name: "Two" }])[0]!.pct).toBe(1.4);
+  });
+});
+
+describe("label rooms (user ask 2026-10-15)", () => {
+  it("keeps room for a funder's pill right by its diamond, clear of every bubble", () => {
+    const g = layoutGraph(buildGraph(snapshot));
+    const funder = g.nodes.find((n) => n.kind === "funder")!;
+    const spot = g.labelSpots?.get(funder.id);
+    expect(spot).toBeDefined();
+    // The room's box (about a pill's size) touches no bubble's edge...
+    for (const n of g.nodes) {
+      const cx = Math.max(spot!.x - 41, Math.min(n.x, spot!.x + 41));
+      const cy = Math.max(spot!.y - 9, Math.min(n.y, spot!.y + 9));
+      expect(Math.hypot(cx - n.x, cy - n.y)).toBeGreaterThanOrEqual(n.r);
+    }
+    // ...and sits within a short leader of the diamond.
+    const gx = Math.max(0, Math.abs(spot!.x - funder.x) - 41);
+    const gy = Math.max(0, Math.abs(spot!.y - funder.y) - 9);
+    expect(Math.hypot(gx, gy) - funder.r).toBeLessThan(40);
+  });
+  it("puts a pill in its room when the room is clear", () => {
+    const g = layoutGraph(buildGraph(snapshot));
+    const funder = g.nodes.find((n) => n.kind === "funder")!;
+    const [p] = placeLabels(g, [{ id: funder.id, x: funder.x, y: funder.y, r: funder.r, w: 60, h: 16 }]);
+    const spot = g.labelSpots!.get(funder.id)!;
+    expect(Math.hypot(p!.x - spot.x, p!.y - spot.y)).toBeLessThan(40);
+  });
+  it("keeps a KOL's pill by the KOL, its bundle drawn in together", () => {
+    const g = layoutGraph(buildGraph({ ...snapshot, linkedHolders: [{ wallet: R, pct: 3 }] }));
+    const kols = kolControl(g, [{ kolWallet: R, kolName: "Ansem", wallets: [{ wallet: D, pct: 4 }] }]);
+    const pulled = regroupLayout(g, { kols });
+    const { kol, members } = kolBundleNodes(pulled, kols[0]!);
+    expect(kol?.wallet).toBe(R);
+    expect(members.map((n) => n.wallet).sort()).toEqual([C, D, R].sort());
+    const spot = pulled.labelSpots?.get(`kol:${R}`);
+    expect(spot).toBeDefined();
+    expect(Math.hypot(spot!.x - kol!.x, spot!.y - kol!.y)).toBeLessThan(kol!.r + 120);
+  });
+});
+
+describe("bundleOutline", () => {
+  it("grows each bubble and joins them along the shortest gaps", () => {
+    const o = bundleOutline([
+      { x: 0, y: 0, r: 10 },
+      { x: 100, y: 0, r: 10 },
+      { x: 30, y: 0, r: 5 },
+    ]);
+    expect(o.circles.map((c) => c.r)).toEqual([24, 24, 19]);
+    // Two bands for three bubbles: 0-2 and 2-1, never the long 0-1.
+    expect(o.bands).toHaveLength(2);
+    expect(o.bands.some((b) => Math.abs(b.x1 - b.x2) === 100)).toBe(false);
+  });
+  it("draws nothing for a lone bubble", () => {
+    expect(bundleOutline([{ x: 0, y: 0, r: 10 }])).toEqual({ circles: [], bands: [] });
   });
 });
