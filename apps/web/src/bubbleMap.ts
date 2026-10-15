@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Snapshot, Token } from "./api";
+import type { WalletNames } from "./walletNames";
 
 /**
  * The linked-wallets bubble map: a coin's top holders as bubbles sized by their share of supply,
@@ -1843,4 +1844,21 @@ export function centreOf(nodes: readonly Pick<MapNode, "x" | "y">[]): { x: numbe
     x: nodes.reduce((s, n) => s + n.x, 0) / nodes.length,
     y: nodes.reduce((s, n) => s + n.y, 0) / nodes.length,
   };
+}
+
+/**
+ * Whether a cluster's funder goes by its wallet on the map and the card (user ask 2026-10-15): only
+ * when the wallet is known (a KOL, a KOL's Known Side, a Pump.fun or FOMO name, a Helius label: any
+ * name in `names`), is itself a holder, or carries a label of its own anyway (flagged as the
+ * creator, risky or a dumper). Any other funder goes by its cluster's number (clusterNumberText).
+ */
+export function funderNamed(graph: BubbleGraph, funder: string, names: WalletNames): boolean {
+  if (names[funder]) return true;
+  return graph.nodes.some((n) => n.wallet === funder && (n.kind === "holder" || n.flags.length > 0));
+}
+
+/** A cluster's name in a list when its funder isn't named (funderNamed): "Cluster 2"; else null. */
+export function clusterNumberText(graph: BubbleGraph, i: number, names: WalletNames): string | null {
+  const c = graph.clusters[i];
+  return c && funderNamed(graph, c.funder, names) ? null : `Cluster ${i + 1}`;
 }
