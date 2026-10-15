@@ -110,19 +110,22 @@ export interface PairRow {
 
 /**
  * The top side wallets for one KOL and window: at least minShared coins in common and SIDE_MIN_PCT %
- * of the KOL's coins, by % shared, then coins in common, then the closest timing. Exported for tests.
+ * of the KOL's coins, by % shared, then coins in common, then the closest timing. `carried` are the
+ * wallets a shorter window listed (user ask 2026-10-15: a wallet in 24h is in 7d and 30d too):
+ * they stay on whatever their figures over this window, ahead of the TOP_SIDES cut. Exported for tests.
  */
 export function rankSideWallets(
   pairs: readonly PairRow[],
   kolCoins: number,
   sideCoins: ReadonlyMap<string, number>,
   minShared: number,
+  carried: ReadonlySet<string> = new Set(),
 ): SideWallet[] {
   if (kolCoins <= 0) return [];
-  return pairs
-    .filter(
-      (p) => p.shared >= minShared && (Math.min(p.shared, kolCoins) / kolCoins) * 100 + 1e-9 >= SIDE_MIN_PCT,
-    )
+  const passes = (p: PairRow) =>
+    p.shared >= minShared && (Math.min(p.shared, kolCoins) / kolCoins) * 100 + 1e-9 >= SIDE_MIN_PCT;
+  const ranked = pairs
+    .filter((p) => carried.has(p.side) || passes(p))
     .map((p) => ({
       wallet: p.side,
       shared: p.shared,
@@ -130,8 +133,10 @@ export function rankSideWallets(
       coins: Math.max(sideCoins.get(p.side) ?? p.shared, p.shared),
       gapSec: Math.round(p.gapSec),
     }))
-    .sort((a, b) => b.pct - a.pct || b.shared - a.shared || Math.abs(a.gapSec) - Math.abs(b.gapSec))
-    .slice(0, TOP_SIDES);
+    .sort((a, b) => b.pct - a.pct || b.shared - a.shared || Math.abs(a.gapSec) - Math.abs(b.gapSec));
+  // The carried wallets always make the cut; the rest fill what is left of TOP_SIDES.
+  let room = Math.max(0, TOP_SIDES - ranked.filter((r) => carried.has(r.wallet)).length);
+  return ranked.filter((r) => carried.has(r.wallet) || room-- > 0);
 }
 
 /**
@@ -307,12 +312,13 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   const rankedByKol = kols.map((k) => {
     const coins = { "24h": Number(k.c24), "7d": Number(k.c7), "30d": Number(k.c30) };
     const lists = byKol.get(k.wallet);
-    const ranked = Object.fromEntries(
-      SIDE_WINDOWS.map((w) => [
-        w,
-        lists ? rankSideWallets(lists[w], coins[w], sideCoins[w], SIDE_MIN_SHARED[w]) : [],
-      ]),
-    ) as Record<SideWindow, SideWallet[]>;
+    // Shortest window first: each longer one keeps every wallet a shorter one listed.
+    const ranked = {} as Record<SideWindow, SideWallet[]>;
+    const carried = new Set<string>();
+    for (const w of SIDE_WINDOWS) {
+      ranked[w] = lists ? rankSideWallets(lists[w], coins[w], sideCoins[w], SIDE_MIN_SHARED[w], carried) : [];
+      for (const s of ranked[w]) carried.add(s.wallet);
+    }
     return { k, coins, ranked };
   });
   // A wallet strongly matched with four or more KOLs is a likely bot: off every list, which keeps
