@@ -10923,9 +10923,6 @@ button.bm-same {
     position: static;
   }
 }
-.bm-note {
-  margin: 12px 0 0 !important;
-}
 .bm-empty {
   margin: 18px 0 !important;
 }
@@ -10935,46 +10932,6 @@ button.bm-same {
   border-radius: 14px;
   background: var(--surface-3);
   animation: pulse 1.4s ease-in-out infinite;
-}
-/* A stat tile that opens something (Linked opens the bubble map): an accent edge and a map icon,
-   so it reads as a button among the plain tiles. */
-.card-stats div.tile-opens {
-  cursor: pointer;
-  border-color: color-mix(in srgb, var(--brand-a) 35%, transparent);
-  background: color-mix(in srgb, var(--brand-a) 8%, var(--surface-3));
-  transition:
-    border-color 0.15s,
-    background 0.15s;
-}
-.card-stats div.tile-opens.risky {
-  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
-  background: var(--bad-wash);
-}
-.card-stats div.tile-opens:hover,
-.card-stats div.tile-opens:focus-visible {
-  border-color: var(--brand-a);
-  background: color-mix(in srgb, var(--brand-a) 14%, var(--surface-3));
-}
-.card-stats div.tile-opens.risky:hover,
-.card-stats div.tile-opens.risky:focus-visible {
-  border-color: var(--bad);
-}
-.card-stats div.tile-opens:focus-visible {
-  outline: 2px solid var(--brand-a);
-  outline-offset: 1px;
-}
-.card-stats div.tile-opens dt {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-}
-.tile-opens-icon {
-  flex: none;
-  color: var(--brand-ink);
-}
-.card-stats div.tile-opens.risky .tile-opens-icon {
-  color: var(--bad-ink);
 }
 @media (max-width: 640px) {
   .bm-stats {
