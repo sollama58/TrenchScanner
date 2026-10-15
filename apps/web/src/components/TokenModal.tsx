@@ -334,6 +334,28 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         </nav>
       </header>
 
+      {/* The address and the quick links first: what a reader reaches for before anything else. */}
+      <div className="tm-links">
+        <button className="mint" onClick={copy} title="Copy mint address">
+          {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+          {copied ? "Copied" : shortAddress(mint)}
+        </button>
+        <nav className="card-links">
+          {trade.map((l) => (
+            <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">
+              {l.label}
+              <ExternalIcon size={11} />
+            </a>
+          ))}
+          {LINKS.map((l) => (
+            <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
+              {l.label}
+              <ExternalIcon size={11} />
+            </a>
+          ))}
+        </nav>
+      </div>
+
       <section className="tm-figs" aria-label="Market cap">
         <div className="tm-fig">
           <label>{utility ? "At scan" : what === "Passed screen" ? "At screen" : "At alert"}</label>
@@ -442,27 +464,6 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         <GroupLabel id={`${ids}-sage-h`}>TokenSage</GroupLabel>
         <SageSection mint={mint} />
       </section>
-
-      <footer className="tm-foot">
-        <button className="mint" onClick={copy} title="Copy mint address">
-          {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-          {copied ? "Copied" : shortAddress(mint)}
-        </button>
-        <nav className="card-links">
-          {trade.map((l) => (
-            <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">
-              {l.label}
-              <ExternalIcon size={11} />
-            </a>
-          ))}
-          {LINKS.map((l) => (
-            <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
-              {l.label}
-              <ExternalIcon size={11} />
-            </a>
-          ))}
-        </nav>
-      </footer>
     </div>
   );
 }

@@ -9688,15 +9688,13 @@ img.tm-avatar {
 .tm-x-text {
   overflow-wrap: anywhere;
 }
-.tm-foot {
+.tm-links {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px;
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+  margin-bottom: 12px;
 }
 
 /* The chart. */
@@ -11610,9 +11608,6 @@ button.bm-same {
 }
 .tm-summary .tm-link {
   margin-left: 0;
-}
-.tm-modal .tm-foot {
-  margin-top: 26px;
 }
 
 @media (max-width: 640px) {
