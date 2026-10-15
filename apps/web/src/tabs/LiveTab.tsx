@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { type CuratedStats, type Leaderboard, type MatchPage } from "../api";
+import { type CuratedStats, type FeedStats, type Leaderboard, type MatchPage } from "../api";
 import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
 import { AboutModal } from "../components/AboutModal";
 import { introSeen, markIntroSeen } from "../intro";
-import { ArrowRightIcon, BrainIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
+import { FeedStatsModal } from "../components/FeedStatsModal";
+import { ArrowRightIcon, BrainIcon, ChartIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, usePollingAll, useNow, useNudgeStream } from "../hooks";
 import { fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES } from "../feedFill";
@@ -14,6 +15,12 @@ import { CustomizeDrawer } from "../components/CustomizeDrawer";
 import { CaSearchBox, SearchResults } from "../components/CaSearch";
 import { ScanStatus } from "../components/ScanStatus";
 import { parseSearch } from "../caSearch";
+
+/** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
+const MIN_TEASER = 10;
+
+/** The window the feed stats cover. */
+const STATS_HOURS = 24;
 
 /** This browser's "High conviction only" switch (the API takes it per request, not as a saved setting). */
 const HIGH_CONVICTION_KEY = "ts-feed-high-conviction";
@@ -52,6 +59,7 @@ export function LiveTab({
     setAboutOpen(false);
     markIntroSeen(walletAddress);
   };
+  const [statsOpen, setStatsOpen] = useState(false);
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const look = useAppearance();
@@ -74,13 +82,18 @@ export function LiveTab({
   const morePaths = Array.from({ length: depth - 1 }, (_, i) => feedPath(i + 2));
   const morePages = usePollingAll<MatchPage>(morePaths, 30_000);
   const stats = usePolling<CuratedStats>("/curated/stats", 60_000);
+  const feedStats = usePolling<FeedStats>(`/matches/stats?hours=${STATS_HOURS}${hc}`, 30_000);
+  const fs = feedStats.data;
+  const hours = fs?.hours ?? STATS_HOURS;
   const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000);
   const lb = board.data;
   const modelsOn = lb?.showModelAlerts ?? true;
+  // A new alert changes the stats as well as the cards, so both refetch on a nudge.
   const nudged = () => {
     // Only the first page: the ones read ahead catch up on their own poll, and a burst of alerts
     // must not refetch all of them each time.
     feedPage.reload();
+    feedStats.reload();
   };
   const curatedLive = useNudgeStream("/curated/stream", nudged, modelsOn);
   const matchesLive = useNudgeStream("/matches/stream", nudged);
@@ -148,6 +161,15 @@ export function LiveTab({
 
   return (
     <div className="stack">
+      <FeedStatsModal
+        open={statsOpen}
+        onClose={() => setStatsOpen(false)}
+        stats={fs ?? null}
+        hours={hours}
+        targets={t}
+        pollKey=""
+        highConviction={highConviction}
+      />
       <CustomizeDrawer open={customizing} onClose={closeCustomize} />
       <AboutModal open={aboutOpen} onClose={closeAbout} targets={t} />
       <section className="panel feed">
@@ -171,6 +193,18 @@ export function LiveTab({
             </div>
           </div>
           <div className="feed-controls">
+            <button
+              type="button"
+              className="ghost stats-btn"
+              onClick={() => setStatsOpen(true)}
+              title={`Your feed's hit rates and best run over the last ${hours} hours`}
+            >
+              <ChartIcon size={14} />
+              Stats
+              {fs && fs.graded >= MIN_TEASER && fs.hit2xPct !== null && (
+                <span className="num stats-teaser">2x {pct(fs.hit2xPct, 0)}</span>
+              )}
+            </button>
             <button
               type="button"
               className={`ghost stats-btn${customizing ? " on" : ""}`}
