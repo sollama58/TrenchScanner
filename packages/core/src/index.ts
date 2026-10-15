@@ -54,6 +54,7 @@ export * from "./curation/profitSim.js";
 export * from "./curation/regrade.js";
 export * from "./curation/firstCall.js";
 export * from "./curation/curator.js";
+export * from "./curation/relaunchFarm.js";
 export * from "./curation/governor.js";
 export * from "./curation/trainer.js";
 export * from "./curation/boosting.js";

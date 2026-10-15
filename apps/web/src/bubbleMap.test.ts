@@ -27,6 +27,8 @@ import {
   layoutGraph,
   pickReading,
   withWideMap,
+  alertWideMap,
+  fromAlertText,
   sideCounts,
   sideWord,
 } from "./bubbleMap";
@@ -219,6 +221,24 @@ describe("bubble map top 50", () => {
     const s = { ...snapshot, linkedHolders: [{ wallet: A, pct: 12 }] };
     expect(withWideMap(s, null)).toBe(s);
     expect(withWideMap(s, { ...wide, holders: [] })).toBe(s);
+  });
+
+  it("stands the map kept at the call in for an alert only near it", () => {
+    const read = Date.parse(wide.readAt);
+    const kept = { ...wide, alertAt: new Date(read - 40_000).toISOString() };
+    expect(alertWideMap(kept, read - 40_000)).toBe(kept);
+    // A filter alert ten minutes before the call still gets it; one an hour away does not.
+    expect(alertWideMap(kept, read - 10 * 60_000)).toBe(kept);
+    expect(alertWideMap(kept, read - 60 * 60_000)).toBeNull();
+    expect(alertWideMap(null, read)).toBeNull();
+    expect(alertWideMap(undefined, read)).toBeNull();
+    expect(alertWideMap({ ...kept, holders: [] }, read)).toBeNull();
+  });
+
+  it("says how far a reading is from the alert", () => {
+    expect(fromAlertText(1_000, 0, "call")).toBe("at the call");
+    expect(fromAlertText(40_000, 0, "call")).toBe("40s after the call");
+    expect(fromAlertText(0, 180_000, "alert")).toBe("3m before the alert");
   });
 });
 

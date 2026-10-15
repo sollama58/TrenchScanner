@@ -43,6 +43,13 @@ function write(mint: string | null) {
 export interface BubbleSeed {
   token: Token;
   snapshot: Snapshot;
+  /**
+   * The top-50 map to draw over it, when the opener already chose one (the token view's "At the
+   * alert" holds the map as it stood at the call): null for none. Absent: the coin's live one.
+   */
+  wide?: WideMap | null;
+  /** Which moment it is ("At the alert"), headed on the map. */
+  moment?: { label: string; title: string };
 }
 const seeds = new Map<string, BubbleSeed>();
 
@@ -101,6 +108,44 @@ export interface WideMap {
   holders: WideHolder[];
   clusters: NonNullable<Snapshot["linkedClusters"]>;
   sameTimeClusters: NonNullable<Snapshot["sameTimeClusters"]>;
+}
+
+/** The map as it stood at the coin's first model call (BubbleMapAtAlert): kept once, never updated. */
+export interface AlertWideMap extends WideMap {
+  /** The first call the reading is pinned to. */
+  alertAt: string;
+}
+
+/** GET /tokens/:mint/bubble-holders. `atAlert` is absent from API builds before it was kept. */
+export interface BubbleMaps {
+  map: WideMap | null;
+  atAlert?: AlertWideMap | null;
+}
+
+/**
+ * How far from an alert the map kept at the call can stand for it (core's
+ * BUBBLE_AT_ALERT_WINDOW_MS): a filter alert minutes from the model's call shows it, one hours
+ * away does not.
+ */
+export const AT_ALERT_WINDOW_MS = 15 * 60_000;
+
+/** The map kept at the call, when it was read within AT_ALERT_WINDOW_MS of this alert; else null. */
+export function alertWideMap(
+  atAlert: AlertWideMap | null | undefined,
+  alertAtMs: number,
+): AlertWideMap | null {
+  if (!atAlert || !Array.isArray(atAlert.holders) || atAlert.holders.length === 0) return null;
+  const readAt = Date.parse(atAlert.readAt);
+  return Number.isFinite(readAt) && Math.abs(readAt - alertAtMs) <= AT_ALERT_WINDOW_MS ? atAlert : null;
+}
+
+/** "40s after the call", "3m before the alert": how far a reading is from the alert, in words. */
+export function fromAlertText(readAtMs: number, alertAtMs: number, what: string): string {
+  const gap = readAtMs - alertAtMs;
+  const abs = Math.abs(gap);
+  if (abs < 5_000) return `at the ${what}`;
+  const span = abs < 60_000 ? `${Math.round(abs / 1000)}s` : `${Math.round(abs / 60_000)}m`;
+  return `${span} ${gap > 0 ? "after" : "before"} the ${what}`;
 }
 
 /**

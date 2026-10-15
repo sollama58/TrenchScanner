@@ -107,6 +107,7 @@ import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
 import { rememberGraduations, rememberLaunchTimes, resolvePreBondSeconds } from "./launchTimes.js";
 import { ignoreMayhemMints, resolveMayhemMode } from "./mayhemMode.js";
+import { resolveRelaunchSiblings } from "./relaunchFarms.js";
 import {
   launchSnipersFromCache,
   resolveLaunchSnipers,
@@ -959,6 +960,21 @@ async function scanCycle(
     env,
   );
   lap("preBond");
+  // Same-ticker launches just before each candidate, for the relaunch-farm block on model calls
+  // (core's relaunchFarm.ts): one query, asked only about the candidates the local screen and
+  // Mayhem leave standing, as for the pre-bond cut.
+  const relaunchByMint = await resolveRelaunchSiblings(
+    candidates
+      .filter((c) => {
+        const mayhem = mayhemByMint.get(c.mintAddress);
+        return (
+          passesLocalRugScreen(baseProfileByMint.get(c.mintAddress)) &&
+          !(mayhem?.status === "found" && mayhem.isMayhemMode)
+        );
+      })
+      .map((c) => c.mintAddress),
+  );
+  lap("relaunch");
 
   // Anything not looked up keeps isMayhemMode undefined, which the screen rejects - the same
   // verdict its local conditions already reached, with the reason it actually failed on first.
@@ -974,6 +990,8 @@ async function scanCycle(
           ...profile,
           preBondSeconds: preBondByMint.get(c.mintAddress),
           minPreBondSeconds: env.SAFETY_MIN_PREBOND_SECONDS,
+          relaunchSiblings: relaunchByMint.get(c.mintAddress)?.siblings,
+          relaunchSiblingPeakMcapUsd: relaunchByMint.get(c.mintAddress)?.peakMcapUsd,
         },
       ];
     }),

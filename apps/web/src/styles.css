@@ -11258,6 +11258,44 @@ button.bm-same {
   font-size: 11.5px;
   color: var(--muted);
 }
+/* The Holders views (user ask 2026-10-14): At the alert, kept as it stood, and Now. */
+.tm-holders-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: 0 0 12px;
+}
+.tm-holders-bar .tm-holders-when {
+  margin: 0;
+  min-width: 0;
+  padding-inline: 2px;
+}
+.tm-holders-when > span {
+  white-space: nowrap;
+}
+.tm-holders-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.tm-holders-bar.at-alert .tm-holders-switch button.on {
+  color: var(--brand-ink);
+  border-color: color-mix(in srgb, var(--brand-a) 45%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 12%, var(--surface-solid));
+}
+.tm-holders-bar.at-alert .tm-holders-when b {
+  color: var(--brand-ink);
+}
+.tm-holders.at-alert > .sage-card {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--brand-a) 28%, transparent);
+}
+.tm-holders.at-alert .bm-section h4 .sage-tag {
+  color: var(--brand-ink);
+  border-color: color-mix(in srgb, var(--brand-a) 45%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 10%, transparent);
+}
 .tm-group > .tm-grid,
 .tm-group > .tm-holders {
   margin-top: 0;

@@ -343,11 +343,36 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     // Not for a coin no model called.
     expect(await wideMapReadings([group], lookups, new Set())).toEqual([]);
 
-    expect(await storeWideMapReadings([reading!])).toBe(1);
-    expect(await storeWideMapReadings([reading!])).toBe(0);
+    // Called a minute before the read: kept as the map at the alert, once.
+    const calledAt = new Map([[mint, reading!.readAt.getTime() - 60_000]]);
+    expect(await storeWideMapReadings([reading!], calledAt)).toBe(1);
+    expect(await storeWideMapReadings([reading!], calledAt)).toBe(0);
     const row = await prisma.bubbleMapHolders.findUnique({ where: { mintAddress: mint } });
     expect(row).toMatchObject({ holdersRead: 30, knownExtra: 1 });
+    const kept = await prisma.bubbleMapAtAlert.findUnique({ where: { mintAddress: mint } });
+    expect(kept).toMatchObject({ holdersRead: 30, knownExtra: 1, readAt: reading!.readAt });
+    expect(kept!.alertAt.getTime()).toBe(calledAt.get(mint));
+
+    // A later reading moves the live map, never the one kept at the alert.
+    const later = { ...reading!, readAt: new Date(reading!.readAt.getTime() + 5 * 60_000), knownExtra: 0 };
+    resetLinkedWallets();
+    expect(await storeWideMapReadings([later], calledAt)).toBe(1);
+    expect(await prisma.bubbleMapHolders.findUnique({ where: { mintAddress: mint } })).toMatchObject({
+      knownExtra: 0,
+    });
+    expect(await prisma.bubbleMapAtAlert.findUnique({ where: { mintAddress: mint } })).toMatchObject({
+      knownExtra: 1,
+      readAt: reading!.readAt,
+    });
     await prisma.bubbleMapHolders.delete({ where: { mintAddress: mint } });
+    await prisma.bubbleMapAtAlert.delete({ where: { mintAddress: mint } });
+
+    // A coin first read long after its call (called before maps were kept): nothing kept.
+    const old = { ...reading!, mintAddress: w("wide-old") };
+    resetLinkedWallets();
+    await storeWideMapReadings([old], new Map([[old.mintAddress, old.readAt.getTime() - 3_600_000]]));
+    expect(await prisma.bubbleMapAtAlert.findUnique({ where: { mintAddress: old.mintAddress } })).toBeNull();
+    await prisma.bubbleMapHolders.delete({ where: { mintAddress: old.mintAddress } });
   });
 });
 

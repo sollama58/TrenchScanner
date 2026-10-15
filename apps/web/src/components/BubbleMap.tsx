@@ -39,6 +39,7 @@ import {
   type FlaggedHolder,
   type FlagsRead,
   type MapNode,
+  type BubbleMaps,
   type WideMap,
   withWideMap,
 } from "../bubbleMap";
@@ -75,18 +76,25 @@ export const CLUSTER_COLOURS = MAP_COLOURS;
  * coin, or while it loads. The map stands without it.
  */
 function useWideMap(mint: string): WideMap | null {
-  const [wide, setWide] = useState<WideMap | null>(null);
+  return useBubbleMaps(mint)?.map ?? null;
+}
+
+/**
+ * The coin's top-50 maps, live and as kept at its first call (GET /tokens/:mint/bubble-holders):
+ * null while they load or when the read fails. One cached read serves every caller.
+ */
+export function useBubbleMaps(mint: string): BubbleMaps | null {
+  const [maps, setMaps] = useState<{ mint: string; maps: BubbleMaps } | null>(null);
   useEffect(() => {
     let live = true;
-    setWide(null);
-    cachedGet<{ map?: WideMap | null }>(`/tokens/${encodeURIComponent(mint)}/bubble-holders`, 60_000)
-      .then((r) => live && setWide(r.map ?? null))
+    cachedGet<BubbleMaps>(`/tokens/${encodeURIComponent(mint)}/bubble-holders`, 60_000)
+      .then((r) => live && setMaps({ mint, maps: r }))
       .catch(() => undefined);
     return () => {
       live = false;
     };
   }, [mint]);
-  return wide;
+  return maps?.mint === mint ? maps.maps : null;
 }
 
 /** "· +12 known from top 50", for the map's subtitle; empty without the wider map. */
@@ -297,7 +305,10 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
 
   const label = loaded ? tokenLabel(loaded.token) : shortAddress(mint);
   const snapshot = loaded?.snapshot ?? null;
-  const wide = useWideMap(mint);
+  // A seed that chose its top 50 (the token view's "At the alert") draws that one, not the live map.
+  const fetchedWide = useWideMap(mint);
+  const wide = seed && seed.wide !== undefined ? seed.wide : fetchedWide;
+  const moment = seed?.moment;
   const graph = useMemo(
     () => (snapshot ? layoutGraph(buildGraph(withWideMap(snapshot, wide), flagged)) : null),
     [snapshot, wide, flagged],
@@ -318,7 +329,12 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
   const hasMap = !!graph && graph.nodes.some((n) => n.kind === "holder");
   const actions = (
     <>
-      <button type="button" className="ghost share-btn" onClick={copyLink} title="Copy a link to this map">
+      <button
+        type="button"
+        className="ghost share-btn"
+        onClick={copyLink}
+        title={moment ? "Copy a link to this coin's live map" : "Copy a link to this map"}
+      >
         {copied ? <CheckIcon size={14} /> : <LinkIcon size={14} />}
         {copied ? " Copied" : " Link"}
       </button>
@@ -344,7 +360,9 @@ function Body({ mint, onClose }: { mint: string; onClose: () => void }) {
     </>
   );
 
-  const sub = snapshot ? `${label} · read ${ago(wide?.readAt ?? snapshot.takenAt)}${wideText(wide)}` : label;
+  const sub = snapshot
+    ? `${label}${moment ? ` · ${moment.label}` : ""} · read ${ago(wide?.readAt ?? snapshot.takenAt)}${wideText(wide)}`
+    : label;
   if (error) {
     const locked = error instanceof ApiError && (error.status === 401 || error.status === 402);
     return (
@@ -1365,12 +1383,18 @@ export function BubbleMapSection({
   token,
   snapshot,
   moment,
+  wide: chosenWide,
 }: {
   token: Token;
   /** The reading to draw; undefined while it loads. */
   snapshot: Snapshot | null | undefined;
   /** Which moment the reading is from ("Now", "At the alert"), headed on the map; none leaves it off. */
   moment?: { label: string; title: string };
+  /**
+   * The top-50 map to draw over the reading (the one kept at the call, for "At the alert"); null
+   * for none. Absent: the coin's live one.
+   */
+  wide?: WideMap | null;
 }) {
   const [flagged, setFlagged] = useState<FlaggedHolder[]>([]);
   const [flagsFor, setFlagsFor] = useState<{ mint: string; read: FlagsRead } | null>(null);
@@ -1390,7 +1414,8 @@ export function BubbleMapSection({
       live = false;
     };
   }, [mint]);
-  const wide = useWideMap(mint);
+  const liveWide = useWideMap(mint);
+  const wide = chosenWide !== undefined ? chosenWide : liveWide;
   const graph = useMemo(
     () => (snapshot ? layoutGraph(buildGraph(withWideMap(snapshot, wide), flagged)) : null),
     [snapshot, wide, flagged],
@@ -1442,7 +1467,16 @@ export function BubbleMapSection({
           <button
             type="button"
             className="tm-link"
-            onClick={() => (snapshot ? openBubbleMap(mint, { token, snapshot }) : openBubbleMap(mint))}
+            onClick={() =>
+              snapshot
+                ? openBubbleMap(mint, {
+                    token,
+                    snapshot,
+                    ...(chosenWide !== undefined ? { wide: chosenWide } : {}),
+                    ...(moment ? { moment } : {}),
+                  })
+                : openBubbleMap(mint)
+            }
             title="Open the bubble map full size, with a link to share"
           >
             Expand
