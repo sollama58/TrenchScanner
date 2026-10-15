@@ -5448,7 +5448,7 @@ html:has(dialog.about-modal[open]) {
 .coverage {
   position: relative;
   z-index: 1;
-  margin-top: 16px;
+  margin: 4px 0 14px;
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid var(--border);
@@ -5456,13 +5456,6 @@ html:has(dialog.about-modal[open]) {
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-/* On its own between the Models tab's panels (above Learning), it reads as a slim card of its own. */
-.stack > .coverage {
-  margin-top: 0;
-  padding: 14px 18px;
-  background: var(--surface);
-  box-shadow: var(--shadow);
 }
 .cov-head {
   display: flex;
