@@ -16,6 +16,12 @@ const logger = createLogger("tokensage");
  */
 
 export type TokenSageDepth = "basic" | "full";
+/**
+ * Where a batch item's new job sits in TokenSage's queue (POST /v1/tokens:batch `priority`):
+ * high before normal before low, oldest first within one. Re-sending an open job at a higher
+ * tier raises it; a lower one never lowers it.
+ */
+export type TokenSagePriority = "high" | "normal" | "low";
 
 export interface TokenSageCategory {
   label: string;
@@ -606,13 +612,17 @@ export class TokenSageClient {
    * "skip this cycle", and the caller backs off.
    */
   async batch(
-    entries: { ca: string; hints?: TokenSageHints }[],
+    entries: { ca: string; hints?: TokenSageHints; priority?: TokenSagePriority }[],
     depth: TokenSageDepth,
   ): Promise<TokenSageBatchResult> {
     let fullRemaining: number | null = null;
-    const items = entries
-      .slice(0, TOKENSAGE_BATCH_MAX)
-      .map((e) => (e.hints ? { ca: e.ca, hints: e.hints } : { ca: e.ca }));
+    // "normal" is TokenSage's default and is left out, so a batch with no other tier is the
+    // request it was before priorities existed.
+    const items = entries.slice(0, TOKENSAGE_BATCH_MAX).map((e) => ({
+      ca: e.ca,
+      ...(e.hints ? { hints: e.hints } : {}),
+      ...(e.priority && e.priority !== "normal" ? { priority: e.priority } : {}),
+    }));
     const body = await fetchJson<{ items?: TokenSageBatchItem[] }>(`${this.baseUrl}/v1/tokens:batch`, {
       method: "POST",
       headers: this.headers({ "content-type": "application/json" }),

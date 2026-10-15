@@ -14,6 +14,7 @@ import {
   type TokenSageAnalysis,
   type TokenSageDepth,
   type TokenSageHints,
+  type TokenSagePriority,
 } from "@trenchscanner/core";
 import { Prisma } from "@prisma/client";
 import { forgetNarrativeRead } from "./heldNarrativeReads.js";
@@ -37,6 +38,14 @@ const logger = createLogger("tokensage");
  * simply re-sent in the next cycle's batch, which joins its open job for free and returns the
  * analysis once done. That keeps us to a couple of requests a cycle, far inside TokenSage's
  * 60/min per key, where polling each job would not be.
+ *
+ * Every request carries a priority tier (narrativePriority), which orders both our own sends and
+ * TokenSage's job queue: deep reads first (a model is deciding on the coin now), then the quick
+ * reads the scan asks for on the watchlist, then the launch reads asked for every new coin
+ * discovery sees. On 2026-10-15, with the Jupiter discovery sources, TokenSage served every
+ * request oldest first at one priority: a decision's deep read took 45 s at the median instead of
+ * 4 s, and the share of decisions carrying any read fell from ~85% to ~45%. A launch read is
+ * raised to the watchlist tier when the scan notes the coin, by re-sending it at that tier.
  *
  * Failures cost only the narrative:
  * - a 429 or 503 on the whole batch pauses requests for a minute;
@@ -77,6 +86,7 @@ const MAX_SETTLED = 20_000;
 
 interface Wanted {
   depth: TokenSageDepth;
+  priority: TokenSagePriority;
   hints?: TokenSageHints;
   /** A full read asked early (a young coin with an X link), on its own daily budget. */
   early?: boolean;
@@ -86,6 +96,7 @@ interface Wanted {
 
 interface Pending {
   depth: TokenSageDepth;
+  priority: TokenSagePriority;
   hints?: TokenSageHints;
   since: number;
   jobId?: number;
@@ -205,13 +216,30 @@ function settledCovers(mintAddress: string, depth: TokenSageDepth, now: number):
   return true;
 }
 
+const PRIORITY_RANK: Record<TokenSagePriority, number> = { high: 0, normal: 1, low: 2 };
+const PRIORITY_TIERS: TokenSagePriority[] = ["high", "normal", "low"];
+
+/** The more urgent of two tiers. */
+function higher(a: TokenSagePriority, b: TokenSagePriority | undefined): TokenSagePriority {
+  return b !== undefined && PRIORITY_RANK[b] < PRIORITY_RANK[a] ? b : a;
+}
+
+/**
+ * A request's tier: a deep read is high (asked for a coin a model is deciding on, a young coin
+ * with an X link, or one someone looked up), a launch read low, any other quick read normal.
+ */
+export function narrativePriority(depth: TokenSageDepth, launch = false): TokenSagePriority {
+  if (depth === "full") return "high";
+  return launch ? "low" : "normal";
+}
+
 /** Notes that the scan wants this mint's narrative at `depth`. Cheap; does no IO. */
 export function noteNarrativeWanted(
   mintAddress: string,
   depth: TokenSageDepth,
   env: Env,
   hints?: TokenSageHints,
-  opts: { early?: boolean } = {},
+  opts: { early?: boolean; launch?: boolean } = {},
 ): void {
   if (!tokenSageEnabled(env)) return;
   const now = Date.now();
@@ -232,6 +260,11 @@ export function noteNarrativeWanted(
   }
   wanted.set(mintAddress, {
     depth,
+    // A coin noted at launch and again by the scan keeps the scan's tier, whichever came first.
+    priority: higher(
+      narrativePriority(depth, opts.launch),
+      have?.depth === depth ? have.priority : undefined,
+    ),
     hints: hints ?? have?.hints,
     ...(early ? { early } : {}),
     notedAt: now,
@@ -277,6 +310,7 @@ export function noteLaunchNarratives(launches: LaunchSighting[], env: Env, now =
       "basic",
       env,
       tokenSageHints({ ...l, firstSeenAt: l.createdAt ?? null }),
+      { launch: true },
     );
   }
   return byMint.size;
@@ -511,7 +545,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
 
   // Queued on TokenSage's side: re-sent (free) until they finish or we give up on them, a chunk at
   // a time alternating with new requests (see interleave).
-  type Entry = { ca: string; hints?: TokenSageHints };
+  type Entry = { ca: string; hints?: TokenSageHints; priority: TokenSagePriority };
   const resend: Record<TokenSageDepth, Entry[]> = { full: [], basic: [] };
   const byDepth: Record<TokenSageDepth, Entry[]> = { full: [], basic: [] };
   for (const [mint, p] of pending) {
@@ -522,7 +556,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
       continue;
     }
     if (p.depth === "full" && !fullOpen) continue;
-    resend[p.depth].push({ ca: mint, hints: p.hints });
+    resend[p.depth].push({ ca: mint, hints: p.hints, priority: p.priority });
   }
 
   // Newly noted: drop what's already stored deep enough (or queued).
@@ -543,6 +577,14 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
     }
     const queued = pending.get(mint);
     if (queued && narrativeDepthCovers(queued.depth, w.depth)) {
+      // Asked for at a higher tier than it was queued at (a launch read the scan now wants):
+      // re-sent at that tier, which raises the open job on TokenSage's side.
+      const raised = higher(queued.priority, w.priority);
+      if (raised !== queued.priority) {
+        queued.priority = raised;
+        const r = resend[queued.depth].find((e) => e.ca === mint);
+        if (r) r.priority = raised;
+      }
       wanted.delete(mint);
       continue;
     }
@@ -561,18 +603,18 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
     // sent, unless TokenSage itself has said its full quota is spent for the day.
     if (w.depth === "full" && fullOpen) {
       if (w.early) earlyMints.add(mint);
-      byDepth.full.push({ ca: mint, hints: w.hints });
+      byDepth.full.push({ ca: mint, hints: w.hints, priority: w.priority });
     } else if (w.early) {
       // TokenSage's full quota is spent: the basic read, as for any other coin, unless one is on
       // its way.
       if (queued || row) wanted.delete(mint);
-      else byDepth.basic.push({ ca: mint, hints: w.hints });
+      else byDepth.basic.push({ ca: mint, hints: w.hints, priority: w.priority });
     } else if (queued || (w.depth === "full" && row && row.status !== "failed")) {
       // TokenSage's full quota is spent, with a basic answer stored or on its way: the full
       // request stays noted for when the quota is back.
       continue;
     } else {
-      byDepth.basic.push({ ca: mint, hints: w.hints });
+      byDepth.basic.push({ ca: mint, hints: w.hints, priority: w.priority });
     }
   }
 
@@ -585,10 +627,12 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
   newestFirst(byDepth.basic);
   // The depths take batches in turn, full first (those are the mints a model is deciding on
   // right now). Full taking every batch until its list ran dry let a full-depth backlog starve
-  // the quick reads entirely.
+  // the quick reads entirely. Within a depth, tier by tier: a backlog of queued launch reads
+  // re-sent every flush used to fill the quick-read batch, so a watchlist coin's read waited
+  // behind it on our side as well as TokenSage's (2026-10-15: 35 waiting behind 38 queued).
   const lists: Record<TokenSageDepth, Entry[]> = {
-    full: interleave(resend.full, byDepth.full),
-    basic: interleave(resend.basic, byDepth.basic),
+    full: byTier(resend.full, byDepth.full),
+    basic: byTier(resend.basic, byDepth.basic),
   };
   let batches = env.TOKENSAGE_MAX_BATCHES_PER_CYCLE;
   let jobChecks = MAX_JOB_CHECKS_PER_FLUSH;
@@ -675,7 +719,13 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
           const prev = pending.get(item.ca);
           const jobId = typeof item.job_id === "number" ? item.job_id : undefined;
           if (!prev || !narrativeDepthCovers(prev.depth, depth)) {
-            pending.set(item.ca, { depth, hints: entry.hints, since: prev?.since ?? Date.now(), jobId });
+            pending.set(item.ca, {
+              depth,
+              priority: entry.priority,
+              hints: entry.hints,
+              since: prev?.since ?? Date.now(),
+              jobId,
+            });
           } else {
             // To the back of the queue, so a backlog bigger than one flush is re-sent in turn.
             pending.delete(item.ca);
@@ -714,6 +764,7 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
           if (!wanted.has(item.ca))
             wanted.set(item.ca, {
               depth,
+              priority: entry.priority,
               hints: entry.hints,
               ...(depth === "full" && earlyMints.has(item.ca) ? { early: true } : {}),
               notedAt: Date.now(),
@@ -746,6 +797,16 @@ function newestFirst(list: { hints?: TokenSageHints }[]): void {
     return Number.isNaN(t) ? Number.NEGATIVE_INFINITY : t;
   };
   list.sort((a, b) => at(b) - at(a));
+}
+
+/** Tier by tier, most urgent first; within a tier, re-sends and new requests in turn. */
+function byTier<T extends { priority: TokenSagePriority }>(resend: T[], fresh: T[]): T[] {
+  return PRIORITY_TIERS.flatMap((tier) =>
+    interleave(
+      resend.filter((e) => e.priority === tier),
+      fresh.filter((e) => e.priority === tier),
+    ),
+  );
 }
 
 /**
