@@ -4121,6 +4121,16 @@ button.small-btn {
 .about-modal::backdrop {
   background: rgba(4, 5, 8, 0.6);
 }
+/* Every popup is one of these dialogs. While one is open the page behind holds still: a swipe or
+   wheel on the backdrop, or past the end of the popup's own scroll, would otherwise scroll the feed
+   underneath. The gutter stays where the scrollbar was, so nothing shifts sideways. */
+html:has(dialog.about-modal[open]) {
+  overflow: hidden;
+  scrollbar-gutter: stable;
+}
+.about-modal {
+  overscroll-behavior: contain;
+}
 .about-body {
   padding: 22px 24px 26px;
 }
@@ -4789,6 +4799,26 @@ button.small-btn {
 }
 .admin-tag-muted {
   color: var(--muted);
+}
+/* A title's text on a touch screen (touchTips.ts): fixed beside the tapped element. */
+.touch-tip {
+  position: fixed;
+  z-index: 60;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 10px 28px -10px rgba(0, 0, 0, 0.55);
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+  animation: touch-tip-in 0.12s ease-out;
+}
+@keyframes touch-tip-in {
+  from {
+    opacity: 0;
+  }
 }
 .admin-error {
   display: inline-block;
