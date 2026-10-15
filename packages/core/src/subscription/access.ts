@@ -65,6 +65,39 @@ export function decideAccess(
 }
 
 /**
+ * The active filters whose owner has access right now (admin, live whitelist entry or live
+ * subscription) - what the scan and the fast lane match against.
+ *
+ * Every first sign-in seeds an active starter filter, and accounts cost nothing to make (a fresh
+ * keypair), but only an account with access can read matches or receive alerts. Matching every
+ * active filter let throwaway accounts grow each scan's work, and the Match rows and notifies it
+ * writes, without limit - while a popular token's one match transaction, holding every user's
+ * rows, ran into its timeout and took paying users' alerts down with it. A filter whose owner's
+ * access lapses simply stops matching until it is renewed.
+ *
+ * The same rule as decideAccess, as one query: whitelist entries are few, so they are read first
+ * and folded into the owner condition.
+ */
+export async function loadEntitledActiveFilters(admins: ReadonlySet<string>, now: Date = new Date()) {
+  const whitelisted = await prisma.whitelist.findMany({
+    where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+    select: { walletAddress: true },
+  });
+  const wallets = [...admins, ...whitelisted.map((w) => w.walletAddress)];
+  return prisma.userFilter.findMany({
+    where: {
+      isActive: true,
+      user: {
+        OR: [
+          ...(wallets.length > 0 ? [{ walletAddress: { in: wallets } }] : []),
+          { subscription: { expiresAt: { gt: now } } },
+        ],
+      },
+    },
+  });
+}
+
+/**
  * Extend a user's access by `months`, from whichever is later: now, or their current expiry.
  *
  * Renewing early therefore stacks rather than discarding the remainder - the alternative punishes

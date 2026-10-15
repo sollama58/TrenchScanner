@@ -1,4 +1,6 @@
 import {
+  adminWalletSet,
+  loadEntitledActiveFilters,
   prisma,
   createLogger,
   matchesFilter,
@@ -118,6 +120,34 @@ export function markFilterPassComplete(filters: readonly Pick<UserFilter, "id" |
     const live = new Set(filters.map((f) => f.id));
     for (const id of passCompleteFor.keys()) if (!live.has(id)) passCompleteFor.delete(id);
   }
+}
+
+/**
+ * The filters the scan and the fast lane match this cycle: active ones whose owner has access
+ * (loadEntitledActiveFilters). A filter that has just gained access - its owner subscribed, renewed
+ * after a lapse, or was whitelisted - is re-armed (armedAt = now), as the API re-arms a filter
+ * switched on: it was skipped while its owner had no access, so everything it matches is backlog,
+ * and without this the first pass alerted on all of it at once. Process-local like the passes
+ * above: the first load after a restart only records the set.
+ */
+let entitledFilterIds: Set<string> | null = null;
+
+export async function loadMatchableFilters(env: Env): Promise<FilterWithUser[]> {
+  const filters = await loadEntitledActiveFilters(adminWalletSet(env));
+  const previous = entitledFilterIds;
+  entitledFilterIds = new Set(filters.map((f) => f.id));
+  if (!previous) return filters;
+  const gained = filters.filter((f) => !previous.has(f.id));
+  if (gained.length === 0) return filters;
+  const armedAt = new Date();
+  await prisma.userFilter.updateMany({ where: { id: { in: gained.map((f) => f.id) } }, data: { armedAt } });
+  for (const f of gained) f.armedAt = armedAt;
+  return filters;
+}
+
+/** Test hook: forget which filters were last loaded, so the next load re-arms none. */
+export function resetMatchableFilters(): void {
+  entitledFilterIds = null;
 }
 
 /** Test hook: forget every completed pass. */

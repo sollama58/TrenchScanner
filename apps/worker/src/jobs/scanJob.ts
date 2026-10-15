@@ -71,7 +71,12 @@ import { loadNarrativeReads } from "../tokensage/narrativeReads.js";
 import { noteUtilityLookups } from "../tokensage/utilityLookups.js";
 import { flushNowReads, noteNowWanted, takeNowStats } from "../tokensage/nowReads.js";
 import type { PricePathSeeder } from "./pricePathSeed.js";
-import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser } from "./matchDispatch.js";
+import {
+  createMatchesForCandidate,
+  loadMatchableFilters,
+  markFilterPassComplete,
+  type FilterWithUser,
+} from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct, FRESH_WITHIN_HOURS } from "./walletFreshness.js";
@@ -938,8 +943,8 @@ async function scanCycle(
   }
 
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
-  // do.
-  const activeFilters: FilterWithUser[] = await prisma.userFilter.findMany({ where: { isActive: true } });
+  // do. Only filters whose owner has access: see loadMatchableFilters.
+  const activeFilters: FilterWithUser[] = await loadMatchableFilters(env);
 
   // Batched fallback for mints RugCheck has no report for - resolved up front for the whole cycle
   // rather than one un-batched call at a time from inside the candidate loop.
