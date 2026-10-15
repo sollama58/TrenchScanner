@@ -3,11 +3,14 @@ import { usePolling } from "../hooks";
 import { pct, shortAddress } from "../format";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
 import { Load, Panel, Table, Tag, n, when } from "./adminShared";
+import { ModelUnderTheHood } from "./ModelTab";
 
 /**
  * The Admin "Models" section: how each seat makes its calls. One read (GET /admin/models/explain,
  * apps/api/src/modelExplain.ts) gives every seat's recipe, cutoff, call rate, what it leans on and
  * how it weighs its members; a seat's newest calls and one call's explanation load on demand.
+ * Below them sits "Under the hood" (the leaderboard, scoring guides, exams, evolution, signals and
+ * the AI reviewer), moved here from the public Models tab.
  */
 
 type Role = "rules" | "learner" | "stacked" | "blend" | "agreement" | "topslice" | "narrative";
@@ -151,6 +154,7 @@ export function ModelsAdmin() {
             <Lineup data={data} selected={seat?.id ?? null} onPick={setPicked} />
             {seat && <SeatPanel seat={seat} data={data} onPick={setPicked} />}
             {seat && <CallsPanel key={seat.id} seat={seat} />}
+            <ModelUnderTheHood />
           </div>
         );
       }}

@@ -472,6 +472,8 @@ export interface MarkerBarDatum {
   sub?: string;
   /** Drawn dimmer: a rate on too few calls to lean on. */
   thin?: boolean;
+  /** A small switch before the row (e.g. this model's calls in your live feed), outside the row's button. */
+  toggle?: { on: boolean; disabled?: boolean; title: string; label: string; onChange: () => void };
 }
 
 export interface BarMarker {
@@ -506,6 +508,7 @@ export function MarkerBars({
   // Headroom past the furthest bar or marker, on a 10% step, never past 100%.
   const top = Math.min(100, Math.max(10, Math.ceil((Math.max(0, ...values) * 1.12) / 10) * 10));
   const at = (v: number) => `${(Math.min(top, Math.max(0, v)) / top) * 100}%`;
+  const toggles = data.some((d) => d.toggle);
   return (
     <figure className="chart">
       <div className="legend">
@@ -518,7 +521,7 @@ export function MarkerBars({
           </span>
         ))}
       </div>
-      <div className={`mbar${onOpen ? " opens" : ""}`}>
+      <div className={`mbar${onOpen ? " opens" : ""}${toggles ? " toggles" : ""}`}>
         {columns && (
           <div className="mbar-row head-row" aria-hidden="true">
             <span>{columns.label}</span>
@@ -530,52 +533,79 @@ export function MarkerBars({
             {onOpen && <span />}
           </div>
         )}
-        {data.map((d) => (
-          <button
-            type="button"
-            className={`mbar-row${selected === d.id ? " on" : ""}${d.thin ? " thin" : ""}`}
-            key={d.id}
-            onMouseEnter={() => onSelect(d.id)}
-            onFocus={() => onSelect(d.id)}
-            onClick={() => {
-              onSelect(d.id);
-              onOpen?.(d.id);
-            }}
-            aria-pressed={onOpen ? undefined : selected === d.id}
-            aria-haspopup={onOpen ? "dialog" : undefined}
-          >
-            <span className="mbar-label">
-              {d.label}
-              {d.sub && <small>{d.sub}</small>}
-            </span>
-            <span className="mbar-track">
-              {d.value !== null && <span className="mbar-fill" style={{ width: at(d.value) }} />}
-              {markers.map((m) => (
-                <i key={m.kind} className={`mbar-marker ${m.kind}`} style={{ left: at(m.value) }} />
-              ))}
-            </span>
-            <span className="mbar-value num">
-              {d.display ?? (d.value === null ? "–" : `${d.value.toFixed(1)}%`)}
-              {d.note && <small className={d.noteTone}>{d.note}</small>}
-            </span>
-            {onOpen && (
-              <span className="mbar-open" aria-hidden="true">
-                <svg
-                  viewBox="0 0 24 24"
-                  width="14"
-                  height="14"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M9 6l6 6-6 6" />
-                </svg>
+        {data.map((d) => {
+          const row = (
+            <button
+              type="button"
+              className={`mbar-row${selected === d.id ? " on" : ""}${d.thin ? " thin" : ""}`}
+              key={d.id}
+              onMouseEnter={() => onSelect(d.id)}
+              onFocus={() => onSelect(d.id)}
+              onClick={() => {
+                onSelect(d.id);
+                onOpen?.(d.id);
+              }}
+              aria-pressed={onOpen ? undefined : selected === d.id}
+              aria-haspopup={onOpen ? "dialog" : undefined}
+            >
+              <span className="mbar-label">
+                {d.label}
+                {d.sub && <small>{d.sub}</small>}
               </span>
-            )}
-          </button>
-        ))}
+              <span className="mbar-track">
+                {d.value !== null && <span className="mbar-fill" style={{ width: at(d.value) }} />}
+                {markers.map((m) => (
+                  <i key={m.kind} className={`mbar-marker ${m.kind}`} style={{ left: at(m.value) }} />
+                ))}
+              </span>
+              <span className="mbar-value num">
+                {d.display ?? (d.value === null ? "–" : `${d.value.toFixed(1)}%`)}
+                {d.note && <small className={d.noteTone}>{d.note}</small>}
+              </span>
+              {onOpen && (
+                <span className="mbar-open" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M9 6l6 6-6 6" />
+                  </svg>
+                </span>
+              )}
+            </button>
+          );
+          if (!toggles) return row;
+          const tg = d.toggle;
+          return (
+            <div className="mbar-line" key={d.id}>
+              {tg ? (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={tg.on}
+                  aria-label={tg.label}
+                  title={tg.title}
+                  className={`switch mini${tg.on ? " on" : ""}`}
+                  disabled={tg.disabled}
+                  onClick={tg.onChange}
+                >
+                  <span className="switch-track">
+                    <span className="switch-thumb" />
+                  </span>
+                </button>
+              ) : (
+                <span className="mbar-switch-gap" />
+              )}
+              {row}
+            </div>
+          );
+        })}
         <div className="mbar-row axis-row" aria-hidden="true">
           <span />
           <span className="mbar-track bare">

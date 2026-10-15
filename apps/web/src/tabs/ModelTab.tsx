@@ -60,7 +60,8 @@ import { DAY_MS, dayStarts, pricingChangePoint } from "../pricingChange";
  * The Model tab: the curator contest. Several models train on the same graded history, each calls
  * on its own feed, a leaderboard ranks them on one composite score, and the Consensus learns from
  * the rest. The field evolves: each run breeds challengers from the leaders, and the best one
- * takes the weakest seat when it clearly out-examines it. The AI reviewer sits at the bottom, collapsed - it is a later focus.
+ * takes the weakest seat when it clearly out-examines it. The details behind it (Under the hood)
+ * live in the Admin panel: see ModelUnderTheHood.
  */
 export function ModelTab({ guest = false }: { guest?: boolean }) {
   const now = useNow(60_000);
@@ -94,14 +95,8 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
   // stand-in for an older API build without one.
   const base = lb.baseline ?? data.samples.byKind.find((k) => k.kind === "event");
   const following = lb.entries.filter((e) => lb.selectedModels.includes(e.id));
-  const consensus = lb.entries.find((e) => e.role === "stacked") ?? null;
-  const contenders = lb.entries.filter((e) => e.role !== "stacked");
   // The board's order is vs market (hour-matched lift): its first row is "top by lift".
   const leader = lb.entries[0] ?? null;
-  // "best" in the pipeline: the highest live 2x rate among seasoned models with enough graded calls.
-  const bestContender = contenders
-    .filter((e) => !e.composite.warmingUp && e.composite.live.graded >= MIN_GRADED_FOR_RATE)
-    .sort((a, b) => (b.composite.live.winRatePct ?? -1) - (a.composite.live.winRatePct ?? -1))[0];
   // Same list, same save, as the Live tab's model checkboxes.
   const setFeedModels = async (models: string[] | null) => {
     if (guest) return;
@@ -259,117 +254,6 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
       <WeekPanel learning={data.learning} board={lb} now={now} />
 
       <WinnerRunsPanel data={data} days={days} />
-
-      <UnderTheHood>
-        <LeaderboardPanel
-          board={lb}
-          days={days}
-          onSetModels={setFeedModels}
-          guest={guest}
-          refreshing={board.stale}
-          now={now}
-        />
-
-        <section className="panel">
-          <span className="eyebrow">The contest</span>
-          <h3>How a call is made</h3>
-          <p className="muted small">
-            Each model trains on the same graded history every few hours, makes its own calls on its own feed,
-            and is graded the same way: {data.rules.win}. The field evolves: every run breeds new variants of
-            the leaders, and a variant that clearly beats the weakest model takes its seat. The{" "}
-            <strong>Consensus</strong> doesn&apos;t read the market directly; it learns how far to trust each
-            of the others, and calls a token only when at least three of them call it too.
-          </p>
-          <ol className="pipeline" aria-label="How a call is made">
-            <PipelineStage
-              Icon={RadarIcon}
-              title="Scanner"
-              caption="decision moments"
-              count={base?.calls}
-              rate={base?.hitRate2xPct}
-            />
-            <PipelineStage
-              Icon={BrainIcon}
-              title={`${contenders.length} models`}
-              caption={
-                bestContender
-                  ? `best 2x (${MIN_GRADED_FOR_RATE}+ graded): ${bestContender.name}`
-                  : `none with ${MIN_GRADED_FOR_RATE}+ graded yet`
-              }
-              count={undefined}
-              rate={bestContender?.composite.live.winRatePct}
-            />
-            <PipelineStage
-              Icon={BrainIcon}
-              title="Consensus"
-              caption="calls"
-              count={consensus?.composite.live.calls}
-              rate={consensus?.composite.live.winRatePct}
-            />
-            <li className="stage goal">
-              <span className="stage-icon">
-                <TargetIcon size={16} />
-              </span>
-              <span className="stage-title">Goal</span>
-              <span className="stage-rate num">{t.hitRate2xPct}%</span>
-              <span className="stage-caption">
-                hit 2x · {t.hitRate4xPct}% hit 4x · {lb.scoring.tenXTargetPct ?? 25}% hit 10x ·{" "}
-                {lb.scoring.catchTargetPct ?? 75}% of runners caught
-              </span>
-            </li>
-          </ol>
-          <p className="faint small">
-            Live 2x rate over the last {days} days at each step. Entry: {data.rules.fill}. {RULE_NOTE}
-          </p>
-        </section>
-
-        <LeaderboardPanel
-          board={lb}
-          days={days}
-          onSetModels={setFeedModels}
-          guest={guest}
-          refreshing={board.stale}
-          now={now}
-          detailed
-        />
-
-        <HowItWorks board={lb} />
-
-        <EvolutionPanel board={lb} now={now} />
-
-        <TrainingPanel runs={data.runs} board={lb} targets={t} now={now} />
-
-        <div className="columns even">
-          <section className="panel">
-            <span className="eyebrow">Signals</span>
-            <h3>What the models look at</h3>
-            {data.importance && data.importance.features.length > 0 ? (
-              <>
-                <p className="muted small">
-                  {runName(data.runs.find((r) => r.id === data.importance!.modelId)) ??
-                    LEARNER_NAME[data.importance.learner]}{" "}
-                  {data.importance.learner !== "logistic"
-                    ? "- share of tree splits that use each signal."
-                    : "- share of standardized weight; ▲ more is better, ▼ less is better."}
-                </p>
-                <HBarChart
-                  data={data.importance.features.map((f) => ({
-                    label: `${f.direction === 1 ? "▲ " : f.direction === -1 ? "▼ " : ""}${f.label}`,
-                    value: f.sharePct,
-                    display: `${f.sharePct.toFixed(1)}%`,
-                  }))}
-                />
-              </>
-            ) : (
-              <p className="empty">Appears after the first training run.</p>
-            )}
-          </section>
-
-          <FeatureHealthPanel data={data} now={now} />
-        </div>
-
-        <AiReviewerPanel data={data} now={now} />
-      </UnderTheHood>
     </div>
   );
 }
@@ -525,6 +409,36 @@ function BaselineChart({
         ? "reached 10x within an hour"
         : "doubled within 15 minutes";
   const selCatch = selected?.liveCatch ?? null;
+  // The switch beside each name: whether that model's calls show on the reader's live feed. The
+  // same saved list as the Live tab's model picks; it changes only this reader's feed.
+  const [busy, setBusy] = useState(false);
+  const [feedError, setFeedError] = useState<string | null>(null);
+  const toggleFeed = async (id: string) => {
+    setBusy(true);
+    setFeedError(null);
+    try {
+      await onSetModels(toggledModels(board, id));
+    } catch (e) {
+      setFeedError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const feedToggle = (e: LeaderboardEntry) => {
+    const on = board.selectedModels.includes(e.id);
+    const onlyOne = on && board.selectedModels.length === 1;
+    return {
+      on,
+      disabled: busy || refreshing || loading || onlyOne,
+      label: `${e.name} on your live feed`,
+      title: onlyOne
+        ? "Your feed needs at least one model"
+        : on
+          ? `Showing ${e.name}'s calls on your live feed. Switch off to hide them.`
+          : `Show ${e.name}'s calls on your live feed`,
+      onChange: () => void toggleFeed(e.id),
+    };
+  };
 
   return (
     <section className={`panel${loading ? " stale" : ""}`} aria-busy={loading}>
@@ -610,6 +524,7 @@ function BaselineChart({
             </div>
           </div>
 
+          {feedError && <p className="error small">Couldn&apos;t change your feed: {feedError}</p>}
           {rows.length > 0 ? (
             <>
               <MarkerBars
@@ -628,6 +543,7 @@ function BaselineChart({
                     note: `${signedPct(profit)} profit`,
                     noteTone: profit === null || profit === 0 ? undefined : profit > 0 ? "up" : "down",
                     thin: thin(e),
+                    toggle: guest ? undefined : feedToggle(e),
                   };
                 })}
                 markers={[
@@ -682,7 +598,11 @@ function BaselineChart({
                 {caught ? "every model's catch together" : "the baseline"} over the same window. Under each
                 rate is its average profit per call, following every call with one fixed exit plan. Faded bars
                 rest on too few calls. <strong>Tap or click a model</strong> for its full record, past
-                versions and exam results. {RULE_NOTE}
+                versions and exam results.{" "}
+                {!guest && (
+                  <>The switch beside each name shows or hides that model&apos;s calls on your live feed. </>
+                )}{" "}
+                {RULE_NOTE}
               </p>
               <ModelDetailModal
                 entry={board.entries.find((e) => e.id === opened) ?? null}
@@ -881,6 +801,155 @@ function UnderTheHood({ children }: { children: ReactNode }) {
       </summary>
       {open && <div className="stack">{children}</div>}
     </details>
+  );
+}
+
+/**
+ * The details behind the Models tab - the leaderboard and every figure behind it, the scoring
+ * guides, training exams, evolution, the signals and the AI reviewer - shown in the Admin panel's
+ * Models section. It reads the same /curated reports as the Models tab (the same cached answers).
+ */
+export function ModelUnderTheHood() {
+  const now = useNow(60_000);
+  const days = PAGE_DAYS;
+  const [pick, setPick] = useState(0);
+  const insights = usePolling<ModelInsights>(`/curated/insights?days=${days}`, 120_000);
+  const board = usePolling<Leaderboard>(`/curated/models?days=${days}`, 120_000, String(pick));
+  const error = insights.error ?? board.error;
+  if (error && (!insights.data || !board.data))
+    return <p className="error">Couldn't load model data: {error.message}</p>;
+  if (!insights.data || !board.data)
+    return (
+      <div className="panel">
+        <Skeleton lines={4} height={18} />
+      </div>
+    );
+  const data = insights.data;
+  const lb = board.data;
+  const t = lb.targets;
+  const guest = false;
+  const base = lb.baseline ?? data.samples.byKind.find((k) => k.kind === "event");
+  const consensus = lb.entries.find((e) => e.role === "stacked") ?? null;
+  const contenders = lb.entries.filter((e) => e.role !== "stacked");
+  // "best" in the pipeline: the highest live 2x rate among seasoned models with enough graded calls.
+  const bestContender = contenders
+    .filter((e) => !e.composite.warmingUp && e.composite.live.graded >= MIN_GRADED_FOR_RATE)
+    .sort((a, b) => (b.composite.live.winRatePct ?? -1) - (a.composite.live.winRatePct ?? -1))[0];
+  const setFeedModels = async (models: string[] | null) => {
+    await saveFeedSettings({ models });
+    setPick((n) => n + 1);
+  };
+  return (
+    <UnderTheHood>
+      <LeaderboardPanel
+        board={lb}
+        days={days}
+        onSetModels={setFeedModels}
+        guest={guest}
+        refreshing={board.stale}
+        now={now}
+      />
+
+      <section className="panel">
+        <span className="eyebrow">The contest</span>
+        <h3>How a call is made</h3>
+        <p className="muted small">
+          Each model trains on the same graded history every few hours, makes its own calls on its own feed,
+          and is graded the same way: {data.rules.win}. The field evolves: every run breeds new variants of
+          the leaders, and a variant that clearly beats the weakest model takes its seat. The{" "}
+          <strong>Consensus</strong> doesn&apos;t read the market directly; it learns how far to trust each of
+          the others, and calls a token only when at least three of them call it too.
+        </p>
+        <ol className="pipeline" aria-label="How a call is made">
+          <PipelineStage
+            Icon={RadarIcon}
+            title="Scanner"
+            caption="decision moments"
+            count={base?.calls}
+            rate={base?.hitRate2xPct}
+          />
+          <PipelineStage
+            Icon={BrainIcon}
+            title={`${contenders.length} models`}
+            caption={
+              bestContender
+                ? `best 2x (${MIN_GRADED_FOR_RATE}+ graded): ${bestContender.name}`
+                : `none with ${MIN_GRADED_FOR_RATE}+ graded yet`
+            }
+            count={undefined}
+            rate={bestContender?.composite.live.winRatePct}
+          />
+          <PipelineStage
+            Icon={BrainIcon}
+            title="Consensus"
+            caption="calls"
+            count={consensus?.composite.live.calls}
+            rate={consensus?.composite.live.winRatePct}
+          />
+          <li className="stage goal">
+            <span className="stage-icon">
+              <TargetIcon size={16} />
+            </span>
+            <span className="stage-title">Goal</span>
+            <span className="stage-rate num">{t.hitRate2xPct}%</span>
+            <span className="stage-caption">
+              hit 2x · {t.hitRate4xPct}% hit 4x · {lb.scoring.tenXTargetPct ?? 25}% hit 10x ·{" "}
+              {lb.scoring.catchTargetPct ?? 75}% of runners caught
+            </span>
+          </li>
+        </ol>
+        <p className="faint small">
+          Live 2x rate over the last {days} days at each step. Entry: {data.rules.fill}. {RULE_NOTE}
+        </p>
+      </section>
+
+      <LeaderboardPanel
+        board={lb}
+        days={days}
+        onSetModels={setFeedModels}
+        guest={guest}
+        refreshing={board.stale}
+        now={now}
+        detailed
+      />
+
+      <HowItWorks board={lb} />
+
+      <EvolutionPanel board={lb} now={now} />
+
+      <TrainingPanel runs={data.runs} board={lb} targets={t} now={now} />
+
+      <div className="columns even">
+        <section className="panel">
+          <span className="eyebrow">Signals</span>
+          <h3>What the models look at</h3>
+          {data.importance && data.importance.features.length > 0 ? (
+            <>
+              <p className="muted small">
+                {runName(data.runs.find((r) => r.id === data.importance!.modelId)) ??
+                  LEARNER_NAME[data.importance.learner]}{" "}
+                {data.importance.learner !== "logistic"
+                  ? "- share of tree splits that use each signal."
+                  : "- share of standardized weight; ▲ more is better, ▼ less is better."}
+              </p>
+              <HBarChart
+                data={data.importance.features.map((f) => ({
+                  label: `${f.direction === 1 ? "▲ " : f.direction === -1 ? "▼ " : ""}${f.label}`,
+                  value: f.sharePct,
+                  display: `${f.sharePct.toFixed(1)}%`,
+                }))}
+              />
+            </>
+          ) : (
+            <p className="empty">Appears after the first training run.</p>
+          )}
+        </section>
+
+        <FeatureHealthPanel data={data} now={now} />
+      </div>
+
+      <AiReviewerPanel data={data} now={now} />
+    </UnderTheHood>
   );
 }
 

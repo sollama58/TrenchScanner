@@ -54,7 +54,8 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
             </span>
             <h2>Admin panel</h2>
             <p className="muted small">
-              The whole system at a glance. Model leaderboard, evolution and feature health are on the{" "}
+              The whole system at a glance. The model leaderboard, evolution and feature health are under{" "}
+              <strong>Models</strong> › Under the hood; the public view is the{" "}
               <a href="#model" onClick={() => goTo("model")}>
                 Models tab
               </a>
