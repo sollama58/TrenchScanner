@@ -101,7 +101,8 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
   const filters = usePolling<Filter[]>("/filters", 120_000);
   const config = usePolling<AppConfig>("/config", 600_000);
   const settings = useSettings();
-  const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000);
+  const [pick, setPick] = useState(0);
+  const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000, String(pick));
   // `opened` tells apart two editors for the same filter (or two new ones), so opening again starts
   // the form over instead of keeping the last one's keyword text.
   const [editing, setEditing] = useState<{ id: string | null; draft: FilterInput; opened: number } | null>(
@@ -340,7 +341,12 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
         </header>
         <div className="delivery-grid">
           <TelegramPanel board={board.data} />
-          <ModelPanel board={board.data} stale={board.stale} goTo={goTo} />
+          <ModelPanel
+            board={board.data}
+            stale={board.stale}
+            onChanged={() => setPick((n) => n + 1)}
+            goTo={goTo}
+          />
           <AlertsPanel prefs={settings?.alerts ?? null} />
         </div>
       </section>

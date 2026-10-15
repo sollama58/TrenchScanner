@@ -10,6 +10,7 @@ import {
   saveAlertPrefs,
   type NotificationState,
 } from "../alerts";
+import { ModelPicker, saveFeedSettings } from "./ModelPicker";
 import { Skeleton } from "./Charts";
 import { ArrowRightIcon, BellIcon, BrainIcon, VolumeIcon } from "./Icons";
 import { useNow } from "../hooks";
@@ -261,20 +262,20 @@ export function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
   );
 }
 
-/**
- * Which models' calls the reader gets, and the best performer. Read-only here: the models are
- * picked, and the default followed, with the switches on the Models tab (user decision 2026-10-15).
- */
 export function ModelPanel({
   board,
   stale,
+  onChanged,
   goTo,
 }: {
   board: Leaderboard | null;
   stale: boolean;
+  onChanged: () => void;
   goTo: (tab: "live" | "model") => void;
 }) {
   const now = useNow(60_000);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const following = board?.followBest ?? board?.followsDefault ?? true;
   const best = board?.entries.find((e) => e.id === board.defaultModel) ?? null;
   const tops = board
@@ -282,6 +283,19 @@ export function ModelPanel({
     : [];
   const rule = board?.defaultRule;
   const mine = board ? board.entries.filter((e) => board.selectedModels.includes(e.id)) : [];
+
+  const toggle = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await saveFeedSettings({ followBest: !following });
+      onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <section className="panel preferred-model">
@@ -297,6 +311,12 @@ export function ModelPanel({
         <Skeleton lines={3} />
       ) : (
         <div className={stale ? "stale" : ""}>
+          <Switch
+            on={following}
+            label="Always follow the top models"
+            disabled={busy || stale}
+            onToggle={() => void toggle()}
+          />
           <p className="muted">
             {following ? (
               <>
@@ -305,16 +325,16 @@ export function ModelPanel({
                   ? `: the ${rule.count} models with the best proven 2x rate plus the champion, and
                 switches by itself as that ranking changes (picked every ${Math.round(rule.refreshMinutes / 60)} hours).`
                   : ", the best performer right now, and switches by itself whenever a new best is chosen."}{" "}
-                Switching a model on or off on the Models tab switches you to your own picks.
+                Ticking a model below switches you to your own picks.
               </>
             ) : (
               <>
                 Your feed keeps your own picks: <strong>{mine.map((e) => e.name).join(", ") || "–"}</strong>.
-                It won&apos;t change when the top models do; <strong>Use the default</strong> on the Models
-                tab follows them again.
+                It won&apos;t change when the top models do.
               </>
             )}
           </p>
+          <ModelPicker board={board} disabled={busy || stale} onChanged={onChanged} />
           <div className="champion">
             <div>
               <span className="small muted">Best performer</span>
@@ -332,7 +352,7 @@ export function ModelPanel({
               </small>
             </div>
             <button className="ghost" onClick={() => goTo("model")}>
-              Choose models <ArrowRightIcon size={13} />
+              Leaderboard <ArrowRightIcon size={13} />
             </button>
           </div>
           {board.champion && (
@@ -344,6 +364,7 @@ export function ModelPanel({
           )}
         </div>
       )}
+      {error && <p className="error small">Couldn&apos;t switch: {error}</p>}
     </section>
   );
 }
