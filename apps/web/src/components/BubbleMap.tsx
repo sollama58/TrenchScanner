@@ -44,6 +44,8 @@ import {
   type BubbleMaps,
   type WideMap,
   withWideMap,
+  clusterNumberText,
+  funderNamed,
   largestSourceOnly,
   mapLinked,
   TRAIT_ICON,
@@ -698,7 +700,8 @@ function GroupPanel({
       title: "Clusters",
       groups: graph.clusters.map((c, i) => ({
         key: `c:${c.funder}`,
-        title: (
+        // An unknown funder isn't named, its cluster numbered instead (user ask 2026-10-15).
+        title: clusterNumberText(graph, i, names) ?? (
           <>
             Funder <WalletText wallet={c.funder} names={names} />
           </>
@@ -996,7 +999,8 @@ function BubbleSvg({
       // (placeLabels reads `members` too: it keeps the pill where its lines cross fewest bubbles.)
     };
     for (const n of graph.nodes) {
-      if (n.kind !== "funder") continue;
+      // An unknown funder's diamond goes unlabeled (user ask 2026-10-15): its colour ties it to its row.
+      if (n.kind !== "funder" || !n.wallet || !funderNamed(graph, n.wallet, names)) continue;
       const text = clipName(walletText(n.wallet, names));
       const slot = nodeSlot(n, graph);
       list.push({

@@ -13,6 +13,8 @@ import {
   needsRegroup,
   bundleOutline,
   kolBundleNodes,
+  clusterNumberText,
+  funderNamed,
   largestSourceOnly,
   mapLinked,
   TRAIT_ICON,
@@ -237,7 +239,7 @@ export async function renderBubbleCard(
       pct: c.pct,
       mark: { colour: slotColour(i % CLUSTER.length) },
       lead: `${c.wallets.length} wallets`,
-      from: `${walletText(c.funder, names)}${c.creatorLinked ? " · dev" : ""}`,
+      from: `${clusterNumberText(graph, i, names) ?? walletText(c.funder, names)}${c.creatorLinked ? " · dev" : ""}`,
       fromColour: MUTED,
     })),
     ...graph.sameTimeGroups.flatMap((_, i) => {
@@ -428,7 +430,8 @@ export async function renderBubbleCard(
   }[] = [];
   ctx.font = `600 ${PILL_FONT - 1}px ${MONO}`;
   for (const n of map.nodes) {
-    if (n.kind !== "funder" || !n.wallet) continue;
+    // As under the map, an unknown funder's diamond goes unlabeled (user ask 2026-10-15).
+    if (n.kind !== "funder" || !n.wallet || !funderNamed(map, n.wallet, names)) continue;
     const text = walletText(n.wallet, names);
     const short = text.length > 18 ? `${text.slice(0, 17)}…` : text;
     hubs.push({
