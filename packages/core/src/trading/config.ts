@@ -89,6 +89,11 @@ export const tradingBotConfigSchema = z.object({
   maxEntryTries: z.number().int().min(1).max(20).default(4),
   /** The most priority fee one swap may pay, in SOL (Jupiter sizes it under this cap). */
   maxPriorityFeeSol: z.number().min(0).default(0.002),
+  /**
+   * Send swaps through Jito's block engine with this tip (SOL) instead of a priority fee, so
+   * they can't be sandwiched on the way in or out; 0 sends them to the RPC as before.
+   */
+  jitoTipSol: z.number().min(0).default(0.0001),
   /** Never spend the wallet below this, in SOL: fees and token-account rent come out of it. */
   reserveSol: z.number().min(0).default(0.02),
   /** The exit plan; omitted means the project's default plan (EXIT_PLAN). */

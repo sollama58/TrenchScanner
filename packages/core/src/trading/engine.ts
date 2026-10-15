@@ -364,6 +364,11 @@ interface SwapRequest {
   maxPriorityFeeLamports: bigint;
   /** Exactly this priority fee, not the route's estimate: a retry after a send that never landed. */
   priorityFeeLamports?: bigint;
+  /**
+   * Land it through Jito with this tip instead of a priority fee (the bot's jitoTipSol), out of
+   * reach of sandwich bots. A retry's raised fee raises the tip instead.
+   */
+  jitoTipLamports?: bigint;
   /** Buy only: refuse a route that would deliver less (a retry must not chase the price). */
   minQuotedOut?: bigint;
   /**
@@ -379,6 +384,8 @@ interface BuiltSwap {
   route: "jupiter" | "pumpportal";
   quotedOut: string;
   expect: TradeExpectation;
+  /** The Jito tip it pays, when it lands through Jito. */
+  jitoTipLamports?: bigint;
 }
 
 /** The most any one trade may send to anyone but the wallet, whatever the trade's size or price. */
@@ -392,6 +399,11 @@ const MAX_EXTERNAL_LAMPORTS = 50_000_000n;
 function externalAllowance(tradeLamports: bigint): bigint {
   const share = tradeLamports / 50n;
   return (share > MAX_EXTERNAL_LAMPORTS ? MAX_EXTERNAL_LAMPORTS : share) + 1_000_000n;
+}
+
+/** The Jito tip a bot's swaps pay instead of a priority fee; undefined when it sends normally. */
+function jitoTip(config: TradingBotConfig): bigint | undefined {
+  return config.jitoTipSol > 0 ? solToLamports(config.jitoTipSol) : undefined;
 }
 
 /** The priority fee a bot may pay: its own setting, under the server's ceiling. */
@@ -471,8 +483,15 @@ async function fallbackFloor(ctx: PassContext, req: SwapRequest): Promise<bigint
 async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Promise<BuiltSwap> {
   const buy = req.side === "buy";
   const tradeLamports = buy ? req.amount : (req.valueHintLamports ?? 0n);
+  // A Jito tip is a transfer to a tip account: allowed on top of the route's usual allowance.
+  const jitoTip =
+    req.jitoTipLamports !== undefined && req.jitoTipLamports > 0n
+      ? req.priorityFeeLamports !== undefined && req.priorityFeeLamports > req.jitoTipLamports
+        ? req.priorityFeeLamports
+        : req.jitoTipLamports
+      : null;
   const limits = {
-    maxExternalLamports: externalAllowance(tradeLamports),
+    maxExternalLamports: externalAllowance(tradeLamports) + (jitoTip ?? 0n),
     maxPriorityFeeLamports: req.maxPriorityFeeLamports,
   };
   const maxSolDrop =
@@ -496,6 +515,7 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
       maxPriorityFeeLamports: Number(req.maxPriorityFeeLamports),
       priorityFeeLamports:
         req.priorityFeeLamports !== undefined ? Number(req.priorityFeeLamports) : undefined,
+      jitoTipLamports: jitoTip !== null ? Number(jitoTip) : undefined,
     });
     const minOut = BigInt(quote.otherAmountThreshold);
     // Jupiter's route instruction must carry no more slippage than this swap asked for.
@@ -504,6 +524,7 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
       ...built,
       route: "jupiter",
       quotedOut: quote.outAmount,
+      ...(jitoTip !== null ? { jitoTipLamports: jitoTip } : {}),
       expect: buy
         ? { kind: "buy", mint: req.mint, minOut, maxSolDrop, ...jupiterLimits }
         : {
@@ -577,8 +598,9 @@ async function executeSwap(
       route: built.route,
       inAmount: req.amount.toString(),
       quotedOut: built.quotedOut,
-      // What this try pays to land: a retry after it never landed doubles it (feeForRetry).
-      priorityFeeLamports: totals.priorityFeeLamports,
+      // What this try pays to land (its Jito tip, through Jito): a retry after it never landed
+      // doubles it (feeForRetry).
+      priorityFeeLamports: built.jitoTipLamports ?? totals.priorityFeeLamports,
     },
   });
   const sendError = await ctx.deps.rpc.send(rawTx);
@@ -1467,6 +1489,7 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
       slippageBps,
       maxPriorityFeeLamports: maxFee,
       priorityFeeLamports: feeForRetry(maxFee, lastSale),
+      jitoTipLamports: jitoTip(config),
       valueHintLamports,
     },
   );
@@ -1783,7 +1806,13 @@ async function runBotEntries(
       }
       throw err;
     }
-    if (await attemptEntry(ctx, wallet, position, { slippageBps, maxFee: priorityFee(ctx, config) })) {
+    if (
+      await attemptEntry(ctx, wallet, position, {
+        slippageBps,
+        maxFee: priorityFee(ctx, config),
+        jitoTip: jitoTip(config),
+      })
+    ) {
       logger.info("entry sent", { userId: bot.userId, mint: signal.mint, source: signal.label });
     }
   }
@@ -1799,7 +1828,13 @@ async function attemptEntry(
   ctx: PassContext,
   wallet: Wallet,
   position: PositionRow,
-  opts: { slippageBps: number; maxFee: bigint; exactFee?: bigint; minQuotedOut?: bigint },
+  opts: {
+    slippageBps: number;
+    maxFee: bigint;
+    exactFee?: bigint;
+    minQuotedOut?: bigint;
+    jitoTip?: bigint;
+  },
 ): Promise<boolean> {
   try {
     await executeSwap(
@@ -1816,6 +1851,7 @@ async function attemptEntry(
         maxPriorityFeeLamports: opts.maxFee,
         priorityFeeLamports: opts.exactFee,
         minQuotedOut: opts.minQuotedOut,
+        jitoTipLamports: opts.jitoTip,
       },
     );
     ctx.summary.buys++;
@@ -1934,6 +1970,7 @@ async function retryEntry(ctx: PassContext, position: PositionRow, now: Date) {
     slippageBps,
     maxFee,
     exactFee: feeForRetry(maxFee, orders[orders.length - 1] ?? null),
+    jitoTip: jitoTip(config),
     minQuotedOut: first ? (BigInt(first.quotedOut) * BigInt(10_000 - slippageBps)) / 10_000n : undefined,
   });
   if (sent) {

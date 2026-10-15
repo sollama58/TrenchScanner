@@ -150,6 +150,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
     backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
+    jitoUrl: env.TRADING_JITO_URL || undefined,
   });
   const models = enabledContestants(env.CURATOR_CONTESTANTS).map((c) => ({ id: c.id, name: c.name }));
   const serverAddress = looksLikeSolanaAddress(env.TRADING_SERVER_WALLET_ADDRESS)

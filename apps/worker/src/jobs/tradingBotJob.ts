@@ -29,6 +29,7 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
     backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
+    jitoUrl: env.TRADING_JITO_URL || undefined,
   });
   const swap = new JupiterSwapClient({
     // The bot's own key only: sharing the scan's would let a price sweep rate-limit a stop-loss.

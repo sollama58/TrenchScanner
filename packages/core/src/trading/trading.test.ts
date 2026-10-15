@@ -23,7 +23,7 @@ import {
   openWalletSecret,
   sealWalletSecret,
 } from "./keyVault.js";
-import { TradingRpc } from "./rpc.js";
+import { TradingRpc, tipsJito } from "./rpc.js";
 import { decideExit, ladderSoldFraction, sellAmount } from "./exitEngine.js";
 import { associatedTokenAddress, checkInstructions, PROGRAM } from "./txGuard.js";
 import {
@@ -707,6 +707,22 @@ describe("TradingRpc backup endpoint", () => {
       expect(await rpc.send("AAAA")).toBeNull();
       expect(down.seen).toContain("sendTransaction");
       expect(backup.seen).toContain("sendTransaction");
+      // A transaction tipping Jito goes to the block engine alone.
+      const tipped = Buffer.from(
+        buildSolTransfer({
+          from: OWNER,
+          to: "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
+          lamports: 100_000n,
+          recentBlockhash: BLOCKHASH,
+        }),
+      ).toString("base64");
+      expect(tipsJito(tipped)).toBe(true);
+      down.seen.length = 0;
+      backup.seen.length = 0;
+      const viaJito = new TradingRpc({ rpcUrl: down.url, backupUrl: down.url, jitoUrl: `${backup.url}/` });
+      expect(await viaJito.send(tipped)).toBeNull();
+      expect(backup.seen).toEqual(["sendTransaction"]);
+      expect(down.seen).toEqual([]);
       // Without a backup the same outage is "no answer".
       expect(await new TradingRpc({ rpcUrl: down.url }).getBalance(OWNER)).toBeNull();
     } finally {

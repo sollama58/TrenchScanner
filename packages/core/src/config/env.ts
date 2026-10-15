@@ -919,6 +919,9 @@ const envSchema = z.object({
   // A second Solana RPC for the bot (another provider than SOLANA_RPC_URL / Helius): asked when
   // the first gives no answer, and sent every transaction too. Empty: none.
   TRADING_BACKUP_RPC_URL: z.string().optional().default(""),
+  // Jito's block engine for swaps that tip it (a bot's jitoTipSol); empty is mainnet's default
+  // (https://mainnet.block-engine.jito.wtf). A regional one (ny., amsterdam., ...) lands faster nearer it.
+  TRADING_JITO_URL: z.string().optional().default(""),
   // How often the worker's trading-bot job runs (seconds): settles swaps, manages exits, buys.
   TRADING_BOT_INTERVAL_SECONDS: z.coerce.number().min(2).default(5),
   // Optional server-wide ceilings, whatever a bot's settings say. Unset (the default since

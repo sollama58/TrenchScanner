@@ -68,6 +68,7 @@ async function main() {
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
     backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
+    jitoUrl: env.TRADING_JITO_URL || undefined,
   });
   if (!env.HELIUS_API_KEY && !env.SOLANA_RPC_URL) fail("RPC", "set HELIUS_API_KEY or SOLANA_RPC_URL");
   const height = await rpc.getBlockHeight();

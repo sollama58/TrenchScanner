@@ -2,6 +2,31 @@ import { fetchJson } from "../datasources/httpClient.js";
 import { resolveSolanaRpcUrl, type SolanaRpcOptions } from "../subscription/solanaRpc.js";
 import type { GuardRpc, ParsedAccountState, WalletTokenAccount } from "./txGuard.js";
 import { PROGRAM } from "./txGuard.js";
+import { decodeMessage, parseWireTransaction } from "./transaction.js";
+
+/** Jito's tip accounts (getTipAccounts, mainnet): a transaction paying one is for its block engine. */
+export const JITO_TIP_ACCOUNTS = new Set([
+  "96gYZGLnJYVFmbjzopPSU6QiEV5fGqZNyN9nmNhvrZU5",
+  "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",
+  "Cw8CFyM9FkoMi7K7Crf6HNQqf4uEMzpKw6QNghXLvLkY",
+  "ADaUMid9yfUytqMBgopwjb2DTLSokTSzL1zt6iGPaS49",
+  "DfXygSm4jCyNCybVYYK6DwvWqjKee8pbDmJGcLWNDXjh",
+  "ADuUkR4vqLUMWXxW9gh6D6L8pMSawimctcNZ5pGwDcEt",
+  "DttWaMuVvTiduZRnguLF7jNxTgiMBZ1hyAumKUiL2KRL",
+  "3AVi9Tg9Uo68tJfuvoKvqKNWKkC5wPdSSdeBnizKZ6jT",
+]);
+
+export const DEFAULT_JITO_BLOCK_ENGINE_URL = "https://mainnet.block-engine.jito.wtf";
+
+/** Whether a signed transaction tips Jito (names a tip account in its own keys). */
+export function tipsJito(base64Tx: string): boolean {
+  try {
+    const keys = decodeMessage(parseWireTransaction(Buffer.from(base64Tx, "base64")).message).staticKeys;
+    return keys.some((k) => JITO_TIP_ACCOUNTS.has(k));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The chain calls the trading bot makes. Its own small client rather than more methods on
@@ -100,9 +125,13 @@ export class TradingRpc implements GuardRpc {
   /** A second endpoint (TRADING_BACKUP_RPC_URL): asked when the first gives no answer, and sent every transaction too. */
   readonly backupUrl: string | null;
 
-  constructor(options: SolanaRpcOptions & { backupUrl?: string } = {}) {
+  /** Jito's block engine, for the transactions that tip it. */
+  readonly jitoUrl: string;
+
+  constructor(options: SolanaRpcOptions & { backupUrl?: string; jitoUrl?: string } = {}) {
     this.url = resolveSolanaRpcUrl(options);
     this.backupUrl = options.backupUrl && options.backupUrl !== this.url ? options.backupUrl : null;
+    this.jitoUrl = (options.jitoUrl || DEFAULT_JITO_BLOCK_ENGINE_URL).replace(/\/$/, "");
   }
 
   /**
@@ -295,6 +324,23 @@ export class TradingRpc implements GuardRpc {
    * forwarded. Returns the node's error text, if any, for the record.
    */
   async send(base64Tx: string): Promise<string | null> {
+    // A swap that tips Jito goes to Jito's block engine alone: through an ordinary RPC it would be
+    // in reach of the sandwich bots the tip is paid to avoid. Only when Jito doesn't take it does
+    // it fall back to the RPCs.
+    if (tipsJito(base64Tx)) {
+      try {
+        const out = await this.callAt<string>(
+          `${this.jitoUrl}/api/v1/transactions`,
+          "sendTransaction",
+          [base64Tx, { encoding: "base64" }],
+          10_000,
+          0,
+        );
+        if (out.answered) return null;
+      } catch {
+        /* refused: try the RPCs */
+      }
+    }
     // To every endpoint at once: the same signed bytes can land only once, and two paths to the
     // leader beat one.
     const urls = this.backupUrl ? [this.url, this.backupUrl] : [this.url];

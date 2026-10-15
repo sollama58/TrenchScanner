@@ -83,6 +83,7 @@ class FakeChain {
   estimateFee = 20_000n;
   /** The exact priority fee each swap build was asked for (undefined: the estimate). */
   feeRequests: (number | undefined)[] = [];
+  tipRequests: (number | undefined)[] = [];
   private nonce = 1n;
 
   key = (owner: string, mint: string) => `${owner}:${mint}`;
@@ -283,10 +284,11 @@ class FakeChain {
         priceImpactPct: "0",
       } satisfies SwapQuote;
     },
-    swapTransaction: async ({ quote, userPublicKey, priorityFeeLamports }) => {
+    swapTransaction: async ({ quote, userPublicKey, priorityFeeLamports, jitoTipLamports }) => {
       const buying = quote.inputMint === WSOL_MINT;
       const mint = buying ? quote.outputMint : quote.inputMint;
       this.feeRequests.push(priorityFeeLamports);
+      this.tipRequests.push(jitoTipLamports);
       return {
         transaction: this.register(
           userPublicKey,
@@ -390,7 +392,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     const data = {
       enabled: true,
       signalsFrom: new Date(clock.getTime() - 60_000),
-      config: { sources: { models: ["rules"], requireAiBuy: false }, buySol: 0.05, ...config },
+      config: { sources: { models: ["rules"], requireAiBuy: false }, buySol: 0.05, jitoTipSol: 0, ...config },
     };
     await prisma.tradingBot.upsert({ where: { userId }, create: { userId, ...data }, update: data });
   }
@@ -711,6 +713,18 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     const p = await position();
     expect(p.status).toBe("open");
     expect(p.tokensBought).toBe("1000000000");
+  });
+
+  it("sends swaps through Jito with the bot's tip, recording the tip as what the try paid", async () => {
+    await freshSignal({ jitoTipSol: 0.0002 });
+    chain.tipRequests = [];
+    expect((await tick()).buys).toBe(1);
+    await tick();
+    const p = await position();
+    expect(p.status).toBe("open");
+    const [order] = await prisma.tradingOrder.findMany({ where: { positionId: p.id } });
+    expect(order!.priorityFeeLamports).toBe(200_000n);
+    expect(chain.tipRequests).toEqual([200_000]);
   });
 
   it("retries a buy that expired unlanded, doubling the fee it paid", async () => {
@@ -1098,7 +1112,7 @@ describe.skipIf(!dbAvailable)("the server wallet", () => {
     const data = {
       enabled: true,
       signalsFrom: new Date(Date.now() - 60_000),
-      config: { sources: { models: ["rules"], requireAiBuy: false }, buySol: 0.05 },
+      config: { sources: { models: ["rules"], requireAiBuy: false }, buySol: 0.05, jitoTipSol: 0 },
     };
     await prisma.tradingBot.upsert({
       where: { userId: serverId },

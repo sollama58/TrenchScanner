@@ -104,6 +104,8 @@ export interface SwapClient {
     maxPriorityFeeLamports: number;
     /** Instead of the estimate, exactly this fee (a retry raising its fee); never over the max. */
     priorityFeeLamports?: number;
+    /** A Jito tip instead of any priority fee: the transaction is for Jito's block engine. */
+    jitoTipLamports?: number;
   }): Promise<{ transaction: Uint8Array; lastValidBlockHeight: number | null }>;
   /** USD prices for mints (SOL included when asked); a mint Jupiter has no reliable price for is absent. */
   pricesUsd(mints: string[]): Promise<Map<string, number>>;
@@ -251,16 +253,18 @@ export class JupiterSwapClient implements SwapClient {
           // Jupiter's estimate from recent fees ("veryHigh": the 75th percentile) under our cap, or,
           // for a retry after a send that never landed, exactly the raised fee.
           prioritizationFeeLamports:
-            exact !== null
-              ? exact
-              : input.maxPriorityFeeLamports > 0
-                ? {
-                    priorityLevelWithMaxLamports: {
-                      maxLamports: input.maxPriorityFeeLamports,
-                      priorityLevel: "veryHigh",
-                    },
-                  }
-                : undefined,
+            input.jitoTipLamports !== undefined && input.jitoTipLamports > 0
+              ? { jitoTipLamports: input.jitoTipLamports }
+              : exact !== null
+                ? exact
+                : input.maxPriorityFeeLamports > 0
+                  ? {
+                      priorityLevelWithMaxLamports: {
+                        maxLamports: input.maxPriorityFeeLamports,
+                        priorityLevel: "veryHigh",
+                      },
+                    }
+                  : undefined,
         }),
       },
       "Jupiter swap",
