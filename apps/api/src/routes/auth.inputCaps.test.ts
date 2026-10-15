@@ -18,10 +18,24 @@ describe("sign-in input caps", () => {
       const res = await app.inject({
         method: "POST",
         url: "/auth/verify",
-        payload: { method: "signMessage", walletAddress: "z".repeat(200_000), nonce: "x", signature: "x" },
+        payload: { method: "signMessage", walletAddress: "z".repeat(50_000), nonce: "x", signature: "x" },
       });
       expect(res.statusCode).toBe(400);
       expect(Date.now() - started).toBeLessThan(1000);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses a body over the API's 64KB cap before parsing it", async () => {
+    const app = await buildServer(loadEnv());
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/verify",
+        payload: { method: "signMessage", walletAddress: "z".repeat(200_000), nonce: "x", signature: "x" },
+      });
+      expect(res.statusCode).toBe(413);
     } finally {
       await app.close();
     }

@@ -86,6 +86,21 @@ describe.skipIf(!dbAvailable)("telegram routes", () => {
     expect(junk.statusCode).toBe(200);
   });
 
+  it("checks the webhook secret before reading the body", async () => {
+    // Over the API's 64KB body cap but under the webhook's own 1MB: with the secret missing it is
+    // refused as unauthorized, not read and then refused.
+    const big = { update_id: 1, pad: "x".repeat(100_000) };
+    const bad = await app.inject({ method: "POST", url: "/telegram/webhook", payload: big });
+    expect(bad.statusCode).toBe(401);
+    const good = await app.inject({
+      method: "POST",
+      url: "/telegram/webhook",
+      headers: { "x-telegram-bot-api-secret-token": webhookSecret(TOKEN) },
+      payload: big,
+    });
+    expect(good.statusCode).toBe(200);
+  });
+
   it("lists, adjusts and unlinks only the caller's chats", async () => {
     const mine = await prisma.telegramChat.create({
       data: {
