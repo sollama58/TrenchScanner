@@ -6,6 +6,7 @@ import {
   explainScore,
   liveCatch,
   mixCatch,
+  type AddCandidate,
   marketLift,
   noteRunners,
   pooledRecord,
@@ -376,18 +377,42 @@ describe("mixCatch", () => {
       { model: "wide", token: "a" },
       { model: "wide", token: "b" },
       { model: "wide", token: "e" },
+      { model: "spray", token: "b" },
+      { model: "spray", token: "d" },
+      { model: "spray", token: "e" },
+      { model: "precise", token: "e" },
+      { model: "loser", token: "e" },
+      { model: "broke", token: "e" },
+      { model: "warm", token: "e" },
       { model: "retired", token: "b" },
     ],
     new Map([
       ["old", at(0)],
       ["new", at(5)],
       ["wide", at(0)],
+      ["spray", at(0)],
+      ["precise", at(5)],
+      ["loser", at(5)],
+      ["broke", at(5)],
+      ["warm", at(5)],
       ["quiet", at(0)],
     ]),
   );
+  const good = { seasoned: true, winRatePct: 40, lift: 1.5, avgReturnPct: 12 };
+  const candidates = new Map<string, AddCandidate>([
+    ["old", { ...good, calls: 10 }],
+    ["new", { ...good, calls: 10 }],
+    ["wide", { ...good, calls: 20 }],
+    // A runner every hundred calls: it fires at everything.
+    ["spray", { ...good, calls: 200, winRatePct: 12, lift: 1 }],
+    ["precise", { ...good, calls: 4 }],
+    ["loser", { ...good, calls: 4, lift: 0.8 }],
+    ["broke", { ...good, calls: 4, avgReturnPct: -5 }],
+    ["warm", { ...good, calls: 4, seasoned: false }],
+  ]);
 
   it("counts a runner caught when any seat in the mix caught it, since the mix's earliest start", () => {
-    const mix = mixCatch(ledger, ["new", "old"]);
+    const mix = mixCatch(ledger, ["new", "old"], candidates);
     expect(mix).toMatchObject({ runners: 5, caught: 3, pct: 60, models: ["new", "old"] });
     expect(mix.since).toEqual(at(0));
     // c is caught by both, so it is neither seat's alone.
@@ -398,21 +423,38 @@ describe("mixCatch", () => {
   });
 
   it("matches a seat's own catch rate for a mix of one", () => {
-    expect(mixCatch(ledger, ["new"])).toMatchObject({ runners: 3, caught: 2, pct: 66.7 });
+    expect(mixCatch(ledger, ["new"], candidates)).toMatchObject({ runners: 3, caught: 2, pct: 66.7 });
   });
 
-  it("suggests the seats that would raise the share, best first, and only those", () => {
-    const mix = mixCatch(ledger, ["new"]);
-    // wide adds a, b, e (and starts earlier, so a and b join the runners): 5 of 5.
-    // old adds a but brings in a and b as runners: 3 of 5 is below 66.7%, so it isn't offered.
-    expect(mix.additions).toEqual([{ id: "wide", caught: 5, runners: 5, pct: 100 }]);
+  it("suggests only seats that beat the market and make money, ranked by runners added per call", () => {
+    const mix = mixCatch(ledger, ["new"], candidates);
+    // precise: +1 runner on 4 calls (0.25 a call). wide: +3 (a, b, e; it starts earlier, so a and
+    // b join the runners) on 20 calls (0.15). spray: +2 (b, e) on 200 calls (0.01): last, though
+    // it adds more than precise. old would lower the share; loser trails the market, broke loses
+    // money, warm is still warming up, quiet has no record.
+    expect(mix.additions.map((a) => [a.id, a.adds, a.addsPerCall, a.pct])).toEqual([
+      ["precise", 1, 0.25, 100],
+      ["wide", 3, 0.15, 100],
+      ["spray", 2, 0.01, 80],
+    ]);
+    expect(mix.additions[0]).toMatchObject({
+      caught: 3,
+      runners: 3,
+      calls: 4,
+      winRatePct: 40,
+      avgReturnPct: 12,
+    });
   });
 
   it("leaves out seats not on the board and reads null with no seats", () => {
-    expect(mixCatch(ledger, ["retired", "old"]).models).toEqual(["old"]);
-    const none = mixCatch(ledger, []);
+    expect(mixCatch(ledger, ["retired", "old"], candidates).models).toEqual(["old"]);
+    const none = mixCatch(ledger, [], candidates);
     expect(none).toMatchObject({ runners: 0, caught: 0, pct: null, since: null, members: [] });
-    expect(none.additions.map((a) => a.id)).toEqual(["new", "wide", "old"]);
+    expect(none.additions[0]?.id).toBe("precise");
+  });
+
+  it("suggests nothing without the seats' records", () => {
+    expect(mixCatch(ledger, ["new"], new Map()).additions).toEqual([]);
   });
 });
 
