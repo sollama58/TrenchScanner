@@ -3,6 +3,7 @@ import "../bootstrap-env.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { prisma, loadEnv, type CandidateToken, type DexScreenerClient } from "@trenchscanner/core";
 import { runFastMatchCycle } from "./fastMatchJob.js";
+import { resetMatchableFilters } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -55,8 +56,13 @@ async function seedVetted(suffix: string, overrides: Record<string, unknown> = {
   return token;
 }
 
-async function seedSubscriber(suffix: string) {
+async function seedSubscriber(suffix: string, subscribed = true) {
   const user = await prisma.user.create({ data: { walletAddress: `${TAG}-${suffix}` } });
+  // Only filters whose owner has access are matched (loadEntitledActiveFilters).
+  if (subscribed)
+    await prisma.subscription.create({
+      data: { userId: user.id, expiresAt: new Date(Date.now() + 86_400_000), source: "BURN" },
+    });
   await prisma.userFilter.create({
     // Armed long ago: these tests are about alerting, not a just-applied filter settling in.
     data: {
@@ -79,6 +85,7 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
   const env = dbAvailable ? loadEnv() : (undefined as never);
 
   afterEach(async () => {
+    resetMatchableFilters();
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
     await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
@@ -187,6 +194,31 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
 
     await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
+  });
+
+  it("matches no filter whose owner has no access", async () => {
+    const token = await seedVetted("free");
+    const paid = await seedSubscriber("paid");
+    const free = await seedSubscriber("free", false);
+
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
+
+    expect(await prisma.match.count({ where: { tokenId: token.id, userId: paid.id } })).toBe(1);
+    expect(await prisma.match.count({ where: { tokenId: token.id, userId: free.id } })).toBe(0);
+  });
+
+  it("re-arms a filter whose owner just gained access, so its backlog doesn't alert at once", async () => {
+    const token = await seedVetted("gained");
+    const dex = stubDexScreener({ [token.mintAddress]: {} });
+    // A first pass records which filters were matchable; the newcomer is not among them yet.
+    await runFastMatchCycle(dex, env);
+    const newcomer = await seedSubscriber("newcomer");
+
+    await runFastMatchCycle(dex, env);
+
+    expect(await prisma.match.count({ where: { tokenId: token.id, userId: newcomer.id } })).toBe(0);
+    const filter = await prisma.userFilter.findFirstOrThrow({ where: { userId: newcomer.id } });
+    expect(Date.now() - filter.armedAt.getTime()).toBeLessThan(60_000);
   });
 
   it("writes no snapshot for a token whose every match is already on cooldown", async () => {

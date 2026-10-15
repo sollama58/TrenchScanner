@@ -7,6 +7,7 @@ import {
   resolveAccess,
   extendedExpiry,
   decideAccess,
+  loadEntitledActiveFilters,
 } from "./access.js";
 import { SUBSCRIPTION_MINT, SUBSCRIPTION_RAW_PER_MONTH, SUBSCRIPTION_DAYS } from "./constants.js";
 import type { BurnCredit } from "./parseBurn.js";
@@ -284,5 +285,56 @@ describe.skipIf(!dbAvailable)("burn crediting", () => {
     expect(access.hasAccess).toBe(true);
     expect(access.reason).toBe("admin");
     expect(access.expiresAt).toBeNull();
+  });
+});
+
+describe.skipIf(!dbAvailable)("loadEntitledActiveFilters", () => {
+  const P = `EntitledTest${RUN}`;
+  afterAll(async () => {
+    await prisma.whitelist.deleteMany({ where: { walletAddress: { startsWith: P } } });
+    await prisma.user.deleteMany({ where: { walletAddress: { startsWith: P } } });
+  });
+
+  it("keeps admins, live whitelist entries and live subscriptions; drops free and lapsed accounts", async () => {
+    const day = 86_400_000;
+    const make = async (name: string, isActive = true) => {
+      const user = await prisma.user.create({ data: { walletAddress: `${P}-${name}` } });
+      await prisma.userFilter.create({ data: { userId: user.id, name, isActive } });
+      return user;
+    };
+    const subscribed = await make("subscribed");
+    await prisma.subscription.create({
+      data: { userId: subscribed.id, expiresAt: new Date(Date.now() + day), source: "BURN" },
+    });
+    const lapsed = await make("lapsed");
+    await prisma.subscription.create({
+      data: { userId: lapsed.id, expiresAt: new Date(Date.now() - day), source: "BURN" },
+    });
+    await make("whitelisted");
+    await prisma.whitelist.create({ data: { walletAddress: `${P}-whitelisted`, addedBy: "test" } });
+    await make("expiredWhitelist");
+    await prisma.whitelist.create({
+      data: {
+        walletAddress: `${P}-expiredWhitelist`,
+        addedBy: "test",
+        expiresAt: new Date(Date.now() - day),
+      },
+    });
+    await make("admin");
+    await make("free");
+    const paused = await make("paused", false);
+    await prisma.subscription.create({
+      data: { userId: paused.id, expiresAt: new Date(Date.now() + day), source: "BURN" },
+    });
+
+    const mine = new Set(
+      (await prisma.user.findMany({ where: { walletAddress: { startsWith: P } }, select: { id: true } })).map(
+        (u) => u.id,
+      ),
+    );
+    const names = (await loadEntitledActiveFilters(new Set([`${P}-admin`])))
+      .filter((f) => mine.has(f.userId))
+      .map((f) => f.name);
+    expect(names.sort()).toEqual(["admin", "subscribed", "whitelisted"]);
   });
 });

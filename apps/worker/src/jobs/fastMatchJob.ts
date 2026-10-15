@@ -11,7 +11,12 @@ import {
   type OnChainProfile,
   type NarrativeRead,
 } from "@trenchscanner/core";
-import { createMatchesForTargets, resolveAlertTargets, type FilterWithUser } from "./matchDispatch.js";
+import {
+  createMatchesForTargets,
+  loadMatchableFilters,
+  resolveAlertTargets,
+  type FilterWithUser,
+} from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { recentScanVerdicts, type VettedEntry } from "./vettedTokens.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
@@ -170,7 +175,8 @@ export async function runFastMatchCycle(
 
   // Nothing to be fast about if nobody is filtering. Checked first because it is the cheapest
   // question and it short-circuits the whole pass on a deployment with no active users.
-  const activeFilters: FilterWithUser[] = await prisma.userFilter.findMany({ where: { isActive: true } });
+  // Only filters whose owner has access, as in the scan: see loadMatchableFilters.
+  const activeFilters: FilterWithUser[] = await loadMatchableFilters(env);
   if (activeFilters.length === 0) return { stagesMs };
 
   const vettedSince = new Date(startedAt - VETTED_WITHIN_MINUTES * 60_000);
