@@ -36,7 +36,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   bubbleSideLinks: true,
   narrativeNote: null,
   streamTab: false,
-  lighthouseTab: false,
+  // On for everyone by default (user ask 2026-10-15); a new key, so the old opt-in's saved "off" doesn't hide it.
+  hideLighthouseTab: false,
   outline: null,
   // Off by default (user ask 2026-10-14); an account that saved it on keeps it on.
   outlineResult: false,
@@ -234,7 +235,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     bubbleSideLinks: typeof r.bubbleSideLinks === "boolean" ? r.bubbleSideLinks : d.bubbleSideLinks,
     narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
     streamTab: typeof r.streamTab === "boolean" ? r.streamTab : d.streamTab,
-    lighthouseTab: typeof r.lighthouseTab === "boolean" ? r.lighthouseTab : d.lighthouseTab,
+    hideLighthouseTab: typeof r.hideLighthouseTab === "boolean" ? r.hideLighthouseTab : d.hideLighthouseTab,
     outline: hex(r.outline),
     outlineResult: typeof r.outlineResult === "boolean" ? r.outlineResult : d.outlineResult,
     hideBelowMcap: typeof r.hideBelowMcap === "boolean" ? r.hideBelowMcap : d.hideBelowMcap,
@@ -268,7 +269,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     quickLinks,
     narrativeNote,
     streamTab,
-    lighthouseTab,
+    hideLighthouseTab,
     hideBelowMcap,
     hideBelowMcapUsd,
   } = current;
@@ -285,7 +286,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     quickLinks,
     narrativeNote,
     streamTab,
-    lighthouseTab,
+    hideLighthouseTab,
     hideBelowMcap,
     hideBelowMcapUsd,
   });
@@ -294,7 +295,11 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
 /** Whether two appearances look the same (hidden fields in any order). */
 /** The default look, keeping the reader's tab choices (optional tabs aren't part of how cards look). */
 export function defaultLook(current: FeedAppearance): FeedAppearance {
-  return { ...DEFAULT_APPEARANCE, streamTab: current.streamTab, lighthouseTab: current.lighthouseTab };
+  return {
+    ...DEFAULT_APPEARANCE,
+    streamTab: current.streamTab,
+    hideLighthouseTab: current.hideLighthouseTab,
+  };
 }
 
 export function sameAppearance(a: FeedAppearance, b: FeedAppearance): boolean {

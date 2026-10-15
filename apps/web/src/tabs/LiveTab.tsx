@@ -6,7 +6,6 @@ import { ModelPicker, saveFeedSettings } from "../components/ModelPicker";
 import { AboutModal } from "../components/AboutModal";
 import { introSeen, markIntroSeen } from "../intro";
 import { FeedStatsModal } from "../components/FeedStatsModal";
-import { LighthouseButton } from "../components/MarketLighthouse";
 import { ArrowRightIcon, BrainIcon, ChartIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, usePollingAll, useNow, useNudgeStream } from "../hooks";
@@ -224,7 +223,6 @@ export function LiveTab({
                 <span className="num stats-teaser">2x {pct(fs.hit2xPct, 0)}</span>
               )}
             </button>
-            <LighthouseButton base="/curated" />
             <button
               type="button"
               className={`ghost stats-btn${customizing ? " on" : ""}`}

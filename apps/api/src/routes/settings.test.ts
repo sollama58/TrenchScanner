@@ -61,10 +61,12 @@ describe("parseFeedAppearance", () => {
     expect(DEFAULT_FEED_APPEARANCE.streamTab).toBe(false);
     expect(parseFeedAppearance({}).streamTab).toBe(false);
     expect(parseFeedAppearance({ streamTab: true }).streamTab).toBe(true);
-    // So is the Lighthouse tab.
-    expect(DEFAULT_FEED_APPEARANCE.lighthouseTab).toBe(false);
-    expect(parseFeedAppearance({}).lighthouseTab).toBe(false);
-    expect(parseFeedAppearance({ lighthouseTab: true }).lighthouseTab).toBe(true);
+    // The Lighthouse tab shows unless switched off, whatever the retired opt-in switch saved.
+    expect(DEFAULT_FEED_APPEARANCE.hideLighthouseTab).toBe(false);
+    expect(parseFeedAppearance({}).hideLighthouseTab).toBe(false);
+    expect(parseFeedAppearance({ lighthouseTab: false }).hideLighthouseTab).toBe(false);
+    expect(parseFeedAppearance({ hideLighthouseTab: true }).hideLighthouseTab).toBe(true);
+    expect(parseFeedAppearance({ lighthouseTab: false })).not.toHaveProperty("lighthouseTab");
     expect(
       parseFeedAppearance({ reasons: true, quickLinks: ["gmgn", "padre", "gmgn", "axiom"] }),
     ).toMatchObject({
