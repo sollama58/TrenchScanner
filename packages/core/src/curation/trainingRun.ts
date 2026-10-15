@@ -41,12 +41,7 @@ import { trainAgreementCurator, type AgreementCuratorParams, type AgreementCurve
 import { trainTopSliceCurator, type TopSliceCuratorParams } from "./topSlice.js";
 import { buildCalibration } from "./calibration.js";
 import { runDoublings } from "./labels.js";
-import {
-  featureHealthReport,
-  runnerTraitsReport,
-  type FeatureReport,
-  type RunnerReport,
-} from "./featureReport.js";
+import { featureHealthReport, type FeatureReport } from "./featureReport.js";
 import { featureOnset, type HeldFeature } from "./featureOnset.js";
 import {
   describeRuleSet,
@@ -158,8 +153,6 @@ export interface StoredEvalMetrics {
   calibrationCalls?: number;
   /** Per-feature null rates and decile lifts over the rows this run's exam graded. */
   featureReport?: FeatureReport;
-  /** What the winners that ran furthest had in common - see runnerTraitsReport. */
-  runnerReport?: RunnerReport;
   /** Inputs this run held back as too new (or lately dead) to train on - see featureOnset.ts. */
   heldFeatures?: HeldFeature[];
   /** Which decision moments the exam graded (event rows alone, or with pseudo-events) - see ExamPopulation. */
@@ -1017,8 +1010,6 @@ export async function runEvolvingContest(
   };
   // Measured once, on the rows every learner's exam grades: the inputs' health this run.
   let featureReport: FeatureReport | null = null;
-  // Over every training row, not just the exam's: winners with a finished run are few.
-  const runnerReport = runnerTraitsReport(rows);
   // Decided once for the whole field: the inputs too new (or lately dead) to train on.
   const features = runFeatures(rows, cfg);
   const heldFeatures = cfg.featureOnsetGuard ? { heldFeatures: features.held } : {};
@@ -1045,7 +1036,6 @@ export async function runEvolvingContest(
       featureReport = featureHealthReport(reference);
     }
     if (featureReport) exam.result.metrics.featureReport = featureReport;
-    exam.result.metrics.runnerReport = runnerReport;
     Object.assign(exam.result.metrics, heldFeatures);
     results.push(exam.result);
     // A control or standalone seat ships and calls on its own ledger, but feeds no combiner, the
@@ -1065,7 +1055,6 @@ export async function runEvolvingContest(
     // Inputs judged on the deep-read rows: across every row the TokenSage inputs are young and
     // the onset guard would hold them, taking from the seats the very read they wait for.
     const ownFeatures = runFeatures(deepRead, cfg);
-    const runnerReport = runnerTraitsReport(deepRead);
     for (const spec of narrativeSpecs) {
       // The one-step seat trains on the deep-read rows alone: with no market inputs left, the
       // rows without a read could teach it only the safety readings, and its picks would rest on
@@ -1083,7 +1072,6 @@ export async function runEvolvingContest(
         null,
         ownFeatures.usable,
       );
-      exam.result.metrics.runnerReport = runnerReport;
       if (cfg.featureOnsetGuard) exam.result.metrics.heldFeatures = ownFeatures.held;
       results.push(exam.result);
     }
@@ -1161,7 +1149,6 @@ export async function runEvolvingContest(
           ...exam.result.metrics,
           contestant: slot,
           ...(featureReport ? { featureReport } : {}),
-          runnerReport,
           ...heldFeatures,
         },
       };

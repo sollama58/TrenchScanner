@@ -21,8 +21,8 @@ export interface KolBundledInput {
   ties: readonly { wallet: string; kolWallet: string }[];
 }
 
-/** KOL Bundled %, rounded to 2 places; 0 when no KOL bundles any supply. */
-export function kolBundledPct(input: KolBundledInput): number {
+/** The holders KOL Bundled % takes in: every KOL bundle's, each once. */
+export function kolBundledWallets(input: KolBundledInput): Set<string> {
   const pctOf = new Map(input.holders.map((h) => [h.wallet, h.pct]));
   // Each holder's groups: the cluster and the same-minute group it sits in.
   const groupsOf = new Map<string, string[][]>();
@@ -52,6 +52,32 @@ export function kolBundledPct(input: KolBundledInput): number {
     if ([...reach].every((w) => w === kol)) continue;
     for (const w of reach) bundled.add(w);
   }
-  const sum = [...bundled].reduce((t, w) => t + (pctOf.get(w) ?? 0), 0);
+  return bundled;
+}
+
+const sumOf = (wallets: Iterable<string>, holders: readonly { wallet: string; pct: number }[]) => {
+  const pctOf = new Map(holders.map((h) => [h.wallet, h.pct]));
+  let sum = 0;
+  for (const w of wallets) sum += pctOf.get(w) ?? 0;
   return Math.round(sum * 100) / 100;
+};
+
+/** KOL Bundled %, rounded to 2 places; 0 when no KOL bundles any supply. */
+export function kolBundledPct(input: KolBundledInput): number {
+  return sumOf(kolBundledWallets(input), input.holders);
+}
+
+/**
+ * Bundled % (user ask 2026-10-15): the top holders that are linked (in a funder cluster or a
+ * same-minute group, linkedWallets' Linked) or in a KOL's bundle, each once: the alert card's
+ * Linked tile and the bubble map's Linked count the same holders over the scan's top 25. `count`
+ * is how many holders, of the reading's holders. A separate input and filter: the linked
+ * figures (linkedWalletPct, linkedWalletCount) keep leaving KOL bundles out.
+ */
+export function bundledSupply(input: KolBundledInput): { pct: number; count: number } {
+  const holders = new Set(input.holders.map((h) => h.wallet));
+  const wallets = kolBundledWallets(input);
+  for (const g of [...input.clusters, ...input.sameTimeClusters])
+    for (const w of g.wallets) if (holders.has(w.wallet)) wallets.add(w.wallet);
+  return { pct: sumOf(wallets, input.holders), count: wallets.size };
 }

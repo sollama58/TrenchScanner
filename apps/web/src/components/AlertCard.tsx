@@ -120,6 +120,7 @@ export function AlertCard({
     largestPct,
     linkedPct,
     linkedCount: linkedN,
+    linkedKols,
     linkedAtAlert,
     linkedClusters,
     cexPct,
@@ -450,6 +451,7 @@ export function AlertCard({
             <LinkedTile
               pct={linkedPct}
               count={linkedN}
+              kols={linkedKols}
               clusters={linkedClusters}
               atAlert={linkedAtAlert && linkedPct !== null}
               onOpen={() => openBubbleMap(mint, linkedSeed(card))}
@@ -660,8 +662,7 @@ export function cardReadings(card: Card) {
     emptyAtAlert,
     snipers: sniperFrom ? sniperReading(sniperFrom, sniperFrom === s) : null,
     largestPct: s.largestHolderPct ?? latest?.largestHolderPct ?? null,
-    linkedPct: linkedFrom?.linkedWalletPct ?? null,
-    linkedCount: linkedFrom ? linkedCount(linkedFrom) : null,
+    ...linkedTileReading(linkedFrom),
     linkedAtAlert: linkedFrom === s,
     linkedClusters: linkedFrom?.linkedClusters ?? [],
     cexPct: cexFrom?.cexFundedPct ?? null,
@@ -833,6 +834,35 @@ export function linkedSummary(clusters: readonly LinkedClusterView[]): string | 
   return `${top.wallets.length} wallets from one funder hold ${pct(top.pct)}${top.creatorLinked ? " (tied to the creator)" : ""}${more}`;
 }
 
+/**
+ * The Linked tile's count and share: Bundled % where the scan kept it, so KOL bundles count as the
+ * bubble map counts them (user ask 2026-10-15), else the scan's own linked holders. The safety
+ * screen keeps the scan's own count.
+ */
+export function linkedTileReading(
+  s: Pick<
+    Card["snapshot"],
+    | "linkedWalletPct"
+    | "linkedWalletCount"
+    | "linkedWalletsChecked"
+    | "linkedClusters"
+    | "linkedHolders"
+    | "bundledSupplyPct"
+    | "bundledSupplyCount"
+  > | null,
+): { linkedPct: number | null; linkedCount: { linked: number; of: number } | null; linkedKols: boolean } {
+  if (!s) return { linkedPct: null, linkedCount: null, linkedKols: false };
+  const scan = linkedCount(s);
+  if (s.linkedWalletPct != null && s.bundledSupplyPct != null && s.bundledSupplyCount != null && scan) {
+    return {
+      linkedPct: s.bundledSupplyPct,
+      linkedCount: { linked: s.bundledSupplyCount, of: scan.of },
+      linkedKols: s.bundledSupplyCount > scan.linked,
+    };
+  }
+  return { linkedPct: s.linkedWalletPct ?? null, linkedCount: scan, linkedKols: false };
+}
+
 /** The reading behind the Linked tile, for the bubble map to draw the same one. */
 export function linkedSeed(card: Card): BubbleSeed | undefined {
   const s = card.snapshot;
@@ -841,18 +871,22 @@ export function linkedSeed(card: Card): BubbleSeed | undefined {
 }
 
 /**
- * The Linked tile: how many top holders are linked, "N/25" (user ask 2026-10-13), with the supply
- * they hold in the tooltip. Tapping it opens the bubble map.
+ * The Linked tile: how many top holders are linked, "N/25" (user ask 2026-10-13), KOLs' bundles
+ * included, with the supply they hold beside it in smaller type (user ask 2026-10-15). Tapping it
+ * opens the bubble map.
  */
 function LinkedTile({
   pct: value,
   count,
+  kols,
   clusters,
   atAlert,
   onOpen,
 }: {
   pct: number | null;
   count: { linked: number; of: number } | null;
+  /** Whether KOLs' bundles add holders the scan's own count leaves out. */
+  kols: boolean;
   clusters: readonly LinkedClusterView[];
   atAlert: boolean;
   onOpen: () => void;
@@ -862,8 +896,8 @@ function LinkedTile({
     value === null
       ? "Linked: not checked yet. Who paid for each top-25 wallet is read a few tokens per scan."
       : value === 0
-        ? `Linked: no two top-25 wallets share a funder or a funding minute, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
-        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of)} or more. Tap for the bubble map.`;
+        ? `Linked: no two top-25 wallets share a funder or a funding minute, and no KOL bundles any, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
+        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply (Bundled %), counting wallets in a funder's cluster, a funding minute or a KOL's bundle${kols ? " (KOLs' bundles add some)" : ""}${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen counts linked holders without KOLs' bundles and rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of)} or more. Tap for the bubble map.`;
   const canOpen = value !== null && (value > 0 || clusters.length > 0);
   return (
     <div
@@ -901,7 +935,15 @@ function LinkedTile({
         {canOpen && <BubblesIcon size={12} className="tile-opens-icon" />}
       </dt>
       <dd className={value === null ? "muted" : "num"}>
-        {value === null ? "Not checked" : (linkedCountText(count) ?? pct(value))}
+        {value === null ? (
+          "Not checked"
+        ) : count ? (
+          <>
+            {linkedCountText(count)} <span className="dd-sub">({pct(value, 1)})</span>
+          </>
+        ) : (
+          pct(value)
+        )}
       </dd>
     </div>
   );

@@ -5,7 +5,7 @@ import { MIN_WIN_SOL, ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
-import { KolSideWallets } from "../tabs/SideWalletChecker";
+import { KolSideWallets, SideLabelsExport } from "../tabs/SideWalletChecker";
 import {
   CheckIcon,
   CloseIcon,
@@ -82,6 +82,16 @@ export interface WalletProfile {
     fundedAt: string | null;
     score: number | null;
   }[];
+  /** A KOL's labeled sides, named as the Side Wallet Checker exports them. Absent from older API builds. */
+  kolSides?: KolSide[];
+}
+
+interface KolSide {
+  wallet: string;
+  kind: "known" | "funded" | "possible";
+  pct: number;
+  /** "Cupsey_3". */
+  name: string;
 }
 
 interface WalletCoin {
@@ -358,6 +368,7 @@ function Profile({ p }: { p: WalletProfile }) {
       </p>
 
       <Funding p={p} names={names} />
+      {p.kolSides && p.kolSides.length > 0 && <KolSides sides={p.kolSides} />}
       {p.risk && <Risk risk={p.risk} />}
       <Coins
         title="Tracked coins"
@@ -420,6 +431,47 @@ function Funding({ p, names }: { p: WalletProfile; names: WalletNames }) {
     <section className="sage-card wm-section">
       <h4>First funder</h4>
       <p className="wm-row small">{body}</p>
+    </section>
+  );
+}
+
+const KOL_SIDE_GROUPS: { kind: KolSide["kind"]; title: string }[] = [
+  { kind: "known", title: "Known Side Wallets" },
+  { kind: "funded", title: "KOL Funded Wallets" },
+  { kind: "possible", title: "Likely Side Wallets" },
+];
+
+/**
+ * A KOL's labeled sides under its first funder (user ask 2026-10-15): its Known Sides, the wallets
+ * it funded and its high-confidence Possible Sides, with the names the Side Wallet Checker exports.
+ */
+function KolSides({ sides }: { sides: KolSide[] }) {
+  return (
+    <section className="sage-card wm-section">
+      <h4 className="wm-sides-head">
+        Labeled side wallets <span className="sage-tag">{sides.length}</span>
+        <SideLabelsExport labels={{ count: sides.length, wallets: sides }} />
+      </h4>
+      {KOL_SIDE_GROUPS.map(({ kind, title }) => {
+        const rows = sides.filter((s) => s.kind === kind);
+        if (rows.length === 0) return null;
+        return (
+          <div key={kind}>
+            <p className="faint small wm-note">
+              {title} <span className="num">({rows.length})</span>
+            </p>
+            <ul className="wm-linked small">
+              {rows.map((s) => (
+                <li key={s.wallet}>
+                  <WalletButton wallet={s.wallet} names={{}} />
+                  <span className="tm-tag wm-tone-linked">{s.name}</span>
+                  {kind === "possible" && <span className="muted num">{Math.round(s.pct)}% shared</span>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })}
     </section>
   );
 }

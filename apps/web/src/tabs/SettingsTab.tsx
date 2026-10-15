@@ -48,7 +48,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
 
 /** Optional tabs, off until switched on here. Saved with the feed appearance, so it follows the wallet. */
 function TabsPanel() {
-  const { streamTab, lighthouseTab } = useAppearance();
+  const { streamTab, hideLighthouseTab } = useAppearance();
   return (
     <section className="panel">
       <header className="section-head">
@@ -81,9 +81,9 @@ function TabsPanel() {
         <button
           type="button"
           role="switch"
-          aria-checked={lighthouseTab}
-          className={`switch${lighthouseTab ? " on" : ""}`}
-          onClick={() => setAppearance({ lighthouseTab: !lighthouseTab })}
+          aria-checked={!hideLighthouseTab}
+          className={`switch${hideLighthouseTab ? "" : " on"}`}
+          onClick={() => setAppearance({ hideLighthouseTab: !hideLighthouseTab })}
         >
           <span className="switch-track">
             <span className="switch-thumb" />
@@ -92,7 +92,6 @@ function TabsPanel() {
         </button>
         <p className="muted small">
           A tab with the Market Lighthouse in full: how screened tokens are doing, and its trends over time.
-          The Lighthouse button on the Live feed opens it either way.
         </p>
       </div>
     </section>

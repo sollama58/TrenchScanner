@@ -385,9 +385,9 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
       body: (
         <>
           <p className="tour-lead">
-            The Lighthouse button sits at the top of your feed. It&apos;s a quick look at the whole market,
-            not just your alerts: how every coin that got past the bouncer did, and which stories (narratives)
-            new coins are riding.
+            The Lighthouse has its own tab, next to Models. It&apos;s a look at the whole market, not just
+            your alerts: how every coin that got past the bouncer did, and which stories (narratives) new
+            coins are riding.
           </p>
           <p className="tour-lead">
             Its weather gauge, up top, says whether coins are doubling more or less often right now than over

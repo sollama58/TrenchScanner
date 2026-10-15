@@ -185,6 +185,14 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
+        key: "maxBundledSupplyPct",
+        min: 0,
+        max: 100,
+        label: "Max Bundled %",
+        hint: "supply held by the top-25 holders that are linked (a shared funder or funding minute) or in a KOL's bundle, each counted once: the % on the Linked tile; tokens not checked yet wait",
+        unit: "%",
+      },
+      {
         key: "minLiveHolderCount",
         min: 0,
         label: "Min holders (live)",

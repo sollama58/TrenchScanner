@@ -83,7 +83,7 @@ import { resolveEarliestActivity, computeFreshPct, FRESH_WITHIN_HOURS } from "./
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
 import { refreshWalletRiskBook, walletRiskLookup } from "./walletRiskBook.js";
 import { kolLookup, refreshKolWalletBook } from "./kolWalletBook.js";
-import { kolBundledByMint } from "./kolBundled.js";
+import { kolBundledByMint, type KolBundledReading } from "./kolBundled.js";
 import {
   cexReadingOf,
   linkedHoldersOf,
@@ -1145,6 +1145,7 @@ async function scanCycle(
       f.maxBundledWalletCount != null ||
       f.maxLinkedCreatorPct != null ||
       f.maxKolBundledPct != null ||
+      f.maxBundledSupplyPct != null ||
       f.minCexFundedCount != null ||
       f.maxCexFundedCount != null,
   );
@@ -1281,14 +1282,15 @@ async function scanCycle(
   const cexByMint = new Map(
     linkedLookups ? linkedGroups.map((g) => [g.mintAddress, cexReadingOf(g, linkedLookups!)] as const) : [],
   );
-  // KOL Bundled % from the same readings, the roster and one read of the possible side wallets.
+  // KOL Bundled % and Bundled % from the same readings, the roster and one read of the possible
+  // side wallets.
   const kolBundledOf =
     (linkedLookups
       ? await withinBudget(
           kolBundledByMint(linkedByMint, linkedLookups.funderOf, kolLookup()),
           KOL_BUNDLED_BUDGET_MS,
         )
-      : null) ?? new Map<string, number>();
+      : null) ?? new Map<string, KolBundledReading>();
   // The coins whose reading was left for behind the cycle and has not landed: their filter
   // matches wait for it (see holdForLinked), which also puts them in next cycle's waited set.
   holdForLinked(
@@ -2394,7 +2396,7 @@ async function processCandidate(
   cex: CexFundedReading | null = null,
   kolTraders: LiveTraderCounts | null = null,
   winnerTraders: LiveTraderCounts | null = null,
-  kolBundledPct?: number,
+  kolBundled?: KolBundledReading,
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
@@ -2418,9 +2420,9 @@ async function processCandidate(
     kolTraders,
     winnerTraders,
   );
-  // KOL Bundled % rides on the linked reading: unknown (left off) without one.
+  // KOL Bundled % and Bundled % ride on the linked reading: unknown (left off) without one.
   const onChain =
-    withFlags && linked && kolBundledPct !== undefined ? { ...withFlags, kolBundledPct } : withFlags;
+    withFlags && linked && kolBundled !== undefined ? { ...withFlags, ...kolBundled } : withFlags;
   // Launch time: the earliest of the DEX pair's creation time and when the watchlist first saw
   // the mint: after graduation DexScreener's canonical pair is the PumpSwap pool,
   // whose creation time is the graduation, and age read from it restarted at zero - a six-hour

@@ -1428,6 +1428,12 @@ img.avatar {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+/* A figure's second half in smaller type beside it: the Linked tile's "(12.3%)". */
+.card-stats dd .dd-sub {
+  font-size: 10.5px;
+  font-weight: 500;
+  opacity: 0.75;
+}
 /* "Not checked" wraps onto two lines rather than being cut in a narrow box. */
 .card-stats dd.muted {
   font-size: 11px;
@@ -4532,7 +4538,7 @@ button.small-btn {
     order: 0;
     width: auto;
     gap: 0;
-    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
     border-radius: 0;
     border: none;
     border-top: 1px solid var(--border);
@@ -4544,9 +4550,15 @@ button.small-btn {
     min-width: 0;
     flex-direction: column;
     gap: 3px;
-    padding: 6px 2px;
+    padding: 6px 0;
     font-size: 11px;
     border: none;
+  }
+  /* Seven tabs (Stream on, or the admin tab) still fit "Lighthouse" whole on a 375px phone. */
+  .tabs:has(> :nth-child(7)) button,
+  .tabs:has(> :nth-child(7)) .tab-link {
+    font-size: 10px;
+    letter-spacing: -0.01em;
   }
   .tabs button .icon,
   .tabs .tab-link .icon {
@@ -6189,22 +6201,6 @@ button.small-btn {
   background: var(--good-ink);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--good-ink) 25%, transparent);
 }
-.lh-modal {
-  width: min(860px, calc(100vw - 32px));
-}
-.lh-body {
-  padding-top: 0;
-}
-.lh-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  margin: 0 -24px 14px;
-  padding: 20px 24px 12px;
-  overflow: hidden;
-  background: var(--surface-solid);
-  border-bottom: 1px solid var(--border);
-}
 .lh-beam {
   position: absolute;
   inset: -60% auto auto -10%;
@@ -6230,10 +6226,6 @@ button.small-btn {
 }
 .lh-head-text p {
   margin: 0;
-}
-.lh-window {
-  position: relative;
-  margin-top: 12px;
 }
 .lh-content {
   gap: 18px;
@@ -6623,10 +6615,6 @@ button.small-btn {
   max-width: 420px;
 }
 @media (max-width: 640px) {
-  .lh-head {
-    margin: 0 -16px 12px;
-    padding: 16px 16px 10px;
-  }
   .lh-kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -6648,9 +6636,6 @@ button.small-btn {
   .lh-head-icon {
     width: 34px;
     height: 34px;
-  }
-  .lh-window {
-    margin-top: 8px;
   }
   .lh-hit {
     grid-template-columns: 1fr 52px 76px;
@@ -6690,9 +6675,6 @@ button.small-btn {
 }
 
 /* ---------- Market Lighthouse: screened tokens ---------- */
-.lh-btn .icon {
-  color: var(--brand-ink);
-}
 .lh-part {
   display: flex;
   align-items: center;
@@ -6925,20 +6907,6 @@ button.small-btn {
 }
 
 /* ---------- Lighthouse tab (tabs/LighthouseTab.tsx) ---------- */
-.lh-more {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 14px;
-  margin: 18px 0 0;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-.lh-more .button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
 .lht-hero {
   position: relative;
   overflow: hidden;
@@ -11141,6 +11109,14 @@ button.bm-same {
 }
 .wm-section h4 {
   margin-bottom: 8px !important;
+}
+.wm-sides-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wm-sides-head .side-export {
+  margin-left: auto;
 }
 .wm-row {
   display: flex;

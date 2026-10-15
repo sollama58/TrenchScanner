@@ -172,6 +172,14 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
+  if (
+    filter.maxBundledSupplyPct != null &&
+    token.bundledSupplyPct !== undefined &&
+    token.bundledSupplyPct > filter.maxBundledSupplyPct
+  ) {
+    return false;
+  }
+
   // A floor, so it fails closed: without a fresh quote the count is unknown.
   if (filter.minLiveHolderCount != null && (token.freshQuote?.holderCount ?? 0) < filter.minLiveHolderCount) {
     return false;

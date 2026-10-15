@@ -696,19 +696,14 @@ function BaselineChart({
   );
 }
 
-/** How many runner traits the winners panel lists. */
-const RUNNER_TRAIT_ROWS = 4;
-
 /**
  * How far the winners went after the call. A call that doubles inside 15 minutes stays on watch
- * for a day, and its run peak shows whether the models are finding doubles or real runners -
- * plus, from the newest training run, which signals the biggest runners shared.
+ * for a day, and its run peak shows whether the models are finding doubles or real runners.
  */
 function WinnerRunsPanel({ data, days }: { data: ModelInsights; days: number }) {
   const runs = data.winnerRuns ?? [];
   const feed = runs.find((r) => r.population === "curated") ?? null;
   const samples = runs.find((r) => r.population === "samples") ?? null;
-  const traits = data.runnerTraits ?? null;
   const shown = feed && feed.finished > 0 ? feed : samples;
   const mult = (v: number | null | undefined) => (v == null ? "–" : `${v.toFixed(1)}x`);
   const minutes = (v: number | null | undefined) =>
@@ -753,40 +748,6 @@ function WinnerRunsPanel({ data, days }: { data: ModelInsights; days: number }) 
             ? `${shown.winners} winner${shown.winners === 1 ? "" : "s"} still being watched.`
             : "No winners to follow in this window yet."}
         </p>
-      )}
-      {traits && traits.traits.length > 0 && traits.bigRunnerMultiple !== null && (
-        <>
-          <p className="muted small">
-            What the biggest runners had in common (the top quarter of {traits.winners.toLocaleString()}{" "}
-            winners, each of which ran to {mult(traits.bigRunnerMultiple)} or more). Lift is how much more
-            often a winner with the signal high (or low) became one of them; 1 is no difference.
-          </p>
-          <div
-            className="table-wrap"
-            tabIndex={0}
-            role="region"
-            aria-label="What the biggest runners had in common"
-          >
-            <table className="compact">
-              <thead>
-                <tr>
-                  <th>Signal</th>
-                  <th className="r">When high</th>
-                  <th className="r">When low</th>
-                </tr>
-              </thead>
-              <tbody>
-                {traits.traits.slice(0, RUNNER_TRAIT_ROWS).map((f) => (
-                  <tr key={f.feature}>
-                    <td>{f.label}</td>
-                    <td className="r num">{f.topThirdLift.toFixed(2)}x</td>
-                    <td className="r num">{f.bottomThirdLift.toFixed(2)}x</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
       )}
     </section>
   );

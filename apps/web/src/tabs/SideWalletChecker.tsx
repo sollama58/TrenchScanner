@@ -23,7 +23,7 @@ export const SIDE_WINDOWS = ["24h", "7d", "30d"] as const;
 /** GET /utilities/side-labels: every labeled side wallet, once, numbered under its KOL. */
 export interface SideLabels {
   count: number;
-  wallets: { wallet: string; kolWallet: string; kolName: string | null; kind: string; name: string }[];
+  wallets: { wallet: string; name: string }[];
 }
 
 /** The export (user asks 2026-10-14): one WALLET_ADDRESS,KOL_N per line, copied to the clipboard. */
@@ -307,7 +307,12 @@ export function SideWalletChecker() {
 }
 
 /** The cutoffs a wallet must meet to be listed, to carry the label, and to be left out. */
-function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels | null | undefined }) {
+/**
+ * The Export button (user asks 2026-10-14/15): copies the labels as one address,KOL_N per line,
+ * downloading them when the browser blocks the clipboard. The checker's Labeled sides box and a
+ * KOL's wallet modal both use it.
+ */
+export function SideLabelsExport({ labels }: { labels: SideLabels | null | undefined }) {
   const [copied, setCopied] = useState<"copied" | "downloaded" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
@@ -323,6 +328,24 @@ function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopied(null), 2500);
   };
+  return (
+    <button
+      type="button"
+      className="ghost small-btn side-export"
+      disabled={!labels || labels.count === 0}
+      onClick={() => labels && void copy(labels)}
+    >
+      {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}{" "}
+      {copied === "copied"
+        ? `Copied ${plural(labels?.count ?? 0, "wallet")}`
+        : copied === "downloaded"
+          ? "Clipboard blocked: downloaded"
+          : "Export"}
+    </button>
+  );
+}
+
+function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels | null | undefined }) {
   return (
     <div className="side-rules" aria-label="Match rules">
       <div className="side-rule">
@@ -386,19 +409,7 @@ function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels
           High-confidence (Possible Side), Known and KOL Funded wallets, each once under its KOL. Export
           copies them as one address,KOL_N per line.
         </p>
-        <button
-          type="button"
-          className="ghost small-btn side-export"
-          disabled={!labels || labels.count === 0}
-          onClick={() => labels && void copy(labels)}
-        >
-          {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}{" "}
-          {copied === "copied"
-            ? `Copied ${plural(labels?.count ?? 0, "wallet")}`
-            : copied === "downloaded"
-              ? "Clipboard blocked: downloaded"
-              : "Export"}
-        </button>
+        <SideLabelsExport labels={labels} />
       </div>
     </div>
   );

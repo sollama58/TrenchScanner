@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  clusterNumberText,
+  funderNamed,
   largestSourceOnly,
   mapLinked,
   showsPct,
@@ -707,5 +709,28 @@ describe("mapLinked (user ask 2026-10-15)", () => {
   it("counts out of every holder read once a linked holder ranks past the top 25", () => {
     const g = graph([node("a", 2, 0), node("b", 1, 0), node("w", 0.4, 0, 31)], 50);
     expect(mapLinked(g, [])).toEqual({ count: { linked: 3, of: 50 }, pct: 3.4 });
+  });
+});
+
+describe("funderNamed (user ask 2026-10-15)", () => {
+  const graph = {
+    clusters: [{ funder: "f1" }, { funder: "f2" }, { funder: "h" }, { funder: "r" }],
+    nodes: [
+      { kind: "funder", wallet: "f1", flags: [] },
+      { kind: "funder", wallet: "f2", flags: [] },
+      { kind: "holder", wallet: "h", flags: [] },
+      { kind: "funder", wallet: "r", flags: ["risky"] },
+    ],
+  } as never;
+  const names = { f2: { name: "Jupiter", source: "identity" } } as const;
+  it("names only a known funder, a holder, or one labeled anyway", () => {
+    expect(funderNamed(graph, "f1", names)).toBe(false);
+    expect(funderNamed(graph, "f2", names)).toBe(true);
+    expect(funderNamed(graph, "h", names)).toBe(true);
+    expect(funderNamed(graph, "r", names)).toBe(true);
+  });
+  it("numbers the cluster of an unknown funder", () => {
+    expect(clusterNumberText(graph, 0, names)).toBe("Cluster 1");
+    expect(clusterNumberText(graph, 1, names)).toBeNull();
   });
 });

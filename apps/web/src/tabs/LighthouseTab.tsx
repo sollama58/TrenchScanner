@@ -150,7 +150,7 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
             <span className="eyebrow">Right now</span>
             <h2>The last {nowDays === 1 ? "24 hours" : "7 days"} in full</h2>
             <p className="faint small">
-              Everything behind the headline numbers the Live tab&apos;s Lighthouse button shows.
+              The weather, how screened tokens did and what TokenSage sees, with every chart and breakdown.
             </p>
           </div>
           <div className="segmented small" role="tablist" aria-label="Window">

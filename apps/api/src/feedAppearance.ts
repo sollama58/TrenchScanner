@@ -115,8 +115,13 @@ export const feedAppearanceSchema = z
     narrativeNote: z.boolean().nullable().default(null),
     /** The Stream tab (every new token that passes the safety screen in the band); off by default. */
     streamTab: z.boolean().default(false),
-    /** The Lighthouse tab; off by default (the Live feed's Lighthouse button and #lighthouse still open it). */
-    lighthouseTab: z.boolean().default(false),
+    /** The retired opt-in Lighthouse switch (replaced 2026-10-15): accepted from older tabs, ignored. */
+    lighthouseTab: z.boolean().optional(),
+    /**
+     * Hide the Lighthouse tab; off by default, so every account has the tab (user ask 2026-10-15). A
+     * new key rather than lighthouseTab flipped, since that one's stored "off" was mostly the old default.
+     */
+    hideLighthouseTab: z.boolean().default(false),
     /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
     outline: color.default(null),
     /**
@@ -180,7 +185,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   bubbleSideLinks: true,
   narrativeNote: null,
   streamTab: false,
-  lighthouseTab: false,
+  hideLighthouseTab: false,
   outline: null,
   outlineResult: false,
   hideBelowMcap: false,

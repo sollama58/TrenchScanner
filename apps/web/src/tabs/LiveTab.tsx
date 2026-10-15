@@ -4,7 +4,6 @@ import { AlertCard } from "../components/AlertCard";
 import { SkeletonCards } from "../components/Charts";
 import { AboutModal } from "../components/AboutModal";
 import { introSeen, markIntroSeen } from "../intro";
-import { LighthouseButton } from "../components/MarketLighthouse";
 import { ArrowRightIcon, BrainIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, usePollingAll, useNow, useNudgeStream } from "../hooks";
@@ -168,7 +167,6 @@ export function LiveTab({
             </div>
           </div>
           <div className="feed-controls">
-            <LighthouseButton base="/curated" />
             <button
               type="button"
               className={`ghost stats-btn${customizing ? " on" : ""}`}

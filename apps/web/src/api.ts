@@ -210,6 +210,12 @@ export interface Snapshot {
   cexFundedPct?: number | null;
   /** KOL Bundled %: supply held by KOLs and the top holders tied to them; null when not read. */
   kolBundledPct?: number | null;
+  /**
+   * Bundled %: supply held by top holders that are linked or in a KOL's bundle, each once, and
+   * how many of linkedWalletsChecked that is (the Linked tile); null when not read.
+   */
+  bundledSupplyPct?: number | null;
+  bundledSupplyCount?: number | null;
   /** % of supply held by top holders funded within a minute of each other (any funders); null when not checked. */
   sameTimeFundedPct?: number | null;
   sameTimeClusterCount?: number | null;
@@ -836,8 +842,6 @@ export interface ModelInsights {
   };
   /** Per-feature null rates and decile lifts from the newest training run, or null before one. */
   featureHealth?: FeatureHealthReport | null;
-  /** What the winners that ran furthest had in common, from the newest training run. */
-  runnerTraits?: RunnerTraitsReport | null;
   /** How far clean winners ran after the call: the feed's calls ("curated") and the training samples. */
   winnerRuns?: WinnerRuns[];
   /** Inputs the newest run held back as too new (or lately dead) to train on. */
@@ -873,6 +877,7 @@ export interface FilterInput {
   maxSameTimeFundedCount: number | null;
   maxLinkedCreatorPct: number | null;
   maxKolBundledPct: number | null;
+  maxBundledSupplyPct: number | null;
   minLiveHolderCount: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
@@ -1049,20 +1054,6 @@ export interface WinnerRuns {
   reached4xPct: number | null;
   reached10xPct: number | null;
   medianMinutesToPeak: number | null;
-}
-
-export interface RunnerTraitsReport {
-  winners: number;
-  /** A big runner went at least this far (the top quarter of winners by run peak). */
-  bigRunnerMultiple: number | null;
-  medianRunMultiple: number | null;
-  traits: {
-    feature: string;
-    label: string;
-    topThirdLift: number;
-    bottomThirdLift: number;
-    present: number;
-  }[];
 }
 
 export interface FeatureHealthReport {
@@ -1364,8 +1355,11 @@ export interface FeedAppearance {
   narrativeNote: boolean | null;
   /** The Stream tab, switched on in Settings (absent from older API builds: off). */
   streamTab: boolean;
-  /** The Lighthouse tab, switched on in Settings (absent from older API builds: off). */
-  lighthouseTab: boolean;
+  /**
+   * The Lighthouse tab, shown unless switched off in Settings (absent from older API builds: shown).
+   * Replaced lighthouseTab (opt-in) on 2026-10-15, so every account starts with the tab on.
+   */
+  hideLighthouseTab: boolean;
   /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
   outline: string | null;
   /** Graded cards are marked green on a pass and red on a fail (absent from older API builds: off). */
