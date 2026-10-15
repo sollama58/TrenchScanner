@@ -320,9 +320,17 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "rugCheckLookups",
     "linkedWalletCalls",
     "liveTape",
+    "pumpfunList",
+    "launchDetails",
   ] as const) {
     const calls = stageTimings(meta, key);
     if (calls) out[key] = calls;
+  }
+  // Pump.fun's coin list (pages asked and failed, with the last failure) and the one-coin
+  // fallback's counts: a list failing every page means launches arrive from the stream alone.
+  const listError = (m.pumpfunList as { lastError?: unknown } | undefined)?.lastError;
+  if (out.pumpfunList && typeof listError === "string") {
+    out.pumpfunList = { ...(out.pumpfunList as object), lastError: listError.slice(0, 200) };
   }
   // The scan's TokenSage counters (requested, stored, turned away, waiting, pending...): counts
   // only, so whether reads are going out and coming back is visible without the admin wallet.
