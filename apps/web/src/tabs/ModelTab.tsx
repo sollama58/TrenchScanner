@@ -150,13 +150,6 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
           </div>
         </div>
 
-        <CoverageMeter
-          board={lb}
-          guest={guest}
-          disabled={board.stale}
-          onAdd={guest ? undefined : (id) => setFeedModels([...lb.selectedModels, id])}
-        />
-
         <div className="kpis glance">
           <div className="glance-tile">
             <label title="The board's order: its 2x rate over the market's in the same hours">
@@ -257,6 +250,13 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
         onSetModels={setFeedModels}
         refreshing={board.stale}
         refreshKey={String(pick)}
+      />
+
+      <CoverageMeter
+        board={lb}
+        guest={guest}
+        disabled={board.stale}
+        onAdd={guest ? undefined : (id) => setFeedModels([...lb.selectedModels, id])}
       />
 
       <WeekPanel learning={data.learning} board={lb} now={now} />
