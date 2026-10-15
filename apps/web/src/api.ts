@@ -210,6 +210,12 @@ export interface Snapshot {
   cexFundedPct?: number | null;
   /** KOL Bundled %: supply held by KOLs and the top holders tied to them; null when not read. */
   kolBundledPct?: number | null;
+  /**
+   * Bundled %: supply held by top holders that are linked or in a KOL's bundle, each once, and
+   * how many of linkedWalletsChecked that is (the Linked tile); null when not read.
+   */
+  bundledSupplyPct?: number | null;
+  bundledSupplyCount?: number | null;
   /** % of supply held by top holders funded within a minute of each other (any funders); null when not checked. */
   sameTimeFundedPct?: number | null;
   sameTimeClusterCount?: number | null;
@@ -873,6 +879,7 @@ export interface FilterInput {
   maxSameTimeFundedCount: number | null;
   maxLinkedCreatorPct: number | null;
   maxKolBundledPct: number | null;
+  maxBundledSupplyPct: number | null;
   minLiveHolderCount: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;

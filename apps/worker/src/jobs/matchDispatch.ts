@@ -64,6 +64,7 @@ export function awaitsWalletFigure(
     | "sameTimeFundedCount"
     | "linkedCreatorPct"
     | "kolBundledPct"
+    | "bundledSupplyPct"
   >,
   filter: Pick<
     FilterCriteria,
@@ -80,6 +81,7 @@ export function awaitsWalletFigure(
     | "maxSameTimeFundedCount"
     | "maxLinkedCreatorPct"
     | "maxKolBundledPct"
+    | "maxBundledSupplyPct"
   >,
 ): boolean {
   return (
@@ -95,7 +97,8 @@ export function awaitsWalletFigure(
     (filter.maxSameTimeFundedPct != null && scored.sameTimeFundedPct === undefined) ||
     (filter.maxSameTimeFundedCount != null && scored.sameTimeFundedCount === undefined) ||
     (filter.maxLinkedCreatorPct != null && scored.linkedCreatorPct === undefined) ||
-    (filter.maxKolBundledPct != null && scored.kolBundledPct === undefined)
+    (filter.maxKolBundledPct != null && scored.kolBundledPct === undefined) ||
+    (filter.maxBundledSupplyPct != null && scored.bundledSupplyPct === undefined)
   );
 }
 

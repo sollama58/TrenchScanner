@@ -103,6 +103,8 @@ function profileFromSnapshot(
     freshTopHoldersChecked?: number | null;
     bundledWalletCount?: number | null;
     kolBundledPct?: number | null;
+    bundledSupplyPct?: number | null;
+    bundledSupplyCount?: number | null;
     flaggedBuySol?: number | null;
     devHolding: boolean | null;
   },
@@ -148,6 +150,8 @@ function profileFromSnapshot(
     freshTopHoldersChecked: snapshot.freshTopHoldersChecked ?? undefined,
     bundledWalletCount: snapshot.bundledWalletCount ?? undefined,
     kolBundledPct: snapshot.kolBundledPct ?? undefined,
+    bundledSupplyPct: snapshot.bundledSupplyPct ?? undefined,
+    bundledSupplyCount: snapshot.bundledSupplyCount ?? undefined,
     flaggedBuySol: snapshot.flaggedBuySol ?? undefined,
     // The scan's resolved answer, carried forward; the fast path has no trade-stream view of its own.
     creatorHolding: snapshot.devHolding ?? undefined,

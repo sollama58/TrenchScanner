@@ -64,6 +64,7 @@ import {
 import { registerShutdown } from "./processExit.js";
 import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
+import { runBundledSupplyBackfill } from "./jobs/bundledSupplyBackfill.js";
 import { runQuoteRegrade } from "./jobs/quoteRegrade.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
@@ -452,7 +453,13 @@ async function main() {
           const meta = await runLabelRegradeJob(deps.pumpFun);
           // The one-time re-grade of coins paired with another coin (quoteRegrade.ts), same lock.
           const quote = await runQuoteRegrade(deps.pumpFun);
-          return quote ? { ...meta, quoteRegrade: quote } : meta;
+          // The one-time Bundled % backfill (bundledSupplyBackfill.ts), same lock: database only.
+          const bundled = await runBundledSupplyBackfill();
+          return {
+            ...meta,
+            ...(quote ? { quoteRegrade: quote } : {}),
+            ...(bundled ? { bundledSupplyBackfill: bundled } : {}),
+          };
         }),
       1,
       { deadlineMinutes: 15 },

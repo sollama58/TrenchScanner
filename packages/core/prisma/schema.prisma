@@ -321,6 +321,9 @@ model UserFilter {
   /// possible side wallets, or one step out by funder or funding minute;
   /// TokenSnapshot.kolBundledPct). Skipped while unknown.
   maxKolBundledPct           Float?
+  /// Max Bundled %: supply held by top holders that are linked or in a KOL's bundle, each once
+  /// (TokenSnapshot.bundledSupplyPct). Skipped while unknown.
+  maxBundledSupplyPct        Float?
   /// Min holders as Jupiter counts them at the decision (the fresh quote's holderCount, seconds
   /// old). Fails closed without a quote, like the other floors.
   minLiveHolderCount         Int?
@@ -1127,6 +1130,12 @@ model TokenSnapshot {
   /// KOL Bundled % (core's wallets/kolBundled.ts): supply held by KOLs and the top holders tied to
   /// them, one step out. Null until the linked reading lands and the KOL roster loads.
   kolBundledPct           Float?
+  /// Bundled % (core's wallets/kolBundled.ts bundledSupply, user ask 2026-10-15): supply held by
+  /// top holders that are linked or in a KOL's bundle, each once, and how many of the
+  /// linkedWalletsChecked holders that is: the alert card's Linked tile. Null on the same terms as
+  /// kolBundledPct; scans from 2026-10-14 19:44 UTC were backfilled where the reading allowed.
+  bundledSupplyPct        Float?
+  bundledSupplyCount      Int?
   winnerRecentBuyers      Int?
   winnerRecentSellers     Int?
   // How many holders the two percentages above were computed over. The list is "top 10" by

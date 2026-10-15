@@ -492,6 +492,8 @@ export function serializeCuratedAlert(
     linkedLargestClusterPct: null,
     linkedCreatorPct: null,
     kolBundledPct: null,
+    bundledSupplyPct: null,
+    bundledSupplyCount: null,
     linkedClusters: null,
     linkedHolders: null,
     cexFundedPct: null,

@@ -103,6 +103,8 @@ export function snapshotDataFor(
     kolTopHolders: scored.kolTopHolders,
     kolTopHolderPct: scored.kolTopHolderPct,
     kolBundledPct: scored.kolBundledPct,
+    bundledSupplyPct: scored.bundledSupplyPct,
+    bundledSupplyCount: scored.bundledSupplyCount,
     kolFirstBuyers: scored.kolFirstBuyers,
     kolRecentBuyers: scored.kolRecentBuyers,
     kolRecentSellers: scored.kolRecentSellers,
