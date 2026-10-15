@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
+import { cachedGet } from "../cache";
 import { usePolling } from "../hooks";
 import { ago, shortAddress } from "../format";
 import { openWallet } from "../walletModal";
@@ -441,7 +442,8 @@ function SideWallets({
   const [showAll, setShowAll] = useState(false);
   useEffect(() => {
     let live = true;
-    api<KolSides>(`/utilities/${bundle ? "bundle" : "side-wallets"}/${encodeURIComponent(kol)}`)
+    // A bundle shares one read with the labeled-wallets card at the top of the modal.
+    (bundle ? bundleRead<KolSides>(kol) : api<KolSides>(`/utilities/side-wallets/${encodeURIComponent(kol)}`))
       .then((d) => live && setData(d))
       .catch((e: unknown) => {
         if (!live) return;
@@ -703,6 +705,11 @@ function SideRows({
       })}
     </ol>
   );
+}
+
+/** GET /utilities/bundle/:wallet, shared by the modal's bundle card and section (the API caches a day). */
+export function bundleRead<T>(wallet: string): Promise<T> {
+  return cachedGet<T>(`/utilities/bundle/${encodeURIComponent(wallet)}`, 10 * 60_000);
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   SIDE_MIN_SHARED,
   SIDE_WINDOWS,
   isBot,
+  possibleSides,
   prisma,
   rankSideWallets,
   sideWalletRules,
@@ -24,7 +25,11 @@ import {
  * Kept apart from the KOL side wallets on purpose: nothing is stored, nothing labels the wallets it
  * lists, and the bubble map and its clusters never read it. A read of the trade tape the database
  * already holds (TokenWalletActivity): no outside calls. Measured at 0.05-0.3 s a wallet on a copy
- * of production's tape, so each result is cached for BUNDLE_TTL_MS.
+ * of production's tape; each result is cached for BUNDLE_TTL_MS (a day, user ask 2026-10-15).
+ *
+ * The wallets that would qualify to be labeled (`labeled`): those meeting a Possible Side tier
+ * (core's POSSIBLE_SIDE_TIERS) against this wallet, named as the KOL labels are ("7xKXtg_1"). The
+ * modal shows them at the top, as a KOL's wallet shows its labeled sides; they are not stored.
  *
  * Left out of the lists, as on the KOL lists: KOLs (theirs are the KOL lists), known exchange
  * wallets, bots by the 30-day rule, wallets marked as bots by hand, and the KOL job's likely bots.
@@ -32,8 +37,8 @@ import {
 
 const DAY_MS = 86_400_000;
 const WINDOW_MS: Record<SideWindow, number> = { "24h": DAY_MS, "7d": 7 * DAY_MS, "30d": 30 * DAY_MS };
-/** How long one wallet's bundle is served before it is read again. */
-export const BUNDLE_TTL_MS = 60 * 60_000;
+/** How long one wallet's bundle is served before it is read again (user ask 2026-10-15: a day). */
+export const BUNDLE_TTL_MS = DAY_MS;
 /** Bundles kept in memory at once; the oldest goes first. */
 const BUNDLE_CACHE_MAX = 1_000;
 /** The tracked-coin total (for the bot rule) and the likely bots change hourly at most. */
@@ -41,6 +46,20 @@ const SHARED_TTL_MS = 10 * 60_000;
 
 export interface BundleSideWallet extends SideWallet {
   risk: { score: number; dumper: boolean; winner: boolean; sniper: boolean } | null;
+}
+
+/** A wallet that meets a Possible Side tier against the opened one: it would qualify for a label. */
+export interface BundleLabel {
+  wallet: string;
+  /** % of the opened wallet's coins over the tier's span. */
+  pct: number;
+  shared: number;
+  /** The opened wallet's coins over the span. */
+  coins: number;
+  /** The tier's span: 24, 48 or 72 hours. */
+  hours: number;
+  /** "7xKXtg_1": the opened wallet's first six characters and the wallet's number under it. */
+  name: string;
 }
 
 export interface WalletBundle {
@@ -52,6 +71,8 @@ export interface WalletBundle {
   sides: Record<SideWindow, BundleSideWallet[]>;
   /** Wallets the lists would have shown that read as bots (marked by hand or likely bots). */
   likelyBots: string[];
+  /** The wallets that would qualify to be labeled, strongest first. */
+  labeled: BundleLabel[];
   rules: SideWalletRules;
 }
 
@@ -59,6 +80,8 @@ export interface WalletBundle {
 export interface BundlePairRow {
   side: string;
   s24: number;
+  s48: number;
+  s72: number;
   s7: number;
   s30: number;
   g24: number | null;
@@ -100,6 +123,36 @@ export function bundleLists(
     });
   }
   return { sides, likelyBots: [...bots].sort() };
+}
+
+/**
+ * The wallets that would qualify to be labeled: the Possible Side tiers over the opened wallet's
+ * 24-, 48- and 72-hour coins, bots and excluded wallets left out, strongest first and numbered
+ * under the opened wallet. Exported for tests.
+ */
+export function bundleLabels(
+  wallet: string,
+  pairs: readonly BundlePairRow[],
+  coins: Readonly<Record<24 | 48 | 72, number>>,
+  excluded: ReadonlySet<string>,
+  hidden: ReadonlySet<string>,
+): BundleLabel[] {
+  const kept = pairs.filter((p) => !excluded.has(p.side) && !hidden.has(p.side));
+  const span = (key: "s24" | "s48" | "s72", kolCoins: number) => ({
+    pairs: kept.filter((p) => p[key] > 0).map((p) => ({ side: p.side, shared: p[key], gapSec: 0 })),
+    kolCoins,
+  });
+  const stem = wallet.slice(0, 6);
+  return possibleSides({ 24: span("s24", coins[24]), 48: span("s48", coins[48]), 72: span("s72", coins[72]) })
+    .sort((a, b) => b.pct - a.pct || b.shared - a.shared || (a.wallet < b.wallet ? -1 : 1))
+    .map((l, i) => ({
+      wallet: l.wallet,
+      pct: l.pct,
+      shared: l.shared,
+      coins: l.kolCoins,
+      hours: l.hours,
+      name: `${stem}_${i + 1}`,
+    }));
 }
 
 const cache = new Map<string, { at: number; value: Promise<WalletBundle> }>();
@@ -158,6 +211,9 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
     Date
   >;
   const gapSeconds = SIDE_GAP_MINUTES * 60;
+  // The Possible Side tiers' 48- and 72-hour spans (24 hours is the lists' own window).
+  const since48 = new Date(now - 2 * DAY_MS);
+  const since72 = new Date(now - 3 * DAY_MS);
   const empty = (skipped: WalletBundle["skipped"], coins = { "24h": 0, "7d": 0, "30d": 0 }) => ({
     wallet,
     skipped,
@@ -165,13 +221,16 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
     coins,
     sides: { "24h": [], "7d": [], "30d": [] },
     likelyBots: [],
+    labeled: [],
     rules: sideWalletRules(),
   });
 
   const [kol, own, facts] = await Promise.all([
     prisma.kolWallet.findUnique({ where: { wallet }, select: { wallet: true } }),
-    prisma.$queryRaw<{ c24: bigint; c7: bigint; c30: bigint }[]>`
+    prisma.$queryRaw<{ c24: bigint; c48: bigint; c72: bigint; c7: bigint; c30: bigint }[]>`
       SELECT COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since["24h"]}) AS c24,
+             COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since48}) AS c48,
+             COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since72}) AS c72,
              COUNT(*) FILTER (WHERE a."firstBuyAt" >= ${since["7d"]}) AS c7,
              COUNT(*) AS c30
       FROM "TokenWalletActivity" a
@@ -194,6 +253,8 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
     {
       side: string;
       s24: bigint;
+      s48: bigint;
+      s72: bigint;
       s7: bigint;
       s30: bigint;
       g24: number | null;
@@ -220,6 +281,8 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
     )
     SELECT side,
            COUNT(*) FILTER (WHERE at >= ${since["24h"]}) AS s24,
+           COUNT(*) FILTER (WHERE at >= ${since48}) AS s48,
+           COUNT(*) FILTER (WHERE at >= ${since72}) AS s72,
            COUNT(*) FILTER (WHERE at >= ${since["7d"]}) AS s7,
            COUNT(*) AS s30,
            percentile_cont(0.5) WITHIN GROUP (ORDER BY gap) FILTER (WHERE at >= ${since["24h"]}) AS g24,
@@ -258,10 +321,19 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
   for (const w of sides) if (KNOWN_EXCHANGE_WALLETS.has(w)) excluded.add(w);
   const hidden = new Set([...MARKED_BOT_WALLETS, ...facts.likelyBots]);
 
-  const lists = bundleLists(
-    pairs.map((p) => ({ ...p, s24: Number(p.s24), s7: Number(p.s7), s30: Number(p.s30) })),
-    coins,
-    sideCoins,
+  const counted = pairs.map((p) => ({
+    ...p,
+    s24: Number(p.s24),
+    s48: Number(p.s48),
+    s72: Number(p.s72),
+    s7: Number(p.s7),
+    s30: Number(p.s30),
+  }));
+  const lists = bundleLists(counted, coins, sideCoins, excluded, hidden);
+  const labeled = bundleLabels(
+    wallet,
+    counted,
+    { 24: coins["24h"], 48: Number(own[0]?.c48 ?? 0), 72: Number(own[0]?.c72 ?? 0) },
     excluded,
     hidden,
   );
@@ -287,5 +359,6 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
       BundleSideWallet[]
     >,
     likelyBots: lists.likelyBots,
+    labeled,
   };
 }

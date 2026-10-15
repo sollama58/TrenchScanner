@@ -2,11 +2,19 @@
 import "./bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { bundleLists, clearBundleCache, loadWalletBundle, type BundlePairRow } from "./walletBundle.js";
+import {
+  bundleLabels,
+  bundleLists,
+  clearBundleCache,
+  loadWalletBundle,
+  type BundlePairRow,
+} from "./walletBundle.js";
 
 const pair = (side: string, s24: number, s7: number, s30: number): BundlePairRow => ({
   side,
   s24,
+  s48: s24,
+  s72: s24,
   s7,
   s30,
   g24: 5,
@@ -37,6 +45,39 @@ describe("bundleLists", () => {
     expect(sides["30d"].map((s) => s.wallet)).toEqual(["month", "day"]);
     expect(sides["30d"][0]).toEqual({ wallet: "month", shared: 30, pct: 75, coins: 30, gapSec: 7 });
     expect(likelyBots).toEqual(["bot"]);
+  });
+});
+
+describe("bundleLabels", () => {
+  it("names the wallets meeting a Possible Side tier, strongest first, bots and excluded left out", () => {
+    const row = (side: string, s24: number, s48: number, s72: number): BundlePairRow => ({
+      side,
+      s24,
+      s48,
+      s72,
+      s7: s72,
+      s30: s72,
+      g24: 0,
+      g7: 0,
+      g30: 0,
+    });
+    const labels = bundleLabels(
+      "7xKXtgAbcdef",
+      [
+        row("all10", 10, 10, 10), // 100% of 10 coins over 24 hours
+        row("nine", 9, 9, 9), // under ten
+        row("two-days", 4, 27, 27), // 27 of 30 over 48 hours is 90%
+        row("bot", 10, 10, 10),
+        row("cex", 10, 10, 10),
+      ],
+      { 24: 10, 48: 30, 72: 60 },
+      new Set(["cex"]),
+      new Set(["bot"]),
+    );
+    expect(labels).toEqual([
+      { wallet: "all10", pct: 100, shared: 10, coins: 10, hours: 24, name: "7xKXtg_1" },
+      { wallet: "two-days", pct: 90, shared: 27, coins: 30, hours: 48, name: "7xKXtg_2" },
+    ]);
   });
 });
 
@@ -88,6 +129,8 @@ describe.skipIf(!dbAvailable)("loadWalletBundle", () => {
       { wallet: side, shared: 27, pct: 90, coins: 27, gapSec: 60, risk: null },
     ]);
     expect(bundle.sides["24h"]).toEqual([]);
+    // Ten days back is outside every Possible Side tier's span: nothing would qualify for a label.
+    expect(bundle.labeled).toEqual([]);
     // Served from the cache inside the hour.
     expect(await loadWalletBundle(seed, now + 60_000)).toBe(bundle);
 

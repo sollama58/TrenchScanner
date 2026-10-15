@@ -1,4 +1,10 @@
-import { SIDE_BOT_MIN_COINS, SIDE_BOT_SHARE, SIDE_MIN_PCT } from "./sideWalletRules.js";
+import {
+  POSSIBLE_SIDE_TIERS,
+  SIDE_BOT_MIN_COINS,
+  SIDE_BOT_SHARE,
+  SIDE_MIN_PCT,
+  type SideTierHours,
+} from "./sideWalletRules.js";
 
 /**
  * The side-wallet ranking both readers share: the worker's hourly KOL lists (kolSideWalletsJob.ts)
@@ -62,4 +68,34 @@ export function rankSideWallets(
 /** Whether a wallet's coin count in a window marks it as a bot (in a large share of everything). */
 export function isBot(coins: number, totalCoins: number): boolean {
   return coins >= SIDE_BOT_MIN_COINS && coins > totalCoins * SIDE_BOT_SHARE;
+}
+
+/**
+ * The wallets strong enough to label a possible side wallet of the KOL (or a wallet's Multi-Wallet-
+ * Bundle), from its pairs and coin count over each tier's span: the first tier a wallet meets.
+ */
+export function possibleSides(
+  spans: Readonly<Record<SideTierHours, { pairs: readonly PairRow[]; kolCoins: number }>>,
+): { wallet: string; pct: number; shared: number; kolCoins: number; hours: number }[] {
+  const out = new Map<
+    string,
+    { wallet: string; pct: number; shared: number; kolCoins: number; hours: number }
+  >();
+  for (const tier of POSSIBLE_SIDE_TIERS) {
+    const { pairs, kolCoins } = spans[tier.hours];
+    if (kolCoins <= 0) continue;
+    for (const p of pairs) {
+      if (out.has(p.side) || p.shared < tier.minShared) continue;
+      const pct = (Math.min(p.shared, kolCoins) / kolCoins) * 100;
+      if (pct + 1e-9 < tier.minPct) continue;
+      out.set(p.side, {
+        wallet: p.side,
+        shared: p.shared,
+        pct: Math.round(pct * 10) / 10,
+        kolCoins,
+        hours: tier.hours,
+      });
+    }
+  }
+  return [...out.values()];
 }
