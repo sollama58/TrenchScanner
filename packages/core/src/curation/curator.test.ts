@@ -6,6 +6,8 @@ import {
   MAX_EVENT_AGE_MINUTES,
   PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES,
   passesEventPreGate,
+  PRE_GATE_OLD_COIN_MIN_5M_PCT,
+  PRE_GATE_OLD_COIN_MIN_AGE_MINUTES,
   walletChecksKnown,
 } from "./curator.js";
 import type { ScoredToken } from "../types.js";
@@ -238,7 +240,7 @@ describe("curationRankScore", () => {
 describe("passesEventPreGate", () => {
   const band = { min: 100_000, max: 500_000 };
   const ready = (overrides: Partial<ScoredToken> = {}) =>
-    strongCandidate({ buys1h: 60, sells1h: 40, priceChange5mPct: 4, ...overrides });
+    strongCandidate({ buys1h: 60, sells1h: 40, priceChange5mPct: 4, ageMinutes: 30, ...overrides });
 
   it("marks an in-band token with buyers in control and a rising last five minutes", () => {
     expect(passesEventPreGate(ready(), band)).toBe(true);
@@ -249,8 +251,12 @@ describe("passesEventPreGate", () => {
   it("skips out-of-band, sell-dominated, tradeless-hour and falling moments", () => {
     expect(passesEventPreGate(ready({ marketCapUsd: 50_000 }), band)).toBe(false);
     // Six hours is the oldest a decided-on token may be; unknown age passes.
-    expect(passesEventPreGate(ready({ ageMinutes: MAX_EVENT_AGE_MINUTES }), band)).toBe(true);
-    expect(passesEventPreGate(ready({ ageMinutes: MAX_EVENT_AGE_MINUTES + 1 }), band)).toBe(false);
+    expect(passesEventPreGate(ready({ ageMinutes: MAX_EVENT_AGE_MINUTES, priceChange5mPct: 30 }), band)).toBe(
+      true,
+    );
+    expect(
+      passesEventPreGate(ready({ ageMinutes: MAX_EVENT_AGE_MINUTES + 1, priceChange5mPct: 30 }), band),
+    ).toBe(false);
     expect(passesEventPreGate(ready({ ageMinutes: undefined }), band)).toBe(true);
     expect(passesEventPreGate(ready({ buys1h: 40, sells1h: 60 }), band)).toBe(false);
     expect(passesEventPreGate(ready({ buys1h: 0, sells1h: 0 }), band)).toBe(false);
@@ -264,5 +270,17 @@ describe("passesEventPreGate", () => {
     expect(passesEventPreGate(young({ ageMinutes: undefined }), band)).toBe(false);
     expect(passesEventPreGate(young({ buys1h: 0, sells1h: 0 }), band)).toBe(false);
     expect(passesEventPreGate(young({ priceChange5mPct: -2 }), band)).toBe(false);
+  });
+
+  it("wants the last five minutes up 25%+ from an hour old, and a known 5m candle", () => {
+    const old = (o: Partial<ScoredToken> = {}) =>
+      ready({ ageMinutes: PRE_GATE_OLD_COIN_MIN_AGE_MINUTES, ...o });
+    expect(passesEventPreGate(old({ priceChange5mPct: PRE_GATE_OLD_COIN_MIN_5M_PCT }), band)).toBe(true);
+    expect(passesEventPreGate(old({ priceChange5mPct: 24 }), band)).toBe(false);
+    expect(passesEventPreGate(old({ priceChange5mPct: undefined }), band)).toBe(false);
+    // Just under the hour, "not falling" is enough.
+    expect(passesEventPreGate(old({ ageMinutes: 59, priceChange5mPct: 0 }), band)).toBe(true);
+    // The scan's "held by the 5-minute test alone" probe leaves it out.
+    expect(passesEventPreGate(old({ priceChange5mPct: 3 }), band, { skip5m: true })).toBe(true);
   });
 });

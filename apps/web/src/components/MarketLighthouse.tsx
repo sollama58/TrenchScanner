@@ -1247,7 +1247,13 @@ function PreChecks({ s }: { s: ScreenedData }) {
           </li>
           <li>Under {Math.round(c.maxAgeMinutes / 60)} hours old.</li>
           <li>At least {c.minBuySharePct}% of the last hour&apos;s trades are buys.</li>
-          <li>Price not falling over the last 5 minutes.</li>
+          <li>
+            Price not falling over the last 5 minutes
+            {c.oldCoinMin5mPct !== undefined && c.oldCoinMinAgeMinutes !== undefined
+              ? `, and up at least ${c.oldCoinMin5mPct}% once it is ${c.oldCoinMinAgeMinutes >= 60 ? `${c.oldCoinMinAgeMinutes / 60} hour${c.oldCoinMinAgeMinutes === 60 ? "" : "s"}` : `${c.oldCoinMinAgeMinutes} minutes`} old`
+              : ""}
+            .
+          </li>
           <li>Holder wallet checks finished.</li>
         </ul>
       </div>

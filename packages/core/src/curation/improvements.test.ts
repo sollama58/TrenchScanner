@@ -405,7 +405,11 @@ describe("pseudo-event decision rows", () => {
     expect(isDecisionRow(row({}, "event"))).toBe(true);
     // The age cap applies to stored event rows too (banked before the cap) and to pseudo-events.
     expect(isDecisionRow(row({ ageMinutes: 361 }, "event"))).toBe(false);
-    expect(isDecisionRow(row({ ageMinutes: 360 }, "event"))).toBe(true);
+    expect(isDecisionRow(row({ ageMinutes: 360, priceChange5mPct: 30 }, "event"))).toBe(true);
+    // So does the old-coin five-minute test (2026-10-15): an hour old wants the last 5 minutes up 25%+.
+    expect(isDecisionRow(row({ ageMinutes: 90, priceChange5mPct: 10 }, "event"))).toBe(false);
+    expect(isDecisionRow(row({ ageMinutes: 90 }, "event"))).toBe(false);
+    expect(isDecisionRow(row({ ageMinutes: 30, priceChange5mPct: 0 }, "event"))).toBe(true);
     expect(
       isDecisionRow(
         row({ mcapUsd: 50_000, buys1h: 60, sells1h: 40, priceChange5mPct: 2, ageMinutes: 400 }),

@@ -1688,6 +1688,9 @@ export interface MarketLighthouse {
       mcapMaxUsd: number;
       maxAgeMinutes: number;
       minBuySharePct: number;
+      /** From this age the last 5 minutes must be up oldCoinMin5mPct or more. Absent from older API builds. */
+      oldCoinMinAgeMinutes?: number;
+      oldCoinMin5mPct?: number;
     };
   };
   /**

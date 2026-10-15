@@ -6,6 +6,8 @@ import {
   inMcapBand,
   MAX_EVENT_AGE_MINUTES,
   passesEventPreGate,
+  PRE_GATE_OLD_COIN_MIN_5M_PCT,
+  PRE_GATE_OLD_COIN_MIN_AGE_MINUTES,
   type McapBand,
 } from "./curator.js";
 import type { IsotonicCalibration } from "./calibration.js";
@@ -1453,7 +1455,8 @@ export interface WalkForwardOptions {
  * live scan would have decided on had it been looking, graded by the same label. Event rows
  * alone date from 2026-10-03; pseudo-events let the exam reach back over the whole window.
  * An event row banked under an older, looser gate is re-tested too, so the exam's population
- * follows the gate the live scan applies now (the age cap of 2026-10-05 is the case so far).
+ * follows the gate the live scan applies now (the age cap of 2026-10-05, and the old-coin
+ * five-minute test of 2026-10-15).
  */
 export function isDecisionRow(row: TrainingRow, band?: McapBand): boolean {
   if (row.sampleKind === undefined) return true;
@@ -1465,7 +1468,12 @@ export function isDecisionRow(row: TrainingRow, band?: McapBand): boolean {
   };
   if (row.sampleKind === "event") {
     const age = num("ageMinutes");
-    return age === undefined || age <= MAX_EVENT_AGE_MINUTES;
+    if (age === undefined) return true;
+    if (age > MAX_EVENT_AGE_MINUTES) return false;
+    // The old-coin momentum test of 2026-10-15 (PRE_GATE_OLD_COIN_MIN_5M_PCT) re-applies here too.
+    if (age < PRE_GATE_OLD_COIN_MIN_AGE_MINUTES) return true;
+    const change5m = num("priceChange5mPct");
+    return change5m !== undefined && change5m >= PRE_GATE_OLD_COIN_MIN_5M_PCT;
   }
   if (band === undefined) return false;
   return passesEventPreGate(
