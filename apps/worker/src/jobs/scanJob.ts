@@ -920,6 +920,11 @@ async function scanCycle(
       .map((c) => c.mintAddress),
     deps.helius,
     env,
+    Date.now(),
+    // A young coin failing a holder cut is re-read every minute here too: on the plain 5-minute
+    // TTL a list read in its first seconds (every holder then a first buyer) kept it failing the
+    // snipers cut for minutes after the holders had turned over.
+    holderTtl,
   );
   lap("onChainHolders");
 
