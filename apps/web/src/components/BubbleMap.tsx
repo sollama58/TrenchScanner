@@ -212,7 +212,7 @@ function MapView({
   // A picked bubble's cluster lights up; so does a cluster picked from the list.
   const lit = node ? node.cluster : focus;
   const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator"));
-  const largest = graph.clusters[0]?.pct ?? null;
+  const traits = new Map(traitShares(graph).map((t) => [t.trait, t]));
   const { sides, groups, showSides, setSideOn } = side;
   // Each KOL and the supply it may control: side wallets, KOL funded wallets and their linked holders.
   const kols = useKols(graph, groups, names);
@@ -269,9 +269,28 @@ function MapView({
             {kolBundled === null ? "–" : pct(kolBundled, 1)}
           </dd>
         </div>
-        <div title="Largest cluster: the share of supply held by the biggest group of wallets one funder paid for (not one wallet; the card's Largest is the largest single holder)">
-          <dt>Largest cluster</dt>
-          <dd className="num">{pct(largest, 1)}</dd>
+        {/* Fresh, sniper and empty wallets on the map, each its count and supply, in place of
+            Largest cluster (user ask 2026-10-15). */}
+        <div
+          className="bm-traits-stat"
+          title={TRAIT_ORDER.map((t) => {
+            const s = traits.get(t);
+            return `${TRAIT_WORDS[t]}: ${s?.count ?? 0} holding ${pct(s?.pct ?? 0, 1)}`;
+          }).join("\n")}
+        >
+          <dt>Wallet types</dt>
+          <dd className="num">
+            {TRAIT_ORDER.map((t) => {
+              const s = traits.get(t);
+              return (
+                <span key={t} className={s ? undefined : "muted"}>
+                  <TraitIcon trait={t} />
+                  {s?.count ?? 0}
+                  {s && <small>{pct(s.pct, 1)}</small>}
+                </span>
+              );
+            })}
+          </dd>
         </div>
         {graph.sameTimeGroups.length > 0 && (
           <div
@@ -1154,6 +1173,9 @@ function TraitIcon({ trait }: { trait: WalletTrait }) {
     </svg>
   );
 }
+
+/** The order the stat tile lists the traits in (user ask 2026-10-15). */
+const TRAIT_ORDER: readonly WalletTrait[] = ["fresh", "sniper", "empty"];
 
 /** What each trait means, for its bubble's tooltip. */
 const TRAIT_WORDS: Record<WalletTrait, string> = {

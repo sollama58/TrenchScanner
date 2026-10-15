@@ -10657,6 +10657,27 @@ img.tm-avatar {
   font-size: 17px;
   font-weight: 700;
 }
+/* Fresh · Sniper · Empty: each trait's icon, count and supply on one line. */
+.bm-stats .bm-traits-stat dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  font-size: 15px;
+}
+.bm-traits-stat dd > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.bm-traits-stat dd > span.muted {
+  opacity: 0.55;
+}
+.bm-traits-stat dd small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
 .bm-stage {
   position: relative;
   border-radius: 14px;
