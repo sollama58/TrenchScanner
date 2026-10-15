@@ -876,9 +876,11 @@ describe("X account signals as context (rules 0.23.0)", () => {
       },
       "complete",
     );
-    expect(f.highFlagCount).toBe(1);
+    // spoofed_tweet_handle no longer counts at all (DROPPED_FLAG_CODES, 2026-10-15).
+    expect(f.highFlagCount).toBe(0);
     expect(f.warnFlagCount).toBe(1);
     expect(f.flags).toContain("recycled_x_account");
+    expect(f.flags).not.toContain("spoofed_tweet_handle");
     expect(tokenSageFlagSeverity("recycled_x_account", "high")).toBe("info");
     expect(tokenSageFlagSeverity("spoofed_tweet_handle", "high")).toBe("high");
     expect(tokenSageFlagSeverity("copycat", undefined)).toBe("info");

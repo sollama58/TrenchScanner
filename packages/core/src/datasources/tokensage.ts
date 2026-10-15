@@ -42,10 +42,26 @@ const FLAG_SEVERITY_NOW: Readonly<Record<string, "info" | "warn" | "high">> = {
   recycled_x_account: "info",
 };
 
+/**
+ * Spoofed X (user decision 2026-10-15, notes/overlap-audit-2026-10-15/report.md): a status URL whose
+ * handle is not the post's author no longer counts for anything. It was TokenSage's only "high"
+ * flag, so the red-flag count, the scorer's cap, the "unrelated X" filter and the nsXSpoofed input
+ * all fired on the same fact. TokenSage stops raising it; a read made before that drops it here, so
+ * old and new reads count the same.
+ */
+export const DROPPED_FLAG_CODES: ReadonlySet<string> = new Set(["spoofed_tweet_handle"]);
+/** The X relation the same decision dropped: such a post reads as no relation. */
+export const DROPPED_X_RELATIONS: ReadonlySet<string> = new Set(["spoofed"]);
+
 /** A flag's severity under today's rules: TokenSage's own, unless it has since lowered it. */
 export function tokenSageFlagSeverity(code: unknown, severity: unknown): string {
   if (typeof code === "string" && FLAG_SEVERITY_NOW[code] !== undefined) return FLAG_SEVERITY_NOW[code];
   return typeof severity === "string" ? severity : "info";
+}
+
+/** An X relation as it counts today: a dropped one (DROPPED_X_RELATIONS) reads as none. */
+export function xRelationNow(relation: string | null | undefined): string | null {
+  return relation && !DROPPED_X_RELATIONS.has(relation) ? relation : null;
 }
 
 /**
@@ -733,8 +749,9 @@ export interface TokenNarrativeFields {
   copiesRecent: boolean | null;
   /**
    * How the linked X post relates to the coin (x.relation: "launch_announcement",
-   * "official_account", "narrative_reference", "spoofed", "search_only"; kept open). Null when
-   * the post was not read (basic depth, no link, or a fetch that failed).
+   * "official_account", "narrative_reference", "search_only"; kept open). Null when
+   * the post was not read (basic depth, no link, or a fetch that failed), and for "spoofed", which
+   * no longer counts (DROPPED_X_RELATIONS).
    */
   xRelation: string | null;
   /** The post author's follower count, when the post was read. */
@@ -799,7 +816,8 @@ export interface TokenNarrativeFields {
   feeSummary: string | null;
   /**
    * Flag counts by severity, so a reader needs no catalogue of codes. 0 when there are none.
-   * Severity as of today's rules (tokenSageFlagSeverity): recycled_x_account counts as info.
+   * Severity as of today's rules (tokenSageFlagSeverity): recycled_x_account counts as info, and
+   * the dropped flags (DROPPED_FLAG_CODES) count nowhere.
    */
   highFlagCount: number;
   warnFlagCount: number;
@@ -863,7 +881,9 @@ export function narrativeFieldsFromAnalysis(
     if (label !== null && confidence !== null) categories.push({ label: label.slice(0, 80), confidence });
     if (categories.length >= 20) break;
   }
-  const flagRecords = asArray(doc.flags).map(asRecord);
+  const flagRecords = asArray(doc.flags)
+    .map(asRecord)
+    .filter((f) => !(f !== null && typeof f.code === "string" && DROPPED_FLAG_CODES.has(f.code)));
   const flags = labels(
     flagRecords.map((f) => f?.code),
     30,
@@ -958,7 +978,7 @@ export function narrativeFieldsFromAnalysis(
     pairKind: clip(pair?.kind)?.slice(0, 40) ?? null,
     pairSymbol: clip(pair?.symbol)?.slice(0, 40) ?? null,
     copiesRecent,
-    xRelation: xRead ? (clip(x.relation)?.slice(0, 40) ?? null) : null,
+    xRelation: xRead ? xRelationNow(clip(x.relation)?.slice(0, 40) ?? null) : null,
     xAuthorFollowers: xRead ? count(asRecord(x.author)?.followers) : null,
     xPredatesTokenS: xRead ? count(x.predates_token_by_s) : null,
     xReuseCount: xRead ? count(x.reuse_count) : null,

@@ -226,7 +226,9 @@ describe("buildCandidateFeatures - livestream", () => {
     const unknown = buildCandidateFeatures(scored({}));
     expect(unknown.livestreamLive).toBeNull();
     expect(unknown.livestreamViewers).toBeNull();
-    expect(LEARNER_FEATURE_NAMES).toContain("livestreamLive");
+    // Recorded still, but the learners read the viewer count only (live is viewers > 0, 2026-10-15).
+    expect(LEARNER_FEATURE_NAMES).not.toContain("livestreamLive");
+    expect(LEARNER_FEATURE_NAMES).toContain("livestreamViewers");
     expect(scoredFromFeatures(live, 1, 100_000).livestream).toEqual({ live: true, viewers: 42 });
     expect(scoredFromFeatures(unknown, 1, 100_000).livestream).toBeUndefined();
   });

@@ -567,3 +567,40 @@ describe("narrative input scales", () => {
     expect(NARRATIVE_UNTRANSFORMED_FEATURES).toContain("nsCopycat");
   });
 });
+
+describe("Spoofed X no longer counts (2026-10-15)", () => {
+  it("drops the flag, its high count and the relation from a stored read", () => {
+    const read = narrativeReadFromRow({
+      depth: "full",
+      status: "complete",
+      analyzedAt: null,
+      categories: [],
+      referentLabel: null,
+      referentKind: null,
+      referentConfidence: null,
+      referentSupport: [],
+      flags: ["spoofed_tweet_handle", "copycat"],
+      highFlagCount: 1,
+      warnFlagCount: 0,
+      copiesRecent: null,
+      xFit: 1,
+      xVerdict: "about_this_coin",
+      xRelation: "spoofed",
+      xAuthorFollowers: null,
+      xPredatesTokenS: null,
+      xReuseCount: null,
+      trendMatched: null,
+    } as unknown as Parameters<typeof narrativeReadFromRow>[0])!;
+    expect(read.flags).toEqual(["copycat"]);
+    expect(read.highFlagCount).toBe(0);
+    expect(read.xRelation).toBeNull();
+    expect(narrativeFeatureValues(read).nsXSpoofed).toBe(0);
+    expect(narrativeFeatureValues(read).nsHighFlagCount).toBe(0);
+  });
+
+  it("takes it out of a replayed row's high count", () => {
+    const replay = narrativeFromFeatures({ nsDepthFull: 1, nsXRead: 1, nsXSpoofed: 1, nsHighFlagCount: 1 });
+    expect(replay?.highFlagCount).toBe(0);
+    expect(replay?.xRelation).not.toBe("spoofed");
+  });
+});

@@ -232,7 +232,7 @@ describe("scoreNarrative", () => {
     expect(scoreNarrative(baseToken({ narrative: aboutSearch }))).toBe(NARRATIVE_NEUTRAL);
   });
 
-  it("punishes an unrelated, spoofed or mismatched post", () => {
+  it("punishes an unrelated or mismatched post, not a spoofed one", () => {
     const unrelated = read({
       depth: "full",
       xVerdict: "unrelated",
@@ -241,7 +241,12 @@ describe("scoreNarrative", () => {
     });
     expect(scoreNarrative(baseToken({ narrative: unrelated }))).toBe(25);
     const spoofed = read({ depth: "full", xVerdict: "about_this_coin", xFit: 1, xRelation: "spoofed" });
-    expect(scoreNarrative(baseToken({ narrative: spoofed }))).toBe(25);
+    // A spoofed handle no longer counts (2026-10-15): it scores like a post with no relation.
+    const plain = read({ depth: "full", xVerdict: "about_this_coin", xFit: 1, xRelation: "search_only" });
+    expect(scoreNarrative(baseToken({ narrative: spoofed }))).toBe(
+      scoreNarrative(baseToken({ narrative: plain })),
+    );
+    expect(scoreNarrative(baseToken({ narrative: spoofed }))).toBeGreaterThan(25);
     const mismatch = read({
       depth: "full",
       xVerdict: "related",

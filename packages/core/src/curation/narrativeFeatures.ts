@@ -15,9 +15,11 @@
  */
 
 import {
+  DROPPED_FLAG_CODES,
   TOKENSAGE_GENTLE_CREDIBILITY_RULES,
   TOKENSAGE_LOGO_MIN_SCORE,
   tokenSageRulesAtLeast,
+  xRelationNow,
 } from "../datasources/tokensage.js";
 import type { CandidateFeatureName } from "./features.js";
 
@@ -809,6 +811,8 @@ export function narrativeReadFromRow(row: NarrativeRow | null | undefined): Narr
       }
     }
   }
+  const storedFlags: string[] = Array.isArray(row.flags) ? row.flags : [];
+  const droppedHigh = storedFlags.filter((f) => DROPPED_FLAG_CODES.has(f)).length;
   return {
     depth: row.depth === "full" ? "full" : "basic",
     status: row.status,
@@ -820,13 +824,15 @@ export function narrativeReadFromRow(row: NarrativeRow | null | undefined): Narr
     referentConfidence: row.referentConfidence,
     referentSupport: Array.isArray(row.referentSupport) ? row.referentSupport : [],
     referentGeneric: row.referentGeneric ?? null,
-    flags: Array.isArray(row.flags) ? row.flags : [],
-    highFlagCount: row.highFlagCount ?? 0,
+    // A read stored before Spoofed X stopped counting (DROPPED_FLAG_CODES): the flag goes, and the
+    // high count it added with it (spoofed_tweet_handle was "high").
+    flags: storedFlags.filter((f) => !DROPPED_FLAG_CODES.has(f)),
+    highFlagCount: Math.max(0, (row.highFlagCount ?? 0) - droppedHigh),
     warnFlagCount: row.warnFlagCount ?? 0,
     copiesRecent: row.copiesRecent,
     xFit: row.xFit,
     xVerdict: row.xVerdict,
-    xRelation: row.xRelation,
+    xRelation: xRelationNow(row.xRelation),
     xAuthorFollowers: row.xAuthorFollowers,
     xPredatesTokenS: row.xPredatesTokenS,
     xReuseCount: row.xReuseCount,
@@ -1242,9 +1248,7 @@ export function narrativeFromFeatures(
         ? "official_account"
         : num("nsXNarrativeRef") === 1
           ? "narrative_reference"
-          : num("nsXSpoofed") === 1
-            ? "spoofed"
-            : "search_only"
+          : "search_only"
     : null;
   const followersLog = num("nsXAuthorFollowersLog");
   const predatesMin = num("nsXPredatesTokenMin");
@@ -1274,7 +1278,9 @@ export function narrativeFromFeatures(
     referentSupport: Array.from({ length: num("nsReferentSupportCount") ?? 0 }, () => "(replayed)"),
     referentGeneric: num("nsReferentGeneric") === 1 ? true : (num("nsReferentConf") ?? 0) > 0 ? false : null,
     flags,
-    highFlagCount: num("nsHighFlagCount") ?? 0,
+    // Spoofed X no longer counts (DROPPED_FLAG_CODES), and on a row banked before it stopped it was
+    // the high flag, so a replay takes it back out of the count.
+    highFlagCount: Math.max(0, (num("nsHighFlagCount") ?? 0) - (num("nsXSpoofed") === 1 ? 1 : 0)),
     warnFlagCount: num("nsWarnFlagCount") ?? 0,
     copiesRecent: num("nsCopycat") === null ? null : num("nsCopycat") === 1,
     xFit: num("nsXFit"),

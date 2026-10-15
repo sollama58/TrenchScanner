@@ -40,7 +40,13 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
-  if (filter.minHolderGrowthPct != null && (token.holderGrowthPct ?? -Infinity) < filter.minHolderGrowthPct) {
+  // Over the last 10 minutes (user decision 2026-10-15, notes/overlap-audit-2026-10-15/report.md):
+  // the 30-minute growth it read before is unknown for every coin under 30 minutes old, so the
+  // floor, failing closed, hid every young coin whatever its value.
+  if (
+    filter.minHolderGrowthPct != null &&
+    (token.holderGrowth10mPct ?? -Infinity) < filter.minHolderGrowthPct
+  ) {
     return false;
   }
 
@@ -281,7 +287,8 @@ export function matchesNarrativeCriteria(
   if (filter.excludeLateCopies && narrativeIsLateCopy(read) !== false) return false;
   if (filter.excludeUnrelatedX) {
     if (read.depth !== "full" && hasXLink !== false) return false;
-    if (read.xVerdict === "unrelated" || read.xRelation === "spoofed") return false;
+    // A spoofed handle no longer counts (user decision 2026-10-15, tokensage.ts DROPPED_X_RELATIONS).
+    if (read.xVerdict === "unrelated") return false;
   }
   if (filter.requireTrendMatch && !(read.depth === "full" && read.trendMatched === true)) return false;
   return true;

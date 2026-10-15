@@ -591,29 +591,38 @@ function FilterEditor({
           />
           Skip copycats and reused names
         </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={draft.excludeLateCopies}
-            onChange={(e) => set("excludeLateCopies", e.target.checked)}
-          />
-          Skip late copies (the 11th or later coin with a name, or a copy of one more than a day old)
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={draft.excludeNarrativeRedFlags}
-            onChange={(e) => set("excludeNarrativeRedFlags", e.target.checked)}
-          />
-          Skip coins with a narrative red flag
-        </label>
+        {/* Merged away (user decision 2026-10-15, notes/overlap-audit-2026-10-15/report.md): shown only
+            on a filter that still has them on, so they can be cleared. 98% of late copies are
+            copycats, and Spoofed X, the only red flag TokenSage raised, no longer counts. */}
+        {draft.excludeLateCopies && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={draft.excludeLateCopies}
+              onChange={(e) => set("excludeLateCopies", e.target.checked)}
+            />
+            Skip late copies (old: replaced by Skip copycats above, which takes in almost every late copy;
+            still applies until you untick it)
+          </label>
+        )}
+        {draft.excludeNarrativeRedFlags && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={draft.excludeNarrativeRedFlags}
+              onChange={(e) => set("excludeNarrativeRedFlags", e.target.checked)}
+            />
+            Skip coins with a narrative red flag (old: its only flag was a spoofed X post, which no longer
+            counts; untick to clear it)
+          </label>
+        )}
         <label className="check">
           <input
             type="checkbox"
             checked={draft.excludeUnrelatedX}
             onChange={(e) => set("excludeUnrelatedX", e.target.checked)}
           />
-          Skip coins whose linked X post is unrelated or spoofed (needs the deep read)
+          Skip coins whose linked X post is unrelated (needs the deep read)
         </label>
         <label className="check">
           <input

@@ -547,6 +547,17 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "textScamSignals",
   "nsXCredibility",
   "nsFeeMutable",
+  // Exact repeats of another learner input (overlap audit, notes/overlap-audit-2026-10-15/report.md,
+  // user decision 2026-10-15), each keeping the side that carries more: the creator's fee share
+  // (fee redirected is share < 1 on every read, rho -0.99), the trend score (matched is score > 0,
+  // 0.99), the livestream's viewer count (live is viewers > 0, 0.99). nsXSpoofed equalled the
+  // red-flag count on every read and Spoofed X no longer counts at all (tokensage.ts
+  // DROPPED_X_RELATIONS), so it reads 0 from now on. Models trained with them keep reading the
+  // recorded values: retiring only keeps them out of the next run.
+  "nsFeeRedirected",
+  "nsTrendMatched",
+  "livestreamLive",
+  "nsXSpoofed",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
