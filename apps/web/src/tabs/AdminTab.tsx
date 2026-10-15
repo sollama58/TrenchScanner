@@ -556,12 +556,12 @@ function Overview() {
               <Kpi
                 label="Users"
                 value={n(o.users.total)}
-                sub={`+${o.users.new24h} today · +${o.users.new7d} this week`}
+                sub={`+${n(o.users.new24h)} today · +${n(o.users.new7d)} this week`}
               />
               <Kpi
                 label="Paying access"
                 value={n(o.access.activeSubscriptions)}
-                sub={`${o.access.whitelisted} whitelisted · ${o.access.burns7d} burns this week`}
+                sub={`${n(o.access.whitelisted)} whitelisted · ${n(o.access.burns7d)} burns this week`}
               />
               <Kpi
                 label="Model alerts"
@@ -573,7 +573,7 @@ function Overview() {
                 value={total ? `${pct(total.hitRate2xPct)} / ${pct(total.hitRate4xPct)}` : "–"}
                 sub={
                   total
-                    ? `${total.graded} graded · target ${o.targets.hitRate2xPct}% / ${o.targets.hitRate4xPct}%${
+                    ? `${n(total.graded)} graded · target ${o.targets.hitRate2xPct}% / ${o.targets.hitRate4xPct}%${
                         total.hitRate10xPct != null ? ` · 10x ${pct(total.hitRate10xPct, 1)}` : ""
                       }${total.ranLaterPct != null ? ` · ${pct(total.ranLaterPct, 1)} ran later` : ""}`
                     : hits.error
@@ -603,7 +603,7 @@ function Overview() {
               <Kpi
                 label="Database"
                 value={`${(o.databaseMb / 1024).toFixed(2)} GB`}
-                sub={`${o.activeFilters} active filters`}
+                sub={`${n(o.activeFilters)} active filters`}
               />
               <Kpi
                 label="API"
