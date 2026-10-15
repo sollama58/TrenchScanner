@@ -868,7 +868,7 @@ function NarrativeDocument({ mint, onClose }: { mint: string; onClose: () => voi
   return (
     <Panel
       title={`TokenSage on ${q.data?.token?.symbol ?? shortAddress(mint)}`}
-      note={mint}
+      note={<span className="num break-any">{mint}</span>}
       actions={
         <button className="ghost small" onClick={onClose}>
           Close

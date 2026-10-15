@@ -4907,6 +4907,18 @@ button.small-btn {
 .admin-form input.admin-days {
   flex: 0 0 90px;
 }
+/* A labelled field (Burn Credits › Prices): the label takes the row's share and its input keeps its
+   own height. The input's 220px basis above otherwise ran down the label's column, a 220px-tall box. */
+.admin-form .field {
+  flex: 1 1 180px;
+}
+.admin-form .field input {
+  flex: none;
+}
+/* A mint or other unbroken id in running text: wraps anywhere rather than pushing a phone sideways. */
+.break-any {
+  overflow-wrap: anywhere;
+}
 .admin-actions {
   display: inline-flex;
   flex-wrap: wrap;
