@@ -123,7 +123,7 @@ import {
   type LaunchSnipers,
   type SniperGroup,
 } from "./launchSnipers.js";
-import { resolveRugProfiles } from "./rugCheckProfiles.js";
+import { absentTtlFor, resolveRugProfiles } from "./rugCheckProfiles.js";
 import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js";
 import { noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
 import { settledRejects } from "./settledRejects.js";
@@ -917,6 +917,9 @@ async function scanCycle(
     env.RUGCHECK_MAX_LOOKUPS_PER_CYCLE,
     {
       refreshStaleInBackground: true,
+      // A young coin RugCheck had no report for yet is re-asked every minute, not every TTL:
+      // its decisions fall inside the first minutes (see absentTtlFor).
+      absentTtlMinutes: absentTtlFor(firstSeenByMint),
       // Only a coin that can be decided on this cycle waits for a re-check of "no report".
       awaitAbsentOnly: new Set(
         candidates

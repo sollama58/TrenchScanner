@@ -9,7 +9,7 @@ import {
   serializeCuratedAlert,
   withLatestSnapshots,
 } from "../curatedFeed.js";
-import { contestState, modelLabel } from "../contest.js";
+import { contestState, modelLabel, readerBoard } from "../contest.js";
 import {
   leaderboardDaysSchema,
   modelRunsRoute,
@@ -173,7 +173,7 @@ export async function registerGuestRoutes(
     const { days } = parsed.data;
     const [board, state] = await Promise.all([opts.reports.leaderboard(days), contestState(opts.env)]);
     return {
-      ...board,
+      ...readerBoard(board, state.defaultModels),
       selectedModel: state.defaultModels[0],
       selectedModels: state.defaultModels,
       followsDefault: true,

@@ -44,6 +44,7 @@ import {
   buildLeaderboard,
   contestState,
   modelLabel,
+  readerBoard,
   resolveFeedModel,
   resolveFeedModels,
   savedFeed,
@@ -532,7 +533,7 @@ export async function registerCuratedRoutes(
     ]);
     const feed = resolveFeedModels(state, saved);
     return {
-      ...board,
+      ...readerBoard(board, feed.models),
       // The single-ledger pick (/curated) - the first checked model.
       selectedModel: feed.models[0],
       // Every model whose calls the combined feed shows; the Live tab's checkboxes and the

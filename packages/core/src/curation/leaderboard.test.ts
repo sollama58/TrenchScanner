@@ -5,6 +5,7 @@ import {
   emptyRecord,
   explainScore,
   liveCatch,
+  mixCatch,
   marketLift,
   noteRunners,
   pooledRecord,
@@ -354,6 +355,64 @@ describe("liveCatch", () => {
     const { byModel, field } = liveCatch([], [], new Map([["m", at(0)]]));
     expect(byModel.get("m")).toEqual({ runners: 0, caught: 0, pct: null });
     expect(field.pct).toBeNull();
+  });
+});
+
+describe("mixCatch", () => {
+  const at = (h: number) => new Date(Date.UTC(2026, 9, 10, h));
+  const { ledger } = liveCatch(
+    [
+      { token: "a", at: at(1) },
+      { token: "b", at: at(2) },
+      { token: "c", at: at(10) },
+      { token: "d", at: at(11) },
+      { token: "e", at: at(12) },
+    ],
+    [
+      { model: "old", token: "a" },
+      { model: "old", token: "c" },
+      { model: "new", token: "c" },
+      { model: "new", token: "d" },
+      { model: "wide", token: "a" },
+      { model: "wide", token: "b" },
+      { model: "wide", token: "e" },
+      { model: "retired", token: "b" },
+    ],
+    new Map([
+      ["old", at(0)],
+      ["new", at(5)],
+      ["wide", at(0)],
+      ["quiet", at(0)],
+    ]),
+  );
+
+  it("counts a runner caught when any seat in the mix caught it, since the mix's earliest start", () => {
+    const mix = mixCatch(ledger, ["new", "old"]);
+    expect(mix).toMatchObject({ runners: 5, caught: 3, pct: 60, models: ["new", "old"] });
+    expect(mix.since).toEqual(at(0));
+    // c is caught by both, so it is neither seat's alone.
+    expect(mix.members).toEqual([
+      { id: "new", caught: 2, only: 1 },
+      { id: "old", caught: 2, only: 1 },
+    ]);
+  });
+
+  it("matches a seat's own catch rate for a mix of one", () => {
+    expect(mixCatch(ledger, ["new"])).toMatchObject({ runners: 3, caught: 2, pct: 66.7 });
+  });
+
+  it("suggests the seats that would raise the share, best first, and only those", () => {
+    const mix = mixCatch(ledger, ["new"]);
+    // wide adds a, b, e (and starts earlier, so a and b join the runners): 5 of 5.
+    // old adds a but brings in a and b as runners: 3 of 5 is below 66.7%, so it isn't offered.
+    expect(mix.additions).toEqual([{ id: "wide", caught: 5, runners: 5, pct: 100 }]);
+  });
+
+  it("leaves out seats not on the board and reads null with no seats", () => {
+    expect(mixCatch(ledger, ["retired", "old"]).models).toEqual(["old"]);
+    const none = mixCatch(ledger, []);
+    expect(none).toMatchObject({ runners: 0, caught: 0, pct: null, since: null, members: [] });
+    expect(none.additions.map((a) => a.id)).toEqual(["new", "wide", "old"]);
   });
 });
 

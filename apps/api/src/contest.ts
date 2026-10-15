@@ -22,6 +22,7 @@ import {
   liveCallRecords,
   liveMarketLift,
   liveCatchRates,
+  mixCatch,
   loadCurrentLanes,
   rankByMarketLift,
   withLanes,
@@ -42,7 +43,9 @@ import {
   type CompositeScore,
   type Last24h,
   type MarketLift,
+  type CatchLedger,
   type LiveCatch,
+  type MixCoverage,
   type RecordSummary,
   type ContestantSpec,
   type Env,
@@ -343,6 +346,11 @@ export interface Leaderboard {
   baseline: GradedRates;
   /** The runners over the window and how many any seat caught: the ones the whole board let slip. */
   runners: LiveCatch;
+  /**
+   * What the catch rates were counted from, so a reader's own mix can be scored (readerBoard). Names
+   * tokens, so it never leaves the process: readerBoard drops it.
+   */
+  catchLedger: CatchLedger;
   scoring: {
     weights: typeof COMPOSITE_WEIGHTS;
     /** Run-size target, in doublings per call (2 = a 4x average). */
@@ -518,6 +526,19 @@ export async function defaultFeedRecord(
   };
 }
 
+/**
+ * The board as one reader sees it: without the catch ledger, and with the Coverage Meter for the
+ * models their feed shows - the share of the window's runners those models would have caught
+ * together (mixCatch).
+ */
+export function readerBoard(
+  board: Leaderboard,
+  models: readonly string[],
+): Omit<Leaderboard, "catchLedger"> & { coverage: MixCoverage } {
+  const { catchLedger, ...rest } = board;
+  return { ...rest, coverage: mixCatch(catchLedger, models) };
+}
+
 export async function buildLeaderboard(
   env: Env,
   days: number,
@@ -659,6 +680,7 @@ export async function buildLeaderboard(
     },
     baseline,
     runners: catches.field,
+    catchLedger: catches.ledger,
     scoring: {
       weights: COMPOSITE_WEIGHTS,
       runTargetDoublings: RUN_SIZE_TARGET_DOUBLINGS,

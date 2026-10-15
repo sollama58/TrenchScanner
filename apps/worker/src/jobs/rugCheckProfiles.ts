@@ -81,6 +81,34 @@ export const STALE_MAX_AGE_MS = 30 * 60_000;
 /** The cache TTL of a report that listed no market - see resolveRugProfiles. */
 export const NO_MARKETS_TTL_MINUTES = 1;
 
+/**
+ * A cached "no report" on a young coin is re-asked after this long, not after the report TTL.
+ * RugCheck answers "not found" for a mint it hasn't indexed and indexes most Pump.fun launches
+ * within a few minutes; on the 5-minute cache a coin first seen at launch kept that answer past
+ * most of its decision moments (2026-10-14 13:00 to 10-15 22:00 UTC: 4% of decisions on coins
+ * under two minutes old carried a RugCheck holder count, against 75% before). Young, so the
+ * re-asks stay the handful of new arrivals a cycle - see absentTtlFor.
+ */
+export const YOUNG_ABSENT_RECHECK_TTL_MINUTES = 1;
+/** How long after a coin was first seen its "no report" answer is re-asked every minute. */
+export const YOUNG_ABSENT_RECHECK_MINUTES = 10;
+
+/**
+ * The TTL of a cached "no report" answer per mint: YOUNG_ABSENT_RECHECK_TTL_MINUTES while the coin
+ * was first seen under YOUNG_ABSENT_RECHECK_MINUTES ago, else the mint's own TTL (unknown first
+ * sight counts as old, so a mint the scan doesn't track is never re-asked faster).
+ */
+export function absentTtlFor(
+  firstSeenByMint: ReadonlyMap<string, Date | null | undefined>,
+  now: number = Date.now(),
+): (mintAddress: string, ttlMinutes: number) => number {
+  return (mintAddress, ttlMinutes) => {
+    const firstSeen = firstSeenByMint.get(mintAddress)?.getTime();
+    const young = firstSeen !== undefined && now - firstSeen <= YOUNG_ABSENT_RECHECK_MINUTES * 60_000;
+    return young ? Math.min(ttlMinutes, YOUNG_ABSENT_RECHECK_TTL_MINUTES) : ttlMinutes;
+  };
+}
+
 /** Added to the awaited lookups' deadline for the requests already in flight when it passes. */
 const AWAIT_GRACE_MS = 2_000;
 
@@ -181,6 +209,11 @@ export async function resolveRugProfiles(
      * stale report. Unset, every absent mint is waited on.
      */
     awaitAbsentOnly?: Set<string>;
+    /**
+     * The TTL of a cached "no report" answer, given the mint and its report TTL - see
+     * absentTtlFor. Unset, an absent answer lives as long as a report would.
+     */
+    absentTtlMinutes?: (mintAddress: string, ttlMinutes: number) => number;
   } = {},
 ): Promise<RugProfileResolution> {
   const unique = [...new Set(mintAddresses)];
@@ -196,8 +229,11 @@ export async function resolveRugProfiles(
   const ttlOf = typeof ttlMinutes === "number" ? () => ttlMinutes : ttlMinutes;
   // A report that listed no market yet (RugCheckProfile.marketsListed) is re-read every minute:
   // its LP answer is missing, not "not burned", until RugCheck lists the coin's venue.
+  // A cached "no report" on a young coin is re-asked sooner too (absentTtlMinutes): RugCheck
+  // indexes a launch minutes after it is first seen, inside the report TTL.
   const ttlFor = (r: { mintAddress: string; profile: unknown }) => {
     const ttl = ttlOf(r.mintAddress);
+    if (r.profile === null) return opts.absentTtlMinutes?.(r.mintAddress, ttl) ?? ttl;
     const unlisted = (r.profile as { marketsListed?: unknown } | null)?.marketsListed === false;
     return unlisted ? Math.min(ttl, NO_MARKETS_TTL_MINUTES) : ttl;
   };
@@ -210,7 +246,8 @@ export async function resolveRugProfiles(
   for (const row of fresh) {
     if (row.profile === null) {
       // A cached 404. Worth remembering: a brand-new mint RugCheck hasn't indexed would otherwise
-      // be re-requested on every single cycle, which is the busiest case, not the rarest.
+      // be re-requested on every single cycle, which is the busiest case, not the rarest. (On a
+      // young coin it ages out after a minute, not the full TTL - see absentTtlFor.)
       absent.add(row.mintAddress);
       hit.add(row.mintAddress);
       continue;

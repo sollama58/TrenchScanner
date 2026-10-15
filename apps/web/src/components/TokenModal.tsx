@@ -43,7 +43,7 @@ import {
   cardReadings,
   cexCountText,
   countCutFor,
-  linkedSeed,
+  linkedReading,
   nowReading,
   recordedPeakOf,
   SAFETY_MAX_FRESH_WALLET_PCT,
@@ -516,7 +516,7 @@ function useActiveSection(bodyRef: RefObject<HTMLDivElement | null>, ids: string
  * scan). Undefined while that loads, null when no scan has a list.
  */
 function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot | null | undefined {
-  const seed = linkedSeed(card)?.snapshot ?? null;
+  const seed = linkedReading(card);
   // Newest first, so the section follows the coin's scans and its "Last updated" means it.
   const own = [card.latestSnapshot, seed, card.snapshot].find((s) => s && hasHolderList(s)) ?? null;
   const [fetched, setFetched] = useState<{ mint: string; snapshot: Snapshot | null } | null>(null);
