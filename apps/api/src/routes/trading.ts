@@ -20,11 +20,13 @@ import {
   serverWithdrawTo,
   TradingRpc,
   tradingBotConfigSchema,
+  tradingBacktest,
+  type BacktestRow,
   type Env,
 } from "@trenchscanner/core";
 
 /**
- * The trading bot's tab (admin-only while it is new), in two scopes:
+ * The trading bot's section of the Admin tab, in two scopes:
  *
  *   /trading/*         the signed-in user's own custodial wallet (key sealed under KMS);
  *   /trading/server/*  the server wallet (key in the trader's environment), run by the admins
@@ -43,12 +45,13 @@ import {
  * withdrawing refuse sessions from a paired phone (QR device link): those tokens live a year on a
  * device. The server's optional ceilings (TRADING_MAX_*), where set, bound whatever the settings say.
  *
- * With TRADING_BOT_ENABLED off only GET /trading/status is registered (admins: what the bot
+ * With TRADING_BOT_ENABLED off only GET /trading/status and /trading/backtest are registered (admins: what the bot
  * would need to run, and the limits it would run under); every other route answers 404, so no
  * wallet can be created, no bot changed and nothing sold or withdrawn.
  */
 
 const MAX_POSITIONS_SHOWN = 100;
+const BACKTEST_CACHE_MS = 5 * 60_000;
 
 const withdrawSchema = z.object({
   /** Lamports as a decimal string, or "max" for everything less the fee. */
@@ -77,7 +80,8 @@ interface Owner {
 }
 
 /**
- * Whether the bot runs on this deployment and what it is missing, for the Bot tab's status card.
+ * Whether the bot runs on this deployment and what it is missing, for the status card in
+ * Admin -> Trading bot.
  * Names settings, never their values: nothing here is secret.
  */
 export function tradingStatus(env: Env, keyProblem: string | null) {
@@ -144,6 +148,20 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
   app.get("/status", async (request, reply) => {
     if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });
     return status;
+  });
+  // What the models would have bought lately, with and without the AI gate: read-only, so it is
+  // there while the bot is off too. Cached a few minutes; the outcomes behind it settle slowly.
+  const backtests = new Map<number, { at: number; rows: Promise<BacktestRow[]> }>();
+  app.get<{ Querystring: { days?: string } }>("/backtest", async (request, reply) => {
+    if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });
+    const days = Math.min(30, Math.max(1, Math.round(Number(request.query.days ?? 7)) || 7));
+    let hit = backtests.get(days);
+    if (!hit || Date.now() - hit.at > BACKTEST_CACHE_MS) {
+      hit = { at: Date.now(), rows: tradingBacktest(days) };
+      hit.rows.catch(() => backtests.delete(days));
+      backtests.set(days, hit);
+    }
+    return { days, models: await hit.rows };
   });
   if (!env.TRADING_BOT_ENABLED) return;
   const rpc = new TradingRpc({

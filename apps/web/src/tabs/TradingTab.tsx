@@ -52,6 +52,7 @@ interface BotConfig {
   exitSlippageMaxBps: number;
   maxEntryTries: number;
   maxPriorityFeeSol: number;
+  jitoTipSol: number;
   reserveSol: number;
   exitPlan: ExitPlan | null;
 }
@@ -290,6 +291,10 @@ function BotOff({ status }: { status: TradingStatus }) {
             <dd className="small">{status.exitPlanSummary}</dd>
           </div>
           <div>
+            <dt>Sends through</dt>
+            <dd className="small">{d.jitoTipSol > 0 ? `Jito, ${d.jitoTipSol} SOL tip` : "the RPC"}</dd>
+          </div>
+          <div>
             <dt>AI judge</dt>
             <dd className="small">
               {d.sources.requireAiBuy ? "Buys only on its buy verdict" : "Not consulted"}
@@ -301,6 +306,7 @@ function BotOff({ status }: { status: TradingStatus }) {
           </div>
         </dl>
       </section>
+      <BacktestPanel />
     </div>
   );
 }
@@ -386,6 +392,7 @@ function TradingConsole() {
       <WalletPanel state={state} reload={reload} />
       {state.wallet && state.canTrade && <BotPanel state={state} reload={reload} />}
       {state.wallet && <PositionsPanel state={state} reload={reload} />}
+      {state.canTrade && <BacktestPanel />}
     </div>
   );
 }
@@ -839,6 +846,20 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
                 value={draft.maxPriorityFeeSol}
                 onChange={(e) => edit({ ...draft, maxPriorityFeeSol: num(e.target.value) })}
               />
+              <small className="faint">Also caps how far a retry raises the Jito tip.</small>
+            </label>
+            <label className="field">
+              <span>Jito tip (SOL)</span>
+              <input
+                type="number"
+                step="any"
+                min={0}
+                value={draft.jitoTipSol}
+                onChange={(e) => edit({ ...draft, jitoTipSol: num(e.target.value) })}
+              />
+              <small className="faint">
+                Swaps go through Jito with this tip, out of reach of sandwich bots. 0 sends them normally.
+              </small>
             </label>
             <label className="field">
               <span>Keep in reserve (SOL)</span>
@@ -1179,6 +1200,119 @@ function PositionsPanel({ state, reload }: { state: TradingState; reload: () => 
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+interface BacktestSlice {
+  calls: number;
+  wins: number;
+  hitRate: number | null;
+  avgReturnPct: number | null;
+}
+interface BacktestRow {
+  model: string;
+  name: string;
+  all: BacktestSlice;
+  high: BacktestSlice;
+  aiBuy: BacktestSlice;
+  highAiBuy: BacktestSlice;
+}
+
+const BACKTEST_SLICES = [
+  ["all", "Every call"],
+  ["high", "High conviction"],
+  ["aiBuy", "AI buy"],
+  ["highAiBuy", "High + AI buy"],
+] as const;
+
+/**
+ * What each model's calls would have done lately, with and without the AI gate: how many were
+ * graded, the share that doubled in the win window, and the average return under the default
+ * exit plan. The evidence for picking sources (the project's goal is a 75% hit rate on 2x).
+ */
+function BacktestPanel() {
+  const [days, setDays] = useState(7);
+  const [rows, setRows] = useState<BacktestRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setRows(null);
+    api<{ models: BacktestRow[] }>(`/trading/backtest?days=${days}`)
+      .then((r) => {
+        setRows(r.models);
+        setError(null);
+      })
+      .catch((err: unknown) => setError(errorText(err)));
+  }, [days]);
+  const cell = (s: BacktestSlice) =>
+    s.calls === 0 ? (
+      <span className="faint">–</span>
+    ) : (
+      <>
+        <span className={s.hitRate !== null && s.hitRate >= 0.75 ? "up" : undefined}>
+          {Math.round((s.hitRate ?? 0) * 100)}%
+        </span>{" "}
+        <span className="faint">
+          of {s.calls}
+          {s.avgReturnPct !== null
+            ? `, ${s.avgReturnPct >= 0 ? "+" : ""}${s.avgReturnPct.toFixed(0)}% avg`
+            : ""}
+        </span>
+      </>
+    );
+  return (
+    <section className="panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">
+            <BoltIcon size={13} /> What it would have bought
+          </span>
+          <h2>Hit rate on 2x</h2>
+          <p className="muted small">
+            Each model&apos;s graded calls: the share that doubled in the win window, and the average return
+            under the default exit plan. The goal is 75% or better.
+          </p>
+        </div>
+        <div className="row" role="group" aria-label="Window" style={{ gap: 6 }}>
+          {[1, 7, 30].map((d) => (
+            <button key={d} className={d === days ? "primary" : "ghost"} onClick={() => setDays(d)}>
+              {d}d
+            </button>
+          ))}
+        </div>
+      </header>
+      {error ? (
+        <p className="error small">{error}</p>
+      ) : !rows ? (
+        <Skeleton lines={3} />
+      ) : rows.length === 0 ? (
+        <p className="muted small">No graded model calls in this window yet.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="small">
+            <thead>
+              <tr>
+                <th>Model</th>
+                {BACKTEST_SLICES.map(([, label]) => (
+                  <th key={label}>{label}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.model}>
+                  <td>{r.name}</td>
+                  {BACKTEST_SLICES.map(([key]) => (
+                    <td key={key} className="num">
+                      {cell(r[key])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

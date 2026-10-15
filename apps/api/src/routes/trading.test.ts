@@ -86,6 +86,12 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(body.defaults.sources).toMatchObject({ filterIds: [], models: [], requireAiBuy: true });
     expect(body.checks.find((c: { id: string }) => c.id === "server-wallet").ok).toBe(true);
     expect(res.body).not.toContain(env.TRADING_LOCAL_MASTER_KEY);
+    const backtest = await off.inject({ method: "GET", url: "/trading/backtest?days=3", ...as("admin") });
+    expect(backtest.statusCode).toBe(200);
+    expect(backtest.json()).toMatchObject({ days: 3, models: expect.any(Array) });
+    expect((await off.inject({ method: "GET", url: "/trading/backtest", ...as("user") })).statusCode).toBe(
+      403,
+    );
     // The same route reports the bot on where it is.
     expect((await app.inject({ method: "GET", url: "/trading/status", ...as("admin") })).json().enabled).toBe(
       true,

@@ -9,3 +9,4 @@ export * from "./transaction.js";
 export * from "./wallets.js";
 export * from "./txGuard.js";
 export * from "./serverWallet.js";
+export * from "./backtest.js";

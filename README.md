@@ -61,10 +61,12 @@ The Live tab's **Lighthouse** button shows how every token that passed the pre-c
 
 ## Trading bot (admin-only preview)
 
-A **Bot** tab, shown only to wallets in `ADMIN_WALLET_ADDRESSES`, runs a Solana trading bot from a
-wallet the server holds for you (`packages/core/src/trading`). It buys the signals you pick - the
-matches of any of your filters (a filter produces matches while it is your active one) and the
-calls of any model, optionally only high-conviction ones - and sells each position on an exit
+**Admin → Trading bot**, shown only to wallets in `ADMIN_WALLET_ADDRESSES`, runs a Solana trading
+bot from a wallet the server holds for you (`packages/core/src/trading`). It buys the signals you
+pick - the matches of any of your filters (a filter produces matches while it is your active one)
+and the calls of any model, optionally only high-conviction ones, and by default **only those the
+AI judge calls a buy** (`requireAiBuy`, with an optional floor on its 2x estimate; a fresh signal
+waits for its review, and one never reviewed is skipped) - and sells each position on an exit
 plan: by default the same plan the Lighthouse and Models tab simulate (`EXIT_PLAN`: half at 2x,
 the rest on a trailing exit 35% off its high, out at 3 hours; -50% stop before the first sale;
 closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers and hold times.
@@ -86,9 +88,11 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
   simulation watching the wallet and **every** token account it owns must show nothing changing
   but the trade itself - other positions untouched, at least the quoted minimum received, no more
   SOL spent than the trade allows.
-- **Limits a stolen admin session can't exceed.** `TRADING_MAX_BUY_SOL`,
-  `TRADING_MAX_DAILY_SPEND_SOL` and `TRADING_MAX_SLIPPAGE_BPS` cap every bot. Creating the wallet
-  and changing the bot refuse paired-phone sessions. A followed filter edited after the bot's
+- **Limits.** Every bot setting is the admin's to set (buy size, open positions, 24h spend,
+  slippage, exit slippage, tries per entry, priority fee, Jito tip, reserve, exit plan); there are
+  no caps by default. The optional `TRADING_MAX_BUY_SOL`, `_DAILY_SPEND_SOL`, `_SLIPPAGE_BPS` and
+  `_PRIORITY_FEE_SOL` add server ceilings no bot can pass, the bound on what a stolen admin session
+  could do. Creating the wallet and changing the bot refuse paired-phone sessions. A followed filter edited after the bot's
   settings were saved is paused until they are saved again, so editing a filter can't silently
   change what the bot buys.
 - **Split permissions.** The api creates wallets and needs only `kms:GenerateDataKey`; the
@@ -97,8 +101,8 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
   and the scanner can never open a wallet - a withdrawal is a request the trader carries out.
 - **Execution.** The trader's `trading-bot` job runs every `TRADING_BOT_INTERVAL_SECONDS`
   (5): it settles earlier swaps from the chain, walks open positions through their exit plan, and
-  buys new signals within the bot's guards (buy size capped server-side by `TRADING_MAX_BUY_SOL`,
-  max open positions, 24h spend, a SOL reserve, maximum signal age, one entry per token ever).
+  buys new signals within the bot's guards (max open positions, 24h spend, a SOL reserve, maximum
+  signal age, one entry per token ever, and any `TRADING_MAX_*` ceiling set).
   Swaps are routed by Jupiter, with **PumpPortal as the fallback** for Pump.fun tokens Jupiter
   can't route (a mint seconds old, or one migrating to PumpSwap). Each transaction is recorded by
   its signature (and signed bytes) before it is sent and **rebroadcast** until it lands or its
@@ -109,11 +113,18 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
   is marked **stuck** (retried slowly, no longer holding an open slot). Emptied token accounts are
   closed afterwards to recover their rent.
 - **Retries and fees.** Swap priority fees are **dynamic**: Jupiter's estimate from recent fees
-  ("veryHigh") under the bot's `maxPriorityFeeSol`, itself capped by `TRADING_MAX_PRIORITY_FEE_SOL`.
+  ("veryHigh") under the bot's `maxPriorityFeeSol` (and `TRADING_MAX_PRIORITY_FEE_SOL`, if set).
+  With a **Jito tip** (`jitoTipSol`, 0.0001 SOL by default) Jupiter builds the swap with the tip
+  instead, and it is sent to Jito's block engine alone (`TRADING_JITO_URL`), out of reach of
+  sandwich bots; the RPCs take it only if Jito doesn't. A retry raises the tip the same way.
+- **Redundancy.** `TRADING_BACKUP_RPC_URL` (another provider) answers reads the first RPC
+  doesn't, and every non-Jito transaction is sent to both. Prices Jupiter's Price API lacks, or all
+  of them while it is down, come from DexScreener's deepest Solana pair with at least $1,000 of
+  liquidity, so a stop-loss still fires through a Jupiter outage.
   A transaction is never replaced while it can still land; once one has expired unlanded, the next
   try is built from a fresh quote at **double the fee that one paid** (at least 0.0001 SOL, never
   over the cap). Entries are retried - a send that expired, a buy that failed on chain, a build
-  that hit an outage - up to 4 tries while the signal is within its age limit plus 2 minutes,
+  that hit an outage - up to `maxEntryTries` (4) while the signal is within its age limit plus 2 minutes,
   never at a price more than the slippage past the first try's quote, and never once the wallet
   shows the token (an earlier try landed after all). Sales retry until they go through, protective
   exits with 5 more points of slippage per on-chain failure. Jupiter outages, RPC hiccups, rate
@@ -137,9 +148,10 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
    `trenchscanner-trader`. The trader also needs `HELIUS_API_KEY` (or a paid `SOLANA_RPC_URL`),
    `ADMIN_WALLET_ADDRESSES` and, recommended, its own `TRADING_JUPITER_API_KEY`. Then set
    `TRADING_BOT_ENABLED=true` on both.
-4. Until then the **Bot** tab (admins only) is read-only: it says the bot is off, which of these
-   settings are still missing, and the limits and defaults it would run under. Once it is on,
-   open the **Bot** tab, create the wallet, send it a little SOL, pick sources, save, **Start**.
+4. Until then **Admin → Trading bot** is read-only: it says the bot is off, which of these
+   settings are still missing, the limits and defaults it would run under, and what each model's
+   calls would have done lately (the share that doubled, with and without the AI gate). Once it
+   is on, open **Admin → Trading bot**, create the wallet, send it a little SOL, pick sources, save, **Start**.
 
 ### Before real funds (launch checklist)
 
@@ -159,8 +171,9 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
 What the bot refuses to do, whatever its settings: sign a transaction the guard hasn't checked;
 buy a token with a live mint or freeze authority or a Token-2022 extension beyond metadata
 (permanent delegate, transfer hook, transfer fee, pausable, ...); send more than 0.05 SOL to
-anyone but itself in one trade; let a sale cost the wallet SOL beyond fees; exceed the
-`TRADING_MAX_*` ceilings (buy size, 24h spend, slippage, priority fee). The PumpPortal fallback
+anyone but itself in one trade (beyond its Jito tip); sign a Jupiter route allowing more slippage
+than the swap asked for, or taking a platform fee; let a sale cost the wallet SOL beyond fees;
+exceed a `TRADING_MAX_*` ceiling where one is set. The PumpPortal fallback
 is off by default (`TRADING_PUMPPORTAL_FALLBACK`): Jupiter routes Pump.fun tokens itself, and
 PumpPortal's proxy program is not on the guard's allowlist.
 
@@ -168,7 +181,7 @@ PumpPortal's proxy program is not on the guard's allowlist.
 
 Besides each admin's own wallet, there can be one **server wallet** whose private key you supply:
 a wallet you already have (or a fresh one made for it), traded by its own bot that every admin
-controls from **Bot tab → Server wallet** - the same settings, exit plan, positions, sell buttons
+controls from **Admin → Trading bot → Server wallet** - the same settings, exit plan, positions, sell buttons
 and guard as the per-user bots.
 
 | Variable                            | Where                           | What                                                                                   |

@@ -67,8 +67,8 @@
 #         is recommended (its own Jupiter key for swaps).
 #   - TRADING_SERVER_WALLET_SECRET_KEY (trader only), TRADING_SERVER_WALLET_ADDRESS and
 #     TRADING_SERVER_WALLET_WITHDRAW_TO (api + trader), optional
-#         A server wallet whose key you supply, traded by a bot every admin controls (Bot tab ->
-#         Server wallet). Withdrawals go only to TRADING_SERVER_WALLET_WITHDRAW_TO.
+#         A server wallet whose key you supply, traded by a bot every admin controls (Admin ->
+#         Trading bot -> Server wallet). Withdrawals go only to TRADING_SERVER_WALLET_WITHDRAW_TO.
 #   - MODEL_BACKUP_S3_ENDPOINT, _BUCKET, _ACCESS_KEY_ID, _SECRET_ACCESS_KEY (trainer only, optional)
 #         Off-site copies of the weekly model backups to any S3-compatible bucket (Cloudflare R2,
 #         Backblaze B2, AWS S3); MODEL_BACKUP_S3_REGION defaults to "auto" (R2). Unset, backups

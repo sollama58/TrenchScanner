@@ -1,19 +1,19 @@
 /** The dashboard's tabs, and the code-split chunks behind them. */
-export type Tab =
-  "live" | "stream" | "model" | "lighthouse" | "filters" | "utilities" | "settings" | "admin" | "trading";
+export type Tab = "live" | "stream" | "model" | "lighthouse" | "filters" | "utilities" | "settings" | "admin";
 
 export function tabFromHash(): Tab {
   const h = window.location.hash.replace("#", "");
   // Top filters used to be its own tab; it is a card on the Filters tab now, so old links land there.
   if (h === "top") return "filters";
+  // The trading bot was its own tab; it is a section of Admin now (opened by AdminTab).
+  if (h === "trading") return "admin";
   return h === "stream" ||
     h === "model" ||
     h === "lighthouse" ||
     h === "filters" ||
     h === "utilities" ||
     h === "settings" ||
-    h === "admin" ||
-    h === "trading"
+    h === "admin"
     ? h
     : "live";
 }
@@ -26,7 +26,6 @@ type LighthouseTabModule = typeof import("./tabs/LighthouseTab");
 type FiltersTabModule = typeof import("./tabs/FiltersTab");
 type SettingsTabModule = typeof import("./tabs/SettingsTab");
 type AdminTabModule = typeof import("./tabs/AdminTab");
-type TradingTabModule = typeof import("./tabs/TradingTab");
 
 /**
  * Chunks already downloaded. React.lazy suspends on its first render even when the chunk is in
@@ -39,7 +38,6 @@ export const loaded: {
   filters?: FiltersTabModule;
   settings?: SettingsTabModule;
   admin?: AdminTabModule;
-  trading?: TradingTabModule;
 } = {};
 
 export const loadModelTab = () => import("./tabs/ModelTab").then((m) => (loaded.model = m));
@@ -47,7 +45,6 @@ export const loadLighthouseTab = () => import("./tabs/LighthouseTab").then((m) =
 export const loadFiltersTab = () => import("./tabs/FiltersTab").then((m) => (loaded.filters = m));
 export const loadSettingsTab = () => import("./tabs/SettingsTab").then((m) => (loaded.settings = m));
 export const loadAdminTab = () => import("./tabs/AdminTab").then((m) => (loaded.admin = m));
-export const loadTradingTab = () => import("./tabs/TradingTab").then((m) => (loaded.trading = m));
 export const loadSignIn = () => import("./components/SignIn");
 
 /** The browser's IANA zone, for the Lighthouse's hour-of-day chart; empty when it can't say (the API reads UTC). */
@@ -99,6 +96,4 @@ export const TAB_DATA: Record<Tab, string[]> = {
   settings: ["/settings"],
   // Nothing warmed: only admin wallets can read /admin, and everyone's session runs this warm-up.
   admin: [],
-  // Same: the trading bot is admin-only while it is new.
-  trading: [],
 };

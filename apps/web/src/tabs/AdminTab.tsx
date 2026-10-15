@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { ApiError, api, del, downloadFile, patch, post } from "../api";
 import { ShieldIcon } from "../components/Icons";
 import { usePolling } from "../hooks";
@@ -11,6 +11,9 @@ import { CreditsAdmin } from "./AdminCredits";
 import { RunNow } from "./AdminRunNow";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
+
+// The trading bot's section is its own chunk: most admin visits never open it.
+const TradingBot = lazy(() => import("./TradingTab").then((m) => ({ default: m.TradingTab })));
 
 /**
  * The admin panel: everything about the running system in one place, for the wallets in
@@ -34,6 +37,7 @@ const SECTIONS = [
   { id: "credits", label: "Burn Credits" },
   { id: "announce", label: "Announcements" },
   { id: "ai", label: "AI" },
+  { id: "bot", label: "Trading bot" },
   { id: "backups", label: "Backups" },
   { id: "database", label: "Database" },
   { id: "api", label: "API" },
@@ -43,7 +47,10 @@ const SECTIONS = [
 type Section = (typeof SECTIONS)[number]["id"];
 
 export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
-  const [section, setSection] = useState<Section>("overview");
+  // An old #trading link opens the trading bot's section.
+  const [section, setSection] = useState<Section>(() =>
+    typeof window !== "undefined" && window.location.hash === "#trading" ? "bot" : "overview",
+  );
   return (
     <div className="stack admin">
       <section className="panel">
@@ -100,6 +107,11 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
         {section === "credits" && <CreditsAdmin />}
         {section === "announce" && <AnnouncementsAdmin />}
         {section === "ai" && <Ai />}
+        {section === "bot" && (
+          <Suspense fallback={<p className="muted small">Loading the trading bot…</p>}>
+            <TradingBot />
+          </Suspense>
+        )}
         {section === "backups" && <Backups />}
         {section === "database" && <Database />}
         {section === "api" && <ApiInstance />}
