@@ -74,7 +74,7 @@ import type { PricePathSeeder } from "./pricePathSeed.js";
 import { createMatchesForCandidate, markFilterPassComplete, type FilterWithUser } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
-import { resolveEarliestActivity, computeFreshPct } from "./walletFreshness.js";
+import { resolveEarliestActivity, computeFreshPct, FRESH_WITHIN_HOURS } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
 import { refreshWalletRiskBook, walletRiskLookup } from "./walletRiskBook.js";
 import { kolLookup, refreshKolWalletBook } from "./kolWalletBook.js";
@@ -2381,14 +2381,20 @@ async function processCandidate(
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
-    withLinkedWallets(
-      withFreshTopHolders(
-        withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env, sniperWallets),
-        topHolderWalletsOf(candidate.mintAddress, (onChainProfile as { creator?: string } | null)?.creator),
-        earliestActivityByAddress,
+    withHolderKinds(
+      withLinkedWallets(
+        withFreshTopHolders(
+          withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env, sniperWallets),
+          topHolderWalletsOf(candidate.mintAddress, (onChainProfile as { creator?: string } | null)?.creator),
+          earliestActivityByAddress,
+        ),
+        linked,
+        cex,
+        sniperWallets,
       ),
-      linked,
-      cex,
+      earliestActivityByAddress,
+      holdingsByAddress,
+      env,
       sniperWallets,
     ),
     flags,
@@ -2953,6 +2959,43 @@ export function withLinkedWallets(
     ...read,
     sniperTopHolderCount: list.filter((h) => sniperWallets.has(h.wallet)).length,
     sniperTopHoldersChecked: list.length,
+  };
+}
+
+/**
+ * Each holder on the list marked with what the cycle read of its wallet (user ask 2026-10-15), for
+ * the bubble map's icons: `sniper` (among the launch's first 25 buyers), `fresh` (first active
+ * within FRESH_WITHIN_HOURS) and `empty` (under WALLET_HOLDINGS_MIN_USD of anything besides this
+ * coin). A wallet the cycle didn't read is left unmarked. Drawn only: no reading changes. Exported
+ * for tests.
+ */
+export function withHolderKinds(
+  onChain: OnChainProfile | null,
+  earliestActivityByAddress: Map<string, Date | null>,
+  holdingsByAddress: Map<string, WalletHoldings>,
+  env: Pick<Env, "WALLET_HOLDINGS_MIN_USD">,
+  sniperWallets?: ReadonlySet<string>,
+  nowMs = Date.now(),
+): OnChainProfile | null {
+  if (!onChain?.linkedHolders?.length) return onChain;
+  const freshCutoff = nowMs - FRESH_WITHIN_HOURS * 3_600_000;
+  return {
+    ...onChain,
+    linkedHolders: onChain.linkedHolders.map((h) => {
+      const earliest = earliestActivityByAddress.get(h.wallet);
+      const holdings = holdingsByAddress.get(h.wallet);
+      const here = holdings?.perMintUsd[onChain.mintAddress];
+      const sniper = !!sniperWallets?.has(h.wallet);
+      const fresh = !!earliest && earliest.getTime() >= freshCutoff;
+      const empty =
+        !!holdings && here !== undefined && holdings.otherHoldingsUsd - here < env.WALLET_HOLDINGS_MIN_USD;
+      return {
+        ...h,
+        ...(sniper ? { sniper: true } : {}),
+        ...(fresh ? { fresh: true } : {}),
+        ...(empty ? { empty: true } : {}),
+      };
+    }),
   };
 }
 

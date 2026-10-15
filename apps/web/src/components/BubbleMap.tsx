@@ -46,6 +46,10 @@ import {
   withWideMap,
   largestSourceOnly,
   mapLinked,
+  TRAIT_ICON,
+  TRAIT_LABEL,
+  traitShares,
+  type WalletTrait,
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
 import { openWallet } from "../walletModal";
@@ -913,15 +917,27 @@ function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }
   if (kinds.has("pumpfun")) items.push({ cls: "pumpfun", text: '"Pump.fun"' });
   if (kinds.has("fomo")) items.push({ cls: "fomo", text: '"FOMO"' });
   if (kinds.has("identity") || kinds.has("exchange")) items.push({ cls: "", text: "Helius / exchange" });
-  if (!items.length) return null;
+  // Each wallet trait on the map, its icon and the share of supply its holders hold (user ask 2026-10-15).
+  const traits = traitShares(graph);
+  if (!items.length && !traits.length) return null;
   return (
-    <ul className="bm-legend" aria-label="Name colours">
+    <ul className="bm-legend" aria-label="Legend">
       <li className="bm-legend-title" aria-hidden>
         Legend
       </li>
       {items.map((it) => (
         <li key={it.text}>
           <span className={`bm-legend-chip ${it.cls}`}>{it.text}</span>
+        </li>
+      ))}
+      {traits.map((t) => (
+        <li
+          key={t.trait}
+          className="bm-legend-trait"
+          title={`${TRAIT_WORDS[t.trait]}. ${t.count} holder${t.count === 1 ? "" : "s"} on the map, holding ${pctText(t.pct)} of supply`}
+        >
+          <TraitIcon trait={t.trait} />
+          {TRAIT_LABEL[t.trait]} <span className="num">{pctText(t.pct)}</span>
         </li>
       ))}
     </ul>
@@ -1350,6 +1366,7 @@ function Bubble({
           </text>
         </g>
       )}
+      {n.trait && <TraitBadge trait={n.trait} x={n.x + n.r * 0.72} y={n.y + n.r * 0.72} />}
       {(flaggedRisk || dev) && (
         <g className={`bm-badge ${dev ? "dev" : "risk"}`}>
           <circle cx={bx} cy={by} r={dev ? 9 : 7} />
@@ -1363,6 +1380,41 @@ function Bubble({
 }
 
 const pctText = (v: number) => `${v < 10 ? v.toFixed(1) : v.toFixed(0)}%`;
+
+/** A bubble's wallet trait (user ask 2026-10-15): a small disc, bottom right, with its icon. */
+function TraitBadge({ trait, x, y }: { trait: WalletTrait; x: number; y: number }) {
+  const r = 6.5;
+  const k = (r * 1.25) / 24;
+  return (
+    <g className={`bm-trait trait-${trait}`}>
+      <title>{TRAIT_WORDS[trait]}</title>
+      <circle cx={x} cy={y} r={r} />
+      <g transform={`translate(${x - 12 * k} ${y - 12 * k}) scale(${k})`}>
+        {TRAIT_ICON[trait].map((d) => (
+          <path key={d} d={d} />
+        ))}
+      </g>
+    </g>
+  );
+}
+
+/** A trait's icon on its own, for the legend. */
+function TraitIcon({ trait }: { trait: WalletTrait }) {
+  return (
+    <svg className={`bm-trait-icon trait-${trait}`} viewBox="0 0 24 24" width={13} height={13} aria-hidden>
+      {TRAIT_ICON[trait].map((d) => (
+        <path key={d} d={d} />
+      ))}
+    </svg>
+  );
+}
+
+/** What each trait means, for its bubble's tooltip. */
+const TRAIT_WORDS: Record<WalletTrait, string> = {
+  sniper: "Sniper: among the launch's first 25 buyers",
+  fresh: "Fresh wallet: first active within the last 24 hours",
+  empty: "Empty wallet: under $25 in anything besides this coin",
+};
 
 /** When a same-minute group was funded: the date and the minute, in the reader's time zone. */
 function fundingTime(atMs: number): string {
