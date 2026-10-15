@@ -5440,12 +5440,6 @@ button.small-btn {
   background: var(--surface-3);
   box-shadow: inset 0 0 0 1px var(--border);
 }
-.cov-track.slim {
-  flex: none;
-  width: 44px;
-  min-width: 0;
-  height: 5px;
-}
 .cov-fill {
   position: absolute;
   inset: 0 auto 0 0;
@@ -5468,10 +5462,6 @@ button.small-btn {
   width: 2px;
   margin-left: -1px;
   border-radius: 1px;
-}
-.cov-track.slim .cov-mark {
-  top: -2px;
-  bottom: -2px;
 }
 .cov-mark.goal {
   background: var(--ink-2);
@@ -5545,17 +5535,6 @@ button.small-btn {
   opacity: 0.6;
   cursor: default;
 }
-.cov-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ink-2);
-}
-.cov-chip.early {
-  color: var(--muted);
-}
 @media (prefers-reduced-motion: reduce) {
   .cov-fill {
     transition: none;
@@ -5566,7 +5545,7 @@ button.small-btn {
     flex-wrap: wrap;
     gap: 8px 10px;
   }
-  .cov-track:not(.slim) {
+  .cov-track {
     order: 4;
     flex-basis: 100%;
     margin: 2px 0 4px;

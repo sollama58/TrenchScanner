@@ -108,14 +108,14 @@ function bestTitle(b: Best): string {
   );
 }
 
-function Track({ v, slim = false }: { v: CoverageView; slim?: boolean }) {
+function Track({ v }: { v: CoverageView }) {
   return (
-    <span className={`cov-track${slim ? " slim" : ""}`} aria-hidden>
+    <span className="cov-track" aria-hidden>
       <span
         className={`cov-fill${v.early ? " early" : ""}${v.onGoal ? " on-goal" : ""}`}
         style={{ width: `${Math.min(100, Math.max(0, v.share))}%` }}
       />
-      {!slim && v.field !== null && v.field > v.share && (
+      {v.field !== null && v.field > v.share && (
         <span className="cov-mark field" style={{ left: `${Math.min(100, v.field)}%` }} />
       )}
       <span className="cov-mark goal" style={{ left: `${Math.min(100, v.goal)}%` }} />
@@ -237,28 +237,5 @@ export function CoverageMeter({
       )}
       {error && <small className="error">Couldn&apos;t add the model: {error}</small>}
     </div>
-  );
-}
-
-/**
- * The meter as a chip, for the Live feed's header: the share and a slim bar. Opens the Models tab,
- * where the full meter and the switches are.
- */
-export function CoverageChip({ board, onOpen }: { board: Leaderboard; onOpen: () => void }) {
-  const v = coverageView(board);
-  if (!v || v.coverage.runners === 0) return null;
-  const c = v.coverage;
-  return (
-    <button
-      type="button"
-      className={`ghost cov-chip${v.early ? " early" : ""}`}
-      onClick={onOpen}
-      title={`Coverage: ${coverageSentence(v, board.window.days)} Goal ${v.goal}%. Tap to change your models.`}
-      aria-label={`Coverage ${pct(c.pct)} of runners caught by your models. Open the Models tab.`}
-    >
-      <TargetIcon size={13} />
-      <span className="num">{pct(c.pct)}</span>
-      <Track v={v} slim />
-    </button>
   );
 }
