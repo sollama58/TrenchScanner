@@ -5,6 +5,7 @@ import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.
 import type { DexScreenerClient, TokenLookupOptions } from "./dexscreener.js";
 import type { CandidateToken, FreshQuote, FreshQuoteStats } from "../types.js";
 import { PUMP_TOTAL_SUPPLY } from "../curation/tradeFlow.js";
+import type { DiscoveredCoin } from "./pumpfun.js";
 
 const logger = createLogger("jupiter");
 
@@ -42,6 +43,7 @@ interface JupiterToken {
   /** The mint's first pool: for a Pump.fun launch, its bonding curve, opened at launch. */
   firstPool?: { id?: string; createdAt?: string | null } | null;
   holderCount?: number | null;
+  icon?: string | null;
 }
 
 /** The search endpoint takes up to 100 comma-separated mints a call. */
@@ -76,6 +78,7 @@ export class JupiterClient {
   private readonly baseUrl: string;
   private readonly headers: Record<string, string>;
   private readonly gate: RateGate;
+  private lastMovingAt = Number.NEGATIVE_INFINITY;
 
   constructor(options: JupiterClientOptions) {
     this.baseUrl = options.baseUrl ?? "https://api.jup.ag";
@@ -86,6 +89,53 @@ export class JupiterClient {
       burst: GATE_BURST,
       reserve: JUPITER_PRIORITY_RESERVE,
     });
+  }
+
+  /**
+   * Pump.fun coins moving right now, from Jupiter's own lists: the most traded and trending of
+   * the last five minutes, and the newest pools. A discovery source that does not depend on
+   * Pump.fun's API, whose coin list (newest and recently traded) has answered every page with a
+   * Cloudflare challenge since 2026-10-14 about 21:00 UTC: without either, a coin that started
+   * climbing again hours after launch was never put back in front of the scan. Each coin carries
+   * its market cap on Pump.fun's 1B supply, as the band refresh reads it.
+   *
+   * Asked at most once every `minIntervalMs` (the lists move by the minute, and the calls share
+   * the scan's Jupiter budget); a call inside it, or one the budget can't fit before `deadlineMs`,
+   * returns nothing. A failed list is skipped; the others still count.
+   */
+  async discoverMovingLaunches(
+    options: { deadlineMs?: number; minIntervalMs?: number; now?: number } = {},
+  ): Promise<DiscoveredCoin[]> {
+    const now = options.now ?? Date.now();
+    if (now - this.lastMovingAt < (options.minIntervalMs ?? 60_000)) return [];
+    this.lastMovingAt = now;
+    const deadline = Date.now() + (options.deadlineMs ?? 4_000);
+    const gate = {
+      acquire: () => this.gate.acquire(deadline, false),
+      throttled: (delayMs: number) => this.gate.throttled(delayMs),
+    };
+    const paths = ["toptraded/5m?limit=100", "toptrending/5m?limit=100", "recent"];
+    const lists = await Promise.allSettled(
+      paths.map((path) =>
+        fetchJson<unknown>(`${this.baseUrl}/tokens/v2/${path}`, {
+          gate,
+          headers: this.headers,
+          timeoutMs: Math.max(500, deadline - Date.now()),
+          retries: 0,
+        }),
+      ),
+    );
+    const out = new Map<string, DiscoveredCoin>();
+    lists.forEach((result, i) => {
+      if (result.status === "rejected") {
+        if (!(result.reason instanceof RateGateDeadlineError)) {
+          logger.warn("moving-coins list failed", { list: paths[i], error: String(result.reason) });
+        }
+        return;
+      }
+      for (const coin of parseJupiterMovingLaunches(result.value)) out.set(coin.mintAddress, coin);
+    });
+    return [...out.values()];
   }
 
   /** Calls sent, 429 pauses and time spent queued since the last call, then reset. */
@@ -192,6 +242,38 @@ export class JupiterClient {
 
 const finite = (v: number | null | undefined): number | undefined =>
   typeof v === "number" && Number.isFinite(v) ? v : undefined;
+
+/**
+ * Exported for tests. The Pump.fun launches in one of Jupiter's lists, as discovered coins: no
+ * description or socials (the lists carry none - left unknown, not "none"), the market cap on
+ * Pump.fun's 1B supply.
+ */
+export function parseJupiterMovingLaunches(body: unknown): DiscoveredCoin[] {
+  if (!Array.isArray(body)) return [];
+  const out: DiscoveredCoin[] = [];
+  for (const t of body as JupiterToken[]) {
+    if (!t || typeof t.id !== "string" || t.launchpad !== "pump.fun") continue;
+    const priceUsd = finite(t.usdPrice);
+    const created = t.firstPool?.createdAt ? new Date(t.firstPool.createdAt) : undefined;
+    out.push({
+      mintAddress: t.id,
+      symbol: typeof t.symbol === "string" ? t.symbol.slice(0, 40) : undefined,
+      name: typeof t.name === "string" ? t.name.slice(0, 120) : undefined,
+      imageUrl:
+        typeof t.icon === "string" && t.icon.startsWith("https://") ? t.icon.slice(0, 500) : undefined,
+      createdAt:
+        created && !Number.isNaN(created.getTime()) && created.getTime() <= Date.now() + 60_000
+          ? created
+          : undefined,
+      graduated: Boolean(t.graduatedAt),
+      marketCapUsd: priceUsd !== undefined && priceUsd > 0 ? priceUsd * PUMP_TOTAL_SUPPLY : undefined,
+      hasTwitter: false,
+      hasTelegram: false,
+      hasWebsite: false,
+    });
+  }
+  return out;
+}
 
 /** Exported for tests. Only the requested mints, each once. */
 export function parseJupiterTokens(body: unknown, requested: Set<string>): CandidateToken[] {

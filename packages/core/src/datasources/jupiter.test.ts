@@ -3,6 +3,7 @@ import {
   JupiterClient,
   JupiterFirstLookup,
   parseJupiterLaunches,
+  parseJupiterMovingLaunches,
   parseJupiterQuotes,
   parseJupiterTokens,
 } from "./jupiter.js";
@@ -282,5 +283,58 @@ describe("JupiterFirstLookup", () => {
     const out = await new JupiterFirstLookup(jupiter, dex).getTokensByAddresses(["a", "b"]);
     expect(out).toHaveLength(2);
     expect(dex.getTokensByAddresses).not.toHaveBeenCalled();
+  });
+});
+
+describe("parseJupiterMovingLaunches", () => {
+  it("keeps Pump.fun launches, priced on the 1B supply, with no socials claimed", () => {
+    const coins = parseJupiterMovingLaunches([
+      {
+        id: "pumpMint",
+        symbol: "DOG",
+        name: "Dog",
+        usdPrice: 0.00005,
+        mcap: 46_000,
+        launchpad: "pump.fun",
+        icon: "https://ipfs.io/ipfs/x",
+        firstPool: { createdAt: "2026-10-15T12:00:00Z" },
+        graduatedAt: "2026-10-15T12:30:00Z",
+      },
+      { id: "otherMint", usdPrice: 1, launchpad: "letsbonk.fun" },
+      { id: "noPad", usdPrice: 1 },
+    ]);
+    expect(coins).toHaveLength(1);
+    expect(coins[0]).toMatchObject({
+      mintAddress: "pumpMint",
+      symbol: "DOG",
+      marketCapUsd: 50_000,
+      graduated: true,
+      imageUrl: "https://ipfs.io/ipfs/x",
+      createdAt: new Date("2026-10-15T12:00:00Z"),
+    });
+    expect(coins[0]!.description).toBeUndefined();
+    expect(parseJupiterMovingLaunches({ error: "x" })).toEqual([]);
+  });
+});
+
+describe("JupiterClient.discoverMovingLaunches", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("merges the lists, skips a failed one, and asks again only after the interval", async () => {
+    const urls: string[] = [];
+    vi.stubGlobal("fetch", (url: string) => {
+      urls.push(url);
+      if (url.includes("toptrending")) return Promise.resolve(new Response("nope", { status: 500 }));
+      const id = url.includes("recent") ? "new" : "old";
+      return Promise.resolve(new Response(JSON.stringify([{ id, usdPrice: 0.0001, launchpad: "pump.fun" }])));
+    });
+    const client = new JupiterClient({ apiKey: "k", requestsPerMinute: 6000 });
+    const first = await client.discoverMovingLaunches({ now: 1_000_000 });
+    expect(first.map((c) => c.mintAddress).sort()).toEqual(["new", "old"]);
+    expect(urls).toHaveLength(3);
+    expect(await client.discoverMovingLaunches({ now: 1_030_000 })).toEqual([]);
+    expect(urls).toHaveLength(3);
+    await client.discoverMovingLaunches({ now: 1_061_000 });
+    expect(urls).toHaveLength(6);
   });
 });

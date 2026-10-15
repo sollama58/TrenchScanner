@@ -164,7 +164,8 @@ export interface ScanDeps {
    * is priced from (ScoredToken.freshQuote). getFreshQuotes is optional so a test double can
    * leave it out: then no quote, and every row anchors on DexScreener's price.
    */
-  jupiter?: Pick<JupiterClient, "takeCallStats"> & Partial<Pick<JupiterClient, "getFreshQuotes">>;
+  jupiter?: Pick<JupiterClient, "takeCallStats"> &
+    Partial<Pick<JupiterClient, "getFreshQuotes" | "discoverMovingLaunches">>;
   /**
    * Live prices for the newest launches in the band refresh: Jupiter, then CoinGecko for what it
    * misses (LiveLaunchQuotes). Optional: unset, every mint is read from DexScreener alone.
@@ -618,7 +619,7 @@ async function scanCycle(
   // Each source is time-boxed (see discoverWithin): one slow upstream used to hold the whole cycle
   // - ~10s on most cycles of 2026-10-04 - and with it every alert. A late source's mints still
   // join the watchlist the moment they land, in time for the next cycle.
-  const [newMints, trending, active, koth, liveStreams] = await Promise.all([
+  const [newMints, trending, active, koth, liveStreams, jupiterMoving] = await Promise.all([
     discoverWithin(
       "pumpfun",
       deps.pumpFun.discoverNewMints().catch((err) => {
@@ -671,7 +672,29 @@ async function scanCycle(
       null,
       async () => {},
     ),
+    // Jupiter's most traded, trending and newest Pump.fun coins: the same job as Pump.fun's
+    // recently-traded list and newest page, from a source that does not depend on Pump.fun's API
+    // (blocked from 2026-10-14 about 21:00 UTC). Asked at most once a minute; see saveMovingLaunches.
+    discoverWithin(
+      "jupiter-moving",
+      (deps.jupiter?.discoverMovingLaunches?.() ?? Promise.resolve([])).catch((err) => {
+        logger.warn("jupiter moving-coins discovery failed", { error: String(err) });
+        return [] as DiscoveredCoin[];
+      }),
+      [] as DiscoveredCoin[],
+      (coins) => saveMovingLaunches(coins, deps.pumpFun, env),
+    ),
   ]);
+  await saveMovingLaunches(jupiterMoving, deps.pumpFun, env);
+  // The livestreaming coins, from the one Pump.fun list still answering: discovered and revived
+  // with their market cap like the recently-traded list's coins were.
+  const liveCoins = [...(liveStreams?.values() ?? [])].flatMap((l) => (l.coin ? [l.coin] : []));
+  if (liveCoins.length > 0) {
+    await addNewMintsToWatchlist(liveCoins.map((c) => toWatchlistCandidate(c, "pumpfun-live")));
+    await ignoreMayhemMints(liveCoins.filter((c) => c.mayhemMode).map((c) => c.mintAddress));
+    rememberLaunchTimes(liveCoins);
+    await reviveMovingMints(movingCoins(liveCoins), env);
+  }
   const streamed = deps.stream?.drain() ?? [];
   // The description and socials of streamed launches the coin list didn't carry, read one coin at
   // a time behind the cycle (see launchDetails.ts); their rows are created bare below and filled
@@ -1770,6 +1793,53 @@ function movingCoins(coins: DiscoveredCoin[]): { mintAddress: string; marketCapU
   return coins.flatMap((c) =>
     c.marketCapUsd !== undefined ? [{ mintAddress: c.mintAddress, marketCapUsd: c.marketCapUsd }] : [],
   );
+}
+
+/** Launches younger than this found on Jupiter's lists get the one-coin details read (launchDetails). */
+const JUPITER_DETAILS_MAX_AGE_MS = 60 * 60_000;
+
+/**
+ * Jupiter's moving Pump.fun coins (JupiterClient.discoverMovingLaunches) onto the watchlist and
+ * back in front of the scan. Jupiter's lists carry no description or socials, so the row records
+ * neither (unknown, not "none"); a young launch has them read one coin at a time behind the cycle,
+ * as a streamed launch does.
+ */
+export async function saveMovingLaunches(
+  coins: DiscoveredCoin[],
+  pumpFun: Pick<PumpFunClient, "coinDetails">,
+  env: Env,
+): Promise<void> {
+  if (coins.length === 0) return;
+  await addNewMintsToWatchlist(
+    coins.map((c) => ({
+      mintAddress: c.mintAddress,
+      symbol: c.symbol,
+      name: c.name,
+      imageUrl: c.imageUrl,
+      createdAt: c.createdAt,
+      discoverySource: "jupiter",
+    })),
+  );
+  rememberLaunchTimes(coins);
+  await reviveMovingMints(movingCoins(coins), env);
+  const youngSince = Date.now() - JUPITER_DETAILS_MAX_AGE_MS;
+  const young = coins.filter((c) => c.createdAt && c.createdAt.getTime() >= youngSince);
+  if (young.length > 0) {
+    void fillLaunchDetails(
+      young.map((c) => ({
+        kind: "create" as const,
+        mintAddress: c.mintAddress,
+        symbol: c.symbol,
+        name: c.name,
+        at: c.createdAt!,
+      })),
+      pumpFun,
+      async (found) => {
+        await addNewMintsToWatchlist(found.map((c) => toWatchlistCandidate(c, "jupiter")));
+        await ignoreMayhemMints(found.filter((c) => c.mayhemMode).map((c) => c.mintAddress));
+      },
+    ).catch((err: unknown) => logger.warn("launch details failed to save", { error: String(err) }));
+  }
 }
 
 function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): WatchlistCandidate {

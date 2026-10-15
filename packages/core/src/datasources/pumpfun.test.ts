@@ -42,12 +42,10 @@ describe("PumpFunClient.currentlyLive", () => {
       ],
     ]);
     const live = await new PumpFunClient({ baseUrl: url }).currentlyLive({ limit: 5 });
-    expect(live).toEqual(
-      new Map([
-        ["a", { viewers: 67 }],
-        ["b", { viewers: null }],
-      ]),
-    );
+    expect([...live!].map(([mint, l]) => [mint, l.viewers, l.coin?.mintAddress])).toEqual([
+      ["a", 67, "a"],
+      ["b", null, "b"],
+    ]);
     expect(paths).toHaveLength(1);
     expect(paths[0]).toContain("/coins/currently-live?");
   });
@@ -213,14 +211,18 @@ describe("PumpFunClient.takeListStats", () => {
     const stats = client.takeListStats();
     expect(stats).toMatchObject({ pages: 2, failed: 2 });
     expect(stats.lastError).toMatch(/403.*Cloudflare/);
-    expect(client.takeListStats()).toEqual({ pages: 0, failed: 0 });
+    expect(client.takeListStats()).toEqual({ pages: 0, failed: 0, skipped: 0 });
+
+    // Blocked: the list is left alone for a while instead of failing every page every cycle.
+    await client.discoverNewMints({ pages: 3 });
+    expect(client.takeListStats()).toEqual({ pages: 0, failed: 0, skipped: 3 });
   });
 
   it("counts answered pages as not failed", async () => {
     const { url } = await serve([[{ mint: "a" }]]);
     const client = new PumpFunClient({ baseUrl: url });
     await client.discoverNewMints({ pages: 1 });
-    expect(client.takeListStats()).toEqual({ pages: 1, failed: 0 });
+    expect(client.takeListStats()).toEqual({ pages: 1, failed: 0, skipped: 0 });
   });
 });
 
