@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   adminWalletSet,
   createKeyProvider,
+  DEFAULT_TRADING_BOT_CONFIG,
   describeExitPlan,
   effectiveExitPlan,
   enabledContestants,
@@ -42,7 +43,9 @@ import {
  * withdrawing refuse sessions from a paired phone (QR device link): those tokens live a year on a
  * device. The server's ceilings (TRADING_MAX_*) bound whatever the settings say.
  *
- * With TRADING_BOT_ENABLED off nothing here is registered and every route answers 404.
+ * With TRADING_BOT_ENABLED off only GET /trading/status is registered (admins: what the bot
+ * would need to run, and the limits it would run under); every other route answers 404, so no
+ * wallet can be created, no bot changed and nothing sold or withdrawn.
  */
 
 const MAX_POSITIONS_SHOWN = 100;
@@ -73,10 +76,75 @@ interface Owner {
   withdrawTo: string | null;
 }
 
+/**
+ * Whether the bot runs on this deployment and what it is missing, for the Bot tab's status card.
+ * Names settings, never their values: nothing here is secret.
+ */
+export function tradingStatus(env: Env, keyProblem: string | null) {
+  const serverAddress = looksLikeSolanaAddress(env.TRADING_SERVER_WALLET_ADDRESS);
+  const serverWithdrawals = looksLikeSolanaAddress(env.TRADING_SERVER_WALLET_WITHDRAW_TO);
+  return {
+    enabled: env.TRADING_BOT_ENABLED,
+    checks: [
+      {
+        id: "custody",
+        label: "Wallet custody (KMS)",
+        ok: keyProblem === null,
+        detail: keyProblem ?? `${env.TRADING_KEY_PROVIDER} key provider configured`,
+      },
+      {
+        id: "rpc",
+        label: "Paid Solana RPC",
+        ok: Boolean(env.HELIUS_API_KEY || env.SOLANA_RPC_URL),
+        detail:
+          env.HELIUS_API_KEY || env.SOLANA_RPC_URL
+            ? "HELIUS_API_KEY or SOLANA_RPC_URL set"
+            : "set HELIUS_API_KEY or SOLANA_RPC_URL: a stop-loss on the public RPC waits on rate limits",
+      },
+      {
+        id: "jupiter",
+        label: "Jupiter key for swaps",
+        ok: Boolean(env.TRADING_JUPITER_API_KEY),
+        detail: env.TRADING_JUPITER_API_KEY
+          ? "TRADING_JUPITER_API_KEY set"
+          : "TRADING_JUPITER_API_KEY not set on the api (recommended on the trader)",
+      },
+      {
+        id: "server-wallet",
+        label: "Server wallet (optional)",
+        ok: serverAddress && serverWithdrawals,
+        detail: !serverAddress
+          ? "TRADING_SERVER_WALLET_ADDRESS not set"
+          : serverWithdrawals
+            ? "address and withdrawal destination set"
+            : "TRADING_SERVER_WALLET_WITHDRAW_TO not set: withdrawals are off",
+      },
+    ],
+    limits: {
+      maxBuySol: env.TRADING_MAX_BUY_SOL,
+      maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL,
+      maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
+      maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL,
+    },
+    defaults: DEFAULT_TRADING_BOT_CONFIG,
+    exitPlanSummary: describeExitPlan(EXIT_PLAN),
+    models: enabledContestants(env.CURATOR_CONTESTANTS).map((c) => ({ id: c.id, name: c.name })),
+    pumpPortalFallback: env.TRADING_PUMPPORTAL_FALLBACK,
+  };
+}
+
 export async function registerTradingRoutes(app: FastifyInstance, { env }: { env: Env }) {
-  if (!env.TRADING_BOT_ENABLED) return;
   const admins = adminWalletSet(env);
   const keys = createKeyProvider({ ...env, NODE_ENV: process.env.NODE_ENV });
+  const status = tradingStatus(env, keys.provider ? null : keys.reason);
+
+  app.addHook("preHandler", app.authenticate);
+  // Read-only, and the one route that exists while the bot is off.
+  app.get("/status", async (request, reply) => {
+    if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });
+    return status;
+  });
+  if (!env.TRADING_BOT_ENABLED) return;
   const rpc = new TradingRpc({
     rpcUrl: env.SOLANA_RPC_URL || undefined,
     apiKey: env.HELIUS_API_KEY || undefined,
@@ -87,8 +155,6 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     : null;
   let serverAccountId: string | null = null;
   const serverAccount = async () => (serverAccountId ??= await ensureServerWalletAccount());
-
-  app.addHook("preHandler", app.authenticate);
 
   const isAdmin = (request: FastifyRequest) => admins.has(request.user!.walletAddress);
   const deny = (reply: FastifyReply, error: string) => void reply.code(403).send({ error });

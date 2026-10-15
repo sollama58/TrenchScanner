@@ -130,13 +130,16 @@ closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers an
 2. AWS → IAM → create two users with access keys:
    - `trenchscanner-api`: `{"Effect":"Allow","Action":"kms:GenerateDataKey","Resource":"<key ARN>"}`
    - `trenchscanner-trader`: `{"Effect":"Allow","Action":"kms:Decrypt","Resource":"<key ARN>"}`
-3. On Render, sync the Blueprint (it adds the `trenchscanner-trader` worker), then set
+3. In `render.yaml`, uncomment the `trenchscanner-trader` service (it ships commented out while the
+   bot is off, so no paid worker exists for it). On Render, sync the Blueprint, then set
    `TRADING_KMS_KEY_ID` (the ARN), `TRADING_KMS_REGION`, and each service's own
    `TRADING_AWS_ACCESS_KEY_ID` / `TRADING_AWS_SECRET_ACCESS_KEY` on `trenchscanner-api` and
    `trenchscanner-trader`. The trader also needs `HELIUS_API_KEY` (or a paid `SOLANA_RPC_URL`),
    `ADMIN_WALLET_ADDRESSES` and, recommended, its own `TRADING_JUPITER_API_KEY`. Then set
    `TRADING_BOT_ENABLED=true` on both.
-4. Open the **Bot** tab, create the wallet, send it a little SOL, pick sources, save, **Start**.
+4. Until then the **Bot** tab (admins only) is read-only: it says the bot is off, which of these
+   settings are still missing, and the limits and defaults it would run under. Once it is on,
+   open the **Bot** tab, create the wallet, send it a little SOL, pick sources, save, **Start**.
 
 ### Before real funds (launch checklist)
 

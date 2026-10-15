@@ -58,6 +58,34 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
 
   it("does not exist while the feature is off", async () => {
     expect((await off.inject({ method: "GET", url: "/trading", ...as("admin") })).statusCode).toBe(404);
+    for (const [method, url] of [
+      ["POST", "/trading/wallet"],
+      ["PUT", "/trading/bot"],
+      ["POST", "/trading/withdraw"],
+      ["POST", "/trading/sell-all"],
+      ["GET", "/trading/server"],
+      ["PUT", "/trading/server/bot"],
+      ["POST", "/trading/server/withdraw"],
+    ] as const) {
+      expect((await off.inject({ method, url, payload: {}, ...as("admin") })).statusCode).toBe(404);
+    }
+  });
+
+  it("answers status while off: admins only, read-only, no secrets", async () => {
+    expect((await off.inject({ method: "GET", url: "/trading/status" })).statusCode).toBe(401);
+    expect((await off.inject({ method: "GET", url: "/trading/status", ...as("user") })).statusCode).toBe(403);
+    const res = await off.inject({ method: "GET", url: "/trading/status", ...as("admin") });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.enabled).toBe(false);
+    expect(body.limits.maxBuySol).toBe(env.TRADING_MAX_BUY_SOL);
+    expect(body.defaults.sources).toEqual({ filterIds: [], models: [], highConvictionOnly: false });
+    expect(body.checks.find((c: { id: string }) => c.id === "server-wallet").ok).toBe(true);
+    expect(res.body).not.toContain(env.TRADING_LOCAL_MASTER_KEY);
+    // The same route reports the bot on where it is.
+    expect((await app.inject({ method: "GET", url: "/trading/status", ...as("admin") })).json().enabled).toBe(
+      true,
+    );
   });
 
   it("needs a session, and an admin to start", async () => {

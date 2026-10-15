@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "../api";
-import { BoltIcon, CopyIcon, ExternalIcon, LockIcon, RobotIcon } from "../components/Icons";
+import {
+  BoltIcon,
+  CheckIcon,
+  CloseIcon,
+  CopyIcon,
+  ExternalIcon,
+  LockIcon,
+  RobotIcon,
+} from "../components/Icons";
 import { Skeleton } from "../components/Charts";
 import { useNow } from "../hooks";
 import { ago, shortAddress } from "../format";
@@ -103,6 +111,17 @@ interface TradingState {
   withdrawals: Withdrawal[];
 }
 
+/** GET /trading/status: whether the bot runs here, what it is missing, and the limits it runs under. */
+interface TradingStatus {
+  enabled: boolean;
+  checks: { id: string; label: string; ok: boolean; detail: string }[];
+  limits: { maxBuySol: number; maxDailySpendSol: number; maxSlippageBps: number; maxPriorityFeeSol: number };
+  defaults: BotConfig;
+  exitPlanSummary: string;
+  models: { id: string; name: string }[];
+  pumpPortalFallback: boolean;
+}
+
 const LAMPORTS = 1_000_000_000;
 const sol = (lamports: string | null | undefined, digits = 4) =>
   lamports === null || lamports === undefined ? "–" : `${(Number(lamports) / LAMPORTS).toFixed(digits)} SOL`;
@@ -123,6 +142,148 @@ const errorText = (err: unknown) =>
     : String(err instanceof Error ? err.message : err);
 
 export function TradingTab() {
+  const [status, setStatus] = useState<TradingStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api<TradingStatus>("/trading/status")
+      .then(setStatus)
+      .catch((err: unknown) => setError(errorText(err)));
+  }, []);
+  if (error) {
+    return (
+      <div className="stack">
+        <p className="notice small">{error}</p>
+      </div>
+    );
+  }
+  if (!status) {
+    return (
+      <section className="panel">
+        <Skeleton lines={4} />
+      </section>
+    );
+  }
+  return status.enabled ? <TradingConsole /> : <BotOff status={status} />;
+}
+
+/**
+ * The tab while TRADING_BOT_ENABLED is off: read-only. The api has no wallet, bot, sell or
+ * withdrawal routes then and the trader runs nothing, so this shows what turning it on needs and
+ * the limits it would run under, with nothing to press.
+ */
+function BotOff({ status }: { status: TradingStatus }) {
+  const d = status.defaults;
+  const l = status.limits;
+  return (
+    <div className="stack trading">
+      <section className="panel">
+        <header className="section-head">
+          <div>
+            <span className="eyebrow">
+              <RobotIcon size={13} /> Trading bot
+            </span>
+            <h2>Off</h2>
+            <p className="muted small">
+              Switched off on this deployment (TRADING_BOT_ENABLED=false). It holds no wallets, places no
+              trades and moves no funds. Turning it on is a deploy setting, not a button here.
+            </p>
+          </div>
+        </header>
+        <dl className="facts">
+          {status.checks.map((c) => (
+            <div key={c.id}>
+              <dt>
+                {c.ok ? <CheckIcon size={12} /> : <CloseIcon size={12} />} {c.label}
+              </dt>
+              <dd className="small" style={{ overflowWrap: "anywhere" }}>
+                {c.detail}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+      <section className="panel">
+        <header className="section-head">
+          <div>
+            <span className="eyebrow">
+              <LockIcon size={13} /> Limits it would run under
+            </span>
+            <h2>Server ceilings</h2>
+            <p className="muted small">No bot setting can go past these (TRADING_MAX_* on the trader).</p>
+          </div>
+        </header>
+        <dl className="facts">
+          <div>
+            <dt>Largest buy</dt>
+            <dd className="num">{l.maxBuySol} SOL</dd>
+          </div>
+          <div>
+            <dt>Spend per 24 hours</dt>
+            <dd className="num">{l.maxDailySpendSol} SOL</dd>
+          </div>
+          <div>
+            <dt>Slippage</dt>
+            <dd className="num">{l.maxSlippageBps / 100}%</dd>
+          </div>
+          <div>
+            <dt>Priority fee per swap</dt>
+            <dd className="num">{l.maxPriorityFeeSol} SOL</dd>
+          </div>
+        </dl>
+      </section>
+      <section className="panel">
+        <header className="section-head">
+          <div>
+            <span className="eyebrow">
+              <BoltIcon size={13} /> A new bot&apos;s settings
+            </span>
+            <h2>Defaults</h2>
+            <p className="muted small">
+              Each admin&apos;s bot starts paused, following nothing, with these settings to edit once it is
+              on.
+            </p>
+          </div>
+        </header>
+        <dl className="facts">
+          <div>
+            <dt>Buy size</dt>
+            <dd className="num">{d.buySol} SOL</dd>
+          </div>
+          <div>
+            <dt>Open positions at once</dt>
+            <dd className="num">{d.maxOpenPositions}</dd>
+          </div>
+          <div>
+            <dt>Spend per 24 hours</dt>
+            <dd className="num">{d.maxDailySpendSol} SOL</dd>
+          </div>
+          <div>
+            <dt>Oldest signal it buys</dt>
+            <dd className="num">{d.maxSignalAgeSeconds}s</dd>
+          </div>
+          <div>
+            <dt>Slippage</dt>
+            <dd className="num">{d.slippageBps / 100}%</dd>
+          </div>
+          <div>
+            <dt>SOL kept back</dt>
+            <dd className="num">{d.reserveSol} SOL</dd>
+          </div>
+          <div>
+            <dt>Exit plan</dt>
+            <dd className="small">{status.exitPlanSummary}</dd>
+          </div>
+          <div>
+            <dt>Models it can follow</dt>
+            <dd className="small">{status.models.map((m) => m.name).join(", ") || "none"}</dd>
+          </div>
+        </dl>
+      </section>
+    </div>
+  );
+}
+
+function TradingConsole() {
   const [scope, setScopeState] = useState<Scope>(storedScope);
   const [state, setState] = useState<TradingState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
