@@ -11115,6 +11115,14 @@ button.bm-same {
 .wm-section h4 {
   margin-bottom: 8px !important;
 }
+.wm-sides-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wm-sides-head .side-export {
+  margin-left: auto;
+}
 .wm-row {
   display: flex;
   flex-wrap: wrap;

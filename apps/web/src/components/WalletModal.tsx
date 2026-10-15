@@ -5,7 +5,7 @@ import { MIN_WIN_SOL, ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
-import { KolSideWallets } from "../tabs/SideWalletChecker";
+import { KolSideWallets, SideLabelsExport } from "../tabs/SideWalletChecker";
 import {
   CheckIcon,
   CloseIcon,
@@ -448,8 +448,9 @@ const KOL_SIDE_GROUPS: { kind: KolSide["kind"]; title: string }[] = [
 function KolSides({ sides }: { sides: KolSide[] }) {
   return (
     <section className="sage-card wm-section">
-      <h4>
+      <h4 className="wm-sides-head">
         Labeled side wallets <span className="sage-tag">{sides.length}</span>
+        <SideLabelsExport labels={{ count: sides.length, wallets: sides }} />
       </h4>
       {KOL_SIDE_GROUPS.map(({ kind, title }) => {
         const rows = sides.filter((s) => s.kind === kind);
