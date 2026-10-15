@@ -13,6 +13,7 @@ import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { CustomizeDrawer } from "../components/CustomizeDrawer";
 import { CaSearchBox, SearchResults } from "../components/CaSearch";
 import { ScanStatus } from "../components/ScanStatus";
+import { CoverageChip } from "../components/CoverageMeter";
 import { parseSearch } from "../caSearch";
 
 /** This browser's "High conviction only" switch (the API takes it per request, not as a saved setting). */
@@ -171,6 +172,7 @@ export function LiveTab({
             </div>
           </div>
           <div className="feed-controls">
+            {modelsOn && !highConviction && lb && <CoverageChip board={lb} onOpen={() => goTo("model")} />}
             <button
               type="button"
               className={`ghost stats-btn${customizing ? " on" : ""}`}

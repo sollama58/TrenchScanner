@@ -2,7 +2,14 @@ import { Prisma, prisma } from "../db.js";
 import type { CuratorRecipe } from "./contestants.js";
 import type { Lane } from "./evolution.js";
 import { REPORTED_LABEL_RULE, LABEL_LOG2_CAP } from "./labels.js";
-import { liveCatch, marketLift, type CallRecord, type LiveCatch, type MarketLift } from "./leaderboard.js";
+import {
+  liveCatch,
+  marketLift,
+  type CallRecord,
+  type CatchLedger,
+  type LiveCatch,
+  type MarketLift,
+} from "./leaderboard.js";
 import { walletSafetyCutsSql } from "../scoring/rugScreen.js";
 
 /**
@@ -265,7 +272,7 @@ export async function liveCatchRates(
   lanes: readonly Lane[],
   /** The market's rows since `since` when the caller already holds them (see MarketRow); read here otherwise. */
   marketRows?: readonly MarketRow[],
-): Promise<{ byModel: Map<string, LiveCatch>; field: LiveCatch }> {
+): Promise<{ byModel: Map<string, LiveCatch>; field: LiveCatch; ledger: CatchLedger }> {
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
   const laneName = new Map(lanes.map((l) => [l.slot, l.name]));
   const froms = new Map(
