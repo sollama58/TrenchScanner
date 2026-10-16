@@ -27,6 +27,11 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   learningNote: true,
   volume: false,
   scoreColor: true,
+  // On by default (user ask 2026-10-16), in the theme's win, amber and loss colors.
+  tileColors: true,
+  tileLow: null,
+  tileMid: null,
+  tileHigh: null,
   reasons: false,
   sniperTop10: true,
   devTile: false,
@@ -226,6 +231,10 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     learningNote: typeof r.learningNote === "boolean" ? r.learningNote : d.learningNote,
     volume: typeof r.volume === "boolean" ? r.volume : d.volume,
     scoreColor: typeof r.scoreColor === "boolean" ? r.scoreColor : d.scoreColor,
+    tileColors: typeof r.tileColors === "boolean" ? r.tileColors : d.tileColors,
+    tileLow: hex(r.tileLow),
+    tileMid: hex(r.tileMid),
+    tileHigh: hex(r.tileHigh),
     reasons: typeof r.reasons === "boolean" ? r.reasons : d.reasons,
     sniperTop10: typeof r.sniperTop10 === "boolean" ? r.sniperTop10 : d.sniperTop10,
     devTile: typeof r.devTile === "boolean" ? r.devTile : d.devTile,
@@ -266,6 +275,10 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     loss,
     outline,
     outlineResult,
+    tileColors,
+    tileLow,
+    tileMid,
+    tileHigh,
     quickLinks,
     narrativeNote,
     streamTab,
@@ -283,6 +296,10 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     loss,
     outline,
     outlineResult,
+    tileColors,
+    tileLow,
+    tileMid,
+    tileHigh,
     quickLinks,
     narrativeNote,
     streamTab,
@@ -432,7 +449,8 @@ async function save() {
 
 // ---- Applying it ----
 
-const COLOR_SLOTS = ["win", "loss", "accent", "mine", "outline"] as const;
+const COLOR_SLOTS = ["win", "loss", "accent", "mine", "outline", "tileLow", "tileMid", "tileHigh"] as const;
+const TILE_VARS = { tileLow: "--tile-low", tileMid: "--tile-mid", tileHigh: "--tile-high" } as const;
 
 /**
  * The attributes and CSS variables the feed's card grid takes. Only what differs from the default
@@ -457,6 +475,8 @@ export function feedGridProps(a: FeedAppearance): Record<string, string | CSSPro
       style["--brand-ink"] = `color-mix(in srgb, ${c} 65%, var(--ink))`;
     } else if (slot === "outline") {
       style["--card-outline"] = c;
+    } else if (slot === "tileLow" || slot === "tileMid" || slot === "tileHigh") {
+      style[TILE_VARS[slot]] = c;
     } else {
       style["--series-1"] = c;
     }

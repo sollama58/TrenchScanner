@@ -1385,6 +1385,15 @@ export interface FeedAppearance {
   volume: boolean;
   /** Color the Score tile red to green against recent alerts' scores; on by default. */
   scoreColor: boolean;
+  /**
+   * Shade the stat tiles from tileLow through tileMid to tileHigh at the safety screen's cut; on by
+   * default (absent from older API builds: on).
+   */
+  tileColors: boolean;
+  /** The tile scale's colors, #rrggbb, or null for the theme's win, amber and loss colors. */
+  tileLow: string | null;
+  tileMid: string | null;
+  tileHigh: string | null;
   /** The model's reasons under a model call; off by default. */
   reasons: boolean;
   /** The snipers-in-top-holders tile (field id kept from when it read the top 10); off by default. */

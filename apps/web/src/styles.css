@@ -1421,6 +1421,19 @@ img.avatar {
 .card-stats div.risky dd {
   color: var(--bad-ink);
 }
+/* Tile colors (tileTone.ts): a light wash of the tile's place on the lower / median / upper scale,
+   kept faint so a card of tiles doesn't read as a heat map; a tile at the safety cut gets a firmer edge. */
+.card-stats div.toned {
+  background: color-mix(in srgb, var(--tile-c) 8%, var(--surface-3));
+  border-color: color-mix(in srgb, var(--tile-c) 14%, transparent);
+}
+.card-stats div.toned dd {
+  color: color-mix(in oklab, var(--tile-c) 70%, var(--ink));
+}
+.card-stats div.toned-max {
+  background: color-mix(in srgb, var(--tile-c) 12%, var(--surface-3));
+  border-color: color-mix(in srgb, var(--tile-c) 34%, transparent);
+}
 .card-stats dt {
   color: var(--muted);
   font-size: 10px;
