@@ -44,4 +44,8 @@ describe("KOL overrides", () => {
   it("names 5YRg…XRJQUzij as Slingoor", () => {
     expect(KOL_OVERRIDES.get("5YRgrP3mjGzrzirYYN5HAQH19cTYREYwGxW6XRJQUzij")?.name).toBe("Slingoor");
   });
+
+  it("names VJSD…FirUsy1 as Beanzz", () => {
+    expect(KOL_OVERRIDES.get("VJSDW6S74YXR4rRR9P4xwhMvLZJQMhrUb8XMFirUsy1")?.name).toBe("Beanzz");
+  });
 });
