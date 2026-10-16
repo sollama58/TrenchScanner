@@ -48,4 +48,8 @@ describe("KOL overrides", () => {
   it("names VJSD…FirUsy1 as Beanzz", () => {
     expect(KOL_OVERRIDES.get("VJSDW6S74YXR4rRR9P4xwhMvLZJQMhrUb8XMFirUsy1")?.name).toBe("Beanzz");
   });
+
+  it("names bwam…PietdNfSXa as bwam_dev", () => {
+    expect(KOL_OVERRIDES.get("bwamJzztZsepfkteWRChggmXuiiCQvpLqPietdNfSXa")?.name).toBe("bwam_dev");
+  });
 });
