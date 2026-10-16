@@ -14,6 +14,9 @@ import {
   withoutTransfers,
   wideWithoutTransfers,
   type MapNode,
+  type BubbleGraph,
+  markerSpot,
+  stretchWide,
   cexGroupsOf,
   cexLayout,
   cexLinksOf,
@@ -968,5 +971,40 @@ describe("wideWithoutTransfers", () => {
     const plain = { ...wide, clustersExTransfers: undefined };
     expect(wideWithoutTransfers(plain)).toBe(plain);
     expect(wideWithoutTransfers(null)).toBeNull();
+  });
+});
+
+describe("markerSpot", () => {
+  it("sits on the rim at the lower corner when nothing is in the way", () => {
+    const p = markerSpot(0, 0, 20, 6.5, 1, [{ x: 0, y: 0, w: 16, h: 8 }]);
+    expect(p.x).toBeCloseTo(20 * Math.SQRT1_2);
+    expect(p.y).toBeCloseTo(20 * Math.SQRT1_2);
+    expect(markerSpot(0, 0, 20, 6.5, -1, []).x).toBeLessThan(0);
+  });
+
+  it("moves off a name that reaches the corner (user ask 2026-10-16)", () => {
+    const name = { x: 0, y: 8, w: 44, h: 16 };
+    const p = markerSpot(0, 0, 20, 6.5, 1, [name]);
+    const dx = Math.max(Math.abs(p.x - name.x) - name.w / 2, 0);
+    const dy = Math.max(Math.abs(p.y - name.y) - name.h / 2, 0);
+    expect(Math.hypot(dx, dy)).toBeGreaterThanOrEqual(6.5);
+  });
+});
+
+describe("stretchWide", () => {
+  const node = (id: string, x: number, y: number) =>
+    ({ id, kind: "holder", x, y, r: 10, cluster: null, sameTime: null, flags: [] }) as unknown as MapNode;
+  const graph = (nodes: MapNode[]) => ({ nodes, links: [], clusters: [] }) as unknown as BubbleGraph;
+
+  it("spreads a square map sideways toward a wide box, up to its cap", () => {
+    const g = graph([node("a", 0, 0), node("b", 100, 100)]);
+    const out = stretchWide(g, 3);
+    expect(out.nodes[1]!.x - out.nodes[0]!.x).toBeCloseTo(100 * 1.45, 0);
+    expect(out.nodes[1]!.y).toBe(100);
+  });
+
+  it("leaves a map that is already wide enough as it is", () => {
+    const g = graph([node("a", 0, 0), node("b", 300, 20)]);
+    expect(stretchWide(g, 1.2)).toBe(g);
   });
 });
