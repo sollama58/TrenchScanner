@@ -31,9 +31,15 @@ export function AppearanceControls() {
     (f !== "sniperTop10" || look.sniperTop10) &&
     (f !== "dev" || look.devTile) &&
     (f !== "largest" || look.largest) &&
-    (f !== "kolBundled" || look.kolBundled);
+    (f !== "kolBundled" || look.kolBundled) &&
+    (f !== "transferred" || look.transferred);
   const toggleField = (f: CardField) =>
-    f === "reasons" || f === "sniperTop10" || f === "largest" || f === "kolBundled" || f === "dev"
+    f === "reasons" ||
+    f === "sniperTop10" ||
+    f === "largest" ||
+    f === "kolBundled" ||
+    f === "transferred" ||
+    f === "dev"
       ? // Opt-in: switching it on also unhides it, in case an older preset hid it.
         setAppearance({
           [f === "dev" ? "devTile" : f]: !shown(f),
@@ -326,6 +332,14 @@ export function AppearanceControls() {
             onChange={() => setAppearance({ bubbleSideLinks: !look.bubbleSideLinks })}
           />
           Bubble maps: tie KOLs&apos; possible side wallets to them
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.bubbleTransferLinks}
+            onChange={() => setAppearance({ bubbleTransferLinks: !look.bubbleTransferLinks })}
+          />
+          Bubble maps: draw arrows between holders that sent the coin to each other
         </label>
         <div className="field-group">
           <h4>Quick links</h4>

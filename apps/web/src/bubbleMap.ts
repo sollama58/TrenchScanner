@@ -283,6 +283,21 @@ export interface CexLink {
   funder: string;
 }
 
+/**
+ * A holder that sent the coin to another holder (user ask 2026-10-16, TokenSnapshot.holderTransfers):
+ * drawn as an arrow from sender to receiver. Only the coin itself counts; never in Linked.
+ */
+export interface TransferLink {
+  /** The sender's node id. */
+  from: string;
+  /** The receiver's node id. */
+  to: string;
+  /** % of supply it sent, over every transfer between the two. */
+  pct: number;
+  count: number;
+  lastAtMs: number | null;
+}
+
 /** A same-minute group's tie: each holder to the group's first-funded one. */
 export interface SameTimeLink {
   from: string;
@@ -314,6 +329,12 @@ export interface BubbleGraph {
   /** How many top holders an exchange funded, of how many were read; and their share of that count. */
   cexCount: { linked: number; of: number } | null;
   cexPct: number | null;
+  /** Transfers between holders on the map, sender to receiver (drawn only, never counted in Linked). */
+  transferLinks: TransferLink[];
+  /** Transferred Supply %: the coin moved holder to holder among the top 25, as read; null when not read. */
+  transferPct: number | null;
+  /** How many of the top holders sent or got a transfer, of how many were checked; null when not read. */
+  transferCount: { linked: number; of: number } | null;
   /**
    * Where the layout kept room for each pill (layoutGraph's label room): by the label's id (a
    * funder node's id, "same:<i>", "cex:<funder>", "side:<kol>"), the centre of the room it holds.
@@ -377,6 +398,10 @@ export function buildGraph(
     | "cexFundedPct"
     | "cexFundedCount"
     | "cexFundedHolders"
+    | "transferredSupplyPct"
+    | "transferWalletCount"
+    | "transferHoldersChecked"
+    | "holderTransfers"
   > &
     WideReading,
   flagged: readonly FlaggedHolder[] = [],
@@ -532,6 +557,12 @@ export function buildGraph(
         ? { linked: snapshot.cexFundedCount, of: snapshot.cexFundedHolders }
         : null,
     cexPct: snapshot.cexFundedPct ?? null,
+    transferLinks: transferLinksOf(snapshot.holderTransfers ?? [], nodes),
+    transferPct: snapshot.transferredSupplyPct ?? null,
+    transferCount:
+      snapshot.transferWalletCount != null && snapshot.transferHoldersChecked != null
+        ? { linked: snapshot.transferWalletCount, of: snapshot.transferHoldersChecked }
+        : null,
     sameTimeGroups,
     sameTimePct: snapshot.sameTimeFundedPct ?? null,
     sameTimeCount: sameTimeCount(snapshot),
@@ -567,6 +598,73 @@ export function cexLinksOf(
     for (const n of rest) out.push({ from: n.id, to: top!.id, funder });
   }
   return out;
+}
+
+/**
+ * The transfers between holders on the map (TokenSnapshot.holderTransfers), each pair once per
+ * direction, largest first. A pair with either wallet off the map is left out. Drawn only.
+ */
+export function transferLinksOf(
+  transfers: readonly { from: string; to: string; pct: number; count: number; lastAtMs?: number }[],
+  nodes: readonly MapNode[],
+): TransferLink[] {
+  const onMap = new Map(nodes.filter((n) => n.kind === "holder" && n.wallet).map((n) => [n.wallet!, n.id]));
+  const out: TransferLink[] = [];
+  for (const t of Array.isArray(transfers) ? transfers : []) {
+    const from = t && typeof t.from === "string" ? onMap.get(t.from) : undefined;
+    const to = t && typeof t.to === "string" ? onMap.get(t.to) : undefined;
+    if (!from || !to || from === to || !(t.pct >= 0)) continue;
+    out.push({
+      from,
+      to,
+      pct: t.pct,
+      count: typeof t.count === "number" ? t.count : 1,
+      lastAtMs: typeof t.lastAtMs === "number" ? t.lastAtMs : null,
+    });
+  }
+  return out.sort((a, b) => b.pct - a.pct);
+}
+
+/** Each holder's transfers on the map: what it sent to, and got from, other holders. */
+export function transfersOfNode(
+  graph: Pick<BubbleGraph, "transferLinks">,
+  id: string,
+): { sent: number; sentTo: number; got: number; gotFrom: number } {
+  const out = graph.transferLinks.filter((l) => l.from === id);
+  const into = graph.transferLinks.filter((l) => l.to === id);
+  const sum = (ls: TransferLink[]) => Math.round(ls.reduce((t, l) => t + l.pct, 0) * 100) / 100;
+  return { sent: sum(out), sentTo: out.length, got: sum(into), gotFrom: into.length };
+}
+
+/** A transfer arrow's width in map units: thicker for more supply moved. */
+export function transferWidth(pct: number): number {
+  return 1.3 + Math.min(2.6, Math.sqrt(Math.max(0, pct)) * 0.9);
+}
+
+/**
+ * A transfer arrow's curve between two bubbles, trimmed to stop at their edges so the head
+ * shows: a quadratic from (x1, y1) through (cx, cy) to (x2, y2), bent to the sender's right, so
+ * a pair that sent both ways draws two arcs side by side. `angle`: the head's direction at the end.
+ */
+export function transferCurve(
+  a: Pick<MapNode, "x" | "y" | "r">,
+  b: Pick<MapNode, "x" | "y" | "r">,
+  headGap = 2,
+): { x1: number; y1: number; cx: number; cy: number; x2: number; y2: number; angle: number } {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const cx = (a.x + b.x) / 2 - dy * 0.2;
+  const cy = (a.y + b.y) / 2 + dx * 0.2;
+  // Each end steps out of its bubble along the curve's tangent there.
+  const out = (n: Pick<MapNode, "x" | "y" | "r">, gap: number) => {
+    const tx = cx - n.x;
+    const ty = cy - n.y;
+    const len = Math.hypot(tx, ty) || 1;
+    return { x: n.x + (tx / len) * (n.r + gap), y: n.y + (ty / len) * (n.r + gap) };
+  };
+  const p1 = out(a, 1.5);
+  const p2 = out(b, headGap);
+  return { x1: p1.x, y1: p1.y, cx, cy, x2: p2.x, y2: p2.y, angle: Math.atan2(p2.y - cy, p2.x - cx) };
 }
 
 /**
@@ -727,7 +825,7 @@ export function kolBundleNodes(
  */
 export function regroupLayout(
   graph: BubbleGraph,
-  opts: { cex?: boolean; sides?: readonly SideGroup[]; kols?: readonly KolControl[] },
+  opts: { cex?: boolean; sides?: readonly SideGroup[]; kols?: readonly KolControl[]; transfers?: boolean },
 ): BubbleGraph {
   const copy = { ...graph, nodes: graph.nodes.map((n) => ({ ...n })) };
   const kolTies: { from: string; to: string }[] = [];
@@ -744,6 +842,7 @@ export function regroupLayout(
     sideTies: opts.sides && opts.sides.length > 0 ? sideTiesOf(copy, opts.sides) : undefined,
     kolTies,
     kolHubs,
+    transferTies: opts.transfers ? graph.transferLinks : undefined,
   });
 }
 
@@ -752,8 +851,9 @@ export function needsRegroup(opts: {
   cex?: boolean;
   sides?: readonly SideGroup[];
   kols?: readonly KolControl[];
+  transfers?: boolean;
 }): boolean {
-  return !!opts.cex || (opts.sides?.length ?? 0) > 0 || (opts.kols?.length ?? 0) > 0;
+  return !!opts.cex || !!opts.transfers || (opts.sides?.length ?? 0) > 0 || (opts.kols?.length ?? 0) > 0;
 }
 
 /**
@@ -857,6 +957,8 @@ export function layoutGraph(
     kolTies?: readonly { from: string; to: string }[];
     /** Each KOL's pill: by the KOL's bubble when it holds, else by its bundle; for keeping room for it. */
     kolHubs?: readonly { id: string; anchor: string | null; members: readonly string[] }[];
+    /** Holders that sent the coin to each other, pulled gently together (the map's transfers toggle). */
+    transferTies?: readonly { from: string; to: string }[];
   } = {},
 ): BubbleGraph {
   const { nodes, links } = graph;
@@ -874,6 +976,7 @@ export function layoutGraph(
     ...graph.sameTimeLinks,
     ...(opts.cex ? graph.cexLinks : []),
     ...(opts.sideTies ?? []),
+    ...(opts.transferTies ?? []),
   ].flatMap((l) => {
     const a = index.get(l.from);
     const b = index.get(l.to);
@@ -1001,6 +1104,23 @@ export function layoutGraph(
       a.y += dy * k;
       b.x -= dx * k * 0.3;
       b.y -= dy * k * 0.3;
+    }
+    // Transfers between holders, when drawn: a gentle pull, so a sender sits near who it sent to
+    // without leaving its cluster.
+    for (const l of opts.transferTies ?? []) {
+      const a = index.get(l.from);
+      const b = index.get(l.to);
+      if (!a || !b || a === b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.hypot(dx, dy) || 0.01;
+      const want = a.r + b.r + 30;
+      if (dist <= want) continue;
+      const k = ((dist - want) / dist) * 0.035;
+      a.x += dx * k;
+      a.y += dy * k;
+      b.x -= dx * k;
+      b.y -= dy * k;
     }
     // Lines: once the groups have formed, a bubble lying on another pair's line moves off it,
     // and the line's ends give a little the other way.

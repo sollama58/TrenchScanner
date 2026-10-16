@@ -1147,6 +1147,15 @@ model TokenSnapshot {
   /// kolBundledPct; scans from 2026-10-14 19:44 UTC were backfilled where the reading allowed.
   bundledSupplyPct        Float?
   bundledSupplyCount      Int?
+  /// Holder-to-holder transfers (core's wallets/holderTransfers.ts, user ask 2026-10-16): among the
+  /// top 25 (and the creator when it holds), Transferred Supply % (the coin moved holder to holder,
+  /// every transfer counted), how many of transferHoldersChecked sent or got one, and the pairs
+  /// [{ from, to, pct, count, lastAtMs }] for the bubble map (only when there is one). Display and
+  /// record only: no filter, Linked count or model reads them. Null until read.
+  transferredSupplyPct    Float?
+  transferWalletCount     Int?
+  transferHoldersChecked  Int?
+  holderTransfers         Json?
   winnerRecentBuyers      Int?
   winnerRecentSellers     Int?
   // How many holders the two percentages above were computed over. The list is "top 10" by

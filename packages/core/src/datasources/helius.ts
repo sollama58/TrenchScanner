@@ -197,6 +197,11 @@ export type WalletOverviewResult =
 /** A funder's newest page of signatures, for the hot-funder check (getFunderActivityBatch). */
 export type FunderActivityResult = { status: "found"; fullPageSpanMs: number | null } | { status: "failed" };
 
+/** An address's signatures, newest first (getAccountSignaturesBatch); `ok`: the transaction succeeded. */
+export type AccountSignaturesResult =
+  | { status: "found"; signatures: { signature: string; ok: boolean; atMs: number | null }[]; full: boolean }
+  | { status: "failed" };
+
 export type MintAuthorityResult =
   { status: "found"; mintAuthorityActive: boolean; freezeAuthorityActive: boolean } | { status: "failed" };
 
@@ -205,7 +210,14 @@ export type LargestHoldersResult = { status: "found"; holders: OnChainHolders } 
 
 /** A mint's largest wallets, pools aside, with each one's % of supply; "failed" without a full read. */
 export type TopHoldersResult =
-  { status: "found"; holders: { owner: string; pct: number }[] } | { status: "failed" };
+  | {
+      status: "found";
+      /** Largest first; `accounts`: each wallet's token accounts of the coin, when the read listed them. */
+      holders: { owner: string; pct: number; accounts?: string[] }[];
+      /** The coin's raw supply (base units), as a decimal string. */
+      supply?: string;
+    }
+  | { status: "failed" };
 
 /** Whether a mint was launched in Pump.fun's Mayhem Mode. "failed" is kept distinct from a
  *  definitive false for the same reason as EarliestActivityResult: the rug screen treats an
@@ -276,7 +288,7 @@ const MAX_TRANSACTION_VERSION = 1;
 const RPC_METHOD_NOT_FOUND = -32601;
 
 /** One token account row of getProgramAccounts(V2), sliced to TOKEN_ACCOUNT_OWNER_AMOUNT_SLICE. */
-type GpaRow = { account?: { data?: unknown } };
+type GpaRow = { pubkey?: string; account?: { data?: unknown } };
 /** The owner (bytes 32-63) and amount (64-71) of a token account; both token programs lay out the first 165 bytes alike. */
 const TOKEN_ACCOUNT_OWNER_AMOUNT_SLICE = { offset: 32, length: 40 };
 /** getProgramAccountsV2's page: Helius allows up to 10,000, and a page is 1 credit whatever it holds. */
@@ -894,10 +906,15 @@ export class HeliusClient {
         if (!b64) continue;
         const bytes = Buffer.from(b64, "base64");
         if (bytes.length < 40) continue;
-        accounts.push({ owner: bs58.encode(bytes.subarray(0, 32)), amount: bytes.readBigUInt64LE(32) });
+        accounts.push({
+          owner: bs58.encode(bytes.subarray(0, 32)),
+          amount: bytes.readBigUInt64LE(32),
+          ...(typeof row.pubkey === "string" ? { address: row.pubkey } : {}),
+        });
       }
-      const holders = topWalletsFromAccounts(accounts, supplyOf.get(mint)!, n);
-      out.set(mint, holders ? { status: "found", holders } : { status: "failed" });
+      const supply = supplyOf.get(mint)!;
+      const holders = topWalletsFromAccounts(accounts, supply, n);
+      out.set(mint, holders ? { status: "found", holders, supply: supply.toString() } : { status: "failed" });
     }
     return out;
   }
@@ -1357,6 +1374,77 @@ export class HeliusClient {
         fullPageSpanMs:
           sigs.length >= FUNDER_SIGNATURES_LIMIT && newest && oldest ? (newest - oldest) * 1000 : null,
       });
+    }
+    return out;
+  }
+
+  /**
+   * Each address's signatures, newest first, up to FUNDER_SIGNATURES_LIMIT (1000), or only those newer than
+   * `until` when given (a re-read of an account read before). One 1-credit call each. For the
+   * holder-transfer read: a holder's token account of a coin lists every transaction that moved it.
+   * `full`: the page came back full, so older signatures may be missing.
+   */
+  async getAccountSignaturesBatch(
+    reads: readonly { address: string; until?: string | null }[],
+  ): Promise<Map<string, AccountSignaturesResult>> {
+    const out = new Map<string, AccountSignaturesResult>();
+    if (reads.length === 0) return out;
+    const pages = await this.sendBatched<SignaturesResult>(
+      reads.map((r) => ({
+        id: r.address,
+        method: "getSignaturesForAddress",
+        params: [
+          r.address,
+          { limit: FUNDER_SIGNATURES_LIMIT, commitment: "confirmed", ...(r.until ? { until: r.until } : {}) },
+        ],
+      })),
+      15_000,
+    );
+    for (const r of reads) {
+      const res = pages.get(r.address);
+      if (!res || res.error || !Array.isArray(res.result)) {
+        out.set(r.address, { status: "failed" });
+        continue;
+      }
+      out.set(r.address, {
+        status: "found",
+        signatures: res.result.map((s) => ({
+          signature: s.signature,
+          ok: s.err == null,
+          atMs: typeof s.blockTime === "number" ? s.blockTime * 1000 : null,
+        })),
+        full: res.result.length >= FUNDER_SIGNATURES_LIMIT,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Transactions by signature, in full (getTransaction, 1 credit each): per signature the
+   * transaction, null when the node has none, or "failed" when it got no usable answer.
+   */
+  async getTransactionsBatch(signatures: readonly string[]): Promise<Map<string, ChainTx | null | "failed">> {
+    const unique = [...new Set(signatures)];
+    const out = new Map<string, ChainTx | null | "failed">();
+    if (unique.length === 0) return out;
+    const txs = await this.sendBatched<ChainTx | null>(
+      unique.map((signature) => ({
+        id: signature,
+        method: "getTransaction",
+        params: [
+          signature,
+          {
+            encoding: "json",
+            maxSupportedTransactionVersion: MAX_TRANSACTION_VERSION,
+            commitment: "confirmed",
+          },
+        ],
+      })),
+      15_000,
+    );
+    for (const signature of unique) {
+      const res = txs.get(signature);
+      out.set(signature, !res || res.error ? "failed" : (res.result ?? null));
     }
     return out;
   }

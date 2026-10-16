@@ -39,8 +39,10 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   devTile: false,
   largest: false,
   kolBundled: false,
+  transferred: false,
   bubbleCexLinks: false,
   bubbleSideLinks: true,
+  bubbleTransferLinks: true,
   narrativeNote: null,
   streamTab: false,
   // On for everyone by default (user ask 2026-10-15); a new key, so the old opt-in's saved "off" doesn't hide it.
@@ -106,6 +108,7 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
       { id: "linked", label: "Linked wallets" },
       { id: "cexFunded", label: "CEX-funded holders" },
       { id: "kolBundled", label: "KOL Bundled %" },
+      { id: "transferred", label: "Transferred Supply %" },
       { id: "dev", label: "Dev holding / sold" },
     ],
   },
@@ -121,15 +124,16 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
 ];
 
 // "vol" is listed apart from the groups: it is opt-in (FeedAppearance.volume), not hide-able.
-// "reasons", "sniperTop10", "largest", "kolBundled" and "dev" are listed in the groups but have
-// their own switches too (FeedAppearance.reasons, .sniperTop10, .largest, .kolBundled, .devTile).
+// "reasons", "sniperTop10", "largest", "kolBundled", "transferred" and "dev" are listed in the groups
+// but have their own switches too (FeedAppearance.reasons, .sniperTop10, .largest, .kolBundled,
+// .transferred, .devTile).
 const CARD_FIELDS = new Set<string>([...CARD_FIELD_GROUPS.flatMap((g) => g.fields.map((f) => f.id)), "vol"]);
 
 /** The card fields not to draw: the ones the user hid, plus the opt-in ones not switched on. */
 export function cardHideSet(
   look: Pick<
     FeedAppearance,
-    "hidden" | "volume" | "reasons" | "sniperTop10" | "devTile" | "largest" | "kolBundled"
+    "hidden" | "volume" | "reasons" | "sniperTop10" | "devTile" | "largest" | "kolBundled" | "transferred"
   >,
 ): ReadonlySet<CardField> {
   const out = new Set<CardField>(look.hidden);
@@ -139,6 +143,7 @@ export function cardHideSet(
   if (!look.devTile) out.add("dev");
   if (!look.largest) out.add("largest");
   if (!look.kolBundled) out.add("kolBundled");
+  if (!look.transferred) out.add("transferred");
   return out;
 }
 
@@ -243,8 +248,11 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     devTile: typeof r.devTile === "boolean" ? r.devTile : d.devTile,
     largest: typeof r.largest === "boolean" ? r.largest : d.largest,
     kolBundled: typeof r.kolBundled === "boolean" ? r.kolBundled : d.kolBundled,
+    transferred: typeof r.transferred === "boolean" ? r.transferred : d.transferred,
     bubbleCexLinks: typeof r.bubbleCexLinks === "boolean" ? r.bubbleCexLinks : d.bubbleCexLinks,
     bubbleSideLinks: typeof r.bubbleSideLinks === "boolean" ? r.bubbleSideLinks : d.bubbleSideLinks,
+    bubbleTransferLinks:
+      typeof r.bubbleTransferLinks === "boolean" ? r.bubbleTransferLinks : d.bubbleTransferLinks,
     narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
     streamTab: typeof r.streamTab === "boolean" ? r.streamTab : d.streamTab,
     hideLighthouseTab: typeof r.hideLighthouseTab === "boolean" ? r.hideLighthouseTab : d.hideLighthouseTab,

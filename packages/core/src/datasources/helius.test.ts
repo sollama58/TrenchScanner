@@ -749,7 +749,7 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     const bytes = Buffer.alloc(40);
     Buffer.from(bs58.decode(owner)).copy(bytes, 0);
     bytes.writeBigUInt64LE(amount, 32);
-    return { pubkey: "acct", account: { data: [bytes.toString("base64"), "base64"] } };
+    return { pubkey: `acct-${owner}`, account: { data: [bytes.toString("base64"), "base64"] } };
   };
 
   const mintAccount = (c: { id: string }) => ({
@@ -780,7 +780,11 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     );
     const client = new HeliusClient({ rpcUrl: url, isHelius: true });
     const result = await client.getTopHoldersBatch(["mintA"], 25);
-    expect(result.get("mintA")).toEqual({ status: "found", holders: [{ owner: WALLET, pct: 15 }] });
+    expect(result.get("mintA")).toEqual({
+      status: "found",
+      supply: "1000",
+      holders: [{ owner: WALLET, pct: 15, accounts: [`acct-${WALLET}`] }],
+    });
     expect(seen.map((c) => c.method)).toEqual(["getMultipleAccounts", "getProgramAccountsV2"]);
     const gpa = seen.find((c) => c.method === "getProgramAccountsV2")!;
     expect(gpa.params[0]).toBe("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -811,9 +815,10 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     const result = await client.getTopHoldersBatch(["mintA"], 25);
     expect(result.get("mintA")).toEqual({
       status: "found",
+      supply: "1000",
       holders: [
-        { owner: WALLET, pct: 15 },
-        { owner: OTHER, pct: 2 },
+        { owner: WALLET, pct: 15, accounts: [`acct-${WALLET}`] },
+        { owner: OTHER, pct: 2, accounts: [`acct-${OTHER}`] },
       ],
     });
     expect(seen.filter((c) => c.method === "getProgramAccountsV2")).toHaveLength(2);
@@ -844,7 +849,8 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     const client = new HeliusClient({ rpcUrl: url, isHelius: true });
     expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
       status: "found",
-      holders: [{ owner: WALLET, pct: 15 }],
+      supply: "1000",
+      holders: [{ owner: WALLET, pct: 15, accounts: [`acct-${WALLET}`] }],
     });
     expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")?.status).toBe("found");
     expect(seen.filter((m) => m === "getProgramAccountsV2")).toHaveLength(1);
@@ -863,7 +869,8 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     const client = new HeliusClient({ rpcUrl: url });
     expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
       status: "found",
-      holders: [{ owner: WALLET, pct: 15 }],
+      supply: "1000",
+      holders: [{ owner: WALLET, pct: 15, accounts: [`acct-${WALLET}`] }],
     });
     expect(seen).toEqual(["getMultipleAccounts", "getProgramAccounts"]);
   });

@@ -60,4 +60,20 @@ describe("topWalletsFromAccounts", () => {
     expect(top[24]!.pct).toBe(0.5);
     expect(topWalletsFromAccounts(accounts, 0n, 25)).toBeNull();
   });
+
+  it("lists each wallet's token accounts when the read gave them", () => {
+    const top = topWalletsFromAccounts(
+      [
+        { owner: wallet(1), amount: pct(3), address: "acc-1" },
+        { owner: wallet(1), amount: pct(2), address: "acc-2" },
+        { owner: wallet(2), amount: pct(1), address: "acc-3" },
+      ],
+      SUPPLY,
+      25,
+    )!;
+    expect(top).toEqual([
+      { owner: wallet(1), pct: 5, accounts: ["acc-1", "acc-2"] },
+      { owner: wallet(2), pct: 1, accounts: ["acc-3"] },
+    ]);
+  });
 });

@@ -10866,6 +10866,10 @@ img.tm-avatar {
   --bm-cex-3: #f0abfc;
   /* KOLs' possible side wallets: a dotted gold tie, apart from the clusters and exchange dashes. */
   --bm-side: #f5b324;
+  /* Holder-to-holder transfers (user ask 2026-10-16): a violet arrow, apart from every cluster,
+     exchange and KOL colour, and the sparks that flow along it. */
+  --bm-xfer: #8b5cf6;
+  --bm-xfer-spark: color-mix(in srgb, #ffffff 72%, var(--bm-xfer));
   /* Each KOL's bundle outline and pill, by its place among the map's KOLs: gold first, then
      silver (the ink, so it holds in both themes) and mint, none of them a cluster's colour. */
   --bm-kol-0: var(--bm-side);
@@ -11453,6 +11457,130 @@ button.bm-same {
   .bm-node {
     animation: none;
   }
+}
+/* Holder-to-holder transfers: a soft glow, the arrow itself, and sparks flowing from sender to
+   receiver. A picked bubble's arrows brighten; the rest fade. */
+.bm-transfers {
+  pointer-events: none;
+}
+.bm-xfer {
+  pointer-events: stroke;
+  transition: opacity 0.2s;
+  animation: bm-xfer-in 0.6s ease-out 0.35s both;
+}
+.bm-xfer.dim {
+  opacity: 0.14;
+}
+.bm-xfer-glow,
+.bm-xfer-line,
+.bm-xfer-flow {
+  fill: none;
+  stroke-linecap: round;
+}
+.bm-xfer-glow {
+  stroke: var(--bm-xfer);
+  stroke-opacity: 0.16;
+}
+.bm-xfer.on .bm-xfer-glow {
+  stroke-opacity: 0.32;
+}
+.bm-xfer-line {
+  stroke: var(--bm-xfer);
+  stroke-opacity: 0.92;
+}
+.bm-xfer-flow {
+  stroke: var(--bm-xfer-spark);
+  stroke-dasharray: 1.2 7;
+  animation: bm-xfer-flow 1.4s linear infinite;
+}
+.bm-xfer-head {
+  fill: var(--bm-xfer);
+  stroke: var(--bm-xfer);
+  stroke-width: 0.8;
+  stroke-linejoin: round;
+}
+@keyframes bm-xfer-flow {
+  to {
+    stroke-dashoffset: -8.2;
+  }
+}
+@keyframes bm-xfer-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bm-xfer,
+  .bm-xfer-flow {
+    animation: none;
+  }
+  .bm-xfer-flow {
+    display: none;
+  }
+}
+/* The Transferred tile: a violet edge once anything moved. */
+.bm-stats > .bm-xfer-stat.has {
+  border-color: color-mix(in srgb, var(--bm-xfer) 45%, transparent);
+  background: color-mix(in srgb, var(--bm-xfer) 9%, var(--surface-3));
+}
+.bm-stats > .bm-xfer-stat.has dt {
+  color: color-mix(in srgb, var(--bm-xfer) 70%, var(--muted));
+}
+/* The transfer switch's key: a short violet arrow. */
+.bm-xfer-key {
+  position: relative;
+  width: 18px;
+  height: 0;
+  border-top: 2.5px solid var(--bm-xfer);
+}
+.bm-xfer-key::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  top: -5.5px;
+  border-left: 6px solid var(--bm-xfer);
+  border-top: 4.25px solid transparent;
+  border-bottom: 4.25px solid transparent;
+}
+.switch.bm-toggle:not(.on) .bm-xfer-key {
+  opacity: 0.45;
+}
+/* A transfer pair in the list under the map: sender, arrow, receiver. */
+.bm-xfer-dot {
+  grid-area: dot;
+  align-self: center;
+  width: 14px;
+  height: 0;
+  border-top: 2.5px solid var(--bm-xfer);
+  position: relative;
+}
+.bm-xfer-dot::after {
+  content: "";
+  position: absolute;
+  right: -2px;
+  top: -5px;
+  border-left: 5px solid var(--bm-xfer);
+  border-top: 3.75px solid transparent;
+  border-bottom: 3.75px solid transparent;
+}
+.bm-xfer-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.bm-xfer-arrow {
+  flex: none;
+  fill: none;
+  stroke: var(--bm-xfer);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tm-tag.k-xfer {
+  color: color-mix(in srgb, var(--bm-xfer) 70%, var(--ink));
+  border-color: color-mix(in srgb, var(--bm-xfer) 45%, transparent);
+  background: color-mix(in srgb, var(--bm-xfer) 12%, transparent);
 }
 .bm-detail {
   display: flex;

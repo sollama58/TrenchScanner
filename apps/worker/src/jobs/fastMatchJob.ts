@@ -111,6 +111,9 @@ function profileFromSnapshot(
     kolBundledPct?: number | null;
     bundledSupplyPct?: number | null;
     bundledSupplyCount?: number | null;
+    transferredSupplyPct?: number | null;
+    transferWalletCount?: number | null;
+    transferHoldersChecked?: number | null;
     flaggedBuySol?: number | null;
     devHolding: boolean | null;
   },
@@ -158,6 +161,9 @@ function profileFromSnapshot(
     kolBundledPct: snapshot.kolBundledPct ?? undefined,
     bundledSupplyPct: snapshot.bundledSupplyPct ?? undefined,
     bundledSupplyCount: snapshot.bundledSupplyCount ?? undefined,
+    transferredSupplyPct: snapshot.transferredSupplyPct ?? undefined,
+    transferWalletCount: snapshot.transferWalletCount ?? undefined,
+    transferHoldersChecked: snapshot.transferHoldersChecked ?? undefined,
     flaggedBuySol: snapshot.flaggedBuySol ?? undefined,
     // The scan's resolved answer, carried forward; the fast path has no trade-stream view of its own.
     creatorHolding: snapshot.devHolding ?? undefined,

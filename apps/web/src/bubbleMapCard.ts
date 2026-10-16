@@ -31,6 +31,8 @@ import {
   sideWord,
   bubbleNameLines,
   showsPct,
+  transferCurve,
+  transferWidth,
   type SideGroup,
   type FlagsRead,
   type BubbleGraph,
@@ -99,6 +101,8 @@ const PILL_H = 28;
 const CEX = ["#a5b4fc", "#5eead4", "#fda4af", "#f0abfc"];
 /** The most the map is scaled up, so a small one isn't blown up past readable proportions. */
 const MAX_SCALE = 3;
+/** Holder-to-holder transfers' arrows: the map's violet (styles.css --bm-xfer). */
+const XFER = "#a78bfa";
 /** KOLs' possible side wallets: the map's dotted gold (styles.css --bm-side). */
 const SIDE = "#f5b324";
 /** Each KOL's colour on the card, by its place among the map's KOLs (styles.css --bm-kol-0 to 2). */
@@ -162,6 +166,8 @@ export async function renderBubbleCard(
    */
   opts: {
     cex?: boolean;
+    /** Draw the holder-to-holder transfer arrows, as the map shows them when they're on. */
+    transfers?: boolean;
     sides?: readonly SideGroup[];
     flags?: FlagsRead;
     /** KOL Bundled %, listed under the readings when KOLs bundle any supply. */
@@ -309,6 +315,15 @@ export async function renderBubbleCard(
   // KOL Bundled % (user ask 2026-10-14): supply held by KOLs and the holders tied to them.
   if (opts.kolBundled != null && opts.kolBundled > 0)
     notes.push({ colour: SIDE, text: `KOL bundled ${pctText(opts.kolBundled)} of supply` });
+  // Transferred Supply % (user ask 2026-10-16): the coin moved holder to holder among the top 25.
+  const transfers = !!opts.transfers && graph.transferLinks.length > 0;
+  if (transfers && graph.transferPct !== null && graph.transferPct > 0)
+    notes.push({
+      colour: XFER,
+      text: `${pctText(graph.transferPct)} transferred holder to holder${
+        graph.transferCount ? ` (${graph.transferCount.linked}/${graph.transferCount.of})` : ""
+      }`,
+    });
   if (sameWallets > 0 && graph.sameTimePct !== null)
     notes.push({
       colour: INK2,
@@ -400,7 +415,7 @@ export async function renderBubbleCard(
   // Right: the map, fitted into its box; regrouped by exchange and by KOL when those ties show, as on the map.
   const sideGroups = sideRows.map((s) => s.g);
   const kols = opts.kols ?? [];
-  const regroup = { cex, sides: sideGroups, kols };
+  const regroup = { cex, sides: sideGroups, kols, transfers };
   const map = needsRegroup(regroup) ? regroupLayout(graph, regroup) : graph;
   // Each KOL's bundle on the laid-out map, with two or more of its holders there.
   const kolBundles = kols
@@ -684,6 +699,46 @@ export async function renderBubbleCard(
     ctx.stroke();
   }
   ctx.setLineDash([]);
+
+  // Holder-to-holder transfers: a glowing violet arrow from each sender to each receiver, as thick
+  // as the supply it moved, as the map draws them.
+  if (transfers) {
+    for (const l of map.transferLinks) {
+      const a = index.get(l.from);
+      const b = index.get(l.to);
+      if (!a || !b) continue;
+      const w = transferWidth(l.pct) * scale;
+      const head = (4 + transferWidth(l.pct) * 1.5) * scale;
+      const half = (2.4 + transferWidth(l.pct) * 0.85) * scale;
+      const c = transferCurve(a, b, 1.2);
+      const ux = Math.cos(c.angle);
+      const uy = Math.sin(c.angle);
+      const tipX = X(c.x2);
+      const tipY = Y(c.y2);
+      const baseX = tipX - ux * head;
+      const baseY = tipY - uy * head;
+      const curve = () => {
+        ctx.beginPath();
+        ctx.moveTo(X(c.x1), Y(c.y1));
+        ctx.quadraticCurveTo(X(c.cx), Y(c.cy), tipX - ux * head * 0.8, tipY - uy * head * 0.8);
+      };
+      ctx.strokeStyle = alpha(XFER, 0.18);
+      ctx.lineWidth = w * 3.4;
+      curve();
+      ctx.stroke();
+      ctx.strokeStyle = alpha(XFER, 0.95);
+      ctx.lineWidth = w;
+      curve();
+      ctx.stroke();
+      ctx.fillStyle = XFER;
+      ctx.beginPath();
+      ctx.moveTo(tipX, tipY);
+      ctx.lineTo(baseX - uy * half, baseY + ux * half);
+      ctx.lineTo(baseX + uy * half, baseY - ux * half);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
 
   const order = [...map.nodes].sort((a, b) => b.r - a.r);
   ctx.textAlign = "center";

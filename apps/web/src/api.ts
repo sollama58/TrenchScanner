@@ -216,6 +216,15 @@ export interface Snapshot {
    */
   bundledSupplyPct?: number | null;
   bundledSupplyCount?: number | null;
+  /**
+   * Holder-to-holder transfers (user ask 2026-10-16): Transferred Supply %, the coin moved between
+   * top holders (SOL and other coins ignored); how many of transferHoldersChecked sent or got one;
+   * and each sender-receiver pair for the bubble map. Kept out of Linked. Null when not read.
+   */
+  transferredSupplyPct?: number | null;
+  transferWalletCount?: number | null;
+  transferHoldersChecked?: number | null;
+  holderTransfers?: { from: string; to: string; pct: number; count: number; lastAtMs?: number }[] | null;
   /** % of supply held by top holders funded within a minute of each other (any funders); null when not checked. */
   sameTimeFundedPct?: number | null;
   sameTimeClusterCount?: number | null;
@@ -1353,6 +1362,7 @@ export type CardField =
   | "linked"
   | "cexFunded"
   | "kolBundled"
+  | "transferred"
   | "largest"
   | "dev"
   | "reasons"
@@ -1408,10 +1418,14 @@ export interface FeedAppearance {
   largest: boolean;
   /** The KOL Bundled % tile; off by default (absent from older API builds: off). */
   kolBundled: boolean;
+  /** The Transferred tile (holder-to-holder transfers); off by default (absent from older API builds: off). */
+  transferred: boolean;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */
   bubbleCexLinks: boolean;
   /** Bubble maps open with KOLs' possible side wallets tied to them; on by default (absent from older API builds: on). */
   bubbleSideLinks: boolean;
+  /** Bubble maps open with arrows between holders that sent the coin to each other; on by default (absent from older API builds: on). */
+  bubbleTransferLinks: boolean;
   /**
    * The Narrative model's "agrees" / "warns" pill on other models' cards (and the line in Telegram
    * alerts). Null follows the automatic default (GET /config/narrative-note).

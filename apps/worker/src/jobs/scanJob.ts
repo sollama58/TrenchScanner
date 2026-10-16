@@ -47,6 +47,7 @@ import {
   type MintAuthorityResult,
   type OnChainProfile,
   type CexFundedReading,
+  type HolderTransfersReading,
   type LinkedWalletsReading,
   type LiveFlagsReading,
   type LiveTraderCounts,
@@ -113,6 +114,7 @@ import {
 } from "./walletHoldings.js";
 import { seedQuotes } from "./walletValuation.js";
 import { alertAwaitingWallets, holdForLinked, noteAlertWallets } from "./walletPriority.js";
+import { holderTransfersOf, resolveHolderTransfers, takeHolderTransferStats } from "./holderTransfers.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
 import { rememberGraduations, rememberLaunchTimes, resolvePreBondSeconds } from "./launchTimes.js";
@@ -523,8 +525,16 @@ function startLinkedWalletStage(
         return 0;
       },
     );
+    // Holder-to-holder transfers over the same top 25, for the coins about to be decided on only,
+    // alongside the funder reads (holderTransfers.ts; never rejects).
+    const transfers = contenders
+      ? resolveHolderTransfers(part, helius, {
+          maxSignatureReads: env.HOLDER_TRANSFER_SIGNATURE_READS_PER_CYCLE,
+          maxTxReads: env.HOLDER_TRANSFER_TX_READS_PER_CYCLE,
+        })
+      : Promise.resolve();
     const extra = contenders ? contenderLeft : 0;
-    await resolveLinkedWallets(part, helius, {
+    const funders = resolveLinkedWallets(part, helius, {
       maxNewLookups: lookupsLeft + extra,
       onLookups: (n) => {
         const fromExtra = Math.min(n, contenders ? contenderLeft : 0);
@@ -534,6 +544,7 @@ function startLinkedWalletStage(
     }).catch((err: unknown) =>
       logger.warn("linked-wallet reads failed - using cached funders", { error: String(err) }),
     );
+    await Promise.all([funders, transfers]);
   };
   const first = pass(waited, true);
   const work = first.then(() => pass(rest, false));
@@ -1327,6 +1338,9 @@ async function scanCycle(
       .then(storeWideMapReadings)
       .catch((err: unknown) => logger.warn("bubble map top-50 reading failed", { error: String(err) }));
   }
+  // Holder-to-holder transfers among the top 25, from the caches the stage above filled: every coin
+  // whose holders' reads stand gets them, not only the ones read this cycle.
+  const transfersByMint = new Map(linkedGroups.map((g) => [g.mintAddress, holderTransfersOf(g)] as const));
   lap("linkedWallets");
   await withinBudget(liveTapeWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));
   const riskLookup = walletRiskLookup();
@@ -1412,6 +1426,7 @@ async function scanCycle(
           liveTradersOf(candidate.mintAddress, kolIs),
           liveTradersOf(candidate.mintAddress, winnerIs),
           kolBundledOf.get(candidate.mintAddress),
+          transfersByMint.get(candidate.mintAddress) ?? null,
         ),
       );
     } catch (err) {
@@ -1506,6 +1521,8 @@ async function scanCycle(
   const jupiterCalls = deps.jupiter?.takeCallStats();
   // The linked-wallets reads among rpcCalls above, apart, with their credits (1 per call).
   const linkedWalletCalls = takeLinkedWalletStats();
+  // The holder-to-holder transfer reads (holderTransfers.ts), apart, with their credits (1 per call).
+  const holderTransferCalls = takeHolderTransferStats();
   // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
   const liveTape = takeLiveTapeStats();
   // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
@@ -1532,6 +1549,7 @@ async function scanCycle(
     ...discoveryMeta(deps.pumpFun),
     rpcCalls,
     linkedWalletCalls,
+    holderTransferCalls,
     liveTape,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
@@ -2450,6 +2468,7 @@ async function processCandidate(
   kolTraders: LiveTraderCounts | null = null,
   winnerTraders: LiveTraderCounts | null = null,
   kolBundled?: KolBundledReading,
+  transfers: HolderTransfersReading | null = null,
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
@@ -2474,8 +2493,10 @@ async function processCandidate(
     winnerTraders,
   );
   // KOL Bundled % and Bundled % ride on the linked reading: unknown (left off) without one.
-  const onChain =
+  const withBundled =
     withFlags && linked && kolBundled !== undefined ? { ...withFlags, ...kolBundled } : withFlags;
+  // Holder-to-holder transfers: unknown (left off) until the top 25's reads are in.
+  const onChain = withHolderTransfers(withBundled, transfers);
   // Launch time: the earliest of the DEX pair's creation time and when the watchlist first saw
   // the mint: after graduation DexScreener's canonical pair is the PumpSwap pool,
   // whose creation time is the graduation, and age read from it restarted at zero - a six-hour
@@ -3007,6 +3028,31 @@ export function kolSignals(
     kolTopHolderPct:
       holders.length > 0 ? Math.round(kolHolders.reduce((s, h) => s + h.pct, 0) * 100) / 100 : undefined,
     kolFirstBuyers: sniperWallets ? [...sniperWallets].filter(isKol).length : undefined,
+  };
+}
+
+/**
+ * The holder-to-holder transfer reading on the profile (user ask 2026-10-16): Transferred Supply %,
+ * how many holders sent or got one, over how many, and the pairs for the bubble map. Unknown (left
+ * off) without one. Exported for tests.
+ */
+export function withHolderTransfers(
+  onChain: OnChainProfile | null,
+  transfers: HolderTransfersReading | null,
+): OnChainProfile | null {
+  if (!onChain || !transfers) return onChain;
+  return {
+    ...onChain,
+    transferredSupplyPct: transfers.transferredSupplyPct,
+    transferWalletCount: transfers.transferWalletCount,
+    transferHoldersChecked: transfers.holdersChecked,
+    holderTransfers: transfers.transfers.map((t) => ({
+      from: t.from,
+      to: t.to,
+      pct: Math.round(t.pct * 100) / 100,
+      count: t.count,
+      ...(t.lastAtMs !== null ? { lastAtMs: t.lastAtMs } : {}),
+    })),
   };
 }
 

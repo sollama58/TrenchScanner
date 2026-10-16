@@ -36,6 +36,9 @@ import {
   bundleOutline,
   regroupLayout,
   kolBundleNodes,
+  transferCurve,
+  transfersOfNode,
+  needsRegroup,
 } from "./bubbleMap";
 
 const A = "Aaaa1111111111111111111111111111111111111111";
@@ -451,6 +454,56 @@ describe("same-exchange ties", () => {
       buildGraph({ linkedHolders: [{ wallet: A, pct: 5 }], top10HolderPct: null, top10WalletsChecked: null })
         .cexLinks,
     ).toEqual([]);
+  });
+});
+
+describe("holder transfers", () => {
+  const holders = [
+    { wallet: A, pct: 5 },
+    { wallet: B, pct: 3 },
+    { wallet: C, pct: 2 },
+  ];
+  it("draws a sender-to-receiver arrow for each pair on the map, largest first, never in Linked", () => {
+    const g = buildGraph({
+      linkedHolders: holders,
+      top10HolderPct: null,
+      top10WalletsChecked: null,
+      linkedWalletPct: 0,
+      transferredSupplyPct: 4.5,
+      transferWalletCount: 3,
+      transferHoldersChecked: 25,
+      holderTransfers: [
+        { from: A, to: B, pct: 1.5, count: 2, lastAtMs: 1_000 },
+        { from: C, to: A, pct: 3, count: 1 },
+        // Off the map: left out.
+        { from: A, to: "elsewhere", pct: 9, count: 1 },
+      ],
+    });
+    expect(g.transferLinks).toEqual([
+      { from: `h:${C}`, to: `h:${A}`, pct: 3, count: 1, lastAtMs: null },
+      { from: `h:${A}`, to: `h:${B}`, pct: 1.5, count: 2, lastAtMs: 1_000 },
+    ]);
+    expect(g.transferPct).toBe(4.5);
+    expect(g.transferCount).toEqual({ linked: 3, of: 25 });
+    expect(g.linkedPct).toBe(0);
+    expect(g.links).toEqual([]);
+    expect(transfersOfNode(g, `h:${A}`)).toEqual({ sent: 1.5, sentTo: 1, got: 3, gotFrom: 1 });
+    expect(needsRegroup({ transfers: true })).toBe(true);
+  });
+  it("is unread on older scans", () => {
+    const g = buildGraph({ linkedHolders: holders, top10HolderPct: null, top10WalletsChecked: null });
+    expect(g.transferLinks).toEqual([]);
+    expect(g.transferPct).toBeNull();
+    expect(g.transferCount).toBeNull();
+  });
+  it("bends each direction to its own side and stops at the bubbles' edges", () => {
+    const a = { x: 0, y: 0, r: 10 };
+    const b = { x: 100, y: 0, r: 20 };
+    const there = transferCurve(a, b);
+    const back = transferCurve(b, a);
+    expect(Math.sign(there.cy)).toBe(-Math.sign(back.cy));
+    expect(Math.hypot(there.x1 - a.x, there.y1 - a.y)).toBeCloseTo(a.r + 1.5);
+    expect(Math.hypot(there.x2 - b.x, there.y2 - b.y)).toBeCloseTo(b.r + 2);
   });
 });
 
