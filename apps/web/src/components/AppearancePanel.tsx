@@ -402,17 +402,6 @@ export function AppearanceControls() {
             </label>
           ))}
         </div>
-        <div className="field-group">
-          <h4>Token view</h4>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={!look.hideSafetyPill}
-              onChange={() => setAppearance({ hideSafetyPill: !look.hideSafetyPill })}
-            />
-            Safety pill beside Sage (the Safety section always shows)
-          </label>
-        </div>
         {look.hidden.length > 0 && (
           <button type="button" className="ghost small-btn" onClick={() => setAppearance({ hidden: [] })}>
             Show everything
