@@ -16,6 +16,8 @@ import {
   WEEKEND_FLAG_FROM,
   FRESH_QUOTE_GAP_SINCE,
   PATH_TAPE_REFILL_SINCE,
+  PATH_RETURNS_ACROSS_GAPS_SINCE,
+  PRICE_PATH_FEATURES,
   SOCIAL_LIST_OUTAGE,
   SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE,
 } from "./features.js";
@@ -64,6 +66,9 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     expect(LEARNER_FEATURE_NAMES.length).toBe(CANDIDATE_FEATURE_NAMES.length - RETIRED_LEARNER_INPUTS.size);
     for (const name of ["priceChange5mPct", "volume5mUsd", "ageMinutes", "buyRatio5m", "ctxHourSin"] as const)
       expect(LEARNER_FEATURE_NAMES).toContain(name);
+    // The tape's coverage is a learner input and rides with the path block, live and replayed.
+    expect(LEARNER_FEATURE_NAMES).toContain("pathGapMinutes");
+    expect(PRICE_PATH_FEATURES).toContain("pathGapMinutes");
     expect(learnerSubset(["scoreTotal", "ageMinutes", "hasTelegram"])).toEqual(["ageMinutes"]);
   });
 
@@ -418,7 +423,38 @@ describe("maskKnownBadInputs", () => {
     expect(maskKnownBadInputs(at, full).pathRet15mPct).toBe(20);
     const young = { ageMinutes: 3, pathObservedMinutes: 2.5, pathRet1mPct: 4 };
     expect(maskKnownBadInputs(at, young).pathRet1mPct).toBe(4);
-    expect(maskKnownBadInputs(PATH_TAPE_REFILL_SINCE, short).pathRet15mPct).toBe(20);
+    expect(maskKnownBadInputs(PATH_TAPE_REFILL_SINCE, short).pathRet5mPct).toBe(5);
+  });
+
+  it("reads the 15 and 30-minute returns as missing before they spanned gaps when the tape was short of the window", () => {
+    const at = new Date("2026-10-16T18:59:59Z");
+    // Tape under 15 minutes on a 40-minute coin: both returns go; the rest of the block stays.
+    const short = {
+      ageMinutes: 40,
+      pathObservedMinutes: 12,
+      pathRet5mPct: 5,
+      pathRet15mPct: 20,
+      pathRet30mPct: 25,
+      pathDrawdown15mPct: -3,
+      pathGapMinutes: 18,
+      mcapUsd: 1,
+    };
+    expect(maskKnownBadInputs(at, short)).toEqual({ ...short, pathRet15mPct: null, pathRet30mPct: null });
+    expect(short.pathRet15mPct).toBe(20);
+    // Tape past 15 but short of 30: only the 30-minute return goes.
+    const mid = { ...short, pathObservedMinutes: 20 };
+    expect(maskKnownBadInputs(at, mid)).toEqual({ ...mid, pathRet30mPct: null });
+    // A full tape, or a coin younger than the window the tape has followed from birth, keeps both.
+    expect(maskKnownBadInputs(at, { ...short, pathObservedMinutes: 29.5 })).toEqual({
+      ...short,
+      pathObservedMinutes: 29.5,
+    });
+    const young = { ...short, ageMinutes: 10, pathObservedMinutes: 9.5 };
+    expect(maskKnownBadInputs(at, young)).toBe(young);
+    // The slack: a tape a few seconds short of the window still counts as covering it.
+    expect(maskKnownBadInputs(at, { ...mid, pathObservedMinutes: 29.2 }).pathRet30mPct).toBe(25);
+    // Rows since carry returns measured across the gap, read as they are.
+    expect(maskKnownBadInputs(PATH_RETURNS_ACROSS_GAPS_SINCE, short)).toBe(short);
   });
 
   it("reads the sniper share as missing before closed accounts left the top 10", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildCalibration, calibratedWinRate, fitIsotonicRanks } from "./calibration.js";
-import { PricePathBook, clockContext } from "./pricePath.js";
+import { EMPTY_PRICE_PATH, PricePathBook, clockContext } from "./pricePath.js";
 import { blendRanks, scoreBlend, trainBlendCurator } from "./blend.js";
 import { featureHealthReport } from "./featureReport.js";
 import {
@@ -107,6 +107,7 @@ describe("PricePathBook", () => {
     }
     const f = book.features(mint);
     expect(f.pathObservedMinutes).toBe(30);
+    expect(f.pathGapMinutes).toBe(0);
     expect(f.pathRet30mPct!).toBeCloseTo(60, 0);
     expect(f.pathRet1mPct!).toBeLessThan(0);
     expect(f.pathDrawdown15mPct!).toBeCloseTo(-20, 0);
@@ -141,7 +142,7 @@ describe("PricePathBook", () => {
     expect(jitter.features("j").pathRet1mPct!).toBeCloseTo(((1.5 - 1.2) / 1.2) * 100, 6);
   });
 
-  it("leaves a return unknown when the tape has a gap where its reference should be", () => {
+  it("reads the 15 and 30-minute returns across a hole in the tape, and counts the hole as gap", () => {
     // Seen at minute 0 and 1, gone for 39 minutes (out of the scan), back at minute 40 and 41.
     const book = new PricePathBook();
     book.observe("g", new Date(T0), 1, 100);
@@ -149,11 +150,14 @@ describe("PricePathBook", () => {
     book.observe("g", new Date(T0 + 40 * MIN), 1.25, 400);
     book.observe("g", new Date(T0 + 41 * MIN), 1.3, 410);
     const f = book.features("g");
-    // The 41-minute move is not the 5, 15 or 30-minute return, nor 310 holders "in ten minutes".
+    // The 41-minute move is not the 5-minute return, nor 310 holders "in ten minutes".
     expect(f.pathRet5mPct).toBeNull();
-    expect(f.pathRet15mPct).toBeNull();
-    expect(f.pathRet30mPct).toBeNull();
     expect(f.pathHolderSlope10m).toBeNull();
+    // The 15 and 30-minute returns span the hole, from the tick before it (minute 1), and the
+    // gap says the window's minutes 11 to 40 went unobserved.
+    expect(f.pathRet15mPct!).toBeCloseTo(30, 6);
+    expect(f.pathRet30mPct!).toBeCloseTo(30, 6);
+    expect(f.pathGapMinutes).toBe(29);
     // The minute just observed is still a minute.
     expect(f.pathRet1mPct!).toBeCloseTo(4, 6);
     // One missed cycle is tolerated: a 1-minute reference 90 s back still counts, 2 minutes doesn't.
@@ -165,6 +169,46 @@ describe("PricePathBook", () => {
     gap.observe("m", new Date(T0), 1);
     gap.observe("m", new Date(T0 + 120_000), 1.2);
     expect(gap.features("m").pathRet1mPct).toBeNull();
+  });
+
+  it("measures the 15 and 30-minute returns over a short tape, and the gap as the minutes it misses", () => {
+    // Eight minutes of tape, 30 s apart, climbing 1% a minute: a coin the scanner met late.
+    const book = new PricePathBook();
+    for (let i = 0; i <= 16; i++) book.observe("s", new Date(T0 + i * 30_000), 1 + i * 0.005);
+    const f = book.features("s");
+    expect(f.pathObservedMinutes).toBe(8);
+    expect(f.pathGapMinutes).toBe(22);
+    // Both longer windows answer from the oldest tick; the shorter ones keep their own rule.
+    expect(f.pathRet15mPct!).toBeCloseTo(8, 6);
+    expect(f.pathRet30mPct!).toBeCloseTo(8, 6);
+    expect(f.pathRet5mPct!).toBeCloseTo(((1.08 - 1.03) / 1.03) * 100, 6);
+    expect(f.pathRet1mPct!).toBeCloseTo(((1.08 - 1.07) / 1.07) * 100, 6);
+    // Two ticks are still a tape: the move since the scanner's first look, with the gap to say so.
+    const brief = new PricePathBook();
+    brief.observe("b", new Date(T0), 1);
+    brief.observe("b", new Date(T0 + 30_000), 1.2);
+    expect(brief.features("b").pathRet30mPct!).toBeCloseTo(20, 6);
+    expect(brief.features("b").pathGapMinutes).toBe(29.5);
+    // A hole of a few cycles inside a full tape counts as gap; one missed cycle does not.
+    const holed = new PricePathBook();
+    for (let m = 0; m <= 35; m++) {
+      if (m >= 20 && m < 24) continue;
+      holed.observe("h", new Date(T0 + m * MIN), 1 + m * 0.01);
+    }
+    expect(holed.features("h").pathObservedMinutes).toBe(35);
+    expect(holed.features("h").pathGapMinutes).toBe(5);
+    expect(holed.features("h").pathRet30mPct!).toBeCloseTo((1.35 / 1.05 - 1) * 100, 6);
+    const skipped = new PricePathBook();
+    for (let m = 0; m <= 35; m++) if (m !== 20) skipped.observe("k", new Date(T0 + m * MIN), 1);
+    expect(skipped.features("k").pathGapMinutes).toBe(0);
+  });
+
+  it("reads an empty tape as no returns and the whole window missing", () => {
+    const book = new PricePathBook();
+    expect(book.features("none")).toEqual({ ...EMPTY_PRICE_PATH, pathGapMinutes: 30 });
+    book.observe("one", new Date(T0), 1);
+    expect(book.features("one")).toEqual({ ...EMPTY_PRICE_PATH, pathGapMinutes: 30 });
+    expect(EMPTY_PRICE_PATH.pathGapMinutes).toBeNull();
   });
 
   it("measures the holder slope between readings of the count, not between scans", () => {

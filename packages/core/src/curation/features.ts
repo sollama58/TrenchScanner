@@ -318,6 +318,10 @@ export const CANDIDATE_FEATURE_NAMES = [
   "pathMinutesSinceHigh60m",
   "pathHolderSlope10m",
   "pathObservedMinutes",
+  // Added 2026-10-16: minutes of the last 30 the tape does not cover (0 on a full tape, 30 on
+  // none), recorded with the 15 and 30-minute returns now measured across whatever tape there
+  // is (PATH_RETURNS_ACROSS_GAPS_SINCE). Null on every row banked before; never backfilled.
+  "pathGapMinutes",
   // Added 2026-10-05: what the whole market is doing at the moment, and the clock.
   "mktBaseRate1hPct",
   "mktBaseRate6hPct",
@@ -736,6 +740,27 @@ const PATH_TAPE_SLACK_MINUTES = 1;
 const PATH_TAPE_MAX_WINDOW_MINUTES = 30;
 
 /**
+ * Rows banked before this carry the 15 and 30-minute path returns under the old rule: null when
+ * the tape was shorter than the window or had a hole where the reference should sit (#376).
+ * Since the refill that null meant "the scanner only just started watching this coin, or lost
+ * it and found it again", which is when a coin pumps back into the band: on 20+ minute-old coins
+ * a missing pathRet15mPct doubled 9.2% against 3.1%, and the seats scored those rows about three
+ * times the ones carrying a value (notes/data-audit-2026-10-16/round2-hunt.md finding 3). Since
+ * this the two returns are measured across whatever tape there is and pathGapMinutes records how
+ * much of the half hour the tape missed (curation/pricePath.ts). The older rows cannot be
+ * remeasured, so on them each return reads as missing when the tape was shorter than its window
+ * allowed, as the pre-refill rule reads the whole path block, and the onset guard holds
+ * pathGapMinutes until enough rows carry it.
+ *
+ * Placeholder: the deploy time of the change, set at merge.
+ */
+export const PATH_RETURNS_ACROSS_GAPS_SINCE = new Date("2026-10-16T19:00:00Z");
+const PATH_RETURN_WINDOWS = [
+  ["pathRet15mPct", 15],
+  ["pathRet30mPct", 30],
+] as const satisfies readonly (readonly [CandidateFeatureName, number])[];
+
+/**
  * While Pump.fun's coin list was blocked (2026-10-14 21:00 to 10-15 08:30 UTC, until #563), coins
  * discovered elsewhere were stored with hasTwitter / hasWebsite false because nothing had read
  * their socials (scanJob.ts, `?? false`): the share reading 0 went from 5-9% to 35-50%, and 0
@@ -804,11 +829,12 @@ const HOURLY_UNWAITED_FEATURES: readonly CandidateFeatureName[] = [
  * tokens (as live scoring reads it today) and the 30-second pathRet1mPct, and ctxWeekend before
  * WEEKEND_FLAG_FROM; before FRESH_QUOTE_GAP_SINCE the fresh-price gap and market base rates,
  * before SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE the sniper share,
- * before PATH_TAPE_REFILL_SINCE the path inputs on a tape too short for the coin's age, and the
- * social bits through SOCIAL_LIST_OUTAGE. Given the row's kind, the waited-for inputs on hourly
- * rows banked before HOURLY_ROWS_WAIT_SINCE too: in on some of those rows and absent on most,
- * they taught "hourly and missing", a pattern no decision shows. Returns the same object when
- * nothing applies.
+ * before PATH_TAPE_REFILL_SINCE the path inputs on a tape too short for the coin's age, before
+ * PATH_RETURNS_ACROSS_GAPS_SINCE the 15 and 30-minute returns on a tape too short for their
+ * window, and the social bits through SOCIAL_LIST_OUTAGE. Given the row's kind, the waited-for
+ * inputs on hourly rows banked before HOURLY_ROWS_WAIT_SINCE too: in on some of those rows and
+ * absent on most, they taught "hourly and missing", a pattern no decision shows. Returns the same
+ * object when nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
   anchorAt: Date,
@@ -816,44 +842,47 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   sampleKind?: string,
 ): T {
   const at = anchorAt.getTime();
-  const inSocialOutage = at >= SOCIAL_LIST_OUTAGE.from.getTime() && at < SOCIAL_LIST_OUTAGE.until.getTime();
   const unwaitedHourly = sampleKind === "hourly" && at < HOURLY_ROWS_WAIT_SINCE.getTime();
-  if (at >= PATH_TAPE_REFILL_SINCE.getTime() && !inSocialOutage && !unwaitedHourly) return features;
-  const masked: Record<string, number | null | undefined> = { ...features };
+  if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() && !unwaitedHourly) return features;
+  // Copied on the first input cleared, so a row nothing applies to comes back as it is.
+  let masked: Record<string, number | null | undefined> | null = null;
   const clear = (name: string): void => {
-    if (masked[name] !== undefined) masked[name] = null;
+    if (features[name] === undefined || features[name] === null) return;
+    masked ??= { ...features };
+    masked[name] = null;
   };
+  const done = (): T => (masked ?? features) as T;
   if (unwaitedHourly) HOURLY_UNWAITED_FEATURES.forEach(clear);
-  if (inSocialOutage) SOCIAL_OUTAGE_FEATURES.forEach(clear);
-  if (at >= PATH_TAPE_REFILL_SINCE.getTime()) return masked as T;
-  const age = masked.ageMinutes;
-  const tape = masked.pathObservedMinutes;
-  if (
+  if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime()) return done();
+  // The tape held less than `windowMinutes` of the coin's life (the pre-refill rule's test, with
+  // its slack for the rounding of pathObservedMinutes and the reference tick's own).
+  const age = features.ageMinutes;
+  const tape = features.pathObservedMinutes;
+  const tapeShortOf = (windowMinutes: number): boolean =>
     typeof age === "number" &&
     typeof tape === "number" &&
-    tape < Math.min(age, PATH_TAPE_MAX_WINDOW_MINUTES) - PATH_TAPE_SLACK_MINUTES
-  ) {
+    tape < Math.min(age, windowMinutes) - PATH_TAPE_SLACK_MINUTES;
+  for (const [name, windowMinutes] of PATH_RETURN_WINDOWS) if (tapeShortOf(windowMinutes)) clear(name);
+  const inSocialOutage = at >= SOCIAL_LIST_OUTAGE.from.getTime() && at < SOCIAL_LIST_OUTAGE.until.getTime();
+  if (inSocialOutage) SOCIAL_OUTAGE_FEATURES.forEach(clear);
+  if (at >= PATH_TAPE_REFILL_SINCE.getTime()) return done();
+  if (tapeShortOf(PATH_TAPE_MAX_WINDOW_MINUTES)) {
     for (const name of PRICE_PATH_FEATURES) if (name !== "pathObservedMinutes") clear(name);
   }
   if (at < SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE.getTime()) clear("sniperTop10WalletPct");
-  if (at >= FRESH_QUOTE_GAP_SINCE.getTime()) return masked as T;
+  if (at >= FRESH_QUOTE_GAP_SINCE.getTime()) return done();
   FRESH_RULE_ERA_FEATURES.forEach(clear);
-  if (at >= SOCIAL_BITS_FROM_DISCOVERY_SINCE.getTime()) return masked as T;
+  if (at >= SOCIAL_BITS_FROM_DISCOVERY_SINCE.getTime()) return done();
   SOCIAL_BIT_FEATURES.forEach(clear);
   if (at < VOLUME_ACCEL_YOUNG_NULL_SINCE.getTime()) {
-    const age = masked.ageMinutes;
-    if (typeof age === "number" && age < VOLUME_ACCEL_MIN_AGE_MINUTES && masked.volumeAccel !== undefined) {
-      masked.volumeAccel = null;
-    }
-    if (masked.pathRet1mPct !== undefined) masked.pathRet1mPct = null;
+    if (typeof age === "number" && age < VOLUME_ACCEL_MIN_AGE_MINUTES) clear("volumeAccel");
+    clear("pathRet1mPct");
   }
-  if (at < WEEKEND_FLAG_FROM.getTime() && masked.ctxWeekend !== undefined) masked.ctxWeekend = null;
+  if (at < WEEKEND_FLAG_FROM.getTime()) clear("ctxWeekend");
   if (at < TRADE_FLOW_FAKE_ZEROS_UNTIL.getTime()) {
-    for (const name of TRADE_FLOW_FEATURES) {
-      if (name !== "devInitialBuySol" && masked[name] !== undefined) masked[name] = null;
-    }
+    for (const name of TRADE_FLOW_FEATURES) if (name !== "devInitialBuySol") clear(name);
   }
-  return masked as T;
+  return done();
 }
 
 /**
@@ -904,6 +933,7 @@ export const PRICE_PATH_FEATURES = [
   "pathMinutesSinceHigh60m",
   "pathHolderSlope10m",
   "pathObservedMinutes",
+  "pathGapMinutes",
 ] as const satisfies readonly (CandidateFeatureName & keyof PricePathFeatures)[];
 
 /** The market-context features, in vector order - each a MarketContextFeatures field of the same name. */
@@ -1004,6 +1034,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   pathMinutesSinceHigh60m: "minutes since the 1h high",
   pathHolderSlope10m: "holders per minute",
   pathObservedMinutes: "minutes on tape",
+  pathGapMinutes: "minutes off tape (30m)",
   mktBaseRate1hPct: "market 2x rate (1h)",
   mktBaseRate6hPct: "market 2x rate (6h)",
   mktLaunchesPerHour: "launches per hour",
@@ -1325,9 +1356,6 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     kolRecentSellers: scored.kolRecentSellers ?? null,
     ageMinutes: scored.ageMinutes ?? null,
     graduated: scored.graduated === undefined ? null : scored.graduated ? 1 : 0,
-    // Unknown (no source has read the coin's socials: Token.hasTwitter / hasWebsite null since
-    // 2026-10-16, data-correctness audit, user decision) is stored as missing, never as 0; the
-    // replay reads it back the same way (scoredFromFeatures), so live and replayed decisions agree.
     hasTwitter: scored.hasTwitter === undefined ? null : scored.hasTwitter ? 1 : 0,
     hasTelegram: scored.hasTelegram === undefined ? null : scored.hasTelegram ? 1 : 0,
     hasWebsite: scored.hasWebsite === undefined ? null : scored.hasWebsite ? 1 : 0,
