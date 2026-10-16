@@ -177,6 +177,54 @@ export async function withCarriedHolderList<
 }
 
 /**
+ * withCarriedHolderList for a page of snapshots read by id (the Stream's entry rows), in one
+ * statement: each row without a list gets the coin's newest reading before it, the same bound.
+ */
+export async function withCarriedHolderLists<
+  S extends {
+    id: string;
+    linkedHolders: Prisma.JsonValue | null;
+    linkedClusters?: Prisma.JsonValue | null;
+    sameTimeClusters?: Prisma.JsonValue | null;
+  },
+>(snapshots: readonly S[]): Promise<S[]> {
+  const ids = snapshots.filter((s) => s.linkedHolders === null).map((s) => s.id);
+  if (ids.length === 0) return [...snapshots];
+  const rows = await prisma.$queryRaw<
+    {
+      id: string;
+      linkedHolders: Prisma.JsonValue;
+      linkedClusters: Prisma.JsonValue | null;
+      sameTimeClusters: Prisma.JsonValue | null;
+    }[]
+  >`
+    SELECT s.id, h."linkedHolders", h."linkedClusters", h."sameTimeClusters"
+    FROM unnest(${ids}::text[]) AS t(id)
+    JOIN "TokenSnapshot" s ON s.id = t.id
+    CROSS JOIN LATERAL (
+      SELECT "linkedHolders", "linkedClusters", "sameTimeClusters" FROM "TokenSnapshot"
+      WHERE "tokenId" = s."tokenId"
+        AND "takenAt" < s."takenAt"
+        AND "takenAt" >= s."takenAt" - make_interval(secs => ${CARRIED_HOLDER_LIST_MS / 1000}::float8)
+        AND "linkedHolders" IS NOT NULL
+      ORDER BY "takenAt" DESC
+      LIMIT 1
+    ) h`;
+  const carriedById = new Map(rows.map((r) => [r.id, r]));
+  return snapshots.map((s) => {
+    const carried = s.linkedHolders === null ? carriedById.get(s.id) : undefined;
+    return carried === undefined
+      ? s
+      : {
+          ...s,
+          linkedHolders: carried.linkedHolders,
+          linkedClusters: s.linkedClusters ?? carried.linkedClusters,
+          sameTimeClusters: s.sameTimeClusters ?? carried.sameTimeClusters,
+        };
+  });
+}
+
+/**
  * The token columns a card carries: everything but the AI text read (aiTextScores), which is a
  * model input the worker keeps on the row, not something any card shows - every card on every
  * poll was shipping it.

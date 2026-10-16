@@ -2,7 +2,7 @@
 import "./bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { latestSnapshotsByToken, withCarriedHolderList } from "./curatedFeed.js";
+import { latestSnapshotsByToken, withCarriedHolderList, withCarriedHolderLists } from "./curatedFeed.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `holder-list-test-${process.pid}-${Date.now()}`;
@@ -112,5 +112,22 @@ describe.skipIf(!dbAvailable)("latestSnapshotsByToken and withCarriedHolderList:
     );
     expect(stale?.linkedHolders).toBeNull();
     expect(await withCarriedHolderList(null)).toBeNull();
+  });
+
+  it("does the same for a page of rows read by id (the Stream's entry rows)", async () => {
+    const rows = await prisma.tokenSnapshot.findMany({
+      where: { tokenId: { in: [tokens.carried!, tokens.own!, tokens.stale!] } },
+      orderBy: { takenAt: "desc" },
+    });
+    const byKey = (key: string, minutes: number) =>
+      rows.find((r) => r.tokenId === tokens[key] && r.takenAt.getTime() === at(minutes).getTime())!;
+    const page = [byKey("carried", 6), byKey("own", 0), byKey("stale", 150)];
+    const out = await withCarriedHolderLists(page);
+    expect(out.map((r) => r.id)).toEqual(page.map((r) => r.id));
+    expect(out[0]!.linkedHolders).toEqual(listB);
+    expect(out[0]!.linkedClusters).toEqual(clustersB);
+    expect(out[0]!.sameTimeClusters).toEqual(groupsB);
+    expect(out[1]!.linkedHolders).toEqual(listA);
+    expect(out[2]!.linkedHolders).toBeNull();
   });
 });

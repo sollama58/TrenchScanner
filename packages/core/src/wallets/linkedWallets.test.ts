@@ -179,6 +179,22 @@ describe("linkedWallets", () => {
     expect(r.clusters[0]).toMatchObject({ funder: "F", pct: 25, transfers: 1 });
   });
 
+  it("hubs a cluster only a transfer ties at its sender, not the exchange that funded both", () => {
+    const funders = new Map<string, string | null>([
+      ["a", "CEX"],
+      ["b", "CEX"],
+      ["c", null],
+      ["d", null],
+      ["e", null],
+    ]);
+    const r = linkedWallets(holders, funders, {
+      hot: (w) => w === "CEX",
+      transfers: [{ from: "a", to: "b", pct: 1 }],
+    })!;
+    expect(r.linkedClusterCount).toBe(1);
+    expect(r.clusters[0]).toMatchObject({ funder: "a", transfers: 1 });
+  });
+
   it("is unknown while any holder's funder is unread", () => {
     const funders = new Map<string, string | null>([["a", "F"]]);
     expect(linkedWallets(holders, funders, { hot: notHot })).toBeNull();

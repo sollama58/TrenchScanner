@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma, type Env } from "@trenchscanner/core";
-import { TOKEN_CARD_SELECT, withLatestSnapshots } from "../curatedFeed.js";
+import { TOKEN_CARD_SELECT, withCarriedHolderLists, withLatestSnapshots } from "../curatedFeed.js";
 import { SharedCacheMap } from "../sharedCache.js";
 import { currentMarketCap, tokenSearchParam } from "./matches.js";
 import { LIVE_TICK_MAX_TOKENS } from "./live.js";
@@ -117,7 +117,9 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
         select: TOKEN_CARD_SELECT,
       }),
     ]);
-    const snapshotById = new Map(snapshots.map((s) => [s.id, s]));
+    // The entry row often has no holder list of its own (written only on a new reading): it carries
+    // the coin's newest one before it, so the Linked tile keeps its clusters.
+    const snapshotById = new Map((await withCarriedHolderLists(snapshots)).map((s) => [s.id, s]));
     const tokenById = new Map(tokens.map((t) => [t.id, t]));
     // Ordered by the raw read: an `in` lookup makes no promise about row order.
     const rows = entries.flatMap((e) => {
