@@ -503,6 +503,10 @@ describe.skipIf(!dbAvailable)("buildDbReport", () => {
     expect(report.tables.map((t) => t.table)).toContain("TokenSnapshot");
     expect(report.indexes.some((i) => i.index === "Token_firstSeenAt_idx" && i.valid)).toBe(true);
     expect(typeof report.locksWaiting).toBe("number");
+    // This connection at least, against the server's ceiling.
+    expect(report.connections.total).toBeGreaterThanOrEqual(1);
+    expect(report.connections.thisDatabase).toBeGreaterThanOrEqual(1);
+    expect(report.connections.maxConnections).toBeGreaterThan(0);
     // No BigInt left anywhere - it would make the route's JSON serialization throw.
     expect(() => JSON.stringify(report)).not.toThrow();
   });

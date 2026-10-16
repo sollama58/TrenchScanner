@@ -1034,7 +1034,7 @@ const HOT_TABLES = ["Token", "TokenSnapshot", "Match", "CandidateOutcome", "RugC
 
 /** Exported for the route test. Read-only catalog queries - cheap whatever the table sizes. */
 export async function buildDbReport() {
-  const [activity, tables, indexes, locks] = await Promise.all([
+  const [activity, tables, indexes, locks, connections] = await Promise.all([
     prisma.$queryRaw<
       {
         pid: number;
@@ -1080,7 +1080,31 @@ export async function buildDbReport() {
       WHERE t.relname = ANY(${HOT_TABLES})
       ORDER BY t.relname, i.relname`,
     prisma.$queryRaw<{ waiting: bigint }[]>`SELECT count(*) AS waiting FROM pg_locks WHERE NOT granted`,
+    // The one hard ceiling a deploy's new instances hit first: every client backend on the server
+    // counts against max_connections, idle ones included (the activity list above hides those).
+    // State and transaction age are visible for this role's own sessions, which are all of ours.
+    prisma.$queryRaw<
+      {
+        total: bigint;
+        here: bigint;
+        idle_in_transaction: bigint;
+        oldest_transaction_ms: number | null;
+        max_connections: number;
+        reserved: number;
+      }[]
+    >`
+      SELECT count(*) AS total,
+             count(*) FILTER (WHERE datname = current_database()) AS here,
+             count(*) FILTER (WHERE datname = current_database() AND state = 'idle in transaction')
+               AS idle_in_transaction,
+             (EXTRACT(EPOCH FROM (now() - min(xact_start) FILTER (WHERE datname = current_database()))) * 1000)::float8
+               AS oldest_transaction_ms,
+             current_setting('max_connections')::int AS max_connections,
+             current_setting('superuser_reserved_connections')::int AS reserved
+      FROM pg_stat_activity
+      WHERE backend_type = 'client backend'`,
   ]);
+  const c = connections[0];
   return {
     activity,
     tables: tables.map((t) => ({
@@ -1099,6 +1123,17 @@ export async function buildDbReport() {
       scans: Number(i.scans),
     })),
     locksWaiting: Number(locks[0]?.waiting ?? 0),
+    connections: {
+      total: Number(c?.total ?? 0),
+      thisDatabase: Number(c?.here ?? 0),
+      idleInTransaction: Number(c?.idle_in_transaction ?? 0),
+      oldestTransactionMs:
+        c?.oldest_transaction_ms === null || c?.oldest_transaction_ms === undefined
+          ? null
+          : Math.round(c.oldest_transaction_ms),
+      maxConnections: c?.max_connections ?? null,
+      reservedForSuperuser: c?.reserved ?? null,
+    },
   };
 }
 

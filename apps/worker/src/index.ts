@@ -527,8 +527,10 @@ async function main() {
   // The trade tape of called coins (tradeTapeJob.ts): who bought and sold each one, for the wallet
   // risk score and the stop causes. Its own Helius client, so the heartbeat's credit count is its own.
   schedule("trade-tape", () => {
+    const tapeHelius = new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined });
     const tapeDeps = {
-      helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
+      helius: tapeHelius,
+      closingHelius: tapeHelius,
       pumpFun: deps.pumpFun,
       solPrices: (mints: string[]) => deps.dexScreener.solPricesOf(mints),
       // The closing read's market caps: null for a coin with no market, a failed batch left out.
@@ -553,7 +555,7 @@ async function main() {
           runTradeTapeJob(tapeDeps, {
             heliusPagesPerRun: env.TRADE_TAPE_HELIUS_PAGES_PER_RUN,
             pumpFunCallsPerRun: env.TRADE_TAPE_PUMPFUN_CALLS_PER_RUN,
-            closingPagesPerRun: env.TRADE_TAPE_CLOSING_PAGES_PER_RUN,
+            closingCreditsPerRun: env.TRADE_TAPE_CLOSING_CREDITS_PER_RUN,
             lowCapMcapUsd: env.LOW_CAP_MCAP_USD,
           }),
         ),

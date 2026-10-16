@@ -306,13 +306,13 @@ const envSchema = z.object({
   // Pump.fun trade API calls per run (free, spaced 12 s, but it answers 429 quickly): the backlog,
   // coins Helius couldn't read, and a sample of uncalled coins. 0 turns it off.
   TRADE_TAPE_PUMPFUN_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(4),
-  // The trade tape's closing read (tradeTapeJob.ts, user ask 2026-10-16): once a taped coin is past
-  // its 24-hour tracking window and still under LOW_CAP_MCAP_USD, its trades from the tape's end to
-  // now are read once and folded into the wallets already on its tape, so a wallet that sold after
-  // the window shows its sells (times and amounts) instead of reading as still holding. Helius pages
-  // a run (10 credits each, ~43k credits a day at the cap, about 4% of the 2026-10-14 spend); 0 turns
-  // it off.
-  TRADE_TAPE_CLOSING_PAGES_PER_RUN: z.coerce.number().int().nonnegative().default(3),
+  // The trade tape's closing read (tradeTapeClosing.ts, user ask 2026-10-16): once a taped coin is past
+  // its 24-hour tracking window and still under LOW_CAP_MCAP_USD, the tape's wallets that sold since
+  // the window are found from the coin's holders now, and their trades after it read from their own
+  // token accounts (times and amounts) and folded into their rows. Helius credits a one-minute run
+  // (1-credit calls, about 150 for the busiest coin, a few for most): 30 caps it at ~43k a day.
+  // 0 turns it off.
+  TRADE_TAPE_CLOSING_CREDITS_PER_RUN: z.coerce.number().int().nonnegative().default(30),
   // How often whether they still hold is re-read (getMultipleAccounts, 1 credit per 4 tokens):
   // every few minutes for the band, every minute for a token about to be decided on.
   SNIPER_HOLDING_REFRESH_SECONDS: z.coerce.number().positive().default(300),

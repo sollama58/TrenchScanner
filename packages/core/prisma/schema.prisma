@@ -2524,17 +2524,17 @@ model TokenTradeTape {
   readAt    DateTime  @default(now())
   retryAt   DateTime?
 
-  /// The closing read (worker tradeTapeJob.ts, user ask 2026-10-16): once the coin is past its
-  /// 24-hour tracking window and under LOW_CAP_MCAP_USD, its trades from windowEnd to closedThrough
-  /// are read once and folded into the wallets already on the tape (TokenWalletActivity), so a
-  /// wallet that sold after the window shows those sells instead of reading as still holding.
+  /// The closing read (worker tradeTapeClosing.ts, user ask 2026-10-16): once the coin is past its
+  /// 24-hour tracking window and under LOW_CAP_MCAP_USD, the tape's wallets that sold since the
+  /// window have their trades from windowEnd to closedThrough read once and folded into their rows
+  /// (TokenWalletActivity), so they show those sells instead of reading as still holding.
   /// Null: not tried yet. "done": folded in. "waiting": still over the floor, looked at again
-  /// after closeRetryAt. "busy": too many trades to read within the per-coin cap, left as it was.
-  /// "failed": the read failed, retried after closeRetryAt.
+  /// after closeRetryAt. "failed": the read failed, retried after closeRetryAt. "busy": left over by
+  /// the first, mint-wide version of the read (2026-10-16, a few coins), closed again by this one.
   closeStatus   String?
   closeRetryAt  DateTime?
   closedThrough DateTime?
-  /// Trades the closing read found after windowEnd (on any wallet), and the Helius pages it took.
+  /// Trades the closing read folded in, and the Helius credits it took (pages of 10 on "busy" rows).
   closeTrades   Int?
   closeCalls    Int?
 
@@ -2828,4 +2828,35 @@ model BubbleMapAtAlert {
   createdAt        DateTime @default(now())
 
   @@index([alertAt])
+}
+
+/// A coin's bubble map kept at a moment other than its first model call (user ask 2026-10-16):
+/// "screen", when it first passed the safety screen inside the band (the Stream's entry), kept by
+/// the scan for everyone; "filter", when a user's filter first caught it and that user opened it,
+/// kept by the API and shown only to that user, or to everyone when the filter was public (shared
+/// on the leaderboard), after which no other user's filter moment is kept for the coin. The top-25
+/// reading the scan had then, packed (core's wallets/bubbleMoments.ts), or, when another moment
+/// of the coin already keeps the same reading, a pointer to it (sameAsId) and no copy.
+/// Shown only, like BubbleMapAtAlert, and swept on the same horizon (cleanupJob.ts).
+model BubbleMapMoment {
+  id          String   @id @default(cuid())
+  mintAddress String
+  /// "screen" or "filter".
+  kind        String
+  /// The filter's owner; "" for a screen pass. In the key, so each user keeps one filter moment a coin.
+  userId      String   @default("")
+  filterId    String?
+  /// Shown to everyone: every screen pass, and a public filter's moment.
+  isPublic    Boolean
+  /// The passing scan, or the filter's first match on the coin.
+  momentAt    DateTime
+  /// When the reading was taken.
+  readAt      DateTime
+  /// packBubbleReading's text; null when sameAsId points at the row holding the same reading.
+  reading     String?
+  sameAsId    String?
+  createdAt   DateTime @default(now())
+
+  @@unique([mintAddress, kind, userId])
+  @@index([createdAt])
 }

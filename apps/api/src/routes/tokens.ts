@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { allowLookupRead } from "../lookupGate.js";
+import { keepFilterMoment, readBubbleMoments, type BubbleMomentView } from "../bubbleMoments.js";
 import { readKolRows } from "../kolRoster.js";
 import {
   NARRATIVE_CONTESTANT,
@@ -69,6 +70,11 @@ export interface BubbleHolders {
    * updated. Null for a coin with none (never called, or called before it was kept).
    */
   atAlert: (BubbleHoldersMap & { alertAt: string }) | null;
+  /**
+   * The maps kept at the coin's first safety-screen pass and at filters' first catches
+   * (BubbleMapMoment), the ones this reader may see, oldest first.
+   */
+  moments: BubbleMomentView[];
 }
 
 /** A stored map row (BubbleMapHolders or BubbleMapAtAlert) as the API sends it. */
@@ -269,14 +275,35 @@ export async function registerTokenRoutes(app: FastifyInstance) {
       return;
     }
     reply.header("Cache-Control", "private, max-age=30");
-    const [row, frozen] = await Promise.all([
+    const [row, frozen, moments] = await Promise.all([
       prisma.bubbleMapHolders.findUnique({ where: { mintAddress } }),
       prisma.bubbleMapAtAlert.findUnique({ where: { mintAddress } }),
+      readBubbleMoments(mintAddress, request.user?.userId),
     ]);
     return {
       map: row ? bubbleMapOf(row) : null,
       atAlert: frozen ? { ...bubbleMapOf(frozen), alertAt: frozen.alertAt.toISOString() } : null,
+      moments,
     };
+  });
+
+  /**
+   * The reader opened one of their filter's alerts on the coin (`matchId`): keeps the coin's map at
+   * their filter's first catch of it, once (keepFilterMoment). Answers what happened.
+   */
+  app.post("/:mintAddress/bubble-moments/filter", async (request, reply) => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    const matchId = (request.body as { matchId?: unknown } | null)?.matchId;
+    if (
+      !MINT_RE.test(mintAddress) ||
+      typeof matchId !== "string" ||
+      matchId.length === 0 ||
+      matchId.length > 64
+    ) {
+      reply.code(400).send({ error: "needs a mint and a matchId" });
+      return;
+    }
+    return { result: await keepFilterMoment(mintAddress, request.user!.userId, matchId) };
   });
 
   /** TokenSage's read of the token, for the card's TokenSage view (src/tokenSageView.ts). */

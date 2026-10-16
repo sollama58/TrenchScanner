@@ -31,23 +31,29 @@ describe("appendPoolParams", () => {
     expect(url.searchParams.has("connection_limit")).toBe(false);
   });
 
-  it("sets a socket timeout and a shorter server statement timeout by default", () => {
+  it("sets a socket timeout and shorter server statement and idle-in-transaction timeouts by default", () => {
     const url = new URL(appendPoolParams(BASE, {}));
     expect(url.searchParams.get("socket_timeout")).toBe("180");
-    expect(url.searchParams.get("options")).toBe("-c statement_timeout=150000");
+    expect(url.searchParams.get("options")).toBe(
+      "-c statement_timeout=150000 -c idle_in_transaction_session_timeout=300000",
+    );
     const tuned = new URL(appendPoolParams(BASE, { socketTimeoutSeconds: 30, statementTimeoutSeconds: 20 }));
     expect(tuned.searchParams.get("socket_timeout")).toBe("30");
-    expect(tuned.searchParams.get("options")).toBe("-c statement_timeout=20000");
+    expect(tuned.searchParams.get("options")).toBe(
+      "-c statement_timeout=20000 -c idle_in_transaction_session_timeout=300000",
+    );
   });
 
   it("names the connection alongside the statement timeout when asked", () => {
     const url = new URL(appendPoolParams(BASE, { applicationName: "trenchscanner-trainer" }));
     expect(url.searchParams.get("options")).toBe(
-      "-c statement_timeout=150000 -c application_name=trenchscanner-trainer",
+      "-c statement_timeout=150000 -c idle_in_transaction_session_timeout=300000 -c application_name=trenchscanner-trainer",
     );
     // Only a plain name: anything else could smuggle another setting into the options.
     const odd = new URL(appendPoolParams(BASE, { applicationName: "x -c work_mem=1GB" }));
-    expect(odd.searchParams.get("options")).toBe("-c statement_timeout=150000");
+    expect(odd.searchParams.get("options")).toBe(
+      "-c statement_timeout=150000 -c idle_in_transaction_session_timeout=300000",
+    );
   });
 
   it("never overrides a value the URL already specifies", () => {

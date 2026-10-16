@@ -114,6 +114,55 @@ describe("a fresh graduate's own pool in its RugCheck holders", () => {
     }
   });
 
+  it("screens a coin on the chain's holders when RugCheck still lists a wallet that sold out", () => {
+    // 6vs4o...pump on 2026-10-16: RugCheck's report kept a 15% holder an hour after it had sold
+    // everything, so the coin failed the largest-holder cut on a wallet that held nothing.
+    const stale = new Map([
+      [
+        "Fresh",
+        {
+          ...profile(29.6, [
+            { owner: "soldOut", pct: 15 },
+            { owner: "w1", pct: 4.18 },
+            { owner: "w2", pct: 3.32 },
+          ]),
+          largestHolderPct: 15,
+          creator: "w2",
+          devWalletPct: 3.32,
+        },
+      ],
+    ]);
+    const candidate = { mintAddress: "Fresh", dexId: "pumpswap", pairAddress: POOL };
+    const before = buildOnChainProfile(candidate, stale, new Map());
+    expect(runRugScreen({ ...before!, isMayhemMode: false }).reasons).toContainEqual(
+      expect.stringContaining("largest holder owns 15.0%"),
+    );
+
+    const chain = new Map([
+      [
+        "Fresh",
+        {
+          top10HolderPct: 9.5,
+          largestHolderPct: 4.2,
+          top10HolderAddresses: ["w1", "w2", "w3"],
+          topHolderShares: [
+            { owner: "w1", pct: 4.2 },
+            { owner: "w2", pct: 3.3 },
+            { owner: "w3", pct: 2 },
+          ],
+        },
+      ],
+    ]);
+    const now = buildOnChainProfile(candidate, stale, new Map(), chain);
+    expect(now).toMatchObject({
+      top10HolderPct: 9.5,
+      largestHolderPct: 4.2,
+      top10HolderAddresses: ["w1", "w2", "w3"],
+      devWalletPct: 3.3,
+    });
+    expect(runRugScreen({ ...now!, isMayhemMode: false }).passed).toBe(true);
+  });
+
   it("builds a proven launch's profile from the proof when RugCheck and the authority read have nothing", () => {
     const proven = new Map([["Fresh", { status: "found" as const, launch: { quoteMint: "Q", pool: "P" } }]]);
     const failed = new Map<string, MintAuthorityResult>([["Fresh", { status: "failed" }]]);
