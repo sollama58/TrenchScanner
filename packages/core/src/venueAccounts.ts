@@ -12,9 +12,9 @@ import { findProgramAddress } from "./solana.js";
  * person's or an exchange's: those can sell, and stay holders.
  */
 
-const PUMP_FUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+export const PUMP_FUN_PROGRAM = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
 const PUMP_SWAP_PROGRAM = "pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA";
-const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
+export const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
 
 /** Programs whose one vault authority holds the tokens of every pool or curve they run. */
 const SHARED_AUTHORITY_SEEDS: readonly [program: string, seed: string][] = [
@@ -34,12 +34,30 @@ const sharedAuthorities: readonly string[] = SHARED_AUTHORITY_SEEDS.map(([progra
   findProgramAddress([text(seed)], program),
 );
 
+/** The mint's Pump.fun bonding curve: `["bonding-curve", mint]` under the Pump.fun program. */
+export function pumpBondingCurveAddress(mint: Uint8Array): string {
+  return findProgramAddress([text("bonding-curve"), mint], PUMP_FUN_PROGRAM);
+}
+
+/**
+ * The canonical PumpSwap pool a Pump.fun coin graduates into: index 0, created by the curve's pool
+ * authority, quoted in what the curve was quoted in (SOL, or another coin for a curve paired with one).
+ */
+export function pumpSwapPoolAddress(mint: Uint8Array, quoteMint: string): string {
+  const poolCreator = findProgramAddress([text("pool-authority"), mint], PUMP_FUN_PROGRAM);
+  return findProgramAddress(
+    [text("pool"), new Uint8Array([0, 0]), bs58.decode(poolCreator), mint, bs58.decode(quoteMint)],
+    PUMP_SWAP_PROGRAM,
+  );
+}
+
 const MAX_CACHED = 5_000;
 const byMint = new Map<string, ReadonlySet<string>>();
 
 /**
  * The venue accounts of `mintAddress`: its Pump.fun bonding curve, its canonical PumpSwap pool
- * (index 0, quoted in SOL, created by the curve's pool authority at graduation), and the shared
+ * (index 0, quoted in SOL, created by the curve's pool authority at graduation; a curve quoted in
+ * another coin graduates elsewhere, which only a read of the curve tells - see pumpLaunch.ts), and the shared
  * vault authorities of Raydium LaunchLab, CPMM and AMM v4 and Meteora DAMM v2 and DBC. Derived
  * for any mint (a mint from another launchpad simply has no account at its Pump.fun addresses).
  * Only the shared authorities for a string that is not a mint address.
@@ -55,14 +73,8 @@ export function venueAccountsOf(mintAddress: string): ReadonlySet<string> {
     mint = undefined;
   }
   if (mint?.length === 32) {
-    out.add(findProgramAddress([text("bonding-curve"), mint], PUMP_FUN_PROGRAM));
-    const poolCreator = findProgramAddress([text("pool-authority"), mint], PUMP_FUN_PROGRAM);
-    out.add(
-      findProgramAddress(
-        [text("pool"), new Uint8Array([0, 0]), bs58.decode(poolCreator), mint, bs58.decode(WRAPPED_SOL_MINT)],
-        PUMP_SWAP_PROGRAM,
-      ),
-    );
+    out.add(pumpBondingCurveAddress(mint));
+    out.add(pumpSwapPoolAddress(mint, WRAPPED_SOL_MINT));
   }
   if (byMint.size >= MAX_CACHED) {
     const oldest = byMint.keys().next().value;

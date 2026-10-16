@@ -888,6 +888,10 @@ const envSchema = z.object({
   // Kept separate from HELIUS_API_KEY so the two can diverge onto a different paid RPC - the
   // enrichment path can tolerate a throttled RPC, this one cannot.
   SOLANA_RPC_URL: z.string().optional().default(""),
+  // Paid Solana RPCs (comma-separated) the scan's own chain reads fall back to when Helius gives no
+  // answer (rate limited, down) - today the Pump.fun launch proof (worker's pumpLaunch.ts). After
+  // these come SOLANA_RPC_URL, TRADING_BACKUP_RPC_URL and a free public endpoint.
+  CHAIN_BACKUP_RPC_URLS: z.string().optional().default(""),
 
   // How often the reconciler sweeps the chain for burns nobody claimed. This is the backstop that
   // makes the promise "if you burn, you get access" true even when the browser never reports in,

@@ -34,6 +34,7 @@ import {
 } from "@trenchscanner/core";
 import { BAND_ENTRY_CHECK_MS, BandEntryWatch } from "./bandEntryWatch.js";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
+import { pumpLaunchBackups } from "./jobs/pumpLaunch.js";
 import { runCleanupJob } from "./jobs/cleanupJob.js";
 import { runOutcomeTrackingJob, repairOutcomeBookkeeping } from "./jobs/outcomeTrackingJob.js";
 import { createMatchPeaksRunner } from "./jobs/matchPeaks.js";
@@ -248,6 +249,7 @@ async function main() {
       : undefined,
     rugCheck: new RugCheckClient(),
     helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
+    pumpLaunchBackups: pumpLaunchBackups(env),
     stream,
     launchPoller,
     pricePath,

@@ -307,6 +307,10 @@ services:
       # Helius via HELIUS_API_KEY.
       - key: SOLANA_RPC_URL
         sync: false
+      # Optional: paid Solana RPCs (comma-separated, another provider than Helius) the scan's
+      # Pump.fun launch proof falls back to when Helius is rate limited or down.
+      - key: CHAIN_BACKUP_RPC_URLS
+        sync: false
       # Thirty seconds, so a new alert reaches the dashboard within ~half a minute of the token
       # qualifying. Affordable because nothing upstream scales with it: RugCheck requests follow
       # RUGCHECK_CACHE_TTL_MINUTES below (see the worker's rugCheckProfiles.ts), snapshot and
