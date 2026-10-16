@@ -204,3 +204,48 @@ describe("OnDemandLiveRefresher stats", () => {
     });
   });
 });
+
+describe("OnDemandLiveRefresher batching", () => {
+  /** A client that records the mints of every call. */
+  function recordingClient() {
+    const calls: string[][] = [];
+    const client = {
+      getTokensByAddresses: async (mints: string[]) => {
+        calls.push([...mints]);
+        return [];
+      },
+    };
+    return { calls, client: client as unknown as DexScreenerClient };
+  }
+
+  it("lets readers ticking together share one call, charged to the shared budget once", async () => {
+    const { calls, client } = recordingClient();
+    const r = new OnDemandLiveRefresher(client, {
+      maxAgeMs: MINUTE,
+      limit: 30,
+      callsPerMinute: 1,
+      callsPerUserPerMinute: 5,
+    });
+    const [a, b] = await Promise.all([
+      r.refresh([token("A", null), token("B", null)], NOW, undefined, "one"),
+      r.refresh([token("C", null)], NOW + 1, undefined, "two"),
+    ]);
+    expect([a, b]).toEqual([2, 1]);
+    expect(calls).toEqual([["A", "B", "C"]]);
+    expect(r.stats()).toMatchObject({ lookups: 1, tokens: 3, overBudget: 0 });
+  });
+
+  it("sends a batch the moment it is full, and opens the next for the rest", async () => {
+    const { calls, client } = recordingClient();
+    const r = new OnDemandLiveRefresher(client, { maxAgeMs: MINUTE, limit: 30, batchWindowMs: 60_000 });
+    const first = Array.from({ length: 20 }, (_, i) => token(`M${i}`, null));
+    const second = Array.from({ length: 20 }, (_, i) => token(`N${i}`, null));
+    const one = r.refresh(first, NOW);
+    const two = r.refresh(second, NOW);
+    // Twenty and ten fill the first call, which goes out without waiting for the window.
+    expect(await one).toBe(20);
+    expect(calls.map((c) => c.length)).toEqual([30]);
+    // The other ten wait for the window (a minute here), so the test stops waiting on them.
+    void two;
+  });
+});
