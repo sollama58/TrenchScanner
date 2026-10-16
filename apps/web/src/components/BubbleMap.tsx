@@ -66,6 +66,7 @@ import {
   isUsername,
   useWalletNames,
   walletText,
+  type WalletName,
   type WalletNames,
 } from "../walletNames";
 import { WalletText } from "./WalletText";
@@ -147,6 +148,53 @@ function useTransferToggle(graph: BubbleGraph | null): {
   };
 }
 
+interface NameToggle {
+  /** The names the map, its lists and its share image use: every name, or without the hidden kinds. */
+  mapNames: WalletNames;
+  /** Whether the map's one switch shows: the map has a name it would hide, and Settings doesn't set them kind by kind. */
+  hasSwitchable: boolean;
+  showNames: boolean;
+  setNamesOn: (on: boolean) => void;
+}
+
+type SwitchableSource = "pumpfun" | "fomo" | "identity";
+const SWITCHABLE_NAMES: ReadonlySet<WalletName["source"]> = new Set<SwitchableSource>([
+  "pumpfun",
+  "fomo",
+  "identity",
+]);
+
+/**
+ * Whether the Pump.fun, FOMO and Helius names show on the map (user ask 2026-10-16): on by
+ * default, switchable on the map, with the default in Settings. Settings can also set each kind on
+ * its own, and then the map has no switch for them. KOLs' names and exchanges' always show: an
+ * exchange that funded holders keeps its Helius name. Held above the map so its share image follows
+ * it too. `mapNames` is what the map, its lists and the share image name wallets by.
+ */
+function useNameToggle(graph: BubbleGraph | null, names: WalletNames): NameToggle {
+  const { bubbleNameLabels, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius } = useAppearance();
+  const [on, setNamesOn] = useState<boolean | null>(null);
+  const split = bubbleNamesPumpfun !== null || bubbleNamesFomo !== null || bubbleNamesHelius !== null;
+  const showNames = split ? bubbleNameLabels : (on ?? bubbleNameLabels);
+  return useMemo(() => {
+    const shows: Record<SwitchableSource, boolean> = {
+      pumpfun: bubbleNamesPumpfun ?? showNames,
+      fomo: bubbleNamesFomo ?? showNames,
+      identity: bubbleNamesHelius ?? showNames,
+    };
+    const exchanges = new Set(graph?.cexLinks.map((l) => l.funder) ?? []);
+    const switchable = Object.keys(names).filter(
+      (w) => SWITCHABLE_NAMES.has(names[w]!.source) && !exchanges.has(w),
+    );
+    const hidden = switchable.filter((w) => !shows[names[w]!.source as SwitchableSource]);
+    const hasSwitchable = !split && switchable.length > 0;
+    if (hidden.length === 0) return { mapNames: names, hasSwitchable, showNames, setNamesOn };
+    const kept: Record<string, WalletName> = { ...names };
+    for (const w of hidden) delete kept[w];
+    return { mapNames: kept, hasSwitchable, showNames, setNamesOn };
+  }, [graph, names, showNames, split, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius]);
+}
+
 /**
  * KOLs' possible side wallets among the holders (the Side Wallet Checker's recent matches), and
  * whether their ties show: on by default, switchable like the exchange ties (user ask 2026-10-14).
@@ -212,11 +260,14 @@ function MapView({
   showTransfers,
   setTransfersOn,
   side,
+  nameToggle,
   flags,
   scanKolBundled,
 }: {
   graph: BubbleGraph;
   names: WalletNames;
+  /** Whether the Pump.fun, FOMO and Helius names show (useNameToggle). */
+  nameToggle: NameToggle;
   /** Whether the same-exchange ties show (useCexToggle). */
   showCex: boolean;
   setCexOn: (on: boolean) => void;
@@ -406,7 +457,10 @@ function MapView({
           </dd>
         </div>
       </dl>
-      {(graph.cexLinks.length > 0 || groups.length > 0 || graph.transferLinks.length > 0) && (
+      {(graph.cexLinks.length > 0 ||
+        groups.length > 0 ||
+        graph.transferLinks.length > 0 ||
+        nameToggle.hasSwitchable) && (
         <div className="bm-toggles">
           {graph.transferLinks.length > 0 && (
             <MapToggle
@@ -429,6 +483,15 @@ function MapView({
               keyClass="bm-cex-key bm-side-key"
             >
               KOL side wallets
+            </MapToggle>
+          )}
+          {nameToggle.hasSwitchable && (
+            <MapToggle
+              on={nameToggle.showNames}
+              onToggle={() => nameToggle.setNamesOn(!nameToggle.showNames)}
+              keyClass="bm-name-key"
+            >
+              Pump.fun / FOMO / Helius names
             </MapToggle>
           )}
         </div>
@@ -1720,7 +1783,8 @@ export function BubbleMapSection({
     () => (snapshot ? layoutGraph(buildGraph(withWideMap(snapshot, wide), flagged)) : null),
     [snapshot, wide, flagged],
   );
-  const names = useGraphNames(graph);
+  const nameToggle = useNameToggle(graph, useGraphNames(graph));
+  const names = nameToggle.mapNames;
   const { showCex, setCexOn } = useCexToggle(graph);
   const { showTransfers, setTransfersOn } = useTransferToggle(graph);
   const side = useSideToggle(graph);
@@ -1784,6 +1848,7 @@ export function BubbleMapSection({
         showTransfers={showTransfers}
         setTransfersOn={setTransfersOn}
         side={side}
+        nameToggle={nameToggle}
         flags={flags}
         scanKolBundled={snapshot?.kolBundledPct ?? null}
       />

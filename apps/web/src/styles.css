@@ -6556,6 +6556,17 @@ html:has(dialog.about-modal[open]) {
 .appearance-controls .check-hint {
   margin: -8px 0 0;
 }
+/* The bubble maps' names, kind by kind, set in under the one switch. */
+.appearance-controls .check-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  margin: -6px 0 0 24px;
+}
+.appearance-controls .check-sub > span {
+  flex-basis: 100%;
+}
 .preset-options {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -11317,6 +11328,17 @@ img.tm-avatar {
   border-top-color: var(--bm-side);
 }
 .switch.bm-toggle:not(.on) .bm-cex-key {
+  opacity: 0.45;
+}
+/* The names switch's key: a small name pill, green like a Pump.fun name. */
+.switch.bm-toggle .bm-name-key {
+  width: 16px;
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--good, #22c55e) 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good, #22c55e) 80%, transparent);
+}
+.switch.bm-toggle:not(.on) .bm-name-key {
   opacity: 0.45;
 }
 .bm-cex-key {

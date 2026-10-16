@@ -119,6 +119,15 @@ export const feedAppearanceSchema = z
     bubbleSideLinks: z.boolean().default(true),
     /** On bubble maps, arrows between holders that sent the coin to each other (drawn only); on by default. */
     bubbleTransferLinks: z.boolean().default(true),
+    /** On bubble maps, Pump.fun, FOMO and Helius names on the wallets (KOLs' always show); on by default. */
+    bubbleNameLabels: z.boolean().default(true),
+    /**
+     * Each kind's own choice, overriding bubbleNameLabels (user ask 2026-10-16): null follows it.
+     * Any set hides the one switch, in Settings and on the map.
+     */
+    bubbleNamesPumpfun: z.boolean().nullable().default(null),
+    bubbleNamesFomo: z.boolean().nullable().default(null),
+    bubbleNamesHelius: z.boolean().nullable().default(null),
     /** The retired Bundled tile (folded into Linked, 2026-10-13): accepted from older tabs, ignored. */
     bundled: z.boolean().optional(),
     /**
@@ -203,6 +212,10 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   bubbleCexLinks: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
+  bubbleNameLabels: true,
+  bubbleNamesPumpfun: null,
+  bubbleNamesFomo: null,
+  bubbleNamesHelius: null,
   narrativeNote: null,
   streamTab: false,
   hideLighthouseTab: false,

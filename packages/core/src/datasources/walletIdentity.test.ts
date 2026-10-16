@@ -102,6 +102,13 @@ describe("cleanWalletName", () => {
 
   it("leaves every other name alone", () => {
     expect(cleanWalletName("Binance 1")).toBe("Binance 1");
+    // An X handle and anything after it is dropped (user ask 2026-10-16); a bare handle stays.
+    expect(cleanWalletName("Ansem @blknoiz06")).toBe("Ansem");
+    expect(cleanWalletName("Moon Boy (@moonboy_sol)")).toBe("Moon Boy");
+    expect(cleanWalletName("Gake @gake_sol | KOL trader")).toBe("Gake");
+    expect(cleanWalletName("Orange - @orangie | 100x")).toBe("Orange");
+    expect(cleanWalletName("@solo")).toBe("@solo");
+    expect(cleanWalletName("a@b.com fund")).toBe("a@b.com fund");
     expect(cleanWalletName('"quoted" on Raydium')).toBe('"quoted" on Raydium');
   });
 });
