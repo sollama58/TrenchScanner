@@ -9,7 +9,11 @@ import {
   exportRunningModels,
   selectSeats,
   listModelBackups,
+  listTableBackups,
   loadBackupData,
+  loadTableBackupData,
+  tableBackupFileName,
+  TableBackupError,
   prisma,
   restoreModelBackup,
   saveModelBackup,
@@ -125,6 +129,42 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
         .send(data);
     } catch (err) {
       if (err instanceof ModelBackupError) return reply.code(422).send({ error: err.message });
+      throw err;
+    }
+  });
+
+  /**
+   * The weekly copies of the irreplaceable tables (backup/tableBackup.ts): list and download.
+   * There is no restore route on purpose: a restore is a shell step against a database someone
+   * has looked at first (README, "Restore").
+   */
+  app.get("/table-backups", async () => {
+    const [backups, heartbeat] = await Promise.all([
+      listTableBackups(100),
+      prisma.systemHeartbeat.findUnique({ where: { job: "model-backup" } }),
+    ]);
+    const meta = (heartbeat?.meta ?? null) as { offsiteConfigured?: boolean; tables?: unknown } | null;
+    return {
+      backups,
+      keep: opts.env.DATA_BACKUP_KEEP,
+      offsiteConfigured: typeof meta?.offsiteConfigured === "boolean" ? meta.offsiteConfigured : null,
+      lastCheckAt: heartbeat?.lastRunAt ?? null,
+      lastPass: meta?.tables ?? null,
+    };
+  });
+
+  app.get("/table-backups/:id/download", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      const loaded = await loadTableBackupData(id);
+      if (!loaded) return reply.code(404).send({ error: "no such backup" });
+      return reply
+        .header("content-type", "application/gzip")
+        .header("content-disposition", `attachment; filename="${tableBackupFileName(loaded.row)}"`)
+        .header("cache-control", "no-store")
+        .send(loaded.data);
+    } catch (err) {
+      if (err instanceof TableBackupError) return reply.code(422).send({ error: err.message });
       throw err;
     }
   });

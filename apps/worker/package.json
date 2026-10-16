@@ -10,7 +10,8 @@
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "trading:preflight": "tsx src/tradingPreflight.ts"
+    "trading:preflight": "tsx src/tradingPreflight.ts",
+    "backup:restore-tables": "tsx src/restoreTableBackup.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",

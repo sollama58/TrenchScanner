@@ -2096,6 +2096,33 @@ model AiBlendModel {
 /// tables on purpose: a training run retires every model it replaces, and the cleanup job strips a
 /// retired model's weights a week later, so without this a good model's weights are gone for good.
 /// Written weekly by the trainer (and on demand from the Admin tab); restorable from the Admin tab.
+/// A weekly copy of the irreplaceable tables (backup/tableBackup.ts): the users, their filters and
+/// chats, the burn-credit ledger, the trading ledger, the lanes and the curated record, as one
+/// gzipped JSON document, copied to the model-backup bucket when one is set. Database audit
+/// 2026-10-16 (J1): Render's point-in-time recovery covers 3-7 days; this is the copy the project
+/// holds itself, for a loss noticed later than that.
+model DataBackup {
+  id           String    @id @default(cuid())
+  createdAt    DateTime  @default(now())
+  /// "weekly" | "manual"
+  kind         String
+  note         String?
+  /// Per table: { name, rows }.
+  tables       Json
+  rowCount     Int
+  /// The gzipped TableBackupPayload JSON - exactly the bytes the download serves.
+  data         Bytes
+  sizeBytes    Int
+  /// sha256 (hex) of `data`, checked before any download or restore.
+  sha256       String
+  /// The off-site copy (MODEL_BACKUP_S3_*): its object key once uploaded, else the last error.
+  offsiteKey   String?
+  offsiteAt    DateTime?
+  offsiteError String?
+
+  @@index([createdAt])
+}
+
 model ModelBackup {
   id           String    @id @default(cuid())
   createdAt    DateTime  @default(now())

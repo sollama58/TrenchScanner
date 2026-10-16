@@ -27,8 +27,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   learningNote: true,
   volume: false,
   scoreColor: true,
-  // On by default (user ask 2026-10-16), in the theme's win, amber and loss colors.
-  tileColors: true,
+  // Off by default (user ask 2026-10-16); in the theme's win, amber and loss colors when switched on.
+  tileColors: false,
   // Only the reading by default; the whole tile is a choice (user ask 2026-10-16).
   tileFill: false,
   tileLow: null,
@@ -45,7 +45,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   bubbleCexLinks: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
-  bubbleNameLabels: true,
+  // Off by default (user ask 2026-10-16); KOLs' and exchanges' names always show.
+  bubbleNameLabels: false,
   bubbleNamesPumpfun: null,
   bubbleNamesFomo: null,
   bubbleNamesHelius: null,
