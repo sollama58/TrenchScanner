@@ -10582,6 +10582,106 @@ img.tm-avatar {
   display: flex !important;
   margin-bottom: 10px !important;
 }
+/* "Why it's here": a card that holds no more than it has to say, and how each model read the coin. */
+.tm-grid > .tm-why-card {
+  align-self: start;
+}
+.tm-why {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.tm-why-h {
+  margin: 0 0 6px !important;
+  font-weight: 600;
+  color: var(--ink) !important;
+}
+.tm-why-seats {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tm-why-seats li {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: baseline;
+  padding: 6px 9px;
+  border-radius: var(--radius-s);
+  background: var(--surface-3);
+}
+.tm-why-seats li.calls {
+  box-shadow: inset 2px 0 0 var(--good);
+}
+.tm-why-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tm-why-rank {
+  justify-self: end;
+  text-align: right;
+  color: var(--muted);
+}
+.tm-why-seats li.calls .tm-why-rank {
+  color: var(--good-ink);
+}
+.tm-why-push {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 1px;
+  color: var(--muted);
+}
+.tm-why-push i {
+  font-style: normal;
+  font-size: 10px;
+}
+.tm-why-up {
+  color: var(--good-ink);
+}
+.tm-why-down {
+  color: var(--bad-ink);
+}
+.tm-why-gate {
+  margin: 6px 0 0 !important;
+}
+
+/* A card folded to its heading: the whole heading opens it. */
+.tm-modal .sage-card.folded > .tm-fold-h {
+  margin-bottom: 0;
+}
+.tm-fold-btn {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tm-fold-btn:hover:not(:disabled) {
+  background: transparent;
+}
+.tm-fold-btn .tm-h4-meta + .tm-fold-chev {
+  margin-left: 0;
+}
+.tm-fold-chev {
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.tm-fold-btn[aria-expanded="true"] .tm-fold-chev {
+  transform: rotate(180deg);
+}
+.tm-fold-btn:hover .tm-fold-chev {
+  color: var(--ink);
+}
 .tm-ai {
   margin-top: 10px;
   padding: 9px 11px;

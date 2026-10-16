@@ -28,6 +28,7 @@ import { ApiError, lookupRequired, post, type Card, type Snapshot } from "../api
 import { usePolling } from "../hooks";
 import { MIN_WIN_SOL, ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import { TokenImage } from "./TokenImage";
+import { FoldHead } from "./Fold";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
@@ -510,6 +511,13 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const goTo = (id: SectionId) =>
     document.getElementById(`${ids}-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
   const safety = safetyVerdict(card, scanning);
+  // A pass starts folded, a fail or a pending verdict open; the reader's own choice then holds.
+  const [safetyOpenSet, setSafetyOpen] = useState<boolean | null>(null);
+  const safetyOpen = safetyOpenSet ?? safety.state !== "passed";
+  const openSafety = () => {
+    setSafetyOpen(true);
+    goTo("safety");
+  };
   // A lookup asks TokenSage for a fresh read, which lands within minutes: check more often.
   const sage = usePolling<SageView>(`${useTokenApi(mint)}/sage`, utility ? 20_000 : 120_000);
   // The moment the scan lands, re-read what it feeds (the flagged wallets, the read) rather than
@@ -580,7 +588,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
           </div>
         </div>
         <div className="tm-actions">
-          {!hideSafetyPill && <SafetyPill verdict={safety} onClick={() => goTo("safety")} />}
+          {!hideSafetyPill && <SafetyPill verdict={safety} onClick={openSafety} />}
           <button
             type="button"
             className="sage-btn"
@@ -602,7 +610,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
               type="button"
               className={`tm-nav-btn${active === x.id ? " on" : ""}`}
               aria-current={active === x.id ? "true" : undefined}
-              onClick={() => goTo(x.id)}
+              onClick={() => (x.id === "safety" ? openSafety() : goTo(x.id))}
             >
               {utility && x.id === "call" ? "Market" : x.label}
             </button>
@@ -738,7 +746,13 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
 
       <section id={`${ids}-safety`} className="tm-group" aria-labelledby={`${ids}-safety-h`}>
         <GroupLabel id={`${ids}-safety-h`}>Safety</GroupLabel>
-        <SafetyCard verdict={safety} scanning={scanning} now={now} />
+        <SafetyCard
+          verdict={safety}
+          scanning={scanning}
+          now={now}
+          open={safetyOpen}
+          onToggle={() => setSafetyOpen(!safetyOpen)}
+        />
       </section>
 
       <section id={`${ids}-sage`} className="tm-group" aria-labelledby={`${ids}-sage-h`}>
@@ -845,11 +859,28 @@ function useHeadHeight(bodyRef: RefObject<HTMLDivElement | null>): number {
  * The safety screen on this coin (user ask 2026-10-16): its verdict on the newest scan, why it
  * failed, and each of its rules against what the scan read.
  */
-function SafetyCard({ verdict, scanning, now }: { verdict: SafetyVerdict; scanning: boolean; now: number }) {
+/**
+ * The safety screen's verdict and each check. A pass folds to its heading (user ask 2026-10-16):
+ * the badge says it all until someone asks, by opening it here or clicking the header's pill.
+ */
+function SafetyCard({
+  verdict,
+  scanning,
+  now,
+  open,
+  onToggle,
+}: {
+  verdict: SafetyVerdict;
+  scanning: boolean;
+  now: number;
+  open: boolean;
+  onToggle: () => void;
+}) {
   const { state, reading } = verdict;
+  const bodyId = useId();
   return (
-    <section className={`sage-card tm-safety ${state}`}>
-      <h4>
+    <section className={`sage-card tm-safety ${state}${open ? "" : " folded"}`}>
+      <FoldHead open={open} onToggle={onToggle} controls={bodyId}>
         <ShieldIcon size={14} /> Safety screen
         <span className={`badge ${state === "passed" ? "good" : state === "failed" ? "bad" : ""}`}>
           {SAFETY_WORD[state]}
@@ -857,72 +888,76 @@ function SafetyCard({ verdict, scanning, now }: { verdict: SafetyVerdict; scanni
         {reading && (
           <span className="tm-h4-meta small muted">Scan {ago(new Date(reading.takenAt), now)}</span>
         )}
-      </h4>
-      <p className="small muted tm-safety-lead">
-        {state === "passed"
-          ? "Its newest scan clears every rule of the safety screen. The screen runs on every scan, and a coin that fails it is never alerted."
-          : state === "failed"
-            ? `Its newest scan fails the safety screen, so nothing alerts on it while it does.${
-                verdict.passedAtAlert ? " It passed when it was alerted; a later scan failed it." : ""
-              }`
-            : scanning
-              ? "The screen runs with this coin's scan. Its verdict lands here as soon as the scan does."
-              : "No scan has screened this coin yet."}
-      </p>
-      {verdict.reasons.length > 0 && (
-        <ul className="tm-safety-reasons">
-          {verdict.reasons.map((r) => (
-            <li key={r}>
-              <CloseIcon size={12} />
-              {r}
-            </li>
-          ))}
-        </ul>
-      )}
-      {reading ? (
-        <ul className="tm-safety-checks">
-          {safetyChecks(reading).map((c) => (
-            <li key={c.label} className={c.status} title={c.rule}>
-              <span
-                className="tm-safety-mark"
-                aria-label={c.status === "ok" ? "Clears" : c.status === "fail" ? "Fails" : "Not read"}
-              >
-                {c.status === "ok" ? (
-                  <CheckIcon size={12} />
-                ) : c.status === "fail" ? (
+      </FoldHead>
+      {open && (
+        <div id={bodyId}>
+          <p className="small muted tm-safety-lead">
+            {state === "passed"
+              ? "Its newest scan clears every rule of the safety screen. The screen runs on every scan, and a coin that fails it is never alerted."
+              : state === "failed"
+                ? `Its newest scan fails the safety screen, so nothing alerts on it while it does.${
+                    verdict.passedAtAlert ? " It passed when it was alerted; a later scan failed it." : ""
+                  }`
+                : scanning
+                  ? "The screen runs with this coin's scan. Its verdict lands here as soon as the scan does."
+                  : "No scan has screened this coin yet."}
+          </p>
+          {verdict.reasons.length > 0 && (
+            <ul className="tm-safety-reasons">
+              {verdict.reasons.map((r) => (
+                <li key={r}>
                   <CloseIcon size={12} />
-                ) : (
-                  "–"
-                )}
-              </span>
-              <span className="tm-safety-label">
-                {c.label}
-                <small className="faint">{c.rule}</small>
-              </span>
-              <span
-                className={`tm-safety-value${c.status === "unknown" ? " muted" : /\d/.test(c.value) ? " num" : ""}`}
-              >
-                {c.value}
-              </span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        scanning && (
-          <ul className="tm-safety-checks" aria-hidden="true">
-            {Array.from({ length: 6 }, (_, i) => (
-              <li key={i} className="unknown">
-                <span className="tm-safety-mark">–</span>
-                <span className="tm-safety-label">
-                  <SkelValue width="7em" />
-                </span>
-                <span className="tm-safety-value">
-                  <SkelValue width="3em" />
-                </span>
-              </li>
-            ))}
-          </ul>
-        )
+                  {r}
+                </li>
+              ))}
+            </ul>
+          )}
+          {reading ? (
+            <ul className="tm-safety-checks">
+              {safetyChecks(reading).map((c) => (
+                <li key={c.label} className={c.status} title={c.rule}>
+                  <span
+                    className="tm-safety-mark"
+                    aria-label={c.status === "ok" ? "Clears" : c.status === "fail" ? "Fails" : "Not read"}
+                  >
+                    {c.status === "ok" ? (
+                      <CheckIcon size={12} />
+                    ) : c.status === "fail" ? (
+                      <CloseIcon size={12} />
+                    ) : (
+                      "–"
+                    )}
+                  </span>
+                  <span className="tm-safety-label">
+                    {c.label}
+                    <small className="faint">{c.rule}</small>
+                  </span>
+                  <span
+                    className={`tm-safety-value${c.status === "unknown" ? " muted" : /\d/.test(c.value) ? " num" : ""}`}
+                  >
+                    {c.value}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            scanning && (
+              <ul className="tm-safety-checks" aria-hidden="true">
+                {Array.from({ length: 6 }, (_, i) => (
+                  <li key={i} className="unknown">
+                    <span className="tm-safety-mark">–</span>
+                    <span className="tm-safety-label">
+                      <SkelValue width="7em" />
+                    </span>
+                    <span className="tm-safety-value">
+                      <SkelValue width="3em" />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )
+          )}
+        </div>
       )}
     </section>
   );
@@ -1460,117 +1495,124 @@ function StonkFeesCard({ mint }: { mint: string }) {
 /** The flagged wallets in the coin: what each is, its score, and what it did in the coin. */
 function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
   const [all, setAll] = useState(false);
+  // Folded to its heading until opened (user ask 2026-10-16); the map marks these wallets too.
+  const [open, setOpen] = useState(false);
+  const bodyId = useId();
   const shown = all ? wallets : wallets.slice(0, 6);
   // One read names the whole list (and the funders its Linked tags mention).
   const names = useWalletNames(
     useMemo(() => wallets.flatMap((w) => [w.wallet, w.funder ?? null]), [wallets]),
   );
   return (
-    <section className="sage-card tm-wallets">
-      <h4>
+    <section className={`sage-card tm-wallets${open ? "" : " folded"}`}>
+      <FoldHead open={open} onToggle={() => setOpen((o) => !o)} controls={bodyId}>
         Flagged wallets
         <span className="sage-tag">{wallets.length}</span>
         <span className="tm-h4-meta muted small">trading this coin</span>
-      </h4>
-      <div className="fw-table" role="table" aria-label="Flagged wallets">
-        <div className="fw-row fw-headrow" role="row">
-          <span role="columnheader">Wallet</span>
-          <span role="columnheader" className="fw-score-h" title="Risk score, 0-100">
-            Risk
-          </span>
-          <span role="columnheader" className="fw-num">
-            SOL in
-          </span>
-          <span role="columnheader" className="fw-num">
-            SOL out
-          </span>
-          <span role="columnheader" className="fw-num">
-            Net
-          </span>
-        </div>
-        {shown.map((w) => {
-          const net = w.solOut - w.solIn;
-          const tone = w.score === null ? "none" : w.score >= 70 ? "high" : w.score >= 40 ? "mid" : "low";
-          return (
-            <div key={w.wallet} className="fw-row" role="row">
-              <span className="fw-who" role="cell">
-                <i className={`pc-swatch k-${kindOf(w)}`} aria-hidden="true" />
-                <button
-                  type="button"
-                  className="tm-wallet tm-wallet-btn"
-                  onClick={() => openWallet(w.wallet)}
-                  title="Open this wallet's details"
-                >
-                  <WalletText wallet={w.wallet} names={names} />
-                </button>
-                <span className="tm-tags">
-                  {w.tags.map((t) => (
-                    <span
-                      key={t}
-                      className={`tm-tag k-${TAG_TEXT[t].tone}`}
-                      title={
-                        t === "linked" && w.funder
-                          ? `Funded by ${walletText(w.funder, names)}, like other top holders`
-                          : t === "dumper" && w.dumps !== null
-                            ? `Sold into the stop on ${w.dumps} of its called coins (4+, three quarters of them, 10+ coins on record)`
-                            : t === "winner"
-                              ? `3 or more of the called coins it bought doubled with ${MIN_WIN_SOL}+ SOL profit, 60% of them or more, with 10+ coins on record`
-                              : t === "kol" && w.knownSideOf
-                                ? `One of ${w.kol || "a KOL"}'s own wallets, not its main one`
-                                : undefined
-                      }
-                    >
-                      {t === "kol" && w.knownSideOf
-                        ? names[w.wallet]?.source === "kol-side" || !w.kol
-                          ? "Known Side"
-                          : `${w.kol} Known Side`
-                        : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
-                          ? `KOL: ${w.kol}`
-                          : TAG_TEXT[t].text}
-                    </span>
-                  ))}
-                </span>
+      </FoldHead>
+      {open && (
+        <div id={bodyId}>
+          <div className="fw-table" role="table" aria-label="Flagged wallets">
+            <div className="fw-row fw-headrow" role="row">
+              <span role="columnheader">Wallet</span>
+              <span role="columnheader" className="fw-score-h" title="Risk score, 0-100">
+                Risk
               </span>
-              <span
-                role="cell"
-                className={`fw-score num s-${tone}`}
-                title={
-                  w.score === null
-                    ? "Not scored: seen in fewer than two read coins"
-                    : `Risk score ${Math.round(w.score)} of 100${w.coins ? `, from ${w.coins} coins` : ""}`
-                }
-              >
-                {w.score === null ? "–" : Math.round(w.score)}
+              <span role="columnheader" className="fw-num">
+                SOL in
               </span>
-              <span role="cell" className="fw-num num">
-                {w.solIn.toFixed(2)}
+              <span role="columnheader" className="fw-num">
+                SOL out
               </span>
-              <span role="cell" className="fw-num num">
-                {w.solOut.toFixed(2)}
-              </span>
-              {/* Before it sells, its SOL in is a position, not a loss. */}
-              <span
-                role="cell"
-                className={`fw-num num ${w.solOut > 0 ? (net >= 0 ? "up" : "down") : "faint"}`}
-                title={w.solOut > 0 ? undefined : "Still holding: nothing sold yet"}
-              >
-                {w.solOut > 0 ? `${net >= 0 ? "+" : ""}${net.toFixed(2)}` : "holding"}
+              <span role="columnheader" className="fw-num">
+                Net
               </span>
             </div>
-          );
-        })}
-      </div>
-      {wallets.length > 6 && (
-        <button type="button" className="tm-link tm-more" onClick={() => setAll((a) => !a)}>
-          {all ? "Show fewer" : `Show all ${wallets.length}`}
-        </button>
+            {shown.map((w) => {
+              const net = w.solOut - w.solIn;
+              const tone = w.score === null ? "none" : w.score >= 70 ? "high" : w.score >= 40 ? "mid" : "low";
+              return (
+                <div key={w.wallet} className="fw-row" role="row">
+                  <span className="fw-who" role="cell">
+                    <i className={`pc-swatch k-${kindOf(w)}`} aria-hidden="true" />
+                    <button
+                      type="button"
+                      className="tm-wallet tm-wallet-btn"
+                      onClick={() => openWallet(w.wallet)}
+                      title="Open this wallet's details"
+                    >
+                      <WalletText wallet={w.wallet} names={names} />
+                    </button>
+                    <span className="tm-tags">
+                      {w.tags.map((t) => (
+                        <span
+                          key={t}
+                          className={`tm-tag k-${TAG_TEXT[t].tone}`}
+                          title={
+                            t === "linked" && w.funder
+                              ? `Funded by ${walletText(w.funder, names)}, like other top holders`
+                              : t === "dumper" && w.dumps !== null
+                                ? `Sold into the stop on ${w.dumps} of its called coins (4+, three quarters of them, 10+ coins on record)`
+                                : t === "winner"
+                                  ? `3 or more of the called coins it bought doubled with ${MIN_WIN_SOL}+ SOL profit, 60% of them or more, with 10+ coins on record`
+                                  : t === "kol" && w.knownSideOf
+                                    ? `One of ${w.kol || "a KOL"}'s own wallets, not its main one`
+                                    : undefined
+                          }
+                        >
+                          {t === "kol" && w.knownSideOf
+                            ? names[w.wallet]?.source === "kol-side" || !w.kol
+                              ? "Known Side"
+                              : `${w.kol} Known Side`
+                            : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
+                              ? `KOL: ${w.kol}`
+                              : TAG_TEXT[t].text}
+                        </span>
+                      ))}
+                    </span>
+                  </span>
+                  <span
+                    role="cell"
+                    className={`fw-score num s-${tone}`}
+                    title={
+                      w.score === null
+                        ? "Not scored: seen in fewer than two read coins"
+                        : `Risk score ${Math.round(w.score)} of 100${w.coins ? `, from ${w.coins} coins` : ""}`
+                    }
+                  >
+                    {w.score === null ? "–" : Math.round(w.score)}
+                  </span>
+                  <span role="cell" className="fw-num num">
+                    {w.solIn.toFixed(2)}
+                  </span>
+                  <span role="cell" className="fw-num num">
+                    {w.solOut.toFixed(2)}
+                  </span>
+                  {/* Before it sells, its SOL in is a position, not a loss. */}
+                  <span
+                    role="cell"
+                    className={`fw-num num ${w.solOut > 0 ? (net >= 0 ? "up" : "down") : "faint"}`}
+                    title={w.solOut > 0 ? undefined : "Still holding: nothing sold yet"}
+                  >
+                    {w.solOut > 0 ? `${net >= 0 ? "+" : ""}${net.toFixed(2)}` : "holding"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {wallets.length > 6 && (
+            <button type="button" className="tm-link tm-more" onClick={() => setAll((a) => !a)}>
+              {all ? "Show fewer" : `Show all ${wallets.length}`}
+            </button>
+          )}
+          <p className="faint small tm-wallets-note">
+            Risky: a score of 70+ from selling into earlier calls&apos; stops. Linked: funded by the same
+            wallet as other top holders. KOL: a known KOL&apos;s wallet. Winner: 60%+ of the called coins it
+            bought doubled with {MIN_WIN_SOL}+ SOL profit. KOL and Winner mark presence only, not a buy
+            signal. SOL is what each wallet put into and took out of this coin.
+          </p>
+        </div>
       )}
-      <p className="faint small tm-wallets-note">
-        Risky: a score of 70+ from selling into earlier calls&apos; stops. Linked: funded by the same wallet
-        as other top holders. KOL: a known KOL&apos;s wallet. Winner: 60%+ of the called coins it bought
-        doubled with {MIN_WIN_SOL}+ SOL profit. KOL and Winner mark presence only, not a buy signal. SOL is
-        what each wallet put into and took out of this coin.
-      </p>
     </section>
   );
 }
@@ -1746,20 +1788,122 @@ function StatsCard({ card }: { card: Card }) {
 }
 
 /** Who called it and why: each model with its confidence, the reasons, and the AI reviewer's view. */
+/** Mirrors apps/api/src/tokenWhy.ts TokenWhy. */
+interface TokenWhy {
+  moment: { at: string } | null;
+  gate: string | null;
+  seats: {
+    id: string;
+    name: string;
+    calls: boolean;
+    topPct: number | null;
+    callsTopPct: number | null;
+    for: string[];
+    against: string[];
+  }[];
+}
+
+/** Seats listed before "Show all". */
+const WHY_SEATS = 4;
+
+function topText(p: number): string {
+  return `top ${p < 1 ? p.toFixed(1) : Math.round(p)}%`;
+}
+
+/**
+ * How the models read the coin at its decision moment (user ask 2026-10-16): each seat's rank of it
+ * against the rank it calls at, and for the closest seats, what pushed its score up and down.
+ * `at`: a call's time, for the moment it was decided on; null for the coin's newest. Nothing while
+ * it loads or when the reader can't see it.
+ */
+function ModelsRead({ mint, at }: { mint: string; at: number | null }) {
+  const [all, setAll] = useState(false);
+  const { data } = usePolling<TokenWhy>(
+    `/tokens/${encodeURIComponent(mint)}/why${at !== null ? `?at=${at}` : ""}`,
+    300_000,
+  );
+  if (!data) return null;
+  if (!data.moment) {
+    return data.gate ? <p className="small muted tm-why-gate">No model scored it: {data.gate}.</p> : null;
+  }
+  const seats = data.seats;
+  if (seats.length === 0) return null;
+  const shown = all ? seats : seats.slice(0, WHY_SEATS);
+  return (
+    <div className="tm-why">
+      <p className="tm-why-h small">
+        How the models read it
+        <span className="faint">
+          {" "}
+          · {at !== null ? "at the call" : `scored ${ago(new Date(data.moment.at), Date.now())}`}
+        </span>
+      </p>
+      <ul className="tm-why-seats">
+        {shown.map((x) => (
+          <li key={x.id} className={x.calls ? "calls" : ""}>
+            <span className="tm-why-name">{x.name}</span>
+            <span
+              className="tm-why-rank small"
+              title="Where this coin ranked among the model's own scores of the last day, against the share it calls"
+            >
+              {x.topPct !== null && x.callsTopPct !== null ? (
+                <>
+                  {x.calls ? "Over its line," : "Ranked it"} {topText(x.topPct)}
+                  <span className="faint"> · calls {topText(x.callsTopPct)}</span>
+                </>
+              ) : x.calls ? (
+                "Over its line"
+              ) : (
+                "Under its line"
+              )}
+            </span>
+            {(x.for.length > 0 || x.against.length > 0) && (
+              <span className="tm-why-push small">
+                {x.for.length > 0 && (
+                  <span>
+                    <i className="tm-why-up" aria-label="Pushed it up:">
+                      ▲
+                    </i>{" "}
+                    {x.for.join(", ")}
+                  </span>
+                )}
+                {x.against.length > 0 && (
+                  <span>
+                    <i className="tm-why-down" aria-label="Held it back:">
+                      ▼
+                    </i>{" "}
+                    {x.against.join(", ")}
+                  </span>
+                )}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {seats.length > WHY_SEATS && (
+        <button type="button" className="tm-link tm-more" onClick={() => setAll((a) => !a)}>
+          {all ? "Show fewer" : `Show all ${seats.length}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function CallCard({ card }: { card: Card }) {
   const curated = card.curated;
   const showNarrative = useShowNarrativeNote();
   if (!curated) {
     return (
-      <section className="sage-card">
+      <section className="sage-card tm-why-card">
         <h4>Why it&apos;s here</h4>
         <p className="small muted">
           {card.kind === "stream"
             ? "It passed the safety screen inside the market-cap band. No model has called it."
             : card.filter
-              ? `Your filter "${card.filter.name}" caught it.`
-              : "Your filter caught it."}
+              ? `Your filter "${card.filter.name}" caught it. No model has called it.`
+              : "Your filter caught it. No model has called it."}
         </p>
+        <ModelsRead mint={card.token.mintAddress} at={null} />
       </section>
     );
   }
@@ -1805,6 +1949,7 @@ function CallCard({ card }: { card: Card }) {
           ))}
         </ul>
       )}
+      <ModelsRead mint={card.token.mintAddress} at={Date.parse(curated.alertedAt)} />
       {curated.narrative && showNarrative && (
         <p className="small">
           <span className={`sage-tag ${curated.narrative.verdict === "agrees" ? "tone-good" : "tone-warn"}`}>
