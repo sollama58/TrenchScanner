@@ -117,6 +117,8 @@ export interface PaperRunSummary {
 
 /** A pass's cash change found the strategy reset under it: the change is dropped with the rest. */
 class ResetUnderUs extends Error {}
+/** The position changed under this pass (another process sold it first): nothing to book here. */
+class SoldUnderUs extends Error {}
 
 /** One pass: exits for every open paper position, then entries for every running strategy. */
 export async function runPaperTrading(deps: PaperTradingDeps): Promise<PaperRunSummary> {
@@ -186,6 +188,7 @@ async function managePaperExits(
       if (await managePaperExit(deps, position, prices.get(position.mint), solUsd, now(), notes))
         summary.sells++;
     } catch (err) {
+      if (err instanceof SoldUnderUs) continue;
       summary.errors++;
       if (err instanceof ResetUnderUs) continue;
       await prisma.paperPosition
@@ -290,6 +293,23 @@ async function managePaperExit(
   const net = out > fee ? out - fee : 0n;
   const left = held - amount;
   await prisma.$transaction(async (tx) => {
+    // A claim on the holding as this pass read it. A deploy runs the old scanner and the new one
+    // side by side, and nothing else stops both passes reading the same position as due; without
+    // the claim both booked the sale, and the strategy's cash and the position's proceeds were
+    // credited twice. The sale's fee is inside `net`; feesLamports keeps the entry's fee only.
+    const claimed = await tx.paperPosition.updateMany({
+      where: { id: position.id, status: "open", tokensHeld: position.tokensHeld },
+      data: {
+        tokensHeld: left.toString(),
+        proceedsLamports: { increment: net },
+        ...(decision.reason === "take_profit" ? { rungsTaken: { increment: 1 } } : {}),
+        // The trail rides from the price it sold at, as the bot's settled sale does.
+        highMultiple: Math.max(position.highMultiple ?? 0, multiple ?? 0) || null,
+        ...(left <= 0n ? { status: "closed", closedAt: now, closeReason: decision.reason } : {}),
+        error: null,
+      },
+    });
+    if (claimed.count !== 1) throw new SoldUnderUs("position sold by another pass");
     await tx.paperFill.create({
       data: {
         positionId: position.id,
@@ -302,28 +322,16 @@ async function managePaperExit(
         multiple,
       },
     });
-    await tx.paperPosition.update({
-      where: { id: position.id },
-      data: {
-        tokensHeld: left.toString(),
-        proceedsLamports: { increment: net },
-        feesLamports: { increment: fee },
-        ...(decision.reason === "take_profit" ? { rungsTaken: { increment: 1 } } : {}),
-        // The trail rides from the price it sold at, as the bot's settled sale does.
-        highMultiple: Math.max(position.highMultiple ?? 0, multiple ?? 0) || null,
-        ...(left <= 0n ? { status: "closed", closedAt: now, closeReason: decision.reason } : {}),
-        error: null,
-      },
-    });
     const credited = await tx.paperStrategy.updateMany({
       where: { id: position.strategy.id, resetAt: position.strategy.resetAt },
       data: { cashLamports: { increment: net } },
     });
     if (credited.count === 0) throw new ResetUnderUs("strategy reset during the pass");
   });
+  // Each fee once: `net` is this sale's SOL after its fee, feesLamports the entry's fee.
   const result =
     left <= 0n
-      ? `; closed ${signedSol(position.proceedsLamports + net - position.swapInLamports - position.feesLamports - fee)}`
+      ? `; closed ${signedSol(position.proceedsLamports + net - position.swapInLamports - position.feesLamports)}`
       : "";
   paperNote(
     notes,

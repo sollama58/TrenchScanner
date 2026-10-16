@@ -439,6 +439,11 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
   /** Asks the trader to send SOL to the wallet's withdrawal address. One in flight at a time. */
   const withdraw = (scope: Scope) => async (request: FastifyRequest, reply: FastifyReply) => {
     if (scope === "server" && !requireAdmin(request, reply)) return;
+    // The owner's own wallet too, as the header promises: a paired phone's session lives a year on
+    // a device, and must not be able to empty the wallet (to the sign-in wallet, but empty it).
+    if (scope === "own" && request.user!.deviceId) {
+      return deny(reply, "sign in with your wallet on this device to withdraw");
+    }
     const parsed = withdrawSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'amount must be lamports or "max"' });
     const owner = await ownerFor(scope, request);
