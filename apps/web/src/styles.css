@@ -4911,6 +4911,90 @@ html:has(dialog.about-modal[open]) {
   font-size: 0.78em;
   line-height: 1;
 }
+
+/* ---------- Every card the same size ---------- */
+/*
+ * A long ticker, name or model list never makes one card taller or wider than the rest: every row
+ * of the feed takes the tallest card's height, the header's pill row and the footer each stay on
+ * one line (the model pill gives way first, cut with an ellipsis, its full text on hover), and the
+ * footer sits on the card's bottom edge so the cards line up however much is above it.
+ */
+.cards {
+  grid-auto-rows: 1fr;
+}
+.card {
+  container-type: inline-size;
+}
+.card-foot {
+  margin-top: auto;
+}
+.symbol-btn {
+  display: inline-flex;
+}
+.symbol-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta-row {
+  flex-wrap: nowrap;
+  min-height: 20px;
+  min-width: 0;
+}
+.meta-row > * {
+  flex: 0 1 auto;
+}
+.meta-row > .pill-icon,
+.meta-row > .when {
+  flex: none;
+}
+.meta-row > .pill-calls {
+  flex-shrink: 100;
+}
+.card-foot,
+.card-links {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+/* Anything that still doesn't fit is cut from the end, so the first (trading) link always shows. */
+.card-links {
+  overflow: hidden;
+  justify-content: flex-start;
+  margin-left: auto;
+}
+.card-links a {
+  flex: none;
+}
+/* A narrow card drops the links' arrows and tightens the footer before anything is cut. */
+@container (max-width: 400px) {
+  .card-links {
+    gap: 9px;
+  }
+  .card-links a .icon {
+    display: none;
+  }
+  .card-foot,
+  .card-foot-left {
+    gap: 6px;
+  }
+}
+/* A phone card: the FEES badge keeps its icon (its tooltip says where the fee goes). */
+@container (max-width: 340px) {
+  .fee-badge .fee-word {
+    display: none;
+  }
+}
+/* Too narrow for the footer on one line (Customize's narrow cards, two to a phone row): it wraps
+   rather than lose a link, and the rows' shared height keeps the cards matching. */
+@container (max-width: 290px) {
+  .card-foot,
+  .card-links {
+    flex-wrap: wrap;
+  }
+  .card-links {
+    overflow: visible;
+  }
+}
 .rank-inline {
   display: none;
 }

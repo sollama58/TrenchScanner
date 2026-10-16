@@ -210,15 +210,20 @@ export function AlertCard({
                 type="button"
                 className="symbol symbol-btn"
                 onClick={openDetailModal}
-                title="Open the token's chart and details"
+                title={`${tokenLabel(card.token)}: open the token's chart and details`}
               >
-                {tokenLabel(card.token)}
+                {/* Its own box: a button doesn't draw text-overflow's ellipsis on its text. */}
+                <span className="symbol-text">{tokenLabel(card.token)}</span>
               </button>
             ) : (
-              <strong className="symbol">{tokenLabel(card.token)}</strong>
+              <strong className="symbol" title={tokenLabel(card.token)}>
+                {tokenLabel(card.token)}
+              </strong>
             )}
             {show("tokenName") && card.token.name && card.token.symbol && (
-              <span className="token-name">{card.token.name}</span>
+              <span className="token-name" title={card.token.name}>
+                {card.token.name}
+              </span>
             )}
           </div>
           <div className="meta-row">
@@ -246,11 +251,11 @@ export function AlertCard({
             )}
             {curated && show("modelPill") && (
               <span
-                className={`pill ${isModel || labelSource ? "pill-model" : "pill-heur"}`}
+                className={`pill pill-calls ${isModel || labelSource ? "pill-model" : "pill-heur"}`}
                 title={
                   calls.length > 1
                     ? `${calls.map((c) => `${c.modelName ?? "Model"}: score ${c.confidence.toFixed(0)}`).join("\n")}\n${SCORE_HINT}`
-                    : SCORE_HINT
+                    : `${curated.modelName ?? (isModel ? "Model" : "Heuristic")}: score ${curated.confidence.toFixed(0)}\n${SCORE_HINT}`
                 }
               >
                 <BrainIcon size={12} />
@@ -641,7 +646,7 @@ export function AlertCard({
           )}
           {fees && (
             <span className={`fee-badge fee-${fees.kind}`} title={fees.title} aria-label={fees.title}>
-              FEES
+              <span className="fee-word">FEES</span>
               <fees.Icon size={14} />
             </span>
           )}
