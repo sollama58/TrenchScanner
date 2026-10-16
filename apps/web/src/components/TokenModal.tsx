@@ -64,10 +64,13 @@ import {
 import { PriceChart, type ChartEvent } from "./PriceChart";
 import {
   categoryText,
+  count,
   CrowdChart,
+  INPUTS,
   LINEAGE,
   LineageText,
   pct0,
+  RELATION,
   TREND_SOURCE,
   words,
   type SageRead,
@@ -2080,9 +2083,15 @@ function SageStatus({ data, error }: { data: SageView | null; error: Error | nul
   );
 }
 
-/** What the coin is about: its referent, how sure TokenSage is, and the kind of coin it is. */
+/**
+ * What the coin is about: its referent and how sure TokenSage is, what kind of thing it is, the
+ * signals that point at it, and the X post it was read from.
+ */
 function ReferentCard({ read: r }: { read: SageRead }) {
   const ref = r.referent;
+  const supported = new Set(ref?.supportedBy ?? []);
+  const signals = INPUTS.filter((i) => supported.has(i.id));
+  const x = r.x?.url?.startsWith("https://") ? r.x : null;
   return (
     <section className="sage-card tm-referent-card">
       <h4>
@@ -2093,10 +2102,37 @@ function ReferentCard({ read: r }: { read: SageRead }) {
       {ref?.confidence != null && (
         <span className="muted small">{Math.round(ref.confidence * 100)}% sure</span>
       )}
-      {r.mainCategory && (
+      {(ref?.kind || r.mainCategory) && (
         <div className="sage-marks">
-          <span className="sage-tag">{categoryText(r.mainCategory.label)}</span>
+          {ref?.kind && <span className="sage-tag tone-neutral">{words(ref.kind)}</span>}
+          {r.mainCategory && <span className="sage-tag">{categoryText(r.mainCategory.label)}</span>}
         </div>
+      )}
+      {ref?.desc && <p className="tm-referent-desc small">{ref.desc}</p>}
+      {signals.length > 0 && (
+        <div className="tm-referent-signals" aria-label="What points at the referent">
+          <span className="sage-eyebrow">Pointed at by</span>
+          <span className="sage-inputs">
+            {signals.map((i) => (
+              <span key={i.id} className="sage-input on">
+                <CheckIcon size={11} />
+                {i.label}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+      {x && (
+        <p className="small tm-referent-x">
+          <a href={x.url!} target="_blank" rel="noreferrer">
+            {x.author?.handle ? `@${x.author.handle}` : "X post"}
+            <ExternalIcon size={11} />
+          </a>
+          <span className="muted">
+            {x.relation && ` · ${RELATION[x.relation] ?? words(x.relation)}`}
+            {x.author?.followers != null && ` · ${count(x.author.followers)} followers`}
+          </span>
+        </p>
       )}
     </section>
   );
@@ -2106,8 +2142,6 @@ function ReferentCard({ read: r }: { read: SageRead }) {
 function LineageCard({ read: r }: { read: SageRead }) {
   const l = r.lineage;
   const lineage = l ? LINEAGE[l.kind] : undefined;
-  const of = l?.ofMint && l.kind !== "original" && l.kind !== "unknown" ? l.ofMint : null;
-  const ofLabel = l?.ofTicker ? `$${l.ofTicker}` : (l?.ofName ?? "the original");
   const has = !!l || !!r.referent?.wave || r.copyOf.length > 0;
   return (
     <section className="sage-card tm-lineage">
@@ -2119,11 +2153,6 @@ function LineageCard({ read: r }: { read: SageRead }) {
         <>
           <LineageText read={r} />
           <CrowdChart read={r} />
-          {of && (
-            <button type="button" className="tm-link tm-of" onClick={() => openSage(of)}>
-              TokenSage on {ofLabel}
-            </button>
-          )}
         </>
       ) : (
         <p className="small muted">TokenSage didn&apos;t tie it to any earlier coin or crowd.</p>

@@ -10864,6 +10864,33 @@ img.tm-avatar {
 .tm-referent-card .sage-marks {
   margin: 10px 0 0;
 }
+.tm-referent-card .tm-referent-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin: 10px 0 0;
+  color: var(--ink-2);
+}
+.tm-referent-signals {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+.tm-referent-signals .sage-inputs {
+  margin: 0;
+  gap: 4px;
+}
+.tm-referent-x {
+  margin: 12px 0 0 !important;
+}
+.tm-referent-x a {
+  display: inline-flex;
+  vertical-align: baseline;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
 .tm-sage > p.small {
   margin: 0;
 }
@@ -11240,9 +11267,6 @@ img.tm-avatar {
 
 /* Token modal: TokenSage's lineage, trending terms, and how coins like it did this week. */
 .tm-lineage .sage-crowd {
-  margin-top: 8px;
-}
-.tm-of {
   margin-top: 8px;
 }
 .tm-terms {
