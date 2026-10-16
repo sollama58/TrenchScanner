@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { LoadingNote, SkelValue } from "./Loading";
 import type { Snapshot, Token } from "../api";
 import { usePolling } from "../hooks";
@@ -50,6 +50,11 @@ import {
   wideWithoutTransfers,
   TRAIT_ICON,
   RISKY_ICON,
+  CLOCK_ICON,
+  markerSpot,
+  sameTimeShare,
+  stretchWide,
+  type TextBox,
   riskyShare,
   TRAIT_LABEL,
   traitShares,
@@ -906,13 +911,14 @@ function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }
   // Each kind's own name, written the way its names are (user ask 2026-10-14): KOL, "Pump.fun", "FOMO".
   const items: { cls: string; text: string }[] = [];
   if (kinds.has("kol")) items.push({ cls: "kol", text: "KOL" });
-  if (kinds.has("kol-side")) items.push({ cls: "kol", text: "KOL Known Side" });
   if (kinds.has("pumpfun")) items.push({ cls: "pumpfun", text: '"Pump.fun"' });
   if (kinds.has("fomo")) items.push({ cls: "fomo", text: '"FOMO"' });
   if (kinds.has("identity") || kinds.has("exchange")) items.push({ cls: "", text: "Helius / exchange" });
   // Each wallet trait on the map, its icon and the share of supply its holders hold (user ask 2026-10-15).
   const traits = traitShares(graph);
-  if (!items.length && !traits.length) return null;
+  // The same-minute clock, its holders' share beside it (user ask 2026-10-16).
+  const same = sameTimeShare(graph);
+  if (!items.length && !traits.length && !same.count) return null;
   return (
     <ul className="bm-legend" aria-label="Legend">
       <li className="bm-legend-title" aria-hidden>
@@ -933,12 +939,45 @@ function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }
           {TRAIT_LABEL[t.trait]} <span className="num">{pctText(t.pct)}</span>
         </li>
       ))}
+      {same.count > 0 && (
+        <li
+          className="bm-legend-trait"
+          title={`Funded the same minute: ${same.count} holder${same.count === 1 ? "" : "s"} on the map, holding ${pctText(same.pct)} of supply`}
+        >
+          <svg className="bm-trait-icon bm-clock-icon" viewBox="0 0 24 24" width={13} height={13} aria-hidden>
+            {CLOCK_ICON.map((d) => (
+              <path key={d} d={d} />
+            ))}
+          </svg>
+          Funded together <span className="num">{pctText(same.pct)}</span>
+        </li>
+      )}
     </ul>
   );
 }
 
+/** The stage's width over its height, as laid out now (and on each resize); null before it's measured. */
+function useStageAspect(ref: React.RefObject<HTMLElement | null>): number | null {
+  const [aspect, setAspect] = useState<number | null>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const read = () => {
+      const { width, height } = el.getBoundingClientRect();
+      // Rounded, so a pixel's change doesn't lay the map out again.
+      if (width > 0 && height > 0) setAspect(Math.round((width / height) * 20) / 20);
+    };
+    read();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return aspect;
+}
+
 function BubbleSvg({
-  graph,
+  graph: laid,
   names,
   picked,
   lit,
@@ -966,6 +1005,11 @@ function BubbleSvg({
   onPick: (id: string) => void;
 }) {
   const uid = useId().replace(/:/g, "");
+  // The map spread sideways to fill a wide stage (user ask 2026-10-16); a narrow one keeps its shape.
+  const stage = useRef<HTMLDivElement>(null);
+  const aspect = useStageAspect(stage);
+  const graph = useMemo(() => (aspect ? stretchWide(laid, aspect) : laid), [laid, aspect]);
+  const { bubbleFunderLabels } = useAppearance();
   const index = new Map(graph.nodes.map((n) => [n.id, n]));
   const cexSlot = useMemo(() => cexSlots(graph), [graph]);
   // Each transfer arrow's route, clear of other bubbles (user ask 2026-10-16); the pills keep off them.
@@ -973,13 +1017,13 @@ function BubbleSvg({
     () => (transfers && graph.transferLinks.length > 0 ? transferRoutes(graph) : null),
     [graph, transfers],
   );
-  // Funders' names, each exchange's name when its ties show, and each same-minute group's, as pills
+  // Funders' names (when Settings shows them) and each exchange's name when its ties show, as pills
   // placed where they cover nothing (user ask 2026-10-14: they sat on bubbles, text and lines). An
-  // exchange's and a group's pill is a hub, tied to each of its wallets by a line, as a funder is.
+  // exchange's pill is a hub, tied to each of its wallets by a line, as a funder is.
   const { labels, placed } = useMemo(() => {
     type Label = MapLabel & {
       text: string;
-      kind: "funder" | "cex" | "same" | "side" | "kol";
+      kind: "funder" | "cex" | "side" | "kol";
       colour: string | null;
       /** A hub's wallets, each tied to the pill by a line. */
       members: MapNode[];
@@ -995,8 +1039,10 @@ function BubbleSvg({
       // (placeLabels reads `members` too: it keeps the pill where its lines cross fewest bubbles.)
     };
     for (const n of graph.nodes) {
-      // An unknown funder's diamond goes unlabeled (user ask 2026-10-15): its colour ties it to its row.
-      if (n.kind !== "funder" || !n.wallet || !funderNamed(graph, n.wallet, names)) continue;
+      // An unknown funder's diamond goes unlabeled (user ask 2026-10-15): its colour ties it to its
+      // row. A named one's pill shows only when Settings says so (user ask 2026-10-16: off by default).
+      if (!bubbleFunderLabels || n.kind !== "funder" || !n.wallet || !funderNamed(graph, n.wallet, names))
+        continue;
       const text = clipName(walletText(n.wallet, names));
       const slot = nodeSlot(n, graph);
       list.push({
@@ -1031,16 +1077,8 @@ function BubbleSvg({
         ...(kol ? { anchor: kol, tied } : {}),
       });
     });
-    graph.sameTimeGroups.forEach((g, i) => {
-      const members = graph.nodes.filter((n) => n.kind === "holder" && n.sameTime === i);
-      hub(
-        `same:${i}`,
-        members,
-        `Funded together ${clockTime(g.atMs)}`,
-        "same",
-        `var(--bm-${sameTimeSlot(graph, i)})`,
-      );
-    });
+    // A same-minute group has no pill (user ask 2026-10-16): a clock on each of its bubbles, and
+    // ties between them, say they were funded together.
     if (cexLinks) {
       for (const g of cexGroupsOf(graph)) {
         // The exchange's name alone, in full ("Binance Hot Wallet 2" reads "Binance").
@@ -1050,7 +1088,7 @@ function BubbleSvg({
       }
     }
     return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list, routes) };
-  }, [graph, names, cexLinks, cexSlot, kolSides, kols, routes]);
+  }, [graph, names, cexLinks, cexSlot, kolSides, kols, routes, bubbleFunderLabels]);
   const box = graphBounds(graph, 18, placed);
   const dim = (n: MapNode) => lit !== null && n.cluster !== lit;
   // Bigger bubbles first so the small ones draw on top and stay tappable.
@@ -1058,7 +1096,7 @@ function BubbleSvg({
   const ids = Array.from({ length: CLUSTER_COLOURS }, (_, i) => i);
 
   return (
-    <div className="bm-stage compact">
+    <div className="bm-stage compact" ref={stage}>
       <svg
         className="bm-svg"
         viewBox={`${box.x} ${box.y} ${box.w} ${box.h}`}
@@ -1153,6 +1191,22 @@ function BubbleSvg({
                 d={`M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`}
                 className={`bm-link${lit !== null && l.cluster !== lit ? " dim" : ""}`}
                 style={{ stroke: `var(--bm-${l.cluster % CLUSTER_COLOURS})` }}
+              />
+            );
+          })}
+          {/* Each same-minute group's ties, each holder to the first funded, in the group's colour. */}
+          {graph.sameTimeLinks.map((l) => {
+            const a = index.get(l.from);
+            const b = index.get(l.to);
+            if (!a || !b) return null;
+            const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12;
+            const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.12;
+            return (
+              <path
+                key={`t-${l.from}-${l.to}`}
+                d={`M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`}
+                className={`bm-link bm-same-link${lit !== null ? " dim" : ""}`}
+                style={{ stroke: `var(--bm-${sameTimeSlot(graph, l.group)})` }}
               />
             );
           })}
@@ -1401,7 +1455,8 @@ function Bubble({
   const fontSize = n.pct < 1 ? Math.max(6, Math.min(7.5, n.r * 0.44)) : Math.max(8, Math.min(17, n.r * 0.46));
   const bx = n.x + n.r * 0.72;
   const by = n.y - n.r * 0.72;
-  const named = n.wallet ? names[n.wallet] : undefined;
+  // A KOL's Known Side never carries its name on the bubble (user ask 2026-10-16).
+  const named = bubbleName(n, names);
   const pumpfun = isPumpfunName(named);
   // A KOL's name always gets its gold backing, so it stands out (user ask 2026-10-14); so does a
   // Known Side's, one of the KOL's own wallets.
@@ -1412,6 +1467,21 @@ function Bubble({
   const lineH = fit ? fit.size * 1.15 : 0;
   const pctY = fit ? n.y - (fit.lines.length * lineH) / 2 - 1 : n.y;
   const nameY = pctY + fontSize * 0.62 + (fit ? fit.size * 0.62 : 0);
+  // The wallet type's mark at the lower right and the same-minute clock at the lower left, each
+  // moved round the rim off the % and the name (user ask 2026-10-16: never over them).
+  const boxes: TextBox[] = [];
+  if (showPct)
+    boxes.push({ x: n.x, y: fit ? pctY : n.y, w: pctText(n.pct).length * fontSize * 0.62, h: fontSize });
+  if (fit)
+    boxes.push({
+      x: n.x,
+      y: (showPct ? nameY : n.y) - fit.size * 0.7 + (fit.lines.length * lineH + fit.size * 0.35) / 2,
+      w: fit.w + 8,
+      h: fit.lines.length * lineH + fit.size * 0.35,
+    });
+  const trait = n.trait ? { trait: n.trait, ...markerSpot(n.x, n.y, n.r, MARK_R, 1, boxes) } : null;
+  if (trait) boxes.push({ x: trait.x, y: trait.y, w: MARK_R * 2, h: MARK_R * 2 });
+  const clock = n.sameTime !== null ? markerSpot(n.x, n.y, n.r, MARK_R, -1, boxes) : null;
   return (
     <>
       {n.sameTime !== null && (
@@ -1465,7 +1535,14 @@ function Bubble({
           </text>
         </g>
       )}
-      {n.trait && <TraitBadge trait={n.trait} x={n.x + n.r * 0.72} y={n.y + n.r * 0.72} />}
+      {trait && <TraitBadge trait={trait.trait} x={trait.x} y={trait.y} />}
+      {clock && (
+        <g className="bm-trait bm-clock" style={{ color: `var(--bm-${sameSlot})` }}>
+          <title>Funded the same minute as others on the map</title>
+          <circle cx={clock.x} cy={clock.y} r={MARK_R} />
+          <MarkIcon paths={CLOCK_ICON} x={clock.x} y={clock.y} />
+        </g>
+      )}
       {(flaggedRisk || dev) && (
         <g className={`bm-badge ${dev ? "dev" : "risk"}`}>
           <circle cx={bx} cy={by} r={dev ? 9 : 7} />
@@ -1480,19 +1557,34 @@ function Bubble({
 
 const pctText = (v: number) => `${v < 10 ? v.toFixed(1) : v.toFixed(0)}%`;
 
+/** A bubble's corner mark's radius, map units. */
+const MARK_R = 6.5;
+
+/** The name a holder's bubble carries: none for a KOL's Known Side (user ask 2026-10-16). */
+function bubbleName(n: MapNode, names: WalletNames): WalletName | undefined {
+  const named = n.wallet ? names[n.wallet] : undefined;
+  return named?.source === "kol-side" ? undefined : named;
+}
+
+/** A corner mark's icon, centred on x, y. */
+function MarkIcon({ paths, x, y }: { paths: readonly string[]; x: number; y: number }) {
+  const k = (MARK_R * 1.25) / 24;
+  return (
+    <g transform={`translate(${x - 12 * k} ${y - 12 * k}) scale(${k})`}>
+      {paths.map((d) => (
+        <path key={d} d={d} />
+      ))}
+    </g>
+  );
+}
+
 /** A bubble's wallet trait (user ask 2026-10-15): a small disc, bottom right, with its icon. */
 function TraitBadge({ trait, x, y }: { trait: WalletTrait; x: number; y: number }) {
-  const r = 6.5;
-  const k = (r * 1.25) / 24;
   return (
     <g className={`bm-trait trait-${trait}`}>
       <title>{TRAIT_WORDS[trait]}</title>
-      <circle cx={x} cy={y} r={r} />
-      <g transform={`translate(${x - 12 * k} ${y - 12 * k}) scale(${k})`}>
-        {TRAIT_ICON[trait].map((d) => (
-          <path key={d} d={d} />
-        ))}
-      </g>
+      <circle cx={x} cy={y} r={MARK_R} />
+      <MarkIcon paths={TRAIT_ICON[trait]} x={x} y={y} />
     </g>
   );
 }
@@ -1581,11 +1673,6 @@ function fundingTime(atMs: number): string {
 function sameTimeFunders(g: SameTimeGroup): string {
   const funders = new Set(g.wallets.map((w) => w.funder ?? `?${w.wallet}`));
   return funders.size === 1 ? " · one funder" : ` · from ${funders.size} funders`;
-}
-
-/** A funding minute's clock time, for a same-minute group's pill. */
-function clockTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 /** A name short enough to sit under a bubble. */
@@ -1824,6 +1911,7 @@ export function BubbleMapSection({
   const liveWide = useWideMap(mint);
   const wide = chosenWide !== undefined ? chosenWide : liveWide;
   const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
+  const { bubbleFunderLabels } = useAppearance();
   // Transfers hidden: Linked, its clusters and the bundles as they read without them (user ask
   // 2026-10-16), on the map and its share image alike.
   const shown = useMemo(
@@ -1893,6 +1981,7 @@ export function BubbleMapSection({
                 kolBundled: kolBundledFor(shown, kols),
                 kols: drawnKolsFor(side, kols),
                 linkedKols: kols,
+                funderLabels: bubbleFunderLabels,
               })
             }
           />

@@ -43,6 +43,7 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   // Off by default (user ask 2026-10-16); Customize › Extras switches it on.
   feesBadge: false,
   bubbleCexLinks: false,
+  bubbleFunderLabels: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
   // Off by default (user ask 2026-10-16); KOLs' and exchanges' names always show.
@@ -270,6 +271,8 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     transferred: typeof r.transferred === "boolean" ? r.transferred : d.transferred,
     feesBadge: typeof r.feesBadge === "boolean" ? r.feesBadge : d.feesBadge,
     bubbleCexLinks: typeof r.bubbleCexLinks === "boolean" ? r.bubbleCexLinks : d.bubbleCexLinks,
+    bubbleFunderLabels:
+      typeof r.bubbleFunderLabels === "boolean" ? r.bubbleFunderLabels : d.bubbleFunderLabels,
     bubbleSideLinks: typeof r.bubbleSideLinks === "boolean" ? r.bubbleSideLinks : d.bubbleSideLinks,
     bubbleTransferLinks:
       typeof r.bubbleTransferLinks === "boolean" ? r.bubbleTransferLinks : d.bubbleTransferLinks,

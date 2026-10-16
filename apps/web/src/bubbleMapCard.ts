@@ -22,6 +22,11 @@ import {
   traitShares,
   RISKY_ICON,
   riskyShare,
+  CLOCK_ICON,
+  markerSpot,
+  sameTimeShare,
+  stretchWide,
+  type TextBox,
   type WalletTrait,
   type KolControl,
   type ClusterHalo,
@@ -186,6 +191,8 @@ export async function renderBubbleCard(
      * the KOL side wallets switch is off; the figure stays as the dialog's tile shows it.
      */
     linkedKols?: readonly KolControl[];
+    /** Name the wallets that fund clusters on a pill by their diamond (Settings; off by default). */
+    funderLabels?: boolean;
   } = {},
 ): Promise<HTMLCanvasElement> {
   // Drawn at twice the card's size: the map's small bubbles and names stay sharp (user ask 2026-10-16).
@@ -426,11 +433,6 @@ export async function renderBubbleCard(
   const sideGroups = sideRows.map((s) => s.g);
   const kols = opts.kols ?? [];
   const regroup = { cex, sides: sideGroups, kols, transfers };
-  const map = needsRegroup(regroup) ? regroupLayout(graph, regroup) : graph;
-  // Each KOL's bundle on the laid-out map, with two or more of its holders there.
-  const kolBundles = kols
-    .map((k, i) => ({ k, colour: kolColour(i), ...kolBundleNodes(map, k) }))
-    .filter((b) => b.members.length >= 2);
   // Which kinds of name the bubbles carry, for the legend under the map (user ask 2026-10-14).
   const legend = nameLegend(graph, names, (opts.flags ?? "ok") === "ok");
   // From the card's top to the footer's rule (CARD_H - 82), less the legend under it.
@@ -440,6 +442,12 @@ export async function renderBubbleCard(
     w: CARD_W - 12 - (PAD + leftW + 8),
     h: CARD_H - 92 - 24 - (legend.length > 0 ? LEGEND_H : 0),
   };
+  // Spread sideways to fill the card's wide map box, as the dialog does (user ask 2026-10-16).
+  const map = stretchWide(needsRegroup(regroup) ? regroupLayout(graph, regroup) : graph, area.w / area.h);
+  // Each KOL's bundle on the laid-out map, with two or more of its holders there.
+  const kolBundles = kols
+    .map((k, i) => ({ k, colour: kolColour(i), ...kolBundleNodes(map, k) }))
+    .filter((b) => b.members.length >= 2);
   // The pills are sized in pixels on the card (readable at share size), so in map units they shrink
   // as the map scales up: estimate the scale without them first, then place them at that size.
   const bare = graphBounds(map, 10);
@@ -467,8 +475,10 @@ export async function renderBubbleCard(
   }[] = [];
   ctx.font = `600 ${PILL_FONT - 1}px ${MONO}`;
   for (const n of map.nodes) {
-    // As under the map, an unknown funder's diamond goes unlabeled (user ask 2026-10-15).
-    if (n.kind !== "funder" || !n.wallet || !funderNamed(map, n.wallet, names)) continue;
+    // As under the map, an unknown funder's diamond goes unlabeled (user ask 2026-10-15), and a
+    // named one's pill shows only when Settings says so (user ask 2026-10-16).
+    if (!opts.funderLabels || n.kind !== "funder" || !n.wallet || !funderNamed(map, n.wallet, names))
+      continue;
     const text = walletText(n.wallet, names);
     const short = text.length > 18 ? `${text.slice(0, 17)}…` : text;
     hubs.push({
@@ -509,24 +519,8 @@ export async function renderBubbleCard(
       funder: !!kol,
     });
   }
-  // Each same-minute group's pill, a hub tied to its wallets by solid lines, as the dialog draws it.
-  map.sameTimeGroups.forEach((g, i) => {
-    const members = map.nodes.filter((n): n is MapNode => n.kind === "holder" && n.sameTime === i);
-    if (members.length === 0) return;
-    // No time on the share image (user ask 2026-10-14): the group's colour tells them apart.
-    const text = "Funded together";
-    hubs.push({
-      id: `same:${i}`,
-      ...centreOf(members),
-      r: 0,
-      ...pillSize(text),
-      text,
-      colour: slotColour(sameTimeSlot(map, i)),
-      members,
-      dashed: false,
-      dotted: false,
-    });
-  });
+  // A same-minute group has no pill (user ask 2026-10-16): a clock on each of its bubbles and solid
+  // ties between them in its colour, as the dialog draws it.
   // Each exchange's pill, its name alone and in full, tied to its holders by dashed lines in its colour.
   if (cex) {
     for (const g of cexGroupsOf(map)) {
@@ -675,7 +669,22 @@ export async function renderBubbleCard(
     ctx.stroke();
   }
 
-  // Each pill's ties to its wallets: solid for a same-minute group, dashed for an exchange.
+  // Each same-minute group's ties, each holder to the first funded, in the group's colour.
+  for (const l of map.sameTimeLinks) {
+    const a = index.get(l.from);
+    const b = index.get(l.to);
+    if (!a || !b) continue;
+    const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12;
+    const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.12;
+    ctx.strokeStyle = alpha(slotColour(sameTimeSlot(map, l.group)), 0.6);
+    ctx.lineWidth = Math.max(1.5, 1.6 * scale);
+    ctx.beginPath();
+    ctx.moveTo(X(a.x), Y(a.y));
+    ctx.quadraticCurveTo(X(mx), Y(my), X(b.x), Y(b.y));
+    ctx.stroke();
+  }
+
+  // Each pill's ties to its wallets: dashed for an exchange, dotted for a KOL's side wallets.
   ctx.lineWidth = Math.max(1.5, 1.6 * scale);
   hubs.forEach((hub, i) => {
     const p = placed[i]!;
@@ -837,7 +846,9 @@ export async function renderBubbleCard(
       ctx.setLineDash([]);
     }
     // The % and, under it, the wallet's name, sized and wrapped as the dialog does (bubbleNameLines).
-    const named = n.wallet ? names[n.wallet] : undefined;
+    // A KOL's Known Side never carries its name on the bubble (user ask 2026-10-16).
+    const named0 = n.wallet ? names[n.wallet] : undefined;
+    const named = named0?.source === "kol-side" ? undefined : named0;
     const fit = named ? bubbleNameLines(n.r, named.name, isUsername(named)) : null;
     // Every bubble down to 0.1% carries its amount, smaller under 1%, as on the map (showsPct).
     const showPct = showsPct(n.pct);
@@ -845,10 +856,13 @@ export async function renderBubbleCard(
     const nameSize = fit ? Math.max(11, fit.size * scale) : 0;
     const lineH = nameSize * 1.15;
     const pctY = fit ? cy - (fit.lines.length * lineH) / 2 - 1 : cy + 1;
+    // What the corner marks keep off (user ask 2026-10-16): the % and the name.
+    const boxes: TextBox[] = [];
     if (showPct) {
       ctx.fillStyle = INK;
       ctx.font = `750 ${pctSize}px ${FONT}`;
       ctx.fillText(pctText(n.pct), cx, pctY);
+      boxes.push({ x: cx, y: pctY, w: ctx.measureText(pctText(n.pct)).width, h: pctSize });
     }
     if (fit && named) {
       const nameY = showPct
@@ -860,6 +874,8 @@ export async function renderBubbleCard(
       // A KOL's Known Side is the KOL's own wallet: gold too.
       const kol = named.source === "kol" || named.source === "kol-side";
       // A KOL's name on gold, as in the dialog; any other gets a dark backing when it runs past the edge.
+      const blockH = text.length * lineH + nameSize * 0.3;
+      boxes.push({ x: cx, y: nameY - nameSize * 0.72 + blockH / 2, w: w + 10, h: blockH });
       if (kol || w > r * 1.7) {
         ctx.fillStyle = kol ? SIDE : "rgba(12, 14, 20, 0.82)";
         ctx.beginPath();
@@ -881,18 +897,29 @@ export async function renderBubbleCard(
             : INK;
       text.forEach((l, j) => ctx.fillText(l, cx, nameY + j * lineH));
     }
-    // The wallet's trait, bottom right: a dark disc and its icon, as on the map (user ask 2026-10-15).
-    if (n.trait) {
-      const tx = cx + r * 0.72;
-      const ty = cy + r * 0.72;
+    // The wallet's trait, bottom right: a dark disc and its icon, as on the map (user ask 2026-10-15);
+    // the same-minute clock bottom left in its group's colour (user ask 2026-10-16). Each moves round
+    // the rim off the % and the name.
+    const mark = (at: { x: number; y: number }, ring: string) => {
       ctx.fillStyle = "#1b1e28";
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.18)";
+      ctx.strokeStyle = ring;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(tx, ty, 11, 0, Math.PI * 2);
+      ctx.arc(at.x, at.y, MARK_R, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
-      drawTraitIcon(ctx, n.trait, tx, ty, 14);
+    };
+    if (n.trait) {
+      const at = markerSpot(cx, cy, r, MARK_R, 1, boxes);
+      mark(at, "rgba(255, 255, 255, 0.18)");
+      drawTraitIcon(ctx, n.trait, at.x, at.y, 14);
+      boxes.push({ x: at.x, y: at.y, w: MARK_R * 2, h: MARK_R * 2 });
+    }
+    if (n.sameTime !== null) {
+      const ink = slotColour(sameTimeSlot(map, n.sameTime));
+      const at = markerSpot(cx, cy, r, MARK_R, -1, boxes);
+      mark(at, ink);
+      drawIcon(ctx, CLOCK_ICON, ink, at.x, at.y, 14);
     }
     const dev = n.flags.includes("creator");
     if (risk || dev) {
@@ -929,13 +956,22 @@ export async function renderBubbleCard(
   // The legend: one chip per kind of name on the map, its own name written as those names are
   // (user ask 2026-10-14: KOL, "Pump.fun", "FOMO"), centred under it.
   if (legend.length > 0) {
-    ctx.font = `650 14px ${FONT}`;
-    // A trait's item is its icon and its words, no chip (user ask 2026-10-15: kept minimal).
-    const widths = legend.map((k) => ctx.measureText(k.text).width + (k.icon ? 20 : 16));
-    // A faint italic "Legend" before the chips (user ask 2026-10-14).
-    ctx.font = `italic 500 14px ${FONT}`;
-    const titleW = ctx.measureText("Legend").width + 12;
-    const total = titleW + widths.reduce((t, w) => t + w, 0) + (legend.length - 1) * 10;
+    // The type shrinks until the row fits under the map (a long legend ran off the card's edge).
+    let size = 14;
+    let widths: number[] = [];
+    let titleW = 0;
+    let total = Infinity;
+    for (; size >= 10; size -= 1) {
+      ctx.font = `650 ${size}px ${FONT}`;
+      // A trait's item is its icon and its words, no chip (user ask 2026-10-15: kept minimal).
+      widths = legend.map((k) => ctx.measureText(k.text).width + (k.icon ? 20 : 16));
+      // A faint italic "Legend" before the chips (user ask 2026-10-14).
+      ctx.font = `italic 500 ${size}px ${FONT}`;
+      titleW = ctx.measureText("Legend").width + 12;
+      total = titleW + widths.reduce((t, w) => t + w, 0) + (legend.length - 1) * 10;
+      if (total <= area.w) break;
+    }
+    size = Math.max(size, 10);
     let x = area.x + (area.w - total) / 2;
     const ly = area.y + area.h + LEGEND_H / 2;
     ctx.textBaseline = "middle";
@@ -943,7 +979,7 @@ export async function renderBubbleCard(
     ctx.fillStyle = alpha("#ffffff", 0.5);
     ctx.fillText("Legend", x, ly + 1);
     x += titleW;
-    ctx.font = `650 14px ${FONT}`;
+    ctx.font = `650 ${size}px ${FONT}`;
     ctx.textAlign = "center";
     legend.forEach((c, i) => {
       if (c.icon) {
@@ -965,6 +1001,9 @@ export async function renderBubbleCard(
   ctx.textBaseline = "alphabetic";
   return canvas;
 }
+
+/** A bubble's corner mark's radius, card pixels. */
+const MARK_R = 11;
 
 /** The legend's height under the map, card pixels. */
 const LEGEND_H = 34;
@@ -988,7 +1027,6 @@ function nameLegend(graph: BubbleGraph, names: WalletNames, flagsRead: boolean):
   const dark = "rgba(12, 14, 20, 0.82)";
   const out: LegendItem[] = [];
   if (kinds.has("kol")) out.push({ text: "KOL", bg: SIDE, ink: "#1a1300" });
-  if (kinds.has("kol-side")) out.push({ text: "KOL Known Side", bg: SIDE, ink: "#1a1300" });
   if (kinds.has("pumpfun")) out.push({ text: '"Pump.fun"', bg: dark, ink: "#4ade80" });
   if (kinds.has("fomo")) out.push({ text: '"FOMO"', bg: dark, ink: "#c4b5fd" });
   if (kinds.has("identity") || kinds.has("exchange"))
@@ -1001,6 +1039,16 @@ function nameLegend(graph: BubbleGraph, names: WalletNames, flagsRead: boolean):
       ink: INK2,
       icon: TRAIT_ICON[t.trait],
       iconInk: TRAIT_INK[t.trait],
+    });
+  // The same-minute clock and its holders' share (user ask 2026-10-16).
+  const same = sameTimeShare(graph);
+  if (same.count > 0)
+    out.push({
+      text: `Funded together ${pctText(same.pct)}`,
+      bg: dark,
+      ink: INK2,
+      icon: CLOCK_ICON,
+      iconInk: INK2,
     });
   // The risky holders' share of supply beside them, a red exclamation (user ask 2026-10-16).
   const risky = riskyShare(graph);
