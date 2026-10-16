@@ -25,7 +25,11 @@ import {
   scoreCandidateWithModel,
   wilsonLowerBound,
 } from "./trainer.js";
-import { CANDIDATE_FEATURE_NAMES, LEARNER_FEATURE_NAMES, withCurrentNarrativeTiming } from "./features.js";
+import {
+  CANDIDATE_FEATURE_NAMES,
+  MARKET_LEARNER_FEATURE_NAMES,
+  withCurrentNarrativeTiming,
+} from "./features.js";
 import {
   CONSENSUS_CONTESTANT,
   HIGH_PRECISION_SHARE_BAND,
@@ -325,7 +329,7 @@ function runFeatures(
 /** A recipe narrowed to the run's usable inputs; one left with none keeps its own list. */
 function narrowRecipe(recipe: CuratorRecipe, usable: ReadonlySet<string> | null): CuratorRecipe {
   if (usable === null) return recipe;
-  const wanted = recipe.featureNames ?? LEARNER_FEATURE_NAMES;
+  const wanted = recipe.featureNames ?? MARKET_LEARNER_FEATURE_NAMES;
   const kept = wanted.filter((f) => usable.has(f));
   if (kept.length === wanted.length || kept.length === 0) return recipe;
   return { ...recipe, featureNames: kept };
@@ -1520,7 +1524,9 @@ function rulesSeatResult(
   const teacher = pickRulesTeacher(cfg, pool);
   if (teacher !== null && pool.reference.length > 0) {
     const ranks = pool.foldRanks.get(teacher)!;
-    const featureNames = LEARNER_FEATURE_NAMES.filter((f) => pool.usable === null || pool.usable.has(f));
+    const featureNames = MARKET_LEARNER_FEATURE_NAMES.filter(
+      (f) => pool.usable === null || pool.usable.has(f),
+    );
     const conditions = distillRuleSet(pool.reference, ranks, featureNames);
     if (conditions) {
       const name = pool.names.get(teacher) ?? teacher;

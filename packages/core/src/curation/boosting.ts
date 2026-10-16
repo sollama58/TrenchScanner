@@ -1,4 +1,4 @@
-import { LEARNER_FEATURE_NAMES } from "./features.js";
+import { MARKET_LEARNER_FEATURE_NAMES } from "./features.js";
 import { isCurrentLabelRule, runDoublings, runWeight, TEN_X_MULTIPLE } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 
@@ -121,13 +121,19 @@ export interface BoostingOptions {
   /** Stop after this many trees without a validation improvement. */
   patience?: number;
   seed?: number;
+  /**
+   * Forests grown, each from its own seed, and averaged into the one shipped model (every tree
+   * kept, its values scaled by 1/n). Row and feature sampling make a single forest's top picks
+   * partly luck of the seed; the mean of a few is the same model with that luck averaged out.
+   */
+  bagSeeds?: number;
   /** Same meaning as TrainOptions.recencyHalfLifeDays in trainer.ts. */
   recencyHalfLifeDays?: number;
   /** Same meaning as TrainOptions.legacyLabelWeight in trainer.ts. */
   legacyLabelWeight?: number;
   /** Same meaning as TrainOptions.runWeightPerDoubling in trainer.ts. */
   runWeightPerDoubling?: number;
-  /** The inputs the forest may split on - see TrainOptions.featureNames. Omitted = LEARNER_FEATURE_NAMES. */
+  /** The inputs the forest may split on - see TrainOptions.featureNames. Omitted = MARKET_LEARNER_FEATURE_NAMES. */
   featureNames?: readonly string[];
   /**
    * A feature holding a log-odds to start every row from (LightGBM's init_score), logistic
@@ -157,6 +163,11 @@ export const DEFAULT_BOOSTING_OPTIONS: ResolvedBoostingOptions = {
   validationFraction: 0.2,
   patience: 30,
   seed: 1,
+  // 3 since 2026-10-16 (user decision; was 1). Offline on 21.8k rows from 10-05: a 10-seed bag of
+  // the default recipe picked the same top 20% hit rate as one forest (21.8% vs 21.3%, inside
+  // noise) with a third less spread between exam slices; deeper trees, more trees, CatBoost and
+  // other families did no better. Costs one forest's training time per seed.
+  bagSeeds: 3,
 };
 
 /** Fewest validation rows (and validation wins) early stopping needs to mean anything. */
@@ -811,6 +822,7 @@ export function leafOfBinned(
  * out of the fitting half, since hourly samples of one token are near-duplicates and would make
  * the holdout flatter the forest into growing too long. The forest is then refit on every row
  * with that many trees. With too little data to hold out, a fixed conservative count is used.
+ * All of that runs once per bagSeeds seed and the forests are averaged into one model.
  */
 export async function trainBoostedCurator(
   rows: BoostingRow[],
@@ -818,7 +830,7 @@ export async function trainBoostedCurator(
 ): Promise<Omit<BoostedCuratorParams, "threshold">> {
   if (rows.length === 0) throw new Error("cannot train on zero rows");
   const opts = { ...DEFAULT_BOOSTING_OPTIONS, ...stripUndefined(options) };
-  const featureNames = [...(options.featureNames ?? LEARNER_FEATURE_NAMES)];
+  const featureNames = [...(options.featureNames ?? MARKET_LEARNER_FEATURE_NAMES)];
   const offsetInput = options.offsetInput;
   if (offsetInput !== undefined && opts.objective !== "logistic") {
     throw new Error("a starting log-odds (offsetInput) needs the logistic objective");
@@ -831,41 +843,53 @@ export async function trainBoostedCurator(
   const fit = sorted.slice(0, cut).filter((r) => r.tokenId === undefined || !validTokens.has(r.tokenId));
   const validWins = valid.filter((r) => r.labelValue > 0).length;
 
-  // On a given log-odds, too little data to hold out means no evidence the trees improve on it.
-  let treeCount = offsetInput !== undefined ? 0 : FALLBACK_TREES;
-  if (
-    valid.length >= MIN_VALIDATION_ROWS &&
-    validWins >= MIN_VALIDATION_WINS &&
-    fit.length >= MIN_VALIDATION_ROWS
-  ) {
-    const probe = await boost(
-      fit,
-      valid,
-      opts.maxTrees,
-      opts,
+  const grow = async (seedOpts: ResolvedBoostingOptions) => {
+    // On a given log-odds, too little data to hold out means no evidence the trees improve on it.
+    let treeCount = offsetInput !== undefined ? 0 : FALLBACK_TREES;
+    if (
+      valid.length >= MIN_VALIDATION_ROWS &&
+      validWins >= MIN_VALIDATION_WINS &&
+      fit.length >= MIN_VALIDATION_ROWS
+    ) {
+      const probe = await boost(
+        fit,
+        valid,
+        opts.maxTrees,
+        seedOpts,
+        options.recencyHalfLifeDays,
+        options.legacyLabelWeight,
+        options.runWeightPerDoubling,
+        featureNames,
+        offsetInput,
+      );
+      // At least a handful: a forest that "stops" at 1-2 trees is barely more than the base rate.
+      // On a given log-odds that start is the point, so as few as none are kept.
+      treeCount = offsetInput !== undefined ? probe.bestTrees : Math.max(10, probe.bestTrees);
+    }
+    const final = await boost(
+      sorted,
+      [],
+      treeCount,
+      seedOpts,
       options.recencyHalfLifeDays,
       options.legacyLabelWeight,
       options.runWeightPerDoubling,
       featureNames,
       offsetInput,
     );
-    // At least a handful: a forest that "stops" at 1-2 trees is barely more than the base rate.
-    // On a given log-odds that start is the point, so as few as none are kept.
-    treeCount = offsetInput !== undefined ? probe.bestTrees : Math.max(10, probe.bestTrees);
-  }
-  const final = await boost(
-    sorted,
-    [],
-    treeCount,
-    opts,
-    options.recencyHalfLifeDays,
-    options.legacyLabelWeight,
-    options.runWeightPerDoubling,
-    featureNames,
-    offsetInput,
-  );
-  let baseScore = final.baseScore;
-  let trees = final.trees;
+    return final;
+  };
+  const bags = Math.max(1, Math.round(opts.bagSeeds));
+  const grown: Awaited<ReturnType<typeof grow>>[] = [];
+  // Seeds far apart in mulberry32's input so the bags' row and feature draws share nothing.
+  for (let b = 0; b < bags; b++) grown.push(await grow({ ...opts, seed: opts.seed + b * 7919 }));
+  const final = grown[0]!;
+  const k = 1 / bags;
+  let baseScore = grown.reduce((sum, g) => sum + g.baseScore, 0) * k;
+  let trees =
+    bags === 1
+      ? final.trees
+      : grown.flatMap((g) => g.trees.map((t) => ({ ...t, value: t.value.map((v) => v * k) })));
   if (opts.objective !== "logistic") {
     // The sum of the trees is an ordering, not a log-odds: map it onto the clean-2x label. The
     // final fit already binned exactly these rows, so its bins are reused rather than rebuilt.

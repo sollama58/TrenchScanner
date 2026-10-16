@@ -295,6 +295,32 @@ describe("boosting from a given log-odds (offsetInput)", () => {
   });
 });
 
+describe("seed bagging", () => {
+  it("ships the mean of one forest per seed, the first being the single-seed forest", async () => {
+    const rows = interactionRows(800, 3);
+    const one = await trainBoostedCurator(rows, { seed: 1, bagSeeds: 1 });
+    const second = await trainBoostedCurator(rows, { seed: 1 + 7919, bagSeeds: 1 });
+    const bagged = await trainBoostedCurator(rows, { seed: 1, bagSeeds: 2 });
+    expect(bagged.trees.length).toBe(one.trees.length + second.trees.length);
+    const logit = (p: number) => Math.log(p / (1 - p));
+    for (const row of interactionRows(20, 9)) {
+      expect(logit(scoreBoosted(bagged, row.features))).toBeCloseTo(
+        (logit(scoreBoosted(one, row.features)) + logit(scoreBoosted(second, row.features))) / 2,
+        9,
+      );
+    }
+  });
+
+  it("bags three seeds by default", async () => {
+    const rows = interactionRows(800, 3);
+    const [a, b, c] = await Promise.all(
+      [1, 1 + 7919, 1 + 2 * 7919].map((seed) => trainBoostedCurator(rows, { seed, bagSeeds: 1 })),
+    );
+    const bagged = await trainBoostedCurator(rows);
+    expect(bagged.trees.length).toBe(a!.trees.length + b!.trees.length + c!.trees.length);
+  });
+});
+
 describe("averageBoosted", () => {
   it("scores the mean of the models' log-odds and explains as their mean", async () => {
     const a = await trainBoostedCurator(interactionRows(800, 3), { seed: 1 });

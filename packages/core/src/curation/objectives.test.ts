@@ -31,7 +31,7 @@ function runRows(count: number, seed: number): BoostingRow[] {
     rows.push({
       tokenId: `t${i}`,
       anchorAt: new Date(T0 + i * 20_000),
-      features: { buyRatio24h: edge, volume1hUsd: fuel * 10_000, ageMinutes: rand() * 300 },
+      features: { buyRatio24h: edge, volume24hUsd: fuel * 10_000, ageMinutes: rand() * 300 },
       labelValue: win ? Math.log2(Math.min(multiple, 10)) : 0,
       runPeakMultiple: multiple,
       hit10x: multiple >= 10,
@@ -68,7 +68,7 @@ function corr(a: number[], b: number[]): number {
   return sab / Math.sqrt(saa * sbb);
 }
 /** The "fuel" signal: how far a winner runs, read back from the volume feature. */
-const fuel = (r: BoostingRow) => r.features.volume1hUsd! / 10_000;
+const fuel = (r: BoostingRow) => r.features.volume24hUsd! / 10_000;
 
 describe("boosting objectives", () => {
   it("the run-size objective ranks the big runners above the sure doubles", async () => {
