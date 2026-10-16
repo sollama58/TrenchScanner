@@ -257,6 +257,7 @@ function useKols(
                 : [],
             ),
             transfers ? graph.transferLinks : [],
+            transfers ? graph.fundingClusters : undefined,
           )
         : [],
     [graph, groups, names, transfers],
@@ -1829,15 +1830,17 @@ export function BubbleMapSection({
     () => (snapshot && !showTransfers ? withoutTransfers(snapshot) : snapshot),
     [snapshot, showTransfers],
   );
-  const graph = useMemo(
-    () =>
-      shown
-        ? layoutGraph(
-            buildGraph(withWideMap(shown, showTransfers ? wide : wideWithoutTransfers(wide)), flagged),
-          )
-        : null,
-    [shown, wide, showTransfers, flagged],
-  );
+  const graph = useMemo(() => {
+    if (!shown) return null;
+    const drawn = layoutGraph(
+      buildGraph(withWideMap(shown, showTransfers ? wide : wideWithoutTransfers(wide)), flagged),
+    );
+    if (!showTransfers || !snapshot) return drawn;
+    // The clusters funding alone forms, for each KOL's step out (user decision 2026-10-16: a send
+    // into a KOL's bundle doesn't pull the sender in).
+    const funding = withWideMap(withoutTransfers(snapshot), wideWithoutTransfers(wide)).linkedClusters;
+    return funding ? { ...drawn, fundingClusters: funding } : drawn;
+  }, [shown, snapshot, wide, showTransfers, flagged]);
   const nameToggle = useNameToggle(graph, useGraphNames(graph));
   const names = nameToggle.mapNames;
   const { showCex, setCexOn } = useCexToggle(graph);

@@ -89,6 +89,15 @@ describe("transfers out of a KOL's bundle", () => {
     ];
     expect(kolBundledPct({ holders, clusters, sameTimeClusters, isKol, ties, transfers })).toBe(4);
   });
+  it("leaves out a wallet that sent into the bundle, stepping out by funding alone", () => {
+    // x sent side the coin: the transfer joined them in one cluster, funding alone did not.
+    const counted = [...clusters, { wallets: [{ wallet: "side" }, { wallet: "x" }] }];
+    const input = { holders, clusters: counted, sameTimeClusters, isKol, ties };
+    expect(kolBundledPct(input)).toBe(8);
+    expect(kolBundledPct({ ...input, kolClusters: clusters })).toBe(4);
+    // Still linked in Bundled %, the holders linked by any means.
+    expect(bundledSupply({ ...input, kolClusters: clusters }).pct).toBe(10);
+  });
   it("makes a lone KOL that sent supply out a bundle", () => {
     const transfers = [{ from: "kol", to: "min", pct: 0.3 }];
     expect(kolBundledPct({ holders, clusters, sameTimeClusters, isKol, ties: [], transfers })).toBe(2.3);

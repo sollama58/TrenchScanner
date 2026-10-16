@@ -470,6 +470,11 @@ export interface BubbleGraph {
   cexPct: number | null;
   /** Transfers between holders on the map, sender to receiver (drawn only, never counted in Linked). */
   transferLinks: TransferLink[];
+  /**
+   * The clusters funding alone forms, where transfers changed the drawn ones: what a KOL's bundle
+   * steps out through (kolControl's kolClusters). Absent: the drawn clusters stand for them.
+   */
+  fundingClusters?: Cluster[];
   /** Transferred Supply %: the coin moved holder to holder among the top 25, as read; null when not read. */
   transferPct: number | null;
   /** How many of the top holders sent or got a transfer, of how many were checked; null when not read. */
@@ -1016,13 +1021,25 @@ export interface KolControl {
  * `kols`: holders named as KOLs, for KOLs on the map with no side wallets. Largest share first.
  * `transfers`: the map's holder-to-holder transfers, when shown: a holder the KOL or any wallet in
  * its bundle sent the coin to joins the bundle, and on from there (user decision 2026-10-16).
+ * `kolClusters`: the clusters funding alone forms, for the step out by funder, so a wallet that
+ * sent the coin into a bundle (often bait) isn't pulled in by the transfer (user decision
+ * 2026-10-16); absent, the map's own clusters.
  */
 export function kolControl(
   graph: Pick<BubbleGraph, "nodes">,
   groups: readonly SideGroup[],
   kols: readonly { wallet: string; name: string | null }[] = [],
   transfers: readonly Pick<TransferLink, "from" | "to" | "pct">[] = [],
+  kolClusters?: readonly Pick<Cluster, "wallets">[],
 ): KolControl[] {
+  // Each holder's funder cluster for the step out: funding alone where given.
+  const clusterOf = new Map<string, number>();
+  if (kolClusters)
+    kolClusters.forEach((c, i) => {
+      for (const w of c?.wallets ?? []) if (!clusterOf.has(w.wallet)) clusterOf.set(w.wallet, i);
+    });
+  const clusterIn = (n: MapNode): number | null =>
+    kolClusters ? (n.wallet ? (clusterOf.get(n.wallet) ?? null) : null) : n.cluster;
   const holders = new Map(
     graph.nodes.flatMap((n) => (n.kind === "holder" && n.wallet ? [[n.wallet, n] as const] : [])),
   );
@@ -1057,7 +1074,8 @@ export function kolControl(
       const n = holders.get(w)!;
       for (const o of holders.values()) {
         if (!o.wallet || tie.has(o.wallet)) continue;
-        if (n.cluster !== null && o.cluster === n.cluster) tie.set(o.wallet, "cluster");
+        const c = clusterIn(n);
+        if (c !== null && clusterIn(o) === c) tie.set(o.wallet, "cluster");
         else if (n.sameTime !== null && o.sameTime === n.sameTime) tie.set(o.wallet, "same-minute");
       }
     }
