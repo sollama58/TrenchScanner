@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { LoadingNote, SkelValue } from "./Loading";
 import type { Snapshot, Token } from "../api";
 import { cachedGet } from "../cache";
 import { pct, tokenLabel } from "../format";
@@ -1388,11 +1389,76 @@ function NodeDetail({
  * The bubble map inside the token modal, for the reading the card shows, with Share. Says so when
  * no scan has read the coin's holders.
  */
+/** Faint bubbles where the map will draw, sized and placed by hand. */
+const PLACEHOLDER_BUBBLES: [number, number, number][] = [
+  [50, 48, 15],
+  [27, 32, 9],
+  [72, 30, 8],
+  [76, 66, 10],
+  [30, 70, 7],
+  [14, 52, 4.5],
+  [88, 46, 4],
+  [58, 80, 5],
+  [42, 18, 4],
+  [62, 14, 3.5],
+];
+
+/**
+ * The bubble map's place while its reading loads or is being taken (user ask 2026-10-16): the
+ * card at the map's own size, with faint bubbles and what is being read.
+ */
+export function BubbleMapPlaceholder({ children }: { children: ReactNode }) {
+  return (
+    <section className="sage-card bm-section bm-loading" aria-busy="true">
+      <h4>
+        <BubblesIcon size={14} /> Bubble map
+      </h4>
+      {/* The map's own tiles and stage, so the reading fills in at the same size and place. */}
+      <dl className="bm-stats" style={{ "--bm-cols": 3 } as React.CSSProperties} aria-hidden="true">
+        {["Linked", "KOL Bundled", "CEX-funded"].map((l) => (
+          <div key={l}>
+            <dt>{l}</dt>
+            <dd>
+              <SkelValue width="3.4em" />
+            </dd>
+          </div>
+        ))}
+        <div className="bm-traits-stat">
+          <dt>Wallet types</dt>
+          <dd>
+            <ul className="bm-wt-list">
+              {[0, 1, 2, 3].map((i) => (
+                <li key={i} className="bm-wt bm-wt-skel">
+                  <span className="skeleton" />
+                </li>
+              ))}
+            </ul>
+          </dd>
+        </div>
+      </dl>
+      <div className="bm-stage compact bm-loading-stage">
+        <svg className="bm-svg bm-loading-art" viewBox="0 0 100 100" aria-hidden="true">
+          {PLACEHOLDER_BUBBLES.map(([x, y, r], i) => (
+            <circle key={i} cx={x} cy={y} r={r} style={{ animationDelay: `${(i % 5) * 0.18}s` }} />
+          ))}
+        </svg>
+        <LoadingNote
+          className="bm-loading-note"
+          slow="Still reading the holders: a coin with many holders takes longer."
+        >
+          {children}
+        </LoadingNote>
+      </div>
+    </section>
+  );
+}
+
 export function BubbleMapSection({
   token,
   snapshot,
   moment,
   wide: chosenWide,
+  pending = false,
 }: {
   token: Token;
   /** The reading to draw; undefined while it loads. */
@@ -1404,6 +1470,8 @@ export function BubbleMapSection({
    * for none. Absent: the coin's live one.
    */
   wide?: WideMap | null;
+  /** A fresh scan is reading the holders now: an empty reading means "on its way", not "none". */
+  pending?: boolean;
 }) {
   const [flagged, setFlagged] = useState<FlaggedHolder[]>([]);
   const [flagsFor, setFlagsFor] = useState<{ mint: string; read: FlagsRead } | null>(null);
@@ -1435,6 +1503,13 @@ export function BubbleMapSection({
   const kols = useKols(graph, side.groups, names);
   const label = tokenLabel(token);
   if (!graph || !graph.nodes.some((n) => n.kind === "holder")) {
+    // Still on its way: the map's place is held at its size, so it fills in without a jump.
+    if (snapshot === undefined || pending)
+      return (
+        <BubbleMapPlaceholder>
+          {pending ? "Reading the top holders and how they're linked…" : "Loading the top holders…"}
+        </BubbleMapPlaceholder>
+      );
     // Every token view shows the map (user ask 2026-10-13); a coin no scan read holders for says so.
     return (
       <section className="sage-card bm-section bm-empty">
@@ -1442,9 +1517,8 @@ export function BubbleMapSection({
           <BubblesIcon size={14} /> Bubble map
         </h4>
         <p className="muted small">
-          {snapshot === undefined
-            ? "Loading the top holders…"
-            : "No holder list for this coin yet: no scan of it has read its top holders. The map and the top holders fill in once one does."}
+          No holder list for this coin yet: no scan of it has read its top holders. The map and the top
+          holders fill in once one does.
         </p>
       </section>
     );
