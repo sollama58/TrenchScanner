@@ -18,6 +18,7 @@ export type HeartbeatJob =
   | "ai-judge"
   | "champion-refresh"
   | "model-backup"
+  | "db-dump"
   | "score-weights"
   | "lighthouse-rollup"
   | "label-regrade"
@@ -65,6 +66,10 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "ai-judge": "trainer",
   "champion-refresh": "trainer",
   "model-backup": "trainer",
+  // Not a worker job: the nightly full dump runs as its own Render cron (scripts/db-backup) and
+  // writes this row itself. Counted with the trainer's batch jobs so pipeline-watch tells the
+  // admins when a night's dump fails or stops coming, and the admin panel lists it beside them.
+  "db-dump": "trainer",
   "score-weights": "trainer",
   "lighthouse-rollup": "trainer",
   "label-regrade": "trainer",

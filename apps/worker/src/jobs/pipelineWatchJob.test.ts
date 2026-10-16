@@ -157,6 +157,24 @@ describe("pipeline watch: the trainer's jobs", () => {
     expect(problems[0]!.text).toBe("Trainer job outcome-tracking: no run for 30 h");
   });
 
+  it("watches the nightly full dump's own cron like a daily trainer job", () => {
+    expect(TRAINER_JOBS).toContain("db-dump");
+    // The row backup.sh writes: daily at 02, so a missed night is told a day and three hours on.
+    const night = (agoMs: number, extra: Partial<TrainerJobCheck> = {}) =>
+      trainer("db-dump", agoMs, { dailyAtHourUtc: 2 }, extra);
+    expect(findTrainerProblems([night(20 * HOUR)], NOW)).toEqual([]);
+    expect(findTrainerProblems([night(28 * HOUR)], NOW).map((p) => p.key)).toEqual(["job:db-dump"]);
+    const failed = night(10 * MIN, {
+      lastSuccessAt: new Date(NOW - 24 * HOUR),
+      lastError: "db-dump failed while dumping (exit 1); see the cron's log on Render",
+    });
+    expect(findTrainerProblems([failed], NOW)[0]!.text).toBe(
+      "Trainer job db-dump: last run failed: db-dump failed while dumping (exit 1); see the cron's log on Render",
+    );
+    // Before the cron has ever run (no bucket yet), there is no row and nothing to tell.
+    expect(findTrainerProblems([{ ...night(0), lastRunAt: null, lastSuccessAt: null }], NOW)).toEqual([]);
+  });
+
   it("takes a skipped run (the AI judge with no key) as the job being alive", () => {
     expect(findTrainerProblems([trainer("ai-judge", 10 * MIN, { intervalMs: 10 * MIN })], NOW)).toEqual([]);
   });
