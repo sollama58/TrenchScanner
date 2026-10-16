@@ -232,8 +232,17 @@ export async function loadLabeledSides(): Promise<LabeledSide[]> {
  * strongest label names another KOL is left to that KOL, as in the export.
  */
 export async function loadKolLabeledSides(wallet: string): Promise<LabeledSide[]> {
+  const read = await readKolGroupSides(wallet);
+  if (!read) return [];
+  return numberLabeledSides(read.sides).filter((s) => s.kolWallet === read.main);
+}
+
+/** A KOL's group (its main wallet and Known Sides) and every label any of them earned, keyed by wallet. */
+async function readKolGroupSides(
+  wallet: string,
+): Promise<{ main: string; sides: Record<string, PossibleSide[]> } | null> {
   const own = await prisma.kolWallet.findUnique({ where: { wallet }, select: { mainWallet: true } });
-  if (!own) return [];
+  if (!own) return null;
   const main = own.mainWallet ?? wallet;
   const known = await prisma.kolWallet.findMany({ where: { mainWallet: main }, select: { wallet: true } });
   const group = [main, ...known.map((k) => k.wallet).filter((w) => w !== main)];
@@ -249,5 +258,63 @@ export async function loadKolLabeledSides(wallet: string): Promise<LabeledSide[]
     ...funded.map((r) => r.wallet),
     ...possible.map((r) => r.wallet),
   ];
-  return numberLabeledSides(await loadPossibleSides(wallets)).filter((s) => s.kolWallet === main);
+  return { main, sides: await loadPossibleSides(wallets) };
+}
+
+/** A wallet carrying a label for one KOL, as the Side Wallet Checker pins it above the KOL's list. */
+export interface KolSideLabel {
+  wallet: string;
+  kind: LabeledSide["kind"];
+  /** % shared on the tier that earned it; 100 on a Known Side; 0 when transfers or funding alone did. */
+  pct: number;
+  /** The tier's span: 24, 48 or 72 hours; 0 on a Known Side or a funded-only entry. */
+  hours: number;
+  /** Transfers with the KOL that earned (or helped earn) the label; absent when none. */
+  transfers?: number;
+  /** Its name in the export ("Cupsey_2"), or null when its strongest label is another KOL's. */
+  name: string | null;
+}
+
+/**
+ * Every wallet labeled for this KOL (user ask 2026-10-16: pinned above the KOL's side-wallet list
+ * whatever the window): its Known Sides, the wallets it funded and its Possible Sides, buying or
+ * transfers. Unlike the export, a wallet whose strongest label names another KOL is kept too: it
+ * is labeled for this one as well. Known Sides first, then funded, then by % shared and transfers.
+ * `wallet` itself is left out (a Known Side's list is its KOL's labels less itself).
+ */
+export async function loadKolSideLabels(wallet: string): Promise<KolSideLabel[]> {
+  const read = await readKolGroupSides(wallet);
+  if (!read) return [];
+  return kolSideLabels(wallet, read.main, read.sides, numberLabeledSides(read.sides));
+}
+
+/** loadKolSideLabels' pure half. Exported for tests. */
+export function kolSideLabels(
+  wallet: string,
+  main: string,
+  sides: Record<string, PossibleSide[]>,
+  numbered: readonly LabeledSide[],
+): KolSideLabel[] {
+  const names = new Map(numbered.filter((n) => n.kolWallet === main).map((n) => [n.wallet, n.name]));
+  const out: KolSideLabel[] = [];
+  for (const [w, entries] of Object.entries(sides)) {
+    if (w === wallet) continue;
+    const s = entries.find((e) => e.kolWallet === main);
+    if (!s) continue;
+    out.push({
+      wallet: w,
+      kind: kindOf(s),
+      pct: s.pct,
+      hours: s.hours,
+      ...(s.transfers ? { transfers: s.transfers } : {}),
+      name: names.get(w) ?? null,
+    });
+  }
+  return out.sort(
+    (a, b) =>
+      KIND_RANK[a.kind] - KIND_RANK[b.kind] ||
+      b.pct - a.pct ||
+      (b.transfers ?? 0) - (a.transfers ?? 0) ||
+      (a.wallet < b.wallet ? -1 : 1),
+  );
 }

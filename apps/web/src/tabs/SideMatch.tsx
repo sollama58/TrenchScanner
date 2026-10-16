@@ -4,7 +4,7 @@ import { shortAddress } from "../format";
 import { TokenImage } from "../components/TokenImage";
 import { openWallet } from "../walletModal";
 import { Skeleton } from "../components/Charts";
-import { ExternalIcon, LinkIcon } from "../components/Icons";
+import { ExternalIcon, LinkIcon, TransferIcon } from "../components/Icons";
 
 type SideWindow = "24h" | "7d" | "30d";
 
@@ -64,7 +64,41 @@ export interface SideMatchData {
     sellGapSec: number | null;
   }[];
   truncated: boolean;
+  /**
+   * The coins moved between the two in the window, newest first (user ask 2026-10-16): "out" the KOL
+   * sent, "in" the wallet sent. Absent from older API builds.
+   */
+  transfers?: PairTransfer[];
+  transfersTruncated?: boolean;
 }
+
+/** Mirrors PairTransfer in apps/api/src/sideTransfers.ts. */
+export interface PairTransfer {
+  signature: string;
+  at: string;
+  direction: "out" | "in";
+  mint: string;
+  symbol: string | null;
+  name: string | null;
+  imageUrl: string | null;
+  pct: number;
+}
+
+/** The transfers' headline and the line under it: "3 transfers", "KOL sent 2 · wallet sent 1". Exported for tests. */
+export function transferSummary(transfers: readonly Pick<PairTransfer, "direction">[]): {
+  text: string;
+  detail: string;
+} {
+  if (transfers.length === 0) return { text: "No coins moved", detail: "Between the two, in the window" };
+  const out = transfers.filter((t) => t.direction === "out").length;
+  return {
+    text: `${transfers.length} transfer${transfers.length === 1 ? "" : "s"}`,
+    detail: `KOL sent ${out} · wallet sent ${transfers.length - out}`,
+  };
+}
+
+const supplyPct = (pct: number) =>
+  `${pct.toLocaleString("en-US", { maximumFractionDigits: pct >= 1 ? 1 : 2 })}%`;
 
 /** "12s", "2m 5s", "1h 4m": a duration in words. Exported for tests. */
 export function span(sec: number): string {
@@ -194,6 +228,8 @@ export function SideMatch({
     );
   const s = data.summary;
   const verdict = fundingVerdict(data);
+  const transfers = data.transfers ?? [];
+  const moved = transferSummary(transfers);
   return (
     <div className="sm-body">
       <div className="sm-signals">
@@ -204,6 +240,13 @@ export function SideMatch({
           </strong>
           <FunderLine who={kolName} f={data.kol.funding} onOpen={onOpen} />
           <FunderLine who="Wallet" f={data.side.funding} onOpen={onOpen} />
+        </div>
+        <div className={`sm-signal sm-funding ${transfers.length > 0 ? "strong" : "none"}`}>
+          <span className="sm-label">Transfers</span>
+          <strong className="num">
+            {transfers.length > 0 && <TransferIcon size={13} />} {moved.text}
+          </strong>
+          <span className="small faint num">{moved.detail}</span>
         </div>
         <div className="sm-signal">
           <span className="sm-label">Buy order</span>
@@ -252,6 +295,10 @@ export function SideMatch({
             <strong>Selling together</strong> and steady sizing (the same fraction of the KOL&apos;s buy) fit
             one person splitting a position.
           </li>
+          <li>
+            <strong>Coins moving between them</strong>, again and again over a few days, fits one owner
+            shifting bags between wallets. One transfer can be a gift or a sale.
+          </li>
           <li>Launch snipes and fast exits on both legs point to a bot rather than a person.</li>
         </ul>
       </details>
@@ -260,115 +307,170 @@ export function SideMatch({
         first bought within {data.gapMinutes} minutes, newest first{data.truncated ? " (the newest 200)" : ""}
         .
       </p>
-      <div className="sm-table" role="table" aria-label={`Coins ${kolName} and this wallet bought together`}>
-        <div className="sm-row sm-headrow faint small" role="row">
-          <span role="columnheader">Coin</span>
-          <span role="columnheader">Bought</span>
-          <span role="columnheader" className="num">
-            SOL in
-          </span>
-          <span role="columnheader">First sell</span>
-          <span role="columnheader" className="num">
-            P&amp;L
-          </span>
+      {data.trades.length > 0 && (
+        <div
+          className="sm-table"
+          role="table"
+          aria-label={`Coins ${kolName} and this wallet bought together`}
+        >
+          <div className="sm-row sm-headrow faint small" role="row">
+            <span role="columnheader">Coin</span>
+            <span role="columnheader">Bought</span>
+            <span role="columnheader" className="num">
+              SOL in
+            </span>
+            <span role="columnheader">First sell</span>
+            <span role="columnheader" className="num">
+              P&amp;L
+            </span>
+          </div>
+          {data.trades.map((t) => {
+            const kRoles = roles(t.kol);
+            const sRoles = roles(t.side);
+            return (
+              <div key={t.mint} className="sm-row" role="row">
+                <span className="sm-coin" role="cell">
+                  <TokenImage
+                    url={t.imageUrl}
+                    size={48}
+                    width={24}
+                    height={24}
+                    fallback={<span className="sm-coin-dot" aria-hidden="true" />}
+                  />
+                  <span className="sm-coin-text">
+                    <a
+                      href={`https://dexscreener.com/solana/${t.mint}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={`${t.name ?? t.mint} on DexScreener`}
+                    >
+                      {t.symbol ? `$${t.symbol}` : shortAddress(t.mint)} <ExternalIcon size={11} />
+                    </a>
+                    <span className="faint small">{when(t.kol.firstBuyAt)}</span>
+                  </span>
+                </span>
+                <span className="sm-legs" role="cell" data-label="Bought">
+                  <span className="faint">KOL</span>
+                  <span className="num">
+                    {new Date(t.kol.firstBuyAt).toLocaleTimeString("en-US", { hour12: false })}
+                  </span>
+                  <span className="faint">Wallet</span>
+                  <span className={`num sm-gap ${t.gapSec < -1 ? "before" : ""}`}>{offset(t.gapSec)}</span>
+                </span>
+                <span className="sm-legs num" role="cell" data-label="SOL in">
+                  <span className="faint">KOL</span>
+                  <span>
+                    {sol(t.kol.solIn)}
+                    {t.kol.buys > 1 && <span className="faint"> · {t.kol.buys} buys</span>}
+                  </span>
+                  <span className="faint">Wallet</span>
+                  <span>
+                    {sol(t.side.solIn)}
+                    {t.side.buys > 1 && <span className="faint"> · {t.side.buys} buys</span>}
+                  </span>
+                </span>
+                <span className="sm-legs" role="cell" data-label="First sell">
+                  <span className="faint">KOL</span>
+                  <span className="num">
+                    {t.kol.firstSellAt
+                      ? `${span((Date.parse(t.kol.firstSellAt) - Date.parse(t.kol.firstBuyAt)) / 1000)} held`
+                      : "holding"}
+                  </span>
+                  <span className="faint">Wallet</span>
+                  <span className="num">
+                    {t.sellGapSec != null ? (
+                      <span className={Math.abs(t.sellGapSec) <= 300 ? "sm-together" : undefined}>
+                        sold {offset(t.sellGapSec)}
+                      </span>
+                    ) : t.side.firstSellAt ? (
+                      `${span((Date.parse(t.side.firstSellAt) - Date.parse(t.side.firstBuyAt)) / 1000)} held`
+                    ) : (
+                      "holding"
+                    )}
+                  </span>
+                </span>
+                <span className="sm-legs num sm-pnl" role="cell" data-label="P&L">
+                  <span className="faint">KOL</span>
+                  <span className={t.kol.solOut - t.kol.solIn >= 0 ? "up" : "down"}>
+                    {signedSol(t.kol.solOut - t.kol.solIn)}
+                  </span>
+                  <span className="faint">Wallet</span>
+                  <span className={t.side.solOut - t.side.solIn >= 0 ? "up" : "down"}>
+                    {signedSol(t.side.solOut - t.side.solIn)}
+                  </span>
+                </span>
+                {(kRoles.length > 0 || sRoles.length > 0) && (
+                  <span className="sm-roles small" role="cell">
+                    {kRoles.map((r) => (
+                      <span key={`k${r}`} className="pill">
+                        KOL · {r}
+                      </span>
+                    ))}
+                    {sRoles.map((r) => (
+                      <span key={`s${r}`} className="pill">
+                        Wallet · {r}
+                      </span>
+                    ))}
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
-        {data.trades.map((t) => {
-          const kRoles = roles(t.kol);
-          const sRoles = roles(t.side);
-          return (
-            <div key={t.mint} className="sm-row" role="row">
-              <span className="sm-coin" role="cell">
-                <TokenImage
-                  url={t.imageUrl}
-                  size={48}
-                  width={24}
-                  height={24}
-                  fallback={<span className="sm-coin-dot" aria-hidden="true" />}
-                />
-                <span className="sm-coin-text">
+      )}
+      {transfers.length > 0 && (
+        <>
+          <p className="faint small sm-caption">
+            {transfers.length} coin transfer{transfers.length === 1 ? "" : "s"} between {kolName} and this
+            wallet in the last {data.window}, newest first{data.transfersTruncated ? " (the newest 100)" : ""}
+            . Dust and exchange hops aren&apos;t counted.
+          </p>
+          <ul className="sm-transfers" aria-label={`Coins moved between ${kolName} and this wallet`}>
+            {transfers.map((t) => (
+              <li key={`${t.signature}-${t.direction}`} className="sm-transfer">
+                <span className="sm-coin">
+                  <TokenImage
+                    url={t.imageUrl}
+                    size={48}
+                    width={22}
+                    height={22}
+                    fallback={<span className="sm-coin-dot" aria-hidden="true" />}
+                  />
                   <a
                     href={`https://dexscreener.com/solana/${t.mint}`}
                     target="_blank"
                     rel="noreferrer"
                     title={`${t.name ?? t.mint} on DexScreener`}
                   >
-                    {t.symbol ? `$${t.symbol}` : shortAddress(t.mint)} <ExternalIcon size={11} />
+                    {t.symbol ? `$${t.symbol}` : shortAddress(t.mint)}
                   </a>
-                  <span className="faint small">{when(t.kol.firstBuyAt)}</span>
                 </span>
-              </span>
-              <span className="sm-legs" role="cell" data-label="Bought">
-                <span className="faint">KOL</span>
-                <span className="num">
-                  {new Date(t.kol.firstBuyAt).toLocaleTimeString("en-US", { hour12: false })}
+                <span className={`sm-direction small ${t.direction}`}>
+                  {t.direction === "out" ? "KOL → wallet" : "Wallet → KOL"}
                 </span>
-                <span className="faint">Wallet</span>
-                <span className={`num sm-gap ${t.gapSec < -1 ? "before" : ""}`}>{offset(t.gapSec)}</span>
-              </span>
-              <span className="sm-legs num" role="cell" data-label="SOL in">
-                <span className="faint">KOL</span>
-                <span>
-                  {sol(t.kol.solIn)}
-                  {t.kol.buys > 1 && <span className="faint"> · {t.kol.buys} buys</span>}
+                <span className="num small" title="Share of the coin's supply it moved">
+                  {supplyPct(t.pct)}
                 </span>
-                <span className="faint">Wallet</span>
-                <span>
-                  {sol(t.side.solIn)}
-                  {t.side.buys > 1 && <span className="faint"> · {t.side.buys} buys</span>}
-                </span>
-              </span>
-              <span className="sm-legs" role="cell" data-label="First sell">
-                <span className="faint">KOL</span>
-                <span className="num">
-                  {t.kol.firstSellAt
-                    ? `${span((Date.parse(t.kol.firstSellAt) - Date.parse(t.kol.firstBuyAt)) / 1000)} held`
-                    : "holding"}
-                </span>
-                <span className="faint">Wallet</span>
-                <span className="num">
-                  {t.sellGapSec != null ? (
-                    <span className={Math.abs(t.sellGapSec) <= 300 ? "sm-together" : undefined}>
-                      sold {offset(t.sellGapSec)}
-                    </span>
-                  ) : t.side.firstSellAt ? (
-                    `${span((Date.parse(t.side.firstSellAt) - Date.parse(t.side.firstBuyAt)) / 1000)} held`
-                  ) : (
-                    "holding"
-                  )}
-                </span>
-              </span>
-              <span className="sm-legs num sm-pnl" role="cell" data-label="P&L">
-                <span className="faint">KOL</span>
-                <span className={t.kol.solOut - t.kol.solIn >= 0 ? "up" : "down"}>
-                  {signedSol(t.kol.solOut - t.kol.solIn)}
-                </span>
-                <span className="faint">Wallet</span>
-                <span className={t.side.solOut - t.side.solIn >= 0 ? "up" : "down"}>
-                  {signedSol(t.side.solOut - t.side.solIn)}
-                </span>
-              </span>
-              {(kRoles.length > 0 || sRoles.length > 0) && (
-                <span className="sm-roles small" role="cell">
-                  {kRoles.map((r) => (
-                    <span key={`k${r}`} className="pill">
-                      KOL · {r}
-                    </span>
-                  ))}
-                  {sRoles.map((r) => (
-                    <span key={`s${r}`} className="pill">
-                      Wallet · {r}
-                    </span>
-                  ))}
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <p className="faint small sm-caption">
-        P&amp;L is SOL out minus SOL in on that coin from the trades we read; an open position shows only what
-        it spent.
-      </p>
+                <a
+                  className="faint small sm-transfer-at"
+                  href={`https://solscan.io/tx/${t.signature}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Open the transaction on Solscan"
+                >
+                  {when(t.at)} <ExternalIcon size={11} />
+                </a>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {data.trades.length > 0 && (
+        <p className="faint small sm-caption">
+          P&amp;L is SOL out minus SOL in on that coin from the trades we read; an open position shows only
+          what it spent.
+        </p>
+      )}
     </div>
   );
 }

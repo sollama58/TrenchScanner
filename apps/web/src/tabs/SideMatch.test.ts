@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fundingVerdict, span } from "./SideMatch";
+import { fundingVerdict, span, transferSummary } from "./SideMatch";
 
 describe("SideMatch", () => {
   it("writes durations in words", () => {
@@ -26,5 +26,15 @@ describe("SideMatch", () => {
     expect(fundingVerdict({ ...base, side: { wallet: "s", funding: null }, fundingLink: null }).text).toBe(
       "Funders not read yet",
     );
+  });
+});
+
+describe("transferSummary", () => {
+  it("counts each way", () => {
+    expect(transferSummary([])).toEqual({ text: "No coins moved", detail: "Between the two, in the window" });
+    expect(transferSummary([{ direction: "out" }, { direction: "out" }, { direction: "in" }])).toEqual({
+      text: "3 transfers",
+      detail: "KOL sent 2 · wallet sent 1",
+    });
   });
 });
