@@ -3189,8 +3189,8 @@ body.drawer-open .util-drawer {
 }
 .side-head {
   padding: 0 8px 6px;
-  /* Room for each row's wallet profile button. */
-  margin-right: 40px;
+  /* Room for each row's wallet profile and wallet web buttons. */
+  margin-right: 80px;
   border-bottom: 1px solid var(--border);
 }
 .side-line {
@@ -3201,6 +3201,11 @@ body.drawer-open .util-drawer {
 .side-line .side-row {
   flex: 1;
   min-width: 0;
+}
+.side-acts {
+  display: flex;
+  flex: none;
+  gap: 4px;
 }
 .side-profile {
   flex: none;
@@ -3769,6 +3774,16 @@ body.drawer-open .util-drawer {
   }
   .side-head {
     padding: 0 4px 6px;
+    /* The two buttons stack on a phone, so the name keeps its room. */
+    margin-right: 34px;
+  }
+  .side-acts {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .side-acts .side-profile {
+    width: 30px;
+    height: 28px;
   }
   .side-count {
     font-size: 12px;
@@ -13953,4 +13968,408 @@ body:has(.util-toast) .bug-fab {
 .feed-sim-search {
   width: 100%;
   margin-bottom: 8px;
+}
+
+/* The wallet web (components/WalletWeb.tsx, user ask 2026-10-16): a KOL's labeled wallets round its
+   main wallet, each tie in its own colour. Gold a Known Side (the KOL's side colour on the bubble
+   map), cyan a funding, blue dots buying alongside, violet transfers (the bubble map's arrows). */
+.ww-modal {
+  --ww-hub: var(--ink);
+  --ww-known: var(--bm-side);
+  --ww-funded: #06b6d4;
+  --ww-funder: #64748b;
+  --ww-trades: var(--series-1);
+  --ww-transfers: var(--bm-xfer);
+}
+.ww-loading {
+  display: grid;
+  place-items: center;
+  min-height: 260px;
+}
+.ww-hero {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 10px;
+}
+.ww-headline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px 12px 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--brand-a) 35%, transparent);
+  background:
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--brand-a) 22%, transparent), transparent 70%),
+    radial-gradient(
+      circle at 100% 100%,
+      color-mix(in srgb, var(--brand-b) 16%, transparent),
+      transparent 70%
+    ),
+    var(--surface-3);
+}
+.ww-headline > strong {
+  font-size: 44px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  background: linear-gradient(135deg, var(--brand-ink), var(--brand-b));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.ww-headline > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.ww-headline-word {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.ww-tiles {
+  display: grid;
+  grid-template-columns: repeat(var(--ww-cols, 4), minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+.ww-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  border: 1px solid color-mix(in srgb, var(--ww-tone) 28%, transparent);
+}
+.ww-tile.none {
+  border-color: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+.ww-tile dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ww-tile dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.ww-tile.none dd {
+  color: var(--muted);
+}
+.ww-modal .tone-hub {
+  --ww-tone: var(--ww-hub);
+}
+.ww-modal .tone-known {
+  --ww-tone: var(--ww-known);
+}
+.ww-modal .tone-funded {
+  --ww-tone: var(--ww-funded);
+}
+.ww-modal .tone-funder {
+  --ww-tone: var(--ww-funder);
+}
+.ww-modal .tone-trades {
+  --ww-tone: var(--ww-trades);
+}
+.ww-modal .tone-transfers {
+  --ww-tone: var(--ww-transfers);
+}
+.ww-swatch {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ww-tone);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ww-tone) 22%, transparent);
+}
+.ww-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.ww-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border: 1px dashed var(--border);
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+.ww-chip.on {
+  color: var(--ink);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--ww-tone) 50%, transparent);
+  background: color-mix(in srgb, var(--ww-tone) 12%, transparent);
+}
+.ww-chip-line path {
+  fill: none;
+  stroke: var(--ww-tone);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+.ww-chip.tone-trades .ww-chip-line path {
+  stroke-dasharray: 0.5 4.5;
+  stroke-width: 3;
+}
+.ww-chip:not(.on) .ww-chip-line {
+  opacity: 0.4;
+}
+.ww-chip-n {
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.ww-stage .ww-svg {
+  height: min(480px, 58dvh);
+  touch-action: manipulation;
+}
+.ww-rings circle {
+  fill: none;
+  stroke: color-mix(in srgb, var(--ink) 7%, transparent);
+  stroke-dasharray: 2 5;
+}
+.ww-edge {
+  transition: opacity 0.2s;
+}
+.ww-edge.dim {
+  opacity: 0.1;
+}
+.ww-line,
+.ww-glow {
+  fill: none;
+  stroke-linecap: round;
+}
+.ww-edge .ww-line {
+  stroke: var(--ww-tie);
+  stroke-opacity: 0.85;
+}
+.ww-edge.on .ww-line {
+  stroke-opacity: 1;
+}
+.ww-glow {
+  stroke: var(--ww-tie);
+  stroke-opacity: 0.16;
+}
+.ww-edge.tie-known {
+  --ww-tie: var(--ww-known);
+}
+.ww-edge.tie-funded {
+  --ww-tie: var(--ww-funded);
+}
+.ww-edge.tie-trades {
+  --ww-tie: var(--ww-trades);
+}
+.ww-edge.tie-trades .ww-line {
+  stroke-dasharray: 0.5 5;
+  stroke-opacity: 0.9;
+}
+.ww-arrow {
+  fill: var(--ww-funded);
+  stroke: var(--surface-2);
+  stroke-width: 1;
+  stroke-linejoin: round;
+}
+.ww-node:focus-visible .bm-bubble {
+  stroke: var(--ink) !important;
+  stroke-width: 2.5;
+}
+.ww-hub-halo {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-dasharray: 3 4;
+  animation: ww-spin 24s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+@keyframes ww-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ww-hub-halo {
+    animation: none;
+  }
+}
+.ww-hub-initial {
+  fill: var(--surface-solid);
+  font-size: 24px;
+  font-weight: 800;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+}
+.ww-inner {
+  fill: #fff;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.25);
+  stroke-width: 1.6px;
+}
+.ww-label {
+  fill: var(--ink-2);
+  font-size: 9px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: var(--surface-2);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+.ww-label.dim {
+  opacity: 0.25;
+}
+.ww-label.hub {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 750;
+}
+.ww-funder {
+  stroke: var(--ww-funded);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 2;
+}
+.ww-hint,
+.ww-empty {
+  margin: 10px 2px 0;
+}
+.ww-detail {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  border: 1px solid color-mix(in srgb, var(--ww-tone) 35%, transparent);
+  border-left: 3px solid var(--ww-tone);
+}
+.ww-detail > header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ww-detail > header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ww-role {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--ww-tone) 45%, transparent);
+  background: color-mix(in srgb, var(--ww-tone) 14%, transparent);
+}
+.ww-detail-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.ww-detail-actions .small-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ww-ties {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 5px;
+}
+.ww-ties li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.ww-ties .ww-swatch {
+  width: 7px;
+  height: 7px;
+  transform: translateY(-1px);
+}
+.ww-detail p {
+  margin: 6px 0 0;
+}
+.ww-note {
+  margin: 12px 0 0;
+}
+/* The bubble button beside a labeled list's heading. */
+.side-web-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 2px 0 4px;
+  padding: 7px 8px 7px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--brand-a) 28%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 7%, transparent);
+}
+.side-web-bar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+}
+.side-web-bar strong {
+  color: var(--ink);
+}
+.side-web-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+@media (max-width: 640px) {
+  .ww-headline > strong {
+    font-size: 38px;
+  }
+  .ww-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .ww-tile {
+    padding: 7px 10px;
+  }
+  .ww-tile dd {
+    font-size: 17px;
+  }
+  .ww-stage .ww-svg {
+    height: min(420px, 52dvh);
+  }
+  .ww-detail-actions {
+    margin-left: 0;
+    width: 100%;
+  }
 }
