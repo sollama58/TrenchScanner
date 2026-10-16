@@ -1251,6 +1251,7 @@ async function scanCycle(
       f.maxLinkedCreatorPct != null ||
       f.maxKolBundledPct != null ||
       f.maxBundledSupplyPct != null ||
+      f.maxTransferredSupplyPct != null ||
       f.minCexFundedCount != null ||
       f.maxCexFundedCount != null,
   );

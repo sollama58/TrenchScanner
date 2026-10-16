@@ -78,6 +78,7 @@ function buildFilterInputSchema(env: Env) {
     maxLinkedCreatorPct: z.number().min(0).max(100).nullable().optional(),
     maxKolBundledPct: z.number().min(0).max(100).nullable().optional(),
     maxBundledSupplyPct: z.number().min(0).max(100).nullable().optional(),
+    maxTransferredSupplyPct: z.number().min(0).max(100).nullable().optional(),
     minLiveHolderCount: z.number().int().min(0).max(100_000).nullable().optional(),
     // Empty means any launchpad. Only the ones discovery takes (core's SCANNED_LAUNCHPADS).
     launchpads: z
