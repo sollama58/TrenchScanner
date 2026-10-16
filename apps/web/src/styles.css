@@ -13722,3 +13722,21 @@ body:has(.util-toast) .bug-fab {
     gap: 0;
   }
 }
+
+/* Admin › Feed simulator: the model and filter pick lists side by side. */
+.feed-sim-picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.feed-sim-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.feed-sim-search {
+  width: 100%;
+  margin-bottom: 8px;
+}

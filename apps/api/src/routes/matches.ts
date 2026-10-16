@@ -351,7 +351,7 @@ export function matchAlertSnapshot<S extends { priceUsd: number; marketCapUsd: n
  * when the window closes). Reads the rows still open for these matches, so a 2x shows the moment
  * it lands and the card doesn't say "Live" for the whole window after the token doubled.
  */
-async function openOutcomeRows(matches: readonly MatchOutcomeRow[]) {
+export async function openOutcomeRows(matches: readonly MatchOutcomeRow[]) {
   // A clean winner's 10x tier stays open for the rest of its hour after the 2x/4x verdict lands.
   const open = (m: MatchOutcomeRow) =>
     m.hit2xIn1h === null || (m.hit2xIn1h && !m.disqualified && m.hit10xIn1h === null);
@@ -386,6 +386,99 @@ export function matchOutcome(
     outcomeFinalizedAt: m.hit2xIn1h === null ? null : m.matchedAt,
     candidateOutcome: (m.candidateOutcomeId && rowById.get(m.candidateOutcomeId)) || null,
   });
+}
+
+/** A filter alert's columns the Stats tiles grade it on. */
+export const STATS_MATCH_SELECT = {
+  id: true,
+  tokenId: true,
+  peakReturnPct: true,
+  ...MATCH_OUTCOME_SELECT,
+  token: { select: { symbol: true } },
+} satisfies Prisma.MatchSelect;
+type StatsMatchRow = Prisma.MatchGetPayload<{ select: typeof STATS_MATCH_SELECT }>;
+
+/** A model call's columns the Stats tiles grade it on. */
+export const STATS_CALL_SELECT = {
+  ...CALL_SELECT,
+  peak1hReturnPct: true,
+  maxDrawdown1hPct: true,
+  hit2xIn15m: true,
+  hit2xIn1h: true,
+  hit4xIn1h: true,
+  hit10xIn1h: true,
+  disqualified: true,
+  peak24hReturnPct: true,
+  runPeakMinutes: true,
+  outcomeFinalizedAt: true,
+  anchorMcapUsd: true,
+  peakMcapUsd: true,
+  candidateOutcome: curatedAlertInclude.candidateOutcome,
+  token: { select: { symbol: true } },
+} satisfies Prisma.CuratedAlertSelect;
+type StatsCallRow = Prisma.CuratedAlertGetPayload<{ select: typeof STATS_CALL_SELECT }>;
+
+/**
+ * The cards a feed's Stats tiles grade, from its filter alerts and model calls (newest first),
+ * folded and graded exactly as the feed's cards are. With `bothOnly`, only the filter alerts a
+ * call stands beside (calledNear), folded or not, and no call on its own. Shared with the Admin
+ * feed simulator, so a simulated feed is graded the way a reader's is.
+ */
+export function feedStatsCards(
+  matches: readonly StatsMatchRow[],
+  calls: StatsCallRow[],
+  rowById: Awaited<ReturnType<typeof openOutcomeRows>>,
+  bothOnly: boolean,
+): FeedStatsCard[] {
+  type StatsCard = FeedStatsCard & {
+    id: string;
+    matchedAt: Date;
+    curated: { alertId: string; card: FeedStatsCard } | null;
+  };
+  const near = bothOnly ? calledNear(calls) : null;
+  const kept = near ? matches.filter((m) => near(m.tokenId, m.matchedAt)) : matches;
+  const matchCards: StatsCard[] = kept.map((m) => {
+    const outcome = matchOutcome(m, rowById);
+    return {
+      id: m.id,
+      kind: "match",
+      tokenId: m.tokenId,
+      matchedAt: m.matchedAt,
+      symbol: m.token.symbol,
+      outcome,
+      // The card's ATH figure for a filter alert.
+      peakPct: m.peakReturnPct ?? outcome.peak24hReturnPct,
+      curated: null,
+    };
+  });
+  // Several followed models calling one token are one card, graded on its first call.
+  const callCards: StatsCard[] = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS).map(({ lead }) => {
+    const outcome = resolveOutcome(lead);
+    const card: FeedStatsCard = {
+      kind: "curated",
+      tokenId: lead.tokenId,
+      symbol: lead.token.symbol,
+      outcome,
+      peakPct: callPeakPct(outcome.peak24hReturnPct, lead),
+    };
+    return { ...card, id: lead.id, matchedAt: lead.createdAt, curated: { alertId: lead.id, card } };
+  });
+  // A model call on a token the reader's filter also caught is one card. It keeps the filter
+  // alert's price, so it keeps that alert's verdict too, as the feed card grades it: a call at
+  // $11K that doubled must not count a filter alert at $22.4K that peaked at 1.2x as a win.
+  const folded = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS);
+  return (bothOnly ? folded.filter((c) => c.kind === "match") : folded).map((c): FeedStatsCard =>
+    c.kind === "match" && c.curated
+      ? {
+          ...c.curated.card,
+          kind: "match",
+          tokenId: c.tokenId,
+          outcome: c.outcome,
+          // The better of the two alerts' runs, as the card shows it.
+          peakPct: maxPct(c.peakPct, c.curated.card.peakPct),
+        }
+      : c,
+  );
 }
 
 /**
@@ -596,13 +689,7 @@ export async function registerMatchRoutes(
         where: { userId, matchedAt: { gte: since }, ...(bothOnly ? { filter: ACTIVE_FILTER } : {}) },
         orderBy: { matchedAt: "desc" },
         take: FEED_STATS_MAX_ROWS,
-        select: {
-          id: true,
-          tokenId: true,
-          peakReturnPct: true,
-          ...MATCH_OUTCOME_SELECT,
-          token: { select: { symbol: true } },
-        },
+        select: STATS_MATCH_SELECT,
       }),
       feedCalls.models.length === 0
         ? Promise.resolve([])
@@ -611,81 +698,12 @@ export async function registerMatchRoutes(
               where: { ...feedCallsWhere(feedCalls), createdAt: { gte: callsSince } },
               orderBy: { createdAt: "desc" },
               take: FEED_STATS_MAX_ROWS,
-              select: {
-                ...CALL_SELECT,
-                peak1hReturnPct: true,
-                maxDrawdown1hPct: true,
-                hit2xIn15m: true,
-                hit2xIn1h: true,
-                hit4xIn1h: true,
-                hit10xIn1h: true,
-                disqualified: true,
-                peak24hReturnPct: true,
-                runPeakMinutes: true,
-                outcomeFinalizedAt: true,
-                anchorMcapUsd: true,
-                peakMcapUsd: true,
-                candidateOutcome: curatedAlertInclude.candidateOutcome,
-                token: { select: { symbol: true } },
-              },
+              select: STATS_CALL_SELECT,
             }),
           ),
     ]);
 
-    const rowById = await openOutcomeRows(matches);
-
-    type StatsCard = FeedStatsCard & {
-      id: string;
-      matchedAt: Date;
-      curated: { alertId: string; card: FeedStatsCard } | null;
-    };
-    const near = bothOnly ? calledNear(calls) : null;
-    const kept = near ? matches.filter((m) => near(m.tokenId, m.matchedAt)) : matches;
-    const matchCards: StatsCard[] = kept.map((m) => {
-      const outcome = matchOutcome(m, rowById);
-      return {
-        id: m.id,
-        kind: "match",
-        tokenId: m.tokenId,
-        matchedAt: m.matchedAt,
-        symbol: m.token.symbol,
-        outcome,
-        // The card's ATH figure for a filter alert.
-        peakPct: m.peakReturnPct ?? outcome.peak24hReturnPct,
-        curated: null,
-      };
-    });
-    // Several followed models calling one token are one card, graded on its first call.
-    const callCards: StatsCard[] = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS).map(
-      ({ lead }) => {
-        const outcome = resolveOutcome(lead);
-        const card: FeedStatsCard = {
-          kind: "curated",
-          tokenId: lead.tokenId,
-          symbol: lead.token.symbol,
-          outcome,
-          peakPct: callPeakPct(outcome.peak24hReturnPct, lead),
-        };
-        return { ...card, id: lead.id, matchedAt: lead.createdAt, curated: { alertId: lead.id, card } };
-      },
-    );
-    // A model call on a token the reader's filter also caught is one card. It keeps the filter
-    // alert's price, so it keeps that alert's verdict too, as the feed card grades it: a call at
-    // $11K that doubled must not count a filter alert at $22.4K that peaked at 1.2x as a win.
-    const folded = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS);
-    // Both-only: the filter alerts a call stands beside, folded or not; no call on its own.
-    const cards = (bothOnly ? folded.filter((c) => c.kind === "match") : folded).map((c): FeedStatsCard =>
-      c.kind === "match" && c.curated
-        ? {
-            ...c.curated.card,
-            kind: "match",
-            tokenId: c.tokenId,
-            outcome: c.outcome,
-            // The better of the two alerts' runs, as the card shows it.
-            peakPct: maxPct(c.peakPct, c.curated.card.peakPct),
-          }
-        : c,
-    );
+    const cards = feedStatsCards(matches, calls, await openOutcomeRows(matches), bothOnly);
 
     return {
       ...summarizeFeed(cards, hours),
