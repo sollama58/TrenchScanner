@@ -1846,7 +1846,7 @@ model BurnCreditEntry {
 model BurnCreditSettings {
   id               String   @id @default("burn-credits")
   /// Whole $ASDFASDFA burned per credit.
-  tokensPerCredit  Int      @default(500)
+  tokensPerCredit  Int      @default(100)
   /// Credits per lookup, for each utility.
   tokenLookupCost  Int      @default(1)
   walletLookupCost Int      @default(1)

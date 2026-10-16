@@ -84,7 +84,7 @@ function lookupError(e: unknown): string {
 
 /**
  * The Utilities tab: lookups paid for with Burn Credits, which a wallet earns by burning
- * $ASDFASDFA (500 per credit unless an admin changes it). A credit is taken only once a lookup
+ * $ASDFASDFA (100 per credit unless an admin changes it). A credit is taken only once a lookup
  * succeeds, and a lookup can be re-opened free for an hour.
  * Behind the subscription, like every other tab: credits pay for each lookup on top of it.
  */

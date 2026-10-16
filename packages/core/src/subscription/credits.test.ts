@@ -70,11 +70,11 @@ describe.skipIf(!dbAvailable)("the credit ledger", () => {
 
   it("credits a burn once, however many times it is claimed", async () => {
     const sig = `CreditSig${RUN}`;
-    const first = await creditBurnCredits(sig, { burnerWallet: WALLET, rawAmount: 1_000n * TOKENS }, "claim");
+    const first = await creditBurnCredits(sig, { burnerWallet: WALLET, rawAmount: 200n * TOKENS }, "claim");
     expect(first).toEqual({ status: "credited", credits: 2, wallet: WALLET });
     const again = await Promise.all([
-      creditBurnCredits(sig, { burnerWallet: WALLET, rawAmount: 1_000n * TOKENS }, "reconciler"),
-      creditBurnCredits(sig, { burnerWallet: WALLET, rawAmount: 1_000n * TOKENS }, "claim"),
+      creditBurnCredits(sig, { burnerWallet: WALLET, rawAmount: 200n * TOKENS }, "reconciler"),
+      creditBurnCredits(sig, { burnerWallet: WALLET, rawAmount: 200n * TOKENS }, "claim"),
     ]);
     expect(again.map((o) => o.status)).toEqual(["already_credited", "already_credited"]);
     expect(await creditBalance(WALLET)).toBe(2);
