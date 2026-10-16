@@ -807,6 +807,44 @@ describe("mapLinked (user ask 2026-10-15)", () => {
     const kols = [{ wallets: [{ wallet: "k" }, { wallet: "s" }, { wallet: "a" }] }];
     expect(mapLinked(g, kols as never)).toEqual({ count: { linked: 4, of: 25 }, pct: 9.5 });
   });
+  it("counts a same-minute holder the scan counted once, also in a KOL's bundle (audit 2026-10-16)", () => {
+    // K (a KOL) and A were funded in the same minute; the scan counted both: 2/25, 5%.
+    const minute = (count: number | undefined) =>
+      buildGraph({
+        linkedWalletPct: 5,
+        linkedWalletCount: count,
+        linkedWalletsChecked: 25,
+        linkedClusters: [],
+        linkedHolders: [
+          { wallet: A, pct: 3 },
+          { wallet: B, pct: 2 },
+          { wallet: C, pct: 1 },
+          { wallet: D, pct: 1 },
+        ],
+        sameTimeFundedPct: 5,
+        sameTimeClusters: [
+          {
+            atMs: 1_000,
+            spanMs: 20_000,
+            pct: 5,
+            wallets: [
+              { wallet: A, pct: 3, fundedAtMs: 1_000, funder: F },
+              { wallet: B, pct: 2, fundedAtMs: 21_000, funder: R },
+            ],
+          },
+        ],
+      } as never);
+    const g = minute(2);
+    const kols = kolControl(g, [], [{ wallet: A, name: "Kol" }]);
+    expect(kols[0]!.wallets.map((w) => w.wallet).sort()).toEqual([A, B]);
+    expect(mapLinked(g, kols)).toEqual({ count: { linked: 2, of: 25 }, pct: 5 });
+    // A scan from before same-minute holders counted in Linked: the map still adds them.
+    const old = minute(0);
+    expect(mapLinked(old, kolControl(old, [], [{ wallet: A, name: "Kol" }])).count).toEqual({
+      linked: 2,
+      of: 25,
+    });
+  });
   it("counts out of every holder read once a linked holder ranks past the top 25", () => {
     const g = graph([node("a", 2, 0), node("b", 1, 0), node("w", 0.4, 0, 31)], 50);
     expect(mapLinked(g, [])).toEqual({ count: { linked: 3, of: 50 }, pct: 3.4 });

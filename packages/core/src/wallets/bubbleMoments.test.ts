@@ -81,6 +81,14 @@ describe("packBubbleReading", () => {
     expect(unpackBubbleReading(packBubbleReading(r))).toEqual(r);
   });
 
+  it("keeps an empty list of clusters without transfers, and none when the reading had none", () => {
+    const r = bubbleReadingOf({ ...reading, linkedClustersExTransfers: [] })!;
+    expect(r.linkedClustersExTransfers).toEqual([]);
+    expect(unpackBubbleReading(packBubbleReading(r))!.linkedClustersExTransfers).toEqual([]);
+    const none = bubbleReadingOf({ ...reading, linkedClustersExTransfers: undefined })!;
+    expect(unpackBubbleReading(packBubbleReading(none))).not.toHaveProperty("linkedClustersExTransfers");
+  });
+
   it("writes each address once and is well under the reading as JSON", () => {
     const r = bubbleReadingOf(reading)!;
     const packed = packBubbleReading(r);

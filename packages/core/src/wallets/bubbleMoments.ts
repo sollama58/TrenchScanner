@@ -69,7 +69,13 @@ export function bubbleReadingOf(
   const out: Record<string, unknown> = { linkedHolders: holders };
   for (const key of BUBBLE_READING_LISTS) {
     const v = source[key];
-    if (key !== "linkedHolders" && Array.isArray(v) && v.length > 0) out[key] = v;
+    // An empty list without transfers is a reading too: no clusters once transfers are hidden.
+    if (
+      key === "linkedClustersExTransfers"
+        ? Array.isArray(v)
+        : key !== "linkedHolders" && Array.isArray(v) && v.length > 0
+    )
+      out[key] = v;
   }
   for (const key of BUBBLE_READING_NUMBERS) {
     const v = source[key];
@@ -172,7 +178,7 @@ export function packBubbleReading(reading: BubbleReading): string {
     a: addresses,
     h,
     ...(c.length ? { c } : {}),
-    ...(ce.length ? { ce } : {}),
+    ...(Array.isArray(reading.linkedClustersExTransfers) ? { ce } : {}),
     ...(t.length ? { t } : {}),
     ...(x.length ? { x } : {}),
     n,
@@ -226,7 +232,7 @@ export function unpackBubbleReading(packed: string | null | undefined): BubbleRe
       ...(typeof transfers === "number" ? { transfers } : {}),
     }));
   const linkedClusters = clusters(p.c);
-  const linkedClustersExTransfers = clusters(p.ce);
+  const linkedClustersExTransfers = "ce" in p ? clusters(p.ce) : undefined;
   const sameTimeClusters = rows(p.t).map(([atMs, spanMs, pct, wallets]) => ({
     atMs: num(atMs),
     spanMs: num(spanMs),
