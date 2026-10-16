@@ -2728,19 +2728,6 @@ legend {
   font-size: 12px;
   padding: 5px 10px;
 }
-.util-toast {
-  position: fixed;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  z-index: 50;
-  max-width: calc(100vw - 32px);
-  padding: 10px 14px;
-  border-radius: var(--radius-s);
-  background: var(--surface-solid);
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow);
-}
 .util-free {
   color: var(--good-ink);
   background: var(--good-wash);
@@ -11782,9 +11769,6 @@ button.bm-same {
 .wm-sub {
   margin: -4px 0 4px !important;
 }
-.wm-skeleton {
-  height: 260px;
-}
 .wm-section h4 {
   margin-bottom: 8px !important;
 }
@@ -12679,4 +12663,261 @@ button.bm-same {
 }
 .feed-catch-key.filters {
   background: var(--series-3);
+}
+
+/* ---------- Loading states (components/Loading.tsx, user ask 2026-10-16) ----------
+   Each part of a popup that is still loading holds its place at about its final size, says what
+   is being read, and fills in where it sits. */
+/* A placeholder drawn over a tile or card: mixed from the text colour, so it shows on any surface. */
+.skel-value,
+.about-body .skeleton {
+  background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--ink) 7%, transparent) 0%,
+      color-mix(in srgb, var(--ink) 14%, transparent) 50%,
+      color-mix(in srgb, var(--ink) 7%, transparent) 100%
+    )
+    0 0 / 200% 100%;
+}
+.skel-value {
+  display: inline-block;
+  vertical-align: middle;
+  max-width: 100%;
+  height: 0.85em;
+  min-height: 10px;
+  border-radius: 4px;
+}
+.ld-spin {
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  opacity: 0.85;
+  vertical-align: -1px;
+  animation: ld-spin 0.8s linear infinite;
+}
+@keyframes ld-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ld-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+}
+.ld-note .ld-spin {
+  color: var(--brand-ink);
+}
+.ld-steps,
+.about-body ul.ld-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ld-steps li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11.5px;
+  transition:
+    color 0.25s,
+    background 0.25s,
+    border-color 0.25s;
+}
+.ld-steps li.busy .ld-spin {
+  color: var(--brand-ink);
+}
+.ld-steps li.done {
+  border-color: transparent;
+  background: var(--good-wash);
+  color: var(--good-ink);
+}
+/* Opens a late card into place: its height grows from nothing instead of jumping. */
+.ld-reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 0.3s ease,
+    opacity 0.3s ease;
+}
+.ld-reveal.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.ld-reveal > div {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* A lookup's scan, part by part, under the token modal's links. */
+.tm-scan {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--brand-ink) 28%, var(--border));
+  border-radius: var(--radius-s);
+  background: color-mix(in srgb, var(--brand-ink) 6%, transparent);
+  transition:
+    border-color 0.3s,
+    background 0.3s;
+}
+.tm-scan.done {
+  border-color: var(--border);
+  background: transparent;
+}
+.tm-scan-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+}
+.tm-scan-head > .ld-spin,
+.tm-scan-head > svg {
+  color: var(--brand-ink);
+}
+.tm-scan.done .tm-scan-head > svg {
+  color: var(--good-ink);
+}
+.tm-scan-head .tm-scan-sub::before {
+  content: "· ";
+}
+@media (max-width: 640px) {
+  .tm-scan-sub {
+    flex-basis: 100%;
+  }
+  .tm-scan-head .tm-scan-sub::before {
+    content: none;
+  }
+}
+.tm-tag-busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--brand-ink);
+}
+/* The chart's place: the note sits in its middle. */
+.tm-chart-skeleton {
+  display: grid;
+  place-items: center;
+}
+.tm-skel-note {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-solid) 70%, transparent);
+}
+.tm-opening .tm-nav-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.tm-opening .tm-figs {
+  margin-bottom: 14px;
+}
+.tm-open-failed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.tm-open-failed p {
+  margin: 0;
+}
+.tm-open-actions {
+  display: flex;
+  gap: 8px;
+}
+/* The bubble map's place while its holders are read: the map's own height, faint bubbles in it. */
+.bm-loading-art circle {
+  fill: color-mix(in srgb, var(--ink) 9%, transparent);
+  animation: bm-bubble 1.8s ease-in-out infinite;
+}
+@keyframes bm-bubble {
+  50% {
+    opacity: 0.45;
+  }
+}
+.bm-loading-note {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-solid) 85%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+/* A wallet-type chip's place: its height, empty. */
+.bm-wt-skel {
+  height: 46px;
+  padding: 0;
+  border: 0;
+}
+.bm-wt-skel .skeleton {
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+}
+.th-skeleton .th-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* The wallet modal's profile while it is read. */
+.wm-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.wm-loading .bm-stats {
+  margin: 0;
+}
+.side-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.side-skel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.side-skel li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .ld-spin {
+    animation-duration: 2.4s;
+  }
+  .bm-loading-art circle {
+    animation: none;
+  }
+  .ld-reveal {
+    transition: none;
+  }
 }
