@@ -141,6 +141,7 @@ import { flushScreenRejects, foldRejectExtremes, noteScreenReject } from "./reje
 import { noteDecisionHold, takeDecisionHolds } from "./decisionHolds.js";
 import { loadMarketContext } from "./marketContext.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
+import { keepScreenMoment } from "./screenMoments.js";
 import type { JobRunMeta } from "../scheduler.js";
 import type { StreamEvent } from "../discovery/pumpPortalStream.js";
 import {
@@ -2668,6 +2669,10 @@ async function processCandidate(
     return 0;
   }
   lastScreenPassAt = Date.now();
+  // The coin's bubble map at its first pass inside the band (the Stream's entry), behind the scan.
+  if (scored.marketCapUsd >= env.MCAP_FILTER_MIN && scored.marketCapUsd <= env.MCAP_FILTER_MAX) {
+    void keepScreenMoment(token, snapshot, scored, { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX });
+  }
 
   // The first rug-screen pass inside the curated band asks for the text read the curators use as
   // features. Fire-and-forget: it lands on the token for its next scan.

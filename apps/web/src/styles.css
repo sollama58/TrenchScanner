@@ -12270,6 +12270,11 @@ button.bm-same {
 .tm-holders-when > span {
   white-space: nowrap;
 }
+/* Up to five moments (screen pass, filters, the alert, Now): they wrap on a phone rather than scroll. */
+.tm-holders-switch {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
 .tm-holders-switch button {
   display: inline-flex;
   align-items: center;
