@@ -182,6 +182,19 @@ export const TRAIT_ICON: Record<WalletTrait, readonly string[]> = {
   ],
 };
 
+/** The risky wallets' mark beside the traits (user ask 2026-10-16): a red exclamation in a ring. */
+export const RISKY_ICON: readonly string[] = [
+  "M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0Z",
+  "M12 7.5v5.5",
+  "M12 16.5h.01",
+];
+
+/** Risky holders on the map (flagged risky or a known dumper, not merely the creator), and their supply. */
+export function riskyShare(graph: Pick<BubbleGraph, "nodes">): { count: number; pct: number } {
+  const nodes = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator"));
+  return { count: nodes.length, pct: Math.round(nodes.reduce((t, n) => t + n.pct, 0) * 100) / 100 };
+}
+
 /** A holder's trait from the scan's marks: sniper first, then fresh, then empty; null for none. */
 export function traitOf(
   h: { sniper?: boolean; fresh?: boolean; empty?: boolean } | undefined,

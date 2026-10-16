@@ -20,6 +20,8 @@ import {
   TRAIT_ICON,
   TRAIT_LABEL,
   traitShares,
+  RISKY_ICON,
+  riskyShare,
   type WalletTrait,
   type KolControl,
   type ClusterHalo,
@@ -67,14 +69,25 @@ function drawTraitIcon(
   y: number,
   size: number,
 ) {
+  drawIcon(ctx, TRAIT_ICON[trait], TRAIT_INK[trait], x, y, size);
+}
+/** A 24px-grid stroke icon in `ink`, `size` across, centred on x, y. */
+function drawIcon(
+  ctx: CanvasRenderingContext2D,
+  paths: readonly string[],
+  ink: string,
+  x: number,
+  y: number,
+  size: number,
+) {
   ctx.save();
   ctx.translate(x - size / 2, y - size / 2);
   ctx.scale(size / 24, size / 24);
-  ctx.strokeStyle = TRAIT_INK[trait];
+  ctx.strokeStyle = ink;
   ctx.lineWidth = 2.4;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  for (const d of TRAIT_ICON[trait]) ctx.stroke(new Path2D(d));
+  for (const d of paths) ctx.stroke(new Path2D(d));
   ctx.restore();
 }
 /** The map's pills on the card: their text size, side padding and height, in card pixels. */
@@ -288,12 +301,11 @@ export async function renderBubbleCard(
 
   // The lines under the list, each on if it has something to say; the list takes the room left,
   // never fewer than six rows (or every bundle when there are fewer).
-  const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator")).length;
+  // The risky count sits in the legend with the wallet types (user ask 2026-10-16); a line here
+  // only says when the flagged wallets weren't read.
   const sameWallets = graph.nodes.filter((n) => n.sameTime !== null).length;
   const notes: { colour: string; text: string }[] = [];
   if ((opts.flags ?? "ok") !== "ok") notes.push({ colour: MUTED, text: "Risky wallets: not read" });
-  else if (risky > 0)
-    notes.push({ colour: RISK, text: `${risky} risky wallet${risky === 1 ? "" : "s"} among the holders` });
   // KOL Bundled % (user ask 2026-10-14): supply held by KOLs and the holders tied to them.
   if (opts.kolBundled != null && opts.kolBundled > 0)
     notes.push({ colour: SIDE, text: `KOL bundled ${pctText(opts.kolBundled)} of supply` });
@@ -395,7 +407,7 @@ export async function renderBubbleCard(
     .map((k, i) => ({ k, colour: kolColour(i), ...kolBundleNodes(map, k) }))
     .filter((b) => b.members.length >= 2);
   // Which kinds of name the bubbles carry, for the legend under the map (user ask 2026-10-14).
-  const legend = nameLegend(graph, names);
+  const legend = nameLegend(graph, names, (opts.flags ?? "ok") === "ok");
   // From the card's top to the footer's rule (CARD_H - 82), less the legend under it.
   const area = {
     x: PAD + leftW + 8,
@@ -852,7 +864,7 @@ export async function renderBubbleCard(
   if (legend.length > 0) {
     ctx.font = `650 14px ${FONT}`;
     // A trait's item is its icon and its words, no chip (user ask 2026-10-15: kept minimal).
-    const widths = legend.map((k) => ctx.measureText(k.text).width + (k.trait ? 20 : 16));
+    const widths = legend.map((k) => ctx.measureText(k.text).width + (k.icon ? 20 : 16));
     // A faint italic "Legend" before the chips (user ask 2026-10-14).
     ctx.font = `italic 500 14px ${FONT}`;
     const titleW = ctx.measureText("Legend").width + 12;
@@ -867,8 +879,8 @@ export async function renderBubbleCard(
     ctx.font = `650 14px ${FONT}`;
     ctx.textAlign = "center";
     legend.forEach((c, i) => {
-      if (c.trait) {
-        drawTraitIcon(ctx, c.trait, x + 8, ly, 15);
+      if (c.icon) {
+        drawIcon(ctx, c.icon, c.iconInk ?? c.ink, x + 8, ly, 15);
         ctx.fillStyle = c.ink;
         ctx.fillText(c.text, x + 20 + (widths[i]! - 20) / 2, ly + 1);
       } else {
@@ -890,18 +902,24 @@ export async function renderBubbleCard(
 /** The legend's height under the map, card pixels. */
 const LEGEND_H = 34;
 
+/** A legend item: a chip with its name, or (with `icon`) an icon and words with no chip. */
+interface LegendItem {
+  text: string;
+  bg: string;
+  ink: string;
+  icon?: readonly string[];
+  iconInk?: string;
+}
+
 /** The kinds of wallet name on the map's holders, in a fixed order: each kind's name, drawn as those names are. */
-function nameLegend(
-  graph: BubbleGraph,
-  names: WalletNames,
-): { text: string; bg: string; ink: string; trait?: WalletTrait }[] {
+function nameLegend(graph: BubbleGraph, names: WalletNames, flagsRead: boolean): LegendItem[] {
   const kinds = new Set(
     graph.nodes.flatMap((n) =>
       n.kind === "holder" && n.wallet && names[n.wallet] ? [names[n.wallet]!.source] : [],
     ),
   );
   const dark = "rgba(12, 14, 20, 0.82)";
-  const out: { text: string; bg: string; ink: string; trait?: WalletTrait }[] = [];
+  const out: LegendItem[] = [];
   if (kinds.has("kol")) out.push({ text: "KOL", bg: SIDE, ink: "#1a1300" });
   if (kinds.has("kol-side")) out.push({ text: "KOL Known Side", bg: SIDE, ink: "#1a1300" });
   if (kinds.has("pumpfun")) out.push({ text: '"Pump.fun"', bg: dark, ink: "#4ade80" });
@@ -910,6 +928,16 @@ function nameLegend(
     out.push({ text: "Helius / exchange", bg: dark, ink: INK });
   // Each wallet trait on the map and the share of supply its holders hold (user ask 2026-10-15).
   for (const t of traitShares(graph))
-    out.push({ text: `${TRAIT_LABEL[t.trait]} ${pctText(t.pct)}`, bg: dark, ink: INK2, trait: t.trait });
+    out.push({
+      text: `${TRAIT_LABEL[t.trait]} ${pctText(t.pct)}`,
+      bg: dark,
+      ink: INK2,
+      icon: TRAIT_ICON[t.trait],
+      iconInk: TRAIT_INK[t.trait],
+    });
+  // The risky holders' count beside them, a red exclamation (user ask 2026-10-16).
+  const risky = riskyShare(graph).count;
+  if (flagsRead && risky > 0)
+    out.push({ text: `Risky ${risky}`, bg: dark, ink: INK2, icon: RISKY_ICON, iconInk: RISK });
   return out;
 }
