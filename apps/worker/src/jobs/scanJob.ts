@@ -55,6 +55,7 @@ import {
   type OwnTapeRow,
   type LiveFlagsReading,
   type LiveTraderCounts,
+  type WalletScoreReading,
   type OnChainHolders,
   type CandidateToken,
   type ScoredToken,
@@ -111,7 +112,15 @@ import {
   takeLinkedWalletStats,
   type LinkedGroup,
 } from "./linkedWallets.js";
-import { liveFlagsOf, liveTradersOf, liveWindowFlowOf, readLiveTape, takeLiveTapeStats } from "./liveTape.js";
+import {
+  liveBuyersOf,
+  liveFlagsOf,
+  liveTradersOf,
+  liveWalletScoreOf,
+  liveWindowFlowOf,
+  readLiveTape,
+  takeLiveTapeStats,
+} from "./liveTape.js";
 import {
   resolveWalletHoldings,
   computeEmptyPct,
@@ -1669,6 +1678,8 @@ async function scanCycle(
           wallets: [
             ...(onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []),
             ...(sniperWalletsFromCache(c.mintAddress) ?? []),
+            // The newest trades' buyers, for the Wallet Score reading (liveWalletScoreOf).
+            ...liveBuyersOf(c.mintAddress),
           ],
         })),
         riskScale.builtAt,
@@ -1718,6 +1729,10 @@ async function scanCycle(
             kolBundledBaseOf.get(candidate.mintAddress),
           ),
           ownTapes === null ? null : ownTapes.get(candidate.mintAddress),
+          // Left off when the own-tape read failed: the buyers' scores could carry this coin's result.
+          ownTapes === null
+            ? null
+            : liveWalletScoreOf(candidate.mintAddress, riskLookup, ownTapes.get(candidate.mintAddress)),
         ),
       );
     } catch (err) {
@@ -2834,6 +2849,7 @@ async function processCandidate(
   transfers: HolderTransfersReading | null = null,
   exTransfers: ExTransfersReading | null = null,
   ownTape: ReadonlyMap<string, OwnTapeRow> | null | undefined = undefined,
+  walletScores: WalletScoreReading | null = null,
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
@@ -2863,6 +2879,7 @@ async function processCandidate(
     flags,
     kolTraders,
     winnerTraders,
+    walletScores,
   );
   // KOL Bundled % and Bundled % ride on the linked reading: unknown (left off) without one.
   const withBundled =
@@ -3678,10 +3695,17 @@ export function withLiveFlags(
   flags: LiveFlagsReading | null,
   kolTraders: LiveTraderCounts | null = null,
   winnerTraders: LiveTraderCounts | null = null,
+  walletScores: WalletScoreReading | null = null,
 ): OnChainProfile | null {
   if (!onChain) return onChain;
   const withTraders = {
     ...onChain,
+    ...(walletScores
+      ? {
+          walletScoreRecentBuyersMean: walletScores.walletScoreRecentBuyersMean ?? undefined,
+          walletScoreRecentBuyersScored: walletScores.walletScoreRecentBuyersScored,
+        }
+      : {}),
     ...(kolTraders ? { kolRecentBuyers: kolTraders.buyers, kolRecentSellers: kolTraders.sellers } : {}),
     ...(winnerTraders
       ? { winnerRecentBuyers: winnerTraders.buyers, winnerRecentSellers: winnerTraders.sellers }

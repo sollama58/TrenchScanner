@@ -215,6 +215,8 @@ export interface ScoredWallet {
   /** The count-and-rate labels (walletLabels), as the book carries them; absent reads as neither. */
   dumper?: boolean;
   winner?: boolean;
+  /** The hidden composite Wallet Score (walletScore.ts); null or absent when it has none. */
+  walletScore?: number | null;
 }
 
 /** What one wallet did in the coin being decided on, from that coin's own tape (TokenWalletActivity). */
