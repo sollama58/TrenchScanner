@@ -100,3 +100,8 @@ jobs:
       # published last, on every run.
       - name: Validate render.yaml
         run: npx -y js-yaml@4.3.2 render.yaml > /dev/null
+
+      # The nightly full-database dump and its restore (scripts/db-backup) are shell scripts the
+      # Node checks above never read; a syntax error in one would show only at 02:30 or mid-restore.
+      - name: Check the database backup scripts parse
+        run: for f in scripts/db-backup/*.sh; do bash -n "$f"; done

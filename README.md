@@ -222,7 +222,9 @@ A wallet listed in `ADMIN_WALLET_ADDRESSES` (comma-separated base58 addresses; e
 
 ## Backups and restore
 
-Render backs every paid database up continuously, with point-in-time recovery of the last 3 days (Hobby workspace) or 7 (Pro), and on-demand exports kept 7 days: the database → **Recovery** page. That covers losing the whole database and a deletion noticed within the window. The project keeps two copies of its own on top (database audit 2026-10-16):
+Render backs every paid database up continuously, with point-in-time recovery of the last 3 days (Hobby workspace) or 7 (Pro), and on-demand exports kept 7 days: the database → **Recovery** page. That covers losing the whole database and a deletion noticed within the window. The project keeps three copies of its own on top (database audit 2026-10-16):
+
+- **Nightly full dumps** - the whole database, every night at 02:30 UTC, to the Cloudflare R2 bucket (below). This is the copy that survives losing the database, its backups, or the Render account.
 
 - **Model backups** - the running curator models, weekly, in `ModelBackup`; the Admin tab's Backups panel lists, downloads, imports and restores them.
 - **Table backups** - the tables nothing can rebuild (users, filters, Telegram chats, subscriptions, whitelist, burn events and the burn-credit ledger, trading wallets/bots/positions/orders/withdrawals, curator lanes, the curated record), weekly, in `DataBackup` (`DATA_BACKUP_KEEP` kept, 8), each a few MB gzipped. Both are copied to the `MODEL_BACKUP_S3_*` bucket when it is set on the trainer, which is the copy that survives losing the database; without it they live in the same Postgres. `GET /admin/table-backups` lists them and `GET /admin/table-backups/:id/download` serves the file.
@@ -235,6 +237,32 @@ npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<
 ```
 
 The dry run prints what the file holds; the real run prints, per table, what it put back, what was already there and what it skipped. A backup restores into the schema it was taken from or a later one whose new columns are nullable or defaulted.
+
+### Nightly full dumps (Cloudflare R2)
+
+The `trenchscanner-db-backup` cron (render.yaml, `scripts/db-backup`) runs `pg_dump` of the whole database at 02:30 UTC and streams it, compressed, to `<bucket>/trenchscanner/db-dumps/trenchscanner-<UTC stamp>.dump`. The dump's sha256 is taken from the bytes on their way up; the dump is then read back from the bucket and checked against it, and only then is its `.sha256` written beside it. A dump with no `.sha256` is incomplete and is never listed, restored or kept. The newest `DB_DUMP_KEEP` (14) are kept. Each run writes the `db-dump` row of `SystemHeartbeat`, so a failed or missed night reaches the admins' Telegram through pipeline-watch like any trainer job, and `/health/worker` shows it. The dump only reads: one connection and one snapshot for the minutes it takes.
+
+**Setting it up (once):**
+
+1. Cloudflare dashboard → **R2** → **Create bucket**, e.g. `trenchscanner-backups` (any location). Leave public access off.
+2. R2 → **Manage API tokens** → **Create API token**: _Object Read & Write_, limited to that bucket. Keep the Access Key ID and Secret Access Key it shows once, and the S3 endpoint `https://<account id>.r2.cloudflarestorage.com`.
+3. On Render, set the same four values on both `trenchscanner-db-backup` and `trenchscanner-trainer`: `MODEL_BACKUP_S3_ENDPOINT`, `MODEL_BACKUP_S3_BUCKET`, `MODEL_BACKUP_S3_ACCESS_KEY_ID`, `MODEL_BACKUP_S3_SECRET_ACCESS_KEY`. Until they are set the cron logs "no bucket configured" and exits cleanly.
+4. On `trenchscanner-db-backup`, **Trigger Run** once and read its log: it ends with `done: ... kept, ... pruned`.
+
+**Restoring.** `restore.sh` lives in the same image. Open `trenchscanner-db-backup` on Render → **Shell** (a fresh instance with this image and the service's settings, including the live `DATABASE_URL`), or run the image anywhere with Docker and the same variables. Every command reads the bucket; only `restore` writes, and only to the database given by `--target`.
+
+```
+/app/restore.sh list                    # complete dumps, newest last
+/app/restore.sh verify latest           # sha256 and contents check, writes nothing
+/app/restore.sh download latest /tmp/x.dump
+/app/restore.sh restore latest --target "<database URL>"
+```
+
+The safe way to restore is into a **new, empty database**: create one on Render (same plan and Postgres version), restore into its external URL, check it, then point `DATABASE_URL` on the api, worker, trainer and this cron at it. Nothing live changes until that switch. `--table NAME` (repeatable) restores only some tables into an empty database, for inspecting or copying rows back by hand.
+
+When a new database is not an option, `--replace` rebuilds a database that holds data. It refuses while other sessions are connected (suspend the api, worker and trainer first), refuses when the disk could not hold the old and new data together (`--disk-gb`, default 30), asks you to type the database's name when the target is the live one (`--confirm <name>` to pass it non-interactively), and first dumps the database as it stands to `db-dumps-pre-restore/` so the restore itself can be undone with that dump. The whole restore, the drop of the old schema included, is one transaction committed only once the dump has been read to its end: a failure at any point leaves the target exactly as it was. After a replace, resume the services. If the dump predates the code's latest migration (restore.sh prints the restored one), redeploy the api first: its pre-deploy step applies the missing migrations.
+
+A restore drill is worth doing now and then: `restore latest` into a throwaway database, which proves the dumps restore and shows how long a real restore takes.
 
 ## Local development
 
