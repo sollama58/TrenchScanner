@@ -172,6 +172,11 @@ export const prisma =
   new PrismaClient({
     ...(datasourceUrl !== null ? { datasourceUrl } : {}),
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
+    // An interactive transaction waited 2 s (Prisma's default maxWait) for a pooled connection
+    // while a plain query waits pool_timeout (20 s), so under the same burst the write routes
+    // (credits, withdrawals, sign-in) failed first with P2028. A call that needs a longer body
+    // timeout still passes its own options (matchDispatch, the model writes, replaceRows).
+    transactionOptions: { maxWait: 10_000 },
   });
 
 if (process.env.NODE_ENV !== "production") {

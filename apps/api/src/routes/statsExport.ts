@@ -146,11 +146,19 @@ function outcomeWhere(q: ExportQuery, since: Date, until: Date): Prisma.Candidat
   };
 }
 
-/** Keyset continuation on (time, id): strictly after the last row of the previous page. */
+/**
+ * Keyset continuation on (time, id): strictly after the last row of the previous page. The
+ * `>= last.at` term is what the index walk starts from; the OR alone is a filter, and without the
+ * term every page re-read the rows before the cursor (250 k rows removed by filter per page on a
+ * 300 k-row export, 568 ms against 1.7 ms; database audit 2026-10-16, F1).
+ */
 function after<K extends string>(field: K, last: { at: Date; id: string } | null) {
   if (!last) return {};
   return {
-    OR: [{ [field]: { gt: last.at } }, { [field]: last.at, id: { gt: last.id } }],
+    AND: [
+      { [field]: { gte: last.at } },
+      { OR: [{ [field]: { gt: last.at } }, { [field]: last.at, id: { gt: last.id } }] },
+    ],
   };
 }
 
@@ -578,8 +586,12 @@ async function* narrativePages(since: Date, until: Date, pageSize = EXPORT_PAGE_
     const where: Prisma.TokenNarrativeWhereInput = {
       AND: [
         { checkedAt: { gte: since, lt: until } },
+        // As after(): the time term starts the index walk, the OR breaks the tie.
         last
-          ? { OR: [{ checkedAt: { gt: last.at } }, { checkedAt: last.at, mintAddress: { gt: last.id } }] }
+          ? {
+              checkedAt: { gte: last.at },
+              OR: [{ checkedAt: { gt: last.at } }, { checkedAt: last.at, mintAddress: { gt: last.id } }],
+            }
           : {},
       ],
     };
