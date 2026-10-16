@@ -424,7 +424,15 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
   it("reads the waited-for inputs as missing on hourly rows banked before the hourly wait, keeping decisions", async () => {
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-load-unwaited` } });
     const at = (m: number) => new Date(HOURLY_ROWS_WAIT_SINCE.getTime() + m * 60_000);
-    const features = { freshTop10WalletPct: 20, nsXRead: 1, nsCopycat: 0, mcapUsd: 50_000, ageMinutes: 4 };
+    // Versioned, so the TokenSage-marker mask leaves the quick read alone.
+    const features = {
+      freshTop10WalletPct: 20,
+      nsXRead: 1,
+      nsCopycat: 0,
+      nsRulesVersion: 1,
+      mcapUsd: 50_000,
+      ageMinutes: 4,
+    };
     const row = (m: number, sampleKind: string) => ({
       tokenId: token.id,
       anchorAt: at(m),
