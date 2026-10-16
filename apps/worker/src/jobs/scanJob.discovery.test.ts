@@ -78,6 +78,54 @@ describe("a fresh graduate's own pool in its RugCheck holders", () => {
     ).toBe(false);
   });
 
+  it("passes a proven Pump.fun launch on LP and authorities, without its PumpSwap pool as a holder", () => {
+    // STARMAN's shape: a curve quoted in another Pump.fun coin, whose RugCheck report listed only
+    // the Meteora side pools (0% locked) and counted the PumpSwap pool as a holder.
+    const sidePoolsOnly = new Map([
+      [
+        "Fresh",
+        profile(45, [
+          { owner: "QuotedPool", pct: 11.8 },
+          { owner: "w1", pct: 20 },
+          { owner: "w2", pct: 13.2 },
+        ]),
+      ],
+    ]);
+    sidePoolsOnly.get("Fresh")!.lpBurned = false;
+    const candidate = { mintAddress: "Fresh", dexId: "pumpswap", pairAddress: "SomeOtherPair" };
+    expect(buildOnChainProfile(candidate, sidePoolsOnly, new Map())?.lpBurned).toBe(false);
+
+    const proven = new Map([
+      ["Fresh", { status: "found" as const, launch: { quoteMint: "Q", pool: "QuotedPool" } }],
+    ]);
+    const built = buildOnChainProfile(candidate, sidePoolsOnly, new Map(), new Map(), proven);
+    expect(built).toMatchObject({ lpBurned: true, mintAuthorityActive: false, freezeAuthorityActive: false });
+    expect(built?.top10HolderPct).toBeCloseTo(33.2);
+    expect(runRugScreen({ ...built!, isMayhemMode: false }).reasons).not.toContainEqual(
+      expect.stringContaining("liquidity"),
+    );
+
+    // No proof (not a Pump.fun launch, or the read failed): the report's answer stands.
+    for (const result of [{ status: "found" as const, launch: null }, { status: "failed" as const }]) {
+      const unproven = new Map([["Fresh", result]]);
+      expect(buildOnChainProfile(candidate, sidePoolsOnly, new Map(), new Map(), unproven)?.lpBurned).toBe(
+        false,
+      );
+    }
+  });
+
+  it("builds a proven launch's profile from the proof when RugCheck and the authority read have nothing", () => {
+    const proven = new Map([["Fresh", { status: "found" as const, launch: { quoteMint: "Q", pool: "P" } }]]);
+    const failed = new Map<string, MintAuthorityResult>([["Fresh", { status: "failed" }]]);
+    const candidate = { mintAddress: "Fresh", dexId: "meteora" };
+    expect(buildOnChainProfile(candidate, new Map(), failed)).toBeNull();
+    expect(buildOnChainProfile(candidate, new Map(), failed, new Map(), proven)).toMatchObject({
+      lpBurned: true,
+      mintAuthorityActive: false,
+      freezeAuthorityActive: false,
+    });
+  });
+
   it("re-reads only coins graduated in the last five minutes still over the cut without their pool", () => {
     const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
     const profiles = new Map<string, RugCheckProfile>([

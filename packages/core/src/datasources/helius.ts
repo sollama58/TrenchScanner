@@ -4,6 +4,12 @@ import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
+import {
+  pumpCurveAddressOf,
+  readPumpLaunch,
+  type ParsedAccount,
+  type PumpLaunchResult,
+} from "./pumpLaunch.js";
 import { parseLaunchBuyers, type LaunchBuyersReading, type RawLaunchTx } from "./launchBuyers.js";
 import type { ChainTx } from "../wallets/tradeTape.js";
 import { funderFromEarliestTransactions, FUNDER_TXS_WALKED } from "../wallets/linkedWallets.js";
@@ -1480,6 +1486,38 @@ export class HeliusClient {
       lastAt: at(page[0]?.blockTime),
       firstAt: complete ? at(page[page.length - 1]?.blockTime) : null,
     };
+  }
+
+  /**
+   * On-chain proof of which mints are Pump.fun launches (see pumpLaunch.ts): each mint and its
+   * bonding-curve PDA in one jsonParsed getMultipleAccounts. A read without an answer is "failed",
+   * never a definitive "not a Pump.fun launch".
+   */
+  async getPumpLaunchBatch(mintAddresses: string[]): Promise<Map<string, PumpLaunchResult>> {
+    const unique = [...new Set(mintAddresses)];
+    const out = new Map<string, PumpLaunchResult>();
+    const curveByMint = new Map<string, string>();
+    for (const mint of unique) {
+      const curve = pumpCurveAddressOf(mint);
+      if (curve) curveByMint.set(mint, curve);
+      else out.set(mint, { status: "found", launch: null });
+    }
+    if (curveByMint.size === 0) return out;
+
+    const accounts = await this.getMultipleAccounts<ParsedAccount>(
+      [...curveByMint.keys(), ...curveByMint.values()],
+      { encoding: "jsonParsed" },
+    );
+    for (const [mint, curve] of curveByMint) {
+      const mintAccount = accounts.get(mint);
+      const curveAccount = accounts.get(curve);
+      if (!mintAccount || mintAccount === "failed" || !curveAccount || curveAccount === "failed") {
+        out.set(mint, { status: "failed" });
+        continue;
+      }
+      out.set(mint, readPumpLaunch(mint, mintAccount.value, curveAccount.value));
+    }
+    return out;
   }
 
   /**

@@ -42,6 +42,7 @@ import {
   type LiveStream,
   type RugCheckClient,
   type RugCheckProfile,
+  type PumpLaunchResult,
   type HeliusClient,
   type SolPriceLookup,
   type MintAuthorityResult,
@@ -116,6 +117,7 @@ import { seedQuotes } from "./walletValuation.js";
 import { alertAwaitingWallets, holdForLinked, noteAlertWallets } from "./walletPriority.js";
 import { holderTransfersOf, resolveHolderTransfers, takeHolderTransferStats } from "./holderTransfers.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
+import { resolvePumpLaunches } from "./pumpLaunch.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
 import { rememberGraduations, rememberLaunchTimes, resolvePreBondSeconds } from "./launchTimes.js";
 import { ignoreMayhemMints, resolveMayhemMode } from "./mayhemMode.js";
@@ -165,6 +167,8 @@ const CANDIDATE_CONCURRENCY = 15;
 
 export interface ScanDeps {
   pumpFun: PumpFunClient;
+  /** Where the Pump.fun launch proof is read when Helius gives no answer (pumpLaunch.ts). Optional: none. */
+  pumpLaunchBackups?: Pick<HeliusClient, "getPumpLaunchBatch">[];
   dexScreener: DexScreenerClient;
   /**
    * Where the empty-wallet check prices holders' other holdings: Jupiter first when a key is set
@@ -984,6 +988,16 @@ async function scanCycle(
     .map((c) => c.mintAddress);
   const mintAuthorities = await resolveMintAuthorities(needsAuthorityLookup, deps.helius, env);
   lap("mintAuthority");
+  // A coin the data in hand fails on LP or authorities is checked for on-chain proof that it is a
+  // Pump.fun launch, whose LP is the protocol's and whose authorities are gone (pumpLaunch.ts).
+  const pumpLaunches = await resolvePumpLaunches(
+    candidates
+      .filter((c) => !passesLocalRugScreen(buildOnChainProfile(c, rugProfiles, mintAuthorities)))
+      .map((c) => c.mintAddress),
+    deps.helius,
+    deps.pumpLaunchBackups,
+  );
+  lap("pumpLaunch");
   // The same mints' top-10 holders, read from the chain (see onChainHolders.ts), for the ones the
   // fallback profile can pass on: renounced authorities on a Pump.fun venue. Without a holder list
   // the concentration cut and the wallet checks can't run, and model calls wait for them.
@@ -993,10 +1007,11 @@ async function scanCycle(
         const a = mintAuthorities.get(c.mintAddress);
         return (
           !rugProfiles.has(c.mintAddress) &&
-          a?.status === "found" &&
-          !a.mintAuthorityActive &&
-          !a.freezeAuthorityActive &&
-          pumpVenue(c.dexId)
+          ((a?.status === "found" &&
+            !a.mintAuthorityActive &&
+            !a.freezeAuthorityActive &&
+            pumpVenue(c.dexId)) ||
+            provenPumpLaunch(pumpLaunches, c.mintAddress) !== null)
         );
       })
       .map((c) => c.mintAddress),
@@ -1019,7 +1034,7 @@ async function scanCycle(
   const baseProfileByMint = new Map<string, OnChainProfile | null>(
     candidates.map((c) => [
       c.mintAddress,
-      buildOnChainProfile(c, rugProfiles, mintAuthorities, onChainHolders),
+      buildOnChainProfile(c, rugProfiles, mintAuthorities, onChainHolders, pumpLaunches),
     ]),
   );
   const mayhemCandidates = candidates
@@ -2831,12 +2846,45 @@ export function secondLookDue(
  * reports it. With the holder list in, the concentration cut and the wallet checks run as on a
  * RugCheck profile, so curated calls (CURATED_REQUIRE_WALLET_CHECKS) no longer wait for RugCheck;
  * the creator, holder count and risk score stay unknown.
+ *
+ * A coin proven on chain to be a Pump.fun launch (pumpLaunches, see core's pumpLaunch.ts) has its
+ * LP locked and its authorities revoked whatever either source says: its venue is its curve and
+ * the PumpSwap pool its migration created, and the proof read both authorities gone. That pool is
+ * also no holder - RugCheck can miss it, as it did for a curve quoted in another Pump.fun coin.
  */
 export function buildOnChainProfile(
   candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
   rugProfiles: Map<string, RugCheckProfile>,
   mintAuthorities: Map<string, MintAuthorityResult>,
   onChainHolders: Map<string, OnChainHolders> = new Map(),
+  pumpLaunches: Map<string, PumpLaunchResult> = new Map(),
+): OnChainProfile | null {
+  const launch = provenPumpLaunch(pumpLaunches, candidate.mintAddress);
+  const profile = profileFromSources(
+    candidate,
+    rugProfiles,
+    mintAuthorities,
+    onChainHolders,
+    launch !== null,
+  );
+  if (!profile || !launch) return profile;
+  const withoutPool =
+    "topHolderShares" in profile ? withoutVenueHolder(profile as RugCheckProfile, launch.pool) : profile;
+  return { ...withoutPool, lpBurned: true, mintAuthorityActive: false, freezeAuthorityActive: false };
+}
+
+/** The proven Pump.fun launch behind `mintAddress`, or null when there is no proof. */
+function provenPumpLaunch(pumpLaunches: Map<string, PumpLaunchResult>, mintAddress: string) {
+  const result = pumpLaunches.get(mintAddress);
+  return result?.status === "found" ? result.launch : null;
+}
+
+function profileFromSources(
+  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
+  rugProfiles: Map<string, RugCheckProfile>,
+  mintAuthorities: Map<string, MintAuthorityResult>,
+  onChainHolders: Map<string, OnChainHolders>,
+  provenPump: boolean,
 ): OnChainProfile | null {
   // isMayhemMode is deliberately left unset here and filled in later for the candidates that
   // earn a lookup (see the two-pass assembly in runScanCycle). Unset means unverified, which the
@@ -2860,14 +2908,17 @@ export function buildOnChainProfile(
       : profile;
   }
 
+  // A proven launch's proof read the authorities itself (buildOnChainProfile applies it), so it
+  // doesn't need this lookup to have answered.
   const authorities = mintAuthorities.get(mintAddress);
-  if (!authorities || authorities.status !== "found") return null;
+  const read = authorities?.status === "found" ? authorities : undefined;
+  if (!read && !provenPump) return null;
 
   const holders = onChainHolders.get(mintAddress);
   return {
     mintAddress,
-    mintAuthorityActive: authorities.mintAuthorityActive,
-    freezeAuthorityActive: authorities.freezeAuthorityActive,
+    mintAuthorityActive: read?.mintAuthorityActive ?? false,
+    freezeAuthorityActive: read?.freezeAuthorityActive ?? false,
     lpBurned: pumpVenue(candidate.dexId),
     ...(holders
       ? {
