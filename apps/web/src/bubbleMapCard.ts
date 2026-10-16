@@ -181,6 +181,11 @@ export async function renderBubbleCard(
      * in place of its side wallets (user ask 2026-10-15).
      */
     kols?: readonly KolControl[];
+    /**
+     * Every KOL bundle, for the Linked figure, when `kols` (what's drawn) leaves some out because
+     * the KOL side wallets switch is off; the figure stays as the dialog's tile shows it.
+     */
+    linkedKols?: readonly KolControl[];
   } = {},
 ): Promise<HTMLCanvasElement> {
   // Drawn at twice the card's size: the map's small bubbles and names stay sharp (user ask 2026-10-16).
@@ -212,7 +217,7 @@ export async function renderBubbleCard(
   ctx.fillText(clip(ctx, name, leftW), PAD, 210);
 
   // KOLs' bundles and the wider map's links counted too, as the dialog's Linked tile (mapLinked).
-  const { pct: linked, count } = mapLinked(graph, opts.kols);
+  const { pct: linked, count } = mapLinked(graph, opts.linkedKols ?? opts.kols);
   const holders = graph.nodes.filter((n) => n.kind === "holder").length;
   const held = graph.nodes.filter((n) => n.kind === "holder").reduce((t, n) => t + n.pct, 0);
   // Red at the app's cut: the Linked tile's count against the screen's 20 of 25.
