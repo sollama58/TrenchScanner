@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  callPeakAt,
   callPeakPct,
   foldCuratedIntoPage,
+  foldedCallPeakPct,
   groupSameTokenCalls,
   resolveOutcome,
   serializeCuratedAlert,
@@ -603,5 +605,38 @@ describe("callPeakPct", () => {
     expect(callPeakPct(300, { peakMcapUsd: 100_000, anchorMcapUsd: 50_000 })).toBe(300);
     expect(callPeakPct(40, { peakMcapUsd: null, anchorMcapUsd: 50_000 })).toBe(40);
     expect(callPeakPct(null, { peakMcapUsd: null, anchorMcapUsd: 50_000 })).toBeNull();
+  });
+});
+
+describe("callPeakAt", () => {
+  const call = (peakMcapUsd: number | null, peakMcapAt: Date | null) => ({
+    createdAt: T0,
+    peakMcapUsd,
+    peakMcapAt,
+    anchorMcapUsd: 50_000,
+  });
+  it("times the run peak from the call when it is the Peak", () => {
+    expect(callPeakAt(300, 12, call(100_000, at(240)))).toEqual(at(12));
+  });
+  it("times the market-cap high when that is the Peak", () => {
+    expect(callPeakAt(20, 12, call(500_000, at(240)))).toEqual(at(240));
+  });
+  it("is unknown without a Peak, or without the Peak's own time", () => {
+    expect(callPeakAt(null, null, call(null, null))).toBeNull();
+    // The run peak is the Peak but has no minutes: the lower high's time is not its time.
+    expect(callPeakAt(300, null, call(100_000, at(240)))).toBeNull();
+  });
+});
+
+describe("foldedCallPeakPct", () => {
+  it("re-bases a call's Peak onto the filter alert's market cap when it came at or after it", () => {
+    expect(foldedCallPeakPct({ peakMcapUsd: 90_000, peakAt: at(60) }, at(30), 30_000)).toBeCloseTo(200);
+    expect(foldedCallPeakPct({ peakMcapUsd: 90_000, peakAt: at(30) }, at(30), 30_000)).toBeCloseTo(200);
+  });
+  it("leaves out a Peak from before the filter alert, or of unknown time", () => {
+    // Called at $10K at 11:00, peaked at $60K at 11:20, the filter alerted at $30K at 12:00.
+    expect(foldedCallPeakPct({ peakMcapUsd: 60_000, peakAt: at(-40) }, T0, 30_000)).toBeNull();
+    expect(foldedCallPeakPct({ peakMcapUsd: 60_000, peakAt: null }, T0, 30_000)).toBeNull();
+    expect(foldedCallPeakPct({ peakMcapUsd: null, peakAt: at(10) }, T0, 30_000)).toBeNull();
   });
 });

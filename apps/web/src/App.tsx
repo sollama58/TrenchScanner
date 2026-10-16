@@ -44,6 +44,7 @@ import { beginWait, markNavigation } from "./loadTracker";
 import { StreamView } from "./components/StreamView";
 import { useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
+import { closeTokenModal } from "./tokenModal";
 import { BugButton } from "./components/BugButton";
 import { AdminReportsBadge } from "./components/AdminReportsBadge";
 
@@ -122,6 +123,8 @@ export function App() {
           setSessionToken(null);
           invalidate();
           resetSettings();
+          // The open token view is above the feed, so it would outlive the session it was read in.
+          closeTokenModal();
           setSession({ state: "signed-out" });
           return;
         }
@@ -172,6 +175,7 @@ export function App() {
         setGuest(false);
         invalidate();
         resetSettings();
+        closeTokenModal();
         setSession({ state: "signed-in", user });
       })
       .catch((e: unknown) => {
@@ -206,6 +210,7 @@ export function App() {
     setSessionToken(null);
     invalidate();
     resetSettings();
+    closeTokenModal();
     setSession({ state: "signed-out" });
   };
 
@@ -213,6 +218,7 @@ export function App() {
     setGuest(true);
     invalidate();
     resetSettings();
+    closeTokenModal();
     setSession({ state: "guest" });
     // On a phone the guest button sits below the fold; the feed should open at its top.
     window.scrollTo({ top: 0 });
@@ -222,6 +228,7 @@ export function App() {
   const connectWallet = () => {
     setGuest(false);
     invalidate();
+    closeTokenModal();
     setSession({ state: "signed-out" });
     window.scrollTo({ top: 0 });
   };

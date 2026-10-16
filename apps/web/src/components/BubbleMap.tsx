@@ -1,7 +1,8 @@
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { LoadingNote, SkelValue } from "./Loading";
 import type { Snapshot, Token } from "../api";
 import { usePolling } from "../hooks";
+import { invalidate } from "../cache";
 import { pct, tokenLabel } from "../format";
 import {
   bubbleNameLines,
@@ -100,10 +101,32 @@ function useWideMap(mint: string): WideMap | null {
  */
 export function useBubbleMaps(mint: string): BubbleMaps | null {
   // Re-read at the worker's scan pace while the view is open, so a top 50 read after it opened
-  // (or one that changed) shows without reopening it.
-  const path = `/tokens/${encodeURIComponent(mint)}/bubble-holders`;
-  const { data } = usePolling<BubbleMaps>(path, HOLDER_SCAN_MS);
+  // (or one that changed) shows without reopening it - and at once when reloadBubbleMaps says so.
+  const path = bubbleMapsPath(mint);
+  const version = useSyncExternalStore(subscribeMaps, () => mapsVersion.get(mint) ?? 0);
+  const { data } = usePolling<BubbleMaps>(path, HOLDER_SCAN_MS, String(version));
   return data;
+}
+
+const bubbleMapsPath = (mint: string) => `/tokens/${encodeURIComponent(mint)}/bubble-holders`;
+
+/** Per coin, bumped by reloadBubbleMaps: every view reading its maps re-reads them (a key bump). */
+const mapsVersion = new Map<string, number>();
+const mapsListeners = new Set<() => void>();
+function subscribeMaps(listener: () => void) {
+  mapsListeners.add(listener);
+  return () => mapsListeners.delete(listener);
+}
+
+/**
+ * Re-reads a coin's maps in every open view now, not on the next poll: a moment was just kept
+ * (a filter alert's catch). Dropping the cache alone left it to the next tick, a minute away, and
+ * a read already in flight could put the answer from before it back.
+ */
+export function reloadBubbleMaps(mint: string): void {
+  invalidate(bubbleMapsPath(mint));
+  mapsVersion.set(mint, (mapsVersion.get(mint) ?? 0) + 1);
+  for (const l of mapsListeners) l();
 }
 
 /** The names of every wallet on the map (holders and funders), in one read. */

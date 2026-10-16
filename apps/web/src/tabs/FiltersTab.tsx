@@ -10,6 +10,7 @@ import {
   type Leaderboard,
 } from "../api";
 import { usePolling } from "../hooks";
+import { invalidate } from "../cache";
 import { pct, usd } from "../format";
 import { GROUPS, LAUNCHPAD_CHOICES, shownValue } from "../filterFields";
 import { useSettings } from "../alerts";
@@ -128,6 +129,10 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
       await action();
       if (done) setMessage(done);
       filters.reload();
+      // "Only alerts both caught" counts switched-on filters alone (the feed, its stats and the
+      // feed catch), and a deleted filter takes its alerts with it: the cached answers are stale.
+      invalidate("/matches");
+      invalidate("/curated/models");
       return true;
     } catch (e) {
       lastError.current = e instanceof ApiError || e instanceof Error ? e.message : String(e);

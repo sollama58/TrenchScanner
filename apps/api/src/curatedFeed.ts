@@ -319,6 +319,41 @@ export function callPeakPct(
   return fromAth === null ? runPeakPct : Math.max(runPeakPct, fromAth);
 }
 
+/**
+ * When a call's Peak (callPeakPct, same inputs) came: its run peak's moment (runPeakMinutes after
+ * the call) when that is the Peak, else its market-cap high's (peakMcapAt). Null when the Peak or
+ * its time is unknown. A card a call folds into re-bases the call's Peak onto the filter alert's
+ * price only when it came at or after that alert (foldedCallPeakPct).
+ */
+export function callPeakAt(
+  runPeakPct: number | null,
+  runPeakMinutes: number | null,
+  alert: { createdAt: Date; peakMcapUsd: number | null; peakMcapAt: Date | null; anchorMcapUsd: number },
+): Date | null {
+  const peak = callPeakPct(runPeakPct, alert);
+  if (peak === null) return null;
+  if (peak === runPeakPct && runPeakMinutes !== null) {
+    return new Date(alert.createdAt.getTime() + runPeakMinutes * 60_000);
+  }
+  return peak === callPeakPct(null, alert) ? alert.peakMcapAt : null;
+}
+
+/**
+ * A call's Peak as a return on the market cap of the filter alert it folded into, or null when it
+ * can't count there: it came before that alert (a run that peaked and pulled back before the
+ * filter fired is no run above the filter's price), or its time is unknown.
+ */
+export function foldedCallPeakPct(
+  call: { peakMcapUsd: number | null; peakAt: Date | null },
+  matchedAt: Date,
+  alertMcapUsd: number,
+): number | null {
+  if (call.peakMcapUsd === null || call.peakAt === null || !(alertMcapUsd > 0)) return null;
+  if (call.peakAt.getTime() < matchedAt.getTime()) return null;
+  const pct = (call.peakMcapUsd / alertMcapUsd - 1) * 100;
+  return Number.isFinite(pct) ? pct : null;
+}
+
 export function resolveOutcome(alert: OutcomeSources): OutcomeView {
   const live = alert.candidateOutcome;
   const pctFrom = (price: number, anchor: number) => ((price - anchor) / anchor) * 100;
@@ -499,6 +534,11 @@ export function curatedMeta(alert: CuratedAlertWithRelations) {
      * so it re-bases the call's Peak from this rather than from the call's own alert price.
      */
     peakMcapUsd: peakPct !== null && peakPct > 0 ? alert.anchorMcapUsd * (1 + peakPct / 100) : null,
+    /**
+     * When that Peak came (callPeakAt), null when unknown: a folded card re-bases it only when it
+     * came at or after the filter alert, and a run that peaked before is not one above its price.
+     */
+    peakAt: callPeakAt(outcome.peak24hReturnPct, outcome.runPeakMinutes, alert),
     /**
      * The Narrative seat's later view of this call, once TokenSage's deep read decided: "agrees"
      * or "warns". Null until then, and on the Narrative seat's own calls. Whether the card shows

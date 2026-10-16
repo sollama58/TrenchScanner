@@ -223,8 +223,9 @@ function FeedCatchMeter({ pollKey }: { pollKey: string }) {
             <span className="feed-catch-key models" aria-hidden /> Both{" "}
             <span className="num">{pct(share(fc.caught))}</span>
           </span>
-          <span>
-            Models alone <span className="num">{pct(share(fc.models.caught))}</span>, filters alone{" "}
+          {/* Each side's whole catch, the runners both caught included: not what each caught alone. */}
+          <span title="Each side's whole catch, the runners both caught included">
+            Models <span className="num">{pct(share(fc.models.caught))}</span>, filters{" "}
             <span className="num">{pct(share(fc.filters.caught))}</span>
           </span>
         </p>

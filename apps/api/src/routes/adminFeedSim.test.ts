@@ -6,7 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
-import { dedupeByToken } from "./adminFeedSim.js";
+import { bothCaughtMatches, dedupeByToken } from "./adminFeedSim.js";
 
 const HOUR = 3_600_000;
 
@@ -21,6 +21,19 @@ describe("dedupeByToken", () => {
     // Newest first, as the read returns them.
     const kept = dedupeByToken([m("c", "a", 8), m("b", "a", 2), m("x", "z", 1), m("a", "a", 0)], 6 * HOUR);
     expect(kept.map((k) => k.id)).toEqual(["c", "x", "a"]);
+  });
+});
+
+describe("bothCaughtMatches", () => {
+  it("pairs filter alerts with calls before deduping them", () => {
+    const t0 = Date.parse("2026-10-16T00:00:00Z");
+    const m = (id: string, h: number) => ({ id, tokenId: "a", matchedAt: new Date(t0 + h * HOUR) });
+    // Filter A at 00:00, filter B at 05:00, the model at 08:00: B's card is the both-only feed's.
+    const kept = bothCaughtMatches(
+      [m("b", 5), m("a", 0)],
+      [{ tokenId: "a", createdAt: new Date(t0 + 8 * HOUR) }],
+    );
+    expect(kept.map((k) => k.id)).toEqual(["b"]);
   });
 });
 
