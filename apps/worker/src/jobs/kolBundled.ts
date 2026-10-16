@@ -28,6 +28,12 @@ export interface KolBundledReading {
   kolBundledPct: number;
   bundledSupplyPct: number;
   bundledSupplyCount: number;
+  /**
+   * The same two before a KOL's bundle followed its transfers (user decision 2026-10-16): what the
+   * models and the AI judge keep reading until the next retrain (notes/model-retrain-pending.md).
+   */
+  kolBundledPctModel: number;
+  bundledSupplyPctModel: number;
 }
 
 /** The holder lists a KOL reading needs: the linked reading's, or a stored snapshot's. */
@@ -80,10 +86,13 @@ export async function kolBundledByMint(
       transfers: r.transfers,
     };
     const bundled = bundledSupply(input);
+    const unfollowed = { ...input, transfers: null };
     out.set(mint, {
       kolBundledPct: kolBundledPct(input),
       bundledSupplyPct: bundled.pct,
       bundledSupplyCount: bundled.count,
+      kolBundledPctModel: kolBundledPct(unfollowed),
+      bundledSupplyPctModel: bundledSupply(unfollowed).pct,
     });
   }
   return out;

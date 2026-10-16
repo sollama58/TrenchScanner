@@ -1146,8 +1146,10 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     top10WalletsChecked: scored.top10WalletsChecked ?? null,
     freshTopHolderCount: scored.freshTopHolderCount ?? null,
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
-    kolBundledPct: scored.kolBundledPct ?? null,
-    bundledSupplyPct: scored.bundledSupplyPct ?? null,
+    // The models keep the figures from before KOL bundles followed transfers until the next
+    // retrain (notes/model-retrain-pending.md); the snapshot and the filters read the new ones.
+    kolBundledPct: scored.kolBundledPctModel ?? scored.kolBundledPct ?? null,
+    bundledSupplyPct: scored.bundledSupplyPctModel ?? scored.bundledSupplyPct ?? null,
     launchpadStonks:
       scored.launchpad === STONKS_LAUNCHPAD ? 1 : scored.launchpad === PUMPFUN_LAUNCHPAD ? 0 : null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
