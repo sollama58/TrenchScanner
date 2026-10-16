@@ -310,6 +310,7 @@ function BotOff({ status }: { status: TradingStatus }) {
           </div>
         </dl>
       </section>
+      <TradeAlertsPanel />
       <PaperPanel />
       <BacktestPanel />
     </div>
@@ -403,6 +404,7 @@ function TradingConsole() {
       <WalletPanel state={state} reload={reload} />
       {state.wallet && state.canTrade && <BotPanel state={state} reload={reload} />}
       {state.wallet && <PositionsPanel state={state} reload={reload} />}
+      {state.canTrade && <TradeAlertsPanel />}
       {state.canTrade && <PaperPanel />}
       {state.canTrade && <BacktestPanel />}
     </div>
@@ -926,7 +928,8 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
           Telegram alerts for each buy, sale and {paper ? "stop" : "pause"}
         </label>
         <p className="muted small">
-          Sent to the private chats linked to your account in Settings, never to a group.
+          Sent to the private chats linked to your account in Settings, never to a group. Which kinds are sent
+          is set once for all your bots, under Telegram trade alerts.
         </p>
       </fieldset>
 
@@ -1518,6 +1521,116 @@ const signedSol = (lamports: string) => {
  * Nothing here holds a wallet or sends a transaction, so it works while the real bot is off. An
  * admin keeps several strategies and runs up to three at once.
  */
+type TradeAlertEvent =
+  "buy" | "take_profit" | "stop_loss" | "trailing_stop" | "time_limit" | "manual" | "loss_limit";
+interface TradeAlerts {
+  paper: boolean;
+  bot: boolean;
+  events: Record<TradeAlertEvent, boolean>;
+}
+const TRADE_ALERT_EVENTS: { id: TradeAlertEvent; label: string }[] = [
+  { id: "buy", label: "Buys" },
+  { id: "take_profit", label: "Take-profit sales" },
+  { id: "stop_loss", label: "Stop-loss sales" },
+  { id: "trailing_stop", label: "Trailing exits" },
+  { id: "time_limit", label: "Time-limit sales" },
+  { id: "manual", label: "Sales you asked for" },
+  { id: "loss_limit", label: "Loss-limit stops and pauses" },
+];
+
+/**
+ * Which trade notes reach the admin's private Telegram chats: paper strategies and the live bot
+ * on or off, and which kinds, the same for both. Each switch saves as it is pressed. Layered on
+ * each bot's and strategy's own "Telegram alerts" box: a note goes out only when both allow it.
+ */
+function TradeAlertsPanel() {
+  const [alerts, setAlerts] = useState<TradeAlerts | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    api<{ alerts: TradeAlerts }>("/trading/alerts")
+      .then((res) => setAlerts(res.alerts))
+      .catch((err: unknown) => setError(errorText(err)));
+  }, []);
+
+  const save = async (
+    patch: Partial<Omit<TradeAlerts, "events">> & { events?: Partial<TradeAlerts["events"]> },
+  ) => {
+    if (!alerts) return;
+    const before = alerts;
+    setAlerts({ ...alerts, ...patch, events: { ...alerts.events, ...(patch.events ?? {}) } });
+    try {
+      const res = await api<{ alerts: TradeAlerts }>("/trading/alerts", {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+      setAlerts(res.alerts);
+      setError(null);
+    } catch (err) {
+      setAlerts(before);
+      setError(errorText(err));
+    }
+  };
+
+  const anySource = alerts ? alerts.paper || alerts.bot : false;
+  return (
+    <section className="panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">
+            <BoltIcon size={13} /> Telegram trade alerts
+          </span>
+          <h2>{!alerts ? "Alerts" : anySource ? "On" : "Off"}</h2>
+          <p className="muted small">
+            What your trading bot and paper strategies tell your private Telegram chats. The same choices
+            apply to both. Each bot and strategy also has its own on/off box in its settings.
+          </p>
+        </div>
+      </header>
+      {error && <p className="error small">{error}</p>}
+      {!alerts ? (
+        <Skeleton lines={3} />
+      ) : (
+        <>
+          <fieldset>
+            <legend>From</legend>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={alerts.paper}
+                onChange={(e) => void save({ paper: e.target.checked })}
+              />
+              Paper strategies
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={alerts.bot}
+                onChange={(e) => void save({ bot: e.target.checked })}
+              />
+              Trading bot
+            </label>
+          </fieldset>
+          <fieldset disabled={!anySource}>
+            <legend>Which alerts</legend>
+            <div className="grid2">
+              {TRADE_ALERT_EVENTS.map((ev) => (
+                <label className="check" key={ev.id}>
+                  <input
+                    type="checkbox"
+                    checked={alerts.events[ev.id]}
+                    onChange={(e) => void save({ events: { [ev.id]: e.target.checked } })}
+                  />
+                  {ev.label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        </>
+      )}
+    </section>
+  );
+}
+
 function PaperPanel() {
   const [state, setState] = useState<PaperState | null>(null);
   const [error, setError] = useState<string | null>(null);
