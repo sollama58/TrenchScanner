@@ -375,6 +375,14 @@ export const LinkIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** Two opposed arrows: coins moved between two wallets. */
+export const TransferIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 8h15M15 4l4 4-4 4" />
+    <path d="M20 16H5M9 12l-4 4 4 4" />
+  </Svg>
+);
+
 /** A wallet: the wallet detail modal. */
 export const WalletIcon = (p: IconProps) => (
   <Svg {...p}>

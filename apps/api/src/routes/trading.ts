@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import {
   adminWalletSet,
+  applyTradeAlertsPatch,
   createKeyProvider,
   DEFAULT_TRADING_BOT_CONFIG,
   describeExitPlan,
@@ -13,6 +14,7 @@ import {
   EXIT_PLAN,
   LAMPORTS_PER_SOL,
   looksLikeSolanaAddress,
+  parseTradeAlerts,
   prisma,
   readExitPlan,
   readTradingBotConfig,
@@ -21,6 +23,7 @@ import {
   TradingRpc,
   tradingBotConfigSchema,
   tradingBacktest,
+  tradeAlertsPatchSchema,
   type BacktestRow,
   type Env,
 } from "@trenchscanner/core";
@@ -163,6 +166,38 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
       backtests.set(days, hit);
     }
     return { days, models: await hit.rows };
+  });
+  // Which trade notes reach the admin's Telegram chats, for the live bot and every paper strategy
+  // alike (trading/tradeAlerts.ts). There while the bot is off too: paper strategies still send.
+  app.get("/alerts", async (request, reply) => {
+    if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });
+    const user = await prisma.user.findUnique({
+      where: { id: request.user!.userId },
+      select: { tradeAlerts: true },
+    });
+    if (!user) return reply.code(401).send({ error: "unauthenticated" });
+    return { alerts: parseTradeAlerts(user.tradeAlerts) };
+  });
+  app.put("/alerts", async (request, reply) => {
+    if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });
+    const parsed = tradeAlertsPatchSchema.safeParse(request.body);
+    if (!parsed.success)
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    const userId = request.user!.userId;
+    // Merged under the row lock, as settings.ts does: each switch saves as it is pressed.
+    const next = await prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<{ tradeAlerts: unknown }[]>`
+        SELECT "tradeAlerts" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+      if (rows.length === 0) return null;
+      const merged = applyTradeAlertsPatch(parseTradeAlerts(rows[0]!.tradeAlerts), parsed.data);
+      await tx.user.update({
+        where: { id: userId },
+        data: { tradeAlerts: merged as unknown as Prisma.InputJsonValue },
+      });
+      return merged;
+    });
+    if (!next) return reply.code(401).send({ error: "unauthenticated" });
+    return { alerts: next };
   });
   // Paper trading holds no wallet and moves nothing: there whether or not the bot is on.
   await app.register((paper) => registerPaperTradingRoutes(paper, { env, admins }), { prefix: "/paper" });

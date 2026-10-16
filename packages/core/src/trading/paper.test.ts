@@ -426,6 +426,45 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
     expect(s.lastError).toBeNull();
   });
 
+  it("sends only the notes each recipient's trade-alert settings want", async () => {
+    const other = await prisma.user.create({
+      data: {
+        walletAddress: generateWalletKeypair().publicKey,
+        tradeAlerts: { paper: false, events: { stop_loss: false } },
+      },
+    });
+    const base = BigInt(Date.now()) * 1000n + 500n;
+    await prisma.telegramChat.createMany({
+      data: [
+        { chatId: base + 1n, kind: "private", userId },
+        { chatId: base + 2n, kind: "private", userId: other.id },
+      ],
+    });
+    try {
+      const sent: [bigint, string][] = [];
+      const telegram = {
+        sendMessage: async (chatId: bigint, html: string) => (sent.push([chatId, html]), { ok: true }),
+      };
+      await sendTradeNotes(
+        [
+          { userId: other.id, html: "paper buy", source: "paper", event: "buy" },
+          { userId: other.id, html: "bot stop", source: "bot", event: "stop_loss" },
+          { userId: other.id, html: "bot buy", source: "bot", event: "buy" },
+          { userId, html: "mine", source: "paper", event: "stop_loss" },
+        ],
+        { telegram, admins: new Set([admin]) },
+      );
+      // The other account turned paper notes and stop losses off; this one has no settings: all on.
+      expect(sent).toEqual([
+        [base + 2n, "bot buy"],
+        [base + 1n, "mine"],
+      ]);
+    } finally {
+      await prisma.telegramChat.deleteMany({ where: { chatId: { in: [base + 1n, base + 2n] } } });
+      await prisma.user.delete({ where: { id: other.id } });
+    }
+  });
+
   it("sends notes to the owner's private chats only, the server bot's to every admin's", async () => {
     const other = await prisma.user.create({ data: { walletAddress: generateWalletKeypair().publicKey } });
     const base = BigInt(Date.now()) * 1000n;
@@ -444,9 +483,9 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
       const long = "x".repeat(2_000);
       await sendTradeNotes(
         [
-          { userId, html: long },
-          { userId, html: long },
-          { userId: other.id, html: "server" },
+          { userId, html: long, source: "paper", event: "buy" },
+          { userId, html: long, source: "paper", event: "buy" },
+          { userId: other.id, html: "server", source: "bot", event: "buy" },
         ],
         { telegram, admins: new Set([admin]), serverUserId: other.id },
       );

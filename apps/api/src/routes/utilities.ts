@@ -28,7 +28,13 @@ import {
 } from "@trenchscanner/core";
 import { creatorFeesByMint, TOKEN_CARD_SELECT, withCarriedHolderList } from "../curatedFeed.js";
 import { readKolRows } from "../kolRoster.js";
-import { loadLabeledSides } from "../possibleSides.js";
+import { loadKolSideLabels, loadLabeledSides } from "../possibleSides.js";
+import {
+  loadPairTransfers,
+  loadTransferCounts,
+  PAIR_TRANSFERS_MAX,
+  transferGroup,
+} from "../sideTransfers.js";
 import { currentMarketCap } from "./matches.js";
 import { readTokenChart, readTokenSage } from "./tokens.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
@@ -45,9 +51,11 @@ import { loadWalletBundle } from "../walletBundle.js";
  * - POST /utilities/wallet      look up any wallet: 1 credit, taken once its profile loads; the
  *                               dashboard then opens it in the wallet modal (GET /wallets/:wallet)
  * - GET  /utilities/side-wallets         the Side Wallet Checker's KOL leaderboard (free)
- * - GET  /utilities/side-wallets/:wallet one KOL's top side wallets per window (free)
+ * - GET  /utilities/side-wallets/:wallet one KOL's top side wallets per window (free), the wallets
+ *                               labeled for it, and each wallet's coin transfers with it
  * - GET  /utilities/side-wallets/:wallet/:side the coins a KOL and one listed wallet bought together,
- *                               leg by leg, with both funders: what a person needs to judge a link
+ *                               leg by leg, with both funders and the coins moved between them:
+ *                               what a person needs to judge a link
  * - GET  /utilities/side-labels          every labeled side wallet, numbered per KOL: the count and export
  * - GET  /utilities/bundle/:wallet       any other wallet's Multi-Wallet-Bundle, read on demand (free)
  *
@@ -378,7 +386,7 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       StoredSideWallet[]
     >;
     const wallets = [...new Set(SIDE_WINDOWS.flatMap((w) => sides[w].map((s) => s.wallet)))];
-    const [risk, names] = await Promise.all([
+    const [risk, names, labeled, transfers] = await Promise.all([
       wallets.length
         ? prisma.walletRisk.findMany({
             where: { wallet: { in: wallets } },
@@ -386,6 +394,9 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
           })
         : [],
       kolNames([kol]),
+      // Pinned above the lists whatever the window (user ask 2026-10-16), and each row's transfers.
+      loadKolSideLabels(kol),
+      transferGroup(kol).then((g) => loadTransferCounts(g)),
     ]);
     const riskBy = new Map(risk.map((r) => [r.wallet, r]));
     const withRisk = (s: StoredSideWallet) => {
@@ -405,6 +416,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       sides: Object.fromEntries(SIDE_WINDOWS.map((w) => [w, sides[w].map(withRisk)])),
       // Wallets taken off this KOL's lists as likely bots (strongly matched with 4+ KOLs).
       likelyBots: (row.sides as { likelyBots?: string[] }).likelyBots ?? [],
+      labeled,
+      transfers,
       rules: sideWalletRules(),
     };
   });
@@ -460,7 +473,7 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       WHERE k."wallet" = ${kol} AND k."buys" > 0 AND k."firstBuyAt" >= ${since}
       ORDER BY k."firstBuyAt" DESC
       LIMIT ${SIDE_MATCH_MAX}`;
-    const [kolCoins, funders, names] = await Promise.all([
+    const [kolCoins, funders, names, transfers] = await Promise.all([
       prisma.$queryRaw<{ n: bigint }[]>`
         SELECT COUNT(*) AS n
         FROM "TokenWalletActivity" a
@@ -471,6 +484,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
         select: { wallet: true, status: true, funder: true, amountSol: true, fundedAt: true },
       }),
       kolNames([kol]),
+      // Coins moved between the two (user ask 2026-10-16), a KOL's Known Sides counting as the KOL.
+      transferGroup(kol).then((g) => loadPairTransfers(g, side, since)),
     ]);
     const funderOf = (w: string) => {
       const f = funders.find((x) => x.wallet === w);
@@ -498,6 +513,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       summary: sideMatchSummary(trades),
       trades,
       truncated: rows.length >= SIDE_MATCH_MAX,
+      transfers,
+      transfersTruncated: transfers.length >= PAIR_TRANSFERS_MAX,
     };
   });
 

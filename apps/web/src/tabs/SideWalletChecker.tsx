@@ -16,6 +16,7 @@ import {
   SearchIcon,
   ShieldIcon,
   TargetIcon,
+  TransferIcon,
   UsersIcon,
   WalletIcon,
 } from "../components/Icons";
@@ -106,6 +107,80 @@ interface KolSides {
   likelyBots?: string[];
   /** A Multi-Wallet-Bundle only (GET /utilities/bundle/:wallet): why there is none. */
   skipped?: "kol" | "bot" | null;
+  /** The wallets labeled for it, or in a bundle that would be; pinned above the list. Absent from older API builds. */
+  labeled?: SideLabel[];
+  /** Each wallet's coin transfers with it, either way, per window. Absent from older API builds. */
+  transfers?: Record<SideWindow, Record<string, number>>;
+}
+
+/**
+ * A wallet labeled for the KOL (KolSideLabel in apps/api/src/possibleSides.ts), or one that would
+ * be against a bundle's wallet (BundleLabel in apps/api/src/walletBundle.ts, which has no kind).
+ */
+export interface SideLabel {
+  wallet: string;
+  kind?: "known" | "funded" | "possible";
+  /** % shared on the tier that earned it; 0 when transfers or funding alone did. */
+  pct: number;
+  /** The tier's span in hours. */
+  hours?: number;
+  /** Transfers with the KOL (or the bundle's wallet) that earned or helped earn it. */
+  transfers?: number;
+  /** The transfer tier's span, on a bundle label, when it differs from `hours`. */
+  transferHours?: number;
+}
+
+/** One row of a list: a side wallet with its figures in the window (null when it isn't listed there), and its label when pinned. */
+export interface SideItem {
+  wallet: string;
+  stats: SideWallet | null;
+  label?: SideLabel;
+}
+
+/**
+ * The labeled wallets pinned above the list whatever the window (user ask 2026-10-16), and the
+ * list without them. Pinned: those listed in the window first, by % shared as the list has them,
+ * then the rest in the API's order (Known Sides, funded, then strongest). Exported for tests.
+ */
+export function pinLabeled(
+  list: readonly SideWallet[],
+  labeled: readonly SideLabel[] = [],
+): { pinned: SideItem[]; rest: SideWallet[] } {
+  const byWallet = new Map(labeled.map((l) => [l.wallet, l]));
+  const inList = new Set(list.map((s) => s.wallet));
+  return {
+    pinned: [
+      ...list
+        .filter((s) => byWallet.has(s.wallet))
+        .map((s) => ({ wallet: s.wallet, stats: s, label: byWallet.get(s.wallet) })),
+      ...labeled
+        .filter((l) => !inList.has(l.wallet))
+        .map((l) => ({ wallet: l.wallet, stats: null, label: l })),
+    ],
+    rest: list.filter((s) => !byWallet.has(s.wallet)),
+  };
+}
+
+/** A pinned wallet's pill: the label it carries ("Labeled" in a bundle, which labels no one). Exported for tests. */
+export function labelPill(l: SideLabel): string {
+  if (l.kind === "known") return "Known Side";
+  if (l.kind === "funded") return "KOL Funded Wallet";
+  return l.kind === "possible" ? "Possible Side" : "Labeled";
+}
+
+/** What earned a pinned wallet its label, in words: "96% shared over 48h · 7 transfers". Exported for tests. */
+export function labelBasis(l: SideLabel): string {
+  if (l.kind === "known") return "One of the KOL's own wallets";
+  if (l.kind === "funded") return "The KOL paid for its first SOL";
+  const transferSpan = l.transferHours ?? (l.pct > 0 ? undefined : l.hours);
+  return [
+    l.pct > 0 ? `${Math.round(l.pct)}% shared${l.hours ? ` over ${l.hours}h` : ""}` : null,
+    l.transfers
+      ? `${plural(l.transfers, "transfer")}${transferSpan ? ` within ${transferSpan}h` : ""}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** Rows shown before "Show all". */
@@ -462,6 +537,9 @@ function SideWallets({
   const rules = data?.rules ?? DEFAULT_RULES;
   const list = data?.sides[period] ?? [];
   const coins = data?.coins[period] ?? 0;
+  const { pinned, rest } = pinLabeled(list, data?.labeled);
+  const transfers = data?.transfers?.[period];
+  const rows = { kol, kolName, period, coins, transfers, bundle };
   return (
     <div className="side-drop">
       <div className="side-drop-head">
@@ -520,24 +598,24 @@ function SideWallets({
             ))}
           </ol>
         </div>
-      ) : list.length === 0 ? (
-        <p className="muted small side-empty">
-          {coins === 0
-            ? `No tracked coins in the last ${period}.`
-            : `No wallet shared ${rules.minShared[period]} or more of its ${plural(coins, "coin")} (and ${rules.minPct}% or more) in the last ${period}.`}
-        </p>
       ) : (
         <>
-          <SideRows
-            kol={kol}
-            kolName={kolName}
-            period={period}
-            list={list.slice(0, DROP_ROWS)}
-            coins={coins}
-          />
-          {list.length > DROP_ROWS && (
+          {/* Labeled wallets first, whatever the window (user ask 2026-10-16), then a rule, then the list. */}
+          {pinned.length > 0 && <SideRows {...rows} items={pinned} pinned />}
+          {rest.length === 0 ? (
+            <p className="muted small side-empty">
+              {coins === 0
+                ? `No tracked coins in the last ${period}.`
+                : list.length > 0
+                  ? `No other wallet shared ${rules.minShared[period]} or more of its coins in the last ${period}.`
+                  : `No wallet shared ${rules.minShared[period]} or more of its ${plural(coins, "coin")} (and ${rules.minPct}% or more) in the last ${period}.`}
+            </p>
+          ) : (
+            <SideRows {...rows} items={rest.slice(0, DROP_ROWS).map(asItem)} />
+          )}
+          {rest.length > DROP_ROWS && (
             <button type="button" className="ghost small-btn side-all" onClick={() => setShowAll(true)}>
-              Show all {list.length} wallets
+              Show all {rest.length} wallets
             </button>
           )}
         </>
@@ -551,11 +629,9 @@ function SideWallets({
       )}
       {showAll && (
         <SideWalletsModal
-          kol={kol}
-          kolName={kolName}
-          period={period}
-          list={list}
-          coins={coins}
+          rows={rows}
+          pinned={pinned}
+          rest={rest}
           rules={rules}
           onClose={() => setShowAll(false)}
         />
@@ -566,22 +642,19 @@ function SideWallets({
 
 /** Every listed side wallet for one KOL and window, in a native modal (a sheet on phones). */
 function SideWalletsModal({
-  kol,
-  kolName,
-  period,
-  list,
-  coins,
+  rows,
+  pinned,
+  rest,
   rules,
   onClose,
 }: {
-  kol: string;
-  kolName: string;
-  period: SideWindow;
-  list: SideWallet[];
-  coins: number;
+  rows: Omit<SideRowsProps, "items" | "pinned" | "onOpen">;
+  pinned: SideItem[];
+  rest: SideWallet[];
   rules: SideRules;
   onClose: () => void;
 }) {
+  const { kolName, period, coins } = rows;
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
@@ -608,80 +681,118 @@ function SideWalletsModal({
           </button>
         </header>
         <p className="muted small">
-          All {list.length} wallets that shared at least {rules.minShared[period]} of its{" "}
-          {plural(coins, "coin")} and {rules.minPct}% or more, by % shared. Not confirmed side wallets:
-          matched on timing only.
+          All {rest.length} wallets that shared at least {rules.minShared[period]} of its{" "}
+          {plural(coins, "coin")} and {rules.minPct}% or more, by % shared
+          {pinned.length > 0 ? `, below the ${plural(pinned.length, "labeled wallet")}` : ""}. Not confirmed
+          side wallets: matched on timing only.
         </p>
         {/* The wallet modal opens over the page, so this one closes first. */}
-        <SideRows kol={kol} kolName={kolName} period={period} list={list} coins={coins} onOpen={onClose} />
+        {pinned.length > 0 && <SideRows {...rows} items={pinned} pinned onOpen={onClose} />}
+        <SideRows {...rows} items={rest.map(asItem)} onOpen={onClose} />
       </div>
     </dialog>
   );
 }
 
-/**
- * Side wallet rows: address (opens the wallet modal), % shared bar, coins, timing and labels. A row
- * opens the coins it bought with the KOL, leg by leg (SideMatch).
- */
-function SideRows({
-  kol,
-  kolName,
-  period,
-  list,
-  coins,
-  onOpen,
-}: {
+const asItem = (s: SideWallet): SideItem => ({ wallet: s.wallet, stats: s });
+
+interface SideRowsProps {
   kol: string;
   kolName: string;
   period: SideWindow;
-  list: SideWallet[];
+  items: SideItem[];
   coins: number;
+  /** Each wallet's coin transfers with the KOL in the window. */
+  transfers?: Record<string, number>;
+  /** A Multi-Wallet-Bundle's list: its pinned wallets would qualify for a label, they carry none. */
+  bundle?: boolean;
+  /** The labeled wallets above the rule (user ask 2026-10-16): ranked by none, each with its label. */
+  pinned?: boolean;
   onOpen?: () => void;
-}) {
-  const labels = usePossibleSides(list.map((s) => s.wallet));
+}
+
+/**
+ * Side wallet rows: address (opens the wallet modal), % shared bar, coins, timing, transfers and
+ * labels. A row opens the coins it bought with the KOL, leg by leg, and the coins moved between
+ * them (SideMatch). A pinned wallet not listed in the window shows what labeled it instead.
+ */
+function SideRows({ kol, kolName, period, items, coins, transfers, bundle, pinned, onOpen }: SideRowsProps) {
+  const labels = usePossibleSides(pinned ? [] : items.map((s) => s.wallet));
   const [open, setOpen] = useState<string | null>(null);
   return (
-    <ol className="side-sides">
-      {list.map((s, i) => {
-        const label = labels[s.wallet]?.find((p) => p.kolWallet === kol);
-        const isOpen = open === s.wallet;
-        const toggle = () => setOpen(isOpen ? null : s.wallet);
+    <ol
+      className={`side-sides${pinned ? " side-pinned" : ""}`}
+      aria-label={pinned ? "Labeled wallets" : undefined}
+    >
+      {items.map(({ wallet, stats: s, label: pin }, i) => {
+        const label = pin ? null : labels[wallet]?.find((p) => p.kolWallet === kol);
+        const moved = transfers?.[wallet] ?? 0;
+        const isOpen = open === wallet;
+        const toggle = () => setOpen(isOpen ? null : wallet);
         return (
           <li
-            key={s.wallet}
-            className={[label ? "labeled" : "", isOpen ? "open" : ""].join(" ").trim() || undefined}
+            key={wallet}
+            className={[pin || label ? "labeled" : "", isOpen ? "open" : ""].join(" ").trim() || undefined}
             // The row opens and closes its trades; the address, the toggle and the open panel itself don't.
             onClick={(e) => {
               if (!(e.target as HTMLElement).closest("button, a, .sm-body")) toggle();
             }}
           >
-            <span className="side-rank num faint">{i + 1}</span>
+            {pin ? (
+              <span className="side-rank side-pin" title={bundle ? "Would qualify for a label" : "Labeled"}>
+                <TargetIcon size={12} />
+              </span>
+            ) : (
+              <span className="side-rank num faint">{i + 1}</span>
+            )}
             <button
               type="button"
               className="link side-wallet num"
-              title={`Open ${s.wallet}`}
+              title={`Open ${wallet}`}
               onClick={() => {
                 onOpen?.();
-                openWallet(s.wallet);
+                openWallet(wallet);
               }}
             >
-              {shortAddress(s.wallet)}
+              {shortAddress(wallet)}
             </button>
             <span className="side-bar" aria-hidden="true">
-              <span style={{ width: `${Math.min(100, s.pct)}%` }} />
+              {s && <span style={{ width: `${Math.min(100, s.pct)}%` }} />}
             </span>
-            <span className={`side-pct num${s.pct >= 90 ? " strong" : ""}`}>
-              {s.pct.toFixed(s.pct >= 10 ? 0 : 1)}%
+            <span className={`side-pct num${s && s.pct >= 90 ? " strong" : s ? "" : " faint"}`}>
+              {s ? `${s.pct.toFixed(s.pct >= 10 ? 0 : 1)}%` : "—"}
             </span>
             <span className="side-meta faint small num">
-              <span title="Coins it bought with the KOL, of the KOL's coins in the window">
-                {s.shared}/{coins} coins
-              </span>
-              <span title="Median time from the KOL's buy to its own">· {gapText(s.gapSec)}</span>
-              <span title="Every tracked coin it bought in the window">· {s.coins} total</span>
+              {s ? (
+                <>
+                  <span title="Coins it bought with the KOL, of the KOL's coins in the window">
+                    {s.shared}/{coins} coins
+                  </span>
+                  <span title="Median time from the KOL's buy to its own">· {gapText(s.gapSec)}</span>
+                  <span title="Every tracked coin it bought in the window">· {s.coins} total</span>
+                </>
+              ) : (
+                <>
+                  {pin && labelBasis(pin) && <span>{labelBasis(pin)}</span>}
+                  <span>
+                    {pin && labelBasis(pin) ? "· " : ""}not listed in {period}
+                  </span>
+                </>
+              )}
             </span>
             <span className="side-tags">
-              {label?.funded ? (
+              {pin ? (
+                <span
+                  className={`pill side-label${pin.kind === "funded" || pin.kind === "known" ? " side-funded" : ""}`}
+                  title={
+                    bundle
+                      ? `Would qualify for a Possible Side label against this wallet: ${labelBasis(pin)}`
+                      : labelBasis(pin)
+                  }
+                >
+                  <TargetIcon size={11} /> {labelPill(pin)}
+                </span>
+              ) : label?.funded ? (
                 <span
                   className="pill side-label side-funded"
                   title="The KOL paid for this wallet's first SOL"
@@ -698,7 +809,15 @@ function SideRows({
                   </span>
                 )
               )}
-              {s.risk?.winner && (
+              {moved > 0 && (
+                <span
+                  className="pill side-transfers"
+                  title={`Times it moved a coin to or from ${kolName} in the last ${period}`}
+                >
+                  <TransferIcon size={11} /> {plural(moved, "transfer")}
+                </span>
+              )}
+              {s?.risk?.winner && (
                 <span
                   className="pill"
                   title="Winner: 60%+ of the called coins it bought doubled. Presence only, not a buy signal."
@@ -706,8 +825,8 @@ function SideRows({
                   Winner
                 </span>
               )}
-              {s.risk?.dumper && <span className="pill pill-warn">Dumper</span>}
-              {s.risk?.sniper && <span className="pill">Sniper</span>}
+              {s?.risk?.dumper && <span className="pill pill-warn">Dumper</span>}
+              {s?.risk?.sniper && <span className="pill">Sniper</span>}
             </span>
             <button
               type="button"
@@ -715,11 +834,17 @@ function SideRows({
               aria-expanded={isOpen}
               onClick={toggle}
             >
-              {isOpen ? "Hide trades" : `Compare ${s.shared} trades`}
+              {isOpen
+                ? "Hide trades"
+                : s
+                  ? `Compare ${s.shared} trades${moved > 0 ? ` and ${plural(moved, "transfer")}` : ""}`
+                  : moved > 0
+                    ? `See ${plural(moved, "transfer")}`
+                    : "Compare trades"}
               <ChevronDownIcon size={13} className="side-chevron" />
             </button>
             {isOpen && (
-              <SideMatch kol={kol} kolName={kolName} side={s.wallet} period={period} onOpen={onOpen} />
+              <SideMatch kol={kol} kolName={kolName} side={wallet} period={period} onOpen={onOpen} />
             )}
           </li>
         );

@@ -16,6 +16,7 @@ import {
   type SideWalletRules,
   type SideWindow,
 } from "@trenchscanner/core";
+import { loadTransferCounts, type TransferCounts } from "./sideTransfers.js";
 
 /**
  * A wallet's Multi-Wallet-Bundle (user ask 2026-10-15): the Side Wallet Checker's matching, run for
@@ -88,6 +89,8 @@ export interface WalletBundle {
   likelyBots: string[];
   /** The wallets that would qualify to be labeled, strongest first. */
   labeled: BundleLabel[];
+  /** How many coin transfers each wallet made with it, either way, per window (sideTransfers.ts). */
+  transfers: TransferCounts;
   rules: SideWalletRules;
 }
 
@@ -260,6 +263,7 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
     sides: { "24h": [], "7d": [], "30d": [] },
     likelyBots: [],
     labeled: [],
+    transfers: { "24h": {}, "7d": {}, "30d": {} },
     rules: sideWalletRules(),
   });
 
@@ -288,9 +292,14 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
   // split its bag into) can still qualify its partners by transfers alone.
   if (coins["30d"] === 0) {
     const hidden = new Set([...MARKED_BOT_WALLETS, ...facts.likelyBots]);
+    const [partners, transfers] = await Promise.all([
+      transferPartners(wallet, now),
+      loadTransferCounts([wallet], now),
+    ]);
     return {
       ...empty(null, coins),
-      labeled: withTransferLabels(wallet, [], await transferPartners(wallet, now), new Set(), hidden),
+      labeled: withTransferLabels(wallet, [], partners, new Set(), hidden),
+      transfers,
     };
   }
 
@@ -384,13 +393,11 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
     hidden,
   );
   // Wallets that moved coins with it often enough to qualify by transfers alone (user ask 2026-10-16).
-  const transferLabels = withTransferLabels(
-    wallet,
-    labeled,
-    await transferPartners(wallet, now),
-    excluded,
-    hidden,
-  );
+  const [partners, transfers] = await Promise.all([
+    transferPartners(wallet, now),
+    loadTransferCounts([wallet], now),
+  ]);
+  const transferLabels = withTransferLabels(wallet, labeled, partners, excluded, hidden);
   const listed = [...new Set(SIDE_WINDOWS.flatMap((w) => lists.sides[w].map((s) => s.wallet)))];
   const risk = listed.length
     ? await prisma.walletRisk.findMany({
@@ -414,6 +421,7 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
     >,
     likelyBots: lists.likelyBots,
     labeled: transferLabels,
+    transfers,
   };
 }
 

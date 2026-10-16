@@ -3,6 +3,7 @@ import "./bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { MARKED_BOT_WALLETS, prisma } from "@trenchscanner/core";
 import {
+  kolSideLabels,
   loadKolLabeledSides,
   loadLabeledSides,
   loadPossibleSides,
@@ -59,6 +60,43 @@ describe("numberLabeledSides", () => {
       "w6,K3abcd_1",
     ]);
     expect(out.find((s) => s.wallet === "w3")).toMatchObject({ kind: "known", kolWallet: "K1" });
+  });
+});
+
+describe("kolSideLabels", () => {
+  const side = (kolWallet: string, extra: Record<string, unknown> = {}) => ({
+    kolWallet,
+    kolName: kolWallet,
+    pct: 0,
+    shared: 0,
+    kolCoins: 0,
+    hours: 72,
+    ...extra,
+  });
+  it("keeps every wallet labeled for the KOL, its strongest label another KOL's or not, Known Sides first", () => {
+    const sides = {
+      known: [side("M", { known: true, pct: 100, hours: 0 })],
+      shared: [side("OTHER", { pct: 99 }), side("M", { pct: 80 })],
+      transfer: [side("M", { transfers: 12 })],
+      funded: [side("M", { funded: true, hours: 0 })],
+      strong: [side("M", { pct: 95, transfers: 4 })],
+      self: [side("M", { known: true, pct: 100 })],
+      elsewhere: [side("OTHER", { pct: 90 })],
+    };
+    const numbered = numberLabeledSides(sides);
+    const out = kolSideLabels("self", "M", sides, numbered);
+    expect(out.map((l) => [l.wallet, l.kind])).toEqual([
+      ["known", "known"],
+      ["funded", "funded"],
+      ["strong", "possible"],
+      ["shared", "possible"],
+      ["transfer", "possible"],
+    ]);
+    expect(out.find((l) => l.wallet === "strong")).toMatchObject({ pct: 95, transfers: 4 });
+    expect(out.find((l) => l.wallet === "transfer")).toMatchObject({ pct: 0, transfers: 12 });
+    // Numbered under its strongest KOL in the export: no name under this one.
+    expect(out.find((l) => l.wallet === "shared")!.name).toBeNull();
+    expect(out.find((l) => l.wallet === "known")!.name).toBe("M_1");
   });
 });
 
