@@ -11,7 +11,7 @@ import {
 } from "../api";
 import { usePolling } from "../hooks";
 import { pct, usd } from "../format";
-import { GROUPS, shownValue } from "../filterFields";
+import { GROUPS, LAUNCHPAD_CHOICES, shownValue } from "../filterFields";
 import { useSettings } from "../alerts";
 import { ScoreExplainer } from "../components/ScoreExplainer";
 import { BellIcon, EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
@@ -61,6 +61,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     minLiveHolderCount: null,
     minFirstBuyersHolding: null,
     maxFirstBuyersHolding: null,
+    launchpads: [],
     narrativeCategories: [],
     excludeNarrativeCategories: [],
     excludeCopycats: false,
@@ -81,6 +82,7 @@ function toInput(f: Filter): FilterInput {
     ...rest,
     narrativeKeywords: rest.narrativeKeywords ?? [],
     // Absent from filters saved by older API builds.
+    launchpads: rest.launchpads ?? [],
     narrativeCategories: rest.narrativeCategories ?? [],
     excludeNarrativeCategories: rest.excludeNarrativeCategories ?? [],
     excludeCopycats: rest.excludeCopycats ?? false,
@@ -494,6 +496,26 @@ function FilterEditor({
             />
           </label>
         </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Launchpad</legend>
+        <p className="muted small">Leave both unticked for coins from either.</p>
+        {LAUNCHPAD_CHOICES.map((l) => (
+          <label className="check" key={l.id}>
+            <input
+              type="checkbox"
+              checked={draft.launchpads.includes(l.id)}
+              onChange={(e) =>
+                set(
+                  "launchpads",
+                  e.target.checked ? [...draft.launchpads, l.id] : draft.launchpads.filter((x) => x !== l.id),
+                )
+              }
+            />
+            {l.label} only
+          </label>
+        ))}
       </fieldset>
 
       {GROUPS.map((g) => (

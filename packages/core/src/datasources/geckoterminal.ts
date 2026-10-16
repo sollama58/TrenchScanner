@@ -2,6 +2,7 @@ import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError } from "./rateGate.js";
+import { isCurveVenue } from "../launchpads.js";
 import type { CandidateToken } from "../types.js";
 
 const logger = createLogger("geckoterminal");
@@ -193,7 +194,11 @@ const num = (v: string | number | null | undefined): number | undefined => {
  */
 function toDexId(id: string | undefined): string | undefined {
   if (id === undefined) return undefined;
-  return id === "pump-fun" ? "pumpfun" : id;
+  if (id === "pump-fun") return "pumpfun";
+  // GeckoTerminal names each Raydium program ("raydium-clmm", "raydium-cpmm"); DexScreener calls
+  // them all "raydium", which is where a Stonks coin graduates.
+  if (id.startsWith("raydium")) return "raydium";
+  return id;
 }
 
 /** Exported for tests. Only the requested mints, priced off a top pool they are the base of. */
@@ -222,9 +227,9 @@ export function parseGeckoTokens(body: GeckoMultiResponse, requested: Set<string
       pairAddress: p?.address,
       priceUsd,
       marketCapUsd,
-      // DexScreener reports no liquidity for a pre-bond curve; GeckoTerminal reports the curve's
+      // DexScreener reports no liquidity for a pre-bond curve (Pump.fun's or Stonks'); GeckoTerminal reports the curve's
       // reserves. Kept the same as DexScreener so the scan reads a curve the same either way.
-      liquidityUsd: dexId === "pumpfun" ? undefined : num(p?.reserve_in_usd),
+      liquidityUsd: isCurveVenue(dexId) ? undefined : num(p?.reserve_in_usd),
       volume24hUsd: num(p?.volume_usd?.h24),
       buys24h: p?.transactions?.h24?.buys,
       sells24h: p?.transactions?.h24?.sells,

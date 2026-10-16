@@ -1,4 +1,10 @@
 import type { FilterCriteria, FilterInput } from "./api";
+
+/** The filters' launchpad choices (core's launchpads.ts). */
+export const LAUNCHPAD_CHOICES = [
+  { id: "pumpfun", label: "Pump.fun" },
+  { id: "stonks", label: "Stonks" },
+] as const;
 import { usd } from "./format";
 
 /** The filter fields shown as numbers, grouped the way the editor and the leaderboard show them. */
@@ -285,6 +291,11 @@ export function criteriaLines(c: FilterCriteria): string[] {
       const unit = f.unit === "%" ? "%" : f.unit ? ` ${f.unit}` : "";
       lines.push(`${f.label}: ${String(typeof v === "number" ? shownValue(f, v) : v)}${unit}`);
     }
+  }
+  if (c.launchpads?.length) {
+    lines.push(
+      `Launchpad: ${c.launchpads.map((l) => LAUNCHPAD_CHOICES.find((x) => x.id === l)?.label ?? l).join(" or ")}`,
+    );
   }
   if (c.excludeCriticalRiskFlags) lines.push("Skips critical RugCheck flags");
   if (c.narrativeKeywords.length > 0) lines.push(`Keywords: ${c.narrativeKeywords.join(", ")}`);

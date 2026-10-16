@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { liveFlagsOf, readLiveTape, resetLiveTape, takeLiveTapeStats } from "./liveTape.js";
+import { liveFlagsOf, liveWindowFlowOf, readLiveTape, resetLiveTape, takeLiveTapeStats } from "./liveTape.js";
 
 const SOL = 1_000_000_000;
 const MINT = "Mint1111111111111111111111111111111111111111";
@@ -54,5 +54,19 @@ describe("live tape", () => {
     await readLiveTape([MINT], fakeHelius(), { maxPages: 1, refreshMs: 60_000, nowMs: 0 });
     expect(liveFlagsOf(MINT, undefined, 1)).toBeNull();
     expect(liveFlagsOf(MINT, lookup, 16 * 60_000)).toBeNull();
+  });
+
+  it("reads a coin's 5m order flow off its page, as of when it was read, until it is five minutes old", async () => {
+    const readAt = 1_700_000_160_000;
+    await readLiveTape([MINT], fakeHelius(), { maxPages: 1, refreshMs: 60_000, nowMs: readAt });
+    // The page is the coin's whole history: one 2 SOL buy, a minute before the read.
+    expect(liveWindowFlowOf(MINT, readAt + 60_000)).toMatchObject({
+      uniqueBuyers5m: 1,
+      avgBuySol5m: 2,
+      newBuyerShare5m: 1,
+      tradesPerMin5m: 1,
+    });
+    expect(liveWindowFlowOf(MINT, readAt + 6 * 60_000)).toBeNull();
+    expect(liveWindowFlowOf("other", readAt)).toBeNull();
   });
 });

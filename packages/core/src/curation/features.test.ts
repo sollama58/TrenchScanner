@@ -168,6 +168,17 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(replayed.ageMinutes).toBe(90);
   });
 
+  it("flags a Stonks coin 1 and a Pump.fun coin 0, leaves an unknown launchpad null, and replays it", () => {
+    const stonks = buildCandidateFeatures(scored({ launchpad: "stonks" }));
+    expect(stonks.launchpadStonks).toBe(1);
+    expect(buildCandidateFeatures(scored({ launchpad: "pumpfun" })).launchpadStonks).toBe(0);
+    expect(buildCandidateFeatures(scored()).launchpadStonks).toBeNull();
+    expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
+    expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
+    expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("launchpadStonks");
+  });
+
   it("rows banked before the short-window capture replay those fields as unknown", () => {
     const legacyFeatures = { volumeToMcapRatio: 1.3, buys24h: 700, sells24h: 300, scoreTotal: 75 };
     const replayed = scoredFromFeatures(legacyFeatures, 0.0001, 150_000);

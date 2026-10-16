@@ -23,6 +23,14 @@ describe("matchesFilter", () => {
     expect(matchesFilter(baseToken(), baseFilter)).toBe(true);
   });
 
+  it("keeps only the ticked launchpads, and fails a coin whose launchpad is unknown", () => {
+    const stonksOnly = { ...baseFilter, launchpads: ["stonks"] };
+    expect(matchesFilter(baseToken({ launchpad: "stonks" }), stonksOnly)).toBe(true);
+    expect(matchesFilter(baseToken({ launchpad: "pumpfun" }), stonksOnly)).toBe(false);
+    expect(matchesFilter(baseToken(), stonksOnly)).toBe(false);
+    expect(matchesFilter(baseToken({ launchpad: "pumpfun" }), { ...baseFilter, launchpads: [] })).toBe(true);
+  });
+
   it("rejects a token outside the mcap band", () => {
     expect(matchesFilter(baseToken({ marketCapUsd: 10_000 }), baseFilter)).toBe(false);
     expect(matchesFilter(baseToken({ marketCapUsd: 1_000_000 }), baseFilter)).toBe(false);

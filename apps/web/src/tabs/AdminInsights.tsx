@@ -1100,6 +1100,8 @@ function criteria(f: AdminFilter): string {
   if (f.excludeCriticalRiskFlags) parts.push("no critical flags");
   const words = f.narrativeKeywords as string[] | undefined;
   if (words?.length) parts.push(`words: ${words.join(", ")}`);
+  const launchpads = f.launchpads as string[] | undefined;
+  if (launchpads?.length) parts.push(`launchpad: ${launchpads.join(" or ")}`);
   parts.push(...narrativeCriteriaLines(f as Partial<FilterCriteria>).map((l) => l.toLowerCase()));
   return parts.join(" · ");
 }

@@ -78,6 +78,8 @@ export interface DiscoveredCoin {
   websiteUrl?: string;
   /** Launched in Mayhem Mode, per Pump.fun's own flag; undefined when the coin carries none. */
   mayhemMode?: true;
+  /** The launchpad, normalized (launchpads.ts); undefined means Pump.fun's own lists. */
+  launchpad?: string;
 }
 
 export interface PumpFunClientOptions {

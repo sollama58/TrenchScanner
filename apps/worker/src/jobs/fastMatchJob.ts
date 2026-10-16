@@ -2,6 +2,7 @@ import {
   prisma,
   createLogger,
   buildScoredToken,
+  launchpadFromVenue,
   scoreToken,
   refreshScoreWeights,
   forEachWithConcurrency,
@@ -247,7 +248,9 @@ export async function runFastMatchCycle(
     const onChain = profileFromSnapshot(candidate.mintAddress, entry.snapshot);
     if (!onChain) return;
 
-    const scored = buildScoredToken(candidate, onChain, {
+    // DexScreener's pair doesn't say where a graduated Stonks coin came from; the scan did.
+    const launchpad = entry.token.launchpad ?? launchpadFromVenue(candidate.dexId);
+    const scored = buildScoredToken(launchpad ? { ...candidate, launchpad } : candidate, onChain, {
       // The earlier of the two, as the scan does: a graduated token's canonical pair is its
       // PumpSwap pool, created at graduation, not at launch.
       createdAt:
@@ -330,7 +333,7 @@ async function newestScanVerdictsFromDb(since: Date, env: Env): Promise<VettedEn
   if (newestIds.length === 0) return [];
   const rows = await prisma.tokenSnapshot.findMany({
     where: { id: { in: newestIds.map((r) => r.id) } },
-    include: { token: { select: { id: true, mintAddress: true, firstSeenAt: true } } },
+    include: { token: { select: { id: true, mintAddress: true, firstSeenAt: true, launchpad: true } } },
   });
   return rows.map(({ token, ...snapshot }) => ({ token, snapshot }));
 }

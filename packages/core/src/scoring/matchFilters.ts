@@ -36,6 +36,15 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
+  // Which launchpads (user ask 2026-10-16: Stonks vs Pump.fun). Fails closed on an unknown one:
+  // the user named where the coin must come from.
+  if (
+    (filter.launchpads?.length ?? 0) > 0 &&
+    (!token.launchpad || !filter.launchpads!.includes(token.launchpad))
+  ) {
+    return false;
+  }
+
   if (filter.minVolumeMcapRatio != null && (token.volumeToMcapRatio ?? 0) < filter.minVolumeMcapRatio) {
     return false;
   }
