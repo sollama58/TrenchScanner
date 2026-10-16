@@ -334,6 +334,7 @@ async function tradingPass(deps: TradingEngineDeps, notes: TradeNote[] = []): Pr
 
   await stage(ctx, "settle-orders", () => settleOrders(ctx));
   await stage(ctx, "recover", () => recoverPositions(ctx));
+  await stage(ctx, "reread-sales", () => rereadSales(ctx));
   await stage(ctx, "settle-withdrawals", () => settleWithdrawals(ctx));
   await stage(ctx, "send-withdrawals", () => sendWithdrawals(ctx));
   await stage(ctx, "exits", () => manageExits(ctx));
@@ -947,11 +948,8 @@ async function settleFromBalances(ctx: PassContext, wallet: Wallet, order: Order
   await prisma.$transaction(async (tx) => {
     const claimed = await tx.tradingOrder.updateMany({
       where: { id: order.id, status: "pending" },
-      data: {
-        status: "confirmed",
-        settledAt: at,
-        error: "details unreadable; settled from the wallet balance",
-      },
+      // lamportsDelta stays null: rereadSales books the SOL back once the RPC serves the details.
+      data: { status: "confirmed", settledAt: at, error: UNREAD_SALE_ERROR },
     });
     if (claimed.count !== 1) return;
     await tx.tradingPosition.update({
@@ -987,6 +985,59 @@ function saleOutcome(
     nextAttemptAt: null,
     error: null,
   };
+}
+
+const UNREAD_SALE_ERROR = "details unreadable; settled from the wallet balance";
+const saleRereadAt = new Map<string, number>();
+
+/**
+ * A sale settled from balances (settleFromBalances) booked no SOL back: the RPC had not served
+ * its details in time. They are read again for a while, as the recovery is, and the SOL that came
+ * back is booked once - left at zero, the trade read as a total loss, for the loss limit too.
+ */
+async function rereadSales(ctx: PassContext): Promise<void> {
+  const now = ctx.now().getTime();
+  const orders = await prisma.tradingOrder.findMany({
+    where: {
+      side: "sell",
+      status: "confirmed",
+      lamportsDelta: null,
+      error: UNREAD_SALE_ERROR,
+      settledAt: { gt: new Date(now - RECOVERY_LOOKBACK_MS) },
+    },
+    include: { position: { select: { mint: true } } },
+    orderBy: { settledAt: "asc" },
+    take: 20,
+  });
+  for (const order of orders) {
+    if (!ctx.inBudget()) return;
+    if ((saleRereadAt.get(order.id) ?? 0) > now - RECOVERY_RECHECK_MS) continue;
+    saleRereadAt.set(order.id, now);
+    const wallet = await ctx.walletFor(order.userId);
+    if (!wallet) continue;
+    const fill = await ctx.deps.rpc.getTransactionFill(
+      order.signature,
+      wallet.publicKey,
+      order.position.mint,
+    );
+    if (!fill || fill.failed) continue;
+    await prisma.$transaction(async (tx) => {
+      const claimed = await tx.tradingOrder.updateMany({
+        where: { id: order.id, lamportsDelta: null },
+        data: {
+          lamportsDelta: fill.lamportsDelta,
+          tokenDelta: fill.tokenDelta.toString(),
+          error: "details read late; the SOL back booked then",
+        },
+      });
+      if (claimed.count !== 1) return;
+      await tx.tradingPosition.update({
+        where: { id: order.positionId },
+        data: { proceedsLamports: { increment: fill.lamportsDelta } },
+      });
+    });
+  }
+  if (saleRereadAt.size > 5_000) saleRereadAt.clear();
 }
 
 const recoveryCheckedAt = new Map<string, number>();
@@ -1532,9 +1583,17 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
   // Claim the exit on the row as it was read: two passes side by side (a deploy's overlap, a pass
   // that outlived its lock) both find the position due, and only the one whose claim lands sells.
   // The sale's outcome or failure sets nextAttemptAt afresh; a send that never made an order
-  // leaves the position to the next pass a minute on.
+  // leaves the position to the next pass a minute on. A settled rung sale puts nextAttemptAt
+  // back to null, so the holding as read is claimed too (as paper trading does): a pass still
+  // holding the row from before that sale must not sell the same rung again.
   const claimed = await prisma.tradingPosition.updateMany({
-    where: { id: position.id, status: position.status, nextAttemptAt: position.nextAttemptAt },
+    where: {
+      id: position.id,
+      status: position.status,
+      nextAttemptAt: position.nextAttemptAt,
+      tokensHeld: position.tokensHeld,
+      rungsTaken: position.rungsTaken,
+    },
     data: { nextAttemptAt: new Date(now.getTime() + EXIT_CLAIM_MS) },
   });
   if (claimed.count !== 1) return;
@@ -1661,6 +1720,11 @@ export async function loadSignals(
 
 /** An AI review this long before its signal still counts for it (the judge can run first, in gate mode). */
 const AI_REVIEW_LOOKBACK_MS = 10 * 60_000;
+/**
+ * Signals decided behind one still awaiting its verdict (owner:mint:at -> when it goes stale):
+ * the window is read again from the waiting one, and these are not decided a second time.
+ */
+const decidedAhead = new Map<string, number>();
 
 export type AiGateOutcome =
   { signal: TradeSignal; verdict: "buy" } | { signal: TradeSignal; verdict: "skip"; why: string };
@@ -1670,9 +1734,13 @@ export type AiGateOutcome =
  * only on a "buy" verdict (AiReview) for its token, at or above minAiProbability2x. A signal
  * still fresh with no verdict yet holds the window there: `through` moves back to just before
  * it, so it and everything after it are read again next pass, by when the review may be in.
- * Fresh means younger than maxSignalAgeSeconds; past that, no verdict is a skip.
+ * Fresh means younger than maxSignalAgeSeconds; past that, no verdict is a skip. The signals
+ * after it that do have a verdict are decided now all the same (one never reviewed must not hold
+ * a reviewed buy until it goes stale), and once only: `owner` (the bot or strategy) keys them so
+ * the re-reads pass over them.
  */
 export async function gateOnAiVerdicts(
+  owner: string,
   signals: TradeSignal[],
   through: Date,
   config: TradingBotConfig,
@@ -1696,19 +1764,25 @@ export async function gateOnAiVerdicts(
     },
     orderBy: { createdAt: "desc" },
   });
+  for (const [key, staleAt] of decidedAhead) if (staleAt < now.getTime()) decidedAhead.delete(key);
   const outcomes: AiGateOutcome[] = [];
+  let waitingFrom: number | null = null;
   for (const signal of signals) {
+    const key = `${owner}:${signal.mint}:${signal.at.getTime()}`;
+    if (decidedAhead.has(key)) continue;
     // The newest verdict on this token from around the signal or after it.
     const review = reviews.find(
       (r) =>
         r.token.mintAddress === signal.mint &&
         r.createdAt.getTime() >= signal.at.getTime() - AI_REVIEW_LOOKBACK_MS,
     );
+    if (!review && now.getTime() - signal.at.getTime() < config.maxSignalAgeSeconds * 1000) {
+      // Wait for it: read again from just before this signal.
+      waitingFrom ??= signal.at.getTime();
+      continue;
+    }
+    if (waitingFrom !== null) decidedAhead.set(key, signal.at.getTime() + config.maxSignalAgeSeconds * 1000);
     if (!review) {
-      if (now.getTime() - signal.at.getTime() < config.maxSignalAgeSeconds * 1000) {
-        // Wait for it: read again from just before this signal.
-        return { outcomes, through: new Date(signal.at.getTime() - 1) };
-      }
       outcomes.push({ signal, verdict: "skip", why: "no AI review before the signal went stale" });
       continue;
     }
@@ -1727,7 +1801,8 @@ export async function gateOnAiVerdicts(
     }
     outcomes.push({ signal, verdict: "buy" });
   }
-  return { outcomes, through };
+  if (decidedAhead.size > 5_000) decidedAhead.clear();
+  return { outcomes, through: waitingFrom === null ? through : new Date(waitingFrom - 1) };
 }
 
 /**
@@ -1853,7 +1928,7 @@ async function runBotEntries(
     bot.configSavedAt,
   );
   // With requireAiBuy, the AI judge's verdicts decide, and a signal still awaiting one holds the window.
-  const { outcomes, through } = await gateOnAiVerdicts(loaded.signals, loaded.through, config, now);
+  const { outcomes, through } = await gateOnAiVerdicts(bot.id, loaded.signals, loaded.through, config, now);
   // The window is consumed whatever happens to its signals: a skipped signal is never bought later.
   if (through > bot.signalsFrom) {
     await prisma.tradingBot.update({ where: { id: bot.id }, data: { signalsFrom: through } });
@@ -2125,7 +2200,7 @@ async function entryBlocker(
   now: Date,
 ): Promise<string | null> {
   if (now.getTime() - signal.at.getTime() > config.maxSignalAgeSeconds * 1000) return "signal too old";
-  const [open, spent, inFlight, existing] = await Promise.all([
+  const [open, spent, inFlight, existing, withdrawing] = await Promise.all([
     prisma.tradingPosition.count({ where: { userId, status: { in: ["buying", "open"] } } }),
     prisma.tradingPosition.aggregate({
       where: {
@@ -2141,8 +2216,13 @@ async function entryBlocker(
       where: { userId_mint: { userId, mint: signal.mint } },
       select: { id: true },
     }),
+    // A withdrawal in flight (it can be "everything") may not show in the balance yet either.
+    prisma.tradingWithdrawal.count({
+      where: { userId, status: { in: ["requested", "sending", "pending"] } },
+    }),
   ]);
   if (existing) return "already traded this token";
+  if (withdrawing > 0) return "a withdrawal is in progress";
   const mint = await ctx.deps.rpc.getMintInfo(signal.mint);
   if (!mint) return "mint unreadable";
   const risk = mintRisk(mint);
@@ -2168,6 +2248,8 @@ async function entryBlocker(
 
 const TOKEN_PROGRAM_IDS = new Set<string>([PROGRAM.token, PROGRAM.token2022]);
 const closeSentAt = new Map<string, number>();
+/** The rent in each close sent, by position and account: booked to the position once they're gone. */
+const closeRent = new Map<string, Map<string, bigint>>();
 /** A close that was sent is not sent again for this long (it lands or its blockhash expires). */
 const CLOSE_RESEND_MS = 3 * 60_000;
 
@@ -2194,7 +2276,17 @@ async function reclaimRent(ctx: PassContext): Promise<void> {
       position.closedAt !== null && now.getTime() - position.closedAt.getTime() > RENT_RECLAIM_GIVE_UP_MS;
     if (empty.length === 0 || held.raw > 0n || giveUp) {
       // Nothing to close, or tokens remain (dust, an airdrop) that a close would refuse anyway.
-      await prisma.tradingPosition.update({ where: { id: position.id }, data: { accountClosedAt: now } });
+      // No accounts left after closes were sent: their rent is back in the wallet. The buy paid it
+      // (the swap created the account, inside entryLamports), so it is part of what the trade
+      // returned - without it every closed trade read ~0.002 SOL worse than it was.
+      const sent = closeRent.get(position.id);
+      closeRent.delete(position.id);
+      let rent = 0n;
+      if (held.accounts.length === 0) for (const lamports of sent?.values() ?? []) rent += lamports;
+      await prisma.tradingPosition.updateMany({
+        where: { id: position.id, accountClosedAt: null },
+        data: { accountClosedAt: now, ...(rent > 0n ? { proceedsLamports: { increment: rent } } : {}) },
+      });
       continue;
     }
     const blockhash = await ctx.deps.rpc.getLatestBlockhash();
@@ -2253,6 +2345,11 @@ async function reclaimRent(ctx: PassContext): Promise<void> {
         // not sent again for a while, so a lagging read can't make it pay a fee per pass.
         closeSentAt.set(account.address, Date.now());
         if (closeSentAt.size > 5_000) closeSentAt.clear();
+        if (closeRent.size > 5_000) closeRent.clear();
+        closeRent.set(
+          position.id,
+          (closeRent.get(position.id) ?? new Map()).set(account.address, state.lamports),
+        );
         await ctx.deps.rpc.send(rawTx);
         ctx.summary.reclaimed++;
       } catch (err) {

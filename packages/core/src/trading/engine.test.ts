@@ -515,8 +515,14 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
       ["sell", "trailing_stop", "confirmed", "jupiter"],
     ]);
 
-    // Half a minute after closing, the emptied token account is closed for its rent.
+    // Half a minute after closing, the emptied token account is closed for its rent...
     expect((await tick(1)).reclaimed).toBe(1);
+    // ...and once it's gone, the rent the buy paid for it counts as money back.
+    chain.tokens.delete(chain.key(walletKey, mint));
+    await tick(4);
+    p = await position();
+    expect(p.accountClosedAt).not.toBeNull();
+    expect(p.proceedsLamports).toBe(52_500_000n - 10_000n + 75_000_000n - 10_000n + 2_039_280n);
   });
 
   it("refuses swaps whose simulation drains SOL, empties another position, or reassigns the wallet", async () => {
@@ -950,6 +956,108 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     const p = await position();
     expect(p.status).toBe("closed");
     expect(p.closeReason).toBe("manual");
+  });
+
+  it("does not sell a rung again that another pass sold and settled after this one read the position", async () => {
+    await opened();
+    chain.price.set(mint, 0.105);
+    // Between this pass's read and its claim, the rung's sale (another pass's) settles: the row
+    // is back to nextAttemptAt null, as this pass read it, but holding half.
+    const prices = chain.swap.pricesUsd;
+    chain.swap.pricesUsd = async (mints) => {
+      await prisma.tradingPosition.update({
+        where: { userId_mint: { userId, mint } },
+        data: { tokensHeld: "500000000", rungsTaken: 1, nextAttemptAt: null },
+      });
+      return prices(mints);
+    };
+    expect((await tick(1)).sells).toBe(0);
+    chain.swap.pricesUsd = prices;
+    const p = await position();
+    expect(p.tokensHeld).toBe("500000000");
+    expect(await prisma.tradingOrder.count({ where: { positionId: p.id, side: "sell" } })).toBe(0);
+  });
+
+  it("books a sale settled from balances once the RPC serves its details", async () => {
+    await opened();
+    chain.price.set(mint, 0.06);
+    await prisma.tradingPosition.update({
+      where: { userId_mint: { userId, mint } },
+      data: { closeRequested: true },
+    });
+    const read = chain.rpc.getTransactionFill;
+    chain.rpc.getTransactionFill = async () => null;
+    expect((await tick()).sells).toBe(1);
+    // Past the read grace: settled from the wallet balance, with nothing booked yet.
+    await tick(3);
+    let p = await position();
+    expect(p.status).toBe("closed");
+    expect(p.proceedsLamports).toBe(0n);
+
+    chain.rpc.getTransactionFill = read;
+    await tick(6);
+    p = await position();
+    expect(p.proceedsLamports).toBe(60_000_000n - 10_000n);
+    // Booked once.
+    await tick(6);
+    expect((await position()).proceedsLamports).toBe(60_000_000n - 10_000n);
+  });
+
+  it("buys nothing while a withdrawal is in flight", async () => {
+    await freshSignal();
+    await prisma.tradingWithdrawal.create({
+      data: { userId, destination: admin, requestedLamports: 1_000_000n },
+    });
+    const run = await tick();
+    expect(run.buys).toBe(0);
+    expect(run.skipped).toBe(1);
+  });
+
+  it("with the AI gate on, buys a reviewed signal behind one still awaiting its verdict", async () => {
+    const other = generateWalletKeypair().publicKey;
+    const otherId = (await prisma.token.create({ data: { mintAddress: other, symbol: "OTHER" } })).id;
+    try {
+      chain.price.set(other, 0.05);
+      await gated();
+      // The later signal is reviewed "buy"; the earlier one (this test's token) never is.
+      await prisma.curatedAlert.create({
+        data: {
+          tokenId: otherId,
+          source: "heuristic-v1",
+          model: "rules",
+          confidence: 80,
+          anchorPriceUsd: 0.00001,
+          anchorMcapUsd: 10_000,
+          createdAt: new Date(clock.getTime() - 10_000),
+        },
+      });
+      await prisma.aiReview.create({
+        data: {
+          tokenId: otherId,
+          mode: "shadow",
+          model: "test",
+          decision: "buy",
+          probability2x: 0.6,
+          latencyMs: 1,
+          anchorPriceUsd: 0.00001,
+          anchorMcapUsd: 10_000,
+          createdAt: new Date(clock.getTime() - 5_000),
+        },
+      });
+      const first = await tick();
+      expect(first.buys).toBe(1);
+      expect(first.skipped).toBe(0);
+      // The window still holds at the unreviewed signal, and the bought one is not decided again.
+      const again = await tick();
+      expect(again.signals).toBe(0);
+      await aiReview("buy");
+      expect((await tick()).buys).toBe(1);
+    } finally {
+      await prisma.tradingPosition.deleteMany({ where: { userId, mint: other } });
+      await prisma.curatedAlert.deleteMany({ where: { tokenId: otherId } });
+      await prisma.aiReview.deleteMany({ where: { tokenId: otherId } });
+      await prisma.token.deleteMany({ where: { id: otherId } });
+    }
   });
 
   it("withdraws only to the address sealed into the wallet, keeping a reserve while positions are open", async () => {
