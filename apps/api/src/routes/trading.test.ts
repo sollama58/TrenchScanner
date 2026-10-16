@@ -276,6 +276,49 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     ).toBe(403);
   });
 
+  it("sells on request without waiting out a failure backoff, leaving an exit claim alone", async () => {
+    const position = (nextAttemptAt: Date) =>
+      prisma.tradingPosition.create({
+        data: {
+          userId: ids.user,
+          mint: generateWalletKeypair().publicKey,
+          sourceKind: "model",
+          sourceRef: "rules",
+          sourceLabel: "rules",
+          signalAt: new Date(),
+          status: "open",
+          exitPlan: {},
+          failCount: 20,
+          nextAttemptAt,
+        },
+      });
+    const backedOff = await position(new Date(Date.now() + 6 * 3_600_000));
+    const claimed = await position(new Date(Date.now() + 30_000));
+    const one = await app.inject({
+      method: "POST",
+      url: `/trading/positions/${backedOff.id}/sell`,
+      ...as("user"),
+    });
+    expect(one.statusCode).toBe(200);
+    const after = await prisma.tradingPosition.findUniqueOrThrow({ where: { id: backedOff.id } });
+    expect(after.closeRequested).toBe(true);
+    expect(after.nextAttemptAt!.getTime()).toBeLessThanOrEqual(Date.now());
+
+    await prisma.tradingPosition.update({
+      where: { id: backedOff.id },
+      data: { nextAttemptAt: new Date(Date.now() + 6 * 3_600_000) },
+    });
+    expect((await app.inject({ method: "POST", url: "/trading/sell-all", ...as("user") })).statusCode).toBe(
+      200,
+    );
+    const rows = await prisma.tradingPosition.findMany({ where: { id: { in: [backedOff.id, claimed.id] } } });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(backedOff.id)!.nextAttemptAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(byId.get(claimed.id)!.nextAttemptAt!.getTime()).toBe(claimed.nextAttemptAt!.getTime());
+    expect(rows.every((r) => r.closeRequested)).toBe(true);
+    await prisma.tradingPosition.deleteMany({ where: { id: { in: [backedOff.id, claimed.id] } } });
+  });
+
   it("runs paper trading while the bot is off: admins only, at most three running at once", async () => {
     const url = "/trading/paper";
     expect((await off.inject({ method: "GET", url, ...as("user") })).statusCode).toBe(403);
