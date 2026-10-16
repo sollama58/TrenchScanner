@@ -287,6 +287,8 @@ export interface OnChainProfile {
    */
   linkedWalletPctExTransfers?: number;
   linkedWalletCountExTransfers?: number;
+  /** The creator-tied share without transfers: the models' linkedCreatorPct until the retrain switches it. */
+  linkedCreatorPctExTransfers?: number;
   kolBundledPctExTransfers?: number;
   bundledSupplyPctExTransfers?: number;
   bundledSupplyCountExTransfers?: number;

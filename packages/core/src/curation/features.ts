@@ -205,6 +205,27 @@ export const LAUNCHPAD_FEATURES = ["launchpadStonks"] as const;
  */
 export const TRANSFER_FEATURES = ["transferredSupplyPct", "transferWalletCount"] as const;
 
+/**
+ * Added 2026-10-16 (user ask, notes/held-inputs-2026-10-16/report.md section 3): launch facts the
+ * scan already reads but no decision row carried, for coins under five minutes old, where the
+ * holder-wallet readings separate nothing. Of the launch's first 25 buyers, how many exist yet
+ * (tradeFlow.firstBuyersSeen; under 25 only while the launch has had fewer) and how many hold
+ * 0.1% of the supply or more (tradeFlow.firstBuyersHoldingCut, the card's figure, which the models
+ * are to read in place of firstBuyersHolding at the pending retrain, notes/model-retrain-pending.md);
+ * seconds a graduated coin spent on its curve (preBondSeconds, null on the curve or when either
+ * end is unknown); and same-ticker launches in the 15 minutes before it, with the highest market
+ * cap any of them reached (relaunchSiblings, relaunchSiblingPeakMcapUsd; the relaunch-farm block
+ * reads them). Null on every row banked before; never backfilled. Recorded only
+ * (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ */
+export const LAUNCH_FACT_FEATURES = [
+  "firstBuyersSeen",
+  "firstBuyersHoldingCut",
+  "preBondSeconds",
+  "relaunchSiblings",
+  "relaunchSiblingPeakMcapUsd",
+] as const;
+
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
   "flaggedSellers",
@@ -299,6 +320,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   // Pending (user decision 2026-10-16): at the retrain that adds the waiting wallet metrics, swap
   // this for tradeFlow.firstBuyersHoldingCut (buyers holding 0.1% of the supply or more, the
   // figure the card shows), left null on rows banked before 2026-10-16 rather than backfilled.
+  // The rows carry it as firstBuyersHoldingCut from 2026-10-16 on (LAUNCH_FACT_FEATURES).
   "firstBuyersHolding",
   // Added 2026-10-04: Claude's read of the launch's own name and description, 0-1 each
   // (curation/textFeatures.ts). Null until the mint has been read, and on rows banked before.
@@ -444,6 +466,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...BUNDLED_SUPPLY_FEATURES,
   ...LAUNCHPAD_FEATURES,
   ...TRANSFER_FEATURES,
+  ...LAUNCH_FACT_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -577,6 +600,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // terms. Bring them in by removing them here once a few days of decision rows show they separate
   // runners.
   ...TRANSFER_FEATURES,
+  // The launch facts (added 2026-10-16, user ask): recorded first, on the same terms.
+  ...LAUNCH_FACT_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
@@ -1012,6 +1037,11 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   launchpadStonks: "Stonks launch (vs Pump.fun)",
   transferredSupplyPct: "supply transferred holder to holder",
   transferWalletCount: "top holders that sent or got a transfer",
+  firstBuyersSeen: "first buyers so far",
+  firstBuyersHoldingCut: "first buyers holding 0.1%+",
+  preBondSeconds: "seconds on the bonding curve",
+  relaunchSiblings: "same-ticker launches just before",
+  relaunchSiblingPeakMcapUsd: "best same-ticker launch's peak market cap",
   sameTimeFundedPct: "supply funded in the same minute",
   sameTimeClusterCount: "same-minute funding groups",
   sameTimeFundedCount: "top holders funded in the same minute",
@@ -1236,7 +1266,11 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     linkedWalletPct: scored.linkedWalletPct ?? null,
     linkedClusterCount: scored.linkedClusterCount ?? null,
     linkedLargestClusterPct: scored.linkedLargestClusterPct ?? null,
-    linkedCreatorPct: scored.linkedCreatorPct ?? null,
+    // Funding links only (user ask 2026-10-16): since #643 a holder-to-holder transfer links holders
+    // too, and the share of decision rows with supply tied to the creator went from 1.3% to 4.0%
+    // (notes/held-inputs-2026-10-16/report.md). The models keep the definition they were trained
+    // on until the retrain switches it (notes/model-retrain-pending.md); unknown without the copy.
+    linkedCreatorPct: scored.linkedCreatorPctExTransfers ?? null,
     linkedWalletCount:
       scored.linkedWalletCount ??
       (scored.linkedClusters === undefined
@@ -1254,12 +1288,18 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
     // The models keep the figures from before KOL bundles followed transfers until the next
     // retrain (notes/model-retrain-pending.md); the snapshot and the filters read the new ones.
-    kolBundledPct: scored.kolBundledPctModel ?? scored.kolBundledPct ?? null,
-    bundledSupplyPct: scored.bundledSupplyPctModel ?? scored.bundledSupplyPct ?? null,
+    // Unknown without the Model copy: falling back to the new figures would mix the two definitions.
+    kolBundledPct: scored.kolBundledPctModel ?? null,
+    bundledSupplyPct: scored.bundledSupplyPctModel ?? null,
     launchpadStonks:
       scored.launchpad === STONKS_LAUNCHPAD ? 1 : scored.launchpad === PUMPFUN_LAUNCHPAD ? 0 : null,
     transferredSupplyPct: scored.transferredSupplyPct ?? null,
     transferWalletCount: scored.transferWalletCount ?? null,
+    firstBuyersSeen: scored.tradeFlow?.firstBuyersSeen ?? null,
+    firstBuyersHoldingCut: scored.tradeFlow?.firstBuyersHoldingCut ?? null,
+    preBondSeconds: scored.preBondSeconds ?? null,
+    relaunchSiblings: scored.relaunchSiblings ?? null,
+    relaunchSiblingPeakMcapUsd: scored.relaunchSiblingPeakMcapUsd ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,
     sameTimeFundedCount: scored.sameTimeFundedCount ?? null,
