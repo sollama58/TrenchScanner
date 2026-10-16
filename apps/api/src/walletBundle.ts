@@ -188,23 +188,46 @@ export function loadWalletBundle(wallet: string, now = Date.now()): Promise<Wall
   return value;
 }
 
-/** Every tracked coin in the last 30 days (for the bot rule), and the KOL job's likely bots. */
+/** How old the KOL job's coin total may be before it is counted here instead (the job runs hourly). */
+const JOB_TOTAL_MAX_AGE_MS = 3 * 3_600_000;
+
+/**
+ * Every tracked coin in the last 30 days (for the bot rule), and the KOL job's likely bots. The
+ * total is the one kol-side-wallets computed on its last run (its heartbeat's meta.totalCoins): it
+ * is the job that defines the bot rule, with the same query, hourly. Counted here only when that
+ * figure is missing or stale: the count reads nearly every row of TokenWalletActivity (30 days of
+ * it, no index serves the predicate) on a request path, every ten minutes (database audit
+ * 2026-10-16, F4).
+ */
 function sharedFacts(now: number) {
   if (shared && now - shared.at < SHARED_TTL_MS) return shared.value;
   const since = new Date(now - WINDOW_MS["30d"]);
   const value = (async () => {
-    const [[totals], kolLists] = await Promise.all([
-      prisma.$queryRaw<{ c30: bigint }[]>`
-        SELECT COUNT(DISTINCT a."tokenId") AS c30
-        FROM "TokenWalletActivity" a
-        JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
-        WHERE a."buys" > 0 AND a."firstBuyAt" >= ${since}`,
+    const [beat, kolLists] = await Promise.all([
+      prisma.systemHeartbeat.findUnique({
+        where: { job: "kol-side-wallets" },
+        select: { lastSuccessAt: true, meta: true },
+      }),
       prisma.kolSideWallets.findMany({ select: { sides: true } }),
     ]);
+    const fromJob = Number((beat?.meta as { totalCoins?: unknown } | null)?.totalCoins);
+    const fresh = beat?.lastSuccessAt != null && now - beat.lastSuccessAt.getTime() < JOB_TOTAL_MAX_AGE_MS;
+    const totalCoins =
+      fresh && Number.isFinite(fromJob) && fromJob > 0
+        ? fromJob
+        : Number(
+            (
+              await prisma.$queryRaw<{ c30: bigint }[]>`
+                SELECT COUNT(DISTINCT a."tokenId") AS c30
+                FROM "TokenWalletActivity" a
+                JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
+                WHERE a."buys" > 0 AND a."firstBuyAt" >= ${since}`
+            )[0]?.c30 ?? 0,
+          );
     const likelyBots = new Set<string>();
     for (const r of kolLists)
       for (const w of (r.sides as { likelyBots?: string[] } | null)?.likelyBots ?? []) likelyBots.add(w);
-    return { totalCoins: Number(totals?.c30 ?? 0), likelyBots };
+    return { totalCoins, likelyBots };
   })();
   shared = { at: now, value };
   value.catch(() => {
