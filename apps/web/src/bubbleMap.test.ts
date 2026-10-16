@@ -499,7 +499,8 @@ describe("holder transfers", () => {
     expect(g.transferCount).toBeNull();
   });
   it("routes an arrow round a bubble in its way, and keeps a two-way pair's arcs apart", () => {
-    const node = (id: string, x: number, y: number, r: number) => ({ id, x, y, r }) as MapNode;
+    const node = (id: string, x: number, y: number, r: number) =>
+      ({ id, x, y, r, flags: [], trait: null }) as unknown as MapNode;
     const a = node("a", 0, 0, 10);
     const b = node("b", 120, 0, 10);
     // A bubble right where the plain bow (to the sender's right, +y here) passes.
