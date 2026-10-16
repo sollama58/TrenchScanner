@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
-import { ApiError, post, type Subscription, type User } from "./api";
+import { ACCESS_ENDED_EVENT, ApiError, post, type Subscription, type User } from "./api";
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
 import { GUEST_DELAY_MINUTES, isGuest, setGuest, setSessionToken } from "./session";
 import { usePolling } from "./hooks";
@@ -527,6 +527,18 @@ function AccessGate({
 }) {
   const { data, error, reload } = usePolling<Subscription>("/subscription", 300_000);
   const hasAccess = data?.hasAccess === true;
+  // A gated route said access has ended (api.ts): look again now rather than at the next poll,
+  // so the paywall replaces the failing tabs. At most every 10 s, as every open tab's poll says so.
+  const lastRecheck = useRef(0);
+  useEffect(() => {
+    const recheck = () => {
+      if (Date.now() - lastRecheck.current < 10_000) return;
+      lastRecheck.current = Date.now();
+      reload();
+    };
+    window.addEventListener(ACCESS_ENDED_EVENT, recheck);
+    return () => window.removeEventListener(ACCESS_ENDED_EVENT, recheck);
+  }, [reload]);
   const warmed = useRef(false);
   useEffect(() => {
     if (!hasAccess || warmed.current) return;

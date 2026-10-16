@@ -93,7 +93,7 @@ export const MANUAL_RUN_EXCLUDED: Readonly<Partial<Record<HeartbeatJob, string>>
   "label-regrade": "Already runs every minute until history is re-graded.",
   "trade-tape": "Already runs every minute.",
   "free-access":
-    "Deletes accounts for good. It runs every few minutes, and switching Free Access off in Access runs the cleanup at once.",
+    "Deletes accounts for good. It runs every few minutes, an hour after a period ends or is switched off.",
 };
 
 /** The entry for `job`, or undefined when it can't be run from the panel. */

@@ -854,10 +854,18 @@ export async function loadTrainingRows(
   pageRows = LOAD_PAGE_ROWS,
   band?: { min: number; max: number },
 ): Promise<TrainingRow[]> {
-  const events = await loadRowsOfKind("event", windowStart, maxRows, pageRows);
+  const [events, alerted] = await Promise.all([
+    loadRowsOfKind("event", windowStart, maxRows, pageRows),
+    alertedEventAnchors(windowStart),
+  ]);
   const hourly = withoutEventTwins(
     await loadRowsOfKind("hourly", windowStart, maxRows - events.length, pageRows, band),
-    events,
+    events.map((e) => ({
+      tokenId: e.tokenId,
+      anchorAt: e.anchorAt,
+      anchorPriceUsd: e.anchorPriceUsd,
+      alerted: e.tokenId !== undefined && alerted.has(anchorKey(e.tokenId, e.anchorAt)),
+    })),
   );
   // Newest first, as a single newest-first query would have returned them; ties keep events first.
   return [...events, ...hourly].sort((a, b) => b.anchorAt.getTime() - a.anchorAt.getTime());
@@ -877,17 +885,20 @@ const MOVED_TWIN_WINDOW_MS = 180_000;
  * such a twin, 2026-10-08). The event row is the one the exam reads; its hourly twin goes. An
  * alerted event's anchor moves to send time, so a twin is also an hourly row up to a few minutes
  * before its token's event with the same scan price - else the models' own picks train twice.
+ * The price can't be relied on for a row re-graded from candles (its price is the replay's candle
+ * at its own anchor, and the moved anchor usually lands on another minute), so before an event
+ * known to be alerted (`alerted`) any hourly row in those few minutes is its twin, whatever the price.
  */
 export function withoutEventTwins<T extends { tokenId?: string; anchorAt: Date; anchorPriceUsd?: number }>(
   hourly: readonly T[],
-  events: readonly { tokenId?: string; anchorAt: Date; anchorPriceUsd?: number }[],
+  events: readonly { tokenId?: string; anchorAt: Date; anchorPriceUsd?: number; alerted?: boolean }[],
 ): T[] {
-  const eventsByToken = new Map<string, { t: number; price?: number }[]>();
+  const eventsByToken = new Map<string, { t: number; price?: number; alerted: boolean }[]>();
   for (const e of events) {
     // A row with no token can't be matched to anything, so it is never anyone's twin.
     if (e.tokenId === undefined) continue;
     const list = eventsByToken.get(e.tokenId) ?? [];
-    list.push({ t: e.anchorAt.getTime(), price: e.anchorPriceUsd });
+    list.push({ t: e.anchorAt.getTime(), price: e.anchorPriceUsd, alerted: e.alerted === true });
     eventsByToken.set(e.tokenId, list);
   }
   return hourly.filter((h) => {
@@ -896,12 +907,26 @@ export function withoutEventTwins<T extends { tokenId?: string; anchorAt: Date; 
     return !list?.some(
       (e) =>
         Math.abs(e.t - t) < TWIN_WINDOW_MS ||
-        (h.anchorPriceUsd !== undefined &&
-          e.price === h.anchorPriceUsd &&
+        ((e.alerted || (h.anchorPriceUsd !== undefined && e.price === h.anchorPriceUsd)) &&
           e.t >= t &&
           e.t - t <= MOVED_TWIN_WINDOW_MS),
     );
   });
+}
+
+const anchorKey = (tokenId: string, anchorAt: Date) => `${tokenId}@${anchorAt.getTime()}`;
+
+/**
+ * The event rows in the window a curated alert points at, as anchorKey: the ones whose anchor
+ * emitCuratedAlert moved to send time (withoutEventTwins). One row per alerted moment in the window.
+ */
+async function alertedEventAnchors(windowStart: Date): Promise<Set<string>> {
+  const rows = await prisma.$queryRaw<{ tokenId: string; anchorAt: Date }[]>`
+    SELECT DISTINCT co."tokenId", co."anchorAt"
+    FROM "CuratedAlert" a
+    JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId" AND co."sampleKind" = 'event'
+    WHERE a."createdAt" >= ${windowStart} AND co."anchorAt" >= ${windowStart}`;
+  return new Set(rows.map((r) => anchorKey(r.tokenId, r.anchorAt)));
 }
 
 /**
@@ -1037,13 +1062,17 @@ type GradedFields = Pick<
  * The grade a row trains and is examined on. A row a curated alert points at keeps the rule-3
  * verdict the alert was published with, and its rule-4 re-grade sits in rule4Grade
  * (labelRegradeJob.ts): that one is read instead, with its fresh-price gap, so the moments the
- * models called are graded on the same rule as the rest. Every other row is returned as it is.
+ * models called are graded on the same rule as the rest. An alerted row born rule 4 can carry one
+ * too: the quote re-grade's candle replay (quoteRegrade.ts), for a coin whose price read $0 while
+ * it was watched. That replay is read as well, but the row keeps its own freshGapPct: it is the
+ * live quote's gap, already rule 4's. Every other row is returned as it is.
  */
 export function trainingGradeOf<R extends GradedFields & { features: unknown; rule4Grade: unknown }>(
   r: R,
 ): R {
   const g = r.rule4Grade;
-  if (r.labelRule !== 3 || g === null || typeof g !== "object") return r;
+  const born4 = r.labelRule === FRESH_ANCHOR_LABEL_RULE;
+  if ((r.labelRule !== 3 && !born4) || g === null || typeof g !== "object") return r;
   const grade = g as Record<string, unknown>;
   if (typeof grade.labelValue !== "number" || typeof grade.anchorPriceUsd !== "number") return r;
   const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
@@ -1058,10 +1087,9 @@ export function trainingGradeOf<R extends GradedFields & { features: unknown; ru
     peak1hReturnPct: num(grade.peak1hReturnPct),
     peakBeforeStopPriceUsd: num(grade.peakBeforeStopPriceUsd),
     hit10xIn1h: typeof grade.hit10xIn1h === "boolean" ? grade.hit10xIn1h : null,
-    features: {
-      ...(r.features as Record<string, number | null>),
-      freshGapPct: num(grade.freshGapPct),
-    },
+    features: born4
+      ? r.features
+      : { ...(r.features as Record<string, number | null>), freshGapPct: num(grade.freshGapPct) },
   };
 }
 

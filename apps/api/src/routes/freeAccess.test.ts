@@ -247,17 +247,22 @@ describe.skipIf(!dbAvailable)("free access", () => {
     expect(byWallet.get(listed.wallet)).toMatchObject({ action: "keep", reason: "whitelisted" });
   });
 
-  it("won't switch off when the accounts it would delete aren't the ones the admin was shown", async () => {
+  it("won't switch off when the accounts it would delete aren't the ones the admin was shown, and closes sign-in so the next try can match", async () => {
     const shown = (await asAdmin("GET", "/admin/free-access")).json().plan.digest as string;
     expect((await asAdmin("POST", "/admin/free-access/disable", { digest: shown })).statusCode).toBe(400);
-    const stale = await asAdmin("POST", "/admin/free-access/disable", { confirm: true, digest: "not-it" });
-    expect(stale.statusCode).toBe(409);
-    expect(stale.json().deletes).toBe(1);
     // Someone new signs in after the admin looked: the same switch-off is now refused.
     const late = await signIn(keypair());
     const res = await asAdmin("POST", "/admin/free-access/disable", { confirm: true, digest: shown });
     expect(res.statusCode).toBe(409);
     expect(res.json().deletes).toBe(2);
+    expect(res.json().error).toMatch(/sign-in is now closed/i);
+    // Sign-in closed with the refusal: access runs on, but nobody else is enrolled.
+    expect((await asAdmin("GET", "/admin/free-access")).json().period.phase).toBe("running");
+    const later = await signIn(keypair());
+    expect(await grantOf(later.wallet)).toBeNull();
+    const stale = await asAdmin("POST", "/admin/free-access/disable", { confirm: true, digest: "not-it" });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().deletes).toBe(2);
     expect((await as(freshA.cookie, "GET", "/filters")).statusCode).toBe(200);
     // The late one subscribes, so the plan is the one shown again.
     await prisma.subscription.create({
@@ -379,5 +384,16 @@ describe.skipIf(!dbAvailable)("free access", () => {
     const second = await signIn(again);
     expect(second.userId).not.toBe(first.userId);
     expect((await as(second.cookie, "GET", "/filters")).statusCode).toBe(402);
+  });
+
+  it("switching off a period nobody enrolled in lets a new one be saved at once", async () => {
+    const scheduled = await asAdmin("PUT", "/admin/free-access", { ...times(HOUR), confirm: true });
+    expect(scheduled.json().period.phase).toBe("scheduled");
+    const shown = (await asAdmin("GET", "/admin/free-access")).json().plan.digest as string;
+    const res = await asAdmin("POST", "/admin/free-access/disable", { confirm: true, digest: shown });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().period.purgedAt).not.toBeNull();
+    expect((await asAdmin("GET", "/admin/free-access")).json().period).toBeNull();
+    expect((await asAdmin("PUT", "/admin/free-access", { ...times(), confirm: true })).statusCode).toBe(200);
   });
 });

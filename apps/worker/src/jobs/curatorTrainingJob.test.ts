@@ -400,6 +400,54 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
       rows.map((r) => `${r.sampleKind}@${(r.anchorAt.getTime() - windowStart.getTime()) / 60_000}`),
     ).toEqual(["event@3", "hourly@1"]);
   });
+
+  it("drops the hourly twin of an alerted event row even when re-grading gave the two different prices", async () => {
+    const windowStart = new Date("2099-03-01T00:00:00Z");
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-load-alerted` } });
+    const at = (s: number) => new Date(windowStart.getTime() + s * 1_000);
+    const row = (s: number, sampleKind: string, anchorPriceUsd: number) => ({
+      tokenId: token.id,
+      anchorAt: at(s),
+      finalizedAt: at(s),
+      sampleKind,
+      anchorPriceUsd,
+      anchorMcapUsd: 50_000,
+      features: {},
+      score: 50,
+      nextCheckAt: windowStart,
+      labelValue: 0,
+      peak1hPriceUsd: 1,
+      low1hPriceUsd: 1,
+      lowBefore2xPriceUsd: 1,
+      peak24hPriceUsd: 1,
+    });
+    await prisma.candidateOutcome.createMany({
+      data: [row(500, "hourly", 1), row(670, "hourly", 1.1), row(1_000, "event", 2)],
+    });
+    // The event row's anchor moved to send time, 70s after its scan; the twin's price is another candle's.
+    const event = await prisma.candidateOutcome.findFirstOrThrow({
+      where: { tokenId: token.id, sampleKind: "event" },
+    });
+    await prisma.candidateOutcome.updateMany({
+      where: { tokenId: token.id, sampleKind: "event" },
+      data: { anchorAt: at(740), finalizedAt: at(740) },
+    });
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        candidateOutcomeId: event.id,
+        source: "test",
+        confidence: 80,
+        anchorPriceUsd: 2,
+        anchorMcapUsd: 50_000,
+        createdAt: at(740),
+      },
+    });
+    const rows = await loadTrainingRows(windowStart, 100, 50);
+    expect(
+      rows.map((r) => `${r.sampleKind}@${(r.anchorAt.getTime() - windowStart.getTime()) / 1_000}`),
+    ).toEqual(["event@740", "hourly@500"]);
+  });
 });
 
 describe("trainingGradeOf", () => {
@@ -442,11 +490,36 @@ describe("trainingGradeOf", () => {
     });
   });
 
-  it("leaves rows without one, and rows already on rule 4, as they are", () => {
+  it("reads the quote re-grade's replay on an alerted row born rule 4, keeping its live fresh-price gap", () => {
+    const born4 = {
+      ...base,
+      labelRule: 4,
+      labelValue: 0,
+      features: { mcapUsd: 10_000, freshGapPct: 3 },
+      rule4Grade: {
+        labelValue: 1,
+        anchorPriceUsd: 1.05,
+        signalPriceUsd: 1.05,
+        hit10xIn1h: false,
+        freshGapPct: 9,
+      },
+    };
+    expect(trainingGradeOf(born4)).toMatchObject({
+      labelRule: 4,
+      labelValue: 1,
+      anchorPriceUsd: 1.05,
+      signalPriceUsd: 1.05,
+      features: { mcapUsd: 10_000, freshGapPct: 3 },
+    });
+  });
+
+  it("leaves rows without one, or with a broken one, as they are", () => {
     const plain = { ...base, rule4Grade: null };
     expect(trainingGradeOf(plain)).toBe(plain);
-    const born4 = { ...base, labelRule: 4, rule4Grade: { labelValue: 0, anchorPriceUsd: 2 } };
-    expect(trainingGradeOf(born4)).toBe(born4);
+    const plain4 = { ...base, labelRule: 4, rule4Grade: null };
+    expect(trainingGradeOf(plain4)).toBe(plain4);
+    const older = { ...base, labelRule: 2, rule4Grade: { labelValue: 0, anchorPriceUsd: 2 } };
+    expect(trainingGradeOf(older)).toBe(older);
     const broken = { ...base, rule4Grade: { anchorPriceUsd: 2 } };
     expect(trainingGradeOf(broken)).toBe(broken);
   });
@@ -472,6 +545,25 @@ describe("withoutEventTwins", () => {
       { tokenId: "a", anchorAt: at(55), anchorPriceUsd: 0.001, id: "after the event" },
     ];
     expect(withoutEventTwins(hourly, events).map((h) => h.id)).toEqual(["other price", "after the event"]);
+  });
+
+  it("drops the twin of an alerted event whatever the price, as re-graded rows anchor on other candles", () => {
+    const events = [
+      { tokenId: "a", anchorAt: at(50), anchorPriceUsd: 0.0011, alerted: true },
+      { tokenId: "b", anchorAt: at(50), anchorPriceUsd: 0.0011 },
+    ];
+    const hourly = [
+      { tokenId: "a", anchorAt: at(0), anchorPriceUsd: 0.001, id: "twin" },
+      { tokenId: "a", anchorAt: at(55), anchorPriceUsd: 0.001, id: "after the event" },
+      { tokenId: "b", anchorAt: at(0), anchorPriceUsd: 0.001, id: "not alerted, other price" },
+    ];
+    expect(withoutEventTwins(hourly, events).map((h) => h.id)).toEqual([
+      "after the event",
+      "not alerted, other price",
+    ]);
+    // Over three minutes before the alert is another scan.
+    const early = [{ tokenId: "a", anchorAt: new Date(at(50).getTime() - 181_000), id: "earlier scan" }];
+    expect(withoutEventTwins(early, events).map((h) => h.id)).toEqual(["earlier scan"]);
   });
 });
 
