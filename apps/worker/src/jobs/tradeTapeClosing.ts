@@ -6,6 +6,7 @@ import {
   prisma,
   PUMP_SUPPLY_TOKENS,
   TAPE_TRADES_PER_WALLET,
+  associatedTokenAddress,
   tradesFromChainTransactionsPriced,
   walletTrades,
   type HeliusClient,
@@ -25,23 +26,40 @@ const logger = createLogger("trade-tape-closing");
  * and the wallet pages, however and whenever it sold later. And once a coin is under
  * LOW_CAP_MCAP_USD the scan stops reading it beyond its market cap (lowCap.ts). So when a taped
  * coin is past its tracking window (the call plus the 24-hour extended watch) and still under the
- * floor, its trades from the tape's end to now are read once - Helius getTransactionsForAddress on
- * the mint, oldest first, from the window's end - and folded into the wallets already on its tape:
- * their buys and sells, SOL and tokens, first buy and sell, and their stored trades with each
- * trade's own time and amount. A coin still over the floor is looked at again an hour later.
+ * floor, it is closed once:
+ *  1. Its holders now are read (getProgramAccountsV2 on the mint, 1 credit a page), and each wallet
+ *     on its tape that held tokens at the window's end and holds less now is a seller.
+ *  2. Each seller's token account of the coin lists every transaction that moved it
+ *     (getSignaturesForAddress, 1 credit; both token programs' associated account for a wallet
+ *     whose account is gone), and those after the window are read (getTransaction, 1 credit each).
+ *  3. Their trades are folded into the sellers' rows: buys and sells, SOL and tokens, first buy and
+ *     sell, and the stored trades, each with its own time and amount.
+ * A wallet that still holds what it held needs nothing read: "holding" is right for it.
+ *
+ * It reads by wallet, not the mint's whole tape after the window, on purpose: a called coin's
+ * first day after its call often runs to thousands of trades (the first coin the mint-wide read
+ * met in production took its whole 30-page cap and stored nothing), while the tape's holders who
+ * sold are a few dozen accounts. MAX_SELLERS_PER_COIN (largest holdings first) and
+ * MAX_TX_PER_COIN bound one coin to about 150 credits; a wallet whose transactions don't all fit
+ * is left as it was rather than given part of its trades.
  *
  * Only wallets already on the tape are updated. A wallet that first bought after the window is not
  * added: the tape's rows are the coin's traders up to its call (what the wallet book scores), and
  * a late buyer of a dead coin is not one of them. What a row says about the call itself (held at
  * the anchor, top 10, sold into the stop, launch roles) is read at the anchor and stays as it was.
+ * A coin still over the floor is looked at again an hour later.
  */
 
 /** Taped coins this far back are closed (the tape's own lookback): older ones keep their tape. */
 const LOOKBACK_MS = 10 * 24 * 3_600_000;
 /** The tracking window after a call: the extended watch of its grading row. */
 export const CLOSING_AFTER_ANCHOR_MS = CANDIDATE_EXTENDED_WATCH_HOURS * 3_600_000;
-/** 3,000 trades after the window, 300 credits: past it the coin was not dead, and is left as it was. */
-export const CLOSING_MAX_PAGES_PER_COIN = 30;
+/** The tape's sellers read per coin, largest holding at the window's end first. */
+export const MAX_SELLERS_PER_COIN = 40;
+/** Transactions read per coin (1 credit each). */
+export const MAX_TX_PER_COIN = 100;
+/** A holding this many whole tokens or less (a millionth of a Pump.fun supply) counts as none. */
+const DUST_TOKENS = 1_000;
 /** A coin still over the floor is looked at again this much later. */
 const RECHECK_ALIVE_MS = 60 * 60_000;
 const RETRY_FAILED_MS = 30 * 60_000;
@@ -51,6 +69,14 @@ const FRESH_MCAP_MS = 30 * 60_000;
 const MCAP_LOOKUPS_PER_RUN = 30;
 /** Taped coins looked at per run for one to close. */
 const CANDIDATES_PER_RUN = 200;
+/** Both token programs: a closed account's program is not known, so both associated accounts are read. */
+const TOKEN_PROGRAMS = [
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+] as const;
+
+/** Runs' worth of budget the lane may save up while there is nothing to close. */
+const MAX_BALANCE_RUNS = 5;
 
 export interface ClosingCoin {
   tokenId: string;
@@ -58,21 +84,16 @@ export interface ClosingCoin {
   windowEndMs: number;
 }
 
-interface ClosingProgress {
-  coin: ClosingCoin;
-  /** The read stops here: the moment it started. */
-  closeAtMs: number;
-  trades: TapeTrade[];
-  calls: number;
-  cursor: string | undefined;
-  errors: number;
-}
-
-let progress: ClosingProgress | null = null;
+/**
+ * Credits the lane may still spend: each run adds its budget and a coin's reads take theirs, so
+ * a coin dearer than one run's budget is paid off over the next runs and the long-run spend
+ * stays at the budget (capped at a few runs' worth while there is nothing to close).
+ */
+let creditBalance = 0;
 
 /** Test hook. */
 export function resetClosingState(): void {
-  progress = null;
+  creditBalance = 0;
 }
 
 /**
@@ -97,7 +118,12 @@ export async function nextClosingCoin(
     where: {
       status: { in: ["done", "partial"] },
       anchorAt: { gte: new Date(nowMs - LOOKBACK_MS), lte: new Date(nowMs - CLOSING_AFTER_ANCHOR_MS) },
-      OR: [{ closeStatus: null }, { closeStatus: { in: ["waiting", "failed"] }, closeRetryAt: { lte: now } }],
+      // "busy": left by the first, mint-wide version of this read; this one can close it.
+      OR: [
+        { closeStatus: null },
+        { closeStatus: "busy" },
+        { closeStatus: { in: ["waiting", "failed"] }, closeRetryAt: { lte: now } },
+      ],
     },
     select: {
       tokenId: true,
@@ -225,46 +251,75 @@ export function foldClosingTrades(row: ClosingRow, trades: readonly TapeTrade[])
   return out;
 }
 
-/** Folds a finished closing read into the tape's wallets and marks the tape closed. */
+/** The figures of a tape row the closing read needs to find its sellers and fold their trades. */
+const ROW_SELECT = {
+  id: true,
+  wallet: true,
+  buys: true,
+  sells: true,
+  solIn: true,
+  solOut: true,
+  tokensBought: true,
+  tokensSold: true,
+  firstBuyAt: true,
+  firstSellAt: true,
+  boughtPct: true,
+  fastExit: true,
+  trades: true,
+} as const;
+
+type TapeRow = ClosingRow & { id: string; wallet: string };
+
+/** What the tape says a wallet held at the window's end, in whole tokens. */
+export function heldAtWindowEnd(row: Pick<ClosingRow, "tokensBought" | "tokensSold">): number {
+  return Math.max(0, row.tokensBought - row.tokensSold);
+}
+
+/**
+ * The tape's wallets that held tokens at the window's end and hold less now (`nowTokens`: whole
+ * tokens by wallet; a wallet missing holds none), largest holding first, at most
+ * MAX_SELLERS_PER_COIN. Exported for tests.
+ */
+export function sellersOf<R extends Pick<TapeRow, "wallet" | "tokensBought" | "tokensSold">>(
+  rows: readonly R[],
+  nowTokens: ReadonlyMap<string, number>,
+): R[] {
+  return rows
+    .filter((r) => {
+      const held = heldAtWindowEnd(r);
+      return held > DUST_TOKENS && (nowTokens.get(r.wallet) ?? 0) < held - Math.max(DUST_TOKENS, held * 0.01);
+    })
+    .sort((a, b) => heldAtWindowEnd(b) - heldAtWindowEnd(a))
+    .slice(0, MAX_SELLERS_PER_COIN);
+}
+
+/**
+ * Folds the sellers' trades into their rows and marks the tape closed. `tradesOf`: each wallet's
+ * trades after the window, for the wallets read in full (an empty list for one that moved the coin
+ * without trading it, a transfer).
+ */
 export async function storeClosing(
   coin: ClosingCoin,
-  read: { trades: TapeTrade[]; closeAtMs: number; calls: number },
+  rows: readonly TapeRow[],
+  tradesOf: ReadonlyMap<string, TapeTrade[]>,
+  read: { closeAtMs: number; credits: number },
 ): Promise<{ wallets: number; trades: number }> {
-  const trades = orderTrades(read.trades).filter(
-    (t) => t.atMs > coin.windowEndMs && t.atMs <= read.closeAtMs,
-  );
-  const byWallet = new Map<string, TapeTrade[]>();
-  for (const t of trades) {
-    const list = byWallet.get(t.wallet);
-    if (list) list.push(t);
-    else byWallet.set(t.wallet, [t]);
-  }
-  const rows = await prisma.tokenWalletActivity.findMany({
-    where: { tokenId: coin.tokenId, wallet: { in: [...byWallet.keys()] } },
-    select: {
-      id: true,
-      wallet: true,
-      buys: true,
-      sells: true,
-      solIn: true,
-      solOut: true,
-      tokensBought: true,
-      tokensSold: true,
-      firstBuyAt: true,
-      firstSellAt: true,
-      boughtPct: true,
-      fastExit: true,
-      trades: true,
-    },
-  });
+  let wallets = 0;
+  let trades = 0;
   await prisma.$transaction(
     async (tx) => {
       for (const row of rows) {
-        const next = foldClosingTrades(row, byWallet.get(row.wallet)!);
+        const own = orderTrades(tradesOf.get(row.wallet) ?? []).filter(
+          (t) => t.wallet === row.wallet && t.atMs > coin.windowEndMs && t.atMs <= read.closeAtMs,
+        );
+        if (own.length === 0) continue;
+        const next = foldClosingTrades(row, own);
         await tx.tokenWalletActivity.update({
           where: { id: row.id },
           data: { ...next, trades: next.trades as unknown as Prisma.InputJsonValue },
         });
+        wallets += 1;
+        trades += own.length;
       }
       await tx.tokenTradeTape.update({
         where: { tokenId: coin.tokenId },
@@ -272,97 +327,177 @@ export async function storeClosing(
           closeStatus: "done",
           closeRetryAt: null,
           closedThrough: new Date(read.closeAtMs),
-          closeTrades: trades.length,
-          closeCalls: read.calls,
+          closeTrades: trades,
+          closeCalls: read.credits,
         },
       });
     },
     { timeout: 30_000 },
   );
-  return { wallets: rows.length, trades: trades.length };
+  return { wallets, trades };
 }
 
-async function markClosing(coin: ClosingCoin, status: "busy" | "failed", calls: number, nowMs: number) {
+async function markFailed(coin: ClosingCoin, credits: number, nowMs: number) {
   await prisma.tokenTradeTape.update({
     where: { tokenId: coin.tokenId },
-    data: {
-      closeStatus: status,
-      closeRetryAt: status === "failed" ? new Date(nowMs + RETRY_FAILED_MS) : null,
-      closeCalls: calls,
-    },
+    data: { closeStatus: "failed", closeRetryAt: new Date(nowMs + RETRY_FAILED_MS), closeCalls: credits },
   });
+}
+
+/** A wallet's associated account of a coin under either program; none for an address that won't derive. */
+function associatedAccountsOf(wallet: string, mint: string): string[] {
+  try {
+    return TOKEN_PROGRAMS.map((p) => associatedTokenAddress(wallet, mint, p));
+  } catch {
+    return [];
+  }
 }
 
 export interface ClosingCounts {
   closingDone: number;
-  closingBusy: number;
   closingFailed: number;
+  /** Tape wallets found to have sold since the window, and those whose trades were folded in. */
+  closingSellers: number;
   closingWallets: number;
-  closingPages: number;
+  closingCredits: number;
+}
+
+export type ClosingHelius = Pick<
+  HeliusClient,
+  "getTopHoldersBatch" | "getAccountSignaturesBatch" | "getTransactionsBatch"
+>;
+
+/**
+ * Closes one coin (see the note at the top). Returns the credits spent, or "failed" with them when
+ * a read got no usable answer (the coin is retried later).
+ */
+export async function closeCoin(
+  coin: ClosingCoin,
+  helius: ClosingHelius,
+  solPrices: SolPriceLookup | undefined,
+  counts: ClosingCounts,
+  nowMs: number,
+): Promise<number> {
+  let credits = 0;
+  const holders = (await helius.getTopHoldersBatch([coin.mint], Number.MAX_SAFE_INTEGER)).get(coin.mint);
+  // A mint's program and supply (getMultipleAccounts), then its token accounts: a page in nearly all cases.
+  credits += 2;
+  if (!holders || holders.status !== "found") {
+    await markFailed(coin, credits, nowMs);
+    counts.closingFailed += 1;
+    return credits;
+  }
+  const nowTokens = new Map(holders.holders.map((h) => [h.owner, (h.pct / 100) * PUMP_SUPPLY_TOKENS]));
+  const accountsNow = new Map(holders.holders.map((h) => [h.owner, h.accounts ?? []]));
+  const rows: TapeRow[] = await prisma.tokenWalletActivity.findMany({
+    where: { tokenId: coin.tokenId },
+    select: ROW_SELECT,
+  });
+  const sellers = sellersOf(rows, nowTokens);
+  counts.closingSellers += sellers.length;
+
+  // Each seller's accounts of the coin: the ones it still has, else its associated account under
+  // either program (the history of a closed account can still be read).
+  const accountsOf = new Map(
+    sellers.map((r) => {
+      const own = accountsNow.get(r.wallet) ?? [];
+      return [r.wallet, own.length > 0 ? own : associatedAccountsOf(r.wallet, coin.mint)] as const;
+    }),
+  );
+  const reads = [...accountsOf.values()].flat().map((address) => ({ address }));
+  const pages = reads.length > 0 ? await helius.getAccountSignaturesBatch(reads) : new Map();
+  credits += reads.length;
+
+  // The transactions after the window, a whole wallet at a time within MAX_TX_PER_COIN.
+  // A read with no usable answer fails the coin whole (retried later): stored part-way, a retry
+  // would fold the same trades in twice.
+  if (
+    [...pages.values()].some((p) => p.status !== "found") ||
+    pages.size < new Set(reads.map((r) => r.address)).size
+  ) {
+    await markFailed(coin, credits, nowMs);
+    counts.closingFailed += 1;
+    return credits;
+  }
+  const sigsOf = new Map<string, string[]>();
+  let txBudget = MAX_TX_PER_COIN;
+  for (const r of sellers) {
+    const sigs = new Set<string>();
+    let readable = true;
+    for (const a of accountsOf.get(r.wallet)!) {
+      const page = pages.get(a);
+      if (!page || page.status !== "found") {
+        readable = false;
+        break;
+      }
+      for (const sig of page.signatures) {
+        if (sig.ok && sig.atMs !== null && sig.atMs > coin.windowEndMs) sigs.add(sig.signature);
+      }
+      // A full page may have dropped older signatures that still fall after the window.
+      const oldest = page.signatures.at(-1)?.atMs ?? null;
+      if (page.full && (oldest === null || oldest > coin.windowEndMs)) readable = false;
+    }
+    if (!readable || sigs.size > txBudget) continue;
+    txBudget -= sigs.size;
+    sigsOf.set(r.wallet, [...sigs]);
+  }
+  const wanted = [...new Set([...sigsOf.values()].flat())];
+  const txs = wanted.length > 0 ? await helius.getTransactionsBatch(wanted) : new Map();
+  credits += wanted.length;
+  const tradesOf = new Map<string, TapeTrade[]>();
+  const byWallet = new Map<string, TapeTrade[]>();
+  const found = wanted.flatMap((sig) => {
+    const tx = txs.get(sig);
+    return tx && tx !== "failed" ? [tx] : [];
+  });
+  if (found.length > 0) {
+    const parsed = await tradesFromChainTransactionsPriced(coin.mint, found, solPrices);
+    for (const t of parsed.trades) {
+      const list = byWallet.get(t.wallet);
+      if (list) list.push(t);
+      else byWallet.set(t.wallet, [t]);
+    }
+  }
+  if (wanted.some((sig) => txs.get(sig) === "failed" || txs.get(sig) === undefined)) {
+    await markFailed(coin, credits, nowMs);
+    counts.closingFailed += 1;
+    return credits;
+  }
+  for (const wallet of sigsOf.keys()) tradesOf.set(wallet, byWallet.get(wallet) ?? []);
+  const stored = await storeClosing(
+    coin,
+    rows.filter((r) => tradesOf.has(r.wallet)),
+    tradesOf,
+    { closeAtMs: nowMs, credits },
+  );
+  counts.closingDone += 1;
+  counts.closingWallets += stored.wallets;
+  return credits;
 }
 
 /**
- * Spends up to `budget` Helius pages on closing reads, one coin at a time; a coin not finished
- * carries over to the next run. `skip`: coins another lane is reading right now.
+ * Closes coins while the lane has credits (see creditBalance): `budget` a run, and up to
+ * MAX_BALANCE_RUNS runs' worth saved while there was nothing to close.
  */
 export async function runClosingLane(
   deps: {
-    helius: Pick<HeliusClient, "getMintTransactionsPage" | "gtfaUsable">;
+    helius: ClosingHelius;
     solPrices?: SolPriceLookup;
     marketCaps?: MarketCapLookup;
   },
-  opts: { budget: number; floorUsd: number; skip?: ReadonlySet<string> },
+  opts: { budget: number; floorUsd: number },
   counts: ClosingCounts,
   now: () => number,
 ): Promise<void> {
-  let budget = opts.budget;
-  if (opts.floorUsd <= 0) return;
-  while (budget > 0 && deps.helius.gtfaUsable) {
-    if (!progress) {
-      const coin = await nextClosingCoin(now(), opts.floorUsd, deps.marketCaps, opts.skip);
-      if (!coin) return;
-      progress = { coin, closeAtMs: now(), trades: [], calls: 0, cursor: undefined, errors: 0 };
-    }
-    const p = progress;
-    const page = await deps.helius.getMintTransactionsPage(p.coin.mint, {
-      paginationToken: p.cursor,
-      sinceBlockTime: Math.floor(p.coin.windowEndMs / 1000),
-      untilBlockTime: Math.ceil(p.closeAtMs / 1000),
-    });
-    budget -= 1;
-    counts.closingPages += 1;
-    p.calls += 1;
-    if (page.status === "unsupported") {
-      progress = null;
-      return;
-    }
-    if (page.status === "failed") {
-      p.errors += 1;
-      if (p.errors >= 3) {
-        await markClosing(p.coin, "failed", p.calls, now());
-        counts.closingFailed += 1;
-        progress = null;
-      }
-      continue;
-    }
-    const parsed = await tradesFromChainTransactionsPriced(p.coin.mint, page.txs, deps.solPrices);
-    p.trades.push(...parsed.trades);
-    p.cursor = page.paginationToken ?? undefined;
-    const lastAtMs = Math.max(0, ...page.txs.map((t) => (t.blockTime ?? 0) * 1000));
-    if (!page.paginationToken || lastAtMs > p.closeAtMs) {
-      const stored = await storeClosing(p.coin, { trades: p.trades, closeAtMs: p.closeAtMs, calls: p.calls });
-      counts.closingDone += 1;
-      counts.closingWallets += stored.wallets;
-      progress = null;
-    } else if (p.calls >= CLOSING_MAX_PAGES_PER_COIN) {
-      await markClosing(p.coin, "busy", p.calls, now());
-      counts.closingBusy += 1;
-      progress = null;
-    }
+  if (opts.floorUsd <= 0 || opts.budget <= 0) return;
+  creditBalance = Math.min(creditBalance + opts.budget, opts.budget * MAX_BALANCE_RUNS);
+  const tried = new Set<string>();
+  while (creditBalance > 0) {
+    const coin = await nextClosingCoin(now(), opts.floorUsd, deps.marketCaps, tried);
+    if (!coin) return;
+    tried.add(coin.tokenId);
+    const spent = await closeCoin(coin, deps.helius, deps.solPrices, counts, now());
+    creditBalance -= spent;
+    counts.closingCredits += spent;
   }
-}
-
-/** The coin the closing lane is part way through, if any. */
-export function closingInProgress(): string | undefined {
-  return progress?.coin.tokenId;
 }

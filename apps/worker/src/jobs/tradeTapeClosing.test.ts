@@ -1,13 +1,15 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { prisma, type ChainTx, type TapeTrade } from "@trenchscanner/core";
+import { associatedTokenAddress, prisma, type ChainTx, type TapeTrade } from "@trenchscanner/core";
 import {
   CLOSING_AFTER_ANCHOR_MS,
   foldClosingTrades,
   resetClosingState,
   runClosingLane,
+  sellersOf,
   type ClosingCounts,
+  type ClosingHelius,
   type ClosingRow,
 } from "./tradeTapeClosing.js";
 
@@ -69,27 +71,67 @@ describe("foldClosingTrades", () => {
   });
 });
 
+describe("sellersOf", () => {
+  const r = (wallet: string, tokensBought: number, tokensSold: number) => ({
+    wallet,
+    tokensBought,
+    tokensSold,
+  });
+
+  it("finds the wallets that held at the window's end and hold less now, largest first", () => {
+    const rows = [
+      r("small", 10_000_000, 0),
+      r("big", 50_000_000, 0),
+      r("keeps", 20_000_000, 0),
+      r("out", 5e6, 5e6),
+    ];
+    const now = new Map([
+      ["keeps", 20_000_000],
+      ["small", 2_000_000],
+    ]);
+    expect(sellersOf(rows, now).map((x) => x.wallet)).toEqual(["big", "small"]);
+  });
+
+  it("does not count a rounding difference as a sale", () => {
+    expect(sellersOf([r("a", 50_000_000, 0)], new Map([["a", 49_900_000]]))).toEqual([]);
+  });
+});
+
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
-const TAG = `tape-closing-test-${Date.now()}`;
 // Far from every other test's tapes, so none of theirs is inside the lookback.
 const NOW = Date.parse("2031-01-10T00:00:00Z");
 const ANCHOR = NOW - CLOSING_AFTER_ANCHOR_MS - 10 * MIN;
 const WINDOW_END = ANCHOR + 30 * MIN;
-const holder = "4WPT9wLwQWYS5zyX36ZgoY3ESxxLgDmE12upKXDAyYbL";
-const newcomer = "E8UYm3eH1vod7a2kpkWotNyosY2W7x6K9yCDZbkqwW12";
+// Real wallet addresses: program accounts (off the ed25519 curve) are left out of the tape.
+const seller = "4WPT9wLwQWYS5zyX36ZgoY3ESxxLgDmE12upKXDAyYbL";
+const keeper = "E8UYm3eH1vod7a2kpkWotNyosY2W7x6K9yCDZbkqwW12";
+const LEGACY = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 
 const counts = (): ClosingCounts => ({
   closingDone: 0,
-  closingBusy: 0,
   closingFailed: 0,
+  closingSellers: 0,
   closingWallets: 0,
-  closingPages: 0,
+  closingCredits: 0,
 });
 
-async function seedTape(label: string, mcap: number | null) {
+/** Real mint addresses (the associated accounts are derived from them), one per seeded coin. */
+const MINTS = [
+  "51yFbJwn4nZNv9BdG4g15sV61j8yZRXfwnvPUKV2pump",
+  "9zHKZ14uki54GAHqs75sXshQstqhqxY6bXPb3r9Apump",
+  "BadHgRkP5AusMppqZT5zAAUcfvuG1wft56T5p247pump",
+  "EA9cRajgtYr11aLaWP6i66UuKbATHkmUGx1Rv2Abpump",
+  "DCmAqQgTnBWoHvGv1nzQZsyQRaAWjzMGsknfoZ9hpump",
+  "EWtmECczHgregwQQ4WArXKGX8cBhEvK8FLDp6bqapump",
+];
+let nextMint = 0;
+const mintFor = () => MINTS[nextMint++ % MINTS.length]!;
+const seeded: string[] = [];
+
+async function seedTape(mcap: number | null) {
   const token = await prisma.token.create({
     data: {
-      mintAddress: `${TAG}-${label}`,
+      mintAddress: mintFor(),
       ...(mcap !== null ? { liveMarketCapUsd: mcap, liveDataAt: new Date(NOW - MIN) } : {}),
     },
   });
@@ -103,20 +145,23 @@ async function seedTape(label: string, mcap: number | null) {
       windowEnd: new Date(WINDOW_END),
     },
   });
-  await prisma.tokenWalletActivity.create({
-    data: {
-      tokenId: token.id,
-      wallet: holder,
-      buys: 1,
-      solIn: 2,
-      tokensBought: 50_000_000,
-      firstBuyAt: new Date(ANCHOR - MIN),
-      heldAtAnchor: 50_000_000,
-      heldPctAtAnchor: 5,
-      boughtPct: 5,
-      trades: [[ANCHOR - MIN, 1, 2, 50_000_000]],
-    },
-  });
+  for (const wallet of [seller, keeper]) {
+    await prisma.tokenWalletActivity.create({
+      data: {
+        tokenId: token.id,
+        wallet,
+        buys: 1,
+        solIn: 2,
+        tokensBought: 50_000_000,
+        firstBuyAt: new Date(ANCHOR - MIN),
+        heldAtAnchor: 50_000_000,
+        heldPctAtAnchor: 5,
+        boughtPct: 5,
+        trades: [[ANCHOR - MIN, 1, 2, 50_000_000]],
+      },
+    });
+  }
+  seeded.push(token.id);
   return token;
 }
 
@@ -147,92 +192,143 @@ function chainTx(
   };
 }
 
+/** A Helius stand-in: the keeper still holds everything, the seller sold out and closed its account. */
+function heliusFor(mint: string, sells: ChainTx[], asked: string[] = []): ClosingHelius {
+  const sellerAta = associatedTokenAddress(seller, mint, LEGACY);
+  return {
+    getTopHoldersBatch: async () =>
+      new Map([
+        [mint, { status: "found" as const, holders: [{ owner: keeper, pct: 5, accounts: ["keeper-ata"] }] }],
+      ]),
+    getAccountSignaturesBatch: async (reads) => {
+      asked.push(...reads.map((r) => r.address));
+      return new Map(
+        reads.map((r) => [
+          r.address,
+          {
+            status: "found" as const,
+            full: false,
+            signatures:
+              r.address === sellerAta
+                ? [
+                    ...sells.map((t) => ({
+                      signature: t.transaction!.signatures![0]!,
+                      ok: true,
+                      atMs: t.blockTime! * 1000,
+                    })),
+                    // Inside the window: already on the tape.
+                    { signature: "old", ok: true, atMs: WINDOW_END - MIN },
+                  ]
+                : [],
+          },
+        ]),
+      );
+    },
+    getTransactionsBatch: async (sigs) =>
+      new Map(sigs.map((sig) => [sig, sells.find((t) => t.transaction!.signatures![0] === sig) ?? null])),
+  };
+}
+
 describe.skipIf(!dbAvailable)("closing read", () => {
   beforeEach(async () => {
     resetClosingState();
-    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.token.deleteMany({ where: { id: { in: seeded.splice(0) } } });
   });
   afterAll(async () => {
-    if (dbAvailable) await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    if (dbAvailable) await prisma.token.deleteMany({ where: { id: { in: seeded } } });
   });
 
-  it("folds a dead coin's later sells into its tape's wallets, once", async () => {
-    const token = await seedTape("dead", 2_500);
-    const asked: { since?: number; until?: number }[] = [];
-    const helius = {
-      gtfaUsable: true,
-      getMintTransactionsPage: async (
-        _m: string,
-        opts?: { sinceBlockTime?: number; untilBlockTime?: number },
-      ) => {
-        asked.push({ since: opts?.sinceBlockTime, until: opts?.untilBlockTime });
-        return {
-          status: "ok" as const,
-          txs: [
-            chainTx(token.mintAddress, WINDOW_END + 2 * 3_600_000, holder, 50_000_000, 20_000_000, 0.4e9),
-            chainTx(token.mintAddress, WINDOW_END + 3 * 3_600_000, newcomer, 0, 5_000_000, -0.3e9),
-            chainTx(token.mintAddress, WINDOW_END + 5 * 3_600_000, holder, 20_000_000, 0, 0.1e9),
-          ],
-          paginationToken: null,
-        };
-      },
-    };
+  it("folds the later sells of the tape's sellers into their rows, once", async () => {
+    const token = await seedTape(2_500);
+    const mint = token.mintAddress;
+    const sells = [
+      chainTx(mint, WINDOW_END + 2 * 3_600_000, seller, 50_000_000, 20_000_000, 0.4e9),
+      chainTx(mint, WINDOW_END + 5 * 3_600_000, seller, 20_000_000, 0, 0.1e9),
+    ];
+    const asked: string[] = [];
     const c = counts();
-    await runClosingLane({ helius }, { budget: 3, floorUsd: 4_000 }, c, () => NOW);
-    expect(asked).toEqual([{ since: Math.floor(WINDOW_END / 1000), until: NOW / 1000 }]);
-    expect(c).toMatchObject({ closingDone: 1, closingWallets: 1, closingPages: 1 });
+    await runClosingLane(
+      { helius: heliusFor(mint, sells, asked) },
+      { budget: 30, floorUsd: 4_000 },
+      c,
+      () => NOW,
+    );
+    // Only the seller's accounts are read (both programs: its account is gone); the keeper's aren't.
+    expect(asked.sort()).toEqual(
+      [
+        associatedTokenAddress(seller, mint, LEGACY),
+        associatedTokenAddress(seller, mint, "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"),
+      ].sort(),
+    );
+    // Program and supply, the holder page, two signature reads, two transactions.
+    expect(c).toMatchObject({ closingDone: 1, closingSellers: 1, closingWallets: 1, closingCredits: 6 });
     const row = await prisma.tokenWalletActivity.findFirstOrThrow({
-      where: { tokenId: token.id, wallet: holder },
+      where: { tokenId: token.id, wallet: seller },
     });
     expect(row).toMatchObject({ sells: 2, tokensSold: 50_000_000, heldAtAnchor: 50_000_000 });
     expect(row.solOut).toBeCloseTo(0.5);
     expect(row.firstSellAt).toEqual(new Date(WINDOW_END + 2 * 3_600_000));
     expect(row.trades).toHaveLength(3);
-    // A wallet that first bought after the window is not added to the tape.
-    expect(await prisma.tokenWalletActivity.count({ where: { tokenId: token.id, wallet: newcomer } })).toBe(
-      0,
-    );
+    const kept = await prisma.tokenWalletActivity.findFirstOrThrow({
+      where: { tokenId: token.id, wallet: keeper },
+    });
+    expect(kept.sells).toBe(0);
     const tape = await prisma.tokenTradeTape.findUniqueOrThrow({ where: { tokenId: token.id } });
-    expect(tape).toMatchObject({ closeStatus: "done", closeTrades: 3, closeCalls: 1 });
+    expect(tape).toMatchObject({ closeStatus: "done", closeTrades: 2, closeCalls: 6 });
     expect(tape.closedThrough).toEqual(new Date(NOW));
     // Closed for good: nothing more to read.
     const again = counts();
-    await runClosingLane({ helius }, { budget: 3, floorUsd: 4_000 }, again, () => NOW + MIN);
-    expect(again.closingPages).toBe(0);
+    await runClosingLane(
+      { helius: heliusFor(mint, sells) },
+      { budget: 30, floorUsd: 4_000 },
+      again,
+      () => NOW + MIN,
+    );
+    expect(again.closingCredits).toBe(0);
   });
 
   it("waits on a coin still over the floor, and judges a coin with no market dead", async () => {
-    const alive = await seedTape("alive", 50_000);
-    const gone = await seedTape("gone", null);
+    const alive = await seedTape(50_000);
+    const gone = await seedTape(null);
     const read: string[] = [];
-    const helius = {
-      gtfaUsable: true,
-      getMintTransactionsPage: async (m: string) => {
-        read.push(m);
-        return { status: "ok" as const, txs: [], paginationToken: null };
+    const helius: ClosingHelius = {
+      ...heliusFor(gone.mintAddress, []),
+      getTopHoldersBatch: async (mints) => {
+        read.push(...mints);
+        return new Map(mints.map((m) => [m, { status: "found" as const, holders: [] }]));
       },
     };
     const marketCaps = async (mints: string[]) => new Map(mints.map((m) => [m, null] as const));
-    await runClosingLane({ helius, marketCaps }, { budget: 5, floorUsd: 4_000 }, counts(), () => NOW);
+    await runClosingLane({ helius, marketCaps }, { budget: 30, floorUsd: 4_000 }, counts(), () => NOW);
     expect(read).toEqual([gone.mintAddress]);
     const waiting = await prisma.tokenTradeTape.findUniqueOrThrow({ where: { tokenId: alive.id } });
     expect(waiting.closeStatus).toBe("waiting");
     expect(waiting.closeRetryAt!.getTime()).toBeGreaterThan(NOW);
   });
 
-  it("leaves a coin whose market caps could not be read for a later run", async () => {
-    await seedTape("unknown", null);
-    const helius = {
-      gtfaUsable: true,
-      getMintTransactionsPage: async () => ({ status: "ok" as const, txs: [], paginationToken: null }),
-    };
+  it("leaves a coin whose market cap could not be read for a later run", async () => {
+    await seedTape(null);
     const c = counts();
     await runClosingLane(
-      { helius, marketCaps: async () => new Map<string, number | null>() },
-      { budget: 5, floorUsd: 4_000 },
+      { helius: heliusFor(mintFor(), []), marketCaps: async () => new Map<string, number | null>() },
+      { budget: 30, floorUsd: 4_000 },
       c,
       () => NOW,
     );
-    expect(c.closingPages).toBe(0);
+    expect(c.closingCredits).toBe(0);
+  });
+
+  it("retries a coin whose holders could not be read", async () => {
+    const token = await seedTape(1_000);
+    const helius: ClosingHelius = {
+      ...heliusFor(token.mintAddress, []),
+      getTopHoldersBatch: async (mints) => new Map(mints.map((m) => [m, { status: "failed" as const }])),
+    };
+    const c = counts();
+    await runClosingLane({ helius }, { budget: 30, floorUsd: 4_000 }, c, () => NOW);
+    expect(c.closingFailed).toBe(1);
+    const tape = await prisma.tokenTradeTape.findUniqueOrThrow({ where: { tokenId: token.id } });
+    expect(tape.closeStatus).toBe("failed");
+    expect(tape.closeRetryAt!.getTime()).toBeGreaterThan(NOW);
   });
 });
