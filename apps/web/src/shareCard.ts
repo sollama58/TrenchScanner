@@ -101,6 +101,8 @@ export function frame(
     link: string;
     /** Stamps the footer with the time as well as the date (in UTC), for figures that move by the hour. */
     time?: boolean;
+    /** A small disclaimer under the footer, for cards that show inferred labels. */
+    disclaimer?: string;
   },
 ) {
   const W = CARD_W;
@@ -170,6 +172,11 @@ export function frame(
   ctx.font = `700 22px ${FONT}`;
   ctx.fillText(opts.link, W - PAD, H - 44);
   ctx.textAlign = "left";
+  if (opts.disclaimer) {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.34)";
+    ctx.font = `500 13px ${FONT}`;
+    ctx.fillText(clip(ctx, opts.disclaimer, W - PAD * 2), PAD, H - 18);
+  }
 }
 
 /** "October 12, 2026", or with `time` "Oct 12, 2026, 16:05 UTC": the image is seen in any timezone. */

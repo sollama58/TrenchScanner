@@ -93,7 +93,7 @@ const ROLE_PILL: Record<PlacedNode["role"], string> = {
   hub: "Main wallet",
   known: "Known Side",
   funded: "KOL Funded Wallet",
-  possible: "Possible Side",
+  possible: "Probable Side",
   bundle: "Would be labeled",
   funder: "Shared funder",
 };
@@ -221,7 +221,7 @@ function WebView({
         "1 main",
         web.counts.known && `${web.counts.known} Known Side${web.counts.known === 1 ? "" : "s"}`,
         web.counts.funded && `${web.counts.funded} KOL Funded`,
-        web.counts.possible && `${web.counts.possible} Possible Side${web.counts.possible === 1 ? "" : "s"}`,
+        web.counts.possible && `${web.counts.possible} Probable Side${web.counts.possible === 1 ? "" : "s"}`,
       ]
     : ["1 opened", labeled && `${labeled} would be labeled`];
   const funders = layout.nodes.filter((n) => n.role === "funder").length;
@@ -229,7 +229,7 @@ function WebView({
     ? [
         { key: "known", label: "Known Sides", value: web.counts.known },
         { key: "funded", label: "KOL Funded", value: web.counts.funded },
-        { key: "trades", label: "Possible Sides", value: web.counts.possible },
+        { key: "trades", label: "Probable Sides", value: web.counts.possible },
         { key: "transfers", label: "Moved coins", value: web.counts.transfers },
       ]
     : [
@@ -286,7 +286,7 @@ function WebView({
       {labeled === 0 ? (
         <p className="muted small ww-empty">
           {web.kol
-            ? `No wallet is labeled for ${hubName} yet: no Known Side, no wallet it funded, and no Possible Side.`
+            ? `No wallet is labeled for ${hubName} yet: no Known Side, no wallet it funded, and no Probable Side.`
             : "No wallet would be labeled against it: none bought enough of the same coins, or moved enough coins with it."}
         </p>
       ) : (
