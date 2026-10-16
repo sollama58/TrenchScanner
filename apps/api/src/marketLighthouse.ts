@@ -1,6 +1,8 @@
 import { z } from "zod";
 import {
   describeExitPlan,
+  feeRecipientOf,
+  FEE_RECIPIENTS,
   firstCallOnRowSql,
   notRetiredModelSql,
   MAX_EVENT_AGE_MINUTES,
@@ -390,6 +392,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     alertRows,
     screened,
     safetyScreen,
+    feeDestinations,
   ] = await Promise.all([
     tokenSageWorkerStatus(),
     prisma.tokenNarrative.groupBy({
@@ -446,11 +449,12 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       FROM "TokenNarrative" WHERE "checkedAt" > ${since} AND status <> 'failed'`,
     // Model alerts in the window with what TokenSage says about their coin now. Same bound and
     // cap as the Admin report; only the columns the tallies need, never the mint.
-    prisma.$queryRaw<AlertOutcomeRow[]>`
+    prisma.$queryRaw<(AlertOutcomeRow & { fee_destination: string | null })[]>`
       SELECT (a."hit2xIn1h" AND NOT COALESCE(a."disqualified", false)) AS hit2x, a."hit4xIn1h" AS hit4x, a."hit10xIn1h" AS hit10x,
              a."simReturnPct"::float8 AS sim_return,
              n.status, n.categories, n."mainCategory" AS main_category, n."xVerdict" AS x_verdict, n."copiesRecent" AS copies_recent,
-             CASE WHEN n."referentGeneric" THEN n."referentKind" || ' (kind only)' ELSE n."referentKind" END AS referent_kind, n.flags
+             CASE WHEN n."referentGeneric" THEN n."referentKind" || ' (kind only)' ELSE n."referentKind" END AS referent_kind, n.flags,
+             n."feeDestination" AS fee_destination
       FROM "CuratedAlert" a
       JOIN "Token" t ON t.id = a."tokenId"
       LEFT JOIN "TokenNarrative" n ON n."mintAddress" = t."mintAddress"
@@ -460,6 +464,11 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       LIMIT 20000`,
     buildScreenedOutcomes(env, since, days),
     buildSafetyScreen(since),
+    // Where each coin read sends its creator fee, grouped into FEE_RECIPIENTS below.
+    prisma.$queryRaw<{ label: string | null; count: bigint }[]>`
+      SELECT "feeDestination" AS label, count(*) AS count FROM "TokenNarrative"
+      WHERE "checkedAt" > ${since} AND status <> 'failed' AND "feeDestination" IS NOT NULL
+      GROUP BY 1`,
   ]);
 
   // ---- Reads ----
@@ -501,6 +510,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
   const byCategory = new Map<string, OutcomeTally>();
   const byXVerdict = new Map<string, OutcomeTally>();
   const byCopy = new Map<string, OutcomeTally>();
+  const byFeeRecipient = new Map<string, OutcomeTally>();
   const all = new Map<string, OutcomeTally>();
   let alertsDescribed = 0;
   for (const row of alertRows) {
@@ -508,6 +518,8 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     if (row.status === null || row.status === "failed") continue;
     alertsDescribed += 1;
     tally(byCategory, topCategory(row.categories, row.main_category) ?? "uncategorized", row);
+    const recipient = feeRecipientOf(row.fee_destination);
+    if (recipient) tally(byFeeRecipient, recipient, row);
     if (row.x_verdict) tally(byXVerdict, row.x_verdict, row);
     if (row.copies_recent !== null)
       tally(byCopy, row.copies_recent ? "copies a recent coin" : "original", row);
@@ -542,6 +554,7 @@ export async function buildMarketLighthouse(env: Env, days: number) {
     pairKinds: counts(pairKinds),
     copies: counts(copies),
     news: counts(news),
+    feeRecipients: feeRecipientCounts(feeDestinations),
     screened,
     safetyScreen,
     outcomes: {
@@ -553,8 +566,25 @@ export async function buildMarketLighthouse(env: Env, days: number) {
       byCategory: sortedTallies(byCategory).map(slimTally),
       byXVerdict: sortedTallies(byXVerdict).map(slimTally),
       byCopy: sortedTallies(byCopy).map(slimTally),
+      byFeeRecipient: sortedTallies(byFeeRecipient).map(slimTally),
     },
   };
+}
+
+/**
+ * Coins read by who gets their creator fee, biggest group first: TokenSage's destinations folded
+ * into FEE_RECIPIENTS, the ones it couldn't name left out.
+ */
+export function feeRecipientCounts(rows: { label: string | null; count: bigint | number }[]) {
+  const sums = new Map<string, number>(FEE_RECIPIENTS.map((r) => [r, 0]));
+  for (const r of rows) {
+    const recipient = feeRecipientOf(r.label);
+    if (recipient) sums.set(recipient, sums.get(recipient)! + Number(r.count));
+  }
+  return [...sums.entries()]
+    .filter(([, count]) => count > 0)
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => b.count - a.count);
 }
 
 /**

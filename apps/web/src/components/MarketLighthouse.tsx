@@ -8,6 +8,7 @@ import { intervalText, MIN_GRADED_FOR_RATE, RULE_NOTE_UNFILTERED, wilson } from 
 import { HBarChart, Skeleton } from "./Charts";
 import { InfoIcon, LighthouseIcon } from "./Icons";
 import {
+  renderFeeRecipientsCard,
   renderNarrativeMixCard,
   renderNarrativesPayCard,
   renderScreenedCard,
@@ -209,6 +210,8 @@ function TokenSageSections({
         </p>
       </Section>
 
+      {d.feeRecipients && <FeeRecipients d={d} days={days} span={span} />}
+
       <SignalsAtAGlance d={d} base={apiBase} days={days} />
     </>
   );
@@ -329,6 +332,39 @@ function Signals({
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * Who gets the creator fee on the coins read (the alert card's FEES badge, in four groups), and
+ * how model calls on each group's coins did. Coins TokenSage couldn't place are left out.
+ */
+function FeeRecipients({ d, days, span }: { d: MarketLighthouse; days: Days; span: string }) {
+  const rows = d.feeRecipients ?? [];
+  const byFeeRecipient = d.outcomes.byFeeRecipient ?? [];
+  const known = sumOf(rows);
+  return (
+    <Section
+      title="Fee recipients"
+      note={`Who gets the creator fee on the coins read in the last ${span}: a charity, the holders or other wallets, a GitHub account, or the dev. Below, how model calls on each group's coins did under the exit plan; groups under ${MIN_GRADED} graded calls stay faded.`}
+      share={
+        <ShareButton
+          title={`Fee recipients, last ${span}`}
+          fileName={fileFor("fee-recipients", days)}
+          caption={`TrenchScanner: who gets the creator fee on new Solana coins, last ${span}`}
+          disabled={known === 0}
+          render={() => renderFeeRecipientsCard({ feeRecipients: rows, byFeeRecipient }, span)}
+        />
+      }
+    >
+      <Split title="Coins read" rows={rows} empty="No fee recipients read yet" />
+      {known > 0 && (
+        <div className="lh-mini">
+          <h4>Calls by fee recipient</h4>
+          <HitRates rows={bestFirst(byFeeRecipient)} />
+        </div>
+      )}
+    </Section>
   );
 }
 

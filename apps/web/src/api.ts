@@ -1758,6 +1758,11 @@ export interface MarketLighthouse {
   pairKinds: LighthouseCount[];
   copies: LighthouseCount[];
   news: LighthouseCount[];
+  /**
+   * Coins read by who gets their creator fee: "charity", "holders or wallets", "GitHub" or "dev",
+   * biggest first. Absent from older API builds.
+   */
+  feeRecipients?: LighthouseCount[];
   /** Every token that passed the pre-checks, graded from its decision moment. */
   screened: {
     bucketHours: number;
@@ -1844,5 +1849,7 @@ export interface MarketLighthouse {
     byCategory: LighthouseTally[];
     byXVerdict: LighthouseTally[];
     byCopy: LighthouseTally[];
+    /** Model calls by who gets their coin's creator fee (feeRecipients' groups). Absent from older API builds. */
+    byFeeRecipient?: LighthouseTally[];
   };
 }
