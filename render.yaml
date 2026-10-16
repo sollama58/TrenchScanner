@@ -80,10 +80,11 @@
 # under its job lock (apps/worker/src/jobLock.ts: up to two on the scanner, up to six on the
 # trainer) - against the actual connection ceiling on the Postgres plan you deploy to (Render
 # dashboard -> the database -> Info tab; the Admin tab's Database panel shows the live count against
-# it). Adjust downward if you move to a plan with a lower ceiling, or if you scale any service to
-# more than one instance - every instance opens its own pool, and during a deploy the old and new
-# instances are both connected for a while, so the peak is about twice the steady total (plus the
-# three preDeploy migrate sessions).
+# it; basic-4gb allows 200, 2026-10-16). Adjust downward if you move to a plan with a lower ceiling,
+# or if you scale any service to more than one instance - every instance opens its own pool, and
+# during a deploy the old and new instances are both connected for a while (Render keeps the old
+# one up through the health check plus maxShutdownDelaySeconds), so the peak is about twice the
+# steady total (plus the three preDeploy migrate sessions).
 #
 # See PLANNING.md and README.md for the full architecture and local dev setup.
 
@@ -141,6 +142,9 @@ services:
     # waits out whichever of them is already migrating (the others then find nothing to apply)
     # and retries a migration that hit its lock_timeout.
     preDeployCommand: npm run prisma:deploy
+    # Deploy a merge to main only once its CI run (.github/workflows/ci.yml) has passed: a commit
+    # that fails typecheck or a test never reaches production. 2026-10-16 database audit.
+    autoDeployTrigger: checksPass
     healthCheckPath: /health
     envVars:
       - fromGroup: trenchscanner-shared
@@ -260,6 +264,9 @@ services:
     startCommand: npm run start -w @trenchscanner/worker
     # The same migration step as the api's (see there), so this never boots ahead of the schema.
     preDeployCommand: npm run prisma:deploy
+    # Deploy a merge to main only once its CI run (.github/workflows/ci.yml) has passed: a commit
+    # that fails typecheck or a test never reaches production. 2026-10-16 database audit.
+    autoDeployTrigger: checksPass
     # Seconds from SIGTERM to SIGKILL. Render's default is 30s; a shadow AI review in flight is given its whole
     # AI_REVIEW_TIMEOUT_MS (60s) plus the heartbeat writes before the process ends (worker
     # index.ts, REVIEW_DRAIN_SLACK_MS), so a deploy no longer cuts one off. Raise this with that
@@ -356,11 +363,26 @@ services:
         value: "30"
       - key: STALE_TOKEN_RETENTION_DAYS
         value: "14"
+      # Retention decided 2026-10-16 (database audit): the trade tape's wallet rows two weeks, every
+      # training row 90 days and the ones that doubled (or a curated call points at) 180, the Live
+      # feed 30 days with its archive 90 days and the archived runners 180. See env.ts.
+      - key: TWA_RETENTION_DAYS
+        value: "14"
+      - key: CANDIDATE_OUTCOME_RETENTION_DAYS
+        value: "90"
+      - key: CANDIDATE_OUTCOME_HIT_RETENTION_DAYS
+        value: "180"
+      - key: MATCH_ARCHIVE_DAYS
+        value: "30"
+      - key: MATCH_ARCHIVE_RETENTION_DAYS
+        value: "90"
+      - key: MATCH_ARCHIVE_HIT_RETENTION_DAYS
+        value: "180"
       # pipeline-watch's warning line for the database's size: about 3 GB under the Postgres disk
-      # (15 GB today), raised together with it. See DB_DISK_ALERT_MB in packages/core/src/config/env.ts
-      # and "When the database disk is nearly full" in the README.
+      # (30 GB since 2026-10-16), raised together with it. See DB_DISK_ALERT_MB in
+      # packages/core/src/config/env.ts and "When the database disk is nearly full" in the README.
       - key: DB_DISK_ALERT_MB
-        value: "12000"
+        value: "27000"
       - key: OUTCOME_TRACKING_HOUR_UTC
         value: "5"
       - key: ACTIVE_VIEW_WINDOW_MINUTES
@@ -479,6 +501,9 @@ services:
     startCommand: npm run start -w @trenchscanner/worker
     # The same migration step as the api's (see there), so this never boots ahead of the schema.
     preDeployCommand: npm run prisma:deploy
+    # Deploy a merge to main only once its CI run (.github/workflows/ci.yml) has passed: a commit
+    # that fails typecheck or a test never reaches production. 2026-10-16 database audit.
+    autoDeployTrigger: checksPass
     # Seconds from SIGTERM to SIGKILL. Render's default is 30s; a shadow AI review in flight is given its whole
     # AI_REVIEW_TIMEOUT_MS (60s) plus the heartbeat writes before the process ends (worker
     # index.ts, REVIEW_DRAIN_SLACK_MS), so a deploy no longer cuts one off. Raise this with that
@@ -527,6 +552,19 @@ services:
         value: "30"
       - key: STALE_TOKEN_RETENTION_DAYS
         value: "14"
+      # The same retention as the scanner's block above: the trainer runs the nightly cleanup.
+      - key: TWA_RETENTION_DAYS
+        value: "14"
+      - key: CANDIDATE_OUTCOME_RETENTION_DAYS
+        value: "90"
+      - key: CANDIDATE_OUTCOME_HIT_RETENTION_DAYS
+        value: "180"
+      - key: MATCH_ARCHIVE_DAYS
+        value: "30"
+      - key: MATCH_ARCHIVE_RETENTION_DAYS
+        value: "90"
+      - key: MATCH_ARCHIVE_HIT_RETENTION_DAYS
+        value: "180"
       - key: OUTCOME_TRACKING_HOUR_UTC
         value: "5"
 
@@ -540,6 +578,7 @@ services:
     name: trenchscanner-web
     # See the api service's buildCommand comment above: vite and typescript are devDependencies.
     buildCommand: npm ci --include=dev && npm run build -w @trenchscanner/web
+    autoDeployTrigger: checksPass
     # A backend-only merge leaves the dashboard as it is (see the api service's buildFilter). The
     # web build reads only apps/web and the root manifests: it imports nothing from packages/, and
     # its tsconfig extends nothing.
@@ -622,5 +661,9 @@ databases:
     # background reads went to disk and queued behind each other, and page loads that normally take
     # 0.3-0.6 s took 5-20 s in those bursts (notes/server-load-audit-2026-10-13.md in the project).
     plan: basic-4gb
+    # 30 GB since 2026-10-16 (database audit): at the 15 GB default the data was 1.3 GB a day from
+    # filling it, and Render suspends a database that outgrows its disk. DB_DISK_ALERT_MB above
+    # warns 3 GB under this; raise both together.
+    diskSizeGB: 30
     databaseName: trenchscanner
     user: trenchscanner
