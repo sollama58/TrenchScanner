@@ -37,7 +37,6 @@ GRANDFATHERED=(
   20261014040000_kol_side_wallets
   20261014070000_bubble_map_holders
   20261014070000_telegram_models
-  # Merged the same hour (#629, #627) and independent: a new table and a Token column.
   20261016030000_feedback_reports
   20261016030000_launchpads
 )

@@ -666,14 +666,14 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     ]);
     expect(second.slice(2).every((e) => e.priority === "low")).toBe(true);
 
-    // A deep read is high, and a later launch note never lowers the watchlist's tier.
+    // A deep read is normal too, and a later launch note never lowers the watchlist's tier.
     noteNarrativeWanted(watch, "full", on);
     noteLaunchNarratives([{ mintAddress: `${TAG}-tier-x`, createdAt: new Date(now) }], on, now);
     noteNarrativeWanted(`${TAG}-tier-x`, "basic", on);
     noteLaunchNarratives([{ mintAddress: `${TAG}-tier-x`, createdAt: new Date(now) }], on, now);
     await flushNarrativeRequests({ ...on, TOKENSAGE_MAX_BATCHES_PER_CYCLE: 2 }, client);
     expect(batch.mock.calls[2]![1]).toBe("full");
-    expect(batch.mock.calls[2]![0]).toEqual([{ ca: watch, priority: "high" }]);
+    expect(batch.mock.calls[2]![0]).toEqual([{ ca: watch, priority: "normal" }]);
     const fourth = batch.mock.calls[3]![0] as { ca: string; priority: string }[];
     expect(fourth.find((e) => e.ca === `${TAG}-tier-x`)?.priority).toBe("normal");
     expect(fourth.map((e) => e.priority).slice(0, 3)).toEqual(["normal", "normal", "normal"]);
