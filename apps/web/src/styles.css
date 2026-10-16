@@ -12239,6 +12239,12 @@ button.bm-same {
   align-items: center;
   gap: 8px;
 }
+.wm-sides-head .wm-web-btn {
+  margin-left: auto;
+}
+.wm-sides-head .wm-web-btn + .side-export {
+  margin-left: 0;
+}
 .wm-sides-head .side-export {
   margin-left: auto;
 }
