@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tileLook, tileTone, tileToneColor } from "./tileTone";
+import { tileLook, tileMode, tileTone, tileToneColor } from "./tileTone";
 
 describe("tileTone", () => {
   it("runs from 0 at zero to 1 at the red bound, clamped past it", () => {
@@ -46,14 +46,22 @@ describe("tileToneColor", () => {
 });
 
 describe("tileLook", () => {
-  it("shades a tile with a reading when on", () => {
-    expect(tileLook(true, 0.5, false).className).toBe("toned");
-    expect(tileLook(true, 1, true).className).toBe("toned toned-max");
+  it("colors only the reading by default, the whole tile when asked", () => {
+    expect(tileLook("text", 0.5, false).className).toBe("toned");
+    expect(tileLook("text", 1, true).className).toBe("toned");
+    expect(tileLook("box", 0.5, false).className).toBe("toned toned-box");
+    expect(tileLook("box", 1, true).className).toBe("toned toned-box toned-max");
   });
 
   it("falls back to red-at-the-cut when off or unread", () => {
-    expect(tileLook(false, 1, true)).toEqual({ className: "risky" });
-    expect(tileLook(false, 0.3, false)).toEqual({});
-    expect(tileLook(true, null, false)).toEqual({});
+    expect(tileLook("off", 1, true)).toEqual({ className: "risky" });
+    expect(tileLook("off", 0.3, false)).toEqual({});
+    expect(tileLook("text", null, false)).toEqual({});
+  });
+
+  it("reads the mode from the look", () => {
+    expect(tileMode({ tileColors: true, tileFill: false })).toBe("text");
+    expect(tileMode({ tileColors: true, tileFill: true })).toBe("box");
+    expect(tileMode({ tileColors: false, tileFill: true })).toBe("off");
   });
 });

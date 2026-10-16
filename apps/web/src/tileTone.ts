@@ -25,17 +25,34 @@ export function tileToneColor(tone: number): string {
 }
 
 /**
- * A tile's class and style: shaded on the scale when coloring is on and the tile has a reading,
+ * How the tiles take the scale: "text" colors only the reading (the default, user ask 2026-10-16),
+ * "box" shades the whole tile too (Customize's "Color the whole tile"), "off" leaves them plain.
+ */
+export type TileMode = "off" | "text" | "box";
+
+/** The mode a look asks for. */
+export function tileMode(look: { tileColors: boolean; tileFill: boolean }): TileMode {
+  return !look.tileColors ? "off" : look.tileFill ? "box" : "text";
+}
+
+/**
+ * A tile's class and style: colored on the scale when coloring is on and the tile has a reading,
  * else the plain tile, red only when the reading fails the screen (`risky`), as before.
  */
 export function tileLook(
-  on: boolean,
+  mode: TileMode,
   tone: number | null,
   risky: boolean,
 ): { className?: string; style?: CSSProperties } {
-  if (!on || tone === null) return risky ? { className: "risky" } : {};
+  if (mode === "off" || tone === null) return risky ? { className: "risky" } : {};
   return {
-    className: risky ? "toned toned-max" : "toned",
+    className: mode === "box" ? (risky ? "toned toned-box toned-max" : "toned toned-box") : "toned",
     style: { "--tile-c": tileToneColor(tone) } as CSSProperties,
   };
 }
+
+/** The red bounds of the tiles without a safety screen cut (user picks 2026-10-16). */
+export const TILE_RED_KOL_BUNDLED_PCT = 30;
+export const TILE_RED_FIRST_BUYERS = 20;
+/** The first-buyers count the bound is set on; a launch read over fewer scales it the same way. */
+export const TILE_FIRST_BUYERS_OF = 25;
