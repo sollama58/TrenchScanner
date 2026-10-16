@@ -1103,7 +1103,9 @@ model TokenSnapshot {
   linkedCreatorPct        Float?
   linkedClusters          Json?
   // Every top holder the linked reading covered (the creator aside) and its %, largest first, for
-  // the bubble map; stored only alongside linkedClusters or sameTimeClusters.
+  // the bubble map. Since 2026-10-16 only on rows that carry a new reading, or every ten minutes
+  // (worker holderListWrites.ts): a null means "as the newest earlier row with one", which
+  // curatedFeed.ts carries onto a card's latest snapshot. Before that, on every scan that had one.
   linkedHolders           Json?
   // Top holders funded within a minute of each other, from any funders (core's sameTimeClusters):
   // the % of supply they hold, how many such groups, and the groups themselves (when each was

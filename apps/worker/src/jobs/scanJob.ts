@@ -85,6 +85,7 @@ import {
   type FilterWithUser,
 } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
+import { noteHolderListWritten, shouldWriteHolderList } from "./holderListWrites.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct, FRESH_WITHIN_HOURS } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
@@ -2643,9 +2644,13 @@ async function processCandidate(
     dropScanVerdict(token.id);
     return 0;
   }
+  // The holder list rides only a new reading, or one written ten minutes ago (holderListWrites.ts):
+  // the same list on every 30-second row was most of the table's growth.
+  const writeHolderList = shouldWriteHolderList(token.id, scored.linkedHolders);
   const snapshot = await prisma.tokenSnapshot.create({
-    data: snapshotDataFor(token.id, scored, "scan"),
+    data: snapshotDataFor(token.id, scored, "scan", { linkedHolders: writeHolderList }),
   });
+  if (writeHolderList && scored.linkedHolders) noteHolderListWritten(token.id, scored.linkedHolders);
   noteSnapshotWritten(token.id, snapshot.takenAt.getTime());
   noteFreshMarketData([token.id]);
   // Passing or failing - the fast-match lane goes by the newest verdict. See vettedTokens.ts.

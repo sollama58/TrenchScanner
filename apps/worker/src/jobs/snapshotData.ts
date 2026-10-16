@@ -25,6 +25,12 @@ export function snapshotDataFor(
   tokenId: string,
   scored: ScoredToken,
   source: SnapshotSource,
+  /**
+   * linkedHolders: whether this row carries the top-holder list. The scan passes
+   * holderListWrites.ts' answer (a new reading, or the last written one is ten minutes old); left
+   * out, the list is written whenever there is one, as every row did before 2026-10-16.
+   */
+  opts: { linkedHolders?: boolean } = {},
 ): Prisma.TokenSnapshotUncheckedCreateInput {
   return {
     tokenId,
@@ -87,11 +93,13 @@ export function snapshotDataFor(
     sameTimeClusters: scored.sameTimeClusters?.length
       ? (scored.sameTimeClusters as unknown as Prisma.InputJsonValue)
       : undefined,
-    // The top holders the scan read, on every scan that has the list (user ask 2026-10-13; until
-    // then only alongside a cluster), for the bubble map and the holder-list evaluation.
-    linkedHolders: scored.linkedHolders?.length
-      ? (scored.linkedHolders as unknown as Prisma.InputJsonValue)
-      : undefined,
+    // The top holders the scan read (user ask 2026-10-13), for the bubble map and the holder-list
+    // evaluation - on the rows that carry a new reading, not every scan (holderListWrites.ts):
+    // readers take the newest row that has one.
+    linkedHolders:
+      opts.linkedHolders !== false && scored.linkedHolders?.length
+        ? (scored.linkedHolders as unknown as Prisma.InputJsonValue)
+        : undefined,
     flaggedBuyers: scored.flaggedBuyers,
     flaggedSellers: scored.flaggedSellers,
     flaggedBuySol: scored.flaggedBuySol,

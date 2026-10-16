@@ -26,7 +26,7 @@ import {
   type SolanaRpc,
   type UtilityKind,
 } from "@trenchscanner/core";
-import { creatorFeesByMint, TOKEN_CARD_SELECT } from "../curatedFeed.js";
+import { creatorFeesByMint, TOKEN_CARD_SELECT, withCarriedHolderList } from "../curatedFeed.js";
 import { readKolRows } from "../kolRoster.js";
 import { loadLabeledSides } from "../possibleSides.js";
 import { currentMarketCap } from "./matches.js";
@@ -803,10 +803,14 @@ export async function tokenView(mint: string, paidAt: Date): Promise<UtilityToke
     creatorFeesByMint([mint]),
   ]);
   if (!token) return null;
-  const latest = await prisma.tokenSnapshot.findFirst({
-    where: { tokenId: token.id },
-    orderBy: { takenAt: "desc" },
-  });
+  // With the newest holder list before it when the newest scan carries none (holderListWrites.ts):
+  // a lookup's token view draws its bubble map from this row alone.
+  const latest = await withCarriedHolderList(
+    await prisma.tokenSnapshot.findFirst({
+      where: { tokenId: token.id },
+      orderBy: { takenAt: "desc" },
+    }),
+  );
   const scanned = latest !== null && latest.takenAt.getTime() >= paidAt.getTime() - FRESH_SCAN_SLACK_MS;
   const snapshot = latest ?? standIn(token, readings.get(mint));
   const current = currentMarketCap(token, latest);
