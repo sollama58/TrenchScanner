@@ -335,7 +335,9 @@ export async function storeTape(
         await tx.candidateOutcome.update({ where: { id: c.id }, data: { stopCause: c.cause } });
       }
     },
-    { timeout: 30_000 },
+    // maxWait as the scanner's other write transactions have it: at Prisma's 2 s default, a pool
+    // stall during a scan burst failed the store, and the next run re-read the coin from page one.
+    { maxWait: 10_000, timeout: 30_000 },
   );
   return { wallets: kept.length, stopCauses: causes.length };
 }

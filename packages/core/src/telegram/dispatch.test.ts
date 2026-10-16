@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { loadEnv } from "../config/env.js";
-import { appendPoolParams, prisma, TRAINER_APPLICATION_NAME } from "../db.js";
+import { appendPoolParams, namePassLock, prisma, TRAINER_APPLICATION_NAME } from "../db.js";
 import type { ContestantSpec } from "../curation/contestants.js";
 import {
   buildPending,
@@ -600,15 +600,16 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     expect(capped!.sentThrough.getTime()).toBe(later - MAX_COMMIT_WAIT_MS);
   });
 
-  it("waits on other connections' open transactions, but not the trainer's or its own", async () => {
+  it("waits on other connections' open transactions, but not the trainer's, a pass lock's or its own", async () => {
     const connect = (applicationName?: string) =>
       new PrismaClient({ datasourceUrl: appendPoolParams(process.env.DATABASE_URL!, { applicationName }) });
-    const holdOpen = async (client: PrismaClient) => {
+    const holdOpen = async (client: PrismaClient, asPassLock = false) => {
       let release = () => {};
       let began = (_at: Date) => {};
       const start = new Promise<Date>((resolve) => (began = resolve));
       const done = client.$transaction(
         async (tx) => {
+          if (asPassLock) await namePassLock(tx);
           const [row] = await tx.$queryRaw<{ at: Date }[]>`SELECT now() AS at`;
           began(row!.at);
           await new Promise<void>((resolve) => (release = resolve));
@@ -630,6 +631,11 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       // Other test files may have their own short transactions open; never this one, nor the pass's.
       expect(seen.oldest).not.toBe(training.start.getTime());
       expect(seen.oldest).not.toBe(seen.self);
+      // Nor the trading engine's pass lock: named inside its transaction, and it writes nothing.
+      const locking = await holdOpen(scanner, true);
+      const passing = await oldest();
+      expect(passing.oldest).not.toBe(locking.start.getTime());
+      await locking.release();
       const writing = await holdOpen(scanner);
       const held = await oldest();
       expect(held.oldest).not.toBeNull();

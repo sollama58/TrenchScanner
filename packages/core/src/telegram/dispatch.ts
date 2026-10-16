@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { Env } from "../config/env.js";
 import { adminWalletSet } from "../config/env.js";
-import { prisma, TRAINER_APPLICATION_NAME } from "../db.js";
+import { namePassLock, PASS_LOCK_APPLICATION_NAME, prisma, TRAINER_APPLICATION_NAME } from "../db.js";
 import { createLogger } from "../logger.js";
 import { resolveAccess } from "../subscription/access.js";
 import {
@@ -108,8 +108,11 @@ export interface DispatchDeps {
  * Run on the pass's own connection, so its own transaction doesn't count. The trainer's
  * connections don't either: it never writes an alert, and its training reads run for minutes,
  * which held every alert back by the full MAX_COMMIT_WAIT_MS while they did. Nor do Postgres's own
- * processes (autovacuum, WAL senders): only client connections write alerts. A client transaction
- * that hasn't written yet still counts, since a scan's row can carry its transaction's start.
+ * processes (autovacuum, WAL senders): only client connections write alerts. Nor the pass-lock
+ * transactions (PASS_LOCK_APPLICATION_NAME: the trading engine's, and this one's on another
+ * process): they hold an advisory lock and write nothing, and the engine's would otherwise hold
+ * every alert back for the length of each trading pass. A client transaction that hasn't written
+ * yet still counts, since a scan's row can carry its transaction's start.
  */
 export async function oldestOpenTransaction(tx: Prisma.TransactionClient): Promise<Date | null> {
   try {
@@ -117,7 +120,7 @@ export async function oldestOpenTransaction(tx: Prisma.TransactionClient): Promi
       SELECT min(xact_start) AS oldest FROM pg_stat_activity
       WHERE datname = current_database() AND pid <> pg_backend_pid() AND xact_start IS NOT NULL
         AND backend_type = 'client backend'
-        AND application_name IS DISTINCT FROM ${TRAINER_APPLICATION_NAME}`;
+        AND COALESCE(application_name, '') NOT IN (${TRAINER_APPLICATION_NAME}, ${PASS_LOCK_APPLICATION_NAME})`;
     return row?.oldest ?? null;
   } catch {
     return null;
@@ -460,6 +463,7 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
       const [lock] = await tx.$queryRaw<{ locked: boolean }[]>`
         SELECT pg_try_advisory_xact_lock(hashtext(${TELEGRAM_DISPATCH_LOCK})) AS locked`;
       if (!lock?.locked) return summary;
+      await namePassLock(tx);
       return dispatchPass(env, deps, summary, tx);
     },
     { maxWait: 10_000, timeout: PASS_TRANSACTION_TIMEOUT_MS },

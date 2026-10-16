@@ -1,7 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import bs58 from "bs58";
-import { prisma } from "../db.js";
-import { feeForRetry, runTradingEngine, withdrawalAmount, type TradingEngineDeps } from "./engine.js";
+import { PrismaClient } from "@prisma/client";
+import { appendPoolParams, namePassLock, prisma } from "../db.js";
+import {
+  feeForRetry,
+  runTradingEngine,
+  SIGNAL_COMMIT_GRACE_MS,
+  signalHorizon,
+  withdrawalAmount,
+  type TradingEngineDeps,
+} from "./engine.js";
 import { TransientError } from "./errors.js";
 import type { TradeNote } from "./tradeNotes.js";
 import { createLocalKeyProvider, generateWalletKeypair } from "./keyVault.js";
@@ -1194,5 +1202,41 @@ describe.skipIf(!dbAvailable)("the server wallet", () => {
     });
     expect(rows.map((r) => r.status)).toEqual(["failed", "pending"]);
     expect(sentTo).toEqual([destination]);
+  });
+});
+
+describe.skipIf(!dbAvailable)("signalHorizon", () => {
+  it("waits on another connection's open transaction, but not on a pass lock's", async () => {
+    const other = new PrismaClient({ datasourceUrl: appendPoolParams(process.env.DATABASE_URL!, {}) });
+    const holdOpen = async (asPassLock: boolean) => {
+      let release = () => {};
+      let began = (_at: Date) => {};
+      const start = new Promise<Date>((resolve) => (began = resolve));
+      const done = other.$transaction(
+        async (tx) => {
+          if (asPassLock) await namePassLock(tx);
+          const [row] = await tx.$queryRaw<{ at: Date }[]>`SELECT now() AS at`;
+          began(row!.at);
+          await new Promise<void>((resolve) => (release = resolve));
+        },
+        { timeout: 30_000 },
+      );
+      return { start: await start, release: () => (release(), done) };
+    };
+    try {
+      // Read as from ten seconds later, so a transaction opened just now is past the grace.
+      const locking = await holdOpen(true);
+      const later = new Date(locking.start.getTime() + 2 * SIGNAL_COMMIT_GRACE_MS);
+      const free = await signalHorizon(later);
+      // Other test files may hold short transactions of their own; never this one.
+      expect(free.getTime()).not.toBe(locking.start.getTime());
+      await locking.release();
+      const writing = await holdOpen(false);
+      const held = await signalHorizon(new Date(writing.start.getTime() + 2 * SIGNAL_COMMIT_GRACE_MS));
+      expect(held.getTime()).toBeLessThanOrEqual(writing.start.getTime());
+      await writing.release();
+    } finally {
+      await other.$disconnect();
+    }
   });
 });

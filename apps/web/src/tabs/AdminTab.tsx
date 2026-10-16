@@ -1605,6 +1605,14 @@ interface DbReport {
     last_autovacuum: string | null;
   }[];
   locksWaiting: number;
+  connections: {
+    total: number;
+    thisDatabase: number;
+    idleInTransaction: number;
+    oldestTransactionMs: number | null;
+    maxConnections: number | null;
+    reservedForSuperuser: number | null;
+  };
 }
 interface StorageReport {
   databaseMb: number;
@@ -1635,7 +1643,10 @@ function Database() {
           {(d) => (
             <div className="stack">
               <p className="small muted">
-                {d.activity.length} active connections · {d.locksWaiting} waiting on locks
+                {d.connections.total}
+                {d.connections.maxConnections !== null ? ` of ${d.connections.maxConnections}` : ""}{" "}
+                connections open · {d.activity.length} running a query · {d.connections.idleInTransaction}{" "}
+                idle in a transaction · {d.locksWaiting} waiting on locks
               </p>
               <Table
                 head={["PID", "State", "Waiting on", "Running", "Query"]}
