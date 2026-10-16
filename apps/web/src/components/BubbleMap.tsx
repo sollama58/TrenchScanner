@@ -235,7 +235,10 @@ function MapView({
 
   return (
     <>
-      <dl className="bm-stats">
+      <dl
+        className="bm-stats"
+        style={{ "--bm-cols": graph.sameTimeGroups.length > 0 ? 4 : 3 } as React.CSSProperties}
+      >
         <div
           className={
             linked.count !== null &&
@@ -254,9 +257,13 @@ function MapView({
             }
           >
             {/* N/25 and, beside it, the share of supply those linked holders hold (user ask 2026-10-14). */}
-            {linked.count && linked.pct !== null
-              ? `${linkedCountText(linked.count)} (${pct(linked.pct, 1)})`
-              : (linkedCountText(linked.count) ?? pct(linked.pct, 1))}
+            {linked.count && linked.pct !== null ? (
+              <>
+                {linkedCountText(linked.count)} <span className="bm-stat-sub">({pct(linked.pct, 1)})</span>
+              </>
+            ) : (
+              (linkedCountText(linked.count) ?? pct(linked.pct, 1))
+            )}
           </dd>
         </div>
         <div
@@ -269,41 +276,6 @@ function MapView({
           <dt>KOL bundled</dt>
           <dd className={kolBundled === null ? "muted" : "num"}>
             {kolBundled === null ? "–" : pct(kolBundled, 1)}
-          </dd>
-        </div>
-        {/* Fresh, sniper, empty and risky wallets on the map, each its count and supply, in place of
-            Largest cluster and Risky holders (user asks 2026-10-15, 2026-10-16). Two tiles wide. */}
-        <div
-          className="bm-traits-stat"
-          title={[
-            ...TRAIT_ORDER.map((t) => {
-              const s = traits.get(t);
-              return `${TRAIT_WORDS[t]}: ${s?.count ?? 0} holding ${pct(s?.pct ?? 0, 1)}`;
-            }),
-            flags === "ok"
-              ? `${RISKY_WORDS}: ${risky.count} holding ${pct(risky.pct, 1)}`
-              : flags === "failed"
-                ? "Risky: couldn't load the flagged wallets, so no risky ones are ringed. Not a clean reading."
-                : "Risky: loading the flagged wallets",
-          ].join("\n")}
-        >
-          <dt>Wallet types</dt>
-          <dd className="num">
-            {TRAIT_ORDER.map((t) => {
-              const s = traits.get(t);
-              return (
-                <span key={t} className={s ? undefined : "muted"}>
-                  <TraitIcon trait={t} size={15} />
-                  {s?.count ?? 0}
-                  {s && <small>{pct(s.pct, 1)}</small>}
-                </span>
-              );
-            })}
-            <span className={flags === "ok" && risky.count > 0 ? "bm-risky-stat" : "muted"}>
-              <RiskyIcon />
-              {flags === "ok" ? risky.count : "–"}
-              {flags === "ok" && risky.count > 0 && <small>{pct(risky.pct, 1)}</small>}
-            </span>
           </dd>
         </div>
         {graph.sameTimeGroups.length > 0 && (
@@ -332,6 +304,43 @@ function MapView({
           <dt>CEX-funded</dt>
           <dd className="num">
             {cex === null ? "-" : (cexCountText(cex.linked, cex.of) ?? pct(graph.cexPct, 0))}
+          </dd>
+        </div>
+        {/* Fresh, sniper, empty and risky wallets on the map, each its count and supply: a row of its
+            own under the headline tiles (user asks 2026-10-15, 2026-10-16). */}
+        <div className="bm-traits-stat">
+          <dt>Wallet types</dt>
+          <dd>
+            <ul className="bm-wt-list">
+              {TRAIT_ORDER.map((t) => {
+                const s = traits.get(t);
+                return (
+                  <WalletTypeItem
+                    key={t}
+                    tone={t}
+                    icon={<TraitIcon trait={t} size={17} />}
+                    label={TRAIT_LABEL[t]}
+                    count={s?.count ?? 0}
+                    share={pct(s?.pct ?? 0, 1)}
+                    title={`${TRAIT_WORDS[t]}. ${s?.count ?? 0} on the map, holding ${pct(s?.pct ?? 0, 1)} of supply`}
+                  />
+                );
+              })}
+              <WalletTypeItem
+                tone="risky"
+                icon={<RiskyIcon />}
+                label="Risky"
+                count={flags === "ok" ? risky.count : null}
+                share={flags === "ok" ? pct(risky.pct, 1) : flags === "failed" ? "not read" : "loading"}
+                title={
+                  flags === "ok"
+                    ? `${RISKY_WORDS}. ${risky.count} on the map, holding ${pct(risky.pct, 1)} of supply`
+                    : flags === "failed"
+                      ? "Risky: couldn't load the flagged wallets, so no risky ones are ringed. Not a clean reading."
+                      : "Risky: loading the flagged wallets"
+                }
+              />
+            </ul>
           </dd>
         </div>
       </dl>
@@ -1184,10 +1193,41 @@ function TraitIcon({ trait, size = 13 }: { trait: WalletTrait; size?: number }) 
 /** The order the stat tile lists the traits in (user ask 2026-10-15). */
 const TRAIT_ORDER: readonly WalletTrait[] = ["fresh", "sniper", "empty"];
 
-/** The risky wallets' mark on its own, for the Wallet types tile. */
+/** One wallet type in the Wallet types row: its icon on a tinted badge, count, name and supply. */
+function WalletTypeItem({
+  tone,
+  icon,
+  label,
+  count,
+  share,
+  title,
+}: {
+  tone: WalletTrait | "risky";
+  icon: React.ReactNode;
+  label: string;
+  /** null while unknown. */
+  count: number | null;
+  share: string;
+  title: string;
+}) {
+  return (
+    <li className={`bm-wt wt-${tone}${count === 0 ? " none" : ""}`} title={title}>
+      <span className="bm-wt-badge">{icon}</span>
+      <span className="bm-wt-text">
+        <span className="bm-wt-top">
+          <b className="num">{count ?? "–"}</b>
+          <span className="bm-wt-label">{label}</span>
+        </span>
+        <span className="bm-wt-share num">{share}</span>
+      </span>
+    </li>
+  );
+}
+
+/** The risky wallets' mark on its own, for the Wallet types row. */
 function RiskyIcon() {
   return (
-    <svg className="bm-trait-icon bm-risky-icon" viewBox="0 0 24 24" width={15} height={15} aria-hidden>
+    <svg className="bm-trait-icon bm-risky-icon" viewBox="0 0 24 24" width={17} height={17} aria-hidden>
       {RISKY_ICON.map((d) => (
         <path key={d} d={d} />
       ))}

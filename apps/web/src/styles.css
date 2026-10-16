@@ -10614,35 +10614,38 @@ img.tm-avatar {
   gap: 6px;
   flex: none;
 }
+/* The bubble map's stat row (user ask 2026-10-16: make it look great): the headline tiles side
+   by side, one column each (--bm-cols, set by the map), and Wallet types across the full width
+   under them. */
 .bm-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(var(--bm-cols, 4), minmax(0, 1fr));
+  gap: 8px;
   margin: 10px 0 12px;
 }
-.bm-stats div {
+.bm-stats > div {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 3px;
   min-width: 0;
-  padding: 7px 10px;
-  border-radius: 10px;
+  padding: 10px 14px 11px;
+  border-radius: 12px;
   background: var(--surface-3);
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--ink) 6%, transparent);
 }
-.bm-stats div.risky {
+.bm-stats > div.risky {
   border-color: color-mix(in srgb, var(--bad) 40%, transparent);
   background: var(--bad-wash);
 }
-.bm-stats div.risky dd {
-  color: var(--bad-ink);
+.bm-stats > div.risky dd {
+  color: var(--bad-ink) !important;
 }
 .bm-stats dt {
   color: var(--muted);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 10.5px;
+  font-weight: 650;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -10650,40 +10653,101 @@ img.tm-avatar {
 .bm-stats dd {
   margin: 0;
   color: var(--ink) !important;
-  font-size: 17px;
+  font-size: 19px;
   font-weight: 700;
+  line-height: 1.2;
 }
-/* Wallet types: each trait's icon, count and supply on one line, two tiles wide so it reads easily
-   (user ask 2026-10-16). */
-.bm-stats .bm-traits-stat {
-  grid-column: span 2;
-}
-.bm-stats .bm-traits-stat dd {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px 12px;
-  font-size: 17px;
-}
-.bm-traits-stat dd > span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.bm-traits-stat dd > span.muted {
-  opacity: 0.55;
-}
-.bm-traits-stat dd small {
-  margin-left: 2px;
+.bm-stat-sub {
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
+  white-space: nowrap;
 }
-.bm-risky-icon {
+/* Wallet types: four even cells, each a tinted icon badge, its count and name, and its supply. */
+.bm-stats > .bm-traits-stat {
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+.bm-wt-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.bm-wt {
+  --wt: var(--ink-2);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 10px 7px 7px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--wt) 7%, var(--surface-2, transparent));
+  border: 1px solid color-mix(in srgb, var(--wt) 18%, transparent);
+}
+.bm-wt.wt-fresh {
+  --wt: var(--bm-trait-fresh);
+}
+.bm-wt.wt-sniper {
+  --wt: var(--bm-trait-sniper);
+}
+.bm-wt.wt-empty {
+  --wt: var(--bm-trait-empty);
+}
+.bm-wt.wt-risky {
+  --wt: var(--bad-ink);
+}
+.bm-wt.none {
+  opacity: 0.5;
+}
+.bm-wt-badge {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  color: var(--wt);
+  background: color-mix(in srgb, var(--wt) 16%, transparent);
+}
+.bm-wt-badge .bm-trait-icon {
+  color: var(--wt);
+}
+.bm-wt-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.15;
+}
+.bm-wt-top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.bm-wt-top b {
+  font-size: 19px;
+  font-weight: 750;
+  color: var(--ink);
+}
+.bm-wt.wt-risky:not(.none) .bm-wt-top b {
   color: var(--bad-ink);
 }
-.bm-traits-stat dd > span.bm-risky-stat {
-  color: var(--bad-ink);
+.bm-wt-label {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.bm-wt-share {
+  margin-top: 2px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  font-weight: 650;
 }
 .bm-stage {
   position: relative;
@@ -11299,6 +11363,9 @@ button.bm-same {
   .bm-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .bm-wt-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .bm-svg {
     height: min(360px, 46dvh);
   }
@@ -11796,21 +11863,10 @@ button.bm-same {
 .tm-holders > .sage-card {
   margin-top: 0;
 }
-.tm-holders .bm-section .bm-stats {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-}
 .tm-holders .bm-stage.compact .bm-svg {
   height: min(560px, 64dvh);
 }
-@media (max-width: 760px) {
-  .tm-holders .bm-section .bm-stats {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
 @media (max-width: 480px) {
-  .tm-holders .bm-section .bm-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
   .tm-holders .bm-stage.compact .bm-svg {
     height: min(400px, 52dvh);
   }
