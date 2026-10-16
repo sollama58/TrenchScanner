@@ -1484,6 +1484,8 @@ export interface FeedAppearance {
   feesBadge: boolean;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */
   bubbleCexLinks: boolean;
+  /** Bubble maps name the wallets that fund clusters on a label by their diamond; off by default (absent from older API builds: off). */
+  bubbleFunderLabels: boolean;
   /** Bubble maps open with KOLs' possible side wallets tied to them; on by default (absent from older API builds: on). */
   bubbleSideLinks: boolean;
   /** Bubble maps open with arrows between holders that sent the coin to each other; on by default (absent from older API builds: on). */

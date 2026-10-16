@@ -338,6 +338,14 @@ export function AppearanceControls() {
         <label className="check">
           <input
             type="checkbox"
+            checked={look.bubbleFunderLabels}
+            onChange={() => setAppearance({ bubbleFunderLabels: !look.bubbleFunderLabels })}
+          />
+          Bubble maps: name the wallets that fund bundles on a label by their diamond
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
             checked={look.bubbleSideLinks}
             onChange={() => setAppearance({ bubbleSideLinks: !look.bubbleSideLinks })}
           />

@@ -328,6 +328,81 @@ export const RISKY_ICON: readonly string[] = [
   "M12 16.5h.01",
 ];
 
+/**
+ * A same-minute group's mark on each of its bubbles (user ask 2026-10-16), in place of the
+ * "Funded together" pill: a clock, on a 24px grid like the traits.
+ */
+export const CLOCK_ICON: readonly string[] = ["M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0Z", "M12 7v5l3 2"];
+
+/** The holders on the map funded the same minute as another, and their supply, for the legends. */
+export function sameTimeShare(graph: Pick<BubbleGraph, "nodes">): { count: number; pct: number } {
+  const nodes = graph.nodes.filter((n) => n.kind === "holder" && n.sameTime !== null);
+  return { count: nodes.length, pct: Math.round(nodes.reduce((t, n) => t + n.pct, 0) * 100) / 100 };
+}
+
+/** A box a bubble's text takes (its % or its name), by its centre: map units, or pixels on the card. */
+export interface TextBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Where a bubble's corner mark goes (user ask 2026-10-16: never over its % or its name): on the rim
+ * at the lower right (`side` 1, a wallet type) or lower left (-1, funded together); else the first
+ * spot further round the lower rim, then a little further out each round, that clears every box.
+ * `mr` is the mark's radius.
+ */
+export function markerSpot(
+  cx: number,
+  cy: number,
+  r: number,
+  mr: number,
+  side: 1 | -1,
+  boxes: readonly TextBox[],
+): { x: number; y: number } {
+  const clear = (x: number, y: number) =>
+    boxes.every((b) => {
+      const dx = Math.max(Math.abs(x - b.x) - b.w / 2, 0);
+      const dy = Math.max(Math.abs(y - b.y) - b.h / 2, 0);
+      return dx * dx + dy * dy >= (mr + 0.5) ** 2;
+    });
+  for (const out of [0, 0.35, 0.7, 1, 1.4, 2])
+    for (const deg of [45, 35, 55, 25, 65, 15, 75, 0]) {
+      const a = (deg * Math.PI) / 180;
+      const d = r + out * mr;
+      const x = cx + side * Math.cos(a) * d;
+      const y = cy + Math.sin(a) * d;
+      if (clear(x, y)) return { x, y };
+    }
+  // Nothing on the rim clears them (a long name's backing): under the lowest box.
+  const below = Math.max(cy, ...boxes.map((b) => b.y + b.h / 2));
+  return { x: cx + side * r * 0.72, y: below + mr + 1 };
+}
+
+/**
+ * The map spread sideways to fill a wider box (user ask 2026-10-16): each bubble's x pushed out from
+ * the middle, up to `max` times, until the map's shape about matches `aspect` (width over height).
+ * Only gaps grow, so no two bubbles come to overlap; a map already that wide comes back unchanged.
+ */
+export function stretchWide(graph: BubbleGraph, aspect: number, max = 1.45): BubbleGraph {
+  if (!(aspect > 0) || graph.nodes.length < 2) return graph;
+  const box = graphBounds(graph, 0);
+  if (box.w <= 0 || box.h <= 0) return graph;
+  const k = Math.min(max, aspect / (box.w / box.h));
+  if (k <= 1.02) return graph;
+  const mid = box.x + box.w / 2;
+  const sx = (x: number) => mid + (x - mid) * k;
+  return {
+    ...graph,
+    nodes: graph.nodes.map((n) => ({ ...n, x: sx(n.x) })),
+    ...(graph.labelSpots
+      ? { labelSpots: new Map([...graph.labelSpots].map(([id, p]) => [id, { x: sx(p.x), y: p.y }])) }
+      : {}),
+  };
+}
+
 /** Risky holders on the map (flagged risky or a known dumper, not merely the creator), and their supply. */
 export function riskyShare(graph: Pick<BubbleGraph, "nodes">): { count: number; pct: number } {
   const nodes = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator"));
@@ -481,7 +556,7 @@ export interface BubbleGraph {
   transferCount: { linked: number; of: number } | null;
   /**
    * Where the layout kept room for each pill (layoutGraph's label room): by the label's id (a
-   * funder node's id, "same:<i>", "cex:<funder>", "side:<kol>"), the centre of the room it holds.
+   * funder node's id, "cex:<funder>", "side:<kol>"), the centre of the room it holds.
    * placeLabels tries it first. Absent before a layout.
    */
   labelSpots?: ReadonlyMap<string, { x: number; y: number }>;
@@ -1389,7 +1464,7 @@ export function layoutGraph(
       const dist = Math.hypot(dx, dy) || 0.01;
       const want = a.r + b.r + 24;
       if (dist <= want) continue;
-      // Firmer between holders no cluster holds, so the group sits tight round its pill.
+      // Firmer between holders no cluster holds, so the group sits tight.
       const k = ((dist - want) / dist) * (a.cluster === null && b.cluster === null ? 0.1 : 0.04);
       a.x += dx * k;
       a.y += dy * k;
@@ -1652,7 +1727,7 @@ const LABEL_DISTANCE_COST = 0.15;
 const HUB_REACH = 0.4;
 /** How much of a room's overlap with its own group's bubbles the room takes; the bubbles take the rest. */
 const ROOM_SHARE = 0.2;
-const ROOM_W = { funder: 82, same: 150, cex: 70, side: 112 } as const;
+const ROOM_W = { funder: 82, cex: 70, side: 112 } as const;
 
 function labelRooms(
   graph: BubbleGraph,
@@ -1680,13 +1755,7 @@ function labelRooms(
         set: false,
         dir: [0, 1],
       });
-  graph.sameTimeGroups.forEach((_, i) =>
-    hub(
-      `same:${i}`,
-      graph.nodes.filter((n) => n.kind === "holder" && n.sameTime === i),
-      ROOM_W.same,
-    ),
-  );
+  // A same-minute group has no pill (user ask 2026-10-16: a clock on its bubbles instead).
   if (opts.cex) for (const g of cexGroupsOf(graph)) hub(`cex:${g.funder}`, g.nodes, ROOM_W.cex);
   for (const k of opts.kolHubs ?? []) {
     const anchor = k.anchor ? index.get(k.anchor) : undefined;
