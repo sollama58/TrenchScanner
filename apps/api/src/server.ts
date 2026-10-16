@@ -40,6 +40,7 @@ import { registerAdminInsightRoutes } from "./routes/adminInsights.js";
 import { registerAdminModelRoutes } from "./routes/adminModels.js";
 import { registerAdminWalletRoutes } from "./routes/adminWallets.js";
 import { registerAdminBackupRoutes } from "./routes/adminBackups.js";
+import { registerAdminFreeAccessRoutes } from "./routes/adminFreeAccess.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerAdminAnnouncementRoutes, registerAnnouncementRoutes } from "./routes/announcements.js";
 import { registerAdminFeedbackRoutes, registerFeedbackRoutes } from "./routes/feedback.js";
@@ -388,9 +389,9 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
    * is no longer valid.
    *
    * A browser session - nearly every dashboard request - gets all of it from ONE statement: the
-   * user's sessionVersion and feed settings, the wallet's Whitelist row, and the subscription of
-   * whoever owns the wallet. That used to be four Prisma queries (the nested subscription select
-   * is two) on three pool connections at once, in front of every request; the dashboard opens
+   * user's sessionVersion and feed settings, the wallet's Whitelist row, the subscription of
+   * whoever owns the wallet, and its free access (freeAccess.ts in core). That used to be four
+   * Prisma queries (the nested subscription select is two) on three pool connections at once, in front of every request; the dashboard opens
    * with six requests together, so the gate alone wanted eighteen of the twelve connections the
    * API has, and the feed queries queued behind it. Device sessions keep the separate checks:
    * their revocation lives on the device row, and they are rare.
@@ -415,6 +416,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
         whitelisted: boolean;
         whitelistExpiresAt: Date | null;
         subscriptionExpiresAt: Date | null;
+        freeAccessUntil: Date | null;
       }[]
     >`
       SELECT (u."id" IS NOT NULL) AS found,
@@ -424,7 +426,12 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
              (SELECT s."expiresAt"
                 FROM "User" owner
                 JOIN "Subscription" s ON s."userId" = owner."id"
-               WHERE owner."walletAddress" = ${session.walletAddress}) AS "subscriptionExpiresAt"
+               WHERE owner."walletAddress" = ${session.walletAddress}) AS "subscriptionExpiresAt",
+             (SELECT MAX(p."accessEndsAt")
+                FROM "FreeAccessGrant" g
+                JOIN "FreeAccessPeriod" p ON p."id" = g."periodId"
+               WHERE g."walletAddress" = ${session.walletAddress}
+                 AND p."purgedAt" IS NULL AND p."disabledAt" IS NULL) AS "freeAccessUntil"
       FROM (VALUES (1)) AS one(x)
       LEFT JOIN "User" u ON u."id" = ${session.userId}
       LEFT JOIN "Whitelist" w ON w."walletAddress" = ${session.walletAddress}`;
@@ -443,6 +450,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       admins,
       row.whitelisted ? { expiresAt: row.whitelistExpiresAt } : null,
       row.subscriptionExpiresAt,
+      new Date(),
+      row.freeAccessUntil,
     );
   }
 
@@ -606,6 +615,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       await registerAdminAnnouncementRoutes(instance);
       // The bug button's reports, to read and triage.
       await registerAdminFeedbackRoutes(instance);
+      // Free Access: open sign-in to everyone for a while, and clean up after it.
+      await registerAdminFreeAccessRoutes(instance, { env });
     },
     { prefix: "/admin" },
   );

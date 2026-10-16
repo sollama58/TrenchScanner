@@ -1905,6 +1905,54 @@ model Whitelist {
   createdAt DateTime @default(now())
 }
 
+/// A Free Access period, set from Admin > Access (packages/core/src/subscription/freeAccess.ts).
+/// Any wallet that signs in from signInStartsAt until signInEndsAt is enrolled (a FreeAccessGrant)
+/// and has full access until accessEndsAt, or until an admin switches it off (disabledAt). Then the
+/// cleanup deletes every account the period created, unless it has since subscribed or falls under
+/// another retention rule, and stamps purgedAt. At most one period is not yet purged at a time.
+model FreeAccessPeriod {
+  id             String    @id @default(cuid())
+  signInStartsAt DateTime
+  signInEndsAt   DateTime
+  /// Never before signInEndsAt.
+  accessEndsAt   DateTime
+  /// The admin wallet that set it up, and the last one that changed its times.
+  createdBy      String
+  updatedBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  /// Switched off by an admin before accessEndsAt: access ends at once.
+  disabledAt     DateTime?
+  disabledBy     String?
+  /// When the cleanup settled every grant. Null while the period runs or its cleanup is due.
+  purgedAt       DateTime?
+
+  grants FreeAccessGrant[]
+
+  @@index([purgedAt])
+}
+
+/// One wallet enrolled in a Free Access period by signing in during its sign-in window. Kept after
+/// the cleanup as the record of what happened to the account (outcome).
+model FreeAccessGrant {
+  id             String           @id @default(cuid())
+  periodId       String
+  period         FreeAccessPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  walletAddress  String
+  /// The account that signed in. No relation: the cleanup deletes that User, and this row stays.
+  userId         String
+  /// The account was made by this free-access sign-in. Only these are ever deleted: an account
+  /// that existed before the period keeps its data and simply loses the free access.
+  createdAccount Boolean
+  enrolledAt     DateTime         @default(now())
+  /// What the cleanup did: "deleted", or "kept: <why>" (subscriber, whitelisted, burned, ...).
+  outcome        String?
+  settledAt      DateTime?
+
+  @@unique([periodId, walletAddress])
+  @@index([walletAddress])
+}
+
 /// Where the burn reconciler got to, so each pass only walks what it hasn't seen.
 ///
 /// A single row (id "burn-scan"). Kept in its own table rather than in SystemHeartbeat.meta

@@ -1,6 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { adminWalletSet, prisma, Prisma, readAiBudget, type Env } from "@trenchscanner/core";
+import {
+  adminWalletSet,
+  freeAccessWallets,
+  prisma,
+  Prisma,
+  readAiBudget,
+  type Env,
+} from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { SharedCache } from "../sharedCache.js";
@@ -373,6 +380,7 @@ export async function registerAdminOpsRoutes(
       select: { walletAddress: true, expiresAt: true },
     });
     const listed = new Map(whitelist.map((w) => [w.walletAddress, w.expiresAt]));
+    const free = new Set(await freeAccessWallets(now));
     return users.map((u) => {
       const wl = listed.get(u.walletAddress);
       const whitelisted = wl !== undefined && (wl === null || wl > now);
@@ -387,7 +395,9 @@ export async function registerAdminOpsRoutes(
             ? "whitelist"
             : subscribed
               ? "subscription"
-              : "none",
+              : free.has(u.walletAddress)
+                ? "free_access"
+                : "none",
         subscription: u.subscription,
         filters: u._count.filters,
         activeFilters: u.filters.length,

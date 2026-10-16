@@ -10,6 +10,7 @@ import { ModelsAdmin } from "./AdminModels";
 import { WalletsAdmin } from "./AdminWallets";
 import { UsageAdmin } from "./AdminUsage";
 import { CreditsAdmin } from "./AdminCredits";
+import { FreeAccessAdmin } from "./AdminFreeAccess";
 import { RunNow } from "./AdminRunNow";
 import { FeedSimAdmin } from "./AdminFeedSim";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
@@ -1045,7 +1046,7 @@ interface Account {
   id: string;
   walletAddress: string;
   createdAt: string;
-  access: "admin" | "whitelist" | "subscription" | "none";
+  access: "admin" | "whitelist" | "subscription" | "free_access" | "none";
   subscription: { expiresAt: string; source: string } | null;
   filters: number;
   activeFilters: number;
@@ -1075,7 +1076,9 @@ function Users() {
               .map((u) => [
                 <Wallet address={u.walletAddress} />,
                 when(u.createdAt),
-                <Tag tone={u.access === "none" ? "muted" : "ok"}>{u.access}</Tag>,
+                <Tag tone={u.access === "none" ? "muted" : u.access === "free_access" ? "warn" : "ok"}>
+                  {u.access === "free_access" ? "free access" : u.access}
+                </Tag>,
                 u.subscription ? (
                   <span title={u.subscription.source}>
                     {new Date(u.subscription.expiresAt).toLocaleDateString()}
@@ -1166,6 +1169,7 @@ function Access() {
         )}
       </Load>
       <Levers onDone={reloadAll} />
+      <FreeAccessAdmin />
       <Panel title="Subscriptions">
         <Load q={subs}>
           {(rows) => (

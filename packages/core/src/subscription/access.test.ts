@@ -65,6 +65,40 @@ describe("decideAccess", () => {
   });
 });
 
+describe("decideAccess with free access", () => {
+  const now = new Date("2026-01-01T00:00:00Z");
+  const later = new Date("2026-02-01T00:00:00Z");
+  const soon = new Date("2026-01-02T00:00:00Z");
+  const earlier = new Date("2025-12-01T00:00:00Z");
+
+  it("grants it while the period runs, and answers with when it ends", () => {
+    expect(decideAccess("w", NO_ADMINS, null, null, now, soon)).toEqual({
+      hasAccess: true,
+      expiresAt: soon,
+      reason: "free_access",
+    });
+    // A lapsed subscription doesn't hide it.
+    expect(decideAccess("w", NO_ADMINS, null, earlier, now, soon).reason).toBe("free_access");
+  });
+
+  it("lets a live subscription, whitelist entry or admin answer first", () => {
+    expect(decideAccess("w", NO_ADMINS, null, later, now, soon)).toMatchObject({
+      reason: "subscription",
+      expiresAt: later,
+    });
+    expect(decideAccess("w", NO_ADMINS, { expiresAt: null }, null, now, soon).reason).toBe("whitelist");
+    expect(decideAccess("w", new Set(["w"]), null, null, now, soon).reason).toBe("admin");
+  });
+
+  it("is no access once the period has ended", () => {
+    expect(decideAccess("w", NO_ADMINS, null, null, now, earlier)).toEqual({
+      hasAccess: false,
+      expiresAt: null,
+      reason: "none",
+    });
+  });
+});
+
 describe("extendedExpiry", () => {
   const now = new Date("2026-01-01T00:00:00Z");
   const day = 24 * 60 * 60 * 1000;
