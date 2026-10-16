@@ -2,6 +2,8 @@ import {
   adminWalletSet,
   JupiterSwapClient,
   runPaperTrading,
+  sendTradeNotes,
+  TelegramApi,
   TradingRpc,
   type Env,
 } from "@trenchscanner/core";
@@ -24,8 +26,14 @@ export function createPaperTradingRunner(env: Env): () => Promise<JobRunMeta> {
     apiKey: env.TRADING_JUPITER_API_KEY || undefined,
     baseUrl: env.TRADING_JUPITER_BASE_URL || undefined,
   });
+  // Each strategy's buys, sales and automatic stops, to its owner's private Telegram chats.
+  const telegram = env.TELEGRAM_BOT_TOKEN ? new TelegramApi(env.TELEGRAM_BOT_TOKEN) : null;
+  const notify = telegram
+    ? async (notes: Parameters<typeof sendTradeNotes>[0]) =>
+        void (await sendTradeNotes(notes, { telegram, admins }))
+    : undefined;
   return async () => {
-    const summary = await runPaperTrading({ swap, rpc, canTrade: (wallet) => admins.has(wallet) });
+    const summary = await runPaperTrading({ swap, rpc, canTrade: (wallet) => admins.has(wallet), notify });
     return { ...summary };
   };
 }

@@ -2102,6 +2102,8 @@ model TradingBot {
   /// not traded until the settings are saved again, so changing what a filter matches never
   /// silently changes what the bot buys.
   configSavedAt DateTime @default(now())
+  /// dailyLossLimitSol counts positions closed after this (set each time the bot is switched on).
+  lossWindowFrom DateTime @default(now())
   lastRunAt   DateTime?
   lastError   String?
   createdAt   DateTime  @default(now())
@@ -2223,6 +2225,8 @@ model PaperStrategy {
   /// configSavedAt wait for the settings to be saved again.
   signalsFrom      DateTime  @default(now())
   configSavedAt    DateTime  @default(now())
+  /// dailyLossLimitSol counts positions closed after this (set on each start and reset).
+  lossWindowFrom   DateTime  @default(now())
   lastRunAt        DateTime?
   lastError        String?
   /// The last signals it passed on and why (newest first, a few dozen), for the admin to read.

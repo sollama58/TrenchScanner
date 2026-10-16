@@ -3,6 +3,7 @@ import bs58 from "bs58";
 import { prisma } from "../db.js";
 import { feeForRetry, runTradingEngine, withdrawalAmount, type TradingEngineDeps } from "./engine.js";
 import { TransientError } from "./errors.js";
+import type { TradeNote } from "./tradeNotes.js";
 import { createLocalKeyProvider, generateWalletKeypair } from "./keyVault.js";
 import {
   NoRouteError,
@@ -874,6 +875,33 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     const [a, b] = await Promise.all([tick(), tick()]);
     expect([a.locked, b.locked].sort()).toEqual([false, true]);
     expect(a.buys + b.buys).toBe(1);
+  });
+
+  it("tells Telegram about fills, and pauses at its daily loss limit", async () => {
+    await freshSignal({ dailyLossLimitSol: 0.01 });
+    const notes: TradeNote[] = [];
+    const run = async (minutes = 0) => {
+      clock = new Date(clock.getTime() + minutes * 60_000);
+      return runTradingEngine({ ...deps(), notify: async (n) => void notes.push(...n) });
+    };
+    await run();
+    await run();
+    expect((await position()).status).toBe("open");
+    expect(notes.map((n) => n.html)).toEqual([
+      expect.stringMatching(/^🤖 <b>Bot<\/b>: bought .*\$TEST.* for 0\.0500 SOL \(Model: /),
+    ]);
+
+    // Down 60%: the stop sells, and with the loss over 0.01 SOL the bot pauses itself.
+    chain.price.set(mint, 0.02);
+    await run(1);
+    await run();
+    const p = await position();
+    expect(p.closeReason).toBe("stop_loss");
+    expect(notes[1]!.html).toMatch(/sold .*\(stop loss\), 0\.0200 SOL back; closed −0\.0300 SOL/);
+    const bot = await prisma.tradingBot.findUniqueOrThrow({ where: { userId } });
+    expect(bot.enabled).toBe(false);
+    expect(bot.lastError).toMatch(/^paused: lost 0\.0300 SOL in the last 24 hours \(limit 0\.01 SOL\)/);
+    expect(notes[2]!.html).toMatch(/⏸ paused: lost/);
   });
 
   it("sells everything on request, even when the token can't be priced", async () => {

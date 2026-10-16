@@ -20,6 +20,8 @@ import {
   type SwapClient,
 } from "./jupiterSwap.js";
 import { TransientError } from "./errors.js";
+import { escapeHtml } from "../telegram/format.js";
+import { EXIT_REASON_TEXT, signedSol, solAmount, tokenLink, type TradeNote } from "./tradeNotes.js";
 import type { KeyProvider } from "./keyVault.js";
 import type { MintInfo, TradingRpc, TransactionFill } from "./rpc.js";
 import {
@@ -178,6 +180,8 @@ export interface TradingEngineDeps {
   maxBuyLamports?: bigint;
   maxDailySpendLamports?: bigint;
   maxSlippageBps?: number;
+  /** Delivers a pass's Telegram notes (tradeNotes.ts), after the pass; omitted sends none. */
+  notify?: (notes: TradeNote[]) => Promise<void>;
   now?: () => Date;
 }
 
@@ -231,15 +235,21 @@ const PASS_TRANSACTION_TIMEOUT_MS = 240_000;
 export async function runTradingEngine(
   deps: TradingEngineDeps,
 ): Promise<TradingRunSummary & { locked: boolean }> {
-  return prisma.$transaction(
+  const notes: TradeNote[] = [];
+  const result = await prisma.$transaction(
     async (tx) => {
       const [lock] = await tx.$queryRaw<{ locked: boolean }[]>`
         SELECT pg_try_advisory_xact_lock(hashtext(${TRADING_ENGINE_LOCK})) AS locked`;
       if (!lock?.locked) return { ...emptySummary(), locked: false };
-      return { ...(await tradingPass(deps)), locked: true };
+      return { ...(await tradingPass(deps, notes)), locked: true };
     },
     { maxWait: 10_000, timeout: PASS_TRANSACTION_TIMEOUT_MS },
   );
+  // Told after the lock is released: a slow Telegram never holds up the next pass.
+  if (deps.notify && notes.length > 0) {
+    await deps.notify(notes).catch((err) => logger.warn("trade notes failed", { error: errText(err) }));
+  }
+  return result;
 }
 
 function emptySummary(): TradingRunSummary {
@@ -270,11 +280,13 @@ interface PassContext {
   inBudget: () => boolean;
   /** Sell quotes for tokens without a Price API price, by mint+amount. */
   quoteCache: Map<string, { at: number; out: bigint }>;
+  /** Adds a Telegram note for the account, when its bot's settings want them. */
+  note: (userId: string, html: string) => Promise<void>;
 }
 
 const quoteCache = new Map<string, { at: number; out: bigint }>();
 
-async function tradingPass(deps: TradingEngineDeps): Promise<TradingRunSummary> {
+async function tradingPass(deps: TradingEngineDeps, notes: TradeNote[] = []): Promise<TradingRunSummary> {
   const now = deps.now ?? (() => new Date());
   const startedAt = Date.now();
   const summary = emptySummary();
@@ -304,7 +316,18 @@ async function tradingPass(deps: TradingEngineDeps): Promise<TradingRunSummary> 
     summary,
     inBudget: () => Date.now() - startedAt < PASS_BUDGET_MS,
     quoteCache,
+    note: async (userId, html) => {
+      if (!deps.notify) return;
+      if (!notifyFor.has(userId)) {
+        const bot = await prisma.tradingBot.findUnique({ where: { userId }, select: { config: true } });
+        notifyFor.set(userId, readTradingBotConfig(bot?.config).notifyTelegram);
+      }
+      if (!notifyFor.get(userId)) return;
+      const who = server && userId === server.userId ? "Server bot" : "Bot";
+      notes.push({ userId, html: `🤖 <b>${who}</b>: ${html}` });
+    },
   };
+  const notifyFor = new Map<string, boolean>();
 
   await stage(ctx, "settle-orders", () => settleOrders(ctx));
   await stage(ctx, "recover", () => recoverPositions(ctx));
@@ -816,7 +839,7 @@ async function settleBuy(ctx: PassContext, wallet: Wallet, order: OrderWithPosit
     note = "fill read from the wallet balance";
   }
   const at = ctx.now();
-  await prisma.$transaction(async (tx) => {
+  const settled = await prisma.$transaction(async (tx) => {
     const claimed = await tx.tradingOrder.updateMany({
       where: { id: order.id, status: "pending" },
       data: {
@@ -826,7 +849,7 @@ async function settleBuy(ctx: PassContext, wallet: Wallet, order: OrderWithPosit
         tokenDelta: fill.tokenDelta.toString(),
       },
     });
-    if (claimed.count !== 1) return;
+    if (claimed.count !== 1) return false;
     await tx.tradingPosition.updateMany({
       where: { id: order.positionId, status: "buying" },
       data:
@@ -845,7 +868,15 @@ async function settleBuy(ctx: PassContext, wallet: Wallet, order: OrderWithPosit
             }
           : { status: "failed", error: "the buy confirmed but no tokens arrived", closedAt: at },
     });
+    return true;
   });
+  if (settled && bought > 0n) {
+    const p = order.position;
+    await ctx.note(
+      p.userId,
+      `bought ${tokenLink(p.symbol, p.mint)} for ${solAmount(-fill.lamportsDelta)} (${escapeHtml(p.sourceLabel)})`,
+    );
+  }
 }
 
 async function settleSale(ctx: PassContext, wallet: Wallet, order: OrderWithPosition, fill: TransactionFill) {
@@ -859,7 +890,7 @@ async function settleSale(ctx: PassContext, wallet: Wallet, order: OrderWithPosi
   if (chain && chain.raw < held) held = chain.raw;
   if (held < 0n) held = 0n;
   const at = ctx.now();
-  await prisma.$transaction(async (tx) => {
+  const settled = await prisma.$transaction(async (tx) => {
     const claimed = await tx.tradingOrder.updateMany({
       where: { id: order.id, status: "pending" },
       data: {
@@ -869,12 +900,23 @@ async function settleSale(ctx: PassContext, wallet: Wallet, order: OrderWithPosi
         tokenDelta: fill.tokenDelta.toString(),
       },
     });
-    if (claimed.count !== 1) return;
+    if (claimed.count !== 1) return false;
     await tx.tradingPosition.update({
       where: { id: position.id },
       data: saleOutcome(position, order, held, fill.lamportsDelta, at),
     });
+    return true;
   });
+  if (settled) {
+    const result =
+      held === 0n && position.entryLamports !== null
+        ? `; closed ${signedSol(position.proceedsLamports + fill.lamportsDelta - position.entryLamports)}`
+        : "";
+    await ctx.note(
+      position.userId,
+      `sold ${tokenLink(position.symbol, position.mint)} (${EXIT_REASON_TEXT[order.reason] ?? escapeHtml(order.reason)}), ${solAmount(fill.lamportsDelta)} back${result}`,
+    );
+  }
 }
 
 /** Confirmed, details unreadable: the sale's effect from balances, the buy recovered from holdings. */
@@ -1703,6 +1745,7 @@ async function openEntries(ctx: PassContext): Promise<void> {
     if (!wallet) continue;
     ctx.summary.bots++;
     try {
+      if (await pausedForLoss(ctx, bot)) continue;
       await runBotEntries(ctx, bot, wallet);
       await prisma.tradingBot.update({
         where: { id: bot.id },
@@ -1716,6 +1759,47 @@ async function openEntries(ctx: PassContext): Promise<void> {
       logger.warn("bot entries failed", { botId: bot.id, error: errText(err) });
     }
   }
+}
+
+/** Where the daily loss limit starts counting: 24 hours back, or the last start if later. */
+export function lossWindowStart(now: Date, lossWindowFrom: Date): Date {
+  const day = new Date(now.getTime() - 24 * 3_600_000);
+  return lossWindowFrom > day ? lossWindowFrom : day;
+}
+
+/** SOL lost (positive) or made (negative) by positions closed since `since`, fees included. */
+export function netLoss(rows: { paid: bigint; back: bigint }[]): bigint {
+  return rows.reduce((sum, r) => sum + r.paid - r.back, 0n);
+}
+
+/**
+ * The daily loss limit (config.dailyLossLimitSol): a bot whose positions closed in the last 24
+ * hours, since it was last switched on, lost that much between them is switched off, with the
+ * reason, and its owner told. Its open positions keep following their exits.
+ */
+async function pausedForLoss(
+  ctx: PassContext,
+  bot: { id: string; userId: string; config: Prisma.JsonValue; lossWindowFrom: Date },
+): Promise<boolean> {
+  const config = readTradingBotConfig(bot.config);
+  if (!(config.dailyLossLimitSol > 0)) return false;
+  const now = ctx.now();
+  const closed = await prisma.tradingPosition.findMany({
+    where: {
+      userId: bot.userId,
+      status: "closed",
+      closedAt: { gt: lossWindowStart(now, bot.lossWindowFrom) },
+      entryLamports: { not: null },
+    },
+    select: { entryLamports: true, proceedsLamports: true },
+  });
+  const lost = netLoss(closed.map((p) => ({ paid: p.entryLamports!, back: p.proceedsLamports })));
+  if (lost < solToLamports(config.dailyLossLimitSol)) return false;
+  const why = `paused: lost ${solAmount(lost)} in the last 24 hours (limit ${config.dailyLossLimitSol} SOL)`;
+  await prisma.tradingBot.update({ where: { id: bot.id }, data: { enabled: false, lastError: why } });
+  logger.warn("bot paused at its daily loss limit", { userId: bot.userId, lost: lost.toString() });
+  await ctx.note(bot.userId, `⏸ ${escapeHtml(why)}. Open positions keep their exit plans.`);
+  return true;
 }
 
 async function runBotEntries(
