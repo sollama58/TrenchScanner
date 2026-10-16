@@ -4,7 +4,9 @@ import { ApiError, post } from "./api";
 /**
  * Possible KOL side wallets (POST /wallets/possible-sides): wallets the Side Wallet Checker found
  * buying a KOL's coins alongside it: all of them on 10+ coins over 24 hours, 90%+ on 25+ over
- * 48 hours, or 80%+ on 50+ over 72 hours.
+ * 48 hours, or 80%+ on 50+ over 72 hours; or that the KOL sent coins to 6 times in 24 hours, 10 in
+ * 48 or 25 in 72, or that sent the KOL coins 8 times over 1% of supply in 24 hours, 16 over 0.5% in
+ * 24 or 16 over 2% in 72 (user ask 2026-10-16).
  * For the bubble map's ties and tags only. Answers are kept for the session, like wallet names.
  */
 
@@ -20,6 +22,8 @@ export interface PossibleSide {
   funded?: boolean;
   /** One of the KOL's own wallets (a Known Side: another roster entry of a KOL with a main wallet set). */
   known?: boolean;
+  /** Transfers of a coin between it and the KOL that earned the label (core's TRANSFER_SIDE_OUTBOUND_TIERS and TRANSFER_SIDE_INBOUND_TIERS); absent when none. */
+  transfers?: number;
 }
 
 export type PossibleSides = Readonly<Record<string, readonly PossibleSide[]>>;
@@ -80,11 +84,15 @@ export function usePossibleSides(wallets: readonly (string | null | undefined)[]
 
 /** "Ansem Possible Side (93%)", "Ansem KOL Funded Wallet" for a wallet the KOL funded, "Ansem Known Side" for its own. */
 export function possibleSideText(
-  s: Pick<PossibleSide, "kolWallet" | "kolName" | "pct" | "funded" | "known">,
+  s: Pick<PossibleSide, "kolWallet" | "kolName" | "pct" | "funded" | "known" | "transfers">,
 ): string {
   const who = s.kolName ?? `${s.kolWallet.slice(0, 4)}…${s.kolWallet.slice(-4)}`;
   if (s.known) return `${who} Known Side`;
-  return s.funded ? `${who} KOL Funded Wallet` : `${who} Possible Side (${Math.round(s.pct)}%)`;
+  if (s.funded) return `${who} KOL Funded Wallet`;
+  // A label transfers alone earned has no buying-alongside share to show (user ask 2026-10-16).
+  return s.pct > 0
+    ? `${who} Possible Side (${Math.round(s.pct)}%)`
+    : `${who} Possible Side (${s.transfers ?? 0} transfers)`;
 }
 
 /** The KOLs with possible side wallets among `holders`, each with those holders, strongest first. */

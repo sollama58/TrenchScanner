@@ -54,6 +54,8 @@ export interface BubbleHoldersMap {
     pct: number;
     creatorLinked: boolean;
   }[];
+  /** The clusters without holder-to-holder transfers, when transfers changed them (user ask 2026-10-16). */
+  clustersExTransfers?: BubbleHoldersMap["clusters"];
   sameTimeClusters: {
     atMs: number;
     spanMs: number;
@@ -82,6 +84,7 @@ function bubbleMapOf(row: {
   knownExtra: number;
   holders: unknown;
   clusters: unknown;
+  clustersExTransfers?: unknown;
   sameTimeClusters: unknown;
 }): BubbleHoldersMap {
   return {
@@ -90,6 +93,9 @@ function bubbleMapOf(row: {
     knownExtra: row.knownExtra,
     holders: row.holders as BubbleHoldersMap["holders"],
     clusters: row.clusters as BubbleHoldersMap["clusters"],
+    ...(Array.isArray(row.clustersExTransfers)
+      ? { clustersExTransfers: row.clustersExTransfers as BubbleHoldersMap["clusters"] }
+      : {}),
     sameTimeClusters: row.sameTimeClusters as BubbleHoldersMap["sameTimeClusters"],
   };
 }

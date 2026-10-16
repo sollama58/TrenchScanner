@@ -38,6 +38,8 @@ export interface WideMap {
   knownExtra: number;
   holders: WideHolder[];
   clusters: NonNullable<Snapshot["linkedClusters"]>;
+  /** The clusters without holder-to-holder transfers, when transfers changed them; absent otherwise. */
+  clustersExTransfers?: NonNullable<Snapshot["linkedClusters"]>;
   sameTimeClusters: NonNullable<Snapshot["sameTimeClusters"]>;
 }
 
@@ -169,6 +171,47 @@ export function withWideMap<
     linkedClusters: Array.isArray(wide.clusters) ? wide.clusters : [],
     sameTimeClusters: Array.isArray(wide.sameTimeClusters) ? wide.sameTimeClusters : [],
   };
+}
+
+/**
+ * The reading as it stands without holder-to-holder transfers (user ask 2026-10-16): Linked, its
+ * clusters, KOL Bundled and Bundled from the funding-only figures the scan keeps beside the counted
+ * ones, for the map with its transfers hidden. A scan from before they were kept reads as it is.
+ */
+export function withoutTransfers<
+  S extends Pick<
+    Snapshot,
+    | "linkedWalletPct"
+    | "linkedWalletCount"
+    | "linkedClusters"
+    | "kolBundledPct"
+    | "bundledSupplyPct"
+    | "bundledSupplyCount"
+    | "linkedWalletPctExTransfers"
+    | "linkedWalletCountExTransfers"
+    | "linkedClustersExTransfers"
+    | "kolBundledPctExTransfers"
+    | "bundledSupplyPctExTransfers"
+    | "bundledSupplyCountExTransfers"
+  >,
+>(s: S): S {
+  if (s.linkedWalletPctExTransfers == null) return s;
+  return {
+    ...s,
+    linkedWalletPct: s.linkedWalletPctExTransfers,
+    linkedWalletCount: s.linkedWalletCountExTransfers ?? s.linkedWalletCount,
+    linkedClusters: s.linkedClustersExTransfers ?? s.linkedClusters,
+    kolBundledPct: s.kolBundledPctExTransfers ?? s.kolBundledPct,
+    bundledSupplyPct: s.bundledSupplyPctExTransfers ?? s.bundledSupplyPct,
+    bundledSupplyCount: s.bundledSupplyCountExTransfers ?? s.bundledSupplyCount,
+  };
+}
+
+/** The wider map as it reads without holder-to-holder transfers (withoutTransfers' counterpart). */
+export function wideWithoutTransfers<W extends WideMap>(wide: W | null | undefined): W | null | undefined {
+  return wide && Array.isArray(wide.clustersExTransfers)
+    ? { ...wide, clusters: wide.clustersExTransfers }
+    : wide;
 }
 
 /** What withWideMap keeps of the scan's own reading once the wider map stands in for it. */

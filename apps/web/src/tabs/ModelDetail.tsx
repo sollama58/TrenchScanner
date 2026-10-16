@@ -781,6 +781,7 @@ function WindowsTable({
   const boards = [
     usePolling<Leaderboard>(`${api}/models?days=${WINDOWS[0]}`, 120_000),
     usePolling<Leaderboard>(`${api}/models?days=${WINDOWS[1]}`, 120_000),
+    usePolling<Leaderboard>(`${api}/models?days=${WINDOWS[2]}`, 120_000),
   ];
   return (
     <div className="table-wrap">

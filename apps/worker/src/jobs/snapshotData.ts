@@ -120,6 +120,15 @@ export function snapshotDataFor(
     holderTransfers: scored.holderTransfers?.length
       ? (scored.holderTransfers as unknown as Prisma.InputJsonValue)
       : undefined,
+    // Linked without transfers, kept recorded beside the counted figures (user ask 2026-10-16).
+    linkedWalletPctExTransfers: scored.linkedWalletPctExTransfers,
+    linkedWalletCountExTransfers: scored.linkedWalletCountExTransfers,
+    kolBundledPctExTransfers: scored.kolBundledPctExTransfers,
+    bundledSupplyPctExTransfers: scored.bundledSupplyPctExTransfers,
+    bundledSupplyCountExTransfers: scored.bundledSupplyCountExTransfers,
+    linkedClustersExTransfers: scored.linkedClustersExTransfers
+      ? (scored.linkedClustersExTransfers as unknown as Prisma.InputJsonValue)
+      : undefined,
     kolFirstBuyers: scored.kolFirstBuyers,
     kolRecentBuyers: scored.kolRecentBuyers,
     kolRecentSellers: scored.kolRecentSellers,

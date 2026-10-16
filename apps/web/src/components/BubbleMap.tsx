@@ -45,6 +45,8 @@ import {
   funderNamed,
   largestSourceOnly,
   mapLinked,
+  withoutTransfers,
+  wideWithoutTransfers,
   TRAIT_ICON,
   RISKY_ICON,
   riskyShare,
@@ -136,14 +138,14 @@ function useCexToggle(graph: BubbleGraph | null): { showCex: boolean; setCexOn: 
  * on by default, switchable on the map like the exchange ties, with the default in Settings. Held
  * above the map so its share image draws them too.
  */
-function useTransferToggle(graph: BubbleGraph | null): {
+function useTransferToggle(snapshot: Snapshot | null | undefined): {
   showTransfers: boolean;
   setTransfersOn: (on: boolean) => void;
 } {
   const { bubbleTransferLinks } = useAppearance();
   const [on, setTransfersOn] = useState<boolean | null>(null);
   return {
-    showTransfers: !!graph && (on ?? bubbleTransferLinks) && graph.transferLinks.length > 0,
+    showTransfers: (on ?? bubbleTransferLinks) && (snapshot?.holderTransfers?.length ?? 0) > 0,
     setTransfersOn,
   };
 }
@@ -236,6 +238,13 @@ function useKols(graph: BubbleGraph | null, groups: readonly SideGroup[], names:
  * KOL Bundled % for the share image: the scan's figure (what the filters and models read), else
  * the map's own groups, else unknown.
  */
+const NO_KOLS: readonly KolControl[] = [];
+
+/** The KOL bundles to draw: none while the KOL side wallets switch is there and off, else every one. */
+function drawnKolsFor(side: SideToggle, kols: readonly KolControl[]): readonly KolControl[] {
+  return side.groups.length > 0 && !side.showSides ? NO_KOLS : kols;
+}
+
 function kolBundledFor(snapshot: Snapshot | null | undefined, kols: readonly KolControl[]): number | null {
   return snapshot?.kolBundledPct ?? (kols.length > 0 ? kolBundledShare(kols) : null);
 }
@@ -304,10 +313,13 @@ function MapView({
   // KOLs' side wallets gather round them the same way while their ties show.
   // Each KOL's bundle sits together too, its pill by the KOL (user ask 2026-10-15).
   // Holders that sent the coin to each other sit a little closer while their arrows show.
+  // The KOL side wallets switch off: no KOL bundle is gathered, ringed or labelled on the map, its
+  // list or its share image (user ask 2026-10-16); the KOL Bundled and Linked figures stay.
+  const drawnKols = drawnKolsFor(side, kols);
   const regrouped = useMemo(() => {
-    const opts = { cex: showCex, sides: side.shown, kols, transfers: showTransfers };
+    const opts = { cex: showCex, sides: side.shown, kols: drawnKols, transfers: showTransfers };
     return needsRegroup(opts) ? regroupLayout(graph, opts) : null;
-  }, [graph, showCex, side.shown, kols, showTransfers]);
+  }, [graph, showCex, side.shown, drawnKols, showTransfers]);
   const xfer = graph.transferPct;
   const cex = graph.cexCount;
   // Linked takes in KOLs' bundles and the wider map's links, out of every holder read (mapLinked).
@@ -457,6 +469,27 @@ function MapView({
           </dd>
         </div>
       </dl>
+      <BubbleSvg
+        graph={regrouped ?? graph}
+        names={names}
+        picked={picked}
+        lit={lit}
+        cexLinks={showCex}
+        transfers={showTransfers}
+        sideGroups={side.shown}
+        kols={drawnKols}
+        sides={sides}
+        onPick={(id) => {
+          setPicked(id);
+          setFocusFunder(null);
+          // A wallet's bubble (a holder, or the funder behind a cluster) opens that wallet's modal;
+          // the "others" bubble has no one wallet, so it only lights up.
+          const wallet = graph.nodes.find((n) => n.id === id)?.wallet;
+          if (wallet) openWallet(wallet);
+        }}
+      />
+      <NameLegend graph={graph} names={names} />
+      {/* The map's switches sit under the legend (user ask 2026-10-16). */}
       {(graph.cexLinks.length > 0 ||
         groups.length > 0 ||
         graph.transferLinks.length > 0 ||
@@ -496,31 +529,11 @@ function MapView({
           )}
         </div>
       )}
-      <BubbleSvg
-        graph={regrouped ?? graph}
-        names={names}
-        picked={picked}
-        lit={lit}
-        cexLinks={showCex}
-        transfers={showTransfers}
-        sideGroups={side.shown}
-        kols={kols}
-        sides={sides}
-        onPick={(id) => {
-          setPicked(id);
-          setFocusFunder(null);
-          // A wallet's bubble (a holder, or the funder behind a cluster) opens that wallet's modal;
-          // the "others" bubble has no one wallet, so it only lights up.
-          const wallet = graph.nodes.find((n) => n.id === id)?.wallet;
-          if (wallet) openWallet(wallet);
-        }}
-      />
-      <NameLegend graph={graph} names={names} />
       <NodeDetail node={node} graph={graph} names={names} sides={sides} />
       <GroupPanel
         graph={graph}
         names={names}
-        kols={kols}
+        kols={drawnKols}
         transfers={showTransfers}
         listed={listed}
         lit={lit}
@@ -1779,14 +1792,25 @@ export function BubbleMapSection({
   const mint = token.mintAddress;
   const liveWide = useWideMap(mint);
   const wide = chosenWide !== undefined ? chosenWide : liveWide;
+  const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
+  // Transfers hidden: Linked, its clusters and the bundles as they read without them (user ask
+  // 2026-10-16), on the map and its share image alike.
+  const shown = useMemo(
+    () => (snapshot && !showTransfers ? withoutTransfers(snapshot) : snapshot),
+    [snapshot, showTransfers],
+  );
   const graph = useMemo(
-    () => (snapshot ? layoutGraph(buildGraph(withWideMap(snapshot, wide), flagged)) : null),
-    [snapshot, wide, flagged],
+    () =>
+      shown
+        ? layoutGraph(
+            buildGraph(withWideMap(shown, showTransfers ? wide : wideWithoutTransfers(wide)), flagged),
+          )
+        : null,
+    [shown, wide, showTransfers, flagged],
   );
   const nameToggle = useNameToggle(graph, useGraphNames(graph));
   const names = nameToggle.mapNames;
   const { showCex, setCexOn } = useCexToggle(graph);
-  const { showTransfers, setTransfersOn } = useTransferToggle(graph);
   const side = useSideToggle(graph);
   const kols = useKols(graph, side.groups, names);
   const label = tokenLabel(token);
@@ -1833,8 +1857,9 @@ export function BubbleMapSection({
                 transfers: showTransfers,
                 sides: side.shown,
                 flags,
-                kolBundled: kolBundledFor(snapshot, kols),
-                kols,
+                kolBundled: kolBundledFor(shown, kols),
+                kols: drawnKolsFor(side, kols),
+                linkedKols: kols,
               })
             }
           />
@@ -1850,7 +1875,7 @@ export function BubbleMapSection({
         side={side}
         nameToggle={nameToggle}
         flags={flags}
-        scanKolBundled={snapshot?.kolBundledPct ?? null}
+        scanKolBundled={shown?.kolBundledPct ?? null}
       />
     </section>
   );

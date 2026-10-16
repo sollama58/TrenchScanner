@@ -145,10 +145,13 @@ describe.skipIf(!dbAvailable)("GET /curated/stats", () => {
     ]) {
       expect((await get(url)).statusCode).toBe(400);
     }
-    // The Models vs baseline chart's 24h window is served by the leaderboard alone.
+    // The Models vs baseline chart's 24h and 3-day windows are served by the leaderboard alone.
     const day = await get("/curated/models?days=1");
     expect(day.statusCode).toBe(200);
     expect(day.json().window.days).toBe(1);
+    const three = await get("/curated/models?days=3");
+    expect(three.statusCode).toBe(200);
+    expect(three.json().window.days).toBe(3);
     const board = await get("/curated/models?days=7");
     expect(board.statusCode).toBe(200);
     expect(board.json().window.days).toBe(7);

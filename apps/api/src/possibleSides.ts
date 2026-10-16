@@ -32,17 +32,31 @@ export interface PossibleSide {
   fundedSol?: number | null;
   /** A Known Side: one of the KOL's own wallets, named as such (KolWallet.mainWallet). */
   known?: boolean;
+  /**
+   * Transfers of a coin between it and the KOL that earned the label (user ask 2026-10-16: core's
+   * TRANSFER_SIDE_OUTBOUND_TIERS and TRANSFER_SIDE_INBOUND_TIERS), in that span; absent when buying
+   * alongside earned it alone.
+   */
+  transfers?: number;
 }
 
 const shortAddress = (a: string) => (a.length > 10 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a);
 
 /** "Ansem Possible Side (93%)", "Ansem KOL Funded Wallet" or "Ansem Known Side": the label the wallet carries. */
 export function possibleSideText(
-  s: Pick<PossibleSide, "kolWallet" | "kolName" | "pct"> & { funded?: boolean; known?: boolean },
+  s: Pick<PossibleSide, "kolWallet" | "kolName" | "pct"> & {
+    funded?: boolean;
+    known?: boolean;
+    transfers?: number;
+  },
 ): string {
   const who = s.kolName ?? shortAddress(s.kolWallet);
   if (s.known) return `${who} Known Side`;
-  return s.funded ? `${who} KOL Funded Wallet` : `${who} Possible Side (${Math.round(s.pct)}%)`;
+  if (s.funded) return `${who} KOL Funded Wallet`;
+  // A label transfers alone earned has no buying-alongside share to show.
+  return s.pct > 0
+    ? `${who} Possible Side (${Math.round(s.pct)}%)`
+    : `${who} Possible Side (${s.transfers ?? 0} transfers)`;
 }
 
 /** Each wallet's possible-side matches, strongest first; wallets with none are left out. */
@@ -91,6 +105,7 @@ export async function loadPossibleSides(wallets: readonly string[]): Promise<Rec
       shared: match?.shared ?? 0,
       kolCoins: match?.kolCoins ?? 0,
       hours: match?.hours ?? 0,
+      ...(match?.transfers ? { transfers: match.transfers } : {}),
       funded: true,
       fundedAt: f.fundedAt,
       fundedSol: f.amountSol,
@@ -106,6 +121,7 @@ export async function loadPossibleSides(wallets: readonly string[]): Promise<Rec
       shared: r.shared,
       kolCoins: r.kolCoins,
       hours: r.hours,
+      ...(r.transfers > 0 ? { transfers: r.transfers } : {}),
     });
   }
   return out;
@@ -137,6 +153,8 @@ export interface LabeledSide {
   pct: number;
   /** "Cupsey_1": the KOL's name (spaces and commas as underscores) and the wallet's number under it. */
   name: string;
+  /** Transfers with the KOL that earned a Possible Side label (core's TRANSFER_SIDE_OUTBOUND_TIERS and TRANSFER_SIDE_INBOUND_TIERS); absent when none. */
+  transfers?: number;
 }
 
 const KIND_RANK: Record<LabeledSide["kind"], number> = { known: 0, funded: 1, possible: 2 };
@@ -156,7 +174,14 @@ export function numberLabeledSides(sides: Record<string, PossibleSide[]>): Label
     const top = entries[0];
     if (!top) continue;
     const list = byKol.get(top.kolWallet) ?? [];
-    list.push({ wallet, kolWallet: top.kolWallet, kolName: top.kolName, kind: kindOf(top), pct: top.pct });
+    list.push({
+      wallet,
+      kolWallet: top.kolWallet,
+      kolName: top.kolName,
+      kind: kindOf(top),
+      pct: top.pct,
+      ...(top.transfers ? { transfers: top.transfers } : {}),
+    });
     byKol.set(top.kolWallet, list);
   }
   const groups = [...byKol.values()].sort((a, b) => {

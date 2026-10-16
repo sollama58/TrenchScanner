@@ -117,7 +117,12 @@ import {
 } from "./walletHoldings.js";
 import { seedQuotes } from "./walletValuation.js";
 import { alertAwaitingWallets, holdForLinked, noteAlertWallets } from "./walletPriority.js";
-import { holderTransfersOf, resolveHolderTransfers, takeHolderTransferStats } from "./holderTransfers.js";
+import {
+  holderTransfersOf,
+  recordTransferEvents,
+  resolveHolderTransfers,
+  takeHolderTransferStats,
+} from "./holderTransfers.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolvePumpLaunches } from "./pumpLaunch.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
@@ -1350,23 +1355,59 @@ async function scanCycle(
     env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0
       ? await resolveLinkedWallets(linkedGroups, deps.helius, { maxNewLookups: 0 }).catch(() => null)
       : null;
-  const linkedByMint = new Map(
+  // Holder-to-holder transfers among the top 25, from the caches the stage above filled: every coin
+  // whose holders' reads stand gets them, not only the ones read this cycle.
+  const transfersByMint = new Map(linkedGroups.map((g) => [g.mintAddress, holderTransfersOf(g)] as const));
+  // Linked without transfers, kept recorded (user ask 2026-10-16), and Linked with them: a transfer
+  // past dust and clear of exchanges links its two holders (user decision 2026-10-16). Only a coin
+  // whose transfer reading is complete gets them; the rest read on funding alone.
+  const linkedBaseByMint = new Map(
     linkedLookups
       ? linkedGroups.map((g) => [g.mintAddress, linkedReadingOf(g, linkedLookups!)] as const)
       : [],
   );
+  const linkedByMint = new Map(
+    linkedLookups
+      ? linkedGroups.map((g) => {
+          const base = linkedBaseByMint.get(g.mintAddress) ?? null;
+          const transfers = transfersByMint.get(g.mintAddress)?.transfers;
+          const counted = base && transfers?.length ? linkedReadingOf(g, linkedLookups!, transfers) : base;
+          return [g.mintAddress, counted && sameLinked(counted, base) ? base : counted] as const;
+        })
+      : [],
+  );
+  // Each linking transfer kept for the flags read across coins (KOL Possible Side, Multi-Wallet-Bundle).
+  if (linkedLookups) recordTransferEvents(transfersByMint, linkedBaseByMint, linkedLookups.hot);
   const cexByMint = new Map(
     linkedLookups ? linkedGroups.map((g) => [g.mintAddress, cexReadingOf(g, linkedLookups!)] as const) : [],
   );
   // KOL Bundled % and Bundled % from the same readings, the roster and one read of the possible
-  // side wallets.
-  const kolBundledOf =
+  // side wallets; for the coins transfers changed, the same without them too, in the same read
+  // (keyed "ex:<mint>") so both land or neither does.
+  const EX = "ex:";
+  const changedByTransfers = [...linkedBaseByMint].filter(
+    ([mint, base]) => base && linkedByMint.get(mint) !== base,
+  );
+  const kolBundledAll =
     (linkedLookups
       ? await withinBudget(
-          kolBundledByMint(linkedByMint, linkedLookups.funderOf, kolLookup()),
+          kolBundledByMint(
+            new Map([
+              ...linkedByMint,
+              ...changedByTransfers.map(([mint, base]) => [EX + mint, base] as const),
+            ]),
+            linkedLookups.funderOf,
+            kolLookup(),
+          ),
           KOL_BUNDLED_BUDGET_MS,
         )
       : null) ?? new Map<string, KolBundledReading>();
+  const kolBundledOf = new Map([...kolBundledAll].filter(([key]) => !key.startsWith(EX)));
+  const kolBundledBaseOf = new Map(
+    [...kolBundledAll].flatMap(([key, r]) =>
+      key.startsWith(EX) ? [[key.slice(EX.length), r] as const] : [],
+    ),
+  );
   // The coins whose reading was left for behind the cycle and has not landed: their filter
   // matches wait for it (see holdForLinked), which also puts them in next cycle's waited set.
   holdForLinked(
@@ -1377,13 +1418,11 @@ async function scanCycle(
   );
   // The alerted coins' wider bubble maps, saved behind the cycle: nothing here waits on them.
   if (linkedLookups && wideMints.size > 0) {
-    void wideMapReadings(linkedGroups, linkedLookups, wideMints)
+    const transfersOf = new Map([...transfersByMint].map(([mint, r]) => [mint, r?.transfers] as const));
+    void wideMapReadings(linkedGroups, linkedLookups, wideMints, transfersOf)
       .then(storeWideMapReadings)
       .catch((err: unknown) => logger.warn("bubble map top-50 reading failed", { error: String(err) }));
   }
-  // Holder-to-holder transfers among the top 25, from the caches the stage above filled: every coin
-  // whose holders' reads stand gets them, not only the ones read this cycle.
-  const transfersByMint = new Map(linkedGroups.map((g) => [g.mintAddress, holderTransfersOf(g)] as const));
   lap("linkedWallets");
   await withinBudget(liveTapeWork, Math.max(0, WALLET_STAGE_BUDGET_MS - (Date.now() - sniperStageStartedAt)));
   const riskLookup = walletRiskLookup();
@@ -1470,6 +1509,12 @@ async function scanCycle(
           liveTradersOf(candidate.mintAddress, winnerIs),
           kolBundledOf.get(candidate.mintAddress),
           transfersByMint.get(candidate.mintAddress) ?? null,
+          exTransfersOf(
+            linkedBaseByMint.get(candidate.mintAddress) ?? null,
+            linkedByMint.get(candidate.mintAddress) ?? null,
+            kolBundledOf.get(candidate.mintAddress),
+            kolBundledBaseOf.get(candidate.mintAddress),
+          ),
         ),
       );
     } catch (err) {
@@ -2514,6 +2559,7 @@ async function processCandidate(
   winnerTraders: LiveTraderCounts | null = null,
   kolBundled?: KolBundledReading,
   transfers: HolderTransfersReading | null = null,
+  exTransfers: ExTransfersReading | null = null,
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
@@ -2540,8 +2586,9 @@ async function processCandidate(
   // KOL Bundled % and Bundled % ride on the linked reading: unknown (left off) without one.
   const withBundled =
     withFlags && linked && kolBundled !== undefined ? { ...withFlags, ...kolBundled } : withFlags;
-  // Holder-to-holder transfers: unknown (left off) until the top 25's reads are in.
-  const onChain = withHolderTransfers(withBundled, transfers);
+  // Holder-to-holder transfers: unknown (left off) until the top 25's reads are in. The linked
+  // figures without them ride along, recorded (user ask 2026-10-16).
+  const onChain = withExTransfers(withHolderTransfers(withBundled, transfers), exTransfers);
   // Launch time: the earliest of the DEX pair's creation time and when the watchlist first saw
   // the mint: after graduation DexScreener's canonical pair is the PumpSwap pool,
   // whose creation time is the graduation, and age read from it restarted at zero - a six-hour
@@ -3143,6 +3190,66 @@ export function withHolderTransfers(
       ...(t.lastAtMs !== null ? { lastAtMs: t.lastAtMs } : {}),
     })),
   };
+}
+
+/**
+ * Linked, KOL Bundled and Bundled without holder-to-holder transfers (user ask 2026-10-16): the
+ * funding-only figures, recorded beside the counted ones; the clusters only when transfers changed
+ * them. Null without a linked reading.
+ */
+export interface ExTransfersReading {
+  linkedWalletPct: number;
+  linkedWalletCount: number;
+  kolBundled?: KolBundledReading;
+  /** The clusters without transfers, when transfers changed them. */
+  clusters?: LinkedWalletsReading["clusters"];
+}
+
+/** The figures without transfers for one coin, from its readings with and without. Exported for tests. */
+export function exTransfersOf(
+  base: LinkedWalletsReading | null,
+  counted: LinkedWalletsReading | null,
+  kolBundled: KolBundledReading | undefined,
+  kolBundledBase: KolBundledReading | undefined,
+): ExTransfersReading | null {
+  if (!base) return null;
+  const changed = counted !== null && counted !== base;
+  return {
+    linkedWalletPct: base.linkedWalletPct,
+    linkedWalletCount: base.linkedWalletCount,
+    kolBundled: changed ? kolBundledBase : kolBundled,
+    ...(changed ? { clusters: base.clusters } : {}),
+  };
+}
+
+/** The figures without transfers on the profile. Exported for tests. */
+export function withExTransfers(
+  onChain: OnChainProfile | null,
+  ex: ExTransfersReading | null,
+): OnChainProfile | null {
+  if (!onChain || !ex || onChain.linkedWalletPct === undefined) return onChain;
+  return {
+    ...onChain,
+    linkedWalletPctExTransfers: ex.linkedWalletPct,
+    linkedWalletCountExTransfers: ex.linkedWalletCount,
+    ...(ex.kolBundled
+      ? {
+          kolBundledPctExTransfers: ex.kolBundled.kolBundledPct,
+          bundledSupplyPctExTransfers: ex.kolBundled.bundledSupplyPct,
+          bundledSupplyCountExTransfers: ex.kolBundled.bundledSupplyCount,
+        }
+      : {}),
+    ...(ex.clusters ? { linkedClustersExTransfers: ex.clusters } : {}),
+  };
+}
+
+/** Whether two linked readings hold the same holders in the same clusters (transfers changed nothing). */
+function sameLinked(a: LinkedWalletsReading, b: LinkedWalletsReading | null): boolean {
+  if (!b || a.linkedWalletCount !== b.linkedWalletCount || a.clusters.length !== b.clusters.length)
+    return false;
+  const key = (r: LinkedWalletsReading) =>
+    r.clusters.map((c) => c.wallets.map((w) => w.wallet).join(",")).join("|");
+  return key(a) === key(b);
 }
 
 /** The linked-wallets reading on the profile; unknown (left off) without one. Exported for tests. */

@@ -308,7 +308,7 @@ function BaselinePanel(props: BaselineProps) {
   // The model whose detail dialog is open (it follows the board, so a window switch refreshes it).
   const [opened, setOpened] = useState<string | null>(null);
   const view = { days, setDays, metric, setMetric, picked, setPicked, opened, setOpened };
-  // The page's own board is the 7-day one; the 24h board is polled only while it is picked.
+  // The page's own board is the 7-day one; the 24h and 3-day boards are polled only while picked.
   return days === PAGE_DAYS ? (
     <BaselineChart {...props} {...view} loading={false} />
   ) : (

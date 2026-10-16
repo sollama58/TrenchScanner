@@ -132,11 +132,11 @@ export const reportDaysSchema = z.coerce
 const insightsQuerySchema = z.object({ days: reportDaysSchema });
 
 /**
- * The leaderboard also serves a 24h window: the Models vs baseline chart switches between 24h and
- * 7 days. It is a few grouped reads, far lighter than an insights fill, and still one cache entry
- * per window.
+ * The leaderboard also serves 24h and 3-day windows: the Models vs baseline chart switches between
+ * 24h, 3 days and 7 days. Each is a few grouped reads over the shared 30-day market rows, far
+ * lighter than an insights fill, and still one cache entry per window.
  */
-const LEADERBOARD_WINDOWS_DAYS = [1, ...REPORT_WINDOWS_DAYS] as const;
+const LEADERBOARD_WINDOWS_DAYS = [1, 3, ...REPORT_WINDOWS_DAYS] as const;
 
 export const leaderboardDaysSchema = z.coerce
   .number()
@@ -278,8 +278,9 @@ export function createReportCaches(env: Env) {
     await leaderboardFor(30).warm(() => buildLeaderboard(env, 30, market), ahead);
     await lighthouse.keepWarm(env, ahead);
     await lighthouseHistory.keepWarm(ahead);
-    // The Models vs baseline chart's 24h view and the model detail's.
+    // The Models vs baseline chart's 24h and 3-day views, and the model detail's.
     await leaderboardFor(1).warm(() => buildLeaderboard(env, 1, market), ahead);
+    await leaderboardFor(3).warm(() => buildLeaderboard(env, 3, market), ahead);
     await weather.warm(() => loadMarketWeather(env), ahead);
   };
 

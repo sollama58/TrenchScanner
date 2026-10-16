@@ -92,6 +92,8 @@ interface KolSide {
   wallet: string;
   kind: "known" | "funded" | "possible";
   pct: number;
+  /** Transfers with the KOL that earned the label (from the KOL 6 in 24 hours, 10 in 48 or 25 in 72; to it, 8 over 1% of supply in 24 hours, 16 over 0.5% in 24 or 16 over 2% in 72); absent when none. */
+  transfers?: number;
   /** "Cupsey_3". */
   name: string;
 }
@@ -526,7 +528,16 @@ function KolSides({ sides }: { sides: KolSide[] }) {
                 <li key={s.wallet}>
                   <WalletButton wallet={s.wallet} names={{}} />
                   <span className="tm-tag wm-tone-linked">{s.name}</span>
-                  {kind === "possible" && <span className="muted num">{Math.round(s.pct)}% shared</span>}
+                  {kind === "possible" && (
+                    <span className="muted num">
+                      {[
+                        s.pct > 0 ? `${Math.round(s.pct)}% shared` : null,
+                        s.transfers ? `${s.transfers} transfers` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -546,6 +557,8 @@ interface BundleLabel {
   hours: number;
   /** "7xKXtg_1". */
   name: string;
+  /** Transfers with it that qualify the wallet (4 in 48 hours or 10 in 72); absent when none. */
+  transfers?: number;
 }
 
 /**
@@ -576,7 +589,8 @@ function BundleLabels({ wallet }: { wallet: string }) {
         </h4>
         <p className="faint small wm-note">
           Wallets in its Multi-Wallet-Bundle that would qualify for a label: they bought nearly all of its
-          coins within minutes of it. Not stored, and not on the bubble map.
+          coins within minutes of it, or moved coins with it 4 times in 48 hours or 10 in 72. Not stored, and
+          not on the bubble map.
         </p>
         <ul className="wm-linked small">
           {labels.map((l) => (
@@ -584,7 +598,12 @@ function BundleLabels({ wallet }: { wallet: string }) {
               <WalletButton wallet={l.wallet} names={{}} />
               <span className="tm-tag wm-tone-linked">{l.name}</span>
               <span className="muted num">
-                {Math.round(l.pct)}% of {l.coins} coins over {l.hours}h
+                {[
+                  l.coins > 0 ? `${Math.round(l.pct)}% of ${l.coins} coins over ${l.hours}h` : null,
+                  l.transfers ? `${l.transfers} transfers within ${l.hours}h` : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
               </span>
             </li>
           ))}

@@ -11294,11 +11294,12 @@ img.tm-avatar {
   align-self: center;
 }
 /* The map's tie switches: pills in a row, each with the app's switch and its line sample. */
+/* The map's switches, under its legend (user ask 2026-10-16). */
 .bm-toggles {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: -2px 0 10px;
+  margin: 12px 0 2px;
 }
 .switch.bm-toggle {
   gap: 9px;
