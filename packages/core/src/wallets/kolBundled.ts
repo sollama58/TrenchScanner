@@ -20,7 +20,7 @@
  */
 
 import { linkingTransfers } from "./holderTransfers.js";
-import { KNOWN_EXCHANGE_WALLETS } from "./linkedWallets.js";
+import { isServiceWallet } from "./linkedWallets.js";
 
 export interface KolBundledInput {
   /** The top holders the linked reading covers, with their share of supply, %. */
@@ -47,7 +47,7 @@ export function bundleTransfers<T extends { from: string; to: string; pct: numbe
   transfers: readonly T[] | null | undefined,
   pctOf: ReadonlyMap<string, number>,
 ): T[] {
-  return linkingTransfers(transfers, pctOf, (w) => KNOWN_EXCHANGE_WALLETS.has(w));
+  return linkingTransfers(transfers, pctOf, isServiceWallet);
 }
 
 /** The holders KOL Bundled % takes in: every KOL bundle's, each once. */

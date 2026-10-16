@@ -24,6 +24,13 @@ describe("pickWalletName", () => {
     });
   });
 
+  it("names Stonks' fee wallet Stonk_Fees, ahead of any other name (user ask 2026-10-16)", () => {
+    expect(pickWalletName({ kol: null, identity, exchange: null, platform: "Stonk_Fees" })).toEqual({
+      name: "Stonk_Fees",
+      source: "exchange",
+    });
+  });
+
   it("names a KOL's Known Side as one, ahead of any other name", () => {
     expect(pickWalletName({ kol: null, kolSide: "Cupsey Known Side", identity, exchange: "OKX" })).toEqual({
       name: "Cupsey Known Side",
