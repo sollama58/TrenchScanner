@@ -640,7 +640,7 @@ function SideWallets({
                           : "Wallets labeled for it, pinned above the list whatever the window"
                       }
                     />
-                    {bundle ? " would be labeled" : ""} · {plural(pinned.length + 1, "wallet")} used
+                    {bundle ? " would be labeled" : ""}
                   </span>
                 </span>
                 <WalletWebButton wallet={kol} name={kolName} className="ghost small-btn side-web-btn">
