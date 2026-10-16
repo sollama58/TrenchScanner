@@ -93,6 +93,7 @@ export * from "./curation/featureOnset.js";
 export * from "./curation/runGuard.js";
 export * from "./curation/rulesDistill.js";
 export * from "./curation/modelBackup.js";
+export * from "./backup/tableBackup.js";
 export * from "./storage/s3.js";
 export * from "./telegram/index.js";
 export * from "./wallets/linkedWallets.js";

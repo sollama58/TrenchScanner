@@ -220,6 +220,22 @@ A wallet listed in `ADMIN_WALLET_ADDRESSES` (comma-separated base58 addresses; e
 - **Users** - wallet, join date, filter/match counts.
 - **Config** - the non-secret half of the shared env schema (mcap band, scan cadence, RugCheck cache TTL, holder-growth window, retention windows, `PUBLIC_APP_DOMAIN`, ...), so you can see what's actually running without opening the Render dashboard. `apps/api/src/routes/admin.config.test.ts` asserts the endpoint still returns every one of them and no secret - the tab fails silently otherwise, by simply rendering one fewer row.
 
+## Backups and restore
+
+Render backs every paid database up continuously, with point-in-time recovery of the last 3 days (Hobby workspace) or 7 (Pro), and on-demand exports kept 7 days: the database → **Recovery** page. That covers losing the whole database and a deletion noticed within the window. The project keeps two copies of its own on top (database audit 2026-10-16):
+
+- **Model backups** - the running curator models, weekly, in `ModelBackup`; the Admin tab's Backups panel lists, downloads, imports and restores them.
+- **Table backups** - the tables nothing can rebuild (users, filters, Telegram chats, subscriptions, whitelist, burn events and the burn-credit ledger, trading wallets/bots/positions/orders/withdrawals, curator lanes, the curated record), weekly, in `DataBackup` (`DATA_BACKUP_KEEP` kept, 8), each a few MB gzipped. Both are copied to the `MODEL_BACKUP_S3_*` bucket when it is set on the trainer, which is the copy that survives losing the database; without it they live in the same Postgres. `GET /admin/table-backups` lists them and `GET /admin/table-backups/:id/download` serves the file.
+
+**Restore** a table backup when rows are gone and point-in-time recovery no longer reaches back far enough. It is additive: rows whose key already exists are left as they are, a row whose parent is gone for good (a curated alert of a token since swept) is skipped and counted, and the whole run lands in one transaction. Take a Render export first, download the file, then from a checkout with `DATABASE_URL` pointing at the database:
+
+```
+npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<stamp>.json.gz --dry-run
+npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<stamp>.json.gz
+```
+
+The dry run prints what the file holds; the real run prints, per table, what it put back, what was already there and what it skipped. A backup restores into the schema it was taken from or a later one whose new columns are nullable or defaulted.
+
 ## Local development
 
 **Prerequisites:** Node.js 20+, a local Postgres instance.

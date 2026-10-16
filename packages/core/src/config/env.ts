@@ -718,6 +718,10 @@ const envSchema = z.object({
   // Model backups (curation/modelBackup.ts): the trainer snapshots every running model once a
   // week; this many weekly backups are kept (pinned ones, never pruned, don't count).
   MODEL_BACKUP_KEEP_WEEKS: z.coerce.number().int().min(8).default(12),
+  // Weekly copies of the irreplaceable tables (backup/tableBackup.ts; database audit 2026-10-16,
+  // J1, user decision): this many are kept in DataBackup, each a few MB gzipped, and each is also
+  // copied to the MODEL_BACKUP_S3_* bucket when one is set.
+  DATA_BACKUP_KEEP: z.coerce.number().int().min(4).default(8),
   // Off-site copies of each backup, to any S3-compatible bucket (Cloudflare R2, Backblaze B2, AWS
   // S3). All four of endpoint, bucket and the key pair must be set, else backups stay in Postgres
   // only. Endpoint is the bucket host's base URL, e.g. https://<account>.r2.cloudflarestorage.com;
