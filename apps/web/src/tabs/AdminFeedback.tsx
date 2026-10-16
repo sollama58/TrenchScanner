@@ -48,6 +48,23 @@ interface Reports {
 const STATUS_TONE: Record<Status, "warn" | "muted" | "ok"> = { new: "warn", seen: "muted", done: "ok" };
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/**
+ * The report's page as a link target, only when it is plain http(s). The sender writes this
+ * field, so a javascript: or data: URL must never become a clickable href.
+ */
+export function safePageUrl(raw: string | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A screenshot the API handed back, only as a raster image data URL (never SVG or HTML). */
+export const isImageDataUrl = (v: string) => /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(v);
+
 /** "Chrome 131 on Android": enough to tell browsers apart without the whole user agent. */
 export function browserName(ua: string | undefined): string | null {
   if (!ua) return null;
@@ -165,6 +182,7 @@ function ReportItem({ report: r, onChanged }: { report: Report; onChanged: () =>
   const [note, setNote] = useState(r.adminNote ?? "");
   const c = r.context ?? {};
   const browser = browserName(c.userAgent);
+  const link = safePageUrl(c.url);
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -178,27 +196,40 @@ function ReportItem({ report: r, onChanged }: { report: Report; onChanged: () =>
       setBusy(false);
     }
   };
-  const setStatus = (status: Status) => run(() => patch(`/admin/feedback/${r.id}`, { status }));
-  const saveNote = () => run(() => patch(`/admin/feedback/${r.id}`, { adminNote: note.trim() || null }));
+  const setStatus = (status: Status) =>
+    run(() => patch(`/admin/feedback/${encodeURIComponent(r.id)}`, { status }));
+  const saveNote = () =>
+    run(() => patch(`/admin/feedback/${encodeURIComponent(r.id)}`, { adminNote: note.trim() || null }));
   const remove = () => {
     if (!window.confirm("Delete this report for good? Use this for spam.")) return;
-    void run(() => del(`/admin/feedback/${r.id}`));
+    void run(() => del(`/admin/feedback/${encodeURIComponent(r.id)}`));
   };
   const showShot = async () => {
     setBusy(true);
     setError(null);
     try {
-      setShot((await api<{ screenshot: string }>(`/admin/feedback/${r.id}/screenshot`)).screenshot);
+      const { screenshot } = await api<{ screenshot: string }>(
+        `/admin/feedback/${encodeURIComponent(r.id)}/screenshot`,
+      );
+      if (!isImageDataUrl(screenshot)) throw new Error("that screenshot isn't an image");
+      setShot(screenshot);
     } catch (e) {
       setError(errorText(e));
     } finally {
       setBusy(false);
     }
   };
-  /** The full-size image in a new browser tab (a data: URL can't be opened directly). */
-  const openShot = async () => {
+  /**
+   * The full-size image in a new browser tab (a data: URL can't be opened directly). Decoded here
+   * rather than with fetch(), which the site's connect-src policy refuses for data: URLs.
+   */
+  const openShot = () => {
     if (!shot) return;
-    const blob = await (await fetch(shot)).blob();
+    const [head, body] = shot.split(",", 2);
+    const type = /^data:(image\/(?:jpeg|png|webp));base64$/.exec(head ?? "")?.[1];
+    if (!type || !body) return;
+    const bytes = Uint8Array.from(atob(body), (ch) => ch.charCodeAt(0));
+    const blob = new Blob([bytes], { type });
     const url = URL.createObjectURL(blob);
     window.open(url, "_blank", "noopener");
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
@@ -240,13 +271,17 @@ function ReportItem({ report: r, onChanged }: { report: Report; onChanged: () =>
       {facts.length > 0 && <p className="small faint report-facts">{facts.join(" · ")}</p>}
       {c.url && (
         <p className="small faint report-url">
-          <a href={c.url} target="_blank" rel="noopener noreferrer">
-            {c.url}
-          </a>
+          {link ? (
+            <a href={link} target="_blank" rel="noopener noreferrer">
+              {link}
+            </a>
+          ) : (
+            c.url
+          )}
         </p>
       )}
       {shot && (
-        <button type="button" className="report-shot" onClick={() => void openShot()} title="Open full size">
+        <button type="button" className="report-shot" onClick={openShot} title="Open full size">
           <img src={shot} alt="The sender's screenshot" />
         </button>
       )}
