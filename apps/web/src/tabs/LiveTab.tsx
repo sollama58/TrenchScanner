@@ -136,6 +136,13 @@ export function LiveTab({
   }, [filled, allLoaded, apiHasMore, depth, maxDepth]);
   // Back to reading the first page alone when the feed changes.
   useEffect(() => setDepth(1), [highConviction]);
+  // Paged back: read only as deep as the page on screen, growing again (above) if it comes up
+  // short. Kept at its depth, every page read on the way out stayed polled for good.
+  const lastPage = useRef(page);
+  useEffect(() => {
+    if (page < lastPage.current) setDepth((d) => Math.min(d, page));
+    lastPage.current = page;
+  }, [page]);
   const shownCards = filled?.shown;
   const hiddenCount = filled?.hiddenHere ?? 0;
 

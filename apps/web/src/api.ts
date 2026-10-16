@@ -328,6 +328,8 @@ export interface CuratedMeta {
   peakPct?: number | null;
   /** That Peak as a market cap, null until it traded above the call (absent from older API builds). */
   peakMcapUsd?: number | null;
+  /** When that Peak came; null when unknown (absent from older API builds). */
+  peakAt?: string | null;
   /** The Narrative seat's later view of the call, once the deep read decided; null until then. */
   narrative?: { verdict: "agrees" | "warns"; at: string } | null;
   aiReview?: AdminAiReview;

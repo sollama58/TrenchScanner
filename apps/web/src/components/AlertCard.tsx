@@ -1216,21 +1216,28 @@ const SCORE_HINT = "Rank score 0-100, not a probability";
  *
  * A card a call folded into keeps the filter alert's market cap, while the call's Peak is from its
  * own alert price (up to hours apart, so possibly far lower): the call's high is re-based onto the
- * card's market cap first. Older API builds send no peakMcapUsd and keep the call's percentage.
+ * card's market cap first, and only when it came at or after the filter alert (peakAt) - a run that
+ * peaked and pulled back before the filter fired is no run above its price. That Peak is never
+ * timed by the call's runPeakMinutes, which count from the call, not the alert the card shows.
+ * Older API builds send no peakMcapUsd and keep the call's percentage.
  */
 export function recordedPeakOf(card: Card): { pct: number | null; isRunPeak: boolean } {
   const curated = card.curated;
   const runPeak = curated?.outcome.peak24hReturnPct ?? null;
   const callPeak = curated?.peakPct ?? runPeak;
   const alertMcap = card.snapshot.marketCapUsd;
-  const callHere =
-    card.kind === "match" && curated && curated.peakMcapUsd !== undefined
-      ? curated.peakMcapUsd !== null && alertMcap > 0
-        ? (curated.peakMcapUsd / alertMcap - 1) * 100
-        : null
-      : callPeak;
+  const folded = card.kind === "match" && !!curated && curated.peakMcapUsd !== undefined;
+  const peakAt = curated?.peakAt ? Date.parse(curated.peakAt) : NaN;
+  const callHere = folded
+    ? curated.peakMcapUsd != null && alertMcap > 0 && peakAt >= Date.parse(card.matchedAt)
+      ? (curated.peakMcapUsd / alertMcap - 1) * 100
+      : null
+    : callPeak;
   const pct = maxKnown(callHere, card.peakReturnPct);
-  return { pct, isRunPeak: pct !== null && pct === callHere && runPeak !== null && callPeak === runPeak };
+  return {
+    pct,
+    isRunPeak: !folded && pct !== null && pct === callHere && runPeak !== null && callPeak === runPeak,
+  };
 }
 
 /**

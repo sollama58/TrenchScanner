@@ -10,22 +10,35 @@ import {
   walletCountText,
 } from "./AlertCard";
 
+/** The card's alert time, and a moment after and before it. */
+const ALERTED = "2026-10-16T12:00:00.000Z";
+const AFTER = "2026-10-16T12:30:00.000Z";
+const BEFORE = "2026-10-16T11:20:00.000Z";
+
 /** Just the fields recordedPeakOf reads. */
 function card(over: {
   kind: Card["kind"];
   alertMcap: number;
   peakReturnPct?: number | null;
-  curated?: { peakPct?: number | null; peakMcapUsd?: number | null; runPeak?: number | null } | null;
+  curated?: {
+    peakPct?: number | null;
+    peakMcapUsd?: number | null;
+    peakAt?: string | null;
+    runPeak?: number | null;
+  } | null;
 }): Card {
   const c = over.curated;
   return {
     kind: over.kind,
+    matchedAt: ALERTED,
     snapshot: { marketCapUsd: over.alertMcap },
     peakReturnPct: over.peakReturnPct ?? null,
     curated: c
       ? {
           peakPct: c.peakPct,
-          ...(c.peakMcapUsd !== undefined ? { peakMcapUsd: c.peakMcapUsd } : {}),
+          ...(c.peakMcapUsd !== undefined
+            ? { peakMcapUsd: c.peakMcapUsd, peakAt: c.peakAt !== undefined ? c.peakAt : AFTER }
+            : {}),
           outcome: { peak24hReturnPct: c.runPeak ?? null, runPeakMinutes: 12 },
         }
       : null,
@@ -44,6 +57,42 @@ describe("recordedPeakOf", () => {
       }),
     );
     expect(peak.pct).toBeCloseTo(233.33, 1);
+    expect(peak.isRunPeak).toBe(false);
+  });
+
+  it("leaves out a folded call's peak from before the filter alert", () => {
+    // Called at $10k, peaked at $60k at 11:20, caught by the filter at $30k at 12:00 and never higher.
+    const peak = recordedPeakOf(
+      card({
+        kind: "match",
+        alertMcap: 30_000,
+        peakReturnPct: null,
+        curated: { peakPct: 500, peakMcapUsd: 60_000, peakAt: BEFORE, runPeak: 500 },
+      }),
+    );
+    expect(peak).toEqual({ pct: null, isRunPeak: false });
+
+    // Its time unknown: not re-based either.
+    const unknown = recordedPeakOf(
+      card({
+        kind: "match",
+        alertMcap: 30_000,
+        peakReturnPct: 10,
+        curated: { peakPct: 500, peakMcapUsd: 60_000, peakAt: null, runPeak: 500 },
+      }),
+    );
+    expect(unknown.pct).toBe(10);
+  });
+
+  it("does not time a folded call's peak by the call's run peak minutes", () => {
+    const peak = recordedPeakOf(
+      card({
+        kind: "match",
+        alertMcap: 60_000,
+        peakReturnPct: 10,
+        curated: { peakPct: 900, peakMcapUsd: 200_000, runPeak: 900 },
+      }),
+    );
     expect(peak.isRunPeak).toBe(false);
   });
 

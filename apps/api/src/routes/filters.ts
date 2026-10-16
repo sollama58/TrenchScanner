@@ -217,11 +217,13 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
         // Switched on from off: it starts from what newly matches, not the backlog (armedAt).
         data: { isActive: true, ...(existing.isActive ? {} : { armedAt: new Date() }) },
       });
-      return { row, boardChanged: existing.shareOnLeaderboard };
+      return { row, boardChanged: existing.shareOnLeaderboard, switched: !existing.isActive };
     });
     if (!activated) return reply.code(404).send({ error: "filter not found" });
     // The board shows which shared filters are active now.
     if (activated.boardChanged) filterLeaderboardCache.clear();
+    // "Only alerts both caught" counts active filters alone: its cached stats change with this.
+    if (activated.switched) clearReaderCaches(userId);
     return activated.row;
   });
 
@@ -266,10 +268,14 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       return {
         updated,
         boardChanged: existing.shareOnLeaderboard || updated.shareOnLeaderboard,
+        switched: existing.isActive !== updated.isActive,
       };
     });
     if ("updated" in result) {
       if (result.boardChanged) filterLeaderboardCache.clear();
+      // "Only alerts both caught" counts active filters alone (its feed, stats and returns), and
+      // those answers are cached per reader: switching a filter on or off changes them now.
+      if (result.switched) clearReaderCaches(userId);
       return result.updated;
     }
     if (result.error === 404) return reply.code(404).send({ error: "filter not found" });

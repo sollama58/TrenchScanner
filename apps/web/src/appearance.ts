@@ -348,16 +348,20 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
   });
 }
 
-/** Whether two appearances look the same (hidden fields in any order). */
-/** The default look, keeping the reader's tab choices (optional tabs aren't part of how cards look). */
+/**
+ * The default look, keeping the reader's tab and token-view choices (Settings' switches, not part
+ * of how cards look - as withPreset keeps them).
+ */
 export function defaultLook(current: FeedAppearance): FeedAppearance {
   return {
     ...DEFAULT_APPEARANCE,
     streamTab: current.streamTab,
     hideLighthouseTab: current.hideLighthouseTab,
+    hideSafetyPill: current.hideSafetyPill,
   };
 }
 
+/** Whether two appearances look the same (hidden fields in any order). */
 export function sameAppearance(a: FeedAppearance, b: FeedAppearance): boolean {
   const key = (x: FeedAppearance) => JSON.stringify({ ...x, hidden: [...x.hidden].sort() });
   return key(a) === key(b);

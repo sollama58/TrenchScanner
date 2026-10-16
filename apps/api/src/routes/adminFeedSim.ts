@@ -6,7 +6,13 @@ import { summarizeFeed, type FeedStats } from "../feedStats.js";
 import { CURATED_MATCH_LINK_WINDOW_MS } from "../curatedFeed.js";
 import { contestState } from "../contest.js";
 import type { Env } from "@trenchscanner/core";
-import { feedStatsCards, openOutcomeRows, STATS_CALL_SELECT, STATS_MATCH_SELECT } from "./matches.js";
+import {
+  calledNear,
+  feedStatsCards,
+  openOutcomeRows,
+  STATS_CALL_SELECT,
+  STATS_MATCH_SELECT,
+} from "./matches.js";
 
 /**
  * The Admin feed simulator: how a feed made of any models and any switched-on filters would have
@@ -69,6 +75,20 @@ export function dedupeByToken<T extends { tokenId: string; matchedAt: Date }>(
   return kept.reverse();
 }
 
+/**
+ * The "both" row's filter alerts: those a call stands beside (calledNear), then deduped. Paired
+ * first, as the both-only feed does: deduping first kept a token's oldest alert, and when that one
+ * was more than the fold window from the call while a later one (another picked filter's) was
+ * within it, the token went uncounted though the reader's both-only feed shows that later card.
+ */
+export function bothCaughtMatches<T extends { tokenId: string; matchedAt: Date }>(
+  newestFirst: readonly T[],
+  calls: readonly { tokenId: string; createdAt: Date }[],
+): T[] {
+  const near = calledNear(calls);
+  return dedupeByToken(newestFirst.filter((m) => near(m.tokenId, m.matchedAt)));
+}
+
 export async function registerAdminFeedSimRoutes(
   app: FastifyInstance,
   opts: { env: Env; reports: ReportCaches },
@@ -123,7 +143,8 @@ export async function registerAdminFeedSimRoutes(
              GROUP BY 1`,
     ]);
     const matches = dedupeByToken(rawMatches);
-    const rowById = await openOutcomeRows(matches);
+    const bothMatches = bothCaughtMatches(rawMatches, calls);
+    const rowById = await openOutcomeRows([...new Set([...matches, ...bothMatches])]);
     // Calls before the window only pair with a filter alert; on their own they're outside it.
     const callsInWindow = calls.filter((c) => c.createdAt >= since);
     const filterSide = { count: filterIds.length, wins, since };
@@ -137,7 +158,7 @@ export async function registerAdminFeedSimRoutes(
             ? feedStatsCards(matches, [], rowById, false)
             : mode === "either"
               ? feedStatsCards(matches, callsInWindow, rowById, false)
-              : feedStatsCards(matches, calls, rowById, true);
+              : feedStatsCards(bothMatches, calls, rowById, true);
       return {
         mode,
         stats: summarizeFeed(cards, hours),

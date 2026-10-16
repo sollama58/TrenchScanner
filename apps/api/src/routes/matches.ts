@@ -24,6 +24,8 @@ import {
   resolveOutcome,
   CURATED_MATCH_LINK_WINDOW_MS,
   callPeakPct,
+  callPeakAt,
+  foldedCallPeakPct,
   type CallGroup,
   type CuratedAlertWithRelations,
   type ModelCall,
@@ -393,6 +395,9 @@ export const STATS_MATCH_SELECT = {
   id: true,
   tokenId: true,
   peakReturnPct: true,
+  // The card's alert market cap (matchAlertSnapshot), which a folded call's Peak re-bases onto.
+  alertMcapUsd: true,
+  snapshot: { select: { priceUsd: true, marketCapUsd: true } },
   ...MATCH_OUTCOME_SELECT,
   token: { select: { symbol: true } },
 } satisfies Prisma.MatchSelect;
@@ -413,6 +418,7 @@ export const STATS_CALL_SELECT = {
   outcomeFinalizedAt: true,
   anchorMcapUsd: true,
   peakMcapUsd: true,
+  peakMcapAt: true,
   candidateOutcome: curatedAlertInclude.candidateOutcome,
   token: { select: { symbol: true } },
 } satisfies Prisma.CuratedAlertSelect;
@@ -433,7 +439,15 @@ export function feedStatsCards(
   type StatsCard = FeedStatsCard & {
     id: string;
     matchedAt: Date;
-    curated: { alertId: string; card: FeedStatsCard } | null;
+    /** A filter alert's market cap as its card shows it; 0 on a call's. */
+    alertMcapUsd: number;
+    curated: {
+      alertId: string;
+      card: FeedStatsCard;
+      /** The call's Peak as a market cap, and when it came (curatedMeta's peakMcapUsd, peakAt). */
+      peakMcapUsd: number | null;
+      peakAt: Date | null;
+    } | null;
   };
   const near = bothOnly ? calledNear(calls) : null;
   const kept = near ? matches.filter((m) => near(m.tokenId, m.matchedAt)) : matches;
@@ -444,6 +458,7 @@ export function feedStatsCards(
       kind: "match",
       tokenId: m.tokenId,
       matchedAt: m.matchedAt,
+      alertMcapUsd: matchAlertSnapshot(m.snapshot, m.alertMcapUsd).marketCapUsd,
       symbol: m.token.symbol,
       outcome,
       // The card's ATH figure for a filter alert.
@@ -454,14 +469,26 @@ export function feedStatsCards(
   // Several followed models calling one token are one card, graded on its first call.
   const callCards: StatsCard[] = groupSameTokenCalls(calls, CURATED_MATCH_LINK_WINDOW_MS).map(({ lead }) => {
     const outcome = resolveOutcome(lead);
+    const peakPct = callPeakPct(outcome.peak24hReturnPct, lead);
     const card: FeedStatsCard = {
       kind: "curated",
       tokenId: lead.tokenId,
       symbol: lead.token.symbol,
       outcome,
-      peakPct: callPeakPct(outcome.peak24hReturnPct, lead),
+      peakPct,
     };
-    return { ...card, id: lead.id, matchedAt: lead.createdAt, curated: { alertId: lead.id, card } };
+    return {
+      ...card,
+      id: lead.id,
+      matchedAt: lead.createdAt,
+      alertMcapUsd: 0,
+      curated: {
+        alertId: lead.id,
+        card,
+        peakMcapUsd: peakPct !== null && peakPct > 0 ? lead.anchorMcapUsd * (1 + peakPct / 100) : null,
+        peakAt: callPeakAt(outcome.peak24hReturnPct, outcome.runPeakMinutes, lead),
+      },
+    };
   });
   // A model call on a token the reader's filter also caught is one card. It keeps the filter
   // alert's price, so it keeps that alert's verdict too, as the feed card grades it: a call at
@@ -474,8 +501,9 @@ export function feedStatsCards(
           kind: "match",
           tokenId: c.tokenId,
           outcome: c.outcome,
-          // The better of the two alerts' runs, as the card shows it.
-          peakPct: maxPct(c.peakPct, c.curated.card.peakPct),
+          // The better of the two alerts' runs, as the card shows it (recordedPeakOf): the call's
+          // re-based onto the filter alert's price, and only when it came at or after that alert.
+          peakPct: maxPct(c.peakPct, foldedCallPeakPct(c.curated, c.matchedAt, c.alertMcapUsd)),
         }
       : c,
   );
