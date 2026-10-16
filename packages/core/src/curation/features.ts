@@ -287,6 +287,9 @@ export const CANDIDATE_FEATURE_NAMES = [
   "devSoldShare",
   // Added 2026-10-04: of the launch's first 25 buyers, how many still hold it (null until the
   // launch has been read - from the chain since 2026-10-05, the worker's launchSnipers.ts).
+  // Pending (user decision 2026-10-16): at the retrain that adds the waiting wallet metrics, swap
+  // this for tradeFlow.firstBuyersHoldingCut (buyers holding 0.1% of the supply or more, the
+  // figure the card shows), left null on rows banked before 2026-10-16 rather than backfilled.
   "firstBuyersHolding",
   // Added 2026-10-04: Claude's read of the launch's own name and description, 0-1 each
   // (curation/textFeatures.ts). Null until the mint has been read, and on rows banked before.
