@@ -249,3 +249,79 @@ describe("OnDemandLiveRefresher batching", () => {
     void two;
   });
 });
+
+describe("OnDemandLiveRefresher failures", () => {
+  it("lets every reader sharing a failed call go, and tries its tokens again next time", async () => {
+    let fail = true;
+    const client = {
+      calls: 0,
+      getTokensByAddresses: async () => {
+        client.calls += 1;
+        if (fail) throw new Error("dexscreener down");
+        return [];
+      },
+    };
+    const r = new OnDemandLiveRefresher(client as unknown as DexScreenerClient, {
+      maxAgeMs: MINUTE,
+      limit: 30,
+    });
+    const results = await Promise.allSettled([
+      r.refresh([token("A", null)], NOW),
+      r.refresh([token("B", null)], NOW),
+    ]);
+    expect(results.map((x) => x.status)).toEqual(["rejected", "rejected"]);
+    expect(client.calls).toBe(1);
+    // Not cooled down: the failure learned nothing about them.
+    expect(mints(r.selectDue([token("A", null), token("B", null)], NOW + 1))).toEqual(["A", "B"]);
+    fail = false;
+    expect(await r.refresh([token("A", null)], NOW + 2)).toBe(1);
+    expect(r.stats()).toMatchObject({ lookups: 2, failures: 1 });
+  });
+
+  it("gives up on a lookup that never answers, freeing its place for the next ones", async () => {
+    let hang = true;
+    const client = {
+      calls: 0,
+      getTokensByAddresses: () => {
+        client.calls += 1;
+        return hang ? new Promise<never>(() => {}) : Promise.resolve([]);
+      },
+    };
+    const r = new OnDemandLiveRefresher(client as unknown as DexScreenerClient, {
+      maxAgeMs: MINUTE,
+      limit: 30,
+      batchWindowMs: 0,
+      lookupDeadlineMs: 50,
+    });
+    // Four hung lookups fill every place; a fifth is skipped rather than queued behind them.
+    const hung: Promise<number>[] = [];
+    for (const [i, m] of ["A", "B", "C", "D"].entries()) {
+      const p = r.refresh([token(m, null)], NOW + i * 1_000);
+      p.catch(() => undefined);
+      hung.push(p);
+      // Past the (zero) batch window, so each goes out as its own lookup.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(await r.refresh([token("E", null)], NOW + 5_000)).toBe(0);
+    expect(r.stats()).toMatchObject({ backlogged: 1 });
+    // Past the deadline they fail, release their places, and their tokens are due again.
+    expect((await Promise.allSettled(hung)).every((x) => x.status === "rejected")).toBe(true);
+    expect(r.stats()).toMatchObject({ timedOut: 4 });
+    hang = false;
+    expect(await r.refresh([token("A", null), token("E", null)], NOW + 6_000)).toBe(2);
+    expect(client.calls).toBe(5);
+  });
+
+  it("answers a waiting tick on time when the shared lookup hangs", async () => {
+    const client = { getTokensByAddresses: () => new Promise<never>(() => {}) };
+    const r = new OnDemandLiveRefresher(client as unknown as DexScreenerClient, {
+      maxAgeMs: MINUTE,
+      limit: 30,
+      lookupDeadlineMs: 10_000,
+    });
+    void r.refresh([token("A", null)]).catch(() => undefined);
+    const started = Date.now();
+    expect(await r.refreshAndWait([token("A", null)], { maxAgeMs: 8_000, timeoutMs: 50 })).toBe(true);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});

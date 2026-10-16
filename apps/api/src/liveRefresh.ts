@@ -22,6 +22,11 @@ const BATCH_WINDOW_MS = 250;
  * 2026-10-16). A few at once is what the gate passes without a queue.
  */
 const MAX_LOOKUPS_IN_FLIGHT = 4;
+/**
+ * See OnDemandLiveRefresher.withDeadline. Past DexScreener's 5 s batch timeout plus the
+ * fallback's 4 s, with room for the writes after.
+ */
+const LOOKUP_DEADLINE_MS = 15_000;
 
 /** The shape GET /matches already has to hand for every token on the page. */
 export interface RefreshableToken {
@@ -62,6 +67,8 @@ export interface OnDemandLiveRefresherOptions {
    * BATCH_WINDOW_MS). Short next to DexScreener's own 150-450 ms answer and the live tick's wait.
    */
   batchWindowMs?: number;
+  /** The longest a lookup holds its place before it counts as failed (default LOOKUP_DEADLINE_MS). */
+  lookupDeadlineMs?: number;
 }
 
 /**
@@ -102,6 +109,7 @@ export class OnDemandLiveRefresher {
   /** Batches opened and not yet answered - see MAX_LOOKUPS_IN_FLIGHT. */
   private lookupsInFlight = 0;
   private readonly batchWindowMs: number;
+  private readonly lookupDeadlineMs: number;
   private readonly attemptedAt = new Map<string, number>();
   private readonly calls: number[] = [];
   /**
@@ -124,6 +132,8 @@ export class OnDemandLiveRefresher {
     userOverBudget: 0,
     /** The subset of overBudget skipped because MAX_LOOKUPS_IN_FLIGHT lookups were still out. */
     backlogged: 0,
+    /** Lookups given up on at lookupDeadlineMs (not in failures: they may still answer later). */
+    timedOut: 0,
     since: new Date(),
   };
   /** Age (ms) of the oldest reading in each live tick answer, newest last - see noteServed. */
@@ -136,6 +146,7 @@ export class OnDemandLiveRefresher {
     private readonly options: OnDemandLiveRefresherOptions,
   ) {
     this.batchWindowMs = options.batchWindowMs ?? BATCH_WINDOW_MS;
+    this.lookupDeadlineMs = options.lookupDeadlineMs ?? LOOKUP_DEADLINE_MS;
   }
 
   /**
@@ -248,8 +259,23 @@ export class OnDemandLiveRefresher {
     this.lookupsInFlight += 1;
     // Joiners add to this list until the batch goes out, so the lookup reads it then.
     const members = [...tokens];
+    // Each member's attempt mark as start() set it, so a failure clears this batch's marks only.
+    const marks = new Map(members.map((t) => [t.mintAddress, this.attemptedAt.get(t.mintAddress)]));
     const lookup: Promise<number> = ready
-      .then(() => this.lookup(members))
+      .then(() => {
+        for (const t of members)
+          if (!marks.has(t.mintAddress)) marks.set(t.mintAddress, this.attemptedAt.get(t.mintAddress));
+        return this.withDeadline(this.lookup(members));
+      })
+      .catch((err: unknown) => {
+        // A failed or timed-out lookup learned nothing, so its tokens are not cooled down: the
+        // next tick may try them again (budget allowing), and the worker's once-a-minute refresh
+        // keeps them moving meanwhile.
+        for (const [mint, at] of marks) {
+          if (at !== undefined && this.attemptedAt.get(mint) === at) this.attemptedAt.delete(mint);
+        }
+        throw err;
+      })
       .finally(() => {
         this.lookupsInFlight -= 1;
         // Only this batch's entries: a later batch may already hold one of these mints again.
@@ -269,6 +295,26 @@ export class OnDemandLiveRefresher {
       batch.timer.unref?.();
     }
     return batch;
+  }
+
+  /**
+   * The lookup, or a rejection once lookupDeadlineMs has passed. DexScreener's own timeout and the
+   * client's fallback normally answer well inside it; this is the backstop for a call that never
+   * settles, which would otherwise hold its MAX_LOOKUPS_IN_FLIGHT slot (and stop every live
+   * refresh once all of them were held) and leave its tokens marked in flight for good. A lookup
+   * that finishes after it still writes what it found.
+   */
+  private withDeadline(lookup: Promise<number>): Promise<number> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        this.counters.timedOut += 1;
+        reject(new Error(`live lookup still unanswered after ${this.lookupDeadlineMs} ms`));
+      }, this.lookupDeadlineMs);
+      timer.unref?.();
+    });
+    lookup.catch(() => undefined);
+    return Promise.race([lookup, deadline]).finally(() => clearTimeout(timer));
   }
 
   private flush(batch: Batch): void {
