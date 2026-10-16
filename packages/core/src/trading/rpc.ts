@@ -118,6 +118,8 @@ export interface MintInfo {
   freezeAuthority: string | null;
   /** Token-2022 extension names, as the RPC's jsonParsed encoding names them. */
   extensions: string[];
+  /** Absent when the RPC didn't say. */
+  decimals?: number;
 }
 
 export class TradingRpc implements GuardRpc {
@@ -282,6 +284,7 @@ export class TradingRpc implements GuardRpc {
             info?: {
               mintAuthority?: string | null;
               freezeAuthority?: string | null;
+              decimals?: number;
               extensions?: { extension?: string }[];
             };
           };
@@ -296,6 +299,7 @@ export class TradingRpc implements GuardRpc {
       mintAuthority: info.mintAuthority ?? null,
       freezeAuthority: info.freezeAuthority ?? null,
       extensions: (info.extensions ?? []).map((e) => e.extension ?? "unknown"),
+      ...(typeof info.decimals === "number" ? { decimals: info.decimals } : {}),
     };
   }
 

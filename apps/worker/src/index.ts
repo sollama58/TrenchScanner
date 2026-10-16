@@ -54,6 +54,7 @@ import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
 import { reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
 import { createTradingBotRunner } from "./jobs/tradingBotJob.js";
+import { createPaperTradingRunner } from "./jobs/paperTradingJob.js";
 import {
   scheduleInterval,
   scheduleDailyAt,
@@ -139,6 +140,8 @@ const SHUTDOWN_GRACE_MS = 20_000;
 const REVIEW_DRAIN_SLACK_MS = 2_000;
 /** What a shutdown allows the interrupted-run heartbeats and the disconnect after the grace. */
 const SHUTDOWN_WRITES_MS = 8_000;
+/** How often paper strategies are walked (runPaperTrading). */
+const PAPER_TRADING_INTERVAL_MS = 10_000;
 /** How often the composite score's weights are refit (runScoreWeightsJob). */
 const SCORE_WEIGHTS_INTERVAL_HOURS = 6;
 
@@ -380,6 +383,14 @@ async function main() {
       }),
     );
   }
+  // Paper trading (admin-only): simulated strategies on live signals and quotes. Never signs or
+  // sends, so it runs whether or not the bot above is on - see packages/core/src/trading/paper.ts.
+  schedule("paper-trading", () => {
+    const runPaperTrading = createPaperTradingRunner(env);
+    return scheduleInterval("paper-trading", runPaperTrading, PAPER_TRADING_INTERVAL_MS / 60_000, {
+      deadlineMinutes: 5,
+    });
+  });
   // Says when a stage of the alert path stops producing (new tokens, decision moments, TokenSage
   // reads, model alerts, Telegram delivery) although every job is still running, and tells the
   // admin wallets' private Telegram chats - see runPipelineWatch. A stall that lasts 10 minutes

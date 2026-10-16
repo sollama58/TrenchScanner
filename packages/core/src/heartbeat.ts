@@ -26,7 +26,8 @@ export type HeartbeatJob =
   | "kol-wallets"
   | "telegram-dispatch"
   | "pipeline-watch"
-  | "trading-bot";
+  | "trading-bot"
+  | "paper-trading";
 
 /**
  * Which worker process runs a job. The worker is deployed as two processes (render.yaml): the
@@ -53,6 +54,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   // wallets (kms:Decrypt), so those credentials live nowhere else, and a slow scan cycle or a
   // crashed retrain never delays a stop-loss.
   "trading-bot": "trader",
+  // Paper trading holds no key and sends nothing; it reads signals as they land, beside the scan.
+  "paper-trading": "scanner",
   cleanup: "trainer",
   "outcome-tracking": "trainer",
   "curator-training": "trainer",

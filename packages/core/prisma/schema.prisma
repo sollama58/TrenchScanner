@@ -91,6 +91,7 @@ model User {
   telegramChats     TelegramChat[]
   tradingWallet     TradingWallet?
   tradingBot        TradingBot?
+  paperStrategies   PaperStrategy[]
 }
 
 /// A single-use code, shown as a QR on a signed-in desktop, that mints a session on a phone.
@@ -2198,6 +2199,101 @@ model TradingOrder {
   settledAt            DateTime?
 
   @@index([status])
+  @@index([positionId])
+}
+
+/// A paper-trading strategy (admin-only): the trading bot's settings run against live signals
+/// and live Jupiter quotes with simulated SOL - no wallet, no transaction (trading/paper.ts).
+/// An admin keeps several and runs up to MAX_RUNNING_PAPER_STRATEGIES at once.
+model PaperStrategy {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name             String
+  /// Buying new signals. Stopping it leaves open positions on their exit plans.
+  running          Boolean   @default(false)
+  /// trading/paper.ts validates it: the bot's settings plus the simulated fill penalty.
+  config           Json
+  /// The simulated SOL it started with, and what it holds now outside positions.
+  bankrollLamports BigInt
+  cashLamports     BigInt
+  /// Bumped by a reset; a pass's cash change applies only under the reset it read.
+  resetAt          DateTime  @default(now())
+  /// As on TradingBot: signals before this are never bought, and filters re-armed after
+  /// configSavedAt wait for the settings to be saved again.
+  signalsFrom      DateTime  @default(now())
+  configSavedAt    DateTime  @default(now())
+  lastRunAt        DateTime?
+  lastError        String?
+  /// The last signals it passed on and why (newest first, a few dozen), for the admin to read.
+  recentSkips      Json      @default("[]")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  positions PaperPosition[]
+
+  @@index([userId])
+  @@index([running])
+}
+
+/// One simulated entry into one token; a strategy enters a mint at most once, as the bot does.
+/// Raw token amounts are decimal strings (a u64 can exceed BIGINT).
+model PaperPosition {
+  id               String        @id @default(cuid())
+  strategyId       String
+  strategy         PaperStrategy @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  mint             String
+  symbol           String?
+  sourceKind       String
+  sourceRef        String
+  sourceLabel      String
+  signalAt         DateTime
+  /// "open" -> "closed"
+  status           String
+  /// SOL into the swap (what the exit multiple is measured against), and fees on top of it.
+  swapInLamports   BigInt
+  feesLamports     BigInt        @default(0)
+  tokensBought     String
+  tokensHeld       String
+  decimals         Int
+  exitPlan         Json
+  rungsTaken       Int           @default(0)
+  /// Highest multiple since the first sale (the trail's anchor), and over the whole hold.
+  highMultiple     Float?
+  peakMultiple     Float?
+  lastMultiple     Float?
+  lastPricedAt     DateTime?
+  /// SOL back from sales, after their fees.
+  proceedsLamports BigInt        @default(0)
+  closeRequested   Boolean       @default(false)
+  openedAt         DateTime
+  closedAt         DateTime?
+  closeReason      String?
+  error            String?
+  createdAt        DateTime      @default(now())
+
+  fills PaperFill[]
+
+  @@unique([strategyId, mint])
+  @@index([status])
+}
+
+/// One simulated swap, priced from a live Jupiter quote.
+model PaperFill {
+  id          String        @id @default(cuid())
+  positionId  String
+  position    PaperPosition @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  /// "buy" or "sell"; the reason is "entry" or the exit's (take_profit, stop_loss, ...).
+  side        String
+  reason      String
+  rung        Int?
+  /// SOL in (buy) or out (sell) of the swap itself, and the fees counted on top.
+  lamports    BigInt
+  feeLamports BigInt
+  tokens      String
+  multiple    Float?
+  createdAt   DateTime      @default(now())
+
   @@index([positionId])
 }
 

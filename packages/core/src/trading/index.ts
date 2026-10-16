@@ -10,3 +10,4 @@ export * from "./wallets.js";
 export * from "./txGuard.js";
 export * from "./serverWallet.js";
 export * from "./backtest.js";
+export * from "./paper.js";

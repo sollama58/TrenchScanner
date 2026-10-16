@@ -202,6 +202,10 @@ the bot should trade, and keep the rest elsewhere.
 For local development, `TRADING_KEY_PROVIDER=local` with `TRADING_LOCAL_MASTER_KEY`
 (`openssl rand -hex 32`) replaces KMS; it is refused when `NODE_ENV=production`.
 
+### Paper trading
+
+Admin -> Trading bot -> Paper trading runs the bot's settings on simulated SOL, and it works while the real bot is off. A strategy reads the same live signals the bot would: its filters' matches and its models' calls, through the AI gate. It applies the same limits (fresh signals only, one entry per token, open positions, 24h spend, reserve) and refuses the same risky mints. It fills each entry and sale at a live Jupiter quote, less its fill penalty (1% by default), charges the network fee plus the Jito tip, and sells on its exit plan. Nothing holds a key or sends a transaction. The `paper-trading` job runs every 10 seconds on the scanner (`packages/core/src/trading/paper.ts`). Each admin keeps up to 10 strategies and runs up to 3 at once. Each strategy shows its equity, result, win rate, the share of entries that reached 2x, its trades, and the signals it passed on and why.
+
 ## Admin Panel
 
 A wallet listed in `ADMIN_WALLET_ADDRESSES` (comma-separated base58 addresses; empty by default) sees an extra **Admin** tab in the dashboard, backed by `GET`/`POST /admin/*` on the API (every route 403s anyone else - see `apps/api/src/routes/admin.ts`). Admin status is config, not a DB column, so promoting/demoting an admin is a one-line env change rather than a manual DB write. It covers:
