@@ -21,7 +21,7 @@ import { onWalletsChanged } from "../wallet";
 import { openWallet } from "../walletModal";
 import { Skeleton } from "../components/Charts";
 import { TokenModal } from "../components/TokenModal";
-import { ChartIcon, FlameIcon, SearchIcon, ToolsIcon } from "../components/Icons";
+import { ChartIcon, FlameIcon, SearchIcon, ToolsIcon, WalletIcon } from "../components/Icons";
 import { SideWalletChecker } from "./SideWalletChecker";
 
 /** Mirrors apps/api/src/routes/utilities.ts GET /utilities. */
@@ -60,7 +60,7 @@ const MAX_CREDITS_PER_BURN = 100;
 const CREDIT_PICKS = [1, 10, 25, 50, 100];
 const CLAIM_EVERY_MS = 5_000;
 const CLAIM_SLOW_AFTER_MS = 120_000;
-const SYMBOL = "$ASDFASDFA";
+export const SYMBOL = "$ASDFASDFA";
 
 type Stage = "connecting" | "preparing" | "signing" | "sending";
 const STAGE_TEXT: Record<Stage, string> = {
@@ -70,7 +70,7 @@ const STAGE_TEXT: Record<Stage, string> = {
   sending: "Sending…",
 };
 
-const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
+export const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
 
 /** Why a lookup was refused, in words: the API's own message when it sent one. */
 function lookupError(e: unknown): string {
@@ -201,7 +201,7 @@ function CreditsPanel({
  * Burn Credits tag, so it buys credits and never subscription time; the API reads it back from the
  * chain and credits it once (and the burn reconciler does, if this tab closes first).
  */
-function CreditBurn({
+export function CreditBurn({
   walletAddress,
   overview,
   onCredited,
@@ -472,6 +472,7 @@ const LOOKUP_CARDS = {
     field: "mint",
     eyebrow: "Token lookup",
     title: "Scan any coin",
+    short: "Coin scanner",
     blurb:
       "Paste a contract address for the same view as a coin on the feed: its chart, holders, safety checks, flagged wallets and TokenSage's read. It gets a fresh scan and a fresh TokenSage read.",
     placeholder: "Contract address (CA)",
@@ -482,6 +483,7 @@ const LOOKUP_CARDS = {
     field: "wallet",
     eyebrow: "Wallet lookup",
     title: "Look into any wallet",
+    short: "Wallet scanner",
     blurb:
       "Paste a wallet address to see its full profile: what it holds, who funded it, its risk score and how it traded the coins we track.",
     placeholder: "Wallet address",
@@ -489,15 +491,20 @@ const LOOKUP_CARDS = {
   },
 } as const;
 
-/** Paste an address, pay a credit, see the coin or wallet as the dashboard's own view shows it. */
-function LookupCard({
+/**
+ * Paste an address, pay a credit, see the coin or wallet as the dashboard's own view shows it.
+ * `compact` is the utility panel's version (UtilityDrawer): a short title, no blurb.
+ */
+export function LookupCard({
   utility,
   data,
   onOpened,
+  compact = false,
 }: {
   utility: "token" | "wallet";
   data: UtilitiesOverview | null;
   onOpened: (address: string) => void;
+  compact?: boolean;
 }) {
   const card = LOOKUP_CARDS[utility];
   const [address, setAddress] = useState("");
@@ -524,18 +531,29 @@ function LookupCard({
     }
   };
 
+  const Icon = utility === "token" ? ChartIcon : compact ? WalletIcon : SearchIcon;
+  const Wrap = compact ? "div" : "section";
   return (
-    <section className="panel util-card">
-      <header className="section-head">
-        <div>
-          <span className="eyebrow">
-            {utility === "token" ? <ChartIcon size={13} /> : <SearchIcon size={13} />} {card.eyebrow}
-          </span>
-          <h2>{card.title}</h2>
-        </div>
-        <span className="util-cost num">{plural(cost, "credit")}</span>
-      </header>
-      <p className="muted small">{card.blurb}</p>
+    <Wrap className={compact ? "util-card util-card-compact" : "panel util-card"}>
+      {compact ? (
+        <header className="util-col-head">
+          <h3>
+            <Icon size={14} /> {card.short}
+          </h3>
+          <span className="util-cost num">{plural(cost, "credit")}</span>
+        </header>
+      ) : (
+        <header className="section-head">
+          <div>
+            <span className="eyebrow">
+              <Icon size={13} /> {card.eyebrow}
+            </span>
+            <h2>{card.title}</h2>
+          </div>
+          <span className="util-cost num">{plural(cost, "credit")}</span>
+        </header>
+      )}
+      {!compact && <p className="muted small">{card.blurb}</p>}
       <form className="util-form" onSubmit={(e) => void submit(e)}>
         <input
           type="text"
@@ -552,7 +570,15 @@ function LookupCard({
         />
         <button type="submit" className="primary" disabled={!valid || busy}>
           <SearchIcon size={14} />
-          {busy ? "Looking up…" : open ? "Open (free)" : "Look up"}
+          {busy
+            ? compact
+              ? "Scanning…"
+              : "Looking up…"
+            : open
+              ? "Open (free)"
+              : compact
+                ? "Scan"
+                : "Look up"}
         </button>
       </form>
       {value !== "" && !valid && <p className="muted small">That doesn&apos;t look like a Solana address.</p>}
@@ -561,7 +587,42 @@ function LookupCard({
           {error}
         </p>
       )}
-    </section>
+    </Wrap>
+  );
+}
+
+type Lookup = UtilitiesOverview["lookups"][number];
+
+/**
+ * One lookup in a list: the coin's picture (or the address's first letters) and what it was.
+ * `detail` replaces the default second line (kind · address · when).
+ */
+export function LookupWhat({ lookup: l, detail }: { lookup: Lookup; detail?: React.ReactNode }) {
+  const subject = l.subject ?? "";
+  const label = l.token ? tokenLabel(l.token) : shortAddress(subject);
+  return (
+    <>
+      <TokenImage
+        url={l.token?.imageUrl}
+        size={64}
+        className="avatar util-avatar"
+        width={28}
+        height={28}
+        fallback={
+          <span className="avatar placeholder util-avatar">{label.replace("$", "").slice(0, 2)}</span>
+        }
+      />
+      <span className="util-what">
+        <strong>{label}</strong>
+        <span className="faint small num">
+          {detail ?? (
+            <>
+              {l.utility === "wallet" ? "Wallet" : "Token"} · {shortAddress(subject)} · {ago(new Date(l.at))}
+            </>
+          )}
+        </span>
+      </span>
+    </>
   );
 }
 
@@ -606,26 +667,9 @@ function RecentLookups({
       <ul className="util-list">
         {lookups.map((l, i) => {
           const subject = l.subject ?? "";
-          const label = l.token ? tokenLabel(l.token) : shortAddress(subject);
           return (
             <li key={`${subject}-${l.at}-${i}`}>
-              <TokenImage
-                url={l.token?.imageUrl}
-                size={64}
-                className="avatar util-avatar"
-                width={28}
-                height={28}
-                fallback={
-                  <span className="avatar placeholder util-avatar">{label.replace("$", "").slice(0, 2)}</span>
-                }
-              />
-              <span className="util-what">
-                <strong>{label}</strong>
-                <span className="faint small num">
-                  {l.utility === "wallet" ? "Wallet" : "Token"} · {shortAddress(subject)} ·{" "}
-                  {ago(new Date(l.at))}
-                </span>
-              </span>
+              <LookupWhat lookup={l} />
               {l.utility !== null &&
                 (l.open ? (
                   <button
@@ -664,7 +708,7 @@ function RecentLookups({
 }
 
 /** A paid lookup in the feed's token modal, refreshed while it is open (its scan lands within a minute). */
-function UtilityTokenModal({ mint, onClose }: { mint: string; onClose: () => void }) {
+export function UtilityTokenModal({ mint, onClose }: { mint: string; onClose: () => void }) {
   const path = `/utilities/token/${encodeURIComponent(mint)}`;
   const [poll, setPoll] = useState(10_000);
   const { data, error } = usePolling<UtilityTokenView>(path, poll);
