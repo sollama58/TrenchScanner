@@ -439,6 +439,30 @@ export class DexScreenerClient {
   }
 
   /**
+   * Coins' prices in SOL (SOL per whole token), for valuing a trade paid in another coin - see
+   * tradesFromChainTransactions. Any coin DexScreener prices, directly or through its own quote
+   * coin, on the same short-lived cache as priceInQuoteToken. A coin it can't price is left out;
+   * never throws.
+   */
+  async solPricesOf(mints: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const ask = [...new Set(mints)].filter((m) => m !== WRAPPED_SOL_MINT);
+    if (ask.length === 0) return out;
+    const gate = {
+      acquire: () => this.gate.acquire(),
+      throttled: (delayMs: number) => this.gate.throttled(delayMs),
+    };
+    const usd = await this.quoteUsdPrices([WRAPPED_SOL_MINT, ...ask], gate);
+    const solUsd = usd.get(WRAPPED_SOL_MINT);
+    if (!solUsd) return out;
+    for (const mint of ask) {
+      const price = usd.get(mint);
+      if (price) out.set(mint, price / solUsd);
+    }
+    return out;
+  }
+
+  /**
    * Re-reads, from the per-token pairs endpoint, each mint whose batch answer is a Pump.fun curve
    * at its graduation price. The batch lookup can go on listing only a graduated mint's old curve -
    * frozen at the graduation price forever, with no PumpSwap pool beside it - so the scan priced
