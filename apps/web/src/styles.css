@@ -2782,12 +2782,12 @@ body.drawer-open .util-drawer {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 14px 8px 12px;
+  gap: 10px;
+  padding: 18px 10px 15px;
   margin-right: -1px;
   color: #fff;
   border: none;
-  border-radius: 12px 0 0 12px;
+  border-radius: 15px 0 0 15px;
   background: linear-gradient(180deg, var(--brand-a), var(--brand-b));
   box-shadow:
     -10px 0 28px -12px rgba(110, 90, 255, 0.75),
@@ -2800,7 +2800,7 @@ body.drawer-open .util-drawer {
   background: linear-gradient(180deg, var(--brand-a), var(--brand-b));
   border-color: transparent;
   filter: brightness(1.1);
-  padding-left: 11px;
+  padding-left: 14px;
 }
 .util-drawer-handle:active:not(:disabled) {
   transform: none;
@@ -2812,7 +2812,7 @@ body.drawer-open .util-drawer {
 .util-drawer-handle-text {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 800;
   letter-spacing: 0.22em;
   text-transform: uppercase;

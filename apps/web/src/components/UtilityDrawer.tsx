@@ -92,9 +92,9 @@ function Drawer({ walletAddress, onMore }: { walletAddress: string; onMore: () =
         title={open ? "Close the utilities" : "Coin and wallet scanners, Burn Credits"}
         onClick={toggle}
       >
-        <ToolsIcon size={15} />
-        <span className="util-drawer-handle-text">Utils</span>
-        <ChevronDownIcon size={13} className="util-drawer-chev" />
+        <ToolsIcon size={19} />
+        <span className="util-drawer-handle-text">Utility</span>
+        <ChevronDownIcon size={16} className="util-drawer-chev" />
       </button>
       <div id="util-drawer-panel" className="util-drawer-panel" ref={panelRef} inert={!open}>
         {opened && (
