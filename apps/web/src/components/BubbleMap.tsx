@@ -1,7 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { LoadingNote, SkelValue } from "./Loading";
 import type { Snapshot, Token } from "../api";
-import { cachedGet } from "../cache";
+import { usePolling } from "../hooks";
 import { pct, tokenLabel } from "../format";
 import {
   bubbleNameLines,
@@ -25,6 +25,7 @@ import {
   nodeSlot,
   sameTimeSlot,
   buildGraph,
+  HOLDER_SCAN_MS,
   clusterHalos,
   HALO_PAD,
   graphBounds,
@@ -89,17 +90,11 @@ function useWideMap(mint: string): WideMap | null {
  * null while they load or when the read fails. One cached read serves every caller.
  */
 export function useBubbleMaps(mint: string): BubbleMaps | null {
-  const [maps, setMaps] = useState<{ mint: string; maps: BubbleMaps } | null>(null);
-  useEffect(() => {
-    let live = true;
-    cachedGet<BubbleMaps>(`/tokens/${encodeURIComponent(mint)}/bubble-holders`, 60_000)
-      .then((r) => live && setMaps({ mint, maps: r }))
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, [mint]);
-  return maps?.mint === mint ? maps.maps : null;
+  // Re-read at the worker's scan pace while the view is open, so a top 50 read after it opened
+  // (or one that changed) shows without reopening it.
+  const path = `/tokens/${encodeURIComponent(mint)}/bubble-holders`;
+  const { data } = usePolling<BubbleMaps>(path, HOLDER_SCAN_MS);
+  return data;
 }
 
 /** The names of every wallet on the map (holders and funders), in one read. */
@@ -208,7 +203,10 @@ function MapView({
   scanKolBundled: number | null;
 }) {
   const [picked, setPicked] = useState<string | null>(null);
-  const [focus, setFocus] = useState<number | null>(null);
+  // The cluster picked from the list, by its funder: its index can move when the map updates.
+  const [focusFunder, setFocusFunder] = useState<string | null>(null);
+  const focusIndex = focusFunder === null ? -1 : graph.clusters.findIndex((c) => c.funder === focusFunder);
+  const focus = focusIndex < 0 ? null : focusIndex;
   // The group under the map whose wallets are listed open: "c:", "x:" or "t:" and its key.
   const [listed, setListed] = useState<string | null>(null);
   const node = graph.nodes.find((n) => n.id === picked) ?? null;
@@ -374,7 +372,7 @@ function MapView({
         sides={sides}
         onPick={(id) => {
           setPicked(id);
-          setFocus(null);
+          setFocusFunder(null);
           // A wallet's bubble (a holder, or the funder behind a cluster) opens that wallet's modal;
           // the "others" bubble has no one wallet, so it only lights up.
           const wallet = graph.nodes.find((n) => n.id === id)?.wallet;
@@ -392,7 +390,7 @@ function MapView({
         onSelect={(key, cluster) => {
           const open = listed !== key;
           setPicked(null);
-          setFocus(open && cluster !== undefined ? cluster : null);
+          setFocusFunder(open && cluster !== undefined ? (graph.clusters[cluster]?.funder ?? null) : null);
           setListed(open ? key : null);
         }}
       />
@@ -1459,6 +1457,8 @@ export function BubbleMapSection({
   moment,
   wide: chosenWide,
   pending = false,
+  flagged,
+  flags,
 }: {
   token: Token;
   /** The reading to draw; undefined while it loads. */
@@ -1472,25 +1472,14 @@ export function BubbleMapSection({
   wide?: WideMap | null;
   /** A fresh scan is reading the holders now: an empty reading means "on its way", not "none". */
   pending?: boolean;
+  /**
+   * The flagged wallets in the coin's trades, from the chart read the modal keeps polling (so the
+   * risky rings follow it), and whether that read has landed.
+   */
+  flagged: readonly FlaggedHolder[];
+  flags: FlagsRead;
 }) {
-  const [flagged, setFlagged] = useState<FlaggedHolder[]>([]);
-  const [flagsFor, setFlagsFor] = useState<{ mint: string; read: FlagsRead } | null>(null);
   const mint = token.mintAddress;
-  const flags: FlagsRead = flagsFor?.mint === mint ? flagsFor.read : "loading";
-  useEffect(() => {
-    let live = true;
-    // The chart card asks for the same path; the cache hands both the one answer.
-    cachedGet<{ wallets?: FlaggedHolder[] }>(`/tokens/${encodeURIComponent(mint)}/chart`, 60_000)
-      .then((c) => {
-        if (!live) return;
-        setFlagged(c.wallets ?? []);
-        setFlagsFor({ mint, read: "ok" });
-      })
-      .catch(() => live && setFlagsFor({ mint, read: "failed" }));
-    return () => {
-      live = false;
-    };
-  }, [mint]);
   const liveWide = useWideMap(mint);
   const wide = chosenWide !== undefined ? chosenWide : liveWide;
   const graph = useMemo(
