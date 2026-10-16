@@ -14023,6 +14023,10 @@ body:has(.util-toast) .bug-fab {
   gap: 3px;
   min-width: 0;
 }
+.ww-share {
+  margin-left: auto;
+  flex: none;
+}
 .ww-headline-word {
   font-size: 15px;
   font-weight: 700;
