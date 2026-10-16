@@ -2727,6 +2727,295 @@ legend {
   color: var(--good-ink);
   background: var(--good-wash);
 }
+
+/* ---------- Utility panel (components/UtilityDrawer.tsx) ----------
+   A handle on the right edge of every tab; the panel slides out to its right with the coin and
+   wallet scanners and the Burn Credits. Desktop only: the component draws nothing below 900px,
+   and this hides it there too. */
+.util-drawer {
+  --util-w: min(1040px, calc(100vw - 96px));
+  position: fixed;
+  z-index: 35;
+  right: 0;
+  bottom: 24px;
+  display: flex;
+  align-items: center;
+  transform: translateX(var(--util-w));
+  transition: transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+  pointer-events: none;
+}
+.util-drawer.open {
+  transform: none;
+}
+.util-drawer > * {
+  pointer-events: auto;
+}
+/* The Customize drawer takes the right edge while it is open. */
+body.drawer-open .util-drawer {
+  display: none;
+}
+@media (max-width: 899px) {
+  .util-drawer {
+    display: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .util-drawer {
+    transition: none;
+  }
+}
+.util-drawer-handle {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 8px 12px;
+  margin-right: -1px;
+  color: #fff;
+  border: none;
+  border-radius: 12px 0 0 12px;
+  background: linear-gradient(180deg, var(--brand-a), var(--brand-b));
+  box-shadow:
+    -10px 0 28px -12px rgba(110, 90, 255, 0.75),
+    0 1px 0 rgba(255, 255, 255, 0.18) inset;
+  transition:
+    padding 0.15s,
+    filter 0.15s;
+}
+.util-drawer-handle:hover:not(:disabled) {
+  background: linear-gradient(180deg, var(--brand-a), var(--brand-b));
+  border-color: transparent;
+  filter: brightness(1.1);
+  padding-left: 11px;
+}
+.util-drawer-handle:active:not(:disabled) {
+  transform: none;
+}
+.util-drawer-handle:focus-visible {
+  outline: 2px solid var(--brand-ink);
+  outline-offset: 2px;
+}
+.util-drawer-handle-text {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+/* Points the way the panel will move: out (left) while shut, back (right) while open. */
+.util-drawer-chev {
+  transform: rotate(90deg);
+  transition: transform 0.25s;
+  opacity: 0.85;
+}
+.util-drawer.open .util-drawer-chev {
+  transform: rotate(-90deg);
+}
+.util-drawer-panel {
+  width: var(--util-w);
+  height: min(460px, calc(100dvh - 120px));
+  display: flex;
+  flex-direction: column;
+  color: var(--ink);
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  border-right: none;
+  border-radius: var(--radius) 0 0 var(--radius);
+  box-shadow: -28px 0 64px -28px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.util-drawer:not(.open) .util-drawer-panel {
+  box-shadow: none;
+}
+.util-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--brand-a) 9%, transparent),
+    color-mix(in srgb, var(--brand-b) 3%, transparent) 60%,
+    transparent
+  );
+}
+.util-drawer-head .eyebrow {
+  margin-bottom: 2px;
+}
+.util-drawer-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.util-drawer-error {
+  margin: 10px 18px 0;
+}
+.util-drawer-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(220px, 0.78fr);
+}
+.util-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  padding: 16px 18px;
+  border-left: 1px solid var(--border);
+}
+.util-col:first-child {
+  border-left: none;
+}
+.util-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.util-col-head h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.util-col-head h3 .icon {
+  color: var(--brand-ink);
+}
+.util-card-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.util-card-compact p {
+  margin: 0;
+}
+.util-card-compact .util-form {
+  margin-top: 0;
+}
+.util-card-compact .util-form input {
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+.util-col-recent {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.util-col-recent > p {
+  margin: 0;
+}
+.util-col-label {
+  margin: 2px 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.util-col-label .faint {
+  letter-spacing: 0.02em;
+  text-transform: none;
+  font-weight: 500;
+}
+.util-drawer-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0 -8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  gap: 2px;
+}
+.util-drawer-list li {
+  padding: 0;
+  border-top: none;
+}
+.util-recent-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  text-align: left;
+  font-weight: inherit;
+  background: transparent;
+  border-color: transparent;
+}
+.util-recent-row:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.util-recent-row:active:not(:disabled) {
+  transform: none;
+}
+.util-recent-go {
+  flex: none;
+  color: var(--muted);
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    transform 0.15s;
+}
+.util-recent-row:hover .util-recent-go,
+.util-recent-row:focus-visible .util-recent-go {
+  opacity: 1;
+  transform: translateX(2px);
+  color: var(--brand-ink);
+}
+.util-col-credits {
+  background: color-mix(in srgb, var(--brand-a) 4%, transparent);
+}
+.util-col-credits .util-balance {
+  margin-top: -2px;
+}
+.util-col-credits .util-balance .num {
+  font-size: 40px;
+  line-height: 1.05;
+}
+.util-drawer-rates {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  font-size: 12.5px;
+}
+.util-drawer-rates div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.util-drawer-rates dt {
+  color: var(--muted);
+}
+.util-drawer-rates dd {
+  margin: 0;
+  font-weight: 600;
+}
+.util-refill {
+  justify-content: center;
+  margin-top: 4px;
+}
+.util-col-note {
+  margin: auto 0 0;
+}
+.util-refill-modal {
+  width: min(560px, calc(100vw - 32px));
+}
+.util-refill-modal .about-head h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.util-refill-modal .util-burn {
+  margin-top: 4px;
+}
 .util-side > p {
   margin: 0 0 12px;
 }

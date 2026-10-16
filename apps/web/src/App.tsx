@@ -61,6 +61,10 @@ const UtilitiesTab = lazy(() => import("./tabs/UtilitiesTab").then((m) => ({ def
 const WalletModalHost = lazy(() =>
   import("./components/WalletModal").then((m) => ({ default: m.WalletModalHost })),
 );
+// The pull-out utility panel on every tab (desktop only): loads once signed in with access.
+const UtilityDrawer = lazy(() =>
+  import("./components/UtilityDrawer").then((m) => ({ default: m.UtilityDrawer })),
+);
 const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ default: m.BurnPanel })));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
@@ -447,6 +451,9 @@ export function App() {
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
             </div>
+            <Suspense fallback={null}>
+              <UtilityDrawer walletAddress={session.user.walletAddress} onMore={() => goTo("utilities")} />
+            </Suspense>
             {sageMint && (
               <Suspense fallback={null}>
                 <SageHost key={sageMint} mint={sageMint} guest={false} onConnect={connectWallet} />

@@ -73,6 +73,26 @@ const LOOKUP_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 /** One read per wallet modal opened; each is a database query (no outside calls), cached an hour. */
 const BUNDLE_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 
+/**
+ * How a paid token lookup reads DexScreener. `priority` because a person is waiting on it with a
+ * credit on the line: the API's DexScreener budget keeps DEXSCREENER_PRIORITY_RESERVE of its burst
+ * for priority calls, and before this the lookup was an ordinary one, so whenever the live
+ * refreshes of open pages had drawn the bucket down to that reserve it queued behind them at the
+ * sustained pace (one slot per 500 ms, raced by every waiting refresh) and could run out its
+ * deadline as "Couldn't reach the market data" (user report 2026-10-16). Nothing else in the API
+ * is priority, so the reserve is the lookup's own. A mint DexScreener has no pair for yet (a
+ * launch minutes old: it lists them ~43 s in, GeckoTerminal ~22 s) is asked of the fallback
+ * rather than answered "no market found". Exported for tests.
+ */
+export const UTILITY_TOKEN_LOOKUP = (mint: string, failed: Set<string>) => ({
+  timeoutMs: 5_000,
+  retries: 1,
+  deadlineMs: 10_000,
+  failed,
+  priority: true,
+  fallbackIfUnlisted: [mint],
+});
+
 /** A scan snapshot this close before the lookup still counts as the lookup's fresh scan. */
 const FRESH_SCAN_SLACK_MS = 60_000;
 
@@ -223,12 +243,7 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
 
     const failed = new Set<string>();
     const [reading] = await withApiFeature("utility-token", () =>
-      opts.dexScreener.getTokensByAddresses([mint], 1, {
-        timeoutMs: 5_000,
-        retries: 1,
-        deadlineMs: 10_000,
-        failed,
-      }),
+      opts.dexScreener.getTokensByAddresses([mint], 1, UTILITY_TOKEN_LOOKUP(mint, failed)),
     );
     if (!reading || !(reading.marketCapUsd > 0)) {
       if (failed.has(mint)) {

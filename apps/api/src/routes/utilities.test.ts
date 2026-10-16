@@ -231,6 +231,13 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
     expect(reopen.statusCode).toBe(200);
     expect(reopen.json()).toMatchObject({ charged: 0, balance: 0 });
     expect(lookup).toHaveBeenCalledTimes(2);
+    // A person is waiting: the lookup takes the budget's reserved slots instead of queueing behind
+    // the live refreshes, and asks the fallback about a mint DexScreener hasn't listed yet.
+    expect(lookup).toHaveBeenCalledWith(
+      [mint],
+      1,
+      expect.objectContaining({ priority: true, fallbackIfUnlisted: [mint] }),
+    );
   });
 
   it("takes nothing for an address no market knows, and refuses a lookup it can't pay for", async () => {
