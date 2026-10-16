@@ -8,6 +8,7 @@ import {
   NARRATIVE_LED_MODEL_KIND,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
+  consensusBackersNeeded,
   TOP_SLICE_MODEL_KIND,
   TWO_STAGE_MODEL_KIND,
   AGREEMENT_SIGNAL,
@@ -177,7 +178,12 @@ export function recipeFacts(params: ContestantParams, metrics: Partial<StoredEva
     case STACKED_MODEL_KIND:
       facts.push(
         { label: "Shape", value: "Logistic model over the members' ranks (stacked)" },
-        { label: "Members", value: `${params.members.length} learners + Rules` },
+        {
+          label: "Members",
+          value: params.meta.featureNames.includes(RULES_GATE_SIGNAL)
+            ? `${params.members.length} learners + Rules`
+            : `${params.members.length} learners`,
+        },
       );
       break;
     case BLEND_MODEL_KIND:
@@ -329,8 +335,16 @@ export function combinerRule(params: ContestantParams, memberCount: number): str
       return `Calls when the members' average rank (highest and lowest dropped) is at least ${params.threshold.toFixed(3)}, where 0.990 means "above 99% of decision moments".`;
     case TOP_SLICE_MODEL_KIND:
       return "Calls when any one member ranks the coin in the top quarter of its own calls.";
-    case STACKED_MODEL_KIND:
-      return "A logistic model weighs every member's rank, Rules' score and how many members agree, then calls above its own cutoff.";
+    case STACKED_MODEL_KIND: {
+      const reads = params.meta.featureNames.includes(RULES_GATE_SIGNAL)
+        ? "every member's rank, Rules' score and how many members agree"
+        : "every member's rank and how many members agree";
+      const gate =
+        params.minBackers === 0
+          ? ""
+          : `, when at least ${consensusBackersNeeded(memberCount)} members call it too`;
+      return `A logistic model weighs ${reads}, then calls above its own cutoff${gate}.`;
+    }
     default:
       return null;
   }

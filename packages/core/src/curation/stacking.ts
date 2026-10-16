@@ -39,6 +39,12 @@ import { emptyRecord, GOAL_LABEL, noteRunners, type CallRecord } from "./leaderb
  * Member backing (user decision 2026-10-14): whatever the meta model scores, a moment is a call
  * only when at least CONSENSUS_MIN_BACKERS members call it at their own cutoffs - live
  * (stackedCalls) and on the meta exam alike, so the two agree.
+ *
+ * The Trader seat (user decision 2026-10-16, notes/combiner-eval-2026-10-16/report.md) is a second
+ * stacked model on this same machinery, built to be the one model a trading bot follows: it stacks
+ * every learner seat (the Sharp and control seats too), reads no Rules inputs, has no
+ * member-backing gate (StackingInput.withRules / .minBackers) and calls only its top ~10% of
+ * moments (TRADER_CUTOFF_SHARE in contestants.ts).
  */
 
 export const STACKED_MODEL_KIND = "stacked-v1";
@@ -70,9 +76,14 @@ export interface StackedCuratorParams extends ServedCuratorExtras {
   members: StackedMember[];
   /** The rules contestant as a member: its rank-score quantiles and the gate's score floor. */
   rules: { quantiles: number[]; minScore: number };
-  /** The meta model, over stackedFeatureNames(members). */
+  /** The meta model, over stackedFeatureNames(members), with or without the Rules signals. */
   meta: Omit<LogisticCuratorParams, "threshold">;
   threshold: number;
+  /**
+   * How many members must call a moment at their own cutoffs for this model to call it. Absent
+   * means Consensus's rule (consensusBackersNeeded); 0 means no gate (the Trader seat).
+   */
+  minBackers?: number;
 }
 
 export const RULES_GATE_SIGNAL = "rules:gate";
@@ -90,11 +101,10 @@ export function memberSignalName(contestant: string): string {
   return `${contestant}:rank`;
 }
 
-export function stackedFeatureNames(members: readonly { contestant: string }[]): string[] {
+export function stackedFeatureNames(members: readonly { contestant: string }[], withRules = true): string[] {
   return [
     ...members.map((m) => memberSignalName(m.contestant)),
-    RULES_RANK_SIGNAL,
-    RULES_GATE_SIGNAL,
+    ...(withRules ? [RULES_RANK_SIGNAL, RULES_GATE_SIGNAL] : []),
     AGREEMENT_SIGNAL,
   ];
 }
@@ -150,11 +160,10 @@ export function consensusBackersNeeded(memberCount: number): number {
 export function consensusBacked(
   members: readonly StackedMember[],
   memberProbabilities: ReadonlyMap<string, number>,
+  needed = consensusBackersNeeded(members.length),
 ): boolean {
-  return (
-    agreementCount(members, memberRanks(members, memberProbabilities)) >=
-    consensusBackersNeeded(members.length)
-  );
+  if (needed <= 0) return true;
+  return agreementCount(members, memberRanks(members, memberProbabilities)) >= needed;
 }
 
 /**
@@ -167,7 +176,14 @@ export function stackedCalls(
   probability: number,
   memberProbabilities: ReadonlyMap<string, number>,
 ): boolean {
-  return probability >= params.threshold && consensusBacked(params.members, memberProbabilities);
+  return (
+    probability >= params.threshold &&
+    consensusBacked(
+      params.members,
+      memberProbabilities,
+      params.minBackers ?? consensusBackersNeeded(params.members.length),
+    )
+  );
 }
 
 /** An ascending sample of `values` at QUANTILE_POINTS evenly spaced positions. */
@@ -287,6 +303,13 @@ export interface StackingInput {
   recencyHalfLifeDays?: number;
   /** Same meaning as TrainOptions.runWeightPerDoubling; the learner seats read it from the env. */
   runWeightPerDoubling?: number;
+  /** Whether the meta model reads Rules' rank and gate (default true; the Trader seat doesn't). */
+  withRules?: boolean;
+  /**
+   * Members that must call a moment for it to be a call (StackedCuratorParams.minBackers). Omitted
+   * = Consensus's rule; 0 = no gate.
+   */
+  minBackers?: number;
 }
 
 export interface StackingResult {
@@ -324,7 +347,11 @@ export async function trainStackedCurator(
     ),
   );
   const rulesQuantiles = quantileTable(rulesSignals.map((r) => r.rankScore));
-  const featureNames = stackedFeatureNames(members.map((contestant) => ({ contestant })));
+  const withRules = input.withRules ?? true;
+  const featureNames = stackedFeatureNames(
+    members.map((contestant) => ({ contestant })),
+    withRules,
+  );
 
   // The meta model's training rows: the reference rows with their features swapped for member
   // signals. Fold ranks, not shipped-model ranks - the shipped models trained on these very rows.
@@ -366,7 +393,7 @@ export async function trainStackedCurator(
   const chunkSize = Math.floor(n / META_CHUNKS);
   // The member-backing gate, as live: a judged row is a call only when enough members call it at
   // the cutoffs that chunk's agreement signal reads (CONSENSUS_MIN_BACKERS).
-  const backersNeeded = consensusBackersNeeded(members.length);
+  const backersNeeded = input.minBackers ?? consensusBackersNeeded(members.length);
   const judged: { rows: TrainingRow[]; ranks: number[]; backed: boolean[]; spanHours: number }[] = [];
   for (let k = 1; k < META_CHUNKS && chunkSize > 0; k++) {
     const start = k * chunkSize;
@@ -458,6 +485,7 @@ export async function trainStackedCurator(
       rules: { quantiles: rulesQuantiles, minScore: input.heuristicMinScore },
       meta,
       threshold: deployed ?? neverEmitThreshold,
+      ...(input.minBackers !== undefined ? { minBackers: input.minBackers } : {}),
     },
     precisionCalibration,
     precisionCurve: precisionCurve(outOfSample),

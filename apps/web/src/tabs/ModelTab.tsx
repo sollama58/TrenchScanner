@@ -830,8 +830,9 @@ export function ModelUnderTheHood() {
   const t = lb.targets;
   const guest = false;
   const base = lb.baseline ?? data.samples.byKind.find((k) => k.kind === "event");
-  const consensus = lb.entries.find((e) => e.role === "stacked") ?? null;
-  const contenders = lb.entries.filter((e) => e.role !== "stacked");
+  // Consensus is the pipeline's last stage; Trader, the other stacked model, counts among the models.
+  const consensus = lb.entries.find((e) => e.id === "consensus") ?? null;
+  const contenders = lb.entries.filter((e) => e.id !== "consensus");
   // "best" in the pipeline: the highest live 2x rate among seasoned models with enough graded calls.
   const bestContender = contenders
     .filter((e) => !e.composite.warmingUp && e.composite.live.graded >= MIN_GRADED_FOR_RATE)

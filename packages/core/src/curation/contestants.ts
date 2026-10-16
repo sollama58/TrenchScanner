@@ -30,6 +30,8 @@ import type { CuratorLearner } from "./trainer.js";
  *  - "stacked": the consensus - a second-order model trained on the other contestants' own
  *    out-of-sample calls (curation/stacking.ts). The default feed. Since 2026-10-14 (user
  *    decision) it calls only moments at least CONSENSUS_MIN_BACKERS of its members call too.
+ *    Trader (user decision 2026-10-16) holds the role too: the stacked model built for the
+ *    trading bot, over every learner seat, no Rules inputs, no backing gate, its top ~10% only.
  *  - "blend": the learners' confidence ranks averaged, nothing fitted (curation/blend.ts) - the
  *    consensus's unlearned rival.
  *  - "agreement": how many learners call the token at their own cutoff, nothing fitted
@@ -123,6 +125,8 @@ export interface ContestantSpec {
 
 /** The consensus - what every subscriber sees until they pick another model. */
 export const CONSENSUS_CONTESTANT = "consensus";
+/** The stacked model a trading bot follows - see TRADER_CUTOFF_SHARE and stacking.ts. */
+export const TRADER_CONTESTANT = "trader";
 export const RULES_CONTESTANT = "rules";
 export const BLEND_CONTESTANT = "blend";
 export const AGREEMENT_CONTESTANT = "agreement";
@@ -259,6 +263,24 @@ export const HIGH_PRECISION_CUTOFF_SHARE = 0.12;
 /** How far, as a share of moments, the high-precision cutoff may move from its anchor. */
 export const HIGH_PRECISION_SHARE_BAND = 0.03;
 
+/**
+ * Trader's cutoff anchor, as a share of decision moments (moved within HIGH_PRECISION_SHARE_BAND by
+ * hit rate, as the Sharp seats' is). Walk-forward replay of the live calls, 10-11..10-16, one buy
+ * per token (notes/combiner-eval-2026-10-16/report.md, section 2): a logistic stacker over every
+ * seat's day-ranked confidence trading its top 9% averaged -5.5% a trade under the site's exit
+ * plan (2x 21.1%, ~120 a day); its top 19% -6.4%, its top half -11.2%, Consensus -11.1%.
+ */
+export const TRADER_CUTOFF_SHARE = 0.1;
+
+/**
+ * Whether a learner seat feeds Trader: every learner that trains on the shared exam rows, the
+ * control and standalone seats included (a stacker weighs each one, so a near-duplicate seat
+ * costs it little, unlike a vote). The narrative seats sit a different exam population.
+ */
+export function isTraderMember(spec: ContestantSpec): boolean {
+  return spec.role === "learner" && spec.retired !== true;
+}
+
 export const CONTESTANTS: readonly ContestantSpec[] = [
   {
     id: CONSENSUS_CONTESTANT,
@@ -267,6 +289,15 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
       "Learns how far to trust each other model, and calls only when at least three of them call the token at their own cutoffs",
     summary:
       "Doesn't read tokens itself: it learns which of the other models to trust, and calls only when at least three of them call it too.",
+    role: "stacked",
+  },
+  {
+    id: TRADER_CONTESTANT,
+    name: "Trader",
+    description:
+      "Learns how far to trust every other trained model, Sharp seats included, and calls only its surest tenth of decision moments - built for the trading bot",
+    summary:
+      "Built for trading: learns which of the other models to trust and calls only the tokens it is surest of, about a tenth of what it sees.",
     role: "stacked",
   },
   {
