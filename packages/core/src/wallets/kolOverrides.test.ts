@@ -76,4 +76,8 @@ describe("KOL overrides", () => {
   it("names AuPp…nD45yqrf as Dani", () => {
     expect(KOL_OVERRIDES.get("AuPp4YTMTyqxYXQnHc5KUc6pUuCSsHQpBJhgnD45yqrf")?.name).toBe("Dani");
   });
+
+  it("names DwCp…f1cXYicWf as wizard", () => {
+    expect(KOL_OVERRIDES.get("DwCp9GZw3ueoXPykHSPUkRZEwcTVbJH2i9Sf1cXYicWf")?.name).toBe("wizard");
+  });
 });
