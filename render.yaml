@@ -356,6 +356,11 @@ services:
         value: "30"
       - key: STALE_TOKEN_RETENTION_DAYS
         value: "14"
+      # pipeline-watch's warning line for the database's size: about 3 GB under the Postgres disk
+      # (15 GB today), raised together with it. See DB_DISK_ALERT_MB in packages/core/src/config/env.ts
+      # and "When the database disk is nearly full" in the README.
+      - key: DB_DISK_ALERT_MB
+        value: "12000"
       - key: OUTCOME_TRACKING_HOUR_UTC
         value: "5"
       - key: ACTIVE_VIEW_WINDOW_MINUTES

@@ -290,6 +290,15 @@ page on `holdex.live` never sends.
 
 Database migrations run automatically before every api, worker and trainer deploy via `preDeployCommand` - no manual step needed after the first setup. `npm run prisma:deploy` (`scripts/migrate-deploy.sh`) waits out a run another service already started and retries a migration that hit its `lock_timeout`. A new migration that locks a large table (Token, TokenSnapshot, Match, CandidateOutcome, CuratedAlert, User, ...) with an ALTER TABLE, a plain CREATE or DROP INDEX, an UPDATE backfill or a foreign key into it starts with `SET LOCAL lock_timeout = '5s';` so it gives up rather than stall the live services behind a long read; CI checks this (`scripts/check-migration-locks.sh`), and that no two migrations share a timestamp (`scripts/check-migration-timestamps.sh`).
 
+### When the database disk is nearly full
+
+pipeline-watch tells the admins' private Telegram chats, and fails `GET /health/worker?strict=1`, once the database passes `DB_DISK_ALERT_MB` (12 GB by default; keep it about 3 GB under the Postgres disk the Render dashboard shows, and raise both together). A full disk stops every write at once - scans, alerts, outcomes, the burn-credit and trading ledgers - and leaves no room to reclaim space in place, so act while the warning is new:
+
+1. Raise the Postgres disk on Render (the database → Settings). This is the fix; the rest buys time.
+2. Space that comes back at once: `TRUNCATE "WalletHoldingsCache", "WalletActivityCache", "RugCheckCache", "MayhemModeCache";` (about 350 MB on 2026-10-16). They cache upstream reads the scanner refills as it goes, at the cost of the Helius and RugCheck calls to do so.
+3. Lower `SNAPSHOT_RETENTION_DAYS` on the trainer and let the 04:00 cleanup run: it is batched and resumable, and `GET /health/worker` shows what each stage deleted and how long it took.
+4. Only once there is free space again, rebuild the bloated indexes with `REINDEX INDEX CONCURRENTLY` as `scripts/reindex-bloat.sql` describes. Never `VACUUM FULL` on a nearly full disk: it needs free space equal to the table it rewrites.
+
 ### Cost
 
 Per the plan in `PLANNING.md`: ~$21–31/mo (Render Starter web service + Starter worker + the cheapest Postgres tier (`basic-256mb`), Helius's free/low tier covers light usage; the dashboard is hosted by the CultScreener site, not billed here). Background workers specifically require a paid Render plan - there's no free tier for them.

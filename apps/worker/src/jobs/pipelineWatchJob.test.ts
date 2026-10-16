@@ -5,6 +5,7 @@ import { prisma, loadEnv, type Env } from "@trenchscanner/core";
 import { JobFailure, SHUTDOWN_INTERRUPTED_ERROR } from "../scheduler.js";
 import {
   clearedKeys,
+  findCapacityProblems,
   findProblems,
   findTrainerProblems,
   notificationText,
@@ -57,6 +58,20 @@ describe("pipeline watch: what counts as stalled", () => {
       NOW,
     );
     expect(problems.map((p) => p.key)).toEqual(["job:scan", "job:telegram-dispatch"]);
+  });
+
+  it("flags the database once it passes the disk warning line, and not with the check off", () => {
+    const gb = 1_073_741_824;
+    expect(findCapacityProblems(11.5 * gb, 12_000)).toEqual([]);
+    const over = findCapacityProblems(12.4 * gb, 12_000);
+    expect(over.map((p) => p.key)).toEqual(["disk"]);
+    expect(over[0]!.capacity).toBe(true);
+    expect(over[0]!.text).toContain("Database: 12.4 GB, past the 11.7 GB warning line");
+    expect(findCapacityProblems(12.4 * gb, 0)).toEqual([]);
+    expect(findCapacityProblems(null, 12_000)).toEqual([]);
+    const text = notificationText(over, [], over);
+    expect(text).toMatch(/^<b>⚠️ TrenchScanner database is filling up<\/b>\n• Database: 12\.4 GB/);
+    expect(text).not.toContain("pipeline stalled");
   });
 
   it("flags Telegram delivery when a linked chat's cursor falls behind", () => {
@@ -293,6 +308,22 @@ describe.skipIf(!dbAvailable)("pipeline watch against the database", () => {
         ? String(again.meta.stalledKeys)
         : String((again as { stalledKeys?: string }).stalledKeys);
     expect(keys).not.toContain("tokensage");
+  });
+
+  it("warns once the database passes the disk line, and not with the check off", async () => {
+    const now = Date.now();
+    await jobsRanAt(now);
+    const over = await runPipelineWatch({ ...env, DB_DISK_ALERT_MB: 1 }, { now }).catch((e: unknown) => e);
+    expect(over).toBeInstanceOf(JobFailure);
+    expect((over as JobFailure).message).toContain("Database:");
+    expect(String((over as JobFailure).meta.stalledKeys)).toContain("disk");
+    expect((over as JobFailure).meta.databaseMb).toBeGreaterThanOrEqual(1);
+    const off = await runPipelineWatch({ ...env, DB_DISK_ALERT_MB: 0 }, { now }).catch((e: unknown) => e);
+    const keys =
+      off instanceof JobFailure
+        ? String(off.meta.stalledKeys)
+        : String((off as { stalledKeys?: string }).stalledKeys);
+    expect(keys).not.toContain("disk");
   });
 
   it("tells only the admins' private chats, never a group an admin linked", async () => {
