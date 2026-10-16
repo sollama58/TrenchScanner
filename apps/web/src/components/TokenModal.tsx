@@ -250,6 +250,7 @@ export interface OpeningView {
  * fills in where the reader is already looking. Said plainly, with a retry, when the fetch fails.
  */
 function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { onClose: () => void }) {
+  const { hideSafetyPill } = useAppearance();
   const label = token ? tokenLabel({ mintAddress: mint, symbol: token.symbol, name: token.name }) : null;
   const title = label ?? shortAddress(mint);
   const failed = !!error;
@@ -294,7 +295,7 @@ function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { o
           </div>
         </div>
         <div className="tm-actions">
-          {!failed && <SafetyPill verdict={PENDING_SAFETY} />}
+          {!failed && !hideSafetyPill && <SafetyPill verdict={PENDING_SAFETY} />}
           <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
             <CloseIcon size={16} />
           </button>
@@ -458,6 +459,7 @@ function HoldersPlaceholder({ children }: { children: ReactNode }) {
 }
 
 function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: () => void }) {
+  const { hideSafetyPill } = useAppearance();
   const mint = card.token.mintAddress;
   const s = card.snapshot;
   const curated = card.curated;
@@ -564,7 +566,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
           </div>
         </div>
         <div className="tm-actions">
-          <SafetyPill verdict={safety} onClick={() => goTo("safety")} />
+          {!hideSafetyPill && <SafetyPill verdict={safety} onClick={() => goTo("safety")} />}
           <button
             type="button"
             className="sage-btn"

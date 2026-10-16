@@ -66,6 +66,9 @@ describe("parseFeedAppearance", () => {
     expect(parseFeedAppearance({}).hideLighthouseTab).toBe(false);
     expect(parseFeedAppearance({ lighthouseTab: false }).hideLighthouseTab).toBe(false);
     expect(parseFeedAppearance({ hideLighthouseTab: true }).hideLighthouseTab).toBe(true);
+    // The token view's safety pill shows unless switched off.
+    expect(parseFeedAppearance({}).hideSafetyPill).toBe(false);
+    expect(parseFeedAppearance({ hideSafetyPill: true }).hideSafetyPill).toBe(true);
     expect(parseFeedAppearance({ lighthouseTab: false })).not.toHaveProperty("lighthouseTab");
     expect(
       parseFeedAppearance({ reasons: true, quickLinks: ["gmgn", "padre", "gmgn", "axiom"] }),
