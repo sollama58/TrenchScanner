@@ -43,11 +43,13 @@ const MAX_TOP10_SHARE_PCT = 100;
 export function holdersFromLargestAccounts(
   accounts: LargestAccount[],
   supply: bigint,
+  /** Wallets that are not holders of this coin (its fee wallet on a Stonks coin: stonksFees.ts). */
+  exclude: ReadonlySet<string> = new Set(),
 ): OnChainHolders | null {
   if (supply <= 0n) return null;
   const byOwner = new Map<string, bigint>();
   for (const a of accounts) {
-    if (a.amount <= 0n || !isWalletAddress(a.owner)) continue;
+    if (a.amount <= 0n || exclude.has(a.owner) || !isWalletAddress(a.owner)) continue;
     byOwner.set(a.owner, (byOwner.get(a.owner) ?? 0n) + a.amount);
   }
   const sorted = [...byOwner.entries()].sort((x, y) => (y[1] > x[1] ? 1 : y[1] < x[1] ? -1 : 0));
@@ -109,12 +111,14 @@ export function topWalletsFromAccounts(
   accounts: readonly LargestAccount[],
   supply: bigint,
   n: number,
+  /** Wallets that are not holders of this coin (its fee wallet on a Stonks coin: stonksFees.ts). */
+  exclude: ReadonlySet<string> = new Set(),
 ): { owner: string; pct: number; accounts?: string[] }[] | null {
   if (supply <= 0n) return null;
   const byOwner = new Map<string, bigint>();
   const accountsOf = new Map<string, string[]>();
   for (const a of accounts) {
-    if (a.amount <= 0n || a.owner === SYSTEM_PROGRAM) continue;
+    if (a.amount <= 0n || a.owner === SYSTEM_PROGRAM || exclude.has(a.owner)) continue;
     byOwner.set(a.owner, (byOwner.get(a.owner) ?? 0n) + a.amount);
     if (a.address) accountsOf.set(a.owner, [...(accountsOf.get(a.owner) ?? []), a.address]);
   }

@@ -570,12 +570,12 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   });
   // The read-only feed for visitors without a wallet: its own route, so no paid route's gate is loosened.
   await app.register(registerGuestRoutes, { prefix: "/guest", env, viewStamps, reports });
-  await app.register(registerTokenRoutes, { prefix: "/tokens" });
   // The wallet modal. Its chain read (balance, history, a missing funder) needs a Helius key;
-  // without one the modal shows what the database knows.
-  const walletLive = env.HELIUS_API_KEY
-    ? new WalletLiveReader(new HeliusClient({ apiKey: env.HELIUS_API_KEY }))
-    : null;
+  // without one the modal shows what the database knows. The token modal's Stonk fee card reads
+  // through the same client.
+  const walletHelius = env.HELIUS_API_KEY ? new HeliusClient({ apiKey: env.HELIUS_API_KEY }) : null;
+  await app.register(registerTokenRoutes, { prefix: "/tokens", stonkFees: walletHelius });
+  const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;
   // Helius's name for it (exchanges, protocols, services): its identity API, on paid plans.
   const walletIdentity = env.HELIUS_API_KEY
     ? new WalletIdentityReader(new HeliusIdentityClient(env.HELIUS_API_KEY))

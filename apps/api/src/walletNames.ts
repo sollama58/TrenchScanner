@@ -1,6 +1,7 @@
 import {
   cleanWalletName,
   KNOWN_EXCHANGE_WALLETS,
+  PLATFORM_WALLETS,
   prisma,
   withoutHandle,
   type HeliusIdentity,
@@ -11,8 +12,10 @@ import { knownSideName, readKolRows } from "./kolRoster.js";
 /**
  * The name a holder list shows for a wallet in place of its address (POST /wallets/names): a
  * KOL's name from Solana Tracker's roster (KolWallet), else Helius's identity name, else
- * TrenchScanner's own exchange label. Read for a whole list at once. A KOL's Known Side (another
- * roster wallet of a KOL whose main wallet is set, core's KOL_MAINS) is "<KOL> Known Side".
+ * TrenchScanner's own exchange label; a launchpad's own wallet (core's PLATFORM_WALLETS,
+ * "Stonk_Fees") goes by TrenchScanner's label above all. Read for a whole list at once. A KOL's
+ * Known Side (another roster wallet of a KOL whose main wallet is set, core's KOL_MAINS) is
+ * "<KOL> Known Side".
  */
 
 /**
@@ -33,7 +36,10 @@ export function pickWalletName(input: {
   kolSide?: string | null;
   identity: HeliusIdentity | null | undefined;
   exchange: string | null | undefined;
+  /** TrenchScanner's own label for a launchpad's wallet ("Stonk_Fees"): above every other name. */
+  platform?: string | null;
 }): WalletName | null {
+  if (input.platform) return { name: input.platform, source: "exchange" };
   // Every name drops a trailing X handle ("NAME @HANDLE" → "NAME", user ask 2026-10-16); an
   // identity read before that was cached with it, so it is cleaned again here.
   const kolSide = input.kolSide && withoutHandle(input.kolSide);
@@ -107,6 +113,7 @@ export async function loadWalletNames(
       kolSide: kols.get(w)?.main ? kolName.get(w) : null,
       identity: identities.get(w),
       exchange: KNOWN_EXCHANGE_WALLETS.get(w),
+      platform: PLATFORM_WALLETS.get(w),
     });
     if (name) names[w] = name;
   }

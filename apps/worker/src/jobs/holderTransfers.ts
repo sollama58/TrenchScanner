@@ -1,7 +1,7 @@
 import {
   createLogger,
   holderTransfersReading,
-  KNOWN_EXCHANGE_WALLETS,
+  isServiceWallet,
   linkingTransfers,
   prisma,
   sharedSignatures,
@@ -268,7 +268,7 @@ export function recordTransferEvents(
     const holders = holdersOf.get(mint)?.holders;
     if (!reading?.events?.length || !holders?.length) continue;
     const pctOf = new Map(holders.map((h) => [h.wallet, h.pct]));
-    const linking = linkingTransfers(reading.events, pctOf, (w) => hot(w) || KNOWN_EXCHANGE_WALLETS.has(w));
+    const linking = linkingTransfers(reading.events, pctOf, (w) => hot(w) || isServiceWallet(w));
     for (const e of linking) {
       const key = `${e.signature}:${e.from}:${e.to}`;
       if (e.atMs === null || recorded.has(key)) continue;

@@ -4,6 +4,7 @@ import { forEachWithConcurrency } from "../concurrency.js";
 import type { OnChainProfile } from "../types.js";
 import { CEX_FUNDED_TOP_N } from "../wallets/linkedWallets.js";
 import { venueAccountsOf } from "../venueAccounts.js";
+import { feeHoldersOf, withheldFeeAuthorityOf } from "../stonksFees.js";
 import type { OnChainHolders } from "./onChainHolders.js";
 
 const logger = createLogger("rugcheck");
@@ -15,6 +16,10 @@ export interface RugCheckReport {
   creatorBalance?: number;
   totalHolders?: number;
   topHolders?: { pct: number; owner?: string; address: string }[];
+  /** Token-2022 extensions; read for the transfer fee's withheld-fee authority (stonksFees.ts). */
+  token_extensions?: { transferFeeConfig?: { withdrawWithheldAuthority?: string | null } | null } | null;
+  /** The launchpad RugCheck names, when it does ("stonkfun", "pump_fun"...). */
+  launchpad?: string | null;
   // NOTE: lpLockedPct only appears at the top level of the /report/summary endpoint. The full
   // /report endpoint (what we call) nests it per-market instead - see toProfile() below.
   markets?: {
@@ -272,12 +277,18 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
   // and a report from a coin's first minutes lists no market at all. The venue accounts derived
   // from the mint (venueAccountsOf) are left out whatever the list says.
   const venueAccounts = venueAccountsOf(mintAddress);
+  // On a Stonks coin its fee wallet holds swept transfer fees, not a bag (stonksFees.ts).
+  const feeHolders = feeHoldersOf({
+    launchpad: report.launchpad,
+    withheldFeeAuthority: withheldFeeAuthorityOf(report.token_extensions),
+  });
   const realHolders = (report.topHolders ?? []).filter((h) => {
     const owner = h.owner ?? h.address;
     return (
       !poolAuthorities.has(owner) &&
       !poolVaults.has(h.address) &&
       !venueAccounts.has(owner) &&
+      !feeHolders.has(owner) &&
       owner !== CLOSED_ACCOUNT_OWNER
     );
   });

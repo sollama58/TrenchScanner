@@ -3,10 +3,14 @@ import { allowLookupRead } from "../lookupGate.js";
 import { keepFilterMoment, readBubbleMoments, type BubbleMomentView } from "../bubbleMoments.js";
 import { readKolRows } from "../kolRoster.js";
 import {
+  isStonksCoin,
   NARRATIVE_CONTESTANT,
   Prisma,
   prisma,
   RISKY_WALLET_SCORE,
+  STONKS_FEE_WALLET,
+  STONKS_FEE_WALLET_LABEL,
+  type HeliusClient,
   type TokenSageAnalysis,
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
@@ -218,13 +222,57 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
   };
 }
 
+/** GET /tokens/:mint/stonk-fees: Stonks' fee wallet's share of a Stonks coin (core's stonksFees.ts). */
+export interface StonkFees {
+  /** Whether the coin is a Stonks launch; the rest is only read for one. */
+  stonks: boolean;
+  wallet: string;
+  label: string;
+  /** % of supply the fee wallet holds now; null when the chain read had no answer. */
+  pct: number | null;
+}
+
+type StonkFeesReader = Pick<HeliusClient, "getWalletShareOfMint">;
+
+/** The fee wallet's share moves with every sweep: a minute's reuse per coin. */
+const stonkFeesCache = new KeyedCache<{ pct: number; withheldFeeAuthority?: string }>(60_000);
+
+/**
+ * The fee wallet's share for the token modal's card. Only coins the scanner tracks, and only a
+ * chain read for one whose launchpad is Stonks or not recorded (then its mint's withheld-fee
+ * authority decides): a Pump.fun coin's answer is known without one. Exported for tests.
+ */
+export async function readStonkFees(
+  mintAddress: string,
+  reader: StonkFeesReader | null,
+  launchpad: string | null | undefined,
+): Promise<StonkFees> {
+  const out = { stonks: false, wallet: STONKS_FEE_WALLET, label: STONKS_FEE_WALLET_LABEL, pct: null };
+  const known = isStonksCoin({ launchpad });
+  if (!known && launchpad) return out;
+  if (!reader) return { ...out, stonks: known };
+  const read = await stonkFeesCache
+    .get(mintAddress, async () => {
+      const r = await reader.getWalletShareOfMint(STONKS_FEE_WALLET, mintAddress);
+      // Thrown, not returned: a read without an answer isn't kept for the minute.
+      if (!r) throw new Error("no answer");
+      return r;
+    })
+    .catch(() => null);
+  const stonks = known || isStonksCoin({ withheldFeeAuthority: read?.withheldFeeAuthority });
+  return { ...out, stonks, pct: stonks && read ? read.pct : null };
+}
+
 /**
  * Token detail is not user-specific (it's the same underlying market data for
  * everyone), but still requires auth since it's part of the product surface
  * rather than a public API - keeps scope aligned with "multiple users,
  * individual filters" rather than an open public tool.
  */
-export async function registerTokenRoutes(app: FastifyInstance) {
+export async function registerTokenRoutes(
+  app: FastifyInstance,
+  opts: { stonkFees?: StonkFeesReader | null } = {},
+) {
   // Token detail is reached from the paid feed. Behind the paywall - see authenticateSubscriber in server.ts.
   app.addHook("preHandler", app.authenticateSubscriber);
 
@@ -304,6 +352,20 @@ export async function registerTokenRoutes(app: FastifyInstance) {
       return;
     }
     return { result: await keepFilterMoment(mintAddress, request.user!.userId, matchId) };
+  });
+
+  /** Stonks' fee wallet's share of the coin, for the token modal's card; `stonks: false` for any other coin. */
+  app.get("/:mintAddress/stonk-fees", async (request, reply): Promise<StonkFees | undefined> => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    if (!MINT_RE.test(mintAddress)) {
+      reply.code(400).send({ error: "not a valid mint" });
+      return;
+    }
+    const token = await prisma.token.findUnique({ where: { mintAddress }, select: { launchpad: true } });
+    reply.header("Cache-Control", "private, max-age=30");
+    if (!token)
+      return { stonks: false, wallet: STONKS_FEE_WALLET, label: STONKS_FEE_WALLET_LABEL, pct: null };
+    return readStonkFees(mintAddress, opts.stonkFees ?? null, token.launchpad);
   });
 
   /** TokenSage's read of the token, for the card's TokenSage view (src/tokenSageView.ts). */
