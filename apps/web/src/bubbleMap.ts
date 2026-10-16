@@ -69,6 +69,14 @@ export const MOMENT_FIELDS = [
   "transferWalletCount",
   "transferHoldersChecked",
   "kolBundledPct",
+  "bundledSupplyPct",
+  "bundledSupplyCount",
+  "linkedWalletPctExTransfers",
+  "linkedWalletCountExTransfers",
+  "kolBundledPctExTransfers",
+  "bundledSupplyPctExTransfers",
+  "bundledSupplyCountExTransfers",
+  "linkedClustersExTransfers",
 ] as const satisfies readonly (keyof Snapshot)[];
 
 /**

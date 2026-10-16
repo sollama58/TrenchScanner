@@ -29,6 +29,13 @@ export const BUBBLE_READING_NUMBERS = [
   "transferWalletCount",
   "transferHoldersChecked",
   "kolBundledPct",
+  "bundledSupplyPct",
+  "bundledSupplyCount",
+  "linkedWalletPctExTransfers",
+  "linkedWalletCountExTransfers",
+  "kolBundledPctExTransfers",
+  "bundledSupplyPctExTransfers",
+  "bundledSupplyCountExTransfers",
 ] as const;
 
 /** The lists, named as on TokenSnapshot. */
@@ -37,6 +44,7 @@ export const BUBBLE_READING_LISTS = [
   "linkedClusters",
   "sameTimeClusters",
   "holderTransfers",
+  "linkedClustersExTransfers",
 ] as const;
 
 type NumberField = (typeof BUBBLE_READING_NUMBERS)[number];
@@ -94,6 +102,7 @@ type Cluster = {
   wallets: { wallet: string; pct: number }[];
   pct: number;
   creatorLinked: boolean;
+  transfers?: number;
 };
 type SameTime = {
   atMs: number;
@@ -133,12 +142,19 @@ export function packBubbleReading(reading: BubbleReading): string {
     if (x.cexFunder) row.push(at(x.cexFunder));
     return row;
   });
-  const c = ((reading.linkedClusters ?? []) as Cluster[]).map((x) => [
-    at(x.funder),
-    (x.wallets ?? []).map((w) => [at(w.wallet), num(w.pct)]),
-    num(x.pct),
-    x.creatorLinked ? 1 : 0,
-  ]);
+  const clusters = (list: unknown[] | undefined) =>
+    ((list ?? []) as Cluster[]).map((x) => {
+      const row: unknown[] = [
+        at(x.funder),
+        (x.wallets ?? []).map((w) => [at(w.wallet), num(w.pct)]),
+        num(x.pct),
+        x.creatorLinked ? 1 : 0,
+      ];
+      if (typeof x.transfers === "number") row.push(x.transfers);
+      return row;
+    });
+  const c = clusters(reading.linkedClusters);
+  const ce = clusters(reading.linkedClustersExTransfers);
   const t = ((reading.sameTimeClusters ?? []) as SameTime[]).map((x) => [
     num(x.atMs),
     num(x.spanMs),
@@ -156,6 +172,7 @@ export function packBubbleReading(reading: BubbleReading): string {
     a: addresses,
     h,
     ...(c.length ? { c } : {}),
+    ...(ce.length ? { ce } : {}),
     ...(t.length ? { t } : {}),
     ...(x.length ? { x } : {}),
     n,
@@ -165,7 +182,16 @@ export function packBubbleReading(reading: BubbleReading): string {
 /** A packed reading back as bubbleReadingOf made it; null for text in no shape it knows. */
 export function unpackBubbleReading(packed: string | null | undefined): BubbleReading | null {
   if (!packed) return null;
-  let p: { v?: unknown; a?: unknown; h?: unknown; c?: unknown; t?: unknown; x?: unknown; n?: unknown };
+  let p: {
+    v?: unknown;
+    a?: unknown;
+    h?: unknown;
+    c?: unknown;
+    ce?: unknown;
+    t?: unknown;
+    x?: unknown;
+    n?: unknown;
+  };
   try {
     p = JSON.parse(packed) as typeof p;
   } catch {
@@ -191,12 +217,16 @@ export function unpackBubbleReading(packed: string | null | undefined): BubbleRe
       },
     ];
   });
-  const linkedClusters = rows(p.c).map(([funder, wallets, pct, creatorLinked]) => ({
-    funder: addr(funder) ?? "",
-    wallets: rows(wallets).map(([w, wp]) => ({ wallet: addr(w) ?? "", pct: num(wp) })),
-    pct: num(pct),
-    creatorLinked: creatorLinked === 1,
-  }));
+  const clusters = (v: unknown) =>
+    rows(v).map(([funder, wallets, pct, creatorLinked, transfers]) => ({
+      funder: addr(funder) ?? "",
+      wallets: rows(wallets).map(([w, wp]) => ({ wallet: addr(w) ?? "", pct: num(wp) })),
+      pct: num(pct),
+      creatorLinked: creatorLinked === 1,
+      ...(typeof transfers === "number" ? { transfers } : {}),
+    }));
+  const linkedClusters = clusters(p.c);
+  const linkedClustersExTransfers = clusters(p.ce);
   const sameTimeClusters = rows(p.t).map(([atMs, spanMs, pct, wallets]) => ({
     atMs: num(atMs),
     spanMs: num(spanMs),
@@ -219,6 +249,7 @@ export function unpackBubbleReading(packed: string | null | undefined): BubbleRe
   return bubbleReadingOf({
     linkedHolders,
     linkedClusters,
+    linkedClustersExTransfers,
     sameTimeClusters,
     holderTransfers,
     ...Object.fromEntries(BUBBLE_READING_NUMBERS.map((k, i) => [k, numbers[i]])),
