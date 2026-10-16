@@ -2,6 +2,7 @@ import {
   alertWideMap,
   fromAlertText,
   hasHolderList,
+  HOLDER_SCAN_MS,
   holderFreshness,
   linkedCountText,
   pickReading,
@@ -149,6 +150,8 @@ const MODEL_SPAN_MS = 5 * 60_000;
 /** Points drawn at most: enough for a smooth line, few enough that each one stays hoverable. */
 const MAX_POINTS = 200;
 const CHART_POLL_MS = 30_000;
+/** While a lookup's scan is still landing, its chart (and the flagged wallets on it) is re-read faster. */
+const SCANNING_POLL_MS = 8_000;
 
 const LINKS = [
   { label: "DexScreener", href: (m: string) => `https://dexscreener.com/solana/${m}` },
@@ -165,6 +168,8 @@ export interface UtilityMode {
   apiBase: string;
   /** Whether the lookup's fresh scan has landed yet. */
   scan: "scanning" | "scanned";
+  /** When the lookup was paid for (its scan started then); absent from older API builds. */
+  since?: number;
 }
 
 const UtilityContext = createContext<UtilityMode | null>(null);
@@ -432,8 +437,16 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const utility = useContext(UtilityContext);
   const what = utility ? "Scanned" : card.kind === "stream" ? "Passed screen" : curated ? "Called" : "Alert";
   // One poll for the chart and the wallet sections that read the same answer.
-  const chart = usePolling<TokenChart>(`${useTokenApi(mint)}/chart`, CHART_POLL_MS);
-  const flagged = useMemo(() => chart.data?.wallets ?? [], [chart.data]);
+  /** The lookup's fresh scan (holders, safety checks) is still on its way. */
+  const scanning = utility?.scan === "scanning";
+  const chart = usePolling<TokenChart>(
+    `${useTokenApi(mint)}/chart`,
+    scanning ? SCANNING_POLL_MS : CHART_POLL_MS,
+  );
+  // Kept as the same list while a poll brings the same wallets, so the map isn't rebuilt for nothing.
+  const flaggedKey = JSON.stringify(chart.data?.wallets ?? []);
+  const flagged = useMemo(() => JSON.parse(flaggedKey) as FlaggedWallet[], [flaggedKey]);
+  const flags = chart.data ? "ok" : chart.error ? "failed" : "loading";
   const linked = useHolderReading(card, mint, !!utility);
   const holders = useHoldersView(card, linked, alertAt, !!utility);
   const ids = useId().replace(/:/g, "");
@@ -441,8 +454,18 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const active = useActiveSection(bodyRef, ids);
   // A lookup asks TokenSage for a fresh read, which lands within minutes: check more often.
   const sage = usePolling<SageView>(`${useTokenApi(mint)}/sage`, utility ? 20_000 : 120_000);
-  /** The lookup's fresh scan (holders, safety checks) is still on its way. */
-  const scanning = utility?.scan === "scanning";
+  // The moment the scan lands, re-read what it feeds (the flagged wallets, the read) rather than
+  // waiting for their next poll.
+  const wasScanning = useRef(scanning);
+  const { reload: reloadChart } = chart;
+  const { reload: reloadSage } = sage;
+  useEffect(() => {
+    if (wasScanning.current && !scanning) {
+      reloadChart();
+      reloadSage();
+    }
+    wasScanning.current = scanning;
+  }, [scanning, reloadChart, reloadSage]);
 
   return (
     <div className="about-body tm-body" ref={bodyRef}>
@@ -527,6 +550,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
 
       {utility && (
         <ScanProgress
+          since={utility.since}
           steps={[
             { label: "Market data", done: true },
             { label: "Chart", done: !!chart.data || !!chart.error },
@@ -631,6 +655,8 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
             moment={holders.moment}
             {...(holders.atAlert ? { wide: holders.frozen } : {})}
             pending={scanning}
+            flagged={flagged}
+            flags={flags}
           />
           <TopHolders snapshot={holders.listReading} flagged={flagged} pending={scanning} />
         </div>
@@ -663,10 +689,13 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
  * blank or placeholder section reads as "on its way", not "missing". Shown only when the view
  * opened mid-scan, and kept (all ticked) once it finishes, so nothing below moves when it does.
  */
-function ScanProgress({ steps }: { steps: { label: string; done: boolean }[] }) {
+function ScanProgress({ steps, since }: { steps: { label: string; done: boolean }[]; since?: number }) {
   const busy = steps.some((s) => !s.done);
   const [shown] = useState(busy);
-  const secs = useElapsed(busy);
+  // Counted from when the lookup started, so a lookup re-opened mid-scan says how long it has run.
+  const secs = useElapsed(busy, since);
+  // TokenSage's read is the slow part: once it is all that is left, say so rather than blame holders.
+  const onlySage = steps.filter((s) => !s.done).every((s) => s.label === "TokenSage read");
   if (!shown) return null;
   return (
     <section className={`tm-scan${busy ? "" : " done"}`} aria-label="Scan progress" aria-live="polite">
@@ -677,7 +706,9 @@ function ScanProgress({ steps }: { steps: { label: string; done: boolean }[] }) 
           {busy
             ? secs < 45
               ? "Each section fills in as its part lands, usually within a minute."
-              : `Still going (${secs}s): a busy coin's holders take longer.`
+              : onlySage
+                ? `Waiting on TokenSage's read (${secs}s): a deep read can take a few minutes.`
+                : `Still going (${secs}s): a busy coin's holders take longer.`
             : "Every section is up to date."}
         </span>
       </p>
@@ -742,11 +773,25 @@ function useHolderReading(card: Card, mint: string, lookup: boolean): Snapshot |
   useEffect(() => {
     if (!fetch) return;
     let live = true;
-    cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, 60_000)
-      .then((d) => live && setFetched({ mint, snapshot: pickReading(d.snapshots ?? []) ?? seed }))
-      .catch(() => live && setFetched({ mint, snapshot: seed }));
+    const read = () =>
+      cachedGet<{ snapshots?: Snapshot[] }>(`/tokens/${encodeURIComponent(mint)}`, HOLDER_SCAN_MS)
+        .then((d) => {
+          if (!live) return;
+          const snapshot = pickReading(d.snapshots ?? []) ?? null;
+          // A newer reading replaces the one shown; a failed or empty re-read keeps it.
+          setFetched((f) =>
+            f?.mint === mint && f.snapshot && !snapshot ? f : { mint, snapshot: snapshot ?? seed },
+          );
+        })
+        .catch(() => live && setFetched((f) => (f?.mint === mint ? f : { mint, snapshot: seed })));
+    void read();
+    // The worker saves a reading each scan: follow it while the view is open.
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void read();
+    }, HOLDER_SCAN_MS);
     return () => {
       live = false;
+      window.clearInterval(timer);
     };
   }, [fetch, mint]);
   if (own) return own;

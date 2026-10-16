@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api, ApiError, post, type Card } from "../api";
 import {
   BurnUncertainError,
@@ -709,6 +710,10 @@ function RecentLookups({
 }
 
 /** A paid lookup in the feed's token modal, refreshed while it is open (its scan lands within a minute). */
+/** How often a lookup's view is re-read while its scan lands, and after. */
+const SCAN_POLL_MS = 5_000;
+const VIEW_POLL_MS = 30_000;
+
 export function UtilityTokenModal({
   mint,
   onClose,
@@ -720,7 +725,7 @@ export function UtilityTokenModal({
   lookups?: UtilitiesOverview["lookups"];
 }) {
   const path = `/utilities/token/${encodeURIComponent(mint)}`;
-  const [poll, setPoll] = useState(10_000);
+  const [poll, setPoll] = useState(SCAN_POLL_MS);
   const { data, error, reload } = usePolling<UtilityTokenView>(path, poll);
   // The first answer's token, kept so a later refresh never blanks the header.
   const [token] = useState(() => lookups?.find((l) => l.subject === mint)?.token ?? null);
@@ -729,20 +734,23 @@ export function UtilityTokenModal({
     const id = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(id);
   }, []);
-  // Every 10s until the scan lands, then at the feed's own pace.
+  // Every few seconds until the scan lands, then at the feed's own pace.
   useEffect(() => {
-    if (data?.scan === "scanned") setPoll(30_000);
+    if (data?.scan === "scanned") setPoll(VIEW_POLL_MS);
   }, [data?.scan]);
 
   // The modal opens at once: the coin's frame while its view loads, then the view in place. A
   // lookup that closed (its free window passed) or failed to load says so there, with a retry.
-  return (
+  // Drawn on the page itself, not inside whatever opened it: the utility panel goes inert when it
+  // closes (a click elsewhere while a scan runs), which would leave the modal unclickable.
+  return createPortal(
     <TokenModal
       card={data?.card ?? null}
       now={now}
       onClose={onClose}
-      utility={data ? { apiBase: "/utilities/token", scan: data.scan } : null}
+      utility={data ? { apiBase: "/utilities/token", scan: data.scan, since: Date.parse(data.paidAt) } : null}
       opening={{ mint, token, error: data ? null : error, onRetry: reload }}
-    />
+    />,
+    document.body,
   );
 }

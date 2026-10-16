@@ -117,6 +117,8 @@ interface WalletCoin {
   isCreator: boolean;
 }
 
+/** How often an open wallet is re-read. */
+const PROFILE_REFRESH_MS = 60_000;
 /** Coins listed before "Show all". */
 const COINS_SHOWN = 8;
 const TRADES_SHOWN = 10;
@@ -238,11 +240,21 @@ function Body({ wallet, onClose }: { wallet: string; onClose: () => void }) {
     let live = true;
     setData(null);
     setError(null);
-    cachedGet<WalletProfile>(`/wallets/${encodeURIComponent(wallet)}`, 30_000)
+    const path = `/wallets/${encodeURIComponent(wallet)}`;
+    cachedGet<WalletProfile>(path, 30_000)
       .then((d) => live && setData(d))
       .catch((e: unknown) => live && setError(e instanceof Error ? e : new Error(String(e))));
+    // Re-read while it stays open: a wallet's funder, risk score and trades fill in as the worker
+    // reads them, and the profile follows without a reopen. A failed re-read keeps what is shown.
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      cachedGet<WalletProfile>(path, PROFILE_REFRESH_MS / 2)
+        .then((d) => live && setData((old) => (old ? d : old)))
+        .catch(() => undefined);
+    }, PROFILE_REFRESH_MS);
     return () => {
       live = false;
+      window.clearInterval(timer);
     };
   }, [wallet, attempt]);
 
