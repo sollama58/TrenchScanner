@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import bs58 from "bs58";
+import { ipRateLimitKey } from "../clientIp.js";
 import {
   prisma,
   adminWalletSet,
@@ -54,7 +55,8 @@ const verifyBodySchema = z.discriminatedUnion("method", [
 // The tightest limits in the API: both routes are unauthenticated (reachable by anyone) and
 // touch the DB (a nonce row per /nonce call). The global default (server.ts) covers everything
 // else; a legitimate user signing in a few times a minute is well within this.
-const AUTH_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+// Keyed by address, never by session: see ipRateLimitKey.
+const AUTH_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute", keyGenerator: ipRateLimitKey };
 
 // Whether the session cookie has to survive a *cross-site* request, decided per request by
 // comparing the host this API was actually reached on against the dashboard's own domain

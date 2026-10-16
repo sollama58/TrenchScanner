@@ -429,9 +429,16 @@ function externalAllowance(tradeLamports: bigint): bigint {
   return (share > MAX_EXTERNAL_LAMPORTS ? MAX_EXTERNAL_LAMPORTS : share) + 1_000_000n;
 }
 
-/** The Jito tip a bot's swaps pay instead of a priority fee; undefined when it sends normally. */
-function jitoTip(config: TradingBotConfig): bigint | undefined {
-  return config.jitoTipSol > 0 ? solToLamports(config.jitoTipSol) : undefined;
+/**
+ * The Jito tip a bot's swaps pay instead of a priority fee; undefined when it sends normally.
+ * Under the server's priority-fee ceiling too: the tip is paid in its place, so it must not be
+ * the way around it (security audit 2026-10-16, trading F3).
+ */
+function jitoTip(ctx: PassContext, config: TradingBotConfig): bigint | undefined {
+  if (config.jitoTipSol <= 0) return undefined;
+  const own = solToLamports(config.jitoTipSol);
+  const cap = ctx.deps.maxPriorityFeeLamports;
+  return cap !== undefined && cap < own ? cap : own;
 }
 
 /** The priority fee a bot may pay: its own setting, under the server's ceiling. */
@@ -1560,7 +1567,9 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
   if (amount <= 0n) return;
 
   const configured = Math.min(config.slippageBps, ctx.deps.maxSlippageBps ?? config.slippageBps);
-  const exitSlippage = Math.max(configured, config.exitSlippageBps);
+  // Exits stay under the server's slippage ceiling too, however wide the bot's settings are.
+  const ceiling = ctx.deps.maxSlippageBps ?? 10_000;
+  const exitSlippage = Math.min(Math.max(configured, config.exitSlippageBps), ceiling);
   // A take-profit sells at the configured slippage; one that keeps failing (the price moved
   // before it landed) and every protective exit sells with room to get out.
   // Each failed attempt at a protective exit widens it by 5 points, up to 50%.
@@ -1570,6 +1579,7 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
       : Math.min(
           Math.max(config.exitSlippageMaxBps, exitSlippage),
           exitSlippage + 500 * Math.min(position.failCount, 4),
+          ceiling,
         );
   // What the tokens being sold are worth: by the price when there is one, else by their cost.
   const costOfAmount =
@@ -1613,7 +1623,7 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
       slippageBps,
       maxPriorityFeeLamports: maxFee,
       priorityFeeLamports: feeForRetry(maxFee, lastSale),
-      jitoTipLamports: jitoTip(config),
+      jitoTipLamports: jitoTip(ctx, config),
       valueHintLamports,
     },
   );
@@ -1995,7 +2005,7 @@ async function runBotEntries(
       await attemptEntry(ctx, wallet, position, {
         slippageBps,
         maxFee: priorityFee(ctx, config),
-        jitoTip: jitoTip(config),
+        jitoTip: jitoTip(ctx, config),
       })
     ) {
       logger.info("entry sent", { userId: bot.userId, mint: signal.mint, source: signal.label });
@@ -2155,7 +2165,7 @@ async function retryEntry(ctx: PassContext, position: PositionRow, now: Date) {
     slippageBps,
     maxFee,
     exactFee: feeForRetry(maxFee, orders[orders.length - 1] ?? null),
-    jitoTip: jitoTip(config),
+    jitoTip: jitoTip(ctx, config),
     minQuotedOut: first ? (BigInt(first.quotedOut) * BigInt(10_000 - slippageBps)) / 10_000n : undefined,
   });
   if (sent) {

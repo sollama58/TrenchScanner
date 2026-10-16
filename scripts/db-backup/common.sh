@@ -62,6 +62,16 @@ resolve_dump() {
   local want="${1:-latest}" dumps key
   dumps="$(complete_dumps)"
   if [ "$want" = "latest" ]; then
+    # Not one stamped in the future: names sort by time, so a planted
+    # trenchscanner-2099....dump would otherwise be "latest" for good and never pruned
+    # (security audit 2026-10-16, backups F2). Name such a dump explicitly to restore it.
+    local now
+    now="$(date -u +%Y%m%dT%H%M%SZ)"
+    dumps="$(while read -r key; do
+      [ -n "$key" ] || continue
+      stamp="${key##*"$DUMP_STEM"}"
+      [[ "${stamp%.dump}" > "$now" ]] || printf '%s\n' "$key"
+    done <<<"$dumps")"
     [ -n "$dumps" ] || die "no complete dumps under s3://$BUCKET/$DUMP_DIR"
     tail -n1 <<<"$dumps"
     return

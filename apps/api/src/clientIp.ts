@@ -16,6 +16,14 @@ const IP_LITERAL = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9a-fA-F:]+)$/;
  * Where it is absent this falls back to request.ip, the old behaviour - not to the socket peer,
  * which behind a proxy is the proxy itself and would put every anonymous caller in one bucket.
  */
+/**
+ * Rate-limit key for routes that must be limited by address whatever session the caller sends:
+ * the global key moves any request carrying a verifiable token (even a signed-out one) to that
+ * token's own bucket, so on sign-in each new token bought another 20 sign-ins from the same IP
+ * (security audit 2026-10-16, auth F1).
+ */
+export const ipRateLimitKey = (request: FastifyRequest): string => `ip:${clientIp(request)}`;
+
 export function clientIp(request: FastifyRequest): string {
   const header = request.headers["cf-connecting-ip"];
   const cf = Array.isArray(header) ? header[0] : header;

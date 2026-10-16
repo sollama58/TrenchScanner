@@ -232,11 +232,13 @@ Render backs every paid database up continuously, with point-in-time recovery of
 **Restore** a table backup when rows are gone and point-in-time recovery no longer reaches back far enough. It is additive: rows whose key already exists are left as they are, a row whose parent is gone for good (a curated alert of a token since swept) is skipped and counted, and the whole run lands in one transaction. Take a Render export first, download the file, then from a checkout with `DATABASE_URL` pointing at the database:
 
 ```
-npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<stamp>.json.gz --dry-run
-npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<stamp>.json.gz
+npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<stamp>.json.gz --tables UserFilter,CuratedAlert --dry-run
+npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<stamp>.json.gz --tables UserFilter,CuratedAlert
 ```
 
-The dry run prints what the file holds; the real run prints, per table, what it put back, what was already there and what it skipped. A backup restores into the schema it was taken from or a later one whose new columns are nullable or defaulted.
+`--tables` is required (run without it to see the table names; `--tables all` restores every one). Name only the tables that were actually lost: additive means every row deleted since the backup comes back, including deletions that were decisions, such as a revoked subscription, a removed whitelist entry or an account deleted for good, and a restored `User` row's old sessions work again. The dry run runs the restore and rolls it back, so its counts are what would come back, and both runs warn when `User`, `Whitelist`, `Subscription` or `LinkedDevice` rows come back. The real run prints, per table, what it put back, what was already there and what it skipped.
+
+Backup files hold every user's wallet, Telegram chat ids and the trading wallets' KMS-sealed keys: treat a downloaded file as sensitive and delete it after use. A backup restores into the schema it was taken from or a later one whose new columns are nullable or defaulted.
 
 ### Nightly full dumps (Cloudflare R2)
 

@@ -19,6 +19,7 @@
 #   --skip-safety-dump    with --replace: do not first copy the target to the bucket
 #   --confirm NAME        with --replace on the live database: its name, instead of typing it
 #   --disk-gb N           with --replace: the target's disk, to check it can hold old and new data
+#   --keep-sessions       do not sign everyone out after the restore (see step 3)
 #                         at once until the transaction commits (default $DB_DISK_GB, else 30)
 #
 # Restoring into a NEW, empty database and pointing the services at it is the safe way: nothing
@@ -88,7 +89,7 @@ other_sessions() {
 }
 
 cmd_restore() {
-  local want="latest" target="" from_file="" replace=0 allow_conn=0 safety=1 confirm="" disk_gb="${DB_DISK_GB:-30}"
+  local want="latest" target="" from_file="" replace=0 allow_conn=0 safety=1 keep_sessions=0 confirm="" disk_gb="${DB_DISK_GB:-30}"
   local -a tables=()
   if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
     want="$1"
@@ -100,6 +101,7 @@ cmd_restore() {
       --table) tables+=("${2:?--table needs a name}"); shift 2 ;;
       --from-file) from_file="${2:?--from-file needs a file}"; shift 2 ;;
       --replace) replace=1; shift ;;
+      --keep-sessions) keep_sessions=1; shift ;;
       --allow-connections) allow_conn=1; shift ;;
       --skip-safety-dump) safety=0; shift ;;
       --confirm) confirm="${2:?--confirm needs the database name}"; shift 2 ;;
@@ -205,6 +207,23 @@ cmd_restore() {
       s3 s3 cp "$source" - | pg_restore "${restore_args[@]}" || ok=0
     fi
     if [ "$ok" -eq 1 ]; then
+      # A dump brings back the sessionVersion and device rows of its night, undoing any sign-out
+      # or phone unlink since - and restores tend to follow an incident, when those were just
+      # made. So everyone is signed out once, in the same transaction (security audit
+      # 2026-10-16, backups F4). --keep-sessions skips it.
+      if [ "$keep_sessions" -eq 0 ]; then
+        cat <<'SQL'
+DO $$
+BEGIN
+  IF to_regclass('public."User"') IS NOT NULL THEN
+    UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1;
+  END IF;
+  IF to_regclass('public."LinkedDevice"') IS NOT NULL THEN
+    UPDATE "LinkedDevice" SET "revokedAt" = now() WHERE "revokedAt" IS NULL;
+  END IF;
+END $$;
+SQL
+      fi
       printf 'COMMIT;\n'
     else
       log "the restore stopped part-way: nothing was committed"

@@ -72,7 +72,7 @@ export function createSessionSigner(jwtSecret: string, ttlHours: number) {
 
     async verify(token: string): Promise<SessionPayload | null> {
       try {
-        const { payload } = await jwtVerify(token, key);
+        const { payload } = await jwtVerify(token, key, { algorithms: ["HS256"] });
         if (typeof payload.sub !== "string" || typeof payload.walletAddress !== "string") {
           return null;
         }

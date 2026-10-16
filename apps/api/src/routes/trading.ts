@@ -403,6 +403,10 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
         ["maxDailySpendSol", limits.maxDailySpendSol, env.TRADING_MAX_DAILY_SPEND_SOL, "SOL"],
         ["maxPriorityFeeSol", limits.maxPriorityFeeSol, env.TRADING_MAX_PRIORITY_FEE_SOL, "SOL"],
         ["slippageBps", limits.slippageBps, env.TRADING_MAX_SLIPPAGE_BPS, "bps"],
+        // Exits and the Jito tip too: the trader clamps them, but the settings should say so.
+        ["exitSlippageBps", limits.exitSlippageBps, env.TRADING_MAX_SLIPPAGE_BPS, "bps"],
+        ["exitSlippageMaxBps", limits.exitSlippageMaxBps, env.TRADING_MAX_SLIPPAGE_BPS, "bps"],
+        ["jitoTipSol", limits.jitoTipSol, env.TRADING_MAX_PRIORITY_FEE_SOL, "SOL"],
       ] as const;
       for (const [field, value, cap, unit] of over) {
         if (cap !== undefined && value > cap)
