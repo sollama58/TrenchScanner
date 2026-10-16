@@ -26,6 +26,7 @@ import {
   TILE_FIRST_BUYERS_OF,
   TILE_RED_FIRST_BUYERS,
   TILE_RED_KOL_BUNDLED_PCT,
+  TILE_RED_TRANSFERRED_PCT,
   tileLook,
   tileMode,
   tileTone,
@@ -132,6 +133,9 @@ export function AlertCard({
     cexHolders,
     kolBundledPct,
     kolBundledAtAlert,
+    transferredPct,
+    transferCount,
+    transferAtAlert,
     firstHolding,
     firstSeen,
     buyersAtAlert,
@@ -156,6 +160,7 @@ export function AlertCard({
         "linked",
         "cexFunded",
         "kolBundled",
+        "transferred",
         "dev",
       ] as const
     ).filter(show).length + (show("vol") ? 3 : 0);
@@ -513,6 +518,40 @@ export function AlertCard({
               </dd>
             </div>
           )}
+          {show("transferred") && (
+            <div
+              {...tileLook(tiles, tileTone(transferredPct, TILE_RED_TRANSFERRED_PCT), false)}
+              title={
+                transferredPct === null
+                  ? "Transferred: not checked yet. Transfers between the top 25 holders are read for the coins closest to a call."
+                  : transferredPct === 0
+                    ? `Transferred: none of the top ${transferCount?.of ?? 25} holders sent the coin to another, ${transferAtAlert ? "at alert time" : "from a scan after the alert"}.`
+                    : `Transferred Supply %: ${pct(transferredPct, 1)} of supply moved holder to holder${
+                        transferCount
+                          ? `, between ${transferCount.linked} of the top ${transferCount.of} holders`
+                          : ""
+                      } (the coin itself only; SOL and other coins are ignored), ${
+                        transferAtAlert ? "at alert time" : "from a scan after the alert"
+                      }. Not counted in Linked; the bubble map draws each transfer.`
+              }
+            >
+              <dt>Transferred</dt>
+              <dd className={transferredPct === null ? "muted" : "num"}>
+                {transferredPct === null ? (
+                  "Not checked"
+                ) : transferCount && transferredPct > 0 ? (
+                  <>
+                    {pct(transferredPct, 1)}{" "}
+                    <span className="dd-sub">
+                      ({transferCount.linked}/{transferCount.of})
+                    </span>
+                  </>
+                ) : (
+                  pct(transferredPct, 1)
+                )}
+              </dd>
+            </div>
+          )}
           {show("dev") && (
             <div
               title={
@@ -652,6 +691,8 @@ export function cardReadings(card: Card) {
   const cexFrom = s.cexFundedPct != null ? s : latest;
   // KOL Bundled %, the same way.
   const kolFrom = s.kolBundledPct != null ? s : latest;
+  // Transferred Supply %, the same way.
+  const transferFrom = s.transferredSupplyPct != null ? s : latest;
   // The same fallback for the first-buyers count, read from the launch's first transactions.
   const buyersFrom = s.firstBuyersHolding != null ? s : latest;
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
@@ -683,6 +724,12 @@ export function cardReadings(card: Card) {
     cexHolders: cexFrom?.cexFundedHolders ?? null,
     kolBundledPct: kolFrom?.kolBundledPct ?? null,
     kolBundledAtAlert: kolFrom === s,
+    transferredPct: transferFrom?.transferredSupplyPct ?? null,
+    transferCount:
+      transferFrom?.transferWalletCount != null && transferFrom.transferHoldersChecked != null
+        ? { linked: transferFrom.transferWalletCount, of: transferFrom.transferHoldersChecked }
+        : null,
+    transferAtAlert: transferFrom === s,
     firstHolding: buyersFrom?.firstBuyersHolding ?? null,
     firstSeen: buyersFrom?.firstBuyersSeen ?? null,
     buyersAtAlert: buyersFrom === s,

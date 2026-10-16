@@ -11,6 +11,8 @@ export interface LargestAccount {
   owner: string;
   /** Raw amount (base units). */
   amount: bigint;
+  /** The token account's own address, when the read gave it. */
+  address?: string;
 }
 
 export interface OnChainHolders {
@@ -68,19 +70,27 @@ export function topWalletsFromAccounts(
   accounts: readonly LargestAccount[],
   supply: bigint,
   n: number,
-): { owner: string; pct: number }[] | null {
+): { owner: string; pct: number; accounts?: string[] }[] | null {
   if (supply <= 0n) return null;
   const byOwner = new Map<string, bigint>();
+  const accountsOf = new Map<string, string[]>();
   for (const a of accounts) {
     if (a.amount <= 0n || a.owner === SYSTEM_PROGRAM) continue;
     byOwner.set(a.owner, (byOwner.get(a.owner) ?? 0n) + a.amount);
+    if (a.address) accountsOf.set(a.owner, [...(accountsOf.get(a.owner) ?? []), a.address]);
   }
   const sorted = [...byOwner.entries()].sort((x, y) => (y[1] > x[1] ? 1 : y[1] < x[1] ? -1 : 0));
-  const out: { owner: string; pct: number }[] = [];
+  const out: { owner: string; pct: number; accounts?: string[] }[] = [];
   for (const [owner, amount] of sorted) {
     if (out.length >= n) break;
     if (!isWalletAddress(owner)) continue;
-    out.push({ owner, pct: Number((amount * 1_000_000n) / supply) / 10_000 });
+    const held = accountsOf.get(owner);
+    // Each wallet's token accounts of the coin ride along for the holder-transfer read.
+    out.push({
+      owner,
+      pct: Number((amount * 1_000_000n) / supply) / 10_000,
+      ...(held ? { accounts: held } : {}),
+    });
   }
   return out;
 }

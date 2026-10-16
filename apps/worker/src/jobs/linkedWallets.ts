@@ -94,6 +94,7 @@ export function resetLinkedWallets(): void {
   settledFunders.clear();
   hotFunders.clear();
   topHolderLists.clear();
+  holderAccountLists.clear();
   wideHolderLists.clear();
   storedWide.clear();
   frozenAtAlert.clear();
@@ -427,8 +428,10 @@ export async function readTopHolders(
   for (const g of due) {
     const r = read.get(g.mintAddress);
     if (r?.status !== "found" || r.holders.length === 0) continue;
+    rememberHolderAccounts(g.mintAddress, r.holders, r.supply, now);
+    const holders = r.holders.map(({ owner, pct }) => ({ owner, pct }));
     // The readings stay on the top 25 (and one more, for the creator), however many were read.
-    const top = r.holders.length > LINKED_TOP_N + 1 ? r.holders.slice(0, LINKED_TOP_N + 1) : r.holders;
+    const top = holders.length > LINKED_TOP_N + 1 ? holders.slice(0, LINKED_TOP_N + 1) : holders;
     if (topHolderLists.size >= MAX_TOP_HOLDER_LISTS) {
       const oldest = topHolderLists.keys().next().value;
       if (oldest !== undefined) topHolderLists.delete(oldest);
@@ -442,10 +445,52 @@ export async function readTopHolders(
         if (oldest !== undefined) wideHolderLists.delete(oldest);
       }
       wideHolderLists.delete(g.mintAddress);
-      wideHolderLists.set(g.mintAddress, { holders: r.holders, atMs: now });
+      wideHolderLists.set(g.mintAddress, { holders, atMs: now });
     }
   }
   return due.length;
+}
+
+/**
+ * Each mint's largest holders' token accounts of the coin and its raw supply, from the same read
+ * as the top-holder list (the account list comes back with it, at no extra cost): what the
+ * holder-transfer read (holderTransfers.ts) reads the signatures of. Kept apart from the holder
+ * lists so the accounts never ride into a stored reading.
+ */
+const holderAccountLists = new Map<
+  string,
+  { accountsOf: Map<string, string[]>; supply: bigint; atMs: number }
+>();
+
+function rememberHolderAccounts(
+  mintAddress: string,
+  holders: readonly { owner: string; accounts?: string[] }[],
+  supply: string | undefined,
+  nowMs: number,
+): void {
+  if (!supply || !/^\d+$/.test(supply)) return;
+  const accountsOf = new Map(
+    holders.flatMap((h) => (h.accounts?.length ? [[h.owner, h.accounts] as const] : [])),
+  );
+  if (accountsOf.size === 0) return;
+  if (holderAccountLists.size >= MAX_TOP_HOLDER_LISTS) {
+    const oldest = holderAccountLists.keys().next().value;
+    if (oldest !== undefined) holderAccountLists.delete(oldest);
+  }
+  holderAccountLists.delete(mintAddress);
+  holderAccountLists.set(mintAddress, { accountsOf, supply: BigInt(supply), atMs: nowMs });
+}
+
+/**
+ * The token accounts of a mint's largest holders and its raw supply, from the newest top-holder
+ * read while it is fresh enough to use (as cachedTopHolders), else undefined.
+ */
+export function cachedHolderAccounts(
+  mintAddress: string,
+  nowMs = Date.now(),
+): { accountsOf: ReadonlyMap<string, readonly string[]>; supply: bigint; atMs: number } | undefined {
+  const entry = holderAccountLists.get(mintAddress);
+  return entry && nowMs - entry.atMs < TOP_HOLDERS_MAX_AGE_MS ? entry : undefined;
 }
 
 /** How far back a model call puts its coin on the wider bubble map. */

@@ -33,6 +33,7 @@ export const CARD_FIELDS = [
   "linked",
   "cexFunded",
   "kolBundled",
+  "transferred",
   "largest",
   "dev",
   "reasons",
@@ -110,10 +111,14 @@ export const feedAppearanceSchema = z
     largest: z.boolean().default(false),
     /** The KOL Bundled % tile (supply held by KOLs and the holders tied to them); hidden by default. */
     kolBundled: z.boolean().default(false),
+    /** The Transferred tile (supply moved holder to holder among the top 25); hidden by default. */
+    transferred: z.boolean().default(false),
     /** On bubble maps, ties between holders the same exchange funded (drawn only); off by default. */
     bubbleCexLinks: z.boolean().default(false),
     /** On bubble maps, ties from KOLs' possible side wallets (drawn only, never counted); on by default. */
     bubbleSideLinks: z.boolean().default(true),
+    /** On bubble maps, arrows between holders that sent the coin to each other (drawn only); on by default. */
+    bubbleTransferLinks: z.boolean().default(true),
     /** The retired Bundled tile (folded into Linked, 2026-10-13): accepted from older tabs, ignored. */
     bundled: z.boolean().optional(),
     /**
@@ -194,8 +199,10 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   devTile: false,
   largest: false,
   kolBundled: false,
+  transferred: false,
   bubbleCexLinks: false,
   bubbleSideLinks: true,
+  bubbleTransferLinks: true,
   narrativeNote: null,
   streamTab: false,
   hideLighthouseTab: false,

@@ -105,6 +105,13 @@ export function snapshotDataFor(
     kolBundledPct: scored.kolBundledPct,
     bundledSupplyPct: scored.bundledSupplyPct,
     bundledSupplyCount: scored.bundledSupplyCount,
+    transferredSupplyPct: scored.transferredSupplyPct,
+    transferWalletCount: scored.transferWalletCount,
+    transferHoldersChecked: scored.transferHoldersChecked,
+    // Only when there is a transfer to draw, as for the clusters above.
+    holderTransfers: scored.holderTransfers?.length
+      ? (scored.holderTransfers as unknown as Prisma.InputJsonValue)
+      : undefined,
     kolFirstBuyers: scored.kolFirstBuyers,
     kolRecentBuyers: scored.kolRecentBuyers,
     kolRecentSellers: scored.kolRecentSellers,

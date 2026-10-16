@@ -225,6 +225,14 @@ const envSchema = z.object({
   // on the unpaged 10-credit method). The new holders these lists add go to the funder read, which
   // LINKED_WALLET_LOOKUPS_PER_CYCLE still caps. 0 keeps RugCheck's list.
   LINKED_HOLDER_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(10),
+  // Holder-to-holder transfers among the top 25 (worker's holderTransfers.ts, user ask 2026-10-16):
+  // signature reads of the holders' token accounts per cycle (1 credit each, a whole coin's 25 or
+  // so at a time, contenders only; a re-read after 10 minutes asks only for newer ones), and full
+  // reads of the transactions two holders share (1 credit each). Contenders number in single digits
+  // a cycle, so about 25 credits a coin, then 25 every 10 minutes while it stays one. 0 turns the
+  // reads off (coins then show no transfer links).
+  HOLDER_TRANSFER_SIGNATURE_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(60),
+  HOLDER_TRANSFER_TX_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
   // The longest a curated decision waits for the Linked and CEX-funded counts to be read over the
   // chain's top 25 once the token is otherwise ready (worker's linkedListReady; user ask 2026-10-13).
   // Coins under SNIPER_SHARE_WAIT_MIN_AGE_MINUTES don't wait. Past it the decision goes ahead on

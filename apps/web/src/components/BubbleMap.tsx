@@ -51,6 +51,10 @@ import {
   TRAIT_LABEL,
   traitShares,
   type WalletTrait,
+  transferCurve,
+  transfersOfNode,
+  transferWidth,
+  type TransferLink,
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
 import { openWallet } from "../walletModal";
@@ -125,6 +129,23 @@ function useCexToggle(graph: BubbleGraph | null): { showCex: boolean; setCexOn: 
 }
 
 /**
+ * Whether the arrows between holders that sent the coin to each other show (user ask 2026-10-16):
+ * on by default, switchable on the map like the exchange ties, with the default in Settings. Held
+ * above the map so its share image draws them too.
+ */
+function useTransferToggle(graph: BubbleGraph | null): {
+  showTransfers: boolean;
+  setTransfersOn: (on: boolean) => void;
+} {
+  const { bubbleTransferLinks } = useAppearance();
+  const [on, setTransfersOn] = useState<boolean | null>(null);
+  return {
+    showTransfers: !!graph && (on ?? bubbleTransferLinks) && graph.transferLinks.length > 0,
+    setTransfersOn,
+  };
+}
+
+/**
  * KOLs' possible side wallets among the holders (the Side Wallet Checker's recent matches), and
  * whether their ties show: on by default, switchable like the exchange ties (user ask 2026-10-14).
  * Held above the map so its share image draws and lists them too. Drawn only: never in the Linked
@@ -186,6 +207,8 @@ function MapView({
   names,
   showCex,
   setCexOn,
+  showTransfers,
+  setTransfersOn,
   side,
   flags,
   scanKolBundled,
@@ -195,6 +218,9 @@ function MapView({
   /** Whether the same-exchange ties show (useCexToggle). */
   showCex: boolean;
   setCexOn: (on: boolean) => void;
+  /** Whether the holder-to-holder transfer arrows show (useTransferToggle). */
+  showTransfers: boolean;
+  setTransfersOn: (on: boolean) => void;
   /** KOLs' possible side wallets and whether they show (useSideToggle). */
   side: SideToggle;
   /** Whether the flagged wallets (the risky rings) have been read. */
@@ -224,10 +250,12 @@ function MapView({
   // 2026-10-13); off, the usual layout comes back as it was.
   // KOLs' side wallets gather round them the same way while their ties show.
   // Each KOL's bundle sits together too, its pill by the KOL (user ask 2026-10-15).
+  // Holders that sent the coin to each other sit a little closer while their arrows show.
   const regrouped = useMemo(() => {
-    const opts = { cex: showCex, sides: side.shown, kols };
+    const opts = { cex: showCex, sides: side.shown, kols, transfers: showTransfers };
     return needsRegroup(opts) ? regroupLayout(graph, opts) : null;
-  }, [graph, showCex, side.shown, kols]);
+  }, [graph, showCex, side.shown, kols, showTransfers]);
+  const xfer = graph.transferPct;
   const cex = graph.cexCount;
   // Linked takes in KOLs' bundles and the wider map's links, out of every holder read (mapLinked).
   const linked = mapLinked(graph, kols);
@@ -236,7 +264,11 @@ function MapView({
     <>
       <dl
         className="bm-stats"
-        style={{ "--bm-cols": graph.sameTimeGroups.length > 0 ? 4 : 3 } as React.CSSProperties}
+        style={
+          {
+            "--bm-cols": 3 + (graph.sameTimeGroups.length > 0 ? 1 : 0) + (xfer !== null ? 1 : 0),
+          } as React.CSSProperties
+        }
       >
         <div
           className={
@@ -305,6 +337,35 @@ function MapView({
             {cex === null ? "-" : (cexCountText(cex.linked, cex.of) ?? pct(graph.cexPct, 0))}
           </dd>
         </div>
+        {/* Transferred Supply % (user ask 2026-10-16): the coin moved holder to holder among the top
+            25, a stat of its own beside Linked, never counted in it. */}
+        {xfer !== null && (
+          <div
+            className={`bm-xfer-stat${xfer > 0 ? " has" : ""}`}
+            title={
+              xfer === 0
+                ? `Transferred: none of the top ${graph.transferCount?.of ?? 25} holders sent the coin to another`
+                : `Transferred Supply %: ${pct(xfer, 1)} of supply moved holder to holder${
+                    graph.transferCount
+                      ? `, between ${graph.transferCount.linked} of the top ${graph.transferCount.of} holders`
+                      : ""
+                  }. The coin itself only: SOL and other coins are ignored. Not counted in Linked.`
+            }
+          >
+            <dt>Transferred</dt>
+            <dd className="num">
+              {pct(xfer, 1)}
+              {graph.transferCount && xfer > 0 && (
+                <>
+                  {" "}
+                  <span className="bm-stat-sub">
+                    ({graph.transferCount.linked}/{graph.transferCount.of})
+                  </span>
+                </>
+              )}
+            </dd>
+          </div>
+        )}
         {/* Fresh, sniper, empty and risky wallets on the map, each its count and supply: a row of its
             own under the headline tiles (user asks 2026-10-15, 2026-10-16). */}
         <div className="bm-traits-stat">
@@ -343,8 +404,17 @@ function MapView({
           </dd>
         </div>
       </dl>
-      {(graph.cexLinks.length > 0 || groups.length > 0) && (
+      {(graph.cexLinks.length > 0 || groups.length > 0 || graph.transferLinks.length > 0) && (
         <div className="bm-toggles">
+          {graph.transferLinks.length > 0 && (
+            <MapToggle
+              on={showTransfers}
+              onToggle={() => setTransfersOn(!showTransfers)}
+              keyClass="bm-xfer-key"
+            >
+              Holder transfers
+            </MapToggle>
+          )}
           {graph.cexLinks.length > 0 && (
             <MapToggle on={showCex} onToggle={() => setCexOn(!showCex)} keyClass="bm-cex-key">
               Same-exchange ties
@@ -367,6 +437,7 @@ function MapView({
         picked={picked}
         lit={lit}
         cexLinks={showCex}
+        transfers={showTransfers}
         sideGroups={side.shown}
         kols={kols}
         sides={sides}
@@ -385,6 +456,7 @@ function MapView({
         graph={graph}
         names={names}
         kols={kols}
+        transfers={showTransfers}
         listed={listed}
         lit={lit}
         onSelect={(key, cluster) => {
@@ -429,6 +501,8 @@ function kolSummary(k: KolControl): string {
 
 /** The exchanges' section under the map: kept out of largestSourceOnly. */
 const EXCHANGES = "Exchanges";
+/** The holder-to-holder transfers' section: kept out of largestSourceOnly too (a pair, not a bundle). */
+const TRANSFERS = "Transfers";
 
 /** One group under the map: a funder's cluster, a KOL's holdings, an exchange's, a funding minute. */
 interface PanelGroup {
@@ -454,6 +528,7 @@ function GroupPanel({
   graph,
   names,
   kols,
+  transfers,
   listed,
   lit,
   onSelect,
@@ -461,6 +536,8 @@ function GroupPanel({
   graph: BubbleGraph;
   names: WalletNames;
   kols: readonly KolControl[];
+  /** Whether the transfer arrows show: their pairs are listed while they do. */
+  transfers: boolean;
   listed: string | null;
   lit: number | null;
   onSelect: (key: string, cluster?: number) => void;
@@ -536,6 +613,35 @@ function GroupPanel({
         funder: g.funder,
       })),
     },
+    // Each sender and receiver among the top holders (user ask 2026-10-16), largest move first.
+    {
+      title: TRANSFERS,
+      groups: (transfers ? graph.transferLinks : []).flatMap((l) => {
+        const from = graph.nodes.find((n) => n.id === l.from);
+        const to = graph.nodes.find((n) => n.id === l.to);
+        if (!from?.wallet || !to?.wallet) return [];
+        return [
+          {
+            key: `s:${l.from}>${l.to}`,
+            title: (
+              <span className="bm-xfer-pair">
+                <WalletText wallet={from.wallet} names={names} />
+                <TransferArrow />
+                <WalletText wallet={to.wallet} names={names} />
+              </span>
+            ),
+            sub: `${l.count} transfer${l.count === 1 ? "" : "s"}${l.lastAtMs !== null ? ` · last ${agoText(l.lastAtMs)}` : ""}`,
+            pct: l.pct,
+            style: { "--bm": "var(--bm-xfer)" } as React.CSSProperties,
+            dot: <i className="bm-xfer-dot" aria-hidden="true" />,
+            wallets: [
+              { wallet: from.wallet, pct: from.pct, tag: `Sent ${xferPctText(l.pct)}` },
+              { wallet: to.wallet, pct: to.pct, tag: `Got ${xferPctText(l.pct)}` },
+            ],
+          },
+        ];
+      }),
+    },
   ];
   // A group that falls under two kinds (a funding minute inside a funder's cluster, a cluster a KOL's
   // bundle takes in) lists once, under the largest (user ask 2026-10-15). An exchange's holders
@@ -543,7 +649,7 @@ function GroupPanel({
   const kept = new Set(
     largestSourceOnly(
       all
-        .filter((sec) => sec.title !== EXCHANGES)
+        .filter((sec) => sec.title !== EXCHANGES && sec.title !== TRANSFERS)
         .flatMap((sec) =>
           sec.groups.map((g) => ({
             kind: sec.title,
@@ -557,7 +663,10 @@ function GroupPanel({
   const sections = all
     .map((sec) => ({
       ...sec,
-      groups: sec.title === EXCHANGES ? sec.groups : sec.groups.filter((g) => kept.has(g)),
+      groups:
+        sec.title === EXCHANGES || sec.title === TRANSFERS
+          ? sec.groups
+          : sec.groups.filter((g) => kept.has(g)),
     }))
     .filter((sec) => sec.groups.length > 0);
   if (sections.length === 0) return null;
@@ -725,6 +834,7 @@ function BubbleSvg({
   picked,
   lit,
   cexLinks,
+  transfers,
   sideGroups: kolSides,
   kols,
   sides,
@@ -736,6 +846,8 @@ function BubbleSvg({
   lit: number | null;
   /** Draw the same-exchange ties. */
   cexLinks: boolean;
+  /** Draw the holder-to-holder transfer arrows. */
+  transfers: boolean;
   /** The KOLs whose possible side wallets to tie to them (empty when switched off). */
   sideGroups: readonly SideGroup[];
   /** Each KOL's bundle (kolControl): outlined, with the KOL's name and share on a pill. */
@@ -973,6 +1085,9 @@ function BubbleSvg({
             });
           })}
         </g>
+        {transfers && graph.transferLinks.length > 0 && (
+          <TransferArrows graph={graph} index={index} names={names} picked={picked} lit={lit} />
+        )}
         {order.map((n, i) => (
           <g
             key={n.id}
@@ -1019,6 +1134,93 @@ function BubbleSvg({
         </g>
       </svg>
     </div>
+  );
+}
+
+/** How much moved in one transfer pair, in words fit for a tag: "<0.1%" for dust. */
+function xferPctText(v: number): string {
+  return v > 0 && v < 0.1 ? "<0.1%" : pctText(v);
+}
+
+/** "3m ago", "2h ago", "4d ago": when the newest transfer of a pair was. */
+function agoText(atMs: number, nowMs = Date.now()): string {
+  const m = Math.max(0, Math.round((nowMs - atMs) / 60_000));
+  if (m < 60) return `${Math.max(1, m)}m ago`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+}
+
+/** The small arrow between a transfer's sender and receiver in the list under the map. */
+function TransferArrow() {
+  return (
+    <svg className="bm-xfer-arrow" viewBox="0 0 16 10" width="16" height="10" aria-label="sent to">
+      <path d="M1 5h11" />
+      <path d="M9 1.5 13.5 5 9 8.5" />
+    </svg>
+  );
+}
+
+/**
+ * Holder-to-holder transfers (user ask 2026-10-16): a glowing arrow from each sender to each
+ * receiver, as thick as the supply it moved, with sparks flowing along it in the direction the
+ * coin went (each pair's share is in its title and the list under the map). A pair that sent both ways draws two
+ * arcs side by side. A picked bubble keeps its own arrows lit and dims the rest.
+ */
+function TransferArrows({
+  graph,
+  index,
+  names,
+  picked,
+  lit,
+}: {
+  graph: BubbleGraph;
+  index: ReadonlyMap<string, MapNode>;
+  names: WalletNames;
+  picked: string | null;
+  lit: number | null;
+}) {
+  const parts = graph.transferLinks.flatMap((l: TransferLink) => {
+    const a = index.get(l.from);
+    const b = index.get(l.to);
+    if (!a || !b) return [];
+    const w = transferWidth(l.pct);
+    const head = 4 + w * 1.5;
+    const half = 2.4 + w * 0.85;
+    const c = transferCurve(a, b, 1.2);
+    // The line stops at the head's base, so the head's tip sits on the receiver's edge.
+    const ux = Math.cos(c.angle);
+    const uy = Math.sin(c.angle);
+    const bx = c.x2 - ux * head * 0.8;
+    const by = c.y2 - uy * head * 0.8;
+    const d = `M${c.x1},${c.y1} Q${c.cx},${c.cy} ${bx},${by}`;
+    const tipX = c.x2;
+    const tipY = c.y2;
+    const baseX = c.x2 - ux * head;
+    const baseY = c.y2 - uy * head;
+    const points = `${tipX},${tipY} ${baseX - uy * half},${baseY + ux * half} ${baseX + uy * half},${baseY - ux * half}`;
+    const mine = picked !== null && (picked === l.from || picked === l.to);
+    const dim = (picked !== null && !mine) || (picked === null && lit !== null);
+    const title = `${walletText(a.wallet, names)} sent ${xferPctText(l.pct)} of supply to ${walletText(b.wallet, names)}${
+      l.count > 1 ? ` in ${l.count} transfers` : ""
+    }${l.lastAtMs !== null ? `, last ${agoText(l.lastAtMs)}` : ""}`;
+    return [{ w, d, points, mine, dim, title, key: `${l.from}>${l.to}` }];
+  });
+  return (
+    <g className={`bm-transfers${picked !== null ? " picking" : ""}`}>
+      {parts.map((p) => (
+        <g
+          key={p.key}
+          className={`bm-xfer${p.dim ? " dim" : ""}${p.mine ? " on" : ""}`}
+          style={{ "--xw": p.w } as React.CSSProperties}
+        >
+          <title>{p.title}</title>
+          <path d={p.d} className="bm-xfer-glow" style={{ strokeWidth: p.w * 3.4 }} />
+          <path d={p.d} className="bm-xfer-line" style={{ strokeWidth: p.w }} />
+          <path d={p.d} className="bm-xfer-flow" pathLength={100} style={{ strokeWidth: p.w * 0.9 }} />
+          <polygon points={p.points} className="bm-xfer-head" />
+        </g>
+      ))}
+    </g>
   );
 }
 
@@ -1288,11 +1490,21 @@ function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames, sides: Po
     ...(n.wallet ? (sides[n.wallet] ?? []).map(possibleSideText) : []),
   ].filter(Boolean);
   const same = n.sameTime === null ? null : graph.sameTimeGroups[n.sameTime];
+  const moved = transferWords(transfersOfNode(graph, n.id));
   return `Holder ${walletText(n.wallet, names)}${n.rank !== undefined ? ` (#${n.rank})` : ""}, ${pctText(n.pct)} of supply${
     cluster ? `, funded by ${walletText(cluster.funder, names)}` : ""
   }${same ? `, funded in the same minute as ${same.wallets.length - 1} other top holders` : ""}${
-    what.length ? `, ${what.join(", ")}` : ""
-  }`;
+    moved.length ? `, ${moved.join(", ")}` : ""
+  }${what.length ? `, ${what.join(", ")}` : ""}`;
+}
+
+/** "sent 1.2% to 2 holders", "got 0.4% from 1 holder": a holder's transfers in words. */
+function transferWords(t: ReturnType<typeof transfersOfNode>): string[] {
+  const holders = (n: number) => `${n} holder${n === 1 ? "" : "s"}`;
+  return [
+    t.sentTo > 0 ? `sent ${xferPctText(t.sent)} to ${holders(t.sentTo)}` : null,
+    t.gotFrom > 0 ? `got ${xferPctText(t.got)} from ${holders(t.gotFrom)}` : null,
+  ].filter((x): x is string => x !== null);
 }
 
 /** What a tapped bubble is, under the map. */
@@ -1373,6 +1585,12 @@ function NodeDetail({
           {graph.sameTimeGroups[n.sameTime]!.wallets.length === 2 ? "" : "s"}
         </span>
       )}
+      {n.kind === "holder" &&
+        transferWords(transfersOfNode(graph, n.id)).map((t) => (
+          <span key={t} className="tm-tag k-xfer">
+            {t.charAt(0).toUpperCase() + t.slice(1)}
+          </span>
+        ))}
       {n.score !== null && <span className="muted num">risk {Math.round(n.score)}</span>}
       {tags.map((t) => (
         <span key={t.text} className={`tm-tag k-${t.tone}`}>
@@ -1488,6 +1706,7 @@ export function BubbleMapSection({
   );
   const names = useGraphNames(graph);
   const { showCex, setCexOn } = useCexToggle(graph);
+  const { showTransfers, setTransfersOn } = useTransferToggle(graph);
   const side = useSideToggle(graph);
   const kols = useKols(graph, side.groups, names);
   const label = tokenLabel(token);
@@ -1530,6 +1749,7 @@ export function BubbleMapSection({
             render={() =>
               renderBubbleCard(graph, token, names, {
                 cex: showCex,
+                transfers: showTransfers,
                 sides: side.shown,
                 flags,
                 kolBundled: kolBundledFor(snapshot, kols),
@@ -1544,6 +1764,8 @@ export function BubbleMapSection({
         names={names}
         showCex={showCex}
         setCexOn={setCexOn}
+        showTransfers={showTransfers}
+        setTransfersOn={setTransfersOn}
         side={side}
         flags={flags}
         scanKolBundled={snapshot?.kolBundledPct ?? null}

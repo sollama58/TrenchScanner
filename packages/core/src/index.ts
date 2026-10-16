@@ -99,4 +99,5 @@ export * from "./wallets/kolOverrides.js";
 export * from "./wallets/sideWalletRules.js";
 export * from "./wallets/sideWallets.js";
 export * from "./wallets/kolBundled.js";
+export * from "./wallets/holderTransfers.js";
 export * from "./trading/index.js";
