@@ -47,7 +47,7 @@ function syntheticRows(count: number, seed = 42): TrainingRow[] {
         volumeToMcapRatio: ratio,
         buyRatio24h: 0.5 + rand() * 0.2,
         holderGrowthPct: rand() * 20 - 5,
-        ageMinutes: 30 + rand() * 200,
+        ageMinutes: 30 + rand() * 140, // within MAX_EVENT_AGE_MINUTES
         scoreTotal: 30 + rand() * 30,
         liquidityUsd: null,
         graduated: 0,
@@ -921,7 +921,7 @@ describe("trainCurator sparse passes", () => {
           volumeToMcapRatio: rand() < 0.2 ? null : rand() * 3,
           buyRatio24h: rand() < 0.3 ? 0 : 0.5 + rand() * 0.2,
           holderGrowthPct: rand() < 0.1 ? -0 : rand() < 0.2 ? undefined : rand() * 20 - 5,
-          ageMinutes: 30 + rand() * 200,
+          ageMinutes: 30 + rand() * 140, // within MAX_EVENT_AGE_MINUTES
           liquidityUsd: null,
         },
         labelValue: rand() < 0.2 ? 1 + rand() * 2 : 0,
