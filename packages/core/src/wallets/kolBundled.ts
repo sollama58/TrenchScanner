@@ -12,6 +12,11 @@
  * A wallet splitting its bag across fresh wallets is one owner's supply whoever it is. The send
  * must pass the dust floor (TRANSFER_LINK_MIN_PCT or TRANSFER_LINK_MIN_SHARE of what the sender
  * held); only known exchange wallets are left out, so a busy side wallet's sends still count.
+ *
+ * Sends into a bundle don't pull the sender in (user decision 2026-10-16): a wallet sending a KOL
+ * or its side wallets the coin is as often bait as the KOL's own. The step out by funder cluster
+ * reads `kolClusters` (the clusters funding alone forms) where given; a repeat sender becomes a
+ * possible side wallet through the inbound transfer tiers (TRANSFER_SIDE_INBOUND_TIERS) instead.
  */
 
 import { linkingTransfers } from "./holderTransfers.js";
@@ -28,6 +33,11 @@ export interface KolBundledInput {
   isKol: (wallet: string) => boolean;
   /** Holders tied to a KOL: the KOL funded them, or they trade as its possible side wallet. */
   ties: readonly { wallet: string; kolWallet: string }[];
+  /**
+   * The funder clusters a KOL's bundle steps out through: funding alone, without holder-to-holder
+   * transfers, so a send into the bundle doesn't join the sender to it. Absent: `clusters`.
+   */
+  kolClusters?: readonly { wallets: readonly { wallet: string }[] }[] | null;
   /** Holder-to-holder transfers of the coin (holderTransfers.ts); none: bundles from ties and groups alone. */
   transfers?: readonly { from: string; to: string; pct: number }[] | null;
 }
@@ -45,7 +55,7 @@ export function kolBundledWallets(input: KolBundledInput): Set<string> {
   const pctOf = new Map(input.holders.map((h) => [h.wallet, h.pct]));
   // Each holder's groups: the cluster and the same-minute group it sits in.
   const groupsOf = new Map<string, string[][]>();
-  for (const g of [...input.clusters, ...input.sameTimeClusters]) {
+  for (const g of [...(input.kolClusters ?? input.clusters), ...input.sameTimeClusters]) {
     const members = g.wallets.map((w) => w.wallet).filter((w) => pctOf.has(w));
     for (const w of members) {
       const list = groupsOf.get(w) ?? [];

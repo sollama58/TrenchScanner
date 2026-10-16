@@ -734,6 +734,24 @@ describe("kolControl", () => {
     ]);
     expect(kolControl(g, sides)[0]!.pct).toBe(2.8);
   });
+  it("steps out by funding alone, leaving out a wallet that sent into the bundle", () => {
+    const n = (wallet: string, pct: number, cluster: number | null) =>
+      ({ id: `h:${wallet}`, kind: "holder", wallet, pct, cluster, sameTime: null }) as unknown as MapNode;
+    // bait sent side the coin, so the drawn cluster 0 holds both; funding alone ties side to mate.
+    const g = { nodes: [n("kol", 2, null), n("side", 1, 0), n("mate", 0.5, 0), n("bait", 3, 0)] };
+    const sides = [{ kolWallet: "kol", kolName: null, wallets: [{ wallet: "side", pct: 50 }] }];
+    const funding = [
+      {
+        wallets: [
+          { wallet: "side", pct: 1 },
+          { wallet: "mate", pct: 0.5 },
+        ],
+      },
+    ];
+    expect(kolControl(g, sides)[0]!.pct).toBe(6.5);
+    const [k] = kolControl(g, sides, [], [{ from: "h:bait", to: "h:side", pct: 1 }], funding);
+    expect(k!.wallets.map((w) => w.wallet)).toEqual(["kol", "side", "mate"]);
+  });
 });
 
 describe("label rooms (user ask 2026-10-15)", () => {

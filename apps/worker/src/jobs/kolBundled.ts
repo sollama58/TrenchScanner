@@ -40,6 +40,8 @@ export interface KolBundledReading {
 export type KolBundledSource = Pick<LinkedWalletsReading, "holders" | "clusters" | "sameTimeClusters"> & {
   /** The coin's holder-to-holder transfers: a KOL's bundle takes in whoever it sent the coin to. */
   transfers?: readonly { from: string; to: string; pct: number }[] | null;
+  /** The clusters funding alone forms, for a KOL's step out (core's KolBundledInput.kolClusters). */
+  kolClusters?: LinkedWalletsReading["clusters"] | null;
 };
 
 /**
@@ -84,9 +86,10 @@ export async function kolBundledByMint(
       isKol,
       ties,
       transfers: r.transfers,
+      kolClusters: r.kolClusters,
     };
     const bundled = bundledSupply(input);
-    const unfollowed = { ...input, transfers: null };
+    const unfollowed = { ...input, transfers: null, kolClusters: null };
     out.set(mint, {
       kolBundledPct: kolBundledPct(input),
       bundledSupplyPct: bundled.pct,

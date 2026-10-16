@@ -1430,7 +1430,15 @@ async function scanCycle(
             new Map([
               ...[...linkedByMint].map(
                 ([mint, r]) =>
-                  [mint, r && { ...r, transfers: transfersByMint.get(mint)?.transfers }] as const,
+                  [
+                    mint,
+                    r && {
+                      ...r,
+                      transfers: transfersByMint.get(mint)?.transfers,
+                      // A send into a KOL's bundle doesn't pull the sender in (user decision 2026-10-16).
+                      kolClusters: linkedBaseByMint.get(mint)?.clusters,
+                    },
+                  ] as const,
               ),
               ...changedByTransfers.map(([mint, base]) => [EX + mint, base] as const),
             ]),
