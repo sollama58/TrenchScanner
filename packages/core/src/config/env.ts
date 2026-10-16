@@ -592,8 +592,10 @@ const envSchema = z.object({
   // (curation/liveScale.ts) so the share is what the seats actually call. At a nominal 20% the
   // tree seats had called 8-12% of decision moments live; on the 27 hours of live scores before
   // the change the pooled 2x rate was flat from the top 5% to the top 20% (26.4% vs 25.4%) and
-  // 23.7% at the top 30% (notes/dynamic-cutoff-2026-10-15/report.md).
-  CURATED_CUTOFF_TARGET_SHARE: z.coerce.number().min(0).max(1).default(0.25),
+  // 23.7% at the top 30% (notes/dynamic-cutoff-2026-10-15/report.md). User decision 2026-10-16
+  // (15:48 UTC): back to 20%, keeping the live-score reading, after live hit rates slid to the
+  // low 20s and below at 25%.
+  CURATED_CUTOFF_TARGET_SHARE: z.coerce.number().min(0).max(1).default(0.2),
   CURATED_CUTOFF_SHARE_BAND: z.coerce.number().min(0).max(0.5).default(0),
   // How much a tighter cutoff in the band must raise the 2x lower bound before the cutoff moves
   // to it (0.01 = 1 point); a looser one is taken when its bound is no lower. Forward test
