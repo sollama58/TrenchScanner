@@ -44,6 +44,8 @@ import {
   largestSourceOnly,
   mapLinked,
   TRAIT_ICON,
+  RISKY_ICON,
+  riskyShare,
   TRAIT_LABEL,
   traitShares,
   type WalletTrait,
@@ -211,7 +213,7 @@ function MapView({
   const node = graph.nodes.find((n) => n.id === picked) ?? null;
   // A picked bubble's cluster lights up; so does a cluster picked from the list.
   const lit = node ? node.cluster : focus;
-  const risky = graph.nodes.filter((n) => n.kind === "holder" && n.flags.some((f) => f !== "creator"));
+  const risky = riskyShare(graph);
   const traits = new Map(traitShares(graph).map((t) => [t.trait, t]));
   const { sides, groups, showSides, setSideOn } = side;
   // Each KOL and the supply it may control: side wallets, KOL funded wallets and their linked holders.
@@ -269,14 +271,21 @@ function MapView({
             {kolBundled === null ? "–" : pct(kolBundled, 1)}
           </dd>
         </div>
-        {/* Fresh, sniper and empty wallets on the map, each its count and supply, in place of
-            Largest cluster (user ask 2026-10-15). */}
+        {/* Fresh, sniper, empty and risky wallets on the map, each its count and supply, in place of
+            Largest cluster and Risky holders (user asks 2026-10-15, 2026-10-16). Two tiles wide. */}
         <div
           className="bm-traits-stat"
-          title={TRAIT_ORDER.map((t) => {
-            const s = traits.get(t);
-            return `${TRAIT_WORDS[t]}: ${s?.count ?? 0} holding ${pct(s?.pct ?? 0, 1)}`;
-          }).join("\n")}
+          title={[
+            ...TRAIT_ORDER.map((t) => {
+              const s = traits.get(t);
+              return `${TRAIT_WORDS[t]}: ${s?.count ?? 0} holding ${pct(s?.pct ?? 0, 1)}`;
+            }),
+            flags === "ok"
+              ? `${RISKY_WORDS}: ${risky.count} holding ${pct(risky.pct, 1)}`
+              : flags === "failed"
+                ? "Risky: couldn't load the flagged wallets, so no risky ones are ringed. Not a clean reading."
+                : "Risky: loading the flagged wallets",
+          ].join("\n")}
         >
           <dt>Wallet types</dt>
           <dd className="num">
@@ -284,12 +293,17 @@ function MapView({
               const s = traits.get(t);
               return (
                 <span key={t} className={s ? undefined : "muted"}>
-                  <TraitIcon trait={t} />
+                  <TraitIcon trait={t} size={15} />
                   {s?.count ?? 0}
                   {s && <small>{pct(s.pct, 1)}</small>}
                 </span>
               );
             })}
+            <span className={flags === "ok" && risky.count > 0 ? "bm-risky-stat" : "muted"}>
+              <RiskyIcon />
+              {flags === "ok" ? risky.count : "–"}
+              {flags === "ok" && risky.count > 0 && <small>{pct(risky.pct, 1)}</small>}
+            </span>
           </dd>
         </div>
         {graph.sameTimeGroups.length > 0 && (
@@ -303,19 +317,6 @@ function MapView({
             <dd className="num">{linkedCountText(graph.sameTimeCount) ?? pct(graph.sameTimePct, 1)}</dd>
           </div>
         )}
-        <div
-          className={flags === "ok" && risky.length > 0 ? "risky" : undefined}
-          title={
-            flags === "ok"
-              ? undefined
-              : flags === "failed"
-                ? "Risky holders: couldn't load the flagged wallets, so no risky ones are ringed. Not a clean reading."
-                : "Risky holders: loading the flagged wallets"
-          }
-        >
-          <dt>Risky holders</dt>
-          <dd className={flags === "ok" ? "num" : "muted"}>{flags === "ok" ? risky.length : "–"}</dd>
-        </div>
         <div
           className={
             cex !== null && cex.linked >= countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cex.of)
@@ -1164,9 +1165,15 @@ function TraitBadge({ trait, x, y }: { trait: WalletTrait; x: number; y: number 
 }
 
 /** A trait's icon on its own, for the legend. */
-function TraitIcon({ trait }: { trait: WalletTrait }) {
+function TraitIcon({ trait, size = 13 }: { trait: WalletTrait; size?: number }) {
   return (
-    <svg className={`bm-trait-icon trait-${trait}`} viewBox="0 0 24 24" width={13} height={13} aria-hidden>
+    <svg
+      className={`bm-trait-icon trait-${trait}`}
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      aria-hidden
+    >
       {TRAIT_ICON[trait].map((d) => (
         <path key={d} d={d} />
       ))}
@@ -1176,6 +1183,18 @@ function TraitIcon({ trait }: { trait: WalletTrait }) {
 
 /** The order the stat tile lists the traits in (user ask 2026-10-15). */
 const TRAIT_ORDER: readonly WalletTrait[] = ["fresh", "sniper", "empty"];
+
+/** The risky wallets' mark on its own, for the Wallet types tile. */
+function RiskyIcon() {
+  return (
+    <svg className="bm-trait-icon bm-risky-icon" viewBox="0 0 24 24" width={15} height={15} aria-hidden>
+      {RISKY_ICON.map((d) => (
+        <path key={d} d={d} />
+      ))}
+    </svg>
+  );
+}
+const RISKY_WORDS = "Risky: flagged risky or a known dumper";
 
 /** What each trait means, for its bubble's tooltip. */
 const TRAIT_WORDS: Record<WalletTrait, string> = {

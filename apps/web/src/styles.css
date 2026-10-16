@@ -10653,26 +10653,37 @@ img.tm-avatar {
   font-size: 17px;
   font-weight: 700;
 }
-/* Fresh · Sniper · Empty: each trait's icon, count and supply on one line. */
+/* Wallet types: each trait's icon, count and supply on one line, two tiles wide so it reads easily
+   (user ask 2026-10-16). */
+.bm-stats .bm-traits-stat {
+  grid-column: span 2;
+}
 .bm-stats .bm-traits-stat dd {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 2px 8px;
-  font-size: 15px;
+  align-items: center;
+  gap: 2px 12px;
+  font-size: 17px;
 }
 .bm-traits-stat dd > span {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
 }
 .bm-traits-stat dd > span.muted {
   opacity: 0.55;
 }
 .bm-traits-stat dd small {
-  color: var(--muted);
-  font-size: 11px;
+  margin-left: 2px;
+  color: var(--ink-2);
+  font-size: 13px;
   font-weight: 600;
+}
+.bm-risky-icon {
+  color: var(--bad-ink);
+}
+.bm-traits-stat dd > span.bm-risky-stat {
+  color: var(--bad-ink);
 }
 .bm-stage {
   position: relative;
