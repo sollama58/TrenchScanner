@@ -382,7 +382,7 @@ async function main() {
     logger.warn("WORKER_ROLE=trader but TRADING_BOT_ENABLED is off: this process runs nothing");
   }
   if (env.TRADING_BOT_ENABLED && runsJob(role, "trading-bot")) {
-    const runTradingBot = createTradingBotRunner(env);
+    const runTradingBot = createTradingBotRunner(env, dexScreener);
     schedule("trading-bot", () =>
       scheduleInterval("trading-bot", runTradingBot, env.TRADING_BOT_INTERVAL_SECONDS / 60, {
         deadlineMinutes: 10,

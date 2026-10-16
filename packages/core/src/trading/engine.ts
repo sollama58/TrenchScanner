@@ -62,7 +62,9 @@ import { withWalletKey, type TradingWalletRow } from "./wallets.js";
  * can't route), check the UNSIGNED transaction with the guard (txGuard.ts: allowed instructions
  * only, and a simulation showing nothing but the trade itself changes), sign, record the order
  * with its signature and the signed bytes, then send. Nothing is signed before it has passed the
- * guard, and nothing is sent that the database doesn't know about.
+ * guard, and nothing is sent that the database doesn't know about. The guard's minimum is never
+ * the route's word alone: it is raised to fair value by an independent price (DexScreener), less
+ * the slippage and a tenth, and a buy that price can't back is not made.
  *
  * Retrying: nothing is ever sent twice while it can still land. A transaction is rebroadcast by
  * its own signature until it lands or its blockhash is safely past expiry; only then is a new one
@@ -165,6 +167,14 @@ export interface TradingEngineDeps {
   swap: SwapClient;
   /** Second route for Pump.fun tokens Jupiter can't trade (PumpPortal); null for none. */
   fallback?: FallbackSwapClient | null;
+  /**
+   * Prices in SOL per whole token from a source the swap routes don't control (DexScreener's
+   * solPricesOf); a mint it can't price is left out. Every swap's minimum is at least fair value
+   * by these, less the slippage and a tenth - Jupiter's quote and Price API come from the same
+   * party that builds the route, so a compromised one could otherwise name its own floor. No
+   * price: buys are refused, sales go ahead on the route's own floor (an exit must still fire).
+   */
+  independentPricesSol: (mints: string[]) => Promise<Map<string, number>>;
   /** Opens the custodial wallets (KMS); null when this process has none (the server wallet still trades). */
   keys: KeyProvider | null;
   /** Server-wide ceiling on any swap's priority fee (TRADING_MAX_PRIORITY_FEE_SOL). */
@@ -488,11 +498,44 @@ async function utilityPrice(
 /** A retry's route would deliver less than the first try's quote, less the slippage: the price ran. */
 class PriceMovedError extends Error {}
 
+/** The route quotes less than fair value by the independent price, less the slippage and a tenth. */
+class FairValueError extends Error {}
+
 /**
- * A floor for a trade the fallback route built without a quote: what the Price API says it's
- * worth, less the slippage and another tenth (the pool's price is not the index's). Buy: raw
- * tokens; sell: lamports. The lowest acceptable (1 token, 0 lamports) when there is no price -
- * the external-transfer cap still bounds what a hostile build could take.
+ * What a trade is worth at `lamportsPerRaw`, less the slippage and another tenth (the pool's
+ * price is not the index's). Buy: raw tokens; sell: lamports. Null for a price that makes no sense.
+ */
+function floorAt(req: SwapRequest, lamportsPerRaw: number): bigint | null {
+  if (!(lamportsPerRaw > 0) || !Number.isFinite(lamportsPerRaw)) return null;
+  const keep = Math.max(0, 1 - req.slippageBps / 10_000) * 0.9;
+  const fair = req.side === "buy" ? Number(req.amount) / lamportsPerRaw : Number(req.amount) * lamportsPerRaw;
+  const floor = fair * keep;
+  return Number.isFinite(floor) ? BigInt(Math.floor(floor)) : null;
+}
+
+/**
+ * The trade's floor by the independent price (TradingEngineDeps.independentPricesSol), never the
+ * swap route's own: null when it can't be priced - no price, or no decimals to scale it by (a
+ * buy's are read from the mint).
+ */
+async function independentFloor(ctx: PassContext, req: SwapRequest): Promise<bigint | null> {
+  let solPerToken: number | undefined;
+  try {
+    solPerToken = (await ctx.deps.independentPricesSol([req.mint])).get(req.mint);
+  } catch {
+    return null;
+  }
+  if (!solPerToken) return null;
+  const decimals =
+    req.decimals ?? (await ctx.deps.rpc.getMintInfo(req.mint).catch(() => null))?.decimals ?? null;
+  if (decimals === null) return null;
+  return floorAt(req, (solPerToken * 1e9) / 10 ** decimals);
+}
+
+/**
+ * A floor for a trade the fallback route built without a quote, by the Price API: the lowest
+ * acceptable (1 token, 0 lamports) when there is no price. buildSwap raises it to the independent
+ * floor, which a buy can't go without.
  */
 async function fallbackFloor(ctx: PassContext, req: SwapRequest): Promise<bigint> {
   const none = req.side === "buy" ? 1n : 0n;
@@ -506,12 +549,8 @@ async function fallbackFloor(ctx: PassContext, req: SwapRequest): Promise<bigint
   const solUsd = prices.get(WSOL_MINT);
   if (!tokenUsd || !solUsd) return none;
   // Pump.fun tokens (the only ones the fallback trades) have 6 decimals.
-  const lamportsPerRaw = ((tokenUsd / solUsd) * 1e9) / 10 ** (req.decimals ?? 6);
-  if (!(lamportsPerRaw > 0)) return none;
-  const keep = Math.max(0, 1 - req.slippageBps / 10_000) * 0.9;
-  const fair = req.side === "buy" ? Number(req.amount) / lamportsPerRaw : Number(req.amount) * lamportsPerRaw;
-  const floor = BigInt(Math.floor(fair * keep));
-  return floor > none ? floor : none;
+  const floor = floorAt(req, ((tokenUsd / solUsd) * 1e9) / 10 ** (req.decimals ?? 6));
+  return floor !== null && floor > none ? floor : none;
 }
 
 /** Builds the swap on Jupiter, else (a Pump.fun token) PumpPortal, with what the guard must see. */
@@ -532,6 +571,11 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
   const maxSolDrop =
     req.amount + req.maxPriorityFeeLamports + BUY_MARGIN_LAMPORTS + limits.maxExternalLamports;
   const feeAllowance = req.maxPriorityFeeLamports + SELL_FEE_ALLOWANCE_LAMPORTS + limits.maxExternalLamports;
+  // A floor the route can't set for itself. A buy needs one; a sale goes ahead without, on the
+  // route's own minimum, so a stop-loss isn't held hostage to a price feed.
+  const independent = await independentFloor(ctx, req);
+  if (independent === null && buy)
+    throw new TransientError("no independent price for the token: not buying on the route's word alone");
   try {
     const quote = await ctx.deps.swap.quote({
       inputMint: buy ? WSOL_MINT : req.mint,
@@ -544,6 +588,11 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
         `the price ran: ${quote.outAmount} tokens quoted now, under ${req.minQuotedOut} (the first try's quote less the slippage)`,
       );
     }
+    if (independent !== null && BigInt(quote.outAmount) < independent) {
+      throw new FairValueError(
+        `the route quotes ${quote.outAmount}, under ${independent} (fair value by the independent price, less the slippage and a tenth)`,
+      );
+    }
     const built = await ctx.deps.swap.swapTransaction({
       quote,
       userPublicKey: wallet.publicKey,
@@ -552,7 +601,9 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
         req.priorityFeeLamports !== undefined ? Number(req.priorityFeeLamports) : undefined,
       jitoTipLamports: jitoTip !== null ? Number(jitoTip) : undefined,
     });
-    const minOut = BigInt(quote.otherAmountThreshold);
+    // Never under the independent floor, whatever minimum the quote names.
+    const quotedMin = BigInt(quote.otherAmountThreshold);
+    const minOut = independent !== null && independent > quotedMin ? independent : quotedMin;
     // Jupiter's route instruction must carry no more slippage than this swap asked for.
     const jupiterLimits = { ...limits, maxSlippageBps: req.slippageBps };
     return {
@@ -573,7 +624,13 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
     };
   } catch (err) {
     const fallback = ctx.deps.fallback;
-    if (!fallback || !fallback.handles(req.mint) || err instanceof PriceMovedError) throw err;
+    if (
+      !fallback ||
+      !fallback.handles(req.mint) ||
+      err instanceof PriceMovedError ||
+      err instanceof FairValueError
+    )
+      throw err;
     logger.info("jupiter could not build the swap; trying the fallback route", {
       mint: req.mint,
       side: req.side,
@@ -593,9 +650,10 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
       }),
       fallbackFloor(ctx, req),
     ]);
-    // A retry's floor is never under the first try's quote less the slippage (no chasing).
-    const floor =
-      req.minQuotedOut !== undefined && quotedFloor < req.minQuotedOut ? req.minQuotedOut : quotedFloor;
+    // Never under the independent floor (a buy always has one), nor, for a retry, under the first
+    // try's quote less the slippage (no chasing).
+    let floor = independent !== null && independent > quotedFloor ? independent : quotedFloor;
+    if (req.minQuotedOut !== undefined && floor < req.minQuotedOut) floor = req.minQuotedOut;
     return {
       ...built,
       route: "pumpportal",
@@ -1423,8 +1481,20 @@ async function recordExitFailure(ctx: PassContext, position: PositionRow, err: u
   const at = ctx.now();
   const plan = readExitPlan(position.exitPlan);
   const ageMinutes = position.openedAt ? (at.getTime() - position.openedAt.getTime()) / 60_000 : 0;
-  if (err instanceof PricingError || err instanceof RateLimitedError || err instanceof TransientError) {
-    const wait = err instanceof RateLimitedError ? 30_000 : err instanceof PricingError ? 15_000 : 5_000;
+  // A quote far under the independent price is a pricing question too (a feed behind a fast move,
+  // or a route that lies): it says nothing yet about whether the token can be sold.
+  if (
+    err instanceof PricingError ||
+    err instanceof FairValueError ||
+    err instanceof RateLimitedError ||
+    err instanceof TransientError
+  ) {
+    const wait =
+      err instanceof RateLimitedError
+        ? 30_000
+        : err instanceof PricingError || err instanceof FairValueError
+          ? 15_000
+          : 5_000;
     const stuck =
       position.status === "open" &&
       ageMinutes > holdCapMinutes(position, plan) + TRANSIENT_STUCK_AFTER_MINUTES;
@@ -2054,7 +2124,10 @@ async function attemptEntry(
   } catch (err) {
     const at = ctx.now();
     const final =
-      err instanceof GuardRefusal || err instanceof NoRouteError || err instanceof PriceMovedError;
+      err instanceof GuardRefusal ||
+      err instanceof NoRouteError ||
+      err instanceof PriceMovedError ||
+      err instanceof FairValueError;
     if (final) {
       await prisma.tradingPosition.updateMany({
         where: { id: position.id, status: "buying", orders: { none: { status: "pending" } } },
