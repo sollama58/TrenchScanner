@@ -27,6 +27,8 @@ import {
   SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE,
   LAUNCH_FACT_FEATURES,
   WALLET_SCORE_FEATURES,
+  MARKET_LEARNER_FEATURE_NAMES,
+  MARKET_TOKENSAGE_INPUTS,
 } from "./features.js";
 import { NS_RULES_VERSION } from "./narrativeFeatures.js";
 import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
@@ -768,6 +770,22 @@ describe("maskKnownBadInputs", () => {
   it("keeps the retired duplicates off the learner list", () => {
     for (const name of ["nsReferentNamed", "nsXContentMismatch", "devInitialBuySol"] as const) {
       expect(LEARNER_FEATURE_NAMES).not.toContain(name);
+    }
+  });
+});
+
+describe("the market seats' TokenSage inputs", () => {
+  it("keeps the fee group and logo score, and leaves the rest to the Narrative seats", () => {
+    for (const name of MARKET_TOKENSAGE_INPUTS) expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
+    expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsCatAnimal");
+    expect(MARKET_LEARNER_FEATURE_NAMES).not.toContain("nsDepthFull");
+    expect(LEARNER_FEATURE_NAMES).toContain("nsCatAnimal");
+    expect(MARKET_LEARNER_FEATURE_NAMES.filter((n) => n.startsWith("ns"))).toHaveLength(
+      MARKET_TOKENSAGE_INPUTS.length,
+    );
+    // Every non-TokenSage learner input stays.
+    for (const name of LEARNER_FEATURE_NAMES.filter((n) => !n.startsWith("ns"))) {
+      expect(MARKET_LEARNER_FEATURE_NAMES).toContain(name);
     }
   });
 });

@@ -317,8 +317,8 @@ export function UsageAdmin() {
           {(t) =>
             !t.configured ? (
               <p className="small muted">
-                Not connected. Set TOKENSAGE_ADMIN_KEY on the API service to show TokenSage's own calls and
-                Helius credits here.
+                Not connected. Set TOKENSAGE_MONITOR_KEY (TokenSage's read-only MONITOR_KEY) on the API
+                service to show TokenSage's own calls and Helius credits here.
               </p>
             ) : (
               <div className="stack">

@@ -168,7 +168,7 @@ export interface SageTrack {
 }
 
 /** The inputs TokenSage can read, in the order the view lists them. */
-const INPUTS: { id: string; label: string }[] = [
+export const INPUTS: { id: string; label: string }[] = [
   { id: "name", label: "Name" },
   { id: "symbol", label: "Ticker" },
   { id: "description", label: "Description" },
@@ -231,7 +231,7 @@ const FEE_RECIPIENT: Record<string, string> = {
   unresolved: "Unresolved",
 };
 
-const RELATION: Record<string, string> = {
+export const RELATION: Record<string, string> = {
   launch_announcement: "Launch announcement",
   official_account: "The coin's own account",
   narrative_reference: "A post the coin references",

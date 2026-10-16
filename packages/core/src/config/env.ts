@@ -385,6 +385,11 @@ const envSchema = z.object({
   // back than this.
   CLEANUP_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(4),
   SNAPSHOT_RETENTION_DAYS: z.coerce.number().positive().default(30),
+  // How long after a coin's latest alert its alerts' Peak/ATH keeps following the coin's own trades
+  // (Pump.fun minute candles, apps/worker/src/jobs/candlePeaks.ts), so a runner's day-two leg or a
+  // wake-up a week later is recorded (user ask 2026-10-16). Each coin costs a candle read every ten
+  // minutes while it trades and twice a day once it is quiet.
+  PEAK_TRACKING_DAYS: z.coerce.number().positive().default(14),
   STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(14),
   // The trade tape's per-wallet rows (TokenWalletActivity, ~1.2 KB a row at ~55k rows a day, the
   // second-largest table on 2026-10-16) and the per-coin tape reads (TokenTradeTape) are kept this
@@ -672,10 +677,13 @@ const envSchema = z.object({
   // the weakest learner seat when its exam beats that seat's by CURATOR_EVOLUTION_MARGIN points,
   // at most one takeover per run. Each challenger costs one more exam of run time (about 20 s on
   // the trainer; memory stays flat). 0 freezes the field.
-  // 10 since 2026-10-06 (user decision; was 2). The takeover's bootstrap bar rises with the count
-  // (selectionAdjustedConfidence in evolution.ts), so the best of 10 is held to the same false-
-  // takeover rate as a single challenger.
-  CURATOR_EVOLUTION_CHALLENGERS: z.coerce.number().int().min(0).max(12).default(10),
+  // 4 since 2026-10-16 (user decision; was 10 from 2026-10-06, 2 before). The takeover's bootstrap
+  // bar rises with the count (selectionAdjustedConfidence in evolution.ts), so the best of many is
+  // held to the same false-takeover rate as a single challenger - but the exam's slice-to-slice
+  // spread (about 3 points of top-20% hit rate) is wider than any recipe change tried offline
+  // moved it, so the extra six mostly bought luckier exams. Their run time now goes to seed-bagging
+  // each tree learner (DEFAULT_BOOSTING_OPTIONS.bagSeeds).
+  CURATOR_EVOLUTION_CHALLENGERS: z.coerce.number().int().min(0).max(12).default(4),
   // A seat's recipe holds it at least this long before it can be replaced - time to build a live
   // record the leaderboard can judge it on. 0 = off (a seat can be replaced the run it is seated).
   CURATOR_EVOLUTION_MIN_AGE_HOURS: z.coerce.number().min(0).default(12),
@@ -848,9 +856,13 @@ const envSchema = z.object({
   // Trimmed, with surrounding quotes or a pasted "Bearer " dropped: a stray space or quote from
   // the Render dashboard otherwise makes every call a 401.
   TOKENSAGE_API_KEY: pastedKey,
-  // TokenSage's ADMIN_KEY, read only by the API for Admin > API usage: TokenSage's own outside
-  // calls and Helius credits shown next to ours (/admin/v1/upstreams and /admin/v1/helius). Unset,
-  // that panel says so and the rest of the page is unaffected.
+  // TokenSage's read-only MONITOR_KEY, read only by the API for Admin > API usage: TokenSage's own
+  // outside calls and Helius credits shown next to ours (/admin/v1/upstreams and /admin/v1/helius).
+  // Unset, that panel says so and the rest of the page is unaffected.
+  TOKENSAGE_MONITOR_KEY: pastedKey,
+  // Deprecated (security audit 2026-10-16): TokenSage's full ADMIN_KEY, used for the same panel
+  // only when TOKENSAGE_MONITOR_KEY is unset. The internet-facing API should not hold it: set the
+  // monitor key and delete this one.
   TOKENSAGE_ADMIN_KEY: pastedKey,
   TOKENSAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   // 4 since 2026-10-15 (user decision): at 2, with decisions at 50-70 an hour after the Jupiter

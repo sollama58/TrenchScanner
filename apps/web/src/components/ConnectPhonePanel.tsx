@@ -24,6 +24,9 @@ type Code =
   | { state: "expired" }
   | { state: "paired"; device: string };
 
+/** Paired phones an account may have at once (the API refuses a third: auth/deviceLink.ts). */
+const MAX_PHONES = 2;
+
 export function ConnectPhonePanel() {
   const [list, setList] = useState<DeviceList | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -209,7 +212,7 @@ export function ConnectPhonePanel() {
       )}
 
       <div className="cp-devices">
-        <h3>Phones signed in{devices.length > 0 ? ` (${devices.length})` : ""}</h3>
+        <h3>Phones signed in{devices.length > 0 ? ` (${devices.length} of ${MAX_PHONES})` : ""}</h3>
         {listError && !list ? (
           <p className="error small">Couldn&apos;t load your phones: {listError}</p>
         ) : !list ? (

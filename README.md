@@ -232,11 +232,13 @@ Render backs every paid database up continuously, with point-in-time recovery of
 **Restore** a table backup when rows are gone and point-in-time recovery no longer reaches back far enough. It is additive: rows whose key already exists are left as they are, a row whose parent is gone for good (a curated alert of a token since swept) is skipped and counted, and the whole run lands in one transaction. Take a Render export first, download the file, then from a checkout with `DATABASE_URL` pointing at the database:
 
 ```
-npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<stamp>.json.gz --dry-run
-npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<stamp>.json.gz
+npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<stamp>.json.gz --tables UserFilter,CuratedAlert --dry-run
+npm run backup:restore-tables -w @trenchscanner/worker -- trenchscanner-tables-<stamp>.json.gz --tables UserFilter,CuratedAlert
 ```
 
-The dry run prints what the file holds; the real run prints, per table, what it put back, what was already there and what it skipped. A backup restores into the schema it was taken from or a later one whose new columns are nullable or defaulted.
+`--tables` is required (run without it to see the table names; `--tables all` restores every one). Name only the tables that were actually lost: additive means every row deleted since the backup comes back, including deletions that were decisions, such as a revoked subscription, a removed whitelist entry or an account deleted for good, and a restored `User` row's old sessions work again. The dry run runs the restore and rolls it back, so its counts are what would come back, and both runs warn when `User`, `Whitelist`, `Subscription` or `LinkedDevice` rows come back. The real run prints, per table, what it put back, what was already there and what it skipped.
+
+Backup files hold every user's wallet, Telegram chat ids and the trading wallets' KMS-sealed keys: treat a downloaded file as sensitive and delete it after use. A backup restores into the schema it was taken from or a later one whose new columns are nullable or defaulted.
 
 ### Nightly full dumps (Cloudflare R2)
 
@@ -244,10 +246,14 @@ The `trenchscanner-db-backup` cron (render.yaml, `scripts/db-backup`) runs `pg_d
 
 **Setting it up (once):**
 
-1. Cloudflare dashboard → **R2** → **Create bucket**, e.g. `trenchscanner-backups` (any location). Leave public access off.
-2. R2 → **Manage API tokens** → **Create API token**: _Object Read & Write_, limited to that bucket. Keep the Access Key ID and Secret Access Key it shows once, and the S3 endpoint `https://<account id>.r2.cloudflarestorage.com`.
-3. On Render, set the same four values on both `trenchscanner-db-backup` and `trenchscanner-trainer`: `MODEL_BACKUP_S3_ENDPOINT`, `MODEL_BACKUP_S3_BUCKET`, `MODEL_BACKUP_S3_ACCESS_KEY_ID`, `MODEL_BACKUP_S3_SECRET_ACCESS_KEY`. Until they are set the cron logs "no bucket configured" and exits cleanly.
-4. On `trenchscanner-db-backup`, **Trigger Run** once and read its log: it ends with `done: ... kept, ... pruned`.
+Two buckets and two tokens, so a leaked trainer key can neither delete nor replace the nightly dumps (security audit 2026-10-16):
+
+1. Cloudflare dashboard → **R2** → **Create bucket** twice (any location, public access off): `trenchscanner-backups` for the model and table backups, and `trenchscanner-db-dumps` for the nightly dumps.
+2. R2 → **Manage API tokens** → **Create API token** twice, each _Object Read & Write_ and limited to ONE bucket: one for `trenchscanner-backups`, one for `trenchscanner-db-dumps`. Keep each Access Key ID and Secret Access Key (shown once) and the S3 endpoint `https://<account id>.r2.cloudflarestorage.com`.
+3. On Render, set `MODEL_BACKUP_S3_ENDPOINT`, `MODEL_BACKUP_S3_BUCKET`, `MODEL_BACKUP_S3_ACCESS_KEY_ID` and `MODEL_BACKUP_S3_SECRET_ACCESS_KEY` on `trenchscanner-trainer` with the backups bucket and its token, and on `trenchscanner-db-backup` with the dumps bucket and its token. Until they are set the cron logs "no bucket configured" and exits cleanly.
+4. `trenchscanner-db-dumps` → **Settings** → **Bucket lock rules** → add a rule for prefix `trenchscanner/db-dumps/`, retention **14 days** (matching `DB_DUMP_KEEP`). Nothing can delete a dump inside that window, the cron's own pruning included: it leaves a locked dump for a later night.
+5. Object lifecycle rules (bucket → **Settings** → **Object lifecycle rules**), so deleted accounts don't live on off-site: on `trenchscanner-backups`, delete objects under `trenchscanner/table-backups/` after **90 days**; on `trenchscanner-db-dumps`, delete objects under `trenchscanner/db-dumps-pre-restore/` after **30 days**.
+6. On `trenchscanner-db-backup`, **Trigger Run** once and read its log: it ends with `done: ... kept, ... pruned`.
 
 **Restoring.** `restore.sh` lives in the same image. Open `trenchscanner-db-backup` on Render → **Shell** (a fresh instance with this image and the service's settings, including the live `DATABASE_URL`), or run the image anywhere with Docker and the same variables. Every command reads the bucket; only `restore` writes, and only to the database given by `--target`.
 

@@ -920,34 +920,36 @@ export function ModelUnderTheHood() {
 
       <TrainingPanel runs={data.runs} board={lb} targets={t} now={now} />
 
-      <div className="columns even">
-        <section className="panel">
-          <span className="eyebrow">Signals</span>
-          <h3>What the models look at</h3>
-          {data.importance && data.importance.features.length > 0 ? (
-            <>
-              <p className="muted small">
-                {runName(data.runs.find((r) => r.id === data.importance!.modelId)) ??
-                  LEARNER_NAME[data.importance.learner]}{" "}
-                {data.importance.learner !== "logistic"
-                  ? "- share of tree splits that use each signal."
-                  : "- share of standardized weight; ▲ more is better, ▼ less is better."}
-              </p>
-              <HBarChart
-                data={data.importance.features.map((f) => ({
-                  label: `${f.direction === 1 ? "▲ " : f.direction === -1 ? "▼ " : ""}${f.label}`,
-                  value: f.sharePct,
-                  display: `${f.sharePct.toFixed(1)}%`,
-                }))}
-              />
-            </>
-          ) : (
-            <p className="empty">Appears after the first training run.</p>
-          )}
-        </section>
+      {!data.recipeHidden && (
+        <div className="columns even">
+          <section className="panel">
+            <span className="eyebrow">Signals</span>
+            <h3>What the models look at</h3>
+            {data.importance && data.importance.features.length > 0 ? (
+              <>
+                <p className="muted small">
+                  {runName(data.runs.find((r) => r.id === data.importance!.modelId)) ??
+                    LEARNER_NAME[data.importance.learner]}{" "}
+                  {data.importance.learner !== "logistic"
+                    ? "- share of tree splits that use each signal."
+                    : "- share of standardized weight; ▲ more is better, ▼ less is better."}
+                </p>
+                <HBarChart
+                  data={data.importance.features.map((f) => ({
+                    label: `${f.direction === 1 ? "▲ " : f.direction === -1 ? "▼ " : ""}${f.label}`,
+                    value: f.sharePct,
+                    display: `${f.sharePct.toFixed(1)}%`,
+                  }))}
+                />
+              </>
+            ) : (
+              <p className="empty">Appears after the first training run.</p>
+            )}
+          </section>
 
-        <FeatureHealthPanel data={data} now={now} />
-      </div>
+          <FeatureHealthPanel data={data} now={now} />
+        </div>
+      )}
 
       <AiReviewerPanel data={data} now={now} />
     </UnderTheHood>

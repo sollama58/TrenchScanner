@@ -225,18 +225,22 @@ interface TsHelius {
   };
 }
 
-/** TokenSage's own meter (its /admin/v1 monitor), read with TOKENSAGE_ADMIN_KEY when that is set. */
+/**
+ * TokenSage's own meter (its /admin/v1 monitor), read with TOKENSAGE_MONITOR_KEY, or the deprecated
+ * TOKENSAGE_ADMIN_KEY while only that is set.
+ */
 export async function readTokenSageUsage(
-  env: Pick<Env, "TOKENSAGE_API_URL" | "TOKENSAGE_ADMIN_KEY">,
+  env: Pick<Env, "TOKENSAGE_API_URL" | "TOKENSAGE_MONITOR_KEY" | "TOKENSAGE_ADMIN_KEY">,
   hours: number,
 ): Promise<TokenSageUsage> {
-  if (!env.TOKENSAGE_API_URL || !env.TOKENSAGE_ADMIN_KEY) {
+  const key = env.TOKENSAGE_MONITOR_KEY || env.TOKENSAGE_ADMIN_KEY;
+  if (!env.TOKENSAGE_API_URL || !key) {
     return { configured: false, error: null, sources: [], helius: null };
   }
   const trimmed = env.TOKENSAGE_API_URL.trim().replace(/\/+$/, "");
   const base = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
   const opts = {
-    headers: { authorization: `Bearer ${env.TOKENSAGE_ADMIN_KEY}` },
+    headers: { authorization: `Bearer ${key}` },
     timeoutMs: 6_000,
     retries: 0,
   };

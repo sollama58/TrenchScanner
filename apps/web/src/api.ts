@@ -906,6 +906,8 @@ export interface ModelInsights {
   winnerRuns?: WinnerRuns[];
   /** Inputs the newest run held back as too new (or lately dead) to train on. */
   heldFeatures?: { feature: string; label: string; referencePct: number; recentPct: number }[];
+  /** True for non-admins: importance and signal health are withheld, so their panels are left out. */
+  recipeHidden?: boolean;
   recentAiReviews: AiReviewRow[];
 }
 

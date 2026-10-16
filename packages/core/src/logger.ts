@@ -4,6 +4,14 @@
  */
 type Level = "debug" | "info" | "warn" | "error";
 
+/**
+ * Keys whose values never reach a log line, whatever object they ride in on (a headers object, a
+ * config dump). Nothing logs them today; this keeps a future `{ headers }` from leaking a session
+ * or an API key (security audit 2026-10-16, web H5).
+ */
+const SECRET_KEY =
+  /^(authorization|cookie|set-cookie|x-api-key|api[-_]?key|secret|secret[-_]?key|password|private[-_]?key)$/i;
+
 function write(level: Level, scope: string, msg: string, meta?: Record<string, unknown>) {
   const entry = {
     ts: new Date().toISOString(),
@@ -16,8 +24,8 @@ function write(level: Level, scope: string, msg: string, meta?: Record<string, u
   try {
     // A BigInt (a raw count(*)) or a circular object in meta made JSON.stringify throw, turning a
     // log call inside a catch block into a new rejection.
-    line = JSON.stringify(entry, (_key, value: unknown) =>
-      typeof value === "bigint" ? value.toString() : value,
+    line = JSON.stringify(entry, (key, value: unknown) =>
+      SECRET_KEY.test(key) ? "[redacted]" : typeof value === "bigint" ? value.toString() : value,
     );
   } catch {
     line = JSON.stringify({ ts: entry.ts, level, scope, msg, meta: "[unserializable]" });

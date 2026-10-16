@@ -671,6 +671,15 @@ async function link(
     linkedByTelegramId: from ? BigInt(from.id) : null,
     linkedByName: from ? userDisplayName(from) : isAnonymousAdmin(message) ? "Anonymous admin" : null,
   });
+  if (!result.ok && result.reason === "chat_limit") {
+    await api.sendMessage(
+      chatId,
+      result.limitKind === "private"
+        ? "That account already has a personal chat linked. Unlink it from <b>Filters → Telegram alerts</b> first, then send the link again."
+        : "That account already has a group linked. Unlink it from <b>Filters → Telegram alerts</b> first, then send the link again.",
+    );
+    return { action: "refused" };
+  }
   if (!result.ok) {
     logger.warn("rejected a telegram link code", { chatId: String(chatId) });
     await api.sendMessage(

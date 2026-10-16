@@ -67,7 +67,14 @@ class FakeChain {
   /** lamports per raw token unit */
   price = new Map<string, number>();
   solUsd = 200;
-  hostile: "none" | "drain-sol" | "steal-other" | "reassign" | "skim" = "none";
+  /** "dust": the build delivers a thousandth of what it quotes (a thin pool it routes through). */
+  hostile: "none" | "drain-sol" | "steal-other" | "reassign" | "skim" | "dust" = "none";
+  /** The independent price feed (SOL per whole token); null follows `price`, as a fair feed would. */
+  independent: Map<string, number> | null = null;
+  /** Jupiter's quote names a minimum of 1 (a compromised quote). */
+  lowballThreshold = false;
+  /** Jupiter quotes (and its build delivers) this share of the fair amount. */
+  quoteFactor = 1;
   /** Token balance reads lag: they return the balance from before the last transaction, once. */
   lagOnce = false;
   /** The balance read fails (an RPC that doesn't answer). */
@@ -81,6 +88,7 @@ class FakeChain {
     mintAuthority: null,
     freezeAuthority: null,
     extensions: ["metadataPointer", "tokenMetadata"],
+    decimals: 6,
   });
   /** The program the RPC claims owns the wallet's token accounts (a hostile RPC lies here). */
   reportedTokenProgram: string = PROGRAM.token;
@@ -259,6 +267,7 @@ class FakeChain {
             },
           ]);
     const fee = 10_000n;
+    if (this.hostile === "dust") outAmount /= 1000n;
     const effect: Effect = {
       wallet: userPublicKey,
       mint,
@@ -286,13 +295,14 @@ class FakeChain {
     quote: async ({ inputMint, outputMint, amount }) => {
       if (this.jupiterNoRoute) throw new NoRouteError("no route");
       const buying = inputMint === WSOL_MINT;
-      const out = this.out(buying ? outputMint : inputMint, buying, amount);
+      const fair = this.out(buying ? outputMint : inputMint, buying, amount);
+      const out = BigInt(Math.floor(Number(fair) * this.quoteFactor));
       return {
         inputMint,
         outputMint,
         inAmount: amount.toString(),
         outAmount: out.toString(),
-        otherAmountThreshold: ((out * 85n) / 100n).toString(),
+        otherAmountThreshold: this.lowballThreshold ? "1" : ((out * 85n) / 100n).toString(),
         priceImpactPct: "0",
       } satisfies SwapQuote;
     },
@@ -324,6 +334,16 @@ class FakeChain {
     },
   };
 
+  /** lamports per raw unit -> SOL per whole token (6 decimals) */
+  independentPricesSol: TradingEngineDeps["independentPricesSol"] = async (mints) => {
+    const out = new Map<string, number>();
+    for (const m of mints) {
+      const p = this.independent ? this.independent.get(m) : this.price.get(m);
+      if (p !== undefined) out.set(m, this.independent ? p : (p / 1e9) * 1e6);
+    }
+    return out;
+  };
+
   fallback: FallbackSwapClient = {
     handles: (mint) => this.fallbackMints.has(mint),
     build: async ({ side, mint, wallet, amount }) => ({
@@ -352,6 +372,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     rpc: chain.rpc,
     swap: chain.swap,
     fallback: chain.fallback,
+    independentPricesSol: (mints) => chain.independentPricesSol(mints),
     keys,
     canTrade: (w) => w === admin,
     maxBuyLamports: LAMPORTS,
@@ -540,6 +561,81 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
       expect(await prisma.tradingOrder.count({ where: { positionId: p.id } })).toBe(0);
     }
     expect(chain.sol.get(walletKey)).toBe(LAMPORTS);
+  });
+
+  it("raises a quote's lowball minimum to the independent floor, so a thin route's dust is refused", async () => {
+    await freshSignal();
+    chain.lowballThreshold = true;
+    chain.hostile = "dust";
+    expect((await tick()).buys).toBe(0);
+    const p = await position();
+    expect(p.status).toBe("failed");
+    // 0.05 SOL is 1,000 tokens at the independent price: the floor is that less 15% and a tenth.
+    expect(p.error).toMatch(/under the quoted minimum 765000000/);
+    expect(chain.sent).toHaveLength(0);
+  });
+
+  it("holds the fallback route's buy to the independent floor when the Price API has nothing", async () => {
+    await freshSignal();
+    chain.jupiterNoRoute = true;
+    chain.fallbackMints.add(mint);
+    chain.swap.pricesUsd = async () => new Map(); // the old floor: 1 token
+    chain.hostile = "dust";
+    expect((await tick()).buys).toBe(0);
+    const p = await position();
+    expect(p.status).toBe("failed");
+    expect(p.error).toMatch(/under the quoted minimum 765000000/);
+    expect(chain.sent).toHaveLength(0);
+  });
+
+  it("does not buy without an independent price, and retries while the signal is fresh", async () => {
+    await freshSignal();
+    chain.independent = new Map();
+    expect((await tick()).buys).toBe(0);
+    let p = await position();
+    expect(p.status).toBe("buying");
+    expect(p.failCount).toBe(1);
+    expect(p.error).toMatch(/no independent price/);
+    expect(chain.sent).toHaveLength(0);
+    // ...nor on the fallback route.
+    chain.jupiterNoRoute = true;
+    chain.fallbackMints.add(mint);
+    await tick(0.1);
+    p = await position();
+    expect(p.status).toBe("buying");
+    expect(p.error).toMatch(/no independent price/);
+    expect(chain.sent).toHaveLength(0);
+    // The price comes back: bought.
+    chain.independent = null;
+    expect((await tick(0.1)).buys).toBe(1);
+  });
+
+  it("still sells without an independent price, on the route's own minimum", async () => {
+    await opened();
+    chain.independent = new Map();
+    chain.price.set(mint, 0.02); // under the stop
+    expect((await tick(1)).sells).toBe(1);
+    await tick();
+    const p = await position();
+    expect(p.status).toBe("closed");
+    expect(p.closeReason).toBe("stop_loss");
+  });
+
+  it("refuses a quote far under fair value by the independent price", async () => {
+    await freshSignal();
+    chain.quoteFactor = 0.5;
+    expect((await tick()).buys).toBe(0);
+    const p = await position();
+    expect(p.status).toBe("failed");
+    expect(p.error).toMatch(/the route quotes 500000000, under 765000000/);
+    expect(chain.sent).toHaveLength(0);
+
+    // A sale is never held to the independent price: a lagging feed must not block a stop-loss.
+    chain.quoteFactor = 1;
+    await opened();
+    chain.quoteFactor = 0.5;
+    chain.price.set(mint, 0.02); // under the stop
+    expect((await tick(1)).sells).toBe(1);
   });
 
   it("refuses a fallback build that skims the trade with an extra SOL transfer", async () => {
@@ -1241,6 +1337,7 @@ describe.skipIf(!dbAvailable)("the server wallet", () => {
     rpc: chain.rpc,
     swap: chain.swap,
     fallback: chain.fallback,
+    independentPricesSol: (mints) => chain.independentPricesSol(mints),
     keys,
     // No admin wallets at all: the server bot trades regardless, its settings being admins' only.
     canTrade: () => false,

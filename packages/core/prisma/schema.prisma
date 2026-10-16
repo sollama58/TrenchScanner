@@ -556,6 +556,7 @@ model Token {
   curatedAlerts          CuratedAlert[]
   curatedShadowEmissions CuratedShadowEmission[]
   aiReviews              AiReview[]
+  peakWatch              PeakWatch?
 
   // The watchlist selection (selectWatchlist in apps/worker/src/jobs/scanJob.ts) ranges and orders
   // on this every scan cycle. Without it all three of its queries scanned and sorted the whole
@@ -645,8 +646,13 @@ model CuratedAlert {
   /// The market-cap high since the call, from the snapshots and live readings the app keeps -
   /// the same ATH Match.peakMcapUsd is for a filter alert (worker jobs/curatedPeaks.ts). Only ever
   /// rises; null until the token has traded above anchorMcapUsd since the call.
+  /// Once peakCheckedAt is set, the coin's own trades own it instead (worker jobs/candlePeaks.ts).
   peakMcapUsd        Float?
   peakMcapAt         DateTime?
+  /// When peakMcapUsd was last set from the coin's minute candles (jobs/candlePeaks.ts). From then
+  /// on the candles keep it, and the snapshot and live-reading passes leave the row alone. Null:
+  /// not read from candles yet (or a coin Pump.fun has no candles for).
+  peakCheckedAt      DateTime?
 
   /// The Narrative seat's view of a coin another seat already called: "agrees" when its deep
   /// read would have called it too, "warns" when it would not. The seat decides when TokenSage's
@@ -1321,6 +1327,9 @@ model Match {
   // (the mcap at match time), not these fields - see outcomeTrackingJob.ts for why.
   peakMcapUsd     Float?
   peakMcapAt      DateTime?
+  // When peakMcapUsd was last set from the coin's minute candles (worker jobs/candlePeaks.ts); from
+  // then on the candles keep it, and the snapshot and live-reading passes leave the row alone.
+  peakCheckedAt   DateTime?
   // The market cap the alert was priced at when the scan had a fresh quote (label rule 4, the
   // price its grading row is anchored at), on DexScreener's supply. When set it replaces
   // snapshot.marketCapUsd as the baseline for every figure below and for the card's Alert figure,
@@ -2941,4 +2950,32 @@ model BubbleMapMoment {
 
   @@unique([mintAddress, kind, userId])
   @@index([createdAt])
+}
+
+/// A coin someone was alerted to, kept under watch for PEAK_TRACKING_DAYS after its latest alert so
+/// its alerts' Peak/ATH follows the coin's own trades, a run on day two or a wake-up a week later
+/// included (worker jobs/candlePeaks.ts, user ask 2026-10-16). One row per coin, however many
+/// alerts it has. Also the record of how far an alerted coin went in the end, for working out what
+/// a runner looked like at its alert.
+model PeakWatch {
+  tokenId      String   @id
+  token        Token    @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  /// The coin's first and latest alert (a model call or a filter alert) in the window.
+  firstAlertAt DateTime
+  lastAlertAt  DateTime
+  /// When to read its candles next: sooner while it trades (nextPeakCheckDelayMs).
+  nextCheckAt  DateTime
+  lastCheckedAt DateTime?
+  /// The start of its latest minute with a trade, as of the last read.
+  lastTradeAt  DateTime?
+  /// Whether its candles agreed with its first alert's price: false, and only its readings set its
+  /// alerts' peaks (another quote coin, say). Null until a read reached back over an alert.
+  candlesTrusted Boolean?
+  /// Its highest close since its first alert as a market cap (on that alert's supply), and when.
+  athMcapUsd   Float?
+  athAt        DateTime?
+  /// Pump.fun's answer was "no such coin": nothing more to read.
+  noCandles    Boolean  @default(false)
+
+  @@index([nextCheckAt])
 }

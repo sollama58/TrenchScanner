@@ -5,6 +5,8 @@ import type { FastifyInstance } from "fastify";
 import { prisma, loadEnv, generateWalletKeypair } from "@trenchscanner/core";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
+import bs58 from "bs58";
+import nacl from "tweetnacl";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -12,8 +14,11 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
   const base = loadEnv();
   const signer = createSessionSigner(base.JWT_SECRET, base.SESSION_TTL_HOURS);
   // Real-looking keys: a withdrawal's destination is the sign-in wallet.
-  const adminWallet = generateWalletKeypair().publicKey;
-  const userWallet = generateWalletKeypair().publicKey;
+  // Keys these tests can sign with: every bot action needs the wallet's signature (tradeConfirm.ts).
+  const adminKeys = nacl.sign.keyPair();
+  const userKeys = nacl.sign.keyPair();
+  const adminWallet = bs58.encode(adminKeys.publicKey);
+  const userWallet = bs58.encode(userKeys.publicKey);
   const serverWallet = generateWalletKeypair().publicKey;
   const serverDestination = generateWalletKeypair().publicKey;
   const env = {
@@ -59,9 +64,40 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
   });
 
   const as = (who: keyof typeof cookies) => ({ cookies: { [SESSION_COOKIE_NAME]: cookies[who] } });
+  const secretOf = (cookie: string | undefined) =>
+    cookie === cookies.admin ? adminKeys.secretKey : cookie === cookies.user ? userKeys.secretKey : null;
+
+  type InjectOpts = {
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    url: string;
+    payload?: Record<string, unknown>;
+    cookies?: Record<string, string>;
+  };
+  /**
+   * inject, with the wallet's confirmation for a bot action: asks /trading/confirm for the text,
+   * signs it with the session's key and sends it in the body, as the dashboard does.
+   */
+  async function inj(server: FastifyInstance, opts: InjectOpts) {
+    const cookie = opts.cookies?.[SESSION_COOKIE_NAME];
+    const secret = secretOf(cookie);
+    const confirmable =
+      opts.method !== "GET" && /^\/trading\/(?!paper|confirm|status|backtest)/.test(opts.url) && secret;
+    if (!confirmable) return server.inject(opts);
+    const body = opts.payload ?? {};
+    const challenge = await server.inject({
+      method: "POST",
+      url: "/trading/confirm",
+      cookies: opts.cookies,
+      payload: { method: opts.method, path: opts.url, body },
+    });
+    if (challenge.statusCode !== 200) return server.inject(opts);
+    const { nonce, message } = challenge.json<{ nonce: string; message: string }>();
+    const signature = bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), secret));
+    return server.inject({ ...opts, payload: { ...body, confirmation: { nonce, signature } } });
+  }
 
   it("does not exist while the feature is off", async () => {
-    expect((await off.inject({ method: "GET", url: "/trading", ...as("admin") })).statusCode).toBe(404);
+    expect((await inj(off, { method: "GET", url: "/trading", ...as("admin") })).statusCode).toBe(404);
     for (const [method, url] of [
       ["POST", "/trading/wallet"],
       ["PUT", "/trading/bot"],
@@ -71,14 +107,14 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
       ["PUT", "/trading/server/bot"],
       ["POST", "/trading/server/withdraw"],
     ] as const) {
-      expect((await off.inject({ method, url, payload: {}, ...as("admin") })).statusCode).toBe(404);
+      expect((await inj(off, { method, url, payload: {}, ...as("admin") })).statusCode).toBe(404);
     }
   });
 
   it("answers status while off: admins only, read-only, no secrets", async () => {
-    expect((await off.inject({ method: "GET", url: "/trading/status" })).statusCode).toBe(401);
-    expect((await off.inject({ method: "GET", url: "/trading/status", ...as("user") })).statusCode).toBe(403);
-    const res = await off.inject({ method: "GET", url: "/trading/status", ...as("admin") });
+    expect((await inj(off, { method: "GET", url: "/trading/status" })).statusCode).toBe(401);
+    expect((await inj(off, { method: "GET", url: "/trading/status", ...as("user") })).statusCode).toBe(403);
+    const res = await inj(off, { method: "GET", url: "/trading/status", ...as("admin") });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.enabled).toBe(false);
@@ -87,39 +123,35 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(body.defaults.sources).toMatchObject({ filterIds: [], models: [], requireAiBuy: true });
     expect(body.checks.find((c: { id: string }) => c.id === "server-wallet").ok).toBe(true);
     expect(res.body).not.toContain(env.TRADING_LOCAL_MASTER_KEY);
-    const backtest = await off.inject({ method: "GET", url: "/trading/backtest?days=3", ...as("admin") });
+    const backtest = await inj(off, { method: "GET", url: "/trading/backtest?days=3", ...as("admin") });
     expect(backtest.statusCode).toBe(200);
     expect(backtest.json()).toMatchObject({ days: 3, models: expect.any(Array) });
-    expect((await off.inject({ method: "GET", url: "/trading/backtest", ...as("user") })).statusCode).toBe(
-      403,
-    );
+    expect((await inj(off, { method: "GET", url: "/trading/backtest", ...as("user") })).statusCode).toBe(403);
     // The same route reports the bot on where it is.
-    expect((await app.inject({ method: "GET", url: "/trading/status", ...as("admin") })).json().enabled).toBe(
+    expect((await inj(app, { method: "GET", url: "/trading/status", ...as("admin") })).json().enabled).toBe(
       true,
     );
   });
 
   it("needs a session, and an admin to start", async () => {
-    expect((await app.inject({ method: "GET", url: "/trading" })).statusCode).toBe(401);
-    expect((await app.inject({ method: "GET", url: "/trading", ...as("user") })).statusCode).toBe(403);
-    expect((await app.inject({ method: "POST", url: "/trading/wallet", ...as("user") })).statusCode).toBe(
-      403,
-    );
+    expect((await inj(app, { method: "GET", url: "/trading" })).statusCode).toBe(401);
+    expect((await inj(app, { method: "GET", url: "/trading", ...as("user") })).statusCode).toBe(403);
+    expect((await inj(app, { method: "POST", url: "/trading/wallet", ...as("user") })).statusCode).toBe(403);
     expect(
-      (await app.inject({ method: "PUT", url: "/trading/bot", payload: {}, ...as("user") })).statusCode,
+      (await inj(app, { method: "PUT", url: "/trading/bot", payload: {}, ...as("user") })).statusCode,
     ).toBe(403);
   });
 
   it("creates one sealed wallet per admin and shows the default exit plan", async () => {
-    const first = await app.inject({ method: "POST", url: "/trading/wallet", ...as("admin") });
+    const first = await inj(app, { method: "POST", url: "/trading/wallet", ...as("admin") });
     expect(first.statusCode).toBe(200);
-    const again = await app.inject({ method: "POST", url: "/trading/wallet", ...as("admin") });
+    const again = await inj(app, { method: "POST", url: "/trading/wallet", ...as("admin") });
     expect(again.json().publicKey).toBe(first.json().publicKey);
     const row = await prisma.tradingWallet.findUniqueOrThrow({ where: { userId: ids.admin } });
     expect(row.keyProvider).toBe("local");
     expect(row.secretCiphertext.length).toBe(32);
 
-    const state = await app.inject({ method: "GET", url: "/trading", ...as("admin") });
+    const state = await inj(app, { method: "GET", url: "/trading", ...as("admin") });
     expect(state.statusCode).toBe(200);
     const body = state.json();
     expect(body.canTrade).toBe(true);
@@ -136,7 +168,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
   it("saves settings, keeping only the user's own filters and known models", async () => {
     const mine = await prisma.userFilter.create({ data: { userId: ids.admin, name: "mine" } });
     const theirs = await prisma.userFilter.create({ data: { userId: ids.user, name: "theirs" } });
-    const res = await app.inject({
+    const res = await inj(app, {
       method: "PUT",
       url: "/trading/bot",
       ...as("admin"),
@@ -151,7 +183,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(bot.enabled).toBe(true);
     expect(Date.now() - bot.signalsFrom.getTime()).toBeLessThan(10_000);
 
-    const bad = await app.inject({
+    const bad = await inj(app, {
       method: "PUT",
       url: "/trading/bot",
       ...as("admin"),
@@ -174,14 +206,14 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
   });
 
   it("has no ceilings by default, enforces one the server sets, and refuses paired-phone sessions", async () => {
-    const big = await app.inject({
+    const big = await inj(app, {
       method: "PUT",
       url: "/trading/bot",
       ...as("admin"),
       payload: { config: { slippageBps: 4000, buySol: 50, maxDailySpendSol: 500, maxOpenPositions: 200 } },
     });
     expect(big.statusCode).toBe(200);
-    const over = await capped.inject({
+    const over = await inj(capped, {
       method: "PUT",
       url: "/trading/bot",
       ...as("admin"),
@@ -191,7 +223,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(over.json().error).toMatch(/slippageBps/);
     const device = await prisma.linkedDevice.create({ data: { userId: ids.admin } });
     const phone = await signer.sign({ userId: ids.admin, walletAddress: adminWallet, deviceId: device.id });
-    const res = await app.inject({
+    const res = await inj(app, {
       method: "PUT",
       url: "/trading/bot",
       cookies: { [SESSION_COOKIE_NAME]: phone },
@@ -200,7 +232,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toMatch(/sign in with your wallet/);
     // Nor may it withdraw the owner's own wallet.
-    const out = await app.inject({
+    const out = await inj(app, {
       method: "POST",
       url: "/trading/withdraw",
       cookies: { [SESSION_COOKIE_NAME]: phone },
@@ -209,7 +241,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(out.statusCode).toBe(403);
     expect(out.json().error).toMatch(/sign in with your wallet/);
     // Viewing still works from the phone.
-    const view = await app.inject({
+    const view = await inj(app, {
       method: "GET",
       url: "/trading",
       cookies: { [SESSION_COOKIE_NAME]: phone },
@@ -219,7 +251,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
   });
 
   it("withdraws only to the sign-in wallet, one at a time", async () => {
-    const tooSmall = await app.inject({
+    const tooSmall = await inj(app, {
       method: "POST",
       url: "/trading/withdraw",
       ...as("admin"),
@@ -227,7 +259,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     });
     expect(tooSmall.statusCode).toBe(400);
     // A destination in the body is ignored: there is no such field.
-    const ok = await app.inject({
+    const ok = await inj(app, {
       method: "POST",
       url: "/trading/withdraw",
       ...as("admin"),
@@ -235,7 +267,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     });
     expect(ok.statusCode).toBe(200);
     expect(ok.json().destination).toBe(adminWallet);
-    const second = await app.inject({
+    const second = await inj(app, {
       method: "POST",
       url: "/trading/withdraw",
       ...as("admin"),
@@ -258,13 +290,13 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
         withdrawTo: userWallet,
       },
     });
-    const state = await app.inject({ method: "GET", url: "/trading", ...as("user") });
+    const state = await inj(app, { method: "GET", url: "/trading", ...as("user") });
     expect(state.statusCode).toBe(200);
     expect(state.json().canTrade).toBe(false);
-    expect((await app.inject({ method: "POST", url: "/trading/sell-all", ...as("user") })).statusCode).toBe(
+    expect((await inj(app, { method: "POST", url: "/trading/sell-all", ...as("user") })).statusCode).toBe(
       200,
     );
-    const w = await app.inject({
+    const w = await inj(app, {
       method: "POST",
       url: "/trading/withdraw",
       ...as("user"),
@@ -272,7 +304,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     });
     expect(w.json().destination).toBe(userWallet);
     expect(
-      (await app.inject({ method: "PUT", url: "/trading/bot", payload: {}, ...as("user") })).statusCode,
+      (await inj(app, { method: "PUT", url: "/trading/bot", payload: {}, ...as("user") })).statusCode,
     ).toBe(403);
   });
 
@@ -294,7 +326,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
       });
     const backedOff = await position(new Date(Date.now() + 6 * 3_600_000));
     const claimed = await position(new Date(Date.now() + 30_000));
-    const one = await app.inject({
+    const one = await inj(app, {
       method: "POST",
       url: `/trading/positions/${backedOff.id}/sell`,
       ...as("user"),
@@ -308,7 +340,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
       where: { id: backedOff.id },
       data: { nextAttemptAt: new Date(Date.now() + 6 * 3_600_000) },
     });
-    expect((await app.inject({ method: "POST", url: "/trading/sell-all", ...as("user") })).statusCode).toBe(
+    expect((await inj(app, { method: "POST", url: "/trading/sell-all", ...as("user") })).statusCode).toBe(
       200,
     );
     const rows = await prisma.tradingPosition.findMany({ where: { id: { in: [backedOff.id, claimed.id] } } });
@@ -321,11 +353,11 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
 
   it("runs paper trading while the bot is off: admins only, at most three running at once", async () => {
     const url = "/trading/paper";
-    expect((await off.inject({ method: "GET", url, ...as("user") })).statusCode).toBe(403);
-    expect((await off.inject({ method: "POST", url, payload: {}, ...as("user") })).statusCode).toBe(403);
+    expect((await inj(off, { method: "GET", url, ...as("user") })).statusCode).toBe(403);
+    expect((await inj(off, { method: "POST", url, payload: {}, ...as("user") })).statusCode).toBe(403);
     const created: string[] = [];
     for (let i = 0; i < 4; i++) {
-      const res = await off.inject({
+      const res = await inj(off, {
         method: "POST",
         url,
         payload: { name: `S${i}`, bankrollSol: 5, config: { sources: { models: ["rules", "nope"] } } },
@@ -335,7 +367,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
       created.push(res.json().id);
     }
     for (const id of created.slice(0, 3)) {
-      const res = await off.inject({
+      const res = await inj(off, {
         method: "PATCH",
         url: `${url}/${id}`,
         payload: { running: true },
@@ -343,7 +375,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
       });
       expect(res.statusCode).toBe(200);
     }
-    const fourth = await off.inject({
+    const fourth = await inj(off, {
       method: "PATCH",
       url: `${url}/${created[3]}`,
       payload: { running: true },
@@ -352,7 +384,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(fourth.statusCode).toBe(409);
     expect(fourth.json().error).toMatch(/at most 3/);
     // Stopping one frees a slot.
-    await off.inject({
+    await inj(off, {
       method: "PATCH",
       url: `${url}/${created[0]}`,
       payload: { running: false },
@@ -360,7 +392,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     });
     expect(
       (
-        await off.inject({
+        await inj(off, {
           method: "PATCH",
           url: `${url}/${created[3]}`,
           payload: { running: true },
@@ -369,7 +401,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
       ).statusCode,
     ).toBe(200);
 
-    const list = (await off.inject({ method: "GET", url, ...as("admin") })).json();
+    const list = (await inj(off, { method: "GET", url, ...as("admin") })).json();
     expect(list.maxRunning).toBe(3);
     expect(list.strategies).toHaveLength(4);
     const first = list.strategies[0];
@@ -380,7 +412,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(first.stats.entries).toBe(0);
 
     // No caps on the settings beyond what keeps them meaningful.
-    const big = await off.inject({
+    const big = await inj(off, {
       method: "PATCH",
       url: `${url}/${created[1]}`,
       payload: {
@@ -394,7 +426,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     // Another admin's strategy is not yours; a reset refills the bankroll; delete removes it.
     expect(
       (
-        await off.inject({
+        await inj(off, {
           method: "POST",
           url: `${url}/${created[1]}/reset`,
           payload: { bankrollSol: 2 },
@@ -405,12 +437,65 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     const reset = await prisma.paperStrategy.findUniqueOrThrow({ where: { id: created[1]! } });
     expect(reset.cashLamports).toBe(2_000_000_000n);
     expect(
-      (await off.inject({ method: "DELETE", url: `${url}/${created[1]}`, ...as("admin") })).statusCode,
+      (await inj(off, { method: "DELETE", url: `${url}/${created[1]}`, ...as("admin") })).statusCode,
     ).toBe(200);
     expect(
-      (await off.inject({ method: "DELETE", url: `${url}/${created[1]}`, ...as("admin") })).statusCode,
+      (await inj(off, { method: "DELETE", url: `${url}/${created[1]}`, ...as("admin") })).statusCode,
     ).toBe(404);
     await prisma.paperStrategy.deleteMany({ where: { userId: ids.admin } });
+  });
+
+  it("refuses a bot action without the wallet's fresh signature for exactly that request", async () => {
+    const put = (payload: Record<string, unknown>) =>
+      app.inject({ method: "PUT", url: "/trading/bot", ...as("admin"), payload });
+    // A session alone is not enough.
+    const bare = await put({ enabled: false });
+    expect(bare.statusCode).toBe(428);
+    expect(bare.json().code).toBe("confirmation_required");
+
+    const challenge = async (body: Record<string, unknown>) => {
+      const res = await app.inject({
+        method: "POST",
+        url: "/trading/confirm",
+        ...as("admin"),
+        payload: { method: "PUT", path: "/trading/bot", body },
+      });
+      expect(res.statusCode).toBe(200);
+      const json = res.json<{ nonce: string; message: string; walletAddress: string }>();
+      expect(json.walletAddress).toBe(adminWallet);
+      expect(json.message).toMatch(/Change the trading bot's settings/);
+      return json;
+    };
+    const sign = (message: string, key = adminKeys.secretKey) =>
+      bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), key));
+
+    // Signed for one body, sent with another: refused, and nothing changes.
+    const a = await challenge({ enabled: false });
+    const swapped = await put({
+      enabled: true,
+      confirmation: { nonce: a.nonce, signature: sign(a.message) },
+    });
+    expect(swapped.statusCode).toBe(403);
+    // Signed by another wallet: refused.
+    const b = await challenge({ enabled: false });
+    const other = await put({
+      enabled: false,
+      confirmation: { nonce: b.nonce, signature: sign(b.message, userKeys.secretKey) },
+    });
+    expect(other.statusCode).toBe(403);
+    // The right signature works once, and only once.
+    const c = await challenge({ enabled: false });
+    const good = { enabled: false, confirmation: { nonce: c.nonce, signature: sign(c.message) } };
+    expect((await put(good)).statusCode).toBe(200);
+    expect((await put(good)).statusCode).toBe(403);
+    // A sign-in nonce is never a trading confirmation.
+    const signIn = await put({
+      enabled: false,
+      confirmation: { nonce: "not-a-trade-nonce", signature: sign("x") },
+    });
+    expect(signIn.statusCode).toBe(403);
+    // Paper trading needs none of this.
+    expect((await app.inject({ method: "GET", url: "/trading/paper", ...as("admin") })).statusCode).toBe(200);
   });
 
   describe("the server wallet", () => {
@@ -427,16 +512,14 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     });
 
     it("is for admins only, and shows its address but never a key", async () => {
-      expect((await app.inject({ method: "GET", url: "/trading/server", ...as("user") })).statusCode).toBe(
-        403,
-      );
+      expect((await inj(app, { method: "GET", url: "/trading/server", ...as("user") })).statusCode).toBe(403);
       expect(
-        (await app.inject({ method: "PUT", url: "/trading/server/bot", payload: {}, ...as("user") }))
+        (await inj(app, { method: "PUT", url: "/trading/server/bot", payload: {}, ...as("user") }))
           .statusCode,
       ).toBe(403);
-      const own = await app.inject({ method: "GET", url: "/trading", ...as("admin") });
+      const own = await inj(app, { method: "GET", url: "/trading", ...as("admin") });
       expect(own.json().serverWallet).toEqual({ configured: true });
-      const res = await app.inject({ method: "GET", url: "/trading/server", ...as("admin") });
+      const res = await inj(app, { method: "GET", url: "/trading/server", ...as("admin") });
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body.scope).toBe("server");
@@ -449,7 +532,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     it("follows admins' filters and models, set by any admin", async () => {
       const adminFilter = await prisma.userFilter.create({ data: { userId: ids.admin, name: "admin's" } });
       const userFilter = await prisma.userFilter.create({ data: { userId: ids.user, name: "user's" } });
-      const res = await app.inject({
+      const res = await inj(app, {
         method: "PUT",
         url: "/trading/server/bot",
         ...as("admin"),
@@ -468,7 +551,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     });
 
     it("withdraws only to the configured address, and not without one", async () => {
-      const off = await noWithdraw.inject({
+      const off = await inj(noWithdraw, {
         method: "POST",
         url: "/trading/server/withdraw",
         ...as("admin"),
@@ -476,7 +559,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
       });
       expect(off.statusCode).toBe(409);
       expect(off.json().error).toMatch(/TRADING_SERVER_WALLET_WITHDRAW_TO/);
-      const ok = await app.inject({
+      const ok = await inj(app, {
         method: "POST",
         url: "/trading/server/withdraw",
         ...as("admin"),

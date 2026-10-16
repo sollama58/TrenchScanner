@@ -12,7 +12,7 @@ import {
   type ResolvedBoostingOptions,
 } from "./boosting.js";
 import { CURRENT_FEATURE_TRANSFORM } from "./featureTransform.js";
-import { LEARNER_FEATURE_NAMES } from "./features.js";
+import { MARKET_LEARNER_FEATURE_NAMES } from "./features.js";
 
 /**
  * The third learner family: a random forest. Deep trees, each grown on its own random slice of
@@ -52,7 +52,7 @@ export interface ForestOptions {
   recencyHalfLifeDays?: number;
   legacyLabelWeight?: number;
   runWeightPerDoubling?: number;
-  /** The inputs the forest may split on. Omitted = LEARNER_FEATURE_NAMES. */
+  /** The inputs the forest may split on. Omitted = MARKET_LEARNER_FEATURE_NAMES. */
   featureNames?: readonly string[];
 }
 
@@ -95,7 +95,7 @@ export async function trainForestCurator(
 ): Promise<Omit<BoostedCuratorParams, "threshold">> {
   if (rows.length === 0) throw new Error("cannot train on zero rows");
   const opts = { ...DEFAULT_FOREST_OPTIONS, ...stripUndefined(options) };
-  const featureNames = [...(options.featureNames ?? LEARNER_FEATURE_NAMES)];
+  const featureNames = [...(options.featureNames ?? MARKET_LEARNER_FEATURE_NAMES)];
   const transform = CURRENT_FEATURE_TRANSFORM;
   const cols = featureColumns(rows, featureNames, transform);
   const binned = cols.map((c) => binColumn(c, opts.maxBins));

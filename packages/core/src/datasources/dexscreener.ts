@@ -95,6 +95,20 @@ export interface DexScreenerClientOptions {
    * a blank DexScreener stays blank.
    */
   fallback?: GeckoTerminalClient;
+  /**
+   * Re-prices readings that stopped moving when this source disagrees with them - see
+   * correctStalePrices. Unset, DexScreener's readings stand as given.
+   */
+  staleCheck?: StalePriceSource;
+}
+
+/** Where stale-looking readings are cross-checked (JupiterClient). */
+export interface StalePriceSource {
+  getTokensByAddresses(
+    mintAddresses: string[],
+    concurrency?: number,
+    options?: TokenLookupOptions,
+  ): Promise<CandidateToken[]>;
 }
 
 /**
@@ -201,6 +215,16 @@ export class DexScreenerClient {
   private readonly quoteUsd = new Map<string, { usd: number; at: number }>();
   /** Mints last priced through their quote coin, so with no USD volume yet - see fillFromFallback. */
   private readonly quotePriced = new Set<string>();
+  /** Re-prices readings that look stale - see correctStalePrices. */
+  private readonly staleCheck?: StalePriceSource;
+  /** Each mint's last DexScreener price and since when it has been exactly that. */
+  private readonly flatSince = new Map<string, { priceUsd: number; since: number }>();
+  /** The cross-check's last answer per suspect mint (null: it had no price). */
+  private readonly staleChecks = new Map<string, { at: number; priceUsd: number | null }>();
+  /** Mints a cross-check is out for, so overlapping lookups don't ask twice. */
+  private readonly staleAsking = new Set<string>();
+  /** The latest cross-check, for tests to await. */
+  staleCrossCheck: Promise<void> = Promise.resolve();
 
   constructor(options: DexScreenerClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://api.dexscreener.com";
@@ -211,6 +235,7 @@ export class DexScreenerClient {
       reserve: DEXSCREENER_PRIORITY_RESERVE,
     });
     this.fallback = options.fallback;
+    this.staleCheck = options.staleCheck;
   }
 
   /** Whether lookups are currently being answered by the fallback. */
@@ -255,6 +280,110 @@ export class DexScreenerClient {
     concurrency = 5,
     /** Per-batch timeout and retries (fetchJson's defaults when omitted) - see TokenLookupOptions. */
     options: TokenLookupOptions = {},
+  ): Promise<CandidateToken[]> {
+    const tokens = await this.lookupWithFallback(mintAddresses, concurrency, options);
+    return this.staleCheck && tokens.length > 0 ? this.correctStalePrices(tokens) : tokens;
+  }
+
+  /**
+   * Re-prices readings that look stale against the cross-check source (Jupiter). DexScreener can
+   * go on answering a coin at one price for hours while the coin trades elsewhere: a graduated
+   * coin's frozen curve with no pool listed (~$40-45k on coins trading at $2-3k), a pool quoted in
+   * another coin whose USD price stopped moving. On 2026-10-14, 17 of the 782 coins with alerts had
+   * scan readings over 2x anything they traded at (notes/peak-ath-2026-10-16.md): a coin's "Now",
+   * its Peak (which folds "Now" in), its place in the band and the model inputs all read them.
+   *
+   * A reading is suspect once its price has not moved at all for STALE_FLAT_MS at a market cap
+   * worth scanning. A genuinely quiet coin looks the same, so the cross-check decides: Jupiter
+   * prices the pool a coin really trades in, and a suspect it puts more than STALE_MAX_RATIO away
+   * takes Jupiter's price, on the pair's own supply, marked as the mix it is (dexscreenerLive). A
+   * quiet coin Jupiter agrees with is left as it was, so it stays on the watchlist and a wake-up
+   * is seen.
+   *
+   * The cross-check is never waited on: the scan's refresh is what every decision waits behind. A
+   * suspect is asked about in the background at most every STALE_RECHECK_MS, and its readings are
+   * corrected from the latest answer while that answer is under STALE_ANSWER_MAX_AGE_MS old - so a
+   * frozen reading is corrected from the lookup after it turns suspect, seconds later. A failed
+   * answer leaves the readings as DexScreener gave them.
+   */
+  private correctStalePrices(tokens: CandidateToken[]): CandidateToken[] {
+    const now = Date.now();
+    const suspects: CandidateToken[] = [];
+    for (const t of tokens) {
+      if (
+        !(t.priceUsd > 0) ||
+        (t.marketSource !== undefined && t.marketSource !== MARKET_SOURCE.dexscreener)
+      ) {
+        continue;
+      }
+      const flat = this.flatSince.get(t.mintAddress);
+      if (!flat || flat.priceUsd !== t.priceUsd) {
+        this.flatSince.delete(t.mintAddress);
+        this.flatSince.set(t.mintAddress, { priceUsd: t.priceUsd, since: now });
+        continue;
+      }
+      if (now - flat.since >= STALE_FLAT_MS && t.marketCapUsd >= STALE_CHECK_MIN_MCAP_USD) suspects.push(t);
+    }
+    trimOldest(this.flatSince, STALE_TRACK_MAX_MINTS);
+    if (suspects.length === 0) return tokens;
+
+    const ask = suspects
+      .map((t) => t.mintAddress)
+      .filter(
+        (mint) =>
+          now - (this.staleChecks.get(mint)?.at ?? 0) >= STALE_RECHECK_MS && !this.staleAsking.has(mint),
+      );
+    if (ask.length > 0) this.staleCrossCheck = this.crossCheck(ask);
+
+    const fixed = new Map<string, CandidateToken>();
+    for (const t of suspects) {
+      const check = this.staleChecks.get(t.mintAddress);
+      if (!check?.priceUsd || now - check.at > STALE_ANSWER_MAX_AGE_MS) continue;
+      const ratio = t.priceUsd / check.priceUsd;
+      if (ratio <= STALE_MAX_RATIO && ratio >= 1 / STALE_MAX_RATIO) continue;
+      fixed.set(t.mintAddress, {
+        ...t,
+        priceUsd: check.priceUsd,
+        marketCapUsd: (t.marketCapUsd / t.priceUsd) * check.priceUsd,
+        marketSource: MARKET_SOURCE.dexscreenerLive,
+      });
+    }
+    if (fixed.size > 0) {
+      logger.info("re-priced stale readings from the cross-check", {
+        count: fixed.size,
+        mints: [...fixed.keys()],
+      });
+    }
+    return fixed.size === 0 ? tokens : tokens.map((t) => fixed.get(t.mintAddress) ?? t);
+  }
+
+  /** Asks the cross-check source about `mints` and records its answers - see correctStalePrices. */
+  private async crossCheck(mints: string[]): Promise<void> {
+    for (const mint of mints) this.staleAsking.add(mint);
+    try {
+      const answers = await this.staleCheck!.getTokensByAddresses(mints, 2, {
+        timeoutMs: STALE_CHECK_TIMEOUT_MS,
+        retries: 0,
+        deadlineMs: STALE_CHECK_TIMEOUT_MS,
+      });
+      const priced = new Map(answers.filter((a) => a.priceUsd > 0).map((a) => [a.mintAddress, a.priceUsd]));
+      const at = Date.now();
+      for (const mint of mints) {
+        this.staleChecks.delete(mint);
+        this.staleChecks.set(mint, { at, priceUsd: priced.get(mint) ?? null });
+      }
+      trimOldest(this.staleChecks, STALE_TRACK_MAX_MINTS);
+    } catch (err) {
+      logger.warn("stale-price cross-check failed", { mints: mints.length, error: String(err) });
+    } finally {
+      for (const mint of mints) this.staleAsking.delete(mint);
+    }
+  }
+
+  private async lookupWithFallback(
+    mintAddresses: string[],
+    concurrency: number,
+    options: TokenLookupOptions,
   ): Promise<CandidateToken[]> {
     const unique = [...new Set(mintAddresses)];
     if (unique.length === 0) return [];
@@ -923,6 +1052,29 @@ const CURVE_RECHECK_FIRST_MS = 60_000;
 const CURVE_RECHECK_MAX_MS = 15 * 60_000;
 /** Curves whose re-read backoff is remembered at once. */
 const CURVE_RECHECK_MAX_MINTS = 5_000;
+
+/** A reading whose price has not moved at all for this long is suspect - see correctStalePrices. */
+const STALE_FLAT_MS = 10 * 60_000;
+/** Below this a suspect isn't worth a cross-check: under the watchlist's near-band floor. */
+const STALE_CHECK_MIN_MCAP_USD = 7_000;
+/** How often one suspect mint is asked about. */
+const STALE_RECHECK_MS = 2 * 60_000;
+/** The cross-check's price further than this factor from DexScreener's replaces it. */
+const STALE_MAX_RATIO = 1.5;
+/** The most one cross-check takes. */
+const STALE_CHECK_TIMEOUT_MS = 5_000;
+/** A cross-check answer older than this no longer corrects a reading. */
+const STALE_ANSWER_MAX_AGE_MS = 5 * 60_000;
+/** Mints the stale-price bookkeeping remembers at once. */
+const STALE_TRACK_MAX_MINTS = 10_000;
+
+/** Drops a map's oldest entries (insertion order) down to `max`. */
+function trimOldest<K, V>(map: Map<K, V>, max: number): void {
+  for (const key of map.keys()) {
+    if (map.size <= max) return;
+    map.delete(key);
+  }
+}
 
 /** Below this, a non-curve pool is too thin to be a trustworthy price source. */
 const MIN_CANONICAL_POOL_LIQUIDITY_USD = 1000;

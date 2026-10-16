@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
+import { confirmedTradingCall } from "../tradeConfirm";
 import {
   BoltIcon,
   CheckIcon,
@@ -423,7 +424,7 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
     setBusy(true);
     setMsg(null);
     try {
-      await api(`${base(state.scope)}/wallet`, { method: "POST" });
+      await confirmedTradingCall(`${base(state.scope)}/wallet`, "POST");
       await reload();
     } catch (err) {
       setMsg(errorText(err));
@@ -441,10 +442,7 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
     setBusy(true);
     setMsg(null);
     try {
-      await api(`${base(state.scope)}/withdraw`, {
-        method: "POST",
-        body: JSON.stringify({ amount: lamports }),
-      });
+      await confirmedTradingCall(`${base(state.scope)}/withdraw`, "POST", { amount: lamports });
       setAmount("");
       setMsg("Withdrawal requested. It is sent within a few seconds.");
       await reload();
@@ -1126,7 +1124,7 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
     setBusy(true);
     setMsg(null);
     try {
-      await api(`${base(state.scope)}/bot`, { method: "PUT", body: JSON.stringify({ enabled }) });
+      await confirmedTradingCall(`${base(state.scope)}/bot`, "PUT", { enabled });
       await reload();
     } catch (err) {
       setMsg(errorText(err));
@@ -1135,7 +1133,7 @@ function BotPanel({ state, reload }: { state: TradingState; reload: () => Promis
     }
   };
   const saveConfig = async (config: BotConfig) => {
-    await api(`${base(state.scope)}/bot`, { method: "PUT", body: JSON.stringify({ config }) });
+    await confirmedTradingCall(`${base(state.scope)}/bot`, "PUT", { config });
     await reload();
   };
 
@@ -1196,7 +1194,7 @@ function PositionsPanel({ state, reload }: { state: TradingState; reload: () => 
     setBusy(true);
     setMsg(null);
     try {
-      await api(path, { method: "POST" });
+      await confirmedTradingCall(path, "POST");
     } catch (err) {
       // A position sold or closed since the last refresh, say: the reload shows it as it is.
       setMsg(errorText(err));
@@ -1559,10 +1557,7 @@ function TradeAlertsPanel() {
     const before = alerts;
     setAlerts({ ...alerts, ...patch, events: { ...alerts.events, ...(patch.events ?? {}) } });
     try {
-      const res = await api<{ alerts: TradeAlerts }>("/trading/alerts", {
-        method: "PUT",
-        body: JSON.stringify(patch),
-      });
+      const res = await confirmedTradingCall<{ alerts: TradeAlerts }>("/trading/alerts", "PUT", patch);
       setAlerts(res.alerts);
       setError(null);
     } catch (err) {

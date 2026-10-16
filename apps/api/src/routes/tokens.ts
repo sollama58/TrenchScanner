@@ -241,6 +241,31 @@ type StonkFeesReader = Pick<HeliusClient, "getWalletShareOfMint">;
 const stonkFeesCache = new KeyedCache<{ pct: number; withheldFeeAuthority?: string }>(60_000);
 
 /**
+ * Coins whose chain read said "not Stonks", for a day: a mint's withheld-fee authority hardly ever
+ * changes, and most Token rows have no recorded launchpad, so without this every distinct mint
+ * cost a Helius read each minute (security audit 2026-10-16, inputs F1).
+ */
+const NOT_STONKS_TTL_MS = 24 * 3_600_000;
+const NOT_STONKS_MAX = 50_000;
+const notStonks = new Map<string, number>();
+function knownNotStonks(mint: string, now = Date.now()): boolean {
+  const at = notStonks.get(mint);
+  if (at === undefined) return false;
+  if (now - at < NOT_STONKS_TTL_MS) return true;
+  notStonks.delete(mint);
+  return false;
+}
+function rememberNotStonks(mint: string, now = Date.now()): void {
+  notStonks.delete(mint);
+  notStonks.set(mint, now);
+  while (notStonks.size > NOT_STONKS_MAX) {
+    const oldest = notStonks.keys().next().value;
+    if (oldest === undefined) break;
+    notStonks.delete(oldest);
+  }
+}
+
+/**
  * The fee wallet's share for the token modal's card. Only coins the scanner tracks, and only a
  * chain read for one whose launchpad is Stonks or not recorded (then its mint's withheld-fee
  * authority decides): a Pump.fun coin's answer is known without one. Exported for tests.
@@ -254,6 +279,7 @@ export async function readStonkFees(
   const known = isStonksCoin({ launchpad });
   if (!known && launchpad) return out;
   if (!reader) return { ...out, stonks: known };
+  if (!known && knownNotStonks(mintAddress)) return out;
   const read = await stonkFeesCache
     .get(mintAddress, async () => {
       const r = await reader.getWalletShareOfMint(STONKS_FEE_WALLET, mintAddress);
@@ -263,6 +289,7 @@ export async function readStonkFees(
     })
     .catch(() => null);
   const stonks = known || isStonksCoin({ withheldFeeAuthority: read?.withheldFeeAuthority });
+  if (read && !stonks) rememberNotStonks(mintAddress);
   return { ...out, stonks, pct: stonks && read ? read.pct : null };
 }
 
@@ -358,18 +385,25 @@ export async function registerTokenRoutes(
   });
 
   /** Stonks' fee wallet's share of the coin, for the token modal's card; `stonks: false` for any other coin. */
-  app.get("/:mintAddress/stonk-fees", async (request, reply): Promise<StonkFees | undefined> => {
-    const { mintAddress } = request.params as { mintAddress: string };
-    if (!MINT_RE.test(mintAddress)) {
-      reply.code(400).send({ error: "not a valid mint" });
-      return;
-    }
-    const token = await prisma.token.findUnique({ where: { mintAddress }, select: { launchpad: true } });
-    reply.header("Cache-Control", "private, max-age=30");
-    if (!token)
-      return { stonks: false, wallet: STONKS_FEE_WALLET, label: STONKS_FEE_WALLET_LABEL, pct: null };
-    return readStonkFees(mintAddress, opts.stonkFees ?? null, token.launchpad);
-  });
+  app.get(
+    "/:mintAddress/stonk-fees",
+    // Each miss is a Helius read: a modal opens one per coin, nobody legitimate needs more.
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply): Promise<StonkFees | undefined> => {
+      const { mintAddress } = request.params as { mintAddress: string };
+      if (!MINT_RE.test(mintAddress)) {
+        reply.code(400).send({ error: "not a valid mint" });
+        return;
+      }
+      // Reads Helius: only for a coin the reader may open, like the modal's other reads.
+      if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
+      const token = await prisma.token.findUnique({ where: { mintAddress }, select: { launchpad: true } });
+      reply.header("Cache-Control", "private, max-age=30");
+      if (!token)
+        return { stonks: false, wallet: STONKS_FEE_WALLET, label: STONKS_FEE_WALLET_LABEL, pct: null };
+      return readStonkFees(mintAddress, opts.stonkFees ?? null, token.launchpad);
+    },
+  );
 
   /**
    * Why the models did or didn't call the coin (tokenWhy.ts), at its decision moment at or before

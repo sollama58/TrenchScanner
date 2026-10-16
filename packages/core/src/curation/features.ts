@@ -696,6 +696,15 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "nsTrendMatched",
   "livestreamLive",
   "nsXSpoofed",
+  // The last hour's volume, buy and sell counts and volume-to-mcap (user decision 2026-10-16):
+  // equal to their 24h twins on 89% of decision rows (every coin under an hour old; rank
+  // correlation 0.92-0.96 on the rest). Taking all four out moved the walk-forward AUC +0.002 and
+  // the top-20% 2x rate +0.01 points (18 paired fits on 21.8k rows from 10-05). The 24h figures
+  // carry more (shuffling volume24hUsd costs 0.44 AUC points, volume1hUsd 0.08). Still recorded.
+  "volume1hUsd",
+  "buys1h",
+  "sells1h",
+  "volume1hToMcapRatio",
   // The ns* writer's rules version (added 2026-10-16): a marker for maskKnownBadInputs, never
   // an input - a model that split on it would learn the deploy calendar.
   "nsRulesVersion",
@@ -704,6 +713,37 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
 export const LEARNER_FEATURE_NAMES: readonly CandidateFeatureName[] = CANDIDATE_FEATURE_NAMES.filter(
   (name) => !RETIRED_LEARNER_INPUTS.has(name),
+);
+
+/**
+ * The TokenSage inputs the market seats read (user decision 2026-10-16): the fee group and the
+ * logo score, the only ones that separated runners on their own on 7,444 exam decision rows from
+ * 10-08 (fee to a wallet AUC 0.522 in 6 of 6 time slices, creator fee share 0.476 in 5 of 6, logo
+ * score 0.528); the other 60 sat at 0.49-0.52, no more than chance across that many, and adding
+ * all 66 to the trees moved the top-20% 2x rate 0.6 +- 0.5 points. The rest stay recorded and stay
+ * on LEARNER_FEATURE_NAMES for the Narrative and Narrative Blend seats; add one here once later
+ * days show it separating runners.
+ */
+export const MARKET_TOKENSAGE_INPUTS: readonly CandidateFeatureName[] = [
+  "nsFeeToHolders",
+  "nsFeeToCharity",
+  "nsFeeToGithub",
+  "nsFeeToWallet",
+  "nsFeeCreatorShare",
+  "nsLogoScore",
+];
+
+/** A TokenSage input: an ns* reading, or one TokenSage's writer owns. */
+export function isTokenSageInput(name: string): boolean {
+  return name.startsWith("ns") || (ALL_NARRATIVE_FEATURES as readonly string[]).includes(name);
+}
+
+/**
+ * The inputs a market seat (every learner but the Narrative and Narrative Blend seats) reads unless
+ * its recipe names its own: every learner input, with TokenSage's narrowed to MARKET_TOKENSAGE_INPUTS.
+ */
+export const MARKET_LEARNER_FEATURE_NAMES: readonly CandidateFeatureName[] = LEARNER_FEATURE_NAMES.filter(
+  (name) => !isTokenSageInput(name) || MARKET_TOKENSAGE_INPUTS.includes(name),
 );
 
 /** A recipe's feature list with the retired inputs taken out. */

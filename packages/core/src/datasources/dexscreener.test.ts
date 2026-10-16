@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DexScreenerClient, pickCanonicalPair, pumpSwapPoolCreatedAt } from "./dexscreener.js";
+import { MARKET_SOURCE } from "../marketSource.js";
 import { GeckoTerminalClient, parseGeckoTokens } from "./geckoterminal.js";
 
 describe("pickCanonicalPair", () => {
@@ -947,5 +948,94 @@ describe("getTokensByAddresses: the fallback prices what DexScreener can't", () 
     });
     expect(asked).toEqual([]);
     expect(tokens.find((t) => t.mintAddress === "pepeQuoted")?.marketCapUsd).toBe(0);
+  });
+});
+
+describe("stale readings", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  /** A pumpswap pool for `mint` at `priceUsd` on a 1B supply. */
+  const pool = (mint: string, priceUsd: number) => ({
+    chainId: "solana",
+    dexId: "pumpswap",
+    baseToken: { address: mint },
+    priceUsd: String(priceUsd),
+    marketCap: priceUsd * 1e9,
+    liquidity: { usd: 20_000 },
+  });
+
+  it("re-prices a reading that stopped moving when the cross-check puts it elsewhere, and leaves a quiet coin alone", async () => {
+    // Salem, 2026-10-14: DexScreener held it at $43k for hours while it traded at $2-3k.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const t0 = Date.parse("2026-10-14T20:00:00Z");
+    vi.setSystemTime(t0);
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve(new Response(JSON.stringify([pool("frozen", 4.3e-5), pool("quiet", 2e-5)]))),
+    );
+    const asked: string[][] = [];
+    const jupiter = {
+      getTokensByAddresses: async (mints: string[]) => {
+        asked.push(mints);
+        return [
+          { mintAddress: "frozen", priceUsd: 2.5e-6, marketCapUsd: 2_500 },
+          { mintAddress: "quiet", priceUsd: 2.1e-5, marketCapUsd: 21_000 },
+        ].filter((t) => mints.includes(t.mintAddress)) as never;
+      },
+    };
+    const client = new DexScreenerClient({ staleCheck: jupiter });
+    const read = async () => {
+      const tokens = await client.getTokensByAddresses(["frozen", "quiet"]);
+      return new Map(tokens.map((t) => [t.mintAddress, t]));
+    };
+
+    // Moving or only briefly flat: as DexScreener gave it, and nothing asked.
+    expect((await read()).get("frozen")?.marketCapUsd).toBeCloseTo(43_000);
+    vi.setSystemTime(t0 + 5 * 60_000);
+    await read();
+    expect(asked).toEqual([]);
+
+    // Flat for ten minutes: asked about in the background, never waited on.
+    vi.setSystemTime(t0 + 11 * 60_000);
+    expect((await read()).get("frozen")?.marketCapUsd).toBeCloseTo(43_000);
+    expect(asked).toEqual([["frozen", "quiet"]]);
+    await client.staleCrossCheck;
+
+    // The next lookup takes the cross-check's price on the pair's own supply.
+    vi.setSystemTime(t0 + 11 * 60_000 + 15_000);
+    const after = await read();
+    expect(after.get("frozen")).toMatchObject({
+      priceUsd: 2.5e-6,
+      marketSource: MARKET_SOURCE.dexscreenerLive,
+    });
+    expect(after.get("frozen")?.marketCapUsd).toBeCloseTo(2_500);
+    // Within 1.5x of the cross-check: a genuinely quiet coin, left as it was.
+    expect(after.get("quiet")).toMatchObject({ priceUsd: 2e-5 });
+    expect(after.get("quiet")?.marketSource).not.toBe(MARKET_SOURCE.dexscreenerLive);
+    // Not asked again inside two minutes.
+    expect(asked).toHaveLength(1);
+  });
+
+  it("leaves the readings as they were when the cross-check fails or isn't set", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const t0 = Date.parse("2026-10-14T20:00:00Z");
+    vi.setSystemTime(t0);
+    vi.stubGlobal("fetch", () => Promise.resolve(new Response(JSON.stringify([pool("frozen", 4.3e-5)]))));
+    const failing = new DexScreenerClient({
+      staleCheck: { getTokensByAddresses: () => Promise.reject(new Error("down")) },
+    });
+    const plain = new DexScreenerClient();
+    for (const client of [failing, plain]) {
+      vi.setSystemTime(t0);
+      await client.getTokensByAddresses(["frozen"]);
+      vi.setSystemTime(t0 + 11 * 60_000);
+      await client.getTokensByAddresses(["frozen"]);
+      await client.staleCrossCheck;
+      vi.setSystemTime(t0 + 12 * 60_000);
+      const [token] = await client.getTokensByAddresses(["frozen"]);
+      expect(token?.marketCapUsd).toBeCloseTo(43_000);
+    }
   });
 });

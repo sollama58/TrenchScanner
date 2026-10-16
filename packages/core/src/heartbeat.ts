@@ -22,6 +22,7 @@ export type HeartbeatJob =
   | "score-weights"
   | "lighthouse-rollup"
   | "label-regrade"
+  | "candle-peaks"
   | "trade-tape"
   | "wallet-risk"
   | "kol-side-wallets"
@@ -73,6 +74,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "score-weights": "trainer",
   "lighthouse-rollup": "trainer",
   "label-regrade": "trainer",
+  // Pump.fun candle reads for alerted coins, beside the re-grade that reads the same candles.
+  "candle-peaks": "trainer",
   // The scanner: the service with the Helius key the tape reads with (the trainer has none).
   "trade-tape": "scanner",
   "wallet-risk": "trainer",

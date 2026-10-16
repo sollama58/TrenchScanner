@@ -269,12 +269,15 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       });
     }
 
+    // Charged before the mint joins the scanner: the balance check above reserves nothing, so
+    // concurrent lookups used to put every mint on the scan and charge only one of them
+    // (security audit 2026-10-16, paywall F3).
+    const spent = await spendCredits(wallet, "token", mint, cost);
+    if (spent.status === "insufficient") return notEnough(reply, spent.balance, cost);
+
     const now = new Date();
     keepReading(mint, reading, now);
     await upsertLookedUpToken(mint, reading, now);
-
-    const spent = await spendCredits(wallet, "token", mint, cost);
-    if (spent.status === "insufficient") return notEnough(reply, spent.balance, cost);
     return {
       mint,
       charged: spent.status === "charged" ? spent.cost : 0,

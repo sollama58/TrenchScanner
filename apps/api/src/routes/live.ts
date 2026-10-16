@@ -66,6 +66,42 @@ const tickQuerySchema = z.object({
 });
 
 /**
+ * How many distinct tokens one account may mark as viewed per window. The worker refreshes only
+ * the most recently viewed tokens (LIVE_PRICE_MAX_TRACKED, 150), so one account ticking hundreds
+ * of ids could hold every slot and starve other viewers' cards and paid lookups of their scans
+ * (security audit 2026-10-16, inputs F2). A few open tabs of 30 fit well under it.
+ */
+const VIEW_STAMP_WINDOW_MS = 5 * 60_000;
+const VIEW_STAMPS_PER_USER = 120;
+const VIEW_STAMP_USERS_MAX = 10_000;
+const stampsByUser = new Map<string, { at: number; ids: Set<string> }>();
+
+/** The ids this account may stamp now (those it already stamped this window, then new ones up to the cap). */
+export function allowViewStamps(userKey: string, ids: string[], now = Date.now()): string[] {
+  let entry = stampsByUser.get(userKey);
+  stampsByUser.delete(userKey);
+  if (!entry || now - entry.at > VIEW_STAMP_WINDOW_MS) entry = { at: now, ids: new Set() };
+  stampsByUser.set(userKey, entry);
+  while (stampsByUser.size > VIEW_STAMP_USERS_MAX) {
+    const oldest = stampsByUser.keys().next().value;
+    if (oldest === undefined) break;
+    stampsByUser.delete(oldest);
+  }
+  const seen = entry.ids;
+  return ids.filter((id) => {
+    if (seen.has(id)) return true;
+    if (seen.size >= VIEW_STAMPS_PER_USER) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+/** Test seam: forget the per-account stamp windows. */
+export function clearViewStampWindows(): void {
+  stampsByUser.clear();
+}
+
+/**
  * The live tick: current market data for the tokens on an open page, seconds old.
  *
  * Before this, "Now" on a card was as fresh as the last full feed poll (every 30s) carrying the
@@ -116,7 +152,8 @@ export async function registerLiveRoutes(
     };
 
     let rows = await read(true);
-    opts.viewStamps.record(rows.map((r) => r.id));
+    const stampIds = rows.map((r) => r.id);
+    opts.viewStamps.record(request.user ? allowViewStamps(request.user.userId, stampIds) : stampIds);
     const refreshed = await opts.liveRefresher.refreshAndWait(rows, {
       maxAgeMs: LIVE_TICK_MAX_AGE_MS,
       timeoutMs: LIVE_TICK_WAIT_MS,

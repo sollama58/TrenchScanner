@@ -233,6 +233,59 @@ async function signInWithLegacy(name: string, provider: LegacyProvider): Promise
   );
 }
 
+// ---- Signing a message as the signed-in wallet (trading bot confirmations) ----
+
+/** The signed-in wallet isn't in this browser, or is set to another account. */
+export class WalletUnavailableError extends Error {}
+
+/**
+ * Has the wallet `address` signed in with sign `message`, and returns the signature (base58).
+ * Prefers the extension remembered at sign-in, then any standard wallet that holds the address,
+ * then the older injected providers. Never signs with a different account: the server would refuse
+ * it, and a wallet quietly signing as someone else is the last thing to train people to accept.
+ */
+export async function signMessageAs(address: string, message: string): Promise<string> {
+  const bytes = new TextEncoder().encode(message);
+  const signers = solanaWallets().filter((w) => SolanaSignMessage in w.features);
+  const name = signedInWalletName(address)?.toLowerCase();
+  const named = name
+    ? signers.filter((w) => {
+        const n = w.name.toLowerCase();
+        return n === name || n.includes(name) || name.includes(n);
+      })
+    : [];
+  const holds = (w: Wallet) => w.accounts.some((a) => a.address === address);
+  const ordered = [...named.filter(holds), ...named, ...signers.filter(holds)];
+  const wallet = ordered[0];
+  if (wallet) {
+    let account = wallet.accounts.find((a) => a.address === address);
+    if (!account) {
+      const connect = (wallet.features as Partial<StandardConnectFeature>)[StandardConnect];
+      const connected = connect ? await withTimeout(connect.connect(), "connect") : { accounts: [] };
+      account = connected.accounts.find((a) => a.address === address);
+    }
+    if (!account)
+      throw new WalletUnavailableError(
+        `Switch ${wallet.name} to the account you signed in with (${address.slice(0, 4)}…${address.slice(-4)}), then try again.`,
+      );
+    const signMessage = (wallet.features as SolanaSignMessageFeature)[SolanaSignMessage];
+    const [signed] = await withTimeout(signMessage.signMessage({ account, message: bytes }), "sign");
+    if (!signed) throw new Error("The wallet returned no signature");
+    return bs58.encode(signed.signature);
+  }
+  for (const { provider } of legacyWallets()) {
+    const connected = await withTimeout(provider.connect(), "connect");
+    if ((connected?.publicKey ?? provider.publicKey)?.toString() !== address) continue;
+    const signed = await withTimeout(provider.signMessage(bytes, "utf8"), "sign");
+    const signature = signed instanceof Uint8Array ? signed : signed?.signature;
+    if (!signature) throw new Error("The wallet returned no signature");
+    return bs58.encode(Uint8Array.from(signature));
+  }
+  throw new WalletUnavailableError(
+    "Open this on the computer with the wallet you signed in with: trading bot changes need that wallet to approve them.",
+  );
+}
+
 // ---- What to tell the person when it fails ----
 
 /** A plain-language reason for a failed sign-in, never an empty or bare technical one. */

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "../db.js";
 import { FakeTelegramApi } from "./fakeApi.js";
 import { issueTelegramLinkCode } from "./link.js";
@@ -81,6 +81,14 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
   let userId = "";
   beforeAll(async () => {
     userId = (await prisma.user.create({ data: { walletAddress: `${TAG}-wallet-main` } })).id;
+  });
+  // One account links a chat in nearly every test: unlink the last test's chats first, so the
+  // per-account cap (one personal chat, one group; link.ts) leaves room for the next.
+  beforeEach(async () => {
+    await prisma.telegramChat.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
   });
   afterAll(async () => {
     if (!dbAvailable) return;
