@@ -48,6 +48,8 @@ export interface ChainTx extends RawLaunchTx {
     | (NonNullable<RawLaunchTx["meta"]> & {
         preBalances?: number[] | null;
         postBalances?: number[] | null;
+        /** The network fee in lamports, priority fee included. */
+        fee?: number | null;
       })
     | null;
   transaction?: {
@@ -78,10 +80,17 @@ export function keysOf(tx: ChainTx): string[] {
 /**
  * The trades in a page of a mint's transactions (Helius getTransactionsForAddress, full details,
  * oldest first). Every wallet whose balance of the mint moved is a trader in that transaction: up
- * is a buy, down a sell, and the SOL is its own lamport change (fees and tips included, so a buy
- * reads a little dear). Program accounts (the bonding curve, a pool, a vault) are off the ed25519
- * curve and left out, so the curve never reads as the biggest seller. A token move with no SOL
- * beside it is a transfer, kept: it changes who holds what.
+ * is a buy, down a sell. Program accounts (the bonding curve, a pool, a vault) are off the ed25519
+ * curve and left out, so the curve never reads as the biggest seller. A token move with nothing
+ * paid beside it is a transfer, kept: it changes who holds what.
+ *
+ * The SOL is what the wallet paid or got for the mint, whatever coin it paid in (paidSol): its
+ * lamports, its wrapped SOL, and any other coin that moved the other way, valued in SOL from
+ * `solPerUnit` (see counterMints), or the fee payer's when a service wallet paid for it. Pump.fun
+ * lets a launch pair with any coin (PUMP, USD1, a tokenized stock, another launch), and routers pay
+ * out in USDC: a trade paid in another coin read as ~0 SOL here before (2026-10-16: flagged-wallet
+ * SOL read 0 on 75% of coin-paired calls against 24% of SOL-paired ones). A coin `solPerUnit`
+ * can't price is left out, so such a trade reads its lamports alone, as before.
  *
  * Also returns the launch, when the page starts at it: the transaction that minted the supply
  * (no balance of the mint before it), its time, and its fee payer, the creator.
@@ -90,6 +99,7 @@ export function tradesFromChainTransactions(
   mint: string,
   txs: readonly ChainTx[],
   walletCheck: (address: string) => boolean = isWalletAddress,
+  solPerUnit: ReadonlyMap<string, number> = new Map(),
 ): { trades: TapeTrade[]; launch: { atMs: number | null; creator: string | null } | null } {
   const isWallet = new Map<string, boolean>();
   const wallet = (a: string) => {
@@ -112,26 +122,28 @@ export function tradesFromChainTransactions(
       if (pre.length === 0 && post.length > 0) launch = { atMs, creator: keys[0] || null };
     }
     if (atMs === null) continue;
-    const deltas = new Map<string, number>();
-    const add = (b: RawBalance, sign: 1 | -1) => {
-      if (!b.owner) return;
-      const raw = Number(b.uiTokenAmount?.amount ?? 0);
-      if (!Number.isFinite(raw)) return;
-      const tokens = raw / 10 ** (b.uiTokenAmount?.decimals ?? PUMP_DECIMALS);
-      deltas.set(b.owner, (deltas.get(b.owner) ?? 0) + sign * tokens);
-    };
-    for (const b of pre) add(b, -1);
-    for (const b of post) add(b, 1);
-    for (const [owner, delta] of deltas) {
-      if (delta === 0 || !wallet(owner)) continue;
-      const i = keys.indexOf(owner);
-      const lamports = i >= 0 ? (tx.meta.postBalances?.[i] ?? 0) - (tx.meta.preBalances?.[i] ?? 0) : 0;
+    const deltas = ownerDeltas(pre, post, (b) => b.owner);
+    // Every other coin's moves, by owner then mint: the leg paid or received in something else.
+    const other = otherDeltas(tx, mint);
+    const traders = [...deltas].filter(([owner, delta]) => delta !== 0 && wallet(owner));
+    // A trade a service wallet pays for (a trading bot's relayer, sending the coin to its user's
+    // wallet): when exactly one trader paid nothing itself and the fee payer is not a trader, what
+    // the fee payer paid or got is that trader's, less the network fee.
+    const payer = keys[0];
+    const payerIsTrader = payer !== undefined && (deltas.get(payer) ?? 0) !== 0;
+    const unpaid = traders.filter(
+      ([owner, delta]) => paidSol(tx, keys, other, owner, delta, solPerUnit) === 0,
+    );
+    for (const [owner, delta] of traders) {
       const side = delta > 0 ? "buy" : "sell";
-      const sol = side === "buy" ? Math.max(0, -lamports) : Math.max(0, lamports);
+      let sol = paidSol(tx, keys, other, owner, delta, solPerUnit);
+      if (sol === 0 && unpaid.length === 1 && payer && !payerIsTrader) {
+        sol = paidSol(tx, keys, other, payer, delta, solPerUnit, (tx.meta.fee ?? 0) / LAMPORTS_PER_SOL);
+      }
       trades.push({
         wallet: owner,
         side,
-        sol: sol / LAMPORTS_PER_SOL,
+        sol,
         tokens: Math.abs(delta),
         atMs,
         tx: sig,
@@ -139,6 +151,130 @@ export function tradesFromChainTransactions(
     }
   }
   return { trades, launch };
+}
+
+/**
+ * What `owner` paid (for a buy, `delta` > 0) or got (a sell) for the mint in one transaction, in
+ * SOL: its lamport change plus `feeBack` (fees and tips are otherwise included, so a buy reads a
+ * little dear), its wrapped SOL either way, and each other coin on the leg that went the other way
+ * (paid on a buy, got on a sell, so a coin passing through is not a price) valued from
+ * `solPerUnit`. A coin it has no price for adds nothing.
+ */
+function paidSol(
+  tx: ChainTx,
+  keys: string[],
+  other: Map<string, Map<string, number>>,
+  owner: string,
+  delta: number,
+  solPerUnit: ReadonlyMap<string, number>,
+  feeBack = 0,
+): number {
+  const i = keys.indexOf(owner);
+  const lamports = i >= 0 ? (tx.meta?.postBalances?.[i] ?? 0) - (tx.meta?.preBalances?.[i] ?? 0) : 0;
+  let solIn = lamports / LAMPORTS_PER_SOL + feeBack;
+  for (const [coin, moved] of other.get(owner) ?? []) {
+    if (coin === WRAPPED_SOL_MINT) solIn += moved;
+    else if (delta > 0 ? moved < 0 : moved > 0) solIn += moved * (solPerUnit.get(coin) ?? 0);
+  }
+  return delta > 0 ? Math.max(0, -solIn) : Math.max(0, solIn);
+}
+
+/** Wrapped SOL: counted as SOL wherever a wallet pays or gets it. */
+const WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112";
+
+/** Each owner's net change in whole tokens across a transaction's token balances. */
+function ownerDeltas(
+  pre: RawBalance[],
+  post: RawBalance[],
+  ownerOf: (b: RawBalance) => string | undefined,
+): Map<string, number> {
+  const deltas = new Map<string, number>();
+  const add = (b: RawBalance, sign: 1 | -1) => {
+    const owner = ownerOf(b);
+    if (!owner) return;
+    const raw = Number(b.uiTokenAmount?.amount ?? 0);
+    if (!Number.isFinite(raw)) return;
+    const tokens = raw / 10 ** (b.uiTokenAmount?.decimals ?? PUMP_DECIMALS);
+    deltas.set(owner, (deltas.get(owner) ?? 0) + sign * tokens);
+  };
+  for (const b of pre) add(b, -1);
+  for (const b of post) add(b, 1);
+  return deltas;
+}
+
+/** Every coin but `mint` that moved in a transaction: owner -> coin -> net whole tokens. */
+function otherDeltas(tx: ChainTx, mint: string): Map<string, Map<string, number>> {
+  const byCoin = new Map<string, { pre: RawBalance[]; post: RawBalance[] }>();
+  const collect = (list: unknown, key: "pre" | "post") => {
+    for (const b of (list ?? []) as RawBalance[]) {
+      if (!b.mint || b.mint === mint) continue;
+      let entry = byCoin.get(b.mint);
+      if (!entry) byCoin.set(b.mint, (entry = { pre: [], post: [] }));
+      entry[key].push(b);
+    }
+  };
+  collect(tx.meta?.preTokenBalances, "pre");
+  collect(tx.meta?.postTokenBalances, "post");
+  const out = new Map<string, Map<string, number>>();
+  for (const [coin, { pre, post }] of byCoin) {
+    for (const [owner, moved] of ownerDeltas(pre, post, (b) => b.owner)) {
+      if (moved === 0) continue;
+      let coins = out.get(owner);
+      if (!coins) out.set(owner, (coins = new Map()));
+      coins.set(coin, moved);
+    }
+  }
+  return out;
+}
+
+/**
+ * The coins, other than SOL, that wallets paid for `mint` or got for it in these transactions:
+ * the coin-paired launch's quote coin, or what a router paid out (USDC). Price these in SOL and
+ * pass them to tradesFromChainTransactions, so no coin needs to be known in advance.
+ */
+export function counterMints(
+  mint: string,
+  txs: readonly ChainTx[],
+  walletCheck: (address: string) => boolean = isWalletAddress,
+): string[] {
+  const coins = new Set<string>();
+  for (const tx of txs) {
+    if (!tx?.meta || tx.meta.err) continue;
+    const pre = ((tx.meta.preTokenBalances ?? []) as RawBalance[]).filter((b) => b.mint === mint);
+    const post = ((tx.meta.postTokenBalances ?? []) as RawBalance[]).filter((b) => b.mint === mint);
+    const deltas = ownerDeltas(pre, post, (b) => b.owner);
+    const other = otherDeltas(tx, mint);
+    const payer = keysOf(tx)[0];
+    for (const [owner, delta] of deltas) {
+      if (delta === 0 || !walletCheck(owner)) continue;
+      // The fee payer's too, for a trade it pays for (see tradesFromChainTransactions).
+      for (const who of payer && !deltas.get(payer) ? [owner, payer] : [owner]) {
+        for (const [coin, moved] of other.get(who) ?? []) {
+          if (coin !== WRAPPED_SOL_MINT && Math.sign(moved) === -Math.sign(delta)) coins.add(coin);
+        }
+      }
+    }
+  }
+  return [...coins];
+}
+
+/** Prices coins in SOL per whole token, leaving out any it can't (DexScreenerClient.solPricesOf). */
+export type SolPriceLookup = (mints: string[]) => Promise<ReadonlyMap<string, number>>;
+
+/**
+ * tradesFromChainTransactions with the coins paid or got beside the mint (counterMints) priced
+ * first. Without a lookup, or when it fails, those coins go unvalued as before.
+ */
+export async function tradesFromChainTransactionsPriced(
+  mint: string,
+  txs: readonly ChainTx[],
+  solPrices?: SolPriceLookup,
+  walletCheck: (address: string) => boolean = isWalletAddress,
+): Promise<ReturnType<typeof tradesFromChainTransactions>> {
+  const coins = solPrices ? counterMints(mint, txs, walletCheck) : [];
+  const prices =
+    coins.length > 0 ? await solPrices!(coins).catch(() => new Map<string, number>()) : new Map();
+  return tradesFromChainTransactions(mint, txs, walletCheck, prices);
 }
 
 /** One page of Pump.fun's trade API (swap-api /v2/coins/{mint}/trades), newest first. */

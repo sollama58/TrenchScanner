@@ -7,6 +7,7 @@ import { openWallet } from "../walletModal";
 import { usePossibleSides } from "../possibleSides";
 import { SideMatch } from "./SideMatch";
 import { Skeleton } from "../components/Charts";
+import { LoadingNote } from "../components/Loading";
 import {
   ChevronDownIcon,
   CheckIcon,
@@ -440,8 +441,10 @@ function SideWallets({
   const [error, setError] = useState<string | null>(null);
   const [missing, setMissing] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
+    setError(null);
     // A bundle shares one read with the labeled-wallets card at the top of the modal.
     (bundle ? bundleRead<KolSides>(kol) : api<KolSides>(`/utilities/side-wallets/${encodeURIComponent(kol)}`))
       .then((d) => live && setData(d))
@@ -454,7 +457,7 @@ function SideWallets({
     return () => {
       live = false;
     };
-  }, [kol, bundle]);
+  }, [kol, bundle, attempt]);
 
   const rules = data?.rules ?? DEFAULT_RULES;
   const list = data?.sides[period] ?? [];
@@ -495,10 +498,28 @@ function SideWallets({
         </p>
       ) : error ? (
         <p className="error small">
-          Couldn&apos;t load its {bundle ? "bundle" : "side wallets"}: {error}
+          Couldn&apos;t load its {bundle ? "bundle" : "side wallets"}: {error}{" "}
+          <button type="button" className="link" onClick={() => setAttempt((n) => n + 1)}>
+            Try again
+          </button>
         </p>
       ) : !data ? (
-        <Skeleton lines={3} />
+        <div className="side-loading" aria-busy="true">
+          <LoadingNote slow={`Still matching: a wallet with many coins takes longer.`} slowAfterMs={6000}>
+            {bundle
+              ? "Matching its trades against every wallet in the coins we track…"
+              : "Loading its side wallets…"}
+          </LoadingNote>
+          <ol className="side-skel" aria-hidden="true">
+            {Array.from({ length: 4 }, (_, i) => (
+              <li key={i}>
+                <span className="skeleton skel-value" style={{ width: `${34 - i * 4}%` }} />
+                <span className="skeleton skel-value" style={{ width: "2.6em", marginLeft: "auto" }} />
+                <span className="skeleton skel-value" style={{ width: "4em" }} />
+              </li>
+            ))}
+          </ol>
+        </div>
       ) : list.length === 0 ? (
         <p className="muted small side-empty">
           {coins === 0

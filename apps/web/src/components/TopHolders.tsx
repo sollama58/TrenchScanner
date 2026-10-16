@@ -18,9 +18,12 @@ const SHOWN = 12;
 export function TopHolders({
   snapshot,
   flagged,
+  pending = false,
 }: {
   snapshot: Snapshot | null | undefined;
   flagged: readonly FlaggedHolder[];
+  /** A fresh scan is reading the holders now: the list's place is held until it lands. */
+  pending?: boolean;
 }) {
   const [all, setAll] = useState(false);
   const graph = useMemo(() => (snapshot ? buildGraph(snapshot, flagged) : null), [snapshot, flagged]);
@@ -35,7 +38,23 @@ export function TopHolders({
       [holders, graph],
     ),
   );
-  if (!graph || holders.length === 0) return null;
+  if (!graph || holders.length === 0) {
+    if (!pending) return null;
+    return (
+      <section className="sage-card tm-holders-card" aria-busy="true">
+        <h4>Top holders</h4>
+        <ol className="th-list th-skeleton" aria-hidden="true">
+          {Array.from({ length: SHOWN }, (_, i) => (
+            <li key={i} className="th-row">
+              <span className="th-rank num">{i + 1}</span>
+              <span className="skeleton skel-value" style={{ width: `${46 - ((i * 7) % 18)}%` }} />
+              <span className="skeleton skel-value" style={{ width: "3em", marginLeft: "auto" }} />
+            </li>
+          ))}
+        </ol>
+      </section>
+    );
+  }
   const rest = graph.nodes.find((n) => n.kind === "rest");
   const max = Math.max(...holders.map((h) => h.pct), rest?.pct ?? 0);
   const shown = all ? holders : holders.slice(0, SHOWN);

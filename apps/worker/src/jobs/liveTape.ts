@@ -2,11 +2,12 @@ import {
   createLogger,
   liveFlags,
   liveTraders,
-  tradesFromChainTransactions,
+  tradesFromChainTransactionsPriced,
   type HeliusClient,
   type LiveFlagsReading,
   type LiveTraderCounts,
   type ScoredWallet,
+  type SolPriceLookup,
   type TapeTrade,
 } from "@trenchscanner/core";
 
@@ -57,7 +58,13 @@ export function resetLiveTape(): void {
 export async function readLiveTape(
   mints: readonly string[],
   helius: Pick<HeliusClient, "getMintTransactionsPage" | "gtfaUsable">,
-  opts: { maxPages: number; refreshMs: number; nowMs?: number },
+  opts: {
+    maxPages: number;
+    refreshMs: number;
+    nowMs?: number;
+    /** Prices the coins a trade was paid in other than SOL (a coin-paired launch's quote coin). */
+    solPrices?: SolPriceLookup;
+  },
 ): Promise<void> {
   if (!helius.gtfaUsable || opts.maxPages <= 0) return;
   const now = opts.nowMs ?? Date.now();
@@ -77,7 +84,8 @@ export async function readLiveTape(
         }
         pagesRead += 1;
         pages.delete(mint);
-        pages.set(mint, { atMs: now, trades: tradesFromChainTransactions(mint, page.txs).trades });
+        const { trades } = await tradesFromChainTransactionsPriced(mint, page.txs, opts.solPrices);
+        pages.set(mint, { atMs: now, trades });
         if (pages.size > MAX_ENTRIES) {
           const oldest = pages.keys().next().value;
           if (oldest !== undefined) pages.delete(oldest);

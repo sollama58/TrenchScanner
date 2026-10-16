@@ -125,11 +125,19 @@ export function AppearanceControls() {
             checked={look.tileColors}
             onChange={() => setAppearance({ tileColors: !look.tileColors })}
           />
-          Color the stat tiles: a light shade from the lower color, through the median, to the upper color at
+          Color the stat tiles&apos; readings: from the lower color, through the median, to the upper color at
           the safety screen&apos;s cutoff
         </label>
         {look.tileColors && (
           <>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={look.tileFill}
+                onChange={() => setAppearance({ tileFill: !look.tileFill })}
+              />
+              Color the whole tile, not only the reading
+            </label>
             <ColorRow
               label="Tiles: lower"
               hint="Well inside the cutoff (A is your Wins color)"

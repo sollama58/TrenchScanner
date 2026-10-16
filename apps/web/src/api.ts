@@ -1390,6 +1390,8 @@ export interface FeedAppearance {
    * default (absent from older API builds: on).
    */
   tileColors: boolean;
+  /** Color the whole tile, not only its reading (absent from older API builds: off). */
+  tileFill: boolean;
   /** The tile scale's colors, #rrggbb, or null for the theme's win, amber and loss colors. */
   tileLow: string | null;
   tileMid: string | null;

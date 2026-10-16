@@ -819,6 +819,36 @@ describe("getTokensByAddresses: the fallback prices what DexScreener can't", () 
     expect(urls.filter((u) => u.endsWith("/DOPE"))).toHaveLength(1);
   });
 
+  it("prices any coin in SOL for a trade paid in it, and leaves out what it can't price", async () => {
+    vi.stubGlobal("fetch", (url: string) => {
+      const list = url.split("/").pop()!.split("?")[0]!.split(",");
+      const pairs = [
+        {
+          dexId: "raydium",
+          pairAddress: "s1",
+          baseToken: { address: SOL.address },
+          quoteToken: { address: "USDC" },
+          priceUsd: "200",
+          liquidity: { usd: 5e7 },
+        },
+        {
+          dexId: "pumpswap",
+          pairAddress: "p1",
+          baseToken: { address: "PUMP" },
+          quoteToken: SOL,
+          priceUsd: "0.008",
+          liquidity: { usd: 3e6 },
+        },
+      ]
+        .map((p) => ({ chainId: "solana", ...p }))
+        .filter((p) => list.includes(p.baseToken.address));
+      return Promise.resolve(new Response(JSON.stringify(pairs)));
+    });
+    const prices = await new DexScreenerClient().solPricesOf(["PUMP", "unknown", SOL.address]);
+    expect([...prices.keys()]).toEqual(["PUMP"]);
+    expect(prices.get("PUMP")).toBeCloseTo(0.008 / 200, 12);
+  });
+
   it("prices a pair whose quote coin is itself quoted in another coin, a tokenized stock included", async () => {
     vi.stubGlobal("fetch", (url: string) => {
       const list = url.split("/").pop()!.split("?")[0]!.split(",");

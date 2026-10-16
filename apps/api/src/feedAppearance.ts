@@ -88,6 +88,8 @@ export const feedAppearanceSchema = z
     scoreColor: z.boolean().default(true),
     /** Shade the stat tiles on a lower / median / upper scale, upper at the safety screen's cut; on by default. */
     tileColors: z.boolean().default(true),
+    /** Color the whole tile, not only its reading; off by default. */
+    tileFill: z.boolean().default(false),
     /** The tile scale's colors; null keeps the theme's win, amber and loss colors. */
     tileLow: color.default(null),
     tileMid: color.default(null),
@@ -183,6 +185,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   volume: false,
   scoreColor: true,
   tileColors: true,
+  tileFill: false,
   tileLow: null,
   tileMid: null,
   tileHigh: null,
