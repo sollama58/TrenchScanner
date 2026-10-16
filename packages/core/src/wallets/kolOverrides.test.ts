@@ -77,7 +77,11 @@ describe("KOL overrides", () => {
     expect(KOL_OVERRIDES.get("AuPp4YTMTyqxYXQnHc5KUc6pUuCSsHQpBJhgnD45yqrf")?.name).toBe("Dani");
   });
 
-  it("names DwCp…f1cXYicWf as wizard", () => {
+  it("names DwCp…1cXYicWf as wizard", () => {
     expect(KOL_OVERRIDES.get("DwCp9GZw3ueoXPykHSPUkRZEwcTVbJH2i9Sf1cXYicWf")?.name).toBe("wizard");
+  });
+
+  it("names KJXB…cwxftvY as aightbet", () => {
+    expect(KOL_OVERRIDES.get("KJXB1ot9nkCvq1ZD27vzNSBaPPCT82DpVnXrcwxftvY")?.name).toBe("aightbet");
   });
 });
