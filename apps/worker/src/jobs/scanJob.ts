@@ -39,6 +39,7 @@ import {
   type RugCheckClient,
   type RugCheckProfile,
   type HeliusClient,
+  type SolPriceLookup,
   type MintAuthorityResult,
   type OnChainProfile,
   type CexFundedReading,
@@ -455,13 +456,19 @@ let liveTapeInFlight: Promise<void> | null = null;
  * Starts this cycle's live tape reads (liveTape.ts) for the coins close to a call, unless the
  * previous cycle's are still running. Never rejects.
  */
-function startLiveTapeStage(mints: string[], helius: HeliusClient, env: Env): Promise<void> {
+function startLiveTapeStage(
+  mints: string[],
+  helius: HeliusClient,
+  env: Env,
+  solPrices?: SolPriceLookup,
+): Promise<void> {
   if (liveTapeInFlight || env.LIVE_TAPE_PAGES_PER_CYCLE <= 0 || mints.length === 0) {
     return liveTapeInFlight ?? Promise.resolve();
   }
   const work = readLiveTape(mints, helius, {
     maxPages: env.LIVE_TAPE_PAGES_PER_CYCLE,
     refreshMs: env.LIVE_TAPE_REFRESH_SECONDS * 1000,
+    solPrices,
   }).catch((err: unknown) => logger.warn("live tape reads failed", { error: String(err) }));
   liveTapeInFlight = work;
   void work.finally(() => {
@@ -1164,6 +1171,8 @@ async function scanCycle(
     sniperGroups.filter((g) => g.contender || g.alerted).map((g) => g.mintAddress),
     deps.helius,
     env,
+    // Test doubles may stub the client without it.
+    deps.dexScreener.solPricesOf ? (m) => deps.dexScreener.solPricesOf(m) : undefined,
   );
 
   // A user filter with a wallet criterion holds a match until the figure is in, up to

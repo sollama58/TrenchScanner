@@ -14,6 +14,8 @@ import {
 import {
   gateOnAiVerdicts,
   loadSignals,
+  lossWindowStart,
+  netLoss,
   mintRisk,
   positionMultiple,
   signalHorizon,
@@ -23,6 +25,8 @@ import {
 import { decideExit, sellAmount, type ExitReason } from "./exitEngine.js";
 import { NoRouteError, RateLimitedError, WSOL_MINT, type SwapClient } from "./jupiterSwap.js";
 import type { MintInfo } from "./rpc.js";
+import { escapeHtml } from "../telegram/format.js";
+import { EXIT_REASON_TEXT, signedSol, solAmount, tokenLink, type TradeNote } from "./tradeNotes.js";
 
 /**
  * Paper trading (admin-only): the trading bot's settings run against the same live signals - the
@@ -97,6 +101,8 @@ export interface PaperTradingDeps {
   now?: () => Date;
   /** How far signals may be read (signalHorizon by default). */
   horizon?: (now: Date) => Promise<Date>;
+  /** Delivers a pass's Telegram notes (tradeNotes.ts) at its end; omitted sends none. */
+  notify?: (notes: TradeNote[]) => Promise<void>;
 }
 
 export interface PaperRunSummary {
@@ -126,15 +132,30 @@ export async function runPaperTrading(deps: PaperTradingDeps): Promise<PaperRunS
   const started = Date.now();
   const inBudget = () => Date.now() - started < PAPER_PASS_BUDGET_MS;
   const now = () => deps.now?.() ?? new Date();
-  await managePaperExits(deps, summary, now, inBudget);
-  await openPaperEntries(deps, summary, now, inBudget);
+  const notes: TradeNote[] = [];
+  await managePaperExits(deps, summary, now, inBudget, notes);
+  await openPaperEntries(deps, summary, now, inBudget, notes);
+  if (deps.notify && notes.length > 0) {
+    await deps.notify(notes).catch((err) => logger.warn("trade notes failed", { error: errText(err) }));
+  }
   return summary;
+}
+
+/** A note for the strategy's owner, when its settings want them. */
+function paperNote(
+  notes: TradeNote[],
+  strategy: { userId: string; name: string },
+  config: PaperStrategyConfig,
+  html: string,
+) {
+  if (config.notifyTelegram)
+    notes.push({ userId: strategy.userId, html: `📝 <b>Paper · ${escapeHtml(strategy.name)}</b>: ${html}` });
 }
 
 // ── Exits ────────────────────────────────────────────────────────────────────────────────────
 
 type PaperPositionRow = Prisma.PaperPositionGetPayload<{
-  include: { strategy: { select: { id: true; resetAt: true; config: true } } };
+  include: { strategy: { select: { id: true; resetAt: true; config: true; userId: true; name: true } } };
 }>;
 
 async function managePaperExits(
@@ -142,10 +163,11 @@ async function managePaperExits(
   summary: PaperRunSummary,
   now: () => Date,
   inBudget: () => boolean,
+  notes: TradeNote[],
 ) {
   const open = await prisma.paperPosition.findMany({
     where: { status: "open" },
-    include: { strategy: { select: { id: true, resetAt: true, config: true } } },
+    include: { strategy: { select: { id: true, resetAt: true, config: true, userId: true, name: true } } },
     orderBy: { openedAt: "asc" },
     take: MAX_POSITIONS_PER_PASS,
   });
@@ -161,7 +183,8 @@ async function managePaperExits(
     if (!inBudget()) return;
     summary.exitsChecked++;
     try {
-      if (await managePaperExit(deps, position, prices.get(position.mint), solUsd, now())) summary.sells++;
+      if (await managePaperExit(deps, position, prices.get(position.mint), solUsd, now(), notes))
+        summary.sells++;
     } catch (err) {
       summary.errors++;
       if (err instanceof ResetUnderUs) continue;
@@ -184,6 +207,7 @@ async function managePaperExit(
   tokenUsd: number | undefined,
   solUsd: number | undefined,
   now: Date,
+  notes: TradeNote[],
 ): Promise<boolean> {
   const config = readPaperConfig(position.strategy.config);
   const plan = readExitPlan(position.exitPlan);
@@ -297,6 +321,16 @@ async function managePaperExit(
     });
     if (credited.count === 0) throw new ResetUnderUs("strategy reset during the pass");
   });
+  const result =
+    left <= 0n
+      ? `; closed ${signedSol(position.proceedsLamports + net - position.swapInLamports - position.feesLamports - fee)}`
+      : "";
+  paperNote(
+    notes,
+    position.strategy,
+    config,
+    `sold ${tokenLink(position.symbol, position.mint)} (${EXIT_REASON_TEXT[decision.reason] ?? decision.reason}), ${solAmount(net)} back${result}`,
+  );
   return true;
 }
 
@@ -330,6 +364,7 @@ async function openPaperEntries(
   summary: PaperRunSummary,
   now: () => Date,
   inBudget: () => boolean,
+  notes: TradeNote[],
 ) {
   const strategies = await prisma.paperStrategy.findMany({
     where: { running: true },
@@ -352,7 +387,8 @@ async function openPaperEntries(
     }
     summary.strategies++;
     try {
-      await runStrategyEntries(deps, summary, strategy, horizon, now(), { mints, quotes });
+      if (await pausedForLoss(strategy, now(), notes)) continue;
+      await runStrategyEntries(deps, summary, strategy, horizon, now(), { mints, quotes }, notes);
       await prisma.paperStrategy.update({
         where: { id: strategy.id },
         data: { lastRunAt: now(), lastError: null },
@@ -369,6 +405,28 @@ async function openPaperEntries(
 
 type StrategyRow = Prisma.PaperStrategyGetPayload<object>;
 
+/** The daily loss limit, as the bot applies it (engine.ts pausedForLoss): stops the strategy. */
+async function pausedForLoss(strategy: StrategyRow, now: Date, notes: TradeNote[]): Promise<boolean> {
+  const config = readPaperConfig(strategy.config);
+  if (!(config.dailyLossLimitSol > 0)) return false;
+  const closed = await prisma.paperPosition.findMany({
+    where: {
+      strategyId: strategy.id,
+      status: "closed",
+      closedAt: { gt: lossWindowStart(now, strategy.lossWindowFrom) },
+    },
+    select: { swapInLamports: true, feesLamports: true, proceedsLamports: true },
+  });
+  const lost = netLoss(
+    closed.map((p) => ({ paid: p.swapInLamports + p.feesLamports, back: p.proceedsLamports })),
+  );
+  if (lost < solToLamports(config.dailyLossLimitSol)) return false;
+  const why = `stopped: lost ${solAmount(lost)} in the last 24 hours (limit ${config.dailyLossLimitSol} SOL)`;
+  await prisma.paperStrategy.update({ where: { id: strategy.id }, data: { running: false, lastError: why } });
+  paperNote(notes, strategy, config, `⏸ ${escapeHtml(why)}. Open positions keep their exit plans.`);
+  return true;
+}
+
 async function runStrategyEntries(
   deps: PaperTradingDeps,
   summary: PaperRunSummary,
@@ -376,6 +434,7 @@ async function runStrategyEntries(
   horizon: Date,
   now: Date,
   shared: { mints: Map<string, Promise<MintInfo | null>>; quotes: Map<string, Promise<bigint>> },
+  notes: TradeNote[],
 ) {
   if (horizon <= strategy.signalsFrom) return;
   const config = readPaperConfig(strategy.config);
@@ -539,6 +598,12 @@ async function runStrategyEntries(
     cash -= buyLamports + fee;
     summary.entries++;
     logger.info("paper entry", { strategyId: strategy.id, mint: signal.mint, source: signal.label });
+    paperNote(
+      notes,
+      strategy,
+      config,
+      `bought ${tokenLink(signal.symbol, signal.mint)} for ${solAmount(buyLamports)} (${escapeHtml(signal.label)})`,
+    );
   }
 
   if (skips.length > 0) await recordSkips(strategy.id, skips);

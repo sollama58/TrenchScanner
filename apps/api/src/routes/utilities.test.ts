@@ -131,7 +131,7 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
       payload: { signature },
     });
     expect(first.statusCode).toBe(200);
-    expect(first.json()).toMatchObject({ status: "credited", credits: 3, balance: 3 });
+    expect(first.json()).toMatchObject({ status: "credited", credits: 15, balance: 15 });
 
     const again = await app.inject({
       method: "POST",
@@ -139,7 +139,7 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
       cookies: me.cookies,
       payload: { signature },
     });
-    expect(again.json()).toMatchObject({ status: "already_credited", balance: 3 });
+    expect(again.json()).toMatchObject({ status: "already_credited", balance: 15 });
 
     // A burn tagged for credits can't buy subscription months, however large.
     const big = random(64);
@@ -263,7 +263,7 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
     expect(res.json()).toMatchObject({ code: "not_enough_credits", balance: 0, cost: 1 });
 
     const overview = await app.inject({ method: "GET", url: "/utilities", cookies: me.cookies });
-    expect(overview.json()).toMatchObject({ balance: 1, prices: { tokensPerCredit: 500 } });
+    expect(overview.json()).toMatchObject({ balance: 1, prices: { tokensPerCredit: 100 } });
   });
 
   it("lets an admin award credits to any wallet, while the admin's own lookups still cost credits", async () => {

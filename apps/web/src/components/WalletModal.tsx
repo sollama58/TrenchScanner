@@ -5,6 +5,8 @@ import { MIN_WIN_SOL, ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
+import { LoadingNote, Reveal, SkelValue } from "./Loading";
+import { Skeleton } from "./Charts";
 import { bundleRead, KolSideWallets, SideLabelsExport, WalletBundle } from "../tabs/SideWalletChecker";
 import {
   CheckIcon,
@@ -231,6 +233,7 @@ function Locked({
 function Body({ wallet, onClose }: { wallet: string; onClose: () => void }) {
   const [data, setData] = useState<WalletProfile | null>(null);
   const [error, setError] = useState<Error | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
     setData(null);
@@ -241,7 +244,7 @@ function Body({ wallet, onClose }: { wallet: string; onClose: () => void }) {
     return () => {
       live = false;
     };
-  }, [wallet]);
+  }, [wallet, attempt]);
 
   const [copied, setCopied] = useState(false);
   const copyLink = () => {
@@ -279,6 +282,13 @@ function Body({ wallet, onClose }: { wallet: string; onClose: () => void }) {
             `Couldn't load this wallet: ${error.message}`
           )}
         </p>
+        {!lookup && !locked && (
+          <p>
+            <button type="button" className="primary" onClick={() => setAttempt((n) => n + 1)}>
+              Try again
+            </button>
+          </p>
+        )}
         <Links wallet={wallet} />
       </div>
     );
@@ -286,8 +296,44 @@ function Body({ wallet, onClose }: { wallet: string; onClose: () => void }) {
   return (
     <div className="about-body bm-body">
       <Head wallet={wallet} actions={actions} />
-      {!data ? <div className="bm-skeleton wm-skeleton" /> : <Profile p={data} />}
+      {!data ? <ProfileSkeleton /> : <Profile p={data} />}
       <Links wallet={wallet} />
+    </div>
+  );
+}
+
+/**
+ * The profile's place while the wallet is read (user ask 2026-10-16): its tiles and sections with
+ * their own headings, values held by placeholders, so the profile fills in where it will sit. A
+ * wallet TrenchScanner hasn't seen is read off the chain then, which can take a while: it says so.
+ */
+function ProfileSkeleton() {
+  return (
+    <div className="wm-loading" aria-busy="true">
+      <LoadingNote slow="Still reading: a busy wallet's history takes longer to page through.">
+        Reading this wallet: its balance, who funded it, and its trades in the coins we track…
+      </LoadingNote>
+      <dl className="bm-stats">
+        {["Balance", "Age", "Transactions", "Risk score", "Win score"].map((l) => (
+          <div key={l}>
+            <dt>{l}</dt>
+            <dd className="num">
+              <SkelValue width="3.6em" />
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {[
+        ["First funder", 1],
+        ["Risk score", 3],
+        ["Tracked coins", 4],
+        ["Linked wallets", 2],
+      ].map(([title, lines]) => (
+        <section key={title} className="sage-card wm-section" aria-hidden="true">
+          <h4>{title}</h4>
+          <Skeleton lines={lines as number} />
+        </section>
+      ))}
     </div>
   );
 }
@@ -508,28 +554,31 @@ function BundleLabels({ wallet }: { wallet: string }) {
     };
   }, [wallet]);
   if (labels.length === 0) return null;
+  // Read after the profile: it opens into place rather than pushing the sections below down at once.
   return (
-    <section className="sage-card wm-section">
-      <h4 className="wm-sides-head">
-        Labeled bundle wallets <span className="sage-tag">{labels.length}</span>
-        <SideLabelsExport labels={{ count: labels.length, wallets: labels }} />
-      </h4>
-      <p className="faint small wm-note">
-        Wallets in its Multi-Wallet-Bundle that would qualify for a label: they bought nearly all of its coins
-        within minutes of it. Not stored, and not on the bubble map.
-      </p>
-      <ul className="wm-linked small">
-        {labels.map((l) => (
-          <li key={l.wallet}>
-            <WalletButton wallet={l.wallet} names={{}} />
-            <span className="tm-tag wm-tone-linked">{l.name}</span>
-            <span className="muted num">
-              {Math.round(l.pct)}% of {l.coins} coins over {l.hours}h
-            </span>
-          </li>
-        ))}
-      </ul>
-    </section>
+    <Reveal>
+      <section className="sage-card wm-section">
+        <h4 className="wm-sides-head">
+          Labeled bundle wallets <span className="sage-tag">{labels.length}</span>
+          <SideLabelsExport labels={{ count: labels.length, wallets: labels }} />
+        </h4>
+        <p className="faint small wm-note">
+          Wallets in its Multi-Wallet-Bundle that would qualify for a label: they bought nearly all of its
+          coins within minutes of it. Not stored, and not on the bubble map.
+        </p>
+        <ul className="wm-linked small">
+          {labels.map((l) => (
+            <li key={l.wallet}>
+              <WalletButton wallet={l.wallet} names={{}} />
+              <span className="tm-tag wm-tone-linked">{l.name}</span>
+              <span className="muted num">
+                {Math.round(l.pct)}% of {l.coins} coins over {l.hours}h
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </Reveal>
   );
 }
 

@@ -84,7 +84,7 @@ function lookupError(e: unknown): string {
 
 /**
  * The Utilities tab: lookups paid for with Burn Credits, which a wallet earns by burning
- * $ASDFASDFA (500 per credit unless an admin changes it). A credit is taken only once a lookup
+ * $ASDFASDFA (100 per credit unless an admin changes it). A credit is taken only once a lookup
  * succeeds, and a lookup can be re-opened free for an hour.
  * Behind the subscription, like every other tab: credits pay for each lookup on top of it.
  */
@@ -125,6 +125,7 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
         <UtilityTokenModal
           key={openMint}
           mint={openMint}
+          lookups={data?.lookups}
           onClose={() => {
             setOpenMint(null);
             reload();
@@ -708,10 +709,21 @@ function RecentLookups({
 }
 
 /** A paid lookup in the feed's token modal, refreshed while it is open (its scan lands within a minute). */
-export function UtilityTokenModal({ mint, onClose }: { mint: string; onClose: () => void }) {
+export function UtilityTokenModal({
+  mint,
+  onClose,
+  lookups,
+}: {
+  mint: string;
+  onClose: () => void;
+  /** The lookup list, for the coin's name and picture while its view loads. */
+  lookups?: UtilitiesOverview["lookups"];
+}) {
   const path = `/utilities/token/${encodeURIComponent(mint)}`;
   const [poll, setPoll] = useState(10_000);
-  const { data, error } = usePolling<UtilityTokenView>(path, poll);
+  const { data, error, reload } = usePolling<UtilityTokenView>(path, poll);
+  // The first answer's token, kept so a later refresh never blanks the header.
+  const [token] = useState(() => lookups?.find((l) => l.subject === mint)?.token ?? null);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 30_000);
@@ -722,24 +734,15 @@ export function UtilityTokenModal({ mint, onClose }: { mint: string; onClose: ()
     if (data?.scan === "scanned") setPoll(30_000);
   }, [data?.scan]);
 
-  if (!data) {
-    if (!error) return null;
-    // The lookup closed (its free window passed) or failed to load: say so where the button was.
-    return (
-      <div className="util-toast error small" role="alert">
-        Couldn&apos;t open that lookup: {error.message}{" "}
-        <button type="button" className="link" onClick={onClose}>
-          Close
-        </button>
-      </div>
-    );
-  }
+  // The modal opens at once: the coin's frame while its view loads, then the view in place. A
+  // lookup that closed (its free window passed) or failed to load says so there, with a retry.
   return (
     <TokenModal
-      card={data.card}
+      card={data?.card ?? null}
       now={now}
       onClose={onClose}
-      utility={{ apiBase: "/utilities/token", scan: data.scan }}
+      utility={data ? { apiBase: "/utilities/token", scan: data.scan } : null}
+      opening={{ mint, token, error: data ? null : error, onRetry: reload }}
     />
   );
 }

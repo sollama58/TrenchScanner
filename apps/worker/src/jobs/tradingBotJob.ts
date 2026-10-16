@@ -7,7 +7,9 @@ import {
   JupiterSwapClient,
   PumpPortalSwapClient,
   runTradingEngine,
+  sendTradeNotes,
   solToLamports,
+  TelegramApi,
   TradingRpc,
   type Env,
 } from "@trenchscanner/core";
@@ -42,6 +44,9 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
   const server = loadServerWalletKey(env);
   if (server.problem) createLogger("trading").error(`server wallet disabled: ${server.problem}`);
   let serverAccountId: string | null = null;
+  // Buys, sales and automatic pauses, to the owner's private Telegram chats (the server bot's to
+  // every admin's). Needs TELEGRAM_BOT_TOKEN on this process too.
+  const telegram = env.TELEGRAM_BOT_TOKEN ? new TelegramApi(env.TELEGRAM_BOT_TOKEN) : null;
   if (!env.TRADING_JUPITER_API_KEY) {
     // Jupiter has been moving keyless traffic off lite-api.jup.ag; a key (free at portal.jup.ag)
     // puts swaps on api.jup.ag with their own limit.
@@ -75,6 +80,10 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
       maxBuyLamports: optionalLamports(env.TRADING_MAX_BUY_SOL),
       maxDailySpendLamports: optionalLamports(env.TRADING_MAX_DAILY_SPEND_SOL),
       maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
+      notify: telegram
+        ? async (notes) =>
+            void (await sendTradeNotes(notes, { telegram, admins, serverUserId: serverAccountId }))
+        : undefined,
     });
     const meta: JobRunMeta = {
       ...counts,

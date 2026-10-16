@@ -23,7 +23,7 @@ export interface BurnCreditPrices {
 }
 
 export const DEFAULT_CREDIT_PRICES: BurnCreditPrices = {
-  tokensPerCredit: 500,
+  tokensPerCredit: 100,
   cost: { token: 1, wallet: 1 },
 };
 

@@ -419,6 +419,9 @@ services:
   #     # Only these wallets' bots open new positions (exits and withdrawals run for everyone).
   #     - key: ADMIN_WALLET_ADDRESSES
   #       sync: false
+  #     # Optional: tells owners' private Telegram chats about each buy, sale and loss-limit pause.
+  #     - key: TELEGRAM_BOT_TOKEN
+  #       sync: false
   #     # The server wallet (README -> Trading bot -> Server wallet): its private key, as Phantom
   #     # exports it (base58) or a solana-keygen JSON array. THIS SERVICE ONLY. The address and
   #     # withdrawal destination below must match the api's.

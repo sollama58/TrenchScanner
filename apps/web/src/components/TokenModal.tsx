@@ -69,8 +69,9 @@ import {
 } from "./SageView";
 import { WeekChart } from "./WeekChart";
 import { Skeleton } from "./Charts";
+import { LoadingNote, LoadSteps, SkelValue, Spinner, useElapsed } from "./Loading";
 import { openWallet } from "../walletModal";
-import { BubbleMapSection, useBubbleMaps } from "./BubbleMap";
+import { BubbleMapPlaceholder, BubbleMapSection, useBubbleMaps } from "./BubbleMap";
 import { TopHolders } from "./TopHolders";
 import { WalletText } from "./WalletText";
 import { FilterGlyph } from "./FilterBadge";
@@ -188,11 +189,14 @@ export function TokenModal({
   now,
   onClose,
   utility = null,
+  opening,
 }: {
-  card: Card;
+  /** Null while the view is still being fetched: `opening` then says for which coin. */
+  card: Card | null;
   now: number;
   onClose: () => void;
   utility?: UtilityMode | null;
+  opening?: OpeningView;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -214,9 +218,199 @@ export function TokenModal({
       }}
     >
       <UtilityContext.Provider value={utility}>
-        <TokenBody card={card} now={now} onClose={() => ref.current?.close()} />
+        {card ? (
+          <TokenBody card={card} now={now} onClose={() => ref.current?.close()} />
+        ) : (
+          opening && <OpeningBody {...opening} onClose={() => ref.current?.close()} />
+        )}
       </UtilityContext.Provider>
     </dialog>
+  );
+}
+
+/** A coin's view before its data has landed: what is known of it, and whether the fetch failed. */
+export interface OpeningView {
+  mint: string;
+  /** What the lookup list already knows of the coin, for the header. */
+  token?: { symbol: string | null; name: string | null; imageUrl: string | null } | null;
+  error?: Error | null;
+  onRetry?: () => void;
+}
+
+/**
+ * The modal while its view is still on the way (user ask 2026-10-16): the same frame, header and
+ * links as the coin's own, each section's place held at about its final size, so the coin's data
+ * fills in where the reader is already looking. Said plainly, with a retry, when the fetch fails.
+ */
+function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { onClose: () => void }) {
+  const label = token ? tokenLabel({ mintAddress: mint, symbol: token.symbol, name: token.name }) : null;
+  const title = label ?? shortAddress(mint);
+  const failed = !!error;
+  return (
+    <div className="about-body tm-body tm-opening" aria-busy={!failed}>
+      <header className="tm-head">
+        <div className="tm-token">
+          <div className="avatar-wrap tone-neutral">
+            <TokenImage
+              url={token?.imageUrl ?? null}
+              size={160}
+              className="avatar tm-avatar"
+              width={56}
+              height={56}
+              eager
+              fallback={
+                label ? (
+                  <span className="avatar placeholder tm-avatar">{label.replace("$", "").slice(0, 2)}</span>
+                ) : (
+                  <span className="skeleton round tm-avatar" />
+                )
+              }
+            />
+          </div>
+          <div className="tm-title-block">
+            <h2 id="tm-title" className="tm-title" tabIndex={-1} autoFocus>
+              {title}
+              {token?.name && token.symbol && <span className="token-name"> {token.name}</span>}
+            </h2>
+            <div className="tm-sub">
+              {failed ? (
+                <span className="when">Not opened</span>
+              ) : (
+                <span className="when tm-scanning">
+                  <Spinner size={10} /> Opening the scan…
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="tm-actions">
+          <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
+            <CloseIcon size={16} />
+          </button>
+        </div>
+        <nav className="tm-nav" aria-label="Sections">
+          {SECTIONS.map((x) => (
+            <button key={x.id} type="button" className="tm-nav-btn" disabled>
+              {x.id === "call" ? "Market" : x.label}
+            </button>
+          ))}
+        </nav>
+      </header>
+      <MintLinks mint={mint} />
+      {failed ? (
+        <section className="sage-card tm-open-failed" role="alert">
+          <h4>Couldn&apos;t open this coin</h4>
+          <p className="small muted">{error.message}</p>
+          <div className="tm-open-actions">
+            {onRetry && (
+              <button type="button" className="primary" onClick={onRetry}>
+                Try again
+              </button>
+            )}
+            <button type="button" className="ghost" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </section>
+      ) : (
+        <>
+          <section className="tm-figs" aria-label="Market cap">
+            {["At scan", "Now", "Peak", "Age"].map((l) => (
+              <div key={l} className="tm-fig">
+                <label>{l}</label>
+                <span className="num">
+                  <SkelValue width="4.4em" />
+                </span>
+              </div>
+            ))}
+          </section>
+          <section className="tm-group" aria-label="Chart">
+            <section className="sage-card tm-chart">
+              <h4>
+                <ChartIcon size={14} /> Market cap
+                <span className="tm-ranges" aria-hidden="true">
+                  {["From scan", "1h", "All"].map((r) => (
+                    <button key={r} type="button" className={`tm-range${r === "All" ? " on" : ""}`} disabled>
+                      {r}
+                    </button>
+                  ))}
+                </span>
+              </h4>
+              <ChartSkeleton>Loading the chart…</ChartSkeleton>
+            </section>
+          </section>
+          <section className="tm-group">
+            <GroupLabel id="tm-opening-holders">Holders</GroupLabel>
+            <HoldersPlaceholder>Loading the top holders…</HoldersPlaceholder>
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** The copyable mint and the quick links: what a reader reaches for before anything else. */
+function MintLinks({ mint }: { mint: string }) {
+  const [copied, setCopied] = useState(false);
+  const { quickLinks } = useAppearance();
+  const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
+  const copy = () => {
+    void navigator.clipboard?.writeText(mint).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    });
+  };
+  return (
+    <div className="tm-links">
+      <button className="mint" onClick={copy} title="Copy mint address">
+        {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+        {copied ? "Copied" : shortAddress(mint)}
+      </button>
+      <nav className="card-links">
+        {trade.map((l) => (
+          <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">
+            {l.label}
+            <ExternalIcon size={11} />
+          </a>
+        ))}
+        {LINKS.map((l) => (
+          <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
+            {l.label}
+            <ExternalIcon size={11} />
+          </a>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+/** The chart's place while it loads, the height the chart will take. */
+function ChartSkeleton({ children }: { children: ReactNode }) {
+  return (
+    <div className="tm-chart-skeleton" style={{ height: chartBoxHeight() }}>
+      <LoadingNote className="tm-skel-note" slow="Still loading the chart…">
+        {children}
+      </LoadingNote>
+    </div>
+  );
+}
+
+/** The chart's plot height for this window, and the whole box it draws (axis and volume lane included). */
+function chartHeight(): number {
+  return window.innerWidth <= 640 ? 180 : 220;
+}
+function chartBoxHeight(): number {
+  return chartHeight() + CHART_CHROME_PX;
+}
+/** What PriceChart draws around its plot: the time axis and the volume lane. */
+const CHART_CHROME_PX = 40;
+
+/** The Holders section's place while its reading is taken: the bubble map's frame, and the list's. */
+function HoldersPlaceholder({ children }: { children: ReactNode }) {
+  return (
+    <div className="tm-holders">
+      <BubbleMapPlaceholder>{children}</BubbleMapPlaceholder>
+    </div>
   );
 }
 
@@ -234,9 +428,6 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const { pct: recordedPeak } = recordedPeakOf(card);
   const peak = move !== null && move > 0 ? Math.max(recordedPeak ?? 0, move) : recordedPeak;
   const hasPeak = peak !== null && peak > 0;
-  const [copied, setCopied] = useState(false);
-  const { quickLinks } = useAppearance();
-  const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
   const label = tokenLabel(card.token);
   const utility = useContext(UtilityContext);
   const what = utility ? "Scanned" : card.kind === "stream" ? "Passed screen" : curated ? "Called" : "Alert";
@@ -248,13 +439,10 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const ids = useId().replace(/:/g, "");
   const bodyRef = useRef<HTMLDivElement>(null);
   const active = useActiveSection(bodyRef, ids);
-
-  const copy = () => {
-    void navigator.clipboard?.writeText(mint).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    });
-  };
+  // A lookup asks TokenSage for a fresh read, which lands within minutes: check more often.
+  const sage = usePolling<SageView>(`${useTokenApi(mint)}/sage`, utility ? 20_000 : 120_000);
+  /** The lookup's fresh scan (holders, safety checks) is still on its way. */
+  const scanning = utility?.scan === "scanning";
 
   return (
     <div className="about-body tm-body" ref={bodyRef}>
@@ -335,26 +523,25 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
       </header>
 
       {/* The address and the quick links first: what a reader reaches for before anything else. */}
-      <div className="tm-links">
-        <button className="mint" onClick={copy} title="Copy mint address">
-          {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-          {copied ? "Copied" : shortAddress(mint)}
-        </button>
-        <nav className="card-links">
-          {trade.map((l) => (
-            <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">
-              {l.label}
-              <ExternalIcon size={11} />
-            </a>
-          ))}
-          {LINKS.map((l) => (
-            <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
-              {l.label}
-              <ExternalIcon size={11} />
-            </a>
-          ))}
-        </nav>
-      </div>
+      <MintLinks mint={mint} />
+
+      {utility && (
+        <ScanProgress
+          steps={[
+            { label: "Market data", done: true },
+            { label: "Chart", done: !!chart.data || !!chart.error },
+            { label: "Holders and safety checks", done: !scanning },
+            {
+              label: "TokenSage read",
+              done:
+                !!sage.data?.read ||
+                (!!sage.error && !sage.data) ||
+                sage.data?.status === "failed" ||
+                sage.data?.status === "expired",
+            },
+          ]}
+        />
+      )}
 
       <section className="tm-figs" aria-label="Market cap">
         <div className="tm-fig">
@@ -379,7 +566,9 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         </div>
         <div className="tm-fig">
           <label>{utility ? "Age" : "Age at alert"}</label>
-          <span className="num">{minutes(s.ageMinutes)}</span>
+          <span className="num">
+            {s.ageMinutes == null && scanning ? <SkelValue width="2.6em" /> : minutes(s.ageMinutes)}
+          </span>
           {s.liquidityUsd != null && <small className="num muted">Liq {usd(s.liquidityUsd)}</small>}
         </div>
       </section>
@@ -441,8 +630,9 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
             snapshot={holders.reading}
             moment={holders.moment}
             {...(holders.atAlert ? { wide: holders.frozen } : {})}
+            pending={scanning}
           />
-          <TopHolders snapshot={holders.listReading} flagged={flagged} />
+          <TopHolders snapshot={holders.listReading} flagged={flagged} pending={scanning} />
         </div>
         {flagged.length > 0 && <WalletsCard wallets={flagged} />}
       </section>
@@ -462,9 +652,37 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
 
       <section id={`${ids}-sage`} className="tm-group" aria-labelledby={`${ids}-sage-h`}>
         <GroupLabel id={`${ids}-sage-h`}>TokenSage</GroupLabel>
-        <SageSection mint={mint} />
+        <SageSection mint={mint} sage={sage} />
       </section>
     </div>
+  );
+}
+
+/**
+ * A lookup's scan, part by part (user ask 2026-10-16): which of the coin's reads have landed, so a
+ * blank or placeholder section reads as "on its way", not "missing". Shown only when the view
+ * opened mid-scan, and kept (all ticked) once it finishes, so nothing below moves when it does.
+ */
+function ScanProgress({ steps }: { steps: { label: string; done: boolean }[] }) {
+  const busy = steps.some((s) => !s.done);
+  const [shown] = useState(busy);
+  const secs = useElapsed(busy);
+  if (!shown) return null;
+  return (
+    <section className={`tm-scan${busy ? "" : " done"}`} aria-label="Scan progress" aria-live="polite">
+      <p className="tm-scan-head small">
+        {busy ? <Spinner size={11} /> : <CheckIcon size={13} />}
+        <strong>{busy ? "Scanning this coin" : "Scan complete"}</strong>
+        <span className="faint tm-scan-sub">
+          {busy
+            ? secs < 45
+              ? "Each section fills in as its part lands, usually within a minute."
+              : `Still going (${secs}s): a busy coin's holders take longer.`
+            : "Every section is up to date."}
+        </span>
+      </p>
+      <LoadSteps steps={steps} />
+    </section>
   );
 }
 
@@ -704,9 +922,9 @@ function ChartCard({
   const utility = useContext(UtilityContext);
   // Every token view opens on the coin's whole history; Model View is a click away.
   const [range, setRange] = useState<Range>("all");
-  const [height, setHeight] = useState(() => (window.innerWidth <= 640 ? 180 : 220));
+  const [height, setHeight] = useState(chartHeight);
   useEffect(() => {
-    const onResize = () => setHeight(window.innerWidth <= 640 ? 180 : 220);
+    const onResize = () => setHeight(chartHeight());
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -815,7 +1033,7 @@ function ChartCard({
             ))}
           </span>
         </h4>
-        {!data && !error && <div className="tm-chart-skeleton" style={{ height }} />}
+        {!data && !error && <ChartSkeleton>Loading the chart…</ChartSkeleton>}
         {locked && (
           <p className="tm-locked muted small">
             <LockIcon size={14} /> {locked}
@@ -994,16 +1212,33 @@ function StatsCard({ card }: { card: Card }) {
   const { scoreColor } = useAppearance();
   const tone = scoreColor ? scoreTone(s.score ?? null, scale) : null;
   const latest = card.latestSnapshot;
+  /** The lookup's scan is still reading this: a placeholder, not "–" or "Not checked". */
+  const pending = utility?.scan === "scanning";
+  const wait = (missing: boolean, width?: string) =>
+    pending && missing ? <SkelValue width={width} /> : null;
+  const waitTile = (label: string) => (
+    <div>
+      <dt>{label}</dt>
+      <dd>
+        <SkelValue />
+      </dd>
+    </div>
+  );
   return (
     <section className="sage-card">
       <h4>
-        {utility ? (utility.scan === "scanning" ? "Market data (scanning…)" : "At the scan") : "At the alert"}
+        {utility ? "At the scan" : "At the alert"}
+        {pending && (
+          <span className="sage-tag tm-tag-busy">
+            <Spinner size={9} /> Scanning
+          </span>
+        )}
       </h4>
       <dl className="tm-stats">
         <div>
           <dt>Score</dt>
           <dd className="num" style={tone === null ? undefined : { color: scoreToneColor(tone) }}>
-            {s.score == null ? "–" : Math.round(s.score)}
+            {wait(s.score == null, "2em") ?? (s.score == null ? "–" : Math.round(s.score))}
           </dd>
         </div>
         <div
@@ -1015,7 +1250,7 @@ function StatsCard({ card }: { card: Card }) {
         >
           <dt>Holders</dt>
           <dd className="num">
-            {s.liveHolderCount ?? s.holderCount ?? "–"}
+            {wait((s.liveHolderCount ?? s.holderCount) == null) ?? s.liveHolderCount ?? s.holderCount ?? "–"}
             {(() => {
               const then = s.liveHolderCount ?? s.holderCount;
               const now = latest ? (latest.liveHolderCount ?? latest.holderCount) : null;
@@ -1050,7 +1285,7 @@ function StatsCard({ card }: { card: Card }) {
           title="Share of supply the ten largest holders own (pool aside)"
         >
           <dt>Top 10</dt>
-          <dd className="num">{pct(s.top10HolderPct)}</dd>
+          <dd className="num">{wait(s.top10HolderPct == null) ?? pct(s.top10HolderPct)}</dd>
         </div>
         <div
           className={
@@ -1060,26 +1295,34 @@ function StatsCard({ card }: { card: Card }) {
         >
           <dt>Largest holder</dt>
           <dd className={r.largestPct === null ? "muted" : "num"}>
-            {r.largestPct === null ? "–" : pct(r.largestPct)}
+            {wait(r.largestPct === null) ?? (r.largestPct === null ? "–" : pct(r.largestPct))}
           </dd>
         </div>
-        <WalletStat
-          label="Fresh"
-          value={r.freshPct}
-          of={r.freshOf}
-          failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
-          atAlert={r.freshAtAlert !== null}
-          explain="top-holder wallets first used, or used again after a week or more idle, in the last 24h"
-        />
-        <WalletStat
-          label="Empty"
-          value={r.emptyPct}
-          of={r.emptyOf}
-          failsAt={SAFETY_REJECT_EMPTY_WALLET_PCT}
-          atAlert={r.emptyAtAlert !== null}
-          explain="top-10 holder wallets with under $25 of other tokens"
-        />
-        <SniperTile reading={r.snipers} />
+        {pending && r.freshPct === null ? (
+          waitTile("Fresh")
+        ) : (
+          <WalletStat
+            label="Fresh"
+            value={r.freshPct}
+            of={r.freshOf}
+            failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
+            atAlert={r.freshAtAlert !== null}
+            explain="top-holder wallets first used, or used again after a week or more idle, in the last 24h"
+          />
+        )}
+        {pending && r.emptyPct === null ? (
+          waitTile("Empty")
+        ) : (
+          <WalletStat
+            label="Empty"
+            value={r.emptyPct}
+            of={r.emptyOf}
+            failsAt={SAFETY_REJECT_EMPTY_WALLET_PCT}
+            atAlert={r.emptyAtAlert !== null}
+            explain="top-10 holder wallets with under $25 of other tokens"
+          />
+        )}
+        {pending && r.snipers === null ? waitTile("Snipers") : <SniperTile reading={r.snipers} />}
         <div
           className={
             r.linkedCount !== null &&
@@ -1093,7 +1336,8 @@ function StatsCard({ card }: { card: Card }) {
         >
           <dt>Linked</dt>
           <dd className={r.linkedPct === null ? "muted" : "num"}>
-            {r.linkedPct === null ? "Not checked" : (linkedCountText(r.linkedCount) ?? pct(r.linkedPct))}
+            {wait(r.linkedPct === null) ??
+              (r.linkedPct === null ? "Not checked" : (linkedCountText(r.linkedCount) ?? pct(r.linkedPct)))}
           </dd>
         </div>
         <div
@@ -1106,16 +1350,22 @@ function StatsCard({ card }: { card: Card }) {
         >
           <dt>CEX-funded</dt>
           <dd className={r.cexPct === null ? "muted" : "num"}>
-            {r.cexPct === null ? "Not checked" : (cexCountText(r.cexCount, r.cexHolders) ?? pct(r.cexPct))}
+            {wait(r.cexPct === null) ??
+              (r.cexPct === null ? "Not checked" : (cexCountText(r.cexCount, r.cexHolders) ?? pct(r.cexPct)))}
           </dd>
         </div>
         <div title="How many of the launch's first 25 buyers still hold it">
           <dt>First buyers holding</dt>
-          <dd className="num">{r.firstHolding === null ? "–" : `${r.firstHolding}/${r.firstSeen ?? 25}`}</dd>
+          <dd className="num">
+            {wait(r.firstHolding === null, "2.4em") ??
+              (r.firstHolding === null ? "–" : `${r.firstHolding}/${r.firstSeen ?? 25}`)}
+          </dd>
         </div>
         <div title={r.feeLine ?? undefined}>
           <dt>Dev</dt>
-          <dd>{r.devHolding === null ? "–" : r.devHolding ? "Holding" : "Sold"}</dd>
+          <dd>
+            {wait(r.devHolding === null) ?? (r.devHolding === null ? "–" : r.devHolding ? "Holding" : "Sold")}
+          </dd>
         </div>
       </dl>
       {r.feeLine && <p className="small muted tm-fee">Creator fee: {r.feeLine}</p>}
@@ -1211,19 +1461,36 @@ function CallCard({ card }: { card: Card }) {
  * TokenSage's part of the modal: its read in brief, then the coin's lineage and crowd, what it is
  * trending on, and how calls on coins like it (its narrative) did this week.
  */
-function SageSection({ mint }: { mint: string }) {
+function SageSection({
+  mint,
+  sage: { data, error },
+}: {
+  mint: string;
+  sage: { data: SageView | null; error: Error | null };
+}) {
   const utility = useContext(UtilityContext);
-  // A lookup asks TokenSage for a fresh read, which lands within minutes: check more often.
-  const { data, error } = usePolling<SageView>(`${useTokenApi(mint)}/sage`, utility ? 20_000 : 120_000);
   const r = data?.read ?? null;
+  // A lookup's read is on its way: its lineage and trend cards keep their places meanwhile.
+  const reading = !!utility && !r && !error && (!data || data.status === "none");
   return (
     <>
       <SageCard mint={mint} data={data} error={error} />
-      {r && (
+      {r ? (
         <div className="tm-grid">
           <LineageCard read={r} />
           <TrendCard read={r} />
         </div>
+      ) : (
+        reading && (
+          <div className="tm-grid" aria-hidden="true">
+            {["Lineage", "Trending"].map((t) => (
+              <section key={t} className="sage-card">
+                <h4>{t}</h4>
+                <Skeleton lines={3} />
+              </section>
+            ))}
+          </div>
+        )
       )}
       {data?.track && <WeekChart track={data.track} />}
     </>
@@ -1249,7 +1516,12 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
           Full read
         </button>
       </h4>
-      {!data && !error && <Skeleton lines={3} />}
+      {!data && !error && (
+        <>
+          {utility && <LoadingNote>Loading TokenSage&apos;s read…</LoadingNote>}
+          <Skeleton lines={3} />
+        </>
+      )}
       {locked && (
         <p className="tm-locked muted small">
           <LockIcon size={14} /> {locked}
@@ -1258,15 +1530,21 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
       {error && !data && !locked && (
         <p className="error small">Couldn&apos;t load the read: {error.message}</p>
       )}
-      {data && !r && (
+      {data && !r && utility && data.status === "none" && (
+        <>
+          <LoadingNote slow="TokenSage is still reading this coin. A deep read can take a few minutes.">
+            TokenSage is reading this coin now. Its read fills in here as soon as it lands.
+          </LoadingNote>
+          <Skeleton lines={3} />
+        </>
+      )}
+      {data && !r && !(utility && data.status === "none") && (
         <p className="small muted">
           {data.status === "failed"
             ? "TokenSage couldn't read this coin."
             : data.status === "expired"
               ? "TokenSage's full read isn't kept for this coin (reads are kept for three weeks, and only for coins that reached the band)."
-              : utility
-                ? "TokenSage is reading this coin now. Its read shows here as soon as it lands."
-                : "TokenSage hasn't read this coin yet."}
+              : "TokenSage hasn't read this coin yet."}
         </p>
       )}
       {r && (

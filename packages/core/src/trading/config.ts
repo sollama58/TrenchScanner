@@ -96,6 +96,13 @@ export const tradingBotConfigSchema = z.object({
   jitoTipSol: z.number().min(0).default(0.0001),
   /** Never spend the wallet below this, in SOL: fees and token-account rent come out of it. */
   reserveSol: z.number().min(0).default(0.02),
+  /**
+   * Stop buying once positions closed in the last 24 hours (since it was last started) lost this
+   * much SOL between them, fees included; 0 is off. Open positions keep following their exits.
+   */
+  dailyLossLimitSol: z.number().min(0).default(0),
+  /** Tell the owner's private Telegram chats about each buy, sale and automatic pause. */
+  notifyTelegram: z.boolean().default(true),
   /** The exit plan; omitted means the project's default plan (EXIT_PLAN). */
   exitPlan: exitPlanSchema.nullable().default(null),
 });
