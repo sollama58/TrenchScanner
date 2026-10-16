@@ -574,7 +574,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // without one the modal shows what the database knows. The token modal's Stonk fee card reads
   // through the same client.
   const walletHelius = env.HELIUS_API_KEY ? new HeliusClient({ apiKey: env.HELIUS_API_KEY }) : null;
-  await app.register(registerTokenRoutes, { prefix: "/tokens", stonkFees: walletHelius });
+  await app.register(registerTokenRoutes, { prefix: "/tokens", env, stonkFees: walletHelius });
   const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;
   // Helius's name for it (exchanges, protocols, services): its identity API, on paid plans.
   const walletIdentity = env.HELIUS_API_KEY
