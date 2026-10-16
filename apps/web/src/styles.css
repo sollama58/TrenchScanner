@@ -2347,6 +2347,11 @@ g:hover > .hit {
 .share-modal {
   width: min(760px, calc(100vw - 32px));
 }
+/* A wide share image (the bubble map's) previews near full size: as wide as the screen allows
+   while the whole dialog still fits its height (user ask 2026-10-16). */
+.share-modal.wide {
+  width: min(1280px, calc(100vw - 32px), calc((100dvh - 210px) * 16 / 9 + 50px));
+}
 .share-modal .about-head h3 {
   margin: 0;
 }
@@ -12159,11 +12164,11 @@ button.bm-same {
   margin-top: 0;
 }
 .bm-stage.compact .bm-svg {
-  height: min(320px, 44dvh);
+  height: min(360px, 48dvh);
 }
 @media (max-width: 640px) {
   .bm-stage.compact .bm-svg {
-    height: min(280px, 40dvh);
+    height: min(320px, 44dvh);
   }
 }
 
@@ -12348,11 +12353,11 @@ button.bm-same {
   margin-top: 0;
 }
 .tm-holders .bm-stage.compact .bm-svg {
-  height: min(560px, 64dvh);
+  height: min(640px, 70dvh);
 }
 @media (max-width: 480px) {
   .tm-holders .bm-stage.compact .bm-svg {
-    height: min(400px, 52dvh);
+    height: min(460px, 58dvh);
   }
 }
 .th-list {
