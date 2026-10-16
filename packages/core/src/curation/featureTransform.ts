@@ -49,6 +49,8 @@ const UNTRANSFORMED_FEATURES = new Set([
   "earlyBuyerSoldShare",
   "devSoldShare",
   "firstBuyersHolding",
+  "firstBuyersSeen",
+  "firstBuyersHoldingCut",
   "devHolding",
   "pathGreenShare10m",
   "mktBaseRate1hPct",

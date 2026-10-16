@@ -9,6 +9,7 @@ const reading = (pct: number, count: number, wallets: string[][]) =>
   ({
     linkedWalletPct: pct,
     linkedWalletCount: count,
+    linkedCreatorPct: count,
     clusters: wallets.map((w) => ({
       funder: w[0],
       wallets: w.map((x) => ({ wallet: x, pct: 1 })),
@@ -32,6 +33,7 @@ describe("figures without transfers", () => {
       linkedWalletPct: 15,
       linkedWalletPctExTransfers: 10,
       linkedWalletCountExTransfers: 2,
+      linkedCreatorPctExTransfers: 2,
       kolBundledPctExTransfers: 12,
       bundledSupplyPctExTransfers: 13,
       bundledSupplyCountExTransfers: 2,

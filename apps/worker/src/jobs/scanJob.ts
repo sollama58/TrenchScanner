@@ -3508,6 +3508,7 @@ export function withHolderTransfers(
 export interface ExTransfersReading {
   linkedWalletPct: number;
   linkedWalletCount: number;
+  linkedCreatorPct: number;
   kolBundled?: KolBundledReading;
   /** The clusters without transfers, when transfers changed them. */
   clusters?: LinkedWalletsReading["clusters"];
@@ -3525,6 +3526,7 @@ export function exTransfersOf(
   return {
     linkedWalletPct: base.linkedWalletPct,
     linkedWalletCount: base.linkedWalletCount,
+    linkedCreatorPct: base.linkedCreatorPct,
     // Without transfers' own figures where they were read (a KOL's sends carry its bundle on
     // even when the clusters stand), else the counted ones, which then read the same.
     kolBundled: changed ? kolBundledBase : (kolBundledBase ?? kolBundled),
@@ -3542,6 +3544,7 @@ export function withExTransfers(
     ...onChain,
     linkedWalletPctExTransfers: ex.linkedWalletPct,
     linkedWalletCountExTransfers: ex.linkedWalletCount,
+    linkedCreatorPctExTransfers: ex.linkedCreatorPct,
     ...(ex.kolBundled
       ? {
           kolBundledPctExTransfers: ex.kolBundled.kolBundledPct,

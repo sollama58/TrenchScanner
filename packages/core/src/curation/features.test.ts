@@ -22,8 +22,10 @@ import {
   PRICE_PATH_FEATURES,
   SOCIAL_LIST_OUTAGE,
   SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE,
+  LAUNCH_FACT_FEATURES,
 } from "./features.js";
 import { NS_RULES_VERSION } from "./narrativeFeatures.js";
+import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
 import type { ScoredToken } from "../types.js";
 
 function scored(overrides: Partial<ScoredToken> = {}): ScoredToken {
@@ -198,7 +200,7 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("mktSource");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("relaunchSiblingPeakMcapUsd");
     // Appended on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.
     expect(CANDIDATE_FEATURE_NAMES).toContain("walletRiskScoredTop10");
   });
@@ -246,6 +248,47 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored()).transferredSupplyPct).toBeNull();
     expect(RETIRED_LEARNER_INPUTS.has("transferredSupplyPct")).toBe(true);
     expect(RETIRED_LEARNER_INPUTS.has("transferWalletCount")).toBe(true);
+  });
+
+  it("records the launch facts, recorded only, null while unread", () => {
+    const f = buildCandidateFeatures(
+      scored({
+        tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersSeen: 9, firstBuyersHoldingCut: 4 },
+        preBondSeconds: 42,
+        relaunchSiblings: 3,
+        relaunchSiblingPeakMcapUsd: 80_000,
+      }),
+    );
+    expect(f).toMatchObject({
+      firstBuyersSeen: 9,
+      firstBuyersHoldingCut: 4,
+      preBondSeconds: 42,
+      relaunchSiblings: 3,
+      relaunchSiblingPeakMcapUsd: 80_000,
+    });
+    const none = buildCandidateFeatures(scored());
+    for (const name of LAUNCH_FACT_FEATURES) {
+      expect(none[name]).toBeNull();
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    }
+  });
+
+  it("the models read the funding-only creator share and the pre-follow bundles, unknown without them", () => {
+    const f = buildCandidateFeatures(
+      scored({
+        linkedCreatorPct: 9,
+        linkedCreatorPctExTransfers: 2,
+        kolBundledPct: 12,
+        kolBundledPctModel: 5,
+        bundledSupplyPct: 14,
+        bundledSupplyPctModel: 7,
+      }),
+    );
+    expect(f).toMatchObject({ linkedCreatorPct: 2, kolBundledPct: 5, bundledSupplyPct: 7 });
+    const bare = buildCandidateFeatures(
+      scored({ linkedCreatorPct: 9, kolBundledPct: 12, bundledSupplyPct: 14 }),
+    );
+    expect(bare).toMatchObject({ linkedCreatorPct: null, kolBundledPct: null, bundledSupplyPct: null });
   });
 
   it("rows banked before the short-window capture replay those fields as unknown", () => {
