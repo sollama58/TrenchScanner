@@ -17,6 +17,12 @@ import {
   type TapeTrade,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
+import {
+  resetClosingState,
+  runClosingLane,
+  type ClosingCounts,
+  type MarketCapLookup,
+} from "./tradeTapeClosing.js";
 
 const logger = createLogger("trade-tape");
 
@@ -338,11 +344,17 @@ export interface TradeTapeDeps {
   pumpFun: Pick<PumpFunClient, "coinTrades" | "coinOrigin">;
   /** Prices the coins a trade was paid in other than SOL (a coin-paired launch's quote coin). */
   solPrices?: SolPriceLookup;
+  /** Current market caps, for the closing read's "still dead?" (tradeTapeClosing.ts). */
+  marketCaps?: MarketCapLookup;
 }
 
 export interface TradeTapeOptions {
   heliusPagesPerRun: number;
   pumpFunCallsPerRun: number;
+  /** Helius pages for closing reads (tradeTapeClosing.ts); 0 or absent: none. */
+  closingPagesPerRun?: number;
+  /** LOW_CAP_MCAP_USD: under it a taped coin past its tracking window is closed. 0: none is. */
+  lowCapMcapUsd?: number;
   spacingMs?: number;
   now?: () => number;
 }
@@ -557,6 +569,13 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
   const called = (await pendingCalledCoins(now())).filter((c) => !inProgress.has(c.tokenId));
   const pending = called.length + (inProgress.size - (inProgress.has(undefined) ? 1 : 0));
   const heliusOn = opts.heliusPagesPerRun > 0 && deps.helius.gtfaUsable;
+  const closing: ClosingCounts = {
+    closingDone: 0,
+    closingBusy: 0,
+    closingFailed: 0,
+    closingWallets: 0,
+    closingPages: 0,
+  };
   await Promise.all([
     opts.heliusPagesPerRun > 0
       ? runHeliusLane(deps, called, opts.heliusPagesPerRun, counts, now)
@@ -572,6 +591,19 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
           now,
         )
       : Promise.resolve(),
+    // A tape is only closed once it is read, so the coin is never one the lanes above have open.
+    (opts.closingPagesPerRun ?? 0) > 0
+      ? runClosingLane(
+          deps,
+          { budget: opts.closingPagesPerRun!, floorUsd: opts.lowCapMcapUsd ?? 0 },
+          closing,
+          now,
+        ).catch((err: unknown) => {
+          // Started afresh next run: a half-stored coin is simply read again.
+          resetClosingState();
+          logger.warn("closing read failed", { error: String(err) });
+        })
+      : Promise.resolve(),
   ]);
   const rpc = deps.helius.takeCallStats();
   const meta: JobRunMeta = {
@@ -580,8 +612,11 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
     // then runs on Pump.fun alone, a few coins an hour.
     heliusUsable: deps.helius.gtfaUsable,
     ...counts,
+    // Closing reads (tradeTapeClosing.ts): coins closed, left busy or failed, wallets updated, pages.
+    ...closing,
     heliusCredits: (rpc.getTransactionsForAddress ?? 0) * 10,
   };
-  if (counts.done + counts.partial + counts.failed > 0) logger.info("trade tapes read", meta);
+  if (counts.done + counts.partial + counts.failed + closing.closingDone > 0)
+    logger.info("trade tapes read", meta);
   return meta;
 }
