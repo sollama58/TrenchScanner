@@ -302,13 +302,20 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
   const m = meta as Record<string, unknown>;
   const out: { durationMs?: number; stagesMs?: Record<string, number>; [count: string]: unknown } = {};
-  // Every top-level number the job reported (duration, and counts such as tracked/inBand).
+  // Every top-level number or flag the job reported (duration, counts such as tracked/inBand,
+  // the cleanup's fullSnapshotWalk).
   for (const [key, value] of Object.entries(m)) {
-    if (typeof value === "number" && !SCHEDULE_META_KEYS.has(key)) out[key] = value;
+    if ((typeof value === "number" || typeof value === "boolean") && !SCHEDULE_META_KEYS.has(key)) {
+      out[key] = value;
+    }
   }
   // Why a run did nothing (the AI judge's "reviewer off"): without it a skipped run reads as a
-  // healthy few-millisecond success.
-  if (typeof m.skipped === "string") out.skipped = m.skipped;
+  // healthy few-millisecond success. The cleanup's stage names likewise: the stages it held back
+  // because the match copies did not land, and the ones a resumed run skipped - without them a
+  // held stage's 0 reads as "nothing old enough yet".
+  for (const key of ["skipped", "heldStages", "resumedSkippedStages"] as const) {
+    if (typeof m[key] === "string") out[key] = m[key];
+  }
   const stages = stageTimings(meta, "stagesMs");
   if (stages) out.stagesMs = stages;
   // The scan's paid RPC calls per method ({ method: count }) - what the Helius plan bills on.

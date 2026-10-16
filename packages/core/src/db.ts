@@ -45,6 +45,14 @@ const DEFAULT_STATEMENT_TIMEOUT_SECONDS = 150;
 const DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_SECONDS = 300;
 
 /**
+ * Every DateTime column Prisma made is `timestamp without time zone`, which Prisma reads and writes
+ * as UTC. A raw statement that compares one with now() or casts a timestamptz into one converts
+ * through the session's TimeZone, so the session is pinned to UTC rather than left to the server's
+ * setting (UTC on Render today, but a setting, not a promise).
+ */
+const SESSION_TIME_ZONE = "UTC";
+
+/**
  * What the trainer's connections call themselves in pg_stat_activity. The Telegram dispatch waits
  * for open transactions that could still commit an alert, and leaves these out: the trainer writes
  * no alerts, and its long training reads would otherwise hold every alert back.
@@ -110,6 +118,7 @@ export function appendPoolParams(
     url.searchParams.set(
       "options",
       `-c statement_timeout=${ms} -c idle_in_transaction_session_timeout=${idleMs}` +
+        ` -c TimeZone=${SESSION_TIME_ZONE}` +
         (name ? ` -c application_name=${name}` : ""),
     );
   }

@@ -470,8 +470,12 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // its own references and none depends on another having finished. The failed stages are still
   // reported at the end, on the heartbeat's lastError - see the end of the run.
   const failedStages: Record<string, string> = {};
-  /** What each stage took, reported with the counts: they alone do not say where a run's time went. */
-  const stageDurationsMs: Record<string, number> = {};
+  /**
+   * What each stage took, reported with the counts: they alone do not say where a run's time
+   * went. Under the key every job reports its timings on (stagesMs), which is the one
+   * GET /health/worker passes through.
+   */
+  const stagesMs: Record<string, number> = {};
   let stagesRun = 0;
   // A run cut off earlier (a deploy, a restart) leaves the stages it finished on the heartbeat
   // row; this run skips those and picks up from the first one it didn't - see RESUME_WINDOW_MS.
@@ -493,14 +497,14 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     const begun = Date.now();
     try {
       const result = await run();
-      stageDurationsMs[name] = Date.now() - begun;
+      stagesMs[name] = Date.now() - begun;
       progress.done.push(name);
       await writeResumeState(progress).catch((err: unknown) =>
         logger.warn("failed to note cleanup progress", { stage: name, error: String(err) }),
       );
       return result;
     } catch (err) {
-      stageDurationsMs[name] = Date.now() - begun;
+      stagesMs[name] = Date.now() - begun;
       failedStages[name] = err instanceof Error ? err.message : String(err);
       logger.error("cleanup stage failed - continuing with the rest", { stage: name, error: String(err) });
       return fallback;
@@ -977,7 +981,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         .filter((name) => name !== null)
         .join(", "),
     });
-  Object.assign(counts, { stageDurationsMs });
+  Object.assign(counts, { stagesMs });
   const failed = Object.keys(failedStages);
   if (failed.length > 0) {
     logger.error("cleanup job finished with failed stages", {

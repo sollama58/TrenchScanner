@@ -802,7 +802,7 @@ describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
     // 2026-10-16) and what each took.
     expect(nightly.deletedBubbleMapsAtAlert).toBe(0);
     expect(nightly.deletedOrphanNarratives).toBe(1);
-    const durations = nightly.stageDurationsMs as Record<string, number>;
+    const durations = nightly.stagesMs as Record<string, number>;
     expect(typeof durations.orphanNarratives).toBe("number");
     expect(typeof durations.untrackedNarrativeDocs).toBe("number");
     expect(nightly.heldStages).toBeUndefined();

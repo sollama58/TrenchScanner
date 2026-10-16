@@ -256,6 +256,8 @@ model AuthNonce {
   usedAt        DateTime?
 
   @@index([walletAddress])
+  /// The nightly sweep deletes by expiresAt (cleanup's `nonces` stage); without this it reads the table.
+  @@index([expiresAt])
 }
 
 /// A saved filter configuration. A user may have more than one.

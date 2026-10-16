@@ -93,6 +93,37 @@ describe("public worker health: stale threshold", () => {
     expect(summary.stale).toBe(false);
     expect(summary.lastRun).toEqual({ durationMs: 1_000 });
   });
+
+  it("keeps the cleanup's stage timings, held and skipped stages and the weekly-walk flag", () => {
+    const row = {
+      job: "cleanup",
+      lastRunAt: new Date(0),
+      lastSuccessAt: null,
+      lastError: null,
+      meta: {
+        durationMs: 183_000,
+        intervalMs: 24 * 3_600_000,
+        fullSnapshotWalk: false,
+        deletedSnapshots: 12,
+        stagesMs: { snapshots: 90_000, nonces: 5 },
+        heldStages: "candidateOutcomes, matchOutcomes",
+        resumedSkippedStages: "snapshots",
+        resumeState: { startedAt: "2026-10-16T04:00:00.000Z", done: ["snapshots"] },
+      },
+    };
+    const summary = summarizeHeartbeat(
+      row as unknown as Parameters<typeof summarizeHeartbeat>[0],
+      5 * 3_600_000,
+    );
+    expect(summary.lastRun).toEqual({
+      durationMs: 183_000,
+      fullSnapshotWalk: false,
+      deletedSnapshots: 12,
+      stagesMs: { snapshots: 90_000, nonces: 5 },
+      heldStages: "candidateOutcomes, matchOutcomes",
+      resumedSkippedStages: "snapshots",
+    });
+  });
 });
 
 describe("public worker health: a training run in flight", () => {
