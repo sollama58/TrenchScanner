@@ -467,7 +467,7 @@ function walletLines(s: ScoredToken): string[] {
   const score = (v: number) => String(Math.round(v));
   if (known(s.walletRiskTop10Max) || known(s.walletRiskFirstBuyersMean) || known(s.knownDumperFirstBuyers)) {
     lines.push(
-      `- wallet risk (0-100, 40 is the market's average, ${RISKY_WALLET_SCORE}+ is risky): riskiest top-10 holder ${known(s.walletRiskTop10Max) ? score(s.walletRiskTop10Max) : "unknown"}; launch's first buyers average ${known(s.walletRiskFirstBuyersMean) ? score(s.walletRiskFirstBuyersMean) : "unknown"}; supply held by risky holders ${fmtPct(s.walletRiskHighSupplyPct)}; known dumpers among the first buyers ${fmtNum(s.knownDumperFirstBuyers)}`,
+      `- wallet risk (0-100, 40 is the market's average, ${RISKY_WALLET_SCORE}+ is risky): riskiest top-10 holder ${known(s.walletRiskTop10Max) ? `at the ${score(s.walletRiskTop10Max)}th percentile of scored wallets` : "unknown"}; launch's first buyers average ${known(s.walletRiskFirstBuyersMean) ? score(s.walletRiskFirstBuyersMean) : "unknown"}; supply held by risky holders ${fmtPct(s.walletRiskHighSupplyPct)}; known dumpers among the first buyers ${fmtNum(s.knownDumperFirstBuyers)}`,
     );
   }
   if (known(s.walletWinTop10Max) || known(s.walletWinFirstBuyersMean) || known(s.knownWinnerFirstBuyers)) {

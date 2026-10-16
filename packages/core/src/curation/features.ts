@@ -53,6 +53,16 @@ export const WALLET_RISK_FEATURES = [
 ] as const;
 
 /**
+ * Added 2026-10-16 (data-correctness audit, values section 6): how many of the top-10 holders
+ * were scored when walletRiskTop10Max was read. From the same deploy walletRiskTop10Max is the
+ * percentile of the riskiest scored holder among every wallet scored at the time, with the
+ * coin's own tape taken out (core's wallets/riskScore.ts coinWalletRisk); the max of more scored
+ * holders reads higher, which this count says. Null on every row banked before. Recorded only
+ * (RETIRED_LEARNER_INPUTS) until a retrain admits it.
+ */
+export const WALLET_RISK_COVERAGE_FEATURES = ["walletRiskScoredTop10"] as const;
+
+/**
  * Added 2026-10-13 (the same brief, item 3): linked wallets among the top holders (top 10, then top 20 from later on 2026-10-13, then the top 25 pools aside), from who
  * paid for each one (core's wallets/linkedWallets.ts). The % of supply held by holders in a
  * cluster (one funder, or one funded another), the cluster count, the largest cluster's %, and the
@@ -179,7 +189,9 @@ export const KOL_BUNDLED_FEATURES = ["kolBundledPct"] as const;
  * wallets/kolBundled.ts bundledSupply): what the alert card's Linked tile now shows. A separate
  * input beside linkedWalletPct and kolBundledPct, which stay as they were. Null on the same terms
  * as kolBundledPct. Rows from 2026-10-14 19:44 UTC (when KOL Bundled % started) carry it where the
- * stored reading allows (bundledSupplyBackfill.ts in the worker); older rows read null.
+ * stored reading allows (bundledSupplyBackfill.ts in the worker); older rows read null. Rows with
+ * KOL bundles banked before BUNDLED_SUPPLY_POINT_IN_TIME_FROM read null to the learners
+ * (maskKnownBadInputs): the backfill before it rebuilt them from a later day's knowledge.
  *
  * READ BY THE LEARNERS (user ask 2026-10-15: "have the models consider" it), so it is not in
  * RETIRED_LEARNER_INPUTS. The onset guard (featureOnset.ts) keeps it out of a run until it covers
@@ -461,6 +473,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...LAUNCHPAD_FEATURES,
   ...TRANSFER_FEATURES,
   ...AGE_SOURCE_FEATURES,
+  ...WALLET_RISK_COVERAGE_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -594,6 +607,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // terms. Bring them in by removing them here once a few days of decision rows show they separate
   // runners.
   ...TRANSFER_FEATURES,
+  // The scored top-10 count behind walletRiskTop10Max (added 2026-10-16, data-correctness
+  // audit): recorded first, on the same terms.
+  ...WALLET_RISK_COVERAGE_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
@@ -835,6 +851,18 @@ const HOURLY_UNWAITED_FEATURES: readonly CandidateFeatureName[] = [
 ];
 
 /**
+ * Rows banked before this may carry a bundledSupplyPct the backfill rebuilt from knowledge that
+ * came after the decision (2026-10-16, data-correctness audit, skew section 8): until this
+ * deploy bundledSupplyBackfill.ts rebuilt the KOL half from the roster and side-wallet labels of
+ * the day it ran, and from snapshots taken up to 90 s after the anchor. The backfill wrote into
+ * the stored vector with no mark, so those values can't be told from the scan's own and can't be
+ * rebuilt point-in-time after the fact. Only rows whose KOL Bundled % was above 0 are affected:
+ * with none, Bundled % is the linked share itself, exact at any time. Placeholder: the deploy
+ * time, adjusted at merge.
+ */
+export const BUNDLED_SUPPLY_POINT_IN_TIME_FROM = new Date("2026-10-16T19:00:00Z");
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
  * the create message and is real), the social bits on rows banked before
@@ -846,8 +874,9 @@ const HOURLY_UNWAITED_FEATURES: readonly CandidateFeatureName[] = [
  * PATH_RETURNS_ACROSS_GAPS_SINCE the 15 and 30-minute returns on a tape too short for their
  * window, and the social bits through SOCIAL_LIST_OUTAGE. Given the row's kind, the waited-for
  * inputs on hourly rows banked before HOURLY_ROWS_WAIT_SINCE too: in on some of those rows and
- * absent on most, they taught "hourly and missing", a pattern no decision shows. Returns the same
- * object when nothing applies.
+ * absent on most, they taught "hourly and missing", a pattern no decision shows. And
+ * bundledSupplyPct on rows with KOL bundles banked before BUNDLED_SUPPLY_POINT_IN_TIME_FROM.
+ * Returns the same object when nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
   anchorAt: Date,
@@ -856,7 +885,13 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
 ): T {
   const at = anchorAt.getTime();
   const unwaitedHourly = sampleKind === "hourly" && at < HOURLY_ROWS_WAIT_SINCE.getTime();
-  if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() && !unwaitedHourly) return features;
+  // 2026-10-16 (data-correctness audit): the backfill rebuilt only rows whose KOL Bundled % was
+  // above 0; a row carrying Bundled % without a KOL Bundled % at all isn't the exact case either.
+  const rebuiltBundled =
+    at < BUNDLED_SUPPLY_POINT_IN_TIME_FROM.getTime() &&
+    features.bundledSupplyPct != null &&
+    features.kolBundledPct !== 0;
+  if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() && !unwaitedHourly && !rebuiltBundled) return features;
   // Copied on the first input cleared, so a row nothing applies to comes back as it is.
   let masked: Record<string, number | null | undefined> | null = null;
   const clear = (name: string): void => {
@@ -866,6 +901,7 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   };
   const done = (): T => (masked ?? features) as T;
   if (unwaitedHourly) HOURLY_UNWAITED_FEATURES.forEach(clear);
+  if (rebuiltBundled) clear("bundledSupplyPct");
   if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime()) return done();
   // The tape held less than `windowMinutes` of the coin's life (the pre-refill rule's test, with
   // its slack for the rounding of pathObservedMinutes and the reference tick's own).
@@ -1076,7 +1112,8 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   jup5mHolderChange: "5m holder change (live)",
   jup1hHolderChange: "1h holder change (live)",
   jupHolderCount: "holders (live)",
-  walletRiskTop10Max: "riskiest top-10 wallet",
+  walletRiskTop10Max: "riskiest top-10 wallet (percentile of scored wallets)",
+  walletRiskScoredTop10: "top-10 wallets scored",
   walletRiskFirstBuyersMean: "first buyers' wallet risk",
   walletRiskHighSupplyPct: "supply held by risky wallets",
   knownDumperFirstBuyers: "known dumpers among first buyers",
@@ -1320,6 +1357,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     emptyTop10WalletPct: scored.emptyTop10WalletPct ?? null,
     sniperTop10WalletPct: scored.sniperTop10WalletPct ?? null,
     walletRiskTop10Max: scored.walletRiskTop10Max ?? null,
+    walletRiskScoredTop10: scored.walletRiskScoredTop10 ?? null,
     walletRiskFirstBuyersMean: scored.walletRiskFirstBuyersMean ?? null,
     walletRiskHighSupplyPct: scored.walletRiskHighSupplyPct ?? null,
     knownDumperFirstBuyers: scored.knownDumperFirstBuyers ?? null,

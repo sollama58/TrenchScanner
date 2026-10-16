@@ -8,6 +8,7 @@ import {
   learnerSubset,
   maskKnownBadInputs,
   HOURLY_ROWS_WAIT_SINCE,
+  BUNDLED_SUPPLY_POINT_IN_TIME_FROM,
   NARRATIVE_READ_AT_DECISION_SINCE,
   SOCIAL_BITS_FROM_DISCOVERY_SINCE,
   withCurrentNarrativeTiming,
@@ -195,7 +196,8 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("ageSource");
+    // Appended last on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("walletRiskScoredTop10");
   });
 
   it("says whether the age counts from the launch or the pool, null without an age, and replays it", () => {
@@ -373,6 +375,31 @@ describe("withCurrentNarrativeTiming", () => {
 });
 
 describe("maskKnownBadInputs", () => {
+  it("reads a backfilled bundledSupplyPct as missing on rows with KOL bundles banked before the point-in-time backfill", () => {
+    const before = new Date(BUNDLED_SUPPLY_POINT_IN_TIME_FROM.getTime() - 1);
+    const rebuilt = { bundledSupplyPct: 6, kolBundledPct: 3, linkedWalletPct: 3, mcapUsd: 50_000 };
+    expect(maskKnownBadInputs(before, rebuilt)).toEqual({ ...rebuilt, bundledSupplyPct: null });
+    expect(rebuilt.bundledSupplyPct).toBe(6);
+    expect(maskKnownBadInputs(BUNDLED_SUPPLY_POINT_IN_TIME_FROM, rebuilt)).toBe(rebuilt);
+    // No KOL bundled anyone: Bundled % is the linked share itself, exact at any time.
+    const exact = { bundledSupplyPct: 3, kolBundledPct: 0, linkedWalletPct: 3, mcapUsd: 50_000 };
+    expect(maskKnownBadInputs(before, exact)).toBe(exact);
+    // Without a KOL Bundled % the row isn't the exact case either.
+    expect(maskKnownBadInputs(before, { bundledSupplyPct: 3, mcapUsd: 50_000 }).bundledSupplyPct).toBeNull();
+    expect(maskKnownBadInputs(before, { kolBundledPct: 3, mcapUsd: 50_000 })).toEqual({
+      kolBundledPct: 3,
+      mcapUsd: 50_000,
+    });
+    // Older rows get it masked alongside the other masks.
+    expect(maskKnownBadInputs(new Date("2026-10-04T12:00:00Z"), { ...rebuilt, hasTwitter: 1 })).toMatchObject(
+      {
+        bundledSupplyPct: null,
+        hasTwitter: null,
+        kolBundledPct: 3,
+      },
+    );
+  });
+
   it("reads the fake order-flow zeros on old rows as missing, and leaves newer rows alone", () => {
     const row = {
       uniqueBuyers5m: 0,

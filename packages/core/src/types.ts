@@ -206,11 +206,14 @@ export interface OnChainProfile {
   freshTopHoldersChecked?: number;
   /**
    * The wallet risk readings (core's wallets/riskScore.ts, coinWalletRisk), from the worker's
-   * in-memory copy of WalletRisk: the riskiest top-10 holder, the first buyers' mean score, the %
-   * of supply held by risky top holders, and the known dumpers among the first buyers. Undefined
-   * when no wallet in view is scored, or before the scores load. Recorded as model inputs only.
+   * in-memory copy of WalletRisk: the riskiest top-10 holder (since 2026-10-16 as a percentile of
+   * the wallets scored at the time, with the coin's own tape taken out, and how many of the ten
+   * were scored), the first buyers' mean score, the % of supply held by risky top holders, and
+   * the known dumpers among the first buyers. Undefined when no wallet in view is scored, or
+   * before the scores load. Recorded as model inputs; the learners read walletRiskTop10Max.
    */
   walletRiskTop10Max?: number;
+  walletRiskScoredTop10?: number;
   walletRiskFirstBuyersMean?: number;
   walletRiskHighSupplyPct?: number;
   knownDumperFirstBuyers?: number;

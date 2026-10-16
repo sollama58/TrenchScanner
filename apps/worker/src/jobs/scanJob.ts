@@ -52,6 +52,7 @@ import {
   type CexFundedReading,
   type HolderTransfersReading,
   type LinkedWalletsReading,
+  type OwnTapeRow,
   type LiveFlagsReading,
   type LiveTraderCounts,
   type OnChainHolders,
@@ -92,7 +93,7 @@ import { recentLookupMints, splitLowCap } from "./lowCap.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct, FRESH_WITHIN_HOURS } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
-import { refreshWalletRiskBook, walletRiskLookup } from "./walletRiskBook.js";
+import { ownTapesOf, refreshWalletRiskBook, walletRiskLookup, walletRiskScale } from "./walletRiskBook.js";
 import { kolLookup, refreshKolWalletBook } from "./kolWalletBook.js";
 import { kolBundledByMint, type KolBundledReading } from "./kolBundled.js";
 import {
@@ -1656,6 +1657,24 @@ async function scanCycle(
   const freshLaunchBuyers =
     (await withinBudget(launchBuyerWork, LAUNCH_BUYER_FRESHNESS_BUDGET_MS)) ??
     launchBuyerFreshnessFromCache(launchBuyerMints);
+  // Each coin's rows on its own trade tape, for the wallets its risk readings look at (2026-10-16,
+  // data-correctness audit): a coin decided on before, whose first call's tape the hourly scores
+  // now count. Two queries for the cycle; nothing to read while the scores aren't loaded.
+  const riskScale = walletRiskScale();
+  const ownTapes = riskScale
+    ? await ownTapesOf(
+        candidates.map((c) => ({
+          mintAddress: c.mintAddress,
+          tokenId: priors.get(c.mintAddress)?.token?.id,
+          wallets: [
+            ...(onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []),
+            ...(sniperWalletsFromCache(c.mintAddress) ?? []),
+          ],
+        })),
+        riskScale.builtAt,
+      )
+    : new Map<string, ReadonlyMap<string, OwnTapeRow>>();
+  lap("ownTapes");
   const perCandidateMatches: number[] = [];
   const processOne = (curatedCycle: CuratedCycle) => async (candidate: CandidateToken) => {
     try {
@@ -1698,6 +1717,7 @@ async function scanCycle(
             kolBundledOf.get(candidate.mintAddress),
             kolBundledBaseOf.get(candidate.mintAddress),
           ),
+          ownTapes === null ? null : ownTapes.get(candidate.mintAddress),
         ),
       );
     } catch (err) {
@@ -2813,13 +2833,21 @@ async function processCandidate(
   kolBundled?: KolBundledReading,
   transfers: HolderTransfersReading | null = null,
   exTransfers: ExTransfersReading | null = null,
+  ownTape: ReadonlyMap<string, OwnTapeRow> | null | undefined = undefined,
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
     withHolderKinds(
       withLinkedWallets(
         withFreshTopHolders(
-          withWalletSignals(onChainProfile, earliestActivityByAddress, holdingsByAddress, env, sniperWallets),
+          withWalletSignals(
+            onChainProfile,
+            earliestActivityByAddress,
+            holdingsByAddress,
+            env,
+            sniperWallets,
+            ownTape,
+          ),
           topHolderWalletsOf(candidate.mintAddress, (onChainProfile as { creator?: string } | null)?.creator),
           earliestActivityByAddress,
         ),
@@ -3354,6 +3382,8 @@ export function withWalletSignals(
   holdingsByAddress: Map<string, WalletHoldings>,
   env: Pick<Env, "WALLET_HOLDINGS_MIN_USD">,
   sniperWallets?: ReadonlySet<string>,
+  // The coin's own tape rows (ownTapesOf): undefined when it has none, null when the read failed.
+  ownTape?: ReadonlyMap<string, OwnTapeRow> | null,
 ): OnChainProfile | null {
   if (!onChain?.top10HolderAddresses?.length) return onChain;
   const freshTop10WalletPct = computeFreshPct(onChain.top10HolderAddresses, earliestActivityByAddress);
@@ -3373,7 +3403,7 @@ export function withWalletSignals(
     // Recorded even when both percentages came back unknown: it describes the list that was
     // available, which is what a card needs to say "4 of 9" rather than assuming ten.
     top10WalletsChecked: onChain.top10HolderAddresses.length,
-    ...walletRiskSignals(onChain, sniperWallets),
+    ...walletRiskSignals(onChain, sniperWallets, ownTape),
     ...kolSignals(onChain, sniperWallets),
   };
 }
@@ -3666,21 +3696,30 @@ export function withLiveFlags(
 }
 
 /**
- * The wallet risk readings (recorded model inputs only, coinWalletRisk in core): who the top
- * holders and first buyers are, from the hourly scores. Nothing while the scores aren't loaded.
+ * The wallet risk readings (coinWalletRisk in core; the learners read walletRiskTop10Max): who the
+ * top holders and first buyers are, from the hourly scores. Nothing while the scores aren't
+ * loaded, or when the coin's own tape rows couldn't be read (2026-10-16, data-correctness
+ * audit): those are taken back out of the scores (the coin's own earlier result), and the max is
+ * placed among the wallets scored at the time (walletRiskScale).
  */
 function walletRiskSignals(
   onChain: OnChainProfile,
   sniperWallets: ReadonlySet<string> | undefined,
+  ownTape: ReadonlyMap<string, OwnTapeRow> | null | undefined,
 ): Partial<OnChainProfile> {
   const lookup = walletRiskLookup();
-  if (!lookup) return {};
+  const scale = walletRiskScale();
+  if (!lookup || !scale || ownTape === null) return {};
   const shares = (onChain as { topHolderShares?: { owner: string; pct: number }[] }).topHolderShares;
-  const r = coinWalletRisk(lookup, {
-    top10Holders: onChain.top10HolderAddresses,
-    topHolderShares: shares,
-    firstBuyers: sniperWallets,
-  });
+  const r = coinWalletRisk(
+    lookup,
+    {
+      top10Holders: onChain.top10HolderAddresses,
+      topHolderShares: shares,
+      firstBuyers: sniperWallets,
+    },
+    { ownTape, marketDumpRate: scale.marketDumpRate, rank: scale.rank },
+  );
   const w = coinWalletWins(lookup, {
     top10Holders: onChain.top10HolderAddresses,
     topHolderShares: shares,
@@ -3688,6 +3727,7 @@ function walletRiskSignals(
   });
   return {
     walletRiskTop10Max: r.walletRiskTop10Max ?? undefined,
+    walletRiskScoredTop10: r.walletRiskScoredTop10 ?? undefined,
     walletRiskFirstBuyersMean: r.walletRiskFirstBuyersMean ?? undefined,
     walletRiskHighSupplyPct: r.walletRiskHighSupplyPct ?? undefined,
     knownDumperFirstBuyers: r.knownDumperFirstBuyers ?? undefined,

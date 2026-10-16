@@ -108,10 +108,16 @@ export function walletRiskScore(s: WalletRiskStats, marketDumpRate: number): num
   return Math.round(Math.min(100, Math.max(0, score)) * 10) / 10;
 }
 
-/** What the scan reads per coin from the scores (recorded only, not read by the models yet). */
+/** What the scan reads per coin from the scores (walletRiskTop10Max is read by the learners). */
 export interface CoinWalletRisk {
-  /** Highest score among the top-10 holders scored; null when none is. */
+  /**
+   * The riskiest top-10 holder scored, without the coin's own tape, as a percentile (0-100) of
+   * every wallet scored at the time (2026-10-16, data-correctness audit; see coinWalletRisk).
+   * Rows banked before carry the raw score (0-100, 40 at the market's rate). Null when none is.
+   */
   walletRiskTop10Max: number | null;
+  /** How many of the top-10 holders were scored (the max reads higher the more there are). */
+  walletRiskScoredTop10: number | null;
   /** Mean score of the launch's first buyers that are scored; null when none is. */
   walletRiskFirstBuyersMean: number | null;
   /** % of supply held by top holders scored RISKY_WALLET_SCORE or more; null without the shares. */
@@ -159,12 +165,84 @@ export function walletWinScore(s: WalletWinStats, marketWinRate: number): number
 export interface ScoredWallet {
   score: number;
   dumps: number;
+  /**
+   * The other counts behind the score (2026-10-16, data-correctness audit), so a coin's own tape
+   * can be taken back out of it at a repeat decision (scoreWithoutCoin). Absent on a book loaded
+   * without them: such a wallet is then unknown wherever its own tape is in the score.
+   */
+  appearances?: number;
+  fastExits?: number;
+  snipes?: number;
   /** The win score and early wins (walletWinScore); 0 on rows from before they were scored. */
   winScore?: number;
   earlyWins?: number;
   /** The count-and-rate labels (walletLabels), as the book carries them; absent reads as neither. */
   dumper?: boolean;
   winner?: boolean;
+}
+
+/** What one wallet did in the coin being decided on, from that coin's own tape (TokenWalletActivity). */
+export interface OwnTapeRow {
+  dumpedIntoStop: boolean;
+  fastExit: boolean;
+  launchSniper: boolean;
+}
+
+/**
+ * The wallet's score with the coin's own tape row taken out (2026-10-16, data-correctness
+ * audit, skew section 9): a second decision on a coin, an hour or more after the first, reads
+ * scores rebuilt from tapes that include this coin's first call and its outcome. The row is
+ * subtracted from the counts and the score rebuilt with walletRiskScore against the market rate
+ * the table was built with. Null when the book doesn't carry the counts: the wallet is then
+ * unknown, never read with its own result in it.
+ */
+export function scoreWithoutCoin(w: ScoredWallet, own: OwnTapeRow, marketDumpRate: number): number | null {
+  if (w.appearances === undefined || w.fastExits === undefined || w.snipes === undefined) return null;
+  // Clamped at 0: a tape read after the rebuild isn't in the counts yet (the caller leaves those
+  // out), and the clamp keeps a race between the two from going negative.
+  const less = (n: number, flag: boolean) => Math.max(0, n - (flag ? 1 : 0));
+  return walletRiskScore(
+    {
+      appearances: less(w.appearances, true),
+      dumps: less(w.dumps, own.dumpedIntoStop),
+      fastExits: less(w.fastExits, own.fastExit),
+      snipes: less(w.snipes, own.launchSniper),
+    },
+    marketDumpRate,
+  );
+}
+
+/**
+ * Where a score sits among every wallet scored at the time: the % of them scoring below it,
+ * 0-100 to one decimal (2026-10-16, data-correctness audit, values section 6). The raw score's
+ * scale climbs on its own as the table grows and the prior wears off (median 41.5 on 10-13 to
+ * 62 on 10-15), so a split learned one day covers other coins the next; the percentile holds its
+ * meaning as the table grows. What still moves with coverage is how many of the ten are scored
+ * (the max of more draws reads higher), which walletRiskScoredTop10 records beside it.
+ * `sortedScores` is every scored wallet's score, ascending.
+ */
+export function scorePercentile(sortedScores: readonly number[], score: number): number {
+  if (sortedScores.length === 0) return 0;
+  let lo = 0;
+  let hi = sortedScores.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (sortedScores[mid]! < score) lo = mid + 1;
+    else hi = mid;
+  }
+  return Math.round(((100 * lo) / sortedScores.length) * 10) / 10;
+}
+
+/**
+ * The book's state the per-coin readings are taken against (2026-10-16, data-correctness
+ * audit): the coin's own tape rows for the wallets in view (empty when the coin has no finished
+ * tape in the table), the market dump rate the table was built with, and the percentile rank
+ * of a score within it. Without it, coinWalletRisk reads the raw scores as before.
+ */
+export interface WalletRiskAsOf {
+  ownTape?: ReadonlyMap<string, OwnTapeRow>;
+  marketDumpRate?: number | null;
+  rank?: (score: number) => number;
 }
 
 /** What the scan reads per coin from the win scores (recorded only, not read by the models yet). */
@@ -216,6 +294,13 @@ export function coinWalletWins(
 /**
  * The per-coin readings from the wallets a decision can see: the top holders (with their % of
  * supply when known) and the launch's first buyers.
+ *
+ * 2026-10-16 (data-correctness audit, skew section 9 and values section 6): a wallet with a row
+ * on the coin's own tape is read with that row taken out (scoreWithoutCoin), or left unknown when
+ * it can't be (no counts, no market rate); walletRiskTop10Max is then the percentile of the max
+ * among the scored wallets (scorePercentile) when `asOf.rank` is given. The dumper label stays
+ * as the book carries it: it needs ten coins and a rate well above the market's, which one coin
+ * rarely decides.
  */
 export function coinWalletRisk(
   lookup: (wallet: string) => ScoredWallet | undefined,
@@ -224,18 +309,28 @@ export function coinWalletRisk(
     topHolderShares?: readonly { owner: string; pct: number }[];
     firstBuyers?: ReadonlySet<string> | readonly string[];
   },
+  asOf: WalletRiskAsOf = {},
 ): CoinWalletRisk {
+  const scoreOf = (wallet: string): ScoredWallet | undefined => {
+    const w = lookup(wallet);
+    const own = asOf.ownTape?.get(wallet);
+    if (!w || !own) return w;
+    const score = asOf.marketDumpRate == null ? null : scoreWithoutCoin(w, own, asOf.marketDumpRate);
+    return score === null ? undefined : { ...w, score };
+  };
   const top = input.top10Holders ?? [];
-  const topScores = top.map(lookup).filter((w): w is ScoredWallet => w !== undefined);
+  const topScores = top.map(scoreOf).filter((w): w is ScoredWallet => w !== undefined);
   const buyers = input.firstBuyers ? [...input.firstBuyers] : null;
-  const buyerScores = (buyers ?? []).map(lookup).filter((w): w is ScoredWallet => w !== undefined);
+  const buyerScores = (buyers ?? []).map(scoreOf).filter((w): w is ScoredWallet => w !== undefined);
   const shares = input.topHolderShares?.slice(0, 10);
+  const max = topScores.length > 0 ? Math.max(...topScores.map((w) => w.score)) : null;
   return {
-    walletRiskTop10Max: topScores.length > 0 ? Math.max(...topScores.map((w) => w.score)) : null,
+    walletRiskTop10Max: max === null ? null : asOf.rank ? asOf.rank(max) : max,
+    walletRiskScoredTop10: top.length > 0 ? topScores.length : null,
     walletRiskFirstBuyersMean:
       buyerScores.length > 0 ? buyerScores.reduce((s, w) => s + w.score, 0) / buyerScores.length : null,
     walletRiskHighSupplyPct: shares
-      ? shares.reduce((s, h) => s + ((lookup(h.owner)?.score ?? 0) >= RISKY_WALLET_SCORE ? h.pct : 0), 0)
+      ? shares.reduce((s, h) => s + ((scoreOf(h.owner)?.score ?? 0) >= RISKY_WALLET_SCORE ? h.pct : 0), 0)
       : null,
     knownDumperFirstBuyers: buyers ? buyerScores.filter(isDumperWallet).length : null,
   };

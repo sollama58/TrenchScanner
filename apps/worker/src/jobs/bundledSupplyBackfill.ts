@@ -17,10 +17,21 @@ const logger = createLogger("bundled-supply-backfill");
  * would hand the models what was learned after the decision.
  *
  * - KOL Bundled % 0: no KOL bundled anyone, so Bundled % is the linked share itself, exactly.
- * - KOL Bundled % above 0: the KOL bundles are rebuilt from the scan's stored holder list, today's
- *   roster, the holders' funders and the possible side wallets, and kept only where the rebuilt
- *   KOL Bundled % matches the one recorded at the time (the same KOL groups, then). A row whose
- *   KOL groups have since changed keeps it null.
+ * - KOL Bundled % above 0: the KOL bundles are rebuilt from the scan's stored holder list, the
+ *   roster as it stood when the scan ran, and the holders' funders, and kept only where the
+ *   rebuilt KOL Bundled % matches the one recorded at the time (the same KOL groups, then). A row
+ *   whose KOL groups differ keeps it null.
+ *
+ * Point-in-time (2026-10-16, data-correctness audit, skew section 8): a rebuild uses only what
+ * the scan could have known. The roster is read as of the scan (KolWallet.firstSeenAt, when the
+ * roster first carried the wallet; a wallet dropped and re-added counts from the re-add, and
+ * entries from before the column count from the roster's first sync, 2026-10-13, before any row
+ * in the window). The possible side wallets are not read at all: KolPossibleSide is rebuilt
+ * whole every hour from later coins and their outcomes, with no record of when a label was first
+ * earned, so a bundle that needed one stays null through the match rule. Funders are first
+ * transactions, which never change. The scan behind an outcome row is a snapshot taken at or
+ * before the anchor, never after. Rows backfilled before this ran can't be told apart and read
+ * null to the learners (core's features.ts BUNDLED_SUPPLY_POINT_IN_TIME_FROM).
  *
  * Covers the decision rows' feature vectors (CandidateOutcome.features, what the models train
  * on) and the snapshots alert cards show (CuratedAlert's and Match's), which the Linked tile
@@ -29,7 +40,7 @@ const logger = createLogger("bundled-supply-backfill");
  */
 export const BUNDLED_SUPPLY_BACKFILL_FROM = new Date("2026-10-14T19:00:00Z");
 export const BUNDLED_SUPPLY_ROWS_PER_RUN = 400;
-/** How far a snapshot can sit from its outcome's anchor and still be the scan that banked it. */
+/** How far before its outcome's anchor a snapshot can sit and still be the scan that banked it. */
 const SNAPSHOT_WINDOW_MS = 90_000;
 /** Recorded and rebuilt KOL Bundled % agree within rounding. */
 const SAME_PCT = 0.011;
@@ -50,14 +61,22 @@ export function resetBundledSupplyBackfill(): void {
 }
 
 export interface BackfillDeps {
-  /** The possible side wallets of these wallets (kolBundled.ts reads KolPossibleSide). */
+  /**
+   * The possible side wallets of these wallets. None by default (2026-10-16): the live table
+   * (KolPossibleSide) holds today's labels, not the scan's. A test hook.
+   */
   loadSides?: (wallets: readonly string[]) => Promise<KolTie[]>;
   now?: () => number;
   rowsPerRun?: number;
 }
 
+/** No side wallets: see the file's note on point-in-time rebuilds. */
+const noSides = async (): Promise<KolTie[]> => [];
+
 type ScanRow = {
   id: string;
+  /** When the scan ran: the roster is read as it stood then. */
+  takenAt: Date;
   kolBundledPct: number | null;
   linkedWalletPct: number | null;
   linkedWalletCount: number | null;
@@ -70,6 +89,7 @@ type ScanRow = {
 
 const SCAN_SELECT = {
   id: true,
+  takenAt: true,
   kolBundledPct: true,
   linkedWalletPct: true,
   linkedWalletCount: true,
@@ -116,22 +136,26 @@ async function bundledOf(
   if (rebuild.size === 0) return out;
   const wallets = [...new Set([...rebuild.values()].flatMap((r) => r.holders.map((h) => h.wallet)))];
   const [roster, funders] = await Promise.all([
-    prisma.kolWallet.findMany({ select: { wallet: true } }),
+    prisma.kolWallet.findMany({ select: { wallet: true, firstSeenAt: true } }),
     prisma.walletFunder.findMany({
       where: { wallet: { in: wallets } },
       select: { wallet: true, funder: true },
     }),
   ]);
   if (roster.length === 0) return out;
-  const kols = new Set(roster.map((r) => r.wallet));
+  const kolSince = new Map(roster.map((r) => [r.wallet, r.firstSeenAt.getTime()]));
   const funderOf = new Map(funders.map((f) => [f.wallet, f.funder]));
-  const rebuilt: Map<string, KolBundledReading> = await kolBundledByMint(
-    rebuild,
-    funderOf,
-    (w) => kols.has(w),
-    deps.loadSides,
-  );
+  // One scan at a time: each reads the roster as of its own moment (2026-10-16).
   for (const s of scans) {
+    const src = rebuild.get(s.id);
+    if (!src) continue;
+    const asOf = s.takenAt.getTime();
+    const rebuilt: Map<string, KolBundledReading> = await kolBundledByMint(
+      new Map([[s.id, src]]),
+      funderOf,
+      (w) => (kolSince.get(w) ?? Infinity) <= asOf,
+      deps.loadSides ?? noSides,
+    );
     const r = rebuilt.get(s.id);
     if (r && Math.abs(r.kolBundledPct - s.kolBundledPct!) <= SAME_PCT)
       out.set(s.id, { pct: r.bundledSupplyPct, count: r.bundledSupplyCount });
@@ -179,19 +203,17 @@ async function outcomesBatch(deps: BackfillDeps, limit: number): Promise<boolean
   await setOutcomes(exact);
   totals.exact += exact.length;
 
-  // Each row's own scan: the token's snapshot nearest the anchor that recorded the same KOL Bundled %.
+  // Each row's own scan: the token's snapshot nearest the anchor, at or before it (2026-10-16: a
+  // later one read holders the decision never saw), that recorded the same KOL Bundled %.
   const scanOf = new Map<string, ScanRow>();
   for (const r of toFind) {
     const near = await prisma.tokenSnapshot.findMany({
       where: {
         tokenId: r.tokenId,
-        takenAt: {
-          gte: new Date(r.anchorAt.getTime() - SNAPSHOT_WINDOW_MS),
-          lte: new Date(r.anchorAt.getTime() + SNAPSHOT_WINDOW_MS),
-        },
+        takenAt: { gte: new Date(r.anchorAt.getTime() - SNAPSHOT_WINDOW_MS), lte: r.anchorAt },
         kolBundledPct: { not: null },
       },
-      select: { ...SCAN_SELECT, takenAt: true },
+      select: SCAN_SELECT,
     });
     const pick = near
       .filter((s) => Math.abs(s.kolBundledPct! - r.kol) <= SAME_PCT)
