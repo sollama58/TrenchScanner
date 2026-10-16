@@ -118,6 +118,8 @@ export const feedAppearanceSchema = z
     feesBadge: z.boolean().default(false),
     /** On bubble maps, ties between holders the same exchange funded (drawn only); off by default. */
     bubbleCexLinks: z.boolean().default(false),
+    /** On bubble maps, a funder's name on a label by its diamond (the diamond and its lines always show); off by default. */
+    bubbleFunderLabels: z.boolean().default(false),
     /** On bubble maps, ties from KOLs' possible side wallets (drawn only, never counted); on by default. */
     bubbleSideLinks: z.boolean().default(true),
     /** On bubble maps, arrows between holders that sent the coin to each other (drawn only); on by default. */
@@ -216,6 +218,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   transferred: false,
   feesBadge: false,
   bubbleCexLinks: false,
+  bubbleFunderLabels: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
   bubbleNameLabels: false,

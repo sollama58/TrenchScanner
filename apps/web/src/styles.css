@@ -11596,6 +11596,14 @@ button.bm-same {
 .bm-trait-icon.trait-empty {
   color: var(--bm-trait-empty);
 }
+/* The same-minute clock (user ask 2026-10-16): its group's colour, on the disc's rim too. */
+.bm-clock circle {
+  stroke: currentColor;
+  stroke-width: 1.2;
+}
+.bm-trait-icon.bm-clock-icon {
+  color: var(--ink-2);
+}
 .bm-legend li.bm-legend-trait {
   gap: 4px;
 }

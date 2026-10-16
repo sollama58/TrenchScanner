@@ -73,6 +73,7 @@
 #         Off-site copies of the weekly model backups to any S3-compatible bucket (Cloudflare R2,
 #         Backblaze B2, AWS S3); MODEL_BACKUP_S3_REGION defaults to "auto" (R2). Unset, backups
 #         stay in Postgres only (Admin tab -> Backups) and can still be downloaded from there.
+#         The nightly full-database dump (trenchscanner-db-backup) takes the same four keys.
 #
 # DATABASE_CONNECTION_LIMIT is set (not sync: false - it ships with a value) on all three Node
 # services below. Verify the three values, plus the connections held outside the pools - the API's
@@ -567,6 +568,42 @@ services:
         value: "180"
       - key: OUTCOME_TRACKING_HOUR_UTC
         value: "5"
+
+  # The nightly full-database backup (scripts/db-backup, README -> Backups and restore): pg_dump of
+  # the whole database at 02:30 UTC, between the hourly jobs and well before the 04:00 cleanup,
+  # streamed to the same bucket as the model backups (Cloudflare R2), checked by sha256 and by
+  # reading it back, and the oldest past DB_DUMP_KEEP removed. It only reads: one connection
+  # (count it with the pools above) and one snapshot for the few minutes the dump takes. Until
+  # the four bucket keys are set it logs that no bucket is configured and exits cleanly.
+  # restore.sh in the same image restores a dump: open this service's Shell on Render (a fresh
+  # instance with this image and these settings) and run /app/restore.sh.
+  # backup.sh's heartbeat says dailyAtHourUtc 2: move it with the schedule.
+  - type: cron
+    name: trenchscanner-db-backup
+    runtime: docker
+    plan: starter
+    region: oregon
+    schedule: "30 2 * * *"
+    dockerfilePath: ./scripts/db-backup/Dockerfile
+    dockerContext: ./scripts/db-backup
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trenchscanner-db
+          property: connectionString
+      # The same bucket and token as the trainer's (model-backup); dumps go under db-dumps/.
+      - key: MODEL_BACKUP_S3_ENDPOINT
+        sync: false
+      - key: MODEL_BACKUP_S3_BUCKET
+        sync: false
+      - key: MODEL_BACKUP_S3_ACCESS_KEY_ID
+        sync: false
+      - key: MODEL_BACKUP_S3_SECRET_ACCESS_KEY
+        sync: false
+      # Nightly dumps kept, newest first: two weeks, about 14 x the compressed size in the bucket.
+      - key: DB_DUMP_KEEP
+        value: "14"
 
   # The dashboard in apps/web, with the custom domain trenchscanner.app (and www). A page on
   # trenchscanner.app calls the API on api.trenchscanner.app (SAME_SITE_APIS in apps/web/src/api.ts),

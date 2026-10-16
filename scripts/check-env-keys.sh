@@ -24,6 +24,9 @@ IGNORE=(
   NODE_VERSION
   # Read by the web build (import.meta.env in apps/web), not by the API or worker's schema.
   VITE_API_URL
+  # Read by the nightly full-database dump's shell script (scripts/db-backup), not by Node.
+  DB_DUMP_KEEP
+  DB_DUMP_COMPRESS
 )
 
 # Keys the code reads straight from process.env, outside the schema, and why. Each may also be
@@ -74,6 +77,12 @@ REQUIRED=(
   "trenchscanner-trainer MODEL_BACKUP_S3_BUCKET"
   "trenchscanner-trainer MODEL_BACKUP_S3_ACCESS_KEY_ID"
   "trenchscanner-trainer MODEL_BACKUP_S3_SECRET_ACCESS_KEY"
+  # The nightly full-database dump to the same bucket (scripts/db-backup/backup.sh).
+  "trenchscanner-db-backup DATABASE_URL"
+  "trenchscanner-db-backup MODEL_BACKUP_S3_ENDPOINT"
+  "trenchscanner-db-backup MODEL_BACKUP_S3_BUCKET"
+  "trenchscanner-db-backup MODEL_BACKUP_S3_ACCESS_KEY_ID"
+  "trenchscanner-db-backup MODEL_BACKUP_S3_SECRET_ACCESS_KEY"
 )
 
 failed=0

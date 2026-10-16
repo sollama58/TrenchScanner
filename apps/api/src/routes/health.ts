@@ -56,6 +56,8 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "champion-refresh": 3 * 3_600_000,
   // Hourly: takes the weekly model backup when one is due and copies new ones off-site.
   "model-backup": 3 * 3_600_000,
+  // Nightly, from its own Render cron (scripts/db-backup/backup.sh); the row exists once it has run.
+  "db-dump": 26 * 3_600_000,
   // Every SCORE_WEIGHTS_INTERVAL_HOURS (6): refits the composite score's weights.
   "score-weights": 14 * 3_600_000,
   // Hourly: sums the Lighthouse's history (apps/worker/src/jobs/lighthouseRollupJob.ts).
