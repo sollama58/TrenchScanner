@@ -73,7 +73,6 @@ import {
   type SageRead,
   type SageView,
 } from "./SageView";
-import { WeekChart } from "./WeekChart";
 import { Skeleton } from "./Charts";
 import { LoadingNote, LoadSteps, SkelValue, Spinner, useElapsed } from "./Loading";
 import { openWallet } from "../walletModal";
@@ -2005,8 +2004,9 @@ function CallCard({ card }: { card: Card }) {
 }
 
 /**
- * TokenSage's part of the modal: its read in brief, then the coin's lineage and crowd, what it is
- * trending on, and how calls on coins like it (its narrative) did this week.
+ * TokenSage's part of the modal, kept to three cards (user ask 2026-10-16): what the coin refers to,
+ * whether it is a copy or builds on another coin, and what it is trending on. The rest of the read
+ * is one button away in TokenSage's own modal.
  */
 function SageSection({
   mint,
@@ -2017,58 +2017,48 @@ function SageSection({
 }) {
   const utility = useContext(UtilityContext);
   const r = data?.read ?? null;
-  // A lookup's read is on its way: its lineage and trend cards keep their places meanwhile.
+  // A lookup's read is on its way: its three cards keep their places meanwhile.
   const reading = !!utility && !r && !error && (!data || data.status === "none");
   return (
     <>
-      <SageCard mint={mint} data={data} error={error} />
       {r ? (
-        <div className="tm-grid">
+        <div className="tm-sage-grid">
+          <ReferentCard read={r} />
           <LineageCard read={r} />
           <TrendCard read={r} />
         </div>
-      ) : (
-        reading && (
-          <div className="tm-grid" aria-hidden="true">
-            {["Lineage", "Trending"].map((t) => (
+      ) : reading ? (
+        <>
+          <LoadingNote slow="TokenSage is still reading this coin. A deep read can take a few minutes.">
+            {data
+              ? "TokenSage is reading this coin now. Its read fills in here as soon as it lands."
+              : "Loading TokenSage's read…"}
+          </LoadingNote>
+          <div className="tm-sage-grid" aria-hidden="true">
+            {["Refers to", "Copycat check", "Trending"].map((t) => (
               <section key={t} className="sage-card">
                 <h4>{t}</h4>
                 <Skeleton lines={3} />
               </section>
             ))}
           </div>
-        )
+        </>
+      ) : (
+        <SageStatus data={data} error={error} />
       )}
-      {data?.track && <WeekChart track={data.track} />}
+      <button type="button" className="tm-sage-open" onClick={() => openSage(mint)}>
+        <SageIcon size={14} /> Open TokenSage&apos;s full read
+      </button>
     </>
   );
 }
 
-/** TokenSage's read in brief: the referent, theme, copy mark, summary, flags and X link. */
-function SageCard({ mint, data, error }: { mint: string; data: SageView | null; error: Error | null }) {
-  const r = data?.read ?? null;
+/** Why there are no cards yet: still loading, locked, failed, or TokenSage hasn't read the coin. */
+function SageStatus({ data, error }: { data: SageView | null; error: Error | null }) {
   const locked = error && !data ? lockedText(error, "TokenSage read") : null;
-  const ref = r?.referent ?? null;
-  const utility = useContext(UtilityContext);
-  const copyMark = r?.copyMark ? (LINEAGE[r.copyMark] ?? LINEAGE.copy) : undefined;
-  const flags = r ? [...r.flags].sort((a, b) => rank(a.severity) - rank(b.severity)).slice(0, 5) : [];
   return (
     <section className="sage-card tm-sage">
-      <h4>
-        <span className="sage-brand">
-          <SageIcon size={14} /> TokenSage
-        </span>
-        {r && <span className="sage-tag">{r.depth === "full" ? "Deep read" : "Quick read"}</span>}
-        <button type="button" className="tm-link" onClick={() => openSage(mint)}>
-          Full read
-        </button>
-      </h4>
-      {!data && !error && (
-        <>
-          {utility && <LoadingNote>Loading TokenSage&apos;s read…</LoadingNote>}
-          <Skeleton lines={3} />
-        </>
-      )}
+      {!data && !error && <Skeleton lines={3} />}
       {locked && (
         <p className="tm-locked muted small">
           <LockIcon size={14} /> {locked}
@@ -2077,15 +2067,7 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
       {error && !data && !locked && (
         <p className="error small">Couldn&apos;t load the read: {error.message}</p>
       )}
-      {data && !r && utility && data.status === "none" && (
-        <>
-          <LoadingNote slow="TokenSage is still reading this coin. A deep read can take a few minutes.">
-            TokenSage is reading this coin now. Its read fills in here as soon as it lands.
-          </LoadingNote>
-          <Skeleton lines={3} />
-        </>
-      )}
-      {data && !r && !(utility && data.status === "none") && (
+      {data && (
         <p className="small muted">
           {data.status === "failed"
             ? "TokenSage couldn't read this coin."
@@ -2094,68 +2076,29 @@ function SageCard({ mint, data, error }: { mint: string; data: SageView | null; 
               : "TokenSage hasn't read this coin yet."}
         </p>
       )}
-      {r && (
-        <>
-          <div className="tm-referent">
-            <span className="sage-eyebrow">
-              {ref ? (ref.generic ? "A kind of coin" : "Refers to") : "Referent"}
-            </span>
-            <strong>{ref ? ref.label : "No clear referent"}</strong>
-            {ref?.confidence != null && (
-              <span className="muted small"> · {Math.round(ref.confidence * 100)}% sure</span>
-            )}
-          </div>
-          {(r.mainCategory || copyMark) && (
-            <div className="sage-marks">
-              {r.mainCategory && <span className="sage-tag">{categoryText(r.mainCategory.label)}</span>}
-              {copyMark && <span className={`sage-tag tone-${copyMark.tone}`}>{copyMark.text}</span>}
-            </div>
-          )}
-          {r.summary && <Summary text={r.summary} />}
-          {flags.length > 0 && (
-            <ul className="sage-flags">
-              {flags.map((f) => (
-                <li key={f.code} className={`sage-flag sev-${f.severity}`}>
-                  <span className="sage-flag-code">
-                    {f.severity === "high" ? "▲ " : f.severity === "warn" ? "● " : "○ "}
-                    {words(f.code)}
-                  </span>
-                  {f.detail && <span className="sage-flag-detail">{f.detail}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-          {r.x?.url && r.x.url.startsWith("https://") && (
-            <p className="small tm-x">
-              <a href={r.x.url} target="_blank" rel="noreferrer">
-                {r.x.author?.handle ? `@${r.x.author.handle}` : "X post"}
-                <ExternalIcon size={11} />
-              </a>
-              {r.x.author?.followers != null && (
-                <span className="muted"> · {r.x.author.followers.toLocaleString()} followers</span>
-              )}
-              {r.x.text && <span className="muted tm-x-text"> · {r.x.text}</span>}
-            </p>
-          )}
-        </>
-      )}
     </section>
   );
 }
 
-/** TokenSage's summary, clamped to a few lines with a toggle: reads run long. */
-function Summary({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
-  const long = text.length > 280;
+/** What the coin is about: its referent, how sure TokenSage is, and the kind of coin it is. */
+function ReferentCard({ read: r }: { read: SageRead }) {
+  const ref = r.referent;
   return (
-    <div className="tm-summary">
-      <blockquote className={`sage-summary${long && !open ? " clamped" : ""}`}>{text}</blockquote>
-      {long && (
-        <button type="button" className="tm-link" onClick={() => setOpen((o) => !o)}>
-          {open ? "Show less" : "Read all"}
-        </button>
+    <section className="sage-card tm-referent-card">
+      <h4>
+        {ref?.generic ? "A kind of coin" : "Refers to"}
+        <span className="sage-tag">{r.depth === "full" ? "Deep read" : "Quick read"}</span>
+      </h4>
+      <strong className="tm-referent-name">{ref ? ref.label : "No clear referent"}</strong>
+      {ref?.confidence != null && (
+        <span className="muted small">{Math.round(ref.confidence * 100)}% sure</span>
       )}
-    </div>
+      {r.mainCategory && (
+        <div className="sage-marks">
+          <span className="sage-tag">{categoryText(r.mainCategory.label)}</span>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -2169,7 +2112,7 @@ function LineageCard({ read: r }: { read: SageRead }) {
   return (
     <section className="sage-card tm-lineage">
       <h4>
-        Lineage
+        Copycat check
         {lineage && <span className={`sage-tag tone-${lineage.tone}`}>{lineage.text}</span>}
       </h4>
       {has ? (
@@ -2192,7 +2135,7 @@ function LineageCard({ read: r }: { read: SageRead }) {
 /** What the coin is riding: the trending terms TokenSage matched it to, where, and how high. */
 function TrendCard({ read: r }: { read: SageRead }) {
   const t = r.trend;
-  const terms = t?.terms.slice(0, 6) ?? [];
+  const terms = t?.terms.slice(0, 3) ?? [];
   return (
     <section className="sage-card tm-trend">
       <h4>
@@ -2232,8 +2175,4 @@ function TrendCard({ read: r }: { read: SageRead }) {
       )}
     </section>
   );
-}
-
-function rank(severity: string): number {
-  return severity === "high" ? 0 : severity === "warn" ? 1 : 2;
 }
