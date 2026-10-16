@@ -135,6 +135,14 @@ describe("snapshotDataFor: the holder reading", () => {
     }
   });
 
+  it("records which source the market figures came from, null on a reading without one", () => {
+    expect(snapshotDataFor("t1", scored, "scan").marketSource).toBeNull();
+    expect(
+      snapshotDataFor("t1", { ...scored, marketSource: "dexscreener_live" } as ScoredToken, "fast")
+        .marketSource,
+    ).toBe("dexscreener_live");
+  });
+
   it("leaves the three lists off when the writer says the reading is unchanged", () => {
     const data = snapshotDataFor("t1", scored, "scan", { holderReading: false });
     expect(data.linkedHolders).toBeUndefined();

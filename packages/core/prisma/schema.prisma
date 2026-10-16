@@ -1070,6 +1070,12 @@ model TokenSnapshot {
   volumeToMcapRatio Float?
   buys24h           Int?
   sells24h          Int?
+  // Which source the market figures on this row came from (core's marketSource.ts):
+  // "dexscreener", "dexscreener_live" (DexScreener's pair at Jupiter's live price), "jupiter" or
+  // "gecko". The refresh switches by age and listing, and the sources' figures mean different
+  // things; the feature vector carries the same fact as mktSource. Null on rows from before
+  // 2026-10-16, and on a reading built without one.
+  marketSource      String?
 
   // Short-window market data, from the same DexScreener pair response the 24h figures come from
   // (its priceChange/volume/txns objects carry m5/h1/h6 buckets alongside h24 - free to capture,
@@ -1495,6 +1501,11 @@ model WalletHoldingsCache {
   /// row can answer for launches the wallet turns up on later - see
   /// WalletHoldingsResult.complete. False on older rows and on wallets too big to list in full.
   breakdownComplete Boolean @default(false)
+
+  /// A holding no price source was asked about (a mint Jupiter's search doesn't list - see
+  /// WalletHoldingsResult.unpriced): otherHoldingsUsd is a floor that can't call the wallet
+  /// empty. False on rows written before 2026-10-16, which counted such holdings as $0.
+  unpriced Boolean @default(false)
 
   checkedAt DateTime @default(now())
 

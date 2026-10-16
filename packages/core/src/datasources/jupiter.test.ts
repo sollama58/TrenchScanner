@@ -37,6 +37,7 @@ describe("parseJupiterTokens", () => {
       buys24h: 10,
       sells24h: 4,
       priceChange24hPct: -5,
+      marketSource: "jupiter",
     });
     expect(b).toMatchObject({ mintAddress: "b", priceUsd: 0, marketCapUsd: 5_000, liquidityUsd: undefined });
     expect(b!.volume24hUsd).toBeUndefined();
@@ -90,10 +91,12 @@ describe("parseJupiterLaunches", () => {
       sells5m: 9,
       buys1h: 30,
       volume24hUsd: 2_500,
+      marketSource: "jupiter",
     });
     expect(graduate).toMatchObject({
       marketCapUsd: 50_000,
       dexId: "pumpswap",
+      marketSource: "jupiter",
       graduatedAt: new Date("2026-10-12T20:50:00Z"),
       liquidityUsd: 20_000,
       volume5mUsd: undefined,
@@ -326,8 +329,29 @@ describe("JupiterFirstLookup", () => {
     };
     const dex = { getTokensByAddresses: vi.fn(async (_mints: string[]) => [] as CandidateToken[]) };
     const lookup = new JupiterFirstLookup(jupiter, dex);
-    await lookup.getTokensByAddresses(["priced", "junk", "unanswered"], 3, { mayBeUnindexed: true });
+    const unasked = new Set<string>();
+    await lookup.getTokensByAddresses(["priced", "junk", "unanswered"], 3, { mayBeUnindexed: true, unasked });
     expect(dex.getTokensByAddresses.mock.calls[0]![0]).toEqual(["unanswered"]);
+    // The mint nobody was asked about is named, so a caller doesn't read its absence as "no pair".
+    expect([...unasked]).toEqual(["junk"]);
+  });
+
+  it("names nothing unasked when every miss goes on to DexScreener", async () => {
+    const jupiter = { getTokensByAddresses: vi.fn(async () => [token("priced"), token("zero", 0)]) };
+    const dex = { getTokensByAddresses: vi.fn(async (_mints: string[]) => [] as CandidateToken[]) };
+    const unasked = new Set<string>();
+    await new JupiterFirstLookup(jupiter, dex).getTokensByAddresses(["priced", "zero", "absent"], 3, {
+      unasked,
+    });
+    expect(dex.getTokensByAddresses.mock.calls[0]![0]).toEqual(["zero", "absent"]);
+    expect(unasked.size).toBe(0);
+    // A token Jupiter answered without a price was answered, not skipped.
+    const skipped = new Set<string>();
+    await new JupiterFirstLookup(jupiter, dex).getTokensByAddresses(["priced", "zero", "absent"], 3, {
+      mayBeUnindexed: true,
+      unasked: skipped,
+    });
+    expect([...skipped]).toEqual(["absent"]);
   });
 
   it("never touches DexScreener when Jupiter priced everything", async () => {

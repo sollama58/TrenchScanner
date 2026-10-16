@@ -1,4 +1,5 @@
 import { PUMPFUN_LAUNCHPAD, STONKS_LAUNCHPAD } from "../launchpads.js";
+import { marketSourceCode, marketSourceFromCode } from "../marketSource.js";
 import type { ScoredToken } from "../types.js";
 import { scoreNarrative, scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
@@ -20,6 +21,7 @@ import {
   NARRATIVE_FEATURES_V6,
   NARRATIVE_FEATURES_V7,
   NARRATIVE_FEATURES_V8,
+  NARRATIVE_FEATURES_V9,
   NARRATIVE_FRIENDLY_LABELS,
   narrativeFeatureValues,
   narrativeFromFeatures,
@@ -228,6 +230,20 @@ export const TRANSFER_FEATURES = ["transferredSupplyPct", "transferWalletCount"]
  * until it covers enough of the exam's span.
  */
 export const AGE_SOURCE_FEATURES = ["ageSource"] as const;
+
+/**
+ * Added 2026-10-16 (user decision, "markers everywhere"; notes/data-audit-2026-10-16/round2-code.md
+ * section 4): which source the market inputs above came from, as marketSource.ts codes it (1
+ * DexScreener's pair, 2 that pair at Jupiter's live price, 3 Jupiter outright, 4 GeckoTerminal).
+ * The refresh switches source by age and listing, and each source's liquidity, windows and pair
+ * time mean something different, so the models get the source beside the figures. One small
+ * integer rather than the one-hot bits the other categorical inputs use (fee destination, logo
+ * group, lineage): the tree seats split it as they would any code, and the linear seat reads
+ * it as it reads launchpadStonks. Null on every row banked before, never backfilled. Read by the
+ * learners; the onset guard (featureOnset.ts) keeps it out of a run until it covers enough of
+ * the exam's span.
+ */
+export const MARKET_SOURCE_FEATURES = ["mktSource"] as const;
 
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
@@ -474,6 +490,11 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...TRANSFER_FEATURES,
   ...AGE_SOURCE_FEATURES,
   ...WALLET_RISK_COVERAGE_FEATURES,
+  // Added 2026-10-16 (user decision, "markers everywhere"; curation/narrativeFeatures.ts): whether
+  // a TokenSage read was in at the decision, and the ns* writer's rules version. Written on
+  // every row from now on, read or not; null on every row banked before. Never backfilled.
+  ...NARRATIVE_FEATURES_V9,
+  ...MARKET_SOURCE_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -633,6 +654,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "nsTrendMatched",
   "livestreamLive",
   "nsXSpoofed",
+  // The ns* writer's rules version (added 2026-10-16): a marker for maskKnownBadInputs, never
+  // an input - a model that split on it would learn the deploy calendar.
+  "nsRulesVersion",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -863,6 +887,17 @@ const HOURLY_UNWAITED_FEATURES: readonly CandidateFeatureName[] = [
 export const BUNDLED_SUPPLY_POINT_IN_TIME_FROM = new Date("2026-10-16T19:00:00Z");
 
 /**
+ * When rows started carrying the ns* writer's rules version (nsRulesVersion, NS_RULES_VERSION in
+ * curation/narrativeFeatures.ts). PLACEHOLDER: the deploy time of the change that added the
+ * marker, to be set to the real one at merge (user note 2026-10-16). A row banked before this
+ * without a version was written under rules nobody can name: TokenSage's value regimes moved with
+ * #611 / #631 and their neighbours on 10-14..16 (nsDepthFull 52% to 83% of event rows,
+ * nsCatCelebrity 3-8% to 41%, a failed X fetch written as zeros), and no mark on the row says
+ * which side of a step it sits on (notes/data-audit-2026-10-16/round2-hunt.md, section 6).
+ */
+export const NS_RULES_VERSION_MARKER_SINCE = new Date("2026-10-16T19:00:00Z");
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
  * the create message and is real), the social bits on rows banked before
@@ -876,6 +911,11 @@ export const BUNDLED_SUPPLY_POINT_IN_TIME_FROM = new Date("2026-10-16T19:00:00Z"
  * inputs on hourly rows banked before HOURLY_ROWS_WAIT_SINCE too: in on some of those rows and
  * absent on most, they taught "hourly and missing", a pattern no decision shows. And
  * bundledSupplyPct on rows with KOL bundles banked before BUNDLED_SUPPLY_POINT_IN_TIME_FROM.
+ * The TokenSage inputs on rows banked before NS_RULES_VERSION_MARKER_SINCE that carry no
+ * nsRulesVersion: those pre-date the marker and span the #631 regime step. From here on a change
+ * to what an ns* input means bumps NS_RULES_VERSION, and the rows written under the old meaning
+ * can be masked by version rather than by date (`nsRulesVersion !== NS_RULES_VERSION`); not
+ * applied yet, version 1 is the first.
  * Returns the same object when nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
@@ -891,7 +931,18 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
     at < BUNDLED_SUPPLY_POINT_IN_TIME_FROM.getTime() &&
     features.bundledSupplyPct != null &&
     features.kolBundledPct !== 0;
-  if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() && !unwaitedHourly && !rebuiltBundled) return features;
+  const unversionedNs =
+    at < NS_RULES_VERSION_MARKER_SINCE.getTime() &&
+    features.nsRulesVersion == null &&
+    ALL_NARRATIVE_FEATURES.some((name) => features[name] != null);
+  if (
+    at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() &&
+    !unwaitedHourly &&
+    !rebuiltBundled &&
+    !unversionedNs
+  ) {
+    return features;
+  }
   // Copied on the first input cleared, so a row nothing applies to comes back as it is.
   let masked: Record<string, number | null | undefined> | null = null;
   const clear = (name: string): void => {
@@ -902,6 +953,7 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   const done = (): T => (masked ?? features) as T;
   if (unwaitedHourly) HOURLY_UNWAITED_FEATURES.forEach(clear);
   if (rebuiltBundled) clear("bundledSupplyPct");
+  if (unversionedNs) ALL_NARRATIVE_FEATURES.forEach(clear);
   if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime()) return done();
   // The tape held less than `windowMinutes` of the coin's life (the pre-refill rule's test, with
   // its slack for the rounding of pathObservedMinutes and the reference tick's own).
@@ -1136,6 +1188,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   bundledSupplyPct: "supply bundled (linked holders and KOL bundles)",
   launchpadStonks: "Stonks launch (vs Pump.fun)",
   ageSource: "age counted from the launch (vs the pool)",
+  mktSource: "market data source",
   transferredSupplyPct: "supply transferred holder to holder",
   transferWalletCount: "top holders that sent or got a transfer",
   sameTimeFundedPct: "supply funded in the same minute",
@@ -1212,6 +1265,7 @@ export function scoredFromFeatures(
         : num("launchpadStonks") === 1
           ? STONKS_LAUNCHPAD
           : PUMPFUN_LAUNCHPAD,
+    marketSource: marketSourceFromCode(num("mktSource")),
     top10HolderPct: num("top10HolderPct"),
     devWalletPct: num("devWalletPct"),
     creatorHolding: num("devHolding") === undefined ? undefined : num("devHolding") === 1,
@@ -1386,6 +1440,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     bundledSupplyPct: scored.bundledSupplyPctModel ?? scored.bundledSupplyPct ?? null,
     launchpadStonks:
       scored.launchpad === STONKS_LAUNCHPAD ? 1 : scored.launchpad === PUMPFUN_LAUNCHPAD ? 0 : null,
+    mktSource: marketSourceCode(scored.marketSource),
     transferredSupplyPct: scored.transferredSupplyPct ?? null,
     transferWalletCount: scored.transferWalletCount ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,

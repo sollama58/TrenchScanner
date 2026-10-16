@@ -4,6 +4,7 @@ import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
 import type { MarketContextFeatures, PricePathFeatures } from "./curation/pricePath.js";
 import type { NarrativeRead } from "./curation/narrativeFeatures.js";
 import type { TextScores } from "./curation/textFeatures.js";
+import type { MarketSource } from "./marketSource.js";
 /**
  * Domain types shared across data source clients, the scoring engine, the
  * API, and the worker. These are intentionally decoupled from the Prisma
@@ -82,6 +83,12 @@ export interface CandidateToken {
    * PumpSwap pool is listed.
    */
   graduatedAt?: Date;
+  /**
+   * Which source the market figures above came from (marketSource.ts): DexScreener's pair, that
+   * pair with Jupiter's live price, Jupiter outright, or GeckoTerminal. Set by each client's
+   * parser and by the band refresh's merge; undefined on a reading built without one.
+   */
+  marketSource?: MarketSource;
 }
 
 /**

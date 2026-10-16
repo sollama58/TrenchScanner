@@ -274,7 +274,11 @@ describe("frozen graduation curves", () => {
     const lookup = async () =>
       (await client.getTokensByAddresses(["quiet"], 1, { retries: 0, fresh: true }))[0];
 
-    expect(await lookup()).toMatchObject({ dexId: "pumpfun", marketCapUsd: 45_000 });
+    expect(await lookup()).toMatchObject({
+      dexId: "pumpfun",
+      marketCapUsd: 45_000,
+      marketSource: "dexscreener",
+    });
     expect(reReads).toHaveLength(1);
     now += 30_000;
     await lookup();
@@ -634,6 +638,7 @@ describe("parseGeckoTokens", () => {
       sells5m: 2,
       volume5mUsd: 120,
       volume24hUsd: 9000,
+      marketSource: "gecko",
     });
     expect(t?.pairCreatedAt?.toISOString()).toBe("2026-10-07T20:00:00.000Z");
   });

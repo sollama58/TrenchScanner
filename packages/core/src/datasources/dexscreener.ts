@@ -4,6 +4,7 @@ import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
 import { normalizeSocialUrl } from "./tokensage.js";
 import { isCurveVenue } from "../launchpads.js";
+import { MARKET_SOURCE } from "../marketSource.js";
 import type { GeckoTerminalClient } from "./geckoterminal.js";
 import type { CandidateToken, WatchlistCandidate } from "../types.js";
 
@@ -162,6 +163,13 @@ export interface TokenLookupOptions {
    * fallback is on, the lookup is not sent at all and every mint counts as failed.
    */
   mayBeUnindexed?: boolean;
+  /**
+   * When supplied, collects the mints no source was asked about at all: under `mayBeUnindexed`
+   * JupiterFirstLookup leaves a mint Jupiter answered without a token out of its DexScreener
+   * batch, so an entry missing from the result is "not asked", not "no pair anywhere". A caller
+   * valuing holdings must not read such a mint as worth nothing (walletValuation.ts).
+   */
+  unasked?: Set<string>;
   /**
    * Skip the recent-quote cache and ask DexScreener now (the answer is still cached for others).
    * For a caller whose logic needs a reading independent of the one other jobs just took - the
@@ -1014,6 +1022,7 @@ function toCandidateToken(pair: DexScreenerPair): CandidateToken {
     hasWebsite: info ? (info.websites?.length ?? 0) > 0 : undefined,
     imageUrl: info?.imageUrl,
     dexId: pair.dexId,
+    marketSource: MARKET_SOURCE.dexscreener,
   };
 }
 

@@ -36,6 +36,7 @@ const UNTRANSFORMED_FEATURES = new Set([
   "dexBoosted",
   "launchpadStonks",
   "ageSource",
+  "mktSource",
   "narrativeTagCount",
   "scoreMomentum",
   "scoreHolderHealth",

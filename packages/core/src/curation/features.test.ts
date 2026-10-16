@@ -10,6 +10,7 @@ import {
   HOURLY_ROWS_WAIT_SINCE,
   BUNDLED_SUPPLY_POINT_IN_TIME_FROM,
   NARRATIVE_READ_AT_DECISION_SINCE,
+  NS_RULES_VERSION_MARKER_SINCE,
   SOCIAL_BITS_FROM_DISCOVERY_SINCE,
   withCurrentNarrativeTiming,
   TRADE_FLOW_FAKE_ZEROS_UNTIL,
@@ -22,6 +23,7 @@ import {
   SOCIAL_LIST_OUTAGE,
   SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE,
 } from "./features.js";
+import { NS_RULES_VERSION } from "./narrativeFeatures.js";
 import type { ScoredToken } from "../types.js";
 
 function scored(overrides: Partial<ScoredToken> = {}): ScoredToken {
@@ -196,8 +198,9 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    // Appended last on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("walletRiskScoredTop10");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("mktSource");
+    // Appended on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.
+    expect(CANDIDATE_FEATURE_NAMES).toContain("walletRiskScoredTop10");
   });
 
   it("says whether the age counts from the launch or the pool, null without an age, and replays it", () => {
@@ -208,6 +211,32 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(LEARNER_FEATURE_NAMES).toContain("ageSource");
     expect(scoredFromFeatures(launch, 0.0001, 150_000).ageFromLaunch).toBe(true);
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).ageFromLaunch).toBeUndefined();
+  });
+
+  it("records the market source as its code, a learner input, and replays it; null without one", () => {
+    const live = buildCandidateFeatures(scored({ marketSource: "dexscreener_live" }));
+    expect(live.mktSource).toBe(2);
+    expect(buildCandidateFeatures(scored({ marketSource: "dexscreener" })).mktSource).toBe(1);
+    expect(buildCandidateFeatures(scored({ marketSource: "jupiter" })).mktSource).toBe(3);
+    expect(buildCandidateFeatures(scored({ marketSource: "gecko" })).mktSource).toBe(4);
+    // A reading built without one, and every row banked before the marker.
+    expect(buildCandidateFeatures(scored()).mktSource).toBeNull();
+    expect(scoredFromFeatures(live, 0.0001, 150_000).marketSource).toBe("dexscreener_live");
+    expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).marketSource).toBeUndefined();
+    // A code this build doesn't know replays as no source rather than a wrong one.
+    expect(scoredFromFeatures({ mktSource: 99 }, 0.0001, 150_000).marketSource).toBeUndefined();
+    expect(LEARNER_FEATURE_NAMES).toContain("mktSource");
+  });
+
+  it("writes the TokenSage markers on every row: read or not, and the writer's rules version", () => {
+    const none = buildCandidateFeatures(scored());
+    expect(none.nsRead).toBe(0);
+    expect(none.nsRulesVersion).toBe(NS_RULES_VERSION);
+    expect(none.nsDepthFull).toBeNull();
+    expect(LEARNER_FEATURE_NAMES).toContain("nsRead");
+    // The version is a handle for masking, never an input.
+    expect(RETIRED_LEARNER_INPUTS.has("nsRulesVersion")).toBe(true);
+    expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
   });
 
   it("records Transferred % and the transfer count, recorded only, null while unread", () => {
@@ -556,6 +585,7 @@ describe("maskKnownBadInputs", () => {
       top10HolderPct: 25,
       mcapUsd: 50_000,
       hasTwitter: 1,
+      nsRulesVersion: NS_RULES_VERSION,
     };
     const before = new Date(HOURLY_ROWS_WAIT_SINCE.getTime() - 1);
     const masked = maskKnownBadInputs(before, row, "hourly");
@@ -586,6 +616,48 @@ describe("maskKnownBadInputs", () => {
     // Together with the older masks on a row old enough for both.
     const oldest = maskKnownBadInputs(new Date("2026-10-07T12:00:00Z"), row, "hourly");
     expect(oldest).toMatchObject({ hasTwitter: null, nsXRead: null, nsCopycat: 1 });
+  });
+
+  it("reads the TokenSage inputs as missing on rows from before the rules marker that carry no version", () => {
+    // A row from the #631 era: ns* inputs written under rules nobody can name.
+    const row = {
+      nsCopycat: 1,
+      nsDepthFull: 1,
+      nsXRead: 0,
+      nsLogoScore: null,
+      mcapUsd: 50_000,
+      hasTwitter: 1,
+    };
+    const before = new Date("2026-10-16T18:59:59Z");
+    expect(maskKnownBadInputs(before, row)).toEqual({
+      nsCopycat: null,
+      nsDepthFull: null,
+      nsXRead: null,
+      nsLogoScore: null,
+      mcapUsd: 50_000,
+      hasTwitter: 1,
+    });
+    expect(row.nsCopycat).toBe(1);
+    // The trainer's fixed shape fills a missing input with undefined, which is also "no version".
+    expect(maskKnownBadInputs(before, { ...row, nsRulesVersion: undefined }).nsCopycat).toBeNull();
+    // A row from the marker on carries its version and is read as stored, same object.
+    const versioned = { ...row, nsRulesVersion: NS_RULES_VERSION, nsRead: 1 };
+    expect(maskKnownBadInputs(NS_RULES_VERSION_MARKER_SINCE, versioned)).toBe(versioned);
+    // A pre-marker row that somehow carries one is trusted on it.
+    expect(maskKnownBadInputs(before, versioned)).toBe(versioned);
+    // Nothing to mask on a row without TokenSage inputs: same object.
+    const noRead = { mcapUsd: 40_000, hasTwitter: 1 };
+    expect(maskKnownBadInputs(before, noRead)).toBe(noRead);
+  });
+
+  it("masks the TokenSage inputs together with the older eras' inputs on one row", () => {
+    const row = { nsCopycat: 1, hasTwitter: 1, uniqueBuyers5m: 0, mcapUsd: 50_000 };
+    expect(maskKnownBadInputs(new Date("2026-10-04T12:00:00Z"), row)).toEqual({
+      nsCopycat: null,
+      hasTwitter: null,
+      uniqueBuyers5m: null,
+      mcapUsd: 50_000,
+    });
   });
 
   it("keeps the retired duplicates off the learner list", () => {

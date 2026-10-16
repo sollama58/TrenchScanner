@@ -430,6 +430,7 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
       anchorAt: at(m),
       finalizedAt: at(m),
       sampleKind,
+      labelRule: 4,
       anchorPriceUsd: 1 + m / 100,
       anchorMcapUsd: 50_000,
       features,

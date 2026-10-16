@@ -5,6 +5,7 @@ import {
   SCANNED_LAUNCHPADS,
   STONKS_LAUNCHPAD,
 } from "../launchpads.js";
+import { MARKET_SOURCE } from "../marketSource.js";
 import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
@@ -378,6 +379,7 @@ export function parseJupiterTokens(body: unknown, requested: Set<string>): Candi
       buys24h: finite(stats?.numBuys),
       sells24h: finite(stats?.numSells),
       priceChange24hPct: finite(stats?.priceChange),
+      marketSource: MARKET_SOURCE.jupiter,
     });
   }
   return [...out.values()];
@@ -453,6 +455,7 @@ export function parseJupiterLaunches(body: unknown, requested: Set<string>): Can
       dexId,
       graduatedAt: graduatedAt && !Number.isNaN(graduatedAt.getTime()) ? graduatedAt : undefined,
       launchpad,
+      marketSource: MARKET_SOURCE.jupiter,
     });
   }
   return [...out.values()];
@@ -536,6 +539,14 @@ export class JupiterFirstLookup {
     const rest = unique.filter(
       (mint) => jupiterFailed.has(mint) || (!options.mayBeUnindexed && !priced.has(mint)),
     );
+    // Jupiter's misses that DexScreener is not asked about: left out of the answer, and said so.
+    // A token Jupiter answered without a price was answered (no route to price it on).
+    if (options.unasked && options.mayBeUnindexed) {
+      const answered = new Set(found.map((t) => t.mintAddress));
+      for (const mint of unique) {
+        if (!answered.has(mint) && !jupiterFailed.has(mint)) options.unasked.add(mint);
+      }
+    }
     if (rest.length === 0) return found;
     const remaining = deadline === undefined ? undefined : Math.max(0, deadline - Date.now());
     if (remaining === 0) {
