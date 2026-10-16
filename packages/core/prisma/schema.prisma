@@ -1100,7 +1100,9 @@ model TokenSnapshot {
   // linkedWallets.ts): % of supply held by holders in a cluster (one funder paid for them, or one
   // funded another), how many clusters, the largest one's %, and the % tied to the creator. Null
   // until every holder's funder is read. linkedClusters keeps the clusters themselves (funder,
-  // wallets and their %) for the alert card's list; null when there are none.
+  // wallets and their %) for the alert card's list; null when there are none, and since
+  // 2026-10-16 written only with linkedHolders (see there): a null on a row that has a reading
+  // means "as the newest earlier row with one".
   linkedWalletPct         Float?
   linkedClusterCount      Int?
   linkedWalletCount       Int?
@@ -1111,11 +1113,13 @@ model TokenSnapshot {
   // Every top holder the linked reading covered (the creator aside) and its %, largest first, for
   // the bubble map. Since 2026-10-16 only on rows that carry a new reading, or every ten minutes
   // (worker holderListWrites.ts): a null means "as the newest earlier row with one", which
-  // curatedFeed.ts carries onto a card's latest snapshot. Before that, on every scan that had one.
+  // curatedFeed.ts carries onto a card's latest snapshot, and the row a Match or CuratedAlert
+  // points at gets the reading when it is written. Before that, on every scan that had one.
   linkedHolders           Json?
   // Top holders funded within a minute of each other, from any funders (core's sameTimeClusters):
   // the % of supply they hold, how many such groups, and the groups themselves (when each was
-  // funded, by whom, and each wallet's %); null when there are none. Read with the linked reading.
+  // funded, by whom, and each wallet's %); null when there are none. Read with the linked reading,
+  // and since 2026-10-16 written only with linkedHolders (see there).
   sameTimeFundedPct       Float?
   sameTimeClusterCount    Int?
   sameTimeFundedCount     Int?

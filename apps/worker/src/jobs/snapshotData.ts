@@ -1,5 +1,6 @@
 import type { Prisma } from "@prisma/client";
 import { resolveDevHolding, type ScoredToken } from "@trenchscanner/core";
+import { holderReadingData } from "./holderListWrites.js";
 
 /**
  * Which job is writing the row. See TokenSnapshot.source in schema.prisma for why this matters:
@@ -26,11 +27,12 @@ export function snapshotDataFor(
   scored: ScoredToken,
   source: SnapshotSource,
   /**
-   * linkedHolders: whether this row carries the top-holder list. The scan passes
-   * holderListWrites.ts' answer (a new reading, or the last written one is ten minutes old); left
-   * out, the list is written whenever there is one, as every row did before 2026-10-16.
+   * holderReading: whether this row carries the holder reading's lists (linkedHolders,
+   * linkedClusters, sameTimeClusters). The scan passes holderListWrites.ts' answer (a new reading,
+   * or the last written one is ten minutes old); left out, the lists are written whenever there
+   * are any, as every row did before 2026-10-16 and as the fast lane's alert rows still do.
    */
-  opts: { linkedHolders?: boolean } = {},
+  opts: { holderReading?: boolean } = {},
 ): Prisma.TokenSnapshotUncheckedCreateInput {
   return {
     tokenId,
@@ -81,30 +83,19 @@ export function snapshotDataFor(
     cexFundedPct: scored.cexFundedPct,
     cexFundedCount: scored.cexFundedCount,
     cexFundedHolders: scored.cexFundedHolders,
-    // Only when there is a cluster to list: most coins have none, and this is a column per scan.
-    linkedClusters: scored.linkedClusters?.length
-      ? (scored.linkedClusters as unknown as Prisma.InputJsonValue)
-      : undefined,
+    // The reading's lists - the top holders the scan read (user ask 2026-10-13), the clusters
+    // among them and the same-minute groups - on the rows that carry a new reading, not every
+    // scan (holderListWrites.ts): readers take the newest row that has them.
+    ...(opts.holderReading !== false ? holderReadingData(scored) : {}),
     sameTimeFundedPct: scored.sameTimeFundedPct,
     sameTimeClusterCount: scored.sameTimeClusterCount,
     sameTimeFundedCount: scored.sameTimeFundedCount,
     bundledWalletCount: scored.bundledWalletCount,
-    // Only when there is a same-minute group to list, as for the clusters above.
-    sameTimeClusters: scored.sameTimeClusters?.length
-      ? (scored.sameTimeClusters as unknown as Prisma.InputJsonValue)
-      : undefined,
-    // The top holders the scan read (user ask 2026-10-13), for the bubble map and the holder-list
-    // evaluation - on the rows that carry a new reading, not every scan (holderListWrites.ts):
-    // readers take the newest row that has one.
-    linkedHolders:
-      opts.linkedHolders !== false && scored.linkedHolders?.length
-        ? (scored.linkedHolders as unknown as Prisma.InputJsonValue)
-        : undefined,
     flaggedBuyers: scored.flaggedBuyers,
     flaggedSellers: scored.flaggedSellers,
     flaggedBuySol: scored.flaggedBuySol,
     flaggedSellSol: scored.flaggedSellSol,
-    // Only when there is a flagged trade to list, as for the clusters above.
+    // Only when there is a flagged trade to list: most scans have none, and this is a column per scan.
     flaggedTrades: scored.flaggedTrades?.length
       ? (scored.flaggedTrades as unknown as Prisma.InputJsonValue)
       : undefined,

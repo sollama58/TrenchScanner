@@ -15,6 +15,7 @@ import {
   FRESH_ANCHOR_LABEL_RULE,
 } from "@trenchscanner/core";
 import type { Token, TokenSnapshot } from "@prisma/client";
+import { carryHolderReadingOntoAlertRow } from "./holderListWrites.js";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
 import { clearFilterWalletWait, filterWalletWaitOver, linkedPendingFor } from "./walletPriority.js";
 
@@ -379,6 +380,9 @@ export async function createMatchesForTargets(opts: {
       // inserting them one by one held this token's lock (and a pooled connection) for as many
       // round trips, against the 15s body timeout below.
       if (confirmed.length === 0) return [];
+      // The row these matches point at is read on its own by the feed, so it carries the holder
+      // reading the scan may have left off as unchanged (holderListWrites.ts).
+      if (snapshot.linkedHolders === null) await carryHolderReadingOntoAlertRow(tx, snapshot.id, scored);
       // Priced from a fresh quote when the scan read one, as the alert's grading row is (see
       // anchorMatchOutcome): its Alert figure and peaks then count from that price, not from the
       // snapshot's DexScreener one, which runs 45-60 s behind.

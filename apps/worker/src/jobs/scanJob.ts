@@ -87,7 +87,7 @@ import {
   type FilterWithUser,
 } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
-import { noteHolderListWritten, shouldWriteHolderList } from "./holderListWrites.js";
+import { noteHolderReadingWritten, shouldWriteHolderReading } from "./holderListWrites.js";
 import { recentLookupMints, splitLowCap } from "./lowCap.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct, FRESH_WITHIN_HOURS } from "./walletFreshness.js";
@@ -2746,13 +2746,13 @@ async function processCandidate(
     dropScanVerdict(token.id);
     return 0;
   }
-  // The holder list rides only a new reading, or one written ten minutes ago (holderListWrites.ts):
-  // the same list on every 30-second row was most of the table's growth.
-  const writeHolderList = shouldWriteHolderList(token.id, scored.linkedHolders);
+  // The holder reading's lists ride only a new reading, or one written ten minutes ago
+  // (holderListWrites.ts): the same lists on every 30-second row were most of the table's growth.
+  const writeHolderReading = shouldWriteHolderReading(token.id, scored);
   const snapshot = await prisma.tokenSnapshot.create({
-    data: snapshotDataFor(token.id, scored, "scan", { linkedHolders: writeHolderList }),
+    data: snapshotDataFor(token.id, scored, "scan", { holderReading: writeHolderReading }),
   });
-  if (writeHolderList && scored.linkedHolders) noteHolderListWritten(token.id, scored.linkedHolders);
+  if (writeHolderReading) noteHolderReadingWritten(token.id, scored);
   noteSnapshotWritten(token.id, snapshot.takenAt.getTime());
   noteFreshMarketData([token.id]);
   // Passing or failing - the fast-match lane goes by the newest verdict. See vettedTokens.ts.
