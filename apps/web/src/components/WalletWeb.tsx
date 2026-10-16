@@ -15,7 +15,9 @@ import {
   type SideWeb,
   type WebTie,
 } from "../walletWeb";
+import { renderWalletWebCard } from "../walletWebCard";
 import { LoadingNote } from "./Loading";
+import { ShareButton } from "./ShareImageDialog";
 import { BubblesIcon, CheckIcon, CloseIcon, CopyIcon, WalletIcon } from "./Icons";
 
 /**
@@ -250,6 +252,23 @@ function WebView({
             <span className="ww-headline-word">{web.total === 1 ? "wallet used" : "wallets used"}</span>
             <span className="faint small">{parts.filter(Boolean).join(" · ")}</span>
           </span>
+          {/* The web as an image (user ask 2026-10-16), with the ties switched on as shown. */}
+          {labeled > 0 && (
+            <span className="ww-share">
+              <ShareButton
+                title={`${hubName}'s wallet web`}
+                fileName={`trenchscanner-wallet-web-${
+                  hubName
+                    .toLowerCase()
+                    .replace(/[^a-z0-9]+/g, "-")
+                    .replace(/^-|-$/g, "") || web.hub.slice(0, 6)
+                }`}
+                caption={`${hubName}: ${walletCount(web.total)} used, mapped on TrenchScanner`}
+                wide
+                render={() => renderWalletWebCard(web, layout, names, hubName, hidden)}
+              />
+            </span>
+          )}
         </div>
         <dl className="ww-tiles" style={{ "--ww-cols": tiles.length } as React.CSSProperties}>
           {tiles.map((t) => (
