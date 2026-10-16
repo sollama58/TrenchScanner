@@ -377,7 +377,7 @@ describe("maskKnownBadInputs", () => {
 
   it("reads the fresh-price gap and market base rates as missing before live fresh quotes", () => {
     const row = { freshGapPct: -12, mktBaseRate1hPct: 8, mktBaseRate6hPct: 9, mcapUsd: 50_000 };
-    expect(maskKnownBadInputs(new Date("2026-10-12T16:03:59Z"), row)).toEqual({
+    expect(maskKnownBadInputs(new Date("2026-10-12T16:02:59Z"), row)).toEqual({
       freshGapPct: null,
       mktBaseRate1hPct: null,
       mktBaseRate6hPct: null,

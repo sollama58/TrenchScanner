@@ -311,6 +311,8 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
       features: {},
       score: 50,
       nextCheckAt: windowStart,
+      // Born on the current rule, as every live row is; older rules leave the set.
+      labelRule: 4,
       labelValue: 1,
       peak1hPriceUsd: 1,
       low1hPriceUsd: 1,
@@ -366,7 +368,7 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     expect(describeRowBudget(all, windowStart, 100).capped).toBe(false);
   });
 
-  it("keeps only rows inside the alert band, and decision rows no older than the age cap", async () => {
+  it("keeps only rows inside the alert band, on the current label rule, no older than the age cap and not frozen", async () => {
     const windowStart = new Date("2099-02-01T00:00:00Z");
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-load-band` } });
     const at = (m: number) => new Date(windowStart.getTime() + m * 60_000);
@@ -380,6 +382,7 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
       features,
       score: 50,
       nextCheckAt: windowStart,
+      labelRule: 4,
       labelValue: 0,
       peak1hPriceUsd: 1,
       low1hPriceUsd: 1,
@@ -394,12 +397,22 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
         row(4, "event", 50_000, { ageMinutes: 600 }), // older than the event age cap
         // The hourly twin of the minute-3 event row, banked in the same scan.
         { ...row(3, "hourly", 50_000), anchorAt: new Date(at(3).getTime() + 1_000) },
+        // Never re-graded to the current rule: which rows the re-grade skipped followed the outcome.
+        { ...row(5, "event", 50_000, { ageMinutes: 5 }), labelRule: 3 },
+        // A background row of a coin over the age cap, and a frozen curve nobody traded.
+        row(6, "hourly", 50_000, { ageMinutes: 600 }),
+        row(7, "hourly", 50_000, { ageMinutes: 20, volume1hUsd: 0, buys1h: 0 }),
+        // Born rule 3 (no usable quote at the scan) and re-graded in place: its gap was measured
+        // after the decision, so it reads as missing.
+        { ...row(8, "event", 50_000, { ageMinutes: 3, freshGapPct: 5 }), rule3Grade: { labelValue: 0 } },
       ],
     });
     const rows = await loadTrainingRows(windowStart, 100, 50, { min: 10_000, max: 1_000_000 });
     expect(
       rows.map((r) => `${r.sampleKind}@${(r.anchorAt.getTime() - windowStart.getTime()) / 60_000}`),
-    ).toEqual(["event@3", "hourly@1"]);
+    ).toEqual(["event@8", "event@3", "hourly@1"]);
+    expect(rows[0]!.features.freshGapPct).toBeNull();
+    expect(rows[1]!.features.ageMinutes).toBe(30);
   });
 
   it("drops the hourly twin of an alerted event row even when re-grading gave the two different prices", async () => {
@@ -416,6 +429,7 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
       features: {},
       score: 50,
       nextCheckAt: windowStart,
+      labelRule: 4,
       labelValue: 0,
       peak1hPriceUsd: 1,
       low1hPriceUsd: 1,

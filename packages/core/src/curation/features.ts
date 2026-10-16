@@ -707,7 +707,7 @@ export const WEEKEND_FLAG_FROM = new Date("2026-10-05T00:00:00Z");
 
 /**
  * Rows anchored before this carry no live fresh-price gap. Jupiter's quote at the scan (the
- * freshGapPct input, features.ts) started 2026-10-12 16:04 UTC with the first row born rule 4;
+ * freshGapPct input, features.ts) started 2026-10-12 16:03 UTC with the first row born rule 4;
  * older rows got the input later from the candle re-grade (labelRegradeJob.ts), which measures it
  * on a candle up to 60 s old, from the alert's moved send-time anchor (so it holds the move after
  * the decision), and only on the rows whose candles it could replay: on decision rows under five
@@ -715,7 +715,7 @@ export const WEEKEND_FLAG_FROM = new Date("2026-10-05T00:00:00Z");
  * notes/data-audit-2026-10-16). The market base-rate inputs changed meaning at the same switch:
  * until then they counted wins graded under rule 3.
  */
-export const FRESH_QUOTE_GAP_SINCE = new Date("2026-10-12T16:04:00Z");
+export const FRESH_QUOTE_GAP_SINCE = new Date("2026-10-12T16:03:00Z");
 const FRESH_RULE_ERA_FEATURES = [
   "freshGapPct",
   "mktBaseRate1hPct",
@@ -727,7 +727,8 @@ const FRESH_RULE_ERA_FEATURES = [
  * coin: the in-memory tape emptied on every deploy until #414 (2026-10-13 01:05 UTC) refilled it
  * from snapshots, so on an older coin "pathRet15mPct missing" meant "tape under 15 minutes" and
  * read as the retired pathObservedMinutes. Coins 20+ minutes old with under 5 minutes of tape
- * doubled 11.7% against 4.9% with a full tape, and the gap is gone on later rows. On those rows,
+ * doubled 11.7% against 4.9% with a full tape. Since the refill a short tape means the coin just
+ * entered the band (live rows read the same), so only the older rows are masked: on those rows,
  * when the tape is shorter than the coin's age allows, every path input reads as missing.
  */
 export const PATH_TAPE_REFILL_SINCE = new Date("2026-10-13T01:05:00Z");

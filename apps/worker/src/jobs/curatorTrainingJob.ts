@@ -1043,6 +1043,8 @@ interface LoadedRow {
   peakBeforeStopPriceUsd: number | null;
   hit10xIn1h: boolean | null;
   rule4Grade: unknown;
+  /** Set when the row was born rule 3 and the re-grade rewrote it in place (labelRegradeJob.ts). */
+  rule3Grade: unknown;
 }
 
 /** The grade fields trainingGradeOf reads from a stored rule4Grade. */
@@ -1164,7 +1166,7 @@ async function loadRowsOfKind(
     const page = await prisma.$queryRaw<LoadedRow[]>`
       SELECT "id", "tokenId", "anchorAt", "features", "labelValue", "anchorPriceUsd",
              "signalPriceUsd", "anchorMcapUsd", "sampleKind", "labelRule", "maxDrawdown1hPct",
-             "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h", "rule4Grade"
+             "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h", "rule4Grade", "rule3Grade"
       FROM "CandidateOutcome"
       WHERE "finalizedAt" IS NOT NULL
         AND "anchorAt" >= ${windowStart}
@@ -1181,7 +1183,8 @@ async function loadRowsOfKind(
       // which rows it skipped depended on the outcome (busy runners outgrew the candle history,
       // old flat coins never traded), so young skipped decision rows doubled 23.4% against 17.3%
       // for re-graded ones while skipped hourly rows doubled 3.9% (data-correctness audit
-      // 2026-10-16). Every row since 2026-10-12 is born on the current rule.
+      // 2026-10-16). Since 2026-10-12 a row is born rule 3 only when the scan had no usable fresh
+      // quote (1-3% of decision rows a day); the re-grade then rewrites it in place.
       if (!isCurrentLabelRule(r)) continue;
       // A completed curve nobody trades (no volume, no buys in the hour) reads a frozen market cap
       // near $49.6k and stale holder figures, and never moves: 5,523 hourly rows on 10-06..10-11
@@ -1192,6 +1195,10 @@ async function loadRowsOfKind(
         r.anchorAt,
         withFixedShape(r.features as Record<string, number | null>),
       );
+      // A row re-graded in place (born rule 3 after the fresh quotes began, no usable quote at the
+      // scan) had its fresh-price gap overwritten with the candle re-grade's, measured after the
+      // decision: live, the same no-quote decision carries no gap at all.
+      if (loaded.rule3Grade !== null && features.freshGapPct !== undefined) features.freshGapPct = null;
       out.push({
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,
