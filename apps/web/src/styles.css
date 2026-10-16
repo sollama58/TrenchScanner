@@ -6556,6 +6556,17 @@ html:has(dialog.about-modal[open]) {
 .appearance-controls .check-hint {
   margin: -8px 0 0;
 }
+/* The bubble maps' names, kind by kind, set in under the one switch. */
+.appearance-controls .check-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  margin: -6px 0 0 24px;
+}
+.appearance-controls .check-sub > span {
+  flex-basis: 100%;
+}
 .preset-options {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));

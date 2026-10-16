@@ -149,38 +149,50 @@ function useTransferToggle(graph: BubbleGraph | null): {
 }
 
 interface NameToggle {
-  /** The names the map, its lists and its share image use: every name, or without the switchable ones. */
+  /** The names the map, its lists and its share image use: every name, or without the hidden kinds. */
   mapNames: WalletNames;
-  /** Whether the map has any name the switch would hide; the switch shows only then. */
+  /** Whether the map's one switch shows: the map has a name it would hide, and Settings doesn't set them kind by kind. */
   hasSwitchable: boolean;
   showNames: boolean;
   setNamesOn: (on: boolean) => void;
 }
 
-/** The name sources the Pump.fun / FOMO / Helius switch hides; KOLs' and exchanges' always show. */
-const SWITCHABLE_NAMES: ReadonlySet<WalletName["source"]> = new Set(["pumpfun", "fomo", "identity"]);
+type SwitchableSource = "pumpfun" | "fomo" | "identity";
+const SWITCHABLE_NAMES: ReadonlySet<WalletName["source"]> = new Set<SwitchableSource>([
+  "pumpfun",
+  "fomo",
+  "identity",
+]);
 
 /**
  * Whether the Pump.fun, FOMO and Helius names show on the map (user ask 2026-10-16): on by
- * default, switchable on the map, with the default in Settings. KOLs' names and exchanges' always
- * show: an exchange that funded holders keeps its Helius name. Held above the map so its share
- * image follows it too. `mapNames` is what the map, its lists and the share image name wallets by.
+ * default, switchable on the map, with the default in Settings. Settings can also set each kind on
+ * its own, and then the map has no switch for them. KOLs' names and exchanges' always show: an
+ * exchange that funded holders keeps its Helius name. Held above the map so its share image follows
+ * it too. `mapNames` is what the map, its lists and the share image name wallets by.
  */
 function useNameToggle(graph: BubbleGraph | null, names: WalletNames): NameToggle {
-  const { bubbleNameLabels } = useAppearance();
+  const { bubbleNameLabels, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius } = useAppearance();
   const [on, setNamesOn] = useState<boolean | null>(null);
-  const showNames = on ?? bubbleNameLabels;
+  const split = bubbleNamesPumpfun !== null || bubbleNamesFomo !== null || bubbleNamesHelius !== null;
+  const showNames = split ? bubbleNameLabels : (on ?? bubbleNameLabels);
   return useMemo(() => {
+    const shows: Record<SwitchableSource, boolean> = {
+      pumpfun: bubbleNamesPumpfun ?? showNames,
+      fomo: bubbleNamesFomo ?? showNames,
+      identity: bubbleNamesHelius ?? showNames,
+    };
     const exchanges = new Set(graph?.cexLinks.map((l) => l.funder) ?? []);
-    const hidden = Object.keys(names).filter(
+    const switchable = Object.keys(names).filter(
       (w) => SWITCHABLE_NAMES.has(names[w]!.source) && !exchanges.has(w),
     );
-    if (showNames || hidden.length === 0)
-      return { mapNames: names, hasSwitchable: hidden.length > 0, showNames, setNamesOn };
+    const hidden = switchable.filter((w) => !shows[names[w]!.source as SwitchableSource]);
+    const hasSwitchable = !split && switchable.length > 0;
+    if (hidden.length === 0) return { mapNames: names, hasSwitchable, showNames, setNamesOn };
     const kept: Record<string, WalletName> = { ...names };
     for (const w of hidden) delete kept[w];
-    return { mapNames: kept, hasSwitchable: true, showNames, setNamesOn };
-  }, [graph, names, showNames]);
+    return { mapNames: kept, hasSwitchable, showNames, setNamesOn };
+  }, [graph, names, showNames, split, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius]);
 }
 
 /**
