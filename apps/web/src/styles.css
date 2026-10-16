@@ -404,6 +404,23 @@ input[type="checkbox"] {
   -webkit-backdrop-filter: saturate(1.4) blur(14px);
   border-bottom: 1px solid var(--border);
 }
+/* A faint brand-gradient hairline along the header's bottom edge, brightest under the middle. */
+.topbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--brand-a) 45%, transparent) 30%,
+    color-mix(in srgb, var(--brand-b) 45%, transparent) 70%,
+    transparent
+  );
+}
 .topbar-inner {
   max-width: 1360px;
   margin: 0 auto;
@@ -418,6 +435,7 @@ input[type="checkbox"] {
   gap: 10px;
   color: var(--ink);
   text-decoration: none !important;
+  border-radius: var(--radius-s);
 }
 .brand-name {
   font-weight: 800;
@@ -432,13 +450,18 @@ input[type="checkbox"] {
   display: block;
   filter: drop-shadow(0 6px 14px rgba(110, 90, 255, 0.45));
 }
+/* A segmented control: the tabs sit in a recessed track, the open one raised and tinted with the
+   brand colour. Sizes are unchanged from the plain bar, as the wrap breakpoints below count on them.
+   On one row the track centres in the room between the brand and the wallet. */
 .tabs {
   display: flex;
   gap: 2px;
   padding: 4px;
+  margin-left: auto;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 12px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.22);
 }
 /* The signed-in bar's tablist wrapper (App.tsx): its buttons lay out as if they were the bar's own. */
 .tabs > .tablist {
@@ -450,19 +473,35 @@ input[type="checkbox"] {
   color: var(--ink-2);
   border-radius: 9px;
   padding: 7px 14px;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s,
+    box-shadow 0.15s;
+}
+.tabs button .icon {
+  color: var(--muted);
+  transition: color 0.15s;
 }
 .tabs button:hover:not(:disabled) {
-  background: transparent;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
   border-color: transparent;
   color: var(--ink);
 }
-.tabs button.on {
-  background: var(--surface-solid);
-  color: var(--ink);
-  border-color: var(--border-strong);
-  box-shadow: 0 2px 10px -4px rgba(0, 0, 0, 0.5);
+.tabs button:hover:not(:disabled) .icon {
+  color: var(--ink-2);
 }
-.tabs button.on .icon {
+.tabs button.on,
+.tabs button.on:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--brand-a) 13%, var(--surface-solid));
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--brand-a) 34%, transparent);
+  box-shadow:
+    0 1px 0 var(--highlight) inset,
+    0 4px 14px -6px color-mix(in srgb, var(--brand-a) 60%, transparent);
+}
+.tabs button.on .icon,
+.tabs button.on:hover:not(:disabled) .icon {
   color: var(--brand-ink);
 }
 .topbar-right {
@@ -4930,10 +4969,12 @@ html:has(dialog.about-modal[open]) {
     width: auto;
     gap: 0;
     padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    margin: 0;
     border-radius: 0;
     border: none;
     border-top: 1px solid var(--border);
     background: var(--surface-solid);
+    box-shadow: 0 -10px 24px -18px rgba(0, 0, 0, 0.55);
   }
   /* Sized by their labels (flex-basis auto), so "Lighthouse" takes the room "Live" doesn't need
      instead of every entry getting an equal, too-narrow share. */
@@ -4942,9 +4983,12 @@ html:has(dialog.about-modal[open]) {
     min-width: 0;
     flex-direction: column;
     gap: 3px;
+    position: relative;
     padding: 6px 0;
     font-size: 11px;
     border: none;
+    border-radius: 10px;
+    color: var(--muted);
   }
   /* Seven tabs (Stream on, or the admin tab) still fit "Lighthouse" whole on a 360px phone. Signed
      in, the tabs sit inside .tablist, so count them there. */
@@ -4962,10 +5006,31 @@ html:has(dialog.about-modal[open]) {
     width: 20px;
     height: 20px;
   }
-  .tabs button.on {
+  /* The open tab: a short brand-gradient bar on the bar's top edge with a soft glow spreading down
+     from it, the icon in brand colour and the label at full ink. Inactive labels step back to
+     muted. The glow sits behind the icon and label (z-index -1 within the fixed bar). */
+  .tabs button.on,
+  .tabs button.on:hover:not(:disabled) {
     background: transparent;
+    border-color: transparent;
     box-shadow: none;
     color: var(--ink);
+  }
+  .tabs button.on::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    top: -6px;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    pointer-events: none;
+    background:
+      linear-gradient(90deg, var(--brand-a), var(--brand-b)) top center / 28px 3px no-repeat,
+      radial-gradient(60% 75% at 50% 0%, color-mix(in srgb, var(--brand-a) 24%, transparent), transparent);
+  }
+  .tabs button:hover:not(:disabled) {
+    background: transparent;
   }
   .tabs button span {
     max-width: 100%;
