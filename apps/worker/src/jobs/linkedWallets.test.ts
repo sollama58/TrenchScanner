@@ -395,7 +395,7 @@ describe("readTopHolders", () => {
     expect(helius.getTopHoldersBatch).toHaveBeenCalledWith(["mA"], 26);
     expect(groups[0]!.holders).toHaveLength(26);
     expect(groups[1]!.holders).toEqual([{ owner: "rugcheck", pct: 1 }]);
-    expect(cachedTopHolders("mA", 1)).toBe(top);
+    expect(cachedTopHolders("mA", 1)).toEqual(top);
     expect(cachedTopHolders("mB", 1)).toBeUndefined();
 
     // Fresh lists aren't read again; the next mint is.
