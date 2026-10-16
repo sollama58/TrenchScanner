@@ -119,6 +119,8 @@ export const feedAppearanceSchema = z
     bubbleSideLinks: z.boolean().default(true),
     /** On bubble maps, arrows between holders that sent the coin to each other (drawn only); on by default. */
     bubbleTransferLinks: z.boolean().default(true),
+    /** On bubble maps, Pump.fun, FOMO and Helius names on the wallets (KOLs' always show); on by default. */
+    bubbleNameLabels: z.boolean().default(true),
     /** The retired Bundled tile (folded into Linked, 2026-10-13): accepted from older tabs, ignored. */
     bundled: z.boolean().optional(),
     /**
@@ -203,6 +205,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   bubbleCexLinks: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
+  bubbleNameLabels: true,
   narrativeNote: null,
   streamTab: false,
   hideLighthouseTab: false,

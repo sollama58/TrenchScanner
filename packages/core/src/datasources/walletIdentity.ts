@@ -47,14 +47,25 @@ export function isPumpfunName(name: string): boolean {
   return usernameApp(name) === "pumpfun";
 }
 
+/** A name followed by an X handle and maybe more: `NAME @handle …` or `NAME (@handle) …`. */
+const HANDLE_RE = /^(.*?\S)\s+\(?@[A-Za-z0-9_]/;
+
+/** A name without its X handle and anything after it ("NAME @HANDLE …" → "NAME"); a bare "@handle" stays. */
+export function withoutHandle(name: string): string {
+  const m = HANDLE_RE.exec(name.trim());
+  // "NAME - @handle" or "NAME | @handle" leaves no separator behind.
+  return (m && m[1]!.replace(/[\s|:,\u00b7\u2013\u2014-]+$/, "")) || name.trim();
+}
+
 /**
  * A wallet's name as the dashboard keeps it: a Pump.fun or FOMO username labelled
  * `"NAME" on Pumpfun` / `"NAME" on FOMO` becomes just NAME (user asks 2026-10-13 and 14; the
- * dashboard quotes and tints it); anything else is left as it is.
+ * dashboard quotes and tints it), and an X handle and anything after it is dropped ("NAME @HANDLE …" → "NAME",
+ * user ask 2026-10-16); anything else is left as it is.
  */
 export function cleanWalletName(name: string): string {
   const m = USERNAME_RE.exec(name.trim());
-  return m ? m[1]!.trim() : name.trim();
+  return m ? m[1]!.trim() : withoutHandle(name);
 }
 
 /** One identity entry, or null when Helius names nothing (no name and no tags). */

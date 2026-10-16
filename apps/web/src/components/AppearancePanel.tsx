@@ -341,6 +341,14 @@ export function AppearanceControls() {
           />
           Bubble maps: draw arrows between holders that sent the coin to each other
         </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.bubbleNameLabels}
+            onChange={() => setAppearance({ bubbleNameLabels: !look.bubbleNameLabels })}
+          />
+          Bubble maps: show Pump.fun, FOMO and Helius names on wallets (KOLs and exchanges always show)
+        </label>
         <div className="field-group">
           <h4>Quick links</h4>
           {QUICK_LINK_SITES.map((l) => (

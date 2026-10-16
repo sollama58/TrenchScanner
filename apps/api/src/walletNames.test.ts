@@ -4,6 +4,11 @@ import { pickWalletName } from "./walletNames.js";
 const identity = { type: "exchange", name: "OKX 2", category: "Centralized Exchange", tags: [] };
 
 describe("pickWalletName", () => {
+  it("drops a trailing X handle from any name, cached identities included (user ask 2026-10-16)", () => {
+    const named = { type: "other", name: "Gake @gake_sol", category: null, tags: [] };
+    expect(pickWalletName({ kol: null, identity: named, exchange: null })?.name).toBe("Gake");
+    expect(pickWalletName({ kol: "Ansem @blknoiz06", identity: null, exchange: null })?.name).toBe("Ansem");
+  });
   it("prefers the KOL name, then Helius's name, then the exchange list", () => {
     expect(pickWalletName({ kol: "Cupsey", identity, exchange: "OKX" })).toEqual({
       name: "Cupsey",

@@ -1,4 +1,10 @@
-import { KNOWN_EXCHANGE_WALLETS, prisma, type HeliusIdentity } from "@trenchscanner/core";
+import {
+  cleanWalletName,
+  KNOWN_EXCHANGE_WALLETS,
+  prisma,
+  withoutHandle,
+  type HeliusIdentity,
+} from "@trenchscanner/core";
 import type { IdentityUserKey, WalletIdentityReader } from "./walletIdentity.js";
 import { knownSideName, readKolRows } from "./kolRoster.js";
 
@@ -28,17 +34,19 @@ export function pickWalletName(input: {
   identity: HeliusIdentity | null | undefined;
   exchange: string | null | undefined;
 }): WalletName | null {
-  const kolSide = input.kolSide?.trim();
+  // Every name drops a trailing X handle ("NAME @HANDLE" → "NAME", user ask 2026-10-16); an
+  // identity read before that was cached with it, so it is cleaned again here.
+  const kolSide = input.kolSide && withoutHandle(input.kolSide);
   if (kolSide) return { name: kolSide, source: "kol-side" };
-  const kol = input.kol?.trim();
+  const kol = input.kol && withoutHandle(input.kol);
   if (kol) return { name: kol, source: "kol" };
-  const identity = input.identity?.name?.trim();
+  const identity = input.identity?.name && cleanWalletName(input.identity.name);
   if (identity)
     return {
       name: identity,
       source: input.identity?.pumpfun ? "pumpfun" : input.identity?.fomo ? "fomo" : "identity",
     };
-  const exchange = input.exchange?.trim();
+  const exchange = input.exchange && withoutHandle(input.exchange);
   if (exchange) return { name: exchange, source: "exchange" };
   return null;
 }

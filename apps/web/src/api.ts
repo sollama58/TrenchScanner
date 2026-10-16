@@ -1437,6 +1437,8 @@ export interface FeedAppearance {
   bubbleSideLinks: boolean;
   /** Bubble maps open with arrows between holders that sent the coin to each other; on by default (absent from older API builds: on). */
   bubbleTransferLinks: boolean;
+  /** Bubble maps open with Pump.fun, FOMO and Helius names shown; on by default (absent from older API builds: on). */
+  bubbleNameLabels: boolean;
   /**
    * The Narrative model's "agrees" / "warns" pill on other models' cards (and the line in Telegram
    * alerts). Null follows the automatic default (GET /config/narrative-note).
