@@ -9,6 +9,7 @@ import { bucketMsOf, pricingChangeSlot } from "../pricingChange";
 import { renderTrendCard, type TrendCardData } from "../components/lighthouseCards";
 import { ShareButton } from "../components/ShareImageDialog";
 import { LighthouseBody, WINDOWS as NOW_WINDOWS, type Days } from "../components/MarketLighthouse";
+import { LighthouseWallets } from "../components/LighthouseWallets";
 import {
   ArrowRightIcon,
   ChevronDownIcon,
@@ -169,6 +170,9 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
         </header>
         <LighthouseBody base={api} days={nowDays} />
       </section>
+
+      {/* Names wallets and coins, so for signed-in readers only. */}
+      {!guest && <LighthouseWallets />}
 
       <section className={`panel lht-charts${history.stale ? " stale" : ""}`} aria-busy={history.stale}>
         <header className="section-head">
