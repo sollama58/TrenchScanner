@@ -39,6 +39,8 @@ GRANDFATHERED=(
   20261014070000_telegram_models
   20261016030000_feedback_reports
   20261016030000_launchpads
+  20261016090000_feed_both_only
+  20261016090000_transfers_count
 )
 
 names=$(find "$MIGRATIONS" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort)

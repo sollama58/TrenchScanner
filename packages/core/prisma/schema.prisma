@@ -2781,3 +2781,34 @@ model BubbleMapAtAlert {
 
   @@index([alertAt])
 }
+
+/// A coin's bubble map kept at a moment other than its first model call (user ask 2026-10-16):
+/// "screen", when it first passed the safety screen inside the band (the Stream's entry), kept by
+/// the scan for everyone; "filter", when a user's filter first caught it and that user opened it,
+/// kept by the API and shown only to that user, or to everyone when the filter was public (shared
+/// on the leaderboard), after which no other user's filter moment is kept for the coin. The top-25
+/// reading the scan had then, packed (core's wallets/bubbleMoments.ts), or, when another moment
+/// of the coin already keeps the same reading, a pointer to it (sameAsId) and no copy.
+/// Shown only, like BubbleMapAtAlert, and swept on the same horizon (cleanupJob.ts).
+model BubbleMapMoment {
+  id          String   @id @default(cuid())
+  mintAddress String
+  /// "screen" or "filter".
+  kind        String
+  /// The filter's owner; "" for a screen pass. In the key, so each user keeps one filter moment a coin.
+  userId      String   @default("")
+  filterId    String?
+  /// Shown to everyone: every screen pass, and a public filter's moment.
+  isPublic    Boolean
+  /// The passing scan, or the filter's first match on the coin.
+  momentAt    DateTime
+  /// When the reading was taken.
+  readAt      DateTime
+  /// packBubbleReading's text; null when sameAsId points at the row holding the same reading.
+  reading     String?
+  sameAsId    String?
+  createdAt   DateTime @default(now())
+
+  @@unique([mintAddress, kind, userId])
+  @@index([createdAt])
+}

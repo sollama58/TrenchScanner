@@ -5,11 +5,14 @@ import {
   HOLDER_SCAN_MS,
   holderFreshness,
   linkedCountText,
+  momentLabel,
+  momentSnapshot,
   pickReading,
   withWideMap,
   type AlertWideMap,
+  type BubbleMoment,
 } from "../bubbleMap";
-import { cachedGet } from "../cache";
+import { cachedGet, invalidate } from "../cache";
 import {
   createContext,
   useContext,
@@ -21,7 +24,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { ApiError, lookupRequired, type Card, type Snapshot } from "../api";
+import { ApiError, lookupRequired, post, type Card, type Snapshot } from "../api";
 import { usePolling } from "../hooks";
 import { MIN_WIN_SOL, ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import { TokenImage } from "./TokenImage";
@@ -489,6 +492,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const flags = chart.data ? "ok" : chart.error ? "failed" : "loading";
   const linked = useHolderReading(card, mint, !!utility);
   const holders = useHoldersView(card, linked, alertAt, !!utility);
+  useFilterCatchKept(card, !!utility);
   const ids = useId().replace(/:/g, "");
   const bodyRef = useRef<HTMLDivElement>(null);
   const active = useActiveSection(bodyRef, ids);
@@ -652,30 +656,27 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
       <section id={`${ids}-holders`} className="tm-group" aria-labelledby={`${ids}-holders-h`}>
         <GroupLabel id={`${ids}-holders-h`}>Holders</GroupLabel>
         {(holders.canSwitch || (holders.reading && hasHolderList(holders.reading))) && (
-          <div className={`tm-holders-bar${holders.atAlert ? " at-alert" : ""}`}>
+          <div className={`tm-holders-bar${holders.isKept ? " at-alert" : ""}`}>
             {holders.canSwitch && (
               <div className="segmented small tm-holders-switch" role="radiogroup" aria-label="Holders at">
-                {(
-                  [
-                    ["alert", `At the ${holders.word}`],
-                    ["now", "Now"],
-                  ] as const
-                ).map(([v, text]) => (
+                {[...holders.options, { view: "now" as const, label: "Now", at: Infinity }].map((o) => (
                   <button
-                    key={v}
+                    key={o.view}
                     type="button"
                     role="radio"
-                    aria-checked={holders.view === v}
-                    className={holders.view === v ? "on" : ""}
-                    onClick={() => holders.setView(v)}
+                    aria-checked={holders.view === o.view}
+                    className={holders.view === o.view ? "on" : ""}
+                    onClick={() => holders.setView(o.view)}
                   >
-                    {v === "alert" && <ClockIcon size={12} />}
-                    {text}
+                    {o.view !== "now" && <ClockIcon size={12} />}
+                    {o.label}
                   </button>
                 ))}
               </div>
             )}
-            {holders.atAlert ? (
+            {holders.kept ? (
+              <MomentHoldersWhen moment={holders.kept} />
+            ) : holders.atAlert ? (
               <AlertHoldersWhen
                 alertAt={alertAt}
                 word={holders.word}
@@ -694,14 +695,14 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
             )}
           </div>
         )}
-        <div className={`tm-holders${holders.atAlert ? " at-alert" : ""}`}>
+        <div className={`tm-holders${holders.isKept ? " at-alert" : ""}`}>
           <BubbleMapSection
             // A fresh map for each view: its picks, open lists and toggles belong to one reading.
             key={holders.view}
             token={card.token}
             snapshot={holders.reading}
             moment={holders.moment}
-            {...(holders.atAlert ? { wide: holders.frozen } : {})}
+            {...holders.wide}
             pending={scanning}
             flagged={flagged}
             flags={flags}
@@ -976,61 +977,166 @@ function holdersMoment(card: Card, reading: Snapshot | null | undefined) {
       };
 }
 
-/** Which Holders view the modal opened on last: the next token view opens on the same one. */
-let lastHoldersView: "alert" | "now" = "now";
+/** Filter alerts this page already told the API were opened. */
+const openedFilterAlerts = new Set<string>();
 
 /**
- * The Holders section's two views (user ask 2026-10-14): "At the alert", the holders as they
- * stood when the coin was alerted or called, kept and never updated; and "Now", the newest scan's.
+ * Opening one of your filter's alerts keeps the coin's bubble map at that filter's first catch of
+ * it (POST /tokens/:mint/bubble-moments/filter, user ask 2026-10-16), once: shown to you, or to
+ * everyone for a public filter. Then the kept maps are read again so it is offered at once.
+ */
+function useFilterCatchKept(card: Card, utility: boolean) {
+  const mint = card.token.mintAddress;
+  const isFilterAlert = !utility && card.kind === "match" && !!card.filter;
+  useEffect(() => {
+    if (!isFilterAlert || openedFilterAlerts.has(card.id)) return;
+    openedFilterAlerts.add(card.id);
+    post<{ result: string }>(`/tokens/${encodeURIComponent(mint)}/bubble-moments/filter`, {
+      matchId: card.id,
+    })
+      .then((r) => {
+        if (r?.result === "kept") invalidate(`/tokens/${encodeURIComponent(mint)}/bubble-holders`);
+      })
+      .catch(() => {
+        // Nothing to show for it: the next opening tries again.
+        openedFilterAlerts.delete(card.id);
+      });
+  }, [isFilterAlert, card.id, mint]);
+}
+
+/**
+ * A Holders view: "now", the newest scan's; "alert", as kept at the alert or call; or a kept
+ * moment (BubbleMoment), by its id.
+ */
+type HoldersView = "alert" | "now" | `moment:${string}`;
+
+/** Which Holders view the modal opened on last: the next token view opens on the same one, where it has it. */
+let lastHoldersView: HoldersView = "now";
+
+/** One button on the Holders switch, in time order. */
+interface HoldersOption {
+  view: HoldersView;
+  label: string;
+  at: number;
+}
+
+/**
+ * The Holders section's views (user ask 2026-10-14, 2026-10-16): "At the alert", the holders as
+ * they stood when the coin was alerted or called, kept and never updated; the maps kept at the
+ * coin's first safety-screen pass and at filters' first catches (BubbleMoment: everyone's, the
+ * reader's own filter's, and public filters'); and "Now", the newest scan's.
  * At the alert draws the alert's own scan (its top 25, the numbers The call shows) under the
  * top-50 map kept at the coin's first model call, when that was read near this alert
- * (alertWideMap). A coin with neither, a Stream card or a lookup has only Now.
+ * (alertWideMap). A kept moment draws its own top 25 alone. A coin with none of them has only Now.
  */
 function useHoldersView(card: Card, linked: Snapshot | null | undefined, alertAt: number, utility: boolean) {
   /** What the moment is called: a model's call, or a filter's alert. */
   const word: "call" | "alert" = card.curated ? "call" : "alert";
   const maps = useBubbleMaps(card.token.mintAddress);
-  const [picked, setPicked] = useState(lastHoldersView);
+  const [picked, setPicked] = useState<HoldersView>(lastHoldersView);
   const s = card.snapshot;
   const frozen = utility || card.kind === "stream" ? null : alertWideMap(maps?.atAlert, alertAt);
   const alertHasList = !utility && card.kind !== "stream" && hasHolderList(s);
   // Both views would draw the same thing: the newest reading is the alert's and nothing kept differs.
   const same = linked?.takenAt === s.takenAt && !frozen && !maps?.map;
-  const canSwitch = (alertHasList || !!frozen) && !same;
-  const view = canSwitch ? picked : "now";
+  const alertOffered = (alertHasList || !!frozen) && !same;
+  // A filter alert's own catch is the At the alert view already: not offered twice.
+  const moments = (maps?.moments ?? []).filter(
+    (m) =>
+      !(
+        alertOffered &&
+        card.kind === "match" &&
+        m.kind === "filter" &&
+        m.mine &&
+        Math.abs(Date.parse(m.at) - Date.parse(card.matchedAt)) < 1_000
+      ),
+  );
+  const options: HoldersOption[] = [
+    ...(alertOffered ? [{ view: "alert" as const, label: `At the ${word}`, at: alertAt }] : []),
+    ...moments.map((m) => ({
+      view: `moment:${m.id}` as const,
+      label: momentLabel(m).short,
+      at: Date.parse(m.at),
+    })),
+  ].sort((a, b) => a.at - b.at);
+  const canSwitch = options.length > 0;
+  const view: HoldersView = options.some((o) => o.view === picked) ? picked : "now";
   const atAlert = view === "alert";
-  const setView = (v: "alert" | "now") => {
+  const kept = view === "now" ? null : (moments.find((m) => view === `moment:${m.id}`) ?? null);
+  const setView = (v: HoldersView) => {
     lastHoldersView = v;
     setPicked(v);
   };
-  const moment = utility
-    ? undefined
-    : atAlert
-      ? {
-          label: `At the ${word}`,
-          title: frozen
-            ? `The holders as they stood at the ${word}: the top 50 read ${fromAlertText(Date.parse(frozen.readAt), alertAt, word)}, kept and never updated. Counts are the ${word}'s own scan (the /25), the same numbers The call shows.`
-            : `The holders the ${word}'s scan read, kept as they stood: the same reading The call shows.`,
-        }
-      : canSwitch
+  const keptReading = kept ? momentSnapshot(s, kept) : null;
+  const moment = kept
+    ? {
+        label: momentLabel(kept).short,
+        title: `The holders as they stood ${momentLabel(kept).long}: that scan's top holders, kept and never updated.`,
+      }
+    : utility
+      ? undefined
+      : atAlert
         ? {
-            label: "Now",
-            title: `The latest scan's reading. Switch to At the ${word} for the holders as they stood then.`,
+            label: `At the ${word}`,
+            title: frozen
+              ? `The holders as they stood at the ${word}: the top 50 read ${fromAlertText(Date.parse(frozen.readAt), alertAt, word)}, kept and never updated. Counts are the ${word}'s own scan (the /25), the same numbers The call shows.`
+              : `The holders the ${word}'s scan read, kept as they stood: the same reading The call shows.`,
           }
-        : holdersMoment(card, linked);
+        : canSwitch
+          ? {
+              label: "Now",
+              title:
+                "The latest scan's reading. Switch to an earlier moment for the holders as they stood then.",
+            }
+          : holdersMoment(card, linked);
   return {
     word,
     view,
     setView,
+    options,
     canSwitch,
     atAlert,
+    /** The kept moment on view, if one is. */
+    kept,
+    /** Any view kept as it stood: the alert's or a moment's. */
+    isKept: atAlert || !!kept,
     frozen,
     moment,
+    /** The top-50 map to draw over the reading: the one kept at the call, none for a moment, else the live one. */
+    wide: atAlert ? { wide: frozen } : kept ? { wide: null } : {},
     /** The reading the map draws. */
-    reading: atAlert ? s : linked,
+    reading: keptReading ?? (atAlert ? s : linked),
     /** The reading the top-holder list draws: the map's, through the kept top 50 when the scan kept no list. */
-    listReading: atAlert ? (alertHasList ? s : withWideMap(s, frozen)) : linked,
+    listReading: keptReading ?? (atAlert ? (alertHasList ? s : withWideMap(s, frozen)) : linked),
   };
+}
+
+/** When a kept moment's holders were read, and that they are kept as they stood. */
+function MomentHoldersWhen({ moment }: { moment: BubbleMoment }) {
+  const at = Date.parse(moment.at);
+  const hm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const day =
+    new Date(at).toDateString() === new Date().toDateString()
+      ? ""
+      : `${new Date(at).toLocaleDateString([], { month: "short", day: "numeric" })}, `;
+  const what =
+    moment.kind === "screen"
+      ? "Passed the screen"
+      : `${moment.mine ? "Your filter" : "Public filter"}${moment.filterName ? ` "${moment.filterName}"` : ""} caught it`;
+  return (
+    <p className="tm-holders-when">
+      <b>
+        {what} {day}
+        {hm(at)}
+      </b>{" "}
+      ·{" "}
+      <span>
+        Holders read{" "}
+        {fromAlertText(Date.parse(moment.readAt), at, moment.kind === "screen" ? "pass" : "catch")}
+      </span>{" "}
+      · <span>Kept as it stood</span>
+    </p>
+  );
 }
 
 /** When the holders at the alert were read, and that they are kept as they stood. */

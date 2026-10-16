@@ -49,10 +49,90 @@ export interface AlertWideMap extends WideMap {
   alertAt: string;
 }
 
-/** GET /tokens/:mint/bubble-holders. `atAlert` is absent from API builds before it was kept. */
+/** The snapshot fields a kept moment's reading carries (core's wallets/bubbleMoments.ts). */
+export const MOMENT_FIELDS = [
+  "linkedHolders",
+  "linkedClusters",
+  "sameTimeClusters",
+  "holderTransfers",
+  "linkedWalletPct",
+  "linkedWalletCount",
+  "linkedWalletsChecked",
+  "top10HolderPct",
+  "top10WalletsChecked",
+  "sameTimeFundedPct",
+  "sameTimeFundedCount",
+  "cexFundedPct",
+  "cexFundedCount",
+  "cexFundedHolders",
+  "transferredSupplyPct",
+  "transferWalletCount",
+  "transferHoldersChecked",
+  "kolBundledPct",
+  "bundledSupplyPct",
+  "bundledSupplyCount",
+  "linkedWalletPctExTransfers",
+  "linkedWalletCountExTransfers",
+  "kolBundledPctExTransfers",
+  "bundledSupplyPctExTransfers",
+  "bundledSupplyCountExTransfers",
+  "linkedClustersExTransfers",
+] as const satisfies readonly (keyof Snapshot)[];
+
+/**
+ * A coin's map kept at another moment (BubbleMapMoment, user ask 2026-10-16): "screen", its first
+ * safety-screen pass inside the band; "filter", a filter's first catch of it, kept once its owner
+ * opened it and shown to them, or to everyone for a public filter.
+ */
+export interface BubbleMoment {
+  id: string;
+  kind: "screen" | "filter";
+  /** The passing scan, or the filter's match. */
+  at: string;
+  readAt: string;
+  /** The reader's own filter caught it. */
+  mine: boolean;
+  isPublic: boolean;
+  filterName: string | null;
+  reading: Partial<Pick<Snapshot, (typeof MOMENT_FIELDS)[number]>>;
+}
+
+/**
+ * GET /tokens/:mint/bubble-holders. `atAlert` is absent from API builds before it was kept, and
+ * `moments` from those before 2026-10-16.
+ */
 export interface BubbleMaps {
   map: WideMap | null;
   atAlert?: AlertWideMap | null;
+  moments?: BubbleMoment[];
+}
+
+/**
+ * `base` drawn as the moment's reading: every field the map and the top-holder list read is the
+ * moment's (null where it had none), the rest stays `base`'s, and its time is the reading's.
+ */
+export function momentSnapshot<S extends Snapshot>(base: S, moment: BubbleMoment): S {
+  const out: Record<string, unknown> = { ...(base as object), takenAt: moment.readAt };
+  for (const key of MOMENT_FIELDS) out[key] = moment.reading?.[key] ?? null;
+  return out as S;
+}
+
+/** What a moment is called on the Holders switch, and in words for its title. */
+export function momentLabel(m: Pick<BubbleMoment, "kind" | "mine" | "filterName">): {
+  short: string;
+  long: string;
+} {
+  if (m.kind === "screen") return { short: "Passed screen", long: "when it first passed the safety screen" };
+  const name = m.filterName ? `"${m.filterName}"` : null;
+  if (m.mine)
+    return {
+      short: "Your filter",
+      long: `when your filter${name ? ` ${name}` : ""} first caught it`,
+    };
+  return {
+    short: "Public filter",
+    long: `when the public filter${name ? ` ${name}` : ""} first caught it`,
+  };
 }
 
 /**
