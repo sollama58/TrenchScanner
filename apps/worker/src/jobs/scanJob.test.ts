@@ -317,6 +317,18 @@ describe("liveLaunchSource", () => {
     expect(live?.mints[0]).toBe("m0");
   });
 
+  it("prices a Stonks coin live at any age, since DexScreener never lists its curve", () => {
+    const live = liveLaunchSource(
+      source,
+      [
+        { mintAddress: "old-pump", firstSeenAt: at(60), launchpad: "pumpfun" },
+        { mintAddress: "old-stonks", firstSeenAt: at(60), launchpad: "stonks" },
+      ],
+      now,
+    );
+    expect(live?.mints).toEqual(["old-stonks"]);
+  });
+
   it("is off without a live source, or with no young launch", () => {
     expect(liveLaunchSource(undefined, [{ mintAddress: "a", firstSeenAt: at(1) }], now)).toBeUndefined();
     expect(liveLaunchSource(source, [{ mintAddress: "a", firstSeenAt: at(30) }], now)).toBeUndefined();

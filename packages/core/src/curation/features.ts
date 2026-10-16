@@ -1,3 +1,4 @@
+import { PUMPFUN_LAUNCHPAD, STONKS_LAUNCHPAD } from "../launchpads.js";
 import type { ScoredToken } from "../types.js";
 import { scoreNarrative, scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
@@ -185,6 +186,15 @@ export const KOL_BUNDLED_FEATURES = ["kolBundledPct"] as const;
  * enough of the exam's span, so the seats take it in on a scheduled retrain once it has.
  */
 export const BUNDLED_SUPPLY_FEATURES = ["bundledSupplyPct"] as const;
+
+/**
+ * Added 2026-10-16 (user ask): 1 for a Stonks coin (Raydium LaunchLab, launchpads.ts), 0 for one
+ * from another launchpad (Pump.fun), null when the launchpad is unknown. Stonks coins entered
+ * discovery the same day, so every row banked before is null (a Pump.fun coin then, as they all
+ * were; not backfilled). Read by the learners; the onset guard (featureOnset.ts) keeps it out of
+ * a run until it covers enough of the exam's span.
+ */
+export const LAUNCHPAD_FEATURES = ["launchpadStonks"] as const;
 
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
@@ -420,6 +430,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...FRESH_TOP_HOLDER_FEATURES,
   ...KOL_BUNDLED_FEATURES,
   ...BUNDLED_SUPPLY_FEATURES,
+  ...LAUNCHPAD_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -899,6 +910,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   freshTopHoldersChecked: "top holders checked for fresh wallets",
   kolBundledPct: "supply bundled by KOLs",
   bundledSupplyPct: "supply bundled (linked holders and KOL bundles)",
+  launchpadStonks: "Stonks launch (vs Pump.fun)",
   sameTimeFundedPct: "supply funded in the same minute",
   sameTimeClusterCount: "same-minute funding groups",
   sameTimeFundedCount: "top holders funded in the same minute",
@@ -965,6 +977,12 @@ export function scoredFromFeatures(
     holderGrowth10mPct: num("holderGrowth10mPct"),
     minutesSinceFirstInBand: num("minutesSinceFirstInBand"),
     dexBoosted: bool("dexBoosted"),
+    launchpad:
+      num("launchpadStonks") === undefined
+        ? undefined
+        : num("launchpadStonks") === 1
+          ? STONKS_LAUNCHPAD
+          : PUMPFUN_LAUNCHPAD,
     top10HolderPct: num("top10HolderPct"),
     devWalletPct: num("devWalletPct"),
     creatorHolding: num("devHolding") === undefined ? undefined : num("devHolding") === 1,
@@ -1130,6 +1148,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
     kolBundledPct: scored.kolBundledPct ?? null,
     bundledSupplyPct: scored.bundledSupplyPct ?? null,
+    launchpadStonks: scored.launchpad === undefined ? null : scored.launchpad === STONKS_LAUNCHPAD ? 1 : 0,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,
     sameTimeFundedCount: scored.sameTimeFundedCount ?? null,

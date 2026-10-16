@@ -28,7 +28,10 @@ import {
   FRESH_ANCHOR_MAX_RATIO,
   type FreshQuote,
   walletChecksKnown,
-  deriveGraduated,
+  isCurveVenue,
+  launchpadFromVenue,
+  PUMPFUN_LAUNCHPAD,
+  STONKS_LAUNCHPAD,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
   type Env,
@@ -740,6 +743,7 @@ async function scanCycle(
       symbol: e.symbol,
       name: e.name,
       discoverySource: "pumpportal",
+      launchpad: e.launchpad,
     })),
     ...trending,
     ...active.map((c) => toWatchlistCandidate(c, "pumpfun-active")),
@@ -1640,9 +1644,10 @@ async function scanDowntimeMs(env: Env, now: number): Promise<number> {
   }
 }
 
-export async function selectWatchlist(
-  env: Env,
-): Promise<{ tracked: { id: string; mintAddress: string; firstSeenAt: Date }[]; alive: number }> {
+export async function selectWatchlist(env: Env): Promise<{
+  tracked: { id: string; mintAddress: string; firstSeenAt: Date; launchpad: string | null }[];
+  alive: number;
+}> {
   const now = Date.now();
   const ttlCutoff = new Date(now - env.WATCHLIST_TTL_HOURS * 3_600_000);
   // The liveness horizon is measured in observations, not bare wall-clock.
@@ -1670,9 +1675,9 @@ export async function selectWatchlist(
   const probationReserve = Math.floor(
     (env.WATCHLIST_MAX_TRACKED * env.WATCHLIST_PROBATION_RESERVE_PCT) / 100,
   );
-  // Only the three columns the cycle reads: these are up to WATCHLIST_MAX_TRACKED rows a minute,
-  // and a whole Token row carries the description and every sticky flag.
-  const select = { id: true, mintAddress: true, firstSeenAt: true } as const;
+  // Only the columns the cycle reads: these are up to WATCHLIST_MAX_TRACKED rows a minute, and a
+  // whole Token row carries the description and every sticky flag.
+  const select = { id: true, mintAddress: true, firstSeenAt: true, launchpad: true } as const;
   const bandCeiling = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
   // Mayhem coins are set aside for good (Token.ignoredAt; see ignoreMayhemMints).
   const aliveWhere = { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff }, ignoredAt: null };
@@ -1759,13 +1764,15 @@ export const LIVE_LAUNCH_MAX = 400;
  */
 export function liveLaunchSource(
   source: LaunchQuoteSource | undefined,
-  tracked: { mintAddress: string; firstSeenAt: Date }[],
+  tracked: { mintAddress: string; firstSeenAt: Date; launchpad?: string | null }[],
   now = Date.now(),
 ): { source: LaunchQuoteSource; mints: string[] } | undefined {
   if (!source) return undefined;
   const cutoff = now - LIVE_LAUNCH_MINUTES * 60_000;
   const mints = tracked
-    .filter((t) => t.firstSeenAt.getTime() > cutoff)
+    // A Stonks coin at any age: DexScreener never lists its LaunchLab curve, so on the curve only
+    // the live read prices it (sorted after the young launches, by first-seen time like them).
+    .filter((t) => t.firstSeenAt.getTime() > cutoff || t.launchpad === STONKS_LAUNCHPAD)
     .sort((a, b) => b.firstSeenAt.getTime() - a.firstSeenAt.getTime())
     .slice(0, LIVE_LAUNCH_MAX)
     .map((t) => t.mintAddress);
@@ -1849,12 +1856,19 @@ export async function saveMovingLaunches(
       imageUrl: c.imageUrl,
       createdAt: c.createdAt,
       discoverySource: "jupiter",
+      launchpad: c.launchpad,
     })),
   );
   rememberLaunchTimes(coins);
   await reviveMovingMints(movingCoins(coins), env);
   const youngSince = Date.now() - JUPITER_DETAILS_MAX_AGE_MS;
-  const young = coins.filter((c) => c.createdAt && c.createdAt.getTime() >= youngSince);
+  // Pump.fun's details answer for its own coins alone.
+  const young = coins.filter(
+    (c) =>
+      c.createdAt &&
+      c.createdAt.getTime() >= youngSince &&
+      (c.launchpad ?? PUMPFUN_LAUNCHPAD) === PUMPFUN_LAUNCHPAD,
+  );
   if (young.length > 0) {
     void fillLaunchDetails(
       young.map((c) => ({
@@ -1889,6 +1903,8 @@ function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): Wa
     // the hasDescription feature distinguishes from "this source never had one".
     description: coin.description ?? "",
     discoverySource,
+    // Pump.fun's own lists and PumpPortal carry Pump.fun coins alone.
+    launchpad: coin.launchpad ?? PUMPFUN_LAUNCHPAD,
   };
 }
 
@@ -1994,7 +2010,12 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
   const uniqueByMint = new Map<string, WatchlistCandidate>();
   for (const c of discovered) {
     const first = uniqueByMint.get(c.mintAddress);
-    uniqueByMint.set(c.mintAddress, first ? { ...first, boosted: first.boosted || c.boosted } : c);
+    uniqueByMint.set(
+      c.mintAddress,
+      first
+        ? { ...first, boosted: first.boosted || c.boosted, launchpad: first.launchpad ?? c.launchpad }
+        : c,
+    );
   }
 
   const valid: WatchlistCandidate[] = [];
@@ -2026,9 +2047,22 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
       description: coin.description?.slice(0, 2_000),
       discoverySource: coin.discoverySource,
       dexBoosted: coin.boosted ?? false,
+      launchpad: coin.launchpad,
     })),
     skipDuplicates: true,
   });
+
+  // The launchpad for mints already on the table that a source names now (a coin first found on
+  // DexScreener's feeds, which never say). Settles to zero rows once every such mint has one.
+  const byLaunchpad = new Map<string, string[]>();
+  for (const c of valid) {
+    if (c.launchpad) byLaunchpad.set(c.launchpad, [...(byLaunchpad.get(c.launchpad) ?? []), c.mintAddress]);
+  }
+  for (const [launchpad, mints] of byLaunchpad) {
+    await prisma.token
+      .updateMany({ where: { mintAddress: { in: mints }, launchpad: null }, data: { launchpad } })
+      .catch((err) => logger.warn("failed to record launchpads", { error: String(err) }));
+  }
 
   // Sticky boost flag for mints already on the table - a paid boost bought after discovery is
   // still a boost. Settles to zero rows once every boosted mint is marked.
@@ -2457,6 +2491,8 @@ async function processCandidate(
       // Re-scans come from DexScreener, which carries neither of these; discovery stored them.
       description: candidate.description ?? existingToken?.description ?? undefined,
       dexBoosted: existingToken ? existingToken.dexBoosted : undefined,
+      // Recorded at discovery; a graduated Stonks coin's Raydium pool doesn't say.
+      launchpad: existingToken?.launchpad ?? candidate.launchpad ?? launchpadFromVenue(candidate.dexId),
       // Socials too: DexScreener reports them for almost nothing in this band, while the Token
       // row keeps what Pump.fun's metadata said at discovery (tokenChanges keeps them sticky).
       // Read from the candidate alone, hasTwitter was 0 on 204 of the 240 coins whose X post
@@ -2565,7 +2601,12 @@ async function processCandidate(
   noteFreshMarketData([token.id]);
   // Passing or failing - the fast-match lane goes by the newest verdict. See vettedTokens.ts.
   recordScanVerdict({
-    token: { id: token.id, mintAddress: token.mintAddress, firstSeenAt: token.firstSeenAt },
+    token: {
+      id: token.id,
+      mintAddress: token.mintAddress,
+      firstSeenAt: token.firstSeenAt,
+      launchpad: scored.launchpad ?? null,
+    },
     snapshot,
   });
 
@@ -2828,9 +2869,13 @@ export function freshGraduatesOverCut(
     .map((c) => c.mintAddress);
 }
 
-/** A Pump.fun bonding curve or the PumpSwap pool it graduates into: liquidity nobody can pull. */
+/**
+ * A launchpad's bonding curve (Pump.fun's, or Stonks' LaunchLab curve) or the PumpSwap pool a
+ * Pump.fun coin graduates into: liquidity nobody can pull. A Stonks coin's Raydium pool is not
+ * assumed locked: its LP is RugCheck's to report.
+ */
 function pumpVenue(dexId: string | undefined): boolean {
-  return deriveGraduated(dexId) === false || dexId === "pumpswap";
+  return isCurveVenue(dexId) || dexId === "pumpswap";
 }
 
 /**

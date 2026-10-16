@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { type Env, prisma, scanBand, loadFilterTrackRecords } from "@trenchscanner/core";
+import { type Env, prisma, scanBand, loadFilterTrackRecords, SCANNED_LAUNCHPADS } from "@trenchscanner/core";
 import {
   boardFor,
   buildFilterLeaderboard,
@@ -79,6 +79,11 @@ function buildFilterInputSchema(env: Env) {
     maxKolBundledPct: z.number().min(0).max(100).nullable().optional(),
     maxBundledSupplyPct: z.number().min(0).max(100).nullable().optional(),
     minLiveHolderCount: z.number().int().min(0).max(100_000).nullable().optional(),
+    // Empty means any launchpad. Only the ones discovery takes (core's SCANNED_LAUNCHPADS).
+    launchpads: z
+      .array(z.string().refine((v) => SCANNED_LAUNCHPADS.has(v), "unknown launchpad"))
+      .max(10)
+      .default([]),
     minFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
     maxFirstBuyersHolding: z.number().int().min(0).max(25).nullable().optional(),
     // TokenSage narrative criteria (core matchFilters.ts). Labels are TokenSage's own slugs, a

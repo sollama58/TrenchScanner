@@ -18,6 +18,9 @@ export interface RugCheckReport {
   markets?: {
     pubkey: string;
     marketType?: string;
+    /** The market's two vault token accounts. */
+    liquidityA?: string;
+    liquidityB?: string;
     lp?: { lpLockedPct?: number; baseUSD?: number; quoteUSD?: number };
   }[];
   score_normalised?: number;
@@ -214,9 +217,15 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
   // risk. Confirmed against live data: a market's `pubkey` is exactly the `owner` that shows up
   // on the pool's token holdings in topHolders.
   const poolAuthorities = new Set(markets.map((m) => m.pubkey));
+  // Not every program owns its vault from the market's own address: Raydium LaunchLab (Stonks'
+  // curve) holds every curve's tokens under one shared authority, which read as a single holder
+  // of ~96% of supply. The vault token accounts themselves are the market's, whoever owns them.
+  const poolVaults = new Set(
+    markets.flatMap((m) => [m.liquidityA, m.liquidityB]).filter((a): a is string => typeof a === "string"),
+  );
   const realHolders = (report.topHolders ?? []).filter((h) => {
     const owner = h.owner ?? h.address;
-    return !poolAuthorities.has(owner) && owner !== CLOSED_ACCOUNT_OWNER;
+    return !poolAuthorities.has(owner) && !poolVaults.has(h.address) && owner !== CLOSED_ACCOUNT_OWNER;
   });
   const top10HolderPct = realHolders
     .slice(0, TOP_N_FOR_CONCENTRATION)

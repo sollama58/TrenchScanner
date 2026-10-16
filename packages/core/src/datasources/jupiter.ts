@@ -1,3 +1,10 @@
+import {
+  isCurveVenue,
+  normalizeLaunchpad,
+  PUMPFUN_LAUNCHPAD,
+  SCANNED_LAUNCHPADS,
+  STONKS_LAUNCHPAD,
+} from "../launchpads.js";
 import { fetchJson } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
@@ -305,15 +312,17 @@ const finite = (v: number | null | undefined): number | undefined =>
   typeof v === "number" && Number.isFinite(v) ? v : undefined;
 
 /**
- * Exported for tests. The Pump.fun launches in one of Jupiter's lists, as discovered coins: no
- * description or socials (the lists carry none - left unknown, not "none"), the market cap on
- * Pump.fun's 1B supply.
+ * Exported for tests. The launches in one of Jupiter's lists from a launchpad the scan takes
+ * (SCANNED_LAUNCHPADS: Pump.fun and Stonks), as discovered coins: no description or socials (the
+ * lists carry none - left unknown, not "none"), the market cap on Pump.fun's 1B supply for a
+ * Pump.fun coin and on Jupiter's full-supply fdv for the rest.
  */
 export function parseJupiterMovingLaunches(body: unknown): DiscoveredCoin[] {
   if (!Array.isArray(body)) return [];
   const out: DiscoveredCoin[] = [];
   for (const t of body as JupiterToken[]) {
-    if (!t || typeof t.id !== "string" || t.launchpad !== "pump.fun") continue;
+    const launchpad = normalizeLaunchpad(t?.launchpad);
+    if (!t || typeof t.id !== "string" || !launchpad || !SCANNED_LAUNCHPADS.has(launchpad)) continue;
     const priceUsd = finite(t.usdPrice);
     const created = t.firstPool?.createdAt ? new Date(t.firstPool.createdAt) : undefined;
     out.push({
@@ -326,8 +335,15 @@ export function parseJupiterMovingLaunches(body: unknown): DiscoveredCoin[] {
         created && !Number.isNaN(created.getTime()) && created.getTime() <= Date.now() + 60_000
           ? created
           : undefined,
-      graduated: Boolean(t.graduatedAt),
-      marketCapUsd: priceUsd !== undefined && priceUsd > 0 ? priceUsd * PUMP_TOTAL_SUPPLY : undefined,
+      graduated: Boolean(t.graduatedPool || t.graduatedAt),
+      // Pump.fun's on its fixed 1B; another launchpad's on Jupiter's full-supply fdv.
+      marketCapUsd:
+        priceUsd === undefined || priceUsd <= 0
+          ? undefined
+          : launchpad === PUMPFUN_LAUNCHPAD
+            ? priceUsd * PUMP_TOTAL_SUPPLY
+            : (finite(t.fdv) ?? finite(t.mcap)),
+      launchpad,
       hasTwitter: false,
       hasTelegram: false,
       hasWebsite: false,
@@ -388,17 +404,28 @@ export function parseJupiterLaunches(body: unknown, requested: Set<string>): Can
   for (const t of body as JupiterToken[]) {
     if (!t || typeof t.id !== "string" || !requested.has(t.id) || out.has(t.id)) continue;
     const priceUsd = finite(t.usdPrice);
-    const pump = t.launchpad === "pump.fun";
+    const launchpad = normalizeLaunchpad(t.launchpad);
+    const pump = launchpad === PUMPFUN_LAUNCHPAD;
     // On the 1B supply DexScreener and Pump.fun quote a Pump.fun coin on: Jupiter's `mcap` counts
     // supply after burns, up to ~9% lower (notes/price-sourcing-audit-2026-10-12.md), which would
     // move the band floor and every market-cap input. Other coins take the full-supply fdv.
     const marketCapUsd =
       pump && priceUsd !== undefined ? priceUsd * PUMP_TOTAL_SUPPLY : (finite(t.fdv) ?? finite(t.mcap));
     if (priceUsd === undefined || priceUsd <= 0 || marketCapUsd === undefined || marketCapUsd <= 0) continue;
-    const dexId = pump ? (t.graduatedPool ? "pumpswap" : "pumpfun") : undefined;
+    // A Stonks coin's LaunchLab curve is "stonkfun" (GeckoTerminal's name: DexScreener lists no
+    // curve), and it graduates into a Raydium pool.
+    const dexId = pump
+      ? t.graduatedPool
+        ? "pumpswap"
+        : "pumpfun"
+      : launchpad === STONKS_LAUNCHPAD
+        ? t.graduatedPool
+          ? "raydium"
+          : "stonkfun"
+        : undefined;
     const liquidity = finite(t.liquidity);
     const createdAt = t.firstPool?.createdAt ? new Date(t.firstPool.createdAt) : undefined;
-    const graduatedAt = dexId === "pumpswap" && t.graduatedAt ? new Date(t.graduatedAt) : undefined;
+    const graduatedAt = t.graduatedPool && t.graduatedAt ? new Date(t.graduatedAt) : undefined;
     const m5 = t.stats5m ?? undefined;
     const h1 = t.stats1h ?? undefined;
     const h24 = t.stats24h ?? undefined;
@@ -409,7 +436,7 @@ export function parseJupiterLaunches(body: unknown, requested: Set<string>): Can
       priceUsd,
       marketCapUsd,
       // Doubled, as parseJupiterTokens does: Jupiter counts one side of the pool.
-      liquidityUsd: dexId === "pumpfun" || liquidity === undefined ? undefined : liquidity * 2,
+      liquidityUsd: isCurveVenue(dexId) || liquidity === undefined ? undefined : liquidity * 2,
       volume24hUsd: sumOrUndefined(finite(h24?.buyVolume), finite(h24?.sellVolume)),
       buys24h: finite(h24?.numBuys),
       sells24h: finite(h24?.numSells),
@@ -426,6 +453,7 @@ export function parseJupiterLaunches(body: unknown, requested: Set<string>): Can
       pairCreatedAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : undefined,
       dexId,
       graduatedAt: graduatedAt && !Number.isNaN(graduatedAt.getTime()) ? graduatedAt : undefined,
+      launchpad,
     });
   }
   return [...out.values()];

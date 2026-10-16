@@ -72,6 +72,11 @@ export interface CandidateToken {
   /** Whether the mint has ever appeared on DexScreener's paid-boost feed (Token.dexBoosted). */
   dexBoosted?: boolean;
   /**
+   * The launchpad the coin came from, normalized (launchpads.ts: "pumpfun", "stonks", ...):
+   * Token.launchpad, else what the venue gives away. Undefined when unknown.
+   */
+  launchpad?: string;
+  /**
    * When a graduated Pump.fun mint's PumpSwap pool was created, i.e. when it left its bonding
    * curve (pumpSwapPoolCreatedAt in dexscreener.ts). Undefined while on the curve, or when no
    * PumpSwap pool is listed.
@@ -105,6 +110,8 @@ export interface WatchlistCandidate {
   discoverySource?: string;
   /** Seen on DexScreener's paid-boost feed - recorded (stickily) as Token.dexBoosted. */
   boosted?: boolean;
+  /** The launchpad, normalized (launchpads.ts) - recorded as Token.launchpad. */
+  launchpad?: string;
 }
 
 export interface OnChainProfile {
@@ -471,6 +478,11 @@ export interface FilterCriteria {
   maxCexFundedCount?: number | null;
   /** Max SOL flagged wallets bought in the coin's newest trades (flaggedBuySol). Skipped while unknown. */
   maxFlaggedBuySol?: number | null;
+  /**
+   * Only coins from these launchpads (launchpads.ts: "pumpfun", "stonks"); empty or unset means
+   * any. Fails closed on a coin whose launchpad is unknown.
+   */
+  launchpads?: string[];
   /** Bounds on how many of the launch's first 25 buyers still hold it (tradeFlow.firstBuyersHolding). */
   minFirstBuyersHolding?: number | null;
   maxFirstBuyersHolding?: number | null;

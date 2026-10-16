@@ -881,6 +881,8 @@ export interface FilterInput {
   minLiveHolderCount: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;
+  /** Only coins from these launchpads ("pumpfun", "stonks"); empty means any. */
+  launchpads: string[];
   /** TokenSage narrative criteria; every one fails closed until the coin has a read. */
   narrativeCategories: string[];
   excludeNarrativeCategories: string[];

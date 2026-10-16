@@ -2,6 +2,7 @@ import {
   createLogger,
   EMPTY_TRADE_FLOW,
   looksLikeSolanaAddress,
+  normalizeLaunchpad,
   TradeFlowBook,
   type FlowLaunch,
   type FlowTrade,
@@ -34,6 +35,8 @@ export interface StreamEvent {
   name?: string;
   /** A launch's metadata URI (the token's on-chain `uri`): the fallback for its description and socials. */
   metadataUri?: string;
+  /** PumpPortal's `pool` ("pump", "pump-amm"), normalized (core's launchpads.ts). */
+  launchpad?: string;
   at: Date;
 }
 
@@ -55,6 +58,8 @@ interface PumpPortalMessage {
   newTokenBalance?: unknown;
   marketCapSol?: unknown;
   uri?: unknown;
+  /** Which venue: "pump" for a Pump.fun curve, "pump-amm" for its graduation pool. */
+  pool?: unknown;
   /** PumpPortal's own notices (subscription acks and refusals). */
   message?: unknown;
 }
@@ -130,6 +135,7 @@ export function parsePumpPortalMessage(raw: string, at: Date = new Date()): Stre
   if (typeof msg.mint !== "string" || !looksLikeSolanaAddress(msg.mint)) return null;
   const kind = msg.txType === "create" ? "create" : msg.txType === "migrate" ? "migrate" : null;
   if (!kind) return null;
+  const launchpad = normalizeLaunchpad(msg.pool);
   return {
     kind,
     mintAddress: msg.mint,
@@ -138,6 +144,7 @@ export function parsePumpPortalMessage(raw: string, at: Date = new Date()): Stre
     ...(kind === "create" && typeof msg.uri === "string" && msg.uri.length <= 500
       ? { metadataUri: msg.uri }
       : {}),
+    ...(launchpad ? { launchpad } : {}),
     at,
   };
 }

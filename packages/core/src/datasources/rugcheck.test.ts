@@ -54,6 +54,23 @@ describe("toProfile", () => {
     expect(profile.top10HolderPct).toBeCloseTo(10.15);
   });
 
+  it("leaves out a LaunchLab curve's shared vault, which RugCheck lists as a holder", () => {
+    // A Stonks coin on its Raydium LaunchLab curve: the vault's owner is LaunchLab's one authority
+    // for every curve, so only the vault's own address ties it to this coin's market.
+    const vault = "vaultTokenAccount";
+    const profile = toProfile(
+      MINT,
+      baseReport({
+        topHolders: [
+          { address: vault, owner: "WLHv2UAZm6z4KyaaELi5pjdbJh6RESMva1Rnn8pJVVh", pct: 96 },
+          { address: "wallet-2", owner: "wallet-2", pct: 1.5 },
+        ],
+        markets: [{ pubkey: "launchlabPool", liquidityA: vault, lp: { lpLockedPct: 100 } }],
+      }),
+    );
+    expect(profile.top10HolderPct).toBeCloseTo(1.5);
+  });
+
   it("treats LP as burned when every market clears the lock threshold", () => {
     const profile = toProfile(MINT, baseReport());
     expect(profile.lpBurned).toBe(true);

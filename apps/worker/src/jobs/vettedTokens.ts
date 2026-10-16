@@ -16,7 +16,8 @@ import type { TokenSnapshot } from "@prisma/client";
  * database for that window.
  */
 export interface VettedEntry {
-  token: { id: string; mintAddress: string; firstSeenAt: Date };
+  /** launchpad: Token.launchpad, else what the scan read it as (null when unknown). */
+  token: { id: string; mintAddress: string; firstSeenAt: Date; launchpad?: string | null };
   snapshot: TokenSnapshot;
 }
 
