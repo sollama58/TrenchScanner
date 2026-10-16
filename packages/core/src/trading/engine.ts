@@ -223,6 +223,8 @@ function errText(err: unknown): string {
 export const TRADING_ENGINE_LOCK = "trading-engine";
 /** The lock's transaction outlives the pass budget with room for the last send to finish. */
 const PASS_TRANSACTION_TIMEOUT_MS = 240_000;
+/** How long an exit claim holds a position before another pass may try it. */
+const EXIT_CLAIM_MS = 60_000;
 
 /**
  * One pass, under a Postgres advisory lock. A deploy runs the old trader and the new one side by
@@ -754,6 +756,11 @@ async function settleOrder(ctx: PassContext, order: OrderWithPosition, height: n
           where: { id: order.id, status: "pending" },
           data: { status: "expired", error: "the sale expired without landing", settledAt: ctx.now() },
         });
+        // The exit's claim on the position is released: the next pass sells again, paying more.
+        await prisma.tradingPosition.updateMany({
+          where: { id: order.positionId, status: { in: ["open", "stuck"] } },
+          data: { nextAttemptAt: null },
+        });
       }
       ctx.summary.settled++;
       return;
@@ -884,6 +891,9 @@ async function settleSale(ctx: PassContext, wallet: Wallet, order: OrderWithPosi
   const position = order.position;
   // Holdings after a sale come from the chain; the fill's token change is only the fallback.
   const chain = await ctx.deps.rpc.getTokenBalance(wallet.publicKey, position.mint);
+  // Neither says what was sold: leave the order pending and settle it next pass, as a buy does.
+  // Written off as "nothing sold" on no evidence, the same rung would be sold again.
+  if (fill.tokenDelta >= 0n && !chain) return;
   const sold = fill.tokenDelta < 0n ? -fill.tokenDelta : 0n;
   // The chain can only lower what the fill says is left: a lagging node reading the balance from
   // before the sale must not undo it (and get the same rung sold twice).
@@ -1519,6 +1529,15 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
     select: { status: true, priorityFeeLamports: true },
   });
   const maxFee = priorityFee(ctx, config);
+  // Claim the exit on the row as it was read: two passes side by side (a deploy's overlap, a pass
+  // that outlived its lock) both find the position due, and only the one whose claim lands sells.
+  // The sale's outcome or failure sets nextAttemptAt afresh; a send that never made an order
+  // leaves the position to the next pass a minute on.
+  const claimed = await prisma.tradingPosition.updateMany({
+    where: { id: position.id, status: position.status, nextAttemptAt: position.nextAttemptAt },
+    data: { nextAttemptAt: new Date(now.getTime() + EXIT_CLAIM_MS) },
+  });
+  if (claimed.count !== 1) return;
   await executeSwap(
     ctx,
     wallet,

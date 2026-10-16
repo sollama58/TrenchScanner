@@ -70,6 +70,8 @@ class FakeChain {
   hostile: "none" | "drain-sol" | "steal-other" | "reassign" | "skim" = "none";
   /** Token balance reads lag: they return the balance from before the last transaction, once. */
   lagOnce = false;
+  /** The balance read fails (an RPC that doesn't answer). */
+  balanceUnreadable = false;
   private lastBalance = new Map<string, bigint>();
   jupiterNoRoute = false;
   height = 100;
@@ -204,6 +206,7 @@ class FakeChain {
     getMintInfo: async (mint) => this.mintInfo(mint),
     getPriorityFeeEstimate: async () => 0n,
     getTokenBalance: async (owner, mint) => {
+      if (this.balanceUnreadable) return null;
       let raw = this.tokens.get(this.key(owner, mint));
       if (this.lagOnce && this.lastBalance.has(this.key(owner, mint))) {
         this.lagOnce = false;
@@ -574,6 +577,29 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     expect(p.tokensHeld).toBe("500000000");
     // ...so the same rung is not sold again.
     expect((await tick(1)).sells).toBe(0);
+  });
+
+  it("leaves a sale pending while neither the fill nor the balance says what was sold", async () => {
+    await opened();
+    chain.price.set(mint, 0.105);
+    expect((await tick(1)).sells).toBe(1);
+    // The fill shows no token change (an unusual account layout) and the balance read fails.
+    chain.landed.get(chain.sent.at(-1)!)!.tokenDelta = 0n;
+    chain.balanceUnreadable = true;
+    await tick();
+    let p = await position();
+    expect(p.rungsTaken).toBe(0);
+    expect(p.tokensHeld).toBe("1000000000");
+    const pending = await prisma.tradingOrder.count({ where: { positionId: p.id, status: "pending" } });
+    expect(pending).toBe(1);
+    // Not written off as "nothing sold", so the rung is not sold again meanwhile...
+    expect((await tick(1)).sells).toBe(0);
+    // ...and it settles from the balance once that can be read.
+    chain.balanceUnreadable = false;
+    await tick();
+    p = await position();
+    expect(p.rungsTaken).toBe(1);
+    expect(p.tokensHeld).toBe("500000000");
   });
 
   it("reopens a closed position whose tokens turn up in the wallet", async () => {
