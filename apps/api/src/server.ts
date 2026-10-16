@@ -13,6 +13,7 @@ import {
   GeckoTerminalClient,
   HeliusClient,
   HeliusIdentityClient,
+  JupiterClient,
   SolanaRpc,
   resolveAccess,
   decideAccess,
@@ -466,7 +467,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     );
   }
 
-  // The API's only outbound data source. Used for one thing: refreshing the market caps on a page
+  // The API's only outbound data sources. Used for one thing: refreshing the market caps on a page
   // the moment it's opened, instead of leaving them until the worker's next tick - see
   // liveRefresh.ts for how that's kept from becoming a per-request upstream call.
   const dexScreener = new DexScreenerClient({
@@ -478,6 +479,12 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
         ? { apiKey: env.COINGECKO_API_KEY, priorityPerMinute: 1, backgroundPerMinute: 30 }
         : { priorityPerMinute: 1, backgroundPerMinute: 6 },
     ),
+    // A page's "Now" (and the Peak it folds in) re-priced from Jupiter when DexScreener's reading
+    // has stopped at a stale price - see DexScreenerClient.correctStalePrices. A handful of calls a
+    // minute at most: 100 mints a call, each asked about at most every two minutes.
+    staleCheck: env.JUPITER_API_KEY
+      ? new JupiterClient({ apiKey: env.JUPITER_API_KEY, requestsPerMinute: 6, burst: 2 })
+      : undefined,
   });
   // One per process, shared by every route, so its in-flight sharing, cooldown and call budget
   // hold across the feeds and the live tick rather than per route.

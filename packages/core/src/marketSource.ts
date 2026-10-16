@@ -16,7 +16,9 @@ export const MARKET_SOURCE = {
   /**
    * DexScreener's pair with Jupiter's live price (and the cap that price makes on the pair's
    * supply): the refresh's reading of a listed launch under ten minutes old. A pair quoted in
-   * another coin takes Jupiter's volumes and price changes too (refreshCandidates.ts).
+   * another coin takes Jupiter's volumes and price changes too (refreshCandidates.ts). Also a
+   * reading of any age whose DexScreener price had stopped at a stale figure Jupiter disagreed
+   * with (DexScreenerClient.correctStalePrices, from 2026-10-16).
    */
   dexscreenerLive: "dexscreener_live",
   /** Jupiter's reading outright: a launch DexScreener had not listed when the live read priced it. */

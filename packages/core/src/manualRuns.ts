@@ -91,6 +91,7 @@ export const MANUAL_RUN_EXCLUDED: Readonly<Partial<Record<HeartbeatJob, string>>
   "candidate-watch": "Already runs every minute; its cadence is the label resolution.",
   "match-peaks": "Already runs every couple of minutes.",
   "label-regrade": "Already runs every minute until history is re-graded.",
+  "candle-peaks": "Already runs every minute.",
   "trade-tape": "Already runs every minute.",
   "free-access":
     "Deletes accounts for good. It runs every few minutes, an hour after a period ends or is switched off.",

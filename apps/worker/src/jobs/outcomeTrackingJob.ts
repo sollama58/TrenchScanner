@@ -225,6 +225,8 @@ export async function runOutcomeTrackingJob(
       const write = await prisma.match.updateMany({
         where: {
           id: match.id,
+          // A peak the coin's own trades keep (candlePeaks.ts) is theirs, not a live price's.
+          peakCheckedAt: null,
           OR: [{ peakMcapUsd: null }, { peakMcapUsd: { lt: update.peakMcapUsd } }],
         },
         data: { peakMcapUsd: update.peakMcapUsd, peakMcapAt: update.peakMcapAt },
