@@ -22,6 +22,7 @@ import {
 import { TransientError } from "./errors.js";
 import { escapeHtml } from "../telegram/format.js";
 import { EXIT_REASON_TEXT, signedSol, solAmount, tokenLink, type TradeNote } from "./tradeNotes.js";
+import { saleEvent, type TradeAlertEvent } from "./tradeAlerts.js";
 import type { KeyProvider } from "./keyVault.js";
 import type { MintInfo, TradingRpc, TransactionFill } from "./rpc.js";
 import {
@@ -284,7 +285,7 @@ interface PassContext {
   /** Sell quotes for tokens without a Price API price, by mint+amount. */
   quoteCache: Map<string, { at: number; out: bigint }>;
   /** Adds a Telegram note for the account, when its bot's settings want them. */
-  note: (userId: string, html: string) => Promise<void>;
+  note: (userId: string, event: TradeAlertEvent, html: string) => Promise<void>;
 }
 
 const quoteCache = new Map<string, { at: number; out: bigint }>();
@@ -319,7 +320,7 @@ async function tradingPass(deps: TradingEngineDeps, notes: TradeNote[] = []): Pr
     summary,
     inBudget: () => Date.now() - startedAt < PASS_BUDGET_MS,
     quoteCache,
-    note: async (userId, html) => {
+    note: async (userId, event, html) => {
       if (!deps.notify) return;
       if (!notifyFor.has(userId)) {
         const bot = await prisma.tradingBot.findUnique({ where: { userId }, select: { config: true } });
@@ -327,7 +328,7 @@ async function tradingPass(deps: TradingEngineDeps, notes: TradeNote[] = []): Pr
       }
       if (!notifyFor.get(userId)) return;
       const who = server && userId === server.userId ? "Server bot" : "Bot";
-      notes.push({ userId, html: `🤖 <b>${who}</b>: ${html}` });
+      notes.push({ userId, html: `🤖 <b>${who}</b>: ${html}`, source: "bot", event });
     },
   };
   const notifyFor = new Map<string, boolean>();
@@ -883,6 +884,7 @@ async function settleBuy(ctx: PassContext, wallet: Wallet, order: OrderWithPosit
     const p = order.position;
     await ctx.note(
       p.userId,
+      "buy",
       `bought ${tokenLink(p.symbol, p.mint)} for ${solAmount(-fill.lamportsDelta)} (${escapeHtml(p.sourceLabel)})`,
     );
   }
@@ -926,6 +928,7 @@ async function settleSale(ctx: PassContext, wallet: Wallet, order: OrderWithPosi
         : "";
     await ctx.note(
       position.userId,
+      saleEvent(order.reason),
       `sold ${tokenLink(position.symbol, position.mint)} (${EXIT_REASON_TEXT[order.reason] ?? escapeHtml(order.reason)}), ${solAmount(fill.lamportsDelta)} back${result}`,
     );
   }
@@ -1896,7 +1899,7 @@ async function pausedForLoss(
   const why = `paused: lost ${solAmount(lost)} in the last 24 hours (limit ${config.dailyLossLimitSol} SOL)`;
   await prisma.tradingBot.update({ where: { id: bot.id }, data: { enabled: false, lastError: why } });
   logger.warn("bot paused at its daily loss limit", { userId: bot.userId, lost: lost.toString() });
-  await ctx.note(bot.userId, `⏸ ${escapeHtml(why)}. Open positions keep their exit plans.`);
+  await ctx.note(bot.userId, "loss_limit", `⏸ ${escapeHtml(why)}. Open positions keep their exit plans.`);
   return true;
 }
 

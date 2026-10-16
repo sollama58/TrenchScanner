@@ -2,12 +2,19 @@ import { prisma } from "../db.js";
 import { createLogger } from "../logger.js";
 import { escapeHtml } from "../telegram/format.js";
 import { LAMPORTS_PER_SOL } from "./config.js";
+import {
+  parseTradeAlerts,
+  tradeAlertWanted,
+  type TradeAlertEvent,
+  type TradeAlertSource,
+} from "./tradeAlerts.js";
 
 /**
  * Telegram notes about the bot's and paper strategies' trades: a buy, a sale, an automatic pause.
  * A pass collects them and sends them at its end, one message per chat (split when long), to the
  * owner's own private chats - never a group or channel they linked. The server bot's notes go to
- * every admin's. Best effort: a note that can't be sent is logged and dropped, never retried, and
+ * every admin's. Each recipient's trade-alert settings (tradeAlerts.ts) decide which of the notes
+ * reach their chats. Best effort: a note that can't be sent is logged and dropped, never retried, and
  * never holds up trading.
  */
 
@@ -19,6 +26,9 @@ export interface TradeNote {
   /** Whose trade: the account whose chats hear about it. */
   userId: string;
   html: string;
+  /** Which bot and what happened: for the recipient's trade-alert settings. */
+  source: TradeAlertSource;
+  event: TradeAlertEvent;
 }
 
 export interface TradeNoteSender {
@@ -60,25 +70,36 @@ export async function sendTradeNotes(
   },
 ): Promise<number> {
   if (notes.length === 0) return 0;
-  const byUser = new Map<string, string[]>();
-  for (const note of notes) byUser.set(note.userId, [...(byUser.get(note.userId) ?? []), note.html]);
+  const byUser = new Map<string, TradeNote[]>();
+  for (const note of notes) byUser.set(note.userId, [...(byUser.get(note.userId) ?? []), note]);
   let sent = 0;
-  for (const [userId, lines] of byUser) {
+  for (const [userId, userNotes] of byUser) {
     const owners =
       options.serverUserId && userId === options.serverUserId
         ? { walletAddress: { in: [...options.admins] } }
         : { id: userId };
     const chats = await prisma.telegramChat.findMany({
       where: { enabled: true, revokedAt: null, kind: "private", user: owners },
-      select: { chatId: true },
+      select: { chatId: true, userId: true, user: { select: { tradeAlerts: true } } },
     });
-    for (const message of chunk(lines)) {
-      for (const { chatId } of chats) {
-        try {
-          if ((await options.telegram.sendMessage(chatId, message)).ok) sent++;
-          else logger.warn("trade note not sent", { userId });
-        } catch (err) {
-          logger.warn("trade note not sent", { userId, error: String(err) });
+    // Each chat's owner picks which notes they hear: one message set per owner.
+    const byOwner = new Map<string, { alerts: unknown; chatIds: bigint[] }>();
+    for (const chat of chats) {
+      const entry = byOwner.get(chat.userId) ?? { alerts: chat.user.tradeAlerts, chatIds: [] };
+      entry.chatIds.push(chat.chatId);
+      byOwner.set(chat.userId, entry);
+    }
+    for (const { alerts, chatIds } of byOwner.values()) {
+      const settings = parseTradeAlerts(alerts);
+      const lines = userNotes.filter((n) => tradeAlertWanted(settings, n)).map((n) => n.html);
+      for (const message of chunk(lines)) {
+        for (const chatId of chatIds) {
+          try {
+            if ((await options.telegram.sendMessage(chatId, message)).ok) sent++;
+            else logger.warn("trade note not sent", { userId });
+          } catch (err) {
+            logger.warn("trade note not sent", { userId, error: String(err) });
+          }
         }
       }
     }

@@ -83,6 +83,10 @@ model User {
   /// How the Live feed looks for this user (theme, colors, spacing, columns, which card fields
   /// show) - see feedAppearance.ts in apps/api for the shape. Null = the default look.
   feedAppearance  Json?
+  /// Which trade notes (buys, sales by exit reason, loss-limit stops) from this user's live bot and
+  /// paper strategies reach their private Telegram chats - see trading/tradeAlerts.ts in core for
+  /// the shape. Null = all of them, as before the setting existed.
+  tradeAlerts     Json?
 
   filters           UserFilter[]
   matches           Match[]

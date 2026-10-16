@@ -12,3 +12,4 @@ export * from "./serverWallet.js";
 export * from "./backtest.js";
 export * from "./paper.js";
 export * from "./tradeNotes.js";
+export * from "./tradeAlerts.js";

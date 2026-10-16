@@ -27,6 +27,7 @@ import { NoRouteError, RateLimitedError, WSOL_MINT, type SwapClient } from "./ju
 import type { MintInfo } from "./rpc.js";
 import { escapeHtml } from "../telegram/format.js";
 import { EXIT_REASON_TEXT, signedSol, solAmount, tokenLink, type TradeNote } from "./tradeNotes.js";
+import { saleEvent, type TradeAlertEvent } from "./tradeAlerts.js";
 
 /**
  * Paper trading (admin-only): the trading bot's settings run against the same live signals - the
@@ -148,10 +149,16 @@ function paperNote(
   notes: TradeNote[],
   strategy: { userId: string; name: string },
   config: PaperStrategyConfig,
+  event: TradeAlertEvent,
   html: string,
 ) {
   if (config.notifyTelegram)
-    notes.push({ userId: strategy.userId, html: `📝 <b>Paper · ${escapeHtml(strategy.name)}</b>: ${html}` });
+    notes.push({
+      userId: strategy.userId,
+      html: `📝 <b>Paper · ${escapeHtml(strategy.name)}</b>: ${html}`,
+      source: "paper",
+      event,
+    });
 }
 
 // ── Exits ────────────────────────────────────────────────────────────────────────────────────
@@ -337,6 +344,7 @@ async function managePaperExit(
     notes,
     position.strategy,
     config,
+    saleEvent(decision.reason),
     `sold ${tokenLink(position.symbol, position.mint)} (${EXIT_REASON_TEXT[decision.reason] ?? decision.reason}), ${solAmount(net)} back${result}`,
   );
   return true;
@@ -431,7 +439,13 @@ async function pausedForLoss(strategy: StrategyRow, now: Date, notes: TradeNote[
   if (lost < solToLamports(config.dailyLossLimitSol)) return false;
   const why = `stopped: lost ${solAmount(lost)} in the last 24 hours (limit ${config.dailyLossLimitSol} SOL)`;
   await prisma.paperStrategy.update({ where: { id: strategy.id }, data: { running: false, lastError: why } });
-  paperNote(notes, strategy, config, `⏸ ${escapeHtml(why)}. Open positions keep their exit plans.`);
+  paperNote(
+    notes,
+    strategy,
+    config,
+    "loss_limit",
+    `⏸ ${escapeHtml(why)}. Open positions keep their exit plans.`,
+  );
   return true;
 }
 
@@ -616,6 +630,7 @@ async function runStrategyEntries(
       notes,
       strategy,
       config,
+      "buy",
       `bought ${tokenLink(signal.symbol, signal.mint)} for ${solAmount(buyLamports)} (${escapeHtml(signal.label)})`,
     );
   }
