@@ -751,6 +751,67 @@ describe.skipIf(!dbAvailable)("runCleanupJob: TokenSage narratives", () => {
       ["outside-young", true, "sol"],
     ]);
   });
+
+  it("walks the days that newly crossed each line on a weeknight, and every row on the weekly walk", async () => {
+    const T = `${TAG}-w`;
+    const shortTokens = {
+      SNAPSHOT_RETENTION_DAYS: 3650,
+      CANDIDATE_OUTCOME_RETENTION_DAYS: 3650,
+      STALE_TOKEN_RETENTION_DAYS: 14,
+    } as never;
+    const row = (suffix: string, ageHours: number) =>
+      prisma.tokenNarrative.create({
+        data: {
+          mintAddress: `${T}-${suffix}`,
+          depth: "basic",
+          status: "complete",
+          pairKind: "sol",
+          analysis: { summary: "a cat coin" },
+          checkedAt: new Date(Date.now() - ageHours * 3_600_000),
+        },
+      });
+    // Two coins outside the band: read three days ago (crossed the 48-hour line since the last few
+    // sweeps) and ten days ago (a row the nightly slice does not reach). Two narratives with no
+    // Token: read just past the 14-day token horizon, and long past it.
+    await prisma.token.create({ data: { mintAddress: `${T}-recent` } });
+    await prisma.token.create({ data: { mintAddress: `${T}-missed` } });
+    await Promise.all([
+      row("recent", 72),
+      row("missed", 240),
+      row("gone", 15 * 24),
+      row("gone-missed", 40 * 24),
+    ]);
+    const nightly = (await runCleanupJob(shortTokens, {
+      rowsPerBatch: 10,
+      pauseMs: 0,
+      fullSnapshotWalk: false,
+    })) as Record<string, unknown>;
+    const after = async () =>
+      (
+        await prisma.tokenNarrative.findMany({
+          where: { mintAddress: { startsWith: T } },
+          orderBy: { mintAddress: "asc" },
+        })
+      ).map((r) => [r.mintAddress.slice(T.length + 1), r.analysis !== null]);
+    expect(await after()).toEqual([
+      ["gone-missed", true],
+      ["missed", true],
+      ["recent", false],
+    ]);
+    // The heartbeat's view of the run: every stage's count (BubbleMapAtAlert's was dropped before
+    // 2026-10-16) and what each took.
+    expect(nightly.deletedBubbleMapsAtAlert).toBe(0);
+    expect(nightly.deletedOrphanNarratives).toBe(1);
+    const durations = nightly.stageDurationsMs as Record<string, number>;
+    expect(typeof durations.orphanNarratives).toBe("number");
+    expect(typeof durations.untrackedNarrativeDocs).toBe("number");
+    expect(nightly.heldStages).toBeUndefined();
+    await runCleanupJob(shortTokens, { rowsPerBatch: 10, pauseMs: 0, fullSnapshotWalk: true });
+    expect(await after()).toEqual([
+      ["missed", false],
+      ["recent", false],
+    ]);
+  });
 });
 
 /**
