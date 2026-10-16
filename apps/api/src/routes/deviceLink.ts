@@ -3,8 +3,8 @@ import { z } from "zod";
 import { prisma, type Env } from "@trenchscanner/core";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 import { sessionCookieAttrs } from "./auth.js";
-import { clientIp } from "../clientIp.js";
-import { issueLinkCode, redeemLinkCode, LINK_CODE_TTL_MS } from "../auth/deviceLink.js";
+import { clientIp, ipRateLimitKey } from "../clientIp.js";
+import { issueLinkCode, redeemLinkCode, LINK_CODE_TTL_MS, MAX_LINKED_DEVICES } from "../auth/deviceLink.js";
 
 /**
  * Mobile Connect, Trenches half: pair a phone with a signed-in desktop by scanning a QR.
@@ -21,6 +21,8 @@ import { issueLinkCode, redeemLinkCode, LINK_CODE_TTL_MS } from "../auth/deviceL
  * Pairing a phone takes one call; nobody legitimate comes close to this.
  */
 const LINK_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+/** /link/redeem is unauthenticated: keyed by address, never by whatever session it carries. */
+const REDEEM_RATE_LIMIT = { ...LINK_ROUTE_RATE_LIMIT, keyGenerator: ipRateLimitKey };
 
 export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env: Env }) {
   /**
@@ -52,11 +54,17 @@ export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env
    * Every failure answers the same way: an attacker feeding this endpoint guesses learns only
    * "no", never whether a code was real but spent, or real but expired.
    */
-  app.post("/link/redeem", { config: { rateLimit: LINK_ROUTE_RATE_LIMIT } }, async (request, reply) => {
+  app.post("/link/redeem", { config: { rateLimit: REDEEM_RATE_LIMIT } }, async (request, reply) => {
     const parsed = z.object({ code: z.string().max(256) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid" });
 
     const result = await redeemLinkCode(parsed.data.code, request.headers["user-agent"]);
+    if (!result.ok && result.reason === "device_limit") {
+      return reply.code(409).send({
+        error: `This account already has ${MAX_LINKED_DEVICES} paired phones. Sign one out on your desktop (Settings, Connect your phone), then scan this code again.`,
+        code: "device_limit",
+      });
+    }
     if (!result.ok) {
       request.log.warn({ ip: clientIp(request) }, "rejected a mobile link redemption");
       return reply.code(400).send({ error: "invalid_or_expired" });

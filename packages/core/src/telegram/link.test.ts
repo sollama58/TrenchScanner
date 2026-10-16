@@ -5,6 +5,7 @@ import {
   hashTelegramCode,
   issueTelegramLinkCode,
   looksLikeTelegramCode,
+  MAX_TELEGRAM_CHATS,
   redeemTelegramLinkCode,
 } from "./link.js";
 
@@ -100,5 +101,35 @@ describe.skipIf(!dbAvailable)("telegram link codes", () => {
     expect(await prisma.telegramChat.count({ where: { chatId: c.chatId } })).toBe(1);
     // What the old account was sent neither counts for the new one nor holds its alerts back.
     expect(await prisma.telegramAlertSent.count({ where: { chatId: row!.id } })).toBe(0);
+  });
+
+  it("links one personal chat and one group per account, and re-links either freely", async () => {
+    expect(MAX_TELEGRAM_CHATS).toEqual({ private: 1, group: 1 });
+    const mine = chat("private");
+    const group = chat("supergroup");
+    expect((await redeemTelegramLinkCode((await issueTelegramLinkCode(userId)).code, mine)).ok).toBe(true);
+    expect((await redeemTelegramLinkCode((await issueTelegramLinkCode(userId)).code, group)).ok).toBe(true);
+    // A second of either kind is refused, and the code stays unspent.
+    const extra = await issueTelegramLinkCode(userId);
+    expect(await redeemTelegramLinkCode(extra.code, chat("group"))).toEqual({
+      ok: false,
+      reason: "chat_limit",
+      limitKind: "group",
+    });
+    expect(
+      await prisma.telegramLinkCode.count({
+        where: { codeHash: hashTelegramCode(extra.code), claimedAt: null },
+      }),
+    ).toBe(1);
+    const second = await redeemTelegramLinkCode((await issueTelegramLinkCode(userId)).code, chat("private"));
+    expect(second.ok === false && second.limitKind).toBe("private");
+    // The chats already linked re-link without counting against themselves.
+    expect((await redeemTelegramLinkCode((await issueTelegramLinkCode(userId)).code, mine)).ok).toBe(true);
+    // Unlinking the group frees its place.
+    await prisma.telegramChat.updateMany({
+      where: { chatId: group.chatId },
+      data: { revokedAt: new Date() },
+    });
+    expect((await redeemTelegramLinkCode(extra.code, chat("group"))).ok).toBe(true);
   });
 });

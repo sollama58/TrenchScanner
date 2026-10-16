@@ -4,6 +4,7 @@ import {
   ensureServerWalletAccount,
   loadServerWalletKey,
   createKeyProvider,
+  type DexScreenerClient,
   JupiterSwapClient,
   PumpPortalSwapClient,
   runTradingEngine,
@@ -23,7 +24,10 @@ import { JobFailure, type JobRunMeta } from "../scheduler.js";
  * /health/worker shows a misconfigured bot rather than a silent one. A pass in which a stage
  * failed (settling, exits, ...) is reported as failed too, with its counts kept.
  */
-export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
+export function createTradingBotRunner(
+  env: Env,
+  dexScreener: Pick<DexScreenerClient, "solPricesOf">,
+): () => Promise<JobRunMeta> {
   const keys = createKeyProvider({ ...env, NODE_ENV: process.env.NODE_ENV });
   const admins = adminWalletSet(env);
   const hasRpc = Boolean(env.HELIUS_API_KEY || env.SOLANA_RPC_URL);
@@ -73,6 +77,8 @@ export function createTradingBotRunner(env: Env): () => Promise<JobRunMeta> {
       rpc,
       swap,
       fallback,
+      // The floor under every swap, from prices Jupiter and PumpPortal have no say in.
+      independentPricesSol: (mints) => dexScreener.solPricesOf(mints),
       keys: keys.provider,
       // The TRADING_MAX_* ceilings are optional: unset, the bot's own settings decide.
       maxPriorityFeeLamports: optionalLamports(env.TRADING_MAX_PRIORITY_FEE_SOL),

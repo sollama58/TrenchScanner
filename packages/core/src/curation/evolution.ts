@@ -7,7 +7,7 @@ import {
   type ContestantSpec,
   type CuratorRecipe,
 } from "./contestants.js";
-import { LEARNER_FEATURE_NAMES, learnerSubset, type CandidateFeatureName } from "./features.js";
+import { MARKET_LEARNER_FEATURE_NAMES, learnerSubset, type CandidateFeatureName } from "./features.js";
 import { MIN_LIVE_CALLS_TO_RANK } from "./leaderboard.js";
 
 /**
@@ -117,8 +117,12 @@ export function normalizeRecipe(recipe: CuratorRecipe, baseHalfLifeDays: number)
   }
   // A lineage bred before an input was retired still lists it, and a recipe's list is read as
   // is at training time; the retired names leave here, so no child, mate or stored challenger
-  // carries them on. A list that was only retired names means every learner input.
-  const featureNames = recipe.featureNames ? learnerSubset(recipe.featureNames) : undefined;
+  // carries them on. So do the TokenSage inputs the market seats no longer read
+  // (MARKET_TOKENSAGE_INPUTS). A list that was only those names means every market input.
+  const market = new Set<string>(MARKET_LEARNER_FEATURE_NAMES);
+  const featureNames = recipe.featureNames
+    ? learnerSubset(recipe.featureNames).filter((name) => market.has(name))
+    : undefined;
   return {
     learner: "logistic",
     recencyHalfLifeDays,
@@ -172,7 +176,7 @@ function mutateFeatures(
   current: readonly string[] | undefined,
   rng: Rng,
 ): CandidateFeatureName[] | undefined {
-  const all = LEARNER_FEATURE_NAMES;
+  const all = MARKET_LEARNER_FEATURE_NAMES;
   const have = new Set<CandidateFeatureName>((current as CandidateFeatureName[] | undefined) ?? all);
   const missing = all.filter((f) => !have.has(f));
   const steps = 1 + Math.floor(rng() * 3);
@@ -333,8 +337,8 @@ export function describeRecipe(
       f.featureSample! * 100,
     )}% of features; ${memory}`;
   } else {
-    const n = r.featureNames?.length ?? LEARNER_FEATURE_NAMES.length;
-    what = `Logistic regression on ${n === LEARNER_FEATURE_NAMES.length ? "every" : `${n} of ${LEARNER_FEATURE_NAMES.length}`} features; ${memory}`;
+    const n = r.featureNames?.length ?? MARKET_LEARNER_FEATURE_NAMES.length;
+    what = `Logistic regression on ${n === MARKET_LEARNER_FEATURE_NAMES.length ? "every" : `${n} of ${MARKET_LEARNER_FEATURE_NAMES.length}`} features; ${memory}`;
   }
   if (r.twoStage)
     what = `Two stages (dodge the stop, then double): ${what.charAt(0).toLowerCase()}${what.slice(1)}`;

@@ -7,6 +7,7 @@ import {
   deviceIsActive,
   hashCode,
   LINK_CODE_TTL_MS,
+  MAX_LINKED_DEVICES,
   resetDeviceTouchThrottle,
   touchDevice,
   touchThrottleSize,
@@ -82,6 +83,7 @@ describe.skipIf(!dbAvailable)("mobile link codes", () => {
               get(target, prop, receiver) {
                 if (prop === "linkedDevice") {
                   return {
+                    count: async () => 0,
                     create: async () => {
                       throw new Error("simulated device create failure");
                     },
@@ -147,6 +149,21 @@ describe.skipIf(!dbAvailable)("mobile link codes", () => {
 
   it("treats a device that no longer exists as inactive", async () => {
     expect(await deviceIsActive("clnonexistent0000000000000")).toBe(false);
+  });
+
+  it("pairs at most two phones, and keeps the code scannable when it refuses a third", async () => {
+    expect(MAX_LINKED_DEVICES).toBe(2);
+    const paired: string[] = [];
+    for (let i = 0; i < MAX_LINKED_DEVICES; i++) {
+      const result = await redeemLinkCode((await issueLinkCode(userId)).code);
+      if (!result.ok) throw new Error("expected the pairing to succeed");
+      paired.push(result.deviceId);
+    }
+    const { code } = await issueLinkCode(userId);
+    expect(await redeemLinkCode(code)).toEqual({ ok: false, reason: "device_limit" });
+    // Signing one phone out frees its place, and the same QR then works.
+    await prisma.linkedDevice.update({ where: { id: paired[0]! }, data: { revokedAt: new Date() } });
+    expect((await redeemLinkCode(code)).ok).toBe(true);
   });
 
   it("one account's code cannot mint a device on another account", async () => {

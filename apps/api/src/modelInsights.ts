@@ -320,9 +320,15 @@ export type FullModelInsights = Awaited<ReturnType<typeof fullModelInsights>>;
 
 /** Strips what only admins see from the full report; an admin gets it as is. */
 export function insightsView(full: FullModelInsights, isAdmin: boolean) {
-  if (isAdmin) return full;
+  if (isAdmin) return { ...full, recipeHidden: false };
   return {
     ...full,
+    // What each model leans on is admin-only, as on /models/:id/weights (P24; extended to this
+    // report after the 2026-10-16 security audit): the guest copy of it was public.
+    importance: null,
+    featureHealth: null,
+    heldFeatures: [],
+    recipeHidden: true,
     aiJudge: {
       ...full.aiJudge,
       playbooks: full.aiJudge.playbooks.map(({ text: _text, rationale: _rationale, ...p }) => p),

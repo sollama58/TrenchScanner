@@ -6,6 +6,7 @@ import {
   scorePercentile,
   scoreWithoutCoin,
   walletLabels,
+  wilsonLower,
   walletRiskScore,
   walletWinScore,
 } from "./riskScore.js";
@@ -221,12 +222,31 @@ describe("walletLabels", () => {
     expect(walletLabels(stats({ dumps: 8, appearances: 10 }), market).dumper).toBe(true);
     expect(walletLabels(stats({ dumps: 7, appearances: 10 }), market).dumper).toBe(false);
     expect(walletLabels(stats({ dumps: 9, appearances: 12 }), market).dumper).toBe(true);
-    expect(walletLabels(stats({ wins: 2, appearances: 10 }), market).winner).toBe(false);
-    expect(walletLabels(stats({ wins: 6, appearances: 10 }), market).winner).toBe(true);
-    expect(walletLabels(stats({ wins: 5, appearances: 10 }), market).winner).toBe(false);
     expect(walletLabels(stats({ snipes: 2, appearances: 10 }), market).sniper).toBe(false);
     expect(walletLabels(stats({ snipes: 5, appearances: 10 }), market).sniper).toBe(true);
     expect(walletLabels(stats({ snipes: 5, appearances: 11 }), market).sniper).toBe(false);
+  });
+
+  it("labels a winner whose win rate holds at twice the market's, at its lower bound", () => {
+    // The market's own trades come out at 2x for 0.5 SOL about 2-3% of the time (10-16).
+    const m = { dumpRate: 0.45, winRate: 0.03 };
+    expect(walletLabels(stats({ wins: 2, appearances: 10 }), m).winner).toBe(false);
+    // 3 of 10: 30%, lower bound about 12%, well over 6%.
+    expect(walletLabels(stats({ wins: 3, appearances: 10 }), m).winner).toBe(true);
+    // 3 of 40: 7.5%, lower bound about 3%, under 6%.
+    expect(walletLabels(stats({ wins: 3, appearances: 40 }), m).winner).toBe(false);
+    // 8 of 40: 20%, lower bound about 12%.
+    expect(walletLabels(stats({ wins: 8, appearances: 40 }), m).winner).toBe(true);
+    // The old bar (60% of coins) is no longer needed, and a market that wins often raises it.
+    expect(walletLabels(stats({ wins: 5, appearances: 10 }), market).winner).toBe(false);
+    expect(walletLabels(stats({ wins: 9, appearances: 10 }), market).winner).toBe(true);
+  });
+
+  it("bounds the win rate from below", () => {
+    expect(wilsonLower(0, 10, 1.645)).toBe(0);
+    expect(wilsonLower(3, 10, 1.645)).toBeCloseTo(0.124, 2);
+    expect(wilsonLower(3, 40, 1.645)).toBeLessThan(0.06);
+    expect(wilsonLower(5, 0, 1.645)).toBe(0);
   });
 
   it("gives no label at all under ten coins on record", () => {
@@ -240,15 +260,17 @@ describe("walletLabels", () => {
   });
 
   it("never shows dumper and winner together: the side further above its market wins", () => {
-    // 8 of 10 dumped (0.8 vs 0.45) and 6 of 10 doubled (0.6 vs 0.23): the win side is further out.
-    expect(walletLabels(stats({ dumps: 8, wins: 6, appearances: 10 }), market)).toEqual({
+    // 8 of 10 dumped (0.8 vs 0.45) and 6 of 10 won (0.6 vs 0.03): the win side is further out.
+    expect(
+      walletLabels(stats({ dumps: 8, wins: 6, appearances: 10 }), { dumpRate: 0.45, winRate: 0.03 }),
+    ).toEqual({
       dumper: false,
       winner: true,
       sniper: false,
     });
     // Against a market that doubles as often, the dump side is the stronger claim.
     expect(
-      walletLabels(stats({ dumps: 8, wins: 6, appearances: 10 }), { dumpRate: 0.2, winRate: 0.5 }),
+      walletLabels(stats({ dumps: 8, wins: 6, appearances: 10 }), { dumpRate: 0.2, winRate: 0.15 }),
     ).toEqual({ dumper: true, winner: false, sniper: false });
   });
 });

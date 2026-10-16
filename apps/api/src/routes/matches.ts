@@ -563,6 +563,28 @@ export function calledNear(
 /** A filter that is the owner's and switched on: the "active filters" the both-only feed counts. */
 const ACTIVE_FILTER = { isActive: true, deletedAt: null } satisfies Prisma.UserFilterWhereInput;
 
+/** Text searches one account may run per minute (GET /matches?q=). */
+const TEXT_SEARCHES_PER_MINUTE = 30;
+const textSearches = new Map<string, number[]>();
+
+/** Whether this account may run another text search now; records it when so. */
+export function allowTextSearch(userKey: string, now = Date.now()): boolean {
+  const recent = (textSearches.get(userKey) ?? []).filter((t) => now - t < 60_000);
+  textSearches.delete(userKey);
+  if (recent.length >= TEXT_SEARCHES_PER_MINUTE) {
+    textSearches.set(userKey, recent);
+    return false;
+  }
+  recent.push(now);
+  textSearches.set(userKey, recent);
+  while (textSearches.size > 10_000) {
+    const oldest = textSearches.keys().next().value;
+    if (oldest === undefined) break;
+    textSearches.delete(oldest);
+  }
+  return true;
+}
+
 export async function registerMatchRoutes(
   app: FastifyInstance,
   opts: {
@@ -1001,6 +1023,11 @@ export async function registerMatchRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const { page, includeCurated, highConviction, mint, q } = parsed.data;
+    // A text search is uncached and can't use an index (%text%): its own, tighter budget, so one
+    // script can't keep the shared database busy (security audit 2026-10-16, inputs F3).
+    if (q && !allowTextSearch(request.user!.userId)) {
+      return reply.code(429).send({ error: "Too many searches; wait a few seconds and try again." });
+    }
     // The CA search: one token's alerts. Nobody has an alert on a token we never saw.
     const searched = mint
       ? await prisma.token.findUnique({ where: { mintAddress: mint }, select: { id: true } })

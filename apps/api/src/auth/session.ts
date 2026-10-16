@@ -43,6 +43,16 @@ export interface SessionPayload {
    * before this claim existed read as 0, the column's starting value.
    */
   sessionVersion?: number;
+  /** When the token was signed (ms), i.e. when this sign-in or pairing happened. */
+  issuedAtMs?: number;
+}
+
+/** The longest an admin wallet's session lives from its sign-in, browser or paired phone. */
+export const ADMIN_SESSION_MAX_AGE_MS = 7 * 24 * 3_600_000;
+
+/** Whether an admin wallet's session is still within ADMIN_SESSION_MAX_AGE_MS of its sign-in. */
+export function adminSessionFresh(session: SessionPayload, now = Date.now()): boolean {
+  return session.issuedAtMs !== undefined && now - session.issuedAtMs <= ADMIN_SESSION_MAX_AGE_MS;
 }
 
 /**
@@ -72,7 +82,7 @@ export function createSessionSigner(jwtSecret: string, ttlHours: number) {
 
     async verify(token: string): Promise<SessionPayload | null> {
       try {
-        const { payload } = await jwtVerify(token, key);
+        const { payload } = await jwtVerify(token, key, { algorithms: ["HS256"] });
         if (typeof payload.sub !== "string" || typeof payload.walletAddress !== "string") {
           return null;
         }
@@ -81,6 +91,7 @@ export function createSessionSigner(jwtSecret: string, ttlHours: number) {
           walletAddress: payload.walletAddress,
           deviceId: typeof payload.deviceId === "string" ? payload.deviceId : undefined,
           sessionVersion: typeof payload.sv === "number" ? payload.sv : 0,
+          issuedAtMs: typeof payload.iat === "number" ? payload.iat * 1000 : undefined,
         };
       } catch {
         return null;

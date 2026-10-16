@@ -105,6 +105,28 @@ describe.skipIf(!dbAvailable)("table backups", () => {
     expect((await prisma.curatedAlert.findUnique({ where: { id: alert.id } }))!.confidence).toBe(0.9);
   });
 
+  it("restores only the named tables, and a dry run changes nothing", async () => {
+    await cleanUp();
+    const { user, entry } = await seed();
+    const saved = await saveTableBackup("manual", "test");
+    const payload = decodeTableBackup((await loadTableBackupData(saved.id))!.data);
+    await prisma.user.delete({ where: { id: user.id } });
+    await prisma.burnCreditEntry.delete({ where: { id: entry.id } });
+
+    const dry = await restoreTableBackup(payload, { only: ["User", "BurnCreditEntry"], dryRun: true });
+    expect(dry.dryRun).toBe(true);
+    expect(dry.tables.map((t) => t.name).sort()).toEqual(["BurnCreditEntry", "User"]);
+    expect(dry.tables.find((t) => t.name === "User")!.inserted).toBeGreaterThanOrEqual(1);
+    expect(await prisma.user.count({ where: { id: user.id } })).toBe(0);
+
+    const real = await restoreTableBackup(payload, { only: ["BurnCreditEntry"] });
+    expect(real.tables.map((t) => t.name)).toEqual(["BurnCreditEntry"]);
+    expect(await prisma.burnCreditEntry.count({ where: { id: entry.id } })).toBe(1);
+    // User was not named, so the deleted account stays deleted.
+    expect(await prisma.user.count({ where: { id: user.id } })).toBe(0);
+    await prisma.burnCreditEntry.delete({ where: { id: entry.id } });
+  });
+
   it("refuses a file that was changed or is not a backup", () => {
     const good = sealTableBackup({
       format: TABLE_BACKUP_FORMAT,

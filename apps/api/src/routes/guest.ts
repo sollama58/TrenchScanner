@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma, type Env } from "@trenchscanner/core";
 import { currentMarketCap } from "./matches.js";
+import { ipRateLimitKey } from "../clientIp.js";
 import {
   CURATED_MATCH_LINK_WINDOW_MS,
   curatedAlertInclude,
@@ -57,7 +58,7 @@ const FEED_CACHE_TTL_MS = 5_000;
  * this leaves room for dozens of guests behind one carrier or office address, while every answer
  * comes from the shared page cache; the global 300/min would let one address scrape freely.
  */
-const GUEST_RATE_LIMIT = { max: 90, timeWindow: "1 minute" };
+const GUEST_RATE_LIMIT = { max: 90, timeWindow: "1 minute", keyGenerator: ipRateLimitKey };
 
 const reportQuerySchema = z.object({ days: reportDaysSchema });
 const leaderboardQuerySchema = z.object({ days: leaderboardDaysSchema });

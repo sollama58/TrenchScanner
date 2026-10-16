@@ -45,8 +45,19 @@ export async function issueLinkCode(userId: string): Promise<IssuedLinkCode> {
   return { code, expiresAt };
 }
 
+/**
+ * Paired phones one account may have at once (user decision after the 2026-10-16 security audit):
+ * each is a year-long session with the owner's full access, so without a cap one subscription
+ * could be handed out as any number of seats.
+ */
+export const MAX_LINKED_DEVICES = 2;
+
 export type RedeemResult =
-  { ok: true; userId: string; walletAddress: string; deviceId: string } | { ok: false };
+  | { ok: true; userId: string; walletAddress: string; deviceId: string }
+  | { ok: false; reason?: "device_limit" };
+
+/** Thrown inside the redeem transaction to roll the claim back, so the code stays scannable. */
+class DeviceLimitReached extends Error {}
 
 /**
  * Redeems a code and creates the device it pairs, or refuses.
@@ -73,24 +84,34 @@ export async function redeemLinkCode(
   // Three separate statements consumed the code on a failed device create (a pool timeout, a
   // database blip) and left the phone with nothing - the user then had to go back to the desktop
   // for a fresh QR, when the honest outcome is "that scan failed, scan again".
-  return db.$transaction(async (tx) => {
-    const claimed = await tx.mobileLinkCode.updateMany({
-      where: { codeHash: hashCode(code), claimedAt: null, expiresAt: { gt: new Date() } },
-      data: { claimedAt: new Date() },
-    });
-    if (claimed.count !== 1) return { ok: false };
+  return db
+    .$transaction(async (tx): Promise<RedeemResult> => {
+      const claimed = await tx.mobileLinkCode.updateMany({
+        where: { codeHash: hashCode(code), claimedAt: null, expiresAt: { gt: new Date() } },
+        data: { claimedAt: new Date() },
+      });
+      if (claimed.count !== 1) return { ok: false };
 
-    const row = await tx.mobileLinkCode.findUnique({
-      where: { codeHash: hashCode(code) },
-      include: { user: { select: { id: true, walletAddress: true } } },
-    });
-    if (!row) return { ok: false };
+      const row = await tx.mobileLinkCode.findUnique({
+        where: { codeHash: hashCode(code) },
+        include: { user: { select: { id: true, walletAddress: true } } },
+      });
+      if (!row) return { ok: false };
 
-    const device = await tx.linkedDevice.create({
-      data: { userId: row.userId, userAgent: userAgent?.slice(0, 300) ?? null },
+      // Over the cap the whole transaction rolls back: the code is not spent, so once a phone is
+      // unlinked the same QR still works within its two minutes.
+      const active = await tx.linkedDevice.count({ where: { userId: row.userId, revokedAt: null } });
+      if (active >= MAX_LINKED_DEVICES) throw new DeviceLimitReached();
+
+      const device = await tx.linkedDevice.create({
+        data: { userId: row.userId, userAgent: userAgent?.slice(0, 300) ?? null },
+      });
+      return { ok: true, userId: row.user.id, walletAddress: row.user.walletAddress, deviceId: device.id };
+    })
+    .catch((err: unknown): RedeemResult => {
+      if (err instanceof DeviceLimitReached) return { ok: false, reason: "device_limit" };
+      throw err;
     });
-    return { ok: true, userId: row.user.id, walletAddress: row.user.walletAddress, deviceId: device.id };
-  });
 }
 
 /**

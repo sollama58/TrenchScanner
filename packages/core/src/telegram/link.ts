@@ -61,7 +61,27 @@ export interface TelegramChatBinding {
 }
 
 export type TelegramRedeemResult =
-  { ok: true; userId: string; walletAddress: string; chatRowId: string; moved: boolean } | { ok: false };
+  | { ok: true; userId: string; walletAddress: string; chatRowId: string; moved: boolean }
+  | { ok: false; reason?: "chat_limit"; limitKind?: "private" | "group" };
+
+/**
+ * Linked Telegram chats per account (user decision after the 2026-10-16 security audit): one
+ * personal chat and one group. Without a cap one subscription could feed the real-time alerts to
+ * any number of public groups.
+ */
+export const MAX_TELEGRAM_CHATS = { private: 1, group: 1 } as const;
+
+/** A private chat, or anything shared (group, supergroup, channel). */
+export function telegramChatClass(kind: string): "private" | "group" {
+  return kind === "private" ? "private" : "group";
+}
+
+/** Rolls the redeem transaction back, so the code is not spent by a refused link. */
+class ChatLimitReached extends Error {
+  constructor(readonly limitKind: "private" | "group") {
+    super("telegram chat limit");
+  }
+}
 
 /**
  * Redeems a code and binds the chat to the code's account. The claim is a conditional update
@@ -79,50 +99,68 @@ export async function redeemTelegramLinkCode(
 ): Promise<TelegramRedeemResult> {
   if (!looksLikeTelegramCode(code)) return { ok: false };
   const codeHash = hashTelegramCode(code);
-  return db.$transaction(async (tx) => {
-    const claimed = await tx.telegramLinkCode.updateMany({
-      where: { codeHash, claimedAt: null, expiresAt: { gt: new Date() } },
-      data: { claimedAt: new Date() },
-    });
-    if (claimed.count !== 1) return { ok: false };
-    const row = await tx.telegramLinkCode.findUnique({
-      where: { codeHash },
-      include: { user: { select: { id: true, walletAddress: true } } },
-    });
-    if (!row) return { ok: false };
+  return db
+    .$transaction(async (tx): Promise<TelegramRedeemResult> => {
+      const claimed = await tx.telegramLinkCode.updateMany({
+        where: { codeHash, claimedAt: null, expiresAt: { gt: new Date() } },
+        data: { claimedAt: new Date() },
+      });
+      if (claimed.count !== 1) return { ok: false };
+      const row = await tx.telegramLinkCode.findUnique({
+        where: { codeHash },
+        include: { user: { select: { id: true, walletAddress: true } } },
+      });
+      if (!row) return { ok: false };
 
-    const existing = await tx.telegramChat.findUnique({
-      where: { chatId: chat.chatId },
-      select: { id: true, userId: true },
+      const existing = await tx.telegramChat.findUnique({
+        where: { chatId: chat.chatId },
+        select: { id: true, userId: true },
+      });
+      // Over the cap for this kind of chat: refused, the whole transaction rolled back. A chat
+      // already linked to this account re-links freely.
+      const limitKind = telegramChatClass(chat.kind);
+      const others = await tx.telegramChat.findMany({
+        where: { userId: row.userId, revokedAt: null, NOT: { chatId: chat.chatId } },
+        select: { kind: true },
+      });
+      if (
+        others.filter((o) => telegramChatClass(o.kind) === limitKind).length >= MAX_TELEGRAM_CHATS[limitKind]
+      ) {
+        throw new ChatLimitReached(limitKind);
+      }
+      const data = {
+        kind: chat.kind,
+        title: chat.title,
+        linkedByTelegramId: chat.linkedByTelegramId,
+        linkedByName: chat.linkedByName,
+        userId: row.userId,
+        enabled: true,
+        revokedAt: null,
+        lastError: null,
+        failures: 0,
+        // Never replay what happened before the link.
+        sentThrough: new Date(),
+      };
+      const moved = existing !== null && existing.userId !== row.userId;
+      if (existing && moved) {
+        // What the chat was sent for the old account: the new one's /trenchboard and /alerts must not
+        // count it, and the one-alert-per-token dedupe must not hold back the new account's alerts.
+        await tx.telegramAlertSent.deleteMany({ where: { chatId: existing.id } });
+      }
+      const saved = existing
+        ? await tx.telegramChat.update({ where: { id: existing.id }, data, select: { id: true } })
+        : await tx.telegramChat.create({ data: { chatId: chat.chatId, ...data }, select: { id: true } });
+      return {
+        ok: true,
+        userId: row.user.id,
+        walletAddress: row.user.walletAddress,
+        chatRowId: saved.id,
+        moved,
+      };
+    })
+    .catch((err: unknown): TelegramRedeemResult => {
+      if (err instanceof ChatLimitReached)
+        return { ok: false, reason: "chat_limit", limitKind: err.limitKind };
+      throw err;
     });
-    const data = {
-      kind: chat.kind,
-      title: chat.title,
-      linkedByTelegramId: chat.linkedByTelegramId,
-      linkedByName: chat.linkedByName,
-      userId: row.userId,
-      enabled: true,
-      revokedAt: null,
-      lastError: null,
-      failures: 0,
-      // Never replay what happened before the link.
-      sentThrough: new Date(),
-    };
-    const moved = existing !== null && existing.userId !== row.userId;
-    if (existing && moved) {
-      // What the chat was sent for the old account: the new one's /trenchboard and /alerts must not
-      // count it, and the one-alert-per-token dedupe must not hold back the new account's alerts.
-      await tx.telegramAlertSent.deleteMany({ where: { chatId: existing.id } });
-    }
-    const saved = existing
-      ? await tx.telegramChat.update({ where: { id: existing.id }, data, select: { id: true } })
-      : await tx.telegramChat.create({ data: { chatId: chat.chatId, ...data }, select: { id: true } });
-    return {
-      ok: true,
-      userId: row.user.id,
-      walletAddress: row.user.walletAddress,
-      chatRowId: saved.id,
-      moved,
-    };
-  });
 }

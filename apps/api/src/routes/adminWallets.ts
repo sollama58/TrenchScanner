@@ -103,7 +103,11 @@ async function buildOverview(limit: number, minCoins: number) {
     riskyWallets: risky,
     riskyScore: RISKY_WALLET_SCORE,
     winnerWallets: winnerCount,
-    winnerRule: { minWins: WINNER.minWins, minRate: WINNER.minRate, minCoins: MIN_LABEL_APPEARANCES },
+    winnerRule: {
+      minWins: WINNER.minWins,
+      lowerBoundVsMarket: WINNER.lowerBoundVsMarket,
+      minCoins: MIN_LABEL_APPEARANCES,
+    },
     dumperRule: {
       minDumps: KNOWN_DUMPER.minDumps,
       minRate: KNOWN_DUMPER.minRate,

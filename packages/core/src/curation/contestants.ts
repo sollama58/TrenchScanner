@@ -484,7 +484,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     summary:
       "Takes the market's read of the coin and TokenSage's deep read of its story, and weighs the two together.",
     role: "narrative",
-    recipe: { learner: "gbdt", narrativeBlend: true },
+    // Every learner input, TokenSage's included: its blend stage reads all of them, where the
+    // market seats read MARKET_LEARNER_FEATURE_NAMES (its market stage drops the ns* inputs).
+    recipe: { learner: "gbdt", narrativeBlend: true, featureNames: LEARNER_FEATURE_NAMES },
   },
 ];
 

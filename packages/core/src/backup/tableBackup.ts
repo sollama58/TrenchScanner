@@ -333,6 +333,29 @@ export async function uploadPendingTableBackups(
 
 export interface TableRestoreResult {
   tables: { name: string; rows: number; inserted: number; skipped: number }[];
+  /** True when nothing was kept: the counts are what a real run would put back. */
+  dryRun?: boolean;
+}
+
+export interface TableRestoreOptions {
+  /**
+   * Only these tables (names as BACKED_UP_TABLES has them). The restore is additive, so every
+   * row deleted since the backup comes back - a revoked grant, a removed whitelist entry, an
+   * account deleted for good - which is why the CLI makes the operator name the tables actually
+   * lost (security audit 2026-10-16, backups F1).
+   */
+  only?: readonly string[];
+  /** Runs the whole restore and rolls it back, so the counts show what would come back. */
+  dryRun?: boolean;
+}
+
+/** Tables whose deleted rows are decisions (revoked access, deleted accounts), not losses. */
+export const ACCESS_TABLES: readonly string[] = ["User", "Whitelist", "Subscription", "LinkedDevice"];
+
+class DryRunRollback extends Error {
+  constructor(readonly result: TableRestoreResult) {
+    super("dry run: rolled back");
+  }
 }
 
 /**
@@ -345,61 +368,71 @@ export interface TableRestoreResult {
  * Run from a shell with `npm run backup:restore-tables -w @trenchscanner/worker -- <file>`; the
  * README's "Restore" section says when.
  */
-export async function restoreTableBackup(payload: TableBackupPayload): Promise<TableRestoreResult> {
+export async function restoreTableBackup(
+  payload: TableBackupPayload,
+  opts: TableRestoreOptions = {},
+): Promise<TableRestoreResult> {
   const known = new Map(BACKED_UP_TABLES.map((t, i) => [t.name, i]));
+  const only = opts.only ? new Set(opts.only) : null;
   const ordered = payload.tables
-    .filter((t) => known.has(t.name))
+    .filter((t) => known.has(t.name) && (!only || only.has(t.name)))
     .sort((a, b) => known.get(a.name)! - known.get(b.name)!);
   const skippedTables = payload.tables.filter((t) => !known.has(t.name)).map((t) => t.name);
   if (skippedTables.length > 0)
     logger.warn("table restore: skipping tables this build does not know", { skippedTables });
 
-  return prisma.$transaction(
-    async (tx) => {
-      const result: TableRestoreResult = { tables: [] };
-      for (const table of ordered) {
-        const target = quote(table.name);
-        const insertChunk = async (rows: unknown[]): Promise<number> => {
-          const [row] = await tx.$queryRawUnsafe<{ n: bigint }[]>(
-            `WITH ins AS (
+  return prisma
+    .$transaction(
+      async (tx) => {
+        const result: TableRestoreResult = { tables: [] };
+        for (const table of ordered) {
+          const target = quote(table.name);
+          const insertChunk = async (rows: unknown[]): Promise<number> => {
+            const [row] = await tx.$queryRawUnsafe<{ n: bigint }[]>(
+              `WITH ins AS (
                INSERT INTO ${target} SELECT * FROM json_populate_recordset(NULL::${target}, $1::json)
                ON CONFLICT DO NOTHING RETURNING 1)
              SELECT count(*)::bigint AS n FROM ins`,
-            JSON.stringify(rows),
-          );
-          return Number(row?.n ?? 0);
-        };
-        let inserted = 0;
-        let skipped = 0;
-        for (let i = 0; i < table.rows.length; i += CHUNK_ROWS) {
-          const chunk = table.rows.slice(i, i + CHUNK_ROWS);
-          await tx.$executeRawUnsafe("SAVEPOINT chunk");
-          try {
-            inserted += await insertChunk(chunk);
-            await tx.$executeRawUnsafe("RELEASE SAVEPOINT chunk");
-          } catch (err) {
-            await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT chunk");
-            if (!isForeignKeyError(err)) throw err;
-            // One parent is missing somewhere in the chunk: find which rows, keep the rest.
-            for (const one of chunk) {
-              await tx.$executeRawUnsafe("SAVEPOINT row");
-              try {
-                inserted += await insertChunk([one]);
-                await tx.$executeRawUnsafe("RELEASE SAVEPOINT row");
-              } catch (inner) {
-                await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT row");
-                if (!isForeignKeyError(inner)) throw inner;
-                skipped++;
+              JSON.stringify(rows),
+            );
+            return Number(row?.n ?? 0);
+          };
+          let inserted = 0;
+          let skipped = 0;
+          for (let i = 0; i < table.rows.length; i += CHUNK_ROWS) {
+            const chunk = table.rows.slice(i, i + CHUNK_ROWS);
+            await tx.$executeRawUnsafe("SAVEPOINT chunk");
+            try {
+              inserted += await insertChunk(chunk);
+              await tx.$executeRawUnsafe("RELEASE SAVEPOINT chunk");
+            } catch (err) {
+              await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT chunk");
+              if (!isForeignKeyError(err)) throw err;
+              // One parent is missing somewhere in the chunk: find which rows, keep the rest.
+              for (const one of chunk) {
+                await tx.$executeRawUnsafe("SAVEPOINT row");
+                try {
+                  inserted += await insertChunk([one]);
+                  await tx.$executeRawUnsafe("RELEASE SAVEPOINT row");
+                } catch (inner) {
+                  await tx.$executeRawUnsafe("ROLLBACK TO SAVEPOINT row");
+                  if (!isForeignKeyError(inner)) throw inner;
+                  skipped++;
+                }
               }
             }
           }
+          result.tables.push({ name: table.name, rows: table.rows.length, inserted, skipped });
         }
-        result.tables.push({ name: table.name, rows: table.rows.length, inserted, skipped });
-      }
-      return result;
-    },
-    { maxWait: 30_000, timeout: 1_800_000 },
-  );
+        if (opts.dryRun) throw new DryRunRollback({ ...result, dryRun: true });
+        return result;
+      },
+      { maxWait: 30_000, timeout: 1_800_000 },
+    )
+    .catch((err: unknown) => {
+      if (err instanceof DryRunRollback) return err.result;
+      throw err;
+    });
 }
 
 function isForeignKeyError(err: unknown): boolean {
