@@ -216,12 +216,6 @@ async function main() {
         }
       : {},
   );
-  const dexScreener = new DexScreenerClient({
-    baseUrl: env.DEXSCREENER_BASE_URL,
-    requestsPerMinute: env.DEXSCREENER_REQUESTS_PER_MINUTE,
-    // Answers token lookups while DexScreener answers them blank (2026-10-07).
-    fallback: geckoTerminal,
-  });
   // With a Jupiter key, the price-only jobs (candidate-watch, the empty-wallet check) ask Jupiter
   // first, so DexScreener's per-IP budget goes to the scan's refresh and fast-match.
   const jupiter = env.JUPITER_API_KEY
@@ -233,6 +227,15 @@ async function main() {
         burst: env.JUPITER_REQUESTS_PER_SECOND,
       })
     : undefined;
+  const dexScreener = new DexScreenerClient({
+    baseUrl: env.DEXSCREENER_BASE_URL,
+    requestsPerMinute: env.DEXSCREENER_REQUESTS_PER_MINUTE,
+    // Answers token lookups while DexScreener answers them blank (2026-10-07).
+    fallback: geckoTerminal,
+    // Re-prices readings frozen at a stale price (a graduated coin's dead curve, a pool quoted in
+    // a coin whose price stopped) from Jupiter: 17 of 782 alerted coins on 2026-10-14.
+    staleCheck: jupiter,
+  });
   // The launches PumpPortal doesn't send, from Jupiter's newest pools - see JupiterLaunchPoller.
   // Only the process that scans reads it, as with the stream.
   const launchPoller = scans && jupiter ? new JupiterLaunchPoller(jupiter) : undefined;
