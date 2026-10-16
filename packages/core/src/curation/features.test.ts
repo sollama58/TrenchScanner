@@ -13,6 +13,10 @@ import {
   TRADE_FLOW_FAKE_ZEROS_UNTIL,
   VOLUME_ACCEL_YOUNG_NULL_SINCE,
   WEEKEND_FLAG_FROM,
+  FRESH_QUOTE_GAP_SINCE,
+  PATH_TAPE_REFILL_SINCE,
+  SOCIAL_LIST_OUTAGE,
+  SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE,
 } from "./features.js";
 import type { ScoredToken } from "../types.js";
 
@@ -168,6 +172,15 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(replayed.ageMinutes).toBe(90);
   });
 
+  it("replays the live gate's market cap and top-25 fresh-wallet count, not the anchor's cap", () => {
+    const f = { mcapUsd: 80_000, freshTopHolderCount: 9, freshTopHoldersChecked: 25 };
+    const replayed = scoredFromFeatures(f, 0.0001, 120_000);
+    expect(replayed.marketCapUsd).toBe(80_000);
+    expect(replayed.freshTopHolderCount).toBe(9);
+    expect(replayed.freshTopHoldersChecked).toBe(25);
+    expect(scoredFromFeatures({}, 0.0001, 120_000).marketCapUsd).toBe(120_000);
+  });
+
   it("flags a Stonks coin 1 and a Pump.fun coin 0, leaves an unknown launchpad null, and replays it", () => {
     const stonks = buildCandidateFeatures(scored({ launchpad: "stonks" }));
     expect(stonks.launchpadStonks).toBe(1);
@@ -287,9 +300,10 @@ describe("buildCandidateFeatures - fresh quote", () => {
     expect(f.jup5mHolderChange).toBeNull();
     expect(f.jup1hHolderChange).toBe(90);
     expect(LEARNER_FEATURE_NAMES).toContain("freshGapPct");
-    // Jupiter's holder count is recorded, not yet read.
+    // Jupiter's holder count is read in place of RugCheck's (data-correctness audit 2026-10-16).
     expect(f.jupHolderCount).toBe(412);
-    expect(LEARNER_FEATURE_NAMES).not.toContain("jupHolderCount");
+    expect(LEARNER_FEATURE_NAMES).toContain("jupHolderCount");
+    expect(LEARNER_FEATURE_NAMES).not.toContain("holderCount");
 
     const none = buildCandidateFeatures(scored({}));
     for (const k of [
@@ -344,7 +358,7 @@ describe("maskKnownBadInputs", () => {
       mcapUsd: 50_000,
     });
     expect(row.uniqueBuyers5m).toBe(0);
-    const fresh = maskKnownBadInputs(SOCIAL_BITS_FROM_DISCOVERY_SINCE, row);
+    const fresh = maskKnownBadInputs(PATH_TAPE_REFILL_SINCE, row);
     expect(fresh).toBe(row);
   });
 
@@ -359,7 +373,52 @@ describe("maskKnownBadInputs", () => {
       mcapUsd: 50_000,
     });
     expect(maskKnownBadInputs(new Date("2026-10-07T19:38:59Z"), row).hasTwitter).toBeNull();
-    expect(maskKnownBadInputs(new Date("2026-10-07T19:39:00Z"), row)).toBe(row);
+    expect(maskKnownBadInputs(SOCIAL_BITS_FROM_DISCOVERY_SINCE, row)).toEqual(row);
+  });
+
+  it("reads the fresh-price gap and market base rates as missing before live fresh quotes", () => {
+    const row = { freshGapPct: -12, mktBaseRate1hPct: 8, mktBaseRate6hPct: 9, mcapUsd: 50_000 };
+    expect(maskKnownBadInputs(new Date("2026-10-12T16:02:59Z"), row)).toEqual({
+      freshGapPct: null,
+      mktBaseRate1hPct: null,
+      mktBaseRate6hPct: null,
+      mcapUsd: 50_000,
+    });
+    expect(maskKnownBadInputs(FRESH_QUOTE_GAP_SINCE, row)).toEqual(row);
+  });
+
+  it("reads path inputs as missing before the tape refill when the tape is shorter than the coin's age", () => {
+    const at = new Date("2026-10-13T01:04:00Z");
+    const short = { ageMinutes: 40, pathObservedMinutes: 4, pathRet15mPct: 20, pathRet5mPct: 5, mcapUsd: 1 };
+    expect(maskKnownBadInputs(at, short)).toMatchObject({
+      pathRet15mPct: null,
+      pathRet5mPct: null,
+      pathObservedMinutes: 4,
+    });
+    const full = { ageMinutes: 40, pathObservedMinutes: 30, pathRet15mPct: 20 };
+    expect(maskKnownBadInputs(at, full).pathRet15mPct).toBe(20);
+    const young = { ageMinutes: 3, pathObservedMinutes: 2.5, pathRet1mPct: 4 };
+    expect(maskKnownBadInputs(at, young).pathRet1mPct).toBe(4);
+    expect(maskKnownBadInputs(PATH_TAPE_REFILL_SINCE, short).pathRet15mPct).toBe(20);
+  });
+
+  it("reads the sniper share as missing before closed accounts left the top 10", () => {
+    const row = { sniperTop10WalletPct: 40, freshGapPct: 2, mcapUsd: 1 };
+    expect(maskKnownBadInputs(new Date("2026-10-12T18:16:59Z"), row).sniperTop10WalletPct).toBeNull();
+    expect(maskKnownBadInputs(new Date("2026-10-12T18:16:59Z"), row).freshGapPct).toBe(2);
+    expect(maskKnownBadInputs(SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE, row).sniperTop10WalletPct).toBe(40);
+  });
+
+  it("reads hasTwitter and hasWebsite as missing while Pump.fun's coin list was blocked", () => {
+    const row = { hasTwitter: 0, hasTelegram: 0, hasWebsite: 0, freshGapPct: 2 };
+    expect(maskKnownBadInputs(new Date("2026-10-15T01:00:00Z"), row)).toEqual({
+      hasTwitter: null,
+      hasTelegram: 0,
+      hasWebsite: null,
+      freshGapPct: 2,
+    });
+    expect(maskKnownBadInputs(SOCIAL_LIST_OUTAGE.until, row)).toBe(row);
+    expect(maskKnownBadInputs(new Date("2026-10-14T20:59:00Z"), row)).toBe(row);
   });
 
   it("reads volumeAccel's by-construction 12 on young tokens and the 30-second pathRet1mPct as missing before #138", () => {

@@ -58,8 +58,15 @@ export const MIN_BUY_RATIO = 0.55;
  * old, ~2.5% of those one to six hours old, and 0.3% of those six to twenty-four hours old - 27%
  * of the rows for 2% of the wins. A moment past this age is not one a curator is asked about, so
  * it is not banked as an event, not decided on, and (through isDecisionRow) not examined on.
+ *
+ * 360 -> 180 on 2026-10-16 (user decision, notes/data-audit-2026-10-16/age-cap-experiment.md):
+ * walk-forward on 10 days of rows, the 3-hour training set gave the trees AUC 0.591 vs 0.588 and
+ * a top-20% hit of 22.5% vs 21.7% (25% top-25% catch 32.2 vs 30.9), and no cap's model put a
+ * coin over 20 minutes old in its top quarter, so the 3-6 hour rows (8% of decisions, 1% of
+ * training weight's wins) only diluted the fit. The same number caps the gate, the loader and
+ * the exam so what trains is what is decided on.
  */
-export const MAX_EVENT_AGE_MINUTES = 360;
+export const MAX_EVENT_AGE_MINUTES = 180;
 /**
  * Skip-if-unknown risk cap: a token down more than this in the last five minutes is mid-flush,
  * and an alert into a flush is exactly the shape the label's 50%-drawdown clause disqualifies -

@@ -524,10 +524,19 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // views); bring them in by removing them here once a few days of decision rows show they
   // separate runners (notes/audit-2026-10-12/features.md).
   ...NARRATIVE_FEATURES_V7,
-  // Jupiter's live holder count (added 2026-10-13): recorded to be judged first. Bring it in by
-  // removing it here once a few days of decision rows show it separates runners, the
-  // under-five-minute coins above all (notes/hit-catch-2026-10-13/inputs.md).
-  ...JUPITER_EXTRA_FEATURES,
+  // RugCheck's holder count and risk score, and the two holder-growth inputs built on RugCheck's
+  // count readings (data-correctness audit, user ask 2026-10-16, notes/data-audit-2026-10-16):
+  // whether RugCheck had indexed a coin yet decided whether they were filled. They were present on
+  // 99% of decision rows under five minutes old on 10-11, 6% on 10-15 (a cached "not found",
+  // #599) and 49-56% since, so "missing" stood in for "young": rows without them doubled 18.8%
+  // against 7.9% with, the Trees seat scored missing rows about 3x higher, and holderGrowth10mPct
+  // was the largest input of a replica Trees fit. Jupiter's count (jupHolderCount, now read) and
+  // its holder changes are seconds old and fill 93-98% of rows. The safety screen still reads
+  // RugCheck's figures from the scored token.
+  "holderCount",
+  "riskScore",
+  "holderGrowth10mPct",
+  "pathHolderSlope10m",
   // The wallet risk readings (added 2026-10-13): recorded to be judged out of sample first, the
   // models thread's call (notes/hit-catch-2026-10-13/wallet-risk-brief.md). All but
   // walletRiskTop10Max, which the learners read from 2026-10-15 (user decision): on 10 days of
@@ -697,23 +706,96 @@ export const VOLUME_ACCEL_YOUNG_NULL_SINCE = new Date("2026-10-05T15:30:00Z");
 export const WEEKEND_FLAG_FROM = new Date("2026-10-05T00:00:00Z");
 
 /**
+ * Rows anchored before this carry no live fresh-price gap. Jupiter's quote at the scan (the
+ * freshGapPct input, features.ts) started 2026-10-12 16:03 UTC with the first row born rule 4;
+ * older rows got the input later from the candle re-grade (labelRegradeJob.ts), which measures it
+ * on a candle up to 60 s old, from the alert's moved send-time anchor (so it holds the move after
+ * the decision), and only on the rows whose candles it could replay: on decision rows under five
+ * minutes old the 290 it skipped doubled 30.0% against 18.7% (data-correctness audit 2026-10-16,
+ * notes/data-audit-2026-10-16). The market base-rate inputs changed meaning at the same switch:
+ * until then they counted wins graded under rule 3.
+ */
+export const FRESH_QUOTE_GAP_SINCE = new Date("2026-10-12T16:03:00Z");
+const FRESH_RULE_ERA_FEATURES = [
+  "freshGapPct",
+  "mktBaseRate1hPct",
+  "mktBaseRate6hPct",
+] as const satisfies readonly CandidateFeatureName[];
+
+/**
+ * Rows banked before this carry price-path inputs that are missing because of a restart, not the
+ * coin: the in-memory tape emptied on every deploy until #414 (2026-10-13 01:05 UTC) refilled it
+ * from snapshots, so on an older coin "pathRet15mPct missing" meant "tape under 15 minutes" and
+ * read as the retired pathObservedMinutes. Coins 20+ minutes old with under 5 minutes of tape
+ * doubled 11.7% against 4.9% with a full tape. Since the refill a short tape means the coin just
+ * entered the band (live rows read the same), so only the older rows are masked: on those rows,
+ * when the tape is shorter than the coin's age allows, every path input reads as missing.
+ */
+export const PATH_TAPE_REFILL_SINCE = new Date("2026-10-13T01:05:00Z");
+const PATH_TAPE_SLACK_MINUTES = 1;
+const PATH_TAPE_MAX_WINDOW_MINUTES = 30;
+
+/**
+ * While Pump.fun's coin list was blocked (2026-10-14 21:00 to 10-15 08:30 UTC, until #563), coins
+ * discovered elsewhere were stored with hasTwitter / hasWebsite false because nothing had read
+ * their socials (scanJob.ts, `?? false`): the share reading 0 went from 5-9% to 35-50%, and 0
+ * doubled 19.3% against 7.5% for 1. In that window the two bits read as missing.
+ */
+export const SOCIAL_LIST_OUTAGE = {
+  from: new Date("2026-10-14T21:00:00Z"),
+  until: new Date("2026-10-15T08:30:00Z"),
+} as const;
+const SOCIAL_OUTAGE_FEATURES = [
+  "hasTwitter",
+  "hasWebsite",
+] as const satisfies readonly CandidateFeatureName[];
+
+/**
+ * Rows banked before this read the sniper share over a top 10 that still held closed token
+ * accounts (#397, 2026-10-12 18:17 UTC, dropped them): its median stepped from 10 to 30 and the
+ * share of rows at 35%+ from 22.5% to 36.9%, so the older rows carry another scale of the same
+ * input. On them it reads as missing.
+ */
+export const SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE = new Date("2026-10-12T18:17:00Z");
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
  * the create message and is real), the social bits on rows banked before
  * SOCIAL_BITS_FROM_DISCOVERY_SINCE, and before VOLUME_ACCEL_YOUNG_NULL_SINCE volumeAccel on young
  * tokens (as live scoring reads it today) and the 30-second pathRet1mPct, and ctxWeekend before
- * WEEKEND_FLAG_FROM. Returns the same object when nothing applies.
+ * WEEKEND_FLAG_FROM; before FRESH_QUOTE_GAP_SINCE the fresh-price gap and market base rates,
+ * before SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE the sniper share,
+ * before PATH_TAPE_REFILL_SINCE the path inputs on a tape too short for the coin's age, and the
+ * social bits through SOCIAL_LIST_OUTAGE. Returns the same object when nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
   anchorAt: Date,
   features: T,
 ): T {
   const at = anchorAt.getTime();
-  if (at >= SOCIAL_BITS_FROM_DISCOVERY_SINCE.getTime()) return features;
+  const inSocialOutage = at >= SOCIAL_LIST_OUTAGE.from.getTime() && at < SOCIAL_LIST_OUTAGE.until.getTime();
+  if (at >= PATH_TAPE_REFILL_SINCE.getTime() && !inSocialOutage) return features;
   const masked: Record<string, number | null | undefined> = { ...features };
-  for (const name of SOCIAL_BIT_FEATURES) {
+  const clear = (name: string): void => {
     if (masked[name] !== undefined) masked[name] = null;
+  };
+  if (inSocialOutage) SOCIAL_OUTAGE_FEATURES.forEach(clear);
+  if (at >= PATH_TAPE_REFILL_SINCE.getTime()) return masked as T;
+  const age = masked.ageMinutes;
+  const tape = masked.pathObservedMinutes;
+  if (
+    typeof age === "number" &&
+    typeof tape === "number" &&
+    tape < Math.min(age, PATH_TAPE_MAX_WINDOW_MINUTES) - PATH_TAPE_SLACK_MINUTES
+  ) {
+    for (const name of PRICE_PATH_FEATURES) if (name !== "pathObservedMinutes") clear(name);
   }
+  if (at < SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE.getTime()) clear("sniperTop10WalletPct");
+  if (at >= FRESH_QUOTE_GAP_SINCE.getTime()) return masked as T;
+  FRESH_RULE_ERA_FEATURES.forEach(clear);
+  if (at >= SOCIAL_BITS_FROM_DISCOVERY_SINCE.getTime()) return masked as T;
+  SOCIAL_BIT_FEATURES.forEach(clear);
   if (at < VOLUME_ACCEL_YOUNG_NULL_SINCE.getTime()) {
     const age = masked.ageMinutes;
     if (typeof age === "number" && age < VOLUME_ACCEL_MIN_AGE_MINUTES && masked.volumeAccel !== undefined) {
@@ -975,7 +1057,9 @@ export function scoredFromFeatures(
   const replayed: ScoredToken = {
     mintAddress: "(replayed)",
     priceUsd: anchorPriceUsd,
-    marketCapUsd: anchorMcapUsd,
+    // The scan's market cap, as the live gate read it; the row's anchor cap is the fresh quote's
+    // or the candle re-grade's, which can sit well off it.
+    marketCapUsd: num("mcapUsd") ?? anchorMcapUsd,
     liquidityUsd: num("liquidityUsd"),
     volume24hUsd: num("volume24hUsd"),
     volumeToMcapRatio: num("volumeToMcapRatio"),
@@ -1009,6 +1093,9 @@ export function scoredFromFeatures(
     freshTop10WalletPct: num("freshTop10WalletPct"),
     emptyTop10WalletPct: num("emptyTop10WalletPct"),
     sniperTop10WalletPct: num("sniperTop10WalletPct"),
+    // The top-25 fresh-wallet count the live cut reads first (freshWalletShare).
+    freshTopHolderCount: num("freshTopHolderCount"),
+    freshTopHoldersChecked: num("freshTopHoldersChecked"),
     ageMinutes: num("ageMinutes"),
     graduated: bool("graduated"),
     hasTwitter: bool("hasTwitter"),

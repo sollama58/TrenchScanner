@@ -30,6 +30,8 @@ import {
   trainingWeightByAge,
   MAX_EVENT_AGE_MINUTES,
   FRESH_ANCHOR_LABEL_RULE,
+  isCurrentLabelRule,
+  isDecisionRow,
   CANDIDATE_FEATURE_NAMES,
   ALL_NARRATIVE_FEATURES,
   Prisma,
@@ -1042,6 +1044,8 @@ interface LoadedRow {
   peakBeforeStopPriceUsd: number | null;
   hit10xIn1h: boolean | null;
   rule4Grade: unknown;
+  /** Set when the row was born rule 3 and the re-grade rewrote it in place (labelRegradeJob.ts). */
+  rule3Grade: unknown;
 }
 
 /** The grade fields trainingGradeOf reads from a stored rule4Grade. */
@@ -1065,7 +1069,10 @@ type GradedFields = Pick<
  * models called are graded on the same rule as the rest. An alerted row born rule 4 can carry one
  * too: the quote re-grade's candle replay (quoteRegrade.ts), for a coin whose price read $0 while
  * it was watched. That replay is read as well, but the row keeps its own freshGapPct: it is the
- * live quote's gap, already rule 4's. Every other row is returned as it is.
+ * live quote's gap, already rule 4's. A re-graded rule-3 row's freshGapPct reads as missing: the
+ * re-grade measured it on a candle from the alert's moved send-time anchor, after the decision
+ * (maskKnownBadInputs nulls it on every row before FRESH_QUOTE_GAP_SINCE as well). Every other
+ * row is returned as it is.
  */
 export function trainingGradeOf<R extends GradedFields & { features: unknown; rule4Grade: unknown }>(
   r: R,
@@ -1087,10 +1094,15 @@ export function trainingGradeOf<R extends GradedFields & { features: unknown; ru
     peak1hReturnPct: num(grade.peak1hReturnPct),
     peakBeforeStopPriceUsd: num(grade.peakBeforeStopPriceUsd),
     hit10xIn1h: typeof grade.hit10xIn1h === "boolean" ? grade.hit10xIn1h : null,
-    features: born4
-      ? r.features
-      : { ...(r.features as Record<string, number | null>), freshGapPct: num(grade.freshGapPct) },
+    features: born4 ? r.features : { ...(r.features as Record<string, number | null>), freshGapPct: null },
   };
+}
+
+/** A background row of a coin with no trading in its hour: no 1h volume and no 1h buys recorded as 0. */
+export function isFrozenCurveRow(features: unknown): boolean {
+  if (typeof features !== "object" || features === null) return false;
+  const f = features as Record<string, unknown>;
+  return f.volume1hUsd === 0 && f.buys1h === 0;
 }
 
 /** Every name a stored vector can carry, in vector order: the shape withFixedShape builds. */
@@ -1130,12 +1142,20 @@ async function loadRowsOfKind(
 ): Promise<TrainingRow[]> {
   // Background rows are banked across the padded scan band, but no call is ever made outside the
   // curated band: half of them sat under its floor (2026-10-08), teaching a market nobody trades.
+  // Banded on the scan's own market cap, the one the live gate read: the anchor cap is the fresh
+  // quote's, which let 1,459 rows of coins under the $10k floor in (19% of hourly rows, doubling
+  // 18.1% against 8.9%, with inputs no decision row ever lacks) - data-correctness audit 2026-10-16.
   const bandSql =
-    band !== undefined ? Prisma.sql`AND "anchorMcapUsd" BETWEEN ${band.min} AND ${band.max}` : Prisma.empty;
+    band !== undefined
+      ? Prisma.sql`AND COALESCE(("features"::jsonb ->> 'mcapUsd')::float8, "anchorMcapUsd") BETWEEN ${band.min} AND ${band.max}`
+      : Prisma.empty;
   // Decision moments older than the event pre-gate's age cap were banked before the cap existed
   // (2026-10-05): a live decision can no longer be one, so they neither train nor grade.
+  // Background rows are held to the same cap (data-correctness audit 2026-10-16): 27% of them
+  // were coins over six hours old doubling about 1%, a market no decision can come from. The cap
+  // itself is 3 hours since 2026-10-16 (age-cap experiment, same note folder).
   const ageSql =
-    sampleKind === "event"
+    sampleKind === "event" || sampleKind === "hourly"
       ? Prisma.sql`AND COALESCE(("features"::jsonb ->> 'ageMinutes')::float8, 0) <= ${MAX_EVENT_AGE_MINUTES}`
       : Prisma.empty;
   const out: TrainingRow[] = [];
@@ -1153,7 +1173,7 @@ async function loadRowsOfKind(
     const page = await prisma.$queryRaw<LoadedRow[]>`
       SELECT "id", "tokenId", "anchorAt", "features", "labelValue", "anchorPriceUsd",
              "signalPriceUsd", "anchorMcapUsd", "sampleKind", "labelRule", "maxDrawdown1hPct",
-             "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h", "rule4Grade"
+             "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h", "rule4Grade", "rule3Grade"
       FROM "CandidateOutcome"
       WHERE "finalizedAt" IS NOT NULL
         AND "anchorAt" >= ${windowStart}
@@ -1166,12 +1186,27 @@ async function loadRowsOfKind(
       LIMIT ${take}`;
     for (const loaded of page) {
       const r = trainingGradeOf(loaded);
+      // A row the rule-4 re-grade never reached stays out of the fit, as it stays out of the exam:
+      // which rows it skipped depended on the outcome (busy runners outgrew the candle history,
+      // old flat coins never traded), so young skipped decision rows doubled 23.4% against 17.3%
+      // for re-graded ones while skipped hourly rows doubled 3.9% (data-correctness audit
+      // 2026-10-16). Since 2026-10-12 a row is born rule 3 only when the scan had no usable fresh
+      // quote (1-3% of decision rows a day); the re-grade then rewrites it in place.
+      if (!isCurrentLabelRule(r)) continue;
+      // A completed curve nobody trades (no volume, no buys in the hour) reads a frozen market cap
+      // near $49.6k and stale holder figures, and never moves: 5,523 hourly rows on 10-06..10-11
+      // taught the band where live near-graduation coins sit that it never doubles.
+      if (r.sampleKind === "hourly" && isFrozenCurveRow(r.features)) continue;
       // Inputs known to be wrong on old rows (fake order-flow zeros) read as missing.
       const features = maskKnownBadInputs(
         r.anchorAt,
         withFixedShape(r.features as Record<string, number | null>),
       );
-      out.push({
+      // A row re-graded in place (born rule 3 after the fresh quotes began, no usable quote at the
+      // scan) had its fresh-price gap overwritten with the candle re-grade's, measured after the
+      // decision: live, the same no-quote decision carries no gap at all.
+      if (loaded.rule3Grade !== null && features.freshGapPct !== undefined) features.freshGapPct = null;
+      const row: TrainingRow = {
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,
         features,
@@ -1192,7 +1227,11 @@ async function loadRowsOfKind(
         ...runPeakOf(r),
         // The 10x tier, for the exam's 10x part of the score; unknown until the row's hour settles.
         ...(r.hit10xIn1h !== null ? { hit10x: r.hit10xIn1h } : {}),
-      });
+      };
+      // The decision pre-gate's old-coin momentum test (#567) re-applied, as the exam does: the
+      // 1,942 older rows that fail it today doubled 1.8% and held 9.6% of the training weight.
+      if (row.sampleKind === "event" && !isDecisionRow(row)) continue;
+      out.push(row);
     }
     if (page.length < take) break;
     const last = page[page.length - 1]!;
