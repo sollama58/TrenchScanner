@@ -43,6 +43,7 @@ import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
 import { StreamView } from "./components/StreamView";
 import { useAppearance } from "./appearance";
+import { TokenModalHost } from "./components/TokenModalHost";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
@@ -499,6 +500,7 @@ export function App() {
           </a>
         </span>
       </footer>
+      <TokenModalHost />
     </div>
   );
 }

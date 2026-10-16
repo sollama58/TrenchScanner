@@ -206,8 +206,8 @@ export function TokenModal({
       aria-labelledby="tm-title"
       onClose={onClose}
       // A click on the backdrop lands on the dialog element itself; clicks inside land on its content.
-      // Rendered through a portal from the card, so React would bubble the click on to the card's
-      // own click handler (which opens this modal); it stops here.
+      // Rendered through a portal, so React would bubble the click on to whatever rendered it (a
+      // Utilities panel, or the app around a feed card's modal); it stops here.
       onClick={(e) => {
         e.stopPropagation();
         if (e.target === e.currentTarget) ref.current?.close();
