@@ -363,11 +363,11 @@ services:
         value: "30"
       - key: STALE_TOKEN_RETENTION_DAYS
         value: "14"
-      # Retention decided 2026-10-16 (database audit): the trade tape's wallet rows two weeks, every
+      # Retention decided 2026-10-16 (database audit): the trade tape's wallet rows 30 days (wallet risk, a model input, reads them all), every
       # training row 90 days and the ones that doubled (or a curated call points at) 180, the Live
       # feed 30 days with its archive 90 days and the archived runners 180. See env.ts.
       - key: TWA_RETENTION_DAYS
-        value: "14"
+        value: "30"
       - key: CANDIDATE_OUTCOME_RETENTION_DAYS
         value: "90"
       - key: CANDIDATE_OUTCOME_HIT_RETENTION_DAYS
@@ -554,7 +554,7 @@ services:
         value: "14"
       # The same retention as the scanner's block above: the trainer runs the nightly cleanup.
       - key: TWA_RETENTION_DAYS
-        value: "14"
+        value: "30"
       - key: CANDIDATE_OUTCOME_RETENTION_DAYS
         value: "90"
       - key: CANDIDATE_OUTCOME_HIT_RETENTION_DAYS
