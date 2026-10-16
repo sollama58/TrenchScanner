@@ -33,6 +33,11 @@ const logger = createLogger("pipeline-watch");
  * itself, and a trainer that stopped quietly freezes the models and lets the nightly sweeps lapse
  * (the disk-full incidents). Those only notify the admins - restarting the scanner would not
  * help them, and visitors' alerts are not delayed by them.
+ *
+ * The database's size is watched the same way (DB_DISK_ALERT_MB): a full disk stops every write
+ * at once and leaves no room to reclaim space in place, so the warning has to come while there is
+ * still room to act - raise the disk, or run the cleanup early. The size goes on the heartbeat
+ * (databaseMb), so /health/worker shows it between warnings.
  */
 
 export interface FlowCheck {
@@ -85,6 +90,8 @@ export interface Problem {
   text: string;
   /** A trainer job's problem: notified, but not a stall of the alert path (no banner, no restart). */
   trainer?: boolean;
+  /** The database's size: notified and failed like a trainer problem; nothing restarts for it. */
+  capacity?: boolean;
 }
 
 /** The jobs the trainer process runs (see HEARTBEAT_JOB_ROLE), all watched from here. */
@@ -224,6 +231,40 @@ export function findProblems(
   return out;
 }
 
+/**
+ * The database against DB_DISK_ALERT_MB. One problem under a fixed key, so the admins hear once
+ * when the line is crossed and once when the size is back under it, and the strict health check
+ * fails in between (an external monitor's cue).
+ */
+export function findCapacityProblems(databaseBytes: number | null, alertMb: number): Problem[] {
+  if (databaseBytes === null || !(alertMb > 0)) return [];
+  const mb = databaseBytes / 1_048_576;
+  if (mb < alertMb) return [];
+  const gb = (n: number) => (n / 1024).toFixed(1);
+  return [
+    {
+      key: "disk",
+      text:
+        `Database: ${gb(mb)} GB, past the ${gb(alertMb)} GB warning line (DB_DISK_ALERT_MB) - ` +
+        "raise the Postgres disk on Render or free space before writes stop " +
+        "(README: when the database disk is nearly full)",
+      capacity: true,
+    },
+  ];
+}
+
+/** pg_database_size, in bytes; null when the read fails (the other checks still run). */
+async function databaseBytes(): Promise<number | null> {
+  try {
+    const [row] = await prisma.$queryRaw<{ bytes: bigint }[]>`
+      SELECT pg_database_size(current_database()) AS bytes`;
+    return row ? Number(row.bytes) : null;
+  } catch (err) {
+    logger.warn("database size not read", { error: String(err) });
+    return null;
+  }
+}
+
 async function countFlows(now: number): Promise<FlowCheck[]> {
   const DAY = 24 * 3_600_000;
   const out: FlowCheck[] = [];
@@ -334,8 +375,9 @@ async function adminChats(env: Env): Promise<bigint[]> {
 
 export function notificationText(started: Problem[], cleared: string[], still: Problem[]): string {
   const lines: string[] = [];
-  const stalled = started.filter((p) => !p.trainer);
+  const stalled = started.filter((p) => !p.trainer && !p.capacity);
   const trainer = started.filter((p) => p.trainer);
+  const capacity = started.filter((p) => p.capacity);
   if (stalled.length > 0) {
     lines.push("<b>⚠️ TrenchScanner pipeline stalled</b>");
     for (const p of stalled) lines.push(`• ${escapeHtml(p.text)}`);
@@ -344,6 +386,11 @@ export function notificationText(started: Problem[], cleared: string[], still: P
     if (lines.length > 0) lines.push("");
     lines.push("<b>⚠️ TrenchScanner trainer needs a look</b>");
     for (const p of trainer) lines.push(`• ${escapeHtml(p.text)}`);
+  }
+  if (capacity.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("<b>⚠️ TrenchScanner database is filling up</b>");
+    for (const p of capacity) lines.push(`• ${escapeHtml(p.text)}`);
   }
   if (cleared.length > 0) {
     if (lines.length > 0) lines.push("");
@@ -470,16 +517,22 @@ async function watchOnce(
   const now = deps.now ?? Date.now();
   const before = await previousState();
   remember(before);
-  const [flows, jobs, trainerJobs, cursor] = await Promise.all([
+  const [flows, jobs, trainerJobs, cursor, dbBytes] = await Promise.all([
     countFlows(now),
     readJobs(),
     readTrainerJobs(),
     oldestChatCursor(),
+    databaseBytes(),
   ]);
-  const problems = [...findProblems(flows, jobs, now, cursor), ...findTrainerProblems(trainerJobs, now)];
+  const problems = [
+    ...findProblems(flows, jobs, now, cursor),
+    ...findTrainerProblems(trainerJobs, now),
+    ...findCapacityProblems(dbBytes, env.DB_DISK_ALERT_MB),
+  ];
   // Only the alert path's own problems are a stall: they alone start the clock towards the
-  // visitors' banner and the scanner restart, neither of which a trainer job's problem calls for.
-  const stalls = problems.filter((p) => !p.trainer);
+  // visitors' banner and the scanner restart, neither of which a trainer job's problem or a
+  // filling disk calls for.
+  const stalls = problems.filter((p) => !p.trainer && !p.capacity);
   const keys = new Set(problems.map((p) => p.key));
   const started = problems.filter((p) => !before.keys.has(p.key));
   const cleared = clearedKeys(before.keys, keys);
@@ -529,6 +582,7 @@ async function watchOnce(
     stalledSince: stalledSince === null ? null : new Date(stalledSince).toISOString(),
     warned,
     lastRestartAt: lastRestartAt === null ? null : new Date(lastRestartAt).toISOString(),
+    databaseMb: dbBytes === null ? null : Math.round(dbBytes / 1_048_576),
     flows: Object.fromEntries(flows.map((f) => [f.key, f.recent])),
   };
   if (problems.length > 0) {
