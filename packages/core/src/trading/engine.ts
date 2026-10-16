@@ -1673,7 +1673,7 @@ export async function gateOnAiVerdicts(
  * open elsewhere (it may yet commit a row stamped earlier) - but never more than 20s behind. Our
  * own lock's transaction is left out of that.
  */
-async function signalHorizon(now: Date): Promise<Date> {
+export async function signalHorizon(now: Date): Promise<Date> {
   const grace = new Date(now.getTime() - SIGNAL_COMMIT_GRACE_MS);
   try {
     const [row] = await prisma.$queryRaw<{ oldest: Date | null }[]>`

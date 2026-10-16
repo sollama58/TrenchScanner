@@ -49,6 +49,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     await capped?.close();
     if (!dbAvailable) return;
     const userIds = [ids.admin, ids.user].filter(Boolean);
+    await prisma.paperStrategy.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.tradingWithdrawal.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.tradingPosition.deleteMany({ where: { userId: { in: userIds } } });
     await prisma.tradingBot.deleteMany({ where: { userId: { in: userIds } } });
@@ -264,6 +265,100 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(
       (await app.inject({ method: "PUT", url: "/trading/bot", payload: {}, ...as("user") })).statusCode,
     ).toBe(403);
+  });
+
+  it("runs paper trading while the bot is off: admins only, at most three running at once", async () => {
+    const url = "/trading/paper";
+    expect((await off.inject({ method: "GET", url, ...as("user") })).statusCode).toBe(403);
+    expect((await off.inject({ method: "POST", url, payload: {}, ...as("user") })).statusCode).toBe(403);
+    const created: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const res = await off.inject({
+        method: "POST",
+        url,
+        payload: { name: `S${i}`, bankrollSol: 5, config: { sources: { models: ["rules", "nope"] } } },
+        ...as("admin"),
+      });
+      expect(res.statusCode).toBe(200);
+      created.push(res.json().id);
+    }
+    for (const id of created.slice(0, 3)) {
+      const res = await off.inject({
+        method: "PATCH",
+        url: `${url}/${id}`,
+        payload: { running: true },
+        ...as("admin"),
+      });
+      expect(res.statusCode).toBe(200);
+    }
+    const fourth = await off.inject({
+      method: "PATCH",
+      url: `${url}/${created[3]}`,
+      payload: { running: true },
+      ...as("admin"),
+    });
+    expect(fourth.statusCode).toBe(409);
+    expect(fourth.json().error).toMatch(/at most 3/);
+    // Stopping one frees a slot.
+    await off.inject({
+      method: "PATCH",
+      url: `${url}/${created[0]}`,
+      payload: { running: false },
+      ...as("admin"),
+    });
+    expect(
+      (
+        await off.inject({
+          method: "PATCH",
+          url: `${url}/${created[3]}`,
+          payload: { running: true },
+          ...as("admin"),
+        })
+      ).statusCode,
+    ).toBe(200);
+
+    const list = (await off.inject({ method: "GET", url, ...as("admin") })).json();
+    expect(list.maxRunning).toBe(3);
+    expect(list.strategies).toHaveLength(4);
+    const first = list.strategies[0];
+    expect(first.bankrollLamports).toBe("5000000000");
+    expect(first.cashLamports).toBe("5000000000");
+    // Unknown models are dropped.
+    expect(first.config.sources.models).toEqual(["rules"]);
+    expect(first.stats.entries).toBe(0);
+
+    // No caps on the settings beyond what keeps them meaningful.
+    const big = await off.inject({
+      method: "PATCH",
+      url: `${url}/${created[1]}`,
+      payload: {
+        config: { buySol: 500, maxDailySpendSol: 10_000, maxOpenPositions: 1000, fillPenaltyBps: 250 },
+      },
+      ...as("admin"),
+    });
+    expect(big.statusCode).toBe(200);
+    expect(big.json().config).toMatchObject({ buySol: 500, fillPenaltyBps: 250 });
+
+    // Another admin's strategy is not yours; a reset refills the bankroll; delete removes it.
+    expect(
+      (
+        await off.inject({
+          method: "POST",
+          url: `${url}/${created[1]}/reset`,
+          payload: { bankrollSol: 2 },
+          ...as("admin"),
+        })
+      ).statusCode,
+    ).toBe(200);
+    const reset = await prisma.paperStrategy.findUniqueOrThrow({ where: { id: created[1]! } });
+    expect(reset.cashLamports).toBe(2_000_000_000n);
+    expect(
+      (await off.inject({ method: "DELETE", url: `${url}/${created[1]}`, ...as("admin") })).statusCode,
+    ).toBe(200);
+    expect(
+      (await off.inject({ method: "DELETE", url: `${url}/${created[1]}`, ...as("admin") })).statusCode,
+    ).toBe(404);
+    await prisma.paperStrategy.deleteMany({ where: { userId: ids.admin } });
   });
 
   describe("the server wallet", () => {

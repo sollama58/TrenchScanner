@@ -24,6 +24,7 @@ import {
   type BacktestRow,
   type Env,
 } from "@trenchscanner/core";
+import { registerPaperTradingRoutes } from "./paperTrading.js";
 
 /**
  * The trading bot's section of the Admin tab, in two scopes:
@@ -45,9 +46,9 @@ import {
  * withdrawing refuse sessions from a paired phone (QR device link): those tokens live a year on a
  * device. The server's optional ceilings (TRADING_MAX_*), where set, bound whatever the settings say.
  *
- * With TRADING_BOT_ENABLED off only GET /trading/status and /trading/backtest are registered (admins: what the bot
- * would need to run, and the limits it would run under); every other route answers 404, so no
- * wallet can be created, no bot changed and nothing sold or withdrawn.
+ * With TRADING_BOT_ENABLED off only GET /trading/status, /trading/backtest and the paper-trading
+ * routes (/trading/paper, simulated: see paperTrading.ts) are registered; every other route answers
+ * 404, so no wallet can be created, no bot changed and nothing sold or withdrawn.
  */
 
 const MAX_POSITIONS_SHOWN = 100;
@@ -163,6 +164,8 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     }
     return { days, models: await hit.rows };
   });
+  // Paper trading holds no wallet and moves nothing: there whether or not the bot is on.
+  await app.register((paper) => registerPaperTradingRoutes(paper, { env, admins }), { prefix: "/paper" });
   if (!env.TRADING_BOT_ENABLED) return;
   const rpc = new TradingRpc({
     rpcUrl: env.SOLANA_RPC_URL || undefined,
