@@ -733,6 +733,9 @@ export async function registerCuratedRoutes(
     const day1 = new Date(Date.now() - 86_400_000);
     const day7 = new Date(Date.now() - 7 * 86_400_000);
     const day30 = new Date(Date.now() - 30 * 86_400_000);
+    // Past CANDIDATE_OUTCOME_RETENTION_DAYS the cleanup keeps only the rows that doubled, so the
+    // base rate counts only the horizon that still holds the losers too.
+    const baseRateFrom = new Date(Date.now() - opts.env.CANDIDATE_OUTCOME_RETENTION_DAYS * 86_400_000);
     // The feed figures describe the default feed - what a subscriber who hasn't picked sees. The
     // contest's per-model records are the leaderboard's (/curated/models).
     const state = await contestState(opts.env);
@@ -753,7 +756,8 @@ export async function registerCuratedRoutes(
             SELECT count(*) FILTER (WHERE "finalizedAt" IS NOT NULL) AS finalized,
                    count(*) FILTER (WHERE "labelValue" > 0) AS winners
             FROM "CandidateOutcome"
-            WHERE "sampleKind" = 'event' AND ${walletSafetyCutsSql()}`,
+            WHERE "sampleKind" = 'event' AND ${walletSafetyCutsSql()}
+              AND "anchorAt" >= ${baseRateFrom}`,
       ),
       prisma.candidateOutcome.count({ where: { anchorAt: { gte: day7 } } }),
       defaultRow

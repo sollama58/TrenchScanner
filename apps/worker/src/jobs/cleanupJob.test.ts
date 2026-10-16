@@ -502,6 +502,39 @@ describe.skipIf(!dbAvailable)("runCleanupJob: tracked snapshot downsampling", ()
     ).toEqual([10, 30]);
     expect(left.filter((s) => s.takenAt.getTime() > Date.now() - DAY)).toHaveLength(3);
   });
+
+  it("keeps the newest row carrying a holder list, but not an older one", async () => {
+    const token = await prisma.token.create({
+      data: { mintAddress: `${TAG}-b`, firstSeenAt: new Date(Date.now() - 20 * DAY), lastLiveAt: new Date() },
+    });
+    const bucketStart = Math.floor((Date.now() - 10 * DAY) / 300_000) * 300_000;
+    const list = [{ wallet: "w", pct: 1 }];
+    await prisma.tokenSnapshot.createMany({
+      data: [
+        { tokenId: token.id, priceUsd: 1, marketCapUsd: 30, takenAt: new Date(bucketStart) },
+        {
+          tokenId: token.id,
+          priceUsd: 1,
+          marketCapUsd: 10,
+          takenAt: new Date(bucketStart + 30_000),
+          linkedHolders: list,
+        },
+        {
+          tokenId: token.id,
+          priceUsd: 1,
+          marketCapUsd: 20,
+          takenAt: new Date(bucketStart + 60_000),
+          linkedHolders: list,
+        },
+        { tokenId: token.id, priceUsd: 1, marketCapUsd: 15, takenAt: new Date(bucketStart + 90_000) },
+      ],
+    });
+
+    await runCleanupJob(env, { rowsPerBatch: 10, tokensPerBatch: 5, pauseMs: 0, fullSnapshotWalk: true });
+
+    const left = await prisma.tokenSnapshot.findMany({ where: { tokenId: token.id } });
+    expect(left.map((s) => s.marketCapUsd).sort()).toEqual([20, 30]);
+  });
 });
 
 /**

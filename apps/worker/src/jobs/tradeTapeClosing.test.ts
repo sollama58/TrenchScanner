@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { associatedTokenAddress, prisma, type ChainTx, type TapeTrade } from "@trenchscanner/core";
 import {
   CLOSING_AFTER_ANCHOR_MS,
+  closingSupplyTokens,
   foldClosingTrades,
   resetClosingState,
   runClosingLane,
@@ -14,6 +15,16 @@ import {
 } from "./tradeTapeClosing.js";
 
 const MIN = 60_000;
+
+describe("closingSupplyTokens", () => {
+  it("reads a burned Pump.fun supply, and the billion without a usable one", () => {
+    expect(closingSupplyTokens("800000000000000")).toBe(800_000_000);
+    expect(closingSupplyTokens(undefined)).toBe(1_000_000_000);
+    expect(closingSupplyTokens("0")).toBe(1_000_000_000);
+    // Not a burned Pump.fun coin (9 decimals): the billion stands.
+    expect(closingSupplyTokens("1000000000000000000")).toBe(1_000_000_000);
+  });
+});
 
 describe("foldClosingTrades", () => {
   const row: ClosingRow = {

@@ -167,13 +167,13 @@ export function fromAlertText(readAtMs: number, alertAtMs: number, what: string)
  * Same minute, CEX-funded) stays the snapshot's: the top 50 is for the picture only.
  */
 export function withWideMap<
-  S extends Pick<Snapshot, "linkedClusters" | "linkedHolders" | "sameTimeClusters">,
+  S extends Pick<Snapshot, "linkedClusters" | "linkedHolders" | "sameTimeClusters" | "linkedWalletCount">,
 >(snapshot: S, wide: WideMap | null | undefined): S & WideReading {
   if (!wide || !Array.isArray(wide.holders) || wide.holders.length === 0) return snapshot;
   return {
     ...snapshot,
     // What the scan counted as linked, and how many holders the wider read listed (mapLinked).
-    scanLinkedWallets: clusterWallets(snapshot.linkedClusters),
+    scanLinkedWallets: scanLinkedOf(snapshot),
     holdersRead: wide.holdersRead,
     linkedHolders: withTraits(wide.holders, snapshot.linkedHolders),
     linkedClusters: Array.isArray(wide.clusters) ? wide.clusters : [],
@@ -247,6 +247,22 @@ function withTraits(holders: WideHolder[], read: Snapshot["linkedHolders"] | und
 
 function clusterWallets(clusters: Snapshot["linkedClusters"] | undefined): string[] {
   return [...new Set((clusters ?? []).flatMap((c) => (c?.wallets ?? []).map((w) => w.wallet)))];
+}
+
+/**
+ * The wallets the scan's Linked count took in: its clusters' and, since 2026-10-13, its same-minute
+ * groups' (core's linkedWallets counts each holder once). A scan from before then counted only the
+ * clusters, so its count falls short of the two together and the clusters alone stand.
+ */
+function scanLinkedOf(
+  s: Pick<Snapshot, "linkedClusters" | "sameTimeClusters" | "linkedWalletCount">,
+): string[] {
+  const clusters = clusterWallets(s.linkedClusters);
+  const both = new Set([
+    ...clusters,
+    ...(s.sameTimeClusters ?? []).flatMap((g) => (g?.wallets ?? []).map((w) => w.wallet)),
+  ]);
+  return s.linkedWalletCount != null && s.linkedWalletCount >= both.size ? [...both] : clusters;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -691,7 +707,7 @@ export function buildGraph(
     sameTimeCount: sameTimeCount(snapshot),
     linkedPct: snapshot.linkedWalletPct ?? null,
     linkedCount: linkedCount(snapshot),
-    scanLinked: new Set(snapshot.scanLinkedWallets ?? clusterWallets(snapshot.linkedClusters)),
+    scanLinked: new Set(snapshot.scanLinkedWallets ?? scanLinkedOf(snapshot)),
     holdersRead: snapshot.holdersRead ?? null,
     top10Pct: top10,
   };

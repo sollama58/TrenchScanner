@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
 import {
   BoltIcon,
@@ -320,7 +320,10 @@ function TradingConsole() {
   const [scope, setScopeState] = useState<Scope>(storedScope);
   const [state, setState] = useState<TradingState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The scope shown now: a response for the other one, still in flight at a switch, is dropped.
+  const scopeRef = useRef(scope);
   const setScope = (next: Scope) => {
+    scopeRef.current = next;
     setScopeState(next);
     setState(null);
     try {
@@ -332,9 +335,12 @@ function TradingConsole() {
 
   const reload = useCallback(async () => {
     try {
-      setState(await api<TradingState>(base(scope)));
+      const res = await api<TradingState>(base(scope));
+      if (scopeRef.current !== scope) return;
+      setState(res);
       setLoadError(null);
     } catch (err) {
+      if (scopeRef.current !== scope) return;
       // The server wallet is for admins: anyone else lands back on their own.
       if (scope === "server" && err instanceof ApiError && err.status === 403) return setScope("own");
       setLoadError(
@@ -1178,16 +1184,21 @@ const REASON: Record<string, string> = {
 function PositionsPanel({ state, reload }: { state: TradingState; reload: () => Promise<void> }) {
   const now = useNow(15_000);
   const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
   const open = state.positions.filter(
     (p) => p.status === "open" || p.status === "buying" || p.status === "stuck",
   );
   const act = async (path: string, ask: string) => {
     if (!confirm(ask)) return;
     setBusy(true);
+    setMsg(null);
     try {
       await api(path, { method: "POST" });
-      await reload();
+    } catch (err) {
+      // A position sold or closed since the last refresh, say: the reload shows it as it is.
+      setMsg(errorText(err));
     } finally {
+      await reload();
       setBusy(false);
     }
   };
@@ -1217,6 +1228,7 @@ function PositionsPanel({ state, reload }: { state: TradingState; reload: () => 
           </button>
         )}
       </header>
+      {msg && <p className="error small">{msg}</p>}
       {state.positions.length === 0 ? (
         <p className="muted small">No trades yet.</p>
       ) : (

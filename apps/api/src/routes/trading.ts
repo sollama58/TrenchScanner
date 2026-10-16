@@ -412,15 +412,25 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     return { enabled: bot.enabled, config: readTradingBotConfig(bot.config) };
   };
 
+  /**
+   * A requested sale doesn't wait out a failure backoff (up to hours after many failed sales):
+   * the next pass tries it. An exit claim (at most a minute ahead) is left alone, so a sale in
+   * flight is not sent twice.
+   */
+  const sellSoon = (where: Prisma.TradingPositionWhereInput) =>
+    prisma.tradingPosition.updateMany({
+      where: { ...where, nextAttemptAt: { gt: new Date(Date.now() + 60_000) } },
+      data: { nextAttemptAt: new Date() },
+    });
+
   const sellOne =
     (scope: Scope) => async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       if (scope === "server" && !requireAdmin(request, reply, false)) return;
       const owner = await ownerFor(scope, request);
-      const updated = await prisma.tradingPosition.updateMany({
-        where: { id: request.params.id, userId: owner.userId, status: { in: ["open", "stuck"] } },
-        data: { closeRequested: true },
-      });
+      const where = { id: request.params.id, userId: owner.userId, status: { in: ["open", "stuck"] } };
+      const updated = await prisma.tradingPosition.updateMany({ where, data: { closeRequested: true } });
       if (updated.count === 0) return reply.code(404).send({ error: "no open position with that id" });
+      await sellSoon(where);
       return { ok: true };
     };
 
@@ -429,10 +439,9 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     if (scope === "server" && !requireAdmin(request, reply, false)) return;
     const { userId } = await ownerFor(scope, request);
     await prisma.tradingBot.updateMany({ where: { userId }, data: { enabled: false } });
-    const updated = await prisma.tradingPosition.updateMany({
-      where: { userId, status: { in: ["open", "stuck"] } },
-      data: { closeRequested: true },
-    });
+    const where = { userId, status: { in: ["open", "stuck"] } };
+    const updated = await prisma.tradingPosition.updateMany({ where, data: { closeRequested: true } });
+    await sellSoon(where);
     return { ok: true, positions: updated.count };
   };
 

@@ -121,8 +121,10 @@ describe.skipIf(!dbAvailable)("feed stats", () => {
         peak24hReturnPct: 120,
         simReturnPct: 60,
         // Token B ran on after the call's watch: a later scan saw it at 12x the call's market cap,
-        // which the worker's peak pass banked on the call.
+        // which the worker's peak pass banked on the call - after the filter alert, so it counts
+        // on the folded card (re-based onto the filter alert's price, the same $50K here).
         peakMcapUsd: 600_000,
+        peakMcapAt: ago(30),
       },
     });
     app = await buildServer(env);

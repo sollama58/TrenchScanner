@@ -53,6 +53,18 @@ export function lookupRequired(err: unknown): err is ApiError {
   );
 }
 
+/**
+ * Fired on `window` when a gated route answers 402 subscription_required: the reader's access has
+ * ended (a lapsed subscription, a Free Access period run out or switched off). AccessGate re-checks
+ * /subscription on it instead of waiting for its own slow poll.
+ */
+export const ACCESS_ENDED_EVENT = "ts:access-ended";
+
+/** A 402 from the access gate, not a paid lookup's (lookupRequired). */
+export function accessEnded(status: number, body: unknown): boolean {
+  return status === 402 && (body as { error?: unknown } | null)?.error === "subscription_required";
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = authHeaders(new Headers(init.headers));
   if (init.body !== undefined && !headers.has("content-type"))
@@ -75,6 +87,9 @@ export async function parse<T>(res: Response): Promise<T> {
       typeof body === "object" && body !== null && "error" in body
         ? String((body as { error: unknown }).error)
         : res.statusText;
+    if (accessEnded(res.status, body) && typeof window !== "undefined") {
+      window.dispatchEvent(new Event(ACCESS_ENDED_EVENT));
+    }
     throw new ApiError(res.status, message, body);
   }
   return body as T;
@@ -334,6 +349,8 @@ export interface CuratedMeta {
   peakPct?: number | null;
   /** That Peak as a market cap, null until it traded above the call (absent from older API builds). */
   peakMcapUsd?: number | null;
+  /** When that Peak came; null when unknown (absent from older API builds). */
+  peakAt?: string | null;
   /** The Narrative seat's later view of the call, once the deep read decided; null until then. */
   narrative?: { verdict: "agrees" | "warns"; at: string } | null;
   aiReview?: AdminAiReview;

@@ -453,7 +453,13 @@ async function runStrategyEntries(
     horizon,
     strategy.configSavedAt,
   );
-  const { outcomes, through } = await gateOnAiVerdicts(loaded.signals, loaded.through, config, now);
+  const { outcomes, through } = await gateOnAiVerdicts(
+    strategy.id,
+    loaded.signals,
+    loaded.through,
+    config,
+    now,
+  );
   // Consumed whatever happens to its signals; never moved back over a start or save made meanwhile.
   await prisma.paperStrategy.updateMany({
     where: { id: strategy.id, signalsFrom: { lt: through } },

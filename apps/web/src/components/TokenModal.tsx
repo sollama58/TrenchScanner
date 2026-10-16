@@ -12,7 +12,7 @@ import {
   type AlertWideMap,
   type BubbleMoment,
 } from "../bubbleMap";
-import { cachedGet, invalidate } from "../cache";
+import { cachedGet } from "../cache";
 import {
   createContext,
   useContext,
@@ -75,7 +75,7 @@ import { WeekChart } from "./WeekChart";
 import { Skeleton } from "./Charts";
 import { LoadingNote, LoadSteps, SkelValue, Spinner, useElapsed } from "./Loading";
 import { openWallet } from "../walletModal";
-import { BubbleMapPlaceholder, BubbleMapSection, useBubbleMaps } from "./BubbleMap";
+import { BubbleMapPlaceholder, BubbleMapSection, reloadBubbleMaps, useBubbleMaps } from "./BubbleMap";
 import { TopHolders } from "./TopHolders";
 import { WalletText } from "./WalletText";
 import { FilterGlyph } from "./FilterBadge";
@@ -469,7 +469,11 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const outcome = cardOutcome(card, now);
   const badge = outcomeBadge(outcome);
   const showVerdict = outcome !== null && !(outcome.status === "watching" && !outcome.hit2x);
-  const alertAt = Date.parse(curated?.alertedAt ?? card.matchedAt);
+  // The moment the card shows: a filter alert a call folded into keeps the filter alert's time, as
+  // its price and verdict are that alert's; its calls are drawn on the chart at their own times.
+  const alertAt = Date.parse(
+    card.kind === "curated" ? (curated?.alertedAt ?? card.matchedAt) : card.matchedAt,
+  );
   const alertMcap = s.marketCapUsd;
   const nowMcap = nowReading(card);
   const move = change(alertMcap, nowMcap);
@@ -478,7 +482,13 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const hasPeak = peak !== null && peak > 0;
   const label = tokenLabel(card.token);
   const utility = useContext(UtilityContext);
-  const what = utility ? "Scanned" : card.kind === "stream" ? "Passed screen" : curated ? "Called" : "Alert";
+  const what = utility
+    ? "Scanned"
+    : card.kind === "stream"
+      ? "Passed screen"
+      : card.kind === "curated"
+        ? "Called"
+        : "Alert";
   // One poll for the chart and the wallet sections that read the same answer.
   /** The lookup's fresh scan (holders, safety checks) is still on its way. */
   const scanning = utility?.scan === "scanning";
@@ -995,7 +1005,7 @@ function useFilterCatchKept(card: Card, utility: boolean) {
       matchId: card.id,
     })
       .then((r) => {
-        if (r?.result === "kept") invalidate(`/tokens/${encodeURIComponent(mint)}/bubble-holders`);
+        if (r?.result === "kept") reloadBubbleMaps(mint);
       })
       .catch(() => {
         // Nothing to show for it: the next opening tries again.
@@ -1031,7 +1041,7 @@ interface HoldersOption {
  */
 function useHoldersView(card: Card, linked: Snapshot | null | undefined, alertAt: number, utility: boolean) {
   /** What the moment is called: a model's call, or a filter's alert. */
-  const word: "call" | "alert" = card.curated ? "call" : "alert";
+  const word: "call" | "alert" = card.kind === "curated" ? "call" : "alert";
   const maps = useBubbleMaps(card.token.mintAddress);
   const [picked, setPicked] = useState<HoldersView>(lastHoldersView);
   const s = card.snapshot;
@@ -1239,14 +1249,21 @@ function ChartCard({
 
   const events = useMemo<ChartEvent[]>(() => {
     const out: ChartEvent[] = [{ t: alertAt, label: what, mcap: alertMcap > 0 ? alertMcap : null }];
-    // Every other model that called it, once each, at its own call time.
-    for (const c of card.curated?.calledBy ?? []) {
+    // Every other model that called it, once each, at its own call time - on a filter alert a
+    // call folded into, its call(s) too.
+    const curated = card.curated;
+    const calls = curated?.calledBy?.length
+      ? curated.calledBy
+      : card.kind === "match" && curated
+        ? [{ alertedAt: curated.alertedAt, modelName: curated.modelName ?? null }]
+        : [];
+    for (const c of calls) {
       const t = Date.parse(c.alertedAt);
       if (!Number.isFinite(t) || Math.abs(t - alertAt) < 30_000) continue;
       out.push({ t, label: c.modelName ?? "Model" });
     }
     return out;
-  }, [alertAt, alertMcap, what, card.curated?.calledBy]);
+  }, [alertAt, alertMcap, what, card.kind, card.curated]);
 
   // A call card's alert price is the call's own anchor; a filter alert's can be a scan's reading.
   const callPriced = card.kind === "curated" && alertMcap > 0;

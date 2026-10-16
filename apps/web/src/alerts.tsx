@@ -227,6 +227,29 @@ const NOTIFIED_KEEP = 200;
 const cardKey = (c: Card) => `${c.kind}:${c.id}`;
 
 /**
+ * When a card became news: its own time, or for a filter alert wearing a model's call (folded, or
+ * every card of "Only alerts both caught") the latest of that and its calls. Such a card first
+ * shows when its second half lands - often a call after the filter alert - and keeps the filter
+ * alert's older time, which alone read as a card brought in by a change and was learned silently.
+ */
+export function raisedAt(c: Card): number {
+  const at = Date.parse(c.matchedAt);
+  if (c.kind !== "match" || !c.curated) return at;
+  const calls = c.curated.calledBy?.length ? c.curated.calledBy : [c.curated];
+  return Math.max(at, ...calls.map((k) => Date.parse(k.alertedAt)));
+}
+
+/**
+ * Whether the reader's choices want this card announced. A filter alert wearing a call is both,
+ * so either choice does: with "Only alerts both caught" every card is one, and a reader who
+ * wants model calls alone heard nothing.
+ */
+export function wantedBy(c: Card, notifyOn: AlertPrefs["notifyOn"]): boolean {
+  if (c.kind === "curated") return notifyOn.modelCalls;
+  return notifyOn.filterMatches || (c.curated !== null && notifyOn.modelCalls);
+}
+
+/**
  * Claims `keys` for this browser tab, so two open tabs don't both ping for the same alert.
  * Returns the keys no other tab has claimed.
  */
@@ -273,8 +296,8 @@ export function AlertNotifier() {
 
   const notifies = prefs !== null && prefs.browserNotifications && notificationState() === "granted";
   const active = prefs !== null && (prefs.soundEnabled || notifies);
-  const wantsMatches = active && prefs!.notifyOn.filterMatches;
-  const wantsCalls = active && prefs!.notifyOn.modelCalls;
+  // Either stream can complete a card both caught (wantedBy), so either choice listens to both.
+  const listens = active && (prefs!.notifyOn.filterMatches || prefs!.notifyOn.modelCalls);
 
   // Browsers only allow sound after an interaction with the page: unlock on the first one.
   useEffect(() => {
@@ -309,11 +332,7 @@ export function AlertNotifier() {
         for (const c of fresh) seen.current.add(cardKey(c));
         if (!p) return;
         const raisedAfter = Math.max(now - FRESH_MS, previousLook - SINCE_LAST_LOOK_SLACK_MS);
-        const news = fresh.filter(
-          (c) =>
-            new Date(c.matchedAt).getTime() > raisedAfter &&
-            (c.kind === "curated" ? p.notifyOn.modelCalls : p.notifyOn.filterMatches),
-        );
+        const news = fresh.filter((c) => raisedAt(c) > raisedAfter && wantedBy(c, p.notifyOn));
         const mine = new Set(claim(news.map(cardKey)));
         const toAnnounce = news.filter((c) => mine.has(cardKey(c)));
         if (toAnnounce.length === 0) return;
@@ -355,8 +374,8 @@ export function AlertNotifier() {
     else look(-1);
   }, [look]);
 
-  const matchesLive = useNudgeStream("/matches/stream", check, wantsMatches, true);
-  const callsLive = useNudgeStream("/curated/stream", check, wantsCalls, true);
+  const matchesLive = useNudgeStream("/matches/stream", check, listens, true);
+  const callsLive = useNudgeStream("/curated/stream", check, listens, true);
 
   useEffect(() => {
     if (!active) {
@@ -366,10 +385,10 @@ export function AlertNotifier() {
     if (!busy.current) look(0);
     const timer = window.setInterval(() => {
       // Streams up: they say when to look. Otherwise look on a timer.
-      if (!((!wantsMatches || matchesLive) && (!wantsCalls || callsLive))) check();
+      if (listens && !(matchesLive && callsLive)) check();
     }, CHECK_EVERY_MS);
     return () => window.clearInterval(timer);
-  }, [active, wantsMatches, wantsCalls, matchesLive, callsLive, check, look]);
+  }, [active, listens, matchesLive, callsLive, check, look]);
 
   return null;
 }

@@ -446,9 +446,10 @@ async function main() {
       { runEarly: onRunNow("burn-scan") },
     ),
   );
-  // Free Access's end: once a period has run out (or an admin switched it off and the API's own
-  // cleanup didn't finish), deletes the accounts it created that nothing retains - see
-  // freeAccess.ts in core. A read of one row on every other pass.
+  // Free Access's end: an hour after a period runs out or an admin switches it off
+  // (freeAccessCleanupAt), deletes the accounts it created that nothing retains - see
+  // freeAccess.ts in core. This is the only place the cleanup runs. A read of one row on every
+  // other pass.
   schedule("free-access", () =>
     scheduleInterval(
       "free-access",

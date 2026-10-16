@@ -144,7 +144,7 @@ describe("withTransferLabels", () => {
   const run = [0, 5 * H, 10 * H, 20 * H];
 
   it("adds wallets with 4 transfers in 48 hours, and marks the ones already labeled", () => {
-    const labeled = [{ wallet: "B", pct: 90, shared: 30, coins: 30, hours: 48, name: "WALLET_1" }];
+    const labeled = [{ wallet: "B", pct: 90, shared: 30, coins: 30, hours: 24, name: "WALLET_1" }];
     const out = withTransferLabels(
       "WALLETXYZ",
       labeled,
@@ -158,7 +158,17 @@ describe("withTransferLabels", () => {
       new Set(),
     );
     expect(out).toEqual([
-      { wallet: "B", pct: 90, shared: 30, coins: 30, hours: 48, name: "WALLET_1", transfers: 4 },
+      // Labeled on the 24-hour buying tier; its transfers met the 48-hour one.
+      {
+        wallet: "B",
+        pct: 90,
+        shared: 30,
+        coins: 30,
+        hours: 24,
+        name: "WALLET_1",
+        transfers: 4,
+        transferHours: 48,
+      },
       { wallet: "C", pct: 0, shared: 0, coins: 0, hours: 48, name: "WALLET_2", transfers: 4 },
     ]);
     expect(labeled[0]).not.toHaveProperty("transfers");

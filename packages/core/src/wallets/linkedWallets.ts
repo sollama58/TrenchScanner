@@ -381,7 +381,7 @@ export function linkedWallets(
     const inside = new Set(members.map((m) => m.owner));
     const transfers = links.filter((t) => inside.has(t.from)).length;
     clusters.push({
-      funder: clusterFunder(members, funderOf, isHolder, sentBy),
+      funder: clusterFunder(members, funderOf, isHolder, usable, sentBy),
       wallets: members.map((m) => ({ wallet: m.owner, pct: round2(m.pct) })),
       pct: round2(members.reduce((s, m) => s + m.pct, 0)),
       creatorLinked: members.some((m) => tiedToCreator(m.owner)),
@@ -420,12 +420,15 @@ function clusterFunder(
   members: readonly { owner: string }[],
   funderOf: ReadonlyMap<string, string | null>,
   isHolder: ReadonlySet<string>,
+  usable: (f: string | null | undefined) => f is string,
   sentBy: ReadonlyMap<string, number> = new Map(),
 ): string {
+  // Hot funders (exchanges, services) link nobody, so they hub no cluster either: two holders an
+  // exchange paid for that only a transfer ties fall through to the sender.
   const counts = new Map<string, number>();
   for (const m of members) {
     const f = funderOf.get(m.owner);
-    if (f) counts.set(f, (counts.get(f) ?? 0) + 1);
+    if (usable(f)) counts.set(f, (counts.get(f) ?? 0) + 1);
   }
   let best: string | null = null;
   for (const [f, c] of counts)

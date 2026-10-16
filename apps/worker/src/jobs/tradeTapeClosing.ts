@@ -368,6 +368,15 @@ export type ClosingHelius = Pick<
 >;
 
 /**
+ * A coin's supply now in whole tokens, from the read's raw supply at Pump.fun's 6 decimals; the
+ * Pump.fun billion when the read gave none or one no burned Pump.fun coin could have.
+ */
+export function closingSupplyTokens(rawSupply: string | undefined): number {
+  const tokens = rawSupply && /^\d+$/.test(rawSupply) ? Number(rawSupply) / 1e6 : 0;
+  return tokens > 0 && tokens <= PUMP_SUPPLY_TOKENS ? tokens : PUMP_SUPPLY_TOKENS;
+}
+
+/**
  * Closes one coin (see the note at the top). Returns the credits spent, or "failed" with them when
  * a read got no usable answer (the coin is retried later).
  */
@@ -387,7 +396,9 @@ export async function closeCoin(
     counts.closingFailed += 1;
     return credits;
   }
-  const nowTokens = new Map(holders.holders.map((h) => [h.owner, (h.pct / 100) * PUMP_SUPPLY_TOKENS]));
+  // Each pct is of the supply now, which burns can have taken under a Pump.fun billion.
+  const supplyTokens = closingSupplyTokens(holders.supply);
+  const nowTokens = new Map(holders.holders.map((h) => [h.owner, (h.pct / 100) * supplyTokens]));
   const accountsNow = new Map(holders.holders.map((h) => [h.owner, h.accounts ?? []]));
   const rows: TapeRow[] = await prisma.tokenWalletActivity.findMany({
     where: { tokenId: coin.tokenId },

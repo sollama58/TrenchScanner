@@ -70,6 +70,11 @@ export interface BundleLabel {
    * buying alongside qualifies it alone. A transfer-only entry has pct, shared and coins 0.
    */
   transfers?: number;
+  /**
+   * The transfer tier's span when it differs from `hours`: a wallet labeled by buying on the
+   * 24-hour tier whose transfers meet the 48-hour one.
+   */
+  transferHours?: number;
 }
 
 export interface WalletBundle {
@@ -279,7 +284,15 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
   };
   if (MARKED_BOT_WALLETS.has(wallet) || facts.likelyBots.has(wallet) || isBot(coins["30d"], facts.totalCoins))
     return empty("bot", coins);
-  if (coins["30d"] === 0) return empty(null, coins);
+  // No tracked buys: no buying lists, but a wallet that only moved coins (a fresh wallet a holder
+  // split its bag into) can still qualify its partners by transfers alone.
+  if (coins["30d"] === 0) {
+    const hidden = new Set([...MARKED_BOT_WALLETS, ...facts.likelyBots]);
+    return {
+      ...empty(null, coins),
+      labeled: withTransferLabels(wallet, [], await transferPartners(wallet, now), new Set(), hidden),
+    };
+  }
 
   // Every wallet that first bought one of its coins within the gap of its own first buy.
   const pairs = await prisma.$queryRaw<
@@ -447,8 +460,10 @@ export function withTransferLabels(
     const tier = transferSideTier(p.ats);
     if (!tier) continue;
     const had = byWallet.get(p.side);
-    if (had) had.transfers = tier.transfers;
-    else
+    if (had) {
+      had.transfers = tier.transfers;
+      if (tier.hours !== had.hours) had.transferHours = tier.hours;
+    } else
       extra.push({
         wallet: p.side,
         pct: 0,

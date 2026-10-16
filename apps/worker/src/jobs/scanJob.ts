@@ -1048,14 +1048,19 @@ async function scanCycle(
   // every coin whose RugCheck list fails a holder cut with no recent chain list: RugCheck can serve
   // a list for hours after its holders sold, and a coin failing on one is never read again by
   // the stages that pass coins only (the top-25 read among them), so it would stay failed.
-  const holderCutRecheck = candidates.filter(
-    (c) =>
-      rugProfiles.has(c.mintAddress) &&
-      !recentHolderLists.has(c.mintAddress) &&
-      failsHolderConcentration(
-        buildOnChainProfile(c, rugProfiles, mintAuthorities, recentHolderLists, pumpLaunches),
-      ),
-  );
+  // Only a coin the holder cut alone can still fail: a settled reject, or one already failing on LP
+  // or authorities, stays rejected whatever its holders read, so its chain read buys nothing.
+  const holderCutRecheck = candidates.filter((c) => {
+    if (
+      !rugProfiles.has(c.mintAddress) ||
+      recentHolderLists.has(c.mintAddress) ||
+      settled.has(c.mintAddress)
+    ) {
+      return false;
+    }
+    const profile = buildOnChainProfile(c, rugProfiles, mintAuthorities, recentHolderLists, pumpLaunches);
+    return passesLocalRugScreen(profile) && failsHolderConcentration(profile);
+  });
   const onChainHolders = await resolveOnChainHolders(
     [
       ...candidates.filter((c) => {

@@ -559,6 +559,8 @@ interface BundleLabel {
   name: string;
   /** Transfers with it that qualify the wallet (4 in 48 hours or 10 in 72); absent when none. */
   transfers?: number;
+  /** The transfer tier's span when it differs from `hours`. */
+  transferHours?: number;
 }
 
 /**
@@ -600,7 +602,7 @@ function BundleLabels({ wallet }: { wallet: string }) {
               <span className="muted num">
                 {[
                   l.coins > 0 ? `${Math.round(l.pct)}% of ${l.coins} coins over ${l.hours}h` : null,
-                  l.transfers ? `${l.transfers} transfers within ${l.hours}h` : null,
+                  l.transfers ? `${l.transfers} transfers within ${l.transferHours ?? l.hours}h` : null,
                 ]
                   .filter(Boolean)
                   .join(" · ")}

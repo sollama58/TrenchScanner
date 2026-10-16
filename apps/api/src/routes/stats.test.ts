@@ -159,8 +159,9 @@ describe("GET /stats/hit-rates gating", () => {
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
 const TAG = `stats-test-${Date.now()}`;
-// A window nothing else in the database can fall into, so the counts are exactly the fixture's.
-const BASE = new Date("2001-02-03T00:00:00Z");
+// A window nothing else in the database can fall into, so the counts are exactly the fixture's,
+// yet inside the report's 90-day horizon (a window starting past it is refused).
+const BASE = new Date(Math.floor(Date.now() / 60_000) * 60_000 - 61 * 86_400_000 + 17_000);
 const at = (minutes: number) => new Date(BASE.getTime() + minutes * 60_000);
 
 describe.skipIf(!dbAvailable)("GET /stats/hit-rates report", () => {

@@ -330,12 +330,20 @@ export class OnDemandLiveRefresher {
     const startedAt = Date.now();
     this.counters.lookups += 1;
     this.counters.tokens += tokens.length;
+    // DexScreener's client answers a failed batch as "not found" rather than throwing.
+    const failed = new Set<string>();
     const lookup: Promise<number> = refreshLiveMarketData(this.dexScreener, tokens, {
       peakWindowDays: this.options.peakWindowDays,
+      failed,
     })
       .then(
         (result) => {
           this.counters.updated += result.updated;
+          if (failed.size > 0) {
+            // Learned nothing for these, so they are not cooled down: the next tick may try again.
+            this.counters.failures += 1;
+            for (const mint of failed) this.attemptedAt.delete(mint);
+          }
           logger.debug("on-demand live refresh", { requested: result.requested, updated: result.updated });
           return result.requested;
         },

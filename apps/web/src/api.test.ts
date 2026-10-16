@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { apiUrlFor, runExamRates } from "./api";
+import { accessEnded, apiUrlFor, runExamRates } from "./api";
+
+describe("accessEnded", () => {
+  it("is the access gate's 402, not a paid lookup's or any other error", () => {
+    expect(accessEnded(402, { error: "subscription_required", expiresAt: null })).toBe(true);
+    expect(accessEnded(402, { code: "lookup_required", error: "Look this up to open it" })).toBe(false);
+    expect(accessEnded(401, { error: "subscription_required" })).toBe(false);
+    expect(accessEnded(402, null)).toBe(false);
+    expect(accessEnded(402, "subscription_required")).toBe(false);
+  });
+});
 
 describe("apiUrlFor", () => {
   it("sends trenchscanner.app pages to the API on its own subdomain", () => {
