@@ -17,6 +17,8 @@ import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const HOUR = 3_600_000;
+// Unique per run: the cleanup keeps a deleted account's report with no wallet, so it is found by its text.
+const REPORT_TEXT = `free access test ${Date.now()}`;
 
 /**
  * Free Access end to end against a real database: switching it on from the admin routes, a real
@@ -55,7 +57,9 @@ describe.skipIf(!dbAvailable)("free access", () => {
     await app?.close();
     if (!dbAvailable) return;
     await wipePeriods();
-    await prisma.feedbackReport.deleteMany({ where: { walletAddress: { in: wallets } } });
+    await prisma.feedbackReport.deleteMany({
+      where: { OR: [{ walletAddress: { in: wallets } }, { message: REPORT_TEXT }] },
+    });
     await prisma.burnCreditEntry.deleteMany({ where: { wallet: { in: wallets } } });
     await prisma.whitelist.deleteMany({ where: { walletAddress: { in: wallets } } });
     await prisma.authNonce.deleteMany({ where: { walletAddress: { in: wallets } } });
@@ -212,7 +216,7 @@ describe.skipIf(!dbAvailable)("free access", () => {
     await prisma.feedbackReport.create({
       data: {
         kind: "bug",
-        message: "free access test",
+        message: REPORT_TEXT,
         walletAddress: freshA.wallet,
         submitterKey: `w:${freshA.wallet}`,
       },
@@ -285,7 +289,7 @@ describe.skipIf(!dbAvailable)("free access", () => {
     expect(await prisma.authNonce.count({ where: { walletAddress: freshA.wallet } })).toBe(0);
     expect(await prisma.feedbackReport.count({ where: { walletAddress: freshA.wallet } })).toBe(0);
     expect(
-      await prisma.feedbackReport.count({ where: { message: "free access test", submitterKey: "deleted" } }),
+      await prisma.feedbackReport.count({ where: { message: REPORT_TEXT, submitterKey: "deleted" } }),
     ).toBe(1);
     expect((await as(freshA.cookie, "GET", "/filters")).statusCode).toBe(401);
     expect(await grantOf(freshA.wallet)).toMatchObject({ outcome: "deleted" });
