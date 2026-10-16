@@ -501,7 +501,7 @@ function Funding({ p, names }: { p: WalletProfile; names: WalletNames }) {
 const KOL_SIDE_GROUPS: { kind: KolSide["kind"]; title: string }[] = [
   { kind: "known", title: "Known Side Wallets" },
   { kind: "funded", title: "KOL Funded Wallets" },
-  { kind: "possible", title: "Likely Side Wallets" },
+  { kind: "possible", title: "Probable Side Wallets" },
 ];
 
 /**

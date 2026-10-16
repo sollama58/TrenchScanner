@@ -59,7 +59,7 @@ export function webCardRows(web: SideWeb, layout: WebLayout): { tone: Tone; labe
     return [
       { tone: "known", label: "Known Sides", value: web.counts.known },
       { tone: "funded", label: "KOL Funded Wallets", value: web.counts.funded },
-      { tone: "trades", label: "Possible Sides", value: web.counts.possible },
+      { tone: "trades", label: "Probable Sides", value: web.counts.possible },
       { tone: "transfers", label: "Moved coins between them", value: web.counts.transfers },
     ];
   return [
@@ -91,6 +91,7 @@ export async function renderWalletWebCard(
     footer: `Labeled from funding, timing and transfers on chain · ${shortAddress(web.hub)}`,
     link: "trenchscanner.app",
     time: true,
+    disclaimer: "Labels are on-chain inferences, not confirmed ownership. Not financial advice.",
   });
 
   // Left column: who, the headline count, what it is made of, and the ties' key.
