@@ -12274,3 +12274,35 @@ button.bm-same {
 .section-head:has(.ca-search) > div:first-child {
   min-width: min(300px, 100%);
 }
+
+/* ---------- Feed catch (Live Stats): the Coverage Meter's track, models plus what filters add ---------- */
+.stats-modal .feed-catch {
+  margin-top: 12px;
+}
+.cov-fill.filters {
+  background: var(--series-3);
+  box-shadow: none;
+}
+.cov-fill.filters.after {
+  border-radius: 0 999px 999px 0;
+}
+.feed-catch-parts {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.feed-catch-key {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-radius: 999px;
+  vertical-align: 0;
+}
+.feed-catch-key.models {
+  background: linear-gradient(90deg, var(--brand-a), var(--brand-b));
+}
+.feed-catch-key.filters {
+  background: var(--series-3);
+}

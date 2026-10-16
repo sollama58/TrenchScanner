@@ -80,7 +80,15 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     const res = await call(cookie, "GET", "/filters/leaderboard");
     expect(res.statusCode).toBe(200);
     return res.json() as {
-      ranked: { id: string; rank: number; score: number; graded: number; mine: boolean; criteria: object }[];
+      ranked: {
+        id: string;
+        rank: number;
+        score: number;
+        graded: number;
+        mine: boolean;
+        criteria: object;
+        catch: { runners: number; caught: number; pct: number | null };
+      }[];
       warmingUp: { id: string; graded: number }[];
     };
   }
@@ -113,6 +121,9 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     expect(b.ranked[0]!.score).toBeGreaterThan(b.ranked[1]!.score);
     expect(b.ranked.every((e) => !e.mine)).toBe(true);
     expect(b.warmingUp.map((e) => e.id)).toEqual([young]);
+    // Catch: every alert is on the one test token, which doubled, so each winner caught it.
+    expect(b.ranked[0]!.catch).toMatchObject({ caught: 1 });
+    expect(b.ranked[0]!.catch.runners).toBeGreaterThanOrEqual(1);
     const raw = JSON.stringify(b);
     expect(raw).not.toContain(OWNER);
     expect(raw).not.toContain(ownerId);

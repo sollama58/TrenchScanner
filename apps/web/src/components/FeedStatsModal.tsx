@@ -1,9 +1,12 @@
 import { useEffect, useRef } from "react";
-import type { FeedStats } from "../api";
+import type { FeedStats, Leaderboard } from "../api";
 import { RingGauge } from "./Charts";
 import { FeedReturns } from "./FeedReturns";
-import { BoltIcon, CloseIcon, RadarIcon, TrophyIcon } from "./Icons";
+import { MIN_RUNNERS_FOR_COVERAGE } from "./CoverageMeter";
+import { BoltIcon, CheckIcon, CloseIcon, RadarIcon, TargetIcon, TrophyIcon } from "./Icons";
 import { multiple, pct } from "../format";
+import { usePolling } from "../hooks";
+import { PAGE_DAYS } from "../tabs/modelShared";
 
 /** Graded alerts below which a hit rate shows as "early" rather than as a verdict. */
 const MIN_GRADED = 10;
@@ -119,6 +122,7 @@ export function FeedStatsModal({
                 )}
               </div>
             </section>
+            <FeedCatchMeter pollKey={pollKey} />
             <p className="faint small stats-note">
               Coins alerted in your feed over the last {hours} hours, graded from the alert price. Alerts
               still being graded don&apos;t count as misses.
@@ -128,5 +132,110 @@ export function FeedStatsModal({
         )}
       </div>
     </dialog>
+  );
+}
+
+const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+
+/** The catch goal when an older API build doesn't send one (as the Coverage Meter). */
+const DEFAULT_GOAL_PCT = 75;
+
+/**
+ * The whole feed's catch: of the tokens that doubled over the Models tab's window, the share the
+ * reader's models (the Coverage Meter's mix, while model alerts are on) and their switched-on
+ * filters caught between them. The track shows the models' part and what the filters add on top.
+ * Read from the Models tab's own board, so the models' part is the Coverage Meter's figure.
+ */
+function FeedCatchMeter({ pollKey }: { pollKey: string }) {
+  const board = usePolling<Leaderboard>(`/curated/models?days=${PAGE_DAYS}`, 120_000, pollKey);
+  const fc = board.data?.feedCatch;
+  if (!fc) return null;
+  const days = board.data!.window.days;
+  const goal = board.data!.scoring.catchTargetPct ?? DEFAULT_GOAL_PCT;
+  const share = (n: number) => (fc.runners > 0 ? Math.min(100, (n / fc.runners) * 100) : 0);
+  const early = fc.runners < MIN_RUNNERS_FOR_COVERAGE;
+  const onGoal = fc.pct !== null && fc.pct >= goal && !early;
+  const modelsPart = fc.models.count > 0 ? share(fc.models.caught) : 0;
+  const filtersPart = fc.filters.count > 0 ? share(fc.filters.only) : 0;
+  const sources = [
+    fc.models.count > 0 && plural(fc.models.count, "model"),
+    fc.filters.count > 0 && plural(fc.filters.count, "filter"),
+  ].filter(Boolean);
+  const sentence =
+    sources.length === 0
+      ? "Your feed has no models or filters switched on."
+      : fc.runners === 0
+        ? `No runners in the last ${plural(days, "day")} yet.`
+        : `Your ${sources.join(" and ")} caught ${fc.caught.toLocaleString()} of the ${plural(fc.runners, "runner")} (tokens that doubled) in the last ${plural(days, "day")}.`;
+  return (
+    <div
+      className="coverage feed-catch"
+      title={`${sentence} A runner counts as caught when one of your models called it, or one of your filters alerted on it, at a moment that went on to double. Goal ${goal}%.`}
+    >
+      <div className="cov-head">
+        <span className="cov-label">
+          <TargetIcon size={13} /> Feed catch · {days}d
+        </span>
+        <span
+          className={`cov-value num${early ? " early" : ""}`}
+          role="meter"
+          aria-label="Share of runners your feed caught"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={fc.pct ?? 0}
+          aria-valuetext={fc.pct === null ? "no runners yet" : `${pct(fc.pct)} of runners caught`}
+        >
+          {fc.pct === null ? "–" : pct(fc.pct)}
+        </span>
+        <span className="cov-track" aria-hidden>
+          {modelsPart > 0 && (
+            <span className={`cov-fill${early ? " early" : ""}`} style={{ width: `${modelsPart}%` }} />
+          )}
+          {filtersPart > 0 && (
+            <span
+              className={`cov-fill filters${modelsPart > 0 ? " after" : ""}${early ? " early" : ""}`}
+              style={{ left: `${modelsPart}%`, width: `${Math.min(filtersPart, 100 - modelsPart)}%` }}
+            />
+          )}
+          <span className="cov-mark goal" style={{ left: `${Math.min(100, goal)}%` }} />
+        </span>
+        {onGoal ? (
+          <span className="cov-badge">
+            <CheckIcon size={12} /> On goal
+          </span>
+        ) : (
+          <span className="cov-goal muted small num">goal {goal}%</span>
+        )}
+      </div>
+      <p className="cov-note muted small">
+        {sentence}
+        {early && fc.runners > 0 && " Still early: too few runners to judge."}
+      </p>
+      {fc.runners > 0 && sources.length > 0 && (
+        <p className="feed-catch-parts faint small">
+          {fc.models.count > 0 && (
+            <span>
+              <span className="feed-catch-key models" aria-hidden /> Models{" "}
+              <span className="num">{pct(share(fc.models.caught))}</span>
+            </span>
+          )}
+          {fc.filters.count > 0 && (
+            <span>
+              <span className="feed-catch-key filters" aria-hidden />{" "}
+              {fc.models.count > 0 ? (
+                <>
+                  Filters add <span className="num">{fc.filters.only.toLocaleString()}</span>{" "}
+                  {fc.filters.only === 1 ? "runner" : "runners"} the models missed
+                </>
+              ) : (
+                <>
+                  Filters <span className="num">{pct(share(fc.filters.caught))}</span>
+                </>
+              )}
+            </span>
+          )}
+        </p>
+      )}
+    </div>
   );
 }

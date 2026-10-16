@@ -5,6 +5,7 @@ import {
   emptyRecord,
   explainScore,
   liveCatch,
+  feedCatch,
   mixCatch,
   type AddCandidate,
   marketLift,
@@ -473,5 +474,63 @@ describe("rankByMarketLift", () => {
       entry("warming", 50, true, 3),
     ]).map((e) => e.id);
     expect(order).toEqual(["high-lift", "high-score", "no-lift", "warming"]);
+  });
+});
+
+describe("feedCatch", () => {
+  const at = (h: number) => new Date(Date.UTC(2026, 9, 10, h));
+  const { ledger } = liveCatch(
+    [
+      { token: "a", at: at(1) },
+      { token: "b", at: at(2) },
+      { token: "c", at: at(10) },
+      { token: "d", at: at(11) },
+    ],
+    [
+      { model: "m1", token: "a" },
+      { model: "m2", token: "c" },
+    ],
+    new Map([
+      ["m1", at(0)],
+      ["m2", at(5)],
+    ]),
+  );
+
+  it("adds the filters' runners to the models' and counts each runner once", () => {
+    const fc = feedCatch(ledger, ["m1", "m2"], {
+      count: 2,
+      wins: [
+        { token: "a", at: at(1) },
+        { token: "d", at: at(11) },
+        // A filter win the market read missed is a runner too.
+        { token: "z", at: at(12) },
+      ],
+      since: at(0),
+    });
+    expect(fc).toMatchObject({ runners: 5, caught: 4, pct: 80 });
+    expect(fc.models).toEqual({ count: 2, caught: 2 });
+    expect(fc.filters).toEqual({ count: 2, caught: 3, only: 2 });
+  });
+
+  it("is the Coverage Meter's figure with no filters on", () => {
+    const fc = feedCatch(ledger, ["m2"], { count: 0, wins: [], since: at(0) });
+    const mix = mixCatch(ledger, ["m2"], new Map());
+    expect(fc).toMatchObject({ runners: mix.runners, caught: mix.caught, pct: mix.pct });
+    expect(fc.since).toEqual(at(5));
+  });
+
+  it("counts from the filters' start when model alerts are off, and is empty with nothing on", () => {
+    expect(
+      feedCatch(ledger, [], { count: 1, wins: [{ token: "b", at: at(2) }], since: at(0) }),
+    ).toMatchObject({
+      runners: 4,
+      caught: 1,
+      pct: 25,
+    });
+    expect(feedCatch(ledger, [], { count: 0, wins: [], since: at(0) })).toMatchObject({
+      runners: 0,
+      pct: null,
+      since: null,
+    });
   });
 });

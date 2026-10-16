@@ -75,7 +75,13 @@ export function TopFiltersPick({ onCopied }: { onCopied: () => void }) {
             </div>
             <p className="small muted board-stats">
               Score <strong className="num">{top.score ?? "–"}</strong> ·{" "}
-              <strong className="num">{pct(top.winRatePct)}</strong> 2x · {top.graded.toLocaleString()} graded
+              <strong className="num">{pct(top.winRatePct)}</strong> 2x ·{" "}
+              {top.catch && top.catch.runners > 0 && (
+                <>
+                  <strong className="num">{pct(top.catch.pct)}</strong> catch ·{" "}
+                </>
+              )}
+              {top.graded.toLocaleString()} graded
             </p>
           </div>
           <button
@@ -296,6 +302,16 @@ function BoardEntry({
           <span title="How far the alerts ran on average over their 24h watch (stopped-out calls count as 0)">
             runs avg <strong className="num">{runMultiple(e.avgRunDoublings)}</strong>
           </span>{" "}
+          {e.catch && e.catch.runners > 0 && (
+            <>
+              ·{" "}
+              <span
+                title={`Catch: it alerted on ${e.catch.caught.toLocaleString()} of the ${e.catch.runners.toLocaleString()} coins that doubled since ${since}, at a moment that went on to double`}
+              >
+                catch <strong className="num">{pct(e.catch.pct)}</strong>
+              </span>{" "}
+            </>
+          )}
           · {e.graded.toLocaleString()} graded since {since}
         </p>
         <details className="board-criteria">

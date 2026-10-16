@@ -44,6 +44,7 @@ import {
   buildLeaderboard,
   contestState,
   modelLabel,
+  filterWins,
   readerBoard,
   resolveFeedModel,
   resolveFeedModels,
@@ -532,8 +533,14 @@ export async function registerCuratedRoutes(
       savedFeed(request),
     ]);
     const feed = resolveFeedModels(state, saved);
+    // Informational: a failed read leaves the feed's catch off rather than failing the board.
+    const filters = await filterWins(request.user!.userId, board.window.since).catch(() => null);
     return {
-      ...readerBoard(board, feed.models),
+      ...readerBoard(
+        board,
+        feed.models,
+        filters ? { models: saved.showModelAlerts ? feed.models : [], filters } : undefined,
+      ),
       // The single-ledger pick (/curated) - the first checked model.
       selectedModel: feed.models[0],
       // Every model whose calls the combined feed shows; the Live tab's checkboxes and the
