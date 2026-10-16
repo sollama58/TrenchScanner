@@ -108,8 +108,11 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
                               AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}
                               AND a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."anchorAt") AS "earlyWins",
            percentile_cont(0.5) WITHIN GROUP (ORDER BY a."boughtPct") AS "medianSupplyPct",
-           SUM(a."solIn") AS "solIn",
-           SUM(a."solOut") AS "solOut",
+           -- Summed as numeric: float8 addition depends on the order the rows arrive in, so a
+           -- plan change (an index walk one hour, a scan the next) moved the last bits of 13-25%
+           -- of wallets' sums and replaceRows rewrote those rows for nothing.
+           SUM(a."solIn"::numeric)::float8 AS "solIn",
+           SUM(a."solOut"::numeric)::float8 AS "solOut",
            MAX(COALESCE(a."firstBuyAt", a."createdAt")) AS "lastSeenAt"
     FROM "TokenWalletActivity" a
     JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
@@ -146,7 +149,11 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
     };
   });
 
+  // maxWait above Prisma's 2-s default: this runs on the trainer's pool of six, which the other
+  // hourly jobs share on the same minute, and a pool timeout here throws away the aggregate just
+  // paid for.
   const { written, deleted } = await prisma.$transaction((tx) => replaceRows(tx, WALLET_RISK_TABLE, data), {
+    maxWait: 30_000,
     timeout: 120_000,
   });
 
