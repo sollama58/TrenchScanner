@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { buildCandidateFeatures, CANDIDATE_FEATURE_NAMES, TRADE_FLOW_FEATURES } from "./features.js";
-import { EMPTY_TRADE_FLOW, resolveDevHolding, TradeFlowBook, type FlowTrade } from "./tradeFlow.js";
+import {
+  chainWindowFlow,
+  EMPTY_TRADE_FLOW,
+  resolveDevHolding,
+  TradeFlowBook,
+  withWindowFlow,
+  type FlowTrade,
+} from "./tradeFlow.js";
 import type { ScoredToken } from "../types.js";
 
 const MINT = "mintA";
@@ -215,5 +222,71 @@ describe("resolveDevHolding", () => {
     expect(resolveDevHolding({ tradeFlow: flow(null), creatorHolding: false })).toBe(false);
     expect(resolveDevHolding({ tradeFlow: flow(null) })).toBeNull();
     expect(resolveDevHolding({})).toBeNull();
+  });
+});
+
+describe("chainWindowFlow", () => {
+  const now = 10 * 60_000;
+  const t = (wallet: string, side: "buy" | "sell", sol: number, minutesAgo: number, tokens = sol * 1e6) => ({
+    wallet,
+    side,
+    sol,
+    tokens,
+    atMs: now - minutesAgo * 60_000,
+  });
+
+  it("reads the last five minutes from a page that reaches back past them", () => {
+    const flow = chainWindowFlow(
+      [
+        t("old", "buy", 1, 8),
+        t("a", "buy", 1, 4),
+        t("a", "buy", 3, 3),
+        t("old", "buy", 1, 2),
+        t("b", "sell", 2, 1),
+      ],
+      now,
+      false,
+    );
+    expect(flow.uniqueBuyers5m).toBe(2);
+    expect(flow.tradesPerMin5m).toBeCloseTo(4 / 5);
+    expect(flow.buysPerBuyer5m).toBe(1.5);
+    expect(flow.avgBuySol5m).toBeCloseTo(5 / 3);
+    expect(flow.topBuyerShare5m).toBeCloseTo(4 / 5);
+    // "old" traded before the window: only "a" is new.
+    expect(flow.newBuyerShare5m).toBe(0.5);
+    // 1e-6 SOL a token on a 1B supply is a 1,000 SOL cap; net flow is 5 - 2 SOL.
+    expect(flow.netFlow5mToMcap).toBeCloseTo(3 / 1_000);
+    expect(flow.earlyBuyerCount).toBeNull();
+  });
+
+  it("reads a busy page that lies inside the window over the span it covers, new buyers unknown", () => {
+    const flow = chainWindowFlow([t("a", "buy", 1, 2), t("b", "buy", 1, 1)], now, false);
+    expect(flow.tradesPerMin5m).toBeCloseTo(1);
+    expect(flow.newBuyerShare5m).toBeNull();
+  });
+
+  it("reads a young coin's whole history over its life, and no trades at all as a quiet window", () => {
+    const flow = chainWindowFlow([t("a", "buy", 1, 2), t("b", "buy", 1, 1)], now, true);
+    expect(flow.tradesPerMin5m).toBeCloseTo(1);
+    expect(flow.newBuyerShare5m).toBe(1);
+    expect(chainWindowFlow([], now, true)).toMatchObject({ uniqueBuyers5m: 0, tradesPerMin5m: 0 });
+    expect(chainWindowFlow([], now, false).uniqueBuyers5m).toBeNull();
+  });
+});
+
+describe("withWindowFlow", () => {
+  it("takes the 5m fields from the window reading, keeping the rest, and leaves them unknown without one", () => {
+    const stream = { ...EMPTY_TRADE_FLOW, uniqueBuyers5m: 0, tradesPerMin5m: 0, firstBuyersHolding: 7 };
+    const window = { ...EMPTY_TRADE_FLOW, uniqueBuyers5m: 12, tradesPerMin5m: 3 };
+    expect(withWindowFlow(stream, window)).toMatchObject({
+      uniqueBuyers5m: 12,
+      tradesPerMin5m: 3,
+      firstBuyersHolding: 7,
+    });
+    expect(withWindowFlow(stream, null)).toMatchObject({
+      uniqueBuyers5m: null,
+      tradesPerMin5m: null,
+      firstBuyersHolding: 7,
+    });
   });
 });

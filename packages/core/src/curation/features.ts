@@ -188,8 +188,8 @@ export const KOL_BUNDLED_FEATURES = ["kolBundledPct"] as const;
 export const BUNDLED_SUPPLY_FEATURES = ["bundledSupplyPct"] as const;
 
 /**
- * Added 2026-10-16 (user ask): 1 for a Stonks coin (Raydium LaunchLab, launchpads.ts), 0 for one
- * from another launchpad (Pump.fun), null when the launchpad is unknown. Stonks coins entered
+ * Added 2026-10-16 (user ask): 1 for a Stonks coin (Raydium LaunchLab, launchpads.ts), 0 for a
+ * Pump.fun coin, null when the launchpad is unknown or another one. Stonks coins entered
  * discovery the same day, so every row banked before is null (a Pump.fun coin then, as they all
  * were; not backfilled). Read by the learners; the onset guard (featureOnset.ts) keeps it out of
  * a run until it covers enough of the exam's span.
@@ -1148,7 +1148,8 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
     kolBundledPct: scored.kolBundledPct ?? null,
     bundledSupplyPct: scored.bundledSupplyPct ?? null,
-    launchpadStonks: scored.launchpad === undefined ? null : scored.launchpad === STONKS_LAUNCHPAD ? 1 : 0,
+    launchpadStonks:
+      scored.launchpad === STONKS_LAUNCHPAD ? 1 : scored.launchpad === PUMPFUN_LAUNCHPAD ? 0 : null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,
     sameTimeFundedCount: scored.sameTimeFundedCount ?? null,

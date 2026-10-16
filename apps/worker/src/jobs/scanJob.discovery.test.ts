@@ -59,6 +59,25 @@ describe("a fresh graduate's own pool in its RugCheck holders", () => {
     expect(built?.top10HolderAddresses).toEqual(["w1", "w2"]);
   });
 
+  it("judges a Stonks coin's LP on its LaunchLab markets, not on a side pool someone opened", () => {
+    const rug = new Map([["Fresh", { ...profile(20), lpBurned: false, launchLabLpBurned: true }]]);
+    const stonks = buildOnChainProfile(
+      { mintAddress: "Fresh", dexId: "raydium", launchpad: "stonks" },
+      rug,
+      new Map(),
+    );
+    expect(stonks?.lpBurned).toBe(true);
+    // Another launchpad's coin, or one cached before the reading existed, keeps every pool's answer.
+    expect(buildOnChainProfile({ mintAddress: "Fresh", dexId: "raydium" }, rug, new Map())?.lpBurned).toBe(
+      false,
+    );
+    const cached = new Map([["Fresh", { ...profile(20), lpBurned: false }]]);
+    expect(
+      buildOnChainProfile({ mintAddress: "Fresh", dexId: "raydium", launchpad: "stonks" }, cached, new Map())
+        ?.lpBurned,
+    ).toBe(false);
+  });
+
   it("re-reads only coins graduated in the last five minutes still over the cut without their pool", () => {
     const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000);
     const profiles = new Map<string, RugCheckProfile>([

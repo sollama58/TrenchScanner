@@ -47,6 +47,14 @@ export interface RugCheckProfile extends OnChainProfile {
    * 2026-10-14, L2 H2 / L3 L3). Absent otherwise.
    */
   marketsListed?: false;
+  /**
+   * The LP lock judged on Raydium LaunchLab's own markets alone (RAYDIUM_LAUNCHLAB_MARKET_TYPES:
+   * the curve, and the CPMM pool a LaunchLab coin migrates into), as lpBurned is on a Pump.fun
+   * coin's own markets: what the scan reads for a Stonks coin, whose side pools others open are
+   * no more its holders' exit than a Pump.fun coin's. Absent when no such market is listed, and on
+   * profiles cached before it existed.
+   */
+  launchLabLpBurned?: boolean;
 }
 
 /**
@@ -109,6 +117,13 @@ export const CREATOR_UNKNOWN_FLAG = "Creator identity unknown";
 
 /** RugCheck's marketType for a Pump.fun bonding curve and for the PumpSwap pool a token graduates into. */
 const PUMP_MARKET_TYPES = new Set(["pump_fun", "pump_fun_amm"]);
+
+/**
+ * RugCheck's marketType for a Raydium LaunchLab curve (Stonks' launchpad) and for the CPMM pool its
+ * coins migrate into. Only read for a coin known to be from a LaunchLab launchpad: anyone can open
+ * a CPMM pool for any coin.
+ */
+const RAYDIUM_LAUNCHLAB_MARKET_TYPES = new Set(["raydium_launchlab", "raydium_cpmm"]);
 
 /** A non-Pump.fun token's pools holding less than this share of its pooled liquidity don't count for the LP check. */
 const SIDE_POOL_MAX_SHARE = 0.05;
@@ -274,7 +289,11 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
       : totalPoolUsd > 0
         ? markets.filter((m) => poolUsd(m) >= SIDE_POOL_MAX_SHARE * totalPoolUsd)
         : markets;
-  const lpBurned = lpMarkets.length > 0 && lpMarkets.every((m) => (m.lp?.lpLockedPct ?? 0) >= 95);
+  const locked = (m: (typeof markets)[number]) => (m.lp?.lpLockedPct ?? 0) >= 95;
+  const lpBurned = lpMarkets.length > 0 && lpMarkets.every(locked);
+  const launchLabMarkets = markets.filter(
+    (m) => m.marketType !== undefined && RAYDIUM_LAUNCHLAB_MARKET_TYPES.has(m.marketType),
+  );
 
   const top10Holders = realHolders.slice(0, TOP_N_FOR_CONCENTRATION);
 
@@ -304,6 +323,7 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     riskScore: report.score_normalised,
     riskFlags,
     ...(markets.length === 0 ? { marketsListed: false as const } : {}),
+    ...(launchLabMarkets.length > 0 ? { launchLabLpBurned: launchLabMarkets.every(locked) } : {}),
     // For the linked-wallets reading (whose holders the creator funded, or shares a funder with).
     ...(report.creator ? { creator: report.creator } : {}),
     // Feeds the worker's wallet-freshness check (apps/worker/src/jobs/walletFreshness.ts) - a

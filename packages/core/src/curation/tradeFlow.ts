@@ -441,3 +441,115 @@ export function resolveDevHolding(token: {
   if (soldShare !== null) return soldShare < DEV_SOLD_OUT_SHARE;
   return token.creatorHolding ?? null;
 }
+
+/** A trade off the chain (wallets/tradeTape.ts TapeTrade): SOL paid or got, whole tokens. */
+export interface ChainFlowTrade {
+  wallet: string;
+  side: "buy" | "sell";
+  sol: number;
+  tokens: number;
+  atMs: number;
+}
+
+/** The order-flow fields a 5m window of trades gives; the launch's bags need the launch itself. */
+export const WINDOW_FLOW_FIELDS = [
+  "uniqueBuyers5m",
+  "buysPerBuyer5m",
+  "avgBuySol5m",
+  "topBuyerShare5m",
+  "newBuyerShare5m",
+  "netFlow5mToMcap",
+  "tradesPerMin5m",
+] as const satisfies readonly (keyof TradeFlowFeatures)[];
+
+/** How many of the newest priced trades the market cap is read from (their median price). */
+const MCAP_TRADES = 9;
+
+/**
+ * The 5m order-flow fields read from a page of a coin's newest chain trades (the worker's live
+ * tape), for a coin the PumpPortal stream doesn't carry: a Stonks coin, on Raydium's LaunchLab
+ * and its CPMM pool. Each trade's SOL is already what was paid in whatever quote coin. Read as the
+ * stream's book reads its window, at `now` (when the page was read):
+ *
+ * - The window is whole when the page reaches back past it, or holds the coin's whole history
+ *   (`complete`). A busy coin whose page lies wholly inside the window reads over the span the
+ *   page covers instead, as the book does with a full buffer; its new-buyer share is unknown.
+ * - The market cap is the median SOL-per-token of the newest trades on a 1B supply, as
+ *   PumpPortal's marketCapSol is (Pump.fun and Stonks mints are both 1B).
+ *
+ * The early-buyer and dev fields stay null: a page of the newest trades says nothing about them.
+ */
+export function chainWindowFlow(
+  trades: readonly ChainFlowTrade[],
+  now: number,
+  complete: boolean,
+): TradeFlowFeatures {
+  const out: TradeFlowFeatures = { ...EMPTY_TRADE_FLOW };
+  const sorted = trades.filter((t) => t.atMs <= now).sort((a, b) => a.atMs - b.atMs);
+  if (sorted.length === 0) {
+    // No trade at all yet, from a whole history: a quiet window, not an unknown one.
+    if (complete && trades.length === 0) {
+      out.uniqueBuyers5m = 0;
+      out.tradesPerMin5m = 0;
+    }
+    return out;
+  }
+  const since = now - FLOW_WINDOW_MS;
+  const oldest = sorted[0]!.atMs;
+  const whole = complete || oldest < since;
+  // A whole history younger than the window reads over its own life, as the book does from launch.
+  const span = Math.max(1, whole ? Math.min(FLOW_WINDOW_MS, now - oldest) : now - oldest) / 60_000;
+
+  const seenBefore = new Set<string>();
+  const byWallet = new Map<string, number>();
+  const newBuyers = new Set<string>();
+  let buys = 0;
+  let buySol = 0;
+  let sellSol = 0;
+  let inWindow = 0;
+  for (const t of sorted) {
+    const first = !seenBefore.has(t.wallet);
+    seenBefore.add(t.wallet);
+    if (t.atMs < since) continue;
+    inWindow += 1;
+    if (t.side === "buy") {
+      buys += 1;
+      buySol += t.sol;
+      byWallet.set(t.wallet, (byWallet.get(t.wallet) ?? 0) + t.sol);
+      if (first) newBuyers.add(t.wallet);
+    } else {
+      sellSol += t.sol;
+    }
+  }
+  out.uniqueBuyers5m = byWallet.size;
+  out.tradesPerMin5m = inWindow / span;
+  if (buys > 0) {
+    out.buysPerBuyer5m = buys / byWallet.size;
+    out.avgBuySol5m = buySol / buys;
+    out.topBuyerShare5m = buySol > 0 ? Math.max(...byWallet.values()) / buySol : null;
+    // A wallet's first trade is only known when the page reaches back before the window.
+    out.newBuyerShare5m = whole ? newBuyers.size / byWallet.size : null;
+  }
+  const prices = sorted
+    .filter((t) => t.tokens > 0 && t.sol > 0)
+    .slice(-MCAP_TRADES)
+    .map((t) => t.sol / t.tokens)
+    .sort((a, b) => a - b);
+  const mid = prices.length > 0 ? prices[Math.floor(prices.length / 2)]! : null;
+  if (mid !== null) out.netFlow5mToMcap = (buySol - sellSol) / (mid * PUMP_TOTAL_SUPPLY);
+  return out;
+}
+
+/**
+ * A coin's trade flow with its 5m fields taken from `window` (chainWindowFlow) instead of the
+ * stream's: for a coin the stream doesn't carry, whose stream window would read an empty five
+ * minutes as a quiet one. Without a window reading, those fields are unknown.
+ */
+export function withWindowFlow(
+  flow: TradeFlowFeatures | undefined,
+  window: TradeFlowFeatures | null,
+): TradeFlowFeatures {
+  const out: TradeFlowFeatures = { ...(flow ?? EMPTY_TRADE_FLOW) };
+  for (const field of WINDOW_FLOW_FIELDS) out[field] = window?.[field] ?? null;
+  return out;
+}

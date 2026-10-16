@@ -71,6 +71,17 @@ describe("toProfile", () => {
     expect(profile.top10HolderPct).toBeCloseTo(1.5);
   });
 
+  it("reads the LP lock on Raydium LaunchLab's own markets apart, for a Stonks coin", () => {
+    const markets = [
+      { pubkey: "cpmm", marketType: "raydium_cpmm", lp: { lpLockedPct: 100, quoteUSD: 50_000 } },
+      { pubkey: "dlmm", marketType: "meteoraDlmm", lp: { lpLockedPct: 0, quoteUSD: 50_000 } },
+    ];
+    const profile = toProfile(MINT, baseReport({ markets }));
+    expect(profile.lpBurned).toBe(false);
+    expect(profile.launchLabLpBurned).toBe(true);
+    expect(toProfile(MINT, baseReport()).launchLabLpBurned).toBeUndefined();
+  });
+
   it("treats LP as burned when every market clears the lock threshold", () => {
     const profile = toProfile(MINT, baseReport());
     expect(profile.lpBurned).toBe(true);

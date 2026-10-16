@@ -32,6 +32,7 @@ import {
   launchpadFromVenue,
   PUMPFUN_LAUNCHPAD,
   STONKS_LAUNCHPAD,
+  withWindowFlow,
   forEachWithConcurrency,
   looksLikeSolanaAddress,
   type Env,
@@ -102,7 +103,7 @@ import {
   takeLinkedWalletStats,
   type LinkedGroup,
 } from "./linkedWallets.js";
-import { liveFlagsOf, liveTradersOf, readLiveTape, takeLiveTapeStats } from "./liveTape.js";
+import { liveFlagsOf, liveTradersOf, liveWindowFlowOf, readLiveTape, takeLiveTapeStats } from "./liveTape.js";
 import {
   resolveWalletHoldings,
   computeEmptyPct,
@@ -860,7 +861,12 @@ async function scanCycle(
       const young = new Set(live.mints);
       deps.bandEntryWatch.note(refreshed.marketData.filter((t) => young.has(t.mintAddress)));
     }
-    candidates = refreshed.inBand;
+    // Each coin's launchpad, as discovery recorded it: a re-read from DexScreener doesn't say.
+    const launchpadOf = new Map(tracked.map((t) => [t.mintAddress, t.launchpad]));
+    candidates = refreshed.inBand.map((c) => {
+      const launchpad = c.launchpad ?? launchpadOf.get(c.mintAddress);
+      return launchpad && launchpad !== c.launchpad ? { ...c, launchpad } : c;
+    });
     refreshPartial = refreshed.partial;
     refreshedMarketData = refreshed.marketData;
     for (const [mint, at] of refreshed.seenAt) readingSeenAt.set(mint, at);
@@ -1338,7 +1344,8 @@ async function scanCycle(
   // counter that undercounts under exactly the concurrency it was built for is not worth keeping.
   // Every candidate's trades get followed from here on (a no-op for ones already tracked) - the
   // order-flow features need a few minutes of watching before they say anything.
-  deps.stream?.watch?.(candidates.map((c) => c.mintAddress));
+  // Stonks coins' trades never come through PumpPortal (their flow is read off the live tape).
+  deps.stream?.watch?.(candidates.filter((c) => c.launchpad !== STONKS_LAUNCHPAD).map((c) => c.mintAddress));
 
   // Seconds-old prices for the coins about to be decided on (ScoredToken.freshQuote), read now
   // rather than with the refresh: DexScreener's figures were already 45-60 s behind the market,
@@ -2519,14 +2526,20 @@ async function processCandidate(
       firstInBandAt,
     },
   );
-  if (tradeFlow) scored.tradeFlow = tradeFlow;
+  // A Stonks coin's trades never come through PumpPortal, so its 5m flow is read off the live
+  // tape's chain trades instead; the stream's empty window would read as a dead coin.
+  const flow =
+    scored.launchpad === STONKS_LAUNCHPAD
+      ? withWindowFlow(tradeFlow, liveWindowFlowOf(candidate.mintAddress))
+      : tradeFlow;
+  if (flow) scored.tradeFlow = flow;
   // TokenSage's read, as stored when this cycle began: the ns* model inputs, the narrative
   // filter criteria and the score's narrative part all read it from here. Never looked up
   // later for a row that was recorded without it.
   if (prior.narrative) scored.narrative = prior.narrative;
   // The score's holder-quality part reads the first buyers, which arrive with the trade flow,
   // and its narrative part the read.
-  if (tradeFlow || prior.narrative) scored.score = scoreToken(scored);
+  if (flow || prior.narrative) scored.score = scoreToken(scored);
   // The price tape: this cycle's observation goes on first, then the path features read back
   // over the last hour of it.
   if (pricePath) {
@@ -2799,7 +2812,7 @@ export function secondLookDue(
  * the creator, holder count and risk score stay unknown.
  */
 export function buildOnChainProfile(
-  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress">,
+  candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
   rugProfiles: Map<string, RugCheckProfile>,
   mintAuthorities: Map<string, MintAuthorityResult>,
   onChainHolders: Map<string, OnChainHolders> = new Map(),
@@ -2811,7 +2824,13 @@ export function buildOnChainProfile(
   const rugProfile = rugProfiles.get(mintAddress);
   if (rugProfile) {
     // The coin's own pool out of the holder list, for a report written before RugCheck listed it.
-    const profile = withoutVenueHolder(rugProfile, candidate.pairAddress);
+    const venueless = withoutVenueHolder(rugProfile, candidate.pairAddress);
+    // A Stonks coin's LP is judged on its LaunchLab markets alone, as a Pump.fun coin's is on its
+    // own (rugcheck.ts launchLabLpBurned): side pools others open aren't its holders' exit.
+    const profile =
+      candidate.launchpad === STONKS_LAUNCHPAD && rugProfile.launchLabLpBurned !== undefined
+        ? { ...venueless, lpBurned: rugProfile.launchLabLpBurned }
+        : venueless;
     // A report listing no market at all hasn't read the LP: a Pump.fun venue's is locked by the
     // protocol, the same answer the chain fallback gives below. It used to read "LP not burned",
     // so the coin also never earned its Mayhem and pre-bond reads (audit 2026-10-14, L2 H2).
