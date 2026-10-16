@@ -237,6 +237,13 @@ export interface OnChainProfile {
   winnerRecentBuyers?: number;
   winnerRecentSellers?: number;
   /**
+   * The hidden composite Wallet Score (wallets/walletScore.ts) of the wallets buying in the newest
+   * trades read before the decision: their mean, and how many have a score. Undefined without a
+   * live page or the scores. Recorded as model inputs only; never shown.
+   */
+  walletScoreRecentBuyersMean?: number;
+  walletScoreRecentBuyersScored?: number;
+  /**
    * Known KOL wallets (Solana Tracker's roster, KolWallet) among the top-20 holders (count, and
    * their % of supply), among the launch's first buyers, and buying or selling in the newest
    * trades read before the decision. Undefined without the roster, without the list in question,

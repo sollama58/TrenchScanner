@@ -2693,6 +2693,16 @@ model WalletRisk {
   dumper          Boolean  @default(false)
   winner          Boolean  @default(false)
   sniper          Boolean  @default(false)
+  /// The hidden composite Wallet Score (walletScore in core's wallets/walletScore.ts) and the
+  /// counts behind it beside appearances, dumps and fastExits: coins it bought before the tape's
+  /// anchor, those of them that made a clean 2x / 4x within the hour, and coins it traded itself
+  /// at 2x / 4x or better. Null under three coins. Never shown; recorded on decisions only.
+  earlyBuys       Int      @default(0)
+  early2x         Int      @default(0)
+  early4x         Int      @default(0)
+  own2x           Int      @default(0)
+  own4x           Int      @default(0)
+  walletScore     Float?
   /// Median % of supply it bought.
   medianSupplyPct Float?
   solIn           Float

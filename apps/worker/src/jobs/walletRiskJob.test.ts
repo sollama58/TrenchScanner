@@ -144,6 +144,73 @@ describe.skipIf(!dbAvailable)("wallet risk job", () => {
       earlyWins: 1,
       // Under ten coins: no label yet, however good the rate.
       winner: false,
+      // The Wallet Score's counts: own 2x on any clean stake of 0.05 SOL or more (the first three
+      // coins), and four coins first bought before the anchor.
+      own2x: 3,
+      own4x: 0,
+      earlyBuys: 4,
+      early2x: 0,
+    });
+    const row = await prisma.walletRisk.findUniqueOrThrow({ where: { wallet: trader } });
+    expect(row.walletScore).not.toBeNull();
+  });
+
+  it("counts the Wallet Score's early 2x and 4x from the call's outcome", async () => {
+    const early = `${TAG}-early`;
+    const anchorAt = new Date("2026-10-14T10:00:00Z");
+    // Per coin: [hit2x, hit4x, disqualified, bought before the anchor]
+    const coins: [boolean, boolean, boolean, boolean][] = [
+      [true, true, false, true], // early 4x run
+      [true, false, false, true], // early 2x
+      [true, true, true, true], // disqualified: neither
+      [true, true, false, false], // bought after the anchor: neither
+    ];
+    for (const [i, [hit2x, hit4x, disqualified, before]] of coins.entries()) {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-early-${i}` } });
+      const outcome = await prisma.candidateOutcome.create({
+        data: {
+          tokenId: token.id,
+          anchorAt,
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 100_000,
+          features: {},
+          sampleKind: "event",
+          nextCheckAt: anchorAt,
+          peak1hPriceUsd: 1,
+          low1hPriceUsd: 1,
+          lowBefore2xPriceUsd: 1,
+          peak24hPriceUsd: 1,
+          hit2xIn1h: hit2x,
+          hit4xIn1h: hit4x,
+          disqualified,
+        },
+      });
+      await prisma.tokenTradeTape.create({
+        data: {
+          tokenId: token.id,
+          outcomeId: outcome.id,
+          anchorAt,
+          reason: "called",
+          status: "done",
+          windowEnd: anchorAt,
+        },
+      });
+      await prisma.tokenWalletActivity.create({
+        data: {
+          tokenId: token.id,
+          wallet: early,
+          buys: 1,
+          solIn: 1,
+          firstBuyAt: new Date(anchorAt.getTime() + (before ? -60_000 : 60_000)),
+        },
+      });
+    }
+    await runWalletRiskJob();
+    expect(await prisma.walletRisk.findUnique({ where: { wallet: early } })).toMatchObject({
+      appearances: 4,
+      earlyBuys: 3,
+      early2x: 2,
+      early4x: 1,
     });
   });
 });

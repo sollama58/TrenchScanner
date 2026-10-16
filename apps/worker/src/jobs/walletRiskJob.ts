@@ -5,7 +5,10 @@ import {
   walletRiskScore,
   walletWinScore,
   walletLabels,
+  walletScore,
+  walletScoreMarket,
   MIN_WIN_SOL,
+  OWN_MULTIPLE_MIN_SOL,
   OVERSOLD_TOKENS,
   RISKY_WALLET_SCORE,
   WALLET_WIN_MULTIPLE,
@@ -32,14 +35,51 @@ const logger = createLogger("wallet-risk");
  * early win is one the wallet first bought before the tape's anchor, so a decision could have seen
  * it holding. The win score (walletWinScore) is built from those against the market's win rate,
  * the way the risk score is built from dumps.
+ *
+ * The hidden Wallet Score (user ask 2026-10-16, core's wallets/walletScore.ts) is built from the
+ * same rows against the market's rates: coins bought before the anchor that then made a clean 2x
+ * or 4x within the hour (the call's outcome row), own trades at 2x or 4x, fast exits and dumps.
  */
+
+/** A clean trade: no more tokens sold than bought on the tape, and no sell before the first buy. */
+const cleanSql = Prisma.sql`(a."tokensSold" <= ${OVERSOLD_TOKENS} * a."tokensBought"
+  AND NOT (a."firstSellAt" IS NOT NULL AND a."firstBuyAt" IS NOT NULL AND a."firstSellAt" < a."firstBuyAt"))`;
 
 /** A win: the wallet's own clean trade at WALLET_WIN_MULTIPLE or better, for MIN_WIN_SOL of profit. */
 const winSql = Prisma.sql`(a."solIn" > 0
   AND a."solOut" >= ${WALLET_WIN_MULTIPLE} * a."solIn"
   AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}
-  AND a."tokensSold" <= ${OVERSOLD_TOKENS} * a."tokensBought"
-  AND NOT (a."firstSellAt" IS NOT NULL AND a."firstBuyAt" IS NOT NULL AND a."firstSellAt" < a."firstBuyAt"))`;
+  AND ${cleanSql})`;
+
+/** An own trade at `multiple` or better (the Wallet Score's own2x / own4x). */
+const ownMultipleSql = (multiple: number) => Prisma.sql`(a."solIn" >= ${OWN_MULTIPLE_MIN_SOL}
+  AND a."solOut" >= ${multiple} * a."solIn"
+  AND ${cleanSql})`;
+
+/** Bought before the tape's anchor, so a decision could have seen it buying. */
+const earlySql = Prisma.sql`(a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."anchorAt")`;
+
+/** The Wallet Score's counts, as one SELECT list (the per-wallet query and the market totals). */
+export const scoreCountsSql = Prisma.sql`COUNT(*) FILTER (WHERE ${earlySql}) AS "earlyBuys",
+  COUNT(*) FILTER (WHERE ${earlySql} AND o."hit2xIn1h" AND o."disqualified" IS NOT TRUE) AS "early2x",
+  COUNT(*) FILTER (WHERE ${earlySql} AND o."hit4xIn1h" AND o."disqualified" IS NOT TRUE) AS "early4x",
+  COUNT(*) FILTER (WHERE ${ownMultipleSql(2)}) AS "own2x",
+  COUNT(*) FILTER (WHERE ${ownMultipleSql(4)}) AS "own4x",
+  COUNT(*) FILTER (WHERE a."fastExit") AS "fastExits"`;
+
+export type ScoreCountRow = Record<
+  "earlyBuys" | "early2x" | "early4x" | "own2x" | "own4x" | "fastExits",
+  bigint
+>;
+
+export const scoreCounts = (r: ScoreCountRow) => ({
+  earlyBuys: Number(r.earlyBuys),
+  early2x: Number(r.early2x),
+  early4x: Number(r.early4x),
+  own2x: Number(r.own2x),
+  own4x: Number(r.own4x),
+  fastExits: Number(r.fastExits),
+});
 
 const MIN_APPEARANCES = 2;
 
@@ -59,6 +99,12 @@ const WALLET_RISK_TABLE: ReplaceRowsSpec = {
     { name: "dumper", type: "boolean" },
     { name: "winner", type: "boolean" },
     { name: "sniper", type: "boolean" },
+    { name: "earlyBuys", type: "integer" },
+    { name: "early2x", type: "integer" },
+    { name: "early4x", type: "integer" },
+    { name: "own2x", type: "integer" },
+    { name: "own4x", type: "integer" },
+    { name: "walletScore", type: "double precision" },
     { name: "medianSupplyPct", type: "double precision" },
     { name: "solIn", type: "double precision" },
     { name: "solOut", type: "double precision" },
@@ -85,30 +131,43 @@ interface Agg {
 export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promise<JobRunMeta> {
   const now = new Date((opts.now ?? Date.now)());
   // The market's dump rate, over every wallet, the once-seen ones included.
-  const [totals] = await prisma.$queryRaw<{ appearances: bigint; dumps: bigint; wins: bigint }[]>`
-    SELECT COUNT(*) FILTER (WHERE a."buys" > 0) AS appearances,
-           COUNT(*) FILTER (WHERE a."buys" > 0 AND a."dumpedIntoStop") AS dumps,
-           COUNT(*) FILTER (WHERE a."buys" > 0 AND ${winSql}) AS wins
+  // The Wallet Score's market rates are over the same rows (bought), from the same SELECT list.
+  const [totals] = await prisma.$queryRaw<
+    ({ appearances: bigint; dumps: bigint; wins: bigint } & ScoreCountRow)[]
+  >`
+    SELECT COUNT(*) AS appearances,
+           COUNT(*) FILTER (WHERE a."dumpedIntoStop") AS dumps,
+           COUNT(*) FILTER (WHERE ${winSql}) AS wins,
+           ${scoreCountsSql}
     FROM "TokenWalletActivity" a
-    JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')`;
+    JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
+    LEFT JOIN "CandidateOutcome" o ON o."id" = t."outcomeId"
+    WHERE a."buys" > 0`;
   const appearances = Number(totals?.appearances ?? 0);
   const marketDumpRate = appearances > 0 ? Number(totals!.dumps) / appearances : 0;
   const marketWinRate = appearances > 0 ? Number(totals!.wins) / appearances : 0;
+  const scoreMarket = walletScoreMarket({
+    appearances,
+    dumps: Number(totals?.dumps ?? 0),
+    ...(totals
+      ? scoreCounts(totals)
+      : { earlyBuys: 0, early2x: 0, early4x: 0, own2x: 0, own4x: 0, fastExits: 0 }),
+  });
 
   const rows = await prisma.$queryRaw<
-    (Omit<Agg, "appearances" | "dumps" | "fastExits" | "snipes" | "wins" | "earlyWins"> & {
-      appearances: bigint;
-      dumps: bigint;
-      fastExits: bigint;
-      snipes: bigint;
-      wins: bigint;
-      earlyWins: bigint;
-    })[]
+    (Omit<Agg, "appearances" | "dumps" | "fastExits" | "snipes" | "wins" | "earlyWins"> &
+      ScoreCountRow & {
+        appearances: bigint;
+        dumps: bigint;
+        snipes: bigint;
+        wins: bigint;
+        earlyWins: bigint;
+      })[]
   >`
     SELECT a."wallet",
            COUNT(*) AS appearances,
            COUNT(*) FILTER (WHERE a."dumpedIntoStop") AS dumps,
-           COUNT(*) FILTER (WHERE a."fastExit") AS "fastExits",
+           ${scoreCountsSql},
            COUNT(*) FILTER (WHERE a."launchSniper") AS snipes,
            COUNT(*) FILTER (WHERE ${winSql}) AS wins,
            COUNT(*) FILTER (WHERE ${winSql}
@@ -122,6 +181,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
            MAX(COALESCE(a."firstBuyAt", a."createdAt")) AS "lastSeenAt"
     FROM "TokenWalletActivity" a
     JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
+    LEFT JOIN "CandidateOutcome" o ON o."id" = t."outcomeId"
     WHERE a."buys" > 0
     GROUP BY a."wallet"
     HAVING COUNT(*) >= ${MIN_APPEARANCES}`;
@@ -134,6 +194,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
       snipes: Number(r.snipes),
     };
     const wins = { appearances: stats.appearances, wins: Number(r.wins), earlyWins: Number(r.earlyWins) };
+    const counts = scoreCounts(r);
     const labels = walletLabels(
       { appearances: stats.appearances, dumps: stats.dumps, wins: wins.wins, snipes: stats.snipes },
       { dumpRate: marketDumpRate, winRate: marketWinRate },
@@ -146,6 +207,15 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
       earlyWins: wins.earlyWins,
       winScore: walletWinScore(wins, marketWinRate),
       ...labels,
+      earlyBuys: counts.earlyBuys,
+      early2x: counts.early2x,
+      early4x: counts.early4x,
+      own2x: counts.own2x,
+      own4x: counts.own4x,
+      walletScore: walletScore(
+        { ...counts, appearances: stats.appearances, dumps: stats.dumps },
+        scoreMarket,
+      ),
       medianSupplyPct: r.medianSupplyPct === null ? null : Number(r.medianSupplyPct),
       solIn: Number(r.solIn),
       solOut: Number(r.solOut),
@@ -172,6 +242,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
     snipers: data.filter((d) => d.sniper).length,
     marketDumpRate: Math.round(marketDumpRate * 10_000) / 10_000,
     marketWinRate: Math.round(marketWinRate * 10_000) / 10_000,
+    walletScored: data.filter((d) => d.walletScore !== null).length,
     appearances,
   };
   logger.info("wallet risk rebuilt", meta);

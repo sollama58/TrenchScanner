@@ -196,9 +196,11 @@ async function walletDetail(wallet: string) {
       })
     ).map((o) => [o.id, o]),
   );
+  // The Wallet Score stays hidden (user ask 2026-10-16): it is a model input, not a reading.
+  const shown = risk ? (({ walletScore: _hidden, ...rest }) => rest)(risk) : null;
   return {
     wallet,
-    risk,
+    risk: shown,
     coins: activity.map((a) => {
       const o = a.token.tradeTape?.outcomeId ? outcomes.get(a.token.tradeTape.outcomeId) : undefined;
       return {
