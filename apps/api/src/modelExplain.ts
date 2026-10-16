@@ -73,15 +73,15 @@ const LEARNER_KINDS: readonly string[] = [
   NARRATIVE_LED_MODEL_KIND,
 ];
 
-function isLearnerParams(p: ContestantParams | null): p is TrainedCuratorParams {
+export function isLearnerParams(p: ContestantParams | null): p is TrainedCuratorParams {
   return p !== null && LEARNER_KINDS.includes(p.kind);
 }
 
-function asFeatures(value: unknown): Features | null {
+export function asFeatures(value: unknown): Features | null {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Features) : null;
 }
 
-async function loadParams(id: string): Promise<ContestantParams | null> {
+export async function loadParams(id: string): Promise<ContestantParams | null> {
   const row = await prisma.curatorModel.findUnique({ where: { id }, select: { params: true } });
   const params = row?.params as (ContestantParams & { pruned?: unknown }) | null | undefined;
   if (!params || typeof params !== "object" || typeof params.kind !== "string") return null;
@@ -710,7 +710,10 @@ export interface CallExplain {
 
 const PUSHES = 6;
 
-function pushes(params: TrainedCuratorParams, features: Features): { for: CallPush[]; against: CallPush[] } {
+export function pushes(
+  params: TrainedCuratorParams,
+  features: Features,
+): { for: CallPush[]; against: CallPush[] } {
   const byLabel = new Map<string, number>();
   for (const c of featureContributions(params, features)) {
     if (!Number.isFinite(c.value)) continue;

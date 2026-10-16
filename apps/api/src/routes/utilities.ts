@@ -37,6 +37,7 @@ import {
 } from "../sideTransfers.js";
 import { currentMarketCap } from "./matches.js";
 import { readTokenChart, readTokenSage } from "./tokens.js";
+import { readTokenProfile } from "../tokenProfile.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 import { loadWalletBundle } from "../walletBundle.js";
@@ -558,6 +559,16 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
     if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
     return readTokenSage(lookup.subject);
+  });
+
+  /** The lookup's Dev, Socials and Order flow cards (tokenProfile.ts). */
+  app.get("/token/:mint/profile", async (request, reply) => {
+    const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
+    if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
+    const profile = await readTokenProfile(lookup.subject);
+    if (!profile) return reply.code(404).send({ error: "token not found" });
+    reply.header("Cache-Control", "private, max-age=15");
+    return profile;
   });
 }
 

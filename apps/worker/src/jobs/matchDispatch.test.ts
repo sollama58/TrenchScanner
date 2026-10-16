@@ -8,6 +8,7 @@ import {
   markFilterPassComplete,
   resetFilterPasses,
   awaitsWalletFigure,
+  awaitsScreenReading,
   ALERT_COOLDOWN_HOURS,
   FILTER_ARM_QUIET_MINUTES,
   type FilterWithUser,
@@ -35,6 +36,8 @@ function scoredFixture(mintAddress: string): ScoredToken {
     ageMinutes: 90,
     graduated: true,
     narrativeTags: [],
+    // The screen's holder reading is in (see awaitsScreenReading): most tests are about alerting.
+    freshTop10WalletPct: 10,
     rugScreen: { passed: true, reasons: [] },
     score: { momentum: 85, holderHealth: 75, age: 100, narrative: 40, total: 80 },
   };
@@ -404,6 +407,24 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     ).toBe(1);
   });
 
+  it("holds every filter's match until the screen's holder reading is in, however long it takes", async () => {
+    const { token, snapshot } = await seedToken("screen-wait");
+    const plain = await seedUserWithFilter("n");
+    const env = { ...loadEnv(), MATCH_ALERT_GUARD: "off" as const, FILTER_WALLET_MAX_WAIT_SECONDS: 0 };
+    const args = { token, snapshot, activeFilters: [plain], env };
+    // No holder list yet, so no fresh-wallet share: the screen has not looked at the holders.
+    const unread = { ...scoredFixture(token.mintAddress), freshTop10WalletPct: undefined };
+
+    // Held even with the filter-figure wait turned off: the screen's cuts aren't a filter's choice.
+    expect(await createMatchesForCandidate({ ...args, scored: unread })).toBe(0);
+    expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
+
+    // The reading lands: the hold never started a cooldown, so it alerts at once.
+    expect(await createMatchesForCandidate({ ...args, scored: { ...unread, freshTop10WalletPct: 20 } })).toBe(
+      1,
+    );
+  });
+
   it("anchors one graded outcome for every match of the token, and reports filter records", async () => {
     const env = loadEnv();
     const { token, snapshot } = await seedToken("graded");
@@ -459,5 +480,15 @@ describe("awaitsWalletFigure", () => {
     expect(
       awaitsWalletFigure({ ...known, emptyTop10WalletPct: undefined }, { maxFreshTop10WalletPct: 60 }),
     ).toBe(false);
+  });
+});
+
+describe("awaitsScreenReading", () => {
+  it("waits until the fresh-wallet share the screen cuts on is known", () => {
+    expect(awaitsScreenReading({})).toBe(true);
+    expect(awaitsScreenReading({ freshTop10WalletPct: 0 })).toBe(false);
+    expect(awaitsScreenReading({ freshTopHolderCount: 3, freshTopHoldersChecked: 25 })).toBe(false);
+    // A top-25 count over no holders read is no reading.
+    expect(awaitsScreenReading({ freshTopHolderCount: 0, freshTopHoldersChecked: 0 })).toBe(true);
   });
 });

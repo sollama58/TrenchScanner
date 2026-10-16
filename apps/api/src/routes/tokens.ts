@@ -10,10 +10,13 @@ import {
   RISKY_WALLET_SCORE,
   STONKS_FEE_WALLET,
   STONKS_FEE_WALLET_LABEL,
+  type Env,
   type HeliusClient,
   type TokenSageAnalysis,
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
+import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
+import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import {
   CandleCache,
   KeyedCache,
@@ -298,7 +301,7 @@ export async function readStonkFees(
  */
 export async function registerTokenRoutes(
   app: FastifyInstance,
-  opts: { stonkFees?: StonkFeesReader | null } = {},
+  opts: { env?: Env; stonkFees?: StonkFeesReader | null } = {},
 ) {
   // Token detail is reached from the paid feed. Behind the paywall - see authenticateSubscriber in server.ts.
   app.addHook("preHandler", app.authenticateSubscriber);
@@ -401,6 +404,49 @@ export async function registerTokenRoutes(
       return readStonkFees(mintAddress, opts.stonkFees ?? null, token.launchpad);
     },
   );
+
+  /**
+   * Why the models did or didn't call the coin (tokenWhy.ts), at its decision moment at or before
+   * `at` (ms; a call's time), else its newest one. Asked for when the reader opens it.
+   */
+  app.get("/:mintAddress/why", async (request, reply): Promise<TokenWhy | undefined> => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    const raw = (request.query as { at?: string } | undefined)?.at;
+    const at = raw === undefined ? null : Number(raw);
+    if (!MINT_RE.test(mintAddress) || (at !== null && !(Number.isFinite(at) && at > 0))) {
+      reply.code(400).send({ error: "needs a mint and, optionally, a time in ms" });
+      return;
+    }
+    if (!opts.env) {
+      reply.code(404).send({ error: "not available" });
+      return;
+    }
+    if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
+    const why = await readTokenWhy(opts.env, mintAddress, at);
+    if (!why) {
+      reply.code(404).send({ error: "token not found" });
+      return;
+    }
+    reply.header("Cache-Control", "private, max-age=60");
+    return why;
+  });
+
+  /** The token modal's Dev, Socials and Order flow cards (tokenProfile.ts). */
+  app.get("/:mintAddress/profile", async (request, reply): Promise<TokenProfile | undefined> => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    if (!MINT_RE.test(mintAddress)) {
+      reply.code(400).send({ error: "not a valid mint" });
+      return;
+    }
+    if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
+    const profile = await readTokenProfile(mintAddress);
+    if (!profile) {
+      reply.code(404).send({ error: "token not found" });
+      return;
+    }
+    reply.header("Cache-Control", "private, max-age=30");
+    return profile;
+  });
 
   /** TokenSage's read of the token, for the card's TokenSage view (src/tokenSageView.ts). */
   app.get("/:mintAddress/sage", async (request, reply): Promise<SageView | undefined> => {

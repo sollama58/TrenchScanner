@@ -8,6 +8,7 @@ import { WalletText } from "./WalletText";
 import { LoadingNote, Reveal, SkelValue } from "./Loading";
 import { Skeleton } from "./Charts";
 import { bundleRead, KolSideWallets, SideLabelsExport, WalletBundle } from "../tabs/SideWalletChecker";
+import { WalletWebButton } from "./WalletWeb";
 import {
   CheckIcon,
   CloseIcon,
@@ -428,7 +429,13 @@ function Profile({ p }: { p: WalletProfile }) {
       </p>
 
       <Funding p={p} names={names} />
-      {p.kolSides && p.kolSides.length > 0 && <KolSides sides={p.kolSides} />}
+      {p.kolSides && p.kolSides.length > 0 && (
+        <KolSides
+          sides={p.kolSides}
+          wallet={p.wallet}
+          name={p.kol?.knownSideOf?.name ?? p.kol?.name ?? shortAddress(p.wallet)}
+        />
+      )}
       {!p.kol && <BundleLabels wallet={p.wallet} />}
       {p.risk && <Risk risk={p.risk} />}
       <Coins
@@ -508,11 +515,14 @@ const KOL_SIDE_GROUPS: { kind: KolSide["kind"]; title: string }[] = [
  * A KOL's labeled sides under its first funder (user ask 2026-10-15): its Known Sides, the wallets
  * it funded and its high-confidence Possible Sides, with the names the Side Wallet Checker exports.
  */
-function KolSides({ sides }: { sides: KolSide[] }) {
+function KolSides({ sides, wallet, name }: { sides: KolSide[]; wallet: string; name: string }) {
   return (
     <section className="sage-card wm-section">
       <h4 className="wm-sides-head">
         Labeled side wallets <span className="sage-tag">{sides.length}</span>
+        <WalletWebButton wallet={wallet} name={name} className="ghost small-btn side-web-btn wm-web-btn">
+          <span className="wm-web-label">Wallet web</span>
+        </WalletWebButton>
         <SideLabelsExport labels={{ count: sides.length, wallets: sides }} />
       </h4>
       {KOL_SIDE_GROUPS.map(({ kind, title }) => {
@@ -587,12 +597,19 @@ function BundleLabels({ wallet }: { wallet: string }) {
       <section className="sage-card wm-section">
         <h4 className="wm-sides-head">
           Labeled bundle wallets <span className="sage-tag">{labels.length}</span>
+          <WalletWebButton
+            wallet={wallet}
+            name={shortAddress(wallet)}
+            className="ghost small-btn side-web-btn wm-web-btn"
+          >
+            <span className="wm-web-label">Wallet web</span>
+          </WalletWebButton>
           <SideLabelsExport labels={{ count: labels.length, wallets: labels }} />
         </h4>
         <p className="faint small wm-note">
           Wallets in its Multi-Wallet-Bundle that would qualify for a label: they bought nearly all of its
           coins within minutes of it, or moved coins with it 4 times in 48 hours or 10 in 72. Not stored, and
-          not on the bubble map.
+          not on the token bubble map.
         </p>
         <ul className="wm-linked small">
           {labels.map((l) => (
