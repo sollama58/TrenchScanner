@@ -805,9 +805,10 @@ const PATH_TAPE_MAX_WINDOW_MINUTES = 30;
  * allowed, as the pre-refill rule reads the whole path block, and the onset guard holds
  * pathGapMinutes until enough rows carry it.
  *
- * Placeholder: the deploy time of the change, set at merge.
+ * Set to the deploy of the change (2026-10-16 ~19:20 UTC), with slack on the late side so no row
+ * banked under the old rule reads as the new one.
  */
-export const PATH_RETURNS_ACROSS_GAPS_SINCE = new Date("2026-10-16T19:00:00Z");
+export const PATH_RETURNS_ACROSS_GAPS_SINCE = new Date("2026-10-16T19:30:00Z");
 const PATH_RETURN_WINDOWS = [
   ["pathRet15mPct", 15],
   ["pathRet30mPct", 30],
@@ -843,10 +844,10 @@ export const SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE = new Date("2026-10-12T1
  * landed, so on hourly rows under 20 minutes old the X-read block was never present (0% against
  * 42-57% of decisions), the wallet checks were in on half and the Linked reading on a third
  * (notes/data-audit-2026-10-16, skew.md section 4, round2-hunt.md section 5). Since then the
- * hourly row waits for the same readiness on its own clock. The time the wait was deployed -
- * adjust at merge.
+ * hourly row waits for the same readiness on its own clock. The time the wait was deployed
+ * (2026-10-16 ~19:20 UTC), with slack on the late side.
  */
-export const HOURLY_ROWS_WAIT_SINCE = new Date("2026-10-16T19:00:00Z");
+export const HOURLY_ROWS_WAIT_SINCE = new Date("2026-10-16T19:30:00Z");
 
 /**
  * What an hourly row banked without the wait lacked (see HOURLY_ROWS_WAIT_SINCE): the deep read's
@@ -881,21 +882,21 @@ const HOURLY_UNWAITED_FEATURES: readonly CandidateFeatureName[] = [
  * the day it ran, and from snapshots taken up to 90 s after the anchor. The backfill wrote into
  * the stored vector with no mark, so those values can't be told from the scan's own and can't be
  * rebuilt point-in-time after the fact. Only rows whose KOL Bundled % was above 0 are affected:
- * with none, Bundled % is the linked share itself, exact at any time. Placeholder: the deploy
- * time, adjusted at merge.
+ * with none, Bundled % is the linked share itself, exact at any time. The deploy time of the
+ * point-in-time backfill (2026-10-16 ~19:20 UTC), with slack on the late side.
  */
-export const BUNDLED_SUPPLY_POINT_IN_TIME_FROM = new Date("2026-10-16T19:00:00Z");
+export const BUNDLED_SUPPLY_POINT_IN_TIME_FROM = new Date("2026-10-16T19:30:00Z");
 
 /**
  * When rows started carrying the ns* writer's rules version (nsRulesVersion, NS_RULES_VERSION in
- * curation/narrativeFeatures.ts). PLACEHOLDER: the deploy time of the change that added the
- * marker, to be set to the real one at merge (user note 2026-10-16). A row banked before this
+ * curation/narrativeFeatures.ts): the deploy of the change that added the marker (2026-10-16
+ * ~19:20 UTC), with slack on the late side. A row banked before this
  * without a version was written under rules nobody can name: TokenSage's value regimes moved with
  * #611 / #631 and their neighbours on 10-14..16 (nsDepthFull 52% to 83% of event rows,
  * nsCatCelebrity 3-8% to 41%, a failed X fetch written as zeros), and no mark on the row says
  * which side of a step it sits on (notes/data-audit-2026-10-16/round2-hunt.md, section 6).
  */
-export const NS_RULES_VERSION_MARKER_SINCE = new Date("2026-10-16T19:00:00Z");
+export const NS_RULES_VERSION_MARKER_SINCE = new Date("2026-10-16T19:30:00Z");
 
 /**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
