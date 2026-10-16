@@ -1,6 +1,9 @@
 import {
   createLogger,
   holderTransfersReading,
+  KNOWN_EXCHANGE_WALLETS,
+  linkingTransfers,
+  prisma,
   sharedSignatures,
   transferMovesOf,
   type HeliusClient,
@@ -46,7 +49,7 @@ interface AccountSignatures {
 /** Each token account's signatures, by its address. */
 const accountSigs = new Map<string, AccountSignatures>();
 /** Each read transaction's moves of its coin, by "mint:signature"; null when it is not a transfer. */
-const txMoves = new Map<string, { atMs: number | null; moves: TransferMove[] } | null>();
+const txMoves = new Map<string, { atMs: number | null; moves: TransferMove[]; signature: string } | null>();
 
 let calls = { getSignaturesForAddress: 0, getTransaction: 0 };
 
@@ -181,7 +184,7 @@ export async function resolveHolderTransfers(
       if (tx === undefined || tx === "failed") continue;
       for (const u of uses) {
         const moves = tx ? transferMovesOf(u.mint, tx) : null;
-        rememberMoves(`${u.mint}:${sig}`, moves ? { atMs: u.atMs, moves } : null);
+        rememberMoves(`${u.mint}:${sig}`, moves ? { atMs: u.atMs, moves, signature: sig } : null);
       }
     }
   } catch (err) {
@@ -202,7 +205,7 @@ export function holderTransfersOf(g: TransferGroup, nowMs = Date.now()): HolderT
       if (!e || nowMs - e.atMs > ACCOUNT_MAX_AGE_MS) return null;
     }
   }
-  const moves: { atMs: number | null; moves: TransferMove[] }[] = [];
+  const moves: { atMs: number | null; moves: TransferMove[]; signature: string }[] = [];
   for (const sig of sharedOf(h.accountsOf)) {
     const m = txMoves.get(`${g.mintAddress}:${sig}`);
     if (m === undefined) return null;
@@ -225,11 +228,72 @@ function signatureTime(accountsOf: ReadonlyMap<string, readonly string[]>, sig: 
   return null;
 }
 
-function rememberMoves(key: string, value: { atMs: number | null; moves: TransferMove[] } | null): void {
+function rememberMoves(
+  key: string,
+  value: { atMs: number | null; moves: TransferMove[]; signature: string } | null,
+): void {
   txMoves.delete(key);
   txMoves.set(key, value);
   if (txMoves.size > MAX_TXS) {
     const oldest = txMoves.keys().next().value;
     if (oldest !== undefined) txMoves.delete(oldest);
   }
+}
+
+/** Transfers already stored (signature:from:to), so a coin read every cycle writes each once. */
+const recorded = new Set<string>();
+const MAX_RECORDED = 100_000;
+
+/**
+ * Keeps each transfer that links two top holders (core's linkingTransfers: no dust, no exchange or
+ * hot wallet) as a HolderTransferEvent row, for the flags read across coins (the KOL Possible Side
+ * and Multi-Wallet-Bundle tiers in core's holderTransfers.ts). `holdersOf`: each coin's linked
+ * reading, for its holders' shares. Written behind the cycle: nothing waits on it, and a failed
+ * write is tried again next cycle.
+ */
+export function recordTransferEvents(
+  transfersByMint: ReadonlyMap<string, HolderTransfersReading | null>,
+  holdersOf: ReadonlyMap<string, { holders: readonly { wallet: string; pct: number }[] } | null>,
+  hot: (wallet: string) => boolean,
+): void {
+  const rows: {
+    signature: string;
+    fromWallet: string;
+    toWallet: string;
+    mintAddress: string;
+    pct: number;
+    at: Date;
+  }[] = [];
+  for (const [mint, reading] of transfersByMint) {
+    const holders = holdersOf.get(mint)?.holders;
+    if (!reading?.events?.length || !holders?.length) continue;
+    const pctOf = new Map(holders.map((h) => [h.wallet, h.pct]));
+    const linking = linkingTransfers(reading.events, pctOf, (w) => hot(w) || KNOWN_EXCHANGE_WALLETS.has(w));
+    for (const e of linking) {
+      const key = `${e.signature}:${e.from}:${e.to}`;
+      if (e.atMs === null || recorded.has(key)) continue;
+      rows.push({
+        signature: e.signature,
+        fromWallet: e.from,
+        toWallet: e.to,
+        mintAddress: mint,
+        pct: Math.round(e.pct * 10_000) / 10_000,
+        at: new Date(e.atMs),
+      });
+    }
+  }
+  if (rows.length === 0) return;
+  void prisma.holderTransferEvent
+    .createMany({ data: rows, skipDuplicates: true })
+    .then(() => {
+      for (const r of rows) recorded.add(`${r.signature}:${r.fromWallet}:${r.toWallet}`);
+      while (recorded.size > MAX_RECORDED) {
+        const oldest = recorded.values().next().value;
+        if (oldest === undefined) break;
+        recorded.delete(oldest);
+      }
+    })
+    .catch((err: unknown) =>
+      logger.warn("holder transfer events write failed", { rows: rows.length, error: String(err) }),
+    );
 }

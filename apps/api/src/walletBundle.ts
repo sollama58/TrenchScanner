@@ -4,7 +4,9 @@ import {
   SIDE_GAP_MINUTES,
   SIDE_MIN_SHARED,
   SIDE_WINDOWS,
+  TRANSFER_SIDE_TIERS,
   isBot,
+  transferSideTier,
   possibleSides,
   prisma,
   rankSideWallets,
@@ -60,6 +62,12 @@ export interface BundleLabel {
   hours: number;
   /** "7xKXtg_1": the opened wallet's first six characters and the wallet's number under it. */
   name: string;
+  /**
+   * Transfers of a coin between it and the opened wallet that qualify it (user ask 2026-10-16: 4
+   * within 48 hours or 10 within 72, core's TRANSFER_SIDE_TIERS), in the tier's span; absent when
+   * buying alongside qualifies it alone. A transfer-only entry has pct, shared and coins 0.
+   */
+  transfers?: number;
 }
 
 export interface WalletBundle {
@@ -337,6 +345,14 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
     excluded,
     hidden,
   );
+  // Wallets that moved coins with it often enough to qualify by transfers alone (user ask 2026-10-16).
+  const transferLabels = withTransferLabels(
+    wallet,
+    labeled,
+    await transferPartners(wallet, now),
+    excluded,
+    hidden,
+  );
   const listed = [...new Set(SIDE_WINDOWS.flatMap((w) => lists.sides[w].map((s) => s.wallet)))];
   const risk = listed.length
     ? await prisma.walletRisk.findMany({
@@ -359,6 +375,66 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
       BundleSideWallet[]
     >,
     likelyBots: lists.likelyBots,
-    labeled,
+    labeled: transferLabels,
   };
+}
+
+/**
+ * Each wallet that moved a coin with `wallet`, either way, inside the longest TRANSFER_SIDE_TIERS
+ * span, with each transfer's time (HolderTransferEvent keeps only those that link: no dust, no
+ * exchange or hot wallet). KOLs are left to their own lists.
+ */
+async function transferPartners(wallet: string, now: number): Promise<{ side: string; ats: number[] }[]> {
+  const longest = Math.max(...TRANSFER_SIDE_TIERS.map((t) => t.hours));
+  const since = new Date(now - longest * 3_600_000);
+  const rows = await prisma.$queryRaw<{ side: string; ats: Date[] }[]>`
+    SELECT side, array_agg("at" ORDER BY "at") AS ats
+    FROM (
+      SELECT e."toWallet" AS side, e."at" FROM "HolderTransferEvent" e
+      WHERE e."fromWallet" = ${wallet} AND e."at" >= ${since}
+      UNION ALL
+      SELECT e."fromWallet" AS side, e."at" FROM "HolderTransferEvent" e
+      WHERE e."toWallet" = ${wallet} AND e."at" >= ${since}
+    ) ev
+    WHERE NOT EXISTS (SELECT 1 FROM "KolWallet" k WHERE k."wallet" = ev.side)
+    GROUP BY side`;
+  return rows.map((r) => ({ side: r.side, ats: r.ats.map((d) => new Date(d).getTime()) }));
+}
+
+/**
+ * The labels with the transfer tier added (user ask 2026-10-16): a wallet already labeled by buying
+ * alongside carries its transfer count too; one transfers alone qualify joins after them. Bots and
+ * excluded wallets never label. Renumbered under the opened wallet. Exported for tests.
+ */
+export function withTransferLabels(
+  wallet: string,
+  labeled: readonly BundleLabel[],
+  partners: readonly { side: string; ats: readonly number[] }[],
+  excluded: ReadonlySet<string>,
+  hidden: ReadonlySet<string>,
+): BundleLabel[] {
+  const out = labeled.map((l) => ({ ...l }));
+  const byWallet = new Map(out.map((l) => [l.wallet, l]));
+  const extra: BundleLabel[] = [];
+  for (const p of partners) {
+    if (p.side === wallet || excluded.has(p.side) || hidden.has(p.side) || KNOWN_EXCHANGE_WALLETS.has(p.side))
+      continue;
+    const tier = transferSideTier(p.ats);
+    if (!tier) continue;
+    const had = byWallet.get(p.side);
+    if (had) had.transfers = tier.transfers;
+    else
+      extra.push({
+        wallet: p.side,
+        pct: 0,
+        shared: 0,
+        coins: 0,
+        hours: tier.hours,
+        name: "",
+        transfers: tier.transfers,
+      });
+  }
+  extra.sort((a, b) => (b.transfers ?? 0) - (a.transfers ?? 0) || (a.wallet < b.wallet ? -1 : 1));
+  const stem = wallet.slice(0, 6);
+  return [...out, ...extra].map((l, i) => ({ ...l, name: `${stem}_${i + 1}` }));
 }

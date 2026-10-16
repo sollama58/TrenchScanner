@@ -12,7 +12,11 @@ import {
   SIDE_LIKELY_BOT_PCT,
   SIDE_MIN_SHARED,
   SIDE_WINDOWS,
+  TRANSFER_SIDE_INBOUND_TIERS,
+  TRANSFER_SIDE_OUTBOUND_TIERS,
   isBot,
+  inboundSideTier,
+  transferSideTier,
   possibleSides,
   rankSideWallets,
   type PairRow,
@@ -277,8 +281,45 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
         kolWallet: k.wallet,
         computedAt: now,
         rulesVersion: POSSIBLE_SIDE_RULES_VERSION,
+        transfers: 0,
       })),
   );
+
+  // Transfer labels (user ask 2026-10-16): a wallet the KOL sent coins to, 6 times in 24 hours, 10
+  // in 48 or 25 in 72; or one that sent coins to the KOL, 8 times over 1% of supply in 24 hours, 16
+  // over 0.5% in 24 or 16 over 2% in 72. Only transfers that link count (no dust, no exchange or hot
+  // wallet; the scan keeps only those).
+  const transferPairs = await transferSidePairs(now);
+  const possibleByPair = new Map(possible.map((p) => [`${p.wallet}:${p.kolWallet}`, p]));
+  let transferLabels = 0;
+  for (const t of transferPairs) {
+    if (bots.has(t.side) || botLike.has(t.side) || KNOWN_EXCHANGE_WALLETS.has(t.side)) continue;
+    const tier =
+      transferSideTier(
+        t.outAts.map((d) => d.getTime()),
+        TRANSFER_SIDE_OUTBOUND_TIERS,
+      ) ?? inboundSideTier(t.inAts.map((d, i) => ({ atMs: d.getTime(), pct: t.inPcts[i] ?? 0 })));
+    if (!tier) continue;
+    transferLabels += 1;
+    const had = possibleByPair.get(`${t.side}:${t.kol}`);
+    if (had) {
+      had.transfers = tier.transfers;
+      continue;
+    }
+    const label = {
+      wallet: t.side,
+      kolWallet: t.kol,
+      pct: 0,
+      shared: 0,
+      kolCoins: 0,
+      hours: tier.hours,
+      transfers: tier.transfers,
+      computedAt: now,
+      rulesVersion: POSSIBLE_SIDE_RULES_VERSION,
+    };
+    possible.push(label);
+    possibleByPair.set(`${t.side}:${t.kol}`, label);
+  }
 
   let possibleHeld = 0;
   let written = 0;
@@ -320,6 +361,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     written,
     withSides: data.filter((d) => (d.sides as Record<SideWindow, SideWallet[]>)["30d"].length > 0).length,
     possibleSides: possible.length,
+    transferLabels,
     possibleSidesHeld: possibleHeld,
     pairs: pairs.length,
     bots: bots.size,
@@ -328,6 +370,57 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   };
   logger.info("kol side wallets rebuilt", meta);
   return meta;
+}
+
+/** How long a holder transfer stays readable for the flags: well past the longest tier's span. */
+const TRANSFER_EVENT_KEEP_MS = 30 * DAY_MS;
+
+/**
+ * Every (KOL, other wallet) pair with linking transfers between them inside the longest tier's
+ * span: the times of those from the KOL to the wallet (`outAts`), and the times and % of supply of
+ * those from the wallet to the KOL (`inAts`, `inPcts`). A Known Side's transfers are its KOL's
+ * (KolWallet.mainWallet); transfers between two KOLs make no side. Old events are dropped first.
+ */
+async function transferSidePairs(
+  now: Date,
+): Promise<{ kol: string; side: string; outAts: Date[]; inAts: Date[]; inPcts: number[] }[]> {
+  await prisma.holderTransferEvent.deleteMany({
+    where: { at: { lt: new Date(now.getTime() - TRANSFER_EVENT_KEEP_MS) } },
+  });
+  const tiers = [...TRANSFER_SIDE_OUTBOUND_TIERS, ...TRANSFER_SIDE_INBOUND_TIERS];
+  const longest = Math.max(...tiers.map((t) => t.hours));
+  const fewest = Math.min(...tiers.map((t) => t.transfers));
+  const since = new Date(now.getTime() - longest * HOUR_MS);
+  const rows = await prisma.$queryRaw<
+    { kol: string; side: string; outAts: Date[] | null; inAts: Date[] | null; inPcts: number[] | null }[]
+  >`
+    WITH ev AS (
+      SELECT COALESCE(k."mainWallet", k."wallet") AS kol, e."toWallet" AS side, true AS "out", e."at", e."pct"
+      FROM "HolderTransferEvent" e
+      JOIN "KolWallet" k ON k."wallet" = e."fromWallet"
+      WHERE e."at" >= ${since}
+        AND NOT EXISTS (SELECT 1 FROM "KolWallet" k2 WHERE k2."wallet" = e."toWallet")
+      UNION ALL
+      SELECT COALESCE(k."mainWallet", k."wallet") AS kol, e."fromWallet" AS side, false AS "out", e."at", e."pct"
+      FROM "HolderTransferEvent" e
+      JOIN "KolWallet" k ON k."wallet" = e."toWallet"
+      WHERE e."at" >= ${since}
+        AND NOT EXISTS (SELECT 1 FROM "KolWallet" k2 WHERE k2."wallet" = e."fromWallet")
+    )
+    SELECT kol, side,
+      array_agg("at" ORDER BY "at") FILTER (WHERE "out") AS "outAts",
+      array_agg("at" ORDER BY "at") FILTER (WHERE NOT "out") AS "inAts",
+      array_agg("pct" ORDER BY "at") FILTER (WHERE NOT "out") AS "inPcts"
+    FROM ev
+    GROUP BY kol, side
+    HAVING COUNT(*) >= ${fewest}`;
+  return rows.map((r) => ({
+    kol: r.kol,
+    side: r.side,
+    outAts: r.outAts ?? [],
+    inAts: r.inAts ?? [],
+    inPcts: (r.inPcts ?? []).map(Number),
+  }));
 }
 
 async function knownSideWallets(tx: Prisma.TransactionClient): Promise<string[]> {

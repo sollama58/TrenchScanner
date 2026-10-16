@@ -262,13 +262,26 @@ export interface OnChainProfile {
    * Holder-to-holder transfers (user ask 2026-10-16, core's wallets/holderTransfers.ts): among the
    * top 25 (and the creator when it holds), Transferred Supply %, the supply that moved holder to
    * holder in the coin itself (SOL and other coins ignored); how many holders sent or got one, of
-   * how many checked; and each sender-receiver pair for the bubble map. Kept out of the Linked
-   * count, the filters and the models. Undefined until every holder's account reads are in.
+   * how many checked; and each sender-receiver pair for the bubble map. Undefined until every
+   * holder's account reads are in. A pair past dust and clear of exchanges links its two holders in
+   * the Linked count (user decision 2026-10-16); Transferred Supply % itself feeds no filter or model.
    */
   transferredSupplyPct?: number;
   transferWalletCount?: number;
   transferHoldersChecked?: number;
   holderTransfers?: { from: string; to: string; pct: number; count: number; lastAtMs?: number }[];
+  /**
+   * Linked, KOL Bundled and Bundled without holder-to-holder transfers (user ask 2026-10-16): the
+   * figures above count transfers that link two holders (core's linkingTransfers); these keep the
+   * funding-only ones recorded, and the bubble map shows them when its transfers are hidden.
+   * linkedClustersExTransfers only when the clusters differ.
+   */
+  linkedWalletPctExTransfers?: number;
+  linkedWalletCountExTransfers?: number;
+  kolBundledPctExTransfers?: number;
+  bundledSupplyPctExTransfers?: number;
+  bundledSupplyCountExTransfers?: number;
+  linkedClustersExTransfers?: LinkedCluster[];
   linkedClusters?: LinkedCluster[];
   /**
    * The top holders the scan read (up to CEX_FUNDED_TOP_N, the creator aside), largest first,

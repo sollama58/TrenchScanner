@@ -20,6 +20,107 @@ import type { ChainTx } from "./tradeTape.js";
 /** How many of the largest holders are read for transfers, as for the Linked count (core's LINKED_TOP_N). */
 export const TRANSFER_TOP_N = 25;
 
+/**
+ * A transfer pair links its two holders (counts in Linked, Bundled and KOL ties; user decision
+ * 2026-10-16) only when it moved at least this % of supply...
+ */
+export const TRANSFER_LINK_MIN_PCT = 0.05;
+/** ...or at least this share of what the sender held (its holding now plus what it sent): dust links no one. */
+export const TRANSFER_LINK_MIN_SHARE = 0.1;
+/**
+ * The transfers between two wallets that make them a Multi-Wallet-Bundle (user ask 2026-10-16): at
+ * least `transfers` transfers that link (no dust, no exchange or hot wallet), either way between
+ * them, within any `hours`-long span. One transfer can be a gift or an OTC trade; a run of them is
+ * one owner moving its bags.
+ */
+export const TRANSFER_SIDE_TIERS = [
+  { hours: 48, transfers: 4 },
+  { hours: 72, transfers: 10 },
+] as const;
+
+/** A KOL's Possible Side from the KOL sending the coin to the wallet (user ask 2026-10-16), as TRANSFER_SIDE_TIERS. */
+export const TRANSFER_SIDE_OUTBOUND_TIERS = [
+  { hours: 24, transfers: 6 },
+  { hours: 48, transfers: 10 },
+  { hours: 72, transfers: 25 },
+] as const;
+
+/**
+ * A KOL's Possible Side from the wallet sending the coin to the KOL (user ask 2026-10-16): a wallet
+ * paying a KOL is as often a fan, a deal or a sale as the KOL's own, so it takes more and bigger
+ * transfers. Each tier counts only transfers of more than `minPct` % of supply.
+ */
+export const TRANSFER_SIDE_INBOUND_TIERS = [
+  { hours: 24, transfers: 8, minPct: 1 },
+  { hours: 24, transfers: 16, minPct: 0.5 },
+  { hours: 72, transfers: 16, minPct: 2 },
+] as const;
+
+/** The most of `atMs` that fall in any `hours`-long span. */
+function mostInSpan(atMs: readonly number[], hours: number): number {
+  const times = [...atMs].filter(Number.isFinite).sort((x, y) => x - y);
+  const span = hours * 3_600_000;
+  let best = 0;
+  let lo = 0;
+  for (let hi = 0; hi < times.length; hi += 1) {
+    while (times[hi]! - times[lo]! > span) lo += 1;
+    best = Math.max(best, hi - lo + 1);
+  }
+  return best;
+}
+
+/**
+ * The tier two wallets' linking transfers meet (`tiers`: TRANSFER_SIDE_TIERS for a bundle,
+ * TRANSFER_SIDE_OUTBOUND_TIERS for a KOL sending), first first, with how many transfers fell in its
+ * best span; null when none. `atMs`: each transfer's time.
+ */
+export function transferSideTier(
+  atMs: readonly number[],
+  tiers: readonly { hours: number; transfers: number }[] = TRANSFER_SIDE_TIERS,
+): { hours: number; transfers: number } | null {
+  for (const t of tiers) {
+    const best = mostInSpan(atMs, t.hours);
+    if (best >= t.transfers) return { hours: t.hours, transfers: best };
+  }
+  return null;
+}
+
+/**
+ * The tier a wallet's transfers to a KOL meet (TRANSFER_SIDE_INBOUND_TIERS), first first, with how
+ * many transfers fell in its best span; null when none. `events`: each transfer's time and % of supply.
+ */
+export function inboundSideTier(
+  events: readonly { atMs: number; pct: number }[],
+): { hours: number; transfers: number } | null {
+  for (const t of TRANSFER_SIDE_INBOUND_TIERS) {
+    const best = mostInSpan(
+      events.filter((e) => e.pct > t.minPct).map((e) => e.atMs),
+      t.hours,
+    );
+    if (best >= t.transfers) return { hours: t.hours, transfers: best };
+  }
+  return null;
+}
+
+/**
+ * The transfer pairs that link their two holders: both among `pctOf`'s holders (share of supply,
+ * %), neither an exchange or other hot wallet (`hot`: its deposit wallets are on-curve and would
+ * link everyone who deposits), and more than dust (TRANSFER_LINK_MIN_PCT or
+ * TRANSFER_LINK_MIN_SHARE of what the sender held).
+ */
+export function linkingTransfers<T extends { from: string; to: string; pct: number }>(
+  transfers: readonly T[] | null | undefined,
+  pctOf: ReadonlyMap<string, number>,
+  hot: (wallet: string) => boolean,
+): T[] {
+  return (transfers ?? []).filter((t) => {
+    if (t.from === t.to || !pctOf.has(t.from) || !pctOf.has(t.to)) return false;
+    if (hot(t.from) || hot(t.to)) return false;
+    const held = (pctOf.get(t.from) ?? 0) + t.pct;
+    return t.pct >= TRANSFER_LINK_MIN_PCT || (held > 0 && t.pct >= held * TRANSFER_LINK_MIN_SHARE);
+  });
+}
+
 /** One transaction's moves of the coin between wallets: who sent how much to whom (raw units). */
 export interface TransferMove {
   from: string;
@@ -49,6 +150,23 @@ export interface HolderTransfersReading {
   transferWalletCount: number;
   /** How many holders were checked (the top 25, the creator too when it holds). */
   holdersChecked: number;
+  /**
+   * Each transfer between two of the holders on its own, newest first: for the flags read across
+   * coins (TRANSFER_SIDE_TIERS), stored by the scan as HolderTransferEvent rows. Absent on readings
+   * made before it was kept.
+   */
+  events?: HolderTransferOne[];
+}
+
+/** One transfer of the coin from one top holder to another. */
+export interface HolderTransferOne {
+  signature: string;
+  from: string;
+  to: string;
+  /** % of supply it moved. */
+  pct: number;
+  /** When it landed, ms epoch; null when the transaction had no block time. */
+  atMs: number | null;
 }
 
 interface RawBalance {
@@ -106,7 +224,7 @@ export function transferMovesOf(
  */
 export function holderTransfersReading(
   holders: readonly string[],
-  moves: Iterable<{ atMs: number | null; moves: readonly TransferMove[] }>,
+  moves: Iterable<{ atMs: number | null; moves: readonly TransferMove[]; signature?: string }>,
   supply: bigint,
 ): HolderTransfersReading | null {
   if (supply <= 0n || holders.length === 0) return null;
@@ -115,9 +233,19 @@ export function holderTransfersReading(
     string,
     { from: string; to: string; amount: bigint; count: number; lastAtMs: number | null }
   >();
+  const pctOf = (amount: bigint) => Number((amount * 1_000_000n) / supply) / 10_000;
+  const events: HolderTransferOne[] = [];
   for (const tx of moves) {
     for (const m of tx.moves) {
       if (!set.has(m.from) || !set.has(m.to) || m.from === m.to) continue;
+      if (tx.signature)
+        events.push({
+          signature: tx.signature,
+          from: m.from,
+          to: m.to,
+          pct: pctOf(BigInt(m.amount)),
+          atMs: tx.atMs,
+        });
       const key = `${m.from}>${m.to}`;
       const p = pairs.get(key) ?? { from: m.from, to: m.to, amount: 0n, count: 0, lastAtMs: null };
       p.amount += BigInt(m.amount);
@@ -126,7 +254,6 @@ export function holderTransfersReading(
       pairs.set(key, p);
     }
   }
-  const pctOf = (amount: bigint) => Number((amount * 1_000_000n) / supply) / 10_000;
   const transfers = [...pairs.values()]
     .map((p) => ({ from: p.from, to: p.to, pct: pctOf(p.amount), count: p.count, lastAtMs: p.lastAtMs }))
     .sort((a, b) => b.pct - a.pct || b.count - a.count);
@@ -137,6 +264,7 @@ export function holderTransfersReading(
     transferredSupplyPct: Math.round(pctOf(total) * 100) / 100,
     transferWalletCount: wallets.size,
     holdersChecked: holders.length,
+    ...(events.length > 0 ? { events: events.sort((a, b) => (b.atMs ?? 0) - (a.atMs ?? 0)) } : {}),
   };
 }
 

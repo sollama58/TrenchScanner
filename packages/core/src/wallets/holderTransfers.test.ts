@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { holderTransfersReading, sharedSignatures, transferMovesOf } from "./holderTransfers.js";
+import {
+  holderTransfersReading,
+  linkingTransfers,
+  sharedSignatures,
+  transferMovesOf,
+  inboundSideTier,
+  TRANSFER_SIDE_OUTBOUND_TIERS,
+  transferSideTier,
+} from "./holderTransfers.js";
 import type { ChainTx } from "./tradeTape.js";
 
 const MINT = "mint";
@@ -152,6 +160,21 @@ describe("holderTransfersReading", () => {
     expect(r.holdersChecked).toBe(3);
   });
 
+  it("keeps each transfer with its signature, newest first", () => {
+    const r = holderTransfersReading(
+      ["a", "b"],
+      [
+        { atMs: 1_000, signature: "s1", moves: [{ from: "a", to: "b", amount: "10000000" }] },
+        { atMs: 3_000, signature: "s2", moves: [{ from: "b", to: "a", amount: "5000000" }] },
+      ],
+      1_000_000_000n,
+    )!;
+    expect(r.events).toEqual([
+      { signature: "s2", from: "b", to: "a", pct: 0.5, atMs: 3_000 },
+      { signature: "s1", from: "a", to: "b", pct: 1, atMs: 1_000 },
+    ]);
+  });
+
   it("reads zero when no two holders moved the coin between them", () => {
     const r = holderTransfersReading(["a", "b"], [], 1_000n)!;
     expect(r).toEqual({ transfers: [], transferredSupplyPct: 0, transferWalletCount: 0, holdersChecked: 2 });
@@ -178,5 +201,74 @@ describe("sharedSignatures", () => {
     ]);
     // s2 is in two of a's own accounts, not two holders'.
     expect([...sharedSignatures(accountsOf, (acc) => sigs[acc] ?? [])]).toEqual(["s3"]);
+  });
+});
+
+describe("linkingTransfers", () => {
+  const pctOf = new Map([
+    ["a", 5],
+    ["b", 3],
+    ["c", 0.01],
+    ["hot", 2],
+  ]);
+  const notHot = (w: string) => w === "hot";
+
+  it("keeps transfers past the dust floor between holders, clear of hot wallets", () => {
+    const t = [
+      { from: "a", to: "b", pct: 0.05 }, // at the % floor
+      { from: "a", to: "b", pct: 0.01 }, // dust: 0.01 of a 5% bag
+      { from: "c", to: "b", pct: 0.005 }, // small, but a third of what c held
+      { from: "hot", to: "a", pct: 1 }, // an exchange
+      { from: "a", to: "outsider", pct: 1 }, // not a holder
+      { from: "a", to: "a", pct: 1 },
+    ];
+    expect(linkingTransfers(t, pctOf, notHot)).toEqual([t[0], t[2]]);
+  });
+
+  it("is empty without transfers", () => {
+    expect(linkingTransfers(null, pctOf, notHot)).toEqual([]);
+  });
+});
+
+describe("transferSideTier", () => {
+  const H = 3_600_000;
+  it("flags 4 transfers within 48 hours", () => {
+    expect(transferSideTier([0, 10 * H, 20 * H, 47 * H])).toEqual({ hours: 48, transfers: 4 });
+    expect(transferSideTier([0, 10 * H, 20 * H, 49 * H])).toBeNull();
+  });
+
+  it("flags a run of transfers in 72 hours, and ignores ones out of order or without a time", () => {
+    const run = Array.from({ length: 10 }, (_, i) => (9 - i) * 8 * H);
+    expect(transferSideTier(run)).toEqual({ hours: 48, transfers: 7 });
+    expect(transferSideTier([0, Number.NaN, 100 * H, 200 * H])).toBeNull();
+  });
+
+  it("needs 6 in 24 hours, 10 in 48 or 25 in 72 from a KOL", () => {
+    const every = (n: number, gap: number) => Array.from({ length: n }, (_, i) => i * gap * H);
+    expect(transferSideTier(every(6, 4), TRANSFER_SIDE_OUTBOUND_TIERS)).toEqual({ hours: 24, transfers: 6 });
+    expect(transferSideTier(every(5, 4), TRANSFER_SIDE_OUTBOUND_TIERS)).toBeNull();
+    expect(transferSideTier(every(10, 5), TRANSFER_SIDE_OUTBOUND_TIERS)).toEqual({
+      hours: 48,
+      transfers: 10,
+    });
+    expect(transferSideTier(every(25, 2.9), TRANSFER_SIDE_OUTBOUND_TIERS)?.hours).toBe(24);
+  });
+});
+
+describe("inboundSideTier", () => {
+  const H = 3_600_000;
+  const run = (n: number, pct: number, gap: number) =>
+    Array.from({ length: n }, (_, i) => ({ atMs: i * gap * H, pct }));
+
+  it("needs 8 over 1% in 24 hours", () => {
+    expect(inboundSideTier(run(8, 1.5, 3))).toEqual({ hours: 24, transfers: 8 });
+    expect(inboundSideTier(run(8, 1, 3))).toBeNull(); // not over 1%
+    expect(inboundSideTier(run(7, 1.5, 3))).toBeNull();
+  });
+
+  it("or 16 over 0.5% in 24 hours, or 16 over 2% in 72", () => {
+    expect(inboundSideTier(run(16, 0.6, 1.5))).toEqual({ hours: 24, transfers: 16 });
+    expect(inboundSideTier(run(16, 2.5, 4.5))).toEqual({ hours: 72, transfers: 16 });
+    expect(inboundSideTier(run(16, 1.5, 4.5))).toBeNull();
   });
 });

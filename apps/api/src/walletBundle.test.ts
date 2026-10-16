@@ -8,6 +8,7 @@ import {
   clearBundleCache,
   loadWalletBundle,
   type BundlePairRow,
+  withTransferLabels,
 } from "./walletBundle.js";
 
 const pair = (side: string, s24: number, s7: number, s30: number): BundlePairRow => ({
@@ -135,5 +136,31 @@ describe.skipIf(!dbAvailable)("loadWalletBundle", () => {
     expect(await loadWalletBundle(seed, now + 60_000)).toBe(bundle);
 
     expect((await loadWalletBundle(kol, now)).skipped).toBe("kol");
+  });
+});
+
+describe("withTransferLabels", () => {
+  const H = 3_600_000;
+  const run = [0, 5 * H, 10 * H, 20 * H];
+
+  it("adds wallets with 4 transfers in 48 hours, and marks the ones already labeled", () => {
+    const labeled = [{ wallet: "B", pct: 90, shared: 30, coins: 30, hours: 48, name: "WALLET_1" }];
+    const out = withTransferLabels(
+      "WALLETXYZ",
+      labeled,
+      [
+        { side: "B", ats: run },
+        { side: "C", ats: run },
+        { side: "D", ats: [0, 100 * H] }, // too few
+        { side: "E", ats: run }, // excluded (a KOL, a bot)
+      ],
+      new Set(["E"]),
+      new Set(),
+    );
+    expect(out).toEqual([
+      { wallet: "B", pct: 90, shared: 30, coins: 30, hours: 48, name: "WALLET_1", transfers: 4 },
+      { wallet: "C", pct: 0, shared: 0, coins: 0, hours: 48, name: "WALLET_2", transfers: 4 },
+    ]);
+    expect(labeled[0]).not.toHaveProperty("transfers");
   });
 });

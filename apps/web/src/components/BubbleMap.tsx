@@ -45,6 +45,8 @@ import {
   funderNamed,
   largestSourceOnly,
   mapLinked,
+  withoutTransfers,
+  wideWithoutTransfers,
   TRAIT_ICON,
   RISKY_ICON,
   riskyShare,
@@ -136,14 +138,14 @@ function useCexToggle(graph: BubbleGraph | null): { showCex: boolean; setCexOn: 
  * on by default, switchable on the map like the exchange ties, with the default in Settings. Held
  * above the map so its share image draws them too.
  */
-function useTransferToggle(graph: BubbleGraph | null): {
+function useTransferToggle(snapshot: Snapshot | null | undefined): {
   showTransfers: boolean;
   setTransfersOn: (on: boolean) => void;
 } {
   const { bubbleTransferLinks } = useAppearance();
   const [on, setTransfersOn] = useState<boolean | null>(null);
   return {
-    showTransfers: !!graph && (on ?? bubbleTransferLinks) && graph.transferLinks.length > 0,
+    showTransfers: (on ?? bubbleTransferLinks) && (snapshot?.holderTransfers?.length ?? 0) > 0,
     setTransfersOn,
   };
 }
@@ -1779,14 +1781,25 @@ export function BubbleMapSection({
   const mint = token.mintAddress;
   const liveWide = useWideMap(mint);
   const wide = chosenWide !== undefined ? chosenWide : liveWide;
+  const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
+  // Transfers hidden: Linked, its clusters and the bundles as they read without them (user ask
+  // 2026-10-16), on the map and its share image alike.
+  const shown = useMemo(
+    () => (snapshot && !showTransfers ? withoutTransfers(snapshot) : snapshot),
+    [snapshot, showTransfers],
+  );
   const graph = useMemo(
-    () => (snapshot ? layoutGraph(buildGraph(withWideMap(snapshot, wide), flagged)) : null),
-    [snapshot, wide, flagged],
+    () =>
+      shown
+        ? layoutGraph(
+            buildGraph(withWideMap(shown, showTransfers ? wide : wideWithoutTransfers(wide)), flagged),
+          )
+        : null,
+    [shown, wide, showTransfers, flagged],
   );
   const nameToggle = useNameToggle(graph, useGraphNames(graph));
   const names = nameToggle.mapNames;
   const { showCex, setCexOn } = useCexToggle(graph);
-  const { showTransfers, setTransfersOn } = useTransferToggle(graph);
   const side = useSideToggle(graph);
   const kols = useKols(graph, side.groups, names);
   const label = tokenLabel(token);
@@ -1833,7 +1846,7 @@ export function BubbleMapSection({
                 transfers: showTransfers,
                 sides: side.shown,
                 flags,
-                kolBundled: kolBundledFor(snapshot, kols),
+                kolBundled: kolBundledFor(shown, kols),
                 kols,
               })
             }
@@ -1850,7 +1863,7 @@ export function BubbleMapSection({
         side={side}
         nameToggle={nameToggle}
         flags={flags}
-        scanKolBundled={snapshot?.kolBundledPct ?? null}
+        scanKolBundled={shown?.kolBundledPct ?? null}
       />
     </section>
   );

@@ -11,6 +11,8 @@ import {
   placeLabels,
   exchangeName,
   centreOf,
+  withoutTransfers,
+  wideWithoutTransfers,
   type MapNode,
   cexGroupsOf,
   cexLayout,
@@ -831,5 +833,57 @@ describe("funderNamed (user ask 2026-10-15)", () => {
   it("numbers the cluster of an unknown funder", () => {
     expect(clusterNumberText(graph, 0, names)).toBe("Cluster 1");
     expect(clusterNumberText(graph, 1, names)).toBeNull();
+  });
+});
+
+describe("withoutTransfers", () => {
+  const snap = {
+    linkedWalletPct: 30,
+    linkedWalletCount: 6,
+    linkedClusters: [{ funder: "a", wallets: [], pct: 30, creatorLinked: false, transfers: 2 }],
+    kolBundledPct: 25,
+    bundledSupplyPct: 40,
+    bundledSupplyCount: 5,
+    linkedWalletPctExTransfers: 20,
+    linkedWalletCountExTransfers: 4,
+    linkedClustersExTransfers: [{ funder: "a", wallets: [], pct: 20, creatorLinked: false }],
+    kolBundledPctExTransfers: 15,
+    bundledSupplyPctExTransfers: 30,
+    bundledSupplyCountExTransfers: 3,
+  } as unknown as Parameters<typeof withoutTransfers>[0];
+
+  it("shows the figures without transfers", () => {
+    expect(withoutTransfers(snap)).toMatchObject({
+      linkedWalletPct: 20,
+      linkedWalletCount: 4,
+      linkedClusters: [{ pct: 20 }],
+      kolBundledPct: 15,
+      bundledSupplyPct: 30,
+      bundledSupplyCount: 3,
+    });
+  });
+
+  it("keeps a snapshot read before the figures were kept", () => {
+    const old = { ...snap, linkedWalletPctExTransfers: null };
+    expect(withoutTransfers(old)).toBe(old);
+  });
+});
+
+describe("wideWithoutTransfers", () => {
+  const wide = {
+    readAt: "2026-10-16T00:00:00Z",
+    holdersRead: 50,
+    knownExtra: 0,
+    holders: [],
+    clusters: [{ funder: "a", wallets: [], pct: 30, creatorLinked: false, transfers: 1 }],
+    clustersExTransfers: [{ funder: "b", wallets: [], pct: 10, creatorLinked: false }],
+    sameTimeClusters: [],
+  };
+
+  it("draws the clusters without transfers when the map kept them", () => {
+    expect(wideWithoutTransfers(wide)!.clusters).toEqual(wide.clustersExTransfers);
+    const plain = { ...wide, clustersExTransfers: undefined };
+    expect(wideWithoutTransfers(plain)).toBe(plain);
+    expect(wideWithoutTransfers(null)).toBeNull();
   });
 });
