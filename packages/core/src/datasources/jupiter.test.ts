@@ -101,6 +101,36 @@ describe("parseJupiterLaunches", () => {
     expect(curve!.graduatedAt).toBeUndefined();
     expect(parseJupiterLaunches({ error: "nope" }, new Set(["curve"]))).toEqual([]);
   });
+
+  it("reads a Stonks coin on its LaunchLab curve, and after it moves to its Raydium pool", () => {
+    const [curve, graduate] = parseJupiterLaunches(
+      [
+        {
+          id: "stonkCurve",
+          usdPrice: 0.00002,
+          mcap: 20_000,
+          fdv: 20_000,
+          liquidity: 9_000,
+          launchpad: "stonkfun",
+        },
+        {
+          id: "stonkPool",
+          usdPrice: 0.0001,
+          mcap: 99_000,
+          fdv: 100_000,
+          liquidity: 30_000,
+          launchpad: "stonkfun",
+          graduatedPool: "cpmm",
+          graduatedAt: "2026-10-16T00:10:00Z",
+        },
+      ],
+      new Set(["stonkCurve", "stonkPool"]),
+    );
+    expect(curve).toMatchObject({ dexId: "stonkfun", launchpad: "stonks", liquidityUsd: undefined });
+    expect(curve!.graduatedAt).toBeUndefined();
+    expect(graduate).toMatchObject({ dexId: "raydium", launchpad: "stonks", liquidityUsd: 60_000 });
+    expect(graduate!.graduatedAt).toEqual(new Date("2026-10-16T00:10:00Z"));
+  });
 });
 
 describe("parseJupiterQuotes", () => {
@@ -310,7 +340,7 @@ describe("JupiterFirstLookup", () => {
 });
 
 describe("parseJupiterMovingLaunches", () => {
-  it("keeps Pump.fun launches, priced on the 1B supply, with no socials claimed", () => {
+  it("keeps Pump.fun and Stonks launches, priced on the 1B supply, with no socials claimed", () => {
     const coins = parseJupiterMovingLaunches([
       {
         id: "pumpMint",
@@ -325,8 +355,11 @@ describe("parseJupiterMovingLaunches", () => {
       },
       { id: "otherMint", usdPrice: 1, launchpad: "letsbonk.fun" },
       { id: "noPad", usdPrice: 1 },
+      { id: "stonkMint", usdPrice: 0.0001, mcap: 99_000, fdv: 100_000, launchpad: "stonkfun" },
     ]);
-    expect(coins).toHaveLength(1);
+    expect(coins).toHaveLength(2);
+    expect(coins[1]).toMatchObject({ mintAddress: "stonkMint", launchpad: "stonks", marketCapUsd: 100_000 });
+    expect(coins[0]!.launchpad).toBe("pumpfun");
     expect(coins[0]).toMatchObject({
       mintAddress: "pumpMint",
       symbol: "DOG",

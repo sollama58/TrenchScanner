@@ -3,6 +3,7 @@ import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
 import { normalizeSocialUrl } from "./tokensage.js";
+import { isCurveVenue } from "../launchpads.js";
 import type { GeckoTerminalClient } from "./geckoterminal.js";
 import type { CandidateToken, WatchlistCandidate } from "../types.js";
 
@@ -1022,5 +1023,6 @@ function toCandidateToken(pair: DexScreenerPair): CandidateToken {
  * indexed) means unknown, not "not graduated" - deliberately not assumed either way.
  */
 export function deriveGraduated(dexId: string | undefined): boolean | undefined {
-  return dexId === undefined ? undefined : dexId !== "pumpfun";
+  // A Stonks coin's LaunchLab curve ("stonkfun") is a curve too (launchpads.ts).
+  return dexId === undefined ? undefined : !isCurveVenue(dexId);
 }

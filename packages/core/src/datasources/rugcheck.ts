@@ -18,6 +18,9 @@ export interface RugCheckReport {
   markets?: {
     pubkey: string;
     marketType?: string;
+    /** The market's two vault token accounts. */
+    liquidityA?: string;
+    liquidityB?: string;
     lp?: { lpLockedPct?: number; baseUSD?: number; quoteUSD?: number };
   }[];
   score_normalised?: number;
@@ -44,6 +47,14 @@ export interface RugCheckProfile extends OnChainProfile {
    * 2026-10-14, L2 H2 / L3 L3). Absent otherwise.
    */
   marketsListed?: false;
+  /**
+   * The LP lock judged on Raydium LaunchLab's own markets alone (RAYDIUM_LAUNCHLAB_MARKET_TYPES:
+   * the curve, and the CPMM pool a LaunchLab coin migrates into), as lpBurned is on a Pump.fun
+   * coin's own markets: what the scan reads for a Stonks coin, whose side pools others open are
+   * no more its holders' exit than a Pump.fun coin's. Absent when no such market is listed, and on
+   * profiles cached before it existed.
+   */
+  launchLabLpBurned?: boolean;
 }
 
 /**
@@ -106,6 +117,13 @@ export const CREATOR_UNKNOWN_FLAG = "Creator identity unknown";
 
 /** RugCheck's marketType for a Pump.fun bonding curve and for the PumpSwap pool a token graduates into. */
 const PUMP_MARKET_TYPES = new Set(["pump_fun", "pump_fun_amm"]);
+
+/**
+ * RugCheck's marketType for a Raydium LaunchLab curve (Stonks' launchpad) and for the CPMM pool its
+ * coins migrate into. Only read for a coin known to be from a LaunchLab launchpad: anyone can open
+ * a CPMM pool for any coin.
+ */
+const RAYDIUM_LAUNCHLAB_MARKET_TYPES = new Set(["raydium_launchlab", "raydium_cpmm"]);
 
 /** A non-Pump.fun token's pools holding less than this share of its pooled liquidity don't count for the LP check. */
 const SIDE_POOL_MAX_SHARE = 0.05;
@@ -214,9 +232,15 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
   // risk. Confirmed against live data: a market's `pubkey` is exactly the `owner` that shows up
   // on the pool's token holdings in topHolders.
   const poolAuthorities = new Set(markets.map((m) => m.pubkey));
+  // Not every program owns its vault from the market's own address: Raydium LaunchLab (Stonks'
+  // curve) holds every curve's tokens under one shared authority, which read as a single holder
+  // of ~96% of supply. The vault token accounts themselves are the market's, whoever owns them.
+  const poolVaults = new Set(
+    markets.flatMap((m) => [m.liquidityA, m.liquidityB]).filter((a): a is string => typeof a === "string"),
+  );
   const realHolders = (report.topHolders ?? []).filter((h) => {
     const owner = h.owner ?? h.address;
-    return !poolAuthorities.has(owner) && owner !== CLOSED_ACCOUNT_OWNER;
+    return !poolAuthorities.has(owner) && !poolVaults.has(h.address) && owner !== CLOSED_ACCOUNT_OWNER;
   });
   const top10HolderPct = realHolders
     .slice(0, TOP_N_FOR_CONCENTRATION)
@@ -265,7 +289,11 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
       : totalPoolUsd > 0
         ? markets.filter((m) => poolUsd(m) >= SIDE_POOL_MAX_SHARE * totalPoolUsd)
         : markets;
-  const lpBurned = lpMarkets.length > 0 && lpMarkets.every((m) => (m.lp?.lpLockedPct ?? 0) >= 95);
+  const locked = (m: (typeof markets)[number]) => (m.lp?.lpLockedPct ?? 0) >= 95;
+  const lpBurned = lpMarkets.length > 0 && lpMarkets.every(locked);
+  const launchLabMarkets = markets.filter(
+    (m) => m.marketType !== undefined && RAYDIUM_LAUNCHLAB_MARKET_TYPES.has(m.marketType),
+  );
 
   const top10Holders = realHolders.slice(0, TOP_N_FOR_CONCENTRATION);
 
@@ -295,6 +323,7 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
     riskScore: report.score_normalised,
     riskFlags,
     ...(markets.length === 0 ? { marketsListed: false as const } : {}),
+    ...(launchLabMarkets.length > 0 ? { launchLabLpBurned: launchLabMarkets.every(locked) } : {}),
     // For the linked-wallets reading (whose holders the creator funded, or shares a funder with).
     ...(report.creator ? { creator: report.creator } : {}),
     // Feeds the worker's wallet-freshness check (apps/worker/src/jobs/walletFreshness.ts) - a

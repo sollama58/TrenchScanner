@@ -82,6 +82,7 @@ const YES_NO_INPUTS: ReadonlySet<string> = new Set([
   "hasWebsite",
   "hasDescription",
   "dexBoosted",
+  "launchpadStonks",
   "devHolding",
   "ctxWeekend",
   "livestreamLive",

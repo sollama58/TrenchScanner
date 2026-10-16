@@ -1,6 +1,7 @@
 import {
   createLogger,
   forEachWithConcurrency,
+  isCurveVenue,
   type DexScreenerClient,
   type Env,
   type PumpFunClient,
@@ -121,7 +122,7 @@ export async function resolvePreBondSeconds(
   // A curve pair is created with the coin: its creation time is the launch.
   for (const c of candidates) {
     const ms = validMs(c.pairCreatedAt);
-    if (c.dexId === "pumpfun" && ms !== undefined && launches.get(c.mintAddress) == null) {
+    if (isCurveVenue(c.dexId) && ms !== undefined && launches.get(c.mintAddress) == null) {
       remember(launches, c.mintAddress, ms);
     }
   }

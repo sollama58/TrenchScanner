@@ -1,4 +1,5 @@
 import {
+  chainWindowFlow,
   createLogger,
   liveFlags,
   liveTraders,
@@ -9,6 +10,7 @@ import {
   type ScoredWallet,
   type SolPriceLookup,
   type TapeTrade,
+  type TradeFlowFeatures,
 } from "@trenchscanner/core";
 
 const logger = createLogger("live-tape");
@@ -28,7 +30,8 @@ const logger = createLogger("live-tape");
 const MAX_PAGE_AGE_MS = 15 * 60_000;
 const MAX_ENTRIES = 2_000;
 
-const pages = new Map<string, { atMs: number; trades: TapeTrade[] }>();
+/** A coin's newest page: its trades, and whether they are its whole history (no older page). */
+const pages = new Map<string, { atMs: number; trades: TapeTrade[]; complete: boolean }>();
 let pagesRead = 0;
 let pagesFailed = 0;
 
@@ -85,7 +88,7 @@ export async function readLiveTape(
         pagesRead += 1;
         pages.delete(mint);
         const { trades } = await tradesFromChainTransactionsPriced(mint, page.txs, opts.solPrices);
-        pages.set(mint, { atMs: now, trades });
+        pages.set(mint, { atMs: now, trades, complete: page.paginationToken === null });
         if (pages.size > MAX_ENTRIES) {
           const oldest = pages.keys().next().value;
           if (oldest !== undefined) pages.delete(oldest);
@@ -118,4 +121,18 @@ export function liveFlagsOf(
   const page = pages.get(mint);
   if (!lookup || !page || nowMs - page.atMs > MAX_PAGE_AGE_MS) return null;
   return liveFlags(page.trades, lookup);
+}
+
+/** A window reading older than this is no longer the last five minutes. */
+const MAX_WINDOW_PAGE_AGE_MS = 5 * 60_000;
+
+/**
+ * The 5m order flow read from a coin's recent page (core's chainWindowFlow), for a coin the
+ * PumpPortal stream doesn't carry (a Stonks coin); null without a page read in the last five
+ * minutes. Read as of when the page was read.
+ */
+export function liveWindowFlowOf(mint: string, nowMs = Date.now()): TradeFlowFeatures | null {
+  const page = pages.get(mint);
+  if (!page || nowMs - page.atMs > MAX_WINDOW_PAGE_AGE_MS) return null;
+  return chainWindowFlow(page.trades, page.atMs, page.complete);
 }
