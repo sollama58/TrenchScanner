@@ -6,6 +6,7 @@ import {
   loadEnv,
   CURATOR_MODEL_KIND,
   CANDIDATE_FEATURE_NAMES,
+  HOURLY_ROWS_WAIT_SINCE,
   type Env,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
@@ -418,6 +419,48 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     ).toEqual(["event@10", "event@8", "event@3", "hourly@1"]);
     expect(rows[1]!.features.freshGapPct).toBeNull();
     expect(rows[2]!.features.ageMinutes).toBe(30);
+  });
+
+  it("reads the waited-for inputs as missing on hourly rows banked before the hourly wait, keeping decisions", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-load-unwaited` } });
+    const at = (m: number) => new Date(HOURLY_ROWS_WAIT_SINCE.getTime() + m * 60_000);
+    const features = { freshTop10WalletPct: 20, nsXRead: 1, nsCopycat: 0, mcapUsd: 50_000, ageMinutes: 4 };
+    const row = (m: number, sampleKind: string) => ({
+      tokenId: token.id,
+      anchorAt: at(m),
+      finalizedAt: at(m),
+      sampleKind,
+      anchorPriceUsd: 1 + m / 100,
+      anchorMcapUsd: 50_000,
+      features,
+      score: 50,
+      nextCheckAt: at(m),
+      labelValue: 0,
+      peak1hPriceUsd: 1,
+      low1hPriceUsd: 1,
+      lowBefore2xPriceUsd: 1,
+      peak24hPriceUsd: 1,
+    });
+    await prisma.candidateOutcome.createMany({
+      data: [row(-3, "hourly"), row(-2, "event"), row(1, "hourly")],
+    });
+    // Other tests' rows share the window (and the ones anchored in the future lead it): only this
+    // token's are read.
+    const rows = (await loadTrainingRows(at(-5), 5_000, 500)).filter((r) => r.tokenId === token.id);
+    expect(rows.map((r) => `${r.sampleKind}@${(r.anchorAt.getTime() - at(0).getTime()) / 60_000}`)).toEqual([
+      "hourly@1",
+      "event@-2",
+      "hourly@-3",
+    ]);
+    const [since, event, before] = rows;
+    expect(before!.features).toMatchObject({
+      freshTop10WalletPct: null,
+      nsXRead: null,
+      nsCopycat: 0,
+      mcapUsd: 50_000,
+    });
+    expect(event!.features).toMatchObject({ freshTop10WalletPct: 20, nsXRead: 1 });
+    expect(since!.features).toMatchObject({ freshTop10WalletPct: 20, nsXRead: 1 });
   });
 
   it("drops the hourly twin of an alerted event row even when re-grading gave the two different prices", async () => {

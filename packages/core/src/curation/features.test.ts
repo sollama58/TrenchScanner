@@ -7,6 +7,7 @@ import {
   RETIRED_LEARNER_INPUTS,
   learnerSubset,
   maskKnownBadInputs,
+  HOURLY_ROWS_WAIT_SINCE,
   NARRATIVE_READ_AT_DECISION_SINCE,
   SOCIAL_BITS_FROM_DISCOVERY_SINCE,
   withCurrentNarrativeTiming,
@@ -442,6 +443,58 @@ describe("maskKnownBadInputs", () => {
       ctxHourSin: 0.5,
     });
     expect(maskKnownBadInputs(WEEKEND_FLAG_FROM, row).ctxWeekend).toBe(1);
+  });
+
+  it("reads the waited-for inputs as missing on hourly rows banked before the hourly wait, and nowhere else", () => {
+    const row = {
+      nsXRead: 1,
+      nsXFit: 0.8,
+      nsXLikes: 12,
+      nsCopycat: 1,
+      nsDepthFull: 1,
+      freshTop10WalletPct: 20,
+      emptyTop10WalletPct: 10,
+      sniperTop10WalletPct: 30,
+      linkedCreatorPct: 5,
+      linkedWalletCount: 2,
+      cexFundedPct: 40,
+      cexFundedCount: 8,
+      bundledSupplyPct: 3,
+      kolBundledPct: 0,
+      transferredSupplyPct: 1,
+      top10HolderPct: 25,
+      mcapUsd: 50_000,
+      hasTwitter: 1,
+    };
+    const before = new Date(HOURLY_ROWS_WAIT_SINCE.getTime() - 1);
+    const masked = maskKnownBadInputs(before, row, "hourly");
+    expect(masked).toEqual({
+      ...row,
+      nsXRead: null,
+      nsXFit: null,
+      nsXLikes: null,
+      freshTop10WalletPct: null,
+      emptyTop10WalletPct: null,
+      sniperTop10WalletPct: null,
+      linkedCreatorPct: null,
+      linkedWalletCount: null,
+      cexFundedPct: null,
+      cexFundedCount: null,
+      bundledSupplyPct: null,
+      kolBundledPct: null,
+      transferredSupplyPct: null,
+    });
+    expect(row.nsXRead).toBe(1);
+    // The quick read, the holder share and the social bits are as they were.
+    expect(masked).toMatchObject({ nsCopycat: 1, nsDepthFull: 1, top10HolderPct: 25, hasTwitter: 1 });
+    // A decision row of the same moment, an hourly row since the wait, and a call without the
+    // kind (the older callers) are left alone.
+    expect(maskKnownBadInputs(before, row, "event")).toBe(row);
+    expect(maskKnownBadInputs(HOURLY_ROWS_WAIT_SINCE, row, "hourly")).toBe(row);
+    expect(maskKnownBadInputs(before, row)).toBe(row);
+    // Together with the older masks on a row old enough for both.
+    const oldest = maskKnownBadInputs(new Date("2026-10-07T12:00:00Z"), row, "hourly");
+    expect(oldest).toMatchObject({ hasTwitter: null, nsXRead: null, nsCopycat: 1 });
   });
 
   it("keeps the retired duplicates off the learner list", () => {

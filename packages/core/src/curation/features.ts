@@ -759,6 +759,44 @@ const SOCIAL_OUTAGE_FEATURES = [
 export const SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE = new Date("2026-10-12T18:17:00Z");
 
 /**
+ * Hourly background rows banked before this were banked at the coin's first scan of the hour,
+ * with no wait. A decision row waits for the wallet checks, the top-10 snipers share and the
+ * Linked reading (scanJob.ts, decisionInputsReady), and by then TokenSage's deep read has usually
+ * landed, so on hourly rows under 20 minutes old the X-read block was never present (0% against
+ * 42-57% of decisions), the wallet checks were in on half and the Linked reading on a third
+ * (notes/data-audit-2026-10-16, skew.md section 4, round2-hunt.md section 5). Since then the
+ * hourly row waits for the same readiness on its own clock. The time the wait was deployed -
+ * adjust at merge.
+ */
+export const HOURLY_ROWS_WAIT_SINCE = new Date("2026-10-16T19:00:00Z");
+
+/**
+ * What an hourly row banked without the wait lacked (see HOURLY_ROWS_WAIT_SINCE): the deep read's
+ * X block, the top-10 wallet checks and snipers share, and the Linked reading over the top 25
+ * with everything that rides on it (exchange funders, same-minute groups, bundles, transfers).
+ * The quick read's inputs were in on half of the youngest rows and are left alone.
+ */
+const HOURLY_UNWAITED_FEATURES: readonly CandidateFeatureName[] = [
+  ...ALL_NARRATIVE_FEATURES.filter((name) => name.startsWith("nsX")),
+  "freshTop10WalletPct",
+  "emptyTop10WalletPct",
+  "top10WalletsChecked",
+  "sniperTop10WalletPct",
+  "sniperTopHolderCount",
+  "sniperTopHoldersChecked",
+  ...FRESH_TOP_HOLDER_FEATURES,
+  ...LINKED_WALLET_FEATURES,
+  ...CEX_FUNDED_FEATURES,
+  "cexFundedCount",
+  "cexFundedHolders",
+  ...SAME_TIME_FUNDING_FEATURES,
+  ...BUNDLED_FEATURES,
+  ...KOL_BUNDLED_FEATURES,
+  ...BUNDLED_SUPPLY_FEATURES,
+  ...TRANSFER_FEATURES,
+];
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
  * the create message and is real), the social bits on rows banked before
@@ -767,19 +805,25 @@ export const SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE = new Date("2026-10-12T1
  * WEEKEND_FLAG_FROM; before FRESH_QUOTE_GAP_SINCE the fresh-price gap and market base rates,
  * before SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE the sniper share,
  * before PATH_TAPE_REFILL_SINCE the path inputs on a tape too short for the coin's age, and the
- * social bits through SOCIAL_LIST_OUTAGE. Returns the same object when nothing applies.
+ * social bits through SOCIAL_LIST_OUTAGE. Given the row's kind, the waited-for inputs on hourly
+ * rows banked before HOURLY_ROWS_WAIT_SINCE too: in on some of those rows and absent on most,
+ * they taught "hourly and missing", a pattern no decision shows. Returns the same object when
+ * nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
   anchorAt: Date,
   features: T,
+  sampleKind?: string,
 ): T {
   const at = anchorAt.getTime();
   const inSocialOutage = at >= SOCIAL_LIST_OUTAGE.from.getTime() && at < SOCIAL_LIST_OUTAGE.until.getTime();
-  if (at >= PATH_TAPE_REFILL_SINCE.getTime() && !inSocialOutage) return features;
+  const unwaitedHourly = sampleKind === "hourly" && at < HOURLY_ROWS_WAIT_SINCE.getTime();
+  if (at >= PATH_TAPE_REFILL_SINCE.getTime() && !inSocialOutage && !unwaitedHourly) return features;
   const masked: Record<string, number | null | undefined> = { ...features };
   const clear = (name: string): void => {
     if (masked[name] !== undefined) masked[name] = null;
   };
+  if (unwaitedHourly) HOURLY_UNWAITED_FEATURES.forEach(clear);
   if (inSocialOutage) SOCIAL_OUTAGE_FEATURES.forEach(clear);
   if (at >= PATH_TAPE_REFILL_SINCE.getTime()) return masked as T;
   const age = masked.ageMinutes;

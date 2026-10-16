@@ -147,7 +147,7 @@ import { recordCandidateSample, takeSampleStats } from "./candidateOutcomeJob.js
 import { noteHolderCutVerdict, rugCheckTtlFor } from "./youngHolderRecheck.js";
 import { settledRejects } from "./settledRejects.js";
 import { flushScreenRejects, foldRejectExtremes, noteScreenReject } from "./rejectExtremes.js";
-import { noteDecisionHold, takeDecisionHolds } from "./decisionHolds.js";
+import { type DecisionHoldReason, noteDecisionHold, takeDecisionHolds } from "./decisionHolds.js";
 import { loadMarketContext } from "./marketContext.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
 import { keepScreenMoment } from "./screenMoments.js";
@@ -341,6 +341,13 @@ function sniperReadsOn(env: Env): boolean {
   return env.SNIPER_LAUNCH_LOOKUPS_PER_CYCLE > 0 || env.SNIPER_CONTENDER_LOOKUPS_PER_CYCLE > 0;
 }
 
+/**
+ * Whose wait a readiness check runs on: a decision moment's, or the hourly training sample's
+ * (see decisionInputsReady). Each lane keeps its own clock per token, so the hourly sample
+ * neither starts nor spends the wait a decision gets once the token is pre-gated.
+ */
+export type WaitLane = "decision" | "hourly";
+
 /** When each token waiting on its top-10 snipers share started waiting - see sniperShareReady. */
 const sniperWaitSince = new Map<string, number>();
 /** A wait older than this belongs to a token that left the band or the watchlist. */
@@ -349,9 +356,44 @@ const SNIPER_WAIT_FORGET_MS = 60 * 60_000;
 /** When each token waiting on its top-25 linked reading started waiting - see linkedListReady. */
 const linkedWaitSince = new Map<string, number>();
 
-/** Drops waits for tokens no longer being decided on. Once a cycle. */
+/**
+ * When each token's hourly sample started waiting on the top-10 wallet checks - see
+ * decisionInputsReady. The decision lane has no clock here: it waits as long as it takes.
+ */
+const walletChecksWaitSince = new Map<string, number>();
+
+/**
+ * The longest an hourly sample waits for the wallet checks. A decision's wait is unbounded, but
+ * a contender's lookups lead the cycle's wallet stage and land within a cycle or two; every other
+ * coin's run behind on the leftover budget, and a coin with no holder list is never looked up.
+ * Past this the row is banked with the checks unknown, as a decision past its sniper wait is,
+ * rather than never.
+ */
+export const HOURLY_WALLET_CHECKS_MAX_WAIT_MS = 5 * 60_000;
+
+/** A lane's key for a token's wait: the decision lane owns the plain mint. */
+function waitKey(mint: string, lane: WaitLane | undefined): string {
+  return lane === "hourly" ? `hourly:${mint}` : mint;
+}
+
+/**
+ * Whether a wait has run its course: the first call starts it, later calls say whether maxMs
+ * has passed since. A bound of 0 never waits. A wait that ran out stays run out until the
+ * reading lands (the caller drops it then) or the prune forgets it: forgotten at once, two waits
+ * asked side by side restarted each other in turn, each ready just as the other began again.
+ */
+function waitedOut(waits: Map<string, number>, key: string, maxMs: number, now: number): boolean {
+  const since = waits.get(key);
+  if (since === undefined) {
+    waits.set(key, now);
+    return maxMs <= 0;
+  }
+  return now - since >= maxMs;
+}
+
+/** Drops waits for tokens no longer being decided on or sampled. Once a cycle. */
 function pruneSniperWaits(now: number): void {
-  for (const waits of [sniperWaitSince, linkedWaitSince]) {
+  for (const waits of [sniperWaitSince, linkedWaitSince, walletChecksWaitSince]) {
     for (const [mint, since] of waits) {
       if (now - since > SNIPER_WAIT_FORGET_MS) waits.delete(mint);
     }
@@ -362,6 +404,7 @@ function pruneSniperWaits(now: number): void {
 export function resetSniperWaits(): void {
   sniperWaitSince.clear();
   linkedWaitSince.clear();
+  walletChecksWaitSince.clear();
 }
 
 /**
@@ -371,30 +414,23 @@ export function resetSniperWaits(): void {
  * Goes ahead once the chain's list is in and the reading over it landed, when the reads are off,
  * for a coin younger than minAgeMinutes (as for the snipers share, its ready moment is too short
  * to spend waiting), or after maxMs - then on whatever reading there is, which the screen cuts at
- * the same share of the holders it read (rugScreen's countCutFor). The first call starts the wait.
- * Exported for tests.
+ * the same share of the holders it read (rugScreen's countCutFor). The first call starts the wait,
+ * on the lane's own clock (WaitLane; the decision's without one). Exported for tests.
  */
 export function linkedListReady(
   scored: Pick<ScoredToken, "mintAddress" | "linkedWalletCount" | "cexFundedCount" | "ageMinutes">,
   listRead: boolean,
-  wait: { maxMs: number; minAgeMinutes: number; readsOn: boolean },
+  wait: { maxMs: number; minAgeMinutes: number; readsOn: boolean; lane?: WaitLane },
   now = Date.now(),
 ): boolean {
-  const mint = scored.mintAddress;
+  const key = waitKey(scored.mintAddress, wait.lane);
   const young = scored.ageMinutes !== undefined && scored.ageMinutes < wait.minAgeMinutes;
   const landed = listRead && scored.linkedWalletCount !== undefined && scored.cexFundedCount !== undefined;
   if (landed || !wait.readsOn || young) {
-    linkedWaitSince.delete(mint);
+    linkedWaitSince.delete(key);
     return true;
   }
-  const since = linkedWaitSince.get(mint);
-  if (since === undefined) {
-    linkedWaitSince.set(mint, now);
-    return wait.maxMs <= 0;
-  }
-  if (now - since < wait.maxMs) return false;
-  linkedWaitSince.delete(mint);
-  return true;
+  return waitedOut(linkedWaitSince, key, wait.maxMs, now);
 }
 
 /**
@@ -406,16 +442,18 @@ export function linkedListReady(
  * is banked with the share unknown, which the models already handle. A coin younger than
  * minAgeMinutes doesn't wait at all: its ready moment is short and its read the least likely to
  * land in time, so a wait cost almost every young coin its decision (2026-10-08). An unknown age
- * waits. Call it only for a token that is otherwise ready to be decided on: the first call starts
- * its wait. Exported for tests.
+ * waits. Call it only for a token that is otherwise ready to be decided on (or, on the hourly
+ * lane, due its sample): the first call starts its wait, on the lane's own clock (WaitLane; the
+ * decision's without one). Exported for tests.
  */
 export function sniperShareReady(
   scored: Pick<ScoredToken, "mintAddress" | "sniperTop10WalletPct" | "ageMinutes">,
   chainReadAvailable: boolean,
-  wait: { maxMs: number; minAgeMinutes: number },
+  wait: { maxMs: number; minAgeMinutes: number; lane?: WaitLane },
   now = Date.now(),
 ): boolean {
   const mint = scored.mintAddress;
+  const key = waitKey(mint, wait.lane);
   const young = scored.ageMinutes !== undefined && scored.ageMinutes < wait.minAgeMinutes;
   if (
     scored.sniperTop10WalletPct !== undefined ||
@@ -423,17 +461,86 @@ export function sniperShareReady(
     young ||
     sniperShareUnobtainable(mint)
   ) {
-    sniperWaitSince.delete(mint);
+    sniperWaitSince.delete(key);
     return true;
   }
-  const since = sniperWaitSince.get(mint);
-  if (since === undefined) {
-    sniperWaitSince.set(mint, now);
-    return wait.maxMs <= 0;
+  return waitedOut(sniperWaitSince, key, wait.maxMs, now);
+}
+
+/**
+ * Whether the inputs a curated decision waits for are in, so a row banked now carries what a
+ * decision would see: the top-10 wallet checks (walletChecksKnown; with CURATED_REQUIRE_WALLET_CHECKS
+ * off nothing waits), then the top-10 snipers share (sniperShareReady) and the Linked and
+ * CEX-funded counts over the chain's top 25 (linkedListReady), each for its bounded wait and not
+ * for young coins. The decision lane waits for the wallet checks however long it takes - a
+ * contender's lookups lead the cycle, and a decision without them would skip the curator's wallet
+ * caps - and starts the other two waits only once they are in; `held` names what held it, for
+ * the scan's hold counts (decisionHolds.ts). The hourly lane runs on its own clocks (WaitLane) so
+ * the sample never starts or spends the decision's wait, asks all three at once so they run side
+ * by side, and bounds the wallet checks at HOURLY_WALLET_CHECKS_MAX_WAIT_MS. Hourly rows used to
+ * be banked at the coin's first scan, ahead of every wait, and carried none of what a decision had
+ * waited for (notes/data-audit-2026-10-16, skew.md section 4). Exported for tests.
+ */
+export function decisionInputsReady(
+  scored: Pick<
+    ScoredToken,
+    | "mintAddress"
+    | "ageMinutes"
+    | "freshTop10WalletPct"
+    | "emptyTop10WalletPct"
+    | "sniperTop10WalletPct"
+    | "linkedWalletCount"
+    | "cexFundedCount"
+  >,
+  reads: { lane: WaitLane; listRead: boolean; sniperChainAvailable: boolean },
+  env: Pick<
+    Env,
+    | "CURATED_REQUIRE_WALLET_CHECKS"
+    | "SNIPER_SHARE_MAX_WAIT_SECONDS"
+    | "SNIPER_SHARE_WAIT_MIN_AGE_MINUTES"
+    | "LINKED_LIST_MAX_WAIT_SECONDS"
+    | "LINKED_HOLDER_READS_PER_CYCLE"
+    | "LINKED_WALLET_LOOKUPS_PER_CYCLE"
+  >,
+  now = Date.now(),
+): { ready: boolean; held: DecisionHoldReason[] } {
+  if (!env.CURATED_REQUIRE_WALLET_CHECKS) return { ready: true, held: [] };
+  const { lane } = reads;
+  const held: DecisionHoldReason[] = [];
+  let walletsIn = walletChecksKnown(scored);
+  if (lane === "hourly") {
+    const key = waitKey(scored.mintAddress, lane);
+    if (walletsIn) walletChecksWaitSince.delete(key);
+    else walletsIn = waitedOut(walletChecksWaitSince, key, HOURLY_WALLET_CHECKS_MAX_WAIT_MS, now);
   }
-  if (now - since < wait.maxMs) return false;
-  sniperWaitSince.delete(mint);
-  return true;
+  if (!walletsIn) {
+    held.push("walletChecks");
+    if (lane === "decision") return { ready: false, held };
+  }
+  const snipersIn = sniperShareReady(
+    scored,
+    reads.sniperChainAvailable,
+    {
+      maxMs: env.SNIPER_SHARE_MAX_WAIT_SECONDS * 1000,
+      minAgeMinutes: env.SNIPER_SHARE_WAIT_MIN_AGE_MINUTES,
+      lane,
+    },
+    now,
+  );
+  const linkedIn = linkedListReady(
+    scored,
+    reads.listRead,
+    {
+      maxMs: env.LINKED_LIST_MAX_WAIT_SECONDS * 1000,
+      minAgeMinutes: env.SNIPER_SHARE_WAIT_MIN_AGE_MINUTES,
+      readsOn: env.LINKED_HOLDER_READS_PER_CYCLE > 0 && env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0,
+      lane,
+    },
+    now,
+  );
+  if (!snipersIn) held.push("sniperWait");
+  if (!linkedIn) held.push("linkedWait");
+  return { ready: walletsIn && snipersIn && linkedIn, held };
 }
 
 /** The sniper reads still running, possibly past a cycle's budget - see startSniperStage. */
@@ -2865,41 +2972,41 @@ async function processCandidate(
     // outside it (see viewedMarketData) is scanned for its live card, not sampled for training.
     const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
     const inScanBand = inMcapBand(scored.marketCapUsd, scanBand(band.min, band.max));
-    if (!prior.recentHourlySample && inScanBand) await recordCandidateSample(token.id, scored, env);
-    // An event waits for the sniper checks when they're required: deciding without them would
-    // skip the curator's wallet caps, and an event spent now can't be reopened until the
-    // spacing window passes. The contender-first wallet ordering above resolves them quickly.
-    // The top-10 snipers share too, while it can still come, for SNIPER_SHARE_MAX_WAIT_SECONDS at
-    // most and not for young coins (sniperShareReady): the safety cut reads it, and a decision row banked without it
-    // would teach the models its absence. Checked after the pre-gate, so the wait starts when the
-    // token is otherwise ready to be decided on.
-    // And the Linked and CEX-funded counts over the chain's top 25, on the same terms (linkedListReady).
-    // Both waits are asked each time, so they run side by side rather than one after the other.
-    const walletReady = () => {
-      if (!env.CURATED_REQUIRE_WALLET_CHECKS) return true;
-      if (!walletChecksKnown(scored)) {
-        noteDecisionHold("walletChecks");
-        return false;
-      }
-      const snipersIn = sniperShareReady(scored, sniperChainAvailable, {
-        maxMs: env.SNIPER_SHARE_MAX_WAIT_SECONDS * 1000,
-        minAgeMinutes: env.SNIPER_SHARE_WAIT_MIN_AGE_MINUTES,
-      });
-      const linkedIn = linkedListReady(scored, cachedTopHolders(scored.mintAddress) !== undefined, {
-        maxMs: env.LINKED_LIST_MAX_WAIT_SECONDS * 1000,
-        minAgeMinutes: env.SNIPER_SHARE_WAIT_MIN_AGE_MINUTES,
-        readsOn: env.LINKED_HOLDER_READS_PER_CYCLE > 0 && env.LINKED_WALLET_LOOKUPS_PER_CYCLE > 0,
-      });
-      if (!snipersIn) noteDecisionHold("sniperWait");
-      if (!linkedIn) noteDecisionHold("linkedWait");
-      return snipersIn && linkedIn;
-    };
+    // What a decision waits for, on either lane's clock - see decisionInputsReady. The wallet
+    // checks when they're required: deciding without them would skip the curator's wallet caps,
+    // and an event spent now can't be reopened until the spacing window passes. The contender-first
+    // wallet ordering above resolves them quickly. The top-10 snipers share too, while it can still
+    // come, for SNIPER_SHARE_MAX_WAIT_SECONDS at most and not for young coins (sniperShareReady):
+    // the safety cut reads it, and a row banked without it would teach the models its absence.
+    // And the Linked and CEX-funded counts over the chain's top 25, on the same terms
+    // (linkedListReady). Both waits are asked each time, so they run side by side.
+    const inputsReady = (lane: WaitLane) =>
+      decisionInputsReady(
+        scored,
+        { lane, listRead: cachedTopHolders(scored.mintAddress) !== undefined, sniperChainAvailable },
+        env,
+      );
+    // The hourly sample waits for the same inputs a decision does, so the two kinds of training
+    // row mean the same: banked at the coin's first scan it carried none of them, and the models
+    // learned "missing" from background rows alone (notes/data-audit-2026-10-16, skew.md section
+    // 4). Held this cycle, it is asked again next cycle: the spacing check stays open until it
+    // is banked. No lookup is made for it that the cycle wouldn't make anyway.
+    if (!prior.recentHourlySample && inScanBand && inputsReady("hourly").ready) {
+      await recordCandidateSample(token.id, scored, env);
+    }
     const preGate = passesEventPreGate(scored, band);
     // Held by the pre-gate's 5-minute test alone: everything else about the moment was ready.
     if (!preGate && passesEventPreGate(scored, band, { skip5m: true })) {
       noteDecisionHold("preGate5m");
     }
-    if (preGate && walletReady()) {
+    // Checked after the pre-gate, so the decision's wait starts when the token is otherwise
+    // ready to be decided on.
+    const decisionReady = () => {
+      const { ready, held } = inputsReady("decision");
+      for (const reason of held) noteDecisionHold(reason);
+      return ready;
+    };
+    if (preGate && decisionReady()) {
       const event = await recordCandidateSample(token.id, scored, env, { kind: "event" });
       // A pick that lost an earlier governor pass re-contends while its event is spent - see
       // takeContenderRetry. A fresh event decides from scratch and supersedes any retry.
