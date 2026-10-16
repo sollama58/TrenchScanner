@@ -939,7 +939,8 @@ async function scanCycle(
   // written above; the full read below skips it until a cycle prices it back over the floor. Its
   // last verdict goes too, so the fast lane never matches it on a reading from before it died.
   let lowCapHeld = 0;
-  if (env.LOW_CAP_MCAP_USD > 0) {
+  // The Utilities lookups (never held) are only asked for when there is a coin to hold.
+  if (splitLowCap(candidates, env.LOW_CAP_MCAP_USD).held.length > 0) {
     const lookedUp = await recentLookupMints().catch((err: unknown) => {
       logger.warn("failed to read recent token lookups - holding no low-cap coin this cycle", {
         error: String(err),
@@ -948,14 +949,12 @@ async function scanCycle(
     });
     if (lookedUp) {
       const split = splitLowCap(candidates, env.LOW_CAP_MCAP_USD, lookedUp);
-      if (split.held.length > 0) {
-        candidates = split.kept;
-        lowCapHeld = split.held.length;
-        const idOf = new Map(activelyViewed.map((t) => [t.mintAddress, t.id]));
-        for (const c of split.held) {
-          const id = idOf.get(c.mintAddress);
-          if (id) dropScanVerdict(id);
-        }
+      candidates = split.kept;
+      lowCapHeld = split.held.length;
+      const idOf = new Map(activelyViewed.map((t) => [t.mintAddress, t.id]));
+      for (const c of split.held) {
+        const id = idOf.get(c.mintAddress);
+        if (id) dropScanVerdict(id);
       }
     }
   }

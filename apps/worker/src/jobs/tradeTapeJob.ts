@@ -21,6 +21,7 @@ import {
   resetClosingState,
   runClosingLane,
   type ClosingCounts,
+  type ClosingHelius,
   type MarketCapLookup,
 } from "./tradeTapeClosing.js";
 
@@ -344,15 +345,17 @@ export interface TradeTapeDeps {
   pumpFun: Pick<PumpFunClient, "coinTrades" | "coinOrigin">;
   /** Prices the coins a trade was paid in other than SOL (a coin-paired launch's quote coin). */
   solPrices?: SolPriceLookup;
-  /** Current market caps, for the closing read's "still dead?" (tradeTapeClosing.ts). */
+  /** The closing read's calls (tradeTapeClosing.ts); without them it doesn't run. */
+  closingHelius?: ClosingHelius;
+  /** Current market caps, for the closing read's "still dead?". */
   marketCaps?: MarketCapLookup;
 }
 
 export interface TradeTapeOptions {
   heliusPagesPerRun: number;
   pumpFunCallsPerRun: number;
-  /** Helius pages for closing reads (tradeTapeClosing.ts); 0 or absent: none. */
-  closingPagesPerRun?: number;
+  /** Helius credits a run for closing reads (tradeTapeClosing.ts); 0 or absent: none. */
+  closingCreditsPerRun?: number;
   /** LOW_CAP_MCAP_USD: under it a taped coin past its tracking window is closed. 0: none is. */
   lowCapMcapUsd?: number;
   spacingMs?: number;
@@ -571,10 +574,10 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
   const heliusOn = opts.heliusPagesPerRun > 0 && deps.helius.gtfaUsable;
   const closing: ClosingCounts = {
     closingDone: 0,
-    closingBusy: 0,
     closingFailed: 0,
+    closingSellers: 0,
     closingWallets: 0,
-    closingPages: 0,
+    closingCredits: 0,
   };
   await Promise.all([
     opts.heliusPagesPerRun > 0
@@ -592,10 +595,10 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
         )
       : Promise.resolve(),
     // A tape is only closed once it is read, so the coin is never one the lanes above have open.
-    (opts.closingPagesPerRun ?? 0) > 0
+    (opts.closingCreditsPerRun ?? 0) > 0 && deps.closingHelius
       ? runClosingLane(
-          deps,
-          { budget: opts.closingPagesPerRun!, floorUsd: opts.lowCapMcapUsd ?? 0 },
+          { helius: deps.closingHelius, solPrices: deps.solPrices, marketCaps: deps.marketCaps },
+          { budget: opts.closingCreditsPerRun!, floorUsd: opts.lowCapMcapUsd ?? 0 },
           closing,
           now,
         ).catch((err: unknown) => {
@@ -612,8 +615,9 @@ export async function runTradeTapeJob(deps: TradeTapeDeps, opts: TradeTapeOption
     // then runs on Pump.fun alone, a few coins an hour.
     heliusUsable: deps.helius.gtfaUsable,
     ...counts,
-    // Closing reads (tradeTapeClosing.ts): coins closed, left busy or failed, wallets updated, pages.
+    // Closing reads (tradeTapeClosing.ts): coins closed or failed, sellers found, wallets updated, credits.
     ...closing,
+    // The trade tape's own reads; closingCredits counts the closing reads' 1-credit calls.
     heliusCredits: (rpc.getTransactionsForAddress ?? 0) * 10,
   };
   if (counts.done + counts.partial + counts.failed + closing.closingDone > 0)
