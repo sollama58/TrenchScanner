@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Card, CardField, FeedAppearance, Snapshot } from "../api";
 import {
@@ -24,9 +24,7 @@ import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../sco
 import { filterCardStyle } from "../filterStyle";
 import { tileLook, tileTone } from "../tileTone";
 import { FilterGlyph } from "./FilterBadge";
-
-// The token modal (and its chart) loads the first time a card is opened.
-const TokenModal = lazy(() => import("./TokenModal").then((m) => ({ default: m.TokenModal })));
+import { openTokenModal, refreshTokenModal } from "../tokenModal";
 
 /** Clicks on these inside a card do their own thing rather than open the token modal. */
 const OWN_CLICK = "a, button, input, select, textarea, label, summary, [role='button']";
@@ -65,7 +63,9 @@ export function AlertCard({
   const tone = scoreColor ? scoreTone(s.score ?? null, scale) : null;
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [detailOpen, setDetailOpen] = useState(false);
+  // The modal lives above the feed (TokenModalHost), so it stays open if this card leaves it.
+  const openDetailModal = () => openTokenModal(card, now);
+  useEffect(() => refreshTokenModal(card, now), [card, now]);
   const alertMcap = s.marketCapUsd;
   const nowMcap = nowReading(card);
   const move = change(alertMcap, nowMcap);
@@ -162,7 +162,7 @@ export function AlertCard({
     if (!detail || e.defaultPrevented || e.button !== 0) return;
     if ((e.target as Element).closest?.(OWN_CLICK)) return;
     if (window.getSelection?.()?.toString()) return;
-    setDetailOpen(true);
+    openDetailModal();
   };
 
   return (
@@ -181,7 +181,7 @@ export function AlertCard({
               <button
                 type="button"
                 className="symbol symbol-btn"
-                onClick={() => setDetailOpen(true)}
+                onClick={openDetailModal}
                 title="Open the token's chart and details"
               >
                 {tokenLabel(card.token)}
@@ -585,13 +585,6 @@ export function AlertCard({
           )}
         </footer>
       )}
-      {detailOpen &&
-        createPortal(
-          <Suspense fallback={null}>
-            <TokenModal card={card} now={now} onClose={() => setDetailOpen(false)} />
-          </Suspense>,
-          document.body,
-        )}
     </article>
   );
 }
