@@ -12,6 +12,7 @@ import {
   type ScoredToken,
   type UserFilter,
   decisionAnchor,
+  freshWalletShare,
   FRESH_ANCHOR_LABEL_RULE,
 } from "@trenchscanner/core";
 import type { Token, TokenSnapshot } from "@prisma/client";
@@ -106,6 +107,20 @@ export function awaitsWalletFigure(
     (filter.maxBundledSupplyPct != null && scored.bundledSupplyPct === undefined) ||
     (filter.maxTransferredSupplyPct != null && scored.transferredSupplyPct === undefined)
   );
+}
+
+/**
+ * Whether the safety screen's holder cuts can't have run on this token yet: its fresh-wallet share
+ * is unknown, which also means no top-10 holder list was in to read (rugScreen.ts). The screen's
+ * wallet cuts pass a figure that isn't measured, so until this lands the token has passed a screen
+ * that never looked at its holders. Model calls already wait for it (CURATED_REQUIRE_WALLET_CHECKS);
+ * resolveAlertTargets holds every user-filter match for it too, and without a time limit: HEEHAW
+ * (2026-10-16) alerted three filters at 3-4 minutes old, before RugCheck had a holder list, and
+ * failed the screen two minutes later on 100% fresh and 25 of 25 linked. Over the two days before,
+ * 33 of the 77 coins alerted with no holder reading failed the screen within 15 minutes of it.
+ */
+export function awaitsScreenReading(scored: Parameters<typeof freshWalletShare>[0]): boolean {
+  return freshWalletShare(scored) === undefined;
 }
 
 /**
@@ -307,13 +322,24 @@ export async function resolveAlertTargets(opts: {
   // the next scan with the figure decides it for real. Held, like the guard below, without
   // starting the cooldown. The other filters on the token alert now. Every filter waits for a
   // linked-wallets reading the scan left for later (see holdForLinked): the safety screen cuts on it.
+  // And every filter waits for the screen's own holder reading (awaitsScreenReading), past
+  // walletWaitMs too: a match that went out before it was a token the screen had not checked.
+  const screenPending = awaitsScreenReading(scored);
   const linkedPending = linkedPendingFor(scored.mintAddress);
-  const waiting = settled.filter((f) => linkedPending || awaitsWalletFigure(scored, f));
+  const waiting = settled.filter((f) => screenPending || linkedPending || awaitsWalletFigure(scored, f));
   let matching = settled;
   if (waiting.length === 0) {
     clearWait();
-  } else if (!filterWalletWaitOver(scored.mintAddress, opts.walletWaitMs ?? DEFAULT_WALLET_WAIT_MS, now)) {
-    matching = settled.filter((f) => !waiting.includes(f));
+  } else {
+    // Called either way: the first call starts the hold, which puts the token's wallet lookups
+    // next in line after the contenders' (alertAwaitingWallets).
+    const waitOver = filterWalletWaitOver(
+      scored.mintAddress,
+      opts.walletWaitMs ?? DEFAULT_WALLET_WAIT_MS,
+      now,
+    );
+    if (screenPending) return [];
+    if (!waitOver) matching = settled.filter((f) => !waiting.includes(f));
   }
   if (matching.length === 0) return [];
 
