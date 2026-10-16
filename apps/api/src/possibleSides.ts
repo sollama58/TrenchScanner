@@ -204,6 +204,29 @@ export function numberLabeledSides(sides: Record<string, PossibleSide[]>): Label
  * once, under the KOL its strongest label names (loadPossibleSides' order).
  */
 export async function loadLabeledSides(): Promise<LabeledSide[]> {
+  return numberLabeledSides(await loadPossibleSides(await labeledCandidates()));
+}
+
+/**
+ * How many wallets are labeled for each KOL (user ask 2026-10-16: the leaderboard's "N Flagged
+ * Wallets"), keyed by its main wallet: the same wallets loadKolSideLabels pins above its list, so a
+ * wallet labeled for two KOLs counts for both.
+ */
+export async function loadKolLabelCounts(): Promise<Map<string, number>> {
+  return countKolLabels(await loadPossibleSides(await labeledCandidates()));
+}
+
+/** loadKolLabelCounts' pure half: each KOL's labeled wallets, once each. Exported for tests. */
+export function countKolLabels(sides: Record<string, PossibleSide[]>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const entries of Object.values(sides)) {
+    for (const kol of new Set(entries.map((e) => e.kolWallet))) counts.set(kol, (counts.get(kol) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** Every wallet that may carry a side label: Possible Sides, Known Sides, and wallets a KOL funded. */
+async function labeledCandidates(): Promise<string[]> {
   const [possible, known, funded] = await Promise.all([
     prisma.kolPossibleSide.findMany({ select: { wallet: true } }),
     prisma.kolWallet.findMany({
@@ -217,12 +240,11 @@ export async function loadLabeledSides(): Promise<LabeledSide[]> {
       WHERE f."funder" <> f."wallet"
         AND NOT EXISTS (SELECT 1 FROM "KolWallet" k2 WHERE k2."wallet" = f."wallet")`,
   ]);
-  const wallets = [
+  return [
     ...possible.map((r) => r.wallet),
     ...known.filter((k) => k.mainWallet !== k.wallet).map((k) => k.wallet),
     ...funded.map((r) => r.wallet),
   ];
-  return numberLabeledSides(await loadPossibleSides(wallets));
 }
 
 /**

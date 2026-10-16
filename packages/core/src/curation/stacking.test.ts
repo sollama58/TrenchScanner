@@ -333,3 +333,65 @@ describe("the member-backing gate (user decision 2026-10-14)", () => {
     );
   });
 });
+
+describe("the Trader seat's stacking (user decision 2026-10-16)", () => {
+  const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 0 };
+
+  it("reads no Rules signals and has no backing gate, live or on its exam", async () => {
+    const rows = syntheticMarket({ tokens: 2000, days: 20, truth: "linear", seed: 9 }).sort(
+      (a, b) => a.anchorAt.getTime() - b.anchorAt.getTime(),
+    );
+    const half = Math.floor(rows.length / 2);
+    const model = await trainCurator(rows.slice(0, half));
+    const reference: TrainingRow[] = rows.slice(half);
+    const good = Float64Array.from(
+      confidenceRanks(reference.map((r) => scoreCandidateWithModel(model, r.features))),
+    );
+    const trader = (await trainStackedCurator(
+      {
+        reference,
+        memberFoldRanks: new Map([
+          ["a", good],
+          ["b", good],
+          ["c", good],
+        ]),
+        memberShippedProbabilities: new Map([
+          ["a", good],
+          ["b", good],
+          ["c", good],
+        ]),
+        // Only one member can call: Consensus's gate would leave its exam empty.
+        memberCallRanks: new Map([
+          ["a", 0.8],
+          ["b", null],
+          ["c", null],
+        ]),
+        heuristicMinScore: 55,
+        targets,
+        cooldownHours: 24,
+        targetPerHour: 6,
+        withRules: false,
+        minBackers: 0,
+      },
+      1.01,
+    ))!;
+    expect(trader.params.meta.featureNames).toEqual(stackedFeatureNames(trader.params.members, false));
+    expect(trader.params.meta.featureNames).not.toContain("rules:rank");
+    expect(trader.params.meta.featureNames).not.toContain("rules:gate");
+    expect(trader.params.minBackers).toBe(0);
+    expect(trader.exam.calls).toBeGreaterThan(0);
+
+    // Live, a meta score over the line is a call with no member calling.
+    const nobody = new Map([
+      ["a", 0],
+      ["b", 0],
+      ["c", 0],
+    ]);
+    expect(stackedCalls({ ...trader.params, threshold: 0.5 }, 0.6, nobody)).toBe(true);
+    expect(stackedCalls({ ...trader.params, threshold: 0.5 }, 0.4, nobody)).toBe(false);
+    // Rules' signals don't move its score.
+    const score = (gate: boolean, rankScore: number) =>
+      scoreStacked(trader.params, new Map([["a", good[10]!]]), { gate, rankScore });
+    expect(score(true, 100)).toBe(score(false, 0));
+  });
+});

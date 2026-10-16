@@ -266,6 +266,19 @@ export const LAUNCH_FACT_FEATURES = [
   "relaunchSiblingPeakMcapUsd",
 ] as const;
 
+/**
+ * Added 2026-10-16 (user ask, notes/wallet-score-2026-10-16): the hidden composite Wallet Score
+ * (core's wallets/walletScore.ts) of the wallets buying in the coin's newest trades read before
+ * the decision (the live tape): their mean, and how many of them have a score. Null without a
+ * live page or before the scores load. Backfilled point-in-time on the rows decided around a
+ * called coin's tape (worker's walletScoreBackfill.ts). Recorded only (RETIRED_LEARNER_INPUTS)
+ * until they hold up on later days.
+ */
+export const WALLET_SCORE_FEATURES = [
+  "walletScoreRecentBuyersMean",
+  "walletScoreRecentBuyersScored",
+] as const;
+
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
   "flaggedSellers",
@@ -518,6 +531,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...NARRATIVE_FEATURES_V9,
   ...MARKET_SOURCE_FEATURES,
   ...LAUNCH_FACT_FEATURES,
+  ...WALLET_SCORE_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -656,6 +670,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   ...WALLET_RISK_COVERAGE_FEATURES,
   // The launch facts (added 2026-10-16, user ask): recorded first, on the same terms.
   ...LAUNCH_FACT_FEATURES,
+  // The hidden Wallet Score of the newest buyers (added 2026-10-16, user ask): recorded first, on
+  // the same terms (notes/wallet-score-2026-10-16/report.md).
+  ...WALLET_SCORE_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
@@ -1585,6 +1602,8 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     knownWinnerFirstBuyers: scored.knownWinnerFirstBuyers ?? null,
     winnerRecentBuyers: scored.winnerRecentBuyers ?? null,
     winnerRecentSellers: scored.winnerRecentSellers ?? null,
+    walletScoreRecentBuyersMean: scored.walletScoreRecentBuyersMean ?? null,
+    walletScoreRecentBuyersScored: scored.walletScoreRecentBuyersScored ?? null,
     kolTopHolders: scored.kolTopHolders ?? null,
     kolTopHolderPct: scored.kolTopHolderPct ?? null,
     kolFirstBuyers: scored.kolFirstBuyers ?? null,

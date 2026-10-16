@@ -3294,6 +3294,12 @@ body.drawer-open .util-drawer {
   border-color: color-mix(in srgb, var(--brand-a) 40%, transparent);
   background: color-mix(in srgb, var(--brand-a) 12%, transparent);
 }
+.side-flagged {
+  flex: none;
+  color: var(--warn-ink);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
 .side-count {
   text-align: right;
   font-size: 13px;
@@ -3766,7 +3772,8 @@ body.drawer-open .util-drawer {
   .side-avatar {
     display: none;
   }
-  .side-found {
+  .side-found,
+  .side-who .side-flagged {
     display: none;
   }
   .side-row {
@@ -9170,12 +9177,8 @@ html:has(dialog.about-modal[open]) {
 .tour-note .pill {
   vertical-align: 1px;
 }
-.tour-lead .good,
-.tour-card .good {
+.tour-goal .good {
   color: var(--good-ink);
-}
-.tour-lead .bad {
-  color: var(--bad-ink);
 }
 .about-body ul.tour-checks {
   grid-template-columns: 1fr 1fr;
@@ -9220,58 +9223,49 @@ html:has(dialog.about-modal[open]) {
   font-size: 13px;
 }
 .tour-goal {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 8px 0 12px;
-  padding: 10px 14px;
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px 14px;
   border-radius: var(--radius-s);
   background: var(--good-wash);
   border: 1px solid color-mix(in srgb, var(--good) 30%, transparent);
   color: var(--ink);
   font-size: 13px;
 }
-.tour-goal .num {
-  font-size: 26px;
-  font-weight: 700;
-  color: var(--good-ink);
-}
-.about-body ol.tour-legend {
-  margin: 0 0 10px;
+.about-body ul.tour-tiers {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0;
   padding: 0;
   list-style: none;
-  counter-reset: legend;
+}
+.about-body .tour-tiers li {
   display: grid;
-  gap: 6px;
+  justify-items: center;
+  gap: 1px;
+  padding: 8px 4px;
+  border-radius: var(--radius-s);
+  background: var(--surface-solid);
+  border: 1px solid color-mix(in srgb, var(--good) 25%, transparent);
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
 }
-.tour-legend li {
-  counter-increment: legend;
-  position: relative;
-  padding-left: 28px;
-  font-size: 13px;
-  color: var(--ink-2);
-}
-.tour-legend li::before {
-  content: counter(legend);
-}
-.tour-legend li::before,
-.tour-spot {
-  display: inline-grid;
-  place-items: center;
-  width: 19px;
-  height: 19px;
-  flex: none;
-  border-radius: 50%;
-  font-size: 11px;
+.tour-tiers .tier-x {
+  font-size: 20px;
   font-weight: 700;
-  color: #fff;
-  background: var(--brand-a);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-a) 25%, transparent);
+  color: var(--ink);
 }
-.tour-legend li::before {
-  position: absolute;
-  left: 0;
-  top: 0;
+.about-body .tour-goal p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.tour-goal p b {
+  color: var(--good-ink);
 }
 
 .about-body ul.tour-keys {
@@ -9300,58 +9294,6 @@ html:has(dialog.about-modal[open]) {
 }
 .tour-keys b {
   color: var(--ink);
-}
-
-/* The pretend card on "Reading a card" */
-.tour-card {
-  display: grid;
-  gap: 10px;
-  max-width: 420px;
-  margin: 6px auto 8px;
-  padding: 14px;
-  border-radius: 14px;
-  background: var(--surface-solid);
-  border: 1px solid var(--border-strong);
-  box-shadow: var(--shadow);
-  font-size: 13px;
-}
-.tour-card-head,
-.tour-card-pills,
-.tour-card-name,
-.tour-card-chips,
-.tour-card-grade {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-.tour-card-head {
-  justify-content: space-between;
-}
-.tour-card-logo {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--series-3), var(--series-1));
-}
-.tour-card-stats {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-}
-.tour-card-stats div {
-  display: grid;
-}
-.tour-card-stats .faint {
-  font-size: 11px;
-}
-.tour-card-grade {
-  margin-left: auto;
-}
-.tour-win {
-  color: var(--good-ink);
-  background: var(--good-wash);
-  border-color: color-mix(in srgb, var(--good) 40%, transparent);
 }
 
 /* Footer: dots, fine print, back / next */
@@ -9630,10 +9572,6 @@ html:has(dialog.about-modal[open]) {
 .tour-art .cap.off {
   fill: var(--muted);
 }
-.tour-art .strike {
-  stroke: var(--bad-ink);
-  stroke-width: 2;
-}
 .tour-art .label.kol {
   fill: color-mix(in srgb, var(--tour-kol) 70%, var(--ink));
 }
@@ -9788,22 +9726,6 @@ html:has(dialog.about-modal[open]) {
   fill: var(--good-wash);
   stroke: var(--good-ink);
 }
-.tour-art .orbit {
-  fill: none;
-  stroke: var(--border-strong);
-  stroke-width: 1.5;
-}
-.tour-art .podium rect {
-  fill: var(--surface-3);
-  stroke: var(--axis);
-}
-.tour-art .podium .first {
-  fill: color-mix(in srgb, var(--warn) 35%, var(--surface-solid));
-  stroke: var(--warn);
-}
-.tour-art .crown {
-  fill: var(--warn);
-}
 .tour-art .grid {
   stroke: var(--grid);
   stroke-width: 1;
@@ -9811,47 +9733,6 @@ html:has(dialog.about-modal[open]) {
 .tour-art .grid.base {
   stroke: var(--axis);
   stroke-width: 1.5;
-}
-.tour-art .grid.deadline {
-  stroke: var(--axis);
-  stroke-dasharray: 3 4;
-}
-.tour-art .zone.bad {
-  fill: var(--bad-wash);
-}
-.tour-art .path {
-  fill: none;
-  stroke-width: 3;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.tour-art .path.win {
-  stroke: var(--good-ink);
-}
-.tour-art .path.loss {
-  stroke: var(--bad-ink);
-}
-.tour-art .badge rect,
-.tour-art .badge circle {
-  stroke-width: 1.5;
-}
-.tour-art .badge.good rect {
-  fill: color-mix(in srgb, var(--good) 22%, var(--surface-solid));
-  stroke: var(--good-ink);
-}
-.tour-art .badge.bad circle {
-  fill: color-mix(in srgb, var(--bad) 22%, var(--surface-solid));
-  stroke: var(--bad-ink);
-}
-.tour-art .badge text {
-  font-size: 12px;
-  font-weight: 700;
-}
-.tour-art .badge.good text {
-  fill: var(--good-ink);
-}
-.tour-art .badge.bad text {
-  fill: var(--bad-ink);
 }
 .tour-art .gauge {
   fill: none;

@@ -52,4 +52,40 @@ describe("KOL overrides", () => {
   it("names bwam…PietdNfSXa as bwam_dev", () => {
     expect(KOL_OVERRIDES.get("bwamJzztZsepfkteWRChggmXuiiCQvpLqPietdNfSXa")?.name).toBe("bwam_dev");
   });
+
+  it("names 4S8Y…nF5UuHA as shaka", () => {
+    expect(KOL_OVERRIDES.get("4S8YBCt6hhi7Nr1NnKF6jF856LLN8JJFzD1a8nF5UuHA")?.name).toBe("shaka");
+  });
+
+  it("names ALau…1Ci31wE as Thurston", () => {
+    expect(KOL_OVERRIDES.get("ALauG4FwEYDgSXd5Hen6kvuWSCdUi2fYNSNqM1Ci31wE")?.name).toBe("Thurston");
+  });
+
+  it("names 722t…Jv9x5VTx as caller100x", () => {
+    expect(KOL_OVERRIDES.get("722tXm5uB5uuG2tC43uKHXQ7Pbyz75pTokEAJv9x5VTx")?.name).toBe("caller100x");
+  });
+
+  it("names Hi5y…LfuD2mqd as gambles.sol", () => {
+    expect(KOL_OVERRIDES.get("Hi5yNvPSfagdja5xjYMTYWnnjSE3ze5KsezTLfuD2mqd")?.name).toBe("gambles.sol");
+  });
+
+  it("names 9tRf…dYH4TnAp as Woozy", () => {
+    expect(KOL_OVERRIDES.get("9tRff7L6Mx3ZDNBoGPffdjD3c9JNzLc3nxzadYH4TnAp")?.name).toBe("Woozy");
+  });
+
+  it("names AuPp…nD45yqrf as Dani", () => {
+    expect(KOL_OVERRIDES.get("AuPp4YTMTyqxYXQnHc5KUc6pUuCSsHQpBJhgnD45yqrf")?.name).toBe("Dani");
+  });
+
+  it("names DwCp…1cXYicWf as wizard", () => {
+    expect(KOL_OVERRIDES.get("DwCp9GZw3ueoXPykHSPUkRZEwcTVbJH2i9Sf1cXYicWf")?.name).toBe("wizard");
+  });
+
+  it("names KJXB…cwxftvY as aightbet", () => {
+    expect(KOL_OVERRIDES.get("KJXB1ot9nkCvq1ZD27vzNSBaPPCT82DpVnXrcwxftvY")?.name).toBe("aightbet");
+  });
+
+  it("names B799…pvBdYFdR as Dusty", () => {
+    expect(KOL_OVERRIDES.get("B799XD2RtgkxYRvv5Q9CFnSpVifrsJErWz6MpvBdYFdR")?.name).toBe("Dusty");
+  });
 });

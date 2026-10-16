@@ -47,7 +47,9 @@ import {
   usableLiveScores,
   type LiveScales,
   type SeatScores,
+  CONSENSUS_CONTESTANT,
   RULES_CONTESTANT,
+  RULES_GATE_SIGNAL,
   NARRATIVE_CONTESTANT,
   CONTESTANTS,
   RULES_MODEL_KIND,
@@ -347,7 +349,7 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
     });
     return false;
   });
-  const consensus = usable.find((e) => e.role === "stacked");
+  const consensus = usable.find((e) => e.spec.id === CONSENSUS_CONTESTANT);
   // The default is the stored best performer (curation/champion.ts) while it can still send here;
   // else the consensus once it can call, else Rules - the same answer the API gives.
   const champion = await loadChampion();
@@ -640,7 +642,10 @@ function decideCurations(
         }))
         .sort((a, b) => b.rank - a.rank);
       const backers = ranked.filter((r) => r.rank >= BACKING_RANK).map((r) => names.get(r.m.contestant));
-      if (decisions.get(RULES_CONTESTANT)?.curate) backers.push(names.get(RULES_CONTESTANT));
+      // Rules backs a call only for a meta model that reads it (Trader doesn't).
+      if (params.meta.featureNames.includes(RULES_GATE_SIGNAL) && decisions.get(RULES_CONTESTANT)?.curate) {
+        backers.push(names.get(RULES_CONTESTANT));
+      }
       const named = backers.filter((b): b is string => b !== undefined);
       if (named.length > 0) reasons.push(`backed by ${named.join(", ")}`);
       const strongest = ranked[0] ? learners.get(ranked[0].m.contestant) : undefined;

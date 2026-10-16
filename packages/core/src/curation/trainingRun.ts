@@ -33,7 +33,10 @@ import {
 import {
   CONSENSUS_CONTESTANT,
   HIGH_PRECISION_SHARE_BAND,
+  isTraderMember,
   RULES_CONTESTANT,
+  TRADER_CONTESTANT,
+  TRADER_CUTOFF_SHARE,
   type ContestantSpec,
   type CuratorRecipe,
 } from "./contestants.js";
@@ -1007,6 +1010,21 @@ export async function runEvolvingContest(
 
   const laneCalls = new Map<string, Uint8Array>();
   const callRanks = new Map<string, number | null>();
+  // Trader's members (isTraderMember): the combiners' members plus the control and standalone seats.
+  const traderFoldRanks = new Map<string, Float64Array>();
+  const traderShipped = new Map<string, Float64Array>();
+  const traderCallRanks = new Map<string, number | null>();
+  const keepForTrader = (slot: string, exam: LearnerExam) => {
+    if (exam.foldRanks && exam.shipped) {
+      traderFoldRanks.set(slot, exam.foldRanks);
+      traderShipped.set(slot, exam.shipped);
+      traderCallRanks.set(slot, exam.callRank);
+    } else {
+      traderFoldRanks.delete(slot);
+      traderShipped.delete(slot);
+      traderCallRanks.delete(slot);
+    }
+  };
   const keep = (slot: string, exam: LearnerExam) => {
     if (exam.foldRanks && exam.shipped) {
       foldRanks.set(slot, exam.foldRanks);
@@ -1019,6 +1037,7 @@ export async function runEvolvingContest(
     }
     if (exam.calls) laneCalls.set(slot, exam.calls);
     else laneCalls.delete(slot);
+    keepForTrader(slot, exam);
   };
   // Measured once, on the rows every learner's exam grades: the inputs' health this run.
   let featureReport: FeatureReport | null = null;
@@ -1051,8 +1070,12 @@ export async function runEvolvingContest(
     Object.assign(exam.result.metrics, heldFeatures);
     results.push(exam.result);
     // A control or standalone seat ships and calls on its own ledger, but feeds no combiner, the
-    // rules seat or evolution (contestants.ts, ContestantSpec.control and .standalone).
-    if (spec.control || spec.standalone) continue;
+    // rules seat or evolution (contestants.ts, ContestantSpec.control and .standalone) - except
+    // Trader, which stacks every learner seat.
+    if (spec.control || spec.standalone) {
+      if (isTraderMember(spec)) keepForTrader(spec.id, exam);
+      continue;
+    }
     laneExamScores.set(spec.id, exam.examScore);
     keep(spec.id, exam);
   }
@@ -1183,20 +1206,35 @@ export async function runEvolvingContest(
     );
   }
 
-  const stackedSpec = cfg.contestants.find((c) => c.role === "stacked");
-  if (stackedSpec && reference !== null && foldRanks.size >= 2) {
+  // Consensus and Trader: the same stacking, Trader over every learner seat with no Rules inputs,
+  // no member-backing gate and its own cutoff anchor (TRADER_CUTOFF_SHARE, as the Sharp seats').
+  for (const stackedSpec of cfg.contestants.filter((c) => c.role === "stacked")) {
+    const trader = stackedSpec.id === TRADER_CONTESTANT;
+    const members = trader
+      ? { fold: traderFoldRanks, shipped: traderShipped, callRanks: traderCallRanks }
+      : { fold: foldRanks, shipped: shippedProbabilities, callRanks };
+    if (reference === null || members.fold.size < 2) continue;
     const stacked = await trainStackedCurator(
       {
         reference,
-        memberFoldRanks: foldRanks,
-        memberShippedProbabilities: shippedProbabilities,
-        memberCallRanks: callRanks,
+        memberFoldRanks: members.fold,
+        memberShippedProbabilities: members.shipped,
+        memberCallRanks: members.callRanks,
         heuristicMinScore: cfg.heuristicMinScore,
-        targets: cfg.targets,
+        targets: trader
+          ? {
+              ...cfg.targets,
+              targetShare: TRADER_CUTOFF_SHARE,
+              shareBand: HIGH_PRECISION_SHARE_BAND,
+              minSupportShare: 0,
+              coverageTolerance: 0,
+            }
+          : cfg.targets,
         cooldownHours: cfg.cooldownHours,
         targetPerHour: cfg.targetPerHour,
         recencyHalfLifeDays: cfg.recencyHalfLifeDays,
         runWeightPerDoubling: cfg.runWeightPerDoubling,
+        ...(trader ? { withRules: false, minBackers: 0 } : {}),
       },
       NEVER_EMIT_THRESHOLD,
     );

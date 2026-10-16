@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { labelBasis, labelPill, pinLabeled, sideLabelsText, type SideWallet } from "./SideWalletChecker";
+import {
+  flaggedText,
+  labelBasis,
+  labelPill,
+  pinLabeled,
+  sideLabelsText,
+  type SideWallet,
+} from "./SideWalletChecker";
+
+describe("flaggedText", () => {
+  it("counts the flagged wallets", () => {
+    expect(flaggedText(1)).toBe("1 Flagged Wallet");
+    expect(flaggedText(1200)).toBe("1,200 Flagged Wallets");
+  });
+});
 
 describe("sideLabelsText", () => {
   it("writes one address,KOL_N per line", () => {

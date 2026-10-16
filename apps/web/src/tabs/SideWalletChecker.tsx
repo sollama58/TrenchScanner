@@ -87,6 +87,8 @@ interface SideLeaderboard {
     knownSideOf?: { wallet: string; name: string | null } | null;
     coins: Record<SideWindow, number>;
     sides: Record<SideWindow, number>;
+    /** Wallets labeled for it, whatever the window: its pinned list's count. Absent from older API builds. */
+    flagged?: number;
   }[];
 }
 
@@ -189,6 +191,19 @@ const FIRST_ROWS = 25;
 /** Side wallets shown in a dropdown; more open in a modal. */
 const DROP_ROWS = 10;
 const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
+
+/** "3 Flagged Wallets" (user ask 2026-10-16): the labeled wallets pinned above a list. Exported for tests. */
+export const flaggedText = (n: number) => `${n.toLocaleString("en-US")} Flagged Wallet${n === 1 ? "" : "s"}`;
+
+/** The count of labeled wallets beside a KOL's name and above its lists; none when there are none. */
+function FlaggedPill({ count, title }: { count: number | undefined; title: string }) {
+  if (!count) return null;
+  return (
+    <span className="pill side-flagged" title={title}>
+      {flaggedText(count)}
+    </span>
+  );
+}
 
 /** "12s after", "2m 5s before", "same second". Exported for tests. */
 export function gapText(sec: number): string {
@@ -340,6 +355,10 @@ export function SideWalletChecker() {
                             {plural(k.sides["30d"], "possible wallet")}
                           </span>
                         )}
+                        <FlaggedPill
+                          count={k.flagged}
+                          title="Wallets labeled for it (Known Sides, KOL Funded Wallets and Possible Sides), whatever the window"
+                        />
                       </span>
                       {SIDE_WINDOWS.map((w) => (
                         <span key={w} className={`num side-count${w === "30d" ? " main" : ""}`}>
@@ -613,10 +632,15 @@ function SideWallets({
                 <span>
                   <TargetIcon size={13} />
                   <span>
-                    <strong className="num">
-                      {plural(pinned.length, bundle ? "wallet" : "labeled wallet")}
-                    </strong>
-                    {bundle ? " would be labeled" : ""} · {plural(pinned.length + 1, "wallet")} used
+                    <FlaggedPill
+                      count={pinned.length}
+                      title={
+                        bundle
+                          ? "Wallets that would qualify for a label against it"
+                          : "Wallets labeled for it, pinned above the list whatever the window"
+                      }
+                    />
+                    {bundle ? " would be labeled" : ""}
                   </span>
                 </span>
                 <WalletWebButton wallet={kol} name={kolName} className="ghost small-btn side-web-btn">

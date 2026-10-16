@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { liveFlagsOf, liveWindowFlowOf, readLiveTape, resetLiveTape, takeLiveTapeStats } from "./liveTape.js";
+import {
+  liveBuyersOf,
+  liveFlagsOf,
+  liveWalletScoreOf,
+  liveWindowFlowOf,
+  readLiveTape,
+  resetLiveTape,
+  takeLiveTapeStats,
+} from "./liveTape.js";
 
 const SOL = 1_000_000_000;
 const MINT = "Mint1111111111111111111111111111111111111111";
@@ -54,6 +62,22 @@ describe("live tape", () => {
     await readLiveTape([MINT], fakeHelius(), { maxPages: 1, refreshMs: 60_000, nowMs: 0 });
     expect(liveFlagsOf(MINT, undefined, 1)).toBeNull();
     expect(liveFlagsOf(MINT, lookup, 16 * 60_000)).toBeNull();
+  });
+
+  it("reads the buyers' Wallet Score off the page, leaving out wallets on the coin's own tape", async () => {
+    await readLiveTape([MINT], fakeHelius(), { maxPages: 1, refreshMs: 60_000, nowMs: 0 });
+    const scored = (w: string) => (w === RISKY ? { score: 90, dumps: 0, walletScore: 0.4 } : undefined);
+    expect(liveBuyersOf(MINT, 1)).toEqual([RISKY]);
+    expect(liveWalletScoreOf(MINT, scored, undefined, 1)).toEqual({
+      walletScoreRecentBuyersMean: 0.4,
+      walletScoreRecentBuyersScored: 1,
+    });
+    expect(liveWalletScoreOf(MINT, scored, new Set([RISKY]), 1)).toEqual({
+      walletScoreRecentBuyersMean: null,
+      walletScoreRecentBuyersScored: 0,
+    });
+    expect(liveWalletScoreOf(MINT, undefined, undefined, 1)).toBeNull();
+    expect(liveWalletScoreOf(MINT, scored, undefined, 16 * 60_000)).toBeNull();
   });
 
   it("reads a coin's 5m order flow off its page, as of when it was read, until it is five minutes old", async () => {

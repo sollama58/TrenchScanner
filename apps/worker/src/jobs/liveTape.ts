@@ -4,6 +4,7 @@ import {
   liveFlags,
   liveTraders,
   tradesFromChainTransactionsPriced,
+  walletScoreReading,
   type HeliusClient,
   type LiveFlagsReading,
   type LiveTraderCounts,
@@ -11,6 +12,7 @@ import {
   type SolPriceLookup,
   type TapeTrade,
   type TradeFlowFeatures,
+  type WalletScoreReading,
 } from "@trenchscanner/core";
 
 const logger = createLogger("live-tape");
@@ -121,6 +123,29 @@ export function liveFlagsOf(
   const page = pages.get(mint);
   if (!lookup || !page || nowMs - page.atMs > MAX_PAGE_AGE_MS) return null;
   return liveFlags(page.trades, lookup);
+}
+
+/** The wallets buying in a coin's recent page, or none without one (for the own-tape read). */
+export function liveBuyersOf(mint: string, nowMs = Date.now()): string[] {
+  const page = pages.get(mint);
+  if (!page || nowMs - page.atMs > MAX_PAGE_AGE_MS) return [];
+  return [...new Set(page.trades.filter((t) => t.side === "buy").map((t) => t.wallet))];
+}
+
+/**
+ * The hidden Wallet Score of the wallets buying in a coin's recent page (core's
+ * walletScoreReading), or null without a recent page or the scores. Wallets in `ownTape` (rows
+ * on this coin's own tape already in the scores) are left out.
+ */
+export function liveWalletScoreOf(
+  mint: string,
+  lookup: ((wallet: string) => ScoredWallet | undefined) | undefined,
+  ownTape: { has(wallet: string): boolean } | null | undefined,
+  nowMs = Date.now(),
+): WalletScoreReading | null {
+  const page = pages.get(mint);
+  if (!lookup || !page || nowMs - page.atMs > MAX_PAGE_AGE_MS) return null;
+  return walletScoreReading(page.trades, (wallet) => lookup(wallet)?.walletScore, ownTape);
 }
 
 /** A window reading older than this is no longer the last five minutes. */

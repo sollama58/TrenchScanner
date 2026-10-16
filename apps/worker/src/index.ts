@@ -71,6 +71,7 @@ import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
 import { runCandlePeaksJob } from "./jobs/candlePeaks.js";
 import { runBundledSupplyBackfill } from "./jobs/bundledSupplyBackfill.js";
+import { runWalletScoreBackfill } from "./jobs/walletScoreBackfill.js";
 import { runQuoteRegrade } from "./jobs/quoteRegrade.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
@@ -529,10 +530,13 @@ async function main() {
           const quote = await runQuoteRegrade(deps.pumpFun);
           // The one-time Bundled % backfill (bundledSupplyBackfill.ts), same lock: database only.
           const bundled = await runBundledSupplyBackfill();
+          // The one-time Wallet Score backfill (walletScoreBackfill.ts), same lock: database only.
+          const walletScores = await runWalletScoreBackfill();
           return {
             ...meta,
             ...(quote ? { quoteRegrade: quote } : {}),
             ...(bundled ? { bundledSupplyBackfill: bundled } : {}),
+            ...(walletScores ? { walletScoreBackfill: walletScores } : {}),
           };
         }),
       1,

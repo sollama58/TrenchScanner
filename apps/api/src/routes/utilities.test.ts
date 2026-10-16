@@ -377,6 +377,8 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
         knownSideOf: null,
         coins: { "24h": 1, "7d": 2, "30d": 4 },
         sides: { "24h": 0, "7d": 0, "30d": 1 },
+        // Flagged Wallets counts labeled possible sides (possibleSides.ts); none seeded here.
+        flagged: 0,
       });
       expect(board.json().rules).toMatchObject({
         minShared: { "24h": 5, "7d": 15, "30d": 25 },
