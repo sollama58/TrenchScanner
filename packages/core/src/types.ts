@@ -97,6 +97,11 @@ export interface WatchlistCandidate {
   symbol?: string;
   name?: string;
   imageUrl?: string;
+  /**
+   * When the source says the coin launched (Pump.fun's created_timestamp, the stream's create
+   * event, Jupiter's first pool) - recorded as Token.firstSeenAt and Token.launchedAt. Only a
+   * launch source sets it; DexScreener's feeds, which would give the pool's age, leave it unset.
+   */
   createdAt?: Date;
   hasTwitter?: boolean;
   hasTelegram?: boolean;
@@ -368,6 +373,12 @@ export interface OnChainProfile {
 /** A CandidateToken enriched with on-chain data and derived metrics, ready to score. */
 export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfile, "mintAddress">> {
   ageMinutes?: number;
+  /**
+   * Whether ageMinutes counts from the launch itself (Token.launchedAt, or the bonding-curve pair
+   * the coin launched with) rather than from the earliest the scan has - which on a coin first
+   * met after graduation is its PumpSwap pool. The ageSource model input; undefined with no age.
+   */
+  ageFromLaunch?: boolean;
   volumeToMcapRatio?: number;
   holderGrowthPct?: number;
   /**

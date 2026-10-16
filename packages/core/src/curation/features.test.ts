@@ -195,7 +195,17 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("transferWalletCount");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("ageSource");
+  });
+
+  it("says whether the age counts from the launch or the pool, null without an age, and replays it", () => {
+    const launch = buildCandidateFeatures(scored({ ageMinutes: 90, ageFromLaunch: true }));
+    expect(launch.ageSource).toBe(1);
+    expect(buildCandidateFeatures(scored({ ageMinutes: 1, ageFromLaunch: false })).ageSource).toBe(0);
+    expect(buildCandidateFeatures(scored({ ageMinutes: undefined })).ageSource).toBeNull();
+    expect(LEARNER_FEATURE_NAMES).toContain("ageSource");
+    expect(scoredFromFeatures(launch, 0.0001, 150_000).ageFromLaunch).toBe(true);
+    expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).ageFromLaunch).toBeUndefined();
   });
 
   it("records Transferred % and the transfer count, recorded only, null while unread", () => {

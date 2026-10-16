@@ -129,7 +129,12 @@ import {
 import { resolveMintAuthorities } from "./mintAuthority.js";
 import { resolvePumpLaunches } from "./pumpLaunch.js";
 import { resolveOnChainHolders } from "./onChainHolders.js";
-import { rememberGraduations, rememberLaunchTimes, resolvePreBondSeconds } from "./launchTimes.js";
+import {
+  rememberGraduations,
+  rememberLaunchTimes,
+  resolveLaunchTimes,
+  resolvePreBondSeconds,
+} from "./launchTimes.js";
 import { ignoreMayhemMints, resolveMayhemMode } from "./mayhemMode.js";
 import { resolveRelaunchSiblings } from "./relaunchFarms.js";
 import { fillLaunchDetails, takeLaunchDetailStats } from "./launchDetails.js";
@@ -948,7 +953,7 @@ async function scanCycle(
   // DexScreener calls. The most recently viewed win.
   const activelyViewed = await prisma.token.findMany({
     where: { lastViewedAt: { gt: viewCutoff } },
-    select: { id: true, mintAddress: true, firstSeenAt: true },
+    select: { id: true, mintAddress: true, firstSeenAt: true, launchedAt: true },
     orderBy: { lastViewedAt: "desc" },
     take: env.LIVE_PRICE_MAX_TRACKED,
   });
@@ -1078,6 +1083,9 @@ async function scanCycle(
   }
 
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
+  const storedLaunchByMint = new Map(
+    [...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.launchedAt]),
+  );
   // Coins already known to fail the screen for good (Mayhem, an instant bond): their last RugCheck
   // report stands, never refreshed - see settledRejects.ts. Asked before RugCheck, from caches only.
   const settled = await settledRejects(candidates, env, new Set(activelyViewed.map((t) => t.mintAddress)));
@@ -1220,6 +1228,20 @@ async function scanCycle(
     ...[...mayhemByMint].filter(([, m]) => m.status === "found" && m.isMayhemMode).map(([mint]) => mint),
   ]);
 
+  // When each candidate launched, for its age: from the Token row and memory now, and for a
+  // graduated coin nobody has it for, asked of Pump.fun behind the cycle and kept on the row for
+  // the next one (see resolveLaunchTimes). Seeds the pre-bond cut's launch times too.
+  const { known: launchedAtByMint, pending: launchTimeLookups } = resolveLaunchTimes(
+    candidates,
+    storedLaunchByMint,
+    { pumpFun: deps.pumpFun },
+    env,
+    (mintAddress, launchedAt) =>
+      prisma.token.updateMany({ where: { mintAddress, launchedAt: null }, data: { launchedAt } }),
+  );
+  void launchTimeLookups.catch((err: unknown) =>
+    logger.warn("launch time lookups failed", { error: String(err) }),
+  );
   // Seconds on the bonding curve for graduated candidates, for the screen's pre-bond cut. Only
   // asked about candidates still passing the local screen and not Mayhem: the rest are rejected
   // anyway, and Mayhem's answer is one batched RPC call where this is a Pump.fun call per coin.
@@ -1290,7 +1312,14 @@ async function scanCycle(
   // With the coin's age, which the pre-gate's buy-ratio test depends on (see passesEventPreGate).
   const contender = (c: CandidateToken) =>
     passesEventPreGate(
-      { ...c, ageMinutes: candidateAgeMinutes(c.pairCreatedAt, firstSeenByMint.get(c.mintAddress)) },
+      {
+        ...c,
+        ageMinutes: candidateAgeMinutes({
+          launchedAt: launchedAtByMint.get(c.mintAddress),
+          pairCreatedAt: c.pairCreatedAt,
+          firstSeenAt: firstSeenByMint.get(c.mintAddress),
+        }),
+      },
       curatedBand,
     );
   const walletGroups = candidates
@@ -1635,6 +1664,7 @@ async function scanCycle(
           candidate,
           priors.get(candidate.mintAddress) ?? NO_PRIORS,
           firstSeenByMint.get(candidate.mintAddress),
+          launchedAtByMint.get(candidate.mintAddress),
           withChainDevHolding(
             onChainByMint.get(candidate.mintAddress) ?? null,
             sniperByMint.get(candidate.mintAddress),
@@ -1913,7 +1943,13 @@ async function scanDowntimeMs(env: Env, now: number): Promise<number> {
 }
 
 export async function selectWatchlist(env: Env): Promise<{
-  tracked: { id: string; mintAddress: string; firstSeenAt: Date; launchpad: string | null }[];
+  tracked: {
+    id: string;
+    mintAddress: string;
+    firstSeenAt: Date;
+    launchedAt: Date | null;
+    launchpad: string | null;
+  }[];
   alive: number;
 }> {
   const now = Date.now();
@@ -1945,7 +1981,13 @@ export async function selectWatchlist(env: Env): Promise<{
   );
   // Only the columns the cycle reads: these are up to WATCHLIST_MAX_TRACKED rows a minute, and a
   // whole Token row carries the description and every sticky flag.
-  const select = { id: true, mintAddress: true, firstSeenAt: true, launchpad: true } as const;
+  const select = {
+    id: true,
+    mintAddress: true,
+    firstSeenAt: true,
+    launchedAt: true,
+    launchpad: true,
+  } as const;
   const bandCeiling = scanBand(env.MCAP_FILTER_MIN, env.MCAP_FILTER_MAX).max;
   // Mayhem coins are set aside for good (Token.ignoredAt; see ignoreMayhemMints).
   const aliveWhere = { firstSeenAt: { gt: ttlCutoff }, lastLiveAt: { gt: probationCutoff }, ignoredAt: null };
@@ -2307,6 +2349,7 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
       name: coin.name,
       imageUrl: coin.imageUrl,
       firstSeenAt: coin.createdAt ?? new Date(),
+      launchedAt: coin.createdAt,
       // Null until a source that carries the socials has read them; a stream, Jupiter or
       // DexScreener-list row stored false here until 2026-10-16 (data audit, user decision).
       hasTwitter: coin.hasTwitter,
@@ -2332,6 +2375,33 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
     await prisma.token
       .updateMany({ where: { mintAddress: { in: mints }, launchpad: null }, data: { launchpad } })
       .catch((err) => logger.warn("failed to record launchpads", { error: String(err) }));
+  }
+
+  // The launch time for mints already on the table that a launch source names now (a coin first
+  // found on DexScreener's feeds, or a row from before the column): one read for the rows still
+  // without one, a write per hit. Settles to zero rows once every such mint has one.
+  const launchedByMint = new Map(
+    valid.flatMap((c) =>
+      c.createdAt && !Number.isNaN(c.createdAt.getTime()) ? [[c.mintAddress, c.createdAt] as const] : [],
+    ),
+  );
+  if (launchedByMint.size > 0) {
+    await prisma.token
+      .findMany({
+        where: { mintAddress: { in: [...launchedByMint.keys()] }, launchedAt: null },
+        select: { mintAddress: true },
+      })
+      .then((rows) =>
+        Promise.all(
+          rows.map((row) =>
+            prisma.token.updateMany({
+              where: { mintAddress: row.mintAddress, launchedAt: null },
+              data: { launchedAt: launchedByMint.get(row.mintAddress) },
+            }),
+          ),
+        ),
+      )
+      .catch((err) => logger.warn("failed to record launch times", { error: String(err) }));
   }
 
   // Sticky boost flag for mints already on the table - a paid boost bought after discovery is
@@ -2675,18 +2745,18 @@ export function persistSnapshot(tokenId: string, prior: CandidatePrior, now: num
 }
 
 /**
- * Minutes since launch from what the cycle knows before scoring: the earlier of the pair's creation
- * and the watchlist's first sighting (processCandidate's age anchor, less the Token row's).
+ * Minutes since launch from what the cycle knows before scoring: the launch time a source has
+ * said (resolveLaunchTimes), else the earlier of the pair's creation and the watchlist's first
+ * sighting (processCandidate's age anchors, less the Token row's).
  */
 export function candidateAgeMinutes(
-  pairCreatedAt: Date | undefined,
-  firstSeenAt: Date | undefined,
+  anchors: { launchedAt?: Date; pairCreatedAt?: Date; firstSeenAt?: Date },
   now: number = Date.now(),
 ): number | undefined {
-  const anchors = [pairCreatedAt, firstSeenAt]
-    .filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()))
-    .map((d) => d.getTime());
-  return anchors.length > 0 ? (now - Math.min(...anchors)) / 60_000 : undefined;
+  const valid = (d: Date | undefined): d is Date => d instanceof Date && !Number.isNaN(d.getTime());
+  if (valid(anchors.launchedAt)) return (now - anchors.launchedAt.getTime()) / 60_000;
+  const fallback = [anchors.pairCreatedAt, anchors.firstSeenAt].filter(valid).map((d) => d.getTime());
+  return fallback.length > 0 ? (now - Math.min(...fallback)) / 60_000 : undefined;
 }
 
 /** How long the decision's fresh-quote read may take (see readFreshQuotes). */
@@ -2721,6 +2791,7 @@ async function processCandidate(
   candidate: CandidateToken,
   prior: CandidatePrior,
   watchlistFirstSeenAt: Date | undefined,
+  launchedAt: Date | undefined,
   onChainProfile: OnChainProfile | null,
   activeFilters: FilterWithUser[],
   earliestActivityByAddress: Map<string, Date | null>,
@@ -2771,14 +2842,18 @@ async function processCandidate(
   // Holder-to-holder transfers: unknown (left off) until the top 25's reads are in. The linked
   // figures without them ride along, recorded (user ask 2026-10-16).
   const onChain = withExTransfers(withHolderTransfers(withBundled, transfers), exTransfers);
-  // Launch time: the earliest of the DEX pair's creation time and when the watchlist first saw
-  // the mint: after graduation DexScreener's canonical pair is the PumpSwap pool,
-  // whose creation time is the graduation, and age read from it restarted at zero - a six-hour
-  // old token matched a "max 30 minutes old" filter the moment it bonded.
+  // Launch time: what a launch source said (Token.launchedAt, resolveLaunchTimes), else the
+  // earliest of the DEX pair's creation time and when the watchlist first saw the mint. After
+  // graduation DexScreener's canonical pair is the PumpSwap pool, whose creation time is the
+  // graduation, and age read from it restarted at zero - a six-hour old token matched a "max 30
+  // minutes old" filter the moment it bonded; and on a coin the scan first met after graduation
+  // every anchor it has is that pool (27-45% of graduated rows on some days, data audit
+  // 2026-10-16), which only the source's launch time corrects. The scored token says which it got
+  // (ageFromLaunch, the ageSource input).
   const ageAnchors = [candidate.pairCreatedAt, watchlistFirstSeenAt, existingToken?.firstSeenAt]
     .filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()))
     .map((d) => d.getTime());
-  const createdAt = ageAnchors.length > 0 ? new Date(Math.min(...ageAnchors)) : undefined;
+  const createdAt = launchedAt ?? (ageAnchors.length > 0 ? new Date(Math.min(...ageAnchors)) : undefined);
   noteHolderCutVerdict(candidate.mintAddress, onChain, createdAt);
 
   // First sighting inside the curated band, stamped once and kept - the anchor for the
@@ -2815,6 +2890,7 @@ async function processCandidate(
     onChain,
     {
       createdAt,
+      launchedAt,
       previousHolderCount: prior.holderCount ?? undefined,
       previousHolderCountAt: prior.holderCountAt ?? undefined,
       previousHolderCount10m: prior.holderCount10m ?? undefined,

@@ -436,6 +436,14 @@ model Token {
   /// of them. Null means DexScreener has no image, not that we failed to look.
   imageUrl                String?
   firstSeenAt             DateTime  @default(now())
+  /// When the mint launched on its launchpad's bonding curve, as a launch source said: Pump.fun's
+  /// `created_timestamp` (its lists at discovery, or asked once per graduated coin - the worker's
+  /// launchTimes.ts), the stream's create event, Jupiter's first pool. Null until one has. The
+  /// token's age (ageMinutes) reads from here when set: a coin the scan first met after
+  /// graduation has only its PumpSwap pool to go by otherwise, and a coin that bonded after an
+  /// hour read as a minute old (user decision 2026-10-16). firstSeenAt stays what it is - when
+  /// the scanner knew of the mint - which the watchlist's horizons are measured from.
+  launchedAt              DateTime?
   /// Null = no source has read this coin's socials yet; false = a source that carries them
   /// (Pump.fun's coin details, the launch metadata, a DexScreener pair with an info block) said
   /// there is none. Nullable since 2026-10-16 (data-correctness audit, user decision): rows from

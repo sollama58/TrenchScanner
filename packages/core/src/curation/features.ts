@@ -205,6 +205,18 @@ export const LAUNCHPAD_FEATURES = ["launchpadStonks"] as const;
  */
 export const TRANSFER_FEATURES = ["transferredSupplyPct", "transferWalletCount"] as const;
 
+/**
+ * Added 2026-10-16 (data audit, values.md section 3; user decision): what ageMinutes counts from.
+ * 1 when the age is since the launch itself (Token.launchedAt from a launch source, or the
+ * bonding-curve pair the coin launched with), 0 when it is since the earliest the scan has - on a
+ * coin first met after graduation that is its PumpSwap pool, so a coin that bonded after an hour
+ * read as a minute old (27-45% of graduated rows on some days). Null with no age, and on every
+ * row banked before. Read by the learners, so a model can tell the two ages apart, and a mask can
+ * find the rows whose age is the pool's; the onset guard (featureOnset.ts) keeps it out of a run
+ * until it covers enough of the exam's span.
+ */
+export const AGE_SOURCE_FEATURES = ["ageSource"] as const;
+
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
   "flaggedSellers",
@@ -448,6 +460,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...BUNDLED_SUPPLY_FEATURES,
   ...LAUNCHPAD_FEATURES,
   ...TRANSFER_FEATURES,
+  ...AGE_SOURCE_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -1085,6 +1098,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   kolBundledPct: "supply bundled by KOLs",
   bundledSupplyPct: "supply bundled (linked holders and KOL bundles)",
   launchpadStonks: "Stonks launch (vs Pump.fun)",
+  ageSource: "age counted from the launch (vs the pool)",
   transferredSupplyPct: "supply transferred holder to holder",
   transferWalletCount: "top holders that sent or got a transfer",
   sameTimeFundedPct: "supply funded in the same minute",
@@ -1172,6 +1186,7 @@ export function scoredFromFeatures(
     freshTopHolderCount: num("freshTopHolderCount"),
     freshTopHoldersChecked: num("freshTopHoldersChecked"),
     ageMinutes: num("ageMinutes"),
+    ageFromLaunch: bool("ageSource"),
     graduated: bool("graduated"),
     hasTwitter: bool("hasTwitter"),
     hasTelegram: bool("hasTelegram"),
@@ -1355,6 +1370,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     kolRecentBuyers: scored.kolRecentBuyers ?? null,
     kolRecentSellers: scored.kolRecentSellers ?? null,
     ageMinutes: scored.ageMinutes ?? null,
+    ageSource: scored.ageFromLaunch === undefined ? null : scored.ageFromLaunch ? 1 : 0,
     graduated: scored.graduated === undefined ? null : scored.graduated ? 1 : 0,
     hasTwitter: scored.hasTwitter === undefined ? null : scored.hasTwitter ? 1 : 0,
     hasTelegram: scored.hasTelegram === undefined ? null : scored.hasTelegram ? 1 : 0,

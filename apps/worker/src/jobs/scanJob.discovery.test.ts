@@ -291,6 +291,30 @@ describe.skipIf(!dbAvailable)("discovery metadata and revival", () => {
     expect((await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(2) } })).dexBoosted).toBe(true);
   });
 
+  it("records the launch time a launch source says, on a new row and later on one found without it", async () => {
+    const launchedAt = new Date("2026-10-16T12:00:00Z");
+    await addNewMintsToWatchlist([
+      { mintAddress: mint(31), createdAt: launchedAt, discoverySource: "pumpfun" },
+    ]);
+    const fromLaunch = await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(31) } });
+    expect(fromLaunch.launchedAt).toEqual(launchedAt);
+    expect(fromLaunch.firstSeenAt).toEqual(launchedAt);
+
+    // First met on DexScreener (no launch time), then on a Pump.fun list: the row takes it, once.
+    await addNewMintsToWatchlist([{ mintAddress: mint(32), discoverySource: "dexscreener" }]);
+    expect(
+      (await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(32) } })).launchedAt,
+    ).toBeNull();
+    await addNewMintsToWatchlist([
+      { mintAddress: mint(32), createdAt: launchedAt, discoverySource: "pumpfun" },
+    ]);
+    const later = new Date("2026-10-16T13:00:00Z");
+    await addNewMintsToWatchlist([{ mintAddress: mint(32), createdAt: later, discoverySource: "jupiter" }]);
+    const filled = await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(32) } });
+    expect(filled.launchedAt).toEqual(launchedAt);
+    expect(filled.firstSeenAt).not.toEqual(launchedAt);
+  });
+
   it("fills in the description and socials of a row the stream created bare, once", async () => {
     await addNewMintsToWatchlist([{ mintAddress: mint(90), symbol: "BARE", discoverySource: "pumpportal" }]);
     // Bare means unread: the socials are null, not a false the models would read as "none".
