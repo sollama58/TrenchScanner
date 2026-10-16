@@ -1355,25 +1355,32 @@ async function scanCycle(
     linkedLookups ? linkedGroups.map((g) => [g.mintAddress, cexReadingOf(g, linkedLookups!)] as const) : [],
   );
   // KOL Bundled % and Bundled % from the same readings, the roster and one read of the possible
-  // side wallets.
-  const kolBundledOf =
+  // side wallets; for the coins transfers changed, the same without them too, in the same read
+  // (keyed "ex:<mint>") so both land or neither does.
+  const EX = "ex:";
+  const changedByTransfers = [...linkedBaseByMint].filter(
+    ([mint, base]) => base && linkedByMint.get(mint) !== base,
+  );
+  const kolBundledAll =
     (linkedLookups
       ? await withinBudget(
-          kolBundledByMint(linkedByMint, linkedLookups.funderOf, kolLookup()),
+          kolBundledByMint(
+            new Map([
+              ...linkedByMint,
+              ...changedByTransfers.map(([mint, base]) => [EX + mint, base] as const),
+            ]),
+            linkedLookups.funderOf,
+            kolLookup(),
+          ),
           KOL_BUNDLED_BUDGET_MS,
         )
       : null) ?? new Map<string, KolBundledReading>();
-  // The same without transfers, for the coins transfers changed (the rest read the same).
-  const changedByTransfers = new Map(
-    [...linkedBaseByMint].filter(([mint, base]) => base && linkedByMint.get(mint) !== base),
+  const kolBundledOf = new Map([...kolBundledAll].filter(([key]) => !key.startsWith(EX)));
+  const kolBundledBaseOf = new Map(
+    [...kolBundledAll].flatMap(([key, r]) =>
+      key.startsWith(EX) ? [[key.slice(EX.length), r] as const] : [],
+    ),
   );
-  const kolBundledBaseOf =
-    (linkedLookups && changedByTransfers.size > 0
-      ? await withinBudget(
-          kolBundledByMint(changedByTransfers, linkedLookups.funderOf, kolLookup()),
-          KOL_BUNDLED_BUDGET_MS,
-        )
-      : null) ?? new Map<string, KolBundledReading>();
   // The coins whose reading was left for behind the cycle and has not landed: their filter
   // matches wait for it (see holdForLinked), which also puts them in next cycle's waited set.
   holdForLinked(
@@ -1384,7 +1391,8 @@ async function scanCycle(
   );
   // The alerted coins' wider bubble maps, saved behind the cycle: nothing here waits on them.
   if (linkedLookups && wideMints.size > 0) {
-    void wideMapReadings(linkedGroups, linkedLookups, wideMints)
+    const transfersOf = new Map([...transfersByMint].map(([mint, r]) => [mint, r?.transfers] as const));
+    void wideMapReadings(linkedGroups, linkedLookups, wideMints, transfersOf)
       .then(storeWideMapReadings)
       .catch((err: unknown) => logger.warn("bubble map top-50 reading failed", { error: String(err) }));
   }

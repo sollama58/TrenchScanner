@@ -33,8 +33,9 @@ export interface PossibleSide {
   /** A Known Side: one of the KOL's own wallets, named as such (KolWallet.mainWallet). */
   known?: boolean;
   /**
-   * Transfers of a coin between it and the KOL that earned the label (user ask 2026-10-16: 4 in
-   * 48 hours or 10 in 72), in that span; absent when buying alongside earned it alone.
+   * Transfers of a coin between it and the KOL that earned the label (user ask 2026-10-16: core's
+   * TRANSFER_SIDE_OUTBOUND_TIERS and TRANSFER_SIDE_INBOUND_TIERS), in that span; absent when buying
+   * alongside earned it alone.
    */
   transfers?: number;
 }

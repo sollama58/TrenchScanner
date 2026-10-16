@@ -46,6 +46,7 @@ import {
   largestSourceOnly,
   mapLinked,
   withoutTransfers,
+  wideWithoutTransfers,
   TRAIT_ICON,
   RISKY_ICON,
   riskyShare,
@@ -1725,8 +1726,13 @@ export function BubbleMapSection({
     [snapshot, showTransfers],
   );
   const graph = useMemo(
-    () => (shown ? layoutGraph(buildGraph(withWideMap(shown, wide), flagged)) : null),
-    [shown, wide, flagged],
+    () =>
+      shown
+        ? layoutGraph(
+            buildGraph(withWideMap(shown, showTransfers ? wide : wideWithoutTransfers(wide)), flagged),
+          )
+        : null,
+    [shown, wide, showTransfers, flagged],
   );
   const names = useGraphNames(graph);
   const { showCex, setCexOn } = useCexToggle(graph);

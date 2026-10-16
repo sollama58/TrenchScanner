@@ -15,7 +15,7 @@ import {
   type KnownFunder,
   type LinkedWalletsReading,
 } from "@trenchscanner/core";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { FailureBackoff } from "./failureBackoff.js";
 import { SettledAnswers } from "./settledAnswers.js";
 
@@ -549,6 +549,11 @@ export interface WideMapReading {
   knownExtra: number;
   holders: WideHolder[];
   clusters: LinkedWalletsReading["clusters"];
+  /**
+   * The clusters without holder-to-holder transfers, when transfers changed them (user ask
+   * 2026-10-16): what the map draws with its transfers hidden.
+   */
+  clustersExTransfers?: LinkedWalletsReading["clusters"];
   sameTimeClusters: LinkedWalletsReading["sameTimeClusters"];
 }
 
@@ -563,6 +568,11 @@ export async function wideMapReadings(
   groups: readonly LinkedGroup[],
   lookups: LinkedWalletLookups,
   wideMints: ReadonlySet<string>,
+  /** Each coin's holder-to-holder transfers among its top 25, which link holders as in its Linked. */
+  transfersOf: ReadonlyMap<
+    string,
+    readonly { from: string; to: string; pct: number }[] | null | undefined
+  > = new Map(),
 ): Promise<WideMapReading[]> {
   const todo = groups.flatMap((g) => {
     const wide = wideMints.has(g.mintAddress) ? wideHolderLists.get(g.mintAddress) : undefined;
@@ -626,8 +636,14 @@ export async function wideMapReadings(
     const creator = g.creator ?? null;
     const creatorFunder = creator ? (funderOf.get(creator) ?? null) : null;
     const topN = list.length;
-    const reading = linkedWallets(list, funderOf, { hot, creator, creatorFunder, fundedAtOf, topN });
-    if (!reading) continue;
+    const base = linkedWallets(list, funderOf, { hot, creator, creatorFunder, fundedAtOf, topN });
+    if (!base) continue;
+    const transfers = transfersOf.get(g.mintAddress);
+    const reading = transfers?.length
+      ? (linkedWallets(list, funderOf, { hot, creator, creatorFunder, fundedAtOf, topN, transfers }) ?? base)
+      : base;
+    const clusterKey = (r: LinkedWalletsReading) =>
+      r.clusters.map((c) => c.wallets.map((w) => w.wallet).join(",")).join("|");
     const cex = cexFundedReading(list, funderOf, { hot, creator, topN });
     const cexOf = new Map((cex?.cexFunders ?? []).map((c) => [c.wallet, c.funder]));
     const rankOf = new Map(extras.map((h) => [h.owner, h.rank]));
@@ -642,6 +658,9 @@ export async function wideMapReadings(
         ...(cexOf.has(h.wallet) ? { cexFunder: cexOf.get(h.wallet)! } : {}),
       })),
       clusters: reading.clusters,
+      ...(reading !== base && clusterKey(reading) !== clusterKey(base)
+        ? { clustersExTransfers: base.clusters }
+        : {}),
       sameTimeClusters: reading.sameTimeClusters,
     });
   }
@@ -675,6 +694,9 @@ async function freezeAtAlert(r: WideMapReading, calledAtMs: number | undefined):
           knownExtra: r.knownExtra,
           holders: r.holders as unknown as Prisma.InputJsonValue,
           clusters: r.clusters as unknown as Prisma.InputJsonValue,
+          ...(r.clustersExTransfers
+            ? { clustersExTransfers: r.clustersExTransfers as unknown as Prisma.InputJsonValue }
+            : {}),
           sameTimeClusters: r.sameTimeClusters as unknown as Prisma.InputJsonValue,
         },
       ],
@@ -702,7 +724,13 @@ export async function storeWideMapReadings(
   let written = 0;
   for (const r of readings) {
     await freezeAtAlert(r, calledAt.get(r.mintAddress));
-    const key = JSON.stringify([r.readAt.getTime(), r.holders, r.clusters, r.sameTimeClusters]);
+    const key = JSON.stringify([
+      r.readAt.getTime(),
+      r.holders,
+      r.clusters,
+      r.clustersExTransfers ?? null,
+      r.sameTimeClusters,
+    ]);
     if (storedWide.get(r.mintAddress) === key) continue;
     const data = {
       readAt: r.readAt,
@@ -710,6 +738,10 @@ export async function storeWideMapReadings(
       knownExtra: r.knownExtra,
       holders: r.holders as unknown as Prisma.InputJsonValue,
       clusters: r.clusters as unknown as Prisma.InputJsonValue,
+      // Cleared when transfers no longer change the clusters.
+      clustersExTransfers: r.clustersExTransfers
+        ? (r.clustersExTransfers as unknown as Prisma.InputJsonValue)
+        : Prisma.DbNull,
       sameTimeClusters: r.sameTimeClusters as unknown as Prisma.InputJsonValue,
       computedAt: new Date(),
     };

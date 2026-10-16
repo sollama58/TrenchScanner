@@ -2689,7 +2689,7 @@ model KolPossibleSide {
   /// A label from older rules is dropped on the next run rather than held.
   rulesVersion Int @default(0)
   /// Transfers of a coin between the wallet and the KOL that earned the label (user ask
-  /// 2026-10-16: 4 within 48 hours or 10 within 72, core's TRANSFER_SIDE_TIERS), in the tier's
+  /// 2026-10-16: core's TRANSFER_SIDE_OUTBOUND_TIERS and TRANSFER_SIDE_INBOUND_TIERS), in the tier's
   /// span; 0 when buying alongside earned it alone. A transfer-only label has pct, shared and kolCoins 0.
   transfers    Int @default(0)
 
@@ -2700,7 +2700,7 @@ model KolPossibleSide {
 /// One transfer of a coin from one of its top holders to another (user ask 2026-10-16), as the
 /// scan read it (core's wallets/holderTransfers.ts), kept when it links the two (core's
 /// linkingTransfers: no dust, no exchange or hot wallet). Read across coins for the KOL Possible
-/// Side and Multi-Wallet-Bundle flags (core's TRANSFER_SIDE_TIERS). Rows older than 30 days go.
+/// Side and Multi-Wallet-Bundle flags (the tiers in core's wallets/holderTransfers.ts). Rows older than 30 days go.
 model HolderTransferEvent {
   signature   String
   fromWallet  String
@@ -2733,6 +2733,9 @@ model BubbleMapHolders {
   holders          Json
   /// Same shapes as TokenSnapshot.linkedClusters and sameTimeClusters.
   clusters         Json
+  /// The clusters without holder-to-holder transfers, only when transfers changed them (user ask
+  /// 2026-10-16): what the map draws with its transfers hidden.
+  clustersExTransfers Json?
   sameTimeClusters Json
   computedAt       DateTime
 
@@ -2754,6 +2757,7 @@ model BubbleMapAtAlert {
   /// Same shapes as BubbleMapHolders.
   holders          Json
   clusters         Json
+  clustersExTransfers Json?
   sameTimeClusters Json
   createdAt        DateTime @default(now())
 

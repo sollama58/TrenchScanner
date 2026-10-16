@@ -38,6 +38,8 @@ export interface WideMap {
   knownExtra: number;
   holders: WideHolder[];
   clusters: NonNullable<Snapshot["linkedClusters"]>;
+  /** The clusters without holder-to-holder transfers, when transfers changed them; absent otherwise. */
+  clustersExTransfers?: NonNullable<Snapshot["linkedClusters"]>;
   sameTimeClusters: NonNullable<Snapshot["sameTimeClusters"]>;
 }
 
@@ -131,6 +133,13 @@ export function withoutTransfers<
     bundledSupplyPct: s.bundledSupplyPctExTransfers ?? s.bundledSupplyPct,
     bundledSupplyCount: s.bundledSupplyCountExTransfers ?? s.bundledSupplyCount,
   };
+}
+
+/** The wider map as it reads without holder-to-holder transfers (withoutTransfers' counterpart). */
+export function wideWithoutTransfers<W extends WideMap>(wide: W | null | undefined): W | null | undefined {
+  return wide && Array.isArray(wide.clustersExTransfers)
+    ? { ...wide, clusters: wide.clustersExTransfers }
+    : wide;
 }
 
 /** What withWideMap keeps of the scan's own reading once the wider map stands in for it. */

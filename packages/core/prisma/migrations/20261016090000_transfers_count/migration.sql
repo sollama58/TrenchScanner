@@ -14,6 +14,9 @@ ALTER TABLE "TokenSnapshot" ADD COLUMN IF NOT EXISTS "linkedClustersExTransfers"
 
 ALTER TABLE "KolPossibleSide" ADD COLUMN IF NOT EXISTS "transfers" INTEGER NOT NULL DEFAULT 0;
 
+ALTER TABLE "BubbleMapHolders" ADD COLUMN IF NOT EXISTS "clustersExTransfers" JSONB;
+ALTER TABLE "BubbleMapAtAlert" ADD COLUMN IF NOT EXISTS "clustersExTransfers" JSONB;
+
 CREATE TABLE IF NOT EXISTS "HolderTransferEvent" (
     "signature" TEXT NOT NULL,
     "fromWallet" TEXT NOT NULL,
