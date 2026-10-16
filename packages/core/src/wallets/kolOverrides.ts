@@ -19,6 +19,8 @@ export const KOL_OVERRIDES: ReadonlyMap<string, KolOverride> = new Map([
   ["5sNnKuWKUtZkdC1eFNyqz3XHpNoCRQ1D1DfHcNHMV7gn", { name: "cryptovillian26" }],
   // User ask 2026-10-15: name this wallet as this KOL.
   ["2iPgNgss7ow3v5YFkTpzABStfjFSyG3BGvP5sZqADtFM", { name: "Jdn" }],
+  // User ask 2026-10-16: name this wallet as this KOL.
+  ["5YRgrP3mjGzrzirYYN5HAQH19cTYREYwGxW6XRJQUzij", { name: "Slingoor" }],
 ]);
 
 /**
