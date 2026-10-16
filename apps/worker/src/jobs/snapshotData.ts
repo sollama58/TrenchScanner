@@ -134,6 +134,7 @@ export function snapshotDataFor(
     liveHolderCount: scored.freshQuote?.holderCount ?? undefined,
     firstBuyersHolding: scored.tradeFlow?.firstBuyersHolding ?? null,
     firstBuyersSeen: scored.tradeFlow?.firstBuyersSeen ?? null,
+    firstBuyersHoldingCut: scored.tradeFlow?.firstBuyersHoldingCut ?? null,
     devHolding: resolveDevHolding(scored),
     isMayhemMode: scored.isMayhemMode,
     graduated: scored.graduated,

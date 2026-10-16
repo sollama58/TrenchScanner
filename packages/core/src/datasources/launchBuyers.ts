@@ -267,3 +267,30 @@ export function countStillHolding(
   }
   return holding;
 }
+
+/**
+ * The share of the supply a first buyer must still hold to count on the card's, the token view's
+ * and the filters' "First buyers holding" (user decision 2026-10-16): 0.1%. The models keep
+ * countStillHolding, the figure they were trained on.
+ */
+export const FIRST_BUYER_SUPPLY_CUT = 0.001;
+
+/**
+ * How many of `buyers` hold FIRST_BUYER_SUPPLY_CUT of `supply` or more now, from their token
+ * accounts' current balances (base units, like `supply`; a closed account is 0). Null when any
+ * balance is missing, as countStillHolding, or the supply is unknown.
+ */
+export function countHoldingSupplyCut(
+  buyers: readonly LaunchBuyer[],
+  balances: ReadonlyMap<string, number>,
+  supply: number,
+): number | null {
+  if (!(supply > 0)) return null;
+  let holding = 0;
+  for (const b of buyers) {
+    const balance = balances.get(b.tokenAccount);
+    if (balance === undefined) return null;
+    if (balance >= supply * FIRST_BUYER_SUPPLY_CUT) holding += 1;
+  }
+  return holding;
+}

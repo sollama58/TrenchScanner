@@ -350,7 +350,8 @@ model UserFilter {
   /// Only coins from these launchpads (Token.launchpad: "pumpfun", "stonks"); empty means any.
   /// Fails closed on a coin whose launchpad is unknown.
   launchpads                 String[] @default([])
-  /// Bounds on how many of the launch's first 25 buyers still hold it (TokenSnapshot.firstBuyersHolding).
+  /// Bounds on how many of the launch's first 25 buyers still hold 0.1% of the supply or more
+  /// (TokenSnapshot.firstBuyersHoldingCut).
   minFirstBuyersHolding      Int?
   maxFirstBuyersHolding      Int?
   /// TokenSage narrative criteria (packages/core/src/scoring/matchFilters.ts): only / never these
@@ -1204,6 +1205,10 @@ model TokenSnapshot {
   // PumpPortal trade stream (curation/tradeFlow.ts), so null for a launch it didn't see.
   firstBuyersHolding      Int?
   firstBuyersSeen         Int?
+  // Of those first buyers, how many hold 0.1% of the supply or more (user decision 2026-10-16):
+  // the "First buyers holding" the card, the token view and the filters show. firstBuyersHolding,
+  // the models' input, counts any buyer above dust. Null on scans before then.
+  firstBuyersHoldingCut   Int?
   // Whether the dev still holds the token (resolveDevHolding: the trade stream's view of the dev's
   // bag, else RugCheck's creator balance). Null when neither knew.
   devHolding              Boolean?

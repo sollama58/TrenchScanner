@@ -597,6 +597,7 @@ export function withLaunchSnipers(
   return {
     ...base,
     firstBuyersHolding: snipers.holding,
+    firstBuyersHoldingCut: snipers.holdingCut,
     firstBuyersSeen: snipers.seen,
     ...launchShape,
   };

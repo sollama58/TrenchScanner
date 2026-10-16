@@ -90,6 +90,8 @@ describe("resolveLaunchSnipers", () => {
     const groups = [{ mintAddress: "A", contender: false }];
     expect((await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 })).get("A")).toEqual({
       holding: 12,
+      // 900 of a 100,000 supply is over the 0.1% cut.
+      holdingCut: 12,
       seen: 25,
       devHolding: null,
       firstBuyersSupplyPct: 25,
@@ -156,6 +158,7 @@ describe("resolveLaunchSnipers", () => {
     const groups = [{ mintAddress: "A", contender: false }];
     expect((await resolveLaunchSnipers(groups, f.helius, { ...opts, now: 0 })).get("A")).toEqual({
       holding: 10,
+      holdingCut: 10,
       seen: 10,
       devHolding: null,
       firstBuyersSupplyPct: 10,
@@ -202,6 +205,7 @@ describe("withLaunchSnipers", () => {
   it("fills the figure in when the stream has none, and keeps the stream's when it has one", () => {
     const snipers = {
       holding: 7,
+      holdingCut: 4,
       seen: 25,
       devHolding: true,
       firstBuyersSupplyPct: 25,
@@ -211,6 +215,7 @@ describe("withLaunchSnipers", () => {
     expect(withLaunchSnipers(undefined, snipers)).toEqual({
       ...EMPTY_TRADE_FLOW,
       firstBuyersHolding: 7,
+      firstBuyersHoldingCut: 4,
       firstBuyersSeen: 25,
       firstBuyersSupplyPct: 25,
       launchBundledBuyers: 3,

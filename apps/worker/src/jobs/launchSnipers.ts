@@ -1,4 +1,5 @@
 import {
+  countHoldingSupplyCut,
   countStillHolding,
   createLogger,
   devStillHolding,
@@ -39,6 +40,10 @@ interface Entry {
   /** Re-reads of an incomplete launch so far: each waits twice as long as the last. */
   rereads: number;
   holding: number | null;
+  /** The first buyers holding 0.1% of the supply or more, from the same balance read. */
+  holdingCut: number | null;
+  /** The supply the create minted, in base units (LaunchBuyersReading.supply). */
+  supply: number;
   /** Whether the dev still holds their launch buy, from the same balance read as `holding`. */
   devHolding: boolean | null;
   holdingAt: number;
@@ -75,8 +80,13 @@ function incompleteRetryMs(rereads: number, contender: boolean): number {
 const MAX_HOLDING_AGE_MS = 30 * 60_000;
 
 export interface LaunchSnipers extends LaunchFigures {
-  /** Of the first buyers, how many still hold. */
+  /** Of the first buyers, how many still hold (above dust: the models' input). */
   holding: number;
+  /**
+   * Of the first buyers, how many hold 0.1% of the supply or more (countHoldingSupplyCut): what
+   * the card and the filters show. Null when the launch read gave no supply.
+   */
+  holdingCut: number | null;
   /** How many first buyers there were (25, or fewer while the launch has had fewer). */
   seen: number;
   /**
@@ -142,7 +152,13 @@ export function launchSnipersFromCache(
   for (const mint of mints) {
     const e = entries.get(mint);
     if (!e || e.holding === null || now - e.holdingAt > MAX_HOLDING_AGE_MS) continue;
-    out.set(mint, { holding: e.holding, seen: e.buyers.length, devHolding: e.devHolding, ...e.figures });
+    out.set(mint, {
+      holding: e.holding,
+      holdingCut: e.holdingCut,
+      seen: e.buyers.length,
+      devHolding: e.devHolding,
+      ...e.figures,
+    });
   }
   return out;
 }
@@ -248,6 +264,8 @@ export async function resolveLaunchSnipers(
           readAt: now,
           rereads: prev ? prev.rereads + 1 : 0,
           holding: sameBuyers ? prev.holding : null,
+          holdingCut: sameBuyers ? prev.holdingCut : null,
+          supply: r.supply,
           devHolding: sameBuyers ? prev.devHolding : null,
           holdingAt: sameBuyers ? prev.holdingAt : 0,
         });
@@ -292,6 +310,7 @@ export async function resolveLaunchSnipers(
       const holding = countStillHolding(e.buyers, balances);
       if (holding !== null) {
         e.holding = holding;
+        e.holdingCut = countHoldingSupplyCut(e.buyers, balances, e.supply);
         e.devHolding = devStillHolding(e.devAccounts, balances);
         e.holdingAt = now;
       }

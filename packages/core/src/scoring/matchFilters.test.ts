@@ -228,8 +228,26 @@ describe("maxEmptyTop10WalletPct", () => {
 describe("first buyers still holding", () => {
   const withHolding = (n: number | null) =>
     baseToken({
-      tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersHolding: n, firstBuyersSeen: n === null ? null : 25 },
+      tradeFlow: {
+        ...EMPTY_TRADE_FLOW,
+        firstBuyersHolding: n,
+        firstBuyersHoldingCut: n,
+        firstBuyersSeen: n === null ? null : 25,
+      },
     });
+
+  it("reads the 0.1%-of-supply count, not the models' above-dust one", () => {
+    const token = baseToken({
+      tradeFlow: {
+        ...EMPTY_TRADE_FLOW,
+        firstBuyersHolding: 20,
+        firstBuyersHoldingCut: 6,
+        firstBuyersSeen: 25,
+      },
+    });
+    expect(matchesFilter(token, { ...baseFilter, maxFirstBuyersHolding: 10 })).toBe(true);
+    expect(matchesFilter(token, { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(false);
+  });
 
   it("applies the floor and the ceiling", () => {
     expect(matchesFilter(withHolding(8), { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(false);
