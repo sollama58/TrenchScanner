@@ -18,6 +18,15 @@ const RPC_CACHE_RETENTION_DAYS = 90;
 
 /** How long retired/candidate CuratorModel rows are kept - see the sweep below. */
 const CURATOR_MODEL_RETENTION_DAYS = 90;
+/**
+ * Bug reports (FeedbackReport): a screenshot is a data URL of up to ~0.5 MB, the one heavy column,
+ * and admins read it while the report is open. It is dropped a week after the report is marked
+ * done, or a month after it was filed whatever its status; the done report itself goes after a
+ * quarter. The message, contact and admin note stay until then.
+ */
+const FEEDBACK_SCREENSHOT_DONE_DAYS = 7;
+const FEEDBACK_SCREENSHOT_DAYS = 30;
+const FEEDBACK_REPORT_DONE_DAYS = 90;
 
 /** How long a retired CuratorModel keeps its weights before the sweep stubs them out. */
 const CURATOR_MODEL_PARAMS_RETENTION_DAYS = 7;
@@ -602,19 +611,60 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
         )
       : 0;
 
+  // Archived matches past MATCH_ARCHIVE_RETENTION_DAYS go, except the ones that ran, which stay
+  // until MATCH_ARCHIVE_HIT_RETENTION_DAYS (user decision 2026-10-16: 90 and 180 days). Never
+  // sooner than the archive move itself, so a match is not deleted the night it is archived.
+  const archiveRetentionDays =
+    env.MATCH_ARCHIVE_RETENTION_DAYS > 0 ? Math.max(env.MATCH_ARCHIVE_RETENTION_DAYS, archiveDays) : 0;
+  const archiveHitDays = Math.max(env.MATCH_ARCHIVE_HIT_RETENTION_DAYS ?? 0, archiveRetentionDays);
+  const deletedArchivedMatches =
+    archiveRetentionDays > 0
+      ? await stage("matchArchiveRetention", 0, async () => {
+          const ran = `("hitHundredPctAt" IS NOT NULL OR "hit2xIn1h" IS TRUE OR COALESCE("peakReturnPct", 0) >= 100)`;
+          const losers = await deleteInBatches(
+            `SELECT "id" FROM "MatchArchive" WHERE "matchedAt" < $1 AND NOT ${ran}`,
+            "MatchArchive",
+            [new Date(startedAt - archiveRetentionDays * DAY_MS)],
+            batch,
+          );
+          const winners = await deleteInBatches(
+            `SELECT "id" FROM "MatchArchive" WHERE "matchedAt" < $1`,
+            "MatchArchive",
+            [new Date(startedAt - archiveHitDays * DAY_MS)],
+            batch,
+          );
+          return losers + winners;
+        })
+      : 0;
+
   // Only once the copies above landed: the age sweep would otherwise take match anchors whose
-  // verdict never reached their Match.
+  // verdict never reached their Match. Past the general horizon the rows that doubled, and the
+  // rows a curated call points at, stay until CANDIDATE_OUTCOME_HIT_RETENTION_DAYS (user decision
+  // 2026-10-16); everything else goes by age alone.
+  const hitDays = env.CANDIDATE_OUTCOME_HIT_RETENTION_DAYS ?? 0;
+  const keepsHits = hitDays > env.CANDIDATE_OUTCOME_RETENTION_DAYS;
   const deletedCandidateOutcomes = {
     count: !matchCopiesLanded
       ? 0
-      : await stage("candidateOutcomes", 0, () =>
-          deleteInBatches(
-            `SELECT "id" FROM "CandidateOutcome" WHERE "anchorAt" < $1`,
+      : await stage("candidateOutcomes", 0, async () => {
+          const relevant = `(o."hit2xIn1h" IS TRUE OR EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."candidateOutcomeId" = o."id"))`;
+          const rest = await deleteInBatches(
+            keepsHits
+              ? `SELECT o."id" FROM "CandidateOutcome" o WHERE o."anchorAt" < $1 AND NOT ${relevant}`
+              : `SELECT "id" FROM "CandidateOutcome" WHERE "anchorAt" < $1`,
             "CandidateOutcome",
             [candidateOutcomeCutoff],
             batch,
-          ),
-        ),
+          );
+          if (!keepsHits) return rest;
+          const hits = await deleteInBatches(
+            `SELECT "id" FROM "CandidateOutcome" WHERE "anchorAt" < $1`,
+            "CandidateOutcome",
+            [new Date(startedAt - hitDays * DAY_MS)],
+            batch,
+          );
+          return rest + hits;
+        }),
   };
 
   // Graded filter-alert anchors go much sooner (user decision 2026-10-05: 7 days after their watch
@@ -669,13 +719,17 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     ),
   };
 
-  // The trade tape's per-wallet rows and reads (tradeTapeJob.ts), on the snapshot horizon: the
-  // wallet risk score looks back over them, and a month of called coins is plenty for it.
+  // The trade tape's per-wallet rows and reads (tradeTapeJob.ts), on their own horizon
+  // (TWA_RETENTION_DAYS, two weeks; the snapshot horizon until 2026-10-16): the wallet risk score
+  // looks back over a wallet's recent coins, nothing trains on them, and the tape job re-reads at
+  // most ten days back.
+  const twaDays = env.TWA_RETENTION_DAYS > 0 ? env.TWA_RETENTION_DAYS : env.SNAPSHOT_RETENTION_DAYS;
+  const twaCutoff = new Date(startedAt - twaDays * DAY_MS);
   const deletedWalletActivity = await stage("walletActivity", 0, () =>
     deleteInBatches(
       `SELECT "id" FROM "TokenWalletActivity" WHERE "createdAt" < $1`,
       "TokenWalletActivity",
-      [snapshotCutoff],
+      [twaCutoff],
       batch,
     ),
   );
@@ -683,10 +737,32 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deleteInBatches(
       `SELECT "tokenId" FROM "TokenTradeTape" WHERE "readAt" < $1`,
       "TokenTradeTape",
-      [snapshotCutoff],
+      [twaCutoff],
       batch,
       "tokenId",
     ),
+  );
+
+  // Bug reports: the screenshot goes first (a week after the report is done, or a month after it
+  // was filed), the done report after a quarter. See FEEDBACK_SCREENSHOT_DONE_DAYS above.
+  const screenshotDoneCutoff = new Date(startedAt - FEEDBACK_SCREENSHOT_DONE_DAYS * DAY_MS);
+  const screenshotCutoff = new Date(startedAt - FEEDBACK_SCREENSHOT_DAYS * DAY_MS);
+  const strippedFeedbackScreenshots = await stage(
+    "feedbackScreenshots",
+    0,
+    () => prisma.$executeRaw`
+    UPDATE "FeedbackReport" SET "screenshot" = NULL
+    WHERE "screenshot" IS NOT NULL
+      AND (("status" = 'done' AND "updatedAt" < ${screenshotDoneCutoff}) OR "createdAt" < ${screenshotCutoff})
+  `,
+  );
+  const deletedFeedbackReports = await stage("feedbackReports", { count: 0 }, () =>
+    prisma.feedbackReport.deleteMany({
+      where: {
+        status: "done",
+        updatedAt: { lt: new Date(startedAt - FEEDBACK_REPORT_DONE_DAYS * DAY_MS) },
+      },
+    }),
   );
 
   // Old non-active curator models: one is minted every CURATOR_TRAINING_INTERVAL_HOURS (several a
@@ -940,10 +1016,13 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedFunderActivity: deletedFunderActivity.count,
     deletedMatchOutcomes,
     archivedMatches,
+    deletedArchivedMatches,
     deletedHoldingsCache: deletedHoldingsCache.count,
     deletedShadowEmissions: deletedShadowEmissions.count,
     deletedWalletActivity,
     deletedTradeTapes,
+    strippedFeedbackScreenshots,
+    deletedFeedbackReports: deletedFeedbackReports.count,
     deletedAiReviews: deletedAiReviews.count,
     deletedCuratorModels: deletedCuratorModels.count,
     strippedCuratorModels,

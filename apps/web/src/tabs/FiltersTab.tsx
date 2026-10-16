@@ -58,6 +58,7 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     maxLinkedCreatorPct: null,
     maxKolBundledPct: null,
     maxBundledSupplyPct: null,
+    maxTransferredSupplyPct: null,
     minLiveHolderCount: null,
     minFirstBuyersHolding: null,
     maxFirstBuyersHolding: null,

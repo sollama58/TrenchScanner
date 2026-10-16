@@ -12,6 +12,21 @@ const MAX_DURATIONS = 200;
  * global budget still caps the total.
  */
 const MAX_BUDGET_USERS = 5_000;
+/** See OnDemandLiveRefresherOptions.batchWindowMs. */
+const BATCH_WINDOW_MS = 250;
+/**
+ * Lookups (batches opened and not yet answered) at once, past which a new one is skipped like an
+ * over-budget one. The call budget is a window: it let a minute's calls start in seconds, the
+ * client's rate gate then sent them out at its sustained pace, and lookups sat queued for up to
+ * 35 s with every tick that shared one waiting out LIVE_TICK_WAIT_MS on it (load test,
+ * 2026-10-16). A few at once is what the gate passes without a queue.
+ */
+const MAX_LOOKUPS_IN_FLIGHT = 4;
+/**
+ * See OnDemandLiveRefresher.withDeadline. Past DexScreener's 5 s batch timeout plus the
+ * fallback's 4 s, with room for the writes after.
+ */
+const LOOKUP_DEADLINE_MS = 15_000;
 
 /** The shape GET /matches already has to hand for every token on the page. */
 export interface RefreshableToken {
@@ -47,6 +62,13 @@ export interface OnDemandLiveRefresherOptions {
   callsPerUserPerMinute?: number;
   /** Where the refreshed tokens' matches get their peak raised - see refreshLiveMarketData. */
   peakWindowDays?: number;
+  /**
+   * How long a lookup waits for other readers' due tokens to share its call (default
+   * BATCH_WINDOW_MS). Short next to DexScreener's own 150-450 ms answer and the live tick's wait.
+   */
+  batchWindowMs?: number;
+  /** The longest a lookup holds its place before it counts as failed (default LOOKUP_DEADLINE_MS). */
+  lookupDeadlineMs?: number;
 }
 
 /**
@@ -70,8 +92,24 @@ export interface OnDemandLiveRefresherOptions {
  * One instance per process (server.ts), shared by every route, so all of the above hold across
  * routes rather than per route.
  */
+/** Tokens waiting to share one upstream call - see OnDemandLiveRefresher.start. */
+interface Batch {
+  tokens: RefreshableToken[];
+  /** Resolves when the batch goes out. */
+  go: () => void;
+  sent: boolean;
+  timer: NodeJS.Timeout | undefined;
+  lookup: Promise<number>;
+}
+
 export class OnDemandLiveRefresher {
   private readonly inFlight = new Map<string, Promise<unknown>>();
+  /** The batch still taking tokens, if any. */
+  private open: Batch | null = null;
+  /** Batches opened and not yet answered - see MAX_LOOKUPS_IN_FLIGHT. */
+  private lookupsInFlight = 0;
+  private readonly batchWindowMs: number;
+  private readonly lookupDeadlineMs: number;
   private readonly attemptedAt = new Map<string, number>();
   private readonly calls: number[] = [];
   /**
@@ -92,6 +130,10 @@ export class OnDemandLiveRefresher {
     overBudget: 0,
     /** The subset of overBudget refused by a reader's own sub-budget rather than the global one. */
     userOverBudget: 0,
+    /** The subset of overBudget skipped because MAX_LOOKUPS_IN_FLIGHT lookups were still out. */
+    backlogged: 0,
+    /** Lookups given up on at lookupDeadlineMs (not in failures: they may still answer later). */
+    timedOut: 0,
     since: new Date(),
   };
   /** Age (ms) of the oldest reading in each live tick answer, newest last - see noteServed. */
@@ -102,7 +144,10 @@ export class OnDemandLiveRefresher {
   constructor(
     private readonly dexScreener: DexScreenerClient,
     private readonly options: OnDemandLiveRefresherOptions,
-  ) {}
+  ) {
+    this.batchWindowMs = options.batchWindowMs ?? BATCH_WINDOW_MS;
+    this.lookupDeadlineMs = options.lookupDeadlineMs ?? LOOKUP_DEADLINE_MS;
+  }
 
   /**
    * Fire-and-forget: never awaited by the request handler, so a slow DexScreener can't slow down
@@ -157,8 +202,15 @@ export class OnDemandLiveRefresher {
   }
 
   /**
-   * Picks what is due and starts one lookup for it, synchronously, so a caller knows at once
+   * Picks what is due and queues it for a lookup, synchronously, so a caller knows at once
    * whether there is anything to wait for. Null when nothing is due or the budget is spent.
+   *
+   * Due tokens join the batch other readers opened in the last BATCH_WINDOW_MS when it has room,
+   * and only a batch that has to be opened costs a call. Each live tick used to make its own call
+   * for the handful of its tokens that were due - four or five on average with 100 dashboards
+   * open (load test, 2026-10-16) - so the call budget ran out at a fraction of what DexScreener's
+   * 30 addresses a call could carry, lookups queued behind the client's rate gate for 15-35 s,
+   * and every tick waiting on them answered after its full LIVE_TICK_WAIT_MS with old numbers.
    */
   private start(
     tokens: readonly RefreshableToken[],
@@ -168,13 +220,117 @@ export class OnDemandLiveRefresher {
   ): Promise<number> | null {
     const due = this.selectDue(tokens, now, maxAgeMs);
     if (due.length === 0) return null;
-    if (!this.takeBudget(Math.ceil(due.length / ADDRESSES_PER_CALL), now, userKey)) return null;
+    const open = this.open !== null && this.open.tokens.length < ADDRESSES_PER_CALL ? this.open : null;
+    const room = open ? ADDRESSES_PER_CALL - open.tokens.length : 0;
+    const newCalls = Math.ceil(Math.max(0, due.length - room) / ADDRESSES_PER_CALL);
+    if (newCalls > 0 && this.lookupsInFlight + newCalls > MAX_LOOKUPS_IN_FLIGHT) {
+      this.counters.overBudget += 1;
+      this.counters.backlogged += 1;
+      logger.debug("live refresh lookups backed up, skipping", { inFlight: this.lookupsInFlight });
+      return null;
+    }
+    // A reader is charged for what it asks, as if it were alone: its sub-budget caps one reader
+    // paging through history whoever else is online. The shared budget pays only for new calls.
+    if (!this.takeBudget(Math.ceil(due.length / ADDRESSES_PER_CALL), newCalls, now, userKey)) return null;
 
     for (const token of due) this.attemptedAt.set(token.mintAddress, now);
+    const batches = new Set<Promise<number>>();
+    let rest = due;
+    if (open) {
+      const joining = rest.slice(0, room);
+      rest = rest.slice(room);
+      open.tokens.push(...joining);
+      for (const token of joining) this.inFlight.set(token.mintAddress, open.lookup);
+      batches.add(open.lookup);
+      if (open.tokens.length >= ADDRESSES_PER_CALL) this.flush(open);
+    }
+    for (let i = 0; i < rest.length; i += ADDRESSES_PER_CALL) {
+      const batch = this.openBatch(rest.slice(i, i + ADDRESSES_PER_CALL));
+      batches.add(batch.lookup);
+    }
+    const mine = due.length;
+    return Promise.all(batches).then(() => mine);
+  }
+
+  /** Opens a batch with these tokens; it goes out when full or BATCH_WINDOW_MS from now. */
+  private openBatch(tokens: RefreshableToken[]): Batch {
+    let go: () => void = () => {};
+    const ready = new Promise<void>((resolve) => (go = resolve));
+    this.lookupsInFlight += 1;
+    // Joiners add to this list until the batch goes out, so the lookup reads it then.
+    const members = [...tokens];
+    // Each member's attempt mark as start() set it, so a failure clears this batch's marks only.
+    const marks = new Map(members.map((t) => [t.mintAddress, this.attemptedAt.get(t.mintAddress)]));
+    const lookup: Promise<number> = ready
+      .then(() => {
+        for (const t of members)
+          if (!marks.has(t.mintAddress)) marks.set(t.mintAddress, this.attemptedAt.get(t.mintAddress));
+        return this.withDeadline(this.lookup(members));
+      })
+      .catch((err: unknown) => {
+        // A failed or timed-out lookup learned nothing, so its tokens are not cooled down: the
+        // next tick may try them again (budget allowing), and the worker's once-a-minute refresh
+        // keeps them moving meanwhile.
+        for (const [mint, at] of marks) {
+          if (at !== undefined && this.attemptedAt.get(mint) === at) this.attemptedAt.delete(mint);
+        }
+        throw err;
+      })
+      .finally(() => {
+        this.lookupsInFlight -= 1;
+        // Only this batch's entries: a later batch may already hold one of these mints again.
+        for (const token of members) {
+          if (this.inFlight.get(token.mintAddress) === lookup) this.inFlight.delete(token.mintAddress);
+        }
+      });
+    const batch: Batch = { tokens: members, go, sent: false, timer: undefined, lookup };
+    // Callers that never await their refresh (a page load) must not see an unhandled rejection;
+    // the ones that do still get the failure.
+    batch.lookup.catch(() => undefined);
+    for (const token of tokens) this.inFlight.set(token.mintAddress, batch.lookup);
+    if (batch.tokens.length >= ADDRESSES_PER_CALL) this.flush(batch);
+    else {
+      this.open = batch;
+      batch.timer = setTimeout(() => this.flush(batch), this.batchWindowMs);
+      batch.timer.unref?.();
+    }
+    return batch;
+  }
+
+  /**
+   * The lookup, or a rejection once lookupDeadlineMs has passed. DexScreener's own timeout and the
+   * client's fallback normally answer well inside it; this is the backstop for a call that never
+   * settles, which would otherwise hold its MAX_LOOKUPS_IN_FLIGHT slot (and stop every live
+   * refresh once all of them were held) and leave its tokens marked in flight for good. A lookup
+   * that finishes after it still writes what it found.
+   */
+  private withDeadline(lookup: Promise<number>): Promise<number> {
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        this.counters.timedOut += 1;
+        reject(new Error(`live lookup still unanswered after ${this.lookupDeadlineMs} ms`));
+      }, this.lookupDeadlineMs);
+      timer.unref?.();
+    });
+    lookup.catch(() => undefined);
+    return Promise.race([lookup, deadline]).finally(() => clearTimeout(timer));
+  }
+
+  private flush(batch: Batch): void {
+    if (batch.sent) return;
+    batch.sent = true;
+    clearTimeout(batch.timer);
+    if (this.open === batch) this.open = null;
+    batch.go();
+  }
+
+  /** One upstream call for a batch's tokens, and the bookkeeping around it. */
+  private lookup(tokens: readonly RefreshableToken[]): Promise<number> {
     const startedAt = Date.now();
     this.counters.lookups += 1;
-    this.counters.tokens += due.length;
-    const lookup = refreshLiveMarketData(this.dexScreener, due, {
+    this.counters.tokens += tokens.length;
+    const lookup: Promise<number> = refreshLiveMarketData(this.dexScreener, tokens, {
       peakWindowDays: this.options.peakWindowDays,
     })
       .then(
@@ -191,11 +347,7 @@ export class OnDemandLiveRefresher {
       .finally(() => {
         this.durations.push(Date.now() - startedAt);
         if (this.durations.length > MAX_DURATIONS) this.durations.shift();
-        for (const token of due) {
-          if (this.inFlight.get(token.mintAddress) === lookup) this.inFlight.delete(token.mintAddress);
-        }
       });
-    for (const token of due) this.inFlight.set(token.mintAddress, lookup);
     return lookup;
   }
 
@@ -226,11 +378,11 @@ export class OnDemandLiveRefresher {
   }
 
   /**
-   * Records `count` upstream calls if the last minute's budget - and, for a named reader, that
-   * reader's own sub-budget - has room for them. Both are checked before either is charged, so a
-   * call refused by one never spends the other.
+   * Records `calls` new upstream calls against the last minute's budget and, for a named reader,
+   * `count` against that reader's own sub-budget, if both have room. Both are checked before
+   * either is charged, so a call refused by one never spends the other.
    */
-  private takeBudget(count: number, now: number, userKey?: string): boolean {
+  private takeBudget(count: number, calls: number, now: number, userKey?: string): boolean {
     const budget = this.options.callsPerMinute;
     const userBudget = userKey === undefined ? undefined : this.options.callsPerUserPerMinute;
     if (budget !== undefined) {
@@ -247,15 +399,13 @@ export class OnDemandLiveRefresher {
         return false;
       }
     }
-    if (budget !== undefined && this.calls.length + count > budget) {
+    if (budget !== undefined && this.calls.length + calls > budget) {
       this.counters.overBudget += 1;
       logger.debug("live refresh over its call budget, skipping", { budget });
       return false;
     }
-    for (let i = 0; i < count; i += 1) {
-      if (budget !== undefined) this.calls.push(now);
-      mine?.push(now);
-    }
+    if (budget !== undefined) for (let i = 0; i < calls; i += 1) this.calls.push(now);
+    if (mine) for (let i = 0; i < count; i += 1) mine.push(now);
     if (mine) {
       // Re-insert so the map's order stays least-recently-charged first.
       this.userCalls.delete(userKey!);

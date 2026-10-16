@@ -9,6 +9,8 @@
  * bounded per mint and in total (see the caps below) - the worker has 512MB.
  */
 
+import { FIRST_BUYER_SUPPLY_CUT } from "../datasources/launchBuyers.js";
+
 /** Pump.fun mints are 1B tokens; PumpPortal reports token amounts in whole tokens. */
 export const PUMP_TOTAL_SUPPLY = 1_000_000_000;
 /** Buys this soon after the launch are the snipers and bundlers. */
@@ -89,6 +91,12 @@ export interface TradeFlowFeatures {
   firstBuyersHolding: number | null;
   firstBuyersSeen: number | null;
   /**
+   * Of those first buyers, how many hold FIRST_BUYER_SUPPLY_CUT (0.1%) of the supply or more: the
+   * "First buyers holding" the card, the token view and the filters show (user decision
+   * 2026-10-16). firstBuyersHolding, the models' input, counts any buyer above dust instead.
+   */
+  firstBuyersHoldingCut: number | null;
+  /**
    * The launch's shape, from the chain read (datasources/launchBuyers.ts launchFigures): % of the
    * supply the first FIRST_BUYERS buyers bought, how many of them bought in the create
    * transaction's own slot (the bundle), and % of the supply the dev bought in the create. Null
@@ -120,6 +128,7 @@ export const EMPTY_TRADE_FLOW: TradeFlowFeatures = {
   devSoldShare: null,
   firstBuyersHolding: null,
   firstBuyersSeen: null,
+  firstBuyersHoldingCut: null,
   firstBuyersSupplyPct: null,
   launchBundledBuyers: null,
   devBuySupplyPct: null,
@@ -374,10 +383,13 @@ export class TradeFlowBook {
       out.earlyBuyerSoldShare = soldShare({ bought, sold });
       out.devSoldShare = flow.dev ? soldShare(flow.dev) : null;
       let holding = 0;
+      let holdingCut = 0;
       for (const bag of flow.firstBuyers.values()) {
         if (bagBalance(bag) > bag.bought * HOLDING_DUST_SHARE) holding += 1;
+        if (bagBalance(bag) >= PUMP_TOTAL_SUPPLY * FIRST_BUYER_SUPPLY_CUT) holdingCut += 1;
       }
       out.firstBuyersHolding = holding;
+      out.firstBuyersHoldingCut = holdingCut;
       out.firstBuyersSeen = flow.firstBuyers.size;
     }
     return out;

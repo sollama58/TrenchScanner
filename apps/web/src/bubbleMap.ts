@@ -971,7 +971,15 @@ export function sideCounts(
 }
 
 /** How a wallet in a KOL's holdings ties to the KOL. */
-export type KolTie = "kol" | "known" | "funded" | "side" | "cluster" | "same-minute";
+export type KolTie = "kol" | "known" | "funded" | "side" | "cluster" | "same-minute" | "transfer";
+
+/**
+ * A send that carries a KOL's bundle on to its receiver (core's bundleTransfers): at least this %
+ * of supply (core's TRANSFER_LINK_MIN_PCT)...
+ */
+export const BUNDLE_TRANSFER_MIN_PCT = 0.05;
+/** ...or this share of what the sender held, its holding now plus what it sent (TRANSFER_LINK_MIN_SHARE). */
+export const BUNDLE_TRANSFER_MIN_SHARE = 0.1;
 
 /** A KOL on the map and the supply it may control: its own wallet, its side wallets and theirs. */
 export interface KolControl {
@@ -990,15 +998,29 @@ export interface KolControl {
  * and possible side wallets (`groups`), and any holder that shares a funder or a funding minute
  * with the KOL's wallet or one of those. A KOL holding alone, tied to no one, is left off.
  * `kols`: holders named as KOLs, for KOLs on the map with no side wallets. Largest share first.
+ * `transfers`: the map's holder-to-holder transfers, when shown: a holder the KOL or any wallet in
+ * its bundle sent the coin to joins the bundle, and on from there (user decision 2026-10-16).
  */
 export function kolControl(
   graph: Pick<BubbleGraph, "nodes">,
   groups: readonly SideGroup[],
   kols: readonly { wallet: string; name: string | null }[] = [],
+  transfers: readonly Pick<TransferLink, "from" | "to" | "pct">[] = [],
 ): KolControl[] {
   const holders = new Map(
     graph.nodes.flatMap((n) => (n.kind === "holder" && n.wallet ? [[n.wallet, n] as const] : [])),
   );
+  const byId = new Map([...holders.values()].map((n) => [n.id, n]));
+  // Each holder's sends past dust, by wallet.
+  const sentTo = new Map<string, string[]>();
+  for (const t of transfers) {
+    const from = byId.get(t.from)?.wallet;
+    const to = byId.get(t.to)?.wallet;
+    if (!from || !to || from === to) continue;
+    const held = holders.get(from)!.pct + t.pct;
+    if (t.pct < BUNDLE_TRANSFER_MIN_PCT && !(held > 0 && t.pct >= held * BUNDLE_TRANSFER_MIN_SHARE)) continue;
+    sentTo.set(from, [...(sentTo.get(from) ?? []), to]);
+  }
   const seeds = new Map<string, { kolName: string | null; ties: Map<string, KolTie> }>();
   for (const g of groups) {
     const ties = new Map<string, KolTie>();
@@ -1021,6 +1043,15 @@ export function kolControl(
         if (!o.wallet || tie.has(o.wallet)) continue;
         if (n.cluster !== null && o.cluster === n.cluster) tie.set(o.wallet, "cluster");
         else if (n.sameTime !== null && o.sameTime === n.sameTime) tie.set(o.wallet, "same-minute");
+      }
+    }
+    // Then every holder the bundle sent the coin to, and those they sent it to.
+    const queue = [...tie.keys()];
+    while (queue.length > 0) {
+      for (const to of sentTo.get(queue.pop()!) ?? []) {
+        if (tie.has(to)) continue;
+        tie.set(to, "transfer");
+        queue.push(to);
       }
     }
     const wallets = [...tie]

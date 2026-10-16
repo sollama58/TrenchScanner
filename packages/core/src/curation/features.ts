@@ -196,6 +196,15 @@ export const BUNDLED_SUPPLY_FEATURES = ["bundledSupplyPct"] as const;
  */
 export const LAUNCHPAD_FEATURES = ["launchpadStonks"] as const;
 
+/**
+ * Added 2026-10-16 (user ask: "track as a future model input"): Transferred %, the share of
+ * supply the top-25 holders sent each other (the coin itself; core's wallets/holderTransfers.ts),
+ * and how many of them sent or got one: the "3.0% transferred holder to holder (5/25)" line on the
+ * bubble map. Null until the top 25's transfer reads are in, and on every row banked before.
+ * Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ */
+export const TRANSFER_FEATURES = ["transferredSupplyPct", "transferWalletCount"] as const;
+
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
   "flaggedSellers",
@@ -287,6 +296,9 @@ export const CANDIDATE_FEATURE_NAMES = [
   "devSoldShare",
   // Added 2026-10-04: of the launch's first 25 buyers, how many still hold it (null until the
   // launch has been read - from the chain since 2026-10-05, the worker's launchSnipers.ts).
+  // Pending (user decision 2026-10-16): at the retrain that adds the waiting wallet metrics, swap
+  // this for tradeFlow.firstBuyersHoldingCut (buyers holding 0.1% of the supply or more, the
+  // figure the card shows), left null on rows banked before 2026-10-16 rather than backfilled.
   "firstBuyersHolding",
   // Added 2026-10-04: Claude's read of the launch's own name and description, 0-1 each
   // (curation/textFeatures.ts). Null until the mint has been read, and on rows banked before.
@@ -431,6 +443,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...KOL_BUNDLED_FEATURES,
   ...BUNDLED_SUPPLY_FEATURES,
   ...LAUNCHPAD_FEATURES,
+  ...TRANSFER_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -551,6 +564,10 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   ...FRESH_TOP_HOLDER_FEATURES,
   // KOL Bundled % (added 2026-10-14): recorded first, on the same terms.
   ...KOL_BUNDLED_FEATURES,
+  // Transferred % and the transfer count (added 2026-10-16, user ask): recorded first, on the same
+  // terms. Bring them in by removing them here once a few days of decision rows show they separate
+  // runners.
+  ...TRANSFER_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
@@ -911,6 +928,8 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   kolBundledPct: "supply bundled by KOLs",
   bundledSupplyPct: "supply bundled (linked holders and KOL bundles)",
   launchpadStonks: "Stonks launch (vs Pump.fun)",
+  transferredSupplyPct: "supply transferred holder to holder",
+  transferWalletCount: "top holders that sent or got a transfer",
   sameTimeFundedPct: "supply funded in the same minute",
   sameTimeClusterCount: "same-minute funding groups",
   sameTimeFundedCount: "top holders funded in the same minute",
@@ -1146,10 +1165,14 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     top10WalletsChecked: scored.top10WalletsChecked ?? null,
     freshTopHolderCount: scored.freshTopHolderCount ?? null,
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
-    kolBundledPct: scored.kolBundledPct ?? null,
-    bundledSupplyPct: scored.bundledSupplyPct ?? null,
+    // The models keep the figures from before KOL bundles followed transfers until the next
+    // retrain (notes/model-retrain-pending.md); the snapshot and the filters read the new ones.
+    kolBundledPct: scored.kolBundledPctModel ?? scored.kolBundledPct ?? null,
+    bundledSupplyPct: scored.bundledSupplyPctModel ?? scored.bundledSupplyPct ?? null,
     launchpadStonks:
       scored.launchpad === STONKS_LAUNCHPAD ? 1 : scored.launchpad === PUMPFUN_LAUNCHPAD ? 0 : null,
+    transferredSupplyPct: scored.transferredSupplyPct ?? null,
+    transferWalletCount: scored.transferWalletCount ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
     sameTimeClusterCount: scored.sameTimeClusterCount ?? null,
     sameTimeFundedCount: scored.sameTimeFundedCount ?? null,

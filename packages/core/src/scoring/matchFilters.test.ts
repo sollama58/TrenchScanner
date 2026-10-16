@@ -179,6 +179,15 @@ describe("maxLinkedCreatorPct", () => {
   });
 });
 
+describe("maxTransferredSupplyPct", () => {
+  it("rejects supply moved holder to holder over the ceiling, and skips an unknown reading", () => {
+    const filter = { ...baseFilter, maxTransferredSupplyPct: 2 };
+    expect(matchesFilter(baseToken({ transferredSupplyPct: 3 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ transferredSupplyPct: 2 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ transferredSupplyPct: undefined }), filter)).toBe(true);
+  });
+});
+
 describe("minLiveHolderCount", () => {
   const quote = { priceUsd: 0.001, marketCapUsd: 200_000, fetchedAt: new Date() };
   it("needs the fresh quote's holder count to clear the floor, and fails closed without one", () => {
@@ -228,8 +237,26 @@ describe("maxEmptyTop10WalletPct", () => {
 describe("first buyers still holding", () => {
   const withHolding = (n: number | null) =>
     baseToken({
-      tradeFlow: { ...EMPTY_TRADE_FLOW, firstBuyersHolding: n, firstBuyersSeen: n === null ? null : 25 },
+      tradeFlow: {
+        ...EMPTY_TRADE_FLOW,
+        firstBuyersHolding: n,
+        firstBuyersHoldingCut: n,
+        firstBuyersSeen: n === null ? null : 25,
+      },
     });
+
+  it("reads the 0.1%-of-supply count, not the models' above-dust one", () => {
+    const token = baseToken({
+      tradeFlow: {
+        ...EMPTY_TRADE_FLOW,
+        firstBuyersHolding: 20,
+        firstBuyersHoldingCut: 6,
+        firstBuyersSeen: 25,
+      },
+    });
+    expect(matchesFilter(token, { ...baseFilter, maxFirstBuyersHolding: 10 })).toBe(true);
+    expect(matchesFilter(token, { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(false);
+  });
 
   it("applies the floor and the ceiling", () => {
     expect(matchesFilter(withHolding(8), { ...baseFilter, minFirstBuyersHolding: 10 })).toBe(false);

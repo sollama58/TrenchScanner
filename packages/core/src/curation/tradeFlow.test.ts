@@ -97,6 +97,8 @@ describe("TradeFlowBook", () => {
     let f = book.features(MINT, sec(60));
     expect(f.firstBuyersSeen).toBe(25);
     expect(f.firstBuyersHolding).toBe(25);
+    // Each bought exactly 0.1% of the supply, the card's cut.
+    expect(f.firstBuyersHoldingCut).toBe(25);
     // w0 sells out, w1 leaves dust, w2 sells half, w29 (not a first buyer) sells out.
     book.trade(trade("w0", "sell", 1, sec(70), { tokenAmount: 1_000_000, newTokenBalance: 0 }));
     book.trade(trade("w1", "sell", 1, sec(71), { tokenAmount: 995_000, newTokenBalance: 5_000 }));
@@ -104,6 +106,8 @@ describe("TradeFlowBook", () => {
     book.trade(trade("w29", "sell", 1, sec(73), { tokenAmount: 1_000_000, newTokenBalance: 0 }));
     f = book.features(MINT, sec(80));
     expect(f.firstBuyersHolding).toBe(23);
+    // w2's half bag is under 0.1% of the supply: still holding for the models, not for the card.
+    expect(f.firstBuyersHoldingCut).toBe(22);
     expect(f.firstBuyersSeen).toBe(25);
     const features = buildCandidateFeatures({
       mintAddress: MINT,
@@ -193,7 +197,7 @@ describe("order-flow features in the vector", () => {
       names
         .slice(start + TRADE_FLOW_FEATURES.length)
         .every((n) =>
-          /^(text|path|mkt|ctx|buys5m|sells5m|buyRatio5m|ns[A-Z]|scoreNarrativeV2$|livestream|pairAgeMinutes$|sniperTop10WalletPct$|firstBuyersSupplyPct$|launchBundledBuyers$|devBuySupplyPct$|freshGapPct$|jup|freshLaunchBuyerPct$|walletRisk|knownDumperFirstBuyers$|linked|bundled|flagged|cexFunded|sameTime|walletWin|knownWinnerFirstBuyers$|winnerRecent|kol|largestHolderPct$|sniperTopHolder|top10WalletsChecked$|freshTopHolder|launchpadStonks$)/.test(
+          /^(text|path|mkt|ctx|buys5m|sells5m|buyRatio5m|ns[A-Z]|scoreNarrativeV2$|livestream|pairAgeMinutes$|sniperTop10WalletPct$|firstBuyersSupplyPct$|launchBundledBuyers$|devBuySupplyPct$|freshGapPct$|jup|freshLaunchBuyerPct$|walletRisk|knownDumperFirstBuyers$|linked|bundled|flagged|cexFunded|sameTime|walletWin|knownWinnerFirstBuyers$|winnerRecent|kol|largestHolderPct$|sniperTopHolder|top10WalletsChecked$|freshTopHolder|launchpadStonks$|transfer)/.test(
             n,
           ),
         ),

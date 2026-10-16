@@ -38,6 +38,7 @@ describe("computeFreshLaunchBuyerPct", () => {
 describe("withLaunchSnipers and the launch-buyer share", () => {
   const snipers = {
     holding: 7,
+    holdingCut: 4,
     seen: 25,
     devHolding: null,
     firstBuyersSupplyPct: 25,
