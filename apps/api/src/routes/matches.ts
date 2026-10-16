@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import {
   prisma,
   corsOriginList,
@@ -40,7 +40,13 @@ import {
 } from "../feedStats.js";
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
-import { contestState, resolveFeedModels, savedFeed } from "../contest.js";
+import {
+  contestState,
+  feedBothOnlyApplies,
+  resolveFeedModels,
+  savedFeed,
+  type SavedFeed,
+} from "../contest.js";
 import { SharedCacheMap } from "../sharedCache.js";
 
 /** Fixed, not user-configurable - the dashboard's Live Feed always shows 12 cards per page. */
@@ -71,7 +77,12 @@ type CallRow = Prisma.CuratedAlertGetPayload<{ select: typeof CALL_SELECT }>;
 type CuratedCardMeta = ReturnType<typeof serializeCuratedAlert>["curated"] & { calledBy: ModelCall[] };
 
 /** What GET /matches/stats answers with - cached per reader, see FEED_STATS_CACHE_TTL_MS. */
-type FeedStatsResponse = ReturnType<typeof summarizeFeed> & { showModelAlerts: boolean; truncated: boolean };
+type FeedStatsResponse = ReturnType<typeof summarizeFeed> & {
+  showModelAlerts: boolean;
+  /** Only alerts both caught (Settings): every card is a filter alert a followed model also called. */
+  bothOnly: boolean;
+  truncated: boolean;
+};
 
 /** A grading row's columns the run peak reads, and the exit-plan return. */
 const RUN_PEAK_SELECT = {
@@ -147,6 +158,7 @@ interface FeedReturnsResponse {
   /** The same, from the followed models' calls alone and from the reader's own filters' alerts alone. */
   topBySource: { model: FeedReturnsResponse["top"]; filter: FeedReturnsResponse["top"] };
   showModelAlerts: boolean;
+  bothOnly: boolean;
   truncated: boolean;
 }
 
@@ -404,6 +416,32 @@ export function keyFollowsModel(key: string, model: string): boolean {
     .includes(model);
 }
 
+/** Which feed a reader's saved settings make: their filters alone, with model calls, or both-only. */
+function feedMode(saved: Pick<SavedFeed, "showModelAlerts" | "bothOnly">): "off" | "on" | "both" {
+  return feedBothOnlyApplies(saved) ? "both" : saved.showModelAlerts ? "on" : "off";
+}
+
+/**
+ * For the "only alerts both caught" feed: whether a filter alert on `tokenId` at `at` has one of
+ * `calls` on the same token within the fold window either side - the alerts the feed folds into
+ * one card wearing both (foldCuratedIntoPage), and the same test the feed's SQL makes.
+ */
+export function calledNear(
+  calls: readonly { tokenId: string; createdAt: Date }[],
+  windowMs: number = CURATED_MATCH_LINK_WINDOW_MS,
+): (tokenId: string, at: Date) => boolean {
+  const byToken = new Map<string, number[]>();
+  for (const c of calls) {
+    const list = byToken.get(c.tokenId);
+    if (list) list.push(c.createdAt.getTime());
+    else byToken.set(c.tokenId, [c.createdAt.getTime()]);
+  }
+  return (tokenId, at) => (byToken.get(tokenId) ?? []).some((t) => Math.abs(t - at.getTime()) <= windowMs);
+}
+
+/** A filter that is the owner's and switched on: the "active filters" the both-only feed counts. */
+const ACTIVE_FILTER = { isActive: true, deletedAt: null } satisfies Prisma.UserFilterWhereInput;
+
 export async function registerMatchRoutes(
   app: FastifyInstance,
   opts: {
@@ -523,8 +561,9 @@ export async function registerMatchRoutes(
     const calls = await readerCalls(saved, highConviction);
     const userId = request.user!.userId;
     // Everything the answer depends on, so a settings change never reads a stale answer.
-    const key = `${userId}:${hours}:${saved.showModelAlerts ? "on" : "off"}:${feedCallsKey(calls)}`;
-    return statsCache.for(key).get(() => buildFeedStats(userId, hours, calls, saved.showModelAlerts));
+    const mode = feedMode(saved);
+    const key = `${userId}:${hours}:${mode}:${feedCallsKey(calls)}`;
+    return statsCache.for(key).get(() => buildFeedStats(userId, hours, calls, mode));
   });
 
   /**
@@ -544,13 +583,17 @@ export async function registerMatchRoutes(
     userId: string,
     hours: number,
     feedCalls: FeedCalls,
-    showModelAlerts: boolean,
+    mode: "off" | "on" | "both",
   ): Promise<FeedStatsResponse> {
     const since = new Date(Date.now() - hours * 3_600_000);
+    const bothOnly = mode === "both";
+    // Both-only: a filter alert early in the window counts with a call from up to the fold window
+    // before it, as its feed card does.
+    const callsSince = bothOnly ? new Date(since.getTime() - CURATED_MATCH_LINK_WINDOW_MS) : since;
 
     const [matches, calls] = await Promise.all([
       prisma.match.findMany({
-        where: { userId, matchedAt: { gte: since } },
+        where: { userId, matchedAt: { gte: since }, ...(bothOnly ? { filter: ACTIVE_FILTER } : {}) },
         orderBy: { matchedAt: "desc" },
         take: FEED_STATS_MAX_ROWS,
         select: {
@@ -563,9 +606,9 @@ export async function registerMatchRoutes(
       }),
       feedCalls.models.length === 0
         ? Promise.resolve([])
-        : sharedCallRead(`stats:${hours}:${feedCallsKey(feedCalls)}`, () =>
+        : sharedCallRead(`stats:${hours}:${bothOnly ? "both:" : ""}${feedCallsKey(feedCalls)}`, () =>
             prisma.curatedAlert.findMany({
-              where: { ...feedCallsWhere(feedCalls), createdAt: { gte: since } },
+              where: { ...feedCallsWhere(feedCalls), createdAt: { gte: callsSince } },
               orderBy: { createdAt: "desc" },
               take: FEED_STATS_MAX_ROWS,
               select: {
@@ -596,7 +639,9 @@ export async function registerMatchRoutes(
       matchedAt: Date;
       curated: { alertId: string; card: FeedStatsCard } | null;
     };
-    const matchCards: StatsCard[] = matches.map((m) => {
+    const near = bothOnly ? calledNear(calls) : null;
+    const kept = near ? matches.filter((m) => near(m.tokenId, m.matchedAt)) : matches;
+    const matchCards: StatsCard[] = kept.map((m) => {
       const outcome = matchOutcome(m, rowById);
       return {
         id: m.id,
@@ -627,23 +672,25 @@ export async function registerMatchRoutes(
     // A model call on a token the reader's filter also caught is one card. It keeps the filter
     // alert's price, so it keeps that alert's verdict too, as the feed card grades it: a call at
     // $11K that doubled must not count a filter alert at $22.4K that peaked at 1.2x as a win.
-    const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
-      (c): FeedStatsCard =>
-        c.kind === "match" && c.curated
-          ? {
-              ...c.curated.card,
-              kind: "match",
-              tokenId: c.tokenId,
-              outcome: c.outcome,
-              // The better of the two alerts' runs, as the card shows it.
-              peakPct: maxPct(c.peakPct, c.curated.card.peakPct),
-            }
-          : c,
+    const folded = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS);
+    // Both-only: the filter alerts a call stands beside, folded or not; no call on its own.
+    const cards = (bothOnly ? folded.filter((c) => c.kind === "match") : folded).map((c): FeedStatsCard =>
+      c.kind === "match" && c.curated
+        ? {
+            ...c.curated.card,
+            kind: "match",
+            tokenId: c.tokenId,
+            outcome: c.outcome,
+            // The better of the two alerts' runs, as the card shows it.
+            peakPct: maxPct(c.peakPct, c.curated.card.peakPct),
+          }
+        : c,
     );
 
     return {
       ...summarizeFeed(cards, hours),
-      showModelAlerts,
+      showModelAlerts: mode !== "off",
+      bothOnly,
       // The caps bound a pathological window; a real feed is far below them.
       truncated: matches.length === FEED_STATS_MAX_ROWS || calls.length === FEED_STATS_MAX_ROWS,
     };
@@ -665,20 +712,23 @@ export async function registerMatchRoutes(
     const saved = await savedFeed(request);
     const calls = await readerCalls(saved, parsed.data.highConviction);
     const userId = request.user!.userId;
-    const key = `${userId}:${saved.showModelAlerts ? "on" : "off"}:${feedCallsKey(calls)}`;
-    return returnsCache.for(key).get(() => buildFeedReturns(userId, calls, saved.showModelAlerts));
+    const mode = feedMode(saved);
+    const key = `${userId}:${mode}:${feedCallsKey(calls)}`;
+    return returnsCache.for(key).get(() => buildFeedReturns(userId, calls, mode));
   });
 
   async function buildFeedReturns(
     userId: string,
     feedCalls: FeedCalls,
-    showModelAlerts: boolean,
+    mode: "off" | "on" | "both",
   ): Promise<FeedReturnsResponse> {
     const now = Date.now();
     const since = new Date(now - RETURN_WINDOW_MAX_HOURS * 3_600_000);
-    const [matches, calls] = await Promise.all([
+    const bothOnly = mode === "both";
+    const callsSince = bothOnly ? new Date(since.getTime() - CURATED_MATCH_LINK_WINDOW_MS) : since;
+    const [allMatches, allCalls] = await Promise.all([
       prisma.match.findMany({
-        where: { userId, matchedAt: { gte: since } },
+        where: { userId, matchedAt: { gte: since }, ...(bothOnly ? { filter: ACTIVE_FILTER } : {}) },
         orderBy: { matchedAt: "desc" },
         take: FEED_STATS_MAX_ROWS,
         select: {
@@ -692,9 +742,9 @@ export async function registerMatchRoutes(
       }),
       feedCalls.models.length === 0
         ? Promise.resolve([])
-        : sharedCallRead(`returns:${feedCallsKey(feedCalls)}`, () =>
+        : sharedCallRead(`returns:${bothOnly ? "both:" : ""}${feedCallsKey(feedCalls)}`, () =>
             prisma.curatedAlert.findMany({
-              where: { ...feedCallsWhere(feedCalls), createdAt: { gte: since } },
+              where: { ...feedCallsWhere(feedCalls), createdAt: { gte: callsSince } },
               orderBy: { createdAt: "desc" },
               take: FEED_STATS_MAX_ROWS,
               select: {
@@ -719,6 +769,14 @@ export async function registerMatchRoutes(
             }),
           ),
     ]);
+    // Both-only: the filter alerts a call stands beside, and the calls standing beside one (the
+    // models' Top 3 then lists only calls the feed shows).
+    const nearCall = bothOnly ? calledNear(allCalls) : null;
+    const nearMatch = bothOnly
+      ? calledNear(allMatches.map((m) => ({ tokenId: m.tokenId, createdAt: m.matchedAt })))
+      : null;
+    const matches = nearCall ? allMatches.filter((m) => nearCall(m.tokenId, m.matchedAt)) : allMatches;
+    const calls = nearMatch ? allCalls.filter((c) => nearMatch(c.tokenId, c.createdAt)) : allCalls;
     // A filter alert's return is on the row grading it; the match keeps no copy.
     const outcomeIds = [
       ...new Set(matches.flatMap((m) => (m.candidateOutcomeId ? [m.candidateOutcomeId] : []))),
@@ -807,7 +865,8 @@ export async function registerMatchRoutes(
       /** Whether the alert that made the Peak passed. */
       passed: boolean;
     };
-    const cards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS).map(
+    const foldedCards = foldCuratedIntoPage([...matchCards, ...callCards], CURATED_MATCH_LINK_WINDOW_MS);
+    const cards = (bothOnly ? foldedCards.filter((c) => c.kind === "match") : foldedCards).map(
       (c): FoldedReturnCard => {
         if (c.kind !== "match" || !c.curated) return { ...c, peakAt: c.at };
         // A folded card's return is the call's; its run is the better of the two alerts' (each
@@ -883,8 +942,9 @@ export async function registerMatchRoutes(
       windows: summarizeReturns(cards, now),
       top: named(best),
       topBySource: { model: named(bestModel), filter: named(bestFilter) },
-      showModelAlerts,
-      truncated: matches.length === FEED_STATS_MAX_ROWS || calls.length === FEED_STATS_MAX_ROWS,
+      showModelAlerts: mode !== "off",
+      bothOnly,
+      truncated: allMatches.length === FEED_STATS_MAX_ROWS || allCalls.length === FEED_STATS_MAX_ROWS,
     };
   }
 
@@ -931,7 +991,11 @@ export async function registerMatchRoutes(
      */
     const mergeDepth = page * PAGE_SIZE;
     const saved = includeCurated === "saved" ? await savedFeed(request) : null;
-    const wantsCurated = includeCurated === "on" || (saved?.showModelAlerts ?? false);
+    // Settings' "only alerts both caught": the page is the reader's active filters' alerts on
+    // tokens a followed model also called within the fold window, each one card wearing both, and
+    // no card from either side alone. Paged on those matches alone (bothOnlyRows), not merged.
+    const bothOnly = saved !== null && feedBothOnlyApplies(saved);
+    const wantsCurated = !bothOnly && (includeCurated === "on" || (saved?.showModelAlerts ?? false));
     // Skipped entirely when the reader hasn't opted in - no curated rows are fetched, so nothing
     // is filtered out after the fact and the page count stays exact.
     const interleave = wantsCurated && mergeDepth <= MAX_MERGE_DEPTH;
@@ -1006,21 +1070,59 @@ export async function registerMatchRoutes(
       ? (await matchesInMergedRun()) + mergeDepth - MAX_MERGE_DEPTH - PAGE_SIZE
       : (page - 1) * PAGE_SIZE;
 
+    /**
+     * The both-only page: the reader's matches from active filters with a followed call on the
+     * same token within the fold window either side (calledNear's test, in SQL), newest first, one
+     * row past the page so hasMore needs no count. Rides Match (userId, matchedAt) for the scan and
+     * CuratedAlert (tokenId, createdAt) for each EXISTS.
+     */
+    const bothOnlyRows = async (calls: FeedCalls) => {
+      if (calls.models.length === 0) return [];
+      const text = q ? `%${q.replace(/[\\%_]/g, "\\$&")}%` : null;
+      return prisma.$queryRaw<{ id: string; matchedAt: Date; tokenId: string }[]>`
+        SELECT m."id", m."matchedAt", m."tokenId"
+          FROM "Match" m
+          JOIN "UserFilter" f ON f."id" = m."filterId"
+         WHERE m."userId" = ${where.userId}
+           AND f."isActive" AND f."deletedAt" IS NULL
+           ${tokenId ? Prisma.sql`AND m."tokenId" = ${tokenId}` : Prisma.empty}
+           ${
+             text
+               ? Prisma.sql`AND EXISTS (SELECT 1 FROM "Token" t WHERE t."id" = m."tokenId"
+                   AND (t."symbol" ILIKE ${text} OR t."name" ILIKE ${text} OR t."mintAddress" ILIKE ${text}))`
+               : Prisma.empty
+           }
+           AND EXISTS (
+             SELECT 1 FROM "CuratedAlert" c
+              WHERE c."tokenId" = m."tokenId"
+                AND c."model" = ANY(${calls.models})
+                ${calls.tier === null ? Prisma.empty : Prisma.sql`AND c."tier" = ${calls.tier}`}
+                AND c."createdAt" BETWEEN m."matchedAt" - ${CURATED_MATCH_LINK_WINDOW_MS / 1000} * interval '1 second'
+                                      AND m."matchedAt" + ${CURATED_MATCH_LINK_WINDOW_MS / 1000} * interval '1 second')
+         ORDER BY m."matchedAt" DESC, m."id" DESC
+         OFFSET ${skip} LIMIT ${PAGE_SIZE + 1}`;
+    };
+    const both = bothOnly
+      ? await feedCalls().then(async (calls) => ({ calls, rows: await bothOnlyRows(calls) }))
+      : null;
+
     const [[matches, matchTotal], curated] = await Promise.all([
-      Promise.all([
-        prisma.match.findMany({
-          where,
-          orderBy: { matchedAt: "desc" },
-          // Interleaving needs the whole run up to this page (it slices the union itself);
-          // otherwise this IS the page.
-          ...(interleave ? { take: mergeDepth } : { skip, take: PAGE_SIZE }),
-          // Bare rows, like the curated half: only the page's own matches are loaded in full,
-          // below, and a deep page's merge used to pull up to 300 matches with their token and
-          // snapshot rows to show twelve.
-          select: MATCH_ORDER_SELECT,
-        }),
-        prisma.match.count({ where }),
-      ]),
+      both
+        ? ([both.rows.slice(0, PAGE_SIZE), skip + both.rows.length] as const)
+        : Promise.all([
+            prisma.match.findMany({
+              where,
+              orderBy: { matchedAt: "desc" },
+              // Interleaving needs the whole run up to this page (it slices the union itself);
+              // otherwise this IS the page.
+              ...(interleave ? { take: mergeDepth } : { skip, take: PAGE_SIZE }),
+              // Bare rows, like the curated half: only the page's own matches are loaded in full,
+              // below, and a deep page's merge used to pull up to 300 matches with their token and
+              // snapshot rows to show twelve.
+              select: MATCH_ORDER_SELECT,
+            }),
+            prisma.match.count({ where }),
+          ]),
       interleave ? loadCurated() : Promise.resolve(null),
     ]);
 
@@ -1069,6 +1171,36 @@ export async function registerMatchRoutes(
         );
         pageGroups = pageGroups.map((g) => regrouped.get(g.newest.id) ?? g);
       }
+    }
+    // Both-only: each card's calls - the followed calls on its token within the fold window, read
+    // for the page's matches alone - grouped as the feed groups them; a card wears the group with
+    // a call nearest its own alert.
+    const bothGroupOf = new Map<string, CallGroup<CallRow>>();
+    if (both && matches.length > 0) {
+      const times = matches.map((m) => m.matchedAt.getTime());
+      const near = await prisma.curatedAlert.findMany({
+        where: {
+          ...callsWhere(both.calls),
+          tokenId: { in: [...new Set(matches.map((m) => m.tokenId))] },
+          createdAt: {
+            gte: new Date(Math.min(...times) - CURATED_MATCH_LINK_WINDOW_MS),
+            lte: new Date(Math.max(...times) + CURATED_MATCH_LINK_WINDOW_MS),
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        select: CALL_SELECT,
+      });
+      const groups = groupSameTokenCalls(near, CURATED_MATCH_LINK_WINDOW_MS);
+      for (const m of matches) {
+        const at = m.matchedAt.getTime();
+        const gap = (g: CallGroup<CallRow>) =>
+          Math.min(...g.calls.map((c) => Math.abs(c.alertedAt.getTime() - at)));
+        const best = groups
+          .filter((g) => g.lead.tokenId === m.tokenId && gap(g) <= CURATED_MATCH_LINK_WINDOW_MS)
+          .sort((a, b) => gap(a) - gap(b))[0];
+        if (best) bothGroupOf.set(m.id, best);
+      }
+      pageGroups = [...new Map([...bothGroupOf.values()].map((g) => [g.newest.id, g])).values()];
     }
     const groupByNewest = new Map(pageGroups.map((g) => [g.newest.id, g]));
 
@@ -1136,7 +1268,13 @@ export async function registerMatchRoutes(
     for (const item of pageItems) {
       if (item.kind === "match") {
         const match = matchById.get(item.row.id);
-        if (match) ordered.push(toMatchCard(match));
+        if (!match) continue;
+        const card = toMatchCard(match);
+        // Both-only: the card wears its calls, as a folded card does.
+        const group = bothGroupOf.get(match.id);
+        const alert = group && curatedById.get(group.lead.id);
+        if (group && alert) card.curated = toCuratedCard(alert, group).curated;
+        ordered.push(card);
         continue;
       }
       const group = groupByNewest.get(item.group.newest.id) ?? item.group;

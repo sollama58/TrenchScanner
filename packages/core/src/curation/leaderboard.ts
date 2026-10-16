@@ -731,6 +731,8 @@ export interface FeedCatch extends LiveCatch {
   models: { count: number; caught: number };
   /** The runners the filters caught, and how many of those no model in the mix did. */
   filters: { count: number; caught: number; only: number };
+  /** Only alerts both caught (Settings): `caught` is the runners a model AND a filter caught. */
+  bothOnly: boolean;
 }
 
 /**
@@ -739,11 +741,14 @@ export interface FeedCatch extends LiveCatch {
  * a winning moment (a clean 2x). Filters count from `filtersSince` (their alerts are read from
  * there), models from the earliest one's start; the runners are those since the earlier of the two.
  * A filter's winning token is a runner even if the market read missed it, as a seat's call is.
+ * With `bothOnly` (the reader's feed shows only alerts both caught) a runner counts as caught only
+ * when a model and a filter both caught it.
  */
 export function feedCatch(
   ledger: CatchLedger,
   models: readonly string[],
   filters: { count: number; wins: readonly { token: string; at: Date }[]; since: Date },
+  bothOnly = false,
 ): FeedCatch {
   const mix = [...new Set(models)].filter((m) => ledger.froms.has(m));
   let from = Infinity;
@@ -759,7 +764,9 @@ export function feedCatch(
   if (from !== Infinity) for (const at of lastWin.values()) if (at >= from) runners += 1;
   const byModels = new Set<string>();
   for (const m of mix) for (const t of ledger.caughtBy.get(m) ?? []) byModels.add(t);
-  const any = new Set([...byModels, ...byFilters]);
+  const any = bothOnly
+    ? new Set([...byFilters].filter((t) => byModels.has(t)))
+    : new Set([...byModels, ...byFilters]);
   let only = 0;
   for (const t of byFilters) if (!byModels.has(t)) only += 1;
   return {
@@ -769,6 +776,7 @@ export function feedCatch(
     since: from === Infinity ? null : new Date(from),
     models: { count: mix.length, caught: byModels.size },
     filters: { count: filters.count, caught: byFilters.size, only },
+    bothOnly,
   };
 }
 

@@ -179,6 +179,7 @@ export async function registerGuestRoutes(
       followsDefault: true,
       showModelAlerts: true,
       followBest: true,
+      bothOnly: false,
     };
   });
 

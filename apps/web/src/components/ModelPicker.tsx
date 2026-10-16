@@ -14,6 +14,8 @@ export async function saveFeedSettings(change: {
   showModelAlerts?: boolean;
   /** Follow the default (the top models); ticking models by hand turns it off. */
   followBest?: boolean;
+  /** Only alerts both caught: the feed keeps only filter alerts a followed model also called. */
+  bothOnly?: boolean;
 }) {
   await put("/curated/feed", change);
   // Every cached feed and leaderboard answer was for the old settings. Stats and insights don't

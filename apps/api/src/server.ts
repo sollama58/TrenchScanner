@@ -411,13 +411,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
         feedModels: string[] | null;
         showModelAlerts: boolean | null;
         followBestModel: boolean | null;
+        feedBothOnly: boolean | null;
         whitelisted: boolean;
         whitelistExpiresAt: Date | null;
         subscriptionExpiresAt: Date | null;
       }[]
     >`
       SELECT (u."id" IS NOT NULL) AS found,
-             u."sessionVersion", u."curatedModel", u."feedModels", u."showModelAlerts", u."followBestModel",
+             u."sessionVersion", u."curatedModel", u."feedModels", u."showModelAlerts", u."followBestModel", u."feedBothOnly",
              (w."walletAddress" IS NOT NULL) AS whitelisted,
              w."expiresAt" AS "whitelistExpiresAt",
              (SELECT s."expiresAt"
@@ -435,6 +436,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       feedModels: row.feedModels ?? [],
       showModelAlerts: row.showModelAlerts ?? true,
       followBestModel: row.followBestModel ?? true,
+      feedBothOnly: row.feedBothOnly ?? false,
     });
     return decideAccess(
       session.walletAddress,
