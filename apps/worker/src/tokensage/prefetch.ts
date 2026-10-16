@@ -40,9 +40,8 @@ const logger = createLogger("tokensage");
  * 60/min per key, where polling each job would not be.
  *
  * Every request carries a priority tier (narrativePriority), which orders both our own sends and
- * TokenSage's job queue: deep reads first (a model is deciding on the coin now), then the quick
- * reads the scan asks for on the watchlist, then the launch reads asked for every new coin
- * discovery sees. On 2026-10-15, with the Jupiter discovery sources, TokenSage served every
+ * TokenSage's job queue: the reads the scan asks for (watchlist quick reads, deep reads) ahead of
+ * the launch reads asked for every new coin discovery sees. On 2026-10-15, with the Jupiter discovery sources, TokenSage served every
  * request oldest first at one priority: a decision's deep read took 45 s at the median instead of
  * 4 s, and the share of decisions carrying any read fell from ~85% to ~45%. A launch read is
  * raised to the watchlist tier when the scan notes the coin, by re-sending it at that tier.
@@ -225,11 +224,13 @@ function higher(a: TokenSagePriority, b: TokenSagePriority | undefined): TokenSa
 }
 
 /**
- * A request's tier: a deep read is high (asked for a coin a model is deciding on, a young coin
- * with an X link, or one someone looked up), a launch read low, any other quick read normal.
+ * A request's tier: a launch read low, every other read normal. Deep reads went in "high" at
+ * first, ahead of every quick read, but a deep read can hold one of TokenSage's analyzer slots
+ * for minutes (X, OCR): on 2026-10-16 from 01:10 UTC the deep reads filled every slot and quick
+ * reads stopped completing altogether (250+ queued, none stored). At one tier they share the
+ * slots oldest first, as before priorities existed, and only the launch reads yield.
  */
-export function narrativePriority(depth: TokenSageDepth, launch = false): TokenSagePriority {
-  if (depth === "full") return "high";
+export function narrativePriority(_depth: TokenSageDepth, launch = false): TokenSagePriority {
   return launch ? "low" : "normal";
 }
 
