@@ -1456,6 +1456,8 @@ export interface FeedAppearance {
   kolBundled: boolean;
   /** The Transferred tile (holder-to-holder transfers); off by default (absent from older API builds: off). */
   transferred: boolean;
+  /** The card footer's FEES badge; off by default (absent from older API builds: off). */
+  feesBadge: boolean;
   /** Bubble maps open with same-exchange ties drawn; off by default (absent from older API builds: off). */
   bubbleCexLinks: boolean;
   /** Bubble maps open with KOLs' possible side wallets tied to them; on by default (absent from older API builds: on). */
