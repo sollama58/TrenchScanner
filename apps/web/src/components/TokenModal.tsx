@@ -720,6 +720,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
           <TopHolders snapshot={holders.listReading} flagged={flagged} pending={scanning} />
         </div>
         {flagged.length > 0 && <WalletsCard wallets={flagged} />}
+        <StonkFeesCard mint={mint} />
       </section>
 
       <section id={`${ids}-call`} className="tm-group" aria-labelledby={`${ids}-call-h`}>
@@ -1409,6 +1410,52 @@ const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: stri
   kol: { text: "KOL", tone: "kol" },
   winner: { text: "Winner", tone: "winner" },
 };
+
+/** GET /tokens/:mint/stonk-fees (api routes/tokens.ts). */
+interface StonkFees {
+  stonks: boolean;
+  wallet: string;
+  label: string;
+  pct: number | null;
+}
+
+/** A share of supply as the card shows it: two decimals, a sliver as "<0.01%". */
+function stonkFeesPctText(pct: number): string {
+  return pct > 0 && pct < 0.01 ? "<0.01%" : `${pct.toFixed(2)}%`;
+}
+
+/**
+ * Stonks' fee wallet's share of a Stonks coin (user ask 2026-10-16): the 3% transfer fee it sweeps
+ * up. It is left out of every holder figure, bundle and the bubble map on a Stonks coin, so its
+ * share shows here on its own. Nothing for any other coin.
+ */
+function StonkFeesCard({ mint }: { mint: string }) {
+  const { data } = usePolling<StonkFees>(`/tokens/${encodeURIComponent(mint)}/stonk-fees`, 120_000);
+  if (!data?.stonks) return null;
+  return (
+    <section className="sage-card tm-stonk-fees" aria-label="Stonk fee wallet">
+      <h4>
+        Stonk fee wallet
+        <span className="tm-h4-meta muted small">left out of holders</span>
+      </h4>
+      <div className="tm-stonk-fees-row">
+        <button
+          type="button"
+          className="tm-wallet tm-wallet-btn"
+          onClick={() => openWallet(data.wallet)}
+          title="Open this wallet's details"
+        >
+          {data.label} <span className="muted">{shortAddress(data.wallet)}</span>
+        </button>
+        <b className="tm-stonk-fees-pct">{data.pct === null ? "n/a" : stonkFeesPctText(data.pct)}</b>
+      </div>
+      <p className="muted small tm-stonk-fees-note">
+        Stonks' fee wallet holds the coin's 3% transfer fee, swept from trades. It isn't counted in the top
+        holders, bundles, linked wallets or the bubble map.
+      </p>
+    </section>
+  );
+}
 
 /** The flagged wallets in the coin: what each is, its score, and what it did in the coin. */
 function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {

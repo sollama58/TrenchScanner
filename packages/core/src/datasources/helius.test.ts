@@ -4,6 +4,7 @@ import { activityStretch, HeliusClient, WALLET_DORMANT_GAP_MS } from "./helius.j
 import { ed25519 } from "@noble/curves/ed25519";
 import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
+import { STONKS_FEE_WALLET } from "../stonksFees.js";
 
 const WALLET = bs58.encode(ed25519.getPublicKey(new Uint8Array(32).fill(7)));
 const CURVE = mayhemStateAddress(WALLET);
@@ -714,7 +715,8 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
           };
         if (c.method === "getTokenSupply")
           return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "1000" } } };
-        // getMultipleAccounts: the first account belongs to a program address, the second to a wallet.
+        // getMultipleAccounts: the first account belongs to a program address, the second to a
+        // wallet; the mint itself rides last (for its transfer fee's authority; none here).
         return {
           jsonrpc: "2.0",
           id: c.id,
@@ -722,6 +724,7 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
             value: [
               { data: { parsed: { info: { owner: CURVE } } } },
               { data: { parsed: { info: { owner: WALLET } } } },
+              { data: { parsed: { info: {} } } },
             ],
           },
         };
@@ -746,6 +749,75 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
     );
     const client = new HeliusClient({ rpcUrl: url });
     expect((await client.getLargestHoldersBatch(["mintA"])).get("mintA")).toEqual({ status: "failed" });
+  });
+
+  const largestWithFeeWallet = (authority: string | null) =>
+    startServer((calls) =>
+      calls.map((c) => {
+        if (c.method === "getTokenLargestAccounts")
+          return {
+            jsonrpc: "2.0",
+            id: c.id,
+            result: {
+              value: [
+                { address: "acct1", amount: "300" },
+                { address: "acct2", amount: "100" },
+              ],
+            },
+          };
+        if (c.method === "getTokenSupply")
+          return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "1000" } } };
+        // getMultipleAccounts: the two token accounts, then the mint itself.
+        return {
+          jsonrpc: "2.0",
+          id: c.id,
+          result: {
+            value: [
+              { data: { parsed: { info: { owner: STONKS_FEE_WALLET } } } },
+              { data: { parsed: { info: { owner: WALLET } } } },
+              {
+                data: {
+                  parsed: {
+                    info: {
+                      extensions: authority
+                        ? [
+                            {
+                              extension: "transferFeeConfig",
+                              state: { withdrawWithheldAuthority: authority },
+                            },
+                          ]
+                        : [],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        };
+      }),
+    );
+
+  it("leaves Stonks' fee wallet out of a Stonks coin's holders, read off the mint's fee authority", async () => {
+    const { url } = await largestWithFeeWallet(STONKS_FEE_WALLET);
+    const result = await new HeliusClient({ rpcUrl: url }).getLargestHoldersBatch(["mintA"]);
+    expect(result.get("mintA")).toEqual({
+      status: "found",
+      holders: {
+        top10HolderPct: 10,
+        largestHolderPct: 10,
+        top10HolderAddresses: [WALLET],
+        topHolderShares: [{ owner: WALLET, pct: 10 }],
+      },
+    });
+  });
+
+  it("keeps the fee wallet as a holder of any other coin", async () => {
+    const { url } = await largestWithFeeWallet(null);
+    const result = await new HeliusClient({ rpcUrl: url }).getLargestHoldersBatch(["mintA"]);
+    expect(result.get("mintA")).toMatchObject({
+      status: "found",
+      holders: { largestHolderPct: 30, top10HolderAddresses: [STONKS_FEE_WALLET, WALLET] },
+    });
   });
 });
 
@@ -878,6 +950,56 @@ describe("HeliusClient.getTopHoldersBatch", () => {
       holders: [{ owner: WALLET, pct: 15, accounts: [`acct-${WALLET}`] }],
     });
     expect(seen).toEqual(["getMultipleAccounts", "getProgramAccounts"]);
+  });
+
+  it("leaves Stonks' fee wallet out of a Stonks coin's top holders, and only a Stonks coin's", async () => {
+    const serve = (authority: string | null) =>
+      startServer((calls) =>
+        calls.map((c) => {
+          if (c.method === "getMultipleAccounts")
+            return {
+              jsonrpc: "2.0",
+              id: c.id,
+              result: {
+                value: [
+                  {
+                    owner: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+                    data: {
+                      parsed: {
+                        info: {
+                          supply: "1000",
+                          ...(authority
+                            ? {
+                                extensions: [
+                                  {
+                                    extension: "transferFeeConfig",
+                                    state: { withdrawWithheldAuthority: authority },
+                                  },
+                                ],
+                              }
+                            : {}),
+                        },
+                      },
+                    },
+                  },
+                ],
+              },
+            };
+          return { jsonrpc: "2.0", id: c.id, result: [row(STONKS_FEE_WALLET, 300n), row(WALLET, 150n)] };
+        }),
+      );
+    const stonks = await serve(STONKS_FEE_WALLET);
+    expect(
+      (await new HeliusClient({ rpcUrl: stonks.url }).getTopHoldersBatch(["mintA"], 25)).get("mintA"),
+    ).toEqual({
+      status: "found",
+      supply: "1000",
+      holders: [{ owner: WALLET, pct: 15, accounts: [`acct-${WALLET}`] }],
+    });
+    const other = await serve(null);
+    expect(
+      (await new HeliusClient({ rpcUrl: other.url }).getTopHoldersBatch(["mintA"], 25)).get("mintA"),
+    ).toMatchObject({ status: "found", holders: [{ owner: STONKS_FEE_WALLET, pct: 30 }, { owner: WALLET }] });
   });
 
   it("fails a mint that isn't a token mint, or whose accounts didn't come back", async () => {
