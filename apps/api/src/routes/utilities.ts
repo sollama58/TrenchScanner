@@ -40,6 +40,7 @@ import { readTokenChart, readTokenSage } from "./tokens.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 import { loadWalletBundle } from "../walletBundle.js";
+import { loadSideWeb } from "../sideWeb.js";
 
 /**
  * The Utilities tab: lookups paid for with Burn Credits (core's subscription/credits.ts).
@@ -58,6 +59,8 @@ import { loadWalletBundle } from "../walletBundle.js";
  *                               what a person needs to judge a link
  * - GET  /utilities/side-labels          every labeled side wallet, numbered per KOL: the count and export
  * - GET  /utilities/bundle/:wallet       any other wallet's Multi-Wallet-Bundle, read on demand (free)
+ * - GET  /utilities/side-web/:wallet     the bubble map of the wallets labeled for a KOL (or a
+ *                               bundle would label), tied by what labeled each (free)
  *
  * A lookup stays open for LOOKUP_REOPEN_MS after it is paid for: the view's own reads, and
  * looking the same thing up again, are free inside it and refused (402) outside it.
@@ -432,6 +435,18 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     if (!ADDRESS_RE.test(wallet)) return reply.code(400).send({ error: "not a valid address" });
     reply.header("Cache-Control", "private, max-age=300");
     return loadWalletBundle(wallet);
+  });
+
+  /**
+   * A wallet's web (user ask 2026-10-16): every wallet labeled for a KOL, or that any other
+   * wallet's bundle would label, with the ties that labeled each (sideWeb.ts). Database reads only;
+   * a bundle's read is the one /bundle/:wallet caches.
+   */
+  app.get("/side-web/:wallet", { config: { rateLimit: BUNDLE_RATE_LIMIT } }, async (request, reply) => {
+    const wallet = (request.params as { wallet?: string }).wallet ?? "";
+    if (!ADDRESS_RE.test(wallet)) return reply.code(400).send({ error: "not a valid address" });
+    reply.header("Cache-Control", "private, max-age=300");
+    return loadSideWeb(wallet);
   });
 
   /**

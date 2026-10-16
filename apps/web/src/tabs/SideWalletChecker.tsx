@@ -8,6 +8,7 @@ import { usePossibleSides } from "../possibleSides";
 import { SideMatch } from "./SideMatch";
 import { Skeleton } from "../components/Charts";
 import { LoadingNote } from "../components/Loading";
+import { WalletWebButton } from "../components/WalletWeb";
 import {
   ChevronDownIcon,
   CheckIcon,
@@ -347,16 +348,20 @@ export function SideWalletChecker() {
                       ))}
                       <ChevronDownIcon size={16} className="side-chevron" />
                     </button>
-                    {/* Its wallet profile (user ask 2026-10-14), beside the row: a button can't hold another. */}
-                    <button
-                      type="button"
-                      className="ghost icon-btn side-profile"
-                      title={`Open ${name}'s wallet profile`}
-                      aria-label={`Open ${name}'s wallet profile`}
-                      onClick={() => openWallet(k.wallet)}
-                    >
-                      <WalletIcon size={15} />
-                    </button>
+                    <span className="side-acts">
+                      {/* Its wallet profile (user ask 2026-10-14), beside the row: a button can't hold another. */}
+                      <button
+                        type="button"
+                        className="ghost icon-btn side-profile"
+                        title={`Open ${name}'s wallet profile`}
+                        aria-label={`Open ${name}'s wallet profile`}
+                        onClick={() => openWallet(k.wallet)}
+                      >
+                        <WalletIcon size={15} />
+                      </button>
+                      {/* Its wallet web (user ask 2026-10-16): every wallet labeled for it, as a bubble map. */}
+                      <WalletWebButton wallet={k.wallet} name={name} />
+                    </span>
                   </div>
                   {isOpen && (
                     <SideWallets kol={k.wallet} kolName={name} period={period} setPeriod={setPeriod} />
@@ -601,7 +606,26 @@ function SideWallets({
       ) : (
         <>
           {/* Labeled wallets first, whatever the window (user ask 2026-10-16), then a rule, then the list. */}
-          {pinned.length > 0 && <SideRows {...rows} items={pinned} pinned />}
+          {pinned.length > 0 && (
+            <>
+              {/* The labeled wallets as a bubble map, tied by what labeled each (user ask 2026-10-16). */}
+              <div className="side-web-bar small">
+                <span>
+                  <TargetIcon size={13} />
+                  <span>
+                    <strong className="num">
+                      {plural(pinned.length, bundle ? "wallet" : "labeled wallet")}
+                    </strong>
+                    {bundle ? " would be labeled" : ""} · {plural(pinned.length + 1, "wallet")} used
+                  </span>
+                </span>
+                <WalletWebButton wallet={kol} name={kolName} className="ghost small-btn side-web-btn">
+                  Wallet web
+                </WalletWebButton>
+              </div>
+              <SideRows {...rows} items={pinned} pinned />
+            </>
+          )}
           {rest.length === 0 ? (
             <p className="muted small side-empty">
               {coins === 0
