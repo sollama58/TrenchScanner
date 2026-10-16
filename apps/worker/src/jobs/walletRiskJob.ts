@@ -1,11 +1,14 @@
 import {
   prisma,
+  Prisma,
   createLogger,
   walletRiskScore,
   walletWinScore,
   walletLabels,
   MIN_WIN_SOL,
+  OVERSOLD_TOKENS,
   RISKY_WALLET_SCORE,
+  WALLET_WIN_MULTIPLE,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 import { replaceRows, type ReplaceRowsSpec } from "./replaceRows.js";
@@ -23,13 +26,20 @@ const logger = createLogger("wallet-risk");
  * whose figures changed (replaceRows.ts): computedAt is the run that last changed a row, and the
  * time of the last rebuild is the job's heartbeat (readers show the later of the two).
  *
- * The win side (user ask 2026-10-13): a coin counts as a win when its reference row (the tape's
- * outcome) hit 2x within 15 minutes and was not disqualified, and the wallet's realized profit on
- * it (solOut - solIn) was at least MIN_WIN_SOL (user ask 2026-10-15); an early win is one the wallet
- * first bought before that row's anchor, so a decision could have seen it holding. The win score
- * (walletWinScore) is built from those against the market's win rate, the way the risk score is
- * built from dumps.
+ * The win side (user ask 2026-10-13): a coin counts as a win when the wallet's own trade in it
+ * came out at WALLET_WIN_MULTIPLE or better for MIN_WIN_SOL of profit, on a clean trade (winSql below;
+ * the definition and why it changed on 2026-10-16 are at MIN_WIN_SOL in core's riskScore.ts); an
+ * early win is one the wallet first bought before the tape's anchor, so a decision could have seen
+ * it holding. The win score (walletWinScore) is built from those against the market's win rate,
+ * the way the risk score is built from dumps.
  */
+
+/** A win: the wallet's own clean trade at WALLET_WIN_MULTIPLE or better, for MIN_WIN_SOL of profit. */
+const winSql = Prisma.sql`(a."solIn" > 0
+  AND a."solOut" >= ${WALLET_WIN_MULTIPLE} * a."solIn"
+  AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}
+  AND a."tokensSold" <= ${OVERSOLD_TOKENS} * a."tokensBought"
+  AND NOT (a."firstSellAt" IS NOT NULL AND a."firstBuyAt" IS NOT NULL AND a."firstSellAt" < a."firstBuyAt"))`;
 
 const MIN_APPEARANCES = 2;
 
@@ -78,11 +88,9 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
   const [totals] = await prisma.$queryRaw<{ appearances: bigint; dumps: bigint; wins: bigint }[]>`
     SELECT COUNT(*) FILTER (WHERE a."buys" > 0) AS appearances,
            COUNT(*) FILTER (WHERE a."buys" > 0 AND a."dumpedIntoStop") AS dumps,
-           COUNT(*) FILTER (WHERE a."buys" > 0 AND co."hit2xIn15m" AND NOT co."disqualified"
-                              AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}) AS wins
+           COUNT(*) FILTER (WHERE a."buys" > 0 AND ${winSql}) AS wins
     FROM "TokenWalletActivity" a
-    JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
-    LEFT JOIN "CandidateOutcome" co ON co."id" = t."outcomeId"`;
+    JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')`;
   const appearances = Number(totals?.appearances ?? 0);
   const marketDumpRate = appearances > 0 ? Number(totals!.dumps) / appearances : 0;
   const marketWinRate = appearances > 0 ? Number(totals!.wins) / appearances : 0;
@@ -102,10 +110,8 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
            COUNT(*) FILTER (WHERE a."dumpedIntoStop") AS dumps,
            COUNT(*) FILTER (WHERE a."fastExit") AS "fastExits",
            COUNT(*) FILTER (WHERE a."launchSniper") AS snipes,
-           COUNT(*) FILTER (WHERE co."hit2xIn15m" AND NOT co."disqualified"
-                              AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}) AS wins,
-           COUNT(*) FILTER (WHERE co."hit2xIn15m" AND NOT co."disqualified"
-                              AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}
+           COUNT(*) FILTER (WHERE ${winSql}) AS wins,
+           COUNT(*) FILTER (WHERE ${winSql}
                               AND a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."anchorAt") AS "earlyWins",
            percentile_cont(0.5) WITHIN GROUP (ORDER BY a."boughtPct") AS "medianSupplyPct",
            -- Summed as numeric: float8 addition depends on the order the rows arrive in, so a
@@ -116,7 +122,6 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
            MAX(COALESCE(a."firstBuyAt", a."createdAt")) AS "lastSeenAt"
     FROM "TokenWalletActivity" a
     JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
-    LEFT JOIN "CandidateOutcome" co ON co."id" = t."outcomeId"
     WHERE a."buys" > 0
     GROUP BY a."wallet"
     HAVING COUNT(*) >= ${MIN_APPEARANCES}`;

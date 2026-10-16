@@ -472,7 +472,7 @@ function walletLines(s: ScoredToken): string[] {
   }
   if (known(s.walletWinTop10Max) || known(s.walletWinFirstBuyersMean) || known(s.knownWinnerFirstBuyers)) {
     lines.push(
-      `- winner wallets (wallets whose coins keep doubling; same 0-100 scale): best top-10 holder ${known(s.walletWinTop10Max) ? score(s.walletWinTop10Max) : "unknown"}; first buyers average ${known(s.walletWinFirstBuyersMean) ? score(s.walletWinFirstBuyersMean) : "unknown"}; supply held by winners ${fmtPct(s.walletWinHighSupplyPct)}; known winners among the first buyers ${fmtNum(s.knownWinnerFirstBuyers)}`,
+      `- winner wallets (wallets that keep selling their coins at 2x or better; same 0-100 scale): best top-10 holder ${known(s.walletWinTop10Max) ? score(s.walletWinTop10Max) : "unknown"}; first buyers average ${known(s.walletWinFirstBuyersMean) ? score(s.walletWinFirstBuyersMean) : "unknown"}; supply held by winners ${fmtPct(s.walletWinHighSupplyPct)}; known winners among the first buyers ${fmtNum(s.knownWinnerFirstBuyers)}`,
     );
   }
   if (known(s.winnerRecentBuyers) || known(s.winnerRecentSellers)) {

@@ -9,7 +9,9 @@ const card = (wallet: string, over: Partial<WalletScorecard> = {}): WalletScorec
   coins: 10,
   coinTiers: { graded: 10, won2x: 2, won4x: 0, won10x: 0, tenXGraded: 10 },
   closed: 5,
-  avgReturnPct: 0,
+  returnPct: 0,
+  closedSolIn: 5,
+  closedSolOut: 5,
   medianReturnPct: 0,
   inProfit: 2,
   own2x: 0,
@@ -41,9 +43,9 @@ describe("sortWallets", () => {
   });
 
   it("needs enough closed trades to rank by return, and ranks net SOL for everyone", () => {
-    const few = card("few", { closed: MIN_CLOSED - 1, avgReturnPct: 900, solOut: 50 });
-    const up = card("up", { avgReturnPct: 40, solOut: 12 });
-    const down = card("down", { avgReturnPct: -20, solOut: 4 });
+    const few = card("few", { closed: MIN_CLOSED - 1, returnPct: 900, solOut: 50 });
+    const up = card("up", { returnPct: 40, solOut: 12 });
+    const down = card("down", { returnPct: -20, solOut: 4 });
     expect(sortWallets([few, down, up], "return").map((w) => w.wallet)).toEqual(["up", "down", "few"]);
     expect(sortWallets([down, up, few], "net").map((w) => w.wallet)).toEqual(["few", "up", "down"]);
   });

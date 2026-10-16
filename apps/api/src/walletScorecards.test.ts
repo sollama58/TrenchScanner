@@ -56,7 +56,9 @@ describe("scorecardOf", () => {
     expect(c.coins).toBe(3);
     expect(c.coinTiers).toEqual({ graded: 2, won2x: 1, won4x: 1, won10x: 0, tenXGraded: 1 });
     expect(c.closed).toBe(2);
-    expect(c.avgReturnPct).toBeCloseTo((200 - 50) / 2);
+    // 3 SOL in, 4 out across the two closed coins.
+    expect(c.returnPct).toBeCloseTo((4 / 3 - 1) * 100);
+    expect([c.closedSolIn, c.closedSolOut]).toEqual([3, 4]);
     expect(c.medianReturnPct).toBeCloseTo(75);
     expect(c.inProfit).toBe(1);
     expect([c.own2x, c.own4x, c.own10x]).toEqual([1, 0, 0]);
@@ -68,23 +70,41 @@ describe("scorecardOf", () => {
     expect(c.best).toEqual({ mint: "a", symbol: null, multiple: 3 });
   });
 
-  it("weights the group's average return by closed coins", () => {
-    const a = {
-      ...scorecardOf("a", [row({ solOut: 2, tokensSold: 100 })]),
-      name: null,
-      twitter: null,
-      sides: 0,
-    };
-    const b = {
-      ...scorecardOf("b", [row({ solOut: 0.5, tokensSold: 100 }), row({ solOut: 0.5, tokensSold: 100 })]),
-      name: null,
-      twitter: null,
-      sides: 0,
-    };
-    const s = summaryOf([a, b]);
+  it("weights the return by size, so one tiny moonshot can't carry it", () => {
+    // User report 2026-10-16: a 0.01 SOL coin sold at 448x beside ten 5 SOL coins sold at a loss.
+    const c = scorecardOf("w", [
+      row({ solIn: 0.01, solOut: 4.488, tokensSold: 100 }),
+      ...Array.from({ length: 10 }, () => row({ solIn: 5, solOut: 4.5, tokensSold: 100 })),
+    ]);
+    expect(c.returnPct).toBeCloseTo(((45 + 4.488) / 50.01 - 1) * 100);
+    expect(c.returnPct!).toBeLessThan(0);
+    expect(c.medianReturnPct).toBeCloseTo(-10);
+  });
+
+  it("leaves out coins it sold more of than it bought on the tape", () => {
+    // Tokens sent in from a side wallet: SOL out against this wallet's SOL in is no trade's return.
+    const c = scorecardOf("w", [row({ solIn: 0.1, solOut: 30, tokensBought: 100, tokensSold: 5_000 })]);
+    expect(c.closed).toBe(0);
+    expect(c.returnPct).toBeNull();
+    expect(c.best).toBeNull();
+    expect(c.solOut).toBe(30);
+  });
+
+  it("sums the group's return by size and grades each coin once", () => {
+    const ra = [row({ who: "a", mint: "x", solOut: 2, tokensSold: 100, hit2x: true, tenXGraded: true })];
+    const rb = [
+      // The same coin, bought by a second wallet: graded once for the group.
+      row({ who: "b", mint: "x", solOut: 0.5, tokensSold: 100, hit2x: true, tenXGraded: true }),
+      row({ who: "b", mint: "y", solOut: 0.5, tokensSold: 100, hit2x: false, tenXGraded: true }),
+    ];
+    const s = summaryOf([scorecardOf("a", ra), scorecardOf("b", rb)], [...ra, ...rb]);
     expect(s.closed).toBe(3);
-    expect(s.avgReturnPct).toBeCloseTo((100 - 50 - 50) / 3);
+    // 3 SOL in, 3 out.
+    expect(s.returnPct).toBeCloseTo(0);
     expect(s.wallets).toBe(2);
+    expect(s.coins).toBe(3);
+    expect(s.distinctCoins).toBe(2);
+    expect(s.coinTiers).toMatchObject({ graded: 2, won2x: 1 });
   });
 });
 
@@ -197,7 +217,7 @@ describe.skipIf(!dbAvailable)("buildWalletScorecards", () => {
     expect(kol).toMatchObject({ name: "Tester", twitter: "tester", sides: 1, coins: 2, closed: 1, early: 2 });
     expect(kol?.coinTiers).toMatchObject({ graded: 2, won2x: 1, tenXGraded: 2 });
     // Coin 0 is held open by the side's unsold tokens: only coin 1 (0.4x) is closed.
-    expect(kol?.avgReturnPct).toBeCloseTo(-60);
+    expect(kol?.returnPct).toBeCloseTo(-60);
     expect(d.baseline.coins).toBeGreaterThanOrEqual(2);
 
     const month = await buildWalletScorecards(30, "kols", now);

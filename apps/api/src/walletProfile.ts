@@ -268,7 +268,7 @@ export function walletLabels(input: {
       text: "Winner",
       tone: "good",
       source: "TrenchScanner win score",
-      detail: `${r.wins} of the ${r.appearances} called coins it bought doubled with ${MIN_WIN_SOL}+ SOL profit`,
+      detail: `Sold ${r.wins} of the ${r.appearances} tracked coins it bought at 2x or better, for ${MIN_WIN_SOL}+ SOL profit each`,
     });
   // The book decides the sniper label with its rate rule; a wallet with no book row has fewer
   // than two coins read, so the count alone can't reach the bar.
