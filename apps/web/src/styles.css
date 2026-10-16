@@ -10968,6 +10968,23 @@ img.tm-avatar {
 .tm-wallets-note {
   margin: 10px 0 0 !important;
 }
+.tm-stonk-fees-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-3);
+}
+.tm-stonk-fees-pct {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.tm-stonk-fees-note {
+  margin: 8px 0 0 !important;
+}
 @media (max-width: 640px) {
   .tm-wallets li {
     grid-template-columns: auto auto 1fr auto;

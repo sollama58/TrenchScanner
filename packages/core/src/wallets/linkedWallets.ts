@@ -1,5 +1,6 @@
 import { keysOf, type ChainTx } from "./tradeTape.js";
 import { linkingTransfers } from "./holderTransfers.js";
+import { PLATFORM_WALLETS } from "../stonksFees.js";
 
 /**
  * Linked wallets: top holders that one wallet paid for. A wallet's first transaction is almost
@@ -36,8 +37,20 @@ export const KNOWN_EXCHANGE_WALLETS: ReadonlyMap<string, string> = new Map([
   ["BmFdpraQhkiDQE6SnfG5omcA1VwzqfXrwtNYBwWTymy6", "KuCoin"],
 ]);
 
-/** The exchange hot wallets above, left out as funders. */
-export const HOT_FUNDER_DENYLIST: ReadonlySet<string> = new Set(KNOWN_EXCHANGE_WALLETS.keys());
+/**
+ * Whether a wallet is a service, never a person: an exchange hot wallet above, or a launchpad's own
+ * wallet (Stonks' fee wallet, stonksFees.ts). Never a funder that links wallets, a transfer link, a
+ * bundle or a side wallet.
+ */
+export function isServiceWallet(wallet: string): boolean {
+  return KNOWN_EXCHANGE_WALLETS.has(wallet) || PLATFORM_WALLETS.has(wallet);
+}
+
+/** The exchange hot wallets and launchpad wallets, left out as funders. */
+export const HOT_FUNDER_DENYLIST: ReadonlySet<string> = new Set([
+  ...KNOWN_EXCHANGE_WALLETS.keys(),
+  ...PLATFORM_WALLETS.keys(),
+]);
 
 /**
  * A funder whose newest page of signatures (SIGNATURES_PAGE, one 1-credit call) all fall within
@@ -345,11 +358,7 @@ export function linkedWallets(
 
   // Holders that moved the coin between them, past dust and clear of exchanges.
   const pctOfHolder = new Map(list.map((h) => [h.owner, h.pct]));
-  const links = linkingTransfers(
-    opts.transfers,
-    pctOfHolder,
-    (w) => opts.hot(w) || KNOWN_EXCHANGE_WALLETS.has(w),
-  );
+  const links = linkingTransfers(opts.transfers, pctOfHolder, (w) => opts.hot(w) || isServiceWallet(w));
   const sentBy = new Map<string, number>();
   for (const t of links) {
     union(t.from, t.to);

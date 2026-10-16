@@ -2,7 +2,7 @@ import {
   Prisma,
   prisma,
   createLogger,
-  KNOWN_EXCHANGE_WALLETS,
+  isServiceWallet,
   MARKED_BOT_WALLETS,
   POSSIBLE_SIDE_HOLD_DAYS,
   POSSIBLE_SIDE_RULES_VERSION,
@@ -220,7 +220,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   const byKol = new Map<string, Record<SideWindow, PairRow[]>>();
   const tierPairs = new Map<string, Record<48 | 72, PairRow[]>>();
   for (const p of pairs) {
-    if (bots.has(p.side) || KNOWN_EXCHANGE_WALLETS.has(p.side)) continue;
+    if (bots.has(p.side) || isServiceWallet(p.side)) continue;
     let lists = byKol.get(p.kol);
     if (!lists) byKol.set(p.kol, (lists = { "24h": [], "7d": [], "30d": [] }));
     let tiers = tierPairs.get(p.kol);
@@ -294,7 +294,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   const possibleByPair = new Map(possible.map((p) => [`${p.wallet}:${p.kolWallet}`, p]));
   let transferLabels = 0;
   for (const t of transferPairs) {
-    if (bots.has(t.side) || botLike.has(t.side) || KNOWN_EXCHANGE_WALLETS.has(t.side)) continue;
+    if (bots.has(t.side) || botLike.has(t.side) || isServiceWallet(t.side)) continue;
     const tier =
       transferSideTier(
         t.outAts.map((d) => d.getTime()),

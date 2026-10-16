@@ -13,6 +13,7 @@ import {
   LAUNCH_SNIPER,
   MIN_WIN_SOL,
   KNOWN_EXCHANGE_WALLETS,
+  PLATFORM_WALLETS,
   RISKY_WALLET_SCORE,
   SAME_TIME_FUNDING_MS,
   type HeliusClient,
@@ -228,6 +229,15 @@ export function walletLabels(input: {
               detail: `In the last ${s.hours} hours it bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it. Not confirmed as the KOL's wallet.`,
             },
     );
+  const platform = PLATFORM_WALLETS.get(input.wallet);
+  if (platform)
+    out.push({
+      text: platform,
+      tone: "info",
+      source: "TrenchScanner launchpad list",
+      detail:
+        "Stonks' fee wallet: it collects the 3% transfer fee on every Stonks coin. Left out of Stonks coins' holder figures, bundles and bubble maps.",
+    });
   const exchange = KNOWN_EXCHANGE_WALLETS.get(input.wallet);
   if (exchange)
     out.push({ text: `${exchange} hot wallet`, tone: "info", source: "TrenchScanner exchange list" });

@@ -1,5 +1,5 @@
 import {
-  KNOWN_EXCHANGE_WALLETS,
+  isServiceWallet,
   MARKED_BOT_WALLETS,
   SIDE_GAP_MINUTES,
   SIDE_MIN_SHARED,
@@ -373,7 +373,7 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
     sideCoins["30d"].set(r.wallet, Number(r.c30));
     if (isBot(Number(r.c30), facts.totalCoins)) excluded.add(r.wallet);
   }
-  for (const w of sides) if (KNOWN_EXCHANGE_WALLETS.has(w)) excluded.add(w);
+  for (const w of sides) if (isServiceWallet(w)) excluded.add(w);
   const hidden = new Set([...MARKED_BOT_WALLETS, ...facts.likelyBots]);
 
   const counted = pairs.map((p) => ({
@@ -463,8 +463,7 @@ export function withTransferLabels(
   const byWallet = new Map(out.map((l) => [l.wallet, l]));
   const extra: BundleLabel[] = [];
   for (const p of partners) {
-    if (p.side === wallet || excluded.has(p.side) || hidden.has(p.side) || KNOWN_EXCHANGE_WALLETS.has(p.side))
-      continue;
+    if (p.side === wallet || excluded.has(p.side) || hidden.has(p.side) || isServiceWallet(p.side)) continue;
     const tier = transferSideTier(p.ats);
     if (!tier) continue;
     const had = byWallet.get(p.side);
