@@ -88,8 +88,8 @@ export const feedAppearanceSchema = z
     volume: z.boolean().default(false),
     /** Color the Score tile red to green against recent alerts' scores; on by default. */
     scoreColor: z.boolean().default(true),
-    /** Shade the stat tiles on a lower / median / upper scale, upper at the safety screen's cut; on by default. */
-    tileColors: z.boolean().default(true),
+    /** Shade the stat tiles on a lower / median / upper scale, upper at the safety screen's cut; off by default. */
+    tileColors: z.boolean().default(false),
     /** Color the whole tile, not only its reading; off by default. */
     tileFill: z.boolean().default(false),
     /** The tile scale's colors; null keeps the theme's win, amber and loss colors. */
@@ -122,8 +122,8 @@ export const feedAppearanceSchema = z
     bubbleSideLinks: z.boolean().default(true),
     /** On bubble maps, arrows between holders that sent the coin to each other (drawn only); on by default. */
     bubbleTransferLinks: z.boolean().default(true),
-    /** On bubble maps, Pump.fun, FOMO and Helius names on the wallets (KOLs' always show); on by default. */
-    bubbleNameLabels: z.boolean().default(true),
+    /** On bubble maps, Pump.fun, FOMO and Helius names on the wallets (KOLs' always show); off by default. */
+    bubbleNameLabels: z.boolean().default(false),
     /**
      * Each kind's own choice, overriding bubbleNameLabels (user ask 2026-10-16): null follows it.
      * Any set hides the one switch, in Settings and on the map.
@@ -203,7 +203,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   learningNote: true,
   volume: false,
   scoreColor: true,
-  tileColors: true,
+  tileColors: false,
   tileFill: false,
   tileLow: null,
   tileMid: null,
@@ -218,7 +218,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   bubbleCexLinks: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
-  bubbleNameLabels: true,
+  bubbleNameLabels: false,
   bubbleNamesPumpfun: null,
   bubbleNamesFomo: null,
   bubbleNamesHelius: null,
