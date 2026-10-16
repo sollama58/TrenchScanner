@@ -193,6 +193,12 @@ const envSchema = z.object({
   // rate that kept only the last 30-60 minutes of launches - a token that took two hours to
   // climb into the band was evicted before it got there.
   WATCHLIST_NEAR_BAND_MIN_MCAP_USD: z.coerce.number().nonnegative().default(7_000),
+  // Low-cap mode (user ask 2026-10-16): a coin whose market cap is under this is treated as dead.
+  // The scan stops its full read (RugCheck, Helius wallet reads, holder lists, bubble map, TokenSage,
+  // snapshots, filter matching) and keeps only its market cap fresh - the watchlist refresh and the
+  // Live feed's live figure, which also raise its peak - until it climbs back over, when the full
+  // read resumes on the next cycle. A Utilities lookup is always read in full. 0 turns it off.
+  LOW_CAP_MCAP_USD: z.coerce.number().nonnegative().default(4_000),
   // Cap on UNCACHED wallet earliest-activity lookups per scan cycle - the Helius budget guard
   // for the always-on fresh-wallet pass (see the worker's walletFreshness.ts). Wallet history is
   // immutable, so every resolved wallet is cached forever and the steady-state cost is only the
@@ -300,6 +306,13 @@ const envSchema = z.object({
   // Pump.fun trade API calls per run (free, spaced 12 s, but it answers 429 quickly): the backlog,
   // coins Helius couldn't read, and a sample of uncalled coins. 0 turns it off.
   TRADE_TAPE_PUMPFUN_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(4),
+  // The trade tape's closing read (tradeTapeJob.ts, user ask 2026-10-16): once a taped coin is past
+  // its 24-hour tracking window and still under LOW_CAP_MCAP_USD, its trades from the tape's end to
+  // now are read once and folded into the wallets already on its tape, so a wallet that sold after
+  // the window shows its sells (times and amounts) instead of reading as still holding. Helius pages
+  // a run (10 credits each, ~43k credits a day at the cap, about 4% of the 2026-10-14 spend); 0 turns
+  // it off.
+  TRADE_TAPE_CLOSING_PAGES_PER_RUN: z.coerce.number().int().nonnegative().default(3),
   // How often whether they still hold is re-read (getMultipleAccounts, 1 credit per 4 tokens):
   // every few minutes for the band, every minute for a token about to be decided on.
   SNIPER_HOLDING_REFRESH_SECONDS: z.coerce.number().positive().default(300),

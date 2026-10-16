@@ -14,6 +14,13 @@ import {
 } from "../appearance";
 import { useNarrativeNoteReadiness } from "../narrativeNote";
 
+/** The bubble maps' names that can be shown or hidden kind by kind (user ask 2026-10-16). */
+const NAME_KINDS = [
+  ["bubbleNamesPumpfun", "Pump.fun names"],
+  ["bubbleNamesHelius", "Helius names"],
+  ["bubbleNamesFomo", "FOMO names"],
+] as const;
+
 /**
  * Every appearance control (presets, theme and colors, layout, card fields), in the Live and Stream
  * tabs' Customize panel, where the feed itself is the preview. Every change shows at once and is
@@ -23,6 +30,7 @@ export function AppearanceControls() {
   const look = useAppearance();
   const narrative = useNarrativeNoteReadiness();
   const narrativeShown = look.narrativeNote ?? narrative?.ready ?? false;
+  const namesSplit = NAME_KINDS.some(([key]) => look[key] !== null);
   const hidden = useMemo(() => new Set(look.hidden), [look.hidden]);
   const activePreset = PRESETS.find((p) => sameAppearance(withPreset(look, p.look), look))?.id ?? null;
   const shown = (f: CardField) =>
@@ -341,6 +349,46 @@ export function AppearanceControls() {
           />
           Bubble maps: draw arrows between holders that sent the coin to each other
         </label>
+        {/* One switch for the three kinds of name, or each on its own; any set on its own hides the
+            one switch here and on the map (user ask 2026-10-16). */}
+        {!namesSplit && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={look.bubbleNameLabels}
+              onChange={() => setAppearance({ bubbleNameLabels: !look.bubbleNameLabels })}
+            />
+            Bubble maps: show Pump.fun, FOMO and Helius names on wallets (KOLs and exchanges always show)
+          </label>
+        )}
+        <div className="check-sub">
+          <span className="faint small">
+            {namesSplit
+              ? "Bubble maps: names on wallets (KOLs and exchanges always show)"
+              : "Or set each kind:"}
+          </span>
+          {NAME_KINDS.map(([key, text]) => (
+            <label key={key} className="check">
+              <input
+                type="checkbox"
+                checked={look[key] ?? look.bubbleNameLabels}
+                onChange={() => setAppearance({ [key]: !(look[key] ?? look.bubbleNameLabels) })}
+              />
+              {text}
+            </label>
+          ))}
+          {namesSplit && (
+            <button
+              type="button"
+              className="link small"
+              onClick={() =>
+                setAppearance({ bubbleNamesPumpfun: null, bubbleNamesFomo: null, bubbleNamesHelius: null })
+              }
+            >
+              Go back to one switch
+            </button>
+          )}
+        </div>
         <div className="field-group">
           <h4>Quick links</h4>
           {QUICK_LINK_SITES.map((l) => (

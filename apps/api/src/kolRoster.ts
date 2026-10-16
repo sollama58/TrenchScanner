@@ -1,4 +1,4 @@
-import { prisma } from "@trenchscanner/core";
+import { prisma, withoutHandle } from "@trenchscanner/core";
 
 /**
  * KOL roster rows (KolWallet) as the dashboard shows them. A Known Side (KolWallet.mainWallet set,
@@ -48,5 +48,5 @@ export async function readKolRows(wallets: readonly string[]): Promise<Map<strin
 
 /** "Cupsey Known Side": the name a Known Side goes by. */
 export function knownSideName(main: { wallet: string; name: string | null }): string {
-  return `${main.name ?? shortAddress(main.wallet)} Known Side`;
+  return `${(main.name && withoutHandle(main.name)) || shortAddress(main.wallet)} Known Side`;
 }

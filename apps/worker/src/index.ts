@@ -506,6 +506,20 @@ async function main() {
       helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
       pumpFun: deps.pumpFun,
       solPrices: (mints: string[]) => deps.dexScreener.solPricesOf(mints),
+      // The closing read's market caps: null for a coin with no market, a failed batch left out.
+      marketCaps: async (mints: string[]) => {
+        const failed = new Set<string>();
+        const found = await deps.dexScreener.getTokensByAddresses(mints, 1, {
+          timeoutMs: 10_000,
+          retries: 1,
+          failed,
+        });
+        const caps = new Map<string, number | null>(
+          mints.filter((m) => !failed.has(m)).map((m) => [m, null]),
+        );
+        for (const t of found) if (t.marketCapUsd > 0) caps.set(t.mintAddress, t.marketCapUsd);
+        return caps;
+      },
     };
     return scheduleInterval(
       "trade-tape",
@@ -514,6 +528,8 @@ async function main() {
           runTradeTapeJob(tapeDeps, {
             heliusPagesPerRun: env.TRADE_TAPE_HELIUS_PAGES_PER_RUN,
             pumpFunCallsPerRun: env.TRADE_TAPE_PUMPFUN_CALLS_PER_RUN,
+            closingPagesPerRun: env.TRADE_TAPE_CLOSING_PAGES_PER_RUN,
+            lowCapMcapUsd: env.LOW_CAP_MCAP_USD,
           }),
         ),
       1,

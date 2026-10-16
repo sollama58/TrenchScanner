@@ -43,6 +43,10 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   bubbleCexLinks: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
+  bubbleNameLabels: true,
+  bubbleNamesPumpfun: null,
+  bubbleNamesFomo: null,
+  bubbleNamesHelius: null,
   narrativeNote: null,
   streamTab: false,
   // On for everyone by default (user ask 2026-10-15); a new key, so the old opt-in's saved "off" doesn't hide it.
@@ -253,6 +257,10 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     bubbleSideLinks: typeof r.bubbleSideLinks === "boolean" ? r.bubbleSideLinks : d.bubbleSideLinks,
     bubbleTransferLinks:
       typeof r.bubbleTransferLinks === "boolean" ? r.bubbleTransferLinks : d.bubbleTransferLinks,
+    bubbleNameLabels: typeof r.bubbleNameLabels === "boolean" ? r.bubbleNameLabels : d.bubbleNameLabels,
+    bubbleNamesPumpfun: typeof r.bubbleNamesPumpfun === "boolean" ? r.bubbleNamesPumpfun : null,
+    bubbleNamesFomo: typeof r.bubbleNamesFomo === "boolean" ? r.bubbleNamesFomo : null,
+    bubbleNamesHelius: typeof r.bubbleNamesHelius === "boolean" ? r.bubbleNamesHelius : null,
     narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
     streamTab: typeof r.streamTab === "boolean" ? r.streamTab : d.streamTab,
     hideLighthouseTab: typeof r.hideLighthouseTab === "boolean" ? r.hideLighthouseTab : d.hideLighthouseTab,

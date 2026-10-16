@@ -86,6 +86,7 @@ import {
 } from "./matchDispatch.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import { noteHolderListWritten, shouldWriteHolderList } from "./holderListWrites.js";
+import { recentLookupMints, splitLowCap } from "./lowCap.js";
 import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from "./vettedTokens.js";
 import { resolveEarliestActivity, computeFreshPct, FRESH_WITHIN_HOURS } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
@@ -927,13 +928,38 @@ async function scanCycle(
       count: viewedMarketData.length,
     });
   }
+  // Low-cap mode (lowCap.ts): a coin under LOW_CAP_MCAP_USD keeps only the market cap just
+  // written above; the full read below skips it until a cycle prices it back over the floor. Its
+  // last verdict goes too, so the fast lane never matches it on a reading from before it died.
+  let lowCapHeld = 0;
+  if (env.LOW_CAP_MCAP_USD > 0) {
+    const lookedUp = await recentLookupMints().catch((err: unknown) => {
+      logger.warn("failed to read recent token lookups - holding no low-cap coin this cycle", {
+        error: String(err),
+      });
+      return null;
+    });
+    if (lookedUp) {
+      const split = splitLowCap(candidates, env.LOW_CAP_MCAP_USD, lookedUp);
+      if (split.held.length > 0) {
+        candidates = split.kept;
+        lowCapHeld = split.held.length;
+        const idOf = new Map(activelyViewed.map((t) => [t.mintAddress, t.id]));
+        for (const c of split.held) {
+          const id = idOf.get(c.mintAddress);
+          if (id) dropScanVerdict(id);
+        }
+      }
+    }
+  }
   lap("viewedRefresh");
 
   if (candidates.length === 0) {
     logger.info("scan cycle complete (nothing in band or actively viewed)", {
       durationMs: Date.now() - startedAt,
+      lowCapHeld,
     });
-    return { stagesMs, ...earlyExitMeta(env, deps.pumpFun) };
+    return { stagesMs, lowCapHeld, ...earlyExitMeta(env, deps.pumpFun) };
   }
 
   const firstSeenByMint = new Map([...tracked, ...activelyViewed].map((t) => [t.mintAddress, t.firstSeenAt]));
@@ -1575,6 +1601,8 @@ async function scanCycle(
     ...(launchPoller ? { launchPoller: { ...launchPoller } } : {}),
     tracked: tracked.length,
     inBand: candidates.length,
+    // Coins under LOW_CAP_MCAP_USD this cycle kept to their market cap (lowCap.ts), not in inBand.
+    lowCapHeld,
     matches: matchCount,
     samplesBanked,
     pricePathMints: deps.pricePath?.size ?? 0,

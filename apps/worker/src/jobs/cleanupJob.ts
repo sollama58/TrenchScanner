@@ -1,4 +1,4 @@
-import { prisma, createLogger, type Env } from "@trenchscanner/core";
+import { prisma, createLogger, Prisma, type Env } from "@trenchscanner/core";
 import { PartialJobFailure, type JobRunMeta } from "../scheduler.js";
 
 const logger = createLogger("cleanup-job");
@@ -198,28 +198,36 @@ async function untrackedTokenIds(ids: string[]): Promise<string[]> {
 }
 
 /**
- * TokenNarrative rows checked before `cutoff`, walked in mintAddress order with a cursor (the primary
- * key), a page at a time, so a pass over the whole table reads it once whatever each page changes.
- * `act` gets each page's mints and returns how many rows it changed.
+ * TokenNarrative rows checked in [since, cutoff), oldest read first, a page at a time; `act` gets
+ * each page's mints and returns how many rows it changed. Walked through TokenNarrative_checkedAt_idx:
+ * the cursor is the last row's checkedAt, a bound on the index, with its mint as the tiebreaker
+ * for rows read in the same millisecond. The nightly callers pass a few days before their line as
+ * `since`, so a pass reads the rows that newly crossed it; the weekly full walk passes the epoch
+ * and reads every row. Until 2026-10-16 both walked the whole table by primary key every night, in
+ * mintAddress (random) order, to change the newest day's rows (db audit, C5). `withDocument`
+ * limits the walk to rows still holding a document, for the strips.
  */
-async function forEachOldNarrativePage(
+async function forEachNarrativePage(
+  since: Date,
   cutoff: Date,
   opts: BatchOptions,
   act: (mints: string[]) => Promise<number>,
+  { withDocument = false }: { withDocument?: boolean } = {},
 ): Promise<number> {
   let total = 0;
-  let after = "";
+  let after: { mintAddress: string; checkedAt: Date } | null = null;
   for (;;) {
-    const page = await prisma.$queryRaw<{ mintAddress: string }[]>`
-      SELECT n."mintAddress" FROM "TokenNarrative" n
-      WHERE n."mintAddress" > ${after} AND n."checkedAt" < ${cutoff}
-      ORDER BY n."mintAddress"
+    const page: { mintAddress: string; checkedAt: Date }[] = await prisma.$queryRaw`
+      SELECT n."mintAddress", n."checkedAt" FROM "TokenNarrative" n
+      WHERE n."checkedAt" >= ${after?.checkedAt ?? since} AND n."checkedAt" < ${cutoff}
+        ${after ? Prisma.sql`AND NOT (n."checkedAt" = ${after.checkedAt} AND n."mintAddress" <= ${after.mintAddress})` : Prisma.empty}
+        ${withDocument ? Prisma.sql`AND n."analysis" IS NOT NULL` : Prisma.empty}
+      ORDER BY n."checkedAt", n."mintAddress"
       LIMIT ${opts.rowsPerBatch}`;
     if (page.length === 0) return total;
-    const mints = page.map((r) => r.mintAddress);
-    total += await act(mints);
+    total += await act(page.map((r) => r.mintAddress));
     if (page.length < opts.rowsPerBatch) return total;
-    after = mints[mints.length - 1]!;
+    after = page[page.length - 1]!;
     await sleep(opts.pauseMs);
   }
 }
@@ -353,39 +361,28 @@ async function deleteExpiredSnapshots(
   let downsampled = 0;
   let after: { firstSeenAt: Date; id: string } | null = null;
   for (;;) {
-    const tokens: { id: string; firstSeenAt: Date }[] = await prisma.token.findMany({
-      where: {
-        firstSeenAt: { lt: walkCutoff },
-        // Both conditions are ORs, so they go under AND: as two spread `OR` keys the cursor's
-        // replaced the token filter on every page after the first.
-        AND: [
-          // Only tokens that can own a snapshot that crossed a line since the last few sweeps. One
-          // is written only for a scan candidate (every one of which came back from DexScreener and
-          // so had lastLiveAt stamped then), a token someone had open (lastViewedAt), or a
-          // fast-match alert on a token the scan vetted - while nearly every old Token row is a
-          // launch that never traded and never had one. A token not live or viewed since before
-          // the longest horizon (plus slack for a missed night) holds only rows past every line,
-          // which earlier sweeps already took. Probing all of them every night is what made this
-          // sweep take hours. The weekly full walk catches anything this misses.
-          fullWalk
-            ? {}
-            : {
-                OR: [{ lastLiveAt: { gte: activeSince } }, { lastViewedAt: { gte: activeSince } }],
-              },
-          after
-            ? {
-                OR: [
-                  { firstSeenAt: { gt: after.firstSeenAt } },
-                  { firstSeenAt: after.firstSeenAt, id: { gt: after.id } },
-                ],
-              }
-            : {},
-        ],
-      },
-      orderBy: [{ firstSeenAt: "asc" }, { id: "asc" }],
-      select: { id: true, firstSeenAt: true },
-      take: opts.tokensPerBatch,
-    });
+    // Only tokens that can own a snapshot that crossed a line since the last few sweeps. One is
+    // written only for a scan candidate (every one of which came back from DexScreener and so had
+    // lastLiveAt stamped then), a token someone had open (lastViewedAt), or a fast-match alert on
+    // a token the scan vetted - while nearly every old Token row is a launch that never traded and
+    // never had one. A token not live or viewed since before the longest horizon (plus slack for
+    // a missed night) holds only rows past every line, which earlier sweeps already took. Probing
+    // all of them every night is what made this sweep take hours. The weekly full walk catches
+    // anything this misses.
+    //
+    // Raw SQL for the cursor's sake: written as a row comparison, (firstSeenAt, id) > (the last
+    // page's), the planner makes it a bound on Token_firstSeenAt_idx, so each page starts where
+    // the last ended. Prisma can only spell it `firstSeenAt > x OR (firstSeenAt = x AND id > y)`,
+    // which is a filter, not a bound: every page then scanned the index from the oldest token and
+    // threw away everything before the cursor, and the ~2,600 pages of a night re-read ~260 k
+    // entries each - most of the run's 500 s (db audit 2026-10-16, C4).
+    const tokens: { id: string; firstSeenAt: Date }[] = await prisma.$queryRaw`
+      SELECT t."id", t."firstSeenAt" FROM "Token" t
+      WHERE t."firstSeenAt" < ${walkCutoff}
+        ${fullWalk ? Prisma.empty : Prisma.sql`AND (t."lastLiveAt" >= ${activeSince} OR t."lastViewedAt" >= ${activeSince})`}
+        ${after ? Prisma.sql`AND (t."firstSeenAt", t."id") > (${after.firstSeenAt}, ${after.id})` : Prisma.empty}
+      ORDER BY t."firstSeenAt", t."id"
+      LIMIT ${opts.tokensPerBatch}`;
     if (tokens.length === 0) return { expired: total, untracked, downsampled };
     // Only the tokens still holding a row past the shortest line get the four statements below.
     // After the first sweep that is a small share of them - an untracked token's rows go at 48
@@ -473,6 +470,8 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // its own references and none depends on another having finished. The failed stages are still
   // reported at the end, on the heartbeat's lastError - see the end of the run.
   const failedStages: Record<string, string> = {};
+  /** What each stage took, reported with the counts: they alone do not say where a run's time went. */
+  const stageDurationsMs: Record<string, number> = {};
   let stagesRun = 0;
   // A run cut off earlier (a deploy, a restart) leaves the stages it finished on the heartbeat
   // row; this run skips those and picks up from the first one it didn't - see RESUME_WINDOW_MS.
@@ -491,14 +490,17 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   ): Promise<T> => {
     if (progress.done.includes(name)) return whenDone;
     stagesRun += 1;
+    const begun = Date.now();
     try {
       const result = await run();
+      stageDurationsMs[name] = Date.now() - begun;
       progress.done.push(name);
       await writeResumeState(progress).catch((err: unknown) =>
         logger.warn("failed to note cleanup progress", { stage: name, error: String(err) }),
       );
       return result;
     } catch (err) {
+      stageDurationsMs[name] = Date.now() - begun;
       failedStages[name] = err instanceof Error ? err.message : String(err);
       logger.error("cleanup stage failed - continuing with the rest", { stage: name, error: String(err) });
       return fallback;
@@ -748,7 +750,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedFilterBaselines,
     deletedTelegramAlertsSent,
     deletedBubbleMaps,
-    ,
+    deletedBubbleMapsAtAlert,
     deletedBubbleMoments,
   ] = await Promise.all([
     stage("linkCodes", none, () =>
@@ -873,9 +875,15 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // ...unless the coin itself is gone: the stale-token sweep above removed its Token row (nothing
   // referenced it after STALE_TOKEN_RETENTION_DAYS), so the row's derived columns have no coin to
   // describe and nothing reads them past the Lighthouse's 72-hour window. Same age bar as the
-  // tokens, so a narrative read is never dropped ahead of its coin.
+  // tokens, so a narrative read is never dropped ahead of its coin. Nightly, this and the strip
+  // below walk the few days of reads that newly crossed their line (a coin's read follows its first
+  // sighting by minutes, so its narrative crosses the night after its Token went); the weekly full
+  // walk takes the rest, such as a narrative whose Token went later because a reference it held
+  // ran out - see forEachNarrativePage.
+  const narrativeSince = (cutoff: Date) => (fullWalk ? new Date(0) : new Date(cutoff.getTime() - 3 * DAY_MS));
   const deletedOrphanNarratives = await stage("orphanNarratives", 0, () =>
-    forEachOldNarrativePage(
+    forEachNarrativePage(
+      narrativeSince(tokenCutoff),
       tokenCutoff,
       batch,
       (mints) =>
@@ -885,12 +893,12 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
           AND NOT EXISTS (SELECT 1 FROM "Token" t WHERE t."mintAddress" = n."mintAddress")`,
     ),
   );
-  // The raw document of a coin that never reached the band, two days after the read. Every row
-  // older than the bar is walked, nightly: the walk is one pass over the primary key, and after the
-  // first night only the newest day's rows still hold a document.
+  // The raw document of a coin that never reached the band, two days after the read. Only rows
+  // still holding a document are walked: after the first night, the newest day's.
   const untrackedDocCutoff = new Date(startedAt - NARRATIVE_UNTRACKED_DOC_RETENTION_HOURS * 3_600_000);
   const strippedUntrackedNarrativeDocs = await stage("untrackedNarrativeDocs", 0, () =>
-    forEachOldNarrativePage(
+    forEachNarrativePage(
+      narrativeSince(untrackedDocCutoff),
       untrackedDocCutoff,
       batch,
       (mints) =>
@@ -900,6 +908,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
           AND n."analysis" IS NOT NULL
           AND NOT EXISTS (
             SELECT 1 FROM "Token" t WHERE t."mintAddress" = n."mintAddress" AND t."firstInBandAt" IS NOT NULL)`,
+      { withDocument: true },
     ),
   );
   // Nightly, only the few days that newly crossed the line: re-reading every older row for a NULL
@@ -941,6 +950,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedFilterBaselines: deletedFilterBaselines.count,
     deletedTelegramAlertsSent: deletedTelegramAlertsSent.count,
     deletedBubbleMaps: deletedBubbleMaps.count,
+    deletedBubbleMapsAtAlert: deletedBubbleMapsAtAlert.count,
     deletedBubbleMoments,
     deletedTokens: deletedTokens.count,
     deletedWalletCache: deletedWalletCache.count,
@@ -955,6 +965,19 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   // The run reached its end: tomorrow's starts from the first stage again.
   await writeResumeState(null).catch(() => {});
   if (skippedStages.length > 0) Object.assign(counts, { resumedSkippedStages: skippedStages.join(", ") });
+  // The stages held back because the match copies did not land (see matchOutcomeCopies), so their
+  // 0 reads as "not run" rather than "nothing old enough yet".
+  if (!matchCopiesLanded)
+    Object.assign(counts, {
+      heldStages: [
+        archiveDays > 0 ? "matchArchive" : null,
+        "candidateOutcomes",
+        env.MATCH_OUTCOME_RETENTION_DAYS > 0 ? "matchOutcomes" : null,
+      ]
+        .filter((name) => name !== null)
+        .join(", "),
+    });
+  Object.assign(counts, { stageDurationsMs });
   const failed = Object.keys(failedStages);
   if (failed.length > 0) {
     logger.error("cleanup job finished with failed stages", {

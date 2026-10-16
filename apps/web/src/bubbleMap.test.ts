@@ -37,6 +37,8 @@ import {
   regroupLayout,
   kolBundleNodes,
   transferCurve,
+  transferRoutes,
+  routePoints,
   transfersOfNode,
   needsRegroup,
 } from "./bubbleMap";
@@ -495,6 +497,62 @@ describe("holder transfers", () => {
     expect(g.transferLinks).toEqual([]);
     expect(g.transferPct).toBeNull();
     expect(g.transferCount).toBeNull();
+  });
+  it("routes an arrow round a bubble in its way, and keeps a two-way pair's arcs apart", () => {
+    const node = (id: string, x: number, y: number, r: number) =>
+      ({ id, x, y, r, flags: [], trait: null }) as unknown as MapNode;
+    const a = node("a", 0, 0, 10);
+    const b = node("b", 120, 0, 10);
+    // A bubble right where the plain bow (to the sender's right, +y here) passes.
+    const block = node("x", 60, 24, 12);
+    const one = transferRoutes({
+      nodes: [a, b, block],
+      transferLinks: [{ from: "a", to: "b", pct: 1, count: 1, lastAtMs: null }],
+    });
+    const r = one.get("a>b")!;
+    expect(r.cy).toBeLessThan(0);
+    expect(routePoints(r).every((p) => Math.hypot(p.x - block.x, p.y - block.y) > block.r)).toBe(true);
+    const two = transferRoutes({
+      nodes: [a, b],
+      transferLinks: [
+        { from: "a", to: "b", pct: 1, count: 1, lastAtMs: null },
+        { from: "b", to: "a", pct: 1, count: 1, lastAtMs: null },
+      ],
+    });
+    expect(Math.sign(two.get("a>b")!.cy)).toBe(-Math.sign(two.get("b>a")!.cy));
+  });
+  it("lays the map out with no bubble under a transfer arrow, and no pill on one", () => {
+    const g = buildGraph({
+      linkedHolders: [
+        { wallet: A, pct: 5 },
+        { wallet: B, pct: 3 },
+        { wallet: C, pct: 2 },
+        ...Array.from({ length: 12 }, (_, i) => ({ wallet: `w${i}`, pct: 1 })),
+      ],
+      top10HolderPct: null,
+      top10WalletsChecked: null,
+      holderTransfers: [
+        { from: A, to: B, pct: 2, count: 1 },
+        { from: B, to: C, pct: 1, count: 1 },
+        { from: C, to: A, pct: 1, count: 1 },
+      ],
+    });
+    const map = regroupLayout(g, { transfers: true });
+    const routes = transferRoutes(map);
+    for (const [key, r] of routes) {
+      const [from, to] = key.split(">");
+      for (const n of map.nodes) {
+        if (n.id === from || n.id === to) continue;
+        for (const p of routePoints(r)) expect(Math.hypot(p.x - n.x, p.y - n.y)).toBeGreaterThan(n.r);
+      }
+    }
+    const [placed] = placeLabels(map, [{ id: "pill", x: 0, y: 0, r: 0, w: 60, h: 16 }], routes);
+    for (const r of routes.values()) {
+      for (const p of routePoints(r)) {
+        const inside = Math.abs(p.x - placed!.x) < placed!.w / 2 && Math.abs(p.y - placed!.y) < placed!.h / 2;
+        expect(inside).toBe(false);
+      }
+    }
   });
   it("bends each direction to its own side and stops at the bubbles' edges", () => {
     const a = { x: 0, y: 0, r: 10 };

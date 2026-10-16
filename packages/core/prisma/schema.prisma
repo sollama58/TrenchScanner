@@ -2461,6 +2461,20 @@ model TokenTradeTape {
   readAt    DateTime  @default(now())
   retryAt   DateTime?
 
+  /// The closing read (worker tradeTapeJob.ts, user ask 2026-10-16): once the coin is past its
+  /// 24-hour tracking window and under LOW_CAP_MCAP_USD, its trades from windowEnd to closedThrough
+  /// are read once and folded into the wallets already on the tape (TokenWalletActivity), so a
+  /// wallet that sold after the window shows those sells instead of reading as still holding.
+  /// Null: not tried yet. "done": folded in. "waiting": still over the floor, looked at again
+  /// after closeRetryAt. "busy": too many trades to read within the per-coin cap, left as it was.
+  /// "failed": the read failed, retried after closeRetryAt.
+  closeStatus   String?
+  closeRetryAt  DateTime?
+  closedThrough DateTime?
+  /// Trades the closing read found after windowEnd (on any wallet), and the Helius pages it took.
+  closeTrades   Int?
+  closeCalls    Int?
+
   @@index([readAt])
   @@index([status, retryAt])
 }

@@ -220,7 +220,10 @@ export function pill(
 }
 
 /** Loads the app icon and waits for the card fonts, then returns a blank card-sized canvas. */
-export async function cardCanvas(): Promise<{
+export async function cardCanvas(
+  /** Pixels per card unit: 2 draws a 2400x1350 image on the same 1200x675 layout. */
+  scale = 1,
+): Promise<{
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D | null;
   icon: HTMLImageElement | null;
@@ -232,7 +235,9 @@ export async function cardCanvas(): Promise<{
     document.fonts?.load(`500 20px ${MONO}`).catch(() => undefined),
   ]);
   const canvas = document.createElement("canvas");
-  canvas.width = CARD_W;
-  canvas.height = CARD_H;
-  return { canvas, ctx: canvas.getContext("2d"), icon };
+  canvas.width = Math.round(CARD_W * scale);
+  canvas.height = Math.round(CARD_H * scale);
+  const ctx = canvas.getContext("2d");
+  ctx?.scale(scale, scale);
+  return { canvas, ctx, icon };
 }

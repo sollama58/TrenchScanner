@@ -722,11 +722,13 @@ export function transferCurve(
   a: Pick<MapNode, "x" | "y" | "r">,
   b: Pick<MapNode, "x" | "y" | "r">,
   headGap = 2,
-): { x1: number; y1: number; cx: number; cy: number; x2: number; y2: number; angle: number } {
+  /** How far the curve bows, as a share of the distance; negative bows to the sender's left. */
+  bend = 0.2,
+): TransferRoute {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
-  const cx = (a.x + b.x) / 2 - dy * 0.2;
-  const cy = (a.y + b.y) / 2 + dx * 0.2;
+  const cx = (a.x + b.x) / 2 - dy * bend;
+  const cy = (a.y + b.y) / 2 + dx * bend;
   // Each end steps out of its bubble along the curve's tangent there.
   const out = (n: Pick<MapNode, "x" | "y" | "r">, gap: number) => {
     const tx = cx - n.x;
@@ -737,6 +739,152 @@ export function transferCurve(
   const p1 = out(a, 1.5);
   const p2 = out(b, headGap);
   return { x1: p1.x, y1: p1.y, cx, cy, x2: p2.x, y2: p2.y, angle: Math.atan2(p2.y - cy, p2.x - cx) };
+}
+
+/** A transfer arrow's drawn curve (transferCurve). */
+export interface TransferRoute {
+  x1: number;
+  y1: number;
+  cx: number;
+  cy: number;
+  x2: number;
+  y2: number;
+  angle: number;
+}
+
+/** The bows tried for an arrow, the plain one first; a pair sent both ways keeps to the wider ones. */
+const TRANSFER_BENDS = [0.2, -0.2, 0.32, -0.32, 0.12, -0.12, 0.45, -0.45] as const;
+
+/** Points along a quadratic route, its ends left out. */
+export function routePoints(r: TransferRoute, step = 3): { x: number; y: number }[] {
+  const n = Math.max(6, Math.ceil(Math.hypot(r.x2 - r.x1, r.y2 - r.y1) / step));
+  const out: { x: number; y: number }[] = [];
+  for (let i = 0; i <= n; i += 1) {
+    const t = i / n;
+    out.push({
+      x: (1 - t) * (1 - t) * r.x1 + 2 * (1 - t) * t * r.cx + t * t * r.x2,
+      y: (1 - t) * (1 - t) * r.y1 + 2 * (1 - t) * t * r.cy + t * t * r.y2,
+    });
+  }
+  return out;
+}
+
+/**
+ * Each transfer arrow's route, by "from>to" (user ask 2026-10-16: arrows neither hidden by nor
+ * hiding anything). The arrows run under the bubbles, so each takes the bow, of a few, that passes
+ * under the fewest other bubbles; a pair sent both ways keeps its two arcs on opposite sides.
+ */
+export function transferRoutes(
+  graph: Pick<BubbleGraph, "nodes" | "transferLinks">,
+  headGap = 1.2,
+): Map<string, TransferRoute> {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const key = (from: string, to: string) => `${from}>${to}`;
+  const have = new Set(graph.transferLinks.map((l) => key(l.from, l.to)));
+  // The badges on bubbles' rims (a trait's bottom right, a risk or DEV mark's top right), drawn over
+  // the arrows: an arrow leaving its own bubble shouldn't run under its badge either.
+  const badges = graph.nodes.flatMap((n) => [
+    ...(n.trait ? [{ x: n.x + n.r * 0.72, y: n.y + n.r * 0.72, r: 9 }] : []),
+    ...(n.flags.length > 0 ? [{ x: n.x + n.r * 0.72, y: n.y - n.r * 0.72, r: 11 }] : []),
+  ]);
+  /** What a route passes under: other bubbles (with a little room round each), and badges. */
+  const covered = (r: TransferRoute, a: string, b: string): number => {
+    const pts = routePoints(r, 4);
+    let c = 0;
+    for (const n of graph.nodes) {
+      if (n.id === a || n.id === b) continue;
+      const reach = n.r + 3;
+      if (pts.some((p) => (p.x - n.x) ** 2 + (p.y - n.y) ** 2 < reach * reach)) c += 5;
+    }
+    for (const k of badges) if (pts.some((p) => (p.x - k.x) ** 2 + (p.y - k.y) ** 2 < k.r * k.r)) c += 1;
+    return c;
+  };
+  /** Arrows already routed, as polylines: crossing one costs a little, so arrows cross only where they must. */
+  const drawn: { x: number; y: number }[][] = [];
+  const crossings = (r: TransferRoute): number => {
+    const pts = routePoints(r, 6);
+    let c = 0;
+    for (const other of drawn) {
+      cross: for (let i = 1; i < pts.length; i += 1) {
+        for (let j = 1; j < other.length; j += 1) {
+          if (segmentsCross(pts[i - 1]!, pts[i]!, other[j - 1]!, other[j]!)) {
+            c += 1;
+            break cross;
+          }
+        }
+      }
+    }
+    return c * 0.5;
+  };
+  /** A route whose tail or tip lands under a badge, starting or ending just past it instead. */
+  const clearOfBadges = (r: TransferRoute): TransferRoute => {
+    const pts = routePoints(r, 1);
+    const free = (p: { x: number; y: number }) =>
+      badges.every((k) => (p.x - k.x) ** 2 + (p.y - k.y) ** 2 >= k.r * k.r);
+    const i = pts.findIndex(free);
+    const j = pts.length - 1 - [...pts].reverse().findIndex(free);
+    // Moved only by the short way round a badge, never along most of the arrow.
+    if (i <= 0 && j >= pts.length - 1) return r;
+    if (i < 0 || j - i < pts.length / 2) return r;
+    const tip = pts[j]!;
+    const before = pts[Math.max(i, j - 2)]!;
+    return {
+      ...r,
+      x1: pts[i]!.x,
+      y1: pts[i]!.y,
+      x2: tip.x,
+      y2: tip.y,
+      angle: j < pts.length - 1 ? Math.atan2(tip.y - before.y, tip.x - before.x) : r.angle,
+    };
+  };
+  const out = new Map<string, TransferRoute>();
+  for (const l of graph.transferLinks) {
+    if (out.has(key(l.from, l.to))) continue;
+    const a = byId.get(l.from);
+    const b = byId.get(l.to);
+    if (!a || !b) continue;
+    const both = have.has(key(l.to, l.from));
+    let best: { bend: number; c: number } | null = null;
+    for (const bend of TRANSFER_BENDS) {
+      // Two arcs need the room between them: no shallow bow for a pair sent both ways.
+      if (both && Math.abs(bend) < 0.2) continue;
+      const there = transferCurve(a, b, headGap, bend);
+      let c = covered(there, a.id, b.id) + crossings(there);
+      // The same bow seen from the receiver lands on the other side, so the two arcs stay apart.
+      if (both) {
+        const back = transferCurve(b, a, headGap, bend);
+        c += covered(back, b.id, a.id) + crossings(back);
+      }
+      // The plain bow wins a tie; the others pay a little for their shape.
+      const s = c + (bend === 0.2 ? 0 : Math.abs(bend) === 0.2 ? 0.1 : 0.2);
+      if (!best || s < best.c) best = { bend, c: s };
+    }
+    const there = clearOfBadges(transferCurve(a, b, headGap, best!.bend));
+    out.set(key(l.from, l.to), there);
+    drawn.push(routePoints(there, 6));
+    if (both) {
+      const back = clearOfBadges(transferCurve(b, a, headGap, best!.bend));
+      out.set(key(l.to, l.from), back);
+      drawn.push(routePoints(back, 6));
+    }
+  }
+  return out;
+}
+
+/** Whether segment p1-p2 crosses segment q1-q2 (touching ends aside). */
+function segmentsCross(
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+  q1: { x: number; y: number },
+  q2: { x: number; y: number },
+): boolean {
+  const side = (a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }) =>
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  const d1 = side(q1, q2, p1);
+  const d2 = side(q1, q2, p2);
+  const d3 = side(p1, p2, q1);
+  const d4 = side(p1, p2, q2);
+  return d1 * d2 < 0 && d3 * d4 < 0;
 }
 
 /**
@@ -1048,8 +1196,13 @@ export function layoutGraph(
     ...graph.sameTimeLinks,
     ...(opts.cex ? graph.cexLinks : []),
     ...(opts.sideTies ?? []),
-    ...(opts.transferTies ?? []),
   ].flatMap((l) => {
+    const a = index.get(l.from);
+    const b = index.get(l.to);
+    return a && b && a !== b ? [[a, b] as const] : [];
+  });
+  // The transfer arrows bow (transferCurve), so bubbles are kept off the arc itself, each way drawn.
+  const arcs = (opts.transferTies ?? []).flatMap((l) => {
     const a = index.get(l.from);
     const b = index.get(l.to);
     return a && b && a !== b ? [[a, b] as const] : [];
@@ -1228,6 +1381,9 @@ export function layoutGraph(
         }
       }
     }
+    // Transfer arrows: a bubble under an arrow's arc moves off it, with room for the arrow's glow
+    // (user ask 2026-10-16: no arrow hidden under a bubble, none drawn across one).
+    if (it >= iterations * 0.3) pushOffArcs(arcs, nodes, 0.3);
     // The pills' room: each pulled to its anchor or its wallets, kept clear of bubbles and of
     // each other, so the labels land beside what they name (user ask 2026-10-15).
     if (it > 0 && it % 40 === 0) for (const r of rooms) aimRoom(r, nodes);
@@ -1241,14 +1397,78 @@ export function layoutGraph(
     collide(nodes);
   }
   // The rooms pushed some bubbles about: part any that ended up touching, then settle the rooms
-  // round the bubbles as they now stand.
+  // round the bubbles as they now stand. With arrows drawn, bubbles still under one are moved off
+  // it in turn, so nothing a collision undoes is left.
   for (let i = 0; i < 30; i += 1) collide(nodes);
+  if (arcs.length > 0) {
+    for (let i = 0; i < 80; i += 1) {
+      pushOffArcs(arcs, nodes, 0.5);
+      collide(nodes);
+    }
+  }
   for (const r of rooms) aimRoom(r, nodes);
   for (let i = 0; i < 40; i += 1) stepRooms(rooms, nodes, fundingLines, true);
   // Then only out of the way, so no room is left a step inside a bubble's berth.
   for (let i = 0; i < 12; i += 1) stepRooms(rooms, nodes, fundingLines, true, false);
   graph.labelSpots = new Map(rooms.map((r) => [r.id, { x: r.x, y: r.y }]));
   return graph;
+}
+
+/** How far a transfer arrow's arc keeps off any other bubble's edge, map units: its glow is wide. */
+const ARROW_CLEARANCE = 9;
+
+/**
+ * Moves each bubble lying under a transfer arrow's arc off it, the arrow's ends giving a little the
+ * other way. `strength`: the share of the overlap made up each call.
+ */
+function pushOffArcs(
+  arcs: readonly (readonly [MapNode, MapNode])[],
+  nodes: readonly MapNode[],
+  strength: number,
+) {
+  for (const [a, b] of arcs) {
+    const pts = arcPoints(a, b);
+    for (const n of nodes) {
+      if (n === a || n === b) continue;
+      let hit = { x: 0, y: 0, d: Infinity, t: 0 };
+      pts.forEach((p, i) => {
+        const d = Math.hypot(n.x - p.x, n.y - p.y);
+        if (d < hit.d) hit = { x: p.x, y: p.y, d, t: i / (pts.length - 1) };
+      });
+      const want = n.r + ARROW_CLEARANCE;
+      if (hit.d >= want) continue;
+      let dx = n.x - hit.x;
+      let dy = n.y - hit.y;
+      let dist = hit.d;
+      if (dist < 0.01) {
+        dx = -(b.y - a.y);
+        dy = b.x - a.x;
+        dist = Math.hypot(dx, dy) || 1;
+      }
+      const push = ((want - dist) / dist) * strength;
+      n.x += dx * push;
+      n.y += dy * push;
+      a.x -= dx * push * 0.15 * (1 - hit.t);
+      a.y -= dy * push * 0.15 * (1 - hit.t);
+      b.x -= dx * push * 0.15 * hit.t;
+      b.y -= dy * push * 0.15 * hit.t;
+    }
+  }
+}
+
+/** Points along the arc a transfer arrow draws from a to b (transferCurve's plain bow), centre to centre. */
+function arcPoints(a: Pick<MapNode, "x" | "y">, b: Pick<MapNode, "x" | "y">): { x: number; y: number }[] {
+  const cx = (a.x + b.x) / 2 - (b.y - a.y) * 0.2;
+  const cy = (a.y + b.y) / 2 + (b.x - a.x) * 0.2;
+  const out: { x: number; y: number }[] = [];
+  for (let i = 0; i <= 12; i += 1) {
+    const t = i / 12;
+    out.push({
+      x: (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * cx + t * t * b.x,
+      y: (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * cy + t * t * b.y,
+    });
+  }
+  return out;
 }
 
 /** Whether a bubble wears a ring past its edge: a same-minute group's, or a risky wallet's. */
@@ -1570,6 +1790,8 @@ export interface PlacedLabel {
 export function placeLabels(
   graph: Pick<BubbleGraph, "nodes" | "links" | "labelSpots">,
   labels: readonly MapLabel[],
+  /** The transfer arrows drawn (transferRoutes): a pill keeps well off them. */
+  transfers?: ReadonlyMap<string, TransferRoute> | null,
 ): PlacedLabel[] {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   // Every drawn line as sample points (funding links bend, as the map draws them).
@@ -1592,6 +1814,10 @@ export function placeLabels(
     const b = byId.get(l.to);
     if (a && b) sample(a.x, a.y, b.x, b.y, 0.12);
   }
+  // The transfer arrows, each point costing several of a plain line's: a pill on one hides its head
+  // or its flow (user ask 2026-10-16).
+  const arrows: { x: number; y: number }[] = [];
+  for (const r of transfers?.values() ?? []) arrows.push(...routePoints(r, 3));
   // Bubbles with their rings (same-minute and risk rings reach about 9 past the edge, plus their stroke).
   const circles = graph.nodes.map((n) => ({
     id: n.id,
@@ -1636,6 +1862,7 @@ export function placeLabels(
       if (Math.abs(p.x - x) * 2 < p.w + w + 4 && Math.abs(p.y - y) * 2 < p.h + h + 4) c += 30;
     }
     for (const p of points) if (p.x > x0 && p.x < x1 && p.y > y0 && p.y < y1) c += 1;
+    for (const p of arrows) if (p.x > x0 - 2 && p.x < x1 + 2 && p.y > y0 - 2 && p.y < y1 + 2) c += 5;
     return c;
   };
   // Below, above, right, left, then the diagonals.

@@ -2347,6 +2347,11 @@ g:hover > .hit {
 .share-modal {
   width: min(760px, calc(100vw - 32px));
 }
+/* A wide share image (the bubble map's) previews near full size: as wide as the screen allows
+   while the whole dialog still fits its height (user ask 2026-10-16). */
+.share-modal.wide {
+  width: min(1280px, calc(100vw - 32px), calc((100dvh - 210px) * 16 / 9 + 50px));
+}
 .share-modal .about-head h3 {
   margin: 0;
 }
@@ -6550,6 +6555,17 @@ html:has(dialog.about-modal[open]) {
 /* A line under a checkbox saying what it does on its own (the Narrative toggle's automatic rule). */
 .appearance-controls .check-hint {
   margin: -8px 0 0;
+}
+/* The bubble maps' names, kind by kind, set in under the one switch. */
+.appearance-controls .check-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  margin: -6px 0 0 24px;
+}
+.appearance-controls .check-sub > span {
+  flex-basis: 100%;
 }
 .preset-options {
   display: grid;
@@ -11314,6 +11330,17 @@ img.tm-avatar {
 .switch.bm-toggle:not(.on) .bm-cex-key {
   opacity: 0.45;
 }
+/* The names switch's key: a small name pill, green like a Pump.fun name. */
+.switch.bm-toggle .bm-name-key {
+  width: 16px;
+  height: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--good, #22c55e) 55%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good, #22c55e) 80%, transparent);
+}
+.switch.bm-toggle:not(.on) .bm-name-key {
+  opacity: 0.45;
+}
 .bm-cex-key {
   width: 18px;
   border-top: 2px dashed var(--bm-cex);
@@ -12159,11 +12186,11 @@ button.bm-same {
   margin-top: 0;
 }
 .bm-stage.compact .bm-svg {
-  height: min(320px, 44dvh);
+  height: min(360px, 48dvh);
 }
 @media (max-width: 640px) {
   .bm-stage.compact .bm-svg {
-    height: min(280px, 40dvh);
+    height: min(320px, 44dvh);
   }
 }
 
@@ -12353,11 +12380,11 @@ button.bm-same {
   margin-top: 0;
 }
 .tm-holders .bm-stage.compact .bm-svg {
-  height: min(560px, 64dvh);
+  height: min(640px, 70dvh);
 }
 @media (max-width: 480px) {
   .tm-holders .bm-stage.compact .bm-svg {
-    height: min(400px, 52dvh);
+    height: min(460px, 58dvh);
   }
 }
 .th-list {

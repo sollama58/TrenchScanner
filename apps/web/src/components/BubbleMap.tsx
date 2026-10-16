@@ -52,6 +52,8 @@ import {
   traitShares,
   type WalletTrait,
   transferCurve,
+  transferRoutes,
+  type TransferRoute,
   transfersOfNode,
   transferWidth,
   type TransferLink,
@@ -64,6 +66,7 @@ import {
   isUsername,
   useWalletNames,
   walletText,
+  type WalletName,
   type WalletNames,
 } from "../walletNames";
 import { WalletText } from "./WalletText";
@@ -145,6 +148,53 @@ function useTransferToggle(graph: BubbleGraph | null): {
   };
 }
 
+interface NameToggle {
+  /** The names the map, its lists and its share image use: every name, or without the hidden kinds. */
+  mapNames: WalletNames;
+  /** Whether the map's one switch shows: the map has a name it would hide, and Settings doesn't set them kind by kind. */
+  hasSwitchable: boolean;
+  showNames: boolean;
+  setNamesOn: (on: boolean) => void;
+}
+
+type SwitchableSource = "pumpfun" | "fomo" | "identity";
+const SWITCHABLE_NAMES: ReadonlySet<WalletName["source"]> = new Set<SwitchableSource>([
+  "pumpfun",
+  "fomo",
+  "identity",
+]);
+
+/**
+ * Whether the Pump.fun, FOMO and Helius names show on the map (user ask 2026-10-16): on by
+ * default, switchable on the map, with the default in Settings. Settings can also set each kind on
+ * its own, and then the map has no switch for them. KOLs' names and exchanges' always show: an
+ * exchange that funded holders keeps its Helius name. Held above the map so its share image follows
+ * it too. `mapNames` is what the map, its lists and the share image name wallets by.
+ */
+function useNameToggle(graph: BubbleGraph | null, names: WalletNames): NameToggle {
+  const { bubbleNameLabels, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius } = useAppearance();
+  const [on, setNamesOn] = useState<boolean | null>(null);
+  const split = bubbleNamesPumpfun !== null || bubbleNamesFomo !== null || bubbleNamesHelius !== null;
+  const showNames = split ? bubbleNameLabels : (on ?? bubbleNameLabels);
+  return useMemo(() => {
+    const shows: Record<SwitchableSource, boolean> = {
+      pumpfun: bubbleNamesPumpfun ?? showNames,
+      fomo: bubbleNamesFomo ?? showNames,
+      identity: bubbleNamesHelius ?? showNames,
+    };
+    const exchanges = new Set(graph?.cexLinks.map((l) => l.funder) ?? []);
+    const switchable = Object.keys(names).filter(
+      (w) => SWITCHABLE_NAMES.has(names[w]!.source) && !exchanges.has(w),
+    );
+    const hidden = switchable.filter((w) => !shows[names[w]!.source as SwitchableSource]);
+    const hasSwitchable = !split && switchable.length > 0;
+    if (hidden.length === 0) return { mapNames: names, hasSwitchable, showNames, setNamesOn };
+    const kept: Record<string, WalletName> = { ...names };
+    for (const w of hidden) delete kept[w];
+    return { mapNames: kept, hasSwitchable, showNames, setNamesOn };
+  }, [graph, names, showNames, split, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius]);
+}
+
 /**
  * KOLs' possible side wallets among the holders (the Side Wallet Checker's recent matches), and
  * whether their ties show: on by default, switchable like the exchange ties (user ask 2026-10-14).
@@ -210,11 +260,14 @@ function MapView({
   showTransfers,
   setTransfersOn,
   side,
+  nameToggle,
   flags,
   scanKolBundled,
 }: {
   graph: BubbleGraph;
   names: WalletNames;
+  /** Whether the Pump.fun, FOMO and Helius names show (useNameToggle). */
+  nameToggle: NameToggle;
   /** Whether the same-exchange ties show (useCexToggle). */
   showCex: boolean;
   setCexOn: (on: boolean) => void;
@@ -404,7 +457,10 @@ function MapView({
           </dd>
         </div>
       </dl>
-      {(graph.cexLinks.length > 0 || groups.length > 0 || graph.transferLinks.length > 0) && (
+      {(graph.cexLinks.length > 0 ||
+        groups.length > 0 ||
+        graph.transferLinks.length > 0 ||
+        nameToggle.hasSwitchable) && (
         <div className="bm-toggles">
           {graph.transferLinks.length > 0 && (
             <MapToggle
@@ -427,6 +483,15 @@ function MapView({
               keyClass="bm-cex-key bm-side-key"
             >
               KOL side wallets
+            </MapToggle>
+          )}
+          {nameToggle.hasSwitchable && (
+            <MapToggle
+              on={nameToggle.showNames}
+              onToggle={() => nameToggle.setNamesOn(!nameToggle.showNames)}
+              keyClass="bm-name-key"
+            >
+              Pump.fun / FOMO / Helius names
             </MapToggle>
           )}
         </div>
@@ -859,6 +924,11 @@ function BubbleSvg({
   const uid = useId().replace(/:/g, "");
   const index = new Map(graph.nodes.map((n) => [n.id, n]));
   const cexSlot = useMemo(() => cexSlots(graph), [graph]);
+  // Each transfer arrow's route, clear of other bubbles (user ask 2026-10-16); the pills keep off them.
+  const routes = useMemo(
+    () => (transfers && graph.transferLinks.length > 0 ? transferRoutes(graph) : null),
+    [graph, transfers],
+  );
   // Funders' names, each exchange's name when its ties show, and each same-minute group's, as pills
   // placed where they cover nothing (user ask 2026-10-14: they sat on bubbles, text and lines). An
   // exchange's and a group's pill is a hub, tied to each of its wallets by a line, as a funder is.
@@ -935,8 +1005,8 @@ function BubbleSvg({
         hub(`cex:${g.funder}`, [...g.nodes], text, "cex", `var(--bm-cex-${cexSlot.get(g.funder) ?? 0})`);
       }
     }
-    return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list) };
-  }, [graph, names, cexLinks, cexSlot, kolSides, kols]);
+    return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list, routes) };
+  }, [graph, names, cexLinks, cexSlot, kolSides, kols, routes]);
   const box = graphBounds(graph, 18, placed);
   const dim = (n: MapNode) => lit !== null && n.cluster !== lit;
   // Bigger bubbles first so the small ones draw on top and stay tappable.
@@ -1086,7 +1156,14 @@ function BubbleSvg({
           })}
         </g>
         {transfers && graph.transferLinks.length > 0 && (
-          <TransferArrows graph={graph} index={index} names={names} picked={picked} lit={lit} />
+          <TransferArrows
+            graph={graph}
+            index={index}
+            routes={routes}
+            names={names}
+            picked={picked}
+            lit={lit}
+          />
         )}
         {order.map((n, i) => (
           <g
@@ -1169,12 +1246,14 @@ function TransferArrow() {
 function TransferArrows({
   graph,
   index,
+  routes,
   names,
   picked,
   lit,
 }: {
   graph: BubbleGraph;
   index: ReadonlyMap<string, MapNode>;
+  routes: ReadonlyMap<string, TransferRoute> | null;
   names: WalletNames;
   picked: string | null;
   lit: number | null;
@@ -1186,7 +1265,7 @@ function TransferArrows({
     const w = transferWidth(l.pct);
     const head = 4 + w * 1.5;
     const half = 2.4 + w * 0.85;
-    const c = transferCurve(a, b, 1.2);
+    const c = routes?.get(`${l.from}>${l.to}`) ?? transferCurve(a, b, 1.2);
     // The line stops at the head's base, so the head's tip sits on the receiver's edge.
     const ux = Math.cos(c.angle);
     const uy = Math.sin(c.angle);
@@ -1704,7 +1783,8 @@ export function BubbleMapSection({
     () => (snapshot ? layoutGraph(buildGraph(withWideMap(snapshot, wide), flagged)) : null),
     [snapshot, wide, flagged],
   );
-  const names = useGraphNames(graph);
+  const nameToggle = useNameToggle(graph, useGraphNames(graph));
+  const names = nameToggle.mapNames;
   const { showCex, setCexOn } = useCexToggle(graph);
   const { showTransfers, setTransfersOn } = useTransferToggle(graph);
   const side = useSideToggle(graph);
@@ -1746,6 +1826,7 @@ export function BubbleMapSection({
             fileName={`trenchscanner-bubbles-${(token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
             caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
             iconOnly
+            wide
             render={() =>
               renderBubbleCard(graph, token, names, {
                 cex: showCex,
@@ -1767,6 +1848,7 @@ export function BubbleMapSection({
         showTransfers={showTransfers}
         setTransfersOn={setTransfersOn}
         side={side}
+        nameToggle={nameToggle}
         flags={flags}
         scanKolBundled={snapshot?.kolBundledPct ?? null}
       />
