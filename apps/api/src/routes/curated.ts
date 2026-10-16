@@ -38,6 +38,7 @@ import {
   lighthouseSignalsQuerySchema,
 } from "../marketLighthouse.js";
 import { createLighthouseHistoryCache, lighthouseHistoryQuerySchema } from "../lighthouseHistory.js";
+import { createWalletScorecardsCache, walletScorecardsQuerySchema } from "../walletScorecards.js";
 import { createTokenSageShowcaseCache } from "../tokenSageShowcase.js";
 import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
 import {
@@ -927,6 +928,17 @@ export async function registerCuratedRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     return opts.reports.lighthouseHistory(parsed.data);
+  });
+
+  /** The Lighthouse tab's "Wallets to watch": how the KOLs and top winners trade (walletScorecards.ts). */
+  const walletScorecards = createWalletScorecardsCache();
+  app.get("/lighthouse/wallets", async (request, reply) => {
+    const parsed = walletScorecardsQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    reply.header("Cache-Control", "private, max-age=300");
+    return walletScorecards(parsed.data.days, parsed.data.group);
   });
 
   // Every report a tab opens on is refilled before it expires, one at a time (keepWarm in
