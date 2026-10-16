@@ -252,7 +252,7 @@ export async function registerPaperTradingRoutes(
       ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
       ...(parsed.data.running !== undefined ? { running: parsed.data.running } : {}),
       // Starting reads signals from now: a strategy never buys a backlog.
-      ...(starting ? { signalsFrom: now, lastError: null } : {}),
+      ...(starting ? { signalsFrom: now, lossWindowFrom: now, lastError: null } : {}),
       ...(config ? { config: config as unknown as Prisma.InputJsonValue, configSavedAt: now } : {}),
     };
     const updated = await prisma.$transaction(async (tx) => {
@@ -293,6 +293,7 @@ export async function registerPaperTradingRoutes(
           cashLamports: bankroll,
           resetAt: now,
           signalsFrom: now,
+          lossWindowFrom: now,
           recentSkips: [],
           lastError: null,
         },

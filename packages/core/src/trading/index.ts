@@ -11,3 +11,4 @@ export * from "./txGuard.js";
 export * from "./serverWallet.js";
 export * from "./backtest.js";
 export * from "./paper.js";
+export * from "./tradeNotes.js";

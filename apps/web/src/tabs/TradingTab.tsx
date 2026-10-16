@@ -54,6 +54,8 @@ interface BotConfig {
   maxPriorityFeeSol: number;
   jitoTipSol: number;
   reserveSol: number;
+  dailyLossLimitSol: number;
+  notifyTelegram: boolean;
   exitPlan: ExitPlan | null;
   /** Paper strategies only: bps taken off each simulated fill. */
   fillPenaltyBps?: number;
@@ -889,6 +891,37 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
             </small>
           </label>
         </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Loss limit and alerts</legend>
+        <div className="grid2">
+          <label className="field">
+            <span>{paper ? "Stop" : "Pause"} after losing in 24h (SOL)</span>
+            <input
+              type="number"
+              step="any"
+              min={0}
+              value={draft.dailyLossLimitSol}
+              onChange={(e) => edit({ ...draft, dailyLossLimitSol: num(e.target.value) })}
+            />
+            <small className="faint">
+              Counts trades closed in the last 24 hours since it was last started. 0 is off. Open positions
+              keep their exit plans.
+            </small>
+          </label>
+        </div>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={draft.notifyTelegram}
+            onChange={(e) => edit({ ...draft, notifyTelegram: e.target.checked })}
+          />
+          Telegram alerts for each buy, sale and {paper ? "stop" : "pause"}
+        </label>
+        <p className="muted small">
+          Sent to the private chats linked to your account in Settings, never to a group.
+        </p>
       </fieldset>
 
       <fieldset>

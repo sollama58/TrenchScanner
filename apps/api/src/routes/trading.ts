@@ -395,7 +395,8 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     const data = {
       enabled,
       config: config as unknown as Prisma.InputJsonValue,
-      ...(turningOn ? { signalsFrom: new Date() } : {}),
+      // ...and the daily loss limit's count: a bot it paused can be switched back on.
+      ...(turningOn ? { signalsFrom: new Date(), lossWindowFrom: new Date() } : {}),
       // Saving the settings confirms the followed filters as they are now (see loadSignals).
       ...(parsed.data.config ? { configSavedAt: new Date() } : {}),
     };

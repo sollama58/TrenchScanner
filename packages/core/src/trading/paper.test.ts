@@ -4,6 +4,7 @@ import { generateWalletKeypair } from "./keyVault.js";
 import { NoRouteError, WSOL_MINT, type SwapQuote } from "./jupiterSwap.js";
 import type { MintInfo } from "./rpc.js";
 import { PROGRAM } from "./txGuard.js";
+import { sendTradeNotes, type TradeNote } from "./tradeNotes.js";
 import {
   paperStats,
   paperSwapFee,
@@ -134,7 +135,9 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
     canTrade: (w) => admins.has(w),
     now: () => clock,
     horizon: async (now) => now,
+    notify: async (n) => void notes.push(...n),
   });
+  let notes: TradeNote[] = [];
 
   beforeAll(async () => {
     userId = (await prisma.user.create({ data: { walletAddress: admin } })).id;
@@ -154,6 +157,7 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
     market.lamportsPerRaw.set(mint, 0.05); // 0.05 SOL buys 1e9 raw units (1,000 tokens)
     clock = new Date();
     admins = new Set([admin]);
+    notes = [];
     await prisma.paperStrategy.deleteMany({ where: { userId } });
     await prisma.curatedAlert.deleteMany({ where: { tokenId } });
     await prisma.aiReview.deleteMany({ where: { tokenId } });
@@ -164,7 +168,7 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
       data: {
         tokenId,
         source: "heuristic-v1",
-        model: "rules",
+        model: "paper-test",
         confidence: 80,
         anchorPriceUsd: 0.00001,
         anchorMcapUsd: 10_000,
@@ -180,7 +184,7 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
         cashLamports: SOL,
         signalsFrom: new Date(clock.getTime() - 60_000),
         config: {
-          sources: { models: ["rules"], requireAiBuy: false },
+          sources: { models: ["paper-test"], requireAiBuy: false },
           buySol: 0.05,
           fillPenaltyBps: 100,
           exitPlan: {
@@ -294,7 +298,10 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
 
   it("follows the AI gate and records why it passed", async () => {
     // No review, and the signal is past the age limit: skipped.
-    await strategyWithSignal({ sources: { models: ["rules"], requireAiBuy: true }, maxSignalAgeSeconds: 10 });
+    await strategyWithSignal({
+      sources: { models: ["paper-test"], requireAiBuy: true },
+      maxSignalAgeSeconds: 10,
+    });
     const summary = await runPaperTrading(deps());
     expect(summary.entries).toBe(0);
     const skips = (await strategy()).recentSkips as unknown as PaperSkip[];
@@ -303,7 +310,7 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
   });
 
   it("buys on an AI buy verdict", async () => {
-    await strategyWithSignal({ sources: { models: ["rules"], requireAiBuy: true } });
+    await strategyWithSignal({ sources: { models: ["paper-test"], requireAiBuy: true } });
     await prisma.aiReview.create({
       data: {
         tokenId,
@@ -343,5 +350,83 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
     const s = await strategy();
     expect(s.running).toBe(false);
     expect(s.lastError).toMatch(/no longer an admin/);
+  });
+  it("tells Telegram about its buys and sales, unless told not to", async () => {
+    await strategyWithSignal();
+    await runPaperTrading(deps());
+    market.lamportsPerRaw.set(mint, 0.02);
+    clock = new Date(clock.getTime() + 60_000);
+    await runPaperTrading(deps());
+    expect(notes.map((n) => n.userId)).toEqual([userId, userId]);
+    expect(notes[0]!.html).toMatch(
+      /^📝 <b>Paper · test<\/b>: bought <a href="https:\/\/solscan.io\/token\/\w+">\$PAPER<\/a> for 0.0500 SOL/,
+    );
+    expect(notes[1]!.html).toMatch(/sold .*\(stop loss\), 0\.0195 SOL back; closed −0\.0307 SOL/);
+
+    notes = [];
+    await prisma.paperStrategy.deleteMany({ where: { userId } });
+    await prisma.curatedAlert.deleteMany({ where: { tokenId } });
+    await strategyWithSignal({ notifyTelegram: false });
+    await runPaperTrading(deps());
+    expect(await prisma.paperPosition.count({ where: { strategyId } })).toBe(1);
+    expect(notes).toEqual([]);
+  });
+
+  it("stops at its daily loss limit, and starts counting again when restarted", async () => {
+    await strategyWithSignal({ dailyLossLimitSol: 0.02 });
+    await runPaperTrading(deps());
+    market.lamportsPerRaw.set(mint, 0.02);
+    clock = new Date(clock.getTime() + 60_000);
+    // The stop-loss sale loses about 0.03 SOL; the same pass stops the strategy.
+    await runPaperTrading(deps());
+    let s = await strategy();
+    expect(s.running).toBe(false);
+    expect(s.lastError).toMatch(/lost 0\.0307 SOL in the last 24 hours \(limit 0\.02 SOL\)/);
+    expect(notes.at(-1)!.html).toMatch(/⏸ stopped: lost/);
+
+    // Started again (the API moves the window): the earlier loss no longer counts.
+    await prisma.paperStrategy.update({
+      where: { id: strategyId },
+      data: { running: true, lossWindowFrom: clock, lastError: null },
+    });
+    clock = new Date(clock.getTime() + 10_000);
+    await runPaperTrading(deps());
+    s = await strategy();
+    expect(s.running).toBe(true);
+    expect(s.lastError).toBeNull();
+  });
+
+  it("sends notes to the owner's private chats only, the server bot's to every admin's", async () => {
+    const other = await prisma.user.create({ data: { walletAddress: generateWalletKeypair().publicKey } });
+    const base = BigInt(Date.now()) * 1000n;
+    await prisma.telegramChat.createMany({
+      data: [
+        { chatId: base + 1n, kind: "private", userId },
+        { chatId: base + 2n, kind: "group", userId },
+        { chatId: base + 3n, kind: "private", userId: other.id },
+      ],
+    });
+    try {
+      const sent: [bigint, string][] = [];
+      const telegram = {
+        sendMessage: async (chatId: bigint, html: string) => (sent.push([chatId, html]), { ok: true }),
+      };
+      const long = "x".repeat(2_000);
+      await sendTradeNotes(
+        [
+          { userId, html: long },
+          { userId, html: long },
+          { userId: other.id, html: "server" },
+        ],
+        { telegram, admins: new Set([admin]), serverUserId: other.id },
+      );
+      // Two long notes split into two messages, to the owner's private chat only; the server
+      // account's note goes to the admin's private chat, not to the server account's own.
+      expect(sent.map(([c]) => c)).toEqual([base + 1n, base + 1n, base + 1n]);
+      expect(sent[2]![1]).toBe("server");
+    } finally {
+      await prisma.telegramChat.deleteMany({ where: { chatId: { in: [base + 1n, base + 2n, base + 3n] } } });
+      await prisma.user.delete({ where: { id: other.id } });
+    }
   });
 });

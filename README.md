@@ -202,6 +202,10 @@ the bot should trade, and keep the rest elsewhere.
 For local development, `TRADING_KEY_PROVIDER=local` with `TRADING_LOCAL_MASTER_KEY`
 (`openssl rand -hex 32`) replaces KMS; it is refused when `NODE_ENV=production`.
 
+### Loss limit and Telegram alerts
+
+Both the bot and each paper strategy have a daily loss limit (`dailyLossLimitSol`, 0 = off). When the positions closed in the last 24 hours, counted from the last start, have lost that much SOL between them (fees included), the bot pauses itself, or the strategy stops itself. It records the reason, and its open positions keep their exit plans. Starting it again starts the count again. With `notifyTelegram` on (the default), each buy, sale and automatic pause goes to the owner's private Telegram chats, never a linked group; the server bot's go to every admin's. This needs `TELEGRAM_BOT_TOKEN` on the process that trades: the scanner for paper trading, and the trader for the bot.
+
 ### Paper trading
 
 Admin -> Trading bot -> Paper trading runs the bot's settings on simulated SOL, and it works while the real bot is off. A strategy reads the same live signals the bot would: its filters' matches and its models' calls, through the AI gate. It applies the same limits (fresh signals only, one entry per token, open positions, 24h spend, reserve) and refuses the same risky mints. It fills each entry and sale at a live Jupiter quote, less its fill penalty (1% by default), charges the network fee plus the Jito tip, and sells on its exit plan. Nothing holds a key or sends a transaction. The `paper-trading` job runs every 10 seconds on the scanner (`packages/core/src/trading/paper.ts`). Each admin keeps up to 10 strategies and runs up to 3 at once. Each strategy shows its equity, result, win rate, the share of entries that reached 2x, its trades, and the signals it passed on and why.
