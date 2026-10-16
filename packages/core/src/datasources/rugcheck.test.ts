@@ -71,6 +71,82 @@ describe("toProfile", () => {
     expect(profile.top10HolderPct).toBeCloseTo(1.5);
   });
 
+  it("leaves out a graduated coin's old bonding curve, which its markets list no longer names", () => {
+    // Live report for 2bQcQFdqp62Wo99noGRYdWdLrCZ3SAVXtjTP2jUspump, 2026-10-16: the markets list has
+    // only the PumpSwap pool, while the Pump.fun curve (its PDA, 7oq2c...) still holds 22%.
+    const pumpSwapPool = "3fZsfqSQuMGvD4aR1YQhQrewSnkYfmxm4R6wFnv69mkE";
+    const profile = toProfile(
+      "2bQcQFdqp62Wo99noGRYdWdLrCZ3SAVXtjTP2jUspump",
+      baseReport({
+        topHolders: [
+          { address: "kAZugyrySXzHzrBz3BWQUk5bwevfwqfaWmyUqmWzg4G", owner: pumpSwapPool, pct: 47.996 },
+          {
+            address: "B5bSNbkRVGXStFQxRPHxLv8JjBp6FPcY4xyZptkyHeZ7",
+            owner: "7oq2c9s7GD1RAxFRccybGc4kZDMzwHSLBaKrEbXA9mJG",
+            pct: 22.231,
+          },
+          {
+            address: "HHQwnfduTwLB1MDtBsuAhAKMrrT6HxSMkXbv4Jbky9iT",
+            owner: "Cm9BjYWLEUzwHQNV3Fn5dzghYpiqN8zuGW8soy7DoDQX",
+            pct: 10.189,
+          },
+          {
+            address: "G9GqQXchSYfAim9s8imiBBqVcKhTBmFnJVpy79z3YcWS",
+            owner: "JEAYzwR2kYLRCVWkXTyB35rejx1xqxauu2TpFcQMguxZ",
+            pct: 3.702,
+          },
+        ],
+        markets: [{ pubkey: pumpSwapPool, marketType: "pump_fun_amm", lp: { lpLockedPct: 100 } }],
+      }),
+    );
+    expect(profile.largestHolderPct).toBeCloseTo(10.189);
+    expect(profile.top10HolderPct).toBeCloseTo(13.891);
+    expect(profile.top10HolderAddresses).toEqual([
+      "Cm9BjYWLEUzwHQNV3Fn5dzghYpiqN8zuGW8soy7DoDQX",
+      "JEAYzwR2kYLRCVWkXTyB35rejx1xqxauu2TpFcQMguxZ",
+    ]);
+    expect(profile.topHolderShares?.map((h) => h.owner)).not.toContain(
+      "7oq2c9s7GD1RAxFRccybGc4kZDMzwHSLBaKrEbXA9mJG",
+    );
+  });
+
+  it("leaves out a coin's bonding curve on a report that lists no market yet", () => {
+    const profile = toProfile(
+      "2bQcQFdqp62Wo99noGRYdWdLrCZ3SAVXtjTP2jUspump",
+      baseReport({
+        topHolders: [
+          {
+            address: "B5bSNbkRVGXStFQxRPHxLv8JjBp6FPcY4xyZptkyHeZ7",
+            owner: "7oq2c9s7GD1RAxFRccybGc4kZDMzwHSLBaKrEbXA9mJG",
+            pct: 80,
+          },
+          {
+            address: "HHQwnfduTwLB1MDtBsuAhAKMrrT6HxSMkXbv4Jbky9iT",
+            owner: "Cm9BjYWLEUzwHQNV3Fn5dzghYpiqN8zuGW8soy7DoDQX",
+            pct: 4,
+          },
+        ],
+        markets: [],
+      }),
+    );
+    expect(profile.largestHolderPct).toBeCloseTo(4);
+    expect(profile.top10HolderPct).toBeCloseTo(4);
+  });
+
+  it("keeps a multisig vault as a holder: program-derived, but someone can sell from it", () => {
+    // A system-owned PDA holding SOL (a Squads-style vault), seen among top holders 2026-10-16.
+    const profile = toProfile(
+      MINT,
+      baseReport({
+        topHolders: [
+          { address: "vaultTokenAccount", owner: "BwWK17cbHxwWBKZkUYvzxLcNQ1YVyaFezduWbtm2de6s", pct: 12 },
+        ],
+        markets: [],
+      }),
+    );
+    expect(profile.largestHolderPct).toBeCloseTo(12);
+  });
+
   it("reads the LP lock on Raydium LaunchLab's own markets apart, for a Stonks coin", () => {
     const markets = [
       { pubkey: "cpmm", marketType: "raydium_cpmm", lp: { lpLockedPct: 100, quoteUSD: 50_000 } },

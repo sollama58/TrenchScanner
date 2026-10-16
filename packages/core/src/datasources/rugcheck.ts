@@ -3,6 +3,7 @@ import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import type { OnChainProfile } from "../types.js";
 import { CEX_FUNDED_TOP_N } from "../wallets/linkedWallets.js";
+import { venueAccountsOf } from "../venueAccounts.js";
 
 const logger = createLogger("rugcheck");
 
@@ -238,9 +239,20 @@ export function toProfile(mintAddress: string, report: RugCheckReport): RugCheck
   const poolVaults = new Set(
     markets.flatMap((m) => [m.liquidityA, m.liquidityB]).filter((a): a is string => typeof a === "string"),
   );
+  // The markets list is not every venue the coin has had: a graduated Pump.fun coin's report lists
+  // its PumpSwap pool and not the bonding curve, which can still hold a fifth of supply (seen
+  // 2026-10-16 on 2bQcQ...pump: the curve at 22% read as the largest holder and failed the screen),
+  // and a report from a coin's first minutes lists no market at all. The venue accounts derived
+  // from the mint (venueAccountsOf) are left out whatever the list says.
+  const venueAccounts = venueAccountsOf(mintAddress);
   const realHolders = (report.topHolders ?? []).filter((h) => {
     const owner = h.owner ?? h.address;
-    return !poolAuthorities.has(owner) && !poolVaults.has(h.address) && owner !== CLOSED_ACCOUNT_OWNER;
+    return (
+      !poolAuthorities.has(owner) &&
+      !poolVaults.has(h.address) &&
+      !venueAccounts.has(owner) &&
+      owner !== CLOSED_ACCOUNT_OWNER
+    );
   });
   const top10HolderPct = realHolders
     .slice(0, TOP_N_FOR_CONCENTRATION)
