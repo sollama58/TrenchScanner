@@ -3294,6 +3294,12 @@ body.drawer-open .util-drawer {
   border-color: color-mix(in srgb, var(--brand-a) 40%, transparent);
   background: color-mix(in srgb, var(--brand-a) 12%, transparent);
 }
+.side-flagged {
+  flex: none;
+  color: var(--warn-ink);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
 .side-count {
   text-align: right;
   font-size: 13px;
@@ -3766,7 +3772,8 @@ body.drawer-open .util-drawer {
   .side-avatar {
     display: none;
   }
-  .side-found {
+  .side-found,
+  .side-who .side-flagged {
     display: none;
   }
   .side-row {

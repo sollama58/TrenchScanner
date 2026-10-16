@@ -28,7 +28,7 @@ import {
 } from "@trenchscanner/core";
 import { creatorFeesByMint, TOKEN_CARD_SELECT, withCarriedHolderList } from "../curatedFeed.js";
 import { readKolRows } from "../kolRoster.js";
-import { loadKolSideLabels, loadLabeledSides } from "../possibleSides.js";
+import { loadKolLabelCounts, loadKolSideLabels, loadLabeledSides } from "../possibleSides.js";
 import {
   loadPairTransfers,
   loadTransferCounts,
@@ -331,7 +331,7 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       take: SIDE_LEADERBOARD_MAX,
       select: { wallet: true, coins24h: true, coins7d: true, coins30d: true, sides: true, computedAt: true },
     });
-    const names = await kolNames(stored.map((r) => r.wallet));
+    const [names, flagged] = await Promise.all([kolNames(stored.map((r) => r.wallet)), loadKolLabelCounts()]);
     // A Known Side's buys count on its KOL's own row (kolSideWalletsJob.ts): it is never a second
     // entry, even in a row left from before it was sorted as one.
     const rows = stored.filter((r) => !names.get(r.wallet)?.knownSideOf);
@@ -362,6 +362,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
             "7d": sides["7d"]?.length ?? 0,
             "30d": sides["30d"]?.length ?? 0,
           },
+          // Wallets labeled for it, whatever the window (user ask 2026-10-16): its pinned list's count.
+          flagged: flagged.get(r.wallet) ?? 0,
         };
       }),
     };
