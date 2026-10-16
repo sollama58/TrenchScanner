@@ -27,6 +27,7 @@ import {
   DISQUALIFYING_DRAWDOWN_FRACTION,
   walletSafetyCutsSql,
   maskKnownBadInputs,
+  isPreFeeWalletStonksRow,
   trainingWeightByAge,
   MAX_EVENT_AGE_MINUTES,
   FRESH_ANCHOR_LABEL_RULE,
@@ -1202,6 +1203,8 @@ async function loadRowsOfKind(
       // near $49.6k and stale holder figures, and never moves: 5,523 hourly rows on 10-06..10-11
       // taught the band where live near-graduation coins sit that it never doubles.
       if (r.sampleKind === "hourly" && isFrozenCurveRow(r.features)) continue;
+      // Stonks rows from before the fee wallet left their holder figures (2026-10-16).
+      if (isPreFeeWalletStonksRow(r.anchorAt, r.features as Record<string, number | null>)) continue;
       // Inputs known to be wrong on old rows (fake order-flow zeros, the inputs hourly rows were
       // banked ahead of until HOURLY_ROWS_WAIT_SINCE) read as missing.
       const features = maskKnownBadInputs(

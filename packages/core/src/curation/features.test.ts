@@ -10,6 +10,8 @@ import {
   HOURLY_ROWS_WAIT_SINCE,
   BUNDLED_SUPPLY_POINT_IN_TIME_FROM,
   HOLDER_TRANSFER_LINKS_WINDOW,
+  STONKS_FEE_WALLET_EXCLUDED_SINCE,
+  isPreFeeWalletStonksRow,
   NARRATIVE_READ_AT_DECISION_SINCE,
   NS_RULES_VERSION_MARKER_SINCE,
   SOCIAL_BITS_FROM_DISCOVERY_SINCE,
@@ -453,6 +455,17 @@ describe("withCurrentNarrativeTiming", () => {
     expect(old.features.nsCopycat).toBe(1);
     expect(keptFresh).toBe(fresh);
     expect(keptNoRead).toBe(noRead);
+  });
+});
+
+describe("isPreFeeWalletStonksRow", () => {
+  it("leaves out Stonks rows banked before the fee wallet left their holders, and nothing else", () => {
+    const before = new Date(STONKS_FEE_WALLET_EXCLUDED_SINCE.getTime() - 1);
+    expect(isPreFeeWalletStonksRow(before, { launchpadStonks: 1 })).toBe(true);
+    expect(isPreFeeWalletStonksRow(STONKS_FEE_WALLET_EXCLUDED_SINCE, { launchpadStonks: 1 })).toBe(false);
+    expect(isPreFeeWalletStonksRow(before, { launchpadStonks: 0 })).toBe(false);
+    expect(isPreFeeWalletStonksRow(before, { launchpadStonks: null })).toBe(false);
+    expect(isPreFeeWalletStonksRow(before, {})).toBe(false);
   });
 });
 

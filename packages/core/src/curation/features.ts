@@ -946,6 +946,24 @@ const HOLDER_TRANSFER_LINKED_FEATURES = [
 ] as const satisfies readonly CandidateFeatureName[];
 
 /**
+ * Stonks rows banked before this counted the Stonks fee wallet (5KXDF…iK6tD, which collects each
+ * Stonks coin's 3% transfer fee) as a holder: in the top 10, the largest holder, the linked and
+ * same-minute wallets, transfers and both bundle figures. Since the change that leaves it out
+ * (2026-10-16 batch, deploy ~20:15 UTC, with slack on the late side) none of those count it, so
+ * nearly every holder input on an older Stonks row means something else. They are about 1% of
+ * decision rows, all from 10-16, so the trainer leaves them out rather than masking inputs one by one.
+ */
+export const STONKS_FEE_WALLET_EXCLUDED_SINCE = new Date("2026-10-16T21:00:00Z");
+
+/** A Stonks row banked while the fee wallet still counted as a holder (STONKS_FEE_WALLET_EXCLUDED_SINCE). */
+export function isPreFeeWalletStonksRow(
+  anchorAt: Date,
+  features: Record<string, number | null | undefined>,
+): boolean {
+  return features.launchpadStonks === 1 && anchorAt.getTime() < STONKS_FEE_WALLET_EXCLUDED_SINCE.getTime();
+}
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
  * the create message and is real), the social bits on rows banked before
