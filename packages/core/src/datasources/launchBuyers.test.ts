@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  countHoldingSupplyCut,
   countStillHolding,
   devStillHolding,
   launchFigures,
@@ -204,6 +205,37 @@ describe("countStillHolding", () => {
   });
   it("is unknown when any balance is missing", () => {
     expect(countStillHolding(buyers, new Map([["a-ata", 500]]))).toBeNull();
+  });
+});
+
+describe("countHoldingSupplyCut", () => {
+  const buyers = [
+    { wallet: "a", tokenAccount: "a-ata", bought: 5000, slot: null },
+    { wallet: "b", tokenAccount: "b-ata", bought: 5000, slot: null },
+    { wallet: "c", tokenAccount: "c-ata", bought: 500, slot: null },
+  ];
+  it("counts buyers holding 0.1% of the supply or more, whatever they bought", () => {
+    // Supply 1,000,000: the cut is 1,000. c still holds all it bought, but under the cut.
+    expect(
+      countHoldingSupplyCut(
+        buyers,
+        new Map([
+          ["a-ata", 1000],
+          ["b-ata", 999],
+          ["c-ata", 500],
+        ]),
+        1_000_000,
+      ),
+    ).toBe(1);
+  });
+  it("is unknown when any balance or the supply is missing", () => {
+    expect(countHoldingSupplyCut(buyers, new Map([["a-ata", 5000]]), 1_000_000)).toBeNull();
+    const all = new Map([
+      ["a-ata", 5000],
+      ["b-ata", 5000],
+      ["c-ata", 500],
+    ]);
+    expect(countHoldingSupplyCut(buyers, all, 0)).toBeNull();
   });
 });
 

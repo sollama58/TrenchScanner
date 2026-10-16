@@ -595,6 +595,7 @@ export function serializeCuratedAlert(
     flaggedTrades: null,
     firstBuyersHolding: null,
     firstBuyersSeen: null,
+    firstBuyersHoldingCut: null,
     devHolding: null,
     isMayhemMode: null,
     graduated: null,

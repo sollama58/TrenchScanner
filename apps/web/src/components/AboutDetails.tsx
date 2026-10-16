@@ -267,9 +267,9 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           </dd>
           <dt>1st Buyers Holding</dt>
           <dd>
-            Of the first 25 buyers after launch (dev aside), how many still hold, as 12/25. Ones still holding
-            can dump on you. Read once from the launch on chain, then rechecked every few minutes.
-            &ldquo;–&rdquo; means it hasn&apos;t been read yet.
+            Of the first 25 buyers after launch (dev aside), how many still hold 0.1% of the supply or more,
+            as 12/25. Ones still holding can dump on you. Read once from the launch on chain, then rechecked
+            every few minutes. &ldquo;–&rdquo; means it hasn&apos;t been read yet.
           </dd>
           <dt>Snipers</dt>
           <dd>

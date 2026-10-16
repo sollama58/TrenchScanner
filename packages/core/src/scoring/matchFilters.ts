@@ -217,8 +217,9 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   }
 
   // Unknown until the launch's first buyers have been read: the floor fails closed, the ceiling
-  // skips, per the split above.
-  const firstBuyersHolding = token.tradeFlow?.firstBuyersHolding ?? null;
+  // skips, per the split above. Counts the buyers holding 0.1% of the supply or more, the figure
+  // the card shows (user decision 2026-10-16), not the models' above-dust count.
+  const firstBuyersHolding = token.tradeFlow?.firstBuyersHoldingCut ?? null;
   if (
     filter.minFirstBuyersHolding != null &&
     (firstBuyersHolding === null || firstBuyersHolding < filter.minFirstBuyersHolding)
