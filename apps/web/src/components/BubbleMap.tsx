@@ -52,6 +52,8 @@ import {
   traitShares,
   type WalletTrait,
   transferCurve,
+  transferRoutes,
+  type TransferRoute,
   transfersOfNode,
   transferWidth,
   type TransferLink,
@@ -859,6 +861,11 @@ function BubbleSvg({
   const uid = useId().replace(/:/g, "");
   const index = new Map(graph.nodes.map((n) => [n.id, n]));
   const cexSlot = useMemo(() => cexSlots(graph), [graph]);
+  // Each transfer arrow's route, clear of other bubbles (user ask 2026-10-16); the pills keep off them.
+  const routes = useMemo(
+    () => (transfers && graph.transferLinks.length > 0 ? transferRoutes(graph) : null),
+    [graph, transfers],
+  );
   // Funders' names, each exchange's name when its ties show, and each same-minute group's, as pills
   // placed where they cover nothing (user ask 2026-10-14: they sat on bubbles, text and lines). An
   // exchange's and a group's pill is a hub, tied to each of its wallets by a line, as a funder is.
@@ -935,8 +942,8 @@ function BubbleSvg({
         hub(`cex:${g.funder}`, [...g.nodes], text, "cex", `var(--bm-cex-${cexSlot.get(g.funder) ?? 0})`);
       }
     }
-    return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list) };
-  }, [graph, names, cexLinks, cexSlot, kolSides, kols]);
+    return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list, routes) };
+  }, [graph, names, cexLinks, cexSlot, kolSides, kols, routes]);
   const box = graphBounds(graph, 18, placed);
   const dim = (n: MapNode) => lit !== null && n.cluster !== lit;
   // Bigger bubbles first so the small ones draw on top and stay tappable.
@@ -1086,7 +1093,14 @@ function BubbleSvg({
           })}
         </g>
         {transfers && graph.transferLinks.length > 0 && (
-          <TransferArrows graph={graph} index={index} names={names} picked={picked} lit={lit} />
+          <TransferArrows
+            graph={graph}
+            index={index}
+            routes={routes}
+            names={names}
+            picked={picked}
+            lit={lit}
+          />
         )}
         {order.map((n, i) => (
           <g
@@ -1169,12 +1183,14 @@ function TransferArrow() {
 function TransferArrows({
   graph,
   index,
+  routes,
   names,
   picked,
   lit,
 }: {
   graph: BubbleGraph;
   index: ReadonlyMap<string, MapNode>;
+  routes: ReadonlyMap<string, TransferRoute> | null;
   names: WalletNames;
   picked: string | null;
   lit: number | null;
@@ -1186,7 +1202,7 @@ function TransferArrows({
     const w = transferWidth(l.pct);
     const head = 4 + w * 1.5;
     const half = 2.4 + w * 0.85;
-    const c = transferCurve(a, b, 1.2);
+    const c = routes?.get(`${l.from}>${l.to}`) ?? transferCurve(a, b, 1.2);
     // The line stops at the head's base, so the head's tip sits on the receiver's edge.
     const ux = Math.cos(c.angle);
     const uy = Math.sin(c.angle);
@@ -1746,6 +1762,7 @@ export function BubbleMapSection({
             fileName={`trenchscanner-bubbles-${(token.symbol ?? mint.slice(0, 6)).toLowerCase()}`}
             caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
             iconOnly
+            wide
             render={() =>
               renderBubbleCard(graph, token, names, {
                 cex: showCex,

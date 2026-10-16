@@ -32,6 +32,7 @@ import {
   bubbleNameLines,
   showsPct,
   transferCurve,
+  transferRoutes,
   transferWidth,
   type SideGroup,
   type FlagsRead,
@@ -55,6 +56,9 @@ import {
   clip,
   frame,
 } from "./shareCard";
+
+/** Pixels per card unit in the bubble map's share image. */
+const CARD_SCALE = 2;
 
 /** The map's cluster colours on the dark card: the dashboard's dark slots (styles.css .bm-modal). */
 const CLUSTER = ["#3987e5", "#199e70", "#d95926", "#8b5cf6", "#06b6d4", "#84cc16", "#ec4899"];
@@ -179,7 +183,8 @@ export async function renderBubbleCard(
     kols?: readonly KolControl[];
   } = {},
 ): Promise<HTMLCanvasElement> {
-  const { canvas, ctx, icon } = await cardCanvas();
+  // Drawn at twice the card's size: the map's small bubbles and names stay sharp (user ask 2026-10-16).
+  const { canvas, ctx, icon } = await cardCanvas(CARD_SCALE);
   if (!ctx) return canvas;
   const label = tokenLabel(token);
   frame(ctx, icon, "", "", {
@@ -552,7 +557,9 @@ export async function renderBubbleCard(
       dotted: true,
     });
   }
-  const placed = placeLabels(map, hubs);
+  // The arrows' routes, picked clear of other bubbles; the pills keep off them.
+  const routes = transfers ? transferRoutes(map) : null;
+  const placed = placeLabels(map, hubs, routes);
   const box = graphBounds(map, 10, placed);
   const scale = Math.min(area.w / box.w, area.h / box.h, MAX_SCALE);
   const ox = area.x + (area.w - box.w * scale) / 2 - box.x * scale;
@@ -710,7 +717,7 @@ export async function renderBubbleCard(
       const w = transferWidth(l.pct) * scale;
       const head = (4 + transferWidth(l.pct) * 1.5) * scale;
       const half = (2.4 + transferWidth(l.pct) * 0.85) * scale;
-      const c = transferCurve(a, b, 1.2);
+      const c = routes?.get(`${l.from}>${l.to}`) ?? transferCurve(a, b, 1.2);
       const ux = Math.cos(c.angle);
       const uy = Math.sin(c.angle);
       const tipX = X(c.x2);

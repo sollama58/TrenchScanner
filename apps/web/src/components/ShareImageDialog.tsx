@@ -14,6 +14,7 @@ export function ShareImageDialog({
   link,
   render,
   onClose,
+  wide = false,
 }: {
   title: string;
   /** Without the extension. */
@@ -24,6 +25,8 @@ export function ShareImageDialog({
   link: string;
   render: () => Promise<HTMLCanvasElement>;
   onClose: () => void;
+  /** Preview near full size (a detailed image, such as the bubble map's). */
+  wide?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [png, setPng] = useState<{ blob: Blob; url: string } | null>(null);
@@ -79,7 +82,7 @@ export function ShareImageDialog({
   return (
     <dialog
       ref={ref}
-      className="about-modal share-modal"
+      className={`about-modal share-modal${wide ? " wide" : ""}`}
       aria-label={`Share: ${title}`}
       onClose={onClose}
       // A click on the backdrop lands on the dialog element itself; clicks inside land on its content.
@@ -139,6 +142,7 @@ export function ShareButton({
   render,
   disabled = false,
   iconOnly = false,
+  wide = false,
 }: {
   title: string;
   fileName: string;
@@ -148,6 +152,8 @@ export function ShareButton({
   disabled?: boolean;
   /** A bare icon, for a toolbar of icon buttons. */
   iconOnly?: boolean;
+  /** Preview the image near full size (ShareImageDialog). */
+  wide?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -171,6 +177,7 @@ export function ShareButton({
           link={link}
           render={render}
           onClose={() => setOpen(false)}
+          wide={wide}
         />
       )}
     </>
