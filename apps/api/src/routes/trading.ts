@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { issueTradeConfirmation, requireTradeConfirmation } from "../tradeConfirm.js";
 import {
   adminWalletSet,
   applyTradeAlertsPatch,
@@ -180,6 +181,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
   });
   app.put("/alerts", async (request, reply) => {
     if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });
+    if (!(await requireTradeConfirmation(request, reply))) return;
     const parsed = tradeAlertsPatchSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
@@ -381,6 +383,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
 
   const saveBot = (scope: Scope) => async (request: FastifyRequest, reply: FastifyReply) => {
     if (!requireAdmin(request, reply)) return;
+    if (!(await requireTradeConfirmation(request, reply))) return;
     const parsed = botPatchSchema.safeParse(request.body);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
@@ -465,6 +468,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
   const sellOne =
     (scope: Scope) => async (request: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
       if (scope === "server" && !requireAdmin(request, reply, false)) return;
+      if (!(await requireTradeConfirmation(request, reply))) return;
       const owner = await ownerFor(scope, request);
       const where = { id: request.params.id, userId: owner.userId, status: { in: ["open", "stuck"] } };
       const updated = await prisma.tradingPosition.updateMany({ where, data: { closeRequested: true } });
@@ -476,6 +480,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
   /** The panic button: stops new entries and sells every open position on the next pass. */
   const sellAll = (scope: Scope) => async (request: FastifyRequest, reply: FastifyReply) => {
     if (scope === "server" && !requireAdmin(request, reply, false)) return;
+    if (!(await requireTradeConfirmation(request, reply))) return;
     const { userId } = await ownerFor(scope, request);
     await prisma.tradingBot.updateMany({ where: { userId }, data: { enabled: false } });
     const where = { userId, status: { in: ["open", "stuck"] } };
@@ -492,6 +497,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     if (scope === "own" && request.user!.deviceId) {
       return deny(reply, "sign in with your wallet on this device to withdraw");
     }
+    if (!(await requireTradeConfirmation(request, reply))) return;
     const parsed = withdrawSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'amount must be lamports or "max"' });
     const owner = await ownerFor(scope, request);
@@ -538,11 +544,21 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     return { id: created.id, destination: created.destination, status: created.status };
   };
 
+  /** The text a wallet signs to approve one of the actions below (tradeConfirm.ts). */
+  // Any signed-in wallet: a former admin's wallet can still sell out and withdraw. The routes
+  // themselves decide who may act; a confirmation only proves the wallet approved the request.
+  app.post(
+    "/confirm",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => issueTradeConfirmation(request, reply),
+  );
+
   // ── The user's own custodial wallet ──
   app.get("/", state("own"));
   /** Creates the signed-in admin's trading wallet (idempotent). */
   app.post("/wallet", async (request, reply) => {
     if (!requireAdmin(request, reply)) return;
+    if (!(await requireTradeConfirmation(request, reply))) return;
     if (!keys.provider)
       return reply.code(503).send({ error: `wallet custody is not configured: ${keys.reason}` });
     try {

@@ -625,22 +625,16 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     await freshSignal();
     chain.quoteFactor = 0.5;
     expect((await tick()).buys).toBe(0);
-    let p = await position();
+    const p = await position();
     expect(p.status).toBe("failed");
     expect(p.error).toMatch(/the route quotes 500000000, under 765000000/);
     expect(chain.sent).toHaveLength(0);
 
-    // A sale is held back too, but only as a pricing question: retried soon, not counted.
+    // A sale is never held to the independent price: a lagging feed must not block a stop-loss.
     chain.quoteFactor = 1;
     await opened();
     chain.quoteFactor = 0.5;
     chain.price.set(mint, 0.02); // under the stop
-    expect((await tick(1)).sells).toBe(0);
-    p = await position();
-    expect(p.status).toBe("open");
-    expect(p.failCount).toBe(0);
-    expect(p.error).toMatch(/under \d+ \(fair value by the independent price/);
-    chain.quoteFactor = 1;
     expect((await tick(1)).sells).toBe(1);
   });
 

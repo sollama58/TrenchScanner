@@ -20,7 +20,12 @@ import {
   withApiFeature,
 } from "@trenchscanner/core";
 import { SAVED_FEED_SELECT, toSavedFeed } from "./contest.js";
-import { createSessionSigner, verifyRequestSessions, type SessionPayload } from "./auth/session.js";
+import {
+  adminSessionFresh,
+  createSessionSigner,
+  verifyRequestSessions,
+  type SessionPayload,
+} from "./auth/session.js";
 import { deviceIsActive, touchDevice } from "./auth/deviceLink.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerDeviceLinkRoutes } from "./routes/deviceLink.js";
@@ -250,11 +255,20 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
    * and has to run every time.
    */
   const verifiedSessions = new WeakMap<FastifyRequest, SessionPayload[]>();
+  // Computed once at startup, not per-request - ADMIN_WALLET_ADDRESSES only ever changes via a
+  // redeploy anyway.
+  const admins = adminWalletSet(env);
   async function verifySessions(request: FastifyRequest): Promise<SessionPayload[]> {
     const cached = verifiedSessions.get(request);
     if (cached) return cached;
     // The cookie, and the Authorization header from a browser that drops third-party cookies.
-    const sessions = await verifyRequestSessions(app.sessionSigner, request);
+    // An admin wallet's session, browser or paired phone, lasts at most ADMIN_SESSION_MAX_AGE_MS
+    // from its sign-in whatever its own expiry says (user decision after the 2026-10-16 security
+    // audit): admin then signs in with the wallet again, or scans a fresh QR.
+    const now = Date.now();
+    const sessions = (await verifyRequestSessions(app.sessionSigner, request)).filter(
+      (s) => !admins.has(s.walletAddress) || adminSessionFresh(s, now),
+    );
     verifiedSessions.set(request, sessions);
     return sessions;
   }
@@ -330,9 +344,6 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     if (session) request.user = session;
   });
 
-  // Computed once at startup, not per-request - ADMIN_WALLET_ADDRESSES only ever changes via a
-  // redeploy anyway.
-  const admins = adminWalletSet(env);
   app.decorate("authenticateAdmin", async (request, reply) => {
     const session = await resolveSession(request);
     if (!session) {

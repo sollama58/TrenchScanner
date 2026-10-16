@@ -848,9 +848,13 @@ const envSchema = z.object({
   // Trimmed, with surrounding quotes or a pasted "Bearer " dropped: a stray space or quote from
   // the Render dashboard otherwise makes every call a 401.
   TOKENSAGE_API_KEY: pastedKey,
-  // TokenSage's ADMIN_KEY, read only by the API for Admin > API usage: TokenSage's own outside
-  // calls and Helius credits shown next to ours (/admin/v1/upstreams and /admin/v1/helius). Unset,
-  // that panel says so and the rest of the page is unaffected.
+  // TokenSage's read-only MONITOR_KEY, read only by the API for Admin > API usage: TokenSage's own
+  // outside calls and Helius credits shown next to ours (/admin/v1/upstreams and /admin/v1/helius).
+  // Unset, that panel says so and the rest of the page is unaffected.
+  TOKENSAGE_MONITOR_KEY: pastedKey,
+  // Deprecated (security audit 2026-10-16): TokenSage's full ADMIN_KEY, used for the same panel
+  // only when TOKENSAGE_MONITOR_KEY is unset. The internet-facing API should not hold it: set the
+  // monitor key and delete this one.
   TOKENSAGE_ADMIN_KEY: pastedKey,
   TOKENSAGE_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
   // 4 since 2026-10-15 (user decision): at 2, with decisions at 50-70 an hour after the Jupiter

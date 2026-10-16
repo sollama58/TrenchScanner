@@ -62,9 +62,10 @@ import { withWalletKey, type TradingWalletRow } from "./wallets.js";
  * can't route), check the UNSIGNED transaction with the guard (txGuard.ts: allowed instructions
  * only, and a simulation showing nothing but the trade itself changes), sign, record the order
  * with its signature and the signed bytes, then send. Nothing is signed before it has passed the
- * guard, and nothing is sent that the database doesn't know about. The guard's minimum is never
+ * guard, and nothing is sent that the database doesn't know about. A buy's guard minimum is never
  * the route's word alone: it is raised to fair value by an independent price (DexScreener), less
- * the slippage and a tenth, and a buy that price can't back is not made.
+ * the slippage and a tenth, and a buy that price can't back is not made. Sales keep the route's
+ * own minimum, so an exit is never held back by a lagging feed.
  *
  * Retrying: nothing is ever sent twice while it can still land. A transaction is rebroadcast by
  * its own signature until it lands or its blockhash is safely past expiry; only then is a new one
@@ -571,9 +572,10 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
   const maxSolDrop =
     req.amount + req.maxPriorityFeeLamports + BUY_MARGIN_LAMPORTS + limits.maxExternalLamports;
   const feeAllowance = req.maxPriorityFeeLamports + SELL_FEE_ALLOWANCE_LAMPORTS + limits.maxExternalLamports;
-  // A floor the route can't set for itself. A buy needs one; a sale goes ahead without, on the
-  // route's own minimum, so a stop-loss isn't held hostage to a price feed.
-  const independent = await independentFloor(ctx, req);
+  // A floor the route can't set for itself, for buys only. A sale always goes ahead on the
+  // route's own minimum: the independent feed runs up to a minute behind, and in a rug that would
+  // hold a stop-loss back while the price falls through it.
+  const independent = buy ? await independentFloor(ctx, req) : null;
   if (independent === null && buy)
     throw new TransientError("no independent price for the token: not buying on the route's word alone");
   try {

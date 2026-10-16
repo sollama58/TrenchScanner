@@ -35,7 +35,7 @@
 #         it decides whether the Narrative model seat is on the roster in each process
 #         (packages/core/src/config/env.ts), so a flag set on the worker alone has the scanner
 #         wait on a seat the trainer never trains.
-#   - TOKENSAGE_API_URL, TOKENSAGE_ADMIN_KEY (api)  optional: TokenSage's ADMIN_KEY
+#   - TOKENSAGE_API_URL, TOKENSAGE_MONITOR_KEY (api)  optional: TokenSage's read-only MONITOR_KEY
 #         Admin > API usage then shows TokenSage's own outside calls and Helius credits next to
 #         ours (apps/api/src/routes/adminUsage.ts). Unset, that panel says so.
 #   - COINGECKO_API_KEY (api, worker + trainer)    optional: a CoinGecko paid-plan key
@@ -171,9 +171,13 @@ services:
       # Optional: a CoinGecko paid-plan key for the market-data fallback (see .env.example).
       - key: COINGECKO_API_KEY
         sync: false
-      # Optional: TokenSage's URL and its ADMIN_KEY, for TokenSage's own meter on Admin > API usage
-      # (apps/api/src/routes/adminUsage.ts). The scanner's TOKENSAGE_API_KEY is not needed here.
+      # Optional: TokenSage's URL and its read-only MONITOR_KEY, for TokenSage's own meter on Admin >
+      # API usage (apps/api/src/routes/adminUsage.ts). The scanner's TOKENSAGE_API_KEY is not needed
+      # here. TOKENSAGE_ADMIN_KEY is the deprecated fallback: delete its value once the monitor key
+      # is set (security audit 2026-10-16).
       - key: TOKENSAGE_API_URL
+        sync: false
+      - key: TOKENSAGE_MONITOR_KEY
         sync: false
       - key: TOKENSAGE_ADMIN_KEY
         sync: false

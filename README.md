@@ -246,10 +246,14 @@ The `trenchscanner-db-backup` cron (render.yaml, `scripts/db-backup`) runs `pg_d
 
 **Setting it up (once):**
 
-1. Cloudflare dashboard → **R2** → **Create bucket**, e.g. `trenchscanner-backups` (any location). Leave public access off.
-2. R2 → **Manage API tokens** → **Create API token**: _Object Read & Write_, limited to that bucket. Keep the Access Key ID and Secret Access Key it shows once, and the S3 endpoint `https://<account id>.r2.cloudflarestorage.com`.
-3. On Render, set the same four values on both `trenchscanner-db-backup` and `trenchscanner-trainer`: `MODEL_BACKUP_S3_ENDPOINT`, `MODEL_BACKUP_S3_BUCKET`, `MODEL_BACKUP_S3_ACCESS_KEY_ID`, `MODEL_BACKUP_S3_SECRET_ACCESS_KEY`. Until they are set the cron logs "no bucket configured" and exits cleanly.
-4. On `trenchscanner-db-backup`, **Trigger Run** once and read its log: it ends with `done: ... kept, ... pruned`.
+Two buckets and two tokens, so a leaked trainer key can neither delete nor replace the nightly dumps (security audit 2026-10-16):
+
+1. Cloudflare dashboard → **R2** → **Create bucket** twice (any location, public access off): `trenchscanner-backups` for the model and table backups, and `trenchscanner-db-dumps` for the nightly dumps.
+2. R2 → **Manage API tokens** → **Create API token** twice, each _Object Read & Write_ and limited to ONE bucket: one for `trenchscanner-backups`, one for `trenchscanner-db-dumps`. Keep each Access Key ID and Secret Access Key (shown once) and the S3 endpoint `https://<account id>.r2.cloudflarestorage.com`.
+3. On Render, set `MODEL_BACKUP_S3_ENDPOINT`, `MODEL_BACKUP_S3_BUCKET`, `MODEL_BACKUP_S3_ACCESS_KEY_ID` and `MODEL_BACKUP_S3_SECRET_ACCESS_KEY` on `trenchscanner-trainer` with the backups bucket and its token, and on `trenchscanner-db-backup` with the dumps bucket and its token. Until they are set the cron logs "no bucket configured" and exits cleanly.
+4. `trenchscanner-db-dumps` → **Settings** → **Bucket lock rules** → add a rule for prefix `trenchscanner/db-dumps/`, retention **14 days** (matching `DB_DUMP_KEEP`). Nothing can delete a dump inside that window, the cron's own pruning included: it leaves a locked dump for a later night.
+5. Object lifecycle rules (bucket → **Settings** → **Object lifecycle rules**), so deleted accounts don't live on off-site: on `trenchscanner-backups`, delete objects under `trenchscanner/table-backups/` after **90 days**; on `trenchscanner-db-dumps`, delete objects under `trenchscanner/db-dumps-pre-restore/` after **30 days**.
+6. On `trenchscanner-db-backup`, **Trigger Run** once and read its log: it ends with `done: ... kept, ... pruned`.
 
 **Restoring.** `restore.sh` lives in the same image. Open `trenchscanner-db-backup` on Render → **Shell** (a fresh instance with this image and the service's settings, including the live `DATABASE_URL`), or run the image anywhere with Docker and the same variables. Every command reads the bucket; only `restore` writes, and only to the database given by `--target`.
 

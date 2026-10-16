@@ -108,9 +108,15 @@ excess=$((${#dumps[@]} - KEEP))
 for ((i = 0; i < excess; i++)); do
   old="${dumps[$i]}"
   [ "$old" != "$key" ] || continue
-  s3 s3 rm "$(s3_url "$old")" --only-show-errors
-  s3 s3 rm "$(s3_url "${old%.dump}.sha256")" --only-show-errors
-  pruned=$((pruned + 1))
+  # With an R2 bucket lock on the dumps (README -> Backups and restore), a dump still inside its
+  # retention can't be deleted: it is left for a later night, never a failed run. The .sha256
+  # goes only once the dump has.
+  if s3 s3 rm "$(s3_url "$old")" --only-show-errors; then
+    s3 s3 rm "$(s3_url "${old%.dump}.sha256")" --only-show-errors || log "kept ${old%.dump}.sha256 (locked)"
+    pruned=$((pruned + 1))
+  else
+    log "kept $old for now (the bucket lock still holds it)"
+  fi
 done
 # Pieces of runs that died before their .sha256 (older than a day, so never a run in flight).
 cutoff=$(date -u -d '-1 day' +%Y%m%dT%H%M%SZ)
@@ -120,8 +126,11 @@ while read -r k; do
   ts="${name#"$DUMP_STEM"}"
   ts="${ts%.dump}"
   if [[ "$ts" < "$cutoff" ]] && ! grep -qxF "$k" < <(complete_dumps); then
-    s3 s3 rm "$(s3_url "$k")" --only-show-errors
-    log "removed incomplete $k"
+    if s3 s3 rm "$(s3_url "$k")" --only-show-errors; then
+      log "removed incomplete $k"
+    else
+      log "kept incomplete $k for now (the bucket lock still holds it)"
+    fi
   fi
 done < <(list_keys | grep '\.dump$' || true)
 

@@ -4,7 +4,7 @@ import { prisma, type Env } from "@trenchscanner/core";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 import { sessionCookieAttrs } from "./auth.js";
 import { clientIp, ipRateLimitKey } from "../clientIp.js";
-import { issueLinkCode, redeemLinkCode, LINK_CODE_TTL_MS } from "../auth/deviceLink.js";
+import { issueLinkCode, redeemLinkCode, LINK_CODE_TTL_MS, MAX_LINKED_DEVICES } from "../auth/deviceLink.js";
 
 /**
  * Mobile Connect, Trenches half: pair a phone with a signed-in desktop by scanning a QR.
@@ -59,6 +59,12 @@ export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env
     if (!parsed.success) return reply.code(400).send({ error: "invalid" });
 
     const result = await redeemLinkCode(parsed.data.code, request.headers["user-agent"]);
+    if (!result.ok && result.reason === "device_limit") {
+      return reply.code(409).send({
+        error: `This account already has ${MAX_LINKED_DEVICES} paired phones. Sign one out on your desktop (Settings, Connect your phone), then scan this code again.`,
+        code: "device_limit",
+      });
+    }
     if (!result.ok) {
       request.log.warn({ ip: clientIp(request) }, "rejected a mobile link redemption");
       return reply.code(400).send({ error: "invalid_or_expired" });

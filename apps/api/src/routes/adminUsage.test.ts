@@ -33,9 +33,9 @@ async function cleanup() {
 }
 
 describe("readTokenSageUsage", () => {
-  it("says it isn't connected without TokenSage's admin key, and calls nothing", async () => {
+  it("says it isn't connected without a TokenSage monitor or admin key, and calls nothing", async () => {
     const usage = await readTokenSageUsage(
-      { TOKENSAGE_API_URL: "https://ts.example", TOKENSAGE_ADMIN_KEY: "" },
+      { TOKENSAGE_API_URL: "https://ts.example", TOKENSAGE_MONITOR_KEY: "", TOKENSAGE_ADMIN_KEY: "" },
       24,
     );
     expect(usage).toEqual({ configured: false, error: null, sources: [], helius: null });
