@@ -82,6 +82,34 @@ describe("assessTrainingRun", () => {
     expect(legacy.accept).toBe(false);
   });
 
+  it("compares rows only against running models trained under the current loading rules", () => {
+    const shrunk = { ...base, results: [learner(0.5)], trainingRows: 30_000 };
+    const rowRulesSince = new Date(now.getTime() - HOUR);
+    // Live before the rules narrowed the set: its count says nothing about missing rows.
+    expect(assessTrainingRun({ ...shrunk, rowRulesSince, incumbents: [incumbent()] })).toEqual({
+      accept: true,
+      reason: null,
+    });
+    expect(
+      assessTrainingRun({ ...shrunk, rowRulesSince, incumbents: [incumbent({ activatedAt: null })] }).accept,
+    ).toBe(true);
+    // Live since: still held when rows go missing.
+    const since = incumbent({ activatedAt: new Date(now.getTime() - HOUR / 2) });
+    const held = assessTrainingRun({ ...shrunk, rowRulesSince, incumbents: [incumbent(), since] });
+    expect(held.accept).toBe(false);
+    expect(held.reason).toContain("under half");
+    // The silence check doesn't depend on it.
+    expect(
+      assessTrainingRun({
+        ...base,
+        rowRulesSince,
+        incumbents: [incumbent()],
+        results: [learner(NEVER_EMIT_THRESHOLD)],
+        trainingRows: 30_000,
+      }).accept,
+    ).toBe(false);
+  });
+
   it("compares against the row cap when the cap was lowered", () => {
     expect(
       assessTrainingRun({

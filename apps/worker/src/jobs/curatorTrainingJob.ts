@@ -28,6 +28,7 @@ import {
   walletSafetyCutsSql,
   maskKnownBadInputs,
   isPreFeeWalletStonksRow,
+  TRAINING_ROW_RULES_SINCE,
   trainingWeightByAge,
   MAX_EVENT_AGE_MINUTES,
   FRESH_ANCHOR_LABEL_RULE,
@@ -265,6 +266,7 @@ async function trainCurators(
       maxRows: env.CURATOR_TRAINING_MAX_ROWS,
       now: new Date(),
       maxHoldMs: env.CURATOR_GUARD_MAX_HOLD_HOURS * 3_600_000,
+      rowRulesSince: TRAINING_ROW_RULES_SINCE,
     });
     if (!verdict.accept) {
       logger.warn("training run held back - keeping the running models", {
