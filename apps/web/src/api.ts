@@ -246,6 +246,17 @@ export interface Snapshot {
   /** Trading volume over the last 5 minutes and hour, as the scan saw it. */
   volume5mUsd?: number | null;
   volume1hUsd?: number | null;
+  /**
+   * The safety screen's verdict on this scan and, when it failed, why (core's rugScreen.ts). Absent
+   * from a lookup's stand-in reading before its first scan lands.
+   */
+  rugScreenPassed?: boolean;
+  rugScreenReasons?: string[];
+  /** What the screen read off the contract: null when not read. */
+  mintAuthorityActive?: boolean | null;
+  freezeAuthorityActive?: boolean | null;
+  lpBurned?: boolean | null;
+  isMayhemMode?: boolean | null;
 }
 
 export type OutcomeStatus = "watching" | "won" | "missed" | "disqualified" | "unknown";

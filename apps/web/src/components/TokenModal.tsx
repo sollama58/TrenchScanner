@@ -89,7 +89,9 @@ import {
   LockIcon,
   RobotIcon,
   SageIcon,
+  ShieldIcon,
 } from "./Icons";
+import { safetyChecks, safetyVerdict, type SafetyVerdict } from "../safetyScreen";
 
 /** Mirrors apps/api/src/routes/tokens.ts TokenChart. */
 interface TokenChart {
@@ -273,10 +275,13 @@ function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { o
             />
           </div>
           <div className="tm-title-block">
-            <h2 id="tm-title" className="tm-title" tabIndex={-1} autoFocus>
-              {title}
-              {token?.name && token.symbol && <span className="token-name"> {token.name}</span>}
-            </h2>
+            <div className="tm-title-row">
+              <h2 id="tm-title" className="tm-title" tabIndex={-1} autoFocus>
+                {title}
+                {token?.name && token.symbol && <span className="token-name"> {token.name}</span>}
+              </h2>
+              <MintChip mint={mint} />
+            </div>
             <div className="tm-sub">
               {failed ? (
                 <span className="when">Not opened</span>
@@ -289,10 +294,12 @@ function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { o
           </div>
         </div>
         <div className="tm-actions">
+          {!failed && <SafetyPill verdict={PENDING_SAFETY} />}
           <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
             <CloseIcon size={16} />
           </button>
         </div>
+        <QuickLinks mint={mint} />
         <nav className="tm-nav" aria-label="Sections">
           {SECTIONS.map((x) => (
             <button key={x.id} type="button" className="tm-nav-btn" disabled>
@@ -301,7 +308,6 @@ function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { o
           ))}
         </nav>
       </header>
-      <MintLinks mint={mint} />
       {failed ? (
         <section className="sage-card tm-open-failed" role="alert">
           <h4>Couldn&apos;t open this coin</h4>
@@ -354,11 +360,9 @@ function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { o
   );
 }
 
-/** The copyable mint and the quick links: what a reader reaches for before anything else. */
-function MintLinks({ mint }: { mint: string }) {
+/** The copyable mint, beside the coin's name: what a reader reaches for before anything else. */
+function MintChip({ mint }: { mint: string }) {
   const [copied, setCopied] = useState(false);
-  const { quickLinks } = useAppearance();
-  const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
       setCopied(true);
@@ -366,26 +370,60 @@ function MintLinks({ mint }: { mint: string }) {
     });
   };
   return (
-    <div className="tm-links">
-      <button className="mint" onClick={copy} title="Copy mint address">
-        {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-        {copied ? "Copied" : shortAddress(mint)}
-      </button>
-      <nav className="card-links">
-        {trade.map((l) => (
-          <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">
-            {l.label}
-            <ExternalIcon size={11} />
-          </a>
-        ))}
-        {LINKS.map((l) => (
-          <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
-            {l.label}
-            <ExternalIcon size={11} />
-          </a>
-        ))}
-      </nav>
-    </div>
+    <button type="button" className="mint tm-mint" onClick={copy} title="Copy mint address">
+      {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+      {copied ? "Copied" : shortAddress(mint)}
+    </button>
+  );
+}
+
+/** The coin on the trading sites (Settings › Quick links) and the explorers, as pills under Sage. */
+function QuickLinks({ mint }: { mint: string }) {
+  const { quickLinks } = useAppearance();
+  const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
+  return (
+    <nav className="tm-quick" aria-label="Open this coin elsewhere">
+      {trade.map((l) => (
+        <a key={l.id} className="trade" href={l.href(mint)} target="_blank" rel="noreferrer">
+          {l.label}
+          <ExternalIcon size={11} />
+        </a>
+      ))}
+      {LINKS.map((l) => (
+        <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
+          {l.label}
+          <ExternalIcon size={11} />
+        </a>
+      ))}
+    </nav>
+  );
+}
+
+const PENDING_SAFETY: SafetyVerdict = { state: "pending", reading: null, reasons: [], passedAtAlert: false };
+const SAFETY_WORD = { passed: "Passed", failed: "Failed", pending: "Pending" } as const;
+
+/** The safety screen's verdict, left of Sage: a link down to the Safety section. */
+function SafetyPill({ verdict, onClick }: { verdict: SafetyVerdict; onClick?: () => void }) {
+  const { state } = verdict;
+  const title =
+    state === "passed"
+      ? "Passed the safety screen. See the Safety section."
+      : state === "failed"
+        ? `Failed the safety screen${verdict.passedAtAlert ? " on a scan after the alert" : ""}. See the Safety section.`
+        : "The safety screen's verdict lands with the coin's scan.";
+  return (
+    <button
+      type="button"
+      className={`tm-safety-pill ${state}`}
+      onClick={onClick}
+      disabled={!onClick}
+      title={title}
+      aria-label={`Safety screen: ${SAFETY_WORD[state].toLowerCase()}`}
+    >
+      {state === "pending" ? <Spinner size={11} /> : <ShieldIcon size={13} />}
+      <span className="tm-safety-word">Safety </span>
+      {SAFETY_WORD[state]}
+    </button>
   );
 }
 
@@ -452,6 +490,10 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const ids = useId().replace(/:/g, "");
   const bodyRef = useRef<HTMLDivElement>(null);
   const active = useActiveSection(bodyRef, ids);
+  const headH = useHeadHeight(bodyRef);
+  const goTo = (id: SectionId) =>
+    document.getElementById(`${ids}-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const safety = safetyVerdict(card, scanning);
   // A lookup asks TokenSage for a fresh read, which lands within minutes: check more often.
   const sage = usePolling<SageView>(`${useTokenApi(mint)}/sage`, utility ? 20_000 : 120_000);
   // The moment the scan lands, re-read what it feeds (the flagged wallets, the read) rather than
@@ -468,7 +510,11 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   }, [scanning, reloadChart, reloadSage]);
 
   return (
-    <div className="about-body tm-body" ref={bodyRef}>
+    <div
+      className="about-body tm-body"
+      ref={bodyRef}
+      style={headH ? ({ "--tm-head-h": `${headH}px` } as React.CSSProperties) : undefined}
+    >
       <header className="tm-head">
         <div className="tm-token">
           <div className={`avatar-wrap tone-${badge.tone}`}>
@@ -485,10 +531,15 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
             />
           </div>
           <div className="tm-title-block">
-            <h2 id="tm-title" className="tm-title" tabIndex={-1} autoFocus>
-              {label}
-              {card.token.name && card.token.symbol && <span className="token-name"> {card.token.name}</span>}
-            </h2>
+            <div className="tm-title-row">
+              <h2 id="tm-title" className="tm-title" tabIndex={-1} autoFocus>
+                {label}
+                {card.token.name && card.token.symbol && (
+                  <span className="token-name"> {card.token.name}</span>
+                )}
+              </h2>
+              <MintChip mint={mint} />
+            </div>
             <div className="tm-sub">
               {showVerdict && badge.tone !== "neutral" && (
                 <span className={`badge ${badge.tone}`}>{badge.text}</span>
@@ -513,6 +564,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
           </div>
         </div>
         <div className="tm-actions">
+          <SafetyPill verdict={safety} onClick={() => goTo("safety")} />
           <button
             type="button"
             className="sage-btn"
@@ -526,6 +578,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
             <CloseIcon size={16} />
           </button>
         </div>
+        <QuickLinks mint={mint} />
         <nav className="tm-nav" aria-label="Sections">
           {SECTIONS.map((x) => (
             <button
@@ -533,20 +586,13 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
               type="button"
               className={`tm-nav-btn${active === x.id ? " on" : ""}`}
               aria-current={active === x.id ? "true" : undefined}
-              onClick={() =>
-                document
-                  .getElementById(`${ids}-${x.id}`)
-                  ?.scrollIntoView({ behavior: "smooth", block: "start" })
-              }
+              onClick={() => goTo(x.id)}
             >
               {utility && x.id === "call" ? "Market" : x.label}
             </button>
           ))}
         </nav>
       </header>
-
-      {/* The address and the quick links first: what a reader reaches for before anything else. */}
-      <MintLinks mint={mint} />
 
       {utility && (
         <ScanProgress
@@ -676,6 +722,11 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         )}
       </section>
 
+      <section id={`${ids}-safety`} className="tm-group" aria-labelledby={`${ids}-safety-h`}>
+        <GroupLabel id={`${ids}-safety-h`}>Safety</GroupLabel>
+        <SafetyCard verdict={safety} scanning={scanning} now={now} />
+      </section>
+
       <section id={`${ids}-sage`} className="tm-group" aria-labelledby={`${ids}-sage-h`}>
         <GroupLabel id={`${ids}-sage-h`}>TokenSage</GroupLabel>
         <SageSection mint={mint} sage={sage} />
@@ -722,6 +773,7 @@ const SECTIONS = [
   { id: "chart", label: "Chart" },
   { id: "holders", label: "Holders" },
   { id: "call", label: "The call" },
+  { id: "safety", label: "Safety" },
   { id: "sage", label: "TokenSage" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -757,6 +809,109 @@ function useActiveSection(bodyRef: RefObject<HTMLDivElement | null>, ids: string
     };
   }, [bodyRef, ids]);
   return active;
+}
+
+/**
+ * The sticky header's height, followed as it wraps, so a section the nav or the safety pill jumps
+ * to lands just under it (the sections' scroll margin reads it).
+ */
+function useHeadHeight(bodyRef: RefObject<HTMLDivElement | null>): number {
+  const [h, setH] = useState(0);
+  useEffect(() => {
+    const head = bodyRef.current?.querySelector(".tm-head");
+    if (!head || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setH(Math.round(head.getBoundingClientRect().height)));
+    ro.observe(head);
+    return () => ro.disconnect();
+  }, [bodyRef]);
+  return h;
+}
+
+/**
+ * The safety screen on this coin (user ask 2026-10-16): its verdict on the newest scan, why it
+ * failed, and each of its rules against what the scan read.
+ */
+function SafetyCard({ verdict, scanning, now }: { verdict: SafetyVerdict; scanning: boolean; now: number }) {
+  const { state, reading } = verdict;
+  return (
+    <section className={`sage-card tm-safety ${state}`}>
+      <h4>
+        <ShieldIcon size={14} /> Safety screen
+        <span className={`badge ${state === "passed" ? "good" : state === "failed" ? "bad" : ""}`}>
+          {SAFETY_WORD[state]}
+        </span>
+        {reading && (
+          <span className="tm-h4-meta small muted">Scan {ago(new Date(reading.takenAt), now)}</span>
+        )}
+      </h4>
+      <p className="small muted tm-safety-lead">
+        {state === "passed"
+          ? "Its newest scan clears every rule of the safety screen. The screen runs on every scan, and a coin that fails it is never alerted."
+          : state === "failed"
+            ? `Its newest scan fails the safety screen, so nothing alerts on it while it does.${
+                verdict.passedAtAlert ? " It passed when it was alerted; a later scan failed it." : ""
+              }`
+            : scanning
+              ? "The screen runs with this coin's scan. Its verdict lands here as soon as the scan does."
+              : "No scan has screened this coin yet."}
+      </p>
+      {verdict.reasons.length > 0 && (
+        <ul className="tm-safety-reasons">
+          {verdict.reasons.map((r) => (
+            <li key={r}>
+              <CloseIcon size={12} />
+              {r}
+            </li>
+          ))}
+        </ul>
+      )}
+      {reading ? (
+        <ul className="tm-safety-checks">
+          {safetyChecks(reading).map((c) => (
+            <li key={c.label} className={c.status} title={c.rule}>
+              <span
+                className="tm-safety-mark"
+                aria-label={c.status === "ok" ? "Clears" : c.status === "fail" ? "Fails" : "Not read"}
+              >
+                {c.status === "ok" ? (
+                  <CheckIcon size={12} />
+                ) : c.status === "fail" ? (
+                  <CloseIcon size={12} />
+                ) : (
+                  "–"
+                )}
+              </span>
+              <span className="tm-safety-label">
+                {c.label}
+                <small className="faint">{c.rule}</small>
+              </span>
+              <span
+                className={`tm-safety-value${c.status === "unknown" ? " muted" : /\d/.test(c.value) ? " num" : ""}`}
+              >
+                {c.value}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        scanning && (
+          <ul className="tm-safety-checks" aria-hidden="true">
+            {Array.from({ length: 6 }, (_, i) => (
+              <li key={i} className="unknown">
+                <span className="tm-safety-mark">–</span>
+                <span className="tm-safety-label">
+                  <SkelValue width="7em" />
+                </span>
+                <span className="tm-safety-value">
+                  <SkelValue width="3em" />
+                </span>
+              </li>
+            ))}
+          </ul>
+        )
+      )}
+    </section>
+  );
 }
 
 /**
