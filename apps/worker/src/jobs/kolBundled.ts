@@ -28,10 +28,19 @@ export interface KolBundledReading {
   kolBundledPct: number;
   bundledSupplyPct: number;
   bundledSupplyCount: number;
+  /**
+   * The same two before a KOL's bundle followed its transfers (user decision 2026-10-16): what the
+   * models and the AI judge keep reading until the next retrain (notes/model-retrain-pending.md).
+   */
+  kolBundledPctModel: number;
+  bundledSupplyPctModel: number;
 }
 
 /** The holder lists a KOL reading needs: the linked reading's, or a stored snapshot's. */
-export type KolBundledSource = Pick<LinkedWalletsReading, "holders" | "clusters" | "sameTimeClusters">;
+export type KolBundledSource = Pick<LinkedWalletsReading, "holders" | "clusters" | "sameTimeClusters"> & {
+  /** The coin's holder-to-holder transfers: a KOL's bundle takes in whoever it sent the coin to. */
+  transfers?: readonly { from: string; to: string; pct: number }[] | null;
+};
 
 /**
  * KOL Bundled % and Bundled % for each coin with a linked reading (core's wallets/kolBundled.ts), from the KOL
@@ -74,12 +83,16 @@ export async function kolBundledByMint(
       sameTimeClusters: r.sameTimeClusters,
       isKol,
       ties,
+      transfers: r.transfers,
     };
     const bundled = bundledSupply(input);
+    const unfollowed = { ...input, transfers: null };
     out.set(mint, {
       kolBundledPct: kolBundledPct(input),
       bundledSupplyPct: bundled.pct,
       bundledSupplyCount: bundled.count,
+      kolBundledPctModel: kolBundledPct(unfollowed),
+      bundledSupplyPctModel: bundledSupply(unfollowed).pct,
     });
   }
   return out;

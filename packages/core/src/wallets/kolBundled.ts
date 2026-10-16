@@ -6,7 +6,16 @@
  * (user decision 2026-10-14). Each holder counts once across every KOL; a KOL holding alone, tied
  * to no one, adds nothing. The bubble map's KOLs list (apps/web bubbleMap.ts kolControl) draws the
  * same groups.
+ *
+ * Transfers out of a bundle (user decision 2026-10-16): a holder that got the coin from the KOL or
+ * from any wallet already in its bundle joins it, past the one-step limit, and so on from there.
+ * A wallet splitting its bag across fresh wallets is one owner's supply whoever it is. The send
+ * must pass the dust floor (TRANSFER_LINK_MIN_PCT or TRANSFER_LINK_MIN_SHARE of what the sender
+ * held); only known exchange wallets are left out, so a busy side wallet's sends still count.
  */
+
+import { linkingTransfers } from "./holderTransfers.js";
+import { KNOWN_EXCHANGE_WALLETS } from "./linkedWallets.js";
 
 export interface KolBundledInput {
   /** The top holders the linked reading covers, with their share of supply, %. */
@@ -19,6 +28,16 @@ export interface KolBundledInput {
   isKol: (wallet: string) => boolean;
   /** Holders tied to a KOL: the KOL funded them, or they trade as its possible side wallet. */
   ties: readonly { wallet: string; kolWallet: string }[];
+  /** Holder-to-holder transfers of the coin (holderTransfers.ts); none: bundles from ties and groups alone. */
+  transfers?: readonly { from: string; to: string; pct: number }[] | null;
+}
+
+/** The sends that carry a bundle on to their receiver: past dust, neither end a known exchange. */
+export function bundleTransfers<T extends { from: string; to: string; pct: number }>(
+  transfers: readonly T[] | null | undefined,
+  pctOf: ReadonlyMap<string, number>,
+): T[] {
+  return linkingTransfers(transfers, pctOf, (w) => KNOWN_EXCHANGE_WALLETS.has(w));
 }
 
 /** The holders KOL Bundled % takes in: every KOL bundle's, each once. */
@@ -42,12 +61,24 @@ export function kolBundledWallets(input: KolBundledInput): Set<string> {
     tiedByKol.set(t.kolWallet, set);
   }
   for (const w of pctOf.keys()) if (input.isKol(w) && !tiedByKol.has(w)) tiedByKol.set(w, new Set());
+  const sentTo = new Map<string, string[]>();
+  for (const t of bundleTransfers(input.transfers, pctOf))
+    sentTo.set(t.from, [...(sentTo.get(t.from) ?? []), t.to]);
   const bundled = new Set<string>();
   for (const [kol, tied] of tiedByKol) {
     const core = new Set(tied);
     if (pctOf.has(kol)) core.add(kol);
     const reach = new Set(core);
     for (const w of core) for (const g of groupsOf.get(w) ?? []) for (const o of g) reach.add(o);
+    // Then every holder the bundle sent the coin to, and those they sent it to.
+    const queue = [...reach];
+    while (queue.length > 0) {
+      for (const to of sentTo.get(queue.pop()!) ?? []) {
+        if (reach.has(to)) continue;
+        reach.add(to);
+        queue.push(to);
+      }
+    }
     // Tied to no one but itself: not a bundle.
     if ([...reach].every((w) => w === kol)) continue;
     for (const w of reach) bundled.add(w);
