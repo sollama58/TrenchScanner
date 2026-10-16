@@ -190,7 +190,7 @@ const SWITCHABLE_NAMES: ReadonlySet<WalletName["source"]> = new Set<SwitchableSo
 ]);
 
 /**
- * Whether the Pump.fun, FOMO and Helius names show on the map (user ask 2026-10-16): on by
+ * Whether the Pump.fun, FOMO and Helius names show on the map (user ask 2026-10-16): off by
  * default, switchable on the map, with the default in Settings. Settings can also set each kind on
  * its own, and then the map has no switch for them. KOLs' names and exchanges' always show: an
  * exchange that funded holders keeps its Helius name. Held above the map so its share image follows
