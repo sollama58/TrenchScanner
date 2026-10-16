@@ -2319,7 +2319,8 @@ model PaperPosition {
   signalAt         DateTime
   /// "open" -> "closed"
   status           String
-  /// SOL into the swap (what the exit multiple is measured against), and fees on top of it.
+  /// SOL into the swap (what the exit multiple is measured against), and the entry's fees on top
+  /// of it. A sale's fee comes off proceedsLamports instead, so each fee counts once.
   swapInLamports   BigInt
   feesLamports     BigInt        @default(0)
   tokensBought     String

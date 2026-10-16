@@ -260,6 +260,36 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
     expect(stats.hit2x).toBe(1);
   });
 
+  it("books a sale once when another pass sold the position under it", async () => {
+    await strategyWithSignal();
+    await runPaperTrading(deps());
+    const cashAfterBuy = (await strategy()).cashLamports;
+    market.lamportsPerRaw.set(mint, 0.125);
+    clock = new Date(clock.getTime() + 60_000);
+    // A deploy's other scanner sells the rung between this pass's read and its sale.
+    const quote = market.swap.quote;
+    const raced: PaperTradingDeps["swap"] = {
+      ...market.swap,
+      quote: async (req) => {
+        if (req.inputMint === mint) {
+          await prisma.paperPosition.update({
+            where: { id: (await position()).id },
+            data: { tokensHeld: "495000000", rungsTaken: 1 },
+          });
+        }
+        return quote(req);
+      },
+    };
+    const summary = await runPaperTrading({ ...deps(), swap: raced });
+    expect(summary.sells).toBe(0);
+    expect(summary.errors).toBe(0);
+    const p = await position();
+    expect(p.fills.map((f) => f.reason)).toEqual(["entry"]);
+    expect(p.tokensHeld).toBe("495000000");
+    expect(p.proceedsLamports).toBe(0n);
+    expect((await strategy()).cashLamports).toBe(cashAfterBuy);
+  });
+
   it("stops out, and sells on request", async () => {
     await strategyWithSignal();
     await runPaperTrading(deps());
@@ -361,7 +391,7 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
     expect(notes[0]!.html).toMatch(
       /^📝 <b>Paper · test<\/b>: bought <a href="https:\/\/solscan.io\/token\/\w+">\$PAPER<\/a> for 0.0500 SOL/,
     );
-    expect(notes[1]!.html).toMatch(/sold .*\(stop loss\), 0\.0195 SOL back; closed −0\.0307 SOL/);
+    expect(notes[1]!.html).toMatch(/sold .*\(stop loss\), 0\.0195 SOL back; closed −0\.0306 SOL/);
 
     notes = [];
     await prisma.paperStrategy.deleteMany({ where: { userId } });
@@ -381,7 +411,7 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
     await runPaperTrading(deps());
     let s = await strategy();
     expect(s.running).toBe(false);
-    expect(s.lastError).toMatch(/lost 0\.0307 SOL in the last 24 hours \(limit 0\.02 SOL\)/);
+    expect(s.lastError).toMatch(/lost 0\.0306 SOL in the last 24 hours \(limit 0\.02 SOL\)/);
     expect(notes.at(-1)!.html).toMatch(/⏸ stopped: lost/);
 
     // Started again (the API moves the window): the earlier loss no longer counts.

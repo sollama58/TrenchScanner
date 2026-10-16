@@ -199,6 +199,15 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toMatch(/sign in with your wallet/);
+    // Nor may it withdraw the owner's own wallet.
+    const out = await app.inject({
+      method: "POST",
+      url: "/trading/withdraw",
+      cookies: { [SESSION_COOKIE_NAME]: phone },
+      payload: { amount: "max" },
+    });
+    expect(out.statusCode).toBe(403);
+    expect(out.json().error).toMatch(/sign in with your wallet/);
     // Viewing still works from the phone.
     const view = await app.inject({
       method: "GET",
