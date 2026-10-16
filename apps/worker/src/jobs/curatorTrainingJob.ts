@@ -208,6 +208,7 @@ async function trainCurators(
       highConvictionRank: env.CURATED_HIGH_CONVICTION_RANK,
       calibrationWindowDays: env.CURATOR_CALIBRATION_WINDOW_DAYS,
       featureOnsetGuard: env.CURATOR_FEATURE_ONSET_GUARD,
+      windowStart,
       rulesFromBest: env.CURATOR_RULES_FROM_BEST,
       rulesTeachers,
       currentRules,
@@ -240,7 +241,7 @@ async function trainCurators(
       ),
     ),
     ...fillRateAlarms(
-      inputFills(trainingRows, CANDIDATE_FEATURE_NAMES, env.CURATOR_EXAM_SHARE),
+      inputFills(trainingRows, CANDIDATE_FEATURE_NAMES, env.CURATOR_EXAM_SHARE, windowStart),
       new Set<string>(LEARNER_FEATURE_NAMES),
       RETIRED_LEARNER_INPUTS as ReadonlySet<string>,
     ),
@@ -381,6 +382,10 @@ async function trainCurators(
       feature: h.feature,
       referencePct: h.referencePct,
       recentPct: h.recentPct,
+      // The age buckets that held it, when the pooled coverage alone did not.
+      ...(h.buckets
+        ? { buckets: h.buckets.map((b) => `${b.bucket} ${b.recentPct}% against ${b.referencePct}%`) }
+        : {}),
     })),
     // The inputs' health this run: anything null on most rows, or with no lift at either end,
     // is a wire to check (see curation/featureReport.ts).

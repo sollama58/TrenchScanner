@@ -225,18 +225,31 @@ export const FILL_DROP_RATIO = 0.4;
 /**
  * Inputs the learners read that went dead lately (a source down), and retired inputs that came
  * back to life (worth judging again). The onset guard already keeps a dead input out of the run;
- * this makes it visible.
+ * this makes it visible. An input is also judged within each age bucket (2026-10-16,
+ * data-correctness audit: the holder count went from 99% to 6% filled on coins under five
+ * minutes old while its pooled fill stayed over 80%, and no alarm fired); the message names the
+ * bucket.
  */
 export function fillRateAlarms(
-  /** inputFills (featureOnset.ts): each input's fill on the reference span and the newest rows. */
+  /** inputFills (featureOnset.ts): each input's fill on the reference span and the newest rows, and per age bucket. */
   fills: readonly HeldFeature[],
   read: ReadonlySet<string>,
   retired: ReadonlySet<string>,
 ): string[] {
   const out: string[] = [];
+  const wentDead = (referencePct: number, recentPct: number) =>
+    referencePct >= 20 && recentPct < referencePct * FILL_DROP_RATIO;
   for (const f of fills) {
-    if (read.has(f.feature) && f.referencePct >= 20 && f.recentPct < f.referencePct * FILL_DROP_RATIO) {
+    if (read.has(f.feature) && wentDead(f.referencePct, f.recentPct)) {
       out.push(`${f.feature} went dead: ${f.recentPct}% of the newest rows against ${f.referencePct}%`);
+    } else if (read.has(f.feature)) {
+      for (const b of f.buckets ?? []) {
+        if (wentDead(b.referencePct, b.recentPct)) {
+          out.push(
+            `${f.feature} went dead at ${b.bucket}: ${b.recentPct}% of the newest ${b.recentRows} rows against ${b.referencePct}%`,
+          );
+        }
+      }
     } else if (retired.has(f.feature) && f.referencePct < 2 && f.recentPct >= 20) {
       out.push(`${f.feature} (retired as dead) is filled again on ${f.recentPct}% of the newest rows`);
     }
