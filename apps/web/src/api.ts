@@ -1403,7 +1403,8 @@ export type CardField =
   | "reasons"
   | "mint"
   | "links"
-  | "sage";
+  | "sage"
+  | "fees";
 
 /** Trading sites a card can link the token to (the API's QUICK_LINKS). */
 export type QuickLink = "terminal" | "axiom" | "gmgn";

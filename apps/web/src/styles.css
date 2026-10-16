@@ -8896,6 +8896,33 @@ html:has(dialog.about-modal[open]) {
   gap: 6px;
   flex: none;
 }
+/* Where the creator fee goes, in the theme's (or the reader's own) colors. */
+.fee-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  cursor: default;
+}
+.fee-badge .icon {
+  stroke-width: 1.75;
+}
+.fee-charity .icon {
+  color: var(--bad-ink);
+}
+.fee-rewards .icon {
+  color: var(--good-ink);
+}
+.fee-github .icon {
+  color: var(--brand-ink);
+}
+.fee-dev .icon {
+  color: var(--warn-ink);
+}
 
 /* The Live tab's picture tour (AboutModal, TourArt) */
 .tour-modal {
