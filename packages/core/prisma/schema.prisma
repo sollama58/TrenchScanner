@@ -2059,6 +2059,37 @@ model Announcement {
   @@index([createdAt])
 }
 
+/// A bug report or suggestion sent from the bug button on every screen (apps/api/src/routes/
+/// feedback.ts). Anyone can send one, signed in or not; admins read and triage them in Admin >
+/// Reports.
+model FeedbackReport {
+  id            String   @id @default(cuid())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  /// "bug" | "idea"
+  kind          String
+  message       String
+  /// How to reach the sender (a Telegram handle, an email), when they gave one.
+  contact       String?
+  /// "new" | "seen" | "done"
+  status        String   @default("new")
+  /// The signed-in wallet that sent it; null for a guest.
+  walletAddress String?
+  /// Who sent it, for the daily cap: "w:<wallet>" signed in, "ip:<hash>" otherwise.
+  submitterKey  String
+  /// What the sender's browser said about where they were: page, tab, version, screen size.
+  context       Json?
+  /// An image the sender attached, as a data: URL. Never in the list route's answer.
+  screenshot    String?
+  adminNote     String?
+  /// The admin wallet that last changed its status or note.
+  handledBy     String?
+
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([submitterKey, createdAt])
+}
+
 // ── Trading bot (packages/core/src/trading) ──────────────────────────────────────────────────
 // Admin-only for now. A user's bot trades from a wallet the server holds for them; its key is
 // sealed under AWS KMS (trading/keyVault.ts) and withdrawals only ever go to the wallet the user

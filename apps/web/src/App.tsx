@@ -44,6 +44,8 @@ import { beginWait, markNavigation } from "./loadTracker";
 import { StreamView } from "./components/StreamView";
 import { useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
+import { BugButton } from "./components/BugButton";
+import { AdminReportsBadge } from "./components/AdminReportsBadge";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
@@ -322,6 +324,7 @@ export function App() {
                   >
                     <Icon size={15} />
                     <span>{label}</span>
+                    {id === "admin" && <AdminReportsBadge />}
                   </button>
                 ))}
               </div>
@@ -501,6 +504,13 @@ export function App() {
         </span>
       </footer>
       <TokenModalHost />
+      {/* On every screen, signed in or not: bug reports and suggestions, read in Admin > Reports. */}
+      <BugButton
+        tab={signedIn || guest ? tab : session.state}
+        signedIn={signedIn}
+        guest={guest}
+        walletAddress={signedIn ? session.user.walletAddress : null}
+      />
     </div>
   );
 }

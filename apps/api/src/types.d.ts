@@ -15,6 +15,11 @@ declare module "fastify" {
      * entry or admin flag - see resolveAccess() in packages/core.
      */
     authenticateSubscriber: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /**
+     * Sets `request.user` when the caller has a live session and lets everyone through either
+     * way: for routes guests may use but that want to know who a signed-in caller is.
+     */
+    identify: (request: FastifyRequest) => Promise<void>;
     /** Push channel for newly created matches - see matchStream.ts. Exposed for /health to report on. */
     matchStream: MatchStream;
   }
