@@ -301,7 +301,7 @@ export async function renderBubbleCard(
 
   // The lines under the list, each on if it has something to say; the list takes the room left,
   // never fewer than six rows (or every bundle when there are fewer).
-  // The risky count sits in the legend with the wallet types (user ask 2026-10-16); a line here
+  // The risky share sits in the legend with the wallet types (user ask 2026-10-16); a line here
   // only says when the flagged wallets weren't read.
   const sameWallets = graph.nodes.filter((n) => n.sameTime !== null).length;
   const notes: { colour: string; text: string }[] = [];
@@ -935,9 +935,9 @@ function nameLegend(graph: BubbleGraph, names: WalletNames, flagsRead: boolean):
       icon: TRAIT_ICON[t.trait],
       iconInk: TRAIT_INK[t.trait],
     });
-  // The risky holders' count beside them, a red exclamation (user ask 2026-10-16).
-  const risky = riskyShare(graph).count;
-  if (flagsRead && risky > 0)
-    out.push({ text: `Risky ${risky}`, bg: dark, ink: INK2, icon: RISKY_ICON, iconInk: RISK });
+  // The risky holders' share of supply beside them, a red exclamation (user ask 2026-10-16).
+  const risky = riskyShare(graph);
+  if (flagsRead && risky.count > 0)
+    out.push({ text: `Risky ${pctText(risky.pct)}`, bg: dark, ink: INK2, icon: RISKY_ICON, iconInk: RISK });
   return out;
 }
