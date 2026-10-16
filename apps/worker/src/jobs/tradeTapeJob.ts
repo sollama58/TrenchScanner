@@ -9,10 +9,11 @@ import {
   pumpFunCursorBefore,
   stopCauseOf,
   summarizeTape,
-  tradesFromChainTransactions,
+  tradesFromChainTransactionsPriced,
   TAPE_WINDOW_AFTER_ANCHOR_MS,
   type HeliusClient,
   type PumpFunClient,
+  type SolPriceLookup,
   type TapeTrade,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
@@ -335,6 +336,8 @@ export async function storeTape(
 export interface TradeTapeDeps {
   helius: Pick<HeliusClient, "getMintTransactionsPage" | "gtfaUsable" | "takeCallStats">;
   pumpFun: Pick<PumpFunClient, "coinTrades" | "coinOrigin">;
+  /** Prices the coins a trade was paid in other than SOL (a coin-paired launch's quote coin). */
+  solPrices?: SolPriceLookup;
 }
 
 export interface TradeTapeOptions {
@@ -431,7 +434,7 @@ async function runHeliusLane(
       }
       continue;
     }
-    const parsed = tradesFromChainTransactions(p.coin.mint, page.txs);
+    const parsed = await tradesFromChainTransactionsPriced(p.coin.mint, page.txs, deps.solPrices);
     if (!p.started) {
       p.started = true;
       p.launch = parsed.launch;

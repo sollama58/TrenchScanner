@@ -492,6 +492,7 @@ async function main() {
     const tapeDeps = {
       helius: new HeliusClient({ apiKey: env.HELIUS_API_KEY || undefined }),
       pumpFun: deps.pumpFun,
+      solPrices: (mints: string[]) => deps.dexScreener.solPricesOf(mints),
     };
     return scheduleInterval(
       "trade-tape",

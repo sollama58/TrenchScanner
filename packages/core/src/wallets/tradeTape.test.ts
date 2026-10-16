@@ -8,6 +8,8 @@ import {
   stopCauseOf,
   summarizeTape,
   tradesFromChainTransactions,
+  tradesFromChainTransactionsPriced,
+  counterMints,
   tradesFromPumpFun,
   type ChainTx,
   type TapeTrade,
@@ -91,6 +93,137 @@ describe("tradesFromChainTransactions", () => {
   it("skips failed transactions", () => {
     const failed = { ...buy, meta: { ...buy.meta!, err: { InstructionError: [0, "x"] } } };
     expect(tradesFromChainTransactions(MINT, [failed], isWallet).trades).toEqual([]);
+  });
+
+  describe("trades paid in another coin", () => {
+    const PUMP = "pumpCoin";
+    const USDC = "usdcCoin";
+    const WSOL = "So11111111111111111111111111111111111111112";
+    const coin = (accountIndex: number, owner: string, mint: string, amount: number) => ({
+      accountIndex,
+      mint,
+      owner,
+      uiTokenAmount: { amount: String(amount * 1e6), decimals: 6 },
+    });
+    // Bob buys a PUMP-paired launch with 20,000 PUMP; his SOL moves by the fee alone.
+    const pumpBuy: ChainTx = {
+      blockTime: T0 / 1000 + 5,
+      transaction: {
+        signatures: ["pumpBuy"],
+        message: { accountKeys: ["bob", "bobAta", "bobPump", "curveAta"] },
+      },
+      meta: {
+        err: null,
+        preTokenBalances: [
+          bal(3, "curve", 960_000_000),
+          coin(2, "bob", PUMP, 50_000),
+          coin(4, "curve", PUMP, 0),
+        ],
+        postTokenBalances: [
+          bal(3, "curve", 955_000_000),
+          bal(1, "bob", 5_000_000),
+          coin(2, "bob", PUMP, 30_000),
+          coin(4, "curve", PUMP, 20_000),
+        ],
+        preBalances: [1e9, 0, 0, 0],
+        postBalances: [1e9 - 10_000, 0, 0, 0],
+      },
+    };
+    // Alice sells through a router that pays her 80 USDC.
+    const usdcSell: ChainTx = {
+      blockTime: T0 / 1000 + 90,
+      transaction: { signatures: ["usdcSell"], message: { accountKeys: ["alice", "aliceAta", "aliceUsdc"] } },
+      meta: {
+        err: null,
+        preTokenBalances: [bal(1, "alice", 6_000_000), coin(2, "alice", USDC, 0)],
+        postTokenBalances: [bal(1, "alice", 0), coin(2, "alice", USDC, 80)],
+        preBalances: [1e9, 0, 0],
+        postBalances: [1e9 - 5_000, 0, 0],
+      },
+    };
+    // Carol pays from wrapped SOL she already holds.
+    const wsolBuy: ChainTx = {
+      blockTime: T0 / 1000 + 100,
+      transaction: { signatures: ["wsolBuy"], message: { accountKeys: ["carol", "carolAta", "carolWsol"] } },
+      meta: {
+        err: null,
+        preTokenBalances: [coin(2, "carol", WSOL, 3)],
+        postTokenBalances: [bal(1, "carol", 1_000_000), coin(2, "carol", WSOL, 2.25)],
+        preBalances: [1e9, 0, 0],
+        postBalances: [1e9 - 5_000, 0, 0],
+      },
+    };
+    const solPerUnit = new Map([
+      [PUMP, 0.00004],
+      [USDC, 0.005],
+    ]);
+
+    it("values the coin paid or got in SOL", () => {
+      const { trades } = tradesFromChainTransactions(
+        MINT,
+        [pumpBuy, usdcSell, wsolBuy],
+        isWallet,
+        solPerUnit,
+      );
+      expect(trades.map((t) => [t.wallet, t.side, Number(t.sol.toFixed(6))])).toEqual([
+        ["bob", "buy", 0.80001],
+        ["alice", "sell", 0.399995],
+        ["carol", "buy", 0.750005],
+      ]);
+    });
+
+    it("reads the lamports alone for a coin it has no price for, as before", () => {
+      const { trades } = tradesFromChainTransactions(MINT, [pumpBuy, wsolBuy], isWallet);
+      expect(trades.map((t) => Number(t.sol.toFixed(6)))).toEqual([0.00001, 0.750005]);
+    });
+
+    it("credits a trade a service wallet paid for to the wallet that got the coin", () => {
+      // A bot's relayer pays 10 USDC and the fee; dave's wallet receives the coin.
+      const relayed: ChainTx = {
+        blockTime: T0 / 1000 + 120,
+        transaction: {
+          signatures: ["relayed"],
+          message: { accountKeys: ["relayer", "daveAta", "relayerUsdc"] },
+        },
+        meta: {
+          err: null,
+          fee: 5_000,
+          preTokenBalances: [coin(2, "relayer", USDC, 100)],
+          postTokenBalances: [bal(1, "dave", 2_000_000), coin(2, "relayer", USDC, 90)],
+          preBalances: [1e9, 0, 0],
+          postBalances: [1e9 - 5_000, 0, 0],
+        },
+      };
+      const { trades } = tradesFromChainTransactions(MINT, [relayed], isWallet, solPerUnit);
+      expect(trades).toHaveLength(1);
+      expect(trades[0]).toMatchObject({ wallet: "dave", side: "buy" });
+      expect(trades[0]!.sol).toBeCloseTo(0.05, 9);
+      expect(counterMints(MINT, [relayed], isWallet)).toEqual([USDC]);
+    });
+
+    it("lists the coins to price, never SOL itself or a pool's", () => {
+      expect(counterMints(MINT, [pumpBuy, usdcSell, wsolBuy, buy], isWallet).sort()).toEqual(
+        [PUMP, USDC].sort(),
+      );
+    });
+
+    it("prices them through the lookup, and survives a failing one", async () => {
+      const asked: string[][] = [];
+      const lookup = async (mints: string[]) => {
+        asked.push(mints);
+        return solPerUnit;
+      };
+      const priced = await tradesFromChainTransactionsPriced(MINT, [pumpBuy], lookup, isWallet);
+      expect(asked).toEqual([[PUMP]]);
+      expect(priced.trades[0]!.sol).toBeCloseTo(0.80001, 6);
+      const failing = await tradesFromChainTransactionsPriced(
+        MINT,
+        [pumpBuy],
+        () => Promise.reject(new Error("x")),
+        isWallet,
+      );
+      expect(failing.trades[0]!.sol).toBeCloseTo(0.00001, 6);
+    });
   });
 });
 
