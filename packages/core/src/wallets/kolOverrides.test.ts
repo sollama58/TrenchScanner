@@ -69,7 +69,11 @@ describe("KOL overrides", () => {
     expect(KOL_OVERRIDES.get("Hi5yNvPSfagdja5xjYMTYWnnjSE3ze5KsezTLfuD2mqd")?.name).toBe("gambles.sol");
   });
 
-  it("names 9tRf…adYH4TnAp as Woozy", () => {
+  it("names 9tRf…dYH4TnAp as Woozy", () => {
     expect(KOL_OVERRIDES.get("9tRff7L6Mx3ZDNBoGPffdjD3c9JNzLc3nxzadYH4TnAp")?.name).toBe("Woozy");
+  });
+
+  it("names AuPp…nD45yqrf as Dani", () => {
+    expect(KOL_OVERRIDES.get("AuPp4YTMTyqxYXQnHc5KUc6pUuCSsHQpBJhgnD45yqrf")?.name).toBe("Dani");
   });
 });

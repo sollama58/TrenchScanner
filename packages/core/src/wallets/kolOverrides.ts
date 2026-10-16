@@ -25,12 +25,13 @@ export const KOL_OVERRIDES: ReadonlyMap<string, KolOverride> = new Map([
   ["VJSDW6S74YXR4rRR9P4xwhMvLZJQMhrUb8XMFirUsy1", { name: "Beanzz" }],
   // User ask 2026-10-16: name this wallet as this KOL.
   ["bwamJzztZsepfkteWRChggmXuiiCQvpLqPietdNfSXa", { name: "bwam_dev" }],
-  // User ask 2026-10-16: name these five wallets as these KOLs.
+  // User ask 2026-10-16: name these six wallets as these KOLs.
   ["4S8YBCt6hhi7Nr1NnKF6jF856LLN8JJFzD1a8nF5UuHA", { name: "shaka" }],
   ["ALauG4FwEYDgSXd5Hen6kvuWSCdUi2fYNSNqM1Ci31wE", { name: "Thurston" }],
   ["722tXm5uB5uuG2tC43uKHXQ7Pbyz75pTokEAJv9x5VTx", { name: "caller100x" }],
   ["Hi5yNvPSfagdja5xjYMTYWnnjSE3ze5KsezTLfuD2mqd", { name: "gambles.sol" }],
   ["9tRff7L6Mx3ZDNBoGPffdjD3c9JNzLc3nxzadYH4TnAp", { name: "Woozy" }],
+  ["AuPp4YTMTyqxYXQnHc5KUc6pUuCSsHQpBJhgnD45yqrf", { name: "Dani" }],
 ]);
 
 /**
