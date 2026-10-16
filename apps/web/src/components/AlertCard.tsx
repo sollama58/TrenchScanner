@@ -13,7 +13,18 @@ import {
   tokenThumb,
   usd,
 } from "../format";
-import { BrainIcon, CheckIcon, CopyIcon, ExternalIcon, RobotIcon, SageIcon, SlidersIcon } from "./Icons";
+import {
+  BrainIcon,
+  ChefHatIcon,
+  CheckIcon,
+  CopyIcon,
+  ExternalIcon,
+  GiftIcon,
+  HeartIcon,
+  RobotIcon,
+  SageIcon,
+  SlidersIcon,
+} from "./Icons";
 import { openSage } from "../sage";
 import { linkedCount, linkedCountText } from "../bubbleMap";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
@@ -164,6 +175,8 @@ export function AlertCard({
         "dev",
       ] as const
     ).filter(show).length + (show("vol") ? 3 : 0);
+
+  const fees = show("fees") ? feeBadge(card.token.creatorFee) : null;
 
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
@@ -604,7 +617,7 @@ export function AlertCard({
         </div>
       )}
 
-      {(show("mint") || show("sage") || show("links") || trade.length > 0) && (
+      {(show("mint") || show("sage") || fees || show("links") || trade.length > 0) && (
         <footer className="card-foot">
           {(show("mint") || show("sage")) && (
             <div className="card-foot-left">
@@ -625,6 +638,12 @@ export function AlertCard({
                 </button>
               )}
             </div>
+          )}
+          {fees && (
+            <span className={`fee-badge fee-${fees.kind}`} title={fees.title} aria-label={fees.title}>
+              FEES
+              <fees.Icon size={14} />
+            </span>
           )}
           {(show("links") || trade.length > 0) && (
             <nav className="card-links">
@@ -647,6 +666,57 @@ export function AlertCard({
       )}
     </article>
   );
+}
+
+const FEE_BADGES = {
+  charity: { Icon: HeartIcon, label: "go to a charity" },
+  rewards: { Icon: GiftIcon, label: "go to holders or another wallet" },
+  github: { Icon: RobotIcon, label: "go to a GitHub account" },
+  dev: { Icon: ChefHatIcon, label: "go to the dev" },
+} as const;
+
+/**
+ * The footer's FEES badge: where the coin's creator fee goes (TokenSage's read), as one outline
+ * icon - a heart for a charity, a gift for holder rewards or any other wallet, a robot for a GitHub
+ * account, a chef's hat for the dev. Nothing when TokenSage hasn't read the coin or can't tell.
+ */
+export function feeBadge(fee: Card["token"]["creatorFee"]): {
+  kind: keyof typeof FEE_BADGES;
+  Icon: (typeof FEE_BADGES)[keyof typeof FEE_BADGES]["Icon"];
+  title: string;
+} | null {
+  const kind = feeKind(fee?.destination);
+  if (!kind) return null;
+  const { Icon, label } = FEE_BADGES[kind];
+  const summary = fee?.summary?.trim().replace(/\.$/, "");
+  return {
+    kind,
+    Icon,
+    title: summary ? `${summary.charAt(0).toUpperCase()}${summary.slice(1)}.` : `Creator fees ${label}.`,
+  };
+}
+
+/** TokenSage's fee destination as a badge kind (packages/core/src/datasources/tokensage.ts). */
+function feeKind(destination: string | null | undefined): keyof typeof FEE_BADGES | null {
+  switch (destination) {
+    case "charity":
+      return "charity";
+    case "github":
+      return "github";
+    case "creator":
+      return "dev";
+    // Holders, cashback to traders, another wallet or account, or a split among several of them.
+    case "holder_rewards":
+    case "cashback":
+    case "wallet":
+    case "split":
+    case "social":
+    case "x":
+    case "x_account":
+      return "rewards";
+    default:
+      return null;
+  }
 }
 
 /** Fresh over the top 25 as a share, where the scan counted it; null otherwise. */

@@ -1379,3 +1379,33 @@ export function normalizeSocialUrl(
   }
   return url.toString();
 }
+
+/**
+ * Who a coin's creator fee goes to, in four groups: a charity, its holders or other wallets
+ * (holder rewards, cashback, another wallet or account, or a split among them), a GitHub account,
+ * or the dev. Null when TokenSage can't tell. The Lighthouse's Fee recipients section groups by
+ * this; the alert card's FEES badge (apps/web/src/components/AlertCard.tsx) draws the same groups.
+ */
+export const FEE_RECIPIENTS = ["charity", "holders or wallets", "GitHub", "dev"] as const;
+export type FeeRecipient = (typeof FEE_RECIPIENTS)[number];
+
+export function feeRecipientOf(destination: string | null | undefined): FeeRecipient | null {
+  switch (destination) {
+    case "charity":
+      return "charity";
+    case "github":
+      return "GitHub";
+    case "creator":
+      return "dev";
+    case "holder_rewards":
+    case "cashback":
+    case "wallet":
+    case "split":
+    case "social":
+    case "x":
+    case "x_account":
+      return "holders or wallets";
+    default:
+      return null;
+  }
+}

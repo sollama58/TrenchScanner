@@ -1,5 +1,6 @@
 import type { LighthouseCount, LighthouseTally, MarketLighthouse, MarketWeather } from "../api";
 import { pct, signedPct } from "../format";
+import { MIN_GRADED_FOR_RATE as MIN_GRADED } from "../rates";
 import type { Series, Unit } from "../lighthouseMetrics";
 import {
   BODY_BOTTOM,
@@ -607,6 +608,76 @@ export async function renderNarrativesPayCard(
     },
   );
   drawNarrativesPay(ctx, { outcomes });
+  return canvas;
+}
+
+// ---------- Fee recipients ----------
+
+export interface FeeRecipientsCardData {
+  /** Coins read by who gets their creator fee, biggest first. */
+  feeRecipients: LighthouseCount[];
+  /** Model calls by the same groups. */
+  byFeeRecipient: LighthouseTally[];
+}
+
+/**
+ * Who gets the creator fee on new coins, as one 100% bar, then a row per group: its share of the
+ * coins read and how model calls on its coins did (2x rate and average return under the exit plan).
+ */
+export async function renderFeeRecipientsCard(
+  d: FeeRecipientsCardData,
+  span: string,
+): Promise<HTMLCanvasElement> {
+  const { canvas, ctx, icon } = await cardCanvas();
+  if (!ctx) return canvas;
+  const total = sum(d.feeRecipients);
+  const graded = d.byFeeRecipient.reduce((s, r) => s + r.graded, 0);
+  frame(ctx, icon, "Fee recipients", "Who gets the creator fee on new coins, and how calls on them did.", {
+    badge: windowBadge(`Last ${span}`),
+    footer: `${n(total)} coins with a known fee recipient · ${n(graded)} graded model calls`,
+    link: LINK,
+    time: true,
+  });
+  if (total === 0) {
+    empty(ctx, "No fee recipients read in this window.");
+    return canvas;
+  }
+  split(ctx, "Coins read", d.feeRecipients, "", PAD, BODY_TOP + 20, CARD_W - PAD * 2);
+
+  const calls = new Map(d.byFeeRecipient.map((t) => [t.label, t]));
+  const cols = [PAD + 330, PAD + 560, PAD + 800, CARD_W - PAD];
+  const top = BODY_TOP + 128;
+  const rowH = Math.min(44, (BODY_BOTTOM - top - 26) / d.feeRecipients.length);
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = MUTED;
+  ctx.font = `600 16px ${FONT}`;
+  ctx.textAlign = "right";
+  ["Of coins", "Calls 2x", "Avg return", "Graded"].forEach((h, i) => ctx.fillText(h, cols[i]!, top));
+  d.feeRecipients.forEach((r, i) => {
+    const cy = top + 26 + rowH * i + rowH / 2;
+    const t = calls.get(r.label);
+    const r2x = t && t.graded > 0 ? (t.won2x / t.graded) * 100 : null;
+    const ret = t && t.returnN > 0 ? t.returnSum / t.returnN : null;
+    ctx.globalAlpha = t && t.graded >= MIN_GRADED ? 1 : 0.55;
+    ctx.textAlign = "left";
+    ctx.fillStyle = SERIES[i] ?? OTHER;
+    roundRect(ctx, PAD, cy - 7, 14, 14, 4);
+    ctx.fill();
+    ctx.fillStyle = INK;
+    ctx.font = `500 23px ${FONT}`;
+    ctx.fillText(label(r.label), PAD + 26, cy);
+    ctx.textAlign = "right";
+    ctx.font = `700 23px ${FONT}`;
+    ctx.fillText(pct(share(r.count, total)), cols[0]!, cy);
+    ctx.fillText(r2x === null ? "–" : pct(r2x), cols[1]!, cy);
+    ctx.fillStyle = tone(ret);
+    ctx.fillText(ret === null ? "–" : signedPct(ret), cols[2]!, cy);
+    ctx.fillStyle = INK2;
+    ctx.font = `500 21px ${FONT}`;
+    ctx.fillText(t ? n(t.graded) : "0", cols[3]!, cy);
+  });
+  ctx.globalAlpha = 1;
+  ctx.textAlign = "left";
   return canvas;
 }
 
