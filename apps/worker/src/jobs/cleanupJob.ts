@@ -338,10 +338,12 @@ async function deleteExpiredSnapshots(
        LIMIT $3)`;
   // A tracked token's older history thinned to one row per bucket: the highest market cap in it
   // (earliest on a tie), so peak recovery still finds every peak, plus any row a Match or curated
-  // alert points at. Rerunning it deletes nothing new - each bucket's keeper wins again.
+  // alert points at, and the token's newest row carrying a holder list (holderListWrites.ts: rows
+  // after it read the list from it, so the token view of a coin past this horizon keeps its holders).
+  // Rerunning it deletes nothing new - each bucket's keeper wins again.
   const downsampleSql = `DELETE FROM "TokenSnapshot" WHERE "id" IN (
       SELECT r."id" FROM (
-        SELECT s."id", row_number() OVER (
+        SELECT s."id", s."tokenId", s."takenAt", s."linkedHolders" IS NOT NULL AS "hasList", row_number() OVER (
                  PARTITION BY s."tokenId", floor(extract(epoch FROM s."takenAt") / $4)
                  ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC) AS rn
           FROM "TokenSnapshot" s
@@ -350,6 +352,9 @@ async function deleteExpiredSnapshots(
        WHERE r.rn > 1
          AND NOT EXISTS (SELECT 1 FROM "Match" m WHERE m."snapshotId" = r."id")
          AND NOT EXISTS (SELECT 1 FROM "CuratedAlert" a WHERE a."snapshotId" = r."id")
+         AND NOT (r."hasList" AND NOT EXISTS (
+               SELECT 1 FROM "TokenSnapshot" n
+                WHERE n."tokenId" = r."tokenId" AND n."takenAt" > r."takenAt" AND n."linkedHolders" IS NOT NULL))
        LIMIT $5)`;
   // Walk every token old enough to own a row on any horizon.
   const walkCutoff = [untrackedCutoff, downsample?.cutoff].reduce<Date>(
