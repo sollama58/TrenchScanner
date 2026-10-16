@@ -1,5 +1,5 @@
 import { Prisma } from "@prisma/client";
-import { prisma } from "../db.js";
+import { namePassLock, PASS_LOCK_APPLICATION_NAME, prisma } from "../db.js";
 import { createLogger } from "../logger.js";
 import { contestantSpec } from "../curation/contestants.js";
 import type { ExitPlan } from "../curation/profitSim.js";
@@ -241,6 +241,7 @@ export async function runTradingEngine(
       const [lock] = await tx.$queryRaw<{ locked: boolean }[]>`
         SELECT pg_try_advisory_xact_lock(hashtext(${TRADING_ENGINE_LOCK})) AS locked`;
       if (!lock?.locked) return { ...emptySummary(), locked: false };
+      await namePassLock(tx);
       return { ...(await tradingPass(deps, notes)), locked: true };
     },
     { maxWait: 10_000, timeout: PASS_TRANSACTION_TIMEOUT_MS },
@@ -1712,8 +1713,11 @@ export async function gateOnAiVerdicts(
 
 /**
  * How far signals may be read: a few seconds behind now, and behind the oldest transaction still
- * open elsewhere (it may yet commit a row stamped earlier) - but never more than 20s behind. Our
- * own lock's transaction is left out of that.
+ * open elsewhere (it may yet commit a row stamped earlier) - but never more than 20s behind. The
+ * pass-lock transactions are left out of that - our own and the Telegram dispatch's, which names
+ * itself the same way (PASS_LOCK_APPLICATION_NAME): each holds an advisory lock for its pass and
+ * writes nothing through it. Matching on the lock's query text missed the dispatch's, whose last
+ * statement is its own horizon read, so every Telegram burst held entries back by up to 20s.
  */
 export async function signalHorizon(now: Date): Promise<Date> {
   const grace = new Date(now.getTime() - SIGNAL_COMMIT_GRACE_MS);
@@ -1722,7 +1726,7 @@ export async function signalHorizon(now: Date): Promise<Date> {
       SELECT min(xact_start) AS oldest FROM pg_stat_activity
       WHERE datname = current_database() AND pid <> pg_backend_pid() AND xact_start IS NOT NULL
         AND backend_type = 'client backend' AND state <> 'idle'
-        AND query NOT ILIKE '%pg_try_advisory_xact_lock%'`;
+        AND COALESCE(application_name, '') <> ${PASS_LOCK_APPLICATION_NAME}`;
     const oldest = row?.oldest ?? null;
     if (!oldest) return grace;
     const floor = new Date(now.getTime() - MAX_COMMIT_WAIT_MS);

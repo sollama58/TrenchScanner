@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 
 /**
  * Singleton Prisma client. In dev, tsx/nodemon-style reloads can otherwise
@@ -7,7 +7,10 @@ import { PrismaClient } from "@prisma/client";
  */
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-/** Prisma's own default `pool_timeout`, in seconds - the fallback when nothing overrides it. */
+/**
+ * The `pool_timeout` fallback when nothing overrides it, in seconds: twice Prisma's own default of
+ * ten, for the reasons DATABASE_POOL_TIMEOUT_SECONDS gives in config/env.ts.
+ */
 const DEFAULT_POOL_TIMEOUT_SECONDS = 20;
 
 /**
@@ -30,6 +33,18 @@ const DEFAULT_SOCKET_TIMEOUT_SECONDS = 180;
 const DEFAULT_STATEMENT_TIMEOUT_SECONDS = 150;
 
 /**
+ * How long a connection may sit inside an open transaction running nothing before the server ends
+ * it. statement_timeout covers a statement that runs, not a transaction left open while the client
+ * does something else - and two passes hold one open for their whole length: the Telegram dispatch
+ * (120 s) and the trading engine (240 s) take their advisory lock in a transaction and then send
+ * through other connections. Prisma ends those at their own timeouts; this is the net under a
+ * client that cannot (a stalled event loop, a socket the database never saw close), so a wedged
+ * client gives its pool slot back instead of holding it for good. Above every transaction timeout
+ * in the repo, so it never fires first.
+ */
+const DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_SECONDS = 300;
+
+/**
  * What the trainer's connections call themselves in pg_stat_activity. The Telegram dispatch waits
  * for open transactions that could still commit an alert, and leaves these out: the trainer writes
  * no alerts, and its long training reads would otherwise hold every alert back.
@@ -37,8 +52,24 @@ const DEFAULT_STATEMENT_TIMEOUT_SECONDS = 150;
 export const TRAINER_APPLICATION_NAME = "trenchscanner-trainer";
 
 /**
- * Appends `connection_limit`/`pool_timeout` (and the socket/statement timeouts above) to a
- * datasource URL, without disturbing anything the URL already specifies.
+ * What the two pass-lock transactions call themselves while they hold their lock. The Telegram
+ * dispatch and the trading engine each keep one transaction open for the length of a pass, only
+ * to hold its advisory lock; every row they write goes through other connections. The commit-wait
+ * horizons that scan pg_stat_activity for transactions that could still commit a row leave both out
+ * by this name - without it each pass held the other's alerts or signals back by up to the full
+ * wait. Set inside the transaction (namePassLock), so the pooled connection answers to its usual
+ * name again once the pass ends.
+ */
+export const PASS_LOCK_APPLICATION_NAME = "trenchscanner-pass-lock";
+
+/** Names `tx`, a pass-lock transaction, for the rest of its life (see PASS_LOCK_APPLICATION_NAME). */
+export async function namePassLock(tx: Prisma.TransactionClient): Promise<void> {
+  await tx.$queryRaw`SELECT set_config('application_name', ${PASS_LOCK_APPLICATION_NAME}, true)`;
+}
+
+/**
+ * Appends `connection_limit`/`pool_timeout` (and the socket, statement and idle-in-transaction
+ * timeouts above) to a datasource URL, without disturbing anything the URL already specifies.
  *
  * Pure and easy to test in isolation on purpose: this is the part that actually decides what
  * Prisma connects with, and the params it sets are exactly the two numbers a
@@ -74,10 +105,12 @@ export function appendPoolParams(
   }
   if (!url.searchParams.has("options")) {
     const ms = Math.round((opts.statementTimeoutSeconds ?? DEFAULT_STATEMENT_TIMEOUT_SECONDS) * 1000);
+    const idleMs = DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_SECONDS * 1000;
     const name = opts.applicationName && /^[\w-]+$/.test(opts.applicationName) ? opts.applicationName : null;
     url.searchParams.set(
       "options",
-      `-c statement_timeout=${ms}${name ? ` -c application_name=${name}` : ""}`,
+      `-c statement_timeout=${ms} -c idle_in_transaction_session_timeout=${idleMs}` +
+        (name ? ` -c application_name=${name}` : ""),
     );
   }
   return url.toString();

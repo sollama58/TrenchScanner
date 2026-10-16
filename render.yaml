@@ -75,12 +75,15 @@
 #         stay in Postgres only (Admin tab -> Backups) and can still be downloaded from there.
 #
 # DATABASE_CONNECTION_LIMIT is set (not sync: false - it ships with a value) on all three Node
-# services below. Verify the three values plus one LISTEN connection (the API's SSE push, held
-# outside the pool - see apps/api/src/matchStream.ts) against the actual connection ceiling on the
-# Postgres plan you deploy to (Render dashboard -> the database -> Info tab), and adjust downward
-# if you move to a plan with a lower ceiling, or if you scale any service to more than one
-# instance - every instance opens its own pool, and during a deploy the old and new instances are
-# both connected for a while.
+# services below. Verify the three values, plus the connections held outside the pools - the API's
+# one LISTEN connection (its SSE push, apps/api/src/matchStream.ts) and one per batch job running
+# under its job lock (apps/worker/src/jobLock.ts: up to two on the scanner, up to six on the
+# trainer) - against the actual connection ceiling on the Postgres plan you deploy to (Render
+# dashboard -> the database -> Info tab; the Admin tab's Database panel shows the live count against
+# it). Adjust downward if you move to a plan with a lower ceiling, or if you scale any service to
+# more than one instance - every instance opens its own pool, and during a deploy the old and new
+# instances are both connected for a while, so the peak is about twice the steady total (plus the
+# three preDeploy migrate sessions).
 #
 # See PLANNING.md and README.md for the full architecture and local dev setup.
 
@@ -273,9 +276,13 @@ services:
       # CANDIDATE_CONCURRENCY (apps/worker/src/jobs/scanJob.ts, 15 at the time of writing) tokens
       # at once, each doing its own DB writes, and a limit below that would have the worker
       # queue against its OWN concurrency rather than anything external - self-inflicted
-      # contention on every scan cycle, not just under unusual load. 18 clears that with margin;
-      # verify the api+worker total against the Postgres plan's real connection ceiling before
-      # raising either.
+      # contention on every scan cycle, not just under unusual load. 18 clears the scan cycle;
+      # it does not clear the scan cycle plus everything else on this process that shares the
+      # pool - candidate-watch's UPDATE_CONCURRENCY (10), fast-match's MATCH_CONCURRENCY (4), the
+      # Telegram pass-lock transaction and trade-tape's write transaction - so when a
+      # candidate-watch sweep lands on a scan cycle, callers queue for up to pool_timeout (20 s)
+      # and a P2024 drops that candidate's snapshot for the cycle. Verify the api+worker+trainer
+      # total against the Postgres plan's real connection ceiling before raising it.
       - key: DATABASE_CONNECTION_LIMIT
         value: "18"
       # The alert path and label grading only; training and the nightly sweeps run on the
