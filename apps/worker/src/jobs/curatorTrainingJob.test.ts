@@ -22,6 +22,7 @@ import {
   withoutEventTwins,
   runPeakOf,
   trainingGradeOf,
+  isFrozenCurveRow,
 } from "./curatorTrainingJob.js";
 import {
   collectCuratedContender,
@@ -450,6 +451,15 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
   });
 });
 
+describe("isFrozenCurveRow", () => {
+  it("flags a background row with no volume and no buys in its hour, nothing else", () => {
+    expect(isFrozenCurveRow({ volume1hUsd: 0, buys1h: 0, mcapUsd: 49_600 })).toBe(true);
+    expect(isFrozenCurveRow({ volume1hUsd: 0, buys1h: 3 })).toBe(false);
+    expect(isFrozenCurveRow({ volume1hUsd: null, buys1h: 0 })).toBe(false);
+    expect(isFrozenCurveRow(null)).toBe(false);
+  });
+});
+
 describe("trainingGradeOf", () => {
   const base = {
     labelValue: 1.2,
@@ -486,7 +496,8 @@ describe("trainingGradeOf", () => {
       anchorMcapUsd: 16_000,
       maxDrawdown1hPct: -60,
       peakBeforeStopPriceUsd: null,
-      features: { mcapUsd: 10_000, freshGapPct: 60 },
+      // The re-grade's gap was measured after the decision: it reads as missing.
+      features: { mcapUsd: 10_000, freshGapPct: null },
     });
   });
 

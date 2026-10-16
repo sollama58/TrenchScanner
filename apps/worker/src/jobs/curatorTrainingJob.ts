@@ -30,6 +30,7 @@ import {
   trainingWeightByAge,
   MAX_EVENT_AGE_MINUTES,
   FRESH_ANCHOR_LABEL_RULE,
+  isCurrentLabelRule,
   CANDIDATE_FEATURE_NAMES,
   ALL_NARRATIVE_FEATURES,
   Prisma,
@@ -1065,7 +1066,10 @@ type GradedFields = Pick<
  * models called are graded on the same rule as the rest. An alerted row born rule 4 can carry one
  * too: the quote re-grade's candle replay (quoteRegrade.ts), for a coin whose price read $0 while
  * it was watched. That replay is read as well, but the row keeps its own freshGapPct: it is the
- * live quote's gap, already rule 4's. Every other row is returned as it is.
+ * live quote's gap, already rule 4's. A re-graded rule-3 row's freshGapPct reads as missing: the
+ * re-grade measured it on a candle from the alert's moved send-time anchor, after the decision
+ * (maskKnownBadInputs nulls it on every row before FRESH_QUOTE_GAP_SINCE as well). Every other
+ * row is returned as it is.
  */
 export function trainingGradeOf<R extends GradedFields & { features: unknown; rule4Grade: unknown }>(
   r: R,
@@ -1087,10 +1091,15 @@ export function trainingGradeOf<R extends GradedFields & { features: unknown; ru
     peak1hReturnPct: num(grade.peak1hReturnPct),
     peakBeforeStopPriceUsd: num(grade.peakBeforeStopPriceUsd),
     hit10xIn1h: typeof grade.hit10xIn1h === "boolean" ? grade.hit10xIn1h : null,
-    features: born4
-      ? r.features
-      : { ...(r.features as Record<string, number | null>), freshGapPct: num(grade.freshGapPct) },
+    features: born4 ? r.features : { ...(r.features as Record<string, number | null>), freshGapPct: null },
   };
+}
+
+/** A background row of a coin with no trading in its hour: no 1h volume and no 1h buys recorded as 0. */
+export function isFrozenCurveRow(features: unknown): boolean {
+  if (typeof features !== "object" || features === null) return false;
+  const f = features as Record<string, unknown>;
+  return f.volume1hUsd === 0 && f.buys1h === 0;
 }
 
 /** Every name a stored vector can carry, in vector order: the shape withFixedShape builds. */
@@ -1134,8 +1143,10 @@ async function loadRowsOfKind(
     band !== undefined ? Prisma.sql`AND "anchorMcapUsd" BETWEEN ${band.min} AND ${band.max}` : Prisma.empty;
   // Decision moments older than the event pre-gate's age cap were banked before the cap existed
   // (2026-10-05): a live decision can no longer be one, so they neither train nor grade.
+  // Background rows are held to the same cap (data-correctness audit 2026-10-16): 27% of them
+  // were coins over six hours old doubling about 1%, a market no decision can come from.
   const ageSql =
-    sampleKind === "event"
+    sampleKind === "event" || sampleKind === "hourly"
       ? Prisma.sql`AND COALESCE(("features"::jsonb ->> 'ageMinutes')::float8, 0) <= ${MAX_EVENT_AGE_MINUTES}`
       : Prisma.empty;
   const out: TrainingRow[] = [];
@@ -1166,6 +1177,16 @@ async function loadRowsOfKind(
       LIMIT ${take}`;
     for (const loaded of page) {
       const r = trainingGradeOf(loaded);
+      // A row the rule-4 re-grade never reached stays out of the fit, as it stays out of the exam:
+      // which rows it skipped depended on the outcome (busy runners outgrew the candle history,
+      // old flat coins never traded), so young skipped decision rows doubled 23.4% against 17.3%
+      // for re-graded ones while skipped hourly rows doubled 3.9% (data-correctness audit
+      // 2026-10-16). Every row since 2026-10-12 is born on the current rule.
+      if (!isCurrentLabelRule(r)) continue;
+      // A completed curve nobody trades (no volume, no buys in the hour) reads a frozen market cap
+      // near $49.6k and stale holder figures, and never moves: 5,523 hourly rows on 10-06..10-11
+      // taught the band where live near-graduation coins sit that it never doubles.
+      if (r.sampleKind === "hourly" && isFrozenCurveRow(r.features)) continue;
       // Inputs known to be wrong on old rows (fake order-flow zeros) read as missing.
       const features = maskKnownBadInputs(
         r.anchorAt,
