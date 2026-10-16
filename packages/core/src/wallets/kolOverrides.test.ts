@@ -40,4 +40,8 @@ describe("KOL overrides", () => {
   it("names 2iPg…qADtFM as Jdn", () => {
     expect(KOL_OVERRIDES.get("2iPgNgss7ow3v5YFkTpzABStfjFSyG3BGvP5sZqADtFM")?.name).toBe("Jdn");
   });
+
+  it("names 5YRg…XRJQUzij as Slingoor", () => {
+    expect(KOL_OVERRIDES.get("5YRgrP3mjGzrzirYYN5HAQH19cTYREYwGxW6XRJQUzij")?.name).toBe("Slingoor");
+  });
 });
