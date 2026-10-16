@@ -1469,6 +1469,8 @@ export interface FeedAppearance {
    * Replaced lighthouseTab (opt-in) on 2026-10-15, so every account starts with the tab on.
    */
   hideLighthouseTab: boolean;
+  /** Hide the safety pill in the token view's header; the Safety section stays (absent from older API builds: shown). */
+  hideSafetyPill: boolean;
   /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
   outline: string | null;
   /** Graded cards are marked green on a pass and red on a fail (absent from older API builds: off). */
