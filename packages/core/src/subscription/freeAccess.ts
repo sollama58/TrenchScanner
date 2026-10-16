@@ -219,6 +219,14 @@ export function deleteDigest(plan: readonly FreeAccessPlanEntry[]): string {
  * against the plan the admin confirmed (`expectedDigest`) under the same exclusive lock enrolments
  * wait on, so nobody can be enrolled between the check and the switch-off - and after it nothing
  * is enrolled at all, so the cleanup can only delete fewer accounts than the admin saw.
+ *
+ * A refusal while sign-in is open also closes sign-in (signInEndsAt = now), under the same lock:
+ * otherwise a steady stream of sign-ins changes the plan between every look and every try, and the
+ * switch-off never goes through. With enrolment stopped, the next plan the admin sees is the one
+ * checked.
+ *
+ * A period that never enrolled anyone (only scheduled, say) has nothing to clean up, so it is
+ * stamped purged as well, and a new period can be saved at once instead of after the grace.
  */
 export async function disableFreeAccess(
   adminWallet: string,
@@ -226,26 +234,41 @@ export async function disableFreeAccess(
   expectedDigest: string,
   now: Date = new Date(),
 ): Promise<DisableFreeAccessResult> {
-  return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${FREE_ACCESS_LOCK}))`;
-    const current = await currentFreeAccessPeriod(tx);
-    if (!current || freeAccessPhase(current, now) === "ended") {
-      return { ok: false as const, error: "free access is not on" };
-    }
-    const plan = await planFreeAccessCleanup(current.id, admins, now);
-    if (deleteDigest(plan) !== expectedDigest) {
-      return {
-        ok: false as const,
-        error: "the accounts the cleanup would delete have changed: review them again",
-        deletes: plan.filter((p) => p.action === "delete").length,
-      };
-    }
-    const period = await tx.freeAccessPeriod.update({
-      where: { id: current.id },
-      data: { disabledAt: now, disabledBy: adminWallet },
-    });
-    return { ok: true as const, period };
-  });
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${FREE_ACCESS_LOCK}))`;
+      const current = await currentFreeAccessPeriod(tx);
+      if (!current || freeAccessPhase(current, now) === "ended") {
+        return { ok: false as const, error: "free access is not on" };
+      }
+      // Through tx: on the connection that holds the lock, and the same snapshot it checks.
+      const plan = await planFreeAccessCleanup(current.id, admins, now, tx);
+      if (deleteDigest(plan) !== expectedDigest) {
+        const closing = freeAccessPhase(current, now) === "open";
+        if (closing) {
+          await tx.freeAccessPeriod.update({
+            where: { id: current.id },
+            data: { signInEndsAt: now, updatedBy: adminWallet },
+          });
+        }
+        return {
+          ok: false as const,
+          error: closing
+            ? "the accounts the cleanup would delete have changed, so sign-in is now closed and the list can't change again: review them and retry"
+            : "the accounts the cleanup would delete have changed: review them again",
+          deletes: plan.filter((p) => p.action === "delete").length,
+        };
+      }
+      const enrolled = await tx.freeAccessGrant.count({ where: { periodId: current.id } });
+      const period = await tx.freeAccessPeriod.update({
+        where: { id: current.id },
+        data: { disabledAt: now, disabledBy: adminWallet, ...(enrolled === 0 ? { purgedAt: now } : {}) },
+      });
+      return { ok: true as const, period };
+    },
+    // The dry run reads facts for every grant; a large period can outlast the default 5s.
+    { timeout: 60_000 },
+  );
 }
 
 /** What the cleanup will do (or did) with one enrolled wallet. */
@@ -332,8 +355,10 @@ export async function planFreeAccessCleanup(
   periodId: string,
   admins: ReadonlySet<string>,
   now: Date = new Date(),
+  /** disableFreeAccess passes its transaction, so the check reads under the lock it holds. */
+  db: Prisma.TransactionClient = prisma,
 ): Promise<FreeAccessPlanEntry[]> {
-  const grants = await prisma.freeAccessGrant.findMany({
+  const grants = await db.freeAccessGrant.findMany({
     where: { periodId, settledAt: null },
     orderBy: { enrolledAt: "asc" },
   });
@@ -341,30 +366,30 @@ export async function planFreeAccessCleanup(
   const walletList = grants.map((g) => g.walletAddress);
   const userIds = grants.map((g) => g.userId);
   const [users, whitelist, burns, credits, tradingWallets, positions, withdrawals] = await Promise.all([
-    prisma.user.findMany({
+    db.user.findMany({
       where: { id: { in: userIds } },
       select: { id: true, walletAddress: true, subscription: { select: { expiresAt: true } } },
     }),
-    prisma.whitelist.findMany({
+    db.whitelist.findMany({
       where: { walletAddress: { in: walletList } },
       select: { walletAddress: true },
     }),
-    prisma.burnEvent.findMany({
+    db.burnEvent.findMany({
       where: { OR: [{ burnerWallet: { in: walletList } }, { userId: { in: userIds } }] },
       select: { burnerWallet: true, userId: true },
     }),
-    prisma.burnCreditEntry.findMany({
+    db.burnCreditEntry.findMany({
       where: { wallet: { in: walletList } },
       select: { wallet: true },
       distinct: ["wallet"],
     }),
-    prisma.tradingWallet.findMany({ where: { userId: { in: userIds } }, select: { userId: true } }),
-    prisma.tradingPosition.findMany({
+    db.tradingWallet.findMany({ where: { userId: { in: userIds } }, select: { userId: true } }),
+    db.tradingPosition.findMany({
       where: { userId: { in: userIds } },
       select: { userId: true },
       distinct: ["userId"],
     }),
-    prisma.tradingWithdrawal.findMany({
+    db.tradingWithdrawal.findMany({
       where: { userId: { in: userIds } },
       select: { userId: true },
       distinct: ["userId"],
@@ -451,7 +476,7 @@ export async function cleanUpFreeAccessPeriod(
         async (tx) => {
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${burnWalletLockKey(grant.walletAddress)}))`;
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${grant.userId}))`;
-          // Settled meanwhile by another run (the worker's pass and an admin's switch-off can meet).
+          // Settled meanwhile by another run (two passes can meet, e.g. across a deploy).
           const fresh = await tx.freeAccessGrant.findUnique({
             where: { id: grant.id },
             select: { settledAt: true },
@@ -496,7 +521,7 @@ export async function cleanUpFreeAccessPeriod(
 
 /**
  * The cleanup for whatever period has ended and not been cleaned up yet - the worker's pass. Safe
- * to run beside an admin's switch-off: each grant is settled once (see cleanUpFreeAccessPeriod).
+ * to run twice at once: each grant is settled once (see cleanUpFreeAccessPeriod).
  */
 export async function runDueFreeAccessCleanup(
   admins: ReadonlySet<string>,
