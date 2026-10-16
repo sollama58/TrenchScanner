@@ -10647,6 +10647,134 @@ img.tm-avatar {
   margin: 6px 0 0 !important;
 }
 
+/* Order flow, under the chart: buys against sells, per window. */
+.tm-flow {
+  margin-top: 12px;
+}
+.tm-flow-rows {
+  display: grid;
+  gap: 8px;
+}
+.tm-flow-row {
+  display: grid;
+  grid-template-columns: 52px minmax(80px, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+}
+.tm-flow-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-3);
+}
+.tm-flow-bar .buy {
+  background: var(--good);
+}
+.tm-flow-bar .sell {
+  background: var(--bad);
+  opacity: 0.85;
+}
+.tm-flow-counts .up,
+.tm-flow-meta .up,
+.tm-dev .up {
+  color: var(--good-ink);
+}
+.tm-flow-counts .down,
+.tm-flow-meta .down {
+  color: var(--bad-ink);
+}
+.tm-flow-note {
+  margin: 10px 0 0 !important;
+  white-space: normal;
+}
+@media (max-width: 640px) {
+  .tm-flow-row {
+    grid-template-columns: 52px minmax(0, 1fr);
+    row-gap: 4px;
+  }
+  .tm-flow-counts,
+  .tm-flow-meta {
+    grid-column: 2;
+  }
+}
+
+/* Dev and socials. */
+.tm-dev-grid > .sage-card {
+  align-self: start;
+}
+.tm-dev-who {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 8px !important;
+}
+.tm-dev-coins {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.tm-dev-coins .tm-link {
+  margin-left: 0;
+  padding: 0;
+  font-size: 13px;
+}
+.tm-dev-coins li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 8px;
+  border-radius: var(--radius-s);
+  background: var(--surface-3);
+}
+.tm-social-list {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px !important;
+  padding: 0;
+  list-style: none;
+}
+.tm-social-list li {
+  display: grid;
+  grid-template-columns: 18px 72px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: var(--radius-s);
+  background: var(--surface-3);
+}
+.tm-social-list li.missing {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.tm-social-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+.tm-social-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.tm-social-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 13px;
+}
+.tm-social-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tm-social-facts {
+  margin: 0 0 4px !important;
+}
+
 /* A card folded to its heading: the whole heading opens it. */
 .tm-modal .sage-card.folded > .tm-fold-h {
   margin-bottom: 0;

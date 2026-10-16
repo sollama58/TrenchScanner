@@ -29,6 +29,7 @@ import { usePolling } from "../hooks";
 import { MIN_WIN_SOL, ago, change, minutes, multiple, pct, shortAddress, tokenLabel, usd } from "../format";
 import { TokenImage } from "./TokenImage";
 import { FoldHead } from "./Fold";
+import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfileCards";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { QUICK_LINK_SITES, useAppearance } from "../appearance";
@@ -383,8 +384,16 @@ function MintChip({ mint }: { mint: string }) {
 }
 
 /** The coin on the trading sites (Settings › Quick links) and the explorers, as pills under Sage. */
-function QuickLinks({ mint }: { mint: string }) {
+function QuickLinks({ mint, socials }: { mint: string; socials?: TokenProfile["socials"] | null }) {
   const { quickLinks } = useAppearance();
+  // The coin's own X, Telegram and website (user ask 2026-10-16), launcher-supplied, https only.
+  const own = socials
+    ? [
+        { label: "X", href: socials.x },
+        { label: "Telegram", href: socials.telegram },
+        { label: "Website", href: socials.website },
+      ].filter((l): l is { label: string; href: string } => !!l.href)
+    : [];
   const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
   return (
     <nav className="tm-quick" aria-label="Open this coin elsewhere">
@@ -396,6 +405,12 @@ function QuickLinks({ mint }: { mint: string }) {
       ))}
       {LINKS.map((l) => (
         <a key={l.label} href={l.href(mint)} target="_blank" rel="noreferrer">
+          {l.label}
+          <ExternalIcon size={11} />
+        </a>
+      ))}
+      {own.map((l) => (
+        <a key={l.label} className="social" href={l.href} target="_blank" rel="noopener noreferrer nofollow">
           {l.label}
           <ExternalIcon size={11} />
         </a>
@@ -520,6 +535,11 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   };
   // A lookup asks TokenSage for a fresh read, which lands within minutes: check more often.
   const sage = usePolling<SageView>(`${useTokenApi(mint)}/sage`, utility ? 20_000 : 120_000);
+  // The Dev, Socials and Order flow cards' read (user ask 2026-10-16); the flow moves with each scan.
+  const profile = usePolling<TokenProfile>(
+    `${useTokenApi(mint)}/profile`,
+    scanning ? SCANNING_POLL_MS : CHART_POLL_MS,
+  );
   // The moment the scan lands, re-read what it feeds (the flagged wallets, the read) rather than
   // waiting for their next poll.
   const wasScanning = useRef(scanning);
@@ -602,7 +622,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
             <CloseIcon size={16} />
           </button>
         </div>
-        <QuickLinks mint={mint} />
+        <QuickLinks mint={mint} socials={profile.data?.socials} />
         <nav className="tm-nav" aria-label="Sections">
           {SECTIONS.map((x) => (
             <button
@@ -669,6 +689,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
 
       <section id={`${ids}-chart`} className="tm-group" aria-label="Chart">
         <ChartCard card={card} chart={chart} alertAt={alertAt} alertMcap={alertMcap} what={what} />
+        {profile.data?.flow && <FlowCard flow={profile.data.flow} now={now} />}
       </section>
 
       <section id={`${ids}-holders`} className="tm-group" aria-labelledby={`${ids}-holders-h`}>
@@ -744,6 +765,14 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         )}
       </section>
 
+      <section id={`${ids}-dev`} className="tm-group" aria-labelledby={`${ids}-dev-h`}>
+        <GroupLabel id={`${ids}-dev-h`}>Dev and socials</GroupLabel>
+        <div className="tm-grid tm-dev-grid">
+          <DevCard dev={profile.data ? profile.data.dev : undefined} />
+          <SocialsCard socials={profile.data?.socials} x={sage.data?.read?.x} />
+        </div>
+      </section>
+
       <section id={`${ids}-safety`} className="tm-group" aria-labelledby={`${ids}-safety-h`}>
         <GroupLabel id={`${ids}-safety-h`}>Safety</GroupLabel>
         <SafetyCard
@@ -801,6 +830,7 @@ const SECTIONS = [
   { id: "chart", label: "Chart" },
   { id: "holders", label: "Holders" },
   { id: "call", label: "The call" },
+  { id: "dev", label: "Dev" },
   { id: "safety", label: "Safety" },
   { id: "sage", label: "TokenSage" },
 ] as const;

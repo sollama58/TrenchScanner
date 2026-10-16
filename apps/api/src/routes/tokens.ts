@@ -16,6 +16,7 @@ import {
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
+import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import {
   CandleCache,
   KeyedCache,
@@ -394,6 +395,23 @@ export async function registerTokenRoutes(
     }
     reply.header("Cache-Control", "private, max-age=60");
     return why;
+  });
+
+  /** The token modal's Dev, Socials and Order flow cards (tokenProfile.ts). */
+  app.get("/:mintAddress/profile", async (request, reply): Promise<TokenProfile | undefined> => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    if (!MINT_RE.test(mintAddress)) {
+      reply.code(400).send({ error: "not a valid mint" });
+      return;
+    }
+    if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
+    const profile = await readTokenProfile(mintAddress);
+    if (!profile) {
+      reply.code(404).send({ error: "token not found" });
+      return;
+    }
+    reply.header("Cache-Control", "private, max-age=30");
+    return profile;
   });
 
   /** TokenSage's read of the token, for the card's TokenSage view (src/tokenSageView.ts). */
