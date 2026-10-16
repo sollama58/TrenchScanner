@@ -1,4 +1,4 @@
-import type { Prisma, TokenSnapshot } from "@prisma/client";
+import { Prisma, type TokenSnapshot } from "@prisma/client";
 import {
   prisma,
   WIN_WINDOW_MINUTES,
@@ -93,13 +93,59 @@ export async function latestSnapshotsByToken(
 ): Promise<Map<string, TokenSnapshot>> {
   const ids = [...new Set(tokenIds)];
   if (ids.length === 0) return new Map();
-  const snapshots = await prisma.$queryRaw<TokenSnapshot[]>`
-    SELECT s.*
+  // The newest row carries the holder list only when it was a new reading (worker
+  // holderListWrites.ts), so the newest list before it rides along: the token view's bubble map
+  // and top holders read the card's latest snapshot first, and a list means the same whichever
+  // row it came from. Bounded to CARRIED_HOLDER_LIST_MS before the row, like withCarriedHolderList.
+  const snapshots = await prisma.$queryRaw<(TokenSnapshot & { carriedHolders: Prisma.JsonValue | null })[]>`
+    SELECT s.*, h."linkedHolders" AS "carriedHolders"
     FROM unnest(${ids}::text[]) AS t(id)
     CROSS JOIN LATERAL (
       SELECT * FROM "TokenSnapshot" WHERE "tokenId" = t.id ORDER BY "takenAt" DESC LIMIT 1
-    ) s`;
-  return new Map(snapshots.map((s) => [s.tokenId, s]));
+    ) s
+    LEFT JOIN LATERAL (
+      SELECT "linkedHolders" FROM "TokenSnapshot"
+      WHERE s."linkedHolders" IS NULL
+        AND "tokenId" = t.id
+        AND "takenAt" < s."takenAt"
+        AND "takenAt" >= s."takenAt" - make_interval(secs => ${CARRIED_HOLDER_LIST_MS / 1000}::float8)
+        AND "linkedHolders" IS NOT NULL
+      ORDER BY "takenAt" DESC
+      LIMIT 1
+    ) h ON true`;
+  return new Map(
+    snapshots.map(({ carriedHolders, ...s }) => [
+      s.tokenId,
+      s.linkedHolders === null && carriedHolders !== null ? { ...s, linkedHolders: carriedHolders } : s,
+    ]),
+  );
+}
+
+/**
+ * How far back of a snapshot the newest holder list is looked for. A coin whose list is still
+ * being read has one at most HOLDER_LIST_REWRITE_MS (10 min) before any of its rows; two hours
+ * covers a coin that left the band, and bounds the index walk for one that never had a list.
+ */
+const CARRIED_HOLDER_LIST_MS = 2 * 3_600_000;
+
+/**
+ * A snapshot with the coin's newest holder list before it when its own is null - the single-row
+ * form of what latestSnapshotsByToken does for a page (see there).
+ */
+export async function withCarriedHolderList<
+  S extends { tokenId: string; takenAt: Date; linkedHolders: Prisma.JsonValue | null },
+>(snapshot: S | null): Promise<S | null> {
+  if (snapshot === null || snapshot.linkedHolders !== null) return snapshot;
+  const carried = await prisma.tokenSnapshot.findFirst({
+    where: {
+      tokenId: snapshot.tokenId,
+      takenAt: { lt: snapshot.takenAt, gte: new Date(snapshot.takenAt.getTime() - CARRIED_HOLDER_LIST_MS) },
+      linkedHolders: { not: Prisma.DbNull },
+    },
+    orderBy: { takenAt: "desc" },
+    select: { linkedHolders: true },
+  });
+  return carried === null ? snapshot : { ...snapshot, linkedHolders: carried.linkedHolders };
 }
 
 /**
