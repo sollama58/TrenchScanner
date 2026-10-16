@@ -3,6 +3,7 @@ import "./bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { MARKED_BOT_WALLETS, prisma } from "@trenchscanner/core";
 import {
+  countKolLabels,
   kolSideLabels,
   loadKolLabeledSides,
   loadLabeledSides,
@@ -60,6 +61,27 @@ describe("numberLabeledSides", () => {
       "w6,K3abcd_1",
     ]);
     expect(out.find((s) => s.wallet === "w3")).toMatchObject({ kind: "known", kolWallet: "K1" });
+  });
+});
+
+describe("countKolLabels", () => {
+  const entry = (kolWallet: string, extra = {}) => ({
+    kolWallet,
+    kolName: null,
+    pct: 90,
+    shared: 0,
+    kolCoins: 0,
+    hours: 24,
+    ...extra,
+  });
+
+  it("counts each wallet once for every KOL it is labeled for, Known Sides included", () => {
+    const counts = countKolLabels({
+      w1: [entry("K1", { known: true })],
+      w2: [entry("K1", { funded: true }), entry("K2")],
+      w3: [entry("K2")],
+    });
+    expect(Object.fromEntries(counts)).toEqual({ K1: 2, K2: 2 });
   });
 });
 
