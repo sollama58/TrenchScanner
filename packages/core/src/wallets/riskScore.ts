@@ -32,17 +32,50 @@ export const RISKY_WALLET_SCORE = 70;
  * doubles - so "two dumps" or "one win in three" reads as noise. Measured on 27k scored wallets:
  * the old dumper rule (2 dumps) labelled 52% of them and its wallets dumped their next coin at
  * 1.09x the market; this one labels 5% at 1.36x. The old winner rule (win score 70+ or 2 early
- * wins) labelled 12% at 0.7-1.4x; this one labels 2% at 1.6x per appearance.
+ * wins) labelled 12% at 0.7-1.4x; this one labels 2% at 1.6x per appearance. (The winner rule
+ * and what counts as a win changed again on 2026-10-16: see WINNER.)
  */
 export const KNOWN_DUMPER = { minDumps: 4, minRate: 0.75 } as const;
 /**
- * The smallest win that counts (user ask 2026-10-15): a coin it bought that doubled counts toward
- * its wins - the win score, the early wins and the winner label - only if it took out at least
- * this much more SOL than it put in on that coin (TokenWalletActivity solOut - solIn, realized
- * within the tape). The market's win rate counts the same way, so the score stays comparable.
+ * What counts as a wallet's win (user ask 2026-10-16, notes/winner-wallets-2026-10-16): a coin it
+ * traded itself at WALLET_WIN_MULTIPLE or better - it took out at least twice the SOL it put in, on the
+ * coin's tape (TokenWalletActivity solOut against solIn) - for at least MIN_WIN_SOL of profit (user
+ * ask 2026-10-15), on a clean trade: it sold no more than OVERSOLD_TOKENS times the tokens it
+ * bought on the tape, and made no sell before its first buy there (tokens held from before a
+ * partial tape, or sent in from another wallet, would read as a free moonshot).
+ *
+ * Until 2026-10-16 a win was the coin doubling from our read (its reference row's clean 2x) with
+ * MIN_WIN_SOL of profit. Two things kept the winner label empty: under 7% of those 2x buys made
+ * 0.5 SOL (the median stake is 0.3 SOL), so the market's win rate fell to 2%, while the label still
+ * asked for 60% of a wallet's coins - no wallet of 25k with 10+ coins came within 14 points. And
+ * the coin's 2x from our read mostly marks wallets that bought after the move: 82% of the buys of
+ * the wallets it ranked highest came after our read, and their early buys doubled less often than
+ * everyone's.
  */
 export const MIN_WIN_SOL = 0.5;
-export const WINNER = { minWins: 3, minRate: 0.6 } as const;
+export const WALLET_WIN_MULTIPLE = 2;
+export const OVERSOLD_TOKENS = 1.1;
+/**
+ * The winner label (user ask 2026-10-16), relative to the market like the scores: 3+ wins, and a
+ * win rate whose 90% lower bound (Wilson) is at least twice the market's, so a lucky streak on few
+ * coins doesn't carry it. Checked out of sample on 10-11..10-16 tapes (labels from coins before
+ * 10-15, graded on the coins after): 601 wallets, whose later trades came out at 2x or better 9.8%
+ * of the time against 2.6% for everyone, +0.19 SOL a coin against -0.08, and 70% of their buys
+ * before our read against 41%. On the whole table it labels about 900 of the 25k wallets with 10+
+ * coins (3.5%).
+ */
+export const WINNER = { minWins: 3, lowerBoundVsMarket: 2, z: 1.645, minMarketRate: 0.01 } as const;
+
+/** The Wilson score interval's lower bound for k successes in n: a rate the record supports. */
+export function wilsonLower(k: number, n: number, z: number): number {
+  if (n <= 0) return 0;
+  const p = k / n;
+  const d = 1 + (z * z) / n;
+  const centre = p + (z * z) / (2 * n);
+  const spread = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
+  return Math.max(0, (centre - spread) / d);
+}
+
 /** Launch sniper: 3+ coins bought in their first 5 seconds, and at least half of its coins. */
 export const LAUNCH_SNIPER = { minSnipes: 3, minRate: 0.5 } as const;
 /**
@@ -77,7 +110,10 @@ export function walletLabels(
   const n = Math.max(1, s.appearances);
   if (s.appearances < MIN_LABEL_APPEARANCES) return { dumper: false, winner: false, sniper: false };
   let dumper = s.dumps >= KNOWN_DUMPER.minDumps && s.dumps / n >= KNOWN_DUMPER.minRate;
-  let winner = s.wins >= WINNER.minWins && s.wins / n >= WINNER.minRate;
+  let winner =
+    s.wins >= WINNER.minWins &&
+    wilsonLower(s.wins, n, WINNER.z) >=
+      WINNER.lowerBoundVsMarket * Math.max(WINNER.minMarketRate, market.winRate);
   if (dumper && winner) {
     const z = (x: number, m: number) => (x / n - m) / Math.sqrt(Math.max(1e-6, m * (1 - m)));
     if (z(s.dumps, market.dumpRate) >= z(s.wins, market.winRate)) winner = false;

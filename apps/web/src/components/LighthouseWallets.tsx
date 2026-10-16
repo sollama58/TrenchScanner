@@ -29,7 +29,10 @@ export interface WalletScorecard {
   coins: number;
   coinTiers: TierCounts;
   closed: number;
-  avgReturnPct: number | null;
+  closedSolIn: number;
+  closedSolOut: number;
+  /** Closed SOL out / closed SOL in - 1: what it made on the coins it sold out of, by size. */
+  returnPct: number | null;
   medianReturnPct: number | null;
   inProfit: number;
   own2x: number;
@@ -51,9 +54,12 @@ export interface WalletScorecards {
   summary: {
     wallets: number;
     coins: number;
+    distinctCoins: number;
     coinTiers: TierCounts;
     closed: number;
-    avgReturnPct: number | null;
+    closedSolIn: number;
+    closedSolOut: number;
+    returnPct: number | null;
     inProfit: number;
     own2x: number;
     solIn: number;
@@ -130,7 +136,7 @@ export function sortWallets(wallets: readonly WalletScorecard[], key: SortKey): 
       case "rate2x":
         return w.coinTiers.graded >= MIN_GRADED ? rate2x(w.coinTiers) : null;
       case "return":
-        return w.closed >= MIN_CLOSED ? w.avgReturnPct : null;
+        return w.closed >= MIN_CLOSED ? w.returnPct : null;
       case "net":
         return w.solOut - w.solIn;
       case "coins":
@@ -268,7 +274,7 @@ export function LighthouseWallets() {
               <span
                 role="columnheader"
                 className="num"
-                title="Its own average return on coins it sold out of"
+                title="What it made on the coins it sold out of: SOL out against SOL in"
               >
                 Return
               </span>
@@ -304,11 +310,13 @@ export function LighthouseWallets() {
               </>
             )}
             2x, 4x and 10x are the share of the coins it bought that got there from the moment we read them,
-            graded like every other rate here. Return is its own: SOL out against SOL in, on coins it sold at
-            least {Math.round(d.closedShare * 100)}% of. Ranked once a wallet has {MIN_GRADED} graded coins (
-            {MIN_CLOSED} sold out of for Return).
+            graded like every other rate here. Return is what it made on the coins it sold at least{" "}
+            {Math.round(d.closedShare * 100)}% of: all the SOL it took out against all it put in, so a big
+            trade counts for more than a small one; coins where it sold tokens sent to it from elsewhere are
+            left out. Typical is the median trade. Net SOL also counts coins it still holds, at what it paid.
+            Ranked once a wallet has {MIN_GRADED} graded coins ({MIN_CLOSED} sold out of for Return).
             {view.group === "winners" &&
-              " Top winners are the 100 off-roster wallets with the highest win score; the coins that earned them the label count here too."}
+              " Top winners are the 100 off-roster wallets with the highest win score among those labelled Winner (they sell coins at 2x or better, for 0.5+ SOL, at least twice as often as the market); the trades that earned them the label count here too."}
             {view.group === "kols" && " A KOL's Known Sides count as the KOL."} Updated {ago(d.computedAt)}.
           </p>
         </div>
@@ -328,7 +336,9 @@ function Summary({ d, who }: { d: WalletScorecards; who: string }) {
       <div className="lh-kpi">
         <span className="lh-kpi-label">Active {who}</span>
         <span className="lh-kpi-value num">{s.wallets.toLocaleString("en-US")}</span>
-        <span className="muted small">{s.coins.toLocaleString("en-US")} tracked coins bought</span>
+        <span className="muted small">
+          {s.distinctCoins.toLocaleString("en-US")} tracked coins, {s.coins.toLocaleString("en-US")} buys
+        </span>
       </div>
       <div className="lh-kpi">
         <span className="lh-kpi-label">Their coins that 2x&apos;d</span>
@@ -348,11 +358,11 @@ function Summary({ d, who }: { d: WalletScorecards; who: string }) {
         </span>
       </div>
       <div className="lh-kpi">
-        <span className="lh-kpi-label">Average return</span>
-        <span className={`lh-kpi-value num ${tone(s.avgReturnPct)}`}>{signedPct(s.avgReturnPct)}</span>
+        <span className="lh-kpi-label">Return on closed trades</span>
+        <span className={`lh-kpi-value num ${tone(s.returnPct)}`}>{signedPct(s.returnPct)}</span>
         <span className="muted small">
           {s.closed > 0
-            ? `${pct(share(s.inProfit, s.closed))} of ${s.closed.toLocaleString("en-US")} closed trades in profit`
+            ? `${sol(s.closedSolOut - s.closedSolIn, true)} on ${s.closed.toLocaleString("en-US")} trades · ${pct(share(s.inProfit, s.closed))} in profit`
             : "no closed trades yet"}
         </span>
       </div>
@@ -360,7 +370,7 @@ function Summary({ d, who }: { d: WalletScorecards; who: string }) {
         <span className="lh-kpi-label">Net SOL</span>
         <span className={`lh-kpi-value num ${tone(net)}`}>{sol(net, true)}</span>
         <span className="muted small">
-          {sol(s.solIn)} in · {sol(s.solOut)} out
+          {sol(s.solIn)} in · {sol(s.solOut)} out, coins still held at cost
         </span>
       </div>
     </section>
@@ -384,7 +394,7 @@ function TierCompare({ d, who }: { d: WalletScorecards; who: string }) {
     <div className="lw-tiers" aria-label={`How often the ${who}' coins reached 2x, 4x and 10x`}>
       <div className="lw-tier-legend faint small">
         <span>
-          <i className="lw-swatch group" /> The {who}&apos; coins ({g.graded.toLocaleString("en-US")} graded)
+          <i className="lw-swatch group" /> Coins the {who} bought ({g.graded.toLocaleString("en-US")} graded)
         </span>
         <span>
           <i className="lw-swatch base" /> Every tracked coin ({b.graded.toLocaleString("en-US")})
@@ -428,7 +438,7 @@ function WalletRow({
   const r2 = rate2x(t);
   const net = w.solOut - w.solIn;
   const tier = (won: number, over: number, digits = 0) => (over > 0 ? pct(share(won, over), digits) : "–");
-  const ret = w.closed >= MIN_CLOSED ? w.avgReturnPct : null;
+  const ret = w.closed >= MIN_CLOSED ? w.returnPct : null;
   const id = `lw-detail-${w.wallet}`;
   return (
     <div className={`lw-item${open ? " open" : ""}${thin ? " thin" : ""}`} role="rowgroup">
@@ -465,8 +475,16 @@ function WalletRow({
         <span className={`num lw-wide${thin ? " faint" : ""}`} role="cell">
           {tier(t.won10x, t.tenXGraded)}
         </span>
-        <span className={`num ${ret === null ? "faint" : tone(ret)}`} role="cell">
-          {ret === null ? (w.closed ? signedPct(w.avgReturnPct) : "–") : signedPct(ret)}
+        <span
+          className={`num ${ret === null ? "faint" : tone(ret)}`}
+          role="cell"
+          title={
+            w.closed
+              ? `${sol(w.closedSolIn)} in, ${sol(w.closedSolOut)} out on ${w.closed} coins sold out of`
+              : undefined
+          }
+        >
+          {ret === null ? (w.closed ? signedPct(w.returnPct) : "–") : signedPct(ret)}
         </span>
         <span className="num lw-wide" role="cell">
           {w.closed ? pct(share(w.inProfit, w.closed)) : "–"}
@@ -487,9 +505,13 @@ function WalletRow({
             />
             <Fact
               label="Own return"
-              value={`${signedPct(w.avgReturnPct)} avg · ${signedPct(w.medianReturnPct)} median`}
-              sub={`on ${w.closed} of ${w.coins} coins sold out of`}
-              tone={tone(w.avgReturnPct)}
+              value={`${signedPct(w.returnPct)} · ${signedPct(w.medianReturnPct)} typical`}
+              sub={
+                w.closed
+                  ? `${sol(w.closedSolIn)} in, ${sol(w.closedSolOut)} out on the ${w.closed} of ${w.coins} coins sold out of`
+                  : `none of its ${w.coins} coins sold out of yet`
+              }
+              tone={tone(w.returnPct)}
             />
             <Fact
               label="Own 2x · 4x · 10x"

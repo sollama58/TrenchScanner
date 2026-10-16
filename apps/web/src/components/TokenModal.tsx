@@ -1586,7 +1586,7 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                               : t === "dumper" && w.dumps !== null
                                 ? `Sold into the stop on ${w.dumps} of its called coins (4+, three quarters of them, 10+ coins on record)`
                                 : t === "winner"
-                                  ? `3 or more of the called coins it bought doubled with ${MIN_WIN_SOL}+ SOL profit, 60% of them or more, with 10+ coins on record`
+                                  ? `Sold 3 or more of the coins it bought at 2x or better for ${MIN_WIN_SOL}+ SOL profit, at least twice as often as the market, with 10+ coins on record`
                                   : t === "kol" && w.knownSideOf
                                     ? `One of ${w.kol || "a KOL"}'s own wallets, not its main one`
                                     : undefined
@@ -1639,9 +1639,9 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
           )}
           <p className="faint small tm-wallets-note">
             Risky: a score of 70+ from selling into earlier calls&apos; stops. Linked: funded by the same
-            wallet as other top holders. KOL: a known KOL&apos;s wallet. Winner: 60%+ of the called coins it
-            bought doubled with {MIN_WIN_SOL}+ SOL profit. KOL and Winner mark presence only, not a buy
-            signal. SOL is what each wallet put into and took out of this coin.
+            wallet as other top holders. KOL: a known KOL&apos;s wallet. Winner: sells its coins at 2x or
+            better for {MIN_WIN_SOL}+ SOL profit at least twice as often as the market. KOL and Winner mark
+            presence only, not a buy signal. SOL is what each wallet put into and took out of this coin.
           </p>
         </div>
       )}

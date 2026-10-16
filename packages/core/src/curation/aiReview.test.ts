@@ -110,7 +110,7 @@ describe("AI review brief", () => {
       "funded from an exchange (how retail usually arrives): 9 of the top 25, 30.0% of supply",
     );
     // No winner scores and no same-minute reading: those lines are left out, not "unknown".
-    expect(brief).not.toContain("winner wallets (wallets whose coins keep doubling");
+    expect(brief).not.toContain("winner wallets (wallets that keep selling");
     expect(brief).not.toContain("same minute");
     expect(buildAiReviewBrief(scored, decision)).not.toContain("wallets:");
   });

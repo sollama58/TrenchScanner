@@ -102,4 +102,48 @@ describe.skipIf(!dbAvailable)("wallet risk job", () => {
     expect(after).toMatchObject({ appearances: 4, dumps: 4, medianSupplyPct: 2.5 });
     expect(after!.computedAt.toISOString()).toBe("2026-10-14T12:00:00.000Z");
   });
+
+  it("counts a win on the wallet's own clean 2x trade, for 0.5 SOL of profit", async () => {
+    const trader = `${TAG}-trader`;
+    const anchorAt = new Date("2026-10-14T10:00:00Z");
+    const before = new Date("2026-10-14T09:59:00Z");
+    const after = new Date("2026-10-14T10:05:00Z");
+    // Per coin: [solIn, solOut, tokensBought, tokensSold, firstBuyAt, firstSellAt]
+    const coins: [number, number, number, number, Date, Date | null][] = [
+      [1, 2.5, 100, 100, before, after], // win, early
+      [1, 2.5, 100, 100, after, new Date("2026-10-14T10:09:00Z")], // win, bought after the anchor
+      [0.2, 0.5, 100, 100, before, after], // 2.5x but 0.3 SOL profit: not a win
+      [1, 1.8, 100, 100, before, after], // 0.8 SOL profit but under 2x: not a win
+      [0.01, 5, 100, 5_000, before, after], // sold tokens sent in from elsewhere: not a win
+      [0.05, 5, 100, 100, after, before], // sold before its first buy (partial tape): not a win
+    ];
+    for (const [i, [solIn, solOut, tokensBought, tokensSold, firstBuyAt, firstSellAt]] of coins.entries()) {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-win-${i}` } });
+      await prisma.tokenTradeTape.create({
+        data: { tokenId: token.id, anchorAt, reason: "called", status: "done", windowEnd: anchorAt },
+      });
+      await prisma.tokenWalletActivity.create({
+        data: {
+          tokenId: token.id,
+          wallet: trader,
+          buys: 1,
+          sells: 1,
+          solIn,
+          solOut,
+          tokensBought,
+          tokensSold,
+          firstBuyAt,
+          firstSellAt,
+        },
+      });
+    }
+    await runWalletRiskJob();
+    expect(await prisma.walletRisk.findUnique({ where: { wallet: trader } })).toMatchObject({
+      appearances: 6,
+      wins: 2,
+      earlyWins: 1,
+      // Under ten coins: no label yet, however good the rate.
+      winner: false,
+    });
+  });
 });

@@ -31,6 +31,11 @@ export type WalletGroup = (typeof WALLET_GROUPS)[number];
 const TOP_WINNERS = 100;
 /** A coin counts as sold out of once this share of the tokens bought has been sold. */
 export const CLOSED_SHARE = 0.9;
+/**
+ * ...and not once it sold more than this many times the tokens it bought on the tape: the rest came
+ * in by transfer (a side wallet, an airdrop), so SOL out against SOL in is not its trade's return.
+ */
+export const OVERSOLD_SHARE = 1.1;
 /** Wallets shown, most active first, before the reader's own sort. */
 const MAX_WALLETS = 150;
 /** The tape's per-coin rows read, at most: bounds a fill whatever the roster grows to. */
@@ -93,8 +98,16 @@ export interface WalletScorecard {
   coinTiers: TierCounts;
   /** Coins it sold out of, and its own return on them. */
   closed: number;
-  /** Mean of (SOL out / SOL in - 1) over closed coins, in percent. */
-  avgReturnPct: number | null;
+  /** SOL it put into and took out of the coins it sold out of. */
+  closedSolIn: number;
+  closedSolOut: number;
+  /**
+   * Its return on those coins, weighted by size: closed SOL out / closed SOL in - 1, in percent -
+   * what it actually made. Not the mean of per-coin returns, which one tiny-stake moonshot rules
+   * (user report 2026-10-16: +3,683% beside +2.4 SOL net).
+   */
+  returnPct: number | null;
+  /** The typical closed trade: the median per-coin return, in percent. */
   medianReturnPct: number | null;
   /** Closed coins it took out more SOL than it put in. */
   inProfit: number;
@@ -114,11 +127,21 @@ export interface WalletScorecard {
 }
 
 export interface GroupSummary {
+  /** Every wallet of the group that bought a tracked coin in the window, not only those listed. */
   wallets: number;
+  /** Their buys: one per wallet and coin. */
   coins: number;
+  /**
+   * The distinct coins any of them bought, graded once each: what "their coins" means beside
+   * every tracked coin (a coin six KOLs bought counts once, not six times).
+   */
+  distinctCoins: number;
   coinTiers: TierCounts;
   closed: number;
-  avgReturnPct: number | null;
+  closedSolIn: number;
+  closedSolOut: number;
+  /** Closed SOL out / closed SOL in - 1 over every wallet shown, in percent. */
+  returnPct: number | null;
   inProfit: number;
   own2x: number;
   solIn: number;
@@ -144,7 +167,10 @@ const median = (xs: number[]): number | null => {
 };
 
 const isClosed = (r: WalletCoinRow) =>
-  r.solIn > 0 && r.tokensBought > 0 && r.tokensSold >= r.tokensBought * CLOSED_SHARE;
+  r.solIn > 0 &&
+  r.tokensBought > 0 &&
+  r.tokensSold >= r.tokensBought * CLOSED_SHARE &&
+  r.tokensSold <= r.tokensBought * OVERSOLD_SHARE;
 
 const emptyTiers = (): TierCounts => ({ graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0 });
 
@@ -171,6 +197,8 @@ export function scorecardOf(
   let own10x = 0;
   let solIn = 0;
   let solOut = 0;
+  let closedSolIn = 0;
+  let closedSolOut = 0;
   let early = 0;
   let snipes = 0;
   let fastExits = 0;
@@ -188,6 +216,8 @@ export function scorecardOf(
     if (!isClosed(r)) continue;
     const multiple = r.solOut / r.solIn;
     returns.push((multiple - 1) * 100);
+    closedSolIn += r.solIn;
+    closedSolOut += r.solOut;
     if (multiple > 1) inProfit++;
     if (multiple >= 2) own2x++;
     if (multiple >= 4) own4x++;
@@ -199,7 +229,9 @@ export function scorecardOf(
     coins: rows.length,
     coinTiers,
     closed: returns.length,
-    avgReturnPct: returns.length ? returns.reduce((s, x) => s + x, 0) / returns.length : null,
+    closedSolIn,
+    closedSolOut,
+    returnPct: closedReturnPct(closedSolIn, closedSolOut),
     medianReturnPct: median(returns),
     inProfit,
     own2x,
@@ -215,17 +247,29 @@ export function scorecardOf(
   };
 }
 
-/** The group's totals: every coin row of every wallet shown, each counted once per wallet. */
-export function summaryOf(cards: readonly WalletScorecard[]): GroupSummary {
+const closedReturnPct = (solIn: number, solOut: number) => (solIn > 0 ? (solOut / solIn - 1) * 100 : null);
+
+/**
+ * The group's totals over every wallet in it (`cards`, listed or not): trade figures summed per
+ * wallet, coin grades once per distinct coin (`rows`, every wallet's coin rows).
+ */
+export function summaryOf(
+  cards: readonly Omit<WalletScorecard, "name" | "twitter" | "sides">[],
+  rows: readonly WalletCoinRow[],
+): GroupSummary {
   const coinTiers = emptyTiers();
-  let closed = 0;
-  let returnSum = 0;
+  const byMint = new Map<string, WalletCoinRow>();
+  for (const r of rows) if (!byMint.has(r.mint)) byMint.set(r.mint, r);
+  for (const r of byMint.values()) addTiers(coinTiers, r);
   const s: GroupSummary = {
     wallets: cards.length,
     coins: 0,
+    distinctCoins: byMint.size,
     coinTiers,
     closed: 0,
-    avgReturnPct: null,
+    closedSolIn: 0,
+    closedSolOut: 0,
+    returnPct: null,
     inProfit: 0,
     own2x: 0,
     solIn: 0,
@@ -233,16 +277,15 @@ export function summaryOf(cards: readonly WalletScorecard[]): GroupSummary {
   };
   for (const c of cards) {
     s.coins += c.coins;
-    for (const k of Object.keys(coinTiers) as (keyof TierCounts)[]) coinTiers[k] += c.coinTiers[k];
-    closed += c.closed;
-    if (c.avgReturnPct !== null) returnSum += c.avgReturnPct * c.closed;
+    s.closed += c.closed;
+    s.closedSolIn += c.closedSolIn;
+    s.closedSolOut += c.closedSolOut;
     s.inProfit += c.inProfit;
     s.own2x += c.own2x;
     s.solIn += c.solIn;
     s.solOut += c.solOut;
   }
-  s.closed = closed;
-  s.avgReturnPct = closed ? returnSum / closed : null;
+  s.returnPct = closedReturnPct(s.closedSolIn, s.closedSolOut);
   return s;
 }
 
@@ -346,24 +389,26 @@ export async function buildWalletScorecards(
     if (list) list.push(row);
     else byWallet.set(r.who, [row]);
   }
-  const top = [...byWallet.entries()].sort((x, y) => y[1].length - x[1].length).slice(0, MAX_WALLETS);
-  const names = await readKolRows(top.map(([w]) => w));
+  const all = [...byWallet.entries()].map(([wallet, rows]) => scorecardOf(wallet, rows));
+  // The most active are listed; the summary covers the whole group.
+  const top = [...all].sort((x, y) => y.coins - x.coins).slice(0, MAX_WALLETS);
+  const names = await readKolRows(top.map((c) => c.wallet));
   const sides =
     group === "kols" && top.length
       ? await prisma.kolWallet.groupBy({
           by: ["mainWallet"],
-          where: { mainWallet: { in: top.map(([w]) => w) } },
+          where: { mainWallet: { in: top.map((c) => c.wallet) } },
           _count: { _all: true },
         })
       : [];
   const sideCount = new Map(sides.map((s) => [s.mainWallet, s._count._all]));
-  const wallets: WalletScorecard[] = top.map(([wallet, rows]) => {
-    const kol = names.get(wallet);
+  const wallets: WalletScorecard[] = top.map((card) => {
+    const kol = names.get(card.wallet);
     return {
-      ...scorecardOf(wallet, rows),
+      ...card,
       name: kol ? (kol.main ? knownSideName(kol.main) : kol.name) : null,
       twitter: kol?.twitter ?? null,
-      sides: sideCount.get(wallet) ?? 0,
+      sides: sideCount.get(card.wallet) ?? 0,
     };
   });
   return {
@@ -377,7 +422,7 @@ export async function buildWalletScorecards(
       won10x: Number(b?.won10x ?? 0),
       tenXGraded: Number(b?.ten_x_graded ?? 0),
     },
-    summary: summaryOf(wallets),
+    summary: summaryOf(all, [...byWallet.values()].flat()),
     wallets,
     closedShare: CLOSED_SHARE,
     computedAt: new Date(now).toISOString(),

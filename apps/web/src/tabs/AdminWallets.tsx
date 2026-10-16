@@ -27,7 +27,7 @@ interface Overview {
   riskyScore: number;
   /** The win side. Absent from older API builds. */
   winnerWallets?: number;
-  winnerRule?: { minWins: number; minRate: number; minCoins?: number };
+  winnerRule?: { minWins: number; lowerBoundVsMarket: number; minCoins?: number };
   dumperRule?: { minDumps: number; minRate: number; minCoins?: number };
   tapes: Record<string, number>;
   tapes24h: { status: string; source: string | null; count: number }[];
@@ -138,7 +138,7 @@ export function WalletsAdmin() {
                 value={n(r.winnerWallets ?? 0)}
                 sub={
                   r.winnerRule
-                    ? `${r.winnerRule.minWins}+ doubled, ${Math.round(r.winnerRule.minRate * 100)}% of its coins, ${r.winnerRule.minCoins ?? 10}+ coins`
+                    ? `${r.winnerRule.minWins}+ own 2x trades, a win rate at least ${r.winnerRule.lowerBoundVsMarket}x the market's, ${r.winnerRule.minCoins ?? 10}+ coins`
                     : undefined
                 }
                 tone={r.winnerWallets ? "ok" : undefined}
