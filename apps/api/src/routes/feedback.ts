@@ -22,6 +22,13 @@ export const FEEDBACK_SCREENSHOT_MAX = 900_000;
 export const FEEDBACK_DAILY_CAP = 20;
 /** Guest reports, from every guest together, in an hour. Signed-in senders are not counted. */
 export const FEEDBACK_GUEST_HOURLY_CAP = 60;
+/**
+ * Reports from everyone together in an hour. A wallet costs nothing to sign in with, so the
+ * per-sender caps alone would let someone with a stack of wallets fill the table.
+ */
+export const FEEDBACK_TOTAL_HOURLY_CAP = 300;
+/** Screenshots stored from everyone together in a day: at most ~180MB a day at the size cap. */
+export const FEEDBACK_SCREENSHOT_DAILY_CAP = 200;
 export const FEEDBACK_STATUSES = ["new", "seen", "done"] as const;
 
 /** Bursts: a report and a couple of corrections, not a flood. */
@@ -29,13 +36,53 @@ const SUBMIT_RATE_LIMIT = { max: 5, timeWindow: "10 minutes" };
 /** The screenshot rides in the body, so this route takes more than the API's 64KB default. */
 const SUBMIT_BODY_LIMIT = 1024 * 1024;
 
-const text = (max: number) => z.string().trim().max(max);
+/**
+ * Control characters (but newline and tab), bidi overrides and other invisible format marks. NUL
+ * is refused by Postgres text and jsonb outright (a 500), and the bidi ones can make a report read
+ * differently in the admin list than what was sent.
+ */
+const UNSAFE_CHARS =
+  // eslint-disable-next-line no-control-regex
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g;
+export const clean = (value: string) => value.replace(UNSAFE_CHARS, "").trim();
+
+const text = (max: number) => z.string().transform(clean).pipe(z.string().max(max));
+
+/**
+ * The page the report came from: an http(s) URL only, so the admin list's link can never be a
+ * javascript: or data: URL someone posted. Anything else is dropped, not refused.
+ */
+const pageUrl = z
+  .string()
+  .max(2000)
+  .transform((raw) => {
+    try {
+      const url = new URL(clean(raw));
+      if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+      if (url.username || url.password) return undefined;
+      return url.href.slice(0, 500);
+    } catch {
+      return undefined;
+    }
+  });
+
+/**
+ * A JPEG data URL (all the form's screen capture makes) whose bytes really start like one. An
+ * <img> can't run script, but there is no reason to store anything else.
+ */
+const jpegDataUrl = z
+  .string()
+  .max(FEEDBACK_SCREENSHOT_MAX, "That screenshot is too large")
+  .regex(/^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/, "That screenshot isn't an image")
+  .refine((v) => {
+    const head = Buffer.from(v.slice(23, 31), "base64");
+    return head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+  }, "That screenshot isn't an image");
 
 const contextSchema = z
   .object({
-    url: text(500),
+    url: pageUrl,
     tab: text(40),
-    section: text(60),
     appVersion: text(60),
     viewport: text(20),
     screen: text(20),
@@ -47,22 +94,23 @@ const contextSchema = z
     signedIn: z.boolean(),
     guest: z.boolean(),
   })
-  .partial();
+  .partial()
+  .strip();
 
 const submitSchema = z.object({
   kind: z.enum(["bug", "idea"]),
   message: z
     .string()
-    .trim()
-    .min(5, "Say a little more about it")
-    .max(FEEDBACK_MESSAGE_MAX, `Keep it under ${FEEDBACK_MESSAGE_MAX} characters`),
+    .transform(clean)
+    .pipe(
+      z
+        .string()
+        .min(5, "Say a little more about it")
+        .max(FEEDBACK_MESSAGE_MAX, `Keep it under ${FEEDBACK_MESSAGE_MAX} characters`),
+    ),
   contact: text(FEEDBACK_CONTACT_MAX).optional(),
   context: contextSchema.optional(),
-  screenshot: z
-    .string()
-    .max(FEEDBACK_SCREENSHOT_MAX, "That screenshot is too large")
-    .regex(/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/, "That screenshot isn't an image")
-    .optional(),
+  screenshot: jpegDataUrl.optional(),
   // The honeypot: hidden from people, filled in by form-filling bots.
   website: z.string().optional(),
 });
@@ -95,20 +143,25 @@ export async function registerFeedbackRoutes(app: FastifyInstance, opts: { env: 
       const wallet = request.user?.walletAddress ?? null;
       const submitterKey = wallet ? `w:${wallet}` : guestKey(opts.env.JWT_SECRET, clientIp(request));
       const now = Date.now();
-      const [today, guestsThisHour] = await Promise.all([
+      const hourAgo = new Date(now - 3_600_000);
+      const [today, guestsThisHour, everyoneThisHour, shotsToday] = await Promise.all([
         prisma.feedbackReport.count({
           where: { submitterKey, createdAt: { gt: new Date(now - 24 * 3_600_000) } },
         }),
         wallet
           ? Promise.resolve(0)
-          : prisma.feedbackReport.count({
-              where: { walletAddress: null, createdAt: { gt: new Date(now - 3_600_000) } },
-            }),
+          : prisma.feedbackReport.count({ where: { walletAddress: null, createdAt: { gt: hourAgo } } }),
+        prisma.feedbackReport.count({ where: { createdAt: { gt: hourAgo } } }),
+        screenshot
+          ? prisma.feedbackReport.count({
+              where: { screenshot: { not: null }, createdAt: { gt: new Date(now - 24 * 3_600_000) } },
+            })
+          : Promise.resolve(0),
       ]);
       if (today >= FEEDBACK_DAILY_CAP) {
         return reply.code(429).send({ error: "You've sent a lot of reports today. Try again tomorrow." });
       }
-      if (guestsThisHour >= FEEDBACK_GUEST_HOURLY_CAP) {
+      if (guestsThisHour >= FEEDBACK_GUEST_HOURLY_CAP || everyoneThisHour >= FEEDBACK_TOTAL_HOURLY_CAP) {
         return reply
           .code(429)
           .send({ error: "Lots of reports are coming in right now. Connect a wallet or try again later." });
@@ -122,7 +175,8 @@ export async function registerFeedbackRoutes(app: FastifyInstance, opts: { env: 
           walletAddress: wallet,
           submitterKey,
           context: context ?? undefined,
-          screenshot: screenshot ?? null,
+          // Past the day's screenshot budget the report still goes in, without its picture.
+          screenshot: screenshot && shotsToday < FEEDBACK_SCREENSHOT_DAILY_CAP ? screenshot : null,
         },
         select: { id: true },
       });
@@ -161,7 +215,8 @@ const LIST_SELECT = {
   handledBy: true,
 } as const;
 
-const idParams = z.object({ id: z.string().min(1).max(64) });
+/** Report ids are cuids. */
+const idParams = z.object({ id: z.string().regex(/^[a-z0-9]{1,64}$/) });
 
 async function statusCounts() {
   const rows = await prisma.feedbackReport.groupBy({ by: ["status"], _count: { _all: true } });
