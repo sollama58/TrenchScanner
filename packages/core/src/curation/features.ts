@@ -924,6 +924,28 @@ export const BUNDLED_SUPPLY_POINT_IN_TIME_FROM = new Date("2026-10-16T19:30:00Z"
 export const NS_RULES_VERSION_MARKER_SINCE = new Date("2026-10-16T19:30:00Z");
 
 /**
+ * Rows banked in this window carry the creator share, KOL Bundled % and Bundled % with holder
+ * transfers counted as links. #643 (2026-10-16 03:55 UTC) let a transfer past dust link its two
+ * holders in the Linked reading, and every figure built on its clusters followed, the models'
+ * copies included: the `...Model` bundles leave out a KOL's sends but still step through the
+ * transfer-linked clusters, and linkedCreatorPct read the counted share until #679. Decision
+ * rows with creator-tied supply went from 1.3% to 4.0% of rows and Bundled %'s 90th percentile
+ * from 15.5 to 18.0 (pre-retrain check 2026-10-16). The learners keep the funding-only
+ * definitions until the retrain that switches them (notes/model-retrain-pending.md), read live
+ * from the `...ExTransfers` figures, so in this window the three read as missing. The end is the
+ * deploy of the change that moved the bundles to those figures, with slack on the late side.
+ */
+export const HOLDER_TRANSFER_LINKS_WINDOW = {
+  from: new Date("2026-10-16T03:55:00Z"),
+  until: new Date("2026-10-16T21:00:00Z"),
+} as const;
+const HOLDER_TRANSFER_LINKED_FEATURES = [
+  "linkedCreatorPct",
+  "kolBundledPct",
+  "bundledSupplyPct",
+] as const satisfies readonly CandidateFeatureName[];
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
  * the create message and is real), the social bits on rows banked before
@@ -937,6 +959,7 @@ export const NS_RULES_VERSION_MARKER_SINCE = new Date("2026-10-16T19:30:00Z");
  * inputs on hourly rows banked before HOURLY_ROWS_WAIT_SINCE too: in on some of those rows and
  * absent on most, they taught "hourly and missing", a pattern no decision shows. And
  * bundledSupplyPct on rows with KOL bundles banked before BUNDLED_SUPPLY_POINT_IN_TIME_FROM.
+ * The creator share and the two bundle figures through HOLDER_TRANSFER_LINKS_WINDOW.
  * The TokenSage inputs on rows banked before NS_RULES_VERSION_MARKER_SINCE that carry no
  * nsRulesVersion: those pre-date the marker and span the #631 regime step. From here on a change
  * to what an ns* input means bumps NS_RULES_VERSION, and the rows written under the old meaning
@@ -961,11 +984,14 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
     at < NS_RULES_VERSION_MARKER_SINCE.getTime() &&
     features.nsRulesVersion == null &&
     ALL_NARRATIVE_FEATURES.some((name) => features[name] != null);
+  const transferLinked =
+    at >= HOLDER_TRANSFER_LINKS_WINDOW.from.getTime() && at < HOLDER_TRANSFER_LINKS_WINDOW.until.getTime();
   if (
     at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() &&
     !unwaitedHourly &&
     !rebuiltBundled &&
-    !unversionedNs
+    !unversionedNs &&
+    !transferLinked
   ) {
     return features;
   }
@@ -980,6 +1006,7 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   if (unwaitedHourly) HOURLY_UNWAITED_FEATURES.forEach(clear);
   if (rebuiltBundled) clear("bundledSupplyPct");
   if (unversionedNs) ALL_NARRATIVE_FEATURES.forEach(clear);
+  if (transferLinked) HOLDER_TRANSFER_LINKED_FEATURES.forEach(clear);
   if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime()) return done();
   // The tape held less than `windowMinutes` of the coin's life (the pre-refill rule's test, with
   // its slack for the rounding of pathObservedMinutes and the reference tick's own).
@@ -1469,11 +1496,13 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     top10WalletsChecked: scored.top10WalletsChecked ?? null,
     freshTopHolderCount: scored.freshTopHolderCount ?? null,
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
-    // The models keep the figures from before KOL bundles followed transfers until the next
-    // retrain (notes/model-retrain-pending.md); the snapshot and the filters read the new ones.
-    // Unknown without the Model copy: falling back to the new figures would mix the two definitions.
-    kolBundledPct: scored.kolBundledPctModel ?? null,
-    bundledSupplyPct: scored.bundledSupplyPctModel ?? null,
+    // The models keep the figures from before transfers counted (in Linked since #643, in KOL
+    // bundles since #667) until the next retrain (notes/model-retrain-pending.md); the snapshot and
+    // the filters read the new ones. The funding-only reading, not the `...Model` copies: those
+    // leave out a KOL's sends but still step through transfer-linked clusters
+    // (HOLDER_TRANSFER_LINKS_WINDOW). Unknown without it, so the two definitions never mix.
+    kolBundledPct: scored.kolBundledPctExTransfers ?? null,
+    bundledSupplyPct: scored.bundledSupplyPctExTransfers ?? null,
     launchpadStonks:
       scored.launchpad === STONKS_LAUNCHPAD ? 1 : scored.launchpad === PUMPFUN_LAUNCHPAD ? 0 : null,
     mktSource: marketSourceCode(scored.marketSource),

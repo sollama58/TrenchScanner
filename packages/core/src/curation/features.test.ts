@@ -9,6 +9,7 @@ import {
   maskKnownBadInputs,
   HOURLY_ROWS_WAIT_SINCE,
   BUNDLED_SUPPLY_POINT_IN_TIME_FROM,
+  HOLDER_TRANSFER_LINKS_WINDOW,
   NARRATIVE_READ_AT_DECISION_SINCE,
   NS_RULES_VERSION_MARKER_SINCE,
   SOCIAL_BITS_FROM_DISCOVERY_SINCE,
@@ -279,14 +280,23 @@ describe("scoredFromFeatures - replay round trip", () => {
         linkedCreatorPct: 9,
         linkedCreatorPctExTransfers: 2,
         kolBundledPct: 12,
-        kolBundledPctModel: 5,
+        kolBundledPctModel: 10,
+        kolBundledPctExTransfers: 5,
         bundledSupplyPct: 14,
-        bundledSupplyPctModel: 7,
+        bundledSupplyPctModel: 11,
+        bundledSupplyPctExTransfers: 7,
       }),
     );
     expect(f).toMatchObject({ linkedCreatorPct: 2, kolBundledPct: 5, bundledSupplyPct: 7 });
+    // The Model copies still step through transfer-linked clusters: never read in their place.
     const bare = buildCandidateFeatures(
-      scored({ linkedCreatorPct: 9, kolBundledPct: 12, bundledSupplyPct: 14 }),
+      scored({
+        linkedCreatorPct: 9,
+        kolBundledPct: 12,
+        kolBundledPctModel: 10,
+        bundledSupplyPct: 14,
+        bundledSupplyPctModel: 11,
+      }),
     );
     expect(bare).toMatchObject({ linkedCreatorPct: null, kolBundledPct: null, bundledSupplyPct: null });
   });
@@ -447,12 +457,37 @@ describe("withCurrentNarrativeTiming", () => {
 });
 
 describe("maskKnownBadInputs", () => {
+  it("reads the creator share and the bundle figures as missing while transfers counted as links", () => {
+    const row = {
+      linkedCreatorPct: 4,
+      kolBundledPct: 0,
+      bundledSupplyPct: 9,
+      linkedWalletPct: 9,
+      mcapUsd: 50_000,
+    };
+    const masked = { ...row, linkedCreatorPct: null, kolBundledPct: null, bundledSupplyPct: null };
+    const { from, until } = HOLDER_TRANSFER_LINKS_WINDOW;
+    // Past every older mask, so the window alone decides.
+    const late = new Date(Math.max(from.getTime(), BUNDLED_SUPPLY_POINT_IN_TIME_FROM.getTime()));
+    expect(maskKnownBadInputs(from, row)).toEqual(masked);
+    expect(maskKnownBadInputs(late, row)).toEqual(masked);
+    expect(maskKnownBadInputs(new Date(until.getTime() - 1), row)).toEqual(masked);
+    expect(maskKnownBadInputs(until, row)).toBe(row);
+    expect(row.linkedCreatorPct).toBe(4);
+  });
   it("reads a backfilled bundledSupplyPct as missing on rows with KOL bundles banked before the point-in-time backfill", () => {
-    const before = new Date(BUNDLED_SUPPLY_POINT_IN_TIME_FROM.getTime() - 1);
+    // Before the transfer-links window, which masks the figure on its own (its own test).
+    const before = new Date(HOLDER_TRANSFER_LINKS_WINDOW.from.getTime() - 1);
     const rebuilt = { bundledSupplyPct: 6, kolBundledPct: 3, linkedWalletPct: 3, mcapUsd: 50_000 };
     expect(maskKnownBadInputs(before, rebuilt)).toEqual({ ...rebuilt, bundledSupplyPct: null });
     expect(rebuilt.bundledSupplyPct).toBe(6);
-    expect(maskKnownBadInputs(BUNDLED_SUPPLY_POINT_IN_TIME_FROM, rebuilt)).toBe(rebuilt);
+    // From then on only the transfer-links window (its own test) touches the figure.
+    expect(maskKnownBadInputs(BUNDLED_SUPPLY_POINT_IN_TIME_FROM, rebuilt)).toEqual({
+      ...rebuilt,
+      bundledSupplyPct: null,
+      kolBundledPct: null,
+    });
+    expect(maskKnownBadInputs(HOLDER_TRANSFER_LINKS_WINDOW.until, rebuilt)).toBe(rebuilt);
     // No KOL bundled anyone: Bundled % is the linked share itself, exact at any time.
     const exact = { bundledSupplyPct: 3, kolBundledPct: 0, linkedWalletPct: 3, mcapUsd: 50_000 };
     expect(maskKnownBadInputs(before, exact)).toBe(exact);
@@ -652,10 +687,11 @@ describe("maskKnownBadInputs", () => {
     // The quick read, the holder share and the social bits are as they were.
     expect(masked).toMatchObject({ nsCopycat: 1, nsDepthFull: 1, top10HolderPct: 25, hasTwitter: 1 });
     // A decision row of the same moment, an hourly row since the wait, and a call without the
-    // kind (the older callers) are left alone.
-    expect(maskKnownBadInputs(before, row, "event")).toBe(row);
-    expect(maskKnownBadInputs(HOURLY_ROWS_WAIT_SINCE, row, "hourly")).toBe(row);
-    expect(maskKnownBadInputs(before, row)).toBe(row);
+    // kind (the older callers) lose only what the transfer-links window takes (its own test).
+    const transferLinked = { ...row, linkedCreatorPct: null, kolBundledPct: null, bundledSupplyPct: null };
+    expect(maskKnownBadInputs(before, row, "event")).toEqual(transferLinked);
+    expect(maskKnownBadInputs(HOURLY_ROWS_WAIT_SINCE, row, "hourly")).toEqual(transferLinked);
+    expect(maskKnownBadInputs(before, row)).toEqual(transferLinked);
     // Together with the older masks on a row old enough for both.
     const oldest = maskKnownBadInputs(new Date("2026-10-07T12:00:00Z"), row, "hourly");
     expect(oldest).toMatchObject({ hasTwitter: null, nsXRead: null, nsCopycat: 1 });
