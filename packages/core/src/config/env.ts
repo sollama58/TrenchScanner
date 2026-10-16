@@ -677,10 +677,13 @@ const envSchema = z.object({
   // the weakest learner seat when its exam beats that seat's by CURATOR_EVOLUTION_MARGIN points,
   // at most one takeover per run. Each challenger costs one more exam of run time (about 20 s on
   // the trainer; memory stays flat). 0 freezes the field.
-  // 10 since 2026-10-06 (user decision; was 2). The takeover's bootstrap bar rises with the count
-  // (selectionAdjustedConfidence in evolution.ts), so the best of 10 is held to the same false-
-  // takeover rate as a single challenger.
-  CURATOR_EVOLUTION_CHALLENGERS: z.coerce.number().int().min(0).max(12).default(10),
+  // 4 since 2026-10-16 (user decision; was 10 from 2026-10-06, 2 before). The takeover's bootstrap
+  // bar rises with the count (selectionAdjustedConfidence in evolution.ts), so the best of many is
+  // held to the same false-takeover rate as a single challenger - but the exam's slice-to-slice
+  // spread (about 3 points of top-20% hit rate) is wider than any recipe change tried offline
+  // moved it, so the extra six mostly bought luckier exams. Their run time now goes to seed-bagging
+  // each tree learner (DEFAULT_BOOSTING_OPTIONS.bagSeeds).
+  CURATOR_EVOLUTION_CHALLENGERS: z.coerce.number().int().min(0).max(12).default(4),
   // A seat's recipe holds it at least this long before it can be replaced - time to build a live
   // record the leaderboard can judge it on. 0 = off (a seat can be replaced the run it is seated).
   CURATOR_EVOLUTION_MIN_AGE_HOURS: z.coerce.number().min(0).default(12),
