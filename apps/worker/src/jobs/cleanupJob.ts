@@ -725,9 +725,8 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
   };
 
   // The trade tape's per-wallet rows and reads (tradeTapeJob.ts), on their own horizon
-  // (TWA_RETENTION_DAYS, two weeks; the snapshot horizon until 2026-10-16): the wallet risk score
-  // looks back over a wallet's recent coins, nothing trains on them, and the tape job re-reads at
-  // most ten days back.
+  // (TWA_RETENTION_DAYS, 30 days; the snapshot horizon until 2026-10-16): the wallet risk score,
+  // a model input, is built from every row kept, and the tape job re-reads at most ten days back.
   const twaDays = env.TWA_RETENTION_DAYS > 0 ? env.TWA_RETENTION_DAYS : env.SNAPSHOT_RETENTION_DAYS;
   const twaCutoff = new Date(startedAt - twaDays * DAY_MS);
   const deletedWalletActivity = await stage("walletActivity", 0, () =>

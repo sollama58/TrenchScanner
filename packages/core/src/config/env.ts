@@ -384,13 +384,13 @@ const envSchema = z.object({
   STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(14),
   // The trade tape's per-wallet rows (TokenWalletActivity, ~1.2 KB a row at ~55k rows a day, the
   // second-largest table on 2026-10-16) and the per-coin tape reads (TokenTradeTape) are kept this
-  // many days, on their own horizon since 2026-10-16 (database audit, user decision: "option B").
-  // Nothing trains on them: the wallet risk score reads a wallet's recent coins, the KOL
-  // side-wallet windows (kolSideWalletsJob.ts, walletBundle.ts) read back up to "30d" and show
-  // whatever this keeps, and the tape job itself re-reads at most 10 days back (LOOKBACK_MS in
-  // tradeTapeJob.ts), so 14 days loses no read it would redo. 0 falls back to
-  // SNAPSHOT_RETENTION_DAYS.
-  TWA_RETENTION_DAYS: z.coerce.number().nonnegative().default(14),
+  // many days, on their own horizon since 2026-10-16 (database audit). 30, not the audit's 14
+  // (user decision 2026-10-16): the wallet risk score is built from every row kept here, and
+  // walletRiskTop10Max is a model input, so a shorter horizon would shift what the models read
+  // until a retrain. The KOL side-wallet windows (kolSideWalletsJob.ts, walletBundle.ts) read back
+  // up to "30d", and the tape job itself re-reads at most 10 days back (LOOKBACK_MS in
+  // tradeTapeJob.ts). 0 falls back to SNAPSHOT_RETENTION_DAYS.
+  TWA_RETENTION_DAYS: z.coerce.number().nonnegative().default(30),
   // pipeline-watch tells the admins' private chats, and fails the strict health check, once the
   // database passes this size. A full disk stops every write at once (scans, alerts, outcomes,
   // the ledgers) and leaves no room to reclaim space in place; on 2026-10-16 the database was

@@ -81,8 +81,7 @@ const KOL_SIDE_WALLETS_TABLE: ReplaceRowsSpec = {
 /** Wallet pairs per delete when refreshing the labels that qualify again. */
 const POSSIBLE_SIDE_DELETE_CHUNK = 500;
 
-// The "30d" window reads what TWA_RETENTION_DAYS keeps of TokenWalletActivity (14 days since
-// 2026-10-16), so it shows the last two weeks under a thirty-day label.
+// The "30d" window reads what TWA_RETENTION_DAYS keeps of TokenWalletActivity (30 days).
 const WINDOW_MS: Record<SideWindow, number> = { "24h": DAY_MS, "7d": 7 * DAY_MS, "30d": 30 * DAY_MS };
 
 /**

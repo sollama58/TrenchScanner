@@ -38,8 +38,8 @@ import {
  */
 
 const DAY_MS = 86_400_000;
-// "30d" reaches back only as far as TWA_RETENTION_DAYS keeps TokenWalletActivity (14 days since
-// 2026-10-16); see kolSideWalletsJob.ts.
+// "30d" reaches back as far as TWA_RETENTION_DAYS keeps TokenWalletActivity (30 days); see
+// kolSideWalletsJob.ts.
 const WINDOW_MS: Record<SideWindow, number> = { "24h": DAY_MS, "7d": 7 * DAY_MS, "30d": 30 * DAY_MS };
 /** How long one wallet's bundle is served before it is read again (user ask 2026-10-15: a day). */
 export const BUNDLE_TTL_MS = DAY_MS;
