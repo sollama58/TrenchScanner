@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import {
   createLogger,
   prisma,
@@ -18,17 +19,97 @@ export interface RelaunchSiblings {
 }
 
 /**
- * The same-ticker launches before each mint, for the block on model calls on relaunch farms (see
- * core's curation/relaunchFarm.ts). One query over the Token table the
- * discovery stream already fills; the siblings are fixed by the mint's first sighting, their peak
- * moves. A mint with no ticker, or not in the table, is left out (the block does not apply). On a
- * failed read every mint is left out, the same as unread.
+ * How often a farm's peak is read again, and how long a mint not in the table or without a ticker
+ * stays unasked about. The siblings are fixed by the mint's first sighting, so a mint below the
+ * cut is read once per process; a farm's peak moves, so it is read again at this pace.
  */
-export async function resolveRelaunchSiblings(mints: string[]): Promise<Map<string, RelaunchSiblings>> {
+export const RELAUNCH_PEAK_REREAD_MS = 5 * 60_000;
+/**
+ * The read's own statement timeout. It ran inline in the scan cycle under the pool's 150-s
+ * statement_timeout alone, and one such read took 102 s in production (2026-10-16 02:31 UTC,
+ * database audit D1), the cycle waiting on it the whole time; past this bound the cycle goes on
+ * without the block, as it does on any failed read.
+ */
+export const RELAUNCH_READ_TIMEOUT_MS = 20_000;
+/** Mints remembered at once; past this the least recently asked about go. */
+const MAX_REMEMBERED = 20_000;
+
+/** What this process read for each mint, or null for one the table had no ticker for, and when. */
+const remembered = new Map<string, { reading: RelaunchSiblings | null; readAt: number }>();
+
+function remember(mint: string, reading: RelaunchSiblings | null, now: number): void {
+  // Re-inserted so Map order stays "least recently asked about first" for the eviction below.
+  remembered.delete(mint);
+  if (remembered.size >= MAX_REMEMBERED) {
+    const oldest = remembered.keys().next().value;
+    if (oldest !== undefined) remembered.delete(oldest);
+  }
+  remembered.set(mint, { reading, readAt: now });
+}
+
+/** Tests: forget every mint. */
+export function resetRelaunchSiblingsForTests(): void {
+  remembered.clear();
+}
+
+/**
+ * The same-ticker launches before each mint, for the block on model calls on relaunch farms (see
+ * core's curation/relaunchFarm.ts). One query over the Token table the discovery stream already
+ * fills, asked once per mint per process: the siblings are fixed by the mint's first sighting,
+ * and only a farm's peak (a mint at or past the cut) is read again, every RELAUNCH_PEAK_REREAD_MS.
+ * The scan asks about 150-220 candidates a cycle and sees 10-20 new ones, so the read shrinks to
+ * those. A mint with no ticker, or not in the table, is left out (the block does not apply) and
+ * asked about again after the same pause, since a ticker can arrive with later metadata. On a
+ * failed or timed-out read the mints it was about are left out, the same as unread; the ones
+ * already read keep their answer.
+ */
+export async function resolveRelaunchSiblings(
+  mints: string[],
+  now: number = Date.now(),
+): Promise<Map<string, RelaunchSiblings>> {
   const out = new Map<string, RelaunchSiblings>();
-  if (mints.length === 0) return out;
+  const toRead: string[] = [];
+  for (const mint of new Set(mints)) {
+    const known = remembered.get(mint);
+    const stale =
+      known !== undefined &&
+      (known.reading === null || known.reading.siblings >= RELAUNCH_FARM_MIN_SIBLINGS) &&
+      now - known.readAt >= RELAUNCH_PEAK_REREAD_MS;
+    if (known === undefined || stale) toRead.push(mint);
+    else if (known.reading !== null) out.set(mint, known.reading);
+  }
+  if (toRead.length === 0) return out;
   try {
-    const rows = await prisma.$queryRaw<{ mintAddress: string; siblings: number; peak: number | null }[]>`
+    const rows = await prisma.$transaction(
+      async (tx) => {
+        // The bound rides the transaction's connection, this statement alone.
+        await tx.$queryRaw`SELECT set_config('statement_timeout', ${String(RELAUNCH_READ_TIMEOUT_MS)}, true)`;
+        return readSiblings(tx, toRead);
+      },
+      { maxWait: 5_000, timeout: RELAUNCH_READ_TIMEOUT_MS + 5_000 },
+    );
+    const read = new Set<string>();
+    for (const r of rows) {
+      const reading = { siblings: r.siblings, peakMcapUsd: Number(r.peak ?? 0) };
+      remember(r.mintAddress, reading, now);
+      out.set(r.mintAddress, reading);
+      read.add(r.mintAddress);
+    }
+    for (const mint of toRead) if (!read.has(mint)) remember(mint, null, now);
+  } catch (err) {
+    logger.warn("relaunch sibling read failed; the relaunch-farm block is skipped this cycle", {
+      mints: toRead.length,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return out;
+}
+
+async function readSiblings(
+  tx: Prisma.TransactionClient,
+  mints: string[],
+): Promise<{ mintAddress: string; siblings: number; peak: number | null }[]> {
+  return tx.$queryRaw<{ mintAddress: string; siblings: number; peak: number | null }[]>`
       WITH sib AS (
         SELECT t."mintAddress", s."id", s."lastMcapUsd", s."liveMarketCapUsd", s."rejectPeak60mMcapUsd"
         FROM "Token" t
@@ -60,13 +141,4 @@ export async function resolveRelaunchSiblings(mints: string[]): Promise<Map<stri
           FROM sib s WHERE s."mintAddress" = c."mintAddress" AND s."id" IS NOT NULL
         ) END AS peak
       FROM counted c`;
-    for (const r of rows) {
-      out.set(r.mintAddress, { siblings: r.siblings, peakMcapUsd: Number(r.peak ?? 0) });
-    }
-  } catch (err) {
-    logger.warn("relaunch sibling read failed; the relaunch-farm block is skipped this cycle", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-  return out;
 }
