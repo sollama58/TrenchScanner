@@ -221,6 +221,11 @@ export interface SavedFeed {
   showModelAlerts: boolean;
   /** Follow the best performer (the default) instead of the hand picks above. */
   followBest: boolean;
+  /**
+   * Only alerts both caught: the feed keeps only its filter alerts on tokens a followed model also
+   * called. Saved as is; whether it applies (model alerts on) is feedBothOnlyApplies' call.
+   */
+  bothOnly: boolean;
 }
 
 export const SAVED_FEED_SELECT = {
@@ -228,6 +233,7 @@ export const SAVED_FEED_SELECT = {
   feedModels: true,
   showModelAlerts: true,
   followBestModel: true,
+  feedBothOnly: true,
 } as const;
 
 export function toSavedFeed(user: {
@@ -235,16 +241,29 @@ export function toSavedFeed(user: {
   feedModels: string[];
   showModelAlerts: boolean;
   followBestModel: boolean;
+  feedBothOnly: boolean;
 }): SavedFeed {
   return {
     model: user.curatedModel,
     models: user.feedModels,
     showModelAlerts: user.showModelAlerts,
     followBest: user.followBestModel,
+    bothOnly: user.feedBothOnly,
   };
 }
 
-const DEFAULT_SAVED_FEED: SavedFeed = { model: null, models: [], showModelAlerts: true, followBest: true };
+/** Whether a saved feed is narrowed to alerts both caught: the switch is on and model alerts are too. */
+export function feedBothOnlyApplies(saved: Pick<SavedFeed, "showModelAlerts" | "bothOnly">): boolean {
+  return saved.showModelAlerts && saved.bothOnly;
+}
+
+const DEFAULT_SAVED_FEED: SavedFeed = {
+  model: null,
+  models: [],
+  showModelAlerts: true,
+  followBest: true,
+  bothOnly: false,
+};
 
 export async function savedFeed(request: FastifyRequest): Promise<SavedFeed> {
   // The auth hook already read it for browser sessions; only device sessions pay for a lookup.
@@ -562,7 +581,12 @@ export async function filterWins(
 export function readerBoard(
   board: Leaderboard,
   models: readonly string[],
-  feed?: { models: readonly string[]; filters: Awaited<ReturnType<typeof filterWins>> },
+  feed?: {
+    models: readonly string[];
+    filters: Awaited<ReturnType<typeof filterWins>>;
+    /** Only alerts both caught: a runner counts when a model and a filter both caught it. */
+    bothOnly?: boolean;
+  },
 ): Omit<Leaderboard, "catchLedger"> & { coverage: MixCoverage; feedCatch?: FeedCatch } {
   const { catchLedger, ...rest } = board;
   // What the meter weighs before suggesting a model: its live record over the same window. A
@@ -583,7 +607,7 @@ export function readerBoard(
   return {
     ...rest,
     coverage: mixCatch(catchLedger, models, candidates),
-    ...(feed ? { feedCatch: feedCatch(catchLedger, feed.models, feed.filters) } : {}),
+    ...(feed ? { feedCatch: feedCatch(catchLedger, feed.models, feed.filters, feed.bothOnly ?? false) } : {}),
   };
 }
 

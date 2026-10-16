@@ -3,6 +3,7 @@ import {
   largestHolderShare,
   RugCheckClient,
   toProfile,
+  withChainHolders,
   withoutVenueHolder,
   type RugCheckReport,
 } from "./rugcheck.js";
@@ -392,5 +393,55 @@ describe("largestHolderShare", () => {
       ]),
     ).toBe(11);
     expect(largestHolderShare([])).toBeUndefined();
+  });
+});
+
+describe("withChainHolders", () => {
+  const profile = toProfile(
+    MINT,
+    baseReport({
+      creator: CREATOR,
+      topHolders: [
+        { address: "acct-1", owner: "sold-out", pct: 15 },
+        { address: "acct-2", owner: CREATOR, pct: 4 },
+      ],
+    }),
+  );
+
+  it("takes the holder figures from the chain's reading and keeps the rest of the report", () => {
+    const current = withChainHolders(profile, {
+      top10HolderPct: 7,
+      largestHolderPct: 5,
+      topHolderShares: [
+        { owner: "w1", pct: 5 },
+        { owner: CREATOR, pct: 2 },
+      ],
+    });
+    expect(current).toMatchObject({
+      top10HolderPct: 7,
+      largestHolderPct: 5,
+      top10HolderAddresses: ["w1", CREATOR],
+      devWalletPct: 2,
+      lpBurned: profile.lpBurned,
+      creator: CREATOR,
+    });
+    // The creator sold out too: no dev share, as when RugCheck doesn't list them.
+    expect(
+      withChainHolders(profile, {
+        top10HolderPct: 5,
+        largestHolderPct: 5,
+        topHolderShares: [{ owner: "w1", pct: 5 }],
+      }).devWalletPct,
+    ).toBeUndefined();
+  });
+
+  it("leaves the profile alone without a trustworthy reading", () => {
+    expect(withChainHolders(profile, undefined)).toBe(profile);
+    expect(withChainHolders(profile, { top10HolderPct: undefined, largestHolderPct: undefined })).toBe(
+      profile,
+    );
+    expect(withChainHolders(profile, { top10HolderPct: 3, largestHolderPct: 3, topHolderShares: [] })).toBe(
+      profile,
+    );
   });
 });

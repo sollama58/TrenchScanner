@@ -51,6 +51,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   streamTab: false,
   // On for everyone by default (user ask 2026-10-15); a new key, so the old opt-in's saved "off" doesn't hide it.
   hideLighthouseTab: false,
+  // The token view's safety pill shows by default; its Safety section always does (user ask 2026-10-16).
+  hideSafetyPill: false,
   outline: null,
   // Off by default (user ask 2026-10-14); an account that saved it on keeps it on.
   outlineResult: false,
@@ -264,6 +266,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     narrativeNote: typeof r.narrativeNote === "boolean" ? r.narrativeNote : null,
     streamTab: typeof r.streamTab === "boolean" ? r.streamTab : d.streamTab,
     hideLighthouseTab: typeof r.hideLighthouseTab === "boolean" ? r.hideLighthouseTab : d.hideLighthouseTab,
+    hideSafetyPill: typeof r.hideSafetyPill === "boolean" ? r.hideSafetyPill : d.hideSafetyPill,
     outline: hex(r.outline),
     outlineResult: typeof r.outlineResult === "boolean" ? r.outlineResult : d.outlineResult,
     hideBelowMcap: typeof r.hideBelowMcap === "boolean" ? r.hideBelowMcap : d.hideBelowMcap,
@@ -303,6 +306,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     narrativeNote,
     streamTab,
     hideLighthouseTab,
+    hideSafetyPill,
     hideBelowMcap,
     hideBelowMcapUsd,
   } = current;
@@ -325,6 +329,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     narrativeNote,
     streamTab,
     hideLighthouseTab,
+    hideSafetyPill,
     hideBelowMcap,
     hideBelowMcapUsd,
   });

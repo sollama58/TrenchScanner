@@ -4,6 +4,7 @@ import { forEachWithConcurrency } from "../concurrency.js";
 import type { OnChainProfile } from "../types.js";
 import { CEX_FUNDED_TOP_N } from "../wallets/linkedWallets.js";
 import { venueAccountsOf } from "../venueAccounts.js";
+import type { OnChainHolders } from "./onChainHolders.js";
 
 const logger = createLogger("rugcheck");
 
@@ -85,6 +86,32 @@ export function withoutVenueHolder(
     largestHolderPct: largestHolderShare(rest),
     top10HolderAddresses: [...new Set(top.map((h) => h.owner))],
     topHolderShares: rest,
+  };
+}
+
+/**
+ * The profile with its holder figures (top-10 share, largest holder, the top-10 wallets, the
+ * shares behind them, the dev's share) taken from the chain's reading instead of RugCheck's list.
+ * RugCheck can serve the same holder list for hours: on 2026-10-16 6vs4o...pump's report still
+ * listed a wallet at 15% more than an hour after it had sold every token, and the coin failed the
+ * largest-holder cut on it. Everything else on the profile (authorities, LP, risk, holder count)
+ * stays RugCheck's. Returns the profile unchanged without a trustworthy reading.
+ */
+export function withChainHolders(
+  profile: RugCheckProfile,
+  holders: Pick<OnChainHolders, "top10HolderPct" | "largestHolderPct" | "topHolderShares"> | undefined,
+): RugCheckProfile {
+  const shares = holders?.topHolderShares;
+  if (!holders || !shares?.length || holders.top10HolderPct === undefined) return profile;
+  const top = shares.slice(0, TOP_N_FOR_CONCENTRATION);
+  const creator = profile.creator ? shares.find((h) => h.owner === profile.creator) : undefined;
+  return {
+    ...profile,
+    top10HolderPct: holders.top10HolderPct,
+    largestHolderPct: holders.largestHolderPct,
+    top10HolderAddresses: [...new Set(top.map((h) => h.owner))],
+    topHolderShares: shares.slice(0, Math.max(TOP_N_FOR_CONCENTRATION + 1, CEX_FUNDED_TOP_N)),
+    devWalletPct: creator?.pct,
   };
 }
 

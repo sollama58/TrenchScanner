@@ -101,4 +101,5 @@ export * from "./wallets/sideWalletRules.js";
 export * from "./wallets/sideWallets.js";
 export * from "./wallets/kolBundled.js";
 export * from "./wallets/holderTransfers.js";
+export * from "./wallets/bubbleMoments.js";
 export * from "./trading/index.js";

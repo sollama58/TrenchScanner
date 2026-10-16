@@ -60,5 +60,6 @@ function holderFigures(profile: OnChainProfile): Record<string, number | null | 
     emptyTop10WalletPct: profile.emptyTop10WalletPct,
     sniperTop10WalletPct: profile.sniperTop10WalletPct,
     top10HolderPct: profile.top10HolderPct,
+    largestHolderPct: profile.largestHolderPct,
   };
 }

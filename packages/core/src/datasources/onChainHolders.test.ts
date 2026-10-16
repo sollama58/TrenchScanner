@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ed25519 } from "@noble/curves/ed25519";
 import bs58 from "bs58";
-import { holdersFromLargestAccounts, topWalletsFromAccounts } from "./onChainHolders.js";
+import { holdersFromLargestAccounts, holdersFromShares, topWalletsFromAccounts } from "./onChainHolders.js";
 import { isWalletAddress, mayhemStateAddress } from "../solana.js";
 
 /** A real wallet address: a public key on the curve. */
@@ -34,6 +34,9 @@ describe("holdersFromLargestAccounts", () => {
     // 5% for the first wallet plus nine at 1%.
     expect(holders.top10HolderPct).toBe(14);
     expect(holders.largestHolderPct).toBe(5);
+    // Every wallet read, with its share, for a RugCheck profile's figures (withChainHolders).
+    expect(holders.topHolderShares).toHaveLength(13);
+    expect(holders.topHolderShares?.[0]).toEqual({ owner: wallet(1), pct: 5 });
   });
 
   it("has no answer without a supply, and no share when the shares can't add up", () => {
@@ -75,5 +78,25 @@ describe("topWalletsFromAccounts", () => {
       { owner: wallet(1), pct: 5, accounts: ["acc-1", "acc-2"] },
       { owner: wallet(2), pct: 1, accounts: ["acc-3"] },
     ]);
+  });
+});
+
+describe("holdersFromShares", () => {
+  it("reads the top ten and the largest wallet off a share list, one wallet once", () => {
+    const shares = [
+      { owner: "a", pct: 6 },
+      { owner: "b", pct: 3 },
+      { owner: "a", pct: 1 },
+      ...Array.from({ length: 12 }, (_, i) => ({ owner: `w${i}`, pct: 1 })),
+    ];
+    const holders = holdersFromShares(shares)!;
+    expect(holders.largestHolderPct).toBe(7);
+    expect(holders.top10HolderAddresses).toHaveLength(10);
+    expect(holders.top10HolderPct).toBe(7 + 3 + 8);
+    expect(holders.topHolderShares).toHaveLength(14);
+  });
+
+  it("has no answer for an empty list", () => {
+    expect(holdersFromShares([])).toBeUndefined();
   });
 });

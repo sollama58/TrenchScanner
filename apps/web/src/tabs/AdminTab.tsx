@@ -11,6 +11,7 @@ import { WalletsAdmin } from "./AdminWallets";
 import { UsageAdmin } from "./AdminUsage";
 import { CreditsAdmin } from "./AdminCredits";
 import { RunNow } from "./AdminRunNow";
+import { FeedSimAdmin } from "./AdminFeedSim";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
 
@@ -34,6 +35,7 @@ const SECTIONS = [
   { id: "tokensage", label: "TokenSage" },
   { id: "screen", label: "Safety screen" },
   { id: "filters", label: "Filters" },
+  { id: "feedsim", label: "Feed simulator" },
   { id: "users", label: "Users" },
   { id: "access", label: "Access" },
   { id: "credits", label: "Burn Credits" },
@@ -106,6 +108,7 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
         {section === "tokensage" && <TokenSageAdmin />}
         {section === "screen" && <SafetyScreen />}
         {section === "filters" && <FiltersAdmin />}
+        {section === "feedsim" && <FeedSimAdmin />}
         {section === "users" && <Users />}
         {section === "access" && <Access />}
         {section === "credits" && <CreditsAdmin />}

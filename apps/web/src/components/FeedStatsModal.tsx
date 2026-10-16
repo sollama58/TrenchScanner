@@ -73,7 +73,9 @@ export function FeedStatsModal({
                   {fs
                     ? fs.alerts === 0
                       ? "No alerts yet"
-                      : `${fs.fromFilter} from your filter${fs.showModelAlerts ? `, ${fs.fromModels} model calls` : ""}`
+                      : fs.bothOnly
+                        ? `Caught by both your filter and your models`
+                        : `${fs.fromFilter} from your filter${fs.showModelAlerts ? `, ${fs.fromModels} model calls` : ""}`
                     : "Loading…"}
                 </small>
                 {fs && fs.pending > 0 && <small className="faint">{fs.pending} still grading</small>}
@@ -155,8 +157,10 @@ function FeedCatchMeter({ pollKey }: { pollKey: string }) {
   const share = (n: number) => (fc.runners > 0 ? Math.min(100, (n / fc.runners) * 100) : 0);
   const early = fc.runners < MIN_RUNNERS_FOR_COVERAGE;
   const onGoal = fc.pct !== null && fc.pct >= goal && !early;
-  const modelsPart = fc.models.count > 0 ? share(fc.models.caught) : 0;
-  const filtersPart = fc.filters.count > 0 ? share(fc.filters.only) : 0;
+  // Only alerts both caught: one fill, the runners a model and a filter both caught.
+  const both = fc.bothOnly ?? false;
+  const modelsPart = both ? share(fc.caught) : fc.models.count > 0 ? share(fc.models.caught) : 0;
+  const filtersPart = !both && fc.filters.count > 0 ? share(fc.filters.only) : 0;
   const sources = [
     fc.models.count > 0 && plural(fc.models.count, "model"),
     fc.filters.count > 0 && plural(fc.filters.count, "filter"),
@@ -166,11 +170,13 @@ function FeedCatchMeter({ pollKey }: { pollKey: string }) {
       ? "Your feed has no models or filters switched on."
       : fc.runners === 0
         ? `No runners in the last ${plural(days, "day")} yet.`
-        : `Your ${sources.join(" and ")} caught ${fc.caught.toLocaleString()} of the ${plural(fc.runners, "runner")} (tokens that doubled) in the last ${plural(days, "day")}.`;
+        : both
+          ? `Your ${sources.join(" and ")} both caught ${fc.caught.toLocaleString()} of the ${plural(fc.runners, "runner")} (tokens that doubled) in the last ${plural(days, "day")}.`
+          : `Your ${sources.join(" and ")} caught ${fc.caught.toLocaleString()} of the ${plural(fc.runners, "runner")} (tokens that doubled) in the last ${plural(days, "day")}.`;
   return (
     <div
       className="coverage feed-catch"
-      title={`${sentence} A runner counts as caught when one of your models called it, or one of your filters alerted on it, at a moment that went on to double. Goal ${goal}%.`}
+      title={`${sentence} A runner counts as caught when one of your models called it, ${both ? "and" : "or"} one of your filters alerted on it, at a moment that went on to double. Goal ${goal}%.`}
     >
       <div className="cov-head">
         <span className="cov-label">
@@ -211,7 +217,19 @@ function FeedCatchMeter({ pollKey }: { pollKey: string }) {
         {sentence}
         {early && fc.runners > 0 && " Still early: too few runners to judge."}
       </p>
-      {fc.runners > 0 && sources.length > 0 && (
+      {both && fc.runners > 0 && sources.length > 0 && (
+        <p className="feed-catch-parts faint small">
+          <span>
+            <span className="feed-catch-key models" aria-hidden /> Both{" "}
+            <span className="num">{pct(share(fc.caught))}</span>
+          </span>
+          <span>
+            Models alone <span className="num">{pct(share(fc.models.caught))}</span>, filters alone{" "}
+            <span className="num">{pct(share(fc.filters.caught))}</span>
+          </span>
+        </p>
+      )}
+      {!both && fc.runners > 0 && sources.length > 0 && (
         <p className="feed-catch-parts faint small">
           {fc.models.count > 0 && (
             <span>

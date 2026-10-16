@@ -12298,6 +12298,11 @@ button.bm-same {
 .tm-holders-when > span {
   white-space: nowrap;
 }
+/* Up to five moments (screen pass, filters, the alert, Now): they wrap on a phone rather than scroll. */
+.tm-holders-switch {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
 .tm-holders-switch button {
   display: inline-flex;
   align-items: center;
@@ -13721,4 +13726,22 @@ body:has(.util-toast) .bug-fab {
     grid-template-columns: minmax(0, 1fr);
     gap: 0;
   }
+}
+
+/* Admin › Feed simulator: the model and filter pick lists side by side. */
+.feed-sim-picks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.feed-sim-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.feed-sim-search {
+  width: 100%;
+  margin-bottom: 8px;
 }

@@ -751,6 +751,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedTelegramAlertsSent,
     deletedBubbleMaps,
     deletedBubbleMapsAtAlert,
+    deletedBubbleMoments,
   ] = await Promise.all([
     stage("linkCodes", none, () =>
       prisma.mobileLinkCode.deleteMany({
@@ -801,6 +802,33 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     // Their maps as they stood at the call: kept as long as the alert's own snapshot.
     stage("bubbleMapAtAlert", none, () =>
       prisma.bubbleMapAtAlert.deleteMany({ where: { alertAt: { lt: snapshotCutoff } } }),
+    ),
+    // Maps kept at the first screen pass and at an opened filter catch (BubbleMapMoment): as long
+    // as the alert's, except a screen pass of a coin no filter matched and no model called, which
+    // goes with that coin's own untracked scan history. A row another row's sameAsId points at
+    // stays until that one goes.
+    stage(
+      "bubbleMapMoments",
+      0,
+      () =>
+        prisma.$executeRaw`
+        DELETE FROM "BubbleMapMoment" m
+        WHERE (
+            m."createdAt" < ${snapshotCutoff}
+            OR (
+              m."kind" = 'screen'
+              AND m."createdAt" < ${untrackedCutoff ?? snapshotCutoff}
+              AND NOT EXISTS (
+                SELECT 1 FROM "Token" t
+                WHERE t."mintAddress" = m."mintAddress"
+                  AND (
+                    EXISTS (SELECT 1 FROM "Match" x WHERE x."tokenId" = t."id")
+                    OR EXISTS (SELECT 1 FROM "CuratedAlert" x WHERE x."tokenId" = t."id")
+                  )
+              )
+            )
+          )
+          AND NOT EXISTS (SELECT 1 FROM "BubbleMapMoment" o WHERE o."sameAsId" = m."id")`,
     ),
   ]);
 
@@ -923,6 +951,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedTelegramAlertsSent: deletedTelegramAlertsSent.count,
     deletedBubbleMaps: deletedBubbleMaps.count,
     deletedBubbleMapsAtAlert: deletedBubbleMapsAtAlert.count,
+    deletedBubbleMoments,
     deletedTokens: deletedTokens.count,
     deletedWalletCache: deletedWalletCache.count,
     deletedMintAuthorityCache: deletedMintAuthorityCache.count,

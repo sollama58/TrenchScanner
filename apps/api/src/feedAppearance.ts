@@ -144,6 +144,8 @@ export const feedAppearanceSchema = z
      * new key rather than lighthouseTab flipped, since that one's stored "off" was mostly the old default.
      */
     hideLighthouseTab: z.boolean().default(false),
+    /** Hide the safety screen's pill in the token view's header; the Safety section stays (user ask 2026-10-16). */
+    hideSafetyPill: z.boolean().default(false),
     /** The card outline's color before the alert resolves; null keeps the theme's neutral one. */
     outline: color.default(null),
     /**
@@ -219,6 +221,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   narrativeNote: null,
   streamTab: false,
   hideLighthouseTab: false,
+  hideSafetyPill: false,
   outline: null,
   outlineResult: false,
   hideBelowMcap: false,

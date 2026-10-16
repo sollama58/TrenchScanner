@@ -22,6 +22,12 @@ export interface OnChainHolders {
   largestHolderPct?: number;
   /** The ten largest wallets, largest first. */
   top10HolderAddresses: string[];
+  /**
+   * Every wallet the read covered with its % of supply, largest first: what a RugCheck profile's
+   * holder figures are recomputed from when the chain's reading replaces them (withChainHolders).
+   * Absent when the shares can't be trusted.
+   */
+  topHolderShares?: { owner: string; pct: number }[];
 }
 
 const TOP_N = 10;
@@ -44,15 +50,48 @@ export function holdersFromLargestAccounts(
     if (a.amount <= 0n || !isWalletAddress(a.owner)) continue;
     byOwner.set(a.owner, (byOwner.get(a.owner) ?? 0n) + a.amount);
   }
-  const top = [...byOwner.entries()].sort((x, y) => (y[1] > x[1] ? 1 : y[1] < x[1] ? -1 : 0)).slice(0, TOP_N);
+  const sorted = [...byOwner.entries()].sort((x, y) => (y[1] > x[1] ? 1 : y[1] < x[1] ? -1 : 0));
+  const top = sorted.slice(0, TOP_N);
   const held = top.reduce((sum, [, amount]) => sum + amount, 0n);
   // Hundredths of a percent, in integers, so a 1e9-supply mint's figures don't lose precision.
   const pct = Number((held * 10_000n) / supply) / 100;
   const largest = top.length > 0 ? Number((top[0]![1] * 10_000n) / supply) / 100 : undefined;
+  const consistent = pct <= MAX_TOP10_SHARE_PCT;
   return {
-    top10HolderPct: pct <= MAX_TOP10_SHARE_PCT ? pct : undefined,
-    largestHolderPct: pct <= MAX_TOP10_SHARE_PCT ? largest : undefined,
+    top10HolderPct: consistent ? pct : undefined,
+    largestHolderPct: consistent ? largest : undefined,
     top10HolderAddresses: top.map(([owner]) => owner),
+    ...(consistent
+      ? {
+          topHolderShares: sorted.map(([owner, amount]) => ({
+            owner,
+            pct: Number((amount * 1_000_000n) / supply) / 10_000,
+          })),
+        }
+      : {}),
+  };
+}
+
+/**
+ * The holder figures of a list of wallets and their % of supply (pools already out, largest
+ * first, as topWalletsFromAccounts reads them): the same shape holdersFromLargestAccounts answers.
+ * Undefined for an empty list.
+ */
+export function holdersFromShares(
+  shares: readonly { owner: string; pct: number }[],
+): OnChainHolders | undefined {
+  const byOwner = new Map<string, number>();
+  for (const h of shares) if (h.pct > 0) byOwner.set(h.owner, (byOwner.get(h.owner) ?? 0) + h.pct);
+  const sorted = [...byOwner.entries()].sort((a, b) => b[1] - a[1]).map(([owner, pct]) => ({ owner, pct }));
+  if (sorted.length === 0) return undefined;
+  const top = sorted.slice(0, TOP_N);
+  const pct = top.reduce((sum, h) => sum + h.pct, 0);
+  const consistent = pct <= MAX_TOP10_SHARE_PCT + 0.5;
+  return {
+    top10HolderPct: consistent ? pct : undefined,
+    largestHolderPct: consistent ? sorted[0]!.pct : undefined,
+    top10HolderAddresses: top.map((h) => h.owner),
+    ...(consistent ? { topHolderShares: sorted } : {}),
   };
 }
 

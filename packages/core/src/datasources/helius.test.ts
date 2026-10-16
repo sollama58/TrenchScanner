@@ -731,7 +731,12 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
     const result = await client.getLargestHoldersBatch(["mintA"]);
     expect(result.get("mintA")).toEqual({
       status: "found",
-      holders: { top10HolderPct: 10, largestHolderPct: 10, top10HolderAddresses: [WALLET] },
+      holders: {
+        top10HolderPct: 10,
+        largestHolderPct: 10,
+        top10HolderAddresses: [WALLET],
+        topHolderShares: [{ owner: WALLET, pct: 10 }],
+      },
     });
   });
 

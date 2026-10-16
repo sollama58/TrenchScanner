@@ -369,6 +369,22 @@ export function cachedTopHolders(
 }
 
 /**
+ * Past this a chain list no longer stands in for the coin's current holders in the safety screen's
+ * holder cuts (scanJob's currentHolderReadings): a list is re-read every TOP_HOLDERS_REFRESH_MS,
+ * plus the cycle the re-read lands in.
+ */
+export const CURRENT_HOLDERS_MAX_AGE_MS = TOP_HOLDERS_REFRESH_MS + 5 * 60_000;
+
+/** The chain's top-holder list for a mint while it is recent enough to be its current holders. */
+export function currentTopHolders(
+  mintAddress: string,
+  nowMs = Date.now(),
+): { owner: string; pct: number }[] | undefined {
+  const entry = topHolderLists.get(mintAddress);
+  return entry && nowMs - entry.atMs < CURRENT_HOLDERS_MAX_AGE_MS ? entry.holders : undefined;
+}
+
+/**
  * The wallets of a mint's top 25 holders (pools and the creator aside), largest first, from the
  * chain's list while it is fresh enough to use: the holders Fresh is counted over ("N/25", user
  * decision 2026-10-14), the same ones as Linked, CEX-funded and Snipers. Undefined without a list.

@@ -40,6 +40,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
       </p>
       <FeedPanel goTo={goTo} />
       <TabsPanel />
+      <TokenViewPanel />
       <ConnectPhonePanel />
       <AccountPanel account={settings?.account ?? null} />
     </div>
@@ -92,6 +93,41 @@ function TabsPanel() {
         </button>
         <p className="muted small">
           A tab with the Market Lighthouse in full: how screened tokens are doing, and its trends over time.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+/** The token view's header (user ask 2026-10-16). Saved with the feed appearance, so it follows the wallet. */
+function TokenViewPanel() {
+  const { hideSafetyPill } = useAppearance();
+  return (
+    <section className="panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">
+            <ShieldIcon size={13} /> Token view
+          </span>
+          <h2>Coin header</h2>
+        </div>
+      </header>
+      <div className="tab-option">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={!hideSafetyPill}
+          className={`switch${hideSafetyPill ? "" : " on"}`}
+          onClick={() => setAppearance({ hideSafetyPill: !hideSafetyPill })}
+        >
+          <span className="switch-track">
+            <span className="switch-thumb" />
+          </span>
+          Safety pill
+        </button>
+        <p className="muted small">
+          The safety screen&apos;s Passed or Failed pill beside Sage in a coin&apos;s header. Its Safety
+          section always shows.
         </p>
       </div>
     </section>

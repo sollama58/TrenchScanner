@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Env } from "@trenchscanner/core";
 import type { ReportCaches } from "./curated.js";
 import { explainCall, recentSeatCalls, type CallExplain } from "../modelExplain.js";
+import { registerAdminFeedSimRoutes } from "./adminFeedSim.js";
 
 /**
  * The Admin "Models" section (modelExplain.ts): every seat's recipe, inputs, member weights and
@@ -23,6 +24,8 @@ export async function registerAdminModelRoutes(
 ) {
   // The same fill the model detail view's weightings read (createReportCaches).
   app.get("/models/explain", async () => opts.reports.lineup());
+  // The feed simulator: hit rate and coverage for any models and switched-on filters together.
+  await registerAdminFeedSimRoutes(app, opts);
 
   app.get("/models/:seat/calls", async (request, reply) => {
     const seat = seatSchema.safeParse(request.params);

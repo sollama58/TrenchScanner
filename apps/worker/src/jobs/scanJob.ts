@@ -17,6 +17,8 @@ import {
   refreshScoreWeights,
   runRugScreen,
   withoutVenueHolder,
+  withChainHolders,
+  holdersFromShares,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
   SAFETY_MAX_LARGEST_HOLDER_PCT,
   sniperShareOfTop10,
@@ -98,6 +100,7 @@ import {
   linkedHoldersOf,
   linkedReadingOf,
   cachedTopHolders,
+  currentTopHolders,
   topHolderWalletsOf,
   readTopHolders,
   storeWideMapReadings,
@@ -147,6 +150,7 @@ import { flushScreenRejects, foldRejectExtremes, noteScreenReject } from "./reje
 import { noteDecisionHold, takeDecisionHolds } from "./decisionHolds.js";
 import { loadMarketContext } from "./marketContext.js";
 import { noteFreshMarketData } from "./matchPeaks.js";
+import { keepScreenMoment } from "./screenMoments.js";
 import type { JobRunMeta } from "../scheduler.js";
 import type { StreamEvent } from "../discovery/pumpPortalStream.js";
 import {
@@ -1030,12 +1034,31 @@ async function scanCycle(
     deps.pumpLaunchBackups,
   );
   lap("pumpLaunch");
+  // The chain's top 25 where it was read recently (readTopHolders): the coin's current holders,
+  // which RugCheck's list may not be (withChainHolders).
+  const recentHolderLists = new Map<string, OnChainHolders>();
+  for (const c of candidates) {
+    const list = currentTopHolders(c.mintAddress);
+    const holders = list && holdersFromShares(list);
+    if (holders) recentHolderLists.set(c.mintAddress, holders);
+  }
   // The same mints' top-10 holders, read from the chain (see onChainHolders.ts), for the ones the
   // fallback profile can pass on: renounced authorities on a Pump.fun venue. Without a holder list
-  // the concentration cut and the wallet checks can't run, and model calls wait for them.
+  // the concentration cut and the wallet checks can't run, and model calls wait for them. And for
+  // every coin whose RugCheck list fails a holder cut with no recent chain list: RugCheck can serve
+  // a list for hours after its holders sold, and a coin failing on one is never read again by
+  // the stages that pass coins only (the top-25 read among them), so it would stay failed.
+  const holderCutRecheck = candidates.filter(
+    (c) =>
+      rugProfiles.has(c.mintAddress) &&
+      !recentHolderLists.has(c.mintAddress) &&
+      failsHolderConcentration(
+        buildOnChainProfile(c, rugProfiles, mintAuthorities, recentHolderLists, pumpLaunches),
+      ),
+  );
   const onChainHolders = await resolveOnChainHolders(
-    candidates
-      .filter((c) => {
+    [
+      ...candidates.filter((c) => {
         const a = mintAuthorities.get(c.mintAddress);
         return (
           !rugProfiles.has(c.mintAddress) &&
@@ -1045,8 +1068,9 @@ async function scanCycle(
             pumpVenue(c.dexId)) ||
             provenPumpLaunch(pumpLaunches, c.mintAddress) !== null)
         );
-      })
-      .map((c) => c.mintAddress),
+      }),
+      ...holderCutRecheck,
+    ].map((c) => c.mintAddress),
     deps.helius,
     env,
     Date.now(),
@@ -1055,6 +1079,10 @@ async function scanCycle(
     // snipers cut for minutes after the holders had turned over.
     holderTtl,
   );
+  // This cycle's chain read first, then the recent top-25 lists for the rest.
+  for (const [mint, holders] of recentHolderLists) {
+    if (!onChainHolders.has(mint)) onChainHolders.set(mint, holders);
+  }
   lap("onChainHolders");
 
   // Profiles are assembled in two passes, because Mayhem Mode is the ONE rug-screen condition
@@ -2743,6 +2771,10 @@ async function processCandidate(
     return 0;
   }
   lastScreenPassAt = Date.now();
+  // The coin's bubble map at its first pass inside the band (the Stream's entry), behind the scan.
+  if (scored.marketCapUsd >= env.MCAP_FILTER_MIN && scored.marketCapUsd <= env.MCAP_FILTER_MAX) {
+    void keepScreenMoment(token, snapshot, scored, { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX });
+  }
 
   // The first rug-screen pass inside the curated band asks for the text read the curators use as
   // features. Fire-and-forget: it lands on the token for its next scan.
@@ -2931,6 +2963,9 @@ export function secondLookDue(
  * LP locked and its authorities revoked whatever either source says: its venue is its curve and
  * the PumpSwap pool its migration created, and the proof read both authorities gone. That pool is
  * also no holder - RugCheck can miss it, as it did for a curve quoted in another Pump.fun coin.
+ *
+ * A chain reading in `onChainHolders` for a coin RugCheck has a report for replaces the report's
+ * holder figures (core's withChainHolders): the screen's holder cuts read who holds the coin now.
  */
 export function buildOnChainProfile(
   candidate: Pick<CandidateToken, "mintAddress" | "dexId" | "pairAddress" | "launchpad">,
@@ -2972,8 +3007,13 @@ function profileFromSources(
   const { mintAddress } = candidate;
   const rugProfile = rugProfiles.get(mintAddress);
   if (rugProfile) {
-    // The coin's own pool out of the holder list, for a report written before RugCheck listed it.
-    const venueless = withoutVenueHolder(rugProfile, candidate.pairAddress);
+    // The chain's holders over RugCheck's list where they were read: RugCheck can serve a list
+    // for hours after its holders sold (withChainHolders). Else the coin's own pool out of the
+    // holder list, for a report written before RugCheck listed it.
+    const venueless = withoutVenueHolder(
+      withChainHolders(rugProfile, onChainHolders.get(mintAddress)),
+      candidate.pairAddress,
+    );
     // A Stonks coin's LP is judged on its LaunchLab markets alone, as a Pump.fun coin's is on its
     // own (rugcheck.ts launchLabLpBurned): side pools others open aren't its holders' exit.
     const profile =
@@ -3008,6 +3048,16 @@ function profileFromSources(
         }
       : {}),
   };
+}
+
+/** Whether the profile's holder figures fail the screen's top-10 or largest-holder cut. */
+function failsHolderConcentration(profile: OnChainProfile | null): boolean {
+  return (
+    (typeof profile?.top10HolderPct === "number" &&
+      profile.top10HolderPct >= SAFETY_REJECT_TOP10_HOLDER_PCT) ||
+    (typeof profile?.largestHolderPct === "number" &&
+      profile.largestHolderPct > SAFETY_MAX_LARGEST_HOLDER_PCT)
+  );
 }
 
 /** How long after graduating a coin over the concentration cut is re-read every minute. */
