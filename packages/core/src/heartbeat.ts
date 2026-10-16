@@ -10,6 +10,7 @@ export type HeartbeatJob =
   | "outcome-tracking"
   | "live-price"
   | "burn-scan"
+  | "free-access"
   | "fast-match"
   | "candidate-watch"
   | "curator-training"
@@ -46,6 +47,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "fast-match": "scanner",
   "candidate-watch": "scanner",
   "burn-scan": "scanner",
+  // Beside the burn reconciler: the other job that keeps the access tables true.
+  "free-access": "scanner",
   "match-peaks": "scanner",
   "telegram-dispatch": "scanner",
   // Holds the Telegram bot token and the admin wallets it notifies (the trainer has neither).

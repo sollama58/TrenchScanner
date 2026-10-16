@@ -138,6 +138,7 @@ const LEVEL_TEXT: Record<Settings["account"]["access"]["level"], string> = {
   admin: "Admin",
   whitelist: "Whitelisted",
   subscription: "Subscriber",
+  free_access: "Free access",
   none: "No access",
 };
 
@@ -201,11 +202,13 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
                 ? access.subscription.source === "BURN"
                   ? `Burning (${access.burns} burn${access.burns === 1 ? "" : "s"})`
                   : "Granted by an admin"
-                : access.level === "whitelist"
-                  ? "Whitelist"
-                  : access.level === "admin"
-                    ? "Admin wallet"
-                    : "–"}
+                : access.level === "free_access"
+                  ? "Free access"
+                  : access.level === "whitelist"
+                    ? "Whitelist"
+                    : access.level === "admin"
+                      ? "Admin wallet"
+                      : "–"}
             </dd>
           </div>
           <div>
@@ -220,12 +223,26 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
           </div>
         </dl>
       )}
-      {account && (access?.level === "subscription" || access?.level === "none") && (
-        <div className="burn-section">
-          <h3>{access.level === "subscription" ? "Extend your access" : "Subscribe"}</h3>
-          <BurnPanel walletAddress={account.walletAddress} onCredited={() => void loadSettings(true)} />
-        </div>
+      {access?.level === "free_access" && access.expiresAt && (
+        <p className="small muted">
+          {access.freeAccess?.deletesAccount
+            ? `Free access ends ${date(access.expiresAt)}. This account was made during free access, so it is deleted soon after, with its filters, settings and linked phones and chats, unless you subscribe before.`
+            : `Free access ends ${date(access.expiresAt)}. Your account and settings stay; subscribe to keep using everything.`}
+        </p>
       )}
+      {account &&
+        (access?.level === "subscription" || access?.level === "none" || access?.level === "free_access") && (
+          <div className="burn-section">
+            <h3>
+              {access.level === "subscription"
+                ? "Extend your access"
+                : access.level === "free_access"
+                  ? "Subscribe to keep your account"
+                  : "Subscribe"}
+            </h3>
+            <BurnPanel walletAddress={account.walletAddress} onCredited={() => void loadSettings(true)} />
+          </div>
+        )}
     </section>
   );
 }

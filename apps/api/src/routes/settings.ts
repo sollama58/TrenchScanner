@@ -29,6 +29,14 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
       resolveAccess(walletAddress, admins),
     ]);
     if (!user) return reply.code(401).send({ error: "unauthenticated" });
+    // Whether Free Access's end deletes this account: only one the period created (freeAccess.ts).
+    const freeGrant =
+      access.reason === "free_access"
+        ? await prisma.freeAccessGrant.findFirst({
+            where: { walletAddress, userId, period: { purgedAt: null } },
+            select: { createdAccount: true },
+          })
+        : null;
     return {
       alerts: parseAlertPrefs(user.alertPrefs),
       appearance: parseFeedAppearance(user.feedAppearance),
@@ -37,7 +45,7 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
         memberSince: user.createdAt,
         access: {
           hasAccess: access.hasAccess,
-          // admin | whitelist | subscription | none
+          // admin | whitelist | subscription | free_access | none
           level: access.reason,
           expiresAt: access.expiresAt,
           subscription: user.subscription
@@ -48,6 +56,7 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
               }
             : null,
           burns: user._count.burns,
+          freeAccess: freeGrant ? { deletesAccount: freeGrant.createdAccount } : null,
         },
       },
     };

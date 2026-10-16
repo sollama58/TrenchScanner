@@ -3,3 +3,4 @@ export * from "./parseBurn.js";
 export * from "./access.js";
 export * from "./solanaRpc.js";
 export * from "./credits.js";
+export * from "./freeAccess.js";

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { User } from "../api";
+import { api, type User } from "../api";
 import { GUEST_DELAY_MINUTES } from "../session";
 import { describeSignInError, onWalletsChanged, walletOptions, type WalletOption } from "../wallet";
 import { BrainIcon, RobotIcon, TargetIcon } from "./Icons";
@@ -29,6 +29,21 @@ const FEATURES = [
   },
 ];
 
+interface FreeAccessNotice {
+  phase: "scheduled" | "open" | null;
+  signInStartsAt: string;
+  signInEndsAt: string;
+  accessEndsAt: string;
+}
+
+const fmt = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
 export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void; onGuest?: () => void }) {
   const [wallets, setWallets] = useState<WalletOption[]>(walletOptions);
   const [searching, setSearching] = useState(true);
@@ -48,6 +63,19 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
       off();
       clearTimeout(done);
       window.removeEventListener("focus", refresh);
+    };
+  }, []);
+
+  // Free Access (set in Admin > Access): while its sign-in window is open, or about to open, say
+  // so - signing in is what gets a wallet in. Best effort: no answer, no line.
+  const [free, setFree] = useState<FreeAccessNotice | null>(null);
+  useEffect(() => {
+    let live = true;
+    api<FreeAccessNotice>("/config/free-access")
+      .then((f) => live && setFree(f.phase ? f : null))
+      .catch(() => undefined);
+    return () => {
+      live = false;
     };
   }, []);
 
@@ -129,6 +157,13 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
         {error && (
           <p className="error small" role="alert">
             {error}
+          </p>
+        )}
+        {free && (
+          <p className="small signin-free" role="status">
+            {free.phase === "open"
+              ? `Free access is open: sign in before ${fmt(free.signInEndsAt)} to use everything until ${fmt(free.accessEndsAt)}.`
+              : `Free access opens ${fmt(free.signInStartsAt)}: sign in then to use everything until ${fmt(free.accessEndsAt)}.`}
           </p>
         )}
         <p className="faint small signin-burn">

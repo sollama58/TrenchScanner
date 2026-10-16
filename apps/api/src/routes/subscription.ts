@@ -7,6 +7,7 @@ import {
   claimHeldBurns,
   creditBurn,
   describeRejection,
+  enrollInFreeAccess,
   parseBurnTransaction,
   prisma,
   resolveAccess,
@@ -85,12 +86,27 @@ export async function registerSubscriptionRoutes(
   // key inside.
   app.addHook("preHandler", app.authenticate);
 
+  /**
+   * The wallet's access, enrolling it in Free Access first when it has none and a sign-in window
+   * is open: someone already signed in when the window opened (sitting on the paywall, which
+   * polls this) gets in without signing out and back in. Never as a new account - the account
+   * existed before, so the cleanup keeps it.
+   */
+  async function accessWithFreeAccess(userId: string, wallet: string) {
+    const access = await resolveAccess(wallet, admins);
+    if (access.hasAccess) return access;
+    const enrolled = await enrollInFreeAccess({ id: userId, walletAddress: wallet }, false, admins).catch(
+      () => null,
+    );
+    return enrolled ? resolveAccess(wallet, admins) : access;
+  }
+
   /** What access this wallet has, and what it would cost to get some. */
   app.get("/", async (request) => {
     const wallet = request.user!.walletAddress;
     // All three are independent reads keyed on the signed wallet - one round trip, not two.
     const [access, burnCount, lastBurn] = await Promise.all([
-      resolveAccess(wallet, admins),
+      accessWithFreeAccess(request.user!.userId, wallet),
       prisma.burnEvent.count({ where: { burnerWallet: wallet } }),
       prisma.burnEvent.findFirst({
         where: { burnerWallet: wallet },

@@ -114,7 +114,7 @@ export interface User {
 
 export interface Subscription {
   hasAccess: boolean;
-  reason: "admin" | "whitelist" | "subscription" | "none" | null;
+  reason: "admin" | "whitelist" | "subscription" | "free_access" | "none" | null;
   expiresAt: string | null;
   /** What access costs, in $ASDFASDFA. */
   price?: { mint: string; decimals: number; tokensPerMonth: number; daysPerMonth: number };
@@ -1536,10 +1536,12 @@ export interface Settings {
     memberSince: string;
     access: {
       hasAccess: boolean;
-      level: "admin" | "whitelist" | "subscription" | "none";
+      level: "admin" | "whitelist" | "subscription" | "free_access" | "none";
       expiresAt: string | null;
       subscription: { since: string; expiresAt: string; source: "BURN" | "ADMIN_GRANT" } | null;
       burns: number;
+      /** Set while the access is Free Access: whether its end deletes this account. */
+      freeAccess?: { deletesAccount: boolean } | null;
     };
   };
 }

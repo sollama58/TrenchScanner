@@ -2,12 +2,14 @@ import { AccessSource, Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { SUBSCRIPTION_DAYS } from "./constants.js";
 import type { BurnCredit } from "./parseBurn.js";
+import { freeAccessUntil, freeAccessWallets } from "./freeAccess.js";
 
 export interface AccessState {
   hasAccess: boolean;
   /** Null for admins and indefinite whitelist entries - access that doesn't run out. */
   expiresAt: Date | null;
-  reason: "admin" | "whitelist" | "subscription" | "none";
+  /** free_access: enrolled in the Free Access period that is on (see freeAccess.ts). */
+  reason: "admin" | "whitelist" | "subscription" | "free_access" | "none";
 }
 
 /**
@@ -25,14 +27,23 @@ export async function resolveAccess(
 
   // Independent lookups, so they share one round trip instead of queueing: this runs in front
   // of every gated request.
-  const [whitelisted, user] = await Promise.all([
+  const now = new Date();
+  const [whitelisted, user, freeUntil] = await Promise.all([
     prisma.whitelist.findUnique({ where: { walletAddress }, select: { expiresAt: true } }),
     prisma.user.findUnique({
       where: { walletAddress },
       select: { subscription: { select: { expiresAt: true } } },
     }),
+    freeAccessUntil(walletAddress, now),
   ]);
-  return decideAccess(walletAddress, admins, whitelisted, user?.subscription?.expiresAt ?? null);
+  return decideAccess(
+    walletAddress,
+    admins,
+    whitelisted,
+    user?.subscription?.expiresAt ?? null,
+    now,
+    freeUntil,
+  );
 }
 
 /**
@@ -42,7 +53,11 @@ export async function resolveAccess(
  * what counts as access.
  *
  * `whitelisted` is the wallet's Whitelist row (null when it has none); `subscriptionExpiresAt` is
- * the expiry on the subscription of the user who owns this wallet.
+ * the expiry on the subscription of the user who owns this wallet; `freeAccessUntil` is when the
+ * wallet's free access ends (freeAccessUntil in freeAccess.ts), null when it has none.
+ *
+ * A live subscription answers before free access, so a free user who subscribes sees their paid
+ * expiry (and the burn panel stacks on it) rather than the free period's.
  */
 export function decideAccess(
   walletAddress: string,
@@ -50,6 +65,7 @@ export function decideAccess(
   whitelisted: { expiresAt: Date | null } | null,
   subscriptionExpiresAt: Date | null,
   now: Date = new Date(),
+  freeAccessUntil: Date | null = null,
 ): AccessState {
   if (admins.has(walletAddress)) {
     return { hasAccess: true, expiresAt: null, reason: "admin" };
@@ -60,6 +76,9 @@ export function decideAccess(
   const expiresAt = subscriptionExpiresAt;
   if (expiresAt !== null && expiresAt > now) {
     return { hasAccess: true, expiresAt, reason: "subscription" };
+  }
+  if (freeAccessUntil !== null && freeAccessUntil > now) {
+    return { hasAccess: true, expiresAt: freeAccessUntil, reason: "free_access" };
   }
   return { hasAccess: false, expiresAt, reason: "none" };
 }
@@ -75,15 +94,18 @@ export function decideAccess(
  * rows, ran into its timeout and took paying users' alerts down with it. A filter whose owner's
  * access lapses simply stops matching until it is renewed.
  *
- * The same rule as decideAccess, as one query: whitelist entries are few, so they are read first
- * and folded into the owner condition.
+ * The same rule as decideAccess, as one query: whitelist entries and free-access wallets are few,
+ * so they are read first and folded into the owner condition.
  */
 export async function loadEntitledActiveFilters(admins: ReadonlySet<string>, now: Date = new Date()) {
-  const whitelisted = await prisma.whitelist.findMany({
-    where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
-    select: { walletAddress: true },
-  });
-  const wallets = [...admins, ...whitelisted.map((w) => w.walletAddress)];
+  const [whitelisted, free] = await Promise.all([
+    prisma.whitelist.findMany({
+      where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+      select: { walletAddress: true },
+    }),
+    freeAccessWallets(now),
+  ]);
+  const wallets = [...admins, ...whitelisted.map((w) => w.walletAddress), ...free];
   return prisma.userFilter.findMany({
     where: {
       isActive: true,

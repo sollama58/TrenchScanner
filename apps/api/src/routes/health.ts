@@ -26,6 +26,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every few minutes. Worth surfacing promptly: while this is down, someone who burned and closed
   // the tab is locked out of what they paid for, and nothing else will notice.
   "burn-scan": 20 * 60_000,
+  // Every 5 minutes: cleans up after a Free Access period ends. Late, it leaves free accounts
+  // standing a while longer; nothing else waits on it.
+  "free-access": 30 * 60_000,
   // Every minute, and while it's down every open training row's label window is silently
   // recording nothing - an hour of downtime is an hour of alerts whose outcomes read "flat".
   "candidate-watch": 10 * 60_000,

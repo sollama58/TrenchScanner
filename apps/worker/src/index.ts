@@ -25,6 +25,8 @@ import {
   manualRunRequested,
   recordHeartbeat,
   runsJob,
+  runDueFreeAccessCleanup,
+  adminWalletSet,
   runTelegramDispatch,
   takeManualRunRequests,
   onAlertWritten,
@@ -143,6 +145,8 @@ const REVIEW_DRAIN_SLACK_MS = 2_000;
 const SHUTDOWN_WRITES_MS = 8_000;
 /** How often paper strategies are walked (runPaperTrading). */
 const PAPER_TRADING_INTERVAL_MS = 10_000;
+/** How often a Free Access period that has ended is looked for, to clean up after it. */
+const FREE_ACCESS_CLEANUP_INTERVAL_MINUTES = 5;
 /** How often the composite score's weights are refit (runScoreWeightsJob). */
 const SCORE_WEIGHTS_INTERVAL_HOURS = 6;
 
@@ -440,6 +444,27 @@ async function main() {
       }),
       env.BURN_SCAN_INTERVAL_MINUTES,
       { runEarly: onRunNow("burn-scan") },
+    ),
+  );
+  // Free Access's end: once a period has run out (or an admin switched it off and the API's own
+  // cleanup didn't finish), deletes the accounts it created that nothing retains - see
+  // freeAccess.ts in core. A read of one row on every other pass.
+  schedule("free-access", () =>
+    scheduleInterval(
+      "free-access",
+      async () => {
+        const result = await runDueFreeAccessCleanup(adminWalletSet(env), {
+          log: (msg, meta) => logger.error(msg, meta),
+        });
+        if (result && result.failed > 0) {
+          throw new Error(
+            `free access cleanup left ${result.failed} accounts to retry (${JSON.stringify(result)})`,
+          );
+        }
+        return result ? { ...result } : { periodId: null };
+      },
+      FREE_ACCESS_CLEANUP_INTERVAL_MINUTES,
+      { deadlineMinutes: 30 },
     ),
   );
   // Rolls match peaks forward from data already banked - no upstream calls. Off the scan cycle on

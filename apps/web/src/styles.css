@@ -3738,6 +3738,13 @@ body.drawer-open .util-drawer {
 .signin-burn {
   margin: 14px 0 0;
 }
+/* Free Access is open (or about to): the one line on the page that changes what signing in gets. */
+.signin-free {
+  margin: 14px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--good);
+  border-radius: 8px;
+}
 
 /* ---------- Guest mode ---------- */
 .guest-entry {

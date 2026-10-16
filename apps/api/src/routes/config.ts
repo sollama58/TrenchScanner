@@ -8,6 +8,8 @@ import {
   loadNarrativeNoteReadiness,
   narrativeNoteReadiness,
   emptyRecord,
+  currentFreeAccessPeriod,
+  freeAccessPhase,
   recentScoreScale,
   SCORE_SCALE_FALLBACK,
   scanBand,
@@ -60,6 +62,11 @@ export async function registerConfigRoutes(app: FastifyInstance, opts: { env: En
   });
   app.get("/score", () => scoreCache.get(buildScoreConfig));
 
+  // Free Access, for the sign-in page: whether it is open (or coming) and until when. Public like
+  // the rest - the times are what an admin announces anyway. Not cached: one indexed read of a
+  // table of a few rows, asked once per sign-in page, and a switch-off shows at once.
+  app.get("/free-access", buildFreeAccess);
+
   // Whether the Narrative seat's "agrees"/"warns" note shows on cards for readers who haven't set
   // the Customize toggle (curation/narrativeNote.ts), with the record behind it for the toggle's
   // hint. Public like the rest, and cached in core for five minutes.
@@ -72,6 +79,19 @@ export async function registerConfigRoutes(app: FastifyInstance, opts: { env: En
       return narrativeNoteReadiness(emptyRecord());
     }
   });
+}
+
+/** The body of GET /config/free-access. */
+async function buildFreeAccess() {
+  const period = await currentFreeAccessPeriod();
+  const phase = period ? freeAccessPhase(period) : null;
+  if (!period || (phase !== "scheduled" && phase !== "open")) return { phase: null };
+  return {
+    phase,
+    signInStartsAt: period.signInStartsAt,
+    signInEndsAt: period.signInEndsAt,
+    accessEndsAt: period.accessEndsAt,
+  };
 }
 
 /** The body of GET /config/score - see scoreCache. */
