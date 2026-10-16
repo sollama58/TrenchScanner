@@ -640,7 +640,24 @@ const ALERT_COLUMNS = [
   // can be graded against the card's outcome. Null where no deep read decided on the card.
   "narrativeVerdict",
   "narrativeNotedAt",
+  // The call's ATH since it went out and when, from the coin's own trades once peakCheckedAt is
+  // set (worker candlePeaks.ts), followed for PEAK_TRACKING_DAYS: a run on day two or a wake-up a
+  // week later shows here, where peak24hReturnPct stops at the 24h watch.
+  "peakMcapUsd",
+  "peakMcapAt",
+  "peakCheckedAt",
+  // The coin's ATH since its first alert, by any model or filter (PeakWatch), and when.
+  "coinAthMcapUsd",
+  "coinAthAt",
 ] as const;
+
+/** The alert columns read from the alert's token rather than the alert row. */
+const TOKEN_ALERT_COLUMNS: ReadonlySet<string> = new Set([
+  "mintAddress",
+  "symbol",
+  "coinAthMcapUsd",
+  "coinAthAt",
+]);
 
 const SHADOW_COLUMNS = [
   "id",
@@ -978,14 +995,26 @@ function pagesFor(q: ExportQuery, since: Date, until: Date, pageSize?: number): 
               take,
               select: {
                 ...Object.fromEntries(
-                  ALERT_COLUMNS.filter((c) => c !== "mintAddress" && c !== "symbol").map((c) => [c, true]),
+                  ALERT_COLUMNS.filter((c) => !TOKEN_ALERT_COLUMNS.has(c)).map((c) => [c, true]),
                 ),
                 id: true,
                 createdAt: true,
-                token: { select: { mintAddress: true, symbol: true } },
+                token: {
+                  select: {
+                    mintAddress: true,
+                    symbol: true,
+                    peakWatch: { select: { athMcapUsd: true, athAt: true } },
+                  },
+                },
               },
             })
-          ).map(({ token, ...r }) => ({ ...r, mintAddress: token.mintAddress, symbol: token.symbol })),
+          ).map(({ token, ...r }) => ({
+            ...r,
+            mintAddress: token.mintAddress,
+            symbol: token.symbol,
+            coinAthMcapUsd: token.peakWatch?.athMcapUsd ?? null,
+            coinAthAt: token.peakWatch?.athAt ?? null,
+          })),
         since,
         until,
         pageSize,

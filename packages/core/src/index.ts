@@ -57,6 +57,7 @@ export * from "./curation/narrativeFeatures.js";
 export * from "./curation/labels.js";
 export * from "./curation/profitSim.js";
 export * from "./curation/regrade.js";
+export * from "./curation/candlePeak.js";
 export * from "./curation/firstCall.js";
 export * from "./curation/curator.js";
 export * from "./curation/relaunchFarm.js";

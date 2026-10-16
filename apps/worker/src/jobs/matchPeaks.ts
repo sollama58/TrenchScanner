@@ -36,6 +36,10 @@ export interface PeakRecordingResult {
  * running this every scan cycle settles to zero writes rather than churning the table. Running it
  * for the first time against existing data backfills the entire history at once.
  *
+ * A match whose peak the coin's own trades keep (Match.peakCheckedAt, candlePeaks.ts) is left alone
+ * by every statement here: a snapshot or live reading can be stale (a graduated coin's frozen
+ * curve, a reading from before a rug), and the candles are the coin's trades.
+ *
  * A peak is only recorded once a token has actually traded *above* its alert market cap - a null
  * peakMcapUsd means "never went up", which is different from "went up 0%". See
  * reconcileMatchOutcome in outcomeTrackingJob.ts, which derives peakReturnPct/hitHundredPctAt
@@ -106,6 +110,7 @@ export async function recordMatchPeaks(
     -- this outer WHERE, and without this line a smaller windowed peak overwrote the larger one.
     WHERE m.id = p.id
       AND p.peak_mcap > COALESCE(m."peakMcapUsd", 0)
+      AND m."peakCheckedAt" IS NULL
   `
       : // The incremental pass reads only the snapshots taken inside the window - anything older
         // was already folded in by an earlier pass, which is what makes the window enough. It used
@@ -158,6 +163,7 @@ export async function recordMatchPeaks(
     -- this outer WHERE, and without this line a smaller windowed peak overwrote the larger one.
     WHERE m.id = p.id
       AND p.peak_mcap > COALESCE(m."peakMcapUsd", 0)
+      AND m."peakCheckedAt" IS NULL
   `;
 
   // The live ping is a real observation too, and a much finer-grained one - every minute, for
@@ -179,6 +185,7 @@ export async function recordMatchPeaks(
       AND t."liveMarketCapUsd" IS NOT NULL
       AND t."liveDataAt" IS NOT NULL
       AND t."liveDataAt" >= m."matchedAt" + CASE WHEN m."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
+      AND m."peakCheckedAt" IS NULL
       AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), COALESCE(m."alertMcapUsd", alert."marketCapUsd"))
   `
       : await prisma.$executeRaw`
@@ -193,6 +200,7 @@ export async function recordMatchPeaks(
       AND t."liveDataAt" IS NOT NULL
       AND t."liveDataAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
       AND t."liveDataAt" >= m."matchedAt" + CASE WHEN m."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
+      AND m."peakCheckedAt" IS NULL
       AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), COALESCE(m."alertMcapUsd", alert."marketCapUsd"))
   `;
 
@@ -324,6 +332,7 @@ async function recordWindowedPeaksForTokens(
     -- Re-checked on the row being updated - see the same line in recordMatchPeaks.
     WHERE m.id = p.id
       AND p.peak_mcap > COALESCE(m."peakMcapUsd", 0)
+      AND m."peakCheckedAt" IS NULL
   `;
   const fromLivePings =
     tokenIds.livePings.length === 0
@@ -341,6 +350,7 @@ async function recordWindowedPeaksForTokens(
       AND t."liveDataAt" IS NOT NULL
       AND t."liveDataAt" > NOW() - MAKE_INTERVAL(mins => ${since}::int)
       AND t."liveDataAt" >= m."matchedAt" + CASE WHEN m."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
+      AND m."peakCheckedAt" IS NULL
       AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), COALESCE(m."alertMcapUsd", alert."marketCapUsd"))
   `;
   if (fromSnapshots > 0 || fromLivePings > 0) {
@@ -456,6 +466,7 @@ async function recordMatchPeaksForTokens(
     -- this outer WHERE, and without this line a smaller windowed peak overwrote the larger one.
     WHERE m.id = p.id
       AND p.peak_mcap > COALESCE(m."peakMcapUsd", 0)
+      AND m."peakCheckedAt" IS NULL
   `;
   const fromLivePings = await prisma.$executeRaw`
     UPDATE "Match" m
@@ -469,6 +480,7 @@ async function recordMatchPeaksForTokens(
       AND t."liveMarketCapUsd" IS NOT NULL
       AND t."liveDataAt" IS NOT NULL
       AND t."liveDataAt" >= m."matchedAt" + CASE WHEN m."alertMcapUsd" IS NULL THEN INTERVAL '0 seconds' ELSE MAKE_INTERVAL(secs => ${LAG_SECS}::int) END
+      AND m."peakCheckedAt" IS NULL
       AND t."liveMarketCapUsd" > GREATEST(COALESCE(m."peakMcapUsd", 0), COALESCE(m."alertMcapUsd", alert."marketCapUsd"))
   `;
   return { fromSnapshots, fromLivePings };

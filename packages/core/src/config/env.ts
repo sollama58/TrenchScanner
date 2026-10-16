@@ -385,6 +385,11 @@ const envSchema = z.object({
   // back than this.
   CLEANUP_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(4),
   SNAPSHOT_RETENTION_DAYS: z.coerce.number().positive().default(30),
+  // How long after a coin's latest alert its alerts' Peak/ATH keeps following the coin's own trades
+  // (Pump.fun minute candles, apps/worker/src/jobs/candlePeaks.ts), so a runner's day-two leg or a
+  // wake-up a week later is recorded (user ask 2026-10-16). Each coin costs a candle read every ten
+  // minutes while it trades and twice a day once it is quiet.
+  PEAK_TRACKING_DAYS: z.coerce.number().positive().default(14),
   STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(14),
   // The trade tape's per-wallet rows (TokenWalletActivity, ~1.2 KB a row at ~55k rows a day, the
   // second-largest table on 2026-10-16) and the per-coin tape reads (TokenTradeTape) are kept this

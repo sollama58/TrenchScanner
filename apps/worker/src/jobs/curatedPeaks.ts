@@ -12,7 +12,9 @@ const logger = createLogger("curated-peaks");
  * it was higher - so when the price came back down, the card's Peak walked back to the short
  * watch's figure. Kept here, the Peak only ever rises.
  *
- * Both statements only raise: the guards mean a row already at its high is not rewritten.
+ * Both statements only raise: the guards mean a row already at its high is not rewritten. A call
+ * whose peak the coin's own trades keep (peakCheckedAt, candlePeaks.ts) is left alone: these
+ * readings can be stale, and the candles are not.
  */
 /** CALL_PEAK_READING_LAG_MS in whole seconds, for the statements below. */
 const LAG_SECS = CALL_PEAK_READING_LAG_MS / 1000;
@@ -61,7 +63,8 @@ export async function recordCuratedPeaks(
         ORDER BY s."marketCapUsd" DESC, s."takenAt" ASC
         LIMIT 1
       ) best ON TRUE
-      WHERE c2."createdAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
+      WHERE c2."peakCheckedAt" IS NULL
+        AND c2."createdAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
         AND (${snapshotTokens}::text[] IS NULL OR c2."tokenId" = ANY(${snapshotTokens}::text[]))
         AND best."marketCapUsd" > GREATEST(COALESCE(c2."peakMcapUsd", 0), c2."anchorMcapUsd")
     ) p
@@ -69,6 +72,7 @@ export async function recordCuratedPeaks(
     -- high another pass raised meanwhile (the same guard as recordMatchPeaks).
     WHERE c.id = p.id
       AND p.peak_mcap > COALESCE(c."peakMcapUsd", 0)
+      AND c."peakCheckedAt" IS NULL
   `;
   const fromLivePings =
     liveTokens !== null && liveTokens.length === 0
@@ -79,6 +83,7 @@ export async function recordCuratedPeaks(
         "peakMcapAt"  = t."liveDataAt"
     FROM "Token" t
     WHERE t.id = c."tokenId"
+      AND c."peakCheckedAt" IS NULL
       AND c."createdAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
       AND (${liveTokens}::text[] IS NULL OR c."tokenId" = ANY(${liveTokens}::text[]))
       AND t."liveMarketCapUsd" IS NOT NULL

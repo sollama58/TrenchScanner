@@ -69,6 +69,7 @@ import {
 import { registerShutdown } from "./processExit.js";
 import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
+import { runCandlePeaksJob } from "./jobs/candlePeaks.js";
 import { runBundledSupplyBackfill } from "./jobs/bundledSupplyBackfill.js";
 import { runQuoteRegrade } from "./jobs/quoteRegrade.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
@@ -477,6 +478,16 @@ async function main() {
     scheduleInterval("match-peaks", runMatchPeaks, env.MATCH_PEAKS_INTERVAL_MINUTES, {
       deadlineMinutes: 15,
     }),
+  );
+  // Every alert's Peak/ATH from the coin's own minute candles, for PEAK_TRACKING_DAYS after the
+  // coin's latest alert (candlePeaks.ts): a few dozen Pump.fun calls a minute at most.
+  schedule("candle-peaks", () =>
+    scheduleInterval(
+      "candle-peaks",
+      () => runCandlePeaksJob(deps.pumpFun, { trackingDays: env.PEAK_TRACKING_DAYS }),
+      1,
+      { deadlineMinutes: 10 },
+    ),
   );
   // Both daily jobs catch up on boot when overdue - see scheduleDailyAt. Cleanup's deletes are
   // batched (see runCleanupJob), so a boot-time run after a long gap is many short statements,
