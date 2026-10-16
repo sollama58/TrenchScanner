@@ -40,17 +40,19 @@ export function AppearanceControls() {
     (f !== "dev" || look.devTile) &&
     (f !== "largest" || look.largest) &&
     (f !== "kolBundled" || look.kolBundled) &&
-    (f !== "transferred" || look.transferred);
+    (f !== "transferred" || look.transferred) &&
+    (f !== "fees" || look.feesBadge);
   const toggleField = (f: CardField) =>
     f === "reasons" ||
     f === "sniperTop10" ||
     f === "largest" ||
     f === "kolBundled" ||
     f === "transferred" ||
-    f === "dev"
+    f === "dev" ||
+    f === "fees"
       ? // Opt-in: switching it on also unhides it, in case an older preset hid it.
         setAppearance({
-          [f === "dev" ? "devTile" : f]: !shown(f),
+          [f === "dev" ? "devTile" : f === "fees" ? "feesBadge" : f]: !shown(f),
           hidden: look.hidden.filter((x) => x !== f),
         })
       : setAppearance({ hidden: hidden.has(f) ? look.hidden.filter((x) => x !== f) : [...look.hidden, f] });

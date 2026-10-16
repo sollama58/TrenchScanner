@@ -114,6 +114,8 @@ export const feedAppearanceSchema = z
     kolBundled: z.boolean().default(false),
     /** The Transferred tile (supply moved holder to holder among the top 25); hidden by default. */
     transferred: z.boolean().default(false),
+    /** The card footer's FEES badge (where the creator fee goes); hidden by default (user ask 2026-10-16). */
+    feesBadge: z.boolean().default(false),
     /** On bubble maps, ties between holders the same exchange funded (drawn only); off by default. */
     bubbleCexLinks: z.boolean().default(false),
     /** On bubble maps, ties from KOLs' possible side wallets (drawn only, never counted); on by default. */
@@ -212,6 +214,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   largest: false,
   kolBundled: false,
   transferred: false,
+  feesBadge: false,
   bubbleCexLinks: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
