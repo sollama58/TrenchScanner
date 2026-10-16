@@ -54,6 +54,11 @@ export function windowDays(q: { days: number; since?: Date; until?: Date }, now 
   return (until.getTime() - since.getTime()) / DAY_MS;
 }
 
+/** Where a since/until/days query's window starts, resolved the way windowDays resolves it. */
+function windowStart(q: { days: number; since?: Date; until?: Date }, now = new Date()): Date {
+  return q.since ?? new Date((q.until ?? now).getTime() - q.days * DAY_MS);
+}
+
 const querySchema = z
   .object({
     days: z.coerce.number().int().min(1).max(MAX_WINDOW_DAYS).default(30),
@@ -64,6 +69,11 @@ const querySchema = z
   // `since` alone used to open the whole table: the cap on `days` only bound the default window.
   .refine((q) => windowDays(q) <= MAX_WINDOW_DAYS, {
     message: `window must be at most ${MAX_WINDOW_DAYS} days`,
+  })
+  // The cap on length alone let a short window sit wholly past the horizon (since=150d ago,
+  // until=120d ago), where only the winners are left. A day's slack for a client's clock.
+  .refine((q) => windowStart(q).getTime() >= Date.now() - (MAX_WINDOW_DAYS + 1) * DAY_MS, {
+    message: `window must start within the last ${MAX_WINDOW_DAYS} days`,
   });
 
 /** One group of graded calls - the shape every section of the report is built from. */

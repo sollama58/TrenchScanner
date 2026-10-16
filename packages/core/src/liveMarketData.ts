@@ -44,6 +44,8 @@ export async function refreshLiveMarketData(
      * match-peaks pass alone.
      */
     peakWindowDays?: number;
+    /** Filled with the mints whose DexScreener batch failed (the client answers them as absent). */
+    failed?: Set<string>;
   } = {},
 ): Promise<LiveMarketDataRefresh> {
   if (tokens.length === 0) return { requested: 0, updated: 0 };
@@ -55,9 +57,13 @@ export async function refreshLiveMarketData(
   const live = await dexScreener.getTokensByAddresses(
     tokens.map((t) => t.mintAddress),
     5,
-    { seenAt },
+    { seenAt, failed: options.failed },
   );
-  return writeLiveMarketData(tokens, live, { ...options, seenAt, fetchedAt: new Date() });
+  return writeLiveMarketData(tokens, live, {
+    peakWindowDays: options.peakWindowDays,
+    seenAt,
+    fetchedAt: new Date(),
+  });
 }
 
 /**
