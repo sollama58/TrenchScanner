@@ -71,6 +71,7 @@ import {
   type StackedCuratorParams,
   type TrainedCuratorParams,
 } from "@trenchscanner/core";
+import { carryHolderReadingOntoAlertRow } from "./holderListWrites.js";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
 import {
   aiGateQualified,
@@ -1310,6 +1311,9 @@ async function emitCuratedAlert(
       }
       if (!anchor) return null;
 
+      // As for a Match (matchDispatch.ts): the call's snapshot row carries the holder reading the
+      // scan may have left off as unchanged (holderListWrites.ts).
+      if (pick.snapshotId) await carryHolderReadingOntoAlertRow(tx, pick.snapshotId, scored);
       const alert = await tx.curatedAlert.create({
         data: {
           tokenId: token.id,

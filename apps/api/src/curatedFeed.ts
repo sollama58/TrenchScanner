@@ -93,18 +93,26 @@ export async function latestSnapshotsByToken(
 ): Promise<Map<string, TokenSnapshot>> {
   const ids = [...new Set(tokenIds)];
   if (ids.length === 0) return new Map();
-  // The newest row carries the holder list only when it was a new reading (worker
-  // holderListWrites.ts), so the newest list before it rides along: the token view's bubble map
-  // and top holders read the card's latest snapshot first, and a list means the same whichever
-  // row it came from. Bounded to CARRIED_HOLDER_LIST_MS before the row, like withCarriedHolderList.
-  const snapshots = await prisma.$queryRaw<(TokenSnapshot & { carriedHolders: Prisma.JsonValue | null })[]>`
-    SELECT s.*, h."linkedHolders" AS "carriedHolders"
+  // The newest row carries the holder reading - the list, its clusters and its same-minute
+  // groups - only when it was a new reading (worker holderListWrites.ts), so the newest reading
+  // before it rides along: the token view's bubble map and top holders read the card's latest
+  // snapshot first, and a reading means the same whichever row it came from. Bounded to
+  // CARRIED_HOLDER_LIST_MS before the row, like withCarriedHolderList.
+  const snapshots = await prisma.$queryRaw<
+    (TokenSnapshot & {
+      carriedHolders: Prisma.JsonValue | null;
+      carriedClusters: Prisma.JsonValue | null;
+      carriedSameTime: Prisma.JsonValue | null;
+    })[]
+  >`
+    SELECT s.*, h."linkedHolders" AS "carriedHolders", h."linkedClusters" AS "carriedClusters",
+           h."sameTimeClusters" AS "carriedSameTime"
     FROM unnest(${ids}::text[]) AS t(id)
     CROSS JOIN LATERAL (
       SELECT * FROM "TokenSnapshot" WHERE "tokenId" = t.id ORDER BY "takenAt" DESC LIMIT 1
     ) s
     LEFT JOIN LATERAL (
-      SELECT "linkedHolders" FROM "TokenSnapshot"
+      SELECT "linkedHolders", "linkedClusters", "sameTimeClusters" FROM "TokenSnapshot"
       WHERE s."linkedHolders" IS NULL
         AND "tokenId" = t.id
         AND "takenAt" < s."takenAt"
@@ -114,9 +122,16 @@ export async function latestSnapshotsByToken(
       LIMIT 1
     ) h ON true`;
   return new Map(
-    snapshots.map(({ carriedHolders, ...s }) => [
+    snapshots.map(({ carriedHolders, carriedClusters, carriedSameTime, ...s }) => [
       s.tokenId,
-      s.linkedHolders === null && carriedHolders !== null ? { ...s, linkedHolders: carriedHolders } : s,
+      s.linkedHolders === null && carriedHolders !== null
+        ? {
+            ...s,
+            linkedHolders: carriedHolders,
+            linkedClusters: s.linkedClusters ?? carriedClusters,
+            sameTimeClusters: s.sameTimeClusters ?? carriedSameTime,
+          }
+        : s,
     ]),
   );
 }
@@ -129,11 +144,17 @@ export async function latestSnapshotsByToken(
 const CARRIED_HOLDER_LIST_MS = 2 * 3_600_000;
 
 /**
- * A snapshot with the coin's newest holder list before it when its own is null - the single-row
- * form of what latestSnapshotsByToken does for a page (see there).
+ * A snapshot with the coin's newest holder reading before it when its own list is null - the
+ * single-row form of what latestSnapshotsByToken does for a page (see there).
  */
 export async function withCarriedHolderList<
-  S extends { tokenId: string; takenAt: Date; linkedHolders: Prisma.JsonValue | null },
+  S extends {
+    tokenId: string;
+    takenAt: Date;
+    linkedHolders: Prisma.JsonValue | null;
+    linkedClusters?: Prisma.JsonValue | null;
+    sameTimeClusters?: Prisma.JsonValue | null;
+  },
 >(snapshot: S | null): Promise<S | null> {
   if (snapshot === null || snapshot.linkedHolders !== null) return snapshot;
   const carried = await prisma.tokenSnapshot.findFirst({
@@ -143,9 +164,16 @@ export async function withCarriedHolderList<
       linkedHolders: { not: Prisma.DbNull },
     },
     orderBy: { takenAt: "desc" },
-    select: { linkedHolders: true },
+    select: { linkedHolders: true, linkedClusters: true, sameTimeClusters: true },
   });
-  return carried === null ? snapshot : { ...snapshot, linkedHolders: carried.linkedHolders };
+  return carried === null
+    ? snapshot
+    : {
+        ...snapshot,
+        linkedHolders: carried.linkedHolders,
+        linkedClusters: snapshot.linkedClusters ?? carried.linkedClusters,
+        sameTimeClusters: snapshot.sameTimeClusters ?? carried.sameTimeClusters,
+      };
 }
 
 /**

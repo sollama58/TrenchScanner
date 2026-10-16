@@ -97,6 +97,70 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     expect(matches.every((m) => m.deliveredDashboard)).toBe(true);
   });
 
+  it("puts the holder reading on the alert's snapshot row when the scan left it off as unchanged", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-reading` } });
+    const scored: ScoredToken = {
+      ...scoredFixture(token.mintAddress),
+      linkedHolders: [
+        { wallet: "A".repeat(44), pct: 4.2, cexFunder: "Binance" },
+        { wallet: "B".repeat(44), pct: 1.1 },
+      ],
+      linkedClusters: [
+        {
+          funder: "F".repeat(44),
+          wallets: [
+            { wallet: "A".repeat(44), pct: 4.2 },
+            { wallet: "B".repeat(44), pct: 1.1 },
+          ],
+          pct: 5.3,
+          creatorLinked: false,
+        },
+      ],
+      sameTimeClusters: [
+        {
+          atMs: 1_760_000_000_000,
+          spanMs: 20_000,
+          wallets: [{ wallet: "A".repeat(44), pct: 4.2, fundedAtMs: 1_760_000_000_000, funder: null }],
+          pct: 4.2,
+        },
+      ],
+    };
+    // The scan's row without the lists: holderListWrites.ts said the reading was unchanged...
+    const bare = await prisma.tokenSnapshot.create({
+      data: snapshotDataFor(token.id, scored, "scan", { holderReading: false }),
+    });
+    expect(bare.linkedHolders).toBeNull();
+    expect(bare.linkedClusters).toBeNull();
+
+    const count = await createMatchesForCandidate({
+      token,
+      snapshot: bare,
+      scored,
+      activeFilters: [await seedUserWithFilter("reading")],
+    });
+
+    // ...and the alert's row now carries it, since the feed reads that row on its own.
+    expect(count).toBe(1);
+    const row = await prisma.tokenSnapshot.findUniqueOrThrow({ where: { id: bare.id } });
+    expect(row.linkedHolders).toEqual(scored.linkedHolders);
+    expect(row.linkedClusters).toEqual(scored.linkedClusters);
+    expect(row.sameTimeClusters).toEqual(scored.sameTimeClusters);
+
+    // A row that carries its own reading keeps it.
+    const other = await prisma.token.create({ data: { mintAddress: `${TAG}-own-reading` } });
+    const own = await prisma.tokenSnapshot.create({ data: snapshotDataFor(other.id, scored, "scan") });
+    const later = { ...scored, linkedHolders: [{ wallet: "C".repeat(44), pct: 9 }], linkedClusters: [] };
+    await createMatchesForCandidate({
+      token: other,
+      snapshot: own,
+      scored: later,
+      activeFilters: [await seedUserWithFilter("own-reading")],
+    });
+    const kept = await prisma.tokenSnapshot.findUniqueOrThrow({ where: { id: own.id } });
+    expect(kept.linkedHolders).toEqual(scored.linkedHolders);
+    expect(kept.linkedClusters).toEqual(scored.linkedClusters);
+  });
+
   it("still alerts everyone else when a filter was deleted or switched off mid-cycle", async () => {
     const { token, snapshot } = await seedToken("stale-filters");
     const [kept, deleted, switchedOff] = [

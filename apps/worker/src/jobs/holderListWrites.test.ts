@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   HOLDER_LIST_REWRITE_MS,
   holderListKey,
-  noteHolderListWritten,
+  holderReadingKey,
+  noteHolderReadingWritten,
   resetHolderListWritesForTests,
-  shouldWriteHolderList,
+  shouldWriteHolderReading,
+  type HolderReading,
 } from "./holderListWrites.js";
 import { snapshotDataFor } from "./snapshotData.js";
 import type { ScoredToken } from "@trenchscanner/core";
@@ -15,67 +17,138 @@ const list = (pct = 4.2): HolderList => [
   { wallet: "A".repeat(44), pct, cexFunder: "Binance" },
   { wallet: "B".repeat(44), pct: 1.1, sniper: true },
 ];
+const clusters = (pct = 5.3): NonNullable<ScoredToken["linkedClusters"]> => [
+  {
+    funder: "F".repeat(44),
+    wallets: [
+      { wallet: "A".repeat(44), pct: 4.2 },
+      { wallet: "B".repeat(44), pct: 1.1 },
+    ],
+    pct,
+    creatorLinked: false,
+  },
+];
+const groups = (): NonNullable<ScoredToken["sameTimeClusters"]> => [
+  {
+    atMs: T0 - 60_000,
+    spanMs: 20_000,
+    wallets: [
+      { wallet: "A".repeat(44), pct: 4.2, fundedAtMs: T0 - 60_000, funder: "F".repeat(44) },
+      { wallet: "B".repeat(44), pct: 1.1, fundedAtMs: T0 - 40_000, funder: null },
+    ],
+    pct: 5.3,
+  },
+];
+const reading = (pct = 4.2): HolderReading => ({
+  linkedHolders: list(pct),
+  linkedClusters: clusters(),
+  sameTimeClusters: groups(),
+});
 
-describe("shouldWriteHolderList", () => {
+describe("shouldWriteHolderReading", () => {
   beforeEach(() => resetHolderListWritesForTests());
 
-  it("writes a coin's first list, then not the same one again within the rewrite window", () => {
-    expect(shouldWriteHolderList("t1", list(), T0)).toBe(true);
-    noteHolderListWritten("t1", list(), T0);
-    expect(shouldWriteHolderList("t1", list(), T0 + 30_000)).toBe(false);
-    expect(shouldWriteHolderList("t1", list(), T0 + HOLDER_LIST_REWRITE_MS - 1)).toBe(false);
+  it("writes a coin's first reading, then not the same one again within the rewrite window", () => {
+    expect(shouldWriteHolderReading("t1", reading(), T0)).toBe(true);
+    noteHolderReadingWritten("t1", reading(), T0);
+    expect(shouldWriteHolderReading("t1", reading(), T0 + 30_000)).toBe(false);
+    expect(shouldWriteHolderReading("t1", reading(), T0 + HOLDER_LIST_REWRITE_MS - 1)).toBe(false);
   });
 
-  it("writes again once the last written list is HOLDER_LIST_REWRITE_MS old", () => {
-    noteHolderListWritten("t1", list(), T0);
-    expect(shouldWriteHolderList("t1", list(), T0 + HOLDER_LIST_REWRITE_MS)).toBe(true);
+  it("writes again once the last written reading is HOLDER_LIST_REWRITE_MS old", () => {
+    noteHolderReadingWritten("t1", reading(), T0);
+    expect(shouldWriteHolderReading("t1", reading(), T0 + HOLDER_LIST_REWRITE_MS)).toBe(true);
   });
 
-  it("writes a changed reading at once: a share, a tag or a wallet", () => {
-    noteHolderListWritten("t1", list(), T0);
-    expect(shouldWriteHolderList("t1", list(4.3), T0 + 1_000)).toBe(true);
-    const tagged = list();
-    tagged[1] = { ...tagged[1]!, fresh: true };
-    expect(shouldWriteHolderList("t1", tagged, T0 + 1_000)).toBe(true);
-    expect(shouldWriteHolderList("t1", list().slice(0, 1), T0 + 1_000)).toBe(true);
+  it("writes a changed reading at once: a share, a tag or a wallet of the list", () => {
+    noteHolderReadingWritten("t1", reading(), T0);
+    expect(shouldWriteHolderReading("t1", reading(4.3), T0 + 1_000)).toBe(true);
+    const tagged = reading();
+    tagged.linkedHolders![1] = { ...tagged.linkedHolders![1]!, fresh: true };
+    expect(shouldWriteHolderReading("t1", tagged, T0 + 1_000)).toBe(true);
+    expect(
+      shouldWriteHolderReading("t1", { ...reading(), linkedHolders: list().slice(0, 1) }, T0 + 1_000),
+    ).toBe(true);
   });
 
-  it("has nothing to write for a missing or empty list, and keeps the record for the next one", () => {
-    noteHolderListWritten("t1", list(), T0);
-    expect(shouldWriteHolderList("t1", undefined, T0 + 1_000)).toBe(false);
-    expect(shouldWriteHolderList("t1", [], T0 + 1_000)).toBe(false);
-    expect(shouldWriteHolderList("t1", list(), T0 + 2_000)).toBe(false);
+  it("writes a changed cluster or same-minute group at once, with the same list", () => {
+    noteHolderReadingWritten("t1", reading(), T0);
+    expect(shouldWriteHolderReading("t1", { ...reading(), linkedClusters: clusters(6) }, T0 + 1_000)).toBe(
+      true,
+    );
+    expect(shouldWriteHolderReading("t1", { ...reading(), linkedClusters: [] }, T0 + 1_000)).toBe(true);
+    expect(shouldWriteHolderReading("t1", { ...reading(), sameTimeClusters: [] }, T0 + 1_000)).toBe(true);
+    // A reading with the list alone, then the same list with clusters: two readings.
+    noteHolderReadingWritten("t2", { linkedHolders: list() }, T0);
+    expect(shouldWriteHolderReading("t2", { linkedHolders: list() }, T0 + 1_000)).toBe(false);
+    expect(
+      shouldWriteHolderReading("t2", { linkedHolders: list(), linkedClusters: clusters() }, T0 + 1_000),
+    ).toBe(true);
+  });
+
+  it("has nothing to write for a reading with no list, and keeps the record for the next one", () => {
+    noteHolderReadingWritten("t1", reading(), T0);
+    expect(shouldWriteHolderReading("t1", {}, T0 + 1_000)).toBe(false);
+    expect(shouldWriteHolderReading("t1", { linkedHolders: [], linkedClusters: [] }, T0 + 1_000)).toBe(false);
+    expect(shouldWriteHolderReading("t1", reading(), T0 + 2_000)).toBe(false);
+    // Clusters alone are still a list to carry.
+    expect(shouldWriteHolderReading("t3", { linkedClusters: clusters() }, T0)).toBe(true);
   });
 
   it("tracks coins apart", () => {
-    noteHolderListWritten("t1", list(), T0);
-    expect(shouldWriteHolderList("t2", list(), T0 + 1_000)).toBe(true);
+    noteHolderReadingWritten("t1", reading(), T0);
+    expect(shouldWriteHolderReading("t2", reading(), T0 + 1_000)).toBe(true);
   });
 
-  it("keys a list by its holders, shares and tags in order", () => {
+  it("keys a list by its holders, shares and tags in order, and a reading by its three lists", () => {
     expect(holderListKey(list())).toBe(holderListKey(list()));
     expect(holderListKey(list())).not.toBe(holderListKey([...list()].reverse()));
     expect(holderListKey([{ wallet: "A", pct: 1 }])).toBe(
       holderListKey([{ wallet: "A", pct: 1, sniper: undefined }]),
     );
+    expect(holderReadingKey(reading())).toBe(holderReadingKey(reading()));
+    expect(holderReadingKey({ linkedHolders: list() })).toBe(
+      holderReadingKey({ linkedHolders: list(), linkedClusters: [] }),
+    );
+    expect(holderReadingKey({ linkedHolders: list() })).not.toBe(holderReadingKey(reading()));
   });
 });
 
-describe("snapshotDataFor: the holder list", () => {
+describe("snapshotDataFor: the holder reading", () => {
   const scored = {
     priceUsd: 1,
     marketCapUsd: 1,
     score: { total: 0, momentum: 0, holderHealth: 0, age: 0, narrative: 0 },
     rugScreen: { passed: true, reasons: [] },
-    linkedHolders: list(),
+    ...reading(),
   } as unknown as ScoredToken;
 
-  it("carries the list by default and when asked to", () => {
-    expect(snapshotDataFor("t1", scored, "scan").linkedHolders).toEqual(list());
-    expect(snapshotDataFor("t1", scored, "scan", { linkedHolders: true }).linkedHolders).toEqual(list());
+  it("carries the three lists by default and when asked to", () => {
+    for (const data of [
+      snapshotDataFor("t1", scored, "scan"),
+      snapshotDataFor("t1", scored, "fast"),
+      snapshotDataFor("t1", scored, "scan", { holderReading: true }),
+    ]) {
+      expect(data.linkedHolders).toEqual(list());
+      expect(data.linkedClusters).toEqual(clusters());
+      expect(data.sameTimeClusters).toEqual(groups());
+    }
   });
 
-  it("leaves the list off when the writer says it is unchanged", () => {
-    expect(snapshotDataFor("t1", scored, "scan", { linkedHolders: false }).linkedHolders).toBeUndefined();
+  it("leaves the three lists off when the writer says the reading is unchanged", () => {
+    const data = snapshotDataFor("t1", scored, "scan", { holderReading: false });
+    expect(data.linkedHolders).toBeUndefined();
+    expect(data.linkedClusters).toBeUndefined();
+    expect(data.sameTimeClusters).toBeUndefined();
+    // The reading's numbers still ride every row.
+    expect(data.priceUsd).toBe(1);
+  });
+
+  it("stores no empty list", () => {
+    const bare = { ...scored, linkedClusters: [], sameTimeClusters: undefined } as unknown as ScoredToken;
+    const data = snapshotDataFor("t1", bare, "scan");
+    expect(data.linkedHolders).toEqual(list());
+    expect(data.linkedClusters).toBeUndefined();
+    expect(data.sameTimeClusters).toBeUndefined();
   });
 });
