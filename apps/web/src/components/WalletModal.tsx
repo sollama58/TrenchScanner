@@ -521,7 +521,7 @@ function KolSides({ sides, wallet, name }: { sides: KolSide[]; wallet: string; n
       <h4 className="wm-sides-head">
         Labeled side wallets <span className="sage-tag">{sides.length}</span>
         <WalletWebButton wallet={wallet} name={name} className="ghost small-btn side-web-btn wm-web-btn">
-          Wallet web
+          <span className="wm-web-label">Wallet web</span>
         </WalletWebButton>
         <SideLabelsExport labels={{ count: sides.length, wallets: sides }} />
       </h4>
@@ -602,7 +602,7 @@ function BundleLabels({ wallet }: { wallet: string }) {
             name={shortAddress(wallet)}
             className="ghost small-btn side-web-btn wm-web-btn"
           >
-            Wallet web
+            <span className="wm-web-label">Wallet web</span>
           </WalletWebButton>
           <SideLabelsExport labels={{ count: labels.length, wallets: labels }} />
         </h4>

@@ -12245,6 +12245,12 @@ button.bm-same {
 .wm-sides-head .wm-web-btn + .side-export {
   margin-left: 0;
 }
+/* Phones: the heading and both buttons share one line, so the web button keeps only its icon. */
+@media (max-width: 480px) {
+  .wm-sides-head .wm-web-label {
+    display: none;
+  }
+}
 .wm-sides-head .side-export {
   margin-left: auto;
 }
