@@ -312,6 +312,15 @@ describe.skipIf(!dbAvailable)("GET /health/worker?strict=1 against the database"
       ),
     );
 
+  it("answers GET /health?db=1 only after one query has come back", async () => {
+    const instance = await app();
+    const res = await instance.inject({ url: "/health?db=1" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, db: true });
+    expect((await instance.inject({ url: "/health" })).json()).toEqual({ ok: true });
+    await instance.close();
+  });
+
   it("answers 200 while the alert path is fresh, 503 naming the stale job once it isn't", async () => {
     await ranAt(new Date());
     const first = await app();

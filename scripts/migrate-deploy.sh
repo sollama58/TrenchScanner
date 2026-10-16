@@ -15,7 +15,9 @@
 #  4. A migration that failed on an earlier deploy (P3009): marked rolled back and run again, once
 #     per run (every migration since check-migrations.sh's RERUN_SAFE_FROM re-applies safely).
 #
-# Any other failure is passed through unchanged.
+# Any other failure is passed through unchanged. Every statement runs under a statement_timeout
+# (MIGRATE_STATEMENT_TIMEOUT_MS, 15 minutes by default) so a runaway index build or backfill cannot
+# hold a busy table for the rest of the night.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,6 +28,17 @@ LOCK_PAUSE=${MIGRATE_LOCK_PAUSE_SECONDS:-15}
 # How long to keep waiting on another service's migration run.
 PEER_WAIT=${MIGRATE_PEER_WAIT_SECONDS:-900}
 PEER_PAUSE=${MIGRATE_PEER_PAUSE_SECONDS:-5}
+# The longest one statement of a migration may run. The app's pool caps its own statements (db.ts)
+# but migrations run on the raw URL, where nothing did: a `lock_timeout` bounds the wait for a
+# table's lock, not the index build or backfill that then holds it against every write. A known
+# long backfill raises this for its own deploy.
+STATEMENT_TIMEOUT_MS=${MIGRATE_STATEMENT_TIMEOUT_MS:-900000}
+
+if [[ -n "${DATABASE_URL:-}" && "$DATABASE_URL" != *"options="* ]]; then
+  sep='?'
+  [[ "$DATABASE_URL" == *\?* ]] && sep='&'
+  export DATABASE_URL="${DATABASE_URL}${sep}options=-c%20statement_timeout%3D${STATEMENT_TIMEOUT_MS}"
+fi
 
 lock_failures=0
 failed_resolved=0

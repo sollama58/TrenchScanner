@@ -184,8 +184,19 @@ export async function registerHealthRoutes(
   /** Plain liveness check - what Render's healthCheckPath hits. */
   // A fresh instance reports unhealthy until its report caches are filled (capped in server.ts), so
   // a deploy keeps traffic on the old instance meanwhile and no reader meets an empty cache.
-  app.get("/", async (_request, reply) => {
+  // `?db=1` also runs one trivial query, for an outside monitor: a database Render has suspended
+  // (its disk full) takes every in-process watcher down with it, and this is the signal left.
+  // Render's own probe stays on the plain route, so a database blip does not restart the API.
+  app.get<{ Querystring: { db?: string } }>("/", async (request, reply) => {
     if (opts.warming?.()) return reply.code(503).send({ ok: false, warming: true });
+    if (request.query.db === "1" || request.query.db === "true") {
+      const db = await prisma.$queryRaw`SELECT 1`.then(
+        () => true,
+        () => false,
+      );
+      if (!db) return reply.code(503).send({ ok: false, db: false });
+      return { ok: true, db: true };
+    }
     return { ok: true };
   });
 
