@@ -4,6 +4,8 @@ import { ShieldIcon } from "../components/Icons";
 import { usePolling } from "../hooks";
 import { Kpi, Load, Panel, Table, Tag, Wallet, dollars, ms, n, when } from "./adminShared";
 import { AnnouncementsAdmin } from "./AdminAnnouncements";
+import { FeedbackAdmin } from "./AdminFeedback";
+import { AdminReportsBadge } from "../components/AdminReportsBadge";
 import { ModelsAdmin } from "./AdminModels";
 import { WalletsAdmin } from "./AdminWallets";
 import { UsageAdmin } from "./AdminUsage";
@@ -36,6 +38,7 @@ const SECTIONS = [
   { id: "access", label: "Access" },
   { id: "credits", label: "Burn Credits" },
   { id: "announce", label: "Announcements" },
+  { id: "reports", label: "Reports" },
   { id: "ai", label: "AI" },
   { id: "bot", label: "Trading bot" },
   { id: "backups", label: "Backups" },
@@ -82,6 +85,7 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
               onClick={() => setSection(s.id)}
             >
               {s.label}
+              {s.id === "reports" && <AdminReportsBadge />}
             </button>
           ))}
         </div>
@@ -106,6 +110,7 @@ export function AdminTab({ goTo }: { goTo: (tab: "model") => void }) {
         {section === "access" && <Access />}
         {section === "credits" && <CreditsAdmin />}
         {section === "announce" && <AnnouncementsAdmin />}
+        {section === "reports" && <FeedbackAdmin />}
         {section === "ai" && <Ai />}
         {section === "bot" && (
           <Suspense fallback={<p className="muted small">Loading the trading bot…</p>}>

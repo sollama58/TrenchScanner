@@ -42,6 +42,7 @@ import { registerAdminWalletRoutes } from "./routes/adminWallets.js";
 import { registerAdminBackupRoutes } from "./routes/adminBackups.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerAdminAnnouncementRoutes, registerAnnouncementRoutes } from "./routes/announcements.js";
+import { registerAdminFeedbackRoutes, registerFeedbackRoutes } from "./routes/feedback.js";
 import { registerLeaderboardRoutes } from "./routes/leaderboard.js";
 import { registerSubscriptionRoutes } from "./routes/subscription.js";
 import { registerStatsRoutes } from "./routes/stats.js";
@@ -323,6 +324,11 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     request.user = session;
   });
 
+  app.decorate("identify", async (request) => {
+    const session = await resolveSession(request);
+    if (session) request.user = session;
+  });
+
   // Computed once at startup, not per-request - ADMIN_WALLET_ADDRESSES only ever changes via a
   // redeploy anyway.
   const admins = adminWalletSet(env);
@@ -505,6 +511,9 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // Public like /config: the admin's banner shows to guests and the signed-out page too.
   await app.register(registerAnnouncementRoutes, { prefix: "/announcement" });
 
+  // The bug button's reports: guests may send them too, so this is outside every auth gate.
+  await app.register(registerFeedbackRoutes, { prefix: "/feedback", env });
+
   await app.register(registerAuthRoutes, { prefix: "/auth", env });
 
   await app.register(registerDeviceLinkRoutes, { prefix: "/auth", env });
@@ -593,6 +602,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       // Burn Credits: the ratio, each utility's cost, grants and the ledger.
       await registerAdminCreditRoutes(instance);
       await registerAdminAnnouncementRoutes(instance);
+      // The bug button's reports, to read and triage.
+      await registerAdminFeedbackRoutes(instance);
     },
     { prefix: "/admin" },
   );

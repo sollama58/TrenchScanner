@@ -12680,3 +12680,332 @@ button.bm-same {
 .feed-catch-key.filters {
   background: var(--series-3);
 }
+
+/* ---------- Bug button (components/BugButton.tsx) ----------
+   A small round icon at the bottom right of every screen. It sits under the Utility panel and the
+   Customize drawer (z-index 35 and 40), which cover it while open, and clear of the Utility
+   handle, which is centred on the panel well above it. On a phone it rides above the tab bar. */
+.bug-fab {
+  position: fixed;
+  z-index: 34;
+  right: 20px;
+  bottom: calc(20px + env(safe-area-inset-bottom));
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--ink-2);
+  background: var(--surface-solid);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 10px 28px -12px rgba(0, 0, 0, 0.55);
+  opacity: 0.88;
+  transition:
+    opacity 0.15s,
+    color 0.15s,
+    transform 0.15s,
+    bottom 0.2s;
+}
+.bug-fab:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--brand-ink);
+  background: var(--surface-solid);
+  border-color: color-mix(in srgb, var(--brand-a) 55%, var(--border-strong));
+  transform: translateY(-1px);
+}
+.bug-fab:focus-visible {
+  opacity: 1;
+}
+body.drawer-open .bug-fab {
+  display: none;
+}
+/* Clear of the "new version" banner and the utility toast, which centre at the bottom. */
+body:has(.update-banner) .bug-fab,
+body:has(.util-toast) .bug-fab {
+  bottom: calc(80px + env(safe-area-inset-bottom));
+}
+/* The footer's links end at the right edge, under the button once scrolled to the bottom. */
+.site-foot {
+  padding-right: 84px;
+}
+@media (max-width: 640px) {
+  .bug-fab {
+    right: 12px;
+    width: 40px;
+    height: 40px;
+    bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+  /* Signed in or a guest, the tabs are a bar along the bottom. */
+  .app:has(.topbar .tabs) .bug-fab {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+  body:has(.update-banner) .bug-fab,
+  body:has(.util-toast) .bug-fab {
+    bottom: calc(136px + env(safe-area-inset-bottom));
+  }
+  .site-foot {
+    padding-right: 24px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bug-fab {
+    transition: none;
+  }
+}
+
+/* The form it opens (components/BugReportDialog.tsx). */
+.bug-modal {
+  width: min(560px, calc(100vw - 32px));
+}
+/* Hidden while "Capture this screen" takes its frame, so the page shows and not the form. */
+.bug-modal.capturing,
+.bug-modal.capturing::backdrop {
+  opacity: 0;
+  transition: none;
+}
+.bug-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+}
+.bug-title .icon {
+  color: var(--brand-ink);
+}
+.bug-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 6px;
+}
+.bug-kind {
+  width: fit-content;
+}
+.bug-kind button {
+  gap: 6px;
+}
+.bug-field {
+  display: grid;
+  gap: 6px;
+}
+.bug-field textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: 9px 11px;
+}
+.bug-field textarea::placeholder {
+  color: var(--muted);
+}
+.bug-field textarea:focus {
+  outline: none;
+  border-color: var(--brand-b);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-b) 25%, transparent);
+}
+.bug-count {
+  justify-self: end;
+  margin-top: -2px;
+}
+.bug-shot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.bug-shot-actions .ghost {
+  border-style: dashed;
+}
+.bug-shot-preview {
+  position: relative;
+  margin: 0;
+  width: fit-content;
+  max-width: 100%;
+}
+.bug-shot-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 180px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+}
+.bug-shot-preview .icon-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--surface-solid);
+  border-color: var(--border-strong);
+}
+.bug-shot p {
+  margin: 6px 0 0;
+}
+/* The honeypot: off screen, not display: none, which some bots skip. */
+.bug-hp {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.bug-sends {
+  margin: 0;
+}
+.bug-form .error {
+  margin: 0;
+}
+.bug-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.bug-sent {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 18px 0 4px;
+  text-align: center;
+}
+.bug-sent p {
+  margin: 0;
+  max-width: 380px;
+}
+.bug-sent-mark {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  color: var(--good-ink);
+  background: var(--good-wash);
+}
+@media (max-width: 640px) {
+  .bug-modal {
+    width: 100vw;
+  }
+  .bug-actions .button.primary {
+    flex: 1;
+    justify-content: center;
+  }
+}
+
+/* ---------- Admin > Reports (tabs/AdminFeedback.tsx) ---------- */
+.reports-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 2px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  background: var(--bad-ink);
+}
+@media (max-width: 640px) {
+  .tabs button .reports-badge {
+    position: absolute;
+    top: 2px;
+    left: calc(50% + 6px);
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    font-size: 10px;
+    max-width: none;
+  }
+  .tabs button:has(.reports-badge) {
+    position: relative;
+  }
+}
+.reports-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.reports-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.report {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.report-new {
+  border-left: 3px solid var(--warn-ink);
+}
+.report-done {
+  opacity: 0.8;
+}
+.report-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.report-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.report-kind-bug {
+  color: var(--bad-ink);
+}
+.report-kind-idea {
+  color: var(--brand-ink);
+}
+.report-from {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.report-message {
+  margin: 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+.report-facts,
+.report-url {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.report-shot {
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border-radius: var(--radius-s);
+  overflow: hidden;
+}
+.report-shot img {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+}
+.report-note {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.report-note input {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
