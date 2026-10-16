@@ -4,12 +4,9 @@ import { BrainIcon, CloseIcon, SlidersIcon } from "./Icons";
 import {
   BouncerArt,
   BubblesArt,
-  CompeteArt,
   FunnelArt,
-  GradeArt,
   GuestArt,
   KolArt,
-  SideCheckArt,
   TwoWaysArt,
   WeatherArt,
   YoursArt,
@@ -194,82 +191,52 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
       title: "Two ways onto your feed",
       art: <TwoWaysArt />,
       body: (
-        <div className="tour-pair">
-          <div>
-            <span className="pill pill-mine">
-              <SlidersIcon size={12} /> Your alert
-            </span>
-            <p>
-              A coin that matches one of the filters you&apos;ve switched on in the Filters tab. If a rule
-              needs a wallet check, it waits for that check before it pings you.
-            </p>
-          </div>
-          <div>
-            <span className="pill pill-model">
-              <BrainIcon size={12} /> Model
-            </span>
-            <p>
-              A robot that studied thousands of past coins says &ldquo;this one!&rdquo;, with how sure it is
-              from 0 to 100.
-            </p>
-          </div>
-        </div>
-      ),
-    },
-    {
-      title: "The robots compete",
-      art: <CompeteArt />,
-      body: (
         <>
-          <p className="tour-lead">
-            Every few hours each model studies the latest coins, then sits a test on weeks it has never seen.
-            The three with the best proven 2x rate over the last three days make up your default feed, and the
-            champion joins them if it isn&apos;t one of the three. New models are bred from the winners, and a
-            newcomer that beats the weakest takes its seat.
-          </p>
-        </>
-      ),
-    },
-    {
-      title: "Every alert gets a report card",
-      art: <GradeArt />,
-      body: (
-        <>
-          <p className="tour-lead">
-            We start the clock at the price when it alerted. Doubling within 15 minutes is a win{" "}
-            <b className="good">✓</b>. Reaching 4x within 30 minutes is <b className="good">✓✓</b>, and 10x
-            within an hour is <b className="good">✓✓✓</b>. If it misses, or halves before doubling, it&apos;s
-            a loss <b className="bad">✕</b>, marked stopped out <b className="bad">⊘</b> when it halved and
-            also doubled within the day. <b>↗</b> marks a miss that didn&apos;t halve in its first 30 minutes
-            and doubled later.
-          </p>
+          <div className="tour-pair">
+            <div>
+              <span className="pill pill-mine">
+                <SlidersIcon size={12} /> Your alert
+              </span>
+              <p>
+                A coin that matches one of the filters you&apos;ve switched on in the Filters tab. If a rule
+                needs a wallet check, it waits for that check before it pings you.
+              </p>
+            </div>
+            <div>
+              <span className="pill pill-model">
+                <BrainIcon size={12} /> Model
+              </span>
+              <p>
+                A robot that studied thousands of past coins says &ldquo;this one!&rdquo;, with how sure it is
+                from 0 to 100.
+              </p>
+            </div>
+          </div>
           <div className="tour-goal">
-            <span className="num">{t.hitRate2xPct}%</span>
-            <span>
-              The goal: {t.hitRate2xPct}% of alerts double, {t.hitRate4xPct}% reach 4x, and the models catch
-              75% of all the tokens that double.
-            </span>
+            <ul className="tour-tiers" aria-label="How alerts are graded">
+              <li>
+                <b className="good">✓</b>
+                <b className="tier-x num">2x</b>
+                <span>in 15 min</span>
+              </li>
+              <li>
+                <b className="good">✓✓</b>
+                <b className="tier-x num">4x</b>
+                <span>in 30 min</span>
+              </li>
+              <li>
+                <b className="good">✓✓✓</b>
+                <b className="tier-x num">10x</b>
+                <span>in 1 hour</span>
+              </li>
+            </ul>
+            <p>
+              Either way, every alert is graded from its price when it alerted. Our goal:{" "}
+              <b>{t.hitRate2xPct}%</b> of alerts double, <b>{t.hitRate4xPct}%</b> reach 4x, and the models
+              catch <b>75%</b> of all the coins that double.
+            </p>
           </div>
         </>
-      ),
-    },
-    {
-      title: "Reading a card",
-      art: <CardMock />,
-      body: (
-        <ol className="tour-legend">
-          <li>Who called it: your filter, or a model and how sure it is.</li>
-          <li>Market cap when it alerted, right now, and the best it has reached.</li>
-          <li>
-            Who holds it: the biggest 10 wallets&apos; share, and how many are fresh or empty. Lower is
-            usually safer.
-          </li>
-          <li>
-            Snipers: how many of the top 25 holders were among the first 25 buyers. DS means the creator sold,
-            DH means they still hold.
-          </li>
-          <li>The grade so far.</li>
-        </ol>
       ),
     },
     {
@@ -338,24 +305,6 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
       ? []
       : [
           {
-            title: "Who trades alongside the KOLs",
-            art: <SideCheckArt />,
-            body: (
-              <>
-                <p className="tour-lead">
-                  The Side Wallet Checker on the Utilities tab is free. It ranks the KOLs by how many of our
-                  coins they bought in the last 30 days. Open one to see the wallets that bought the same
-                  coins within minutes of it, and compare any of them with the KOL trade by trade.
-                </p>
-                <p className="tour-lead">
-                  Wallets that clear the bar earn the Possible Side label you see on the bubble map. Bots and
-                  likely bots (wallets that shadow many KOLs at once) are left out, and the labelled wallets
-                  export in one tap.
-                </p>
-              </>
-            ),
-          },
-          {
             title: "Make the feed yours",
             art: <YoursArt />,
             body: (
@@ -416,62 +365,4 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
         ]
       : []),
   ];
-}
-
-/** A pretend alert card with numbered spots, for the "Reading a card" page. */
-function CardMock() {
-  return (
-    <div className="tour-card" role="img" aria-label="An example alert card with five numbered parts">
-      <div className="tour-card-head">
-        <span className="tour-card-name">
-          <span className="tour-card-logo" aria-hidden />
-          <b>FROGGO</b>
-        </span>
-        <span className="tour-card-pills">
-          <span className="pill pill-model">
-            <BrainIcon size={11} /> Model · 82
-          </span>
-          <Spot n={1} />
-        </span>
-      </div>
-      <div className="tour-card-stats">
-        <div>
-          <span className="faint">Alert</span>
-          <b className="num">$14k</b>
-        </div>
-        <div>
-          <span className="faint">Now</span>
-          <b className="num">$33k</b>
-        </div>
-        <div>
-          <span className="faint">Peak</span>
-          <b className="num good">2.6x</b>
-        </div>
-        <Spot n={2} />
-      </div>
-      <div className="tour-card-chips">
-        <span className="pill">Top 10 · 19%</span>
-        <span className="pill">Fresh · 10%</span>
-        <span className="pill">Empty · 20%</span>
-        <Spot n={3} />
-      </div>
-      <div className="tour-card-chips">
-        <span className="pill">Snipers · 4/25</span>
-        <span className="pill">DS</span>
-        <Spot n={4} />
-        <span className="tour-card-grade">
-          <span className="pill tour-win">✓ 2x win</span>
-          <Spot n={5} />
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function Spot({ n }: { n: number }) {
-  return (
-    <span className="tour-spot num" aria-hidden>
-      {n}
-    </span>
-  );
 }
