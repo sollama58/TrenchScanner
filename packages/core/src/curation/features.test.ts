@@ -176,7 +176,16 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("launchpadStonks");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("transferWalletCount");
+  });
+
+  it("records Transferred % and the transfer count, recorded only, null while unread", () => {
+    const f = buildCandidateFeatures(scored({ transferredSupplyPct: 3, transferWalletCount: 5 }));
+    expect(f.transferredSupplyPct).toBe(3);
+    expect(f.transferWalletCount).toBe(5);
+    expect(buildCandidateFeatures(scored()).transferredSupplyPct).toBeNull();
+    expect(RETIRED_LEARNER_INPUTS.has("transferredSupplyPct")).toBe(true);
+    expect(RETIRED_LEARNER_INPUTS.has("transferWalletCount")).toBe(true);
   });
 
   it("rows banked before the short-window capture replay those fields as unknown", () => {

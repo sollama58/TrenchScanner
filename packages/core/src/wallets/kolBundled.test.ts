@@ -70,3 +70,27 @@ describe("bundledSupply", () => {
     ).toEqual({ pct: 6, count: 2 });
   });
 });
+
+describe("transfers out of a KOL's bundle", () => {
+  const ties = [{ wallet: "side", kolWallet: "kol" }];
+  it("takes in every holder the KOL or its bundle sent the coin to, and on from there", () => {
+    // kol 2 + side 1.5 + mate 0.5; mate sent to far (two steps out by funding), far on to x.
+    const transfers = [
+      { from: "mate", to: "far", pct: 0.7 },
+      { from: "far", to: "x", pct: 0.4 },
+    ];
+    expect(kolBundledPct({ holders, clusters, sameTimeClusters, isKol, ties, transfers })).toBe(8.7);
+    expect(kolBundledPct({ holders, clusters, sameTimeClusters, isKol, ties })).toBe(4);
+  });
+  it("leaves out dust and sends into the bundle", () => {
+    const transfers = [
+      { from: "side", to: "x", pct: 0.01 },
+      { from: "min", to: "kol", pct: 0.5 },
+    ];
+    expect(kolBundledPct({ holders, clusters, sameTimeClusters, isKol, ties, transfers })).toBe(4);
+  });
+  it("makes a lone KOL that sent supply out a bundle", () => {
+    const transfers = [{ from: "kol", to: "min", pct: 0.3 }];
+    expect(kolBundledPct({ holders, clusters, sameTimeClusters, isKol, ties: [], transfers })).toBe(2.3);
+  });
+});

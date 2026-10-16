@@ -8,8 +8,8 @@ import { BugIcon, CheckIcon, CloseIcon, StarIcon, TrashIcon } from "./Icons";
 /** Mirrors apps/api/src/routes/feedback.ts. */
 const MESSAGE_MAX = 2000;
 const CONTACT_MAX = 200;
-/** Under the API's 900,000-character cap, with room to spare. */
-const SCREENSHOT_TARGET = 850_000;
+/** Under the API's 500,000-character cap (FEEDBACK_SCREENSHOT_MAX), with room to spare. */
+const SCREENSHOT_TARGET = 450_000;
 
 /** Where the reader is when they open the form; sent along so admins don't have to ask. */
 export interface ReportWhere {

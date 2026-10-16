@@ -1679,7 +1679,7 @@ function StatsCard({ card }: { card: Card }) {
               (r.cexPct === null ? "Not checked" : (cexCountText(r.cexCount, r.cexHolders) ?? pct(r.cexPct)))}
           </dd>
         </div>
-        <div title="How many of the launch's first 25 buyers still hold it">
+        <div title="How many of the launch's first 25 buyers still hold 0.1% of the supply or more">
           <dt>First buyers holding</dt>
           <dd className="num">
             {wait(r.firstHolding === null, "2.4em") ??

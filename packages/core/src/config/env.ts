@@ -382,12 +382,22 @@ const envSchema = z.object({
   CLEANUP_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(4),
   SNAPSHOT_RETENTION_DAYS: z.coerce.number().positive().default(30),
   STALE_TOKEN_RETENTION_DAYS: z.coerce.number().positive().default(14),
+  // The trade tape's per-wallet rows (TokenWalletActivity, ~1.2 KB a row at ~55k rows a day, the
+  // second-largest table on 2026-10-16) and the per-coin tape reads (TokenTradeTape) are kept this
+  // many days, on their own horizon since 2026-10-16 (database audit, user decision: "option B").
+  // Nothing trains on them: the wallet risk score reads a wallet's recent coins, the KOL
+  // side-wallet windows (kolSideWalletsJob.ts, walletBundle.ts) read back up to "30d" and show
+  // whatever this keeps, and the tape job itself re-reads at most 10 days back (LOOKBACK_MS in
+  // tradeTapeJob.ts), so 14 days loses no read it would redo. 0 falls back to
+  // SNAPSHOT_RETENTION_DAYS.
+  TWA_RETENTION_DAYS: z.coerce.number().nonnegative().default(14),
   // pipeline-watch tells the admins' private chats, and fails the strict health check, once the
   // database passes this size. A full disk stops every write at once (scans, alerts, outcomes,
   // the ledgers) and leaves no room to reclaim space in place; on 2026-10-16 the database was
   // growing 1.3 GB a day toward a 15 GB disk with nothing watching. Keep it about 3 GB under the
   // Postgres disk on Render (the database -> Info) and raise both together; 0 turns it off.
-  DB_DISK_ALERT_MB: z.coerce.number().min(0).default(12_000),
+  // 27 GB since the disk went to 30 GB on 2026-10-16.
+  DB_DISK_ALERT_MB: z.coerce.number().min(0).default(27_000),
   // The short horizon for snapshots of tokens nothing else points at - no CandidateOutcome, Match,
   // curated or shadow call, or AI verdict (see untrackedTokenIds in cleanupJob.ts). Those are
   // almost all launches that failed the rug screen on every scan, and they write most of the
@@ -420,11 +430,15 @@ const envSchema = z.object({
   // and a few seconds a minute, well inside DexScreener's limits.
   // Retention is deliberately much longer than SNAPSHOT_RETENTION_DAYS - these rows ARE the
   // training set, they carry their own copy of the features precisely so snapshots can be pruned
-  // on the normal horizon (Match and CuratedAlert keep their own outcome copies). 60 days (90
-  // until 2026-10-14, user decision P21): training reads 21 days, the exam and calibration inside
-  // that, the Lighthouse 72 hours; features grew to ~3 KB a row, so 90 days headed for ~4 GB.
-  // What a shorter horizon loses: research exports and hit-rate reports over 60-180 days, and the
-  // curated panel's base rate, which pools every event row still kept.
+  // on the normal horizon (Match and CuratedAlert keep their own outcome copies). 90 days (60
+  // from 2026-10-14, P21, to 2026-10-16, when the disk went from 15 to 30 GB and the user asked
+  // for 90 days of every training row and 180 of the most relevant): training reads 21 days, the
+  // exam and calibration inside that, the Lighthouse 72 hours; features are ~3 KB a row, so 90
+  // days is ~4 GB. Past CANDIDATE_OUTCOME_RETENTION_DAYS only the rows
+  // CANDIDATE_OUTCOME_HIT_RETENTION_DAYS keeps remain - the doublers and the curated calls - so
+  // that tail is winners only: a training window, a base rate or a hit-rate report that reached
+  // into it would read a 100% hit rate. Every reader stays inside the shorter horizon
+  // (CURATOR_TRAINING_WINDOW_DAYS, FITNESS_WINDOW_DAYS, stats MAX_WINDOW_DAYS = 90).
   CANDIDATE_SAMPLE_SPACING_MINUTES: z.coerce.number().positive().default(60),
   // The "looks ready" sample (CandidateOutcome.sampleKind = "event"): at most one per token per
   // this window, taken the first scan the token passes passesEventPreGate. The curators decide
@@ -432,7 +446,13 @@ const envSchema = z.object({
   CANDIDATE_EVENT_SPACING_MINUTES: z.coerce.number().positive().default(60),
   CANDIDATE_WATCH_INTERVAL_MINUTES: z.coerce.number().min(0.25).default(1),
   CANDIDATE_WATCH_MAX_BATCH: z.coerce.number().int().positive().default(2000),
-  CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(60),
+  CANDIDATE_OUTCOME_RETENTION_DAYS: z.coerce.number().positive().default(90),
+  // The most relevant training rows stay this long: the ones that doubled (hit2xIn1h), the label
+  // every model is trained toward, and every row a curated call points at. Past
+  // CANDIDATE_OUTCOME_RETENTION_DAYS and up to here, those are what remain, for research exports
+  // and postmortems of the calls that worked. 0, or no more than the general horizon, keeps nothing
+  // longer. User decision 2026-10-16.
+  CANDIDATE_OUTCOME_HIT_RETENTION_DAYS: z.coerce.number().nonnegative().default(180),
   // Graded "match" rows (the anchors user-filter alerts are graded from) are kept this long instead:
   // their verdict is copied onto the Match rows when the window closes, they never train a model,
   // and at ~6k rows (~28MB) a day they were 40% of the table's growth. 0 keeps them on the
@@ -446,7 +466,17 @@ const envSchema = z.object({
   // history pages, which need the card's snapshot, end at this age. Never less than
   // SNAPSHOT_RETENTION_DAYS (the stage waits that long): a match's peak is tracked from its
   // token's snapshots until then. 0 keeps every match in Match.
-  MATCH_ARCHIVE_DAYS: z.coerce.number().nonnegative().default(60),
+  // 30 days (60 until 2026-10-16, user decision: the Live feed keeps 30 days): the feed's history
+  // pages end where the snapshots they need end anyway.
+  MATCH_ARCHIVE_DAYS: z.coerce.number().nonnegative().default(30),
+  // Archived matches are deleted after this many days (the "matchArchiveRetention" stage), except
+  // the ones that ran: a hundred-percent gain (hitHundredPctAt or peakReturnPct >= 100) or a 2x
+  // in the hour (hit2xIn1h), which stay MATCH_ARCHIVE_HIT_RETENTION_DAYS. The Leaderboard and the
+  // hit-rate report read the archive; past the first horizon only winners remain, so no report
+  // window reaches beyond it (stats MAX_WINDOW_DAYS = 90). Before 2026-10-16 the archive was
+  // never pruned. 0 keeps every archived row. User decision 2026-10-16: 90 and 180.
+  MATCH_ARCHIVE_RETENTION_DAYS: z.coerce.number().nonnegative().default(90),
+  MATCH_ARCHIVE_HIT_RETENTION_DAYS: z.coerce.number().nonnegative().default(180),
 
   // Curated Alerts feed (see packages/core/src/curation/curator.ts). CURATED_MIN_SCORE is the
   // heuristic curator's composite-score floor - env-tunable so emission volume can be steered in

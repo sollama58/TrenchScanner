@@ -260,6 +260,12 @@ export interface Snapshot {
   /** Of the launch's first 25 buyers (firstBuyersSeen while fewer), how many still hold it. */
   firstBuyersHolding?: number | null;
   firstBuyersSeen?: number | null;
+  /**
+   * Of those first buyers, how many hold 0.1% of the supply or more: the "First buyers holding"
+   * shown on the card, the token view and the share images (user decision 2026-10-16). Null on
+   * scans before then.
+   */
+  firstBuyersHoldingCut?: number | null;
   /** Whether the dev still holds the token; null when unknown. */
   devHolding?: boolean | null;
   ageMinutes: number | null;
@@ -917,6 +923,7 @@ export interface FilterInput {
   maxLinkedCreatorPct: number | null;
   maxKolBundledPct: number | null;
   maxBundledSupplyPct: number | null;
+  maxTransferredSupplyPct: number | null;
   minLiveHolderCount: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;

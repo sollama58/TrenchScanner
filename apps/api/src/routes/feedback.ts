@@ -16,8 +16,12 @@ import { clientIp } from "../clientIp.js";
 
 export const FEEDBACK_MESSAGE_MAX = 2000;
 export const FEEDBACK_CONTACT_MAX = 200;
-/** A downscaled JPEG of a phone or desktop screen is 100-400KB as a data URL; this leaves room. */
-export const FEEDBACK_SCREENSHOT_MAX = 900_000;
+/**
+ * A downscaled JPEG of a phone or desktop screen is 100-400KB as a data URL; this leaves room.
+ * 500,000 since 2026-10-16 (900,000 before): the column is the report table's only weight, the
+ * dialog shrinks the image to fit, and the nightly cleanup drops it a week after the report is done.
+ */
+export const FEEDBACK_SCREENSHOT_MAX = 500_000;
 /** Reports one sender may file in a day. */
 export const FEEDBACK_DAILY_CAP = 20;
 /** Guest reports, from every guest together, in an hour. Signed-in senders are not counted. */

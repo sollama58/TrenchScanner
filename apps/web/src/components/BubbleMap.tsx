@@ -239,7 +239,12 @@ function useSideToggle(graph: BubbleGraph | null): SideToggle {
   return { sides, groups, showSides, shown: showSides ? groups : NO_SIDES, setSideOn };
 }
 /** Each KOL on the map with the holders tied to it (kolControl); none without a map. */
-function useKols(graph: BubbleGraph | null, groups: readonly SideGroup[], names: WalletNames): KolControl[] {
+function useKols(
+  graph: BubbleGraph | null,
+  groups: readonly SideGroup[],
+  names: WalletNames,
+  transfers: boolean,
+): KolControl[] {
   return useMemo(
     () =>
       graph
@@ -251,9 +256,10 @@ function useKols(graph: BubbleGraph | null, groups: readonly SideGroup[], names:
                 ? [{ wallet: n.wallet, name: names[n.wallet]!.name }]
                 : [],
             ),
+            transfers ? graph.transferLinks : [],
           )
         : [],
-    [graph, groups, names],
+    [graph, groups, names, transfers],
   );
 }
 
@@ -327,7 +333,7 @@ function MapView({
   const traits = new Map(traitShares(graph).map((t) => [t.trait, t]));
   const { sides, groups, showSides, setSideOn } = side;
   // Each KOL and the supply it may control: side wallets, KOL funded wallets and their linked holders.
-  const kols = useKols(graph, groups, names);
+  const kols = useKols(graph, groups, names, showTransfers);
   // KOL Bundled % in place of the old cluster count (user ask 2026-10-15): the scan's figure, else
   // the map's own KOL groups, as the share image reads it.
   const kolBundled = scanKolBundled ?? (kols.length > 0 ? kolBundledShare(kols) : null);
@@ -579,6 +585,7 @@ const KOL_TIE_TEXT: Record<KolTie, string> = {
   side: "Possible side",
   cluster: "Same funder",
   "same-minute": "Same minute",
+  transfer: "Got a transfer",
 };
 
 /** "4 wallets · 1 KOL funded · 2 possible sides": what a KOL's row holds. */
@@ -587,7 +594,7 @@ function kolSummary(k: KolControl): string {
   const known = count("known");
   const funded = count("funded");
   const side = count("side");
-  const linked = count("cluster") + count("same-minute");
+  const linked = count("cluster") + count("same-minute") + count("transfer");
   return [
     `${k.wallets.length} wallet${k.wallets.length === 1 ? "" : "s"}`,
     known > 0 ? `${known} known side${known === 1 ? "" : "s"}` : null,
@@ -1835,7 +1842,7 @@ export function BubbleMapSection({
   const names = nameToggle.mapNames;
   const { showCex, setCexOn } = useCexToggle(graph);
   const side = useSideToggle(graph);
-  const kols = useKols(graph, side.groups, names);
+  const kols = useKols(graph, side.groups, names, showTransfers);
   const label = tokenLabel(token);
   if (!graph || !graph.nodes.some((n) => n.kind === "holder")) {
     // Still on its way: the map's place is held at its size, so it fills in without a jump.

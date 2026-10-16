@@ -195,6 +195,14 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
     return false;
   }
 
+  if (
+    filter.maxTransferredSupplyPct != null &&
+    token.transferredSupplyPct !== undefined &&
+    token.transferredSupplyPct > filter.maxTransferredSupplyPct
+  ) {
+    return false;
+  }
+
   // A floor, so it fails closed: without a fresh quote the count is unknown.
   if (filter.minLiveHolderCount != null && (token.freshQuote?.holderCount ?? 0) < filter.minLiveHolderCount) {
     return false;
@@ -209,8 +217,9 @@ export function matchesFilter(token: ScoredToken, filter: FilterCriteria): boole
   }
 
   // Unknown until the launch's first buyers have been read: the floor fails closed, the ceiling
-  // skips, per the split above.
-  const firstBuyersHolding = token.tradeFlow?.firstBuyersHolding ?? null;
+  // skips, per the split above. Counts the buyers holding 0.1% of the supply or more, the figure
+  // the card shows (user decision 2026-10-16), not the models' above-dust count.
+  const firstBuyersHolding = token.tradeFlow?.firstBuyersHoldingCut ?? null;
   if (
     filter.minFirstBuyersHolding != null &&
     (firstBuyersHolding === null || firstBuyersHolding < filter.minFirstBuyersHolding)

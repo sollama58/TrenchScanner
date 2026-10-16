@@ -477,7 +477,7 @@ export function AlertCard({
               title={
                 firstHolding === null
                   ? "First buyers holding: not checked yet for this token"
-                  : `First buyers holding: ${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold it${
+                  : `First buyers holding: ${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold 0.1% of the supply or more${
                       buyersAtAlert ? ", at alert time" : ", from a scan after the alert"
                     }`
               }
@@ -768,8 +768,9 @@ export function cardReadings(card: Card) {
   const kolFrom = s.kolBundledPct != null ? s : latest;
   // Transferred Supply %, the same way.
   const transferFrom = s.transferredSupplyPct != null ? s : latest;
-  // The same fallback for the first-buyers count, read from the launch's first transactions.
-  const buyersFrom = s.firstBuyersHolding != null ? s : latest;
+  // The same fallback for the first-buyers count, read from the launch's first transactions: the
+  // buyers holding 0.1% of the supply or more (user decision 2026-10-16), kept since then.
+  const buyersFrom = s.firstBuyersHoldingCut != null ? s : latest;
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
   const devHolding = latest?.devHolding ?? s.devHolding ?? null;
   // Where the creator fee goes (TokenSage), under the Dev tile's tooltip: about 14% of coins
@@ -805,7 +806,7 @@ export function cardReadings(card: Card) {
         ? { linked: transferFrom.transferWalletCount, of: transferFrom.transferHoldersChecked }
         : null,
     transferAtAlert: transferFrom === s,
-    firstHolding: buyersFrom?.firstBuyersHolding ?? null,
+    firstHolding: buyersFrom?.firstBuyersHoldingCut ?? null,
     firstSeen: buyersFrom?.firstBuyersSeen ?? null,
     buyersAtAlert: buyersFrom === s,
     devHolding,

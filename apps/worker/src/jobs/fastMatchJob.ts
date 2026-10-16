@@ -275,6 +275,7 @@ export async function runFastMatchCycle(
         ...EMPTY_TRADE_FLOW,
         firstBuyersHolding: entry.snapshot.firstBuyersHolding,
         firstBuyersSeen: entry.snapshot.firstBuyersSeen,
+        firstBuyersHoldingCut: entry.snapshot.firstBuyersHoldingCut,
       };
     }
     // TokenSage's read too, so a narrative criterion and the score's narrative part are applied
