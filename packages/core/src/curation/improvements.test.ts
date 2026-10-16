@@ -44,6 +44,7 @@ import {
   type ScoredOutcome,
   type TrainingRow,
 } from "./trainer.js";
+import { MAX_EVENT_AGE_MINUTES } from "./curator.js";
 import { LEGACY_LABEL_RULE, CURRENT_LABEL_RULE } from "./labels.js";
 import type { ScoredToken } from "../types.js";
 
@@ -368,8 +369,10 @@ describe("pseudo-event decision rows", () => {
     expect(isDecisionRow(row({ mcapUsd: 50_000, buys1h: 60, sells1h: 40 }))).toBe(false);
     expect(isDecisionRow(row({}, "event"))).toBe(true);
     // The age cap applies to stored event rows too (banked before the cap) and to pseudo-events.
-    expect(isDecisionRow(row({ ageMinutes: 361 }, "event"))).toBe(false);
-    expect(isDecisionRow(row({ ageMinutes: 360, priceChange5mPct: 30 }, "event"))).toBe(true);
+    expect(isDecisionRow(row({ ageMinutes: MAX_EVENT_AGE_MINUTES + 1 }, "event"))).toBe(false);
+    expect(isDecisionRow(row({ ageMinutes: MAX_EVENT_AGE_MINUTES, priceChange5mPct: 30 }, "event"))).toBe(
+      true,
+    );
     // So does the old-coin five-minute test (2026-10-15): an hour old wants the last 5 minutes up 25%+.
     expect(isDecisionRow(row({ ageMinutes: 90, priceChange5mPct: 10 }, "event"))).toBe(false);
     expect(isDecisionRow(row({ ageMinutes: 90 }, "event"))).toBe(false);

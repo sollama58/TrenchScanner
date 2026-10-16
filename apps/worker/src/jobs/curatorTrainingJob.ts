@@ -1152,7 +1152,8 @@ async function loadRowsOfKind(
   // Decision moments older than the event pre-gate's age cap were banked before the cap existed
   // (2026-10-05): a live decision can no longer be one, so they neither train nor grade.
   // Background rows are held to the same cap (data-correctness audit 2026-10-16): 27% of them
-  // were coins over six hours old doubling about 1%, a market no decision can come from.
+  // were coins over six hours old doubling about 1%, a market no decision can come from. The cap
+  // itself is 3 hours since 2026-10-16 (age-cap experiment, same note folder).
   const ageSql =
     sampleKind === "event" || sampleKind === "hourly"
       ? Prisma.sql`AND COALESCE(("features"::jsonb ->> 'ageMinutes')::float8, 0) <= ${MAX_EVENT_AGE_MINUTES}`
