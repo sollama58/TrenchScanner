@@ -247,6 +247,24 @@ describe("buildCandidateFeatures - audit additions", () => {
     expect(f.dexBoosted).toBeNull();
     expect(f.hasDescription).toBeNull();
   });
+
+  it("stores an unread social as missing, a read one as 0/1, and replays it the same way", () => {
+    // Token.hasTwitter / hasWebsite null = never read (2026-10-16 data audit): never a 0.
+    const unread = buildCandidateFeatures(base);
+    expect(unread.hasTwitter).toBeNull();
+    expect(unread.hasWebsite).toBeNull();
+    const none = buildCandidateFeatures({ ...base, hasTwitter: false, hasWebsite: false });
+    expect(none.hasTwitter).toBe(0);
+    expect(none.hasWebsite).toBe(0);
+    const linked = buildCandidateFeatures({ ...base, hasTwitter: true, hasWebsite: true });
+    expect(linked.hasTwitter).toBe(1);
+    expect(linked.hasWebsite).toBe(1);
+    // The Rules replay reads the stored vector back through scoredFromFeatures: missing stays
+    // unknown, so a replayed decision sees what the live one saw.
+    expect(scoredFromFeatures(unread, 1, 100_000).hasTwitter).toBeUndefined();
+    expect(scoredFromFeatures(none, 1, 100_000).hasTwitter).toBe(false);
+    expect(scoredFromFeatures(linked, 1, 100_000).hasWebsite).toBe(true);
+  });
 });
 
 describe("buildCandidateFeatures - livestream", () => {

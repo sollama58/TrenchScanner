@@ -81,10 +81,35 @@ describe("knownSocial", () => {
     expect(knownSocial(true, false)).toBe(true);
   });
 
-  it("is a known none only when the candidate said so, and unknown otherwise", () => {
+  it("is a known none when the candidate or the row read one, and unknown when neither has read", () => {
     expect(knownSocial(false, false)).toBe(false);
     expect(knownSocial(false, undefined)).toBe(false);
-    expect(knownSocial(undefined, false)).toBeUndefined();
+    expect(knownSocial(false, null)).toBe(false);
+    // A stored false is a read since 2026-10-16; null is the row that no source has read.
+    expect(knownSocial(undefined, false)).toBe(false);
+    expect(knownSocial(undefined, null)).toBeUndefined();
     expect(knownSocial(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe("tokenChanges - socials on a row no source has read", () => {
+  const unread = { ...existing, hasTwitter: null, hasWebsite: null } as unknown as Token;
+  const base = { narrativeTags: ["animal"] };
+
+  it("settles the row to a read none, and adds a link, but never clears one", () => {
+    expect(tokenChanges(unread, { ...base, hasTwitter: false, hasWebsite: true })).toEqual({
+      hasTwitter: false,
+      hasWebsite: true,
+    });
+    expect(tokenChanges({ ...existing, hasTwitter: true } as Token, { ...base, hasTwitter: false })).toEqual(
+      {},
+    );
+    expect(tokenChanges({ ...existing, hasWebsite: false } as Token, { ...base, hasWebsite: false })).toEqual(
+      {},
+    );
+  });
+
+  it("leaves it unread when the re-scan's candidate carried no socials either", () => {
+    expect(tokenChanges(unread, base)).toEqual({});
   });
 });

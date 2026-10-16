@@ -369,6 +369,9 @@ describe("parseJupiterMovingLaunches", () => {
       createdAt: new Date("2026-10-15T12:00:00Z"),
     });
     expect(coins[0]!.description).toBeUndefined();
+    // The lists carry no socials: unknown, never a false the row would store as "none".
+    expect(coins[0]!.hasTwitter).toBeUndefined();
+    expect(coins[0]!.hasWebsite).toBeUndefined();
     expect(parseJupiterMovingLaunches({ error: "x" })).toEqual([]);
   });
 });

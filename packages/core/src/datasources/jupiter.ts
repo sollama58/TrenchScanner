@@ -344,9 +344,8 @@ export function parseJupiterMovingLaunches(body: unknown): DiscoveredCoin[] {
             ? priceUsd * PUMP_TOTAL_SUPPLY
             : (finite(t.fdv) ?? finite(t.mcap)),
       launchpad,
-      hasTwitter: false,
-      hasTelegram: false,
-      hasWebsite: false,
+      // No socials on the list: left undefined (unknown), never false. The scan stored a false
+      // here until 2026-10-16 and the models read "0 = unread" as a signal (data audit).
     });
   }
   return out;

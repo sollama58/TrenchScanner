@@ -1325,6 +1325,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     kolRecentSellers: scored.kolRecentSellers ?? null,
     ageMinutes: scored.ageMinutes ?? null,
     graduated: scored.graduated === undefined ? null : scored.graduated ? 1 : 0,
+    // Unknown (no source has read the coin's socials: Token.hasTwitter / hasWebsite null since
+    // 2026-10-16, data-correctness audit, user decision) is stored as missing, never as 0; the
+    // replay reads it back the same way (scoredFromFeatures), so live and replayed decisions agree.
     hasTwitter: scored.hasTwitter === undefined ? null : scored.hasTwitter ? 1 : 0,
     hasTelegram: scored.hasTelegram === undefined ? null : scored.hasTelegram ? 1 : 0,
     hasWebsite: scored.hasWebsite === undefined ? null : scored.hasWebsite ? 1 : 0,

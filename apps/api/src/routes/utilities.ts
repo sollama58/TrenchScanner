@@ -777,9 +777,10 @@ async function upsertLookedUpToken(mint: string, reading: CandidateToken, now: D
         reading.pairCreatedAt instanceof Date && !Number.isNaN(reading.pairCreatedAt.getTime())
           ? reading.pairCreatedAt
           : now,
-      hasTwitter: reading.hasTwitter ?? false,
+      // Unknown (null) unless the pair carried an info block - never a false the row never read.
+      hasTwitter: reading.hasTwitter,
       hasTelegram: reading.hasTelegram ?? false,
-      hasWebsite: reading.hasWebsite ?? false,
+      hasWebsite: reading.hasWebsite,
       discoverySource: "utility",
       ...live,
     },

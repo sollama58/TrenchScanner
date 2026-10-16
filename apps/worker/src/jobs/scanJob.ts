@@ -2307,9 +2307,11 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
       name: coin.name,
       imageUrl: coin.imageUrl,
       firstSeenAt: coin.createdAt ?? new Date(),
-      hasTwitter: coin.hasTwitter ?? false,
+      // Null until a source that carries the socials has read them; a stream, Jupiter or
+      // DexScreener-list row stored false here until 2026-10-16 (data audit, user decision).
+      hasTwitter: coin.hasTwitter,
       hasTelegram: coin.hasTelegram ?? false,
-      hasWebsite: coin.hasWebsite ?? false,
+      hasWebsite: coin.hasWebsite,
       twitterUrl: coin.twitterUrl,
       websiteUrl: coin.websiteUrl,
       description: coin.description?.slice(0, 2_000),
@@ -2378,9 +2380,11 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
           where: { id: token.id },
           data: {
             description: (coin.description ?? "").slice(0, 2_000),
-            hasTwitter: token.hasTwitter || (coin.hasTwitter ?? false),
+            // A link already recorded stays; otherwise the detail source's own reading, which may
+            // be a known "none" (false) on a row that was null, or nothing (left as it was).
+            hasTwitter: token.hasTwitter || coin.hasTwitter,
             hasTelegram: token.hasTelegram || (coin.hasTelegram ?? false),
-            hasWebsite: token.hasWebsite || (coin.hasWebsite ?? false),
+            hasWebsite: token.hasWebsite || coin.hasWebsite,
             // The links and image are filled by the backfills below, on rows still missing them.
           },
         })
@@ -2544,12 +2548,28 @@ export async function loadCandidatePriors(
 
 /**
  * A social link as the scored token carries it: present if either the cycle's candidate or the
- * stored Token row has it; a known "none" only when the candidate said so; unknown otherwise.
- * Exported for tests.
+ * stored Token row has it; a known "none" when the candidate read the socials and said so, or
+ * when the row records a read that said so; unknown (undefined) when neither has read them.
+ * Since 2026-10-16 the row's null is that "never read" (data-correctness audit, user decision):
+ * before, an unread row stored false, and the model input doubled as "found by the stream or
+ * Jupiter and never filled in". The curated features then store the unknown as a missing input
+ * (buildCandidateFeatures), never as 0. Exported for tests.
  */
-export function knownSocial(own: boolean | undefined, stored: boolean | undefined): boolean | undefined {
+export function knownSocial(
+  own: boolean | undefined,
+  stored: boolean | null | undefined,
+): boolean | undefined {
   if (own || stored) return true;
-  return own;
+  return own ?? stored ?? undefined;
+}
+
+/**
+ * What the Token row knows about one social link: a recorded URL is a link whatever the bit says
+ * (the URL columns were filled on rows the bit predates); otherwise the bit, null read as unknown.
+ */
+function storedSocial(bit: boolean | null | undefined, url: string | null | undefined): boolean | undefined {
+  if (url) return true;
+  return bit ?? undefined;
 }
 
 /** What a re-scan may set on a Token row - see tokenChanges. */
@@ -2574,25 +2594,34 @@ interface TokenScanFields {
  *  - imageUrl only when there is one. DexScreener has no artwork for almost any token in this
  *    band, so assigning it unconditionally on re-scan would blank the Pump.fun image that
  *    discovery already recorded.
- *  - Socials only ever go from false to true: a re-scan's candidate comes from DexScreener, which
- *    reports socials for almost nothing in this band, while discovery read them from Pump.fun's
- *    own metadata. Overwriting with `?? false` erased real knowledge on the first re-scan - the
- *    badges vanished from the card and the scoring's social component silently lost its input.
+ *  - Socials only ever go from unread or false to true: a re-scan's candidate comes from
+ *    DexScreener, which reports socials for almost nothing in this band, while discovery read them
+ *    from Pump.fun's own metadata. Overwriting with `?? false` erased real knowledge on the first
+ *    re-scan - the badges vanished from the card and the scoring's social component silently lost
+ *    its input. A candidate that did read them (a pair with an info block) settles a row still
+ *    null to its false; an unread candidate leaves the row as it is.
  *  - firstInBandAt is stamped once and kept.
  * Exported for tests.
  */
 export function tokenChanges(existing: Token | null, f: TokenScanFields): Prisma.TokenUpdateInput {
   const out: Prisma.TokenUpdateInput = {};
   const differs = (a: unknown, b: unknown) => existing === null || a !== b;
+  const social = (read: boolean | undefined, stored: boolean | null | undefined): boolean | undefined => {
+    if (read && !stored) return true;
+    if (read === false && stored == null) return false;
+    return undefined;
+  };
   // Set when the candidate has one, as before: an absent value never cleared a stored one.
   if (f.symbol !== undefined && differs(existing?.symbol, f.symbol)) out.symbol = f.symbol;
   if (f.name !== undefined && differs(existing?.name, f.name)) out.name = f.name;
   if (f.pairAddress !== undefined && differs(existing?.pairAddress, f.pairAddress))
     out.pairAddress = f.pairAddress;
   if (f.imageUrl && differs(existing?.imageUrl, f.imageUrl)) out.imageUrl = f.imageUrl;
-  if (f.hasTwitter && !existing?.hasTwitter) out.hasTwitter = true;
+  const twitter = social(f.hasTwitter, existing?.hasTwitter);
+  if (twitter !== undefined) out.hasTwitter = twitter;
   if (f.hasTelegram && !existing?.hasTelegram) out.hasTelegram = true;
-  if (f.hasWebsite && !existing?.hasWebsite) out.hasWebsite = true;
+  const website = social(f.hasWebsite, existing?.hasWebsite);
+  if (website !== undefined) out.hasWebsite = website;
   if (f.firstInBandAt && !existing?.firstInBandAt) out.firstInBandAt = f.firstInBandAt;
   // Only a measured reading is written; an unknown one never clears the last known.
   if (
@@ -2773,12 +2802,14 @@ async function processCandidate(
       // DexScreener to have filled socials in" (notes/tokensage-data-eval-2026-10-07.md).
       hasTwitter: knownSocial(
         candidate.hasTwitter,
-        existingToken?.hasTwitter || Boolean(existingToken?.twitterUrl),
+        storedSocial(existingToken?.hasTwitter, existingToken?.twitterUrl),
       ),
-      hasTelegram: knownSocial(candidate.hasTelegram, existingToken?.hasTelegram),
+      // hasTelegram keeps the old column shape (retired learner input): a stored false there
+      // still means "none or never read", so only a stored true counts.
+      hasTelegram: knownSocial(candidate.hasTelegram, existingToken?.hasTelegram || undefined),
       hasWebsite: knownSocial(
         candidate.hasWebsite,
-        existingToken?.hasWebsite || Boolean(existingToken?.websiteUrl),
+        storedSocial(existingToken?.hasWebsite, existingToken?.websiteUrl),
       ),
     },
     onChain,
@@ -2856,9 +2887,9 @@ async function processCandidate(
             name: candidate.name,
             pairAddress: candidate.pairAddress,
             imageUrl: candidate.imageUrl,
-            hasTwitter: candidate.hasTwitter ?? false,
+            hasTwitter: candidate.hasTwitter,
             hasTelegram: candidate.hasTelegram ?? false,
-            hasWebsite: candidate.hasWebsite ?? false,
+            hasWebsite: candidate.hasWebsite,
             firstInBandAt,
             narrativeTags: scored.narrativeTags,
             lastEmptyTop10WalletPct: scored.emptyTop10WalletPct,

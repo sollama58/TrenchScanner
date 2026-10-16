@@ -436,9 +436,16 @@ model Token {
   /// of them. Null means DexScreener has no image, not that we failed to look.
   imageUrl                String?
   firstSeenAt             DateTime  @default(now())
-  hasTwitter              Boolean   @default(false)
+  /// Null = no source has read this coin's socials yet; false = a source that carries them
+  /// (Pump.fun's coin details, the launch metadata, a DexScreener pair with an info block) said
+  /// there is none. Nullable since 2026-10-16 (data-correctness audit, user decision): rows from
+  /// PumpPortal, Jupiter and DexScreener's lists stored false when nothing was ever read, and the
+  /// models learned "0 = unread" as a signal. Rows from before keep that false as it is; the
+  /// training-side masks in curation/features.ts cover the eras. hasTelegram is a retired learner
+  /// input and keeps its old shape.
+  hasTwitter              Boolean?
   hasTelegram             Boolean   @default(false)
-  hasWebsite              Boolean   @default(false)
+  hasWebsite              Boolean?
   /// The launcher's X/Twitter and website links as found at discovery (Pump.fun's `twitter` /
   /// `website`, or DexScreener's profile links). Only https URLs are kept; a bare X handle is
   /// stored as its https://x.com/ URL. Null when the source had none. Kept so the AI reviewer,
