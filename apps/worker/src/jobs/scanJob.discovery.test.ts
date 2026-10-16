@@ -291,23 +291,57 @@ describe.skipIf(!dbAvailable)("discovery metadata and revival", () => {
     expect((await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(2) } })).dexBoosted).toBe(true);
   });
 
+  it("records the launch time a launch source says, on a new row and later on one found without it", async () => {
+    const launchedAt = new Date("2026-10-16T12:00:00Z");
+    await addNewMintsToWatchlist([
+      { mintAddress: mint(31), createdAt: launchedAt, discoverySource: "pumpfun" },
+    ]);
+    const fromLaunch = await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(31) } });
+    expect(fromLaunch.launchedAt).toEqual(launchedAt);
+    expect(fromLaunch.firstSeenAt).toEqual(launchedAt);
+
+    // First met on DexScreener (no launch time), then on a Pump.fun list: the row takes it, once.
+    await addNewMintsToWatchlist([{ mintAddress: mint(32), discoverySource: "dexscreener" }]);
+    expect(
+      (await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(32) } })).launchedAt,
+    ).toBeNull();
+    await addNewMintsToWatchlist([
+      { mintAddress: mint(32), createdAt: launchedAt, discoverySource: "pumpfun" },
+    ]);
+    const later = new Date("2026-10-16T13:00:00Z");
+    await addNewMintsToWatchlist([{ mintAddress: mint(32), createdAt: later, discoverySource: "jupiter" }]);
+    const filled = await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(32) } });
+    expect(filled.launchedAt).toEqual(launchedAt);
+    expect(filled.firstSeenAt).not.toEqual(launchedAt);
+  });
+
   it("fills in the description and socials of a row the stream created bare, once", async () => {
     await addNewMintsToWatchlist([{ mintAddress: mint(90), symbol: "BARE", discoverySource: "pumpportal" }]);
-    expect(
-      (await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(90) } })).description,
-    ).toBeNull();
+    // Bare means unread: the socials are null, not a false the models would read as "none".
+    expect(await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(90) } })).toMatchObject({
+      description: null,
+      hasTwitter: null,
+      hasWebsite: null,
+    });
 
     await addNewMintsToWatchlist([
       {
         mintAddress: mint(90),
         description: "a cat",
         hasTwitter: true,
+        hasWebsite: false,
         twitterUrl: "https://x.com/cat",
         discoverySource: "pumpportal",
       },
     ]);
     const filled = await prisma.token.findUniqueOrThrow({ where: { mintAddress: mint(90) } });
-    expect(filled).toMatchObject({ description: "a cat", hasTwitter: true, twitterUrl: "https://x.com/cat" });
+    expect(filled).toMatchObject({
+      description: "a cat",
+      hasTwitter: true,
+      // The detail read said no website: a read none, recorded over the unread null.
+      hasWebsite: false,
+      twitterUrl: "https://x.com/cat",
+    });
 
     // A recorded description is never rewritten.
     await addNewMintsToWatchlist([
@@ -326,23 +360,8 @@ describe.skipIf(!dbAvailable)("discovery metadata and revival", () => {
     const coinDetails = async () => null;
     await saveMovingLaunches(
       [
-        {
-          mintAddress: mint(91),
-          graduated: false,
-          hasTwitter: false,
-          hasTelegram: false,
-          hasWebsite: false,
-          marketCapUsd: 80_000,
-        },
-        {
-          mintAddress: mint(92),
-          symbol: "NEW",
-          graduated: false,
-          hasTwitter: false,
-          hasTelegram: false,
-          hasWebsite: false,
-          marketCapUsd: 3_000,
-        },
+        { mintAddress: mint(91), graduated: false, marketCapUsd: 80_000 },
+        { mintAddress: mint(92), symbol: "NEW", graduated: false, marketCapUsd: 3_000 },
       ],
       { coinDetails },
       env,
@@ -355,7 +374,9 @@ describe.skipIf(!dbAvailable)("discovery metadata and revival", () => {
       symbol: "NEW",
       description: null,
       discoverySource: "jupiter",
-      hasTwitter: false,
+      // Jupiter's lists carry no socials: unknown, not "none".
+      hasTwitter: null,
+      hasWebsite: null,
     });
   });
 

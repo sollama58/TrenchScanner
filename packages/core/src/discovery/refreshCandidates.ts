@@ -1,4 +1,5 @@
 import type { DexScreenerClient, TokenLookupOptions } from "../datasources/dexscreener.js";
+import { MARKET_SOURCE } from "../marketSource.js";
 import type { CandidateToken } from "../types.js";
 
 /** Default widen-the-net factor - see BandFilterOptions.bandPaddingRatio. Exported so anything
@@ -198,7 +199,13 @@ function mergeLiveLaunches(
       pair.priceUsd > 0 && pair.marketCapUsd > 0
         ? (pair.marketCapUsd / pair.priceUsd) * reading.token.priceUsd
         : reading.token.marketCapUsd;
-    marketData[i] = { ...pair, priceUsd: reading.token.priceUsd, marketCapUsd };
+    // Marked as the mix it is: a DexScreener pair read at Jupiter's price (marketSource.ts).
+    marketData[i] = {
+      ...pair,
+      priceUsd: reading.token.priceUsd,
+      marketCapUsd,
+      marketSource: MARKET_SOURCE.dexscreenerLive,
+    };
     // A pair quoted in another coin carries no USD volume or price change: the live reading's stand in.
     if (pair.volume1hUsd === undefined) {
       const r = reading.token;

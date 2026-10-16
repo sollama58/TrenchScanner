@@ -4,6 +4,7 @@ import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
 import { normalizeSocialUrl } from "./tokensage.js";
 import { isCurveVenue } from "../launchpads.js";
+import { MARKET_SOURCE } from "../marketSource.js";
 import type { GeckoTerminalClient } from "./geckoterminal.js";
 import type { CandidateToken, WatchlistCandidate } from "../types.js";
 
@@ -162,6 +163,13 @@ export interface TokenLookupOptions {
    * fallback is on, the lookup is not sent at all and every mint counts as failed.
    */
   mayBeUnindexed?: boolean;
+  /**
+   * When supplied, collects the mints no source was asked about at all: under `mayBeUnindexed`
+   * JupiterFirstLookup leaves a mint Jupiter answered without a token out of its DexScreener
+   * batch, so an entry missing from the result is "not asked", not "no pair anywhere". A caller
+   * valuing holdings must not read such a mint as worth nothing (walletValuation.ts).
+   */
+  unasked?: Set<string>;
   /**
    * Skip the recent-quote cache and ask DexScreener now (the answer is still cached for others).
    * For a caller whose logic needs a reading independent of the one other jobs just took - the
@@ -806,15 +814,17 @@ export class DexScreenerClient {
     const byMint = new Map<string, WatchlistCandidate>();
     for (const entry of [...profiles, ...boosts]) {
       if (entry.chainId !== SOLANA_CHAIN_ID || !entry.tokenAddress) continue;
-      const links = entry.links ?? [];
+      // A profile that lists its links is a read of the socials; one without any is unknown.
+      const links = entry.links;
       byMint.set(entry.tokenAddress, {
         mintAddress: entry.tokenAddress,
-        hasTwitter: links.some((l) => l.type === "twitter"),
-        hasTelegram: links.some((l) => l.type === "telegram"),
-        hasWebsite: links.some((l) => !l.type || l.type === "website"),
-        twitterUrl: normalizeSocialUrl(links.find((l) => l.type === "twitter")?.url, "twitter") ?? undefined,
+        hasTwitter: links?.some((l) => l.type === "twitter"),
+        hasTelegram: links?.some((l) => l.type === "telegram"),
+        hasWebsite: links?.some((l) => !l.type || l.type === "website"),
+        twitterUrl: normalizeSocialUrl(links?.find((l) => l.type === "twitter")?.url, "twitter") ?? undefined,
         websiteUrl:
-          normalizeSocialUrl(links.find((l) => !l.type || l.type === "website")?.url, "website") ?? undefined,
+          normalizeSocialUrl(links?.find((l) => !l.type || l.type === "website")?.url, "website") ??
+          undefined,
         discoverySource: "dexscreener",
         boosted: boosted.has(entry.tokenAddress),
       });
@@ -978,7 +988,10 @@ export function pickCanonicalPair<
 }
 
 function toCandidateToken(pair: DexScreenerPair): CandidateToken {
-  const socials = pair.info?.socials ?? [];
+  // A pair without an info block (nearly every young coin) says nothing about the socials:
+  // unknown, not "none". Only a block that is there is a read (2026-10-16 data audit).
+  const info = pair.info;
+  const socials = info?.socials ?? [];
   // A pair DexScreener can't price in USD (one quoted in another coin) reports its USD volume as
   // 0 however much it trades: unknown, not a dead coin.
   const usd = pair.priceUsd === undefined ? undefined : pair.volume;
@@ -1004,11 +1017,12 @@ function toCandidateToken(pair: DexScreenerPair): CandidateToken {
     buys1h: pair.txns?.h1?.buys,
     sells1h: pair.txns?.h1?.sells,
     pairCreatedAt: pair.pairCreatedAt ? new Date(pair.pairCreatedAt) : undefined,
-    hasTwitter: socials.some((s) => s.type === "twitter"),
-    hasTelegram: socials.some((s) => s.type === "telegram"),
-    hasWebsite: (pair.info?.websites?.length ?? 0) > 0,
-    imageUrl: pair.info?.imageUrl,
+    hasTwitter: info ? socials.some((s) => s.type === "twitter") : undefined,
+    hasTelegram: info ? socials.some((s) => s.type === "telegram") : undefined,
+    hasWebsite: info ? (info.websites?.length ?? 0) > 0 : undefined,
+    imageUrl: info?.imageUrl,
     dexId: pair.dexId,
+    marketSource: MARKET_SOURCE.dexscreener,
   };
 }
 

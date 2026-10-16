@@ -3,6 +3,7 @@ import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError } from "./rateGate.js";
 import { isCurveVenue } from "../launchpads.js";
+import { MARKET_SOURCE } from "../marketSource.js";
 import type { CandidateToken } from "../types.js";
 
 const logger = createLogger("geckoterminal");
@@ -245,6 +246,7 @@ export function parseGeckoTokens(body: GeckoMultiResponse, requested: Set<string
       sells1h: p?.transactions?.h1?.sells,
       pairCreatedAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : undefined,
       dexId,
+      marketSource: MARKET_SOURCE.gecko,
     });
   }
   return out;

@@ -441,6 +441,14 @@ export type WalletHoldingsResult =
        * whose breakdown would be partial or too big to cache.
        */
       complete: boolean;
+      /**
+       * True when a holding could not be priced because no source was asked about it (the
+       * balances route: a mint Jupiter's search doesn't list is not sent on to DexScreener - see
+       * TokenLookupOptions.unasked). The total is then a floor that cannot call the wallet empty:
+       * computeEmptyPct reads such a wallet under the bar as unknown. Absent on the DAS route,
+       * which prices from the indexer's own figures.
+       */
+      unpriced?: boolean;
     }
   | { status: "unsupported" }
   | { status: "failed" };

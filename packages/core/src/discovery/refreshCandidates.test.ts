@@ -137,16 +137,26 @@ describe("refreshAndFilterToBand", () => {
         liveLaunches: {
           source: source([
             // Jupiter's own cap counts a smaller, post-burn supply: the pair's supply wins.
-            { ...candidate("listed", 10_010), priceUsd: 0.000011 },
-            { ...candidate("unlisted", 10_500), dexId: "pumpfun" },
+            { ...candidate("listed", 10_010), priceUsd: 0.000011, marketSource: "jupiter" },
+            { ...candidate("unlisted", 10_500), dexId: "pumpfun", marketSource: "jupiter" },
           ]),
           mints: ["listed", "unlisted", "untraded"],
         },
       });
       const byMint = new Map(result.inBand.map((t) => [t.mintAddress, t]));
       expect([...byMint.keys()].sort()).toEqual(["listed", "older", "unlisted"]);
-      expect(byMint.get("listed")).toMatchObject({ marketCapUsd: 11_000, priceUsd: 0.000011, buys5m: 12 });
-      expect(byMint.get("unlisted")).toMatchObject({ marketCapUsd: 10_500, dexId: "pumpfun" });
+      // Each reading says what it is: the pair at the live price, the live reading itself.
+      expect(byMint.get("listed")).toMatchObject({
+        marketCapUsd: 11_000,
+        priceUsd: 0.000011,
+        buys5m: 12,
+        marketSource: "dexscreener_live",
+      });
+      expect(byMint.get("unlisted")).toMatchObject({
+        marketCapUsd: 10_500,
+        dexId: "pumpfun",
+        marketSource: "jupiter",
+      });
       expect(result.seenAt.get("listed")).toEqual(liveAt);
       expect(result.liveMarketCaps).toContainEqual({ mintAddress: "unlisted", marketCapUsd: 10_500 });
       // Only the launch the live read could not price is left for GeckoTerminal.

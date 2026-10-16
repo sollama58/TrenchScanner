@@ -26,7 +26,7 @@ const clusters = [{ funder: "f", wallets: [{ wallet: A }, { wallet: B }], pct: 3
 async function seed(
   label: string,
   kolBundledPct: number,
-  opts: { snapshot?: boolean; alert?: boolean } = {},
+  opts: { snapshot?: boolean; alert?: boolean; snapshotAt?: number } = {},
 ) {
   const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${label}`, symbol: "T" } });
   const row = await prisma.candidateOutcome.create({
@@ -48,7 +48,7 @@ async function seed(
     ? await prisma.tokenSnapshot.create({
         data: {
           tokenId: token.id,
-          takenAt: new Date(ANCHOR - 2_000),
+          takenAt: new Date(opts.snapshotAt ?? ANCHOR - 2_000),
           priceUsd: 1,
           marketCapUsd: 100_000,
           linkedWalletPct: 3,
@@ -96,13 +96,18 @@ describe.skipIf(!dbAvailable)("Bundled % backfill", () => {
   });
 
   it("takes the linked share where no KOL bundled anyone, and rebuilds the rest when it matches", async () => {
-    await prisma.kolWallet.create({ data: { wallet: KOL, seenAt: new Date(ANCHOR) } });
+    // On the roster since the day before: a KOL to the scan that banked the rows.
+    await prisma.kolWallet.create({
+      data: { wallet: KOL, seenAt: new Date(ANCHOR), firstSeenAt: new Date(ANCHOR - 86_400_000) },
+    });
     await prisma.walletFunder.create({ data: { wallet: FUNDED, status: "found", funder: KOL } });
     const none = await seed("none", 0);
     const kol = await seed("kol", 3, { snapshot: true, alert: true });
-    // Recorded 5% at the time: today's groups rebuild 3%, so the KOL groups changed since.
+    // Recorded 5% at the time: the groups as of the scan rebuild 3%, so the KOL groups differ.
     const moved = await seed("moved", 5, { snapshot: true });
     const lost = await seed("lost", 3);
+    // The only snapshot near the anchor was taken after it (2026-10-16): not the decision's scan.
+    const later = await seed("later", 3, { snapshot: true, snapshotAt: ANCHOR + 2_000 });
 
     await runAll();
 
@@ -111,11 +116,28 @@ describe.skipIf(!dbAvailable)("Bundled % backfill", () => {
     expect((await featuresOf(kol.row.id)).bundledSupplyPct).toBe(6);
     expect((await featuresOf(moved.row.id)).bundledSupplyPct).toBeUndefined();
     expect((await featuresOf(lost.row.id)).bundledSupplyPct).toBeUndefined();
+    expect((await featuresOf(later.row.id)).bundledSupplyPct).toBeUndefined();
     // The alert's own snapshot, for the card's Linked tile.
     const snap = await prisma.tokenSnapshot.findUniqueOrThrow({ where: { id: kol.snapshot!.id } });
     expect(snap.bundledSupplyPct).toBe(6);
     expect(snap.bundledSupplyCount).toBe(4);
     // Once through, it never asks again.
     expect(await runBundledSupplyBackfill({ now: () => NOW })).toBeNull();
+  });
+
+  // 2026-10-16 (data-correctness audit): the roster as it stood at the scan, not today's.
+  it("reads the roster as of the scan: a KOL added after it bundled nobody then", async () => {
+    await prisma.kolWallet.deleteMany({ where: { wallet: KOL } });
+    await prisma.kolWallet.create({
+      data: { wallet: KOL, seenAt: new Date(NOW), firstSeenAt: new Date(ANCHOR + 1_000) },
+    });
+    // Recorded 3% at the time: without the KOL the rebuild finds 0%, so the groups differ.
+    const late = await seed("late", 3, { snapshot: true, alert: true });
+
+    await runAll();
+
+    expect((await featuresOf(late.row.id)).bundledSupplyPct).toBeUndefined();
+    const snap = await prisma.tokenSnapshot.findUniqueOrThrow({ where: { id: late.snapshot!.id } });
+    expect(snap.bundledSupplyPct).toBeNull();
   });
 });

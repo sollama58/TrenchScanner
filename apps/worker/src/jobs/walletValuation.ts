@@ -21,8 +21,12 @@ const logger = createLogger("wallet-valuation");
  *
  * Same contract as HeliusClient.getOtherHoldingsUsdBatch, so the cache and budget logic in
  * walletHoldings.ts sit on top of either: otherHoldingsUsd is a FLOOR of the wallet's non-cash,
- * non-gas holdings (unpriced tokens count as nothing), and perMintUsd carries each launch of
- * interest, zero included.
+ * non-gas holdings (a token with no pair anywhere counts as nothing), and perMintUsd carries each
+ * launch of interest, zero included. A holding no source was asked about (Jupiter's search
+ * doesn't list it, and under mayBeUnindexed DexScreener isn't asked - TokenLookupOptions.unasked)
+ * is neither priced nor worthless: the wallet comes back `unpriced`, and computeEmptyPct reads
+ * it as unknown rather than empty (user decision 2026-10-16; before, such holdings counted as $0
+ * and a holder of coins Jupiter doesn't index read "empty").
  */
 
 /** How long a DexScreener quote (or "no usable pair") is reused. */
@@ -58,6 +62,13 @@ export interface MintQuote {
 
 const ZERO_QUOTE: MintQuote = { priceUsd: 0, capUsd: 0 };
 
+/**
+ * A mint no price source was asked about (see the note at the top): cached like a quote, for
+ * the same TTL, so the holder isn't re-read every cycle to learn the same nothing.
+ */
+const UNPRICED = "unpriced";
+type CachedQuote = MintQuote | typeof UNPRICED;
+
 export function quoteFromToken(
   token: Pick<CandidateToken, "priceUsd" | "liquidityUsd" | "marketCapUsd" | "volume24hUsd">,
 ): MintQuote {
@@ -68,7 +79,7 @@ export function quoteFromToken(
   return capUsd > 0 ? { priceUsd: price, capUsd } : ZERO_QUOTE;
 }
 
-const priceCache = new Map<string, { quote: MintQuote; at: number }>();
+const priceCache = new Map<string, { quote: CachedQuote; at: number }>();
 const decimalsCache = new Map<string, number>();
 
 type BalanceReading =
@@ -107,7 +118,7 @@ export function seedQuotes(tokens: Iterable<CandidateToken>, now: number = Date.
   trimOldest(priceCache, MAX_PRICE_CACHE);
 }
 
-function cachedQuote(mint: string, now: number): MintQuote | undefined {
+function cachedQuote(mint: string, now: number): CachedQuote | undefined {
   const hit = priceCache.get(mint);
   if (!hit) return undefined;
   if (now - hit.at > PRICE_TTL_MS) {
@@ -205,11 +216,13 @@ export async function valueWalletsFromBalances(
 
   if (toPrice.size > 0) {
     const failed = new Set<string>();
+    const unasked = new Set<string>();
     const tokens = await deps.dexScreener.getTokensByAddresses([...toPrice], 3, {
       timeoutMs: 5_000,
       retries: 1,
       deadlineMs: 10_000,
       failed,
+      unasked,
       // These are whatever else the holders own, most of it with no pair anywhere: an all-empty
       // answer is the usual case, not DexScreener going blank (the watchlist refresh decides that).
       mayBeUnindexed: true,
@@ -227,8 +240,12 @@ export async function valueWalletsFromBalances(
     for (const mint of toPrice) {
       if (failed.has(mint)) continue;
       const token = byMint.get(mint);
-      // Absent from an answered batch: DexScreener has no pair, so it is worth nothing to us.
-      priceCache.set(mint, { quote: token ? quoteFromToken(token) : ZERO_QUOTE, at });
+      // Absent from an answered batch: DexScreener has no pair, so it is worth nothing to us -
+      // unless no source was asked about it, in which case nobody knows what it is worth.
+      priceCache.set(mint, {
+        quote: token ? quoteFromToken(token) : unasked.has(mint) ? UNPRICED : ZERO_QUOTE,
+        at,
+      });
     }
     trimOldest(priceCache, MAX_PRICE_CACHE);
   }
@@ -270,7 +287,7 @@ async function readMissingDecimals(plans: WalletPlan[], deps: ValuationDeps, now
   for (const plan of plans) {
     for (const [mint] of plan.mints) {
       const quote = cachedQuote(mint, now);
-      if (quote && quote.priceUsd > 0 && !decimalsCache.has(mint)) need.add(mint);
+      if (quote && quote !== UNPRICED && quote.priceUsd > 0 && !decimalsCache.has(mint)) need.add(mint);
     }
   }
   if (need.size === 0) return 0;
@@ -283,7 +300,9 @@ async function readMissingDecimals(plans: WalletPlan[], deps: ValuationDeps, now
 /**
  * The wallet's reading from what is known now, or null when it can't be finished yet: a holding
  * whose price or decimals are unknown, unless the holdings outside the launches of interest are
- * already worth `minUsd` without it.
+ * already worth `minUsd` without it. A holding no source was asked about is a finished reading
+ * marked `unpriced`: it counts for nothing in the floor, and the mark says the floor can't call
+ * the wallet empty.
  */
 function valuePlan(
   plan: WalletPlan,
@@ -295,12 +314,17 @@ function valuePlan(
   let outsideInterest = 0;
   let unknown = false;
   let unknownInterest = false;
+  let unpriced = false;
   const pricedByMint: Record<string, number> = {};
   for (const [mint, amount] of plan.mints) {
     const value = holdingUsd(mint, amount, now);
     if (value === undefined) {
       unknown = true;
       if (interesting.has(mint)) unknownInterest = true;
+      continue;
+    }
+    if (value === UNPRICED) {
+      unpriced = true;
       continue;
     }
     if (value <= 0) continue;
@@ -311,19 +335,24 @@ function valuePlan(
   if (unknownInterest) return null;
   if (unknown && outsideInterest < minUsd) return null;
 
-  const complete = !unknown && !plan.truncated && Object.keys(pricedByMint).length <= COMPLETE_BREAKDOWN_MAX;
+  const complete =
+    !unknown && !unpriced && !plan.truncated && Object.keys(pricedByMint).length <= COMPLETE_BREAKDOWN_MAX;
   const perMintUsd: Record<string, number> = {};
   for (const mint of interesting) perMintUsd[mint] = 0;
   for (const [mint, usd] of Object.entries(pricedByMint)) {
     if (complete || interesting.has(mint)) perMintUsd[mint] = usd;
   }
-  return { status: "found", otherHoldingsUsd: total, perMintUsd, complete };
+  return { status: "found", otherHoldingsUsd: total, perMintUsd, complete, unpriced };
 }
 
-/** USD a holding counts for: 0 when unpriceable, undefined when its price or decimals are unknown. */
-function holdingUsd(mint: string, amount: bigint, now: number): number | undefined {
+/**
+ * USD a holding counts for: 0 when unpriceable (no pair anywhere, or nobody traded it today),
+ * UNPRICED when no source was asked about it, undefined when its price or decimals are unknown.
+ */
+function holdingUsd(mint: string, amount: bigint, now: number): number | undefined | typeof UNPRICED {
   const quote = cachedQuote(mint, now);
   if (quote === undefined) return undefined;
+  if (quote === UNPRICED) return UNPRICED;
   if (quote.priceUsd <= 0) return 0;
   const decimals = decimalsCache.get(mint);
   if (decimals === undefined) return undefined;

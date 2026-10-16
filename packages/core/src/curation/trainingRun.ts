@@ -101,6 +101,12 @@ export interface CuratorTrainingConfig {
    * (env CURATOR_FEATURE_ONSET_GUARD). Omitted = off.
    */
   featureOnsetGuard?: boolean;
+  /**
+   * The training window's start (the rows were loaded from it). The onset guard judges coverage
+   * from there or from the first row on the current label rule, whichever is later. Omitted =
+   * from the first current-rule row.
+   */
+  windowStart?: Date;
 }
 
 /** How one family did in this run's exam - stored for every family, shipped or not. */
@@ -308,11 +314,11 @@ function servedExtras(
  */
 function runFeatures(
   rows: TrainingRow[],
-  cfg: Pick<CuratorTrainingConfig, "featureOnsetGuard" | "examShare">,
+  cfg: Pick<CuratorTrainingConfig, "featureOnsetGuard" | "examShare" | "windowStart">,
 ): { usable: ReadonlySet<string> | null; held: HeldFeature[] } {
   if (!cfg.featureOnsetGuard) return { usable: null, held: [] };
   // The reference span is the exam's: the rows the cutoffs are set on.
-  const { usable, held } = featureOnset(rows, CANDIDATE_FEATURE_NAMES, cfg.examShare);
+  const { usable, held } = featureOnset(rows, CANDIDATE_FEATURE_NAMES, cfg.examShare, cfg.windowStart);
   return { usable: new Set(usable), held };
 }
 

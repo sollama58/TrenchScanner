@@ -1,4 +1,5 @@
 import { PUMPFUN_LAUNCHPAD, STONKS_LAUNCHPAD } from "../launchpads.js";
+import { marketSourceCode, marketSourceFromCode } from "../marketSource.js";
 import type { ScoredToken } from "../types.js";
 import { scoreNarrative, scoreToken, scoreTokenLegacy } from "../scoring/scorer.js";
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
@@ -20,6 +21,7 @@ import {
   NARRATIVE_FEATURES_V6,
   NARRATIVE_FEATURES_V7,
   NARRATIVE_FEATURES_V8,
+  NARRATIVE_FEATURES_V9,
   NARRATIVE_FRIENDLY_LABELS,
   narrativeFeatureValues,
   narrativeFromFeatures,
@@ -51,6 +53,16 @@ export const WALLET_RISK_FEATURES = [
   "walletRiskHighSupplyPct",
   "knownDumperFirstBuyers",
 ] as const;
+
+/**
+ * Added 2026-10-16 (data-correctness audit, values section 6): how many of the top-10 holders
+ * were scored when walletRiskTop10Max was read. From the same deploy walletRiskTop10Max is the
+ * percentile of the riskiest scored holder among every wallet scored at the time, with the
+ * coin's own tape taken out (core's wallets/riskScore.ts coinWalletRisk); the max of more scored
+ * holders reads higher, which this count says. Null on every row banked before. Recorded only
+ * (RETIRED_LEARNER_INPUTS) until a retrain admits it.
+ */
+export const WALLET_RISK_COVERAGE_FEATURES = ["walletRiskScoredTop10"] as const;
 
 /**
  * Added 2026-10-13 (the same brief, item 3): linked wallets among the top holders (top 10, then top 20 from later on 2026-10-13, then the top 25 pools aside), from who
@@ -179,7 +191,9 @@ export const KOL_BUNDLED_FEATURES = ["kolBundledPct"] as const;
  * wallets/kolBundled.ts bundledSupply): what the alert card's Linked tile now shows. A separate
  * input beside linkedWalletPct and kolBundledPct, which stay as they were. Null on the same terms
  * as kolBundledPct. Rows from 2026-10-14 19:44 UTC (when KOL Bundled % started) carry it where the
- * stored reading allows (bundledSupplyBackfill.ts in the worker); older rows read null.
+ * stored reading allows (bundledSupplyBackfill.ts in the worker); older rows read null. Rows with
+ * KOL bundles banked before BUNDLED_SUPPLY_POINT_IN_TIME_FROM read null to the learners
+ * (maskKnownBadInputs): the backfill before it rebuilt them from a later day's knowledge.
  *
  * READ BY THE LEARNERS (user ask 2026-10-15: "have the models consider" it), so it is not in
  * RETIRED_LEARNER_INPUTS. The onset guard (featureOnset.ts) keeps it out of a run until it covers
@@ -204,6 +218,32 @@ export const LAUNCHPAD_FEATURES = ["launchpadStonks"] as const;
  * Recorded only (RETIRED_LEARNER_INPUTS) until they hold up on later days.
  */
 export const TRANSFER_FEATURES = ["transferredSupplyPct", "transferWalletCount"] as const;
+
+/**
+ * Added 2026-10-16 (data audit, values.md section 3; user decision): what ageMinutes counts from.
+ * 1 when the age is since the launch itself (Token.launchedAt from a launch source, or the
+ * bonding-curve pair the coin launched with), 0 when it is since the earliest the scan has - on a
+ * coin first met after graduation that is its PumpSwap pool, so a coin that bonded after an hour
+ * read as a minute old (27-45% of graduated rows on some days). Null with no age, and on every
+ * row banked before. Read by the learners, so a model can tell the two ages apart, and a mask can
+ * find the rows whose age is the pool's; the onset guard (featureOnset.ts) keeps it out of a run
+ * until it covers enough of the exam's span.
+ */
+export const AGE_SOURCE_FEATURES = ["ageSource"] as const;
+
+/**
+ * Added 2026-10-16 (user decision, "markers everywhere"; notes/data-audit-2026-10-16/round2-code.md
+ * section 4): which source the market inputs above came from, as marketSource.ts codes it (1
+ * DexScreener's pair, 2 that pair at Jupiter's live price, 3 Jupiter outright, 4 GeckoTerminal).
+ * The refresh switches source by age and listing, and each source's liquidity, windows and pair
+ * time mean something different, so the models get the source beside the figures. One small
+ * integer rather than the one-hot bits the other categorical inputs use (fee destination, logo
+ * group, lineage): the tree seats split it as they would any code, and the linear seat reads
+ * it as it reads launchpadStonks. Null on every row banked before, never backfilled. Read by the
+ * learners; the onset guard (featureOnset.ts) keeps it out of a run until it covers enough of
+ * the exam's span.
+ */
+export const MARKET_SOURCE_FEATURES = ["mktSource"] as const;
 
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
@@ -318,6 +358,10 @@ export const CANDIDATE_FEATURE_NAMES = [
   "pathMinutesSinceHigh60m",
   "pathHolderSlope10m",
   "pathObservedMinutes",
+  // Added 2026-10-16: minutes of the last 30 the tape does not cover (0 on a full tape, 30 on
+  // none), recorded with the 15 and 30-minute returns now measured across whatever tape there
+  // is (PATH_RETURNS_ACROSS_GAPS_SINCE). Null on every row banked before; never backfilled.
+  "pathGapMinutes",
   // Added 2026-10-05: what the whole market is doing at the moment, and the clock.
   "mktBaseRate1hPct",
   "mktBaseRate6hPct",
@@ -444,6 +488,13 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...BUNDLED_SUPPLY_FEATURES,
   ...LAUNCHPAD_FEATURES,
   ...TRANSFER_FEATURES,
+  ...AGE_SOURCE_FEATURES,
+  ...WALLET_RISK_COVERAGE_FEATURES,
+  // Added 2026-10-16 (user decision, "markers everywhere"; curation/narrativeFeatures.ts): whether
+  // a TokenSage read was in at the decision, and the ns* writer's rules version. Written on
+  // every row from now on, read or not; null on every row banked before. Never backfilled.
+  ...NARRATIVE_FEATURES_V9,
+  ...MARKET_SOURCE_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -577,6 +628,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // terms. Bring them in by removing them here once a few days of decision rows show they separate
   // runners.
   ...TRANSFER_FEATURES,
+  // The scored top-10 count behind walletRiskTop10Max (added 2026-10-16, data-correctness
+  // audit): recorded first, on the same terms.
+  ...WALLET_RISK_COVERAGE_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
@@ -600,6 +654,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "nsTrendMatched",
   "livestreamLive",
   "nsXSpoofed",
+  // The ns* writer's rules version (added 2026-10-16): a marker for maskKnownBadInputs, never
+  // an input - a model that split on it would learn the deploy calendar.
+  "nsRulesVersion",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */
@@ -736,6 +793,28 @@ const PATH_TAPE_SLACK_MINUTES = 1;
 const PATH_TAPE_MAX_WINDOW_MINUTES = 30;
 
 /**
+ * Rows banked before this carry the 15 and 30-minute path returns under the old rule: null when
+ * the tape was shorter than the window or had a hole where the reference should sit (#376).
+ * Since the refill that null meant "the scanner only just started watching this coin, or lost
+ * it and found it again", which is when a coin pumps back into the band: on 20+ minute-old coins
+ * a missing pathRet15mPct doubled 9.2% against 3.1%, and the seats scored those rows about three
+ * times the ones carrying a value (notes/data-audit-2026-10-16/round2-hunt.md finding 3). Since
+ * this the two returns are measured across whatever tape there is and pathGapMinutes records how
+ * much of the half hour the tape missed (curation/pricePath.ts). The older rows cannot be
+ * remeasured, so on them each return reads as missing when the tape was shorter than its window
+ * allowed, as the pre-refill rule reads the whole path block, and the onset guard holds
+ * pathGapMinutes until enough rows carry it.
+ *
+ * Set to the deploy of the change (2026-10-16 ~19:20 UTC), with slack on the late side so no row
+ * banked under the old rule reads as the new one.
+ */
+export const PATH_RETURNS_ACROSS_GAPS_SINCE = new Date("2026-10-16T19:30:00Z");
+const PATH_RETURN_WINDOWS = [
+  ["pathRet15mPct", 15],
+  ["pathRet30mPct", 30],
+] as const satisfies readonly (readonly [CandidateFeatureName, number])[];
+
+/**
  * While Pump.fun's coin list was blocked (2026-10-14 21:00 to 10-15 08:30 UTC, until #563), coins
  * discovered elsewhere were stored with hasTwitter / hasWebsite false because nothing had read
  * their socials (scanJob.ts, `?? false`): the share reading 0 went from 5-9% to 35-50%, and 0
@@ -759,6 +838,67 @@ const SOCIAL_OUTAGE_FEATURES = [
 export const SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE = new Date("2026-10-12T18:17:00Z");
 
 /**
+ * Hourly background rows banked before this were banked at the coin's first scan of the hour,
+ * with no wait. A decision row waits for the wallet checks, the top-10 snipers share and the
+ * Linked reading (scanJob.ts, decisionInputsReady), and by then TokenSage's deep read has usually
+ * landed, so on hourly rows under 20 minutes old the X-read block was never present (0% against
+ * 42-57% of decisions), the wallet checks were in on half and the Linked reading on a third
+ * (notes/data-audit-2026-10-16, skew.md section 4, round2-hunt.md section 5). Since then the
+ * hourly row waits for the same readiness on its own clock. The time the wait was deployed
+ * (2026-10-16 ~19:20 UTC), with slack on the late side.
+ */
+export const HOURLY_ROWS_WAIT_SINCE = new Date("2026-10-16T19:30:00Z");
+
+/**
+ * What an hourly row banked without the wait lacked (see HOURLY_ROWS_WAIT_SINCE): the deep read's
+ * X block, the top-10 wallet checks and snipers share, and the Linked reading over the top 25
+ * with everything that rides on it (exchange funders, same-minute groups, bundles, transfers).
+ * The quick read's inputs were in on half of the youngest rows and are left alone.
+ */
+const HOURLY_UNWAITED_FEATURES: readonly CandidateFeatureName[] = [
+  ...ALL_NARRATIVE_FEATURES.filter((name) => name.startsWith("nsX")),
+  "freshTop10WalletPct",
+  "emptyTop10WalletPct",
+  "top10WalletsChecked",
+  "sniperTop10WalletPct",
+  "sniperTopHolderCount",
+  "sniperTopHoldersChecked",
+  ...FRESH_TOP_HOLDER_FEATURES,
+  ...LINKED_WALLET_FEATURES,
+  ...CEX_FUNDED_FEATURES,
+  "cexFundedCount",
+  "cexFundedHolders",
+  ...SAME_TIME_FUNDING_FEATURES,
+  ...BUNDLED_FEATURES,
+  ...KOL_BUNDLED_FEATURES,
+  ...BUNDLED_SUPPLY_FEATURES,
+  ...TRANSFER_FEATURES,
+];
+
+/**
+ * Rows banked before this may carry a bundledSupplyPct the backfill rebuilt from knowledge that
+ * came after the decision (2026-10-16, data-correctness audit, skew section 8): until this
+ * deploy bundledSupplyBackfill.ts rebuilt the KOL half from the roster and side-wallet labels of
+ * the day it ran, and from snapshots taken up to 90 s after the anchor. The backfill wrote into
+ * the stored vector with no mark, so those values can't be told from the scan's own and can't be
+ * rebuilt point-in-time after the fact. Only rows whose KOL Bundled % was above 0 are affected:
+ * with none, Bundled % is the linked share itself, exact at any time. The deploy time of the
+ * point-in-time backfill (2026-10-16 ~19:20 UTC), with slack on the late side.
+ */
+export const BUNDLED_SUPPLY_POINT_IN_TIME_FROM = new Date("2026-10-16T19:30:00Z");
+
+/**
+ * When rows started carrying the ns* writer's rules version (nsRulesVersion, NS_RULES_VERSION in
+ * curation/narrativeFeatures.ts): the deploy of the change that added the marker (2026-10-16
+ * ~19:20 UTC), with slack on the late side. A row banked before this
+ * without a version was written under rules nobody can name: TokenSage's value regimes moved with
+ * #611 / #631 and their neighbours on 10-14..16 (nsDepthFull 52% to 83% of event rows,
+ * nsCatCelebrity 3-8% to 41%, a failed X fetch written as zeros), and no mark on the row says
+ * which side of a step it sits on (notes/data-audit-2026-10-16/round2-hunt.md, section 6).
+ */
+export const NS_RULES_VERSION_MARKER_SINCE = new Date("2026-10-16T19:30:00Z");
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
  * the create message and is real), the social bits on rows banked before
@@ -766,50 +906,85 @@ export const SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE = new Date("2026-10-12T1
  * tokens (as live scoring reads it today) and the 30-second pathRet1mPct, and ctxWeekend before
  * WEEKEND_FLAG_FROM; before FRESH_QUOTE_GAP_SINCE the fresh-price gap and market base rates,
  * before SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE the sniper share,
- * before PATH_TAPE_REFILL_SINCE the path inputs on a tape too short for the coin's age, and the
- * social bits through SOCIAL_LIST_OUTAGE. Returns the same object when nothing applies.
+ * before PATH_TAPE_REFILL_SINCE the path inputs on a tape too short for the coin's age, before
+ * PATH_RETURNS_ACROSS_GAPS_SINCE the 15 and 30-minute returns on a tape too short for their
+ * window, and the social bits through SOCIAL_LIST_OUTAGE. Given the row's kind, the waited-for
+ * inputs on hourly rows banked before HOURLY_ROWS_WAIT_SINCE too: in on some of those rows and
+ * absent on most, they taught "hourly and missing", a pattern no decision shows. And
+ * bundledSupplyPct on rows with KOL bundles banked before BUNDLED_SUPPLY_POINT_IN_TIME_FROM.
+ * The TokenSage inputs on rows banked before NS_RULES_VERSION_MARKER_SINCE that carry no
+ * nsRulesVersion: those pre-date the marker and span the #631 regime step. From here on a change
+ * to what an ns* input means bumps NS_RULES_VERSION, and the rows written under the old meaning
+ * can be masked by version rather than by date (`nsRulesVersion !== NS_RULES_VERSION`); not
+ * applied yet, version 1 is the first.
+ * Returns the same object when nothing applies.
  */
 export function maskKnownBadInputs<T extends Record<string, number | null | undefined>>(
   anchorAt: Date,
   features: T,
+  sampleKind?: string,
 ): T {
   const at = anchorAt.getTime();
-  const inSocialOutage = at >= SOCIAL_LIST_OUTAGE.from.getTime() && at < SOCIAL_LIST_OUTAGE.until.getTime();
-  if (at >= PATH_TAPE_REFILL_SINCE.getTime() && !inSocialOutage) return features;
-  const masked: Record<string, number | null | undefined> = { ...features };
-  const clear = (name: string): void => {
-    if (masked[name] !== undefined) masked[name] = null;
-  };
-  if (inSocialOutage) SOCIAL_OUTAGE_FEATURES.forEach(clear);
-  if (at >= PATH_TAPE_REFILL_SINCE.getTime()) return masked as T;
-  const age = masked.ageMinutes;
-  const tape = masked.pathObservedMinutes;
+  const unwaitedHourly = sampleKind === "hourly" && at < HOURLY_ROWS_WAIT_SINCE.getTime();
+  // 2026-10-16 (data-correctness audit): the backfill rebuilt only rows whose KOL Bundled % was
+  // above 0; a row carrying Bundled % without a KOL Bundled % at all isn't the exact case either.
+  const rebuiltBundled =
+    at < BUNDLED_SUPPLY_POINT_IN_TIME_FROM.getTime() &&
+    features.bundledSupplyPct != null &&
+    features.kolBundledPct !== 0;
+  const unversionedNs =
+    at < NS_RULES_VERSION_MARKER_SINCE.getTime() &&
+    features.nsRulesVersion == null &&
+    ALL_NARRATIVE_FEATURES.some((name) => features[name] != null);
   if (
+    at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() &&
+    !unwaitedHourly &&
+    !rebuiltBundled &&
+    !unversionedNs
+  ) {
+    return features;
+  }
+  // Copied on the first input cleared, so a row nothing applies to comes back as it is.
+  let masked: Record<string, number | null | undefined> | null = null;
+  const clear = (name: string): void => {
+    if (features[name] === undefined || features[name] === null) return;
+    masked ??= { ...features };
+    masked[name] = null;
+  };
+  const done = (): T => (masked ?? features) as T;
+  if (unwaitedHourly) HOURLY_UNWAITED_FEATURES.forEach(clear);
+  if (rebuiltBundled) clear("bundledSupplyPct");
+  if (unversionedNs) ALL_NARRATIVE_FEATURES.forEach(clear);
+  if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime()) return done();
+  // The tape held less than `windowMinutes` of the coin's life (the pre-refill rule's test, with
+  // its slack for the rounding of pathObservedMinutes and the reference tick's own).
+  const age = features.ageMinutes;
+  const tape = features.pathObservedMinutes;
+  const tapeShortOf = (windowMinutes: number): boolean =>
     typeof age === "number" &&
     typeof tape === "number" &&
-    tape < Math.min(age, PATH_TAPE_MAX_WINDOW_MINUTES) - PATH_TAPE_SLACK_MINUTES
-  ) {
+    tape < Math.min(age, windowMinutes) - PATH_TAPE_SLACK_MINUTES;
+  for (const [name, windowMinutes] of PATH_RETURN_WINDOWS) if (tapeShortOf(windowMinutes)) clear(name);
+  const inSocialOutage = at >= SOCIAL_LIST_OUTAGE.from.getTime() && at < SOCIAL_LIST_OUTAGE.until.getTime();
+  if (inSocialOutage) SOCIAL_OUTAGE_FEATURES.forEach(clear);
+  if (at >= PATH_TAPE_REFILL_SINCE.getTime()) return done();
+  if (tapeShortOf(PATH_TAPE_MAX_WINDOW_MINUTES)) {
     for (const name of PRICE_PATH_FEATURES) if (name !== "pathObservedMinutes") clear(name);
   }
   if (at < SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE.getTime()) clear("sniperTop10WalletPct");
-  if (at >= FRESH_QUOTE_GAP_SINCE.getTime()) return masked as T;
+  if (at >= FRESH_QUOTE_GAP_SINCE.getTime()) return done();
   FRESH_RULE_ERA_FEATURES.forEach(clear);
-  if (at >= SOCIAL_BITS_FROM_DISCOVERY_SINCE.getTime()) return masked as T;
+  if (at >= SOCIAL_BITS_FROM_DISCOVERY_SINCE.getTime()) return done();
   SOCIAL_BIT_FEATURES.forEach(clear);
   if (at < VOLUME_ACCEL_YOUNG_NULL_SINCE.getTime()) {
-    const age = masked.ageMinutes;
-    if (typeof age === "number" && age < VOLUME_ACCEL_MIN_AGE_MINUTES && masked.volumeAccel !== undefined) {
-      masked.volumeAccel = null;
-    }
-    if (masked.pathRet1mPct !== undefined) masked.pathRet1mPct = null;
+    if (typeof age === "number" && age < VOLUME_ACCEL_MIN_AGE_MINUTES) clear("volumeAccel");
+    clear("pathRet1mPct");
   }
-  if (at < WEEKEND_FLAG_FROM.getTime() && masked.ctxWeekend !== undefined) masked.ctxWeekend = null;
+  if (at < WEEKEND_FLAG_FROM.getTime()) clear("ctxWeekend");
   if (at < TRADE_FLOW_FAKE_ZEROS_UNTIL.getTime()) {
-    for (const name of TRADE_FLOW_FEATURES) {
-      if (name !== "devInitialBuySol" && masked[name] !== undefined) masked[name] = null;
-    }
+    for (const name of TRADE_FLOW_FEATURES) if (name !== "devInitialBuySol") clear(name);
   }
-  return masked as T;
+  return done();
 }
 
 /**
@@ -860,6 +1035,7 @@ export const PRICE_PATH_FEATURES = [
   "pathMinutesSinceHigh60m",
   "pathHolderSlope10m",
   "pathObservedMinutes",
+  "pathGapMinutes",
 ] as const satisfies readonly (CandidateFeatureName & keyof PricePathFeatures)[];
 
 /** The market-context features, in vector order - each a MarketContextFeatures field of the same name. */
@@ -960,6 +1136,7 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   pathMinutesSinceHigh60m: "minutes since the 1h high",
   pathHolderSlope10m: "holders per minute",
   pathObservedMinutes: "minutes on tape",
+  pathGapMinutes: "minutes off tape (30m)",
   mktBaseRate1hPct: "market 2x rate (1h)",
   mktBaseRate6hPct: "market 2x rate (6h)",
   mktLaunchesPerHour: "launches per hour",
@@ -988,7 +1165,8 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   jup5mHolderChange: "5m holder change (live)",
   jup1hHolderChange: "1h holder change (live)",
   jupHolderCount: "holders (live)",
-  walletRiskTop10Max: "riskiest top-10 wallet",
+  walletRiskTop10Max: "riskiest top-10 wallet (percentile of scored wallets)",
+  walletRiskScoredTop10: "top-10 wallets scored",
   walletRiskFirstBuyersMean: "first buyers' wallet risk",
   walletRiskHighSupplyPct: "supply held by risky wallets",
   knownDumperFirstBuyers: "known dumpers among first buyers",
@@ -1010,6 +1188,8 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   kolBundledPct: "supply bundled by KOLs",
   bundledSupplyPct: "supply bundled (linked holders and KOL bundles)",
   launchpadStonks: "Stonks launch (vs Pump.fun)",
+  ageSource: "age counted from the launch (vs the pool)",
+  mktSource: "market data source",
   transferredSupplyPct: "supply transferred holder to holder",
   transferWalletCount: "top holders that sent or got a transfer",
   sameTimeFundedPct: "supply funded in the same minute",
@@ -1086,6 +1266,7 @@ export function scoredFromFeatures(
         : num("launchpadStonks") === 1
           ? STONKS_LAUNCHPAD
           : PUMPFUN_LAUNCHPAD,
+    marketSource: marketSourceFromCode(num("mktSource")),
     top10HolderPct: num("top10HolderPct"),
     devWalletPct: num("devWalletPct"),
     creatorHolding: num("devHolding") === undefined ? undefined : num("devHolding") === 1,
@@ -1097,6 +1278,7 @@ export function scoredFromFeatures(
     freshTopHolderCount: num("freshTopHolderCount"),
     freshTopHoldersChecked: num("freshTopHoldersChecked"),
     ageMinutes: num("ageMinutes"),
+    ageFromLaunch: bool("ageSource"),
     graduated: bool("graduated"),
     hasTwitter: bool("hasTwitter"),
     hasTelegram: bool("hasTelegram"),
@@ -1230,6 +1412,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     emptyTop10WalletPct: scored.emptyTop10WalletPct ?? null,
     sniperTop10WalletPct: scored.sniperTop10WalletPct ?? null,
     walletRiskTop10Max: scored.walletRiskTop10Max ?? null,
+    walletRiskScoredTop10: scored.walletRiskScoredTop10 ?? null,
     walletRiskFirstBuyersMean: scored.walletRiskFirstBuyersMean ?? null,
     walletRiskHighSupplyPct: scored.walletRiskHighSupplyPct ?? null,
     knownDumperFirstBuyers: scored.knownDumperFirstBuyers ?? null,
@@ -1258,6 +1441,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     bundledSupplyPct: scored.bundledSupplyPctModel ?? scored.bundledSupplyPct ?? null,
     launchpadStonks:
       scored.launchpad === STONKS_LAUNCHPAD ? 1 : scored.launchpad === PUMPFUN_LAUNCHPAD ? 0 : null,
+    mktSource: marketSourceCode(scored.marketSource),
     transferredSupplyPct: scored.transferredSupplyPct ?? null,
     transferWalletCount: scored.transferWalletCount ?? null,
     sameTimeFundedPct: scored.sameTimeFundedPct ?? null,
@@ -1280,6 +1464,7 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     kolRecentBuyers: scored.kolRecentBuyers ?? null,
     kolRecentSellers: scored.kolRecentSellers ?? null,
     ageMinutes: scored.ageMinutes ?? null,
+    ageSource: scored.ageFromLaunch === undefined ? null : scored.ageFromLaunch ? 1 : 0,
     graduated: scored.graduated === undefined ? null : scored.graduated ? 1 : 0,
     hasTwitter: scored.hasTwitter === undefined ? null : scored.hasTwitter ? 1 : 0,
     hasTelegram: scored.hasTelegram === undefined ? null : scored.hasTelegram ? 1 : 0,

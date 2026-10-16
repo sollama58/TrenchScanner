@@ -7,6 +7,7 @@ import {
   NARRATIVE_FEATURES_V6,
   NARRATIVE_FEATURES_V7,
   NARRATIVE_FEATURES_V8,
+  NS_RULES_VERSION,
   narrativeFeatureValues,
   narrativeIsLateCopy,
   narrativeReferentNamed,
@@ -131,10 +132,24 @@ describe("narrativeReadFromRow", () => {
 });
 
 describe("narrativeFeatureValues", () => {
-  it("is null across the board without a read", () => {
+  it("is null across the board without a read, but for the markers: no read, and the writer's version", () => {
     const v = narrativeFeatureValues(undefined);
     expect(Object.keys(v)).toEqual([...ALL_NARRATIVE_FEATURES]);
-    expect(Object.values(v).every((x) => x === null)).toBe(true);
+    expect(v.nsRead).toBe(0);
+    expect(v.nsRulesVersion).toBe(NS_RULES_VERSION);
+    const { nsRead: _read, nsRulesVersion: _version, ...rest } = v;
+    expect(Object.values(rest).every((x) => x === null)).toBe(true);
+  });
+
+  it("marks a read as in, under the writer's version, at either depth", () => {
+    expect(narrativeFeatureValues(narrativeReadFromRow(row()))).toMatchObject({
+      nsRead: 1,
+      nsRulesVersion: NS_RULES_VERSION,
+    });
+    expect(narrativeFeatureValues(narrativeReadFromRow(fullRow()))).toMatchObject({
+      nsRead: 1,
+      nsRulesVersion: NS_RULES_VERSION,
+    });
   });
 
   it("knows the theme, referent and flags on a basic read and leaves the X inputs null", () => {
@@ -181,16 +196,42 @@ describe("narrativeFeatureValues", () => {
     });
   });
 
-  it("marks a full read without a readable post as read-nothing, not unknown", () => {
+  it("marks a full read whose post was not read as unread, and what the post would have said as unknown", () => {
+    // The same row whether the fetch failed, was skipped, or there was no link: the X-derived
+    // inputs were 0 on all three until NS_RULES_VERSION 1, which trained "the fetch broke" as
+    // "nothing about this coin on X". Only the marker is a value now.
     const v = narrativeFeatureValues(narrativeReadFromRow(row({ depth: "full", trendMatched: false })));
     expect(v).toMatchObject({
       nsDepthFull: 1,
       nsXRead: 0,
-      nsXVerdictAbout: 0,
-      nsXLaunchAnnouncement: 0,
+      nsXVerdictAbout: null,
+      nsXVerdictUnrelated: null,
+      nsXLaunchAnnouncement: null,
+      nsXOfficialAccount: null,
+      nsXNarrativeRef: null,
+      nsXSpoofed: null,
+      nsXContentMismatch: null,
       nsXFit: null,
       nsXAuthorFollowersLog: null,
+      nsXPredatesTokenMin: null,
+      nsXReuseCount: null,
+      nsXCredibility23: null,
+      nsXAccountAgeDays: null,
+      nsXReuseRank: null,
+      nsXLikes: null,
       nsTrendMatched: 0,
+    });
+    // A flag TokenSage raised about the post it did not read is not a fact about the post either.
+    const flagged = narrativeFeatureValues(
+      narrativeReadFromRow(row({ depth: "full", flags: ["x_content_mismatch"] })),
+    );
+    expect(flagged.nsXContentMismatch).toBeNull();
+    // A read post keeps the facts, zeros included.
+    expect(narrativeFeatureValues(narrativeReadFromRow(fullRow({ flags: [] })))).toMatchObject({
+      nsXRead: 1,
+      nsXVerdictUnrelated: 0,
+      nsXOfficialAccount: 0,
+      nsXContentMismatch: 0,
     });
   });
 

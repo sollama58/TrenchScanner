@@ -3,6 +3,8 @@ import {
   coinWalletRisk,
   coinWalletWins,
   isWinnerWallet,
+  scorePercentile,
+  scoreWithoutCoin,
   walletLabels,
   walletRiskScore,
   walletWinScore,
@@ -53,6 +55,7 @@ describe("coinWalletRisk", () => {
       }),
     ).toEqual({
       walletRiskTop10Max: 90,
+      walletRiskScoredTop10: 2,
       walletRiskFirstBuyersMean: 52.5,
       walletRiskHighSupplyPct: 5,
       knownDumperFirstBuyers: 1,
@@ -62,9 +65,79 @@ describe("coinWalletRisk", () => {
   it("is unknown where nothing in view is scored or read", () => {
     expect(coinWalletRisk(lookup, { top10Holders: ["x"] })).toEqual({
       walletRiskTop10Max: null,
+      walletRiskScoredTop10: 0,
       walletRiskFirstBuyersMean: null,
       walletRiskHighSupplyPct: null,
       knownDumperFirstBuyers: null,
+    });
+    expect(coinWalletRisk(lookup, {}).walletRiskScoredTop10).toBeNull();
+  });
+
+  // 2026-10-16 (data-correctness audit): a repeat decision reads the wallets without the coin's
+  // own tape, and the max as a percentile of the wallets scored at the time.
+  describe("without the coin's own tape", () => {
+    const market = 0.2;
+    // Dumped on 4 of 10 coins, this one among them: 40 * (5/15) / 0.2 = 66.7.
+    const counted = { appearances: 10, dumps: 4, fastExits: 0, snipes: 0 };
+    const withCounts = new Map([
+      ["a", { score: walletRiskScore(counted, market), ...counted, dumper: true }],
+      ["b", { score: 30, dumps: 0, appearances: 2, fastExits: 0, snipes: 0 }],
+      ["old", { score: 95, dumps: 9 }],
+    ]);
+    const lookupCounts = (w: string) => withCounts.get(w);
+    const ownTape = new Map([
+      ["a", { dumpedIntoStop: true, fastExit: false, launchSniper: false }],
+      ["old", { dumpedIntoStop: true, fastExit: false, launchSniper: false }],
+    ]);
+
+    it("rebuilds a wallet's score from its counts less the coin's own row", () => {
+      const own = { dumpedIntoStop: true, fastExit: true, launchSniper: false };
+      expect(scoreWithoutCoin({ score: 0, ...counted, fastExits: 1 }, own, market)).toBe(
+        walletRiskScore({ appearances: 9, dumps: 3, fastExits: 0, snipes: 0 }, market),
+      );
+      // Clamped: a row not yet counted can't take the counts below zero.
+      expect(
+        scoreWithoutCoin({ score: 0, appearances: 0, dumps: 0, fastExits: 0, snipes: 0 }, own, market),
+      ).toBe(walletRiskScore({ appearances: 0, dumps: 0, fastExits: 0, snipes: 0 }, market));
+      expect(scoreWithoutCoin({ score: 95, dumps: 9 }, own, market)).toBeNull();
+    });
+
+    it("reads the max without the coin's own row, and leaves out what it can't rebuild", () => {
+      const r = coinWalletRisk(
+        lookupCounts,
+        { top10Holders: ["a", "b", "old"], firstBuyers: ["a", "old"] },
+        { ownTape, marketDumpRate: market },
+      );
+      // 40 * (4/14) / 0.2 = 57.1; "old" carries no counts, so it is unknown, not 95.
+      expect(r.walletRiskTop10Max).toBeCloseTo(57.1, 1);
+      expect(r.walletRiskScoredTop10).toBe(2);
+      expect(r.walletRiskFirstBuyersMean).toBeCloseTo(57.1, 1);
+      expect(r.knownDumperFirstBuyers).toBe(1);
+      // Without the market rate nothing can be rebuilt: the wallets on the tape drop out.
+      expect(coinWalletRisk(lookupCounts, { top10Holders: ["a", "b"] }, { ownTape })).toMatchObject({
+        walletRiskTop10Max: 30,
+        walletRiskScoredTop10: 1,
+      });
+    });
+
+    it("places the max among the wallets scored at the time", () => {
+      const sorted = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+      expect(scorePercentile(sorted, 55)).toBe(50);
+      expect(scorePercentile(sorted, 10)).toBe(0);
+      expect(scorePercentile(sorted, 100)).toBe(90);
+      expect(scorePercentile(sorted, 101)).toBe(100);
+      expect(scorePercentile([], 55)).toBe(0);
+      expect(scorePercentile([1, 2, 3], 3)).toBe(66.7);
+      const r = coinWalletRisk(
+        lookup,
+        { top10Holders: ["a", "b"] },
+        { rank: (s) => scorePercentile(sorted, s) },
+      );
+      expect(r.walletRiskTop10Max).toBe(80);
+      // The other readings stay on the score's own scale.
+      expect(
+        coinWalletRisk(lookup, { firstBuyers: ["a"] }, { rank: () => 1 }).walletRiskFirstBuyersMean,
+      ).toBe(90);
     });
   });
 });

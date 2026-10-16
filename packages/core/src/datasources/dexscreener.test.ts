@@ -128,6 +128,36 @@ describe("graduation time", () => {
   });
 });
 
+describe("socials on a candidate", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("are unknown without an info block, and a read none or link with one", async () => {
+    // Nearly every young coin's pair has no info block: nothing was read, so nothing is claimed
+    // (a false here was stored as "none" and the models read 0 as "unread" - 2026-10-16 audit).
+    const pairs = [
+      { chainId: "solana", dexId: "pumpfun", baseToken: { address: "bare" }, volume: { h1: 1 } },
+      {
+        chainId: "solana",
+        dexId: "pumpfun",
+        baseToken: { address: "profiled" },
+        volume: { h1: 1 },
+        info: { socials: [{ type: "twitter", url: "https://x.com/a" }] },
+      },
+    ];
+    vi.stubGlobal("fetch", () => Promise.resolve(new Response(JSON.stringify(pairs))));
+    const tokens = await new DexScreenerClient().getTokensByAddresses(["bare", "profiled"], 1, {
+      retries: 0,
+    });
+    const by = new Map(tokens.map((t) => [t.mintAddress, t]));
+    expect(by.get("bare")?.hasTwitter).toBeUndefined();
+    expect(by.get("bare")?.hasWebsite).toBeUndefined();
+    expect(by.get("profiled")?.hasTwitter).toBe(true);
+    expect(by.get("profiled")?.hasWebsite).toBe(false);
+  });
+});
+
 describe("pumpSwapGraduation", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -244,7 +274,11 @@ describe("frozen graduation curves", () => {
     const lookup = async () =>
       (await client.getTokensByAddresses(["quiet"], 1, { retries: 0, fresh: true }))[0];
 
-    expect(await lookup()).toMatchObject({ dexId: "pumpfun", marketCapUsd: 45_000 });
+    expect(await lookup()).toMatchObject({
+      dexId: "pumpfun",
+      marketCapUsd: 45_000,
+      marketSource: "dexscreener",
+    });
     expect(reReads).toHaveLength(1);
     now += 30_000;
     await lookup();
@@ -604,6 +638,7 @@ describe("parseGeckoTokens", () => {
       sells5m: 2,
       volume5mUsd: 120,
       volume24hUsd: 9000,
+      marketSource: "gecko",
     });
     expect(t?.pairCreatedAt?.toISOString()).toBe("2026-10-07T20:00:00.000Z");
   });

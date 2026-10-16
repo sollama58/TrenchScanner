@@ -436,9 +436,24 @@ model Token {
   /// of them. Null means DexScreener has no image, not that we failed to look.
   imageUrl                String?
   firstSeenAt             DateTime  @default(now())
-  hasTwitter              Boolean   @default(false)
+  /// When the mint launched on its launchpad's bonding curve, as a launch source said: Pump.fun's
+  /// `created_timestamp` (its lists at discovery, or asked once per graduated coin - the worker's
+  /// launchTimes.ts), the stream's create event, Jupiter's first pool. Null until one has. The
+  /// token's age (ageMinutes) reads from here when set: a coin the scan first met after
+  /// graduation has only its PumpSwap pool to go by otherwise, and a coin that bonded after an
+  /// hour read as a minute old (user decision 2026-10-16). firstSeenAt stays what it is - when
+  /// the scanner knew of the mint - which the watchlist's horizons are measured from.
+  launchedAt              DateTime?
+  /// Null = no source has read this coin's socials yet; false = a source that carries them
+  /// (Pump.fun's coin details, the launch metadata, a DexScreener pair with an info block) said
+  /// there is none. Nullable since 2026-10-16 (data-correctness audit, user decision): rows from
+  /// PumpPortal, Jupiter and DexScreener's lists stored false when nothing was ever read, and the
+  /// models learned "0 = unread" as a signal. Rows from before keep that false as it is; the
+  /// training-side masks in curation/features.ts cover the eras. hasTelegram is a retired learner
+  /// input and keeps its old shape.
+  hasTwitter              Boolean?
   hasTelegram             Boolean   @default(false)
-  hasWebsite              Boolean   @default(false)
+  hasWebsite              Boolean?
   /// The launcher's X/Twitter and website links as found at discovery (Pump.fun's `twitter` /
   /// `website`, or DexScreener's profile links). Only https URLs are kept; a bare X handle is
   /// stored as its https://x.com/ URL. Null when the source had none. Kept so the AI reviewer,
@@ -1055,6 +1070,12 @@ model TokenSnapshot {
   volumeToMcapRatio Float?
   buys24h           Int?
   sells24h          Int?
+  // Which source the market figures on this row came from (core's marketSource.ts):
+  // "dexscreener", "dexscreener_live" (DexScreener's pair at Jupiter's live price), "jupiter" or
+  // "gecko". The refresh switches by age and listing, and the sources' figures mean different
+  // things; the feature vector carries the same fact as mktSource. Null on rows from before
+  // 2026-10-16, and on a reading built without one.
+  marketSource      String?
 
   // Short-window market data, from the same DexScreener pair response the 24h figures come from
   // (its priceChange/volume/txns objects carry m5/h1/h6 buckets alongside h24 - free to capture,
@@ -1480,6 +1501,11 @@ model WalletHoldingsCache {
   /// row can answer for launches the wallet turns up on later - see
   /// WalletHoldingsResult.complete. False on older rows and on wallets too big to list in full.
   breakdownComplete Boolean @default(false)
+
+  /// A holding no price source was asked about (a mint Jupiter's search doesn't list - see
+  /// WalletHoldingsResult.unpriced): otherHoldingsUsd is a floor that can't call the wallet
+  /// empty. False on rows written before 2026-10-16, which counted such holdings as $0.
+  unpriced Boolean @default(false)
 
   checkedAt DateTime @default(now())
 

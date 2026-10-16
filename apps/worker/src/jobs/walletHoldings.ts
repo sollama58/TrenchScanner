@@ -72,6 +72,11 @@ export interface WalletHoldings {
   otherHoldingsUsd: number;
   /** { mint: usd } for the launches this reading covers, zeroes included. */
   perMintUsd: Record<string, number>;
+  /**
+   * A holding no price source was asked about (WalletHoldingsResult.unpriced): the floor can
+   * say the wallet is NOT empty, never that it is. Absent on readings with every holding priced.
+   */
+  unpriced?: boolean;
 }
 
 /**
@@ -130,7 +135,11 @@ export async function resolveWalletHoldings(
       // is, which is the very bug this breakdown exists to fix. Re-fetch instead.
       continue;
     }
-    result.set(row.address, { otherHoldingsUsd: row.otherHoldingsUsd, perMintUsd });
+    result.set(row.address, {
+      otherHoldingsUsd: row.otherHoldingsUsd,
+      perMintUsd,
+      ...(row.unpriced ? { unpriced: true } : {}),
+    });
   }
 
   // An endpoint that doesn't serve DAS (or one stood down after an outage) can't answer anything
@@ -192,6 +201,7 @@ export async function resolveWalletHoldings(
     otherHoldingsUsd: number;
     perMintUsd: Record<string, number>;
     breakdownComplete: boolean;
+    unpriced: boolean;
   }[] = [];
   let failedCount = 0;
   let unsupported = 0;
@@ -201,12 +211,18 @@ export async function resolveWalletHoldings(
     if (outcome.status === "found") {
       failureBackoff.succeed(address);
       const perMintUsd = compactPerMint(outcome.perMintUsd, ownMints.get(address));
-      result.set(address, { otherHoldingsUsd: outcome.otherHoldingsUsd, perMintUsd });
+      const unpriced = outcome.unpriced === true;
+      result.set(address, {
+        otherHoldingsUsd: outcome.otherHoldingsUsd,
+        perMintUsd,
+        ...(unpriced ? { unpriced } : {}),
+      });
       resolved.push({
         address,
         otherHoldingsUsd: outcome.otherHoldingsUsd,
         perMintUsd,
         breakdownComplete: outcome.complete,
+        unpriced,
       });
     } else if (outcome.status === "unsupported") {
       unsupported += 1;
@@ -233,12 +249,14 @@ export async function resolveWalletHoldings(
               otherHoldingsUsd: row.otherHoldingsUsd,
               perMintUsd: row.perMintUsd,
               breakdownComplete: row.breakdownComplete,
+              unpriced: row.unpriced,
               checkedAt,
             },
             update: {
               otherHoldingsUsd: row.otherHoldingsUsd,
               perMintUsd: row.perMintUsd,
               breakdownComplete: row.breakdownComplete,
+              unpriced: row.unpriced,
               checkedAt,
             },
           }),
@@ -342,12 +360,18 @@ function coversEveryRelevantMint(
  * answer null, because a percentage quoted over a top-10 list we only partly priced is a
  * fabricated number rather than a weak one. Those wallets retry on a later cycle.
  *
- * Note the asymmetry that remains in the value itself: measured holdings are a FLOOR (unpriced
- * assets count as zero - see getOtherHoldingsUsdBatch), so this percentage can overstate how
- * many wallets are empty, never understate. That direction is the safe one for a risk signal -
- * it errs toward flagging a token rather than vouching for it - but it does mean the number
- * should be read as "wallets we cannot see $25 of other holdings in", not "wallets that are
- * definitely empty".
+ * Note the asymmetry that remains in the value itself: measured holdings are a FLOOR (a token
+ * with no pair anywhere counts as zero - see getOtherHoldingsUsdBatch), so this percentage can
+ * overstate how many wallets are empty, never understate. That direction is the safe one for a
+ * risk signal - it errs toward flagging a token rather than vouching for it - but it does mean
+ * the number should be read as "wallets we cannot see $25 of other holdings in", not "wallets
+ * that are definitely empty".
+ *
+ * A wallet with a holding no source was asked about (`unpriced`, user decision 2026-10-16) is
+ * a different case: the floor is missing something that may well be worth the bar, so the
+ * wallet is unknown when it reads under the bar, and the whole answer null with it. Until then
+ * a holder of coins Jupiter's search doesn't list read "empty", which is the signal counting
+ * a lookup's blind spot as a fact about the wallet (round2-code.md, section 6).
  */
 export function computeEmptyPct(
   addresses: string[],
@@ -367,7 +391,11 @@ export function computeEmptyPct(
     if (thisLaunch === undefined) return null;
 
     const besidesThisLaunch = holdings.otherHoldingsUsd - thisLaunch;
-    if (besidesThisLaunch < minUsd) emptyCount += 1;
+    if (besidesThisLaunch < minUsd) {
+      // Under the bar on what could be priced, with a holding nobody priced: not known empty.
+      if (holdings.unpriced) return null;
+      emptyCount += 1;
+    }
   }
   return (emptyCount / addresses.length) * 100;
 }

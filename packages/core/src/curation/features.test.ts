@@ -7,7 +7,10 @@ import {
   RETIRED_LEARNER_INPUTS,
   learnerSubset,
   maskKnownBadInputs,
+  HOURLY_ROWS_WAIT_SINCE,
+  BUNDLED_SUPPLY_POINT_IN_TIME_FROM,
   NARRATIVE_READ_AT_DECISION_SINCE,
+  NS_RULES_VERSION_MARKER_SINCE,
   SOCIAL_BITS_FROM_DISCOVERY_SINCE,
   withCurrentNarrativeTiming,
   TRADE_FLOW_FAKE_ZEROS_UNTIL,
@@ -15,9 +18,12 @@ import {
   WEEKEND_FLAG_FROM,
   FRESH_QUOTE_GAP_SINCE,
   PATH_TAPE_REFILL_SINCE,
+  PATH_RETURNS_ACROSS_GAPS_SINCE,
+  PRICE_PATH_FEATURES,
   SOCIAL_LIST_OUTAGE,
   SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE,
 } from "./features.js";
+import { NS_RULES_VERSION } from "./narrativeFeatures.js";
 import type { ScoredToken } from "../types.js";
 
 function scored(overrides: Partial<ScoredToken> = {}): ScoredToken {
@@ -63,6 +69,9 @@ describe("buildCandidateFeatures - short-window derivations", () => {
     expect(LEARNER_FEATURE_NAMES.length).toBe(CANDIDATE_FEATURE_NAMES.length - RETIRED_LEARNER_INPUTS.size);
     for (const name of ["priceChange5mPct", "volume5mUsd", "ageMinutes", "buyRatio5m", "ctxHourSin"] as const)
       expect(LEARNER_FEATURE_NAMES).toContain(name);
+    // The tape's coverage is a learner input and rides with the path block, live and replayed.
+    expect(LEARNER_FEATURE_NAMES).toContain("pathGapMinutes");
+    expect(PRICE_PATH_FEATURES).toContain("pathGapMinutes");
     expect(learnerSubset(["scoreTotal", "ageMinutes", "hasTelegram"])).toEqual(["ageMinutes"]);
   });
 
@@ -189,7 +198,45 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("transferWalletCount");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("mktSource");
+    // Appended on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.
+    expect(CANDIDATE_FEATURE_NAMES).toContain("walletRiskScoredTop10");
+  });
+
+  it("says whether the age counts from the launch or the pool, null without an age, and replays it", () => {
+    const launch = buildCandidateFeatures(scored({ ageMinutes: 90, ageFromLaunch: true }));
+    expect(launch.ageSource).toBe(1);
+    expect(buildCandidateFeatures(scored({ ageMinutes: 1, ageFromLaunch: false })).ageSource).toBe(0);
+    expect(buildCandidateFeatures(scored({ ageMinutes: undefined })).ageSource).toBeNull();
+    expect(LEARNER_FEATURE_NAMES).toContain("ageSource");
+    expect(scoredFromFeatures(launch, 0.0001, 150_000).ageFromLaunch).toBe(true);
+    expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).ageFromLaunch).toBeUndefined();
+  });
+
+  it("records the market source as its code, a learner input, and replays it; null without one", () => {
+    const live = buildCandidateFeatures(scored({ marketSource: "dexscreener_live" }));
+    expect(live.mktSource).toBe(2);
+    expect(buildCandidateFeatures(scored({ marketSource: "dexscreener" })).mktSource).toBe(1);
+    expect(buildCandidateFeatures(scored({ marketSource: "jupiter" })).mktSource).toBe(3);
+    expect(buildCandidateFeatures(scored({ marketSource: "gecko" })).mktSource).toBe(4);
+    // A reading built without one, and every row banked before the marker.
+    expect(buildCandidateFeatures(scored()).mktSource).toBeNull();
+    expect(scoredFromFeatures(live, 0.0001, 150_000).marketSource).toBe("dexscreener_live");
+    expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).marketSource).toBeUndefined();
+    // A code this build doesn't know replays as no source rather than a wrong one.
+    expect(scoredFromFeatures({ mktSource: 99 }, 0.0001, 150_000).marketSource).toBeUndefined();
+    expect(LEARNER_FEATURE_NAMES).toContain("mktSource");
+  });
+
+  it("writes the TokenSage markers on every row: read or not, and the writer's rules version", () => {
+    const none = buildCandidateFeatures(scored());
+    expect(none.nsRead).toBe(0);
+    expect(none.nsRulesVersion).toBe(NS_RULES_VERSION);
+    expect(none.nsDepthFull).toBeNull();
+    expect(LEARNER_FEATURE_NAMES).toContain("nsRead");
+    // The version is a handle for masking, never an input.
+    expect(RETIRED_LEARNER_INPUTS.has("nsRulesVersion")).toBe(true);
+    expect(LEARNER_FEATURE_NAMES).not.toContain("nsRulesVersion");
   });
 
   it("records Transferred % and the transfer count, recorded only, null while unread", () => {
@@ -245,6 +292,24 @@ describe("buildCandidateFeatures - audit additions", () => {
     expect(f.liquidityToMcapRatio).toBeNull();
     expect(f.dexBoosted).toBeNull();
     expect(f.hasDescription).toBeNull();
+  });
+
+  it("stores an unread social as missing, a read one as 0/1, and replays it the same way", () => {
+    // Token.hasTwitter / hasWebsite null = never read (2026-10-16 data audit): never a 0.
+    const unread = buildCandidateFeatures(base);
+    expect(unread.hasTwitter).toBeNull();
+    expect(unread.hasWebsite).toBeNull();
+    const none = buildCandidateFeatures({ ...base, hasTwitter: false, hasWebsite: false });
+    expect(none.hasTwitter).toBe(0);
+    expect(none.hasWebsite).toBe(0);
+    const linked = buildCandidateFeatures({ ...base, hasTwitter: true, hasWebsite: true });
+    expect(linked.hasTwitter).toBe(1);
+    expect(linked.hasWebsite).toBe(1);
+    // The Rules replay reads the stored vector back through scoredFromFeatures: missing stays
+    // unknown, so a replayed decision sees what the live one saw.
+    expect(scoredFromFeatures(unread, 1, 100_000).hasTwitter).toBeUndefined();
+    expect(scoredFromFeatures(none, 1, 100_000).hasTwitter).toBe(false);
+    expect(scoredFromFeatures(linked, 1, 100_000).hasWebsite).toBe(true);
   });
 });
 
@@ -339,6 +404,31 @@ describe("withCurrentNarrativeTiming", () => {
 });
 
 describe("maskKnownBadInputs", () => {
+  it("reads a backfilled bundledSupplyPct as missing on rows with KOL bundles banked before the point-in-time backfill", () => {
+    const before = new Date(BUNDLED_SUPPLY_POINT_IN_TIME_FROM.getTime() - 1);
+    const rebuilt = { bundledSupplyPct: 6, kolBundledPct: 3, linkedWalletPct: 3, mcapUsd: 50_000 };
+    expect(maskKnownBadInputs(before, rebuilt)).toEqual({ ...rebuilt, bundledSupplyPct: null });
+    expect(rebuilt.bundledSupplyPct).toBe(6);
+    expect(maskKnownBadInputs(BUNDLED_SUPPLY_POINT_IN_TIME_FROM, rebuilt)).toBe(rebuilt);
+    // No KOL bundled anyone: Bundled % is the linked share itself, exact at any time.
+    const exact = { bundledSupplyPct: 3, kolBundledPct: 0, linkedWalletPct: 3, mcapUsd: 50_000 };
+    expect(maskKnownBadInputs(before, exact)).toBe(exact);
+    // Without a KOL Bundled % the row isn't the exact case either.
+    expect(maskKnownBadInputs(before, { bundledSupplyPct: 3, mcapUsd: 50_000 }).bundledSupplyPct).toBeNull();
+    expect(maskKnownBadInputs(before, { kolBundledPct: 3, mcapUsd: 50_000 })).toEqual({
+      kolBundledPct: 3,
+      mcapUsd: 50_000,
+    });
+    // Older rows get it masked alongside the other masks.
+    expect(maskKnownBadInputs(new Date("2026-10-04T12:00:00Z"), { ...rebuilt, hasTwitter: 1 })).toMatchObject(
+      {
+        bundledSupplyPct: null,
+        hasTwitter: null,
+        kolBundledPct: 3,
+      },
+    );
+  });
+
   it("reads the fake order-flow zeros on old rows as missing, and leaves newer rows alone", () => {
     const row = {
       uniqueBuyers5m: 0,
@@ -399,7 +489,38 @@ describe("maskKnownBadInputs", () => {
     expect(maskKnownBadInputs(at, full).pathRet15mPct).toBe(20);
     const young = { ageMinutes: 3, pathObservedMinutes: 2.5, pathRet1mPct: 4 };
     expect(maskKnownBadInputs(at, young).pathRet1mPct).toBe(4);
-    expect(maskKnownBadInputs(PATH_TAPE_REFILL_SINCE, short).pathRet15mPct).toBe(20);
+    expect(maskKnownBadInputs(PATH_TAPE_REFILL_SINCE, short).pathRet5mPct).toBe(5);
+  });
+
+  it("reads the 15 and 30-minute returns as missing before they spanned gaps when the tape was short of the window", () => {
+    const at = new Date("2026-10-16T18:59:59Z");
+    // Tape under 15 minutes on a 40-minute coin: both returns go; the rest of the block stays.
+    const short = {
+      ageMinutes: 40,
+      pathObservedMinutes: 12,
+      pathRet5mPct: 5,
+      pathRet15mPct: 20,
+      pathRet30mPct: 25,
+      pathDrawdown15mPct: -3,
+      pathGapMinutes: 18,
+      mcapUsd: 1,
+    };
+    expect(maskKnownBadInputs(at, short)).toEqual({ ...short, pathRet15mPct: null, pathRet30mPct: null });
+    expect(short.pathRet15mPct).toBe(20);
+    // Tape past 15 but short of 30: only the 30-minute return goes.
+    const mid = { ...short, pathObservedMinutes: 20 };
+    expect(maskKnownBadInputs(at, mid)).toEqual({ ...mid, pathRet30mPct: null });
+    // A full tape, or a coin younger than the window the tape has followed from birth, keeps both.
+    expect(maskKnownBadInputs(at, { ...short, pathObservedMinutes: 29.5 })).toEqual({
+      ...short,
+      pathObservedMinutes: 29.5,
+    });
+    const young = { ...short, ageMinutes: 10, pathObservedMinutes: 9.5 };
+    expect(maskKnownBadInputs(at, young)).toBe(young);
+    // The slack: a tape a few seconds short of the window still counts as covering it.
+    expect(maskKnownBadInputs(at, { ...mid, pathObservedMinutes: 29.2 }).pathRet30mPct).toBe(25);
+    // Rows since carry returns measured across the gap, read as they are.
+    expect(maskKnownBadInputs(PATH_RETURNS_ACROSS_GAPS_SINCE, short)).toBe(short);
   });
 
   it("reads the sniper share as missing before closed accounts left the top 10", () => {
@@ -442,6 +563,101 @@ describe("maskKnownBadInputs", () => {
       ctxHourSin: 0.5,
     });
     expect(maskKnownBadInputs(WEEKEND_FLAG_FROM, row).ctxWeekend).toBe(1);
+  });
+
+  it("reads the waited-for inputs as missing on hourly rows banked before the hourly wait, and nowhere else", () => {
+    const row = {
+      nsXRead: 1,
+      nsXFit: 0.8,
+      nsXLikes: 12,
+      nsCopycat: 1,
+      nsDepthFull: 1,
+      freshTop10WalletPct: 20,
+      emptyTop10WalletPct: 10,
+      sniperTop10WalletPct: 30,
+      linkedCreatorPct: 5,
+      linkedWalletCount: 2,
+      cexFundedPct: 40,
+      cexFundedCount: 8,
+      bundledSupplyPct: 3,
+      kolBundledPct: 0,
+      transferredSupplyPct: 1,
+      top10HolderPct: 25,
+      mcapUsd: 50_000,
+      hasTwitter: 1,
+      nsRulesVersion: NS_RULES_VERSION,
+    };
+    const before = new Date(HOURLY_ROWS_WAIT_SINCE.getTime() - 1);
+    const masked = maskKnownBadInputs(before, row, "hourly");
+    expect(masked).toEqual({
+      ...row,
+      nsXRead: null,
+      nsXFit: null,
+      nsXLikes: null,
+      freshTop10WalletPct: null,
+      emptyTop10WalletPct: null,
+      sniperTop10WalletPct: null,
+      linkedCreatorPct: null,
+      linkedWalletCount: null,
+      cexFundedPct: null,
+      cexFundedCount: null,
+      bundledSupplyPct: null,
+      kolBundledPct: null,
+      transferredSupplyPct: null,
+    });
+    expect(row.nsXRead).toBe(1);
+    // The quick read, the holder share and the social bits are as they were.
+    expect(masked).toMatchObject({ nsCopycat: 1, nsDepthFull: 1, top10HolderPct: 25, hasTwitter: 1 });
+    // A decision row of the same moment, an hourly row since the wait, and a call without the
+    // kind (the older callers) are left alone.
+    expect(maskKnownBadInputs(before, row, "event")).toBe(row);
+    expect(maskKnownBadInputs(HOURLY_ROWS_WAIT_SINCE, row, "hourly")).toBe(row);
+    expect(maskKnownBadInputs(before, row)).toBe(row);
+    // Together with the older masks on a row old enough for both.
+    const oldest = maskKnownBadInputs(new Date("2026-10-07T12:00:00Z"), row, "hourly");
+    expect(oldest).toMatchObject({ hasTwitter: null, nsXRead: null, nsCopycat: 1 });
+  });
+
+  it("reads the TokenSage inputs as missing on rows from before the rules marker that carry no version", () => {
+    // A row from the #631 era: ns* inputs written under rules nobody can name.
+    const row = {
+      nsCopycat: 1,
+      nsDepthFull: 1,
+      nsXRead: 0,
+      nsLogoScore: null,
+      mcapUsd: 50_000,
+      hasTwitter: 1,
+    };
+    const before = new Date("2026-10-16T18:59:59Z");
+    expect(maskKnownBadInputs(before, row)).toEqual({
+      nsCopycat: null,
+      nsDepthFull: null,
+      nsXRead: null,
+      nsLogoScore: null,
+      mcapUsd: 50_000,
+      hasTwitter: 1,
+    });
+    expect(row.nsCopycat).toBe(1);
+    // The trainer's fixed shape fills a missing input with undefined, which is also "no version".
+    expect(maskKnownBadInputs(before, { ...row, nsRulesVersion: undefined }).nsCopycat).toBeNull();
+    // A row from the marker on carries its version and is read as stored, same object.
+    const versioned = { ...row, nsRulesVersion: NS_RULES_VERSION, nsRead: 1 };
+    expect(maskKnownBadInputs(NS_RULES_VERSION_MARKER_SINCE, versioned)).toBe(versioned);
+    // A pre-marker row that somehow carries one is trusted on it.
+    expect(maskKnownBadInputs(before, versioned)).toBe(versioned);
+    // Nothing to mask on a row without TokenSage inputs: same object.
+    const noRead = { mcapUsd: 40_000, hasTwitter: 1 };
+    expect(maskKnownBadInputs(before, noRead)).toBe(noRead);
+  });
+
+  it("masks the TokenSage inputs together with the older eras' inputs on one row", () => {
+    const row = { nsCopycat: 1, hasTwitter: 1, uniqueBuyers5m: 0, mcapUsd: 50_000 };
+    expect(maskKnownBadInputs(new Date("2026-10-04T12:00:00Z"), row)).toEqual({
+      nsCopycat: null,
+      hasTwitter: null,
+      uniqueBuyers5m: null,
+      mcapUsd: 50_000,
+    });
   });
 
   it("keeps the retired duplicates off the learner list", () => {

@@ -1,7 +1,9 @@
 import {
   createLogger,
+  deriveGraduated,
   forEachWithConcurrency,
   isCurveVenue,
+  STONKS_LAUNCHPAD,
   type DexScreenerClient,
   type Env,
   type PumpFunClient,
@@ -37,6 +39,10 @@ const launchBackoff = new FailureBackoff();
 const graduationBackoff = new FailureBackoff();
 const LOOKUP_CONCURRENCY = 4;
 const POOL_RECHECK_MINUTES = 3;
+/** Mints whose launch time is being asked for, or written to the Token row, right now. */
+const launchLookupsInFlight = new Set<string>();
+/** Mints whose launch time this process has written to the Token row (never twice). */
+const launchesStored = new Set<string>();
 
 /** Test hook. */
 export function resetLaunchTimes(): void {
@@ -44,6 +50,8 @@ export function resetLaunchTimes(): void {
   graduations.clear();
   launchBackoff.clear();
   graduationBackoff.clear();
+  launchLookupsInFlight.clear();
+  launchesStored.clear();
 }
 
 function remember<V>(map: Map<string, V>, mint: string, ms: V): void {
@@ -186,6 +194,103 @@ export async function resolvePreBondSeconds(
 
 const graduatedAt = (c: PreBondCandidate): number | undefined =>
   validMs(c.graduatedAt) ?? graduations.get(c.mintAddress);
+
+export interface LaunchTimeCandidate {
+  mintAddress: string;
+  dexId?: string;
+  pairCreatedAt?: Date;
+  launchpad?: string;
+}
+
+/**
+ * When each candidate launched, for the token's age (processCandidate's ageMinutes, and the
+ * ageSource input): the launch time a source has said, from the Token row (`stored`,
+ * Token.launchedAt) or this process (discovery lists, the curve pair, earlier lookups). A mint
+ * missing from the result has none known, and its age counts from the earliest anchor the scan
+ * has - on a coin first met after graduation, its PumpSwap pool.
+ *
+ * A graduated Pump.fun coin nobody has a launch time for is asked of Pump.fun once, BEHIND the
+ * cycle: the lookups start here and the cycle goes on without them, the answer lands on the Token
+ * row (`store`) and in memory, and the next scan reads it. The scan loop's stages are on a
+ * budget each, and a 5-second Pump.fun call per graduate would come out of the decisions'; a
+ * one-cycle wait on the first sighting is the cost of keeping it off that path. Up to
+ * LAUNCH_TIME_LOOKUPS_MAX_PER_CYCLE start per cycle; a failed lookup backs off like the pre-bond
+ * cut's (never cached), and Pump.fun's "no such coin" is kept for the process so a coin it never
+ * launched costs one call per restart. A launch time known here but not yet on the row (one the
+ * discovery lists said, on a row from before the column) is written once as well, so a restart
+ * reads it back.
+ */
+export function resolveLaunchTimes(
+  candidates: ReadonlyArray<LaunchTimeCandidate>,
+  stored: ReadonlyMap<string, Date | null | undefined>,
+  clients: { pumpFun: Pick<PumpFunClient, "launchTime"> },
+  env: Pick<Env, "LAUNCH_TIME_LOOKUPS_MAX_PER_CYCLE">,
+  store: (mintAddress: string, launchedAt: Date) => Promise<unknown>,
+  now = Date.now(),
+): { known: Map<string, Date>; pending: Promise<void> } {
+  const known = new Map<string, Date>();
+  const writes: Promise<unknown>[] = [];
+  const keep = (mint: string, launchedAt: Date): void => {
+    if (launchLookupsInFlight.has(mint) || launchesStored.has(mint)) return;
+    launchLookupsInFlight.add(mint);
+    writes.push(
+      store(mint, launchedAt)
+        .then(() => launchesStored.add(mint))
+        .catch((err: unknown) => logger.warn("failed to record a launch time", { mint, error: String(err) }))
+        .finally(() => launchLookupsInFlight.delete(mint)),
+    );
+  };
+
+  const lookups: string[] = [];
+  for (const c of candidates) {
+    const mint = c.mintAddress;
+    // The row's answer and the curve pair's seed memory, as the discovery lists do.
+    const onRow = validMs(stored.get(mint) ?? undefined);
+    if (onRow !== undefined && launches.get(mint) == null) remember(launches, mint, onRow);
+    const curveMs = validMs(c.pairCreatedAt);
+    if (isCurveVenue(c.dexId) && curveMs !== undefined && launches.get(mint) == null) {
+      remember(launches, mint, curveMs);
+    }
+    const launched = launches.get(mint);
+    if (typeof launched === "number") {
+      known.set(mint, new Date(launched));
+      if (onRow === undefined) keep(mint, new Date(launched));
+      continue;
+    }
+    // Only a graduated Pump.fun coin: on its curve the pair says, and Pump.fun has no answer for
+    // another launchpad's coin. A null in memory is Pump.fun's own "no such coin".
+    if (launched === null || deriveGraduated(c.dexId) !== true || c.launchpad === STONKS_LAUNCHPAD) continue;
+    if (launchLookupsInFlight.has(mint) || launchBackoff.blocked(mint, now)) continue;
+    if (lookups.length >= env.LAUNCH_TIME_LOOKUPS_MAX_PER_CYCLE) continue;
+    lookups.push(mint);
+  }
+
+  for (const mint of lookups) launchLookupsInFlight.add(mint);
+  const pending = forEachWithConcurrency(lookups, LOOKUP_CONCURRENCY, async (mint) => {
+    try {
+      const launched = await clients.pumpFun.launchTime(mint);
+      remember(launches, mint, launched ? launched.getTime() : null);
+      launchBackoff.succeed(mint);
+      if (launched) {
+        await store(mint, launched)
+          .then(() => launchesStored.add(mint))
+          .catch((err: unknown) =>
+            logger.warn("failed to record a launch time", { mint, error: String(err) }),
+          );
+      }
+    } catch {
+      launchBackoff.fail(mint, now);
+    } finally {
+      launchLookupsInFlight.delete(mint);
+    }
+  })
+    .then(() => Promise.all(writes))
+    .then(() => {
+      launchBackoff.prune(now);
+      if (lookups.length > 0) logger.debug("launch time lookups done", { asked: lookups.length });
+    });
+  return { known, pending };
+}
 
 /**
  * Seconds on the curve for each candidate whose launch and graduation are both already known in

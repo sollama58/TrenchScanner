@@ -70,9 +70,13 @@ export interface DiscoveredCoin {
   createdAt?: Date;
   graduated: boolean;
   marketCapUsd?: number;
-  hasTwitter: boolean;
-  hasTelegram: boolean;
-  hasWebsite: boolean;
+  /**
+   * Undefined when the source carries no socials at all (Jupiter's lists): unknown, not "none".
+   * A source that does carry them (Pump.fun's coin details, the launch metadata) says true/false.
+   */
+  hasTwitter?: boolean;
+  hasTelegram?: boolean;
+  hasWebsite?: boolean;
   /** The launcher's X link and website, https only (normalizeSocialUrl). */
   twitterUrl?: string;
   websiteUrl?: string;

@@ -337,9 +337,21 @@ describe("liveLaunchSource", () => {
 
 describe("candidateAgeMinutes", () => {
   const now = Date.parse("2026-10-13T01:00:00Z");
+  const minutesAgo = (m: number) => new Date(now - m * 60_000);
   it("takes the earlier of the pair's creation and the first sighting", () => {
-    expect(candidateAgeMinutes(new Date(now - 3 * 60_000), new Date(now - 5 * 60_000), now)).toBe(5);
-    expect(candidateAgeMinutes(new Date(now - 3 * 60_000), undefined, now)).toBe(3);
-    expect(candidateAgeMinutes(undefined, undefined, now)).toBeUndefined();
+    expect(candidateAgeMinutes({ pairCreatedAt: minutesAgo(3), firstSeenAt: minutesAgo(5) }, now)).toBe(5);
+    expect(candidateAgeMinutes({ pairCreatedAt: minutesAgo(3) }, now)).toBe(3);
+    expect(candidateAgeMinutes({}, now)).toBeUndefined();
+  });
+
+  it("counts from the launch a source said, over the pool and the first sighting", () => {
+    // A coin first met at its PumpSwap pool: the pair and the sighting are both the graduation.
+    expect(
+      candidateAgeMinutes(
+        { launchedAt: minutesAgo(70), pairCreatedAt: minutesAgo(3), firstSeenAt: minutesAgo(3) },
+        now,
+      ),
+    ).toBe(70);
+    expect(candidateAgeMinutes({ launchedAt: new Date(NaN), pairCreatedAt: minutesAgo(3) }, now)).toBe(3);
   });
 });

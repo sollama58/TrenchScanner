@@ -6,6 +6,12 @@ export interface EnrichOptions {
   now?: Date;
   /** Best available creation timestamp (pump.fun created_timestamp, DexScreener pairCreatedAt, or Helius fallback). */
   createdAt?: Date;
+  /**
+   * When the coin launched, from a launch source (Token.launchedAt). Outranks createdAt for the
+   * age: after graduation the pair, and every other anchor the scan has on a coin it first met
+   * then, is the PumpSwap pool, so the age restarted at the graduation. Marks ageFromLaunch.
+   */
+  launchedAt?: Date;
   /** Holder count from the previous snapshot of this token, if any, used to derive growth %. */
   previousHolderCount?: number;
   /** When that count was read (its snapshot's holderCountAt, else its takenAt). */
@@ -26,7 +32,11 @@ export function enrichToken(
   options: EnrichOptions = {},
 ): EnrichedToken {
   const now = options.now ?? new Date();
-  const createdAt = options.createdAt ?? candidate.pairCreatedAt;
+  const launchedAt =
+    options.launchedAt instanceof Date && !Number.isNaN(options.launchedAt.getTime())
+      ? options.launchedAt
+      : undefined;
+  const createdAt = launchedAt ?? options.createdAt ?? candidate.pairCreatedAt;
   // Kept to two decimals (0.01 min = 0.6s) rather than rounded to whole minutes. Rounding here
   // is what made sub-minute filters meaningless: a token 15 seconds old recorded as 0 and one 40
   // seconds old as 1, so "min age 0.25" could never distinguish them. Two decimals is finer than
@@ -76,6 +86,7 @@ export function enrichToken(
     ...candidate,
     ...(onChain ?? {}),
     ageMinutes,
+    ageFromLaunch: ageMinutes === undefined ? undefined : launchedAt !== undefined,
     volumeToMcapRatio,
     holderGrowthPct,
     holderGrowth10mPct,

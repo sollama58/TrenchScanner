@@ -314,6 +314,8 @@ const REFLECTION_COLUMNS: { key: string; label: string; fmt: (v: number) => stri
   { key: "firstBuyersHolding", label: "first 25 buyers still holding", fmt: (v) => v.toFixed(0) },
   // The wallet stage the brief now carries (aiReview.ts walletLines); the 5-minute trade-stream
   // columns that sat above are gone with the stream (dead since 2026-10-04).
+  // A percentile of the wallets scored at the time since 2026-10-16 (data-correctness audit),
+  // the raw 0-100 score on rows banked before.
   { key: "walletRiskTop10Max", label: "riskiest top-10 wallet score", fmt: (v) => v.toFixed(0) },
   { key: "walletWinTop10Max", label: "best top-10 winner wallet score", fmt: (v) => v.toFixed(0) },
   { key: "kolTopHolders", label: "KOLs among top holders", fmt: (v) => v.toFixed(0) },

@@ -198,4 +198,34 @@ describe("run alarms", () => {
       "textMemeAppeal (retired as dead) is filled again on 80% of the newest rows",
     ]);
   });
+
+  it("flags a read input gone dead in one age bucket while full overall, naming the bucket", () => {
+    const bucket = (name: string, referencePct: number, recentPct: number) => ({
+      bucket: name,
+      referencePct,
+      recentPct,
+      referenceRows: 500,
+      recentRows: 120,
+    });
+    const alarms = fillRateAlarms(
+      [
+        {
+          feature: "holderCount",
+          referencePct: 97,
+          recentPct: 82,
+          buckets: [bucket("age under 5 min", 99, 6), bucket("age 5-20 min", 98, 95)],
+        },
+        // Sparse on young coins on both spans: steady, no alarm.
+        { feature: "steady", referencePct: 80, recentPct: 78, buckets: [bucket("age under 5 min", 10, 2)] },
+        // A pooled drop says so once, not once more per bucket.
+        { feature: "liveInput", referencePct: 95, recentPct: 10, buckets: [bucket("age 60+ min", 95, 5)] },
+      ],
+      new Set(["holderCount", "steady", "liveInput"]),
+      new Set(),
+    );
+    expect(alarms).toEqual([
+      "holderCount went dead at age under 5 min: 6% of the newest 120 rows against 99%",
+      "liveInput went dead: 10% of the newest rows against 95%",
+    ]);
+  });
 });

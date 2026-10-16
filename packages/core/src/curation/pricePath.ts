@@ -14,7 +14,11 @@
  */
 
 export interface PricePathFeatures {
-  /** Price change over the last 1/5/15/30 minutes, in percent. */
+  /**
+   * Price change over the last 1/5/15/30 minutes, in percent. The 1 and 5-minute returns need
+   * the tape to reach their reference; the 15 and 30-minute returns are measured across whatever
+   * tape there is, with pathGapMinutes saying how much of the half hour that tape missed.
+   */
   pathRet1mPct: number | null;
   pathRet5mPct: number | null;
   pathRet15mPct: number | null;
@@ -30,6 +34,13 @@ export interface PricePathFeatures {
   pathHolderSlope10m: number | null;
   /** How many minutes of tape the book holds for the mint - how much the rest can be trusted. */
   pathObservedMinutes: number | null;
+  /**
+   * Minutes of the last 30 that no tape covers: the stretch before the tape's first tick, plus
+   * every hole inside the window where consecutive ticks sit more than TAPE_HOLE_MS apart. 0 on a
+   * full tape, 30 on none. It says nothing about the coin's age: a coin younger than the window
+   * reads a gap too (ageMinutes rides alongside in the vector).
+   */
+  pathGapMinutes: number | null;
 }
 
 export const EMPTY_PRICE_PATH: PricePathFeatures = {
@@ -43,6 +54,7 @@ export const EMPTY_PRICE_PATH: PricePathFeatures = {
   pathMinutesSinceHigh60m: null,
   pathHolderSlope10m: null,
   pathObservedMinutes: null,
+  pathGapMinutes: null,
 };
 
 export interface MarketContextFeatures {
@@ -112,6 +124,14 @@ const PRICE_AGO_SLACK_MS = MIN_TICK_SPACING_MS / 2;
 export function priceAgoTolerance(minutes: number): number {
   return Math.max(0.75 * MINUTE, 0.2 * minutes * MINUTE);
 }
+
+/** The window pathGapMinutes is measured over: the longest trailing return's. */
+export const PATH_GAP_WINDOW_MINUTES = 30;
+/**
+ * Consecutive ticks further apart than this leave a hole in the tape: the minutes between them
+ * count as unobserved. Three missed 30-second cycles; a mint that left the scan band is minutes.
+ */
+const TAPE_HOLE_MS = 2 * MINUTE;
 
 /**
  * The tape: one short price/holder series per mint, fed by the scan. Memory is bounded by
@@ -198,34 +218,56 @@ export class PricePathBook {
   /** The path features for a mint as of its newest observation (observe first, then ask). */
   features(mint: string): PricePathFeatures {
     const tape = this.tapes.get(mint);
-    if (!tape || tape.length < 2) return { ...EMPTY_PRICE_PATH };
+    // No tape, or one tick: nothing to measure, and the whole window unobserved.
+    if (!tape || tape.length < 2) return { ...EMPTY_PRICE_PATH, pathGapMinutes: PATH_GAP_WINDOW_MINUTES };
     const now = tape[tape.length - 1]!;
     const first = tape[0]!;
     const observedMinutes = (now.at - first.at) / MINUTE;
 
     // The price `minutes` ago: the newest tick at or before that moment, give or take the slack
-    // of one tick's spacing, provided the tape reaches back that far. The slack used to be half a
-    // minute, which on the scan's 30-second cadence let the tick from the previous cycle stand
-    // in for "a minute ago": pathRet1mPct was a 30-second return, and null only on a one-tick tape.
-    // The tick must also sit near that moment: a mint that left the scan and came back keeps its
-    // old ticks (the tape is pruned only after two hours unseen), so without the bound a coin
-    // revived after 40 minutes read its 40-minute move as the 5, 15 and 30-minute returns, and a
-    // gap of a cycle or two stretched the 1-minute return over three (features audit 2026-10-12).
-    const priceAgo = (minutes: number): number | null => {
+    // of one tick's spacing. The slack used to be half a minute, which on the scan's 30-second
+    // cadence let the tick from the previous cycle stand in for "a minute ago": pathRet1mPct was
+    // a 30-second return, and null only on a one-tick tape.
+    //
+    // For the 1 and 5-minute returns the tape must reach back that far and the tick must sit
+    // near that moment: a mint that left the scan and came back keeps its old ticks (the tape is
+    // pruned only after two hours unseen), so without the bound a coin revived after 40 minutes
+    // read its 40-minute move as the 5-minute return, and a gap of a cycle or two stretched the
+    // 1-minute return over three (features audit 2026-10-12, #376).
+    //
+    // The 15 and 30-minute returns are measured across whatever tape there is (user decision
+    // 2026-10-16, notes/data-audit-2026-10-16/round2-hunt.md finding 3): a tape shorter than the
+    // window answers from its oldest tick, and a hole in the tape where the reference should sit
+    // answers from the tick before the hole. Null only read "the scanner only just started
+    // watching this coin, or lost it and found it again", which is when a coin pumps back into
+    // the band: on 20+ minute-old coins a missing 15-minute return doubled 9.2% against 3.1%, and
+    // the seats scored those rows about three times the ones carrying a value. Now the move is a
+    // value and pathGapMinutes says how much of the window the tape missed, so the models see both.
+    const priceAgo = (minutes: number, acrossGaps: boolean): number | null => {
       const target = now.at - minutes * MINUTE;
-      if (first.at > target + PRICE_AGO_SLACK_MS) return null;
       let best: Tick | null = null;
       for (const tick of tape) {
         if (tick.at <= target + PRICE_AGO_SLACK_MS) best = tick;
         else break;
       }
-      if (!best || target - best.at > priceAgoTolerance(minutes)) return null;
+      if (!best) return acrossGaps ? first.priceUsd : null;
+      if (!acrossGaps && target - best.at > priceAgoTolerance(minutes)) return null;
       return best.priceUsd;
     };
-    const ret = (minutes: number): number | null => {
-      const p = priceAgo(minutes);
+    const ret = (minutes: number, acrossGaps = false): number | null => {
+      const p = priceAgo(minutes, acrossGaps);
       return p === null ? null : ((now.priceUsd - p) / p) * 100;
     };
+    // Minutes of the window no tape covers: before its first tick, and every hole inside it.
+    const windowStart = now.at - PATH_GAP_WINDOW_MINUTES * MINUTE;
+    let uncoveredMs = Math.max(0, first.at - windowStart);
+    for (let i = 1; i < tape.length; i++) {
+      const prev = tape[i - 1]!;
+      const tick = tape[i]!;
+      if (tick.at <= windowStart || tick.at - prev.at <= TAPE_HOLE_MS) continue;
+      uncoveredMs += tick.at - Math.max(prev.at, windowStart);
+    }
+    const gapMinutes = Math.min(PATH_GAP_WINDOW_MINUTES, Math.round((uncoveredMs / MINUTE) * 10) / 10);
     const drawdown = (minutes: number): { pct: number; highAt: number } | null => {
       const from = now.at - minutes * MINUTE;
       if (first.at > from + MINUTE / 2 && observedMinutes < minutes) {
@@ -278,14 +320,15 @@ export class PricePathBook {
     return {
       pathRet1mPct: ret(1),
       pathRet5mPct: ret(5),
-      pathRet15mPct: ret(15),
-      pathRet30mPct: ret(30),
+      pathRet15mPct: ret(15, true),
+      pathRet30mPct: ret(30, true),
       pathDrawdown15mPct: dd15 ? dd15.pct : null,
       pathDrawdown60mPct: dd60 ? dd60.pct : null,
       pathGreenShare10m: observedMinutes >= 3 && moves > 0 ? ups / moves : observedMinutes >= 3 ? 0.5 : null,
       pathMinutesSinceHigh60m: dd60 ? (now.at - dd60.highAt) / MINUTE : null,
       pathHolderSlope10m: holderSlope,
       pathObservedMinutes: Math.round(observedMinutes * 10) / 10,
+      pathGapMinutes: gapMinutes,
     };
   }
 

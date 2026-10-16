@@ -98,7 +98,7 @@ describe("AI review brief", () => {
       decision,
     );
     expect(brief).toContain(
-      "riskiest top-10 holder 82; launch's first buyers average 41; supply held by risky holders 6.5%; known dumpers among the first buyers 2",
+      "riskiest top-10 holder at the 82th percentile of scored wallets; launch's first buyers average 41; supply held by risky holders 6.5%; known dumpers among the first buyers 2",
     );
     expect(brief).toContain("winner wallets in the newest trades: 3 buying, 0 selling");
     expect(brief).toContain("known KOL wallets: 1 among the top 20 holders (1.2% of supply)");

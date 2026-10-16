@@ -265,6 +265,27 @@ export const NARRATIVE_FEATURES_V8 = [
 /** A refresh older than this at the decision says nothing about "now": its inputs are null. */
 export const NOW_FEATURE_MAX_AGE_MIN = 20;
 
+/**
+ * The ninth wave (user decision 2026-10-16, "markers everywhere":
+ * notes/data-audit-2026-10-16/round2-hunt.md section 6, skew.md section 3): markers, not
+ * readings. nsRead says whether a TokenSage read was in at the decision (0 on a row without
+ * one, where every other ns* input is null), so "no read yet" is a value the learners see rather
+ * than a null pattern that stood in for "very young" twice already. nsRulesVersion is the
+ * version of THIS feature writer (NS_RULES_VERSION), written on every row with or without a
+ * read: not a learner input, a handle for masking rows whose ns* inputs were written under
+ * other rules (features.ts maskKnownBadInputs). TokenSage's own versions.rules string is a
+ * different thing (NarrativeRead.rulesVersion) and keeps splitting the inputs whose scale it moved.
+ */
+export const NARRATIVE_FEATURES_V9 = ["nsRead", "nsRulesVersion"] as const;
+
+/**
+ * The ns* writer's rules version, bumped by hand whenever narrativeFeatureValues changes what an
+ * existing input means (a new input needs no bump: older rows read it as null). Changelog:
+ * - 1 (2026-10-16): the marker starts. The X-derived inputs of a full read whose post was not
+ *   read (the fetch failed, was skipped, or there was no link) are null, where they were 0 before.
+ */
+export const NS_RULES_VERSION = 1;
+
 type LogoGroupFeature = (typeof NARRATIVE_FEATURES_V6)[number] &
   ("nsLogoAnimal" | "nsLogoMeme" | "nsLogoPerson" | "nsLogoRobot" | "nsLogoFood" | "nsLogoText");
 
@@ -312,7 +333,8 @@ export type NarrativeFeatureName =
   | (typeof NARRATIVE_FEATURES_V5)[number]
   | (typeof NARRATIVE_FEATURES_V6)[number]
   | (typeof NARRATIVE_FEATURES_V7)[number]
-  | (typeof NARRATIVE_FEATURES_V8)[number];
+  | (typeof NARRATIVE_FEATURES_V8)[number]
+  | (typeof NARRATIVE_FEATURES_V9)[number];
 
 /** Every narrative feature, in the order the waves were added. */
 export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
@@ -324,6 +346,7 @@ export const ALL_NARRATIVE_FEATURES: readonly NarrativeFeatureName[] = [
   ...NARRATIVE_FEATURES_V6,
   ...NARRATIVE_FEATURES_V7,
   ...NARRATIVE_FEATURES_V8,
+  ...NARRATIVE_FEATURES_V9,
 ];
 
 /** Second-wave features that are counts, ranks or ages: everything else is a 0/1 bit or a 0-1 share. */
@@ -418,6 +441,7 @@ export const NARRATIVE_BIT_FEATURES: readonly NarrativeFeatureName[] = [
   "nsPairPumpfun",
   "nsNowTrendMatched",
   "nsHeatIsLeader",
+  "nsRead",
 ];
 
 /** The narrative inputs that are 0-1 shares or confidences, shown as a percentage. */
@@ -532,6 +556,8 @@ export const NARRATIVE_FRIENDLY_LABELS: Record<NarrativeFeatureName, string> = {
   nsHeatFromPeakPct: "story leader below its peak",
   nsHeatIsLeader: "leads its story",
   nsNowAgeMin: "age of the trend and heat refresh",
+  nsRead: "narrative read in at the decision",
+  nsRulesVersion: "narrative input rules version",
 };
 
 /**
@@ -1004,23 +1030,30 @@ export function narrativeXRead(read: NarrativeRead): boolean {
 
 const bit = (v: boolean) => (v ? 1 : 0);
 
-/** The ns* feature values for a read; every one null when there is no read. */
+/**
+ * The ns* feature values for a read. Without one every input is null but the two markers:
+ * nsRead = 0 and the writer's version, so a row says "no read" and under which rules.
+ */
 export function narrativeFeatureValues(
   read: NarrativeRead | undefined,
   now: Date = new Date(),
 ): Record<NarrativeFeatureName, number | null> {
   if (!read) {
-    return Object.fromEntries(ALL_NARRATIVE_FEATURES.map((k) => [k, null])) as Record<
-      NarrativeFeatureName,
-      number | null
-    >;
+    return {
+      ...(Object.fromEntries(ALL_NARRATIVE_FEATURES.map((k) => [k, null])) as Record<
+        NarrativeFeatureName,
+        number | null
+      >),
+      nsRead: 0,
+      nsRulesVersion: NS_RULES_VERSION,
+    };
   }
   const full = read.depth === "full";
   const xRead = narrativeXRead(read);
   const gentleCredibility = tokenSageRulesAtLeast(read.rulesVersion, TOKENSAGE_GENTLE_CREDIBILITY_RULES);
   // An unresolved lineage ("unknown": no launch time) says nothing, like a read from older rules.
   const lineage = read.lineageKind === LINEAGE_KIND.unknown ? null : read.lineageKind;
-  const relation = (name: string) => (full ? bit(xRead && read.xRelation === name) : null);
+  const relation = (name: string) => (xRead ? bit(read.xRelation === name) : null);
   const topConf = read.categories.reduce((max, c) => Math.max(max, c.confidence), 0);
   const categoryBits = Object.fromEntries(
     (Object.entries(NARRATIVE_TOP_CATEGORIES) as [NarrativeFeatureName, string][]).map(([name, top]) => [
@@ -1039,18 +1072,23 @@ export function narrativeFeatureValues(
     nsEarlierSameName: bit(read.flags.includes(NARRATIVE_FLAG.earlierSameName)),
     nsHighFlagCount: read.highFlagCount,
     nsWarnFlagCount: read.warnFlagCount,
-    // Full-depth facts. On a full read without a readable post the 0/1 inputs are 0 (a known
-    // "nothing to read"; hasTwitter says whether a link existed) and the measurements null.
+    nsRead: 1,
+    nsRulesVersion: NS_RULES_VERSION,
+    // Full-depth facts. nsXRead says whether the full read opened the linked post; when it did
+    // not, everything the post would have said is null, not 0 (NS_RULES_VERSION 1). Before, a
+    // failed or skipped X fetch wrote the same zeros as a coin with no link at all, so "the
+    // fetch broke" trained as "nothing about this coin on X" (round2-code.md, section 5).
+    // hasTwitter still says whether a link existed.
     nsTrendMatched: full ? bit(read.trendMatched === true) : null,
     nsXRead: full ? bit(xRead) : null,
-    nsXVerdictAbout: full ? bit(xRead && read.xVerdict === "about_this_coin") : null,
-    nsXVerdictUnrelated: full ? bit(xRead && read.xVerdict === "unrelated") : null,
+    nsXVerdictAbout: xRead ? bit(read.xVerdict === "about_this_coin") : null,
+    nsXVerdictUnrelated: xRead ? bit(read.xVerdict === "unrelated") : null,
     nsXFit: xRead ? read.xFit : null,
     nsXLaunchAnnouncement: relation("launch_announcement"),
     nsXOfficialAccount: relation("official_account"),
     nsXNarrativeRef: relation("narrative_reference"),
     nsXSpoofed: relation("spoofed"),
-    nsXContentMismatch: full ? bit(read.flags.includes(NARRATIVE_FLAG.xContentMismatch)) : null,
+    nsXContentMismatch: xRead ? bit(read.flags.includes(NARRATIVE_FLAG.xContentMismatch)) : null,
     nsXAuthorFollowersLog:
       xRead && read.xAuthorFollowers !== null ? Math.log10(1 + Math.max(0, read.xAuthorFollowers)) : null,
     nsXPredatesTokenMin: xRead && read.xPredatesTokenS !== null ? read.xPredatesTokenS / 60 : null,

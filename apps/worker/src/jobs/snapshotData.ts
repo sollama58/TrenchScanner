@@ -44,6 +44,7 @@ export function snapshotDataFor(
     volumeToMcapRatio: scored.volumeToMcapRatio,
     buys24h: scored.buys24h,
     sells24h: scored.sells24h,
+    marketSource: scored.marketSource ?? null,
     priceChange5mPct: scored.priceChange5mPct,
     priceChange1hPct: scored.priceChange1hPct,
     priceChange6hPct: scored.priceChange6hPct,

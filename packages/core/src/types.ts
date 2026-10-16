@@ -4,6 +4,7 @@ import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
 import type { MarketContextFeatures, PricePathFeatures } from "./curation/pricePath.js";
 import type { NarrativeRead } from "./curation/narrativeFeatures.js";
 import type { TextScores } from "./curation/textFeatures.js";
+import type { MarketSource } from "./marketSource.js";
 /**
  * Domain types shared across data source clients, the scoring engine, the
  * API, and the worker. These are intentionally decoupled from the Prisma
@@ -82,6 +83,12 @@ export interface CandidateToken {
    * PumpSwap pool is listed.
    */
   graduatedAt?: Date;
+  /**
+   * Which source the market figures above came from (marketSource.ts): DexScreener's pair, that
+   * pair with Jupiter's live price, Jupiter outright, or GeckoTerminal. Set by each client's
+   * parser and by the band refresh's merge; undefined on a reading built without one.
+   */
+  marketSource?: MarketSource;
 }
 
 /**
@@ -97,6 +104,11 @@ export interface WatchlistCandidate {
   symbol?: string;
   name?: string;
   imageUrl?: string;
+  /**
+   * When the source says the coin launched (Pump.fun's created_timestamp, the stream's create
+   * event, Jupiter's first pool) - recorded as Token.firstSeenAt and Token.launchedAt. Only a
+   * launch source sets it; DexScreener's feeds, which would give the pool's age, leave it unset.
+   */
   createdAt?: Date;
   hasTwitter?: boolean;
   hasTelegram?: boolean;
@@ -201,11 +213,14 @@ export interface OnChainProfile {
   freshTopHoldersChecked?: number;
   /**
    * The wallet risk readings (core's wallets/riskScore.ts, coinWalletRisk), from the worker's
-   * in-memory copy of WalletRisk: the riskiest top-10 holder, the first buyers' mean score, the %
-   * of supply held by risky top holders, and the known dumpers among the first buyers. Undefined
-   * when no wallet in view is scored, or before the scores load. Recorded as model inputs only.
+   * in-memory copy of WalletRisk: the riskiest top-10 holder (since 2026-10-16 as a percentile of
+   * the wallets scored at the time, with the coin's own tape taken out, and how many of the ten
+   * were scored), the first buyers' mean score, the % of supply held by risky top holders, and
+   * the known dumpers among the first buyers. Undefined when no wallet in view is scored, or
+   * before the scores load. Recorded as model inputs; the learners read walletRiskTop10Max.
    */
   walletRiskTop10Max?: number;
+  walletRiskScoredTop10?: number;
   walletRiskFirstBuyersMean?: number;
   walletRiskHighSupplyPct?: number;
   knownDumperFirstBuyers?: number;
@@ -368,6 +383,12 @@ export interface OnChainProfile {
 /** A CandidateToken enriched with on-chain data and derived metrics, ready to score. */
 export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfile, "mintAddress">> {
   ageMinutes?: number;
+  /**
+   * Whether ageMinutes counts from the launch itself (Token.launchedAt, or the bonding-curve pair
+   * the coin launched with) rather than from the earliest the scan has - which on a coin first
+   * met after graduation is its PumpSwap pool. The ageSource model input; undefined with no age.
+   */
+  ageFromLaunch?: boolean;
   volumeToMcapRatio?: number;
   holderGrowthPct?: number;
   /**

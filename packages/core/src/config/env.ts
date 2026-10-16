@@ -156,6 +156,10 @@ const envSchema = z.object({
   // Pump.fun launch-time lookups one scan cycle may make for graduated tokens the cut can't clear
   // from what's already known (see the worker's launchTimes.ts). Answers are kept for good.
   PREBOND_LOOKUPS_MAX_PER_CYCLE: z.coerce.number().int().min(0).default(30),
+  // Pump.fun launch-time lookups one scan cycle may start for graduated coins whose launch no
+  // source has said, for the token's age (the worker's launchTimes.ts). Run behind the cycle and
+  // kept on the Token row, so each coin costs one. 0 turns them off.
+  LAUNCH_TIME_LOOKUPS_MAX_PER_CYCLE: z.coerce.number().int().min(0).default(30),
   // The wall-clock span holderGrowthPct is measured over: growth is compared against the newest
   // snapshot at least this old, rather than against whatever the previous snapshot happened to be.
   // Anchoring it this way is what keeps the number's meaning independent of SCAN_INTERVAL_MINUTES

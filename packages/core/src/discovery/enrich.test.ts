@@ -33,6 +33,28 @@ describe("enrichToken", () => {
     expect(enriched.ageMinutes).toBe(30);
   });
 
+  it("counts the age from the launch when a launch source said, over the pool's age", () => {
+    const now = new Date("2026-01-01T02:00:00Z");
+    // The scan met the coin at its PumpSwap pool: every anchor it has is the graduation.
+    const poolCreatedAt = new Date("2026-01-01T01:59:00Z");
+    const launchedAt = new Date("2026-01-01T00:30:00Z");
+    const graduate = { ...candidate, dexId: "pumpswap", pairCreatedAt: poolCreatedAt };
+    const fromPool = enrichToken(graduate, onChain, { now, createdAt: poolCreatedAt });
+    expect(fromPool.ageMinutes).toBe(1);
+    expect(fromPool.ageFromLaunch).toBe(false);
+    const fromLaunch = enrichToken(graduate, onChain, { now, createdAt: poolCreatedAt, launchedAt });
+    expect(fromLaunch.ageMinutes).toBe(90);
+    expect(fromLaunch.ageFromLaunch).toBe(true);
+    // An unreadable launch time counts for nothing; no anchor at all means no age, not "pool".
+    expect(enrichToken(graduate, onChain, { now, launchedAt: new Date(NaN) })).toMatchObject({
+      ageMinutes: 1,
+      ageFromLaunch: false,
+    });
+    const unknown = enrichToken({ ...candidate, pairCreatedAt: undefined }, onChain, { now });
+    expect(unknown.ageMinutes).toBeUndefined();
+    expect(unknown.ageFromLaunch).toBeUndefined();
+  });
+
   it("keeps sub-minute ages, so a fractional filter bound can act on them", () => {
     const now = new Date("2026-01-01T00:00:00Z");
     const fifteenSeconds = new Date(now.getTime() - 15_000);

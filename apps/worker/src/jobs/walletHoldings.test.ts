@@ -92,6 +92,22 @@ describe("computeEmptyPct", () => {
     expect(computeEmptyPct(["a", "b", "c", "d"], some, MIN_USD, LAUNCH)).toBeNull();
   });
 
+  it("returns null for a wallet under the bar with a holding nobody priced, not 'empty'", () => {
+    // A holder of coins Jupiter's search doesn't list used to read as a shell: the floor missed
+    // what it could not price and the shortfall counted as a fact about the wallet.
+    const unpriced = new Map<string, WalletHoldings>([
+      ["a", { otherHoldingsUsd: 3_000, perMintUsd: { [LAUNCH]: 3_000 }, unpriced: true }],
+      ["b", { otherHoldingsUsd: 900, perMintUsd: { [LAUNCH]: 900 } }],
+    ]);
+    expect(computeEmptyPct(["a", "b"], unpriced, MIN_USD, LAUNCH)).toBeNull();
+    // Over the bar on what could be priced, the unpriced holding changes nothing: not empty.
+    const rich = new Map<string, WalletHoldings>([
+      ["a", { otherHoldingsUsd: 3_500, perMintUsd: { [LAUNCH]: 3_000 }, unpriced: true }],
+      ["b", { otherHoldingsUsd: 900, perMintUsd: { [LAUNCH]: 900 } }],
+    ]);
+    expect(computeEmptyPct(["a", "b"], rich, MIN_USD, LAUNCH)).toBe(50);
+  });
+
   it("returns null when a reading never covered the launch being scored", () => {
     // A cached row from before this wallet appeared on today's holder list has nothing to
     // subtract. Reporting it as unknown is right; subtracting zero would resurrect the bug.

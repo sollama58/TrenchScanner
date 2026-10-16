@@ -28,12 +28,17 @@ function token(mint: string, priceUsd: number, extra: Partial<CandidateToken> = 
 function deps(
   wallets: Record<string, Record<string, bigint> | "failed">,
   priced: CandidateToken[],
-  opts: { failedMints?: string[] } = {},
+  opts: { failedMints?: string[]; unaskedMints?: string[] } = {},
 ) {
-  const getTokensByAddresses = vi.fn(async (mints: string[], _c?: number, o?: { failed?: Set<string> }) => {
-    for (const m of opts.failedMints ?? []) if (mints.includes(m)) o?.failed?.add(m);
-    return priced.filter((t) => mints.includes(t.mintAddress) && !opts.failedMints?.includes(t.mintAddress));
-  });
+  const getTokensByAddresses = vi.fn(
+    async (mints: string[], _c?: number, o?: { failed?: Set<string>; unasked?: Set<string> }) => {
+      for (const m of opts.failedMints ?? []) if (mints.includes(m)) o?.failed?.add(m);
+      for (const m of opts.unaskedMints ?? []) if (mints.includes(m)) o?.unasked?.add(m);
+      return priced.filter(
+        (t) => mints.includes(t.mintAddress) && !opts.failedMints?.includes(t.mintAddress),
+      );
+    },
+  );
   const getMintDecimals = vi.fn(async (mints: string[]) => new Map(mints.map((m) => [m, 6])));
   const d: ValuationDeps = {
     helius: {
@@ -68,6 +73,7 @@ describe("valueWalletsFromBalances", () => {
       otherHoldingsUsd: 10,
       perMintUsd: { [LAUNCH]: 10 },
       complete: true,
+      unpriced: false,
     });
   });
 
@@ -82,7 +88,35 @@ describe("valueWalletsFromBalances", () => {
       status: "found",
       otherHoldingsUsd: 101,
       perMintUsd: { [LAUNCH]: 1 },
+      unpriced: false,
     });
+  });
+
+  it("marks a wallet unpriced when no source was asked about a holding, rather than counting it as nothing", async () => {
+    // DUST is a mint Jupiter's search doesn't list, so under mayBeUnindexed DexScreener is never
+    // asked about it: nobody knows what it is worth, and this shell may not be one.
+    const { d, getTokensByAddresses } = deps(
+      {
+        shell: { [LAUNCH]: 1_000_000n, [DUST]: 5_000_000_000n },
+        rich: { [MEME]: 2_000_000_000n, [DUST]: 5n },
+      },
+      [token(LAUNCH, 1), token(MEME, 0.05)],
+      { unaskedMints: [DUST] },
+    );
+    const out = await valueWalletsFromBalances(["shell", "rich"], [LAUNCH], d, 25);
+    expect(out.get("shell")).toEqual({
+      status: "found",
+      otherHoldingsUsd: 1,
+      perMintUsd: { [LAUNCH]: 1 },
+      // The breakdown is missing a holding, so it can't answer for other launches.
+      complete: false,
+      unpriced: true,
+    });
+    // The floor still says "not empty" when the priced holdings clear the bar on their own.
+    expect(out.get("rich")).toMatchObject({ status: "found", otherHoldingsUsd: 100, unpriced: true });
+    // Remembered like a quote: the next wallet holding it isn't priced again to learn the same nothing.
+    await valueWalletsFromBalances(["shell"], [LAUNCH], d, 25);
+    expect(getTokensByAddresses).toHaveBeenCalledTimes(1);
   });
 
   it("caps a holding at half the pool, so an airdropped junk token can't make a shell look rich", async () => {

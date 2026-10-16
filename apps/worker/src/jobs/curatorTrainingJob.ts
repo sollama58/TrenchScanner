@@ -208,6 +208,7 @@ async function trainCurators(
       highConvictionRank: env.CURATED_HIGH_CONVICTION_RANK,
       calibrationWindowDays: env.CURATOR_CALIBRATION_WINDOW_DAYS,
       featureOnsetGuard: env.CURATOR_FEATURE_ONSET_GUARD,
+      windowStart,
       rulesFromBest: env.CURATOR_RULES_FROM_BEST,
       rulesTeachers,
       currentRules,
@@ -240,7 +241,7 @@ async function trainCurators(
       ),
     ),
     ...fillRateAlarms(
-      inputFills(trainingRows, CANDIDATE_FEATURE_NAMES, env.CURATOR_EXAM_SHARE),
+      inputFills(trainingRows, CANDIDATE_FEATURE_NAMES, env.CURATOR_EXAM_SHARE, windowStart),
       new Set<string>(LEARNER_FEATURE_NAMES),
       RETIRED_LEARNER_INPUTS as ReadonlySet<string>,
     ),
@@ -381,6 +382,10 @@ async function trainCurators(
       feature: h.feature,
       referencePct: h.referencePct,
       recentPct: h.recentPct,
+      // The age buckets that held it, when the pooled coverage alone did not.
+      ...(h.buckets
+        ? { buckets: h.buckets.map((b) => `${b.bucket} ${b.recentPct}% against ${b.referencePct}%`) }
+        : {}),
     })),
     // The inputs' health this run: anything null on most rows, or with no lift at either end,
     // is a wire to check (see curation/featureReport.ts).
@@ -1197,10 +1202,12 @@ async function loadRowsOfKind(
       // near $49.6k and stale holder figures, and never moves: 5,523 hourly rows on 10-06..10-11
       // taught the band where live near-graduation coins sit that it never doubles.
       if (r.sampleKind === "hourly" && isFrozenCurveRow(r.features)) continue;
-      // Inputs known to be wrong on old rows (fake order-flow zeros) read as missing.
+      // Inputs known to be wrong on old rows (fake order-flow zeros, the inputs hourly rows were
+      // banked ahead of until HOURLY_ROWS_WAIT_SINCE) read as missing.
       const features = maskKnownBadInputs(
         r.anchorAt,
         withFixedShape(r.features as Record<string, number | null>),
+        sampleKind,
       );
       // A row re-graded in place (born rule 3 after the fresh quotes began, no usable quote at the
       // scan) had its fresh-price gap overwritten with the candle re-grade's, measured after the
