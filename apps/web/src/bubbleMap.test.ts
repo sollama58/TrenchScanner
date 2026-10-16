@@ -707,6 +707,33 @@ describe("kolControl", () => {
     const tied = { nodes: [h("k2", 1, 3), h("y", 0.4, 3)] };
     expect(kolControl(tied, [], [{ wallet: "k2", name: "Two" }])[0]!.pct).toBe(1.4);
   });
+  it("takes in the holders its bundle sent the coin to, and on from there, past dust", () => {
+    const n = (wallet: string, pct: number) =>
+      ({
+        id: `h:${wallet}`,
+        kind: "holder",
+        wallet,
+        pct,
+        cluster: null,
+        sameTime: null,
+      }) as unknown as MapNode;
+    const g = { nodes: [n("kol", 2), n("side", 0.8), n("r1", 0.8), n("r2", 0.7), n("dust", 0.5), n("x", 3)] };
+    const sides = [{ kolWallet: "kol", kolName: null, wallets: [{ wallet: "side", pct: 50 }] }];
+    const transfers = [
+      { from: "h:side", to: "h:r1", pct: 0.8 },
+      { from: "h:r1", to: "h:r2", pct: 0.7 },
+      { from: "h:side", to: "h:dust", pct: 0.01 },
+      { from: "h:x", to: "h:kol", pct: 1 },
+    ];
+    const [k] = kolControl(g, sides, [], transfers);
+    expect(k!.wallets.map((w) => [w.wallet, w.tie])).toEqual([
+      ["kol", "kol"],
+      ["side", "side"],
+      ["r1", "transfer"],
+      ["r2", "transfer"],
+    ]);
+    expect(kolControl(g, sides)[0]!.pct).toBe(2.8);
+  });
 });
 
 describe("label rooms (user ask 2026-10-15)", () => {

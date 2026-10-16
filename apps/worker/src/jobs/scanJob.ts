@@ -1408,18 +1408,23 @@ async function scanCycle(
     linkedLookups ? linkedGroups.map((g) => [g.mintAddress, cexReadingOf(g, linkedLookups!)] as const) : [],
   );
   // KOL Bundled % and Bundled % from the same readings, the roster and one read of the possible
-  // side wallets; for the coins transfers changed, the same without them too, in the same read
-  // (keyed "ex:<mint>") so both land or neither does.
+  // side wallets; for the coins with transfers (they change the clusters, or carry a KOL's bundle
+  // on to whoever it sent the coin to), the same without them too, in the same read (keyed
+  // "ex:<mint>") so both land or neither does.
   const EX = "ex:";
   const changedByTransfers = [...linkedBaseByMint].filter(
-    ([mint, base]) => base && linkedByMint.get(mint) !== base,
+    ([mint, base]) =>
+      base && (linkedByMint.get(mint) !== base || (transfersByMint.get(mint)?.transfers.length ?? 0) > 0),
   );
   const kolBundledAll =
     (linkedLookups
       ? await withinBudget(
           kolBundledByMint(
             new Map([
-              ...linkedByMint,
+              ...[...linkedByMint].map(
+                ([mint, r]) =>
+                  [mint, r && { ...r, transfers: transfersByMint.get(mint)?.transfers }] as const,
+              ),
               ...changedByTransfers.map(([mint, base]) => [EX + mint, base] as const),
             ]),
             linkedLookups.funderOf,
@@ -3261,7 +3266,9 @@ export function exTransfersOf(
   return {
     linkedWalletPct: base.linkedWalletPct,
     linkedWalletCount: base.linkedWalletCount,
-    kolBundled: changed ? kolBundledBase : kolBundled,
+    // Without transfers' own figures where they were read (a KOL's sends carry its bundle on
+    // even when the clusters stand), else the counted ones, which then read the same.
+    kolBundled: changed ? kolBundledBase : (kolBundledBase ?? kolBundled),
     ...(changed ? { clusters: base.clusters } : {}),
   };
 }
