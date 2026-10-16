@@ -119,6 +119,37 @@ export function AppearanceControls() {
           />
           Mark graded cards: a thin green or red line along the top when an alert passes or fails
         </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={look.tileColors}
+            onChange={() => setAppearance({ tileColors: !look.tileColors })}
+          />
+          Color the stat tiles: a light shade from the lower color, through the median, to the upper color at
+          the safety screen&apos;s cutoff
+        </label>
+        {look.tileColors && (
+          <>
+            <ColorRow
+              label="Tiles: lower"
+              hint="Well inside the cutoff (A is your Wins color)"
+              value={look.tileLow}
+              onChange={(tileLow) => setAppearance({ tileLow })}
+            />
+            <ColorRow
+              label="Tiles: median"
+              hint="Halfway to the cutoff (A is amber)"
+              value={look.tileMid}
+              onChange={(tileMid) => setAppearance({ tileMid })}
+            />
+            <ColorRow
+              label="Tiles: upper"
+              hint="At the safety screen's cutoff (A is your Losses color)"
+              value={look.tileHigh}
+              onChange={(tileHigh) => setAppearance({ tileHigh })}
+            />
+          </>
+        )}
       </fieldset>
 
       <fieldset>

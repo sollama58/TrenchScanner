@@ -86,6 +86,12 @@ export const feedAppearanceSchema = z
     volume: z.boolean().default(false),
     /** Color the Score tile red to green against recent alerts' scores; on by default. */
     scoreColor: z.boolean().default(true),
+    /** Shade the stat tiles on a lower / median / upper scale, upper at the safety screen's cut; on by default. */
+    tileColors: z.boolean().default(true),
+    /** The tile scale's colors; null keeps the theme's win, amber and loss colors. */
+    tileLow: color.default(null),
+    tileMid: color.default(null),
+    tileHigh: color.default(null),
     /** The model's reasons under a model call; hidden by default, as are accounts saved before it. */
     reasons: z.boolean().default(false),
     /** The Snipers tile (launch snipers in the top holders); on by default since 2026-10-14, in place of 1st Buyers Holding. */
@@ -176,6 +182,10 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   learningNote: true,
   volume: false,
   scoreColor: true,
+  tileColors: true,
+  tileLow: null,
+  tileMid: null,
+  tileHigh: null,
   reasons: false,
   sniperTop10: true,
   devTile: false,

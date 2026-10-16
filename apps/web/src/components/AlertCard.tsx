@@ -22,6 +22,7 @@ import { useShowNarrativeNote } from "../narrativeNote";
 import { cardCalibratedRate } from "../rates";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
 import { filterCardStyle } from "../filterStyle";
+import { tileLook, tileTone } from "../tileTone";
 import { FilterGlyph } from "./FilterBadge";
 
 // The token modal (and its chart) loads the first time a card is opened.
@@ -57,7 +58,7 @@ export function AlertCard({
   const s = card.snapshot;
   const { weights, scale } = useScoreWeights();
   // Red at recent alerts' 10th percentile through to green at their 90th (Customize can turn it off).
-  const { scoreColor, quickLinks } = useAppearance();
+  const { scoreColor, quickLinks, tileColors } = useAppearance();
   // Customize's Narrative toggle, else on once the Narrative model's 7-day hit rate reliably passes 40%.
   const showNarrative = useShowNarrativeNote();
   const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
@@ -380,11 +381,11 @@ export function AlertCard({
           )}
           {show("top10") && (
             <div
-              className={
-                s.top10HolderPct != null && s.top10HolderPct >= SAFETY_REJECT_TOP10_HOLDER_PCT
-                  ? "risky"
-                  : undefined
-              }
+              {...tileLook(
+                tileColors,
+                tileTone(s.top10HolderPct, SAFETY_REJECT_TOP10_HOLDER_PCT),
+                s.top10HolderPct != null && s.top10HolderPct >= SAFETY_REJECT_TOP10_HOLDER_PCT,
+              )}
               title={`Top 10: share of supply the ten largest holders own (pool aside). The safety screen rejects ${SAFETY_REJECT_TOP10_HOLDER_PCT}% or more.`}
             >
               <dt>Top 10</dt>
@@ -393,9 +394,11 @@ export function AlertCard({
           )}
           {show("largest") && (
             <div
-              className={
-                largestPct !== null && largestPct > SAFETY_MAX_LARGEST_HOLDER_PCT ? "risky" : undefined
-              }
+              {...tileLook(
+                tileColors,
+                tileTone(largestPct, SAFETY_MAX_LARGEST_HOLDER_PCT),
+                largestPct !== null && largestPct > SAFETY_MAX_LARGEST_HOLDER_PCT,
+              )}
               title={`Largest holder: one wallet's share of supply (pools aside, its accounts summed). The safety screen rejects over ${SAFETY_MAX_LARGEST_HOLDER_PCT}%.`}
             >
               <dt>Largest</dt>
@@ -411,6 +414,7 @@ export function AlertCard({
               of={freshOf}
               failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
               atAlert={freshAtAlert !== null}
+              colored={tileColors}
               explain="top-holder wallets first used, or used again after a week or more idle, in the last 24h"
             />
           )}
@@ -421,6 +425,7 @@ export function AlertCard({
               of={emptyOf}
               failsAt={SAFETY_REJECT_EMPTY_WALLET_PCT}
               atAlert={emptyAtAlert !== null}
+              colored={tileColors}
               explain="top-10 holder wallets with under $25 of other tokens"
             />
           )}
@@ -438,7 +443,7 @@ export function AlertCard({
               <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
             </div>
           )}
-          {show("sniperTop10") && <SniperTile reading={snipers} />}
+          {show("sniperTop10") && <SniperTile reading={snipers} colored={tileColors} />}
           {show("linked") && (
             <LinkedTile
               pct={linkedPct}
@@ -447,15 +452,16 @@ export function AlertCard({
               bundled={linkedBundled}
               clusters={linkedClusters}
               atAlert={linkedAtAlert && linkedPct !== null}
+              colored={tileColors}
             />
           )}
           {show("cexFunded") && (
             <div
-              className={
-                cexCount !== null && cexCount >= countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cexHolders)
-                  ? "risky"
-                  : undefined
-              }
+              {...tileLook(
+                tileColors,
+                tileTone(cexCount, countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cexHolders)),
+                cexCount !== null && cexCount >= countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cexHolders),
+              )}
               title={
                 cexPct === null
                   ? "CEX-funded: not checked yet. Funder reads are limited per scan, and tokens closest to alerting go first."
@@ -723,6 +729,7 @@ export function WalletStat({
   explain,
   failsAbove,
   failsAt,
+  colored = false,
 }: {
   label: string;
   value: number | null;
@@ -734,6 +741,8 @@ export function WalletStat({
   failsAbove?: number;
   /** The screen rejects at or above this share. */
   failsAt?: number;
+  /** Shade the tile on its scale up to the cut (the alert card, with tile colors on). */
+  colored?: boolean;
 }) {
   const risky =
     value !== null &&
@@ -743,7 +752,7 @@ export function WalletStat({
       ? `${label}: not checked yet. Wallet checks are limited per scan, and tokens closest to alerting go first.`
       : `${label}: ${walletCountText(value, of)} ${explain} (${pct(value)}), ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen rejects ${failsAbove !== undefined ? `over ${failsAbove}%` : `${failsAt ?? 0}% or more`}.`;
   return (
-    <div className={risky ? "risky" : undefined} title={title}>
+    <div {...tileLook(colored, tileTone(value, failsAbove ?? failsAt ?? 0), risky)} title={title}>
       <dt>{label}</dt>
       <dd className={value === null ? "muted" : "num"}>
         {value === null ? "Not checked" : walletCountText(value, of)}
@@ -795,8 +804,20 @@ export function sniperReading(
  * 25 buyers, "N/25". Red when the top ten would fail the safety screen's sniper cut, which still
  * reads the top ten (8 or more of 10).
  */
-export function SniperTile({ reading }: { reading: SniperReading | null }) {
+export function SniperTile({
+  reading,
+  colored = false,
+}: {
+  reading: SniperReading | null;
+  /** Shade the tile on its scale up to the cut (the alert card, with tile colors on). */
+  colored?: boolean;
+}) {
   const risky = reading?.top10Pct != null && reading.top10Pct >= SAFETY_REJECT_SNIPER_WALLET_PCT;
+  // The cut reads the top ten; a scan without that share is placed by its top-25 share instead.
+  const share =
+    reading === null
+      ? null
+      : (reading.top10Pct ?? (reading.of > 0 ? (reading.count * 100) / reading.of : null));
   const top10 =
     reading?.top10Pct != null ? ` In the top 10: ${walletCountText(reading.top10Pct, reading.top10Of)}.` : "";
   const title =
@@ -806,7 +827,7 @@ export function SniperTile({ reading }: { reading: SniperReading | null }) {
           reading.atAlert ? "at alert time" : "from a scan after the alert"
         }.${top10} The safety screen rejects ${SAFETY_REJECT_SNIPER_WALLET_PCT / 10} or more of the top 10.`;
   return (
-    <div className={risky ? "risky" : undefined} title={title}>
+    <div {...tileLook(colored, tileTone(share, SAFETY_REJECT_SNIPER_WALLET_PCT), risky)} title={title}>
       <dt>Snipers</dt>
       <dd className={reading === null ? "muted" : "num"}>
         {reading === null ? "Not checked" : `${reading.count}/${reading.of}`}
@@ -879,6 +900,7 @@ function LinkedTile({
   bundled,
   clusters,
   atAlert,
+  colored,
 }: {
   pct: number | null;
   count: { linked: number; of: number } | null;
@@ -888,7 +910,9 @@ function LinkedTile({
   bundled: boolean;
   clusters: readonly LinkedClusterView[];
   atAlert: boolean;
+  colored: boolean;
 }) {
+  const cut = countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of);
   const summary = linkedSummary(clusters);
   const title =
     value === null
@@ -898,11 +922,7 @@ function LinkedTile({
         : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${bundled ? ` (Bundled %), counting wallets in a funder's cluster, a funding minute or a KOL's bundle${kols ? " (KOLs' bundles add some)" : ""}` : ", KOLs' bundles not checked on this scan"}${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen counts linked holders without KOLs' bundles and rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of)} or more.`;
   return (
     <div
-      className={
-        count !== null && count.linked >= countCutFor(SAFETY_REJECT_LINKED_COUNT, count.of)
-          ? "risky"
-          : undefined
-      }
+      {...tileLook(colored, tileTone(count?.linked, cut), count !== null && count.linked >= cut)}
       title={title}
     >
       <dt>Linked</dt>
