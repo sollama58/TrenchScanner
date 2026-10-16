@@ -60,6 +60,10 @@ model User {
   feedModels      String[] @default([])
   /// Whether model calls are mixed into the combined feed at all; off = only this user's filter matches.
   showModelAlerts Boolean  @default(true)
+  /// Settings' "Only alerts both caught": the Live feed (and its Stats) keeps only the alerts of the
+  /// user's active filters on tokens a model they follow also called (within the feed's fold
+  /// window), shown as one card with both. Applies only while showModelAlerts is on. Off by default.
+  feedBothOnly    Boolean  @default(false)
   /// Follow the best performer (CuratorChampion): the feed shows whichever model holds the default
   /// and switches when a new one is chosen. Picking models by hand turns it off; feedModels then
   /// decides. Kept separate from feedModels so switching back keeps the user's hand picks.

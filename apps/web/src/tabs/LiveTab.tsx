@@ -88,6 +88,8 @@ export function LiveTab({
   const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000);
   const lb = board.data;
   const modelsOn = lb?.showModelAlerts ?? true;
+  // Settings' "Only alerts both caught": the API narrows the feed and its stats; this only words it.
+  const bothOn = modelsOn && (lb?.bothOnly ?? false);
   // A new alert changes the stats as well as the cards, so both refetch on a nudge.
   const nudged = () => {
     // Only the first page: the ones read ahead catch up on their own poll, and a burst of alerts
@@ -178,8 +180,9 @@ export function LiveTab({
             <span className="eyebrow">Live feed</span>
             <div className="heading-row">
               <h2>
-                Your alerts
-                {modelsOn ? (highConviction ? " and high-conviction calls" : " and model calls") : ""}
+                {bothOn
+                  ? "Alerts your filter and models both caught"
+                  : `Your alerts${modelsOn ? (highConviction ? " and high-conviction calls" : " and model calls") : ""}`}
               </h2>
               <button
                 type="button"
@@ -270,9 +273,11 @@ export function LiveTab({
               <div className="empty-state">
                 <RadarIcon size={28} />
                 <p>
-                  {modelsOn
-                    ? `Nothing yet from your filter or ${highConviction ? "the high-conviction calls" : chosenNames}. Alerts land here the moment one comes in.`
-                    : "Nothing caught by your filter yet. Turn on Model alerts in Settings to see the models' calls here too."}
+                  {bothOn
+                    ? `Nothing yet that your filter and ${chosenNames} both caught. Only alerts both caught is on in Settings, so tokens only one side caught are left out.`
+                    : modelsOn
+                      ? `Nothing yet from your filter or ${highConviction ? "the high-conviction calls" : chosenNames}. Alerts land here the moment one comes in.`
+                      : "Nothing caught by your filter yet. Turn on Model alerts in Settings to see the models' calls here too."}
                 </p>
                 <button className="ghost" onClick={() => goTo("filters")}>
                   Tune your filter <ArrowRightIcon size={13} />

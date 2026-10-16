@@ -43,6 +43,7 @@ import { loadMarketWeather, type MarketWeather } from "../marketWeather.js";
 import {
   buildLeaderboard,
   contestState,
+  feedBothOnlyApplies,
   modelLabel,
   filterWins,
   readerBoard,
@@ -174,9 +175,15 @@ const feedSettingsSchema = z
      * keep the hand picks. Picking models turns it off unless this says otherwise.
      */
     followBest: z.boolean().optional(),
+    /** Only alerts both caught: the feed keeps only filter alerts a followed model also called. */
+    bothOnly: z.boolean().optional(),
   })
   .refine(
-    (v) => v.models !== undefined || v.showModelAlerts !== undefined || v.followBest !== undefined,
+    (v) =>
+      v.models !== undefined ||
+      v.showModelAlerts !== undefined ||
+      v.followBest !== undefined ||
+      v.bothOnly !== undefined,
     "nothing to change",
   );
 
@@ -540,7 +547,13 @@ export async function registerCuratedRoutes(
       ...readerBoard(
         board,
         feed.models,
-        filters ? { models: saved.showModelAlerts ? feed.models : [], filters } : undefined,
+        filters
+          ? {
+              models: saved.showModelAlerts ? feed.models : [],
+              filters,
+              bothOnly: feedBothOnlyApplies(saved),
+            }
+          : undefined,
       ),
       // The single-ledger pick (/curated) - the first checked model.
       selectedModel: feed.models[0],
@@ -550,6 +563,7 @@ export async function registerCuratedRoutes(
       followsDefault: feed.followsDefault,
       showModelAlerts: saved.showModelAlerts,
       followBest: saved.followBest,
+      bothOnly: saved.bothOnly,
     };
   });
 
@@ -570,12 +584,13 @@ export async function registerCuratedRoutes(
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const state = await contestState(opts.env);
-    const { models, showModelAlerts, followBest } = parsed.data;
+    const { models, showModelAlerts, followBest, bothOnly } = parsed.data;
     const data: {
       feedModels?: string[];
       curatedModel?: string | null;
       showModelAlerts?: boolean;
       followBestModel?: boolean;
+      feedBothOnly?: boolean;
     } = {};
     if (models !== undefined) {
       const wanted = new Set(models ?? []);
@@ -591,6 +606,7 @@ export async function registerCuratedRoutes(
     }
     if (showModelAlerts !== undefined) data.showModelAlerts = showModelAlerts;
     if (followBest !== undefined) data.followBestModel = followBest;
+    if (bothOnly !== undefined) data.feedBothOnly = bothOnly;
     const userId = request.user!.userId;
     // Switching to "keep my picks" with nothing picked yet keeps today's default models as the
     // picks, so the feed stays on them when the top models change. That reads the current picks, so the read
@@ -616,6 +632,7 @@ export async function registerCuratedRoutes(
       followsDefault: feed.followsDefault,
       showModelAlerts: user.showModelAlerts,
       followBest: saved.followBest,
+      bothOnly: saved.bothOnly,
     };
   });
 
