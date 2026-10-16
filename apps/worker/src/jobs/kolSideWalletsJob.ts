@@ -353,7 +353,9 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
       if (possible.length) await tx.kolPossibleSide.createMany({ data: possible });
       possibleHeld = await tx.kolPossibleSide.count();
     },
-    { timeout: 60_000 },
+    // maxWait as in walletRiskJob: the trainer's six connections are shared with the other hourly
+    // jobs on the same minute, and the pair aggregate above is too dear to drop on a 2-s pool wait.
+    { maxWait: 30_000, timeout: 60_000 },
   );
 
   const meta: JobRunMeta = {

@@ -59,8 +59,13 @@ export async function replaceRows(
     written += await tx.$executeRawUnsafe(upsert, JSON.stringify(chunk));
   }
   const keys = rows.map((r) => String(r[spec.key]));
+  // An anti-join against the key list, not `NOT (key = ANY($1))`: that form hashed the 77 k-key
+  // array under a custom plan (tens of ms) but, once the prepared statement went generic, probed
+  // it per row - 62 s for the same delete (database audit 2026-10-16, E3). NOT EXISTS over
+  // unnest() hash-joins under either plan.
   const deleted = await tx.$executeRawUnsafe(
-    `DELETE FROM ${q(spec.table)} WHERE NOT (${q(spec.key)} = ANY($1::text[]))`,
+    `DELETE FROM ${q(spec.table)} t WHERE NOT EXISTS (` +
+      `SELECT 1 FROM unnest($1::text[]) AS k(key) WHERE k.key = t.${q(spec.key)})`,
     keys,
   );
   return { written, deleted };
