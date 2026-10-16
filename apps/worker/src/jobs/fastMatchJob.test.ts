@@ -50,6 +50,8 @@ async function seedVetted(suffix: string, overrides: Record<string, unknown> = {
       lpBurned: true,
       isMayhemMode: false,
       rugScreenPassed: true,
+      // The screen's holder reading is in - a match waits for it (matchDispatch's awaitsScreenReading).
+      freshTop10WalletPct: 10,
       ...overrides,
     },
   });
@@ -106,6 +108,17 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
       orderBy: { takenAt: "desc" },
     });
     expect(snapshot.priceUsd).toBe(0.0002);
+  });
+
+  it("doesn't alert on a vetted token whose holders the screen hasn't read yet", async () => {
+    // HEEHAW (2026-10-16): the fast lane alerted at three minutes old, before the holder list was
+    // in, and the screen rejected it on that list two minutes later.
+    const token = await seedVetted("unread", { freshTop10WalletPct: null });
+    const user = await seedSubscriber("sub-unread");
+
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
+
+    expect(await prisma.match.count({ where: { tokenId: token.id, userId: user.id } })).toBe(0);
   });
 
   it("writes nothing at all when the re-priced token matches nobody", async () => {
