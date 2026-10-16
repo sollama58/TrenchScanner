@@ -1,4 +1,5 @@
 import { keysOf, type ChainTx } from "./tradeTape.js";
+import { linkingTransfers } from "./holderTransfers.js";
 
 /**
  * Linked wallets: top holders that one wallet paid for. A wallet's first transaction is almost
@@ -173,6 +174,12 @@ export interface LinkedCluster {
   pct: number;
   /** Tied to the creator: funded by it, it funded them, or the same funder. */
   creatorLinked: boolean;
+  /**
+   * How many holder-to-holder transfer pairs tie the cluster together (user decision 2026-10-16:
+   * transfers count in Linked); absent when none. A cluster only transfers hold together has a
+   * holder as its `funder`: the one that sent the most.
+   */
+  transfers?: number;
 }
 
 export interface LinkedWalletsReading {
@@ -289,6 +296,12 @@ export function linkedWallets(
     fundedAtOf?: ReadonlyMap<string, number | null>;
     /** How many of the largest holders to read: LINKED_TOP_N, or more for the bubble map's wider list. */
     topN?: number;
+    /**
+     * Holder-to-holder transfers of the coin (holderTransfers.ts): a pair that passes
+     * linkingTransfers (no dust, no exchange or hot wallet) links its two holders, as a shared
+     * funder does (user decision 2026-10-16). Left out, the reading is funding alone.
+     */
+    transfers?: readonly { from: string; to: string; pct: number }[] | null;
   },
 ): LinkedWalletsReading | null {
   const list = dedupeHolders(holders)
@@ -330,6 +343,19 @@ export function linkedWallets(
     else byFunder.set(f, h.owner);
   }
 
+  // Holders that moved the coin between them, past dust and clear of exchanges.
+  const pctOfHolder = new Map(list.map((h) => [h.owner, h.pct]));
+  const links = linkingTransfers(
+    opts.transfers,
+    pctOfHolder,
+    (w) => opts.hot(w) || KNOWN_EXCHANGE_WALLETS.has(w),
+  );
+  const sentBy = new Map<string, number>();
+  for (const t of links) {
+    union(t.from, t.to);
+    sentBy.set(t.from, (sentBy.get(t.from) ?? 0) + t.pct);
+  }
+
   const creator = opts.creator ?? null;
   const creatorFunder = usable(opts.creatorFunder) ? opts.creatorFunder : null;
   const tiedToCreator = (wallet: string) => {
@@ -352,11 +378,14 @@ export function linkedWallets(
   for (const members of groups.values()) {
     if (members.length < 2) continue;
     members.sort((a, b) => b.pct - a.pct);
+    const inside = new Set(members.map((m) => m.owner));
+    const transfers = links.filter((t) => inside.has(t.from)).length;
     clusters.push({
-      funder: clusterFunder(members, funderOf, isHolder),
+      funder: clusterFunder(members, funderOf, isHolder, sentBy),
       wallets: members.map((m) => ({ wallet: m.owner, pct: round2(m.pct) })),
       pct: round2(members.reduce((s, m) => s + m.pct, 0)),
       creatorLinked: members.some((m) => tiedToCreator(m.owner)),
+      ...(transfers > 0 ? { transfers } : {}),
     });
   }
   clusters.sort((a, b) => b.pct - a.pct);
@@ -383,11 +412,15 @@ export function linkedWallets(
   };
 }
 
-/** The funder most of a cluster shares, or the holder that funded the others. */
+/**
+ * The funder most of a cluster shares, or the holder that funded the others. A cluster no funder
+ * holds together (only transfers do) takes the holder that sent the most.
+ */
 function clusterFunder(
   members: readonly { owner: string }[],
   funderOf: ReadonlyMap<string, string | null>,
   isHolder: ReadonlySet<string>,
+  sentBy: ReadonlyMap<string, number> = new Map(),
 ): string {
   const counts = new Map<string, number>();
   for (const m of members) {
@@ -397,6 +430,15 @@ function clusterFunder(
   let best: string | null = null;
   for (const [f, c] of counts)
     if (!best || c > counts.get(best)! || (c === counts.get(best) && isHolder.has(f))) best = f;
+  // No funder shared, none of them funding another: transfers alone tie it, so its sender is the hub.
+  const shared =
+    best !== null && (counts.get(best)! > 1 || (isHolder.has(best) && members.some((m) => m.owner === best)));
+  if (!shared) {
+    const sender = [...members]
+      .filter((m) => sentBy.has(m.owner))
+      .sort((a, b) => sentBy.get(b.owner)! - sentBy.get(a.owner)!)[0];
+    if (sender) return sender.owner;
+  }
   return best ?? members[0]!.owner;
 }
 

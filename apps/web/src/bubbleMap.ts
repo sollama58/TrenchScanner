@@ -99,6 +99,40 @@ export function withWideMap<
   };
 }
 
+/**
+ * The reading as it stands without holder-to-holder transfers (user ask 2026-10-16): Linked, its
+ * clusters, KOL Bundled and Bundled from the funding-only figures the scan keeps beside the counted
+ * ones, for the map with its transfers hidden. A scan from before they were kept reads as it is.
+ */
+export function withoutTransfers<
+  S extends Pick<
+    Snapshot,
+    | "linkedWalletPct"
+    | "linkedWalletCount"
+    | "linkedClusters"
+    | "kolBundledPct"
+    | "bundledSupplyPct"
+    | "bundledSupplyCount"
+    | "linkedWalletPctExTransfers"
+    | "linkedWalletCountExTransfers"
+    | "linkedClustersExTransfers"
+    | "kolBundledPctExTransfers"
+    | "bundledSupplyPctExTransfers"
+    | "bundledSupplyCountExTransfers"
+  >,
+>(s: S): S {
+  if (s.linkedWalletPctExTransfers == null) return s;
+  return {
+    ...s,
+    linkedWalletPct: s.linkedWalletPctExTransfers,
+    linkedWalletCount: s.linkedWalletCountExTransfers ?? s.linkedWalletCount,
+    linkedClusters: s.linkedClustersExTransfers ?? s.linkedClusters,
+    kolBundledPct: s.kolBundledPctExTransfers ?? s.kolBundledPct,
+    bundledSupplyPct: s.bundledSupplyPctExTransfers ?? s.bundledSupplyPct,
+    bundledSupplyCount: s.bundledSupplyCountExTransfers ?? s.bundledSupplyCount,
+  };
+}
+
 /** What withWideMap keeps of the scan's own reading once the wider map stands in for it. */
 export interface WideReading {
   /** The wallets in the scan's own clusters: those its Linked count took in. */

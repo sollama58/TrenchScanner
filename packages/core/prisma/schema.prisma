@@ -1158,6 +1158,17 @@ model TokenSnapshot {
   transferWalletCount     Int?
   transferHoldersChecked  Int?
   holderTransfers         Json?
+  /// Linked, KOL Bundled and Bundled as they read without holder-to-holder transfers (user ask
+  /// 2026-10-16): since transfers count in linkedWalletPct and the rest, these keep the funding-only
+  /// figures recorded, and the bubble map shows them when its transfers are hidden. Equal to the
+  /// counted figures when no transfer linked anyone. linkedClustersExTransfers: the clusters
+  /// without transfers, only when they differ from linkedClusters. Null until read.
+  linkedWalletPctExTransfers    Float?
+  linkedWalletCountExTransfers  Int?
+  kolBundledPctExTransfers      Float?
+  bundledSupplyPctExTransfers   Float?
+  bundledSupplyCountExTransfers Int?
+  linkedClustersExTransfers     Json?
   winnerRecentBuyers      Int?
   winnerRecentSellers     Int?
   // How many holders the two percentages above were computed over. The list is "top 10" by
@@ -2677,9 +2688,33 @@ model KolPossibleSide {
   /// The label rules it was earned under (core's POSSIBLE_SIDE_RULES_VERSION); 0 is before versions.
   /// A label from older rules is dropped on the next run rather than held.
   rulesVersion Int @default(0)
+  /// Transfers of a coin between the wallet and the KOL that earned the label (user ask
+  /// 2026-10-16: 4 within 48 hours or 10 within 72, core's TRANSFER_SIDE_TIERS), in the tier's
+  /// span; 0 when buying alongside earned it alone. A transfer-only label has pct, shared and kolCoins 0.
+  transfers    Int @default(0)
 
   @@id([wallet, kolWallet])
   @@index([kolWallet])
+}
+
+/// One transfer of a coin from one of its top holders to another (user ask 2026-10-16), as the
+/// scan read it (core's wallets/holderTransfers.ts), kept when it links the two (core's
+/// linkingTransfers: no dust, no exchange or hot wallet). Read across coins for the KOL Possible
+/// Side and Multi-Wallet-Bundle flags (core's TRANSFER_SIDE_TIERS). Rows older than 30 days go.
+model HolderTransferEvent {
+  signature   String
+  fromWallet  String
+  toWallet    String
+  mintAddress String
+  /// % of the coin's supply it moved.
+  pct         Float
+  at          DateTime
+  createdAt   DateTime @default(now())
+
+  @@id([signature, fromWallet, toWallet])
+  @@index([fromWallet, at])
+  @@index([toWallet, at])
+  @@index([at])
 }
 
 /// A model-alerted coin's bubble map over its top 50 holders (user ask 2026-10-14): the top 25 as

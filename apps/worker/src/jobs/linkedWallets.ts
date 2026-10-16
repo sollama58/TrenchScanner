@@ -740,6 +740,8 @@ export async function storeWideMapReadings(
 export function linkedReadingOf(
   group: LinkedGroup,
   lookups: LinkedWalletLookups,
+  /** The coin's holder-to-holder transfers (holderTransfers.ts), which link holders too; none: funding alone. */
+  transfers?: readonly { from: string; to: string; pct: number }[] | null,
 ): LinkedWalletsReading | null {
   if (group.holders.length === 0) return null;
   const creator = group.creator ?? null;
@@ -755,6 +757,7 @@ export function linkedReadingOf(
     creator,
     creatorFunder,
     fundedAtOf: lookups.fundedAtOf,
+    transfers,
   });
 }
 

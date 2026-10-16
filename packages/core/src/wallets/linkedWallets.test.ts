@@ -142,6 +142,43 @@ describe("linkedWallets", () => {
     });
   });
 
+  it("links holders that moved the coin between them, past dust and clear of exchanges", () => {
+    const funders = new Map<string, string | null>(holders.map((h) => [h.owner, null]));
+    const r = linkedWallets(holders, funders, {
+      hot: notHot,
+      transfers: [
+        { from: "b", to: "e", pct: 1 },
+        { from: "c", to: "e", pct: 0.2 },
+        { from: "a", to: "d", pct: 0.01 }, // dust
+        { from: "a", to: "EXCHANGE", pct: 2 }, // not a holder
+      ],
+    })!;
+    expect(r.linkedClusterCount).toBe(1);
+    expect(r.clusters[0]).toMatchObject({ funder: "b", pct: 18, transfers: 2 });
+    expect(r.linkedWalletCount).toBe(3);
+  });
+
+  it("links nobody through a transfer from a hot wallet", () => {
+    const funders = new Map<string, string | null>(holders.map((h) => [h.owner, null]));
+    const r = linkedWallets(holders, funders, {
+      hot: (w) => w === "a",
+      transfers: [{ from: "a", to: "b", pct: 1 }],
+    })!;
+    expect(r.linkedClusterCount).toBe(0);
+  });
+
+  it("keeps a shared funder as the hub when transfers join its cluster", () => {
+    const funders = new Map<string, string | null>([
+      ["a", "F"],
+      ["b", "F"],
+      ["c", null],
+      ["d", null],
+      ["e", null],
+    ]);
+    const r = linkedWallets(holders, funders, { hot: notHot, transfers: [{ from: "c", to: "a", pct: 1 }] })!;
+    expect(r.clusters[0]).toMatchObject({ funder: "F", pct: 25, transfers: 1 });
+  });
+
   it("is unknown while any holder's funder is unread", () => {
     const funders = new Map<string, string | null>([["a", "F"]]);
     expect(linkedWallets(holders, funders, { hot: notHot })).toBeNull();

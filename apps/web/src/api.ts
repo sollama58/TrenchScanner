@@ -189,6 +189,8 @@ export interface Snapshot {
         wallets: { wallet: string; pct: number }[];
         pct: number;
         creatorLinked: boolean;
+        /** How many holder-to-holder transfers tie it together; absent when none. */
+        transfers?: number;
       }[]
     | null;
   /**
@@ -219,12 +221,24 @@ export interface Snapshot {
   /**
    * Holder-to-holder transfers (user ask 2026-10-16): Transferred Supply %, the coin moved between
    * top holders (SOL and other coins ignored); how many of transferHoldersChecked sent or got one;
-   * and each sender-receiver pair for the bubble map. Kept out of Linked. Null when not read.
+   * and each sender-receiver pair for the bubble map. A pair past dust and clear of exchanges links
+   * its two holders in Linked (user decision 2026-10-16). Null when not read.
    */
   transferredSupplyPct?: number | null;
   transferWalletCount?: number | null;
   transferHoldersChecked?: number | null;
   holderTransfers?: { from: string; to: string; pct: number; count: number; lastAtMs?: number }[] | null;
+  /**
+   * Linked, KOL Bundled and Bundled without transfers (user ask 2026-10-16): what the bubble map
+   * shows with its transfers hidden. linkedClustersExTransfers only when transfers changed the
+   * clusters. Null on scans before they were kept.
+   */
+  linkedWalletPctExTransfers?: number | null;
+  linkedWalletCountExTransfers?: number | null;
+  kolBundledPctExTransfers?: number | null;
+  bundledSupplyPctExTransfers?: number | null;
+  bundledSupplyCountExTransfers?: number | null;
+  linkedClustersExTransfers?: Snapshot["linkedClusters"];
   /** % of supply held by top holders funded within a minute of each other (any funders); null when not checked. */
   sameTimeFundedPct?: number | null;
   sameTimeClusterCount?: number | null;
