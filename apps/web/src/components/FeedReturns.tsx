@@ -160,7 +160,9 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
             <p className="small muted returns-focus">
               {topBy === "model"
                 ? data.showModelAlerts
-                  ? "No AI KOL call in your feed has hit 2x this week."
+                  ? data.bothOnly
+                    ? "No AI KOL call your filter also caught has hit 2x this week."
+                    : "No AI KOL call in your feed has hit 2x this week."
                   : "Model alerts are off on your feed, so it has no AI KOL calls."
                 : "No alert from your filters has hit 2x this week."}
             </p>

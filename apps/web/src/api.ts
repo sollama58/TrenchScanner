@@ -409,6 +409,8 @@ export interface FeedStats {
   best: { tokenId: string; symbol: string | null; peakPct: number } | null;
   medianPeakPct: number | null;
   showModelAlerts: boolean;
+  /** Every card was caught by both a followed model and an active filter (absent from older API builds). */
+  bothOnly?: boolean;
   truncated: boolean;
 }
 
@@ -438,6 +440,7 @@ export interface FeedReturns {
   /** The same, from the followed models' calls alone and the reader's own filters' alerts alone (absent from older API builds). */
   topBySource?: { model: NonNullable<FeedReturns["top"]>; filter: NonNullable<FeedReturns["top"]> };
   showModelAlerts: boolean;
+  bothOnly?: boolean;
   truncated: boolean;
 }
 
@@ -1053,6 +1056,8 @@ export interface FeedCatch extends LiveCatch {
   models: { count: number; caught: number };
   /** `only`: runners the filters caught that no model did. */
   filters: { count: number; caught: number; only: number };
+  /** Only alerts both caught: `caught` counts runners a model AND a filter caught (absent from older API builds). */
+  bothOnly?: boolean;
 }
 
 /** A mix of models scored together: a runner counts as caught when any of them called it. */
@@ -1309,6 +1314,11 @@ export interface Leaderboard {
   followsDefault: boolean;
   /** Whether model calls are mixed into the combined feed at all. */
   showModelAlerts: boolean;
+  /**
+   * Settings' "Only alerts both caught": the feed keeps only filter alerts a followed model also
+   * called. Saved as is; it applies only while showModelAlerts is on (absent from older API builds).
+   */
+  bothOnly?: boolean;
   /** The user follows the best performer (absent from API builds before Settings). */
   followBest?: boolean;
   /** When and why the default (the best performer) was last chosen; null before the first pick. */
