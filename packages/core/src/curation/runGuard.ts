@@ -43,7 +43,24 @@ export interface RunGuardInput {
   maxRows: number;
   now: Date;
   maxHoldMs: number;
+  /**
+   * When the training set's loading rules last changed on purpose (TRAINING_ROW_RULES_SINCE).
+   * Running models that went live before it counted rows under the older rules, so their count
+   * says nothing about rows going missing: the row check compares only against models since.
+   */
+  rowRulesSince?: Date;
 }
+
+/**
+ * When the loader's rules last narrowed the training set on purpose: the data-correctness audit
+ * of 2026-10-16 (#674 and its follow-ups: a 3-hour age cap on every row, rows off the current
+ * label rule and frozen-curve rows left out, the scan's own cap for the band) took the set from
+ * about 38,000 rows to about 16,000. The running models then saw the old count, so every run
+ * after held for the full CURATOR_GUARD_MAX_HOLD_HOURS as "rows went missing". The deploy of #674,
+ * with slack on the early side so no model trained under the new rules is left out. Move it
+ * forward whenever a change shrinks the set on purpose.
+ */
+export const TRAINING_ROW_RULES_SINCE = new Date("2026-10-16T18:00:00Z");
 
 export type RunGuardVerdict =
   { accept: true; reason: string | null } | { accept: false; reason: string; heldSinceMs: number };
@@ -65,9 +82,13 @@ export function assessTrainingRun(input: RunGuardInput): RunGuardVerdict {
   if (input.incumbents.length === 0) return { accept: true, reason: null };
 
   const problems: string[] = [];
-  const priorRows = Math.max(...input.incumbents.map((m) => m.trainingRows));
+  // Only running models trained under the current loading rules say how many rows to expect (a
+  // model with no activation time predates the column, so it predates the rules too).
+  const since = input.rowRulesSince?.getTime() ?? -Infinity;
+  const comparable = input.incumbents.filter((m) => (m.activatedAt?.getTime() ?? -Infinity) >= since);
+  const priorRows = comparable.length > 0 ? Math.max(...comparable.map((m) => m.trainingRows)) : 0;
   const expected = Math.min(priorRows, input.maxRows);
-  if (input.trainingRows < expected * MIN_ROW_SHARE) {
+  if (comparable.length > 0 && input.trainingRows < expected * MIN_ROW_SHARE) {
     problems.push(`trained on ${input.trainingRows} rows, under half the ${expected} the running models saw`);
   }
   const calling = (kind: string, threshold: number | null) =>
