@@ -954,6 +954,196 @@ describe.skipIf(!dbAvailable)("runCleanupJob: match archive", () => {
 });
 
 /**
+ * Retention decided 2026-10-16: archived matches go after 90 days unless they ran (180), training
+ * rows after 90 unless they doubled or a curated call points at them (180), the trade tape's
+ * wallet rows after two weeks, and a bug report's screenshot a week after it is done.
+ */
+describe.skipIf(!dbAvailable)("runCleanupJob: retention tiers", () => {
+  const TAG = "CleanupRetentionTiersTest";
+  const WALLET = "CleanupRetentionTiersTestWallet111111111111";
+  const DAY = 86_400_000;
+  const env = {
+    SNAPSHOT_RETENTION_DAYS: 30,
+    TWA_RETENTION_DAYS: 14,
+    CANDIDATE_OUTCOME_RETENTION_DAYS: 90,
+    CANDIDATE_OUTCOME_HIT_RETENTION_DAYS: 180,
+    STALE_TOKEN_RETENTION_DAYS: 3650,
+    MATCH_ARCHIVE_DAYS: 30,
+    MATCH_ARCHIVE_RETENTION_DAYS: 90,
+    MATCH_ARCHIVE_HIT_RETENTION_DAYS: 180,
+  } as never;
+  const ago = (days: number) => new Date(Date.now() - days * DAY);
+
+  const cleanUp = async () => {
+    await prisma.feedbackReport.deleteMany({ where: { submitterKey: TAG } });
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    await prisma.user.deleteMany({ where: { walletAddress: WALLET } });
+  };
+  beforeEach(cleanUp);
+  afterAll(cleanUp);
+
+  it("keeps the archived runners to 180 days and lets the rest go at 90", async () => {
+    const user = await prisma.user.create({ data: { walletAddress: WALLET } });
+    const filter = await prisma.userFilter.create({ data: { userId: user.id } });
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-archived` } });
+    const archived = (name: string, ageDays: number, extra: object = {}) =>
+      prisma.matchArchive.create({
+        data: {
+          id: `${TAG}-${name}`,
+          userId: user.id,
+          filterId: filter.id,
+          tokenId: token.id,
+          mintAddress: token.mintAddress,
+          snapshotId: `${TAG}-snap`,
+          snapshotMarketCapUsd: 20_000,
+          matchedAt: ago(ageDays),
+          score: 60,
+          deliveredDashboard: true,
+          ...extra,
+        },
+      });
+    await archived("recent-loser", 80, { hit2xIn1h: false });
+    await archived("old-loser", 100, { hit2xIn1h: false, peakReturnPct: 40 });
+    await archived("old-doubler", 100, { hit2xIn1h: true });
+    await archived("old-hundred", 100, { hitHundredPctAt: ago(100) });
+    await archived("old-peak", 100, { peakReturnPct: 120 });
+    await archived("ancient-doubler", 200, { hit2xIn1h: true });
+
+    const meta = await runCleanupJob(env, { rowsPerBatch: 1, pauseMs: 0 });
+    expect(meta.deletedArchivedMatches).toBe(2);
+    const left = await prisma.matchArchive.findMany({ where: { userId: user.id }, select: { id: true } });
+    expect(left.map((a) => a.id).sort()).toEqual(
+      [`${TAG}-recent-loser`, `${TAG}-old-doubler`, `${TAG}-old-hundred`, `${TAG}-old-peak`].sort(),
+    );
+
+    // Off: nothing archived is ever deleted.
+    await archived("off-loser", 100, { hit2xIn1h: false });
+    const off = await runCleanupJob({ ...(env as object), MATCH_ARCHIVE_RETENTION_DAYS: 0 } as never, {
+      pauseMs: 0,
+    });
+    expect(off.deletedArchivedMatches).toBe(0);
+    expect(await prisma.matchArchive.count({ where: { userId: user.id } })).toBe(5);
+  });
+
+  it("keeps the training rows that doubled, or that a curated call points at, to 180 days", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-outcomes` } });
+    const outcome = (ageDays: number, extra: object = {}) =>
+      prisma.candidateOutcome.create({
+        data: {
+          tokenId: token.id,
+          sampleKind: "event",
+          anchorAt: ago(ageDays),
+          anchorPriceUsd: 1,
+          anchorMcapUsd: 50_000,
+          features: {},
+          nextCheckAt: new Date(),
+          peak1hPriceUsd: 1,
+          low1hPriceUsd: 1,
+          lowBefore2xPriceUsd: 1,
+          peak24hPriceUsd: 1,
+          finalizedAt: ago(ageDays),
+          ...extra,
+        },
+      });
+    const recent = await outcome(80, { hit2xIn1h: false });
+    const oldMiss = await outcome(100, { hit2xIn1h: false });
+    const oldUngraded = await outcome(100);
+    const oldHit = await outcome(100, { hit2xIn1h: true });
+    const oldCurated = await outcome(100, { hit2xIn1h: false });
+    await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        candidateOutcomeId: oldCurated.id,
+        createdAt: ago(100),
+        source: "heuristic-v1",
+        confidence: 0.9,
+        reasons: [],
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 50_000,
+      },
+    });
+    const ancientHit = await outcome(200, { hit2xIn1h: true });
+
+    const meta = await runCleanupJob(env, { rowsPerBatch: 1, pauseMs: 0 });
+    expect(meta.deletedCandidateOutcomes).toBe(3);
+    const left = await prisma.candidateOutcome.findMany({
+      where: { tokenId: token.id },
+      select: { id: true },
+    });
+    expect(left.map((o) => o.id).sort()).toEqual([recent.id, oldHit.id, oldCurated.id].sort());
+    expect([oldMiss.id, oldUngraded.id, ancientHit.id].some((id) => left.some((o) => o.id === id))).toBe(
+      false,
+    );
+
+    // With the hit horizon no longer than the general one, age alone decides, as before.
+    const flat = await runCleanupJob(
+      { ...(env as object), CANDIDATE_OUTCOME_HIT_RETENTION_DAYS: 90 } as never,
+      { pauseMs: 0 },
+    );
+    expect(flat.deletedCandidateOutcomes).toBe(2);
+    expect(await prisma.candidateOutcome.count({ where: { tokenId: token.id } })).toBe(1);
+  });
+
+  it("prunes the trade tape's wallet rows on their own two-week horizon", async () => {
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-tape` } });
+    const row = (wallet: string, ageDays: number) =>
+      prisma.tokenWalletActivity.create({ data: { tokenId: token.id, wallet, createdAt: ago(ageDays) } });
+    await row("fresh", 10);
+    await row("stale", 20);
+    await row("older", 40);
+
+    const meta = await runCleanupJob(env, { rowsPerBatch: 1, pauseMs: 0 });
+    expect(meta.deletedWalletActivity).toBe(2);
+    expect(await prisma.tokenWalletActivity.findMany({ where: { tokenId: token.id } })).toMatchObject([
+      { wallet: "fresh" },
+    ]);
+
+    // 0 falls back to the snapshot horizon.
+    await row("stale-again", 20);
+    const fallback = await runCleanupJob({ ...(env as object), TWA_RETENTION_DAYS: 0 } as never, {
+      pauseMs: 0,
+    });
+    expect(fallback.deletedWalletActivity).toBe(0);
+    expect(await prisma.tokenWalletActivity.count({ where: { tokenId: token.id } })).toBe(2);
+  });
+
+  it("drops a bug report's screenshot once it is done or a month old, and the done report after a quarter", async () => {
+    const report = (name: string, status: string, createdDays: number, updatedDays: number) =>
+      prisma.feedbackReport.create({
+        data: {
+          kind: "bug",
+          message: name,
+          status,
+          submitterKey: TAG,
+          screenshot: "data:image/jpeg;base64,AAAA",
+          createdAt: ago(createdDays),
+          updatedAt: ago(updatedDays),
+        },
+      });
+    await report("open-fresh", "new", 5, 5);
+    await report("done-fresh", "done", 5, 2);
+    await report("done-week", "done", 20, 8);
+    await report("open-month", "new", 35, 35);
+    await report("done-quarter", "done", 120, 100);
+
+    const meta = await runCleanupJob(env, { pauseMs: 0 });
+    expect(meta.strippedFeedbackScreenshots).toBe(3);
+    expect(meta.deletedFeedbackReports).toBe(1);
+    const left = await prisma.feedbackReport.findMany({
+      where: { submitterKey: TAG },
+      select: { message: true, screenshot: true },
+      orderBy: { message: "asc" },
+    });
+    expect(left).toEqual([
+      { message: "done-fresh", screenshot: "data:image/jpeg;base64,AAAA" },
+      { message: "done-week", screenshot: null },
+      { message: "open-fresh", screenshot: "data:image/jpeg;base64,AAAA" },
+      { message: "open-month", screenshot: null },
+    ]);
+  });
+});
+
+/**
  * A run cut off by a deploy: the next boot's catch-up skips the stages it already finished, so a
  * trainer restarting every few minutes still gets through the whole sweep over a few attempts.
  */

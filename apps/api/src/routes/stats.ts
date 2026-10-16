@@ -39,8 +39,13 @@ export const MIN_GRADED_FOR_VERDICT = 30;
 /** Tight: this is a script's endpoint, and every call runs a dozen aggregates. */
 const STATS_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
 
-/** Longest window one report may cover, whichever way the caller spells it (days, or since/until). */
-export const MAX_WINDOW_DAYS = 180;
+/**
+ * Longest window one report may cover, whichever way the caller spells it (days, or since/until).
+ * 90 since 2026-10-16: past CANDIDATE_OUTCOME_RETENTION_DAYS and MATCH_ARCHIVE_RETENTION_DAYS the
+ * nightly cleanup keeps only the calls that ran, so a window reaching further back would count a
+ * hit rate near 100% (env.ts, "winners only").
+ */
+export const MAX_WINDOW_DAYS = 90;
 
 /** The window a since/until/days query asks for, in days, resolved the way the routes resolve it. */
 export function windowDays(q: { days: number; since?: Date; until?: Date }, now = new Date()): number {
