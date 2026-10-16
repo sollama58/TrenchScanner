@@ -31,6 +31,7 @@ import {
   MAX_EVENT_AGE_MINUTES,
   FRESH_ANCHOR_LABEL_RULE,
   isCurrentLabelRule,
+  isDecisionRow,
   CANDIDATE_FEATURE_NAMES,
   ALL_NARRATIVE_FEATURES,
   Prisma,
@@ -1141,8 +1142,13 @@ async function loadRowsOfKind(
 ): Promise<TrainingRow[]> {
   // Background rows are banked across the padded scan band, but no call is ever made outside the
   // curated band: half of them sat under its floor (2026-10-08), teaching a market nobody trades.
+  // Banded on the scan's own market cap, the one the live gate read: the anchor cap is the fresh
+  // quote's, which let 1,459 rows of coins under the $10k floor in (19% of hourly rows, doubling
+  // 18.1% against 8.9%, with inputs no decision row ever lacks) - data-correctness audit 2026-10-16.
   const bandSql =
-    band !== undefined ? Prisma.sql`AND "anchorMcapUsd" BETWEEN ${band.min} AND ${band.max}` : Prisma.empty;
+    band !== undefined
+      ? Prisma.sql`AND COALESCE(("features"::jsonb ->> 'mcapUsd')::float8, "anchorMcapUsd") BETWEEN ${band.min} AND ${band.max}`
+      : Prisma.empty;
   // Decision moments older than the event pre-gate's age cap were banked before the cap existed
   // (2026-10-05): a live decision can no longer be one, so they neither train nor grade.
   // Background rows are held to the same cap (data-correctness audit 2026-10-16): 27% of them
@@ -1199,7 +1205,7 @@ async function loadRowsOfKind(
       // scan) had its fresh-price gap overwritten with the candle re-grade's, measured after the
       // decision: live, the same no-quote decision carries no gap at all.
       if (loaded.rule3Grade !== null && features.freshGapPct !== undefined) features.freshGapPct = null;
-      out.push({
+      const row: TrainingRow = {
         tokenId: r.tokenId,
         anchorAt: r.anchorAt,
         features,
@@ -1220,7 +1226,11 @@ async function loadRowsOfKind(
         ...runPeakOf(r),
         // The 10x tier, for the exam's 10x part of the score; unknown until the row's hour settles.
         ...(r.hit10xIn1h !== null ? { hit10x: r.hit10xIn1h } : {}),
-      });
+      };
+      // The decision pre-gate's old-coin momentum test (#567) re-applied, as the exam does: the
+      // 1,942 older rows that fail it today doubled 1.8% and held 9.6% of the training weight.
+      if (row.sampleKind === "event" && !isDecisionRow(row)) continue;
+      out.push(row);
     }
     if (page.length < take) break;
     const last = page[page.length - 1]!;

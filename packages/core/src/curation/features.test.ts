@@ -16,6 +16,7 @@ import {
   FRESH_QUOTE_GAP_SINCE,
   PATH_TAPE_REFILL_SINCE,
   SOCIAL_LIST_OUTAGE,
+  SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE,
 } from "./features.js";
 import type { ScoredToken } from "../types.js";
 
@@ -399,6 +400,13 @@ describe("maskKnownBadInputs", () => {
     const young = { ageMinutes: 3, pathObservedMinutes: 2.5, pathRet1mPct: 4 };
     expect(maskKnownBadInputs(at, young).pathRet1mPct).toBe(4);
     expect(maskKnownBadInputs(PATH_TAPE_REFILL_SINCE, short).pathRet15mPct).toBe(20);
+  });
+
+  it("reads the sniper share as missing before closed accounts left the top 10", () => {
+    const row = { sniperTop10WalletPct: 40, freshGapPct: 2, mcapUsd: 1 };
+    expect(maskKnownBadInputs(new Date("2026-10-12T18:16:59Z"), row).sniperTop10WalletPct).toBeNull();
+    expect(maskKnownBadInputs(new Date("2026-10-12T18:16:59Z"), row).freshGapPct).toBe(2);
+    expect(maskKnownBadInputs(SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE, row).sniperTop10WalletPct).toBe(40);
   });
 
   it("reads hasTwitter and hasWebsite as missing while Pump.fun's coin list was blocked", () => {

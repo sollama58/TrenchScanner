@@ -751,12 +751,21 @@ const SOCIAL_OUTAGE_FEATURES = [
 ] as const satisfies readonly CandidateFeatureName[];
 
 /**
+ * Rows banked before this read the sniper share over a top 10 that still held closed token
+ * accounts (#397, 2026-10-12 18:17 UTC, dropped them): its median stepped from 10 to 30 and the
+ * share of rows at 35%+ from 22.5% to 36.9%, so the older rows carry another scale of the same
+ * input. On them it reads as missing.
+ */
+export const SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE = new Date("2026-10-12T18:17:00Z");
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
  * the create message and is real), the social bits on rows banked before
  * SOCIAL_BITS_FROM_DISCOVERY_SINCE, and before VOLUME_ACCEL_YOUNG_NULL_SINCE volumeAccel on young
  * tokens (as live scoring reads it today) and the 30-second pathRet1mPct, and ctxWeekend before
  * WEEKEND_FLAG_FROM; before FRESH_QUOTE_GAP_SINCE the fresh-price gap and market base rates,
+ * before SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE the sniper share,
  * before PATH_TAPE_REFILL_SINCE the path inputs on a tape too short for the coin's age, and the
  * social bits through SOCIAL_LIST_OUTAGE. Returns the same object when nothing applies.
  */
@@ -782,6 +791,7 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   ) {
     for (const name of PRICE_PATH_FEATURES) if (name !== "pathObservedMinutes") clear(name);
   }
+  if (at < SNIPER_SHARE_CLOSED_ACCOUNTS_DROPPED_SINCE.getTime()) clear("sniperTop10WalletPct");
   if (at >= FRESH_QUOTE_GAP_SINCE.getTime()) return masked as T;
   FRESH_RULE_ERA_FEATURES.forEach(clear);
   if (at >= SOCIAL_BITS_FROM_DISCOVERY_SINCE.getTime()) return masked as T;

@@ -405,14 +405,19 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
         // Born rule 3 (no usable quote at the scan) and re-graded in place: its gap was measured
         // after the decision, so it reads as missing.
         { ...row(8, "event", 50_000, { ageMinutes: 3, freshGapPct: 5 }), rule3Grade: { labelValue: 0 } },
+        // The decision pre-gate's old-coin momentum test: an hour-old coin needs +25% in 5 minutes.
+        row(9, "event", 50_000, { ageMinutes: 90, priceChange5mPct: 5 }),
+        row(10, "event", 50_000, { ageMinutes: 90, priceChange5mPct: 40 }),
+        // Banked under the floor at the scan; the fresh quote's cap put it in band.
+        row(11, "hourly", 50_000, { ageMinutes: 3, mcapUsd: 6_000 }),
       ],
     });
     const rows = await loadTrainingRows(windowStart, 100, 50, { min: 10_000, max: 1_000_000 });
     expect(
       rows.map((r) => `${r.sampleKind}@${(r.anchorAt.getTime() - windowStart.getTime()) / 60_000}`),
-    ).toEqual(["event@8", "event@3", "hourly@1"]);
-    expect(rows[0]!.features.freshGapPct).toBeNull();
-    expect(rows[1]!.features.ageMinutes).toBe(30);
+    ).toEqual(["event@10", "event@8", "event@3", "hourly@1"]);
+    expect(rows[1]!.features.freshGapPct).toBeNull();
+    expect(rows[2]!.features.ageMinutes).toBe(30);
   });
 
   it("drops the hourly twin of an alerted event row even when re-grading gave the two different prices", async () => {

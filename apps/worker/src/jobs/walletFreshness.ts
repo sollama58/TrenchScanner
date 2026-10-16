@@ -86,8 +86,11 @@ function rowAnswer(row: {
   activeSince: Date | null;
   lastActivityAt: Date | null;
 }): ActivityAnswer | null {
-  if (!row.lastActivityAt) return null;
-  return { activeSince: row.activeSince, validUntilMs: row.lastActivityAt.getTime() + WALLET_DORMANT_GAP_MS };
+  // A row with no activity at all is an old "indeterminate" answer (an RPC index that hadn't
+  // caught up with a brand-new wallet), not a settled one: the wallet is read again.
+  const activeSince = row.activeSince ?? row.earliestActivityAt;
+  if (!row.lastActivityAt || !activeSince) return null;
+  return { activeSince, validUntilMs: row.lastActivityAt.getTime() + WALLET_DORMANT_GAP_MS };
 }
 
 export async function resolveEarliestActivity(
@@ -231,8 +234,12 @@ export async function resolveEarliestActivity(
         failedCount += 1;
       }
     } else if (outcome.status === "indeterminate") {
-      result.set(address, null);
-      toCache.push({ address, earliestActivityAt: null, activeSince: null, lastActivityAt: new Date(now) });
+      // An empty signatures page, or an oldest signature with no block time, for a wallet that
+      // holds supply (so has at least its buy): the RPC's index hasn't caught up with a brand-new
+      // wallet. Cached as "no activity", that wallet read as not fresh for a week (the dormant
+      // gap), on exactly the coins the check exists for. Unknown instead, retried shortly.
+      failureBackoff.fail(address, now, BUSY_WALLET_BACKOFF_MINUTES);
+      failedCount += 1;
     } else {
       failureBackoff.fail(address, now);
       failedCount += 1;
