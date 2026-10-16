@@ -179,6 +179,15 @@ describe("maxLinkedCreatorPct", () => {
   });
 });
 
+describe("maxTransferredSupplyPct", () => {
+  it("rejects supply moved holder to holder over the ceiling, and skips an unknown reading", () => {
+    const filter = { ...baseFilter, maxTransferredSupplyPct: 2 };
+    expect(matchesFilter(baseToken({ transferredSupplyPct: 3 }), filter)).toBe(false);
+    expect(matchesFilter(baseToken({ transferredSupplyPct: 2 }), filter)).toBe(true);
+    expect(matchesFilter(baseToken({ transferredSupplyPct: undefined }), filter)).toBe(true);
+  });
+});
+
 describe("minLiveHolderCount", () => {
   const quote = { priceUsd: 0.001, marketCapUsd: 200_000, fetchedAt: new Date() };
   it("needs the fresh quote's holder count to clear the floor, and fails closed without one", () => {

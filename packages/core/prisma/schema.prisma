@@ -333,6 +333,9 @@ model UserFilter {
   /// Max Bundled %: supply held by top holders that are linked or in a KOL's bundle, each once
   /// (TokenSnapshot.bundledSupplyPct). Skipped while unknown.
   maxBundledSupplyPct        Float?
+  /// Max Transferred %: supply that moved holder to holder among the top 25
+  /// (TokenSnapshot.transferredSupplyPct). Skipped while unknown.
+  maxTransferredSupplyPct    Float?
   /// Min holders as Jupiter counts them at the decision (the fresh quote's holderCount, seconds
   /// old). Fails closed without a quote, like the other floors.
   minLiveHolderCount         Int?

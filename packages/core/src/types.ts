@@ -264,7 +264,9 @@ export interface OnChainProfile {
    * holder in the coin itself (SOL and other coins ignored); how many holders sent or got one, of
    * how many checked; and each sender-receiver pair for the bubble map. Undefined until every
    * holder's account reads are in. A pair past dust and clear of exchanges links its two holders in
-   * the Linked count (user decision 2026-10-16); Transferred Supply % itself feeds no filter or model.
+   * the Linked count (user decision 2026-10-16). Transferred Supply % is a filter criterion
+   * (maxTransferredSupplyPct) and is recorded on each decision row for the models, not read yet
+   * (curation/features.ts TRANSFER_FEATURES).
    */
   transferredSupplyPct?: number;
   transferWalletCount?: number;
@@ -495,6 +497,8 @@ export interface FilterCriteria {
   maxKolBundledPct?: number | null;
   /** Max Bundled % (bundledSupplyPct): linked holders and KOL bundles together. Skipped while unknown. */
   maxBundledSupplyPct?: number | null;
+  /** Max Transferred % (transferredSupplyPct): supply moved holder to holder among the top 25. Skipped while unknown. */
+  maxTransferredSupplyPct?: number | null;
   /** Min holders as Jupiter counts them at the decision (freshQuote.holderCount). Fails closed without a quote. */
   minLiveHolderCount?: number | null;
   /** Bounds on how many of the 20 largest holders an exchange paid for (cexFundedCount). Skipped while unknown. */

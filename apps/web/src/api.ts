@@ -915,6 +915,7 @@ export interface FilterInput {
   maxLinkedCreatorPct: number | null;
   maxKolBundledPct: number | null;
   maxBundledSupplyPct: number | null;
+  maxTransferredSupplyPct: number | null;
   minLiveHolderCount: number | null;
   minFirstBuyersHolding: number | null;
   maxFirstBuyersHolding: number | null;

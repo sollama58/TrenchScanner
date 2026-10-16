@@ -1082,6 +1082,7 @@ const CRITERIA: [string, string, (v: number) => string][] = [
   ["maxLinkedCreatorPct", "creator-tied ≤", (v) => `${v}%`],
   ["maxKolBundledPct", "KOL bundled ≤", (v) => `${v}%`],
   ["maxBundledSupplyPct", "bundled ≤", (v) => `${v}%`],
+  ["maxTransferredSupplyPct", "transferred ≤", (v) => `${v}%`],
   ["minLiveHolderCount", "live holders ≥", (v) => String(v)],
   ["maxTop10HolderPct", "top10 ≤", (v) => `${v}%`],
   ["maxLargestHolderPct", "largest holder ≤", (v) => `${v}%`],

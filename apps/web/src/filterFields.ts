@@ -208,6 +208,14 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         unit: "%",
       },
       {
+        key: "maxTransferredSupplyPct",
+        min: 0,
+        max: 100,
+        label: "Max Transferred %",
+        hint: "supply the top-25 holders sent each other (the coin itself, not SOL): the % transferred holder to holder on the bubble map; tokens not checked yet wait",
+        unit: "%",
+      },
+      {
         key: "minLiveHolderCount",
         min: 0,
         label: "Min holders (live)",
