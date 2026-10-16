@@ -29,6 +29,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   scoreColor: true,
   // On by default (user ask 2026-10-16), in the theme's win, amber and loss colors.
   tileColors: true,
+  // Only the reading by default; the whole tile is a choice (user ask 2026-10-16).
+  tileFill: false,
   tileLow: null,
   tileMid: null,
   tileHigh: null,
@@ -232,6 +234,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     volume: typeof r.volume === "boolean" ? r.volume : d.volume,
     scoreColor: typeof r.scoreColor === "boolean" ? r.scoreColor : d.scoreColor,
     tileColors: typeof r.tileColors === "boolean" ? r.tileColors : d.tileColors,
+    tileFill: typeof r.tileFill === "boolean" ? r.tileFill : d.tileFill,
     tileLow: hex(r.tileLow),
     tileMid: hex(r.tileMid),
     tileHigh: hex(r.tileHigh),
@@ -276,6 +279,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     outline,
     outlineResult,
     tileColors,
+    tileFill,
     tileLow,
     tileMid,
     tileHigh,
@@ -297,6 +301,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     outline,
     outlineResult,
     tileColors,
+    tileFill,
     tileLow,
     tileMid,
     tileHigh,
