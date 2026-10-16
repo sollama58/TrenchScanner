@@ -13,7 +13,7 @@ import {
 /** Helpers the Models tab and its model detail view share. */
 
 /** The windows the Models vs baseline chart switches between (and its model detail compares). */
-export const WINDOWS = [1, 7] as const;
+export const WINDOWS = [1, 3, 7] as const;
 export type WindowDays = (typeof WINDOWS)[number];
 
 /** The rest of the Models tab reads one fixed window: there isn't more history than this to tell apart. */
