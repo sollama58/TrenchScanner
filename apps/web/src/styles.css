@@ -13167,7 +13167,8 @@ button.bm-same {
 .bm-halo circle {
   fill: var(--bm);
 }
-.bm-halo line {
+.bm-halo path {
+  fill: none;
   stroke: var(--bm);
   stroke-linecap: round;
 }
