@@ -127,7 +127,9 @@ function familyFacts(
         ? "the order of each hour's coins (LambdaRank)"
         : p.objective === "runSize"
           ? "how far a winner runs"
-          : "the chance of a clean 2x";
+          : p.objective === "return"
+            ? "the return under the exit plan, capped at +500%"
+            : "the chance of a clean 2x";
     facts.push(
       { label: `${prefix}Family`, value: family },
       { label: `${prefix}Fitted to`, value: objective },

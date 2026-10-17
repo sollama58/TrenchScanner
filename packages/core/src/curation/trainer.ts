@@ -29,6 +29,7 @@ import {
 } from "./labels.js";
 import { CURRENT_FEATURE_TRANSFORM, transformFeature, type FeatureTransform } from "./featureTransform.js";
 import { emptyRecord, noteRunners } from "./leaderboard.js";
+import { EXIT_PLAN } from "./profitSim.js";
 import {
   BOOSTED_MODEL_KIND,
   boostedContributions,
@@ -433,6 +434,9 @@ export async function trainCuratorModel(
     return trainWinModel(rows, { ...opts, runWeightPerDoubling: CATCH_RUN_WEIGHT_PER_DOUBLING });
   const base = await trainWinModel(rows, opts);
   if (goal !== "return" && goal !== "safe") return base;
+  // A model fitted to the return itself already prices the crash: a second, crash-risk model on
+  // top would count it twice.
+  if (opts.learner === "gbdt" && opts.boosting?.objective === "return") return base;
   const returnRisk = await trainReturnRisk(rows, opts, goal === "safe" ? SAFE_LOSS_AVERSION : 1);
   return returnRisk ? { ...base, returnRisk } : base;
 }
@@ -1809,6 +1813,7 @@ export async function walkForwardEvaluate(
   const labelWindowMs = CANDIDATE_WATCH_WINDOW_MINUTES * 60_000;
   const extendedWatchMs = CANDIDATE_EXTENDED_WATCH_HOURS * 3_600_000;
   const tenXWindowMs = TEN_X_WINDOW_MINUTES * 60_000;
+  const exitPlanHoldMs = EXIT_PLAN.trailMaxHoldMinutes * 60_000;
   const inBand = (r: TrainingRow) =>
     (!opts.mcapBand || inMcapBand(r.anchorMcapUsd, opts.mcapBand)) &&
     (!opts.decisionRowsOnly || isDecisionRow(r, opts.mcapBand)) &&
@@ -1905,6 +1910,14 @@ export async function walkForwardEvaluate(
         .map((r) =>
           r.hit10x !== undefined && r.anchorAt.getTime() + tenXWindowMs > testStartMs
             ? { ...r, hit10x: undefined }
+            : r,
+        )
+        // And the return: a call that sold rides the trail for up to the plan's hold cap, so its
+        // return may be priced inside the fold. It falls back to its kind's default payoff
+        // (rowReturnPct), which the label purge covers; whether it crashed is settled in the window.
+        .map((r) =>
+          r.returnPct !== undefined && r.anchorAt.getTime() + exitPlanHoldMs > testStartMs
+            ? { ...r, returnPct: undefined }
             : r,
         );
       if (train.length < minTrainRows || test.length < minTestRows) continue;
