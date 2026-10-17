@@ -4,7 +4,7 @@ import type { CSSProperties } from "react";
  * The stat tiles' color scale (user ask 2026-10-16): each tile shades from the lower color, through
  * the median color halfway, to the upper color at its red bound, which is the safety screen's
  * cutoff where the tile has one. Customize picks the three colors (FeedAppearance.tileLow, tileMid,
- * tileHigh; the theme's win, amber and loss colors by default) and can switch it off (tileColors).
+ * tileHigh; the theme's win, amber and loss colors by default). It is off by default (tileColors).
  */
 
 /**
