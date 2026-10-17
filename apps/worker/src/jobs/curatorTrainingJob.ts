@@ -427,7 +427,7 @@ async function trainCurators(
       ? {
           rows: learnerMetrics.featureReport.rows,
           mostlyNull: learnerMetrics.featureReport.features
-            .filter((f) => f.nullRatePct >= 90)
+            .filter((f) => !f.retired && (f.recentNullRatePct ?? f.nullRatePct) >= 90)
             .map((f) => f.feature),
           strongest: [...learnerMetrics.featureReport.features]
             .filter((f) => f.topDecileLift !== null)

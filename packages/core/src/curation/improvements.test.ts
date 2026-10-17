@@ -363,6 +363,27 @@ describe("featureHealthReport", () => {
     expect(gone.nullRatePct).toBe(90);
     expect(gone.topDecileLift).toBeNull();
   });
+
+  it("measures missing today on the newest day, and marks inputs no learner reads", () => {
+    const day = 24 * 3_600_000;
+    const end = Date.parse("2026-10-17T12:00:00Z");
+    // 900 rows over the last three weeks without the new input, then 100 from the newest day with it.
+    const rows = Array.from({ length: 1000 }, (_, i) => {
+      const today = i >= 900;
+      return {
+        anchorAt: new Date(today ? end - (i - 900) * 60_000 : end - 2 * day - i * 30 * 60_000),
+        features: { fresh: today ? i : null, textScamSignals: null },
+        labelValue: i % 5 === 0 ? 1 : 0,
+      };
+    });
+    const report = featureHealthReport(rows, ["fresh", "textScamSignals"]);
+    const fresh = report.features.find((f) => f.feature === "fresh")!;
+    expect(report.recentRows).toBe(100);
+    expect(fresh.nullRatePct).toBe(90);
+    expect(fresh.recentNullRatePct).toBe(0);
+    expect(fresh.retired).toBe(false);
+    expect(report.features.find((f) => f.feature === "textScamSignals")!.retired).toBe(true);
+  });
 });
 
 describe("fixed-sequence cutoff", () => {
