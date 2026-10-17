@@ -1,4 +1,5 @@
 import { isWalletAddress } from "../solana.js";
+import { PLATFORM_WALLETS } from "../stonksFees.js";
 import type { RawLaunchTx } from "../datasources/launchBuyers.js";
 
 /**
@@ -125,7 +126,11 @@ export function tradesFromChainTransactions(
     const deltas = ownerDeltas(pre, post, (b) => b.owner);
     // Every other coin's moves, by owner then mint: the leg paid or received in something else.
     const other = otherDeltas(tx, mint);
-    const traders = [...deltas].filter(([owner, delta]) => delta !== 0 && wallet(owner));
+    // A platform wallet (the Stonk fee wallet) is never a trader: its fee sweeps raise its balance
+    // of the mint, which would otherwise read as a near-free buy.
+    const traders = [...deltas].filter(
+      ([owner, delta]) => delta !== 0 && !PLATFORM_WALLETS.has(owner) && wallet(owner),
+    );
     // A trade a service wallet pays for (a trading bot's relayer, sending the coin to its user's
     // wallet): when exactly one trader paid nothing itself and the fee payer is not a trader, what
     // the fee payer paid or got is that trader's, less the network fee.
@@ -246,7 +251,7 @@ export function counterMints(
     const other = otherDeltas(tx, mint);
     const payer = keysOf(tx)[0];
     for (const [owner, delta] of deltas) {
-      if (delta === 0 || !walletCheck(owner)) continue;
+      if (delta === 0 || PLATFORM_WALLETS.has(owner) || !walletCheck(owner)) continue;
       // The fee payer's too, for a trade it pays for (see tradesFromChainTransactions).
       for (const who of payer && !deltas.get(payer) ? [owner, payer] : [owner]) {
         for (const [coin, moved] of other.get(who) ?? []) {

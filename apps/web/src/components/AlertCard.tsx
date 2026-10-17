@@ -535,7 +535,7 @@ export function AlertCard({
               title={
                 kolBundledPct === null
                   ? "KOL Bundled %: not checked yet. It comes with the linked-wallet reading."
-                  : `KOL Bundled %: supply held by KOLs and the top holders tied to them (wallets a KOL funded, possible side wallets, and holders sharing a funder or funding minute with those), ${
+                  : `KOL Bundled %: supply held by KOLs and the top holders tied to them (wallets a KOL funded, probable side wallets, and holders sharing a funder or funding minute with those), ${
                       kolBundledAtAlert ? "at alert time" : "from a scan after the alert"
                     }.`
               }

@@ -1,9 +1,10 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useAppearance } from "../appearance";
 import { cachedGet } from "../cache";
 import { shortAddress } from "../format";
 import { openWallet } from "../walletModal";
-import { useWalletNames, walletNameText, type WalletNames } from "../walletNames";
+import { useWalletNames, visibleNames, walletNameText, type WalletNames } from "../walletNames";
 import {
   layoutWeb,
   TIE_LABEL,
@@ -197,7 +198,11 @@ function WebView({
   hubName: string;
   onOpenWallet: () => void;
 }) {
-  const names = useWalletNames(useMemo(() => web.nodes.map((n) => n.wallet), [web]));
+  // Pump.fun, FOMO and Helius names only as Settings shows them on the bubble maps: off by
+  // default. The share image is drawn from the same names.
+  const look = useAppearance();
+  const allNames = useWalletNames(useMemo(() => web.nodes.map((n) => n.wallet), [web]));
+  const names = useMemo(() => visibleNames(allNames, look), [allNames, look]);
   const [hidden, setHidden] = useState<ReadonlySet<WebTie>>(new Set());
   const [picked, setPicked] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);

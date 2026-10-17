@@ -349,7 +349,7 @@ export function AppearanceControls() {
             checked={look.bubbleSideLinks}
             onChange={() => setAppearance({ bubbleSideLinks: !look.bubbleSideLinks })}
           />
-          Bubble maps: tie KOLs&apos; possible side wallets to them
+          Bubble maps: tie KOLs&apos; probable side wallets to them
         </label>
         <label className="check">
           <input

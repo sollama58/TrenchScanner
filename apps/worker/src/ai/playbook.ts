@@ -9,6 +9,7 @@ import {
   sanitizePlaybookText,
   DISQUALIFYING_DRAWDOWN_FRACTION,
   passesWalletSafetyCuts,
+  isPreFeeWalletStonksRow,
   REFLECTION_SYSTEM_PROMPT,
   aiBudgetResetsAt,
   type Env,
@@ -296,6 +297,7 @@ async function reflectionRecord(active: ActivePlaybook, before: Date): Promise<R
         where: { id: { in: ids.slice(i, i + 1_000) }, finalizedAt: { not: null }, anchorAt: { lt: before } },
         select: {
           id: true,
+          anchorAt: true,
           features: true,
           labelValue: true,
           disqualified: true,
@@ -306,10 +308,12 @@ async function reflectionRecord(active: ActivePlaybook, before: Date): Promise<R
     );
   }
   const stopLevel = -(1 - DISQUALIFYING_DRAWDOWN_FRACTION) * 100;
-  // Calls on tokens the safety screen now rejects stay out of the record the playbook learns from.
-  const screened = outcomes.filter((o) =>
-    passesWalletSafetyCuts(o.features as Record<string, number | null>),
-  );
+  // Calls on tokens the safety screen now rejects stay out of the record the playbook learns from,
+  // as do Stonks rows banked while their holder features still counted the fee wallet.
+  const screened = outcomes.filter((o) => {
+    const features = o.features as Record<string, number | null>;
+    return passesWalletSafetyCuts(features) && !isPreFeeWalletStonksRow(o.anchorAt, features);
+  });
   return screened.map((o) => {
     const call = calls.get(o.id)!;
     const labelValue = o.labelValue ?? 0;

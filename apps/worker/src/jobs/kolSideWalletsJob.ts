@@ -3,6 +3,7 @@ import {
   prisma,
   createLogger,
   isServiceWallet,
+  HOT_FUNDER_DENYLIST,
   MARKED_BOT_WALLETS,
   POSSIBLE_SIDE_HOLD_DAYS,
   POSSIBLE_SIDE_RULES_VERSION,
@@ -342,8 +343,10 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
       await tx.kolPossibleSide.deleteMany({
         where: { kolWallet: { in: await knownSideWallets(tx) } },
       });
-      // A wallet now read as a bot or a likely bot loses the labels it held, hold or not.
-      const unlabeled = [...new Set([...bots, ...botLike])];
+      // A wallet now read as a bot or a likely bot loses the labels it held, hold or not, and so
+      // does a service wallet (an exchange, the Stonk fee wallet) holding one from before it was
+      // left out.
+      const unlabeled = [...new Set([...bots, ...botLike, ...HOT_FUNDER_DENYLIST])];
       if (unlabeled.length) await tx.kolPossibleSide.deleteMany({ where: { wallet: { in: unlabeled } } });
       for (let i = 0; i < possible.length; i += POSSIBLE_SIDE_DELETE_CHUNK) {
         const chunk = possible.slice(i, i + POSSIBLE_SIDE_DELETE_CHUNK);

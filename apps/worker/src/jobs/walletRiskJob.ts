@@ -12,6 +12,7 @@ import {
   OVERSOLD_TOKENS,
   RISKY_WALLET_SCORE,
   WALLET_WIN_MULTIPLE,
+  PLATFORM_WALLETS,
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 import { replaceRows, type ReplaceRowsSpec } from "./replaceRows.js";
@@ -57,6 +58,9 @@ const ownMultipleSql = (multiple: number) => Prisma.sql`(a."solIn" >= ${OWN_MULT
   AND ${cleanSql})`;
 
 /** Bought before the tape's anchor, so a decision could have seen it buying. */
+/** Platform wallets (the Stonk fee wallet) aren't traders; tape rows stored before the tape
+ * skipped them stop counting here. */
+const traderSql = Prisma.sql`a."buys" > 0 AND a."wallet" <> ALL(${[...PLATFORM_WALLETS.keys()]})`;
 const earlySql = Prisma.sql`(a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."anchorAt")`;
 
 /** The Wallet Score's counts, as one SELECT list (the per-wallet query and the market totals). */
@@ -142,7 +146,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
     FROM "TokenWalletActivity" a
     JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
     LEFT JOIN "CandidateOutcome" o ON o."id" = t."outcomeId"
-    WHERE a."buys" > 0`;
+    WHERE ${traderSql}`;
   const appearances = Number(totals?.appearances ?? 0);
   const marketDumpRate = appearances > 0 ? Number(totals!.dumps) / appearances : 0;
   const marketWinRate = appearances > 0 ? Number(totals!.wins) / appearances : 0;
@@ -182,7 +186,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
     FROM "TokenWalletActivity" a
     JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
     LEFT JOIN "CandidateOutcome" o ON o."id" = t."outcomeId"
-    WHERE a."buys" > 0
+    WHERE ${traderSql}
     GROUP BY a."wallet"
     HAVING COUNT(*) >= ${MIN_APPEARANCES}`;
 

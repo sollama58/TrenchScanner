@@ -1,4 +1,4 @@
-import { MARKED_BOT_WALLETS, prisma } from "@trenchscanner/core";
+import { isServiceWallet, MARKED_BOT_WALLETS, prisma } from "@trenchscanner/core";
 import { readKolRows } from "./kolRoster.js";
 
 /**
@@ -42,7 +42,7 @@ export interface PossibleSide {
 
 const shortAddress = (a: string) => (a.length > 10 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a);
 
-/** "Ansem Possible Side (93%)", "Ansem KOL Funded Wallet" or "Ansem Known Side": the label the wallet carries. */
+/** "Ansem Probable Side (93%)", "Ansem KOL Funded Wallet" or "Ansem Known Side": the label the wallet carries. */
 export function possibleSideText(
   s: Pick<PossibleSide, "kolWallet" | "kolName" | "pct"> & {
     funded?: boolean;
@@ -55,14 +55,15 @@ export function possibleSideText(
   if (s.funded) return `${who} KOL Funded Wallet`;
   // A label transfers alone earned has no buying-alongside share to show.
   return s.pct > 0
-    ? `${who} Possible Side (${Math.round(s.pct)}%)`
-    : `${who} Possible Side (${s.transfers ?? 0} transfers)`;
+    ? `${who} Probable Side (${Math.round(s.pct)}%)`
+    : `${who} Probable Side (${s.transfers ?? 0} transfers)`;
 }
 
 /** Each wallet's possible-side matches, strongest first; wallets with none are left out. */
 export async function loadPossibleSides(wallets: readonly string[]): Promise<Record<string, PossibleSide[]>> {
-  // A wallet marked as a bot is no one's side, whatever ties it has.
-  const unique = [...new Set(wallets)].filter((w) => !MARKED_BOT_WALLETS.has(w));
+  // A wallet marked as a bot, or a service wallet (an exchange, the Stonk fee wallet), is no one's
+  // side, whatever ties it has.
+  const unique = [...new Set(wallets)].filter((w) => !MARKED_BOT_WALLETS.has(w) && !isServiceWallet(w));
   if (unique.length === 0) return {};
   const [rows, fundedRows] = await Promise.all([
     prisma.kolPossibleSide.findMany({

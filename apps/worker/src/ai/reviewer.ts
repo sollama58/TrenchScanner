@@ -10,6 +10,7 @@ import {
   nearestOutcomes,
   inMcapBand,
   passesWalletSafetyCuts,
+  isPreFeeWalletStonksRow,
   DISQUALIFYING_DRAWDOWN_FRACTION,
   clampProbability,
   firstReviewPerToken,
@@ -122,8 +123,12 @@ export async function loadGradedPool(
     },
   });
   const band = { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX };
-  // A token the safety screen rejects today never reaches the reviewer, so it is no comparable.
-  const screened = rows.filter((r) => passesWalletSafetyCuts(r.features as Record<string, number | null>));
+  // A token the safety screen rejects today never reaches the reviewer, so it is no comparable;
+  // nor is a Stonks row banked while its holder features still counted the fee wallet.
+  const screened = rows.filter((r) => {
+    const features = r.features as Record<string, number | null>;
+    return passesWalletSafetyCuts(features) && !isPreFeeWalletStonksRow(r.anchorAt, features);
+  });
   return screened
     .filter((r) => inMcapBand(r.anchorMcapUsd, band))
     .map((r) => ({
