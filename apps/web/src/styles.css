@@ -2631,9 +2631,165 @@ legend {
 }
 
 /* ---------- Utilities (tabs/UtilitiesTab.tsx) ---------- */
+/* The tools beside a toolbar that jumps to each (UtilitiesTab's ToolRail): a labeled rail on a
+   wide window, icons alone on a narrower one, a strip under the top bar on a phone. */
 .utilities {
-  max-width: 980px;
+  --util-rail-w: 214px;
+  max-width: 1280px;
   margin: 0 auto;
+  display: grid;
+  grid-template-columns: var(--util-rail-w) minmax(0, 1fr);
+  gap: clamp(18px, 2.2vw, 32px);
+  align-items: start;
+}
+.util-main {
+  min-width: 0;
+}
+.util-anchor {
+  scroll-margin-top: calc(var(--util-topbar-h, 72px) + 16px);
+  min-width: 0;
+}
+.util-grid > .util-anchor {
+  display: flex;
+}
+.util-grid > .util-anchor > .util-card {
+  flex: 1;
+  min-width: 0;
+}
+.util-rail {
+  position: sticky;
+  /* --util-topbar-h: the top bar's height, set by the rail (UtilitiesTab's ToolRail). */
+  top: calc(var(--util-topbar-h, 72px) + 16px);
+  /* Its own scroll if a short window can't fit every stop. */
+  max-height: calc(100vh - var(--util-topbar-h, 72px) - 32px);
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 8px;
+}
+.util-rail ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.util-rail button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.util-rail button svg {
+  flex: none;
+}
+.util-rail button:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+.util-rail button.on {
+  color: var(--brand-ink);
+  background: color-mix(in srgb, var(--brand-a) 13%, transparent);
+  border-color: color-mix(in srgb, var(--brand-a) 28%, transparent);
+}
+.util-rail button.on::before {
+  content: "";
+  position: absolute;
+  left: -9px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 3px;
+  background: linear-gradient(var(--brand-a), var(--brand-b));
+}
+.util-rail-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.util-rail-short {
+  display: none;
+}
+/* Narrower: icons alone, their names in the tooltip. */
+@media (max-width: 1240px) {
+  .utilities {
+    --util-rail-w: 58px;
+  }
+  .util-rail {
+    padding: 6px;
+  }
+  .util-rail button {
+    justify-content: center;
+    padding: 10px 0;
+  }
+  .util-rail button.on::before {
+    left: -7px;
+  }
+  .util-rail-label {
+    display: none;
+  }
+}
+/* A phone: one column, the toolbar a strip under the top bar, each stop's short name under it. */
+@media (max-width: 760px) {
+  .utilities {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+  .util-anchor {
+    scroll-margin-top: calc(var(--util-topbar-h, 50px) + 86px);
+  }
+  .util-rail {
+    top: calc(var(--util-topbar-h, 50px) + 8px);
+    z-index: 5;
+    max-height: none;
+    overflow: visible;
+    padding: 4px;
+    background: var(--surface-solid);
+    /* Covers the gap to the top bar, so the page doesn't scroll by in it. */
+    box-shadow:
+      0 -10px 0 2px var(--page),
+      var(--shadow);
+  }
+  .util-rail ul {
+    flex-direction: row;
+  }
+  .util-rail li {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .util-rail button {
+    flex-direction: column;
+    gap: 3px;
+    padding: 7px 0 6px;
+    font-size: 11px;
+  }
+  .util-rail button.on::before {
+    display: none;
+  }
+  .util-rail-short {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 .util-intro h1 {
   font-size: 30px;
@@ -14432,7 +14588,7 @@ body:has(.util-toast) .bug-fab {
   }
 }
 
-/* ── Lighthouse: Wallets to watch (components/LighthouseWallets.tsx) ─────────── */
+/* ── Utilities: Wallets to watch (components/WalletsToWatch.tsx) ─────────── */
 .lw-body {
   gap: 16px;
 }

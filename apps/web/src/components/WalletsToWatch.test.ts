@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MIN_CLOSED, MIN_GRADED, sortWallets, type WalletScorecard } from "./LighthouseWallets";
+import { MIN_CLOSED, MIN_GRADED, sortWallets, type WalletScorecard } from "./WalletsToWatch";
 
 const card = (wallet: string, over: Partial<WalletScorecard> = {}): WalletScorecard => ({
   wallet,

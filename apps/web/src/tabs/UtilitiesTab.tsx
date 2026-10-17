@@ -22,7 +22,17 @@ import { onWalletsChanged } from "../wallet";
 import { openWallet } from "../walletModal";
 import { Skeleton } from "../components/Charts";
 import { TokenModal } from "../components/TokenModal";
-import { ChartIcon, FlameIcon, SearchIcon, ToolsIcon, WalletIcon } from "../components/Icons";
+import {
+  ChartIcon,
+  ClockIcon,
+  FlameIcon,
+  SearchIcon,
+  ToolsIcon,
+  UsersIcon,
+  WalletIcon,
+  type IconProps,
+} from "../components/Icons";
+import { WalletsToWatch } from "../components/WalletsToWatch";
 import { SideWalletChecker } from "./SideWalletChecker";
 
 /** Mirrors apps/api/src/routes/utilities.ts GET /utilities. */
@@ -88,39 +98,59 @@ function lookupError(e: unknown): string {
  * $ASDFASDFA (100 per credit unless an admin changes it). A credit is taken only once a lookup
  * succeeds, and a lookup can be re-opened free for an hour.
  * Behind the subscription, like every other tab: credits pay for each lookup on top of it.
+ *
+ * A toolbar beside the tools (user ask 2026-10-17) jumps to each one and marks the one in view:
+ * a labeled rail on a wide window, icons alone on a narrower one, a strip along the top on a phone.
  */
 export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
   const { data, error, reload } = usePolling<UtilitiesOverview>("/utilities", 60_000);
   const [openMint, setOpenMint] = useState<string | null>(null);
 
   return (
-    <div className="stack utilities">
-      <header className="util-intro">
-        <span className="eyebrow">
-          <ToolsIcon size={13} /> Utilities
-        </span>
-        <h1>Look up any coin or wallet</h1>
-        <p className="muted">
-          Each lookup costs Burn Credits, which you get by burning {SYMBOL} from this wallet. A credit is only
-          taken once the lookup works, and you can re-open it free for an hour. The Side Wallet Checker is
-          free.
-        </p>
-      </header>
+    <div className="utilities">
+      <ToolRail />
+      <div className="stack util-main">
+        <header className="util-intro">
+          <span className="eyebrow">
+            <ToolsIcon size={13} /> Utilities
+          </span>
+          <h1>Look up any coin or wallet</h1>
+          <p className="muted">
+            Each lookup costs Burn Credits, which you get by burning {SYMBOL} from this wallet. A credit is
+            only taken once the lookup works, and you can re-open it free for an hour. The Side Wallet Checker
+            and Wallets to watch are free.
+          </p>
+        </header>
 
-      <CreditsPanel walletAddress={walletAddress} data={data} error={error} onCredited={reload} />
+        <div id="util-credits" className="util-anchor">
+          <CreditsPanel walletAddress={walletAddress} data={data} error={error} onCredited={reload} />
+        </div>
 
-      <div className="util-grid">
-        <LookupCard utility="token" data={data} onOpened={(mint) => (setOpenMint(mint), reload())} />
-        <LookupCard utility="wallet" data={data} onOpened={(wallet) => (openWallet(wallet), reload())} />
+        <div className="util-grid">
+          <div id="util-token" className="util-anchor">
+            <LookupCard utility="token" data={data} onOpened={(mint) => (setOpenMint(mint), reload())} />
+          </div>
+          <div id="util-wallet" className="util-anchor">
+            <LookupCard utility="wallet" data={data} onOpened={(wallet) => (openWallet(wallet), reload())} />
+          </div>
+        </div>
+
+        <div id="util-sides" className="util-anchor">
+          <SideWalletChecker />
+        </div>
+
+        <div id="util-watch" className="util-anchor">
+          <WalletsToWatch />
+        </div>
+
+        <div id="util-recent" className="util-anchor">
+          <RecentLookups
+            data={data}
+            onOpen={(utility, subject) => (utility === "wallet" ? openWallet(subject) : setOpenMint(subject))}
+            onPaid={reload}
+          />
+        </div>
       </div>
-
-      <SideWalletChecker />
-
-      <RecentLookups
-        data={data}
-        onOpen={(utility, subject) => (utility === "wallet" ? openWallet(subject) : setOpenMint(subject))}
-        onPaid={reload}
-      />
 
       {openMint && (
         <UtilityTokenModal
@@ -134,6 +164,83 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
         />
       )}
     </div>
+  );
+}
+
+/** The toolbar's stops, in page order: each the id of the block it jumps to. */
+const TOOLS: { id: string; label: string; short: string; Icon: (p: IconProps) => React.ReactElement }[] = [
+  { id: "util-credits", label: "Burn Credits", short: "Credits", Icon: FlameIcon },
+  { id: "util-token", label: "Coin lookup", short: "Coin", Icon: ChartIcon },
+  { id: "util-wallet", label: "Wallet lookup", short: "Wallet", Icon: SearchIcon },
+  { id: "util-sides", label: "Side Wallet Checker", short: "Sides", Icon: UsersIcon },
+  { id: "util-watch", label: "Wallets to watch", short: "Watch", Icon: WalletIcon },
+  { id: "util-recent", label: "Your lookups", short: "Recent", Icon: ClockIcon },
+];
+
+/** The quick links to each tool, the one in view marked as it scrolls. */
+function ToolRail() {
+  const [active, setActive] = useState(TOOLS[0]!.id);
+  useEffect(() => {
+    // The last tool whose top has passed a line a third of the way down the window is the one in
+    // view; at the very bottom of the page, the last tool, however short.
+    const onScroll = () => {
+      const line = window.innerHeight / 3;
+      let current = TOOLS[0]!.id;
+      for (const t of TOOLS) {
+        const el = document.getElementById(t.id);
+        if (el && el.getBoundingClientRect().top <= line) current = t.id;
+      }
+      const end = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4;
+      setActive(end ? TOOLS[TOOLS.length - 1]!.id : current);
+    };
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, []);
+  // The top bar wraps to two rows on a narrower window: the rail sits just under it, whatever its
+  // height, and so does a tool it jumps to.
+  useEffect(() => {
+    const bar = document.querySelector<HTMLElement>(".topbar");
+    if (!bar || typeof ResizeObserver === "undefined") return;
+    const root = document.documentElement;
+    const set = () =>
+      root.style.setProperty("--util-topbar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`);
+    set();
+    const ro = new ResizeObserver(set);
+    ro.observe(bar);
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty("--util-topbar-h");
+    };
+  }, []);
+  const go = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setActive(id);
+  };
+  return (
+    <nav className="util-rail" aria-label="Tools">
+      <ul>
+        {TOOLS.map(({ id, label, short, Icon }) => (
+          <li key={id}>
+            <button
+              type="button"
+              className={id === active ? "on" : ""}
+              aria-current={id === active ? "true" : undefined}
+              title={label}
+              onClick={() => go(id)}
+            >
+              <Icon size={16} />
+              <span className="util-rail-label">{label}</span>
+              <span className="util-rail-short">{short}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }
 

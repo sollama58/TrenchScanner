@@ -4,7 +4,7 @@ import { readKolRows, knownSideName } from "./kolRoster.js";
 import { SharedCache } from "./sharedCache.js";
 
 /**
- * The Lighthouse tab's "Wallets to watch" (user ask 2026-10-16): how the most important wallets we
+ * The Utilities tab's "Wallets to watch" (user ask 2026-10-16): how the most important wallets we
  * track trade, from what they did in the coins whose trade tape was read (TokenWalletActivity) and
  * how those coins did from our read of them (the tape's CandidateOutcome).
  *

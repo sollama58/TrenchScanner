@@ -6,7 +6,7 @@ import { Skeleton } from "./Charts";
 import { ChevronDownIcon, WalletIcon } from "./Icons";
 
 /**
- * The Lighthouse tab's "Wallets to watch" (user ask 2026-10-16): how the KOLs on the roster and
+ * The Utilities tab's "Wallets to watch" (user ask 2026-10-16; on the Lighthouse tab until 2026-10-17): how the KOLs on the roster and
  * the wallets our score labels winners trade, from GET /curated/lighthouse/wallets
  * (apps/api/src/walletScorecards.ts). Two kinds of figure, never mixed: how the coins a wallet
  * bought did from our read of them (2x, 4x, 10x, graded like every other Lighthouse rate), and
@@ -154,7 +154,7 @@ export function sortWallets(wallets: readonly WalletScorecard[], key: SortKey): 
   });
 }
 
-export function LighthouseWallets() {
+export function WalletsToWatch() {
   const [view, setView] = useState<View>(loadView);
   const [open, setOpen] = useState<string | null>(null);
   const [all, setAll] = useState(false);
@@ -179,7 +179,9 @@ export function LighthouseWallets() {
     <section className={`panel lht-wallets${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
       <header className="section-head">
         <div>
-          <span className="eyebrow">Wallets to watch · last {span}</span>
+          <span className="eyebrow">
+            <WalletIcon size={13} /> Wallets to watch · last {span}
+          </span>
           <h2>How the top wallets trade</h2>
           <p className="faint small">
             The {view.group === "kols" ? "KOLs on the roster" : "wallets our score marks as winners"}, in the
