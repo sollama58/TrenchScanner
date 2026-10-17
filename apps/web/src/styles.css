@@ -3816,16 +3816,18 @@ body.drawer-open .util-drawer {
   }
   .side-head {
     padding: 0 4px 6px;
-    /* The two buttons stack on a phone, so the name keeps its room. */
-    margin-right: 34px;
+    /* Room for the wallet profile and wallet web buttons, side by side. */
+    margin-right: 62px;
   }
   .side-acts {
-    flex-direction: column;
     gap: 2px;
   }
   .side-acts .side-profile {
     width: 30px;
-    height: 28px;
+    height: 30px;
+    padding: 0;
+    display: grid;
+    place-items: center;
   }
   .side-count {
     font-size: 12px;
