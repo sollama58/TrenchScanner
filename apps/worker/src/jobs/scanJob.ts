@@ -3776,6 +3776,9 @@ export function withLiveFlags(
           cleanWinnerBuySolShare: winnerFollow.cleanWinnerBuySolShare ?? undefined,
           recentBuyersOwn2xMean: winnerFollow.recentBuyersOwn2xMean ?? undefined,
           recentBuyersRead: winnerFollow.recentBuyersRead,
+          cleanWinnerConvictionMax: winnerFollow.cleanWinnerConvictionMax ?? undefined,
+          cleanWinnerNetShare: winnerFollow.cleanWinnerNetShare ?? undefined,
+          cleanWinnerSellerShare: winnerFollow.cleanWinnerSellerShare ?? undefined,
         }
       : {}),
     ...(walletScores

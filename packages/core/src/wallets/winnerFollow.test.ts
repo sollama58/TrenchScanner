@@ -20,6 +20,8 @@ describe("isCleanWinner", () => {
     expect(isCleanWinner(wallet({ winner: true }))).toBe(true);
     expect(isCleanWinner(wallet({ winner: true, transferWins: 1 }))).toBe(false);
     expect(isCleanWinner(wallet({ winner: true, transferWins: undefined }))).toBe(false);
+    // Not counted yet by the rebuild.
+    expect(isCleanWinner(wallet({ winner: true, transferWins: null }))).toBe(false);
     expect(isCleanWinner(wallet({ winner: false }))).toBe(false);
     expect(isCleanWinner(undefined)).toBe(false);
   });
@@ -27,8 +29,8 @@ describe("isCleanWinner", () => {
 
 describe("winnerFollowReading", () => {
   const book = new Map<string, ScoredWallet>([
-    ["W1", wallet({ winner: true, own2x: 9, appearances: 20 })],
-    ["W2", wallet({ winner: true, own2x: 4, appearances: 10 })],
+    ["W1", wallet({ winner: true, own2x: 9, appearances: 20, solIn: 20 })],
+    ["W2", wallet({ winner: true, own2x: 4, appearances: 10, solIn: 5 })],
     // A Winner whose wins came from tokens sent to it: unknown on every input.
     ["T", wallet({ winner: true, transferWins: 2, own2x: 8, appearances: 12 })],
     // Too few coins for its own-2x record.
@@ -49,6 +51,11 @@ describe("winnerFollowReading", () => {
     expect(r.cleanWinnerBuySolShare).toBeCloseTo(4 / 11, 4);
     // (9+1)/(20+10) + (4+1)/(10+10) + (0+1)/(10+10), over six buyers.
     expect(r.recentBuyersOwn2xMean).toBeCloseTo((10 / 30 + 5 / 20 + 1 / 20) / 6, 4);
+    // W1 put 3 SOL in against its usual 1; W2 1 against its usual 0.5.
+    expect(r.cleanWinnerConvictionMax).toBe(3);
+    // W2 bought and sold: two winners in, one out, over six buyers; one seller, a clean winner.
+    expect(r.cleanWinnerNetShare).toBeCloseTo(1 / 6, 4);
+    expect(r.cleanWinnerSellerShare).toBe(1);
   });
 
   it("reads a wallet on the coin's own tape as unknown, still a buyer", () => {
@@ -56,6 +63,14 @@ describe("winnerFollowReading", () => {
     expect(r.recentBuyersRead).toBe(2);
     expect(r.cleanWinnerRecentBuyers).toBe(1);
     expect(r.cleanWinnerBuySolShare).toBeCloseTo(0.5, 4);
+  });
+
+  it("counts winners getting out among the sellers, and a 0 SOL sell (tokens sent out) as no sell", () => {
+    const r = winnerFollowReading([buy("P"), sell("W1", 2), sell("X", 1), sell("W2", 0)], lookup);
+    expect(r.cleanWinnerRecentBuyers).toBe(0);
+    expect(r.cleanWinnerConvictionMax).toBeNull();
+    expect(r.cleanWinnerSellerShare).toBe(0.5);
+    expect(r.cleanWinnerNetShare).toBe(-1);
   });
 
   it("reads tokens sent in from another wallet as no buy: 0 SOL, or a rent-priced buy stored before", () => {
@@ -74,6 +89,9 @@ describe("winnerFollowReading", () => {
       cleanWinnerBuySolShare: null,
       recentBuyersOwn2xMean: null,
       recentBuyersRead: 0,
+      cleanWinnerConvictionMax: null,
+      cleanWinnerNetShare: null,
+      cleanWinnerSellerShare: 1,
     });
   });
 });

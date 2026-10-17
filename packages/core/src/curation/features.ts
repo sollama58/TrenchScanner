@@ -284,7 +284,8 @@ export const WALLET_SCORE_FEATURES = [
  * newest trades read before the decision (the live tape), read through the clean winners' records
  * (core's wallets/winnerFollow.ts: the Winner label, no win fed by tokens transferred in): how
  * many clean winners bought, their share of the buyers and of the SOL bought, the buyers' mean
- * own-2x rate, and how many buyers were read. Null without a live page or before the wallet book
+ * own-2x rate, how many buyers were read, and how the clean winners are trading it (the surest
+ * one's stake against its usual, buying in against getting out, their share of the sellers). Null without a live page or before the wallet book
  * loads. Backfilled point-in-time on the rows decided around a called coin's tape (worker's
  * winnerFollowBackfill.ts). The Winners seat reads them and decides only on moments that carry
  * them (ContestantSpec.requires); every other learner has them retired (RETIRED_LEARNER_INPUTS).
@@ -295,6 +296,11 @@ export const WINNER_FOLLOW_FEATURES = [
   "cleanWinnerBuySolShare",
   "recentBuyersOwn2xMean",
   "recentBuyersRead",
+  // How the clean winners are trading it (user ask 2026-10-17, "learn HOW those wallets trade"):
+  // the surest one's stake against its usual, buying in against getting out, their share of sellers.
+  "cleanWinnerConvictionMax",
+  "cleanWinnerNetShare",
+  "cleanWinnerSellerShare",
 ] as const;
 
 export const LIVE_FLAG_FEATURES = [
@@ -1472,6 +1478,9 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   cleanWinnerBuySolShare: "share of SOL bought by clean winners",
   recentBuyersOwn2xMean: "buyers' own 2x record",
   recentBuyersRead: "buyers read in the newest trades",
+  cleanWinnerConvictionMax: "a clean winner's stake against its usual",
+  cleanWinnerNetShare: "clean winners buying in over getting out",
+  cleanWinnerSellerShare: "share of sellers that are clean winners",
   kolTopHolders: "KOLs among top holders",
   kolTopHolderPct: "supply held by KOLs",
   kolFirstBuyers: "KOLs among first buyers",
@@ -1743,6 +1752,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     cleanWinnerBuySolShare: scored.cleanWinnerBuySolShare ?? null,
     recentBuyersOwn2xMean: scored.recentBuyersOwn2xMean ?? null,
     recentBuyersRead: scored.recentBuyersRead ?? null,
+    cleanWinnerConvictionMax: scored.cleanWinnerConvictionMax ?? null,
+    cleanWinnerNetShare: scored.cleanWinnerNetShare ?? null,
+    cleanWinnerSellerShare: scored.cleanWinnerSellerShare ?? null,
     kolTopHolders: scored.kolTopHolders ?? null,
     kolTopHolderPct: scored.kolTopHolderPct ?? null,
     kolFirstBuyers: scored.kolFirstBuyers ?? null,

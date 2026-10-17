@@ -255,6 +255,9 @@ export interface OnChainProfile {
   cleanWinnerBuySolShare?: number;
   recentBuyersOwn2xMean?: number;
   recentBuyersRead?: number;
+  cleanWinnerConvictionMax?: number;
+  cleanWinnerNetShare?: number;
+  cleanWinnerSellerShare?: number;
   /**
    * Known KOL wallets (Solana Tracker's roster, KolWallet) among the top-20 holders (count, and
    * their % of supply), among the launch's first buyers, and buying or selling in the newest

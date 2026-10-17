@@ -17,8 +17,9 @@
  */
 import { AGREEMENT_MODEL_KIND, scoreAgreement, type AgreementCuratorParams } from "./agreement.js";
 import { BLEND_MODEL_KIND, scoreBlend, type BlendCuratorParams } from "./blend.js";
-import { CONTESTANTS } from "./contestants.js";
+import { CONTESTANTS, hasOwnPopulation } from "./contestants.js";
 import { scoredFromFeatures } from "./features.js";
+import { seatConsiders, type ModelGates } from "./modelGate.js";
 import { buildLiveScales, onLiveMembers, type LiveScales, type LiveScoreRow } from "./liveScale.js";
 import {
   rulesSignal,
@@ -63,6 +64,12 @@ const COMBINER_KINDS: readonly string[] = [
 
 /** The Narrative seats decide only with the deep read in hand (curatedAlerts.ts decideCurations). */
 const NARRATIVE_SEATS = new Set(CONTESTANTS.filter((c) => c.role === "narrative").map((c) => c.id));
+/**
+ * The seats on a population of their own (Gems' frozen filter, Winners' reading): each scores only
+ * the moments it considers (modelGate.ts seatConsiders), as it decides, so its live cutoff ranks
+ * among those moments and not among every moment, most of which it never sees.
+ */
+const OWN_POPULATION_SEATS = new Map(CONTESTANTS.filter(hasOwnPopulation).map((c) => [c.id, c]));
 
 function isDirect(model: LiveSeatModel): boolean {
   return SUPPORTED_CURATOR_MODEL_KINDS.includes(model.kind);
@@ -99,17 +106,24 @@ export class LiveRescorer {
       .map((row) => row.id);
   }
 
-  /** Scores one moment with every current model that hasn't scored it yet. */
-  fill(rowId: string, row: RescoreFeatures, models: readonly LiveSeatModel[]): void {
+  /**
+   * Scores one moment with every current model that hasn't scored it yet. `gates` is the gated
+   * seats' stored filters (ModelGate): a gated seat without its gate scores nothing.
+   */
+  fill(rowId: string, row: RescoreFeatures, models: readonly LiveSeatModel[], gates: ModelGates = {}): void {
     for (const model of models) {
       if (!isDirect(model)) continue;
       let byRow = this.scores.get(model.id);
       if (!byRow) this.scores.set(model.id, (byRow = new Map()));
       if (byRow.has(rowId)) continue;
       const deepRead = row.features.nsDepthFull === 1;
+      const own = OWN_POPULATION_SEATS.get(model.seat);
+      const outside =
+        own !== undefined &&
+        !seatConsiders(own, row.features, own.gate !== undefined ? gates[own.gate] : undefined);
       byRow.set(
         rowId,
-        NARRATIVE_SEATS.has(model.seat) && !deepRead
+        (NARRATIVE_SEATS.has(model.seat) && !deepRead) || outside
           ? null
           : scoreOrNull(() => scoreCandidateWithModel(model.params as TrainedCuratorParams, row.features)),
       );

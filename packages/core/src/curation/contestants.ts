@@ -336,22 +336,35 @@ export const GEMS_RECIPE: CuratorRecipe = {
 };
 
 /**
+ * The clean-winner inputs Winners reads: every WINNER_FOLLOW_FEATURES input but the two counts,
+ * which run lower on the backfilled rows than live (a tape starts minutes before its anchor) and
+ * did no better than the shares (wallets/winnerFollow.ts).
+ */
+export const WINNERS_SEAT_INPUTS: readonly CandidateFeatureName[] = WINNER_FOLLOW_FEATURES.filter(
+  (name) => name !== "cleanWinnerRecentBuyers" && name !== "recentBuyersRead",
+);
+
+/**
  * Winners (user ask 2026-10-17: "a model that learns based on the top-performing winner wallets",
- * leaving out wallets whose wins came from tokens transferred in; notes/winners-model-2026-10-17):
- * Gems' shape - Survivor's two boosted-tree stages on every input but TokenSage's, a 3-day
- * half-life, the Sharp seats' top-12% cutoff - plus the clean-winner reading of the newest buyers
- * (WINNER_FOLLOW_FEATURES, core's wallets/winnerFollow.ts), which no other seat reads. It decides
- * only on moments that carry that reading (ContestantSpec.requires), so its exam is the moments the
- * live tape was read on, filled for the history by the worker's winnerFollowBackfill.ts.
+ * leaving out wallets whose wins came from tokens transferred in, and learning how those wallets
+ * trade; notes/winners-model-2026-10-17): Gems' shape - Survivor's two boosted-tree stages on every
+ * input but TokenSage's, a 3-day half-life, the Sharp seats' top-12% cutoff - plus the clean
+ * winners' reading of the newest trades (WINNERS_SEAT_INPUTS, core's wallets/winnerFollow.ts):
+ * their share of the buyers and the SOL, the buyers' own 2x record, and how the winners are trading
+ * the coin (conviction, buying in against getting out, their share of the sellers). No other seat
+ * reads them. It decides only on moments that carry the reading (ContestantSpec.requires), so its
+ * exam is the moments the live tape was read on, filled for the history by the worker's
+ * winnerFollowBackfill.ts.
  *
  * Point-in-time on 9,837 rows decided around a taped coin (10-11..10-17), a boosted-tree fit with
- * the reading against the same fit without it: walk-forward AUC 0.610 against 0.597 and a top-12%
- * 2x rate of 30.1% against 28.3% (four time splits, three seeds each; base rate 17.7%).
+ * the reading against the same fit without it: walk-forward AUC 0.631 against 0.597, a top-12% 2x
+ * rate of 32.6% against 28.3% and a top-5% one of 38.5% against 33.9% (four time splits, three
+ * seeds each; base rate 17.7%).
  */
 export const WINNERS_RECIPE: CuratorRecipe = {
   learner: "gbdt",
   twoStage: true,
-  featureNames: [...TREES_NO_TOKENSAGE_FEATURES, ...WINNER_FOLLOW_FEATURES],
+  featureNames: [...TREES_NO_TOKENSAGE_FEATURES, ...WINNERS_SEAT_INPUTS],
   recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
   cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
 };
@@ -588,9 +601,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: WINNERS_CONTESTANT,
     name: "Winners",
     description:
-      "Who is buying, read through the best wallets' records: how many clean Winner wallets (no win fed by tokens transferred in) are in the newest buyers, their share of the buyers and the SOL, and the buyers' own 2x record, beside every input but TokenSage's. Survivor's two boosted-tree stages, mostly the last few days, calling only its surest tokens - about the top 12% of the moments the newest trades were read on, moved by 2x record",
+      "Who is buying and how, read through the best wallets' records: the clean Winner wallets' (no win fed by tokens transferred in) share of the newest buyers and of the SOL, the buyers' own 2x record, how hard the winners are buying against their usual stake and whether they are buying in or getting out, beside every input but TokenSage's. Survivor's two boosted-tree stages, mostly the last few days, calling only its surest tokens - about the top 12% of the moments the newest trades were read on, moved by 2x record",
     summary:
-      "Watches which proven winning wallets are buying a coin right now (leaving out wallets whose wins came from tokens sent to them), weighs that with the rest of the coin's picture, and calls only the ones it is surest of.",
+      "Watches which proven winning wallets are trading a coin right now and how (how big they are buying, whether they are getting in or out), leaving out wallets whose wins came from tokens sent to them, weighs that with the rest of the coin's picture, and calls only the ones it is surest of.",
     role: "learner",
     recipe: WINNERS_RECIPE,
     standalone: true,

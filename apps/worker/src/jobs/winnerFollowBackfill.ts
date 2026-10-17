@@ -2,6 +2,7 @@ import {
   prisma,
   createLogger,
   isPaidBuy,
+  isPaidSell,
   Prisma,
   walletLabels,
   winnerFollowReading,
@@ -29,18 +30,22 @@ const logger = createLogger("winner-follow-backfill");
  *
  * Point-in-time: each buyer's record is built from the tape rows written before the last hourly
  * rebuild the scan could have loaded (the hour the row's anchor falls in), with its Winner label
- * against the market's rates over the same rows and only the holder transfers seen before then:
+ * against the market's rates over the same rows and only the holder transfers recorded before then:
  * what the hourly table (walletRiskJob.ts) held. A coin's own tape is written after its anchor, so
  * it is never in its own rows' records.
  *
- * Writes the five WINNER_FOLLOW_FEATURES into the row's feature vector (CandidateOutcome.features);
+ * Writes the WINNER_FOLLOW_FEATURES into the row's feature vector (CandidateOutcome.features);
  * the scan writes them from now on, so a row that has recentBuyersRead is skipped. A few hundred rows
  * a run on the history re-grade's schedule; once through, a no-op that never asks the database again
  * in this process.
  */
-/** Tapes were first kept on 10-11 18:00: from a day later the book has a record to read. */
-export const WINNER_FOLLOW_BACKFILL_FROM = new Date("2026-10-12T18:00:00Z");
-export const WINNER_FOLLOW_ROWS_PER_RUN = 300;
+/**
+ * A tape's per-wallet trades are stored from 10-13 06:00 (TokenWalletActivity.trades); the book
+ * has a day and a half of tapes behind it by then.
+ */
+export const WINNER_FOLLOW_BACKFILL_FROM = new Date("2026-10-13T06:00:00Z");
+/** Each row reads its coin's whole tape: kept small to stay well inside the job's deadline. */
+export const WINNER_FOLLOW_ROWS_PER_RUN = 100;
 /** How far a row's anchor can sit from its token's tape anchor and still be read from the tape. */
 const NEAR_TAPE_MS = 60_000;
 /** A live page's size: one getTransactionsForAddress page (liveTape.ts). */
@@ -125,15 +130,26 @@ export function pageBefore(
 }
 
 /** The reading for one row, or null when no trade before the anchor is on the tape. */
-export async function rebuildRow(tokenId: string, anchorAt: Date): Promise<WinnerFollowReading | null> {
-  const tape = await prisma.tokenWalletActivity.findMany({
-    where: { tokenId, OR: [{ firstBuyAt: { lt: anchorAt } }, { firstSellAt: { lt: anchorAt } }] },
-    select: { wallet: true, trades: true },
-  });
+export async function rebuildRow(
+  tokenId: string,
+  anchorAt: Date,
+  tapes: Map<string, Promise<{ wallet: string; trades: unknown }[]>> = new Map(),
+): Promise<WinnerFollowReading | null> {
+  // The coin's tape, read once a batch: the match, event and hourly rows near one tape share it.
+  let read = tapes.get(tokenId);
+  if (!read) {
+    read = prisma.tokenWalletActivity.findMany({
+      where: { tokenId },
+      select: { wallet: true, trades: true },
+    });
+    tapes.set(tokenId, read);
+  }
+  const tape = await read;
   const page = pageBefore(tape, anchorAt.getTime());
-  // The wallets that paid for a buy: a transfer in isn't one (the reading's own rule).
-  const buyers = [...new Set(page.filter(isPaidBuy).map((t) => t.wallet))];
-  if (buyers.length === 0) return null;
+  // The wallets that paid for a buy or were paid for a sell: a transfer is neither (the reading's
+  // own rules). No buyer, no reading, as live.
+  if (!page.some(isPaidBuy)) return null;
+  const traders = [...new Set(page.filter((t) => isPaidBuy(t) || isPaidSell(t)).map((t) => t.wallet))];
   const cutoff = new Date(Math.floor(anchorAt.getTime() / HOUR_MS) * HOUR_MS);
   const records = await prisma.$queryRaw<
     {
@@ -144,6 +160,7 @@ export async function rebuildRow(tokenId: string, anchorAt: Date): Promise<Winne
       wins: bigint;
       own2x: bigint;
       transferWins: bigint;
+      solIn: number;
     }[]
   >`
     SELECT a."wallet",
@@ -152,12 +169,13 @@ export async function rebuildRow(tokenId: string, anchorAt: Date): Promise<Winne
            COUNT(*) FILTER (WHERE a."launchSniper") AS snipes,
            COUNT(*) FILTER (WHERE ${winSql}) AS wins,
            COUNT(*) FILTER (WHERE ${ownMultipleSql(2)}) AS own2x,
-           COUNT(*) FILTER (WHERE ${transferFedSql(cutoff)}) AS "transferWins"
+           COUNT(*) FILTER (WHERE ${transferFedSql(cutoff)}) AS "transferWins",
+           SUM(a."solIn"::numeric)::float8 AS "solIn"
     FROM "TokenWalletActivity" a
     JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
     WHERE a."buys" > 0
       AND a."createdAt" < ${cutoff}
-      AND a."wallet" IN (${Prisma.join(buyers)})
+      AND a."wallet" IN (${Prisma.join(traders)})
     GROUP BY a."wallet"`;
   const market = marketAt(cutoff.getTime());
   const book = new Map<string, ScoredWallet>();
@@ -176,6 +194,7 @@ export async function rebuildRow(tokenId: string, anchorAt: Date): Promise<Winne
       winner: labels.winner,
       own2x: Number(r.own2x),
       transferWins: Number(r.transferWins),
+      solIn: Number(r.solIn),
     });
   }
   return winnerFollowReading(page, (w) => book.get(w));
@@ -189,7 +208,10 @@ async function setRow(id: string, r: WinnerFollowReading): Promise<void> {
                                    'cleanWinnerRecentShare', ${r.cleanWinnerRecentShare}::float8,
                                    'cleanWinnerBuySolShare', ${r.cleanWinnerBuySolShare}::float8,
                                    'recentBuyersOwn2xMean', ${r.recentBuyersOwn2xMean}::float8,
-                                   'recentBuyersRead', ${r.recentBuyersRead}::float8)
+                                   'recentBuyersRead', ${r.recentBuyersRead}::float8,
+                                   'cleanWinnerConvictionMax', ${r.cleanWinnerConvictionMax}::float8,
+                                   'cleanWinnerNetShare', ${r.cleanWinnerNetShare}::float8,
+                                   'cleanWinnerSellerShare', ${r.cleanWinnerSellerShare}::float8)
      WHERE "id" = ${id}`;
 }
 
@@ -214,12 +236,13 @@ async function batch(limit: number): Promise<boolean> {
     select: { id: true, features: true },
   });
   const featuresOf = new Map(features.map((f) => [f.id, (f.features ?? {}) as Record<string, unknown>]));
+  const tapes = new Map<string, Promise<{ wallet: string; trades: unknown }[]>>();
   for (const r of rows) {
     const f = featuresOf.get(r.id) ?? {};
     // Already written, by the scan or an earlier run.
     if ("recentBuyersRead" in f) continue;
     totals.rows++;
-    const rebuilt = await rebuildRow(r.tokenId, r.anchorAt);
+    const rebuilt = await rebuildRow(r.tokenId, r.anchorAt, tapes);
     if (!rebuilt) {
       totals.noBuyers++;
       continue;

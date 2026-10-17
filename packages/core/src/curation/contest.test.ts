@@ -23,6 +23,7 @@ import {
   TRADER_CONTESTANT,
   WINNERS_CONTESTANT,
   WINNERS_RECIPE,
+  WINNERS_SEAT_INPUTS,
 } from "./contestants.js";
 import { GEMERALD_GATE, passesModelGateOnFeatures, seatConsiders } from "./modelGate.js";
 import { foundingLanes, recipeFamily, traitName } from "./evolution.js";
@@ -332,11 +333,15 @@ describe("Winners", () => {
     expect(WINNERS_RECIPE).toEqual({
       learner: "gbdt",
       twoStage: true,
-      featureNames: [...TREES_NO_TOKENSAGE_FEATURES, ...WINNER_FOLLOW_FEATURES],
+      featureNames: [...TREES_NO_TOKENSAGE_FEATURES, ...WINNERS_SEAT_INPUTS],
       recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
     });
     for (const name of WINNER_FOLLOW_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    // The shares and how winners trade, not the counts, which read lower on backfilled rows.
+    expect(WINNERS_SEAT_INPUTS).not.toContain("cleanWinnerRecentBuyers");
+    expect(WINNERS_SEAT_INPUTS).not.toContain("recentBuyersRead");
+    expect(WINNERS_SEAT_INPUTS).toContain("cleanWinnerNetShare");
     expect(isMemberLearner(spec)).toBe(false);
     expect(isTraderMember(spec)).toBe(false);
     expect(ACTIVE_CONTESTANT_IDS).toContain(WINNERS_CONTESTANT);

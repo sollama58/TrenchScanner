@@ -139,6 +139,10 @@ describe.skipIf(!dbAvailable)("clean-winner reading backfill", () => {
       cleanWinnerRecentBuyers: 1,
       cleanWinnerRecentShare: 0.3333,
       cleanWinnerBuySolShare: 0.3333,
+      // CLEAN bought 1 SOL against its usual 1; no winner sold.
+      cleanWinnerConvictionMax: 1,
+      cleanWinnerNetShare: 0.3333,
+      cleanWinnerSellerShare: null,
     });
     expect((await featuresOf(row.id)).recentBuyersOwn2xMean).toBeGreaterThan(0);
     // Already written, or too far from the tape: left as they were.

@@ -65,7 +65,7 @@ export const winSql = Prisma.sql`(a."solIn" > 0
  * (HolderTransferEvent, the scan's linking transfers between top holders, kept 30 days). The
  * Winners seat reads a Winner wallet only with none of these (core's wallets/winnerFollow.ts). A
  * partial tape that missed an earlier buy reads the same way: the record can't show it bought them.
- * `before` counts only the transfers seen before then (the point-in-time backfill).
+ * `before` counts only the transfers the scan had recorded before then (the point-in-time backfill).
  */
 export const transferFedSql = (before?: Date) => Prisma.sql`(a."solIn" > 0
   AND a."solOut" >= ${WALLET_WIN_MULTIPLE} * a."solIn"
@@ -73,7 +73,7 @@ export const transferFedSql = (before?: Date) => Prisma.sql`(a."solIn" > 0
   AND (NOT ${cleanSql}
        OR EXISTS (SELECT 1 FROM "HolderTransferEvent" h JOIN "Token" tk ON tk."mintAddress" = h."mintAddress"
                    WHERE h."toWallet" = a."wallet" AND tk."id" = a."tokenId"
-                     ${before ? Prisma.sql`AND h."at" < ${before}` : Prisma.empty})))`;
+                     ${before ? Prisma.sql`AND h."createdAt" < ${before}` : Prisma.empty})))`;
 
 /** An own trade at `multiple` or better (the Wallet Score's own2x / own4x). */
 export const ownMultipleSql = (multiple: number) => Prisma.sql`(a."solIn" >= ${OWN_MULTIPLE_MIN_SOL}
