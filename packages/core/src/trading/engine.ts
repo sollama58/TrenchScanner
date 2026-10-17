@@ -192,6 +192,8 @@ export interface TradingEngineDeps {
   maxBuyLamports?: bigint;
   maxDailySpendLamports?: bigint;
   maxSlippageBps?: number;
+  /** The exit ceiling (TRADING_MAX_EXIT_SLIPPAGE_BPS), apart from entries' maxSlippageBps; unset is no limit. */
+  maxExitSlippageBps?: number;
   /** Delivers a pass's Telegram notes (tradeNotes.ts), after the pass; omitted sends none. */
   notify?: (notes: TradeNote[]) => Promise<void>;
   now?: () => Date;
@@ -1638,9 +1640,10 @@ async function manageExit(ctx: PassContext, position: PositionRow, tokenUsd?: nu
   }
   if (amount <= 0n) return;
 
-  const configured = Math.min(config.slippageBps, ctx.deps.maxSlippageBps ?? config.slippageBps);
-  // Exits stay under the server's slippage ceiling too, however wide the bot's settings are.
-  const ceiling = ctx.deps.maxSlippageBps ?? 10_000;
+  // Exits stay under the server's exit slippage ceiling, however wide the bot's settings are: its
+  // own, not the entries' (TRADING_MAX_EXIT_SLIPPAGE_BPS), so a tight entry cap can't trap a sale.
+  const ceiling = ctx.deps.maxExitSlippageBps ?? 10_000;
+  const configured = Math.min(config.slippageBps, ceiling);
   const exitSlippage = Math.min(Math.max(configured, config.exitSlippageBps), ceiling);
   // A take-profit sells at the configured slippage; one that keeps failing (the price moved
   // before it landed) and every protective exit sells with room to get out.

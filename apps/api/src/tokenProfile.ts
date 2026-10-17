@@ -4,8 +4,8 @@ import { prisma, type TokenSageAnalysis } from "@trenchscanner/core";
  * GET /tokens/:mint/profile: the token modal's Dev, Socials and Order flow cards (user ask
  * 2026-10-16).
  *
- * - Dev: the creator wallet (the coin's trade tape, else TokenSage's market.creator when it names
- *   a wallet), its risk score, and the other coins the scanner read the trades of that name it the
+ * - Dev: the creator wallet (the coin's trade tape, else Token.creator as discovery, RugCheck or
+ *   the tape named it, else TokenSage's market.creator when it names a wallet), its risk score, and the other coins the scanner read the trades of that name it the
  *   creator (TokenWalletActivity.isCreator), with how each did. Only coins whose tape was read are
  *   known, so the count is a floor, and the card says so.
  * - Socials: the launcher's X, Telegram and website links, https only (Token's stored links, else
@@ -80,6 +80,7 @@ export async function readTokenProfile(mintAddress: string): Promise<TokenProfil
       hasWebsite: true,
       twitterUrl: true,
       websiteUrl: true,
+      creator: true,
     },
   });
   if (!token) return null;
@@ -111,7 +112,8 @@ export async function readTokenProfile(mintAddress: string): Promise<TokenProfil
     market?.creator && (market.creator_kind == null || market.creator_kind === "wallet")
       ? market.creator
       : null;
-  const creator = [tape?.creator, sageCreator].find((w): w is string => !!w && WALLET_RE.test(w)) ?? null;
+  const creator =
+    [tape?.creator, token.creator, sageCreator].find((w): w is string => !!w && WALLET_RE.test(w)) ?? null;
 
   const [risk, launches, buyers] = await Promise.all([
     creator ? prisma.walletRisk.findUnique({ where: { wallet: creator }, select: { score: true } }) : null,

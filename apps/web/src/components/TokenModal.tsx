@@ -47,6 +47,7 @@ import {
 } from "../priceChart";
 import {
   cardReadings,
+  oldFirstBuyersText,
   cexCountText,
   countCutFor,
   linkedReading,
@@ -81,6 +82,7 @@ import { LoadingNote, LoadSteps, SkelValue, Spinner, useElapsed } from "./Loadin
 import { openWallet } from "../walletModal";
 import { BubbleMapPlaceholder, BubbleMapSection, reloadBubbleMaps, useBubbleMaps } from "./BubbleMap";
 import { TopHolders } from "./TopHolders";
+import type { HolderEntry } from "../holderEntry";
 import { WalletText } from "./WalletText";
 import { FilterGlyph } from "./FilterBadge";
 import { filterCardStyle } from "../filterStyle";
@@ -112,6 +114,8 @@ interface TokenChart {
   /** When the coin's trades were last read live, before a call; null when never. */
   live?: { readAt: number } | null;
   wallets?: FlaggedWallet[];
+  /** How each top holder got in, by wallet (HolderEntry). Absent from older API builds. */
+  holderEntries?: Record<string, HolderEntry>;
 }
 
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
@@ -518,6 +522,8 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const flaggedKey = JSON.stringify(chart.data?.wallets ?? []);
   const flagged = useMemo(() => JSON.parse(flaggedKey) as FlaggedWallet[], [flaggedKey]);
   const flags = chart.data ? "ok" : chart.error ? "failed" : "loading";
+  const entriesKey = JSON.stringify(chart.data?.holderEntries ?? {});
+  const entries = useMemo(() => JSON.parse(entriesKey) as Record<string, HolderEntry>, [entriesKey]);
   const linked = useHolderReading(card, mint, !!utility);
   const holders = useHoldersView(card, linked, alertAt, !!utility);
   useFilterCatchKept(card, !!utility);
@@ -748,7 +754,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
             flagged={flagged}
             flags={flags}
           />
-          <TopHolders snapshot={holders.listReading} flagged={flagged} pending={scanning} />
+          <TopHolders snapshot={holders.listReading} flagged={flagged} entries={entries} pending={scanning} />
         </div>
         {flagged.length > 0 && <WalletsCard wallets={flagged} />}
         <StonkFeesCard mint={mint} />
@@ -1493,7 +1499,7 @@ function stonkFeesPctText(pct: number): string {
 
 /**
  * Stonks' fee wallet's share of a Stonks coin (user ask 2026-10-16): the 3% transfer fee it sweeps
- * up. It is left out of every holder figure, bundle and the bubble map on a Stonks coin, so its
+ * up. It is left out of every holder figure, bundle and the bubble map (on every coin), so its
  * share shows here on its own. Nothing for any other coin.
  */
 function StonkFeesCard({ mint }: { mint: string }) {
@@ -1800,11 +1806,21 @@ function StatsCard({ card }: { card: Card }) {
               (r.cexPct === null ? "Not checked" : (cexCountText(r.cexCount, r.cexHolders) ?? pct(r.cexPct)))}
           </dd>
         </div>
-        <div title="How many of the launch's first 25 buyers still hold 0.1% of the supply or more">
+        <div
+          title={
+            r.firstHolding === null && r.firstHoldingOld !== null
+              ? `Not recorded under the 0.1% count for this token. ${oldFirstBuyersText(r.firstHoldingOld, r.firstSeenOld)}`
+              : "How many of the launch's first 25 buyers still hold 0.1% of the supply or more"
+          }
+        >
           <dt>First buyers holding</dt>
           <dd className="num">
             {wait(r.firstHolding === null, "2.4em") ??
-              (r.firstHolding === null ? "–" : `${r.firstHolding}/${r.firstSeen ?? 25}`)}
+              (r.firstHolding !== null
+                ? `${r.firstHolding}/${r.firstSeen ?? 25}`
+                : r.firstHoldingOld !== null
+                  ? `${r.firstHoldingOld}/${r.firstSeenOld ?? 25}*`
+                  : "–")}
           </dd>
         </div>
         <div title={r.feeLine ?? undefined}>

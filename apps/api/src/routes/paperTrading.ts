@@ -10,6 +10,7 @@ import {
   EXIT_PLAN,
   MAX_PAPER_STRATEGIES,
   MAX_RUNNING_PAPER_STRATEGIES,
+  paperSignalVerdicts,
   paperStats,
   paperStrategyConfigSchema,
   prisma,
@@ -106,6 +107,7 @@ export async function registerPaperTradingRoutes(
       prisma.paperPosition.findMany({
         where: { strategyId: { in: ids } },
         select: {
+          id: true,
           strategyId: true,
           status: true,
           swapInLamports: true,
@@ -114,7 +116,6 @@ export async function registerPaperTradingRoutes(
           tokensBought: true,
           tokensHeld: true,
           lastMultiple: true,
-          peakMultiple: true,
         },
       }),
       Promise.all(
@@ -128,6 +129,8 @@ export async function registerPaperTradingRoutes(
         ),
       ),
     ]);
+    // Hit 2x is graded on each signal's own verdict, as every other hit rate is.
+    const verdicts = await paperSignalVerdicts(all.map((p) => p.id));
     return {
       maxRunning: MAX_RUNNING_PAPER_STRATEGIES,
       maxStrategies: MAX_PAPER_STRATEGIES,
@@ -145,7 +148,7 @@ export async function registerPaperTradingRoutes(
         const config = readPaperConfig(s.config);
         const stats = paperStats(
           s,
-          all.filter((p) => p.strategyId === s.id),
+          all.filter((p) => p.strategyId === s.id).map((p) => ({ ...p, hit2x: verdicts.get(p.id) ?? null })),
         );
         return {
           id: s.id,

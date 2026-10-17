@@ -86,6 +86,7 @@ export function createTradingBotRunner(
       maxBuyLamports: optionalLamports(env.TRADING_MAX_BUY_SOL),
       maxDailySpendLamports: optionalLamports(env.TRADING_MAX_DAILY_SPEND_SOL),
       maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS,
+      maxExitSlippageBps: env.TRADING_MAX_EXIT_SLIPPAGE_BPS,
       notify: telegram
         ? async (notes) =>
             void (await sendTradeNotes(notes, { telegram, admins, serverUserId: serverAccountId }))

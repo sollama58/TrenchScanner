@@ -134,6 +134,7 @@ export function tradingStatus(env: Env, keyProblem: string | null) {
       maxBuySol: env.TRADING_MAX_BUY_SOL ?? null,
       maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL ?? null,
       maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS ?? null,
+      maxExitSlippageBps: env.TRADING_MAX_EXIT_SLIPPAGE_BPS,
       maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL ?? null,
     },
     defaults: DEFAULT_TRADING_BOT_CONFIG,
@@ -181,10 +182,13 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
   });
   app.put("/alerts", async (request, reply) => {
     if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });
-    if (!(await requireTradeConfirmation(request, reply))) return;
-    const parsed = tradeAlertsPatchSchema.safeParse(request.body);
+    // The schema is strict, so the signed confirmation comes off before parsing. Validated before
+    // the confirmation is spent, so a bad body doesn't burn the signature.
+    const { confirmation: _confirmation, ...patch } = (request.body ?? {}) as Record<string, unknown>;
+    const parsed = tradeAlertsPatchSchema.safeParse(patch);
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    if (!(await requireTradeConfirmation(request, reply))) return;
     const userId = request.user!.userId;
     // Merged under the row lock, as settings.ts does: each switch saves as it is pressed.
     const next = await prisma.$transaction(async (tx) => {
@@ -321,6 +325,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
         maxBuySol: env.TRADING_MAX_BUY_SOL ?? null,
         maxDailySpendSol: env.TRADING_MAX_DAILY_SPEND_SOL ?? null,
         maxSlippageBps: env.TRADING_MAX_SLIPPAGE_BPS ?? null,
+        maxExitSlippageBps: env.TRADING_MAX_EXIT_SLIPPAGE_BPS,
         maxPriorityFeeSol: env.TRADING_MAX_PRIORITY_FEE_SOL ?? null,
       },
       // A followed filter edited since the settings were saved is paused until they are saved again.
@@ -383,7 +388,6 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
 
   const saveBot = (scope: Scope) => async (request: FastifyRequest, reply: FastifyReply) => {
     if (!requireAdmin(request, reply)) return;
-    if (!(await requireTradeConfirmation(request, reply))) return;
     const parsed = botPatchSchema.safeParse(request.body);
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
@@ -391,6 +395,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
         .code(400)
         .send({ error: issue ? `${issue.path.join(".")}: ${issue.message}` : "invalid request" });
     }
+    if (!(await requireTradeConfirmation(request, reply))) return;
     const owner = await ownerFor(scope, request);
     if (!owner.wallet) {
       return reply.code(409).send({
@@ -406,9 +411,10 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
         ["maxDailySpendSol", limits.maxDailySpendSol, env.TRADING_MAX_DAILY_SPEND_SOL, "SOL"],
         ["maxPriorityFeeSol", limits.maxPriorityFeeSol, env.TRADING_MAX_PRIORITY_FEE_SOL, "SOL"],
         ["slippageBps", limits.slippageBps, env.TRADING_MAX_SLIPPAGE_BPS, "bps"],
-        // Exits and the Jito tip too: the trader clamps them, but the settings should say so.
-        ["exitSlippageBps", limits.exitSlippageBps, env.TRADING_MAX_SLIPPAGE_BPS, "bps"],
-        ["exitSlippageMaxBps", limits.exitSlippageMaxBps, env.TRADING_MAX_SLIPPAGE_BPS, "bps"],
+        // Exits (against their own ceiling) and the Jito tip too: the trader clamps them, but the
+        // settings should say so.
+        ["exitSlippageBps", limits.exitSlippageBps, env.TRADING_MAX_EXIT_SLIPPAGE_BPS, "bps"],
+        ["exitSlippageMaxBps", limits.exitSlippageMaxBps, env.TRADING_MAX_EXIT_SLIPPAGE_BPS, "bps"],
         ["jitoTipSol", limits.jitoTipSol, env.TRADING_MAX_PRIORITY_FEE_SOL, "SOL"],
       ] as const;
       for (const [field, value, cap, unit] of over) {
@@ -497,9 +503,9 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     if (scope === "own" && request.user!.deviceId) {
       return deny(reply, "sign in with your wallet on this device to withdraw");
     }
-    if (!(await requireTradeConfirmation(request, reply))) return;
     const parsed = withdrawSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'amount must be lamports or "max"' });
+    if (!(await requireTradeConfirmation(request, reply))) return;
     const owner = await ownerFor(scope, request);
     if (!owner.wallet) return reply.code(404).send({ error: "no trading wallet" });
     if (!owner.withdrawTo) {

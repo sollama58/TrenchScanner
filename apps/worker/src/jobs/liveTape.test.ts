@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   liveBuyersOf,
+  liveBuyersOn,
   liveFlagsOf,
+  livePageOf,
   liveWalletScoreOf,
+  liveWalletScoreOn,
   liveWindowFlowOf,
   readLiveTape,
   resetLiveTape,
@@ -13,6 +16,7 @@ const SOL = 1_000_000_000;
 const MINT = "Mint1111111111111111111111111111111111111111";
 // Real on-curve addresses: program accounts are left out of the tape.
 const RISKY = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+const OTHER = "bwamJzztZsepfkteWRChggmXuiiCQvpLqPietdNfSXa";
 
 function buyTx(wallet: string, sol: number, atSec: number) {
   return {
@@ -78,6 +82,28 @@ describe("live tape", () => {
     });
     expect(liveWalletScoreOf(MINT, undefined, undefined, 1)).toBeNull();
     expect(liveWalletScoreOf(MINT, scored, undefined, 16 * 60_000)).toBeNull();
+  });
+
+  it("scores the page it was handed, whose buyers the own-tape read saw, when a newer page lands after", async () => {
+    await readLiveTape([MINT], fakeHelius(), { maxPages: 1, refreshMs: 60_000, nowMs: 0 });
+    const scored = (w: string) =>
+      w === RISKY || w === OTHER ? { score: 50, dumps: 0, walletScore: 0.4 } : undefined;
+    const page = livePageOf(MINT, 1);
+    const ownTape = new Set(liveBuyersOn(page));
+    // A newer page with a new buyer lands between the own-tape read and the score.
+    const later = fakeHelius();
+    later.getMintTransactionsPage.mockResolvedValue({
+      status: "ok",
+      txs: [buyTx(OTHER, 1, 1_700_000_200)],
+      paginationToken: null,
+    });
+    await readLiveTape([MINT], later, { maxPages: 1, refreshMs: 0, nowMs: 2 });
+    expect(liveBuyersOf(MINT, 3)).toEqual([OTHER]);
+    expect(liveWalletScoreOn(page, scored, ownTape)).toEqual({
+      walletScoreRecentBuyersMean: null,
+      walletScoreRecentBuyersScored: 0,
+    });
+    expect(livePageOf(MINT, 16 * 60_000)).toBeUndefined();
   });
 
   it("reads a coin's 5m order flow off its page, as of when it was read, until it is five minutes old", async () => {

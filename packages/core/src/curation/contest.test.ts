@@ -17,11 +17,18 @@ import {
   TREES_RECENT_HALF_LIFE_DAYS,
   enabledContestants,
   isMemberLearner,
+  isTraderMember,
+  GEMS_CONTESTANT,
+  GEMS_RECIPE,
+  TRADER_CONTESTANT,
 } from "./contestants.js";
+import { GEMERALD_GATE, passesModelGateOnFeatures } from "./modelGate.js";
 import { foundingLanes, recipeFamily, traitName } from "./evolution.js";
 import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
 import { LEARNER_FEATURE_NAMES, SAFETY_FEATURES } from "./features.js";
 import {
+  GATED_MIN_ROWS,
+  gatedTrainingSet,
   NARRATIVE_BACKGROUND_KIND,
   NARRATIVE_MIN_ROWS,
   narrativeTrainingSet,
@@ -239,6 +246,72 @@ describe("the Narrative seat's exam", () => {
     ]);
     expect(set.filter((r) => isDecisionRow(r)).map((r) => r.anchorAt.getUTCMinutes())).toEqual([3, 2]);
   });
+});
+
+describe("Gems", () => {
+  it("is a standalone learner on the Gemerald gate, with the leading seats' traits, outside every combiner", () => {
+    const spec = contestantSpec(GEMS_CONTESTANT)!;
+    expect(spec.name).toBe("Gems");
+    expect(spec.role).toBe("learner");
+    expect(spec.standalone).toBe(true);
+    expect(spec.gate).toBe(GEMERALD_GATE);
+    expect(spec.recipe).toBe(GEMS_RECIPE);
+    // Survivor's two stages, Simple Trees' inputs, Linear Recent's memory, the Sharp seats' cutoff.
+    expect(GEMS_RECIPE).toEqual({
+      learner: "gbdt",
+      twoStage: true,
+      featureNames: TREES_NO_TOKENSAGE_FEATURES,
+      recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
+      cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+    });
+    expect(isMemberLearner(spec)).toBe(false);
+    expect(isTraderMember(spec)).toBe(false);
+    expect(ACTIVE_CONTESTANT_IDS).toContain(GEMS_CONTESTANT);
+    expect(foundingLanes(CONTESTANTS, new Date(0)).map((l) => l.slot)).not.toContain(GEMS_CONTESTANT);
+  });
+
+  it("trains and sits its exam on the rows its gate lets through, and sits out without its gate", async () => {
+    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 11 });
+    const gate = { mcapMin: 0, mcapMax: 1e12, maxTop10HolderPct: 40 };
+    const gated = gatedTrainingSet(rows, gate);
+    expect(gated.every((r) => passesModelGateOnFeatures(r.features, gate))).toBe(true);
+    expect(gated.length).toBeGreaterThan(GATED_MIN_ROWS);
+    expect(gated.length).toBeLessThan(rows.length);
+
+    const cfg = {
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 500,
+      recencyHalfLifeDays: 14,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      // A cheaper recipe than Gems' own: the test is the gate, not the trees.
+      contestants: enabledContestants([
+        "consensus",
+        TRADER_CONTESTANT,
+        "linear",
+        "trees",
+        GEMS_CONTESTANT,
+      ]).map((c) => (c.id === GEMS_CONTESTANT ? { ...c, recipe: { learner: "logistic" as const } } : c)),
+    };
+    const without = await runContestTraining(rows, cfg);
+    expect(without.map((r) => r.contestant)).not.toContain(GEMS_CONTESTANT);
+
+    const results = await runContestTraining(rows, { ...cfg, gates: { [GEMERALD_GATE]: gate } });
+    const gems = results.find((r) => r.contestant === GEMS_CONTESTANT)!;
+    expect(gems.metrics.gate).toEqual({
+      id: GEMERALD_GATE,
+      rows: gated.length,
+      of: rows.length,
+      uncheckedOffline: [],
+    });
+    expect(gems.metrics.exam).toBeDefined();
+    for (const id of ["consensus", TRADER_CONTESTANT]) {
+      const combiner = results.find((r) => r.contestant === id)!.params as StackedCuratorParams;
+      expect(combiner.members.map((m) => m.contestant)).not.toContain(GEMS_CONTESTANT);
+    }
+  }, 120_000);
 });
 
 describe("defaultContestant", () => {

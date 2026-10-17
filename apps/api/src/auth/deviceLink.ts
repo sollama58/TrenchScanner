@@ -98,6 +98,10 @@ export async function redeemLinkCode(
       });
       if (!row) return { ok: false };
 
+      // The owner's row locked first, so two codes redeemed at once for one account count in turn
+      // instead of both seeing room under the cap.
+      await tx.$queryRaw`SELECT 1 FROM "User" WHERE "id" = ${row.userId} FOR UPDATE`;
+
       // Over the cap the whole transaction rolls back: the code is not spent, so once a phone is
       // unlinked the same QR still works within its two minutes.
       const active = await tx.linkedDevice.count({ where: { userId: row.userId, revokedAt: null } });

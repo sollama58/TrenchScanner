@@ -3,7 +3,7 @@ import { HEURISTIC_CURATOR_SOURCE, type CurationDecision } from "./curator.js";
 import { FIRST_BUYERS, FRESH_LAUNCH_BUYERS, resolveDevHolding } from "./tradeFlow.js";
 import { CREATOR_UNKNOWN_FLAG } from "../datasources/rugcheck.js";
 import { TOKENSAGE_LOGO_MIN_SCORE } from "../datasources/tokensage.js";
-import { buildCandidateFeatures } from "./features.js";
+import { buildCandidateFeatures, type CandidateFeatureName } from "./features.js";
 import { decisionAnchor, FRESH_ANCHOR_LABEL_RULE } from "./labels.js";
 import { LINEAGE_KIND, narrativeIsCopycat, narrativeXRead, type NarrativeRead } from "./narrativeFeatures.js";
 import {
@@ -417,7 +417,8 @@ function tradeFlowLines(scored: ScoredToken): string[] {
  * The ScoredToken fields the brief's wallet section reads - the wallet stage the models record
  * (curation/features.ts: wallet risk, winners, KOLs, live flags, linked, exchange and same-minute
  * funding). Exported so a replay can put them back on a token rebuilt from its feature vector,
- * which banks them under the same names.
+ * which banks them under the same names; the two funding-only figures the vector banks under
+ * other names are in BRIEF_WALLET_FIELDS_BANKED_AS.
  */
 export const BRIEF_WALLET_FIELDS = [
   "walletRiskTop10Max",
@@ -435,7 +436,6 @@ export const BRIEF_WALLET_FIELDS = [
   "kolFirstBuyers",
   "kolRecentBuyers",
   "kolRecentSellers",
-  "kolBundledPct",
   "flaggedBuyers",
   "flaggedSellers",
   "flaggedBuySol",
@@ -445,13 +445,22 @@ export const BRIEF_WALLET_FIELDS = [
   "linkedWalletCount",
   "linkedWalletsChecked",
   "linkedLargestClusterPct",
-  "linkedCreatorPct",
   "cexFundedPct",
   "cexFundedCount",
   "cexFundedHolders",
   "sameTimeFundedPct",
   "sameTimeFundedCount",
 ] as const satisfies readonly (keyof ScoredToken)[];
+
+/**
+ * Wallet fields the brief reads that the feature vector banks under another name: the brief prints
+ * the funding-only KOL Bundled % and creator share, as the models read them (features.ts banks
+ * them as kolBundledPct and linkedCreatorPct). Brief field to vector name, for the replay.
+ */
+export const BRIEF_WALLET_FIELDS_BANKED_AS = {
+  kolBundledPctExTransfers: "kolBundledPct",
+  linkedCreatorPctExTransfers: "linkedCreatorPct",
+} as const satisfies Partial<Record<keyof ScoredToken, CandidateFeatureName>>;
 
 const known = (v: number | undefined): v is number => typeof v === "number" && Number.isFinite(v);
 
@@ -485,10 +494,10 @@ function walletLines(s: ScoredToken): string[] {
     known(s.kolFirstBuyers) ||
     known(s.kolRecentBuyers) ||
     known(s.kolRecentSellers) ||
-    known(s.kolBundledPctModel ?? s.kolBundledPct)
+    known(s.kolBundledPctExTransfers)
   ) {
     lines.push(
-      `- known KOL wallets: ${fmtNum(s.kolTopHolders)} among the top 20 holders (${fmtPct(s.kolTopHolderPct)} of supply), ${fmtNum(s.kolFirstBuyers)} among the first buyers, ${fmtNum(s.kolRecentBuyers)} buying and ${fmtNum(s.kolRecentSellers)} selling in the newest trades; supply bundled by KOLs (their wallets, wallets they funded, possible side wallets and holders sharing a funder or funding minute with those) ${fmtPct(s.kolBundledPctModel ?? s.kolBundledPct)}`,
+      `- known KOL wallets: ${fmtNum(s.kolTopHolders)} among the top 20 holders (${fmtPct(s.kolTopHolderPct)} of supply), ${fmtNum(s.kolFirstBuyers)} among the first buyers, ${fmtNum(s.kolRecentBuyers)} buying and ${fmtNum(s.kolRecentSellers)} selling in the newest trades; supply bundled by KOLs (their wallets, wallets they funded, possible side wallets and holders sharing a funder or funding minute with those) ${fmtPct(s.kolBundledPctExTransfers)}`,
     );
   }
   if (known(s.flaggedBuyers) || known(s.flaggedSellers)) {
@@ -500,7 +509,7 @@ function walletLines(s: ScoredToken): string[] {
   if (known(s.linkedWalletCount) || known(s.linkedWalletPct)) {
     const of = known(s.linkedWalletsChecked) ? ` of the top ${s.linkedWalletsChecked}` : "";
     lines.push(
-      `- holders linked by funding (one funder paid for them, or they funded each other): ${fmtNum(s.linkedWalletCount)}${of}, holding ${fmtPct(s.linkedWalletPct)} of supply in ${fmtNum(s.linkedClusterCount)} clusters; largest cluster ${fmtPct(s.linkedLargestClusterPct)}; tied to the creator ${fmtPct(s.linkedCreatorPct)}`,
+      `- linked holders (one funder paid for them, they funded each other, or one sent another the coin): ${fmtNum(s.linkedWalletCount)}${of}, holding ${fmtPct(s.linkedWalletPct)} of supply in ${fmtNum(s.linkedClusterCount)} clusters; largest cluster ${fmtPct(s.linkedLargestClusterPct)}; tied to the creator by funding ${fmtPct(s.linkedCreatorPctExTransfers)}`,
     );
   }
   if (known(s.cexFundedCount) || known(s.cexFundedPct)) {

@@ -72,7 +72,9 @@ import {
   isFomoName,
   isPumpfunName,
   isUsername,
+  SWITCHABLE_NAMES,
   useWalletNames,
+  visibleNames,
   walletText,
   type WalletName,
   type WalletNames,
@@ -187,13 +189,6 @@ interface NameToggle {
   setNamesOn: (on: boolean) => void;
 }
 
-type SwitchableSource = "pumpfun" | "fomo" | "identity";
-const SWITCHABLE_NAMES: ReadonlySet<WalletName["source"]> = new Set<SwitchableSource>([
-  "pumpfun",
-  "fomo",
-  "identity",
-]);
-
 /**
  * Whether the Pump.fun, FOMO and Helius names show on the map (user ask 2026-10-16): off by
  * default, switchable on the map, with the default in Settings. Settings can also set each kind on
@@ -207,22 +202,22 @@ function useNameToggle(graph: BubbleGraph | null, names: WalletNames): NameToggl
   const split = bubbleNamesPumpfun !== null || bubbleNamesFomo !== null || bubbleNamesHelius !== null;
   const showNames = split ? bubbleNameLabels : (on ?? bubbleNameLabels);
   return useMemo(() => {
-    const shows: Record<SwitchableSource, boolean> = {
-      pumpfun: bubbleNamesPumpfun ?? showNames,
-      fomo: bubbleNamesFomo ?? showNames,
-      identity: bubbleNamesHelius ?? showNames,
-    };
     const exchanges = new Set(graph?.cexLinks.map((l) => l.funder) ?? []);
-    const switchable = Object.keys(names).filter(
-      (w) => SWITCHABLE_NAMES.has(names[w]!.source) && !exchanges.has(w),
-    );
-    const hidden = switchable.filter((w) => !shows[names[w]!.source as SwitchableSource]);
-    const hasSwitchable = !split && switchable.length > 0;
-    if (hidden.length === 0) return { mapNames: names, hasSwitchable, showNames, setNamesOn };
-    const kept: Record<string, WalletName> = { ...names };
-    for (const w of hidden) delete kept[w];
-    return { mapNames: kept, hasSwitchable, showNames, setNamesOn };
-  }, [graph, names, showNames, split, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius]);
+    const hasSwitchable =
+      !split && Object.keys(names).some((w) => SWITCHABLE_NAMES.has(names[w]!.source) && !exchanges.has(w));
+    const look = { bubbleNameLabels, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius };
+    const mapNames = visibleNames(names, look, showNames, exchanges);
+    return { mapNames, hasSwitchable, showNames, setNamesOn };
+  }, [
+    graph,
+    names,
+    showNames,
+    split,
+    bubbleNameLabels,
+    bubbleNamesPumpfun,
+    bubbleNamesFomo,
+    bubbleNamesHelius,
+  ]);
 }
 
 /**
@@ -263,6 +258,7 @@ function useKols(
             ),
             transfers ? graph.transferLinks : [],
             transfers ? graph.fundingClusters : undefined,
+            (w) => names[w]?.service === true,
           )
         : [],
     [graph, groups, names, transfers],
@@ -359,6 +355,8 @@ function MapView({
   const cex = graph.cexCount;
   // Linked takes in KOLs' bundles and the wider map's links, out of every holder read (mapLinked).
   const linked = mapLinked(graph, kols);
+  // Supply tied to the creator (user ask 2026-10-17): a tile of its own only when there is some.
+  const devTied = graph.creatorPct !== null && graph.creatorPct > 0;
 
   return (
     <>
@@ -366,7 +364,8 @@ function MapView({
         className="bm-stats"
         style={
           {
-            "--bm-cols": 3 + (graph.sameTimeGroups.length > 0 ? 1 : 0) + (xfer !== null ? 1 : 0),
+            "--bm-cols":
+              3 + (graph.sameTimeGroups.length > 0 ? 1 : 0) + (xfer !== null ? 1 : 0) + (devTied ? 1 : 0),
           } as React.CSSProperties
         }
       >
@@ -401,7 +400,7 @@ function MapView({
           title={
             kolBundled === null
               ? "KOL bundled: not checked yet. It comes with the linked-wallet reading."
-              : "KOL bundled: supply held by KOLs and the top holders tied to them (wallets a KOL funded, possible side wallets, and holders sharing a funder or funding minute with those)"
+              : "KOL bundled: supply held by KOLs and the top holders tied to them (wallets a KOL funded, probable side wallets, and holders sharing a funder or funding minute with those)"
           }
         >
           <dt>KOL bundled</dt>
@@ -437,6 +436,17 @@ function MapView({
             {cex === null ? "-" : (cexCountText(cex.linked, cex.of) ?? pct(graph.cexPct, 0))}
           </dd>
         </div>
+        {devTied && (
+          <div
+            className="risky"
+            title={`Tied to dev: ${pct(graph.creatorPct, 1)} of supply is held by ${
+              graph.creatorCount ? `${graph.creatorCount} ` : ""
+            }top holders the creator or its funder paid for, or that got SOL or the coin from one that was. The creator's own holding is left out.`}
+          >
+            <dt>Tied to dev</dt>
+            <dd className="num">{pct(graph.creatorPct, 1)}</dd>
+          </div>
+        )}
         {/* Transferred Supply % (user ask 2026-10-16): the coin moved holder to holder among the top
             25, a stat of its own beside Linked, never counted in it. */}
         {xfer !== null && (
@@ -588,13 +598,13 @@ const KOL_TIE_TEXT: Record<KolTie, string> = {
   kol: "KOL",
   known: "Known side",
   funded: "KOL funded",
-  side: "Possible side",
+  side: "Probable side",
   cluster: "Same funder",
   "same-minute": "Same minute",
   transfer: "Got a transfer",
 };
 
-/** "4 wallets · 1 KOL funded · 2 possible sides": what a KOL's row holds. */
+/** "4 wallets · 1 KOL funded · 2 probable sides": what a KOL's row holds. */
 function kolSummary(k: KolControl): string {
   const count = (t: KolTie) => k.wallets.filter((w) => w.tie === t).length;
   const known = count("known");
@@ -605,7 +615,7 @@ function kolSummary(k: KolControl): string {
     `${k.wallets.length} wallet${k.wallets.length === 1 ? "" : "s"}`,
     known > 0 ? `${known} known side${known === 1 ? "" : "s"}` : null,
     funded > 0 ? `${funded} KOL funded` : null,
-    side > 0 ? `${side} possible side${side === 1 ? "" : "s"}` : null,
+    side > 0 ? `${side} probable side${side === 1 ? "" : "s"}` : null,
     linked > 0 ? `${linked} linked` : null,
     k.holds ? null : "KOL not holding",
   ]
@@ -668,7 +678,7 @@ function GroupPanel({
             Funder <WalletText wallet={c.funder} names={names} />
           </>
         ),
-        sub: `${c.wallets.length} wallets${c.creatorLinked ? " · tied to the creator" : ""}`,
+        sub: `${c.wallets.length} wallets${creatorTiedText(graph, c)}`,
         pct: c.pct,
         style: { "--bm": `var(--bm-${i % CLUSTER_COLOURS})` } as React.CSSProperties,
         dot: <i className="bm-dot" aria-hidden="true" />,
@@ -1590,7 +1600,7 @@ function TraitBadge({ trait, x, y }: { trait: WalletTrait; x: number; y: number 
 }
 
 /** A trait's icon on its own, for the legend. */
-function TraitIcon({ trait, size = 13 }: { trait: WalletTrait; size?: number }) {
+export function TraitIcon({ trait, size = 13 }: { trait: WalletTrait; size?: number }) {
   return (
     <svg
       className={`bm-trait-icon trait-${trait}`}
@@ -1653,7 +1663,7 @@ function RiskyIcon() {
 const RISKY_WORDS = "Risky: flagged risky or a known dumper";
 
 /** What each trait means, for its bubble's tooltip. */
-const TRAIT_WORDS: Record<WalletTrait, string> = {
+export const TRAIT_WORDS: Record<WalletTrait, string> = {
   sniper: "Sniper: among the launch's first 25 buyers",
   fresh: "Fresh wallet: first active within the last 24 hours",
   empty: "Empty wallet: under $25 in anything besides this coin",
@@ -1708,8 +1718,16 @@ function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames, sides: Po
   }${what.length ? `, ${what.join(", ")}` : ""}`;
 }
 
+/** " · 2 tied to the creator": how many of a cluster's holders are, for its row in the list. */
+function creatorTiedText(graph: BubbleGraph, c: BubbleGraph["clusters"][number]): string {
+  const ids = new Set(c.wallets.map((w) => `h:${w.wallet}`));
+  const n = graph.nodes.filter((x) => x.creatorTied && ids.has(x.id)).length;
+  if (n === 0) return "";
+  return n === c.wallets.length ? " · all tied to the creator" : ` · ${n} tied to the creator`;
+}
+
 /** "sent 1.2% to 2 holders", "got 0.4% from 1 holder": a holder's transfers in words. */
-function transferWords(t: ReturnType<typeof transfersOfNode>): string[] {
+export function transferWords(t: ReturnType<typeof transfersOfNode>): string[] {
   const holders = (n: number) => `${n} holder${n === 1 ? "" : "s"}`;
   return [
     t.sentTo > 0 ? `sent ${xferPctText(t.sent)} to ${holders(t.sentTo)}` : null,
@@ -1759,7 +1777,7 @@ function NodeDetail({
       text: n.kol && n.wallet && names[n.wallet]?.name !== n.kol ? `KOL: ${n.kol}` : "KOL",
       tone: "kol",
     });
-  if (cluster?.creatorLinked) tags.push({ text: "Tied to the creator", tone: "dev" });
+  if (n.creatorTied && !n.flags.includes("creator")) tags.push({ text: "Tied to the creator", tone: "dev" });
   for (const s of n.wallet ? (sides[n.wallet] ?? []) : [])
     tags.push({ text: possibleSideText(s), tone: "side" });
   return (
@@ -1929,11 +1947,13 @@ export function BubbleMapSection({
     const funding = withWideMap(withoutTransfers(snapshot), wideWithoutTransfers(wide)).linkedClusters;
     return funding ? { ...drawn, fundingClusters: funding } : drawn;
   }, [shown, snapshot, wide, showTransfers, flagged]);
-  const nameToggle = useNameToggle(graph, useGraphNames(graph));
+  const graphNames = useGraphNames(graph);
+  const nameToggle = useNameToggle(graph, graphNames);
   const names = nameToggle.mapNames;
   const { showCex, setCexOn } = useCexToggle(graph);
   const side = useSideToggle(graph);
-  const kols = useKols(graph, side.groups, names, showTransfers);
+  // Every name, hidden ones too: a KOL's always shows, and an exchange's says it is a service.
+  const kols = useKols(graph, side.groups, graphNames, showTransfers);
   const label = tokenLabel(token);
   if (!graph || !graph.nodes.some((n) => n.kind === "holder")) {
     // Still on its way: the map's place is held at its size, so it fills in without a jump.

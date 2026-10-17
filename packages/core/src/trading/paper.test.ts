@@ -6,6 +6,7 @@ import type { MintInfo } from "./rpc.js";
 import { PROGRAM } from "./txGuard.js";
 import { sendTradeNotes, type TradeNote } from "./tradeNotes.js";
 import {
+  paperSignalVerdicts,
   paperStats,
   paperSwapFee,
   penalizedFill,
@@ -39,7 +40,7 @@ describe("paper trading arithmetic", () => {
         tokensBought: "1000",
         tokensHeld: "500",
         lastMultiple: 3,
-        peakMultiple: 3,
+        hit2x: true,
       },
       // Closed at a profit.
       {
@@ -50,7 +51,7 @@ describe("paper trading arithmetic", () => {
         tokensBought: "1000",
         tokensHeld: "0",
         lastMultiple: 2,
-        peakMultiple: 2.1,
+        hit2x: false,
       },
       // Closed at a loss.
       {
@@ -61,7 +62,8 @@ describe("paper trading arithmetic", () => {
         tokensBought: "1000",
         tokensHeld: "0",
         lastMultiple: 0.5,
-        peakMultiple: 1.2,
+        // Its signal's window is still open: out of the hit rate.
+        hit2x: null,
       },
     ]);
     expect(stats.openValueLamports).toBe(750_000_000n);
@@ -71,8 +73,9 @@ describe("paper trading arithmetic", () => {
     expect(stats.closed).toBe(2);
     expect(stats.wins).toBe(1);
     expect(stats.winRate).toBe(0.5);
-    expect(stats.hit2x).toBe(2);
-    expect(stats.hit2xRate).toBeCloseTo(2 / 3);
+    expect(stats.hit2x).toBe(1);
+    expect(stats.graded).toBe(2);
+    expect(stats.hit2xRate).toBe(0.5);
   });
 });
 
@@ -255,9 +258,18 @@ describe.skipIf(!dbAvailable)("paper trading", () => {
     expect(p.closeReason).toBe("trailing_stop");
     expect(p.tokensHeld).toBe("0");
     expect(p.fills.map((f) => f.reason)).toEqual(["entry", "take_profit", "trailing_stop"]);
-    const stats = paperStats(await strategy(), [p]);
+    // Hit 2x follows the signal's verdict, not the position's own peak.
+    expect((await paperSignalVerdicts([p.id])).get(p.id)).toBeNull();
+    await prisma.curatedAlert.updateMany({ where: { model: "paper-test" }, data: { hit2xIn1h: true } });
+    let stats = paperStats(await strategy(), [
+      { ...p, hit2x: (await paperSignalVerdicts([p.id])).get(p.id)! },
+    ]);
     expect(stats.wins).toBe(1);
     expect(stats.hit2x).toBe(1);
+    await prisma.curatedAlert.updateMany({ where: { model: "paper-test" }, data: { disqualified: true } });
+    stats = paperStats(await strategy(), [{ ...p, hit2x: (await paperSignalVerdicts([p.id])).get(p.id)! }]);
+    expect(stats.hit2x).toBe(0);
+    expect(stats.graded).toBe(1);
   });
 
   it("books a sale once when another pass sold the position under it", async () => {

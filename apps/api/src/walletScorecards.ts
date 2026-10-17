@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { prisma } from "@trenchscanner/core";
+import { OVERSOLD_TOKENS, prisma } from "@trenchscanner/core";
 import { readKolRows, knownSideName } from "./kolRoster.js";
 import { SharedCache } from "./sharedCache.js";
 
@@ -31,11 +31,6 @@ export type WalletGroup = (typeof WALLET_GROUPS)[number];
 const TOP_WINNERS = 100;
 /** A coin counts as sold out of once this share of the tokens bought has been sold. */
 export const CLOSED_SHARE = 0.9;
-/**
- * ...and not once it sold more than this many times the tokens it bought on the tape: the rest came
- * in by transfer (a side wallet, an airdrop), so SOL out against SOL in is not its trade's return.
- */
-export const OVERSOLD_SHARE = 1.1;
 /** Wallets shown, most active first, before the reader's own sort. */
 const MAX_WALLETS = 150;
 /** The tape's per-coin rows read, at most: bounds a fill whatever the roster grows to. */
@@ -166,11 +161,18 @@ const median = (xs: number[]): number | null => {
   return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 };
 
+/**
+ * Left out, as walletRiskJob leaves them out of the Winner label: a coin it sold more than
+ * OVERSOLD_TOKENS times the tokens it bought on the tape of, or sold before its first buy. Either
+ * way some of what it sold came in another way (a transfer, a buy before the tape), so SOL out
+ * against SOL in is not its trade's return.
+ */
 const isClosed = (r: WalletCoinRow) =>
   r.solIn > 0 &&
   r.tokensBought > 0 &&
   r.tokensSold >= r.tokensBought * CLOSED_SHARE &&
-  r.tokensSold <= r.tokensBought * OVERSOLD_SHARE;
+  r.tokensSold <= r.tokensBought * OVERSOLD_TOKENS &&
+  !(r.firstSellAt && r.firstBuyAt && r.firstSellAt < r.firstBuyAt);
 
 const emptyTiers = (): TierCounts => ({ graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0 });
 

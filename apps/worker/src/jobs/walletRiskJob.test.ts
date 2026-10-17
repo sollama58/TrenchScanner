@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
-import { prisma } from "@trenchscanner/core";
+import { prisma, STONKS_FEE_WALLET } from "@trenchscanner/core";
 import { runWalletRiskJob } from "./walletRiskJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -52,6 +52,26 @@ describe.skipIf(!dbAvailable)("wallet risk job", () => {
     });
     expect(row!.score).toBeGreaterThan(0);
     expect(await prisma.walletRisk.findUnique({ where: { wallet: once } })).toBeNull();
+  });
+
+  it("never scores the Stonk fee wallet, though tape rows from before it was left out remain", async () => {
+    for (const i of [0, 1]) {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-fees-${i}` } });
+      await prisma.tokenTradeTape.create({
+        data: {
+          tokenId: token.id,
+          anchorAt: new Date(),
+          reason: "called",
+          status: "done",
+          windowEnd: new Date(),
+        },
+      });
+      await prisma.tokenWalletActivity.create({
+        data: { tokenId: token.id, wallet: STONKS_FEE_WALLET, buys: 1, solIn: 0.000005 },
+      });
+    }
+    await runWalletRiskJob();
+    expect(await prisma.walletRisk.findUnique({ where: { wallet: STONKS_FEE_WALLET } })).toBeNull();
   });
 
   it("rewrites only rows whose figures changed, and deletes wallets that left the set", async () => {

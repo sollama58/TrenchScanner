@@ -477,6 +477,11 @@ model Token {
   /// Pump.fun's lists); null when none has. Feeds the launchpadStonks input and the filters'
   /// launchpad option.
   launchpad               String?
+  /// The wallet that launched the coin, from whichever source named it first: the PumpPortal
+  /// create event's signer, Pump.fun's coin `creator`, RugCheck's report, or the trade tape's
+  /// launch read (user bug report 2026-10-17: the token modal's Dev card read only the tape and
+  /// TokenSage, so most coins showed no creator). Never overwritten once set. Null = unknown.
+  creator                 String?
   /// The first scan that saw the mint inside the curated mcap band. Feeds the
   /// minutesSinceFirstInBand feature: a token that entered the band hours ago and is still
   /// there is a different bet from one arriving now.
@@ -824,6 +829,21 @@ model TopModelsPick {
   slotStart DateTime @id
   models    String[]
   pickedAt  DateTime @default(now())
+}
+
+/// A saved filter's criteria, frozen, that a model seat must see a token pass before it considers it
+/// (core curation/modelGate.ts, ContestantSpec.gate). Written once from the filter as it stood; later
+/// edits to the filter don't reach it.
+model ModelGate {
+  /// The gate id a seat names (e.g. "gemerald" for Gems).
+  id                      String    @id
+  /// The filter's criteria columns, as FilterCriteria.
+  criteria                Json
+  sourceFilterId          String
+  sourceFilterName        String
+  /// The source filter's criteriaChangedAt when it was copied: when those settings were last edited.
+  sourceCriteriaChangedAt DateTime?
+  frozenAt                DateTime  @default(now())
 }
 
 model CuratorLane {
@@ -1775,6 +1795,10 @@ model LighthouseHour {
   /// tokens' snapshots are all still kept (lighthouseRollupJob.ts SCREEN_RECOMPUTE_HOURS), then frozen.
   screenAccepted Int @default(0)
   screenRejected Int @default(0)
+
+  /// The summing rules the screened counts were last summed under (lighthouseRollupJob.ts
+  /// LIGHTHOUSE_ROLLUP_VERSION): an hour below it is re-summed once, while its rows are all kept.
+  rollupVersion Int @default(0)
 
   computedAt DateTime @default(now())
 }

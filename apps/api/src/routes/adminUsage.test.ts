@@ -1,6 +1,6 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { loadEnv, prisma, type Env } from "@trenchscanner/core";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
@@ -39,6 +39,27 @@ describe("readTokenSageUsage", () => {
       24,
     );
     expect(usage).toEqual({ configured: false, error: null, sources: [], helius: null });
+  });
+
+  it("sends the key over https only, upgrading an http:// URL that isn't local", async () => {
+    const urls = async (apiUrl: string): Promise<string[]> => {
+      const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      try {
+        await readTokenSageUsage(
+          { TOKENSAGE_API_URL: apiUrl, TOKENSAGE_MONITOR_KEY: "mk", TOKENSAGE_ADMIN_KEY: "" },
+          24,
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      return fetchMock.mock.calls.map((c) => String((c as unknown[])[0]));
+    };
+    for (const u of await urls("http://ts.example/"))
+      expect(u.startsWith("https://ts.example/admin/v1/")).toBe(true);
+    for (const u of await urls("ts.example")) expect(u.startsWith("https://ts.example/admin/v1/")).toBe(true);
+    for (const u of await urls("http://localhost:8000"))
+      expect(u.startsWith("http://localhost:8000/admin/v1/")).toBe(true);
   });
 });
 

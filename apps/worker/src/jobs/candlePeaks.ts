@@ -147,6 +147,7 @@ export async function runCandlePeaksJob(
       tokenId: true,
       candlesTrusted: true,
       athMcapUsd: true,
+      firstAlertAt: true,
       token: { select: { mintAddress: true } },
     },
   });
@@ -205,7 +206,12 @@ export async function runCandlePeaksJob(
 
 /** Writes one coin's alerts' peaks from its candles, and schedules its next read. */
 export async function applyCandlePeaks(
-  watch: { tokenId: string; candlesTrusted: boolean | null; athMcapUsd: number | null },
+  watch: {
+    tokenId: string;
+    candlesTrusted: boolean | null;
+    athMcapUsd: number | null;
+    firstAlertAt: Date;
+  },
   candles: MinuteCandle[],
   horizon: Date,
   readAt: Date,
@@ -245,11 +251,17 @@ export async function applyCandlePeaks(
     if ((after ?? 0) < (before ?? 0)) out.lowered += 1;
     else if ((after ?? 0) > (before ?? 0)) out.raised += 1;
   };
-  // The coin's ATH since its first alert is that alert's peak (its market cap if never above).
-  let ath: { alertAt: Date; mcap: number; at: Date | null; exact: boolean } | null = null;
+  // The coin's ATH since its first alert: the highest of its alerts' peaks (an alert's market cap
+  // if never above), each a high after the first alert. Only an exact read of the first alert
+  // itself covers the whole span and may replace the recorded ATH (lower included); a later
+  // alert's read, or a read that starts after its alert, can only raise it (a re-alert's small
+  // peak must not replace the run the first alert saw).
+  let ath: { mcap: number; at: Date | null } | null = null;
+  let athExact = false;
   const noteAth = (alertAt: Date, mcap: number, r: PeakWrite & { exact: boolean }) => {
-    if (ath !== null && ath.alertAt <= alertAt) return;
-    ath = { alertAt, mcap: r.peakMcapUsd ?? mcap, at: r.peakMcapAt, exact: r.exact };
+    const value = r.peakMcapUsd ?? mcap;
+    if (ath === null || value > ath.mcap) ath = { mcap: value, at: r.peakMcapAt };
+    if (r.exact && alertAt.getTime() === watch.firstAlertAt.getTime()) athExact = true;
   };
 
   for (const call of calls) {
@@ -310,7 +322,7 @@ export async function applyCandlePeaks(
     out.matches += 1;
   }
 
-  const coinAth = ath as { mcap: number; at: Date | null; exact: boolean } | null;
+  const coinAth = ath as { mcap: number; at: Date | null } | null;
   const last = candles.at(-1);
   const lastTradeAt = last ? new Date(last.startMs) : null;
   await prisma.peakWatch.update({
@@ -320,8 +332,8 @@ export async function applyCandlePeaks(
       lastTradeAt,
       nextCheckAt: new Date(readAt.getTime() + nextPeakCheckDelayMs(lastTradeAt, readAt.getTime())),
       candlesTrusted: trusted,
-      // An exact read replaces it; a read that starts after the first alert can only raise it.
-      ...(coinAth !== null && (coinAth.exact || coinAth.mcap > (watch.athMcapUsd ?? 0))
+      // An exact read of the first alert replaces it; anything else can only raise it.
+      ...(coinAth !== null && (athExact || coinAth.mcap > (watch.athMcapUsd ?? 0))
         ? { athMcapUsd: coinAth.mcap, athAt: coinAth.at }
         : {}),
     },

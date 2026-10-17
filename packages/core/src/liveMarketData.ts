@@ -152,6 +152,8 @@ export async function writeLiveMarketData(
  * follow on the worker's next pass (repairOutcomeBookkeeping keys off peakMcapAt). The peak is
  * stamped with the reading's time - the same liveDataAt just written - as the worker's own
  * live-ping statement stamps it, so "when it peaked" is when the price was seen, not written.
+ * A match whose peak the candles keep (peakCheckedAt) is left alone, as every worker writer does:
+ * the card folds "Now" into its Peak between candle reads, so nothing shown is lost.
  *
  * Failures are logged, not thrown: the market data itself is already saved.
  */
@@ -171,6 +173,8 @@ async function raiseMatchPeaks(
       "TokenSnapshot" alert
       WHERE m."tokenId" = v.id
         AND alert.id = m."snapshotId"
+        -- A peak the coin's own minute closes keep (candlePeaks.ts) is theirs, not a live reading's.
+        AND m."peakCheckedAt" IS NULL
         AND m."matchedAt" > now() - MAKE_INTERVAL(days => ${windowDays}::int)
         -- A reading taken before the alert (a lookup spans seconds) is not its peak; nor, on an
         -- alert priced from a fresh quote, one from the minute after it (see Match.alertMcapUsd).
@@ -189,6 +193,7 @@ async function raiseMatchPeaks(
  * it and above the call's market cap, as the live-ping statement in curatedPeaks.ts does. Without
  * it a call's high was only read off the Token's latest live reading on the worker's pass, so a
  * high between two passes was lost for the call while the filter alert on the same token kept it.
+ * Calls whose peak the candles keep (peakCheckedAt) are left alone, as for matches.
  */
 async function raiseCuratedPeaks(
   rows: readonly { id: string; mcap: number; at: Date }[],
@@ -204,6 +209,7 @@ async function raiseCuratedPeaks(
         ${rows.map((r) => r.at.toISOString())}::text[]::timestamptz[]
       ) AS v(id, mcap, at)
       WHERE c."tokenId" = v.id
+        AND c."peakCheckedAt" IS NULL
         AND c."createdAt" > now() - MAKE_INTERVAL(days => ${windowDays}::int)
         -- A reading from the first minute after the call still shows the market before it.
         AND v.at >= c."createdAt" + MAKE_INTERVAL(secs => ${CALL_PEAK_READING_LAG_MS / 1000}::int)

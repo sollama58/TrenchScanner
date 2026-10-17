@@ -113,10 +113,11 @@ import {
   type LinkedGroup,
 } from "./linkedWallets.js";
 import {
-  liveBuyersOf,
-  liveFlagsOf,
-  liveTradersOf,
-  liveWalletScoreOf,
+  liveBuyersOn,
+  liveFlagsOn,
+  livePageOf,
+  liveTradersOn,
+  liveWalletScoreOn,
   liveWindowFlowOf,
   readLiveTape,
   takeLiveTapeStats,
@@ -894,6 +895,7 @@ async function scanCycle(
       name: e.name,
       discoverySource: "pumpportal",
       launchpad: e.launchpad,
+      creator: e.creator,
     })),
     ...trending,
     ...active.map((c) => toWatchlistCandidate(c, "pumpfun-active")),
@@ -1137,6 +1139,11 @@ async function scanCycle(
     for (const [mint, profile] of recheck.profiles) rugProfiles.set(mint, profile);
     lap("rugCheckRecheck");
   }
+  // RugCheck names the creator of most coins it has a report for: kept on the token for its Dev
+  // card. Behind the cycle; settles to one read once every such coin has one.
+  void recordCreators(
+    [...rugProfiles].flatMap(([mint, p]) => (p.creator ? [[mint, p.creator] as const] : [])),
+  );
 
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
   // do. Only filters whose owner has access: see loadMatchableFilters.
@@ -1670,6 +1677,10 @@ async function scanCycle(
   // data-correctness audit): a coin decided on before, whose first call's tape the hourly scores
   // now count. Two queries for the cycle; nothing to read while the scores aren't loaded.
   const riskScale = walletRiskScale();
+  // Each candidate's live-tape page, taken once: the page readLiveTape left running past its budget
+  // can land between two reads, and the Wallet Score must read the page whose buyers the own-tape
+  // read excluded, or a new page's buyers could carry this coin's own result into it.
+  const livePages = new Map(candidates.map((c) => [c.mintAddress, livePageOf(c.mintAddress)] as const));
   const ownTapes = riskScale
     ? await ownTapesOf(
         candidates.map((c) => ({
@@ -1678,8 +1689,8 @@ async function scanCycle(
           wallets: [
             ...(onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []),
             ...(sniperWalletsFromCache(c.mintAddress) ?? []),
-            // The newest trades' buyers, for the Wallet Score reading (liveWalletScoreOf).
-            ...liveBuyersOf(c.mintAddress),
+            // The newest trades' buyers, for the Wallet Score reading (liveWalletScoreOn).
+            ...liveBuyersOn(livePages.get(c.mintAddress)),
           ],
         })),
         riskScale.builtAt,
@@ -1716,10 +1727,10 @@ async function scanCycle(
           sniperChainAvailable,
           freshQuotes.get(candidate.mintAddress),
           linkedByMint.get(candidate.mintAddress) ?? null,
-          liveFlagsOf(candidate.mintAddress, riskLookup),
+          liveFlagsOn(livePages.get(candidate.mintAddress), riskLookup),
           cexByMint.get(candidate.mintAddress) ?? null,
-          liveTradersOf(candidate.mintAddress, kolIs),
-          liveTradersOf(candidate.mintAddress, winnerIs),
+          liveTradersOn(livePages.get(candidate.mintAddress), kolIs),
+          liveTradersOn(livePages.get(candidate.mintAddress), winnerIs),
           kolBundledOf.get(candidate.mintAddress),
           transfersByMint.get(candidate.mintAddress) ?? null,
           exTransfersOf(
@@ -1732,7 +1743,11 @@ async function scanCycle(
           // Left off when the own-tape read failed: the buyers' scores could carry this coin's result.
           ownTapes === null
             ? null
-            : liveWalletScoreOf(candidate.mintAddress, riskLookup, ownTapes.get(candidate.mintAddress)),
+            : liveWalletScoreOn(
+                livePages.get(candidate.mintAddress),
+                riskLookup,
+                ownTapes.get(candidate.mintAddress),
+              ),
         ),
       );
     } catch (err) {
@@ -2232,6 +2247,35 @@ export async function saveMovingLaunches(
   }
 }
 
+/**
+ * Token.creator for the mints given that have none yet: one read for the rows still without one,
+ * a write per hit, so it settles to zero writes once every such mint has one. Never overwrites:
+ * the first source to name the launcher wins, and they all name the same wallet.
+ */
+export async function recordCreators(
+  pairs: Iterable<readonly [mint: string, creator: string]>,
+): Promise<void> {
+  const byMint = new Map<string, string>();
+  for (const [mint, creator] of pairs) if (looksLikeSolanaAddress(creator)) byMint.set(mint, creator);
+  if (byMint.size === 0) return;
+  await prisma.token
+    .findMany({
+      where: { mintAddress: { in: [...byMint.keys()] }, creator: null },
+      select: { mintAddress: true },
+    })
+    .then((rows) =>
+      Promise.all(
+        rows.map((row) =>
+          prisma.token.updateMany({
+            where: { mintAddress: row.mintAddress, creator: null },
+            data: { creator: byMint.get(row.mintAddress) },
+          }),
+        ),
+      ),
+    )
+    .catch((err) => logger.warn("failed to record creators", { error: String(err) }));
+}
+
 function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): WatchlistCandidate {
   return {
     mintAddress: coin.mintAddress,
@@ -2250,6 +2294,7 @@ function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): Wa
     discoverySource,
     // Pump.fun's own lists and PumpPortal carry Pump.fun coins alone.
     launchpad: coin.launchpad ?? PUMPFUN_LAUNCHPAD,
+    creator: coin.creator,
   };
 }
 
@@ -2358,7 +2403,12 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
     uniqueByMint.set(
       c.mintAddress,
       first
-        ? { ...first, boosted: first.boosted || c.boosted, launchpad: first.launchpad ?? c.launchpad }
+        ? {
+            ...first,
+            boosted: first.boosted || c.boosted,
+            launchpad: first.launchpad ?? c.launchpad,
+            creator: first.creator ?? c.creator,
+          }
         : c,
     );
   }
@@ -2396,9 +2446,14 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
       discoverySource: coin.discoverySource,
       dexBoosted: coin.boosted ?? false,
       launchpad: coin.launchpad,
+      creator: coin.creator,
     })),
     skipDuplicates: true,
   });
+
+  // The creator for mints already on the table that a source names now (a coin first found on
+  // DexScreener's feeds or Jupiter, or a row from before the column).
+  await recordCreators(valid.flatMap((c) => (c.creator ? [[c.mintAddress, c.creator] as const] : [])));
 
   // The launchpad for mints already on the table that a source names now (a coin first found on
   // DexScreener's feeds, which never say). Settles to zero rows once every such mint has one.
@@ -3543,7 +3598,8 @@ export function exTransfersOf(
   return {
     linkedWalletPct: base.linkedWalletPct,
     linkedWalletCount: base.linkedWalletCount,
-    linkedCreatorPct: base.linkedCreatorPct,
+    // The direct ties alone: the models' definition until the retrain (linkedCreatorDirectPct).
+    linkedCreatorPct: base.linkedCreatorDirectPct,
     // Without transfers' own figures where they were read (a KOL's sends carry its bundle on
     // even when the clusters stand), else the counted ones, which then read the same.
     kolBundled: changed ? kolBundledBase : (kolBundledBase ?? kolBundled),

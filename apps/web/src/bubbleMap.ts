@@ -23,6 +23,7 @@ export interface WideHolder {
   sniper?: boolean;
   fresh?: boolean;
   empty?: boolean;
+  creatorTied?: boolean;
 }
 
 /**
@@ -77,6 +78,7 @@ export const MOMENT_FIELDS = [
   "bundledSupplyPctExTransfers",
   "bundledSupplyCountExTransfers",
   "linkedClustersExTransfers",
+  "linkedCreatorPct",
 ] as const satisfies readonly (keyof Snapshot)[];
 
 /**
@@ -241,6 +243,7 @@ function withTraits(holders: WideHolder[], read: Snapshot["linkedHolders"] | und
       ...(r.sniper ? { sniper: true } : {}),
       ...(r.fresh ? { fresh: true } : {}),
       ...(r.empty ? { empty: true } : {}),
+      ...(r.creatorTied ? { creatorTied: true } : {}),
     };
   });
 }
@@ -449,6 +452,8 @@ export interface MapNode {
   trait?: WalletTrait | null;
   /** On the KOL list: its name ("" when unnamed). Absent or null otherwise. */
   kol?: string | null;
+  /** Counted in the supply tied to the creator (tiedHolders). */
+  creatorTied?: boolean;
   /** Risk score 0-100 from the wallet risk scores, when known. */
   score: number | null;
   dumps: number | null;
@@ -550,6 +555,9 @@ export interface BubbleGraph {
    * steps out through (kolControl's kolClusters). Absent: the drawn clusters stand for them.
    */
   fundingClusters?: Cluster[];
+  /** Supply tied to the creator, and how many holders on the map hold it; null when not read. */
+  creatorPct: number | null;
+  creatorCount: number | null;
   /** Transferred Supply %: the coin moved holder to holder among the top 25, as read; null when not read. */
   transferPct: number | null;
   /** How many of the top holders sent or got a transfer, of how many were checked; null when not read. */
@@ -622,6 +630,7 @@ export function buildGraph(
     | "transferHoldersChecked"
     | "holderTransfers"
   > &
+    Partial<Pick<Snapshot, "linkedCreatorPct">> &
     WideReading,
   flagged: readonly FlaggedHolder[] = [],
 ): BubbleGraph {
@@ -636,6 +645,7 @@ export function buildGraph(
     ),
   );
   const traits = new Map((snapshot.linkedHolders ?? []).flatMap((h) => (h ? [[h.wallet, traitOf(h)]] : [])));
+  const tied = tiedHolders(snapshot);
   const nodes: MapNode[] = [];
   const links: MapLink[] = [];
   const seen = new Set<string>();
@@ -652,6 +662,7 @@ export function buildGraph(
       flags: flagsOf(f),
       trait: traits.get(wallet) ?? null,
       kol: kolOf(f),
+      ...(tied.has(wallet) ? { creatorTied: true } : {}),
       score: f?.score ?? null,
       dumps: f?.dumps ?? null,
       count: 1,
@@ -776,6 +787,8 @@ export function buildGraph(
         ? { linked: snapshot.cexFundedCount, of: snapshot.cexFundedHolders }
         : null,
     cexPct: snapshot.cexFundedPct ?? null,
+    creatorPct: snapshot.linkedCreatorPct ?? null,
+    creatorCount: snapshot.linkedCreatorPct == null ? null : nodes.filter((n) => n.creatorTied).length,
     transferLinks: transferLinksOf(snapshot.holderTransfers ?? [], nodes),
     transferPct: snapshot.transferredSupplyPct ?? null,
     transferCount:
@@ -791,6 +804,21 @@ export function buildGraph(
     holdersRead: snapshot.holdersRead ?? null,
     top10Pct: top10,
   };
+}
+
+/**
+ * The holders tied to the creator (user ask 2026-10-17): each one the scan counted in
+ * linkedCreatorPct (linkedHolders' creatorTied). A scan from before it marked them, with creator-tied
+ * supply, falls back on the clusters that hold any: the whole cluster, as those scans tagged it.
+ */
+export function tiedHolders(
+  s: Pick<Snapshot, "linkedHolders" | "linkedClusters"> & Partial<Pick<Snapshot, "linkedCreatorPct">>,
+): Set<string> {
+  const marked = (s.linkedHolders ?? []).filter((h) => h?.creatorTied).map((h) => h.wallet);
+  if (marked.length > 0 || s.linkedCreatorPct === 0) return new Set(marked);
+  return new Set(
+    (s.linkedClusters ?? []).flatMap((c) => (c?.creatorLinked ? (c.wallets ?? []).map((w) => w.wallet) : [])),
+  );
 }
 
 /**
@@ -1099,6 +1127,8 @@ export interface KolControl {
  * `kolClusters`: the clusters funding alone forms, for the step out by funder, so a wallet that
  * sent the coin into a bundle (often bait) isn't pulled in by the transfer (user decision
  * 2026-10-16); absent, the map's own clusters.
+ * `isService`: an exchange or launchpad wallet, whose transfers link no one (as core's
+ * linkingTransfers leaves them out).
  */
 export function kolControl(
   graph: Pick<BubbleGraph, "nodes">,
@@ -1106,6 +1136,7 @@ export function kolControl(
   kols: readonly { wallet: string; name: string | null }[] = [],
   transfers: readonly Pick<TransferLink, "from" | "to" | "pct">[] = [],
   kolClusters?: readonly Pick<Cluster, "wallets">[],
+  isService: (wallet: string) => boolean = () => false,
 ): KolControl[] {
   // Each holder's funder cluster for the step out: funding alone where given.
   const clusterOf = new Map<string, number>();
@@ -1124,7 +1155,7 @@ export function kolControl(
   for (const t of transfers) {
     const from = byId.get(t.from)?.wallet;
     const to = byId.get(t.to)?.wallet;
-    if (!from || !to || from === to) continue;
+    if (!from || !to || from === to || isService(from) || isService(to)) continue;
     const held = holders.get(from)!.pct + t.pct;
     if (t.pct < BUNDLE_TRANSFER_MIN_PCT && !(held > 0 && t.pct >= held * BUNDLE_TRANSFER_MIN_SHARE)) continue;
     sentTo.set(from, [...(sentTo.get(from) ?? []), to]);

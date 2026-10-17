@@ -69,7 +69,7 @@ describe("walletLabels", () => {
       { kolWallet: W, kolName: null, pct: 91, shared: 30, kolCoins: 33, hours: 36 },
     ];
     const labels = walletLabels({ ...base, possibleSides: sides });
-    expect(labels.map((l) => l.text)).toEqual(["Ansem Possible Side (93%)", "Wa11…1111 Possible Side (91%)"]);
+    expect(labels.map((l) => l.text)).toEqual(["Ansem Probable Side (93%)", "Wa11…1111 Probable Side (91%)"]);
     expect(labels[0]!.detail).toContain("In the last 36 hours it bought 28 of the KOL's 30");
   });
 

@@ -15,7 +15,7 @@ import {
 
 /**
  * The Lighthouse's safety-screen share image: the share of new tokens that cleared the safety
- * screen against the share it turned away as Likely Rugs, on one sliding scale, in the shared
+ * screen against the share it turned away as Probable Rugs, on one sliding scale, in the shared
  * branded frame (shareCard.ts).
  */
 export interface SafetyCardData {
@@ -33,7 +33,7 @@ const BAD = "#f87171";
 /**
  * The two shares as shown side by side, adding up to 100: one decimal for both when the smaller
  * one is under 10% (so 3.4% / 96.6%, not 3.4% / 97%), and the accepted side taken from the
- * rounded Likely Rugs figure so the pair never reads 100.4% or 99%.
+ * rounded Probable Rugs figure so the pair never reads 100.4% or 99%.
  */
 export function splitPctText(okPct: number, rugPct: number): { ok: string; rug: string } {
   const low = Math.min(okPct, rugPct);
@@ -58,7 +58,7 @@ export async function renderSafetyCard(d: SafetyCardData): Promise<HTMLCanvasEle
   frame(
     ctx,
     icon,
-    "How many new tokens are Likely Rugs?",
+    "How many new tokens are Probable Rugs?",
     since
       ? `Every token we scanned since ${since}, through our safety screen.`
       : `Every token we scanned in the last ${d.span}, through our safety screen.`,
@@ -90,9 +90,9 @@ export async function renderSafetyCard(d: SafetyCardData): Promise<HTMLCanvasEle
   ctx.fillText(text.rug, x1, BODY_TOP + 96);
   ctx.fillStyle = INK2;
   ctx.font = `600 22px ${FONT}`;
-  ctx.fillText(`Likely Rugs · ${d.rejected.toLocaleString("en-US")} tokens`, x1, BODY_TOP + 134);
+  ctx.fillText(`Probable Rugs · ${d.rejected.toLocaleString("en-US")} tokens`, x1, BODY_TOP + 134);
 
-  // The scale: accepted fills from the left, Likely Rugs from the right, the knob at the split.
+  // The scale: accepted fills from the left, Probable Rugs from the right, the knob at the split.
   const ty = BODY_TOP + 176;
   const th = 30;
   ctx.fillStyle = TRACK;

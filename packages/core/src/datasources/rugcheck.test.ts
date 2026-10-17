@@ -135,7 +135,7 @@ describe("toProfile", () => {
     expect(profile.top10HolderPct).toBeCloseTo(4);
   });
 
-  it("leaves Stonks' fee wallet out of a Stonks coin's holders, and keeps it on any other coin", () => {
+  it("leaves Stonks' fee wallet out of every coin's holders", () => {
     const holders = [
       { address: "FeeAcct1111111111111111111111111111111111111", owner: STONKS_FEE_WALLET, pct: 6 },
       {
@@ -144,22 +144,12 @@ describe("toProfile", () => {
         pct: 4,
       },
     ];
-    // As RugCheck's report gives a Stonks coin's fee authority (BOO, 48uUy..., 2026-10-16).
-    const stonks = toProfile(
-      MINT,
-      baseReport({
-        topHolders: holders,
-        token_extensions: { transferFeeConfig: { withdrawWithheldAuthority: STONKS_FEE_WALLET } },
-      }),
-    );
-    expect(stonks.largestHolderPct).toBeCloseTo(4);
-    expect(stonks.top10HolderPct).toBeCloseTo(4);
-    expect(stonks.top10HolderAddresses).not.toContain(STONKS_FEE_WALLET);
-    const byLaunchpad = toProfile(MINT, baseReport({ topHolders: holders, launchpad: "stonkfun" }));
-    expect(byLaunchpad.largestHolderPct).toBeCloseTo(4);
-    const other = toProfile(MINT, baseReport({ topHolders: holders }));
-    expect(other.largestHolderPct).toBeCloseTo(6);
-    expect(other.top10HolderAddresses).toContain(STONKS_FEE_WALLET);
+    for (const launchpad of ["stonkfun", "pump_fun", null]) {
+      const profile = toProfile(MINT, baseReport({ topHolders: holders, launchpad }));
+      expect(profile.largestHolderPct).toBeCloseTo(4);
+      expect(profile.top10HolderPct).toBeCloseTo(4);
+      expect(profile.top10HolderAddresses).not.toContain(STONKS_FEE_WALLET);
+    }
   });
 
   it("keeps a multisig vault as a holder: program-derived, but someone can sell from it", () => {

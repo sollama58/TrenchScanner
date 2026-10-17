@@ -66,6 +66,8 @@ interface Ceilings {
   maxBuySol: number | null;
   maxDailySpendSol: number | null;
   maxSlippageBps: number | null;
+  /** Exits' own slippage ceiling (TRADING_MAX_EXIT_SLIPPAGE_BPS); absent from older API builds. */
+  maxExitSlippageBps?: number | null;
   maxPriorityFeeSol: number | null;
 }
 interface Position {
@@ -229,8 +231,8 @@ function BotOff({ status }: { status: TradingStatus }) {
             </span>
             <h2>Server ceilings</h2>
             <p className="muted small">
-              None by default: each admin sets their own bot&apos;s limits. A TRADING_MAX_* setting on the
-              server adds a ceiling no bot can pass.
+              None by default but exit slippage: each admin sets their own bot&apos;s limits. A TRADING_MAX_*
+              setting on the server adds a ceiling no bot can pass.
             </p>
           </div>
         </header>
@@ -244,8 +246,14 @@ function BotOff({ status }: { status: TradingStatus }) {
             <dd className="num">{ceiling(l.maxDailySpendSol, " SOL")}</dd>
           </div>
           <div>
-            <dt>Slippage</dt>
+            <dt>Entry slippage</dt>
             <dd className="num">{ceiling(l.maxSlippageBps === null ? null : l.maxSlippageBps / 100, "%")}</dd>
+          </div>
+          <div>
+            <dt>Exit slippage</dt>
+            <dd className="num">
+              {ceiling(l.maxExitSlippageBps == null ? null : l.maxExitSlippageBps / 100, "%")}
+            </dd>
           </div>
           <div>
             <dt>Priority fee per swap</dt>
@@ -819,12 +827,14 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
                   type="number"
                   step="any"
                   min={0.01}
-                  max={100}
+                  max={(defaults.maxExitSlippageBps ?? 10_000) / 100}
                   value={draft.exitSlippageBps / 100}
                   onChange={(e) => edit({ ...draft, exitSlippageBps: Math.round(num(e.target.value) * 100) })}
                 />
                 <small className="faint">
                   The least a stop, trail or timed exit sells with, so it gets out.
+                  {defaults.maxExitSlippageBps != null &&
+                    ` At most ${defaults.maxExitSlippageBps / 100}% on this server.`}
                 </small>
               </label>
               <label className="field">
@@ -833,7 +843,7 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
                   type="number"
                   step="any"
                   min={0.01}
-                  max={100}
+                  max={(defaults.maxExitSlippageBps ?? 10_000) / 100}
                   value={draft.exitSlippageMaxBps / 100}
                   onChange={(e) =>
                     edit({ ...draft, exitSlippageMaxBps: Math.round(num(e.target.value) * 100) })
@@ -1486,7 +1496,9 @@ interface PaperStrategy {
     closed: number;
     wins: number;
     winRate: number | null;
+    /** Entries whose signal won its 2x verdict, of those graded (open signals count in neither). */
     hit2x: number;
+    graded: number;
     hit2xRate: number | null;
   };
   positions: PaperPosition[];
@@ -1506,6 +1518,7 @@ const NO_CEILINGS: Ceilings = {
   maxBuySol: null,
   maxDailySpendSol: null,
   maxSlippageBps: null,
+  maxExitSlippageBps: null,
   maxPriorityFeeSol: null,
 };
 const rate = (r: number | null) => (r === null ? "–" : `${Math.round(r * 100)}%`);
@@ -1828,7 +1841,7 @@ function PaperStrategyCard({
           <dd className={`num ${s.stats.hit2xRate !== null && s.stats.hit2xRate >= 0.75 ? "up" : ""}`}>
             {rate(s.stats.hit2xRate)}{" "}
             <span className="faint">
-              {s.stats.hit2x} of {s.stats.entries}
+              {s.stats.hit2x} of {s.stats.graded} graded
             </span>
           </dd>
         </div>

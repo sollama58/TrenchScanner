@@ -57,6 +57,7 @@ describe("withLinkedWallets: launch snipers among the top holders", () => {
     linkedWalletsChecked: 4,
     linkedLargestClusterPct: 0,
     linkedCreatorPct: 0,
+    linkedCreatorDirectPct: 0,
     clusters: [],
     holders: [
       { wallet: "A", pct: 5 },

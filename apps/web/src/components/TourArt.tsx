@@ -283,11 +283,11 @@ export function KolArt() {
   const tied = [
     ["kol", "1 Known Side"],
     ["kol", "1 KOL Funded"],
-    ["side", "1 possible side"],
+    ["side", "1 probable side"],
     ["a", "1 same funder"],
   ];
   return (
-    <Art label="A KOL's bubble in gold, tied to a Known Side and a wallet it funded, a possible side wallet on a dotted gold line, and a holder sharing its funder: together 12.1% of supply">
+    <Art label="A KOL's bubble in gold, tied to a Known Side and a wallet it funded, a probable side wallet on a dotted gold line, and a holder sharing its funder: together 12.1% of supply">
       <path className="bm-link kol" d={`M${kol[0]} ${kol[1]} L${known[0]} ${known[1]}`} />
       <path className="bm-link kol" d={`M${kol[0]} ${kol[1]} L${funded[0]} ${funded[1]}`} />
       <path className="bm-link side" d={`M${kol[0]} ${kol[1]} L${side[0]} ${side[1]}`} />

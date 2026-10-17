@@ -26,6 +26,7 @@ import {
   callPeakPct,
   callPeakAt,
   foldedCallPeakPct,
+  matchPeakPct,
   type CallGroup,
   type CuratedAlertWithRelations,
   type ModelCall,
@@ -326,6 +327,8 @@ export const MATCH_OUTCOME_SELECT = {
   hit10xIn1h: true,
   disqualified: true,
   peak24hReturnPct: true,
+  // Whether the candles keep its peak (matchPeakPct): then its watcher run peak no longer counts.
+  peakCheckedAt: true,
 } satisfies Prisma.MatchSelect;
 type MatchOutcomeRow = Prisma.MatchGetPayload<{ select: typeof MATCH_OUTCOME_SELECT }>;
 
@@ -419,6 +422,7 @@ export const STATS_CALL_SELECT = {
   anchorMcapUsd: true,
   peakMcapUsd: true,
   peakMcapAt: true,
+  peakCheckedAt: true,
   candidateOutcome: curatedAlertInclude.candidateOutcome,
   token: { select: { symbol: true } },
 } satisfies Prisma.CuratedAlertSelect;
@@ -462,7 +466,7 @@ export function feedStatsCards(
       symbol: m.token.symbol,
       outcome,
       // The card's ATH figure for a filter alert.
-      peakPct: m.peakReturnPct ?? outcome.peak24hReturnPct,
+      peakPct: matchPeakPct(m, outcome.peak24hReturnPct),
       curated: null,
     };
   });
@@ -830,6 +834,7 @@ export async function registerMatchRoutes(
                 outcomeFinalizedAt: true,
                 anchorMcapUsd: true,
                 peakMcapUsd: true,
+                peakCheckedAt: true,
                 candidateOutcome: {
                   select: { ...curatedAlertInclude.candidateOutcome.select, ...RUN_PEAK_SELECT },
                 },
@@ -890,7 +895,7 @@ export async function registerMatchRoutes(
         at: m.matchedAt,
         returnPct: row?.simReturnPct ?? null,
         // The card's Peak for a filter alert: its tracked ATH, else its grading row's run peak.
-        peakPct: m.peakReturnPct ?? m.peak24hReturnPct ?? runPeakPct(row),
+        peakPct: matchPeakPct(m, m.peak24hReturnPct ?? runPeakPct(row)),
         source: { filterId: m.filterId },
         passed: callPassed(matchOutcome(m, rowById)),
         curated: null,

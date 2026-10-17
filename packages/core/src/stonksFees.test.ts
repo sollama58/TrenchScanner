@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  feeHoldersOf,
+  FEE_HOLDERS,
   isStonksCoin,
   PLATFORM_WALLETS,
   STONKS_FEE_WALLET,
@@ -22,9 +22,8 @@ describe("Stonks' fee wallet", () => {
     expect(isStonksCoin({})).toBe(false);
   });
 
-  it("is left out of a Stonks coin's holders only", () => {
-    expect([...feeHoldersOf({ launchpad: "stonks" })]).toEqual([STONKS_FEE_WALLET]);
-    expect(feeHoldersOf({ launchpad: "pumpfun" }).size).toBe(0);
+  it("is left out of every coin's holders", () => {
+    expect([...FEE_HOLDERS]).toEqual([STONKS_FEE_WALLET]);
   });
 
   it("reads the fee authority from the RPC's extension list and from RugCheck's extension object", () => {

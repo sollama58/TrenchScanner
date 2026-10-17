@@ -25,9 +25,11 @@ import {
   RETIRED_LEARNER_INPUTS,
   lockCuratorModelWrites,
   DISQUALIFYING_DRAWDOWN_FRACTION,
-  walletSafetyCutsSql,
+  passesWalletSafetyCuts,
   maskKnownBadInputs,
   isPreFeeWalletStonksRow,
+  withLaunchAge,
+  AGE_FROM_LAUNCH_SINCE,
   TRAINING_ROW_RULES_SINCE,
   trainingWeightByAge,
   MAX_EVENT_AGE_MINUTES,
@@ -58,6 +60,10 @@ import {
   judgeProbation,
   type Challenger,
   type TrainedCuratorParams,
+  gatesById,
+  loadModelGates,
+  GEMERALD_ASKED_AT,
+  GEMERALD_GATE,
 } from "@trenchscanner/core";
 import { RunProgress } from "../runProgress.js";
 import { runContestOffThread } from "../training/runContest.js";
@@ -175,6 +181,25 @@ async function trainCurators(
   const narrativeRows = contestants.some((c) => c.role === "narrative")
     ? await narrativeTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS)
     : [];
+  // The gated seats' frozen filters (Gems, curation/modelGate.ts). Only read while one is on the roster.
+  const storedGates = contestants.some((c) => c.gate !== undefined) ? await loadModelGates() : [];
+  const gates = gatesById(storedGates);
+  for (const c of contestants) {
+    if (c.gate !== undefined && !(c.gate in gates)) {
+      logger.warn("gated seat has no stored gate - it sits out and calls nothing", {
+        contestant: c.id,
+        gate: c.gate,
+      });
+    }
+  }
+  // The copy was asked for as Gemerald stood then; one taken after a later edit says so.
+  const gemerald = storedGates.find((g) => g.id === GEMERALD_GATE);
+  if (gemerald?.sourceCriteriaChangedAt && gemerald.sourceCriteriaChangedAt > GEMERALD_ASKED_AT) {
+    logger.warn("Gems' gate copied Gemerald after an edit made since it was asked for", {
+      editedAt: gemerald.sourceCriteriaChangedAt.toISOString(),
+      askedAt: GEMERALD_ASKED_AT.toISOString(),
+    });
+  }
 
   // A takeover on probation is settled first: confirmed (its challenger takes the seat this
   // run), rejected or abandoned (breeding resumes), or still waiting (no breeding this run).
@@ -215,15 +240,19 @@ async function trainCurators(
       rulesTeachers,
       currentRules,
       narrativeRows,
+      gates,
     },
     plan ?? undefined,
     (step, done, total) => progress.step(`${step} (${done + 1} of up to ${total})`),
   );
   const { results } = outcome;
-  // The Narrative seat sits out until it has rows enough (NARRATIVE_MIN_ROWS); its running
-  // model, if any, stays active rather than retiring with the generation.
+  // The Narrative seat sits out until it has rows enough (NARRATIVE_MIN_ROWS), a gated seat until its
+  // gate is stored and lets enough through (GATED_MIN_ROWS); a running model, if any, stays active
+  // rather than retiring with the generation.
   const kept = contestants
-    .filter((c) => c.role === "narrative" && !results.some((r) => r.contestant === c.id))
+    .filter(
+      (c) => (c.role === "narrative" || c.gate !== undefined) && !results.some((r) => r.contestant === c.id),
+    )
     .map((c) => c.id);
   if (results.length === 0) {
     logger.info("contest training produced nothing to store", { rows: trainingRows.length });
@@ -950,9 +979,14 @@ export async function narrativeTrainingRows(
   maxRows: number,
   pageRows = LOAD_PAGE_ROWS,
 ): Promise<TrainingRow[]> {
-  return (await loadRowsOfKind("second", windowStart, maxRows, pageRows))
-    .filter((r) => r.features.nsDepthFull === 1)
-    .map((r) => ({ ...r, sampleKind: "event" }));
+  return (
+    (await loadRowsOfKind("second", windowStart, maxRows, pageRows))
+      .filter((r) => r.features.nsDepthFull === 1)
+      .map((r) => ({ ...r, sampleKind: "event" }))
+      // Held to today's decision pre-gate as an event row is (the 3h age cap, the old-coin
+      // momentum test): second looks banked under the older 6h cap can't be decided on any more.
+      .filter((r) => isDecisionRow(r))
+  );
 }
 
 /** What loadTrainingRows kept, for the run's log: how deep each kind reaches and whether the cap bound. */
@@ -1054,6 +1088,8 @@ interface LoadedRow {
   rule4Grade: unknown;
   /** Set when the row was born rule 3 and the re-grade rewrote it in place (labelRegradeJob.ts). */
   rule3Grade: unknown;
+  /** The token's launch time (Token.launchedAt), for the rebuilt age of an older graduated row. */
+  launchedAt: Date | null;
 }
 
 /** The grade fields trainingGradeOf reads from a stored rule4Grade. */
@@ -1141,6 +1177,9 @@ export function withFixedShape<T>(stored: T): T {
   return out as T;
 }
 
+/** The row's token's launch time, as a scalar subquery on the unaliased CandidateOutcome row. */
+const launchedAtSql = Prisma.sql`SELECT t."launchedAt" FROM "Token" t WHERE t."id" = "CandidateOutcome"."tokenId"`;
+
 async function loadRowsOfKind(
   sampleKind: "hourly" | "event" | "second",
   windowStart: Date,
@@ -1161,32 +1200,37 @@ async function loadRowsOfKind(
   // (2026-10-05): a live decision can no longer be one, so they neither train nor grade.
   // Background rows are held to the same cap (data-correctness audit 2026-10-16): 27% of them
   // were coins over six hours old doubling about 1%, a market no decision can come from. The cap
-  // itself is 3 hours since 2026-10-16 (age-cap experiment, same note folder).
-  const ageSql =
-    sampleKind === "event" || sampleKind === "hourly"
-      ? Prisma.sql`AND COALESCE(("features"::jsonb ->> 'ageMinutes')::float8, 0) <= ${MAX_EVENT_AGE_MINUTES}`
-      : Prisma.empty;
+  // itself is 3 hours since 2026-10-16 (age-cap experiment, same note folder). The Narrative
+  // seat's second looks are decision moments for that seat and are held to it too. On a graduated
+  // row banked before AGE_FROM_LAUNCH_SINCE the stored age may be the pool's, so the cap reads the
+  // age rebuilt from the launch where the Token has one, as withLaunchAge rebuilds the input.
+  const ageSql = Prisma.sql`AND COALESCE(
+      CASE WHEN "anchorAt" < ${AGE_FROM_LAUNCH_SINCE}
+        AND ("features"::jsonb ->> 'graduated')::float8 = 1
+        AND ("features"::jsonb ->> 'ageSource') IS NULL
+        AND ("features"::jsonb ->> 'ageMinutes') IS NOT NULL
+      THEN GREATEST(0, EXTRACT(EPOCH FROM ("anchorAt" - (${launchedAtSql}))) / 60) END,
+      ("features"::jsonb ->> 'ageMinutes')::float8,
+      0
+    ) <= ${MAX_EVENT_AGE_MINUTES}`;
   const out: TrainingRow[] = [];
   let cursor: { anchorAt: Date; id: string } | undefined;
   let pages = 0;
   while (out.length < maxRows && pages < LOAD_MAX_PAGES) {
     pages += 1;
     const take = Math.min(pageRows, maxRows - out.length);
-    // A token the safety screen rejects today never reaches a curator, so a row banked before
-    // the cut was tightened (mostly farm launches that pump, then rug) neither trains nor grades.
-    // The cut is in the query (walletSafetyCutsSql - the same condition the reports count by),
-    // not applied to the page afterwards: filtered client-side, each page came back short of
-    // `take` by however many it dropped, and a window of mostly rejected rows cost its pages
-    // in full for a few rows kept. Keyset-paged on (anchorAt, id), newest first.
+    // Keyset-paged on (anchorAt, id), newest first. The safety screen's cut is applied to each
+    // row after its inputs are masked (below), not in the query: live, the screen reads the
+    // inputs as they mean today.
     const page = await prisma.$queryRaw<LoadedRow[]>`
       SELECT "id", "tokenId", "anchorAt", "features", "labelValue", "anchorPriceUsd",
              "signalPriceUsd", "anchorMcapUsd", "sampleKind", "labelRule", "maxDrawdown1hPct",
-             "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h", "rule4Grade", "rule3Grade"
+             "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h", "rule4Grade", "rule3Grade",
+             (${launchedAtSql}) AS "launchedAt"
       FROM "CandidateOutcome"
       WHERE "finalizedAt" IS NOT NULL
         AND "anchorAt" >= ${windowStart}
         AND "sampleKind" = ${sampleKind}
-        AND ${walletSafetyCutsSql()}
         ${bandSql}
         ${ageSql}
         ${cursor !== undefined ? Prisma.sql`AND ("anchorAt", "id") < (${cursor.anchorAt}, ${cursor.id})` : Prisma.empty}
@@ -1209,11 +1253,22 @@ async function loadRowsOfKind(
       if (isPreFeeWalletStonksRow(r.anchorAt, r.features as Record<string, number | null>)) continue;
       // Inputs known to be wrong on old rows (fake order-flow zeros, the inputs hourly rows were
       // banked ahead of until HOURLY_ROWS_WAIT_SINCE) read as missing.
-      const features = maskKnownBadInputs(
-        r.anchorAt,
-        withFixedShape(r.features as Record<string, number | null>),
-        sampleKind,
-      );
+      const stored = withFixedShape(r.features as Record<string, number | null>);
+      const masked = maskKnownBadInputs(r.anchorAt, stored, sampleKind);
+      // A token the safety screen rejects today never reaches a curator, so a row banked before
+      // the cut was tightened (mostly farm launches that pump, then rug) neither trains nor grades.
+      // Judged on the inputs as they mean today (an era-masked input is unknown, and the screen
+      // passes an unknown), so the row set matches what the live screen lets through. Not on the
+      // hourly-wait mask: that one hides readings that were real when present.
+      if (
+        !passesWalletSafetyCuts(sampleKind === "hourly" ? maskKnownBadInputs(r.anchorAt, stored) : masked)
+      ) {
+        continue;
+      }
+      // An older graduated row's age as live reads it today: from the launch, not the pool. A row
+      // whose true age is unknown and may be past the age cap leaves the set.
+      const features = withLaunchAge(r.anchorAt, masked, loaded.launchedAt);
+      if (features === null) continue;
       // A row re-graded in place (born rule 3 after the fresh quotes began, no usable quote at the
       // scan) had its fresh-price gap overwritten with the candle re-grade's, measured after the
       // decision: live, the same no-quote decision carries no gap at all.

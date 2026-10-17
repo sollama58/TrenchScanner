@@ -126,7 +126,32 @@ export interface TokenChart {
   live: { readAt: number } | null;
   /** Flagged wallets in the live readings and the tape, with their trades to mark. */
   wallets: MarkedWallet[];
+  /**
+   * How each top holder got in and what it has sold, from the trade tape (TokenWalletActivity):
+   * the top-holder list's line under each wallet (user ask 2026-10-17). Every tape wallet on the
+   * newest holder list, and the tape's largest holders at its anchor. Empty until the tape is read.
+   */
+  holderEntries: Record<string, HolderEntry>;
 }
+
+/** One holder's trades in the coin, as the trade tape read them. */
+export interface HolderEntry {
+  /** Its first buy, ms; null when it never bought (the coin came by transfer). */
+  firstBuyAt: number | null;
+  /** Seconds from the launch to that buy; null when the tape didn't read the launch. */
+  afterLaunchS: number | null;
+  /** 1-25 when among the launch's first 25 buyers. */
+  firstBuyerRank: number | null;
+  buys: number;
+  sells: number;
+  solIn: number;
+  solOut: number;
+  /** Share of what it bought that it has sold since, 0-1; null when it bought none. */
+  soldShare: number | null;
+}
+
+/** The tape's largest holders at its anchor that get a holder entry, besides the newest list's. */
+const ENTRY_TOP_AT_ANCHOR = 60;
 
 /** Snapshots whose live-tape readings the chart folds in, newest first: hours of a busy coin. */
 const LIVE_SNAPSHOTS = 60;
@@ -141,7 +166,7 @@ let candleCache = new CandleCache(pumpFunCandleFetcher());
 export function setCandleFetcherForTests(fetcher: CandleFetcher): void {
   candleCache = new CandleCache(fetcher);
 }
-type ChartWallets = Pick<TokenChart, "tape" | "live" | "wallets">;
+type ChartWallets = Pick<TokenChart, "tape" | "live" | "wallets" | "holderEntries">;
 const walletCache = new KeyedCache<ChartWallets>(WALLETS_CACHE_MS);
 
 /**
@@ -151,21 +176,26 @@ const walletCache = new KeyedCache<ChartWallets>(WALLETS_CACHE_MS);
  * its newest snapshot that has them.
  */
 async function chartWallets(tokenId: string): Promise<ChartWallets> {
-  const [tape, rows, clustered, liveSnaps] = await Promise.all([
+  const [tape, rows, clustered, listed, liveSnaps] = await Promise.all([
     prisma.tokenTradeTape.findUnique({
       where: { tokenId },
-      select: { status: true, anchorAt: true, windowEnd: true, readAt: true },
+      select: { status: true, anchorAt: true, windowEnd: true, readAt: true, launchAt: true },
     }),
     prisma.tokenWalletActivity.findMany({
       where: { tokenId },
       select: {
         wallet: true,
         isCreator: true,
+        buys: true,
+        sells: true,
         solIn: true,
         solOut: true,
+        tokensBought: true,
+        tokensSold: true,
         heldPctAtAnchor: true,
         firstBuyAt: true,
         firstSellAt: true,
+        firstBuyerRank: true,
         trades: true,
       },
     }),
@@ -173,6 +203,11 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
       where: { tokenId, linkedClusters: { not: Prisma.DbNull } },
       orderBy: { takenAt: "desc" },
       select: { linkedClusters: true },
+    }),
+    prisma.tokenSnapshot.findFirst({
+      where: { tokenId, linkedHolders: { not: Prisma.DbNull } },
+      orderBy: { takenAt: "desc" },
+      select: { linkedHolders: true },
     }),
     // A reading with no flagged trades still counts: it says none traded before the call.
     prisma.tokenSnapshot.findMany({
@@ -222,7 +257,68 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
       : null,
     live: liveSnaps[0] ? { readAt: liveSnaps[0].takenAt.getTime() } : null,
     wallets: withLiveTrades(markedWallets(rows, risk, clusters, opts, kols, knownSides), live, risk, opts),
+    holderEntries: holderEntries(rows, listedWallets(listed?.linkedHolders), tape),
   };
+}
+
+/** The wallets on a snapshot's holder list (linkedHolders), when it is one. */
+function listedWallets(list: unknown): Set<string> {
+  if (!Array.isArray(list)) return new Set();
+  return new Set(
+    list.flatMap((h: unknown) =>
+      h && typeof (h as { wallet?: unknown }).wallet === "string" ? [(h as { wallet: string }).wallet] : [],
+    ),
+  );
+}
+
+/**
+ * The top-holder list's entries: each tape wallet on the newest holder list, and the tape's
+ * ENTRY_TOP_AT_ANCHOR largest holders at its anchor (the list at the call). A partial tape didn't
+ * read the launch, so its first buys are only the first it read: no time after launch then.
+ */
+export function holderEntries(
+  rows: readonly {
+    wallet: string;
+    buys: number;
+    sells: number;
+    solIn: number;
+    solOut: number;
+    tokensBought: number;
+    tokensSold: number;
+    heldPctAtAnchor: number | null;
+    firstBuyAt: Date | null;
+    firstBuyerRank: number | null;
+  }[],
+  listed: ReadonlySet<string>,
+  tape: { status: string; launchAt: Date | null } | null,
+): Record<string, HolderEntry> {
+  if (!tape || tape.status === "failed") return {};
+  const top = new Set(
+    rows
+      .filter((r) => (r.heldPctAtAnchor ?? 0) > 0)
+      .sort((a, b) => (b.heldPctAtAnchor ?? 0) - (a.heldPctAtAnchor ?? 0))
+      .slice(0, ENTRY_TOP_AT_ANCHOR)
+      .map((r) => r.wallet),
+  );
+  const launch = tape.status === "done" && tape.launchAt ? tape.launchAt.getTime() : null;
+  const round = (v: number, dp: number) => Math.round(v * 10 ** dp) / 10 ** dp;
+  const out: Record<string, HolderEntry> = {};
+  for (const r of rows) {
+    if (!listed.has(r.wallet) && !top.has(r.wallet)) continue;
+    const bought = r.buys > 0 && r.firstBuyAt ? r.firstBuyAt.getTime() : null;
+    out[r.wallet] = {
+      firstBuyAt: bought,
+      afterLaunchS:
+        bought !== null && launch !== null ? Math.max(0, Math.round((bought - launch) / 1000)) : null,
+      firstBuyerRank: r.firstBuyerRank,
+      buys: r.buys,
+      sells: r.sells,
+      solIn: round(r.solIn, 3),
+      solOut: round(r.solOut, 3),
+      soldShare: r.tokensBought > 0 ? round(Math.min(1, r.tokensSold / r.tokensBought), 3) : null,
+    };
+  }
+  return out;
 }
 
 /** GET /tokens/:mint/stonk-fees: Stonks' fee wallet's share of a Stonks coin (core's stonksFees.ts). */
@@ -479,7 +575,7 @@ export async function readTokenChart(mintAddress: string): Promise<TokenChart> {
         }),
         walletCache.get(token.id, () => chartWallets(token.id)),
       ])
-    : [null, [], { tape: null, live: null, wallets: [] }];
+    : [null, [], { tape: null, live: null, wallets: [], holderEntries: {} }];
   return {
     mint: mintAddress,
     candles: candles && candles.length > 0 ? candles : null,

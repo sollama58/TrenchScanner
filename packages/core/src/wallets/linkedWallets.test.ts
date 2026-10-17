@@ -222,6 +222,47 @@ describe("linkedWallets", () => {
   });
 });
 
+describe("supply tied to the creator", () => {
+  // a: the creator paid for it. b: a paid for it. c: a sent it the coin. d: sent a the coin.
+  // e: unrelated. Ties run downstream only: d and e are not the creator's.
+  const holders = [
+    { owner: "a", pct: 10 },
+    { owner: "b", pct: 8 },
+    { owner: "c", pct: 6 },
+    { owner: "d", pct: 4 },
+    { owner: "e", pct: 2 },
+  ];
+  const funders = new Map<string, string | null>([
+    ["a", "creator"],
+    ["b", "a"],
+    ["c", "X"],
+    ["d", "Y"],
+    ["e", null],
+    ["creator", null],
+  ]);
+  const transfers = [
+    { from: "a", to: "c", pct: 1 },
+    { from: "d", to: "a", pct: 1 },
+  ];
+
+  it("reaches holders a tied holder paid for or sent the coin, and marks each one", () => {
+    const r = linkedWallets(holders, funders, { hot: notHot, creator: "creator", transfers })!;
+    expect(r.linkedCreatorPct).toBe(24);
+    expect(r.linkedCreatorDirectPct).toBe(10);
+    expect(r.holders.filter((h) => h.creatorTied).map((h) => h.wallet)).toEqual(["a", "b", "c"]);
+    // d sits in the cluster through its send to a, but is not tied: the cluster is, d is not.
+    const cluster = r.clusters.find((c) => c.wallets.some((w) => w.wallet === "d"))!;
+    expect(cluster.creatorLinked).toBe(true);
+    expect(r.holders.find((h) => h.wallet === "d")!.creatorTied).toBeUndefined();
+  });
+
+  it("reaches through funding alone when transfers aren't read", () => {
+    const r = linkedWallets(holders, funders, { hot: notHot, creator: "creator" })!;
+    expect(r.linkedCreatorPct).toBe(18);
+    expect(r.linkedCreatorDirectPct).toBe(10);
+  });
+});
+
 describe("wider readings (topN)", () => {
   it("reads past the top 25 when asked, for the bubble map's top 50", () => {
     const holders = Array.from({ length: 40 }, (_, i) => ({ owner: `h${i}`, pct: 40 - i }));

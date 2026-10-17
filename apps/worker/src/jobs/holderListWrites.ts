@@ -48,6 +48,7 @@ export function holderListKey(holders: HolderList): string {
       h.sniper ?? null,
       h.fresh ?? null,
       h.empty ?? null,
+      h.creatorTied ?? null,
     ]),
   );
 }

@@ -185,7 +185,7 @@ export interface LinkedCluster {
   wallets: { wallet: string; pct: number }[];
   /** Their combined share of the supply, %. */
   pct: number;
-  /** Tied to the creator: funded by it, it funded them, or the same funder. */
+  /** Holds a wallet tied to the creator (the holders' creatorTied). */
   creatorLinked: boolean;
   /**
    * How many holder-to-holder transfer pairs tie the cluster together (user decision 2026-10-16:
@@ -207,13 +207,25 @@ export interface LinkedWalletsReading {
   linkedWalletCount: number;
   /** The largest cluster's share of supply, %. 0 with no cluster. */
   linkedLargestClusterPct: number;
-  /** % of supply held by holders tied to the creator (the creator's own holding aside). */
+  /**
+   * % of supply held by holders tied to the creator (the creator's own holding aside): the
+   * creator or its funder paid for them, or the coin or the SOL reached them from a holder that
+   * was (creatorTied below).
+   */
   linkedCreatorPct: number;
+  /**
+   * The same over the direct ties alone (the creator or its funder paid for the holder): the
+   * definition the models were trained on, kept for them until a retrain switches it. Not stored.
+   */
+  linkedCreatorDirectPct: number;
   /** How many holders the reading covers. */
   linkedWalletsChecked: number;
   clusters: LinkedCluster[];
-  /** Every holder the reading covers (the creator aside) and its share, %, largest first: the bubble map's bubbles. */
-  holders: { wallet: string; pct: number }[];
+  /**
+   * Every holder the reading covers (the creator aside) and its share, %, largest first: the
+   * bubble map's bubbles. creatorTied: counted in linkedCreatorPct (the top-holder list's tag).
+   */
+  holders: { wallet: string; pct: number; creatorTied?: true }[];
   /** % of supply held by holders funded within SAME_TIME_FUNDING_MS of each other (any funders). */
   sameTimeFundedPct: number;
   /** Groups of two or more holders funded within SAME_TIME_FUNDING_MS of each other. */
@@ -376,6 +388,33 @@ export function linkedWallets(
     );
   };
 
+  // A tie to the creator reaches on (user ask 2026-10-17, the most accurate picture): a holder a
+  // tied holder paid for, or that a tied holder sent the coin, is the creator's too. Only ever
+  // downstream: a holder that paid or sent to a tied one is not tied by it.
+  const direct = new Set(list.filter((h) => tiedToCreator(h.owner)).map((h) => h.owner));
+  const tied = new Set(direct);
+  const next = new Map<string, string[]>();
+  const edge = (from: string, to: string) => {
+    const out = next.get(from);
+    if (out) out.push(to);
+    else next.set(from, [to]);
+  };
+  for (const h of list) {
+    const f = funderOf.get(h.owner);
+    if (usable(f) && isHolder.has(f)) edge(f, h.owner);
+  }
+  for (const t of links) edge(t.from, t.to);
+  const queue = [...direct];
+  while (queue.length > 0) {
+    for (const to of next.get(queue.pop()!) ?? []) {
+      if (tied.has(to)) continue;
+      tied.add(to);
+      queue.push(to);
+    }
+  }
+  const supplyOf = (wallets: ReadonlySet<string>) =>
+    round2(list.filter((h) => wallets.has(h.owner)).reduce((s, h) => s + h.pct, 0));
+
   const groups = new Map<string, { owner: string; pct: number }[]>();
   for (const h of list) {
     const r = find(h.owner);
@@ -393,7 +432,7 @@ export function linkedWallets(
       funder: clusterFunder(members, funderOf, isHolder, usable, sentBy),
       wallets: members.map((m) => ({ wallet: m.owner, pct: round2(m.pct) })),
       pct: round2(members.reduce((s, m) => s + m.pct, 0)),
-      creatorLinked: members.some((m) => tiedToCreator(m.owner)),
+      creatorLinked: members.some((m) => tied.has(m.owner)),
       ...(transfers > 0 ? { transfers } : {}),
     });
   }
@@ -409,10 +448,17 @@ export function linkedWallets(
     linkedClusterCount: clusters.length,
     linkedWalletCount: linked.size,
     linkedLargestClusterPct: clusters[0]?.pct ?? 0,
-    linkedCreatorPct: round2(list.filter((h) => tiedToCreator(h.owner)).reduce((s, h) => s + h.pct, 0)),
+    linkedCreatorPct: supplyOf(tied),
+    linkedCreatorDirectPct: supplyOf(direct),
     linkedWalletsChecked: list.length,
     clusters,
-    holders: [...list].sort((a, b) => b.pct - a.pct).map((h) => ({ wallet: h.owner, pct: round2(h.pct) })),
+    holders: [...list]
+      .sort((a, b) => b.pct - a.pct)
+      .map((h) => ({
+        wallet: h.owner,
+        pct: round2(h.pct),
+        ...(tied.has(h.owner) ? { creatorTied: true as const } : {}),
+      })),
     sameTimeFundedPct: round2(sameTime.reduce((s, c) => s + c.pct, 0)),
     sameTimeClusterCount: sameTime.length,
     sameTimeFundedCount: sameTime.reduce((n, c) => n + c.wallets.length, 0),

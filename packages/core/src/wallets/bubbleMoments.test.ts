@@ -10,6 +10,7 @@ const holders = Array.from({ length: 25 }, (_, i) => ({
   ...(i % 4 === 0 ? { cexFunder: w(100 + (i % 2)) } : {}),
   ...(i === 1 ? { sniper: true } : {}),
   ...(i === 2 ? { fresh: true, empty: true } : {}),
+  ...(i === 4 ? { creatorTied: true } : {}),
 }));
 const reading = {
   linkedHolders: holders,
@@ -52,6 +53,7 @@ const reading = {
   top10HolderPct: 26.4,
   cexFundedCount: 7,
   kolBundledPct: 0,
+  linkedCreatorPct: 2.25,
 };
 
 describe("bubbleReadingOf", () => {

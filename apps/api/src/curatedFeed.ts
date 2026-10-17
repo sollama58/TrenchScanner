@@ -349,22 +349,38 @@ type OutcomeSources = Pick<
  * 30-minute goal window closes.
  */
 /**
- * A call's Peak: the better of its run peak (watched only while its grading row is - 30 minutes
- * for a call that didn't double) and its market-cap high since the call, which the worker keeps
- * from every reading (jobs/curatedPeaks.ts) and which only rises. The run peak alone made a card's
- * Peak walk back once the live price that had overtaken it fell.
+ * A call's Peak. Once the coin's own minute closes vouch for it (peakCheckedAt, worker
+ * jobs/candlePeaks.ts), its market-cap high since the call alone - replaced by the candles, lower
+ * included, so a stale or wicked watcher reading can't put a bad high back; the card folds its
+ * "Now" in between candle reads, as a filter alert's does. Before that, the better of its run peak
+ * (watched only while its grading row is - 30 minutes for a call that didn't double) and that
+ * high, which the readings only raise: the run peak alone made a card's Peak walk back once the
+ * live price that had overtaken it fell. A filter alert's Peak follows the same rule
+ * (matchPeakPct).
  */
 export function callPeakPct(
   runPeakPct: number | null,
-  alert: { peakMcapUsd: number | null; anchorMcapUsd: number },
+  alert: { peakMcapUsd: number | null; anchorMcapUsd: number; peakCheckedAt: Date | null },
 ): number | null {
   const athPct =
     alert.peakMcapUsd !== null && alert.anchorMcapUsd > 0
       ? (alert.peakMcapUsd / alert.anchorMcapUsd - 1) * 100
       : null;
   const fromAth = athPct !== null && Number.isFinite(athPct) && athPct > 0 ? athPct : null;
-  if (runPeakPct === null) return fromAth;
+  if (alert.peakCheckedAt != null || runPeakPct === null) return fromAth;
   return fromAth === null ? runPeakPct : Math.max(runPeakPct, fromAth);
+}
+
+/**
+ * A filter alert's Peak, by callPeakPct's rule: its tracked ATH (peakReturnPct) alone once the
+ * candles vouch for it, else that or, while it has none, its grading row's run peak.
+ */
+export function matchPeakPct(
+  match: { peakReturnPct: number | null; peakCheckedAt: Date | null },
+  runPeakPct: number | null,
+): number | null {
+  if (match.peakCheckedAt != null) return match.peakReturnPct;
+  return match.peakReturnPct ?? runPeakPct;
 }
 
 /**
@@ -376,11 +392,17 @@ export function callPeakPct(
 export function callPeakAt(
   runPeakPct: number | null,
   runPeakMinutes: number | null,
-  alert: { createdAt: Date; peakMcapUsd: number | null; peakMcapAt: Date | null; anchorMcapUsd: number },
+  alert: {
+    createdAt: Date;
+    peakMcapUsd: number | null;
+    peakMcapAt: Date | null;
+    anchorMcapUsd: number;
+    peakCheckedAt: Date | null;
+  },
 ): Date | null {
   const peak = callPeakPct(runPeakPct, alert);
   if (peak === null) return null;
-  if (peak === runPeakPct && runPeakMinutes !== null) {
+  if (alert.peakCheckedAt == null && peak === runPeakPct && runPeakMinutes !== null) {
     return new Date(alert.createdAt.getTime() + runPeakMinutes * 60_000);
   }
   return peak === callPeakPct(null, alert) ? alert.peakMcapAt : null;

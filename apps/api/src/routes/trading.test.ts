@@ -221,6 +221,22 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     });
     expect(over.statusCode).toBe(400);
     expect(over.json().error).toMatch(/slippageBps/);
+    // Exits answer to their own ceiling (5000 by default), not the entries' 2500.
+    const exits = await inj(capped, {
+      method: "PUT",
+      url: "/trading/bot",
+      ...as("admin"),
+      payload: { config: { slippageBps: 2000, exitSlippageBps: 3000, exitSlippageMaxBps: 5000 } },
+    });
+    expect(exits.statusCode).toBe(200);
+    const wide = await inj(app, {
+      method: "PUT",
+      url: "/trading/bot",
+      ...as("admin"),
+      payload: { config: { exitSlippageMaxBps: 6000 } },
+    });
+    expect(wide.statusCode).toBe(400);
+    expect(wide.json().error).toMatch(/exitSlippageMaxBps: at most 5000 bps/);
     const device = await prisma.linkedDevice.create({ data: { userId: ids.admin } });
     const phone = await signer.sign({ userId: ids.admin, walletAddress: adminWallet, deviceId: device.id });
     const res = await inj(app, {
@@ -496,6 +512,36 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect(signIn.statusCode).toBe(403);
     // Paper trading needs none of this.
     expect((await app.inject({ method: "GET", url: "/trading/paper", ...as("admin") })).statusCode).toBe(200);
+  });
+
+  it("changes trade alerts with a confirmation, and refuses a bad body before spending one", async () => {
+    const put = (payload: Record<string, unknown>) =>
+      inj(app, { method: "PUT", url: "/trading/alerts", ...as("admin"), payload });
+    // The strict alerts schema must not trip over the confirmation the body carries.
+    const res = await put({ bot: false });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().alerts.bot).toBe(false);
+    expect((await put({ bot: true })).json().alerts.bot).toBe(true);
+
+    // An unknown key is refused, and the signed nonce stays unspent.
+    const body = { bot: true, nope: 1 };
+    const challenge = await app.inject({
+      method: "POST",
+      url: "/trading/confirm",
+      ...as("admin"),
+      payload: { method: "PUT", path: "/trading/alerts", body },
+    });
+    const { nonce, message } = challenge.json<{ nonce: string; message: string }>();
+    const signature = bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), adminKeys.secretKey));
+    const bad = await app.inject({
+      method: "PUT",
+      url: "/trading/alerts",
+      ...as("admin"),
+      payload: { ...body, confirmation: { nonce, signature } },
+    });
+    expect(bad.statusCode).toBe(400);
+    const row = await prisma.authNonce.findUnique({ where: { nonce } });
+    expect(row?.usedAt ?? null).toBeNull();
   });
 
   describe("the server wallet", () => {

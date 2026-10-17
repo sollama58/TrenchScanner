@@ -665,8 +665,13 @@ export interface PaperStats {
   /** Closed positions that returned more than they cost, fees included. */
   wins: number;
   winRate: number | null;
-  /** Entries whose price at least doubled at some point (the project's 2x goal). */
+  /**
+   * Entries whose signal won the project's 2x verdict: hit2xIn1h and not disqualified, as every
+   * other hit rate grades it (curation/labels.ts). Out of the graded entries only: a signal whose
+   * win window is still open counts in neither.
+   */
   hit2x: number;
+  graded: number;
   hit2xRate: number | null;
 }
 
@@ -680,7 +685,8 @@ export function paperStats(
     tokensBought: string;
     tokensHeld: string;
     lastMultiple: number | null;
-    peakMultiple: number | null;
+    /** The signal's 2x verdict (paperSignalVerdicts); null while it is ungraded. */
+    hit2x: boolean | null;
   }[],
 ): PaperStats {
   let openValue = 0n;
@@ -688,8 +694,12 @@ export function paperStats(
   let closed = 0;
   let wins = 0;
   let hit2x = 0;
+  let graded = 0;
   for (const p of positions) {
-    if ((p.peakMultiple ?? 0) >= 2) hit2x++;
+    if (p.hit2x !== null) {
+      graded++;
+      if (p.hit2x) hit2x++;
+    }
     if (p.status === "open") {
       open++;
       const bought = Number(p.tokensBought);
@@ -713,8 +723,39 @@ export function paperStats(
     wins,
     winRate: closed > 0 ? wins / closed : null,
     hit2x,
-    hit2xRate: positions.length > 0 ? hit2x / positions.length : null,
+    graded,
+    hit2xRate: graded > 0 ? hit2x / graded : null,
   };
+}
+
+/**
+ * Each position's signal verdict, by position id: the 2x verdict graded on the alert it followed
+ * (the filter's Match or the model's CuratedAlert, by source, coin and signal time), as
+ * `"hit2xIn1h" AND NOT COALESCE("disqualified", false)`. Null while the alert is ungraded or gone.
+ */
+export async function paperSignalVerdicts(
+  positionIds: readonly string[],
+): Promise<Map<string, boolean | null>> {
+  if (positionIds.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<{ id: string; hit2x: boolean | null }[]>`
+    SELECT p."id",
+           CASE WHEN v."hit2xIn1h" IS NULL THEN NULL
+                ELSE v."hit2xIn1h" AND NOT COALESCE(v."disqualified", false) END AS hit2x
+    FROM "PaperPosition" p
+    JOIN "Token" t ON t."mintAddress" = p."mint"
+    LEFT JOIN LATERAL (
+      SELECT m."hit2xIn1h", m."disqualified" FROM "Match" m
+      WHERE p."sourceKind" = 'filter' AND m."tokenId" = t."id"
+        AND m."filterId" = p."sourceRef" AND m."matchedAt" = p."signalAt"
+      UNION ALL
+      SELECT a."hit2xIn1h", a."disqualified" FROM "CuratedAlert" a
+      WHERE p."sourceKind" = 'model' AND a."tokenId" = t."id"
+        AND a."model" = p."sourceRef" AND a."createdAt" = p."signalAt"
+      LIMIT 1
+    ) v ON true
+    WHERE p."id" = ANY(${[...positionIds]})
+  `;
+  return new Map(rows.map((r) => [r.id, r.hit2x]));
 }
 
 function errText(err: unknown): string {

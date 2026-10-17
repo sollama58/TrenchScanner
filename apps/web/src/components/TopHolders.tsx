@@ -1,10 +1,20 @@
-import { useId, useMemo, useState } from "react";
+import { Fragment, useId, useMemo, useState } from "react";
 import type { Snapshot } from "../api";
-import { buildGraph, type FlaggedHolder } from "../bubbleMap";
+import {
+  buildGraph,
+  CLOCK_ICON,
+  nodeSlot,
+  sameTimeSlot,
+  transfersOfNode,
+  type FlaggedHolder,
+} from "../bubbleMap";
+import { entryParts, entryTitle, type HolderEntry } from "../holderEntry";
+import { possibleSideText, usePossibleSides } from "../possibleSides";
 import { openWallet } from "../walletModal";
 import { useWalletNames, walletText } from "../walletNames";
-import { CLUSTER_COLOURS } from "./BubbleMap";
+import { TRAIT_WORDS, TraitIcon, transferWords } from "./BubbleMap";
 import { FoldHead } from "./Fold";
+import { TransferIcon } from "./Icons";
 import { WalletText } from "./WalletText";
 
 /** Holders listed before "Show all". */
@@ -16,14 +26,22 @@ const SHOWN = 12;
  * the wallet is (dev, risky, known dumper). Read from the same graph the bubble map draws, so the
  * two always agree. Nothing when the scan kept no holder list. Folded to its heading until opened
  * (user ask 2026-10-16): the bubble map above already shows who holds what.
+ *
+ * Each row also carries the bubble map's marks (user ask 2026-10-17): the wallet type (sniper,
+ * fresh, empty), the same-minute clock in its group's colour, a transfer mark when it moved the
+ * coin to or from another top holder, the KOL, side and Winner labels, and a line on how it got in
+ * from the trade tape (holder entries, on coins whose trades were read).
  */
 export function TopHolders({
   snapshot,
   flagged,
+  entries = {},
   pending = false,
 }: {
   snapshot: Snapshot | null | undefined;
   flagged: readonly FlaggedHolder[];
+  /** How each holder got in, by wallet (the chart's holderEntries); empty until the tape is read. */
+  entries?: Readonly<Record<string, HolderEntry>>;
   /** A fresh scan is reading the holders now: the list's place is held until it lands. */
   pending?: boolean;
 }) {
@@ -42,6 +60,9 @@ export function TopHolders({
       [holders, graph],
     ),
   );
+  // The bubble map reads the same wallets: one read, kept for the session, serves both.
+  const sides = usePossibleSides(useMemo(() => holders.map((h) => h.wallet), [holders]));
+  const byWallet = useMemo(() => new Map(flagged.map((w) => [w.wallet, w])), [flagged]);
   if (!graph || holders.length === 0) {
     if (!pending) return null;
     return (
@@ -82,19 +103,29 @@ export function TopHolders({
           <ol className="th-list">
             {shown.map((h, i) => {
               const cluster = h.cluster === null ? null : graph.clusters[h.cluster];
-              const colour =
-                h.cluster === null ? "var(--bm-none)" : `var(--bm-${h.cluster % CLUSTER_COLOURS})`;
+              const slot = nodeSlot(h, graph);
+              const colour = slot === null ? "var(--bm-none)" : `var(--bm-${slot})`;
+              const same = h.sameTime === null ? null : graph.sameTimeGroups[h.sameTime];
+              const moved = transferWords(transfersOfNode(graph, h.id));
+              const f = h.wallet ? byWallet.get(h.wallet) : undefined;
+              const named = h.wallet ? names[h.wallet] : undefined;
+              const side = !!f?.knownSideOf || named?.source === "kol-side";
+              const kol = !side && (typeof h.kol === "string" || named?.source === "kol");
+              const possible = (h.wallet ? (sides[h.wallet] ?? []) : []).filter((p) => !(side && p.known));
+              const entry = h.wallet ? entries[h.wallet] : undefined;
               return (
                 <li key={h.id} className="th-row">
                   <span className="th-rank num">{i + 1}</span>
                   <span className="th-who">
                     <i
                       className="th-dot"
-                      style={{ background: colour, opacity: h.cluster === null ? 0.55 : 1 }}
+                      style={{ background: colour, opacity: slot === null ? 0.55 : 1 }}
                       title={
                         cluster
                           ? `Funded by ${walletText(cluster.funder, names)}`
-                          : "Linked to no other top holder"
+                          : same
+                            ? "Linked to no other top holder by funder; funded the same minute as others"
+                            : "Linked to no other top holder"
                       }
                     />
                     <button
@@ -105,10 +136,99 @@ export function TopHolders({
                     >
                       <WalletText wallet={h.wallet} names={names} />
                     </button>
+                    {(h.trait || same || moved.length > 0) && (
+                      <span className="th-marks">
+                        {h.trait && (
+                          <span className="th-mark" title={TRAIT_WORDS[h.trait]}>
+                            <TraitIcon trait={h.trait} size={14} />
+                          </span>
+                        )}
+                        {same && h.sameTime !== null && (
+                          <span
+                            className="th-mark th-clock"
+                            style={{ color: `var(--bm-${sameTimeSlot(graph, h.sameTime)})` }}
+                            title={`Funded the same minute as ${same.wallets.length - 1} other top holder${
+                              same.wallets.length === 2 ? "" : "s"
+                            } (this colour on the map)`}
+                          >
+                            <svg
+                              className="bm-trait-icon"
+                              viewBox="0 0 24 24"
+                              width={14}
+                              height={14}
+                              aria-hidden
+                            >
+                              {CLOCK_ICON.map((d) => (
+                                <path key={d} d={d} />
+                              ))}
+                            </svg>
+                          </span>
+                        )}
+                        {moved.length > 0 && (
+                          <span
+                            className="th-mark th-xfer"
+                            title={`Transfers with other top holders: ${moved.join(", ")}`}
+                          >
+                            <TransferIcon size={14} />
+                          </span>
+                        )}
+                      </span>
+                    )}
                     {h.flags.includes("creator") && <span className="tm-tag k-dev">Dev</span>}
-                    {h.flags.includes("risky") && <span className="tm-tag k-risky">Risky</span>}
-                    {h.flags.includes("dumper") && <span className="tm-tag k-risky">Dumper</span>}
+                    {h.flags.includes("risky") && (
+                      <span
+                        className="tm-tag k-risky"
+                        title={h.score !== null ? `Risk score ${Math.round(h.score)} of 100` : undefined}
+                      >
+                        Risky
+                      </span>
+                    )}
+                    {h.flags.includes("dumper") && (
+                      <span
+                        className="tm-tag k-risky"
+                        title={
+                          h.dumps !== null
+                            ? `Sold into the stop on ${h.dumps} of its called coins`
+                            : undefined
+                        }
+                      >
+                        Dumper
+                      </span>
+                    )}
+                    {h.creatorTied && !h.flags.includes("creator") && (
+                      <span
+                        className="tm-tag k-dev"
+                        title="The creator or its funder paid for this wallet, or it got SOL or the coin from one that was"
+                      >
+                        Tied to dev
+                      </span>
+                    )}
+                    {kol && <span className="tm-tag k-kol">KOL</span>}
+                    {side && <span className="tm-tag k-side">Known Side</span>}
+                    {possible.map((p) => (
+                      <span key={p.kolWallet} className="tm-tag k-side">
+                        {possibleSideText(p)}
+                      </span>
+                    ))}
+                    {f?.tags.includes("winner") && (
+                      <span
+                        className="tm-tag k-winner"
+                        title="Took 2x or better out of 3+ coins it bought, at least twice as often as the market"
+                      >
+                        Winner
+                      </span>
+                    )}
                     {h.hub && <span className="tm-tag k-linked">Funder</span>}
+                    {entry && (
+                      <span className="th-entry muted" title={entryTitle(entry)}>
+                        {entryParts(entry).map((part, k) => (
+                          <Fragment key={k}>
+                            {k > 0 && " · "}
+                            <span>{part}</span>
+                          </Fragment>
+                        ))}
+                      </span>
+                    )}
                   </span>
                   <span className="th-bar" aria-hidden="true">
                     <span style={{ width: `${Math.max(3, (h.pct / max) * 100)}%`, background: colour }} />
@@ -139,6 +259,8 @@ export function TopHolders({
             {graph.linkedPct === null
               ? "Pool aside. Who funded these holders isn't checked yet, so none are grouped into clusters."
               : "Pool aside. The dot is the holder's cluster in the bubble map; grey is linked to no other holder."}
+            {Object.keys(entries).length === 0 &&
+              " How each holder got in shows once the coin's trades are read, which happens for called coins."}
             {total > 0 &&
               graph.linkedPct !== null &&
               (graph.linkedCount

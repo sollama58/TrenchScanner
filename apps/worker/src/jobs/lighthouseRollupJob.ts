@@ -1,6 +1,7 @@
 import {
   prisma,
   createLogger,
+  REPORTED_LABEL_RULE,
   walletSafetyCutsSql,
   firstCallOnRowSql,
   notRetiredModelSql,
@@ -26,8 +27,23 @@ const DAY_MS = 24 * HOUR_MS;
  * were last summed. The first run (an empty table) backfills from the oldest row still present,
  * and a run after a gap resumes from the last hour written, so no hour is ever skipped.
  *
+ * A change to how the screened counts are summed bumps LIGHTHOUSE_ROLLUP_VERSION, and the hours
+ * written before it are then re-summed once, a batch a run (catchUpScreened).
+ *
  * Aggregates only: no mint, name, referent or summary leaves the source tables.
  */
+
+/**
+ * The summing rules the screened counts follow (LighthouseHour.rollupVersion). 1 (2026-10-17):
+ * rows under an older label rule stay out (labelRule >= REPORTED_LABEL_RULE).
+ */
+export const LIGHTHOUSE_ROLLUP_VERSION = 1;
+
+/** Older hours re-summed per run while some carry an older rollupVersion: a week of decision moments. */
+export const CATCH_UP_HOURS_PER_RUN = 7 * 24;
+
+/** CANDIDATE_OUTCOME_RETENTION_DAYS's default: decision moments younger than this are all still kept. */
+const DEFAULT_OUTCOME_RETENTION_DAYS = 90;
 
 /** Hours re-summed on every run, so late grades and re-reads land. */
 export const RECOMPUTE_HOURS = 72;
@@ -66,6 +82,11 @@ export interface LighthouseRollupOptions {
   from?: Date;
   /** "Now" (tests). */
   now?: Date;
+  /**
+   * CANDIDATE_OUTCOME_RETENTION_DAYS: an older hour's decision moments are partly swept (only
+   * the doublers and the called rows stay), so the catch-up never re-sums it.
+   */
+  outcomeRetentionDays?: number;
 }
 
 type HourRow = Omit<Prisma.LighthouseHourCreateInput, "hour" | "computedAt">;
@@ -216,13 +237,14 @@ function screenHours(from: Date, to: Date) {
  * The hourly sums over [from, to), as rows keyed by the hour's epoch ms; hours with nothing stay
  * absent. The screen counts are summed from `screenFrom` only (see SCREEN_RECOMPUTE_HOURS).
  */
-async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<number, HourRow>> {
-  const screenStart = screenFrom > from ? screenFrom : from;
-  const [screened, reads, alerts, screen] = await Promise.all([
-    // The same counting and the same population as the Live tab's Lighthouse: rows the safety
-    // screen would reject today (wallet cuts) stay out, a 2x after the stop is a loss, and the
-    // 10x rate's denominator is every row whose 10x verdict is in (a loss settles it at once).
-    prisma.$queryRaw<ScreenedHourRow[]>`
+/**
+ * The screened decision moments of [from, to) by hour - the same counting and the same
+ * population as the Live tab's Lighthouse: rows the safety screen would reject today (wallet
+ * cuts) and rows under an older label rule stay out, a 2x after the stop is a loss, and the 10x
+ * rate's denominator is every row whose 10x verdict is in (a loss settles it at once).
+ */
+function screenedHours(from: Date, to: Date) {
+  return prisma.$queryRaw<ScreenedHourRow[]>`
       SELECT date_trunc('hour', co."anchorAt") AS hour,
              count(*) AS calls,
              count(*) FILTER (WHERE co."hit2xIn1h" IS NOT NULL) AS graded,
@@ -235,8 +257,29 @@ async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<num
              sum(co."simReturnPct")::float8 AS ret_sum
       FROM "CandidateOutcome" co
       WHERE co."sampleKind" = 'event' AND co."anchorAt" >= ${from} AND co."anchorAt" < ${to}
+        AND co."labelRule" >= ${REPORTED_LABEL_RULE}
         AND ${walletSafetyCutsSql(Prisma.raw('co."features"'))}
-      GROUP BY 1`,
+      GROUP BY 1`;
+}
+
+/** One hour's screened columns from its screenedHours row (zeros for an hour with none). */
+function screenedColumns(r: ScreenedHourRow | undefined) {
+  return {
+    screenedCalls: n(r?.calls),
+    screenedGraded: n(r?.graded),
+    screenedWon2x: n(r?.won2x),
+    screenedWon4x: n(r?.won4x),
+    screenedWon10x: n(r?.won10x),
+    screenedTenXGraded: n(r?.ten_x_graded),
+    screenedReturnN: n(r?.ret_n),
+    screenedReturnSum: r?.ret_sum ?? 0,
+  };
+}
+
+async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<number, HourRow>> {
+  const screenStart = screenFrom > from ? screenFrom : from;
+  const [screened, reads, alerts, screen] = await Promise.all([
+    screenedHours(from, to),
     prisma.$queryRaw<ReadsHourRow[]>`
       SELECT date_trunc('hour', n."checkedAt") AS hour,
              count(*) AS total,
@@ -284,17 +327,7 @@ async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<num
     }
     return row;
   };
-  for (const r of screened) {
-    const h = at(r.hour);
-    h.screenedCalls = n(r.calls);
-    h.screenedGraded = n(r.graded);
-    h.screenedWon2x = n(r.won2x);
-    h.screenedWon4x = n(r.won4x);
-    h.screenedWon10x = n(r.won10x);
-    h.screenedTenXGraded = n(r.ten_x_graded);
-    h.screenedReturnN = n(r.ret_n);
-    h.screenedReturnSum = r.ret_sum ?? 0;
-  }
+  for (const r of screened) Object.assign(at(r.hour), screenedColumns(r));
   for (const r of reads) {
     const h = at(r.hour);
     h.readsTotal = n(r.total);
@@ -344,13 +377,56 @@ async function writeHours(from: Date, to: Date, screenFrom: Date): Promise<numbe
     writes.push(
       prisma.lighthouseHour.upsert({
         where: { hour: new Date(t) },
-        create: { hour: new Date(t), ...row, computedAt },
-        update: { ...(t >= screenFrom.getTime() ? row : unscreened), computedAt },
+        create: { hour: new Date(t), ...row, rollupVersion: LIGHTHOUSE_ROLLUP_VERSION, computedAt },
+        update: {
+          ...(t >= screenFrom.getTime() ? row : unscreened),
+          rollupVersion: LIGHTHOUSE_ROLLUP_VERSION,
+          computedAt,
+        },
       }),
     );
   }
   if (writes.length) await prisma.$transaction(writes);
   return writes.length;
+}
+
+/**
+ * Re-sums the screened counts of the oldest CATCH_UP_HOURS_PER_RUN hours still below
+ * LIGHTHOUSE_ROLLUP_VERSION, before `before` (where this run's own sums start), and stamps them
+ * with it: after a change to the summing rules, the stored history follows them within a few
+ * runs, a week of decision moments at a time, so no run stalls on it. Only the screened columns:
+ * the reads and calls of an older hour stay frozen as designed (a TokenNarrative row moves to its
+ * newest read's hour), and the label days read no decision moments. Only hours whose decision
+ * moments are all still kept (CANDIDATE_OUTCOME_RETENTION_DAYS): past that only the doublers and
+ * the called rows remain, and a re-sum would read a near-100% hit rate.
+ */
+async function catchUpScreened(
+  now: Date,
+  before: Date,
+  retentionDays: number,
+): Promise<{ from: string; to: string; hours: number } | null> {
+  const horizon = new Date(floorHour(now.getTime() - retentionDays * DAY_MS).getTime() + HOUR_MS);
+  const oldest = await prisma.lighthouseHour.findFirst({
+    where: { rollupVersion: { lt: LIGHTHOUSE_ROLLUP_VERSION }, hour: { gte: horizon, lt: before } },
+    orderBy: { hour: "asc" },
+    select: { hour: true },
+  });
+  if (!oldest) return null;
+  const from = oldest.hour;
+  const to = new Date(Math.min(from.getTime() + CATCH_UP_HOURS_PER_RUN * HOUR_MS, before.getTime()));
+  const sums = new Map((await screenedHours(from, to)).map((r) => [r.hour.getTime(), r]));
+  const computedAt = new Date();
+  const writes: Prisma.PrismaPromise<Prisma.BatchPayload>[] = [];
+  for (let t = from.getTime(); t < to.getTime(); t += HOUR_MS) {
+    writes.push(
+      prisma.lighthouseHour.updateMany({
+        where: { hour: new Date(t), rollupVersion: { lt: LIGHTHOUSE_ROLLUP_VERSION } },
+        data: { ...screenedColumns(sums.get(t)), rollupVersion: LIGHTHOUSE_ROLLUP_VERSION, computedAt },
+      }),
+    );
+  }
+  const updated = (await prisma.$transaction(writes)).reduce((sum, r) => sum + r.count, 0);
+  return { from: from.toISOString(), to: to.toISOString(), hours: updated };
 }
 
 // ---------- Daily label breakdowns ----------
@@ -615,6 +691,11 @@ export async function runLighthouseRollupJob(opts: LighthouseRollupOptions = {})
     labelRows += await writeDay(new Date(d));
     daysWritten += 1;
   }
+  const catchUp = await catchUpScreened(
+    now,
+    from,
+    opts.outcomeRetentionDays ?? DEFAULT_OUTCOME_RETENTION_DAYS,
+  );
   const meta = {
     from: from.toISOString(),
     to: to.toISOString(),
@@ -623,6 +704,7 @@ export async function runLighthouseRollupJob(opts: LighthouseRollupOptions = {})
     hoursWritten,
     daysWritten,
     labelRows,
+    ...(catchUp ? { catchUp } : {}),
   };
   logger.info("lighthouse history summed", { ...meta, durationMs: Date.now() - startedAt });
   return meta;

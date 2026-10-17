@@ -1,5 +1,6 @@
 import {
   prisma,
+  Prisma,
   createLogger,
   buildScoredToken,
   launchpadFromVenue,
@@ -11,6 +12,8 @@ import {
   type DexScreenerClient,
   type OnChainProfile,
   type NarrativeRead,
+  type LinkedCluster,
+  type SameTimeCluster,
 } from "@trenchscanner/core";
 import {
   createMatchesForTargets,
@@ -70,6 +73,29 @@ const MAX_TRACKED = 300;
  */
 const MATCH_CONCURRENCY = 4;
 
+/** The holder lists a snapshot can carry (written only on the rows with a new reading, holderListWrites.ts). */
+interface SnapshotHolderLists {
+  linkedHolders?: unknown;
+  linkedClusters?: unknown;
+  sameTimeClusters?: unknown;
+}
+
+/** A stored JSON list as the typed list it was written from, or undefined when absent or empty. */
+function jsonList<T>(value: unknown): T[] | undefined {
+  return Array.isArray(value) && value.length > 0 ? (value as T[]) : undefined;
+}
+
+/** The holder lists on a snapshot, as the profile fields they were written from. */
+function holderListsOf(
+  snapshot: SnapshotHolderLists,
+): Pick<OnChainProfile, "linkedHolders" | "linkedClusters" | "sameTimeClusters"> {
+  return {
+    linkedHolders: jsonList<NonNullable<OnChainProfile["linkedHolders"]>[number]>(snapshot.linkedHolders),
+    linkedClusters: jsonList<LinkedCluster>(snapshot.linkedClusters),
+    sameTimeClusters: jsonList<SameTimeCluster>(snapshot.sameTimeClusters),
+  };
+}
+
 /**
  * Rebuilds the on-chain half of a candidate from its last full-scan snapshot.
  *
@@ -115,8 +141,14 @@ function profileFromSnapshot(
     transferWalletCount?: number | null;
     transferHoldersChecked?: number | null;
     flaggedBuySol?: number | null;
+    linkedWalletPctExTransfers?: number | null;
+    linkedWalletCountExTransfers?: number | null;
+    kolBundledPctExTransfers?: number | null;
+    bundledSupplyPctExTransfers?: number | null;
+    bundledSupplyCountExTransfers?: number | null;
+    linkedClustersExTransfers?: unknown;
     devHolding: boolean | null;
-  },
+  } & SnapshotHolderLists,
 ): OnChainProfile | null {
   // The three the screen treats as hard requirements. Unknown means the snapshot predates the
   // data or the lookup failed, and inventing a value here would admit a token the full cycle
@@ -165,6 +197,15 @@ function profileFromSnapshot(
     transferWalletCount: snapshot.transferWalletCount ?? undefined,
     transferHoldersChecked: snapshot.transferHoldersChecked ?? undefined,
     flaggedBuySol: snapshot.flaggedBuySol ?? undefined,
+    // The funding-only figures the models read (features.ts) and the scan records beside the
+    // counted ones; the creator's share has no snapshot column, so it stays unknown here.
+    linkedWalletPctExTransfers: snapshot.linkedWalletPctExTransfers ?? undefined,
+    linkedWalletCountExTransfers: snapshot.linkedWalletCountExTransfers ?? undefined,
+    kolBundledPctExTransfers: snapshot.kolBundledPctExTransfers ?? undefined,
+    bundledSupplyPctExTransfers: snapshot.bundledSupplyPctExTransfers ?? undefined,
+    bundledSupplyCountExTransfers: snapshot.bundledSupplyCountExTransfers ?? undefined,
+    linkedClustersExTransfers: jsonList<LinkedCluster>(snapshot.linkedClustersExTransfers),
+    ...holderListsOf(snapshot),
     // The scan's resolved answer, carried forward; the fast path has no trade-stream view of its own.
     creatorHolding: snapshot.devHolding ?? undefined,
   };
@@ -379,6 +420,19 @@ async function alertForToken(
 
   const fullToken = await prisma.token.findUnique({ where: { id: token.id } });
   if (!fullToken) return 0;
+
+  // The holder lists ride only on the scan rows with a new reading, so the row this pass read
+  // from may not have them: the newest scan row that does carries the same reading. Without
+  // them the alert's own snapshot (read on its own by the feed, bubble moments and boards) would
+  // have no holders or clusters, and the alert writer's carry-forward has nothing to carry.
+  if (scored.linkedHolders === undefined) {
+    const withLists = await prisma.tokenSnapshot.findFirst({
+      where: { tokenId: token.id, source: "scan", linkedHolders: { not: Prisma.DbNull } },
+      orderBy: { takenAt: "desc" },
+      select: { linkedHolders: true, linkedClusters: true, sameTimeClusters: true },
+    });
+    if (withLists) Object.assign(scored, holderListsOf(withLists));
+  }
 
   const snapshot = await prisma.tokenSnapshot.create({
     data: snapshotDataFor(token.id, scored, "fast"),

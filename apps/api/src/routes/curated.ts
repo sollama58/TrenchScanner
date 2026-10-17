@@ -10,6 +10,7 @@ import {
   walletSafetyCutsSql,
   firstCallOnRowSql,
   notRetiredModelSql,
+  REPORTED_LABEL_RULE,
 } from "@trenchscanner/core";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { currentMarketCap } from "./matches.js";
@@ -676,7 +677,7 @@ export async function registerCuratedRoutes(
         SELECT ("source" = ${HEURISTIC_CURATOR_SOURCE}) AS heuristic,
                count(*) AS emitted,
                count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
-               count(*) FILTER (WHERE "hit2xIn1h" = true AND "disqualified" = false) AS wins
+               count(*) FILTER (WHERE "hit2xIn1h" AND NOT COALESCE("disqualified", false)) AS wins
         FROM "CuratedAlert" a
         WHERE "createdAt" >= ${since} AND ${notRetiredModelSql()}
           AND ${firstCallOnRowSql({ heuristicSource: HEURISTIC_CURATOR_SOURCE })}
@@ -758,6 +759,7 @@ export async function registerCuratedRoutes(
                    count(*) FILTER (WHERE "labelValue" > 0) AS winners
             FROM "CandidateOutcome"
             WHERE "sampleKind" = 'event' AND ${walletSafetyCutsSql()}
+              AND "labelRule" >= ${REPORTED_LABEL_RULE}
               AND "anchorAt" >= ${baseRateFrom}`,
       ),
       prisma.candidateOutcome.count({ where: { anchorAt: { gte: day7 } } }),
@@ -792,9 +794,9 @@ export async function registerCuratedRoutes(
                count(*) FILTER (WHERE "createdAt" >= ${day7}) AS d7,
                count(*) FILTER (WHERE "createdAt" >= ${day1}) AS d1,
                count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL) AS graded,
-               count(*) FILTER (WHERE "hit2xIn1h" = true AND "disqualified" = false) AS wins,
-               count(*) FILTER (WHERE "hit4xIn1h" = true AND "disqualified" = false) AS goal_hits,
-               count(*) FILTER (WHERE "hit10xIn1h" = true AND "disqualified" = false) AS ten_x_hits,
+               count(*) FILTER (WHERE "hit2xIn1h" AND NOT COALESCE("disqualified", false)) AS wins,
+               count(*) FILTER (WHERE "hit4xIn1h" AND NOT COALESCE("disqualified", false)) AS goal_hits,
+               count(*) FILTER (WHERE "hit10xIn1h" AND NOT COALESCE("disqualified", false)) AS ten_x_hits,
                count(*) FILTER (WHERE "hit2xIn1h" IS NOT NULL
                                   AND ("hit10xIn1h" IS NOT NULL
                                        OR NOT ("hit2xIn1h" AND NOT COALESCE("disqualified", false)))) AS ten_x_graded,
