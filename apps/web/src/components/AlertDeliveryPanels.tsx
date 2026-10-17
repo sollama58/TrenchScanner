@@ -384,7 +384,7 @@ export function ModelPanel({
               {rule.rankWindowHours} hours among those with {rule.rankMinGraded ?? rule.minGraded} graded
               calls there, plus the best performer when it isn&apos;t among them.
               {board.champion &&
-                ` The best performer needs ${board.champion.minLiveGraded} graded live calls and has to beat the current one by ${board.champion.margin} points to take over.`}
+                ` The best performer is the model with the best score on the full scorecard (2x, 4x and 10x rates, average return and run size) over the last 72 hours. It needs ${board.champion.minLiveGraded} graded live calls there, and has to beat the current one by ${board.champion.margin} scorecard points (out of 100) to take over.`}
             </p>
           )}
         </div>

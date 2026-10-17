@@ -36,7 +36,15 @@ import {
   transferGroup,
 } from "../sideTransfers.js";
 import { currentMarketCap } from "./matches.js";
-import { readTokenChart, readTokenFirstMinutes, readTokenSage } from "./tokens.js";
+import {
+  fineRes,
+  liveAfter,
+  readTokenChart,
+  readTokenFine,
+  readTokenFirstMinutes,
+  readTokenLive,
+  readTokenSage,
+} from "./tokens.js";
 import { readTokenProfile } from "../tokenProfile.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
@@ -574,6 +582,25 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     reply.header("Cache-Control", `private, max-age=${first.live ? 4 : 60}`);
     return first;
   });
+
+  app.get("/token/:mint/chart/fine", async (request, reply) => {
+    const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
+    if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
+    const fine = await readTokenFine(lookup.subject, fineRes(request.query));
+    reply.header("Cache-Control", `private, max-age=${fine.stepSec === 1 ? 3 : 30}`);
+    return fine;
+  });
+
+  app.get(
+    "/token/:mint/chart/live",
+    { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
+      if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
+      reply.header("Cache-Control", "no-store");
+      return readTokenLive(lookup.subject, liveAfter(request.query));
+    },
+  );
 
   app.get("/token/:mint/sage", async (request, reply) => {
     const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");

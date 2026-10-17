@@ -358,7 +358,7 @@ export function walletChecksKnown(
 export const PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES = 10;
 
 /**
- * From this age on, "not falling" is not enough: the event pre-gate wants the last five minutes up
+ * From this age on, "not collapsing" is not enough: the event pre-gate wants the last five minutes up
  * at least PRE_GATE_OLD_COIN_MIN_5M_PCT, and an unobserved 5m candle fails. On event rows
  * 2026-10-08..15, coins 1-6 hours old were 29% of decision moments and doubled within 15 minutes
  * 3.4% of the time; those up 25%+ in five minutes doubled 7-18% on every one of the 8 days, the

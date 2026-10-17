@@ -5,6 +5,9 @@ import type { CallRecord } from "./leaderboard.js";
 import {
   applyCooldown,
   isDecisionRow,
+  goalValue,
+  hasReturn,
+  type SeatGoal,
   scoreCandidateWithModel,
   type TrainedCuratorParams,
   type TrainingRow,
@@ -49,6 +52,8 @@ export interface ProbationInput {
   share: number;
   /** Wins the challenger's fresh record must hold. */
   minWins: number;
+  /** The seat's goal, which the two are compared on (SeatGoal). Omitted = "2x". */
+  goal?: SeatGoal;
   /** Share of paired bootstrap resamples its 2x rate must lead in (0 = off). */
   confidence: number;
   rng: Rng;
@@ -113,6 +118,10 @@ function maskRecord(rows: TrainingRow[], mask: Uint8Array): CallRecord {
     record.sumRun! += runDoublings(row);
     if (row.labelValue <= 0 || row.hit10x !== undefined) record.tenXGraded! += 1;
     if (row.hit10x === true) record.tenX! += 1;
+    if (hasReturn(row)) {
+      record.simCalls = (record.simCalls ?? 0) + 1;
+      record.sumSimReturnPct = (record.sumSimReturnPct ?? 0) + row.returnPct!;
+    }
   }
   return record;
 }
@@ -135,15 +144,21 @@ export function judgeProbation(input: ProbationInput): ProbationVerdict {
   const laneMask = topShare(input.lane);
   const challenger = maskRecord(rows, challengerMask);
   const lane = maskRecord(rows, laneMask);
-  const pairedConfidence = pairedBootstrapConfidence(
-    Float64Array.from(rows, (r) => r.labelValue),
-    challengerMask,
-    laneMask,
-    input.rng,
-  );
-  const rate = (r: CallRecord) => (r.calls === 0 ? null : r.wins / r.calls);
-  const cr = rate(challenger);
-  const lr = rate(lane);
+  const goal = input.goal ?? "2x";
+  const values = Float64Array.from(rows, (r) => goalValue(r, goal));
+  const pairedConfidence = pairedBootstrapConfidence(values, challengerMask, laneMask, input.rng);
+  const mean = (mask: Uint8Array) => {
+    let sum = 0;
+    let n = 0;
+    for (let i = 0; i < mask.length; i++)
+      if (mask[i]) {
+        sum += values[i]!;
+        n += 1;
+      }
+    return n === 0 ? null : sum / n;
+  };
+  const cr = mean(challengerMask);
+  const lr = mean(laneMask);
   const fmt = (r: CallRecord) =>
     `${r.wins}/${r.calls}` + (r.calls === 0 ? "" : ` (2x ${((r.wins / r.calls) * 100).toFixed(1)}%)`);
   const summary =
@@ -161,7 +176,8 @@ export function judgeProbation(input: ProbationInput): ProbationVerdict {
     pairedConfidence,
   });
   if (challenger.wins < input.minWins) return verdict(false, `too few fresh wins (need ${input.minWins})`);
-  if (lr !== null && (cr === null || cr <= lr)) return verdict(false, "did not beat the seat's 2x rate");
+  if (lr !== null && (cr === null || cr <= lr))
+    return verdict(false, `did not beat the seat on its goal (${goal})`);
   // A seat with no fresh calls of its own to pair against is beaten on the wins floor alone.
   if (input.confidence > 0 && pairedConfidence !== null && pairedConfidence < input.confidence)
     return verdict(false, `not ahead in ${Math.round(input.confidence * 100)}% of paired resamples`);

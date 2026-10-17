@@ -5,8 +5,8 @@
  * drawdowns are still waiting for tape (user ask 2026-10-17: the first ~15 minutes, as granular as
  * possible). The curve account changes on every trade, and its reserves are the price exactly:
  * the worker follows each young coin's curve on the Helius websocket (accountSubscribe) and reads
- * it by RPC where the stream doesn't reach (curveTapeJob.ts). Pure, bounded, in memory: nothing
- * here is persisted, only the features it answers ride on the decision's row.
+ * it by RPC where the stream doesn't reach (the worker's jobs/curveTape.ts). Pure, bounded, in
+ * memory: nothing here is persisted, only the features it answers ride on the decision's row.
  *
  * The price is a step function: between two readings the curve did not change. So the price at
  * any moment the tape covers is exact, which is what lets a 10-second return mean 10 seconds.

@@ -253,7 +253,7 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
-  // The curve tape (worker's curveTapeJob.ts, user ask 2026-10-17): every tracked Pump.fun coin
+  // The curve tape (worker's jobs/curveTape.ts, user ask 2026-10-17): every tracked Pump.fun coin
   // younger than CURVE_TAPE_MAX_AGE_MINUTES has its bonding curve followed on the Helius websocket
   // (accountSubscribe: an update per changed block, ~0.5 KB, 2 credits per 0.1 MB), and read by RPC
   // where the stream doesn't reach. Up to CURVE_TAPE_MAX_MINTS at once. "false" turns it off.
@@ -272,6 +272,17 @@ const envSchema = z.object({
   CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(100_000),
   CURVE_TAPE_POLL_SECONDS: z.coerce.number().min(1).default(5),
   CURVE_TAPE_POLL_MAX_MINTS: z.coerce.number().int().nonnegative().default(100),
+  // The token chart's live tail (api's liveCurve.ts, user ask 2026-10-17: charts on the stream's
+  // second-by-second updates): while a young coin's chart is open, the API follows its bonding curve
+  // on its own Helius websocket (an update per changed block) and the chart draws every change,
+  // read by RPC every few seconds where the stream doesn't reach. Only while someone is looking, so
+  // it costs next to nothing: it opens a second Helius websocket on the same key (about 400
+  // credits a day while any chart is open), closed 2 minutes after the last chart. GET /health
+  // reports it (liveCurves). Needs HELIUS_API_KEY; "false" leaves the charts on candles alone.
+  CHART_LIVE_CURVES: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   // Follows the subscription mint on the same Helius websocket and runs the burn reconciler as soon
   // as a transaction lands on it (worker's BurnStreamWake, user ask 2026-10-17), so a burn grants
   // access in seconds; BURN_SCAN_INTERVAL_MINUTES stays the backstop. The mint sees ~53
@@ -565,8 +576,9 @@ const envSchema = z.object({
   // Every 6 hours since 2026-10-12 (2 from 2026-10-05). Each run refits every seat and re-picks
   // its cutoff, and consecutive runs' call volume swung about 2x for 2 hours' more data (alerts
   // 10-10..10-12, notes/audit-2026-10-12/training.md). Models 6-12 hours old ranked as well as
-  // 0-6 hours old on the walk-forward replay. "Retrain now" still runs one at once.
-  CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().min(0.25).default(6),
+  // 0-6 hours old on the walk-forward replay. Every 12 hours since 2026-10-17 (user ask). "Retrain
+  // now" still runs one at once.
+  CURATOR_TRAINING_INTERVAL_HOURS: z.coerce.number().min(0.25).default(12),
   // Three weeks: on 2026-10-04 the scan banked ~7,700 training rows a day, so this is about the
   // row ceiling below, and it is the window - not the ceiling - that should set how far back the
   // models look. The recency half-life below tilts the fit toward the newest part of it.
@@ -753,8 +765,9 @@ const envSchema = z.object({
   // of each other at 300-400 calls, so the default flipped on noise. 50 is the leaderboard's own
   // rank floor (MIN_LIVE_CALLS_TO_RANK). MIN_LIVE_GRADED 0 = off (an ungraded model can hold it).
   CURATOR_CHAMPION_MIN_LIVE_GRADED: z.coerce.number().int().min(0).default(50),
-  // Since 2026-10-14 the champion is ranked on the 2x lower bound (curation/champion.ts), so MARGIN
-  // is in percentage points of that bound: 1 is about the gap between the top seats over 72 hours.
+  // Since 2026-10-17 the champion is ranked on its live record's full-scorecard score
+  // (curation/champion.ts, recordScore), so MARGIN is in score points out of 100. (2026-10-14..17 it
+  // was ranked on the 2x lower bound and MARGIN was percentage points of that bound.)
   CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(1),
   // The training run's guard (curation/runGuard.ts): a run that would ship broken weights, train on
   // under half the rows the running models saw, or silence every seat that was calling is held

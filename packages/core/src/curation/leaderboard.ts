@@ -10,8 +10,14 @@ import type { PrecisionTargets } from "./trainer.js";
  * runs these tokens make, and not letting the runners slip by: a model that has shown, with
  * confidence, that it meets all of them scores 100; one that has shown nothing scores 0.
  *
- *  - 40 points for the 2x rate: the share of the 2x target its PROVEN 2x rate covers.
- *  - 25 points for the 4x rate: the same against the 4x target.
+ *  - 30 points for the 2x rate: the share of the 2x target its PROVEN 2x rate covers.
+ *  - 20 points for the 4x rate: the same against the 4x target.
+ *  - 20 points for the average return (user decision 2026-10-17: "train and judge on return AND
+ *    2x/4x/10x+ rate ... ALL of these are important"): the simulated return per call under the
+ *    exit plan (profitSim.ts), proven with PRIOR_CALLS phantom stop-outs, scored from 0 at
+ *    RETURN_FLOOR_PCT (every call a full stop) to full at RETURN_TARGET_PCT. A feed whose losers
+ *    fall to the stop and one whose losers drift flat read the same on the rates; this tells them
+ *    apart. A record without returns (older stored exams) is scored on the other parts, scaled.
  *  - 15 points for catching runners (user ask 2026-10-12: "not only hit the % targets but also not
  *    let things slip through the cracks"): of the tokens that doubled at a moment the exam graded,
  *    the share it called at a winning moment, against CATCH_TARGET_RATE. The rates alone reward
@@ -21,7 +27,7 @@ import type { PrecisionTargets } from "./trainer.js";
  *  - 10 points for the 10x rate (10x within an hour, the third tier, user decision 2026-10-06): the
  *    same against TEN_X_TARGET_RATE, proven over the calls whose 10x is settled (tenXGradedOf). A
  *    record that doesn't track it (older stored exams) adds no 10x evidence either way.
- *  - 10 points for run size: how far its calls ran, in doublings per call, against
+ *  - 5 points for run size: how far its calls ran, in doublings per call, against
  *    RUN_SIZE_TARGET_DOUBLINGS. A 2x, 4x or 4x-in-30-minutes call earns the same 2x/4x points
  *    whether it stops there or runs to 50x; this part is what tells them apart. A live call's run
  *    is its 24h run peak; an exam call's is the label window's peak, the 30-minute watch every
@@ -80,7 +86,8 @@ export interface CallRecord {
   sumRun?: number;
   /**
    * Graded calls with a simulated return under the fixed exit plan (curation/profitSim.ts), and
-   * the sum of those returns in percent of a stake. Live records only; absent on exams.
+   * the sum of those returns in percent of a stake. Live records, and exams since 2026-10-17 (each
+   * exam call priced under today's plan - TrainingRow.returnPct); absent on older stored exams.
    */
   simCalls?: number;
   sumSimReturnPct?: number;
@@ -97,12 +104,28 @@ export interface CallRecord {
 export const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
 
 export const COMPOSITE_WEIGHTS = {
-  winRate: 0.4,
-  goalRate: 0.25,
+  winRate: 0.3,
+  goalRate: 0.2,
   tenXRate: 0.1,
-  runSize: 0.1,
+  returnPct: 0.2,
+  runSize: 0.05,
   catchRate: 0.15,
 } as const;
+/** The return part's zero: every call a full stop-out under the exit plan. */
+export const RETURN_FLOOR_PCT = -50;
+/** The return part's target: a quarter of the stake made per call, on average. */
+export const RETURN_TARGET_PCT = 25;
+
+/** Whether a record carries simulated returns (live records; exams since 2026-10-17). */
+export function tracksReturn(record: CallRecord): boolean {
+  return (record.simCalls ?? 0) > 0 && record.sumSimReturnPct !== undefined;
+}
+
+/** The average return a record proves: its returns plus PRIOR_CALLS phantom stop-outs. */
+export function provenReturnPct(record: CallRecord): number {
+  const n = record.simCalls ?? 0;
+  return ((record.sumSimReturnPct ?? 0) + PRIOR_CALLS * RETURN_FLOOR_PCT) / (n + PRIOR_CALLS);
+}
 /**
  * The catch-rate target: three in four of the runners the exam saw called at a winning moment
  * (user decision 2026-10-12, was half). A single model caught 30-40% on the 10-08..10-11 replay
@@ -264,6 +287,13 @@ export interface ScoreParts {
   pointsCatch: number | null;
   /** The proven catch rate, in percent (runners caught over runners seen plus PRIOR_CALLS). */
   provenCatchPct: number | null;
+  /**
+   * Points from the average return, from RETURN_FLOOR_PCT to RETURN_TARGET_PCT; null when the
+   * record carries no returns, and the other parts are then scaled to 100 (see partsTotal).
+   */
+  pointsReturn: number | null;
+  /** The proven average return, in percent of the stake (see provenReturnPct). */
+  provenReturnPct: number | null;
 }
 
 export function scoreParts(record: CallRecord, targets: PrecisionTargets): ScoreParts | null {
@@ -275,6 +305,7 @@ export function scoreParts(record: CallRecord, targets: PrecisionTargets): Score
   const provenRun = provenRate(runSum(record), n);
   const proven10x = provenRate(record.tenX ?? 0, tenXGradedOf(record));
   const provenCatch = tracksCatch(record) ? provenRate(record.runnersCaught ?? 0, record.runnersSeen!) : null;
+  const provenRet = tracksReturn(record) ? provenReturnPct(record) : null;
   return {
     points2x: round1(100 * COMPOSITE_WEIGHTS.winRate * part(proven2x, targets.winRate)),
     points4x: round1(100 * COMPOSITE_WEIGHTS.goalRate * part(proven4x, targets.goalRate)),
@@ -289,6 +320,18 @@ export function scoreParts(record: CallRecord, targets: PrecisionTargets): Score
         ? null
         : round1(100 * COMPOSITE_WEIGHTS.catchRate * part(provenCatch, CATCH_TARGET_RATE)),
     provenCatchPct: provenCatch === null ? null : round1(provenCatch * 100),
+    pointsReturn:
+      provenRet === null
+        ? null
+        : round1(
+            100 *
+              COMPOSITE_WEIGHTS.returnPct *
+              Math.min(
+                1,
+                Math.max(0, (provenRet - RETURN_FLOOR_PCT) / (RETURN_TARGET_PCT - RETURN_FLOOR_PCT)),
+              ),
+          ),
+    provenReturnPct: provenRet === null ? null : round1(provenRet),
   };
 }
 
@@ -299,12 +342,16 @@ export function recordScore(record: CallRecord, targets: PrecisionTargets): numb
   return partsTotal(parts);
 }
 
-/** The parts summed; without a catch part, the rest scaled to 100 so records compare on one scale. */
+/** The parts summed; without a catch or return part, the rest scaled to 100 so records compare on one scale. */
 function partsTotal(parts: ScoreParts): number {
   const rest = parts.points2x + parts.points4x + parts.points10x + parts.pointsRun;
-  return parts.pointsCatch === null
-    ? round1(rest / (1 - COMPOSITE_WEIGHTS.catchRate))
-    : round1(rest + parts.pointsCatch);
+  let weight = 1;
+  let total = rest;
+  if (parts.pointsCatch === null) weight -= COMPOSITE_WEIGHTS.catchRate;
+  else total += parts.pointsCatch;
+  if (parts.pointsReturn === null) weight -= COMPOSITE_WEIGHTS.returnPct;
+  else total += parts.pointsReturn;
+  return round1(total / weight);
 }
 
 /**
@@ -380,6 +427,13 @@ export function pooledRecord(
       tenX: (live.tenX ?? 0) + (exam.tenX ?? 0) * k,
       tenXGraded: tenXGradedOf(live) + tenXGradedOf(exam) * k,
       ...(tracksCatch(exam) ? { runnersSeen: exam.runnersSeen, runnersCaught: exam.runnersCaught ?? 0 } : {}),
+      ...(tracksReturn(live) || tracksReturn(exam)
+        ? {
+            simCalls: (live.simCalls ?? 0) + (tracksReturn(exam) ? exam.simCalls! * k : 0),
+            sumSimReturnPct:
+              (live.sumSimReturnPct ?? 0) + (tracksReturn(exam) ? exam.sumSimReturnPct! * k : 0),
+          }
+        : {}),
     },
   };
 }
@@ -448,13 +502,18 @@ export function explainScore(composite: CompositeScore, targets: PrecisionTarget
     `4x on at least ${b.proven4xPct.toFixed(0)}% (target ${Math.round(targets.goalRate * 100)}%) ` +
     `and 10x within an hour on at least ${b.proven10xPct.toFixed(0)}% (target ${Math.round(TEN_X_TARGET_RATE * 100)}%), ` +
     `with runs worth ${b.provenRunDoublings.toFixed(2)} doublings a call (target ${RUN_SIZE_TARGET_DOUBLINGS}, a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average)` +
+    (b.provenReturnPct === null
+      ? ""
+      : `, returning at least ${b.provenReturnPct.toFixed(0)}% a call under the exit plan (target +${RETURN_TARGET_PCT}%)`) +
     (b.provenCatchPct === null
       ? ", "
       : ` and catching at least ${b.provenCatchPct.toFixed(0)}% of the runners in its backtest (target ${Math.round(CATCH_TARGET_RATE * 100)}%), `) +
     `from ${evidence}: ${b.points2x.toFixed(0)} + ${b.points4x.toFixed(0)} + ${b.points10x.toFixed(0)} + ${b.pointsRun.toFixed(0)}` +
-    (b.pointsCatch === null
-      ? `, scaled to 100 without a catch rate, = `
-      : ` + ${b.pointsCatch.toFixed(0)} = `) +
+    (b.pointsReturn === null ? "" : ` + ${b.pointsReturn.toFixed(0)}`) +
+    (b.pointsCatch === null ? "" : ` + ${b.pointsCatch.toFixed(0)}`) +
+    (b.pointsCatch === null || b.pointsReturn === null
+      ? `, scaled to 100 without ${b.pointsCatch === null && b.pointsReturn === null ? "a catch rate or returns" : b.pointsCatch === null ? "a catch rate" : "returns"}, = `
+      : " = ") +
     `${composite.score.toFixed(0)} of 100.`
   );
 }

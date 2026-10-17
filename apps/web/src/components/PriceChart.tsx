@@ -4,7 +4,10 @@ import {
   FLOW_WINDOW_MS,
   flowAt,
   mcapAxis,
+  sinceLabel,
   timeLabel,
+  timeTicks,
+  valueAt,
   volumeBars,
   type Point,
   type ScanFlow,
@@ -42,6 +45,7 @@ export function PriceChart({
   scans = [],
   live = true,
   now,
+  origin,
   height,
   ariaLabel,
 }: {
@@ -58,12 +62,18 @@ export function PriceChart({
   flow?: ScanFlow[];
   /** Model View: the call's time. Everything after it is shaded as what the model didn't see. */
   seenUntil?: number;
-  /** Model View: the scan readings the model read, drawn as dots on their market caps. */
+  /**
+   * Model View: the scans the model read before the call. Each is a small dot on the line at the
+   * scan's time (its own market cap came from another source, often a few seconds behind, so drawn
+   * at that it sat off the line); the readout near one gives what the scan read.
+   */
   scans?: Point[];
   /** Whether the line runs to the latest reading; false when the view ends earlier (Model View). */
   live?: boolean;
   /** The latest reading, tagged "NOW:" under the end tag when the view ends before it. */
   now?: number;
+  /** The First 15m view's launch: the time axis counts from it ("2:30") instead of the clock. */
+  origin?: number;
   height: number;
   ariaLabel: string;
 }) {
@@ -102,10 +112,12 @@ export function PriceChart({
     return { t0, t1, step, x, axis, base, fromAlert: leadShown && !!lead.mcap, hiIdx };
   }, [points, stepMs, width, height, events]);
 
-  // About one bar per 6px of plot, and no more bars than the view has minutes.
+  // About one bar per 6px of plot, and no more bars than the view has candles' widths (a minute,
+  // 15 seconds or one, the narrowest in view).
   const plotW = width - PAD.l - PAD.r;
+  const narrowest = candles.reduce((w, k) => Math.min(w, k.w ?? 60_000), 60_000);
   const slices = geo
-    ? Math.max(1, Math.min(Math.round(plotW / 6), Math.round((geo.t1 - geo.t0) / 60_000)))
+    ? Math.max(1, Math.min(Math.round(plotW / 6), Math.round((geo.t1 - geo.t0) / narrowest)))
     : 1;
   const vols = useMemo(
     () => (geo && candles.some((k) => k.vol > 0) ? volumeBars(candles, geo.t0, geo.t1, slices) : null),
@@ -131,9 +143,35 @@ export function PriceChart({
   const lastY = py(last);
   const shown = events.filter((e) => e.t >= geo.t0 && e.t <= geo.t1);
   const lead = shown[0];
-  // Five time labels on a desktop, three on a phone, where five would run into each other.
-  const fractions = width < 520 ? [0, 0.5, 1] : [0, 0.25, 0.5, 0.75, 1];
-  const timeTicks = fractions.map((f) => geo.t0 + f * span);
+  // Round times along the axis (on the minute, the quarter hour...), as many as fit their labels:
+  // seconds on a view of seconds, the time since launch on the First 15m view.
+  const fine = stepMs !== undefined && stepMs < 60_000;
+  const tickLabel = (t: number, step: number) =>
+    origin !== undefined ? sinceLabel(t - origin) : timeLabel(t, span, step < 60_000);
+  // A label's width, from its length at the axis's 12px (a little generous, so they never touch).
+  const textW = (text: string) => text.length * 7.4 + 6;
+  const labelW = textW(tickLabel(geo.t0, stepMs ?? 60_000)) + 16;
+  const axisTicks = (() => {
+    const { ticks: all, step } = timeTicks(geo.t0, geo.t1, Math.max(2, Math.floor(plotW / labelW)), origin);
+    // A label that would run off the chart's edge is pinned to it; one that would then touch the
+    // label before it is left out.
+    let prevEnd = -Infinity;
+    return all
+      .map((t) => ({ t, x: x(t), text: tickLabel(t, step) }))
+      .filter((k) => k.x >= PAD.l - 1 && k.x <= width - PAD.r + 1)
+      .map((k) => {
+        const w = textW(k.text);
+        const anchor: "start" | "end" | "middle" =
+          k.x - w / 2 < 0 ? "start" : k.x + w / 2 > width ? "end" : "middle";
+        const lo = anchor === "start" ? k.x - 4 : anchor === "end" ? k.x - w : k.x - w / 2;
+        return { ...k, anchor, lo, hi: lo + w };
+      })
+      .filter((k) => {
+        if (k.lo < prevEnd + 8) return false;
+        prevEnd = k.hi;
+        return true;
+      });
+  })();
   // Value ticks that would sit under the latest value's or the baseline's tag are left out.
   // Model View cut off before now: the latest reading goes under the end tag, or over it when
   // the baseline's tag sits below.
@@ -181,6 +219,13 @@ export function PriceChart({
   const sliceW = plotW / slices;
   const mark = bar !== null && vols ? (vols[bar] ?? undefined) : undefined;
   const hFlow = h ? flowAt(flow, h.t - 60_000, h.t) : null;
+  // The model's scans in view, and the one nearest the hovered point (within a point's width or so).
+  const shownScans = scans.filter((s) => s.t >= geo.t0 && s.t <= geo.t1);
+  const hScan = h
+    ? (shownScans
+        .filter((s) => Math.abs(s.t - h.t) <= Math.max(geo.step, 15_000))
+        .sort((a, b) => Math.abs(a.t - h.t) - Math.abs(b.t - h.t))[0] ?? null)
+    : null;
 
   return (
     <div className="pc" ref={boxRef}>
@@ -237,16 +282,18 @@ export function PriceChart({
             </text>
           </g>
         ))}
-        {timeTicks.map((t, i) => (
-          <text
-            key={i}
-            x={x(t)}
-            y={fullH - 6}
-            className="pc-tick"
-            textAnchor={i === 0 ? "start" : i === timeTicks.length - 1 ? "end" : "middle"}
-          >
-            {timeLabel(t, span)}
-          </text>
+        {axisTicks.map((k) => (
+          <g key={k.t}>
+            <line x1={k.x} x2={k.x} y1={bottom} y2={bottom + 4} className="pc-grid" />
+            <text
+              x={k.anchor === "start" ? Math.max(0, k.x - 4) : k.x}
+              y={fullH - 6}
+              className="pc-tick"
+              textAnchor={k.anchor}
+            >
+              {k.text}
+            </text>
+          </g>
         ))}
 
         {shown.map((e, i) => (
@@ -275,13 +322,15 @@ export function PriceChart({
         <line x1={PAD.l} x2={width - PAD.r} y1={baseY} y2={baseY} className="pc-base" />
         <path d={line} className="pc-line" stroke={`url(#${id}-stroke)`} />
 
-        {scans
-          .filter((s) => s.t >= geo.t0 && s.t <= geo.t1)
-          .map((s) => (
-            <circle key={`scan-${s.t}`} cx={x(s.t)} cy={axis.y(s.v)} r={3.5} className="pc-scan">
-              <title>{`Scan at ${timeLabel(s.t, 0)}: ${usd(s.v)}`}</title>
-            </circle>
-          ))}
+        {shownScans.map((s) => (
+          <circle
+            key={`scan-${s.t}`}
+            cx={x(s.t)}
+            cy={axis.y(valueAt(points, s.t) ?? s.v)}
+            r={hScan === s ? 3.5 : 2.5}
+            className="pc-scan"
+          />
+        ))}
 
         {showPeak && (
           <g className="pc-peak">
@@ -398,15 +447,10 @@ export function PriceChart({
       )}
 
       {h && !mark && (
-        <div
-          className="pc-tip"
-          style={{
-            left: hx > width / 2 ? undefined : hx + 14,
-            right: hx > width / 2 ? width - hx + 14 : undefined,
-          }}
-        >
+        <div className="pc-tip" style={tipPlace(hx, width)}>
           <span className="faint">
-            {timeLabel(h.t, span > 36 * 3_600_000 ? span : 0, stepMs !== undefined && stepMs < 60_000)}
+            {origin !== undefined && <span className="num">{sinceLabel(h.t - origin)} after launch · </span>}
+            {timeLabel(h.t, span > 36 * 3_600_000 ? span : 0, fine)}
           </span>
           <strong className="num">{usd(h.v)}</strong>
           {lead?.mcap ? (
@@ -414,11 +458,26 @@ export function PriceChart({
               {signedPct(change(lead.mcap, h.v))} vs {lead.label.toLowerCase()}
             </span>
           ) : null}
+          {hScan && (
+            <span className="pc-scan-line">
+              <i className="tm-scan-dot" aria-hidden="true" /> Scan the model read: {usd(hScan.v)} at{" "}
+              {timeLabel(hScan.t, 0, true)}
+            </span>
+          )}
           {hFlow && <FlowLine flow={hFlow} />}
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * Where a readout goes beside the point at `hx`: on its far side from the nearer edge, and on a
+ * narrow chart pinned to the far corner instead, so it never runs off the screen.
+ */
+function tipPlace(hx: number, width: number): { left?: number; right?: number } {
+  if (width < 520) return hx > width / 2 ? { left: 4 } : { right: 4 };
+  return hx > width / 2 ? { right: width - hx + 14 } : { left: hx + 14 };
 }
 
 /** A scan's buy share: "64% buys · 120 buys, 68 sells in the 5 min to 4:32 AM". */
@@ -449,24 +508,20 @@ function BarTip({
   bottom: number;
   width: number;
 }) {
-  const mins = Math.round((bar.to - bar.from) / 60_000);
+  const ms = bar.to - bar.from;
+  // A bar of seconds reads in seconds; one of minutes, as before.
+  const secs = ms < 60_000;
+  const over = secs ? `${Math.round(ms / 1_000)}s` : `${Math.round(ms / 60_000)} min`;
+  const many = secs ? ms > 1_000 : ms > 60_000;
   return (
-    <div
-      className="pc-tip"
-      style={{
-        top: "auto",
-        bottom,
-        left: x > width / 2 ? undefined : x + 10,
-        right: x > width / 2 ? width - x + 10 : undefined,
-      }}
-    >
+    <div className="pc-tip" style={{ top: "auto", bottom, ...tipPlace(x, width) }}>
       <span className="faint">
-        {timeLabel(bar.from, 0)}
-        {mins > 1 ? `–${timeLabel(bar.to, 0)}` : ""}
+        {timeLabel(bar.from, 0, secs)}
+        {many ? `–${timeLabel(bar.to, 0, secs)}` : ""}
       </span>
       <strong className="num">{usd(bar.usd)} volume</strong>
       <span className={`num ${bar.c >= bar.o ? "up" : "down"}`}>
-        {signedPct(change(bar.o, bar.c))} market cap{mins > 1 ? ` over ${mins} min` : ""}
+        {signedPct(change(bar.o, bar.c))} market cap{many ? ` over ${over}` : ""}
       </span>
       {flow ? <FlowLine flow={flow} /> : <span className="faint">No buy/sell count from a scan here</span>}
     </div>

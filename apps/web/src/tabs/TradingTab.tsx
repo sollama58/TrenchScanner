@@ -589,6 +589,15 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
 
 const pct = (fraction: number) => Math.round(fraction * 1000) / 10;
 
+/** The share of the position the ladder sells, 0-1. */
+const soldOnLadder = (plan: ExitPlan) => plan.takeProfits.reduce((s, t) => s + t.sellFraction, 0);
+
+/** A new rung above the highest, selling at most what the ladder leaves (the API rejects more than the whole). */
+const nextTakeProfit = (plan: ExitPlan) => ({
+  multiple: Math.max(1.5, ...plan.takeProfits.map((t) => t.multiple)) * 2,
+  sellFraction: Math.min(0.25, Math.round((1 - soldOnLadder(plan)) * 100) / 100),
+});
+
 interface ConfigFormProps {
   /** The saved settings: the form follows them while nothing is being edited. */
   config: BotConfig;
@@ -999,13 +1008,11 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
                 </button>
               </div>
             ))}
-            {plan.takeProfits.length < 20 && (
+            {plan.takeProfits.length < 20 && soldOnLadder(plan) < 1 - 1e-9 && (
               <button
                 type="button"
                 className="ghost"
-                onClick={() =>
-                  editPlan({ takeProfits: [...plan.takeProfits, { multiple: 3, sellFraction: 0.25 }] })
-                }
+                onClick={() => editPlan({ takeProfits: [...plan.takeProfits, nextTakeProfit(plan)] })}
               >
                 + Take profit
               </button>

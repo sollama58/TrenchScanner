@@ -5,6 +5,7 @@ import {
   prisma,
   loadEnv,
   rechooseChampion,
+  curatedTargets,
   HEURISTIC_CURATOR_SOURCE,
   STACKED_MODEL_KIND,
 } from "@trenchscanner/core";
@@ -123,12 +124,14 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
       roster: state.roster,
       lanes,
       rules: { minLiveGraded: 10_000, margin: 2 },
+      targets: curatedTargets(env),
     });
     expect(result).toMatchObject({ changed: true, pick: { id: "consensus", qualified: false } });
     const again = await rechooseChampion({
       roster: state.roster,
       lanes,
       rules: { minLiveGraded: 10_000, margin: 2 },
+      targets: curatedTargets(env),
     });
     expect(again.changed).toBe(false);
     await prisma.curatorChampion.deleteMany({});
@@ -254,10 +257,14 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
     });
 
     const state = await contestState(env);
-    expect(state.roster.find((c) => c.id === "trees")?.name).toBe("Deep Trees #3");
+    // Stored before goals were named: shown with its seat's goal in front (goalNamed).
+    expect(state.roster.find((c) => c.id === "trees")?.name).toBe("Return Deep Trees #3");
     const board = await buildLeaderboard(env, 30);
     const trees = board.entries.find((e) => e.id === "trees")!;
-    expect(trees).toMatchObject({ name: "Deep Trees #3", lane: { generation: 3, parentName: "Trees" } });
+    expect(trees).toMatchObject({
+      name: "Return Deep Trees #3",
+      lane: { generation: 3, parentName: "Trees" },
+    });
     expect(trees.composite.live).toMatchObject({ calls: 1, graded: 1, winRatePct: 0 });
     expect(board.evolution.history.map((h) => h.name)).toEqual(
       expect.arrayContaining(["Deep Trees #3", "Trees"]),

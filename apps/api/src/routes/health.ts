@@ -10,6 +10,7 @@ import {
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
+import { liveCurves } from "../liveCurve.js";
 
 /**
  * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
@@ -49,7 +50,7 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   "paper-trading": 10 * 60_000,
   cleanup: 26 * 3_600_000,
   "outcome-tracking": 26 * 3_600_000,
-  // Runs every CURATOR_TRAINING_INTERVAL_HOURS (6h by default; its heartbeat interval raises this), not daily - same "expected
+  // Runs every CURATOR_TRAINING_INTERVAL_HOURS (12h by default; its heartbeat interval raises this), not daily - same "expected
   // cadence + 2h" buffer as the daily jobs above, scaled to its own interval.
   "curator-training": 4 * 3_600_000,
   // Every 10 minutes; replay batches and playbook rounds wait on it, nothing user-facing does.
@@ -84,7 +85,7 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
 const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
 /**
  * A run in flight is hung after its job's stale threshold - unless the job's runs are far shorter
- * than that. Training's threshold is a whole interval and more (it runs every six hours), but a run
+ * than that. Training's threshold is a whole interval and more (it runs every twelve hours by default), but a run
  * takes about fifteen minutes and the worker gives up on one at 90: going by the threshold, a stuck
  * run read "running" on the admin panel until the worker restarted under it.
  */
@@ -214,9 +215,11 @@ export async function registerHealthRoutes(
         () => false,
       );
       if (!db) return reply.code(503).send({ ok: false, db: false });
-      return { ok: true, db: true };
+      return { ok: true, db: true, liveCurves: liveCurves().stats() };
     }
-    return { ok: true };
+    // The charts' live curve tails on this instance (liveCurve.ts): curves followed, how many the
+    // chart socket covers, and that socket's traffic and estimated Helius credits since boot.
+    return { ok: true, liveCurves: liveCurves().stats() };
   });
 
   /**

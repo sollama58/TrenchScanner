@@ -5,6 +5,7 @@ import {
   marketRunners,
   prisma,
   recordScore,
+  COMPOSITE_WEIGHTS,
   scoreBand,
   provenRate,
   TRACK_RECORD_DAYS,
@@ -25,6 +26,19 @@ import { SharedCache } from "./sharedCache.js";
  * settings "Copy" hands out. Owners are never shown: entries carry the filter's name and a short
  * tag from its id, and `mine` is worked out per request, never stored in the shared board.
  */
+
+/** The four scored parts of a filter's record, scaled to 100 the way recordScore scales them. */
+export function filterPoints(): FilterLeaderboard["points"] {
+  const w = COMPOSITE_WEIGHTS;
+  const scale = 100 / (w.winRate + w.goalRate + w.tenXRate + w.runSize);
+  const pts = (x: number) => Math.round(x * scale * 10) / 10;
+  return {
+    winRate: pts(w.winRate),
+    goalRate: pts(w.goalRate),
+    tenXRate: pts(w.tenXRate),
+    runSize: pts(w.runSize),
+  };
+}
 
 /** Graded alerts a filter needs before it is ranked. Below this it is listed as warming up. */
 export const MIN_GRADED_TO_RANK = 30;
@@ -145,6 +159,11 @@ export interface FilterLeaderboard {
   windowDays: number;
   minGradedToRank: number;
   targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number; tenXPct: number };
+  /**
+   * The points each part of a filter's score is worth. A filter's record has no catch or return
+   * part, so the model scorecard's other four are scaled to 100 (recordScore's partsTotal).
+   */
+  points: { winRate: number; goalRate: number; tenXRate: number; runSize: number };
   ranked: FilterLeaderboardEntry[];
   warmingUp: FilterLeaderboardEntry[];
   /** Every shared filter, ranked or not (the lists above are capped). */
@@ -324,6 +343,7 @@ export async function buildFilterLeaderboard(env: Env, now = new Date()): Promis
       runDoublings: RUN_SIZE_TARGET_DOUBLINGS,
       tenXPct: TEN_X_TARGET_RATE * 100,
     },
+    points: filterPoints(),
     ranked,
     warmingUp,
     sharedCount: entries.length,

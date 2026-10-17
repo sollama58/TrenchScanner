@@ -27,6 +27,26 @@ function bucketLabel(at: string, bucketMinutes: number): string {
 }
 
 /**
+ * The axis labels for a window's buckets, one per bucket ("" for none). Inside a day, six clock
+ * times evenly spaced; past it, the weekday at each local midnight, on the bucket that holds it, so
+ * a week of 6-hour buckets reads Mon Tue Wed every four buckets rather than skipping days.
+ */
+export function axisLabels(ats: readonly string[], bucketMinutes: number): string[] {
+  if (bucketMinutes < 360) {
+    const every = Math.max(1, Math.ceil(ats.length / 6));
+    return ats.map((at, i) => (i % every === 0 ? bucketLabel(at, bucketMinutes) : ""));
+  }
+  const stepMs = bucketMinutes * 60_000;
+  return ats.map((at) => {
+    const start = Date.parse(at);
+    const day = new Date(start);
+    day.setHours(0, 0, 0, 0);
+    if (day.getTime() !== start) day.setDate(day.getDate() + 1);
+    return day.getTime() < start + stepMs ? day.toLocaleDateString(undefined, { weekday: "short" }) : "";
+  });
+}
+
+/**
  * The Stats panel's average returns: what the feed's alerts paid under the fixed exit plan over
  * the last hour, 6 hours, day and week, and the selected window's bars. Mounted only while the
  * panel is open, so nobody's closed panel polls for it.
@@ -109,8 +129,8 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
                   <div
                     key={b.at}
                     className={`lh-ret-col${hover === i ? " is-hover" : ""}`}
-                    onMouseEnter={() => setHover(i)}
-                    onClick={() => setHover(i)}
+                    onPointerEnter={() => setHover(i)}
+                    onPointerDown={() => setHover(i)}
                   >
                     {b.avgReturnPct !== null && (
                       <span
@@ -124,10 +144,11 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
             </div>
           </div>
           <div className="lh-axis lh-axis-inset" aria-hidden>
-            {win.buckets.map((b, i) => (
-              <span key={b.at}>
-                {i % Math.ceil(win.buckets.length / 6) === 0 ? bucketLabel(b.at, win.bucketMinutes) : ""}
-              </span>
+            {axisLabels(
+              win.buckets.map((b) => b.at),
+              win.bucketMinutes,
+            ).map((label, i) => (
+              <span key={win.buckets[i]!.at}>{label}</span>
             ))}
           </div>
         </>
@@ -205,10 +226,10 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
         </>
       )}
       <p className="faint small stats-note">
-        Each alert&apos;s return under the fixed exit plan (half sold at 2x, the rest on a trailing stop, stop
-        at −50%), averaged by when it alerted. An alert counts once its return settles, from 30 minutes to 3
-        hours after it fires, so the last hour fills in late. The top 3 are the calls that passed (hit 2x
-        before a 50% drop), ranked by Peak, the figure each feed card shows.
+        Each alert&apos;s return under the fixed exit plan (35% sold at 2x, 30% at 4x, 25% at 10x, the rest on
+        a trailing stop, stop at −50%), averaged by when it alerted. An alert counts once its return settles,
+        from 30 minutes to 3 hours after it fires, so the last hour fills in late. The top 3 are the calls
+        that passed (hit 2x before a 50% drop), ranked by Peak, the figure each feed card shows.
       </p>
     </section>
   );

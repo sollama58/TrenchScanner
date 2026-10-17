@@ -260,7 +260,7 @@ describe("GET /health while the report caches fill", () => {
     warming = false;
     const res = await app.inject({ url: "/health" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true });
+    expect(res.json()).toMatchObject({ ok: true, liveCurves: { followed: 0, streamed: 0 } });
     await app.close();
   });
 });
@@ -316,8 +316,8 @@ describe.skipIf(!dbAvailable)("GET /health/worker?strict=1 against the database"
     const instance = await app();
     const res = await instance.inject({ url: "/health?db=1" });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, db: true });
-    expect((await instance.inject({ url: "/health" })).json()).toEqual({ ok: true });
+    expect(res.json()).toMatchObject({ ok: true, db: true });
+    expect((await instance.inject({ url: "/health" })).json()).toMatchObject({ ok: true });
     await instance.close();
   });
 

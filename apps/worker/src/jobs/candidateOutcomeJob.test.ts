@@ -216,7 +216,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.hit4xIn1h).toBe(false); // won, but short of the 4x goal
     expect(updated.extended24h).toBe(true);
     expect(updated.finalized24hAt).toBeNull(); // still on the 24h watch
-    // Under the exit plan: half sold at 2x, the rest riding the trail from the window's peak -
+    // Under the exit plan: 35% sold at 2x, the rest riding the trail from the window's peak -
     // no return yet. The sale landed on a tick this sweep never saw, so the trail arms now.
     expect(updated.simReturnPct).toBeNull();
     expect(updated.trailHighPriceUsd).toBeCloseTo(2.6);
@@ -230,7 +230,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updatedAlert.outcomeFinalizedAt).toBeNull();
     expect(updatedAlert.simReturnPct).toBeNull();
 
-    // A new high lifts the trail; the next tick 35% or more under it fires the exit at that tick's
+    // A new high lifts the trail; the next tick 40% or more under it fires the exit at that tick's
     // price, and the return lands on the row and the alert while the row stays on its 24h watch.
     await prisma.candidateOutcome.update({
       where: { id: row.id },
@@ -244,11 +244,11 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
       where: { id: row.id },
       data: { nextCheckAt: new Date(Date.now() - 1000) },
     });
-    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.9 }), env);
+    await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 1.75 }), env);
     const settled = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     expect(settled.trailExitAt).not.toBeNull();
-    expect(settled.trailExitPriceUsd).toBeCloseTo(1.9);
-    expect(settled.simReturnPct).toBeCloseTo((0.5 * 2 + 0.5 * 1.9 - 1) * 100);
+    expect(settled.trailExitPriceUsd).toBeCloseTo(1.75);
+    expect(settled.simReturnPct).toBeCloseTo((0.35 * 2 + 0.65 * 1.75 - 1) * 100);
     expect(settled.finalized24hAt).toBeNull();
     const settledAlert = await prisma.curatedAlert.findUniqueOrThrow({ where: { id: alert.id } });
     expect(settledAlert.simReturnPct).toBeCloseTo(settled.simReturnPct!);
@@ -274,7 +274,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     expect(updated.hit2xIn1h).toBe(false);
     expect(updated.labelValue).toBe(0);
     expect(updated.extended24h).toBe(false);
-    // A loss for the label, but the plan sold half at 2x and still holds the rest: not retired.
+    // A loss for the label, but the plan sold 35% at 2x and still holds the rest: not retired.
     expect(updated.simReturnPct).toBeNull();
     expect(updated.finalized24hAt).toBeNull();
     expect(updated.nextCheckAt.getTime()).toBeGreaterThan(Date.now());
@@ -288,7 +288,7 @@ describe.skipIf(!dbAvailable)("candidate outcome pipeline", () => {
     await runCandidateWatchJob(stubDexScreener({ [token.mintAddress]: 2.4 }), env);
     const capped = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: row.id } });
     expect(capped.trailExitAt).toBeNull();
-    expect(capped.simReturnPct).toBeCloseTo((0.5 * 2 + 0.5 * 2.4 - 1) * 100);
+    expect(capped.simReturnPct).toBeCloseTo((0.35 * 2 + 0.65 * 2.4 - 1) * 100);
     expect(capped.finalized24hAt).not.toBeNull();
     expect(capped.peak24hReturnPct).toBeCloseTo(160);
   });

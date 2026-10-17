@@ -10,6 +10,11 @@ import { z } from "zod";
  */
 export const ALERT_SOUNDS = ["chime", "ping", "bell", "coin", "radar"] as const;
 
+/** Where Chaos Mode opens each new alert: the cards' quick-link sites plus Pump.fun. */
+export const CHAOS_SITES = ["terminal", "axiom", "gmgn", "pumpfun"] as const;
+/** Chaos Mode's per-minute cap on the tabs it opens. */
+export const CHAOS_PER_MINUTE = { min: 1, max: 60 } as const;
+
 export const alertPrefsSchema = z.object({
   soundEnabled: z.boolean(),
   sound: z.enum(ALERT_SOUNDS),
@@ -18,6 +23,12 @@ export const alertPrefsSchema = z.object({
   browserNotifications: z.boolean(),
   /** Which alerts ping or notify. */
   notifyOn: z.object({ filterMatches: z.boolean(), modelCalls: z.boolean() }),
+  /** Chaos Mode: open every new Live feed alert in a trading site's tab (desktop browsers only). */
+  chaosMode: z.boolean(),
+  /** The site it opens; null follows the first of the cards' quick links. */
+  chaosSite: z.enum(CHAOS_SITES).nullable(),
+  /** The most tabs it opens in any minute; alerts past it are skipped. */
+  chaosPerMinute: z.number().int().min(CHAOS_PER_MINUTE.min).max(CHAOS_PER_MINUTE.max),
 });
 
 export type AlertPrefs = z.infer<typeof alertPrefsSchema>;
@@ -28,6 +39,10 @@ export const DEFAULT_ALERT_PREFS: AlertPrefs = {
   volume: 60,
   browserNotifications: false,
   notifyOn: { filterMatches: true, modelCalls: true },
+  // Off by default, 10 a minute (user ask 2026-10-17).
+  chaosMode: false,
+  chaosSite: null,
+  chaosPerMinute: 10,
 };
 
 /** A partial update: any top-level field, and either half of notifyOn. */
@@ -55,6 +70,9 @@ export function parseAlertPrefs(stored: unknown): AlertPrefs {
     sound: field("sound"),
     volume: field("volume"),
     browserNotifications: field("browserNotifications"),
+    chaosMode: field("chaosMode"),
+    chaosSite: field("chaosSite"),
+    chaosPerMinute: field("chaosPerMinute"),
     notifyOn: {
       filterMatches:
         typeof notifyRaw.filterMatches === "boolean"

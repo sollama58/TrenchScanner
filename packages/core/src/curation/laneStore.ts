@@ -1,5 +1,5 @@
 import { Prisma, prisma } from "../db.js";
-import type { CuratorRecipe } from "./contestants.js";
+import { contestantSpec, type CuratorRecipe } from "./contestants.js";
 import type { Lane } from "./evolution.js";
 import { REPORTED_LABEL_RULE, LABEL_LOG2_CAP } from "./labels.js";
 import {
@@ -17,6 +17,16 @@ import { walletSafetyCutsSql } from "../scoring/rugScreen.js";
  * must see the same lanes and grade the same live records, so both read through here.
  */
 
+/**
+ * A stored recipe with its seat's goal filled in: lanes bred before goals existed (2026-10-17)
+ * carry none, and a seat's goal is its own - the seat's spec sets it, every lane in it keeps it.
+ */
+export function withSeatGoal(slot: string, recipe: CuratorRecipe): CuratorRecipe {
+  if (recipe.goal !== undefined) return recipe;
+  const goal = contestantSpec(slot)?.recipe?.goal;
+  return goal === undefined ? recipe : { ...recipe, goal };
+}
+
 /** Each seat's current lane (CuratorLane with retiredAt null), newest first per slot. */
 export async function loadCurrentLanes(): Promise<Lane[]> {
   const rows = await prisma.curatorLane.findMany({
@@ -32,7 +42,7 @@ export async function loadCurrentLanes(): Promise<Lane[]> {
       slot: r.slot,
       name: r.name,
       description: r.description,
-      recipe: r.recipe as unknown as CuratorRecipe,
+      recipe: withSeatGoal(r.slot, r.recipe as unknown as CuratorRecipe),
       generation: r.generation,
       parentName: r.parentName,
       bornAt: r.bornAt,

@@ -3,7 +3,7 @@ import "../bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma, KNOWN_EXCHANGE_WALLETS } from "@trenchscanner/core";
 import { runDevLaunchRiskJob } from "./devLaunchRiskJob.js";
-import { devLaunchReadings, setDevLaunchBook } from "./devLaunchBook.js";
+import { bookCut, devLaunchReadings, setDevLaunchBook } from "./devLaunchBook.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `dev-launch-test-${Date.now()}`;
@@ -69,7 +69,7 @@ describe.skipIf(!dbAvailable)("dev launch risk", () => {
   });
 
   const serial = wallet("Repeat");
-  const once = wallet("Once");
+  const once = wallet("Uno");
   const farmA = wallet("FarmA");
   const farmB = wallet("FarmB");
   const farmer = wallet("Farmer");
@@ -88,7 +88,7 @@ describe.skipIf(!dbAvailable)("dev launch risk", () => {
     const stopped = await launch(serial, { grade: "stop" });
     await launch(serial, { hoursAgo: 0.5 });
     // Once: a single dead launch, no row.
-    await launch(once);
+    const onceCoin = await launch(once);
     // A farm: two fresh creators, one dead launch each, paid for by one wallet.
     await launch(farmA);
     await launch(farmB);
@@ -147,6 +147,8 @@ describe.skipIf(!dbAvailable)("dev launch risk", () => {
       { mintAddress: "new-coin", token: null, creator: serial },
       { mintAddress: fresh.mintAddress, token: fresh },
       { mintAddress: "unknown", token: null },
+      { mintAddress: "once-again", token: null, creator: once },
+      { mintAddress: onceCoin.mintAddress, token: onceCoin },
     ]);
     // The stopped coin's own launch and grade are taken out of its creator's record.
     expect(readings.get(stopped.mintAddress)).toMatchObject({
@@ -166,5 +168,26 @@ describe.skipIf(!dbAvailable)("dev launch risk", () => {
     });
     expect(readings.get(fresh.mintAddress)!.devLaunchRisk).not.toBeNull();
     expect(readings.has("unknown")).toBe(false);
+    // A creator the rebuild kept no row for still reads its earlier launch, not a first launch.
+    expect(readings.get("once-again")).toMatchObject({ devLaunchPrior: 1, devLaunchPriorInBand: 0 });
+    expect(readings.get("once-again")!.devLaunchRisk).not.toBeNull();
+    // ...and its own coin, its only launch, reads none.
+    expect(readings.get(onceCoin.mintAddress)).toMatchObject({ devLaunchPrior: 0, devLaunchRisk: null });
+  });
+});
+
+describe("bookCut", () => {
+  const t = (iso: string) => new Date(iso);
+  it("takes the rows' newest computedAt over a heartbeat still on the last rebuild", () => {
+    expect(bookCut([t("2026-10-17T10:00:00Z"), t("2026-10-17T11:00:00Z")], "2026-10-17T10:00:00Z")).toEqual(
+      t("2026-10-17T11:00:00Z"),
+    );
+  });
+  it("takes a newer heartbeat when the rebuild changed no row", () => {
+    expect(bookCut([t("2026-10-17T10:00:00Z")], "2026-10-17T11:00:00Z")).toEqual(t("2026-10-17T11:00:00Z"));
+  });
+  it("is null with no rows and no heartbeat", () => {
+    expect(bookCut([], null)).toBeNull();
+    expect(bookCut([], "garbage")).toBeNull();
   });
 });

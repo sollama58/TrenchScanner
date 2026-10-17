@@ -837,7 +837,7 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
       where: { tokenId: token.id, model: CONSENSUS_CONTESTANT },
     });
     expect(consensus.confidence).toBeGreaterThan(99);
-    expect(consensus.reasons[0]).toBe("backed by Linear, Trees, Rules");
+    expect(consensus.reasons[0]).toBe("backed by Return Linear, Return Trees, Rules");
   });
 
   it("the consensus doesn't call a moment its members don't back, however sure its meta model is", async () => {

@@ -15,6 +15,7 @@ import {
   roundRect,
 } from "../shareCard";
 import { drawPricingChange } from "../pricingChange";
+import { lineScale, tickIndices } from "../chartScale";
 
 /**
  * The Models tab's week share image: up to five picked models' chosen measure over the last seven
@@ -55,12 +56,8 @@ function chart(ctx: CanvasRenderingContext2D, d: WeekCardData, x0: number, x1: n
   const h = base - top;
   const n = d.labels.length;
   const values = d.lines.flatMap((l) => l.values).filter((v): v is number => v !== null);
-  const hi = Math.max(0, ...values) * 1.15;
-  const low = d.metric === "ret" ? Math.min(0, ...values) * 1.15 : 0;
-  const span = Math.max(10, hi - low);
-  const step = span <= 30 ? 10 : span <= 60 ? 20 : span <= 125 ? 25 : span <= 250 ? 50 : 100;
-  const max = Math.max(10, Math.ceil(hi / step) * step);
-  const min = Math.floor(low / step) * step;
+  // The Models tab's week lines' own scale (MultiLines), so the card reads like the chart.
+  const { top: max, bottom: min, ticks } = lineScale(values, d.metric === "ret");
   const left = x0 + 62;
   const w = x1 - left;
   const x = (i: number) => left + (n <= 1 ? w / 2 : (i / (n - 1)) * w);
@@ -68,7 +65,7 @@ function chart(ctx: CanvasRenderingContext2D, d: WeekCardData, x0: number, x1: n
 
   ctx.textBaseline = "middle";
   ctx.font = `500 16px ${FONT}`;
-  for (let t = min; t <= max; t += step) {
+  for (const t of ticks) {
     ctx.strokeStyle = t === 0 ? "rgba(255, 255, 255, 0.2)" : "rgba(255, 255, 255, 0.07)";
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -80,7 +77,11 @@ function chart(ctx: CanvasRenderingContext2D, d: WeekCardData, x0: number, x1: n
     ctx.fillText(d.metric === "ret" && t > 0 ? `+${t}%` : `${t}%`, left - 10, y(t));
   }
   ctx.textBaseline = "top";
+  // Only the day labels that fit side by side, the last always (more days than fit would overlap).
+  const labelW = Math.max(0, ...d.labels.map((l) => ctx.measureText(l).width));
+  const shown = new Set(tickIndices(n, n <= 1 ? w : w / (n - 1), labelW, 12));
   d.labels.forEach((label, i) => {
+    if (!shown.has(i)) return;
     ctx.fillStyle = MUTED;
     ctx.textAlign = i === 0 ? "left" : i === n - 1 ? "right" : "center";
     ctx.fillText(label, x(i), base + 10);

@@ -27,7 +27,7 @@ interface Book {
   devs: Map<string, DevLaunchEntry>;
   families: Map<string, DevFamilyEntry>;
   market: DevLaunchMarket;
-  /** The rebuild's own cut (its heartbeat's builtAt): the own-launch read must use the same one. */
+  /** The rebuild's own cut (its rows' computedAt): the own-launch read must use the same one. */
   builtAt: Date;
 }
 
@@ -43,33 +43,45 @@ const counts = {
   stops: true,
 } as const;
 
+/**
+ * The cut the loaded rows were built at: the latest of their computedAt (the rebuild's `now`,
+ * committed with them) and the heartbeat's builtAt. The heartbeat alone lags: it is written after
+ * the rows commit, so a load in that gap would pair the new rows with the old cut and let a coin's
+ * own launch leak into its prior. The heartbeat still counts when it is newer, for a rebuild that
+ * changed no row (replaceRows leaves an unchanged row's computedAt as it was). Null with neither.
+ */
+export function bookCut(computedAt: readonly Date[], heartbeatBuiltAt: string | null): Date | null {
+  let max = heartbeatBuiltAt === null ? NaN : new Date(heartbeatBuiltAt).getTime();
+  for (const d of computedAt) if (!(d.getTime() <= max)) max = d.getTime();
+  return Number.isNaN(max) ? null : new Date(max);
+}
+
 /** Starts a reload when the copy is due; never throws, never waits. */
 export function refreshDevLaunchBook(now = Date.now()): void {
   if (loading || now - loadedAt < RELOAD_MS) return;
   loading = Promise.all([
-    prisma.devLaunchRisk.findMany({ select: { wallet: true, funder: true, ...counts } }),
+    prisma.devLaunchRisk.findMany({
+      select: { wallet: true, funder: true, computedAt: true, ...counts },
+    }),
     prisma.devFunderRisk.findMany({ select: { funder: true, creators: true, ...counts } }),
     prisma.systemHeartbeat.findUnique({ where: { job: "dev-launch-risk" }, select: { meta: true } }),
   ])
     .then(([devs, families, heartbeat]) => {
       const meta = (heartbeat?.meta ?? null) as Record<string, unknown> | null;
-      const builtAt = typeof meta?.builtAt === "string" ? new Date(meta.builtAt) : null;
+      const builtAt = bookCut(
+        devs.map((d) => d.computedAt),
+        typeof meta?.builtAt === "string" ? meta.builtAt : null,
+      );
       const rate = (k: string) => (typeof meta?.[k] === "number" ? (meta[k] as number) : null);
       const bandRate = rate("bandRate");
       const winRate = rate("winRate");
       const stopRate = rate("stopRate");
-      // No rebuild yet, or one from before the cut was recorded: nothing to read a coin against.
-      if (
-        !builtAt ||
-        Number.isNaN(builtAt.getTime()) ||
-        bandRate === null ||
-        winRate === null ||
-        stopRate === null
-      ) {
+      // No rebuild yet, or one from before the rates were recorded: nothing to read a coin against.
+      if (!builtAt || bandRate === null || winRate === null || stopRate === null) {
         book = null;
       } else {
         book = {
-          devs: new Map(devs.map(({ wallet, ...r }) => [wallet, r])),
+          devs: new Map(devs.map(({ wallet, computedAt: _c, ...r }) => [wallet, r])),
           families: new Map(families.map(({ funder, ...r }) => [funder, r])),
           market: { bandRate, winRate, stopRate },
           builtAt,
@@ -106,10 +118,10 @@ function creatorOf(c: DevLaunchCoin): string | null {
 }
 
 /**
- * Each coin's dev launch reading, keyed by mint, for the coins whose creator is known. Two
+ * Each coin's dev launch reading, keyed by mint, for the coins whose creator is known. Three
  * queries for the cycle: the coins' own grades as the rebuild read them (to take their own launch
- * back out), and the funders of creators the rebuild had no family for (a new creator from a known
- * farm). Empty while no rebuild is loaded or when a read fails: an unknown is left unknown, never
+ * back out), the funders of creators the rebuild had no family for (a new creator from a known
+ * farm), and the launch counts of creators the rebuild kept no row for (unbookedLaunchesOf). Empty while no rebuild is loaded or when a read fails: an unknown is left unknown, never
  * read with the coin's own result in it.
  */
 export async function devLaunchReadings(
@@ -140,8 +152,12 @@ export async function devLaunchReadings(
         })
       : [];
     const funderOf = new Map(funders.map((f) => [f.wallet, f.funder!]));
+    const unbooked = await unbookedLaunchesOf(
+      [...new Set(withCreator.map(({ creator }) => creator).filter((c) => !b.devs.has(c)))],
+      b.builtAt,
+    );
     for (const { coin, creator } of withCreator) {
-      const entry = b.devs.get(creator);
+      const entry = b.devs.get(creator) ?? unbooked.get(creator);
       const funder = entry?.funder ?? funderOf.get(creator) ?? null;
       const family = funder && funder !== creator ? b.families.get(funder) : undefined;
       out.set(
@@ -204,6 +220,43 @@ export async function ownLaunchesOf(
       graded: g ? 1 : 0,
       wins: g?.win ? 1 : 0,
       stops: g?.stop ? 1 : 0,
+    });
+  }
+  return out;
+}
+
+/** The same address check as the rebuild (devLaunchRiskJob.ts WALLET_SQL_RE). */
+const WALLET_SQL_RE = "^[1-9A-HJ-NP-Za-km-z]{32,44}$";
+
+/**
+ * The launches the rebuild at `builtAt` counted for creators it kept no row for (one launch, never
+ * in the band, no family: devLaunchRiskJob.ts MIN_LAUNCHES), so such a creator's earlier launch
+ * isn't read as a first launch. One grouped count on Token_creator_idx, with the rebuild's window,
+ * settle cut and address check; none of them reached the band by the cut (else it would have a
+ * row), and no grade is read without the band. The coin's own launch is counted here exactly as the
+ * rebuild would, and taken back out with the rest by ownLaunchesOf. Creators with no launch counted
+ * are absent.
+ */
+export async function unbookedLaunchesOf(
+  creators: readonly string[],
+  builtAt: Date,
+): Promise<Map<string, DevLaunchEntry>> {
+  const out = new Map<string, DevLaunchEntry>();
+  if (creators.length === 0) return out;
+  const since = new Date(builtAt.getTime() - DEV_LAUNCH_WINDOW_DAYS * 86_400_000);
+  const settled = new Date(builtAt.getTime() - DEV_LAUNCH_SETTLE_MS);
+  const rows = await prisma.$queryRaw<{ creator: string; launches: bigint }[]>`
+    SELECT t."creator", COUNT(*) AS "launches"
+    FROM "Token" t
+    WHERE t."creator" = ANY(${[...creators]}::text[])
+      AND t."firstSeenAt" >= ${since} AND t."firstSeenAt" < ${settled}
+      AND t."creator" ~ ${WALLET_SQL_RE}
+    GROUP BY t."creator"`;
+  for (const r of rows) {
+    out.set(r.creator, {
+      ...EMPTY_DEV_LAUNCH_STATS,
+      launches: Number(r.launches),
+      funder: null,
     });
   }
   return out;

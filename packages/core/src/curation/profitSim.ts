@@ -13,8 +13,8 @@ import {
  * call instead, under one plan applied to everything (EXIT_PLAN):
  *
  *   - buy at the alert price the labels are graded from (CandidateOutcome.anchorPriceUsd),
- *   - sell a share of the position at each take-profit multiple, lowest first (half at 2x: the
- *     stake is back, so the worst case from there is breakeven),
+ *   - sell a share of the position at each take-profit multiple, lowest first (35% at 2x, 30% at
+ *     4x, 25% at 10x),
  *   - sell whatever is left at the stop if the price falls to it before the first sale,
  *   - once something has been sold, let the rest ride on a trailing exit: it sells the first time
  *     the price is seen a set fraction or more below the highest price since the sale (a ratchet
@@ -89,16 +89,27 @@ export interface ExitPlan {
 }
 
 /**
- * The plan every call is simulated under (user decision 2026-10-07): half at 2x, the rest on a
- * trailing exit 35% below its high, out at 3 hours; stop at -50% before the sale; a call that
- * never sold closes at 30 minutes. The sale at 2x is the stake back, so once it has landed the
- * call can no longer lose, whatever price the trailing share fetches.
+ * The plan every call is simulated under (user decision 2026-10-17): 35% of the position at 2x,
+ * 30% at 4x and 25% at 10x, everything still held on a trailing exit 40% below its high from the
+ * first sale on, out at 3 hours; stop at -50% before the first sale; a call that never sold closes
+ * at 30 minutes. Once the 2x sale has landed, a trail that fills at its level (1.2x from a 2x high)
+ * still returns 0.35 x 2 + 0.65 x 1.2 = 1.48x; it fills at the price seen, so a gap through it can
+ * still lose (breakeven at about 0.46x).
+ *
+ * It replaces half at 2x with the rest trailing 35% (2026-10-07). On 6-hour price paths of the
+ * week to 2026-10-17 it took about a point more per call with the stop booked at its level (as
+ * here), and about the same replayed at the watcher's cadence; a longer hold changed nothing (one
+ * position in 3,284 was still held at 3 hours).
  */
 export const EXIT_PLAN: ExitPlan = {
-  takeProfits: [{ multiple: 2, sellFraction: 0.5 }],
+  takeProfits: [
+    { multiple: 2, sellFraction: 0.35 },
+    { multiple: 4, sellFraction: 0.3 },
+    { multiple: 10, sellFraction: 0.25 },
+  ],
   stopFraction: DISQUALIFYING_DRAWDOWN_FRACTION,
   maxHoldMinutes: CANDIDATE_WATCH_WINDOW_MINUTES,
-  trail: [{ fromMultiple: 2, fraction: 0.35 }],
+  trail: [{ fromMultiple: 2, fraction: 0.4 }],
   trailMaxHoldMinutes: 180,
 };
 
@@ -146,8 +157,11 @@ export function describeExitPlan(plan: ExitPlan = EXIT_PLAN): string {
       .slice(1)
       .map((t) => `${Math.round(t.fraction * 100)}% past ${t.fromMultiple}x`)
       .join(" and ");
+    // With one rung the trail holds "the rest"; with more, it covers whatever is held between them.
+    const riding =
+      plan.takeProfits.length > 1 ? "from the first sale, let what is still held ride" : "let the rest ride";
     parts.push(
-      `let the rest ride with a trailing exit ${Math.round(first.fraction * 100)}% off its high` +
+      `${riding} with a trailing exit ${Math.round(first.fraction * 100)}% off its high` +
         (tightening ? `, tightening to ${tightening}` : "") +
         `, out at ${holdLabel(plan.trailMaxHoldMinutes)}`,
     );
@@ -312,8 +326,12 @@ export function simulateExitPlan(
   let held = 1;
   let proceeds = 0; // in multiples of the stake
   let sold = false;
-  for (const tp of sortedLadder(plan)) {
-    if (held <= 1e-9 || peak < entry * tp.multiple) break;
+  // Rungs past the first are sold while the trail holds the rest, so they count only on prices the
+  // trail saw: a window peak or close after the trail fired came too late for them.
+  const trailHigh = plan.trail.length > 0 ? row.trailHighPriceUsd : null;
+  for (const [i, tp] of sortedLadder(plan).entries()) {
+    const reach = i > 0 && trailHigh != null ? trailHigh : peak;
+    if (held <= 1e-9 || reach < entry * tp.multiple) break;
     const share = Math.min(tp.sellFraction, held);
     proceeds += share * tp.multiple;
     held -= share;

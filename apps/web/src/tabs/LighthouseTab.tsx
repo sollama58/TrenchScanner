@@ -28,6 +28,7 @@ import {
   WINDOWS,
   breakdownSeries,
   bucketAllowed,
+  breakdownKind,
   bucketLabel,
   canAdd,
   hasPanel,
@@ -38,6 +39,7 @@ import {
   metricSeries,
   panelTitle,
   savePanels,
+  spansDays,
   type BreakdownMode,
   type ChartKind,
   type MetricId,
@@ -542,7 +544,10 @@ function MetricsChart({
   onDrawn: (d: Drawn) => void;
 }) {
   const bucket = history.window.bucket;
-  const labels = useMemo(() => history.series.map((p) => bucketLabel(p.at, bucket)), [history, bucket]);
+  const labels = useMemo(() => {
+    const multiDay = spansDays(history.series.map((p) => p.at));
+    return history.series.map((p) => bucketLabel(p.at, bucket, multiDay));
+  }, [history, bucket]);
   const series = useMemo(() => metricSeries(history, panel.metrics, targets), [history, panel, targets]);
   const change = useMemo(() => changeSlot(history.series.map((p) => p.at)), [history]);
   useEffect(
@@ -574,10 +579,13 @@ function BreakdownChart({
   const history = own.data ?? (panel.dimension === fallback.window.dimension ? fallback : null);
   const h = history ?? fallback;
   const bucket = h.labels.bucket;
-  const labels = useMemo(() => h.labels.buckets.map((p) => bucketLabel(p.at, bucket)), [h, bucket]);
+  const labels = useMemo(() => {
+    const multiDay = spansDays(h.labels.buckets.map((p) => p.at));
+    return h.labels.buckets.map((p) => bucketLabel(p.at, bucket, multiDay));
+  }, [h, bucket]);
   const series = useMemo(() => breakdownSeries(h, panel.breakdown), [h, panel.breakdown]);
   const change = useMemo(() => changeSlot(h.labels.buckets.map((p) => p.at)), [h]);
-  const kind = panel.kind === "bars" ? "stacked" : "line";
+  const kind = breakdownKind(panel.breakdown, panel.kind);
   useEffect(() => {
     if (history) onDrawn({ labels, series, kind, pricingChange: change });
   }, [history, labels, series, kind, change, onDrawn]);
