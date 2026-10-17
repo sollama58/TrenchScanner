@@ -136,7 +136,8 @@ export function usePolling<T>(path: string, intervalMs: number, key = ""): Loada
 /**
  * Several paths polled together, all at once: on mount, when the paths or `key` change, on
  * reload(), and every `intervalMs` while the tab is visible. Each path keeps its last answer
- * (null until the first lands) while the next is in flight or if it fails. Overlapping reloads
+ * (the shared cache's until its own lands, null if neither) while the next is in flight or if it
+ * fails. Overlapping reloads
  * coalesce into one follow-up round, as in usePolling.
  */
 export function usePollingAll<T>(
@@ -189,10 +190,15 @@ export function usePollingAll<T>(
   }, [run]);
 
   const firstKey = useRef(key);
+  const skipCache = useRef(false);
   useEffect(() => {
     const forced = key !== firstKey.current;
     firstKey.current = key;
-    if (forced) setHeld(new Map());
+    if (forced) {
+      // The cache holds answers from before the change: don't show them either.
+      skipCache.current = true;
+      setHeld(new Map());
+    }
     again.current = false;
     busy.current = false;
     run(forced ? -1 : FRESH_ON_MOUNT_MS);
@@ -206,13 +212,15 @@ export function usePollingAll<T>(
     };
   }, [joined, key, intervalMs, run, reload]);
 
-  // Keyed on the joined paths, not the array, which a caller may rebuild every render.
+  // Keyed on the joined paths, not the array, which a caller may rebuild every render. A path with
+  // no answer of its own yet shows the shared cache's, so a view coming back (or reading a page it
+  // read before) paints at once while the refetch runs, instead of waiting on it.
   const data = useMemo(
     () =>
       joined
         .split("\n")
         .filter(Boolean)
-        .map((p) => held.get(p) ?? null),
+        .map((p) => held.get(p) ?? (skipCache.current ? null : (peek<T>(p)?.data ?? null))),
     [joined, held],
   );
   return { data, error, reload };
