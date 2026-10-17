@@ -11,6 +11,7 @@ import {
   stitch,
   stitchVolume,
   timeTicks,
+  valueAt,
   volumeBars,
   withCallPoint,
 } from "./priceChart";
@@ -265,5 +266,23 @@ describe("flowAt", () => {
   it("answers null where no scan covers the range or the count is empty", () => {
     expect(flowAt(flow, 400_000, 400_000 + 10)).toBeNull();
     expect(flowAt(flow, 800_000, 850_000)).toBeNull();
+  });
+});
+
+describe("valueAt", () => {
+  const line = [
+    { t: 0, v: 10 },
+    { t: 10, v: 20 },
+    { t: 20, v: 0 },
+  ];
+  it("reads the line where it is drawn, straight between points", () => {
+    expect(valueAt(line, 5)).toBe(15);
+    expect(valueAt(line, 10)).toBe(20);
+    expect(valueAt(line, 15)).toBe(10);
+  });
+  it("is null off the line's span", () => {
+    expect(valueAt(line, -1)).toBeNull();
+    expect(valueAt(line, 21)).toBeNull();
+    expect(valueAt([], 0)).toBeNull();
   });
 });

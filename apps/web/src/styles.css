@@ -13241,10 +13241,21 @@ button.bm-same {
   fill: var(--ink);
   opacity: 0.035;
 }
+/* A scan the model read: a small dot on the line, ringed in the card's colour to stand off it. */
 .pc-scan {
-  fill: var(--surface-2);
-  stroke: var(--brand-ink);
-  stroke-width: 2;
+  fill: var(--brand-ink);
+  stroke: var(--surface-2);
+  stroke-width: 1.5;
+  pointer-events: none;
+}
+.pc-scan-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-2);
+}
+.pc-scan-line .tm-scan-dot {
+  margin-top: 0;
 }
 .tm-model-note {
   display: flex;
@@ -13259,7 +13270,7 @@ button.bm-same {
 }
 .tm-chart-src .tm-scan-dot {
   display: inline-block;
-  vertical-align: -1px;
+  vertical-align: 1px;
   margin-top: 0;
 }
 /* The chart's "Live" pill: the coin's curve is drawn as it changes. */
@@ -13295,11 +13306,10 @@ button.bm-same {
 .tm-scan-dot {
   flex: none;
   margin-top: 4px;
-  width: 9px;
-  height: 9px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  border: 2px solid var(--brand-ink);
-  background: var(--surface-2);
+  background: var(--brand-ink);
 }
 /* Model View cut off before now: the latest reading, under the window's end tag. */
 .pc-now {

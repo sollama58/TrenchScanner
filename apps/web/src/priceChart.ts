@@ -227,6 +227,24 @@ export function linearTicks(lo: number, hi: number, max = 5): number[] {
   return out;
 }
 
+/**
+ * The line's value at `t`, between the points either side of it as the line draws it (straight);
+ * null outside the line's span.
+ */
+export function valueAt(points: readonly Point[], t: number): number | null {
+  if (points.length === 0 || t < points[0]!.t || t > points[points.length - 1]!.t) return null;
+  let lo = 0;
+  let hi = points.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid]!.t <= t) lo = mid;
+    else hi = mid;
+  }
+  const a = points[lo]!;
+  const b = points[hi]!;
+  return b.t === a.t ? b.v : a.v + ((b.v - a.v) * (t - a.t)) / (b.t - a.t);
+}
+
 /** A time label sized to the view: the clock within a day, with the date past it. */
 export function timeLabel(t: number, spanMs: number, seconds = false): string {
   const d = new Date(t);

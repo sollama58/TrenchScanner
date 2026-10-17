@@ -7,6 +7,7 @@ import {
   sinceLabel,
   timeLabel,
   timeTicks,
+  valueAt,
   volumeBars,
   type Point,
   type ScanFlow,
@@ -61,7 +62,11 @@ export function PriceChart({
   flow?: ScanFlow[];
   /** Model View: the call's time. Everything after it is shaded as what the model didn't see. */
   seenUntil?: number;
-  /** Model View: the scan readings the model read, drawn as dots on their market caps. */
+  /**
+   * Model View: the scans the model read before the call. Each is a small dot on the line at the
+   * scan's time (its own market cap came from another source, often a few seconds behind, so drawn
+   * at that it sat off the line); the readout near one gives what the scan read.
+   */
   scans?: Point[];
   /** Whether the line runs to the latest reading; false when the view ends earlier (Model View). */
   live?: boolean;
@@ -214,6 +219,13 @@ export function PriceChart({
   const sliceW = plotW / slices;
   const mark = bar !== null && vols ? (vols[bar] ?? undefined) : undefined;
   const hFlow = h ? flowAt(flow, h.t - 60_000, h.t) : null;
+  // The model's scans in view, and the one nearest the hovered point (within a point's width or so).
+  const shownScans = scans.filter((s) => s.t >= geo.t0 && s.t <= geo.t1);
+  const hScan = h
+    ? (shownScans
+        .filter((s) => Math.abs(s.t - h.t) <= Math.max(geo.step, 15_000))
+        .sort((a, b) => Math.abs(a.t - h.t) - Math.abs(b.t - h.t))[0] ?? null)
+    : null;
 
   return (
     <div className="pc" ref={boxRef}>
@@ -310,13 +322,15 @@ export function PriceChart({
         <line x1={PAD.l} x2={width - PAD.r} y1={baseY} y2={baseY} className="pc-base" />
         <path d={line} className="pc-line" stroke={`url(#${id}-stroke)`} />
 
-        {scans
-          .filter((s) => s.t >= geo.t0 && s.t <= geo.t1)
-          .map((s) => (
-            <circle key={`scan-${s.t}`} cx={x(s.t)} cy={axis.y(s.v)} r={3.5} className="pc-scan">
-              <title>{`Scan at ${timeLabel(s.t, 0)}: ${usd(s.v)}`}</title>
-            </circle>
-          ))}
+        {shownScans.map((s) => (
+          <circle
+            key={`scan-${s.t}`}
+            cx={x(s.t)}
+            cy={axis.y(valueAt(points, s.t) ?? s.v)}
+            r={hScan === s ? 3.5 : 2.5}
+            className="pc-scan"
+          />
+        ))}
 
         {showPeak && (
           <g className="pc-peak">
@@ -444,6 +458,12 @@ export function PriceChart({
               {signedPct(change(lead.mcap, h.v))} vs {lead.label.toLowerCase()}
             </span>
           ) : null}
+          {hScan && (
+            <span className="pc-scan-line">
+              <i className="tm-scan-dot" aria-hidden="true" /> Scan the model read: {usd(hScan.v)} at{" "}
+              {timeLabel(hScan.t, 0, true)}
+            </span>
+          )}
           {hFlow && <FlowLine flow={hFlow} />}
         </div>
       )}
