@@ -58,6 +58,8 @@ type Effect = {
  * guard, signing, recording and settling all run for real against Postgres.
  */
 class FakeChain {
+  /** The slippage each sale was quoted with. */
+  sellSlippage: number[] = [];
   sol = new Map<string, bigint>();
   /** owner:mint -> raw amount, held in the owner's associated account. */
   tokens = new Map<string, bigint>();
@@ -292,9 +294,11 @@ class FakeChain {
   }
 
   swap: SwapClient = {
-    quote: async ({ inputMint, outputMint, amount }) => {
+    quote: async ({ inputMint, outputMint, amount, slippageBps }) => {
       if (this.jupiterNoRoute) throw new NoRouteError("no route");
       const buying = inputMint === WSOL_MINT;
+      if (!buying && outputMint === WSOL_MINT && slippageBps !== undefined)
+        this.sellSlippage.push(slippageBps);
       const fair = this.out(buying ? outputMint : inputMint, buying, amount);
       const out = BigInt(Math.floor(Number(fair) * this.quoteFactor));
       return {
@@ -368,6 +372,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
   const mint = generateWalletKeypair().publicKey;
   let chain: FakeChain;
   let clock = new Date();
+  let ceilings: Partial<TradingEngineDeps> = {};
   const deps = (): TradingEngineDeps => ({
     rpc: chain.rpc,
     swap: chain.swap,
@@ -376,6 +381,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     keys,
     canTrade: (w) => w === admin,
     maxBuyLamports: LAMPORTS,
+    ...ceilings,
     now: () => clock,
   });
 
@@ -388,6 +394,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
   });
 
   beforeEach(() => {
+    ceilings = {};
     chain = new FakeChain();
     chain.sol.set(walletKey, LAMPORTS);
     chain.price.set(mint, 0.05); // 0.05 lamports a raw unit: 0.05 SOL buys 1,000 tokens
@@ -608,6 +615,23 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     // The price comes back: bought.
     chain.independent = null;
     expect((await tick(0.1)).buys).toBe(1);
+  });
+
+  it("caps exits by the exit slippage ceiling, not the entries' one", async () => {
+    // Entries at most 10%, exits at most 40%: the stop sells at the 30% exit slippage.
+    ceilings = { maxSlippageBps: 1000, maxExitSlippageBps: 4000 };
+    await opened();
+    chain.price.set(mint, 0.02); // under the stop
+    expect((await tick(1)).sells).toBe(1);
+    expect(chain.sellSlippage.at(-1)).toBe(3000);
+  });
+
+  it("caps an exit at an exit ceiling under its exit slippage", async () => {
+    ceilings = { maxSlippageBps: 1000, maxExitSlippageBps: 2000 };
+    await opened();
+    chain.price.set(mint, 0.02);
+    expect((await tick(1)).sells).toBe(1);
+    expect(chain.sellSlippage.at(-1)).toBe(2000);
   });
 
   it("still sells without an independent price, on the route's own minimum", async () => {
