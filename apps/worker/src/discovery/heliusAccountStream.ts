@@ -34,8 +34,10 @@ const MAX_BACKOFF_MS = 5 * 60_000;
  * after can still miss it while it is unfinalized.
  */
 export const STREAM_SETTLE_MS = 30_000;
-/** Most keys followed at once: the contenders, with room to spare. */
+/** Most transaction keys followed at once: the contenders, with room to spare. */
 const MAX_KEYS = 200;
+/** Most account keys followed at once: the young coins' curves (CURVE_TAPE_MAX_MINTS caps it lower). */
+const MAX_ACCOUNT_KEYS = 1_000;
 
 /** Helius bills 2 credits per 0.1 MB streamed. */
 export function streamCredits(bytes: number): number {
@@ -44,7 +46,14 @@ export function streamCredits(bytes: number): number {
 
 type WebSocketCtor = new (url: string) => WebSocket;
 
+/**
+ * What a key follows: "tx", the transactions touching its accounts (transactionSubscribe); or
+ * "account", its one account's data on every change (accountSubscribe, curveTapeJob.ts).
+ */
+export type StreamKind = "tx" | "account";
+
 interface Subscription {
+  kind: StreamKind;
   accounts: ReadonlySet<string>;
   /** The request id the subscribe went out under, until Helius answers it. */
   requestId: number | null;
@@ -60,6 +69,10 @@ export interface HeliusStreamStats {
   connected: number;
   subscriptions: number;
   txs: number;
+  /** Live account subscriptions (the curve tape's). */
+  accountSubscriptions: number;
+  /** Account updates delivered (the curve tape's), in the same bytes and credits. */
+  accountUpdates: number;
   bytes: number;
   /** Estimated from the bytes received (streamCredits), plus one per connection opened. */
   credits: number;
@@ -72,15 +85,18 @@ export class HeliusAccountStream {
   private readonly keyOfSub = new Map<number, string>();
   /** Request ids of subscribes in flight to their key. */
   private readonly keyOfRequest = new Map<number, string>();
-  /** Subscribes in flight for keys since dropped or replaced: undone as soon as Helius answers. */
-  private readonly abandonedRequests = new Set<number>();
+  /**
+   * Subscribes in flight for keys since dropped or replaced, with the method that undoes them:
+   * sent as soon as Helius answers.
+   */
+  private readonly abandonedRequests = new Map<number, string>();
   private nextId = 1;
   private backoffMs = MIN_BACKOFF_MS;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private timers: ReturnType<typeof setInterval>[] = [];
   private stopped = false;
   private lastActivityAt = 0;
-  private stats = { txs: 0, bytes: 0, connections: 0 };
+  private stats = { txs: 0, accountUpdates: 0, bytes: 0, connections: 0 };
 
   constructor(
     private readonly url: string,
@@ -88,6 +104,8 @@ export class HeliusAccountStream {
     private readonly onTx: (key: string, signature: string, tx: ChainTx) => void,
     private readonly ctor: WebSocketCtor | null = (globalThis as { WebSocket?: WebSocketCtor }).WebSocket ??
       null,
+    /** Each account update delivered for an "account" key: its base64 data and the message's size. */
+    private readonly onAccount: ((key: string, data: string, bytes: number) => void) | null = null,
   ) {}
 
   static urlFor(apiKey: string): string {
@@ -117,16 +135,17 @@ export class HeliusAccountStream {
   }
 
   /** Follow `accounts` under `key` while asked (again at least every UNWATCHED_TTL_MS). */
-  watch(key: string, accounts: readonly string[], now = Date.now()): void {
-    if (accounts.length === 0) return;
+  watch(key: string, accounts: readonly string[], now = Date.now(), kind: StreamKind = "tx"): void {
+    if (accounts.length === 0 || (kind === "account" && accounts.length !== 1)) return;
     const existing = this.subs.get(key);
-    if (existing && sameSet(existing.accounts, accounts)) {
+    if (existing && existing.kind === kind && sameSet(existing.accounts, accounts)) {
       existing.wantedAt = now;
       return;
     }
-    if (!existing && this.subs.size >= MAX_KEYS) return;
+    if (!existing && this.countOf(kind) >= (kind === "account" ? MAX_ACCOUNT_KEYS : MAX_KEYS)) return;
     if (existing) this.unsubscribe(key, existing);
     const sub: Subscription = {
+      kind,
       accounts: new Set(accounts),
       requestId: null,
       subId: null,
@@ -135,6 +154,20 @@ export class HeliusAccountStream {
     };
     this.subs.set(key, sub);
     this.subscribe(key, sub);
+  }
+
+  /** Stops following `key` now, rather than when it is next evicted. */
+  unwatch(key: string): void {
+    const sub = this.subs.get(key);
+    if (!sub) return;
+    this.unsubscribe(key, sub);
+    this.subs.delete(key);
+  }
+
+  private countOf(kind: StreamKind): number {
+    let n = 0;
+    for (const sub of this.subs.values()) if (sub.kind === kind) n += 1;
+    return n;
   }
 
   /**
@@ -151,12 +184,15 @@ export class HeliusAccountStream {
   takeStats(): HeliusStreamStats {
     const out: HeliusStreamStats = {
       connected: this.socket?.readyState === 1 ? 1 : 0,
-      subscriptions: [...this.subs.values()].filter((s) => s.since !== null).length,
+      subscriptions: [...this.subs.values()].filter((s) => s.kind === "tx" && s.since !== null).length,
+      accountSubscriptions: [...this.subs.values()].filter((s) => s.kind === "account" && s.since !== null)
+        .length,
       txs: this.stats.txs,
+      accountUpdates: this.stats.accountUpdates,
       bytes: this.stats.bytes,
       credits: streamCredits(this.stats.bytes) + this.stats.connections,
     };
-    this.stats = { txs: 0, bytes: 0, connections: 0 };
+    this.stats = { txs: 0, accountUpdates: 0, bytes: 0, connections: 0 };
     return out;
   }
 
@@ -177,8 +213,10 @@ export class HeliusAccountStream {
     }
     if (typeof msg !== "object" || msg === null) return;
     if (typeof msg.id === "number") {
-      if (this.abandonedRequests.delete(msg.id)) {
-        if (typeof msg.result === "number") this.sendUnsubscribe(msg.result);
+      const undo = this.abandonedRequests.get(msg.id);
+      if (undo !== undefined) {
+        this.abandonedRequests.delete(msg.id);
+        if (typeof msg.result === "number") this.sendUnsubscribe(msg.result, undo);
         return;
       }
       const key = this.keyOfRequest.get(msg.id);
@@ -195,6 +233,19 @@ export class HeliusAccountStream {
         // Kept, uncovered: asked again with the same accounts it is not resent (a refusal would
         // come back every cycle), only on the next connection or when its accounts change.
         logger.warn("subscription refused", { key, error: String(msg.error?.message ?? "unknown") });
+      }
+      return;
+    }
+    if (msg.method === "accountNotification") {
+      const subId = msg.params?.subscription;
+      const key = typeof subId === "number" ? this.keyOfSub.get(subId) : undefined;
+      const data = (msg.params?.result as { value?: { data?: unknown } } | undefined)?.value?.data;
+      if (key === undefined || !Array.isArray(data) || typeof data[0] !== "string") return;
+      this.stats.accountUpdates += 1;
+      try {
+        this.onAccount?.(key, data[0], raw.length);
+      } catch (err) {
+        logger.warn("stream account handler failed", { key, error: String(err) });
       }
       return;
     }
@@ -291,6 +342,17 @@ export class HeliusAccountStream {
     const id = this.nextId++;
     sub.requestId = id;
     this.keyOfRequest.set(id, key);
+    if (sub.kind === "account") {
+      socket.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "accountSubscribe",
+          params: [[...sub.accounts][0], { commitment: "confirmed", encoding: "base64" }],
+        }),
+      );
+      return;
+    }
     socket.send(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -314,26 +376,26 @@ export class HeliusAccountStream {
   private unsubscribe(key: string, sub: Subscription): void {
     if (sub.requestId !== null) {
       this.keyOfRequest.delete(sub.requestId);
-      this.abandonedRequests.add(sub.requestId);
+      this.abandonedRequests.set(sub.requestId, unsubscribeMethod(sub.kind));
       sub.requestId = null;
     }
     if (sub.subId !== null) {
       this.keyOfSub.delete(sub.subId);
-      this.sendUnsubscribe(sub.subId);
+      this.sendUnsubscribe(sub.subId, unsubscribeMethod(sub.kind));
     }
     sub.subId = null;
     sub.since = null;
     logger.debug("unsubscribed", { key });
   }
 
-  private sendUnsubscribe(subId: number): void {
+  private sendUnsubscribe(subId: number, method: string): void {
     const socket = this.socket;
     if (socket?.readyState !== 1) return;
     socket.send(
       JSON.stringify({
         jsonrpc: "2.0",
         id: this.nextId++,
-        method: "transactionUnsubscribe",
+        method,
         params: [subId],
       }),
     );
@@ -368,6 +430,10 @@ export function streamTx(raw: unknown): ChainTx | null {
     };
   }
   return tx;
+}
+
+function unsubscribeMethod(kind: StreamKind): string {
+  return kind === "account" ? "accountUnsubscribe" : "transactionUnsubscribe";
 }
 
 function sameSet(a: ReadonlySet<string>, b: readonly string[]): boolean {

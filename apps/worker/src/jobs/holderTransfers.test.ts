@@ -151,7 +151,15 @@ describe("holder transfers", () => {
         since,
         watch: vi.fn(),
         coveredSince: vi.fn(() => s.since),
-        takeStats: vi.fn(() => ({ connected: 1, subscriptions: 1, txs: 0, bytes: 0, credits: 0 })),
+        takeStats: vi.fn(() => ({
+          connected: 1,
+          subscriptions: 1,
+          accountSubscriptions: 0,
+          txs: 0,
+          accountUpdates: 0,
+          bytes: 0,
+          credits: 0,
+        })),
       };
       return s;
     }

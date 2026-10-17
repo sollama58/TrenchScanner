@@ -37,9 +37,11 @@ import {
   MARKET_TOKENSAGE_INPUTS,
   WALLET_SCORE_FEATURES,
   WINNER_FOLLOW_FEATURES,
+  CURVE_PATH_FEATURES,
 } from "./features.js";
 import { NS_RULES_VERSION } from "./narrativeFeatures.js";
 import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
+import { EMPTY_CURVE_PATH } from "./curveTape.js";
 import type { ScoredToken } from "../types.js";
 
 function scored(overrides: Partial<ScoredToken> = {}): ScoredToken {
@@ -214,9 +216,19 @@ describe("scoredFromFeatures - replay round trip", () => {
     expect(buildCandidateFeatures(scored({ launchpad: "bonk" })).launchpadStonks).toBeNull();
     expect(scoredFromFeatures(stonks, 0.0001, 150_000).launchpad).toBe("stonks");
     expect(scoredFromFeatures({ scoreTotal: 75 }, 0.0001, 150_000).launchpad).toBeUndefined();
-    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("cleanWinnerSellerShare");
+    expect(CANDIDATE_FEATURE_NAMES.at(-1)).toBe("curveVolatility1m");
     // Appended on 2026-10-16: the scored top-10 count behind walletRiskTop10Max.
     expect(CANDIDATE_FEATURE_NAMES).toContain("walletRiskScoredTop10");
+  });
+
+  it("records the curve path, replays it, and leaves it unread by the learners", () => {
+    const curvePath = { ...EMPTY_CURVE_PATH, curveRet10sPct: 4.2, curveNetSol1m: 3.5 };
+    const features = buildCandidateFeatures(scored({ curvePath }));
+    expect(features.curveRet10sPct).toBe(4.2);
+    expect(features.curveNetSol1m).toBe(3.5);
+    expect(buildCandidateFeatures(scored()).curveRet10sPct).toBeNull();
+    expect(scoredFromFeatures(features, 0.0001, 150_000).curvePath?.curveNetSol1m).toBe(3.5);
+    for (const name of CURVE_PATH_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
   });
 
   it("says whether the age counts from the launch or the pool, null without an age, and replays it", () => {

@@ -1,3 +1,4 @@
+import { CURVE_READ_BYTES, decodeCurve, type CurveState } from "../curation/curveTape.js";
 import { fetchJson } from "./httpClient.js";
 import { RateGate } from "./rateGate.js";
 import { createLogger } from "../logger.js";
@@ -1573,6 +1574,31 @@ export class HeliusClient {
         continue;
       }
       out.set(mint, readPumpLaunch(mint, mintAccount.value, curveAccount.value));
+    }
+    return out;
+  }
+
+  /**
+   * Pump.fun bonding curves' state, batched: one 1-credit getMultipleAccounts per 100 curves, sliced
+   * to the bytes the curve tape reads (curveTape.ts). Per curve: its state, null when there is no
+   * curve there (not a Pump.fun launch), or "failed".
+   */
+  async getCurveStatesBatch(curves: string[]): Promise<Map<string, CurveState | null | "failed">> {
+    const unique = [...new Set(curves)];
+    const out = new Map<string, CurveState | null | "failed">();
+    if (unique.length === 0) return out;
+    const accounts = await this.getMultipleAccounts<{ data?: unknown }>(unique, {
+      encoding: "base64",
+      dataSlice: { offset: 0, length: CURVE_READ_BYTES },
+    });
+    for (const curve of unique) {
+      const account = accounts.get(curve);
+      if (!account || account === "failed") {
+        out.set(curve, "failed");
+        continue;
+      }
+      const data = account.value?.data;
+      out.set(curve, Array.isArray(data) && typeof data[0] === "string" ? decodeCurve(data[0]) : null);
     }
     return out;
   }

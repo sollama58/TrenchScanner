@@ -253,6 +253,23 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // The curve tape (worker's curveTapeJob.ts, user ask 2026-10-17): every tracked Pump.fun coin
+  // younger than CURVE_TAPE_MAX_AGE_MINUTES has its bonding curve followed on the Helius websocket
+  // (accountSubscribe: an update per changed block, ~0.5 KB, 2 credits per 0.1 MB), and read by RPC
+  // where the stream doesn't reach. Up to CURVE_TAPE_MAX_MINTS at once. "false" turns it off.
+  CURVE_TAPE: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  CURVE_TAPE_MAX_AGE_MINUTES: z.coerce.number().positive().default(15),
+  CURVE_TAPE_MAX_MINTS: z.coerce.number().int().positive().default(500),
+  // The stream's credit ceiling for a UTC day, paced: past its share of the day so far (plus a
+  // tenth of the day's cap of headroom) the curves come off the stream and the
+  // CURVE_TAPE_POLL_MAX_MINTS nearest the band are read every CURVE_TAPE_POLL_SECONDS instead
+  // (1 credit per 100 curves a read), until the spend is back under its share.
+  CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(100_000),
+  CURVE_TAPE_POLL_SECONDS: z.coerce.number().min(1).default(5),
+  CURVE_TAPE_POLL_MAX_MINTS: z.coerce.number().int().nonnegative().default(100),
   // Follows the subscription mint on the same Helius websocket and runs the burn reconciler as soon
   // as a transaction lands on it (worker's BurnStreamWake, user ask 2026-10-17), so a burn grants
   // access in seconds; BURN_SCAN_INTERVAL_MINUTES stays the backstop. The mint sees ~53

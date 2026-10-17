@@ -2,6 +2,7 @@ import type { LinkedCluster, SameTimeCluster } from "./wallets/linkedWallets.js"
 import type { FlaggedTrade } from "./wallets/liveFlags.js";
 import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
 import type { MarketContextFeatures, PricePathFeatures } from "./curation/pricePath.js";
+import type { CurvePathFeatures } from "./curation/curveTape.js";
 import type { NarrativeRead } from "./curation/narrativeFeatures.js";
 import type { TextScores } from "./curation/textFeatures.js";
 import type { MarketSource } from "./marketSource.js";
@@ -441,6 +442,8 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
   textScores?: TextScores;
   /** The shape of the recent price path from the scan's own tape (curation/pricePath.ts). */
   pricePath?: PricePathFeatures;
+  /** A young coin's path read off its bonding curve, change by change (curation/curveTape.ts). */
+  curvePath?: CurvePathFeatures;
   /** What the market as a whole is doing right now, and the clock (curation/pricePath.ts). */
   marketContext?: MarketContextFeatures;
   /**

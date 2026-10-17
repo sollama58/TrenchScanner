@@ -5,6 +5,7 @@ import { scoreNarrative, scoreToken, scoreTokenLegacy } from "../scoring/scorer.
 import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./tradeFlow.js";
 import { freshQuoteMcapUsd } from "./labels.js";
 import type { TextScores } from "./textFeatures.js";
+import { EMPTY_CURVE_PATH, type CurvePathFeatures } from "./curveTape.js";
 import {
   EMPTY_MARKET_CONTEXT,
   EMPTY_PRICE_PATH,
@@ -311,6 +312,30 @@ export const LIVE_FLAG_FEATURES = [
 ] as const;
 
 /**
+ * A young Pump.fun coin's price path read off its bonding curve, change by change (added
+ * 2026-10-17, user ask: the first ~15 minutes as granular as possible; curation/curveTape.ts, the
+ * worker's curveTapeJob.ts). Null while the coin's curve isn't followed (past 15 minutes, not a
+ * Pump.fun curve, graduated) and on every row banked before. Recorded first: no learner reads them
+ * until a few days of decision rows show what they carry (RETIRED_LEARNER_INPUTS).
+ */
+export const CURVE_PATH_FEATURES = [
+  "curveCoveredSec",
+  "curveRet10sPct",
+  "curveRet30sPct",
+  "curveRet1mPct",
+  "curveRet3mPct",
+  "curveRet5mPct",
+  "curveFromHighPct",
+  "curveFromLowPct",
+  "curveSecSinceHigh",
+  "curveNetSol30s",
+  "curveNetSol1m",
+  "curveNetSol3m",
+  "curveChanges1m",
+  "curveVolatility1m",
+] as const satisfies readonly (keyof CurvePathFeatures)[];
+
+/**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
  * curated-alerts learner is allowed to see. Names here are load-bearing: a trained model stores
  * a coefficient per name, so renaming one silently orphans the weight it learned. Add new
@@ -557,6 +582,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...LAUNCH_FACT_FEATURES,
   ...WALLET_SCORE_FEATURES,
   ...WINNER_FOLLOW_FEATURES,
+  ...CURVE_PATH_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -701,6 +727,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The clean winners buying (added 2026-10-17, user ask): read by the Winners seat alone, which
   // names them in its recipe and decides only on moments that carry them.
   ...WINNER_FOLLOW_FEATURES,
+  // The bonding-curve path of a young coin (added 2026-10-17, user ask): recorded first.
+  ...CURVE_PATH_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
@@ -1399,6 +1427,20 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   pathHolderSlope10m: "holders per minute",
   pathObservedMinutes: "minutes on tape",
   pathGapMinutes: "minutes off tape (30m)",
+  curveCoveredSec: "seconds of curve tape",
+  curveRet10sPct: "curve return (10s)",
+  curveRet30sPct: "curve return (30s)",
+  curveRet1mPct: "curve return (1m)",
+  curveRet3mPct: "curve return (3m)",
+  curveRet5mPct: "curve return (5m)",
+  curveFromHighPct: "off the curve high",
+  curveFromLowPct: "up from the curve low",
+  curveSecSinceHigh: "seconds since the curve high",
+  curveNetSol30s: "net SOL into the curve (30s)",
+  curveNetSol1m: "net SOL into the curve (1m)",
+  curveNetSol3m: "net SOL into the curve (3m)",
+  curveChanges1m: "curve changes per minute",
+  curveVolatility1m: "curve volatility (1m)",
   mktBaseRate1hPct: "market 2x rate (1h)",
   mktBaseRate6hPct: "market 2x rate (6h)",
   mktLaunchesPerHour: "launches per hour",
@@ -1568,6 +1610,9 @@ export function scoredFromFeatures(
     marketContext: Object.fromEntries(
       MARKET_CONTEXT_FEATURES.map((k) => [k, num(k) ?? null]),
     ) as unknown as MarketContextFeatures,
+    curvePath: Object.fromEntries(
+      CURVE_PATH_FEATURES.map((k) => [k, num(k) ?? null]),
+    ) as unknown as CurvePathFeatures,
     textScores: textScoresFromFeatures(features),
     narrative: narrativeFromFeatures(features),
     livestream:
@@ -1806,6 +1851,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     ...(Object.fromEntries(
       MARKET_CONTEXT_FEATURES.map((k) => [k, (scored.marketContext ?? EMPTY_MARKET_CONTEXT)[k]]),
     ) as Record<(typeof MARKET_CONTEXT_FEATURES)[number], number | null>),
+    ...(Object.fromEntries(
+      CURVE_PATH_FEATURES.map((k) => [k, (scored.curvePath ?? EMPTY_CURVE_PATH)[k]]),
+    ) as Record<(typeof CURVE_PATH_FEATURES)[number], number | null>),
     buys5m,
     sells5m,
     buyRatio5m,
