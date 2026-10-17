@@ -217,7 +217,7 @@ function ModelDetail({
           graded={live.graded}
           lift={e.vsMarket?.lift ?? null}
           baseRate={e.vsMarket?.marketRatePct ?? null}
-          baseLabel="market in its hours"
+          baseLabel="filtered market in its hours"
         />
         <RateFig
           label="Hit 4x"
@@ -255,9 +255,9 @@ function ModelDetail({
           ? ` · high-conviction calls doubled ${pct(e.highConviction.winRatePct)} of ${e.highConviction.graded}`
           : ""}
         {recordSince(e, board) ? `, since it took its seat on ${shortMonthDay(recordSince(e, board)!)}` : ""}.
-        The 2x tile&apos;s small figure is its lift, the board&apos;s &quot;vs market&quot;: how many times
-        the market&apos;s 2x rate in the same hours it hit. The 4x and 10x show the random-pick rate over the
-        window. {RULE_NOTE}
+        The 2x tile&apos;s small figure is its lift, the board&apos;s &quot;vs filtered market&quot;: how many
+        times the filtered market&apos;s 2x rate in the same hours it hit. The 4x and 10x show the random-pick
+        rate over the window. {RULE_NOTE}
       </p>
       {board.exitPlan && <p className="faint small">Profit follows one fixed exit plan: {board.exitPlan}</p>}
 
@@ -737,7 +737,7 @@ function RateFig({
         ) : baseRate !== null ? (
           `${baseLabel} ${pct(baseRate, 1)}`
         ) : (
-          "No baseline yet"
+          "No filtered baseline yet"
         )}
       </small>
       <small className="faint">Goal {goal}%</small>

@@ -167,10 +167,11 @@ function side(ctx: CanvasRenderingContext2D, d: WeekCardData, x0: number) {
 }
 
 const SUB: Record<CardMetric, string> = {
-  "2x": "How often each model's calls doubled within 15 min, before a 50% stop, next to the market.",
-  "4x": "How often each model's calls reached 4x within 30 min, before a 50% stop, next to the market.",
-  "10x": "How often each model's calls reached 10x within an hour, before a 50% stop, next to the market.",
-  ret: "Average return per call, day by day, next to the market.",
+  "2x": "How often each model's calls doubled within 15 min, before a 50% stop, next to the filtered market.",
+  "4x": "How often each model's calls reached 4x within 30 min, before a 50% stop, next to the filtered market.",
+  "10x":
+    "How often each model's calls reached 10x within an hour, before a 50% stop, next to the filtered market.",
+  ret: "Average return per call, day by day, next to the filtered market.",
   catch: "The share of each day's runners each model called at a winning moment, next to the catch goal.",
 };
 
@@ -182,7 +183,7 @@ export async function renderWeekCard(d: WeekCardData): Promise<HTMLCanvasElement
     footer:
       d.metric === "catch"
         ? `${d.graded.toLocaleString("en-US")} live calls, graded rule 3+ · runner = a token that doubled cleanly that day`
-        : `${d.graded.toLocaleString("en-US")} live calls, graded rule 3+ · market = a random pick from the same moments`,
+        : `${d.graded.toLocaleString("en-US")} live calls, graded rule 3+ · filtered market = a random pick from the same screened moments`,
     link: "trenchscanner.app",
   });
   const split = CARD_W - PAD - 340;
