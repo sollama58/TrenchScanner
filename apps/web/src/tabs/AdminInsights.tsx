@@ -1,10 +1,19 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { narrativeCriteriaLines } from "../filterFields";
 import { ApiError, post, type FilterCriteria } from "../api";
 import { usePolling } from "../hooks";
 import { invalidate } from "../cache";
 import { ago, pct, shortAddress, usd } from "../format";
 import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
+import {
+  loadHiddenReasons,
+  reasonCounts,
+  rejectionKey,
+  saveHiddenReasons,
+  sentence,
+  visibleRejections,
+  type RejectionFeed,
+} from "../rejectionFeed";
 
 /**
  * The Admin sections added after the first panel: training history, TokenSage, the safety
@@ -921,7 +930,197 @@ const walletPct = (v: number | null) =>
     <span className={`num ${v > 70 ? "down" : ""}`}>{pct(v)}</span>
   );
 
+const FEED_WINDOWS = [15, 60, 180, 360] as const;
+type FeedWindow = (typeof FEED_WINDOWS)[number];
+const feedWindowLabel = (m: number) => (m < 60 ? `${m}m` : `${m / 60}h`);
+
+/**
+ * The live rejection feed: tokens the safety screen is rejecting, newest first, polled every 15s
+ * (the API shares one read per 15s). Reason chips hide a reason from the stream; the choice
+ * stays on this device. Pause freezes the list so a row can be read without it moving.
+ */
+function RejectionFeedPanel() {
+  const [minutes, setMinutes] = useState<FeedWindow>(60);
+  const [hidden, setHidden] = useState<Set<string>>(loadHiddenReasons);
+  const [paused, setPaused] = useState<RejectionFeed | null>(null);
+  const q = usePolling<RejectionFeed>(`/admin/screen/rejections?minutes=${minutes}`, 15_000);
+  useEffect(() => saveHiddenReasons(hidden), [hidden]);
+
+  // Rows that arrived since the previous poll, lit up briefly. The first answer lights nothing.
+  const seen = useRef<Set<string> | null>(null);
+  const feed = paused ?? q.data;
+  const fresh = useMemo(() => {
+    const keys = (q.data?.rejections ?? []).map(rejectionKey);
+    const before = seen.current;
+    if (q.data) seen.current = new Set(keys);
+    return before ? new Set(keys.filter((k) => !before.has(k))) : new Set<string>();
+  }, [q.data]);
+
+  const toggle = (label: string) =>
+    setHidden((h) => {
+      const next = new Set(h);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      return next;
+    });
+  const all = feed?.rejections ?? [];
+  const reasons = reasonCounts(all);
+  const rows = visibleRejections(all, hidden);
+  const hiddenHere = reasons.filter((r) => hidden.has(r.label)).length;
+
+  return (
+    <Panel
+      title="Live rejections"
+      note={
+        <>
+          Tokens the safety screen rejected in the last {feedWindowLabel(minutes)}, newest first, at their
+          newest rejecting scan. {paused ? "Paused." : "Refreshes every 15 seconds."} Click a reason to hide
+          it; a token stays while any of its reasons is shown.
+        </>
+      }
+      actions={
+        <div className="reject-feed-tools">
+          <button className="ghost small" onClick={() => setPaused(paused ? null : (q.data ?? null))}>
+            {paused ? "Resume" : "Pause"}
+          </button>
+          <div className="segmented" role="tablist" aria-label="Window">
+            {FEED_WINDOWS.map((m) => (
+              <button
+                key={m}
+                role="tab"
+                aria-selected={m === minutes}
+                className={m === minutes ? "on" : ""}
+                onClick={() => {
+                  setPaused(null);
+                  seen.current = null;
+                  setMinutes(m);
+                }}
+              >
+                {feedWindowLabel(m)}
+              </button>
+            ))}
+          </div>
+        </div>
+      }
+    >
+      <Load q={paused ? { ...q, data: paused, error: null, stale: false } : q}>
+        {() => (
+          <div className="stack">
+            {reasons.length > 0 && (
+              <div className="reject-reasons" role="group" aria-label="Reasons shown">
+                {reasons.map((r) => {
+                  const on = !hidden.has(r.label);
+                  return (
+                    <button
+                      key={r.label}
+                      className={`chip${on ? " on" : ""}`}
+                      aria-pressed={on}
+                      title={on ? "Hide this reason" : "Show this reason"}
+                      onClick={() => toggle(r.label)}
+                    >
+                      {sentence(r.label)} <span className="num">{n(r.count)}</span>
+                    </button>
+                  );
+                })}
+                <span className="reject-reasons-all">
+                  <button
+                    className="link small"
+                    disabled={hiddenHere === 0}
+                    onClick={() =>
+                      setHidden(new Set([...hidden].filter((h) => !reasons.some((r) => r.label === h))))
+                    }
+                  >
+                    Show all
+                  </button>
+                  <button
+                    className="link small"
+                    disabled={hiddenHere === reasons.length}
+                    onClick={() => setHidden(new Set([...hidden, ...reasons.map((r) => r.label)]))}
+                  >
+                    Hide all
+                  </button>
+                </span>
+              </div>
+            )}
+            <p className="muted small">
+              Showing {n(rows.length)} of {n(all.length)} rejected tokens
+              {hiddenHere > 0 && `, ${hiddenHere} ${hiddenHere === 1 ? "reason" : "reasons"} hidden`}.
+            </p>
+            {rows.length === 0 ? (
+              <p className="muted small">
+                {all.length === 0
+                  ? "Nothing rejected in this window."
+                  : "Every rejection here is for a hidden reason."}
+              </p>
+            ) : (
+              <div className="table-wrap">
+                <table className="reject-feed">
+                  <thead>
+                    <tr>
+                      <th>Rejected</th>
+                      <th>Token</th>
+                      <th>Mcap</th>
+                      <th>Reasons</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => {
+                      const key = rejectionKey(r);
+                      return (
+                        <tr key={key} className={fresh.has(key) && !paused ? "reject-new" : undefined}>
+                          <td>{when(r.takenAt)}</td>
+                          <td>
+                            {token(r.mint, r.symbol)}
+                            {r.passedSince && (
+                              <>
+                                {" "}
+                                <Tag tone="ok">passed since</Tag>
+                              </>
+                            )}
+                          </td>
+                          <td>
+                            <span className="num">{usd(r.marketCapUsd)}</span>
+                          </td>
+                          <td>
+                            {r.reasons.length === 0 ? (
+                              <span className="faint">no reason recorded</span>
+                            ) : (
+                              <ul className="reject-why">
+                                {r.reasons.map((x, i) => (
+                                  <li key={i}>{sentence(x.text)}</li>
+                                ))}
+                              </ul>
+                            )}
+                            {r.hiddenCount > 0 && (
+                              <span className="faint small">
+                                +{r.hiddenCount} hidden {r.hiddenCount === 1 ? "reason" : "reasons"}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </Load>
+    </Panel>
+  );
+}
+
 export function SafetyScreen() {
+  return (
+    <div className="stack">
+      <RejectionFeedPanel />
+      <SafetyScreenReport />
+    </div>
+  );
+}
+
+function SafetyScreenReport() {
   const [hours, setHours] = useState<1 | 3 | 6>(1);
   const [show, setShow] = useState<"all" | "failing" | "passing">("all");
   const q = usePolling<ScreenReport>(`/admin/screen?hours=${hours}`, 60_000);

@@ -24,6 +24,7 @@ const ROUTES = [
   "/admin/accounts?limit=10",
   "/admin/tokensage?days=1",
   "/admin/screen?hours=1",
+  "/admin/screen/rejections?minutes=60",
   "/admin/training",
   "/admin/filters",
   "/admin/lookups",
