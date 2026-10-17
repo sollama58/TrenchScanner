@@ -5,6 +5,7 @@ import {
   foldCuratedIntoPage,
   foldedCallPeakPct,
   groupSameTokenCalls,
+  matchPeakPct,
   resolveOutcome,
   serializeCuratedAlert,
 } from "./curatedFeed.js";
@@ -599,27 +600,44 @@ describe("resolveOutcome", () => {
 
 describe("callPeakPct", () => {
   it("takes the market-cap high since the call when the short watch saw less", () => {
-    expect(callPeakPct(20, { peakMcapUsd: 500_000, anchorMcapUsd: 50_000 })).toBe(900);
+    expect(callPeakPct(20, { peakMcapUsd: 500_000, anchorMcapUsd: 50_000, peakCheckedAt: null })).toBe(900);
   });
   it("keeps the run peak when it is the larger, or the only one", () => {
-    expect(callPeakPct(300, { peakMcapUsd: 100_000, anchorMcapUsd: 50_000 })).toBe(300);
-    expect(callPeakPct(40, { peakMcapUsd: null, anchorMcapUsd: 50_000 })).toBe(40);
-    expect(callPeakPct(null, { peakMcapUsd: null, anchorMcapUsd: 50_000 })).toBeNull();
+    expect(callPeakPct(300, { peakMcapUsd: 100_000, anchorMcapUsd: 50_000, peakCheckedAt: null })).toBe(300);
+    expect(callPeakPct(40, { peakMcapUsd: null, anchorMcapUsd: 50_000, peakCheckedAt: null })).toBe(40);
+    expect(callPeakPct(null, { peakMcapUsd: null, anchorMcapUsd: 50_000, peakCheckedAt: null })).toBeNull();
+  });
+  it("takes only the candle high once the candles vouch for it", () => {
+    const checked = { anchorMcapUsd: 50_000, peakCheckedAt: T0 };
+    // A post-rug first-minute reading the watcher saw as +32%; the coin never closed above the call.
+    expect(callPeakPct(32, { ...checked, peakMcapUsd: null })).toBeNull();
+    expect(callPeakPct(300, { ...checked, peakMcapUsd: 100_000 })).toBe(100);
+  });
+});
+
+describe("matchPeakPct", () => {
+  it("falls back to the run peak only before the candles vouch for the alert", () => {
+    expect(matchPeakPct({ peakReturnPct: null, peakCheckedAt: null }, 32)).toBe(32);
+    expect(matchPeakPct({ peakReturnPct: 50, peakCheckedAt: null }, 300)).toBe(50);
+    expect(matchPeakPct({ peakReturnPct: null, peakCheckedAt: T0 }, 32)).toBeNull();
+    expect(matchPeakPct({ peakReturnPct: 50, peakCheckedAt: T0 }, 300)).toBe(50);
   });
 });
 
 describe("callPeakAt", () => {
-  const call = (peakMcapUsd: number | null, peakMcapAt: Date | null) => ({
+  const call = (peakMcapUsd: number | null, peakMcapAt: Date | null, peakCheckedAt: Date | null = null) => ({
     createdAt: T0,
     peakMcapUsd,
     peakMcapAt,
     anchorMcapUsd: 50_000,
+    peakCheckedAt,
   });
   it("times the run peak from the call when it is the Peak", () => {
     expect(callPeakAt(300, 12, call(100_000, at(240)))).toEqual(at(12));
   });
   it("times the market-cap high when that is the Peak", () => {
     expect(callPeakAt(20, 12, call(500_000, at(240)))).toEqual(at(240));
+    expect(callPeakAt(300, 12, call(100_000, at(240), T0))).toEqual(at(240));
   });
   it("is unknown without a Peak, or without the Peak's own time", () => {
     expect(callPeakAt(null, null, call(null, null))).toBeNull();

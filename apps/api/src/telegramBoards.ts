@@ -6,7 +6,13 @@ import {
   type BoardStats,
   type TelegramBoards,
 } from "@trenchscanner/core";
-import { callPeakPct, curatedAlertInclude, latestSnapshotsByToken, resolveOutcome } from "./curatedFeed.js";
+import {
+  callPeakPct,
+  curatedAlertInclude,
+  latestSnapshotsByToken,
+  matchPeakPct,
+  resolveOutcome,
+} from "./curatedFeed.js";
 import { summarizeFeed, type FeedStatsCard } from "./feedStats.js";
 import { MATCH_OUTCOME_SELECT, currentMarketCap, matchOutcome } from "./routes/matches.js";
 
@@ -44,6 +50,7 @@ const CALL_SELECT = {
   modelName: true,
   anchorMcapUsd: true,
   peakMcapUsd: true,
+  peakCheckedAt: true,
   simReturnPct: true,
   peak1hReturnPct: true,
   maxDrawdown1hPct: true,
@@ -195,7 +202,7 @@ async function gradedAlerts(chatRowId: string, since: Date) {
           (match.alertMcapUsd ?? match.snapshot.marketCapUsd) > 0
             ? (match.alertMcapUsd ?? match.snapshot.marketCapUsd)
             : null,
-        peakPct: match.peakReturnPct ?? outcome.peak24hReturnPct,
+        peakPct: matchPeakPct(match, outcome.peak24hReturnPct),
         returnPct: row?.simReturnPct ?? null,
         tracking: row !== null && row.finalized24hAt === null,
         // Priced from a fresh quote: its readings from the first minute lag behind it, as a call's.
