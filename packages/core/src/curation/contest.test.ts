@@ -21,11 +21,19 @@ import {
   GEMS_CONTESTANT,
   GEMS_RECIPE,
   TRADER_CONTESTANT,
+  WINNERS_CONTESTANT,
+  WINNERS_RECIPE,
+  WINNERS_SEAT_INPUTS,
 } from "./contestants.js";
-import { GEMERALD_GATE, passesModelGateOnFeatures } from "./modelGate.js";
+import { GEMERALD_GATE, passesModelGateOnFeatures, seatConsiders } from "./modelGate.js";
 import { foundingLanes, recipeFamily, traitName } from "./evolution.js";
 import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
-import { LEARNER_FEATURE_NAMES, SAFETY_FEATURES } from "./features.js";
+import {
+  LEARNER_FEATURE_NAMES,
+  RETIRED_LEARNER_INPUTS,
+  SAFETY_FEATURES,
+  WINNER_FOLLOW_FEATURES,
+} from "./features.js";
 import {
   GATED_MIN_ROWS,
   gatedTrainingSet,
@@ -311,6 +319,102 @@ describe("Gems", () => {
       const combiner = results.find((r) => r.contestant === id)!.params as StackedCuratorParams;
       expect(combiner.members.map((m) => m.contestant)).not.toContain(GEMS_CONTESTANT);
     }
+  }, 120_000);
+});
+
+describe("Winners", () => {
+  it("is a standalone learner on the clean-winner reading, the only seat reading it, outside every combiner", () => {
+    const spec = contestantSpec(WINNERS_CONTESTANT)!;
+    expect(spec.name).toBe("Winners");
+    expect(spec.role).toBe("learner");
+    expect(spec.standalone).toBe(true);
+    expect(spec.requires).toBe("recentBuyersRead");
+    expect(spec.gate).toBeUndefined();
+    expect(WINNERS_RECIPE).toEqual({
+      learner: "gbdt",
+      twoStage: true,
+      featureNames: [...TREES_NO_TOKENSAGE_FEATURES, ...WINNERS_SEAT_INPUTS],
+      recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
+      cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+    });
+    for (const name of WINNER_FOLLOW_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+    // The shares and how winners trade, not the counts, which read lower on backfilled rows.
+    expect(WINNERS_SEAT_INPUTS).not.toContain("cleanWinnerRecentBuyers");
+    expect(WINNERS_SEAT_INPUTS).not.toContain("recentBuyersRead");
+    expect(WINNERS_SEAT_INPUTS).toContain("cleanWinnerNetShare");
+    expect(isMemberLearner(spec)).toBe(false);
+    expect(isTraderMember(spec)).toBe(false);
+    expect(ACTIVE_CONTESTANT_IDS).toContain(WINNERS_CONTESTANT);
+    expect(foundingLanes(CONTESTANTS, new Date(0)).map((l) => l.slot)).not.toContain(WINNERS_CONTESTANT);
+  });
+
+  it("considers only moments carrying its reading", () => {
+    const spec = contestantSpec(WINNERS_CONTESTANT)!;
+    expect(seatConsiders(spec, { recentBuyersRead: 40 }, undefined)).toBe(true);
+    expect(seatConsiders(spec, { recentBuyersRead: 0 }, undefined)).toBe(true);
+    expect(seatConsiders(spec, { recentBuyersRead: null }, undefined)).toBe(false);
+    expect(seatConsiders(spec, {}, undefined)).toBe(false);
+    // A gated seat without its stored gate considers nothing; a plain seat everything.
+    expect(seatConsiders({ gate: GEMERALD_GATE }, { recentBuyersRead: 40 }, undefined)).toBe(false);
+    expect(seatConsiders({}, {}, undefined)).toBe(true);
+  });
+
+  it("trains and sits its exam on the rows carrying its reading, and sits out with too few", async () => {
+    const market = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 11 });
+    // Half the rows carry the reading (the live tape was read), the rest don't.
+    const rows = market.map((r, i) =>
+      i % 2 === 0
+        ? {
+            ...r,
+            features: {
+              ...r.features,
+              cleanWinnerRecentBuyers: i % 7,
+              cleanWinnerRecentShare: (i % 7) / 50,
+              cleanWinnerBuySolShare: (i % 5) / 20,
+              recentBuyersOwn2xMean: 0.05 + (i % 3) / 100,
+              recentBuyersRead: 50,
+            },
+          }
+        : r,
+    );
+    const carrying = rows.filter((r) => typeof r.features.recentBuyersRead === "number").length;
+    const cfg = {
+      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
+      targetPerHour: 6,
+      heuristicMinScore: 55,
+      minRowsToPromote: 500,
+      recencyHalfLifeDays: 14,
+      cooldownHours: 24,
+      heuristicPrecisionGate: true,
+      // A cheaper recipe than its own: the test is the population, not the trees.
+      contestants: enabledContestants([
+        "consensus",
+        TRADER_CONTESTANT,
+        "linear",
+        "trees",
+        WINNERS_CONTESTANT,
+      ]).map((c) =>
+        c.id === WINNERS_CONTESTANT
+          ? { ...c, recipe: { learner: "logistic" as const, featureNames: WINNERS_RECIPE.featureNames } }
+          : c,
+      ),
+    };
+    const results = await runContestTraining(rows, cfg);
+    const winners = results.find((r) => r.contestant === WINNERS_CONTESTANT)!;
+    expect(winners.metrics.gate).toEqual({
+      id: "requires:recentBuyersRead",
+      rows: carrying,
+      of: rows.length,
+      uncheckedOffline: [],
+    });
+    expect(winners.metrics.exam).toBeDefined();
+    for (const id of ["consensus", TRADER_CONTESTANT]) {
+      const combiner = results.find((r) => r.contestant === id)!.params as StackedCuratorParams;
+      expect(combiner.members.map((m) => m.contestant)).not.toContain(WINNERS_CONTESTANT);
+    }
+    // No row carrying the reading: it sits the run out.
+    const none = await runContestTraining(market, cfg);
+    expect(none.map((r) => r.contestant)).not.toContain(WINNERS_CONTESTANT);
   }, 120_000);
 });
 

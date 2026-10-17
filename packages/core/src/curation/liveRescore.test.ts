@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { NARRATIVE_CONTESTANT, TRADER_CONTESTANT } from "./contestants.js";
+import {
+  GEMS_CONTESTANT,
+  NARRATIVE_CONTESTANT,
+  TRADER_CONTESTANT,
+  WINNERS_CONTESTANT,
+} from "./contestants.js";
+import { GEMERALD_GATE } from "./modelGate.js";
 import { scoredFromFeatures } from "./features.js";
 import { LiveRescorer, type LiveSeatModel, type RescoreFeatures, type RescoreRow } from "./liveRescore.js";
 import { buildLiveScales, onLiveMembers } from "./liveScale.js";
@@ -106,6 +112,36 @@ describe("LiveRescorer", () => {
     // A seat with no current model keeps its stored scores.
     expect(live.scores.get("gone")).toEqual(new Array(N).fill(0.42));
     expect(live.tables.has("linear")).toBe(true);
+  });
+
+  it("scores a seat on a population of its own only on the moments it considers", () => {
+    const winners: LiveSeatModel = {
+      seat: WINNERS_CONTESTANT,
+      id: "m-winners",
+      kind: CURATOR_MODEL_KIND,
+      params: logistic(0, 1),
+    };
+    const gems: LiveSeatModel = {
+      seat: GEMS_CONTESTANT,
+      id: "m-gems",
+      kind: CURATOR_MODEL_KIND,
+      params: logistic(0, 1),
+    };
+    const rescorer = new LiveRescorer();
+    const read = {
+      features: { x: 1, recentBuyersRead: 40, mcapUsd: 50_000 },
+      anchorPriceUsd: 0.0001,
+      anchorMcapUsd: 50_000,
+    };
+    const unread = { features: { x: 1, mcapUsd: 50_000 }, anchorPriceUsd: 0.0001, anchorMcapUsd: 50_000 };
+    rescorer.fill("read", read, [winners, gems], { [GEMERALD_GATE]: { mcapMin: 10_000, mcapMax: 1e12 } });
+    rescorer.fill("unread", unread, [winners, gems]);
+    const scores = (rescorer as unknown as { scores: Map<string, Map<string, number | null>> }).scores;
+    // Winners scores only with its reading in; Gems only once its stored gate lets the moment through.
+    expect(scores.get("m-winners")?.get("read")).toBeCloseTo(1 / (1 + Math.exp(-1)), 6);
+    expect(scores.get("m-winners")?.get("unread")).toBeNull();
+    expect(scores.get("m-gems")?.get("read")).not.toBeNull();
+    expect(scores.get("m-gems")?.get("unread")).toBeNull();
   });
 
   it("scores each moment once per model version, and the whole window again after a retrain", () => {

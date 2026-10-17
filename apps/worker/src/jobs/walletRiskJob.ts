@@ -52,13 +52,31 @@ const cleanSql = Prisma.sql`(a."tokensSold" <= ${OVERSOLD_TOKENS} * a."tokensBou
   AND NOT (a."firstSellAt" IS NOT NULL AND a."firstBuyAt" IS NOT NULL AND a."firstSellAt" < a."firstBuyAt"))`;
 
 /** A win: the wallet's own clean trade at WALLET_WIN_MULTIPLE or better, for MIN_WIN_SOL of profit. */
-const winSql = Prisma.sql`(a."solIn" > 0
+export const winSql = Prisma.sql`(a."solIn" > 0
   AND a."solOut" >= ${WALLET_WIN_MULTIPLE} * a."solIn"
   AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}
   AND ${cleanSql})`;
 
+/**
+ * A win-sized trade fed by tokens transferred in (user ask 2026-10-17, "excluding ones that win based
+ * on tokens being transferred in"): SOL out at WALLET_WIN_MULTIPLE or better for MIN_WIN_SOL of
+ * profit, where the tokens it sold weren't all bought on the tape - it sold more than it bought or
+ * sold before its first buy (not cleanSql), or a holder transfer of the coin reached it
+ * (HolderTransferEvent, the scan's linking transfers between top holders, kept 30 days). The
+ * Winners seat reads a Winner wallet only with none of these (core's wallets/winnerFollow.ts). A
+ * partial tape that missed an earlier buy reads the same way: the record can't show it bought them.
+ * `before` counts only the transfers the scan had recorded before then (the point-in-time backfill).
+ */
+export const transferFedSql = (before?: Date) => Prisma.sql`(a."solIn" > 0
+  AND a."solOut" >= ${WALLET_WIN_MULTIPLE} * a."solIn"
+  AND a."solOut" - a."solIn" >= ${MIN_WIN_SOL}
+  AND (NOT ${cleanSql}
+       OR EXISTS (SELECT 1 FROM "HolderTransferEvent" h JOIN "Token" tk ON tk."mintAddress" = h."mintAddress"
+                   WHERE h."toWallet" = a."wallet" AND tk."id" = a."tokenId"
+                     ${before ? Prisma.sql`AND h."createdAt" < ${before}` : Prisma.empty})))`;
+
 /** An own trade at `multiple` or better (the Wallet Score's own2x / own4x). */
-const ownMultipleSql = (multiple: number) => Prisma.sql`(a."solIn" >= ${OWN_MULTIPLE_MIN_SOL}
+export const ownMultipleSql = (multiple: number) => Prisma.sql`(a."solIn" >= ${OWN_MULTIPLE_MIN_SOL}
   AND a."solOut" >= ${multiple} * a."solIn"
   AND ${cleanSql})`;
 
@@ -114,6 +132,7 @@ const WALLET_RISK_TABLE: ReplaceRowsSpec = {
     { name: "own2x", type: "integer" },
     { name: "own4x", type: "integer" },
     { name: "walletScore", type: "double precision" },
+    { name: "transferWins", type: "integer" },
     { name: "medianSupplyPct", type: "double precision" },
     { name: "solIn", type: "double precision" },
     { name: "solOut", type: "double precision" },
@@ -131,6 +150,7 @@ interface Agg {
   snipes: number;
   wins: number;
   earlyWins: number;
+  transferWins: number;
   medianSupplyPct: number | null;
   solIn: number;
   solOut: number;
@@ -164,13 +184,14 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
   });
 
   const rows = await prisma.$queryRaw<
-    (Omit<Agg, "appearances" | "dumps" | "fastExits" | "snipes" | "wins" | "earlyWins"> &
+    (Omit<Agg, "appearances" | "dumps" | "fastExits" | "snipes" | "wins" | "earlyWins" | "transferWins"> &
       ScoreCountRow & {
         appearances: bigint;
         dumps: bigint;
         snipes: bigint;
         wins: bigint;
         earlyWins: bigint;
+        transferWins: bigint;
       })[]
   >`
     SELECT a."wallet",
@@ -181,6 +202,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
            COUNT(*) FILTER (WHERE ${winSql}) AS wins,
            COUNT(*) FILTER (WHERE ${winSql}
                               AND a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."anchorAt") AS "earlyWins",
+           COUNT(*) FILTER (WHERE ${transferFedSql()}) AS "transferWins",
            percentile_cont(0.5) WITHIN GROUP (ORDER BY a."boughtPct") AS "medianSupplyPct",
            -- Summed as numeric: float8 addition depends on the order the rows arrive in, so a
            -- plan change (an index walk one hour, a scan the next) moved the last bits of 13-25%
@@ -225,6 +247,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
         { ...counts, appearances: stats.appearances, dumps: stats.dumps },
         scoreMarket,
       ),
+      transferWins: Number(r.transferWins),
       medianSupplyPct: r.medianSupplyPct === null ? null : Number(r.medianSupplyPct),
       solIn: Number(r.solIn),
       solOut: Number(r.solOut),
@@ -248,6 +271,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
     risky: data.filter((d) => d.score >= RISKY_WALLET_SCORE).length,
     dumpers: data.filter((d) => d.dumper).length,
     winners: data.filter((d) => d.winner).length,
+    cleanWinners: data.filter((d) => d.winner && d.transferWins === 0).length,
     snipers: data.filter((d) => d.sniper).length,
     marketDumpRate: Math.round(marketDumpRate * 10_000) / 10_000,
     marketWinRate: Math.round(marketWinRate * 10_000) / 10_000,

@@ -5,6 +5,7 @@ import {
   liveTraders,
   tradesFromChainTransactionsPriced,
   walletScoreReading,
+  winnerFollowReading,
   type HeliusClient,
   type LiveFlagsReading,
   type LiveTraderCounts,
@@ -13,6 +14,7 @@ import {
   type TapeTrade,
   type TradeFlowFeatures,
   type WalletScoreReading,
+  type WinnerFollowReading,
 } from "@trenchscanner/core";
 
 const logger = createLogger("live-tape");
@@ -186,6 +188,21 @@ export function liveWalletScoreOn(
 ): WalletScoreReading | null {
   if (!lookup || !page) return null;
   return walletScoreReading(page.trades, (wallet) => lookup(wallet)?.walletScore, ownTape);
+}
+
+/**
+ * The newest buyers read through the clean winner wallets' records (core's winnerFollowReading,
+ * the Winners seat's inputs), or null without the coin's recent page (livePageOf) or the wallet book. Wallets in
+ * `ownTape` (rows on this coin's own tape already in the book) count as buyers but are read as
+ * unknown.
+ */
+export function liveWinnerFollowOn(
+  page: LiveTapePage | undefined,
+  lookup: ((wallet: string) => ScoredWallet | undefined) | undefined,
+  ownTape: { has(wallet: string): boolean } | null | undefined,
+): WinnerFollowReading | null {
+  if (!lookup || !page) return null;
+  return winnerFollowReading(page.trades, lookup, ownTape);
 }
 
 /** A window reading older than this is no longer the last five minutes. */

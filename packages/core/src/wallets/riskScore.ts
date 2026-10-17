@@ -227,6 +227,16 @@ export interface ScoredWallet {
   winner?: boolean;
   /** The hidden composite Wallet Score (walletScore.ts); null or absent when it has none. */
   walletScore?: number | null;
+  /** Coins it traded itself at 2x or better (WalletRisk.own2x), for the Winners seat's inputs. */
+  own2x?: number;
+  /**
+   * Its win-sized trades fed by tokens transferred in (WalletRisk.transferWins): null until the
+   * hourly rebuild has counted them, and absent on a book loaded without it; winnerFollow.ts reads
+   * either as not clean.
+   */
+  transferWins?: number | null;
+  /** SOL it put in over every coin on record (WalletRisk.solIn): its usual stake is this / appearances. */
+  solIn?: number;
 }
 
 /** What one wallet did in the coin being decided on, from that coin's own tape (TokenWalletActivity). */

@@ -64,6 +64,7 @@ import {
   loadModelGates,
   GEMERALD_ASKED_AT,
   GEMERALD_GATE,
+  hasOwnPopulation,
 } from "@trenchscanner/core";
 import { RunProgress } from "../runProgress.js";
 import { runContestOffThread } from "../training/runContest.js";
@@ -247,11 +248,12 @@ async function trainCurators(
   );
   const { results } = outcome;
   // The Narrative seat sits out until it has rows enough (NARRATIVE_MIN_ROWS), a gated seat until its
-  // gate is stored and lets enough through (GATED_MIN_ROWS); a running model, if any, stays active
+  // gate is stored and lets enough through (GATED_MIN_ROWS), Winners until enough rows carry its
+  // reading (the same floor); a running model, if any, stays active
   // rather than retiring with the generation.
   const kept = contestants
     .filter(
-      (c) => (c.role === "narrative" || c.gate !== undefined) && !results.some((r) => r.contestant === c.id),
+      (c) => (c.role === "narrative" || hasOwnPopulation(c)) && !results.some((r) => r.contestant === c.id),
     )
     .map((c) => c.id);
   if (results.length === 0) {

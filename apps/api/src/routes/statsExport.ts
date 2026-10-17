@@ -750,6 +750,8 @@ const WALLET_COLUMNS = [
   "own2x",
   "own4x",
   "walletScore",
+  // Win-sized trades fed by tokens transferred in (the Winners seat reads a Winner only at 0).
+  "transferWins",
   "medianSupplyPct",
   "solIn",
   "solOut",
@@ -800,6 +802,9 @@ const WALLET_ACTIVITY_COLUMNS = [
   "sells",
   "solIn",
   "solOut",
+  // Tokens bought and sold on the tape: a wallet that sold more than it bought had tokens sent in.
+  "tokensBought",
+  "tokensSold",
   "firstBuyAt",
   "firstSellAt",
   "heldPctAtAnchor",
@@ -820,7 +825,8 @@ async function* walletActivityPages(since: Date, until: Date, pageSize = EXPORT_
       SELECT a."id", a."wallet", a."tokenId", tk."mintAddress", tk."symbol",
              a."createdAt" AS "readAt", t."status" AS "tapeStatus", t."reason" AS "tapeReason", t."anchorAt",
              co."hit2xIn15m", co."disqualified", co."stoppedAt", co."hit2xAt",
-             a."buys", a."sells", a."solIn", a."solOut", a."firstBuyAt", a."firstSellAt",
+             a."buys", a."sells", a."solIn", a."solOut", a."tokensBought", a."tokensSold",
+             a."firstBuyAt", a."firstSellAt",
              a."heldPctAtAnchor", a."boughtPct", a."isCreator", a."firstBuyerRank", a."launchSniper",
              a."top10AtAnchor", a."fastExit", a."dumpedIntoStop", a."dumpSol"
       FROM "TokenWalletActivity" a

@@ -34,6 +34,7 @@ import {
 import {
   CONSENSUS_CONTESTANT,
   HIGH_PRECISION_SHARE_BAND,
+  hasOwnPopulation,
   isTraderMember,
   RULES_CONTESTANT,
   TRADER_CONTESTANT,
@@ -61,7 +62,12 @@ import {
   type DerivedRuleSet,
 } from "./rulesDistill.js";
 import { HAND_TUNED_RULE_LINES } from "./curator.js";
-import { gateCriteriaUncheckedOffline, passesModelGateOnFeatures, type ModelGates } from "./modelGate.js";
+import {
+  gateCriteriaUncheckedOffline,
+  passesModelGateOnFeatures,
+  seatConsiders,
+  type ModelGates,
+} from "./modelGate.js";
 
 /**
  * One training run, minus the IO: examine every enabled model family on the same walk-forward
@@ -1073,10 +1079,11 @@ export async function runEvolvingContest(
 
   // Progress for the admin panel: one step per exam sat (seats, narrative seats, challengers).
   // Gated seats sit their own exam on the rows their gate lets through (below), like the narrative seats.
+  // So do the seats on a reading of their own (Winners, ContestantSpec.requires).
   const learnerSpecs = cfg.contestants.filter(
-    (c) => c.role === "learner" && c.recipe && c.gate === undefined,
+    (c) => c.role === "learner" && c.recipe && !hasOwnPopulation(c),
   );
-  const gatedSpecs = cfg.contestants.filter((c) => c.role === "learner" && c.recipe && c.gate !== undefined);
+  const gatedSpecs = cfg.contestants.filter((c) => c.role === "learner" && c.recipe && hasOwnPopulation(c));
   const examsTotal =
     learnerSpecs.length +
     gatedSpecs.length +
@@ -1144,12 +1151,13 @@ export async function runEvolvingContest(
   }
 
   // The gated seats (Gems): trained, examined and calibrated on the moments their frozen filter lets
-  // through, so they share no fold with the learners and feed no combiner. Skipped, with the
-  // running model kept, while the gate is missing or lets through too few decision moments.
+  // through (or, for Winners, the moments carrying its reading), so they share no fold with the
+  // learners and feed no combiner. Skipped, with the running model kept, while the gate is missing
+  // or lets through too few decision moments.
   for (const spec of gatedSpecs) {
-    const gate = cfg.gates?.[spec.gate!];
-    if (!gate) continue;
-    const seatRows = gatedTrainingSet(rows, gate);
+    const gate = spec.gate !== undefined ? cfg.gates?.[spec.gate] : undefined;
+    if (spec.gate !== undefined && !gate) continue;
+    const seatRows = rows.filter((r) => seatConsiders(spec, r.features, gate));
     if (seatRows.filter((r) => isDecisionRow(r, cfg.mcapBand)).length < GATED_MIN_ROWS) continue;
     const ownFeatures = runFeatures(seatRows, cfg);
     examining(spec.name);
@@ -1163,10 +1171,10 @@ export async function runEvolvingContest(
       ownFeatures.usable,
     );
     exam.result.metrics.gate = {
-      id: spec.gate!,
+      id: spec.gate ?? `requires:${spec.requires}`,
       rows: seatRows.length,
       of: rows.length,
-      uncheckedOffline: gateCriteriaUncheckedOffline(gate),
+      uncheckedOffline: gate ? gateCriteriaUncheckedOffline(gate) : [],
     };
     if (cfg.featureOnsetGuard) exam.result.metrics.heldFeatures = ownFeatures.held;
     results.push(exam.result);

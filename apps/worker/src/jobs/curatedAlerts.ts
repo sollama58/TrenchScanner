@@ -73,6 +73,7 @@ import {
   gatesById,
   loadModelGates,
   passesModelGate,
+  seatConsiders,
   type ServedCuratorExtras,
   type StackedCuratorParams,
   type TrainedCuratorParams,
@@ -543,6 +544,8 @@ function decideCurations(
     } else if (entry.role === "learner") {
       // A gated seat considers only what its frozen filter lets through: no score, no decision.
       if (entry.gate && !passesModelGate(scored, entry.gate)) continue;
+      // A seat on a reading of its own (Winners) considers only moments that carry it.
+      if (entry.spec.requires !== undefined && !seatConsiders(entry.spec, features, undefined)) continue;
       const { params, id } = entry.model;
       const probability = safeScore(entry.spec.id, id, () => scoreCandidateWithModel(params, features));
       if (probability === null) continue;

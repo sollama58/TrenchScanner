@@ -170,9 +170,56 @@ describe.skipIf(!dbAvailable)("wallet risk job", () => {
       own4x: 0,
       earlyBuys: 4,
       early2x: 0,
+      // The last two coins are win-sized on tokens it didn't buy on the tape: fed by transfers.
+      transferWins: 2,
     });
     const row = await prisma.walletRisk.findUniqueOrThrow({ where: { wallet: trader } });
     expect(row.walletScore).not.toBeNull();
+  });
+
+  it("counts a win-sized trade on a coin a holder transfer sent it as fed by transfers", async () => {
+    const fed = `${TAG}-fed`;
+    const anchorAt = new Date("2026-10-14T10:00:00Z");
+    for (const i of [0, 1]) {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-fed-${i}` } });
+      await prisma.tokenTradeTape.create({
+        data: { tokenId: token.id, anchorAt, reason: "called", status: "done", windowEnd: anchorAt },
+      });
+      // A clean-looking 2.5x on both; only the first coin was also sent to it by a top holder.
+      await prisma.tokenWalletActivity.create({
+        data: {
+          tokenId: token.id,
+          wallet: fed,
+          buys: 1,
+          sells: 1,
+          solIn: 1,
+          solOut: 2.5,
+          tokensBought: 100,
+          tokensSold: 100,
+          firstBuyAt: anchorAt,
+          firstSellAt: new Date(anchorAt.getTime() + 60_000),
+        },
+      });
+      if (i === 0) {
+        await prisma.holderTransferEvent.create({
+          data: {
+            signature: `${TAG}-sig`,
+            fromWallet: `${TAG}-funder`,
+            toWallet: fed,
+            mintAddress: token.mintAddress,
+            pct: 1,
+            at: anchorAt,
+          },
+        });
+      }
+    }
+    await runWalletRiskJob();
+    expect(await prisma.walletRisk.findUnique({ where: { wallet: fed } })).toMatchObject({
+      appearances: 2,
+      wins: 2,
+      transferWins: 1,
+    });
+    await prisma.holderTransferEvent.deleteMany({ where: { signature: `${TAG}-sig` } });
   });
 
   it("counts the Wallet Score's early 2x and 4x from the call's outcome", async () => {

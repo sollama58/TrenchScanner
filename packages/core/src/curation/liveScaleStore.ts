@@ -2,6 +2,8 @@ import { Prisma, prisma } from "../db.js";
 import { LIVE_CONVICTION_MIN_SAMPLES } from "./convictionLine.js";
 import { loadCurrentLanes } from "./laneStore.js";
 import { LiveRescorer, type LiveSeatModel, type RescoreFeatures } from "./liveRescore.js";
+import { CONTESTANTS } from "./contestants.js";
+import { gatesById, loadModelGates } from "./modelGateStore.js";
 import { LIVE_SCORE_WINDOW_HOURS, type LiveScales } from "./liveScale.js";
 
 /** Rows read per feature query: a retrain re-reads the whole window's feature vectors once. */
@@ -46,6 +48,10 @@ export async function loadLiveScales(highConvictionRank: number, now = new Date(
   }
   const models = await loadSeatModels(seats);
   const missing = rescorer.missingRows(rows, models);
+  // The gated seats' frozen filters (Gems), read only while one of them needs rows scored.
+  const gated = new Set(CONTESTANTS.filter((c) => c.gate !== undefined).map((c) => c.id));
+  const gates =
+    missing.length > 0 && models.some((m) => gated.has(m.seat)) ? gatesById(await loadModelGates()) : {};
   for (let i = 0; i < missing.length; i += FEATURE_BATCH) {
     const batch = await prisma.candidateOutcome.findMany({
       where: { id: { in: missing.slice(i, i + FEATURE_BATCH) } },
@@ -60,6 +66,7 @@ export async function loadLiveScales(highConvictionRank: number, now = new Date(
           anchorMcapUsd: row.anchorMcapUsd,
         },
         models,
+        gates,
       );
     }
   }
