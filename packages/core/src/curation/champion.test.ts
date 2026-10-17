@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { pickChampion, resolveDefaultModel, type ChampionStanding } from "./champion.js";
 
-/** A seat that doubled `ratePct` of `graded` calls in the window. */
-function standing(id: string, ratePct: number, graded: number, calling = true): ChampionStanding {
-  return { id, name: id.toUpperCase(), calling, graded, wins: Math.round((ratePct * graded) / 100) };
+/** A seat whose live record over the window scores `score` on the full scorecard. */
+function standing(id: string, score: number, graded: number, calling = true): ChampionStanding {
+  return { id, name: id.toUpperCase(), calling, graded, wins: Math.round((score * graded) / 100), score };
 }
 
 const rules = { minLiveGraded: 10, margin: 2 };
 
 describe("pickChampion", () => {
-  it("picks the best 2x lower bound among models with enough graded live calls", () => {
+  it("picks the best score among models with enough graded live calls", () => {
     const pick = pickChampion(
       [standing("rules", 30, 40), standing("trees", 55, 12), standing("lucky", 90, 3)],
       null,
@@ -35,8 +35,7 @@ describe("pickChampion", () => {
     expect(pick.reason).toContain("10 graded live calls");
   });
 
-  it("keeps the sitting champion unless a challenger's lower bound leads by the margin", () => {
-    // Lower bounds at 400 calls: 40% -> 35.3, 41.5% -> 36.8 (1.5 points), 43% -> 38.2 (2.9).
+  it("keeps the sitting champion unless a challenger's score leads by the margin", () => {
     const field = [standing("rules", 40, 400), standing("trees", 41.5, 400)];
     expect(pickChampion(field, "rules", rules, "consensus").id).toBe("rules");
     expect(pickChampion(field, null, rules, "consensus").id).toBe("trees");
@@ -44,8 +43,7 @@ describe("pickChampion", () => {
     expect(pickChampion(clear, "rules", rules, "consensus").id).toBe("trees");
   });
 
-  it("ranks on the 2x rate, not on volume", () => {
-    // A seat calling half the market at 20% loses to a tighter one at 24% (lower bounds 18.3 vs 19.5).
+  it("ranks on the score, not on volume", () => {
     const field = [standing("rules", 20, 2_000), standing("trees", 24, 300)];
     expect(pickChampion(field, null, rules, "consensus").id).toBe("trees");
   });

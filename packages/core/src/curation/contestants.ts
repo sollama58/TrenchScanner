@@ -13,7 +13,7 @@ import {
 import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
 import { NARRATIVE_STORY_WEIGHT } from "./narrativeLed.js";
 import { GEMERALD_GATE } from "./modelGate.js";
-import type { CuratorLearner } from "./trainer.js";
+import type { CuratorLearner, SeatGoal } from "./trainer.js";
 
 /**
  * The curator roster: every model that makes calls, each on its own ledger (CuratedAlert.model),
@@ -94,6 +94,8 @@ export interface CuratorRecipe {
    * of the field's. Unset = the field's rule, which leans toward catching more runners.
    */
   cutoffShare?: number;
+  /** What the seat is trained and examined on (SeatGoal in trainer.ts). Unset = the field's (CURATOR_DEFAULT_GOAL). */
+  goal?: SeatGoal;
 }
 
 export interface ContestantSpec {
@@ -173,6 +175,14 @@ export const SHARP_SURVIVOR_CONTESTANT = "sharp-survivor";
  * under a new id: a different model on the old id would have inherited Deep Trees' record.
  */
 export const SHARP_DEEP_TREES_CONTESTANT = "sharp-deep-trees";
+
+/** The goal seats (user ask 2026-10-17) - see SeatGoal in trainer.ts. */
+export const SAFE_CONTESTANT = "safe";
+export const FOUR_X_CONTESTANT = "four-x";
+export const TEN_X_CONTESTANT = "ten-x";
+export const CATCHER_CONTESTANT = "catcher";
+/** Catcher's cutoff anchor: a wider slice than the field's 20%, for the runners outside it. */
+export const CATCHER_CUTOFF_SHARE = 0.35;
 
 /** The gated seat on the Gemerald filter - see GEMS_RECIPE. */
 export const GEMS_CONTESTANT = "gems";
@@ -333,6 +343,7 @@ export const GEMS_RECIPE: CuratorRecipe = {
   featureNames: TREES_NO_TOKENSAGE_FEATURES,
   recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
   cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+  goal: "return",
 };
 
 /**
@@ -367,6 +378,7 @@ export const WINNERS_RECIPE: CuratorRecipe = {
   featureNames: [...TREES_NO_TOKENSAGE_FEATURES, ...WINNERS_SEAT_INPUTS],
   recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
   cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+  goal: "return",
 };
 
 export const CONTESTANTS: readonly ContestantSpec[] = [
@@ -423,91 +435,97 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   },
   {
     id: "linear",
-    name: "Linear",
-    description: "Logistic regression on every feature, weighted toward the last two weeks",
+    name: "Return Linear",
+    description:
+      "Logistic regression on every feature, weighted toward the last two weeks, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary: "Weighs every signal on a token in one simple formula, leaning on the last two weeks.",
     role: "learner",
-    recipe: { learner: "logistic" },
+    recipe: { learner: "logistic", goal: "return" },
   },
   {
     id: "linear-recent",
-    name: "Linear Recent",
-    description: "Logistic regression that mostly forgets anything older than a few days",
+    name: "Return Linear Recent",
+    description:
+      "Logistic regression that mostly forgets anything older than a few days, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary: "The same simple formula, but it mostly remembers only the last few days.",
     role: "learner",
-    recipe: { learner: "logistic", recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS },
+    recipe: { learner: "logistic", recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS, goal: "return" },
   },
   {
     id: "order-flow",
-    name: "Order Flow",
-    description: "Logistic regression on short-window volume, buys and momentum only",
+    name: "Return Order Flow",
+    description:
+      "Logistic regression on short-window volume, buys and momentum only, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary: "Looks only at the last few minutes of trading: volume, buys against sells, and price moves.",
     role: "learner",
-    recipe: { learner: "logistic", featureNames: ORDER_FLOW_FEATURES },
+    recipe: { learner: "logistic", featureNames: ORDER_FLOW_FEATURES, goal: "return" },
   },
   {
     id: "trees",
-    name: "Trees",
-    description: "Gradient-boosted shallow trees that pick up thresholds and interactions",
+    name: "Return Trees",
+    description:
+      "Gradient-boosted shallow trees that pick up thresholds and interactions, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary: 'Learns if-then rules from every signal, like "lots of buyers and few fresh wallets".',
     role: "learner",
-    recipe: { learner: "gbdt" },
+    recipe: { learner: "gbdt", goal: "return" },
   },
   {
     id: TREES_NO_TOKENSAGE_CONTESTANT,
-    name: "Simple Trees",
+    name: "Return Trees, no TokenSage",
     description:
-      "Trees' twin on every input except TokenSage's, kept to measure what the read adds - in no combiner, never the default",
+      "Trees' twin on every input except TokenSage's, kept to measure what the read adds - in no combiner, never the default, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
       "The same if-then rules as Trees, but it never sees TokenSage, so we can tell whether TokenSage helps.",
     role: "learner",
-    recipe: { learner: "gbdt", featureNames: TREES_NO_TOKENSAGE_FEATURES },
+    recipe: { learner: "gbdt", featureNames: TREES_NO_TOKENSAGE_FEATURES, goal: "return" },
     control: true,
   },
   {
     id: "deep-trees",
-    name: "Deep Trees",
-    description: "Gradient-boosted deeper trees for three- and four-way interactions",
+    name: "Return Deep Trees",
+    description:
+      "Gradient-boosted deeper trees for three- and four-way interactions, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary: "Like Trees, but with longer if-then chains to catch rarer combinations.",
     role: "learner",
-    recipe: { learner: "gbdt", boosting: { maxDepth: 5, minLeafRows: 50, maxTrees: 200 } },
+    recipe: { learner: "gbdt", boosting: { maxDepth: 5, minLeafRows: 50, maxTrees: 200 }, goal: "return" },
   },
   {
     id: "trees-recent",
-    name: "Trees Recent",
+    name: "Return Trees Recent",
     description:
-      "Gradient-boosted trees where a row counts half after 1.5 days, so mostly the last day or two (a trial since 2026-10-14)",
+      "Gradient-boosted trees where a row counts half after 1.5 days, so mostly the last day or two (a trial since 2026-10-14), ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary: "If-then rules learned mostly from the last day or two.",
     role: "learner",
     // 1.5-day half-life since 2026-10-14 (was 3), a trial (user decision 2026-10-14): see
     // TREES_RECENT_HALF_LIFE_DAYS. Same id and family - the seat keeps its record and its lane.
-    recipe: { learner: "gbdt", recencyHalfLifeDays: TREES_RECENT_HALF_LIFE_DAYS },
+    recipe: { learner: "gbdt", recencyHalfLifeDays: TREES_RECENT_HALF_LIFE_DAYS, goal: "return" },
   },
   {
     id: "momentum",
-    name: "Momentum",
+    name: "Return Momentum",
     description:
-      "Logistic regression on the last half hour's price path, order flow and the market around it",
+      "Logistic regression on the last half hour's price path, order flow and the market around it, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary: "Reads the last half hour's price path and trading, plus the mood of the market around it.",
     role: "learner",
-    recipe: { learner: "logistic", featureNames: MOMENTUM_FEATURES },
+    recipe: { learner: "logistic", featureNames: MOMENTUM_FEATURES, goal: "return" },
   },
   {
     id: "survivor",
-    name: "Survivor",
-    description: "Two boosted-tree stages: first whether it holds above the stop, then whether it doubles",
+    name: "Return Survivor",
+    description:
+      "Two boosted-tree stages: first whether it holds above the stop, then whether it doubles, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary: "Asks first whether a token will avoid a 50% drop, then whether it will double.",
     role: "learner",
-    recipe: { learner: "gbdt", twoStage: true },
+    recipe: { learner: "gbdt", twoStage: true, goal: "return" },
   },
   {
     id: "forest",
-    name: "Forest",
+    name: "Return Forest",
     description:
-      "A random forest: sixty deep trees, each grown on its own slice of rows and a third of the features, their votes averaged",
+      "A random forest: sixty deep trees, each grown on its own slice of rows and a third of the features, their votes averaged, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary: "Sixty independent if-then trees, each shown a different slice of the data, voting together.",
     role: "learner",
-    recipe: { learner: "forest" },
+    recipe: { learner: "forest", goal: "return" },
   },
   {
     id: "ranker",
@@ -525,16 +543,18 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   },
   {
     id: "runner",
-    name: "Runner",
+    name: "Moonshot",
     description:
-      "Boosted trees that predict how far a token runs - its peak in doublings, any loss counting 0 - not whether it doubles",
-    summary: "Predicts how big the run will be, so a likely 5x ranks above a sure 2x.",
+      "Boosted trees that predict how far a token runs - its peak in doublings, any loss counting 0 - with every winner weighted hard by how far it ran; judged on run size",
+    summary: "Hunts the biggest runs: a likely 10x ranks far above a sure 2x.",
     role: "learner",
-    recipe: { learner: "gbdt", boosting: { objective: "runSize" } },
+    // Was "Runner" (run size alone) until 2026-10-17 (user ask: "one whose goal is ultimately
+    // massive runners"): same id and objective, now with the moonshot goal's run weight.
+    recipe: { learner: "gbdt", boosting: { objective: "runSize" }, goal: "moonshot" },
   },
   {
     id: SHARP_TREES_CONTESTANT,
-    name: "Sharp Trees",
+    name: "Sharp 2x",
     description:
       "Slow, coarse boosted trees (depth 4, 100 rows a leaf) calling only their surest tokens: about the top 12% of decision moments, moved by 2x record",
     summary:
@@ -544,6 +564,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
       learner: "gbdt",
       boosting: { maxDepth: 4, minLeafRows: 100, learningRate: 0.03, maxTrees: 400 },
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+      goal: "2x",
     },
     standalone: true,
   },
@@ -572,22 +593,62 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     // inside noise) and 16 points fewer stop-outs in its top 5%
     // (notes/model-audit-2026-10-14/objectives-sharp.md, 4.6).
     id: SHARP_SURVIVOR_CONTESTANT,
-    name: "Sharp Survivor",
+    name: "Sharp 2x Survivor",
     description:
       "Survivor's two boosted-tree stages (first whether it holds above the stop, then whether it doubles) calling only their surest tokens: about the top 12% of decision moments, moved by 2x record",
     summary:
       "Asks first whether a token will avoid a 50% drop, then whether it will double, and calls only the ones it is surest of, about 6-8 an hour.",
     role: "learner",
-    recipe: { learner: "gbdt", twoStage: true, cutoffShare: HIGH_PRECISION_CUTOFF_SHARE },
+    recipe: { learner: "gbdt", twoStage: true, cutoffShare: HIGH_PRECISION_CUTOFF_SHARE, goal: "2x" },
+    standalone: true,
+  },
+  {
+    id: SAFE_CONTESTANT,
+    name: "Safe",
+    description:
+      "Boosted trees ranked on expected return under the exit plan with every loss counted twice: a 2x model beside a model of falling to the stop before the first sale; judged on that loss-averse return",
+    summary: "Steers clear of coins likely to crash 50%, and calls the ones that can still pay.",
+    role: "learner",
+    recipe: { learner: "gbdt", goal: "safe" },
+    standalone: true,
+  },
+  {
+    id: FOUR_X_CONTESTANT,
+    name: "4x Hunter",
+    description:
+      "Boosted trees trained on a clean 4x inside 30 minutes (anything less is a miss); judged on its 4x rate",
+    summary: "Looks only for coins that can quadruple, not just double.",
+    role: "learner",
+    recipe: { learner: "gbdt", goal: "4x" },
+    standalone: true,
+  },
+  {
+    id: TEN_X_CONTESTANT,
+    name: "10x Hunter",
+    description:
+      "Boosted trees trained on a clean 10x inside the hour (the 4x while too few 10x rows exist); judged on its 10x rate",
+    summary: "Looks only for coins that can go ten times.",
+    role: "learner",
+    recipe: { learner: "gbdt", goal: "10x" },
+    standalone: true,
+  },
+  {
+    id: CATCHER_CONTESTANT,
+    name: "Catcher",
+    description:
+      "Boosted trees on a clean 2x leaning toward the runners, calling a wider slice (about the top 35% of decision moments); judged on how many runners it catches",
+    summary: "Casts the widest net: catches as many of the runners as it can while its hit rate holds.",
+    role: "learner",
+    recipe: { learner: "gbdt", goal: "catch", cutoffShare: CATCHER_CUTOFF_SHARE },
     standalone: true,
   },
   {
     // User ask 2026-10-17: a model on the traits of the best seats that only considers tokens
     // passing the Gemerald filter as it stood then (GEMERALD_GATE, frozen in ModelGate).
     id: GEMS_CONTESTANT,
-    name: "Gems",
+    name: "Return Gems",
     description:
-      "Only tokens that pass the Gemerald filter (a frozen copy): Survivor's two boosted-tree stages on every input but TokenSage's, mostly the last few days, calling only its surest tokens - about the top 12% of Gemerald's moments, moved by 2x record",
+      "Only tokens that pass the Gemerald filter (a frozen copy): Survivor's two boosted-tree stages on every input but TokenSage's, mostly the last few days, calling only its surest tokens - about the top 12% of Gemerald's moments, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
       "Looks only at coins the Gemerald filter lets through, asks whether each will avoid a 50% drop and then double, and calls only the ones it is surest of.",
     role: "learner",
@@ -599,9 +660,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     // User ask 2026-10-17: a model that learns from the best winner wallets, leaving out wallets
     // whose wins came from tokens transferred in. Decides only once the newest buyers were read.
     id: WINNERS_CONTESTANT,
-    name: "Winners",
+    name: "Return Winners",
     description:
-      "Who is buying and how, read through the best wallets' records: the clean Winner wallets' (no win fed by tokens transferred in) share of the newest buyers and of the SOL, the buyers' own 2x record, how hard the winners are buying against their usual stake and whether they are buying in or getting out, beside every input but TokenSage's. Survivor's two boosted-tree stages, mostly the last few days, calling only its surest tokens - about the top 12% of the moments the newest trades were read on, moved by 2x record",
+      "Who is buying and how, read through the best wallets' records: the clean Winner wallets' (no win fed by tokens transferred in) share of the newest buyers and of the SOL, the buyers' own 2x record, how hard the winners are buying against their usual stake and whether they are buying in or getting out, beside every input but TokenSage's. Survivor's two boosted-tree stages, mostly the last few days, calling only its surest tokens - about the top 12% of the moments the newest trades were read on, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
       "Watches which proven winning wallets are trading a coin right now and how (how big they are buying, whether they are getting in or out), leaving out wallets whose wins came from tokens sent to them, weighs that with the rest of the coin's picture, and calls only the ones it is surest of.",
     role: "learner",
@@ -611,13 +672,18 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   },
   {
     id: NARRATIVE_CONTESTANT,
-    name: "Narrative",
+    name: "Return Narrative",
     description:
-      "Two boosted-tree models trained on deep-read coins, blended at fixed weights: 30% the story (TokenSage's theme, lineage, trend match, X post, logo and creator fee, and the coin's socials) and 70% a safety check (holder concentration, fresh, empty and sniper wallets, launch bundles, the dev's buy, RugCheck risk); no price, volume or age. Decides only once TokenSage's deep read is in",
+      "Two boosted-tree models trained on deep-read coins, blended at fixed weights: 30% the story (TokenSage's theme, lineage, trend match, X post, logo and creator fee, and the coin's socials) and 70% a safety check (holder concentration, fresh, empty and sniper wallets, launch bundles, the dev's buy, RugCheck risk); no price, volume or age. Decides only once TokenSage's deep read is in, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
       "Waits for the deep read of what the coin is about (its theme, its X post, copycat signs), then decides from that and a safety check, the safety check holding 70% of the say.",
     role: "narrative",
-    recipe: { learner: "gbdt", featureNames: NARRATIVE_SEAT_FEATURES, narrativeLed: NARRATIVE_STORY_WEIGHT },
+    recipe: {
+      learner: "gbdt",
+      featureNames: NARRATIVE_SEAT_FEATURES,
+      narrativeLed: NARRATIVE_STORY_WEIGHT,
+      goal: "return",
+    },
   },
   {
     // The Narrative seat's two-step sibling (user decision 2026-10-08): the market and the
@@ -625,15 +691,15 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     // narrative. Same rows and the same deep-read gate; it files its own calls like a learner
     // seat (the agrees/warns note on other cards stays the Narrative seat's).
     id: NARRATIVE_BLEND_CONTESTANT,
-    name: "Narrative Blend",
+    name: "Return Narrative Blend",
     description:
-      "Two steps: boosted trees score the coin from every market input, then shallow trees trained on deep-read coins adjust that score by TokenSage's read, only as far as that beat the market score on the newest coins; decides only once the deep read is in",
+      "Two steps: boosted trees score the coin from every market input, then shallow trees trained on deep-read coins adjust that score by TokenSage's read, only as far as that beat the market score on the newest coins; decides only once the deep read is in, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
       "Takes the market's read of the coin and TokenSage's deep read of its story, and weighs the two together.",
     role: "narrative",
     // Every learner input, TokenSage's included: its blend stage reads all of them, where the
     // market seats read MARKET_LEARNER_FEATURE_NAMES (its market stage drops the ns* inputs).
-    recipe: { learner: "gbdt", narrativeBlend: true, featureNames: LEARNER_FEATURE_NAMES },
+    recipe: { learner: "gbdt", narrativeBlend: true, featureNames: LEARNER_FEATURE_NAMES, goal: "return" },
   },
 ];
 

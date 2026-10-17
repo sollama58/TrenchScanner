@@ -78,7 +78,7 @@ describe("probation", () => {
       lane: model("scoreTotal", 0.8),
     });
     expect(worse.confirm).toBe(false);
-    expect(worse.reason).toMatch(/did not beat the seat's 2x rate|not ahead/);
+    expect(worse.reason).toMatch(/did not beat the seat on its goal|not ahead/);
     const thin = judgeProbation({
       ...base,
       rows: rows(T0, 30, 0.8),
@@ -103,7 +103,7 @@ describe("probation", () => {
     expect(verdict.challenger.wins).toBe(verdict.lane.wins);
     expect(verdict.pairedConfidence).toBe(0);
     expect(verdict.confirm).toBe(false);
-    expect(verdict.reason).toMatch(/did not beat the seat's 2x rate/);
+    expect(verdict.reason).toMatch(/did not beat the seat on its goal/);
   });
 
   it("falls back to the seat's frozen volume when no share is set", () => {

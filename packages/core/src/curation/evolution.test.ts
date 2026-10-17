@@ -75,7 +75,10 @@ describe("names", () => {
     expect(traitName({ learner: "gbdt", recencyHalfLifeDays: 3 }, BASE_HL)).toBe("Trees Recent");
     expect(traitName({ learner: "gbdt", boosting: { maxDepth: 5 } }, BASE_HL)).toBe("Deep Trees");
     const orderFlow = CONTESTANTS.find((c) => c.id === "order-flow")!.recipe!;
-    expect(traitName(orderFlow, BASE_HL)).toBe("Order Flow");
+    expect(traitName(orderFlow, BASE_HL)).toBe("Return Order Flow");
+    expect(
+      traitName({ learner: "gbdt", boosting: { objective: "runSize" }, goal: "moonshot" }, BASE_HL),
+    ).toBe("Moonshot Trees");
     expect(
       traitName({ learner: "logistic", featureNames: ["mcapUsd"], recencyHalfLifeDays: 40 }, BASE_HL),
     ).toBe("Lean Linear Patient");
@@ -219,7 +222,7 @@ describe("withLanes", () => {
       summary:
         "Learns if-then rules from every signal, mostly remembering the last few days. A variant bred from Trees.",
     });
-    expect(out.find((s) => s.id === "trees")?.name).toBe("Trees");
+    expect(out.find((s) => s.id === "trees")?.name).toBe("Return Trees");
     expect(out.map((s) => s.id)).toEqual(specs.map((s) => s.id));
   });
 });

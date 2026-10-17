@@ -1507,6 +1507,16 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
               to 50x earn the same points above; this is what tells them apart.
             </li>
           )}
+          {w.returnPct != null && (
+            <li>
+              <strong>{Math.round(w.returnPct * 100)} points for average return.</strong> What a call returns
+              when traded under the fixed exit plan, averaged over every call: nothing at{" "}
+              {sc.returnFloorPct ?? -50}% (every call a full stop), full points at +{sc.returnTargetPct ?? 25}
+              %. The hit rates count a coin that fell to the stop the same as one that went nowhere; this part
+              tells them apart. A record without simulated returns is scored on the other parts, scaled to
+              100.
+            </li>
+          )}
           {w.catchRate != null && (
             <li>
               <strong>{Math.round(w.catchRate * 100)} points for catching runners.</strong> Of the tokens that
@@ -1558,6 +1568,16 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
                 and a run size of <span className="num">{b.provenRunDoublings.toFixed(2)}</span> doublings a
                 call ({Math.round(w.runSize * 100)} × {b.provenRunDoublings.toFixed(2)}/{runTarget} ={" "}
                 <span className="num">{b.pointsRun.toFixed(0)}</span> points)
+              </>
+            )}
+            {b.pointsReturn != null && b.provenReturnPct != null && w.returnPct != null && (
+              <>
+                {" "}
+                and an average return of <span className="num">{b.provenReturnPct.toFixed(0)}%</span> a call (
+                {Math.round(w.returnPct * 100)} × ({b.provenReturnPct.toFixed(0)} − {sc.returnFloorPct ?? -50}
+                )/(
+                {sc.returnTargetPct ?? 25} − {sc.returnFloorPct ?? -50}) ={" "}
+                <span className="num">{b.pointsReturn.toFixed(0)}</span> points)
               </>
             )}
             {b.pointsCatch != null && b.provenCatchPct != null && w.catchRate != null && (
@@ -1670,10 +1690,14 @@ function HowItWorks({ board }: { board: Leaderboard }) {
             ? `, ${Math.round(w.tenXRate * 100)} for how often its calls hit 10x within an hour`
             : ""}
           {w.runSize != null
-            ? `, and ${Math.round(w.runSize * 100)} for run size, how far its calls run over the day after`
+            ? `, ${Math.round(w.runSize * 100)} for run size, how far its calls run over the day after`
             : ""}
-          , with a few phantom misses added so a short streak proves little. It starts from the backtest and
-          shifts to live calls as they're graded (half and half at {board.scoring.livePivotCalls}).
+          {w.returnPct != null
+            ? `, ${Math.round(w.returnPct * 100)} for its average return under the exit plan`
+            : ""}
+          {w.catchRate != null ? `, and ${Math.round(w.catchRate * 100)} for catching the runners` : ""}, with
+          a few phantom misses added so a short streak proves little. It starts from the backtest and shifts
+          to live calls as they're graded (half and half at {board.scoring.livePivotCalls}).
         </li>
         <li>
           <strong>Evolve.</strong> Every run also breeds {board.evolution.challengersPerRun} challenger
