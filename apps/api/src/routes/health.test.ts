@@ -348,3 +348,42 @@ describe.skipIf(!dbAvailable)("GET /health/worker?strict=1 against the database"
     await ranAt(new Date());
   });
 });
+
+describe("a lost run (orphaned)", () => {
+  const H = 3_600_000;
+  const row = {
+    job: "outcome-tracking",
+    lastRunAt: new Date(0),
+    lastSuccessAt: new Date(0),
+    lastError: null,
+    meta: { runningSince: new Date(1 * H).toISOString() },
+  };
+  const at = 9 * H; // eight hours into the stamped run
+  const summarize = (opts: Parameters<typeof summarizeHeartbeat>[2]) =>
+    summarizeHeartbeat(row as unknown as Parameters<typeof summarizeHeartbeat>[0], at, opts);
+
+  it("is orphaned and hung when nobody holds the job's lock", () => {
+    const s = summarize({ heldLocks: new Set() });
+    expect(s.orphaned).toBe(true);
+    expect(s.hung).toBe(true);
+  });
+
+  it("is a live run while the lock is held, and hung past 90 minutes", () => {
+    const s = summarize({ heldLocks: new Set(["outcome-tracking"]) });
+    expect(s.orphaned).toBe(false);
+    expect(s.hung).toBe(true);
+    const fresh = summarizeHeartbeat(
+      { ...row, meta: { runningSince: new Date(at - 20 * 60_000).toISOString() } } as unknown as Parameters<
+        typeof summarizeHeartbeat
+      >[0],
+      at,
+      { heldLocks: new Set(["outcome-tracking"]) },
+    );
+    expect(fresh.hung).toBe(false);
+  });
+
+  it("is not judged without a lock read", () => {
+    expect(summarize({}).orphaned).toBe(false);
+    expect(summarize({ heldLocks: null }).orphaned).toBe(false);
+  });
+});

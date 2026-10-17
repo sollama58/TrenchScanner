@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   HEARTBEAT_JOB_ROLE,
   MANUAL_RUN_EXCLUDED,
+  heldJobLocks,
   MANUAL_RUN_JOBS,
   manualRunJob,
   prisma,
@@ -48,7 +49,10 @@ export async function registerAdminJobRunRoutes(app: FastifyInstance) {
         return { queued: false, reason: "this job has never run - no worker schedules it", job: state };
       }
       if (state.pending) return { queued: false, reason: "already queued", job: state };
-      if (state.runningForMs !== null) return { queued: false, reason: "a run is already going", job: state };
+      // A run lost with its process (orphaned) is not going: refusing it locked "Run now" out
+      // until the job's next slot, up to a day for a daily job.
+      if (state.runningForMs !== null && !state.orphaned)
+        return { queued: false, reason: "a run is already going", job: state };
 
       const requestedBy = request.user?.walletAddress ?? null;
       if (entry.job === "curator-training") {
@@ -71,7 +75,7 @@ async function runNowState() {
 
 /** Each job's catalog entry, last run, and its waiting and latest run-now request. */
 async function jobStates(jobs: HeartbeatJob[]) {
-  const [beats, pending, latest, retrainPending, retrainLatest] = await Promise.all([
+  const [beats, pending, latest, retrainPending, retrainLatest, heldLocks] = await Promise.all([
     prisma.systemHeartbeat.findMany({ where: { job: { in: jobs } } }),
     prisma.jobRunRequest.findMany({
       where: { job: { in: jobs }, startedAt: null },
@@ -92,12 +96,13 @@ async function jobStates(jobs: HeartbeatJob[]) {
     jobs.includes("curator-training")
       ? prisma.curatorRetrainRequest.findFirst({ orderBy: { requestedAt: "desc" } })
       : null,
+    heldJobLocks(),
   ]);
   const now = Date.now();
   return jobs.map((job) => {
     const entry = manualRunJob(job)!;
     const beat = beats.find((b) => b.job === job);
-    const summary = beat ? summarizeHeartbeat(beat, now, { fullError: true }) : null;
+    const summary = beat ? summarizeHeartbeat(beat, now, { fullError: true, heldLocks }) : null;
     const waiting = job === "curator-training" ? retrainPending : pending.find((r) => r.job === job);
     const last = job === "curator-training" ? retrainLatest : latest.find((r) => r.job === job);
     return {
@@ -111,6 +116,7 @@ async function jobStates(jobs: HeartbeatJob[]) {
       durationMs: typeof summary?.lastRun?.durationMs === "number" ? summary.lastRun.durationMs : null,
       skipped: typeof summary?.lastRun?.skipped === "string" ? summary.lastRun.skipped : null,
       runningForMs: summary?.runningForMs ?? null,
+      orphaned: summary?.orphaned ?? false,
       pending: waiting ? { requestedAt: waiting.requestedAt, requestedBy: waiting.requestedBy } : null,
       lastRequest: last
         ? { requestedAt: last.requestedAt, requestedBy: last.requestedBy, startedAt: last.startedAt }

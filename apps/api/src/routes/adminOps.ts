@@ -5,6 +5,7 @@ import {
   freeAccessWallets,
   prisma,
   Prisma,
+  heldJobLocks,
   readAiBudget,
   type Env,
 } from "@trenchscanner/core";
@@ -120,9 +121,12 @@ export async function registerAdminOpsRoutes(
 
   /** /health/worker with the full error text - that route is public and truncates it. */
   app.get("/worker", async () => {
-    const heartbeats = await prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } });
+    const [heartbeats, heldLocks] = await Promise.all([
+      prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
+      heldJobLocks(),
+    ]);
     const now = Date.now();
-    return { jobs: heartbeats.map((h) => summarizeHeartbeat(h, now, { fullError: true })) };
+    return { jobs: heartbeats.map((h) => summarizeHeartbeat(h, now, { fullError: true, heldLocks })) };
   });
 
   const hitRateCaches = new Map<number, SharedCache<Awaited<ReturnType<typeof buildHitRateReport>>>>();

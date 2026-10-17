@@ -1,5 +1,5 @@
 import { Client } from "pg";
-import { createLogger, type HeartbeatJob } from "@trenchscanner/core";
+import { createLogger, jobLockKey, type HeartbeatJob } from "@trenchscanner/core";
 import { JobSkipped } from "./scheduler.js";
 
 const logger = createLogger("job-lock");
@@ -10,10 +10,7 @@ export const JOB_LOCK_APPLICATION_NAME = "trenchscanner-job-lock";
 /** How long taking (or letting go of) a lock may take before the attempt is abandoned. */
 const LOCK_TIMEOUT_MS = 10_000;
 
-/** The advisory-lock key text for a job - hashed by Postgres, like the repo's other locks. */
-export function jobLockKey(job: HeartbeatJob): string {
-  return `job-run:${job}`;
-}
+export { jobLockKey };
 
 /**
  * Runs `fn` only while this process holds `job`'s lock, so one run of the job happens at a time

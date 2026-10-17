@@ -86,10 +86,31 @@ export const ownMultipleSql = (multiple: number) => Prisma.sql`(a."solIn" >= ${O
 const traderSql = Prisma.sql`a."buys" > 0 AND a."wallet" <> ALL(${[...PLATFORM_WALLETS.keys()]})`;
 const earlySql = Prisma.sql`(a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."anchorAt")`;
 
+/**
+ * The read tapes with their coins' outcomes, as `t`, joined to the activity rows `a`. Each tape
+ * looks its outcome up by primary key (the LIMIT keeps the lateral from being flattened into a
+ * join) and the subquery is kept whole (OFFSET 0): as a plain join the planner hashed the whole
+ * CandidateOutcome table, features and all, in both of wallet-risk's whole-tape reads every hour
+ * - the read the Wallet Score added on 10-16, after which the job went from 13 s to 75 s
+ * (performance audit 2026-10-17).
+ */
+export const tapeOutcomesJoinSql = Prisma.sql`JOIN (
+    SELECT t."tokenId", t."anchorAt", o."hit2xIn1h", o."hit4xIn1h", o."disqualified"
+    FROM "TokenTradeTape" t
+    LEFT JOIN LATERAL (
+      SELECT c."hit2xIn1h", c."hit4xIn1h", c."disqualified"
+      FROM "CandidateOutcome" c
+      WHERE c."id" = t."outcomeId"
+      LIMIT 1
+    ) o ON true
+    WHERE t."status" IN ('done', 'partial')
+    OFFSET 0
+  ) t ON t."tokenId" = a."tokenId"`;
+
 /** The Wallet Score's counts, as one SELECT list (the per-wallet query and the market totals). */
 export const scoreCountsSql = Prisma.sql`COUNT(*) FILTER (WHERE ${earlySql}) AS "earlyBuys",
-  COUNT(*) FILTER (WHERE ${earlySql} AND o."hit2xIn1h" AND o."disqualified" IS NOT TRUE) AS "early2x",
-  COUNT(*) FILTER (WHERE ${earlySql} AND o."hit4xIn1h" AND o."disqualified" IS NOT TRUE) AS "early4x",
+  COUNT(*) FILTER (WHERE ${earlySql} AND t."hit2xIn1h" AND t."disqualified" IS NOT TRUE) AS "early2x",
+  COUNT(*) FILTER (WHERE ${earlySql} AND t."hit4xIn1h" AND t."disqualified" IS NOT TRUE) AS "early4x",
   COUNT(*) FILTER (WHERE ${ownMultipleSql(2)}) AS "own2x",
   COUNT(*) FILTER (WHERE ${ownMultipleSql(4)}) AS "own4x",
   COUNT(*) FILTER (WHERE a."fastExit") AS "fastExits"`;
@@ -169,8 +190,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
            COUNT(*) FILTER (WHERE ${winSql}) AS wins,
            ${scoreCountsSql}
     FROM "TokenWalletActivity" a
-    JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
-    LEFT JOIN "CandidateOutcome" o ON o."id" = t."outcomeId"
+    ${tapeOutcomesJoinSql}
     WHERE ${traderSql}`;
   const appearances = Number(totals?.appearances ?? 0);
   const marketDumpRate = appearances > 0 ? Number(totals!.dumps) / appearances : 0;
@@ -211,8 +231,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
            SUM(a."solOut"::numeric)::float8 AS "solOut",
            MAX(COALESCE(a."firstBuyAt", a."createdAt")) AS "lastSeenAt"
     FROM "TokenWalletActivity" a
-    JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
-    LEFT JOIN "CandidateOutcome" o ON o."id" = t."outcomeId"
+    ${tapeOutcomesJoinSql}
     WHERE ${traderSql}
     GROUP BY a."wallet"
     HAVING COUNT(*) >= ${MIN_APPEARANCES}`;

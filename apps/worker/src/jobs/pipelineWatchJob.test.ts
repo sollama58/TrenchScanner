@@ -157,6 +157,15 @@ describe("pipeline watch: the trainer's jobs", () => {
     expect(problems[0]!.text).toBe("Trainer job outcome-tracking: no run for 30 h");
   });
 
+  it("tells a run lost with its process once, keyed by the run", () => {
+    const since = new Date(NOW - 8 * HOUR);
+    const lost = trainer("outcome-tracking", 22 * HOUR, { dailyAtHourUtc: 5 }, { lostRunSince: since });
+    const problems = findTrainerProblems([lost], NOW);
+    expect(problems.map((p) => p.key)).toEqual([`lost:outcome-tracking@${since.toISOString()}`]);
+    expect(problems[0]!.text).toContain("was lost with its process");
+    expect(findTrainerProblems([{ ...lost, lostRunSince: null }], NOW)).toEqual([]);
+  });
+
   it("watches the nightly full dump's own cron like a daily trainer job", () => {
     expect(TRAINER_JOBS).toContain("db-dump");
     // The row backup.sh writes: daily at 02, so a missed night is told a day and three hours on.
