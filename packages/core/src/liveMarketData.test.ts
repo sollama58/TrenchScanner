@@ -217,4 +217,51 @@ describe.skipIf(!dbAvailable)("refreshLiveMarketData", () => {
     // The call made seconds ago keeps no high from these readings.
     expect((await prisma.curatedAlert.findUniqueOrThrow({ where: { id: fresh.id } })).peakMcapUsd).toBeNull();
   });
+  it("leaves a peak the candles keep alone, for matches and calls", async () => {
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
+    const user = await prisma.user.create({ data: { walletAddress: `${TAG}-wallet-${Date.now()}` } });
+    try {
+      const filter = await prisma.userFilter.create({ data: { userId: user.id } });
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-checked` } });
+      const alert = await prisma.tokenSnapshot.create({
+        data: { tokenId: token.id, priceUsd: 0.001, marketCapUsd: 1000 },
+      });
+      const checkedAt = new Date();
+      const match = await prisma.match.create({
+        data: {
+          userId: user.id,
+          filterId: filter.id,
+          tokenId: token.id,
+          snapshotId: alert.id,
+          score: 50,
+          matchedAt: new Date(Date.now() - 2 * 60_000),
+          peakMcapUsd: 1500,
+          peakCheckedAt: checkedAt,
+        },
+      });
+      const call = await prisma.curatedAlert.create({
+        data: {
+          source: "test",
+          confidence: 50,
+          anchorPriceUsd: 0.001,
+          anchorMcapUsd: 1000,
+          tokenId: token.id,
+          createdAt: new Date(Date.now() - 2 * 60_000),
+          peakCheckedAt: checkedAt,
+        },
+      });
+      const dexScreener = {
+        getTokensByAddresses: async () => [
+          { mintAddress: token.mintAddress, marketCapUsd: 9000, priceUsd: 1 },
+        ],
+      } as unknown as DexScreenerClient;
+      await refreshLiveMarketData(dexScreener, [token], { peakWindowDays: 30 });
+      expect((await prisma.match.findUniqueOrThrow({ where: { id: match.id } })).peakMcapUsd).toBe(1500);
+      expect(
+        (await prisma.curatedAlert.findUniqueOrThrow({ where: { id: call.id } })).peakMcapUsd,
+      ).toBeNull();
+    } finally {
+      await prisma.user.delete({ where: { id: user.id } });
+    }
+  });
 });
