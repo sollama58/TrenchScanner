@@ -262,7 +262,9 @@ const envSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
   CURVE_TAPE_MAX_AGE_MINUTES: z.coerce.number().positive().default(15),
-  CURVE_TAPE_MAX_MINTS: z.coerce.number().int().positive().default(500),
+  // 500 was full on the first cycles live (2026-10-17) at ~6.6 stream credits a scan for the whole
+  // socket: the cost follows how often curves change, not how many are followed.
+  CURVE_TAPE_MAX_MINTS: z.coerce.number().int().positive().default(1_000),
   // The stream's credit ceiling for a UTC day, paced: past its share of the day so far (plus a
   // tenth of the day's cap of headroom) the curves come off the stream and the
   // CURVE_TAPE_POLL_MAX_MINTS nearest the band are read every CURVE_TAPE_POLL_SECONDS instead
