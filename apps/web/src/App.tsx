@@ -45,6 +45,7 @@ import { StreamView } from "./components/StreamView";
 import { useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
 import { closeTokenModal } from "./tokenModal";
+import { setProWallet } from "./proTrade";
 import { BugButton } from "./components/BugButton";
 import { AdminReportsBadge } from "./components/AdminReportsBadge";
 
@@ -241,6 +242,9 @@ export function App() {
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
   const isAdmin = signedIn && session.user.isAdmin;
+  // Pro Mode's wallet, for the token modal's Trade panel (null hides all of it).
+  const proWallet = signedIn && session.user.isPro ? session.user.walletAddress : null;
+  useEffect(() => setProWallet(proWallet), [proWallet]);
   // The Stream tab only for a signed-in reader who switched it on in Settings.
   const appearance = useAppearance();
   const streamOn = appearance.streamTab && signedIn;

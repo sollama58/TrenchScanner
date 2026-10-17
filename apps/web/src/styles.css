@@ -15385,3 +15385,148 @@ body:has(.util-toast) .bug-fab {
 .chaos-panel .sound-options {
   align-self: stretch;
 }
+
+/* Pro Mode (2026-10-17): the token modal's Trade panel under the chart, and the trader's own
+   entry line and trade marks on the chart. */
+.tm-trade-toggle {
+  margin-left: 8px;
+  border: 1px solid color-mix(in srgb, var(--good) 45%, var(--border));
+  color: var(--good-ink);
+}
+.tm-trade-toggle.on,
+.tm-trade-toggle.on:hover:not(:disabled) {
+  color: #fff;
+  background: var(--good);
+}
+.tm-trade {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tm-trade-pos {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.tm-trade-pos .tm-fig > span.num {
+  font-size: 16px;
+}
+.tm-trade-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.tm-trade-label {
+  width: 34px;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.tm-trade-btn {
+  min-width: 52px;
+  padding: 5px 10px;
+  border-radius: var(--radius-s);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.tm-trade-btn.buy {
+  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+  background: var(--good-wash);
+  color: var(--good-ink);
+}
+.tm-trade-btn.sell {
+  border-color: color-mix(in srgb, var(--bad) 40%, var(--border));
+  background: var(--bad-wash);
+  color: var(--bad-ink);
+}
+.tm-trade-btn:disabled {
+  opacity: 0.5;
+}
+.tm-trade-custom {
+  display: inline-flex;
+  gap: 4px;
+}
+.tm-trade-custom input {
+  width: 80px;
+}
+.tm-trade-gear {
+  margin-left: auto;
+}
+.tm-trade-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12.5px;
+}
+.tm-trade-settings label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tm-trade-settings input[type="number"] {
+  width: 64px;
+}
+.tm-trade-status {
+  margin: 0;
+  color: var(--muted);
+}
+.tm-trade-status.done {
+  color: var(--good-ink);
+}
+.tm-trade-status.error {
+  color: var(--bad-ink);
+}
+.tm-trade-held {
+  margin: 6px 0 0;
+}
+.pc-entry line {
+  stroke: var(--good-ink);
+  stroke-width: 1;
+  stroke-dasharray: 6 4;
+  opacity: 0.8;
+}
+.pc-entry text {
+  fill: var(--good-ink);
+  font-size: 10.5px;
+  font-weight: 650;
+  font-family: var(--font);
+}
+.pc-trade path {
+  stroke: var(--surface-solid);
+  stroke-width: 1;
+}
+.pc-trade.buy path,
+.pc-trade.buy text {
+  fill: var(--good);
+}
+.pc-trade.sell path,
+.pc-trade.sell text {
+  fill: var(--bad);
+}
+.pc-trade text {
+  font-size: 9.5px;
+  font-weight: 750;
+  font-family: var(--font);
+}
+.pc-trade-line {
+  display: block;
+  font-weight: 650;
+}
+@media (max-width: 640px) {
+  .tm-trade-pos {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tm-trade-gear {
+    margin-left: 0;
+  }
+}

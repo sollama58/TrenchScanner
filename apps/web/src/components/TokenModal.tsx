@@ -64,7 +64,9 @@ import {
   SniperTile,
   WalletStat,
 } from "./AlertCard";
-import { PriceChart, type ChartEvent } from "./PriceChart";
+import { PriceChart, type ChartEvent, type ChartTrade } from "./PriceChart";
+import { TradePanel, solText, tokensText } from "./TradePanel";
+import { summarizePosition, usePosition, useProWallet } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import {
   categoryText,
@@ -497,8 +499,11 @@ function ChartSkeleton({ children }: { children: ReactNode }) {
 }
 
 /** The chart's plot height for this window, and the whole box it draws (axis and volume lane included). */
-function chartHeight(): number {
-  return window.innerWidth <= 640 ? 180 : 220;
+function chartHeight(expanded = false): number {
+  const phone = window.innerWidth <= 640;
+  // Pro Mode's bigger chart, while trading or holding the coin: room for the trade marks.
+  if (expanded) return phone ? 260 : 380;
+  return phone ? 180 : 220;
 }
 function chartBoxHeight(): number {
   return chartHeight() + CHART_CHROME_PX;
@@ -1347,12 +1352,24 @@ export function ChartCard({
   const api = useTokenApi(card.token.mintAddress);
   // Every token view opens on the coin's whole history; Model View is a click away.
   const [range, setRange] = useState<Range>("all");
-  const [height, setHeight] = useState(chartHeight);
+
+  // Pro Mode: the signed-in wallet's position in the coin and the Trade panel. Null for everyone
+  // else, so nothing of it is fetched or drawn without Pro Mode.
+  const pro = useProWallet();
+  const mint = card.token.mintAddress;
+  const position = usePosition(pro ? mint : null);
+  const [trading, setTrading] = useState(false);
+  const holds = !!position.data && BigInt(position.data.balance) > 0n;
+  const expanded = !!pro && (trading || holds);
+
+  // Read from the window on each render; a resize re-renders.
+  const [, setResized] = useState(0);
   useEffect(() => {
-    const onResize = () => setHeight(chartHeight());
+    const onResize = () => setResized((n) => n + 1);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+  const height = chartHeight(expanded);
 
   const events = useMemo<ChartEvent[]>(() => {
     const out: ChartEvent[] = [{ t: alertAt, label: what, mcap: alertMcap > 0 ? alertMcap : null }];
@@ -1474,6 +1491,25 @@ export function ChartCard({
     [data],
   );
 
+  const latestMcap = view?.live ? view.latest : (data?.marketCap.at(-1)?.usd ?? null);
+  const summary = useMemo(
+    () => (pro && position.data ? summarizePosition(position.data, latestMcap) : null),
+    [pro, position.data, latestMcap],
+  );
+  const chartTrades = useMemo<ChartTrade[]>(() => {
+    const p = position.data;
+    if (!pro || !p) return [];
+    const scale = 10 ** (p.decimals ?? 6);
+    return p.trades.flatMap((tr) => {
+      if (tr.side !== "buy" && tr.side !== "sell") return [];
+      const sol = Math.abs(Number(BigInt(tr.lamports))) / 1e9;
+      const tokens = Number(BigInt(tr.tokens)) / scale;
+      const what = tr.side === "buy" ? "You bought" : "You sold";
+      return [{ t: tr.t, side: tr.side, text: `${what} ${tokensText(tokens)} for ${solText(sol)}` }];
+    });
+  }, [pro, position.data]);
+  const entry = summary && summary.held > 0 ? summary.entryMcap : null;
+
   const streaming = shownRange !== "first" && isStreaming(tail);
   const locked = error && !data ? lockedText(error, "chart") : null;
   return (
@@ -1487,6 +1523,18 @@ export function ChartCard({
             </span>
           )}
           {streaming && <LiveBadge tail={tail} />}
+          {pro && (
+            <button
+              type="button"
+              className={`tm-range tm-trade-toggle${trading ? " on" : ""}`}
+              aria-pressed={trading}
+              aria-expanded={trading}
+              title="Buy and sell this coin with your wallet (Pro Mode)"
+              onClick={() => setTrading(!trading)}
+            >
+              Trade
+            </button>
+          )}
           <span className="tm-ranges" role="group" aria-label="Chart range">
             {RANGES.filter((r) => (!utility || r.id !== "model") && (young || r.id !== "first")).map((r) => (
               <button
@@ -1537,6 +1585,8 @@ export function ChartCard({
               now={view.latest}
               scans={view.scans}
               height={height}
+              trades={chartTrades}
+              entry={entry}
               ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
             />
             {shownRange === "model" && (
@@ -1551,6 +1601,34 @@ export function ChartCard({
           </>
         )}
       </section>
+      {pro && trading && (
+        <TradePanel
+          owner={pro}
+          mint={mint}
+          symbol={card.token.symbol ?? "tokens"}
+          position={position.data}
+          summary={summary}
+          onTraded={position.reload}
+        />
+      )}
+      {pro && !trading && holds && summary && (
+        <p className="small muted tm-trade-held">
+          You hold this coin
+          {summary.pnlSol !== null && (
+            <>
+              {" "}
+              ·{" "}
+              <span className={`num ${summary.pnlSol >= 0 ? "up" : "down"}`}>
+                {solText(summary.pnlSol, true)}
+              </span>
+            </>
+          )}
+          .{" "}
+          <button type="button" className="link" onClick={() => setTrading(true)}>
+            Open Trade
+          </button>
+        </p>
+      )}
     </>
   );
 }

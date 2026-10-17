@@ -23,6 +23,14 @@ export interface ChartEvent {
   mcap?: number | null;
 }
 
+/** One of the Pro trader's own trades, marked on the line at its time (Pro Mode only). */
+export interface ChartTrade {
+  t: number;
+  side: "buy" | "sell";
+  /** The readout's line for it ("Bought 0.5 SOL"). */
+  text: string;
+}
+
 const PAD = { l: 8, r: 62, t: 24, b: 24 };
 
 /** The height of the volume lane under the plot, when there are candles to sum. */
@@ -48,6 +56,8 @@ export function PriceChart({
   origin,
   height,
   ariaLabel,
+  trades = [],
+  entry = null,
 }: {
   points: Point[];
   /**
@@ -76,6 +86,10 @@ export function PriceChart({
   origin?: number;
   height: number;
   ariaLabel: string;
+  /** Pro Mode: the trader's own buys and sells, marked on the line. */
+  trades?: ChartTrade[];
+  /** Pro Mode: the average market cap the held position was bought at, drawn as a dashed line. */
+  entry?: number | null;
 }) {
   const id = useId().replace(/:/g, "");
   const boxRef = useRef<HTMLDivElement>(null);
@@ -105,12 +119,14 @@ export function PriceChart({
     const leadShown = lead !== undefined && lead.t >= t0 && lead.t <= t1;
     const base = leadShown && lead.mcap ? lead.mcap : points[0]!.v;
     const values = points.map((p) => p.v);
-    const lo = Math.min(...values, base);
-    const hi = Math.max(...values, base);
+    // The trader's entry stays in view: it is what their PnL is measured from.
+    const extra = entry !== null && entry > 0 ? [entry] : [];
+    const lo = Math.min(...values, base, ...extra);
+    const hi = Math.max(...values, base, ...extra);
     const axis = mcapAxis(lo, hi, PAD.t, height - PAD.b);
     const hiIdx = points.reduce((best, p, i) => (p.v > points[best]!.v ? i : best), 0);
     return { t0, t1, step, x, axis, base, fromAlert: leadShown && !!lead.mcap, hiIdx };
-  }, [points, stepMs, width, height, events]);
+  }, [points, stepMs, width, height, events, entry]);
 
   // About one bar per 6px of plot, and no more bars than the view has candles' widths (a minute,
   // 15 seconds or one, the narrowest in view).
@@ -227,6 +243,11 @@ export function PriceChart({
         .sort((a, b) => Math.abs(a.t - h.t) - Math.abs(b.t - h.t))[0] ?? null)
     : null;
 
+  // The trader's own trades in view, and those by the hovered point.
+  const shownTrades = trades.filter((tr) => tr.t >= geo.t0 && tr.t <= geo.t1);
+  const hTrades = h ? shownTrades.filter((tr) => Math.abs(tr.t - h.t) <= Math.max(geo.step, 5_000)) : [];
+  const entryY = entry !== null && entry > 0 ? axis.y(entry) : null;
+
   return (
     <div className="pc" ref={boxRef}>
       <svg
@@ -331,6 +352,32 @@ export function PriceChart({
             className="pc-scan"
           />
         ))}
+
+        {entryY !== null && (
+          <g className="pc-entry">
+            <line x1={PAD.l} x2={width - PAD.r} y1={entryY} y2={entryY} />
+            <text x={PAD.l + 4} y={entryY - 5}>
+              Your entry {axisUsd(entry!)}
+            </text>
+          </g>
+        )}
+
+        {shownTrades.map((tr, i) => {
+          const cx = x(tr.t);
+          const cy = axis.y(valueAt(points, tr.t) ?? last.v);
+          const buy = tr.side === "buy";
+          // A buy's arrow points up at the line from below it, a sale's down at it from above.
+          const tip = buy ? cy + 4 : cy - 4;
+          const base = buy ? cy + 13 : cy - 13;
+          return (
+            <g key={`trade-${tr.t}-${i}`} className={`pc-trade ${buy ? "buy" : "sell"}`}>
+              <path d={`M${cx},${tip} L${cx - 5.5},${base} L${cx + 5.5},${base} Z`} />
+              <text x={cx} y={buy ? base + 10 : base - 4} textAnchor="middle">
+                {buy ? "B" : "S"}
+              </text>
+            </g>
+          );
+        })}
 
         {showPeak && (
           <g className="pc-peak">
@@ -464,6 +511,11 @@ export function PriceChart({
               {timeLabel(hScan.t, 0, true)}
             </span>
           )}
+          {hTrades.map((tr, i) => (
+            <span key={i} className={`num pc-trade-line ${tr.side === "buy" ? "up" : "down"}`}>
+              {tr.text}
+            </span>
+          ))}
           {hFlow && <FlowLine flow={hFlow} />}
         </div>
       )}

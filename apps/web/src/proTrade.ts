@@ -1,0 +1,324 @@
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { StandardConnect, type StandardConnectFeature } from "@wallet-standard/features";
+import { SolanaSignTransaction, type SolanaSignTransactionFeature } from "@solana/wallet-standard-features";
+import type { WalletAccount } from "@wallet-standard/base";
+import { api, post } from "./api";
+import { burnWallet } from "./burn";
+import { toBase64 } from "./burnTx";
+import { shortAddress } from "./format";
+import { withTimeout } from "./wallet";
+
+/**
+ * Pro Mode trades from the token modal (user decision 2026-10-17): the API builds a swap for the
+ * signed-in wallet (apps/api/src/routes/proTrade.ts), the wallet signs it here, and the API relays
+ * it to Helius Sender. No fee is taken; nothing here holds or asks for a key.
+ *
+ * Shown only to Pro Mode wallets: the App sets the wallet below from /auth/me's isPro, and
+ * everything Pro reads it, so a wallet without Pro Mode never renders, fetches or loads any of it.
+ */
+
+// ---- Who is Pro (set by App from the session) ----
+
+let proWallet: string | null = null;
+const listeners = new Set<() => void>();
+
+export function setProWallet(wallet: string | null): void {
+  if (wallet === proWallet) return;
+  proWallet = wallet;
+  for (const l of listeners) l();
+}
+
+/** The signed-in wallet when it has Pro Mode, else null. */
+export function useProWallet(): string | null {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    () => proWallet,
+  );
+}
+
+// ---- The trader's settings (this browser only) ----
+
+export interface TradeSettings {
+  /** Buy buttons, in SOL. */
+  buyPresets: number[];
+  /** Sell buttons, in percent of the position. */
+  sellPresets: number[];
+  slippagePct: number;
+  /** eco: Sender's SWQOS path, a 0.000005 SOL tip. turbo: every path, 0.001 SOL. */
+  speed: "eco" | "turbo";
+  mevProtect: boolean;
+}
+
+export const DEFAULT_TRADE_SETTINGS: TradeSettings = {
+  buyPresets: [0.1, 0.25, 0.5, 1],
+  sellPresets: [25, 50, 100],
+  slippagePct: 15,
+  speed: "eco",
+  mevProtect: true,
+};
+
+const SETTINGS_KEY = "ts-pro-trade-settings";
+
+export function readTradeSettings(): TradeSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_TRADE_SETTINGS;
+    const s = JSON.parse(raw) as Partial<TradeSettings>;
+    const nums = (v: unknown, ok: (n: number) => boolean, fallback: number[]) =>
+      Array.isArray(v) && v.length > 0 && v.length <= 6 && v.every((n) => typeof n === "number" && ok(n))
+        ? (v as number[])
+        : fallback;
+    return {
+      buyPresets: nums(s.buyPresets, (n) => n > 0 && n <= 100, DEFAULT_TRADE_SETTINGS.buyPresets),
+      sellPresets: nums(s.sellPresets, (n) => n > 0 && n <= 100, DEFAULT_TRADE_SETTINGS.sellPresets),
+      slippagePct:
+        typeof s.slippagePct === "number" && s.slippagePct >= 0.1 && s.slippagePct <= 50
+          ? s.slippagePct
+          : DEFAULT_TRADE_SETTINGS.slippagePct,
+      speed: s.speed === "turbo" ? "turbo" : "eco",
+      mevProtect: s.mevProtect !== false,
+    };
+  } catch {
+    return DEFAULT_TRADE_SETTINGS;
+  }
+}
+
+export function saveTradeSettings(s: TradeSettings): void {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+  } catch {
+    // Blocked storage: the settings hold for this page load.
+  }
+}
+
+// ---- The wallet's position in a coin ----
+
+/** GET /pro/trade/:mint/position. Amounts are decimal strings (u64s never go through a float). */
+export interface PositionResponse {
+  wallet: string;
+  mint: string;
+  decimals: number | null;
+  balance: string;
+  supply: string | null;
+  solUsd: number | null;
+  trades: {
+    signature: string;
+    t: number;
+    side: "buy" | "sell" | "in" | "out";
+    lamports: string;
+    tokens: string;
+  }[];
+  historyUnavailable: boolean;
+  truncated: boolean;
+}
+
+const POSITION_POLL_MS = 15_000;
+
+/** The Pro wallet's position in `mint`, polled while `mint` is set (null: not Pro, or no modal). */
+export function usePosition(mint: string | null): {
+  data: PositionResponse | null;
+  error: Error | null;
+  reload: () => void;
+} {
+  const [data, setData] = useState<PositionResponse | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  const seq = useRef(0);
+  const load = useCallback(() => {
+    if (!mint) return;
+    const mine = ++seq.current;
+    api<PositionResponse>(`/pro/trade/${encodeURIComponent(mint)}/position`)
+      .then((d) => {
+        if (mine !== seq.current) return;
+        setData(d);
+        setError(null);
+      })
+      .catch((e: unknown) => {
+        if (mine !== seq.current) return;
+        setError(e instanceof Error ? e : new Error(String(e)));
+      });
+  }, [mint]);
+  useEffect(() => {
+    setData(null);
+    setError(null);
+    if (!mint) return;
+    load();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, POSITION_POLL_MS);
+    return () => {
+      clearInterval(timer);
+      seq.current++;
+    };
+  }, [mint, load]);
+  return { data, error, reload: load };
+}
+
+/** What the position adds up to, in SOL and the coin's market cap terms. */
+export interface PositionSummary {
+  /** Tokens held, in whole tokens. */
+  held: number;
+  /** Share of supply held (0..1); null without a supply. */
+  share: number | null;
+  /** SOL spent on buys and got back from sales (fees and rent included). */
+  solIn: number;
+  solOut: number;
+  /** The position's value now in SOL, from the chart's latest market cap; null when it can't be priced. */
+  valueSol: number | null;
+  /** Value plus what came back, less what went in, and that as a share of what went in. */
+  pnlSol: number | null;
+  pnlPct: number | null;
+  /** The average market cap the held tokens were bought at (USD), by the buys' own prices. */
+  entryMcap: number | null;
+  buys: number;
+  sells: number;
+}
+
+export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null): PositionSummary {
+  const dec = p.decimals ?? 6;
+  const scale = 10 ** dec;
+  const held = Number(BigInt(p.balance)) / scale;
+  const supply = p.supply ? Number(BigInt(p.supply)) / scale : null;
+  let solIn = 0;
+  let solOut = 0;
+  let boughtTokens = 0;
+  let buys = 0;
+  let sells = 0;
+  for (const t of p.trades) {
+    const lamports = Number(BigInt(t.lamports)) / 1e9;
+    if (t.side === "buy") {
+      solIn += -lamports;
+      boughtTokens += Number(BigInt(t.tokens)) / scale;
+      buys++;
+    } else if (t.side === "sell") {
+      solOut += lamports;
+      sells++;
+    }
+  }
+  const share = supply && supply > 0 ? held / supply : null;
+  const valueSol =
+    share !== null && nowMcapUsd !== null && p.solUsd
+      ? (share * nowMcapUsd) / p.solUsd
+      : held === 0
+        ? 0
+        : null;
+  const pnlSol = valueSol !== null && solIn > 0 ? valueSol + solOut - solIn : null;
+  const pnlPct = pnlSol !== null && solIn > 0 ? pnlSol / solIn : null;
+  // SOL per token paid across the buys, as a market cap: the line the chart draws as "Entry".
+  const entryMcap =
+    boughtTokens > 0 && supply && p.solUsd ? (solIn / boughtTokens) * supply * p.solUsd : null;
+  return { held, share, solIn, solOut, valueSol, pnlSol, pnlPct, entryMcap, buys, sells };
+}
+
+// ---- Trading ----
+
+export interface BuiltTrade {
+  transaction: string;
+  lastValidBlockHeight: number;
+  route: "jupiter" | "pump";
+  quotedOut: string;
+  minOut: string;
+  tipLamports: string;
+  priorityFeeLamports: string;
+}
+
+export type TradeStage = "building" | "signing" | "sending" | "confirming";
+
+export class TradeError extends Error {
+  constructor(
+    message: string,
+    /** Set once the trade went out: it may still land, so check before trading again. */
+    readonly signature?: string,
+  ) {
+    super(message);
+  }
+}
+
+function fromBase64(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function accountFor(owner: string): Promise<{
+  account: WalletAccount;
+  sign: SolanaSignTransactionFeature[typeof SolanaSignTransaction];
+  name: string;
+}> {
+  const w = burnWallet(owner);
+  const signer = w
+    ? (w.wallet.features as Partial<SolanaSignTransactionFeature>)[SolanaSignTransaction]
+    : undefined;
+  if (!w || !signer)
+    throw new TradeError(
+      `Open this in the browser with the wallet you signed in with (${shortAddress(owner)}): trades are signed by it.`,
+    );
+  let account = w.wallet.accounts.find((a) => a.address === owner);
+  if (!account) {
+    const connect = (w.wallet.features as Partial<StandardConnectFeature>)[StandardConnect];
+    const { accounts } = connect ? await withTimeout(connect.connect(), "connect") : { accounts: [] };
+    account = accounts.find((a) => a.address === owner);
+  }
+  if (!account)
+    throw new TradeError(`Switch ${w.name} to ${shortAddress(owner)}, the wallet you signed in with.`);
+  return { account, sign: signer, name: w.name };
+}
+
+const STATUS_POLL_MS = 1_200;
+const CONFIRM_GIVE_UP_MS = 90_000;
+
+/**
+ * One trade, start to finish: build (the API checks it by simulation), sign in the wallet, send
+ * through Sender, then wait for it to land. Resolves with the signature once confirmed.
+ */
+export async function runTrade(
+  input: { owner: string; mint: string; side: "buy" | "sell"; amount: bigint; settings: TradeSettings },
+  onStage: (stage: TradeStage, built?: BuiltTrade) => void,
+): Promise<string> {
+  // The wallet first: if it isn't here there's no point building anything.
+  const { account, sign, name } = await accountFor(input.owner);
+  onStage("building");
+  const built = await post<BuiltTrade>("/pro/trade/build", {
+    mint: input.mint,
+    side: input.side,
+    amount: input.amount.toString(),
+    slippageBps: Math.round(input.settings.slippagePct * 100),
+    speed: input.settings.speed,
+  });
+  onStage("signing", built);
+  const [signed] = await withTimeout(
+    sign.signTransaction({ account, transaction: fromBase64(built.transaction), chain: "solana:mainnet" }),
+    "sign",
+  );
+  if (!signed?.signedTransaction) throw new TradeError(`${name} returned no signed transaction`);
+  onStage("sending", built);
+  const sent = await post<{ signature: string }>("/pro/trade/send", {
+    transaction: toBase64(Uint8Array.from(signed.signedTransaction)),
+    lastValidBlockHeight: built.lastValidBlockHeight,
+    speed: input.settings.speed,
+    mevProtect: input.settings.mevProtect,
+  });
+  onStage("confirming", built);
+  const started = Date.now();
+  for (;;) {
+    await new Promise((r) => setTimeout(r, STATUS_POLL_MS));
+    const s = await api<{ state: string; error?: string }>(
+      `/pro/trade/status/${encodeURIComponent(sent.signature)}`,
+    ).catch(() => ({ state: "unknown" }) as { state: string; error?: string });
+    if (s.state === "confirmed") return sent.signature;
+    if (s.state === "failed")
+      throw new TradeError(
+        `The trade failed on chain${s.error ? ` (${s.error})` : ""}. Nothing was bought or sold.`,
+      );
+    if (s.state === "expired")
+      throw new TradeError("The trade didn't land in time and has expired. Nothing changed.");
+    if (Date.now() - started > CONFIRM_GIVE_UP_MS)
+      throw new TradeError(
+        "Still waiting on the chain. Check your wallet before trading again.",
+        sent.signature,
+      );
+  }
+}

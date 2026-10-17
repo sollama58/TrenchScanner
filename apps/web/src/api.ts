@@ -125,6 +125,8 @@ export interface User {
   id: string;
   walletAddress: string;
   isAdmin: boolean;
+  /** Pro Mode (admins have it by default; others by an admin's grant): the token modal's Trade panel. */
+  isPro?: boolean;
 }
 
 export interface Subscription {
