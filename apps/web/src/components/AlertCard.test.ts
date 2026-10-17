@@ -3,6 +3,7 @@ import type { Card } from "../api";
 import { shownValue } from "../filterFields";
 import {
   cardReadings,
+  oldFirstBuyersText,
   countCutFor,
   nowReading,
   recordedPeakOf,
@@ -231,6 +232,16 @@ describe("holder counts", () => {
     const later = readings({}, { freshTopHolderCount: 18, freshTopHoldersChecked: 25 });
     expect(walletCountText(later.freshPct, later.freshOf)).toBe("18/25");
     expect(later.freshAtAlert).toBeNull();
+  });
+
+  it("carries the older first-buyers count, labelled, where no 0.1% count was recorded", () => {
+    const readings = (snapshot: object, latest: object | null = null) =>
+      cardReadings({ snapshot, latestSnapshot: latest, token: {} } as unknown as Card);
+    const old = readings({ firstBuyersHolding: 14, firstBuyersSeen: 25 });
+    expect(old).toMatchObject({ firstHolding: null, firstHoldingOld: 14, firstSeenOld: 25 });
+    expect(oldFirstBuyersText(14, 25)).toMatch(/^\* Older count: 14 of the first 25 buyers/);
+    const both = readings({ firstBuyersHolding: 14, firstBuyersSeen: 25, firstBuyersHoldingCut: 4 });
+    expect(both).toMatchObject({ firstHolding: 4, firstSeen: 25 });
   });
 
   it("shows a saved share as the count it lets through", () => {
