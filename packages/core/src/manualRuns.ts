@@ -52,6 +52,11 @@ export const MANUAL_RUN_JOBS: readonly ManualRunJob[] = [
     heavy: false,
   },
   {
+    job: "dev-launch-risk",
+    does: "Rebuilds the dev launch scores from how each creator's coins went.",
+    heavy: false,
+  },
+  {
     job: "kol-side-wallets",
     does: "Rebuilds the Side Wallet Checker's lists from the trade tape.",
     heavy: false,

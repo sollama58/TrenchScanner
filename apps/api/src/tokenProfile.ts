@@ -1,13 +1,14 @@
-import { prisma, type TokenSageAnalysis } from "@trenchscanner/core";
+import { prisma, DEV_LAUNCH_GRADE_KINDS, type TokenSageAnalysis } from "@trenchscanner/core";
 
 /**
  * GET /tokens/:mint/profile: the token modal's Dev, Socials and Order flow cards (user ask
  * 2026-10-16).
  *
  * - Dev: the creator wallet (the coin's trade tape, else Token.creator as discovery, RugCheck or
- *   the tape named it, else TokenSage's market.creator when it names a wallet), its risk score, and the other coins the scanner read the trades of that name it the
- *   creator (TokenWalletActivity.isCreator), with how each did. Only coins whose tape was read are
- *   known, so the count is a floor, and the card says so.
+ *   the tape named it, else TokenSage's market.creator when it names a wallet), its two scores - the
+ *   wallet risk score (how it trades) and the dev launch score (how its launches went, user ask
+ *   2026-10-17, with its funder's family) - and its other coins, with how each did: every token
+ *   whose row names it the creator, and the coins whose trade tape does (TokenWalletActivity.isCreator).
  * - Socials: the launcher's X, Telegram and website links, https only (Token's stored links, else
  *   TokenSage's raw ones). Launcher-supplied: the page shows them as links, never as HTML.
  * - Flow: the newest scan's buys and sells over 5 minutes and the hour, with volume and price
@@ -20,14 +21,31 @@ export interface DevCoin {
   at: string;
   outcome: "win" | "stop" | "fizzle" | null;
   peakPct: number | null;
+  /** Whether it reached the alert band; null when the scanner has no token row for it. */
+  reachedBand: boolean | null;
+}
+
+/** A launch record as the hourly rebuild left it (DevLaunchRisk / DevFunderRisk). */
+export interface DevLaunchRecord {
+  /** Dev launch score, 0-100, higher is riskier. */
+  score: number;
+  launches: number;
+  inBand: number;
+  graded: number;
+  wins: number;
+  stops: number;
 }
 
 export interface TokenProfile {
   dev: {
     wallet: string;
-    /** WalletRisk score, 0-100; null when unscored. */
+    /** WalletRisk score, 0-100, from how the wallet trades; null when unscored. */
     risk: number | null;
-    /** Other coins the scanner read that it created, newest first. */
+    /** Its launches in the last 14 days and their score, this coin included once it is an hour old; null without a record. */
+    launch: DevLaunchRecord | null;
+    /** The creators its funder paid for, itself included, pooled; null without a family. */
+    family: (DevLaunchRecord & { creators: number }) | null;
+    /** Other coins it created that the scanner knows of, newest first. */
     coins: DevCoin[];
   } | null;
   socials: {
@@ -82,6 +100,17 @@ export function safeLink(raw: unknown, kind: "x" | "telegram" | "website"): stri
   }
 }
 
+function launchRecord(r: DevLaunchRecord): DevLaunchRecord {
+  return {
+    score: r.score,
+    launches: r.launches,
+    inBand: r.inBand,
+    graded: r.graded,
+    wins: r.wins,
+    stops: r.stops,
+  };
+}
+
 export async function readTokenProfile(mintAddress: string): Promise<TokenProfile | null> {
   const token = await prisma.token.findUnique({
     where: { mintAddress },
@@ -127,37 +156,105 @@ export async function readTokenProfile(mintAddress: string): Promise<TokenProfil
   const creator =
     [tape?.creator, token.creator, sageCreator].find((w): w is string => !!w && WALLET_RE.test(w)) ?? null;
 
-  const [risk, launches, buyers] = await Promise.all([
+  const coinSelect = {
+    mintAddress: true,
+    symbol: true,
+    firstSeenAt: true,
+    firstInBandAt: true,
+    tradeTape: { select: { anchorAt: true, outcomeId: true } },
+  } as const;
+  const [risk, launchRow, created, taped, buyers] = await Promise.all([
     creator ? prisma.walletRisk.findUnique({ where: { wallet: creator }, select: { score: true } }) : null,
+    creator
+      ? prisma.devLaunchRisk.findUnique({
+          where: { wallet: creator },
+          select: {
+            score: true,
+            launches: true,
+            inBand: true,
+            graded: true,
+            wins: true,
+            stops: true,
+            funder: true,
+          },
+        })
+      : null,
+    creator
+      ? prisma.token.findMany({
+          where: { creator, id: { not: token.id } },
+          orderBy: { firstSeenAt: "desc" },
+          take: MAX_DEV_COINS,
+          select: { id: true, ...coinSelect },
+        })
+      : [],
     creator
       ? prisma.tokenWalletActivity.findMany({
           where: { wallet: creator, isCreator: true, tokenId: { not: token.id } },
           orderBy: { createdAt: "desc" },
           take: MAX_DEV_COINS,
-          select: {
-            createdAt: true,
-            token: {
-              select: {
-                mintAddress: true,
-                symbol: true,
-                tradeTape: { select: { anchorAt: true, outcomeId: true } },
-              },
-            },
-          },
+          select: { createdAt: true, token: { select: { id: true, ...coinSelect } } },
         })
       : [],
     tape && tape.status !== "failed"
       ? prisma.tokenWalletActivity.count({ where: { tokenId: token.id, buys: { gt: 0 } } })
       : null,
   ]);
-  const outcomeIds = launches.map((l) => l.token.tradeTape?.outcomeId).filter((id): id is string => !!id);
-  const outcomes = outcomeIds.length
-    ? await prisma.candidateOutcome.findMany({
-        where: { id: { in: outcomeIds } },
-        select: { id: true, hit2xIn1h: true, disqualified: true, stoppedAt: true, peak1hReturnPct: true },
+  const family = launchRow?.funder
+    ? await prisma.devFunderRisk.findUnique({
+        where: { funder: launchRow.funder },
+        select: {
+          creators: true,
+          score: true,
+          launches: true,
+          inBand: true,
+          graded: true,
+          wins: true,
+          stops: true,
+        },
       })
-    : [];
-  const byId = new Map(outcomes.map((o) => [o.id, o]));
+    : null;
+
+  // Every coin it created that the scanner knows of, once each, newest first.
+  const coinsById = new Map<string, { at: Date; t: (typeof created)[number] }>();
+  for (const t of created) coinsById.set(t.id, { at: t.tradeTape?.anchorAt ?? t.firstSeenAt, t });
+  for (const l of taped) {
+    if (!coinsById.has(l.token.id))
+      coinsById.set(l.token.id, { at: l.token.tradeTape?.anchorAt ?? l.createdAt, t: l.token });
+  }
+  const coins = [...coinsById.values()]
+    .sort((a, b) => b.at.getTime() - a.at.getTime())
+    .slice(0, MAX_DEV_COINS);
+  // A coin's grade: its call's when its tape was read (as before), else its first finalized
+  // sample's - the grade the dev launch score counts.
+  const outcomeIds = coins.map((c) => c.t.tradeTape?.outcomeId).filter((id): id is string => !!id);
+  const firstGradeOf = coins.filter((c) => !c.t.tradeTape?.outcomeId && c.t.firstInBandAt).map((c) => c.t.id);
+  const [byOutcomeId, firstGrades] = await Promise.all([
+    outcomeIds.length
+      ? prisma.candidateOutcome.findMany({
+          where: { id: { in: outcomeIds } },
+          select: { id: true, hit2xIn1h: true, disqualified: true, stoppedAt: true, peak1hReturnPct: true },
+        })
+      : [],
+    firstGradeOf.length
+      ? prisma.$queryRaw<
+          {
+            tokenId: string;
+            hit2xIn1h: boolean | null;
+            disqualified: boolean | null;
+            stoppedAt: Date | null;
+            peak1hReturnPct: number | null;
+          }[]
+        >`
+          SELECT DISTINCT ON (c."tokenId") c."tokenId", c."hit2xIn1h", c."disqualified", c."stoppedAt", c."peak1hReturnPct"
+          FROM "CandidateOutcome" c
+          WHERE c."tokenId" = ANY(${firstGradeOf}::text[])
+            AND c."sampleKind" = ANY(${[...DEV_LAUNCH_GRADE_KINDS]})
+            AND c."finalizedAt" IS NOT NULL
+          ORDER BY c."tokenId", c."anchorAt" ASC`
+      : [],
+  ]);
+  const byId = new Map(byOutcomeId.map((o) => [o.id, o]));
+  const byToken = new Map(firstGrades.map((o) => [o.tokenId, o]));
 
   const x = safeLink(token.twitterUrl, "x") ?? safeLink(doc?.raw?.twitter, "x");
   const telegram = safeLink(doc?.raw?.telegram, "telegram");
@@ -168,15 +265,18 @@ export async function readTokenProfile(mintAddress: string): Promise<TokenProfil
       ? {
           wallet: creator,
           risk: risk?.score ?? null,
-          coins: launches.map((l) => {
-            const id = l.token.tradeTape?.outcomeId;
-            const o = id ? byId.get(id) : undefined;
+          launch: launchRow ? launchRecord(launchRow) : null,
+          family: family ? { ...launchRecord(family), creators: family.creators } : null,
+          coins: coins.map(({ at, t }) => {
+            const id = t.tradeTape?.outcomeId;
+            const o = id ? byId.get(id) : byToken.get(t.id);
             return {
-              mint: l.token.mintAddress,
-              symbol: l.token.symbol,
-              at: (l.token.tradeTape?.anchorAt ?? l.createdAt).toISOString(),
+              mint: t.mintAddress,
+              symbol: t.symbol,
+              at: at.toISOString(),
               outcome: o ? (o.hit2xIn1h && !o.disqualified ? "win" : o.stoppedAt ? "stop" : "fizzle") : null,
               peakPct: o?.peak1hReturnPct ?? null,
+              reachedBand: t.firstInBandAt !== null,
             };
           }),
         }

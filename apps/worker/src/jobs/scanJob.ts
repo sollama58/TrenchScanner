@@ -58,6 +58,7 @@ import {
   type LiveTraderCounts,
   type WalletScoreReading,
   type WinnerFollowReading,
+  type DevLaunchFeatures,
   type OnChainHolders,
   type CandidateToken,
   type ScoredToken,
@@ -98,6 +99,7 @@ import { dropScanVerdict, markScanVerdictsPopulated, recordScanVerdict } from ".
 import { resolveEarliestActivity, computeFreshPct, FRESH_WITHIN_HOURS } from "./walletFreshness.js";
 import { launchBuyerFreshnessFromCache, resolveLaunchBuyerFreshness } from "./launchBuyerFreshness.js";
 import { ownTapesOf, refreshWalletRiskBook, walletRiskLookup, walletRiskScale } from "./walletRiskBook.js";
+import { devLaunchReadings, refreshDevLaunchBook } from "./devLaunchBook.js";
 import { kolLookup, refreshKolWalletBook } from "./kolWalletBook.js";
 import { kolBundledByMint, type KolBundledReading } from "./kolBundled.js";
 import {
@@ -763,6 +765,8 @@ async function scanCycle(
   await refreshScoreWeights();
   // The wallet risk scores the decision moments record (background reload, never waited on).
   refreshWalletRiskBook();
+  // The dev launch scores, the same way (devLaunchBook.ts).
+  refreshDevLaunchBook();
   refreshKolWalletBook();
   await seedLastScreenPass();
   const stagesMs: Record<string, number> = {};
@@ -1704,6 +1708,16 @@ async function scanCycle(
       )
     : new Map<string, ReadonlyMap<string, OwnTapeRow>>();
   lap("ownTapes");
+  // How each coin's creator's other launches went, and its funder's other creators' (the dev
+  // launch score): two queries for the cycle, nothing while the scores aren't loaded.
+  const devLaunchByMint = await devLaunchReadings(
+    candidates.map((c) => ({
+      mintAddress: c.mintAddress,
+      token: priors.get(c.mintAddress)?.token ?? null,
+      creator: (onChainByMint.get(c.mintAddress) as { creator?: string } | undefined)?.creator,
+    })),
+  );
+  lap("devLaunch");
   const perCandidateMatches: number[] = [];
   const processOne = (curatedCycle: CuratedCycle) => async (candidate: CandidateToken) => {
     try {
@@ -1763,6 +1777,7 @@ async function scanCycle(
                 riskLookup,
                 ownTapes.get(candidate.mintAddress),
               ),
+          devLaunchByMint.get(candidate.mintAddress) ?? null,
         ),
       );
     } catch (err) {
@@ -2930,6 +2945,7 @@ async function processCandidate(
   ownTape: ReadonlyMap<string, OwnTapeRow> | null | undefined = undefined,
   walletScores: WalletScoreReading | null = null,
   winnerFollow: WinnerFollowReading | null = null,
+  devLaunch: DevLaunchFeatures | null = null,
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
@@ -3052,6 +3068,7 @@ async function processCandidate(
     scored.pricePath = pricePath.features(candidate.mintAddress);
   }
   scored.curvePath = curvePathOf(candidate.mintAddress);
+  if (devLaunch) scored.devLaunch = devLaunch;
   if (marketContext) scored.marketContext = marketContext;
   if (freshQuote && plausibleFreshQuote(freshQuote, scored.priceUsd)) scored.freshQuote = freshQuote;
   if (liveStreams) {

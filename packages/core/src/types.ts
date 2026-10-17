@@ -3,6 +3,7 @@ import type { FlaggedTrade } from "./wallets/liveFlags.js";
 import type { TradeFlowFeatures } from "./curation/tradeFlow.js";
 import type { MarketContextFeatures, PricePathFeatures } from "./curation/pricePath.js";
 import type { CurvePathFeatures } from "./curation/curveTape.js";
+import type { DevLaunchFeatures } from "./wallets/devLaunchScore.js";
 import type { NarrativeRead } from "./curation/narrativeFeatures.js";
 import type { TextScores } from "./curation/textFeatures.js";
 import type { MarketSource } from "./marketSource.js";
@@ -444,6 +445,8 @@ export interface EnrichedToken extends CandidateToken, Partial<Omit<OnChainProfi
   pricePath?: PricePathFeatures;
   /** A young coin's path read off its bonding curve, change by change (curation/curveTape.ts). */
   curvePath?: CurvePathFeatures;
+  /** How the creator's other launches went, and its funder's other creators' (wallets/devLaunchScore.ts). */
+  devLaunch?: DevLaunchFeatures;
   /** What the market as a whole is doing right now, and the clock (curation/pricePath.ts). */
   marketContext?: MarketContextFeatures;
   /**

@@ -6,6 +6,7 @@ import { EMPTY_TRADE_FLOW, resolveDevHolding, type TradeFlowFeatures } from "./t
 import { freshQuoteMcapUsd } from "./labels.js";
 import type { TextScores } from "./textFeatures.js";
 import { EMPTY_CURVE_PATH, type CurvePathFeatures } from "./curveTape.js";
+import { EMPTY_DEV_LAUNCH, type DevLaunchFeatures } from "../wallets/devLaunchScore.js";
 import {
   EMPTY_MARKET_CONTEXT,
   EMPTY_PRICE_PATH,
@@ -336,6 +337,26 @@ export const CURVE_PATH_FEATURES = [
 ] as const satisfies readonly (keyof CurvePathFeatures)[];
 
 /**
+ * The dev launch reading (added 2026-10-17, user ask: a risk score for each dev from how its
+ * launches went; core's wallets/devLaunchScore.ts, the worker's devLaunchBook.ts): the score over
+ * the creator's other launches in the last 14 days and its funder's other creators', and the counts
+ * behind it. The coin's own launch is taken out. Null while the creator is unknown or the hourly
+ * scores aren't loaded, and on every row banked before. On 3,416 called coins' tapes, a dev with
+ * graded launches and no win doubled 11.2% against 15.3% for a first launch, and any earlier launch
+ * raised the stop rate from 75% to 86-89%. Recorded first: no learner reads them until a few days
+ * of decision rows show what they carry (RETIRED_LEARNER_INPUTS).
+ */
+export const DEV_LAUNCH_FEATURES = [
+  "devLaunchRisk",
+  "devLaunchPrior",
+  "devLaunchPriorInBand",
+  "devLaunchPriorGraded",
+  "devLaunchPriorWins",
+  "devLaunchFamilyCreators",
+  "devLaunchFamilyLaunches",
+] as const satisfies readonly (keyof DevLaunchFeatures)[];
+
+/**
  * The feature vector recorded on every CandidateOutcome row, and the ONLY input contract the
  * curated-alerts learner is allowed to see. Names here are load-bearing: a trained model stores
  * a coefficient per name, so renaming one silently orphans the weight it learned. Add new
@@ -583,6 +604,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...WALLET_SCORE_FEATURES,
   ...WINNER_FOLLOW_FEATURES,
   ...CURVE_PATH_FEATURES,
+  ...DEV_LAUNCH_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -729,6 +751,8 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   ...WINNER_FOLLOW_FEATURES,
   // The bonding-curve path of a young coin (added 2026-10-17, user ask): recorded first.
   ...CURVE_PATH_FEATURES,
+  // The dev launch reading (added 2026-10-17, user ask): recorded first.
+  ...DEV_LAUNCH_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
@@ -1441,6 +1465,13 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   curveNetSol3m: "net SOL into the curve (3m)",
   curveChanges1m: "curve changes per minute",
   curveVolatility1m: "curve volatility (1m)",
+  devLaunchRisk: "dev launch risk",
+  devLaunchPrior: "dev's other launches",
+  devLaunchPriorInBand: "dev's other launches that reached the band",
+  devLaunchPriorGraded: "dev's other launches graded",
+  devLaunchPriorWins: "dev's other launches that doubled",
+  devLaunchFamilyCreators: "other devs its funder paid for",
+  devLaunchFamilyLaunches: "launches by its funder's other devs",
   mktBaseRate1hPct: "filtered market 2x rate (1h)",
   mktBaseRate6hPct: "filtered market 2x rate (6h)",
   mktLaunchesPerHour: "launches per hour",
@@ -1613,6 +1644,9 @@ export function scoredFromFeatures(
     curvePath: Object.fromEntries(
       CURVE_PATH_FEATURES.map((k) => [k, num(k) ?? null]),
     ) as unknown as CurvePathFeatures,
+    devLaunch: Object.fromEntries(
+      DEV_LAUNCH_FEATURES.map((k) => [k, num(k) ?? null]),
+    ) as unknown as DevLaunchFeatures,
     textScores: textScoresFromFeatures(features),
     narrative: narrativeFromFeatures(features),
     livestream:
@@ -1854,6 +1888,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     ...(Object.fromEntries(
       CURVE_PATH_FEATURES.map((k) => [k, (scored.curvePath ?? EMPTY_CURVE_PATH)[k]]),
     ) as Record<(typeof CURVE_PATH_FEATURES)[number], number | null>),
+    ...(Object.fromEntries(
+      DEV_LAUNCH_FEATURES.map((k) => [k, (scored.devLaunch ?? EMPTY_DEV_LAUNCH)[k]]),
+    ) as Record<(typeof DEV_LAUNCH_FEATURES)[number], number | null>),
     buys5m,
     sells5m,
     buyRatio5m,

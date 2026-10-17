@@ -77,6 +77,7 @@ import { runWinnerFollowBackfill } from "./jobs/winnerFollowBackfill.js";
 import { runQuoteRegrade } from "./jobs/quoteRegrade.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
+import { runDevLaunchRiskJob } from "./jobs/devLaunchRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
 import { applyKnownSides, applyKolOverrides, runKolWalletsJob } from "./jobs/kolWalletsJob.js";
 import { keepCadenceDelayMs, offsetCadenceDelayMs, trainingFirstRunDelayMs } from "./trainingSchedule.js";
@@ -700,6 +701,26 @@ async function main() {
             await lastSuccessfulRunAt("wallet-risk"),
             60 * 60_000,
             30 * 60_000,
+            Date.now(),
+          ),
+      },
+    ),
+  );
+  // The dev launch scores (devLaunchRiskJob.ts), hourly, a quarter hour off wallet-risk's slot so
+  // it never starts on the same minute as either whole-tape read.
+  schedule("dev-launch-risk", () =>
+    scheduleInterval(
+      "dev-launch-risk",
+      takingRunNow("dev-launch-risk", () => withJobLock("dev-launch-risk", () => runDevLaunchRiskJob())),
+      60,
+      {
+        deadlineMinutes: 30,
+        runEarly: onRunNow("dev-launch-risk"),
+        firstRunDelayMs: async () =>
+          offsetCadenceDelayMs(
+            await lastSuccessfulRunAt("wallet-risk"),
+            60 * 60_000,
+            15 * 60_000,
             Date.now(),
           ),
       },
