@@ -137,6 +137,7 @@ import {
   holderTransfersOf,
   recordTransferEvents,
   resolveHolderTransfers,
+  takeHolderStreamStats,
   takeHolderTransferStats,
 } from "./holderTransfers.js";
 import { resolveMintAuthorities } from "./mintAuthority.js";
@@ -1854,6 +1855,8 @@ async function scanCycle(
   const linkedWalletCalls = takeLinkedWalletStats();
   // The holder-to-holder transfer reads (holderTransfers.ts), apart, with their credits (1 per call).
   const holderTransferCalls = takeHolderTransferStats();
+  // What the Helius holder stream received since the last cycle, and its estimated credits.
+  const heliusStream = takeHolderStreamStats();
   // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
   const liveTape = takeLiveTapeStats();
   // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
@@ -1881,6 +1884,7 @@ async function scanCycle(
     rpcCalls,
     linkedWalletCalls,
     holderTransferCalls,
+    ...(heliusStream ? { heliusStream: { ...heliusStream } } : {}),
     liveTape,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
