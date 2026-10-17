@@ -118,6 +118,14 @@ interface TokenChart {
   holderEntries?: Record<string, HolderEntry>;
 }
 
+/** Mirrors apps/api/src/routes/tokens.ts TokenFirstMinutes. */
+interface TokenFirstMinutes {
+  startAt: number | null;
+  stepSec: 1 | 15;
+  live: boolean;
+  candles: { t: number; o: number; h: number; l: number; c: number; vol?: number }[] | null;
+}
+
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
 interface FlaggedWallet {
   wallet: string;
@@ -145,17 +153,28 @@ function kindOf(w: FlaggedWallet): MarkerKind {
   return "linked";
 }
 
-type Range = "model" | "alert" | "1h" | "all";
+type Range = "model" | "first" | "alert" | "1h" | "all";
 const RANGES: { id: Range; label: string; title?: string }[] = [
   {
     id: "model",
     label: "Model View",
     title: "Up to 5 minutes either side of the call: what the model had to go on, and what came next",
   },
+  {
+    id: "first",
+    label: "First 15m",
+    title:
+      "The coin's first 15 minutes from launch: second by second while it is in them, then in 15-second steps",
+  },
   { id: "alert", label: "From alert" },
   { id: "1h", label: "1h" },
   { id: "all", label: "All" },
 ];
+/** "First 15m" is offered while Pump.fun's 15-second candles still reach back to the launch. */
+const FIRST_VIEW_MAX_AGE_MS = 6 * 3_600_000;
+/** The first-minutes view re-reads this often while the coin is inside them, else rarely. */
+const FIRST_LIVE_POLL_MS = 5_000;
+const FIRST_POLL_MS = 120_000;
 /** How much of the run-up the "From alert" view shows before the alert. */
 const LEAD_IN_MS = 10 * 60_000;
 /** How far either side of the call "Model View" reaches (never before the first trade). */
@@ -1339,6 +1358,11 @@ function ChartCard({
     return out;
   }, [alertAt, alertMcap, what, card.kind, card.curated]);
 
+  // The coin's first trade, for whether its first minutes can still be drawn in fine detail.
+  const firstTradeAt = data?.candles?.[0]?.t ?? data?.marketCap[0]?.t ?? null;
+  const firstShown = firstTradeAt !== null && Date.now() - firstTradeAt <= FIRST_VIEW_MAX_AGE_MS;
+  const shownRange: Range = range === "first" && !firstShown ? "all" : range;
+
   // A call card's alert price is the call's own anchor; a filter alert's can be a scan's reading.
   const callPriced = card.kind === "curated" && alertMcap > 0;
   const view = useMemo(() => {
@@ -1361,17 +1385,17 @@ function ChartCard({
     const first = source[0]!.t;
     const last = source[source.length - 1]!.t;
     const from =
-      range === "all"
+      shownRange === "all"
         ? first
-        : range === "1h"
+        : shownRange === "1h"
           ? last - 3_600_000
-          : range === "model"
+          : shownRange === "model"
             ? Math.max(first, alertAt - MODEL_SPAN_MS)
             : // From the alert: unless the data starts after it (then all of it).
               alertAt - LEAD_IN_MS > first
               ? alertAt - LEAD_IN_MS
               : first;
-    const to = range === "model" ? alertAt + MODEL_SPAN_MS : last;
+    const to = shownRange === "model" ? alertAt + MODEL_SPAN_MS : last;
     const step = pointWidthMs(Math.min(to, last) - Math.max(from, first) + 60_000, MAX_POINTS);
     const line = linePoints(source, from, step, to);
     return {
@@ -1385,7 +1409,7 @@ function ChartCard({
       latest: source[source.length - 1]!.v,
       // The scans the model read before calling it, drawn as dots in Model View.
       scans:
-        range === "model"
+        shownRange === "model"
           ? data.marketCap.filter((p) => p.t >= from && p.t <= alertAt).map((p) => ({ t: p.t, v: p.usd }))
           : [],
       // The minutes in view, for the volume lane.
@@ -1395,7 +1419,7 @@ function ChartCard({
             .map((k) => ({ ...k, vol: k.vol ?? 0 }))
         : [],
     };
-  }, [data, range, alertAt, alertMcap, callPriced]);
+  }, [data, shownRange, alertAt, alertMcap, callPriced]);
 
   // The scans' buy and sell counts, for the buy share in the chart's readouts.
   const flow = useMemo<ScanFlow[]>(
@@ -1418,21 +1442,31 @@ function ChartCard({
             </span>
           )}
           <span className="tm-ranges" role="group" aria-label="Chart range">
-            {RANGES.filter((r) => !utility || r.id !== "model").map((r) => (
-              <button
-                key={r.id}
-                type="button"
-                className={`tm-range${range === r.id ? " on" : ""}`}
-                aria-pressed={range === r.id}
-                title={r.title}
-                onClick={() => setRange(r.id)}
-              >
-                {utility && r.id === "alert" ? "From scan" : r.label}
-              </button>
-            ))}
+            {RANGES.filter((r) => (!utility || r.id !== "model") && (firstShown || r.id !== "first")).map(
+              (r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  className={`tm-range${shownRange === r.id ? " on" : ""}`}
+                  aria-pressed={shownRange === r.id}
+                  title={r.title}
+                  onClick={() => setRange(r.id)}
+                >
+                  {utility && r.id === "alert" ? "From scan" : r.label}
+                </button>
+              ),
+            )}
           </span>
         </h4>
-        {!data && !error && <ChartSkeleton>Loading the chart…</ChartSkeleton>}
+        {shownRange === "first" && (
+          <FirstMinutesChart
+            mint={card.token.mintAddress}
+            label={tokenLabel(card.token)}
+            events={events}
+            height={height}
+          />
+        )}
+        {shownRange !== "first" && !data && !error && <ChartSkeleton>Loading the chart…</ChartSkeleton>}
         {locked && (
           <p className="tm-locked muted small">
             <LockIcon size={14} /> {locked}
@@ -1441,19 +1475,19 @@ function ChartCard({
         {error && !data && !locked && (
           <p className="error small">Couldn&apos;t load the chart: {error.message}</p>
         )}
-        {view && view.points.length < 2 && (
+        {shownRange !== "first" && view && view.points.length < 2 && (
           <p className="muted small tm-chart-empty">
-            No trades to chart yet{range !== "all" ? " in this range" : ""}.
+            No trades to chart yet{shownRange !== "all" ? " in this range" : ""}.
           </p>
         )}
-        {view && view.points.length >= 2 && (
+        {shownRange !== "first" && view && view.points.length >= 2 && (
           <PriceChart
             points={view.points}
             stepMs={view.step}
             events={events}
             candles={view.candles}
             flow={flow}
-            seenUntil={range === "model" ? alertAt : undefined}
+            seenUntil={shownRange === "model" ? alertAt : undefined}
             live={view.live}
             now={view.latest}
             scans={view.scans}
@@ -1461,7 +1495,7 @@ function ChartCard({
             ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
           />
         )}
-        {range === "model" && view && view.points.length >= 2 && (
+        {shownRange === "model" && view && view.points.length >= 2 && (
           <p className="faint small tm-model-note">
             <i className="tm-scan-dot" aria-hidden="true" />{" "}
             {view.scans.length > 0
@@ -1471,6 +1505,81 @@ function ChartCard({
           </p>
         )}
       </section>
+    </>
+  );
+}
+
+/**
+ * The "First 15m" view (user ask 2026-10-17): the coin's first 15 minutes from Pump.fun's candles
+ * (GET /tokens/:mint/chart/first), every second while the coin is inside them and re-read every
+ * few seconds, then in 15-second steps. Read only while the view is open.
+ */
+function FirstMinutesChart({
+  mint,
+  label,
+  events,
+  height,
+}: {
+  mint: string;
+  label: string;
+  events: ChartEvent[];
+  height: number;
+}) {
+  const api = useTokenApi(mint);
+  const [live, setLive] = useState(true);
+  const { data, error } = usePolling<TokenFirstMinutes>(
+    `${api}/chart/first`,
+    live ? FIRST_LIVE_POLL_MS : FIRST_POLL_MS,
+  );
+  useEffect(() => {
+    if (data && !data.live) setLive(false);
+  }, [data]);
+  const view = useMemo(() => {
+    const candles = data?.candles;
+    if (!data || !candles || candles.length === 0) return null;
+    const step = data.stepSec * 1_000;
+    // From the first trade's open, then each candle's close at its end, when that price held.
+    const points: Point[] = [
+      { t: candles[0]!.t, v: candles[0]!.o },
+      ...candles.map((k) => ({ t: k.t + step, v: k.c })),
+    ];
+    return { points, step, candles: candles.map((k) => ({ ...k, vol: k.vol ?? 0 })) };
+  }, [data]);
+
+  if (!data && !error) return <ChartSkeleton>Loading the first minutes…</ChartSkeleton>;
+  if (error && !data) {
+    const locked = lockedText(error, "chart");
+    return locked ? (
+      <p className="tm-locked muted small">
+        <LockIcon size={14} /> {locked}
+      </p>
+    ) : (
+      <p className="error small">Couldn&apos;t load the first minutes: {error.message}</p>
+    );
+  }
+  if (!view || view.points.length < 2) {
+    return (
+      <p className="muted small tm-chart-empty">
+        {data?.live
+          ? "No trades to chart yet."
+          : "Pump.fun no longer has this coin's first minutes in fine detail."}
+      </p>
+    );
+  }
+  return (
+    <>
+      <PriceChart
+        points={view.points}
+        stepMs={view.step}
+        events={events}
+        candles={view.candles}
+        live={data!.live}
+        height={height}
+        ariaLabel={`${label} market cap in its first 15 minutes, from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
+      />
+      <p className="faint small tm-model-note">
+        {data!.live ? "Live, second by second" : "In 15-second steps"} · the first 15 minutes from launch.
+      </p>
     </>
   );
 }

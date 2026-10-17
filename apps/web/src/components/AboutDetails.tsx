@@ -157,7 +157,10 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               and a match fires straight away, with two exceptions:
             </p>
             <ul className="fp-list">
-              <li>It&apos;s held while the price is down 25% or more over the last 5 minutes.</li>
+              <li>
+                It&apos;s held while the price is collapsing: down 65% or more within a minute, or 80% or more
+                over 5 minutes.
+              </li>
               <li>
                 If your filter caps a wallet figure (Max fresh, Max empty or Max top-10 snipers), it waits for
                 that figure, up to about 3 minutes, then alerts with it unknown.

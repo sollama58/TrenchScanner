@@ -395,7 +395,8 @@ const envSchema = z.object({
   // hearing about it. Seconds, not minutes, because that is the unit the answer belongs in.
   FAST_MATCH_INTERVAL_SECONDS: z.coerce.number().min(5).default(15),
   // The platform's floor under every user-filter alert, both lanes (see scoring/alertGuard.ts):
-  // "flush" (default) holds a match back while the price is down 25%+ over five minutes; "ready"
+  // "flush" (default) holds a match back while the price collapses: down 65%+ within a minute (the
+  // curve tape's seconds-old reading when it follows the coin) or 80%+ over five minutes; "ready"
   // also requires buyers to hold the last hour's flow and the last five minutes not to be red;
   // "off" alerts on any match. A held-back match doesn't start the filter's cooldown.
   MATCH_ALERT_GUARD: z.enum(["off", "flush", "ready"]).default("flush"),

@@ -46,7 +46,10 @@ export function PriceChart({
   ariaLabel,
 }: {
   points: Point[];
-  /** The spacing the points were thinned to; scan readings, which come unevenly, estimate their own. */
+  /**
+   * The spacing the points were thinned to; scan readings, which come unevenly, estimate their own.
+   * Under a minute (the first-minutes view's 1- and 15-second candles), the readout shows seconds.
+   */
   stepMs?: number;
   events: ChartEvent[];
   /** Minute candles with their USD volume, summed into bars in a lane under the plot. */
@@ -402,7 +405,9 @@ export function PriceChart({
             right: hx > width / 2 ? width - hx + 14 : undefined,
           }}
         >
-          <span className="faint">{timeLabel(h.t, span > 36 * 3_600_000 ? span : 0)}</span>
+          <span className="faint">
+            {timeLabel(h.t, span > 36 * 3_600_000 ? span : 0, stepMs !== undefined && stepMs < 60_000)}
+          </span>
           <strong className="num">{usd(h.v)}</strong>
           {lead?.mcap ? (
             <span className={`num ${h.v >= lead.mcap ? "up" : "down"}`}>
