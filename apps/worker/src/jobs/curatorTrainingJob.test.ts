@@ -7,6 +7,7 @@ import {
   CURATOR_MODEL_KIND,
   CANDIDATE_FEATURE_NAMES,
   HOURLY_ROWS_WAIT_SINCE,
+  AGE_FROM_LAUNCH_SINCE,
   type Env,
   RULES_MODEL_KIND,
   STACKED_MODEL_KIND,
@@ -19,6 +20,7 @@ import {
   applyContestResults,
   describeRowBudget,
   loadTrainingRows,
+  narrativeTrainingRows,
   withFixedShape,
   withoutEventTwins,
   runPeakOf,
@@ -470,6 +472,89 @@ describe.skipIf(!dbAvailable)("loadTrainingRows", () => {
     });
     expect(event!.features).toMatchObject({ freshTop10WalletPct: 20, nsXRead: 1 });
     expect(since!.features).toMatchObject({ freshTop10WalletPct: 20, nsXRead: 1 });
+  });
+
+  it("rebuilds an older graduated row's age from the launch, caps it, and cuts on the inputs as they mean today", async () => {
+    // Ten hours before #678, inside no other era window that touches these inputs.
+    const base = new Date(AGE_FROM_LAUNCH_SINCE.getTime() - 10 * 3_600_000);
+    const at = (m: number) => new Date(base.getTime() + m * 60_000);
+    const [old, young, unknown] = await Promise.all([
+      prisma.token.create({ data: { mintAddress: `${TAG}-load-age-old`, launchedAt: at(-200) } }),
+      prisma.token.create({ data: { mintAddress: `${TAG}-load-age-young`, launchedAt: at(-30) } }),
+      prisma.token.create({ data: { mintAddress: `${TAG}-load-age-unknown` } }),
+    ]);
+    const row = (tokenId: string, m: number, sampleKind: string, features: object) => ({
+      tokenId,
+      anchorAt: at(m),
+      finalizedAt: at(m),
+      sampleKind,
+      labelRule: 4,
+      anchorPriceUsd: 1 + m / 100,
+      anchorMcapUsd: 50_000,
+      features: { mcapUsd: 50_000, priceChange5mPct: 0, ...features },
+      score: 50,
+      nextCheckAt: at(m),
+      labelValue: 0,
+      peak1hPriceUsd: 1,
+      low1hPriceUsd: 1,
+      lowBefore2xPriceUsd: 1,
+      peak24hPriceUsd: 1,
+    });
+    // Each age the pool's: the coin was first met at its PumpSwap pool, minutes old.
+    const pool = { graduated: 1, ageMinutes: 2, pairAgeMinutes: 2.3 };
+    await prisma.candidateOutcome.createMany({
+      data: [
+        // Launched 200 minutes before: past the 3h cap once its age counts from the launch.
+        row(old.id, 1, "event", pool),
+        // Launched 30 minutes before: kept, at its launch age. Its 90% empty-wallet share is the
+        // old count (unpriced holdings read empty), which today's screen reads as unknown.
+        row(young.id, 2, "event", { ...pool, emptyTop10WalletPct: 90 }),
+        // No launch time: the pool age leaves the set, an age that isn't the pool's reads missing.
+        row(unknown.id, 3, "event", pool),
+        row(unknown.id, 4, "hourly", { ...pool, ageMinutes: 50 }),
+      ],
+    });
+    const rows = (await loadTrainingRows(at(-1), 5_000, 500)).filter((r) =>
+      [old.id, young.id, unknown.id].includes(r.tokenId!),
+    );
+    expect(
+      rows.map((r) => [r.tokenId, r.sampleKind, r.features.ageMinutes, r.features.emptyTop10WalletPct]),
+    ).toEqual([
+      [unknown.id, "hourly", null, undefined],
+      [young.id, "event", 32, null],
+    ]);
+  });
+
+  it("holds the Narrative seat's second looks to the age cap and the decision pre-gate", async () => {
+    const base = new Date("2099-04-01T00:00:00Z");
+    const at = (m: number) => new Date(base.getTime() + m * 60_000);
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-load-second` } });
+    const row = (m: number, features: object) => ({
+      tokenId: token.id,
+      anchorAt: at(m),
+      finalizedAt: at(m),
+      sampleKind: "second",
+      labelRule: 4,
+      anchorPriceUsd: 1 + m / 100,
+      anchorMcapUsd: 50_000,
+      features: { mcapUsd: 50_000, nsDepthFull: 1, nsRulesVersion: 1, ...features },
+      score: 50,
+      nextCheckAt: at(m),
+      labelValue: 0,
+      peak1hPriceUsd: 1,
+      low1hPriceUsd: 1,
+      lowBefore2xPriceUsd: 1,
+      peak24hPriceUsd: 1,
+    });
+    await prisma.candidateOutcome.createMany({
+      data: [
+        row(1, { ageMinutes: 300, priceChange5mPct: 40 }), // banked under the old 6h cap
+        row(2, { ageMinutes: 90, priceChange5mPct: 5 }), // fails the old-coin momentum test
+        row(3, { ageMinutes: 10 }),
+      ],
+    });
+    const rows = (await narrativeTrainingRows(base, 100, 50)).filter((r) => r.tokenId === token.id);
+    expect(rows.map((r) => [r.sampleKind, r.features.ageMinutes])).toEqual([["event", 10]]);
   });
 
   it("drops the hourly twin of an alerted event row even when re-grading gave the two different prices", async () => {

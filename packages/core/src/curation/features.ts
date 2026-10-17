@@ -1021,6 +1021,101 @@ export function isPreFeeWalletStonksRow(
 }
 
 /**
+ * Rows banked before this read walletRiskTop10Max as the riskiest top-10 holder's raw 0-100
+ * score, with the coin's own tape left in. Since #678 (dc17709, committed 2026-10-16 18:47 UTC,
+ * deployed with the 19:30 batch) it is that holder's percentile among every wallet scored at the
+ * time, the coin's own tape taken out, and walletRiskScoredTop10 is recorded beside it. Same range,
+ * another distribution (a raw 60 is far above average, percentile 60 is ordinary), so the older
+ * rows, the ones without walletRiskScoredTop10, read it as missing.
+ */
+export const WALLET_RISK_PERCENTILE_SINCE = new Date("2026-10-16T19:30:00Z");
+
+/** A row whose walletRiskTop10Max is the raw score, not the percentile (WALLET_RISK_PERCENTILE_SINCE). */
+export function isRawWalletRiskRow(
+  anchorAt: Date,
+  features: Record<string, number | null | undefined>,
+): boolean {
+  return (
+    anchorAt.getTime() < WALLET_RISK_PERCENTILE_SINCE.getTime() && features.walletRiskScoredTop10 == null
+  );
+}
+
+/**
+ * Rows banked before this stored hasTwitter / hasWebsite as 0 on every coin no source had read the
+ * socials of (found through PumpPortal, Jupiter or DexScreener's lists), so 0 meant "unread" as
+ * often as "none". Since #678 (deployed with the 2026-10-16 19:30 batch) an unread coin records
+ * null and 0 is a read none. A 1 was always a real read, so on the older rows only a 0 reads as missing.
+ */
+export const SOCIALS_UNREAD_NULL_SINCE = new Date("2026-10-16T19:30:00Z");
+const SOCIALS_UNREAD_FEATURES = [
+  "hasTwitter",
+  "hasWebsite",
+] as const satisfies readonly CandidateFeatureName[];
+
+/**
+ * Rows banked before this counted a top-10 wallet under the empty bar on what could be priced as
+ * empty even when it held something nobody priced, so emptyTop10WalletPct read high. Since #678
+ * (deployed with the 2026-10-16 19:30 batch) such a wallet makes the whole share unknown
+ * (walletHoldings.ts). The older values can't be rebuilt, so they read as missing, and the
+ * training safety cut is applied after this mask, as the live screen sees the share.
+ */
+export const EMPTY_WALLETS_UNPRICED_NULL_SINCE = new Date("2026-10-16T19:30:00Z");
+
+/**
+ * Rows banked before this may carry a graduated coin's age counted from its PumpSwap pool: a coin
+ * the scan first met after graduation took its age from the pool pair, so one that bonded after
+ * an hour read as a minute old. Since #678 (dc17709, committed 2026-10-16 18:47 UTC, deployed with
+ * the 19:30 batch) the age counts from Token.launchedAt when known and ageSource says which
+ * (1 launch, 0 pool). An older graduated row carries no ageSource, so its age is rebuilt from the
+ * launch time where the Token has one (withLaunchAge).
+ */
+export const AGE_FROM_LAUNCH_SINCE = new Date("2026-10-16T19:30:00Z");
+/** How close the stored age sits to the pool's age (pairAgeMinutes) for it to be read as the pool's. */
+const POOL_AGE_SLACK_MINUTES = 1;
+
+/** A graduated row banked before AGE_FROM_LAUNCH_SINCE with no ageSource marker: its age may be its pool's. */
+export function ageMayBePoolAge(
+  anchorAt: Date,
+  features: Record<string, number | null | undefined>,
+): boolean {
+  return (
+    anchorAt.getTime() < AGE_FROM_LAUNCH_SINCE.getTime() &&
+    features.graduated === 1 &&
+    features.ageSource == null &&
+    typeof features.ageMinutes === "number"
+  );
+}
+
+/**
+ * The row's age as live reads it today (AGE_FROM_LAUNCH_SINCE). On a row whose age may be its
+ * pool's, ageMinutes is rebuilt point-in-time from the coin's launch (anchor minus
+ * Token.launchedAt, which never changes). With no launch time it reads as missing, and when the
+ * stored age is the pool's (within POOL_AGE_SLACK_MINUTES of pairAgeMinutes) null is returned:
+ * the coin's true age is unknown and may be past the age cap, so the row leaves the age-capped
+ * kinds. The training loader's SQL age cap reads the same rebuilt age. Returns the same object
+ * when nothing applies; the stored vector itself is never changed.
+ */
+export function withLaunchAge<T extends Record<string, number | null | undefined>>(
+  anchorAt: Date,
+  features: T,
+  launchedAt: Date | null | undefined,
+): T | null {
+  if (!ageMayBePoolAge(anchorAt, features)) return features;
+  if (launchedAt instanceof Date && !Number.isNaN(launchedAt.getTime())) {
+    // Two decimals, as enrichToken stores it.
+    const ageMinutes = Math.max(
+      0,
+      Math.round(((anchorAt.getTime() - launchedAt.getTime()) / 60_000) * 100) / 100,
+    );
+    return { ...features, ageMinutes };
+  }
+  const age = features.ageMinutes as number;
+  const pairAge = features.pairAgeMinutes;
+  if (typeof pairAge === "number" && Math.abs(pairAge - age) <= POOL_AGE_SLACK_MINUTES) return null;
+  return { ...features, ageMinutes: null };
+}
+
+/**
  * A stored vector with the inputs known to be wrong on it read as missing: the order-flow inputs
  * on rows banked before TRADE_FLOW_FAKE_ZEROS_UNTIL (the dev's launch buy aside, which came from
  * the create message and is real), the social bits on rows banked before
@@ -1035,6 +1130,9 @@ export function isPreFeeWalletStonksRow(
  * absent on most, they taught "hourly and missing", a pattern no decision shows. And
  * bundledSupplyPct on rows with KOL bundles banked before BUNDLED_SUPPLY_POINT_IN_TIME_FROM.
  * The creator share and the two bundle figures through HOLDER_TRANSFER_LINKS_WINDOW.
+ * walletRiskTop10Max on raw-score rows (isRawWalletRiskRow), a 0 social bit before
+ * SOCIALS_UNREAD_NULL_SINCE, and emptyTop10WalletPct before EMPTY_WALLETS_UNPRICED_NULL_SINCE.
+ * (A graduated row's pool age is rebuilt separately, by withLaunchAge, since it needs the Token.)
  * The TokenSage inputs on rows banked before NS_RULES_VERSION_MARKER_SINCE that carry no
  * nsRulesVersion: those pre-date the marker and span the #631 regime step. From here on a change
  * to what an ns* input means bumps NS_RULES_VERSION, and the rows written under the old meaning
@@ -1061,12 +1159,18 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
     ALL_NARRATIVE_FEATURES.some((name) => features[name] != null);
   const transferLinked =
     at >= HOLDER_TRANSFER_LINKS_WINDOW.from.getTime() && at < HOLDER_TRANSFER_LINKS_WINDOW.until.getTime();
+  const rawWalletRisk = isRawWalletRiskRow(anchorAt, features);
+  const unreadSocials = at < SOCIALS_UNREAD_NULL_SINCE.getTime();
+  const unpricedEmpty = at < EMPTY_WALLETS_UNPRICED_NULL_SINCE.getTime();
   if (
     at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime() &&
     !unwaitedHourly &&
     !rebuiltBundled &&
     !unversionedNs &&
-    !transferLinked
+    !transferLinked &&
+    !rawWalletRisk &&
+    !unreadSocials &&
+    !unpricedEmpty
   ) {
     return features;
   }
@@ -1082,6 +1186,9 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
   if (rebuiltBundled) clear("bundledSupplyPct");
   if (unversionedNs) ALL_NARRATIVE_FEATURES.forEach(clear);
   if (transferLinked) HOLDER_TRANSFER_LINKED_FEATURES.forEach(clear);
+  if (rawWalletRisk) clear("walletRiskTop10Max");
+  if (unreadSocials) for (const name of SOCIALS_UNREAD_FEATURES) if (features[name] === 0) clear(name);
+  if (unpricedEmpty) clear("emptyTop10WalletPct");
   if (at >= PATH_RETURNS_ACROSS_GAPS_SINCE.getTime()) return done();
   // The tape held less than `windowMinutes` of the coin's life (the pre-refill rule's test, with
   // its slack for the rounding of pathObservedMinutes and the reference tick's own).

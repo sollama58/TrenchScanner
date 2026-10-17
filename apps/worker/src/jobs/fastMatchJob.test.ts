@@ -110,6 +110,33 @@ describe.skipIf(!dbAvailable)("runFastMatchCycle", () => {
     expect(snapshot.priceUsd).toBe(0.0002);
   });
 
+  it("carries the funding-only figures and the newest holder lists onto the alert's snapshot", async () => {
+    const token = await seedVetted("lists", { kolBundledPctExTransfers: 4, bundledSupplyPctExTransfers: 6 });
+    // The scan wrote the lists on an earlier row only (holderListWrites.ts dedupes them).
+    const holders = [{ wallet: "w1", pct: 3.5 }];
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: token.id,
+        source: "scan",
+        takenAt: new Date(Date.now() - 60_000),
+        priceUsd: 0.0001,
+        marketCapUsd: 120_000,
+        score: 75,
+        linkedHolders: holders,
+      },
+    });
+    const user = await seedSubscriber("sub-lists");
+
+    await runFastMatchCycle(stubDexScreener({ [token.mintAddress]: {} }), env);
+
+    expect(await prisma.match.count({ where: { tokenId: token.id, userId: user.id } })).toBe(1);
+    const fast = await prisma.tokenSnapshot.findFirstOrThrow({
+      where: { tokenId: token.id, source: "fast" },
+    });
+    expect(fast).toMatchObject({ kolBundledPctExTransfers: 4, bundledSupplyPctExTransfers: 6 });
+    expect(fast.linkedHolders).toEqual(holders);
+  });
+
   it("doesn't alert on a vetted token whose holders the screen hasn't read yet", async () => {
     // HEEHAW (2026-10-16): the fast lane alerted at three minutes old, before the holder list was
     // in, and the screen rejected it on that list two minutes later.

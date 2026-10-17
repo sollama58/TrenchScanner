@@ -7,6 +7,13 @@ import {
   RETIRED_LEARNER_INPUTS,
   learnerSubset,
   maskKnownBadInputs,
+  withLaunchAge,
+  ageMayBePoolAge,
+  isRawWalletRiskRow,
+  AGE_FROM_LAUNCH_SINCE,
+  WALLET_RISK_PERCENTILE_SINCE,
+  SOCIALS_UNREAD_NULL_SINCE,
+  EMPTY_WALLETS_UNPRICED_NULL_SINCE,
   HOURLY_ROWS_WAIT_SINCE,
   BUNDLED_SUPPLY_POINT_IN_TIME_FROM,
   HOLDER_TRANSFER_LINKS_WINDOW,
@@ -484,6 +491,36 @@ describe("isPreFeeWalletStonksRow", () => {
   });
 });
 
+describe("withLaunchAge", () => {
+  const before = new Date(AGE_FROM_LAUNCH_SINCE.getTime() - 60 * 60_000);
+  const poolAged = { graduated: 1, ageMinutes: 2, pairAgeMinutes: 2.4, mcapUsd: 50_000 };
+
+  it("rebuilds an older graduated row's age from the launch", () => {
+    const launchedAt = new Date(before.getTime() - 200 * 60_000);
+    expect(ageMayBePoolAge(before, poolAged)).toBe(true);
+    const rebuilt = withLaunchAge(before, poolAged, launchedAt);
+    expect(rebuilt).toEqual({ ...poolAged, ageMinutes: 200 });
+    expect(poolAged.ageMinutes).toBe(2);
+  });
+
+  it("drops a pool-aged row with no launch time, and masks the age it can't tell", () => {
+    expect(withLaunchAge(before, poolAged, null)).toBeNull();
+    const notPool = { ...poolAged, ageMinutes: 40 };
+    expect(withLaunchAge(before, notPool, null)).toEqual({ ...notPool, ageMinutes: null });
+    const noPairAge = { graduated: 1, ageMinutes: 2 };
+    expect(withLaunchAge(before, noPairAge, undefined)).toEqual({ ...noPairAge, ageMinutes: null });
+  });
+
+  it("leaves curve rows, marked rows and rows since the change as they are", () => {
+    const launchedAt = new Date(before.getTime() - 200 * 60_000);
+    const curve = { ...poolAged, graduated: 0 };
+    expect(withLaunchAge(before, curve, launchedAt)).toBe(curve);
+    const marked = { ...poolAged, ageSource: 0 };
+    expect(withLaunchAge(before, marked, launchedAt)).toBe(marked);
+    expect(withLaunchAge(AGE_FROM_LAUNCH_SINCE, poolAged, null)).toBe(poolAged);
+  });
+});
+
 describe("maskKnownBadInputs", () => {
   it("reads the creator share and the bundle figures as missing while transfers counted as links", () => {
     const row = {
@@ -637,15 +674,46 @@ describe("maskKnownBadInputs", () => {
   });
 
   it("reads hasTwitter and hasWebsite as missing while Pump.fun's coin list was blocked", () => {
-    const row = { hasTwitter: 0, hasTelegram: 0, hasWebsite: 0, freshGapPct: 2 };
+    // A 1 is a real read, kept outside the outage; a 0 reads as missing until #678 anyway.
+    const row = { hasTwitter: 1, hasTelegram: 0, hasWebsite: 0, freshGapPct: 2 };
     expect(maskKnownBadInputs(new Date("2026-10-15T01:00:00Z"), row)).toEqual({
       hasTwitter: null,
       hasTelegram: 0,
       hasWebsite: null,
       freshGapPct: 2,
     });
-    expect(maskKnownBadInputs(SOCIAL_LIST_OUTAGE.until, row)).toBe(row);
-    expect(maskKnownBadInputs(new Date("2026-10-14T20:59:00Z"), row)).toBe(row);
+    const outsideOutage = { ...row, hasWebsite: null };
+    expect(maskKnownBadInputs(SOCIAL_LIST_OUTAGE.until, row)).toEqual(outsideOutage);
+    expect(maskKnownBadInputs(new Date("2026-10-14T20:59:00Z"), row)).toEqual(outsideOutage);
+  });
+
+  it("reads a 0 social bit as missing before unread socials were stored as null (#678), keeping a 1", () => {
+    const row = { hasTwitter: 0, hasTelegram: 0, hasWebsite: 1, mcapUsd: 50_000 };
+    const before = new Date(SOCIALS_UNREAD_NULL_SINCE.getTime() - 1);
+    expect(maskKnownBadInputs(before, row)).toEqual({ ...row, hasTwitter: null });
+    expect(maskKnownBadInputs(SOCIALS_UNREAD_NULL_SINCE, row)).toBe(row);
+  });
+
+  it("reads the raw-score walletRiskTop10Max as missing on rows without the scored-holder count", () => {
+    const raw = { walletRiskTop10Max: 60, walletRiskFirstBuyersMean: 40, mcapUsd: 50_000 };
+    const before = new Date(WALLET_RISK_PERCENTILE_SINCE.getTime() - 1);
+    expect(isRawWalletRiskRow(before, raw)).toBe(true);
+    expect(maskKnownBadInputs(before, raw)).toMatchObject({
+      walletRiskTop10Max: null,
+      walletRiskFirstBuyersMean: 40,
+    });
+    // A row carrying the count was already scored as a percentile.
+    const percentile = { ...raw, walletRiskScoredTop10: 6 };
+    expect(isRawWalletRiskRow(before, percentile)).toBe(false);
+    expect(maskKnownBadInputs(before, percentile)).toMatchObject({ walletRiskTop10Max: 60 });
+    expect(maskKnownBadInputs(WALLET_RISK_PERCENTILE_SINCE, raw)).toBe(raw);
+  });
+
+  it("reads emptyTop10WalletPct as missing before unpriced holdings made it unknown (#678)", () => {
+    const row = { emptyTop10WalletPct: 70, mcapUsd: 50_000 };
+    const before = new Date(EMPTY_WALLETS_UNPRICED_NULL_SINCE.getTime() - 1);
+    expect(maskKnownBadInputs(before, row)).toEqual({ ...row, emptyTop10WalletPct: null });
+    expect(maskKnownBadInputs(EMPTY_WALLETS_UNPRICED_NULL_SINCE, row)).toBe(row);
   });
 
   it("reads volumeAccel's by-construction 12 on young tokens and the 30-second pathRet1mPct as missing before #138", () => {
@@ -716,10 +784,12 @@ describe("maskKnownBadInputs", () => {
     expect(masked).toMatchObject({ nsCopycat: 1, nsDepthFull: 1, top10HolderPct: 25, hasTwitter: 1 });
     // A decision row of the same moment, an hourly row since the wait, and a call without the
     // kind (the older callers) lose only what the transfer-links window takes (its own test).
+    // Before #678 the empty-wallet share reads as missing too (its own test).
     const transferLinked = { ...row, linkedCreatorPct: null, kolBundledPct: null, bundledSupplyPct: null };
-    expect(maskKnownBadInputs(before, row, "event")).toEqual(transferLinked);
+    const beforeUnpriced = { ...transferLinked, emptyTop10WalletPct: null };
+    expect(maskKnownBadInputs(before, row, "event")).toEqual(beforeUnpriced);
     expect(maskKnownBadInputs(HOURLY_ROWS_WAIT_SINCE, row, "hourly")).toEqual(transferLinked);
-    expect(maskKnownBadInputs(before, row)).toEqual(transferLinked);
+    expect(maskKnownBadInputs(before, row)).toEqual(beforeUnpriced);
     // Together with the older masks on a row old enough for both.
     const oldest = maskKnownBadInputs(new Date("2026-10-07T12:00:00Z"), row, "hourly");
     expect(oldest).toMatchObject({ hasTwitter: null, nsXRead: null, nsCopycat: 1 });

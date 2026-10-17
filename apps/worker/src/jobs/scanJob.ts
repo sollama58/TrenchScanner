@@ -113,10 +113,11 @@ import {
   type LinkedGroup,
 } from "./linkedWallets.js";
 import {
-  liveBuyersOf,
-  liveFlagsOf,
-  liveTradersOf,
-  liveWalletScoreOf,
+  liveBuyersOn,
+  liveFlagsOn,
+  livePageOf,
+  liveTradersOn,
+  liveWalletScoreOn,
   liveWindowFlowOf,
   readLiveTape,
   takeLiveTapeStats,
@@ -1670,6 +1671,10 @@ async function scanCycle(
   // data-correctness audit): a coin decided on before, whose first call's tape the hourly scores
   // now count. Two queries for the cycle; nothing to read while the scores aren't loaded.
   const riskScale = walletRiskScale();
+  // Each candidate's live-tape page, taken once: the page readLiveTape left running past its budget
+  // can land between two reads, and the Wallet Score must read the page whose buyers the own-tape
+  // read excluded, or a new page's buyers could carry this coin's own result into it.
+  const livePages = new Map(candidates.map((c) => [c.mintAddress, livePageOf(c.mintAddress)] as const));
   const ownTapes = riskScale
     ? await ownTapesOf(
         candidates.map((c) => ({
@@ -1678,8 +1683,8 @@ async function scanCycle(
           wallets: [
             ...(onChainByMint.get(c.mintAddress)?.top10HolderAddresses ?? []),
             ...(sniperWalletsFromCache(c.mintAddress) ?? []),
-            // The newest trades' buyers, for the Wallet Score reading (liveWalletScoreOf).
-            ...liveBuyersOf(c.mintAddress),
+            // The newest trades' buyers, for the Wallet Score reading (liveWalletScoreOn).
+            ...liveBuyersOn(livePages.get(c.mintAddress)),
           ],
         })),
         riskScale.builtAt,
@@ -1716,10 +1721,10 @@ async function scanCycle(
           sniperChainAvailable,
           freshQuotes.get(candidate.mintAddress),
           linkedByMint.get(candidate.mintAddress) ?? null,
-          liveFlagsOf(candidate.mintAddress, riskLookup),
+          liveFlagsOn(livePages.get(candidate.mintAddress), riskLookup),
           cexByMint.get(candidate.mintAddress) ?? null,
-          liveTradersOf(candidate.mintAddress, kolIs),
-          liveTradersOf(candidate.mintAddress, winnerIs),
+          liveTradersOn(livePages.get(candidate.mintAddress), kolIs),
+          liveTradersOn(livePages.get(candidate.mintAddress), winnerIs),
           kolBundledOf.get(candidate.mintAddress),
           transfersByMint.get(candidate.mintAddress) ?? null,
           exTransfersOf(
@@ -1732,7 +1737,11 @@ async function scanCycle(
           // Left off when the own-tape read failed: the buyers' scores could carry this coin's result.
           ownTapes === null
             ? null
-            : liveWalletScoreOf(candidate.mintAddress, riskLookup, ownTapes.get(candidate.mintAddress)),
+            : liveWalletScoreOn(
+                livePages.get(candidate.mintAddress),
+                riskLookup,
+                ownTapes.get(candidate.mintAddress),
+              ),
         ),
       );
     } catch (err) {
