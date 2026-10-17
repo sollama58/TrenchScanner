@@ -51,6 +51,7 @@ describe("safety checks", () => {
     expect(by["Mint authority"]).toMatchObject({ value: "Renounced", status: "ok" });
     expect(by["Freeze authority"]).toMatchObject({ value: "Active", status: "fail" });
     expect(by["Liquidity"]).toMatchObject({ status: "ok" });
+    // Unread after the freeze authority failed: Mayhem is looked up only once those pass.
     expect(by["Mayhem Mode"]).toMatchObject({ value: "Not read", status: "unknown" });
     // At 40% the top-10 cut fails; at exactly 10% the largest holder passes.
     expect(by["Top 10 holders"]).toMatchObject({ value: "40%", status: "fail" });
@@ -64,5 +65,17 @@ describe("safety checks", () => {
       rule: "Fails at 16 of 19 or more",
     });
     expect(by["Exchange-funded"]).toMatchObject({ status: "unknown" });
+  });
+
+  it("fails an unread liquidity or Mayhem Mode check, as the screen fails closed", () => {
+    const passing = { mintAuthorityActive: false, freezeAuthorityActive: false };
+    const unread = Object.fromEntries(safetyChecks(snap(passing)).map((c) => [c.label, c]));
+    expect(unread["Liquidity"]).toMatchObject({ value: "Unverified (fails closed)", status: "fail" });
+    const mayhem = Object.fromEntries(
+      safetyChecks(snap({ ...passing, lpBurned: true })).map((c) => [c.label, c]),
+    );
+    expect(mayhem["Mayhem Mode"]).toMatchObject({ value: "Unverified (fails closed)", status: "fail" });
+    // Wallet and share cuts still pass unread.
+    expect(mayhem["Top 10 holders"]).toMatchObject({ value: "Not read", status: "unknown" });
   });
 });

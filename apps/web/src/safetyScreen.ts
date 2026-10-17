@@ -58,16 +58,24 @@ export interface SafetyCheck {
 }
 
 const NOT_READ = "Not read";
+const UNVERIFIED = "Unverified (fails closed)";
 
-/** A yes/no reading where `bad` is the failing answer. */
+/**
+ * A yes/no reading where `bad` is the failing answer. With `unreadFails`, a reading the scan
+ * didn't get fails, as core's screen fails closed on it.
+ */
 function flag(
   label: string,
   v: boolean | null | undefined,
   bad: boolean,
   [yes, no]: [string, string],
   rule: string,
+  unreadFails = false,
 ): SafetyCheck {
-  if (typeof v !== "boolean") return { label, value: NOT_READ, status: "unknown", rule };
+  if (typeof v !== "boolean")
+    return unreadFails
+      ? { label, value: UNVERIFIED, status: "fail", rule }
+      : { label, value: NOT_READ, status: "unknown", rule };
   return { label, value: v ? yes : no, status: v === bad ? "fail" : "ok", rule };
 }
 
@@ -86,8 +94,11 @@ function measured(
 
 /**
  * Every rule the safety screen applies (core's runRugScreen), read off one scan, in the screen's
- * order. A rule the scan didn't read is "Not read": the screen lets those through. The bonding
- * curve's fill time is not kept on the scan, so it shows only among a failed verdict's reasons.
+ * order. A wallet or share cut the scan didn't read is "Not read": the screen lets those through.
+ * An unread liquidity or Mayhem Mode check fails, as the screen fails closed on those (Mayhem is
+ * looked up only once the authority and liquidity checks pass, so it stays "Not read" after one of
+ * them failed). The bonding curve's fill time is not kept on the scan, so it shows only among a
+ * failed verdict's reasons.
  */
 export function safetyChecks(s: Snapshot): SafetyCheck[] {
   const freshCounted = typeof s.freshTopHolderCount === "number" && (s.freshTopHoldersChecked ?? 0) > 0;
@@ -98,11 +109,20 @@ export function safetyChecks(s: Snapshot): SafetyCheck[] {
   const linkedCut = countCutFor(SAFETY_REJECT_LINKED_COUNT, s.linkedWalletsChecked);
   const cexOf = s.cexFundedHolders ?? SAFETY_COUNT_CUT_HOLDERS;
   const cexCut = countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, s.cexFundedHolders);
+  const localFailed =
+    s.mintAuthorityActive === true || s.freezeAuthorityActive === true || s.lpBurned !== true;
   return [
     flag("Mint authority", s.mintAuthorityActive, true, ["Active", "Renounced"], "Must be renounced"),
     flag("Freeze authority", s.freezeAuthorityActive, true, ["Active", "Renounced"], "Must be renounced"),
-    flag("Liquidity", s.lpBurned, false, ["Burned or locked", "Not locked"], "Must be burned or locked"),
-    flag("Mayhem Mode", s.isMayhemMode, true, ["Yes", "No"], "Mayhem Mode coins fail"),
+    flag(
+      "Liquidity",
+      s.lpBurned,
+      false,
+      ["Burned or locked", "Not locked"],
+      "Must be burned or locked",
+      true,
+    ),
+    flag("Mayhem Mode", s.isMayhemMode, true, ["Yes", "No"], "Mayhem Mode coins fail", !localFailed),
     measured(
       "Top 10 holders",
       s.top10HolderPct,
