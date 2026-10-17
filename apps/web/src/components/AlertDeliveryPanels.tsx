@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { type AlertPrefs, type Leaderboard } from "../api";
+import { type AlertPrefs, type FeedComparison, type FeedMixRecord, type Leaderboard } from "../api";
 import { ALERT_SOUND_OPTIONS, type AlertSound } from "../alertSounds";
 import {
   DEFAULT_ALERT_PREFS,
@@ -13,8 +13,8 @@ import {
 import { ModelPicker, saveFeedSettings } from "./ModelPicker";
 import { Skeleton } from "./Charts";
 import { ArrowRightIcon, BellIcon, BrainIcon, VolumeIcon } from "./Icons";
-import { useNow } from "../hooks";
-import { ago } from "../format";
+import { useNow, usePolling } from "../hooks";
+import { ago, pct, signedPct } from "../format";
 
 /**
  * The Filters tab's delivery cards: how alerts reach you in the browser (a sound with its volume,
@@ -277,7 +277,6 @@ export function ModelPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const following = board?.followBest ?? board?.followsDefault ?? true;
-  const best = board?.entries.find((e) => e.id === board.defaultModel) ?? null;
   const tops = board
     ? (board.defaultModels ?? [board.defaultModel]).flatMap((id) => board.entries.filter((e) => e.id === id))
     : [];
@@ -335,36 +334,183 @@ export function ModelPanel({
             )}
           </p>
           <ModelPicker board={board} disabled={busy || stale} onChanged={onChanged} />
-          <div className="champion">
-            <div>
-              <span className="small muted">Best performer</span>
-              <div className="row gap-s">
-                <strong>{best?.name ?? "–"}</strong>
-                {best && best.composite.score !== null && (
-                  <span className="chip chip-model num">score {best.composite.score.toFixed(0)}</span>
-                )}
-                {best && <span className="chip num">#{best.rank} on the 30-day board</span>}
+          <div className="champion top-models">
+            <div className="top-models-head">
+              <div>
+                <span className="small muted">Top models</span>
+                <small className="faint">
+                  What &ldquo;Always follow the top models&rdquo; shows right now
+                  {rule ? `, re-picked every ${Math.round(rule.refreshMinutes / 60)} hours` : ""}.
+                </small>
               </div>
-              <small className="faint">
-                {board.champion
-                  ? `Chosen ${ago(board.champion.chosenAt, now)}. ${board.champion.reason}`
-                  : "Not chosen from live results yet: until a model has enough graded live calls, the default is the Consensus when it can call, else Rules."}
-              </small>
+              <button className="ghost" onClick={() => goTo("model")}>
+                Leaderboard <ArrowRightIcon size={13} />
+              </button>
             </div>
-            <button className="ghost" onClick={() => goTo("model")}>
-              Leaderboard <ArrowRightIcon size={13} />
-            </button>
+            {tops.length === 0 ? (
+              <p className="faint small">No model qualifies yet.</p>
+            ) : (
+              <ol className="top-models-list">
+                {tops.map((e) => (
+                  <li key={e.id}>
+                    <div className="row gap-s">
+                      <strong>{e.name}</strong>
+                      {e.id === board.defaultModel && <span className="chip chip-model">Best performer</span>}
+                      {e.composite.score !== null && (
+                        <span className="chip num">score {e.composite.score.toFixed(0)}</span>
+                      )}
+                      <span className="chip num">#{e.rank}</span>
+                    </div>
+                    <small className="faint num">
+                      {pct(e.composite.live.winRatePct, 1)} 2x ·{" "}
+                      {signedPct(e.composite.live.avgSimReturnPct, 1)} avg return · {e.composite.live.graded}{" "}
+                      graded calls over {board.window.days} days
+                    </small>
+                  </li>
+                ))}
+              </ol>
+            )}
+            <small className="faint">
+              {board.champion
+                ? `Best performer chosen ${ago(board.champion.chosenAt, now)}. ${board.champion.reason}`
+                : "Best performer not chosen from live results yet: until a model has enough graded live calls, the default is the Consensus when it can call, else Rules."}
+            </small>
           </div>
-          {board.champion && (
+          <FeedCompareBox board={board} />
+          {rule?.rankWindowHours !== undefined && (
             <p className="faint small">
-              The best performer is the model with the best 2x lower bound over the last 72 hours. It needs{" "}
-              {board.champion.minLiveGraded} graded live calls there, and has to beat the current one by{" "}
-              {board.champion.margin} points of that bound to take over.
+              The top models are the {rule.count} with the best{" "}
+              {rule.rankedBy === "2x-lower-bound" ? "2x lower bound" : "ranking"} over the last{" "}
+              {rule.rankWindowHours} hours among those with {rule.rankMinGraded ?? rule.minGraded} graded
+              calls there, plus the best performer when it isn&apos;t among them.
+              {board.champion &&
+                ` The best performer needs ${board.champion.minLiveGraded} graded live calls and has to beat the current one by ${board.champion.margin} points to take over.`}
             </p>
           )}
         </div>
       )}
       {error && <p className="error small">Couldn&apos;t switch: {error}</p>}
     </section>
+  );
+}
+
+/** One row of the comparison: a figure for each feed and how yours differs. */
+const COMPARE_ROWS: {
+  label: string;
+  value: (r: FeedMixRecord, days: number) => number | null;
+  show: (v: number | null) => string;
+  /** The difference, in this row's own unit (points for a rate); undefined = none shown. */
+  diff?: (d: number) => string;
+  /** More isn't better or worse (volume): the difference isn't coloured. */
+  neutral?: boolean;
+}[] = [
+  {
+    label: "Calls a day",
+    value: (r, days) => (days > 0 ? r.calls / days : null),
+    show: (v) => (v === null ? "–" : v.toFixed(v < 10 ? 1 : 0)),
+    diff: (d) => `${d > 0 ? "+" : ""}${d.toFixed(Math.abs(d) < 10 ? 1 : 0)}`,
+    neutral: true,
+  },
+  {
+    label: "2x rate",
+    value: (r) => r.hitRate2xPct,
+    show: (v) => pct(v, 1),
+    diff: (d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`,
+  },
+  {
+    label: "4x rate",
+    value: (r) => r.hitRate4xPct,
+    show: (v) => pct(v, 1),
+    diff: (d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`,
+  },
+  {
+    label: "10x rate",
+    value: (r) => r.hitRate10xPct,
+    show: (v) => pct(v, 1),
+    diff: (d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`,
+  },
+  {
+    label: "Avg return",
+    value: (r) => r.avgReturnPct,
+    show: (v) => signedPct(v, 1),
+    diff: (d) => `${d > 0 ? "+" : ""}${d.toFixed(1)}`,
+  },
+  {
+    label: "Runners caught",
+    value: (r) => r.catch.pct,
+    show: (v) => pct(v, 0),
+    diff: (d) => `${d > 0 ? "+" : ""}${d.toFixed(0)}`,
+  },
+];
+
+/**
+ * "Compared with your selection": the top models' feed against the reader's own, each pooled as
+ * one feed (each token once) over the same week.
+ */
+function FeedCompareBox({ board }: { board: Leaderboard }) {
+  // Re-read whenever either side's models change.
+  const key = `${(board.defaultModels ?? [board.defaultModel]).join(",")}|${board.selectedModels.join(",")}`;
+  const cmp = usePolling<FeedComparison>("/curated/models/compare", 120_000, key);
+  const data = cmp.data;
+  return (
+    <div className={`feed-compare${cmp.stale ? " stale" : ""}`}>
+      <span className="small muted">Compared with your selection</span>
+      {!data ? (
+        cmp.error ? (
+          <p className="faint small">Couldn&apos;t load the comparison.</p>
+        ) : (
+          <Skeleton lines={4} />
+        )
+      ) : (
+        <>
+          <small className="faint">
+            {data.same
+              ? `Your feed is the top models, so this is what it delivered over the last ${data.days} days, each token once.`
+              : `Each side as one feed over the last ${data.days} days, each token once, so overlapping calls aren't counted twice. Differences are yours minus the top models', in points for rates.`}
+          </small>
+          <table className="feed-compare-table num">
+            <thead>
+              <tr>
+                <th scope="col">
+                  <span className="sr-only">Figure</span>
+                </th>
+                <th scope="col">Top models</th>
+                {!data.same && <th scope="col">Yours</th>}
+                {!data.same && <th scope="col">Difference</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {COMPARE_ROWS.map((row) => {
+                const best = row.value(data.best, data.days);
+                const mine = row.value(data.mine, data.days);
+                const d = best !== null && mine !== null && row.diff ? mine - best : null;
+                return (
+                  <tr key={row.label}>
+                    <th scope="row">{row.label}</th>
+                    <td>{row.show(best)}</td>
+                    {!data.same && <td>{row.show(mine)}</td>}
+                    {!data.same && (
+                      <td
+                        className={
+                          d === null || row.neutral || Math.abs(d) < 0.05 ? "faint" : d > 0 ? "up" : "down"
+                        }
+                      >
+                        {d === null || !row.diff ? "–" : row.diff(d)}
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+              <tr className="feed-compare-graded">
+                <th scope="row">Graded calls</th>
+                <td>{data.best.graded}</td>
+                {!data.same && <td>{data.mine.graded}</td>}
+                {!data.same && <td />}
+              </tr>
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
   );
 }
