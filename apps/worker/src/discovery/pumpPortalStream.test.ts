@@ -24,6 +24,21 @@ describe("parsePumpPortalMessage", () => {
     ).toBeUndefined();
   });
 
+  it("keeps a launch's creator, the create transaction's signer", () => {
+    const dev = "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr";
+    expect(
+      parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "create", traderPublicKey: dev }))?.creator,
+    ).toBe(dev);
+    expect(
+      parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "migrate", traderPublicKey: dev }))
+        ?.creator,
+    ).toBeUndefined();
+    expect(
+      parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "create", traderPublicKey: "dev" }))
+        ?.creator,
+    ).toBeUndefined();
+  });
+
   it("keeps a launch's metadata URI", () => {
     const uri = "https://ipfs.io/ipfs/bafkreibuifrxzohrvlpgdztmwku4o7wggni72irolspurpn3toi5mfjq2q";
     expect(parsePumpPortalMessage(JSON.stringify({ mint: MINT, txType: "create", uri }))?.metadataUri).toBe(

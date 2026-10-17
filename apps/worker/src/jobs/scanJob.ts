@@ -894,6 +894,7 @@ async function scanCycle(
       name: e.name,
       discoverySource: "pumpportal",
       launchpad: e.launchpad,
+      creator: e.creator,
     })),
     ...trending,
     ...active.map((c) => toWatchlistCandidate(c, "pumpfun-active")),
@@ -1137,6 +1138,11 @@ async function scanCycle(
     for (const [mint, profile] of recheck.profiles) rugProfiles.set(mint, profile);
     lap("rugCheckRecheck");
   }
+  // RugCheck names the creator of most coins it has a report for: kept on the token for its Dev
+  // card. Behind the cycle; settles to one read once every such coin has one.
+  void recordCreators(
+    [...rugProfiles].flatMap(([mint, p]) => (p.creator ? [[mint, p.creator] as const] : [])),
+  );
 
   // Loaded once per cycle and reused for every token - filters change far less often than tokens
   // do. Only filters whose owner has access: see loadMatchableFilters.
@@ -2232,6 +2238,35 @@ export async function saveMovingLaunches(
   }
 }
 
+/**
+ * Token.creator for the mints given that have none yet: one read for the rows still without one,
+ * a write per hit, so it settles to zero writes once every such mint has one. Never overwrites:
+ * the first source to name the launcher wins, and they all name the same wallet.
+ */
+export async function recordCreators(
+  pairs: Iterable<readonly [mint: string, creator: string]>,
+): Promise<void> {
+  const byMint = new Map<string, string>();
+  for (const [mint, creator] of pairs) if (looksLikeSolanaAddress(creator)) byMint.set(mint, creator);
+  if (byMint.size === 0) return;
+  await prisma.token
+    .findMany({
+      where: { mintAddress: { in: [...byMint.keys()] }, creator: null },
+      select: { mintAddress: true },
+    })
+    .then((rows) =>
+      Promise.all(
+        rows.map((row) =>
+          prisma.token.updateMany({
+            where: { mintAddress: row.mintAddress, creator: null },
+            data: { creator: byMint.get(row.mintAddress) },
+          }),
+        ),
+      ),
+    )
+    .catch((err) => logger.warn("failed to record creators", { error: String(err) }));
+}
+
 function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): WatchlistCandidate {
   return {
     mintAddress: coin.mintAddress,
@@ -2250,6 +2285,7 @@ function toWatchlistCandidate(coin: DiscoveredCoin, discoverySource: string): Wa
     discoverySource,
     // Pump.fun's own lists and PumpPortal carry Pump.fun coins alone.
     launchpad: coin.launchpad ?? PUMPFUN_LAUNCHPAD,
+    creator: coin.creator,
   };
 }
 
@@ -2358,7 +2394,12 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
     uniqueByMint.set(
       c.mintAddress,
       first
-        ? { ...first, boosted: first.boosted || c.boosted, launchpad: first.launchpad ?? c.launchpad }
+        ? {
+            ...first,
+            boosted: first.boosted || c.boosted,
+            launchpad: first.launchpad ?? c.launchpad,
+            creator: first.creator ?? c.creator,
+          }
         : c,
     );
   }
@@ -2396,9 +2437,14 @@ export async function addNewMintsToWatchlist(discovered: WatchlistCandidate[]): 
       discoverySource: coin.discoverySource,
       dexBoosted: coin.boosted ?? false,
       launchpad: coin.launchpad,
+      creator: coin.creator,
     })),
     skipDuplicates: true,
   });
+
+  // The creator for mints already on the table that a source names now (a coin first found on
+  // DexScreener's feeds or Jupiter, or a row from before the column).
+  await recordCreators(valid.flatMap((c) => (c.creator ? [[c.mintAddress, c.creator] as const] : [])));
 
   // The launchpad for mints already on the table that a source names now (a coin first found on
   // DexScreener's feeds, which never say). Settles to zero rows once every such mint has one.

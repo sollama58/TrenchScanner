@@ -124,6 +124,8 @@ export interface WatchlistCandidate {
   boosted?: boolean;
   /** The launchpad, normalized (launchpads.ts) - recorded as Token.launchpad. */
   launchpad?: string;
+  /** The wallet that launched the coin, when the source names one - recorded as Token.creator. */
+  creator?: string;
 }
 
 export interface OnChainProfile {

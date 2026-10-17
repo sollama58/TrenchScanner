@@ -301,6 +301,12 @@ export async function storeTape(
         create: { tokenId: coin.tokenId, ...tape },
         update: tape,
       });
+      if (read.creator) {
+        await tx.token.updateMany({
+          where: { id: coin.tokenId, creator: null },
+          data: { creator: read.creator },
+        });
+      }
       await tx.tokenWalletActivity.deleteMany({ where: { tokenId: coin.tokenId } });
       for (let i = 0; i < kept.length; i += 1_000) {
         await tx.tokenWalletActivity.createMany({
