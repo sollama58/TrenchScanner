@@ -9,6 +9,7 @@ import {
   walletScoreMarket,
   MIN_WIN_SOL,
   OWN_MULTIPLE_MIN_SOL,
+  MIN_BUY_SOL_PER_TOKEN,
   OVERSOLD_TOKENS,
   RISKY_WALLET_SCORE,
   WALLET_WIN_MULTIPLE,
@@ -41,8 +42,12 @@ const logger = createLogger("wallet-risk");
  * or 4x within the hour (the call's outcome row), own trades at 2x or 4x, fast exits and dumps.
  */
 
-/** A clean trade: no more tokens sold than bought on the tape, and no sell before the first buy. */
+/**
+ * A clean trade: no more tokens sold than bought on the tape, bought at a price a buy can be
+ * (not tokens sent in for a token account's rent), and no sell before the first buy.
+ */
 const cleanSql = Prisma.sql`(a."tokensSold" <= ${OVERSOLD_TOKENS} * a."tokensBought"
+  AND a."solIn" >= ${MIN_BUY_SOL_PER_TOKEN} * a."tokensBought"
   AND NOT (a."firstSellAt" IS NOT NULL AND a."firstBuyAt" IS NOT NULL AND a."firstSellAt" < a."firstBuyAt"))`;
 
 /** A win: the wallet's own clean trade at WALLET_WIN_MULTIPLE or better, for MIN_WIN_SOL of profit. */

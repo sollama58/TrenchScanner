@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { prisma } from "@trenchscanner/core";
+import { MIN_BUY_SOL_PER_TOKEN, prisma } from "@trenchscanner/core";
 import { readKolRows, knownSideName } from "./kolRoster.js";
 import { SharedCache } from "./sharedCache.js";
 
@@ -170,7 +170,10 @@ const isClosed = (r: WalletCoinRow) =>
   r.solIn > 0 &&
   r.tokensBought > 0 &&
   r.tokensSold >= r.tokensBought * CLOSED_SHARE &&
-  r.tokensSold <= r.tokensBought * OVERSOLD_SHARE;
+  r.tokensSold <= r.tokensBought * OVERSOLD_SHARE &&
+  // Tokens sent in for a token account's rent read as a buy at a price no buy can be (core's
+  // MIN_BUY_SOL_PER_TOKEN): selling them is not its trade's return either.
+  r.solIn >= r.tokensBought * MIN_BUY_SOL_PER_TOKEN;
 
 const emptyTiers = (): TierCounts => ({ graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0 });
 

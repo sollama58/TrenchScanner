@@ -82,7 +82,7 @@ export function keysOf(tx: ChainTx): string[] {
  * oldest first). Every wallet whose balance of the mint moved is a trader in that transaction: up
  * is a buy, down a sell. Program accounts (the bonding curve, a pool, a vault) are off the ed25519
  * curve and left out, so the curve never reads as the biggest seller. A token move with nothing
- * paid beside it is a transfer, kept: it changes who holds what.
+ * paid beside it, or only between wallets, is a transfer, kept at 0 SOL: it changes who holds what.
  *
  * The SOL is what the wallet paid or got for the mint, whatever coin it paid in (paidSol): its
  * lamports, its wrapped SOL, and any other coin that moved the other way, valued in SOL from
@@ -131,13 +131,22 @@ export function tradesFromChainTransactions(
     // the fee payer paid or got is that trader's, less the network fee.
     const payer = keys[0];
     const payerIsTrader = payer !== undefined && (deltas.get(payer) ?? 0) !== 0;
+    // Tokens moving only between wallets, one's loss another's gain with no program account's
+    // balance of the mint changing (no curve or pool on the other side), are a transfer however
+    // the lamports read: a receiver paying its new token account's rent (0.002 SOL) read as a buy
+    // of the whole amount at that price (user report 2026-10-17: a wallet fed by transfers showed
+    // an impossible return).
+    const transfer =
+      traders.some(([, delta]) => delta < 0) &&
+      traders.some(([, delta]) => delta > 0) &&
+      ![...deltas].some(([owner, delta]) => delta !== 0 && !wallet(owner));
     const unpaid = traders.filter(
       ([owner, delta]) => paidSol(tx, keys, other, owner, delta, solPerUnit) === 0,
     );
     for (const [owner, delta] of traders) {
       const side = delta > 0 ? "buy" : "sell";
-      let sol = paidSol(tx, keys, other, owner, delta, solPerUnit);
-      if (sol === 0 && unpaid.length === 1 && payer && !payerIsTrader) {
+      let sol = transfer ? 0 : paidSol(tx, keys, other, owner, delta, solPerUnit);
+      if (!transfer && sol === 0 && unpaid.length === 1 && payer && !payerIsTrader) {
         sol = paidSol(tx, keys, other, payer, delta, solPerUnit, (tx.meta.fee ?? 0) / LAMPORTS_PER_SOL);
       }
       trades.push({
