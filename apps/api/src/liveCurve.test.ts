@@ -178,3 +178,39 @@ describe("SolPrice", () => {
     expect(await price.get()).toBe(101);
   });
 });
+
+describe("LiveCurves.quotes (the feed cards' Now)", () => {
+  it("prices a coin still on its curve in USD, and marks it on the curve", async () => {
+    const t = setup();
+    expect(t.curves.onCurve(MINT)).toBe(false);
+    const q = await t.curves.quotes([MINT], 2_500);
+    const mcap = curveMcapSol(state(5e10)) * 100;
+    expect(q.get(MINT)).toEqual({ marketCapUsd: mcap, priceUsd: mcap / 1e9, at: t.at() });
+    expect(t.curves.onCurve(MINT)).toBe(true);
+    // Reads failing from here: once the price is no longer current, DexScreener prices it again.
+    t.tick(20_000);
+    expect(t.curves.onCurve(MINT)).toBe(false);
+    expect((await t.curves.quotes([MINT], 0)).size).toBe(0);
+    t.curves.stop();
+  });
+
+  it("leaves out graduated coins and mints with no curve, for DexScreener to price", async () => {
+    const graduated = setup({ states: [state(5e10, true)] });
+    expect((await graduated.curves.quotes([MINT], 2_500)).size).toBe(0);
+    expect(graduated.curves.onCurve(MINT)).toBe(false);
+    graduated.curves.stop();
+    const none = setup({ states: [null] });
+    expect((await none.curves.quotes([MINT], 2_500)).size).toBe(0);
+    none.curves.stop();
+  });
+
+  it("stamps a streamed curve as current at the ask", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at() - 1);
+    await t.curves.quotes([MINT], 2_500);
+    t.tick(5_000);
+    const q = await t.curves.quotes([MINT], 2_500);
+    expect(q.get(MINT)?.at).toBe(t.at());
+    t.curves.stop();
+  });
+});

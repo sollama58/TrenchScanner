@@ -32,8 +32,11 @@ export const READ_EVERY_MS = 2_000;
 /** How much of a curve's changes are kept: the First 15m view's span, with room. */
 const KEEP_MS = 20 * 60_000;
 const MAX_TICKS = 6_000;
-/** Curves followed at once; past it the least recently asked is let go. */
-const MAX_FOLLOWED = 200;
+/**
+ * Curves followed at once; past it the least recently asked is let go. The feed cards' live tick
+ * asks for its on-screen coins too (graduated ones hold a slot without costing anything).
+ */
+const MAX_FOLLOWED = 400;
 /** The socket closes after nothing has been followed for this long. */
 const SOCKET_IDLE_MS = 2 * 60_000;
 /** An unconfirmed stretch longer than this is a hole: the cover starts again after it. */
@@ -74,6 +77,17 @@ export interface LiveCurveAnswer {
   /** Each price change after `after`: [ms, market cap in USD], oldest first. */
   ticks: [number, number][];
 }
+
+/** One curve's current price for a feed card - see LiveCurves.quotes. */
+export interface CurveQuote {
+  marketCapUsd: number;
+  priceUsd: number;
+  /** When the price is known current (ms epoch). */
+  at: number;
+}
+
+/** Pump.fun's fixed supply: one billion tokens. */
+const PUMP_SUPPLY = 1e9;
 
 interface Followed {
   curve: string;
@@ -122,10 +136,78 @@ export class LiveCurves {
   /** The changes after `after` (ms) of `mint`'s curve, following it from now on if it wasn't. */
   async read(mint: string, after: number): Promise<LiveCurveAnswer> {
     const now = this.now();
+    const followed = this.follow(mint, now);
+    if (!followed) return none(mint);
+    // The first answer waits for its seed read (briefly), rather than a round later.
+    if (followed.added) await this.seed(SEED_WAIT_MS);
+    const f = followed.f;
+    if (f.none) return none(mint);
+    const streamed = this.confirm(mint, f, now);
+    const usd = await this.deps.solPrice.get();
+    const source: LiveSource = f.readAt === null ? "pending" : streamed ? "stream" : "rpc";
+    return {
+      mint,
+      source: usd === null && source !== "pending" ? "pending" : source,
+      complete: f.complete,
+      coveredFrom: f.coveredFrom,
+      readAt: f.confirmedAt,
+      ticks: usd === null ? [] : f.ticks.filter(([t]) => t > after).map(([t, sol]) => [t, sol * usd]),
+    };
+  }
+
+  /**
+   * The feed cards' "Now" (GET /live/market): each mint's current market cap in USD and the moment
+   * it is known current, for the coins still on their Pump.fun curve, followed from now on as a
+   * chart's curve is. The curve's reserves are the price to the block, where DexScreener's figure
+   * runs 45-60 s behind the market. Graduated coins, coins with no curve and curves not read yet
+   * are left out: the caller keeps DexScreener's figure for those. New curves wait up to `waitMs`
+   * for their seed read.
+   */
+  async quotes(mints: readonly string[], waitMs: number): Promise<Map<string, CurveQuote>> {
+    const now = this.now();
+    let added = false;
+    const asked: [string, Followed][] = [];
+    for (const mint of mints) {
+      const followed = this.follow(mint, now);
+      if (!followed) continue;
+      added ||= followed.added;
+      asked.push([mint, followed.f]);
+    }
+    if (added) await this.seed(waitMs);
+    const out = new Map<string, CurveQuote>();
+    if (asked.length === 0) return out;
+    const usd = await this.deps.solPrice.get();
+    if (usd === null) return out;
+    for (const [mint, f] of asked) {
+      if (f.none || f.complete || f.readAt === null) continue;
+      const last = f.ticks[f.ticks.length - 1];
+      if (!last) continue;
+      this.confirm(mint, f, now);
+      const at = f.confirmedAt ?? f.readAt;
+      // Reads failing and the stream not covering it: not current, DexScreener's figure stands.
+      if (now - at > GAP_MS) continue;
+      out.set(mint, { marketCapUsd: last[1] * usd, priceUsd: (last[1] * usd) / PUMP_SUPPLY, at });
+    }
+    return out;
+  }
+
+  /**
+   * Whether `mint` is followed, its last read found it on its curve, and its price is current
+   * (within GAP_MS): the live tick then leaves it out of the DexScreener lookup, since the curve
+   * prices it.
+   */
+  onCurve(mint: string): boolean {
+    const f = this.followed.get(mint);
+    return !!f && !f.none && !f.complete && f.confirmedAt !== null && this.now() - f.confirmedAt <= GAP_MS;
+  }
+
+  /** Starts following `mint`'s curve if it wasn't; null when it can't be followed. */
+  private follow(mint: string, now: number): { f: Followed; added: boolean } | null {
     let f = this.followed.get(mint);
+    let added = false;
     if (!f) {
       const curve = pumpCurveAddressOf(mint);
-      if (!curve || (!this.deps.reader && !this.deps.makeStream)) return none(mint);
+      if (!curve || (!this.deps.reader && !this.deps.makeStream)) return null;
       if (this.followed.size >= MAX_FOLLOWED) this.dropLeastAsked();
       f = {
         curve,
@@ -139,24 +221,23 @@ export class LiveCurves {
       };
       this.followed.set(mint, f);
       this.ensureRunning();
-      // The first answer waits for its seed read (briefly), rather than a round later.
-      await Promise.race([this.round(), new Promise((r) => setTimeout(r, SEED_WAIT_MS))]);
+      added = true;
     }
     f.askedAt = now;
-    if (f.none) return none(mint);
-    if (!f.complete) this.stream?.watch(KEY_PREFIX + mint, [f.curve], now, "account");
+    if (!f.none && !f.complete) this.stream?.watch(KEY_PREFIX + mint, [f.curve], now, "account");
+    return { f, added };
+  }
+
+  /** Waits for a round (the seed reads of curves just followed), at most `waitMs`. */
+  private async seed(waitMs: number): Promise<void> {
+    await Promise.race([this.round(), new Promise((r) => setTimeout(r, waitMs))]);
+  }
+
+  /** Whether the stream covers `f` now; if so, its price is known current as of `now`. */
+  private confirm(mint: string, f: Followed, now: number): boolean {
     const streamed = this.streamCovers(mint, f);
     if (streamed) f.confirmedAt = now;
-    const usd = await this.deps.solPrice.get();
-    const source: LiveSource = f.readAt === null ? "pending" : streamed ? "stream" : "rpc";
-    return {
-      mint,
-      source: usd === null && source !== "pending" ? "pending" : source,
-      complete: f.complete,
-      coveredFrom: f.coveredFrom,
-      readAt: f.confirmedAt,
-      ticks: usd === null ? [] : f.ticks.filter(([t]) => t > after).map(([t, sol]) => [t, sol * usd]),
-    };
+    return streamed;
   }
 
   /** An account update the stream delivered. */
