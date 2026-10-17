@@ -715,8 +715,7 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
           };
         if (c.method === "getTokenSupply")
           return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "1000" } } };
-        // getMultipleAccounts: the first account belongs to a program address, the second to a
-        // wallet; the mint itself rides last (for its transfer fee's authority; none here).
+        // getMultipleAccounts: the first account belongs to a program address, the second to a wallet.
         return {
           jsonrpc: "2.0",
           id: c.id,
@@ -724,7 +723,6 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
             value: [
               { data: { parsed: { info: { owner: CURVE } } } },
               { data: { parsed: { info: { owner: WALLET } } } },
-              { data: { parsed: { info: {} } } },
             ],
           },
         };
@@ -751,8 +749,8 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
     expect((await client.getLargestHoldersBatch(["mintA"])).get("mintA")).toEqual({ status: "failed" });
   });
 
-  const largestWithFeeWallet = (authority: string | null) =>
-    startServer((calls) =>
+  it("leaves Stonks' fee wallet out of any coin's holders", async () => {
+    const { url } = await startServer((calls) =>
       calls.map((c) => {
         if (c.method === "getTokenLargestAccounts")
           return {
@@ -767,7 +765,6 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
           };
         if (c.method === "getTokenSupply")
           return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "1000" } } };
-        // getMultipleAccounts: the two token accounts, then the mint itself.
         return {
           jsonrpc: "2.0",
           id: c.id,
@@ -775,30 +772,11 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
             value: [
               { data: { parsed: { info: { owner: STONKS_FEE_WALLET } } } },
               { data: { parsed: { info: { owner: WALLET } } } },
-              {
-                data: {
-                  parsed: {
-                    info: {
-                      extensions: authority
-                        ? [
-                            {
-                              extension: "transferFeeConfig",
-                              state: { withdrawWithheldAuthority: authority },
-                            },
-                          ]
-                        : [],
-                    },
-                  },
-                },
-              },
             ],
           },
         };
       }),
     );
-
-  it("leaves Stonks' fee wallet out of a Stonks coin's holders, read off the mint's fee authority", async () => {
-    const { url } = await largestWithFeeWallet(STONKS_FEE_WALLET);
     const result = await new HeliusClient({ rpcUrl: url }).getLargestHoldersBatch(["mintA"]);
     expect(result.get("mintA")).toEqual({
       status: "found",
@@ -808,39 +786,6 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
         top10HolderAddresses: [WALLET],
         topHolderShares: [{ owner: WALLET, pct: 10 }],
       },
-    });
-  });
-
-  it("fails a mint whose own account read failed, though its token accounts read", async () => {
-    // Five mints with 20 accounts each fill the first 100-key chunk, so the mints ride a chunk of
-    // their own, which fails here: the fee wallet could not be told apart.
-    const mints = ["mintA", "mintB", "mintC", "mintD", "mintE"];
-    const { url } = await startServer((calls) =>
-      calls.map((c) => {
-        if (c.method === "getTokenLargestAccounts") {
-          const mint = (c.params[0] as string) ?? "";
-          const value = Array.from({ length: 20 }, (_, i) => ({ address: `${mint}-acct${i}`, amount: "10" }));
-          return { jsonrpc: "2.0", id: c.id, result: { value } };
-        }
-        if (c.method === "getTokenSupply")
-          return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "1000" } } };
-        const keys = c.params[0] as string[];
-        if (keys.some((k) => mints.includes(k)))
-          return { jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } };
-        const value = keys.map(() => ({ data: { parsed: { info: { owner: WALLET } } } }));
-        return { jsonrpc: "2.0", id: c.id, result: { value } };
-      }),
-    );
-    const result = await new HeliusClient({ rpcUrl: url }).getLargestHoldersBatch(mints);
-    for (const mint of mints) expect(result.get(mint)).toEqual({ status: "failed" });
-  });
-
-  it("keeps the fee wallet as a holder of any other coin", async () => {
-    const { url } = await largestWithFeeWallet(null);
-    const result = await new HeliusClient({ rpcUrl: url }).getLargestHoldersBatch(["mintA"]);
-    expect(result.get("mintA")).toMatchObject({
-      status: "found",
-      holders: { largestHolderPct: 30, top10HolderAddresses: [STONKS_FEE_WALLET, WALLET] },
     });
   });
 });
@@ -976,7 +921,7 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     expect(seen).toEqual(["getMultipleAccounts", "getProgramAccounts"]);
   });
 
-  it("leaves Stonks' fee wallet out of a Stonks coin's top holders, and only a Stonks coin's", async () => {
+  it("leaves Stonks' fee wallet out of any coin's top holders, whatever its fee authority", async () => {
     const serve = (authority: string | null) =>
       startServer((calls) =>
         calls.map((c) => {
@@ -1023,7 +968,7 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     const other = await serve(null);
     expect(
       (await new HeliusClient({ rpcUrl: other.url }).getTopHoldersBatch(["mintA"], 25)).get("mintA"),
-    ).toMatchObject({ status: "found", holders: [{ owner: STONKS_FEE_WALLET, pct: 30 }, { owner: WALLET }] });
+    ).toMatchObject({ status: "found", holders: [{ owner: WALLET, pct: 15 }] });
   });
 
   it("fails a mint that isn't a token mint, or whose accounts didn't come back", async () => {

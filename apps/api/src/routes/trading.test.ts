@@ -221,6 +221,22 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     });
     expect(over.statusCode).toBe(400);
     expect(over.json().error).toMatch(/slippageBps/);
+    // Exits answer to their own ceiling (5000 by default), not the entries' 2500.
+    const exits = await inj(capped, {
+      method: "PUT",
+      url: "/trading/bot",
+      ...as("admin"),
+      payload: { config: { slippageBps: 2000, exitSlippageBps: 3000, exitSlippageMaxBps: 5000 } },
+    });
+    expect(exits.statusCode).toBe(200);
+    const wide = await inj(app, {
+      method: "PUT",
+      url: "/trading/bot",
+      ...as("admin"),
+      payload: { config: { exitSlippageMaxBps: 6000 } },
+    });
+    expect(wide.statusCode).toBe(400);
+    expect(wide.json().error).toMatch(/exitSlippageMaxBps: at most 5000 bps/);
     const device = await prisma.linkedDevice.create({ data: { userId: ids.admin } });
     const phone = await signer.sign({ userId: ids.admin, walletAddress: adminWallet, deviceId: device.id });
     const res = await inj(app, {

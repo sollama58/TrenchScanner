@@ -10,7 +10,7 @@ type SafetyScreen = NonNullable<MarketLighthouse["safetyScreen"]>;
 /**
  * The Lighthouse's safety-screen scale: of every token the scanner checked in the window, the
  * share that cleared the safety screen against the share it turned away, which the Lighthouse
- * calls Likely Rugs. One track, accepted filling from the left and Likely Rugs from the right,
+ * calls Probable Rugs. One track, accepted filling from the left and Probable Rugs from the right,
  * with a knob at the split, and a share image of the same.
  */
 export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; days: number }) {
@@ -41,7 +41,7 @@ export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; 
       </div>
       <p className="faint small">
         Every new token the scanner checked in the last {span}: the ones that cleared our safety screen, and
-        the ones it turned away as Likely Rugs (mint or freeze authority kept, liquidity not locked, Mayhem
+        the ones it turned away as Probable Rugs (mint or freeze authority kept, liquidity not locked, Mayhem
         Mode, a bundled launch, a top 10 that is farmed, sniped or too concentrated, a single holder over 10%,
         a top 25 that is mostly linked or mostly exchange-funded).
       </p>
@@ -60,7 +60,7 @@ export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; 
             <div className="lh-safety-figure rug">
               <span className="lh-safety-value num">{text.rug}</span>
               <span className="muted small">
-                Likely Rugs · <span className="num">{s.rejected.toLocaleString()}</span> tokens
+                Probable Rugs · <span className="num">{s.rejected.toLocaleString()}</span> tokens
               </span>
             </div>
           </div>
@@ -70,8 +70,8 @@ export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; 
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={Math.round(rugPct)}
-            aria-valuetext={`${text.rug} Likely Rugs, ${text.ok} accepted`}
-            aria-label={`Likely Rugs: ${text.rug} of ${total.toLocaleString()} tokens screened; ${text.ok} accepted`}
+            aria-valuetext={`${text.rug} Probable Rugs, ${text.ok} accepted`}
+            aria-label={`Probable Rugs: ${text.rug} of ${total.toLocaleString()} tokens screened; ${text.ok} accepted`}
           >
             <span className="lh-safety-ok" style={{ width: `${okPct}%` }} />
             <span className="lh-safety-rug" style={{ width: `${rugPct}%` }} />
@@ -104,7 +104,7 @@ export function SafetyGauge({ s, span, days }: { s: SafetyScreen; span: string; 
         <ShareImageDialog
           title={`Safety screen, last ${span}`}
           fileName={`trenchscanner-likely-rugs-${days === 1 ? "24h" : `${days}d`}`}
-          caption={`TrenchScanner: ${text?.rug ?? "–"} of new tokens are Likely Rugs, ${partialSince ? `since ${sinceUtc(partialSince)}` : `last ${span}`}`}
+          caption={`TrenchScanner: ${text?.rug ?? "–"} of new tokens are Probable Rugs, ${partialSince ? `since ${sinceUtc(partialSince)}` : `last ${span}`}`}
           link="trenchscanner.app"
           render={() =>
             renderSafetyCard({ accepted: s.accepted, rejected: s.rejected, span, since: partialSince })

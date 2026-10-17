@@ -7,10 +7,11 @@ import { normalizeLaunchpad, STONKS_LAUNCHPAD } from "./launchpads.js";
  * share of supply that nobody bought (seen 2026-10-16 on BYTE, SHORT, RIM and BOO: the
  * transferFeeConfig's withdrawWithheldAuthority, read on chain and in RugCheck's token_extensions).
  *
- * On a Stonks coin it is not a holder: it is left out of every holder figure (top 10, largest
- * holder, the top-holder lists behind linked wallets, bundles, KOL Bundled and the bubble map), as a
- * venue account is. On any other coin it stays a holder like any wallet. The token modal shows its
- * share on a Stonks coin on its own card (GET /tokens/:mint/stonk-fees).
+ * It is never a holder, on any coin (owner decision 2026-10-17; it was Stonks coins only before): it
+ * is left out of every holder figure (top 10, largest holder, the top-holder lists behind linked
+ * wallets, bundles, KOL Bundled and the bubble map), as a venue account is, and out of the trade
+ * tape and wallet risk (PLATFORM_WALLETS). The token modal shows its share on a Stonks coin on its
+ * own card (GET /tokens/:mint/stonk-fees).
  */
 export const STONKS_FEE_WALLET = "5KXDF6QnqhBj72hDtJNkkpFaQVUfbFXNybMsp3DiK6tD";
 export const STONKS_FEE_WALLET_LABEL = "Stonk_Fees";
@@ -23,8 +24,8 @@ export const PLATFORM_WALLETS: ReadonlyMap<string, string> = new Map([
   [STONKS_FEE_WALLET, STONKS_FEE_WALLET_LABEL],
 ]);
 
-const NONE: ReadonlySet<string> = new Set();
-const STONKS_FEE_HOLDERS: ReadonlySet<string> = new Set([STONKS_FEE_WALLET]);
+/** The wallets every coin's holder figures leave out beyond its venues: Stonks' fee wallet, on every coin. */
+export const FEE_HOLDERS: ReadonlySet<string> = new Set([STONKS_FEE_WALLET]);
 
 /** What tells a Stonks coin: its recorded launchpad, or its mint's withheld-fee authority. */
 export interface StonksCoinHint {
@@ -38,11 +39,6 @@ export function isStonksCoin(hint: StonksCoinHint): boolean {
   return (
     normalizeLaunchpad(hint.launchpad) === STONKS_LAUNCHPAD || hint.withheldFeeAuthority === STONKS_FEE_WALLET
   );
-}
-
-/** The wallets a coin's holder figures leave out beyond its venues: Stonks' fee wallet, on a Stonks coin only. */
-export function feeHoldersOf(hint: StonksCoinHint): ReadonlySet<string> {
-  return isStonksCoin(hint) ? STONKS_FEE_HOLDERS : NONE;
 }
 
 /**

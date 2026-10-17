@@ -1861,7 +1861,7 @@ export interface MarketLighthouse {
   };
   /**
    * The safety screen's verdict on the tokens first scanned in the window: cleared it at least
-   * once (accepted) or never (rejected, shown as Likely Rugs). Absent from older API builds.
+   * once (accepted) or never (rejected, shown as Probable Rugs). Absent from older API builds.
    */
   safetyScreen?: {
     accepted: number;
