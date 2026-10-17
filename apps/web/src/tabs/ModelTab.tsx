@@ -974,17 +974,24 @@ function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number })
   const held = data.heldFeatures ?? [];
   const newest = data.samples.newestAnchorAt ? new Date(data.samples.newestAnchorAt).getTime() : null;
   const stale = newest !== null && now - newest > 30 * 60_000;
-  const mostlyNull = health
-    ? health.features.filter((f) => f.nullRatePct >= 50).sort((a, b) => b.nullRatePct - a.nullRatePct)
-    : [];
+  // Missing is judged on the newest day of the exam's rows where the run measured it: over the
+  // whole training window an input added or repaired days ago reads mostly missing while it
+  // fills on every moment today. Inputs no model reads (retired: dead feeds, repeats) and those
+  // held back for history (listed below) are not loose wires.
+  const missingNow = (f: FeatureHealthReport["features"][number]) => f.recentNullRatePct ?? f.nullRatePct;
+  const heldNames = new Set(held.map((f) => f.feature));
+  const read = health ? health.features.filter((f) => !f.retired) : [];
+  const retiredCount = health ? health.features.length - read.length : 0;
+  const mostlyNull = read
+    .filter((f) => !heldNames.has(f.feature) && missingNow(f) >= 50)
+    .sort((a, b) => missingNow(b) - missingNow(a));
+  const hasRecent = health?.recentRows !== undefined;
   const lift = (f: FeatureHealthReport["features"][number]) =>
     Math.max(f.topDecileLift ?? 0, f.bottomDecileLift ?? 0);
-  const strongest = health
-    ? health.features
-        .filter((f) => f.topDecileLift !== null)
-        .sort((a, b) => lift(b) - lift(a))
-        .slice(0, HEALTH_ROWS)
-    : [];
+  const strongest = read
+    .filter((f) => f.topDecileLift !== null)
+    .sort((a, b) => lift(b) - lift(a))
+    .slice(0, HEALTH_ROWS);
   return (
     <section className="panel">
       <span className="eyebrow">Inputs</span>
@@ -1001,6 +1008,8 @@ function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number })
             Measured on {health.rows.toLocaleString()} decision moments in the newest run (base 2x rate{" "}
             {pct(health.baseWinRatePct, 1)}). Lift is a signal's top or bottom tenth's 2x rate over the base;
             1 is no signal.
+            {hasRecent &&
+              ` Missing today is over the newest day of those moments (${(health.recentRows ?? 0).toLocaleString()}); the whole window reaches back to before newer inputs were recorded.`}
           </p>
           <div className="table-wrap">
             <table className="compact">
@@ -1009,7 +1018,8 @@ function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number })
                   <th>Strongest on its own</th>
                   <th className="r">Top tenth</th>
                   <th className="r">Bottom tenth</th>
-                  <th className="r">Missing</th>
+                  {hasRecent && <th className="r">Missing today</th>}
+                  <th className="r">{hasRecent ? "Missing, whole window" : "Missing"}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1018,6 +1028,7 @@ function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number })
                     <td>{f.label}</td>
                     <td className="r num">{f.topDecileLift?.toFixed(2)}x</td>
                     <td className="r num">{f.bottomDecileLift?.toFixed(2)}x</td>
+                    {hasRecent && <td className="r num">{pct(f.recentNullRatePct, 0)}</td>}
                     <td className="r num muted">{pct(f.nullRatePct, 0)}</td>
                   </tr>
                 ))}
@@ -1026,10 +1037,10 @@ function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number })
           </div>
           {mostlyNull.length > 0 && (
             <p className="small muted">
-              Mostly missing:{" "}
+              {hasRecent ? "Mostly missing today" : "Mostly missing"}:{" "}
               {mostlyNull
                 .slice(0, HEALTH_ROWS * 2)
-                .map((f) => `${f.label} (${pct(f.nullRatePct, 0)})`)
+                .map((f) => `${f.label} (${pct(missingNow(f), 0)})`)
                 .join(", ")}
               {mostlyNull.length > HEALTH_ROWS * 2 ? ` and ${mostlyNull.length - HEALTH_ROWS * 2} more` : ""}.
             </p>
@@ -1044,6 +1055,12 @@ function FeatureHealthPanel({ data, now }: { data: ModelInsights; now: number })
                 )
                 .join(", ")}
               . A new input joins once it covers enough of that history, usually within a few days.
+            </p>
+          )}
+          {retiredCount > 0 && (
+            <p className="small muted">
+              {retiredCount} more inputs are still recorded but read by no model (dead feeds such as the trade
+              stream and the launch-text read, and repeats of other inputs), so they are left out here.
             </p>
           )}
         </>

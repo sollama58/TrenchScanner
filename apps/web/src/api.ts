@@ -1177,11 +1177,18 @@ export interface WinnerRuns {
 
 export interface FeatureHealthReport {
   rows: number;
+  /** Rows of the newest day the recent null rates were measured on. Absent on older runs. */
+  recentRows?: number;
   baseWinRatePct: number;
   features: {
     feature: string;
     label: string;
+    /** Missing over the whole exam span (the training window). */
     nullRatePct: number;
+    /** Missing over its newest day; null with too few rows, absent on older runs. */
+    recentNullRatePct?: number | null;
+    /** Recorded but read by no model (a dead feed, a repeat, no signal). Absent on older runs. */
+    retired?: boolean;
     topDecileLift: number | null;
     bottomDecileLift: number | null;
     present: number;

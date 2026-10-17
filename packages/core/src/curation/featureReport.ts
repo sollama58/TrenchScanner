@@ -1,4 +1,4 @@
-import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS } from "./features.js";
+import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS, RETIRED_LEARNER_INPUTS } from "./features.js";
 
 /**
  * Per-feature health, computed on each training run over the rows the exam grades: how often
@@ -12,8 +12,17 @@ import { CANDIDATE_FEATURE_NAMES, FRIENDLY_FEATURE_LABELS } from "./features.js"
 export interface FeatureHealth {
   feature: string;
   label: string;
-  /** Rows on which the feature was null, in percent. */
+  /** Rows on which the feature was null, in percent, over the whole exam span. */
   nullRatePct: number;
+  /**
+   * The same over the newest day of those rows (RECENT_WINDOW_MS), null when too few rows dated.
+   * The span reaches back the whole training window, so an input added or repaired in the last
+   * days reads mostly missing on it while it fills on every moment today: this one says whether
+   * the wire is loose now. Absent on reports from before 2026-10-17.
+   */
+  recentNullRatePct?: number | null;
+  /** No learner reads it (RETIRED_LEARNER_INPUTS: dead feeds, repeats, no signal); still watched. */
+  retired?: boolean;
   /** 2x rate of the rows in the feature's top tenth over the base rate (1 = no signal); null with too few present rows. */
   topDecileLift: number | null;
   /** Same for the bottom tenth. */
@@ -24,18 +33,41 @@ export interface FeatureHealth {
 
 export interface FeatureReport {
   rows: number;
+  /** Rows the recent null rates were measured on (the newest day of the span). */
+  recentRows?: number;
   baseWinRatePct: number;
   features: FeatureHealth[];
 }
 
 /** Fewest present rows a decile lift is reported on (a tenth of this is the decile). */
 const MIN_PRESENT_FOR_LIFT = 200;
+/** How far back from the newest row the recent null rates look. */
+const RECENT_WINDOW_MS = 24 * 3_600_000;
+/** Fewest rows a recent null rate is reported on. */
+const MIN_RECENT_ROWS = 50;
 
 export function featureHealthReport(
-  rows: readonly { features: Record<string, number | null | undefined>; labelValue: number }[],
+  rows: readonly {
+    features: Record<string, number | null | undefined>;
+    labelValue: number;
+    anchorAt?: Date;
+  }[],
   featureNames: readonly string[] = CANDIDATE_FEATURE_NAMES,
 ): FeatureReport {
   const n = rows.length;
+  let newest = -Infinity;
+  for (const r of rows) if (r.anchorAt) newest = Math.max(newest, r.anchorAt.getTime());
+  const recent = rows.filter((r) => r.anchorAt && r.anchorAt.getTime() > newest - RECENT_WINDOW_MS);
+  const nullRate = (
+    set: readonly { features: Record<string, number | null | undefined> }[],
+    feature: string,
+  ) => {
+    const missing = set.filter((r) => {
+      const v = r.features[feature];
+      return v === null || v === undefined || !Number.isFinite(v);
+    }).length;
+    return Math.round((missing / set.length) * 1000) / 10;
+  };
   const baseWins = rows.filter((r) => r.labelValue > 0).length;
   const baseRate = n > 0 ? baseWins / n : 0;
   const features: FeatureHealth[] = featureNames.map((feature) => {
@@ -58,10 +90,12 @@ export function featureHealthReport(
       feature,
       label: FRIENDLY_FEATURE_LABELS[feature as keyof typeof FRIENDLY_FEATURE_LABELS] ?? feature,
       nullRatePct: n > 0 ? Math.round(((n - present.length) / n) * 1000) / 10 : 100,
+      recentNullRatePct: recent.length >= MIN_RECENT_ROWS ? nullRate(recent, feature) : null,
+      retired: (RETIRED_LEARNER_INPUTS as ReadonlySet<string>).has(feature),
       topDecileLift,
       bottomDecileLift,
       present: present.length,
     };
   });
-  return { rows: n, baseWinRatePct: Math.round(baseRate * 1000) / 10, features };
+  return { rows: n, recentRows: recent.length, baseWinRatePct: Math.round(baseRate * 1000) / 10, features };
 }
