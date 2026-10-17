@@ -530,34 +530,40 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     expect(p.tokensBought).toBe("1000000000");
     expect(p.entryLamports).toBe(50_010_000n);
 
-    // 2.1x: half sells at the first rung.
+    // 2.1x: 35% sells at the first rung.
     chain.price.set(mint, 0.105);
     expect((await tick(1)).sells).toBe(1);
     await tick();
     p = await position();
     expect(p.rungsTaken).toBe(1);
-    expect(p.tokensHeld).toBe("500000000");
+    expect(p.tokensHeld).toBe("650000000");
     expect(p.highMultiple).toBeCloseTo(2.1);
 
-    // Runs to 5x (the trail's high), then falls under 3.25x: the rest sells on the trail.
+    // 5x: the 4x rung sells another 30% of the original, and lifts the trail's high.
     chain.price.set(mint, 0.25);
-    expect((await tick(1)).sells).toBe(0);
-    expect((await position()).highMultiple).toBeCloseTo(5);
-    chain.price.set(mint, 0.15);
+    expect((await tick(1)).sells).toBe(1);
+    await tick();
+    p = await position();
+    expect(p.rungsTaken).toBe(2);
+    expect(p.tokensHeld).toBe("350000000");
+    expect(p.highMultiple).toBeCloseTo(5);
+    // Then it falls under 3x (40% off the 5x high): the rest sells on the trail.
+    chain.price.set(mint, 0.14);
     expect((await tick(1)).sells).toBe(1);
     await tick();
     p = await position();
     expect(p.status).toBe("closed");
     expect(p.closeReason).toBe("trailing_stop");
     expect(p.tokensHeld).toBe("0");
-    // 0.0525 SOL at 2.1x plus 0.075 SOL at 3x, less fees.
-    expect(p.proceedsLamports).toBe(52_500_000n - 10_000n + 75_000_000n - 10_000n);
+    // 0.03675 SOL at 2.1x, 0.075 SOL at 5x and 0.049 SOL at 2.8x, less fees.
+    expect(p.proceedsLamports).toBe(36_750_000n - 10_000n + 75_000_000n - 10_000n + 49_000_000n - 10_000n);
     const orders = await prisma.tradingOrder.findMany({
       where: { positionId: p.id },
       orderBy: { createdAt: "asc" },
     });
     expect(orders.map((o) => [o.side, o.reason, o.status, o.route])).toEqual([
       ["buy", "entry", "confirmed", "jupiter"],
+      ["sell", "take_profit", "confirmed", "jupiter"],
       ["sell", "take_profit", "confirmed", "jupiter"],
       ["sell", "trailing_stop", "confirmed", "jupiter"],
     ]);
@@ -569,7 +575,9 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     await tick(4);
     p = await position();
     expect(p.accountClosedAt).not.toBeNull();
-    expect(p.proceedsLamports).toBe(52_500_000n - 10_000n + 75_000_000n - 10_000n + 2_039_280n);
+    expect(p.proceedsLamports).toBe(
+      36_750_000n - 10_000n + 75_000_000n - 10_000n + 49_000_000n - 10_000n + 2_039_280n,
+    );
   });
 
   it("refuses swaps whose simulation drains SOL, empties another position, or reassigns the wallet", async () => {
@@ -719,7 +727,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     await tick();
     const p = await position();
     expect(p.rungsTaken).toBe(1);
-    expect(p.tokensHeld).toBe("500000000");
+    expect(p.tokensHeld).toBe("650000000");
     // ...so the same rung is not sold again.
     expect((await tick(1)).sells).toBe(0);
   });
@@ -744,7 +752,7 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     await tick();
     p = await position();
     expect(p.rungsTaken).toBe(1);
-    expect(p.tokensHeld).toBe("500000000");
+    expect(p.tokensHeld).toBe("650000000");
   });
 
   it("reopens a closed position whose tokens turn up in the wallet", async () => {

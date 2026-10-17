@@ -67,8 +67,9 @@ pick - the matches of any of your filters (a filter produces matches while it is
 and the calls of any model, optionally only high-conviction ones, and by default **only those the
 AI judge calls a buy** (`requireAiBuy`, with an optional floor on its 2x estimate; a fresh signal
 waits for its review, and one never reviewed is skipped) - and sells each position on an exit
-plan: by default the same plan the Lighthouse and Models tab simulate (`EXIT_PLAN`: half at 2x,
-the rest on a trailing exit 35% off its high, out at 3 hours; -50% stop before the first sale;
+plan: by default the same plan the Lighthouse and Models tab simulate (`EXIT_PLAN`: 35% at 2x, 30% at
+4x, 25% at 10x, whatever is still held on a trailing exit 40% off its high from the first sale, out
+at 3 hours; -50% stop before the first sale;
 closed at 30 minutes if it never sold), or your own ladder, stop, trail tiers and hold times.
 
 - **Custody.** Each wallet's key is sealed with AES-256-GCM under its own data key, and the data

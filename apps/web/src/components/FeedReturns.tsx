@@ -205,10 +205,10 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
         </>
       )}
       <p className="faint small stats-note">
-        Each alert&apos;s return under the fixed exit plan (half sold at 2x, the rest on a trailing stop, stop
-        at −50%), averaged by when it alerted. An alert counts once its return settles, from 30 minutes to 3
-        hours after it fires, so the last hour fills in late. The top 3 are the calls that passed (hit 2x
-        before a 50% drop), ranked by Peak, the figure each feed card shows.
+        Each alert&apos;s return under the fixed exit plan (35% sold at 2x, 30% at 4x, 25% at 10x, the rest on
+        a trailing stop, stop at −50%), averaged by when it alerted. An alert counts once its return settles,
+        from 30 minutes to 3 hours after it fires, so the last hour fills in late. The top 3 are the calls
+        that passed (hit 2x before a 50% drop), ranked by Peak, the figure each feed card shows.
       </p>
     </section>
   );
