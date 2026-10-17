@@ -282,8 +282,10 @@ export interface OnChainProfile {
   bundledSupplyCount?: number;
   /**
    * KOL Bundled % and Bundled % as they read before a KOL's bundle followed its transfers to the
-   * holders it sent the coin to (user decision 2026-10-16): the models' and the AI judge's inputs
-   * until the next retrain switches them (notes/model-retrain-pending.md). Not stored on the snapshot.
+   * holders it sent the coin to (user decision 2026-10-16). They still step through
+   * transfer-linked clusters, so neither the models nor the AI judge read them any more: both read
+   * the funding-only `...ExTransfers` figures below (curation/features.ts, aiReview.ts). Not
+   * stored on the snapshot.
    */
   kolBundledPctModel?: number;
   bundledSupplyPctModel?: number;
@@ -309,7 +311,10 @@ export interface OnChainProfile {
    */
   linkedWalletPctExTransfers?: number;
   linkedWalletCountExTransfers?: number;
-  /** The creator-tied share without transfers: the models' linkedCreatorPct until the retrain switches it. */
+  /**
+   * The creator-tied share without transfers: the models' linkedCreatorPct and the AI judge's
+   * creator line until the retrain switches them.
+   */
   linkedCreatorPctExTransfers?: number;
   kolBundledPctExTransfers?: number;
   bundledSupplyPctExTransfers?: number;

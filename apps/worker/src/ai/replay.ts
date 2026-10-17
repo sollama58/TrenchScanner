@@ -13,6 +13,8 @@ import {
   usageCostUsd,
   CANDIDATE_WATCH_WINDOW_MINUTES,
   BRIEF_WALLET_FIELDS,
+  BRIEF_WALLET_FIELDS_BANKED_AS,
+  isRawWalletRiskRow,
   FRESH_ANCHOR_LABEL_RULE,
   type CurationDecision,
   type Env,
@@ -156,6 +158,13 @@ export async function loadReplayItems(
       const v = features[k];
       if (typeof v === "number") scored[k] = v;
     }
+    // The funding-only figures the live brief prints, banked under the models' names.
+    for (const [k, banked] of Object.entries(BRIEF_WALLET_FIELDS_BANKED_AS)) {
+      const v = features[banked];
+      if (typeof v === "number") scored[k as keyof typeof BRIEF_WALLET_FIELDS_BANKED_AS] = v;
+    }
+    // A row from before the percentile banks the raw risk score: not put to the brief as a percentile.
+    if (isRawWalletRiskRow(co.anchorAt, features)) delete scored.walletRiskTop10Max;
     const decision: CurationDecision = {
       curate: true,
       tier: a.tier === "high" ? "high" : undefined,

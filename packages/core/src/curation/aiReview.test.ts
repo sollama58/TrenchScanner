@@ -2,6 +2,7 @@ import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
 import { describe, expect, it } from "vitest";
 import {
   AI_REVIEW_SYSTEM_PROMPT,
+  BRIEF_WALLET_FIELDS_BANKED_AS,
   MAX_PLAYBOOK_CHARS,
   aiReviewSystemPrompt,
   buildAiReviewBrief,
@@ -21,6 +22,7 @@ import {
 } from "../scoring/rugScreen.js";
 import type { ScoredToken } from "../types.js";
 import type { CurationDecision } from "./curator.js";
+import { buildCandidateFeatures } from "./features.js";
 
 const scored = {
   mintAddress: "Mint111",
@@ -104,7 +106,7 @@ describe("AI review brief", () => {
     expect(brief).toContain("known KOL wallets: 1 among the top 20 holders (1.2% of supply)");
     expect(brief).toContain("4 selling (12.25 SOL)");
     expect(brief).toContain(
-      "linked by funding (one funder paid for them, or they funded each other): 6 of the top 25",
+      "linked holders (one funder paid for them, they funded each other, or one sent another the coin): 6 of the top 25",
     );
     expect(brief).toContain(
       "funded from an exchange (how retail usually arrives): 9 of the top 25, 30.0% of supply",
@@ -113,6 +115,46 @@ describe("AI review brief", () => {
     expect(brief).not.toContain("winner wallets (wallets that keep selling");
     expect(brief).not.toContain("same minute");
     expect(buildAiReviewBrief(scored, decision)).not.toContain("wallets:");
+  });
+
+  it("prints the funding-only KOL Bundled % and creator share the models read, never the transfer-counted ones", () => {
+    const withTransfers = {
+      ...scored,
+      kolTopHolders: 1,
+      kolBundledPct: 20,
+      kolBundledPctModel: 15,
+      kolBundledPctExTransfers: 8,
+      linkedWalletCount: 6,
+      linkedWalletPct: 14.2,
+      linkedCreatorPct: 9,
+      linkedCreatorPctExTransfers: 3,
+    } as ScoredToken;
+    const brief = buildAiReviewBrief(withTransfers, decision);
+    expect(brief).toContain("with those) 8.0%");
+    expect(brief).toContain("tied to the creator by funding 3.0%");
+    // No fallback: without the funding-only figures they read unknown.
+    const without = buildAiReviewBrief(
+      { ...withTransfers, kolBundledPctExTransfers: undefined, linkedCreatorPctExTransfers: undefined },
+      decision,
+    );
+    expect(without).toContain("with those) unknown");
+    expect(without).toContain("tied to the creator by funding unknown");
+    // The same line rebuilt from the feature vector, as the replay does, matches the live brief.
+    const features = buildCandidateFeatures(withTransfers);
+    expect(features).toMatchObject({ kolBundledPct: 8, linkedCreatorPct: 3 });
+    const replayed = {
+      ...scored,
+      kolTopHolders: 1,
+      linkedWalletCount: 6,
+      linkedWalletPct: 14.2,
+    } as ScoredToken;
+    for (const [k, banked] of Object.entries(BRIEF_WALLET_FIELDS_BANKED_AS)) {
+      const v = features[banked];
+      if (typeof v === "number") replayed[k as keyof typeof BRIEF_WALLET_FIELDS_BANKED_AS] = v;
+    }
+    const walletLinesOf = (b: string) =>
+      b.split("\n").filter((l) => l.includes("KOL") || l.includes("linked"));
+    expect(walletLinesOf(buildAiReviewBrief(replayed, decision))).toEqual(walletLinesOf(brief));
   });
 
   it("shows the market cap the call is graded from beside DexScreener's lagging one", () => {

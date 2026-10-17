@@ -103,14 +103,35 @@ export async function readLiveTape(
   );
 }
 
+/** A coin's newest page as livePageOf hands it out. */
+export type LiveTapePage = Readonly<{ atMs: number; trades: readonly TapeTrade[]; complete: boolean }>;
+
+/**
+ * A coin's recent page, or undefined without one. readLiveTape replaces a coin's page (deleting
+ * it while the new one is priced) while a cycle runs, so the scan takes each candidate's page
+ * once and hands the same page to every reading of the cycle (the own-tape buyers and the Wallet
+ * Score especially: read apart, a new page's buyers could escape the own-tape exclusion).
+ */
+export function livePageOf(mint: string, nowMs = Date.now()): LiveTapePage | undefined {
+  const page = pages.get(mint);
+  return page && nowMs - page.atMs <= MAX_PAGE_AGE_MS ? page : undefined;
+}
+
 /** How many wallets matching `is` traded in a coin's recent page, or null without a recent page. */
 export function liveTradersOf(
   mint: string,
   is: ((wallet: string) => boolean) | undefined,
   nowMs = Date.now(),
 ): LiveTraderCounts | null {
-  const page = pages.get(mint);
-  if (!is || !page || nowMs - page.atMs > MAX_PAGE_AGE_MS) return null;
+  return liveTradersOn(livePageOf(mint, nowMs), is);
+}
+
+/** liveTradersOf on a page already taken (livePageOf). */
+export function liveTradersOn(
+  page: LiveTapePage | undefined,
+  is: ((wallet: string) => boolean) | undefined,
+): LiveTraderCounts | null {
+  if (!is || !page) return null;
   return liveTraders(page.trades, is);
 }
 
@@ -120,15 +141,26 @@ export function liveFlagsOf(
   lookup: ((wallet: string) => ScoredWallet | undefined) | undefined,
   nowMs = Date.now(),
 ): LiveFlagsReading | null {
-  const page = pages.get(mint);
-  if (!lookup || !page || nowMs - page.atMs > MAX_PAGE_AGE_MS) return null;
+  return liveFlagsOn(livePageOf(mint, nowMs), lookup);
+}
+
+/** liveFlagsOf on a page already taken (livePageOf). */
+export function liveFlagsOn(
+  page: LiveTapePage | undefined,
+  lookup: ((wallet: string) => ScoredWallet | undefined) | undefined,
+): LiveFlagsReading | null {
+  if (!lookup || !page) return null;
   return liveFlags(page.trades, lookup);
 }
 
 /** The wallets buying in a coin's recent page, or none without one (for the own-tape read). */
 export function liveBuyersOf(mint: string, nowMs = Date.now()): string[] {
-  const page = pages.get(mint);
-  if (!page || nowMs - page.atMs > MAX_PAGE_AGE_MS) return [];
+  return liveBuyersOn(livePageOf(mint, nowMs));
+}
+
+/** liveBuyersOf on a page already taken (livePageOf). */
+export function liveBuyersOn(page: LiveTapePage | undefined): string[] {
+  if (!page) return [];
   return [...new Set(page.trades.filter((t) => t.side === "buy").map((t) => t.wallet))];
 }
 
@@ -143,8 +175,16 @@ export function liveWalletScoreOf(
   ownTape: { has(wallet: string): boolean } | null | undefined,
   nowMs = Date.now(),
 ): WalletScoreReading | null {
-  const page = pages.get(mint);
-  if (!lookup || !page || nowMs - page.atMs > MAX_PAGE_AGE_MS) return null;
+  return liveWalletScoreOn(livePageOf(mint, nowMs), lookup, ownTape);
+}
+
+/** liveWalletScoreOf on a page already taken (livePageOf): the page whose buyers `ownTape` was read for. */
+export function liveWalletScoreOn(
+  page: LiveTapePage | undefined,
+  lookup: ((wallet: string) => ScoredWallet | undefined) | undefined,
+  ownTape: { has(wallet: string): boolean } | null | undefined,
+): WalletScoreReading | null {
+  if (!lookup || !page) return null;
   return walletScoreReading(page.trades, (wallet) => lookup(wallet)?.walletScore, ownTape);
 }
 
