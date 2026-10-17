@@ -672,7 +672,15 @@ export class TokenSageClient {
   }
 }
 
-/** The hints for a mint from what discovery stored on its Token row; empty fields are left out. */
+/** TokenSage's TokenHints limit on image_url, twitter and website; a longer one 422s the batch. */
+const MAX_HINT_URL_CHARS = 2048;
+
+/**
+ * The hints for a mint from what discovery stored on its Token row; empty fields are left out.
+ * created_at is the launch time only (launchedAt): firstSeenAt is when we first saw the mint,
+ * which for a coin found late is far after its launch, and TokenSage keeps the hint for good
+ * when it has no launch time of its own (a non-pump.fun mint).
+ */
 export function tokenSageHints(token: {
   name?: string | null;
   symbol?: string | null;
@@ -680,17 +688,19 @@ export function tokenSageHints(token: {
   imageUrl?: string | null;
   twitterUrl?: string | null;
   websiteUrl?: string | null;
-  firstSeenAt?: Date | null;
+  launchedAt?: Date | null;
 }): TokenSageHints | undefined {
   const hints: TokenSageHints = {};
+  const url = (value: string | null | undefined): value is string =>
+    !!value && value.length <= MAX_HINT_URL_CHARS;
   if (token.name) hints.name = token.name.slice(0, 200);
   if (token.symbol) hints.symbol = token.symbol.slice(0, 50);
   if (token.description) hints.description = token.description.slice(0, 2_000);
-  if (token.imageUrl?.startsWith("https://")) hints.image_url = token.imageUrl;
-  if (token.twitterUrl) hints.twitter = token.twitterUrl;
-  if (token.websiteUrl) hints.website = token.websiteUrl;
-  if (token.firstSeenAt && !Number.isNaN(token.firstSeenAt.getTime())) {
-    hints.created_at = token.firstSeenAt.toISOString();
+  if (url(token.imageUrl) && token.imageUrl.startsWith("https://")) hints.image_url = token.imageUrl;
+  if (url(token.twitterUrl)) hints.twitter = token.twitterUrl;
+  if (url(token.websiteUrl)) hints.website = token.websiteUrl;
+  if (token.launchedAt && !Number.isNaN(token.launchedAt.getTime())) {
+    hints.created_at = token.launchedAt.toISOString();
   }
   return Object.keys(hints).length > 0 ? hints : undefined;
 }
@@ -1051,10 +1061,14 @@ export interface TokenNarrativeNowFields {
   heatIsLeader: boolean | null;
 }
 
+/** How much older than its refresh a story heat reading may be and still be stored as current. */
+const HEAT_MAX_LAG_MS = 10 * 60_000;
+
 /**
  * The columns one refresh stores, or null when the item carries no refresh (pending with
- * nothing yet, unavailable, invalid). A heat reading that failed (status other than "ok") or a
- * story with no coin found leaves the leader's columns null. Throws on nothing.
+ * nothing yet, unavailable, invalid). A heat reading that failed (status other than "ok"), one
+ * read more than HEAT_MAX_LAG_MS before the refresh, or a story with no coin found leaves the
+ * heat columns null. Throws on nothing.
  */
 export function nowFieldsFromItem(item: TokenSageNowItem, mint: string): TokenNarrativeNowFields | null {
   const doc = asRecord(item);
@@ -1062,7 +1076,14 @@ export function nowFieldsFromItem(item: TokenSageNowItem, mint: string): TokenNa
   if (!doc || at === null || (doc.status !== "complete" && doc.status !== "pending")) return null;
   const trend = asRecord(doc.trend);
   const heat = asRecord(doc.story_heat);
-  const ok = heat !== null && heat.status === "ok";
+  // A refresh whose heat lookup failed can carry an older cached heat: its own as_of says when
+  // that market data was read, and one well before the refresh is not current, so it is dropped.
+  const heatAt = isoDate(heat?.as_of);
+  const ok =
+    heat !== null &&
+    heat.status === "ok" &&
+    heatAt !== null &&
+    at.getTime() - heatAt.getTime() <= HEAT_MAX_LAG_MS;
   const leader = ok ? asRecord(heat.leader) : null;
   const num = (value: unknown): number | null =>
     typeof value === "number" && Number.isFinite(value) ? value : null;

@@ -511,11 +511,61 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     });
   });
 
-  it("finds the mint behind a batch TokenSage refused with 404, so the next batch goes through", async () => {
+  it("caches a dead worker's coded batch error as definitive", async () => {
+    const { client, batch } = fakeClient();
+    const wd = `${TAG}-wd`;
+    const error = "worker_died: worker died; retried automatically after 600 s, or now with refresh=true";
+    batch.mockResolvedValue(ok([{ ca: wd, status: "failed", analysis: null, job_id: 9, error }]));
+    noteNarrativeWanted(wd, "full", env);
+    await flushNarrativeRequests(env, client);
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(await prisma.tokenNarrative.findUniqueOrThrow({ where: { mintAddress: wd } })).toMatchObject({
+      status: "failed",
+      failReason: error,
+    });
+  });
+
+  it("splits a batch TokenSage refused with 422, so only the offending mint is left out", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-07T12:00:00Z"));
+      const { client, batch, job } = fakeClient();
+      const good = [`${TAG}-v1`, `${TAG}-v2`, `${TAG}-v3`, `${TAG}-v4`];
+      const bad = `${TAG}-v-bad`;
+      batch.mockImplementation(async (entries: { ca: string }[]) => {
+        if (entries.some((e) => e.ca === bad)) throw new HttpError(422, "https://ts.test/v1/tokens:batch");
+        return ok(entries.map((e) => ({ ca: e.ca, status: "pending", job_id: 50 })));
+      });
+      for (const m of [...good, bad]) noteNarrativeWanted(m, "basic", env);
+      await flushNarrativeRequests(env, client);
+      const accepted = batch.mock.calls.flatMap((c) => cas(c)).filter((m) => m !== bad);
+      expect(new Set(accepted)).toEqual(new Set(good));
+      expect(job).not.toHaveBeenCalled();
+
+      // The offending mint waits out one window; the others are re-sent as queued reads.
+      batch.mockClear();
+      batch.mockImplementation(async (entries: { ca: string }[]) =>
+        ok(entries.map((e) => ({ ca: e.ca, status: "pending", job_id: 50 }))),
+      );
+      noteNarrativeWanted(bad, "basic", env);
+      await flushNarrativeRequests(env, client);
+      const resent = batch.mock.calls.flatMap((c) => cas(c));
+      expect(resent).not.toContain(bad);
+      expect(new Set(resent)).toEqual(new Set(good));
+
+      vi.setSystemTime(Date.now() + 12 * 60_000);
+      noteNarrativeWanted(bad, "basic", env);
+      await flushNarrativeRequests(env, client);
+      expect(cas(batch.mock.calls.at(-1)!)).toContain(bad);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still finds a queued mint whose failed job got a whole batch refused with 404", async () => {
     const { client, batch, job } = fakeClient();
     const t1 = `${TAG}-t1`;
     const t2 = `${TAG}-t2`;
-    const t3 = `${TAG}-t3`;
     batch.mockResolvedValueOnce(
       ok([
         { ca: t1, status: "pending", job_id: 31 },
@@ -526,56 +576,22 @@ describe.skipIf(!dbAvailable)("TokenSage prefetch", () => {
     noteNarrativeWanted(t2, "basic", env);
     await flushNarrativeRequests(env, client);
 
-    // t2's job failed definitively: TokenSage now answers the whole batch 404.
-    batch.mockRejectedValueOnce(new HttpError(404, "https://ts.test/v1/tokens:batch"));
-    job.mockImplementation(async (id: number) =>
-      id === 32
-        ? { job_id: 32, status: "failed", error: "token_not_found: no account found on-chain" }
-        : { job_id: 31, status: "running" },
-    );
-    noteNarrativeWanted(t3, "basic", env);
+    // An older TokenSage answers the whole batch 404 while t2's job failed definitively.
+    batch.mockImplementation(async (entries: { ca: string }[]) => {
+      if (entries.some((e) => e.ca === t2)) throw new HttpError(404, "https://ts.test/v1/tokens:batch");
+      return ok(entries.map((e) => ({ ca: e.ca, status: "pending", job_id: 31 })));
+    });
+    job.mockResolvedValue({
+      job_id: 32,
+      status: "failed",
+      error: "token_not_found: no account found on-chain",
+    });
     await flushNarrativeRequests(env, client);
-    expect(job.mock.calls.map((c) => c[0]).sort()).toEqual([31, 32]);
-
-    batch.mockResolvedValueOnce(ok([]));
+    expect(job.mock.calls.map((c) => c[0])).toEqual([32]);
+    // t2 waits out TokenSage's failure window; t1 is re-sent on its own.
+    batch.mockClear();
     await flushNarrativeRequests(env, client);
-    expect(cas(batch.mock.calls.at(-1)!).sort()).toEqual([t1, t3].sort());
-  });
-
-  it("cools a refused batch's unsent mints for one window when no queued job is to blame", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-10-07T12:00:00Z"));
-      const { client, batch, job } = fakeClient();
-      const n1 = `${TAG}-n1`;
-      const n2 = `${TAG}-n2`;
-      batch.mockResolvedValueOnce(ok([{ ca: n1, status: "pending", job_id: 41 }]));
-      noteNarrativeWanted(n1, "basic", env);
-      await flushNarrativeRequests(env, client);
-
-      // The culprit's entry is gone (given up on, or never ours): the 404 names nobody. n2 was
-      // never sent, so re-sending it each flush would only be refused again - it waits out the
-      // window. n1 keeps its place: re-sending it is how a culprit gets found.
-      batch.mockRejectedValueOnce(new HttpError(404, "https://ts.test/v1/tokens:batch"));
-      job.mockResolvedValue({ job_id: 41, status: "running" });
-      noteNarrativeWanted(n2, "basic", env);
-      await flushNarrativeRequests(env, client);
-      expect(job).toHaveBeenCalledWith(41);
-
-      batch.mockResolvedValueOnce(ok([{ ca: n1, status: "pending", job_id: 41 }]));
-      noteNarrativeWanted(n2, "basic", env);
-      await flushNarrativeRequests(env, client);
-      expect(cas(batch.mock.calls.at(-1)!)).toEqual([n1]);
-
-      // Past the window it is asked for again.
-      vi.setSystemTime(Date.now() + 12 * 60_000);
-      batch.mockResolvedValueOnce(ok([]));
-      noteNarrativeWanted(n2, "basic", env);
-      await flushNarrativeRequests(env, client);
-      expect(cas(batch.mock.calls.at(-1)!)).toContain(n2);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(batch.mock.calls.flatMap((c) => cas(c))).toEqual([t1]);
   });
 
   it("sends every early deep read, and counts them apart from decision-row reads", async () => {
