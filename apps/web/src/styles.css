@@ -13353,7 +13353,7 @@ button.bm-same {
   gap: 6px;
   margin: 6px 0 0;
 }
-/* What a token chart's view is drawn from, under it (and Model View's note). */
+/* The note under a token chart: Model View's window, First 15m's time axis. */
 .tm-chart-src {
   margin: 6px 0 0;
   line-height: 1.5;
