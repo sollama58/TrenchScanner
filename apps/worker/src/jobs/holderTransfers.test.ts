@@ -6,8 +6,10 @@ import { readTopHolders, resetLinkedWallets } from "./linkedWallets.js";
 import {
   ACCOUNT_REREAD_MS,
   holderTransfersOf,
+  onHolderStreamTx,
   resetHolderTransfers,
   resolveHolderTransfers,
+  setHolderTransferStream,
   takeHolderTransferStats,
 } from "./holderTransfers.js";
 
@@ -140,5 +142,72 @@ describe("holder transfers", () => {
     expect(holderTransfersOf(group, NOW)).toBeNull();
     await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 5, nowMs: NOW + 1 });
     expect(holderTransfersOf(group, NOW + 1)?.transferredSupplyPct).toBe(3);
+  });
+
+  describe("with the Helius stream", () => {
+    /** A stream that has followed every account since `since` (null: not following). */
+    function fakeStream(since: number | null) {
+      const s = {
+        since,
+        watch: vi.fn(),
+        coveredSince: vi.fn(() => s.since),
+        takeStats: vi.fn(() => ({ connected: 1, subscriptions: 1, txs: 0, bytes: 0, credits: 0 })),
+      };
+      return s;
+    }
+    /** The same transfer as the stream delivers it, with the token accounts it touched. */
+    const streamed = {
+      ...transfer,
+      transaction: { signatures: ["live-send"], message: { accountKeys: [{ pubkey: A }, "acc-a", "acc-b"] } },
+    } as ChainTx;
+
+    it("follows a contender's holder accounts and stops re-reading them once covered", async () => {
+      const stream = fakeStream(NOW - 60_000);
+      setHolderTransferStream(stream);
+      const helius = fakeHelius({ "acc-a": ["x"], "acc-b": ["y"], "acc-c": ["z"] }, {});
+      const group = { mintAddress: MINT, holders: [], creator: null };
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: NOW });
+      expect(stream.watch).toHaveBeenCalledWith(MINT, ["acc-a", "acc-b", "acc-c"], NOW);
+      expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(1);
+
+      // A transfer between two holders arrives on the stream, transaction and all.
+      onHolderStreamTx(MINT, "live-send", streamed, NOW + 5_000);
+      const later = NOW + ACCOUNT_REREAD_MS + 1;
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: later });
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: later });
+      expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(1);
+      expect(helius.getTransactionsBatch).not.toHaveBeenCalled();
+      expect(holderTransfersOf(group, later)?.transfers).toEqual([
+        { from: A, to: B, pct: 3, count: 1, lastAtMs: NOW + 5_000 },
+      ]);
+    });
+
+    it("reads an account again when the stream started after its last read, or dropped", async () => {
+      // Subscribed just before the read: a transaction in between could be missed.
+      const stream = fakeStream(NOW - 10_000);
+      setHolderTransferStream(stream);
+      const helius = fakeHelius({ "acc-a": ["x"], "acc-b": ["y"], "acc-c": ["z"] }, {});
+      const group = { mintAddress: MINT, holders: [], creator: null };
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: NOW });
+      // The stream's signature goes on the list, but the read point stays put until a read covers the gap.
+      onHolderStreamTx(MINT, "live-send", streamed, NOW + 5_000);
+      const later = NOW + ACCOUNT_REREAD_MS;
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: later });
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: later });
+      expect(helius.getAccountSignaturesBatch.mock.calls[1]![0]).toEqual([
+        { address: "acc-a", until: "x" },
+        { address: "acc-b", until: "y" },
+        { address: "acc-c", until: "z" },
+      ]);
+
+      // Covered from here; then the connection drops and polling takes over again.
+      const after = later + ACCOUNT_REREAD_MS;
+      stream.since = null;
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: after });
+      await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: after });
+      expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(3);
+    });
   });
 });

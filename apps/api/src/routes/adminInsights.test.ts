@@ -23,6 +23,7 @@ const ROUTES = [
   "/admin/tokensage/recent?status=failed",
   `/admin/tokensage/${MINT_DOG}`,
   "/admin/screen?hours=1",
+  "/admin/screen/rejections?minutes=60",
   "/admin/training",
   "/admin/filters",
   "/admin/lookups",
@@ -172,6 +173,21 @@ describe.skipIf(!dbAvailable)("admin insight routes", () => {
     expect(body.reasons).toContainEqual(
       expect.objectContaining({ label: "N% of top-10 holders are fresh wallets (over 70%)" }),
     );
+  });
+
+  it("streams rejected tokens with each reason grouped, and refuses an odd window", async () => {
+    const body = (await call("/admin/screen/rejections?minutes=15", "admin")).json();
+    const cat = body.rejections.find((r: { mint: string }) => r.mint === MINT_CAT);
+    expect(cat).toMatchObject({ symbol: "Cat", marketCapUsd: 40_000, passedSince: false });
+    expect(cat.reasons).toEqual([
+      {
+        text: "82% of top-10 holders are fresh wallets (over 70%)",
+        label: "N% of top-10 holders are fresh wallets (over 70%)",
+      },
+    ]);
+    // The passing token never shows.
+    expect(body.rejections.some((r: { mint: string }) => r.mint === MINT_DOG)).toBe(false);
+    expect((await call("/admin/screen/rejections?minutes=20", "admin")).statusCode).toBe(400);
   });
 
   it("lists every filter with its owner", async () => {

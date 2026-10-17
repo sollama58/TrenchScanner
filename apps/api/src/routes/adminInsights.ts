@@ -21,9 +21,22 @@ const DAY_MS = 24 * HOUR_MS;
 const REPORT_CACHE_MS = 5 * 60_000;
 /** The screen and filter views move with every scan cycle; a minute behind is fine. */
 const LIVE_CACHE_MS = 60_000;
+/** The rejection feed is read as it happens: one fill per 15s however many admin tabs poll it. */
+const FEED_CACHE_MS = 15_000;
+/** The rejection feed's windows, in minutes. */
+const REJECTION_WINDOWS = [15, 60, 180, 360];
+/** The newest rejected tokens the feed returns. */
+const REJECTION_FEED_LIMIT = 300;
 
 const daysSchema = z.object({ days: z.coerce.number().int().min(1).max(7).default(1) });
 const hoursSchema = z.object({ hours: z.coerce.number().int().min(1).max(6).default(1) });
+const rejectionsSchema = z.object({
+  minutes: z.coerce
+    .number()
+    .int()
+    .refine((m) => REJECTION_WINDOWS.includes(m), "minutes must be 15, 60, 180 or 360")
+    .default(60),
+});
 const recentSchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   status: z.enum(["complete", "partial", "failed"]).optional(),
@@ -409,6 +422,60 @@ async function buildScreenReport(hours: number) {
   };
 }
 
+/**
+ * Admin > Safety screen's live rejection feed: every token the screen rejected in the last
+ * `minutes`, newest first, each at its newest rejecting scan with that scan's reasons (raw, and
+ * grouped by screenReasonLabel so the page can hide a reason). A token rejected again moves back
+ * to the top. Tokens are found through the indexed Token(firstSeenAt) and Token(firstInBandAt)
+ * windows - discovered in the last 6h, or first in the band in the last day - then one
+ * (tokenId, takenAt) index probe each, never a walk of TokenSnapshot by time.
+ */
+async function buildRejectionFeed(minutes: number) {
+  const now = Date.now();
+  const since = new Date(now - minutes * 60_000);
+  const seenSince = new Date(now - 6 * HOUR_MS);
+  const inBandSince = new Date(now - DAY_MS);
+  const rows = await prisma.$queryRaw<
+    {
+      mint: string;
+      symbol: string | null;
+      first_seen_at: Date;
+      taken_at: Date;
+      reasons: string[];
+      mcap: number | null;
+      passed_since: boolean;
+    }[]
+  >`
+    SELECT t."mintAddress" AS mint, t.symbol, t."firstSeenAt" AS first_seen_at,
+           s."takenAt" AS taken_at, s."rugScreenReasons" AS reasons, s."marketCapUsd" AS mcap,
+           EXISTS (
+             SELECT 1 FROM "TokenSnapshot" p
+             WHERE p."tokenId" = t.id AND p."takenAt" > s."takenAt" AND p."rugScreenPassed"
+           ) AS passed_since
+    FROM "Token" t
+    CROSS JOIN LATERAL (
+      SELECT "takenAt", "rugScreenReasons", "marketCapUsd" FROM "TokenSnapshot"
+      WHERE "tokenId" = t.id AND "takenAt" > ${since} AND NOT "rugScreenPassed"
+      ORDER BY "takenAt" DESC LIMIT 1
+    ) s
+    WHERE t."firstSeenAt" > ${seenSince} OR t."firstInBandAt" > ${inBandSince}
+    ORDER BY s."takenAt" DESC
+    LIMIT ${REJECTION_FEED_LIMIT}`;
+  return {
+    window: { minutes, since },
+    checkedAt: new Date(now),
+    rejections: rows.map((r) => ({
+      mint: r.mint,
+      symbol: r.symbol,
+      firstSeenAt: r.first_seen_at,
+      takenAt: r.taken_at,
+      marketCapUsd: r.mcap,
+      passedSince: r.passed_since,
+      reasons: r.reasons.map((text) => ({ text, label: screenReasonLabel(text) })),
+    })),
+  };
+}
+
 /** Training runs, the default model's history, takeovers, probation and the score's weight fits. */
 async function buildTrainingReport() {
   const now = Date.now();
@@ -672,6 +739,15 @@ export async function registerAdminInsightRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     return screen(parsed.data.hours, () => buildScreenReport(parsed.data.hours));
+  });
+
+  const rejections = keyedCache<Awaited<ReturnType<typeof buildRejectionFeed>>>(FEED_CACHE_MS);
+  app.get("/screen/rejections", async (request, reply) => {
+    const parsed = rejectionsSchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    return rejections(parsed.data.minutes, () => buildRejectionFeed(parsed.data.minutes));
   });
 
   const training = new SharedCache<Awaited<ReturnType<typeof buildTrainingReport>>>(LIVE_CACHE_MS);

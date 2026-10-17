@@ -243,6 +243,23 @@ const envSchema = z.object({
   // reads off (coins then show no transfer links).
   HOLDER_TRANSFER_SIGNATURE_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(60),
   HOLDER_TRANSFER_TX_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
+  // Follows those holders' token accounts on Helius's enhanced websocket (worker's
+  // heliusAccountStream.ts, user ask 2026-10-17: credits) instead of re-reading their signatures
+  // every 10 minutes. Streaming bills by size, and holder accounts are quiet, so it costs a small
+  // share of the reads it replaces; the scan heartbeat's heliusStream shows what it really spends.
+  // Needs HELIUS_API_KEY on a Developer plan or higher. Off until turned on.
+  HELIUS_HOLDER_STREAM: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  // Follows the subscription mint on the same Helius websocket and runs the burn reconciler as soon
+  // as a transaction lands on it (worker's BurnStreamWake, user ask 2026-10-17), so a burn grants
+  // access in seconds; BURN_SCAN_INTERVAL_MINUTES stays the backstop. The mint sees ~53
+  // transactions a day, so it costs next to nothing. Needs HELIUS_API_KEY.
+  HELIUS_BURN_STREAM: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   // The longest a curated decision waits for the Linked and CEX-funded counts to be read over the
   // chain's top 25 once the token is otherwise ready (worker's linkedListReady; user ask 2026-10-13).
   // Coins under SNIPER_SHARE_WAIT_MIN_AGE_MINUTES don't wait. Past it the decision goes ahead on

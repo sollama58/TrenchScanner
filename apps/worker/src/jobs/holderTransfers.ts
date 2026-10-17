@@ -2,14 +2,21 @@ import {
   createLogger,
   holderTransfersReading,
   isServiceWallet,
+  keysOf,
   linkingTransfers,
   prisma,
   sharedSignatures,
   transferMovesOf,
+  type ChainTx,
   type HeliusClient,
   type HolderTransfersReading,
   type TransferMove,
 } from "@trenchscanner/core";
+import {
+  STREAM_SETTLE_MS,
+  type HeliusAccountStream,
+  type HeliusStreamStats,
+} from "../discovery/heliusAccountStream.js";
 import { cachedHolderAccounts, cachedTopHolders, topHolderWalletsOf } from "./linkedWallets.js";
 
 const logger = createLogger("holder-transfers");
@@ -29,6 +36,12 @@ const logger = createLogger("holder-transfers");
  * on its own per-cycle budget; every other coin gets a reading from the caches alone, so a coin
  * keeps its links on later scans while its holders stay the same. Display and a recorded stat
  * only: no filter, safety screen, Linked count or model reads it.
+ *
+ * With the Helius stream on (HELIUS_HOLDER_STREAM, user ask 2026-10-17: credits), each coin read
+ * here also has its holders' accounts followed live (discovery/heliusAccountStream.ts). An account
+ * read after its subscription settled is then kept fresh by the stream instead of being read again
+ * every ACCOUNT_REREAD_MS, and a transfer between two holders arrives with its transaction, so it
+ * needs no getTransaction either. Whatever the stream doesn't cover is read as before.
  */
 
 /** How long an account's signatures stand before a contender's are read again (newer ones only). */
@@ -53,6 +66,50 @@ const txMoves = new Map<string, { atMs: number | null; moves: TransferMove[]; si
 
 let calls = { getSignaturesForAddress: 0, getTransaction: 0 };
 
+type HolderStream = Pick<HeliusAccountStream, "watch" | "coveredSince" | "takeStats">;
+let stream: HolderStream | null = null;
+
+/** Hands the module the Helius stream (null turns it off): see the note at the top. */
+export function setHolderTransferStream(s: HolderStream | null): void {
+  stream = s;
+}
+
+/** The stream's counts since the last call, for the scan's heartbeat; null with the stream off. */
+export function takeHolderStreamStats(): HeliusStreamStats | null {
+  return stream?.takeStats() ?? null;
+}
+
+/** Whether the stream has followed `account` (of `mint`) without a break since it was last read. */
+function streamCovers(mint: string, account: string, e: AccountSignatures): boolean {
+  const since = stream?.coveredSince(mint, account) ?? null;
+  return since !== null && e.atMs >= since + STREAM_SETTLE_MS;
+}
+
+/**
+ * A transaction the stream delivered for `mint`'s holder accounts: its signature goes on each
+ * account's list (and moves that account's read point only when the stream covers it, so a gap
+ * is still read), and its moves of the coin are kept when it touched two or more of them.
+ */
+export function onHolderStreamTx(mint: string, signature: string, tx: ChainTx, nowMs = Date.now()): void {
+  if (tx.meta?.err) return;
+  let touched = 0;
+  for (const address of new Set(keysOf(tx))) {
+    const e = accountSigs.get(address);
+    if (!e) continue;
+    touched += 1;
+    e.sigs.set(signature, nowMs);
+    if (streamCovers(mint, address, e)) {
+      e.newest = signature;
+      e.atMs = nowMs;
+    }
+  }
+  const key = `${mint}:${signature}`;
+  if (touched >= 2 && !txMoves.has(key)) {
+    const moves = transferMovesOf(mint, tx);
+    rememberMoves(key, moves ? { atMs: nowMs, moves, signature } : null);
+  }
+}
+
 /** Calls since the last call, for the scan's heartbeat: 1 credit each. */
 export function takeHolderTransferStats(): {
   getSignaturesForAddress: number;
@@ -66,6 +123,7 @@ export function takeHolderTransferStats(): {
 
 /** Test hook. */
 export function resetHolderTransfers(): void {
+  stream = null;
   accountSigs.clear();
   txMoves.clear();
   takeHolderTransferStats();
@@ -123,11 +181,18 @@ export async function resolveHolderTransfers(
   // Signatures, a whole coin at a time.
   const due: { address: string; until: string | null }[] = [];
   const queued = new Set<string>();
-  for (const { h } of read) {
-    const accounts = [...new Set([...h.accountsOf.values()].flat())].filter((a) => {
+  for (const { g, h } of read) {
+    const all = [...new Set([...h.accountsOf.values()].flat())];
+    stream?.watch(g.mintAddress, all, now);
+    const accounts = all.filter((a) => {
       if (queued.has(a)) return false;
       const e = accountSigs.get(a);
-      return !e || now - e.atMs >= ACCOUNT_REREAD_MS;
+      if (!e) return true;
+      if (streamCovers(g.mintAddress, a, e)) {
+        e.atMs = now;
+        return false;
+      }
+      return now - e.atMs >= ACCOUNT_REREAD_MS;
     });
     if (accounts.length === 0 || due.length + accounts.length > opts.maxSignatureReads) continue;
     for (const a of accounts) {

@@ -19,6 +19,7 @@ import {
   RugCheckClient,
   HeliusClient,
   SolanaRpc,
+  SUBSCRIPTION_MINT,
   SolanaTrackerClient,
   lastHeartbeatAt,
   lastSuccessfulRunAt,
@@ -54,7 +55,7 @@ import { runAiJudgeJob } from "./jobs/aiJudgeJob.js";
 import { aiReviewEnabled } from "./ai/reviewer.js";
 import { drainShadowReviews } from "./jobs/curatedAlerts.js";
 import { runLighthouseRollupJob } from "./jobs/lighthouseRollupJob.js";
-import { reconcileBurns } from "./jobs/burnReconciler.js";
+import { BurnStreamWake, reconcileBurns } from "./jobs/burnReconciler.js";
 import { runPipelineWatch } from "./jobs/pipelineWatchJob.js";
 import { createTradingBotRunner } from "./jobs/tradingBotJob.js";
 import { createPaperTradingRunner } from "./jobs/paperTradingJob.js";
@@ -81,6 +82,8 @@ import { applyKnownSides, applyKolOverrides, runKolWalletsJob } from "./jobs/kol
 import { keepCadenceDelayMs, offsetCadenceDelayMs, trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
+import { HeliusAccountStream } from "./discovery/heliusAccountStream.js";
+import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
 import { startNarrativePolling } from "./tokensage/prefetch.js";
 
@@ -109,6 +112,32 @@ const MANUAL_RUN_CHECK_MS = 30_000;
 /** The check that starts `job` early on an admin's "Run now" (see adminJobRuns.ts in the API). */
 function onRunNow(job: HeartbeatJob) {
   return { everyMs: MANUAL_RUN_CHECK_MS, due: () => manualRunRequested(job) };
+}
+
+/** The Helius stream's key for the subscription mint (holder keys are coin mints). */
+const BURN_STREAM_KEY = "burn-scan";
+/** How often the burn reconciler checks whether the stream saw its mint move. */
+const BURN_WAKE_CHECK_MS = 2_000;
+
+/**
+ * The burn reconciler's early runs: an admin's "Run now", as for every job, and, with the Helius
+ * stream on, a transaction on the subscription mint (BurnStreamWake). The stream is checked every
+ * BURN_WAKE_CHECK_MS, the database's run-now requests at their usual pace.
+ */
+function burnRunEarly(stream: HeliusAccountStream | null, wake: BurnStreamWake) {
+  if (!stream) return onRunNow("burn-scan");
+  let manualCheckedAt = 0;
+  return {
+    everyMs: BURN_WAKE_CHECK_MS,
+    due: async () => {
+      // Asked again on every check, so the stream never drops the mint as unwatched.
+      stream.watch(BURN_STREAM_KEY, [SUBSCRIPTION_MINT]);
+      if (wake.take()) return true;
+      if (Date.now() - manualCheckedAt < MANUAL_RUN_CHECK_MS) return false;
+      manualCheckedAt = Date.now();
+      return manualRunRequested("burn-scan");
+    },
+  };
 }
 
 /**
@@ -204,6 +233,22 @@ async function main() {
       ? new PumpPortalStream(env.PUMPPORTAL_WS_URL, undefined, { tradeFlow: env.PUMPPORTAL_TRADE_FLOW })
       : undefined;
   stream?.start();
+  // One Helius websocket, only in the process that scans and reconciles burns: it keeps contenders'
+  // holder accounts fresh instead of re-reading them (holderTransfers.ts, HELIUS_HOLDER_STREAM), and
+  // wakes the burn reconciler when the subscription mint moves (BurnStreamWake, HELIUS_BURN_STREAM).
+  const burnWake = new BurnStreamWake();
+  const holderStreamOn = scans && env.HELIUS_HOLDER_STREAM;
+  const burnStreamOn = runsJob(role, "burn-scan") && env.HELIUS_BURN_STREAM;
+  const heliusStream =
+    (holderStreamOn || burnStreamOn) && env.HELIUS_API_KEY
+      ? new HeliusAccountStream(HeliusAccountStream.urlFor(env.HELIUS_API_KEY), (key, signature, tx) => {
+          if (key === BURN_STREAM_KEY) burnWake.wake();
+          else onHolderStreamTx(key, signature, tx);
+        })
+      : null;
+  heliusStream?.start();
+  if (heliusStream && burnStreamOn) heliusStream.watch(BURN_STREAM_KEY, [SUBSCRIPTION_MINT]);
+  setHolderTransferStream(holderStreamOn ? heliusStream : null);
   // TokenSage requests queued by the scan are re-sent between cycles too - see
   // startNarrativePolling. The queue lives in the scanning process.
   const stopNarrativePolling = scans ? startNarrativePolling(env) : undefined;
@@ -449,7 +494,7 @@ async function main() {
         return counts;
       }),
       env.BURN_SCAN_INTERVAL_MINUTES,
-      { runEarly: onRunNow("burn-scan") },
+      { runEarly: burnRunEarly(heliusStream && burnStreamOn ? heliusStream : null, burnWake) },
     ),
   );
   // Free Access's end: an hour after a period runs out or an admin switches it off
@@ -812,6 +857,7 @@ async function main() {
     logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS, exitCode: code });
     for (const { job } of jobs) job.stop();
     stream?.stop();
+    heliusStream?.stop();
     launchPoller?.stop();
     stopNarrativePolling?.();
     // Detached shadow AI reviews get their whole timeout (see REVIEW_DRAIN_SLACK_MS): one cut off

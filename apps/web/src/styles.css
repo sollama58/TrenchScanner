@@ -5773,6 +5773,75 @@ html:has(dialog.about-modal[open]) {
   color: var(--ink-2);
   word-break: break-word;
 }
+/* Admin > Safety screen's live rejection feed (RejectionFeedPanel in tabs/AdminInsights.tsx). */
+.reject-feed-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.reject-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.reject-reasons .chip {
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: normal;
+  text-align: left;
+  color: var(--muted);
+  text-decoration: line-through;
+  transition:
+    background 0.12s,
+    color 0.12s,
+    border-color 0.12s;
+}
+.reject-reasons .chip.on {
+  color: var(--brand-ink);
+  text-decoration: none;
+  background: color-mix(in srgb, var(--brand-a) 12%, var(--surface-3));
+  border-color: color-mix(in srgb, var(--brand-a) 40%, transparent);
+}
+.reject-reasons .chip .num {
+  opacity: 0.75;
+}
+.reject-reasons-all {
+  display: inline-flex;
+  gap: 12px;
+  margin-left: 4px;
+}
+.reject-feed td {
+  vertical-align: top;
+}
+.reject-why {
+  margin: 0;
+  padding-left: 16px;
+  min-width: 220px;
+  max-width: 520px;
+  font-size: 12px;
+  color: var(--ink-2);
+  word-break: break-word;
+}
+.reject-feed tr.reject-new td {
+  animation: reject-new 2.5s ease-out;
+}
+@keyframes reject-new {
+  from {
+    background: color-mix(in srgb, var(--brand-a) 18%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reject-feed tr.reject-new td {
+    animation: none;
+  }
+}
 .admin-json {
   margin: 0;
   max-height: 480px;
