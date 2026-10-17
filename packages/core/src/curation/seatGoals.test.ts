@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { RETURN_TARGET_CAP_PCT, returnTarget } from "./boosting.js";
 import {
   DEFAULT_RETURN_PAYOFFS,
   expectedReturnPct,
@@ -146,4 +147,41 @@ describe("seat goals", () => {
     const f = { buyRatio24h: 0.5, volume24hUsd: 5_000, ageMinutes: 60 };
     expect(scoreWinOdds(tenX, f)).toBeCloseTo(scoreWinOdds(fourX, f), 9);
   }, 60_000);
+
+  it("fits the return itself for the return objective, with no crash model on top", async () => {
+    const reg = await trainCuratorModel(rows, {
+      learner: "gbdt",
+      boosting: { objective: "return" },
+      goal: "return",
+    });
+    expect(reg.returnRisk).toBeUndefined();
+    expect(reg.kind === "gbdt-v1" && reg.objective).toBe("return");
+    const safeCoin = { buyRatio24h: 0.8, volume24hUsd: 1_000, ageMinutes: 60 };
+    const riskyCoin = { buyRatio24h: 0.8, volume24hUsd: 9_000, ageMinutes: 60 };
+    const dull = { buyRatio24h: 0.1, volume24hUsd: 1_000, ageMinutes: 60 };
+    // Mapped onto a probability like every stored model, in the return's order.
+    const s = scoreCandidateWithModel(reg, safeCoin);
+    expect(s).toBeGreaterThan(0);
+    expect(s).toBeLessThan(1);
+    expect(s).toBeGreaterThan(scoreCandidateWithModel(reg, riskyCoin));
+    expect(s).toBeGreaterThan(scoreCandidateWithModel(reg, dull));
+  }, 60_000);
+});
+
+describe("returnTarget", () => {
+  it("is the return under the exit plan, capped at +500% and floored at the stop", () => {
+    expect(returnTarget(row({ labelValue: 3, returnPct: 874 }))).toBe(RETURN_TARGET_CAP_PCT);
+    expect(RETURN_TARGET_CAP_PCT).toBe(500);
+    expect(returnTarget(row({ labelValue: 2, returnPct: 340 }))).toBe(340);
+    expect(returnTarget(row({ returnPct: -60 }))).toBe(-50);
+    // A late double the 2x label misses still counts what it paid.
+    expect(returnTarget(row({ labelValue: 0, returnPct: 80 }))).toBe(80);
+  });
+
+  it("falls back to the default payoff of a row's kind without a return", () => {
+    expect(returnTarget(row({ labelValue: 1 }))).toBe(DEFAULT_RETURN_PAYOFFS.winPct);
+    expect(returnTarget(row({ crashed: true }))).toBe(DEFAULT_RETURN_PAYOFFS.crashPct);
+    expect(returnTarget(row({ survived: false }))).toBe(DEFAULT_RETURN_PAYOFFS.crashPct);
+    expect(returnTarget(row({}))).toBe(DEFAULT_RETURN_PAYOFFS.flatPct);
+  });
 });

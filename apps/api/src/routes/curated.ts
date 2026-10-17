@@ -23,7 +23,8 @@ import {
 } from "../curatedFeed.js";
 import type { MatchStream } from "../matchStream.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
-import { SharedCache } from "../sharedCache.js";
+import { SharedCache, SharedCacheMap } from "../sharedCache.js";
+import { FEED_COMPARE_DAYS, mixFeedRecord, mixKey, sameMix, type FeedMixRecord } from "../feedCompare.js";
 import {
   buildModelRunHistory,
   fullModelInsights,
@@ -161,6 +162,12 @@ const leaderboardQuerySchema = z.object({ days: leaderboardDaysSchema });
 
 /** Live records move as outcomes finalize (hourly); the Model tab polls every two minutes. */
 const LEADERBOARD_CACHE_TTL_MS = 3 * 60_000;
+
+/**
+ * The feed comparison's records, one per mix of models: the top models' mix is the same for every
+ * reader, and a reader's own picks rarely change, so a few hundred mixes cover everyone.
+ */
+const FEED_COMPARE_MAX_MIXES = 200;
 
 const chooseModelSchema = z.object({
   /** A contestant id, or null to follow the default. */
@@ -403,6 +410,8 @@ export async function registerCuratedRoutes(
    * one query.
    */
   const pageCache = new Map<string, SharedCache<CuratedPage>>();
+  /** The feed comparison's pooled records, by mix (see /models/compare). */
+  const mixRecords = new SharedCacheMap<FeedMixRecord>(LEADERBOARD_CACHE_TTL_MS, FEED_COMPARE_MAX_MIXES);
 
   /**
    * Drop every cached page the instant a new alert exists.
@@ -566,6 +575,31 @@ export async function registerCuratedRoutes(
       showModelAlerts: saved.showModelAlerts,
       followBest: saved.followBest,
       bothOnly: saved.bothOnly,
+    };
+  });
+
+  /**
+   * "Compared with your selection": the top models' feed (what following them shows) against the
+   * reader's own, each pooled as one feed over the last FEED_COMPARE_DAYS days.
+   */
+  app.get("/models/compare", async (request) => {
+    const [board, state, saved] = await Promise.all([
+      opts.reports.leaderboard(FEED_COMPARE_DAYS),
+      contestState(opts.env),
+      savedFeed(request),
+    ]);
+    const best = state.defaultModels;
+    const mine = resolveFeedModels(state, saved).models;
+    const since = board.window.since;
+    const record = (models: readonly string[]) =>
+      mixRecords.for(mixKey(models)).get(() => mixFeedRecord(models, since, state.lanes, board.catchLedger));
+    const [bestRecord, mineRecord] = await Promise.all([record(best), record(mine)]);
+    return {
+      days: FEED_COMPARE_DAYS,
+      since,
+      best: bestRecord,
+      mine: mineRecord,
+      same: sameMix(best, mine),
     };
   });
 
