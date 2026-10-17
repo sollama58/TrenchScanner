@@ -47,6 +47,22 @@ describe("walletScore", () => {
     expect(long).toBeGreaterThan(short);
   });
 
+  it("keeps the market's rates to two significant figures, so a small drift moves no score", () => {
+    const drifted = walletScoreMarket({
+      appearances: 1003,
+      earlyBuys: 401,
+      early2x: 20,
+      early4x: 4,
+      own2x: 30,
+      own4x: 4,
+      fastExits: 702,
+      dumps: 421,
+    });
+    expect(drifted).toEqual(market);
+    expect(market.early2x).toBe(0.05);
+    expect(walletScoreMarket({ ...average(3, 3), early2x: 1, earlyBuys: 3 }).early2x).toBe(0.33);
+  });
+
   it("leaves out a count the market never shows", () => {
     const thin = walletScoreMarket({ ...average(100, 40), early4x: 0, own4x: 0 });
     expect(Number.isFinite(walletScore(average(10, 5), thin)!)).toBe(true);

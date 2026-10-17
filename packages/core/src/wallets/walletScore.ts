@@ -57,9 +57,17 @@ export interface WalletScoreCounts {
 /** The market's rates, over every wallet's rows: each count over its denominator. */
 export type WalletScoreMarket = Record<keyof typeof WALLET_SCORE_WEIGHTS, number>;
 
+/**
+ * Significant figures the market's rates keep (user decision 2026-10-17). Unrounded, they moved a
+ * little with every tape read, every wallet's score moved in the third decimal with them, and the
+ * hourly rebuild rewrote 38-77 k of ~98 k WalletRisk rows. At two figures a rate steps 1-10% at a
+ * time, so scores move when a wallet's own counts change or a rate crosses a step.
+ */
+export const WALLET_SCORE_MARKET_FIGURES = 2;
+
 /** The market's rates from the totals over every wallet's rows. */
 export function walletScoreMarket(total: WalletScoreCounts): WalletScoreMarket {
-  const of = (k: number, n: number) => (n > 0 ? k / n : 0);
+  const of = (k: number, n: number) => (n > 0 ? Number((k / n).toPrecision(WALLET_SCORE_MARKET_FIGURES)) : 0);
   return {
     early2x: of(total.early2x, total.earlyBuys),
     early4x: of(total.early4x, total.earlyBuys),
