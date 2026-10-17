@@ -455,8 +455,13 @@ export function summarizeTape(trades: readonly TapeTrade[], ctx: TapeContext): W
         w.firstBuyAtMs !== null &&
         w.firstBuyAtMs - ctx.launchAtMs <= LAUNCH_SNIPER_MS;
     }
+    // A sell before the first buy (on a partial tape, of tokens bought before the read began) is
+    // no exit from that buy.
     w.fastExit =
-      w.firstBuyAtMs !== null && w.firstSellAtMs !== null && w.firstSellAtMs - w.firstBuyAtMs <= FAST_EXIT_MS;
+      w.firstBuyAtMs !== null &&
+      w.firstSellAtMs !== null &&
+      w.firstSellAtMs >= w.firstBuyAtMs &&
+      w.firstSellAtMs - w.firstBuyAtMs <= FAST_EXIT_MS;
   }
   return [...byWallet.values()];
 }

@@ -64,6 +64,14 @@ describe("foldClosingTrades", () => {
     ]);
   });
 
+  it("reads no fast exit from a first sell before the first buy", () => {
+    const out = foldClosingTrades(
+      { ...row, buys: 0, firstBuyAt: null, sells: 1, firstSellAt: new Date(2_000) },
+      [t("buy", 1, 10_000_000, 3_000)],
+    );
+    expect(out.fastExit).toBe(false);
+  });
+
   it("keeps an earlier first sell and adds later buys to the bought share", () => {
     const out = foldClosingTrades({ ...row, sells: 1, firstSellAt: new Date(2_000) }, [
       t("buy", 1, 10_000_000, 90 * MIN),
