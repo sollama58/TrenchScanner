@@ -83,6 +83,7 @@ import { keepCadenceDelayMs, offsetCadenceDelayMs, trainingFirstRunDelayMs } fro
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 import { HeliusAccountStream } from "./discovery/heliusAccountStream.js";
+import { CURVE_STREAM_KEY_PREFIX, onCurveStreamUpdate, startCurveTape } from "./jobs/curveTape.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
 import { startNarrativePolling } from "./tokensage/prefetch.js";
@@ -238,13 +239,22 @@ async function main() {
   // wakes the burn reconciler when the subscription mint moves (BurnStreamWake, HELIUS_BURN_STREAM).
   const burnWake = new BurnStreamWake();
   const holderStreamOn = scans && env.HELIUS_HOLDER_STREAM;
+  // The young coins' bonding curves ride the same socket (curveTape.ts, CURVE_TAPE).
+  const curveTapeOn = scans && env.CURVE_TAPE;
   const burnStreamOn = runsJob(role, "burn-scan") && env.HELIUS_BURN_STREAM;
   const heliusStream =
-    (holderStreamOn || burnStreamOn) && env.HELIUS_API_KEY
-      ? new HeliusAccountStream(HeliusAccountStream.urlFor(env.HELIUS_API_KEY), (key, signature, tx) => {
-          if (key === BURN_STREAM_KEY) burnWake.wake();
-          else onHolderStreamTx(key, signature, tx);
-        })
+    (holderStreamOn || burnStreamOn || curveTapeOn) && env.HELIUS_API_KEY
+      ? new HeliusAccountStream(
+          HeliusAccountStream.urlFor(env.HELIUS_API_KEY),
+          (key, signature, tx) => {
+            if (key === BURN_STREAM_KEY) burnWake.wake();
+            else onHolderStreamTx(key, signature, tx);
+          },
+          undefined,
+          (key, data, bytes) => {
+            if (key.startsWith(CURVE_STREAM_KEY_PREFIX)) onCurveStreamUpdate(key, data, bytes);
+          },
+        )
       : null;
   heliusStream?.start();
   if (heliusStream && burnStreamOn) heliusStream.watch(BURN_STREAM_KEY, [SUBSCRIPTION_MINT]);
@@ -311,6 +321,15 @@ async function main() {
     // Puts the last hour of that tape back from the scan's snapshots after a deploy.
     pricePathSeeder: new PricePathSeeder(pricePath),
   };
+  const stopCurveTape = curveTapeOn
+    ? startCurveTape(deps.helius, heliusStream, {
+        maxAgeMinutes: env.CURVE_TAPE_MAX_AGE_MINUTES,
+        maxMints: env.CURVE_TAPE_MAX_MINTS,
+        streamCreditsPerDay: env.CURVE_TAPE_STREAM_CREDITS_PER_DAY,
+        pollSeconds: env.CURVE_TAPE_POLL_SECONDS,
+        pollMaxMints: env.CURVE_TAPE_POLL_MAX_MINTS,
+      })
+    : undefined;
 
   // Reads the chain for the subscription gate. Its own client rather than `deps.helius` because
   // it insists on `finalized` commitment - money depends on these answers, not enrichment quality.
@@ -857,6 +876,7 @@ async function main() {
     logger.info("shutting down", { signal, graceMs: SHUTDOWN_GRACE_MS, exitCode: code });
     for (const { job } of jobs) job.stop();
     stream?.stop();
+    stopCurveTape?.();
     heliusStream?.stop();
     launchPoller?.stop();
     stopNarrativePolling?.();

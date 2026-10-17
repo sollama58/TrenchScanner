@@ -1,3 +1,4 @@
+import { curvePathOf, followYoungCurves, takeCurveTapeStats } from "./curveTape.js";
 import {
   tokenSageHints,
   recordRunProgress,
@@ -944,6 +945,8 @@ async function scanCycle(
   // 2. Re-check the active watchlist against live market data, and keep only the mints currently
   // sitting in (or near) the target band.
   const { tracked, alive } = await selectWatchlist(env);
+  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts).
+  followYoungCurves(tracked);
   lap("watchlist");
 
   if (tracked.length === 0) {
@@ -1857,6 +1860,8 @@ async function scanCycle(
   const holderTransferCalls = takeHolderTransferStats();
   // What the Helius holder stream received since the last cycle, and its estimated credits.
   const heliusStream = takeHolderStreamStats();
+  // The young coins' curve tape: what its stream delivered, its RPC reads, and the day's stream spend.
+  const curveTape = takeCurveTapeStats();
   // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
   const liveTape = takeLiveTapeStats();
   // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
@@ -1885,6 +1890,7 @@ async function scanCycle(
     linkedWalletCalls,
     holderTransferCalls,
     ...(heliusStream ? { heliusStream: { ...heliusStream } } : {}),
+    ...(curveTape ? { curveTape } : {}),
     liveTape,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),
@@ -3041,6 +3047,7 @@ async function processCandidate(
     );
     scored.pricePath = pricePath.features(candidate.mintAddress);
   }
+  scored.curvePath = curvePathOf(candidate.mintAddress);
   if (marketContext) scored.marketContext = marketContext;
   if (freshQuote && plausibleFreshQuote(freshQuote, scored.priceUsd)) scored.freshQuote = freshQuote;
   if (liveStreams) {

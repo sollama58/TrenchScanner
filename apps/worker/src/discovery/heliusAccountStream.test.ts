@@ -49,6 +49,40 @@ function started(onTx = vi.fn()) {
 const subscribes = (socket: FakeSocket) => socket.sent.filter((m) => m.method === "transactionSubscribe");
 
 describe("HeliusAccountStream", () => {
+  it("follows an account key with accountSubscribe and hands over each update", () => {
+    const onAccount = vi.fn();
+    const stream = new HeliusAccountStream(
+      "wss://example",
+      vi.fn(),
+      FakeSocket as unknown as new (url: string) => WebSocket,
+      onAccount,
+    );
+    stream.start();
+    const socket = FakeSocket.last!;
+    socket.open();
+    stream.watch("curve:m", ["curve-acc"], 1_000, "account");
+    const sub = socket.sent.find((m) => m.method === "accountSubscribe")!;
+    expect(sub.params).toEqual(["curve-acc", { commitment: "confirmed", encoding: "base64" }]);
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id: sub.id, result: 5 }), 2_000);
+    expect(stream.coveredSince("curve:m", "curve-acc")).toBe(2_000);
+    const note = JSON.stringify({
+      jsonrpc: "2.0",
+      method: "accountNotification",
+      params: { subscription: 5, result: { context: { slot: 1 }, value: { data: ["AAAA", "base64"] } } },
+    });
+    stream.handleMessage(note);
+    expect(onAccount).toHaveBeenCalledWith("curve:m", "AAAA", note.length);
+    expect(stream.takeStats()).toMatchObject({
+      accountSubscriptions: 1,
+      subscriptions: 0,
+      accountUpdates: 1,
+    });
+    stream.unwatch("curve:m");
+    expect(socket.sent.at(-1)).toMatchObject({ method: "accountUnsubscribe", params: [5] });
+    expect(stream.coveredSince("curve:m", "curve-acc")).toBeNull();
+    stream.stop();
+  });
+
   it("subscribes a key's accounts and covers them once Helius answers", () => {
     const { stream, socket } = started();
     stream.watch("mint-1", ["acc-a", "acc-b"], 1_000);
