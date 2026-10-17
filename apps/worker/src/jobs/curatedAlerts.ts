@@ -77,6 +77,7 @@ import {
   type ServedCuratorExtras,
   type StackedCuratorParams,
   type TrainedCuratorParams,
+  aiReviewerState,
 } from "@trenchscanner/core";
 import { carryHolderReadingOntoAlertRow } from "./holderListWrites.js";
 import { recordCandidateSample, type CandidateSampleRef } from "./candidateOutcomeJob.js";
@@ -1140,15 +1141,19 @@ async function emitForModel(
   const capacity = governorCapacity({ lastHour, lastBurstWindow }, env.CURATED_TARGET_PER_HOUR);
   // Every seat's picks can be reviewed: which ones is reviewPriority's call (the high-conviction
   // tier, user decision 2026-10-14), not the seat's.
-  const reviewing = aiReviewEnabled(env);
+  // The Admin panel's AI reviewer switch sits on top of the key and the mode: "off" asks
+  // nothing, and "admins" (testing) runs as shadow whatever the mode says, so no verdict can hold
+  // a pick back from the feed (core's curation/aiSwitch.ts).
+  const aiState = aiReviewEnabled(env) ? await aiReviewerState() : "off";
+  const reviewing = aiState !== "off";
   // Gate mode only once the reviewer has earned it, one of two ways: a learned blend of its odds
   // and the model's that beat the model alone walking forward and on held-out rows (ai/blend.ts) -
   // which then decides what is held back - or, before there is one, a graded record whose buys
   // beat the pool it reviewed with a 95% lower bound above 0 (aiGateQualified), with its bare
   // no_buy as the veto. Until then a gate-mode reviewer runs as shadow.
-  const blend = reviewing && env.AI_REVIEW_MODE === "gate" ? await usableAiBlend() : null;
-  const gating =
-    reviewing && env.AI_REVIEW_MODE === "gate" && (blend !== null || (await aiGateQualified(env)));
+  const gateMode = aiState === "live" && env.AI_REVIEW_MODE === "gate";
+  const blend = gateMode ? await usableAiBlend() : null;
+  const gating = gateMode && (blend !== null || (await aiGateQualified(env)));
   // A token the reviewer just passed on doesn't contend again until its veto cools down -
   // otherwise it would win the same slot and buy the same review every minute.
   const contenders = onePerToken(

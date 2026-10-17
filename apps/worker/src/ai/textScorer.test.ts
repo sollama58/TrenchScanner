@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma, loadEnv, type Env } from "@trenchscanner/core";
+import { prisma, loadEnv, resetAiReviewerSwitchCache, type Env } from "@trenchscanner/core";
 
 const parse = vi.fn();
 vi.mock("./client.js", () => ({
@@ -20,6 +20,7 @@ describe.skipIf(!dbAvailable)("text scorer", () => {
   const env: Env = dbAvailable ? { ...base, ANTHROPIC_API_KEY: "test-key", AI_TEXT_MAX_PER_HOUR: 2 } : base;
 
   beforeEach(() => {
+    resetAiReviewerSwitchCache("admins");
     resetTextScorer();
     resetAiBudget();
     parse.mockReset();
@@ -32,6 +33,7 @@ describe.skipIf(!dbAvailable)("text scorer", () => {
   });
 
   afterAll(async () => {
+    resetAiReviewerSwitchCache();
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
   });
@@ -59,6 +61,9 @@ describe.skipIf(!dbAvailable)("text scorer", () => {
   it("never asks without a key, twice for a scored token, or past the hourly cap", async () => {
     const token = await newToken("b");
     expect(requestTextScores(token, { ...env, ANTHROPIC_API_KEY: "" })).toBeNull();
+    resetAiReviewerSwitchCache("off");
+    expect(requestTextScores(token, env)).toBeNull();
+    resetAiReviewerSwitchCache("admins");
     expect(requestTextScores({ ...token, aiTextScoredAt: new Date() }, env)).toBeNull();
     expect(
       requestTextScores({ ...token, aiTextScoredAt: new Date() }, { ...env, AI_TEXT_FEATURES: false }),

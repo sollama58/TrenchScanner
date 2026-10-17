@@ -68,6 +68,51 @@ export interface AiReviewResult {
   curatorProbability?: number | null;
 }
 
+/**
+ * The verdict in a response's text, or null when there is none that fits the schema. Read from
+ * the last text block: the SDK's parse() throws on any block that isn't JSON - a reply cut off at
+ * max_tokens, a refusal's partial text, the first model's partial answer before a fallback took
+ * over - which turned a billed call into an untyped error before the refusal and "no parsable
+ * verdict" checks could see it.
+ */
+export function parseVerdictText(
+  content: { type: string; text?: string }[],
+): z.infer<typeof VerdictSchema> | null {
+  const text = content.filter((b) => b.type === "text" && typeof b.text === "string").at(-1)?.text;
+  if (!text) return null;
+  try {
+    const parsed = VerdictSchema.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reviews in flight at once, across every seat and both modes. Shadow reviews run detached, so a
+ * busy cycle used to fire all its high-conviction picks together - straight into a new key's rate
+ * limit. The rest wait their turn (their budget is reserved only once they run).
+ */
+const MAX_REVIEWS_IN_FLIGHT = 3;
+let reviewsInFlight = 0;
+const reviewQueue: (() => void)[] = [];
+
+async function withReviewSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (reviewsInFlight >= MAX_REVIEWS_IN_FLIGHT) {
+    await new Promise<void>((resolve) => reviewQueue.push(resolve));
+  } else {
+    reviewsInFlight += 1;
+  }
+  try {
+    return await fn();
+  } finally {
+    // The slot passes straight to the next in line, or is freed.
+    const next = reviewQueue.shift();
+    if (next) next();
+    else reviewsInFlight -= 1;
+  }
+}
+
 /** Turns a schema-valid model answer into the stored verdict: probabilities clamped, text capped. */
 export function verdictFromParsed(parsed: z.infer<typeof VerdictSchema>): AiReviewVerdict {
   return {
@@ -283,9 +328,9 @@ export async function reviewPick(
   decision: CurationDecision,
   env: Env,
   /**
-   * Gate mode awaits the verdict inside the scan's emission cycle: no client retry there, so a
-   * slow call costs one timeout at most before the pick fails open, not two. isDefault: the pick
-   * is the default seat's (see reviewPriority).
+   * gate: the caller awaits the verdict inside the scan's emission cycle (no call is retried, so
+   * a slow one costs one timeout at most before the pick fails open). isDefault: the pick is the
+   * default seat's (see reviewPriority).
    */
   opts: { gate?: boolean; isDefault?: boolean } = {},
 ): Promise<AiReviewResult | null> {
@@ -294,6 +339,16 @@ export async function reviewPick(
   // Launcher text written to steer the reviewer is a pass on its own, decided here so the model
   // is never the only check against it (and no spend goes on reading it).
   if (launcherTextInstructs(scored)) return launcherTextVeto(scored, decision);
+  return withReviewSlot(() => callReviewer(scored, decision, env, priority));
+}
+
+/** The call itself, once a review slot is free - see reviewPick. */
+async function callReviewer(
+  scored: ScoredToken,
+  decision: CurationDecision,
+  env: Env,
+  priority: "live" | "background",
+): Promise<AiReviewResult | null> {
   const reservation = await reserveAiSpend(
     env,
     priority === "live" ? "review" : "review-spare",
@@ -313,7 +368,7 @@ export async function reviewPick(
     curatorProbability: curatorProbabilityOf(decision) ?? null,
   };
   try {
-    const response = await anthropicClient(env).beta.messages.parse(
+    const response = await anthropicClient(env).beta.messages.create(
       {
         model: env.AI_REVIEW_MODEL,
         max_tokens: 16000,
@@ -329,7 +384,10 @@ export async function reviewPick(
         messages: [{ role: "user", content: brief }],
         output_config: { effort: env.AI_REVIEW_EFFORT, format: betaZodOutputFormat(VerdictSchema) },
       },
-      opts.gate ? { maxRetries: 0 } : undefined,
+      // No client retry, shadow included: a retried timeout bills twice against one estimate,
+      // and two timeouts outlast the shutdown drain (index.ts), so a deploy lost the paid answer.
+      // A failed review is recorded with its error; the next seat's call on the coin asks again.
+      { maxRetries: 0 },
     );
     const latencyMs = Date.now() - startedAt;
     await settleAiSpend(reservation, responseCostUsd(env.AI_REVIEW_MODEL, response), "review");
@@ -348,7 +406,7 @@ export async function reviewPick(
         latencyMs,
       };
     }
-    const parsed = response.parsed_output;
+    const parsed = parseVerdictText(response.content);
     if (!parsed) {
       return {
         ...usage,

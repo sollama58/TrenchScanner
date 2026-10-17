@@ -89,6 +89,7 @@ export * from "./curation/textFeatures.js";
 export * from "./curation/aiJudge.js";
 export * from "./curation/aiBlend.js";
 export * from "./curation/aiSpend.js";
+export * from "./curation/aiSwitch.js";
 export * from "./curation/pricePath.js";
 export * from "./curation/curveTape.js";
 export * from "./curation/calibration.js";

@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { namePassLock, PASS_LOCK_APPLICATION_NAME, prisma } from "../db.js";
 import { createLogger } from "../logger.js";
 import { contestantSpec } from "../curation/contestants.js";
+import { aiReviewerState } from "../curation/aiSwitch.js";
 import type { ExitPlan } from "../curation/profitSim.js";
 import {
   effectiveExitPlan,
@@ -1826,6 +1827,11 @@ export type AiGateOutcome =
  * after it that do have a verdict are decided now all the same (one never reviewed must not hold
  * a reviewed buy until it goes stale), and once only: `owner` (the bot or strategy) keys them so
  * the re-reads pass over them.
+ *
+ * `live`: a real-money bot. It reads verdicts only while the Admin panel's AI reviewer switch is
+ * "live"; in the "admins" testing state (and off) it is as if there were none - every signal is
+ * skipped, as before the reviewer ran - so a test can't move money. Paper strategies always read
+ * them: that is how a bot that follows the judge is tried out.
  */
 export async function gateOnAiVerdicts(
   owner: string,
@@ -1833,9 +1839,20 @@ export async function gateOnAiVerdicts(
   through: Date,
   config: TradingBotConfig,
   now: Date,
+  opts: { live?: boolean } = {},
 ): Promise<{ outcomes: AiGateOutcome[]; through: Date }> {
   if (!config.sources.requireAiBuy || signals.length === 0) {
     return { outcomes: signals.map((signal) => ({ signal, verdict: "buy" as const })), through };
+  }
+  if (opts.live && (await aiReviewerState()) !== "live") {
+    return {
+      outcomes: signals.map((signal) => ({
+        signal,
+        verdict: "skip" as const,
+        why: "the AI judge isn't live for trading bots yet (Admin › AI reviewer switch)",
+      })),
+      through,
+    };
   }
   const earliest = Math.min(...signals.map((s) => s.at.getTime()));
   const reviews = await prisma.aiReview.findMany({
@@ -2016,7 +2033,9 @@ async function runBotEntries(
     bot.configSavedAt,
   );
   // With requireAiBuy, the AI judge's verdicts decide, and a signal still awaiting one holds the window.
-  const { outcomes, through } = await gateOnAiVerdicts(bot.id, loaded.signals, loaded.through, config, now);
+  const { outcomes, through } = await gateOnAiVerdicts(bot.id, loaded.signals, loaded.through, config, now, {
+    live: true,
+  });
   // The window is consumed whatever happens to its signals: a skipped signal is never bought later.
   if (through > bot.signalsFrom) {
     await prisma.tradingBot.update({ where: { id: bot.id }, data: { signalsFrom: through } });
