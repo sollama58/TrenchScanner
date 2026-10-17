@@ -8,7 +8,13 @@ import {
   type ChainTx,
   type PumpFunTradesPage,
 } from "@trenchscanner/core";
-import { resetTradeTapeState, runTradeTapeJob, stoppedAtOf, type TradeTapeDeps } from "./tradeTapeJob.js";
+import {
+  heliusPagesLeft,
+  resetTradeTapeState,
+  runTradeTapeJob,
+  stoppedAtOf,
+  type TradeTapeDeps,
+} from "./tradeTapeJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -107,6 +113,17 @@ describe("stoppedAtOf", () => {
     expect(stoppedAtOf({ stoppedAt: new Date(1), rule4Grade: { stoppedAt: null } })).toBeNull();
     expect(stoppedAtOf({ stoppedAt: new Date(1), rule4Grade: { stoppedAt: iso(5) } })?.getTime()).toBe(5);
     expect(stoppedAtOf({ stoppedAt: new Date(1), rule4Grade: null })?.getTime()).toBe(1);
+  });
+});
+
+describe("heliusPagesLeft", () => {
+  it("estimates the pages left at the pace of the last five", () => {
+    expect(heliusPagesLeft([0, 1_000, 2_000, 3_000, 4_000], 60_000)).toBeNull(); // too few pages yet
+    // Five pages in the last 50 s: 10 s a page, 600 s to go.
+    expect(heliusPagesLeft([0, 0, 10_000, 20_000, 30_000, 40_000, 50_000], 650_000)).toBe(60);
+    // Pages within one block time read as a second's worth.
+    expect(heliusPagesLeft([5_000, 5_000, 5_000, 5_000, 5_000, 5_000], 6_000)).toBe(5);
+    expect(heliusPagesLeft([0, 1, 2, 3, 4, 70_000], 60_000)).toBe(0);
   });
 });
 
@@ -284,6 +301,134 @@ describe.skipIf(!dbAvailable)("trade tape job", () => {
       source: "helius",
     });
   });
+  it("hands a busy coin to Pump.fun early, on the next run, and keeps it from Helius", async () => {
+    const busy = await seedCalled("busy", null);
+    const mint = busy.token.mintAddress;
+    const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
+    // A page every second from the launch, against a window that runs 33 minutes: ~2,000 pages.
+    const asked: string[] = [];
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m, opts) => {
+        asked.push(m);
+        const i = opts?.paginationToken ? Number(opts.paginationToken) : 0;
+        return {
+          status: "ok",
+          paginationToken: String(i + 1),
+          txs: [
+            {
+              blockTime: LAUNCH / 1000 + i,
+              transaction: { signatures: [`busy-${i}`], message: { accountKeys: [dev, "ata"] } },
+              meta: {
+                err: null,
+                preTokenBalances:
+                  i === 0
+                    ? []
+                    : [
+                        {
+                          accountIndex: 1,
+                          mint: m,
+                          owner: dev,
+                          uiTokenAmount: { amount: String(i * 1e6), decimals: 6 },
+                        },
+                      ],
+                postTokenBalances: [
+                  {
+                    accountIndex: 1,
+                    mint: m,
+                    owner: dev,
+                    uiTokenAmount: { amount: String((i + 1) * 1e6), decimals: 6 },
+                  },
+                ],
+                preBalances: [10e9, 0],
+                postBalances: [9e9, 0],
+              },
+            },
+          ],
+        };
+      },
+    };
+    const none = pumpFunStub("none", []);
+    let now = NOW;
+    const meta = await runTradeTapeJob(
+      { helius, pumpFun: none.stub },
+      { heliusPagesPerRun: 50, pumpFunCallsPerRun: 0, now: () => now },
+    );
+    expect(meta.handedOff).toBe(1);
+    expect(asked.filter((m) => m === mint)).toHaveLength(10); // not 100
+    const handed = await prisma.tokenTradeTape.findUnique({ where: { tokenId: busy.token.id } });
+    expect(handed).toMatchObject({ status: "failed", source: "helius:busy", calls: 10 });
+    expect(handed!.retryAt!.getTime()).toBeLessThanOrEqual(now);
+
+    // Next run: Pump.fun takes it, and Helius leaves it alone. Pump.fun failing it keeps the mark.
+    now += MIN;
+    asked.length = 0;
+    const origin: TradeTapeDeps["pumpFun"] = {
+      coinOrigin: async () => null,
+      coinTrades: async () => null,
+    };
+    await runTradeTapeJob(
+      { helius, pumpFun: origin },
+      { heliusPagesPerRun: 50, pumpFunCallsPerRun: 4, spacingMs: 0, now: () => now },
+    );
+    expect(asked).not.toContain(mint);
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: busy.token.id } })).toMatchObject({
+      status: "failed",
+      source: "helius:busy",
+    });
+  });
+
+  it("keeps a coin whose Helius page failed, and asks for the page again next run", async () => {
+    const flaky = await seedCalled("flaky", null);
+    const mint = flaky.token.mintAddress;
+    const dev = "HYi9a633brCmNtqLgat8fDo8huRYuYpUxsoJhuSzJiaP";
+    let calls = 0;
+    const helius: TradeTapeDeps["helius"] = {
+      gtfaUsable: true,
+      takeCallStats: () => ({}),
+      getMintTransactionsPage: async (m) => {
+        if (m !== mint) return { status: "ok", txs: [], paginationToken: null };
+        calls += 1;
+        if (calls === 1) return { status: "failed" };
+        return {
+          status: "ok",
+          paginationToken: null,
+          txs: [
+            {
+              blockTime: LAUNCH / 1000,
+              transaction: { signatures: ["f"], message: { accountKeys: [dev, "ata"] } },
+              meta: {
+                err: null,
+                preTokenBalances: [],
+                postTokenBalances: [
+                  { accountIndex: 1, mint: m, owner: dev, uiTokenAmount: { amount: "1000000", decimals: 6 } },
+                ],
+                preBalances: [2e9, 0],
+                postBalances: [1e9, 0],
+              },
+            },
+          ],
+        };
+      },
+    };
+    const none = pumpFunStub("none", []);
+    const first = await runTradeTapeJob(
+      { helius, pumpFun: none.stub },
+      { heliusPagesPerRun: 10, pumpFunCallsPerRun: 0, now: () => NOW },
+    );
+    expect(first.heliusPages).toBe(1); // stopped for the run, not three tries in a row
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: flaky.token.id } })).toBeNull();
+    await runTradeTapeJob(
+      { helius, pumpFun: none.stub },
+      { heliusPagesPerRun: 10, pumpFunCallsPerRun: 0, now: () => NOW },
+    );
+    expect(await prisma.tokenTradeTape.findUnique({ where: { tokenId: flaky.token.id } })).toMatchObject({
+      status: "done",
+      source: "helius",
+    });
+  });
+
   it("has Helius read the newest call and Pump.fun the oldest, whatever their age", async () => {
     const older = await seedCalled("older", null);
     const newer = await seedCalled("newer", null);
