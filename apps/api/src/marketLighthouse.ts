@@ -242,7 +242,7 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
 
 /**
  * What the safety screen made of the tokens first scanned in the window: accepted (cleared it at
- * least once) against rejected (never did), the Lighthouse's "Likely Rugs". Summed from the
+ * least once) against rejected (never did), the Lighthouse's "Probable Rugs". Summed from the
  * hourly rollup (LighthouseHour.screenAccepted / screenRejected), since the snapshots it reads are
  * swept after two days for tokens nobody called; whole hours from the first one after `since`.
  */

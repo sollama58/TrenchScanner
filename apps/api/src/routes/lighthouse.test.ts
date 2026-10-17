@@ -246,7 +246,7 @@ describe.skipIf(!dbAvailable)("market lighthouse", () => {
     expect(unknown.json<MarketLighthouse>().screened.byHourOfDay.timeZone).toBe("UTC");
   });
 
-  it("counts the safety screen's accepted and Likely Rug tokens over the window", async () => {
+  it("counts the safety screen's accepted and Probable Rug tokens over the window", async () => {
     const day = (
       await app.inject({ method: "GET", url: "/guest/lighthouse?days=1" })
     ).json<MarketLighthouse>();
