@@ -181,6 +181,8 @@ export const SAFE_CONTESTANT = "safe";
 export const FOUR_X_CONTESTANT = "four-x";
 export const TEN_X_CONTESTANT = "ten-x";
 export const CATCHER_CONTESTANT = "catcher";
+/** Boosted trees fitted to the return itself (the "return" objective) - user decision 2026-10-17. */
+export const RETURN_REGRESSION_CONTESTANT = "return-regression";
 /** Catcher's cutoff anchor: a wider slice than the field's 20%, for the runners outside it. */
 export const CATCHER_CUTOFF_SHARE = 0.35;
 
@@ -471,7 +473,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   },
   {
     id: TREES_NO_TOKENSAGE_CONTESTANT,
-    name: "Return Trees, no TokenSage",
+    name: "Return Simple Trees",
     description:
       "Return Trees' twin on every input except TokenSage's, kept to measure what the read adds - in no combiner, never the default, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
@@ -641,6 +643,30 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     summary: "Casts the widest net: catches as many of the runners as it can while its hit rate holds.",
     role: "learner",
     recipe: { learner: "gbdt", goal: "catch", cutoffShare: CATCHER_CUTOFF_SHARE },
+    standalone: true,
+  },
+  {
+    // User decision 2026-10-17 ("do what is best for ultimately making the most money", cap at
+    // +500%): on the rule-4 rows 10-07..10-17 replayed under EXIT_PLAN, the top 20% a day by a
+    // return regression doubled 21.5%, stopped out 52.7% and returned +3.4% a call, against
+    // 16.2% / 43.1% / +1.1% for the expected-return formula and 23.8% / 65.3% / -1.0% for P(2x),
+    // inside noise (notes/return-formula-2026-10-17). It sits beside them so the exam decides.
+    // At the Sharp seats' tighter cutoff: on the same replay every ranking returned far more a
+    // call on its top 10% than its top 20% (the return regression +6.7% vs +2.6%, P(2x) +9.0% vs
+    // -0.5%), and made more in total too.
+    id: RETURN_REGRESSION_CONTESTANT,
+    name: "Return Regression",
+    description:
+      "Boosted trees fitted straight to each call's return under the exit plan (capped at +500%), with no split into 2x and crash odds, calling only the coins it expects to pay most: about the top 12% of decision moments; judged on return",
+    summary:
+      "Learns how much a call makes under the exit plan, and calls only the coins it expects to pay most.",
+    role: "learner",
+    recipe: {
+      learner: "gbdt",
+      boosting: { objective: "return" },
+      cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+      goal: "return",
+    },
     standalone: true,
   },
   {

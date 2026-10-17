@@ -313,6 +313,7 @@ export function traitName(recipe: CuratorRecipe, baseHalfLifeDays: number): stri
     const objective = r.boosting!.objective;
     if (objective === "lambdarank") family = `Ranked ${family}`;
     else if (objective === "runSize" && r.goal !== "moonshot") family = `Runner ${family}`;
+    else if (objective === "return") family = `Regression ${family}`;
   } else if (r.learner === "forest") {
     const depth = r.forest!.maxDepth!;
     family = depth >= 8 ? "Deep Forest" : "Forest";
@@ -346,7 +347,9 @@ export function describeRecipe(
         ? "Boosted trees fitted to each hour's order by run size"
         : b.objective === "runSize"
           ? "Boosted trees fitted to the run size"
-          : "Boosted trees";
+          : b.objective === "return"
+            ? "Boosted trees fitted to the return under the exit plan"
+            : "Boosted trees";
     what = `${fitted}, depth ${b.maxDepth}, learning rate ${b.learningRate}, each tree sees ${Math.round(
       b.rowSample! * 100,
     )}% of rows and ${Math.round(b.featureSample! * 100)}% of features; ${memory}`;
@@ -375,6 +378,8 @@ export function plainSummary(recipe: CuratorRecipe, parentName?: string | null):
     what = "Learns to put each hour's biggest runners at the top of the list";
   } else if (recipe.learner === "gbdt" && recipe.boosting?.objective === "runSize") {
     what = "Predicts how big the run will be rather than whether it doubles";
+  } else if (recipe.learner === "gbdt" && recipe.boosting?.objective === "return") {
+    what = "Predicts how much a call will make under the exit plan, rather than whether it doubles";
   } else if (recipe.learner === "gbdt") {
     const depth = recipe.boosting?.maxDepth ?? DEFAULT_BOOSTING_OPTIONS.maxDepth;
     what =
