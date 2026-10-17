@@ -1093,8 +1093,8 @@ export function csvCell(v: unknown): string {
   else s = String(v);
   // A symbol or reason starting with = + - @ would open as a live formula in a spreadsheet;
   // launcher-written text (symbols) and model output (risks) come through here. Numbers keep
-  // their sign: only strings get the quote prefix.
-  if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  // their sign: only text (strings, and lists of them, joined) gets the quote prefix.
+  if (typeof v !== "number" && typeof v !== "bigint" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

@@ -1,4 +1,5 @@
 import {
+  LAUNCHER_TEXT_GUARD_MODEL,
   prisma,
   createLogger,
   fitAiBlend,
@@ -72,6 +73,7 @@ export async function refitAiBlend(env: Env): Promise<{ rows: number; usable: bo
     where: {
       curatorProbability: { not: null },
       probability2x: { not: null },
+      model: { not: LAUNCHER_TEXT_GUARD_MODEL },
       candidateOutcome: { is: { finalizedAt: { not: null } } },
     },
     orderBy: { createdAt: "asc" },

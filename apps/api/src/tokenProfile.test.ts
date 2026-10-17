@@ -15,4 +15,12 @@ describe("safeLink", () => {
     expect(safeLink(null, "x")).toBeNull();
     expect(safeLink("", "telegram")).toBeNull();
   });
+  it("drops userinfo links and off-host X and Telegram links", () => {
+    expect(safeLink("https://x.com@evil.example/", "x")).toBeNull();
+    expect(safeLink("https://user:pw@coin.fun/", "website")).toBeNull();
+    expect(safeLink("https://evil.example/coin", "x")).toBeNull();
+    expect(safeLink("https://evil.example/chat", "telegram")).toBeNull();
+    expect(safeLink("https://twitter.com/coin", "x")).toBe("https://twitter.com/coin");
+    expect(safeLink("https://t.me/coin_chat", "telegram")).toBe("https://t.me/coin_chat");
+  });
 });

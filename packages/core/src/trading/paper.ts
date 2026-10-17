@@ -345,7 +345,7 @@ async function managePaperExit(
     position.strategy,
     config,
     saleEvent(decision.reason),
-    `sold ${tokenLink(position.symbol, position.mint)} (${EXIT_REASON_TEXT[decision.reason] ?? decision.reason}), ${solAmount(net)} back${result}`,
+    `sold ${tokenLink(position.symbol, position.mint)} (${EXIT_REASON_TEXT[decision.reason] ?? escapeHtml(decision.reason)}), ${solAmount(net)} back${result}`,
   );
   return true;
 }

@@ -1,6 +1,7 @@
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import * as z from "zod/v4";
 import {
+  LAUNCHER_TEXT_GUARD_MODEL,
   prisma,
   Prisma,
   createLogger,
@@ -251,6 +252,7 @@ async function reflectionRecord(active: ActivePlaybook, before: Date): Promise<R
   const live = await prisma.aiReview.findMany({
     where: {
       decision: { in: ["buy", "no_buy"] },
+      model: { not: LAUNCHER_TEXT_GUARD_MODEL },
       ...(active.version === 1
         ? { OR: [{ playbookId: active.id }, { playbookId: null }] }
         : { playbookId: active.id }),

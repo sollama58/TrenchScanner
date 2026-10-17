@@ -18,6 +18,7 @@ import {
   judgeLiftFromCounts,
   type Env,
   type MarketRow,
+  LAUNCHER_TEXT_GUARD_MODEL,
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
 import { cacheReport, SharedCache } from "../sharedCache.js";
@@ -86,7 +87,7 @@ function aiReviewsOnePerToken(since: Date, until: Date): Prisma.Sql {
   return Prisma.sql`
     SELECT DISTINCT ON ("tokenId") *
     FROM "AiReview"
-    WHERE "createdAt" >= ${since} AND "createdAt" < ${until}
+    WHERE "createdAt" >= ${since} AND "createdAt" < ${until} AND "model" <> ${LAUNCHER_TEXT_GUARD_MODEL}
     ORDER BY "tokenId", ("decision" IS NULL), "createdAt"`;
 }
 

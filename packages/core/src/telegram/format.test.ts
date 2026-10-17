@@ -45,6 +45,7 @@ describe("telegram alert text", () => {
     expect(text).toContain("Doge &lt;b&gt;Coin&lt;/b&gt;");
     expect(text).toContain("<b>“&lt;script&gt;”</b>");
     expect(escapeHtml("a&b")).toBe("a&amp;b");
+    expect(escapeHtml('a"b')).toBe("a&quot;b");
   });
 
   it("says who raised it", () => {

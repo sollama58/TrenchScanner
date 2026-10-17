@@ -167,7 +167,8 @@ describe("export query", () => {
     expect(csvCell("-SYM")).toBe("'-SYM");
     expect(csvCell("@at")).toBe("'@at");
     expect(csvCell(-12.5)).toBe("-12.5");
-    expect(csvCell(["=a", "b"])).toBe("=a|b");
+    expect(csvCell(["=a", "b"])).toBe("'=a|b");
+    expect(csvCell(["-1", "2"])).toBe("'-1|2");
   });
 
   it("caps the window whichever way it is spelled", () => {
