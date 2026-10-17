@@ -82,7 +82,7 @@ export function usePossibleSides(wallets: readonly (string | null | undefined)[]
   }, [key, v]);
 }
 
-/** "Ansem Possible Side (93%)", "Ansem KOL Funded Wallet" for a wallet the KOL funded, "Ansem Known Side" for its own. */
+/** "Ansem Probable Side (93%)", "Ansem KOL Funded Wallet" for a wallet the KOL funded, "Ansem Known Side" for its own. */
 export function possibleSideText(
   s: Pick<PossibleSide, "kolWallet" | "kolName" | "pct" | "funded" | "known" | "transfers">,
 ): string {
@@ -91,8 +91,8 @@ export function possibleSideText(
   if (s.funded) return `${who} KOL Funded Wallet`;
   // A label transfers alone earned has no buying-alongside share to show (user ask 2026-10-16).
   return s.pct > 0
-    ? `${who} Possible Side (${Math.round(s.pct)}%)`
-    : `${who} Possible Side (${s.transfers ?? 0} transfers)`;
+    ? `${who} Probable Side (${Math.round(s.pct)}%)`
+    : `${who} Probable Side (${s.transfers ?? 0} transfers)`;
 }
 
 /** The KOLs with possible side wallets among `holders`, each with those holders, strongest first. */

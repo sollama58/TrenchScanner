@@ -287,8 +287,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
               <b>KOL Funded</b>: a wallet the KOL paid for.
             </li>
             <li>
-              <b>Possible side</b> (a dotted gold line, &ldquo;side?&rdquo;): a wallet that keeps buying the
-              KOL&apos;s coins within minutes of it. Likely, not confirmed.
+              <b>Probable side</b> (a dotted gold line, &ldquo;side?&rdquo;): a wallet that keeps buying the
+              KOL&apos;s coins within minutes of it. Probable, not confirmed.
             </li>
             <li>
               <b>Same funder or same minute</b>: a holder funded alongside any of those.

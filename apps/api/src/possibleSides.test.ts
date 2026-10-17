@@ -18,13 +18,13 @@ describe("possibleSideText", () => {
       "Ansem KOL Funded Wallet",
     );
     expect(possibleSideText({ kolWallet: "k", kolName: "Ansem", pct: 92.6 })).toBe(
-      "Ansem Possible Side (93%)",
+      "Ansem Probable Side (93%)",
     );
   });
 
   it("counts the transfers on a side transfers alone earned", () => {
     expect(possibleSideText({ kolWallet: "k", kolName: "Ansem", pct: 0, transfers: 5 })).toBe(
-      "Ansem Possible Side (5 transfers)",
+      "Ansem Probable Side (5 transfers)",
     );
   });
 });
