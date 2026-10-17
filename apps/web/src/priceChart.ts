@@ -46,7 +46,9 @@ export function withCallPoint(points: readonly Point[], call: Point): Point[] {
 /**
  * The closes from `fromMs` on (up to `toMs`, when given), thinned to one point per `widthMs` (aligned to the epoch, so a point
  * keeps its place as new minutes arrive): each point is its slot's last close, at that close's
- * time, so the line ends exactly on the latest reading.
+ * time, so the line ends exactly on the latest reading. A slot whose highest close came before its
+ * last keeps that close too, at its own time, so the line's highest point - the chart's Peak - is
+ * the highest minute close in view, as the card's Peak is, not the highest last-of-slot close.
  */
 export function linePoints(
   closes: readonly Point[],
@@ -56,13 +58,24 @@ export function linePoints(
 ): Point[] {
   const out: Point[] = [];
   let slot = Number.NaN;
+  let hi: Point | null = null;
+  let last: Point | null = null;
+  const flush = () => {
+    if (hi !== null && last !== null && hi.t < last.t) out.push(hi);
+    if (last !== null) out.push(last);
+  };
   for (const p of closes) {
     if (p.t < fromMs || p.t > toMs) continue;
     const s = Math.floor(p.t / widthMs);
-    if (s === slot) out[out.length - 1] = { t: p.t, v: p.v };
-    else out.push({ t: p.t, v: p.v });
-    slot = s;
+    if (s !== slot) {
+      flush();
+      hi = null;
+      slot = s;
+    }
+    last = { t: p.t, v: p.v };
+    if (hi === null || p.v > hi.v) hi = last;
   }
+  flush();
   return out;
 }
 

@@ -73,7 +73,7 @@ describe("linePoints", () => {
     expect(pts.map((p) => p.v)).toEqual([1, 2, 3]);
   });
 
-  it("keeps each slot's last close at its own time, from the view's start on", () => {
+  it("keeps each slot's last close at its own time, and its higher close before it, from the view's start on", () => {
     const pts = linePoints(
       [
         { t: 0, v: 10 },
@@ -86,6 +86,7 @@ describe("linePoints", () => {
       3 * M,
     );
     expect(pts).toEqual([
+      { t: M, v: 18 },
       { t: 2 * M, v: 6 },
       { t: 5 * M, v: 7 },
       { t: 7 * M, v: 9 },
