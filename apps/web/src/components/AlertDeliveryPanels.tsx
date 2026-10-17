@@ -357,7 +357,9 @@ export function ModelPanel({
                       <strong>{e.name}</strong>
                       {e.id === board.defaultModel && <span className="chip chip-model">Best performer</span>}
                       {e.composite.score !== null && (
-                        <span className="chip num">score {e.composite.score.toFixed(0)}</span>
+                        <span className="chip num">
+                          {board.window.days}-day score {e.composite.score.toFixed(0)}
+                        </span>
                       )}
                       <span className="chip num">#{e.rank}</span>
                     </div>
@@ -393,6 +395,10 @@ export function ModelPanel({
     </section>
   );
 }
+
+/** Returns stored before the exit plan changed on 17 October were simulated under the earlier one. */
+const EARLIER_PLAN_NOTE =
+  " Returns on calls before 17 October follow the earlier exit plan (half at 2x, the rest trailing 35%).";
 
 /** One row of the comparison: a figure for each feed and how yours differs. */
 const COMPARE_ROWS: {
@@ -465,8 +471,8 @@ function FeedCompareBox({ board }: { board: Leaderboard }) {
         <>
           <small className="faint">
             {data.same
-              ? `Your feed is the top models, so this is what it delivered over the last ${data.days} days, each token once.`
-              : `Each side as one feed over the last ${data.days} days, each token once, so overlapping calls aren't counted twice. Differences are yours minus the top models', in points for rates.`}
+              ? `Your feed is the top models, so this is what it delivered over the last ${data.days} days, each token once.${EARLIER_PLAN_NOTE}`
+              : `Each side as one feed over the last ${data.days} days, each token once, so overlapping calls aren't counted twice. Differences are yours minus the top models', in points for rates.${EARLIER_PLAN_NOTE}`}
           </small>
           <table className="feed-compare-table num">
             <thead>

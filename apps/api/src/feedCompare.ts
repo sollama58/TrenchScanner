@@ -118,8 +118,8 @@ export async function mixFeedRecord(
       JOIN seats ON seats.model = a."model" AND a."createdAt" >= seats.since
         AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" = seats.lane)
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
-      WHERE a."createdAt" >= ${since}
-      ORDER BY a."tokenId", a."createdAt"
+      WHERE a."createdAt" >= ${since} AND a."model" = ANY(${ids}::text[])
+      ORDER BY a."tokenId", a."createdAt", a."id"
     )
     SELECT count(*) AS calls,
            count(*) FILTER (WHERE hit2x IS NOT NULL) AS graded,
