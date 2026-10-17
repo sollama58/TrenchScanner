@@ -1590,7 +1590,7 @@ function TraitBadge({ trait, x, y }: { trait: WalletTrait; x: number; y: number 
 }
 
 /** A trait's icon on its own, for the legend. */
-function TraitIcon({ trait, size = 13 }: { trait: WalletTrait; size?: number }) {
+export function TraitIcon({ trait, size = 13 }: { trait: WalletTrait; size?: number }) {
   return (
     <svg
       className={`bm-trait-icon trait-${trait}`}
@@ -1653,7 +1653,7 @@ function RiskyIcon() {
 const RISKY_WORDS = "Risky: flagged risky or a known dumper";
 
 /** What each trait means, for its bubble's tooltip. */
-const TRAIT_WORDS: Record<WalletTrait, string> = {
+export const TRAIT_WORDS: Record<WalletTrait, string> = {
   sniper: "Sniper: among the launch's first 25 buyers",
   fresh: "Fresh wallet: first active within the last 24 hours",
   empty: "Empty wallet: under $25 in anything besides this coin",
@@ -1709,7 +1709,7 @@ function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames, sides: Po
 }
 
 /** "sent 1.2% to 2 holders", "got 0.4% from 1 holder": a holder's transfers in words. */
-function transferWords(t: ReturnType<typeof transfersOfNode>): string[] {
+export function transferWords(t: ReturnType<typeof transfersOfNode>): string[] {
   const holders = (n: number) => `${n} holder${n === 1 ? "" : "s"}`;
   return [
     t.sentTo > 0 ? `sent ${xferPctText(t.sent)} to ${holders(t.sentTo)}` : null,

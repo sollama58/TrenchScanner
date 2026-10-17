@@ -14666,3 +14666,32 @@ body:has(.util-toast) .bug-fab {
     margin-left: 0;
   }
 }
+/* A top holder's marks beside its name (user ask 2026-10-17): the bubble map's icons, inline. */
+.th-marks {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.th-mark {
+  display: inline-flex;
+  cursor: help;
+}
+.th-mark .icon,
+.th-mark svg {
+  display: block;
+}
+.th-xfer {
+  color: var(--ink-2);
+}
+/* How it got in, a line of its own under the name and labels. */
+.th-entry {
+  min-width: 0;
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.35;
+  cursor: help;
+}
+/* "2.1 SOL", "sold 40% for 1.8 SOL" stay whole; the first piece may wrap on a phone. */
+.th-entry > span + span {
+  white-space: nowrap;
+}

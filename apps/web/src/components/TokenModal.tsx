@@ -81,6 +81,7 @@ import { LoadingNote, LoadSteps, SkelValue, Spinner, useElapsed } from "./Loadin
 import { openWallet } from "../walletModal";
 import { BubbleMapPlaceholder, BubbleMapSection, reloadBubbleMaps, useBubbleMaps } from "./BubbleMap";
 import { TopHolders } from "./TopHolders";
+import type { HolderEntry } from "../holderEntry";
 import { WalletText } from "./WalletText";
 import { FilterGlyph } from "./FilterBadge";
 import { filterCardStyle } from "../filterStyle";
@@ -112,6 +113,8 @@ interface TokenChart {
   /** When the coin's trades were last read live, before a call; null when never. */
   live?: { readAt: number } | null;
   wallets?: FlaggedWallet[];
+  /** How each top holder got in, by wallet (HolderEntry). Absent from older API builds. */
+  holderEntries?: Record<string, HolderEntry>;
 }
 
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
@@ -518,6 +521,8 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   const flaggedKey = JSON.stringify(chart.data?.wallets ?? []);
   const flagged = useMemo(() => JSON.parse(flaggedKey) as FlaggedWallet[], [flaggedKey]);
   const flags = chart.data ? "ok" : chart.error ? "failed" : "loading";
+  const entriesKey = JSON.stringify(chart.data?.holderEntries ?? {});
+  const entries = useMemo(() => JSON.parse(entriesKey) as Record<string, HolderEntry>, [entriesKey]);
   const linked = useHolderReading(card, mint, !!utility);
   const holders = useHoldersView(card, linked, alertAt, !!utility);
   useFilterCatchKept(card, !!utility);
@@ -748,7 +753,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
             flagged={flagged}
             flags={flags}
           />
-          <TopHolders snapshot={holders.listReading} flagged={flagged} pending={scanning} />
+          <TopHolders snapshot={holders.listReading} flagged={flagged} entries={entries} pending={scanning} />
         </div>
         {flagged.length > 0 && <WalletsCard wallets={flagged} />}
         <StonkFeesCard mint={mint} />

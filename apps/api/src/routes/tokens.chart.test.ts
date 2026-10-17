@@ -55,6 +55,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
           linkedClusters: [
             { funder: "Fundr", wallets: [{ wallet: LINKED, pct: 4 }], pct: 4, creatorLinked: false },
           ],
+          linkedHolders: [{ wallet: LINKED, pct: 4 }],
           // The live tape before the call: one wallet the post-call tape never saw, one it did.
           flaggedBuyers: 2,
           flaggedSellers: 0,
@@ -72,6 +73,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
         reason: "called",
         status: "done",
         windowEnd: new Date(1_890_000),
+        launchAt: new Date(60_000),
       },
     });
     await prisma.tokenWalletActivity.createMany({
@@ -86,7 +88,19 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
           ],
         },
         { tokenId: token.id, wallet: LINKED, solIn: 1, firstBuyAt: new Date(80_000) },
-        { tokenId: token.id, wallet: CALM, solIn: 5, firstBuyAt: new Date(80_000) },
+        {
+          tokenId: token.id,
+          wallet: CALM,
+          buys: 1,
+          sells: 1,
+          solIn: 5,
+          solOut: 1.5,
+          tokensBought: 1_000,
+          tokensSold: 400,
+          heldPctAtAnchor: 3,
+          firstBuyerRank: 2,
+          firstBuyAt: new Date(80_000),
+        },
       ],
     });
     await prisma.walletRisk.createMany({
@@ -143,6 +157,24 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
     expect(body.wallets[2]).toMatchObject({ tags: ["linked"], funder: "Fundr", trades: [[80_000, 1, null]] });
   });
 
+  it("sends how each top holder got in: the newest list's and the largest at the anchor", async () => {
+    const body = (await get(MINT)).json<TokenChart>();
+    // RISKY is on neither list: no entry. LINKED is on the newest holder list, CALM held 3% at the call.
+    expect(Object.keys(body.holderEntries).sort()).toEqual([CALM, LINKED].sort());
+    expect(body.holderEntries[CALM]).toEqual({
+      firstBuyAt: 80_000,
+      afterLaunchS: 20,
+      firstBuyerRank: 2,
+      buys: 1,
+      sells: 1,
+      solIn: 5,
+      solOut: 1.5,
+      soldShare: 0.4,
+    });
+    // No buys on the tape: the coin came by transfer.
+    expect(body.holderEntries[LINKED]).toMatchObject({ buys: 0, firstBuyAt: null, soldShare: null });
+  });
+
   it("asks for a paid lookup for a coin the scanner doesn't track, and reads no candles for it", async () => {
     const unknown = address(`${TAG}-unknown`);
     const res = await get(unknown);
@@ -154,6 +186,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
       tape: null,
       live: null,
       wallets: [],
+      holderEntries: {},
     });
     expect(fetched).not.toContain(unknown);
   });
