@@ -1225,7 +1225,10 @@ const SCORE_HINT = "Rank score 0-100, not a probability";
 export function recordedPeakOf(card: Card): { pct: number | null; isRunPeak: boolean } {
   const curated = card.curated;
   const runPeak = curated?.outcome.peak24hReturnPct ?? null;
-  const callPeak = curated?.peakPct ?? runPeak;
+  // The API's Peak is authoritative when sent, null included: once the candles vouch for a call it
+  // leaves out the watcher's run peak (callPeakPct), so falling back to it here would put back the
+  // stale reading the candles corrected. Only older API builds, which send none, use the run peak.
+  const callPeak = curated?.peakPct !== undefined ? curated.peakPct : runPeak;
   const alertMcap = card.snapshot.marketCapUsd;
   const folded = card.kind === "match" && !!curated && curated.peakMcapUsd !== undefined;
   const peakAt = curated?.peakAt ? Date.parse(curated.peakAt) : NaN;

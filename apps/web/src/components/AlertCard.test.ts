@@ -121,6 +121,19 @@ describe("recordedPeakOf", () => {
     expect(later).toEqual({ pct: 400, isRunPeak: false });
   });
 
+  it("keeps a call's Peak the API left empty, not its watcher run peak", () => {
+    // The candles show the coin never closed above the call; the watcher saw +32% after a rug.
+    const peak = recordedPeakOf(
+      card({
+        kind: "curated",
+        alertMcap: 100_000,
+        peakReturnPct: null,
+        curated: { peakPct: null, runPeak: 32 },
+      }),
+    );
+    expect(peak).toEqual({ pct: null, isRunPeak: false });
+  });
+
   it("does not time the filter alert's ATH by the call's run peak", () => {
     const peak = recordedPeakOf(
       card({
