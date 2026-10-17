@@ -195,8 +195,11 @@ export function TopHolders({
                         Dumper
                       </span>
                     )}
-                    {cluster?.creatorLinked && !h.flags.includes("creator") && (
-                      <span className="tm-tag k-dev" title="In a cluster the creator is part of">
+                    {h.creatorTied && !h.flags.includes("creator") && (
+                      <span
+                        className="tm-tag k-dev"
+                        title="The creator or its funder paid for this wallet, or it got SOL or the coin from one that was"
+                      >
                         Tied to dev
                       </span>
                     )}

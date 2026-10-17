@@ -221,8 +221,15 @@ export interface Snapshot {
         sniper?: boolean;
         fresh?: boolean;
         empty?: boolean;
+        /** Counted in linkedCreatorPct: tied to the creator, on scans since 2026-10-17. */
+        creatorTied?: boolean;
       }[]
     | null;
+  /**
+   * % of supply held by top holders tied to the creator: the creator or its funder paid for them,
+   * or the SOL or the coin reached them from a holder that was (since 2026-10-17). Null when not read.
+   */
+  linkedCreatorPct?: number | null;
   /** Of the largest holders (up to 20), the % an exchange or a busy service paid for; null when not read. */
   cexFundedPct?: number | null;
   /** KOL Bundled %: supply held by KOLs and the top holders tied to them; null when not read. */

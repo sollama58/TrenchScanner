@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  tiedHolders,
   clusterNumberText,
   funderNamed,
   largestSourceOnly,
@@ -1006,5 +1007,42 @@ describe("stretchWide", () => {
   it("leaves a map that is already wide enough as it is", () => {
     const g = graph([node("a", 0, 0), node("b", 300, 20)]);
     expect(stretchWide(g, 1.2)).toBe(g);
+  });
+});
+
+describe("tiedHolders", () => {
+  const clusters = [
+    {
+      funder: "f",
+      wallets: [
+        { wallet: "a", pct: 5 },
+        { wallet: "b", pct: 3 },
+      ],
+      pct: 8,
+      creatorLinked: true,
+    },
+  ];
+  it("takes the holders the scan marked, not their whole cluster", () => {
+    const s = {
+      linkedClusters: clusters,
+      linkedHolders: [
+        { wallet: "a", pct: 5, creatorTied: true },
+        { wallet: "b", pct: 3 },
+      ],
+      linkedCreatorPct: 5,
+    };
+    expect([...tiedHolders(s)]).toEqual(["a"]);
+  });
+  it("falls back on the cluster on a scan from before the marks", () => {
+    const s = {
+      linkedClusters: clusters,
+      linkedHolders: [
+        { wallet: "a", pct: 5 },
+        { wallet: "b", pct: 3 },
+      ],
+      linkedCreatorPct: 5,
+    };
+    expect([...tiedHolders(s)].sort()).toEqual(["a", "b"]);
+    expect([...tiedHolders({ ...s, linkedCreatorPct: 0 })]).toEqual([]);
   });
 });

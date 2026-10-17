@@ -36,6 +36,8 @@ export const BUBBLE_READING_NUMBERS = [
   "kolBundledPctExTransfers",
   "bundledSupplyPctExTransfers",
   "bundledSupplyCountExTransfers",
+  // Appended (2026-10-17): rows packed before read it as unknown.
+  "linkedCreatorPct",
 ] as const;
 
 /** The lists, named as on TokenSnapshot. */
@@ -94,6 +96,7 @@ const PACK_VERSION = 1;
 const SNIPER = 1;
 const FRESH = 2;
 const EMPTY = 4;
+const CREATOR_TIED = 8;
 
 type Holder = {
   wallet: string;
@@ -102,6 +105,7 @@ type Holder = {
   sniper?: boolean;
   fresh?: boolean;
   empty?: boolean;
+  creatorTied?: boolean;
 };
 type Cluster = {
   funder: string;
@@ -143,7 +147,11 @@ export function packBubbleReading(reading: BubbleReading): string {
     return i;
   };
   const h = (reading.linkedHolders as Holder[]).map((x) => {
-    const flags = (x.sniper ? SNIPER : 0) | (x.fresh ? FRESH : 0) | (x.empty ? EMPTY : 0);
+    const flags =
+      (x.sniper ? SNIPER : 0) |
+      (x.fresh ? FRESH : 0) |
+      (x.empty ? EMPTY : 0) |
+      (x.creatorTied ? CREATOR_TIED : 0);
     const row: number[] = [at(x.wallet), num(x.pct), flags];
     if (x.cexFunder) row.push(at(x.cexFunder));
     return row;
@@ -220,6 +228,7 @@ export function unpackBubbleReading(packed: string | null | undefined): BubbleRe
         ...(f & SNIPER ? { sniper: true } : {}),
         ...(f & FRESH ? { fresh: true } : {}),
         ...(f & EMPTY ? { empty: true } : {}),
+        ...(f & CREATOR_TIED ? { creatorTied: true } : {}),
       },
     ];
   });

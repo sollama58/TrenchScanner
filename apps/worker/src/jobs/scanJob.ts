@@ -3543,7 +3543,8 @@ export function exTransfersOf(
   return {
     linkedWalletPct: base.linkedWalletPct,
     linkedWalletCount: base.linkedWalletCount,
-    linkedCreatorPct: base.linkedCreatorPct,
+    // The direct ties alone: the models' definition until the retrain (linkedCreatorDirectPct).
+    linkedCreatorPct: base.linkedCreatorDirectPct,
     // Without transfers' own figures where they were read (a KOL's sends carry its bundle on
     // even when the clusters stand), else the counted ones, which then read the same.
     kolBundled: changed ? kolBundledBase : (kolBundledBase ?? kolBundled),

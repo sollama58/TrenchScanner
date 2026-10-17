@@ -138,6 +138,7 @@ export function AlertCard({
     linkedBundled,
     linkedAtAlert,
     linkedClusters,
+    linkedCreatorPct,
     cexPct,
     cexAtAlert,
     cexCount,
@@ -494,6 +495,7 @@ export function AlertCard({
               kols={linkedKols}
               bundled={linkedBundled}
               clusters={linkedClusters}
+              creatorPct={linkedCreatorPct}
               atAlert={linkedAtAlert && linkedPct !== null}
               tiles={tiles}
             />
@@ -794,6 +796,7 @@ export function cardReadings(card: Card) {
     ...linkedTileReading(linkedFrom),
     linkedAtAlert: linkedFrom === s,
     linkedClusters: linkedFrom?.linkedClusters ?? [],
+    linkedCreatorPct: linkedFrom?.linkedCreatorPct ?? null,
     cexPct: cexFrom?.cexFundedPct ?? null,
     cexAtAlert: cexFrom === s,
     cexCount: cexFrom?.cexFundedCount ?? null,
@@ -976,12 +979,27 @@ export function SniperTile({
 type LinkedClusterView = NonNullable<Card["snapshot"]["linkedClusters"]>[number];
 
 /** The cluster line the tile's tooltip and the list lead with: "4 wallets from one funder hold 31%". */
-export function linkedSummary(clusters: readonly LinkedClusterView[]): string | null {
+export function linkedSummary(
+  clusters: readonly LinkedClusterView[],
+  /** Supply tied to the creator (linkedCreatorPct); absent or null on scans that didn't keep it. */
+  creatorPct?: number | null,
+): string | null {
   const top = clusters[0];
   if (!top) return null;
   const more =
     clusters.length > 1 ? `, and ${clusters.length - 1} more cluster${clusters.length > 2 ? "s" : ""}` : "";
-  return `${top.wallets.length} wallets from one funder hold ${pct(top.pct)}${top.creatorLinked ? " (tied to the creator)" : ""}${more}`;
+  // The share itself where the scan kept it (user ask 2026-10-17), not the cluster as a whole.
+  const tied =
+    creatorPct != null
+      ? creatorPct > 0
+        ? `; ${pct(creatorPct)} of supply is tied to the creator`
+        : ""
+      : top.creatorLinked
+        ? " (tied to the creator)"
+        : "";
+  return creatorPct != null
+    ? `${top.wallets.length} wallets from one funder hold ${pct(top.pct)}${more}${tied}`
+    : `${top.wallets.length} wallets from one funder hold ${pct(top.pct)}${tied}${more}`;
 }
 
 /**
@@ -1036,6 +1054,7 @@ function LinkedTile({
   kols,
   bundled,
   clusters,
+  creatorPct,
   atAlert,
   tiles,
 }: {
@@ -1046,11 +1065,12 @@ function LinkedTile({
   /** Whether the reading is Bundled % (KOLs' bundles checked), not only the scan's own linked holders. */
   bundled: boolean;
   clusters: readonly LinkedClusterView[];
+  creatorPct: number | null;
   atAlert: boolean;
   tiles: TileMode;
 }) {
   const cut = countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of);
-  const summary = linkedSummary(clusters);
+  const summary = linkedSummary(clusters, creatorPct);
   const title =
     value === null
       ? "Linked: not checked yet. Who paid for each top-25 wallet is read a few tokens per scan."

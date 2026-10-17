@@ -9,7 +9,8 @@ const reading = (pct: number, count: number, wallets: string[][]) =>
   ({
     linkedWalletPct: pct,
     linkedWalletCount: count,
-    linkedCreatorPct: count,
+    linkedCreatorPct: count + 1,
+    linkedCreatorDirectPct: count,
     clusters: wallets.map((w) => ({
       funder: w[0],
       wallets: w.map((x) => ({ wallet: x, pct: 1 })),

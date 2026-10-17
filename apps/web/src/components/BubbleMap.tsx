@@ -359,6 +359,8 @@ function MapView({
   const cex = graph.cexCount;
   // Linked takes in KOLs' bundles and the wider map's links, out of every holder read (mapLinked).
   const linked = mapLinked(graph, kols);
+  // Supply tied to the creator (user ask 2026-10-17): a tile of its own only when there is some.
+  const devTied = graph.creatorPct !== null && graph.creatorPct > 0;
 
   return (
     <>
@@ -366,7 +368,8 @@ function MapView({
         className="bm-stats"
         style={
           {
-            "--bm-cols": 3 + (graph.sameTimeGroups.length > 0 ? 1 : 0) + (xfer !== null ? 1 : 0),
+            "--bm-cols":
+              3 + (graph.sameTimeGroups.length > 0 ? 1 : 0) + (xfer !== null ? 1 : 0) + (devTied ? 1 : 0),
           } as React.CSSProperties
         }
       >
@@ -437,6 +440,17 @@ function MapView({
             {cex === null ? "-" : (cexCountText(cex.linked, cex.of) ?? pct(graph.cexPct, 0))}
           </dd>
         </div>
+        {devTied && (
+          <div
+            className="risky"
+            title={`Tied to dev: ${pct(graph.creatorPct, 1)} of supply is held by ${
+              graph.creatorCount ? `${graph.creatorCount} ` : ""
+            }top holders the creator or its funder paid for, or that got SOL or the coin from one that was. The creator's own holding is left out.`}
+          >
+            <dt>Tied to dev</dt>
+            <dd className="num">{pct(graph.creatorPct, 1)}</dd>
+          </div>
+        )}
         {/* Transferred Supply % (user ask 2026-10-16): the coin moved holder to holder among the top
             25, a stat of its own beside Linked, never counted in it. */}
         {xfer !== null && (
@@ -668,7 +682,7 @@ function GroupPanel({
             Funder <WalletText wallet={c.funder} names={names} />
           </>
         ),
-        sub: `${c.wallets.length} wallets${c.creatorLinked ? " · tied to the creator" : ""}`,
+        sub: `${c.wallets.length} wallets${creatorTiedText(graph, c)}`,
         pct: c.pct,
         style: { "--bm": `var(--bm-${i % CLUSTER_COLOURS})` } as React.CSSProperties,
         dot: <i className="bm-dot" aria-hidden="true" />,
@@ -1708,6 +1722,14 @@ function nodeLabel(n: MapNode, graph: BubbleGraph, names: WalletNames, sides: Po
   }${what.length ? `, ${what.join(", ")}` : ""}`;
 }
 
+/** " · 2 tied to the creator": how many of a cluster's holders are, for its row in the list. */
+function creatorTiedText(graph: BubbleGraph, c: BubbleGraph["clusters"][number]): string {
+  const ids = new Set(c.wallets.map((w) => `h:${w.wallet}`));
+  const n = graph.nodes.filter((x) => x.creatorTied && ids.has(x.id)).length;
+  if (n === 0) return "";
+  return n === c.wallets.length ? " · all tied to the creator" : ` · ${n} tied to the creator`;
+}
+
 /** "sent 1.2% to 2 holders", "got 0.4% from 1 holder": a holder's transfers in words. */
 export function transferWords(t: ReturnType<typeof transfersOfNode>): string[] {
   const holders = (n: number) => `${n} holder${n === 1 ? "" : "s"}`;
@@ -1759,7 +1781,7 @@ function NodeDetail({
       text: n.kol && n.wallet && names[n.wallet]?.name !== n.kol ? `KOL: ${n.kol}` : "KOL",
       tone: "kol",
     });
-  if (cluster?.creatorLinked) tags.push({ text: "Tied to the creator", tone: "dev" });
+  if (n.creatorTied && !n.flags.includes("creator")) tags.push({ text: "Tied to the creator", tone: "dev" });
   for (const s of n.wallet ? (sides[n.wallet] ?? []) : [])
     tags.push({ text: possibleSideText(s), tone: "side" });
   return (

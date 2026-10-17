@@ -332,6 +332,8 @@ export interface OnChainProfile {
     sniper?: boolean;
     fresh?: boolean;
     empty?: boolean;
+    /** Counted in linkedCreatorPct: tied to the creator (core's linkedWallets). */
+    creatorTied?: boolean;
   }[];
   /**
    * Top holders funded within a minute of each other, whoever paid (core's sameTimeClusters): the
