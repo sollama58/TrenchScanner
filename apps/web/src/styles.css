@@ -11279,6 +11279,8 @@ img.tm-avatar {
   font-size: 12px;
   pointer-events: none;
   white-space: nowrap;
+  /* Above the call flags along the top, which it would otherwise sit under. */
+  z-index: 2;
 }
 .pc-tip strong {
   font-size: 14px;
@@ -13249,6 +13251,46 @@ button.bm-same {
   align-items: flex-start;
   gap: 6px;
   margin: 6px 0 0;
+}
+/* What a token chart's view is drawn from, under it (and Model View's note). */
+.tm-chart-src {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+.tm-chart-src .tm-scan-dot {
+  display: inline-block;
+  vertical-align: -1px;
+  margin-top: 0;
+}
+/* The chart's "Live" pill: the coin's curve is drawn as it changes. */
+.tm-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--good-ink);
+  background: color-mix(in srgb, var(--good) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--good) 35%, transparent);
+  vertical-align: middle;
+}
+.tm-live i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.6s infinite;
+}
+.tm-chart-src .tm-live {
+  margin: 0 4px 0 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tm-live i {
+    animation: none;
+  }
 }
 .tm-scan-dot {
   flex: none;

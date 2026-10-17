@@ -35,7 +35,10 @@ export function fmt(v: number | null, unit: Unit): string {
 
 /** An axis tick: counts compact (1.25M) so a big count still fits the axis, returns as rates. */
 export function tickText(v: number, unit: Unit): string {
-  return unit === "count" ? compactNumber(v) : fmt(v, unit === "ret" ? "pct" : unit);
+  if (unit === "count") return compactNumber(v);
+  // Round ticks read without a trailing ".0": 50%, not 50.0%.
+  if (Number.isInteger(v)) return `${unit === "ret" && v > 0 ? "+" : ""}${v}%`;
+  return fmt(v, unit === "ret" ? "pct" : unit);
 }
 
 /** Under this many pixels a bucket's bars are drawn at their true width, with no gap or minimum. */

@@ -1,4 +1,5 @@
-import { createLogger, type ChainTx } from "@trenchscanner/core";
+import { createLogger } from "../logger.js";
+import type { ChainTx } from "../wallets/tradeTape.js";
 
 const logger = createLogger("helius-stream");
 
@@ -18,6 +19,8 @@ const logger = createLogger("helius-stream");
  * trust the stream for everything since, and anything else it polls as before. A dropped
  * connection reconnects with backoff and every subscription starts over, so a gap reads as not
  * covered, never as no activity.
+ *
+ * In core so the API can follow curves too: the token chart's live tail (apps/api/src/liveCurve.ts).
  */
 
 /** Silence after which the connection is presumed dead: the slot subscription speaks every ~0.4 s. */

@@ -272,6 +272,15 @@ const envSchema = z.object({
   CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(100_000),
   CURVE_TAPE_POLL_SECONDS: z.coerce.number().min(1).default(5),
   CURVE_TAPE_POLL_MAX_MINTS: z.coerce.number().int().nonnegative().default(100),
+  // The token chart's live tail (api's liveCurve.ts, user ask 2026-10-17: charts on the stream's
+  // second-by-second updates): while a young coin's chart is open, the API follows its bonding curve
+  // on its own Helius websocket (an update per changed block) and the chart draws every change,
+  // read by RPC every few seconds where the stream doesn't reach. Only while someone is looking, so
+  // it costs next to nothing. Needs HELIUS_API_KEY; "false" leaves the charts on candles alone.
+  CHART_LIVE_CURVES: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   // Follows the subscription mint on the same Helius websocket and runs the burn reconciler as soon
   // as a transaction lands on it (worker's BurnStreamWake, user ask 2026-10-17), so a burn grants
   // access in seconds; BURN_SCAN_INTERVAL_MINUTES stays the backstop. The mint sees ~53
