@@ -102,9 +102,9 @@ function bestTitle(b: Best): string {
   return (
     `Add ${b.name} to your feed: ${plural(b.adds, "more runner")} caught` +
     (b.calls !== null ? ` for ${plural(b.calls, "more call")} in the window` : "") +
-    (b.lift !== null ? `, its 2x rate ${b.lift.toFixed(1)}x the market's` : "") +
+    (b.lift !== null ? `, its 2x rate ${b.lift.toFixed(1)}x the filtered market's` : "") +
     (b.avgReturnPct !== null ? `, ${signedPct(b.avgReturnPct)} a call on average under the exit plan` : "") +
-    ". Only models that beat the market and make money are suggested, the most runners per call first."
+    ". Only models that beat the filtered market and make money are suggested, the most runners per call first."
   );
 }
 

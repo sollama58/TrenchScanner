@@ -152,13 +152,13 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
 
         <div className="kpis glance">
           <div className="glance-tile">
-            <label title="The board's order: its 2x rate over the market's in the same hours">
+            <label title="The board's order: its 2x rate over the filtered market's in the same hours">
               Top by lift
             </label>
             <span className="glance-value">{leader?.name ?? "–"}</span>
             <span className="muted small">
               {leader?.vsMarket?.lift != null
-                ? `${leader.vsMarket.lift.toFixed(1)}x the market's 2x rate in the hours it called`
+                ? `${leader.vsMarket.lift.toFixed(1)}x the filtered market's 2x rate in the hours it called`
                 : "No lift yet"}
               {leadLive && leadLive.graded > 0
                 ? ` · its own 2x ${pct(leadLive.winRatePct)} on ${leadLive.graded} graded${
@@ -447,7 +447,7 @@ function BaselineChart({
       <header className="section-head">
         <div>
           <span className="eyebrow">
-            <TargetIcon size={13} /> Models vs baseline
+            <TargetIcon size={13} /> Models vs filtered baseline
           </span>
           <h3>Are the models beating a random pick?</h3>
           <p className="muted small">
@@ -459,8 +459,8 @@ function BaselineChart({
               </>
             ) : (
               <>
-                The baseline is how often a token {hit} if you picked at random from the same moments the
-                models choose from. A model is only adding value to the right of that line.
+                The filtered baseline is how often a token {hit} if you picked at random from the same moments
+                the models choose from. A model is only adding value to the right of that line.
               </>
             )}
           </p>
@@ -505,7 +505,7 @@ function BaselineChart({
         <>
           <div className="family-figs">
             <div>
-              <label>{caught ? "All models caught" : `Baseline ${metric}`}</label>
+              <label>{caught ? "All models caught" : `Filtered baseline ${metric}`}</label>
               <span className="num">{pct(baseRate, 1)}</span>
             </div>
             <div>
@@ -588,7 +588,13 @@ function BaselineChart({
                 })}
                 markers={[
                   ...(baseRate !== null
-                    ? [{ label: caught ? "All models" : "Baseline", value: baseRate, kind: "base" as const }]
+                    ? [
+                        {
+                          label: caught ? "All models" : "Filtered baseline",
+                          value: baseRate,
+                          kind: "base" as const,
+                        },
+                      ]
                     : []),
                   { label: "Goal", value: goal, kind: "goal" as const },
                 ]}
@@ -618,12 +624,12 @@ function BaselineChart({
                           metric !== "2x"
                             ? baseRate === null
                               ? "."
-                              : `, against the baseline's ${pct(baseRate, 1)}.`
+                              : `, against the filtered baseline's ${pct(baseRate, 1)}.`
                             : selLift === null
                               ? "."
                               : selLift >= 1
-                                ? `, ${selLift.toFixed(1)}x the market's ${pct(selMarket, 1)} in the hours it called.`
-                                : `, below the market's ${pct(selMarket, 1)} in the hours it called: worse than picking at random.`
+                                ? `, ${selLift.toFixed(1)}x the filtered market's ${pct(selMarket, 1)} in the hours it called.`
+                                : `, below the filtered market's ${pct(selMarket, 1)} in the hours it called: worse than picking at random.`
                         }`}
                   {selected.composite.live.avgSimReturnPct != null
                     ? ` Following every call averaged ${signedPct(selected.composite.live.avgSimReturnPct)} a call.`
@@ -635,10 +641,10 @@ function BaselineChart({
               )}
               <p className="faint small">
                 Live calls over the last {windowLong(days)}, against{" "}
-                {caught ? "every model's catch together" : "the baseline"} over the same window. Under each
-                rate is its average profit per call, following every call with one fixed exit plan. Faded bars
-                rest on too few calls. <strong>Tap or click a model</strong> for its full record, past
-                versions and exam results.{" "}
+                {caught ? "every model's catch together" : "the filtered baseline"} over the same window.
+                Under each rate is its average profit per call, following every call with one fixed exit plan.
+                Faded bars rest on too few calls. <strong>Tap or click a model</strong> for its full record,
+                past versions and exam results.{" "}
                 {!guest && (
                   <>The switch beside each name shows or hides that model&apos;s calls on your live feed. </>
                 )}{" "}
@@ -665,11 +671,11 @@ function BaselineChart({
       )}
 
       <details className="folds">
-        <summary>What exactly is the baseline?</summary>
+        <summary>What exactly is the filtered baseline?</summary>
         <p className="muted small">
           It is measured <strong>after</strong> the safety screen and the pre-check, and{" "}
-          <strong>before</strong> any model or your own filters. A token only becomes a baseline moment once
-          it gets through every one of these, in order:
+          <strong>before</strong> any model or your own filters. A token only becomes a filtered baseline
+          moment once it gets through every one of these, in order:
         </p>
         <ol className="baseline-steps">
           <li>
@@ -1118,10 +1124,10 @@ function LeaderboardPanel({
             </p>
           ) : (
             <p className="muted small">
-              Ranked by <strong>vs market</strong>: how much more often a model&apos;s calls doubled than the
-              average coin in the same hours, so models that started on different days compare fairly. The
-              score runs from 0 to 100: 100 means a model&apos;s calls have reliably hit the goal. Profit is
-              what following every call with one fixed exit plan would have returned. {RULE_NOTE}{" "}
+              Ranked by <strong>vs filtered market</strong>: how much more often a model&apos;s calls doubled
+              than the average coin in the same hours, so models that started on different days compare
+              fairly. The score runs from 0 to 100: 100 means a model&apos;s calls have reliably hit the goal.
+              Profit is what following every call with one fixed exit plan would have returned. {RULE_NOTE}{" "}
               {guest ? (
                 <>
                   Connect a wallet to pick which models&apos; alerts you get with <strong>In feed</strong>.
@@ -1157,7 +1163,7 @@ function LeaderboardPanel({
         <table className="leaderboard">
           <thead>
             <tr>
-              <th className="r" title="Ranked by vs market (lift); warming-up models rank last">
+              <th className="r" title="Ranked by vs filtered market (lift); warming-up models rank last">
                 #
               </th>
               <th>Model</th>
@@ -1166,9 +1172,9 @@ function LeaderboardPanel({
               <th className="r">{detailed ? "2x" : "Doubled"}</th>
               <th
                 className="r"
-                title="Its 2x rate over the market's 2x rate in the same hours: 2.0x means its calls doubled twice as often as a random pick then. The board ranks by this."
+                title="Its 2x rate over the filtered market's 2x rate in the same hours: 2.0x means its calls doubled twice as often as a random pick then. The board ranks by this."
               >
-                vs market
+                vs filtered market
               </th>
               <th
                 className="r"
@@ -1286,10 +1292,10 @@ function LeaderboardPanel({
                   </td>
                   <td
                     className={`r num ${liftTone(e.vsMarket?.lift ?? null)}`}
-                    data-label="vs market"
+                    data-label="vs filtered market"
                     title={
                       e.vsMarket?.marketRatePct != null
-                        ? `The market doubled ${pct(e.vsMarket.marketRatePct, 1)} in the hours it called`
+                        ? `The filtered market doubled ${pct(e.vsMarket.marketRatePct, 1)} in the hours it called`
                         : undefined
                     }
                   >
@@ -1833,7 +1839,7 @@ const LEARNING_METRICS = {
     series: "avg return",
     hit: "",
     of: (r: LearningRates) => r.avgReturnPct ?? null,
-    note: "Average return per call, following every call with one fixed exit plan; the market line is a random pick under the same plan.",
+    note: "Average return per call, following every call with one fixed exit plan; the filtered market line is a random pick under the same plan.",
   },
   catch: {
     tab: "Catch",
@@ -1841,7 +1847,7 @@ const LEARNING_METRICS = {
     series: "catch",
     hit: "caught",
     of: (r: LearningRates) => r.catchPct ?? null,
-    note: "Catch is the share of the day's runners (tokens that doubled cleanly from any moment or call) a line called at a winning moment; the dashed line is the catch goal, not the market.",
+    note: "Catch is the share of the day's runners (tokens that doubled cleanly from any moment or call) a line called at a winning moment; the dashed line is the catch goal, not the filtered market.",
   },
 } as const;
 type LearningMetric = keyof typeof LEARNING_METRICS;
@@ -1957,7 +1963,7 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
   const marketWeek = pooledRates(marketRows);
   const market = {
     key: "market",
-    label: isCatch ? `Goal ${goal}%` : "Market",
+    label: isCatch ? `Goal ${goal}%` : "Filtered market",
     tone: "ref",
     values: keys.map((k) => {
       const r = byDay.get(k)?.market;
@@ -2011,10 +2017,11 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
           </span>
           <h3>Is it getting better?</h3>
           <p className="muted small">
-            Up to {WEEK_MAX_MODELS} models day by day, next to the market (a random pick from the moments the
-            models choose from) and every model&apos;s calls pooled, each token counted once however many
-            models called it. A model that is learning pulls further above the dashed market line over the
-            days. If every line rises together, that&apos;s the market, not the models.
+            Up to {WEEK_MAX_MODELS} models day by day, next to the filtered market (a random pick from the
+            moments the models choose from) and every model&apos;s calls pooled, each token counted once
+            however many models called it. A model that is learning pulls further above the dashed filtered
+            market line over the days. If every line rises together, that&apos;s the filtered market, not the
+            models.
           </p>
         </div>
         <div className="learning-tools">
@@ -2120,7 +2127,7 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
             <tr>
               <th>{WEEK_DAYS}-day total</th>
               <th className="r">{m.fig}</th>
-              <th className="r">{isCatch ? "Vs goal" : "Vs market"}</th>
+              <th className="r">{isCatch ? "Vs goal" : "Vs filtered market"}</th>
               <th className="r">{isCatch ? "Caught" : "Graded"}</th>
             </tr>
           </thead>
@@ -2149,8 +2156,8 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
       </div>
       <p className="faint small">
         {m.note} A model&apos;s day shows once it has {MIN_CALLS_PER_POINT} graded calls; fewer leave a gap.
-        The table pools each line&apos;s calls over the {WEEK_DAYS} days. For the market, &quot;graded&quot;
-        counts decision moments.
+        The table pools each line&apos;s calls over the {WEEK_DAYS} days. For the filtered market,
+        &quot;graded&quot; counts decision moments.
         {isCatch &&
           " Caught counts each day's runners once per day, so a token that ran on two days counts on both."}{" "}
         {RULE_NOTE}
@@ -2160,7 +2167,7 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
         <ShareImageDialog
           title={`Last ${WEEK_DAYS} days, ${m.tab}`}
           fileName="trenchscanner-last-7-days-vs-market"
-          caption="TrenchScanner models vs the market, last 7 days"
+          caption="TrenchScanner models vs the filtered market, last 7 days"
           link="trenchscanner.app"
           render={() => renderWeekCard(card())}
           onClose={() => setSharing(false)}
