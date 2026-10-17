@@ -198,6 +198,39 @@ describe.skipIf(!dbAvailable)("runCandlePeaksJob", () => {
     expect((await callOf(call.id)).peakMcapUsd).toBeCloseTo(90_000);
   });
 
+  it("keeps the coin's ATH when only a later alert's read covers the candles", async () => {
+    const { token, at } = await seedCoin("realert", 72);
+    // First read: the whole history, a 10x on the first alert.
+    candlesByMint.set(token.mintAddress, minutes(at.getTime() - MIN, [1e-5, 1e-4, 2e-5]));
+    await run();
+    expect(
+      (await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: token.id } })).athMcapUsd,
+    ).toBeCloseTo(100_000);
+
+    // Called again at $30k two hours ago; the page now starts after the first alert.
+    const reAt = new Date(at.getTime() + 70 * HOUR);
+    const reCall = await prisma.curatedAlert.create({
+      data: {
+        tokenId: token.id,
+        source: "test",
+        confidence: 70,
+        anchorPriceUsd: 3e-5,
+        anchorMcapUsd: 30_000,
+        createdAt: reAt,
+      },
+    });
+    candlesByMint.set(
+      token.mintAddress,
+      minutes(reAt.getTime() - 5 * MIN, [3e-5, 3e-5, 3e-5, 3e-5, 3e-5, 3e-5, 3.3e-5]),
+    );
+    await prisma.peakWatch.update({ where: { tokenId: token.id }, data: { nextCheckAt: new Date(0) } });
+    await run();
+    expect((await callOf(reCall.id)).peakMcapUsd).toBeCloseTo(33_000);
+    const watch = await prisma.peakWatch.findUniqueOrThrow({ where: { tokenId: token.id } });
+    expect(watch.athMcapUsd).toBeCloseTo(100_000);
+    expect(watch.athAt).toEqual(new Date(at.getTime() + MIN));
+  });
+
   it("stops at Pump.fun's first 429 and tries a failed coin again soon", async () => {
     const { token, call } = await seedCoin("throttled", 1, { callPeak: 12_000 });
     candlesByMint.set(token.mintAddress, new HttpError(429, "too many"));
