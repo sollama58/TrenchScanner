@@ -61,7 +61,7 @@ export interface BundleLabel {
   shared: number;
   /** The opened wallet's coins over the span. */
   coins: number;
-  /** The tier's span: 24, 48 or 72 hours. */
+  /** The tier's span: 24, 48, 72 or 168 hours. */
   hours: number;
   /** "7xKXtg_1": the opened wallet's first six characters and the wallet's number under it. */
   name: string;
@@ -145,23 +145,28 @@ export function bundleLists(
 
 /**
  * The wallets that would qualify to be labeled: the Possible Side tiers over the opened wallet's
- * 24-, 48- and 72-hour coins, bots and excluded wallets left out, strongest first and numbered
+ * 24-, 48-, 72-hour and 7-day coins, bots and excluded wallets left out, strongest first and numbered
  * under the opened wallet. Exported for tests.
  */
 export function bundleLabels(
   wallet: string,
   pairs: readonly BundlePairRow[],
-  coins: Readonly<Record<24 | 48 | 72, number>>,
+  coins: Readonly<Record<24 | 48 | 72 | 168, number>>,
   excluded: ReadonlySet<string>,
   hidden: ReadonlySet<string>,
 ): BundleLabel[] {
   const kept = pairs.filter((p) => !excluded.has(p.side) && !hidden.has(p.side));
-  const span = (key: "s24" | "s48" | "s72", kolCoins: number) => ({
+  const span = (key: "s24" | "s48" | "s72" | "s7", kolCoins: number) => ({
     pairs: kept.filter((p) => p[key] > 0).map((p) => ({ side: p.side, shared: p[key], gapSec: 0 })),
     kolCoins,
   });
   const stem = wallet.slice(0, 6);
-  return possibleSides({ 24: span("s24", coins[24]), 48: span("s48", coins[48]), 72: span("s72", coins[72]) })
+  return possibleSides({
+    24: span("s24", coins[24]),
+    48: span("s48", coins[48]),
+    72: span("s72", coins[72]),
+    168: span("s7", coins[168]),
+  })
     .sort((a, b) => b.pct - a.pct || b.shared - a.shared || (a.wallet < b.wallet ? -1 : 1))
     .map((l, i) => ({
       wallet: l.wallet,
@@ -388,7 +393,7 @@ async function readWalletBundle(wallet: string, now: number): Promise<WalletBund
   const labeled = bundleLabels(
     wallet,
     counted,
-    { 24: coins["24h"], 48: Number(own[0]?.c48 ?? 0), 72: Number(own[0]?.c72 ?? 0) },
+    { 24: coins["24h"], 48: Number(own[0]?.c48 ?? 0), 72: Number(own[0]?.c72 ?? 0), 168: coins["7d"] },
     excluded,
     hidden,
   );

@@ -11,6 +11,7 @@ import {
   SIDE_LIKELY_BOT_MIN_KOLS,
   SIDE_LIKELY_BOT_MIN_SHARED,
   SIDE_LIKELY_BOT_PCT,
+  SIDE_LOYAL_SHARE,
   SIDE_MIN_SHARED,
   SIDE_WINDOWS,
   TRANSFER_SIDE_INBOUND_TIERS,
@@ -88,17 +89,23 @@ const WINDOW_MS: Record<SideWindow, number> = { "24h": DAY_MS, "7d": 7 * DAY_MS,
 /**
  * The wallets that, in the 7-day lists, shared more than SIDE_LIKELY_BOT_MIN_SHARED coins at over
  * SIDE_LIKELY_BOT_PCT % with each of SIDE_LIKELY_BOT_MIN_KOLS or more KOLs: likely copy-trade
- * bots, not anyone's side wallet. Exported for tests.
+ * bots, not anyone's side wallet. A wallet that bought SIDE_LOYAL_SHARE of its own 7-day coins
+ * alongside one of those KOLs is that KOL's side, and not a likely bot. Exported for tests.
  */
 export function likelyBots(
   lists: Iterable<Readonly<Record<SideWindow, readonly SideWallet[]>>>,
 ): Set<string> {
   const kolsOf = new Map<string, number>();
+  const loyal = new Set<string>();
   for (const byWindow of lists)
-    for (const s of byWindow["7d"])
+    for (const s of byWindow["7d"]) {
+      if (s.coins > 0 && s.shared / s.coins >= SIDE_LOYAL_SHARE) loyal.add(s.wallet);
       if (s.pct > SIDE_LIKELY_BOT_PCT && s.shared > SIDE_LIKELY_BOT_MIN_SHARED)
         kolsOf.set(s.wallet, (kolsOf.get(s.wallet) ?? 0) + 1);
-  return new Set([...kolsOf].filter(([, n]) => n >= SIDE_LIKELY_BOT_MIN_KOLS).map(([w]) => w));
+    }
+  return new Set(
+    [...kolsOf].filter(([w, n]) => n >= SIDE_LIKELY_BOT_MIN_KOLS && !loyal.has(w)).map(([w]) => w),
+  );
 }
 
 /**
@@ -286,6 +293,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
       24: { pairs: byKol.get(k.wallet)?.["24h"] ?? [], kolCoins: Number(k.c24) },
       48: { pairs: tierPairs.get(k.wallet)?.[48] ?? [], kolCoins: Number(k.c48) },
       72: { pairs: tierPairs.get(k.wallet)?.[72] ?? [], kolCoins: Number(k.c72) },
+      168: { pairs: byKol.get(k.wallet)?.["7d"] ?? [], kolCoins: Number(k.c7) },
     })
       // A likely bot is no one's side wallet: no label (kept as withheld for the Admin view).
       .filter((p) => {

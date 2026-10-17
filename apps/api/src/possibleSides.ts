@@ -5,7 +5,8 @@ import { readKolRows } from "./kolRoster.js";
  * Possible KOL side wallets (KolPossibleSide, refreshed hourly by the worker's kolSideWalletsJob.ts and
  * kept 90 days past the last run a wallet qualified): wallets that bought a KOL's tracked coins
  * within a few minutes of it, on one of core's POSSIBLE_SIDE_TIERS (all of them on 10+ coins over
- * 24 hours, 90%+ on 25+ over 48 hours, or 80%+ on 50+ over 72 hours). For display only (the wallet
+ * 24 hours, 90%+ on 25+ over 48 hours, 80%+ on 50+ over 72 hours, or over 7 days 70%+ on 100+ or
+ * 65%+ on 200+). For display only (the wallet
  * modal's label, the bubble map's ties); nothing scores or screens on it.
  *
  * A wallet a KOL funded (WalletFunder.funder is the KOL: the KOL paid for its first SOL) is a KOL
