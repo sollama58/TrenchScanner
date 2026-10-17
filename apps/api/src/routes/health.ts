@@ -373,7 +373,7 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
   // Who priced the newest launches (liveLaunchQuotes), and the band-entry checks between cycles
   // and the cycles they started early (bandEntryWatch). The cycle's RugCheck reports: cached, and
   // looked up while it waited (rugCheckLookups). The linked-wallet funder reads and their credits
-  // (linkedWalletCalls), and the holder-transfer reads (holderTransferCalls). The live tape's pages before a call (liveTape). Jupiter's newest-launch
+  // (linkedWalletCalls), and the holder-transfer reads (holderTransferCalls) with the Helius stream that spares them (heliusStream). The live tape's pages before a call (liveTape). Jupiter's newest-launch
   // reads between cycles and the launches they found (launchPoller).
   for (const key of [
     "dexScreenerCalls",
@@ -383,6 +383,7 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "rugCheckLookups",
     "linkedWalletCalls",
     "holderTransferCalls",
+    "heliusStream",
     "liveTape",
     "pumpfunList",
     "launchDetails",

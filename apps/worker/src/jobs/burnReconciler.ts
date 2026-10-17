@@ -57,6 +57,35 @@ export const STUCK_SIGNATURE_PASSES = 10;
 /** The most stepped-over signatures kept and retried; the oldest go first past it. */
 const MAX_SKIPPED_SIGNATURES = 50;
 
+/**
+ * How long after a burn the stream saw the reconciler looks again: the first pass can run before
+ * the burn is finalized, when it still reads as missing.
+ */
+export const BURN_RECHECK_MS = 25_000;
+
+/**
+ * Wakes the reconciler when the Helius stream sees a transaction on the subscription mint (user
+ * ask 2026-10-17), so a burn is credited within seconds instead of at the next scheduled pass. The
+ * scheduled passes stay as the backstop for anything the stream misses (a dropped connection).
+ * Each sighting asks for a pass now and one BURN_RECHECK_MS later.
+ */
+export class BurnStreamWake {
+  private dueAt: number[] = [];
+
+  /** The stream saw a transaction on the mint. */
+  wake(nowMs = Date.now()): void {
+    this.dueAt.push(nowMs, nowMs + BURN_RECHECK_MS);
+    if (this.dueAt.length > 20) this.dueAt = this.dueAt.slice(-20);
+  }
+
+  /** Whether a pass is owed by now; taking it clears every one owed by now. */
+  take(nowMs = Date.now()): boolean {
+    const before = this.dueAt.length;
+    this.dueAt = this.dueAt.filter((t) => t > nowMs);
+    return this.dueAt.length < before;
+  }
+}
+
 export interface ReconcileResult {
   scanned: number;
   burnsFound: number;
