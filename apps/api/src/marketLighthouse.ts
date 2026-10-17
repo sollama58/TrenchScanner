@@ -11,6 +11,7 @@ import {
   PRE_GATE_OLD_COIN_MIN_AGE_MINUTES,
   prisma,
   Prisma,
+  REPORTED_LABEL_RULE,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
   SAFETY_REJECT_SNIPER_WALLET_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
@@ -181,6 +182,7 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
            sum(co."simReturnPct")::float8 AS sim_sum
     FROM "CandidateOutcome" co
     WHERE co."sampleKind" = 'event' AND co."anchorAt" > ${since}
+      AND co."labelRule" >= ${REPORTED_LABEL_RULE}
       AND ${walletSafetyCutsSql(Prisma.raw('co."features"'))}
     GROUP BY 1 ORDER BY 1`;
   const n = (v: bigint | number | null) => Number(v ?? 0);

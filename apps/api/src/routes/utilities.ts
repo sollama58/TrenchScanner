@@ -41,6 +41,7 @@ import { readTokenProfile } from "../tokenProfile.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 import { loadWalletBundle } from "../walletBundle.js";
+import { SharedCache } from "../sharedCache.js";
 import { loadSideWeb } from "../sideWeb.js";
 
 /**
@@ -133,6 +134,12 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
   // credits on top of a subscription. Burns from a wallet without one are still credited by the
   // reconciler, and wait for it.
   app.addHook("preHandler", app.authenticateSubscriber);
+
+  // The leaderboard's "N Flagged Wallets": a pass over every labeled side wallet, whose inputs
+  // change only with the hourly kolSideWalletsJob, so one count serves every reader for a while.
+  const kolLabelCounts = new SharedCache<Map<string, number>>(KOL_LABEL_COUNTS_TTL_MS, {
+    name: "kol label counts",
+  });
 
   /** What the Utilities tab opens with. */
   app.get("/", async (request) => {
@@ -334,7 +341,10 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       take: SIDE_LEADERBOARD_MAX,
       select: { wallet: true, coins24h: true, coins7d: true, coins30d: true, sides: true, computedAt: true },
     });
-    const [names, flagged] = await Promise.all([kolNames(stored.map((r) => r.wallet)), loadKolLabelCounts()]);
+    const [names, flagged] = await Promise.all([
+      kolNames(stored.map((r) => r.wallet)),
+      kolLabelCounts.get(loadKolLabelCounts),
+    ]);
     // A Known Side's buys count on its KOL's own row (kolSideWalletsJob.ts): it is never a second
     // entry, even in a row left from before it was sorted as one.
     const rows = stored.filter((r) => !names.get(r.wallet)?.knownSideOf);
@@ -575,6 +585,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
 }
 
 const SIDE_LEADERBOARD_MAX = 200;
+/** How long the leaderboard's labeled-wallet counts are reused (their inputs change hourly). */
+const KOL_LABEL_COUNTS_TTL_MS = 5 * 60_000;
 /** Most coins one KOL/wallet comparison lists, newest first. */
 const SIDE_MATCH_MAX = 200;
 const SIDE_WINDOW_MS: Record<SideWindow, number> = {

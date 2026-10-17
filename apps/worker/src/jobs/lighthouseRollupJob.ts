@@ -1,6 +1,7 @@
 import {
   prisma,
   createLogger,
+  REPORTED_LABEL_RULE,
   walletSafetyCutsSql,
   firstCallOnRowSql,
   notRetiredModelSql,
@@ -220,7 +221,7 @@ async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<num
   const screenStart = screenFrom > from ? screenFrom : from;
   const [screened, reads, alerts, screen] = await Promise.all([
     // The same counting and the same population as the Live tab's Lighthouse: rows the safety
-    // screen would reject today (wallet cuts) stay out, a 2x after the stop is a loss, and the
+    // screen would reject today (wallet cuts) and rows under an older label rule stay out, a 2x after the stop is a loss, and the
     // 10x rate's denominator is every row whose 10x verdict is in (a loss settles it at once).
     prisma.$queryRaw<ScreenedHourRow[]>`
       SELECT date_trunc('hour', co."anchorAt") AS hour,
@@ -235,6 +236,7 @@ async function sumHours(from: Date, to: Date, screenFrom: Date): Promise<Map<num
              sum(co."simReturnPct")::float8 AS ret_sum
       FROM "CandidateOutcome" co
       WHERE co."sampleKind" = 'event' AND co."anchorAt" >= ${from} AND co."anchorAt" < ${to}
+        AND co."labelRule" >= ${REPORTED_LABEL_RULE}
         AND ${walletSafetyCutsSql(Prisma.raw('co."features"'))}
       GROUP BY 1`,
     prisma.$queryRaw<ReadsHourRow[]>`

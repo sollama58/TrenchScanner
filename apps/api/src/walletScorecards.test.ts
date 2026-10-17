@@ -90,6 +90,21 @@ describe("scorecardOf", () => {
     expect(c.solOut).toBe(30);
   });
 
+  it("leaves out coins it sold before its first buy on the tape", () => {
+    // Tokens held from before the tape: the first sale precedes the first buy.
+    const c = scorecardOf("w", [
+      row({
+        solIn: 1,
+        solOut: 3,
+        tokensSold: 100,
+        firstBuyAt: new Date("2026-10-16T10:05:00Z"),
+        firstSellAt: new Date("2026-10-16T10:00:00Z"),
+      }),
+    ]);
+    expect(c.closed).toBe(0);
+    expect(c.returnPct).toBeNull();
+  });
+
   it("sums the group's return by size and grades each coin once", () => {
     const ra = [row({ who: "a", mint: "x", solOut: 2, tokensSold: 100, hit2x: true, tenXGraded: true })];
     const rb = [

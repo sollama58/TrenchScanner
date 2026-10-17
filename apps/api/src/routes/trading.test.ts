@@ -498,6 +498,36 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     expect((await app.inject({ method: "GET", url: "/trading/paper", ...as("admin") })).statusCode).toBe(200);
   });
 
+  it("changes trade alerts with a confirmation, and refuses a bad body before spending one", async () => {
+    const put = (payload: Record<string, unknown>) =>
+      inj(app, { method: "PUT", url: "/trading/alerts", ...as("admin"), payload });
+    // The strict alerts schema must not trip over the confirmation the body carries.
+    const res = await put({ bot: false });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().alerts.bot).toBe(false);
+    expect((await put({ bot: true })).json().alerts.bot).toBe(true);
+
+    // An unknown key is refused, and the signed nonce stays unspent.
+    const body = { bot: true, nope: 1 };
+    const challenge = await app.inject({
+      method: "POST",
+      url: "/trading/confirm",
+      ...as("admin"),
+      payload: { method: "PUT", path: "/trading/alerts", body },
+    });
+    const { nonce, message } = challenge.json<{ nonce: string; message: string }>();
+    const signature = bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), adminKeys.secretKey));
+    const bad = await app.inject({
+      method: "PUT",
+      url: "/trading/alerts",
+      ...as("admin"),
+      payload: { ...body, confirmation: { nonce, signature } },
+    });
+    expect(bad.statusCode).toBe(400);
+    const row = await prisma.authNonce.findUnique({ where: { nonce } });
+    expect(row?.usedAt ?? null).toBeNull();
+  });
+
   describe("the server wallet", () => {
     let noWithdraw: FastifyInstance;
     let serverAccount = "";

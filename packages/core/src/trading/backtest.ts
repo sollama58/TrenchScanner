@@ -50,6 +50,14 @@ function slice(calls: BacktestCall[]): BacktestSlice {
   };
 }
 
+/**
+ * The canonical win (curation/labels.ts): a 2x with no 50% stop first. `hit2xIn1h` alone is true
+ * on stopped-out calls too, so the disqualified flag has to come off it.
+ */
+export function backtestHit2x(hit2xIn1h: boolean | null, disqualified: boolean | null): boolean | null {
+  return hit2xIn1h === null ? null : hit2xIn1h && disqualified !== true;
+}
+
 /** Groups graded calls into per-model slices, busiest model first. */
 export function summarizeBacktest(calls: BacktestCall[]): BacktestRow[] {
   const byModel = new Map<string, BacktestCall[]>();
@@ -76,6 +84,7 @@ export async function tradingBacktest(days: number, now: Date = new Date()): Pro
       modelName: true,
       tier: true,
       hit2xIn1h: true,
+      disqualified: true,
       simReturnPct: true,
       aiReviews: {
         where: { decision: { not: null } },
@@ -90,7 +99,7 @@ export async function tradingBacktest(days: number, now: Date = new Date()): Pro
       model: r.model!,
       modelName: r.modelName,
       tier: r.tier,
-      hit2x: r.hit2xIn1h,
+      hit2x: backtestHit2x(r.hit2xIn1h, r.disqualified),
       simReturnPct: r.simReturnPct,
       aiDecision: r.aiReviews[0]?.decision ?? null,
     })),

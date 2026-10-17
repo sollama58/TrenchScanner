@@ -112,6 +112,10 @@ export async function redeemTelegramLinkCode(
       });
       if (!row) return { ok: false };
 
+      // The owner's row locked first, so two codes redeemed at once for one account count in turn
+      // instead of both seeing room under the cap.
+      await tx.$queryRaw`SELECT 1 FROM "User" WHERE "id" = ${row.userId} FOR UPDATE`;
+
       const existing = await tx.telegramChat.findUnique({
         where: { chatId: chat.chatId },
         select: { id: true, userId: true },

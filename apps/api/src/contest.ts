@@ -481,8 +481,9 @@ export interface DefaultFeedRecord {
 }
 
 /**
- * The default feed's pooled record since `since`: for each 6-hour slot's stored pick, the calls its
- * models made inside that slot, first call per token, graded as the leaderboard grades a call (the
+ * The default feed's pooled record since `since`: for each 6-hour slot's stored pick, plus the
+ * champion the feed adds while it holds the title, the calls its models made inside that slot,
+ * first call per token, graded as the leaderboard grades a call (the
  * alert's own verdict, else its outcome row's) and, separately, on rule-4 outcome rows alone.
  */
 export async function defaultFeedRecord(
@@ -507,11 +508,26 @@ export async function defaultFeedRecord(
       FROM "TopModelsPick" p
       WHERE p."slotStart" >= ${firstSlot} AND p."slotStart" <= ${now}
     ),
-    picks AS (
-      SELECT slot_start, slot_start + make_interval(mins => ${TOP_MODELS_REFRESH_MINUTES}::int) AS slot_end,
-             unnest(models) AS model
+    picked AS (
+      SELECT slot_start, slot_start + make_interval(mins => ${TOP_MODELS_REFRESH_MINUTES}::int) AS slot_end, models
       FROM slots
       WHERE cardinality(models) > 0
+    ),
+    champions AS (
+      SELECT "contestant" AS model, "chosenAt" AS held_from,
+             COALESCE(lead("chosenAt") OVER (ORDER BY "chosenAt"), 'infinity'::timestamp) AS held_to
+      FROM "CuratorChampion"
+    ),
+    picks AS (
+      SELECT slot_start, slot_end, unnest(models) AS model
+      FROM picked
+      UNION ALL
+      -- The champion joins the served feed when it is not in the pick (resolveDefaultModels), for
+      -- the part of the slot it held the title. A token called by both counts once (calls below).
+      SELECT GREATEST(p.slot_start, c.held_from), LEAST(p.slot_end, c.held_to), c.model
+      FROM picked p
+      JOIN champions c ON c.held_from < p.slot_end AND c.held_to > p.slot_start
+      WHERE NOT (c.model = ANY(p.models))
     ),
     calls AS (
       SELECT DISTINCT ON (a."tokenId")
