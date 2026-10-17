@@ -1417,6 +1417,31 @@ export interface Leaderboard {
   };
 }
 
+/** One mix of models scored as a single feed, each token once (/curated/models/compare). */
+export interface FeedMixRecord {
+  models: string[];
+  calls: number;
+  graded: number;
+  hitRate2xPct: number | null;
+  hitRate4xPct: number | null;
+  hitRate10xPct: number | null;
+  /** Average simulated return per graded call under the exit plan, in percent. */
+  avgReturnPct: number | null;
+  avgRunDoublings: number | null;
+  /** The share of the window's runners the mix called at a winning moment. */
+  catch: LiveCatch;
+}
+
+/** The top models' feed against the reader's own, over the same window (/curated/models/compare). */
+export interface FeedComparison {
+  days: number;
+  since: string;
+  best: FeedMixRecord;
+  mine: FeedMixRecord;
+  /** The reader's feed is the top models. */
+  same: boolean;
+}
+
 // ---- Settings (/settings) ----
 
 export type AlertSoundId = "chime" | "ping" | "bell" | "coin" | "radar";
