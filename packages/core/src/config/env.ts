@@ -767,8 +767,10 @@ const envSchema = z.object({
   CURATOR_CHAMPION_MIN_LIVE_GRADED: z.coerce.number().int().min(0).default(50),
   // Since 2026-10-17 the champion is ranked on its live record's full-scorecard score
   // (curation/champion.ts, recordScore), so MARGIN is in score points out of 100. (2026-10-14..17 it
-  // was ranked on the 2x lower bound and MARGIN was percentage points of that bound.)
-  CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(1),
+  // was ranked on the 2x lower bound and MARGIN was percentage points of that bound.) 3 since
+  // 2026-10-17 (user decision; was 1): a point is within noise between the top seats, so the default
+  // flipped between close models.
+  CURATOR_CHAMPION_MARGIN: z.coerce.number().min(0).max(50).default(3),
   // The training run's guard (curation/runGuard.ts): a run that would ship broken weights, train on
   // under half the rows the running models saw, or silence every seat that was calling is held
   // back and the running models kept. A held run is let through once the running models are this
