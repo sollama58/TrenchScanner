@@ -1,5 +1,5 @@
 import type { ScoredToken } from "../types.js";
-import { MIN_BUY_RATIO } from "../curation/curator.js";
+import { isCollapsing, MIN_BUY_RATIO } from "../curation/curator.js";
 
 /**
  * The platform's own floor under user-filter alerts, applied after
@@ -12,10 +12,8 @@ import { MIN_BUY_RATIO } from "../curation/curator.js";
  *             minutes aren't red - the same "looks ready" moment the curated feed decides at
  *             (passesEventPreGate), minus its band.
  *
- * The one-minute reading comes from the coin's bonding curve when the curve tape follows it
- * (curveRet1mPct: seconds old, worker jobs/curveTape.ts), else from the scan's own 30-second tape
- * (pathRet1mPct). Until 2026-10-17 "flush" held at 25% down over five minutes (MAX_5M_DUMP_PCT);
- * on ten days of graded outcomes for coins under 20 minutes old, moments 25-80% down over five
+ * The collapse line is isCollapsing's (curator.ts), shared with the event pre-gate. Until
+ * 2026-10-17 "flush" held at 25% down over five minutes (MAX_5M_DUMP_PCT); on ten days of graded outcomes for coins under 20 minutes old, moments 25-80% down over five
  * minutes won as often as flat ones (12-20% against 11-12%), and only a collapse did worse: 80%+
  * in five minutes, or 65%+ within a minute, about 5%.
  *
@@ -29,21 +27,12 @@ import { MIN_BUY_RATIO } from "../curation/curator.js";
  */
 export type MatchAlertGuardMode = "off" | "flush" | "ready";
 
-/** Down more than this within the last minute: a collapse. */
-export const COLLAPSE_1M_PCT = -65;
-/** Down more than this over the last five minutes: a collapse. */
-export const COLLAPSE_5M_PCT = -80;
-
 export function alertGuardBlocks(
   scored: Pick<ScoredToken, "priceChange5mPct" | "buys1h" | "sells1h" | "curvePath" | "pricePath">,
   mode: MatchAlertGuardMode,
 ): string | null {
   if (mode === "off") return null;
-  const ret1m = scored.curvePath?.curveRet1mPct ?? scored.pricePath?.pathRet1mPct ?? null;
-  if (ret1m !== null && ret1m < COLLAPSE_1M_PCT) return "collapse";
-  if (scored.priceChange5mPct !== undefined && scored.priceChange5mPct < COLLAPSE_5M_PCT) {
-    return "collapse";
-  }
+  if (isCollapsing(scored)) return "collapse";
   if (mode === "ready") {
     const totalTxns1h = (scored.buys1h ?? 0) + (scored.sells1h ?? 0);
     if (totalTxns1h > 0 && (scored.buys1h ?? 0) / totalTxns1h < MIN_BUY_RATIO) return "sellers";

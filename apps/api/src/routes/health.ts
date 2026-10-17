@@ -385,6 +385,7 @@ function lastRunSummary(meta: unknown): Record<string, unknown> | null {
     "holderTransferCalls",
     "heliusStream",
     "curveTape",
+    "pumpfunGate",
     "liveTape",
     "pumpfunList",
     "launchDetails",

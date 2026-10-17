@@ -426,7 +426,14 @@ describe("pseudo-event decision rows", () => {
     expect(isDecisionRow(row({ mcapUsd: 50_000, buys1h: 40, sells1h: 60, priceChange5mPct: 2 }), band)).toBe(
       false,
     );
-    expect(isDecisionRow(row({ mcapUsd: 50_000, buys1h: 60, sells1h: 40, priceChange5mPct: -2 }), band)).toBe(
+    // A dip is still a moment; a collapse (over five minutes, or within a minute) is not.
+    expect(
+      isDecisionRow(row({ mcapUsd: 50_000, buys1h: 60, sells1h: 40, priceChange5mPct: -30 }), band),
+    ).toBe(true);
+    expect(
+      isDecisionRow(row({ mcapUsd: 50_000, buys1h: 60, sells1h: 40, priceChange5mPct: -85 }), band),
+    ).toBe(false);
+    expect(isDecisionRow(row({ mcapUsd: 50_000, buys1h: 60, sells1h: 40, curveRet1mPct: -70 }), band)).toBe(
       false,
     );
     expect(isDecisionRow(row({ mcapUsd: 5_000_000, buys1h: 60, sells1h: 40 }), band)).toBe(false);

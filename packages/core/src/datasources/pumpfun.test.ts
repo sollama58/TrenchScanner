@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
-import { ipfsMetadataCid, parseLaunchMetadata, PumpFunClient } from "./pumpfun.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ipfsMetadataCid, LIST_BLOCK_BACKOFF_MS, parseLaunchMetadata, PumpFunClient } from "./pumpfun.js";
 
 let server: Server | undefined;
 
@@ -216,6 +216,16 @@ describe("PumpFunClient.takeListStats", () => {
     // Blocked: the list is left alone for a while instead of failing every page every cycle.
     await client.discoverNewMints({ pages: 3 });
     expect(client.takeListStats()).toEqual({ pages: 0, failed: 0, skipped: 3 });
+
+    // Past the wait, one page asks whether the block has lifted; the rest stay skipped.
+    const later = Date.now() + LIST_BLOCK_BACKOFF_MS + 1;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(later);
+    try {
+      await client.discoverNewMints({ pages: 3 });
+      expect(client.takeListStats()).toMatchObject({ pages: 1, failed: 1, skipped: 2 });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("counts answered pages as not failed", async () => {

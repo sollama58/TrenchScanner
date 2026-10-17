@@ -5,6 +5,7 @@ import {
   nextPeakCheckDelayMs,
   HttpError,
   PEAK_CHECK_ACTIVE_MS,
+  pumpFunSwapGate,
   type MinuteCandle,
   type PumpFunClient,
 } from "@trenchscanner/core";
@@ -199,7 +200,18 @@ export async function runCandlePeaksJob(
     counts.implausible += result.implausible;
   }
 
-  const meta = { ...counts, enrolled, due: due.length, throttled };
+  // The trainer's swap-api budget (pumpfunGate.ts), shared with the regrade jobs: what it let
+  // through, paused and held back since the last run.
+  const swap = pumpFunSwapGate.takeStats();
+  const meta = {
+    ...counts,
+    enrolled,
+    due: due.length,
+    throttled,
+    swapRequests: swap.requests,
+    swapThrottled: swap.throttled,
+    swapHeldBack: swap.heldBack,
+  };
   if (counts.coins > 0 || enrolled > 0) logger.info("candle peaks", meta);
   return meta;
 }

@@ -13,7 +13,8 @@ describe("gateMiss", () => {
     expect(gateMiss({ ...ready, ageMinutes: 400 }, band)).toMatch(/hours old/);
     expect(gateMiss({ ...ready, buys1h: 0, sells1h: 0 }, band)).toMatch(/no trades/);
     expect(gateMiss({ ...ready, buys1h: 30, sells1h: 70 }, band)).toMatch(/buys were under/);
-    expect(gateMiss({ ...ready, priceChange5mPct: -3 }, band)).toMatch(/falling/);
+    expect(gateMiss({ ...ready, priceChange5mPct: -3 }, band)).toBeNull();
+    expect(gateMiss({ ...ready, priceChange5mPct: -85 }, band)).toMatch(/collapsing/);
     expect(gateMiss({ ...ready, ageMinutes: 90, priceChange5mPct: 5 }, band)).toMatch(/wasn't up/);
   });
 });

@@ -1,4 +1,4 @@
-import { createLogger, fetchJson, HttpError, PUMP_SUPPLY_TOKENS } from "@trenchscanner/core";
+import { createLogger, fetchJson, HttpError, PUMP_SUPPLY_TOKENS, pumpFunSwapGate } from "@trenchscanner/core";
 
 const logger = createLogger("token-chart");
 
@@ -63,7 +63,8 @@ export function pumpFunCandleFetcher(
     try {
       const body = await fetchJson<unknown>(
         `${baseUrl}/v1/coins/${encodeURIComponent(mint)}/candles?interval=${interval}&limit=${CANDLE_PAGE}&currency=USD`,
-        { timeoutMs: 6_000, retries: 0 },
+        // The process's swap-api budget, shared by every chart cache: a 429 pauses them all.
+        { timeoutMs: 6_000, retries: 0, gate: pumpFunSwapGate },
       );
       return parseMcapCandles(body);
     } catch (err) {
