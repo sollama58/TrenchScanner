@@ -3300,6 +3300,27 @@ body.drawer-open .util-drawer {
   border-color: color-mix(in srgb, var(--warn) 45%, transparent);
   background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
+/* In the KOL list both read as quiet text with a colored dot, not filled pills (user ask 2026-10-17). */
+.side-who .side-found,
+.side-who .side-flagged {
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-weight: 500;
+  color: var(--muted);
+}
+.side-who .side-found::before,
+.side-who .side-flagged::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--brand-a);
+}
+.side-who .side-flagged::before {
+  background: var(--warn);
+}
 .side-count {
   text-align: right;
   font-size: 13px;
@@ -3308,6 +3329,13 @@ body.drawer-open .util-drawer {
 .side-count.main {
   font-weight: 700;
   color: var(--ink);
+}
+/* Possible and Flagged counts: phone-only columns in place of the windows. */
+.side-phone {
+  display: none;
+}
+.side-count-flagged {
+  color: var(--warn-ink);
 }
 .side-chevron {
   color: var(--muted);
@@ -3765,8 +3793,15 @@ body.drawer-open .util-drawer {
   }
   .side-head,
   .side-row {
-    grid-template-columns: 22px minmax(0, 1fr) 40px 40px 44px 16px;
+    grid-template-columns: 22px minmax(0, 1fr) 60px 56px 16px;
     gap: 6px;
+  }
+  .side-head > .num:not(.side-phone),
+  .side-count:not(.side-phone) {
+    display: none;
+  }
+  .side-phone {
+    display: block;
   }
   /* The name needs the room more than the avatar does. */
   .side-avatar {
@@ -3781,16 +3816,18 @@ body.drawer-open .util-drawer {
   }
   .side-head {
     padding: 0 4px 6px;
-    /* The two buttons stack on a phone, so the name keeps its room. */
-    margin-right: 34px;
+    /* Room for the wallet profile and wallet web buttons, side by side. */
+    margin-right: 62px;
   }
   .side-acts {
-    flex-direction: column;
     gap: 2px;
   }
   .side-acts .side-profile {
     width: 30px;
-    height: 28px;
+    height: 30px;
+    padding: 0;
+    display: grid;
+    place-items: center;
   }
   .side-count {
     font-size: 12px;
