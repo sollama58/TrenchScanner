@@ -70,6 +70,8 @@ export * from "./curation/forest.js";
 export * from "./curation/trainingRun.js";
 export * from "./curation/aiReview.js";
 export * from "./curation/contestants.js";
+export * from "./curation/modelGate.js";
+export * from "./curation/modelGateStore.js";
 export * from "./curation/stacking.js";
 export * from "./curation/leaderboard.js";
 export * from "./curation/evolution.js";

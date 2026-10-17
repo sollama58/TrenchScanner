@@ -24,6 +24,7 @@ import {
   type ScoredOutcome,
   scoreCandidateWithModel,
   wilsonLowerBound,
+  isDecisionRow,
 } from "./trainer.js";
 import {
   CANDIDATE_FEATURE_NAMES,
@@ -60,6 +61,7 @@ import {
   type DerivedRuleSet,
 } from "./rulesDistill.js";
 import { HAND_TUNED_RULE_LINES } from "./curator.js";
+import { gateCriteriaUncheckedOffline, passesModelGateOnFeatures, type ModelGates } from "./modelGate.js";
 
 /**
  * One training run, minus the IO: examine every enabled model family on the same walk-forward
@@ -168,6 +170,11 @@ export interface StoredEvalMetrics {
   featureReport?: FeatureReport;
   /** Inputs this run held back as too new (or lately dead) to train on - see featureOnset.ts. */
   heldFeatures?: HeldFeature[];
+  /**
+   * Gated seats only (ContestantSpec.gate): the gate, the run's rows it let through of all of them,
+   * and the criteria a stored row can't be checked against (gateCriteriaUncheckedOffline).
+   */
+  gate?: { id: string; rows: number; of: number; uncheckedOffline: string[] };
   /** Which decision moments the exam graded (event rows alone, or with pseudo-events) - see ExamPopulation. */
   examPopulation?: ExamPopulation;
   /** The Agreement seat only: out-of-sample win rate by how many learners called (curation/agreement.ts). */
@@ -752,6 +759,25 @@ export interface ContestTrainingConfig extends Omit<CuratorTrainingConfig, "lear
    * is not examined this run and keeps its running model.
    */
   narrativeRows?: TrainingRow[];
+  /**
+   * The frozen filters the gated seats read (ContestantSpec.gate, ModelGate rows): a gated seat
+   * whose gate is missing here sits the run out.
+   */
+  gates?: ModelGates;
+}
+
+/**
+ * Fewest decision moments passing its gate a gated seat's exam runs on, as NARRATIVE_MIN_ROWS is
+ * for the narrative seats: under this its cutoff would be a coin flip and it keeps its running model.
+ */
+export const GATED_MIN_ROWS = 300;
+
+/** A gated seat's rows: the run's rows that pass its gate on their stored inputs, any sample kind. */
+export function gatedTrainingSet(
+  rows: readonly TrainingRow[],
+  gate: Parameters<typeof passesModelGateOnFeatures>[1],
+): TrainingRow[] {
+  return rows.filter((r) => passesModelGateOnFeatures(r.features, gate));
 }
 
 /** Fewest deep-read rows the Narrative seat's exam runs on: under this its cutoff would be a coin flip. */
@@ -1046,9 +1072,14 @@ export async function runEvolvingContest(
   const heldFeatures = cfg.featureOnsetGuard ? { heldFeatures: features.held } : {};
 
   // Progress for the admin panel: one step per exam sat (seats, narrative seats, challengers).
-  const learnerSpecs = cfg.contestants.filter((c) => c.role === "learner" && c.recipe);
+  // Gated seats sit their own exam on the rows their gate lets through (below), like the narrative seats.
+  const learnerSpecs = cfg.contestants.filter(
+    (c) => c.role === "learner" && c.recipe && c.gate === undefined,
+  );
+  const gatedSpecs = cfg.contestants.filter((c) => c.role === "learner" && c.recipe && c.gate !== undefined);
   const examsTotal =
     learnerSpecs.length +
+    gatedSpecs.length +
     cfg.contestants.filter((c) => c.role === "narrative" && c.recipe).length +
     (plan?.challengers.length ?? 0);
   let examsDone = 0;
@@ -1110,6 +1141,35 @@ export async function runEvolvingContest(
       if (cfg.featureOnsetGuard) exam.result.metrics.heldFeatures = ownFeatures.held;
       results.push(exam.result);
     }
+  }
+
+  // The gated seats (Gems): trained, examined and calibrated on the moments their frozen filter lets
+  // through, so they share no fold with the learners and feed no combiner. Skipped, with the
+  // running model kept, while the gate is missing or lets through too few decision moments.
+  for (const spec of gatedSpecs) {
+    const gate = cfg.gates?.[spec.gate!];
+    if (!gate) continue;
+    const seatRows = gatedTrainingSet(rows, gate);
+    if (seatRows.filter((r) => isDecisionRow(r, cfg.mcapBand)).length < GATED_MIN_ROWS) continue;
+    const ownFeatures = runFeatures(seatRows, cfg);
+    examining(spec.name);
+    const exam = await examineLearner(
+      seatRows,
+      cfg,
+      spec.id,
+      spec.name,
+      spec.recipe!,
+      null,
+      ownFeatures.usable,
+    );
+    exam.result.metrics.gate = {
+      id: spec.gate!,
+      rows: seatRows.length,
+      of: rows.length,
+      uncheckedOffline: gateCriteriaUncheckedOffline(gate),
+    };
+    if (cfg.featureOnsetGuard) exam.result.metrics.heldFeatures = ownFeatures.held;
+    results.push(exam.result);
   }
 
   const challengerScores: (number | null)[] = [];

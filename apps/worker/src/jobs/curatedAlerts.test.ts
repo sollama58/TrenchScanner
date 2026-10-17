@@ -5,6 +5,8 @@ import {
   prisma,
   Prisma,
   loadEnv,
+  GEMS_CONTESTANT,
+  GEMERALD_GATE,
   CANDIDATE_FEATURE_NAMES,
   CURATOR_MODEL_KIND,
   CONSENSUS_CONTESTANT,
@@ -524,6 +526,37 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     expect(byModel.get(RULES_CONTESTANT)?.source).toBe(HEURISTIC_CURATOR_SOURCE);
     expect(byModel.get("linear")?.source).toBe(linearId);
     expect(new Set(alerts.map((a) => a.candidateOutcomeId))).toEqual(new Set([sample!.id]));
+  });
+
+  it("Gems considers only tokens that pass its frozen gate, and calls nothing without one", async () => {
+    await activeModel(GEMS_CONTESTANT, CURATOR_MODEL_KIND, alwaysYesParams());
+    const token = await prisma.token.create({ data: { mintAddress: `${TAG}-gems` } });
+    const gemsCalls = async (scored: ScoredToken) => {
+      resetCuratorModelCache();
+      const cycle = newCuratedCycle();
+      await collectCuratedContender(cycle, token, scored, null, env);
+      return cycle.byModel.get(GEMS_CONTESTANT)?.length ?? 0;
+    };
+    await prisma.modelGate.deleteMany({ where: { id: GEMERALD_GATE } });
+    try {
+      expect(await gemsCalls(curatableFixture(token.mintAddress))).toBe(0);
+      await prisma.modelGate.create({
+        data: {
+          id: GEMERALD_GATE,
+          criteria: { mcapMin: 100_000, mcapMax: 200_000, maxTop10HolderPct: 30, maxEmptyTop10WalletPct: 60 },
+          sourceFilterId: "test-filter",
+          sourceFilterName: "Gemerald",
+        },
+      });
+      expect(await gemsCalls(curatableFixture(token.mintAddress, { emptyTop10WalletPct: 10 }))).toBe(1);
+      expect(
+        await gemsCalls(curatableFixture(token.mintAddress, { emptyTop10WalletPct: 10, top10HolderPct: 40 })),
+      ).toBe(0);
+      // A capped wallet figure that hasn't landed holds the decision, as a filter alert waits for it.
+      expect(await gemsCalls(curatableFixture(token.mintAddress))).toBe(0);
+    } finally {
+      await prisma.modelGate.deleteMany({ where: { id: GEMERALD_GATE } });
+    }
   });
 
   it("banks every seat's score on a new decision moment, and tiers on the seat's live line", async () => {

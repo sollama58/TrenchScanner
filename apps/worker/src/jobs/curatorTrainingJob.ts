@@ -58,6 +58,10 @@ import {
   judgeProbation,
   type Challenger,
   type TrainedCuratorParams,
+  gatesById,
+  loadModelGates,
+  GEMERALD_ASKED_AT,
+  GEMERALD_GATE,
 } from "@trenchscanner/core";
 import { RunProgress } from "../runProgress.js";
 import { runContestOffThread } from "../training/runContest.js";
@@ -175,6 +179,25 @@ async function trainCurators(
   const narrativeRows = contestants.some((c) => c.role === "narrative")
     ? await narrativeTrainingRows(windowStart, env.CURATOR_TRAINING_MAX_ROWS)
     : [];
+  // The gated seats' frozen filters (Gems, curation/modelGate.ts). Only read while one is on the roster.
+  const storedGates = contestants.some((c) => c.gate !== undefined) ? await loadModelGates() : [];
+  const gates = gatesById(storedGates);
+  for (const c of contestants) {
+    if (c.gate !== undefined && !(c.gate in gates)) {
+      logger.warn("gated seat has no stored gate - it sits out and calls nothing", {
+        contestant: c.id,
+        gate: c.gate,
+      });
+    }
+  }
+  // The copy was asked for as Gemerald stood then; one taken after a later edit says so.
+  const gemerald = storedGates.find((g) => g.id === GEMERALD_GATE);
+  if (gemerald?.sourceCriteriaChangedAt && gemerald.sourceCriteriaChangedAt > GEMERALD_ASKED_AT) {
+    logger.warn("Gems' gate copied Gemerald after an edit made since it was asked for", {
+      editedAt: gemerald.sourceCriteriaChangedAt.toISOString(),
+      askedAt: GEMERALD_ASKED_AT.toISOString(),
+    });
+  }
 
   // A takeover on probation is settled first: confirmed (its challenger takes the seat this
   // run), rejected or abandoned (breeding resumes), or still waiting (no breeding this run).
@@ -215,15 +238,19 @@ async function trainCurators(
       rulesTeachers,
       currentRules,
       narrativeRows,
+      gates,
     },
     plan ?? undefined,
     (step, done, total) => progress.step(`${step} (${done + 1} of up to ${total})`),
   );
   const { results } = outcome;
-  // The Narrative seat sits out until it has rows enough (NARRATIVE_MIN_ROWS); its running
-  // model, if any, stays active rather than retiring with the generation.
+  // The Narrative seat sits out until it has rows enough (NARRATIVE_MIN_ROWS), a gated seat until its
+  // gate is stored and lets enough through (GATED_MIN_ROWS); a running model, if any, stays active
+  // rather than retiring with the generation.
   const kept = contestants
-    .filter((c) => c.role === "narrative" && !results.some((r) => r.contestant === c.id))
+    .filter(
+      (c) => (c.role === "narrative" || c.gate !== undefined) && !results.some((r) => r.contestant === c.id),
+    )
     .map((c) => c.id);
   if (results.length === 0) {
     logger.info("contest training produced nothing to store", { rows: trainingRows.length });

@@ -69,6 +69,10 @@ import {
   ruleSetReasons,
   HEURISTIC_CURATOR_SOURCE,
   type ScoredToken,
+  type FilterCriteria,
+  gatesById,
+  loadModelGates,
+  passesModelGate,
   type ServedCuratorExtras,
   type StackedCuratorParams,
   type TrainedCuratorParams,
@@ -120,7 +124,13 @@ type RosterEntry =
        */
       derived?: DerivedRuleSet;
     }
-  | { role: "learner"; spec: ContestantSpec; model: ModelRef<TrainedCuratorParams> }
+  | {
+      role: "learner";
+      spec: ContestantSpec;
+      model: ModelRef<TrainedCuratorParams>;
+      /** A gated seat's frozen filter (ContestantSpec.gate): it decides only on tokens that pass. */
+      gate?: FilterCriteria;
+    }
   /** Decides only with the deep read in hand - see DecisionPopulation. */
   | { role: "narrative"; spec: ContestantSpec; model: ModelRef<TrainedCuratorParams> }
   | { role: "stacked"; spec: ContestantSpec; model: ModelRef<StackedCuratorParams> }
@@ -249,6 +259,8 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
   });
   const newest = new Map<string, (typeof rows)[number]>();
   for (const row of rows) if (row.contestant && !newest.has(row.contestant)) newest.set(row.contestant, row);
+  // The gated seats' frozen filters (Gems): a seat whose gate isn't stored calls nothing.
+  const gates = specs.some((s) => s.gate !== undefined) ? gatesById(await loadModelGates()) : {};
 
   const entries: RosterEntry[] = [];
   for (const spec of specs) {
@@ -261,6 +273,16 @@ async function loadCuratorRoster(env: Env, key: string): Promise<CuratorRoster> 
         rankCutoff: params !== null ? (params.rankCutoff ?? undefined) : await legacyHeuristicCutoff(),
         ...(params?.derived ? { derived: params.derived } : {}),
       });
+    } else if (spec.role === "learner" && spec.gate !== undefined) {
+      const gate = gates[spec.gate];
+      if (gate && row && SUPPORTED_CURATOR_MODEL_KINDS.includes(row.kind)) {
+        entries.push({
+          role: "learner",
+          spec,
+          model: { id: row.id, params: row.params as unknown as TrainedCuratorParams },
+          gate,
+        });
+      }
     } else if (spec.role === "learner" || spec.role === "narrative") {
       if (row && SUPPORTED_CURATOR_MODEL_KINDS.includes(row.kind)) {
         entries.push({
@@ -519,6 +541,8 @@ function decideCurations(
           : heuristicGate(scored, entry.rankCutoff, env),
       );
     } else if (entry.role === "learner") {
+      // A gated seat considers only what its frozen filter lets through: no score, no decision.
+      if (entry.gate && !passesModelGate(scored, entry.gate)) continue;
       const { params, id } = entry.model;
       const probability = safeScore(entry.spec.id, id, () => scoreCandidateWithModel(params, features));
       if (probability === null) continue;

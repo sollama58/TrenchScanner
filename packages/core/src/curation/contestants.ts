@@ -11,6 +11,7 @@ import {
 } from "./features.js";
 import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
 import { NARRATIVE_STORY_WEIGHT } from "./narrativeLed.js";
+import { GEMERALD_GATE } from "./modelGate.js";
 import type { CuratorLearner } from "./trainer.js";
 
 /**
@@ -40,6 +41,9 @@ import type { CuratorLearner } from "./trainer.js";
  *    cutoff passes only its top 12% or so of decision moments, outside the combiners and
  *    evolution (see ContestantSpec.standalone). Sharp Survivor took over from Sharp Deep Trees
  *    (retired, user decision 2026-10-14).
+ *    Gems (user ask 2026-10-17) is a standalone seat too, with a gate: it considers only tokens
+ *    that pass the Gemerald filter as it stood that day (ContestantSpec.gate, modelGate.ts), and
+ *    trains and sits its exam on those moments alone.
  *  - "topslice": only the most confident calls of the tree seats - a token one of them ranks in
  *    the top quarter of its own calls - at a fixed cutoff, nothing fitted (curation/topSlice.ts).
  *  - "narrative": a trained model that decides only once TokenSage's deep read of the coin is
@@ -121,6 +125,13 @@ export interface ContestantSpec {
    * spec stays so its id is never reused and old rows still have a name.
    */
   retired?: boolean;
+  /**
+   * A gated seat (learners only, standalone): the ModelGate id of the frozen filter a token must
+   * pass before the seat considers it (curation/modelGate.ts). It trains and sits its exam on the
+   * moments that pass and decides live only on those, so its rows don't line up with the shared
+   * exam's and no combiner, Trader included, stacks it. Without its gate stored it calls nothing.
+   */
+  gate?: string;
 }
 
 /** The consensus - what every subscriber sees until they pick another model. */
@@ -146,6 +157,9 @@ export const SHARP_SURVIVOR_CONTESTANT = "sharp-survivor";
  * under a new id: a different model on the old id would have inherited Deep Trees' record.
  */
 export const SHARP_DEEP_TREES_CONTESTANT = "sharp-deep-trees";
+
+/** The gated seat on the Gemerald filter - see GEMS_RECIPE. */
+export const GEMS_CONTESTANT = "gems";
 
 /** "Recent" contestants forget fast: this meta rotates in days, and they bet on that. */
 export const RECENT_HALF_LIFE_DAYS = 3;
@@ -278,8 +292,29 @@ export const TRADER_CUTOFF_SHARE = 0.1;
  * costs it little, unlike a vote). The narrative seats sit a different exam population.
  */
 export function isTraderMember(spec: ContestantSpec): boolean {
-  return spec.role === "learner" && spec.retired !== true;
+  return spec.role === "learner" && spec.retired !== true && spec.gate === undefined;
 }
+
+/**
+ * Gems (user ask 2026-10-17: "based on the traits of our best-performing models"), traits picked by
+ * live 2x hit rate over 3, 7 and 30 days (/stats/hit-rates, 2026-10-17; n = 220-2,450 graded calls
+ * a seat). The leaders were close together, 21-22% against Gemerald's own 17.8%:
+ *  - boosted trees: Trees 21.9% (30d), Simple Trees 21.8%, Trees Recent 22.3% (3d) - the tree seats
+ *    led every window;
+ *  - survival first: Survivor 21.6-21.7% and Sharp Survivor 21.2%, the only seat averaging a profit
+ *    a trade under the site's exit plan (+4.3%, 7d);
+ *  - no TokenSage read: Simple Trees, Trees' twin without it, matched or beat Trees in every window;
+ *  - a short memory: Linear Recent (3-day half-life) 21.6-21.7%, Trees Recent (1.5 days) 22.3% (3d);
+ *  - only its surest calls: Top Slice 21.6-21.8% and the Sharp seats' top-12% cutoff.
+ * The spread between seats is inside noise at these counts; the gate is what makes Gems different.
+ */
+export const GEMS_RECIPE: CuratorRecipe = {
+  learner: "gbdt",
+  twoStage: true,
+  featureNames: TREES_NO_TOKENSAGE_FEATURES,
+  recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
+  cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+};
 
 export const CONTESTANTS: readonly ContestantSpec[] = [
   {
@@ -492,6 +527,20 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     role: "learner",
     recipe: { learner: "gbdt", twoStage: true, cutoffShare: HIGH_PRECISION_CUTOFF_SHARE },
     standalone: true,
+  },
+  {
+    // User ask 2026-10-17: a model on the traits of the best seats that only considers tokens
+    // passing the Gemerald filter as it stood then (GEMERALD_GATE, frozen in ModelGate).
+    id: GEMS_CONTESTANT,
+    name: "Gems",
+    description:
+      "Only tokens that pass the Gemerald filter (a frozen copy): Survivor's two boosted-tree stages on every input but TokenSage's, mostly the last few days, calling only its surest tokens - about the top 12% of Gemerald's moments, moved by 2x record",
+    summary:
+      "Looks only at coins the Gemerald filter lets through, asks whether each will avoid a 50% drop and then double, and calls only the ones it is surest of.",
+    role: "learner",
+    recipe: GEMS_RECIPE,
+    standalone: true,
+    gate: GEMERALD_GATE,
   },
   {
     id: NARRATIVE_CONTESTANT,
