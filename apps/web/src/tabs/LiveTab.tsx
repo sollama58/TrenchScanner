@@ -8,7 +8,7 @@ import { FeedStatsModal } from "../components/FeedStatsModal";
 import { ArrowRightIcon, BrainIcon, ChartIcon, InfoIcon, PaletteIcon, RadarIcon } from "../components/Icons";
 import { prefetch } from "../cache";
 import { useLiveMarketCaps, usePolling, usePollingAll, useNow, useNudgeStream } from "../hooks";
-import { fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES } from "../feedFill";
+import { FEED_PAGE_SIZE, fillPage, joinPages, MAX_FILL_PAGES, MAX_READ_PAGES, nextDepth } from "../feedFill";
 import { ago, pct } from "../format";
 import { cardHideSet, feedGridProps, useAppearance } from "../appearance";
 import { CustomizeDrawer } from "../components/CustomizeDrawer";
@@ -28,6 +28,13 @@ const HIGH_CONVICTION_KEY = "ts-feed-high-conviction";
 /** The "High conviction only" switch is hidden for now; flip this to bring it back. While hidden the
  *  saved choice stays in storage but isn't applied, so nobody is stuck on a filter they can't see. */
 const SHOW_HIGH_CONVICTION = false;
+
+/**
+ * How many API pages each feed page took to fill last time, by feed and page ("<hc>|<page>"), kept
+ * for the page's life rather than the tab's: coming back to Live (or paging back) reads that many
+ * at once, from the cache where it has them, instead of growing one round trip at a time again.
+ */
+const filledDepth = new Map<string, number>();
 
 function readHighConviction(): boolean {
   if (!SHOW_HIGH_CONVICTION) return false;
@@ -77,7 +84,7 @@ export function LiveTab({
   // token, a card whose token was pruned), and hiding low market caps takes more cards out, so the
   // feed reads the API's pages from the first and lays out full pages of its own here: page 1
   // below, and `depth - 1` more after it, read as far as the page on screen needs.
-  const [depth, setDepth] = useState(1);
+  const [depth, setDepth] = useState(() => filledDepth.get(`${hc}|1`) ?? 1);
   const feedPage = usePolling<MatchPage>(feedPath(1), 30_000);
   const morePaths = Array.from({ length: depth - 1 }, (_, i) => feedPath(i + 2));
   const morePages = usePollingAll<MatchPage>(morePaths, 30_000);
@@ -130,19 +137,42 @@ export function LiveTab({
   const maxDepth = Math.min(page + MAX_FILL_PAGES - 1, MAX_READ_PAGES);
   const allLoaded = loadedPages.every((p) => p !== null);
   const apiHasMore = lastLoaded ? (lastLoaded.hasMore ?? false) : false;
-  // Read one more API page while this one is short and the API has older alerts.
+  // Read more API pages while this one is short and the API has older alerts: as many as it looks
+  // to need at the rate the pages so far showed cards, all at once.
   useEffect(() => {
-    if (filled && !filled.moreLoaded && allLoaded && apiHasMore && depth < maxDepth) setDepth((d) => d + 1);
-  }, [filled, allLoaded, apiHasMore, depth, maxDepth]);
-  // Back to reading the first page alone when the feed changes.
-  useEffect(() => setDepth(1), [highConviction]);
-  // Paged back: read only as deep as the page on screen, growing again (above) if it comes up
-  // short. Kept at its depth, every page read on the way out stayed polled for good.
+    if (!filled || !allLoaded) return;
+    if (filled.moreLoaded) filledDepth.set(`${hc}|${page}`, depth);
+    else if (apiHasMore && depth < maxDepth)
+      setDepth(nextDepth(depth, filled.visible, page * FEED_PAGE_SIZE, maxDepth));
+  }, [filled, allLoaded, apiHasMore, depth, maxDepth, hc, page]);
+  // Back to the new feed's own depth when it changes. Not on mount: this ran after the effect above
+  // and undid its first step, so a feed coming back from the cache sat short until the next poll.
+  const lastHc = useRef(hc);
+  useEffect(() => {
+    if (hc === lastHc.current) return;
+    lastHc.current = hc;
+    setDepth(filledDepth.get(`${hc}|1`) ?? 1);
+  }, [hc]);
+  // Paged back: read only as deep as the page on screen took last time, growing again (above) if it
+  // comes up short. Kept at its depth, every page read on the way out stayed polled for good.
   const lastPage = useRef(page);
   useEffect(() => {
-    if (page < lastPage.current) setDepth((d) => Math.min(d, page));
+    if (page < lastPage.current) setDepth((d) => Math.min(d, filledDepth.get(`${hc}|${page}`) ?? page));
     lastPage.current = page;
-  }, [page]);
+  }, [page, hc]);
+  // The API pages the next page looks to need, started on hover/focus of Older so the click usually
+  // finds them all here rather than filling in a few cards per round trip.
+  const prefetchOlder = () => {
+    const ahead = filled
+      ? nextDepth(
+          depth,
+          filled.visible,
+          (page + 1) * FEED_PAGE_SIZE,
+          Math.min(page + MAX_FILL_PAGES, MAX_READ_PAGES),
+        )
+      : depth + 1;
+    for (let n = depth + 1; n <= ahead; n++) prefetch(feedPath(n));
+  };
   const shownCards = filled?.shown;
   const hiddenCount = filled?.hiddenHere ?? 0;
 
@@ -321,9 +351,8 @@ export function LiveTab({
                 <span className="muted small num">Page {page}</span>
                 <button
                   disabled={!hasMore || feedPage.stale}
-                  // Start the next page on hover/focus so the click usually finds it already here.
-                  onPointerEnter={() => prefetch(feedPath(depth + 1))}
-                  onFocus={() => prefetch(feedPath(depth + 1))}
+                  onPointerEnter={prefetchOlder}
+                  onFocus={prefetchOlder}
                   onClick={() => setPage((p) => p + 1)}
                 >
                   Older →
