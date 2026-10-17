@@ -1,8 +1,12 @@
+// Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
+import "../bootstrap-env.js";
 import { describe, expect, it, vi } from "vitest";
+import { keysOf } from "@trenchscanner/core";
 import {
   HeliusAccountStream,
   STREAM_SETTLE_MS,
   streamCredits,
+  streamTx,
   UNWATCHED_TTL_MS,
 } from "./heliusAccountStream.js";
 
@@ -120,5 +124,33 @@ describe("HeliusAccountStream", () => {
   it("prices streamed bytes at 2 credits per 0.1 MB", () => {
     expect(streamCredits(1_000_000)).toBe(20);
     expect(STREAM_SETTLE_MS).toBeGreaterThan(0);
+  });
+
+  it('reads the account keys of an "accounts"-detail transaction, which sit outside `message`', () => {
+    const tx = streamTx({
+      transaction: {
+        signatures: ["sig"],
+        accountKeys: [{ pubkey: "wallet", signer: true }, { pubkey: "acc-a" }],
+      },
+      meta: { err: null },
+    })!;
+    expect(keysOf(tx)).toEqual(["wallet", "acc-a"]);
+    // A full-detail transaction is left as it is.
+    const full = { transaction: { message: { accountKeys: ["x"] } }, meta: null };
+    expect(streamTx(full)).toBe(full);
+    expect(streamTx(null)).toBeNull();
+  });
+
+  it("does not resend a refused subscription every time it is asked for", () => {
+    const { stream, socket } = started();
+    stream.watch("mint-1", ["acc-a"]);
+    const id = subscribes(socket)[0]!.id;
+    stream.handleMessage(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32602, message: "nope" } }));
+    stream.watch("mint-1", ["acc-a"]);
+    expect(subscribes(socket)).toHaveLength(1);
+    expect(stream.coveredSince("mint-1", "acc-a")).toBeNull();
+    stream.watch("mint-1", ["acc-a", "acc-b"]);
+    expect(subscribes(socket)).toHaveLength(2);
+    stream.stop();
   });
 });

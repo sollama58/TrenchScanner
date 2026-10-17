@@ -192,8 +192,9 @@ export class HeliusAccountStream {
         sub.since = at;
         this.keyOfSub.set(msg.result, key);
       } else {
+        // Kept, uncovered: asked again with the same accounts it is not resent (a refusal would
+        // come back every cycle), only on the next connection or when its accounts change.
         logger.warn("subscription refused", { key, error: String(msg.error?.message ?? "unknown") });
-        this.subs.delete(key);
       }
       return;
     }
@@ -202,11 +203,11 @@ export class HeliusAccountStream {
     const key = typeof subId === "number" ? this.keyOfSub.get(subId) : undefined;
     const result = msg.params?.result;
     if (key === undefined || typeof result?.signature !== "string") return;
-    const tx = result.transaction;
-    if (typeof tx !== "object" || tx === null) return;
+    const tx = streamTx(result.transaction);
+    if (!tx) return;
     this.stats.txs += 1;
     try {
-      this.onTx(key, result.signature, tx as ChainTx);
+      this.onTx(key, result.signature, tx);
     } catch (err) {
       logger.warn("stream transaction handler failed", { key, error: String(err) });
     }
@@ -348,6 +349,25 @@ export class HeliusAccountStream {
       this.connect();
     }, delay);
   }
+}
+
+/**
+ * A notification's transaction in the shape the chain readers take (core's ChainTx), or null.
+ * With transactionDetails "accounts" the RPC puts the account keys on the transaction itself
+ * ({ signatures, accountKeys }) rather than under `message`, where keysOf looks for them.
+ */
+export function streamTx(raw: unknown): ChainTx | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const tx = raw as ChainTx & { transaction?: { accountKeys?: unknown } };
+  const inner = tx.transaction;
+  if (inner && !inner.message && Array.isArray(inner.accountKeys)) {
+    const { accountKeys, ...rest } = inner;
+    return {
+      ...tx,
+      transaction: { ...rest, message: { accountKeys: accountKeys as (string | { pubkey?: string })[] } },
+    };
+  }
+  return tx;
 }
 
 function sameSet(a: ReadonlySet<string>, b: readonly string[]): boolean {

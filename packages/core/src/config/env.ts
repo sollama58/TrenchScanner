@@ -247,10 +247,11 @@ const envSchema = z.object({
   // heliusAccountStream.ts, user ask 2026-10-17: credits) instead of re-reading their signatures
   // every 10 minutes. Streaming bills by size, and holder accounts are quiet, so it costs a small
   // share of the reads it replaces; the scan heartbeat's heliusStream shows what it really spends.
-  // Needs HELIUS_API_KEY on a Developer plan or higher. Off until turned on.
+  // Needs HELIUS_API_KEY on a Developer plan or higher. On (user decision 2026-10-17); "false"
+  // goes back to reading every account on the timer.
   HELIUS_HOLDER_STREAM: z
     .enum(["true", "false"])
-    .default("false")
+    .default("true")
     .transform((v) => v === "true"),
   // Follows the subscription mint on the same Helius websocket and runs the burn reconciler as soon
   // as a transaction lands on it (worker's BurnStreamWake, user ask 2026-10-17), so a burn grants
