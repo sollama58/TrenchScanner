@@ -1159,6 +1159,9 @@ export interface ScoreBasis {
   /** Points from catching runners; null when the record doesn't track them (absent from older API builds). */
   pointsCatch?: number | null;
   provenCatchPct?: number | null;
+  /** Points from the average return under the exit plan; null when the record doesn't track it (absent from older API builds). */
+  pointsReturn?: number | null;
+  provenReturnPct?: number | null;
   /** Calls' worth of evidence: graded live calls plus the backtest's share. */
   evidenceCalls: number;
   backtestCalls: number;
@@ -1305,12 +1308,15 @@ export interface Leaderboard {
       tenXRate?: number;
       runSize?: number;
       catchRate?: number;
-      avgReturn?: number;
+      returnPct?: number;
     };
     /** The 10x-within-an-hour rate target, in percent (absent from older API builds). */
     tenXTargetPct?: number;
     /** The catch-rate target, in percent (absent from older API builds). */
     catchTargetPct?: number;
+    /** Average return per call that scores nothing / full points, in percent (absent from older API builds). */
+    returnFloorPct?: number;
+    returnTargetPct?: number;
     /** Run-size target, in doublings per call (2 = a 4x average). */
     runTargetDoublings?: number;
     /** Calls' worth the backtest counts for at most; live weighs the same at this many graded calls. */

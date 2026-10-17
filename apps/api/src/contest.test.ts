@@ -5,6 +5,7 @@ import {
   prisma,
   loadEnv,
   rechooseChampion,
+  curatedTargets,
   HEURISTIC_CURATOR_SOURCE,
   STACKED_MODEL_KIND,
 } from "@trenchscanner/core";
@@ -123,12 +124,14 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
       roster: state.roster,
       lanes,
       rules: { minLiveGraded: 10_000, margin: 2 },
+      targets: curatedTargets(env),
     });
     expect(result).toMatchObject({ changed: true, pick: { id: "consensus", qualified: false } });
     const again = await rechooseChampion({
       roster: state.roster,
       lanes,
       rules: { minLiveGraded: 10_000, margin: 2 },
+      targets: curatedTargets(env),
     });
     expect(again.changed).toBe(false);
     await prisma.curatorChampion.deleteMany({});

@@ -69,8 +69,10 @@ export function toEvolutionPlan(plan: ContestPlan): EvolutionPlan {
             // Both at the seat's share: each its own top calls, as many as the seat's exam sent.
             const k = lane.reduce((n, c) => n + c, 0);
             const at = (ranks: Float64Array) => equalShareCalls(ranks, exam.moments, k, exam.cooldownMs);
+            // Judged on the seat's own goal (SeatGoal): its 2x rate, its return, its 10x rate...
+            const goal = plan.rule.lanes.find((f) => f.lane.slot === slot)?.lane.recipe.goal ?? "2x";
             return pairedBootstrapConfidence(
-              exam.labels,
+              exam.goalValues(goal),
               at(bredRanks),
               at(laneRanks),
               seededRng(ev.seed + challenger),

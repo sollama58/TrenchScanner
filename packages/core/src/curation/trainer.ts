@@ -107,6 +107,17 @@ export interface TrainingRow {
    * Read by the exam's record (the score's 10x part) and the "lambdarank" fit's top tier.
    */
   hit10x?: boolean;
+  /**
+   * What following the call returned under the exit plan (EXIT_PLAN in profitSim.ts), in percent
+   * of the stake: the return the models are ranked on with the "return" objective, and the exam's
+   * average-return part of the score. Omitted when unknown.
+   */
+  returnPct?: number;
+  /**
+   * Whether the call fell to the plan's stop before its first sale - the full stop-out loss the
+   * crash model predicts (see ReturnRisk). Omitted when unknown.
+   */
+  crashed?: boolean;
 }
 
 /**
@@ -282,6 +293,37 @@ export interface ServedCuratorExtras {
 }
 
 /**
+ * The crash side of a return-ranked model (user decision 2026-10-17: "train and judge on return
+ * AND 2x/4x/10x+ rate"). The 2x model alone ranked coins by how likely they were to move hard, and
+ * most hard movers move down: from 10-12 to 10-17 the losers the seats called fell to the stop 85%
+ * of the time against 42% for the ones they skipped, so their calls needed about 28% 2x to break
+ * even (notes/model-exams-2026-10-17). With this attached, the model's score is its expected
+ * return under the exit plan instead of its 2x odds:
+ *
+ *   E = P(2x) x winPct + P(crash) x crashPct + max(0, 1 - P(2x) - P(crash)) x flatPct
+ *
+ * with P(crash) from a second model trained on "fell to the stop before the first sale", and the
+ * three payoffs the average returns of each kind of call in the training rows. The score is E
+ * rescaled to [0, 1] between crashPct and winPct, so cutoffs, ranks and the calibration tables
+ * read it exactly as they read a probability. Within the 2x model's own calls the order is the
+ * same except where crash risk differs, which is the point. Absent = ranked on P(2x) alone.
+ */
+export interface ReturnRisk {
+  crash: Omit<BoostedCuratorParams, "threshold">;
+  payoffs: ReturnPayoffs;
+}
+
+/** The average return, in percent of the stake, of a clean win, a crash and anything else. */
+export interface ReturnPayoffs {
+  winPct: number;
+  crashPct: number;
+  flatPct: number;
+}
+
+/** Payoffs used when the rows carry too few returns to measure them (about the 10-12..10-17 means). */
+export const DEFAULT_RETURN_PAYOFFS: ReturnPayoffs = { winPct: 100, crashPct: -50, flatPct: 0 };
+
+/**
  * A stored curator model of any family. Readers switch on `kind`; a kind not listed in
  * SUPPORTED_CURATOR_MODEL_KINDS must be ignored, never half-applied.
  */
@@ -292,15 +334,16 @@ export type TrainedCuratorParams = (
   | NarrativeBlendCuratorParams
   | NarrativeLedCuratorParams
 ) &
-  ServedCuratorExtras;
+  ServedCuratorExtras & { returnRisk?: ReturnRisk };
 
 /** A model before its emission cutoff is set (Omit over each family - Omit on a union would merge them). */
-export type UnthresholdedCuratorParams =
+export type UnthresholdedCuratorParams = (
   | Omit<LogisticCuratorParams, "threshold">
   | Omit<BoostedCuratorParams, "threshold">
   | Omit<TwoStageCuratorParams, "threshold">
   | Omit<NarrativeBlendCuratorParams, "threshold">
-  | Omit<NarrativeLedCuratorParams, "threshold">;
+  | Omit<NarrativeLedCuratorParams, "threshold">
+) & { returnRisk?: ReturnRisk };
 
 export const SUPPORTED_CURATOR_MODEL_KINDS: readonly string[] = [
   CURATOR_MODEL_KIND,
@@ -333,12 +376,185 @@ export interface ModelTrainOptions extends TrainOptions {
    * story stage and a safety stage, blended with this weight on the story.
    */
   narrativeLed?: number;
+  /** What the model is trained to find - see SeatGoal. Omitted = "2x". */
+  goal?: SeatGoal;
 }
 
-/** Trains one model of the given family (and shape). */
+/**
+ * What a seat is trained and examined on (user ask 2026-10-17: "different models train and are
+ * examined on different goals"; "train and judge on return AND 2x/4x/10x+ rate"):
+ *  - "2x": a clean 2x (the original label);
+ *  - "4x": a clean 4x inside the goal window;
+ *  - "10x": a clean 10x inside the hour;
+ *  - "return": the highest expected return under the exit plan - the 2x model with a crash model
+ *    beside it (ReturnRisk);
+ *  - "safe": the same with a stop-out counted twice over, so the fewest losses that still pay;
+ *  - "moonshot": a clean 2x, weighted hard by how far the winners ran - the biggest runs;
+ *  - "catch": a clean 2x with a moderate lean toward runners, at a wider cutoff (its recipe's
+ *    cutoffShare) - the most runners caught for a hit rate that holds.
+ * Every seat is still scored on the full scorecard (leaderboard.ts) whatever its goal; its own
+ * goal is what its challengers and probation are judged on (goalValue).
+ */
+export type SeatGoal = "2x" | "4x" | "10x" | "return" | "safe" | "moonshot" | "catch";
+export const SEAT_GOALS: readonly SeatGoal[] = ["2x", "4x", "10x", "return", "safe", "moonshot", "catch"];
+
+/** Run weight per doubling past the 2x for the runner-leaning goals (the field default is 0.5). */
+export const MOONSHOT_RUN_WEIGHT_PER_DOUBLING = 3;
+export const CATCH_RUN_WEIGHT_PER_DOUBLING = 1.5;
+/** How many times over the "safe" goal counts a loss (the crash payoff and every negative return). */
+export const SAFE_LOSS_AVERSION = 2;
+/** Fewest clean 10x positives the "10x" goal trains on; fewer and it trains on the 4x instead. */
+const MIN_TEN_X_POSITIVES = 30;
+const FOUR_X_LABEL = Math.log2(4);
+
+/** Trains one model of the given family (and shape) toward its goal - see SeatGoal. */
 export async function trainCuratorModel(
   rows: TrainingRow[],
   opts: ModelTrainOptions = {},
+): Promise<UnthresholdedCuratorParams> {
+  const goal = opts.goal ?? "2x";
+  if (goal === "4x")
+    return trainWinModel(
+      relabel(rows, (r) => r.labelValue >= FOUR_X_LABEL),
+      opts,
+    );
+  if (goal === "10x") {
+    const known = rows.filter((r) => r.labelValue <= 0 || r.hit10x !== undefined);
+    const positives = known.filter((r) => r.hit10x === true).length;
+    if (positives < MIN_TEN_X_POSITIVES) return trainCuratorModel(rows, { ...opts, goal: "4x" });
+    return trainWinModel(
+      relabel(known, (r) => r.hit10x === true),
+      opts,
+    );
+  }
+  if (goal === "moonshot")
+    return trainWinModel(rows, { ...opts, runWeightPerDoubling: MOONSHOT_RUN_WEIGHT_PER_DOUBLING });
+  if (goal === "catch")
+    return trainWinModel(rows, { ...opts, runWeightPerDoubling: CATCH_RUN_WEIGHT_PER_DOUBLING });
+  const base = await trainWinModel(rows, opts);
+  if (goal !== "return" && goal !== "safe") return base;
+  const returnRisk = await trainReturnRisk(rows, opts, goal === "safe" ? SAFE_LOSS_AVERSION : 1);
+  return returnRisk ? { ...base, returnRisk } : base;
+}
+
+/** The rows with every miss of `won` (a 2x that fell short of the goal included) as a loss. */
+function relabel(rows: readonly TrainingRow[], won: (r: TrainingRow) => boolean): TrainingRow[] {
+  return rows.map((r) =>
+    r.labelValue > 0 && !won(r) ? { ...r, labelValue: 0, runPeakMultiple: undefined } : r,
+  );
+}
+
+/** A row's return under the exit plan, or the default payoff of its kind when it carries none. */
+export function rowReturnPct(row: TrainingRow): number {
+  if (row.returnPct !== undefined && Number.isFinite(row.returnPct)) return row.returnPct;
+  if (row.labelValue > 0) return DEFAULT_RETURN_PAYOFFS.winPct;
+  return rowCrashed(row) === true ? DEFAULT_RETURN_PAYOFFS.crashPct : DEFAULT_RETURN_PAYOFFS.flatPct;
+}
+
+/**
+ * One call's worth toward a goal, so two seats' calls can be compared on it call by call (the
+ * paired bootstrap of a takeover and its probation): 1/0 for the hit-rate goals, the run in
+ * doublings for "moonshot", the return for "return", the loss-averse return for "safe". "catch"
+ * is a property of a whole call set, not of one call, so a single call counts as its 2x.
+ */
+export function goalValue(row: TrainingRow, goal: SeatGoal): number {
+  switch (goal) {
+    case "4x":
+      return row.labelValue >= FOUR_X_LABEL ? 1 : 0;
+    case "10x":
+      return row.hit10x === true ? 1 : 0;
+    case "moonshot":
+      return runDoublings(row);
+    case "return":
+      return rowReturnPct(row);
+    case "safe": {
+      const r = rowReturnPct(row);
+      return r < 0 ? SAFE_LOSS_AVERSION * r : r;
+    }
+    default:
+      return row.labelValue > 0 ? 1 : 0;
+  }
+}
+
+/** Fewest rows with a known crash verdict (and crashes, and non-crashes) the crash model trains on. */
+const MIN_CRASH_ROWS = 200;
+const MIN_CRASH_POSITIVES = 20;
+/** Fewest rows of a kind with a known return before its average replaces the default payoff. */
+const MIN_PAYOFF_ROWS = 20;
+
+/**
+ * Whether a row fell to the stop before its first sale: TrainingRow.crashed, else (rows without
+ * it) a loss that breached the stop inside the label window. Undefined when neither is known.
+ */
+export function rowCrashed(row: TrainingRow): boolean | undefined {
+  if (row.crashed !== undefined) return row.crashed;
+  if (row.labelValue > 0) return false;
+  return row.survived === undefined ? undefined : !row.survived;
+}
+
+/**
+ * The three payoffs measured on the rows (current label rule, known return), defaults where thin.
+ * `lossAversion` multiplies the negative ones (the "safe" goal).
+ */
+export function measurePayoffs(rows: readonly TrainingRow[], lossAversion = 1): ReturnPayoffs {
+  const sums = { win: { sum: 0, n: 0 }, crash: { sum: 0, n: 0 }, flat: { sum: 0, n: 0 } };
+  for (const r of rows) {
+    if (r.returnPct === undefined || !Number.isFinite(r.returnPct) || !isCurrentLabelRule(r)) continue;
+    const kind = r.labelValue > 0 ? "win" : rowCrashed(r) === true ? "crash" : "flat";
+    sums[kind].sum += r.returnPct;
+    sums[kind].n += 1;
+  }
+  const mean = (k: keyof typeof sums, fallback: number) =>
+    sums[k].n >= MIN_PAYOFF_ROWS ? sums[k].sum / sums[k].n : fallback;
+  const averse = (x: number) => (x < 0 ? lossAversion * x : x);
+  const crashPct = averse(mean("crash", DEFAULT_RETURN_PAYOFFS.crashPct));
+  // Kept ordered (crash <= flat <= win) so the rescaled score stays inside [0, 1].
+  const winPct = Math.max(mean("win", DEFAULT_RETURN_PAYOFFS.winPct), crashPct + 1);
+  const flatPct = Math.min(Math.max(averse(mean("flat", DEFAULT_RETURN_PAYOFFS.flatPct)), crashPct), winPct);
+  return { winPct, crashPct, flatPct };
+}
+
+/**
+ * The crash model and payoffs - see ReturnRisk. A boosted model on the same inputs as the win
+ * model whatever its family (one seed: it is the second fit of every model, and the run's time
+ * budget is the win models'), with no run weight: a crash is a crash however far a winner ran.
+ * Null when too few rows carry a crash verdict; the model then ranks on its 2x odds alone.
+ */
+async function trainReturnRisk(
+  rows: TrainingRow[],
+  opts: ModelTrainOptions,
+  lossAversion: number,
+): Promise<ReturnRisk | null> {
+  const crashRows: TrainingRow[] = [];
+  for (const r of rows) {
+    const crashed = rowCrashed(r);
+    if (crashed === undefined) continue;
+    crashRows.push({ ...r, labelValue: crashed ? 1 : 0, runPeakMultiple: undefined });
+  }
+  const positives = crashRows.filter((r) => r.labelValue > 0).length;
+  if (
+    crashRows.length < MIN_CRASH_ROWS ||
+    positives < MIN_CRASH_POSITIVES ||
+    crashRows.length - positives < MIN_CRASH_POSITIVES
+  )
+    return null;
+  const crash = await trainBoostedCurator(crashRows, {
+    ...opts.boosting,
+    objective: "logistic",
+    bagSeeds: 1,
+    offsetInput: undefined,
+    recencyHalfLifeDays: opts.recencyHalfLifeDays,
+    legacyLabelWeight: opts.legacyLabelWeight,
+    runWeightPerDoubling: 0,
+    featureNames: opts.featureNames,
+  });
+  return { crash, payoffs: measurePayoffs(rows, lossAversion) };
+}
+
+/** The win side: the model of the given family and shape, ranked on its clean-2x odds. */
+async function trainWinModel(
+  rows: TrainingRow[],
+  opts: ModelTrainOptions,
 ): Promise<UnthresholdedCuratorParams> {
   if (opts.narrativeBlend) return trainNarrativeBlendCurator(rows, opts);
   if (opts.narrativeLed !== undefined) {
@@ -743,14 +959,42 @@ export async function trainCurator(
   };
 }
 
-/** Predicted probability of a clean 2x-within-1-hour for one candidate's feature vector. */
+/**
+ * One candidate's score: its predicted probability of a clean 2x, or with a crash side attached
+ * (ReturnRisk) its expected return under the exit plan rescaled to [0, 1].
+ */
 export function scoreCandidateWithModel(
+  params: UnthresholdedCuratorParams,
+  features: Record<string, number | null | undefined>,
+): number {
+  const pWin = scoreWinOdds(params, features);
+  const risk = params.returnRisk;
+  if (risk === undefined) return pWin;
+  return expectedReturnScore(pWin, scoreBoosted(risk.crash, features), risk.payoffs);
+}
+
+/** E (see ReturnRisk) rescaled to [0, 1] between the crash and win payoffs. */
+export function expectedReturnScore(pWin: number, pCrash: number, payoffs: ReturnPayoffs): number {
+  const span = payoffs.winPct - payoffs.crashPct;
+  if (!(span > 0)) return pWin;
+  const e = expectedReturnPct(pWin, pCrash, payoffs);
+  return Math.min(1, Math.max(0, (e - payoffs.crashPct) / span));
+}
+
+/** E (see ReturnRisk), in percent of the stake. */
+export function expectedReturnPct(pWin: number, pCrash: number, payoffs: ReturnPayoffs): number {
+  const flat = Math.max(0, 1 - pWin - pCrash);
+  return pWin * payoffs.winPct + pCrash * payoffs.crashPct + flat * payoffs.flatPct;
+}
+
+/** The model's predicted probability of a clean 2x, ignoring any crash side. */
+export function scoreWinOdds(
   params: UnthresholdedCuratorParams,
   features: Record<string, number | null | undefined>,
 ): number {
   if (params.kind === BOOSTED_MODEL_KIND) return scoreBoosted(params, features);
   if (params.kind === TWO_STAGE_MODEL_KIND) {
-    return scoreCandidateWithModel(params.survival, features) * scoreCandidateWithModel(params.win, features);
+    return scoreWinOdds(params.survival, features) * scoreWinOdds(params.win, features);
   }
   if (params.kind === NARRATIVE_BLEND_MODEL_KIND) {
     return scoreBoosted(params.blend, withMarketScore(params, features));
@@ -800,6 +1044,8 @@ export interface ScoredOutcome {
   runPeakMultiple?: number;
   /** TrainingRow.hit10x. */
   hit10x?: boolean;
+  /** The row's return under the exit plan (rowReturnPct). */
+  returnPct?: number;
   /**
    * The row's token and moment. When both are present on every call and a cooldown is given,
    * calibration replays production's per-token alert cooldown (see calibrateThresholdForPrecision).
@@ -1287,6 +1533,8 @@ export interface FoldSide {
    */
   runnersSeen?: number;
   runnersCaught?: number;
+  /** Sum of the emissions' returns under the exit plan (rowReturnPct). Absent on older stored folds. */
+  sumReturnPct?: number;
 }
 
 export interface EvalFold {
@@ -1447,6 +1695,8 @@ export interface WalkForwardOptions {
   legacyLabelWeight?: number;
   /** Extra weight per doubling a winner ran past its 2x - see TrainOptions. */
   runWeightPerDoubling?: number;
+  /** What each fold's model is trained toward - see SeatGoal. */
+  goal?: SeatGoal;
   /**
    * Fewest WINS a fold's decision rows must hold before the fold is judged: a hit rate over three
    * wins is noise. The fold count shrinks (down to one) until each fold has this many; a fold
@@ -1523,6 +1773,7 @@ function sideMetrics(emittedRows: TrainingRow[], spanHours: number, graded: Trai
     tenXGraded: emittedRows.filter((r) => r.labelValue <= 0 || r.hit10x !== undefined).length,
     runnersSeen: runners.runnersSeen!,
     runnersCaught: runners.runnersCaught!,
+    sumReturnPct: emittedRows.reduce((s, r) => s + rowReturnPct(r), 0),
   };
 }
 
@@ -1663,6 +1914,7 @@ export async function walkForwardEvaluate(
         narrativeLed: opts.narrativeLed,
         legacyLabelWeight: opts.legacyLabelWeight,
         runWeightPerDoubling: opts.runWeightPerDoubling,
+        goal: opts.goal,
       });
       // Without targets the model plays the pace cutoff, calibrated on the band-filtered train
       // slice - a threshold ranked against unemittable rows grades a model production never
@@ -1703,6 +1955,7 @@ export async function walkForwardEvaluate(
     labelValue: row.labelValue,
     ...(row.runPeakMultiple !== undefined ? { runPeakMultiple: row.runPeakMultiple } : {}),
     ...(row.hit10x !== undefined ? { hit10x: row.hit10x } : {}),
+    returnPct: rowReturnPct(row),
     tokenId: row.tokenId,
     anchorAt: row.anchorAt,
   });

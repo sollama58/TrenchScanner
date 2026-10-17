@@ -6,6 +6,8 @@ import {
   precisionCurve,
   probabilityAtRank,
   trainCuratorModel,
+  goalValue,
+  type SeatGoal,
   walkForwardEvaluate,
   type CuratorLearner,
   type PrecisionCalibration,
@@ -101,6 +103,8 @@ export interface CuratorTrainingConfig {
   runWeightPerDoubling?: number;
   /** Fewest wins a judged exam fold must hold (env CURATOR_EXAM_MIN_FOLD_WINS). */
   minTestWins?: number;
+  /** The goal of a seat whose recipe sets none (env CURATOR_DEFAULT_GOAL) - see SeatGoal. Omitted = "2x". */
+  defaultGoal?: SeatGoal;
   /** The share of decision moments, newest first, the exam grades (env CURATOR_EXAM_SHARE). Default 0.5. */
   examShare?: number;
   /**
@@ -272,6 +276,10 @@ function recordAbove(calls: ScoredOutcome[], rankCutoff: number, cooldownMs: num
     if (c.labelValue <= 0 || c.hit10x !== undefined) record.tenXGraded! += 1;
     record.sumLabel += c.labelValue;
     record.sumRun = (record.sumRun ?? 0) + runDoublings(c);
+    if (c.returnPct !== undefined) {
+      record.simCalls = (record.simCalls ?? 0) + 1;
+      record.sumSimReturnPct = (record.sumSimReturnPct ?? 0) + c.returnPct;
+    }
   }
   return record;
 }
@@ -508,6 +516,7 @@ async function sitRecipeExam(
     narrativeLed: recipe.narrativeLed,
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
+    goal: recipe.goal ?? cfg.defaultGoal,
     minTestWins: cfg.minTestWins,
     examShare: cfg.examShare,
   });
@@ -543,6 +552,7 @@ async function shipRecipe(
     narrativeLed: recipe.narrativeLed,
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
+    goal: recipe.goal ?? cfg.defaultGoal,
   };
   const trained = await trainCuratorModel(rows, trainOpts);
   // The shipped model's scale on tokens it has never seen, raised where it scores higher itself
@@ -607,6 +617,7 @@ function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord
   let tenXGraded: number | null = 0;
   let runnersSeen: number | null = 0;
   let runnersCaught = 0;
+  let sumReturnPct: number | null = 0;
   for (const fold of folds) {
     const s = fold[side];
     record.calls += s.emitted;
@@ -628,6 +639,13 @@ function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord
       runnersSeen += s.runnersSeen;
       runnersCaught += s.runnersCaught ?? 0;
     } else runnersSeen = null;
+    // And the returns: folds stored before they were priced leave the record without them.
+    if (s.sumReturnPct !== undefined && sumReturnPct !== null) sumReturnPct += s.sumReturnPct;
+    else sumReturnPct = null;
+  }
+  if (sumReturnPct !== null && folds.length > 0) {
+    record.simCalls = record.graded;
+    record.sumSimReturnPct = sumReturnPct;
   }
   if (sumRun !== null) record.sumRun = sumRun;
   if (tenX !== null && folds.length > 0) {
@@ -942,6 +960,8 @@ async function examineLearner(
 export interface ExamEvidence {
   /** The reference rows' labels, in reference order. */
   labels: Float64Array;
+  /** Each reference row's worth toward a goal (goalValue), in reference order. */
+  goalValues: (goal: SeatGoal) => Float64Array;
   /** Each reference row's token and time, in reference order: what the cooldown replays over. */
   moments: ShareMoment[];
   /** The per-token alert cooldown the exam plays (ContestTrainingConfig.cooldownHours). */
@@ -1210,6 +1230,7 @@ export async function runEvolvingContest(
     plan && challengerScores.length > 0
       ? plan.decide(laneExamScores, challengerScores, {
           labels: Float64Array.from(reference ?? [], (r) => r.labelValue),
+          goalValues: (goal) => Float64Array.from(reference ?? [], (r) => goalValue(r, goal)),
           moments: (reference ?? []).map((r) => ({ tokenId: r.tokenId, anchorMs: r.anchorAt.getTime() })),
           cooldownMs: cfg.cooldownHours * 3_600_000,
           laneCalls,
