@@ -63,7 +63,8 @@ let busy = false;
 /** The stream is off for the rest of the pace: its credits ran past their share of the day. */
 let paused = false;
 let day = "";
-let dayStreamCredits = 0;
+/** The stream's bytes today: credits are figured on the total, as a single update rounds to none. */
+let dayStreamBytes = 0;
 let stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0 };
 
 const keyOf = (mint: string) => `${CURVE_STREAM_KEY_PREFIX}${mint}`;
@@ -95,7 +96,7 @@ export function onCurveStreamUpdate(key: string, data: string, bytes: number, no
   const mint = key.slice(CURVE_STREAM_KEY_PREFIX.length);
   stats.updates += 1;
   stats.bytes += bytes;
-  dayStreamCredits += streamCredits(bytes);
+  dayStreamBytes += bytes;
   const state = decodeCurve(data);
   if (!state) return;
   tape.record(mint, now, state, "stream");
@@ -157,7 +158,7 @@ export function takeCurveTapeStats(now = Date.now()) {
     streamCredits: streamCredits(stats.bytes),
     // getMultipleAccounts: 1 credit per call of up to 100 curves.
     readCredits: stats.readCalls,
-    streamCreditsToday: Math.round(dayStreamCredits),
+    streamCreditsToday: Math.round(streamCredits(dayStreamBytes)),
     paused: paused ? 1 : 0,
   };
   stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0 };
@@ -177,7 +178,7 @@ function rollDay(now: number): void {
   const today = new Date(now).toISOString().slice(0, 10);
   if (today !== day) {
     day = today;
-    dayStreamCredits = 0;
+    dayStreamBytes = 0;
   }
 }
 
@@ -201,11 +202,11 @@ export async function round(now = Date.now()): Promise<void> {
   busy = true;
   try {
     rollDay(now);
-    const over = overStreamPace(dayStreamCredits, cfg.streamCreditsPerDay, now);
+    const over = overStreamPace(streamCredits(dayStreamBytes), cfg.streamCreditsPerDay, now);
     if (over !== paused) {
       paused = over;
       logger.info(over ? "curve stream paused: past its credit pace" : "curve stream resumed", {
-        streamCreditsToday: Math.round(dayStreamCredits),
+        streamCreditsToday: Math.round(streamCredits(dayStreamBytes)),
       });
       for (const [mint, f] of followed) {
         if (over) stream?.unwatch(keyOf(mint));
@@ -263,6 +264,6 @@ export function resetCurveTape(): void {
   done.clear();
   paused = false;
   day = "";
-  dayStreamCredits = 0;
+  dayStreamBytes = 0;
   stats = { updates: 0, bytes: 0, readCalls: 0, curvesRead: 0, polled: 0, seeded: 0 };
 }

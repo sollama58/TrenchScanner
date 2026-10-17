@@ -83,6 +83,12 @@ describe("curve tape", () => {
     const stats = takeCurveTapeStats(NOW + 6_000)!;
     expect(stats).toMatchObject({ following: 1, streamed: 1, seeded: 1, updates: 1, readCredits: 1 });
     expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBe(6);
+    // The day's spend is figured on its bytes: one 500-byte update rounds to no credit, a
+    // thousand of them are 10.
+    for (let i = 0; i < 1_000; i += 1) {
+      onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, NOW + 7_000);
+    }
+    expect(takeCurveTapeStats(NOW + 7_000)!.streamCreditsToday).toBe(10);
   });
 
   it("polls the curves the stream doesn't cover, and drops a coin that left the watchlist", async () => {
