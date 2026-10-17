@@ -1,4 +1,4 @@
-import { prisma, SIDE_WINDOWS, type SideWindow } from "@trenchscanner/core";
+import { HOT_FUNDER_DENYLIST, prisma, SIDE_WINDOWS, type SideWindow } from "@trenchscanner/core";
 
 /**
  * Transfers on the side-wallet lists (user ask 2026-10-16): how often each wallet moved a coin to
@@ -60,6 +60,7 @@ export async function loadTransferCounts(
       WHERE e."toWallet" = ANY(${ids}) AND e."at" >= ${since("30d")}
     ) ev
     WHERE NOT (side = ANY(${ids}))
+      AND NOT (side = ANY(${[...HOT_FUNDER_DENYLIST]}))
       AND NOT EXISTS (SELECT 1 FROM "KolWallet" k WHERE k."wallet" = ev.side)
     GROUP BY side`;
   return transferCounts(rows);
