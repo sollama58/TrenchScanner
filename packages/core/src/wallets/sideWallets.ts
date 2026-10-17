@@ -75,15 +75,16 @@ export function isBot(coins: number, totalCoins: number): boolean {
  * Bundle), from its pairs and coin count over each tier's span: the first tier a wallet meets.
  */
 export function possibleSides(
-  spans: Readonly<Record<SideTierHours, { pairs: readonly PairRow[]; kolCoins: number }>>,
+  spans: Readonly<Partial<Record<SideTierHours, { pairs: readonly PairRow[]; kolCoins: number }>>>,
 ): { wallet: string; pct: number; shared: number; kolCoins: number; hours: number }[] {
   const out = new Map<
     string,
     { wallet: string; pct: number; shared: number; kolCoins: number; hours: number }
   >();
   for (const tier of POSSIBLE_SIDE_TIERS) {
-    const { pairs, kolCoins } = spans[tier.hours];
-    if (kolCoins <= 0) continue;
+    const span = spans[tier.hours];
+    if (!span || span.kolCoins <= 0) continue;
+    const { pairs, kolCoins } = span;
     for (const p of pairs) {
       if (out.has(p.side) || p.shared < tier.minShared) continue;
       const pct = (Math.min(p.shared, kolCoins) / kolCoins) * 100;

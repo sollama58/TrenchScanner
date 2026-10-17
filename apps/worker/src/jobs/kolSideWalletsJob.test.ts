@@ -104,6 +104,20 @@ describe("rankSideWallets", () => {
     expect(possibleSides({ 24: none, 48: none, 72: span([{ side: "low", shared: 55 }], 70) })).toEqual([]);
   });
 
+  it("labels 70% on 100 or more coins, or 65% on 200 or more, over 7 days", () => {
+    // Cupsey's side wallets on 2026-10-17: 135 of his 187 coins (72%) over the week, 67% over 48h.
+    expect(possibleSides({ 168: span([{ side: "side", shared: 135 }], 187) })).toEqual([
+      { wallet: "side", shared: 135, pct: 72.2, kolCoins: 187, hours: 168 },
+    ]);
+    // 99 coins is under 100; 140 of 210 is 66.7%, under 70 and under 200 coins.
+    expect(possibleSides({ 168: span([{ side: "few", shared: 99 }], 120) })).toEqual([]);
+    expect(possibleSides({ 168: span([{ side: "mid", shared: 140 }], 210) })).toEqual([]);
+    expect(possibleSides({ 168: span([{ side: "big", shared: 200 }], 300) })).toEqual([
+      { wallet: "big", shared: 200, pct: 66.7, kolCoins: 300, hours: 168 },
+    ]);
+    expect(possibleSides({ 168: span([{ side: "low", shared: 250 }], 400) })).toEqual([]);
+  });
+
   it("keeps the first tier a wallet meets", () => {
     const out = possibleSides({
       24: span([{ side: "w", shared: 12 }], 12),
@@ -114,11 +128,12 @@ describe("rankSideWallets", () => {
   });
 
   it("reads a wallet strongly matched with four or more KOLs over 7 days as a likely bot", () => {
-    const entry = (wallet: string, shared: number, pct: number): SideWallet => ({
+    // A copy-trade bot buys far more than any one KOL: 1,000 coins of its own here.
+    const entry = (wallet: string, shared: number, pct: number, coins = 1_000): SideWallet => ({
       wallet,
       shared,
       pct,
-      coins: shared,
+      coins,
       gapSec: 3,
     });
     const kol = (week: SideWallet[]) => ({ "24h": [], "7d": week, "30d": [] });
@@ -130,6 +145,16 @@ describe("rankSideWallets", () => {
     ];
     // "three" is in only three KOLs' lists; "thin" shares 50 coins, not more; "weak" is 60%, not over.
     expect([...likelyBots(lists)]).toEqual(["bot"]);
+
+    // A wallet that bought 70% of its own coins alongside one of those KOLs is that KOL's side.
+    const loyal = lists.map((l, i) => ({
+      ...l,
+      "7d": [...l["7d"], entry("side", i === 0 ? 135 : 60, 72, i === 0 ? 140 : 1_000)],
+    }));
+    expect([...likelyBots(loyal)]).toEqual(["bot"]);
+    // 69% of its own coins is not enough.
+    const spread = lists.map((l) => ({ ...l, "7d": [...l["7d"], entry("spread", 69, 72, 100)] }));
+    expect([...likelyBots(spread)].sort()).toEqual(["bot", "spread"]);
   });
 
   it("reads a wallet in a large share of every coin as a bot", () => {
