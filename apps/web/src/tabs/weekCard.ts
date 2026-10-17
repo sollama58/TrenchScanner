@@ -21,7 +21,7 @@ import { drawPricingChange } from "../pricingChange";
  * days, with the market and every model pooled always drawn, and each line's figure over the week
  * beside the chart, in the shared branded frame (shareCard.ts).
  */
-export type CardMetric = "2x" | "4x" | "10x" | "ret";
+export type CardMetric = "2x" | "4x" | "10x" | "ret" | "catch";
 
 export interface WeekCardData {
   metric: CardMetric;
@@ -171,6 +171,7 @@ const SUB: Record<CardMetric, string> = {
   "4x": "How often each model's calls reached 4x within 30 min, before a 50% stop, next to the market.",
   "10x": "How often each model's calls reached 10x within an hour, before a 50% stop, next to the market.",
   ret: "Average return per call, day by day, next to the market.",
+  catch: "The share of each day's runners each model called at a winning moment, next to the catch goal.",
 };
 
 export async function renderWeekCard(d: WeekCardData): Promise<HTMLCanvasElement> {
@@ -178,7 +179,10 @@ export async function renderWeekCard(d: WeekCardData): Promise<HTMLCanvasElement
   if (!ctx) return canvas;
   frame(ctx, icon, "Is it getting better?", SUB[d.metric], {
     badge: (c, right, cy) => pill(c, right, cy, `Last ${d.labels.length} days`),
-    footer: `${d.graded.toLocaleString("en-US")} live calls, graded rule 3+ · market = a random pick from the same moments`,
+    footer:
+      d.metric === "catch"
+        ? `${d.graded.toLocaleString("en-US")} live calls, graded rule 3+ · runner = a token that doubled cleanly that day`
+        : `${d.graded.toLocaleString("en-US")} live calls, graded rule 3+ · market = a random pick from the same moments`,
     link: "trenchscanner.app",
   });
   const split = CARD_W - PAD - 340;
