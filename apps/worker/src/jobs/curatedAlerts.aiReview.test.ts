@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { prisma, loadEnv, type Env, type ScoredToken } from "@trenchscanner/core";
+import { prisma, loadEnv, resetAiReviewerSwitchCache, type Env, type ScoredToken } from "@trenchscanner/core";
 import {
   collectCuratedContender,
   emitCuratedCycle,
@@ -88,6 +88,8 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
   });
 
   beforeEach(async () => {
+    // Gate mode needs the Admin switch on live; the tests below that say otherwise set it.
+    resetAiReviewerSwitchCache("live");
     reviewPick.mockReset();
     resetSharedReviews();
     const hourAgo = new Date(Date.now() - 3_600_000);
@@ -99,6 +101,7 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
   });
 
   afterAll(async () => {
+    resetAiReviewerSwitchCache();
     if (!dbAvailable) return;
     await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
   });
@@ -240,6 +243,25 @@ describe.skipIf(!dbAvailable)("AI reviewer at the emission site", () => {
       await prisma.aiBlendModel.delete({ where: { id: blend.id } });
       resetAiBlendCache();
     }
+  });
+
+  it("with the Admin switch on test (admins only), gate mode runs as shadow and holds nothing back", async () => {
+    resetAiReviewerSwitchCache("admins");
+    reviewPick.mockResolvedValue(verdict("no_buy"));
+    const { token, emitted } = await run(gate, "switch-admins");
+    expect(emitted).toBe(1);
+    await vi.waitFor(async () => {
+      const review = await prisma.aiReview.findFirstOrThrow({ where: { tokenId: token.id } });
+      expect(review.mode).toBe("shadow");
+      expect(review.decision).toBe("no_buy");
+    });
+  });
+
+  it("never calls the reviewer with the Admin switch off, key or not", async () => {
+    resetAiReviewerSwitchCache("off");
+    const { emitted } = await run(shadow, "switch-off");
+    expect(emitted).toBe(1);
+    expect(reviewPick).not.toHaveBeenCalled();
   });
 
   it("never calls the reviewer without a key", async () => {

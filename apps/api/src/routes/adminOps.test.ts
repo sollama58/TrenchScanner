@@ -30,7 +30,7 @@ const ROUTES = [
   "/admin/lookups",
 ];
 
-async function call(url: string, as: "admin" | "other") {
+async function call(url: string, as: "admin" | "other", put?: unknown) {
   const env: Env = { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMIN_WALLET };
   const app = await buildServer(env);
   try {
@@ -38,7 +38,12 @@ async function call(url: string, as: "admin" | "other") {
       userId: userIds[as],
       walletAddress: as === "admin" ? ADMIN_WALLET : OTHER_WALLET,
     });
-    return await app.inject({ method: "GET", url, cookies: { [SESSION_COOKIE_NAME]: cookie } });
+    return await app.inject({
+      method: put === undefined ? "GET" : "PUT",
+      url,
+      cookies: { [SESSION_COOKIE_NAME]: cookie },
+      ...(put === undefined ? {} : { payload: put as object }),
+    });
   } finally {
     await app.close();
   }
@@ -147,6 +152,20 @@ describe.skipIf(!dbAvailable)("admin panel routes", () => {
       expect(await whitelisted()).toBe(before + 2);
     } finally {
       await prisma.whitelist.deleteMany({ where: { walletAddress: { startsWith: tag } } });
+    }
+  });
+
+  it("sets the AI reviewer switch for an admin only, and reports it on /admin/ai", async () => {
+    await prisma.aiReviewerSwitch.deleteMany();
+    try {
+      expect((await call("/admin/ai/switch", "other", { state: "admins" })).statusCode).toBe(403);
+      expect((await call("/admin/ai/switch", "admin", { state: "everyone" })).statusCode).toBe(400);
+      const res = await call("/admin/ai/switch", "admin", { state: "admins" });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().switch).toMatchObject({ state: "admins", updatedBy: ADMIN_WALLET });
+      expect((await call("/admin/ai", "admin")).json().switch.state).toBe("admins");
+    } finally {
+      await prisma.aiReviewerSwitch.deleteMany();
     }
   });
 });

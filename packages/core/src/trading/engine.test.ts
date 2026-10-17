@@ -11,6 +11,7 @@ import {
   type TradingEngineDeps,
 } from "./engine.js";
 import { TransientError } from "./errors.js";
+import { resetAiReviewerSwitchCache } from "../curation/aiSwitch.js";
 import type { TradeNote } from "./tradeNotes.js";
 import { createLocalKeyProvider, generateWalletKeypair } from "./keyVault.js";
 import {
@@ -363,6 +364,10 @@ class FakeChain {
   };
 }
 
+// The AI gate tests follow verdicts as a live bot does once the Admin switch is live.
+beforeEach(() => resetAiReviewerSwitchCache("live"));
+afterAll(() => resetAiReviewerSwitchCache());
+
 describe.skipIf(!dbAvailable)("trading engine", () => {
   const admin = generateWalletKeypair().publicKey;
   let userId = "";
@@ -497,6 +502,20 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     expect(run.skipped).toBe(1);
     await aiReview("buy");
     expect((await tick()).buys).toBe(0);
+  });
+
+  it("while the AI reviewer switch is on test (admins only), a live bot never buys on a verdict", async () => {
+    resetAiReviewerSwitchCache("admins");
+    await gated();
+    await aiReview("buy");
+    const run = await tick();
+    expect(run.buys).toBe(0);
+    expect(run.skipped).toBe(1);
+    resetAiReviewerSwitchCache("live");
+    await aiReview("buy");
+    // The signal was consumed as a skip: a later verdict doesn't buy it.
+    expect((await tick()).buys).toBe(0);
+    resetAiReviewerSwitchCache();
   });
 
   it("buys a followed model's call, then walks it through the default exit plan", async () => {

@@ -1,4 +1,4 @@
-import { prisma, createLogger, type Env } from "@trenchscanner/core";
+import { prisma, createLogger, aiReviewerState, type Env } from "@trenchscanner/core";
 import { anthropicConfigured } from "../ai/client.js";
 import { pollReplayRuns } from "../ai/replay.js";
 import { maybeEvolvePlaybook, settleEvolutionRun, unsettledEvolutionRuns } from "../ai/playbook.js";
@@ -10,11 +10,15 @@ const logger = createLogger("ai-judge");
  * The AI judge's housekeeping, every AI_JUDGE_INTERVAL_MINUTES: collect finished replay batches
  * and settle playbook rounds, start the next round when one is due (ai/playbook.ts), and refit
  * the learned blend on the curator-training cadence (ai/blend.ts). Does nothing without
- * ANTHROPIC_API_KEY or with the reviewer off - the blend included, since it only matters to a
- * reviewer that runs.
+ * ANTHROPIC_API_KEY, with the reviewer off, or with the Admin panel's AI reviewer switch off -
+ * the blend included, since it only matters to a reviewer that runs. With the switch on
+ * "admins" (testing), a fresh playbook still gets its baseline replay but no round runs that
+ * could promote another, so the test's shadow record is one fixed prompt's.
  */
 export async function runAiJudgeJob(env: Env): Promise<Record<string, string | number | boolean>> {
   if (!anthropicConfigured(env) || env.AI_REVIEW_MODE === "off") return { skipped: "reviewer off" };
+  const state = await aiReviewerState();
+  if (state === "off") return { skipped: "switched off" };
 
   const meta: Record<string, string | number | boolean> = {};
   const scored = await pollReplayRuns(env);
@@ -36,7 +40,7 @@ export async function runAiJudgeJob(env: Env): Promise<Record<string, string | n
   }
 
   try {
-    meta.playbook = await maybeEvolvePlaybook(env);
+    meta.playbook = await maybeEvolvePlaybook(env, Date.now(), { baselineOnly: state !== "live" });
   } catch (err) {
     logger.warn("playbook evolution step failed", { error: String(err) });
     meta.playbook = "error";

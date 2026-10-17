@@ -2227,6 +2227,19 @@ model AiSpend {
   @@id([day, source])
 }
 
+/// The Admin panel's AI reviewer switch (one row, id "ai-reviewer"; curation/aiSwitch.ts). With
+/// ANTHROPIC_API_KEY set, it decides whether the AI judge runs at all: "off" (the default, and what
+/// a missing row reads as) makes no Claude calls; "admins" runs the reviewer in shadow for testing,
+/// its verdicts shown to admins only and never acting on the feed or a live trading bot; "live"
+/// follows AI_REVIEW_MODE in full. Lets an admin start and stop the test without a redeploy.
+model AiReviewerSwitch {
+  id        String   @id @default("ai-reviewer")
+  state     String   @default("off")
+  /// The admin wallet that last changed it.
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+}
+
 /// A message an admin posts from the Admin tab to every visitor's dashboard (signed in or guest).
 /// One shows at a time: posting a new one ends the one before it. It stops showing once `endedAt`
 /// is set (ended by hand or replaced) or `expiresAt` passes; old rows stay as the admin's history.

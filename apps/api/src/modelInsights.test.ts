@@ -161,12 +161,14 @@ describe.skipIf(!dbAvailable)("buildModelInsights", () => {
     if (dbAvailable) await prisma.token.deleteMany({ where: { mintAddress: { startsWith: TAG } } });
   });
 
-  it("lists the reviewer's calls with their verdicts but keeps its reasoning from subscribers", async () => {
+  it("keeps the reviewer's calls, record and playbooks from subscribers while it is admin-only", async () => {
     const insights = await buildModelInsights(loadEnv(), 30, false);
-    const mine = insights.recentAiReviews.find((r) => r.id === reviewId);
-    expect(mine).toMatchObject({ decision: "buy", probability2x: 0.8, outcome: "unknown", alerted: false });
-    expect(mine).not.toHaveProperty("reasoning");
-    expect(mine).not.toHaveProperty("risks");
+    expect(insights.recentAiReviews).toEqual([]);
+    expect(insights.aiJudge).toEqual({ playbooks: [], replays: [], blend: null });
+    expect(insights.aiReviewer.buys.calls).toBe(0);
+    expect(insights.aiReviewer.allReviewed.calls).toBe(0);
+    expect(insights.aiReviewer.byDecision).toEqual([]);
+    expect(insights.aiReviewer.liftPts).toBeNull();
     // Per-filter rows would name other users' filters.
     expect(insights).not.toHaveProperty("filterMatches");
     expect(insights.targets).toEqual({ hitRate2xPct: 75, hitRate4xPct: 50 });
@@ -175,6 +177,7 @@ describe.skipIf(!dbAvailable)("buildModelInsights", () => {
   it("shows the reasoning to admins", async () => {
     const insights = await buildModelInsights(loadEnv(), 30, true);
     const mine = insights.recentAiReviews.find((r) => r.id === reviewId);
+    expect(mine).toMatchObject({ decision: "buy", probability2x: 0.8, outcome: "unknown", alerted: false });
     expect(mine).toMatchObject({ reasoning: "launcher text says buy", risks: ["thin pool"] });
   });
 });

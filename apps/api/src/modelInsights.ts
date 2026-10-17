@@ -19,7 +19,7 @@ import {
   type AiBlendParams,
   type JudgeRecordSummary,
 } from "@trenchscanner/core";
-import { buildHitRateReport, type Targets } from "./routes/stats.js";
+import { buildHitRateReport, sumCounts, withRates, type Targets } from "./routes/stats.js";
 import { buildLearningCurve } from "./learningCurve.js";
 import type { MarketRowSource } from "./marketRows.js";
 
@@ -335,14 +335,30 @@ export function insightsView(full: FullModelInsights, isAdmin: boolean) {
     // Emptied rather than dropped, so the shape stays as every client knows it.
     curatedAlerts: { ...full.curatedAlerts, bySource: [] },
     shadowEmissions: { ...full.shadowEmissions, bySource: [] },
-    aiJudge: {
-      ...full.aiJudge,
-      playbooks: full.aiJudge.playbooks.map(({ text: _text, rationale: _rationale, ...p }) => p),
-      replays: full.aiJudge.replays.map(({ error: _error, ...r }) => r),
-    },
-    recentAiReviews: full.recentAiReviews.map(
-      ({ reasoning: _reasoning, risks: _risks, error: _error, ...r }) => r,
-    ),
+    // The AI reviewer is admin-only while it is tested (the Admin panel's AI reviewer switch,
+    // user ask 2026-10-17): no verdict, record or playbook reaches anyone else. Emptied rather
+    // than dropped, so the shape stays as every client knows it.
+    aiReviewer: withoutAiRecord(full.aiReviewer),
+    aiJudge: { playbooks: [], replays: [], blend: null },
+    recentAiReviews: [],
+  };
+}
+
+/** The AI reviewer's section with no record in it: what a reader who isn't an admin gets. */
+function withoutAiRecord(ai: FullModelInsights["aiReviewer"]): FullModelInsights["aiReviewer"] {
+  const none = withRates(sumCounts([]), { hitRate2xPct: 0, hitRate4xPct: 0 });
+  return {
+    ...ai,
+    buys: none,
+    allReviewed: none,
+    liftPts: null,
+    liftLowPts: null,
+    liftHighPts: null,
+    brier: null,
+    curatorBrier: null,
+    byPlaybook: [],
+    byDecision: [],
+    probability2xBands: [],
   };
 }
 

@@ -83,10 +83,19 @@ export type EvolutionStep =
   | "no-new-candidates"
   | "evolution-submitted"
   | "submit-failed"
-  | "over-budget";
+  | "over-budget"
+  | "held-for-testing";
 
-/** One pass of the loop - see the module comment. Cheap when nothing is due. */
-export async function maybeEvolvePlaybook(env: Env, now = Date.now()): Promise<EvolutionStep> {
+/**
+ * One pass of the loop - see the module comment. Cheap when nothing is due. `baselineOnly` (the
+ * Admin switch's "admins" testing state): a fresh playbook still gets its one baseline replay, but
+ * no round runs that could promote a new one, so the live prompt stays fixed for the whole test.
+ */
+export async function maybeEvolvePlaybook(
+  env: Env,
+  now = Date.now(),
+  opts: { baselineOnly?: boolean } = {},
+): Promise<EvolutionStep> {
   if (!env.AI_PLAYBOOK_EVOLUTION) return "disabled";
   if ((await prisma.aiReplayRun.count({ where: { status: "submitted" } })) > 0) return "replay-pending";
   const lastEvolution = await prisma.aiReplayRun.findFirst({
@@ -102,8 +111,9 @@ export async function maybeEvolvePlaybook(env: Env, now = Date.now()): Promise<E
   }
   if (now < nextAttemptAt) return "not-due";
 
-  const step = await evolutionRound(env, now);
+  const step = await evolutionRound(env, now, opts.baselineOnly === true);
   switch (step) {
+    case "held-for-testing":
     case "too-few-holdout-alerts":
     case "waiting-for-graded-calls":
     case "not-due":
@@ -121,7 +131,7 @@ export async function maybeEvolvePlaybook(env: Env, now = Date.now()): Promise<E
 }
 
 /** The round itself, once nothing above says to wait. */
-async function evolutionRound(env: Env, now: number): Promise<EvolutionStep> {
+async function evolutionRound(env: Env, now: number, baselineOnly: boolean): Promise<EvolutionStep> {
   const active = await ensureActivePlaybook();
   const holdoutStart = new Date(now - env.AI_REPLAY_HOLDOUT_DAYS * 86_400_000);
   const holdoutEnd = new Date(now);
@@ -168,6 +178,7 @@ async function evolutionRound(env: Env, now: number): Promise<EvolutionStep> {
     if (submitted.runId !== null) return "baseline-submitted";
     return submitted.reason === "over-budget" ? "over-budget" : "submit-failed";
   }
+  if (baselineOnly) return "held-for-testing";
 
   // A round is background work on the daily AI budget: the review plus a replay of the incumbent
   // and two candidates on at least MIN_HOLDOUT_ROWS alerts. When what is left above the

@@ -52,6 +52,8 @@ const logger = createLogger("ai-replay");
  * are the token's current ones, and the curator's reasons are what the alert row kept.
  */
 
+/** How long a submitted run's batch may stay unreadable before the run is failed. */
+const UNREADABLE_BATCH_GIVE_UP_MS = 3 * 86_400_000;
 /** A pool row counts as known at time t once its label window (plus slack) has closed. */
 const LABEL_SETTLE_MS = (CANDIDATE_WATCH_WINDOW_MINUTES + 5) * 60_000;
 /** The most pool rows one replay loads for comparables. */
@@ -462,10 +464,20 @@ export async function pollReplayRuns(env: Env): Promise<ScoredReplayRun[]> {
       logger.info("ai replay scored", { run: run.id, purpose: run.purpose, summaries });
       scored.push({ id: run.id, purpose: run.purpose, playbookIds: run.playbookIds, summaries });
     } catch (err) {
-      logger.warn("could not read ai replay batch - retrying next pass", {
-        run: run.id,
-        error: describeAnthropicError(err),
-      });
+      const error = describeAnthropicError(err);
+      // A batch ends within 24h and its results are kept for 29 days, so one still unreadable
+      // days later (a changed key, a deleted batch) never will be. Failed, it stops holding up
+      // every later round (maybeEvolvePlaybook waits while any run is "submitted"). Its
+      // reservation stays charged to the day it was made.
+      if (Date.now() - run.createdAt.getTime() >= UNREADABLE_BATCH_GIVE_UP_MS) {
+        await prisma.aiReplayRun.update({
+          where: { id: run.id },
+          data: { status: "failed", error: `batch unreadable: ${error}`.slice(0, 500) },
+        });
+        logger.warn("ai replay batch unreadable for days - marking it failed", { run: run.id, error });
+        continue;
+      }
+      logger.warn("could not read ai replay batch - retrying next pass", { run: run.id, error });
     }
   }
   return scored;

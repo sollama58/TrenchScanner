@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { ApiError, api, del, downloadFile, patch, post } from "../api";
+import { ApiError, api, del, downloadFile, patch, post, put } from "../api";
 import { ShieldIcon } from "../components/Icons";
 import { usePolling } from "../hooks";
 import { Kpi, Load, Panel, Table, Tag, Wallet, dollars, ms, n, when } from "./adminShared";
@@ -1436,9 +1436,11 @@ interface AiReport {
     lastCycle: Record<string, number> | null;
     last24h: { depth: string; status: string; count: number }[];
   };
+  switch: { state: AiSwitchState; updatedBy: string | null; updatedAt: string | null };
   config: {
     mode: string;
     apiKeySet: boolean;
+    apiKeyReportedBy?: "worker" | "api";
     reviewModel: string;
     textModel: string;
     textFeatures: unknown;
@@ -1467,6 +1469,85 @@ interface AiReport {
   }[];
 }
 
+type AiSwitchState = "off" | "admins" | "live";
+
+const AI_SWITCH_OPTIONS: [AiSwitchState, string][] = [
+  ["off", "Off"],
+  ["admins", "Test, admins only"],
+  ["live", "Live"],
+];
+
+const AI_SWITCH_TEXT: Record<AiSwitchState, string> = {
+  off: "Off: no Claude calls at all, whatever the key and mode say.",
+  admins:
+    "Testing: the reviewer judges high-conviction picks in shadow. Its verdicts show to admins only, and it never holds back an alert or moves a live trading bot. Paper strategies can follow it.",
+  live: "Live: AI_REVIEW_MODE applies in full. A qualified gate can hold picks back from the feed, and live bots set to follow the AI judge act on its verdicts.",
+};
+
+/** The Admin switch over the whole AI reviewer (core's curation/aiSwitch.ts). */
+function AiSwitch({ report, onChange }: { report: AiReport; onChange: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const current = report.switch.state;
+  const choose = async (state: AiSwitchState) => {
+    if (state === current || busy) return;
+    if (
+      state === "live" &&
+      !window.confirm(
+        "Go live? With AI_REVIEW_MODE=gate a qualified reviewer can hold alerts back, and live trading bots set to follow the AI judge will buy on its verdicts.",
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await put("/admin/ai/switch", { state });
+      onChange();
+    } catch (e) {
+      window.alert(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Panel
+      title="AI reviewer switch"
+      note={
+        report.switch.updatedAt
+          ? `Last changed ${when(report.switch.updatedAt)} by ${shortAddress(report.switch.updatedBy ?? "")}. The worker picks a change up within a minute.`
+          : "Never changed. The worker picks a change up within a minute."
+      }
+    >
+      <div className="segmented small" role="radiogroup" aria-label="AI reviewer">
+        {AI_SWITCH_OPTIONS.map(([v, text]) => (
+          <button
+            key={v}
+            type="button"
+            role="radio"
+            aria-checked={current === v}
+            className={current === v ? "on" : ""}
+            disabled={busy}
+            onClick={() => void choose(v)}
+          >
+            {text}
+          </button>
+        ))}
+      </div>
+      <p className="small muted">{AI_SWITCH_TEXT[current]}</p>
+      {current !== "off" && !report.config.apiKeySet && (
+        <p className="notice">
+          The switch is on, but the scanner has no ANTHROPIC_API_KEY, so nothing runs yet. Add it to the
+          trenchscanner-worker service on Render.
+        </p>
+      )}
+      {current !== "off" && report.config.apiKeySet && report.config.mode === "off" && (
+        <p className="notice">
+          The switch is on, but AI_REVIEW_MODE is off on the scanner, so nothing runs. Set it to shadow.
+        </p>
+      )}
+    </Panel>
+  );
+}
+
 function Ai() {
   const q = usePolling<AiReport>("/admin/ai", 60_000);
   const hits = usePolling<HitRates>("/admin/hit-rates?days=30", 120_000);
@@ -1474,10 +1555,11 @@ function Ai() {
     <Load q={q}>
       {(a) => (
         <div className="stack">
-          {!a.config.apiKeySet && (
+          <AiSwitch report={a} onChange={q.reload} />
+          {!a.config.apiKeySet && a.switch.state === "off" && (
             <p className="notice">
-              No ANTHROPIC_API_KEY on this API service, so the AI reviewer isn't running. Set it on both the
-              API and worker services on Render to turn it on.
+              No ANTHROPIC_API_KEY on the scanner, so the AI reviewer can't run. Add it to the
+              trenchscanner-worker service on Render, then turn the switch above to Test.
             </p>
           )}
           <Panel

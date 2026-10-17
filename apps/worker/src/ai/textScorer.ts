@@ -6,6 +6,7 @@ import {
   buildTextScoringBrief,
   parseTextScores,
   TEXT_SCORER_SYSTEM_PROMPT,
+  cachedAiReviewerState,
   type Env,
 } from "@trenchscanner/core";
 import { anthropicClient, anthropicConfigured, describeAnthropicError } from "./client.js";
@@ -61,8 +62,14 @@ function takeSlot(env: Env, now: number): boolean {
   return true;
 }
 
+/** On with a key and AI_TEXT_FEATURES, while the Admin panel's AI reviewer switch isn't off. */
 export function textScoringEnabled(env: Env): boolean {
-  return env.AI_TEXT_FEATURES && env.AI_TEXT_MAX_PER_HOUR > 0 && anthropicConfigured(env);
+  return (
+    env.AI_TEXT_FEATURES &&
+    env.AI_TEXT_MAX_PER_HOUR > 0 &&
+    anthropicConfigured(env) &&
+    cachedAiReviewerState() !== "off"
+  );
 }
 
 /**

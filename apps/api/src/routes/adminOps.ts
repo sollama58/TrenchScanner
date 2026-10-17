@@ -7,6 +7,10 @@ import {
   Prisma,
   heldJobLocks,
   readAiBudget,
+  readAiReviewerSwitch,
+  readWorkerConfig,
+  setAiReviewerSwitch,
+  AI_REVIEWER_STATES,
   type Env,
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
@@ -28,6 +32,7 @@ const REPORT_CACHE_MS = 60_000;
 
 const daysSchema = z.object({ days: z.coerce.number().int().min(1).max(180).default(7) });
 const limitSchema = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) });
+const aiSwitchSchema = z.object({ state: z.enum(AI_REVIEWER_STATES) });
 
 /**
  * The admin panel's operational reads (the dashboard's Admin tab). Everything here was already
@@ -35,7 +40,8 @@ const limitSchema = z.object({ limit: z.coerce.number().int().min(1).max(200).de
  * scripts) - but not from a signed-in browser. These serve the same builders behind the admin
  * wallet check instead, so an admin can see the whole system without a token or a DB console.
  *
- * Read-only. The levers (whitelist, grants, revokes) live in registerAdminSubscriptionRoutes.
+ * Read-only, but for the AI reviewer switch (PUT /ai/switch). The other levers (whitelist,
+ * grants, revokes) live in registerAdminSubscriptionRoutes.
  */
 export async function registerAdminOpsRoutes(
   app: FastifyInstance,
@@ -167,6 +173,22 @@ export async function registerAdminOpsRoutes(
     live: await buildLiveFreshnessReport(opts.liveRefresher),
   }));
 
+  /**
+   * The AI reviewer switch: "off" (no Claude calls), "admins" (shadow test, verdicts shown to
+   * admins only and never acting on the feed or a live bot) or "live" (AI_REVIEW_MODE in full).
+   * The worker picks a change up within a minute, no redeploy.
+   */
+  app.put("/ai/switch", async (request, reply) => {
+    const parsed = aiSwitchSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const by = request.user!.walletAddress;
+    const state = await setAiReviewerSwitch(parsed.data.state, by);
+    request.log.info({ state, by }, "ai reviewer switch changed");
+    return { switch: await readAiReviewerSwitch() };
+  });
+
   /** The AI reviewer's activity and token use: reviews, errors, latency, replay spend. */
   app.get("/ai", async () => {
     const now = Date.now();
@@ -174,7 +196,7 @@ export async function registerAdminOpsRoutes(
       { label: "24h", since: new Date(now - DAY_MS) },
       { label: "7d", since: new Date(now - 7 * DAY_MS) },
     ];
-    const [reviews, replays, recent, budget, budgetDays] = await Promise.all([
+    const [reviews, replays, recent, budget, budgetDays, aiSwitch] = await Promise.all([
       Promise.all(
         windows.map(async (w) => {
           const [agg, byDecision] = await Promise.all([
@@ -231,6 +253,7 @@ export async function registerAdminOpsRoutes(
         _max: { capUsd: true },
         orderBy: { day: "desc" },
       }),
+      readAiReviewerSwitch(),
     ]);
     const r = replays[0];
     // TokenSage narratives stored in the last day (tokensage/prefetch.ts on the worker).
@@ -246,6 +269,7 @@ export async function registerAdminOpsRoutes(
       select: { lastRunAt: true, meta: true },
     });
     const beatMeta = scanBeat?.meta as Record<string, unknown> | null | undefined;
+    const worker = readWorkerConfig(scanBeat?.meta);
     const workerTokenSage =
       beatMeta && typeof beatMeta.tokensage === "object" && beatMeta.tokensage !== null
         ? (beatMeta.tokensage as Record<string, number>)
@@ -258,9 +282,14 @@ export async function registerAdminOpsRoutes(
         lastCycle: workerTokenSage,
         last24h: narratives.map((g) => ({ depth: g.depth, status: g.status, count: g._count._all })),
       },
+      // The Admin switch over all of it (core's curation/aiSwitch.ts).
+      switch: aiSwitch,
       config: {
-        mode: env.AI_REVIEW_MODE,
-        apiKeySet: env.ANTHROPIC_API_KEY.length > 0,
+        // The scanner's own settings where its heartbeat reports them: the API service has no
+        // ANTHROPIC_API_KEY of its own, so its env read "not set" whatever the worker had.
+        mode: workerSetting(worker, "aiReviewMode", env.AI_REVIEW_MODE),
+        apiKeySet: worker?.credentials.anthropicApiKey ?? env.ANTHROPIC_API_KEY.length > 0,
+        apiKeyReportedBy: worker && "anthropicApiKey" in worker.credentials ? "worker" : "api",
         reviewModel: env.AI_REVIEW_MODEL,
         textModel: env.AI_TEXT_MODEL,
         textFeatures: env.AI_TEXT_FEATURES,
@@ -416,4 +445,10 @@ export async function registerAdminOpsRoutes(
       };
     });
   });
+}
+
+/** A setting the scanner's heartbeat reported, as a string, else the API's own. */
+function workerSetting(worker: ReturnType<typeof readWorkerConfig>, key: string, fallback: string): string {
+  const v = worker?.settings[key];
+  return typeof v === "string" ? v : fallback;
 }
