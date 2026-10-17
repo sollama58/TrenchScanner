@@ -1986,6 +1986,19 @@ model Whitelist {
   createdAt DateTime @default(now())
 }
 
+/// Pro Mode (user decision 2026-10-17): the token modal's Trade panel - buying and selling from
+/// the chart with the trader's own wallet - and everything around it. Shown to no one else, not
+/// even as a locked control. Admin wallets have it always and need no row; everyone else needs one,
+/// added and removed from Admin > Access. Keyed by wallet so it can be granted before the wallet
+/// has ever signed in.
+model ProModeGrant {
+  walletAddress String   @id
+  note          String?
+  /// Wallet address of the admin who granted it, for the audit trail.
+  grantedBy     String
+  createdAt     DateTime @default(now())
+}
+
 /// A Free Access period, set from Admin > Access (packages/core/src/subscription/freeAccess.ts).
 /// Any wallet that signs in from signInStartsAt until signInEndsAt is enrolled (a FreeAccessGrant)
 /// and has full access until accessEndsAt, or until an admin switches it off (disabledAt). Then the

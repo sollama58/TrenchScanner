@@ -13,3 +13,6 @@ export * from "./backtest.js";
 export * from "./paper.js";
 export * from "./tradeNotes.js";
 export * from "./tradeAlerts.js";
+export * from "./sender.js";
+export * from "./pumpCurve.js";
+export * from "./manualTrade.js";
