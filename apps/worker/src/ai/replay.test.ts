@@ -155,7 +155,7 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
     });
     const item = items.find((i) => i.candidateOutcomeId === alertId);
     expect(item).toBeDefined();
-    expect(item!.brief).toContain("symbol: ALERT");
+    expect(item!.brief).toContain(`{"symbol":"ALERT",`);
     // The calibrated rate, not the conviction score.
     expect(item!.brief).toContain("doubles within 15 minutes: 27%");
     expect(item!.brief).toContain("backed by Trees");

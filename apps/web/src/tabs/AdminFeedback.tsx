@@ -49,14 +49,15 @@ const STATUS_TONE: Record<Status, "warn" | "muted" | "ok"> = { new: "warn", seen
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
- * The report's page as a link target, only when it is plain http(s). The sender writes this
+ * The report's page as a link target, only when it is plain https. The sender writes this
  * field, so a javascript: or data: URL must never become a clickable href.
  */
 export function safePageUrl(raw: string | undefined): string | null {
   if (!raw) return null;
   try {
     const url = new URL(raw);
-    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+    // https only and no userinfo: `http://trenchscanner.app@evil.example/` reads as this site.
+    return url.protocol === "https:" && !url.username && !url.password ? url.href : null;
   } catch {
     return null;
   }

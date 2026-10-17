@@ -55,7 +55,17 @@ export interface TokenProfile {
 const MAX_DEV_COINS = 12;
 const WALLET_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-/** An https link as stored, else null; a bare Telegram handle becomes its t.me link. */
+/** Hosts the X and Telegram slots may point at; anything else under that label would mislead. */
+const SOCIAL_HOSTS: Record<"x" | "telegram", ReadonlySet<string>> = {
+  x: new Set(["x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"]),
+  telegram: new Set(["t.me", "www.t.me", "telegram.me", "www.telegram.me"]),
+};
+
+/**
+ * An https link as stored, else null; a bare Telegram handle becomes its t.me link. The launcher
+ * writes these, so a link with userinfo (`https://x.com@evil.example/` shows x.com, opens
+ * evil.example) is dropped, and the X and Telegram slots only keep their own hosts.
+ */
 export function safeLink(raw: unknown, kind: "x" | "telegram" | "website"): string | null {
   if (typeof raw !== "string") return null;
   const v = raw.trim();
@@ -64,7 +74,9 @@ export function safeLink(raw: unknown, kind: "x" | "telegram" | "website"): stri
   if (kind === "x" && /^@?[A-Za-z0-9_]{1,15}$/.test(v)) return `https://x.com/${v.replace(/^@/, "")}`;
   try {
     const u = new URL(v);
-    return u.protocol === "https:" ? u.toString() : null;
+    if (u.protocol !== "https:" || u.username || u.password) return null;
+    if (kind !== "website" && !SOCIAL_HOSTS[kind].has(u.hostname.toLowerCase())) return null;
+    return u.toString();
   } catch {
     return null;
   }

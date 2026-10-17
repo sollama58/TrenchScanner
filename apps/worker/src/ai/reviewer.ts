@@ -5,6 +5,8 @@ import {
   createLogger,
   aiReviewSystemPrompt,
   buildAiReviewBrief,
+  launcherTextInstructs,
+  LAUNCHER_TEXT_GUARD_MODEL,
   curatorProbabilityOf,
   buildCandidateFeatures,
   nearestOutcomes,
@@ -248,6 +250,28 @@ export function reviewPriority(
   return isDefault && env.AI_REVIEW_STANDARD_PICKS === "spare" ? "background" : null;
 }
 
+function launcherTextVeto(scored: ScoredToken, decision: CurationDecision): AiReviewResult {
+  logger.warn("launcher text addresses the reviewer; passing without a call", { mint: scored.mintAddress });
+  return {
+    verdict: {
+      decision: "no_buy",
+      probability2x: 0,
+      probability4x: 0,
+      reasoning:
+        "The token's name, symbol or description is written to instruct an AI reviewer, so it is passed on.",
+      risks: ["launcher text tries to steer the AI reviewer"],
+    },
+    error: null,
+    model: LAUNCHER_TEXT_GUARD_MODEL,
+    latencyMs: 0,
+    inputTokens: null,
+    outputTokens: null,
+    playbookId: null,
+    brief: buildAiReviewBrief(scored, decision),
+    curatorProbability: curatorProbabilityOf(decision) ?? null,
+  };
+}
+
 /**
  * Asks Claude for a buy/no-buy call on one pick. Never throws: a failure comes back as
  * `{ verdict: null, error }` so the caller decides what an outage means for the feed. Returns
@@ -267,6 +291,9 @@ export async function reviewPick(
 ): Promise<AiReviewResult | null> {
   const priority = reviewPriority(decision, env, opts.isDefault);
   if (priority === null) return null;
+  // Launcher text written to steer the reviewer is a pass on its own, decided here so the model
+  // is never the only check against it (and no spend goes on reading it).
+  if (launcherTextInstructs(scored)) return launcherTextVeto(scored, decision);
   const reservation = await reserveAiSpend(
     env,
     priority === "live" ? "review" : "review-spare",
