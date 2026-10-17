@@ -133,9 +133,9 @@ describe("rankSideWallets", () => {
   });
 
   it("reads a wallet in a large share of every coin as a bot", () => {
-    expect(isBot(240, 300)).toBe(true);
+    expect(isBot(240, 400)).toBe(true);
     expect(isBot(190, 200)).toBe(false); // under 200 coins
-    expect(isBot(225, 300)).toBe(false); // exactly 75% is not more than it
+    expect(isBot(250, 500)).toBe(false); // exactly 50% is not more than it
   });
 });
 

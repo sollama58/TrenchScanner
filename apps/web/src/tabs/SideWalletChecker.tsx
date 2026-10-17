@@ -59,12 +59,12 @@ export interface SideRules {
   holdDays: number;
 }
 
-/** The cutoffs as of 2026-10-14, for an API build that doesn't send them yet. */
+/** The cutoffs as of 2026-10-17, for an API build that doesn't send them yet. */
 const DEFAULT_RULES: SideRules = {
   gapMinutes: 5,
   minShared: { "24h": 5, "7d": 15, "30d": 25 },
   minPct: 50,
-  bot: { minCoins: 200, minPct: 75, days: 30 },
+  bot: { minCoins: 200, minPct: 50, days: 30 },
   likelyBot: { minKols: 4, minPct: 60, minShared: 50, window: "7d" },
   tiers: [
     { hours: 24, minPct: 100, minShared: 10 },
