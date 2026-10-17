@@ -90,6 +90,22 @@ describe("tradesFromChainTransactions", () => {
     expect(tradesFromChainTransactions(MINT, [buy, sell], isWallet).launch).toBeNull();
   });
 
+  it("never reads the Stonk fee wallet's fee sweep as a buy", () => {
+    const fees = "5KXDF6QnqhBj72hDtJNkkpFaQVUfbFXNybMsp3DiK6tD";
+    const sweep: ChainTx = {
+      blockTime: T0 / 1000 + 30,
+      transaction: { signatures: ["sweep"], message: { accountKeys: [fees, "feesAta"] } },
+      meta: {
+        err: null,
+        preTokenBalances: [bal(1, fees, 1_000_000)],
+        postTokenBalances: [bal(1, fees, 3_000_000)],
+        preBalances: [1e9, 0],
+        postBalances: [1e9 - 5000, 0],
+      },
+    };
+    expect(tradesFromChainTransactions(MINT, [sweep], () => true).trades).toEqual([]);
+  });
+
   it("skips failed transactions", () => {
     const failed = { ...buy, meta: { ...buy.meta!, err: { InstructionError: [0, "x"] } } };
     expect(tradesFromChainTransactions(MINT, [failed], isWallet).trades).toEqual([]);
