@@ -1776,6 +1776,10 @@ model LighthouseHour {
   screenAccepted Int @default(0)
   screenRejected Int @default(0)
 
+  /// The summing rules the screened counts were last summed under (lighthouseRollupJob.ts
+  /// LIGHTHOUSE_ROLLUP_VERSION): an hour below it is re-summed once, while its rows are all kept.
+  rollupVersion Int @default(0)
+
   computedAt DateTime @default(now())
 }
 

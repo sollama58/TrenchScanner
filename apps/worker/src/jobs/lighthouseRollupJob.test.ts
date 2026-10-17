@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { prisma } from "@trenchscanner/core";
-import { runLighthouseRollupJob } from "./lighthouseRollupJob.js";
+import { prisma, REPORTED_LABEL_RULE } from "@trenchscanner/core";
+import { LIGHTHOUSE_ROLLUP_VERSION, runLighthouseRollupJob } from "./lighthouseRollupJob.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -264,5 +264,60 @@ describe.skipIf(!dbAvailable)("lighthouse rollup", () => {
     await runLighthouseRollupJob({ from: DAY, now: new Date(DAY.getTime() + 72 * HOUR_MS) });
     const hour = await prisma.lighthouseHour.findUniqueOrThrow({ where: { hour: HOUR } });
     expect(hour).toMatchObject({ screenedCalls: 4, screenAccepted: 2, screenRejected: 1 });
+  });
+
+  it("re-sums an hour summed under older rules once, inside the kept horizon only", async () => {
+    // Summed before the label-rule filter: an old-rule moment counted among the screened calls.
+    const dog = await prisma.token.findUniqueOrThrow({ where: { mintAddress: MINT_DOG } });
+    await prisma.candidateOutcome.create({
+      data: {
+        tokenId: dog.id,
+        sampleKind: "event",
+        labelRule: REPORTED_LABEL_RULE - 1,
+        anchorAt: AT,
+        anchorPriceUsd: 1,
+        anchorMcapUsd: 50_000,
+        features: {},
+        nextCheckAt: AT,
+        peak1hPriceUsd: 1,
+        low1hPriceUsd: 1,
+        lowBefore2xPriceUsd: 1,
+        peak24hPriceUsd: 1,
+        hit2xIn1h: true,
+      },
+    });
+    await prisma.lighthouseHour.update({
+      where: { hour: HOUR },
+      data: { screenedCalls: 5, readsTotal: 40, rollupVersion: 0 },
+    });
+    // The day's first hour is past the kept horizon here (a 2-day retention two days on): its
+    // decision moments may be partly swept, so it is never re-summed.
+    await prisma.lighthouseHour.update({
+      where: { hour: DAY },
+      data: { screenedCalls: 7, rollupVersion: 0 },
+    });
+
+    const run = () =>
+      runLighthouseRollupJob({
+        from: new Date(DAY.getTime() + 24 * HOUR_MS),
+        now: new Date(DAY.getTime() + 48 * HOUR_MS),
+        outcomeRetentionDays: 2,
+      });
+    const meta = await run();
+    expect(meta).toMatchObject({ catchUp: { hours: 1 } });
+
+    const hour = await prisma.lighthouseHour.findUniqueOrThrow({ where: { hour: HOUR } });
+    // Only the screened counts are re-summed; the old-rule moment stays out, and the reads stay frozen.
+    expect(hour).toMatchObject({
+      screenedCalls: 4,
+      screenedGraded: 3,
+      readsTotal: 40,
+      rollupVersion: LIGHTHOUSE_ROLLUP_VERSION,
+    });
+    const past = await prisma.lighthouseHour.findUniqueOrThrow({ where: { hour: DAY } });
+    expect(past).toMatchObject({ screenedCalls: 7, rollupVersion: 0 });
+
+    // Once: the next run finds nothing left to catch up.
+    expect(await run()).not.toHaveProperty("catchUp");
   });
 });

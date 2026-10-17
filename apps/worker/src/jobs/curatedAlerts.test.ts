@@ -449,14 +449,28 @@ describe.skipIf(!dbAvailable)("emission governor", () => {
  * (sigmoid(5) = 0.99), threshold 0.5. Enough to exercise who-decides-what without caring what a
  * real model would think of the fixture.
  */
+/**
+ * An input no scan sets: the live coins here score sigmoid(5) = 0.993 without it, and a stored
+ * moment carrying it scores sigmoid(5 + knob) - what the live scales re-score history with.
+ */
+const LIVE_KNOB = "liveScoreKnob";
+
+/** The stored features a moment needs for alwaysYesParams to score it `p`. */
+function scoringAt(p: number): Record<string, number> {
+  const q = Math.min(Math.max(p, 1e-6), 1 - 1e-9);
+  return { [LIVE_KNOB]: Math.log(q / (1 - q)) - 5 };
+}
+
 function alwaysYesParams() {
-  const n = CANDIDATE_FEATURE_NAMES.length;
+  const n = CANDIDATE_FEATURE_NAMES.length + 1;
+  const weights = new Array(2 * n).fill(0);
+  weights[n - 1] = 1;
   return {
     kind: CURATOR_MODEL_KIND,
-    featureNames: [...CANDIDATE_FEATURE_NAMES],
+    featureNames: [...CANDIDATE_FEATURE_NAMES, LIVE_KNOB],
     means: new Array(n).fill(0),
     stdevs: new Array(n).fill(1),
-    weights: new Array(2 * n).fill(0),
+    weights,
     bias: 5,
     threshold: 0.5,
   };
@@ -541,7 +555,7 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
         anchorAt: new Date(Date.now() - 3_600_000 - i * 60_000),
         anchorPriceUsd: 0.0001,
         anchorMcapUsd: 100_000,
-        features: {},
+        features: scoringAt(i / 1000),
         nextCheckAt: new Date(),
         peak1hPriceUsd: 0.0001,
         low1hPriceUsd: 0.0001,
@@ -569,8 +583,12 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     expect(alert.tier).toBe("high");
   });
 
-  /** A day of earlier decision moments carrying these seat scores, newest first. */
-  async function liveHistory(name: string, scores: (i: number) => Record<string, number>): Promise<void> {
+  /**
+   * A day of earlier decision moments the seats' current models score `score(i)`, newest first.
+   * Their stored scores are an older model's (0.5 each): the live scales re-score the moments with
+   * the current model (curation/liveRescore.ts), so those never count.
+   */
+  async function liveHistory(name: string, seats: string[], score: (i: number) => number): Promise<void> {
     const history = await prisma.token.create({ data: { mintAddress: `${TAG}-${name}` } });
     await prisma.candidateOutcome.createMany({
       data: Array.from({ length: 250 }, (_, i) => ({
@@ -579,13 +597,13 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
         anchorAt: new Date(Date.now() - 3_600_000 - i * 60_000),
         anchorPriceUsd: 0.0001,
         anchorMcapUsd: 100_000,
-        features: {},
+        features: scoringAt(score(i)),
         nextCheckAt: new Date(),
         peak1hPriceUsd: 0.0001,
         low1hPriceUsd: 0.0001,
         lowBefore2xPriceUsd: 0.0001,
         peak24hPriceUsd: 0.0001,
-        seatScores: scores(i),
+        seatScores: Object.fromEntries(seats.map((seat) => [seat, 0.5])),
       })),
     });
   }
@@ -598,7 +616,7 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
       cutoffRank: 0.75,
     });
     // Live, the seat's scores run 0..0.249: its top quarter starts near 0.19.
-    await liveHistory("cutoff-low", (i) => ({ linear: i / 1000 }));
+    await liveHistory("cutoff-low", ["linear"], (i) => i / 1000);
 
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-cutoff-low-live` } });
     const scored = curatableFixture(token.mintAddress);
@@ -609,8 +627,9 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
 
   it("holds back a call under the seat's live cutoff, though it clears the shipped one", async () => {
     await activeModel("linear", CURATOR_MODEL_KIND, { ...alwaysYesParams(), cutoffRank: 0.75 });
-    // Live, the seat's scores sit at 0.9935 and up, above this coin's 0.9933.
-    await liveHistory("cutoff-high", (i) => ({ linear: 0.9935 + i / 1_000_000 }));
+    // Live, the seat's current model scores the day at 0.9935 and up, above this coin's 0.9933.
+    // The scores the day stored (0.5, an older model's) would have let it call.
+    await liveHistory("cutoff-high", ["linear"], (i) => 0.9935 + i / 1_000_000);
 
     const token = await prisma.token.create({ data: { mintAddress: `${TAG}-cutoff-high-live` } });
     const scored = curatableFixture(token.mintAddress);
@@ -808,7 +827,7 @@ describe.skipIf(!dbAvailable)("curator contest ledgers", () => {
     expect(cycle.byModel.has(CONSENSUS_CONTESTANT)).toBe(false);
 
     // A day of live scores at 0..0.249: on them 0.993 is each member's very top, so both call.
-    await liveHistory("consensus-history", (i) => ({ linear: i / 1000, trees: i / 1000 }));
+    await liveHistory("consensus-history", ["linear", "trees"], (i) => i / 1000);
     resetCuratorModelCache();
     const backed = await prisma.token.create({ data: { mintAddress: `${TAG}-consensus-live` } });
     cycle = newCuratedCycle();

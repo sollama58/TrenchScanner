@@ -505,7 +505,9 @@ async function main() {
   schedule("lighthouse-rollup", () =>
     scheduleInterval(
       "lighthouse-rollup",
-      takingRunNow("lighthouse-rollup", () => runLighthouseRollupJob()),
+      takingRunNow("lighthouse-rollup", () =>
+        runLighthouseRollupJob({ outcomeRetentionDays: env.CANDIDATE_OUTCOME_RETENTION_DAYS }),
+      ),
       LIGHTHOUSE_ROLLUP_MINUTES,
       {
         deadlineMinutes: 30,
