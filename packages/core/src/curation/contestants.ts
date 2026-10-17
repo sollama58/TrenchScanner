@@ -94,7 +94,7 @@ export interface CuratorRecipe {
    * of the field's. Unset = the field's rule, which leans toward catching more runners.
    */
   cutoffShare?: number;
-  /** What the seat is trained and examined on (SeatGoal in trainer.ts). Unset = the field's (CURATOR_DEFAULT_GOAL). */
+  /** What the seat is trained and examined on (SeatGoal in trainer.ts). Unset = "2x". */
   goal?: SeatGoal;
 }
 
@@ -473,9 +473,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: TREES_NO_TOKENSAGE_CONTESTANT,
     name: "Return Trees, no TokenSage",
     description:
-      "Trees' twin on every input except TokenSage's, kept to measure what the read adds - in no combiner, never the default, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
+      "Return Trees' twin on every input except TokenSage's, kept to measure what the read adds - in no combiner, never the default, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
-      "The same if-then rules as Trees, but it never sees TokenSage, so we can tell whether TokenSage helps.",
+      "The same if-then rules as Return Trees, but it never sees TokenSage, so we can tell whether TokenSage helps.",
     role: "learner",
     recipe: { learner: "gbdt", featureNames: TREES_NO_TOKENSAGE_FEATURES, goal: "return" },
     control: true,
@@ -485,7 +485,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     name: "Return Deep Trees",
     description:
       "Gradient-boosted deeper trees for three- and four-way interactions, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
-    summary: "Like Trees, but with longer if-then chains to catch rarer combinations.",
+    summary: "Like Return Trees, but with longer if-then chains to catch rarer combinations.",
     role: "learner",
     recipe: { learner: "gbdt", boosting: { maxDepth: 5, minLeafRows: 50, maxTrees: 200 }, goal: "return" },
   },
@@ -570,16 +570,17 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   },
   {
     id: SHARP_DEEP_TREES_CONTESTANT,
-    name: "Sharp Deep Trees",
+    name: "Sharp 2x Deep Trees",
     description:
-      "Deep Trees' recipe calling only its surest tokens: about the top 12% of decision moments, moved by 2x record",
+      "Return Deep Trees' boosted trees, trained on a clean 2x, calling only their surest tokens: about the top 12% of decision moments, moved by 2x record",
     summary:
-      "Calls only the tokens Deep Trees is surest of, about 6-8 an hour, for the best hit rate rather than catching every runner.",
+      "Calls only the tokens Return Deep Trees' trees are surest of, about 6-8 an hour, for the best hit rate rather than catching every runner.",
     role: "learner",
     recipe: {
       learner: "gbdt",
       boosting: { maxDepth: 5, minLeafRows: 50, maxTrees: 200 },
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+      goal: "2x",
     },
     standalone: true,
     // User decision 2026-10-14: a bit-identical copy of Deep Trees; see SHARP_DEEP_TREES_CONTESTANT.
@@ -595,7 +596,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: SHARP_SURVIVOR_CONTESTANT,
     name: "Sharp 2x Survivor",
     description:
-      "Survivor's two boosted-tree stages (first whether it holds above the stop, then whether it doubles) calling only their surest tokens: about the top 12% of decision moments, moved by 2x record",
+      "Return Survivor's two boosted-tree stages (first whether it holds above the stop, then whether it doubles), trained on a clean 2x, calling only their surest tokens: about the top 12% of decision moments, moved by 2x record",
     summary:
       "Asks first whether a token will avoid a 50% drop, then whether it will double, and calls only the ones it is surest of, about 6-8 an hour.",
     role: "learner",
@@ -648,7 +649,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: GEMS_CONTESTANT,
     name: "Return Gems",
     description:
-      "Only tokens that pass the Gemerald filter (a frozen copy): Survivor's two boosted-tree stages on every input but TokenSage's, mostly the last few days, calling only its surest tokens - about the top 12% of Gemerald's moments, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
+      "Only tokens that pass the Gemerald filter (a frozen copy): Return Survivor's two boosted-tree stages on every input but TokenSage's, mostly the last few days, calling only its surest tokens - about the top 12% of Gemerald's moments, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
       "Looks only at coins the Gemerald filter lets through, asks whether each will avoid a 50% drop and then double, and calls only the ones it is surest of.",
     role: "learner",
@@ -662,7 +663,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: WINNERS_CONTESTANT,
     name: "Return Winners",
     description:
-      "Who is buying and how, read through the best wallets' records: the clean Winner wallets' (no win fed by tokens transferred in) share of the newest buyers and of the SOL, the buyers' own 2x record, how hard the winners are buying against their usual stake and whether they are buying in or getting out, beside every input but TokenSage's. Survivor's two boosted-tree stages, mostly the last few days, calling only its surest tokens - about the top 12% of the moments the newest trades were read on, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
+      "Who is buying and how, read through the best wallets' records: the clean Winner wallets' (no win fed by tokens transferred in) share of the newest buyers and of the SOL, the buyers' own 2x record, how hard the winners are buying against their usual stake and whether they are buying in or getting out, beside every input but TokenSage's. Return Survivor's two boosted-tree stages, mostly the last few days, calling only its surest tokens - about the top 12% of the moments the newest trades were read on, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
       "Watches which proven winning wallets are trading a coin right now and how (how big they are buying, whether they are getting in or out), leaving out wallets whose wins came from tokens sent to them, weighs that with the rest of the coin's picture, and calls only the ones it is surest of.",
     role: "learner",

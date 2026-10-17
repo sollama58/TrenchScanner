@@ -1734,7 +1734,8 @@ function HowItWorks({ board }: { board: Leaderboard }) {
             </>
           ) : (
             <>
-              After each run the model with the best 2x lower bound over the last 72 hours (with at least{" "}
+              After each run the model with the best score on the full scorecard (2x, 4x and 10x rates,
+              average return and run size) over the last 72 hours (with at least{" "}
               {board.champion?.minLiveGraded ?? 10} graded live calls) becomes the default feed, and everyone
               who follows the best switches to it. Until a model qualifies, the default is the Consensus when
               it can call, else Rules.

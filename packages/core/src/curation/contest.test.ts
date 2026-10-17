@@ -160,7 +160,7 @@ describe("the high-precision seats", () => {
   it("retires Sharp Deep Trees, a copy of Deep Trees, under its own id instead of reusing it", () => {
     const old = contestantSpec(SHARP_DEEP_TREES_CONTESTANT)!;
     expect(old.retired).toBe(true);
-    expect(old.name).toBe("Sharp Deep Trees");
+    expect(old.name).toBe("Sharp 2x Deep Trees");
     expect(RETIRED_CONTESTANT_IDS).toContain(SHARP_DEEP_TREES_CONTESTANT);
     expect(ACTIVE_CONTESTANT_IDS).not.toContain(SHARP_DEEP_TREES_CONTESTANT);
     expect(SHARP_SURVIVOR_CONTESTANT).not.toBe(SHARP_DEEP_TREES_CONTESTANT);

@@ -2,6 +2,7 @@ import {
   refreshScoreWeights,
   curatedTargets,
   simulateExitPlan,
+  exitPlanPositionOpen,
   EXIT_PLAN,
   prisma,
   createLogger,
@@ -801,6 +802,7 @@ async function evolutionPlan(
       minAgeMs: env.CURATOR_EVOLUTION_MIN_AGE_HOURS * 3_600_000,
       margin: env.CURATOR_EVOLUTION_MARGIN,
       challengerLearners: challengers.map((c) => recipeFamily(c.recipe)),
+      challengerGoals: challengers.map((c) => c.recipe.goal),
       evidence: {
         minExamWins: env.CURATOR_EVOLUTION_MIN_EXAM_WINS,
         confidence: env.CURATOR_EVOLUTION_CONFIDENCE,
@@ -1071,16 +1073,27 @@ export function runPeakOf(r: {
   return r.peak1hReturnPct !== null ? { runPeakMultiple: 1 + r.peak1hReturnPct / 100 } : {};
 }
 
+/** How long after the trail's hold cap a watcher price still counts as the price at the cap. */
+const HOLD_CAP_PRICE_SLACK_MS = 30 * 60_000;
+
 /**
  * TrainingRow.returnPct and .crashed for a stored row, under today's exit plan (EXIT_PLAN): the
  * plan replayed on the row's own aggregates (the ladder on the peak before the stop, the stop,
- * the trail's exit), so every row is priced the same way whichever plan was current when it was
- * graded. The trail's exit is the one the watcher kept for the plan of the day, so on rows graded
- * before a trail change the trailing share is approximate; the ladder and the stop are exact. A row
- * the replay can't finish (it never sold, so it closed at the window's price, which is not stored)
- * reads its stored return: with no sale and no stop, every plan closes it at that same price.
+ * the trail's exit), so the ladder and the stop are priced the same way whichever plan was current
+ * when the row was graded. The trail's exit is the one the watcher kept for the plan of the day,
+ * so on rows graded before a trail change the trailing share is approximate.
+ *
+ * Where the replay can't finish on the aggregates alone:
+ *  - Nothing sold and no stop: the row closed at the label window's price, which is not stored,
+ *    so it reads its stored return - with no sale and no stop every plan closes it at that price.
+ *  - Something sold and the trail never fired (it rode to the hold cap, or the row predates the
+ *    trail state): the rest closes at a real price the row stores - the watcher's last price, when
+ *    it was taken within HOLD_CAP_PRICE_SLACK_MS after the hold cap, or, on a row whose watch ended
+ *    at the label window's close (no trail state, not on the 24h watch), that close. Without one
+ *    the return is left unknown: the stored return was priced under the plan of its day.
  */
 export function rowReturn(r: {
+  anchorAt: Date;
   anchorPriceUsd: number;
   low1hPriceUsd: number | null;
   peak1hPriceUsd: number | null;
@@ -1090,26 +1103,47 @@ export function rowReturn(r: {
   trailExitAt: Date | null;
   trailExitPriceUsd: number | null;
   simReturnPct: number | null;
+  lastPriceUsd?: number | null;
+  lastCheckedAt?: Date | null;
+  extended24h?: boolean | null;
 }): { returnPct?: number; crashed?: boolean } {
-  if (r.low1hPriceUsd === null || r.peak1hPriceUsd === null) {
-    return r.simReturnPct !== null ? { returnPct: r.simReturnPct } : {};
+  const crashLine = (EXIT_PLAN.stopFraction - 1) * 100 + 1e-6;
+  const known = (returnPct: number | null) =>
+    returnPct === null || !Number.isFinite(returnPct) ? {} : { returnPct, crashed: returnPct <= crashLine };
+  if (r.low1hPriceUsd === null || r.peak1hPriceUsd === null) return known(r.simReturnPct);
+  const input = {
+    anchorPriceUsd: r.anchorPriceUsd,
+    low1hPriceUsd: r.low1hPriceUsd,
+    peak1hPriceUsd: r.peak1hPriceUsd,
+    peakBeforeStopPriceUsd: r.peakBeforeStopPriceUsd,
+    stoppedAt: r.stoppedAt,
+    trailHighPriceUsd: r.trailHighPriceUsd,
+    trailExitAt: r.trailExitAt,
+    trailExitPriceUsd: r.trailExitPriceUsd,
+  };
+  const replayed = simulateExitPlan(input, null);
+  if (replayed !== null) return known(replayed);
+  // Sold, with the trail still holding the rest: close it at the cap price, when one is stored.
+  if (exitPlanPositionOpen({ ...input, simReturnPct: null })) {
+    const capPrice = holdCapPriceUsd(r);
+    const capped = capPrice === null ? null : simulateExitPlan(input, null, EXIT_PLAN, capPrice);
+    // It sold before any stop, so it did not crash whatever the rest fetched.
+    return capped === null || !Number.isFinite(capped) ? { crashed: false } : known(capped);
   }
-  const replayed = simulateExitPlan(
-    {
-      anchorPriceUsd: r.anchorPriceUsd,
-      low1hPriceUsd: r.low1hPriceUsd,
-      peak1hPriceUsd: r.peak1hPriceUsd,
-      peakBeforeStopPriceUsd: r.peakBeforeStopPriceUsd,
-      stoppedAt: r.stoppedAt,
-      trailHighPriceUsd: r.trailHighPriceUsd,
-      trailExitAt: r.trailExitAt,
-      trailExitPriceUsd: r.trailExitPriceUsd,
-    },
-    null,
-  );
-  const returnPct = replayed ?? r.simReturnPct;
-  if (returnPct === null || !Number.isFinite(returnPct)) return {};
-  return { returnPct, crashed: returnPct <= (EXIT_PLAN.stopFraction - 1) * 100 + 1e-6 };
+  return known(r.simReturnPct);
+}
+
+/** The real price rowReturn closes a trailing share at (see there), or null. */
+function holdCapPriceUsd(r: Parameters<typeof rowReturn>[0]): number | null {
+  const price = r.lastPriceUsd ?? null;
+  const at = r.lastCheckedAt ?? null;
+  if (price === null || !(price > 0) || !Number.isFinite(price) || at === null) return null;
+  const sinceAnchor = at.getTime() - r.anchorAt.getTime();
+  const capMs = EXIT_PLAN.trailMaxHoldMinutes * 60_000;
+  if (sinceAnchor >= capMs && sinceAnchor <= capMs + HOLD_CAP_PRICE_SLACK_MS) return price;
+  // A row from before the trail state whose watch ended when the label window closed.
+  if (r.trailHighPriceUsd === null && r.extended24h === false && sinceAnchor <= capMs) return price;
+  return null;
 }
 
 /**
@@ -1140,6 +1174,9 @@ interface LoadedRow {
   trailExitAt: Date | null;
   trailExitPriceUsd: number | null;
   simReturnPct: number | null;
+  lastPriceUsd: number | null;
+  lastCheckedAt: Date | null;
+  extended24h: boolean;
   rule4Grade: unknown;
   /** Set when the row was born rule 3 and the re-grade rewrote it in place (labelRegradeJob.ts). */
   rule3Grade: unknown;
@@ -1307,7 +1344,7 @@ async function loadRowsOfKind(
              "signalPriceUsd", "anchorMcapUsd", "sampleKind", "labelRule", "maxDrawdown1hPct",
              "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h", "low1hPriceUsd",
              "peak1hPriceUsd", "stoppedAt", "trailHighPriceUsd", "trailExitAt", "trailExitPriceUsd",
-             "simReturnPct", "rule4Grade", "rule3Grade",
+             "simReturnPct", "lastPriceUsd", "lastCheckedAt", "extended24h", "rule4Grade", "rule3Grade",
              (${launchedAtSql}) AS "launchedAt"
       FROM "CandidateOutcome"
       WHERE "finalizedAt" IS NOT NULL

@@ -6,7 +6,7 @@ import {
   applyCooldown,
   isDecisionRow,
   goalValue,
-  rowReturnPct,
+  hasReturn,
   type SeatGoal,
   scoreCandidateWithModel,
   type TrainedCuratorParams,
@@ -118,8 +118,10 @@ function maskRecord(rows: TrainingRow[], mask: Uint8Array): CallRecord {
     record.sumRun! += runDoublings(row);
     if (row.labelValue <= 0 || row.hit10x !== undefined) record.tenXGraded! += 1;
     if (row.hit10x === true) record.tenX! += 1;
-    record.simCalls = (record.simCalls ?? 0) + 1;
-    record.sumSimReturnPct = (record.sumSimReturnPct ?? 0) + rowReturnPct(row);
+    if (hasReturn(row)) {
+      record.simCalls = (record.simCalls ?? 0) + 1;
+      record.sumSimReturnPct = (record.sumSimReturnPct ?? 0) + row.returnPct!;
+    }
   }
   return record;
 }

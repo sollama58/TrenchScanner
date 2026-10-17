@@ -444,6 +444,11 @@ function relabel(rows: readonly TrainingRow[], won: (r: TrainingRow) => boolean)
   );
 }
 
+/** Whether a row carries a real return under the exit plan (TrainingRow.returnPct). */
+export function hasReturn(row: TrainingRow): boolean {
+  return row.returnPct !== undefined && Number.isFinite(row.returnPct);
+}
+
 /** A row's return under the exit plan, or the default payoff of its kind when it carries none. */
 export function rowReturnPct(row: TrainingRow): number {
   if (row.returnPct !== undefined && Number.isFinite(row.returnPct)) return row.returnPct;
@@ -1044,7 +1049,7 @@ export interface ScoredOutcome {
   runPeakMultiple?: number;
   /** TrainingRow.hit10x. */
   hit10x?: boolean;
-  /** The row's return under the exit plan (rowReturnPct). */
+  /** The row's return under the exit plan (TrainingRow.returnPct); absent when it has none. */
   returnPct?: number;
   /**
    * The row's token and moment. When both are present on every call and a cooldown is given,
@@ -1533,7 +1538,11 @@ export interface FoldSide {
    */
   runnersSeen?: number;
   runnersCaught?: number;
-  /** Sum of the emissions' returns under the exit plan (rowReturnPct). Absent on older stored folds. */
+  /**
+   * The emissions that carry a return under the exit plan (TrainingRow.returnPct), and the sum of
+   * those returns in percent of a stake. Absent on older stored folds.
+   */
+  pricedCalls?: number;
   sumReturnPct?: number;
 }
 
@@ -1762,6 +1771,8 @@ function sideMetrics(emittedRows: TrainingRow[], spanHours: number, graded: Trai
   noteRunners(runners, graded, emittedRows);
   const wins = emittedRows.filter((r) => r.labelValue > 0).length;
   const goals = emittedRows.filter((r) => r.labelValue >= GOAL_LABEL).length;
+  // Only calls with a real return: a made-up payoff would score the return part on no evidence.
+  const priced = emittedRows.filter((r) => hasReturn(r));
   return {
     emitted,
     perHour: emitted / spanHours,
@@ -1773,7 +1784,8 @@ function sideMetrics(emittedRows: TrainingRow[], spanHours: number, graded: Trai
     tenXGraded: emittedRows.filter((r) => r.labelValue <= 0 || r.hit10x !== undefined).length,
     runnersSeen: runners.runnersSeen!,
     runnersCaught: runners.runnersCaught!,
-    sumReturnPct: emittedRows.reduce((s, r) => s + rowReturnPct(r), 0),
+    pricedCalls: priced.length,
+    sumReturnPct: priced.reduce((s, r) => s + r.returnPct!, 0),
   };
 }
 
@@ -1955,7 +1967,7 @@ export async function walkForwardEvaluate(
     labelValue: row.labelValue,
     ...(row.runPeakMultiple !== undefined ? { runPeakMultiple: row.runPeakMultiple } : {}),
     ...(row.hit10x !== undefined ? { hit10x: row.hit10x } : {}),
-    returnPct: rowReturnPct(row),
+    ...(hasReturn(row) ? { returnPct: row.returnPct } : {}),
     tokenId: row.tokenId,
     anchorAt: row.anchorAt,
   });

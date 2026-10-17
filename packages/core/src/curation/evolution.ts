@@ -431,12 +431,24 @@ export function withLanes(specs: readonly ContestantSpec[], lanes: readonly Lane
     if (!lane || lane.generation === 0) return s;
     return {
       ...s,
-      name: lane.name,
+      name: goalNamed(lane),
       description: lane.description,
       summary: plainSummary(lane.recipe, lane.parentName),
       recipe: lane.recipe,
     };
   });
+}
+
+/**
+ * A lane's name with its goal in front (GOAL_NAMES): lanes bred before goals existed (2026-10-17)
+ * were stored as "Deep Trees #3", and keep that name in the table; they show as "Return Deep
+ * Trees #3". A name that already starts with its goal is left as it is.
+ */
+export function goalNamed(lane: Pick<Lane, "name" | "recipe">): string {
+  const goal = lane.recipe.goal;
+  if (goal === undefined) return lane.name;
+  const prefix = GOAL_NAMES[goal];
+  return lane.name.startsWith(`${prefix} `) ? lane.name : `${prefix} ${lane.name}`;
 }
 
 /** A lane as selection sees it: its blended leaderboard score, and this run's exam on its own. */
@@ -529,6 +541,12 @@ export interface ReplacementInput {
    * field that has collapsed onto one family has no fallback when the market shifts under it.
    */
   challengerLearners?: readonly string[];
+  /**
+   * Each challenger's goal (CuratorRecipe.goal, unset = "2x"), in breeding order. When given, a
+   * challenger only takes a seat with the same goal: a seat keeps what it is trained and judged on
+   * (SeatGoal), and a Moonshot child never lands in a Return seat or the other way round.
+   */
+  challengerGoals?: readonly (SeatGoal | undefined)[];
   /**
    * The statistical gate on a takeover, when given (see TakeoverEvidence). Without it the margin
    * alone decides, as before.
@@ -707,7 +725,8 @@ export interface Replacement {
  * lanes weakest of all) gives its seat to the best challenger, when that challenger beat the
  * lane's own exam on this same run - same rows, same folds - by `margin` points, and (with
  * evidence) clears a bootstrap bar raised for the number of challengers it was picked from. With challengerLearners, every
- * model family keeps at least one seat (see ReplacementInput.challengerLearners).
+ * model family keeps at least one seat (see ReplacementInput.challengerLearners); with
+ * challengerGoals, only a seat of the challenger's own goal is open to it.
  */
 export function chooseReplacement(input: ReplacementInput): Replacement | null {
   let best = -1;
@@ -720,6 +739,7 @@ export function chooseReplacement(input: ReplacementInput): Replacement | null {
   }
   if (best === -1) return null;
   const family = input.challengerLearners?.[best];
+  const goal = input.challengerGoals ? (input.challengerGoals[best] ?? "2x") : undefined;
   const familySeats = new Map<string, number>();
   for (const l of input.lanes) {
     const f = recipeFamily(l.lane.recipe);
@@ -728,6 +748,7 @@ export function chooseReplacement(input: ReplacementInput): Replacement | null {
   const seasoned = input.lanes.filter(
     (l) =>
       input.now.getTime() - l.lane.bornAt.getTime() >= input.minAgeMs &&
+      (goal === undefined || (l.lane.recipe.goal ?? "2x") === goal) &&
       (family === undefined ||
         recipeFamily(l.lane.recipe) === family ||
         familySeats.get(recipeFamily(l.lane.recipe))! > 1),

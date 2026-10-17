@@ -103,8 +103,6 @@ export interface CuratorTrainingConfig {
   runWeightPerDoubling?: number;
   /** Fewest wins a judged exam fold must hold (env CURATOR_EXAM_MIN_FOLD_WINS). */
   minTestWins?: number;
-  /** The goal of a seat whose recipe sets none (env CURATOR_DEFAULT_GOAL) - see SeatGoal. Omitted = "2x". */
-  defaultGoal?: SeatGoal;
   /** The share of decision moments, newest first, the exam grades (env CURATOR_EXAM_SHARE). Default 0.5. */
   examShare?: number;
   /**
@@ -516,7 +514,7 @@ async function sitRecipeExam(
     narrativeLed: recipe.narrativeLed,
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
-    goal: recipe.goal ?? cfg.defaultGoal,
+    goal: recipe.goal,
     minTestWins: cfg.minTestWins,
     examShare: cfg.examShare,
   });
@@ -552,7 +550,7 @@ async function shipRecipe(
     narrativeLed: recipe.narrativeLed,
     legacyLabelWeight: cfg.legacyLabelWeight,
     runWeightPerDoubling: cfg.runWeightPerDoubling,
-    goal: recipe.goal ?? cfg.defaultGoal,
+    goal: recipe.goal,
   };
   const trained = await trainCuratorModel(rows, trainOpts);
   // The shipped model's scale on tokens it has never seen, raised where it scores higher itself
@@ -618,6 +616,7 @@ function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord
   let runnersSeen: number | null = 0;
   let runnersCaught = 0;
   let sumReturnPct: number | null = 0;
+  let pricedCalls = 0;
   for (const fold of folds) {
     const s = fold[side];
     record.calls += s.emitted;
@@ -640,11 +639,14 @@ function foldsRecord(folds: EvalFold[], side: "model" | "heuristic"): CallRecord
       runnersCaught += s.runnersCaught ?? 0;
     } else runnersSeen = null;
     // And the returns: folds stored before they were priced leave the record without them.
-    if (s.sumReturnPct !== undefined && sumReturnPct !== null) sumReturnPct += s.sumReturnPct;
-    else sumReturnPct = null;
+    if (s.sumReturnPct !== undefined && s.pricedCalls !== undefined && sumReturnPct !== null) {
+      sumReturnPct += s.sumReturnPct;
+      pricedCalls += s.pricedCalls;
+    } else sumReturnPct = null;
   }
-  if (sumReturnPct !== null && folds.length > 0) {
-    record.simCalls = record.graded;
+  // Only the calls that carry a return count toward it; with none the record tracks no return.
+  if (sumReturnPct !== null && pricedCalls > 0) {
+    record.simCalls = pricedCalls;
     record.sumSimReturnPct = sumReturnPct;
   }
   if (sumRun !== null) record.sumRun = sumRun;

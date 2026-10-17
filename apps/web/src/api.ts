@@ -1032,6 +1032,8 @@ export interface FilterBoard {
   windowDays: number;
   minGradedToRank: number;
   targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number; tenXPct?: number };
+  /** Points per scored part, scaled to 100 (absent from older API builds). */
+  points?: { winRate: number; goalRate: number; tenXRate: number; runSize: number };
   ranked: FilterBoardEntry[];
   warmingUp: FilterBoardEntry[];
   sharedCount: number;

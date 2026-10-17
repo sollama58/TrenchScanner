@@ -357,9 +357,10 @@ export function ModelPanel({
           </div>
           {board.champion && (
             <p className="faint small">
-              The best performer is the model with the best 2x lower bound over the last 72 hours. It needs{" "}
-              {board.champion.minLiveGraded} graded live calls there, and has to beat the current one by{" "}
-              {board.champion.margin} points of that bound to take over.
+              The best performer is the model with the best score on the full scorecard (2x, 4x and 10x rates,
+              average return and run size) over the last 72 hours. It needs {board.champion.minLiveGraded}{" "}
+              graded live calls there, and has to beat the current one by {board.champion.margin} scorecard
+              points (out of 100) to take over.
             </p>
           )}
         </div>

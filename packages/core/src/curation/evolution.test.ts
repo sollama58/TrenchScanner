@@ -12,6 +12,7 @@ import {
   seededRng,
   traitName,
   withLanes,
+  goalNamed,
   type Lane,
   type LaneFitness,
 } from "./evolution.js";
@@ -225,6 +226,31 @@ describe("withLanes", () => {
     expect(out.find((s) => s.id === "trees")?.name).toBe("Return Trees");
     expect(out.map((s) => s.id)).toEqual(specs.map((s) => s.id));
   });
+
+  it("puts the goal in front of a lane name stored before goals, once", () => {
+    const specs = enabledContestants(CONTESTANT_IDS);
+    const old: Lane = {
+      slot: "trees",
+      name: "Deep Trees #3",
+      description: "bred",
+      recipe: { learner: "gbdt", goal: "return" },
+      generation: 3,
+      parentName: "Trees",
+      bornAt: t0,
+    };
+    const fresh: Lane = { ...old, slot: "deep-trees", name: "Return Deep Trees #5" };
+    const moon: Lane = {
+      ...old,
+      slot: "runner",
+      name: "Trees #2",
+      recipe: { learner: "gbdt", goal: "moonshot" },
+    };
+    const out = withLanes(specs, [old, fresh, moon]);
+    expect(out.find((s) => s.id === "trees")?.name).toBe("Return Deep Trees #3");
+    expect(out.find((s) => s.id === "deep-trees")?.name).toBe("Return Deep Trees #5");
+    expect(out.find((s) => s.id === "runner")?.name).toBe("Moonshot Trees #2");
+    expect(goalNamed({ name: "Trees #1", recipe: { learner: "gbdt" } })).toBe("Trees #1");
+  });
 });
 
 describe("plainSummary", () => {
@@ -305,5 +331,23 @@ describe("the forest and objective families", () => {
     const base = { lanes, challengerScores: [50], now, minAgeMs: 0, margin: 3 };
     expect(chooseReplacement({ ...base, challengerLearners: ["gbdt"] })?.slot).toBe("t1");
     expect(chooseReplacement({ ...base, challengerLearners: ["gbdt:twoStage"] })?.slot).toBe("survivor");
+  });
+
+  it("hands a seat only to a challenger of the same goal", () => {
+    const now = new Date(t0.getTime() + 48 * 3_600_000);
+    const lanes = [
+      { lane: lane("t1", { learner: "gbdt", goal: "return" }), composite: 10, examScore: 20 },
+      { lane: lane("t2", { learner: "gbdt", goal: "return" }), composite: 40, examScore: 20 },
+      { lane: lane("moon", { learner: "gbdt", goal: "moonshot" }), composite: 30, examScore: 20 },
+      { lane: lane("plain", { learner: "gbdt" }), composite: 35, examScore: 20 },
+    ];
+    const base = { lanes, challengerScores: [50], now, minAgeMs: 0, margin: 3 };
+    // Without goals the weakest seat goes, whatever its goal.
+    expect(chooseReplacement(base)?.slot).toBe("t1");
+    expect(chooseReplacement({ ...base, challengerGoals: ["return"] })?.slot).toBe("t1");
+    expect(chooseReplacement({ ...base, challengerGoals: ["moonshot"] })?.slot).toBe("moon");
+    // An unset goal is the 2x goal, on both sides.
+    expect(chooseReplacement({ ...base, challengerGoals: [undefined] })?.slot).toBe("plain");
+    expect(chooseReplacement({ ...base, challengerGoals: ["safe"] })).toBeNull();
   });
 });
