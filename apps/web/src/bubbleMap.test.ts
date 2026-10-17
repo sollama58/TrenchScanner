@@ -736,6 +736,9 @@ describe("kolControl", () => {
       ["r2", "transfer"],
     ]);
     expect(kolControl(g, sides)[0]!.pct).toBe(2.8);
+    // An exchange's transfers link no one: r1 as an exchange stops the chain at the bundle.
+    const cex = kolControl(g, sides, [], transfers, undefined, (w) => w === "r1");
+    expect(cex[0]!.wallets.map((w) => w.wallet)).toEqual(["kol", "side"]);
   });
   it("steps out by funding alone, leaving out a wallet that sent into the bundle", () => {
     const n = (wallet: string, pct: number, cluster: number | null) =>

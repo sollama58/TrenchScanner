@@ -1,5 +1,6 @@
 import {
   cleanWalletName,
+  isServiceWallet,
   KNOWN_EXCHANGE_WALLETS,
   PLATFORM_WALLETS,
   prisma,
@@ -27,6 +28,11 @@ export type WalletNameSource = "kol" | "kol-side" | "identity" | "pumpfun" | "fo
 export interface WalletName {
   name: string;
   source: WalletNameSource;
+  /**
+   * An exchange or launchpad wallet (core's isServiceWallet), whatever name it goes by: never a
+   * person, so the bubble map's KOL bundles skip its transfers. Absent otherwise.
+   */
+  service?: true;
 }
 
 /** The name a wallet goes by, highest priority first. Exported for tests. */
@@ -115,7 +121,7 @@ export async function loadWalletNames(
       exchange: KNOWN_EXCHANGE_WALLETS.get(w),
       platform: PLATFORM_WALLETS.get(w),
     });
-    if (name) names[w] = name;
+    if (name) names[w] = isServiceWallet(w) ? { ...name, service: true } : name;
   }
   return { names, unread: ask.filter((w) => !identities.has(w)) };
 }
