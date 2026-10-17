@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { OVERSOLD_TOKENS, prisma } from "@trenchscanner/core";
+import { MIN_BUY_SOL_PER_TOKEN, OVERSOLD_TOKENS, prisma } from "@trenchscanner/core";
 import { readKolRows, knownSideName } from "./kolRoster.js";
 import { SharedCache } from "./sharedCache.js";
 
 /**
- * The Lighthouse tab's "Wallets to watch" (user ask 2026-10-16): how the most important wallets we
+ * The Utilities tab's "Wallets to watch" (user ask 2026-10-16): how the most important wallets we
  * track trade, from what they did in the coins whose trade tape was read (TokenWalletActivity) and
  * how those coins did from our read of them (the tape's CandidateOutcome).
  *
@@ -172,7 +172,10 @@ const isClosed = (r: WalletCoinRow) =>
   r.tokensBought > 0 &&
   r.tokensSold >= r.tokensBought * CLOSED_SHARE &&
   r.tokensSold <= r.tokensBought * OVERSOLD_TOKENS &&
-  !(r.firstSellAt && r.firstBuyAt && r.firstSellAt < r.firstBuyAt);
+  !(r.firstSellAt && r.firstBuyAt && r.firstSellAt < r.firstBuyAt) &&
+  // Tokens sent in for a token account's rent read as a buy at a price no buy can be (core's
+  // MIN_BUY_SOL_PER_TOKEN): selling them is not its trade's return either.
+  r.solIn >= r.tokensBought * MIN_BUY_SOL_PER_TOKEN;
 
 const emptyTiers = (): TierCounts => ({ graded: 0, won2x: 0, won4x: 0, won10x: 0, tenXGraded: 0 });
 

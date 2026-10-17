@@ -105,6 +105,22 @@ describe("scorecardOf", () => {
     expect(c.returnPct).toBeNull();
   });
 
+  it("leaves out coins whose tokens came in for a token account's rent", () => {
+    // 47M tokens sent in, the receiver paying 0.002 SOL of rent, sold for 1.4 SOL: no trade made 700x.
+    const sent = row({ solIn: 0.00204, solOut: 1.4, tokensBought: 47_000_000, tokensSold: 47_000_000 });
+    const bought = row({
+      mint: "y",
+      solIn: 1,
+      solOut: 1.5,
+      tokensBought: 30_000_000,
+      tokensSold: 30_000_000,
+    });
+    const c = scorecardOf("w", [sent, bought]);
+    expect(c.closed).toBe(1);
+    expect(c.returnPct).toBeCloseTo(50);
+    expect(c.best?.mint).toBe("y");
+  });
+
   it("sums the group's return by size and grades each coin once", () => {
     const ra = [row({ who: "a", mint: "x", solOut: 2, tokensSold: 100, hit2x: true, tenXGraded: true })];
     const rb = [

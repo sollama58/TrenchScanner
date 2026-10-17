@@ -56,6 +56,16 @@ export const MIN_WIN_SOL = 0.5;
 export const WALLET_WIN_MULTIPLE = 2;
 export const OVERSOLD_TOKENS = 1.1;
 /**
+ * ...and paid at least this much SOL per whole token it bought on the tape, on average. A Pump.fun
+ * coin's curve starts near 2.8e-8 SOL a token (30 SOL against 1.073B), so a wallet can't buy below
+ * it: a lower average means tokens that came in without a buy, sent from another wallet with the
+ * receiver paying only its token account's rent (0.002 SOL), read until 2026-10-17 as a buy at
+ * that price (user report 2026-10-17: a wallet on Wallets to watch that sells what a funder sends
+ * it showed an impossible return). Rows the tape stored before then keep those buys, so they are
+ * left out here; set well under the curve's start so another launchpad's cheaper coin isn't.
+ */
+export const MIN_BUY_SOL_PER_TOKEN = 1e-8;
+/**
  * The winner label (user ask 2026-10-16), relative to the market like the scores: 3+ wins, and a
  * win rate whose 90% lower bound (Wilson) is at least twice the market's, so a lucky streak on few
  * coins doesn't carry it. Checked out of sample on 10-11..10-16 tapes (labels from coins before

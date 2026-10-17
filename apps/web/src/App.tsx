@@ -462,9 +462,12 @@ export function App() {
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
             </div>
-            <Suspense fallback={null}>
-              <UtilityDrawer walletAddress={session.user.walletAddress} onMore={() => goTo("utilities")} />
-            </Suspense>
+            {/* The Utilities tab has the same tools, with its own toolbar beside them. */}
+            {tab !== "utilities" && (
+              <Suspense fallback={null}>
+                <UtilityDrawer walletAddress={session.user.walletAddress} onMore={() => goTo("utilities")} />
+              </Suspense>
+            )}
             {sageMint && (
               <Suspense fallback={null}>
                 <SageHost key={sageMint} mint={sageMint} guest={false} onConnect={connectWallet} />
