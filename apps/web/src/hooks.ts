@@ -449,6 +449,8 @@ export function useNudgeStream(
 
 /** How often an open feed asks for fresh market caps. The API keeps each reading under 8s old. */
 const LIVE_TICK_MS = 10_000;
+/** How far DexScreener's figures run behind the market (see AlertCard's CALL_READING_LAG_MS). */
+const DEX_LAG_MS = 60_000;
 /** The least time between two ticks when the tokens on screen change. */
 const MIN_RETICK_MS = 3_000;
 
@@ -464,7 +466,9 @@ export function useLiveMarketCaps(
   cards: Card[] | undefined,
   tickTokenIds?: readonly string[],
 ): Card[] | undefined {
-  const [live, setLive] = useState<Map<string, { marketCapUsd: number; at: string }>>(() => new Map());
+  const [live, setLive] = useState<Map<string, { marketCapUsd: number; at: string; source?: "curve" }>>(
+    () => new Map(),
+  );
   // `tickTokenIds` narrows the tick to some of the cards (a feed holding more cards than are on
   // screen); the rest keep the feed's own figure.
   const tickIds = tickTokenIds ?? cards?.map((c) => c.tokenId);
@@ -491,7 +495,8 @@ export function useLiveMarketCaps(
             // Only the cards' tokens: a long-open feed must not keep every token it ever showed.
             const keep = new Set([...ids.split(","), ...heldRef.current.split(",")]);
             const next = new Map([...prev].filter(([id]) => keep.has(id)));
-            for (const t of res.tokens) next.set(t.id, { marketCapUsd: t.marketCapUsd, at: t.at });
+            for (const t of res.tokens)
+              next.set(t.id, { marketCapUsd: t.marketCapUsd, at: t.at, source: t.source });
             return next;
           });
         })
@@ -523,10 +528,18 @@ export function useLiveMarketCaps(
     return cards.map((card) => {
       const reading = live.get(card.tokenId);
       if (!reading) return card;
-      // The feed may already carry something newer (a scan snapshot, or a later poll).
+      // The feed may already carry something newer (a scan snapshot, or a later poll). A curve
+      // reading is the market to the block, while the feed's DexScreener figure shows the market of
+      // up to a minute before its stamp, so the feed's only wins once it is stamped a minute later.
       const cardAt = card.currentMarketCapAt ? new Date(card.currentMarketCapAt).getTime() : 0;
-      if (new Date(reading.at).getTime() <= cardAt) return card;
-      return { ...card, currentMarketCapUsd: reading.marketCapUsd, currentMarketCapAt: reading.at };
+      const readAt = new Date(reading.at).getTime();
+      if (readAt + (reading.source === "curve" ? DEX_LAG_MS : 0) <= cardAt) return card;
+      return {
+        ...card,
+        currentMarketCapUsd: reading.marketCapUsd,
+        currentMarketCapAt: reading.at,
+        currentMarketCapSource: reading.source,
+      };
     });
   }, [cards, live]);
 }

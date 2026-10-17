@@ -5,7 +5,10 @@ import {
   cardReadings,
   oldFirstBuyersText,
   countCutFor,
+  ageNow,
+  laterScanText,
   nowReading,
+  nowReadingAge,
   recordedPeakOf,
   sniperReading,
   walletCountText,
@@ -178,6 +181,34 @@ describe("nowReading", () => {
 
   it("shows the reading when it has no time (older API builds)", () => {
     expect(nowReading(call("curated", null))).toBe(47_500);
+  });
+
+  it("shows a curve-priced reading from the first second: the curve is the market to the block", () => {
+    expect(nowReading({ ...call("curated", at(5)), currentMarketCapSource: "curve" })).toBe(47_500);
+  });
+});
+
+describe("reading ages", () => {
+  const now = Date.parse("2026-10-16T12:30:00.000Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+
+  it("labels a Now reading once it is two minutes old", () => {
+    expect(nowReadingAge({ currentMarketCapAt: ago(90_000) }, 1, now)).toBeNull();
+    expect(nowReadingAge({ currentMarketCapAt: ago(3 * 60_000) }, 1, now)).toBe("3m");
+    expect(nowReadingAge({ currentMarketCapAt: ago(3 * 60_000) }, null, now)).toBeNull();
+    expect(nowReadingAge({ currentMarketCapAt: null }, 1, now)).toBeNull();
+  });
+
+  it("says how old the newest scan is", () => {
+    expect(
+      laterScanText({ latestSnapshot: { takenAt: ago(12 * 60_000) } as Card["latestSnapshot"] }, now),
+    ).toBe("from a scan 12m ago");
+    expect(laterScanText({ latestSnapshot: null }, now)).toBe("from a scan after the alert");
+  });
+
+  it("ages the coin from its alert snapshot to now", () => {
+    expect(ageNow({ ageMinutes: 4, takenAt: ago(3 * 3_600_000) }, now)).toBe(184);
+    expect(ageNow({ ageMinutes: null, takenAt: ago(0) }, now)).toBeNull();
   });
 });
 
