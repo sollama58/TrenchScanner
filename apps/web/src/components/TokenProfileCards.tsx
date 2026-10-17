@@ -6,17 +6,30 @@ import { ExternalIcon, LinkIcon, SendIcon, WalletIcon, XLogoIcon } from "./Icons
 import type { SageRead } from "./SageView";
 import { WalletText } from "./WalletText";
 
+/** Mirrors apps/api/src/tokenProfile.ts DevLaunchRecord. */
+export interface DevLaunchRecord {
+  score: number;
+  launches: number;
+  inBand: number;
+  graded: number;
+  wins: number;
+  stops: number;
+}
+
 /** Mirrors apps/api/src/tokenProfile.ts TokenProfile. */
 export interface TokenProfile {
   dev: {
     wallet: string;
     risk: number | null;
+    launch: DevLaunchRecord | null;
+    family: (DevLaunchRecord & { creators: number }) | null;
     coins: {
       mint: string;
       symbol: string | null;
       at: string;
       outcome: "win" | "stop" | "fizzle" | null;
       peakPct: number | null;
+      reachedBand: boolean | null;
     }[];
   } | null;
   socials: { x: string | null; telegram: string | null; website: string | null; unread: boolean };
@@ -116,9 +129,20 @@ export function FlowCard({ flow, now }: { flow: TokenProfile["flow"]; now: numbe
   );
 }
 
+/** The tag tone for a 0-100 score where higher is riskier (core's RISKY_* lines are at 70). */
+function riskTone(score: number): string {
+  return score >= 70 ? "tone-bad" : score >= 40 ? "tone-warn" : "";
+}
+
+/** "3 of 5 graded doubled", or nothing when none was graded. */
+function gradedText(r: DevLaunchRecord): string {
+  return r.graded > 0 ? `, ${r.wins} of ${r.graded} graded doubled` : "";
+}
+
 /**
  * Who launched the coin and what else they launched (user ask 2026-10-16): the creator wallet, its
- * risk score, and its other coins the scanner read the trades of, with how each did.
+ * two scores - trading risk (how the wallet trades) and launch risk (how its launches went, user ask
+ * 2026-10-17) - its funder's other devs, and its other coins, with how each did.
  */
 export function DevCard({ dev }: { dev: TokenProfile["dev"] | undefined }) {
   const names = useWalletNames(dev ? [dev.wallet] : []);
@@ -129,12 +153,20 @@ export function DevCard({ dev }: { dev: TokenProfile["dev"] | undefined }) {
     <section className="sage-card tm-dev">
       <h4>
         <WalletIcon size={14} /> Dev
+        {dev && dev.launch && (
+          <span
+            className={`sage-tag ${riskTone(dev.launch.score)}`}
+            title="Launch risk, 0-100: how this dev's coins in the last 14 days went against every launch (reached the band, doubled, stopped), and how many it launched"
+          >
+            Launch risk {Math.round(dev.launch.score)}
+          </span>
+        )}
         {dev && dev.risk !== null && (
           <span
-            className={`sage-tag ${dev.risk >= 70 ? "tone-bad" : dev.risk >= 40 ? "tone-warn" : ""}`}
-            title="The dev wallet's risk score, 0-100, from selling into earlier calls' stops"
+            className={`sage-tag ${riskTone(dev.risk)}`}
+            title="Trading risk, 0-100: how the dev wallet trades, from selling into earlier calls' stops"
           >
-            Risk {Math.round(dev.risk)}
+            Trading risk {Math.round(dev.risk)}
           </span>
         )}
       </h4>
@@ -160,19 +192,34 @@ export function DevCard({ dev }: { dev: TokenProfile["dev"] | undefined }) {
               Solscan <ExternalIcon size={10} />
             </a>
           </p>
+          {dev.launch && (
+            <p className="small muted">
+              {dev.launch.launches} coin{dev.launch.launches === 1 ? "" : "s"} launched in the last 14 days,{" "}
+              {dev.launch.inBand} reached the band{gradedText(dev.launch)}.
+            </p>
+          )}
+          {dev.family && dev.family.creators > 1 && (
+            <p className="small muted">
+              The wallet that funded it also funded {dev.family.creators - 1} other dev
+              {dev.family.creators === 2 ? "" : "s"}; together they launched {dev.family.launches} coins,{" "}
+              {dev.family.inBand} reached the band{gradedText(dev.family)}.{" "}
+              <span className={`sage-tag ${riskTone(dev.family.score)}`}>
+                Funder {Math.round(dev.family.score)}
+              </span>
+            </p>
+          )}
           {dev.coins.length === 0 ? (
-            <p className="small muted">No other coins of this dev in the scanner&apos;s trade records.</p>
+            <p className="small muted">No other coins of this dev in the scanner&apos;s records.</p>
           ) : (
             <>
               <p className="small muted">
-                {dev.coins.length} other coin{dev.coins.length === 1 ? "" : "s"} it launched that the scanner
-                read
+                {dev.coins.length} other coin{dev.coins.length === 1 ? "" : "s"} it launched
                 {graded > 0 && (
                   <>
                     , <strong className={wins > 0 ? "up" : ""}>{wins}</strong> of {graded} doubled
                   </>
                 )}
-                . Coins it read nothing of aren&apos;t counted.
+                .
               </p>
               <ul className="tm-dev-coins">
                 {dev.coins.map((c) => (
@@ -181,6 +228,11 @@ export function DevCard({ dev }: { dev: TokenProfile["dev"] | undefined }) {
                       {c.symbol ? `$${c.symbol}` : c.mint.slice(0, 6)}
                     </button>
                     <span className="faint small">{ago(c.at)}</span>
+                    {!c.outcome && c.reachedBand === false && Date.now() - Date.parse(c.at) > 3_600_000 && (
+                      <span className="sage-tag" title="Never reached the alert band">
+                        Died early
+                      </span>
+                    )}
                     {c.outcome && (
                       <span
                         className={`sage-tag ${OUTCOME[c.outcome].tone ? `tone-${OUTCOME[c.outcome].tone}` : ""}`}

@@ -6,6 +6,7 @@ import {
   MAX_PLAYBOOK_CHARS,
   aiReviewSystemPrompt,
   buildAiReviewBrief,
+  devLaunchLines,
   launcherTextInstructs,
   launcherTextJson,
   curatorProbabilityOf,
@@ -534,6 +535,49 @@ describe("comparable past calls", () => {
     const decision = { curate: true, confidence: 80, reasons: [], source: "heuristic-v1" };
     expect(buildAiReviewBrief(bare, decision)).not.toContain("similar past calls");
     expect(buildAiReviewBrief(bare, decision, [])).toContain("similar past calls: none graded yet");
+  });
+});
+
+describe("AI review brief - the dev's other launches", () => {
+  const devLaunch = {
+    devLaunchRisk: 71.4,
+    devLaunchPrior: 6,
+    devLaunchPriorInBand: 2,
+    devLaunchPriorGraded: 2,
+    devLaunchPriorWins: 0,
+    devLaunchFamilyCreators: 3,
+    devLaunchFamilyLaunches: 9,
+  };
+
+  it("says how the dev's other launches and its funder's other devs went, and the score", () => {
+    const brief = buildAiReviewBrief({ ...scored, devLaunch } as ScoredToken, decision);
+    expect(brief).toContain(
+      "- dev's other launches in the last 14 days: 6, 2 reached the alert band, 0 of 2 graded doubled; the wallet that funded the dev also funded 3 other devs, who launched 9 coins",
+    );
+    expect(brief).toContain(
+      "- dev launch risk (0-100, from how those launches went against every launch; higher is riskier): 71",
+    );
+  });
+
+  it("leaves the lines out while the creator or the scores are unknown", () => {
+    expect(devLaunchLines(scored)).toEqual([]);
+    expect(
+      devLaunchLines({ ...scored, devLaunch: { ...devLaunch, devLaunchPrior: null } } as ScoredToken),
+    ).toEqual([]);
+    // A first launch: no other coins, no score.
+    expect(
+      devLaunchLines({
+        ...scored,
+        devLaunch: {
+          ...devLaunch,
+          devLaunchRisk: null,
+          devLaunchPrior: 0,
+          devLaunchPriorInBand: 0,
+          devLaunchPriorGraded: 0,
+          devLaunchFamilyCreators: 0,
+        },
+      } as ScoredToken),
+    ).toEqual(["- dev's other launches in the last 14 days: 0, 0 reached the alert band"]);
   });
 });
 

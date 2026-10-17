@@ -570,6 +570,8 @@ model Token {
   @@index([lastViewedAt])
   // The dashboard's Stream: the tokens that most recently entered the band (apps/api's launches.ts).
   @@index([firstInBandAt])
+  // The Dev card's other launches of a creator, and the scan's dev launch reading.
+  @@index([creator])
 }
 
 /// A token the curator promoted to the Curated Alerts feed - the public, self-grading output of
@@ -2767,6 +2769,49 @@ model WalletRisk {
 
   @@index([score])
   @@index([winScore])
+}
+
+/// Each creator wallet's launch record and its dev launch score (0-100, higher is riskier), from
+/// the coins it launched in the last 14 days (Token.creator) and how they went: whether each
+/// reached the band, and its first finalized grade. Rebuilt every hour by the trainer's
+/// devLaunchRiskJob.ts (formula: devLaunchScore in core's wallets/devLaunchScore.ts). Kept for a
+/// creator with two launches or more, one that reached the band, or one in a funder's family. The
+/// scan reads it as it stands and takes the coin's own launch back out, so a decision never reads
+/// its own coin's result.
+model DevLaunchRisk {
+  wallet       String   @id
+  score        Float
+  launches     Int
+  inBand       Int
+  graded       Int
+  wins         Int
+  stops        Int
+  /// Who paid for the creator (WalletFunder), when that funder's family has a DevFunderRisk row.
+  funder       String?
+  lastLaunchAt DateTime
+  /// The hourly rebuild that last changed this row; the last rebuild itself is the
+  /// "dev-launch-risk" heartbeat.
+  computedAt   DateTime
+
+  @@index([score])
+  @@index([funder])
+}
+
+/// A funder's family: the launches of every creator one wallet paid for (WalletFunder, exchanges
+/// and other hot funders aside), pooled, for funders with two creators or more. A fresh creator
+/// wallet per launch hides a farm from DevLaunchRisk; its funder's family doesn't. Rebuilt with it.
+model DevFunderRisk {
+  funder     String   @id
+  creators   Int
+  score      Float
+  launches   Int
+  inBand     Int
+  graded     Int
+  wins       Int
+  stops      Int
+  computedAt DateTime
+
+  @@index([score])
 }
 
 /// Who paid for each wallet: the funder in its first transaction (core's wallets/linkedWallets.ts,

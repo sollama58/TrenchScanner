@@ -32,6 +32,7 @@ export * from "./datasources/solanaTracker.js";
 export * from "./datasources/launchBuyers.js";
 export * from "./wallets/tradeTape.js";
 export * from "./wallets/riskScore.js";
+export * from "./wallets/devLaunchScore.js";
 export * from "./wallets/liveFlags.js";
 export * from "./wallets/walletScore.js";
 export * from "./wallets/winnerFollow.js";

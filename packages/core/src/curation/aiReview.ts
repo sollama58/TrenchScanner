@@ -254,6 +254,7 @@ export function buildAiReviewBrief(
     `- holder growth over the last 10 minutes: ${fmtPct(scored.holderGrowth10mPct)}`,
     `- top 10 wallets hold: ${fmtPct(scored.top10HolderPct)}`,
     `- dev wallet holds: ${devWalletText(scored)}; dev still holding: ${devHoldingText(resolveDevHolding(scored))}`,
+    ...devLaunchLines(scored),
     `- top-10 wallets that are brand new: ${fmtPct(scored.freshTop10WalletPct)}`,
     `- top-10 wallets holding almost nothing else: ${fmtPct(scored.emptyTop10WalletPct)}`,
     `- top-10 wallets that were among the launch's first 25 buyers: ${fmtPct(scored.sniperTop10WalletPct)}`,
@@ -402,6 +403,32 @@ function narrativeLines(read: NarrativeRead | undefined): string[] {
   // Its own data block, like the token's text: a referent label can be a phrase lifted from the
   // launcher's X post (TokenSage 0.30+), so it is data to judge, not the scanner speaking.
   return [`<tokensage>`, `TokenSage read of the coin:`, ...lines, `</tokensage>`, ``];
+}
+
+/**
+ * How the dev's other launches went (core's wallets/devLaunchScore.ts): the creator's other coins
+ * in the last 14 days, how many reached the band and doubled, its funder's other devs, and the
+ * score over both. Left out when the creator or the scores are unknown, rather than read as "none".
+ */
+export function devLaunchLines(scored: ScoredToken): string[] {
+  const d = scored.devLaunch;
+  if (!d || d.devLaunchPrior === null) return [];
+  const graded =
+    d.devLaunchPriorGraded && d.devLaunchPriorGraded > 0
+      ? `, ${d.devLaunchPriorWins ?? 0} of ${d.devLaunchPriorGraded} graded doubled`
+      : "";
+  const family =
+    d.devLaunchFamilyCreators && d.devLaunchFamilyCreators > 0
+      ? `; the wallet that funded the dev also funded ${d.devLaunchFamilyCreators} other devs, who launched ${d.devLaunchFamilyLaunches ?? 0} coins`
+      : "";
+  return [
+    `- dev's other launches in the last 14 days: ${d.devLaunchPrior}, ${d.devLaunchPriorInBand ?? 0} reached the alert band${graded}${family}`,
+    ...(d.devLaunchRisk !== null
+      ? [
+          `- dev launch risk (0-100, from how those launches went against every launch; higher is riskier): ${Math.round(d.devLaunchRisk)}`,
+        ]
+      : []),
+  ];
 }
 
 /**

@@ -25,6 +25,7 @@ export type HeartbeatJob =
   | "candle-peaks"
   | "trade-tape"
   | "wallet-risk"
+  | "dev-launch-risk"
   | "kol-side-wallets"
   | "kol-wallets"
   | "telegram-dispatch"
@@ -79,6 +80,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   // The scanner: the service with the Helius key the tape reads with (the trainer has none).
   "trade-tape": "scanner",
   "wallet-risk": "trainer",
+  // Batch SQL over the token and outcome tables, like wallet-risk.
+  "dev-launch-risk": "trainer",
   // Batch SQL over the trade tape, like wallet-risk.
   "kol-side-wallets": "trainer",
   // The scanner: the service SOLANA_TRACKER_API_KEY is set on, beside the other provider keys.
@@ -200,6 +203,7 @@ export const JOB_LOCKED_JOBS: readonly HeartbeatJob[] = [
   "outcome-tracking",
   "trade-tape",
   "wallet-risk",
+  "dev-launch-risk",
 ];
 
 /**
