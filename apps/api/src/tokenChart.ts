@@ -1,4 +1,4 @@
-import { createLogger, fetchJson, HttpError, PUMP_SUPPLY_TOKENS } from "@trenchscanner/core";
+import { createLogger, fetchJson, HttpError, PUMP_SUPPLY_TOKENS, pumpFunSwapGate } from "@trenchscanner/core";
 
 const logger = createLogger("token-chart");
 
@@ -48,13 +48,23 @@ export function parseMcapCandles(body: unknown, supply = PUMP_SUPPLY_TOKENS): Mc
 
 export type CandleFetcher = (mint: string) => Promise<McapCandle[] | null>;
 
-/** Reads a coin's candles from Pump.fun's swap API. Null when Pump.fun has no such coin. */
-export function pumpFunCandleFetcher(baseUrl = "https://swap-api.pump.fun"): CandleFetcher {
+/** Candle widths the first-minutes chart reads (Pump.fun also serves 30s and up). */
+export type CandleInterval = "1s" | "15s" | "1m";
+
+/**
+ * Reads a coin's candles from Pump.fun's swap API: its most recent CANDLE_PAGE candles of
+ * `interval` with a trade. Null when Pump.fun has no such coin.
+ */
+export function pumpFunCandleFetcher(
+  baseUrl = "https://swap-api.pump.fun",
+  interval: CandleInterval = "1m",
+): CandleFetcher {
   return async (mint) => {
     try {
       const body = await fetchJson<unknown>(
-        `${baseUrl}/v1/coins/${encodeURIComponent(mint)}/candles?interval=1m&limit=${CANDLE_PAGE}&currency=USD`,
-        { timeoutMs: 6_000, retries: 0 },
+        `${baseUrl}/v1/coins/${encodeURIComponent(mint)}/candles?interval=${interval}&limit=${CANDLE_PAGE}&currency=USD`,
+        // The process's swap-api budget, shared by every chart cache: a 429 pauses them all.
+        { timeoutMs: 6_000, retries: 0, gate: pumpFunSwapGate },
       );
       return parseMcapCandles(body);
     } catch (err) {
@@ -127,6 +137,24 @@ export class CandleCache {
     }
     return value;
   }
+}
+
+/** How much of a coin's start the first-minutes chart covers. */
+export const FIRST_MINUTES_MS = 15 * 60_000;
+/** The first candle may come this long after the launch time and still count as its start. */
+const FIRST_CANDLE_SLACK_MS = 2 * 60_000;
+
+/**
+ * Exported for tests. The candles of a coin's first FIRST_MINUTES_MS from `startAt` (its launch,
+ * else the first candle), or null when the page doesn't reach back to the start: Pump.fun answers
+ * with the most recent candles, so on a busy coin the start has scrolled out of reach.
+ */
+export function firstMinutes(candles: readonly McapCandle[], startAt: number | null): McapCandle[] | null {
+  if (candles.length === 0) return null;
+  const start = startAt ?? candles[0]!.t;
+  if (candles[0]!.t > start + FIRST_CANDLE_SLACK_MS) return null;
+  const out = candles.filter((k) => k.t < start + FIRST_MINUTES_MS);
+  return out.length > 0 ? out : null;
 }
 
 /** Why a wallet's trades are marked on the chart. */

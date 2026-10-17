@@ -356,17 +356,17 @@ describe.skipIf(!dbAvailable)("createMatchesForCandidate", () => {
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
   });
 
-  it("holds a match back while the token is flushing, without starting the cooldown", async () => {
+  it("holds a match back while the token is collapsing, without starting the cooldown", async () => {
     const env = { ...loadEnv(), MATCH_ALERT_GUARD: "flush" as const };
     const { token, snapshot } = await seedToken("flush");
     const filter = await seedUserWithFilter("h");
-    const flushing = { ...scoredFixture(token.mintAddress), priceChange5mPct: -40 };
+    const flushing = { ...scoredFixture(token.mintAddress), priceChange5mPct: -85 };
     const args = { token, snapshot, activeFilters: [filter], env };
 
     expect(await createMatchesForCandidate({ ...args, scored: flushing })).toBe(0);
     expect(await prisma.match.count({ where: { tokenId: token.id } })).toBe(0);
 
-    // Once it stops flushing it alerts at once - the held-back match never started a cooldown.
+    // Once it stops collapsing it alerts at once - the held-back match never started a cooldown.
     const recovered = { ...scoredFixture(token.mintAddress), priceChange5mPct: 3 };
     expect(await createMatchesForCandidate({ ...args, scored: recovered })).toBe(1);
   });

@@ -120,7 +120,7 @@ export function gateMiss(
   if (s.ageMinutes !== null && s.ageMinutes >= PRE_GATE_OLD_COIN_MIN_AGE_MINUTES) {
     return `past an hour old, it wasn't up ${PRE_GATE_OLD_COIN_MIN_5M_PCT}% over five minutes`;
   }
-  return "its price was falling over the last five minutes";
+  return "its price was collapsing: down 80% or more over five minutes, or 65% or more within a minute";
 }
 
 /** Each served seat's cutoff parts, read out of params in SQL (params is the whole model). */

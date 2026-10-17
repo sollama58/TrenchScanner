@@ -1,4 +1,6 @@
 import { paceBudget } from "./governor.js";
+import { EMPTY_CURVE_PATH } from "./curveTape.js";
+import { EMPTY_PRICE_PATH } from "./pricePath.js";
 import {
   FRIENDLY_FEATURE_LABELS,
   LEARNER_FEATURE_NAMES,
@@ -1464,7 +1466,8 @@ export interface WalkForwardOptions {
  * Event rows are, by construction. With a band, an hourly background sample whose stored
  * features would have passed the event pre-gate (passesEventPreGate: in band, young enough,
  * buyers in control of the hour, last five minutes not falling) is a PSEUDO-EVENT: a moment the
- * live scan would have decided on had it been looking, graded by the same label. Event rows
+ * live scan would have decided on had it been looking, graded by the same label. The young-coin
+ * price test is the collapse line from 2026-10-17 on, so the exam's pseudo-events follow it. Event rows
  * alone date from 2026-10-03; pseudo-events let the exam reach back over the whole window.
  * An event row banked under an older, looser gate is re-tested too, so the exam's population
  * follows the gate the live scan applies now (the age cap of 2026-10-05, and the old-coin
@@ -1495,6 +1498,9 @@ export function isDecisionRow(row: TrainingRow, band?: McapBand): boolean {
       sells1h: num("sells1h"),
       priceChange5mPct: num("priceChange5mPct"),
       ageMinutes: num("ageMinutes"),
+      // The one-minute readings the collapse test reads (isCollapsing): the curve's first.
+      curvePath: { ...EMPTY_CURVE_PATH, curveRet1mPct: num("curveRet1mPct") ?? null },
+      pricePath: { ...EMPTY_PRICE_PATH, pathRet1mPct: num("pathRet1mPct") ?? null },
     },
     band,
   );

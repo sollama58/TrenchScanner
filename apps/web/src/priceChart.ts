@@ -146,12 +146,16 @@ export function linearTicks(lo: number, hi: number, max = 5): number[] {
 }
 
 /** A time label sized to the view: the clock within a day, with the date past it. */
-export function timeLabel(t: number, spanMs: number): string {
+export function timeLabel(t: number, spanMs: number, seconds = false): string {
   const d = new Date(t);
   if (spanMs > 36 * 3_600_000) {
     return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   }
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    ...(seconds && { second: "2-digit" }),
+  });
 }
 
 /** What a flagged wallet is, for its swatch's colour: the coin's creator, a risky one, or linked. */

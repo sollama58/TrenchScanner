@@ -19,7 +19,9 @@ import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
 import {
   CandleCache,
+  FIRST_MINUTES_MS,
   KeyedCache,
+  firstMinutes,
   type CandleFetcher,
   markedWallets,
   parseLiveTrades,
@@ -134,6 +136,24 @@ export interface TokenChart {
   holderEntries: Record<string, HolderEntry>;
 }
 
+/**
+ * GET /tokens/:mint/chart/first: the coin's first 15 minutes for the token modal's "First 15m"
+ * view (user ask 2026-10-17), from Pump.fun's candles, so it costs no database and no Helius.
+ * Second by second while the coin is inside them (and re-read every few seconds); in 15-second
+ * candles afterwards, for as long as Pump.fun's most recent page still reaches back to the start.
+ */
+export interface TokenFirstMinutes {
+  mint: string;
+  /** Where the 15 minutes start: the coin's launch, else its first candle (ms). */
+  startAt: number | null;
+  /** The candles' width in seconds: 1 inside the first minutes, 15 after. */
+  stepSec: 1 | 15;
+  /** Whether the coin is still inside its first minutes (the view keeps polling). */
+  live: boolean;
+  /** Oldest first, as market cap; null when Pump.fun's page no longer reaches the start. */
+  candles: McapCandle[] | null;
+}
+
 /** One holder's trades in the coin, as the trade tape read them. */
 export interface HolderEntry {
   /** Its first buy, ms; null when it never bought (the coin came by transfer). */
@@ -162,9 +182,27 @@ const WALLETS_CACHE_MS = 60_000;
 /** One per process: every reader of a coin shares its Pump.fun call and the call budget. */
 let candleCache = new CandleCache(pumpFunCandleFetcher());
 
+/**
+ * The first-minutes view's candles: 1-second ones while a coin is inside its first minutes (a
+ * reader's view re-reads them every few seconds, so they are reused for a few), 15-second ones
+ * after. Each on its own call budget, apart from the minute candles everyone's chart reads.
+ */
+let secondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
+  ttlMs: 4_000,
+  callsPerMinute: 90,
+  maxEntries: 100,
+});
+let quarterCache = new CandleCache(pumpFunCandleFetcher(undefined, "15s"), { ttlMs: 60_000 });
+/** Past this age the 15-second page (1,000 candles with a trade) rarely still reaches the start. */
+const FIRST_MINUTES_MAX_AGE_MS = 6 * 3_600_000;
+/** A little past the 15 minutes, so the 1-second view takes in the last of them. */
+const FIRST_MINUTES_LIVE_MS = FIRST_MINUTES_MS + 30_000;
+
 /** Tests: where the chart's candles come from, instead of Pump.fun. */
-export function setCandleFetcherForTests(fetcher: CandleFetcher): void {
+export function setCandleFetcherForTests(fetcher: CandleFetcher, secondsFetcher = fetcher): void {
   candleCache = new CandleCache(fetcher);
+  secondCache = new CandleCache(secondsFetcher);
+  quarterCache = new CandleCache(secondsFetcher);
 }
 type ChartWallets = Pick<TokenChart, "tape" | "live" | "wallets" | "holderEntries">;
 const walletCache = new KeyedCache<ChartWallets>(WALLETS_CACHE_MS);
@@ -437,6 +475,19 @@ export async function registerTokenRoutes(
     return readTokenChart(mintAddress);
   });
 
+  /** The token modal's "First 15m" view: the coin's first minutes, second by second while it is in them. */
+  app.get("/:mintAddress/chart/first", async (request, reply): Promise<TokenFirstMinutes | undefined> => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    if (!MINT_RE.test(mintAddress)) {
+      reply.code(400).send({ error: "not a valid mint" });
+      return;
+    }
+    if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
+    const first = await readTokenFirstMinutes(mintAddress);
+    reply.header("Cache-Control", `private, max-age=${first.live ? 4 : 60}`);
+    return first;
+  });
+
   /**
    * A model-alerted coin's bubble map over its top 50 holders (BubbleMapHolders): the top 25 and
    * every known wallet past them, clustered alike, now and as it stood at the coin's first call.
@@ -585,6 +636,27 @@ export async function readTokenChart(mintAddress: string): Promise<TokenChart> {
       .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd, buys: s.buys5m, sells: s.sells5m })),
     ...flagged,
   };
+}
+
+/** The token modal's "First 15m" view (TokenFirstMinutes). */
+export async function readTokenFirstMinutes(
+  mintAddress: string,
+  now = Date.now(),
+): Promise<TokenFirstMinutes> {
+  // Token first, as readTokenChart does: Pump.fun is only asked about a coin on Token.
+  const token = await prisma.token.findUnique({
+    where: { mintAddress },
+    select: { launchedAt: true, firstSeenAt: true },
+  });
+  const startAt = token ? (token.launchedAt ?? token.firstSeenAt).getTime() : null;
+  const age = startAt === null ? Infinity : now - startAt;
+  const live = age <= FIRST_MINUTES_LIVE_MS;
+  const none = { mint: mintAddress, startAt, stepSec: live ? 1 : 15, live, candles: null } as const;
+  if (!token || age > FIRST_MINUTES_MAX_AGE_MS) return none;
+  const candles = await (live ? secondCache : quarterCache).get(mintAddress);
+  // A launch time from the coin's first scan can be a little late; the first candle is the start then.
+  const start = candles?.[0] && startAt !== null ? Math.min(startAt, candles[0].t) : startAt;
+  return { ...none, startAt: start, candles: candles ? firstMinutes(candles, start) : null };
 }
 
 const weekLabels = new SharedCache<DayLabelRow[]>(TRACK_CACHE_MS);

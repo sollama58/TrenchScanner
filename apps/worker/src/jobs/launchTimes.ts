@@ -167,9 +167,12 @@ export async function resolvePreBondSeconds(
     if (grad === undefined || launches.has(c.mintAddress)) continue;
     const known = validMs(knownSince.get(c.mintAddress));
     if (known !== undefined && grad - known >= floorMs) continue;
+    // One already being asked by resolveLaunchTimes is answered there: asking twice spent Pump.fun calls.
+    if (launchLookupsInFlight.has(c.mintAddress)) continue;
     if (launchBackoff.blocked(c.mintAddress, now) || launchLookups.length >= budget) continue;
     launchLookups.push(c.mintAddress);
   }
+  for (const mint of launchLookups) launchLookupsInFlight.add(mint);
   await forEachWithConcurrency(launchLookups, LOOKUP_CONCURRENCY, async (mint) => {
     try {
       const launched = await clients.pumpFun.launchTime(mint);
@@ -178,6 +181,8 @@ export async function resolvePreBondSeconds(
     } catch {
       failed += 1;
       launchBackoff.fail(mint, now);
+    } finally {
+      launchLookupsInFlight.delete(mint);
     }
   });
   launchBackoff.prune(now);

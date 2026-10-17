@@ -70,6 +70,7 @@ import {
   EMPTY_TRADE_FLOW,
   LINKED_TOP_N,
   type NarrativeRead,
+  takePumpFunGateStats,
 } from "@trenchscanner/core";
 import type { Token } from "@prisma/client";
 import { requestTextScores } from "../ai/textScorer.js";
@@ -1862,6 +1863,8 @@ async function scanCycle(
   const heliusStream = takeHolderStreamStats();
   // The young coins' curve tape: what its stream delivered, its RPC reads, and the day's stream spend.
   const curveTape = takeCurveTapeStats();
+  // This process's Pump.fun budget (pumpfunGate.ts): requests let through, 429 pauses, held back.
+  const pumpfunGate = takePumpFunGateStats();
   // The live tape's pages (10 credits each) since the last cycle, and the coins it holds a page for.
   const liveTape = takeLiveTapeStats();
   // Who priced the newest launches since the last cycle: Jupiter, its CoinGecko backup, or neither.
@@ -1891,6 +1894,7 @@ async function scanCycle(
     holderTransferCalls,
     ...(heliusStream ? { heliusStream: { ...heliusStream } } : {}),
     ...(curveTape ? { curveTape } : {}),
+    pumpfunGate,
     liveTape,
     ...(dexScreenerCalls ? { dexScreenerCalls: { ...dexScreenerCalls } } : {}),
     ...(jupiterCalls ? { jupiterCalls: { ...jupiterCalls } } : {}),

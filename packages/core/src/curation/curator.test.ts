@@ -11,6 +11,8 @@ import {
   walletChecksKnown,
 } from "./curator.js";
 import type { ScoredToken } from "../types.js";
+import { EMPTY_CURVE_PATH } from "./curveTape.js";
+import { EMPTY_PRICE_PATH } from "./pricePath.js";
 
 const MIN_SCORE = 70;
 
@@ -248,7 +250,7 @@ describe("passesEventPreGate", () => {
     expect(passesEventPreGate(ready({ priceChange5mPct: undefined }), band)).toBe(true);
   });
 
-  it("skips out-of-band, sell-dominated, tradeless-hour and falling moments", () => {
+  it("skips out-of-band, sell-dominated, tradeless-hour and collapsing moments", () => {
     expect(passesEventPreGate(ready({ marketCapUsd: 50_000 }), band)).toBe(false);
     // Six hours is the oldest a decided-on token may be; unknown age passes.
     expect(passesEventPreGate(ready({ ageMinutes: MAX_EVENT_AGE_MINUTES, priceChange5mPct: 30 }), band)).toBe(
@@ -260,16 +262,24 @@ describe("passesEventPreGate", () => {
     expect(passesEventPreGate(ready({ ageMinutes: undefined }), band)).toBe(true);
     expect(passesEventPreGate(ready({ buys1h: 40, sells1h: 60 }), band)).toBe(false);
     expect(passesEventPreGate(ready({ buys1h: 0, sells1h: 0 }), band)).toBe(false);
-    expect(passesEventPreGate(ready({ priceChange5mPct: -2 }), band)).toBe(false);
+    // A dip passes; only a collapse is skipped.
+    expect(passesEventPreGate(ready({ priceChange5mPct: -40 }), band)).toBe(true);
+    expect(passesEventPreGate(ready({ priceChange5mPct: -85 }), band)).toBe(false);
+    expect(passesEventPreGate(ready({ curvePath: { ...EMPTY_CURVE_PATH, curveRet1mPct: -70 } }), band)).toBe(
+      false,
+    );
+    expect(passesEventPreGate(ready({ pricePath: { ...EMPTY_PRICE_PATH, pathRet1mPct: -70 } }), band)).toBe(
+      false,
+    );
   });
 
-  it("skips the buy-ratio test for a coin under 10 minutes old, but still wants trades and a rising five minutes", () => {
+  it("skips the buy-ratio test for a coin under 10 minutes old, but still wants trades and no collapse", () => {
     const young = (o: Partial<ScoredToken> = {}) => ready({ ageMinutes: 3, buys1h: 20, sells1h: 80, ...o });
     expect(passesEventPreGate(young(), band)).toBe(true);
     expect(passesEventPreGate(young({ ageMinutes: PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES }), band)).toBe(false);
     expect(passesEventPreGate(young({ ageMinutes: undefined }), band)).toBe(false);
     expect(passesEventPreGate(young({ buys1h: 0, sells1h: 0 }), band)).toBe(false);
-    expect(passesEventPreGate(young({ priceChange5mPct: -2 }), band)).toBe(false);
+    expect(passesEventPreGate(young({ priceChange5mPct: -90 }), band)).toBe(false);
   });
 
   it("wants the last five minutes up 25%+ from an hour old, and a known 5m candle", () => {
@@ -278,8 +288,8 @@ describe("passesEventPreGate", () => {
     expect(passesEventPreGate(old({ priceChange5mPct: PRE_GATE_OLD_COIN_MIN_5M_PCT }), band)).toBe(true);
     expect(passesEventPreGate(old({ priceChange5mPct: 24 }), band)).toBe(false);
     expect(passesEventPreGate(old({ priceChange5mPct: undefined }), band)).toBe(false);
-    // Just under the hour, "not falling" is enough.
-    expect(passesEventPreGate(old({ ageMinutes: 59, priceChange5mPct: 0 }), band)).toBe(true);
+    // Just under the hour, "not collapsing" is enough.
+    expect(passesEventPreGate(old({ ageMinutes: 59, priceChange5mPct: -30 }), band)).toBe(true);
     // The scan's "held by the 5-minute test alone" probe leaves it out.
     expect(passesEventPreGate(old({ priceChange5mPct: 3 }), band, { skip5m: true })).toBe(true);
   });

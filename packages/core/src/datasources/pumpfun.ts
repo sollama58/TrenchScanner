@@ -1,4 +1,5 @@
 import { fetchJson, HttpError } from "./httpClient.js";
+import { pumpFunFrontendGate, pumpFunSwapGate, type PumpFunGate } from "./pumpfunGate.js";
 import { createLogger } from "../logger.js";
 import { normalizeSocialUrl } from "./tokensage.js";
 import { looksLikeSolanaAddress } from "../solana.js";
@@ -95,6 +96,11 @@ export interface PumpFunClientOptions {
   baseUrl?: string;
   /** Pump.fun's trade API (the chart's candles). */
   swapBaseUrl?: string;
+  /** Each host's budget (pumpfunGate.ts): the process's own unless a test brings its own. */
+  gates?: {
+    frontend: Pick<PumpFunGate, "acquire" | "throttled">;
+    swap: Pick<PumpFunGate, "acquire" | "throttled">;
+  };
 }
 
 /**
@@ -129,10 +135,16 @@ export class PumpFunClient {
   private readonly swapBaseUrl: string;
   private listStats: PumpFunListStats = { pages: 0, failed: 0, skipped: 0 };
   private listBlockedUntil = 0;
+  /** A page is asking whether the block has lifted: the others stay skipped until it answers. */
+  private listProbing = false;
+  private readonly frontendGate: Pick<PumpFunGate, "acquire" | "throttled">;
+  private readonly swapGate: Pick<PumpFunGate, "acquire" | "throttled">;
 
   constructor(options: PumpFunClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://frontend-api-v3.pump.fun";
     this.swapBaseUrl = options.swapBaseUrl ?? "https://swap-api.pump.fun";
+    this.frontendGate = options.gates?.frontend ?? pumpFunFrontendGate;
+    this.swapGate = options.gates?.swap ?? pumpFunSwapGate;
   }
 
   /**
@@ -220,7 +232,11 @@ export class PumpFunClient {
     try {
       const coin = await fetchJson<PumpFunCoin | null>(
         `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
-        { timeoutMs, retries: 0 },
+        {
+          gate: this.frontendGate,
+          timeoutMs,
+          retries: 0,
+        },
       );
       return coin?.mint === mintAddress ? toDiscoveredCoin(coin) : null;
     } catch (err) {
@@ -238,7 +254,11 @@ export class PumpFunClient {
     try {
       const coin = await fetchJson<PumpFunCoin | null>(
         `${this.baseUrl}/coins/king-of-the-hill?includeNsfw=false`,
-        { timeoutMs: 8000, retries: 1 },
+        {
+          gate: this.frontendGate,
+          timeoutMs: 8000,
+          retries: 1,
+        },
       );
       return coin?.mint ? toDiscoveredCoin(coin) : null;
     } catch (err) {
@@ -257,7 +277,11 @@ export class PumpFunClient {
     try {
       const coin = await fetchJson<PumpFunCoin | null>(
         `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
-        { timeoutMs: 5000, retries: 0 },
+        {
+          gate: this.frontendGate,
+          timeoutMs: 5000,
+          retries: 0,
+        },
       );
       return launchDate(coin?.created_timestamp) ?? null;
     } catch (err) {
@@ -276,7 +300,11 @@ export class PumpFunClient {
     try {
       const coin = await fetchJson<PumpFunCoin | null>(
         `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
-        { timeoutMs, retries: 0 },
+        {
+          gate: this.frontendGate,
+          timeoutMs,
+          retries: 0,
+        },
       );
       const mcap = coin?.usd_market_cap ?? coin?.market_cap_usd;
       return typeof mcap === "number" && Number.isFinite(mcap) && mcap > 0 ? mcap : null;
@@ -300,7 +328,11 @@ export class PumpFunClient {
     try {
       const body = await fetchJson<unknown>(
         `${this.swapBaseUrl}/v2/coins/${encodeURIComponent(mintAddress)}/trades?limit=100&cursor=${encodeURIComponent(cursor)}`,
-        { timeoutMs, retries: 0 },
+        {
+          gate: this.swapGate,
+          timeoutMs,
+          retries: 0,
+        },
       );
       return tradesFromPumpFun(body);
     } catch (err) {
@@ -317,7 +349,11 @@ export class PumpFunClient {
     try {
       const coin = await fetchJson<(PumpFunCoin & { creator?: unknown }) | null>(
         `${this.baseUrl}/coins-v2/${encodeURIComponent(mintAddress)}`,
-        { timeoutMs: 5000, retries: 0 },
+        {
+          gate: this.frontendGate,
+          timeoutMs: 5000,
+          retries: 0,
+        },
       );
       if (!coin) return null;
       return {
@@ -341,7 +377,11 @@ export class PumpFunClient {
     try {
       const body = await fetchJson<unknown>(
         `${this.swapBaseUrl}/v1/coins/${encodeURIComponent(mintAddress)}/candles?interval=1m&limit=${MINUTE_CANDLE_PAGE}&currency=USD`,
-        { timeoutMs, retries: 0 },
+        {
+          gate: this.swapGate,
+          timeoutMs,
+          retries: 0,
+        },
       );
       return parseMinuteCandles(body);
     } catch (err) {
@@ -375,6 +415,7 @@ export class PumpFunClient {
       let coins: PumpFunCoin[];
       try {
         coins = await fetchJson<PumpFunCoin[]>(`${this.baseUrl}/coins/currently-live?${query.toString()}`, {
+          gate: this.frontendGate,
           timeoutMs: 8000,
           retries: 1,
         });
@@ -416,17 +457,24 @@ export class PumpFunClient {
       order: params.order,
       includeNsfw: "false",
     });
-    if (Date.now() < this.listBlockedUntil) {
+    if (Date.now() < this.listBlockedUntil || this.listProbing) {
       this.listStats.skipped += 1;
       return [];
     }
+    // Past a block, one page asks first (LIST_BLOCK_BACKOFF_MS): all nine at once was nine 403s.
+    const probing = this.listBlockedUntil > 0;
+    if (probing) this.listProbing = true;
     this.listStats.pages += 1;
     try {
       const coins = await fetchJson<PumpFunCoin[]>(`${this.baseUrl}/coins?${query.toString()}`, {
+        gate: this.frontendGate,
         timeoutMs: 8000,
         retries: 1,
       });
-      if (Array.isArray(coins)) return coins;
+      if (Array.isArray(coins)) {
+        this.listBlockedUntil = 0;
+        return coins;
+      }
       throw new Error("coin list answered with something other than a list");
     } catch (err) {
       this.listStats.failed += 1;
@@ -435,6 +483,8 @@ export class PumpFunClient {
         this.listBlockedUntil = Date.now() + LIST_BLOCK_BACKOFF_MS;
       logger.warn("listCoins failed", { params, error: this.listStats.lastError });
       return [];
+    } finally {
+      if (probing) this.listProbing = false;
     }
   }
 }

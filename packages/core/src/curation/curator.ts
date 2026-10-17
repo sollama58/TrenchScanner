@@ -368,13 +368,39 @@ export const PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES = 10;
 export const PRE_GATE_OLD_COIN_MIN_AGE_MINUTES = 60;
 export const PRE_GATE_OLD_COIN_MIN_5M_PCT = 25;
 
+/** Down more than this within the last minute: a collapse (isCollapsing). */
+export const COLLAPSE_1M_PCT = -65;
+/** Down more than this over the last five minutes: a collapse (isCollapsing). */
+export const COLLAPSE_5M_PCT = -80;
+
+/**
+ * Whether the price is collapsing: down more than COLLAPSE_1M_PCT within the last minute - read
+ * off the coin's bonding curve when the curve tape follows it (curveRet1mPct, seconds old), else
+ * off the scan's 30-second tape (pathRet1mPct) - or more than COLLAPSE_5M_PCT over five minutes.
+ * Unknown readings don't count. On ten days of graded outcomes for coins under 20 minutes old
+ * (2026-10-17), only such moments won less often than flat ones (about 5% against 11-12%); dips
+ * of 25-80% over five minutes won as often or more. The alert guard and the event pre-gate both
+ * hold at this line (user decisions 2026-10-17).
+ */
+export function isCollapsing(
+  scored: Pick<ScoredToken, "priceChange5mPct" | "curvePath" | "pricePath">,
+): boolean {
+  const ret1m = scored.curvePath?.curveRet1mPct ?? scored.pricePath?.pathRet1mPct ?? null;
+  if (ret1m !== null && ret1m < COLLAPSE_1M_PCT) return true;
+  return scored.priceChange5mPct !== undefined && scored.priceChange5mPct < COLLAPSE_5M_PCT;
+}
+
 /**
  * The cheap "looks ready" test that marks an EVENT moment (CandidateOutcome.sampleKind = "event"):
  * in the band, not older than MAX_EVENT_AGE_MINUTES, buyers in control of the hour's flow (from
- * PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES on; any trades before that), and the last five minutes not
- * falling - up PRE_GATE_OLD_COIN_MIN_5M_PCT or more from PRE_GATE_OLD_COIN_MIN_AGE_MINUTES on. An
- * unknown age passes, like an unobserved 5m candle on a younger coin.
- * `skip5m` leaves the five-minute test out (the scan's preGate5m hold count asks "held by it alone?").
+ * PRE_GATE_BUY_RATIO_MIN_AGE_MINUTES on; any trades before that), and the price not collapsing
+ * (isCollapsing) - up PRE_GATE_OLD_COIN_MIN_5M_PCT or more over five minutes from
+ * PRE_GATE_OLD_COIN_MIN_AGE_MINUTES on. An unknown age passes, like unobserved short-window prices
+ * on a younger coin. Until 2026-10-17 a younger coin needed its last five minutes not to be red:
+ * on ten days of in-band moments the ones that held back won as often or more past 3 minutes old,
+ * and only 48% of their winners were decided on before their 2x, against 76% of the rest (user
+ * decision 2026-10-17, "collapse only").
+ * `skip5m` leaves the price test out (the scan's preGate5m hold count asks "held by it alone?").
  * Curators decide only at the first such moment per token per CANDIDATE_EVENT_SPACING_MINUTES, and
  * the trainer calibrates on exactly those rows, so the model is examined on the same moments it is
  * asked about live - not on an hourly sample of everything in the band, which is a different and
@@ -382,7 +408,10 @@ export const PRE_GATE_OLD_COIN_MIN_5M_PCT = 25;
  * the curators still pick the token.
  */
 export function passesEventPreGate(
-  scored: Pick<ScoredToken, "marketCapUsd" | "buys1h" | "sells1h" | "priceChange5mPct" | "ageMinutes">,
+  scored: Pick<
+    ScoredToken,
+    "marketCapUsd" | "buys1h" | "sells1h" | "priceChange5mPct" | "ageMinutes" | "curvePath" | "pricePath"
+  >,
   band: McapBand,
   opts: { skip5m?: boolean } = {},
 ): boolean {
@@ -398,5 +427,5 @@ export function passesEventPreGate(
   if (scored.ageMinutes !== undefined && scored.ageMinutes >= PRE_GATE_OLD_COIN_MIN_AGE_MINUTES) {
     return scored.priceChange5mPct !== undefined && scored.priceChange5mPct >= PRE_GATE_OLD_COIN_MIN_5M_PCT;
   }
-  return scored.priceChange5mPct === undefined || scored.priceChange5mPct >= 0;
+  return !isCollapsing(scored);
 }
