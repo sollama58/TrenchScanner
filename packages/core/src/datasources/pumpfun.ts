@@ -1,6 +1,7 @@
 import { fetchJson, HttpError } from "./httpClient.js";
 import { createLogger } from "../logger.js";
 import { normalizeSocialUrl } from "./tokensage.js";
+import { looksLikeSolanaAddress } from "../solana.js";
 import type { MinuteCandle } from "../curation/regrade.js";
 import { tradesFromPumpFun, type PumpFunTradesPage } from "../wallets/tradeTape.js";
 
@@ -48,6 +49,8 @@ interface PumpFunCoin {
   num_participants?: number;
   /** "active", "paused" or "completed" on a Mayhem Mode coin; null on every other. */
   mayhem_state?: string | null;
+  /** The wallet that launched the coin. */
+  creator?: string;
 }
 
 /** One coin's Pump.fun livestream as the currently-live feed reports it. */
@@ -84,6 +87,8 @@ export interface DiscoveredCoin {
   mayhemMode?: true;
   /** The launchpad, normalized (launchpads.ts); undefined means Pump.fun's own lists. */
   launchpad?: string;
+  /** The wallet that launched the coin, when the source names one - recorded as Token.creator. */
+  creator?: string;
 }
 
 export interface PumpFunClientOptions {
@@ -524,6 +529,9 @@ function toDiscoveredCoin(coin: PumpFunCoin): DiscoveredCoin {
     websiteUrl: normalizeSocialUrl(coin.website, "website") ?? undefined,
     ...(typeof coin.mayhem_state === "string" && coin.mayhem_state !== ""
       ? { mayhemMode: true as const }
+      : {}),
+    ...(typeof coin.creator === "string" && looksLikeSolanaAddress(coin.creator)
+      ? { creator: coin.creator }
       : {}),
   };
 }

@@ -477,6 +477,11 @@ model Token {
   /// Pump.fun's lists); null when none has. Feeds the launchpadStonks input and the filters'
   /// launchpad option.
   launchpad               String?
+  /// The wallet that launched the coin, from whichever source named it first: the PumpPortal
+  /// create event's signer, Pump.fun's coin `creator`, RugCheck's report, or the trade tape's
+  /// launch read (user bug report 2026-10-17: the token modal's Dev card read only the tape and
+  /// TokenSage, so most coins showed no creator). Never overwritten once set. Null = unknown.
+  creator                 String?
   /// The first scan that saw the mint inside the curated mcap band. Feeds the
   /// minutesSinceFirstInBand feature: a token that entered the band hours ago and is still
   /// there is a different bet from one arriving now.

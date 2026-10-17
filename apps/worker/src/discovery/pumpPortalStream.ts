@@ -37,6 +37,8 @@ export interface StreamEvent {
   metadataUri?: string;
   /** PumpPortal's `pool` ("pump", "pump-amm"), normalized (core's launchpads.ts). */
   launchpad?: string;
+  /** A launch's creator: the create transaction's signer (`traderPublicKey`). */
+  creator?: string;
   at: Date;
 }
 
@@ -145,6 +147,11 @@ export function parsePumpPortalMessage(raw: string, at: Date = new Date()): Stre
       ? { metadataUri: msg.uri }
       : {}),
     ...(launchpad ? { launchpad } : {}),
+    ...(kind === "create" &&
+    typeof msg.traderPublicKey === "string" &&
+    looksLikeSolanaAddress(msg.traderPublicKey)
+      ? { creator: msg.traderPublicKey }
+      : {}),
     at,
   };
 }
