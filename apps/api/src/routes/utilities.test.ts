@@ -383,7 +383,7 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
       expect(board.json().rules).toMatchObject({
         minShared: { "24h": 5, "7d": 15, "30d": 25 },
         minPct: 50,
-        bot: { minCoins: 200, minPct: 75 },
+        bot: { minCoins: 200, minPct: 50 },
         holdDays: 90,
       });
 
