@@ -1,4 +1,4 @@
-import type { ScoredWallet } from "./riskScore.js";
+import { MIN_BUY_SOL_PER_TOKEN, type ScoredWallet } from "./riskScore.js";
 import type { TapeTrade } from "./tradeTape.js";
 
 /**
@@ -49,21 +49,13 @@ export function isCleanWinner(w: ScoredWallet | undefined): boolean {
 }
 
 /**
- * The least SOL a token a paid buy can cost: a Pump.fun curve starts near 2.8e-8 SOL a token, so
- * a lower price is tokens sent in from another wallet, the receiver paying only its token account's
- * rent (0.002 SOL), which the tape read as a buy until the transfer fix of 2026-10-17 (the same
- * floor as riskScore.ts MIN_BUY_SOL_PER_TOKEN, which the Wallets to watch fix adds).
- */
-const PAID_BUY_MIN_SOL_PER_TOKEN = 1e-8;
-
-/**
  * A buy a wallet paid for: tokens sent in from another wallet read as a 0 SOL buy on the tape
  * (tradeTape.ts, from the transfer fix) or, on trades stored before, as a buy at its token
- * account's rent. A receiver isn't a buyer.
+ * account's rent, under MIN_BUY_SOL_PER_TOKEN a token. A receiver isn't a buyer.
  */
 export function isPaidBuy(t: Pick<TapeTrade, "side" | "sol"> & { tokens?: number }): boolean {
   if (t.side !== "buy" || !(Number.isFinite(t.sol) && t.sol > 0)) return false;
-  return t.tokens === undefined || !(t.tokens > 0) || t.sol >= PAID_BUY_MIN_SOL_PER_TOKEN * t.tokens;
+  return t.tokens === undefined || !(t.tokens > 0) || t.sol >= MIN_BUY_SOL_PER_TOKEN * t.tokens;
 }
 
 /**
