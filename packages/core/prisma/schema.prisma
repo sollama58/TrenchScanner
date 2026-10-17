@@ -2617,6 +2617,22 @@ model QuoteRegrade {
   regradedAt DateTime @default(now())
 }
 
+/// One CandidateOutcome whose return was re-scored under the exit plan of 2026-10-17 (35% at 2x,
+/// 30% at 4x, 25% at 10x, a 40% trail) by replaying the coin's Pump.fun minute candles
+/// (apps/worker/src/jobs/exitPlanRescore.ts). Only the return moves: on the outcome and on every
+/// curated alert anchored to it. One row per outcome, written in the same transaction, and never
+/// again. `previousSimReturnPct` is the return it had, enough to put it back; `result` is
+/// "rescored" or why it was left alone. The row with outcomeId "lighthouse" tracks the re-sum of
+/// the Lighthouse history's return columns once every outcome is done (`result` is the next day
+/// to re-sum, or "done").
+model ExitPlanRescore {
+  outcomeId            String   @id
+  previousSimReturnPct Float?
+  simReturnPct         Float?
+  result               String
+  rescoredAt           DateTime @default(now())
+}
+
 /// One read of a coin's trades, from launch to 30 minutes past its reference anchor (the first
 /// moment a seat called it, or a sampled uncalled decision moment): what the per-wallet rows in
 /// TokenWalletActivity and the stop causes on CandidateOutcome were built from. One row per coin;
