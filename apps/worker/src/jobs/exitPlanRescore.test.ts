@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, replayOutcome, type MinuteCandle } from "@trenchscanner/core";
 import {
   LIGHTHOUSE_MARKER,
+  mergeCandles,
   rescoreFromCandles,
   resetExitPlanRescore,
   runExitPlanRescore,
@@ -27,7 +28,10 @@ const path = (fromMinute: number, prices: number[]): MinuteCandle[] =>
 // sells 35% at 2x, 30% at 4x and the rest under 3x.
 const RAN = path(-3, [1, 1, 1, 1.5, 2, 3, 4, 5, 4.2, 2.8, ...Array(60).fill(2.6)]);
 
-async function seed(label: string, extra: { anchorAt?: number; simReturnPct?: number | null } = {}) {
+async function seed(
+  label: string,
+  extra: { anchorAt?: number; simReturnPct?: number | null; sold2x?: boolean } = {},
+) {
   const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${label}`, symbol: "T" } });
   const anchorAt = extra.anchorAt ?? ANCHOR;
   const row = await prisma.candidateOutcome.create({
@@ -53,6 +57,8 @@ async function seed(label: string, extra: { anchorAt?: number; simReturnPct?: nu
       disqualified: false,
       labelValue: 2,
       simReturnPct: extra.simReturnPct === undefined ? 112.5 : extra.simReturnPct,
+      // Sold at 2x unless told otherwise: the trail's state starts on the first sale.
+      trailHighPriceUsd: extra.sold2x === false ? null : 5,
     },
   });
   return { token, row };
@@ -71,6 +77,14 @@ describe("rescoreFromCandles", () => {
     expect(rescoreFromCandles(row, null, NOW)).toEqual({ skip: "no-candles" });
     expect(rescoreFromCandles(row, path(10, [1, 1]), NOW)).toEqual({ skip: "not-covered" });
     expect(rescoreFromCandles({ ...row, anchorPriceUsd: 10 }, RAN, NOW)).toEqual({ skip: "implausible" });
+  });
+});
+
+describe("mergeCandles", () => {
+  it("keeps the minute candles and fills in before them from the five-minute ones", () => {
+    const coarse = [0, 5, 10, 15].map((m) => ({ startMs: m * MIN + 4 * MIN, close: m }));
+    const fine = [12, 13, 14].map((m) => ({ startMs: m * MIN, close: 100 + m }));
+    expect(mergeCandles(coarse, fine).map((c) => c.close)).toEqual([0, 5, 112, 113, 114]);
   });
 });
 
@@ -111,12 +125,44 @@ describe.skipIf(!dbAvailable)("exit plan re-score", () => {
     const outside = await seed("after-switch", { anchorAt: UNTIL.getTime() + 60 * MIN });
     const noReturn = await seed("no-return", { anchorAt: ANCHOR + 2 * MIN, simReturnPct: null });
     const blank = await seed("no-candles", { anchorAt: ANCHOR + 3 * MIN });
+    // Never sold at 2x: the same return under either plan, so not even read.
+    const flat = await seed("no-2x", { anchorAt: ANCHOR + 4 * MIN, simReturnPct: -50, sold2x: false });
+    // Traded past 1000 minutes since its call: the minute candles start after it, the five-minute
+    // ones reach it.
+    const busy = await seed("busy", { anchorAt: ANCHOR + 5 * MIN });
+    const busyMinutes = Array.from({ length: 1000 }, (_, i) => ({
+      startMs: ANCHOR + (200 + i) * MIN,
+      close: 2.6,
+    }));
+    const busyCoarse = RAN.filter((_, i) => i % 5 === 0).map((c) => ({ ...c, startMs: c.startMs + 5 * MIN }));
 
+    const asked: string[] = [];
     const stub = {
-      minuteCandles: async (mint: string) => (mint === blank.token.mintAddress ? null : RAN),
+      minuteCandles: async (mint: string) => {
+        asked.push(mint);
+        if (mint === blank.token.mintAddress) return null;
+        return mint === busy.token.mintAddress ? busyMinutes : RAN;
+      },
+      fiveMinuteCandles: async (mint: string) => {
+        asked.push(`5m:${mint}`);
+        return busyCoarse;
+      },
     };
     const counts = await runExitPlanRescore(stub, window);
-    expect(counts).toMatchObject({ coins: 2, rescored: 1, alerts: 1, skipped: 1, remaining: 0 });
+    expect(counts).toMatchObject({
+      coins: 3,
+      fiveMinuteReads: 1,
+      rescored: 2,
+      alerts: 1,
+      skipped: 1,
+      remaining: 0,
+    });
+    expect(asked).not.toContain(flat.token.mintAddress);
+    expect(asked).toContain(`5m:${busy.token.mintAddress}`);
+    expect(await prisma.exitPlanRescore.findUnique({ where: { outcomeId: flat.row.id } })).toBeNull();
+    expect(
+      (await prisma.exitPlanRescore.findUniqueOrThrow({ where: { outcomeId: busy.row.id } })).result,
+    ).toBe("rescored");
 
     const expected = replayOutcome(1, new Date(ANCHOR), RAN, {
       extended24h: true,
@@ -152,8 +198,11 @@ describe.skipIf(!dbAvailable)("exit plan re-score", () => {
       create: { hour, screenedReturnN: 1, screenedReturnSum: 999, screenAccepted: 7 },
       update: { screenedReturnN: 1, screenedReturnSum: 999, screenAccepted: 7 },
     });
-    let asked = 0;
-    const counting = { minuteCandles: async () => (asked++, RAN) };
+    let calls = 0;
+    const counting = {
+      minuteCandles: async () => (calls++, RAN),
+      fiveMinuteCandles: async () => (calls++, RAN),
+    };
     const days: unknown[] = [];
     for (let i = 0; i < 10; i++) {
       const meta = await runExitPlanRescore(counting, window);
@@ -169,7 +218,7 @@ describe.skipIf(!dbAvailable)("exit plan re-score", () => {
       (await prisma.exitPlanRescore.findUniqueOrThrow({ where: { outcomeId: LIGHTHOUSE_MARKER } })).result,
     ).toBe("done");
     expect(await runExitPlanRescore(counting, window)).toBeNull();
-    expect(asked).toBe(0);
+    expect(calls).toBe(0);
     // The hour's returns follow the re-scored rows; its other columns keep what they had.
     const summed = await prisma.lighthouseHour.findUniqueOrThrow({ where: { hour } });
     expect(summed.screenedReturnSum).not.toBe(999);

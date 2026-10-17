@@ -28,6 +28,12 @@ const logger = createLogger("exit-plan-rescore");
  * alert verdicts are untouched. What the row had is kept in ExitPlanRescore, written in the same
  * transaction, which is also what marks it done. Rows the candles can't vouch for keep their return.
  *
+ * Only rows that sold at 2x are looked at: up to the first sale both plans are the same (the -50%
+ * stop and the 30-minute exit), so every other row's return already stands. That was about one
+ * coin in five of the window. Each coin costs one Pump.fun candle read, plus a five-minute read
+ * when the minute candles don't reach back to its call (a coin that kept trading past 1000
+ * minutes); no Solana RPC.
+ *
  * Once every row is done, the Lighthouse history's return columns are re-summed over the window, a
  * day per run (resumLighthouseReturns), and the job turns into a no-op for the rest of the process.
  */
@@ -54,6 +60,7 @@ export function resetExitPlanRescore(): void {
 
 /** Why a row was left on its old return. */
 type Skip = "no-candles" | "not-covered" | "implausible" | "unfinished";
+type CandleReader = Pick<PumpFunClient, "minuteCandles" | "fiveMinuteCandles">;
 
 /** A row's return under today's plan from the coin's candles, or why there is none. */
 export function rescoreFromCandles(
@@ -75,6 +82,15 @@ export function rescoreFromCandles(
   });
   if (!replay) return { skip: "unfinished" };
   return { simReturnPct: replay.simReturnPct };
+}
+
+/**
+ * Five-minute candles up to where the minute candles begin, then the minute candles: the finer
+ * tape wherever there is one.
+ */
+export function mergeCandles(coarse: readonly MinuteCandle[], fine: readonly MinuteCandle[]): MinuteCandle[] {
+  const fineFrom = fine[0]?.startMs ?? Number.POSITIVE_INFINITY;
+  return [...coarse.filter((c) => c.startMs < fineFrom), ...fine];
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -108,7 +124,7 @@ async function resumLighthouse(
 }
 
 export async function runExitPlanRescore(
-  pumpFun: Pick<PumpFunClient, "minuteCandles">,
+  pumpFun: CandleReader,
   opts: {
     coinsPerRun?: number;
     spacingMs?: number;
@@ -124,10 +140,13 @@ export async function runExitPlanRescore(
   const spacingMs = opts.spacingMs ?? CALL_SPACING_MS;
   const since = opts.since ?? RESCORE_SINCE;
   const until = opts.until ?? RESCORE_UNTIL;
-  // Rows of the window with a return, past their watch, not yet looked at.
+  // Rows of the window that sold at 2x (the trail starts on the first sale; hit2xAt before any stop
+  // covers a row whose trail state is missing), with a return, past their watch, not yet looked at.
   const pendingSql = Prisma.sql`
     co."anchorAt" >= ${since} AND co."anchorAt" < ${until}
     AND co."simReturnPct" IS NOT NULL AND co."finalized24hAt" IS NOT NULL
+    AND (co."trailHighPriceUsd" IS NOT NULL
+      OR (co."hit2xAt" IS NOT NULL AND (co."stoppedAt" IS NULL OR co."hit2xAt" <= co."stoppedAt")))
     AND NOT EXISTS (SELECT 1 FROM "ExitPlanRescore" r WHERE r."outcomeId" = co."id")`;
 
   // The oldest pending rows name the next coins; each coin's pending rows are then done together
@@ -145,15 +164,27 @@ export async function runExitPlanRescore(
     return lighthouse;
   }
 
-  const counts: Record<string, number> = { coins: 0, rescored: 0, alerts: 0, skipped: 0 };
+  const counts: Record<string, number> = { coins: 0, fiveMinuteReads: 0, rescored: 0, alerts: 0, skipped: 0 };
   let throttled = false;
   for (const [i, tokenId] of tokenIds.entries()) {
     if (i > 0) await sleep(spacingMs);
     const token = await prisma.token.findUnique({ where: { id: tokenId }, select: { mintAddress: true } });
     if (!token) continue;
+    const rows = await prisma.$queryRaw<Row[]>`
+      SELECT co."id", co."anchorAt", co."anchorPriceUsd", co."extended24h", co."simReturnPct"
+      FROM "CandidateOutcome" co WHERE ${pendingSql} AND co."tokenId" = ${tokenId}
+      ORDER BY co."anchorAt" ASC`;
+    if (rows.length === 0) continue;
     let candles: MinuteCandle[] | null;
     try {
       candles = await pumpFun.minuteCandles(token.mintAddress);
+      // Minute candles that stop short of the coin's first pending call: read the five-minute ones.
+      if (candles && candles.length > 0 && !candlesCover(candles, rows[0]!.anchorAt.getTime())) {
+        await sleep(spacingMs);
+        counts.fiveMinuteReads! += 1;
+        const coarse = await pumpFun.fiveMinuteCandles(token.mintAddress);
+        if (coarse && coarse.length > 0) candles = mergeCandles(coarse, candles);
+      }
     } catch (err) {
       if (err instanceof HttpError && err.status === 429) {
         throttled = true;
@@ -165,9 +196,6 @@ export async function runExitPlanRescore(
     }
     counts.coins! += 1;
     const nowMs = now();
-    const rows = await prisma.$queryRaw<Row[]>`
-      SELECT co."id", co."anchorAt", co."anchorPriceUsd", co."extended24h", co."simReturnPct"
-      FROM "CandidateOutcome" co WHERE ${pendingSql} AND co."tokenId" = ${tokenId}`;
     for (const row of rows) {
       const result = rescoreFromCandles(row, candles, nowMs);
       if ("skip" in result || result.simReturnPct === null) {
