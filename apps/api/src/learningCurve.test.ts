@@ -8,7 +8,10 @@ import {
   buildLearningModels,
   buildLearningRuns,
   buildLearningTrend,
+  caughtByDay,
   chooseRuns,
+  runnersByDay,
+  withCatch,
   MIN_GRADED_FOR_LIFT,
   TREND_SPAN_DAYS,
 } from "./learningCurve.js";
@@ -41,6 +44,39 @@ function raw(
 function dayAt(offset: number, from = "2026-10-01"): string {
   return new Date(Date.parse(`${from}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
 }
+
+describe("catch by day", () => {
+  const market = [
+    { day: "2026-10-01", token: "a" },
+    { day: "2026-10-01", token: "b" },
+    { day: "2026-10-02", token: "a" },
+  ];
+  const calls = [
+    { day: "2026-10-01", token: "a", model: "m1" },
+    { day: "2026-10-01", token: "c", model: "m2" },
+    { day: "2026-10-01", token: "a", model: "m2" },
+  ];
+
+  it("counts each day's runners once, from market moments and calls alike", () => {
+    expect(runnersByDay(market, calls)).toEqual(
+      new Map([
+        ["2026-10-01", 3],
+        ["2026-10-02", 1],
+      ]),
+    );
+  });
+
+  it("counts a token caught by several models once for the feed", () => {
+    expect(caughtByDay(calls)).toEqual(new Map([["2026-10-01", 2]]));
+    expect(caughtByDay(calls, "m1")).toEqual(new Map([["2026-10-01", 1]]));
+  });
+
+  it("adds the share to a day's rates, null with no runners", () => {
+    const rates = buildLearningDays([], [raw("2026-10-01", 4, 4, 2)])[0]!.feed;
+    expect(withCatch(rates, 3, 2).catchPct).toBe(66.7);
+    expect(withCatch(rates, 0, 0).catchPct).toBeNull();
+  });
+});
 
 describe("buildLearningDays", () => {
   it("pairs the market and feed by day, oldest first, and shows lift only with enough graded on both sides", () => {

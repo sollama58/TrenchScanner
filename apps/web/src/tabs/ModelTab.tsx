@@ -1818,6 +1818,14 @@ const LEARNING_METRICS = {
     of: (r: LearningRates) => r.avgReturnPct ?? null,
     note: "Average return per call, following every call with one fixed exit plan; the market line is a random pick under the same plan.",
   },
+  catch: {
+    tab: "Catch",
+    fig: "Catch",
+    series: "catch",
+    hit: "caught",
+    of: (r: LearningRates) => r.catchPct ?? null,
+    note: "Catch is the share of the day's runners (tokens that doubled cleanly from any moment or call) a line called at a winning moment; the dashed line is the catch goal, not the market.",
+  },
 } as const;
 type LearningMetric = keyof typeof LEARNING_METRICS;
 const LEARNING_METRIC_KEYS = Object.keys(LEARNING_METRICS) as LearningMetric[];
@@ -1846,8 +1854,16 @@ function pooledRates(rows: LearningRates[]): Record<LearningMetric, number | nul
       sumOf(rows, (r) => r.simCalls) > 0
         ? sumOf(rows, (r) => r.sumSimReturnPct) / sumOf(rows, (r) => r.simCalls)
         : null,
+    // Each day's runners once per day: a token that ran on two days counts on both.
+    catch: share(
+      sumOf(rows, (r) => r.caught),
+      sumOf(rows, (r) => r.runners),
+    ),
   };
 }
+
+/** The catch goal when an older API build doesn't send one (as the Coverage Meter). */
+const DEFAULT_CATCH_GOAL_PCT = 75;
 
 /** Most models the week panel draws at once: one per categorical color slot. */
 const WEEK_MAX_MODELS = 5;
@@ -1912,20 +1928,29 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
       }),
       week: pooledRates(rows),
       graded: sumOf(rows, (r) => r.graded),
+      runners: sumOf(rows, (r) => r.runners),
+      caught: sumOf(rows, (r) => r.caught),
     };
   });
   const marketRows = keys.map((k) => byDay.get(k)?.market).filter((r): r is LearningRates => !!r);
   const feedRows = keys.map((k) => byDay.get(k)?.feed).filter((r): r is LearningRates => !!r);
+  const isCatch = metric === "catch";
+  // A random pick from the market catches no share worth drawing, so Catch is read against its goal.
+  const goal = board.scoring.catchTargetPct ?? DEFAULT_CATCH_GOAL_PCT;
+  const marketWeek = pooledRates(marketRows);
   const market = {
     key: "market",
-    label: "Market",
+    label: isCatch ? `Goal ${goal}%` : "Market",
     tone: "ref",
     values: keys.map((k) => {
       const r = byDay.get(k)?.market;
+      if (isCatch) return r && (r.runners ?? 0) > 0 ? goal : null;
       return r && r.graded > 0 ? m.of(r) : null;
     }),
-    week: pooledRates(marketRows),
+    week: { ...marketWeek, catch: goal },
     graded: sumOf(marketRows, (r) => r.graded),
+    runners: sumOf(feedRows, (r) => r.runners),
+    caught: 0,
   };
   const all = {
     key: "all",
@@ -1937,6 +1962,8 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
     }),
     week: pooledRates(feedRows),
     graded: sumOf(feedRows, (r) => r.graded),
+    runners: sumOf(feedRows, (r) => r.runners),
+    caught: sumOf(feedRows, (r) => r.caught),
   };
   const lines = [...modelRows, all, market];
   const anyData = lines.some((l) => l.values.some((v) => v !== null));
@@ -1945,6 +1972,8 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
     const base = market.week[metric];
     if (v === null || base === null) return "–";
     if (metric === "ret") return signedPct(v - base, 1);
+    // Points above or below the goal: a catch is already a share of every runner.
+    if (isCatch) return `${v - base >= 0 ? "+" : "-"}${Math.abs(v - base).toFixed(1)} pts`;
     return base > 0 ? `${(v / base).toFixed(1)}x` : "–";
   };
 
@@ -2058,9 +2087,10 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
           pricingChange={pricingChange}
           subs={keys.map((k) => {
             const d = byDay.get(k);
-            return d
-              ? `${d.feed.graded} graded calls across all models; ${d.market.graded.toLocaleString()} moments`
-              : "No data";
+            if (!d) return "No data";
+            return isCatch
+              ? `${d.feed.caught ?? 0} of ${d.market.runners ?? 0} runners caught across all models`
+              : `${d.feed.graded} graded calls across all models; ${d.market.graded.toLocaleString()} moments`;
           })}
         />
       ) : (
@@ -2073,8 +2103,8 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
             <tr>
               <th>{WEEK_DAYS}-day total</th>
               <th className="r">{m.fig}</th>
-              <th className="r">Vs market</th>
-              <th className="r">Graded</th>
+              <th className="r">{isCatch ? "Vs goal" : "Vs market"}</th>
+              <th className="r">{isCatch ? "Caught" : "Graded"}</th>
             </tr>
           </thead>
           <tbody>
@@ -2088,7 +2118,13 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
                   {fmt(l.week[metric])}
                 </td>
                 <td className="r num">{l.key === "market" ? "–" : vsMarket(l.week[metric])}</td>
-                <td className="r num">{l.graded.toLocaleString()}</td>
+                <td className="r num">
+                  {isCatch
+                    ? l.key === "market"
+                      ? `${l.runners.toLocaleString()} runners`
+                      : `${l.caught.toLocaleString()} of ${l.runners.toLocaleString()}`
+                    : l.graded.toLocaleString()}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -2097,7 +2133,10 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
       <p className="faint small">
         {m.note} A model&apos;s day shows once it has {MIN_CALLS_PER_POINT} graded calls; fewer leave a gap.
         The table pools each line&apos;s calls over the {WEEK_DAYS} days. For the market, &quot;graded&quot;
-        counts decision moments. {RULE_NOTE}
+        counts decision moments.
+        {isCatch &&
+          " Caught counts each day's runners once per day, so a token that ran on two days counts on both."}{" "}
+        {RULE_NOTE}
       </p>
 
       {sharing && (
