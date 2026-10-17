@@ -168,7 +168,7 @@ export function pinLabeled(
 export function labelPill(l: SideLabel): string {
   if (l.kind === "known") return "Known Side";
   if (l.kind === "funded") return "KOL Funded Wallet";
-  return l.kind === "possible" ? "Possible Side" : "Labeled";
+  return l.kind === "possible" ? "Probable Side" : "Labeled";
 }
 
 /** What earned a pinned wallet its label, in words: "96% shared over 48h · 7 transfers". Exported for tests. */
@@ -281,7 +281,7 @@ export function SideWalletChecker() {
       )}
       <SideRulesCard rules={rules} labels={labels} />
       <p className="side-note small" role="note">
-        These are possible side wallets, matched only by buying the same coins at about the same time. None is
+        These are probable side wallets, matched only by buying the same coins at about the same time. None is
         confirmed to belong to the KOL: a wallet here may be a copy trader, a friend, a bot or chance. Not
         financial advice.
       </p>
@@ -360,7 +360,7 @@ export function SideWalletChecker() {
                         )}
                         <FlaggedPill
                           count={k.flagged}
-                          title="Wallets labeled for it (Known Sides, KOL Funded Wallets and Possible Sides), whatever the window"
+                          title="Wallets labeled for it (Known Sides, KOL Funded Wallets and Probable Sides), whatever the window"
                         />
                       </span>
                       {SIDE_WINDOWS.map((w) => (
@@ -481,7 +481,7 @@ function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels
       </div>
       <div className="side-rule side-rule-label">
         <h3>
-          <TargetIcon size={14} /> Possible Side label
+          <TargetIcon size={14} /> Probable Side label
         </h3>
         <ul className="side-tiers">
           {rules.tiers.map((t) => (
@@ -507,7 +507,7 @@ function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels
         </p>
         {rules.likelyBot && (
           <p className="small">
-            <strong>Likely bots:</strong> over {rules.likelyBot.minShared} coins at over{" "}
+            <strong>Probable bots:</strong> over {rules.likelyBot.minShared} coins at over{" "}
             {rules.likelyBot.minPct}% with each of {rules.likelyBot.minKols}+ KOLs in {rules.likelyBot.window}
             .
           </p>
@@ -520,7 +520,7 @@ function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels
         </h3>
         <strong className="side-stat-value num">{labels ? labels.count.toLocaleString("en-US") : "—"}</strong>
         <p className="faint small">
-          High-confidence (Possible Side), Known and KOL Funded wallets, each once under its KOL. Export
+          High-confidence (Probable Side), Known and KOL Funded wallets, each once under its KOL. Export
           copies them as one address,KOL_N per line.
         </p>
         <SideLabelsExport labels={labels} />
@@ -681,9 +681,9 @@ function SideWallets({
       )}
       {data && (data.likelyBots?.length ?? 0) > 0 && (
         <p className="faint small side-hidden-bots">
-          {plural(data.likelyBots!.length, "likely bot")} hidden: {bundle ? "marked as bots or " : ""}strongly
-          matched with {rules.likelyBot?.minKols ?? 4}+ KOLs, which fits a copy-trade bot more than a side
-          wallet.
+          {plural(data.likelyBots!.length, "probable bot")} hidden: {bundle ? "marked as bots or " : ""}
+          strongly matched with {rules.likelyBot?.minKols ?? 4}+ KOLs, which fits a copy-trade bot more than a
+          side wallet.
         </p>
       )}
       {showAll && (
@@ -733,7 +733,7 @@ function SideWalletsModal({
       <div className="about-body">
         <header className="about-head">
           <h2 id="side-modal-title">
-            {kolName}&apos;s possible side wallets · {period}
+            {kolName}&apos;s probable side wallets · {period}
           </h2>
           <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
             <CloseIcon size={16} />
@@ -845,7 +845,7 @@ function SideRows({ kol, kolName, period, items, coins, transfers, bundle, pinne
                   className={`pill side-label${pin.kind === "funded" || pin.kind === "known" ? " side-funded" : ""}`}
                   title={
                     bundle
-                      ? `Would qualify for a Possible Side label against this wallet: ${labelBasis(pin)}`
+                      ? `Would qualify for a Probable Side label against this wallet: ${labelBasis(pin)}`
                       : labelBasis(pin)
                   }
                 >
@@ -862,9 +862,9 @@ function SideRows({ kol, kolName, period, items, coins, transfers, bundle, pinne
                 label && (
                   <span
                     className="pill side-label"
-                    title={`Met a Possible Side tier: ${Math.round(label.pct)}% of the KOL's coins over ${label.hours ?? 24} hours`}
+                    title={`Met a Probable Side tier: ${Math.round(label.pct)}% of the KOL's coins over ${label.hours ?? 24} hours`}
                   >
-                    <TargetIcon size={11} /> Possible Side
+                    <TargetIcon size={11} /> Probable Side
                   </span>
                 )
               )}
@@ -937,14 +937,14 @@ export function WalletBundle({ wallet }: { wallet: string }) {
 }
 
 /**
- * A KOL's likely side wallets in its own wallet modal (user ask 2026-10-14): the leaderboard's
+ * A KOL's probable side wallets in its own wallet modal (user ask 2026-10-14): the leaderboard's
  * dropdown for that one wallet, with the same disclaimer.
  */
 export function KolSideWallets({ wallet, kolName }: { wallet: string; kolName: string }) {
   const [period, setPeriod] = useState<SideWindow>("30d");
   return (
     <section className="sage-card wm-section wm-sides">
-      <h4>Likely side wallets</h4>
+      <h4>Probable side wallets</h4>
       <p className="faint small wm-note">
         Wallets that bought the same coins within minutes of it. Not confirmed to belong to it: a wallet here
         may be a copy trader, a friend, a bot or chance.

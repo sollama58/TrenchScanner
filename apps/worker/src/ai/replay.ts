@@ -7,12 +7,15 @@ import {
   buildAiReviewBrief,
   nearestOutcomes,
   passesWalletSafetyCuts,
+  isPreFeeWalletStonksRow,
   scoredFromFeatures,
   summarizeJudgeRecord,
   aiSpendDay,
   usageCostUsd,
   CANDIDATE_WATCH_WINDOW_MINUTES,
   BRIEF_WALLET_FIELDS,
+  BRIEF_WALLET_FIELDS_BANKED_AS,
+  isRawWalletRiskRow,
   FRESH_ANCHOR_LABEL_RULE,
   type CurationDecision,
   type Env,
@@ -121,6 +124,13 @@ export async function loadReplayItems(
     if (!id || seen.has(id) || seenTokens.has(a.token.id)) return false;
     // A token the safety screen now rejects is never put to the reviewer live, so it is not replayed.
     if (!passesWalletSafetyCuts(a.candidateOutcome!.features as Record<string, number | null>)) return false;
+    if (
+      isPreFeeWalletStonksRow(
+        a.candidateOutcome!.anchorAt,
+        a.candidateOutcome!.features as Record<string, number | null>,
+      )
+    )
+      return false;
     seen.add(id);
     seenTokens.add(a.token.id);
     return true;
@@ -156,6 +166,13 @@ export async function loadReplayItems(
       const v = features[k];
       if (typeof v === "number") scored[k] = v;
     }
+    // The funding-only figures the live brief prints, banked under the models' names.
+    for (const [k, banked] of Object.entries(BRIEF_WALLET_FIELDS_BANKED_AS)) {
+      const v = features[banked];
+      if (typeof v === "number") scored[k as keyof typeof BRIEF_WALLET_FIELDS_BANKED_AS] = v;
+    }
+    // A row from before the percentile banks the raw risk score: not put to the brief as a percentile.
+    if (isRawWalletRiskRow(co.anchorAt, features)) delete scored.walletRiskTop10Max;
     const decision: CurationDecision = {
       curate: true,
       tier: a.tier === "high" ? "high" : undefined,

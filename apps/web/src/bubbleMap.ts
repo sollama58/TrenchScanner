@@ -1127,6 +1127,8 @@ export interface KolControl {
  * `kolClusters`: the clusters funding alone forms, for the step out by funder, so a wallet that
  * sent the coin into a bundle (often bait) isn't pulled in by the transfer (user decision
  * 2026-10-16); absent, the map's own clusters.
+ * `isService`: an exchange or launchpad wallet, whose transfers link no one (as core's
+ * linkingTransfers leaves them out).
  */
 export function kolControl(
   graph: Pick<BubbleGraph, "nodes">,
@@ -1134,6 +1136,7 @@ export function kolControl(
   kols: readonly { wallet: string; name: string | null }[] = [],
   transfers: readonly Pick<TransferLink, "from" | "to" | "pct">[] = [],
   kolClusters?: readonly Pick<Cluster, "wallets">[],
+  isService: (wallet: string) => boolean = () => false,
 ): KolControl[] {
   // Each holder's funder cluster for the step out: funding alone where given.
   const clusterOf = new Map<string, number>();
@@ -1152,7 +1155,7 @@ export function kolControl(
   for (const t of transfers) {
     const from = byId.get(t.from)?.wallet;
     const to = byId.get(t.to)?.wallet;
-    if (!from || !to || from === to) continue;
+    if (!from || !to || from === to || isService(from) || isService(to)) continue;
     const held = holders.get(from)!.pct + t.pct;
     if (t.pct < BUNDLE_TRANSFER_MIN_PCT && !(held > 0 && t.pct >= held * BUNDLE_TRANSFER_MIN_SHARE)) continue;
     sentTo.set(from, [...(sentTo.get(from) ?? []), to]);

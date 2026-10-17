@@ -14,6 +14,8 @@ export interface WalletName {
   name: string;
   /** "kol-side": a KOL's Known Side, named "<KOL> Known Side". */
   source: "kol" | "kol-side" | "identity" | "pumpfun" | "fomo" | "exchange";
+  /** An exchange or launchpad wallet, whatever name it goes by (absent from older API builds). */
+  service?: boolean;
 }
 
 /** Wallet to name, for the wallets that have one. */
@@ -105,6 +107,49 @@ export function walletText(wallet: string | null | undefined, names?: WalletName
   if (!wallet) return "";
   const n = names?.[wallet];
   return n ? walletNameText(n) : shortAddress(wallet);
+}
+
+/** The name sources that are off by default (user ask 2026-10-16): Pump.fun, FOMO and Helius. */
+export type SwitchableSource = "pumpfun" | "fomo" | "identity";
+export const SWITCHABLE_NAMES: ReadonlySet<WalletName["source"]> = new Set<SwitchableSource>([
+  "pumpfun",
+  "fomo",
+  "identity",
+]);
+
+/** The Settings that show the switchable names: one for all, or each kind on its own (null: the one). */
+export interface NameSettings {
+  bubbleNameLabels: boolean;
+  bubbleNamesPumpfun: boolean | null;
+  bubbleNamesFomo: boolean | null;
+  bubbleNamesHelius: boolean | null;
+}
+
+/**
+ * `names` without the Pump.fun, FOMO and Helius names their settings hide: off by default. KOLs',
+ * Known Sides' and exchanges' names always show, as do those of the wallets in `keep` (on the
+ * bubble map, an exchange that funded holders keeps its Helius name). `all` stands in for
+ * bubbleNameLabels where a view has its own switch for it. Returns `names` itself when none is hidden.
+ */
+export function visibleNames(
+  names: WalletNames,
+  look: NameSettings,
+  all: boolean = look.bubbleNameLabels,
+  keep: ReadonlySet<string> = new Set(),
+): WalletNames {
+  const shows: Record<SwitchableSource, boolean> = {
+    pumpfun: look.bubbleNamesPumpfun ?? all,
+    fomo: look.bubbleNamesFomo ?? all,
+    identity: look.bubbleNamesHelius ?? all,
+  };
+  const hidden = Object.keys(names).filter((w) => {
+    const source = names[w]!.source;
+    return SWITCHABLE_NAMES.has(source) && !keep.has(w) && !shows[source as SwitchableSource];
+  });
+  if (hidden.length === 0) return names;
+  const kept: Record<string, WalletName> = { ...names };
+  for (const w of hidden) delete kept[w];
+  return kept;
 }
 
 /** For tests: forget every answer. */

@@ -207,14 +207,14 @@ export function WalletsAdmin() {
             </Panel>
             <Panel
               title="Winning wallets"
-              note={`Labelled winners seen in 3+ coins, by win score: how often the coins it bought doubled with ${MIN_WIN_SOL}+ SOL profit, against the market, nudged up by buying before the call. Tap a wallet for its coins.`}
+              note={`Labelled winners seen in 3+ coins, by win score: how often its own trades came out at 2x+ for ${MIN_WIN_SOL}+ SOL profit, against the market, nudged up by buying before the call. Tap a wallet for its coins.`}
             >
               <Table
                 head={[
                   "Wallet",
                   "Win score",
                   "Coins",
-                  "Doubled",
+                  "Wins",
                   "Bought before the call",
                   "Risk",
                   "SOL in / out",
@@ -235,7 +235,7 @@ export function WalletsAdmin() {
                   `${sol(w.solIn)} / ${sol(w.solOut)}`,
                   when(w.lastSeenAt),
                 ])}
-                empty="No winner yet: a wallet needs a doubled coin on a read tape."
+                empty={`No winner yet: a wallet needs its own 2x trade for ${MIN_WIN_SOL}+ SOL on a read tape.`}
               />
             </Panel>
           </div>

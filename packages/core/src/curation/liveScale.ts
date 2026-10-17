@@ -14,8 +14,9 @@
  *
  * Here the rank travels instead of the probability: a seat's live cutoff is the score at its
  * cutoff rank among its own last LIVE_SCORE_WINDOW_HOURS of live scores (every decision moment
- * stores every seat's score, CandidateOutcome.seatScores), and a member's live rank is its place
- * in those scores. A seat with fewer than LIVE_SCORE_MIN_SAMPLES live scores keeps its shipped
+ * stores its feature vector, and liveRescore.ts scores the window with each seat's current model,
+ * so the scores belong to the model making the call), and a member's live rank is its place in
+ * those scores. A seat with fewer than LIVE_SCORE_MIN_SAMPLES live scores keeps its shipped
  * cutoff and tables. Live scores don't depend on any cutoff, so there is no feedback loop: the
  * cutoff only follows the market's own flow of moments, as the exam's share did.
  */

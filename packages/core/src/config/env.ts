@@ -1024,8 +1024,13 @@ const envSchema = z.object({
   TRADING_MAX_DAILY_SPEND_SOL: optionalPositive,
   // Priority fee on any one swap, in SOL.
   TRADING_MAX_PRIORITY_FEE_SOL: optionalPositive,
-  // Slippage on any swap, in basis points (2500 = 25%).
+  // Slippage on any entry, in basis points (2500 = 25%).
   TRADING_MAX_SLIPPAGE_BPS: optionalPositive,
+  // Slippage on any exit, take-profits and protective exits alike (their widening included), in
+  // basis points. Its own ceiling, separate from entries' (owner decision 2026-10-17): an exit that
+  // can't get out costs more than one that pays up. Set by default, at the default protective
+  // exit's widest (exitSlippageMaxBps, trading/config.ts), so the default settings pass.
+  TRADING_MAX_EXIT_SLIPPAGE_BPS: z.coerce.number().int().min(1).max(10_000).default(5000),
   // The server wallet (trading/serverWallet.ts): one wallet whose private key you supply here,
   // traded by a bot every admin controls from Admin → Trading bot. The secret goes on the TRADER ONLY -
   // base58 as Phantom/Solflare export it, or a solana-keygen JSON byte array. The address is

@@ -151,6 +151,8 @@ export function AlertCard({
     firstHolding,
     firstSeen,
     buyersAtAlert,
+    firstHoldingOld,
+    firstSeenOld,
     devHolding,
     feeLine,
   } = cardReadings(card);
@@ -477,14 +479,22 @@ export function AlertCard({
               )}
               title={
                 firstHolding === null
-                  ? "First buyers holding: not checked yet for this token"
+                  ? firstHoldingOld !== null
+                    ? `First buyers holding: not recorded under the 0.1% count. ${oldFirstBuyersText(firstHoldingOld, firstSeenOld)}`
+                    : "First buyers holding: not checked yet for this token"
                   : `First buyers holding: ${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold 0.1% of the supply or more${
                       buyersAtAlert ? ", at alert time" : ", from a scan after the alert"
                     }`
               }
             >
               <dt className="dt-long">1st Buyers Holding</dt>
-              <dd className="num">{firstHolding === null ? "–" : `${firstHolding}/${firstSeen ?? 25}`}</dd>
+              <dd className="num">
+                {firstHolding !== null
+                  ? `${firstHolding}/${firstSeen ?? 25}`
+                  : firstHoldingOld !== null
+                    ? `${firstHoldingOld}/${firstSeenOld ?? 25}*`
+                    : "–"}
+              </dd>
             </div>
           )}
           {show("sniperTop10") && <SniperTile reading={snipers} tiles={tiles} />}
@@ -527,7 +537,7 @@ export function AlertCard({
               title={
                 kolBundledPct === null
                   ? "KOL Bundled %: not checked yet. It comes with the linked-wallet reading."
-                  : `KOL Bundled %: supply held by KOLs and the top holders tied to them (wallets a KOL funded, possible side wallets, and holders sharing a funder or funding minute with those), ${
+                  : `KOL Bundled %: supply held by KOLs and the top holders tied to them (wallets a KOL funded, probable side wallets, and holders sharing a funder or funding minute with those), ${
                       kolBundledAtAlert ? "at alert time" : "from a scan after the alert"
                     }.`
               }
@@ -773,6 +783,9 @@ export function cardReadings(card: Card) {
   // The same fallback for the first-buyers count, read from the launch's first transactions: the
   // buyers holding 0.1% of the supply or more (user decision 2026-10-16), kept since then.
   const buyersFrom = s.firstBuyersHoldingCut != null ? s : latest;
+  // Scans before then kept only the older count (any amount held): shown as that, labelled, on
+  // tokens with no newer reading, rather than as "not checked yet".
+  const oldBuyersFrom = s.firstBuyersHolding != null ? s : latest;
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
   const devHolding = latest?.devHolding ?? s.devHolding ?? null;
   // Where the creator fee goes (TokenSage), under the Dev tile's tooltip: about 14% of coins
@@ -812,9 +825,20 @@ export function cardReadings(card: Card) {
     firstHolding: buyersFrom?.firstBuyersHoldingCut ?? null,
     firstSeen: buyersFrom?.firstBuyersSeen ?? null,
     buyersAtAlert: buyersFrom === s,
+    firstHoldingOld: oldBuyersFrom?.firstBuyersHolding ?? null,
+    firstSeenOld: oldBuyersFrom?.firstBuyersSeen ?? null,
     devHolding,
     feeLine,
   };
+}
+
+/**
+ * The label for a first-buyers count from before the 0.1% cut (scans before 2026-10-16): those
+ * counted every first buyer still holding any amount, so it reads higher than today's count and is
+ * named as the older count wherever it stands in for it.
+ */
+export function oldFirstBuyersText(holding: number, seen: number | null): string {
+  return `* Older count: ${holding} of the first ${seen ?? 25} buyers still held any amount (scans before 2026-10-16 counted every holder, not only 0.1% of the supply or more)`;
 }
 
 /**
@@ -1245,7 +1269,10 @@ const SCORE_HINT = "Rank score 0-100, not a probability";
 export function recordedPeakOf(card: Card): { pct: number | null; isRunPeak: boolean } {
   const curated = card.curated;
   const runPeak = curated?.outcome.peak24hReturnPct ?? null;
-  const callPeak = curated?.peakPct ?? runPeak;
+  // The API's Peak is authoritative when sent, null included: once the candles vouch for a call it
+  // leaves out the watcher's run peak (callPeakPct), so falling back to it here would put back the
+  // stale reading the candles corrected. Only older API builds, which send none, use the run peak.
+  const callPeak = curated?.peakPct !== undefined ? curated.peakPct : runPeak;
   const alertMcap = card.snapshot.marketCapUsd;
   const folded = card.kind === "match" && !!curated && curated.peakMcapUsd !== undefined;
   const peakAt = curated?.peakAt ? Date.parse(curated.peakAt) : NaN;

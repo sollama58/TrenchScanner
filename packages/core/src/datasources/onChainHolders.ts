@@ -43,7 +43,7 @@ const MAX_TOP10_SHARE_PCT = 100;
 export function holdersFromLargestAccounts(
   accounts: LargestAccount[],
   supply: bigint,
-  /** Wallets that are not holders of this coin (its fee wallet on a Stonks coin: stonksFees.ts). */
+  /** Wallets that are not holders of this coin (Stonks' fee wallet, on every coin: stonksFees.ts). */
   exclude: ReadonlySet<string> = new Set(),
 ): OnChainHolders | null {
   if (supply <= 0n) return null;
@@ -111,7 +111,7 @@ export function topWalletsFromAccounts(
   accounts: readonly LargestAccount[],
   supply: bigint,
   n: number,
-  /** Wallets that are not holders of this coin (its fee wallet on a Stonks coin: stonksFees.ts). */
+  /** Wallets that are not holders of this coin (Stonks' fee wallet, on every coin: stonksFees.ts). */
   exclude: ReadonlySet<string> = new Set(),
 ): { owner: string; pct: number; accounts?: string[] }[] | null {
   if (supply <= 0n) return null;

@@ -72,7 +72,9 @@ import {
   isFomoName,
   isPumpfunName,
   isUsername,
+  SWITCHABLE_NAMES,
   useWalletNames,
+  visibleNames,
   walletText,
   type WalletName,
   type WalletNames,
@@ -187,13 +189,6 @@ interface NameToggle {
   setNamesOn: (on: boolean) => void;
 }
 
-type SwitchableSource = "pumpfun" | "fomo" | "identity";
-const SWITCHABLE_NAMES: ReadonlySet<WalletName["source"]> = new Set<SwitchableSource>([
-  "pumpfun",
-  "fomo",
-  "identity",
-]);
-
 /**
  * Whether the Pump.fun, FOMO and Helius names show on the map (user ask 2026-10-16): off by
  * default, switchable on the map, with the default in Settings. Settings can also set each kind on
@@ -207,22 +202,22 @@ function useNameToggle(graph: BubbleGraph | null, names: WalletNames): NameToggl
   const split = bubbleNamesPumpfun !== null || bubbleNamesFomo !== null || bubbleNamesHelius !== null;
   const showNames = split ? bubbleNameLabels : (on ?? bubbleNameLabels);
   return useMemo(() => {
-    const shows: Record<SwitchableSource, boolean> = {
-      pumpfun: bubbleNamesPumpfun ?? showNames,
-      fomo: bubbleNamesFomo ?? showNames,
-      identity: bubbleNamesHelius ?? showNames,
-    };
     const exchanges = new Set(graph?.cexLinks.map((l) => l.funder) ?? []);
-    const switchable = Object.keys(names).filter(
-      (w) => SWITCHABLE_NAMES.has(names[w]!.source) && !exchanges.has(w),
-    );
-    const hidden = switchable.filter((w) => !shows[names[w]!.source as SwitchableSource]);
-    const hasSwitchable = !split && switchable.length > 0;
-    if (hidden.length === 0) return { mapNames: names, hasSwitchable, showNames, setNamesOn };
-    const kept: Record<string, WalletName> = { ...names };
-    for (const w of hidden) delete kept[w];
-    return { mapNames: kept, hasSwitchable, showNames, setNamesOn };
-  }, [graph, names, showNames, split, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius]);
+    const hasSwitchable =
+      !split && Object.keys(names).some((w) => SWITCHABLE_NAMES.has(names[w]!.source) && !exchanges.has(w));
+    const look = { bubbleNameLabels, bubbleNamesPumpfun, bubbleNamesFomo, bubbleNamesHelius };
+    const mapNames = visibleNames(names, look, showNames, exchanges);
+    return { mapNames, hasSwitchable, showNames, setNamesOn };
+  }, [
+    graph,
+    names,
+    showNames,
+    split,
+    bubbleNameLabels,
+    bubbleNamesPumpfun,
+    bubbleNamesFomo,
+    bubbleNamesHelius,
+  ]);
 }
 
 /**
@@ -263,6 +258,7 @@ function useKols(
             ),
             transfers ? graph.transferLinks : [],
             transfers ? graph.fundingClusters : undefined,
+            (w) => names[w]?.service === true,
           )
         : [],
     [graph, groups, names, transfers],
@@ -404,7 +400,7 @@ function MapView({
           title={
             kolBundled === null
               ? "KOL bundled: not checked yet. It comes with the linked-wallet reading."
-              : "KOL bundled: supply held by KOLs and the top holders tied to them (wallets a KOL funded, possible side wallets, and holders sharing a funder or funding minute with those)"
+              : "KOL bundled: supply held by KOLs and the top holders tied to them (wallets a KOL funded, probable side wallets, and holders sharing a funder or funding minute with those)"
           }
         >
           <dt>KOL bundled</dt>
@@ -602,13 +598,13 @@ const KOL_TIE_TEXT: Record<KolTie, string> = {
   kol: "KOL",
   known: "Known side",
   funded: "KOL funded",
-  side: "Possible side",
+  side: "Probable side",
   cluster: "Same funder",
   "same-minute": "Same minute",
   transfer: "Got a transfer",
 };
 
-/** "4 wallets · 1 KOL funded · 2 possible sides": what a KOL's row holds. */
+/** "4 wallets · 1 KOL funded · 2 probable sides": what a KOL's row holds. */
 function kolSummary(k: KolControl): string {
   const count = (t: KolTie) => k.wallets.filter((w) => w.tie === t).length;
   const known = count("known");
@@ -619,7 +615,7 @@ function kolSummary(k: KolControl): string {
     `${k.wallets.length} wallet${k.wallets.length === 1 ? "" : "s"}`,
     known > 0 ? `${known} known side${known === 1 ? "" : "s"}` : null,
     funded > 0 ? `${funded} KOL funded` : null,
-    side > 0 ? `${side} possible side${side === 1 ? "" : "s"}` : null,
+    side > 0 ? `${side} probable side${side === 1 ? "" : "s"}` : null,
     linked > 0 ? `${linked} linked` : null,
     k.holds ? null : "KOL not holding",
   ]
@@ -1951,11 +1947,13 @@ export function BubbleMapSection({
     const funding = withWideMap(withoutTransfers(snapshot), wideWithoutTransfers(wide)).linkedClusters;
     return funding ? { ...drawn, fundingClusters: funding } : drawn;
   }, [shown, snapshot, wide, showTransfers, flagged]);
-  const nameToggle = useNameToggle(graph, useGraphNames(graph));
+  const graphNames = useGraphNames(graph);
+  const nameToggle = useNameToggle(graph, graphNames);
   const names = nameToggle.mapNames;
   const { showCex, setCexOn } = useCexToggle(graph);
   const side = useSideToggle(graph);
-  const kols = useKols(graph, side.groups, names, showTransfers);
+  // Every name, hidden ones too: a KOL's always shows, and an exchange's says it is a service.
+  const kols = useKols(graph, side.groups, graphNames, showTransfers);
   const label = tokenLabel(token);
   if (!graph || !graph.nodes.some((n) => n.kind === "holder")) {
     // Still on its way: the map's place is held at its size, so it fills in without a jump.

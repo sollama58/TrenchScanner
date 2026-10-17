@@ -236,7 +236,7 @@ export function walletLabels(input: {
       tone: "info",
       source: "TrenchScanner launchpad list",
       detail:
-        "Stonks' fee wallet: it collects the 3% transfer fee on every Stonks coin. Left out of Stonks coins' holder figures, bundles and bubble maps.",
+        "Stonks' fee wallet: it collects the 3% transfer fee on every Stonks coin. Left out of every coin's holder figures, trade tape, bundles and bubble maps.",
     });
   const exchange = KNOWN_EXCHANGE_WALLETS.get(input.wallet);
   if (exchange)

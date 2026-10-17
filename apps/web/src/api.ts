@@ -1467,8 +1467,8 @@ export interface FeedAppearance {
   /** Color the Score tile red to green against recent alerts' scores; on by default. */
   scoreColor: boolean;
   /**
-   * Shade the stat tiles from tileLow through tileMid to tileHigh at the safety screen's cut; on by
-   * default (absent from older API builds: on).
+   * Shade the stat tiles from tileLow through tileMid to tileHigh at the safety screen's cut; off by
+   * default (absent from older API builds: off).
    */
   tileColors: boolean;
   /** Color the whole tile, not only its reading (absent from older API builds: off). */
@@ -1495,11 +1495,11 @@ export interface FeedAppearance {
   bubbleCexLinks: boolean;
   /** Bubble maps name the wallets that fund clusters on a label by their diamond; off by default (absent from older API builds: off). */
   bubbleFunderLabels: boolean;
-  /** Bubble maps open with KOLs' possible side wallets tied to them; on by default (absent from older API builds: on). */
+  /** Bubble maps open with KOLs' probable side wallets tied to them; on by default (absent from older API builds: on). */
   bubbleSideLinks: boolean;
   /** Bubble maps open with arrows between holders that sent the coin to each other; on by default (absent from older API builds: on). */
   bubbleTransferLinks: boolean;
-  /** Bubble maps open with Pump.fun, FOMO and Helius names shown; on by default (absent from older API builds: on). */
+  /** Bubble maps and wallet webs show Pump.fun, FOMO and Helius names; off by default (absent from older API builds: off). */
   bubbleNameLabels: boolean;
   /** Each kind's own choice, overriding bubbleNameLabels; null follows it. Any set hides the one switch. */
   bubbleNamesPumpfun: boolean | null;
@@ -1868,7 +1868,7 @@ export interface MarketLighthouse {
   };
   /**
    * The safety screen's verdict on the tokens first scanned in the window: cleared it at least
-   * once (accepted) or never (rejected, shown as Likely Rugs). Absent from older API builds.
+   * once (accepted) or never (rejected, shown as Probable Rugs). Absent from older API builds.
    */
   safetyScreen?: {
     accepted: number;

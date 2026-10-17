@@ -147,7 +147,7 @@ describe("tokenSageHints", () => {
         imageUrl: "https://ipfs.io/ipfs/x",
         twitterUrl: "https://x.com/dog",
         websiteUrl: null,
-        firstSeenAt: new Date("2026-10-06T18:00:00Z"),
+        launchedAt: new Date("2026-10-06T18:00:00Z"),
       }),
     ).toEqual({
       name: "Dog",
@@ -157,6 +157,18 @@ describe("tokenSageHints", () => {
       created_at: "2026-10-06T18:00:00.000Z",
     });
     expect(tokenSageHints({ imageUrl: "http://insecure" })).toBeUndefined();
+  });
+
+  it("sends created_at only from the launch time, never from when we first saw the mint", () => {
+    const row = { name: "Dog", firstSeenAt: new Date("2026-10-06T18:00:00Z"), launchedAt: null };
+    expect(tokenSageHints(row)).toEqual({ name: "Dog" });
+  });
+
+  it("leaves out a URL longer than TokenSage accepts, which would 422 the whole batch", () => {
+    const long = `https://ipfs.io/ipfs/${"x".repeat(2048)}`;
+    expect(tokenSageHints({ name: "Dog", imageUrl: long, twitterUrl: long, websiteUrl: long })).toEqual({
+      name: "Dog",
+    });
   });
 });
 
@@ -947,6 +959,7 @@ describe("logo labels and pump.fun pairs (rules 0.25.0, 0.27.0)", () => {
         story: "Moo Deng",
         story_kind: "referent",
         status: "ok",
+        as_of: "2026-10-13T21:04:00Z",
         coins: 3,
         leader: {
           mint: "LEADER",
@@ -981,6 +994,18 @@ describe("logo labels and pump.fun pairs (rules 0.25.0, 0.27.0)", () => {
     const failed = { ...item, story_heat: { status: "rate_limited" } } as unknown as TokenSageNowItem;
     expect(nowFieldsFromItem(failed, "MINT")).toMatchObject({ heatCoins: null, heatIsLeader: null });
     expect(nowFieldsFromItem({ ...item, story_heat: null }, "MINT")?.heatLeaderMcapUsd).toBeNull();
+    // Heat read well before the refresh (an old cached reading after a failed lookup) is not
+    // current market data; one a few minutes older is.
+    const heatAt = (as_of: string | undefined) =>
+      ({ ...item, story_heat: { ...item.story_heat, as_of } }) as unknown as TokenSageNowItem;
+    expect(nowFieldsFromItem(heatAt("2026-10-13T20:30:00Z"), "MINT")).toMatchObject({
+      heatCoins: null,
+      heatLeaderMcapUsd: null,
+      heatWaveVolume1hUsd: null,
+      heatIsLeader: null,
+    });
+    expect(nowFieldsFromItem(heatAt(undefined), "MINT")?.heatCoins).toBeNull();
+    expect(nowFieldsFromItem(heatAt("2026-10-13T21:01:00Z"), "MINT")?.heatCoins).toBe(3);
     // Nothing to store without a refresh.
     expect(nowFieldsFromItem({ ca: "MINT", status: "pending" }, "MINT")).toBeNull();
     expect(

@@ -163,7 +163,7 @@ let modelFill: { key: string; promise: Promise<CuratorRoster> } | null = null;
 
 /**
  * The seats' live scales (curation/liveScale.ts): each seat's last LIVE_SCORE_WINDOW_HOURS of
- * scores, the quantile tables the combiners read their members through, and the high-conviction
+ * scores, on its current model (curation/liveRescore.ts), the quantile tables the combiners read their members through, and the high-conviction
  * lines (curation/convictionLine.ts), redrawn every LIVE_SCALE_TTL_MS. A slot evolution handed to
  * a new recipe counts only the scores since the handover (CuratorLane.bornAt). A failed read keeps
  * the previous scales, so a database blip never moves a cutoff or silences the tier.

@@ -4,7 +4,7 @@ import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
 import bs58 from "bs58";
 import { mayhemStateAddress } from "../solana.js";
-import { feeHoldersOf, withheldFeeAuthorityOf } from "../stonksFees.js";
+import { FEE_HOLDERS, withheldFeeAuthorityOf } from "../stonksFees.js";
 import {
   pumpCurveAddressOf,
   readPumpLaunch,
@@ -845,15 +845,14 @@ export class HeliusClient {
     }
 
     const tokenAccounts = [...new Set([...accountsByMint.values()].flat().map((a) => a.address))];
-    // The mints ride the same read, for their transfer fee's withheld-fee authority: on a Stonks
-    // coin that is Stonks' fee wallet, which holds swept fees and is no holder (stonksFees.ts).
     const owners =
       tokenAccounts.length > 0
-        ? await this.getMultipleAccounts<{
-            data?: { parsed?: { info?: { owner?: unknown; extensions?: unknown } } };
-          }>([...tokenAccounts, ...accountsByMint.keys()], {
-            encoding: "jsonParsed",
-          })
+        ? await this.getMultipleAccounts<{ data?: { parsed?: { info?: { owner?: unknown } } } }>(
+            tokenAccounts,
+            {
+              encoding: "jsonParsed",
+            },
+          )
         : new Map();
     for (const [mint, accounts] of accountsByMint) {
       const withOwners: LargestAccount[] = [];
@@ -867,16 +866,8 @@ export class HeliusClient {
         }
         withOwners.push({ owner, amount: a.amount });
       }
-      const mintAccount = owners.get(mint);
-      const feeHolders = feeHoldersOf({
-        withheldFeeAuthority: withheldFeeAuthorityOf(
-          mintAccount && mintAccount !== "failed"
-            ? mintAccount.value?.data?.parsed?.info?.extensions
-            : undefined,
-        ),
-      });
       const holders = complete
-        ? holdersFromLargestAccounts(withOwners, supplyByMint.get(mint)!, feeHolders)
+        ? holdersFromLargestAccounts(withOwners, supplyByMint.get(mint)!, FEE_HOLDERS)
         : null;
       out.set(mint, holders ? { status: "found", holders } : { status: "failed" });
     }
@@ -898,12 +889,10 @@ export class HeliusClient {
     if (unique.length === 0) return out;
     const mints = await this.getMultipleAccounts<{
       owner?: unknown;
-      data?: { parsed?: { info?: { supply?: unknown; extensions?: unknown } } };
+      data?: { parsed?: { info?: { supply?: unknown } } };
     }>(unique, { encoding: "jsonParsed" });
     const programOf = new Map<string, string>();
     const supplyOf = new Map<string, bigint>();
-    // Stonks' fee wallet on a Stonks coin (its mint's withheld-fee authority): no holder (stonksFees.ts).
-    const feeHoldersOfMint = new Map<string, ReadonlySet<string>>();
     for (const mint of unique) {
       const account = mints.get(mint);
       const value = account && account !== "failed" ? account.value : null;
@@ -919,10 +908,6 @@ export class HeliusClient {
       }
       programOf.set(mint, value.owner);
       supplyOf.set(mint, BigInt(supply));
-      feeHoldersOfMint.set(
-        mint,
-        feeHoldersOf({ withheldFeeAuthority: withheldFeeAuthorityOf(value.data?.parsed?.info?.extensions) }),
-      );
     }
     const rowsByMint = await this.tokenAccountsOfMints(programOf);
     for (const mint of programOf.keys()) {
@@ -945,7 +930,7 @@ export class HeliusClient {
         });
       }
       const supply = supplyOf.get(mint)!;
-      const holders = topWalletsFromAccounts(accounts, supply, n, feeHoldersOfMint.get(mint));
+      const holders = topWalletsFromAccounts(accounts, supply, n, FEE_HOLDERS);
       out.set(mint, holders ? { status: "found", holders, supply: supply.toString() } : { status: "failed" });
     }
     return out;

@@ -165,6 +165,36 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
     expect(item!.brief).not.toContain("missed (peak +10%)");
     expect(items.some((i) => i.candidateOutcomeId === standardId)).toBe(false);
   });
+
+  it("prints the wallet figures the live brief printed: funding-only bundles, no raw risk score as a percentile", async () => {
+    // Banked before walletRiskTop10Max became a percentile (no walletRiskScoredTop10).
+    const alertId = await gradedRow("wallets", 30 * 60, 1, true, 150_000);
+    const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: alertId } });
+    await prisma.candidateOutcome.update({
+      where: { id: alertId },
+      data: {
+        features: {
+          ...(row.features as Record<string, number | null>),
+          kolTopHolders: 1,
+          kolBundledPct: 8,
+          linkedWalletCount: 6,
+          linkedWalletPct: 14,
+          linkedCreatorPct: 3,
+          walletRiskTop10Max: 60,
+          walletRiskFirstBuyersMean: 41,
+        },
+      },
+    });
+    const items = await loadReplayItems(env, {
+      from: new Date(Date.now() - 31 * 60 * 60_000),
+      to: new Date(),
+      take: 50,
+    });
+    const brief = items.find((i) => i.candidateOutcomeId === alertId)!.brief;
+    expect(brief).toContain("with those) 8.0%");
+    expect(brief).toContain("tied to the creator by funding 3.0%");
+    expect(brief).toContain("riskiest top-10 holder unknown; launch's first buyers average 41");
+  });
 });
 
 describe("replayedMarket", () => {

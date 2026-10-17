@@ -36,7 +36,7 @@ export async function noteUtilityLookups(env: Env, now = Date.now()): Promise<nu
       imageUrl: true,
       twitterUrl: true,
       websiteUrl: true,
-      firstSeenAt: true,
+      launchedAt: true,
     },
   });
   for (const token of tokens) noteNarrativeWanted(token.mintAddress, "full", env, tokenSageHints(token));

@@ -47,6 +47,7 @@ import {
 } from "../priceChart";
 import {
   cardReadings,
+  oldFirstBuyersText,
   cexCountText,
   countCutFor,
   linkedReading,
@@ -1498,7 +1499,7 @@ function stonkFeesPctText(pct: number): string {
 
 /**
  * Stonks' fee wallet's share of a Stonks coin (user ask 2026-10-16): the 3% transfer fee it sweeps
- * up. It is left out of every holder figure, bundle and the bubble map on a Stonks coin, so its
+ * up. It is left out of every holder figure, bundle and the bubble map (on every coin), so its
  * share shows here on its own. Nothing for any other coin.
  */
 function StonkFeesCard({ mint }: { mint: string }) {
@@ -1805,11 +1806,21 @@ function StatsCard({ card }: { card: Card }) {
               (r.cexPct === null ? "Not checked" : (cexCountText(r.cexCount, r.cexHolders) ?? pct(r.cexPct)))}
           </dd>
         </div>
-        <div title="How many of the launch's first 25 buyers still hold 0.1% of the supply or more">
+        <div
+          title={
+            r.firstHolding === null && r.firstHoldingOld !== null
+              ? `Not recorded under the 0.1% count for this token. ${oldFirstBuyersText(r.firstHoldingOld, r.firstSeenOld)}`
+              : "How many of the launch's first 25 buyers still hold 0.1% of the supply or more"
+          }
+        >
           <dt>First buyers holding</dt>
           <dd className="num">
             {wait(r.firstHolding === null, "2.4em") ??
-              (r.firstHolding === null ? "–" : `${r.firstHolding}/${r.firstSeen ?? 25}`)}
+              (r.firstHolding !== null
+                ? `${r.firstHolding}/${r.firstSeen ?? 25}`
+                : r.firstHoldingOld !== null
+                  ? `${r.firstHoldingOld}/${r.firstSeenOld ?? 25}*`
+                  : "–")}
           </dd>
         </div>
         <div title={r.feeLine ?? undefined}>
