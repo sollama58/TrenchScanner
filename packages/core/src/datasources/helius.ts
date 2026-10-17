@@ -868,6 +868,12 @@ export class HeliusClient {
         withOwners.push({ owner, amount: a.amount });
       }
       const mintAccount = owners.get(mint);
+      // Without the mint account the fee wallet can't be told apart, and a Stonks coin's list
+      // would count it: a failed read, never a list read as complete.
+      if (mintAccount === "failed") {
+        out.set(mint, { status: "failed" });
+        continue;
+      }
       const feeHolders = feeHoldersOf({
         withheldFeeAuthority: withheldFeeAuthorityOf(
           mintAccount && mintAccount !== "failed"

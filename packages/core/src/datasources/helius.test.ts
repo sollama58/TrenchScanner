@@ -811,6 +811,30 @@ describe("HeliusClient.getLargestHoldersBatch", () => {
     });
   });
 
+  it("fails a mint whose own account read failed, though its token accounts read", async () => {
+    // Five mints with 20 accounts each fill the first 100-key chunk, so the mints ride a chunk of
+    // their own, which fails here: the fee wallet could not be told apart.
+    const mints = ["mintA", "mintB", "mintC", "mintD", "mintE"];
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        if (c.method === "getTokenLargestAccounts") {
+          const mint = (c.params[0] as string) ?? "";
+          const value = Array.from({ length: 20 }, (_, i) => ({ address: `${mint}-acct${i}`, amount: "10" }));
+          return { jsonrpc: "2.0", id: c.id, result: { value } };
+        }
+        if (c.method === "getTokenSupply")
+          return { jsonrpc: "2.0", id: c.id, result: { value: { amount: "1000" } } };
+        const keys = c.params[0] as string[];
+        if (keys.some((k) => mints.includes(k)))
+          return { jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } };
+        const value = keys.map(() => ({ data: { parsed: { info: { owner: WALLET } } } }));
+        return { jsonrpc: "2.0", id: c.id, result: { value } };
+      }),
+    );
+    const result = await new HeliusClient({ rpcUrl: url }).getLargestHoldersBatch(mints);
+    for (const mint of mints) expect(result.get(mint)).toEqual({ status: "failed" });
+  });
+
   it("keeps the fee wallet as a holder of any other coin", async () => {
     const { url } = await largestWithFeeWallet(null);
     const result = await new HeliusClient({ rpcUrl: url }).getLargestHoldersBatch(["mintA"]);
