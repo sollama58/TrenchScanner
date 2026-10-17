@@ -2617,7 +2617,8 @@ model TokenTradeTape {
   /// launch (too many trades), so launch roles (first buyers, snipers) are unknown, while who sold
   /// after the anchor is still right. "failed": no usable read (retried after retryAt).
   status    String
-  /// "helius" (getTransactionsForAddress on the mint) or "pumpfun" (Pump.fun's trade API).
+  /// "helius" (getTransactionsForAddress on the mint) or "pumpfun" (Pump.fun's trade API). On a
+  /// failed row, "helius:busy" is a coin too busy for Helius, left to Pump.fun for good.
   source    String?
   windowEnd DateTime
   launchAt  DateTime?

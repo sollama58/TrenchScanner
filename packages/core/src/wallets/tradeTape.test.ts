@@ -356,6 +356,16 @@ describe("summarizeTape and stopCauseOf", () => {
     expect(cause).toMatchObject({ sellers: 0, lead: null, tape: "partial" });
   });
 
+  it("reads no fast exit from a sell before the wallet's first buy on a partial tape", () => {
+    const partial = orderTrades([
+      // Sold tokens bought before the read began, then bought again two minutes later.
+      trade("swing", "sell", 1, 10_000_000, anchor),
+      trade("swing", "buy", 1, 10_000_000, anchor + 2 * 60 * S),
+    ]);
+    const [swing] = summarizeTape(partial, { ...ctx, complete: false });
+    expect(swing!.fastExit).toBe(false);
+  });
+
   it("counts a trade the sources both gave once", () => {
     const t = trade("a", "buy", 1, 1, T0);
     expect(orderTrades([t, { ...t }])).toHaveLength(1);

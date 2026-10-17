@@ -239,9 +239,11 @@ export function foldClosingTrades(row: ClosingRow, trades: readonly TapeTrade[])
     }
   }
   if (bought > 0) out.boughtPct = (row.boughtPct ?? 0) + (bought / PUMP_SUPPLY_TOKENS) * 100;
+  // As the tape reads it (summarizeTape): a sell before the first buy is no exit from it.
   out.fastExit =
     out.firstBuyAt !== null &&
     out.firstSellAt !== null &&
+    out.firstSellAt.getTime() >= out.firstBuyAt.getTime() &&
     out.firstSellAt.getTime() - out.firstBuyAt.getTime() <= FAST_EXIT_MS;
   const before = Array.isArray(row.trades) ? (row.trades as unknown as StoredTrade[]) : [];
   const after = walletTrades(trades).get(trades[0]?.wallet ?? "") ?? [];
