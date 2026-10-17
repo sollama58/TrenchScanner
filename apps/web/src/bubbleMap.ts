@@ -1,5 +1,14 @@
 import type { Snapshot } from "./api";
 import type { WalletNames } from "./walletNames";
+import {
+  crossingCount,
+  laneOffsets,
+  lanePoints,
+  laneRoute,
+  pairSign,
+  type LanePoint,
+  type LaneRoute,
+} from "./linkLanes";
 
 /**
  * The linked-wallets bubble map: a coin's top holders as bubbles sized by their share of supply,
@@ -916,150 +925,254 @@ export function transferCurve(
   return { x1: p1.x, y1: p1.y, cx, cy, x2: p2.x, y2: p2.y, angle: Math.atan2(p2.y - cy, p2.x - cx) };
 }
 
-/** A transfer arrow's drawn curve (transferCurve). */
-export interface TransferRoute {
-  x1: number;
-  y1: number;
-  cx: number;
-  cy: number;
-  x2: number;
-  y2: number;
-  angle: number;
-}
+/** A transfer arrow's drawn curve (transferCurve), as every lane on the map is drawn (linkLanes.ts). */
+export type TransferRoute = LaneRoute;
 
-/** The bows tried for an arrow, the plain one first; a pair sent both ways keeps to the wider ones. */
-const TRANSFER_BENDS = [0.2, -0.2, 0.32, -0.32, 0.12, -0.12, 0.45, -0.45] as const;
-
-/** Points along a quadratic route, its ends left out. */
-export function routePoints(r: TransferRoute, step = 3): { x: number; y: number }[] {
-  const n = Math.max(6, Math.ceil(Math.hypot(r.x2 - r.x1, r.y2 - r.y1) / step));
-  const out: { x: number; y: number }[] = [];
-  for (let i = 0; i <= n; i += 1) {
-    const t = i / n;
-    out.push({
-      x: (1 - t) * (1 - t) * r.x1 + 2 * (1 - t) * t * r.cx + t * t * r.x2,
-      y: (1 - t) * (1 - t) * r.y1 + 2 * (1 - t) * t * r.cy + t * t * r.y2,
-    });
-  }
-  return out;
-}
+/** Points along a quadratic route, its ends included. */
+export const routePoints = lanePoints;
 
 /**
- * Each transfer arrow's route, by "from>to" (user ask 2026-10-16: arrows neither hidden by nor
- * hiding anything). The arrows run under the bubbles, so each takes the bow, of a few, that passes
- * under the fewest other bubbles; a pair sent both ways keeps its two arcs on opposite sides.
+ * Each transfer arrow's route, by "from>to": the arrows' lanes of linkRoutes, for a map drawing its
+ * arrows alone.
  */
 export function transferRoutes(
   graph: Pick<BubbleGraph, "nodes" | "transferLinks">,
   headGap = 1.2,
 ): Map<string, TransferRoute> {
-  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-  const key = (from: string, to: string) => `${from}>${to}`;
-  const have = new Set(graph.transferLinks.map((l) => key(l.from, l.to)));
-  // The badges on bubbles' rims (a trait's bottom right, a risk or DEV mark's top right), drawn over
-  // the arrows: an arrow leaving its own bubble shouldn't run under its badge either.
-  const badges = graph.nodes.flatMap((n) => [
-    ...(n.trait ? [{ x: n.x + n.r * 0.72, y: n.y + n.r * 0.72, r: 9 }] : []),
-    ...(n.flags.length > 0 ? [{ x: n.x + n.r * 0.72, y: n.y - n.r * 0.72, r: 11 }] : []),
-  ]);
-  /** What a route passes under: other bubbles (with a little room round each), and badges. */
-  const covered = (r: TransferRoute, a: string, b: string): number => {
-    const pts = routePoints(r, 4);
-    let c = 0;
-    for (const n of graph.nodes) {
-      if (n.id === a || n.id === b) continue;
-      const reach = n.r + 3;
-      if (pts.some((p) => (p.x - n.x) ** 2 + (p.y - n.y) ** 2 < reach * reach)) c += 5;
-    }
-    for (const k of badges) if (pts.some((p) => (p.x - k.x) ** 2 + (p.y - k.y) ** 2 < k.r * k.r)) c += 1;
-    return c;
-  };
-  /** Arrows already routed, as polylines: crossing one costs a little, so arrows cross only where they must. */
-  const drawn: { x: number; y: number }[][] = [];
-  const crossings = (r: TransferRoute): number => {
-    const pts = routePoints(r, 6);
-    let c = 0;
-    for (const other of drawn) {
-      cross: for (let i = 1; i < pts.length; i += 1) {
-        for (let j = 1; j < other.length; j += 1) {
-          if (segmentsCross(pts[i - 1]!, pts[i]!, other[j - 1]!, other[j]!)) {
-            c += 1;
-            break cross;
-          }
-        }
-      }
-    }
-    return c * 0.5;
-  };
-  /** A route whose tail or tip lands under a badge, starting or ending just past it instead. */
-  const clearOfBadges = (r: TransferRoute): TransferRoute => {
-    const pts = routePoints(r, 1);
-    const free = (p: { x: number; y: number }) =>
-      badges.every((k) => (p.x - k.x) ** 2 + (p.y - k.y) ** 2 >= k.r * k.r);
-    const i = pts.findIndex(free);
-    const j = pts.length - 1 - [...pts].reverse().findIndex(free);
-    // Moved only by the short way round a badge, never along most of the arrow.
-    if (i <= 0 && j >= pts.length - 1) return r;
-    if (i < 0 || j - i < pts.length / 2) return r;
-    const tip = pts[j]!;
-    const before = pts[Math.max(i, j - 2)]!;
-    return {
-      ...r,
-      x1: pts[i]!.x,
-      y1: pts[i]!.y,
-      x2: tip.x,
-      y2: tip.y,
-      angle: j < pts.length - 1 ? Math.atan2(tip.y - before.y, tip.x - before.x) : r.angle,
-    };
-  };
+  const { routes } = linkRoutes({ ...graph, links: [], sameTimeLinks: [] }, { transfers: true, headGap });
   const out = new Map<string, TransferRoute>();
   for (const l of graph.transferLinks) {
-    if (out.has(key(l.from, l.to))) continue;
-    const a = byId.get(l.from);
-    const b = byId.get(l.to);
-    if (!a || !b) continue;
-    const both = have.has(key(l.to, l.from));
-    let best: { bend: number; c: number } | null = null;
-    for (const bend of TRANSFER_BENDS) {
-      // Two arcs need the room between them: no shallow bow for a pair sent both ways.
-      if (both && Math.abs(bend) < 0.2) continue;
-      const there = transferCurve(a, b, headGap, bend);
-      let c = covered(there, a.id, b.id) + crossings(there);
-      // The same bow seen from the receiver lands on the other side, so the two arcs stay apart.
-      if (both) {
-        const back = transferCurve(b, a, headGap, bend);
-        c += covered(back, b.id, a.id) + crossings(back);
-      }
-      // The plain bow wins a tie; the others pay a little for their shape.
-      const s = c + (bend === 0.2 ? 0 : Math.abs(bend) === 0.2 ? 0.1 : 0.2);
-      if (!best || s < best.c) best = { bend, c: s };
+    const r = routes.get(linkKey("xfer", l.from, l.to));
+    if (r) out.set(`${l.from}>${l.to}`, r);
+  }
+  return out;
+}
+
+/** The kinds of line drawn between two bubbles: a funding tie, a same-minute tie, a KOL's side tie, a transfer. */
+export type LinkKind = "fund" | "same" | "side" | "xfer";
+
+/** A drawn line's key in linkRoutes' answer. */
+export function linkKey(kind: LinkKind, from: string, to: string): string {
+  return `${kind}:${from}>${to}`;
+}
+
+/**
+ * The same-minute ties the map draws (user ask 2026-10-17: each tie shown once, nothing drawn
+ * twice): each group joined by its shortest ties, where holders one funder's cluster already joins
+ * count as joined. A group inside one cluster draws none (its clock marks say it); one spanning
+ * clusters draws only the ties that bridge them, each between the nearest holders across.
+ */
+export function sameTimeTies(graph: Pick<BubbleGraph, "nodes" | "sameTimeLinks">): SameTimeLink[] {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const groups = new Map<number, MapNode[]>();
+  for (const l of graph.sameTimeLinks) {
+    const list = groups.get(l.group) ?? [];
+    for (const id of [l.to, l.from]) {
+      const n = byId.get(id);
+      if (n && !list.includes(n)) list.push(n);
     }
-    const there = clearOfBadges(transferCurve(a, b, headGap, best!.bend));
-    out.set(key(l.from, l.to), there);
-    drawn.push(routePoints(there, 6));
-    if (both) {
-      const back = clearOfBadges(transferCurve(b, a, headGap, best!.bend));
-      out.set(key(l.to, l.from), back);
-      drawn.push(routePoints(back, 6));
+    groups.set(l.group, list);
+  }
+  const out: SameTimeLink[] = [];
+  for (const [group, members] of groups) {
+    // Kruskal over the group, its holders in one cluster starting out joined.
+    const root = new Map<MapNode, MapNode>(members.map((n) => [n, n]));
+    const find = (n: MapNode): MapNode => {
+      let r = n;
+      while (root.get(r) !== r) r = root.get(r)!;
+      root.set(n, r);
+      return r;
+    };
+    const join = (a: MapNode, b: MapNode) => root.set(find(a), find(b));
+    for (const a of members)
+      for (const b of members) if (a !== b && a.cluster !== null && a.cluster === b.cluster) join(a, b);
+    const pairs: [MapNode, MapNode, number][] = [];
+    for (let i = 0; i < members.length; i += 1)
+      for (let j = i + 1; j < members.length; j += 1) {
+        const a = members[i]!;
+        const b = members[j]!;
+        pairs.push([a, b, Math.hypot(a.x - b.x, a.y - b.y) - a.r - b.r]);
+      }
+    pairs.sort((p, q) => p[2] - q[2]);
+    for (const [a, b] of pairs) {
+      if (find(a) === find(b)) continue;
+      join(a, b);
+      out.push({ from: a.id, to: b.id, group });
     }
   }
   return out;
 }
 
-/** Whether segment p1-p2 crosses segment q1-q2 (touching ends aside). */
-function segmentsCross(
-  p1: { x: number; y: number },
-  p2: { x: number; y: number },
-  q1: { x: number; y: number },
-  q2: { x: number; y: number },
-): boolean {
-  const side = (a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }) =>
-    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-  const d1 = side(q1, q2, p1);
-  const d2 = side(q1, q2, p2);
-  const d3 = side(p1, p2, q1);
-  const d4 = side(p1, p2, q2);
-  return d1 * d2 < 0 && d3 * d4 < 0;
+/** Each kind's lane order across a bundle (a transfer from the pair's first end leads, one back trails). */
+const LANE_ORDER: Record<LinkKind, number> = { xfer: 0, fund: 1, same: 2, side: 3 };
+/** Each kind's line weight for spacing lanes, map units (styles.css .bm-link, .bm-side-link). */
+const LANE_WIDTH: Record<Exclude<LinkKind, "xfer">, number> = { fund: 1.6, same: 1.6, side: 1.8 };
+
+/**
+ * Every line the map draws between two bubbles, routed together (user ask 2026-10-17: a pair tied
+ * more than one way, say by a funder and a transfer, reads as one tidy bundle). The lines between
+ * one pair become the lanes of one bundle, side by side (linkLanes.ts): a transfer from the pair's
+ * first end on one edge, one back on the other, the funding, same-minute and side ties between.
+ * Each bundle takes the bow, of a few, that passes under the fewest other bubbles and crosses the
+ * fewest bundles already routed, its usual bow winning a tie: a lone funding tie keeps its slight
+ * bow, a bundle a gentler one. Same-minute ties are sameTimeTies' (returned as `same`), side ties
+ * the KOLs' (kolSideTies). Keyed by linkKey.
+ */
+export function linkRoutes(
+  graph: Pick<BubbleGraph, "nodes" | "links" | "sameTimeLinks" | "transferLinks">,
+  opts: {
+    /** Route the transfer arrows (the map's transfers toggle). */
+    transfers?: boolean;
+    sideTies?: readonly { from: string; to: string }[];
+    /** How far past the receiver's rim an arrow's tip stops. */
+    headGap?: number;
+  } = {},
+): { routes: Map<string, LaneRoute>; same: SameTimeLink[] } {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const same = sameTimeTies(graph);
+  type Lane = { kind: LinkKind; from: string; to: string; width: number };
+  const lanes: Lane[] = [
+    ...graph.links.map((l) => ({ kind: "fund" as const, from: l.from, to: l.to, width: LANE_WIDTH.fund })),
+    ...same.map((l) => ({ kind: "same" as const, from: l.from, to: l.to, width: LANE_WIDTH.same })),
+    ...(opts.sideTies ?? []).map((l) => ({
+      kind: "side" as const,
+      from: l.from,
+      to: l.to,
+      width: LANE_WIDTH.side,
+    })),
+    // An arrow's lane holds part of its glow too.
+    ...(opts.transfers ? graph.transferLinks : []).map((l) => ({
+      kind: "xfer" as const,
+      from: l.from,
+      to: l.to,
+      width: transferWidth(l.pct) * 1.7,
+    })),
+  ];
+  // The bundles: each pair's lanes, by the pair's first end (the lower id) to its second.
+  const bundles = new Map<string, { a: MapNode; b: MapNode; lanes: Lane[] }>();
+  for (const l of lanes) {
+    if (l.from === l.to) continue;
+    const [p, q] = l.from <= l.to ? [l.from, l.to] : [l.to, l.from];
+    const a = byId.get(p);
+    const b = byId.get(q);
+    if (!a || !b) continue;
+    const key = `${p}|${q}`;
+    const bundle = bundles.get(key) ?? { a, b, lanes: [] };
+    // One lane per kind and way: a tie listed twice draws once.
+    if (!bundle.lanes.some((o) => o.kind === l.kind && o.from === l.from && o.to === l.to))
+      bundle.lanes.push(l);
+    bundles.set(key, bundle);
+  }
+  const rank = (l: Lane, a: MapNode) => (l.kind === "xfer" && l.from !== a.id ? 9 : LANE_ORDER[l.kind]);
+  // The badges on bubbles' rims (a trait's bottom right, a risk or DEV mark's top right), drawn over
+  // the lines: a lane shouldn't run under one.
+  const badges = graph.nodes.flatMap((n) => [
+    ...(n.trait ? [{ x: n.x + n.r * 0.72, y: n.y + n.r * 0.72, r: 9 }] : []),
+    ...(n.flags.length > 0 ? [{ x: n.x + n.r * 0.72, y: n.y - n.r * 0.72, r: 11 }] : []),
+  ]);
+  const headGap = opts.headGap ?? 1.2;
+  // A plain line tucks just under its bubbles' edges; an arrow stops short of them, so its head shows.
+  const routeOf = (bundle: { a: MapNode; b: MapNode }, l: Lane, bend: number, offset: number) => {
+    const [tail, head] = l.kind === "xfer" ? [1.5, headGap] : [-1, -1];
+    const forward = l.from === bundle.a.id;
+    const r = laneRoute(bundle.a, bundle.b, bend, offset, forward ? tail : head, forward ? head : tail);
+    return forward ? r : reverseLane(r);
+  };
+  // The busiest bundles, and those with arrows, pick their bows first; then the longest.
+  const length = (p: { a: MapNode; b: MapNode }) => Math.hypot(p.b.x - p.a.x, p.b.y - p.a.y);
+  const hasArrow = (p: { lanes: Lane[] }) => Number(p.lanes.some((l) => l.kind === "xfer"));
+  const order = [...bundles.values()].sort(
+    (p, q) => q.lanes.length - p.lanes.length || hasArrow(q) - hasArrow(p) || length(q) - length(p),
+  );
+  const drawn: LanePoint[][] = [];
+  const routes = new Map<string, LaneRoute>();
+  for (const bundle of order) {
+    const { a, b } = bundle;
+    const sorted = [...bundle.lanes].sort((p, q) => rank(p, a) - rank(q, a));
+    const offsets = laneOffsets(sorted.map((l) => l.width));
+    // Its usual bow, the pair's first end to its second: a funding tie's slight one, an arrow's wider
+    // one; a bundle of several, gentler, so its lanes run near straight side by side.
+    const lead = sorted.find((l) => l.kind !== "xfer") ?? sorted[0]!;
+    const usual =
+      (lead.kind === "xfer" ? 0.2 : -0.12) * (sorted.length > 1 ? 0.6 : 1) * pairSign(lead.from, lead.to);
+    const tries = [...new Set([usual, -usual, 0.2, -0.2, 0.32, -0.32, 0.06, -0.06])];
+    let best: { bend: number; s: number } | null = null;
+    for (const bend of tries) {
+      const pts = sorted.map((l, i) => lanePoints(routeOf(bundle, l, bend, offsets[i]!), 4));
+      let c = 0;
+      for (const n of graph.nodes) {
+        if (n === a || n === b) continue;
+        const reach = n.r + 3;
+        if (pts.some((ps) => ps.some((p) => (p.x - n.x) ** 2 + (p.y - n.y) ** 2 < reach * reach))) c += 5;
+      }
+      for (const k of badges)
+        if (pts.some((ps) => ps.some((p) => (p.x - k.x) ** 2 + (p.y - k.y) ** 2 < k.r * k.r))) c += 1;
+      c += crossingCount(lanePoints(routeOf(bundle, sorted[0]!, bend, 0), 8), drawn) * 0.5;
+      const s = c + (bend === usual ? 0 : bend === -usual ? 0.1 : 0.2);
+      if (!best || s < best.s) best = { bend, s };
+    }
+    sorted.forEach((l, i) => {
+      let r = routeOf(bundle, l, best!.bend, offsets[i]!);
+      if (l.kind === "xfer") r = clearOfBadges(r, badges);
+      routes.set(linkKey(l.kind, l.from, l.to), r);
+    });
+    drawn.push(lanePoints(routeOf(bundle, sorted[0]!, best!.bend, 0), 8));
+  }
+  return { routes, same };
+}
+
+/** A lane run the other way: its ends swapped, its heading the new end's. */
+function reverseLane(r: LaneRoute): LaneRoute {
+  return {
+    x1: r.x2,
+    y1: r.y2,
+    cx: r.cx,
+    cy: r.cy,
+    x2: r.x1,
+    y2: r.y1,
+    angle: Math.atan2(r.y1 - r.cy, r.x1 - r.cx),
+  };
+}
+
+/** An arrow whose tail or tip lands under a badge, starting or ending just past it instead. */
+function clearOfBadges(r: LaneRoute, badges: readonly { x: number; y: number; r: number }[]): LaneRoute {
+  const pts = lanePoints(r, 1);
+  const free = (p: LanePoint) => badges.every((k) => (p.x - k.x) ** 2 + (p.y - k.y) ** 2 >= k.r * k.r);
+  const i = pts.findIndex(free);
+  const j = pts.length - 1 - [...pts].reverse().findIndex(free);
+  // Moved only by the short way round a badge, never along most of the arrow.
+  if (i <= 0 && j >= pts.length - 1) return r;
+  if (i < 0 || j - i < pts.length / 2) return r;
+  const tip = pts[j]!;
+  const before = pts[Math.max(i, j - 2)]!;
+  return {
+    ...r,
+    x1: pts[i]!.x,
+    y1: pts[i]!.y,
+    x2: tip.x,
+    y2: tip.y,
+    angle: j < pts.length - 1 ? Math.atan2(tip.y - before.y, tip.x - before.x) : r.angle,
+  };
+}
+
+/**
+ * The KOLs' side ties the map draws (user ask 2026-10-15): each KOL that holds, to its possible side
+ * wallets on the map, with `kol`, the KOL's index in `kols` (its colour).
+ */
+export function kolSideTies(
+  graph: Pick<BubbleGraph, "nodes">,
+  kols: readonly Pick<KolControl, "kolWallet" | "wallets">[],
+  groups: readonly SideGroup[],
+): { from: string; to: string; kol: number }[] {
+  const byKol = new Map(groups.map((g) => [g.kolWallet, g]));
+  const out: { from: string; to: string; kol: number }[] = [];
+  kols.forEach((k, i) => {
+    const { kol, members } = kolBundleNodes(graph, k);
+    const g = byKol.get(k.kolWallet);
+    if (!kol || !g || members.length < 2) return;
+    for (const n of sideMembers(graph, g)) if (n !== kol) out.push({ from: kol.id, to: n.id, kol: i });
+  });
+  return out;
 }
 
 /**
@@ -2008,6 +2121,8 @@ export function placeLabels(
   labels: readonly MapLabel[],
   /** The transfer arrows drawn (transferRoutes): a pill keeps well off them. */
   transfers?: ReadonlyMap<string, TransferRoute> | null,
+  /** Every other line drawn between bubbles (linkRoutes), as drawn; absent, the funding links' plain bow. */
+  lines?: Iterable<LaneRoute> | null,
 ): PlacedLabel[] {
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   // Every drawn line as sample points (funding links bend, as the map draws them).
@@ -2025,11 +2140,13 @@ export function placeLabels(
     }
   };
   // The funding links (hub labels' own spokes depend on where they land, so they aren't known yet).
-  for (const l of graph.links) {
-    const a = byId.get(l.from);
-    const b = byId.get(l.to);
-    if (a && b) sample(a.x, a.y, b.x, b.y, 0.12);
-  }
+  if (lines) for (const r of lines) points.push(...lanePoints(r, 3));
+  else
+    for (const l of graph.links) {
+      const a = byId.get(l.from);
+      const b = byId.get(l.to);
+      if (a && b) sample(a.x, a.y, b.x, b.y, 0.12);
+    }
   // The transfer arrows, each point costing several of a plain line's: a pill on one hides its head
   // or its flow (user ask 2026-10-16).
   const arrows: { x: number; y: number }[] = [];
@@ -2186,11 +2303,21 @@ export function graphBounds(
 /** How far a cluster's halo reaches past its bubbles, map units. */
 export const HALO_PAD = 9;
 
-/** One cluster's halo: its bubbles grown by HALO_PAD and its links as thick bands, filled as one. */
+/**
+ * One cluster's halo: its bubbles grown by HALO_PAD and its links as thick bands, filled as one. A
+ * band follows its funding line's bow (cx, cy, its control point) when the line has a route.
+ */
 export interface ClusterHalo {
   cluster: number;
   circles: { x: number; y: number; r: number }[];
-  bands: { x1: number; y1: number; x2: number; y2: number }[];
+  bands: { x1: number; y1: number; x2: number; y2: number; cx?: number; cy?: number }[];
+}
+
+/** A halo band's SVG path: a quadratic along its line's bow, else straight. */
+export function bandD(b: ClusterHalo["bands"][number]): string {
+  return b.cx === undefined || b.cy === undefined
+    ? `M${b.x1},${b.y1} L${b.x2},${b.y2}`
+    : `M${b.x1},${b.y1} Q${b.cx},${b.cy} ${b.x2},${b.y2}`;
 }
 
 /**
@@ -2198,7 +2325,11 @@ export interface ClusterHalo {
  * a cluster reads as one group at a glance without swallowing the holders next to it. Drawn as a
  * single flattened layer (so overlaps don't darken) by the dialog's SVG and the share image alike.
  */
-export function clusterHalos(graph: BubbleGraph): ClusterHalo[] {
+export function clusterHalos(
+  graph: BubbleGraph,
+  /** The drawn lines (linkRoutes), so each band bows with its funding line. */
+  routes?: ReadonlyMap<string, LaneRoute> | null,
+): ClusterHalo[] {
   const index = new Map(graph.nodes.map((n) => [n.id, n]));
   const out: ClusterHalo[] = [];
   graph.clusters.forEach((_, i) => {
@@ -2209,7 +2340,9 @@ export function clusterHalos(graph: BubbleGraph): ClusterHalo[] {
       if (l.cluster !== i) continue;
       const a = index.get(l.from);
       const b = index.get(l.to);
-      if (a && b) bands.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+      if (!a || !b) continue;
+      const r = routes?.get(linkKey("fund", l.from, l.to));
+      bands.push({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, ...(r ? { cx: r.cx, cy: r.cy } : {}) });
     }
     out.push({
       cluster: i,

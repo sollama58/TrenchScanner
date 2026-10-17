@@ -47,6 +47,10 @@ import {
   routePoints,
   transfersOfNode,
   needsRegroup,
+  transferWidth,
+  linkKey,
+  linkRoutes,
+  sameTimeTies,
 } from "./bubbleMap";
 
 const A = "Aaaa1111111111111111111111111111111111111111";
@@ -525,7 +529,14 @@ describe("holder transfers", () => {
         { from: "b", to: "a", pct: 1, count: 1, lastAtMs: null },
       ],
     });
-    expect(Math.sign(two.get("a>b")!.cy)).toBe(-Math.sign(two.get("b>a")!.cy));
+    // The two arrows run as two lanes of one bundle, side by side, apart all along their middles.
+    const there = routePoints(two.get("a>b")!, 4);
+    const back = routePoints(two.get("b>a")!, 4).reverse();
+    for (let i = 2; i < there.length - 2; i += 1) {
+      const p = there[i]!;
+      const gap = Math.min(...back.map((q) => Math.hypot(p.x - q.x, p.y - q.y)));
+      expect(gap).toBeGreaterThan(transferWidth(1) * 1.5);
+    }
   });
   it("lays the map out with no bubble under a transfer arrow, and no pill on one", () => {
     const g = buildGraph({
@@ -1047,5 +1058,79 @@ describe("tiedHolders", () => {
     };
     expect([...tiedHolders(s)].sort()).toEqual(["a", "b"]);
     expect([...tiedHolders({ ...s, linkedCreatorPct: 0 })]).toEqual([]);
+  });
+});
+
+describe("link bundles", () => {
+  const node = (id: string, x: number, y: number, r: number, extra: Partial<MapNode> = {}) =>
+    ({ id, x, y, r, flags: [], trait: null, cluster: null, sameTime: null, ...extra }) as unknown as MapNode;
+
+  it("runs a funding tie and transfers between one pair as side-by-side lanes, arrows on the edges", () => {
+    const a = node("a", 0, 0, 14, { cluster: 0 });
+    const b = node("b", 140, 0, 14, { cluster: 0, hub: true });
+    const { routes } = linkRoutes(
+      {
+        nodes: [a, b],
+        links: [{ from: "a", to: "b", cluster: 0 }],
+        sameTimeLinks: [],
+        transferLinks: [
+          { from: "a", to: "b", pct: 1, count: 1, lastAtMs: null },
+          { from: "b", to: "a", pct: 0.5, count: 1, lastAtMs: null },
+        ],
+      },
+      { transfers: true },
+    );
+    const mid = (k: string) => routePoints(routes.get(k)!, 2);
+    const at = (k: string) => {
+      const pts = mid(k);
+      return pts[Math.floor(pts.length / 2)]!;
+    };
+    const there = at(linkKey("xfer", "a", "b"));
+    const fund = at(linkKey("fund", "a", "b"));
+    const back = at(linkKey("xfer", "b", "a"));
+    // Across the bundle in order: the arrow out, the funding tie, the arrow back; none on another.
+    expect(Math.sign(fund.y - there.y)).toBe(Math.sign(back.y - fund.y));
+    expect(Math.abs(fund.y - there.y)).toBeGreaterThan(3);
+    expect(Math.abs(back.y - fund.y)).toBeGreaterThan(3);
+    // Each lane leaves and reaches its bubbles at the rim, not their centres.
+    for (const r of routes.values()) {
+      expect(Math.hypot(r.x1 - a.x, r.y1 - a.y)).toBeGreaterThan(a.r - 2);
+      expect(Math.hypot(r.x2 - b.x, r.y2 - b.y) || Math.hypot(r.x1 - b.x, r.y1 - b.y)).toBeGreaterThan(
+        b.r - 2,
+      );
+    }
+    // An arrow keeps its way: it ends at its receiver.
+    const r = routes.get(linkKey("xfer", "b", "a"))!;
+    expect(Math.hypot(r.x2 - a.x, r.y2 - a.y)).toBeLessThan(a.r + 3);
+  });
+
+  it("bows a lone tie round a bubble in its way", () => {
+    const a = node("a", 0, 0, 10);
+    const b = node("b", 160, 0, 10, { hub: true });
+    // Right where the usual bow passes (to the holder's right going to its funder: -y here).
+    const block = node("x", 80, -12, 12);
+    const { routes } = linkRoutes({
+      nodes: [a, b, block],
+      links: [{ from: "a", to: "b", cluster: 0 }],
+      sameTimeLinks: [],
+      transferLinks: [],
+    });
+    const pts = routePoints(routes.get(linkKey("fund", "a", "b"))!);
+    expect(pts.every((p) => Math.hypot(p.x - block.x, p.y - block.y) > block.r)).toBe(true);
+  });
+
+  it("draws a same-minute group's ties only where its clusters don't already join it, nearest first", () => {
+    const n1 = node("h1", 0, 0, 10, { cluster: 0, sameTime: 0 });
+    const n2 = node("h2", 40, 0, 10, { cluster: 0, sameTime: 0 });
+    const n3 = node("h3", 120, 0, 10, { sameTime: 0 });
+    const n4 = node("h4", 300, 0, 10, { sameTime: 0 });
+    // The scan's ties: every holder to the first funded (h1).
+    const ties = sameTimeTies({
+      nodes: [n1, n2, n3, n4],
+      sameTimeLinks: ["h2", "h3", "h4"].map((from) => ({ from, to: "h1", group: 0 })),
+    });
+    const pairs = ties.map((t) => [t.from, t.to].sort().join("-")).sort();
+    // h1-h2 share a cluster: no tie. h3 joins by h2 (nearest), h4 by h3.
+    expect(pairs).toEqual(["h2-h3", "h3-h4"]);
   });
 });

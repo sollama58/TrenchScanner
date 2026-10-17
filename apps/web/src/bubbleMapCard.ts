@@ -37,13 +37,15 @@ import {
   bubbleNameLines,
   showsPct,
   transferCurve,
-  transferRoutes,
+  linkKey,
+  linkRoutes,
   transferWidth,
   type SideGroup,
   type FlagsRead,
   type BubbleGraph,
   type MapNode,
 } from "./bubbleMap";
+import type { LaneRoute } from "./linkLanes";
 import { countCutFor, SAFETY_REJECT_LINKED_COUNT } from "./components/AlertCard";
 import { shortAddress, tokenLabel } from "./format";
 import { isFomoName, isPumpfunName, isUsername, walletText, type WalletNames } from "./walletNames";
@@ -556,9 +558,26 @@ export async function renderBubbleCard(
       dotted: true,
     });
   }
-  // The arrows' routes, picked clear of other bubbles; the pills keep off them.
-  const routes = transfers ? transferRoutes(map) : null;
-  const placed = placeLabels(map, hubs, routes);
+  // Every line between two bubbles routed as one bundle per pair, as the dialog draws them (user ask
+  // 2026-10-17); the pills keep off them all.
+  const { routes: lanes, same } = linkRoutes(map, {
+    transfers,
+    sideTies: kolSpokes.map((s) => ({ from: s.from.id, to: s.to.id })),
+  });
+  const routes = transfers
+    ? new Map(
+        map.transferLinks.flatMap((l) => {
+          const r = lanes.get(linkKey("xfer", l.from, l.to));
+          return r ? [[`${l.from}>${l.to}`, r] as const] : [];
+        }),
+      )
+    : null;
+  const placed = placeLabels(
+    map,
+    hubs,
+    routes,
+    [...lanes].flatMap(([k, r]) => (k.startsWith("xfer:") ? [] : [r])),
+  );
   const box = graphBounds(map, 10, placed);
   const scale = Math.min(area.w / box.w, area.h / box.h, MAX_SCALE);
   const ox = area.x + (area.w - box.w * scale) / 2 - box.x * scale;
@@ -575,7 +594,7 @@ export async function renderBubbleCard(
   const lc = layer.getContext("2d");
   if (lc) {
     const ratio = canvas.width / CARD_W;
-    for (const h of clusterHalos(map)) {
+    for (const h of clusterHalos(map, lanes)) {
       lc.setTransform(ratio, 0, 0, ratio, 0, 0);
       lc.clearRect(0, 0, CARD_W, CARD_H);
       const col = CLUSTER[h.cluster % CLUSTER.length]!;
@@ -586,7 +605,8 @@ export async function renderBubbleCard(
       for (const b of h.bands) {
         lc.beginPath();
         lc.moveTo(X(b.x1), Y(b.y1));
-        lc.lineTo(X(b.x2), Y(b.y2));
+        if (b.cx !== undefined && b.cy !== undefined) lc.quadraticCurveTo(X(b.cx), Y(b.cy), X(b.x2), Y(b.y2));
+        else lc.lineTo(X(b.x2), Y(b.y2));
         lc.stroke();
       }
       lc.beginPath();
@@ -655,33 +675,23 @@ export async function renderBubbleCard(
   }
 
   ctx.lineCap = "round";
-  for (const l of map.links) {
-    const a = index.get(l.from);
-    const b = index.get(l.to);
-    if (!a || !b) continue;
-    const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12;
-    const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.12;
-    ctx.strokeStyle = alpha(CLUSTER[l.cluster % CLUSTER.length]!, 0.6);
-    ctx.lineWidth = Math.max(1.5, 1.6 * scale);
+  const lane = (r: LaneRoute | undefined) => {
+    if (!r) return;
     ctx.beginPath();
-    ctx.moveTo(X(a.x), Y(a.y));
-    ctx.quadraticCurveTo(X(mx), Y(my), X(b.x), Y(b.y));
+    ctx.moveTo(X(r.x1), Y(r.y1));
+    ctx.quadraticCurveTo(X(r.cx), Y(r.cy), X(r.x2), Y(r.y2));
     ctx.stroke();
+  };
+  ctx.lineWidth = Math.max(1.5, 1.6 * scale);
+  for (const l of map.links) {
+    ctx.strokeStyle = alpha(CLUSTER[l.cluster % CLUSTER.length]!, 0.6);
+    lane(lanes.get(linkKey("fund", l.from, l.to)));
   }
 
-  // Each same-minute group's ties, each holder to the first funded, in the group's colour.
-  for (const l of map.sameTimeLinks) {
-    const a = index.get(l.from);
-    const b = index.get(l.to);
-    if (!a || !b) continue;
-    const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12;
-    const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.12;
+  // Each same-minute group's ties its clusters don't already make, in the group's colour.
+  for (const l of same) {
     ctx.strokeStyle = alpha(slotColour(sameTimeSlot(map, l.group)), 0.6);
-    ctx.lineWidth = Math.max(1.5, 1.6 * scale);
-    ctx.beginPath();
-    ctx.moveTo(X(a.x), Y(a.y));
-    ctx.quadraticCurveTo(X(mx), Y(my), X(b.x), Y(b.y));
-    ctx.stroke();
+    lane(lanes.get(linkKey("same", l.from, l.to)));
   }
 
   // Each pill's ties to its wallets: dashed for an exchange, dotted for a KOL's side wallets.
@@ -712,12 +722,7 @@ export async function renderBubbleCard(
   ctx.setLineDash([2, 5]);
   for (const { from: a, to: b, colour } of kolSpokes) {
     ctx.strokeStyle = alpha(colour, 0.9);
-    const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12;
-    const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.12;
-    ctx.beginPath();
-    ctx.moveTo(X(a.x), Y(a.y));
-    ctx.quadraticCurveTo(X(mx), Y(my), X(b.x), Y(b.y));
-    ctx.stroke();
+    lane(lanes.get(linkKey("side", a.id, b.id)));
   }
   ctx.setLineDash([]);
 

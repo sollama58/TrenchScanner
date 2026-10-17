@@ -60,13 +60,17 @@ import {
   traitShares,
   type WalletTrait,
   transferCurve,
-  transferRoutes,
   type TransferRoute,
+  bandD,
+  kolSideTies,
+  linkKey,
+  linkRoutes,
   transfersOfNode,
   transferWidth,
   type TransferLink,
 } from "../bubbleMap";
 import { renderBubbleCard } from "../bubbleMapCard";
+import { laneD } from "../linkLanes";
 import { openWallet } from "../walletModal";
 import {
   isFomoName,
@@ -1022,11 +1026,23 @@ function BubbleSvg({
   const { bubbleFunderLabels } = useAppearance();
   const index = new Map(graph.nodes.map((n) => [n.id, n]));
   const cexSlot = useMemo(() => cexSlots(graph), [graph]);
-  // Each transfer arrow's route, clear of other bubbles (user ask 2026-10-16); the pills keep off them.
-  const routes = useMemo(
-    () => (transfers && graph.transferLinks.length > 0 ? transferRoutes(graph) : null),
-    [graph, transfers],
-  );
+  // Every line between two bubbles routed as one bundle per pair (user ask 2026-10-17): funding,
+  // same-minute and side ties and the transfer arrows side by side, each bundle clear of other
+  // bubbles where it can be; the pills keep off them all.
+  const sideTies = useMemo(() => kolSideTies(graph, kols, kolSides), [graph, kols, kolSides]);
+  const { lanes, same, routes } = useMemo(() => {
+    const arrows = transfers && graph.transferLinks.length > 0;
+    const { routes: lanes, same } = linkRoutes(graph, { transfers: arrows, sideTies });
+    const routes = arrows
+      ? new Map(
+          graph.transferLinks.flatMap((l) => {
+            const r = lanes.get(linkKey("xfer", l.from, l.to));
+            return r ? [[`${l.from}>${l.to}`, r] as const] : [];
+          }),
+        )
+      : null;
+    return { lanes, same, routes };
+  }, [graph, transfers, sideTies]);
   // Funders' names (when Settings shows them) and each exchange's name when its ties show, as pills
   // placed where they cover nothing (user ask 2026-10-14: they sat on bubbles, text and lines). An
   // exchange's pill is a hub, tied to each of its wallets by a line, as a funder is.
@@ -1097,8 +1113,9 @@ function BubbleSvg({
         hub(`cex:${g.funder}`, [...g.nodes], text, "cex", `var(--bm-cex-${cexSlot.get(g.funder) ?? 0})`);
       }
     }
-    return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list, routes) };
-  }, [graph, names, cexLinks, cexSlot, kolSides, kols, routes, bubbleFunderLabels]);
+    const lines = [...lanes].flatMap(([k, r]) => (k.startsWith("xfer:") ? [] : [r]));
+    return { labels: new Map(list.map((l) => [l.id, l])), placed: placeLabels(graph, list, routes, lines) };
+  }, [graph, names, cexLinks, cexSlot, kolSides, kols, routes, lanes, bubbleFunderLabels]);
   const box = graphBounds(graph, 18, placed);
   const dim = (n: MapNode) => lit !== null && n.cluster !== lit;
   // Bigger bubbles first so the small ones draw on top and stay tappable.
@@ -1126,7 +1143,7 @@ function BubbleSvg({
           </radialGradient>
         </defs>
         <g className="bm-halos">
-          {clusterHalos(graph).map((h) => (
+          {clusterHalos(graph, lanes).map((h) => (
             // One flattened layer per cluster: overlapping parts don't darken.
             <g
               key={h.cluster}
@@ -1134,7 +1151,7 @@ function BubbleSvg({
               style={{ "--bm": `var(--bm-${h.cluster % CLUSTER_COLOURS})` } as React.CSSProperties}
             >
               {h.bands.map((b, j) => (
-                <line key={j} x1={b.x1} y1={b.y1} x2={b.x2} y2={b.y2} strokeWidth={HALO_PAD * 2.4} />
+                <path key={j} d={bandD(b)} strokeWidth={HALO_PAD * 2.4} />
               ))}
               {h.circles.map((c, j) => (
                 <circle key={j} cx={c.x} cy={c.y} r={c.r} />
@@ -1189,32 +1206,26 @@ function BubbleSvg({
         </g>
         <g className="bm-links">
           {graph.links.map((l) => {
-            const a = index.get(l.from);
-            const b = index.get(l.to);
-            if (!a || !b) return null;
-            // A slight bend, always to the same side, so crossing lines stay apart.
-            const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12;
-            const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.12;
+            const r = lanes.get(linkKey("fund", l.from, l.to));
+            if (!r) return null;
             return (
               <path
                 key={`${l.from}-${l.to}`}
-                d={`M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`}
+                d={laneD(r)}
                 className={`bm-link${lit !== null && l.cluster !== lit ? " dim" : ""}`}
                 style={{ stroke: `var(--bm-${l.cluster % CLUSTER_COLOURS})` }}
               />
             );
           })}
-          {/* Each same-minute group's ties, each holder to the first funded, in the group's colour. */}
-          {graph.sameTimeLinks.map((l) => {
-            const a = index.get(l.from);
-            const b = index.get(l.to);
-            if (!a || !b) return null;
-            const mx = (a.x + b.x) / 2 + (b.y - a.y) * 0.12;
-            const my = (a.y + b.y) / 2 - (b.x - a.x) * 0.12;
+          {/* Each same-minute group's ties, in the group's colour: only those its clusters don't
+              already join, between the nearest holders (sameTimeTies). */}
+          {same.map((l) => {
+            const r = lanes.get(linkKey("same", l.from, l.to));
+            if (!r) return null;
             return (
               <path
                 key={`t-${l.from}-${l.to}`}
-                d={`M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`}
+                d={laneD(r)}
                 className={`bm-link bm-same-link${lit !== null ? " dim" : ""}`}
                 style={{ stroke: `var(--bm-${sameTimeSlot(graph, l.group)})` }}
               />
@@ -1233,13 +1244,12 @@ function BubbleSvg({
                   {p.far && <line className="bm-leader" x1={l.x} y1={l.y} x2={p.x} y2={p.y} />}
                   {l.anchor &&
                     (l.tied ?? []).map((m) => {
-                      const a = l.anchor!;
-                      const mx = (a.x + m.x) / 2 + (m.y - a.y) * 0.12;
-                      const my = (a.y + m.y) / 2 - (m.x - a.x) * 0.12;
+                      const r = lanes.get(linkKey("side", l.anchor!.id, m.id));
+                      if (!r) return null;
                       return (
                         <path
                           key={m.id}
-                          d={`M${a.x},${a.y} Q${mx},${my} ${m.x},${m.y}`}
+                          d={laneD(r)}
                           className={`bm-side-link${lit !== null ? " dim" : ""}`}
                           style={{ stroke: l.colour ?? undefined }}
                         />
