@@ -3246,7 +3246,8 @@ async function processCandidate(
       await recordCandidateSample(token.id, scored, env);
     }
     const preGate = passesEventPreGate(scored, band);
-    // Held by the pre-gate's 5-minute test alone: everything else about the moment was ready.
+    // Held by the pre-gate's price test alone (isCollapsing, or an older coin's 5-minute rise):
+    // everything else about the moment was ready.
     if (!preGate && passesEventPreGate(scored, band, { skip5m: true })) {
       noteDecisionHold("preGate5m");
     }

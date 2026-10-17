@@ -890,7 +890,12 @@ export interface ModelInsights {
   shadowEmissions: { total: GradedRates; bySource: (GradedRates & { source: string })[] };
   curatorConfidenceBands: (GradedRates & { side: "heuristic" | "model"; band: number })[];
   aiReviewer: {
+    /** What the reviewer runs as: AI_REVIEW_MODE under the Admin switch ("off" while it is off). */
     mode: string;
+    /** AI_REVIEW_MODE alone. Absent from older API builds. */
+    configuredMode?: string;
+    /** The Admin AI reviewer switch. Absent from older API builds. */
+    switch?: "off" | "admins" | "live";
     buys: GradedRates;
     allReviewed: GradedRates;
     /** Its buys' 2x rate minus its passes' (no-buys), in points, one review per coin. */
@@ -1884,6 +1889,12 @@ export interface MarketLighthouse {
       /** From this age the last 5 minutes must be up oldCoinMin5mPct or more. Absent from older API builds. */
       oldCoinMinAgeMinutes?: number;
       oldCoinMin5mPct?: number;
+      /**
+       * The price test before that age: held while collapsing, down this percent or more within a
+       * minute (collapse1mPct) or over five minutes (collapse5mPct). Absent from older API builds.
+       */
+      collapse1mPct?: number;
+      collapse5mPct?: number;
     };
   };
   /**

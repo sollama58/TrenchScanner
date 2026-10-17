@@ -7,6 +7,8 @@ import {
   notRetiredModelSql,
   MAX_EVENT_AGE_MINUTES,
   MIN_BUY_RATIO,
+  COLLAPSE_1M_PCT,
+  COLLAPSE_5M_PCT,
   PRE_GATE_OLD_COIN_MIN_5M_PCT,
   PRE_GATE_OLD_COIN_MIN_AGE_MINUTES,
   prisma,
@@ -236,6 +238,10 @@ async function buildScreenedOutcomes(env: Env, since: Date, days: number) {
       minBuySharePct: Math.round(MIN_BUY_RATIO * 100),
       oldCoinMinAgeMinutes: PRE_GATE_OLD_COIN_MIN_AGE_MINUTES,
       oldCoinMin5mPct: PRE_GATE_OLD_COIN_MIN_5M_PCT,
+      // The younger coin's price test (isCollapsing): held while down more than these, as positive
+      // percentages - within a minute, and over five minutes.
+      collapse1mPct: -COLLAPSE_1M_PCT,
+      collapse5mPct: -COLLAPSE_5M_PCT,
     },
   };
 }

@@ -105,8 +105,9 @@ function ChaosPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
           </span>
           <h2>Open every new alert</h2>
           <p className="muted small">
-            Each new alert in your Live feed opens in a new tab on the site you pick, while TrenchScanner is
-            open on this computer. Desktop browsers only: phones and tablets ignore it even when it is on.
+            Each new alert in your Live feed opens in a new tab as it arrives, on the site you pick while
+            TrenchScanner is open on this computer. Desktop browsers only: phones and tablets ignore it even
+            when it is on.
           </p>
         </div>
         {desktop && (

@@ -16,6 +16,8 @@ import {
   firstCallOnRowSql,
   notRetiredModelSql,
   judgeLiftFromCounts,
+  readAiReviewerSwitch,
+  type AiReviewerState,
   type Env,
   type MarketRow,
   LAUNCHER_TEXT_GUARD_MODEL,
@@ -603,6 +605,16 @@ export function toWinnerRuns(r: WinnerRunRow) {
   };
 }
 
+/** AI_REVIEW_MODE as the Admin switch lets it run (core's curation/aiSwitch.ts). */
+export function effectiveAiReviewMode(
+  state: AiReviewerState,
+  mode: Env["AI_REVIEW_MODE"],
+): Env["AI_REVIEW_MODE"] {
+  if (state === "off") return "off";
+  if (state === "admins" && mode === "gate") return "shadow";
+  return mode;
+}
+
 /** Exported for the route test; the route above is the only caller in production. */
 export async function buildHitRateReport(
   since: Date,
@@ -917,6 +929,7 @@ export async function buildHitRateReport(
     winnerRuns,
     [curatedTotal],
     [shadowTotal],
+    aiSwitch,
   ] = await Promise.all([
     curatedRows,
     modelRows,
@@ -932,6 +945,10 @@ export async function buildHitRateReport(
     winnerRunRows,
     curatedTotalRows,
     shadowTotalRows,
+    // The Admin AI reviewer switch: an unreadable switch reads as "off", as it does on the worker.
+    readAiReviewerSwitch()
+      .then((s) => s.state)
+      .catch((): AiReviewerState => "off"),
   ]);
 
   const rated = (c: GradedCounts, min?: number) => withRates(c, targets, min);
@@ -1008,7 +1025,12 @@ export async function buildHitRateReport(
     // Live and shadow calls together, bucketed by curator confidence (0-100, bands of 10).
     curatorConfidenceBands: confidence.map((r) => ({ side: r.side, band: r.band, ...rated(toCounts(r)) })),
     aiReviewer: {
-      mode: env.AI_REVIEW_MODE,
+      // What the reviewer actually runs as: the Admin switch over AI_REVIEW_MODE ("off" when the
+      // switch is off or there is no key, gate held to shadow while it is in testing).
+      // configuredMode is the env setting alone, which `mode` reported before the switch existed.
+      mode: env.ANTHROPIC_API_KEY ? effectiveAiReviewMode(aiSwitch, env.AI_REVIEW_MODE) : "off",
+      configuredMode: env.AI_REVIEW_MODE,
+      switch: aiSwitch,
       // Gate mode needs AI_REVIEW_MIN_GRADED_BUYS graded buys under the current playbook, with
       // the lift's lower bound above 0.
       buys: buyRates,

@@ -51,7 +51,8 @@ type WebSocketCtor = new (url: string) => WebSocket;
 
 /**
  * What a key follows: "tx", the transactions touching its accounts (transactionSubscribe); or
- * "account", its one account's data on every change (accountSubscribe, curveTapeJob.ts).
+ * "account", its one account's data on every change (accountSubscribe, the worker's
+ * jobs/curveTape.ts).
  */
 export type StreamKind = "tx" | "account";
 

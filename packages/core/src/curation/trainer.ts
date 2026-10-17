@@ -1465,7 +1465,7 @@ export interface WalkForwardOptions {
  * Whether a row is a moment a live curator decides on - see WalkForwardOptions.decisionRowsOnly.
  * Event rows are, by construction. With a band, an hourly background sample whose stored
  * features would have passed the event pre-gate (passesEventPreGate: in band, young enough,
- * buyers in control of the hour, last five minutes not falling) is a PSEUDO-EVENT: a moment the
+ * buyers in control of the hour, price not collapsing (isCollapsing)) is a PSEUDO-EVENT: a moment the
  * live scan would have decided on had it been looking, graded by the same label. The young-coin
  * price test is the collapse line from 2026-10-17 on, so the exam's pseudo-events follow it. Event rows
  * alone date from 2026-10-03; pseudo-events let the exam reach back over the whole window.

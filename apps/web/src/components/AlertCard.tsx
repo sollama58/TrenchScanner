@@ -28,7 +28,7 @@ import {
 import { openSage } from "../sage";
 import { linkedCount, linkedCountText } from "../bubbleMap";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
-import { QUICK_LINK_SITES, useAppearance } from "../appearance";
+import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { cardCalibratedRate } from "../rates";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
@@ -51,7 +51,7 @@ const OWN_CLICK = "a, button, input, select, textarea, label, summary, [role='bu
 
 const LINKS = [
   { label: "Dex", href: (m: string) => `https://dexscreener.com/solana/${m}` },
-  { label: "Pump", href: (m: string) => `https://pump.fun/coin/${m}` },
+  { label: "Pump", href: pumpFunHref },
 ];
 
 export function AlertCard({

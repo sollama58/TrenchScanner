@@ -92,13 +92,14 @@ export interface ExitPlan {
  * The plan every call is simulated under (user decision 2026-10-17): 35% of the position at 2x,
  * 30% at 4x and 25% at 10x, everything still held on a trailing exit 40% below its high from the
  * first sale on, out at 3 hours; stop at -50% before the first sale; a call that never sold closes
- * at 30 minutes. Once the 2x sale has landed the call can no longer lose: the trail's lowest level
- * from a 2x high is 1.2x, so the worst finish is 0.35 x 2 + 0.65 x 1.2 = 1.48x.
+ * at 30 minutes. Once the 2x sale has landed, a trail that fills at its level (1.2x from a 2x high)
+ * still returns 0.35 x 2 + 0.65 x 1.2 = 1.48x; it fills at the price seen, so a gap through it can
+ * still lose (breakeven at about 0.46x).
  *
  * It replaces half at 2x with the rest trailing 35% (2026-10-07). On 6-hour price paths of the
  * week to 2026-10-17 it took about a point more per call with the stop booked at its level (as
  * here), and about the same replayed at the watcher's cadence; a longer hold changed nothing (one
- * position in 3,284 was still held at 3 hours). Notes: notes/exit-plan-65-stop-2026-10-17.md.
+ * position in 3,284 was still held at 3 hours).
  */
 export const EXIT_PLAN: ExitPlan = {
   takeProfits: [
@@ -325,8 +326,12 @@ export function simulateExitPlan(
   let held = 1;
   let proceeds = 0; // in multiples of the stake
   let sold = false;
-  for (const tp of sortedLadder(plan)) {
-    if (held <= 1e-9 || peak < entry * tp.multiple) break;
+  // Rungs past the first are sold while the trail holds the rest, so they count only on prices the
+  // trail saw: a window peak or close after the trail fired came too late for them.
+  const trailHigh = plan.trail.length > 0 ? row.trailHighPriceUsd : null;
+  for (const [i, tp] of sortedLadder(plan).entries()) {
+    const reach = i > 0 && trailHigh != null ? trailHigh : peak;
+    if (held <= 1e-9 || reach < entry * tp.multiple) break;
     const share = Math.min(tp.sellFraction, held);
     proceeds += share * tp.multiple;
     held -= share;

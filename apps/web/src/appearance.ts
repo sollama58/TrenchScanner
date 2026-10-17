@@ -71,6 +71,9 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
 };
 
 /** Trading sites a card can open the token in, as Settings lists them. */
+/** A coin's Pump.fun page. */
+export const pumpFunHref = (mint: string) => `https://pump.fun/coin/${mint}`;
+
 export const QUICK_LINK_SITES: { id: QuickLink; label: string; href: (mint: string) => string }[] = [
   { id: "terminal", label: "Terminal", href: (m) => `https://trade.padre.gg/trade/solana/${m}` },
   { id: "axiom", label: "Axiom", href: (m) => `https://axiom.trade/t/${m}` },

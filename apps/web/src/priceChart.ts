@@ -35,14 +35,20 @@ export interface CloseRun {
  */
 export function stitch(runs: readonly CloseRun[], ticks: readonly Point[] = []): Point[] {
   let out: Point[] = [];
+  let lastStep = 0;
   for (const run of runs) {
     if (run.points.length === 0) continue;
     const from = run.points[0]!.t - run.stepMs;
     out = out.filter((p) => p.t <= from).concat(run.points);
+    lastStep = run.stepMs;
   }
-  const last = out.length > 0 ? out[out.length - 1]!.t : -Infinity;
-  for (const p of ticks) if (p.t > last) out.push(p);
-  return out;
+  // The ticks win from the newest candle's start: that candle may still be open (its close so far
+  // drawn at now), and the curve's changes inside it are the finer reading.
+  const cut = out.length > 0 ? out[out.length - 1]!.t - lastStep : -Infinity;
+  const tail = ticks.filter((p) => p.t > cut);
+  if (tail.length === 0) return out;
+  const first = tail[0]!.t;
+  return out.filter((p) => p.t < first).concat(tail);
 }
 
 /** Time-axis steps, in ms: round seconds, minutes, hours and days. */

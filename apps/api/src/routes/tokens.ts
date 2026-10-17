@@ -206,6 +206,15 @@ let secondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
   maxEntries: 100,
 });
 let quarterCache = new CandleCache(pumpFunCandleFetcher(undefined, "15s"), { ttlMs: 60_000 });
+/**
+ * The token chart's 1-second candles, on a budget of their own: every short view polls them, and
+ * sharing the first-minutes one let a handful of open charts starve a brand-new launch's view.
+ */
+let fineSecondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
+  ttlMs: 4_000,
+  callsPerMinute: 60,
+  maxEntries: 100,
+});
 /** Past this age the 15-second page (1,000 candles with a trade) rarely still reaches the start. */
 const FIRST_MINUTES_MAX_AGE_MS = 6 * 3_600_000;
 /** A little past the 15 minutes, so the 1-second view takes in the last of them. */
@@ -216,6 +225,7 @@ export function setCandleFetcherForTests(fetcher: CandleFetcher, secondsFetcher 
   candleCache = new CandleCache(fetcher);
   secondCache = new CandleCache(secondsFetcher);
   quarterCache = new CandleCache(secondsFetcher);
+  fineSecondCache = new CandleCache(secondsFetcher);
 }
 type ChartWallets = Pick<TokenChart, "tape" | "live" | "wallets" | "holderEntries">;
 const walletCache = new KeyedCache<ChartWallets>(WALLETS_CACHE_MS);
@@ -733,7 +743,7 @@ export async function readTokenFine(mintAddress: string, res: "1s" | "15s"): Pro
   const stepSec = res === "1s" ? 1 : 15;
   // Token first, as readTokenChart does: Pump.fun is only asked about a coin on Token.
   if (!(await isTracked(mintAddress))) return { mint: mintAddress, stepSec, candles: null };
-  const candles = await (res === "1s" ? secondCache : quarterCache).get(mintAddress);
+  const candles = await (res === "1s" ? fineSecondCache : quarterCache).get(mintAddress);
   return { mint: mintAddress, stepSec, candles: candles && candles.length > 0 ? candles : null };
 }
 

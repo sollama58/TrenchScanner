@@ -166,11 +166,15 @@ describe("SolPrice", () => {
     expect(price.source()).toBe("coinbase");
     now = 120_000;
     expect(await price.get()).toBe(100);
+    await new Promise((r) => setTimeout(r, 0));
     jupiterUp = true;
     now = 125_000;
     // Still inside the retry wait after the failure.
     expect(await price.get()).toBe(100);
     now = 131_000;
+    // A stale price is served while the refresh runs; the next read has the new one.
+    expect(await price.get()).toBe(100);
+    await new Promise((r) => setTimeout(r, 0));
     expect(await price.get()).toBe(101);
   });
 });

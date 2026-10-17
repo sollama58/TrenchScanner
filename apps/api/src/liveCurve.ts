@@ -42,7 +42,20 @@ const KEY_PREFIX = "chart:";
 /** How long a chart's first ask waits on the seed read before answering "pending". */
 const SEED_WAIT_MS = 2_500;
 
-type Stream = Pick<HeliusAccountStream, "start" | "stop" | "watch" | "unwatch" | "coveredSince">;
+type Stream = Pick<HeliusAccountStream, "start" | "stop" | "watch" | "unwatch" | "coveredSince"> &
+  Partial<Pick<HeliusAccountStream, "takeStats">>;
+
+/** The chart socket's traffic since this process started, summed over every socket it opened. */
+export interface LiveCurveStreamTotals {
+  /** 1 while a chart socket is open, else 0. */
+  connected: number;
+  accountSubscriptions: number;
+  accountUpdates: number;
+  bytes: number;
+  /** Estimated Helius credits (bytes received, plus one per connection opened). */
+  credits: number;
+  since: string;
+}
 type CurveReader = Pick<HeliusClient, "getCurveStatesBatch">;
 
 /** Where the newest prices came from. "pending": asked, not read yet. "none": not a live curve. */
@@ -98,9 +111,12 @@ export class LiveCurves {
   private emptySince: number | null = null;
   private busy = false;
   private readonly now: () => number;
+  private readonly totals = { accountUpdates: 0, bytes: 0, credits: 0 };
+  private readonly startedAt: number;
 
   constructor(private readonly deps: LiveCurvesDeps) {
     this.now = deps.now ?? Date.now;
+    this.startedAt = this.now();
   }
 
   /** The changes after `after` (ms) of `mint`'s curve, following it from now on if it wasn't. */
@@ -154,16 +170,42 @@ export class LiveCurves {
     this.record(key.slice(KEY_PREFIX.length), f, state, this.now());
   }
 
-  /** How many curves are followed, and how many of them the stream covers (GET /health). */
-  stats(): { followed: number; streamed: number } {
+  /**
+   * How many curves are followed, how many of them the stream covers, and the chart socket's
+   * traffic and estimated credits since this process started (GET /health).
+   */
+  stats(): { followed: number; streamed: number; stream: LiveCurveStreamTotals } {
     let streamed = 0;
     for (const [mint, f] of this.followed) if (this.streamCovers(mint, f)) streamed += 1;
-    return { followed: this.followed.size, streamed };
+    const live = this.drainStreamStats();
+    return {
+      followed: this.followed.size,
+      streamed,
+      stream: {
+        connected: live?.connected ?? 0,
+        accountSubscriptions: live?.accountSubscriptions ?? 0,
+        accountUpdates: this.totals.accountUpdates,
+        bytes: this.totals.bytes,
+        credits: this.totals.credits,
+        since: new Date(this.startedAt).toISOString(),
+      },
+    };
+  }
+
+  /** Folds the open socket's counts since the last call into the process totals. */
+  private drainStreamStats() {
+    const s = this.stream?.takeStats?.();
+    if (!s) return null;
+    this.totals.accountUpdates += s.accountUpdates;
+    this.totals.bytes += s.bytes;
+    this.totals.credits += s.credits;
+    return s;
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.drainStreamStats();
     this.stream?.stop();
     this.stream = null;
     this.followed.clear();
@@ -259,6 +301,7 @@ export class LiveCurves {
   private idle(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.drainStreamStats();
     this.stream?.stop();
     this.stream = null;
     this.emptySince = null;

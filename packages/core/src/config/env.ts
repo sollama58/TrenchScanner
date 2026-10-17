@@ -253,7 +253,7 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
-  // The curve tape (worker's curveTapeJob.ts, user ask 2026-10-17): every tracked Pump.fun coin
+  // The curve tape (worker's jobs/curveTape.ts, user ask 2026-10-17): every tracked Pump.fun coin
   // younger than CURVE_TAPE_MAX_AGE_MINUTES has its bonding curve followed on the Helius websocket
   // (accountSubscribe: an update per changed block, ~0.5 KB, 2 credits per 0.1 MB), and read by RPC
   // where the stream doesn't reach. Up to CURVE_TAPE_MAX_MINTS at once. "false" turns it off.
@@ -276,7 +276,9 @@ const envSchema = z.object({
   // second-by-second updates): while a young coin's chart is open, the API follows its bonding curve
   // on its own Helius websocket (an update per changed block) and the chart draws every change,
   // read by RPC every few seconds where the stream doesn't reach. Only while someone is looking, so
-  // it costs next to nothing. Needs HELIUS_API_KEY; "false" leaves the charts on candles alone.
+  // it costs next to nothing: it opens a second Helius websocket on the same key (about 400
+  // credits a day while any chart is open), closed 2 minutes after the last chart. GET /health
+  // reports it (liveCurves). Needs HELIUS_API_KEY; "false" leaves the charts on candles alone.
   CHART_LIVE_CURVES: z
     .enum(["true", "false"])
     .default("true")

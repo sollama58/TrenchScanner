@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { AlertPrefs, Card, ChaosSite, QuickLink } from "./api";
-import { QUICK_LINK_SITES } from "./appearance";
+import { QUICK_LINK_SITES, pumpFunHref } from "./appearance";
 
 /**
  * Chaos Mode (user ask 2026-10-17): every new alert in the Live feed opens in a new tab on the
@@ -13,7 +13,7 @@ import { QUICK_LINK_SITES } from "./appearance";
 
 export const CHAOS_SITE_OPTIONS: { id: ChaosSite; label: string; href: (mint: string) => string }[] = [
   ...QUICK_LINK_SITES,
-  { id: "pumpfun", label: "Pump.fun", href: (m) => `https://pump.fun/coin/${m}` },
+  { id: "pumpfun", label: "Pump.fun", href: pumpFunHref },
 ];
 
 /** The API's bounds and default (apps/api/src/alertPrefs.ts). */
@@ -25,6 +25,8 @@ const WINDOW_MS = 60_000;
 const OPENED_KEY = "ts-chaos-opened-v1";
 const CLAIMED_KEY = "ts-chaos-claimed-v1";
 const CLAIMED_KEEP = 200;
+/** A Solana mint address: a tab no click started never opens a path built from anything else. */
+const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 /** The site to open: the user's pick, else the first of their cards' quick links, else Padre's Terminal. */
 export function chaosSite(prefs: Pick<AlertPrefs, "chaosSite">, quickLinks: QuickLink[]): ChaosSite {
@@ -145,12 +147,25 @@ function openTab(url: string): Window | null {
   return w;
 }
 
+type ChaosArgs = Parameters<typeof openChaosTabsNow>;
+
 /**
  * Opens new alerts' tokens in tabs, within the per-minute cap. Every TrenchScanner tab in this
  * browser runs the notifier, so alerts are claimed and the cap counted in localStorage, shared by
- * them all: two open tabs open each alert once, and ten a minute is ten in total.
+ * them all: two open tabs open each alert once, and ten a minute is ten in total. The claim and the
+ * count run under a cross-tab lock where the browser has one, so two tabs nudged by the same alert
+ * can't both read the list before either writes it.
  */
-export function openChaosTabs(
+export function openChaosTabs(...args: ChaosArgs): void {
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+  if (locks) void locks.request("ts-chaos", () => openChaosTabsNow(...args));
+  else openChaosTabsNow(...args);
+}
+
+const claimKey = (c: Card) => `${c.kind}:${c.id}`;
+
+/** openChaosTabs without the lock: claims, counts and opens in one go. */
+export function openChaosTabsNow(
   cards: Card[],
   raisedAt: (c: Card) => number,
   prefs: Pick<AlertPrefs, "chaosSite" | "chaosPerMinute">,
@@ -158,9 +173,9 @@ export function openChaosTabs(
   now = Date.now(),
 ): void {
   const claimed = new Set(readList<string>(CLAIMED_KEY));
-  const mine = cards.filter((c) => !claimed.has(`${c.kind}:${c.id}`));
+  const mine = cards.filter((c) => !claimed.has(claimKey(c)) && MINT_RE.test(c.token.mintAddress));
   if (mine.length === 0) return;
-  writeList(CLAIMED_KEY, [...claimed, ...mine.map((c) => `${c.kind}:${c.id}`)].slice(-CLAIMED_KEEP));
+  writeList(CLAIMED_KEY, [...claimed, ...mine.map(claimKey)].slice(-CLAIMED_KEEP));
 
   const site =
     CHAOS_SITE_OPTIONS.find((s) => s.id === chaosSite(prefs, quickLinks)) ?? CHAOS_SITE_OPTIONS[0]!;
@@ -177,8 +192,14 @@ export function openChaosTabs(
   let opened = 0;
   for (const { card } of picks) {
     if (!openTab(site.href(card.token.mintAddress))) {
-      // Blocked: the rest would be too. Settings says how to allow pop-ups.
+      // Blocked: the rest would be too. Settings says how to allow pop-ups. Hand the unopened
+      // picks back so a tab that is allowed pop-ups can still open them while they're fresh.
       setStatus({ blockedAt: now });
+      const unopened = new Set(picks.slice(opened).map(({ card: c }) => claimKey(c)));
+      writeList(
+        CLAIMED_KEY,
+        readList<string>(CLAIMED_KEY).filter((k) => !unopened.has(k)),
+      );
       break;
     }
     stamps.push(now);

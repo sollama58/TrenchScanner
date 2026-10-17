@@ -4,7 +4,9 @@
  * since this process booted. Measurement only (audit 2026-10-14, lane 2 M2): the export can't say
  * which of these held a runner that was decided late or never.
  *
- * - `preGate5m`: the event pre-gate failed on its "last five minutes not falling" test alone.
+ * - `preGate5m`: the event pre-gate failed on its price test alone: collapsing (isCollapsing:
+ *   down 65%+ within a minute or 80%+ over five minutes), or, from an hour old, not up 25%+ over
+ *   five minutes. The key keeps its old name.
  * - `walletChecks`: the wallet checks the curator needs are not all known yet (walletChecksKnown,
  *   which has no time bound).
  * - `sniperWait`: waiting on the top-10 snipers share (sniperShareReady).

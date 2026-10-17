@@ -10,6 +10,7 @@ import {
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
+import { liveCurves } from "../liveCurve.js";
 
 /**
  * How stale a job's lastRunAt can get before we call it out - generous multiples of each job's
@@ -214,9 +215,11 @@ export async function registerHealthRoutes(
         () => false,
       );
       if (!db) return reply.code(503).send({ ok: false, db: false });
-      return { ok: true, db: true };
+      return { ok: true, db: true, liveCurves: liveCurves().stats() };
     }
-    return { ok: true };
+    // The charts' live curve tails on this instance (liveCurve.ts): curves followed, how many the
+    // chart socket covers, and that socket's traffic and estimated Helius credits since boot.
+    return { ok: true, liveCurves: liveCurves().stats() };
   });
 
   /**

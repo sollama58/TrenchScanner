@@ -98,11 +98,12 @@ describe("openChaosTabs", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   const now = 50_000_000;
+  const mint = (id: number) => `Mint${id}${"x".repeat(36)}`;
   const card = (id: number, ago: number) =>
     ({
       kind: "curated",
       id: String(id),
-      token: { mintAddress: `mint${id}` },
+      token: { mintAddress: mint(id) },
       matchedAt: new Date(now - ago).toISOString(),
     }) as unknown as Card;
   const raised = (c: Card) => Date.parse(c.matchedAt);
@@ -110,16 +111,16 @@ describe("openChaosTabs", () => {
   it("opens each alert once, on the picked site, under the cap shared by every tab", () => {
     const prefs = { chaosSite: "pumpfun" as const, chaosPerMinute: 2 };
     openChaosTabs([card(1, 3_000), card(2, 2_000), card(3, 1_000)], raised, prefs, ["terminal"], now);
-    expect(opened).toEqual(["https://pump.fun/coin/mint2", "https://pump.fun/coin/mint3"]);
+    expect(opened).toEqual([`https://pump.fun/coin/${mint(2)}`, `https://pump.fun/coin/${mint(3)}`]);
     // Another TrenchScanner tab seeing the same alerts opens nothing more.
     openChaosTabs([card(2, 2_000), card(3, 1_000)], raised, prefs, ["terminal"], now);
     // The cap holds for the rest of the minute, then frees up.
     openChaosTabs([card(4, 500)], raised, prefs, ["terminal"], now + 1_000);
     openChaosTabs([card(5, 0)], raised, prefs, ["terminal"], now + 61_000);
     expect(opened).toEqual([
-      "https://pump.fun/coin/mint2",
-      "https://pump.fun/coin/mint3",
-      "https://pump.fun/coin/mint5",
+      `https://pump.fun/coin/${mint(2)}`,
+      `https://pump.fun/coin/${mint(3)}`,
+      `https://pump.fun/coin/${mint(5)}`,
     ]);
   });
 
@@ -129,6 +130,22 @@ describe("openChaosTabs", () => {
     openChaosTabs([card(1, 1_000)], raised, prefs, ["gmgn"], now);
     block = false;
     openChaosTabs([card(2, 500)], raised, prefs, ["gmgn"], now);
-    expect(opened).toEqual(["https://gmgn.ai/sol/token/mint2"]);
+    expect(opened).toEqual([`https://gmgn.ai/sol/token/${mint(2)}`]);
+  });
+
+  it("hands a blocked alert back, so a tab allowed pop-ups can still open it", () => {
+    const prefs = { chaosSite: "pumpfun" as const, chaosPerMinute: 5 };
+    block = true;
+    openChaosTabs([card(1, 1_000)], raised, prefs, [], now);
+    block = false;
+    openChaosTabs([card(1, 1_000)], raised, prefs, [], now);
+    expect(opened).toEqual([`https://pump.fun/coin/${mint(1)}`]);
+  });
+
+  it("never opens a tab for something that isn't a mint address", () => {
+    const prefs = { chaosSite: "pumpfun" as const, chaosPerMinute: 5 };
+    const bad = { ...card(1, 1_000), token: { mintAddress: "../evil?x=1" } } as unknown as Card;
+    openChaosTabs([bad, card(2, 500)], raised, prefs, [], now);
+    expect(opened).toEqual([`https://pump.fun/coin/${mint(2)}`]);
   });
 });

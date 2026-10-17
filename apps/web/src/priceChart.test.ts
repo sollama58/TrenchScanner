@@ -34,12 +34,19 @@ describe("pointWidthMs", () => {
 describe("stitch", () => {
   const pts = (...ts: number[]) => ts.map((t) => ({ t, v: t }));
 
-  it("takes each finer run from where it starts, and the live ticks after the newest candle", () => {
+  it("takes each finer run from where it starts, and the live ticks from the newest candle's start", () => {
     const minute = { points: pts(1 * M, 2 * M, 3 * M, 4 * M), stepMs: M };
     // 15-second candles from 2:30 on: their first close is at 2:45.
     const quarter = { points: pts(2.75 * M, 3 * M, 3.25 * M), stepMs: 15_000 };
     const ticks = pts(3.1 * M, 3.5 * M, 3.6 * M);
-    expect(stitch([minute, quarter], ticks).map((p) => p.t / M)).toEqual([1, 2, 2.75, 3, 3.25, 3.5, 3.6]);
+    expect(stitch([minute, quarter], ticks).map((p) => p.t / M)).toEqual([1, 2, 2.75, 3, 3.1, 3.5, 3.6]);
+  });
+
+  it("doesn't let an open candle's close, drawn at now, hide the ticks inside it", () => {
+    // The 5:00 minute candle is open: its close so far is drawn at now (5:40).
+    const minute = { points: [...pts(4 * M, 5 * M), { t: (5 + 40 / 60) * M, v: 9 }], stepMs: M };
+    const ticks = pts(5.2 * M, 5.5 * M);
+    expect(stitch([minute], ticks).map((p) => p.t / M)).toEqual([4, 5, 5.2, 5.5]);
   });
 
   it("leaves the runs alone without finer ones", () => {

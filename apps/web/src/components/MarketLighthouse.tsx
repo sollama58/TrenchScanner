@@ -1191,9 +1191,11 @@ function PreChecks({ s }: { s: ScreenedData }) {
           <li>Under {Math.round(c.maxAgeMinutes / 60)} hours old.</li>
           <li>At least {c.minBuySharePct}% of the last hour&apos;s trades are buys.</li>
           <li>
-            Price not falling over the last 5 minutes
+            {c.collapse1mPct !== undefined && c.collapse5mPct !== undefined
+              ? `Price not collapsing (down ${c.collapse1mPct}% or more within a minute, or ${c.collapse5mPct}% or more over 5 minutes)`
+              : "Price not collapsing"}
             {c.oldCoinMin5mPct !== undefined && c.oldCoinMinAgeMinutes !== undefined
-              ? `, and up at least ${c.oldCoinMin5mPct}% once it is ${c.oldCoinMinAgeMinutes >= 60 ? `${c.oldCoinMinAgeMinutes / 60} hour${c.oldCoinMinAgeMinutes === 60 ? "" : "s"}` : `${c.oldCoinMinAgeMinutes} minutes`} old`
+              ? `; instead up at least ${c.oldCoinMin5mPct}% over 5 minutes once it is ${c.oldCoinMinAgeMinutes >= 60 ? `${c.oldCoinMinAgeMinutes / 60} hour${c.oldCoinMinAgeMinutes === 60 ? "" : "s"}` : `${c.oldCoinMinAgeMinutes} minutes`} old`
               : ""}
             .
           </li>

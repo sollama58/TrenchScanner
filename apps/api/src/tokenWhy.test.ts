@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { gateMiss, topPctOf } from "./tokenWhy.js";
+import { gateMiss, noMomentReason, topPctOf } from "./tokenWhy.js";
 
 const band = { min: 10_000, max: 500_000 };
 const ready = { marketCapUsd: 50_000, buys1h: 80, sells1h: 20, priceChange5mPct: 4, ageMinutes: 30 };
@@ -16,6 +16,18 @@ describe("gateMiss", () => {
     expect(gateMiss({ ...ready, priceChange5mPct: -3 }, band)).toBeNull();
     expect(gateMiss({ ...ready, priceChange5mPct: -85 }, band)).toMatch(/collapsing/);
     expect(gateMiss({ ...ready, ageMinutes: 90, priceChange5mPct: 5 }, band)).toMatch(/wasn't up/);
+  });
+});
+
+describe("noMomentReason", () => {
+  it("names the test a scan misses", () => {
+    expect(noMomentReason({ ...ready, marketCapUsd: 5_000 }, band)).toMatch(/outside the band/);
+  });
+  it("names both a pending moment and the unrecorded 1-minute collapse when the scan passes", () => {
+    expect(noMomentReason(ready, band)).toBe(
+      "the models hadn't reached a decision moment on it yet, or its price was collapsing within a " +
+        "minute (down 65%+), which scans don't record",
+    );
   });
 });
 

@@ -32,7 +32,7 @@ import { FoldHead } from "./Fold";
 import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfileCards";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
-import { QUICK_LINK_SITES, useAppearance } from "../appearance";
+import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, useScoreWeights } from "../scoreWeights";
 import {
@@ -200,7 +200,7 @@ const SCANNING_POLL_MS = 8_000;
 
 const LINKS = [
   { label: "DexScreener", href: (m: string) => `https://dexscreener.com/solana/${m}` },
-  { label: "Pump.fun", href: (m: string) => `https://pump.fun/coin/${m}` },
+  { label: "Pump.fun", href: pumpFunHref },
   { label: "Solscan", href: (m: string) => `https://solscan.io/token/${m}` },
 ];
 
@@ -1382,23 +1382,24 @@ export function ChartCard({
     () => (data ? viewBounds(data, shownRange, alertAt) : null),
     [data, shownRange, alertAt],
   );
-  // Finer candles where they add detail: 1-second ones for a view of minutes, 15-second for hours.
   // Finer candles where they add detail: 1-second ones for a view of minutes, 15-second ones for
   // hours - and for a short view the 1-second page doesn't reach back across (Pump.fun sends the
   // most recent 1,000 with a trade, minutes of a busy coin).
   const span = bounds ? bounds.to - bounds.from : Infinity;
   const fineOk = shownRange !== "first" && !!data?.candles?.length;
+  // Only for a view of the last minutes: the 1-second page never reaches back further, and each
+  // read spends the shared Pump.fun budget.
+  const wantSecond =
+    fineOk && !!bounds && span <= SECOND_VIEW_MAX_MS && bounds.from >= Date.now() - SECOND_VIEW_MAX_MS;
   const second = useFineCandles(
     api,
-    fineOk && span <= SECOND_VIEW_MAX_MS ? "1s" : null,
+    wantSecond ? "1s" : null,
     bounds?.live ? FINE_LIVE_POLL_MS : FINE_POLL_MS,
   );
   const secondReaches = !!second?.candles?.length && !!bounds && second.candles[0]!.t <= bounds.from + 60_000;
   const quarter = useFineCandles(
     api,
-    fineOk &&
-      span <= QUARTER_VIEW_MAX_MS &&
-      (span > SECOND_VIEW_MAX_MS || (second !== null && !secondReaches))
+    fineOk && span <= QUARTER_VIEW_MAX_MS && (!wantSecond || (second !== null && !secondReaches))
       ? "15s"
       : null,
     FINE_POLL_MS,

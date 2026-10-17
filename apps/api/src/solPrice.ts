@@ -69,7 +69,11 @@ export class SolPrice {
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** The price in USD, or null before any source has ever answered. */
+  /**
+   * The price in USD, or null before any source has ever answered. Once there is a price, a stale
+   * one is served while the refresh runs: every live chart poll waits on this, and three slow
+   * sources would otherwise hold them all for seconds.
+   */
   async get(): Promise<number | null> {
     const now = this.now();
     if (this.value && now - this.value.at < this.ttlMs) return this.value.usd;
@@ -77,7 +81,7 @@ export class SolPrice {
     this.inFlight ??= this.refresh().finally(() => {
       this.inFlight = null;
     });
-    return this.inFlight;
+    return this.value ? this.value.usd : this.inFlight;
   }
 
   /** Which source the price in use came from, for the chart's source line. */

@@ -690,9 +690,9 @@ function BaselineChart({
           </li>
           <li>
             <strong>Passes the pre-check</strong>: market cap inside the scanner&apos;s band ($10k to $1M),
-            under 6 hours old, buyers making at least 55% of the last hour&apos;s trades, price not falling
-            over the last 5 minutes (up at least 25% once a token is an hour old), and the fresh and empty
-            wallet checks done.
+            under 6 hours old, buyers making at least 55% of the last hour&apos;s trades, price not collapsing
+            (down 65% or more within a minute, or 80% or more over 5 minutes; once a token is an hour old, up
+            at least 25% over the last 5 minutes instead), and the fresh and empty wallet checks done.
           </li>
           <li>
             <strong>First time per token per hour</strong>: only the first moment a token passes counts, so a
@@ -1619,10 +1619,11 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
           </li>
           <li>
             <strong>It is a simulation, not a promise.</strong> Prices are checked about once a minute. The
-            sale at 2x and the -50% stop are assumed to fill at the level itself; in a fast dump a real stop
-            can fill lower. The trailing exit books the price actually seen under its level, since a trail
-            fires on a sharp drop by construction. Calls whose last price is unknown are left out rather than
-            guessed.
+            sales at 2x, 4x and 10x and the -50% stop are assumed to fill at the level itself; in a fast dump
+            a real stop can fill lower. The trailing exit books the price actually seen under its level, since
+            a trail fires on a sharp drop by construction. Calls whose last price is unknown are left out
+            rather than guessed. Calls graded before 17 October followed the earlier plan (half at 2x, the
+            rest trailing 35% off its high), so windows reaching back past then mix the two.
           </li>
         </ol>
         {example && live && (

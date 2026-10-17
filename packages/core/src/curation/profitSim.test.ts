@@ -51,6 +51,46 @@ const sim07 = (
 ) => simulateExitPlan(r, close, plan, cap);
 
 describe("simulateExitPlan under the default plan (35% at 2x, 30% at 4x, 25% at 10x, trail 40% from 2x)", () => {
+  it("doesn't sell the 4x rung on a run that came after the trail fired", () => {
+    // 2x, trail fires at 1.15x, then the coin runs to 5x and closes at 4.5x: too late for 4x.
+    const late = row({
+      peakBeforeStopPriceUsd: 5,
+      peak1hPriceUsd: 5,
+      trailHighPriceUsd: 2,
+      trailExitAt: at,
+      trailExitPriceUsd: 1.15,
+    });
+    expect(simulateExitPlan(late, 4.5)).toBeCloseTo((0.35 * 2 + 0.65 * 1.15 - 1) * 100, 6);
+  });
+
+  it("reaches 4x, then falls 40% off its high before 10x", () => {
+    // 35% at 2x, 30% at 4x, the last 35% out at 5 x 0.6 = 3x.
+    const r = row({
+      peakBeforeStopPriceUsd: 5,
+      peak1hPriceUsd: 5,
+      trailHighPriceUsd: 5,
+      trailExitAt: at,
+      trailExitPriceUsd: 3,
+    });
+    expect(simulateExitPlan(r, 3)).toBeCloseTo((0.35 * 2 + 0.3 * 4 + 0.35 * 3 - 1) * 100, 6);
+  });
+
+  it("closes what the trail holds at the 3-hour cap", () => {
+    const r = row({ peakBeforeStopPriceUsd: 4.5, peak1hPriceUsd: 4.5, trailHighPriceUsd: 4.5 });
+    expect(simulateExitPlan(r, 4)).toBeNull();
+    expect(exitPlanPositionOpen(r)).toBe(true);
+    expect(simulateExitPlan(r, 4, EXIT_PLAN, 3.5)).toBeCloseTo(
+      (0.35 * 2 + 0.3 * 4 + 0.35 * 3.5 - 1) * 100,
+      6,
+    );
+  });
+
+  it("closes a call that never sold at the window's close", () => {
+    const r = row({ peakBeforeStopPriceUsd: 1.6, peak1hPriceUsd: 1.6, low1hPriceUsd: 0.8 });
+    expect(exitPlanPositionOpen(r)).toBe(false);
+    expect(simulateExitPlan(r, 1.3)).toBeCloseTo(30, 6);
+  });
+
   it("a call that doubled and fell straight back still makes money", () => {
     // Trail from a 2x high sits at 1.2x: 0.35 x 2 + 0.65 x 1.2 = 1.48x.
     const back = row({
