@@ -18,6 +18,7 @@ import {
 import type { Token, TokenSnapshot } from "@prisma/client";
 import { carryHolderReadingOntoAlertRow } from "./holderListWrites.js";
 import { recordCandidateSample } from "./candidateOutcomeJob.js";
+import { curvePathOf } from "./curveTape.js";
 import { clearFilterWalletWait, filterWalletWaitOver, linkedPendingFor } from "./walletPriority.js";
 
 const logger = createLogger("match-dispatch");
@@ -344,8 +345,10 @@ export async function resolveAlertTargets(opts: {
   if (matching.length === 0) return [];
 
   // Before the cooldown read, and returning nothing rather than a reason: a held-back match must
-  // not start the cooldown, so the token can still be alerted the moment it stops flushing.
-  if (alertGuardBlocks(scored, opts.guard ?? "off") !== null) return [];
+  // not start the cooldown, so the token can still be alerted the moment it stops collapsing. The
+  // curve's reading is taken now, not at scoring: it is seconds old, and a collapse is fast.
+  const guarded = { ...scored, curvePath: curvePathOf(scored.mintAddress) };
+  if (alertGuardBlocks(guarded, opts.guard ?? "off") !== null) return [];
 
   // One round trip for every cooldown on this token, instead of one per matching filter. The
   // cooldown is per (user, filter, token), so the pair is what has to be compared - two of a

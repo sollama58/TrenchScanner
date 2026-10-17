@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  firstMinutes,
   CandleCache,
   KeyedCache,
   markedWallets,
@@ -40,6 +41,29 @@ describe("parseMcapCandles", () => {
 
   it("answers a non-array body with no candles", () => {
     expect(parseMcapCandles({ error: "nope" })).toEqual([]);
+  });
+});
+
+describe("firstMinutes", () => {
+  const k = (t: number) => ({ t, o: 1, h: 1, l: 1, c: 1, vol: 0 });
+  const launch = 1_000_000;
+
+  it("keeps the candles of the first 15 minutes from the launch", () => {
+    const candles = [k(launch + 2_000), k(launch + 60_000), k(launch + 899_000), k(launch + 900_000)];
+    expect(firstMinutes(candles, launch)?.map((c) => c.t)).toEqual([
+      launch + 2_000,
+      launch + 60_000,
+      launch + 899_000,
+    ]);
+  });
+
+  it("starts at the first candle when the launch time is unknown", () => {
+    expect(firstMinutes([k(5_000), k(5_000 + 900_000)], null)?.map((c) => c.t)).toEqual([5_000]);
+  });
+
+  it("gives null when the page no longer reaches back to the start", () => {
+    expect(firstMinutes([k(launch + 5 * 60_000)], launch)).toBeNull();
+    expect(firstMinutes([], launch)).toBeNull();
   });
 });
 
