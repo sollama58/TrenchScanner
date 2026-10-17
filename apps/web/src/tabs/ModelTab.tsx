@@ -1598,7 +1598,7 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
         <p className="small">
           <strong>
             {board.exitPlan ??
-              "Buy at the alert price, sell half at 2x, let the rest ride with a trailing exit 35% off its high, out at 3 hours, stop out at -50% before the first sale, and close a call that never sold at 30 minutes."}
+              "Buy at the alert price, sell 35% at 2x, sell 30% at 4x, sell 25% at 10x, from the first sale, let what is still held ride with a trailing exit 40% off its high, out at 3 hours, stop out at -50% before the first sale, and close a call that never sold at 30 minutes."}
           </strong>
         </p>
         <ol className="steps small">
@@ -1607,9 +1607,10 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
             detected and alerted.
           </li>
           <li>
-            <strong>Some worked calls.</strong> One that runs to 4x returns +200% (half sold at 2x, half at
-            4x). One that doubles and then falls to the stop returns +25%. One that drops to the stop first
-            returns -50%. One that ends its 30 minutes 20% up without reaching 2x returns +20%.
+            <strong>Some worked calls.</strong> One that runs to 5x and then trails out at 3x returns +195%
+            (35% sold at 2x, 30% at 4x, the rest at 3x). One that doubles and then falls straight back returns
+            +48% (the trail sells the rest at 1.2x). One that drops to the stop first returns -50%. One that
+            ends its 30 minutes 20% up without reaching 2x returns +20%.
           </li>
           <li>
             <strong>Avg profit</strong> is the average return per graded live call.{" "}

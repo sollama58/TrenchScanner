@@ -160,7 +160,7 @@ describe.skipIf(!dbAvailable)("trading routes", () => {
     // The withdrawal address is sealed into the new wallet's key.
     expect(row.withdrawTo).toBe(adminWallet);
     expect(body.bot.config.exitPlan).toBeNull();
-    expect(body.defaults.exitPlanSummary).toMatch(/sell half at 2x/);
+    expect(body.defaults.exitPlanSummary).toMatch(/sell 35% at 2x, sell 30% at 4x, sell 25% at 10x/);
     // Never anything that could open the wallet.
     expect(JSON.stringify(body)).not.toMatch(/secret|wrapped/i);
   });

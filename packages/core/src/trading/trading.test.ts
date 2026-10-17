@@ -240,10 +240,10 @@ describe("exit engine (the default plan)", () => {
     });
   });
 
-  it("sells half at 2x", () => {
+  it("sells 35% at 2x", () => {
     expect(decideExit(fresh, 2.1, at(5), EXIT_PLAN)).toMatchObject({
       action: "sell",
-      fraction: 0.5,
+      fraction: 0.35,
       all: false,
       reason: "take_profit",
       rung: 0,
@@ -254,13 +254,30 @@ describe("exit engine (the default plan)", () => {
     expect(decideExit(fresh, 1.2, at(30), EXIT_PLAN)).toMatchObject({ action: "sell", reason: "max_hold" });
   });
 
-  it("rides the rest on a trail 35% off the high, which ratchets up", () => {
-    const sold = { openedAt: opened, rungsTaken: 1, highMultiple: 2 };
+  it("sells 30% more at 4x and 25% at 10x, of the original position", () => {
+    const one = { openedAt: opened, rungsTaken: 1, highMultiple: 3 };
+    expect(decideExit(one, 4.2, at(20), EXIT_PLAN)).toMatchObject({
+      reason: "take_profit",
+      rung: 1,
+      fraction: 0.3,
+    });
+    const two = { openedAt: opened, rungsTaken: 2, highMultiple: 8 };
+    expect(decideExit(two, 10.5, at(30), EXIT_PLAN)).toMatchObject({
+      reason: "take_profit",
+      rung: 2,
+      fraction: 0.25,
+      all: false,
+    });
+    expect(ladderSoldFraction(EXIT_PLAN, 3)).toBeCloseTo(0.9);
+  });
+
+  it("rides what is held on a trail 40% off the high, which ratchets up", () => {
+    const sold = { openedAt: opened, rungsTaken: 2, highMultiple: 4 };
     const up = decideExit(sold, 5, at(40), EXIT_PLAN);
     expect(up).toEqual({ action: "hold", highMultiple: 5 });
-    // 5x high: the level is 3.25x.
-    expect(decideExit({ ...sold, highMultiple: 5 }, 3.3, at(41), EXIT_PLAN).action).toBe("hold");
-    expect(decideExit({ ...sold, highMultiple: 5 }, 3.2, at(41), EXIT_PLAN)).toMatchObject({
+    // 5x high: the level is 3x.
+    expect(decideExit({ ...sold, highMultiple: 5 }, 3.05, at(41), EXIT_PLAN).action).toBe("hold");
+    expect(decideExit({ ...sold, highMultiple: 5 }, 2.95, at(41), EXIT_PLAN)).toMatchObject({
       action: "sell",
       all: true,
       reason: "trailing_stop",
@@ -269,7 +286,8 @@ describe("exit engine (the default plan)", () => {
 
   it("does not stop out below -50% after the sale (the trail owns the rest), and closes at 3 hours", () => {
     const sold = { openedAt: opened, rungsTaken: 1, highMultiple: 2 };
-    expect(decideExit(sold, 1.25, at(60), EXIT_PLAN)).toMatchObject({ reason: "trailing_stop" });
+    expect(decideExit(sold, 1.25, at(60), EXIT_PLAN).action).toBe("hold");
+    expect(decideExit(sold, 1.2, at(60), EXIT_PLAN)).toMatchObject({ reason: "trailing_stop" });
     expect(decideExit(sold, 1.9, at(180), EXIT_PLAN)).toMatchObject({ reason: "trail_max_hold" });
   });
 
