@@ -2885,6 +2885,52 @@ model KolPossibleSide {
   @@index([kolWallet])
 }
 
+/// A wallet the Side Wallet Checker reads as a bot (user ask 2026-10-17: the Admin Wallets section's
+/// "Bots and removed sides" view), written each hour by the worker's kolSideWalletsJob.ts: marked by
+/// hand (core's MARKED_BOT_WALLETS), a bot by its share of every tracked coin (SIDE_BOT_MIN_COINS,
+/// SIDE_BOT_SHARE) or a likely bot matched with four or more KOLs (SIDE_LIKELY_BOT_*). Kept 30 days
+/// past the last run that read it as one. Shown only.
+model SideWalletBot {
+  wallet      String   @id
+  /// "marked", "bot" or "likelyBot": the first that fits, in that order.
+  reason      String
+  /// Tracked coins it bought in the last 30 days, and that over every tracked coin's count; null
+  /// when it shared too few coins with any KOL to be read (a marked wallet).
+  coins30d    Int?
+  coinShare   Float?
+  /// The KOLs it bought alongside often enough to reach their lists, before bots were taken off.
+  kols        String[]
+  firstSeenAt DateTime @default(now())
+  /// The last hourly run that read it as a bot.
+  computedAt  DateTime
+
+  @@index([computedAt])
+}
+
+/// A KOL side label taken from a wallet, or kept from it, because the wallet is a bot or a service
+/// wallet (user ask 2026-10-17, shown beside SideWalletBot). "held": a KolPossibleSide label it
+/// carried was deleted; otherwise it met a label tier in a run but bots get no label. Written by the
+/// worker's kolSideWalletsJob.ts, kept POSSIBLE_SIDE_HOLD_DAYS past lastAt. Shown only.
+model KolSideLabelRemoval {
+  wallet    String
+  kolWallet String
+  /// "marked", "bot", "likelyBot" or "service".
+  reason    String
+  held      Boolean
+  /// The label's figures, as KolPossibleSide has them.
+  pct       Float
+  shared    Int
+  kolCoins  Int
+  hours     Int
+  transfers Int      @default(0)
+  firstAt   DateTime @default(now())
+  /// The last run that removed or withheld it.
+  lastAt    DateTime
+
+  @@id([wallet, kolWallet])
+  @@index([lastAt])
+}
+
 /// One transfer of a coin from one of its top holders to another (user ask 2026-10-16), as the
 /// scan read it (core's wallets/holderTransfers.ts), kept when it links the two (core's
 /// linkingTransfers: no dust, no exchange or hot wallet). Read across coins for the KOL Possible

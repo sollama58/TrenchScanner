@@ -6548,6 +6548,29 @@ html:has(dialog.about-modal[open]) {
 .stats-modal {
   width: min(680px, calc(100vw - 32px));
 }
+/* Admin › Wallets › "Bots and removed sides" (tabs/AdminSideBots.tsx) */
+.admin-wallets-tools {
+  justify-content: flex-end;
+}
+.side-bots-modal {
+  width: min(1200px, calc(100vw - 32px));
+}
+.side-bots-filters {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.side-bots-filters .side-search {
+  flex: 1;
+  min-width: 180px;
+  margin: 0;
+}
+.side-bots-removals {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
 .stats-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;

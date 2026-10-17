@@ -3,6 +3,7 @@ import { usePolling } from "../hooks";
 import { MIN_WIN_SOL, pct } from "../format";
 import { useWalletNames } from "../walletNames";
 import { Kpi, Load, Panel, Table, Tag, Wallet, n, when } from "./adminShared";
+import { SideBotsModal } from "./AdminSideBots";
 
 /**
  * The Admin "Wallets" section (apps/api/src/routes/adminWallets.ts): every wallet's risk score,
@@ -108,6 +109,7 @@ export function WalletsAdmin() {
   const q = usePolling<Overview>("/admin/wallets?limit=50", 120_000);
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState<string | null>(null);
+  const [botsOpen, setBotsOpen] = useState(false);
   // One read names both tables (the riskiest and the winning wallets).
   const names = useWalletNames(
     useMemo(() => [...(q.data?.wallets ?? []), ...(q.data?.winners ?? [])].map((w) => w.wallet), [q.data]),
@@ -119,6 +121,12 @@ export function WalletsAdmin() {
   };
   return (
     <div className="stack">
+      <div className="row admin-wallets-tools">
+        <button type="button" className="ghost small-btn" onClick={() => setBotsOpen(true)}>
+          Bots and removed sides
+        </button>
+      </div>
+      <SideBotsModal open={botsOpen} onClose={() => setBotsOpen(false)} />
       <Load q={q}>
         {(r) => (
           <div className="stack">
