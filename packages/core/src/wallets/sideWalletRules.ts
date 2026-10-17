@@ -36,6 +36,13 @@ export const SIDE_BOT_SHARE = 0.5;
 export const SIDE_LIKELY_BOT_MIN_KOLS = 4;
 export const SIDE_LIKELY_BOT_PCT = 60;
 export const SIDE_LIKELY_BOT_MIN_SHARED = 50;
+/**
+ * A wallet that bought at least this share of its own 7-day coins alongside one KOL is that KOL's,
+ * not a copy-trade bot, however many other KOLs it also matches (user ask 2026-10-17: Cupsey's side
+ * wallets were read as likely bots and lost their labels). A bot following every KOL spreads its
+ * buys; a side wallet buys what its owner buys.
+ */
+export const SIDE_LOYAL_SHARE = 0.7;
 
 /**
  * Wallets marked as bots by hand (user ask 2026-10-15): treated as likely bots whatever their
@@ -56,18 +63,23 @@ export const POSSIBLE_SIDE_TIERS = [
   { hours: 24, minPct: 100, minShared: 10 },
   { hours: 48, minPct: 90, minShared: 25 },
   { hours: 72, minPct: 80, minShared: 50 },
+  // User ask 2026-10-17: over 7 days, 70% on 100+ coins or 65% on 200+.
+  { hours: 168, minPct: 70, minShared: 100 },
+  { hours: 168, minPct: 65, minShared: 200 },
 ] as const;
 export type SideTierHours = (typeof POSSIBLE_SIDE_TIERS)[number]["hours"];
 
-/** A possible-side label stays this many days past the last hourly run the wallet met a tier. */
+/** A possible-side label stays this many days past the last hourly run the wallet met any tier. */
 export const POSSIBLE_SIDE_HOLD_DAYS = 90;
 
 /**
  * The version of the label rules above (KolPossibleSide.rulesVersion). The hold keeps only labels
  * earned under these rules: one stored under an older version is dropped on the next run and comes
  * back only if the wallet qualifies again (user ask 2026-10-14: labels from the old cutoffs lingered).
- * Bump it whenever POSSIBLE_SIDE_TIERS or the bot cutoffs change. 1: the 2026-10-14 cutoffs. 2: the
- * bot share at 50% (2026-10-17).
+ * Bump it only when a tier gets stricter: a bump drops every held label that doesn't qualify on the
+ * next run. A new or looser tier needs none, and neither do the bot cutoffs, since a wallet read as a
+ * bot loses its labels on every run anyway (2026-10-17: bump 2 for the bot share cleared held labels
+ * of real side wallets). 1: the 2026-10-14 cutoffs. 2: the bot share at 50% (2026-10-17).
  */
 export const POSSIBLE_SIDE_RULES_VERSION = 2;
 
@@ -77,7 +89,7 @@ export interface SideWalletRules {
   minShared: Record<SideWindow, number>;
   minPct: number;
   bot: { minCoins: number; minPct: number; days: number };
-  likelyBot: { minKols: number; minPct: number; minShared: number; window: SideWindow };
+  likelyBot: { minKols: number; minPct: number; minShared: number; window: SideWindow; loyalPct: number };
   tiers: { hours: number; minPct: number; minShared: number }[];
   holdDays: number;
 }
@@ -93,6 +105,7 @@ export function sideWalletRules(): SideWalletRules {
       minPct: SIDE_LIKELY_BOT_PCT,
       minShared: SIDE_LIKELY_BOT_MIN_SHARED,
       window: "7d",
+      loyalPct: SIDE_LOYAL_SHARE * 100,
     },
     tiers: POSSIBLE_SIDE_TIERS.map((t) => ({ ...t })),
     holdDays: POSSIBLE_SIDE_HOLD_DAYS,

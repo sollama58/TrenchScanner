@@ -54,7 +54,7 @@ export interface SideRules {
   minShared: Record<SideWindow, number>;
   minPct: number;
   bot: { minCoins: number; minPct: number; days: number };
-  likelyBot?: { minKols: number; minPct: number; minShared: number; window: SideWindow };
+  likelyBot?: { minKols: number; minPct: number; minShared: number; window: SideWindow; loyalPct?: number };
   tiers: { hours: number; minPct: number; minShared: number }[];
   holdDays: number;
 }
@@ -65,11 +65,13 @@ const DEFAULT_RULES: SideRules = {
   minShared: { "24h": 5, "7d": 15, "30d": 25 },
   minPct: 50,
   bot: { minCoins: 200, minPct: 50, days: 30 },
-  likelyBot: { minKols: 4, minPct: 60, minShared: 50, window: "7d" },
+  likelyBot: { minKols: 4, minPct: 60, minShared: 50, window: "7d", loyalPct: 70 },
   tiers: [
     { hours: 24, minPct: 100, minShared: 10 },
     { hours: 48, minPct: 90, minShared: 25 },
     { hours: 72, minPct: 80, minShared: 50 },
+    { hours: 168, minPct: 70, minShared: 100 },
+    { hours: 168, minPct: 65, minShared: 200 },
   ],
   holdDays: 90,
 };
@@ -485,7 +487,7 @@ function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels
         </h3>
         <ul className="side-tiers">
           {rules.tiers.map((t) => (
-            <li key={t.hours}>
+            <li key={`${t.hours}-${t.minShared}`}>
               <strong className="num">{t.minPct === 100 ? "All" : `${t.minPct}%+`}</strong>
               <span className="num">{t.minShared}+ coins</span>
               <span className="faint num">{spanText(t.hours)}</span>
@@ -509,6 +511,9 @@ function SideRulesCard({ rules, labels }: { rules: SideRules; labels: SideLabels
           <p className="small">
             <strong>Probable bots:</strong> over {rules.likelyBot.minShared} coins at over{" "}
             {rules.likelyBot.minPct}% with each of {rules.likelyBot.minKols}+ KOLs in {rules.likelyBot.window}
+            {rules.likelyBot.loyalPct
+              ? `, unless ${rules.likelyBot.loyalPct}%+ of its own coins were bought alongside one of them`
+              : ""}
             .
           </p>
         )}

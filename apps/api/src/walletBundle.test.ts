@@ -51,12 +51,12 @@ describe("bundleLists", () => {
 
 describe("bundleLabels", () => {
   it("names the wallets meeting a Possible Side tier, strongest first, bots and excluded left out", () => {
-    const row = (side: string, s24: number, s48: number, s72: number): BundlePairRow => ({
+    const row = (side: string, s24: number, s48: number, s72: number, s7 = s72): BundlePairRow => ({
       side,
       s24,
       s48,
       s72,
-      s7: s72,
+      s7,
       s30: s72,
       g24: 0,
       g7: 0,
@@ -68,16 +68,18 @@ describe("bundleLabels", () => {
         row("all10", 10, 10, 10), // 100% of 10 coins over 24 hours
         row("nine", 9, 9, 9), // under ten
         row("two-days", 4, 27, 27), // 27 of 30 over 48 hours is 90%
+        row("week", 5, 20, 40, 105), // 105 of 150 over 7 days is 70%
         row("bot", 10, 10, 10),
         row("cex", 10, 10, 10),
       ],
-      { 24: 10, 48: 30, 72: 60 },
+      { 24: 10, 48: 30, 72: 60, 168: 150 },
       new Set(["cex"]),
       new Set(["bot"]),
     );
     expect(labels).toEqual([
       { wallet: "all10", pct: 100, shared: 10, coins: 10, hours: 24, name: "7xKXtg_1" },
       { wallet: "two-days", pct: 90, shared: 27, coins: 30, hours: 48, name: "7xKXtg_2" },
+      { wallet: "week", pct: 70, shared: 105, coins: 150, hours: 168, name: "7xKXtg_3" },
     ]);
   });
 });
