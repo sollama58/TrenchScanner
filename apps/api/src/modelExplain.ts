@@ -43,6 +43,9 @@ import {
   type StoredEvalMetrics,
   type TopSliceCuratorParams,
   type TrainedCuratorParams,
+  gatesById,
+  loadModelGates,
+  passesModelGateOnFeatures,
 } from "@trenchscanner/core";
 import { contestState } from "./contest.js";
 
@@ -472,6 +475,8 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
   const sample = sampleRows.map((r) => asFeatures(r.features)).filter((f): f is Features => f !== null);
   const deepRead = sample.filter((f) => f.nsDepthFull === 1);
   const names = new Map(state.roster.map((c) => [c.id, c.name]));
+  // The gated seats (Gems) are read on the moments their frozen filter lets through.
+  const gates = state.roster.some((c) => c.gate !== undefined) ? gatesById(await loadModelGates()) : {};
 
   // Learners first: the combiners read their probabilities on the same moments.
   const probabilities = new Map<string, Float64Array>();
@@ -557,6 +562,7 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
     if (isLearnerParams(params)) {
       // The narrative seats decide only on moments that carry TokenSage's deep read.
       const narrative = spec.role === "narrative";
+      const gate = spec.gate !== undefined ? gates[spec.gate] : undefined;
       const acc = accumulator();
       const probs = new Float64Array(sample.length);
       for (let i = 0; i < sample.length; i++) probs[i] = scoreCandidateWithModel(params, sample[i]!);
@@ -564,6 +570,7 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
       for (let i = 0; i < sample.length; i++) {
         const f = sample[i]!;
         if (narrative && f.nsDepthFull !== 1) continue;
+        if (gate && !passesModelGateOnFeatures(f, gate)) continue;
         addContributions(acc, featureContributions(params, f), probs[i]! >= cutoff);
       }
       if (spec.role === "learner") probabilities.set(spec.id, probs);

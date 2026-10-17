@@ -826,6 +826,21 @@ model TopModelsPick {
   pickedAt  DateTime @default(now())
 }
 
+/// A saved filter's criteria, frozen, that a model seat must see a token pass before it considers it
+/// (core curation/modelGate.ts, ContestantSpec.gate). Written once from the filter as it stood; later
+/// edits to the filter don't reach it.
+model ModelGate {
+  /// The gate id a seat names (e.g. "gemerald" for Gems).
+  id                      String    @id
+  /// The filter's criteria columns, as FilterCriteria.
+  criteria                Json
+  sourceFilterId          String
+  sourceFilterName        String
+  /// The source filter's criteriaChangedAt when it was copied: when those settings were last edited.
+  sourceCriteriaChangedAt DateTime?
+  frozenAt                DateTime  @default(now())
+}
+
 model CuratorLane {
   id            String    @id @default(cuid())
   slot          String
