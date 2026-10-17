@@ -238,7 +238,11 @@ export async function readTokenSageUsage(
     return { configured: false, error: null, sources: [], helius: null };
   }
   const trimmed = env.TOKENSAGE_API_URL.trim().replace(/\/+$/, "");
-  const base = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  // As TokenSageClient does: an http:// URL would send the key in cleartext (and a redirect to
+  // https drops the header), so it is upgraded, except for a local TokenSage.
+  const base = /^https?:\/\//i.test(trimmed)
+    ? trimmed.replace(/^http:\/\/(?!localhost|127\.0\.0\.1)/i, "https://")
+    : `https://${trimmed}`;
   const opts = {
     headers: { authorization: `Bearer ${key}` },
     timeoutMs: 6_000,

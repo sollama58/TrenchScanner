@@ -61,10 +61,9 @@ const logger = createLogger("tokensage");
  */
 
 /**
- * At least NOT_FOUND_COOLDOWN_MS: TokenSage answers a whole batch 404/422 for up to 10 minutes
- * after one of its mints' jobs failed definitively, and the culprit is found by its pending
- * entry's job id (see checkEndedJob). Dropping the entry sooner than that window left the chunk
- * refused with nothing to look up.
+ * At least NOT_FOUND_COOLDOWN_MS: TokenSage answers a mint with its failed job for up to 10
+ * minutes after that job failed, so a pending entry dropped sooner would only be asked again
+ * into the same answer.
  */
 const PENDING_GIVE_UP_MS = 11 * 60_000;
 const PAUSE_AFTER_REFUSAL_MS = 60_000;
@@ -115,8 +114,7 @@ const settled = new Map<string, Settled>();
 /**
  * Mints whose last analysis failed without a definitive reason (or that weren't on-chain yet),
  * left alone until the time stored. TokenSage answers any request within 10 minutes of a failed
- * job with that failure, so asking sooner only wastes a request - and for a definitive failure
- * it answers the whole batch 404/422 (see send), so the margin matters.
+ * job with that failure, so asking sooner only wastes a request.
  */
 const notFoundUntil = new Map<string, number>();
 const NOT_FOUND_COOLDOWN_MS = 11 * 60_000;
@@ -310,7 +308,7 @@ export function noteLaunchNarratives(launches: LaunchSighting[], env: Env, now =
       l.mintAddress,
       "basic",
       env,
-      tokenSageHints({ ...l, firstSeenAt: l.createdAt ?? null }),
+      tokenSageHints({ ...l, launchedAt: l.createdAt ?? null }),
       { launch: true },
     );
   }
@@ -473,9 +471,11 @@ async function storeFailure(mintAddress: string, depth: TokenSageDepth, reason: 
 async function noteFailure(mint: string, depth: TokenSageDepth, error: unknown): Promise<void> {
   pending.delete(mint);
   const reason = typeof error === "string" && error.trim() !== "" ? error : "analysis failed";
-  const code = reason.split(":")[0]!.trim().toLowerCase();
+  // Matched by prefix: a batch item's error is "<code>: <detail>", and an older TokenSage sent
+  // a dead worker as "worker died; retried automatically after ..." with no colon at all.
+  const head = reason.trim().toLowerCase();
   const tries = (failCounts.get(mint) ?? 0) + 1;
-  if (DEFINITIVE_FAILURES.includes(code) || tries >= MAX_TRANSIENT_FAILURES) {
+  if (DEFINITIVE_FAILURES.some((c) => head.startsWith(c)) || tries >= MAX_TRANSIENT_FAILURES) {
     await storeFailure(mint, depth, reason);
     return;
   }
@@ -635,51 +635,62 @@ async function send(api: TokenSageClient, env: Env, now: number): Promise<void> 
     full: byTier(resend.full, byDepth.full),
     basic: byTier(resend.basic, byDepth.basic),
   };
+  // Halves of a refused chunk (see the 404/422 below), sent before anything else and outside
+  // the batch budget: a refused request starts no job, and splitting has to finish within the
+  // flush, or the next one would build the same chunk and be refused again.
+  const splits: Record<TokenSageDepth, Entry[][]> = { full: [], basic: [] };
   let batches = env.TOKENSAGE_MAX_BATCHES_PER_CYCLE;
   let jobChecks = MAX_JOB_CHECKS_PER_FLUSH;
   let turn: TokenSageDepth = "full";
-  while (batches > 0 && (lists.full.length > 0 || lists.basic.length > 0)) {
-    const depth: TokenSageDepth = lists[turn].length > 0 ? turn : turn === "full" ? "basic" : "full";
-    turn = depth === "full" ? "basic" : "full";
-    const chunk = lists[depth].slice(0, TOKENSAGE_PREFETCH_CHUNK);
-    lists[depth] = lists[depth].slice(TOKENSAGE_PREFETCH_CHUNK);
-    batches -= 1;
+  for (;;) {
+    const split: TokenSageDepth | null =
+      splits.full.length > 0 ? "full" : splits.basic.length > 0 ? "basic" : null;
+    let depth: TokenSageDepth;
+    let chunk: Entry[];
+    if (split) {
+      depth = split;
+      chunk = splits[split].shift()!;
+    } else {
+      if (batches <= 0 || (lists.full.length === 0 && lists.basic.length === 0)) break;
+      depth = lists[turn].length > 0 ? turn : turn === "full" ? "basic" : "full";
+      turn = depth === "full" ? "basic" : "full";
+      chunk = lists[depth].slice(0, TOKENSAGE_PREFETCH_CHUNK);
+      lists[depth] = lists[depth].slice(TOKENSAGE_PREFETCH_CHUNK);
+      batches -= 1;
+    }
     let result;
     try {
       result = await api.batch(chunk, depth);
     } catch (err) {
       if (!(err instanceof HttpError) || (err.status !== 404 && err.status !== 422)) throw err;
-      // TokenSage answers the whole batch 404/422 when one re-sent mint's job failed
-      // definitively (token_not_found, not_pumpfun, ...) in the last 10 minutes. Find it by
-      // reading the queued mints' jobs, so the next batch goes through.
+      // TokenSage answers a definitive failure (token_not_found, not_pumpfun, ...) as that
+      // item's own status, so a whole batch refused 404/422 means one entry failed validation
+      // (a hint past its limits). The chunk is split and the halves sent ahead, so the other
+      // mints still go through and the offending one ends up alone; only it is left out.
       stats.errors += 1;
       stats.lastStatus = err.status;
-      let culprits = 0;
-      for (const e of chunk) {
-        const p = pending.get(e.ca);
-        if (p?.jobId === undefined || jobChecks <= 0) continue;
-        jobChecks -= 1;
-        if (await checkEndedJob(api, e.ca, p, p.jobId)) culprits += 1;
+      if (chunk.length > 1) {
+        const half = Math.ceil(chunk.length / 2);
+        splits[depth].unshift(chunk.slice(0, half), chunk.slice(half));
+        continue;
       }
-      if (culprits === 0) {
-        // No queued job to blame (the culprit's pending entry is gone, or there were more
-        // than this flush could look up): the chunk's never-sent mints would otherwise be
-        // re-sent, and refused, every flush for the rest of TokenSage's window, holding up
-        // every other read behind them. Left alone for one window instead; the queued ones
-        // keep their place, since re-sending those is what finds the culprit.
-        const now = Date.now();
-        const cooled: string[] = [];
-        for (const e of chunk) {
-          if (pending.has(e.ca)) continue;
-          wanted.delete(e.ca);
-          rememberNotFound(e.ca, now + NOT_FOUND_COOLDOWN_MS);
-          cooled.push(e.ca);
-        }
-        logger.warn("TokenSage refused a batch with no culprit found; cooling its unsent mints", {
+      const e = chunk[0]!;
+      const p = pending.get(e.ca);
+      let ended = false;
+      if (p?.jobId !== undefined && jobChecks > 0) {
+        // an older TokenSage refused the whole batch for a queued mint whose job failed
+        jobChecks -= 1;
+        ended = await checkEndedJob(api, e.ca, p, p.jobId);
+      }
+      if (!ended) {
+        // Re-sent as it is, it would be refused every flush: left alone for one window.
+        pending.delete(e.ca);
+        wanted.delete(e.ca);
+        rememberNotFound(e.ca, Date.now() + NOT_FOUND_COOLDOWN_MS);
+        logger.warn("TokenSage refused one mint's request; leaving it out for a while", {
           status: err.status,
           depth,
-          chunk: chunk.length,
-          cooled: cooled.length,
+          mint: e.ca,
         });
       }
       continue;

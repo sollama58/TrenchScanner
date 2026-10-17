@@ -21,6 +21,7 @@ const item = (ca: string, asOf: string, status = "complete") => ({
     story: "Moo Deng",
     story_kind: "referent",
     status: "ok",
+    as_of: asOf,
     coins: 2,
     leader: { mint: "LEADER", mcap_usd: 9e7, change_1h_pct: -4, peak_minutes_ago: 30 },
     wave_volume_1h_usd: 1e6,
