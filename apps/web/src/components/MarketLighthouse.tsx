@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type PointerEvent } from "react";
 import type { LighthouseCount, LighthouseSignals, LighthouseTally, MarketLighthouse } from "../api";
 import { usePolling } from "../hooks";
 import { lighthousePath } from "../routes";
@@ -90,7 +90,7 @@ function LighthouseWindow({ base, days }: { base: string; days: Days }) {
   return (
     <div className={`stack lh-content${q.stale ? " stale" : ""}`} aria-busy={q.stale}>
       {d.safetyScreen && <SafetyGauge s={d.safetyScreen} span={span} days={days} />}
-      <Screened s={d.screened} span={span} days={days} />
+      <Screened s={d.screened} span={span} days={days} since={d.window.since} />
       <h3 className="lh-part">
         What TokenSage sees
         <span className={`lh-pill ${d.tokenSage.on ? "on" : "off"}`}>
@@ -475,9 +475,13 @@ function Donut({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) 
   const gap = parts.length > 1 ? 1.6 : 0;
   let offset = 0;
   const focus = parts.find((p) => p.label === hover) ?? parts[0]!;
+  // A tap keeps its pick when the finger lifts; only a mouse moving off clears it.
+  const leave = (e: PointerEvent) => {
+    if (e.pointerType === "mouse") setHover(null);
+  };
   return (
     <div className="lh-donut">
-      <svg viewBox="0 0 100 100" role="img" aria-label="Narrative mix" onMouseLeave={() => setHover(null)}>
+      <svg viewBox="0 0 100 100" role="img" aria-label="Narrative mix" onPointerLeave={leave}>
         <circle cx="50" cy="50" r={r} className="lh-donut-track" />
         {parts.map((p) => {
           const len = (p.n / total) * c;
@@ -492,7 +496,8 @@ function Donut({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) 
               strokeDasharray={`${dash} ${c - dash}`}
               strokeDashoffset={-offset}
               transform="rotate(-90 50 50)"
-              onMouseEnter={() => setHover(p.label)}
+              onPointerEnter={() => setHover(p.label)}
+              onPointerDown={() => setHover(p.label)}
             />
           );
           offset += len;
@@ -510,8 +515,9 @@ function Donut({ d, cls }: { d: MarketLighthouse; cls: (l: string) => string }) 
           <li
             key={p.label}
             className={hover === p.label ? "is-hover" : ""}
-            onMouseEnter={() => setHover(p.label)}
-            onMouseLeave={() => setHover(null)}
+            onPointerEnter={() => setHover(p.label)}
+            onPointerDown={() => setHover(p.label)}
+            onPointerLeave={leave}
           >
             <span className={`lh-swatch ${cls(p.label)}`} />
             <span className="lh-donut-label">{words(p.label)}</span>
@@ -717,15 +723,55 @@ function screenedBucketLabel(iso: string, bucketHours: number) {
   return t.toLocaleTimeString([], { hour: "numeric", minute: halfHour(t) });
 }
 
+type ScreenedBucket = ScreenedData["byBucket"][number];
+
+/**
+ * The window's buckets with none missing: the API sends only buckets that hold a token, so every
+ * bucket start from the window's first to the newest is filled in, an empty one with nothing
+ * graded. The chart's columns then stay evenly spaced in time, with a gap where nothing was.
+ */
+export function fillBuckets(
+  rows: readonly ScreenedBucket[],
+  bucketHours: number,
+  since: string,
+  now = Date.now(),
+): ScreenedBucket[] {
+  const step = bucketHours * 3_600_000;
+  if (!(step > 0)) return [...rows];
+  const byStart = new Map(rows.map((b) => [Date.parse(b.at), b]));
+  const starts = [...byStart.keys()];
+  const sinceMs = Date.parse(since);
+  const first = Math.min(...starts, Number.isFinite(sinceMs) ? Math.floor(sinceMs / step) * step : Infinity);
+  const last = Math.max(...starts, Math.floor(now / step) * step);
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return [...rows];
+  const out: ScreenedBucket[] = [];
+  for (let t = first; t <= last; t += step) {
+    out.push(
+      byStart.get(t) ?? {
+        at: new Date(t).toISOString(),
+        graded: 0,
+        hit2xPct: null,
+        hit4xPct: null,
+        hit10xPct: null,
+        avgReturnPct: null,
+      },
+    );
+  }
+  return out;
+}
+
 /**
  * How every token that cleared the pre-checks did from its decision moment: hit rates per tier
  * and the average return under the fixed exit plan, overall and per bucket. One axis per chart:
  * the rates share a 0-100% scale, the return gets its own chart around zero.
  */
-function Screened({ s, span, days }: { s: ScreenedData; span: string; days: number }) {
+function Screened({ s, span, days, since }: { s: ScreenedData; span: string; days: number; since: string }) {
   const [hover, setHover] = useState<number | null>(null);
   const [explain, setExplain] = useState(false);
-  const buckets = s.byBucket.filter((b) => b.graded > 0);
+  // Empty buckets stay in as gaps, so the axis is linear in time (dropping them squeezed a quiet
+  // night out of the chart, and a reader couldn't tell it had been there).
+  const buckets = fillBuckets(s.byBucket, s.bucketHours, since);
+  const anyGraded = buckets.some((b) => b.graded > 0);
   const per = s.bucketHours >= 24 ? "day" : `${s.bucketHours} hours`;
   const change = pricingChangeSlot(
     buckets.map((b) => Date.parse(b.at)),
@@ -749,7 +795,9 @@ function Screened({ s, span, days }: { s: ScreenedData; span: string; days: numb
   const top = Math.ceil(rateMax / 10) * 10;
   const retAbs = Math.max(5, ...buckets.map((b) => Math.abs(b.avgReturnPct ?? 0)));
   const latest = buckets.length - 1;
-  const shown = hover !== null && hover <= latest ? hover : latest;
+  // With nothing hovered the readout shows the newest bucket that has something graded.
+  const newest = buckets.reduce((at, b, i) => (b.graded > 0 ? i : at), latest);
+  const shown = hover !== null && hover <= latest ? hover : newest;
   const focus = buckets[shown];
   const summary = `A token counts once it passes the safety screen (authorities renounced, liquidity locked, not Mayhem Mode, no more than ${s.checks.freshWalletMaxPct}% fresh, under ${s.checks.emptyWalletRejectPct}% empty and under ${s.checks.sniperWalletRejectPct ?? 80}% launch-sniper top-10 wallets, top 10 owning under ${s.checks.top10HolderRejectPct ?? 40}%, no single holder over ${s.checks.largestHolderMaxPct ?? 10}%, under ${s.checks.linkedRejectCount ?? 20} of the top 25 linked and under ${s.checks.cexFundedRejectCount ?? 21} funded from an exchange${(s.checks.minPreBondSeconds ?? 5) > 0 ? `, bonding curve not filled inside ${s.checks.minPreBondSeconds ?? 5}s of launch` : ""}) and looks ready to decide on.`;
 
@@ -809,7 +857,7 @@ function Screened({ s, span, days }: { s: ScreenedData; span: string; days: numb
         </div>
       </div>
 
-      {buckets.length === 0 ? (
+      {!anyGraded ? (
         <p className="muted small">No screened tokens have been graded in this window yet.</p>
       ) : (
         <div className="lh-screened-charts" onMouseLeave={() => setHover(null)}>
@@ -855,13 +903,17 @@ function Screened({ s, span, days }: { s: ScreenedData; span: string; days: numb
                   onMouseEnter={() => setHover(i)}
                   onClick={() => setHover(i)}
                 >
-                  {TIERS.map((t) => (
-                    <span
-                      key={t.key}
-                      className={`lh-gbar ${t.cls}`}
-                      style={{ height: `${Math.max(0.5, ((b[t.key] ?? 0) / top) * 100)}%` }}
-                    />
-                  ))}
+                  {TIERS.map((t) => {
+                    // An empty bucket keeps its place with no bar, rather than a sliver that reads as 0%.
+                    const v = b[t.key];
+                    return (
+                      <span
+                        key={t.key}
+                        className={`lh-gbar ${t.cls}`}
+                        style={v === null ? undefined : { height: `${Math.max(0.5, (v / top) * 100)}%` }}
+                      />
+                    );
+                  })}
                 </div>
               ))}
             </div>
@@ -901,11 +953,15 @@ function Screened({ s, span, days }: { s: ScreenedData; span: string; days: numb
             </div>
           </div>
           <div className="lh-axis lh-axis-inset" aria-hidden>
-            {buckets.map((b, i) => (
-              <span key={b.at}>
-                {i % Math.ceil(buckets.length / 7) === 0 ? screenedBucketLabel(b.at, s.bucketHours) : ""}
-              </span>
-            ))}
+            {buckets.map((b) => {
+              // Up to about seven labels on bucket starts that are whole multiples of the label
+              // step, so they fall at the same clock times whatever the window's first bucket.
+              const every = Math.ceil(buckets.length / 7);
+              const k = Math.round(Date.parse(b.at) / (s.bucketHours * 3_600_000));
+              return (
+                <span key={b.at}>{k % every === 0 ? screenedBucketLabel(b.at, s.bucketHours) : ""}</span>
+              );
+            })}
           </div>
         </div>
       )}
@@ -961,6 +1017,9 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
   const [hover, setHover] = useState<number | null>(null);
   const clock = localClock();
   const shift = !h.timeZone || h.timeZone === "UTC" ? clock.offsetHours : 0;
+  // Hours the API grouped in the reader's zone start on the hour. Only UTC hours shifted onto the
+  // local clock start minutes past it (05:30 in Kolkata), and then only if the API sent UTC.
+  const minutes = !h.timeZone || h.timeZone === "UTC" ? clock.minutes : 0;
   // Column i is local hour i, holding the API hour that falls on it.
   const hours = Array.from({ length: 24 }, (_, local) => {
     const from = (((local - shift) % 24) + 24) % 24;
@@ -991,7 +1050,7 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
       </p>
       <div className="lh-readout" aria-live="polite">
         <strong>
-          {hourLabel(focus.hour, clock.minutes)}–{hourLabel(focus.hour + 1, clock.minutes)} {clock.name}
+          {hourLabel(focus.hour, minutes)}–{hourLabel(focus.hour + 1, minutes)} {clock.name}
         </strong>
         <span className="num">{focus.calls.toLocaleString()} screened</span>
         <span className="lh-readout-item">
@@ -1076,7 +1135,9 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
       </div>
       <div className="lh-axis lh-axis-inset" aria-hidden>
         {hours.map((x) => (
-          <span key={x.hour}>{x.hour % 3 === 0 ? `${x.hour}h` : ""}</span>
+          <span key={x.hour}>
+            {x.hour % 3 === 0 ? (minutes ? hourLabel(x.hour, minutes) : `${x.hour}h`) : ""}
+          </span>
         ))}
       </div>
     </div>

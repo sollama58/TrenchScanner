@@ -69,6 +69,8 @@ import { registerLaunchRoutes } from "./routes/launches.js";
 import { clientIp } from "./clientIp.js";
 import { RouteTimings } from "./routeTimings.js";
 import { fastifyLogger } from "./fastifyLogger.js";
+import { liveCurves, liveCurvesFor, setLiveCurves } from "./liveCurve.js";
+import { SolPrice } from "./solPrice.js";
 
 const logger = createLogger("api");
 
@@ -592,6 +594,9 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // without one the modal shows what the database knows. The token modal's Stonk fee card reads
   // through the same client.
   const walletHelius = env.HELIUS_API_KEY ? new HeliusClient({ apiKey: env.HELIUS_API_KEY }) : null;
+  // The token chart's live tail follows open charts' curves on its own Helius socket (liveCurve.ts).
+  setLiveCurves(liveCurvesFor(env.HELIUS_API_KEY, env.CHART_LIVE_CURVES, walletHelius, new SolPrice()));
+  app.addHook("onClose", async () => liveCurves().stop());
   await app.register(registerTokenRoutes, { prefix: "/tokens", env, stonkFees: walletHelius });
   const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;
   // Helius's name for it (exchanges, protocols, services): its identity API, on paid plans.

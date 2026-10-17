@@ -2376,7 +2376,6 @@ const OUTCOME_TEXT: Record<ModelInsights["recentAiReviews"][number]["outcome"], 
 
 /** The AI reviewer, kept small and collapsed: it reviews the high-conviction calls and is a later focus. */
 function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
-  const t = data.targets;
   const buys = data.aiReviewer.buys;
   // The API reports the configured mode, not whether the reviewer runs: the mode defaults to
   // "shadow" while nothing runs without an API key. No review at all in the window reads as off.
@@ -2463,15 +2462,20 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
         {data.aiReviewer.probability2xBands.length > 0 && (
           <>
             <h4>Do its odds hold up?</h4>
+            {/* Each band is judged against its own odds, not the feed's goals: calls it gave 30-40%
+                should double about 35% of the time. The band's middle stands in for the odds it
+                gave, since the API sends only the band. */}
             <TargetBars
               aLabel="Actual 2x rate"
               bLabel="Actual 4x rate"
-              aTarget={t.hitRate2xPct}
-              bTarget={t.hitRate4xPct}
+              aTarget={null}
+              bTarget={null}
+              refLabel="odds it gave (band middle)"
               data={data.aiReviewer.probability2xBands.map((b) => ({
                 label: `${b.band}-${b.band + 10}%`,
                 a: b.hitRate2xPct,
                 b: b.hitRate4xPct,
+                aRef: b.band + 5,
                 sub: `${b.graded} graded`,
                 shortSub: `${b.graded}`,
               }))}

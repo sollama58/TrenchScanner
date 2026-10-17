@@ -209,7 +209,7 @@ export function UsageAdmin() {
               </div>
               <Panel
                 title={chart === "credits" ? "Helius credits by feature" : "Calls by provider"}
-                note="Stacked per bar; the last bar is still filling. Hover a bar for its numbers."
+                note="Stacked per bar; the last bar is still filling. Hover or tap a bar for its numbers."
                 actions={
                   <div className="segmented" role="tablist" aria-label="Chart">
                     <button
