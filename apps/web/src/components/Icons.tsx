@@ -2,7 +2,7 @@ import { useId } from "react";
 
 /** A small stroke icon set (24px grid, currentColor), so icons follow the text color they sit in. */
 
-type IconProps = { size?: number; className?: string };
+export type IconProps = { size?: number; className?: string };
 
 function Svg({ size = 16, className, children }: IconProps & { children: React.ReactNode }) {
   return (

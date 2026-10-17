@@ -7,6 +7,7 @@ import {
   notRetiredModelSql,
   REPORTED_LABEL_RULE,
   type PrecisionTargets,
+  marketRowWon,
   type MarketRow,
 } from "@trenchscanner/core";
 import { marketCounts, type MarketRowSource } from "./marketRows.js";
@@ -67,6 +68,14 @@ export interface DayRates extends GradedCounts {
   rate10xPct: number | null;
   /** Average simulated return per call under the fixed exit plan (sumSimReturnPct / simCalls), in percent. */
   avgReturnPct: number | null;
+  /**
+   * Catch (absent from the market side): the day's runners - distinct tokens with a clean 2x from a
+   * market moment or any call that day, as liveCatch counts them - and how many of them these calls
+   * caught at a winning moment, with the share in percent (null with no runners).
+   */
+  runners?: number;
+  caught?: number;
+  catchPct?: number | null;
 }
 
 export interface LearningDay {
@@ -412,6 +421,37 @@ export function buildLearningRuns(rows: RawRun[], targets: PrecisionTargets): Le
     });
 }
 
+/** A clean double on a UTC day: a market moment's token, or a call's (with the model that made it). */
+export type DayWinner = { day: string; token: string; model?: string | null };
+
+/** Pure: the runners each day (distinct tokens with a clean 2x from a market moment or any call). */
+export function runnersByDay(market: readonly DayWinner[], calls: readonly DayWinner[]): Map<string, number> {
+  const tokens = new Map<string, Set<string>>();
+  for (const w of [...market, ...calls]) {
+    let set = tokens.get(w.day);
+    if (!set) tokens.set(w.day, (set = new Set()));
+    set.add(w.token);
+  }
+  return new Map([...tokens].map(([day, set]) => [day, set.size]));
+}
+
+/** Pure: distinct tokens caught each day by the given calls (any model's when `model` is omitted). */
+export function caughtByDay(calls: readonly DayWinner[], model?: string): Map<string, number> {
+  const tokens = new Map<string, Set<string>>();
+  for (const w of calls) {
+    if (model !== undefined && w.model !== model) continue;
+    let set = tokens.get(w.day);
+    if (!set) tokens.set(w.day, (set = new Set()));
+    set.add(w.token);
+  }
+  return new Map([...tokens].map(([day, set]) => [day, set.size]));
+}
+
+/** Pure: a day's rates with its catch added. */
+export function withCatch(rates: DayRates, runners: number, caught: number): DayRates {
+  return { ...rates, runners, caught, catchPct: pct(caught, runners) };
+}
+
 /** The market line's day rows from shared market rows: the same columns its query returns. */
 function marketDays(rows: readonly MarketRow[]): RawDay[] {
   const byDay = new Map<string, MarketRow[]>();
@@ -422,6 +462,11 @@ function marketDays(rows: readonly MarketRow[]): RawDay[] {
     else byDay.set(day, [r]);
   }
   return [...byDay].map(([day, list]) => ({ day, ...marketCounts(list) }));
+}
+
+/** The market's clean doubles by day from shared market rows: the same as readMarketWinners. */
+function marketDayWinners(rows: readonly MarketRow[]): DayWinner[] {
+  return rows.filter(marketRowWon).map((r) => ({ day: r.at.toISOString().slice(0, 10), token: r.token }));
 }
 
 export async function buildLearningCurve(
@@ -466,9 +511,22 @@ export async function buildLearningCurve(
       AND ${walletSafetyCutsSql()}
       AND "labelRule" >= ${REPORTED_LABEL_RULE}
     GROUP BY 1`;
-  const marketRows: Promise<RawDay[]> = (
-    marketSource ? marketSource(trendSince) : Promise.resolve(null)
-  ).then((held) => (held ? marketDays(held.filter((r) => r.at < until)) : readMarket()));
+  // The market's clean doubles by day: the runners a catch is measured against (liveCatch's rule).
+  const readMarketWinners = () => prisma.$queryRaw<DayWinner[]>`
+    SELECT DISTINCT to_char(date_trunc('day', "anchorAt"), 'YYYY-MM-DD') AS day, "tokenId" AS token
+    FROM "CandidateOutcome"
+    WHERE "sampleKind" = 'event'
+      AND "anchorAt" >= ${since} AND "anchorAt" < ${until}
+      AND "hit2xIn1h" AND NOT COALESCE("disqualified", false)
+      AND ${walletSafetyCutsSql()}
+      AND "labelRule" >= ${REPORTED_LABEL_RULE}`;
+  const heldMarket = marketSource ? marketSource(trendSince) : Promise.resolve(null);
+  const marketRows: Promise<RawDay[]> = heldMarket.then((held) =>
+    held ? marketDays(held.filter((r) => r.at < until)) : readMarket(),
+  );
+  const marketWinners: Promise<DayWinner[]> = heldMarket.then((held) =>
+    held ? marketDayWinners(held.filter((r) => r.at >= since && r.at < until)) : readMarketWinners(),
+  );
   // Every model's calls by UTC day, graded the same way (see buildHitRateReport for the label
   // sources). A call whose training row was graded under the legacy rule is left out for the same
   // reason as above; one whose row is gone keeps its own copied verdict.
@@ -506,6 +564,16 @@ export async function buildLearningCurve(
     ${callsFrom}
       AND ${firstCallOnRowSql()}
     GROUP BY 1`;
+  // Each model's clean doubles by day, one row per token: the runners it caught.
+  const callWinners = prisma.$queryRaw<DayWinner[]>`
+    SELECT DISTINCT to_char(date_trunc('day', a."createdAt"), 'YYYY-MM-DD') AS day,
+           a."tokenId" AS token, a."model" AS model
+    FROM "CuratedAlert" a
+    LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
+    WHERE a."createdAt" >= ${since} AND a."createdAt" < ${until} AND ${notRetiredModelSql()}
+      AND (co."labelRule" IS NULL OR co."labelRule" >= ${REPORTED_LABEL_RULE})
+      AND COALESCE(a."hit2xIn1h", co."hit2xIn1h")
+      AND NOT COALESCE(a."disqualified", co."disqualified", false)`;
   // Which runs to show: every run of a short window, the last run of each UTC day of a longer one
   // (a 90-day window at twelve runs a day would be a thousand rows nobody reads). Columns are
   // timestamp(3) without a zone, stored in UTC, so date_trunc groups by UTC day.
@@ -544,8 +612,19 @@ export async function buildLearningCurve(
     WHERE m."trainingTo" = ANY(${chosen.map((d) => d.toISOString())}::timestamp(3)[])
       AND m."contestant" IS NOT NULL
     ORDER BY m."trainingTo" DESC`;
-  const [market, perModel, feed, runs] = await Promise.all([marketRows, modelRows, feedRows, runRows]);
+  const [market, perModel, feed, runs, mWins, cWins] = await Promise.all([
+    marketRows,
+    modelRows,
+    feedRows,
+    runRows,
+    marketWinners,
+    callWinners,
+  ]);
   const dayseries = buildLearningDays(market, feed);
+  const runners = runnersByDay(mWins, cWins);
+  const feedCaught = caughtByDay(cWins);
+  const catchOf = (rates: DayRates, day: string, caught: Map<string, number>) =>
+    withCatch(rates, runners.get(day) ?? 0, caught.get(day) ?? 0);
   const firstDay = since.toISOString().slice(0, 10);
   const inWindow = <T extends { day: string }>(rows: T[]) => rows.filter((d) => d.day >= firstDay);
   const precision: PrecisionTargets = {
@@ -556,9 +635,19 @@ export async function buildLearningCurve(
   };
   return {
     window: { since: since.toISOString(), until: until.toISOString() },
-    days: inWindow(dayseries),
+    days: inWindow(dayseries).map((d) => ({
+      ...d,
+      market: { ...d.market, runners: runners.get(d.day) ?? 0 },
+      feed: catchOf(d.feed, d.day, feedCaught),
+    })),
     models: buildLearningModels(market, perModel)
-      .map((m) => ({ ...m, days: inWindow(m.days) }))
+      .map((m) => {
+        const caught = caughtByDay(cWins, m.model);
+        return {
+          ...m,
+          days: inWindow(m.days).map((d) => ({ ...d, rates: catchOf(d.rates, d.day, caught) })),
+        };
+      })
       .filter((m) => m.days.length > 0),
     runs: buildLearningRuns(runs, precision),
     trend: buildLearningTrend(dayseries),

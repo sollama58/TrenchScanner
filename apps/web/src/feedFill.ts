@@ -24,6 +24,8 @@ export interface FilledPage {
   hiddenHere: number;
   /** Whether the cards read so far hold a shown card past this page (so it is full, with an older one). */
   moreLoaded: boolean;
+  /** Shown cards counted in the alerts read so far, up to and including this page's (for nextDepth). */
+  visible: number;
   /**
    * Tokens to keep "Now" seconds old: this page's cards first, then the hidden ones among them,
    * which come back once they climb over the line. Within the live tick's limit.
@@ -73,7 +75,7 @@ export function fillPage(
   // Cards past this page weren't looked at: they keep what they were.
   for (const card of buffer.slice(read)) if (wasHidden.has(card.id)) hiddenNow.add(card.id);
   const tickTokenIds = [...new Set([...shown.map((c) => c.tokenId), ...hiddenIds])].slice(0, MAX_TICK_TOKENS);
-  return { shown, hiddenHere: hiddenIds.length, moreLoaded, tickTokenIds, hidden: hiddenNow };
+  return { shown, hiddenHere: hiddenIds.length, moreLoaded, visible, tickTokenIds, hidden: hiddenNow };
 }
 
 /** The feed's pages read so far as one list, newest first, each alert once. */
@@ -90,4 +92,15 @@ export function joinPages(pages: readonly ({ matches: Card[] } | null)[]): Card[
     }
   }
   return out;
+}
+
+/**
+ * How many API pages to read next when the `depth` read so far hold only `visible` shown cards and
+ * the page on screen needs `want`: enough more at the rate the pages read so far showed cards, in
+ * one step rather than one page per round trip, which made a short page fill in a few cards at a
+ * time. With nothing shown yet it doubles. Never more than `maxDepth`.
+ */
+export function nextDepth(depth: number, visible: number, want: number, maxDepth: number): number {
+  const more = visible === 0 ? depth : Math.ceil(((want - visible) * depth) / visible);
+  return Math.min(maxDepth, depth + Math.max(1, more));
 }

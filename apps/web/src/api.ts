@@ -774,6 +774,10 @@ export interface LearningRates {
   simCalls?: number;
   sumSimReturnPct?: number;
   avgReturnPct?: number | null;
+  /** The day's runners, how many of them these calls caught, and the share (absent from older API builds). */
+  runners?: number;
+  caught?: number;
+  catchPct?: number | null;
 }
 
 export interface LearningDay {

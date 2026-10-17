@@ -106,6 +106,25 @@ describe("tradesFromChainTransactions", () => {
     expect(tradesFromChainTransactions(MINT, [sweep], () => true).trades).toEqual([]);
   });
 
+  it("reads tokens sent between wallets as a transfer at 0 SOL, rent and all", () => {
+    // The sender signs and pays the fee; the receiver pays its new token account's rent.
+    const sent: ChainTx = {
+      blockTime: T0 / 1000 + 30,
+      transaction: { signatures: ["sent"], message: { accountKeys: ["funder", "bob", "bobAta"] } },
+      meta: {
+        err: null,
+        preTokenBalances: [bal(2, "funder", 47_000_000)],
+        postTokenBalances: [bal(2, "funder", 0), bal(1, "bob", 47_000_000)],
+        preBalances: [1e9, 1e9, 0],
+        postBalances: [1e9 - 5_000, 1e9 - 2_039_280, 2_039_280],
+      },
+    };
+    expect(tradesFromChainTransactions(MINT, [sent], isWallet).trades).toEqual([
+      { wallet: "funder", side: "sell", sol: 0, tokens: 47_000_000, atMs: T0 + 30 * S, tx: "sent" },
+      { wallet: "bob", side: "buy", sol: 0, tokens: 47_000_000, atMs: T0 + 30 * S, tx: "sent" },
+    ]);
+  });
+
   it("skips failed transactions", () => {
     const failed = { ...buy, meta: { ...buy.meta!, err: { InstructionError: [0, "x"] } } };
     expect(tradesFromChainTransactions(MINT, [failed], isWallet).trades).toEqual([]);

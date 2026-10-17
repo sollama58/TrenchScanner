@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Card } from "./api";
-import { fillPage, joinPages } from "./feedFill";
+import { fillPage, joinPages, nextDepth } from "./feedFill";
 
 /** A filter alert priced from its snapshot, so "Now" is just its current market cap. */
 const card = (id: string, mcap: number | null): Card =>
@@ -73,5 +73,19 @@ describe("fillPage at the line", () => {
     const p = fillPage(buffer, on, 1, new Set(["a", "d"]), 1);
     expect(ids(p.shown)).toEqual(["b"]);
     expect([...p.hidden].sort()).toEqual(["a", "d"]);
+  });
+});
+
+describe("nextDepth", () => {
+  it("reads as many pages as the short page looks to need, in one step", () => {
+    // 4 shown from 1 page, 12 wanted: two more at that rate.
+    expect(nextDepth(1, 4, 12, 15)).toBe(3);
+    expect(nextDepth(3, 9, 12, 15)).toBe(4);
+  });
+
+  it("reads one more when full but not past it, doubles with nothing shown, and stops at the cap", () => {
+    expect(nextDepth(2, 12, 12, 15)).toBe(3);
+    expect(nextDepth(4, 0, 12, 15)).toBe(8);
+    expect(nextDepth(10, 1, 12, 15)).toBe(15);
   });
 });

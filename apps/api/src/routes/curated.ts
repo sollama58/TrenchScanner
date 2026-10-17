@@ -932,7 +932,10 @@ export async function registerCuratedRoutes(
     return opts.reports.lighthouseHistory(parsed.data);
   });
 
-  /** The Lighthouse tab's "Wallets to watch": how the KOLs and top winners trade (walletScorecards.ts). */
+  /**
+   * The Utilities tab's "Wallets to watch" (on the Lighthouse tab until 2026-10-17, hence the
+   * path): how the KOLs and top winners trade (walletScorecards.ts).
+   */
   const walletScorecards = createWalletScorecardsCache();
   app.get("/lighthouse/wallets", async (request, reply) => {
     const parsed = walletScorecardsQuerySchema.safeParse(request.query);
