@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
-import { POSSIBLE_SIDE_RULES_VERSION, prisma } from "@trenchscanner/core";
+import { MARKED_BOT_WALLETS, POSSIBLE_SIDE_RULES_VERSION, prisma } from "@trenchscanner/core";
 import {
   isBot,
   likelyBots,
@@ -149,6 +149,7 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
     await prisma.kolWallet.deleteMany({ where: { wallet: { startsWith: TAG } } });
     await prisma.kolSideWallets.deleteMany({ where: { wallet: { startsWith: TAG } } });
     await prisma.kolPossibleSide.deleteMany({ where: { wallet: { startsWith: TAG } } });
+    await prisma.kolSideLabelRemoval.deleteMany({ where: { kolWallet: { startsWith: TAG } } });
   });
 
   it("lists wallets that bought the KOL's coins within minutes of it, other KOLs left out", async () => {
@@ -266,5 +267,44 @@ describe.skipIf(!dbAvailable)("kol side wallets job", () => {
     await runKolSideWalletsJob({ now: () => now });
     const left = await prisma.kolPossibleSide.findMany({ where: { kolWallet: kol } });
     expect(left.map((r) => r.wallet)).toEqual([`${TAG}-current`]);
+  });
+
+  it("records the marked bots and the side labels it takes from them, keeping the first time", async () => {
+    const now = Date.now();
+    const kol = `${TAG}-botkol`;
+    const marked = [...MARKED_BOT_WALLETS][0]!;
+    await prisma.kolWallet.create({ data: { wallet: kol, name: "Bot KOL", seenAt: new Date() } });
+    await prisma.kolPossibleSide.create({
+      data: {
+        wallet: marked,
+        kolWallet: kol,
+        pct: 100,
+        shared: 11,
+        kolCoins: 11,
+        hours: 24,
+        computedAt: new Date(now - 3_600_000),
+        rulesVersion: POSSIBLE_SIDE_RULES_VERSION,
+      },
+    });
+
+    const meta = await runKolSideWalletsJob({ now: () => now });
+    expect(meta.removedLabels).toBeGreaterThanOrEqual(1);
+    expect(await prisma.kolPossibleSide.count({ where: { wallet: marked, kolWallet: kol } })).toBe(0);
+    const bot = await prisma.sideWalletBot.findUnique({ where: { wallet: marked } });
+    expect(bot).toMatchObject({ reason: "marked", computedAt: new Date(now) });
+    const removal = await prisma.kolSideLabelRemoval.findUnique({
+      where: { wallet_kolWallet: { wallet: marked, kolWallet: kol } },
+    });
+    expect(removal).toMatchObject({ reason: "marked", held: true, pct: 100, shared: 11, hours: 24 });
+
+    // A later run with nothing left to remove keeps the removal as it was, and the bot's first sighting.
+    await runKolSideWalletsJob({ now: () => now + 3_600_000 });
+    expect(
+      await prisma.kolSideLabelRemoval.findUnique({
+        where: { wallet_kolWallet: { wallet: marked, kolWallet: kol } },
+      }),
+    ).toEqual(removal);
+    const again = await prisma.sideWalletBot.findUnique({ where: { wallet: marked } });
+    expect(again).toMatchObject({ firstSeenAt: bot!.firstSeenAt, computedAt: new Date(now + 3_600_000) });
   });
 });

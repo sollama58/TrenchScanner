@@ -7,6 +7,7 @@ import {
   lastRebuiltAt,
   MIN_LABEL_APPEARANCES,
   RISKY_WALLET_SCORE,
+  sideWalletRules,
   STOP_ROLES,
   WINNER,
   type StopCause,
@@ -276,7 +277,73 @@ async function coinDetail(mint: string) {
   };
 }
 
+/** The most bots and removed labels the "Bots and removed sides" view lists, newest first. */
+const BOTS_LIMIT = 500;
+
+/**
+ * The "Bots and removed sides" view (user ask 2026-10-17): the wallets the Side Wallet Checker reads
+ * as bots (SideWalletBot) and the KOL side labels taken from or kept from them (KolSideLabelRemoval),
+ * both written hourly by the worker's kolSideWalletsJob.ts, with the KOLs named from the roster.
+ */
+async function sideBots() {
+  const [bots, removals, botCount, removalCount] = await Promise.all([
+    prisma.sideWalletBot.findMany({ orderBy: [{ computedAt: "desc" }, { wallet: "asc" }], take: BOTS_LIMIT }),
+    prisma.kolSideLabelRemoval.findMany({
+      orderBy: [{ lastAt: "desc" }, { wallet: "asc" }],
+      take: BOTS_LIMIT,
+    }),
+    prisma.sideWalletBot.count(),
+    prisma.kolSideLabelRemoval.count(),
+  ]);
+  const kolWallets = [...new Set([...bots.flatMap((b) => b.kols), ...removals.map((r) => r.kolWallet)])];
+  const kolNames = new Map(
+    (
+      await prisma.kolWallet.findMany({
+        where: { wallet: { in: kolWallets } },
+        select: { wallet: true, name: true, twitter: true },
+      })
+    ).map((k) => [k.wallet, k.name ?? (k.twitter ? `@${k.twitter}` : null)]),
+  );
+  const removedOf = new Map<string, number>();
+  for (const r of removals) removedOf.set(r.wallet, (removedOf.get(r.wallet) ?? 0) + 1);
+  const newest = bots[0]?.computedAt ?? null;
+  const rules = sideWalletRules();
+  return {
+    computedAt: await lastRebuiltAt("kol-side-wallets", newest),
+    rules: { bot: rules.bot, likelyBot: rules.likelyBot, holdDays: rules.holdDays },
+    botCount,
+    removalCount,
+    bots: bots.map((b) => ({
+      wallet: b.wallet,
+      reason: b.reason,
+      coins30d: b.coins30d,
+      coinShare: b.coinShare,
+      kols: b.kols.map((wallet) => ({ wallet, name: kolNames.get(wallet) ?? null })),
+      removedLabels: removedOf.get(b.wallet) ?? 0,
+      firstSeenAt: b.firstSeenAt,
+      computedAt: b.computedAt,
+    })),
+    removals: removals.map((r) => ({
+      wallet: r.wallet,
+      kolWallet: r.kolWallet,
+      kolName: kolNames.get(r.kolWallet) ?? null,
+      reason: r.reason,
+      held: r.held,
+      pct: r.pct,
+      shared: r.shared,
+      kolCoins: r.kolCoins,
+      hours: r.hours,
+      transfers: r.transfers,
+      firstAt: r.firstAt,
+      lastAt: r.lastAt,
+    })),
+  };
+}
+
 export async function registerAdminWalletRoutes(app: FastifyInstance) {
+  const bots = new SharedCache<Awaited<ReturnType<typeof sideBots>>>(OVERVIEW_CACHE_MS);
+  app.get("/wallets/bots", async () => bots.get(sideBots));
+
   const overview = new Map<string, SharedCache<Awaited<ReturnType<typeof buildOverview>>>>();
   app.get("/wallets", async (request, reply) => {
     const parsed = listSchema.safeParse(request.query);

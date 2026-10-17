@@ -218,9 +218,12 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     if (isBot(Number(r.c30), totalCoins)) bots.add(r.wallet);
   }
 
+  // The KOLs each bot bought alongside often enough to reach a list (SideWalletBot.kols).
+  const botKols = new Map<string, Set<string>>();
   const byKol = new Map<string, Record<SideWindow, PairRow[]>>();
   const tierPairs = new Map<string, Record<48 | 72, PairRow[]>>();
   for (const p of pairs) {
+    if (bots.has(p.side)) addTo(botKols, p.side, p.kol);
     if (bots.has(p.side) || isServiceWallet(p.side)) continue;
     let lists = byKol.get(p.kol);
     if (!lists) byKol.set(p.kol, (lists = { "24h": [], "7d": [], "30d": [] }));
@@ -256,7 +259,11 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   const data = rankedByKol.map(({ k, coins, ranked }) => {
     const hidden = new Set<string>();
     for (const w of SIDE_WINDOWS) {
-      for (const s of ranked[w]) if (botLike.has(s.wallet)) hidden.add(s.wallet);
+      for (const s of ranked[w])
+        if (botLike.has(s.wallet)) {
+          hidden.add(s.wallet);
+          addTo(botKols, s.wallet, k.wallet);
+        }
       ranked[w] = ranked[w].filter((s) => !botLike.has(s.wallet));
     }
     const sides = { ...ranked, likelyBots: [...hidden].sort() };
@@ -270,14 +277,22 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     };
   });
 
+  const botReason = (w: string): BotReason | null =>
+    MARKED_BOT_WALLETS.has(w) ? "marked" : bots.has(w) ? "bot" : botLike.has(w) ? "likelyBot" : null;
+  // Labels a bot met this run but was not given, for the Admin "Bots and removed sides" view.
+  const withheld: LabelFigures[] = [];
   const possible = kols.flatMap((k) =>
     possibleSides({
       24: { pairs: byKol.get(k.wallet)?.["24h"] ?? [], kolCoins: Number(k.c24) },
       48: { pairs: tierPairs.get(k.wallet)?.[48] ?? [], kolCoins: Number(k.c48) },
       72: { pairs: tierPairs.get(k.wallet)?.[72] ?? [], kolCoins: Number(k.c72) },
     })
-      // A likely bot is no one's side wallet: no label.
-      .filter((p) => !botLike.has(p.wallet))
+      // A likely bot is no one's side wallet: no label (kept as withheld for the Admin view).
+      .filter((p) => {
+        if (!botLike.has(p.wallet)) return true;
+        withheld.push({ ...p, kolWallet: k.wallet, transfers: 0 });
+        return false;
+      })
       .map((p) => ({
         ...p,
         kolWallet: k.wallet,
@@ -295,13 +310,28 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
   const possibleByPair = new Map(possible.map((p) => [`${p.wallet}:${p.kolWallet}`, p]));
   let transferLabels = 0;
   for (const t of transferPairs) {
-    if (bots.has(t.side) || botLike.has(t.side) || isServiceWallet(t.side)) continue;
+    if (isServiceWallet(t.side)) continue;
     const tier =
       transferSideTier(
         t.outAts.map((d) => d.getTime()),
         TRANSFER_SIDE_OUTBOUND_TIERS,
       ) ?? inboundSideTier(t.inAts.map((d, i) => ({ atMs: d.getTime(), pct: t.inPcts[i] ?? 0 })));
     if (!tier) continue;
+    if (bots.has(t.side) || botLike.has(t.side)) {
+      const had = withheld.find((w) => w.wallet === t.side && w.kolWallet === t.kol);
+      if (had) had.transfers = tier.transfers;
+      else
+        withheld.push({
+          wallet: t.side,
+          kolWallet: t.kol,
+          pct: 0,
+          shared: 0,
+          kolCoins: 0,
+          hours: tier.hours,
+          transfers: tier.transfers,
+        });
+      continue;
+    }
     transferLabels += 1;
     const had = possibleByPair.get(`${t.side}:${t.kol}`);
     if (had) {
@@ -325,6 +355,7 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
 
   let possibleHeld = 0;
   let written = 0;
+  let removedLabels = 0;
   await prisma.$transaction(
     async (tx) => {
       ({ written } = await replaceRows(tx, KOL_SIDE_WALLETS_TABLE, data));
@@ -347,7 +378,41 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
       // does a service wallet (an exchange, the Stonk fee wallet) holding one from before it was
       // left out.
       const unlabeled = [...new Set([...bots, ...botLike, ...HOT_FUNDER_DENYLIST])];
+      const removed = unlabeled.length
+        ? await tx.kolPossibleSide.findMany({
+            where: { wallet: { in: unlabeled } },
+            select: {
+              wallet: true,
+              kolWallet: true,
+              pct: true,
+              shared: true,
+              kolCoins: true,
+              hours: true,
+              transfers: true,
+            },
+          })
+        : [];
       if (unlabeled.length) await tx.kolPossibleSide.deleteMany({ where: { wallet: { in: unlabeled } } });
+      removedLabels = removed.length;
+      await recordBots(tx, now, {
+        // An exchange or other service wallet in everything is no bot to list.
+        bots: [...new Set([...MARKED_BOT_WALLETS, ...bots, ...botLike])]
+          .filter((w) => !isServiceWallet(w))
+          .map((wallet) => ({
+            wallet,
+            reason: botReason(wallet)!,
+            coins30d: sideCoins["30d"].get(wallet) ?? null,
+            coinShare:
+              sideCoins["30d"].has(wallet) && totalCoins > 0
+                ? sideCoins["30d"].get(wallet)! / totalCoins
+                : null,
+            kols: [...(botKols.get(wallet) ?? [])].sort(),
+          })),
+        removals: [
+          ...removed.map((r) => ({ ...r, reason: botReason(r.wallet) ?? ("service" as const), held: true })),
+          ...withheld.map((r) => ({ ...r, reason: botReason(r.wallet)!, held: false })),
+        ],
+      });
       for (let i = 0; i < possible.length; i += POSSIBLE_SIDE_DELETE_CHUNK) {
         const chunk = possible.slice(i, i + POSSIBLE_SIDE_DELETE_CHUNK);
         await tx.kolPossibleSide.deleteMany({
@@ -372,6 +437,8 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     pairs: pairs.length,
     bots: bots.size,
     likelyBots: botLike.size,
+    removedLabels,
+    withheldLabels: withheld.length,
     totalCoins,
   };
   logger.info("kol side wallets rebuilt", meta);
@@ -435,4 +502,98 @@ async function knownSideWallets(tx: Prisma.TransactionClient): Promise<string[]>
     select: { wallet: true },
   });
   return rows.map((r) => r.wallet);
+}
+
+type BotReason = "marked" | "bot" | "likelyBot";
+type LabelFigures = {
+  wallet: string;
+  kolWallet: string;
+  pct: number;
+  shared: number;
+  kolCoins: number;
+  hours: number;
+  transfers: number;
+};
+
+/** A bot stays in SideWalletBot this long past the last run that read it as one. */
+export const SIDE_BOT_KEEP_MS = 30 * DAY_MS;
+/** Rows per INSERT when recording bots and removed labels. */
+const RECORD_CHUNK = 500;
+
+function addTo(map: Map<string, Set<string>>, key: string, value: string): void {
+  let set = map.get(key);
+  if (!set) map.set(key, (set = new Set()));
+  set.add(value);
+}
+
+/**
+ * The Admin Wallets section's "Bots and removed sides" view (user ask 2026-10-17): this run's bots
+ * into SideWalletBot and the side labels taken from or kept from them into KolSideLabelRemoval,
+ * each upserted so firstSeenAt / firstAt keep the first run; rows past their keep go.
+ */
+async function recordBots(
+  tx: Prisma.TransactionClient,
+  now: Date,
+  rows: {
+    bots: {
+      wallet: string;
+      reason: BotReason;
+      coins30d: number | null;
+      coinShare: number | null;
+      kols: string[];
+    }[];
+    removals: (LabelFigures & { reason: BotReason | "service"; held: boolean })[];
+  },
+): Promise<void> {
+  for (let i = 0; i < rows.bots.length; i += RECORD_CHUNK) {
+    const chunk = rows.bots.slice(i, i + RECORD_CHUNK);
+    await tx.$executeRaw`
+      INSERT INTO "SideWalletBot" ("wallet", "reason", "coins30d", "coinShare", "kols", "computedAt")
+      VALUES ${Prisma.join(
+        chunk.map(
+          (b) =>
+            Prisma.sql`(${b.wallet}, ${b.reason}, ${b.coins30d}, ${b.coinShare}, ${b.kols}::text[], ${now})`,
+        ),
+      )}
+      ON CONFLICT ("wallet") DO UPDATE SET
+        "reason" = EXCLUDED."reason",
+        "coins30d" = COALESCE(EXCLUDED."coins30d", "SideWalletBot"."coins30d"),
+        "coinShare" = COALESCE(EXCLUDED."coinShare", "SideWalletBot"."coinShare"),
+        "kols" = EXCLUDED."kols",
+        "computedAt" = EXCLUDED."computedAt"`;
+  }
+  // A held label is the stronger record: a later withheld one never turns it back.
+  const byPair = new Map<string, (typeof rows.removals)[number]>();
+  for (const r of rows.removals) {
+    const key = `${r.wallet}:${r.kolWallet}`;
+    if (!byPair.get(key)?.held) byPair.set(key, r);
+  }
+  const removals = [...byPair.values()];
+  for (let i = 0; i < removals.length; i += RECORD_CHUNK) {
+    const chunk = removals.slice(i, i + RECORD_CHUNK);
+    await tx.$executeRaw`
+      INSERT INTO "KolSideLabelRemoval"
+        ("wallet", "kolWallet", "reason", "held", "pct", "shared", "kolCoins", "hours", "transfers", "lastAt")
+      VALUES ${Prisma.join(
+        chunk.map(
+          (r) =>
+            Prisma.sql`(${r.wallet}, ${r.kolWallet}, ${r.reason}, ${r.held}, ${r.pct}, ${r.shared}, ${r.kolCoins}, ${r.hours}, ${r.transfers}, ${now})`,
+        ),
+      )}
+      ON CONFLICT ("wallet", "kolWallet") DO UPDATE SET
+        "reason" = EXCLUDED."reason",
+        "held" = "KolSideLabelRemoval"."held" OR EXCLUDED."held",
+        "pct" = EXCLUDED."pct",
+        "shared" = EXCLUDED."shared",
+        "kolCoins" = EXCLUDED."kolCoins",
+        "hours" = EXCLUDED."hours",
+        "transfers" = EXCLUDED."transfers",
+        "lastAt" = EXCLUDED."lastAt"`;
+  }
+  await tx.sideWalletBot.deleteMany({
+    where: { computedAt: { lt: new Date(now.getTime() - SIDE_BOT_KEEP_MS) } },
+  });
+  await tx.kolSideLabelRemoval.deleteMany({
+    where: { lastAt: { lt: new Date(now.getTime() - POSSIBLE_SIDE_HOLD_MS) } },
+  });
 }
