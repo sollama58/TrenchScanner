@@ -56,6 +56,7 @@ import {
   type LiveFlagsReading,
   type LiveTraderCounts,
   type WalletScoreReading,
+  type WinnerFollowReading,
   type OnChainHolders,
   type CandidateToken,
   type ScoredToken,
@@ -118,6 +119,7 @@ import {
   livePageOf,
   liveTradersOn,
   liveWalletScoreOn,
+  liveWinnerFollowOn,
   liveWindowFlowOf,
   readLiveTape,
   takeLiveTapeStats,
@@ -1748,6 +1750,14 @@ async function scanCycle(
                 riskLookup,
                 ownTapes.get(candidate.mintAddress),
               ),
+          // The same for the clean winners' reading (the Winners seat's inputs).
+          ownTapes === null
+            ? null
+            : liveWinnerFollowOn(
+                livePages.get(candidate.mintAddress),
+                riskLookup,
+                ownTapes.get(candidate.mintAddress),
+              ),
         ),
       );
     } catch (err) {
@@ -2905,6 +2915,7 @@ async function processCandidate(
   exTransfers: ExTransfersReading | null = null,
   ownTape: ReadonlyMap<string, OwnTapeRow> | null | undefined = undefined,
   walletScores: WalletScoreReading | null = null,
+  winnerFollow: WinnerFollowReading | null = null,
 ): Promise<number> {
   const existingToken = prior.token;
   const withFlags = withLiveFlags(
@@ -2935,6 +2946,7 @@ async function processCandidate(
     kolTraders,
     winnerTraders,
     walletScores,
+    winnerFollow,
   );
   // KOL Bundled % and Bundled % ride on the linked reading: unknown (left off) without one.
   const withBundled =
@@ -3752,10 +3764,20 @@ export function withLiveFlags(
   kolTraders: LiveTraderCounts | null = null,
   winnerTraders: LiveTraderCounts | null = null,
   walletScores: WalletScoreReading | null = null,
+  winnerFollow: WinnerFollowReading | null = null,
 ): OnChainProfile | null {
   if (!onChain) return onChain;
   const withTraders = {
     ...onChain,
+    ...(winnerFollow
+      ? {
+          cleanWinnerRecentBuyers: winnerFollow.cleanWinnerRecentBuyers,
+          cleanWinnerRecentShare: winnerFollow.cleanWinnerRecentShare ?? undefined,
+          cleanWinnerBuySolShare: winnerFollow.cleanWinnerBuySolShare ?? undefined,
+          recentBuyersOwn2xMean: winnerFollow.recentBuyersOwn2xMean ?? undefined,
+          recentBuyersRead: winnerFollow.recentBuyersRead,
+        }
+      : {}),
     ...(walletScores
       ? {
           walletScoreRecentBuyersMean: walletScores.walletScoreRecentBuyersMean ?? undefined,

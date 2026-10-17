@@ -2736,6 +2736,11 @@ model WalletRisk {
   own2x           Int      @default(0)
   own4x           Int      @default(0)
   walletScore     Float?
+  /// Its win-sized trades (2x or better for MIN_WIN_SOL) fed by tokens transferred in: it sold more
+  /// than it bought on the tape, sold before its first buy, or a holder transfer of the coin reached
+  /// it (HolderTransferEvent). The Winners seat reads a Winner wallet only while this is 0 (core's
+  /// wallets/winnerFollow.ts; user ask 2026-10-17).
+  transferWins    Int      @default(0)
   /// Median % of supply it bought.
   medianSupplyPct Float?
   solIn           Float

@@ -46,6 +46,8 @@ export function refreshWalletRiskBook(now = Date.now()): void {
         dumper: true,
         winner: true,
         walletScore: true,
+        own2x: true,
+        transferWins: true,
       },
     }),
     prisma.systemHeartbeat.findUnique({
@@ -68,6 +70,8 @@ export function refreshWalletRiskBook(now = Date.now()): void {
             dumper: r.dumper,
             winner: r.winner,
             walletScore: r.walletScore,
+            own2x: r.own2x,
+            transferWins: r.transferWins,
           },
         ]),
       );

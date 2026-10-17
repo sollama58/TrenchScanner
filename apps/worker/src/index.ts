@@ -72,6 +72,7 @@ import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
 import { runCandlePeaksJob } from "./jobs/candlePeaks.js";
 import { runBundledSupplyBackfill } from "./jobs/bundledSupplyBackfill.js";
 import { runWalletScoreBackfill } from "./jobs/walletScoreBackfill.js";
+import { runWinnerFollowBackfill } from "./jobs/winnerFollowBackfill.js";
 import { runQuoteRegrade } from "./jobs/quoteRegrade.js";
 import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
@@ -534,11 +535,14 @@ async function main() {
           const bundled = await runBundledSupplyBackfill();
           // The one-time Wallet Score backfill (walletScoreBackfill.ts), same lock: database only.
           const walletScores = await runWalletScoreBackfill();
+          // The one-time clean-winner reading backfill (winnerFollowBackfill.ts), same lock: database only.
+          const winnerFollow = await runWinnerFollowBackfill();
           return {
             ...meta,
             ...(quote ? { quoteRegrade: quote } : {}),
             ...(bundled ? { bundledSupplyBackfill: bundled } : {}),
             ...(walletScores ? { walletScoreBackfill: walletScores } : {}),
+            ...(winnerFollow ? { winnerFollowBackfill: winnerFollow } : {}),
           };
         }),
       1,

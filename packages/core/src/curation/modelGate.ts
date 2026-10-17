@@ -176,3 +176,24 @@ export function parseModelGate(criteria: unknown): FilterCriteria | null {
   if (typeof c.mcapMin !== "number" || typeof c.mcapMax !== "number") return null;
   return c as unknown as FilterCriteria;
 }
+
+/**
+ * A seat's own population, the one place both kinds are read (ContestantSpec.gate and .requires):
+ * whether the seat considers a moment, from its stored inputs (a training row, or the vector a live
+ * decision scores). A gated seat needs its frozen filter passed; a requiring seat needs the named
+ * input recorded (the Winners seat: the clean-winner reading, core's wallets/winnerFollow.ts). A
+ * seat with neither considers every moment. `gate` is the seat's stored gate, undefined when it
+ * isn't stored: a gated seat then considers nothing.
+ */
+export function seatConsiders(
+  spec: { gate?: string; requires?: string },
+  features: Readonly<Record<string, number | null | undefined>>,
+  gate: FilterCriteria | undefined,
+): boolean {
+  if (spec.requires !== undefined) {
+    const v = features[spec.requires];
+    if (typeof v !== "number" || !Number.isFinite(v)) return false;
+  }
+  if (spec.gate !== undefined) return gate !== undefined && passesModelGateOnFeatures(features, gate);
+  return true;
+}

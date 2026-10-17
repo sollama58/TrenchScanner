@@ -46,6 +46,7 @@ import {
   gatesById,
   loadModelGates,
   passesModelGateOnFeatures,
+  seatConsiders,
 } from "@trenchscanner/core";
 import { contestState } from "./contest.js";
 
@@ -571,6 +572,8 @@ export async function buildModelLineup(env: Env): Promise<ModelLineup> {
         const f = sample[i]!;
         if (narrative && f.nsDepthFull !== 1) continue;
         if (gate && !passesModelGateOnFeatures(f, gate)) continue;
+        // Winners is read on the moments carrying its reading (ContestantSpec.requires).
+        if (spec.requires !== undefined && !seatConsiders(spec, f, undefined)) continue;
         addContributions(acc, featureContributions(params, f), probs[i]! >= cutoff);
       }
       if (spec.role === "learner") probabilities.set(spec.id, probs);

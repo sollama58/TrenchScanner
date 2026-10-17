@@ -279,6 +279,24 @@ export const WALLET_SCORE_FEATURES = [
   "walletScoreRecentBuyersScored",
 ] as const;
 
+/**
+ * Added 2026-10-17 (user ask, notes/winners-model-2026-10-17): the wallets buying in the coin's
+ * newest trades read before the decision (the live tape), read through the clean winners' records
+ * (core's wallets/winnerFollow.ts: the Winner label, no win fed by tokens transferred in): how
+ * many clean winners bought, their share of the buyers and of the SOL bought, the buyers' mean
+ * own-2x rate, and how many buyers were read. Null without a live page or before the wallet book
+ * loads. Backfilled point-in-time on the rows decided around a called coin's tape (worker's
+ * winnerFollowBackfill.ts). The Winners seat reads them and decides only on moments that carry
+ * them (ContestantSpec.requires); every other learner has them retired (RETIRED_LEARNER_INPUTS).
+ */
+export const WINNER_FOLLOW_FEATURES = [
+  "cleanWinnerRecentBuyers",
+  "cleanWinnerRecentShare",
+  "cleanWinnerBuySolShare",
+  "recentBuyersOwn2xMean",
+  "recentBuyersRead",
+] as const;
+
 export const LIVE_FLAG_FEATURES = [
   "flaggedBuyers",
   "flaggedSellers",
@@ -532,6 +550,7 @@ export const CANDIDATE_FEATURE_NAMES = [
   ...MARKET_SOURCE_FEATURES,
   ...LAUNCH_FACT_FEATURES,
   ...WALLET_SCORE_FEATURES,
+  ...WINNER_FOLLOW_FEATURES,
 ] as const;
 
 export type CandidateFeatureName = (typeof CANDIDATE_FEATURE_NAMES)[number];
@@ -673,6 +692,9 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The hidden Wallet Score of the newest buyers (added 2026-10-16, user ask): recorded first, on
   // the same terms (notes/wallet-score-2026-10-16/report.md).
   ...WALLET_SCORE_FEATURES,
+  // The clean winners buying (added 2026-10-17, user ask): read by the Winners seat alone, which
+  // names them in its recipe and decides only on moments that carry them.
+  ...WINNER_FOLLOW_FEATURES,
   // Dead inputs (notes/full-audit-2026-10-14, lanes 4 and 10): the launch-text read is empty on
   // every row since the text scorer has no API key, nsXCredibility is empty since TokenSage's
   // rules 0.23 moved credibility to nsXCredibility23, and nsFeeMutable is 0 on every row that
@@ -1445,6 +1467,11 @@ export const FRIENDLY_FEATURE_LABELS: Partial<Record<CandidateFeatureName, strin
   knownWinnerFirstBuyers: "known winners among first buyers",
   winnerRecentBuyers: "winner wallets buying",
   winnerRecentSellers: "winner wallets selling",
+  cleanWinnerRecentBuyers: "clean winner wallets buying",
+  cleanWinnerRecentShare: "share of buyers that are clean winners",
+  cleanWinnerBuySolShare: "share of SOL bought by clean winners",
+  recentBuyersOwn2xMean: "buyers' own 2x record",
+  recentBuyersRead: "buyers read in the newest trades",
   kolTopHolders: "KOLs among top holders",
   kolTopHolderPct: "supply held by KOLs",
   kolFirstBuyers: "KOLs among first buyers",
@@ -1711,6 +1738,11 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     winnerRecentSellers: scored.winnerRecentSellers ?? null,
     walletScoreRecentBuyersMean: scored.walletScoreRecentBuyersMean ?? null,
     walletScoreRecentBuyersScored: scored.walletScoreRecentBuyersScored ?? null,
+    cleanWinnerRecentBuyers: scored.cleanWinnerRecentBuyers ?? null,
+    cleanWinnerRecentShare: scored.cleanWinnerRecentShare ?? null,
+    cleanWinnerBuySolShare: scored.cleanWinnerBuySolShare ?? null,
+    recentBuyersOwn2xMean: scored.recentBuyersOwn2xMean ?? null,
+    recentBuyersRead: scored.recentBuyersRead ?? null,
     kolTopHolders: scored.kolTopHolders ?? null,
     kolTopHolderPct: scored.kolTopHolderPct ?? null,
     kolFirstBuyers: scored.kolFirstBuyers ?? null,

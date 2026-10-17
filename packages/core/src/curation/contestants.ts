@@ -7,6 +7,7 @@ import {
   PRICE_PATH_FEATURES,
   SAFETY_FEATURES,
   TRADE_FLOW_FEATURES,
+  WINNER_FOLLOW_FEATURES,
   type CandidateFeatureName,
 } from "./features.js";
 import { ALL_NARRATIVE_FEATURES } from "./narrativeFeatures.js";
@@ -43,7 +44,9 @@ import type { CuratorLearner } from "./trainer.js";
  *    (retired, user decision 2026-10-14).
  *    Gems (user ask 2026-10-17) is a standalone seat too, with a gate: it considers only tokens
  *    that pass the Gemerald filter as it stood that day (ContestantSpec.gate, modelGate.ts), and
- *    trains and sits its exam on those moments alone.
+ *    trains and sits its exam on those moments alone. Winners (user ask 2026-10-17) is standalone
+ *    on a reading of its own: it decides only on moments whose newest buyers were read through the
+ *    clean winner wallets' records (ContestantSpec.requires, WINNERS_RECIPE).
  *  - "topslice": only the most confident calls of the tree seats - a token one of them ranks in
  *    the top quarter of its own calls - at a fixed cutoff, nothing fitted (curation/topSlice.ts).
  *  - "narrative": a trained model that decides only once TokenSage's deep read of the coin is
@@ -132,6 +135,19 @@ export interface ContestantSpec {
    * exam's and no combiner, Trader included, stacks it. Without its gate stored it calls nothing.
    */
   gate?: string;
+  /**
+   * A seat on a reading of its own (learners only, standalone): the input a moment must carry
+   * before the seat considers it (modelGate.ts seatConsiders), as the narrative seats need the deep
+   * read. The Winners seat requires the clean-winner reading of the newest buyers. Like a gated
+   * seat it trains and sits its exam on those moments alone, so no combiner, Trader included,
+   * stacks it.
+   */
+  requires?: CandidateFeatureName;
+}
+
+/** A seat deciding on a population of its own: a frozen filter (gate) or a reading it needs (requires). */
+export function hasOwnPopulation(spec: ContestantSpec): boolean {
+  return spec.gate !== undefined || spec.requires !== undefined;
 }
 
 /** The consensus - what every subscriber sees until they pick another model. */
@@ -160,6 +176,9 @@ export const SHARP_DEEP_TREES_CONTESTANT = "sharp-deep-trees";
 
 /** The gated seat on the Gemerald filter - see GEMS_RECIPE. */
 export const GEMS_CONTESTANT = "gems";
+
+/** The seat on the clean winners buying - see WINNERS_RECIPE. */
+export const WINNERS_CONTESTANT = "winners";
 
 /** "Recent" contestants forget fast: this meta rotates in days, and they bet on that. */
 export const RECENT_HALF_LIFE_DAYS = 3;
@@ -292,7 +311,7 @@ export const TRADER_CUTOFF_SHARE = 0.1;
  * costs it little, unlike a vote). The narrative seats sit a different exam population.
  */
 export function isTraderMember(spec: ContestantSpec): boolean {
-  return spec.role === "learner" && spec.retired !== true && spec.gate === undefined;
+  return spec.role === "learner" && spec.retired !== true && !hasOwnPopulation(spec);
 }
 
 /**
@@ -312,6 +331,27 @@ export const GEMS_RECIPE: CuratorRecipe = {
   learner: "gbdt",
   twoStage: true,
   featureNames: TREES_NO_TOKENSAGE_FEATURES,
+  recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
+  cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+};
+
+/**
+ * Winners (user ask 2026-10-17: "a model that learns based on the top-performing winner wallets",
+ * leaving out wallets whose wins came from tokens transferred in; notes/winners-model-2026-10-17):
+ * Gems' shape - Survivor's two boosted-tree stages on every input but TokenSage's, a 3-day
+ * half-life, the Sharp seats' top-12% cutoff - plus the clean-winner reading of the newest buyers
+ * (WINNER_FOLLOW_FEATURES, core's wallets/winnerFollow.ts), which no other seat reads. It decides
+ * only on moments that carry that reading (ContestantSpec.requires), so its exam is the moments the
+ * live tape was read on, filled for the history by the worker's winnerFollowBackfill.ts.
+ *
+ * Point-in-time on 9,837 rows decided around a taped coin (10-11..10-17), a boosted-tree fit with
+ * the reading against the same fit without it: walk-forward AUC 0.610 against 0.597 and a top-12%
+ * 2x rate of 30.1% against 28.3% (four time splits, three seeds each; base rate 17.7%).
+ */
+export const WINNERS_RECIPE: CuratorRecipe = {
+  learner: "gbdt",
+  twoStage: true,
+  featureNames: [...TREES_NO_TOKENSAGE_FEATURES, ...WINNER_FOLLOW_FEATURES],
   recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
   cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
 };
@@ -541,6 +581,20 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     recipe: GEMS_RECIPE,
     standalone: true,
     gate: GEMERALD_GATE,
+  },
+  {
+    // User ask 2026-10-17: a model that learns from the best winner wallets, leaving out wallets
+    // whose wins came from tokens transferred in. Decides only once the newest buyers were read.
+    id: WINNERS_CONTESTANT,
+    name: "Winners",
+    description:
+      "Who is buying, read through the best wallets' records: how many clean Winner wallets (no win fed by tokens transferred in) are in the newest buyers, their share of the buyers and the SOL, and the buyers' own 2x record, beside every input but TokenSage's. Survivor's two boosted-tree stages, mostly the last few days, calling only its surest tokens - about the top 12% of the moments the newest trades were read on, moved by 2x record",
+    summary:
+      "Watches which proven winning wallets are buying a coin right now (leaving out wallets whose wins came from tokens sent to them), weighs that with the rest of the coin's picture, and calls only the ones it is surest of.",
+    role: "learner",
+    recipe: WINNERS_RECIPE,
+    standalone: true,
+    requires: "recentBuyersRead",
   },
   {
     id: NARRATIVE_CONTESTANT,
