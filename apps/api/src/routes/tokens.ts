@@ -17,6 +17,7 @@ import {
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
+import { liveCurves, type LiveCurveAnswer } from "../liveCurve.js";
 import {
   CandleCache,
   FIRST_MINUTES_MS,
@@ -154,6 +155,18 @@ export interface TokenFirstMinutes {
   candles: McapCandle[] | null;
 }
 
+/**
+ * GET /tokens/:mint/chart/fine?res=1s|15s: Pump.fun's finest candles for the token chart's shorter
+ * views (user ask 2026-10-17), its most recent page of them: on a busy coin the 1-second page
+ * reaches back minutes and the 15-second one hours. The chart draws them where they reach and its
+ * minute candles before that. Null when Pump.fun has none or its budget is spent this minute.
+ */
+export interface TokenFineCandles {
+  mint: string;
+  stepSec: 1 | 15;
+  candles: McapCandle[] | null;
+}
+
 /** One holder's trades in the coin, as the trade tape read them. */
 export interface HolderEntry {
   /** Its first buy, ms; null when it never bought (the coin came by transfer). */
@@ -193,6 +206,15 @@ let secondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
   maxEntries: 100,
 });
 let quarterCache = new CandleCache(pumpFunCandleFetcher(undefined, "15s"), { ttlMs: 60_000 });
+/**
+ * The token chart's 1-second candles, on a budget of their own: every short view polls them, and
+ * sharing the first-minutes one let a handful of open charts starve a brand-new launch's view.
+ */
+let fineSecondCache = new CandleCache(pumpFunCandleFetcher(undefined, "1s"), {
+  ttlMs: 4_000,
+  callsPerMinute: 60,
+  maxEntries: 100,
+});
 /** Past this age the 15-second page (1,000 candles with a trade) rarely still reaches the start. */
 const FIRST_MINUTES_MAX_AGE_MS = 6 * 3_600_000;
 /** A little past the 15 minutes, so the 1-second view takes in the last of them. */
@@ -203,6 +225,7 @@ export function setCandleFetcherForTests(fetcher: CandleFetcher, secondsFetcher 
   candleCache = new CandleCache(fetcher);
   secondCache = new CandleCache(secondsFetcher);
   quarterCache = new CandleCache(secondsFetcher);
+  fineSecondCache = new CandleCache(secondsFetcher);
 }
 type ChartWallets = Pick<TokenChart, "tape" | "live" | "wallets" | "holderEntries">;
 const walletCache = new KeyedCache<ChartWallets>(WALLETS_CACHE_MS);
@@ -488,6 +511,39 @@ export async function registerTokenRoutes(
     return first;
   });
 
+  /** The token chart's finer candles: 1- or 15-second, as far back as Pump.fun's page reaches. */
+  app.get("/:mintAddress/chart/fine", async (request, reply): Promise<TokenFineCandles | undefined> => {
+    const { mintAddress } = request.params as { mintAddress: string };
+    if (!MINT_RE.test(mintAddress)) {
+      reply.code(400).send({ error: "not a valid mint" });
+      return;
+    }
+    if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
+    const fine = await readTokenFine(mintAddress, fineRes(request.query));
+    reply.header("Cache-Control", `private, max-age=${fine.stepSec === 1 ? 3 : 30}`);
+    return fine;
+  });
+
+  /**
+   * The token chart's live tail: the coin's bonding-curve price changes since `after` (ms), read
+   * off the Helius stream (liveCurve.ts). Polled every couple of seconds while a chart is open, so
+   * its own limit sits above the global one's share.
+   */
+  app.get(
+    "/:mintAddress/chart/live",
+    { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+    async (request, reply): Promise<LiveCurveAnswer | undefined> => {
+      const { mintAddress } = request.params as { mintAddress: string };
+      if (!MINT_RE.test(mintAddress)) {
+        reply.code(400).send({ error: "not a valid mint" });
+        return;
+      }
+      if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
+      reply.header("Cache-Control", "no-store");
+      return readTokenLive(mintAddress, liveAfter(request.query));
+    },
+  );
+
   /**
    * A model-alerted coin's bubble map over its top 50 holders (BubbleMapHolders): the top 25 and
    * every known wallet past them, clustered alike, now and as it stood at the coin's first call.
@@ -657,6 +713,45 @@ export async function readTokenFirstMinutes(
   // A launch time from the coin's first scan can be a little late; the first candle is the start then.
   const start = candles?.[0] && startAt !== null ? Math.min(startAt, candles[0].t) : startAt;
   return { ...none, startAt: start, candles: candles ? firstMinutes(candles, start) : null };
+}
+
+/** The `res` of a fine-candles request: 1s, else 15s. */
+export function fineRes(query: unknown): "1s" | "15s" {
+  return (query as { res?: unknown } | null)?.res === "1s" ? "1s" : "15s";
+}
+
+/** The `after` of a live-tail request (ms), 0 when absent or malformed. */
+export function liveAfter(query: unknown): number {
+  const after = Number((query as { after?: unknown } | null)?.after);
+  return Number.isFinite(after) && after > 0 ? after : 0;
+}
+
+/** Whether a mint is on Token, reused a while: the live tail asks every couple of seconds. */
+const tracked = new KeyedCache<boolean>(5 * 60_000, 1_000);
+async function isTracked(mintAddress: string): Promise<boolean> {
+  const known = await tracked.get(mintAddress, async () => {
+    const row = await prisma.token.findUnique({ where: { mintAddress }, select: { id: true } });
+    return row !== null;
+  });
+  // A miss isn't kept: the coin may land on Token with its next scan.
+  if (!known) tracked.forget(mintAddress);
+  return known;
+}
+
+/** The token chart's finer candles (TokenFineCandles). */
+export async function readTokenFine(mintAddress: string, res: "1s" | "15s"): Promise<TokenFineCandles> {
+  const stepSec = res === "1s" ? 1 : 15;
+  // Token first, as readTokenChart does: Pump.fun is only asked about a coin on Token.
+  if (!(await isTracked(mintAddress))) return { mint: mintAddress, stepSec, candles: null };
+  const candles = await (res === "1s" ? fineSecondCache : quarterCache).get(mintAddress);
+  return { mint: mintAddress, stepSec, candles: candles && candles.length > 0 ? candles : null };
+}
+
+/** The token chart's live tail (LiveCurveAnswer); only a coin on Token has its curve followed. */
+export async function readTokenLive(mintAddress: string, after: number): Promise<LiveCurveAnswer> {
+  if (!(await isTracked(mintAddress)))
+    return { mint: mintAddress, source: "none", complete: true, coveredFrom: null, readAt: null, ticks: [] };
+  return liveCurves().read(mintAddress, after);
 }
 
 const weekLabels = new SharedCache<DayLabelRow[]>(TRACK_CACHE_MS);

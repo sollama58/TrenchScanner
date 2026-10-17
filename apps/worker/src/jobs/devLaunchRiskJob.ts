@@ -27,7 +27,8 @@ const logger = createLogger("dev-launch-risk");
  * DEV_LAUNCH_GRADE_KINDS finalized before `now` (only coins that reached the band are sampled, so
  * the others aren't looked up). The scan takes a coin's own launch back out of its creator's
  * record with the same rule against the same `now` (devLaunchBook.ts ownLaunchesOf), which the
- * heartbeat carries as builtAt.
+ * rows carry as computedAt (and the heartbeat, written after them, as builtAt). A creator kept no
+ * row (below MIN_LAUNCHES) is counted by the scan itself (devLaunchBook.ts unbookedLaunchesOf).
  */
 
 /** The same address check the Token.creator backfill used (20261017003000_token_creator). */

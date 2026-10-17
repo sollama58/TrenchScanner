@@ -32,16 +32,18 @@ import { FoldHead } from "./Fold";
 import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfileCards";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
-import { QUICK_LINK_SITES, useAppearance } from "../appearance";
+import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, useScoreWeights } from "../scoreWeights";
 import {
   candleCloses,
   linePoints,
+  stitch,
+  stitchVolume,
   withCallPoint,
   pointWidthMs,
+  type CloseRun,
   type MarkerKind,
-  type Point,
   type ScanFlow,
   type VolumeCandle,
 } from "../priceChart";
@@ -63,6 +65,7 @@ import {
   WalletStat,
 } from "./AlertCard";
 import { PriceChart, type ChartEvent } from "./PriceChart";
+import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveSource, type LiveTail } from "./chartFeeds";
 import {
   categoryText,
   count,
@@ -180,14 +183,24 @@ const LEAD_IN_MS = 10 * 60_000;
 /** How far either side of the call "Model View" reaches (never before the first trade). */
 const MODEL_SPAN_MS = 5 * 60_000;
 /** Points drawn at most: enough for a smooth line, few enough that each one stays hoverable. */
-const MAX_POINTS = 200;
+const MAX_POINTS = 240;
+/** Views this short read Pump.fun's 1-second candles, and up to QUARTER_VIEW_MAX_MS its 15-second ones. */
+const SECOND_VIEW_MAX_MS = 20 * 60_000;
+const QUARTER_VIEW_MAX_MS = 6 * 3_600_000;
+/** The fine candles are re-read this often: 1-second ones on a view running to now, others rarely. */
+const FINE_LIVE_POLL_MS = 5_000;
+const FINE_POLL_MS = 60_000;
+/** The live tail counts as live while its price was confirmed this recently. */
+const LIVE_STALE_MS = 10_000;
+/** The First 15m view's span. */
+const FIRST_MINUTES_MS = 15 * 60_000;
 const CHART_POLL_MS = 30_000;
 /** While a lookup's scan is still landing, its chart (and the flagged wallets on it) is re-read faster. */
 const SCANNING_POLL_MS = 8_000;
 
 const LINKS = [
   { label: "DexScreener", href: (m: string) => `https://dexscreener.com/solana/${m}` },
-  { label: "Pump.fun", href: (m: string) => `https://pump.fun/coin/${m}` },
+  { label: "Pump.fun", href: pumpFunHref },
   { label: "Solscan", href: (m: string) => `https://solscan.io/token/${m}` },
 ];
 
@@ -1317,7 +1330,7 @@ function lockedText(error: Error, what: string): string | null {
   return null;
 }
 
-function ChartCard({
+export function ChartCard({
   card,
   chart: { data, error },
   alertAt,
@@ -1331,6 +1344,7 @@ function ChartCard({
   what: string;
 }) {
   const utility = useContext(UtilityContext);
+  const api = useTokenApi(card.token.mintAddress);
   // Every token view opens on the coin's whole history; Model View is a click away.
   const [range, setRange] = useState<Range>("all");
   const [height, setHeight] = useState(chartHeight);
@@ -1360,66 +1374,100 @@ function ChartCard({
 
   // The coin's first trade, for whether its first minutes can still be drawn in fine detail.
   const firstTradeAt = data?.candles?.[0]?.t ?? data?.marketCap[0]?.t ?? null;
-  const firstShown = firstTradeAt !== null && Date.now() - firstTradeAt <= FIRST_VIEW_MAX_AGE_MS;
-  const shownRange: Range = range === "first" && !firstShown ? "all" : range;
+  const young = firstTradeAt !== null && Date.now() - firstTradeAt <= FIRST_VIEW_MAX_AGE_MS;
+  const shownRange: Range = range === "first" && !young ? "all" : range;
+
+  // The view's window over the minute data, before the finer reads that fill it in.
+  const bounds = useMemo(
+    () => (data ? viewBounds(data, shownRange, alertAt) : null),
+    [data, shownRange, alertAt],
+  );
+  // Finer candles where they add detail: 1-second ones for a view of minutes, 15-second ones for
+  // hours - and for a short view the 1-second page doesn't reach back across (Pump.fun sends the
+  // most recent 1,000 with a trade, minutes of a busy coin).
+  const span = bounds ? bounds.to - bounds.from : Infinity;
+  const fineOk = shownRange !== "first" && !!data?.candles?.length;
+  // Only for a view of the last minutes: the 1-second page never reaches back further, and each
+  // read spends the shared Pump.fun budget.
+  const wantSecond =
+    fineOk && !!bounds && span <= SECOND_VIEW_MAX_MS && bounds.from >= Date.now() - SECOND_VIEW_MAX_MS;
+  const second = useFineCandles(
+    api,
+    wantSecond ? "1s" : null,
+    bounds?.live ? FINE_LIVE_POLL_MS : FINE_POLL_MS,
+  );
+  const secondReaches = !!second?.candles?.length && !!bounds && second.candles[0]!.t <= bounds.from + 60_000;
+  const quarter = useFineCandles(
+    api,
+    fineOk && span <= QUARTER_VIEW_MAX_MS && (!wantSecond || (second !== null && !secondReaches))
+      ? "15s"
+      : null,
+    FINE_POLL_MS,
+  );
+  // The live curve's every price change, while the view runs to now on a young coin.
+  const tail = useLiveTail(api, young && shownRange !== "first" && !!bounds?.live);
 
   // A call card's alert price is the call's own anchor; a filter alert's can be a scan's reading.
   const callPriced = card.kind === "curated" && alertMcap > 0;
   const view = useMemo(() => {
-    if (!data) return null;
+    if (!data || !bounds) return null;
     const fromCandles = !!data.candles && data.candles.length > 0;
-    // The line runs through each minute's close at the minute's end, else through the scan's readings.
-    const source: Point[] = fromCandles
-      ? candleCloses(data.candles!)
-      : data.marketCap.map((p) => ({ t: p.t, v: p.usd }));
-    if (source.length < 2)
-      return {
-        points: [] as Point[],
-        fromCandles,
-        step: undefined,
-        live: true,
-        latest: 0,
-        scans: [] as Point[],
-        candles: [] as VolumeCandle[],
-      };
-    const first = source[0]!.t;
+    // The newest candle is still open: its close so far is drawn at now, not at its end.
+    const now = Date.now();
+    const runOf = (candles: NonNullable<TokenChart["candles"]>, stepMs: number) => ({
+      stepMs,
+      candles: candles.map((k) => ({ ...k, vol: k.vol ?? 0 })),
+      points: candleCloses(candles, stepMs).map((p) => (p.t > now ? { ...p, t: now } : p)),
+    });
+    // Coarse to fine: the minute candles, then the 15-second and 1-second ones wherever they reach.
+    const fines = [quarter, second].flatMap((f) =>
+      f?.candles?.length ? [runOf(f.candles, f.stepSec * 1_000)] : [],
+    );
+    // The line runs through each candle's close at its end - the finest candles wherever they
+    // reach, the coarser ones before - then every live curve change after the newest candle.
+    // Without candles, through the scan's readings.
+    const runs: (CloseRun & { candles: VolumeCandle[] })[] = fromCandles
+      ? [runOf(data.candles!, 60_000), ...fines]
+      : [{ points: data.marketCap.map((p) => ({ t: p.t, v: p.usd })), stepMs: 0, candles: [] }];
+    const candled = stitch(runs);
+    const source = stitch(runs, bounds.live ? tail.ticks : []);
+    if (source.length < 2) return null;
     const last = source[source.length - 1]!.t;
-    const from =
-      shownRange === "all"
-        ? first
-        : shownRange === "1h"
-          ? last - 3_600_000
-          : shownRange === "model"
-            ? Math.max(first, alertAt - MODEL_SPAN_MS)
-            : // From the alert: unless the data starts after it (then all of it).
-              alertAt - LEAD_IN_MS > first
-              ? alertAt - LEAD_IN_MS
-              : first;
-    const to = shownRange === "model" ? alertAt + MODEL_SPAN_MS : last;
-    const step = pointWidthMs(Math.min(to, last) - Math.max(from, first) + 60_000, MAX_POINTS);
+    const from = bounds.from;
+    const to = bounds.live ? last : bounds.to;
+    // Which widths the view is drawn from: a run is used where it wins (stitch's rule) in view.
+    const used = runs.filter((r, i) => {
+      const next = runs.slice(i + 1).find((n) => n.points.length > 0);
+      const until = next ? next.points[0]!.t - next.stepMs : Infinity;
+      return r.points.some((p) => p.t >= from && p.t <= to && p.t <= until);
+    });
+    const candledTo = candled.length > 0 ? candled[candled.length - 1]!.t : -Infinity;
+    const usesTail = bounds.live && tail.ticks.some((p) => p.t >= from && p.t > candledTo);
+    const finest = usesTail ? 1_000 : Math.min(...used.map((r) => r.stepMs || 30_000), 60_000);
+    const step = pointWidthMs(Math.max(1_000, Math.min(to, last) - from), maxPoints(), finest);
     const line = linePoints(source, from, step, to);
     return {
       // A call is priced from a fresh quote (its anchor), so its price goes on the line at its
       // time: the "Called" marker then sits on the price the call and its grade start from.
       points: callPriced ? withCallPoint(line, { t: alertAt, v: alertMcap }) : line,
       fromCandles,
-      step: fromCandles ? step : undefined,
+      step,
       // Whether the view runs to the latest reading (Model View's window can end before it).
-      live: to >= last,
+      live: bounds.live,
       latest: source[source.length - 1]!.v,
+      sources: viewSources(
+        fromCandles ? used.map((r) => r.stepMs / 1_000) : [],
+        usesTail ? tail.source : null,
+      ),
       // The scans the model read before calling it, drawn as dots in Model View.
       scans:
         shownRange === "model"
           ? data.marketCap.filter((p) => p.t >= from && p.t <= alertAt).map((p) => ({ t: p.t, v: p.usd }))
           : [],
-      // The minutes in view, for the volume lane.
-      candles: fromCandles
-        ? data
-            .candles!.filter((k) => k.t + 60_000 >= from && k.t <= to)
-            .map((k) => ({ ...k, vol: k.vol ?? 0 }))
-        : [],
+      // The candles in view for the volume lane, each stretch from one width only.
+      candles: stitchVolume(runs).filter((k) => k.t + (k.w ?? 60_000) >= from && k.t <= to),
     };
-  }, [data, shownRange, alertAt, alertMcap, callPriced]);
+  }, [data, bounds, quarter, second, tail.ticks, tail.source, shownRange, alertAt, alertMcap, callPriced]);
 
   // The scans' buy and sell counts, for the buy share in the chart's readouts.
   const flow = useMemo<ScanFlow[]>(
@@ -1430,6 +1478,7 @@ function ChartCard({
     [data],
   );
 
+  const streaming = shownRange !== "first" && isStreaming(tail);
   const locked = error && !data ? lockedText(error, "chart") : null;
   return (
     <>
@@ -1441,21 +1490,20 @@ function ChartCard({
               Scan readings
             </span>
           )}
+          {streaming && <LiveBadge tail={tail} />}
           <span className="tm-ranges" role="group" aria-label="Chart range">
-            {RANGES.filter((r) => (!utility || r.id !== "model") && (firstShown || r.id !== "first")).map(
-              (r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  className={`tm-range${shownRange === r.id ? " on" : ""}`}
-                  aria-pressed={shownRange === r.id}
-                  title={r.title}
-                  onClick={() => setRange(r.id)}
-                >
-                  {utility && r.id === "alert" ? "From scan" : r.label}
-                </button>
-              ),
-            )}
+            {RANGES.filter((r) => (!utility || r.id !== "model") && (young || r.id !== "first")).map((r) => (
+              <button
+                key={r.id}
+                type="button"
+                className={`tm-range${shownRange === r.id ? " on" : ""}`}
+                aria-pressed={shownRange === r.id}
+                title={r.title}
+                onClick={() => setRange(r.id)}
+              >
+                {utility && r.id === "alert" ? "From scan" : r.label}
+              </button>
+            ))}
           </span>
         </h4>
         {shownRange === "first" && (
@@ -1475,44 +1523,115 @@ function ChartCard({
         {error && !data && !locked && (
           <p className="error small">Couldn&apos;t load the chart: {error.message}</p>
         )}
-        {shownRange !== "first" && view && view.points.length < 2 && (
+        {shownRange !== "first" && data && (!view || view.points.length < 2) && (
           <p className="muted small tm-chart-empty">
             No trades to chart yet{shownRange !== "all" ? " in this range" : ""}.
           </p>
         )}
         {shownRange !== "first" && view && view.points.length >= 2 && (
-          <PriceChart
-            points={view.points}
-            stepMs={view.step}
-            events={events}
-            candles={view.candles}
-            flow={flow}
-            seenUntil={shownRange === "model" ? alertAt : undefined}
-            live={view.live}
-            now={view.latest}
-            scans={view.scans}
-            height={height}
-            ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
-          />
-        )}
-        {shownRange === "model" && view && view.points.length >= 2 && (
-          <p className="faint small tm-model-note">
-            <i className="tm-scan-dot" aria-hidden="true" />{" "}
-            {view.scans.length > 0
-              ? `${view.scans.length} scan${view.scans.length === 1 ? "" : "s"} the model read · `
-              : ""}
-            5 minutes either side of the call; shaded is after it, which the model never saw.
-          </p>
+          <>
+            <PriceChart
+              points={view.points}
+              stepMs={view.step}
+              events={events}
+              candles={view.candles}
+              flow={flow}
+              seenUntil={shownRange === "model" ? alertAt : undefined}
+              live={view.live}
+              now={view.latest}
+              scans={view.scans}
+              height={height}
+              ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
+            />
+            <p className="faint small tm-chart-src">
+              {shownRange === "model" && (
+                <>
+                  <i className="tm-scan-dot" aria-hidden="true" />{" "}
+                  {view.scans.length > 0
+                    ? `${view.scans.length} scan${view.scans.length === 1 ? "" : "s"} the model read · `
+                    : ""}
+                  5 minutes either side of the call; shaded is after it, which the model never saw.{" "}
+                </>
+              )}
+              <span title="Where this view's prices come from, finest last">{view.sources}</span>
+            </p>
+          </>
         )}
       </section>
     </>
   );
 }
 
+/** A view's window over the minute data: where it starts and ends, and whether it runs to now. */
+function viewBounds(
+  data: TokenChart,
+  range: Range,
+  alertAt: number,
+): { from: number; to: number; live: boolean } | null {
+  const times = data.candles?.length ? data.candles.map((k) => k.t + 60_000) : data.marketCap.map((p) => p.t);
+  if (times.length === 0) return null;
+  const first = Math.min(times[0]!, data.candles?.[0]?.t ?? Infinity);
+  const last = times[times.length - 1]!;
+  const from =
+    range === "all"
+      ? first
+      : range === "1h"
+        ? Math.max(first, last - 3_600_000)
+        : range === "model"
+          ? Math.max(first, alertAt - MODEL_SPAN_MS)
+          : // From the alert: unless the data starts after it (then all of it).
+            Math.max(first, alertAt - LEAD_IN_MS);
+  // Model View's window can end before the latest reading; every other view runs to it.
+  const to = range === "model" ? alertAt + MODEL_SPAN_MS : Math.max(last, Date.now());
+  return { from, to, live: range !== "model" || to >= Date.now() };
+}
+
+/** "Drawn from Pump.fun's 1-minute, then 1-second candles, then ...": what a view is drawn from. */
+function viewSources(candleSecs: number[], live: LiveSource | null): string {
+  if (candleSecs.length === 0) return "Drawn from our scans' readings (Pump.fun had no candles).";
+  const widths = candleSecs.map((s) => (s >= 60 ? `${s / 60}-minute` : `${s}-second`));
+  const tail =
+    live === "stream"
+      ? ", then every block of the live curve (Helius stream)"
+      : live === "rpc"
+        ? `, then the live curve read every ${LIVE_POLL_MS / 1_000}s`
+        : "";
+  return `Drawn from Pump.fun's ${widths.join(", then ")} candles${tail}.`;
+}
+
+/** Whether the live tail is current: its price confirmed within the last few polls. */
+function isStreaming(tail: LiveTail): boolean {
+  return (
+    !tail.done &&
+    (tail.source === "stream" || tail.source === "rpc") &&
+    tail.readAt !== null &&
+    Date.now() - tail.readAt < LIVE_STALE_MS
+  );
+}
+
+/** The header's "Live" pill: the chart is drawing the coin's curve as it changes. */
+function LiveBadge({ tail }: { tail: LiveTail }) {
+  const how =
+    tail.source === "stream"
+      ? "every price change, block by block, from the Helius stream"
+      : `the bonding curve, read every ${LIVE_POLL_MS / 1_000} seconds (the stream is catching up)`;
+  return (
+    <span className="tm-live" title={`Live: ${how}`}>
+      <i aria-hidden="true" /> Live
+    </span>
+  );
+}
+
+/** Points drawn at most: fewer on a phone, where each still needs room to be hovered. */
+function maxPoints(): number {
+  return window.innerWidth <= 640 ? 160 : MAX_POINTS;
+}
+
 /**
  * The "First 15m" view (user ask 2026-10-17): the coin's first 15 minutes from Pump.fun's candles
  * (GET /tokens/:mint/chart/first), every second while the coin is inside them and re-read every
- * few seconds, then in 15-second steps. Read only while the view is open.
+ * few seconds, then in 15-second steps. While it is inside them the live curve's changes run on
+ * past the newest candle. The axis counts from the launch. Read only while the view is open.
  */
 function FirstMinutesChart({
   mint,
@@ -1534,17 +1653,26 @@ function FirstMinutesChart({
   useEffect(() => {
     if (data && !data.live) setLive(false);
   }, [data]);
+  const tail = useLiveTail(api, live && !!data?.live);
   const view = useMemo(() => {
     const candles = data?.candles;
     if (!data || !candles || candles.length === 0) return null;
     const step = data.stepSec * 1_000;
-    // From the first trade's open, then each candle's close at its end, when that price held.
-    const points: Point[] = [
-      { t: candles[0]!.t, v: candles[0]!.o },
-      ...candles.map((k) => ({ t: k.t + step, v: k.c })),
-    ];
-    return { points, step, candles: candles.map((k) => ({ ...k, vol: k.vol ?? 0 })) };
-  }, [data]);
+    const start = data.startAt ?? candles[0]!.t;
+    const end = start + FIRST_MINUTES_MS;
+    // From the first trade's open, then each candle's close at its end, when that price held, then
+    // the curve's own changes after the newest candle, inside the 15 minutes.
+    const points = stitch(
+      [{ points: [{ t: candles[0]!.t, v: candles[0]!.o }, ...candleCloses(candles, step)], stepMs: step }],
+      data.live ? tail.ticks.filter((p) => p.t <= end) : [],
+    );
+    return {
+      points: linePoints(points, start, pointWidthMs(FIRST_MINUTES_MS, maxPoints() * 2, step)),
+      step,
+      start,
+      candles: candles.map((k) => ({ ...k, vol: k.vol ?? 0, w: step })),
+    };
+  }, [data, tail.ticks]);
 
   if (!data && !error) return <ChartSkeleton>Loading the first minutes…</ChartSkeleton>;
   if (error && !data) {
@@ -1566,6 +1694,7 @@ function FirstMinutesChart({
       </p>
     );
   }
+  const streaming = isStreaming(tail);
   return (
     <>
       <PriceChart
@@ -1574,11 +1703,16 @@ function FirstMinutesChart({
         events={events}
         candles={view.candles}
         live={data!.live}
+        origin={view.start}
         height={height}
         ariaLabel={`${label} market cap in its first 15 minutes, from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
       />
-      <p className="faint small tm-model-note">
-        {data!.live ? "Live, second by second" : "In 15-second steps"} · the first 15 minutes from launch.
+      <p className="faint small tm-chart-src">
+        {streaming && <LiveBadge tail={tail} />} Time since launch ·{" "}
+        {data!.live
+          ? `Pump.fun 1-second candles${tail.source === "stream" ? ", then every block from the Helius stream" : tail.source === "rpc" ? ", then the curve read every few seconds" : ""}`
+          : "Pump.fun 15-second candles"}{" "}
+        · the first 15 minutes from launch.
       </p>
     </>
   );

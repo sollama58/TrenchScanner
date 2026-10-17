@@ -26,6 +26,7 @@ import {
   runPeakOf,
   trainingGradeOf,
   isFrozenCurveRow,
+  rowReturn,
 } from "./curatorTrainingJob.js";
 import {
   collectCuratedContender,
@@ -240,7 +241,8 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     const hot = await prisma.token.create({ data: { mintAddress: `${TAG}-lane-name` } });
     expect(await collectAndEmit(loadEnv(), hot, scoredWithTotal(hot.mintAddress, 90))).toBe(true);
     const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: hot.id } });
-    expect(alert).toMatchObject({ model: "linear", modelName: "Lean Linear #7" });
+    // A lane stored before goals were named shows with its seat's goal in front (goalNamed).
+    expect(alert).toMatchObject({ model: "linear", modelName: "Return Lean Linear #7" });
   });
 
   it("writes the consensus after its members, pointing at their new rows", async () => {
@@ -613,6 +615,55 @@ describe("isFrozenCurveRow", () => {
     expect(isFrozenCurveRow({ volume1hUsd: 0, buys1h: 3 })).toBe(false);
     expect(isFrozenCurveRow({ volume1hUsd: null, buys1h: 0 })).toBe(false);
     expect(isFrozenCurveRow(null)).toBe(false);
+  });
+});
+
+describe("rowReturn", () => {
+  const anchorAt = new Date("2026-10-17T00:00:00Z");
+  const at = (minutes: number) => new Date(anchorAt.getTime() + minutes * 60_000);
+  // Sold 35% at 2x, the trail armed at a 2.5x high and never fired.
+  const sold = {
+    anchorAt,
+    anchorPriceUsd: 1,
+    low1hPriceUsd: 0.9,
+    peak1hPriceUsd: 2.5,
+    peakBeforeStopPriceUsd: 2.5,
+    stoppedAt: null,
+    trailHighPriceUsd: 2.5,
+    trailExitAt: null,
+    trailExitPriceUsd: null,
+    // Priced under an older plan: never read for a row that sold.
+    simReturnPct: 999,
+    extended24h: true,
+  };
+
+  it("closes a trailing share at the price taken just after the hold cap", () => {
+    const r = rowReturn({ ...sold, lastPriceUsd: 1.5, lastCheckedAt: at(183) });
+    expect(r.returnPct).toBeCloseTo((0.35 * 2 + 0.65 * 1.5 - 1) * 100, 6);
+    expect(r.crashed).toBe(false);
+  });
+
+  it("closes an older row's trailing share at the window close when its watch ended there", () => {
+    const r = rowReturn({
+      ...sold,
+      trailHighPriceUsd: null,
+      extended24h: false,
+      lastPriceUsd: 1.2,
+      lastCheckedAt: at(30),
+    });
+    expect(r.returnPct).toBeCloseTo((0.35 * 2 + 0.65 * 1.2 - 1) * 100, 6);
+  });
+
+  it("leaves a sold row's return unknown without a price at the cap, never the stored one", () => {
+    expect(rowReturn({ ...sold, lastPriceUsd: 3, lastCheckedAt: at(24 * 60) })).toEqual({ crashed: false });
+    expect(rowReturn({ ...sold, lastPriceUsd: null, lastCheckedAt: null })).toEqual({ crashed: false });
+  });
+
+  it("reads the stored return of a row that never sold, and marks a stop-out as a crash", () => {
+    const flat = { ...sold, peak1hPriceUsd: 1.5, peakBeforeStopPriceUsd: 1.5, trailHighPriceUsd: null };
+    expect(rowReturn({ ...flat, simReturnPct: 10 })).toEqual({ returnPct: 10, crashed: false });
+    const stopped = { ...flat, low1hPriceUsd: 0.4, stoppedAt: at(10), simReturnPct: null };
+    expect(rowReturn(stopped)).toEqual({ returnPct: -50, crashed: true });
   });
 });
 

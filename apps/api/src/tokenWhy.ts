@@ -5,6 +5,7 @@ import {
   loadLiveScales,
   usableLiveScores,
   passesEventPreGate,
+  COLLAPSE_1M_PCT,
   NEVER_EMIT_THRESHOLD,
   rankFromQuantiles,
   inMcapBand,
@@ -86,7 +87,10 @@ export function topPctOf(scores: readonly number[], score: number): number {
   return Math.min(100, Math.max(0.1, Math.round(((above + 1) / scores.length) * 1000) / 10));
 }
 
-/** The pre-gate test a scan misses, in plain words; null when it passes. */
+/**
+ * The pre-gate test a scan misses, in plain words; null when it passes. The scan carries no
+ * 1-minute path return, so the 1-minute collapse test isn't read here (noMomentReason).
+ */
 export function gateMiss(
   s: {
     marketCapUsd: number;
@@ -121,6 +125,23 @@ export function gateMiss(
     return `past an hour old, it wasn't up ${PRE_GATE_OLD_COIN_MIN_5M_PCT}% over five minutes`;
   }
   return "its price was collapsing: down 80% or more over five minutes, or 65% or more within a minute";
+}
+
+/**
+ * Why a coin with no decision moment never got one, from its newest scan. A snapshot stores no
+ * 1-minute path return (the curve or price tape's, isCollapsing's first test), so gateMiss can't
+ * see that test: a scan that passes every other test while the coin has no moment was either not
+ * yet decided on or held by the 1-minute collapse, and the answer names both.
+ */
+export function noMomentReason(
+  s: Parameters<typeof gateMiss>[0],
+  band: { min: number; max: number },
+): string {
+  return (
+    gateMiss(s, band) ??
+    "the models hadn't reached a decision moment on it yet, or its price was collapsing within a " +
+      `minute (down ${Math.abs(COLLAPSE_1M_PCT)}%+), which scans don't record`
+  );
 }
 
 /** Each served seat's cutoff parts, read out of params in SQL (params is the whole model). */
@@ -175,8 +196,13 @@ async function buildWhy(env: Env, tokenId: string, at: number | null): Promise<T
         ageMinutes: true,
       },
     });
-    const miss = snap ? gateMiss(snap, { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX }) : null;
-    return { moment: null, gate: miss ?? "the models hadn't reached a decision moment on it yet", seats: [] };
+    return {
+      moment: null,
+      gate: snap
+        ? noMomentReason(snap, { min: env.MCAP_FILTER_MIN, max: env.MCAP_FILTER_MAX })
+        : "the models hadn't reached a decision moment on it yet",
+      seats: [],
+    };
   }
 
   const scores = (moment.seatScores ?? {}) as Record<string, unknown>;

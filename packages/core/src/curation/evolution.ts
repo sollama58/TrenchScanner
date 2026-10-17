@@ -9,6 +9,7 @@ import {
 } from "./contestants.js";
 import { MARKET_LEARNER_FEATURE_NAMES, learnerSubset, type CandidateFeatureName } from "./features.js";
 import { MIN_LIVE_CALLS_TO_RANK } from "./leaderboard.js";
+import type { SeatGoal } from "./trainer.js";
 
 /**
  * The curator contest, evolving. Every learner seat on the roster (contestants.ts) is a LANE: a
@@ -101,7 +102,11 @@ export function normalizeRecipe(recipe: CuratorRecipe, baseHalfLifeDays: number)
   const recencyHalfLifeDays = recipe.recencyHalfLifeDays ?? baseHalfLifeDays;
   // The two-stage shape is inherited, never mutated: it is a different question (survive, then
   // run), and a seat that holds it keeps asking it.
-  const shape = recipe.twoStage ? { twoStage: true as const } : {};
+  // The goal is inherited the same way: what the seat is trained and examined on (SeatGoal).
+  const shape = {
+    ...(recipe.twoStage ? { twoStage: true as const } : {}),
+    ...(recipe.goal !== undefined ? { goal: recipe.goal } : {}),
+  };
   if (recipe.learner === "gbdt") {
     const boosting: BoostingOptions = {};
     for (const k of TREE_KNOBS) boosting[k] = recipe.boosting?.[k] ?? DEFAULT_BOOSTING_OPTIONS[k];
@@ -225,6 +230,7 @@ export function mutateRecipe(
                 learner: "logistic",
                 recencyHalfLifeDays: child.recencyHalfLifeDays,
                 twoStage: child.twoStage,
+                goal: child.goal,
               },
               opts.baseHalfLifeDays,
             );
@@ -237,6 +243,7 @@ export function mutateRecipe(
           learner: child.learner === "gbdt" ? "logistic" : "gbdt",
           recencyHalfLifeDays: child.recencyHalfLifeDays,
           twoStage: child.twoStage,
+          goal: child.goal,
         },
         opts.baseHalfLifeDays,
       );
@@ -262,6 +269,7 @@ export function mutateRecipe(
                   learner: "logistic",
                   recencyHalfLifeDays: child.recencyHalfLifeDays,
                   twoStage: child.twoStage,
+                  goal: child.goal,
                 },
                 opts.baseHalfLifeDays,
               );
@@ -284,7 +292,18 @@ const sameSet = (names: readonly string[], set: readonly CandidateFeatureName[])
 const isOrderFlow = (names: readonly string[]) => sameSet(names, ORDER_FLOW_FEATURES);
 const isMomentum = (names: readonly string[]) => sameSet(names, MOMENTUM_FEATURES);
 
-/** The family-and-traits part of a lane's name, e.g. "Deep Trees Recent". */
+/** The goal part of a bred lane's name, so an evolved seat still says what it trains for. */
+const GOAL_NAMES: Record<SeatGoal, string> = {
+  "2x": "2x",
+  "4x": "4x",
+  "10x": "10x",
+  return: "Return",
+  safe: "Safe",
+  moonshot: "Moonshot",
+  catch: "Catcher",
+};
+
+/** The goal-family-and-traits part of a lane's name, e.g. "Return Deep Trees Recent". */
 export function traitName(recipe: CuratorRecipe, baseHalfLifeDays: number): string {
   const r = normalizeRecipe(recipe, baseHalfLifeDays);
   let family: string;
@@ -293,7 +312,7 @@ export function traitName(recipe: CuratorRecipe, baseHalfLifeDays: number): stri
     family = depth >= 5 ? "Deep Trees" : depth <= 2 ? "Shallow Trees" : "Trees";
     const objective = r.boosting!.objective;
     if (objective === "lambdarank") family = `Ranked ${family}`;
-    else if (objective === "runSize") family = `Runner ${family}`;
+    else if (objective === "runSize" && r.goal !== "moonshot") family = `Runner ${family}`;
   } else if (r.learner === "forest") {
     const depth = r.forest!.maxDepth!;
     family = depth >= 8 ? "Deep Forest" : "Forest";
@@ -306,7 +325,7 @@ export function traitName(recipe: CuratorRecipe, baseHalfLifeDays: number): stri
   }
   const hl = r.recencyHalfLifeDays!;
   const memory = hl <= 4 ? " Recent" : hl >= 30 ? " Patient" : "";
-  return (r.twoStage ? "Survivor " : "") + family + memory;
+  return (r.goal ? `${GOAL_NAMES[r.goal]} ` : "") + (r.twoStage ? "Survivor " : "") + family + memory;
 }
 
 const fmtDays = (d: number) => `${Number.isInteger(d) ? d : d.toFixed(1)} day${d === 1 ? "" : "s"}`;
@@ -412,12 +431,24 @@ export function withLanes(specs: readonly ContestantSpec[], lanes: readonly Lane
     if (!lane || lane.generation === 0) return s;
     return {
       ...s,
-      name: lane.name,
+      name: goalNamed(lane),
       description: lane.description,
       summary: plainSummary(lane.recipe, lane.parentName),
       recipe: lane.recipe,
     };
   });
+}
+
+/**
+ * A lane's name with its goal in front (GOAL_NAMES): lanes bred before goals existed (2026-10-17)
+ * were stored as "Deep Trees #3", and keep that name in the table; they show as "Return Deep
+ * Trees #3". A name that already starts with its goal is left as it is.
+ */
+export function goalNamed(lane: Pick<Lane, "name" | "recipe">): string {
+  const goal = lane.recipe.goal;
+  if (goal === undefined) return lane.name;
+  const prefix = GOAL_NAMES[goal];
+  return lane.name.startsWith(`${prefix} `) ? lane.name : `${prefix} ${lane.name}`;
 }
 
 /** A lane as selection sees it: its blended leaderboard score, and this run's exam on its own. */
@@ -510,6 +541,12 @@ export interface ReplacementInput {
    * field that has collapsed onto one family has no fallback when the market shifts under it.
    */
   challengerLearners?: readonly string[];
+  /**
+   * Each challenger's goal (CuratorRecipe.goal, unset = "2x"), in breeding order. When given, a
+   * challenger only takes a seat with the same goal: a seat keeps what it is trained and judged on
+   * (SeatGoal), and a Moonshot child never lands in a Return seat or the other way round.
+   */
+  challengerGoals?: readonly (SeatGoal | undefined)[];
   /**
    * The statistical gate on a takeover, when given (see TakeoverEvidence). Without it the margin
    * alone decides, as before.
@@ -627,22 +664,24 @@ export function equalShareCalls(
 
 /**
  * The share of bootstrap resamples (rows drawn with replacement, the SAME draw for both sides)
- * in which the challenger's 2x rate is higher than the lane's. Both sides are given as their call
- * masks over the same rows - "would it have called row i" - so the comparison is paired: both see
- * the same lucky and unlucky rows in every resample. Only the 2x rate is compared (wins over calls
- * drawn): no catch, run size or 4x/10x part, and the masks should call an equal share of the rows
- * (equalShareCalls), so a side that calls more rows is not credited for the runners it sweeps up -
- * the way the Default is picked on its 2x alone (user decision 2026-10-14). Null when either side
- * called nothing (no record to compare).
+ * in which the challenger's average value per call is higher than the lane's. `values` is each
+ * row's worth toward the seat's goal (goalValue in trainer.ts: 1/0 for a hit-rate goal, the return
+ * for "return", and so on), so for the 2x goal this is the 2x rate (user decision 2026-10-14) and
+ * for the others the seat's own goal (user ask 2026-10-17: "trained and examined on different
+ * goals"). Both sides are given as their call masks over the same rows - "would it have called
+ * row i" - so the comparison is paired: both see the same lucky and unlucky rows in every
+ * resample. The masks should call an equal share of the rows (equalShareCalls), so a side that
+ * calls more rows is not credited for the runners it sweeps up. Null when either side called
+ * nothing (no record to compare).
  */
 export function pairedBootstrapConfidence(
-  labels: ArrayLike<number>,
+  values: ArrayLike<number>,
   challengerCalls: ArrayLike<number>,
   laneCalls: ArrayLike<number>,
   rng: Rng,
   draws = BOOTSTRAP_DRAWS,
 ): number | null {
-  const n = labels.length;
+  const n = values.length;
   if (n === 0 || challengerCalls.length !== n || laneCalls.length !== n) return null;
   let anyChallenger = false;
   let anyLane = false;
@@ -660,7 +699,7 @@ export function pairedBootstrapConfidence(
     let lWins = 0;
     for (let k = 0; k < n; k++) {
       const i = Math.floor(rng() * n);
-      const win = labels[i]! > 0 ? 1 : 0;
+      const win = values[i]!;
       if (challengerCalls[i]) {
         cCalls += 1;
         cWins += win;
@@ -686,7 +725,8 @@ export interface Replacement {
  * lanes weakest of all) gives its seat to the best challenger, when that challenger beat the
  * lane's own exam on this same run - same rows, same folds - by `margin` points, and (with
  * evidence) clears a bootstrap bar raised for the number of challengers it was picked from. With challengerLearners, every
- * model family keeps at least one seat (see ReplacementInput.challengerLearners).
+ * model family keeps at least one seat (see ReplacementInput.challengerLearners); with
+ * challengerGoals, only a seat of the challenger's own goal is open to it.
  */
 export function chooseReplacement(input: ReplacementInput): Replacement | null {
   let best = -1;
@@ -699,6 +739,7 @@ export function chooseReplacement(input: ReplacementInput): Replacement | null {
   }
   if (best === -1) return null;
   const family = input.challengerLearners?.[best];
+  const goal = input.challengerGoals ? (input.challengerGoals[best] ?? "2x") : undefined;
   const familySeats = new Map<string, number>();
   for (const l of input.lanes) {
     const f = recipeFamily(l.lane.recipe);
@@ -707,6 +748,7 @@ export function chooseReplacement(input: ReplacementInput): Replacement | null {
   const seasoned = input.lanes.filter(
     (l) =>
       input.now.getTime() - l.lane.bornAt.getTime() >= input.minAgeMs &&
+      (goal === undefined || (l.lane.recipe.goal ?? "2x") === goal) &&
       (family === undefined ||
         recipeFamily(l.lane.recipe) === family ||
         familySeats.get(recipeFamily(l.lane.recipe))! > 1),

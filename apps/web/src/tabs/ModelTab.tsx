@@ -690,9 +690,9 @@ function BaselineChart({
           </li>
           <li>
             <strong>Passes the pre-check</strong>: market cap inside the scanner&apos;s band ($10k to $1M),
-            under 6 hours old, buyers making at least 55% of the last hour&apos;s trades, price not falling
-            over the last 5 minutes (up at least 25% once a token is an hour old), and the fresh and empty
-            wallet checks done.
+            under 6 hours old, buyers making at least 55% of the last hour&apos;s trades, price not collapsing
+            (down 65% or more within a minute, or 80% or more over 5 minutes; once a token is an hour old, up
+            at least 25% over the last 5 minutes instead), and the fresh and empty wallet checks done.
           </li>
           <li>
             <strong>First time per token per hour</strong>: only the first moment a token passes counts, so a
@@ -1507,6 +1507,16 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
               to 50x earn the same points above; this is what tells them apart.
             </li>
           )}
+          {w.returnPct != null && (
+            <li>
+              <strong>{Math.round(w.returnPct * 100)} points for average return.</strong> What a call returns
+              when traded under the fixed exit plan, averaged over every call: nothing at{" "}
+              {sc.returnFloorPct ?? -50}% (every call a full stop), full points at +{sc.returnTargetPct ?? 25}
+              %. The hit rates count a coin that fell to the stop the same as one that went nowhere; this part
+              tells them apart. A record without simulated returns is scored on the other parts, scaled to
+              100.
+            </li>
+          )}
           {w.catchRate != null && (
             <li>
               <strong>{Math.round(w.catchRate * 100)} points for catching runners.</strong> Of the tokens that
@@ -1560,6 +1570,16 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
                 <span className="num">{b.pointsRun.toFixed(0)}</span> points)
               </>
             )}
+            {b.pointsReturn != null && b.provenReturnPct != null && w.returnPct != null && (
+              <>
+                {" "}
+                and an average return of <span className="num">{b.provenReturnPct.toFixed(0)}%</span> a call (
+                {Math.round(w.returnPct * 100)} × ({b.provenReturnPct.toFixed(0)} − {sc.returnFloorPct ?? -50}
+                )/(
+                {sc.returnTargetPct ?? 25} − {sc.returnFloorPct ?? -50}) ={" "}
+                <span className="num">{b.pointsReturn.toFixed(0)}</span> points)
+              </>
+            )}
             {b.pointsCatch != null && b.provenCatchPct != null && w.catchRate != null && (
               <>
                 {" "}
@@ -1598,7 +1618,7 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
         <p className="small">
           <strong>
             {board.exitPlan ??
-              "Buy at the alert price, sell half at 2x, let the rest ride with a trailing exit 35% off its high, out at 3 hours, stop out at -50% before the first sale, and close a call that never sold at 30 minutes."}
+              "Buy at the alert price, sell 35% at 2x, sell 30% at 4x, sell 25% at 10x, from the first sale, let what is still held ride with a trailing exit 40% off its high, out at 3 hours, stop out at -50% before the first sale, and close a call that never sold at 30 minutes."}
           </strong>
         </p>
         <ol className="steps small">
@@ -1607,9 +1627,10 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
             detected and alerted.
           </li>
           <li>
-            <strong>Some worked calls.</strong> One that runs to 4x returns +200% (half sold at 2x, half at
-            4x). One that doubles and then falls to the stop returns +25%. One that drops to the stop first
-            returns -50%. One that ends its 30 minutes 20% up without reaching 2x returns +20%.
+            <strong>Some worked calls.</strong> One that runs to 5x and then trails out at 3x returns +195%
+            (35% sold at 2x, 30% at 4x, the rest at 3x). One that doubles and then falls straight back returns
+            +48% (the trail sells the rest at 1.2x). One that drops to the stop first returns -50%. One that
+            ends its 30 minutes 20% up without reaching 2x returns +20%.
           </li>
           <li>
             <strong>Avg profit</strong> is the average return per graded live call.{" "}
@@ -1618,10 +1639,11 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
           </li>
           <li>
             <strong>It is a simulation, not a promise.</strong> Prices are checked about once a minute. The
-            sale at 2x and the -50% stop are assumed to fill at the level itself; in a fast dump a real stop
-            can fill lower. The trailing exit books the price actually seen under its level, since a trail
-            fires on a sharp drop by construction. Calls whose last price is unknown are left out rather than
-            guessed.
+            sales at 2x, 4x and 10x and the -50% stop are assumed to fill at the level itself; in a fast dump
+            a real stop can fill lower. The trailing exit books the price actually seen under its level, since
+            a trail fires on a sharp drop by construction. Calls whose last price is unknown are left out
+            rather than guessed. Calls graded before 17 October followed the earlier plan (half at 2x, the
+            rest trailing 35% off its high), so windows reaching back past then mix the two.
           </li>
         </ol>
         {example && live && (
@@ -1670,10 +1692,14 @@ function HowItWorks({ board }: { board: Leaderboard }) {
             ? `, ${Math.round(w.tenXRate * 100)} for how often its calls hit 10x within an hour`
             : ""}
           {w.runSize != null
-            ? `, and ${Math.round(w.runSize * 100)} for run size, how far its calls run over the day after`
+            ? `, ${Math.round(w.runSize * 100)} for run size, how far its calls run over the day after`
             : ""}
-          , with a few phantom misses added so a short streak proves little. It starts from the backtest and
-          shifts to live calls as they're graded (half and half at {board.scoring.livePivotCalls}).
+          {w.returnPct != null
+            ? `, ${Math.round(w.returnPct * 100)} for its average return under the exit plan`
+            : ""}
+          {w.catchRate != null ? `, and ${Math.round(w.catchRate * 100)} for catching the runners` : ""}, with
+          a few phantom misses added so a short streak proves little. It starts from the backtest and shifts
+          to live calls as they're graded (half and half at {board.scoring.livePivotCalls}).
         </li>
         <li>
           <strong>Evolve.</strong> Every run also breeds {board.evolution.challengersPerRun} challenger
@@ -1708,7 +1734,8 @@ function HowItWorks({ board }: { board: Leaderboard }) {
             </>
           ) : (
             <>
-              After each run the model with the best 2x lower bound over the last 72 hours (with at least{" "}
+              After each run the model with the best score on the full scorecard (2x, 4x and 10x rates,
+              average return and run size) over the last 72 hours (with at least{" "}
               {board.champion?.minLiveGraded ?? 10} graded live calls) becomes the default feed, and everyone
               who follows the best switches to it. Until a model qualifies, the default is the Consensus when
               it can call, else Rules.
@@ -2375,7 +2402,6 @@ const OUTCOME_TEXT: Record<ModelInsights["recentAiReviews"][number]["outcome"], 
 
 /** The AI reviewer, kept small and collapsed: it reviews the high-conviction calls and is a later focus. */
 function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
-  const t = data.targets;
   const buys = data.aiReviewer.buys;
   // The API reports the configured mode, not whether the reviewer runs: the mode defaults to
   // "shadow" while nothing runs without an API key. No review at all in the window reads as off.
@@ -2462,15 +2488,20 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
         {data.aiReviewer.probability2xBands.length > 0 && (
           <>
             <h4>Do its odds hold up?</h4>
+            {/* Each band is judged against its own odds, not the feed's goals: calls it gave 30-40%
+                should double about 35% of the time. The band's middle stands in for the odds it
+                gave, since the API sends only the band. */}
             <TargetBars
               aLabel="Actual 2x rate"
               bLabel="Actual 4x rate"
-              aTarget={t.hitRate2xPct}
-              bTarget={t.hitRate4xPct}
+              aTarget={null}
+              bTarget={null}
+              refLabel="odds it gave (band middle)"
               data={data.aiReviewer.probability2xBands.map((b) => ({
                 label: `${b.band}-${b.band + 10}%`,
                 a: b.hitRate2xPct,
                 b: b.hitRate4xPct,
+                aRef: b.band + 5,
                 sub: `${b.graded} graded`,
                 shortSub: `${b.graded}`,
               }))}

@@ -27,6 +27,11 @@ function record(graded: number, wins: number, goals: number, avgLabel: number, t
   return { calls: graded, graded, wins, goals, tenX, sumLabel: avgLabel * graded };
 }
 
+/** The same with every call priced under the exit plan, averaging `avgReturnPct`. */
+function simmed(base: CallRecord, avgReturnPct: number): CallRecord {
+  return { ...base, simCalls: base.graded, sumSimReturnPct: avgReturnPct * base.graded };
+}
+
 /** The same with the runners its exam saw and caught. */
 function examined(base: CallRecord, runnersSeen: number, runnersCaught: number): CallRecord {
   return { ...base, runnersSeen, runnersCaught };
@@ -40,9 +45,9 @@ describe("recordScore", () => {
   it("is 100 for a long record that meets every target, and no more for beating them", () => {
     expect(recordScore(record(1000, 900, 700, 2.5, 300), targets)).toBe(100);
     expect(recordScore(record(1000, 1000, 1000, 3, 1000), targets)).toBe(100);
-    expect(recordScore(examined(record(1000, 900, 700, 2.5, 300), 1000, 800), targets)).toBe(100);
+    expect(recordScore(simmed(examined(record(1000, 900, 700, 2.5, 300), 1000, 800), 40), targets)).toBe(100);
     // Without a single 10x it can't: that part is 10 of the 100.
-    expect(recordScore(examined(record(1000, 900, 700, 2.5), 1000, 800), targets)).toBe(90);
+    expect(recordScore(simmed(examined(record(1000, 900, 700, 2.5), 1000, 800), 40), targets)).toBe(90);
   });
 
   it("discounts a short perfect streak below a long good record", () => {
@@ -51,10 +56,10 @@ describe("recordScore", () => {
     expect(streak).toBeLessThan(steady);
     // 3 of 3 proves 3 / (3 + 10) = 23% of each rate.
     expect(scoreParts(record(3, 3, 3, 3), targets)).toMatchObject({ proven2xPct: 23.1, proven4xPct: 23.1 });
-    // 3 of 3 averaging 3 doublings proves 9 / 13 = 0.69 doublings a call. No catch rate tracked:
-    // the other parts are scaled to 100.
+    // 3 of 3 averaging 3 doublings proves 9 / 13 = 0.69 doublings a call. No catch rate or
+    // return tracked: the other parts are scaled to 100.
     expect(streak).toBeCloseTo(
-      (40 * (23.1 / 75) + 25 * (23.1 / 50) + 10 * (23.1 / 25) + 10 * (0.69 / 2)) / 0.85,
+      (30 * (23.1 / 75) + 20 * (23.1 / 50) + 10 * (23.1 / 25) + 5 * (0.69 / 2)) / 0.65,
       0,
     );
     expect(steady).toBeGreaterThan(90);
@@ -70,9 +75,9 @@ describe("recordScore", () => {
     const short = recordScore(record(100, 40, 20, 0.5), targets)!;
     const long = recordScore(record(100, 40, 20, 1.5), targets)!;
     expect(long).toBeGreaterThan(short);
-    // 0.5 vs 1.5 doublings a call over 110 proven calls: 10 × (1 / 1.1) / 2 ≈ 4.5 points apart,
-    // scaled by 1 / 0.85 without a catch rate.
-    expect(long - short).toBeCloseTo(4.5 / 0.85, 0);
+    // 0.5 vs 1.5 doublings a call over 110 proven calls: 5 × (1 / 1.1) / 2 ≈ 2.3 points apart,
+    // scaled by 1 / 0.65 without a catch rate or return.
+    expect(long - short).toBeCloseTo(2.27 / 0.65, 0);
   });
 
   it("reads run size from sumRun when the record tracks it, sumLabel otherwise", () => {
@@ -84,19 +89,23 @@ describe("recordScore", () => {
   });
 
   it("caps run size at its target like the rates", () => {
-    expect(scoreParts({ ...record(1000, 0, 0, 0), sumRun: 6000 }, targets)!.pointsRun).toBe(10);
+    expect(scoreParts({ ...record(1000, 0, 0, 0), sumRun: 6000 }, targets)!.pointsRun).toBe(5);
   });
 
-  it("is 40 points of 2x rate, 25 of 4x rate, 10 of 10x rate, 10 of run size and 15 of catch rate, each the proven share of its target", () => {
-    const exam = examined(record(400, 300, 100, 1, 20), 100, 40);
+  it("is 30 points of 2x rate, 20 of 4x rate, 10 of 10x rate, 5 of run size, 20 of return and 15 of catch rate, each the proven share of its target", () => {
+    const exam = simmed(examined(record(400, 300, 100, 1, 20), 100, 40), 10);
     const parts = scoreParts(exam, targets)!;
     // 75% raw on 400 calls proves 300/410 = 73%; 25% raw proves 24%; 1 doubling a call proves 0.98.
     expect(parts.proven2xPct).toBeGreaterThan(70);
     expect(parts.proven2xPct).toBeLessThan(75);
-    expect(parts.points2x).toBeCloseTo(40 * (parts.proven2xPct / 75), 0);
-    expect(parts.points4x).toBeCloseTo(25 * (parts.proven4xPct / 50), 0);
+    expect(parts.points2x).toBeCloseTo(30 * (parts.proven2xPct / 75), 0);
+    expect(parts.points4x).toBeCloseTo(20 * (parts.proven4xPct / 50), 0);
     expect(parts.provenRunDoublings).toBeCloseTo(400 / 410, 2);
-    expect(parts.pointsRun).toBeCloseTo(10 * (parts.provenRunDoublings / 2), 0);
+    expect(parts.pointsRun).toBeCloseTo(5 * (parts.provenRunDoublings / 2), 0);
+    // +10% a call on 400 calls, with 10 phantom full stops: (4000 - 500) / 410 = +8.5%, on the
+    // way from -50% (nothing) to +25% (full).
+    expect(parts.provenReturnPct).toBeCloseTo(8.5, 1);
+    expect(parts.pointsReturn!).toBeCloseTo(20 * ((8.54 + 50) / 75), 0);
     // 20 of 400 proves 20/410 = 4.9% against the 25% target.
     expect(parts.proven10xPct).toBeCloseTo(4.9, 1);
     expect(parts.points10x).toBeCloseTo(10 * (parts.proven10xPct / 25), 0);
@@ -104,9 +113,23 @@ describe("recordScore", () => {
     expect(parts.provenCatchPct).toBeCloseTo(36.4, 1);
     expect(parts.pointsCatch!).toBeCloseTo(15 * (36.4 / 75), 0);
     expect(recordScore(exam, targets)).toBeCloseTo(
-      parts.points2x + parts.points4x + parts.points10x + parts.pointsRun + parts.pointsCatch!,
+      parts.points2x +
+        parts.points4x +
+        parts.points10x +
+        parts.pointsRun +
+        parts.pointsReturn! +
+        parts.pointsCatch!,
       1,
     );
+  });
+
+  it("scores the trade: the same hit rates returning more score higher, a feed of full stops scores no return points", () => {
+    const base = examined(record(400, 120, 40, 0.6, 10), 100, 40);
+    const losing = recordScore(simmed(base, -30), targets)!;
+    const paying = recordScore(simmed(base, 15), targets)!;
+    expect(paying).toBeGreaterThan(losing + 10);
+    expect(scoreParts(simmed(base, -50), targets)!.pointsReturn).toBe(0);
+    expect(scoreParts(simmed(base, 200), targets)!.pointsReturn).toBe(20);
   });
 
   it("scores letting runners slip by: the same hit rates catching more runners score higher", () => {
@@ -121,7 +144,7 @@ describe("recordScore", () => {
     const parts = scoreParts(record(400, 300, 100, 1, 20), targets)!;
     expect(parts.pointsCatch).toBeNull();
     expect(recordScore(record(400, 300, 100, 1, 20), targets)).toBeCloseTo(
-      (parts.points2x + parts.points4x + parts.points10x + parts.pointsRun) / 0.85,
+      (parts.points2x + parts.points4x + parts.points10x + parts.pointsRun) / 0.65,
       1,
     );
   });

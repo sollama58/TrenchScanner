@@ -863,6 +863,9 @@ export function LineageText({ read: r }: { read: SageRead }) {
 
 /** Namesakes launched before it and coins on the same theme, over 1h / 6h / 24h. */
 export function CrowdChart({ read: r }: { read: SageRead }) {
+  // What a bar counts, in words, for the bar under the pointer or the last one tapped: a title
+  // alone never shows on a phone.
+  const [picked, setPicked] = useState<string | null>(null);
   const l = r.lineage;
   const w = r.referent?.wave;
   const windows = [
@@ -888,6 +891,7 @@ export function CrowdChart({ read: r }: { read: SageRead }) {
                   h={H}
                   series={1}
                   title={`Last ${x.id}: ${x.a ?? "–"} coins with its name, ticker or logo launched before it`}
+                  onPick={setPicked}
                 />
               )}
               {hasB && (
@@ -897,6 +901,7 @@ export function CrowdChart({ read: r }: { read: SageRead }) {
                   h={H}
                   series={2}
                   title={`Last ${x.id}: ${x.b ?? "–"} coins TokenSage tied to ${r.referent?.label ?? "the same referent"}`}
+                  onPick={setPicked}
                 />
               )}
             </div>
@@ -916,6 +921,11 @@ export function CrowdChart({ read: r }: { read: SageRead }) {
           </span>
         )}
       </div>
+      {picked && (
+        <p className="small muted sage-crowd-readout" aria-live="polite">
+          {picked}
+        </p>
+      )}
     </div>
   );
 }
@@ -926,16 +936,24 @@ function CrowdBar({
   h,
   series,
   title,
+  onPick,
 }: {
   value: number | null;
   max: number;
   h: number;
   series: 1 | 2;
   title: string;
+  onPick: (text: string | null) => void;
 }) {
   const px = value ? Math.max(3, (value / max) * (h - 16)) : 0;
   return (
-    <span className="sage-crowd-col" title={title}>
+    <span
+      className="sage-crowd-col"
+      title={title}
+      onPointerEnter={() => onPick(title)}
+      onPointerDown={() => onPick(title)}
+      onPointerLeave={(e) => e.pointerType === "mouse" && onPick(null)}
+    >
       <span className="sage-crowd-val num">{value ?? "–"}</span>
       <span className={`sage-crowd-fill s${series}`} style={{ height: px }} />
     </span>

@@ -103,7 +103,11 @@ describe("contestant roster", () => {
     const spec = CONTESTANTS.find((c) => c.id === TREES_NO_TOKENSAGE_CONTESTANT)!;
     expect(spec.role).toBe("learner");
     expect(spec.control).toBe(true);
-    expect(spec.recipe).toEqual({ learner: "gbdt", featureNames: TREES_NO_TOKENSAGE_FEATURES });
+    expect(spec.recipe).toEqual({
+      learner: "gbdt",
+      featureNames: TREES_NO_TOKENSAGE_FEATURES,
+      goal: "return",
+    });
     const narrative = new Set<string>(ALL_NARRATIVE_FEATURES);
     expect(TREES_NO_TOKENSAGE_FEATURES.some((f) => f.startsWith("ns") || narrative.has(f))).toBe(false);
     expect(TREES_NO_TOKENSAGE_FEATURES).toEqual(
@@ -139,8 +143,9 @@ describe("the high-precision seats", () => {
       learner: "gbdt",
       twoStage: true,
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+      goal: "2x",
     });
-    expect(contestantSpec(SHARP_SURVIVOR_CONTESTANT)!.name).toBe("Sharp Survivor");
+    expect(contestantSpec(SHARP_SURVIVOR_CONTESTANT)!.name).toBe("Sharp 2x Survivor");
     expect(enabledContestants(["consensus", "linear", SHARP_TREES_CONTESTANT]).map((c) => c.id)).toEqual([
       "rules",
       "linear",
@@ -155,7 +160,7 @@ describe("the high-precision seats", () => {
   it("retires Sharp Deep Trees, a copy of Deep Trees, under its own id instead of reusing it", () => {
     const old = contestantSpec(SHARP_DEEP_TREES_CONTESTANT)!;
     expect(old.retired).toBe(true);
-    expect(old.name).toBe("Sharp Deep Trees");
+    expect(old.name).toBe("Sharp 2x Deep Trees");
     expect(RETIRED_CONTESTANT_IDS).toContain(SHARP_DEEP_TREES_CONTESTANT);
     expect(ACTIVE_CONTESTANT_IDS).not.toContain(SHARP_DEEP_TREES_CONTESTANT);
     expect(SHARP_SURVIVOR_CONTESTANT).not.toBe(SHARP_DEEP_TREES_CONTESTANT);
@@ -172,13 +177,14 @@ describe("Trees Recent", () => {
     expect(contestantSpec("trees-recent")!.recipe).toEqual({
       learner: "gbdt",
       recencyHalfLifeDays: TREES_RECENT_HALF_LIFE_DAYS,
+      goal: "return",
     });
     expect(contestantSpec("linear-recent")!.recipe?.recencyHalfLifeDays).toBe(RECENT_HALF_LIFE_DAYS);
     expect(RECENT_HALF_LIFE_DAYS).toBe(3);
     // Still a member learner on its founding lane: the change reaches it, under the same name.
     const recipe = contestantSpec("trees-recent")!.recipe!;
     expect(recipeFamily(recipe)).toBe(recipeFamily(contestantSpec("trees")!.recipe!));
-    expect(traitName(recipe, 14)).toBe("Trees Recent");
+    expect(traitName(recipe, 14)).toBe("Return Trees Recent");
     expect(foundingLanes(CONTESTANTS, new Date(0)).find((l) => l.slot === "trees-recent")?.recipe).toEqual(
       recipe,
     );
@@ -259,7 +265,7 @@ describe("the Narrative seat's exam", () => {
 describe("Gems", () => {
   it("is a standalone learner on the Gemerald gate, with the leading seats' traits, outside every combiner", () => {
     const spec = contestantSpec(GEMS_CONTESTANT)!;
-    expect(spec.name).toBe("Gems");
+    expect(spec.name).toBe("Return Gems");
     expect(spec.role).toBe("learner");
     expect(spec.standalone).toBe(true);
     expect(spec.gate).toBe(GEMERALD_GATE);
@@ -271,6 +277,7 @@ describe("Gems", () => {
       featureNames: TREES_NO_TOKENSAGE_FEATURES,
       recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+      goal: "return",
     });
     expect(isMemberLearner(spec)).toBe(false);
     expect(isTraderMember(spec)).toBe(false);
@@ -325,7 +332,7 @@ describe("Gems", () => {
 describe("Winners", () => {
   it("is a standalone learner on the clean-winner reading, the only seat reading it, outside every combiner", () => {
     const spec = contestantSpec(WINNERS_CONTESTANT)!;
-    expect(spec.name).toBe("Winners");
+    expect(spec.name).toBe("Return Winners");
     expect(spec.role).toBe("learner");
     expect(spec.standalone).toBe(true);
     expect(spec.requires).toBe("recentBuyersRead");
@@ -336,6 +343,7 @@ describe("Winners", () => {
       featureNames: [...TREES_NO_TOKENSAGE_FEATURES, ...WINNERS_SEAT_INPUTS],
       recencyHalfLifeDays: RECENT_HALF_LIFE_DAYS,
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+      goal: "return",
     });
     for (const name of WINNER_FOLLOW_FEATURES) expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
     // The shares and how winners trade, not the counts, which read lower on backfilled rows.
@@ -595,10 +603,10 @@ describe("takeover probation and the exam's calls", () => {
     expect(outcome.dropped).toBeNull();
     expect(outcome.probation).toMatchObject({ slot: "order-flow", bred: { name: "Trees #1" } });
     expect(outcome.probation!.challengerParams.kind).toBe("gbdt-v1");
-    expect(outcome.probation!.laneName).toBe("Order Flow");
+    expect(outcome.probation!.laneName).toBe("Return Order Flow");
     // The seat keeps its own model this run.
     const seat = outcome.results.find((r) => r.contestant === "order-flow")!;
-    expect(seat.metrics.contestantName).toBe("Order Flow");
+    expect(seat.metrics.contestantName).toBe("Return Order Flow");
     // The bootstrap's masks are the calls the exam record counts: one call per mask entry.
     const linear = outcome.results.find((r) => r.contestant === "linear")!;
     const seen = callsSeen!;

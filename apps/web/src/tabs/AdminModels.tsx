@@ -4,6 +4,8 @@ import { pct, shortAddress } from "../format";
 import { ArrowRightIcon, BrainIcon, RadarIcon, RobotIcon, TargetIcon } from "../components/Icons";
 import { Load, Panel, Table, Tag, n, when } from "./adminShared";
 import { ModelUnderTheHood } from "./ModelTab";
+import { niceScale, scaleTicks } from "../chartScale";
+import { pickHandlers, pointerX, useChartWidth } from "../components/useChartWidth";
 
 /**
  * The Admin "Models" section: how each seat makes its calls. One read (GET /admin/models/explain,
@@ -498,16 +500,23 @@ function CalibrationChart({
   high: number | null;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const W = 560;
+  // Drawn at the box's real width, so its 12px text stays 12px on a phone instead of shrinking
+  // with a fixed viewBox.
+  const [boxRef, W] = useChartWidth();
   const H = 180;
-  const pad = { l: 36, r: 12, t: 12, b: 26 };
+  const pad = { l: 40, r: 12, t: 12, b: 26 };
   const knots = calibration.knots;
   const cutRank = cutoff !== null ? 1 - cutoff / 100 : null;
   // The top of the ranking is where calls live: show from a little under the cutoff (at most the
   // top 20%), not the whole range, where the long flat bottom would squeeze it to a sliver.
   const lo = Math.min(Math.max(0, Math.min(0.8, cutRank !== null ? cutRank - 0.05 : 0.8)), 0.95);
-  const top =
-    Math.max(0.1, ...knots.filter((k, i) => (knots[i + 1]?.rank ?? 1) > lo).map((k) => k.rate)) * 1.1;
+  // Round ticks (10%, 20%, 30%), not halves of the data's top (9%, 18%).
+  const scale = niceScale(
+    0,
+    Math.max(0.1, ...knots.filter((k, i) => (knots[i + 1]?.rank ?? 1) > lo).map((k) => k.rate)) * 1.1 * 100,
+    3,
+  );
+  const top = scale.max / 100;
   const x = (r: number) => pad.l + ((r - lo) / (1 - lo)) * (W - pad.l - pad.r);
   const y = (v: number) => H - pad.b - (v / top) * (H - pad.t - pad.b);
   const visible = knots.filter((k, i) => (knots[i + 1]?.rank ?? 1) > lo);
@@ -517,8 +526,15 @@ function CalibrationChart({
     const x1 = x(visible[i + 1]?.rank ?? 1);
     path += `${i === 0 ? "M" : "L"}${x0},${y(k.rate)} L${x1},${y(k.rate)} `;
   });
-  const ticks = [0, top / 2, top].map((v) => Math.round(v * 100) / 100);
+  const ticks = scaleTicks(scale).map((v) => v / 100);
   const shown = hover !== null ? visible[hover] : null;
+  // The step under the pointer, on a move or a tap.
+  const pick = pickHandlers((e) => {
+    const r = lo + ((pointerX(e, W) - pad.l) / (W - pad.l - pad.r)) * (1 - lo);
+    if (r < lo || r > 1) return null;
+    const i = visible.findIndex((k, j) => r < (visible[j + 1]?.rank ?? 1.0001) && r >= Math.max(lo, k.rank));
+    return i < 0 ? null : i;
+  }, setHover);
   return (
     <div className="model-chart">
       <h3>What a call's rank means</h3>
@@ -526,58 +542,60 @@ function CalibrationChart({
         The card's calibrated %: how often recent out-of-sample calls at each rank doubled (
         {n(calibration.calls)} calls). The dashed lines are its cutoff and high-conviction tier.
       </p>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        role="img"
-        aria-label="2x rate by rank"
-        onMouseLeave={() => setHover(null)}
-      >
-        {ticks.map((t) => (
-          <g key={t}>
-            <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} className="chart-grid" />
-            <text x={pad.l - 6} y={y(t) + 4} className="chart-tick" textAnchor="end">
-              {Math.round(t * 100)}%
+      <div ref={boxRef}>
+        <svg viewBox={`0 0 ${W} ${H}`} height={H} role="img" aria-label="2x rate by rank" {...pick}>
+          {ticks.map((t) => (
+            <g key={t}>
+              <line x1={pad.l} x2={W - pad.r} y1={y(t)} y2={y(t)} className="chart-grid" />
+              <text x={pad.l - 6} y={y(t) + 4} className="chart-tick" textAnchor="end">
+                {Number((t * 100).toFixed(1))}%
+              </text>
+            </g>
+          ))}
+          {[lo, (lo + 1) / 2, 1].map((r, i) => (
+            <text
+              key={r}
+              x={x(r)}
+              y={H - 8}
+              className="chart-tick"
+              textAnchor={i === 0 ? "start" : i === 2 ? "end" : "middle"}
+            >
+              {r === 1 ? "top" : `top ${((1 - r) * 100).toFixed((1 - r) * 100 >= 10 ? 0 : 1)}%`}
             </text>
-          </g>
-        ))}
-        {[lo, (lo + 1) / 2, 1].map((r) => (
-          <text key={r} x={x(r)} y={H - 8} className="chart-tick" textAnchor="middle">
-            {r === 1 ? "top" : `top ${((1 - r) * 100).toFixed((1 - r) * 100 >= 10 ? 0 : 1)}%`}
-          </text>
-        ))}
-        {cutRank !== null && cutRank >= lo && (
-          <line x1={x(cutRank)} x2={x(cutRank)} y1={pad.t} y2={H - pad.b} className="chart-mark" />
-        )}
-        {high !== null && 1 - high / 100 >= lo && (
-          <line
-            x1={x(1 - high / 100)}
-            x2={x(1 - high / 100)}
-            y1={pad.t}
-            y2={H - pad.b}
-            className="chart-mark alt"
-          />
-        )}
-        <path d={path} className="chart-line" />
-        {visible.map((k, i) => {
-          const x0 = x(Math.max(lo, k.rank));
-          const x1 = x(visible[i + 1]?.rank ?? 1);
-          return (
-            <rect
-              key={k.rank}
-              x={x0}
-              y={pad.t}
-              width={Math.max(1, x1 - x0)}
-              height={H - pad.t - pad.b}
-              className={`chart-hit${hover === i ? " on" : ""}`}
-              onMouseEnter={() => setHover(i)}
+          ))}
+          {cutRank !== null && cutRank >= lo && (
+            <line x1={x(cutRank)} x2={x(cutRank)} y1={pad.t} y2={H - pad.b} className="chart-mark" />
+          )}
+          {high !== null && 1 - high / 100 >= lo && (
+            <line
+              x1={x(1 - high / 100)}
+              x2={x(1 - high / 100)}
+              y1={pad.t}
+              y2={H - pad.b}
+              className="chart-mark alt"
             />
-          );
-        })}
-      </svg>
+          )}
+          <path d={path} className="chart-line" />
+          {visible.map((k, i) => {
+            const x0 = x(Math.max(lo, k.rank));
+            const x1 = x(visible[i + 1]?.rank ?? 1);
+            return (
+              <rect
+                key={k.rank}
+                x={x0}
+                y={pad.t}
+                width={Math.max(1, x1 - x0)}
+                height={H - pad.t - pad.b}
+                className={`chart-hit${hover === i ? " on" : ""}`}
+              />
+            );
+          })}
+        </svg>
+      </div>
       <p className="faint small model-readout">
         {shown
           ? `From the top ${((1 - shown.rank) * 100).toFixed(1)}%: ${pct(shown.rate * 100, 1)} doubled (${n(shown.n)} calls in this step)`
-          : "Hover a step for its rate."}
+          : "Hover or tap a step for its rate."}
       </p>
     </div>
   );
@@ -732,10 +750,10 @@ function AgreementView({ seat }: { seat: Seat }) {
             title={`${p.agreeing} calling: ${pct(p.winRatePct, 1)} of ${n(p.rows)} moments doubled`}
           >
             <span className="num small">{pct(p.winRatePct, 0)}</span>
-            <span
-              className="agree-bar"
-              style={{ height: `${Math.max(2, ((p.winRatePct ?? 0) / max) * 100)}%` }}
-            />
+            {/* No rate is no bar (the label above says "–"), not a sliver that reads as near 0%. */}
+            {p.winRatePct !== null && (
+              <span className="agree-bar" style={{ height: `${Math.max(2, (p.winRatePct / max) * 100)}%` }} />
+            )}
             <span className="small">{p.agreeing}</span>
             <span className="faint agree-n">{n(p.rows)}</span>
           </div>

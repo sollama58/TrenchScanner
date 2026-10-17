@@ -890,7 +890,12 @@ export interface ModelInsights {
   shadowEmissions: { total: GradedRates; bySource: (GradedRates & { source: string })[] };
   curatorConfidenceBands: (GradedRates & { side: "heuristic" | "model"; band: number })[];
   aiReviewer: {
+    /** What the reviewer runs as: AI_REVIEW_MODE under the Admin switch ("off" while it is off). */
     mode: string;
+    /** AI_REVIEW_MODE alone. Absent from older API builds. */
+    configuredMode?: string;
+    /** The Admin AI reviewer switch. Absent from older API builds. */
+    switch?: "off" | "admins" | "live";
     buys: GradedRates;
     allReviewed: GradedRates;
     /** Its buys' 2x rate minus its passes' (no-buys), in points, one review per coin. */
@@ -1027,6 +1032,8 @@ export interface FilterBoard {
   windowDays: number;
   minGradedToRank: number;
   targets: { hitRate2xPct: number; hitRate4xPct: number; runDoublings: number; tenXPct?: number };
+  /** Points per scored part, scaled to 100 (absent from older API builds). */
+  points?: { winRate: number; goalRate: number; tenXRate: number; runSize: number };
   ranked: FilterBoardEntry[];
   warmingUp: FilterBoardEntry[];
   sharedCount: number;
@@ -1154,6 +1161,9 @@ export interface ScoreBasis {
   /** Points from catching runners; null when the record doesn't track them (absent from older API builds). */
   pointsCatch?: number | null;
   provenCatchPct?: number | null;
+  /** Points from the average return under the exit plan; null when the record doesn't track it (absent from older API builds). */
+  pointsReturn?: number | null;
+  provenReturnPct?: number | null;
   /** Calls' worth of evidence: graded live calls plus the backtest's share. */
   evidenceCalls: number;
   backtestCalls: number;
@@ -1300,12 +1310,15 @@ export interface Leaderboard {
       tenXRate?: number;
       runSize?: number;
       catchRate?: number;
-      avgReturn?: number;
+      returnPct?: number;
     };
     /** The 10x-within-an-hour rate target, in percent (absent from older API builds). */
     tenXTargetPct?: number;
     /** The catch-rate target, in percent (absent from older API builds). */
     catchTargetPct?: number;
+    /** Average return per call that scores nothing / full points, in percent (absent from older API builds). */
+    returnFloorPct?: number;
+    returnTargetPct?: number;
     /** Run-size target, in doublings per call (2 = a 4x average). */
     runTargetDoublings?: number;
     /** Calls' worth the backtest counts for at most; live weighs the same at this many graded calls. */
@@ -1415,7 +1428,16 @@ export interface AlertPrefs {
   volume: number;
   browserNotifications: boolean;
   notifyOn: { filterMatches: boolean; modelCalls: boolean };
+  /** Chaos Mode: open each new Live feed alert in a trading site's tab, desktop only (absent from older API builds: off). */
+  chaosMode?: boolean;
+  /** The site Chaos Mode opens; null (or absent) follows the first quick link. */
+  chaosSite?: ChaosSite | null;
+  /** The most tabs Chaos Mode opens in a minute, 1-60 (absent from older API builds: 10). */
+  chaosPerMinute?: number;
 }
+
+/** Sites Chaos Mode can open (the API's CHAOS_SITES). */
+export type ChaosSite = QuickLink | "pumpfun";
 
 /** Card fields a user can hide (the API's CARD_FIELDS). */
 export type CardField =
@@ -1875,6 +1897,12 @@ export interface MarketLighthouse {
       /** From this age the last 5 minutes must be up oldCoinMin5mPct or more. Absent from older API builds. */
       oldCoinMinAgeMinutes?: number;
       oldCoinMin5mPct?: number;
+      /**
+       * The price test before that age: held while collapsing, down this percent or more within a
+       * minute (collapse1mPct) or over five minutes (collapse5mPct). Absent from older API builds.
+       */
+      collapse1mPct?: number;
+      collapse5mPct?: number;
     };
   };
   /**

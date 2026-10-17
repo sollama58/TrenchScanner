@@ -1,17 +1,90 @@
 /**
  * The token modal's price chart, the parts that are plain arithmetic (so they are unit-tested in
- * priceChart.test.ts): thinning minute candles into a line's points, and the market-cap axis.
+ * priceChart.test.ts): stitching candles of different widths and the live curve ticks into one
+ * line, thinning it into points, and the market-cap and time axes.
  */
 
+const SECOND = 1_000;
 const MINUTE = 60_000;
-/** Point spacings the chart picks from, in minutes. */
-const POINT_MINUTES = [1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 480, 1440];
+const HOUR = 3_600_000;
+/** Point spacings the chart picks from, in ms: seconds for the short views the fine candles fill. */
+const POINT_MS = [1, 2, 5, 10, 15, 30]
+  .map((s) => s * SECOND)
+  .concat([1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 480, 1440].map((m) => m * MINUTE));
 
-/** The narrowest spacing that fits `spanMs` into at most `maxPoints` points, in ms. */
-export function pointWidthMs(spanMs: number, maxPoints: number): number {
-  const need = spanMs / Math.max(1, maxPoints);
-  const m = POINT_MINUTES.find((b) => b * MINUTE >= need) ?? POINT_MINUTES[POINT_MINUTES.length - 1]!;
-  return m * MINUTE;
+/**
+ * The narrowest spacing that fits `spanMs` into at most `maxPoints` points, in ms, and never finer
+ * than `minMs` (the finest candles in view: thinner than them adds no detail).
+ */
+export function pointWidthMs(spanMs: number, maxPoints: number, minMs = MINUTE): number {
+  const need = Math.max(minMs, spanMs / Math.max(1, maxPoints));
+  return POINT_MS.find((b) => b >= need) ?? POINT_MS[POINT_MS.length - 1]!;
+}
+
+/** A run of candles of one width: their closes, as candleCloses gives them, and that width. */
+export interface CloseRun {
+  points: readonly Point[];
+  stepMs: number;
+}
+
+/**
+ * Exported for tests. The finest reading at every moment: each run (coarse to fine) wins from where
+ * it starts, so the minute closes cover what Pump.fun's finer pages don't reach back to, the
+ * 15-second ones the hours before the 1-second page, and the live curve ticks everything after the
+ * newest candle. A finer run starts at its first candle's start (its first close less its width).
+ */
+export function stitch(runs: readonly CloseRun[], ticks: readonly Point[] = []): Point[] {
+  let out: Point[] = [];
+  let lastStep = 0;
+  for (const run of runs) {
+    if (run.points.length === 0) continue;
+    const from = run.points[0]!.t - run.stepMs;
+    out = out.filter((p) => p.t <= from).concat(run.points);
+    lastStep = run.stepMs;
+  }
+  // The ticks win from the newest candle's start: that candle may still be open (its close so far
+  // drawn at now), and the curve's changes inside it are the finer reading.
+  const cut = out.length > 0 ? out[out.length - 1]!.t - lastStep : -Infinity;
+  const tail = ticks.filter((p) => p.t > cut);
+  if (tail.length === 0) return out;
+  const first = tail[0]!.t;
+  return out.filter((p) => p.t < first).concat(tail);
+}
+
+/** Time-axis steps, in ms: round seconds, minutes, hours and days. */
+const TIME_STEPS = [1, 2, 5, 10, 15, 30]
+  .map((s) => s * SECOND)
+  .concat([1, 2, 5, 10, 15, 30].map((m) => m * MINUTE))
+  .concat([1, 2, 3, 6, 12, 24].map((h) => h * HOUR));
+
+/**
+ * Exported for tests. Round times inside [t0, t1] for the time axis, at most `max` of them:
+ * on the minute, the quarter hour, the hour - in local time, so 15:00 falls on 15:00 even in a
+ * zone 30 minutes off UTC. With `origin` (the First 15m view's launch) they fall on round times
+ * since it instead. Returns the ticks and the step.
+ */
+export function timeTicks(
+  t0: number,
+  t1: number,
+  max: number,
+  origin?: number,
+): { ticks: number[]; step: number } {
+  const span = Math.max(1, t1 - t0);
+  const step = TIME_STEPS.find((s) => span / s <= max) ?? TIME_STEPS[TIME_STEPS.length - 1]!;
+  // The grid's zero: the origin, else UTC midnight moved to local midnight.
+  const zero = origin ?? new Date(t0).getTimezoneOffset() * MINUTE;
+  const ticks: number[] = [];
+  for (let t = zero + Math.ceil((t0 - zero) / step) * step; t <= t1; t += step) ticks.push(t);
+  return { ticks, step };
+}
+
+/** "3:05" since an origin: minutes and seconds, or "1:02:05" past an hour. */
+export function sinceLabel(ms: number): string {
+  const total = Math.max(0, Math.round(ms / SECOND));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
 /** One point of the line: a market cap at a moment. */
@@ -21,12 +94,21 @@ export interface Point {
 }
 
 /**
- * Minute candles as the line's readings: each close at its minute's end, when that price held.
+ * Candles (a minute wide unless `stepMs` says) as the line's readings: each close at its end, when
+ * that price held.
  * Pump.fun stamps a candle with its minute's start, so a close drawn there runs the line a minute
  * ahead of time: at a call's marker it showed where the price went in the minute after the call.
  */
-export function candleCloses(candles: readonly { t: number; c: number }[]): Point[] {
-  return candles.map((c) => ({ t: c.t + MINUTE, v: c.c }));
+export function candleCloses(candles: readonly { t: number; c: number }[], stepMs = MINUTE): Point[] {
+  const out: Point[] = [];
+  for (const k of candles) {
+    const prev = out[out.length - 1];
+    // Pump.fun sends only candles with a trade: across a gap the price held, so the line holds it
+    // to the next candle's start rather than ramping across the quiet seconds.
+    if (stepMs < MINUTE && prev && k.t > prev.t) out.push({ t: k.t, v: prev.v });
+    out.push({ t: k.t + stepMs, v: k.c });
+  }
+  return out;
 }
 
 /**
@@ -145,6 +227,24 @@ export function linearTicks(lo: number, hi: number, max = 5): number[] {
   return out;
 }
 
+/**
+ * The line's value at `t`, between the points either side of it as the line draws it (straight);
+ * null outside the line's span.
+ */
+export function valueAt(points: readonly Point[], t: number): number | null {
+  if (points.length === 0 || t < points[0]!.t || t > points[points.length - 1]!.t) return null;
+  let lo = 0;
+  let hi = points.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid]!.t <= t) lo = mid;
+    else hi = mid;
+  }
+  const a = points[lo]!;
+  const b = points[hi]!;
+  return b.t === a.t ? b.v : a.v + ((b.v - a.v) * (t - a.t)) / (b.t - a.t);
+}
+
 /** A time label sized to the view: the clock within a day, with the date past it. */
 export function timeLabel(t: number, spanMs: number, seconds = false): string {
   const d = new Date(t);
@@ -161,12 +261,14 @@ export function timeLabel(t: number, spanMs: number, seconds = false): string {
 /** What a flagged wallet is, for its swatch's colour: the coin's creator, a risky one, or linked. */
 export type MarkerKind = "dev" | "risky" | "kol" | "winner" | "linked";
 
-/** One minute candle's traded volume: its start, open and close (market cap), and USD volume. */
+/** One candle's traded volume: its start, open and close (market cap), and USD volume. */
 export interface VolumeCandle {
   t: number;
   o: number;
   c: number;
   vol: number;
+  /** Its width in ms; a minute when absent (Pump.fun's minute candles). */
+  w?: number;
 }
 
 /** One bar of the volume lane: the minutes it spans, their USD volume, and the move across them. */
@@ -180,8 +282,10 @@ export interface VolumeBar {
 
 /**
  * Exported for tests. The candles' volume summed into `n` even slices of [t0, t1], each candle by
- * the middle of its minute; a slice with no candles is null. A slice's open is its first candle's
- * open and its close its last candle's close, so its colour says whether the price rose across it.
+ * the middle of its own width (a minute, 15 seconds or one); a slice with no candles is null. A
+ * slice's open is its first candle's open and its close its last candle's close, so its colour
+ * says whether the price rose across it. Candles of different widths that overlap (the stitched
+ * views) count once: a candle starting before the previous one ends is left out.
  */
 export function volumeBars(
   candles: readonly VolumeCandle[],
@@ -191,17 +295,38 @@ export function volumeBars(
 ): (VolumeBar | null)[] {
   const span = Math.max(1, t1 - t0);
   const out: (VolumeBar | null)[] = Array.from({ length: n }, () => null);
-  for (const k of candles) {
-    const mid = k.t + MINUTE / 2;
-    if (mid < t0 - MINUTE || mid > t1 + MINUTE / 2) continue;
+  let covered = -Infinity;
+  for (const k of [...candles].sort((a, b) => a.t - b.t)) {
+    const w = k.w ?? MINUTE;
+    const mid = k.t + w / 2;
+    if (mid < t0 - w || mid > t1 + w / 2 || k.t < covered) continue;
+    covered = k.t + w;
     const i = Math.min(n - 1, Math.max(0, Math.floor(((mid - t0) / span) * n)));
     const b = out[i];
-    if (!b) out[i] = { from: k.t, to: k.t + MINUTE, usd: k.vol, o: k.o, c: k.c };
+    if (!b) out[i] = { from: k.t, to: k.t + w, usd: k.vol, o: k.o, c: k.c };
     else {
       b.usd += k.vol;
-      b.to = k.t + MINUTE;
+      b.to = k.t + w;
       b.c = k.c;
     }
+  }
+  return out;
+}
+
+/**
+ * Exported for tests. The volume lane's candles for a stitched view: each run's candles from where
+ * that run takes over (the same rule as stitch), so a stretch is counted from one width only.
+ */
+export function stitchVolume(
+  runs: readonly { candles: readonly VolumeCandle[]; stepMs: number }[],
+): VolumeCandle[] {
+  let out: VolumeCandle[] = [];
+  for (const run of runs) {
+    if (run.candles.length === 0) continue;
+    const from = run.candles[0]!.t;
+    out = out
+      .filter((k) => k.t + (k.w ?? MINUTE) <= from)
+      .concat(run.candles.map((k) => ({ ...k, w: run.stepMs })));
   }
   return out;
 }

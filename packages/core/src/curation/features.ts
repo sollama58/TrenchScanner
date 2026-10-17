@@ -315,7 +315,7 @@ export const LIVE_FLAG_FEATURES = [
 /**
  * A young Pump.fun coin's price path read off its bonding curve, change by change (added
  * 2026-10-17, user ask: the first ~15 minutes as granular as possible; curation/curveTape.ts, the
- * worker's curveTapeJob.ts). Null while the coin's curve isn't followed (past 15 minutes, not a
+ * worker's jobs/curveTape.ts). Null while the coin's curve isn't followed (past 15 minutes, not a
  * Pump.fun curve, graduated) and on every row banked before. Recorded first: no learner reads them
  * until a few days of decision rows show what they carry (RETIRED_LEARNER_INPUTS).
  */

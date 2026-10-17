@@ -338,6 +338,11 @@ export class KeyedCache<T> {
     }
     return value;
   }
+
+  /** Drops a key's answer, so its next reader fills it again. */
+  forget(key: string): void {
+    this.entries.delete(key);
+  }
 }
 
 /** One flagged trade kept on a snapshot by the live tape (core's wallets/liveFlags.ts FlaggedTrade). */

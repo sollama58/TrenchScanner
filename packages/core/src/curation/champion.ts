@@ -2,12 +2,8 @@ import { prisma } from "../db.js";
 import { CONSENSUS_CONTESTANT, RULES_CONTESTANT, type ContestantSpec } from "./contestants.js";
 import type { Lane } from "./evolution.js";
 import { liveCallRecords } from "./laneStore.js";
-import { emptyRecord } from "./leaderboard.js";
-import {
-  TOP_MODELS_GRADE_LAG_MINUTES,
-  TOP_MODELS_RANK_WINDOW_HOURS,
-  topModelsLowerBound,
-} from "./topModels.js";
+import { emptyRecord, recordScore } from "./leaderboard.js";
+import { TOP_MODELS_GRADE_LAG_MINUTES, TOP_MODELS_RANK_WINDOW_HOURS } from "./topModels.js";
 import type { Env } from "../config/env.js";
 import type { PrecisionTargets } from "./trainer.js";
 import { defaultContestant, NEVER_EMIT_THRESHOLD, type StoredEvalMetrics } from "./trainingRun.js";
@@ -20,8 +16,12 @@ import { defaultContestant, NEVER_EMIT_THRESHOLD, type StoredEvalMetrics } from 
  * pick is stored (CuratorChampion) so the worker and the API read the same answer and the
  * dashboard can say when it last changed.
  *
- * It is ranked the way the Default trio is (topModels.ts, user decision 2026-10-14, full audit
- * P9): the 2x Wilson lower bound over the last TOP_MODELS_RANK_WINDOW_HOURS of graded live calls.
+ * It is ranked on the full scorecard of its live record over the last TOP_MODELS_RANK_WINDOW_HOURS
+ * of graded calls (recordScore in leaderboard.ts: the 2x, 4x and 10x rates, the average return
+ * under the exit plan and run size; a live record has no catch part), since 2026-10-17 (user
+ * decision: "train and judge on return AND 2x/4x/10x+ rate ... ALL of these are important").
+ * From 2026-10-14 to then it was the 2x Wilson lower bound alone, as the Default trio still is
+ * (topModels.ts, full audit P9).
  * It used to be the leaderboard's composite score, which pays 15 points for catching runners, so
  * Rules - calling about half of all moments on a tied points block - took it at 17:20 on 10-14
  * while ranking 15th of 19 on the lower bound (model audit 2026-10-14, rules-score R4; user
@@ -52,6 +52,8 @@ export interface ChampionStanding {
   /** Graded live calls in the window, and the clean 2x among them. */
   graded: number;
   wins: number;
+  /** The live record's full-scorecard score (recordScore); null with nothing graded. */
+  score: number | null;
 }
 
 export interface ChampionPick {
@@ -76,7 +78,7 @@ export function pickChampion(
       reason: `No model has ${rules.minLiveGraded} graded live calls yet, so the default stays on ${nameOf(fallback)}.`,
     };
   }
-  const pct = (s: ChampionStanding) => topModelsLowerBound(s) * 100;
+  const pct = (s: ChampionStanding) => s.score ?? 0;
   const top = [...eligible].sort(
     (a, b) => pct(b) - pct(a) || b.graded - a.graded || a.id.localeCompare(b.id),
   )[0]!;
@@ -87,7 +89,7 @@ export function pickChampion(
       id: held.id,
       qualified: true,
       reason:
-        `${held.name} keeps the default: ${top.name}'s 2x lower bound leads by ${(pct(top) - pct(held)).toFixed(1)} ` +
+        `${held.name} keeps the default: ${top.name}'s score leads by ${(pct(top) - pct(held)).toFixed(1)} ` +
         `points, under the ${rules.margin}-point margin a challenger needs.`,
     };
   }
@@ -95,7 +97,7 @@ export function pickChampion(
     id: top.id,
     qualified: true,
     reason:
-      `Best 2x lower bound (${pct(top).toFixed(1)}%, ${top.wins} of ${top.graded} doubled) over the last ` +
+      `Best score on the full scorecard (${pct(top).toFixed(1)}, ${top.wins} of ${top.graded} doubled) over the last ` +
       `${CHAMPION_WINDOW_HOURS} hours among models with at least ${rules.minLiveGraded} graded live calls.`,
   };
 }
@@ -183,6 +185,7 @@ export async function rechooseChampion(input: {
   roster: readonly ContestantSpec[];
   lanes: readonly Lane[];
   rules: ChampionRules;
+  targets: PrecisionTargets;
   now?: Date;
 }): Promise<{ champion: ChampionRecord; changed: boolean; pick: ChampionPick }> {
   const now = input.now ?? new Date();
@@ -207,6 +210,7 @@ export async function rechooseChampion(input: {
           (model !== undefined && model.threshold !== null && model.threshold < NEVER_EMIT_THRESHOLD)),
       graded: (live.get(spec.id) ?? emptyRecord()).graded,
       wins: (live.get(spec.id) ?? emptyRecord()).wins,
+      score: recordScore(live.get(spec.id) ?? emptyRecord(), input.targets),
     };
   });
   const consensusEnabled = ids.includes(CONSENSUS_CONTESTANT);
@@ -222,8 +226,9 @@ export async function rechooseChampion(input: {
     data: {
       contestant: pick.id,
       name: chosen?.name ?? pick.id,
-      // The lower bound it was chosen on, in percent (the composite score before 2026-10-14).
-      score: chosen && chosen.graded > 0 ? Math.round(topModelsLowerBound(chosen) * 1000) / 10 : null,
+      // The live score it was chosen on (the 2x lower bound in percent 2026-10-14..17, the
+      // pooled composite before).
+      score: chosen?.score ?? null,
       liveGraded: chosen?.graded ?? 0,
       previous: incumbent?.contestant ?? null,
       reason: pick.reason,
