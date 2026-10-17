@@ -3330,6 +3330,13 @@ body.drawer-open .util-drawer {
   font-weight: 700;
   color: var(--ink);
 }
+/* Possible and Flagged counts: phone-only columns in place of the windows. */
+.side-phone {
+  display: none;
+}
+.side-count-flagged {
+  color: var(--warn-ink);
+}
 .side-chevron {
   color: var(--muted);
   transition: transform 0.15s ease;
@@ -3786,8 +3793,15 @@ body.drawer-open .util-drawer {
   }
   .side-head,
   .side-row {
-    grid-template-columns: 22px minmax(0, 1fr) 40px 40px 44px 16px;
+    grid-template-columns: 22px minmax(0, 1fr) 60px 56px 16px;
     gap: 6px;
+  }
+  .side-head > .num:not(.side-phone),
+  .side-count:not(.side-phone) {
+    display: none;
+  }
+  .side-phone {
+    display: block;
   }
   /* The name needs the room more than the avatar does. */
   .side-avatar {

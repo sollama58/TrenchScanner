@@ -313,6 +313,9 @@ export function SideWalletChecker() {
             <span className="num">24h</span>
             <span className="num">7d</span>
             <span className="num">30d</span>
+            {/* On a phone these two replace the window columns (user ask 2026-10-17). */}
+            <span className="num side-phone">Possible</span>
+            <span className="num side-phone">Flagged</span>
             <span />
           </div>
           <ol className="side-list">
@@ -365,6 +368,14 @@ export function SideWalletChecker() {
                           {k.coins[w].toLocaleString("en-US")}
                         </span>
                       ))}
+                      <span className={`num side-count side-phone${k.sides["30d"] ? "" : " faint"}`}>
+                        {k.sides["30d"].toLocaleString("en-US")}
+                      </span>
+                      <span
+                        className={`num side-count side-phone${k.flagged ? " side-count-flagged" : " faint"}`}
+                      >
+                        {(k.flagged ?? 0).toLocaleString("en-US")}
+                      </span>
                       <ChevronDownIcon size={16} className="side-chevron" />
                     </button>
                     <span className="side-acts">
