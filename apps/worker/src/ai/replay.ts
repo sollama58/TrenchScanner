@@ -7,6 +7,7 @@ import {
   buildAiReviewBrief,
   nearestOutcomes,
   passesWalletSafetyCuts,
+  isPreFeeWalletStonksRow,
   scoredFromFeatures,
   summarizeJudgeRecord,
   aiSpendDay,
@@ -121,6 +122,13 @@ export async function loadReplayItems(
     if (!id || seen.has(id) || seenTokens.has(a.token.id)) return false;
     // A token the safety screen now rejects is never put to the reviewer live, so it is not replayed.
     if (!passesWalletSafetyCuts(a.candidateOutcome!.features as Record<string, number | null>)) return false;
+    if (
+      isPreFeeWalletStonksRow(
+        a.candidateOutcome!.anchorAt,
+        a.candidateOutcome!.features as Record<string, number | null>,
+      )
+    )
+      return false;
     seen.add(id);
     seenTokens.add(a.token.id);
     return true;
