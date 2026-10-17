@@ -6,6 +6,8 @@ import {
   oldFirstBuyersText,
   countCutFor,
   ageNow,
+  atAlertNote,
+  newestStats,
   laterScanText,
   nowReading,
   nowReadingAge,
@@ -281,5 +283,55 @@ describe("holder counts", () => {
     expect(shownValue({ scale: 10 }, 40)).toBe(4);
     expect(shownValue({ scale: 10 }, 45)).toBe(4);
     expect(shownValue({}, 45)).toBe(45);
+  });
+});
+
+describe("tiles read the newest scan (user decision 2026-10-17)", () => {
+  const alert = {
+    takenAt: "2026-10-16T12:00:00.000Z",
+    score: 80,
+    top10HolderPct: 30,
+    holderCount: 100,
+    largestHolderPct: 5,
+    cexFundedPct: 10,
+  };
+  const newest = {
+    takenAt: "2026-10-16T13:00:00.000Z",
+    score: 60,
+    top10HolderPct: null,
+    holderCount: 250,
+    largestHolderPct: 9,
+    cexFundedPct: null,
+  };
+  const c = { snapshot: alert, latestSnapshot: newest, token: {} } as unknown as Card;
+
+  it("shows the newest scan's stats, falling back to the alert's where it has none", () => {
+    const t = newestStats(c);
+    expect(t).toMatchObject({
+      fromLatest: true,
+      score: 60,
+      holders: 250,
+      top10Pct: 30,
+      top10FromLatest: false,
+    });
+    expect(newestStats({ ...c, latestSnapshot: { ...alert } as Card["latestSnapshot"] }).fromLatest).toBe(
+      false,
+    );
+  });
+
+  it("reads wallet tiles newest first on the card, alert first in the token view", () => {
+    expect(cardReadings(c, "newest")).toMatchObject({
+      largestPct: 9,
+      largestAtAlert: false,
+      cexPct: 10,
+      cexAtAlert: true,
+    });
+    expect(cardReadings(c)).toMatchObject({ largestPct: 5, largestAtAlert: true });
+  });
+
+  it("notes the alert's value only when it differs", () => {
+    expect(atAlertNote("30%", "42%")).toBe(" (at the alert: 30%)");
+    expect(atAlertNote("30%", "30%")).toBe("");
+    expect(atAlertNote(null, "30%")).toBe("");
   });
 });
