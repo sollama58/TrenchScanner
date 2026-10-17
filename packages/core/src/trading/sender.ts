@@ -1,4 +1,4 @@
-import { fetchJson } from "../datasources/httpClient.js";
+import { fetchJson, HttpError } from "../datasources/httpClient.js";
 
 /**
  * Helius Sender (https://www.helius.dev/docs/sending-transactions/sender): the low-latency send
@@ -60,13 +60,18 @@ export function senderUrl(
   return url.toString();
 }
 
+/** What Sender said to one send: took it, refused it (nothing went out), or no clear answer. */
+export type SenderResult = { ok: true } | { ok: false; refused: boolean; error: string };
+
 /**
- * Sends one signed transaction (base64) to Sender. Returns null when Sender took it, else its
- * error text. Never throws: whether it landed is for the signature's status to say.
+ * Sends one signed transaction (base64) to Sender. Never throws: whether it landed is for the
+ * signature's status to say. Only a JSON-RPC error is a refusal; a timeout or a dropped
+ * connection may still have gone out, so it is `refused: false` and must be treated as sent.
  */
-export async function sendViaSender(url: string, base64Tx: string): Promise<string | null> {
+export async function sendViaSender(url: string, base64Tx: string): Promise<SenderResult> {
+  let body: { result?: unknown; error?: { message?: string } };
   try {
-    const body = await fetchJson<{ result?: unknown; error?: { message?: string } }>(url, {
+    body = await fetchJson<{ result?: unknown; error?: { message?: string } }>(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -78,9 +83,13 @@ export async function sendViaSender(url: string, base64Tx: string): Promise<stri
       timeoutMs: 8_000,
       retries: 0,
     });
-    if (body.error) return body.error.message ?? "Sender refused the transaction";
-    return null;
   } catch (err) {
-    return err instanceof Error ? err.message : String(err);
+    // A 4xx answer (rate limit included) is Sender saying no; a timeout or a 5xx may have gone out.
+    const status = err instanceof HttpError ? err.status : 0;
+    const refused = status >= 400 && status < 500 && status !== 408;
+    return { ok: false, refused, error: err instanceof Error ? err.message : String(err) };
   }
+  if (body.error)
+    return { ok: false, refused: true, error: body.error.message ?? "Sender refused the transaction" };
+  return { ok: true };
 }

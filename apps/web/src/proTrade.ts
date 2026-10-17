@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { StandardConnect, type StandardConnectFeature } from "@wallet-standard/features";
 import { SolanaSignTransaction, type SolanaSignTransactionFeature } from "@solana/wallet-standard-features";
 import type { WalletAccount } from "@wallet-standard/base";
-import { api, post } from "./api";
+import bs58 from "bs58";
+import { ApiError, api, post } from "./api";
 import { burnWallet } from "./burn";
 import { toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
@@ -275,7 +276,15 @@ const CONFIRM_GIVE_UP_MS = 90_000;
  * through Sender, then wait for it to land. Resolves with the signature once confirmed.
  */
 export async function runTrade(
-  input: { owner: string; mint: string; side: "buy" | "sell"; amount: bigint; settings: TradeSettings },
+  input: {
+    owner: string;
+    mint: string;
+    side: "buy" | "sell";
+    amount: bigint;
+    /** A sale of the whole balance, as the chain has it when the trade is built. */
+    all?: boolean;
+    settings: TradeSettings;
+  },
   onStage: (stage: TradeStage, built?: BuiltTrade) => void,
 ): Promise<string> {
   // The wallet first: if it isn't here there's no point building anything.
@@ -287,6 +296,7 @@ export async function runTrade(
     amount: input.amount.toString(),
     slippageBps: Math.round(input.settings.slippagePct * 100),
     speed: input.settings.speed,
+    ...(input.all ? { all: true } : {}),
   });
   onStage("signing", built);
   const [signed] = await withTimeout(
@@ -294,13 +304,27 @@ export async function runTrade(
     "sign",
   );
   if (!signed?.signedTransaction) throw new TradeError(`${name} returned no signed transaction`);
+  const bytes = Uint8Array.from(signed.signedTransaction);
+  // Its signature, known from here on (one signer: the 64 bytes after the count), so anything
+  // that goes wrong past this point can say which transaction to check before trading again.
+  const signature = bytes.length >= 65 && bytes[0] === 1 ? bs58.encode(bytes.subarray(1, 65)) : undefined;
   onStage("sending", built);
-  const sent = await post<{ signature: string }>("/pro/trade/send", {
-    transaction: toBase64(Uint8Array.from(signed.signedTransaction)),
-    lastValidBlockHeight: built.lastValidBlockHeight,
-    speed: input.settings.speed,
-    mevProtect: input.settings.mevProtect,
-  });
+  let sent: { signature: string };
+  try {
+    sent = await post<{ signature: string }>("/pro/trade/send", {
+      transaction: toBase64(bytes),
+      speed: input.settings.speed,
+      mevProtect: input.settings.mevProtect,
+    });
+  } catch (e) {
+    // The API refused it before Sender, or Sender refused it: nothing went out.
+    if (e instanceof ApiError && [400, 422, 429, 502].includes(e.status)) throw e;
+    // Anything else (the connection dropped, the API timed out) may have sent it.
+    throw new TradeError(
+      "Lost touch with the server while sending. It may still land: check your wallet before trading again.",
+      signature,
+    );
+  }
   onStage("confirming", built);
   const started = Date.now();
   for (;;) {

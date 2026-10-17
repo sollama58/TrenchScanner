@@ -1359,6 +1359,10 @@ export function ChartCard({
   const mint = card.token.mintAddress;
   const position = usePosition(pro ? mint : null);
   const [trading, setTrading] = useState(false);
+  const [tradeOpened, setTradeOpened] = useState(false);
+  useEffect(() => {
+    if (trading) setTradeOpened(true);
+  }, [trading]);
   const holds = !!position.data && BigInt(position.data.balance) > 0n;
   const expanded = !!pro && (trading || holds);
 
@@ -1601,15 +1605,18 @@ export function ChartCard({
           </>
         )}
       </section>
-      {pro && trading && (
-        <TradePanel
-          owner={pro}
-          mint={mint}
-          symbol={card.token.symbol ?? "tokens"}
-          position={position.data}
-          summary={summary}
-          onTraded={position.reload}
-        />
+      {/* Mounted once opened and only hidden after, so a trade still confirming keeps its status. */}
+      {pro && (trading || tradeOpened) && (
+        <div hidden={!trading}>
+          <TradePanel
+            owner={pro}
+            mint={mint}
+            symbol={card.token.symbol ?? "tokens"}
+            position={position.data}
+            summary={summary}
+            onTraded={position.reload}
+          />
+        </div>
       )}
       {pro && !trading && holds && summary && (
         <p className="small muted tm-trade-held">

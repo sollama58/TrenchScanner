@@ -108,11 +108,11 @@ export function TradePanel({
     saveTradeSettings(next);
   };
 
-  const trade = async (side: "buy" | "sell", amount: bigint, what: string) => {
+  const trade = async (side: "buy" | "sell", amount: bigint, what: string, all = false) => {
     if (busy || amount <= 0n) return;
     setStatus({ kind: "busy", stage: "building", what });
     try {
-      const signature = await runTrade({ owner, mint, side, amount, settings }, (stage) =>
+      const signature = await runTrade({ owner, mint, side, amount, all, settings }, (stage) =>
         setStatus({ kind: "busy", stage, what }),
       );
       setStatus({ kind: "done", text: `${what}: confirmed.`, signature });
@@ -230,7 +230,7 @@ export function TradePanel({
             className="tm-trade-btn sell"
             disabled={busy || balance === 0n}
             title={balance === 0n ? "Nothing to sell" : undefined}
-            onClick={() => trade("sell", shareOf(balance, pct), `Sell ${pct}%`)}
+            onClick={() => trade("sell", shareOf(balance, pct), `Sell ${pct}%`, pct >= 100)}
           >
             {pct}%
           </button>

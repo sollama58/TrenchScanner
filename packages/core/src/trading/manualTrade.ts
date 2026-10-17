@@ -18,7 +18,14 @@ import {
   systemTransferInstruction,
   type InstructionSpec,
 } from "./transaction.js";
-import { guardSwapTransaction, PROGRAM, type GuardRpc, type TradeExpectation } from "./txGuard.js";
+import {
+  GuardRefusal,
+  guardSwapTransaction,
+  PROGRAM,
+  readJupiterRoute,
+  type GuardRpc,
+  type TradeExpectation,
+} from "./txGuard.js";
 
 /**
  * A Pro trade from the token modal: a swap built here for the trader's OWN wallet to sign in their
@@ -97,6 +104,11 @@ const PUMP_SELL_UNITS = 120_000;
 const JUPITER_UNIT_SLACK = 1.15;
 const JUPITER_UNIT_EXTRA = 5_000;
 const DEFAULT_JUPITER_UNITS = 400_000;
+/** The unit limit's bounds: Jupiter's number is untrusted, and the runtime allows 1.4M at most. */
+const MIN_UNITS = 100_000;
+const MAX_UNITS = 1_400_000;
+/** Jupiter's exact-in route variants, whose arguments end in quoted_out (u64), slippage (u16), fee (u8). */
+const JUPITER_EXACT_IN_ROUTES = new Set(["route", "shared_accounts_route"]);
 
 /** Instructions the guard reads: their accounts stay out of lookup tables. */
 const STATIC_PROGRAMS = new Set<string>([
@@ -147,10 +159,11 @@ export async function buildManualTrade(
     route = "jupiter";
     swapIxs = built.instructions.filter((ix) => ix.programId !== PROGRAM.computeBudget);
     tables = built.lookupTables;
-    units =
-      Math.ceil((built.computeUnitLimit ?? DEFAULT_JUPITER_UNITS) * JUPITER_UNIT_SLACK) + JUPITER_UNIT_EXTRA;
+    const limit = Math.ceil((built.computeUnitLimit ?? DEFAULT_JUPITER_UNITS) * JUPITER_UNIT_SLACK);
+    units = Math.min(MAX_UNITS, Math.max(MIN_UNITS, limit + JUPITER_UNIT_EXTRA));
     quotedOut = BigInt(quote.outAmount);
     minOut = BigInt(quote.otherAmountThreshold);
+    checkJupiterFloor(swapIxs, quotedOut, minOut, req.slippageBps);
   } catch (err) {
     if (!(err instanceof NoRouteError || err instanceof RateLimitedError || err instanceof TransientError))
       throw err;
@@ -243,6 +256,36 @@ export async function buildManualTrade(
     tipLamports: tip.toString(),
     priorityFeeLamports: priorityFee.toString(),
   };
+}
+
+/**
+ * The floor the chain itself enforces on a Jupiter swap is its route instruction's quoted_out
+ * less its slippage - not the quote's otherAmountThreshold, which only the guard's simulation
+ * sees. So the route must be one this reads, exactly one, quoting at least what the quote did:
+ * a response quoting 1 token would simulate fine and then land with no floor at all.
+ */
+export function checkJupiterFloor(
+  ixs: InstructionSpec[],
+  quotedOut: bigint,
+  minOut: bigint,
+  slippageBps: number,
+): void {
+  const routes = ixs
+    .filter((ix) => ix.programId === PROGRAM.jupiterV6)
+    .map((ix) => ({ ix, route: readJupiterRoute(Uint8Array.from(ix.data)) }));
+  const read = routes.filter((r) => r.route !== null);
+  if (read.length !== 1 || !JUPITER_EXACT_IN_ROUTES.has(read[0]!.route!.name))
+    throw new GuardRefusal("Jupiter returned a route this can't check");
+  const data = read[0]!.ix.data;
+  let onChainQuote = 0n;
+  for (let i = 7; i >= 0; i--) onChainQuote = (onChainQuote << 8n) | BigInt(data[data.length - 11 + i]!);
+  if (quotedOut <= 0n || onChainQuote < quotedOut)
+    throw new GuardRefusal("Jupiter's route quotes less than its own quote");
+  if (read[0]!.route!.slippageBps > slippageBps)
+    throw new GuardRefusal("Jupiter's route allows more slippage than asked");
+  const floor = (quotedOut * BigInt(10_000 - slippageBps)) / 10_000n;
+  if (minOut <= 0n || minOut < floor)
+    throw new GuardRefusal("Jupiter's minimum is under the slippage asked for");
 }
 
 /** The coin's bonding curve and the fee recipient its trades pay, as far as they can be read. */

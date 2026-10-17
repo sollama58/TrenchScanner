@@ -22,6 +22,7 @@ import {
 import { HELIUS_SENDER_TIP_ACCOUNTS, isSenderTipAccount, pickSenderTipAccount, senderUrl } from "./sender.js";
 import {
   buildManualTrade,
+  checkJupiterFloor,
   TradeRejected,
   type ManualTradeJupiter,
   type ManualTradeRpc,
@@ -262,5 +263,32 @@ describe("tradeOf", () => {
     expect(
       tradeOf("f", tx({ pre: 1e9, post: 1e9, preTokens: "5", postTokens: "5" }), WALLET, MINT),
     ).toBeNull();
+  });
+});
+
+describe("checkJupiterFloor", () => {
+  // Jupiter's `route`: discriminator, route plan (elided), in_amount, quoted_out, slippage, fee.
+  const u64 = (v: bigint) => Array.from({ length: 8 }, (_, i) => Number((v >> BigInt(8 * i)) & 0xffn));
+  const route = (quotedOut: bigint, slippage: number, disc = [229, 23, 203, 151, 122, 227, 173, 42]) => ({
+    programId: PROGRAM.jupiterV6,
+    accounts: [],
+    data: [...disc, 1, 2, 3, ...u64(10_000_000n), ...u64(quotedOut), slippage & 0xff, slippage >> 8, 0],
+  });
+  const ok = 1_032_879n;
+  const min = 1_022_551n;
+
+  it("passes a route quoting what the quote did, within the slippage asked", () => {
+    expect(() => checkJupiterFloor([route(ok, 100)], ok, min, 100)).not.toThrow();
+  });
+  it("refuses a route whose on-chain quote would leave no floor", () => {
+    expect(() => checkJupiterFloor([route(1n, 100)], ok, min, 100)).toThrow(/quotes less/);
+  });
+  it("refuses wider slippage, a low minimum, or a route it can't read", () => {
+    expect(() => checkJupiterFloor([route(ok, 500)], ok, min, 100)).toThrow(/slippage/);
+    expect(() => checkJupiterFloor([route(ok, 100)], ok, 1n, 100)).toThrow(/minimum/);
+    expect(() => checkJupiterFloor([route(ok, 100, [1, 2, 3, 4, 5, 6, 7, 8])], ok, min, 100)).toThrow(
+      /can't check/,
+    );
+    expect(() => checkJupiterFloor([route(ok, 100), route(ok, 100)], ok, min, 100)).toThrow(/can't check/);
   });
 });

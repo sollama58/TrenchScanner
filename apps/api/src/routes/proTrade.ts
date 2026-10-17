@@ -48,11 +48,12 @@ const buildSchema = z.object({
   amount: z.string().regex(/^\d{1,20}$/),
   slippageBps: z.number().int().min(10).max(5_000),
   speed: z.enum(["eco", "turbo"]),
+  /** A sale of the whole balance, read fresh here (the panel's copy can be seconds old). */
+  all: z.boolean().optional(),
 });
 
 const sendSchema = z.object({
   transaction: z.string().min(1).max(2_000),
-  lastValidBlockHeight: z.number().int().positive(),
   speed: z.enum(["eco", "turbo"]),
   mevProtect: z.boolean(),
 });
@@ -65,11 +66,21 @@ const READ_RATE_LIMIT = { max: 120, timeWindow: "1 minute" };
 /** How often an unconfirmed trade is resent to Sender, and for how long at most. */
 const RESEND_EVERY_MS = 2_000;
 const RESEND_FOR_MS = 75_000;
-/** In-flight trades kept for resending at once, across everyone. */
+/** In-flight trades kept for resending at once, across everyone, and for one wallet. */
 const MAX_IN_FLIGHT = 200;
+const MAX_IN_FLIGHT_PER_WALLET = 5;
+/**
+ * A build is good for one send within this long (a blockhash lives about a minute): /send relays
+ * only a transaction on a blockhash this route handed that wallet, so our Helius key carries
+ * nothing it didn't build, and the expiry it answers by is the build's own, not the caller's.
+ */
+const BUILD_TTL_MS = 120_000;
+const MAX_BUILDS_PER_WALLET = 10;
 /** A position read is reused for this long (the panel polls; a trade invalidates it). */
 const POSITION_TTL_MS = 4_000;
 const SUPPLY_TTL_MS = 10 * 60_000;
+/** Blocks past the blockhash's last valid height before "expired": RPC nodes lag each other. */
+const EXPIRY_MARGIN_BLOCKS = 10;
 /** Parsed transactions kept (they never change), across every wallet and coin. */
 const MAX_CACHED_TRADES = 20_000;
 
@@ -94,6 +105,16 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   const positions = new Map<string, { at: number; body: unknown }>();
   const supplies = new Map<string, { at: number; raw: bigint; decimals: number }>();
   const inFlight = new Map<string, InFlight>();
+  const builds = new Map<string, { blockhash: string; lastValidBlockHeight: number; at: number }[]>();
+
+  /** The wallet's builds still good for a send, oldest first. */
+  function liveBuilds(wallet: string) {
+    const now = Date.now();
+    const list = (builds.get(wallet) ?? []).filter((b) => now - b.at < BUILD_TTL_MS);
+    if (list.length > 0) builds.set(wallet, list);
+    else builds.delete(wallet);
+    return list;
+  }
 
   /** The session's wallet when it has Pro Mode; otherwise answers 404 and returns null. */
   async function proWallet(request: FastifyRequest, reply: FastifyReply): Promise<string | null> {
@@ -114,17 +135,34 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
     try {
-      return await buildManualTrade(
+      let amount = BigInt(body.amount);
+      if (body.side === "sell" && body.all) {
+        const balance = await rpc.getTokenBalance(wallet, body.mint);
+        if (!balance) throw new TransientError("couldn't read the balance");
+        if (balance.raw === 0n) return reply.code(422).send({ error: "You don't hold any of this coin." });
+        amount = balance.raw;
+      }
+      const built = await buildManualTrade(
         { rpc, jupiter },
         {
           wallet,
           mint: body.mint,
           side: body.side,
-          amount: BigInt(body.amount),
+          amount,
           slippageBps: body.slippageBps,
           speed: body.speed,
         },
       );
+      const message = decodeMessage(parseWireTransaction(Buffer.from(built.transaction, "base64")).message);
+      const list = liveBuilds(wallet);
+      list.push({
+        blockhash: message.recentBlockhash,
+        lastValidBlockHeight: built.lastValidBlockHeight,
+        at: Date.now(),
+      });
+      builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
+      if (builds.size > 5_000) builds.clear();
+      return built;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof TradeRejected || err instanceof NoRouteError)
@@ -133,7 +171,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         // The guard's simulation refused it: most often the wallet can't afford it or the price
         // moved past the slippage, which the simulation's error says.
         request.log.warn({ wallet, mint: body.mint, side: body.side, error: message }, "pro trade refused");
-        return reply.code(422).send({ error: plainRefusal(message) });
+        return reply.code(422).send({ error: plainRefusal(message, body.side) });
       }
       if (err instanceof TransientError || err instanceof RateLimitedError)
         return reply.code(503).send({ error: "Couldn't reach the chain or Jupiter just now. Try again." });
@@ -147,9 +185,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     if (!wallet) return;
     const parsed = sendSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
-    const { transaction, lastValidBlockHeight, speed, mevProtect } = parsed.data;
+    const { transaction, speed, mevProtect } = parsed.data;
     const bytes = Uint8Array.from(Buffer.from(transaction, "base64"));
     let signature: string;
+    let lastValidBlockHeight: number;
     try {
       const wire = parseWireTransaction(bytes);
       const message = decodeMessage(wire.message);
@@ -161,6 +200,21 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (!message.staticKeys.some(isSenderTipAccount))
         return reply.code(400).send({ error: "That transaction doesn't tip Sender. Nothing was sent." });
       signature = bs58.encode(wire.signatures[0]!);
+      // Sent already (a retried request): the resend loop has it.
+      if (inFlight.has(signature)) return { signature };
+      // One send per build, on the blockhash it was built with.
+      const list = liveBuilds(wallet);
+      const at = list.findIndex((b) => b.blockhash === message.recentBlockhash);
+      if (at < 0)
+        return reply
+          .code(400)
+          .send({ error: "That trade is too old or wasn't built here. Nothing was sent; try again." });
+      lastValidBlockHeight = list[at]!.lastValidBlockHeight;
+      if ([...inFlight.values()].filter((f) => f.wallet === wallet).length >= MAX_IN_FLIGHT_PER_WALLET)
+        return reply
+          .code(429)
+          .send({ error: "Wait for your open trades to land before sending more. Nothing was sent." });
+      list.splice(at, 1);
     } catch {
       return reply.code(400).send({ error: "That isn't a transaction this can send. Nothing was sent." });
     }
@@ -169,12 +223,15 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       mevProtect,
       apiKey: env.HELIUS_API_KEY || undefined,
     });
-    const error = await sendViaSender(url, transaction);
-    if (error) {
-      request.log.warn({ wallet, signature, error }, "sender refused a pro trade");
+    const sent = await sendViaSender(url, transaction);
+    if (!sent.ok && sent.refused) {
+      request.log.warn({ wallet, signature, error: sent.error }, "sender refused a pro trade");
       // Refused by Sender: nothing went out under this signature (it is safe to build again).
-      return reply.code(502).send({ error: `Helius Sender refused the trade: ${error}`, signature });
+      return reply.code(502).send({ error: `Helius Sender refused the trade: ${sent.error}` });
     }
+    // No clear answer (a timeout): it may have gone out, so it is treated as sent and resent.
+    if (!sent.ok)
+      request.log.warn({ wallet, signature, error: sent.error }, "sender send unclear; resending");
     if (inFlight.size < MAX_IN_FLIGHT) {
       inFlight.set(signature, {
         base64: transaction,
@@ -200,12 +257,16 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       const status = await rpc.getSignatureStatus(signature);
       if (!status) return { state: "unknown" };
       if (!status.seen) {
-        // Past its blockhash's life and never seen: it won't land.
+        // Past its blockhash's life and never seen: it won't land. The height is read first
+        // and the status again after it, so a landing in between can't read as expired.
         const flight = inFlight.get(signature);
         const height = flight ? await rpc.getBlockHeight() : null;
-        if (flight && height !== null && height > flight.lastValidBlockHeight) {
-          inFlight.delete(signature);
-          return { state: "expired" };
+        if (flight && height !== null && height > flight.lastValidBlockHeight + EXPIRY_MARGIN_BLOCKS) {
+          const again = await rpc.getSignatureStatus(signature);
+          if (again && !again.seen) {
+            inFlight.delete(signature);
+            return { state: "expired" };
+          }
         }
         return { state: "pending" };
       }
@@ -313,9 +374,14 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
 }
 
 /** The guard's refusal in the trader's words, where it can be said plainly. */
-export function plainRefusal(message: string): string {
-  if (/InsufficientFunds|insufficient lamports|0x1\b|"Custom":1\}/i.test(message))
+export function plainRefusal(message: string, side: "buy" | "sell" = "buy"): string {
+  if (/insufficient lamports/i.test(message))
     return "Not enough SOL in your wallet for this trade and its fees.";
+  // Token program error 1 (InsufficientFunds) on a sale is the tokens, not the SOL.
+  if (/InsufficientFunds|0x1\b|"Custom":1\}/i.test(message))
+    return side === "sell"
+      ? "You hold fewer tokens than that sale. Refresh and try again."
+      : "Not enough SOL in your wallet for this trade and its fees.";
   if (/6042|6002|6003|0x1771|SlippageToleranceExceeded|under the quoted minimum/i.test(message))
     return "The price moved past your slippage. Try again, or raise the slippage.";
   if (/AccountNotFound/i.test(message)) return "Your wallet has no SOL yet (the account doesn't exist).";

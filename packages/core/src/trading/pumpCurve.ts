@@ -191,7 +191,8 @@ export function pumpBuyInstructions(input: CurveAccounts & { solIn: bigint; slip
   const buy: InstructionSpec = {
     programId: PROGRAM.pumpFun,
     accounts: v3Accounts(input),
-    // spendable_quote_in, min_tokens_out, partial_fill: Some(false).
+    // spendable_quote_in, min_tokens_out, then the optional partial_fill left unset (0: None, the
+    // program's default of filling the whole amount or failing). Verified by mainnet simulation.
     data: [...BUY_EXACT_QUOTE_IN_V3, ...u64le(input.solIn), ...u64le(minTokens), 0],
   };
   return { instructions: [createAta, buy], minTokens };
