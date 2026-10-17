@@ -186,7 +186,7 @@ export type Panel =
 
 export const BREAKDOWN_MODES: { id: BreakdownMode; label: string; unit: Unit; kind: ChartKind }[] = [
   { id: "count", label: "Coins read", unit: "count", kind: "bars" },
-  { id: "share", label: "Share of coins read", unit: "pct", kind: "bars" },
+  { id: "share", label: "Share of coins read", unit: "pct", kind: "line" },
   { id: "calls", label: "Model calls", unit: "count", kind: "bars" },
   { id: "rate2x", label: "2x rate of model calls", unit: "pct", kind: "line" },
 ];
@@ -274,7 +274,7 @@ export const PRESETS: { label: string; make: () => Panel }[] = [
   },
   {
     label: "Breakdown: share of coins read",
-    make: () => ({ id: panelId(), kind: "bars", breakdown: "share", dimension: "category" }),
+    make: () => ({ id: panelId(), kind: "line", breakdown: "share", dimension: "category" }),
   },
   {
     label: "Breakdown: model calls",
@@ -375,6 +375,17 @@ export function breakdownSeries(h: LighthouseHistory, mode: BreakdownMode): Seri
   return series.filter((s) => s.slot !== 0 || s.values.some((v) => v !== null && v !== 0));
 }
 
+/**
+ * How a breakdown panel is drawn. Bars stack only for counts, whose labels add up to a total of
+ * labels. A share or a rate per label doesn't split a whole (a coin can carry several labels of a
+ * dimension, or none), so stacking them can pass 100% and reads as a mix that isn't there: their
+ * bars stand side by side instead.
+ */
+export function breakdownKind(mode: BreakdownMode, kind: ChartKind): "line" | "bars" | "stacked" {
+  if (kind === "line") return "line";
+  return BREAKDOWN_MODES.find((m) => m.id === mode)!.unit === "count" ? "stacked" : "bars";
+}
+
 /** TokenSage's codes ("x_link_reused", "about_this_coin") as words. */
 export const words = (code: string) => code.replace(/[_-]+/g, " ").replace("/", " › ").trim();
 
@@ -435,12 +446,20 @@ export function isPanel(v: unknown): v is Panel {
   );
 }
 
-/** Short tick labels and full readout labels for a bucket's start. */
-export function bucketLabel(iso: string, bucket: LighthouseHistoryBucket): { short: string; full: string } {
+/**
+ * Short tick labels and full readout labels for a bucket's start. `multiDay` is for hourly buckets
+ * over more than a day: their ticks carry the date too, or "2 PM" could be any of the days drawn.
+ */
+export function bucketLabel(
+  iso: string,
+  bucket: LighthouseHistoryBucket,
+  multiDay = false,
+): { short: string; full: string } {
   const t = new Date(iso);
   if (bucket === "hour") {
+    const time = t.toLocaleTimeString([], { hour: "numeric", minute: halfHour(t) });
     return {
-      short: t.toLocaleTimeString([], { hour: "numeric", minute: halfHour(t) }),
+      short: multiDay ? `${t.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}` : time,
       full: t.toLocaleString([], {
         weekday: "short",
         month: "short",
@@ -470,6 +489,10 @@ export function bucketLabel(iso: string, bucket: LighthouseHistoryBucket): { sho
     full: `Week of ${t.toLocaleDateString([], { ...utc, month: "short", day: "numeric", year: "numeric" })}`,
   };
 }
+
+/** Whether bucket starts run over more than a day, so hourly ticks need their date. */
+export const spansDays = (ats: readonly string[]) =>
+  ats.length > 1 && Date.parse(ats[ats.length - 1]!) - Date.parse(ats[0]!) >= 86_400_000;
 
 /** The window's sums as a CSV, one row per bucket, every metric a column, plus the raw counts. */
 export function historyCsv(h: LighthouseHistory): string {

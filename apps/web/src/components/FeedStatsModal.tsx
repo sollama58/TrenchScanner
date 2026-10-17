@@ -188,7 +188,7 @@ function FeedCatchMeter({ pollKey }: { pollKey: string }) {
           aria-label="Share of runners your feed caught"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={fc.pct ?? 0}
+          aria-valuenow={fc.pct ?? undefined}
           aria-valuetext={fc.pct === null ? "no runners yet" : `${pct(fc.pct)} of runners caught`}
         >
           {fc.pct === null ? "–" : pct(fc.pct)}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cutoffPoints, perHourText, shareAt } from "./cutoffCurve";
+import { cutoffPoints, offScale, perHourText, shareAt } from "./cutoffCurve";
 
 const point = (alerts: number) => ({ minProbability: 0.5, alerts, winRatePct: 40, goalRatePct: 20 });
 
@@ -33,5 +33,15 @@ describe("perHourText", () => {
     expect(perHourText(2.345)).toBe("2.3/h");
     expect(perHourText(14.6)).toBe("15/h");
     expect(perHourText(null)).toBe("–");
+  });
+});
+
+describe("offScale", () => {
+  it("names the edge a share runs past, so the chart can say so instead of pinning it silently", () => {
+    expect(offScale(0.4)).toBe("below");
+    expect(offScale(80)).toBe("above");
+    expect(offScale(1)).toBeNull();
+    expect(offScale(50)).toBeNull();
+    expect(offScale(12)).toBeNull();
   });
 });

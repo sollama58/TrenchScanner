@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { LighthouseHistory, LighthouseSums } from "./api";
 import {
+  breakdownKind,
   breakdownSeries,
+  bucketLabel,
   canAdd,
   defaultPanels,
   delta,
@@ -14,6 +16,7 @@ import {
   panelTitle,
   relativeScale,
   signedPts,
+  spansDays,
   unitsOf,
 } from "./lighthouseMetrics";
 
@@ -222,5 +225,29 @@ describe("narrative relative strength", () => {
     expect(signedPts(-7.6)).toBe("-8 pts");
     expect(signedPts(0.3)).toBe("0 pts");
     expect(signedPts(null)).toBe("–");
+  });
+});
+
+describe("breakdownKind", () => {
+  it("stacks counts, but stands shares and rates side by side, since a coin can carry several labels", () => {
+    expect(breakdownKind("count", "bars")).toBe("stacked");
+    expect(breakdownKind("calls", "bars")).toBe("stacked");
+    expect(breakdownKind("share", "bars")).toBe("bars");
+    expect(breakdownKind("rate2x", "bars")).toBe("bars");
+    expect(breakdownKind("share", "line")).toBe("line");
+  });
+});
+
+describe("hourly tick labels", () => {
+  it("carry the date only when the buckets run over more than a day", () => {
+    const at = new Date(2026, 9, 12, 14).toISOString();
+    const day = new Date(2026, 9, 12).toLocaleDateString([], { month: "short", day: "numeric" });
+    expect(bucketLabel(at, "hour").short).not.toContain(day);
+    expect(bucketLabel(at, "hour", true).short.startsWith(`${day} `)).toBe(true);
+    const hours = (n: number) =>
+      Array.from({ length: n }, (_, i) => new Date(Date.UTC(2026, 9, 12, i)).toISOString());
+    expect(spansDays(hours(24))).toBe(false);
+    expect(spansDays(hours(25))).toBe(true);
+    expect(spansDays([])).toBe(false);
   });
 });

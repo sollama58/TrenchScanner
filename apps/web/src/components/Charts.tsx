@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { signedPct } from "../format";
 import { PricingChangeMark } from "./PricingChangeMark";
-import { perHourText, shareAt, type CutoffPoint } from "../cutoffCurve";
+import { offScale, perHourText, shareAt, type CutoffPoint } from "../cutoffCurve";
+import { lineScale, tickIndices, tickTextWidth, tipCenter } from "../chartScale";
+import { pickHandlers, pointerX, useChartWidth } from "./useChartWidth";
 
 /**
  * Small hand-drawn charts. Colors come from CSS tokens (styles.css): --series-1 (blue) and
- * --series-2 (orange) in that fixed order; status colors are never used for series. Every chart
- * has a hover readout, and any chart with two series has a legend.
+ * --series-2 (orange) in that fixed order; status colors are never used for series. The SVG
+ * charts have a readout on hover or tap, the bar lists print each value on its row, and any
+ * chart with two series has a legend.
  */
 
 export interface BarDatum {
@@ -28,9 +31,10 @@ export function HBarChart({ data, max, unit = "" }: { data: BarDatum[]; max?: nu
         <div
           className={`hbar-row${hover === i ? " is-hover" : ""}`}
           role="row"
-          key={d.label}
-          onMouseEnter={() => setHover(i)}
-          onMouseLeave={() => setHover(null)}
+          key={`${i}-${d.label}`}
+          onPointerEnter={() => setHover(i)}
+          onPointerDown={() => setHover(i)}
+          onPointerLeave={(e) => e.pointerType === "mouse" && setHover(null)}
           title={d.detail ? `${d.label}: ${d.display ?? d.value}${unit} - ${d.detail}` : undefined}
         >
           <span className="hbar-label" role="cell">
@@ -61,11 +65,15 @@ export interface GroupDatum {
   thin?: boolean;
   /** An extra tooltip line, e.g. the rate's interval. */
   note?: string;
+  /** This bucket's own mark for `a`, drawn across its group (refLabel names it). */
+  aRef?: number;
 }
 
 /**
  * Grouped vertical bars on a 0-100% scale with dashed target lines - for hit rates, where the
  * question is always "how far from the 75% / 50% line". `a` is the 2x series, `b` the 4x one.
+ * With null targets and each bucket's own `aRef`, every bucket is judged against its own mark
+ * instead (a calibration chart: did the calls given 30-40% odds double 35% of the time?).
  */
 export function TargetBars({
   data,
@@ -73,29 +81,23 @@ export function TargetBars({
   bLabel,
   aTarget,
   bTarget,
+  refLabel,
   height = 180,
 }: {
   data: GroupDatum[];
   aLabel: string;
   bLabel: string;
-  aTarget: number;
-  bTarget: number;
+  /** The goal lines across the chart; null leaves one off. */
+  aTarget: number | null;
+  bTarget: number | null;
+  /** The legend's name for the buckets' own `aRef` marks. */
+  refLabel?: string;
   height?: number;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   // Drawn at the container's real pixel width, so text and bars keep their size at any width
   // instead of scaling with the viewBox.
-  const boxRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(560);
-  useEffect(() => {
-    const el = boxRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(
-      ([entry]) => entry && setWidth(Math.max(280, Math.round(entry.contentRect.width))),
-    );
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const [boxRef, width] = useChartWidth();
   const padL = 40;
   const padR = 8;
   const padT = 10;
@@ -109,8 +111,13 @@ export function TargetBars({
   // Under ~70px a bucket's two lines of text run into the next bucket's.
   const narrow = group < 70;
   // The tooltip is centered on its bucket but kept inside the chart, so it never runs off a phone screen.
-  const tipX =
-    hover === null ? 0 : Math.min(Math.max(padL + hover * group + group / 2, 90), Math.max(90, width - 90));
+  const tipX = hover === null ? 0 : tipCenter(padL + hover * group + group / 2, width);
+  const pick = pickHandlers((e) => {
+    const px = pointerX(e, width);
+    if (data.length === 0 || px < padL || px > width - padR) return null;
+    return Math.min(data.length - 1, Math.floor((px - padL) / group));
+  }, setHover);
+  const targets = [aTarget, bTarget].filter((t): t is number => t !== null);
 
   return (
     <figure className="chart">
@@ -121,9 +128,12 @@ export function TargetBars({
         <span className="key">
           <i className="swatch s2" /> {bLabel}
         </span>
-        <span className="key muted">
-          - - targets {aTarget}% / {bTarget}%
-        </span>
+        {targets.length > 0 && (
+          <span className="key muted">
+            - - {targets.length > 1 ? "targets" : "target"} {targets.map((t) => `${t}%`).join(" / ")}
+          </span>
+        )}
+        {refLabel && <span className="key muted">- - {refLabel}</span>}
       </div>
       <div className="chart-box" ref={boxRef}>
         <svg
@@ -131,6 +141,7 @@ export function TargetBars({
           height={height}
           role="img"
           aria-label={`${aLabel} and ${bLabel} by bucket`}
+          {...pick}
         >
           {[0, 25, 50, 75, 100].map((t) => (
             <g key={t}>
@@ -140,13 +151,23 @@ export function TargetBars({
               </text>
             </g>
           ))}
-          <line className="target t1" x1={padL} x2={width - padR} y1={y(aTarget)} y2={y(aTarget)} />
-          <line className="target t2" x1={padL} x2={width - padR} y1={y(bTarget)} y2={y(bTarget)} />
+          {aTarget !== null && (
+            <line className="target t1" x1={padL} x2={width - padR} y1={y(aTarget)} y2={y(aTarget)} />
+          )}
+          {bTarget !== null && (
+            <line className="target t2" x1={padL} x2={width - padR} y1={y(bTarget)} y2={y(bTarget)} />
+          )}
           {data.map((d, i) => {
             const x0 = padL + i * group + group / 2 - barW - 1;
             return (
-              <g key={d.label} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
-                <rect className="hit" x={padL + i * group} y={padT} width={group} height={plotH + padB} />
+              <g key={i}>
+                <rect
+                  className={`hit${hover === i ? " on" : ""}`}
+                  x={padL + i * group}
+                  y={padT}
+                  width={group}
+                  height={plotH + padB}
+                />
                 {d.a !== null && (
                   <path
                     className={`bar s1${d.thin ? " thin" : ""}`}
@@ -157,6 +178,15 @@ export function TargetBars({
                   <path
                     className={`bar s2${d.thin ? " thin" : ""}`}
                     d={barPath(x0 + barW + 2, y(d.b), barW, padT + plotH)}
+                  />
+                )}
+                {d.aRef !== undefined && (
+                  <line
+                    className="target t1"
+                    x1={x0 - 3}
+                    x2={x0 + 2 * barW + 5}
+                    y1={y(d.aRef)}
+                    y2={y(d.aRef)}
                   />
                 )}
                 <text className="tick" x={padL + i * group + group / 2} y={height - 18} textAnchor="middle">
@@ -182,6 +212,7 @@ export function TargetBars({
             <strong>{hovered.label}</strong>
             <span>
               <i className="swatch s1" /> {aLabel}: {hovered.a === null ? "–" : `${hovered.a.toFixed(1)}%`}
+              {hovered.aRef !== undefined && refLabel ? ` (${refLabel} ${hovered.aRef.toFixed(0)}%)` : ""}
             </span>
             <span>
               <i className="swatch s2" /> {bLabel}: {hovered.b === null ? "–" : `${hovered.b.toFixed(1)}%`}
@@ -227,17 +258,7 @@ export function MultiLines({
   pricingChange?: number | null;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(560);
-  useEffect(() => {
-    const el = boxRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(
-      ([entry]) => entry && setWidth(Math.max(280, Math.round(entry.contentRect.width))),
-    );
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const [boxRef, width] = useChartWidth();
   const padL = 40;
   const padR = 12;
   const padT = 10;
@@ -245,14 +266,7 @@ export function MultiLines({
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
   const values = series.flatMap((s) => s.values).filter((v): v is number => v !== null);
-  const hi = Math.max(0, ...values) * 1.15;
-  const low = signed ? Math.min(0, ...values) * 1.15 : 0;
-  const span = Math.max(10, hi - low);
-  const step = span <= 30 ? 10 : span <= 60 ? 20 : span <= 125 ? 25 : span <= 250 ? 50 : 100;
-  const top = Math.max(10, Math.ceil(hi / step) * step);
-  const bottom = Math.floor(low / step) * step;
-  // Up to `top` only: when every value is negative, `top` is the 10% floor, short of a whole step.
-  const ticks = Array.from({ length: Math.floor((top - bottom) / step) + 1 }, (_, i) => bottom + i * step);
+  const { top, bottom, ticks } = lineScale(values, signed);
   const n = labels.length;
   const x = (i: number) => padL + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
   const y = (v: number) =>
@@ -271,9 +285,15 @@ export function MultiLines({
     });
     return d;
   };
-  const every = Math.max(1, Math.ceil((n * 44) / Math.max(1, plotW)));
   const slot = n <= 1 ? plotW : plotW / (n - 1);
-  const tipX = hover === null ? 0 : Math.min(Math.max(x(hover), 100), Math.max(100, width - 100));
+  // Labels only where they fit, the last always: it is the newest day.
+  const tickAt = new Set(tickIndices(n, slot, Math.max(30, ...labels.map((l) => tickTextWidth(l)))));
+  const tipX = hover === null ? 0 : tipCenter(x(hover), width);
+  const pick = pickHandlers((e) => {
+    if (n === 0) return null;
+    const i = n <= 1 ? 0 : Math.round((pointerX(e, width) - padL) / slot);
+    return Math.min(n - 1, Math.max(0, i));
+  }, setHover);
   // Yardsticks first so the picked models draw over them.
   const drawn = [...series].sort((a, b) => Number(/^s\d$/.test(a.tone)) - Number(/^s\d$/.test(b.tone)));
 
@@ -292,6 +312,7 @@ export function MultiLines({
           height={height}
           role="img"
           aria-label={`${series.map((s) => s.label).join(", ")} by day`}
+          {...pick}
         >
           {ticks.map((t) => (
             <g key={t}>
@@ -309,8 +330,14 @@ export function MultiLines({
             <path key={s.key} className={`line ${s.tone}`} d={path(s.values)} />
           ))}
           {labels.map((label, i) => (
-            <g key={label} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
-              <rect className="hit" x={x(i) - slot / 2} y={padT} width={slot} height={plotH + padB} />
+            <g key={i}>
+              <rect
+                className={`hit${hover === i ? " on" : ""}`}
+                x={x(i) - slot / 2}
+                y={padT}
+                width={slot}
+                height={plotH + padB}
+              />
               {drawn.map((s) => {
                 const v = s.values[i] ?? null;
                 return v === null ? null : (
@@ -323,7 +350,7 @@ export function MultiLines({
                   />
                 );
               })}
-              {(i % every === 0 || i === n - 1) && (
+              {tickAt.has(i) && (
                 <text
                   className="tick"
                   x={x(i)}
@@ -509,6 +536,12 @@ export function MarkerBars({
   const top = Math.min(100, Math.max(10, Math.ceil((Math.max(0, ...values) * 1.12) / 10) * 10));
   const at = (v: number) => `${(Math.min(top, Math.max(0, v)) / top) * 100}%`;
   const toggles = data.some((d) => d.toggle);
+  // Two marker tags closer than about a tag's width would print over each other: the lower one
+  // then reads leftwards from its line and the higher one rightwards.
+  const [lowM, highM] = [...markers].sort((a, b) => a.value - b.value);
+  const close =
+    markers.length === 2 && lowM && highM && ((highM.value - lowM.value) / top) * 100 < 14 ? lowM.kind : null;
+  const nudge = (m: BarMarker) => (close === null ? "" : m.kind === close ? " nudge-l" : " nudge-r");
   return (
     <figure className="chart">
       <div className="legend">
@@ -520,6 +553,8 @@ export function MarkerBars({
             <i className={`marker-key ${m.kind}`} /> {m.label}
           </span>
         ))}
+        {/* The scale follows the data, so say where the track ends: a full bar is this, not 100%. */}
+        <span className="key muted">Track 0–{top}%</span>
       </div>
       <div className={`mbar${onOpen ? " opens" : ""}${toggles ? " toggles" : ""}`}>
         {columns && (
@@ -610,7 +645,7 @@ export function MarkerBars({
           <span />
           <span className="mbar-track bare">
             {markers.map((m) => (
-              <span key={m.kind} className={`mbar-tag ${m.kind}`} style={{ left: at(m.value) }}>
+              <span key={m.kind} className={`mbar-tag ${m.kind}${nudge(m)}`} style={{ left: at(m.value) }}>
                 {m.value.toFixed(1)}%
               </span>
             ))}
@@ -643,17 +678,7 @@ export function CutoffCurve({
   height?: number;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(560);
-  useEffect(() => {
-    const el = boxRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(
-      ([entry]) => entry && setWidth(Math.max(280, Math.round(entry.contentRect.width))),
-    );
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const [boxRef, width] = useChartWidth();
   const padL = 40;
   const padR = 22;
   const padT = 24;
@@ -673,8 +698,19 @@ export function CutoffCurve({
     return { left, w: right - left };
   };
   const hovered = hover !== null ? points[hover] : undefined;
-  const tipX = hovered ? Math.min(Math.max(x(hovered.sharePct), 90), Math.max(90, width - 90)) : 0;
+  const tipX = hovered ? tipCenter(x(hovered.sharePct), width) : 0;
+  const pick = pickHandlers((e) => {
+    const px = pointerX(e, width);
+    const i = edges.findIndex((_, j) => {
+      const b = band(j);
+      return px >= b.left && px < b.left + b.w;
+    });
+    return i < 0 ? null : i;
+  }, setHover);
   const liveX = live ? x(live.sharePct) : null;
+  // A live cutoff outside the curve's 1-50% is pinned to the edge it ran past with an arrow
+  // pointing off the scale and a dotted line, rather than drawn as if it sat on the end slice.
+  const liveOff = live ? offScale(live.sharePct) : null;
   const flip = liveX !== null && liveX > width - 130;
 
   return (
@@ -701,6 +737,7 @@ export function CutoffCurve({
           height={height}
           role="img"
           aria-label="2x and 4x hit rate at each cutoff, by share of decision moments called"
+          {...pick}
         >
           {[0, 25, 50, 75, 100].map((t) => (
             <g key={t}>
@@ -713,11 +750,13 @@ export function CutoffCurve({
           <line className="target t1" x1={padL} x2={width - padR} y1={y(aTarget)} y2={y(aTarget)} />
           <line className="target t2" x1={padL} x2={width - padR} y1={y(bTarget)} y2={y(bTarget)} />
           {liveX !== null && live && (
-            <g className="cutoff-live">
+            <g className={`cutoff-live${liveOff ? " off" : ""}`}>
               <line x1={liveX} x2={liveX} y1={padT - 6} y2={padT + plotH} />
               <text x={flip ? liveX - 5 : liveX + 5} y={padT - 10} textAnchor={flip ? "end" : "start"}>
+                {liveOff === "below" ? "◀ " : ""}
                 Live: top {live.sharePct < 10 ? live.sharePct.toFixed(1) : Math.round(live.sharePct)}%
                 {live.perHour !== null ? `, ${perHourText(live.perHour)}` : ""}
+                {liveOff === "above" ? " ▶" : ""}
               </text>
             </g>
           )}
@@ -727,8 +766,14 @@ export function CutoffCurve({
             const b = band(i);
             const anchor = i === 0 ? "start" : i === points.length - 1 ? "end" : "middle";
             return (
-              <g key={p.sharePct} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
-                <rect className="hit" x={b.left} y={padT} width={b.w} height={plotH + padB} />
+              <g key={i}>
+                <rect
+                  className={`hit${hover === i ? " on" : ""}`}
+                  x={b.left}
+                  y={padT}
+                  width={b.w}
+                  height={plotH + padB}
+                />
                 <circle
                   className="dot s1"
                   cx={x(p.sharePct)}

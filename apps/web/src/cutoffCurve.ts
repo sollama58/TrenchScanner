@@ -41,6 +41,15 @@ export function shareAt(sharePct: number, lo = CURVE_SLICES[0]!, hi = CURVE_SLIC
   return Math.min(1, Math.max(0, t));
 }
 
+/** Whether a share lies off the curve's axis: "below" its first slice, "above" its last, else null. */
+export function offScale(
+  sharePct: number,
+  lo = CURVE_SLICES[0]!,
+  hi = CURVE_SLICES.at(-1)!,
+): "below" | "above" | null {
+  return sharePct < lo ? "below" : sharePct > hi ? "above" : null;
+}
+
 /** Calls an hour, as the chart labels them: one decimal under 10, whole above. */
 export function perHourText(perHour: number | null): string {
   if (perHour === null) return "–";

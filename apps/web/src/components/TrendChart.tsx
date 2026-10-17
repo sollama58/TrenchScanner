@@ -1,13 +1,16 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { Series, Unit } from "../lighthouseMetrics";
+import { compactNumber, niceScale, scaleTicks, tickIndices, tickTextWidth, tipCenter } from "../chartScale";
 import { PricingChangeMark } from "./PricingChangeMark";
+import { pickHandlers, pointerX, useChartWidth } from "./useChartWidth";
 
 /**
  * The Lighthouse tab's chart: up to five series over the same buckets as lines, grouped bars or
  * stacked bars. Rates, counts and returns each have their own scale; a chart carries one on the
  * left axis and, when a second is needed, one on the right. Colors are the categorical slots
  * --series-1..5 through the lh-s1..5 classes (lh-other for the neutral remainder), and every
- * series is named in the legend and the readout, never by color alone.
+ * series is named in the legend and the readout, never by color alone. Stack only series that
+ * split one whole (counts by label): shares that overlap would stack past 100% and mean nothing.
  */
 
 export interface TrendChartProps {
@@ -30,15 +33,13 @@ export function fmt(v: number | null, unit: Unit): string {
   return unit === "ret" && v > 0 ? `+${s}` : s;
 }
 
-/** Round axis bounds and ticks around the data: a step of 1, 2, 2.5 or 5 times a power of ten. */
-export function niceScale(lo: number, hi: number, ticks = 4): { min: number; max: number; step: number } {
-  if (hi <= lo) hi = lo + 1;
-  const raw = (hi - lo) / ticks;
-  const mag = 10 ** Math.floor(Math.log10(raw));
-  const norm = raw / mag;
-  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag;
-  return { min: Math.floor(lo / step) * step, max: Math.ceil(hi / step) * step, step };
+/** An axis tick: counts compact (1.25M) so a big count still fits the axis, returns as rates. */
+export function tickText(v: number, unit: Unit): string {
+  return unit === "count" ? compactNumber(v) : fmt(v, unit === "ret" ? "pct" : unit);
 }
+
+/** Under this many pixels a bucket's bars are drawn at their true width, with no gap or minimum. */
+const NARROW_SLOT = 3;
 
 const cls = (slot: number) => (slot === 0 ? "lh-other" : `lh-s${slot}`);
 
@@ -51,32 +52,20 @@ export function TrendChart({
   pricingChange = null,
 }: TrendChartProps) {
   const [hover, setHover] = useState<number | null>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(640);
-  useEffect(() => {
-    const el = boxRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(
-      ([entry]) => entry && setWidth(Math.max(280, Math.round(entry.contentRect.width))),
-    );
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const [boxRef, width] = useChartWidth(640);
 
   const n = labels.length;
   const units: Unit[] = [];
   for (const s of series) if (!units.includes(s.unit)) units.push(s.unit);
   const left = units[0] ?? "count";
   const right = units[1];
-  const padL = 44;
-  const padR = right ? 44 : 10;
   const padT = 12;
   const padB = 28;
-  const plotW = Math.max(10, width - padL - padR);
   const plotH = height - padT - padB;
 
   // One scale per unit, fitted to the data (plus any goal line); rates never go below zero, and
-  // a stack's scale is the stack's height.
+  // a stack's scale is the stack's height. Counts step in whole numbers, so no two ticks read the
+  // same. A rate axis stops at 100% unless the data runs past it, so nothing is clipped unseen.
   const scaleFor = (unit: Unit) => {
     let lo = 0;
     let hi = 0;
@@ -100,13 +89,23 @@ export function TrendChart({
         }
       }
     }
-    const nice = niceScale(lo, hi * 1.08 || 1);
-    return { ...nice, max: unit === "pct" ? Math.min(100, Math.max(nice.max, nice.step)) : nice.max };
+    const nice = niceScale(lo, hi * 1.08 || 1, 4, unit === "count");
+    return {
+      ...nice,
+      max: unit === "pct" && hi <= 100 ? Math.min(100, Math.max(nice.max, nice.step)) : nice.max,
+    };
   };
   // The left axis always has a scale, even with no series (an empty breakdown), so the axis can draw.
   const scales = new Map<Unit, ReturnType<typeof scaleFor>>(
     (units.length ? units : [left]).map((u) => [u, scaleFor(u)]),
   );
+  const ticksFor = (unit: Unit) => scaleTicks(scales.get(unit)!);
+  // Each axis is as wide as its widest tick label, so "1.25M" or "-100%" never runs off the edge.
+  const axisW = (unit: Unit) =>
+    Math.ceil(Math.max(...ticksFor(unit).map((t) => tickTextWidth(tickText(t, unit))))) + 12;
+  const padL = Math.max(32, axisW(left));
+  const padR = right ? Math.max(32, axisW(right)) : 10;
+  const plotW = Math.max(10, width - padL - padR);
   const y = (v: number, unit: Unit) => {
     const sc = scales.get(unit)!;
     const span = sc.max - sc.min || 1;
@@ -114,18 +113,23 @@ export function TrendChart({
   };
   const slot = plotW / Math.max(1, n);
   const xMid = (i: number) => padL + i * slot + slot / 2;
-  const ticksFor = (unit: Unit) => {
-    const sc = scales.get(unit)!;
-    const out: number[] = [];
-    for (let t = sc.min; t <= sc.max + sc.step / 1e6; t += sc.step) out.push(Number(t.toFixed(6)));
-    return out;
-  };
 
+  // Hourly buckets over a month leave each under a pixel or two: bars then take their true width
+  // with no gap (a 2px minimum would pile them over each other), and dots are left off the lines.
+  const narrow = slot < NARROW_SLOT;
   const barGroups = kind === "bars" ? series.length : 1;
-  const barW = Math.max(2, Math.min(26, (slot * 0.72) / barGroups));
-  const every = Math.max(1, Math.ceil((n * 52) / Math.max(1, plotW)));
+  const barW = narrow ? slot / barGroups : Math.max(2, Math.min(26, (slot * 0.72) / barGroups));
+  const labelW = Math.max(30, ...labels.map((l) => tickTextWidth(l.short)));
+  const tickAt = new Set(tickIndices(n, slot, labelW));
   const hovered = hover !== null && hover < n ? hover : null;
-  const tipX = hovered === null ? 0 : Math.min(Math.max(xMid(hovered), 110), Math.max(110, width - 110));
+  const tipX = hovered === null ? 0 : tipCenter(xMid(hovered), width);
+  // One handler for the whole plot, picking the bucket under the pointer, rather than a hover
+  // target per bucket (720 of them at an hour a bucket over a month).
+  const pick = pickHandlers((e) => {
+    const px = pointerX(e, width);
+    if (n === 0 || px < padL || px > width - padR) return null;
+    return Math.min(n - 1, Math.max(0, Math.floor((px - padL) / slot)));
+  }, setHover);
   const empty = series.length === 0 || series.every((s) => s.values.every((v) => v === null));
 
   const linePath = (s: Series) => {
@@ -160,19 +164,23 @@ export function TrendChart({
           height={height}
           role="img"
           aria-label={series.map((s) => s.label).join(", ")}
+          {...pick}
         >
+          {hovered !== null && (
+            <rect className="hit on" x={padL + hovered * slot} y={padT} width={slot} height={plotH} />
+          )}
           {ticksFor(left).map((t) => (
             <g key={t}>
               <line className="grid" x1={padL} x2={width - padR} y1={y(t, left)} y2={y(t, left)} />
               <text className="tick" x={padL - 6} y={y(t, left) + 3} textAnchor="end">
-                {fmt(t, left === "ret" ? "pct" : left)}
+                {tickText(t, left)}
               </text>
             </g>
           ))}
           {right &&
             ticksFor(right).map((t) => (
               <text key={t} className="tick" x={width - padR + 6} y={y(t, right) + 3} textAnchor="start">
-                {fmt(t, right === "ret" ? "pct" : right)}
+                {tickText(t, right)}
               </text>
             ))}
           {scales.get(left)!.min < 0 && (
@@ -200,36 +208,32 @@ export function TrendChart({
           )}
           {kind === "line" &&
             series.map((s) => <path key={s.id} className={`lht-line ${cls(s.slot)}`} d={linePath(s)} />)}
-          {labels.map((_, i) => {
-            const stackBase = new Map<Unit, number>();
-            return (
-              <g
-                key={i}
-                onMouseEnter={() => setHover(i)}
-                onMouseLeave={() => setHover(null)}
-                onClick={() => setHover(i)}
-              >
-                <rect className="hit" x={padL + i * slot} y={padT} width={slot} height={plotH + padB} />
-                {kind === "bars" &&
-                  series.map((s, j) => {
-                    const v = s.values[i];
-                    if (v === null || v === undefined) return null;
-                    const x0 = xMid(i) - (barGroups * barW) / 2 + j * barW;
-                    const y0 = y(Math.max(0, v), s.unit);
-                    const y1 = y(Math.min(0, v), s.unit);
-                    return (
-                      <rect
-                        key={s.id}
-                        className={`lht-bar ${cls(s.slot)}`}
-                        x={x0 + 0.5}
-                        y={y0}
-                        width={Math.max(1, barW - 1)}
-                        height={Math.max(0.5, y1 - y0)}
-                      />
-                    );
-                  })}
-                {kind === "stacked" &&
-                  series.map((s) => {
+          {kind === "bars" &&
+            series.map((s, j) => (
+              <g key={s.id} className={`lht-bar ${cls(s.slot)}`}>
+                {s.values.map((v, i) => {
+                  if (v === null || v === undefined) return null;
+                  const x0 = xMid(i) - (barGroups * barW) / 2 + j * barW;
+                  const y0 = y(Math.max(0, v), s.unit);
+                  const y1 = y(Math.min(0, v), s.unit);
+                  return (
+                    <rect
+                      key={i}
+                      x={narrow ? x0 : x0 + 0.5}
+                      y={y0}
+                      width={narrow ? barW : Math.max(1, barW - 1)}
+                      height={Math.max(0.5, y1 - y0)}
+                    />
+                  );
+                })}
+              </g>
+            ))}
+          {kind === "stacked" &&
+            labels.map((_, i) => {
+              const stackBase = new Map<Unit, number>();
+              return (
+                <g key={i}>
+                  {series.map((s) => {
                     const v = Math.max(0, s.values[i] ?? 0);
                     if (v === 0) return null;
                     const base = stackBase.get(s.unit) ?? 0;
@@ -247,32 +251,36 @@ export function TrendChart({
                       />
                     );
                   })}
-                {kind === "line" &&
-                  series.map((s) => {
-                    const v = s.values[i];
-                    return v === null || v === undefined ? null : (
-                      <circle
-                        key={s.id}
-                        className={`lht-dot ${cls(s.slot)}`}
-                        cx={xMid(i)}
-                        cy={y(v, s.unit)}
-                        r={hovered === i ? 4 : n > 60 ? 0 : 2.5}
-                      />
-                    );
-                  })}
-                {(i === n - 1 || (i % every === 0 && (n - 1 - i) * slot >= 48)) && (
-                  <text
-                    className="tick"
-                    x={xMid(i)}
-                    y={height - 8}
-                    textAnchor={i === n - 1 && n > 1 ? "end" : i === 0 ? "start" : "middle"}
-                  >
-                    {labels[i]!.short}
-                  </text>
-                )}
-              </g>
-            );
-          })}
+                </g>
+              );
+            })}
+          {kind === "line" &&
+            series.map((s) =>
+              s.values.map((v, i) =>
+                v === null || v === undefined || (i !== hovered && (narrow || n > 60)) ? null : (
+                  <circle
+                    key={`${s.id}-${i}`}
+                    className={`lht-dot ${cls(s.slot)}`}
+                    cx={xMid(i)}
+                    cy={y(v, s.unit)}
+                    r={hovered === i ? 4 : 2.5}
+                  />
+                ),
+              ),
+            )}
+          {labels.map((l, i) =>
+            tickAt.has(i) ? (
+              <text
+                key={i}
+                className="tick"
+                x={xMid(i)}
+                y={height - 8}
+                textAnchor={i === n - 1 && n > 1 ? "end" : i === 0 ? "start" : "middle"}
+              >
+                {l.short}
+              </text>
+            ) : null,
+          )}
           <line className="axis" x1={padL} x2={width - padR} y1={padT + plotH} y2={padT + plotH} />
         </svg>
         {hovered !== null && (
