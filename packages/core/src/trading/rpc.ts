@@ -56,7 +56,7 @@ export interface TransactionFill {
   blockTime: Date | null;
 }
 
-interface TokenBalanceEntry {
+export interface TokenBalanceEntry {
   owner?: string;
   mint?: string;
   uiTokenAmount?: { amount?: string; decimals?: number };
@@ -120,6 +120,20 @@ export interface MintInfo {
   extensions: string[];
   /** Absent when the RPC didn't say. */
   decimals?: number;
+}
+
+/** A transaction as getTransaction's "json" encoding returns it (the fields read here). */
+export interface RawTransaction {
+  blockTime?: number | null;
+  meta?: {
+    err: unknown;
+    preBalances?: number[];
+    postBalances?: number[];
+    preTokenBalances?: TokenBalanceEntry[];
+    postTokenBalances?: TokenBalanceEntry[];
+    loadedAddresses?: { writable?: string[]; readonly?: string[] } | null;
+  } | null;
+  transaction?: { message?: { accountKeys?: string[] } };
 }
 
 export class TradingRpc implements GuardRpc {
@@ -430,6 +444,46 @@ export class TradingRpc implements GuardRpc {
       decimals,
       blockTime: typeof tx.blockTime === "number" ? new Date(tx.blockTime * 1000) : null,
     };
+  }
+
+  /** The newest signatures that touched `address` (at most `limit`); null when unknown. */
+  async getSignaturesForAddress(
+    address: string,
+    limit: number,
+  ): Promise<{ signature: string; blockTime: number | null; failed: boolean }[] | null> {
+    const out = await this.read<{ signature?: string; blockTime?: number | null; err?: unknown }[]>(
+      "getSignaturesForAddress",
+      [address, { limit, commitment: "confirmed" }],
+    );
+    if (!Array.isArray(out)) return null;
+    return out.flatMap((e) =>
+      typeof e.signature === "string"
+        ? [{ signature: e.signature, blockTime: e.blockTime ?? null, failed: e.err != null }]
+        : [],
+    );
+  }
+
+  /**
+   * A landed transaction as the RPC's "json" encoding gives it (any version: v1 messages are on
+   * mainnet now, and Pump.fun's own trades use them). Null when unknown or not found.
+   */
+  async getTransactionJson(signature: string): Promise<RawTransaction | null> {
+    return this.read<RawTransaction>("getTransaction", [
+      signature,
+      { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 1 },
+    ]);
+  }
+
+  /** A mint's supply (raw units) and decimals; null when it can't be read. */
+  async getTokenSupply(mint: string): Promise<{ raw: bigint; decimals: number } | null> {
+    const out = await this.read<{ value?: { amount?: string; decimals?: number } }>("getTokenSupply", [
+      mint,
+      { commitment: "confirmed" },
+    ]);
+    const v = out?.value;
+    if (!v || typeof v.amount !== "string" || !/^\d+$/.test(v.amount) || typeof v.decimals !== "number")
+      return null;
+    return { raw: BigInt(v.amount), decimals: v.decimals };
   }
 
   /**

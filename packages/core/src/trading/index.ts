@@ -16,3 +16,4 @@ export * from "./tradeAlerts.js";
 export * from "./sender.js";
 export * from "./pumpCurve.js";
 export * from "./manualTrade.js";
+export * from "./walletTrades.js";

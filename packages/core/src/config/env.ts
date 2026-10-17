@@ -1101,6 +1101,22 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+
+  // Pro Mode trades (user decision 2026-10-17): buy and sell from the token modal's chart with the
+  // trader's OWN wallet, for admins and the wallets granted Pro Mode in Admin > Access. The api
+  // builds and checks the swap (trading/manualTrade.ts), the wallet signs it in the browser, and
+  // it goes out through Helius Sender. No fee is taken and no key is held. "false" hides the Trade
+  // panel and answers 404 on /pro/trade.
+  PRO_TRADING_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // Jupiter key for Pro trades' quotes and swap instructions. Empty: Jupiter's keyless host. Never
+  // the bot's TRADING_JUPITER_API_KEY, so a burst of clicks can't rate-limit a stop-loss.
+  PRO_TRADING_JUPITER_API_KEY: pastedKey,
+  // Helius Sender's endpoint; empty is the global one (https://sender.helius-rpc.com/fast). The
+  // api adds HELIUS_API_KEY to it (50 sends a second instead of 1). Sender spends no credits.
+  HELIUS_SENDER_URL: z.string().optional().default(""),
 });
 
 /**

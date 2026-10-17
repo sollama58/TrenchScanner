@@ -61,6 +61,8 @@ import { registerWalletRoutes } from "./routes/wallets.js";
 import { WalletLiveReader } from "./walletProfile.js";
 import { WalletIdentityReader } from "./walletIdentity.js";
 import { registerTradingRoutes } from "./routes/trading.js";
+import { registerProTradeRoutes } from "./routes/proTrade.js";
+import { registerAdminProModeRoutes } from "./routes/adminProMode.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
 import { OnDemandLiveRefresher } from "./liveRefresh.js";
@@ -628,6 +630,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
   // The trading bot (admin-only; nothing is registered without TRADING_BOT_ENABLED).
   await app.register(registerTradingRoutes, { prefix: "/trading", env });
+  // Pro Mode trades from the token modal: the trader's own wallet signs; nothing custodial.
+  await app.register(registerProTradeRoutes, { prefix: "/pro", env });
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
   await app.register(registerStatsRoutes, { prefix: "/stats", env, timings, liveRefresher });
   await app.register(registerStatsModelRoutes, { prefix: "/stats", env });
@@ -645,6 +649,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       await registerAdminFeedbackRoutes(instance);
       // Free Access: open sign-in to everyone for a while, and clean up after it.
       await registerAdminFreeAccessRoutes(instance, { env });
+      // Pro Mode: who besides the admins sees the token modal's Trade panel.
+      await registerAdminProModeRoutes(instance, { env });
     },
     { prefix: "/admin" },
   );

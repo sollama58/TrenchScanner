@@ -14,6 +14,7 @@ import {
 } from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME, verifyRequestSessions } from "../auth/session.js";
+import { isProWallet } from "../proMode.js";
 
 // Length caps run before any base58 decode: bs58.decode is quadratic in input length, so an
 // uncapped field let one unauthenticated request (a ~1MB walletAddress) block the event loop for
@@ -136,12 +137,14 @@ async function findOrCreateUser(walletAddress: string): Promise<{ user: User; cr
 
 /** Shapes the public-facing user object - notably where isAdmin gets attached, since that's
  *  derived from config (ADMIN_WALLET_ADDRESSES) rather than stored on the User row itself. */
-function toUserResponse(user: Pick<User, "id" | "walletAddress" | "createdAt">, env: Env) {
+async function toUserResponse(user: Pick<User, "id" | "walletAddress" | "createdAt">, env: Env) {
   return {
     id: user.id,
     walletAddress: user.walletAddress,
     createdAt: user.createdAt,
     isAdmin: adminWalletSet(env).has(user.walletAddress),
+    // Pro Mode: whether the token modal shows its Trade panel (proMode.ts).
+    isPro: await isProWallet(env, user.walletAddress),
   };
 }
 
@@ -243,7 +246,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
 
     // The same token in the body, for a browser that drops the cookie as third-party (see
     // sessionTokens): the dashboard keeps it only if a cookie-only /auth/me then fails.
-    return { ...toUserResponse(user, opts.env), sessionToken: token };
+    return { ...(await toUserResponse(user, opts.env)), sessionToken: token };
   });
 
   app.post("/logout", async (request, reply) => {
