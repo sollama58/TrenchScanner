@@ -1415,7 +1415,16 @@ export interface AlertPrefs {
   volume: number;
   browserNotifications: boolean;
   notifyOn: { filterMatches: boolean; modelCalls: boolean };
+  /** Chaos Mode: open each new Live feed alert in a trading site's tab, desktop only (absent from older API builds: off). */
+  chaosMode?: boolean;
+  /** The site Chaos Mode opens; null (or absent) follows the first quick link. */
+  chaosSite?: ChaosSite | null;
+  /** The most tabs Chaos Mode opens in a minute, 1-60 (absent from older API builds: 10). */
+  chaosPerMinute?: number;
 }
+
+/** Sites Chaos Mode can open (the API's CHAOS_SITES). */
+export type ChaosSite = QuickLink | "pumpfun";
 
 /** Card fields a user can hide (the API's CARD_FIELDS). */
 export type CardField =

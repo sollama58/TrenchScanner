@@ -4,7 +4,9 @@ import { cachedGet, peek } from "./cache";
 import { useNudgeStream } from "./hooks";
 import { playAlertSound, unlockAudio } from "./alertSounds";
 import { tokenThumb, usd } from "./format";
-import { adoptAppearance, appearanceVersion } from "./appearance";
+import { adoptAppearance, appearanceVersion, useAppearance } from "./appearance";
+import { openChaosTabs, thisBrowserIsDesktop } from "./chaosMode";
+import { belowMcapLine } from "./components/AlertCard";
 
 /**
  * Alert delivery in the dashboard: the user's alert settings (shared by the Settings tab and the
@@ -21,6 +23,9 @@ export const DEFAULT_ALERT_PREFS: AlertPrefs = {
   volume: 60,
   browserNotifications: false,
   notifyOn: { filterMatches: true, modelCalls: true },
+  chaosMode: false,
+  chaosSite: null,
+  chaosPerMinute: 10,
 };
 
 // ---- The settings store ----
@@ -293,11 +298,17 @@ export function AlertNotifier() {
   const lastLookAt = useRef(0);
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
+  const look = useAppearance();
+  const lookRef = useRef(look);
+  lookRef.current = look;
 
   const notifies = prefs !== null && prefs.browserNotifications && notificationState() === "granted";
-  const active = prefs !== null && (prefs.soundEnabled || notifies);
+  // Chaos Mode is desktop only, whatever the account says.
+  const chaos = prefs !== null && prefs.chaosMode === true && thisBrowserIsDesktop();
+  const active = prefs !== null && (prefs.soundEnabled || notifies || chaos);
   // Either stream can complete a card both caught (wantedBy), so either choice listens to both.
-  const listens = active && (prefs!.notifyOn.filterMatches || prefs!.notifyOn.modelCalls);
+  // Chaos Mode opens every new alert in the feed, whichever the reader is pinged for.
+  const listens = active && (chaos || prefs!.notifyOn.filterMatches || prefs!.notifyOn.modelCalls);
 
   // Browsers only allow sound after an interaction with the page: unlock on the first one.
   useEffect(() => {
@@ -314,7 +325,7 @@ export function AlertNotifier() {
   const busy = useRef(false);
   const again = useRef(false);
 
-  const look = useCallback((maxAgeMs: number) => {
+  const lookAt = useCallback((maxAgeMs: number) => {
     busy.current = true;
     cachedGet<MatchPage>(FEED_PATH, maxAgeMs)
       .then((page) => {
@@ -332,7 +343,13 @@ export function AlertNotifier() {
         for (const c of fresh) seen.current.add(cardKey(c));
         if (!p) return;
         const raisedAfter = Math.max(now - FRESH_MS, previousLook - SINCE_LAST_LOOK_SLACK_MS);
-        const news = fresh.filter((c) => raisedAt(c) > raisedAfter && wantedBy(c, p.notifyOn));
+        const raised = fresh.filter((c) => raisedAt(c) > raisedAfter);
+        if (p.chaosMode === true && thisBrowserIsDesktop()) {
+          // Only what the Live feed shows: a card hidden under the market cap line isn't on it.
+          const shown = raised.filter((c) => !belowMcapLine(c, lookRef.current));
+          openChaosTabs(shown, raisedAt, p, lookRef.current.quickLinks, now);
+        }
+        const news = raised.filter((c) => wantedBy(c, p.notifyOn));
         const mine = new Set(claim(news.map(cardKey)));
         const toAnnounce = news.filter((c) => mine.has(cardKey(c)));
         if (toAnnounce.length === 0) return;
@@ -362,7 +379,7 @@ export function AlertNotifier() {
         busy.current = false;
         if (again.current) {
           again.current = false;
-          look(-1);
+          lookAt(-1);
         }
       });
   }, []);
@@ -371,8 +388,8 @@ export function AlertNotifier() {
   // never just join that one (an alert in a burst would go unannounced), ask again once it is done.
   const check = useCallback(() => {
     if (busy.current) again.current = true;
-    else look(-1);
-  }, [look]);
+    else lookAt(-1);
+  }, [lookAt]);
 
   const matchesLive = useNudgeStream("/matches/stream", check, listens, true);
   const callsLive = useNudgeStream("/curated/stream", check, listens, true);
@@ -382,13 +399,13 @@ export function AlertNotifier() {
       seen.current = null;
       return;
     }
-    if (!busy.current) look(0);
+    if (!busy.current) lookAt(0);
     const timer = window.setInterval(() => {
       // Streams up: they say when to look. Otherwise look on a timer.
       if (listens && !(matchesLive && callsLive)) check();
     }, CHECK_EVERY_MS);
     return () => window.clearInterval(timer);
-  }, [active, listens, matchesLive, callsLive, check, look]);
+  }, [active, listens, matchesLive, callsLive, check, lookAt]);
 
   return null;
 }

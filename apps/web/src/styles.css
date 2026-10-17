@@ -14981,3 +14981,22 @@ body:has(.util-toast) .bug-fab {
 .th-entry > span + span {
   white-space: nowrap;
 }
+
+/* Settings › Chaos Mode's per-minute cap. */
+.chaos-cap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.chaos-cap input {
+  width: 72px;
+}
+.chaos-cap.off {
+  opacity: 0.55;
+}
+.chaos-panel h4 {
+  margin: 6px 0 0;
+}
+.chaos-panel .sound-options {
+  align-self: stretch;
+}

@@ -224,7 +224,22 @@ describe.skipIf(!dbAvailable)("settings routes", () => {
     });
   });
 
+  it("saves Chaos Mode's switch, site and per-minute cap", async () => {
+    const res = await call("user", "PUT", "/settings/alerts", {
+      chaosMode: true,
+      chaosSite: "pumpfun",
+      chaosPerMinute: 25,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().alerts).toMatchObject({ chaosMode: true, chaosSite: "pumpfun", chaosPerMinute: 25 });
+    const back = await call("user", "PUT", "/settings/alerts", { chaosSite: null });
+    expect(back.json().alerts).toMatchObject({ chaosMode: true, chaosSite: null, chaosPerMinute: 25 });
+  });
+
   it("rejects unknown sounds, out-of-range volume and unknown fields", async () => {
+    expect((await call("user", "PUT", "/settings/alerts", { chaosSite: "bullx" })).statusCode).toBe(400);
+    expect((await call("user", "PUT", "/settings/alerts", { chaosPerMinute: 0 })).statusCode).toBe(400);
+    expect((await call("user", "PUT", "/settings/alerts", { chaosPerMinute: 61 })).statusCode).toBe(400);
     expect((await call("user", "PUT", "/settings/alerts", { sound: "foghorn" })).statusCode).toBe(400);
     expect((await call("user", "PUT", "/settings/alerts", { volume: 101 })).statusCode).toBe(400);
     expect((await call("user", "PUT", "/settings/alerts", { extra: true })).statusCode).toBe(400);

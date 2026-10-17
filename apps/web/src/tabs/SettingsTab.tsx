@@ -1,10 +1,21 @@
-import { type Settings } from "../api";
-import { loadSettings, useSettings } from "../alerts";
+import { useEffect, useState } from "react";
+import { type AlertPrefs, type ChaosSite, type Settings } from "../api";
+import { DEFAULT_ALERT_PREFS, loadSettings, saveAlertPrefs, useSettings } from "../alerts";
 import { Skeleton } from "../components/Charts";
 import { BurnPanel } from "../components/BurnPanel";
 import { FeedPanel } from "../components/FeedPanel";
 import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
-import { ShieldIcon, SlidersIcon, StreamIcon } from "../components/Icons";
+import { BoltIcon, ShieldIcon, SlidersIcon, StreamIcon } from "../components/Icons";
+import { Switch } from "../components/AlertDeliveryPanels";
+import {
+  CHAOS_PER_MINUTE,
+  CHAOS_SITE_OPTIONS,
+  chaosPerMinute,
+  chaosSite,
+  checkPopups,
+  thisBrowserIsDesktop,
+  useChaosStatus,
+} from "../chaosMode";
 import { setAppearance, useAppearance } from "../appearance";
 import { useNow } from "../hooks";
 import { ago, shortAddress } from "../format";
@@ -39,11 +50,156 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
         </span>
       </p>
       <FeedPanel goTo={goTo} />
+      <ChaosPanel prefs={settings?.alerts ?? null} />
       <TabsPanel />
       <TokenViewPanel />
       <ConnectPhonePanel />
       <AccountPanel account={settings?.account ?? null} />
     </div>
+  );
+}
+
+/**
+ * Chaos Mode (user ask 2026-10-17): each new Live feed alert opens in a tab on the picked trading
+ * site, up to a cap a minute. Saved with the alert settings; only desktop browsers act on it.
+ */
+function ChaosPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
+  const prefs = saved ?? DEFAULT_ALERT_PREFS;
+  const { quickLinks } = useAppearance();
+  const status = useChaosStatus();
+  const [desktop] = useState(thisBrowserIsDesktop);
+  const [error, setError] = useState<string | null>(null);
+  const [check, setCheck] = useState<"allowed" | "blocked" | null>(null);
+  const cap = chaosPerMinute(prefs);
+  // The box edits freely; the value is saved when it is left or Enter is pressed.
+  const [capInput, setCapInput] = useState(String(cap));
+  useEffect(() => setCapInput(String(cap)), [cap]);
+  const on = prefs.chaosMode === true;
+  const site = chaosSite(prefs, quickLinks);
+  const siteLabel = CHAOS_SITE_OPTIONS.find((o) => o.id === site)?.label ?? site;
+  const followsQuickLinks = (prefs.chaosSite ?? null) === null;
+
+  const save = (change: Parameters<typeof saveAlertPrefs>[0]) => {
+    setError(null);
+    saveAlertPrefs(change).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  };
+  const commitCap = () => {
+    const n = Number(capInput);
+    const next = Number.isFinite(n)
+      ? Math.min(CHAOS_PER_MINUTE.max, Math.max(CHAOS_PER_MINUTE.min, Math.round(n)))
+      : cap;
+    setCapInput(String(next));
+    if (next !== cap) save({ chaosPerMinute: next });
+  };
+  const pick = (id: ChaosSite | null) => {
+    if (id !== (prefs.chaosSite ?? null)) save({ chaosSite: id });
+  };
+  const blocked = check === "blocked" || (check === null && status.blockedAt !== null);
+
+  return (
+    <section className="panel chaos-panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">
+            <BoltIcon size={13} /> Chaos Mode
+          </span>
+          <h2>Open every new alert</h2>
+          <p className="muted small">
+            Each new alert in your Live feed opens in a new tab on the site you pick, while TrenchScanner is
+            open on this computer. Desktop browsers only: phones and tablets ignore it even when it is on.
+          </p>
+        </div>
+        {desktop && (
+          <button className="ghost" disabled={saved === null} onClick={() => setCheck(checkPopups())}>
+            Check pop-ups
+          </button>
+        )}
+      </header>
+      {saved === null ? (
+        <Skeleton lines={3} />
+      ) : (
+        <div className="tab-option">
+          <Switch on={on} label="Chaos Mode" onToggle={() => save({ chaosMode: !on })} />
+          {!desktop && (
+            <p className="notice small">
+              This is a phone or tablet, so Chaos Mode won&apos;t open anything here. It works in a desktop
+              browser signed in to this wallet.
+            </p>
+          )}
+          <h4>Open alerts on</h4>
+          <div className={`sound-options${on ? "" : " off"}`} role="radiogroup" aria-label="Chaos Mode site">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={followsQuickLinks}
+              className={`sound-option${followsQuickLinks ? " on" : ""}`}
+              onClick={() => pick(null)}
+            >
+              <strong>Quick link</strong>
+              <small className="muted">
+                Your cards&apos; first (
+                {CHAOS_SITE_OPTIONS.find((o) => o.id === (quickLinks[0] ?? "terminal"))?.label})
+              </small>
+            </button>
+            {CHAOS_SITE_OPTIONS.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                role="radio"
+                aria-checked={prefs.chaosSite === o.id}
+                className={`sound-option${prefs.chaosSite === o.id ? " on" : ""}`}
+                onClick={() => pick(o.id)}
+              >
+                <strong>{o.label}</strong>
+              </button>
+            ))}
+          </div>
+          <label className={`chaos-cap${on ? "" : " off"}`}>
+            <span className="small muted">Most tabs a minute</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={CHAOS_PER_MINUTE.min}
+              max={CHAOS_PER_MINUTE.max}
+              step={1}
+              value={capInput}
+              aria-label="Most Chaos Mode tabs a minute"
+              onChange={(e) => setCapInput(e.target.value)}
+              onBlur={commitCap}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitCap();
+              }}
+            />
+          </label>
+          <p className="muted small">
+            {on
+              ? `On. New alerts open on ${siteLabel}, at most ${cap} a minute; alerts past that are skipped, not saved for later.`
+              : `Off. When on, new alerts open on ${siteLabel}, at most ${cap} a minute.`}
+            {status.opened + status.skipped > 0 &&
+              ` Since this page loaded: ${status.opened} opened${status.skipped ? `, ${status.skipped} skipped at the cap` : ""}.`}
+          </p>
+          {desktop && blocked && (
+            <p className="notice small" role="status">
+              Your browser is blocking the tabs. Click the blocked pop-up icon at the right of the address bar
+              and choose to always allow pop-ups from this site (Safari: Settings › Websites › Pop-up Windows
+              › Allow), then press Check pop-ups again.
+            </p>
+          )}
+          {desktop && check === "allowed" && (
+            <p className="notice small" role="status">
+              Pop-ups are allowed for this site, so Chaos Mode can open its tabs.
+            </p>
+          )}
+          {desktop && on && check === null && status.blockedAt === null && (
+            <p className="faint small">
+              Browsers block tabs a page opens on its own until you allow pop-ups for the site. Press Check
+              pop-ups to see if yours does.
+            </p>
+          )}
+        </div>
+      )}
+      {error && <p className="error small">Couldn&apos;t save that: {error}</p>}
+    </section>
   );
 }
 
