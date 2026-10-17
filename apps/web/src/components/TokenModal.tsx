@@ -65,7 +65,7 @@ import {
   WalletStat,
 } from "./AlertCard";
 import { PriceChart, type ChartEvent } from "./PriceChart";
-import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveSource, type LiveTail } from "./chartFeeds";
+import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import {
   categoryText,
   count,
@@ -1455,10 +1455,6 @@ export function ChartCard({
       // Whether the view runs to the latest reading (Model View's window can end before it).
       live: bounds.live,
       latest: source[source.length - 1]!.v,
-      sources: viewSources(
-        fromCandles ? used.map((r) => r.stepMs / 1_000) : [],
-        usesTail ? tail.source : null,
-      ),
       // The scans the model read before calling it, drawn as dots in Model View.
       scans:
         shownRange === "model"
@@ -1543,18 +1539,15 @@ export function ChartCard({
               height={height}
               ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
             />
-            <p className="faint small tm-chart-src">
-              {shownRange === "model" && (
-                <>
-                  <i className="tm-scan-dot" aria-hidden="true" />{" "}
-                  {view.scans.length > 0
-                    ? `${view.scans.length} scan${view.scans.length === 1 ? "" : "s"} the model read · `
-                    : ""}
-                  5 minutes either side of the call; shaded is after it, which the model never saw.{" "}
-                </>
-              )}
-              <span title="Where this view's prices come from, finest last">{view.sources}</span>
-            </p>
+            {shownRange === "model" && (
+              <p className="faint small tm-chart-src">
+                <i className="tm-scan-dot" aria-hidden="true" />{" "}
+                {view.scans.length > 0
+                  ? `${view.scans.length} scan${view.scans.length === 1 ? "" : "s"} the model read · `
+                  : ""}
+                5 minutes either side of the call; shaded is after it, which the model never saw.
+              </p>
+            )}
           </>
         )}
       </section>
@@ -1584,19 +1577,6 @@ function viewBounds(
   // Model View's window can end before the latest reading; every other view runs to it.
   const to = range === "model" ? alertAt + MODEL_SPAN_MS : Math.max(last, Date.now());
   return { from, to, live: range !== "model" || to >= Date.now() };
-}
-
-/** "Drawn from Pump.fun's 1-minute, then 1-second candles, then ...": what a view is drawn from. */
-function viewSources(candleSecs: number[], live: LiveSource | null): string {
-  if (candleSecs.length === 0) return "Drawn from our scans' readings (Pump.fun had no candles).";
-  const widths = candleSecs.map((s) => (s >= 60 ? `${s / 60}-minute` : `${s}-second`));
-  const tail =
-    live === "stream"
-      ? ", then every block of the live curve (Helius stream)"
-      : live === "rpc"
-        ? `, then the live curve read every ${LIVE_POLL_MS / 1_000}s`
-        : "";
-  return `Drawn from Pump.fun's ${widths.join(", then ")} candles${tail}.`;
 }
 
 /** Whether the live tail is current: its price confirmed within the last few polls. */
@@ -1708,11 +1688,7 @@ function FirstMinutesChart({
         ariaLabel={`${label} market cap in its first 15 minutes, from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
       />
       <p className="faint small tm-chart-src">
-        {streaming && <LiveBadge tail={tail} />} Time since launch ·{" "}
-        {data!.live
-          ? `Pump.fun 1-second candles${tail.source === "stream" ? ", then every block from the Helius stream" : tail.source === "rpc" ? ", then the curve read every few seconds" : ""}`
-          : "Pump.fun 15-second candles"}{" "}
-        · the first 15 minutes from launch.
+        {streaming && <LiveBadge tail={tail} />} Time since launch, over the first 15 minutes.
       </p>
     </>
   );
