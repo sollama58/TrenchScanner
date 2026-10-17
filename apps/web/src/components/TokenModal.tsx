@@ -1494,7 +1494,7 @@ function stonkFeesPctText(pct: number): string {
 
 /**
  * Stonks' fee wallet's share of a Stonks coin (user ask 2026-10-16): the 3% transfer fee it sweeps
- * up. It is left out of every holder figure, bundle and the bubble map on a Stonks coin, so its
+ * up. It is left out of every holder figure, bundle and the bubble map (on every coin), so its
  * share shows here on its own. Nothing for any other coin.
  */
 function StonkFeesCard({ mint }: { mint: string }) {
