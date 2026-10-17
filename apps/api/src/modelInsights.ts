@@ -329,6 +329,12 @@ export function insightsView(full: FullModelInsights, isAdmin: boolean) {
     featureHealth: null,
     heldFeatures: [],
     recipeHidden: true,
+    // The per-model-id hit-rate rows (one per model that alerted in the window, more with every
+    // retrain): 53-78% of a 611-764 KB answer the Model tab polls every 2 minutes, and no view
+    // but the admin's, which reads /admin/hit-rates, shows them (performance audit 2026-10-17).
+    // Emptied rather than dropped, so the shape stays as every client knows it.
+    curatedAlerts: { ...full.curatedAlerts, bySource: [] },
+    shadowEmissions: { ...full.shadowEmissions, bySource: [] },
     aiJudge: {
       ...full.aiJudge,
       playbooks: full.aiJudge.playbooks.map(({ text: _text, rationale: _rationale, ...p }) => p),

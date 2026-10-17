@@ -32,3 +32,32 @@ export function trainingFirstRunDelayMs(
     runningSinceFrom(heartbeat.meta, heartbeat.lastRunAt) !== null;
   return cutShort ? INTERRUPTED_RUN_RETRY_MS : heartbeat.lastRunAt.getTime() + intervalMs - nowMs;
 }
+
+/**
+ * The first run after a boot of an hourly job that should keep its cadence across deploys:
+ * the slot its last successful run set, or now when that slot has passed (or it never ran).
+ * wallet-risk and kol-side-wallets each read the whole trade tape, about 75 s apiece on
+ * 2026-10-17, and both re-ran on every trainer boot - twice within 24 minutes that morning.
+ */
+export function keepCadenceDelayMs(lastSuccessAt: Date | null, intervalMs: number, nowMs: number): number {
+  if (!lastSuccessAt) return 0;
+  return Math.max(0, lastSuccessAt.getTime() + intervalMs - nowMs);
+}
+
+/**
+ * A job's first run placed `offsetMs` after another job's cadence, the next such slot from now:
+ * kol-side-wallets runs half an hour off wallet-risk, so the two whole-tape reads stop landing on
+ * the same minute (they started in the same second on every boot). With no anchor yet, now.
+ */
+export function offsetCadenceDelayMs(
+  anchorAt: Date | null,
+  intervalMs: number,
+  offsetMs: number,
+  nowMs: number,
+): number {
+  if (!anchorAt || intervalMs <= 0) return 0;
+  const first = anchorAt.getTime() + offsetMs;
+  if (first >= nowMs) return first - nowMs;
+  const behind = nowMs - first;
+  return (intervalMs - (behind % intervalMs)) % intervalMs;
+}

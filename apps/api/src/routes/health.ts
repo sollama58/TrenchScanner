@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import {
   HEARTBEAT_JOB_ROLE,
+  JOB_LOCKED_JOBS,
+  heldJobLocks,
   prisma,
   readAiBudget,
   runningSinceFrom,
@@ -86,7 +88,18 @@ const DEFAULT_STALE_THRESHOLD_MS = 30 * 60_000;
  */
 const HUNG_AFTER_MS: Record<string, number> = {
   "curator-training": 45 * 60_000,
+  // Daily jobs whose stale threshold is 26 hours: a run takes 3-16 minutes (30 at the worst seen),
+  // and an outcome-tracking run lost at 20:05 on 2026-10-16 read "running, not hung" all night.
+  "outcome-tracking": 90 * 60_000,
+  cleanup: 90 * 60_000,
 };
+/**
+ * A lock-guarded run (JOB_LOCKED_JOBS) is lost, not running, when its lock is free this long after
+ * it started: the stamp goes down a moment before the lock is taken, and a deploy's skipped run
+ * stamps too while the other process holds the lock.
+ */
+const ORPHAN_GRACE_MS = 2 * 60_000;
+const LOCKED_JOBS = new Set<string>(JOB_LOCKED_JOBS);
 /**
  * A job whose heartbeat says how often it runs (the scheduler writes `intervalMs`, see
  * apps/worker/src/scheduler.ts) is stale after this many of its own intervals - the table above
@@ -221,16 +234,18 @@ export async function registerHealthRoutes(
    * light defense-in-depth measure against dumping internal detail to an unauthenticated caller.
    */
   const readHeartbeats = async () => {
-    const [heartbeats, aiBudget, lastAlert, lastRead, lastDecision, lastSecondLook] = await Promise.all([
-      prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
-      readAiBudget(budgetEnv),
-      // Newest row of each, each one a backward step down its own index.
-      prisma.curatedAlert.aggregate({ _max: { createdAt: true } }),
-      prisma.tokenNarrative.aggregate({ _max: { checkedAt: true } }),
-      prisma.candidateOutcome.aggregate({ where: { sampleKind: "event" }, _max: { anchorAt: true } }),
-      // The Narrative seat's second look is a model considering a token too.
-      prisma.candidateOutcome.aggregate({ where: { sampleKind: "second" }, _max: { anchorAt: true } }),
-    ]);
+    const [heartbeats, aiBudget, lastAlert, lastRead, lastDecision, lastSecondLook, heldLocks] =
+      await Promise.all([
+        prisma.systemHeartbeat.findMany({ orderBy: { job: "asc" } }),
+        readAiBudget(budgetEnv),
+        // Newest row of each, each one a backward step down its own index.
+        prisma.curatedAlert.aggregate({ _max: { createdAt: true } }),
+        prisma.tokenNarrative.aggregate({ _max: { checkedAt: true } }),
+        prisma.candidateOutcome.aggregate({ where: { sampleKind: "event" }, _max: { anchorAt: true } }),
+        // The Narrative seat's second look is a model considering a token too.
+        prisma.candidateOutcome.aggregate({ where: { sampleKind: "second" }, _max: { anchorAt: true } }),
+        heldJobLocks(),
+      ]);
     const scanMeta = heartbeats.find((h) => h.job === "scan")?.meta as Record<string, unknown> | null;
     const screenPass = scanMeta?.lastScreenPassAt;
     // When each stage of the alert path last produced something (the header pill's tooltip).
@@ -240,7 +255,7 @@ export async function registerHealthRoutes(
       lastTokenSageAt: lastRead._max.checkedAt,
       lastDecisionAt: latest(lastDecision._max.anchorAt, lastSecondLook._max.anchorAt),
     };
-    return { heartbeats, aiBudget, pipeline };
+    return { heartbeats, aiBudget, pipeline, heldLocks };
   };
   const heartbeatCache = new SharedCache<Awaited<ReturnType<typeof readHeartbeats>>>(WORKER_HEALTH_CACHE_MS);
 
@@ -248,10 +263,10 @@ export async function registerHealthRoutes(
   // a monitor that only reads status codes can alert on it. Without it the route always answers
   // 200 and the dashboard reads the flags from the body, as it always has.
   app.get<{ Querystring: { strict?: string } }>("/worker", async (request, reply) => {
-    const { heartbeats, aiBudget, pipeline } = await heartbeatCache.get(readHeartbeats);
+    const { heartbeats, aiBudget, pipeline, heldLocks } = await heartbeatCache.get(readHeartbeats);
     // Ages are measured now, not when the rows were read, so the cache never makes a job look fresher.
     const now = Date.now();
-    const jobs = heartbeats.map((h) => summarizeHeartbeat(h, now));
+    const jobs = heartbeats.map((h) => summarizeHeartbeat(h, now, { heldLocks }));
     const strict = request.query.strict === "1" || request.query.strict === "true";
     const failing = strict ? strictWorkerFailures(jobs) : [];
     if (failing.length > 0) reply.code(503);
@@ -281,13 +296,26 @@ type HeartbeatRow = Awaited<ReturnType<typeof prisma.systemHeartbeat.findMany>>[
  * One job's row as /health/worker reports it. The admin panel's /admin/worker passes
  * `fullError` for the untruncated message - it is behind the admin gate, this route is public.
  */
-export function summarizeHeartbeat(h: HeartbeatRow, now: number, opts: { fullError?: boolean } = {}) {
+export function summarizeHeartbeat(
+  h: HeartbeatRow,
+  now: number,
+  opts: { fullError?: boolean; heldLocks?: ReadonlySet<string> | null } = {},
+) {
   const threshold = staleThresholdMs(h.job, h.meta);
   // A run in flight for longer than the stale threshold is a hung run, not a slow one -
   // reported separately because "last finished Sep 21, running since 20:33" and "last
   // finished Sep 21, nothing running" call for different fixes.
   const runningSince = runningSinceFrom(h.meta, h.lastRunAt);
   const runningForMs = runningSince ? now - runningSince.getTime() : null;
+  // A lock-guarded run whose lock nobody holds: its process died without its shutdown path, so
+  // the run is gone and nothing will clear the stamp before the job's next run. Only judged when
+  // the caller read the locks (heldJobLocks).
+  const orphaned =
+    opts.heldLocks != null &&
+    LOCKED_JOBS.has(h.job) &&
+    runningForMs !== null &&
+    runningForMs > ORPHAN_GRACE_MS &&
+    !opts.heldLocks.has(h.job);
   return {
     job: h.job,
     // Which worker process owns the job (render.yaml runs a scanner and a trainer), so a
@@ -300,7 +328,11 @@ export function summarizeHeartbeat(h: HeartbeatRow, now: number, opts: { fullErr
     stale: now - h.lastRunAt.getTime() > threshold,
     staleAfterMs: threshold,
     runningForMs,
-    hung: runningForMs !== null && runningForMs > Math.min(threshold, HUNG_AFTER_MS[h.job] ?? threshold),
+    hung:
+      orphaned ||
+      (runningForMs !== null && runningForMs > Math.min(threshold, HUNG_AFTER_MS[h.job] ?? threshold)),
+    // The run in flight was lost with its process (see above), not still going.
+    orphaned,
     // How long the last run took, and for the scan cycle where that time went - timings
     // only, nothing about tokens or users.
     lastRun: lastRunSummary(h.meta),

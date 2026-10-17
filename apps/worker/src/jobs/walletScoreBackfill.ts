@@ -6,7 +6,7 @@ import {
   walletScoreMarket,
   type WalletScoreCounts,
 } from "@trenchscanner/core";
-import { scoreCounts, scoreCountsSql, type ScoreCountRow } from "./walletRiskJob.js";
+import { scoreCounts, scoreCountsSql, tapeOutcomesJoinSql, type ScoreCountRow } from "./walletRiskJob.js";
 
 const logger = createLogger("wallet-score-backfill");
 
@@ -92,8 +92,7 @@ async function loadMarket(): Promise<{ hourMs: number; total: WalletScoreCounts 
            COUNT(*) FILTER (WHERE a."dumpedIntoStop") AS dumps,
            ${scoreCountsSql}
     FROM "TokenWalletActivity" a
-    JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
-    LEFT JOIN "CandidateOutcome" o ON o."id" = t."outcomeId"
+    ${tapeOutcomesJoinSql}
     WHERE a."buys" > 0
     GROUP BY 1
     ORDER BY 1`;
@@ -135,8 +134,7 @@ export async function rebuildRow(
            COUNT(*) FILTER (WHERE a."dumpedIntoStop") AS dumps,
            ${scoreCountsSql}
     FROM "TokenWalletActivity" a
-    JOIN "TokenTradeTape" t ON t."tokenId" = a."tokenId" AND t."status" IN ('done', 'partial')
-    LEFT JOIN "CandidateOutcome" o ON o."id" = t."outcomeId"
+    ${tapeOutcomesJoinSql}
     WHERE a."buys" > 0
       AND a."createdAt" < ${cutoff}
       AND a."wallet" IN (${Prisma.join(buyers.map((b) => b.wallet))})

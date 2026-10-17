@@ -181,6 +181,52 @@ export function runningSinceFrom(meta: unknown, lastRunAt?: Date | null): Date |
   return lastRunAt && lastRunAt.getTime() > at.getTime() ? null : at;
 }
 
+/** The advisory-lock key text for a job (the worker's withJobLock) - hashed by Postgres. */
+export function jobLockKey(job: HeartbeatJob): string {
+  return `job-run:${job}`;
+}
+
+/**
+ * The jobs whose every run holds their job lock (apps/worker/src/jobLock.ts, withJobLock) for its
+ * whole length, so a run in flight is one whose lock some session holds. Keep in step with the
+ * withJobLock calls in apps/worker/src/index.ts.
+ */
+export const JOB_LOCKED_JOBS: readonly HeartbeatJob[] = [
+  "ai-judge",
+  "cleanup",
+  "kol-side-wallets",
+  "kol-wallets",
+  "label-regrade",
+  "outcome-tracking",
+  "trade-tape",
+  "wallet-risk",
+];
+
+/**
+ * Which of JOB_LOCKED_JOBS have their lock held by some database session right now. A lock lives
+ * on its own connection, so Postgres lets go of it the moment the process holding it dies: a run
+ * whose heartbeat still says "running" with its lock free is a run that was lost (the process
+ * killed without its shutdown path - out of memory, SIGKILL), not one still going. Null when the
+ * read fails, so a caller can tell "no lock held" from "don't know".
+ */
+export async function heldJobLocks(): Promise<Set<string> | null> {
+  try {
+    // A bigint advisory key shows in pg_locks as classid (high 32 bits) and objid (low 32 bits)
+    // with objsubid 1; hashtext's int4 widens with its sign, as pg_try_advisory_lock takes it.
+    const rows = await prisma.$queryRaw<{ job: string }[]>`
+      SELECT j.job
+      FROM unnest(${[...JOB_LOCKED_JOBS]}::text[]) AS j(job)
+      WHERE EXISTS (
+        SELECT 1 FROM pg_locks l
+        WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1
+          AND ((l.classid::bigint << 32) | l.objid::bigint) = hashtext('job-run:' || j.job)::bigint
+      )`;
+    return new Set(rows.map((r) => r.job));
+  } catch {
+    return null;
+  }
+}
+
 /** When a job last finished a run (successfully or not), or null if it never has. */
 export async function lastHeartbeatAt(job: HeartbeatJob): Promise<Date | null> {
   const row = await prisma.systemHeartbeat.findUnique({ where: { job }, select: { lastRunAt: true } });

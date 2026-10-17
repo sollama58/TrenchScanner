@@ -4,6 +4,8 @@ import {
   createLogger,
   escapeHtml,
   HEARTBEAT_JOB_ROLE,
+  heldJobLocks,
+  JOB_LOCKED_JOBS,
   runningSinceFrom,
   TelegramApi,
   type Env,
@@ -108,6 +110,11 @@ export interface TrainerJobCheck {
   intervalMs: number | null;
   /** A daily job's slot (scheduler meta.dailyAtHourUtc). */
   dailyAtHourUtc: number | null;
+  /**
+   * When a run that was lost with its process started: a lock-guarded job (JOB_LOCKED_JOBS)
+   * still stamped running with its lock free (heldJobLocks). Nothing else records such a run.
+   */
+  lostRunSince?: Date | null;
 }
 
 const HOUR_MS = 3_600_000;
@@ -153,6 +160,14 @@ export function findTrainerProblems(jobs: TrainerJobCheck[], now: number): Probl
       out.push({
         key: `job:${j.job}`,
         text: `Trainer job ${j.job}: no run for ${formatAge(since)}`,
+        trainer: true,
+      });
+    }
+    if (j.lostRunSince) {
+      // Keyed by the run, so each lost run is told once.
+      out.push({
+        key: `lost:${j.job}@${j.lostRunSince.toISOString()}`,
+        text: `Trainer job ${j.job}: the run started ${j.lostRunSince.toISOString().slice(11, 16)} UTC was lost with its process (out of memory or killed) - it runs again at its next slot`,
         trainer: true,
       });
     }
@@ -307,13 +322,27 @@ async function readJobs(): Promise<JobCheck[]> {
   });
 }
 
-async function readTrainerJobs(): Promise<TrainerJobCheck[]> {
-  const rows = await prisma.systemHeartbeat.findMany({ where: { job: { in: TRAINER_JOBS } } });
+/** How long after its start a lock-guarded run must be lockless to count as lost (see health.ts). */
+const LOST_RUN_GRACE_MS = 2 * 60_000;
+
+async function readTrainerJobs(now: number): Promise<TrainerJobCheck[]> {
+  const [rows, held] = await Promise.all([
+    prisma.systemHeartbeat.findMany({ where: { job: { in: TRAINER_JOBS } } }),
+    heldJobLocks(),
+  ]);
   return TRAINER_JOBS.map((job) => {
     const row = rows.find((r) => r.job === job);
     const meta = (row?.meta ?? null) as Record<string, unknown> | null;
     const num = (k: string) => (meta && typeof meta[k] === "number" ? (meta[k] as number) : null);
+    const since = runningSinceFrom(row?.meta, row?.lastRunAt);
+    const lost =
+      held !== null &&
+      since !== null &&
+      JOB_LOCKED_JOBS.includes(job) &&
+      now - since.getTime() > LOST_RUN_GRACE_MS &&
+      !held.has(job);
     return {
+      lostRunSince: lost ? since : null,
       job,
       lastRunAt: row?.lastRunAt ?? null,
       lastSuccessAt: row?.lastSuccessAt ?? null,
@@ -520,7 +549,7 @@ async function watchOnce(
   const [flows, jobs, trainerJobs, cursor, dbBytes] = await Promise.all([
     countFlows(now),
     readJobs(),
-    readTrainerJobs(),
+    readTrainerJobs(now),
     oldestChatCursor(),
     databaseBytes(),
   ]);

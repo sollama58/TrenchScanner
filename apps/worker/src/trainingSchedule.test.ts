@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { INTERRUPTED_RUN_RETRY_MS, trainingFirstRunDelayMs } from "./trainingSchedule.js";
+import {
+  INTERRUPTED_RUN_RETRY_MS,
+  keepCadenceDelayMs,
+  offsetCadenceDelayMs,
+  trainingFirstRunDelayMs,
+} from "./trainingSchedule.js";
 import { DEADLINE_ERROR, SHUTDOWN_INTERRUPTED_ERROR, STOPPED_ERROR } from "./scheduler.js";
 
 const H = 3_600_000;
@@ -50,5 +55,36 @@ describe("trainingFirstRunDelayMs", () => {
       meta: { durationMs: 2_700_000 },
     };
     expect(trainingFirstRunDelayMs(hb, 6 * H, NOW)).toBe(INTERRUPTED_RUN_RETRY_MS);
+  });
+});
+
+describe("keepCadenceDelayMs", () => {
+  const NOW = Date.parse("2026-10-17T04:07:39Z");
+  const H = 3_600_000;
+  it("waits for the slot the last run set", () => {
+    expect(keepCadenceDelayMs(new Date(NOW - 24 * 60_000), H, NOW)).toBe(36 * 60_000);
+  });
+  it("runs now when the slot has passed or the job never ran", () => {
+    expect(keepCadenceDelayMs(new Date(NOW - 2 * H), H, NOW)).toBe(0);
+    expect(keepCadenceDelayMs(null, H, NOW)).toBe(0);
+  });
+});
+
+describe("offsetCadenceDelayMs", () => {
+  const NOW = Date.parse("2026-10-17T04:07:39Z");
+  const H = 3_600_000;
+  const M = 60_000;
+  it("lands half an hour after the anchor job's next slot", () => {
+    // wallet-risk finished 04:00: kol-side-wallets at 04:30.
+    expect(offsetCadenceDelayMs(new Date(NOW - 7 * M - 39_000), H, 30 * M, NOW)).toBe(22 * M + 21_000);
+  });
+  it("rolls forward to the next such slot once it has passed", () => {
+    // wallet-risk finished 03:20: 03:50 has passed, so 04:50.
+    expect(offsetCadenceDelayMs(new Date(NOW - 47 * M - 39_000), H, 30 * M, NOW)).toBe(42 * M + 21_000);
+    // Several hours behind: still within the next interval.
+    expect(offsetCadenceDelayMs(new Date(NOW - 5 * H), H, 30 * M, NOW)).toBe(30 * M);
+  });
+  it("runs now without an anchor", () => {
+    expect(offsetCadenceDelayMs(null, H, 30 * M, NOW)).toBe(0);
   });
 });

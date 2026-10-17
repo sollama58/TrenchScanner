@@ -75,6 +75,14 @@ async function main() {
   };
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGINT", () => shutdown("SIGINT"));
+  // Node 22 ends the process on an unhandled rejection, taking every in-flight request and the
+  // warm report caches with it. Every known fire-and-forget path catches its own, as in the
+  // worker (apps/worker/src/index.ts), so one reaching here is a bug in a side path: logged.
+  process.on("unhandledRejection", (reason) => {
+    logger.error("unhandled promise rejection", {
+      error: reason instanceof Error ? reason.stack : String(reason),
+    });
+  });
 }
 
 main().catch((err) => {

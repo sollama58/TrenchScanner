@@ -78,7 +78,7 @@ import { runTradeTapeJob } from "./jobs/tradeTapeJob.js";
 import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
 import { applyKnownSides, applyKolOverrides, runKolWalletsJob } from "./jobs/kolWalletsJob.js";
-import { trainingFirstRunDelayMs } from "./trainingSchedule.js";
+import { keepCadenceDelayMs, offsetCadenceDelayMs, trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
@@ -588,17 +588,25 @@ async function main() {
       { deadlineMinutes: 15 },
     );
   });
-  // The wallet risk scores, rebuilt from the trade tape (walletRiskJob.ts). Immediate on boot.
+  // The wallet risk scores, rebuilt from the trade tape (walletRiskJob.ts). The first run after a
+  // boot keeps the hourly slot the last one set (keepCadenceDelayMs): a whole-tape read on every
+  // deploy stacked on the scanner's and the API's warm-up.
   schedule("wallet-risk", () =>
     scheduleInterval(
       "wallet-risk",
       takingRunNow("wallet-risk", () => withJobLock("wallet-risk", () => runWalletRiskJob())),
       60,
-      { deadlineMinutes: 30, runEarly: onRunNow("wallet-risk") },
+      {
+        deadlineMinutes: 30,
+        runEarly: onRunNow("wallet-risk"),
+        firstRunDelayMs: async () =>
+          keepCadenceDelayMs(await lastSuccessfulRunAt("wallet-risk"), 60 * 60_000, Date.now()),
+      },
     ),
   );
   // The Side Wallet Checker's lists (Utilities tab), rebuilt from the trade tape
-  // (kolSideWalletsJob.ts). Immediate on boot. The hand-named KOLs (KOL_OVERRIDES) are written
+  // (kolSideWalletsJob.ts), half an hour off wallet-risk's slot (offsetCadenceDelayMs) so the two
+  // whole-tape reads no longer start in the same second. The hand-named KOLs (KOL_OVERRIDES) are written
   // first, so they are on the roster even without a Solana Tracker key or before its daily read,
   // then each KOL's Known Sides are pointed at its main wallet (KOL_MAINS).
   schedule("kol-side-wallets", () =>
@@ -620,7 +628,17 @@ async function main() {
         }),
       ),
       60,
-      { deadlineMinutes: 30, runEarly: onRunNow("kol-side-wallets") },
+      {
+        deadlineMinutes: 30,
+        runEarly: onRunNow("kol-side-wallets"),
+        firstRunDelayMs: async () =>
+          offsetCadenceDelayMs(
+            await lastSuccessfulRunAt("wallet-risk"),
+            60 * 60_000,
+            30 * 60_000,
+            Date.now(),
+          ),
+      },
     ),
   );
   // Solana Tracker's KOL roster, daily (kolWalletsJob.ts); immediate on a boot that missed a day.
