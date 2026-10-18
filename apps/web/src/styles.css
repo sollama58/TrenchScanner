@@ -3817,6 +3817,9 @@ body.trades-open .util-drawer > * {
   display: block;
   object-fit: cover;
   background: var(--surface-2);
+  /* A dark picture would vanish into the dark theme without an edge. */
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
 }
 .side-who-text {
   display: flex;
