@@ -17146,17 +17146,31 @@ body:has(.util-toast) .bug-fab {
   align-items: center;
   min-height: 32px;
 }
-.card:has(> .quick-buy.qb-top-right, > .quick-buy.qb-top-left) {
-  padding-top: 38px;
+/* On a Live Feed card the pill sits in a row the card already has (beside the ticker, at the
+   header's end, or in the footer), so it never adds a line of its own (user ask 2026-10-18). */
+.quick-buy.qb-slot {
+  position: relative;
+  flex: none;
+  align-self: center;
 }
-.card:has(> .quick-buy.qb-bottom-right, > .quick-buy.qb-bottom-left) {
-  padding-bottom: 38px;
+.title-row > .quick-buy.qb-slot {
+  margin-left: 2px;
 }
-.card:has(> .quick-buy.qb-l.qb-top-right, > .quick-buy.qb-l.qb-top-left) {
-  padding-top: 44px;
+/* Bottom right: pushed to the end unless the links already push it there. */
+.card-foot > .quick-buy.qb-at-bottom-right {
+  margin-left: auto;
 }
-.card:has(> .quick-buy.qb-l.qb-bottom-right, > .quick-buy.qb-l.qb-bottom-left) {
-  padding-bottom: 44px;
+.card-foot > .card-links + .quick-buy.qb-at-bottom-right {
+  margin-left: 0;
+}
+/* In the footer it needs the room the FEES word took (its icon and tooltip stay). */
+.card-foot:has(> .quick-buy) .fee-badge .fee-word {
+  display: none;
+}
+/* Its header and footer neighbours are smaller than a Large pill: it trims to fit them. */
+.card .quick-buy.qb-slot.qb-l {
+  padding: 5px 12px;
+  font-size: 13px;
 }
 /* The candle view's timeframe picker, beside Line / Candles. */
 .pc-tf {
@@ -17381,7 +17395,8 @@ body:has(.util-toast) .bug-fab {
    of showing cut mid-word ("Pu"). Every link is still in the token view. */
 .cards:not([data-phone-cols="2"]) .card-foot .card-links {
   flex: 1 1 0;
-  justify-content: flex-end;
+  /* "safe": a lone link too wide for the room is cut at its end, not its start ("inal"). */
+  justify-content: safe flex-end;
   flex-wrap: wrap;
   overflow: hidden;
   height: 1.5em;

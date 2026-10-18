@@ -6,6 +6,7 @@ import {
   useCanSignTrades,
   useProState,
   useTradeSettings,
+  type QuickBuySettings,
   type TradeStage,
 } from "../proTrade";
 import { TwoFactorCancelled } from "../twoFactor";
@@ -16,6 +17,10 @@ import { BoltIcon } from "./Icons";
  * in Settings > Trading, with the same settings, checks and wallet as the Trade panel. Off by
  * default, and only for a Pro Mode wallet this device can sign for. A wallet that hasn't accepted
  * the trading disclaimer yet is sent to the token window, where it is shown.
+ *
+ * Without `slot` it floats in the picked corner of its card (Stream rows). With `slot`, the card
+ * places one pill per corner in its own rows and only the one matching Settings > Trading shows, so
+ * it sits beside the card's other pills instead of pushing the card down a line (user ask 2026-10-18).
  */
 
 /** Buys this size or more ask first, as in the Trade panel. */
@@ -31,18 +36,23 @@ export function QuickBuyPill({
   mint,
   symbol,
   onNeedsPanel,
+  slot,
 }: {
   mint: string;
   symbol: string;
   /** Opens the token window (the disclaimer and the full Trade panel are there). */
   onNeedsPanel: () => void;
+  /** The corner this spot in the card's layout stands for; it shows only when that one is picked. */
+  slot?: QuickBuySettings["position"];
 }) {
   const pro = useProState();
   const settings = useTradeSettings();
   const q = settings.quickBuy;
   const owner = pro?.pro ? pro.wallet : null;
-  // Only while it's switched on: a feed of cards shouldn't each watch the wallet list for nothing.
-  const canSign = useCanSignTrades(q.enabled ? owner : null);
+  const here = !slot || slot === q.position;
+  // Only while it's switched on (and in this spot): a feed of cards shouldn't each watch the wallet
+  // list for nothing.
+  const canSign = useCanSignTrades(q.enabled && here ? owner : null);
   const [state, setState] = useState<State>({ kind: "idle" });
 
   // A result shows for a moment, then the pill is ready again.
@@ -52,7 +62,7 @@ export function QuickBuyPill({
     return () => clearTimeout(t);
   }, [state]);
 
-  if (!owner || !q.enabled || !canSign) return null;
+  if (!owner || !q.enabled || !here || !canSign) return null;
 
   const buy = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -105,7 +115,7 @@ export function QuickBuyPill({
   return (
     <button
       type="button"
-      className={`quick-buy qb-${q.position} qb-${q.size} qb-${q.color} qb-${state.kind}`}
+      className={`quick-buy ${slot ? `qb-slot qb-at-${slot}` : `qb-${q.position}`} qb-${q.size} qb-${q.color} qb-${state.kind}`}
       onClick={(e) => void buy(e)}
       disabled={state.kind === "busy"}
       title={title}

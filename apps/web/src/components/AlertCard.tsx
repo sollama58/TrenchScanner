@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { QuickBuyPill } from "./QuickBuyPill";
+import { useProState, useTradeSettings, type QuickBuySettings } from "../proTrade";
 import { createPortal } from "react-dom";
 import type { Card, CardField, FeedAppearance, Snapshot } from "../api";
 import {
@@ -90,6 +91,8 @@ export function AlertCard({
   const tone = scoreColor ? scoreTone(t.score, scale) : null;
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const pro = useProState();
+  const tradeSettings = useTradeSettings();
   // The modal lives above the feed (TokenModalHost), so it stays open if this card leaves it.
   const openDetailModal = () => openTokenModal(card, now);
   useEffect(() => refreshTokenModal(card, now), [card, now]);
@@ -204,6 +207,18 @@ export function AlertCard({
   const fees = show("fees") ? feeBadge(card.token.creatorFee) : null;
   const socials = show("socials") ? socialLinks(card.token) : [];
 
+  // Settings > Trading's quick buy, for Pro wallets that switched it on: in the header or footer row
+  // on the picked side, never a row of its own (user ask 2026-10-18).
+  const quickBuy = (slot: QuickBuySettings["position"]) =>
+    detail ? (
+      <QuickBuyPill mint={mint} symbol={tokenLabel(card.token)} onNeedsPanel={openDetailModal} slot={slot} />
+    ) : null;
+  const quickBuyFoot =
+    !!detail &&
+    !!pro?.pro &&
+    tradeSettings.quickBuy.enabled &&
+    tradeSettings.quickBuy.position.startsWith("bottom");
+
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
       setCopied(true);
@@ -225,8 +240,6 @@ export function AlertCard({
       style={filter?.color ? (filterCardStyle(filter.color) as React.CSSProperties) : undefined}
       onClick={openDetail}
     >
-      {/* Settings > Trading's quick buy, for Pro wallets that switched it on. */}
-      {detail && <QuickBuyPill mint={mint} symbol={tokenLabel(card.token)} onNeedsPanel={openDetailModal} />}
       <header className="card-head">
         <div className={`avatar-wrap tone-${badge.tone}`}>
           <TokenAvatar url={card.token.imageUrl} symbol={card.token.symbol} />
@@ -248,6 +261,7 @@ export function AlertCard({
                 {tokenLabel(card.token)}
               </strong>
             )}
+            {quickBuy("top-left")}
             {show("tokenName") && card.token.name && card.token.symbol && (
               <span className="token-name" title={card.token.name}>
                 {card.token.name}
@@ -334,6 +348,7 @@ export function AlertCard({
             {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
           </div>
         </div>
+        {quickBuy("top-right")}
         {resultMark && show("result") && (
           <span
             className={`badge card-result ${badge.tone}`}
@@ -699,7 +714,7 @@ export function AlertCard({
         </div>
       )}
 
-      {(show("mint") || socials.length > 0 || fees || show("links") || trade.length > 0) && (
+      {(show("mint") || socials.length > 0 || fees || show("links") || trade.length > 0 || quickBuyFoot) && (
         <footer className="card-foot">
           {show("mint") && (
             <div className="card-foot-left">
@@ -709,6 +724,7 @@ export function AlertCard({
               </button>
             </div>
           )}
+          {quickBuy("bottom-left")}
           {/* The coin's X and website, beside the copy button (user ask 2026-10-18). */}
           {socials.length > 0 && (
             <span className="card-socials">
@@ -750,6 +766,7 @@ export function AlertCard({
                 ))}
             </nav>
           )}
+          {quickBuy("bottom-right")}
         </footer>
       )}
     </article>
