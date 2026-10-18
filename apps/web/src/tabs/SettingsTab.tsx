@@ -12,6 +12,7 @@ import { PrivyWalletPanel } from "../components/PrivyWalletPanel";
 import { TradingSettingsPanel } from "../components/TradingSettingsPanel";
 import { TrackedWalletsPanel } from "../components/TrackedWallets";
 import { SETTINGS_ACCOUNT_ID } from "../components/WalletMenu";
+import { InstallAppPanel } from "../components/InstallApp";
 import { useMe } from "../me";
 import {
   BoltIcon,
@@ -68,6 +69,8 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
         </span>
       </p>
       <AccountPanel account={settings?.account ?? null} />
+      {/* Phones and tablets without the app installed only. */}
+      <InstallAppPanel />
       <FeedPanel goTo={goTo} />
       <ChaosPanel prefs={settings?.alerts ?? null} />
       <TabsPanel />

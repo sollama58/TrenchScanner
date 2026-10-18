@@ -11,6 +11,7 @@ import {
 import { privyConfig, privyOAuthReturn, type PrivyConfig } from "../privyBridge";
 import { AlertCard } from "./AlertCard";
 import { ClockIcon, TrophyIcon } from "./Icons";
+import { InstallAppButton } from "./InstallApp";
 import { usePolling, useNow } from "../hooks";
 import type { GuestPage } from "../tabs/GuestLiveTab";
 
@@ -121,6 +122,8 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
           Models scan every new Pump.fun token and flag a few. Each alert is scored against one goal: 2x
           within 15 minutes on 75% of alerts, 4x within 30 minutes on half, from the price at the alert.
         </p>
+        {/* Phones and tablets without the app installed only: up top, where it is seen first. */}
+        <InstallAppButton />
         <ShowcaseAlert />
       </div>
       <div className="panel signin-box">

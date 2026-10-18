@@ -18175,3 +18175,39 @@ body:has(.util-toast) .bug-fab {
     gap: 3px;
   }
 }
+
+/* ---------- Install the app (phones and tablets) ---------- */
+.install-app {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 4px;
+}
+.install-btn {
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  font-weight: 600;
+}
+.install-steps {
+  margin: 0;
+  padding: 12px 14px 12px 32px;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+.install-steps strong {
+  color: var(--ink);
+}
+.install-steps svg {
+  vertical-align: -2px;
+}
+.install-panel .install-app {
+  margin-top: 4px;
+}
+.install-panel > p.faint {
+  margin: 8px 0 0;
+}
