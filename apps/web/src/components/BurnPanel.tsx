@@ -233,7 +233,8 @@ export function BurnPanel({
       )}
       <p className="muted small">
         {Number(price.tokensPerMonth).toLocaleString("en-US")} {symbol} buys {price.daysPerMonth} days. Burned
-        tokens are destroyed for good, not paid to anyone. The network fee needs a little SOL.
+        tokens are destroyed for good, not paid to anyone. Your wallet asks you to approve before anything is
+        burned, and the network fee needs a little SOL.
       </p>
 
       {balanceError ? (

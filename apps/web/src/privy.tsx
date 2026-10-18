@@ -44,10 +44,6 @@ export default function PrivyRoot({ appId }: { appId: string }) {
       loginMethods: ["email", "google", "twitter"],
       appearance: { theme: "dark", walletChainType: "solana-only", showWalletLoginFirst: false },
       embeddedWallets: {
-        // No Privy confirm window on each signature (user ask 2026-10-18: it asked too often, and
-        // failed for new wallets). The site's own Buy or Burn button is the approval, and every
-        // trade is checked before it's signed (proTrade.ts tradeProblem). Export still asks.
-        showWalletUIs: false,
         solana: { createOnLogin: "all-users" },
         ethereum: { createOnLogin: "off" },
       },
