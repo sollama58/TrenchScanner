@@ -1575,7 +1575,7 @@ export function ChartCard({
               aria-expanded={trading}
               title={
                 closeOnly
-                  ? "Pro Mode has ended: you can still sell what you hold"
+                  ? "Pro Mode has ended: trading is off for this wallet"
                   : graceEndsAt !== null
                     ? `Pro Mode ends in ${graceLeftText(graceEndsAt)}: your wallet left the top 250 $ASDFASDFA holders`
                     : "Buy and sell this coin with your wallet (Pro Mode)"

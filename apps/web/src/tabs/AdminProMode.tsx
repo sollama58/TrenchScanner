@@ -24,6 +24,7 @@ interface ProModeReport {
     note: string | null;
     grantedBy: string;
     createdAt: string;
+    expiresAt: string | null;
     signedUp: boolean;
   }[];
 }
@@ -34,20 +35,30 @@ export function ProModeAdmin() {
   const q = usePolling<ProModeReport>("/admin/pro-mode", 60_000);
   const [wallet, setWallet] = useState("");
   const [note, setNote] = useState("");
+  const [days, setDays] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
 
   const grant = async () => {
     const who = wallet.trim();
-    if (!window.confirm(`Give ${shortAddress(who)} Pro Mode? They can then trade from the token modal.`))
+    const length = days.trim() ? Number(days.trim()) : undefined;
+    if (length !== undefined && (!Number.isInteger(length) || length < 1 || length > 3650)) {
+      setResult("Days must be a whole number from 1 to 3650, or empty for no end date.");
+      return;
+    }
+    const until = length ? ` for ${length} day${length === 1 ? "" : "s"}` : " with no end date";
+    if (
+      !window.confirm(`Give ${shortAddress(who)} Pro Mode${until}? They can then trade from the token modal.`)
+    )
       return;
     setBusy(true);
     setResult(null);
     try {
-      await post("/admin/pro-mode", { walletAddress: who, note: note.trim() || undefined });
+      await post("/admin/pro-mode", { walletAddress: who, note: note.trim() || undefined, days: length });
       setResult(`Pro Mode on for ${shortAddress(who)}.`);
       setWallet("");
       setNote("");
+      setDays("");
       q.reload();
     } catch (e) {
       setResult(`Failed: ${errorText(e)}`);
@@ -88,8 +99,8 @@ export function ProModeAdmin() {
             <p className="small muted">
               Top 250 $ASDFASDFA holders: {r.holders.inTop} wallets with Pro Mode
               {r.holders.scannedAt ? `, last read ${when(r.holders.scannedAt)}` : ", not read yet"}. Dropping
-              out leaves 24 hours of Pro Mode, with warnings; after that a wallet can still sell what it
-              holds.
+              out leaves 24 hours of Pro Mode, with warnings, unless the wallet moved its bag away. After that
+              it can't trade at all, sells included.
             </p>
             {r.holders.grace.length > 0 && (
               <Table
@@ -115,6 +126,13 @@ export function ProModeAdmin() {
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
               />
+              <input
+                placeholder="Days (empty: no end)"
+                aria-label="Days until it ends (optional)"
+                inputMode="numeric"
+                value={days}
+                onChange={(e) => setDays(e.target.value)}
+              />
               <button
                 className="button primary"
                 disabled={busy || !wallet.trim()}
@@ -125,7 +143,7 @@ export function ProModeAdmin() {
             </div>
             {result && <p className="small muted">{result}</p>}
             <Table
-              head={["Wallet", "Note", "Granted by", "Granted", ""]}
+              head={["Wallet", "Note", "Granted by", "Granted", "Ends", ""]}
               empty="No one besides the admins."
               rows={[
                 ...r.admins.map((a) => [
@@ -133,6 +151,7 @@ export function ProModeAdmin() {
                   <Tag tone="muted">admin</Tag>,
                   "–",
                   "always",
+                  "–",
                   "",
                 ]),
                 ...r.grants.map((g) => [
@@ -148,6 +167,15 @@ export function ProModeAdmin() {
                   </>,
                   shortAddress(g.grantedBy),
                   when(g.createdAt),
+                  g.expiresAt ? (
+                    new Date(g.expiresAt) > new Date() ? (
+                      new Date(g.expiresAt).toLocaleString()
+                    ) : (
+                      <Tag tone="muted">ended</Tag>
+                    )
+                  ) : (
+                    "never"
+                  ),
                   <button className="ghost small" onClick={() => void remove(g.walletAddress)}>
                     Remove
                   </button>,

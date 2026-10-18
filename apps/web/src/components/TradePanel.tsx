@@ -190,13 +190,12 @@ export function TradePanel({
       {graceEndsAt !== null && !closeOnly && (
         <p className="small tm-trade-warn" role="alert">
           Pro Mode ends in <strong className="num">{graceLeftText(graceEndsAt)}</strong> unless your wallet is
-          confirmed in the top 250 $ASDFASDFA holders by then. You can still sell after that.
+          confirmed in the top 250 $ASDFASDFA holders by then. After that you can't trade from here, sells
+          included.
         </p>
       )}
       {closeOnly && (
-        <p className="small tm-trade-warn">
-          Pro Mode has ended for this wallet, so buying is off. You can still sell what you hold.
-        </p>
+        <p className="small tm-trade-warn">Pro Mode has ended for this wallet, so trading is off.</p>
       )}
       {summary && (summary.held > 0 || summary.buys > 0 || summary.sells > 0) && (
         <div className="tm-trade-pos">
