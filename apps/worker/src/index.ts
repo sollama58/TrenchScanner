@@ -87,6 +87,7 @@ import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { runDevLaunchRiskJob } from "./jobs/devLaunchRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
 import { applyKnownSides, applyKolOverrides, runKolWalletsJob } from "./jobs/kolWalletsJob.js";
+import { refreshKolAvatars } from "./jobs/kolAvatars.js";
 import { keepCadenceDelayMs, offsetCadenceDelayMs, trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
@@ -791,7 +792,17 @@ async function main() {
     schedule("kol-wallets", () =>
       scheduleDailyAt(
         "kol-wallets",
-        takingRunNow("kol-wallets", () => withJobLock("kol-wallets", () => runKolWalletsJob(solanaTracker))),
+        takingRunNow("kol-wallets", () =>
+          withJobLock("kol-wallets", async () => {
+            const meta = await runKolWalletsJob(solanaTracker);
+            // Then each KOL's X picture (kolAvatars.ts): a failure there never fails the roster read.
+            const avatars = await refreshKolAvatars().catch((err: unknown) => {
+              logger.warn("KOL picture refresh failed", { error: String(err) });
+              return null;
+            });
+            return avatars ? { ...meta, avatarsRead: avatars.read, avatarPictures: avatars.pictures } : meta;
+          }),
+        ),
         KOL_WALLETS_HOUR_UTC,
         { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS, runEarly: onRunNow("kol-wallets") },
       ),

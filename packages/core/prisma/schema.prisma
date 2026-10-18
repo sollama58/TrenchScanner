@@ -3159,6 +3159,22 @@ model KolWallet {
   @@index([mainWallet])
 }
 
+/// A KOL's X profile picture (user ask 2026-10-18), keyed by its X handle in lower case: fetched
+/// by the worker after each daily roster read (kolAvatars.ts) and served by the API
+/// (GET /kol-avatars/:handle), so the dashboard never loads it from X itself. "none": the handle
+/// has no picture of its own (or no account), and the dashboard keeps its letter.
+model KolAvatar {
+  handle      String   @id
+  status      String
+  image       Bytes?
+  contentType String?
+  /// A short hash of the image, put in its URL so a new picture is a new URL.
+  hash        String?
+  fetchedAt   DateTime
+
+  @@index([fetchedAt])
+}
+
 /// The Side Wallet Checker (Utilities tab): each KOL on the roster (KolWallet) with the tracked
 /// coins it bought in the last 24 hours, 7 days and 30 days (coins whose trade tape was read,
 /// TokenWalletActivity), and the wallets that bought the most of the same coins within a few
