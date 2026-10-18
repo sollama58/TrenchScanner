@@ -1,5 +1,7 @@
 import {
+  BURN_CREDIT_MEMO,
   burnCreditPrices,
+  rawPerCredit,
   creditPots,
   creditsShort,
   describeAsdfPriceRefusal,
@@ -23,6 +25,8 @@ import type { ProStatus } from "./proMode.js";
 
 export interface SacrificeQuote {
   mode: SacrificeMode;
+  /** The free cut-off it was worked out with (SacrificeSettings.freeRank). */
+  freeRank: number;
   /** Null in "off" mode: no tier is worked out. */
   tier: SacrificeTier | null;
   /** What this trade costs; null when it pays nothing or can't be priced. */
@@ -41,7 +45,7 @@ export interface SacrificeQuote {
   tokensPerCredit: number | null;
 }
 
-const OFF: Omit<SacrificeQuote, "mode"> = {
+const OFF: Omit<SacrificeQuote, "mode" | "freeRank"> = {
   tier: null,
   asdfRaw: null,
   credits: null,
@@ -65,8 +69,8 @@ export async function quoteSacrifice(input: {
   /** The wallet's ASDF now, for the free tier's balance check (null when unreadable). */
   liveBalance: () => Promise<bigint | null>;
 }): Promise<SacrificeQuote> {
-  const { mode } = await sacrificeSettings();
-  if (mode === "off") return { mode, ...OFF };
+  const { mode, freeRank } = await sacrificeSettings();
+  if (mode === "off") return { mode, freeRank, ...OFF };
   const tier = await sacrificeTier({
     wallet: input.wallet,
     source: input.source,
@@ -78,7 +82,15 @@ export async function quoteSacrifice(input: {
     tier.pays ? smoothedAsdfPerSol() : null,
   ]);
   const pots = await creditPots(input.wallet, undefined, tokensPerCredit);
-  const base = { mode, ...OFF, tier, burnedCredits: pots.burned, burnedRaw: pots.burnedRaw, tokensPerCredit };
+  const base = {
+    mode,
+    freeRank,
+    ...OFF,
+    tier,
+    burnedCredits: pots.burned,
+    burnedRaw: pots.burnedRaw,
+    tokensPerCredit,
+  };
   if (!tier.pays) return base;
   if (!price || price.asdfPerSol === null)
     return { ...base, priceRefusal: describeAsdfPriceRefusal(price?.refusal ?? "few_samples") };
@@ -95,9 +107,18 @@ export async function quoteSacrifice(input: {
 }
 
 /** Why a build is refused for its Sacrifice ("on" mode only), or null when it may go ahead. */
-export function sacrificeRefusal(
-  q: SacrificeQuote,
-): { code: 422 | 503; body: { error: string; needCredits?: number; topUp?: true; notSent: true } } | null {
+export function sacrificeRefusal(q: SacrificeQuote): {
+  code: 422 | 503;
+  body: {
+    error: string;
+    needCredits?: number;
+    topUp?: true;
+    /** The burn that buys the missing credits: base units and the Burn Credits memo. */
+    topUpRaw?: string;
+    memo?: string;
+    notSent: true;
+  };
+} | null {
   if (q.mode !== "on" || !q.tier?.pays) return null;
   if (q.priceRefusal) return { code: 503, body: { error: q.priceRefusal, notSent: true } };
   if (q.needCredits > 0)
@@ -107,6 +128,8 @@ export function sacrificeRefusal(
         error: `This trade's Sacrifice is ${q.credits?.toFixed(2)} credits (0.2%, paid in burned ASDF), and you have ${(q.burnedCredits ?? 0).toFixed(2)} burned credits. Burn ASDF for ${q.needCredits} more to trade.`,
         needCredits: q.needCredits,
         topUp: true,
+        topUpRaw: (BigInt(q.needCredits) * rawPerCredit(q.tokensPerCredit ?? 0)).toString(),
+        memo: BURN_CREDIT_MEMO,
         notSent: true,
       },
     };
@@ -127,6 +150,8 @@ export function sacrificeView(q: SacrificeQuote) {
     priceRefusal: q.priceRefusal,
     burnedCredits: q.burnedCredits,
     needCredits: q.needCredits,
+    tokensPerCredit: q.tokensPerCredit,
+    freeRank: q.freeRank,
     bps: 20,
   };
 }

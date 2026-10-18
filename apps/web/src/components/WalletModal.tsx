@@ -5,6 +5,7 @@ import { MIN_WIN_SOL, ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
+import { KolAvatar } from "./KolAvatar";
 import { TrackedWalletEditor } from "./TrackedWallets";
 import { LoadingNote, Reveal, SkelValue } from "./Loading";
 import { Skeleton } from "./Charts";
@@ -34,6 +35,8 @@ export interface WalletProfile {
   kol?: {
     name: string | null;
     twitter: string | null;
+    /** Its X picture's path on the API. Absent from older API builds. */
+    avatar?: string | null;
     realizedPnlUsd: number | null;
     winRate: number | null;
     /** A KOL's Known Side: the KOL's main wallet and its name. Absent from older API builds. */
@@ -903,6 +906,7 @@ function Kol({ kol }: { kol: NonNullable<WalletProfile["kol"]> }) {
   ].filter(Boolean);
   return (
     <p className="wm-identity" title="From Solana Tracker's KOL list">
+      <KolAvatar src={kol.avatar} className="wm-kol-pic" />
       <strong>{kol.name ?? "Known KOL"}</strong>
       {kol.twitter && (
         <a href={`https://x.com/${encodeURIComponent(kol.twitter)}`} target="_blank" rel="noreferrer">

@@ -1,5 +1,5 @@
-import { prisma } from "../db.js";
-import { rawPerCredit } from "./credits.js";
+import { Prisma, prisma } from "../db.js";
+import { creditPots, creditWalletLockKey, rawPerCredit } from "./credits.js";
 import { asdfRawPerSol } from "./asdfPrice.js";
 import { PRO_HOLDER_COUNT } from "./proHolders.js";
 
@@ -179,4 +179,188 @@ export function sacrificeFor(lamports: bigint, asdfPerSol: number, tokensPerCred
 export function creditsShort(asdfRaw: bigint, burnedRaw: bigint, tokensPerCredit: number): number {
   if (asdfRaw <= burnedRaw || tokensPerCredit <= 0) return 0;
   return Number(ceilDiv(asdfRaw - burnedRaw, rawPerCredit(tokensPerCredit)));
+}
+
+/** What the send records for one Pro trade, and the Sacrifice it takes. */
+export interface PlatformTradeRecord {
+  signature: string;
+  wallet: string;
+  mint: string;
+  side: "buy" | "sell";
+  lamports: bigint;
+  networkFeeLamports: bigint;
+  sacrifice: {
+    mode: SacrificeMode;
+    /** The tier's reason, null in "off" mode. */
+    tier: SacrificeTier["reason"] | null;
+    pays: boolean;
+    /** ASDF base units; null when nothing was priced (off, free, or a price refusal in shadow). */
+    asdfRaw: bigint | null;
+    lamports: bigint | null;
+    asdfPerSol: number | null;
+  };
+}
+
+export type RecordTradeOutcome =
+  | { status: "recorded"; taken: bigint }
+  /** "on", a fee payer, and the burned pot no longer covers it: nothing was written. */
+  | { status: "short"; burnedRaw: bigint; asdfRaw: bigint };
+
+/**
+ * The send's one database transaction (Build guide step 5), before the trade goes to Sender:
+ * under the wallet's credit lock, re-checks the burned pot, writes the "sacrifice" row (burned
+ * source, the trade's signature) and the PlatformTrade row with the Sacrifice. Two sends at once
+ * can't spend the same credits, and a charge is never unrecorded. "shadow" records the Sacrifice on
+ * the trade but takes nothing; "off" records the trade alone.
+ */
+export async function recordPlatformTrade(r: PlatformTradeRecord): Promise<RecordTradeOutcome> {
+  const s = r.sacrifice;
+  const take = s.mode === "on" && s.pays && s.asdfRaw !== null && s.asdfRaw > 0n ? s.asdfRaw : 0n;
+  return prisma.$transaction(async (tx) => {
+    if (take > 0n) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${creditWalletLockKey(r.wallet)}))`;
+      const pots = await creditPots(r.wallet, tx);
+      if (pots.burnedRaw < take)
+        return { status: "short" as const, burnedRaw: pots.burnedRaw, asdfRaw: take };
+      await tx.burnCreditEntry.create({
+        data: {
+          wallet: r.wallet,
+          delta: 0,
+          kind: "sacrifice",
+          source: "burned",
+          asdfRaw: -take,
+          tradeSignature: r.signature,
+          subject: r.mint,
+          note: r.side,
+        },
+      });
+    }
+    await tx.platformTrade.create({
+      data: {
+        signature: r.signature,
+        wallet: r.wallet,
+        mint: r.mint,
+        side: r.side,
+        lamports: r.lamports,
+        networkFeeLamports: r.networkFeeLamports,
+        platformFeeLamports: take > 0n ? (s.lamports ?? 0n) : 0n,
+        sacrificeAsdfRaw: s.pays && s.mode !== "off" ? (s.asdfRaw ?? 0n) : 0n,
+        asdfPerSol: s.asdfPerSol !== null ? String(s.asdfPerSol) : null,
+        feeTier: s.tier,
+        sacrificeMode: s.mode === "off" ? null : s.mode,
+      },
+    });
+    return { status: "recorded" as const, taken: take };
+  });
+}
+
+/**
+ * Puts a trade's Sacrifice back (it failed, expired, or never went out): one "sacrifice-refund"
+ * row for what its "sacrifice" row took. The unique (kind, tradeSignature) makes a second attempt
+ * a no-op, so the settlement job and the panel can race. Returns the ASDF base units refunded.
+ */
+export async function refundSacrifice(signature: string): Promise<bigint> {
+  const spent = await prisma.burnCreditEntry.findUnique({
+    where: { kind_tradeSignature: { kind: "sacrifice", tradeSignature: signature } },
+    select: { wallet: true, asdfRaw: true, subject: true, note: true },
+  });
+  if (!spent?.asdfRaw || spent.asdfRaw >= 0n) return 0n;
+  try {
+    await prisma.burnCreditEntry.create({
+      data: {
+        wallet: spent.wallet,
+        delta: 0,
+        kind: "sacrifice-refund",
+        source: "burned",
+        asdfRaw: -spent.asdfRaw,
+        tradeSignature: signature,
+        subject: spent.subject,
+        note: spent.note,
+      },
+    });
+    return -spent.asdfRaw;
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return 0n;
+    throw err;
+  }
+}
+
+export type TradeSettlement = "confirmed" | "failed" | "expired";
+
+/** A trade unseen this long after it was sent never landed: its blockhash lives about 90 seconds. */
+export const TRADE_EXPIRE_AFTER_MS = 5 * 60_000;
+
+/**
+ * What a sent trade's signature status says it came to, or null while it is still open (the
+ * rules GET /pro/trade/fees and the settlement job share). `status` null: the read failed.
+ */
+export function tradeOutcome(
+  status: { seen: false } | { seen: true; confirmed: boolean; error: string | null } | null,
+  sentAt: Date,
+  now = new Date(),
+): TradeSettlement | null {
+  if (!status) return null;
+  if (status.seen && status.error) return "failed";
+  if (status.seen && status.confirmed) return "confirmed";
+  if (!status.seen && now.getTime() - sentAt.getTime() > TRADE_EXPIRE_AFTER_MS) return "expired";
+  return null;
+}
+
+/**
+ * Settles a recorded trade (Build guide step 6): marks a "sent" row with its outcome and, for a
+ * failed or expired one, refunds its Sacrifice (refundSacrifice: once per signature, so the panel,
+ * the fees read and the settlement job can all race). A row another path already marked failed or
+ * expired is refunded too, in case that path stopped between the two writes. Returns whether this
+ * call changed the row.
+ */
+export async function settlePlatformTrade(signature: string, status: TradeSettlement): Promise<boolean> {
+  const changed = await prisma.platformTrade.updateMany({
+    where: { signature, status: "sent" },
+    data: { status, settledAt: new Date() },
+  });
+  let refund = changed.count > 0 && status !== "confirmed";
+  if (changed.count === 0) {
+    const row = await prisma.platformTrade.findUnique({ where: { signature }, select: { status: true } });
+    refund = row?.status === "failed" || row?.status === "expired";
+  }
+  if (refund) await refundSacrifice(signature);
+  return changed.count > 0;
+}
+
+/** How often the worker's settlement job runs. */
+export const TRADE_SETTLEMENT_INTERVAL_MS = 30_000;
+/** The settlement job's pass: trades still "sent" this long after sending are looked up. */
+export const TRADE_SETTLE_AFTER_MS = 2 * 60_000;
+const TRADE_SETTLE_BATCH = 50;
+
+/**
+ * Settles every trade still "sent" TRADE_SETTLE_AFTER_MS after it went out, whether or not a panel
+ * is watching it (worker job "trade-settlement"), so a closed tab never leaves a Sacrifice taken
+ * for a trade that failed. Oldest first, TRADE_SETTLE_BATCH a pass.
+ */
+export async function settleOpenTrades(
+  rpc: {
+    getSignatureStatus(
+      signature: string,
+    ): Promise<{ seen: false } | { seen: true; confirmed: boolean; error: string | null } | null>;
+  },
+  now = new Date(),
+): Promise<{ checked: number; settled: number; refunded: number }> {
+  const open = await prisma.platformTrade.findMany({
+    where: { status: "sent", sentAt: { lt: new Date(now.getTime() - TRADE_SETTLE_AFTER_MS) } },
+    orderBy: { sentAt: "asc" },
+    take: TRADE_SETTLE_BATCH,
+    select: { signature: true, sentAt: true },
+  });
+  let settled = 0;
+  let refunded = 0;
+  for (const t of open) {
+    const outcome = tradeOutcome(await rpc.getSignatureStatus(t.signature).catch(() => null), t.sentAt, now);
+    if (!outcome) continue;
+    if (await settlePlatformTrade(t.signature, outcome)) {
+      settled++;
+      if (outcome !== "confirmed") refunded++;
+    }
+  }
+  return { checked: open.length, settled, refunded };
 }

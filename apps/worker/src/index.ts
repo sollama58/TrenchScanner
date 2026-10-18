@@ -38,8 +38,11 @@ import {
   workerConfigMeta,
   type HeartbeatJob,
   ASDF_PRICE_SAMPLE_MS,
+  TRADE_SETTLEMENT_INTERVAL_MS,
   JupiterSwapClient,
   sampleAsdfPrice,
+  settleOpenTrades,
+  TradingRpc,
 } from "@trenchscanner/core";
 import { BAND_ENTRY_CHECK_MS, BandEntryWatch } from "./bandEntryWatch.js";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
@@ -87,6 +90,7 @@ import { runWalletRiskJob } from "./jobs/walletRiskJob.js";
 import { runDevLaunchRiskJob } from "./jobs/devLaunchRiskJob.js";
 import { runKolSideWalletsJob } from "./jobs/kolSideWalletsJob.js";
 import { applyKnownSides, applyKolOverrides, runKolWalletsJob } from "./jobs/kolWalletsJob.js";
+import { refreshKolAvatars } from "./jobs/kolAvatars.js";
 import { keepCadenceDelayMs, offsetCadenceDelayMs, trainingFirstRunDelayMs } from "./trainingSchedule.js";
 import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
@@ -592,6 +596,25 @@ async function main() {
       ),
     );
   }
+  // Settles Pro trades still "sent" two minutes on, whether or not a panel watches them, and
+  // refunds the Sacrifice of one that failed or expired (settleOpenTrades in core). Off with the
+  // trade system.
+  if (env.PRO_TRADING_ENABLED) {
+    const settlementRpc = new TradingRpc({
+      rpcUrl: env.SOLANA_RPC_URL || undefined,
+      apiKey: env.HELIUS_API_KEY || undefined,
+    });
+    schedule("trade-settlement", () =>
+      scheduleInterval(
+        "trade-settlement",
+        // No job lock: two workers side by side during a deploy only repeat each other's reads,
+        // and settling and refunding are each once per trade whoever gets there first.
+        async () => ({ ...(await settleOpenTrades(settlementRpc)) }),
+        TRADE_SETTLEMENT_INTERVAL_MS / 60_000,
+        { deadlineMinutes: 2 },
+      ),
+    );
+  }
   // Rolls match peaks forward from data already banked - no upstream calls. Off the scan cycle on
   // purpose: see createMatchPeaksRunner.
   const runMatchPeaks = createMatchPeaksRunner(env.SNAPSHOT_RETENTION_DAYS, repairOutcomeBookkeeping, {
@@ -791,7 +814,17 @@ async function main() {
     schedule("kol-wallets", () =>
       scheduleDailyAt(
         "kol-wallets",
-        takingRunNow("kol-wallets", () => withJobLock("kol-wallets", () => runKolWalletsJob(solanaTracker))),
+        takingRunNow("kol-wallets", () =>
+          withJobLock("kol-wallets", async () => {
+            const meta = await runKolWalletsJob(solanaTracker);
+            // Then each KOL's X picture (kolAvatars.ts): a failure there never fails the roster read.
+            const avatars = await refreshKolAvatars().catch((err: unknown) => {
+              logger.warn("KOL picture refresh failed", { error: String(err) });
+              return null;
+            });
+            return avatars ? { ...meta, avatarsRead: avatars.read, avatarPictures: avatars.pictures } : meta;
+          }),
+        ),
         KOL_WALLETS_HOUR_UTC,
         { catchUpAfterHours: DAILY_CATCH_UP_AFTER_HOURS, runEarly: onRunNow("kol-wallets") },
       ),

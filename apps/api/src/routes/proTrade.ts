@@ -28,6 +28,10 @@ import {
   type WalletTrade,
   walletTag,
   prisma,
+  recordPlatformTrade,
+  sacrificeSettings,
+  settlePlatformTrade,
+  tradeOutcome,
 } from "@trenchscanner/core";
 import { proStatus, type ProStatus } from "../proMode.js";
 import { requireTwoFactor } from "../twoFactor.js";
@@ -188,10 +192,9 @@ const DEFAULT_REF_LAMPORTS = 100_000_000n;
 const MAX_REF_LAMPORTS = 100_000_000_000n;
 /** The network's base fee on a one-signature trade, lamports. */
 const BASE_FEE_LAMPORTS = 5_000n;
-/** The fees read settles trades still "sent" this old, this many per read, and expires the unseen past FEES_EXPIRE_AFTER_MS. */
+/** The fees read settles trades still "sent" this old, this many per read (expiry: tradeOutcome in core). */
 const FEES_SETTLE_AFTER_MS = 60_000;
 const FEES_SETTLE_PER_READ = 20;
-const FEES_EXPIRE_AFTER_MS = 5 * 60_000;
 
 interface InFlight {
   base64: string;
@@ -617,12 +620,52 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       mevProtect,
       apiKey: env.HELIUS_API_KEY || undefined,
     });
+    // The trade record and its Sacrifice, in one transaction before anything goes on chain
+    // (recordPlatformTrade in core): in "on" mode the burned pot is re-checked under the wallet's
+    // credit lock, so two sends can't spend the same credits, and a charge is never unrecorded.
+    const q = sentBuild.sacrifice;
+    const takes = charged(q);
+    try {
+      const recorded = await recordPlatformTrade({
+        signature,
+        wallet,
+        mint: sentBuild.mint,
+        side: sentBuild.side,
+        lamports: sentBuild.lamports,
+        networkFeeLamports: sentBuild.networkFeeLamports,
+        sacrifice: {
+          mode: q.mode,
+          tier: q.tier?.reason ?? null,
+          pays: q.tier?.pays ?? false,
+          asdfRaw: q.asdfRaw,
+          lamports: q.lamports,
+          asdfPerSol: q.asdfPerSol,
+        },
+      });
+      if (recorded.status === "short")
+        return reply.code(422).send({
+          error:
+            "Your burned credits no longer cover this trade's Sacrifice. Nothing was sent; top up and try again.",
+          topUp: true,
+          notSent: true,
+        });
+    } catch (err) {
+      // Without a record a Sacrifice can't be taken, so a paying trade waits; anything else only
+      // loses its fees-saved row, as before.
+      request.log.warn({ signature, err: String(err) }, "platform trade not recorded");
+      if (takes)
+        return reply
+          .code(503)
+          .send({ error: "Couldn't record the trade just now. Nothing was sent; try again.", notSent: true });
+    }
     // Given back when Sender refuses (nothing went out). Closing sales count too: a buy right
     // after one still waits.
     const giveBack = cooldown.take(wallet);
     const sent = await sendViaSender(url, transaction);
     if (!sent.ok && sent.refused) {
       giveBack();
+      // Nothing went out: the Sacrifice comes back at once.
+      await settleRefused(signature);
       request.log.warn(
         { wallet: walletTag(wallet), signature, error: sent.error },
         "sender refused a pro trade",
@@ -648,27 +691,20 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       scheduleResend();
     }
     forgetPositions(wallet);
-    // Recorded for the fees saved (tradeFees.ts); it counts once it confirms. A miss loses one row.
-    void prisma.platformTrade
-      .create({
-        data: {
-          signature,
-          wallet,
-          mint: sentBuild.mint,
-          side: sentBuild.side,
-          lamports: sentBuild.lamports,
-          networkFeeLamports: sentBuild.networkFeeLamports,
-        },
-      })
-      .catch((err) => request.log.warn({ signature, err: String(err) }, "platform trade not recorded"));
     return { signature };
   });
 
-  /** A recorded trade's outcome, once known (only "sent" rows change). */
+  /**
+   * A recorded trade's outcome, once known (only "sent" rows change), with its Sacrifice refunded
+   * when it failed or expired (settlePlatformTrade in core). The worker's settlement job settles
+   * whatever no panel is watching.
+   */
   const settle = (signature: string, status: "confirmed" | "failed" | "expired") =>
-    prisma.platformTrade
-      .updateMany({ where: { signature, status: "sent" }, data: { status, settledAt: new Date() } })
-      .catch(() => undefined);
+    settlePlatformTrade(signature, status).catch((err) =>
+      app.log.error({ signature, status, err: String(err) }, "platform trade not settled"),
+    );
+  /** A trade Sender refused (nothing went out): failed, with its Sacrifice refunded at once. */
+  const settleRefused = (signature: string) => settle(signature, "failed");
 
   app.get<{ Params: { signature: string } }>(
     "/trade/status/:signature",
@@ -727,13 +763,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     });
     await Promise.all(
       open.map(async (t) => {
-        const status = await rpc.getSignatureStatus(t.signature).catch(() => null);
-        if (!status) return;
-        if (status.seen && status.error) return settle(t.signature, "failed");
-        if (status.seen && status.confirmed) return settle(t.signature, "confirmed");
-        // A blockhash lives about a minute and a half: unseen well past that, it never landed.
-        if (!status.seen && Date.now() - t.sentAt.getTime() > FEES_EXPIRE_AFTER_MS)
-          return settle(t.signature, "expired");
+        // Unseen well past its blockhash's life, it never landed (tradeOutcome in core).
+        const outcome = tradeOutcome(await rpc.getSignatureStatus(t.signature).catch(() => null), t.sentAt);
+        if (outcome) return settle(t.signature, outcome);
       }),
     );
     const [trades, first, solUsd] = await Promise.all([
@@ -748,7 +780,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       }),
       solPrice.get().catch(() => null),
     ]);
-    return { ...feeSummary(trades), since: first?.sentAt ?? null, solUsd };
+    const { mode, freeRank } = await sacrificeSettings();
+    return { ...feeSummary(trades), since: first?.sentAt ?? null, solUsd, sacrifice: { mode, freeRank } };
   });
 
   app.get<{ Params: { mint: string } }>(

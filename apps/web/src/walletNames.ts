@@ -21,6 +21,8 @@ export interface WalletName {
   service?: boolean;
   /** The reader's own label (Settings > Labeled wallets), which they can edit. */
   mine?: boolean;
+  /** A KOL's X picture, as a path on the API (absent: none, or an older API build). */
+  avatar?: string;
 }
 
 /** Wallet to name, for the wallets that have one. */

@@ -22,7 +22,10 @@ import {
   type TradeSettings,
   type TradeStage,
   MIN_TRADE_SOL,
+  sacrificeLine,
+  type SacrificeView,
 } from "../proTrade";
+import { BurnUncertainError, describeBurnError, topUpBurnCredits } from "../burn";
 import { WalletTimeoutError } from "../wallet";
 import { decimalUnits, parseAmounts, parseDecimal } from "../decimal";
 import { renderPositionCard } from "../pnlCard";
@@ -128,18 +131,28 @@ const CONFIRM_BUY_LAMPORTS = 5n * BigInt(LAMPORTS);
 
 /** What the build quotes, said before the wallet asks to sign: "About 1.2M PEPE, at least 1.02M." */
 export function quoteText(
-  built: { quotedOut: string; minOut: string; priorityFeeLamports: string; tipLamports: string },
+  built: {
+    quotedOut: string;
+    minOut: string;
+    priorityFeeLamports: string;
+    tipLamports: string;
+    sacrifice?: SacrificeView;
+  },
   side: "buy" | "sell",
   position: { decimals: number | null } | null,
   symbol: string,
 ): string {
-  // Network fees only (priority fee, Sender tip, base fee): there is no platform fee to add.
+  // Network fees (priority fee, Sender tip, base fee); the Sacrifice, when it is on, is its own line.
   const fees =
     (Number(BigInt(built.priorityFeeLamports)) + Number(BigInt(built.tipLamports)) + 5_000) / LAMPORTS;
+  const sacrifice = sacrificeLine(built.sacrifice);
+  const tail = sacrifice
+    ? `network fee ${solText(fees)}. ${sacrifice}`
+    : `network fee ${solText(fees)}, no platform fee.`;
   if (side === "sell")
-    return `About ${solText(Number(BigInt(built.quotedOut)) / LAMPORTS)}, at least ${solText(Number(BigInt(built.minOut)) / LAMPORTS)}; network fee ${solText(fees)}, no platform fee.`;
+    return `About ${solText(Number(BigInt(built.quotedOut)) / LAMPORTS)}, at least ${solText(Number(BigInt(built.minOut)) / LAMPORTS)}; ${tail}`;
   const scale = 10 ** (position?.decimals ?? 6);
-  return `About ${tokensText(Number(BigInt(built.quotedOut)) / scale)} ${symbol}, at least ${tokensText(Number(BigInt(built.minOut)) / scale)}; network fee ${solText(fees)}, no platform fee.`;
+  return `About ${tokensText(Number(BigInt(built.quotedOut)) / scale)} ${symbol}, at least ${tokensText(Number(BigInt(built.minOut)) / scale)}; ${tail}`;
 }
 
 const STAGE_TEXT: Record<TradeStage, string> = {
@@ -153,7 +166,17 @@ type Status =
   | { kind: "idle" }
   | { kind: "busy"; stage: TradeStage; what: string; quote?: string }
   | { kind: "done"; text: string; signature: string }
-  | { kind: "error"; text: string; signature?: string };
+  | { kind: "error"; text: string; signature?: string }
+  /** The Sacrifice is short of burned credits: one tap burns ASDF for them and retries. */
+  | {
+      kind: "topup";
+      text: string;
+      credits: number;
+      raw: bigint;
+      memo: string;
+      retry: () => void;
+      burning?: string;
+    };
 
 function errorText(e: unknown): string {
   if (e instanceof WalletTimeoutError)
@@ -220,7 +243,7 @@ function bpsText(bps: number): string {
 /**
  * What a buy costs in all (user ask 2026-10-18): one bar for the whole swap cost, color coded,
  * the network's fee, the pools' fees, the coin's own transfer tax and a first buy's account rent,
- * with TrenchScanner's 0% up top. Sized on the amount in the box last filled (a buy's SOL, or a
+ * with TrenchScanner's own fee up top: 0%, or the Sacrifice (ASDF fee plan) once it is on. Sized on the amount in the box last filled (a buy's SOL, or a
  * sale's tokens priced at the position's value), or the first buy button.
  */
 function FeeExplainer({
@@ -282,7 +305,16 @@ function FeeExplainer({
           : []),
       ]
     : [];
-  const parts = [...network.map((p) => ({ ...p, rate: "" })), ...swapParts];
+  // The Sacrifice (ASDF fee plan): 0.2%, paid in burned credits, by wallets below the free
+  // cut-off. Counted in the total only while it is on; in shadow it is shown as a preview.
+  const sac = fee?.sacrifice && fee.sacrifice.mode !== "off" ? fee.sacrifice : null;
+  const sacLine = sacrificeLine(sac, sizeSol > 0 ? sizeSol : undefined);
+  const sacSol = sac?.pays && !sac.priceRefusal ? (sizeSol * sac.bps) / 10_000 : 0;
+  const sacrificeParts =
+    sac?.mode === "on" && sacSol > 0
+      ? [{ key: "sacrifice", label: "Sacrifice (burned ASDF credits)", sol: sacSol, rate: bpsText(sac.bps) }]
+      : [];
+  const parts = [...network.map((p) => ({ ...p, rate: "" })), ...swapParts, ...sacrificeParts];
   const total = fee ? parts.reduce((sum, p) => sum + p.sol, 0) : null;
   const usdText = (sol: number) => {
     const v = sol * (solUsd ?? 0);
@@ -390,11 +422,23 @@ function FeeExplainer({
                       <span>Pool fees and taxes couldn&apos;t be read just now</span>
                     </li>
                   )}
-                  <li className="tm-fee-zero">
-                    <i className="tm-fee-dot zero" aria-hidden="true" />
-                    <span>TrenchScanner platform fee</span>
-                    <strong className="num">0%</strong>
-                  </li>
+                  {sac?.pays ? (
+                    <li>
+                      <i className="tm-fee-dot sacrifice" aria-hidden="true" />
+                      <span>
+                        Sacrifice, in burned credits
+                        <em className="num"> {bpsText(sac.bps)}</em>
+                        {sac.mode === "shadow" && <em> (not charged yet)</em>}
+                      </span>
+                      <span className="num">{sacSol > 0 ? solText(sacSol) : "–"}</span>
+                    </li>
+                  ) : (
+                    <li className="tm-fee-zero">
+                      <i className="tm-fee-dot zero" aria-hidden="true" />
+                      <span>TrenchScanner platform fee</span>
+                      <strong className="num">0%</strong>
+                    </li>
+                  )}
                 </ul>
               </div>
             </div>
@@ -441,11 +485,25 @@ function FeeExplainer({
           </ul>
         </div>
       </details>
-      <span className="tm-fee-zero-badge">
-        <CheckIcon size={12} />
-        <strong>0% platform fee</strong>
-        <span className="tm-fee-zero-more">TrenchScanner takes nothing</span>
-      </span>
+      {sac?.pays && sac.mode === "on" ? (
+        <span className="tm-fee-sacrifice-badge">
+          <strong>0.2% Sacrifice</strong>
+          <span className="tm-fee-zero-more">
+            paid in burned ASDF credits, free for the top {sac.freeRank} holders
+          </span>
+        </span>
+      ) : (
+        <span className="tm-fee-zero-badge">
+          <CheckIcon size={12} />
+          <strong>0% platform fee</strong>
+          <span className="tm-fee-zero-more">
+            {sac && !sac.pays && sac.reason === "holder"
+              ? `free as a top ${sac.freeRank} holder`
+              : "TrenchScanner takes nothing"}
+          </span>
+        </span>
+      )}
+      {sacLine && <p className="small muted tm-fee-sacrifice-line">{sacLine}</p>}
     </div>
   );
 }
@@ -551,22 +609,52 @@ export function TradePanel({
       const left = tradeCooldownLeft(owner);
       if (left > 0) return refuse(`One trade every 5 seconds: try again in ${Math.ceil(left / 1_000)}s.`);
     }
-    // A big buy is one click from a preset or a typo: ask first.
-    if (side === "buy" && amount >= CONFIRM_BUY_LAMPORTS && !window.confirm(`${what} of ${symbol}?`)) return;
+    // A big buy is one click from a preset or a typo: ask first, with its Sacrifice when it pays one.
+    // A sale's SOL value is the position's share; the two-factor prompt shows the same line.
+    const sizeSol =
+      side === "buy"
+        ? Number(amount) / LAMPORTS
+        : summary?.valueSol != null && balance > 0n
+          ? (summary.valueSol * Number(amount)) / Number(balance)
+          : undefined;
+    // An unpriced sale shows its tier only: the fee read's figure is for another amount.
+    const sacrificeNote =
+      sizeSol !== undefined || !fee?.sacrifice?.pays ? sacrificeLine(fee?.sacrifice, sizeSol) : null;
+    if (
+      side === "buy" &&
+      amount >= CONFIRM_BUY_LAMPORTS &&
+      !window.confirm(`${what} of ${symbol}?${sacrificeNote ? `\n\n${sacrificeNote}` : ""}`)
+    )
+      return;
     setStatus({ kind: "busy", stage: "building", what });
     try {
-      const signature = await runTrade({ owner, mint, side, amount, all, settings }, (stage, built) => {
-        setStatus({
-          kind: "busy",
-          stage,
-          what,
-          quote: built ? quoteText(built, side, position, symbol) : undefined,
-        });
-      });
+      const signature = await runTrade(
+        { owner, mint, side, amount, all, settings, sacrificeNote },
+        (stage, built) => {
+          setStatus({
+            kind: "busy",
+            stage,
+            what,
+            quote: built ? quoteText(built, side, position, symbol) : undefined,
+          });
+        },
+      );
       setStatus({ kind: "done", text: `${what}: confirmed.`, signature });
       // The balance has moved, so a filled sale amount is stale.
       if (side === "sell") setSellText("");
     } catch (e) {
+      const body = e instanceof ApiError ? (e.body as Record<string, unknown> | null) : null;
+      if (body?.topUp === true && typeof body.topUpRaw === "string" && typeof body.memo === "string") {
+        setStatus({
+          kind: "topup",
+          text: errorText(e),
+          credits: typeof body.needCredits === "number" ? body.needCredits : 0,
+          raw: BigInt(body.topUpRaw),
+          memo: body.memo,
+          retry: () => void trade(side, amount, what, all),
+        });
+        return;
+      }
       setStatus({
         kind: "error",
         text: errorText(e),
@@ -574,6 +662,28 @@ export function TradePanel({
       });
     } finally {
       onTraded();
+    }
+  };
+
+  /** Burns ASDF for the credits the Sacrifice is short of, then tries the trade again. */
+  const topUp = async (s: Extract<Status, { kind: "topup" }>) => {
+    if (s.burning) return;
+    setStatus({ ...s, burning: "Burning ASDF for credits…" });
+    try {
+      await topUpBurnCredits(owner, s.raw, s.memo, (stage) =>
+        setStatus({
+          ...s,
+          burning: stage === "signing" ? "Approve the burn in your wallet…" : "Burning ASDF for credits…",
+        }),
+      );
+      setStatus({ kind: "idle" });
+      s.retry();
+    } catch (e) {
+      setStatus({
+        kind: "error",
+        text: e instanceof BurnUncertainError ? e.message : describeBurnError(e, "Your wallet"),
+        signature: e instanceof BurnUncertainError ? e.signature : undefined,
+      });
     }
   };
 
@@ -1024,6 +1134,20 @@ export function TradePanel({
                 View on Solscan
               </a>
             </p>
+          )}
+          {status.kind === "topup" && (
+            <>
+              <p className="small">{status.text}</p>
+              <button
+                type="button"
+                className="primary small"
+                disabled={!!status.burning}
+                onClick={() => void topUp(status)}
+              >
+                {status.burning ??
+                  `Burn ASDF for ${status.credits} credit${status.credits === 1 ? "" : "s"} and trade`}
+              </button>
+            </>
           )}
           {status.kind === "error" && (
             <p className="small">

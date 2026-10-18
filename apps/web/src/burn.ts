@@ -44,6 +44,14 @@ export interface BurnBalance {
   } | null;
   /** Whether the top holders get Pro Mode at all (false while it is admins-only or switched off). */
   proOpen?: boolean;
+  /** The Sacrifice's tier (ASDF fee plan); null or absent while it is off. */
+  sacrifice?: {
+    mode: "shadow" | "on";
+    freeRank: number;
+    pays: boolean;
+    reason: "admin" | "grant" | "access" | "holder" | "below_cutoff" | "moved_bag";
+    rank?: number;
+  } | null;
   /** Accounts a burn can come from, largest first. */
   accounts: { address: string; rawAmount: string }[];
 }
@@ -370,4 +378,55 @@ export function formatTokens(raw: bigint, decimals: number): string {
   const cents = ((raw % unit) * 100n) / unit;
   const w = whole.toLocaleString("en-US");
   return cents === 0n ? w : `${w}.${cents.toString().padStart(2, "0").replace(/0$/, "")}`;
+}
+
+/**
+ * The Trade panel's one-tap top-up (ASDF fee plan): burns `rawAmount` of $ASDFASDFA with the Burn
+ * Credits memo for the credits a trade's Sacrifice is short of, through the same flow as the
+ * Utilities burn, and waits for them to be credited. Throws with a plain reason when it can't
+ * start; BurnUncertainError when the burn went out but isn't credited yet (it will be, by the
+ * reconciler, so the person retries in a minute).
+ */
+export async function topUpBurnCredits(
+  owner: string,
+  rawAmount: bigint,
+  memo: string,
+  onStage?: BurnRequest["onStage"],
+): Promise<void> {
+  const wallet = await readyBurnWallet(owner);
+  if (!wallet)
+    throw new Error(
+      "Sign in again with the wallet that holds your $ASDFASDFA to burn for credits. Nothing was burned.",
+    );
+  const balance = await api<BurnBalance>("/subscription/balance");
+  const source = balance.accounts.find((a) => BigInt(a.rawAmount) >= rawAmount);
+  if (!source)
+    throw new Error(
+      `Burning for the credits takes ${formatTokens(rawAmount, balance.decimals)} $ASDFASDFA, more than your wallet holds in one account. Nothing was burned.`,
+    );
+  const signature = await sendBurn({
+    wallet,
+    owner,
+    tokenAccount: source.address,
+    mint: balance.mint,
+    decimals: balance.decimals,
+    rawAmount,
+    months: 0,
+    memo,
+    pendingKey: PENDING_CREDIT_KEY,
+    onStage,
+  });
+  for (let i = 0; i < 40; i++) {
+    const r = await claimCreditBurn(signature);
+    if (r.status === "credited") {
+      clearPendingBurn(PENDING_CREDIT_KEY);
+      return;
+    }
+    if (r.status === "rejected" || r.status === "held") throw new Error(r.message);
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+  }
+  throw new BurnUncertainError(
+    "The burn went out but isn't credited yet. Your credits arrive on their own: try the trade again in a minute.",
+    signature,
+  );
 }

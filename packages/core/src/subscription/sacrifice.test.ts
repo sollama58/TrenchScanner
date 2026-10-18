@@ -1,7 +1,13 @@
 import { describe, it, expect, afterAll, beforeEach } from "vitest";
 import { prisma } from "../db.js";
+import { creditBurnCredits, creditPots } from "./credits.js";
 import {
   creditsShort,
+  recordPlatformTrade,
+  refundSacrifice,
+  settleOpenTrades,
+  settlePlatformTrade,
+  tradeOutcome,
   freeBufferRank,
   resetSacrificeSettingsCacheForTests,
   sacrificeFor,
@@ -178,5 +184,176 @@ describe.skipIf(!dbAvailable)("the fee tier", () => {
       pays: true,
       reason: "below_cutoff",
     });
+  });
+});
+
+describe.skipIf(!dbAvailable)("taking the Sacrifice at send", () => {
+  const RUN = Date.now();
+  const W = `SacrificeSendWallet${RUN}`;
+  const TOKENS = 10n ** 6n;
+  const trade = (n: number, mode: "on" | "shadow" | "off", asdfRaw: bigint | null = 1_000n * TOKENS) => ({
+    signature: `SacrificeSendSig${RUN}-${n}`,
+    wallet: W,
+    mint: "So11111111111111111111111111111111111111112",
+    side: "buy" as const,
+    lamports: SOL,
+    networkFeeLamports: 10_000n,
+    sacrifice: {
+      mode,
+      tier: "below_cutoff" as const,
+      pays: true,
+      asdfRaw,
+      lamports: 2_000_000n,
+      asdfPerSol: 740_000,
+    },
+  });
+
+  afterAll(async () => {
+    await prisma.burnCreditEntry.deleteMany({ where: { wallet: W } });
+    await prisma.platformTrade.deleteMany({ where: { wallet: W } });
+  });
+
+  it("lets only one of two sends spend the same credits, and records each charge with its trade", async () => {
+    await creditBurnCredits(
+      `SacrificeSendBurn${RUN}`,
+      { burnerWallet: W, rawAmount: 1_500n * TOKENS },
+      "claim",
+    );
+    const outcomes = await Promise.all([
+      recordPlatformTrade(trade(1, "on")),
+      recordPlatformTrade(trade(2, "on")),
+    ]);
+    expect(outcomes.map((o) => o.status).sort()).toEqual(["recorded", "short"]);
+    expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(500n * TOKENS);
+    // The short one wrote nothing: no trade row, so nothing went on chain for it either.
+    expect(await prisma.platformTrade.count({ where: { wallet: W } })).toBe(1);
+    const row = await prisma.platformTrade.findFirst({ where: { wallet: W } });
+    expect(row).toMatchObject({
+      platformFeeLamports: 2_000_000n,
+      sacrificeAsdfRaw: 1_000n * TOKENS,
+      sacrificeMode: "on",
+      feeTier: "below_cutoff",
+      asdfPerSol: "740000",
+    });
+  });
+
+  it("records the Sacrifice in shadow mode but takes nothing", async () => {
+    const before = (await creditPots(W, prisma, 100)).burnedRaw;
+    expect(await recordPlatformTrade(trade(3, "shadow", 9_000n * TOKENS))).toEqual({
+      status: "recorded",
+      taken: 0n,
+    });
+    expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(before);
+    expect(
+      await prisma.platformTrade.findUnique({ where: { signature: trade(3, "shadow").signature } }),
+    ).toMatchObject({
+      platformFeeLamports: 0n,
+      sacrificeAsdfRaw: 9_000n * TOKENS,
+      sacrificeMode: "shadow",
+    });
+    expect(await refundSacrifice(trade(3, "shadow").signature)).toBe(0n);
+  });
+
+  it("refunds a trade's Sacrifice once, however many times it is asked", async () => {
+    // Either send can win the race above: refund the one that was recorded.
+    const sig = (await prisma.platformTrade.findFirstOrThrow({ where: { wallet: W, sacrificeMode: "on" } }))
+      .signature;
+    const before = (await creditPots(W, prisma, 100)).burnedRaw;
+    const refunds = await Promise.all([refundSacrifice(sig), refundSacrifice(sig)]);
+    expect(refunds.sort()).toEqual([0n, 1_000n * TOKENS]);
+    expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(before + 1_000n * TOKENS);
+    expect(await refundSacrifice(sig)).toBe(0n);
+  });
+});
+
+describe("tradeOutcome", () => {
+  const sent = new Date("2026-10-18T21:00:00Z");
+  const at = (ms: number) => new Date(sent.getTime() + ms);
+  it("follows the chain, and calls a trade unseen past 5 minutes expired", () => {
+    expect(tradeOutcome({ seen: true, confirmed: true, error: null }, sent, at(1_000))).toBe("confirmed");
+    expect(tradeOutcome({ seen: true, confirmed: false, error: "{}" }, sent, at(1_000))).toBe("failed");
+    expect(tradeOutcome({ seen: true, confirmed: false, error: null }, sent, at(10 * 60_000))).toBeNull();
+    expect(tradeOutcome({ seen: false }, sent, at(4 * 60_000))).toBeNull();
+    expect(tradeOutcome({ seen: false }, sent, at(5 * 60_000 + 1))).toBe("expired");
+    expect(tradeOutcome(null, sent, at(60 * 60_000))).toBeNull();
+  });
+});
+
+describe.skipIf(!dbAvailable)("settling trades", () => {
+  const RUN = Date.now();
+  const W = `SacrificeSettleWallet${RUN}`;
+  const TOKENS = 10n ** 6n;
+  const sig = (n: number) => `SacrificeSettleSig${RUN}-${n}`;
+  const send = (n: number) =>
+    recordPlatformTrade({
+      signature: sig(n),
+      wallet: W,
+      mint: "So11111111111111111111111111111111111111112",
+      side: "sell",
+      lamports: SOL,
+      networkFeeLamports: 10_000n,
+      sacrifice: {
+        mode: "on",
+        tier: "below_cutoff",
+        pays: true,
+        asdfRaw: 100n * TOKENS,
+        lamports: 2_000_000n,
+        asdfPerSol: 740_000,
+      },
+    });
+
+  afterAll(async () => {
+    await prisma.burnCreditEntry.deleteMany({ where: { wallet: W } });
+    await prisma.platformTrade.deleteMany({ where: { wallet: W } });
+  });
+
+  it("refunds a failed trade once and leaves a confirmed one charged", async () => {
+    await creditBurnCredits(
+      `SacrificeSettleBurn${RUN}`,
+      { burnerWallet: W, rawAmount: 1_000n * TOKENS },
+      "claim",
+    );
+    await send(1);
+    await send(2);
+    expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(800n * TOKENS);
+    // The panel and the job race on the failed one: one settles it, the refund lands once.
+    const raced = await Promise.all([
+      settlePlatformTrade(sig(1), "failed"),
+      settlePlatformTrade(sig(1), "failed"),
+    ]);
+    expect(raced.sort()).toEqual([false, true]);
+    expect(await settlePlatformTrade(sig(2), "confirmed")).toBe(true);
+    // A later "expired" can't move a confirmed trade or refund it.
+    expect(await settlePlatformTrade(sig(2), "expired")).toBe(false);
+    expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(900n * TOKENS);
+  });
+
+  it("settles open trades nobody watched, only once they're 2 minutes old", async () => {
+    await send(3);
+    await send(4);
+    const old = new Date(Date.now() - 10 * 60_000);
+    await prisma.platformTrade.updateMany({
+      where: { signature: { in: [sig(3), sig(4)] } },
+      data: { sentAt: old },
+    });
+    await send(5);
+    const looked: string[] = [];
+    const rpc = {
+      getSignatureStatus: async (s: string) => {
+        looked.push(s);
+        return s === sig(3)
+          ? ({ seen: true, confirmed: true, error: null } as const)
+          : ({ seen: false } as const);
+      },
+    };
+    const result = await settleOpenTrades(rpc);
+    expect(looked).not.toContain(sig(5));
+    expect(result).toMatchObject({ settled: 2, refunded: 1 });
+    const rows = await prisma.platformTrade.findMany({
+      where: { signature: { in: [sig(3), sig(4), sig(5)] } },
+      orderBy: { signature: "asc" },
+      select: { status: true },
+    });
+    expect(rows.map((r) => r.status)).toEqual(["confirmed", "expired", "sent"]);
   });
 });

@@ -2178,8 +2178,18 @@ model PlatformTrade {
   side                String
   /// The trade's SOL value, lamports: a buy's spend, a sale's quoted proceeds.
   lamports            BigInt
-  /// What we charged on top of the swap, lamports (0: no platform fee, owner decision 2026-10-17).
+  /// What we charged on top of the swap, lamports: the Sacrifice's SOL value when it was taken
+  /// ("on" mode, a fee payer), else 0. The swap itself never carries a fee.
   platformFeeLamports BigInt    @default(0)
+  /// The Sacrifice (ASDF fee plan): the ASDF base units it took from the burned pot, or would have
+  /// in "shadow" mode (exact: the pot is held in ASDF, so no whole-credit column).
+  sacrificeAsdfRaw    BigInt    @default(0)
+  /// Whole ASDF per SOL it was priced at, as a decimal string; null when nothing was worked out.
+  asdfPerSol          String?
+  /// The wallet's tier at build (sacrifice.ts SacrificeTier reason: "admin", "grant", "access",
+  /// "holder", "below_cutoff" or "moved_bag"), and the mode it was worked out in ("shadow" | "on").
+  feeTier             String?
+  sacrificeMode       String?
   /// What the network took: the priority fee, Sender's tip and the base fee, lamports.
   networkFeeLamports  BigInt
   /// "sent" until it settles: "confirmed", "failed" or "expired". Only confirmed trades count.
@@ -3157,6 +3167,22 @@ model KolWallet {
 
   @@index([seenAt])
   @@index([mainWallet])
+}
+
+/// A KOL's X profile picture (user ask 2026-10-18), keyed by its X handle in lower case: fetched
+/// by the worker after each daily roster read (kolAvatars.ts) and served by the API
+/// (GET /kol-avatars/:handle), so the dashboard never loads it from X itself. "none": the handle
+/// has no picture of its own (or no account), and the dashboard keeps its letter.
+model KolAvatar {
+  handle      String   @id
+  status      String
+  image       Bytes?
+  contentType String?
+  /// A short hash of the image, put in its URL so a new picture is a new URL.
+  hash        String?
+  fetchedAt   DateTime
+
+  @@index([fetchedAt])
 }
 
 /// The Side Wallet Checker (Utilities tab): each KOL on the roster (KolWallet) with the tracked
