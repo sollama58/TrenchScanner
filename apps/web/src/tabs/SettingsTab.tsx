@@ -492,6 +492,7 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
           mint={mint}
           onClose={() => setBuying(false)}
           onBought={funds.reload}
+          balance={balance}
         />
       )}
     </section>

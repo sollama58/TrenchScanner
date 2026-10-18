@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { privyConfig } from "../privyBridge";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { shortAddress } from "../format";
+import { formatTokens, type BurnBalance } from "../burn";
 import { TradePanel } from "./TradePanel";
 import { CloseIcon, FlameIcon } from "./Icons";
 
@@ -11,11 +12,15 @@ import { CloseIcon, FlameIcon } from "./Icons";
  * only (the API lets it buy this one coin, up to 5 SOL at a time, and nothing else). Opened from
  * Settings' Subscription section and the burn panel's "Buy $ASDFASDFA here".
  */
+/** The API's ACCESS_BUY_MAX_LAMPORTS, in SOL: one buy's cap for a wallet without Pro Mode. */
+const ACCESS_BUY_MAX_SOL = 5;
+
 export function BuyAsdfDialog({
   owner,
   mint,
   onClose,
   onBought,
+  balance = null,
 }: {
   /** The signed-in wallet: it pays and receives. */
   owner: string;
@@ -23,6 +28,8 @@ export function BuyAsdfDialog({
   onClose: () => void;
   /** After each trade, so the page can read its balances again. */
   onBought: () => void;
+  /** The page's reading of the wallet's SOL and $ASDFASDFA, shown above the panel. */
+  balance?: BurnBalance | null;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const pro = useProState();
@@ -71,6 +78,22 @@ export function BuyAsdfDialog({
           Swap SOL from your wallet ({shortAddress(owner)}) for $ASDFASDFA, then burn it in Settings for
           access. TrenchScanner takes no fee.{buyOnly ? " Up to 5 SOL a buy." : ""}
         </p>
+        {balance && (
+          <div className="asdf-buy-wallet">
+            <span>
+              <small className="muted">SOL</small>
+              <strong className="num">
+                {balance.solLamports != null
+                  ? (Number(balance.solLamports) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 4 })
+                  : "–"}
+              </strong>
+            </span>
+            <span>
+              <small className="muted">$ASDFASDFA</small>
+              <strong className="num">{formatTokens(BigInt(balance.totalRaw), balance.decimals)}</strong>
+            </span>
+          </div>
+        )}
         {open === null ? (
           <p className="muted small">Loading…</p>
         ) : !open ? (
@@ -95,6 +118,8 @@ export function BuyAsdfDialog({
             position={position.data}
             summary={summary}
             buyOnly={buyOnly}
+            hidePosition
+            maxBuySol={buyOnly ? ACCESS_BUY_MAX_SOL : null}
             onTraded={() => {
               position.reload();
               onBought();

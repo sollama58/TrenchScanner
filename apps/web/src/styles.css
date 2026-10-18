@@ -16044,10 +16044,26 @@ body:has(.util-toast) .bug-fab {
 .tm-preset {
   justify-content: center;
   gap: 4px;
+  min-width: 0;
   min-height: 40px;
   padding: 6px 8px;
   font-weight: 700;
   font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* A narrow side (a phone, or the Buy $ASDFASDFA popup) wraps its buttons rather than squeezing
+   each number past its edge, and drops the "SOL" each button repeats (the side says it). */
+.tm-side {
+  container-type: inline-size;
+}
+@container (max-width: 380px) {
+  .tm-presets {
+    grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
+  }
+  .tm-side.buy .tm-preset small {
+    display: none;
+  }
 }
 .tm-preset small {
   font-size: 10.5px;
@@ -17465,6 +17481,20 @@ body:has(.util-toast) .bug-fab {
 }
 .asdf-buy-modal {
   width: min(560px, calc(100vw - 32px));
+}
+.asdf-buy-wallet {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+.asdf-buy-wallet > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--surface-3);
 }
 .asdf-buy-modal .about-head h3 {
   display: inline-flex;

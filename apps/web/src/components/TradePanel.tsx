@@ -438,6 +438,8 @@ export function TradePanel({
   closeOnly = false,
   graceEndsAt = null,
   buyOnly = false,
+  hidePosition = false,
+  maxBuySol = null,
 }: {
   owner: string;
   mint: string;
@@ -454,6 +456,10 @@ export function TradePanel({
   graceEndsAt?: number | null;
   /** Buying only, no Sell side: the $ASDFASDFA buy for a wallet without Pro Mode (BuyAsdfDialog). */
   buyOnly?: boolean;
+  /** No position block (the Buy $ASDFASDFA popup, user ask 2026-10-18). */
+  hidePosition?: boolean;
+  /** The most one buy may spend here (the API's 5 SOL for a wallet without Pro Mode); null: no cap. */
+  maxBuySol?: number | null;
 }) {
   // Shared with Settings > Trading: a change there shows here at once, and the other way round.
   const settings = useTradeSettings();
@@ -477,6 +483,8 @@ export function TradePanel({
     if (!all) {
       if (side === "buy" && amount < BigInt(Math.round(MIN_TRADE_SOL * LAMPORTS)))
         return refuse("The smallest buy is 0.01 SOL.");
+      if (side === "buy" && maxBuySol !== null && amount > BigInt(Math.round(maxBuySol * LAMPORTS)))
+        return refuse(`Buy up to ${maxBuySol} SOL at a time here.`);
       const worth =
         side === "sell" && summary?.valueSol != null && balance > 0n
           ? (summary.valueSol * Number(amount)) / Number(balance)
@@ -577,7 +585,7 @@ export function TradePanel({
         <p className="small tm-trade-warn">Pro Mode has ended for this wallet, so trading is off.</p>
       )}
 
-      {hasPosition && summary && (
+      {!hidePosition && hasPosition && summary && (
         <div className={`tm-hold ${tone}`}>
           <div className="tm-hold-hero">
             <div className="tm-hold-pnl">
@@ -682,7 +690,10 @@ export function TradePanel({
                     key={`${sol}-${i}`}
                     type="button"
                     className="tm-preset"
-                    disabled={busy}
+                    disabled={busy || (maxBuySol !== null && sol > maxBuySol)}
+                    title={
+                      maxBuySol !== null && sol > maxBuySol ? `Up to ${maxBuySol} SOL a buy here` : undefined
+                    }
                     onClick={() => trade("buy", BigInt(Math.round(sol * LAMPORTS)), `Buy ${solText(sol)}`)}
                   >
                     <span className="num">{sol}</span>
