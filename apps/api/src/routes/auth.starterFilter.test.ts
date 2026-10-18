@@ -1,6 +1,13 @@
 import "../bootstrap-env.js";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { prisma, starterFilterInput, STARTER_FILTER_NAME, type Env } from "@trenchscanner/core";
+import {
+  prisma,
+  starterFilterData,
+  starterFilterInput,
+  STARTER_FILTER_ID,
+  STARTER_FILTER_NAME,
+  type Env,
+} from "@trenchscanner/core";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 const TAG = `starter-filter-test-${Date.now()}`;
@@ -87,5 +94,54 @@ describe.skipIf(!dbAvailable)("the starter filter", () => {
     const existing = await prisma.user.findUnique({ where: { walletAddress } });
     expect(existing).not.toBeNull();
     expect(await prisma.userFilter.count({ where: { userId: user.id } })).toBe(0);
+  });
+
+  it("is the frozen Gemerald copy when one is stored, under the Default name", async () => {
+    // The migration copies Gemerald once (StarterFilter); a new account gets those settings, not
+    // the built-in five, and never Gemerald's own name or styling.
+    const stored = await prisma.starterFilter.findUnique({ where: { id: STARTER_FILTER_ID } });
+    await prisma.starterFilter.upsert({
+      where: { id: STARTER_FILTER_ID },
+      create: {
+        id: STARTER_FILTER_ID,
+        criteria: {
+          mcapMin: 20_000,
+          mcapMax: 300_000,
+          maxSniperTop10WalletPct: 30,
+          launchpads: ["pump.fun"],
+        },
+        sourceFilterId: "gemerald-test",
+        sourceFilterName: "Gemerald",
+      },
+      update: {
+        criteria: {
+          mcapMin: 20_000,
+          mcapMax: 300_000,
+          maxSniperTop10WalletPct: 30,
+          launchpads: ["pump.fun"],
+        },
+      },
+    });
+    try {
+      const user = await prisma.user.create({ data: { walletAddress: `${TAG}-e` } });
+      await prisma.userFilter.create({ data: { ...(await starterFilterData(env)), userId: user.id } });
+      const filter = await prisma.userFilter.findFirstOrThrow({ where: { userId: user.id } });
+      expect(filter.name).toBe("Default");
+      expect(filter.mcapMin).toBe(20_000);
+      expect(filter.mcapMax).toBe(300_000);
+      expect(filter.maxSniperTop10WalletPct).toBe(30);
+      expect(filter.launchpads).toEqual(["pump.fun"]);
+      expect(filter.maxRiskScore).toBeNull();
+      expect(filter.isActive).toBe(true);
+    } finally {
+      if (stored)
+        await prisma.starterFilter.update({ where: { id: STARTER_FILTER_ID }, data: stored as never });
+      else await prisma.starterFilter.delete({ where: { id: STARTER_FILTER_ID } });
+    }
+  });
+
+  it("falls back to the built-in starter when nothing is stored", async () => {
+    if (await prisma.starterFilter.findUnique({ where: { id: STARTER_FILTER_ID } })) return;
+    expect(await starterFilterData(env)).toEqual(starterFilterInput(env));
   });
 });

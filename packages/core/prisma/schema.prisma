@@ -910,6 +910,21 @@ model ModelGate {
   frozenAt                DateTime  @default(now())
 }
 
+/// The filter a new account starts with when one is stored: a saved filter's criteria, frozen (core
+/// filters/starterFilterStore.ts). Written once from the filter as it stood; later edits to the filter
+/// don't reach it. No row means the built-in starter filter (filters/starterFilter.ts).
+model StarterFilter {
+  /// "default", the only one.
+  id                      String    @id
+  /// The filter's criteria columns, as UserFilter names them.
+  criteria                Json
+  sourceFilterId          String
+  sourceFilterName        String
+  /// The source filter's criteriaChangedAt when it was copied: when those settings were last edited.
+  sourceCriteriaChangedAt DateTime?
+  frozenAt                DateTime  @default(now())
+}
+
 model CuratorLane {
   id            String    @id @default(cuid())
   slot          String

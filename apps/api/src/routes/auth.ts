@@ -8,7 +8,7 @@ import {
   appDomainForOrigin,
   claimHeldBurns,
   enrollInFreeAccess,
-  starterFilterInput,
+  starterFilterData,
   walletTag,
   type Env,
   type User,
@@ -364,7 +364,8 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     const { walletAddress } = user;
     /**
      * A brand-new account gets one working filter, so the Live Feed has something to show
-     * instead of an empty page that never explains you have to build something first.
+     * instead of an empty page that never explains you have to build something first: the
+     * frozen copy of Gemerald, named Default (core's filters/starterFilterStore.ts).
      *
      * Gated on `created`, not on "has no filters": somebody who deliberately deletes every filter
      * has said what they want, and quietly rebuilding one on their next sign-in would be the app
@@ -372,8 +373,8 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
      * is a worse first run, but refusing the login over it is worse still.
      */
     if (created) {
-      await prisma.userFilter
-        .create({ data: { userId: user.id, ...starterFilterInput(opts.env) } })
+      await starterFilterData(opts.env)
+        .then((data) => prisma.userFilter.create({ data: { ...data, userId: user.id } }))
         .then(() => request.log.info({ wallet: walletTag(walletAddress) }, "seeded the starter filter"))
         .catch((err: unknown) =>
           request.log.error({ err, wallet: walletTag(walletAddress) }, "could not seed the starter filter"),

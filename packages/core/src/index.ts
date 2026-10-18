@@ -54,6 +54,7 @@ export * from "./scoring/matchFilters.js";
 export * from "./scoring/alertGuard.js";
 
 export * from "./filters/starterFilter.js";
+export * from "./filters/starterFilterStore.js";
 export * from "./filters/trackRecord.js";
 export * from "./scoring/pipeline.js";
 export * from "./subscription/index.js";
