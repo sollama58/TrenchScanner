@@ -109,10 +109,10 @@ describe("contestant roster", () => {
     expect(TREES_NO_TOKENSAGE_FEATURES.length).toBeGreaterThan(20);
   });
 
-  it("doesn't count a control seat as a learner the combiners need, nor give it an evolution lane", () => {
+  it("leaves the retired control seat off the roster and out of evolution", () => {
     expect(
       enabledContestants(["consensus", "linear", TREES_NO_TOKENSAGE_CONTESTANT]).map((c) => c.id),
-    ).toEqual(["rules", "linear", TREES_NO_TOKENSAGE_CONTESTANT]);
+    ).toEqual(["rules", "linear"]);
     expect(foundingLanes(CONTESTANTS, new Date(0)).map((l) => l.slot)).not.toContain(
       TREES_NO_TOKENSAGE_CONTESTANT,
     );
@@ -186,7 +186,11 @@ describe("Trees Recent", () => {
 
 describe("a retired seat", () => {
   it("leaves the roster, the combiners' members and the default list, but keeps its spec", () => {
-    expect(RETIRED_CONTESTANT_IDS).toEqual(["ranker", SHARP_DEEP_TREES_CONTESTANT]);
+    expect(RETIRED_CONTESTANT_IDS).toEqual([
+      TREES_NO_TOKENSAGE_CONTESTANT,
+      "ranker",
+      SHARP_DEEP_TREES_CONTESTANT,
+    ]);
     expect(contestantSpec("ranker")?.name).toBe("Ranker");
     expect(enabledContestants(["consensus", "linear", "trees", "ranker"]).map((c) => c.id)).toEqual([
       "consensus",

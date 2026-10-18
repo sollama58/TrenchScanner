@@ -483,6 +483,10 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     role: "learner",
     recipe: { learner: "gbdt", featureNames: TREES_NO_TOKENSAGE_FEATURES, goal: "return" },
     control: true,
+    // User decision 2026-10-18 (notes/model-audit-2026-10-18): it called the same 33 moments as
+    // Trees after the goal-based exams (Jaccard 1.00), so TokenSage changes nothing for Trees and
+    // the control has given its answer.
+    retired: true,
   },
   {
     id: "deep-trees",
