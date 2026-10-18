@@ -12,6 +12,7 @@ import {
   UtilityTokenModal,
   type UtilitiesOverview,
 } from "../tabs/UtilitiesTab";
+import { useTrackedWallets } from "../trackedWallets";
 import { ArrowRightIcon, ChevronDownIcon, CloseIcon, FlameIcon, ToolsIcon } from "./Icons";
 
 /** Wide enough for the panel's three columns; phones and narrow windows don't get it (user ask). */
@@ -208,6 +209,7 @@ function DrawerBody({
         />
         <CreditsColumn data={data} onRefill={() => setRefill(true)} />
       </div>
+      <LabelsLine onMore={onMore} />
       {openMint && (
         <UtilityTokenModal
           key={openMint}
@@ -229,6 +231,48 @@ function DrawerBody({
         />
       )}
     </>
+  );
+}
+
+/** Scrolls the Utilities tab to one of its tools once the (lazy) tab has drawn it. */
+function scrollToTool(id: string) {
+  const until = Date.now() + 5_000;
+  const find = () => {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    else if (Date.now() < until) requestAnimationFrame(find);
+  };
+  requestAnimationFrame(find);
+}
+
+/**
+ * The reader's wallet labels in one line under the scanners (user ask 2026-10-18): how many of the
+ * cap are used, and a way to the Utilities tab's Wallet labels to add or edit them. Pro Mode only;
+ * the labels are the reader's own (GET /wallets/tracked).
+ */
+function LabelsLine({ onMore }: { onMore: () => void }) {
+  const tracked = useTrackedWallets();
+  if (!tracked?.pro) return null;
+  return (
+    <p className="util-drawer-labels small">
+      <span className="muted">
+        Wallet labels:{" "}
+        <span className="num">
+          {tracked.wallets.length} of {tracked.cap}
+        </span>{" "}
+        used, seen by you alone
+      </span>
+      <button
+        type="button"
+        className="link"
+        onClick={() => {
+          onMore();
+          scrollToTool("util-labels");
+        }}
+      >
+        Manage labels
+      </button>
+    </p>
   );
 }
 
