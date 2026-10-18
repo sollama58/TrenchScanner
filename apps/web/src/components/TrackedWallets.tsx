@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { shortAddress } from "../format";
 import { openWallet } from "../walletModal";
-import { labelExport, parseLabelImport } from "../trackedImport";
+import { labelExport, MAX_IMPORT_BYTES, parseLabelImport } from "../trackedImport";
 import {
   importTrackedWallets,
   removeTrackedWallet,
@@ -213,8 +213,10 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
     setImporting(true);
     setError(null);
     setImported(null);
-    file
-      .text()
+    (file.size > MAX_IMPORT_BYTES
+      ? Promise.reject(new Error("That file is too large for a wallet label list (1 MB at most)."))
+      : file.text()
+    )
       .then(async (text) => {
         const parsed = parseLabelImport(text);
         if (parsed.entries.length === 0)

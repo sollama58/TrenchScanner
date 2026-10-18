@@ -27,11 +27,23 @@ export interface ParsedImport {
   skipped: number;
 }
 
+/** The largest file read: a full 250-wallet list is well under 100 KB. */
+export const MAX_IMPORT_BYTES = 1024 * 1024;
+/**
+ * A name's longest form as sent: the API keeps 32 characters once it has cleaned it, and this
+ * keeps a full 250-entry request under its 64 KB body limit even with four-byte characters.
+ */
+const NAME_SEND_MAX = 40;
+
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+const nameOf = (v: unknown): string | null => {
+  const s = str(v)?.replace(/\s+/g, " ");
+  return s ? [...s].slice(0, NAME_SEND_MAX).join("") : null;
+};
 
 function fromObject(o: Record<string, unknown>): ImportEntry | null {
   const wallet = ADDRESS_KEYS.map((k) => str(o[k])).find((v) => v !== null) ?? null;
-  const name = NAME_KEYS.map((k) => str(o[k])).find((v) => v !== null) ?? null;
+  const name = NAME_KEYS.map((k) => nameOf(o[k])).find((v) => v !== null) ?? null;
   if (!wallet || !name || !ADDRESS_RE.test(wallet)) return null;
   const kol = o.kol === true || (typeof o.category === "string" && o.category.toLowerCase() === "kol");
   return { wallet, name, kol };
@@ -69,7 +81,7 @@ export function parseLabelImport(text: string): ParsedImport {
       );
   } else if (data && typeof data === "object") {
     for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-      const name = str(value);
+      const name = nameOf(value);
       if (name && ADDRESS_RE.test(key)) add({ wallet: key, name, kol: false });
       else if (value && typeof value === "object" && !Array.isArray(value))
         add(fromObject({ wallet: key, ...(value as Record<string, unknown>) }));

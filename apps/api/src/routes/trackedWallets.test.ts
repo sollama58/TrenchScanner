@@ -187,6 +187,7 @@ describe.skipIf(!dbAvailable)("labeled wallets", () => {
         { wallet: extra(1), name: "\u200b" },
         { wallet: extra(0), name: "First again", kol: true },
         { wallet: LABELED, name: "Big Fish" },
+        { wallet: extra(2), name: `x'); DROP TABLE "User";--` },
       ],
     };
     expect((await as(MEMBER, "POST", "/wallets/tracked/import", list)).statusCode).toBe(403);
@@ -197,17 +198,22 @@ describe.skipIf(!dbAvailable)("labeled wallets", () => {
     const res = await as(ADMIN, "POST", "/wallets/tracked/import", list);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
-      added: 1,
+      added: 2,
       updated: 1,
       overCap: 0,
       unnamed: 1,
       cap: TRACKED_WALLET_CAP,
     });
+    // Names are data: stored and read back exactly, never run.
+    expect((await as(ADMIN, "GET", "/wallets/tracked")).json().wallets).toContainEqual(
+      expect.objectContaining({ wallet: extra(2), name: `x'); DROP TABLE "User";--` }),
+    );
     const names = (await as(ADMIN, "POST", "/wallets/names", { wallets: [extra(0)] })).json().names;
     expect(names[extra(0)]).toEqual({ name: "First again", source: "kol", mine: true });
     // The import never reaches the shared side export.
     expect((await as(MEMBER, "GET", "/utilities/side-labels")).body).not.toContain(extra(0));
     await as(ADMIN, "DELETE", `/wallets/tracked/${extra(0)}`);
+    await as(ADMIN, "DELETE", `/wallets/tracked/${extra(2)}`);
   });
 
   it("removes a label, and its names and sides go with it", async () => {

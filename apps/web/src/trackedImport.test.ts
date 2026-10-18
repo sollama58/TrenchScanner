@@ -61,3 +61,24 @@ describe("parseLabelImport", () => {
     expect(() => parseLabelImport("42")).toThrow("list of wallets");
   });
 });
+
+describe("parseLabelImport limits", () => {
+  it("shortens long names so a full list fits the API's body limit", () => {
+    const long = "🐳".repeat(200);
+    const { entries } = parseLabelImport(
+      JSON.stringify(Array.from({ length: 250 }, () => ({ wallet: A, name: long }))),
+    );
+    expect([...entries[0]!.name]).toHaveLength(40);
+    const body = JSON.stringify({
+      wallets: Array.from({ length: 250 }, () => ({ wallet: B, name: entries[0]!.name, kol: true })),
+    });
+    expect(new TextEncoder().encode(body).length).toBeLessThan(64 * 1024);
+  });
+
+  it("treats markup and __proto__ keys as plain data", () => {
+    const text = `[{"wallet":"${A}","name":"<img src=x onerror=alert(1)>","__proto__":{"polluted":true}}]`;
+    const { entries } = parseLabelImport(text);
+    expect(entries[0]!.name).toBe("<img src=x onerror=alert(1)>");
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
