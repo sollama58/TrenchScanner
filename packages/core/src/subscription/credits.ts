@@ -187,7 +187,7 @@ export async function creditPots(
 }
 
 /** Free credits a subscriber gets each rolling day, for lookups only. Unused ones don't carry over. */
-export const DAILY_FREE_CREDITS = 10;
+export const DAILY_FREE_CREDITS = 5;
 export const DAILY_FREE_WINDOW_MS = 24 * 60 * 60_000;
 
 export interface DailyFree {

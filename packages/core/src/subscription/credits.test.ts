@@ -5,6 +5,7 @@ import {
   creditBurnCredits,
   creditPots,
   creditsFor,
+  DAILY_FREE_CREDITS,
   dailyFreeCredits,
   grantCredits,
   CreditGrantError,
@@ -125,8 +126,8 @@ describe.skipIf(!dbAvailable)("credit pots and the free daily credits", () => {
     await grantCredits(SUB, 2, "test");
     expect(await creditPots(SUB)).toEqual({ balance: 5, granted: 2, burned: 3 });
 
-    const first = await spendCredits(SUB, "token", `PotsMint${RUN}`, 9, true);
-    expect(first).toMatchObject({ status: "charged", cost: 9, free: 9, freeLeft: 1, balance: 5 });
+    const first = await spendCredits(SUB, "token", `PotsMint${RUN}`, DAILY_FREE_CREDITS - 1, true);
+    expect(first).toMatchObject({ status: "charged", free: DAILY_FREE_CREDITS - 1, freeLeft: 1, balance: 5 });
     // One free credit left, then the two granted: four credits draw on three pots.
     const split = await spendCredits(SUB, "wallet", `PotsW${RUN}`, 4, true);
     expect(split).toMatchObject({ status: "charged", free: 1, freeLeft: 0, balance: 2 });

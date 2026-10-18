@@ -192,7 +192,7 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
             Each lookup costs Burn Credits, which you get by burning {SYMBOL} from this wallet. A credit is
             only taken once the lookup works, and you can re-open it free for an hour. Coins and wallets
             TrenchScanner already tracks are free to look up, and the form says so before you run it. The Side
-            Wallet Checker and Wallets to watch are free. Subscribers also get 10 free credits a day, used
+            Wallet Checker and Wallets to watch are free. Subscribers also get 5 free credits a day, used
             before their balance.
           </p>
         </header>

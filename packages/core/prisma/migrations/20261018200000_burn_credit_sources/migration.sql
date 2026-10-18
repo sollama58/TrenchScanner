@@ -1,5 +1,5 @@
 -- Burn Credit sources (user ask 2026-10-18): every ledger row says which pot it belongs to, so a
--- subscriber's 10 free daily credits and admin grants pay for lookups but never for trading
+-- subscriber's free daily credits and admin grants pay for lookups but never for trading
 -- (schema.prisma BurnCreditEntry.source, credits.ts spendCredits).
 -- "burned" (bought by a burn), "granted" (an admin grant) or "daily" (the subscriber allowance,
 -- which only ever has spend rows and is not part of the balance).
