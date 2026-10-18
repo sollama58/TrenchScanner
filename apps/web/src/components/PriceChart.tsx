@@ -819,7 +819,7 @@ export function PriceChart({
         {guess && (
           <g className="pc-path">
             <title>
-              {`Experimental predicted path: ${signedPct(guess.change * 100, 1)} over the next ${guess.secs}s in 5-second steps, with the band it usually lands in. A statistical guess from the last minute's trading, often wrong; not advice.`}
+              {`Experimental predicted path: ${signedPct(guess.change * 100, 1)} over the next ${guess.secs}s in 5-second steps, with the band the price landed in about 8 times in 10 in testing. A statistical guess from the last minute's trading, often wrong; not advice.`}
             </title>
             <line x1={guess.zx} x2={guess.zx} y1={PAD.t - 6} y2={bottom} className="pc-path-edge" />
             <text x={(guess.zx + guess.endX) / 2} y={fullH - 6} textAnchor="middle" className="pc-tick">

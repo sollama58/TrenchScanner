@@ -1772,8 +1772,9 @@ export function ChartCard({
             />
             {view.path.length > 1 && (
               <p className="faint small tm-chart-src">
-                Dotted: predicted price path for the next minute (experimental). A statistical guess with its
-                usual range shaded, often wrong; not advice.
+                Right of the dashed line: the next minute (experimental). Shaded is where the price landed
+                about 8 times in 10 in testing, read from the last minute&apos;s trading; the dotted middle is
+                a rough guess. Not advice.
               </p>
             )}
             {shownRange === "model" && (
