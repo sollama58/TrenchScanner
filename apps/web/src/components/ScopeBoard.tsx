@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Card, CardField, LaunchPage, MatchPage } from "../api";
+import type { Card, LaunchPage, MatchPage } from "../api";
 import {
   passesColumnFilter,
-  scopeHideSet,
   useScopeSettings,
   activeFilterCount,
   cardModelNames,
+  type ScopeDisplay,
 } from "../scopeSettings";
+import { rowChips } from "../scopeChips";
 import { ScopeSettingsModal, type ScopeSettingsSection } from "./ScopeSettingsModal";
 import { usePolling, usePollingAll, useLiveMarketCaps, useNow, useNudgeStream } from "../hooks";
 import { joinPages } from "../feedFill";
 import { change, pct, tokenLabel, usd } from "../format";
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { useAppearance } from "../appearance";
-import { tileLook, tileMode, tileTone, type TileMode } from "../tileTone";
+import { tileLook, tileMode, type TileMode } from "../tileTone";
 import { openTokenModal } from "../tokenModal";
 import {
   frameOf,
@@ -27,18 +28,7 @@ import {
   type ScopeColumns,
   type ScopeFrame,
 } from "../scope";
-import {
-  cardReadings,
-  countCutFor,
-  newestStats,
-  nowReading,
-  recordedPeakOf,
-  SAFETY_MAX_FRESH_WALLET_PCT,
-  SAFETY_REJECT_LINKED_COUNT,
-  SAFETY_REJECT_SNIPER_WALLET_PCT,
-  SAFETY_REJECT_TOP10_HOLDER_PCT,
-  socialLinks,
-} from "./AlertCard";
+import { nowReading, recordedPeakOf, socialLinks } from "./AlertCard";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
@@ -81,7 +71,6 @@ export function ScopeBoard({
   const look = useAppearance();
   const settings = useScopeSettings();
   const display = settings.display;
-  const hide = useMemo(() => scopeHideSet(display), [display]);
   const first = usePolling<MatchPage>(feedPath(1), 30_000);
   const morePaths = Array.from({ length: SCOPE_PAGES - 1 }, (_, i) => feedPath(i + 2));
   const more = usePollingAll<MatchPage>(morePaths, 30_000);
@@ -215,6 +204,7 @@ export function ScopeBoard({
       </button>
     );
   };
+  const tiles = tileMode(look);
   const modal = (
     <ScopeSettingsModal
       open={settingsSection !== null}
@@ -222,6 +212,7 @@ export function ScopeBoard({
       onClose={() => onSettings(null)}
       modelNames={modelNames}
       filterNames={filterNames}
+      tiles={tiles}
     />
   );
 
@@ -235,10 +226,9 @@ export function ScopeBoard({
       </>
     );
 
-  const tiles = tileMode(look);
   return (
     <div
-      className={`scope${frame ? " held" : ""}${first.stale ? " stale" : ""}${display.compact ? " compact" : ""}`}
+      className={`scope${frame ? " held" : ""}${first.stale ? " stale" : ""} ${scopeLookClass(display)}`}
       style={{ "--scope-cols": shownCols.length } as React.CSSProperties}
       onPointerEnter={(e) => e.pointerType === "mouse" && pause()}
       onPointerLeave={(e) => e.pointerType === "mouse" && resume()}
@@ -299,7 +289,7 @@ export function ScopeBoard({
                 </p>
               ) : (
                 cols[c.id].map((card) => (
-                  <ScopeRow key={card.id} card={card} now={now} hide={hide} tiles={tiles} />
+                  <ScopeRow key={card.id} card={card} now={now} display={display} tiles={tiles} />
                 ))
               )}
             </div>
@@ -319,20 +309,38 @@ function emptyText(col: ScopeColumn, modelsOn: boolean, gradError: Error | null)
     : "No graduated token has passed the safety screen in the last day.";
 }
 
-/** One alert as a compact row: avatar, ticker and age, where it came from, the figures, and safety chips. */
+/** The board's look as classes: Scope settings' density, layout, sizes and chip style. */
+export function scopeLookClass(d: ScopeDisplay): string {
+  return [
+    `scope-d-${d.density}`,
+    `scope-l-${d.layout}`,
+    `scope-img-${d.imageSize}`,
+    `scope-text-${d.textSize}`,
+    `scope-chips-${d.chipStyle}`,
+    d.colorMcap ? "" : "scope-mc-plain",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** One alert as a row: avatar, ticker and age, where it came from, the figures, and data chips. */
 export function ScopeRow({
   card,
   now,
-  hide,
+  display: d,
   tiles,
+  preview = false,
 }: {
   card: Card;
   now: number;
-  hide: ReadonlySet<CardField>;
+  display: ScopeDisplay;
   tiles: TileMode;
+  /** The settings window's example row: no token window, no quick buy. */
+  preview?: boolean;
 }) {
-  const show = (f: CardField) => !hide.has(f);
-  const open = () => openTokenModal(card, now);
+  const open = () => {
+    if (!preview) openTokenModal(card, now);
+  };
   const onClick = (e: React.MouseEvent) => {
     if (e.defaultPrevented || e.button !== 0) return;
     if ((e.target as Element).closest?.(OWN_CLICK)) return;
@@ -350,8 +358,8 @@ export function ScopeRow({
   const { pct: recorded } = recordedPeakOf(card);
   const peak = move !== null && move > 0 ? Math.max(recorded ?? 0, move) : recorded;
   const alertedAt = curated?.alertedAt ?? card.matchedAt;
-  const age = shortAge(now - Date.parse(card.kind === "match" ? card.matchedAt : alertedAt));
-  const socials = show("socials") ? socialLinks(card.token) : [];
+  const ageMs = now - Date.parse(card.kind === "match" ? card.matchedAt : alertedAt);
+  const socials = d.showSocials ? socialLinks(card.token) : [];
   const label = tokenLabel(card.token);
   const high = calls.some((c) => c.tier === "high") || curated?.tier === "high";
   const models =
@@ -360,79 +368,22 @@ export function ScopeRow({
       : curated
         ? [curated.modelName ?? "Model"]
         : [];
-  const r = cardReadings(card, "newest");
-  const t = newestStats(card);
-  const chips: {
-    key: string;
-    label: string;
-    value: string;
-    title: string;
-    tone: number | null;
-    risky: boolean;
-  }[] = [];
-  if (show("holders") && t.holders != null)
-    chips.push({
-      key: "h",
-      label: "Hold",
-      value: t.holders.toLocaleString(),
-      title: "Holders",
-      tone: null,
-      risky: false,
-    });
-  if (show("top10") && t.top10Pct != null)
-    chips.push({
-      key: "t10",
-      label: "T10",
-      value: pct(t.top10Pct),
-      title: "Top 10 holders' share of supply",
-      tone: tileTone(t.top10Pct, SAFETY_REJECT_TOP10_HOLDER_PCT),
-      risky: t.top10Pct >= SAFETY_REJECT_TOP10_HOLDER_PCT,
-    });
-  if (show("fresh") && r.freshPct != null)
-    chips.push({
-      key: "fr",
-      label: "Fresh",
-      value: pct(r.freshPct),
-      title: "Top holders on fresh wallets",
-      tone: tileTone(r.freshPct, SAFETY_MAX_FRESH_WALLET_PCT),
-      risky: r.freshPct >= SAFETY_MAX_FRESH_WALLET_PCT,
-    });
-  if (show("snipers") && r.snipers)
-    chips.push({
-      key: "sn",
-      label: "Snip",
-      value: `${r.snipers.count}/${r.snipers.of}`,
-      title: "Top holders who were among the launch's first 25 buyers",
-      tone: tileTone(r.snipers.top10Pct, SAFETY_REJECT_SNIPER_WALLET_PCT),
-      risky: (r.snipers.top10Pct ?? 0) >= SAFETY_REJECT_SNIPER_WALLET_PCT,
-    });
-  if (show("linked") && r.linkedPct != null) {
-    const cut = countCutFor(SAFETY_REJECT_LINKED_COUNT, r.linkedCount?.of);
-    chips.push({
-      key: "ln",
-      label: "Link",
-      value: pct(r.linkedPct),
-      title: r.linkedCount
-        ? `${r.linkedCount.linked} of the top ${r.linkedCount.of} holders are linked`
-        : "Supply held by linked wallets",
-      tone: r.linkedCount ? tileTone(r.linkedCount.linked, cut) : null,
-      risky: !!r.linkedCount && r.linkedCount.linked >= cut,
-    });
-  }
+  const chips = rowChips(card, d.chips);
+  const img = d.imageSize === "s" ? 36 : d.imageSize === "l" ? 56 : 44;
 
   return (
-    <article className={`scope-row tone-${badge.tone}`} onClick={onClick}>
-      <QuickBuyPill mint={card.token.mintAddress} symbol={label} onNeedsPanel={open} />
+    <article className={`scope-row tone-${badge.tone}${preview ? " preview" : ""}`} onClick={onClick}>
+      {!preview && <QuickBuyPill mint={card.token.mintAddress} symbol={label} onNeedsPanel={open} />}
       <div className="scope-avatar">
         <TokenImage
           url={card.token.imageUrl?.startsWith("https://") ? card.token.imageUrl : null}
-          size={96}
-          width={48}
-          height={48}
+          size={img * 2}
+          width={img}
+          height={img}
           className="scope-img"
           fallback={<span className="scope-img placeholder">{(card.token.symbol ?? "?").slice(0, 2)}</span>}
         />
-        {mark && show("result") && (
+        {mark && d.showResult && (
           <span className={`scope-mark ${badge.tone}`} role="img" title={badge.text} aria-label={badge.text}>
             {mark}
           </span>
@@ -448,20 +399,24 @@ export function ScopeRow({
           >
             {label}
           </button>
-          {show("tokenName") && card.token.name && card.token.symbol && (
+          {d.showName && card.token.name && card.token.symbol && (
             <span className="scope-name" title={card.token.name}>
               {card.token.name}
             </span>
           )}
         </div>
         <div className="scope-meta">
-          {show("time") && <span className="scope-age num">{age}</span>}
-          {filter && show("modelPill") ? (
+          {d.showAge && (
+            <span className={`scope-age num${d.highlightNew && ageMs < 60_000 ? " new" : ""}`}>
+              {shortAge(ageMs)}
+            </span>
+          )}
+          {filter && d.showSource && (
             <span className="scope-src mine" title={`Caught by your filter “${filter.name}”`}>
               {filter.icon ? <FilterGlyph icon={filter.icon} size={11} /> : <SlidersIcon size={11} />}
             </span>
-          ) : null}
-          {curated && show("modelPill") && (
+          )}
+          {curated && d.showSource && (
             <span className="scope-src model" title={models.join(" + ")}>
               <BrainIcon size={11} />
               <span className="scope-src-text">
@@ -469,7 +424,7 @@ export function ScopeRow({
               </span>
             </span>
           )}
-          {high && show("conviction") && (
+          {high && d.showSource && (
             <span
               className="scope-src model"
               title="High conviction: the model's top half-percent of moments"
@@ -480,36 +435,33 @@ export function ScopeRow({
           {socials.map((l) => (
             <a
               key={l.key}
-              className="pill pill-icon pill-social"
+              className="scope-link"
               href={l.url}
               target="_blank"
               rel="noreferrer noopener"
               title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
               aria-label={`Open the coin's ${l.label}`}
             >
-              <l.Icon size={10} />
+              <l.Icon size={11} />
             </a>
           ))}
         </div>
       </div>
       <div className="scope-figs">
-        {show("now") && (
-          <div className="scope-fig scope-now">
-            <span className="scope-fig-label">MC</span>
-            <span className={`num${move === null ? "" : move >= 0 ? " up" : " down"}`}>
-              {usd(nowMcap ?? alertMcap)}
-            </span>
-          </div>
-        )}
-        {show("alert") && (
-          <div className="scope-fig">
-            <span className="scope-fig-label">At</span>
+        <div className="scope-fig scope-now" title="Market cap now">
+          <span className={`num${move === null ? "" : move >= 0 ? " up" : " down"}`}>
+            {usd(nowMcap ?? alertMcap)}
+          </span>
+        </div>
+        {d.showAt && (
+          <div className="scope-fig" title="Market cap at the alert">
+            <span className="scope-fig-label">at</span>
             <span className="num">{usd(alertMcap)}</span>
           </div>
         )}
-        {show("peak") && peak != null && peak > 0 && (
-          <div className="scope-fig">
-            <span className="scope-fig-label">Pk</span>
+        {d.showPeak && peak != null && peak > 0 && (
+          <div className="scope-fig" title="Peak since the alert">
+            <span className="scope-fig-label">peak</span>
             <span className="num up">+{pct(peak)}</span>
           </div>
         )}
@@ -520,12 +472,12 @@ export function ScopeRow({
             const tl = tileLook(tiles, c.tone, c.risky);
             return (
               <span
-                key={c.key}
+                key={c.id}
                 className={`scope-chip ${tl.className ?? ""}`}
                 style={tl.style}
                 title={c.title}
               >
-                <span className="scope-chip-label">{c.label}</span>
+                <span className="scope-chip-label">{c.short}</span>
                 <span className="num">{c.value}</span>
               </span>
             );
