@@ -713,6 +713,37 @@ describe("TradingRpc backup endpoint", () => {
     return { url: `http://127.0.0.1:${port}`, seen, close: () => new Promise((r) => server.close(r)) };
   }
 
+  it("sums a wallet's coin balances across its accounts and both token programs", async () => {
+    const account = (mint: string, amount: string, decimals = 6) => ({
+      account: { data: { parsed: { info: { mint, tokenAmount: { amount, decimals } } } } },
+    });
+    let page = 0;
+    const node = await rpcServer(() => ({
+      status: 200,
+      body: {
+        jsonrpc: "2.0",
+        id: 1,
+        // Classic token accounts first, then Token-2022's.
+        result: {
+          value:
+            page++ === 0
+              ? [account("MintA", "5"), account("MintA", "7"), account("MintB", "0")]
+              : [account("MintC", "100", 9)],
+        },
+      },
+    }));
+    try {
+      const balances = await new TradingRpc({ rpcUrl: node.url }).getWalletBalances(OWNER);
+      expect(balances).toEqual([
+        { mint: "MintA", raw: 12n, decimals: 6 },
+        { mint: "MintC", raw: 100n, decimals: 9 },
+      ]);
+      expect(node.seen).toEqual(["getTokenAccountsByOwner", "getTokenAccountsByOwner"]);
+    } finally {
+      await node.close();
+    }
+  });
+
   it("reads from the backup when the first RPC doesn't answer, and sends to both", async () => {
     const down = await rpcServer(() => ({ status: 503 }));
     const backup = await rpcServer((method) => ({

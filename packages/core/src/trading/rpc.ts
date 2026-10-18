@@ -110,6 +110,13 @@ export function parseAccountState(raw: RawAccount | null | undefined): ParsedAcc
   return { lamports: BigInt(raw.lamports), owner: raw.owner, token };
 }
 
+/** One coin a wallet holds: its raw balance across the wallet's token accounts. */
+export interface WalletBalance {
+  mint: string;
+  raw: bigint;
+  decimals: number;
+}
+
 /** A mint account's authorities and Token-2022 extensions. */
 export interface MintInfo {
   /** The token program that owns it. */
@@ -333,6 +340,34 @@ export class TradingRpc implements GuardRpc {
       }
     }
     return out;
+  }
+
+  /**
+   * The wallet's coin balances, non-zero only, summed per mint (classic and Token-2022 accounts):
+   * two getTokenAccountsByOwner reads, a credit each on Helius. Null when either read failed.
+   */
+  async getWalletBalances(owner: string): Promise<WalletBalance[] | null> {
+    const byMint = new Map<string, WalletBalance>();
+    for (const programId of [PROGRAM.token, PROGRAM.token2022]) {
+      const page = await this.read<{ value?: { account?: RawAccount }[] }>("getTokenAccountsByOwner", [
+        owner,
+        { programId },
+        { encoding: "jsonParsed", commitment: "confirmed" },
+      ]);
+      if (!page || !Array.isArray(page.value)) return null;
+      for (const entry of page.value) {
+        const data = entry.account?.data;
+        const info = data && !Array.isArray(data) ? data.parsed?.info : undefined;
+        const amount = info?.tokenAmount?.amount;
+        if (typeof info?.mint !== "string" || typeof amount !== "string" || !/^\d+$/.test(amount)) continue;
+        const raw = BigInt(amount);
+        if (raw === 0n) continue;
+        const kept = byMint.get(info.mint);
+        if (kept) kept.raw += raw;
+        else byMint.set(info.mint, { mint: info.mint, raw, decimals: info.tokenAmount?.decimals ?? 0 });
+      }
+    }
+    return [...byMint.values()];
   }
 
   /**

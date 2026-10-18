@@ -1,5 +1,6 @@
 /** The dashboard's tabs, and the code-split chunks behind them. */
-export type Tab = "live" | "stream" | "model" | "lighthouse" | "filters" | "utilities" | "settings" | "admin";
+export type Tab =
+  "live" | "stream" | "model" | "lighthouse" | "filters" | "utilities" | "portfolio" | "settings" | "admin";
 
 export function tabFromHash(): Tab {
   const h = window.location.hash.replace("#", "");
@@ -12,6 +13,7 @@ export function tabFromHash(): Tab {
     h === "lighthouse" ||
     h === "filters" ||
     h === "utilities" ||
+    h === "portfolio" ||
     h === "settings" ||
     h === "admin"
     ? h
@@ -93,6 +95,8 @@ export const TAB_DATA: Record<Tab, string[]> = {
     "/telegram",
   ],
   utilities: ["/utilities"],
+  // Nothing warmed: its holdings are a chain read, made only when the tab opens.
+  portfolio: [],
   settings: ["/settings"],
   // Nothing warmed: only admin wallets can read /admin, and everyone's session runs this warm-up.
   admin: [],
