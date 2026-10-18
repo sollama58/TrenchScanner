@@ -320,7 +320,11 @@ export interface ReturnRisk {
    * 06:31) the return seats' scores read 2x AUC 0.39-0.49 on fresh decision rows, below a coin
    * flip, and the feed doubled less often than the screened market. Gated at 60% in a
    * walk-forward replica (10-15..18), the top fifth doubled 21.9% (P(2x) alone 22.6%, ungated E
-   * 17.1%, market 17.5%) at the ungated return (-5.2% vs -5.0%; P(2x) alone -10.8%). Absent on
+   * 17.1%, market 17.5%) at the ungated return (-5.2% vs -5.0%; P(2x) alone -10.8%). The floor
+   * is read on the rows the model was fitted on, where it scores winners higher than on coins it
+   * hasn't seen, so live it lets through more: 66-75% in the replica, with the same result (21.9-
+   * 22.0% 2x, -4.5% return); nothing reads the floor's share, as the seat's cutoff is a rank
+   * among its own live scores (liveScale.ts) and sits well inside the gated half. Absent on
    * models trained before it, which score as before.
    */
   winFloor?: number;
