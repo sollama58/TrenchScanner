@@ -2110,6 +2110,11 @@ model ProHolder {
   /// What it held at that scan, in raw units (from its share of supply): the 250th row's is what
   /// it takes to get in, shown in Settings' Pro Mode card. Null from scans before this was kept.
   heldRaw       String?
+  /// The Sacrifice's free tier (ASDF fee plan, Build guide step 3): set by the scan that finds the
+  /// wallet at or above the free cut-off (SacrificeSettings.freeRank), kept while it stays within
+  /// the cut-off plus 10 (capped at 250), cleared by the first scan that finds it lower or out.
+  /// A failed scan writes nothing, so stale scans keep every tier as it was.
+  freeTierSince DateTime?
 
   @@index([lastInTopAt])
 }
@@ -3422,4 +3427,19 @@ model AsdfPriceSample {
   asdfPerSol Float
 
   @@index([at])
+}
+
+/// The Sacrifice (ASDF fee plan): the 0.2% fee on Pro trades by wallets below the free cut-off,
+/// paid from burned credits. One row, id "sacrifice", read through a 30 second cache
+/// (sacrifice.ts sacrificeSettings), so it changes from Admin > Pro Mode without a deploy.
+/// PRO_TRADING_ENABLED stays the kill switch for trading as a whole.
+model SacrificeSettings {
+  id        String   @id @default("sacrifice")
+  /// "off" (nothing shown or taken), "shadow" (worked out and recorded, never taken) or "on".
+  mode      String   @default("off")
+  /// Holders at or above this rank trade free; the buffer is this plus 10, capped at 250.
+  freeRank  Int      @default(250)
+  /// The admin wallet that last changed it.
+  updatedBy String?
+  updatedAt DateTime @updatedAt
 }
