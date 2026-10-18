@@ -3249,6 +3249,22 @@ body.drawer-open .trades-drawer {
     display: none;
   }
 }
+/* One pullout at a time: while either panel is out, the other's handle fades away instead of
+   drawing over it (the body classes are set by the two drawers). A click outside a panel closes
+   it, so reaching for the other handle is never blocked for long. */
+body.util-open .trades-drawer,
+body.trades-open .util-drawer {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 0.2s,
+    visibility 0s 0.2s;
+}
+body.util-open .trades-drawer > *,
+body.trades-open .util-drawer > * {
+  pointer-events: none;
+}
 @media (prefers-reduced-motion: reduce) {
   .trades-drawer {
     transition: none;

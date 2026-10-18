@@ -93,6 +93,13 @@ function Drawer() {
   const handle = usePolling<HandleView>("/pro/trades?brief=1", HANDLE_POLL_MS);
   const coins = handle.data?.coins ?? [];
 
+  // The Utility handle steps aside while this panel is out, so it never sits over it (styles.css).
+  useEffect(() => {
+    if (!open) return;
+    document.body.classList.add("trades-open");
+    return () => document.body.classList.remove("trades-open");
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const aside = ref.current;
