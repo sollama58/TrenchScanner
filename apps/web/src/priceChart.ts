@@ -365,6 +365,66 @@ export interface OhlcBar {
   h: number;
   l: number;
   c: number;
+  /** No trades in its slice: drawn flat at the close before it, so the candles run unbroken. */
+  flat?: boolean;
+}
+
+/**
+ * Exported for tests. The candles with no trades between the first and the last filled in, flat at
+ * the close before each, so the candle view runs edge to edge without holes where a coin went quiet
+ * (the price held there). Slot i spans [start + i * ms, start + (i + 1) * ms).
+ */
+export function fillFlat(bars: readonly (OhlcBar | null)[], start: number, ms: number): (OhlcBar | null)[] {
+  const out = [...bars];
+  let prev: OhlcBar | null = null;
+  for (let i = 0; i < out.length; i++) {
+    const b = out[i];
+    if (b) {
+      prev = b;
+      continue;
+    }
+    if (!prev || !out.slice(i + 1).some(Boolean)) continue;
+    const v = prev.c;
+    out[i] = { from: start + i * ms, to: start + (i + 1) * ms, o: v, h: v, l: v, c: v, flat: true };
+    prev = out[i]!;
+  }
+  return out;
+}
+
+/**
+ * Exported for tests. The candles with the line's readings after the newest one's start folded in
+ * (the live curve's ticks): the newest candle is still forming, so a tick inside it moves its close,
+ * high and low, as an exchange chart's last candle moves, rather than waiting for the next candle
+ * read; ticks past its end become candles of their own (pointCandles). Without candles, the
+ * readings alone.
+ */
+export function liveCandles(candles: readonly VolumeCandle[], points: readonly Point[]): VolumeCandle[] {
+  if (candles.length === 0) return pointCandles(points);
+  let n = 0;
+  for (let i = 1; i < candles.length; i++) {
+    const k = candles[i]!;
+    const b = candles[n]!;
+    if (k.t + (k.w ?? MINUTE) > b.t + (b.w ?? MINUTE)) n = i;
+  }
+  const newest = { ...candles[n]! };
+  const end = newest.t + (newest.w ?? MINUTE);
+  let h = Math.max(newest.h ?? -Infinity, newest.o, newest.c);
+  let l = Math.min(newest.l ?? Infinity, newest.o, newest.c);
+  for (const p of points) {
+    if (p.t <= newest.t || p.t > end || !(p.v > 0)) continue;
+    newest.c = p.v;
+    h = Math.max(h, p.v);
+    l = Math.min(l, p.v);
+  }
+  newest.h = h;
+  newest.l = l;
+  const out = candles.map((k, i) => (i === n ? newest : k));
+  return out.concat(
+    pointCandles(
+      points.filter((p) => p.t > end),
+      { t: end, v: newest.c },
+    ),
+  );
 }
 
 /**
@@ -506,6 +566,8 @@ export const TIMEFRAMES: { ms: number; label: string }[] = [
 export function timeframeLabel(ms: number): string {
   const tf = TIMEFRAMES.find((f) => f.ms === ms);
   if (tf) return tf.label;
+  if (ms >= 24 * HOUR && ms % (24 * HOUR) === 0) return `${ms / (24 * HOUR)}d`;
+  if (ms >= HOUR && ms % HOUR === 0) return `${ms / HOUR}h`;
   return ms < MINUTE ? `${Math.round(ms / SECOND)}s` : `${Math.round(ms / MINUTE)}m`;
 }
 
@@ -514,13 +576,24 @@ export function timeframeLabel(ms: number): string {
  * next wider one when the data in view is coarser (a minute candle can't be split into seconds) or
  * when the window holds more than `maxBars` of them (thinner than the screen can show).
  */
-export function candleTimeframe(pickedMs: number, finestMs: number, spanMs: number, maxBars: number): number {
+export function candleTimeframe(
+  pickedMs: number,
+  finestMs: number,
+  spanMs: number,
+  maxBars: number,
+  widths: readonly number[] = TIMEFRAMES.map((f) => f.ms),
+): number {
   const need = Math.max(pickedMs, finestMs);
-  return (
-    TIMEFRAMES.find((f) => f.ms >= need && spanMs / f.ms <= maxBars)?.ms ??
-    TIMEFRAMES[TIMEFRAMES.length - 1]!.ms
-  );
+  return widths.find((ms) => ms >= need && spanMs / ms <= maxBars) ?? widths[widths.length - 1]!;
 }
+
+/**
+ * The widths Auto picks from: the timeframes with steps between them, so the candles in view
+ * come close to filling the plot (1m to 5m was too big a jump: a 2-hour view drew 25 candles).
+ */
+export const AUTO_TIMEFRAMES_MS: readonly number[] = [1, 2, 5, 10, 15, 30]
+  .map((s) => s * SECOND)
+  .concat([1, 2, 3, 5, 10, 15, 30, 60, 120, 240, 480, 1440].map((m) => m * MINUTE));
 
 /**
  * Exported for tests. Slots `ms` wide over [t0, t1], on round multiples of it since `origin` (the

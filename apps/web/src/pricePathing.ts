@@ -39,6 +39,14 @@ export interface PathModel {
    */
   bandLo: number[];
   bandHi: number[];
+  /**
+   * Version 2: per horizon, quantile-regression weights (one per standardized feature, then the
+   * intercept) for the band's 10th and 90th percentile in the same units, so the band follows the
+   * coin's state (wider below after a run-up, say) instead of one shape for every coin. bandLo and
+   * bandHi stay as the fallback.
+   */
+  bandLoW?: number[][];
+  bandHiW?: number[][];
 }
 
 /**
@@ -125,12 +133,42 @@ export function pathFeatures(grid: readonly number[], volUsd30 = 0): number[] | 
 
 /** The expected log change at each of the model's horizons, from the features. */
 export function predictLogChanges(features: readonly number[], model: PathModel = PATH_MODEL): number[] {
-  const z = features.map((x, k) => (x - model.mean[k]!) / (model.scale[k]! || 1));
-  return model.weights.map((wts) => {
-    let y = wts[wts.length - 1]!;
-    for (let k = 0; k < z.length; k++) y += wts[k]! * z[k]!;
-    return y;
+  const z = standardize(features, model);
+  return model.weights.map((wts) => linear(wts, z));
+}
+
+/** The features standardized as the model was fitted on them. */
+function standardize(features: readonly number[], model: PathModel): number[] {
+  return features.map((x, k) => (x - model.mean[k]!) / (model.scale[k]! || 1));
+}
+
+/** Weights (one per input, then the intercept) applied to `z`. */
+function linear(w: readonly number[], z: readonly number[]): number {
+  let y = w[w.length - 1]!;
+  for (let k = 0; k < z.length; k++) y += w[k]! * z[k]!;
+  return y;
+}
+
+/**
+ * The band's 10th and 90th percentile at each horizon, in units of the recent one-second
+ * volatility times the square root of the seconds ahead: from the coin's state where the model has
+ * band weights, else the fixed ones. Ordered low to high.
+ */
+export function bandUnits(
+  features: readonly number[],
+  model: PathModel = PATH_MODEL,
+): { lo: number[]; hi: number[] } {
+  if (!model.bandLoW || !model.bandHiW) return { lo: [...model.bandLo], hi: [...model.bandHi] };
+  const z = standardize(features, model);
+  const lo: number[] = [];
+  const hi: number[] = [];
+  model.horizons.forEach((_, i) => {
+    const a = linear(model.bandLoW![i]!, z);
+    const b = linear(model.bandHiW![i]!, z);
+    lo.push(Math.min(a, b));
+    hi.push(Math.max(a, b));
   });
+  return { lo, hi };
 }
 
 /** One drawn step of the guessed path: its time, the guessed market cap, and the band around it. */
@@ -148,6 +186,60 @@ export function volumeBefore(candles: readonly { t: number; vol?: number }[], en
   return sum;
 }
 
+/** What the model reads at one moment: the expected log change per horizon and the band's unit. */
+export interface PathGuess {
+  /** The grid second the guess was read at (ms). */
+  at: number;
+  ys: number[];
+  /** Recent one-second volatility, floored so a quiet coin still shows some spread. */
+  vol: number;
+  /** The band per horizon, in bandUnits' units. */
+  lo: number[];
+  hi: number[];
+}
+
+/**
+ * The model's guess from the chart's points (market cap) at `now`. `candles` (1-second, with USD
+ * volume) give the volume feature. Null when there is too little recent trading to read one.
+ */
+export function guessPath(
+  points: readonly { t: number; v: number }[],
+  now: number,
+  candles: readonly { t: number; vol?: number }[] = [],
+  model: PathModel = PATH_MODEL,
+): PathGuess | null {
+  const end = Math.floor(now / SECOND) * SECOND;
+  const grid = secondGrid(points, end - PATH_LOOKBACK_SEC * SECOND, end);
+  const f = pathFeatures(grid, volumeBefore(candles, end));
+  if (!f) return null;
+  return { at: end, ys: predictLogChanges(f, model), vol: Math.max(f[4]!, 0.002), ...bandUnits(f, model) };
+}
+
+/**
+ * The drawn path for a guess, from `start` (the line's latest reading): the start, then one step
+ * per horizon, the guessed change applied to the start's price with its band around it.
+ */
+export function pathFrom(
+  guess: PathGuess,
+  start: { t: number; v: number },
+  model: PathModel = PATH_MODEL,
+): PathStep[] {
+  if (!(start.v > 0)) return [];
+  const base = Math.log(start.v);
+  const steps: PathStep[] = [{ t: start.t, v: start.v, lo: start.v, hi: start.v }];
+  model.horizons.forEach((h, i) => {
+    const spread = guess.vol * Math.sqrt(h);
+    const y = guess.ys[i]!;
+    steps.push({
+      t: start.t + h * SECOND,
+      v: Math.exp(base + y),
+      lo: Math.exp(base + y + guess.lo[i]! * spread),
+      hi: Math.exp(base + y + guess.hi[i]! * spread),
+    });
+  });
+  return steps;
+}
+
 /**
  * The guessed path from the chart's points (market cap) at `now`: the starting point (now's
  * price) and then one step per horizon. `candles` (1-second, with USD volume) give the volume
@@ -159,23 +251,8 @@ export function predictPath(
   candles: readonly { t: number; vol?: number }[] = [],
   model: PathModel = PATH_MODEL,
 ): PathStep[] {
-  const end = Math.floor(now / SECOND) * SECOND;
-  const grid = secondGrid(points, end - PATH_LOOKBACK_SEC * SECOND, end);
-  const f = pathFeatures(grid, volumeBefore(candles, end));
-  if (!f) return [];
-  const base = grid[grid.length - 1]!;
-  // The band's unit: recent one-second volatility, floored so a quiet coin still shows some spread.
-  const vol = Math.max(f[4]!, 0.002);
-  const ys = predictLogChanges(f, model);
-  const steps: PathStep[] = [{ t: end, v: Math.exp(base), lo: Math.exp(base), hi: Math.exp(base) }];
-  model.horizons.forEach((h, i) => {
-    const spread = vol * Math.sqrt(h);
-    steps.push({
-      t: end + h * SECOND,
-      v: Math.exp(base + ys[i]!),
-      lo: Math.exp(base + ys[i]! + model.bandLo[i]! * spread),
-      hi: Math.exp(base + ys[i]! + model.bandHi[i]! * spread),
-    });
-  });
-  return steps;
+  const guess = guessPath(points, now, candles, model);
+  if (!guess) return [];
+  const grid = secondGrid(points, guess.at, guess.at);
+  return pathFrom(guess, { t: guess.at, v: Math.exp(grid[0]!) }, model);
 }

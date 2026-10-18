@@ -3,7 +3,14 @@
  * apps/web/scripts/fitPricePathing.ts and the tests. Plain arithmetic, no dependencies.
  */
 
-import { pathFeatures, PATH_LOOKBACK_SEC, secondGrid, volumeBefore, type PathModel } from "./pricePathing";
+import {
+  bandUnits,
+  pathFeatures,
+  PATH_LOOKBACK_SEC,
+  secondGrid,
+  volumeBefore,
+  type PathModel,
+} from "./pricePathing";
 
 /** One decision moment: the features then, and the real log change at each horizon after. */
 export interface PathSample {
@@ -126,6 +133,29 @@ function ridgeWeighted(
   return solve(a, b);
 }
 
+/**
+ * Exported for tests. Weights (features then intercept) for the `tau` quantile of y given rows z (a
+ * linear quantile regression), by iteratively reweighted ridge: each round weights a row by its
+ * side's share (tau above the line, 1 - tau below) over its last error.
+ */
+export function ridgeQuantile(
+  z: readonly number[][],
+  y: readonly number[],
+  tau: number,
+  lambda: number,
+  rounds = 30,
+): number[] {
+  let w = ridge(z, y, lambda);
+  for (let it = 0; it < rounds; it++) {
+    const s = z.map((row, i) => {
+      const r = y[i]! - dot(w, row);
+      return Math.sqrt((r >= 0 ? tau : 1 - tau) / Math.max(1e-3, Math.abs(r)));
+    });
+    w = ridgeWeighted(z, y, s, lambda);
+  }
+  return w;
+}
+
 /** The q-th quantile (0..1) of xs, linear between order statistics. */
 export function quantile(xs: readonly number[], q: number): number {
   if (xs.length === 0) return 0;
@@ -141,6 +171,8 @@ const CLIP = 0.3;
 const LAMBDAS = [0.01, 0.1, 1, 10, 100, 1000];
 
 const vol = (f: readonly number[]) => Math.max(f[4]!, 0.002);
+/** Shrinkage for the band's quantile fits (they read every feature; a little keeps them steady). */
+const BAND_LAMBDA = 1;
 
 /**
  * Fits the model on `train`: standardization, then per horizon a median (absolute error) ridge fit whose strength
@@ -168,6 +200,8 @@ export function fitPathModel(
   const weights: number[][] = [];
   const bandLo: number[] = [];
   const bandHi: number[] = [];
+  const bandLoW: number[][] = [];
+  const bandHiW: number[][] = [];
   horizons.forEach((h, hi) => {
     const y = train.map((r) => Math.max(-CLIP, Math.min(CLIP, r.ys[hi]!)));
     let best = { lambda: LAMBDAS[LAMBDAS.length - 1]!, err: Infinity };
@@ -193,8 +227,22 @@ export function fitPathModel(
     const res = train.map((r, i) => (r.ys[hi]! - dot(w, z[i]!)) / (vol(r.features) * Math.sqrt(h)));
     bandLo.push(quantile(res, 0.1));
     bandHi.push(quantile(res, 0.9));
+    // The band from the coin's state: the residuals' 10th and 90th percentile given the features.
+    bandLoW.push(ridgeQuantile(z, res, 0.1, BAND_LAMBDA));
+    bandHiW.push(ridgeQuantile(z, res, 0.9, BAND_LAMBDA));
   });
-  return { version: 1, stepSec, horizons: [...horizons], mean, scale, weights, bandLo, bandHi };
+  return {
+    version: 2,
+    stepSec,
+    horizons: [...horizons],
+    mean,
+    scale,
+    weights,
+    bandLo,
+    bandHi,
+    bandLoW,
+    bandHiW,
+  };
 }
 
 function dot(w: readonly number[], z: readonly number[]): number {
@@ -220,6 +268,8 @@ export interface HorizonReport {
   bandCoverage: number;
   /** Median width of the band, as a percent of the price. */
   bandWidthPct: number;
+  /** The band's mean pinball loss at its 10th and 90th percentile (lower is a tighter, honest band). */
+  bandLoss: number;
 }
 
 /** Scores `model` on held-out `test` moments, per horizon. */
@@ -231,6 +281,7 @@ export function backtest(model: PathModel, test: readonly PathSample[]): Horizon
     let dirN = 0;
     let dirHit = 0;
     let inBand = 0;
+    let loss = 0;
     const widths: number[] = [];
     for (const r of test) {
       const z = r.features.map((x, k) => (x - model.mean[k]!) / (model.scale[k]! || 1));
@@ -244,9 +295,11 @@ export function backtest(model: PathModel, test: readonly PathSample[]): Horizon
         if (Math.sign(p) === Math.sign(y)) dirHit++;
       }
       const s = vol(r.features) * Math.sqrt(h);
-      const lo = p + model.bandLo[hi]! * s;
-      const up = p + model.bandHi[hi]! * s;
+      const band = bandUnits(r.features, model);
+      const lo = p + band.lo[hi]! * s;
+      const up = p + band.hi[hi]! * s;
       if (y >= lo && y <= up) inBand++;
+      loss += (y >= lo ? 0.1 * (y - lo) : 0.9 * (lo - y)) + (y >= up ? 0.9 * (y - up) : 0.1 * (up - y));
       widths.push((Math.exp(up) - Math.exp(lo)) * 100);
     }
     const n = test.length || 1;
@@ -261,6 +314,7 @@ export function backtest(model: PathModel, test: readonly PathSample[]): Horizon
       directionSamples: dirN,
       bandCoverage: inBand / n,
       bandWidthPct: quantile(widths, 0.5),
+      bandLoss: loss / n,
     };
   });
 }

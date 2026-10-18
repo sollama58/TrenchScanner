@@ -1,15 +1,17 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { change, signedPct, usd } from "../format";
 import {
+  AUTO_TIMEFRAMES_MS,
   candleTimeframe,
   clipPoints,
   FLOW_WINDOW_MS,
   flowAt,
   MIN_ZOOM_MS,
   mcapAxis,
+  fillFlat,
+  liveCandles,
   ohlcBars,
   panBy,
-  pointCandles,
   zoomBy,
   zoomWindow,
   sinceLabel,
@@ -20,7 +22,6 @@ import {
   timeTicks,
   valueAt,
   volumeBars,
-  type OhlcBar,
   type Point,
   type ScanFlow,
   type VolumeBar,
@@ -71,6 +72,8 @@ function keepTimeframe(ms: number | null): void {
 const PICKED_CANDLE_PX = 8;
 /** Candles thinner than this would smear together: the view draws a wider timeframe instead. */
 const MIN_CANDLE_PX = 3;
+/** Auto draws candles about this wide, at least: the narrowest timeframe that leaves them room. */
+const AUTO_CANDLE_PX = 8;
 
 const PAD = { l: 8, r: 62, t: 24, b: 24 };
 
@@ -225,12 +228,8 @@ export function PriceChart({
   }, []);
 
   const ext0 = extent?.t0 ?? points[0]?.t ?? 0;
-  // A predicted path runs past the latest reading: the view's end makes room for it.
   const pathShown = live && path.length > 1;
-  const ext1 = Math.max(
-    extent?.t1 ?? points[points.length - 1]?.t ?? 0,
-    pathShown ? path[path.length - 1]!.t : 0,
-  );
+  const ext1 = extent?.t1 ?? points[points.length - 1]?.t ?? 0;
   const plotW = width - PAD.l - PAD.r;
 
   const geo = useMemo(() => {
@@ -240,58 +239,58 @@ export function PriceChart({
     if (pts.length < 2) return null;
     const zoomed = zoom !== null;
     const step = stepMs ?? Math.max(1, (t1 - t0) / (pts.length - 1));
-    const x = (t: number) => PAD.l + ((t - t0) / Math.max(1, t1 - t0)) * plotW;
     const lead = events[0];
     const leadShown = lead !== undefined && lead.t >= t0 && lead.t <= t1;
     const base = leadShown && lead.mcap ? lead.mcap : pts[0]!.v;
-    // About one bar per 6px of plot (8px for candles, which need the room), and no more bars than
-    // the window has candles' widths (a minute, 15 seconds or one, the narrowest in view). The
-    // candles and the volume lane share the slices, so each candle sits over its volume.
-    const narrowest = candles.reduce((w, k) => Math.min(w, k.w ?? 60_000), 60_000);
-    let slices = Math.max(
-      1,
-      Math.min(Math.round(plotW / (kind === "candles" ? 8 : 6)), Math.round((t1 - t0) / narrowest)),
-    );
-    // Even slices from the window's start, unless a timeframe is picked: then slots of it on round
-    // times, as wide as the finest real candles in view allow.
-    let slot0 = t0;
-    let slotMs = (t1 - t0) / slices;
-    let tfMs: number | null = null;
+    // The candles and the volume lane share slots of one timeframe on round times (since the
+    // epoch, or the First 15m view's launch), so each candle sits over its volume and keeps its
+    // place as new readings arrive: only the slot now forming changes (user ask 2026-10-18: on All
+    // the candles re-cut every second while the slots were even slices of the moving window).
+    // Auto picks the narrowest timeframe that fits about AUTO_CANDLE_PX per candle (6px per bar
+    // for the line's volume lane), never finer than the finest candles in view; a picked one
+    // draws as itself unless the data or the screen can't.
+    const inView = candles.filter((k) => k.t + (k.w ?? 60_000) > t0 && k.t < t1);
+    const finest = inView.reduce((w, k) => Math.min(w, k.w ?? 60_000), inView.length ? 60_000 : 1_000);
+    const maxBars = Math.max(1, Math.floor(plotW / (kind === "candles" ? AUTO_CANDLE_PX : 6)));
+    let tfMs = candleTimeframe(finest, finest, t1 - t0, maxBars, AUTO_TIMEFRAMES_MS);
     /** Why the drawn timeframe is wider than the one picked: coarser data in view, or too many. */
     let tfWider: "data" | "fit" | null = null;
     if (kind === "candles" && timeframe !== null) {
-      const inView = candles.filter((k) => k.t + (k.w ?? 60_000) > t0 && k.t < t1);
-      const finest = inView.reduce((w, k) => Math.min(w, k.w ?? 60_000), inView.length ? 60_000 : 1_000);
       tfMs = candleTimeframe(timeframe, finest, t1 - t0, Math.max(1, Math.floor(plotW / MIN_CANDLE_PX)));
       if (tfMs > timeframe)
         tfWider = finest > timeframe && tfMs === candleTimeframe(finest, 0, 0, 1) ? "data" : "fit";
-      const slots = timeframeSlots(t0, t1, tfMs, origin);
-      slot0 = slots.start;
-      slotMs = tfMs;
-      slices = slots.n;
     }
-    // Candles: the real ones, then the line's own readings past the newest (the live curve's
-    // ticks); without real ones (scan readings), the readings alone.
-    let bars: (OhlcBar | null)[] | null = null;
-    if (kind === "candles") {
-      const newest = candles.reduce<VolumeCandle | null>(
-        (a, k) => (!a || k.t + (k.w ?? 60_000) > a.t + (a.w ?? 60_000) ? k : a),
-        null,
-      );
-      const newestEnd = newest ? newest.t + (newest.w ?? 60_000) : -Infinity;
-      const after = pts.filter((p) => p.t > newestEnd);
-      const src = newest
-        ? [...candles, ...pointCandles(after, { t: newestEnd, v: newest.c })]
-        : pointCandles(pts);
-      bars = ohlcBars(src, slot0, slot0 + slices * slotMs, slices);
-    }
+    // The whole view's candles start with the coin's first candle, which opens before the line's
+    // first point (a close, at its candle's end).
+    const atStart = !zoomed || t0 <= ext0 + 1;
+    const firstStart = candles.reduce((m, k) => Math.min(m, k.t), Infinity);
+    const c0 = kind === "candles" && atStart && firstStart < t0 && firstStart > t0 - tfMs ? firstStart : t0;
+    const { start: slot0, n: slices } = timeframeSlots(c0, t1, tfMs, origin);
+    const slotMs = tfMs;
+    // The candle view's time axis runs over whole slots, so the candles fill the plot edge to edge
+    // (user ask 2026-10-18); the line's runs over the window itself.
+    const d0 = kind === "candles" ? slot0 : t0;
+    const d1 = kind === "candles" ? slot0 + slices * slotMs : t1;
+    // A predicted path gets a zone of its own past the view's end (user ask 2026-10-18): drawn to
+    // the same time scale its minute was a sliver on any view longer than a few minutes.
+    const future = pathShown && t1 >= ext1 - 1;
+    const futureW = future ? Math.round(Math.min(160, Math.max(56, plotW * 0.16))) : 0;
+    const histW = plotW - futureW;
+    const x = (t: number) => PAD.l + ((t - d0) / Math.max(1, d1 - d0)) * histW;
+    // Candles: the real ones with the live curve's ticks folded into the one forming and run on
+    // past it; without real ones (scan readings), the readings alone. Quiet slots between them
+    // are drawn flat, so the candles run unbroken.
+    const bars =
+      kind === "candles"
+        ? fillFlat(ohlcBars(liveCandles(candles, pts), slot0, d1, slices), slot0, slotMs)
+        : null;
     const values = pts.map((p) => p.v);
     const wicks = bars ? bars.flatMap((b) => (b ? [b.h, b.l] : [])) : [];
     // Zoomed, the axis fits what is in the window alone; the whole view also keeps the baseline
     // and the trader's entry (what their PnL is measured from) in sight.
     const extra = zoomed ? [] : [base, ...(entry !== null && entry > 0 ? [entry] : [])];
     // The predicted line stays in sight; its band may run off the plot.
-    const guessed = pathShown ? path.filter((s) => s.t >= t0 && s.t <= t1).map((s) => s.v) : [];
+    const guessed = future ? path.map((s) => s.v) : [];
     const lo = Math.min(...values, ...wicks, ...extra, ...guessed);
     const hi = Math.max(...values, ...wicks, ...extra, ...guessed);
     const axis = mcapAxis(lo, hi, PAD.t, height - PAD.b);
@@ -299,6 +298,10 @@ export function PriceChart({
     return {
       t0,
       t1,
+      d0,
+      d1,
+      future,
+      histW,
       pts,
       zoomed,
       step,
@@ -310,7 +313,9 @@ export function PriceChart({
       slices,
       slot0,
       slotMs,
-      tfMs,
+      tfMs: kind === "candles" && timeframe !== null ? tfMs : null,
+      /** The width Auto draws, named in the picker. */
+      autoMs: tfMs,
       tfWider,
       bars,
     };
@@ -418,18 +423,26 @@ export function PriceChart({
   // A label's width, from its length at the axis's 12px (a little generous, so they never touch).
   const textW = (text: string) => text.length * 7.4 + 6;
   const labelW = textW(tickLabel(geo.t0, stepMs ?? 60_000)) + 16;
+  // With a predicted path, the history's axis ends where the path's zone begins.
+  const edge = geo.future ? PAD.l + geo.histW : width - PAD.r;
+  const right = geo.future ? edge - 4 : width;
   const axisTicks = (() => {
-    const { ticks: all, step } = timeTicks(geo.t0, geo.t1, Math.max(2, Math.floor(plotW / labelW)), origin);
+    const { ticks: all, step } = timeTicks(
+      geo.d0,
+      geo.d1,
+      Math.max(2, Math.floor(geo.histW / labelW)),
+      origin,
+    );
     // A label that would run off the chart's edge is pinned to it; one that would then touch the
     // label before it is left out.
     let prevEnd = -Infinity;
     return all
       .map((t) => ({ t, x: x(t), text: tickLabel(t, step) }))
-      .filter((k) => k.x >= PAD.l - 1 && k.x <= width - PAD.r + 1)
+      .filter((k) => k.x >= PAD.l - 1 && k.x <= edge + 1)
       .map((k) => {
         const w = textW(k.text);
         const anchor: "start" | "end" | "middle" =
-          k.x - w / 2 < 0 ? "start" : k.x + w / 2 > width ? "end" : "middle";
+          k.x - w / 2 < 0 ? "start" : k.x + w / 2 > right ? "end" : "middle";
         const lo = anchor === "start" ? k.x - 4 : anchor === "end" ? k.x - w : k.x - w / 2;
         return { ...k, anchor, lo, hi: lo + w };
       })
@@ -479,7 +492,7 @@ export function PriceChart({
     setHover({ i: best, cx });
   };
   // A slot's width on screen, and where slot i starts (the volume lane and the candles share them).
-  const sliceW = (geo.slotMs / Math.max(1, span)) * plotW;
+  const sliceW = (geo.slotMs / Math.max(1, geo.d1 - geo.d0)) * geo.histW;
   const slotX = (i: number) => x(geo.slot0 + i * geo.slotMs);
   // The candle view reads out the candle under the pointer: its open, high, low and close.
   const hBarIdx =
@@ -526,26 +539,33 @@ export function PriceChart({
   const shownTrades = trades.filter((tr) => tr.t >= geo.t0 && tr.t <= geo.t1);
   const hTrades = h ? shownTrades.filter((tr) => Math.abs(tr.t - h.t) <= Math.max(geo.step, 5_000)) : [];
   // The predicted path in view, from the line's end: the dotted guess and its band, clipped to the plot.
+  // The predicted path in its zone past the view's end: the dotted guess and its band, clipped to
+  // the plot, from the latest reading (in the candle view, from the forming candle's slot end).
   const guess = (() => {
-    if (!pathShown || !atEnd) return null;
-    const steps = path.filter((s) => s.t > last.t && s.t <= geo.t1);
+    if (!geo.future) return null;
+    const p0 = path[0]!;
+    const steps = path.slice(1).filter((s) => s.t > p0.t);
     if (steps.length === 0) return null;
-    const clampY = (v: number) => Math.min(bottom, Math.max(PAD.t, axis.y(v)));
-    const at = (t: number, y: number) => `${x(t).toFixed(1)},${y.toFixed(1)}`;
-    const head = at(last.t, lastY);
     const end = steps[steps.length - 1]!;
+    const zx = PAD.l + geo.histW;
+    const fx = (t: number) => zx + ((t - p0.t) / Math.max(1, end.t - p0.t)) * (plotW - geo.histW);
+    const clampY = (v: number) => Math.min(bottom, Math.max(PAD.t, axis.y(v)));
+    const at = (t: number, y: number) => `${fx(t).toFixed(1)},${y.toFixed(1)}`;
+    const head = `${zx.toFixed(1)},${lastY.toFixed(1)}`;
+    const lead = px(last) < zx - 1 ? `M${px(last).toFixed(1)},${lastY.toFixed(1)} L${head}` : `M${head}`;
     return {
-      line: `M${head} ${steps.map((s) => `L${at(s.t, axis.y(s.v))}`).join(" ")}`,
+      zx,
+      line: `${lead} ${steps.map((s) => `L${at(s.t, axis.y(s.v))}`).join(" ")}`,
       band: `M${head} ${steps.map((s) => `L${at(s.t, clampY(s.hi))}`).join(" ")} ${[...steps]
         .reverse()
         .map((s) => `L${at(s.t, clampY(s.lo))}`)
         .join(" ")} Z`,
-      dots: steps.map((s) => ({ cx: x(s.t), cy: axis.y(s.v) })),
-      endX: x(end.t),
+      dots: steps.map((s) => ({ cx: fx(s.t), cy: axis.y(s.v) })),
+      endX: fx(end.t),
       // The label sits under the band's end, or over it when the band runs to the plot's foot.
       labelY: clampY(end.lo) + 14 <= bottom ? clampY(end.lo) + 14 : clampY(end.hi) - 6,
-      secs: Math.round((end.t - last.t) / 1_000),
-      change: end.v / last.v - 1,
+      secs: Math.round((end.t - p0.t) / 1_000),
+      change: end.v / p0.v - 1,
     };
   })();
   const entryAt = entry !== null && entry > 0 ? axis.y(entry) : null;
@@ -565,11 +585,14 @@ export function PriceChart({
             {signedPct(change(lead.mcap, hv))} vs {lead.label.toLowerCase()}
           </span>
         ) : null}
-        {hb && (
-          <span className="num faint">
-            O {axisUsd(hb.o)} · H {axisUsd(hb.h)} · L {axisUsd(hb.l)} · C {axisUsd(hb.c)}
-          </span>
-        )}
+        {hb &&
+          (hb.flat ? (
+            <span className="faint">No trades: the price held</span>
+          ) : (
+            <span className="num faint">
+              O {axisUsd(hb.o)} · H {axisUsd(hb.h)} · L {axisUsd(hb.l)} · C {axisUsd(hb.c)}
+            </span>
+          ))}
         {hScan && (
           <span className="pc-scan-line">
             <i className="tm-scan-dot" aria-hidden="true" /> Scan the model read: {usd(hScan.v)} at{" "}
@@ -772,11 +795,12 @@ export function PriceChart({
               const cx = slotX(i + 0.5);
               // A timeframe's first or last slot can start before the window or end after it.
               if (cx < PAD.l || cx > width - PAD.r) return null;
-              const bw = Math.min(12, Math.max(1, sliceW * 0.66));
+              const bw = candleBodyW(sliceW);
               const yo = axis.y(b.o);
               const yc = axis.y(b.c);
+              const dir = b.flat ? "flat" : b.c >= b.o ? "up" : "down";
               return (
-                <g key={i} className={`pc-candle ${b.c >= b.o ? "up" : "down"}${hBarIdx === i ? " on" : ""}`}>
+                <g key={i} className={`pc-candle ${dir}${hBarIdx === i ? " on" : ""}`}>
                   <line x1={cx} x2={cx} y1={axis.y(b.h)} y2={axis.y(b.l)} />
                   <rect
                     x={cx - bw / 2}
@@ -795,15 +819,19 @@ export function PriceChart({
         {guess && (
           <g className="pc-path">
             <title>
-              {`Experimental predicted path: ${signedPct(guess.change * 100, 1)} over the next ${guess.secs}s in 5-second steps, with the band it usually lands in. A statistical guess from the last minute's trading, often wrong; not advice.`}
+              {`Experimental predicted path: ${signedPct(guess.change * 100, 1)} over the next ${guess.secs}s in 5-second steps, with the band the price landed in about 8 times in 10 in testing. A statistical guess from the last minute's trading, often wrong; not advice.`}
             </title>
+            <line x1={guess.zx} x2={guess.zx} y1={PAD.t - 6} y2={bottom} className="pc-path-edge" />
+            <text x={(guess.zx + guess.endX) / 2} y={fullH - 6} textAnchor="middle" className="pc-tick">
+              {plotW - geo.histW >= 90 ? `next ${guess.secs}s` : `+${guess.secs}s`}
+            </text>
             <path d={guess.band} className="pc-path-band" />
             <path d={guess.line} className="pc-path-line" />
             {guess.dots.map((d, i) => (
               <circle key={i} cx={d.cx} cy={d.cy} r={1.6} className="pc-path-dot" />
             ))}
             {/* Too narrow to label without covering the line: the caption under the chart says it. */}
-            {guess.endX - x(last.t) >= 110 && (
+            {guess.endX - guess.zx >= 110 && (
               <text
                 x={Math.min(width - PAD.r - 4, guess.endX)}
                 y={Math.max(PAD.t + 8, guess.labelY)}
@@ -895,7 +923,8 @@ export function PriceChart({
               if (sx + sliceW / 2 < PAD.l || sx + sliceW / 2 > width - PAD.r) return null;
               const hb = Math.max(2, (b.usd / volMax) * (laneBottom - laneTop));
               // Thin bars even when a short view has few minutes: a wide block reads as a level, not a bar.
-              const bw = Math.min(14, Math.max(1.5, sliceW - 1.5));
+              // As wide as the candle over it in the candle view; thin bars under a line.
+              const bw = geo.bars ? candleBodyW(sliceW) : Math.min(14, Math.max(1.5, sliceW - 1.5));
               return (
                 <g key={i}>
                   <rect
@@ -1052,7 +1081,9 @@ export function PriceChart({
               value={timeframe ?? "auto"}
               onChange={(e) => pickTimeframe(e.target.value === "auto" ? null : Number(e.target.value))}
             >
-              <option value="auto">Auto</option>
+              <option value="auto">
+                {timeframe === null ? `Auto · ${timeframeLabel(geo.autoMs)}` : "Auto"}
+              </option>
               {TIMEFRAMES.map((f) => (
                 <option key={f.ms} value={f.ms}>
                   {f.label}
@@ -1112,6 +1143,16 @@ export function PriceChart({
       </div>
     </div>
   );
+}
+
+/**
+ * A candle's body width in a slot `sliceW` px wide: the slot less a gap of about a sixth (1 to 4
+ * px), so neighbours sit close and the row fills the plot, as an exchange chart's do; slots too
+ * thin for a gap draw edge to edge.
+ */
+export function candleBodyW(sliceW: number): number {
+  const gap = sliceW >= 3 ? Math.min(4, Math.max(1, sliceW / 6)) : 0;
+  return Math.max(0.6, sliceW - gap);
 }
 
 /** Labeled trades the readout lists by name at most; the rest are counted. */
