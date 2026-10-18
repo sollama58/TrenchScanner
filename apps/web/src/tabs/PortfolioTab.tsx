@@ -1,23 +1,12 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Card } from "../api";
 import { Skeleton } from "../components/Charts";
-import {
-  BellIcon,
-  ChartIcon,
-  CopyIcon,
-  CheckIcon,
-  InfoIcon,
-  RobotIcon,
-  ShieldIcon,
-  TransferIcon,
-  WalletIcon,
-} from "../components/Icons";
+import { ChartIcon, CloseIcon, InfoIcon, RobotIcon, TransferIcon, WalletIcon } from "../components/Icons";
 import { TokenImage } from "../components/TokenImage";
 import { sol, StatsStrip, TradeCard, type TradeCoin, type TradeStats } from "../components/TradesDrawer";
 import { useNow, usePolling } from "../hooks";
-import { ago, multiple, shortAddress, usd } from "../format";
+import { ago, shortAddress, usd } from "../format";
 import { openTokenModal } from "../tokenModal";
-import type { Tab } from "../routes";
 
 /** The API reads the wallet's holdings from the chain at most every 5 minutes; the rest is our own rows. */
 const PORTFOLIO_POLL_MS = 60_000;
@@ -38,22 +27,6 @@ interface Holding {
 }
 
 interface Portfolio {
-  account: {
-    walletAddress: string;
-    memberSince: string;
-    admin: boolean;
-    access: {
-      hasAccess: boolean;
-      reason: "admin" | "whitelist" | "subscription" | "free_access" | "none";
-      expiresAt: string | null;
-    };
-    pro: { source: string | null; rank: number | null; graceEndsAt: string | null };
-    burnCredits: number;
-    lookups30d: number;
-    burns: { count: number; months: number };
-    telegramChats: number;
-    linkedDevices: number;
-  };
   holdings: {
     readAt: string;
     sol: number | null;
@@ -62,6 +35,9 @@ interface Portfolio {
     trackedCoins: number;
     trackedValueUsd: number;
     untracked: number;
+    /** Tracked coins held below minSol (or unpriced): counted, not shown. */
+    dust: number;
+    minSol: number;
   } | null;
   botPositions: {
     id: string;
@@ -105,23 +81,6 @@ interface Portfolio {
       sniper: boolean;
     } | null;
   };
-  alerts: {
-    last7d: number;
-    last30d: number;
-    doubled30d: number;
-    best30d: {
-      at: string;
-      peakReturnPct: number | null;
-      mint: string;
-      symbol: string | null;
-      imageUrl: string | null;
-    } | null;
-    filtersActive: number;
-    filtersOff: number;
-    modelAlertsOn: boolean;
-    followsBestModel: boolean;
-    followedModels: { id: string; name: string }[] | null;
-  };
   solUsd: number | null;
 }
 
@@ -136,18 +95,6 @@ interface PortfolioTrades {
   solUsd: number | null;
 }
 
-const ACCESS_TEXT: Record<Portfolio["account"]["access"]["reason"], string> = {
-  admin: "Admin",
-  whitelist: "Whitelisted",
-  subscription: "Subscriber",
-  free_access: "Free access",
-  none: "No access",
-};
-
-function date(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}
-
 function amount(n: number): string {
   if (n >= 999_995_000) return `${(n / 1e9).toFixed(2)}B`;
   if (n >= 999_950) return `${(n / 1e6).toFixed(2)}M`;
@@ -160,13 +107,13 @@ const tone = (n: number | null | undefined) =>
   n === null || n === undefined || n === 0 ? "" : n > 0 ? " up" : " down";
 
 /**
- * The Portfolio tab (user ask 2026-10-18), shown to Pro Mode wallets only: everything
- * TrenchScanner knows about the signed-in wallet, for its owner alone (GET /portfolio and
+ * The Portfolio page (user ask 2026-10-18), opened from the wallet menu by Pro Mode wallets only: everything
+ * TrenchScanner knows about the signed-in wallet's trading, for its owner alone (GET /portfolio and
  * GET /pro/trades?view=portfolio, both 404 for anyone else).
  * Figures cover the coins TrenchScanner tracks; the wallet's other coins are counted, not shown,
  * and each section says where its figures come from.
  */
-export function PortfolioTab({ goTo }: { goTo: (tab: Tab) => void }) {
+export function PortfolioTab() {
   const { data, error } = usePolling<Portfolio>("/portfolio", PORTFOLIO_POLL_MS);
   const now = useNow(30_000);
   if (!data)
@@ -192,113 +139,11 @@ export function PortfolioTab({ goTo }: { goTo: (tab: Tab) => void }) {
           are counted but not shown, unless a section says otherwise. Only you can see this page.
         </span>
       </p>
-      <AccountPanel account={data.account} goTo={goTo} />
       <HoldingsPanel holdings={data.holdings} now={now} />
       <TradesPanel now={now} />
       {data.botPositions.length > 0 && <BotPanel positions={data.botPositions} now={now} />}
       <TapePanel tape={data.tape} now={now} />
-      <AlertsPanel alerts={data.alerts} goTo={goTo} />
     </div>
-  );
-}
-
-function AccountPanel({ account, goTo }: { account: Portfolio["account"]; goTo: (tab: Tab) => void }) {
-  const [copied, setCopied] = useState(false);
-  const { access } = account;
-  const copy = () =>
-    void navigator.clipboard
-      .writeText(account.walletAddress)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      })
-      .catch(() => undefined);
-  return (
-    <section className="panel">
-      <header className="section-head">
-        <div>
-          <span className="eyebrow">
-            <ShieldIcon size={13} /> Account
-          </span>
-          <h2>Your account</h2>
-        </div>
-        <button type="button" className="ghost" onClick={() => goTo("settings")}>
-          Account settings
-        </button>
-      </header>
-      <dl className="facts">
-        <div>
-          <dt>Wallet</dt>
-          <dd className="num portfolio-wallet">
-            <span title="Your wallet. Only you see it here.">{shortAddress(account.walletAddress)}</span>
-            <button
-              type="button"
-              className="ghost icon-btn"
-              onClick={copy}
-              aria-label={copied ? "Copied" : "Copy your wallet address"}
-            >
-              {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-            </button>
-          </dd>
-        </div>
-        <div>
-          <dt>Signed up</dt>
-          <dd className="num">{date(account.memberSince)}</dd>
-        </div>
-        <div>
-          <dt>Access</dt>
-          <dd>
-            <span className={`badge ${access.hasAccess ? "good" : "bad"}`}>{ACCESS_TEXT[access.reason]}</span>
-            {access.expiresAt && (
-              <span className="faint small">
-                {" "}
-                {access.hasAccess ? "until" : "ended"} {date(access.expiresAt)}
-              </span>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Pro Mode</dt>
-          <dd>
-            {account.pro.source === "holder" || account.pro.source === "grace"
-              ? `Top holder${account.pro.rank ? ` #${account.pro.rank}` : ""}`
-              : account.pro.source === "grant"
-                ? "Granted"
-                : "On"}
-            {account.pro.graceEndsAt && (
-              <span className="faint small"> until {new Date(account.pro.graceEndsAt).toLocaleString()}</span>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Burn Credits</dt>
-          <dd className="num">
-            {account.burnCredits}
-            <span className="faint small"> · {account.lookups30d} lookups in 30 days</span>
-          </dd>
-        </div>
-        <div>
-          <dt>Subscription burns</dt>
-          <dd className="num">
-            {account.burns.count}
-            {account.burns.months > 0 && (
-              <span className="faint small">
-                {" "}
-                · {account.burns.months} month{account.burns.months === 1 ? "" : "s"} bought
-              </span>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Telegram chats</dt>
-          <dd className="num">{account.telegramChats}</dd>
-        </div>
-        <div>
-          <dt>Linked phones</dt>
-          <dd className="num">{account.linkedDevices}</dd>
-        </div>
-      </dl>
-    </section>
   );
 }
 
@@ -354,24 +199,122 @@ function HoldingsPanel({ holdings, now }: { holdings: Portfolio["holdings"]; now
             </div>
           </dl>
           {holdings.coins.length === 0 ? (
-            <p className="faint small portfolio-empty">Your wallet holds no coins TrenchScanner tracks.</p>
+            <p className="faint small portfolio-empty">
+              Your wallet holds no coins TrenchScanner tracks worth {holdings.minSol} SOL or more.
+            </p>
           ) : (
-            <ul className="trades-grid portfolio-grid">
-              {holdings.coins.map((h) => (
-                <li key={h.mint}>
-                  <HoldingCard holding={h} now={now} />
-                </li>
-              ))}
-            </ul>
+            <HoldingsGrid coins={holdings.coins} now={now} total={holdings.trackedCoins} />
           )}
-          {holdings.trackedCoins > holdings.coins.length && (
+          {holdings.dust > 0 && (
             <p className="faint small">
-              Showing your {holdings.coins.length} largest of {holdings.trackedCoins} tracked coins.
+              {holdings.dust} more tracked coin{holdings.dust === 1 ? " is" : "s are"} worth under{" "}
+              {holdings.minSol} SOL, so {holdings.dust === 1 ? "it isn't" : "they aren't"} shown.
             </p>
           )}
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * The holdings cards that fit one row (two on narrow screens, where a row is one or two cards),
+ * with Show all opening every listed coin in a dialog.
+ */
+function HoldingsGrid({ coins, now, total }: { coins: Holding[]; now: number; total: number }) {
+  const grid = useRef<HTMLUListElement>(null);
+  const [cols, setCols] = useState(0);
+  const [all, setAll] = useState(false);
+  useEffect(() => {
+    const el = grid.current;
+    if (!el) return;
+    // The grid's own auto-fill decides the columns; count the tracks it laid out.
+    const measure = () => setCols(getComputedStyle(el).gridTemplateColumns.split(" ").filter(Boolean).length);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const fit = cols === 0 ? coins.length : cols * (cols >= 3 ? 1 : 2);
+  const shown = coins.slice(0, fit);
+  return (
+    <>
+      <ul className="trades-grid portfolio-grid" ref={grid}>
+        {shown.map((h) => (
+          <li key={h.mint}>
+            <HoldingCard holding={h} now={now} />
+          </li>
+        ))}
+      </ul>
+      {coins.length > shown.length && (
+        <button type="button" className="ghost portfolio-more" onClick={() => setAll(true)}>
+          Show all {coins.length}
+        </button>
+      )}
+      <HoldingsDialog open={all} onClose={() => setAll(false)} coins={coins} now={now} total={total} />
+    </>
+  );
+}
+
+function HoldingsDialog({
+  open,
+  onClose,
+  coins,
+  now,
+  total,
+}: {
+  open: boolean;
+  onClose: () => void;
+  coins: Holding[];
+  now: number;
+  total: number;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+  return (
+    <dialog
+      ref={ref}
+      className="about-modal sheet-modal holdings-modal"
+      aria-labelledby="holdings-title"
+      onClose={(e) => {
+        // Only this dialog's own close: a nested dialog's close bubbles up through React.
+        if (e.target === e.currentTarget) onClose();
+      }}
+      // A click on the backdrop lands on the dialog element itself; clicks inside land on its content.
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="about-body">
+        <header className="about-head">
+          <h2 id="holdings-title">Your holdings · {coins.length}</h2>
+          <button className="ghost icon-btn" onClick={onClose} aria-label="Close">
+            <CloseIcon size={16} />
+          </button>
+        </header>
+        {open && (
+          <>
+            <ul className="trades-grid portfolio-grid">
+              {coins.map((h) => (
+                <li key={h.mint}>
+                  <HoldingCard holding={h} now={now} />
+                </li>
+              ))}
+            </ul>
+            {total > coins.length && (
+              <p className="faint small">
+                Your {coins.length} largest of {total} tracked coins.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </dialog>
   );
 }
 
@@ -682,78 +625,6 @@ function TapePanel({ tape, now }: { tape: Portfolio["tape"]; now: number }) {
           </table>
         </div>
       )}
-    </section>
-  );
-}
-
-function AlertsPanel({ alerts, goTo }: { alerts: Portfolio["alerts"]; goTo: (tab: Tab) => void }) {
-  const doubledPct = alerts.last30d > 0 ? Math.round((alerts.doubled30d / alerts.last30d) * 100) : null;
-  return (
-    <section className="panel">
-      <header className="section-head">
-        <div>
-          <span className="eyebrow">
-            <BellIcon size={13} /> Alerts
-          </span>
-          <h2>Your alerts</h2>
-          <p className="muted small">Alerts from your own filters, and the models your feed follows.</p>
-        </div>
-        <button type="button" className="ghost" onClick={() => goTo("filters")}>
-          Filters
-        </button>
-      </header>
-      <dl className="facts">
-        <div>
-          <dt>Filters</dt>
-          <dd className="num">
-            {alerts.filtersActive} on
-            {alerts.filtersOff > 0 && <span className="faint small"> · {alerts.filtersOff} off</span>}
-          </dd>
-        </div>
-        <div>
-          <dt>Filter alerts</dt>
-          <dd className="num">
-            {alerts.last7d}
-            <span className="faint small"> in 7 days · {alerts.last30d} in 30</span>
-          </dd>
-        </div>
-        <div>
-          <dt>Reached 2x</dt>
-          <dd
-            className="num"
-            title="Of your filter alerts in the last 30 days, how many went on to double from the alert"
-          >
-            {alerts.doubled30d}
-            {doubledPct !== null && <span className="faint small"> · {doubledPct}% of 30 days</span>}
-          </dd>
-        </div>
-        <div>
-          <dt>Best in 30 days</dt>
-          <dd className="num">
-            {alerts.best30d ? (
-              <>
-                {alerts.best30d.symbol ? `$${alerts.best30d.symbol}` : shortAddress(alerts.best30d.mint)}{" "}
-                <span className="up">{multiple(alerts.best30d.peakReturnPct)}</span>
-              </>
-            ) : (
-              "–"
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Model alerts</dt>
-          <dd>
-            {!alerts.modelAlertsOn
-              ? "Off"
-              : alerts.followsBestModel
-                ? "Best performer"
-                : (alerts.followedModels ?? []).map((m) => m.name).join(", ") || "Default"}
-            <button type="button" className="link small portfolio-link" onClick={() => goTo("model")}>
-              Models
-            </button>
-          </dd>
-        </div>
-      </dl>
     </section>
   );
 }
