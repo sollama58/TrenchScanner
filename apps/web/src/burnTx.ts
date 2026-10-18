@@ -21,8 +21,7 @@ export const MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 /**
  * $ASDFASDFA, the access token (SUBSCRIPTION_MINT in core): the only mint this ever burns. The mint
  * comes to the burn panels from the API, so it is pinned here as well: a compromised API or a
- * tampered response can't turn "Burn for 1 month" into a burn of the wallet's USDC, now that the
- * embedded wallet signs without a window of its own.
+ * tampered response can't turn "Burn for 1 month" into a burn of the wallet's USDC.
  */
 export const ACCESS_MINT = "9zB5wRarXMj86MymwLumSKA1Dx35zPqqKfcZtK1Spump";
 
