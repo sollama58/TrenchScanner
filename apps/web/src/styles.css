@@ -5629,12 +5629,24 @@ html:has(dialog.about-modal[open]) {
 .meta-row > * {
   flex: 0 1 auto;
 }
-.meta-row > .pill-icon,
-.meta-row > .when {
+.meta-row > .pill-icon {
   flex: none;
 }
 .meta-row > .pill-calls {
   flex-shrink: 100;
+}
+/* "≈61% 2x" is short and means nothing cut. */
+.meta-row > .pill-rate {
+  flex: none;
+}
+.meta-row > .when {
+  flex: none;
+}
+/* High conviction: a filled mark beside the model pill, so neither is cut short. */
+.pill-conviction {
+  color: #fff;
+  border-color: var(--brand-a);
+  background: var(--brand-a);
 }
 .card-foot,
 .card-links {
@@ -7525,11 +7537,24 @@ html:has(dialog.about-modal[open]) {
     font-size: 14px;
     max-width: 100%;
   }
+  /* The high-conviction mark takes the rate's place: both don't fit. */
+  .cards[data-phone-cols="2"] .pill-conviction ~ .pill-rate {
+    display: none;
+  }
   .cards[data-phone-cols="2"] .token-name {
     display: none;
   }
   .cards[data-phone-cols="2"] .meta-row {
     gap: 4px;
+    overflow: hidden;
+  }
+  /* The time gives way at the card's edge rather than running past it. */
+  .cards[data-phone-cols="2"] .meta-row > .when {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .cards[data-phone-cols="2"] .pill {
     font-size: 10px;
@@ -9980,6 +10005,13 @@ html:has(dialog.about-modal[open]) {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: none;
+}
+/* The coin's X and website, beside the copy and Sage buttons. */
+.card-socials {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex: none;
 }
 /* Where the creator fee goes, in the theme's (or the reader's own) colors. */
@@ -17688,4 +17720,93 @@ body:has(.util-toast) .bug-fab {
 .tw-add input {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* Settings > Trading: the Trade panel's buttons, edited in place (PresetButtonsEditor). */
+.preset-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 0 4px;
+}
+.preset-editor-head .trading-sub {
+  margin: 0;
+}
+.preset-editors {
+  max-width: 760px;
+  margin-top: 8px;
+}
+.preset-edit {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  cursor: text;
+}
+.preset-edit input {
+  flex: 0 1 auto;
+  /* As wide as what's typed, so "%" sits right after the number as on the real button. */
+  width: calc(var(--len, 2) * 1ch + 4px);
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: center;
+  box-shadow: none;
+}
+.preset-edit:focus-within {
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
+}
+.preset-edit.bad {
+  border-style: dashed;
+}
+.preset-edit.locked {
+  cursor: default;
+  opacity: 0.85;
+}
+.preset-x {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-solid);
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.preset-edit:hover .preset-x,
+.preset-edit:focus-within .preset-x {
+  opacity: 1;
+}
+@media (hover: none) {
+  .preset-x {
+    opacity: 1;
+  }
+}
+.preset-editor .tm-presets {
+  overflow: visible;
+}
+.preset-editor .tm-preset {
+  overflow: visible;
+}
+.preset-editor-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
 }

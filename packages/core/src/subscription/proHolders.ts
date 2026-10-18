@@ -42,7 +42,10 @@ export interface ProHolderReader {
     mints: string[],
     n: number,
   ): Promise<
-    Map<string, { status: "found"; holders: { owner: string; pct?: number }[] } | { status: string }>
+    Map<
+      string,
+      { status: "found"; holders: { owner: string; pct?: number }[] } | { status: string; reason?: string }
+    >
   >;
 }
 
@@ -54,7 +57,9 @@ export async function refreshProHolders(
   // Pools and other program-owned accounts are left out after the read.
   const read = (await reader.getTopHoldersBatch([SUBSCRIPTION_MINT], PRO_HOLDER_READ)).get(SUBSCRIPTION_MINT);
   if (!read || read.status !== "found" || !("holders" in read))
-    throw new Error("couldn't read the $ASDFASDFA holders");
+    throw new Error(
+      `couldn't read the $ASDFASDFA holders${read && "reason" in read && read.reason ? ` (${read.reason})` : ""}`,
+    );
   const ranked = read.holders.filter((h) => isWalletAddress(h.owner));
   const top = ranked.slice(0, PRO_HOLDER_COUNT).map((h) => h.owner);
   if (top.length === 0) throw new Error("the $ASDFASDFA holder read came back empty");
