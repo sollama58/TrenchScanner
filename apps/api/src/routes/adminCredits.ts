@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   burnCreditPrices,
+  creditsOfRaw,
   CreditGrantError,
   grantCredits,
   prisma,
@@ -39,7 +40,7 @@ const grantSchema = z.object({
 
 export async function registerAdminCreditRoutes(app: FastifyInstance) {
   app.get("/credits", async () => {
-    const [prices, byKind, counts, wallets, recent] = await Promise.all([
+    const [prices, byKind, counts, wallets, recent, pot] = await Promise.all([
       burnCreditPrices(),
       prisma.burnCreditEntry.groupBy({ by: ["kind", "source"], _sum: { delta: true } }),
       // Lookups, not rows: one that drew on two pots of credits is a row per pot at the same time.
@@ -63,9 +64,12 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
           subject: true,
           note: true,
           source: true,
+          asdfRaw: true,
           createdAt: true,
         },
       }),
+      // The burned pot is held in ASDF (credits.ts creditPots): its credits at today's price.
+      prisma.burnCreditEntry.aggregate({ where: { source: "burned" }, _sum: { asdfRaw: true } }),
     ]);
     const sum = (kind: string, daily = false) =>
       byKind
@@ -82,9 +86,16 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
         spent: -sum("spend"),
         // Subscribers' free daily credits used: not part of any balance, so not in `outstanding`.
         dailyFreeUsed: -sum("spend", true),
-        outstanding: sum("burn") + sum("grant") + sum("spend"),
+        // Unspent granted credits plus the burned pot (held in ASDF) at the current price.
+        outstanding:
+          Math.round(
+            (byKind.filter((k) => k.source === "granted").reduce((n, k) => n + (k._sum.delta ?? 0), 0) +
+              creditsOfRaw(pot._sum.asdfRaw ?? 0n, prices.tokensPerCredit)) *
+              100,
+          ) / 100,
+        burnedRaw: (pot._sum.asdfRaw ?? 0n).toString(),
       },
-      recent,
+      recent: recent.map((r) => ({ ...r, asdfRaw: r.asdfRaw?.toString() ?? null })),
     };
   });
 

@@ -29,11 +29,12 @@ import {
   walletTag,
   prisma,
 } from "@trenchscanner/core";
-import { proStatus } from "../proMode.js";
+import { proStatus, type ProStatus } from "../proMode.js";
 import { requireTwoFactor } from "../twoFactor.js";
 import { accessSwapOpen as accessSwapOpenFor } from "./auth.js";
 import { SolPrice } from "../solPrice.js";
 import { feeSummary } from "../tradeFees.js";
+import { quoteSacrifice, sacrificeRefusal, sacrificeView, type SacrificeQuote } from "../sacrificeQuote.js";
 
 /**
  * Pro trades from the token modal (user decision 2026-10-17), for Pro Mode wallets only
@@ -51,6 +52,9 @@ import { feeSummary } from "../tradeFees.js";
  * signs them in the browser, and /send relays only a transaction the session's own wallet signed
  * and that tips Sender - so it can't be used to push anyone else's traffic on our Helius key.
  */
+
+/** Whether the Sacrifice is actually taken on this quote: "on", a fee payer, and priced. */
+const charged = (q: SacrificeQuote) => q.mode === "on" && !!q.tier?.pays && q.lamports !== null;
 
 const SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{80,90}$/;
 
@@ -80,6 +84,11 @@ const buildSchema = z.object({
 const feeSchema = z.object({
   mint: z.string().refine(looksLikeSolanaAddress, "not a token address"),
   speed: z.enum(["eco", "turbo"]),
+  /** The trade's SOL value the Sacrifice is quoted on, lamports. */
+  lamports: z
+    .string()
+    .regex(/^\d{1,15}$/)
+    .optional(),
   priorityFeeLamports: z
     .string()
     .regex(/^\d{1,10}$/)
@@ -258,6 +267,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       mint: string;
       lamports: bigint;
       networkFeeLamports: bigint;
+      /** The Sacrifice worked out at build (sacrificeQuote.ts): what the send takes or records. */
+      sacrifice: SacrificeQuote;
     }[]
   >();
 
@@ -299,15 +310,34 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     request: FastifyRequest,
     reply: FastifyReply,
     opts: { access?: boolean } = {},
-  ): Promise<{ wallet: string; pro: boolean } | null> {
+  ): Promise<{ wallet: string; pro: boolean; source: ProStatus["source"] } | null> {
     const wallet = request.user!.walletAddress;
     const status = await proStatus(env, wallet);
     if (!status.pro && !(opts.access && accessSwapOpen())) {
       reply.code(404).send({ error: "not found", notSent: true });
       return null;
     }
-    return { wallet, pro: status.pro };
+    return { wallet, pro: status.pro, source: status.source };
   }
+  /** The wallet's $ASDFASDFA now, for the Sacrifice's free-tier check; null when unreadable. */
+  const asdfBalance = (wallet: string) => () =>
+    rpc
+      .getTokenBalance(wallet, SUBSCRIPTION_MINT)
+      .then((b) => b?.raw ?? null)
+      .catch(() => null);
+  /** The Sacrifice on a trade worth `lamports` by this wallet (sacrificeQuote.ts). */
+  const sacrificeOn = (
+    who: { wallet: string; pro: boolean; source: ProStatus["source"] },
+    lamports: bigint,
+    access: boolean,
+  ) =>
+    quoteSacrifice({
+      wallet: who.wallet,
+      source: who.source,
+      access,
+      lamports,
+      liveBalance: asdfBalance(who.wallet),
+    });
   // The kill switch (PRO_TRADING_ENABLED) stops the access buy too.
   const accessSwapOpen = () => accessSwapOpenFor(env);
   /** A read about the access token itself, which the access buy's Trade panel needs. */
@@ -398,6 +428,13 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       // A partial sale is measured by what the route quotes for it, in lamports.
       if (!closing && body.side === "sell" && BigInt(built.quotedOut) < MIN_TRADE_LAMPORTS)
         return reply.code(422).send({ error: tooSmall("sell") });
+      const tradeLamports = body.side === "buy" ? amount : BigInt(built.quotedOut);
+      // The Sacrifice (ASDF fee plan): worked out here and kept on the build, so the send takes
+      // exactly this number. In "on" mode a fee payer short of burned credits is refused with
+      // the credits to top up, and an unusable ASDF price refuses rather than guesses.
+      const sacrifice = await sacrificeOn(who, tradeLamports, accessBuy && !who.pro);
+      const refused = sacrificeRefusal(sacrifice);
+      if (refused) return reply.code(refused.code).send(refused.body);
       const builtWire = parseWireTransaction(Buffer.from(built.transaction, "base64"));
       const message = decodeMessage(builtWire.message);
       const list = liveBuilds(wallet);
@@ -410,12 +447,17 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         closing,
         message,
         mint: body.mint,
-        lamports: body.side === "buy" ? amount : BigInt(built.quotedOut),
+        lamports: tradeLamports,
         networkFeeLamports: BigInt(built.priorityFeeLamports) + BigInt(built.tipLamports) + BASE_FEE_LAMPORTS,
+        sacrifice,
       });
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
       if (builds.size > 5_000) builds.clear();
-      return { ...built, quietSign: await quietSign(rpc, wallet, body.mint, body.side) };
+      return {
+        ...built,
+        quietSign: await quietSign(rpc, wallet, body.mint, body.side),
+        sacrifice: sacrificeView(sacrifice),
+      };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof TradeRejected || err instanceof NoRouteError)
@@ -446,25 +488,37 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     }
   });
 
-  // What a trade would pay the network now (priority fee and Sender's tip), for the panel to show
-  // before anything is built. TrenchScanner itself takes nothing.
+  // What a trade would pay now: the network (priority fee and Sender's tip) and the Sacrifice
+  // (ASDF fee plan) on a trade of `lamports` (the panel's amount; 0.1 SOL when left out).
+  // platformFeeLamports is the Sacrifice's SOL value only while it is "on" and the wallet pays;
+  // `sacrifice` says the tier, the credits and the burned-credit balance in every mode.
   app.get("/trade/fee", { config: { rateLimit: READ_RATE_LIMIT } }, async (request, reply) => {
     const who = await proWallet(request, reply, { access: accessMint(request.query) });
     if (!who) return;
     const parsed = feeSchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const q = parsed.data;
-    const fees = await estimateManualFees(rpc, {
-      mint: q.mint,
-      speed: q.speed,
-      ...(q.priorityFeeLamports !== undefined ? { priorityFeeLamports: BigInt(q.priorityFeeLamports) } : {}),
-      ...(q.tipLamports !== undefined ? { tipLamports: BigInt(q.tipLamports) } : {}),
-    });
+    const [fees, sacrifice] = await Promise.all([
+      estimateManualFees(rpc, {
+        mint: q.mint,
+        speed: q.speed,
+        ...(q.priorityFeeLamports !== undefined
+          ? { priorityFeeLamports: BigInt(q.priorityFeeLamports) }
+          : {}),
+        ...(q.tipLamports !== undefined ? { tipLamports: BigInt(q.tipLamports) } : {}),
+      }),
+      sacrificeOn(
+        who,
+        q.lamports !== undefined && BigInt(q.lamports) > 0n ? BigInt(q.lamports) : DEFAULT_REF_LAMPORTS,
+        !who.pro && q.mint === SUBSCRIPTION_MINT,
+      ),
+    ]);
     return {
       priorityFeeLamports: fees.priorityFeeLamports.toString(),
       tipLamports: fees.tipLamports.toString(),
       baseFeeLamports: fees.baseFeeLamports.toString(),
-      platformFeeLamports: "0",
+      platformFeeLamports: charged(sacrifice) ? sacrifice.lamports!.toString() : "0",
+      sacrifice: sacrificeView(sacrifice),
     };
   });
 
@@ -479,7 +533,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     let ref = q.refLamports !== undefined ? BigInt(q.refLamports) : DEFAULT_REF_LAMPORTS;
     if (ref <= 0n) ref = DEFAULT_REF_LAMPORTS;
     if (ref > MAX_REF_LAMPORTS) ref = MAX_REF_LAMPORTS;
-    const costs = await swapCostsFor(who.wallet, q.mint, ref);
+    const [costs, sacrifice] = await Promise.all([
+      swapCostsFor(who.wallet, q.mint, ref),
+      sacrificeOn(who, ref, !who.pro && q.mint === SUBSCRIPTION_MINT),
+    ]);
     if (!costs) return reply.code(503).send({ error: "Couldn't read the swap's costs just now." });
     return {
       refLamports: ref.toString(),
@@ -488,7 +545,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       venues: costs.venues,
       priceImpactPct: costs.priceImpactPct,
       accountRentLamports: costs.accountRentLamports.toString(),
-      platformFeeBps: 0,
+      platformFeeBps: charged(sacrifice) ? 20 : 0,
+      sacrifice: sacrificeView(sacrifice),
     };
   });
 

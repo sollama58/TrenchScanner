@@ -37,6 +37,9 @@ import {
   COMMIT_GRACE_MS,
   workerConfigMeta,
   type HeartbeatJob,
+  ASDF_PRICE_SAMPLE_MS,
+  JupiterSwapClient,
+  sampleAsdfPrice,
 } from "@trenchscanner/core";
 import { BAND_ENTRY_CHECK_MS, BandEntryWatch } from "./bandEntryWatch.js";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
@@ -574,6 +577,21 @@ async function main() {
         },
       ),
     );
+  // The Sacrifice's ASDF price (asdfPrice.ts in core): a Jupiter quote of 1 SOL into ASDF and the
+  // Price API ratio every 15 seconds. On while Pro trading is open beyond the admins, as the holder
+  // scan is, so a day of samples is there before the Sacrifice is switched on. The trading key when
+  // this service has one, else Jupiter's keyless host: never the scan's JUPITER_API_KEY budget.
+  if (env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC) {
+    const asdfPriceReader = new JupiterSwapClient({ apiKey: env.PRO_TRADING_JUPITER_API_KEY || undefined });
+    schedule("asdf-price", () =>
+      scheduleInterval(
+        "asdf-price",
+        async () => ({ ...(await sampleAsdfPrice(asdfPriceReader)) }),
+        ASDF_PRICE_SAMPLE_MS / 60_000,
+        { deadlineMinutes: 1 },
+      ),
+    );
+  }
   // Rolls match peaks forward from data already banked - no upstream calls. Off the scan cycle on
   // purpose: see createMatchPeaksRunner.
   const runMatchPeaks = createMatchPeaksRunner(env.SNAPSHOT_RETENTION_DAYS, repairOutcomeBookkeeping, {

@@ -2032,8 +2032,18 @@ model BurnCreditEntry {
   /// and not part of the balance). Lookups draw daily, then granted, then burned; trading draws
   /// burned only. A lookup that draws on two pots is one spend row per pot, at the same createdAt.
   source          String   @default("burned")
+  /// The burned pot is held in $ASDFASDFA, not credits (owner decision 2026-10-18, "Hold in
+  /// ASDF"): the signed base units a "burned" row adds or takes (a burn positive, a spend or a
+  /// Sacrifice negative). A wallet's burned credits are their sum over the current
+  /// tokensPerCredit, so a reprice changes the credits shown, never the ASDF held. Null on
+  /// "granted" and "daily" rows, which count whole credits in `delta`.
+  asdfRaw         BigInt?
+  /// A trade's transaction signature, on the Sacrifice rows a Pro trade writes. UNIQUE with
+  /// `kind`, so a trade is charged once and refunded at most once.
+  tradeSignature  String?
   createdAt       DateTime @default(now())
 
+  @@unique([kind, tradeSignature])
   @@index([wallet, createdAt])
   @@index([wallet, utility, subject, createdAt])
 }
@@ -2100,6 +2110,11 @@ model ProHolder {
   /// What it held at that scan, in raw units (from its share of supply): the 250th row's is what
   /// it takes to get in, shown in Settings' Pro Mode card. Null from scans before this was kept.
   heldRaw       String?
+  /// The Sacrifice's free tier (ASDF fee plan, Build guide step 3): set by the scan that finds the
+  /// wallet at or above the free cut-off (SacrificeSettings.freeRank), kept while it stays within
+  /// the cut-off plus 10 (capped at 250), cleared by the first scan that finds it lower or out.
+  /// A failed scan writes nothing, so stale scans keep every tier as it was.
+  freeTierSince DateTime?
 
   @@index([lastInTopAt])
 }
@@ -3408,4 +3423,34 @@ model WalletIdentity {
   readAt   DateTime @default(now())
 
   @@index([readAt])
+}
+
+/// The $ASDFASDFA price the Sacrifice is charged at (ASDF fee plan, Build guide step 2): the worker
+/// samples ASDF per SOL every 15 seconds from a Jupiter quote of 1 SOL ("quote") and the Price
+/// API ratio ("price", DexScreener backing it up). asdfPrice.ts smoothedAsdfPerSol takes the
+/// higher of the 5-minute and 24-hour medians. Pruned after 25 hours.
+model AsdfPriceSample {
+  id         BigInt   @id @default(autoincrement())
+  at         DateTime
+  /// "quote" | "price"
+  source     String
+  /// Whole ASDF one SOL buys.
+  asdfPerSol Float
+
+  @@index([at])
+}
+
+/// The Sacrifice (ASDF fee plan): the 0.2% fee on Pro trades by wallets below the free cut-off,
+/// paid from burned credits. One row, id "sacrifice", read through a 30 second cache
+/// (sacrifice.ts sacrificeSettings), so it changes from Admin > Pro Mode without a deploy.
+/// PRO_TRADING_ENABLED stays the kill switch for trading as a whole.
+model SacrificeSettings {
+  id        String   @id @default("sacrifice")
+  /// "off" (nothing shown or taken), "shadow" (worked out and recorded, never taken) or "on".
+  mode      String   @default("off")
+  /// Holders at or above this rank trade free; the buffer is this plus 10, capped at 250.
+  freeRank  Int      @default(250)
+  /// The admin wallet that last changed it.
+  updatedBy String?
+  updatedAt DateTime @updatedAt
 }

@@ -5,6 +5,10 @@ import {
   isWalletAddress,
   prisma,
   proHolderSummary,
+  PRO_HOLDER_COUNT,
+  sacrificeSettings,
+  saveSacrificeSettings,
+  smoothedAsdfPerSol,
   SUBSCRIPTION_MINT_DECIMALS,
   type Env,
   walletTag,
@@ -25,7 +29,30 @@ const grantSchema = z.object({
   days: z.number().int().min(1).max(3650).optional(),
 });
 
+const sacrificeSchema = z.object({
+  mode: z.enum(["off", "shadow", "on"]),
+  freeRank: z.number().int().min(1).max(PRO_HOLDER_COUNT),
+});
+
 export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { env: Env }) {
+  // The Sacrifice on Admin > Pro Mode (sacrifice.ts): its mode and free cut-off, and the ASDF
+  // price it is charged at (asdfPrice.ts) with each source's spot price and the guard state.
+  app.get("/pro-mode/sacrifice", async () => {
+    const [settings, price] = await Promise.all([sacrificeSettings(), smoothedAsdfPerSol()]);
+    return { settings, price };
+  });
+
+  app.put("/pro-mode/sacrifice", async (request, reply) => {
+    const parsed = sacrificeSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const by = request.user!.walletAddress;
+    const settings = await saveSacrificeSettings(parsed.data, by);
+    request.log.info({ settings, by: walletTag(by) }, "sacrifice settings changed");
+    return { settings };
+  });
+
   app.get("/pro-mode", async () => {
     const [grants, holders] = await Promise.all([
       prisma.proModeGrant.findMany({ orderBy: { createdAt: "desc" } }),

@@ -7,6 +7,7 @@ import {
   DailyFreeLine,
   LookupCard,
   LookupWhat,
+  creditCount,
   plural,
   SYMBOL,
   UtilityTokenModal,
@@ -301,7 +302,7 @@ function CreditsColumn({ data, onRefill }: { data: UtilitiesOverview | null; onR
       <div className="util-balance" aria-live="polite">
         {data ? (
           <>
-            <span className="num">{data.balance.toLocaleString("en-US")}</span>
+            <span className="num">{creditCount(data.balance)}</span>
             <small className="muted">credit{data.balance === 1 ? "" : "s"}</small>
           </>
         ) : (
