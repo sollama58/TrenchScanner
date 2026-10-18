@@ -29,6 +29,7 @@ export function TopHolders({
   flagged,
   entries = {},
   pending = false,
+  defaultOpen = false,
 }: {
   snapshot: Snapshot | null | undefined;
   flagged: readonly FlaggedHolder[];
@@ -36,9 +37,11 @@ export function TopHolders({
   entries?: Readonly<Record<string, HolderEntry>>;
   /** A fresh scan is reading the holders now: the list's place is held until it lands. */
   pending?: boolean;
+  /** Open from the start: the Scope terminal's Holders tab, where the list is the tab's point. */
+  defaultOpen?: boolean;
 }) {
   const [all, setAll] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const bodyId = useId();
   const graph = useMemo(() => (snapshot ? buildGraph(snapshot, flagged) : null), [snapshot, flagged]);
   const holders = useMemo(
