@@ -361,4 +361,25 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     expect(await proHolderStanding(mover, at)).toEqual({ state: "none" });
     resetProHolderCacheForTests();
   });
+
+  it("gives the first scan's holders Pro Mode at once, then makes newcomers wait their hour", async () => {
+    await prisma.proHolder.deleteMany({});
+    resetProHolderCacheForTests();
+    const first = new Date();
+    const scan = (owners: string[], at: Date) =>
+      refreshProHolders(
+        {
+          getTopHoldersBatch: async (mints) =>
+            new Map(mints.map((m) => [m, { status: "found", holders: owners.map((owner) => ({ owner })) }])),
+        },
+        at,
+      );
+    await scan([HOLDER], first);
+    expect(await proHolderStanding(HOLDER, first)).toMatchObject({ state: "top", rank: 1 });
+    const next = new Date(first.getTime() + 5 * 60_000);
+    await scan([HOLDER, NEWBIE], next);
+    expect(await proHolderStanding(HOLDER, next)).toMatchObject({ state: "top" });
+    expect(await proHolderStanding(NEWBIE, next)).toMatchObject({ state: "pending" });
+    resetProHolderCacheForTests();
+  });
 });

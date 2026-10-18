@@ -15,6 +15,8 @@ import { SUBSCRIPTION_MINT } from "./constants.js";
  */
 
 export const PRO_HOLDER_COUNT = 250;
+/** The worker's scan cadence: a qualifying wallet gets Pro Mode within this of its hour. */
+export const PRO_HOLDER_SCAN_MINUTES = 5;
 export const PRO_HOLDER_GRACE_MS = 24 * 60 * 60_000;
 /**
  * How long a wallet must stay in the top 250, scan after scan, before it gets Pro Mode: without
@@ -61,7 +63,11 @@ export async function refreshProHolders(
   // A wallet in the previous scan too keeps its run going, and so does one back in the top 250
   // during its grace that had qualified and kept its bag; anyone else starts one now.
   const previous = (await prisma.proHolder.aggregate({ _max: { lastInTopAt: true } }))._max.lastInTopAt;
-  const rows = top.map((wallet, i) => Prisma.sql`(${wallet}, ${i + 1}, ${now}, ${now})`);
+  // The very first scan (Pro trading just opened to holders) has no earlier scan to wait on: the
+  // wallets already in the top 250 count as having held for the hour, so Pro Mode starts with it
+  // rather than an hour after launch. Every later newcomer waits its hour.
+  const since = previous ? now : new Date(now.getTime() - PRO_HOLDER_QUALIFY_MS);
+  const rows = top.map((wallet, i) => Prisma.sql`(${wallet}, ${i + 1}, ${now}, ${since})`);
   await prisma.$executeRaw`
     INSERT INTO "ProHolder" ("walletAddress", "rank", "lastInTopAt", "inTopSince")
     VALUES ${Prisma.join(rows)}
