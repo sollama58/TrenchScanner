@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma, type Env } from "@trenchscanner/core";
+import { prisma, walletTag, type Env } from "@trenchscanner/core";
 import { clientIp } from "../clientIp.js";
 
 /**
@@ -184,7 +184,10 @@ export async function registerFeedbackRoutes(app: FastifyInstance, opts: { env: 
         },
         select: { id: true },
       });
-      request.log.info({ id: created.id, kind, wallet }, "received a feedback report");
+      request.log.info(
+        { id: created.id, kind, wallet: wallet && walletTag(wallet) },
+        "received a feedback report",
+      );
       return { ok: true, id: created.id };
     },
   );
