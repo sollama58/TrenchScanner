@@ -515,9 +515,8 @@ function BaselineChart({
                 {board.followBest !== false ? (
                   <>
                     Your Live feed follows <strong>the default</strong>: the {board.defaultRule?.count ?? 3}{" "}
-                    models with the best proven 2x rate plus the champion (marked default below), updated as
-                    the ranking changes. Switching a model on or off switches you to your own choice of
-                    models.
+                    models with the best score plus the champion (marked default below), updated as the
+                    ranking changes. Switching a model on or off switches you to your own choice of models.
                   </>
                 ) : (
                   <>
@@ -1272,7 +1271,7 @@ function LeaderboardPanel({
                       <strong>{e.name}</strong>
                       {e.isBest && (
                         <span className="chip chip-model" title={bestReturnTitle(board, now)}>
-                          best 24h return
+                          best 24h score
                         </span>
                       )}
                       {e.isDefault && (
@@ -1538,7 +1537,7 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
               target.
             </li>
           )}
-          {w.runSize != null && (
+          {!!w.runSize && (
             <li>
               <strong>{Math.round(w.runSize * 100)} points for run size.</strong> How far its alerts went over
               the 24 hours after the alert, counted in doublings (a 4x is 2, a 32x is 5, capped at 100x),
@@ -1551,20 +1550,20 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
             <li>
               <strong>{Math.round(w.returnPct * 100)} points for average return.</strong> What an alert
               returns when traded under the fixed exit plan, averaged over every alert: nothing at{" "}
-              {sc.returnFloorPct ?? -50}% (every alert a full stop), full points at +
-              {sc.returnTargetPct ?? 25}
-              %. The hit rates count a coin that fell to the stop the same as one that went nowhere; this part
-              tells them apart. A record without simulated returns is scored on the other parts, scaled to
-              100.
+              {sc.returnFloorPct ?? -50}%, full points at +{sc.returnTargetPct ?? 25}%, so breaking even earns
+              half. The hit rates count a coin that fell to the stop the same as one that went nowhere; this
+              part tells them apart. A record without simulated returns is scored on the other parts, scaled
+              to 100.
             </li>
           )}
           {w.catchRate != null && (
             <li>
               <strong>{Math.round(w.catchRate * 100)} points for catching runners.</strong> Of the tokens that
-              doubled in its backtest, the share it flagged at a winning moment, against a{" "}
-              {sc.catchTargetPct ?? 75}% target. The hit rates alone reward a model for flagging only its
-              surest few; this part counts the runners it let slip by. Only the backtest knows every runner a
-              model could have flagged, so a model without one is scored on the other parts, scaled to 100.
+              doubled since it started alerting, the share it flagged at a winning moment, against a{" "}
+              {sc.catchTargetPct ?? 75}% target, with its backtest&apos;s runners filling in while it is new.
+              The hit rates alone reward a model for flagging only its surest few; this part counts the
+              runners it let slip by. A model with no runners to judge is scored on the other parts, scaled to
+              100.
             </li>
           )}
           <li>
@@ -1603,7 +1602,7 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
                 <span className="num">{b.points10x.toFixed(0)}</span> points)
               </>
             )}
-            {b.pointsRun != null && b.provenRunDoublings != null && w.runSize != null && (
+            {b.pointsRun != null && b.provenRunDoublings != null && !!w.runSize && (
               <>
                 {" "}
                 and a run size of <span className="num">{b.provenRunDoublings.toFixed(2)}</span> doublings per
@@ -1733,7 +1732,7 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           {w.tenXRate != null
             ? `, ${Math.round(w.tenXRate * 100)} for how often its alerts hit 10x within an hour`
             : ""}
-          {w.runSize != null
+          {w.runSize
             ? `, ${Math.round(w.runSize * 100)} for run size, how far its alerts run over the day after`
             : ""}
           {w.returnPct != null
@@ -1765,10 +1764,10 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           <strong>The default.</strong>{" "}
           {board.defaultRule ? (
             <>
-              The default feed is the {board.defaultRule.count} models with the best 2x rate at the low end of
-              its {board.defaultRule.rankConfidencePct ?? 95}% range (so a short record counts for less),
-              among those with at least {board.defaultRule.rankMinGraded ?? board.defaultRule.minGraded}{" "}
-              graded alerts over the last {board.defaultRule.rankWindowHours ?? board.defaultRule.windowHours}
+              The default feed is the {board.defaultRule.count} models with the best leaderboard score on
+              their live alerts (the same score, so a short record counts for less), among those with at least{" "}
+              {board.defaultRule.rankMinGraded ?? board.defaultRule.minGraded} graded alerts over the last{" "}
+              {board.defaultRule.rankWindowHours ?? board.defaultRule.windowHours}
               h, picked every {Math.round(board.defaultRule.refreshMinutes / 60)} hours (00, 06, 12 and 18
               UTC) and held until the next pick. The champion joins them when it did not rank in, so the
               default is 4 models at most. Everyone who follows the default sees their alerts combined. With
@@ -1776,11 +1775,10 @@ function HowItWorks({ board }: { board: Leaderboard }) {
             </>
           ) : (
             <>
-              After each run the model with the best score on the full scorecard (2x, 4x and 10x rates,
-              average return and run size) over the last 72 hours (with at least{" "}
-              {board.champion?.minLiveGraded ?? 10} graded live alerts) becomes the default feed, and everyone
-              who follows the best switches to it. Until a model qualifies, the default is the Consensus when
-              it is alerting, else Rules.
+              After each run the model with the best leaderboard score (2x, 4x and 10x rates, average return
+              and catch) over the last 72 hours (with at least {board.champion?.minLiveGraded ?? 10} graded
+              live alerts) becomes the default feed, and everyone who follows the best switches to it. Until a
+              model qualifies, the default is the Consensus when it is alerting, else Rules.
             </>
           )}
         </li>

@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  pickBestReturnModel,
+  pickBestModel,
   pickTopModels,
   rankTopModels,
   servableTopModels,
-  topModelsLowerBound,
   topModelsWindow,
   TOP_MODELS_RANK_MIN_GRADED,
 } from "./topModels.js";
@@ -21,21 +20,17 @@ import {
 import { CONTESTANTS } from "./contestants.js";
 
 const N = TOP_MODELS_RANK_MIN_GRADED;
-const s = (id: string, wins: number, graded: number, calling = true) => ({ id, wins, graded, calling });
+const s = (id: string, score: number | null, graded: number, calling = true) => ({
+  id,
+  wins: 0,
+  graded,
+  calling,
+  score,
+});
 
 describe("pickTopModels", () => {
-  it("ranks by the 2x lower bound, so a short hot streak loses to a longer good record", () => {
-    // "hot" hits 2x on 28% of a short record; "steady" on 25% of four times as many calls.
-    const hot = s("hot", Math.round(0.28 * N), N);
-    const steady = s("steady", N, 4 * N);
-    expect(topModelsLowerBound(steady)).toBeGreaterThan(topModelsLowerBound(hot));
-    expect(
-      pickTopModels([hot, steady, s("c", Math.round(0.2 * N), N), s("d", Math.round(0.1 * N), N)]),
-    ).toEqual(["steady", "hot", "c"]);
-  });
-
-  it("ranks best first on equal volume, which is the 2x rate", () => {
-    expect(pickTopModels([s("a", 10, N), s("b", 20, N), s("c", 15, N), s("d", 5, N)])).toEqual([
+  it("ranks by the composite score, best first", () => {
+    expect(pickTopModels([s("a", 20, N), s("b", 31, N), s("c", 25, N), s("d", 12, N)])).toEqual([
       "b",
       "c",
       "a",
@@ -43,14 +38,14 @@ describe("pickTopModels", () => {
   });
 
   it("skips models under the graded-call floor and models that can't call", () => {
-    const lucky = s("lucky", 2, 2);
-    const silent = s("silent", N, N, false);
-    expect(pickTopModels([lucky, silent, s("a", 10, N), s("b", 9, N), s("c", 8, N)])).toEqual([
+    const lucky = s("lucky", 90, 2);
+    const silent = s("silent", 80, N, false);
+    expect(pickTopModels([lucky, silent, s("a", 30, N), s("b", 29, N), s("c", 28, N)])).toEqual([
       "a",
       "b",
       "c",
     ]);
-    expect(pickTopModels([s("a", N - 1, N - 1), s("b", 9, N), s("c", 8, N), s("d", 1, N)])).toEqual([
+    expect(pickTopModels([s("a", 95, N - 1), s("b", 30, N), s("c", 20, N), s("d", 10, N)])).toEqual([
       "b",
       "c",
       "d",
@@ -58,11 +53,16 @@ describe("pickTopModels", () => {
   });
 
   it("returns null when fewer than three qualify", () => {
-    expect(pickTopModels([s("a", 10, N), s("b", 9, N), s("c", 9, 5)])).toBeNull();
+    expect(pickTopModels([s("a", 30, N), s("b", 29, N), s("c", 29, 5)])).toBeNull();
   });
 
-  it("breaks ties on the longer record, then the id", () => {
-    expect(rankTopModels([s("b", 0, N), s("a", 0, N), s("c", 0, 2 * N)])).toEqual(["c", "a", "b"]);
+  it("breaks ties on the longer record, then the id; an unscored model ranks last", () => {
+    expect(rankTopModels([s("b", 20, N), s("a", 20, N), s("c", 20, 2 * N), s("z", null, N)])).toEqual([
+      "c",
+      "a",
+      "b",
+      "z",
+    ]);
   });
 });
 
@@ -89,23 +89,14 @@ describe("servableTopModels", () => {
   });
 });
 
-describe("pickBestReturnModel", () => {
-  const r = (id: string, avg: number, graded = 40, calling = true) => ({
-    id,
-    wins: 0,
-    graded,
-    calling,
-    simCalls: graded,
-    sumSimReturnPct: avg * graded,
-  });
-
-  it("picks the best average exit-plan return over the floor", () => {
-    expect(pickBestReturnModel([r("a", 5), r("b", 12), r("c", -3)])).toBe("b");
+describe("pickBestModel", () => {
+  it("picks the best composite score over the floor", () => {
+    expect(pickBestModel([s("a", 20, 40), s("b", 33, 40), s("c", 10, 40)])).toBe("b");
   });
 
   it("ignores a short lucky record and models that can't call", () => {
-    expect(pickBestReturnModel([r("a", 5), r("lucky", 300, 2), r("silent", 50, 40, false)])).toBe("a");
-    expect(pickBestReturnModel([r("lucky", 300, 2)])).toBeNull();
+    expect(pickBestModel([s("a", 20, 40), s("lucky", 90, 2), s("silent", 50, 40, false)])).toBe("a");
+    expect(pickBestModel([s("lucky", 90, 2)])).toBeNull();
   });
 });
 

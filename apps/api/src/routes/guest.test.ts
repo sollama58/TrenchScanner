@@ -154,12 +154,13 @@ describe.skipIf(!dbAvailable)("guest feed", () => {
 });
 
 /**
- * The default feed as top models: the three best 2x lower bounds (with enough graded calls) are
+ * The default feed as top models: the three best composite scores (with enough graded calls) are
  * picked, and a token several of them called is one guest card. Seeded under model ids no real
  * roster has, so the shared test database's real default never changes under other test files.
  */
 describe.skipIf(!dbAvailable)("top-models default feed", () => {
   const TOP = `top-models-test-${Date.now()}`;
+  const targets = { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 };
   const ids = ["a", "b", "c", "d", "lucky"].map((k) => `${TOP}-${k}`);
   const [a, b, c, d, lucky] = ids as [string, string, string, string, string];
   const roster = ids.map((id) => ({ id, name: id, role: "learner" }) as unknown as ContestantSpec);
@@ -176,8 +177,8 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
     // The ranked calls sit inside the current 6-hour slot's window, which ends before the slot starts.
     const windowEnd = topModelsWindow(new Date()).until.getTime();
     const beforeWindowEnd = (h: number) => new Date(windowEnd - h * 3_600_000);
-    // a 50%, b 40%, c 30%, d 20%: a, b and c make the cut. lucky is 2 for 2, under the floor.
-    // d has the worst 2x rate but the best average exit-plan return: the "best" marker, not top 3.
+    // a 50%, b 40%, c 30%, d 20%, all at the same return: a, b and c make the cut, a is "best".
+    // lucky is 2 for 2 at +300%, under the floor.
     const graded = (model: string, wins: number, sim = -10) =>
       Array.from({ length: n }, (_, i) => ({
         ...base,
@@ -192,7 +193,7 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
         ...graded(a, n * 0.5),
         ...graded(b, n * 0.4),
         ...graded(c, n * 0.3),
-        ...graded(d, n * 0.2, 25),
+        ...graded(d, n * 0.2),
         {
           ...base,
           tokenId: solo,
@@ -229,10 +230,10 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
     await prisma.topModelsPick.deleteMany({});
   };
 
-  it("picks the three best 2x lower bounds among models with enough graded calls", async () => {
+  it("picks the three best composite scores among models with enough graded calls", async () => {
     await forgetPicks();
-    const picked = await loadTopModels(roster, [], () => true);
-    expect(picked).toMatchObject({ top: [a, b, c], best: d });
+    const picked = await loadTopModels(roster, [], () => true, targets);
+    expect(picked).toMatchObject({ top: [a, b, c], best: a });
     expect(picked.last24h.get(a)).toEqual({
       graded: TOP_MODELS_RANK_MIN_GRADED,
       hitRate2xPct: 50,
@@ -244,20 +245,20 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
 
   it("leaves out models that can't call, keeps a short pick, and gives up with none", async () => {
     await forgetPicks();
-    expect((await loadTopModels(roster, [], (id) => id !== b)).top).toEqual([a, c, d]);
+    expect((await loadTopModels(roster, [], (id) => id !== b, targets)).top).toEqual([a, c, d]);
     await forgetPicks();
-    expect((await loadTopModels(roster, [], (id) => id === a || id === b)).top).toEqual([a, b]);
+    expect((await loadTopModels(roster, [], (id) => id === a || id === b, targets)).top).toEqual([a, b]);
     await forgetPicks();
-    expect((await loadTopModels(roster, [], () => false)).top).toBeNull();
+    expect((await loadTopModels(roster, [], () => false, targets)).top).toBeNull();
   });
 
   it("gives a held model's place to the next-ranked one once it can't call", async () => {
     await forgetPicks();
-    expect((await loadTopModels(roster, [], () => true)).top).toEqual([a, b, c]);
+    expect((await loadTopModels(roster, [], () => true, targets)).top).toEqual([a, b, c]);
     // Same slot, pick held: b stops calling, so d (next ranked) takes its place for the slot.
-    expect((await loadTopModels(roster, [], (id) => id !== b)).top).toEqual([a, c, d]);
+    expect((await loadTopModels(roster, [], (id) => id !== b, targets)).top).toEqual([a, c, d]);
     // b calls again: the held pick is served whole.
-    expect((await loadTopModels(roster, [], () => true)).top).toEqual([a, b, c]);
+    expect((await loadTopModels(roster, [], () => true, targets)).top).toEqual([a, b, c]);
   });
 
   it("shows a token the top models both called as one card, at its first call", async () => {

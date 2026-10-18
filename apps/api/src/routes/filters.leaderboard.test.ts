@@ -131,7 +131,7 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     expect((await board(ownerCookie)).ranked.every((e) => e.mine)).toBe(true);
   });
 
-  it("ranks bigger runs higher when the 2x and 4x records are the same", async () => {
+  it("scores the same 2x and 4x records the same, however far the winners ran (run size scores nothing since 2026-10-18)", async () => {
     const mk = async (name: string) =>
       (
         (
@@ -144,8 +144,7 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     await grade(flat, 40, 10, 60_000, 100); // winners stopped at 2x
     const b = await board();
     const at = (id: string) => b.ranked.find((e) => e.id === id)!;
-    expect(at(runner).score).toBeGreaterThan(at(flat).score);
-    expect(b.ranked.findIndex((e) => e.id === runner)).toBeLessThan(b.ranked.findIndex((e) => e.id === flat));
+    expect(at(runner).score).toBe(at(flat).score);
     await prisma.userFilter.deleteMany({ where: { id: { in: [runner, flat] } } });
   });
 
