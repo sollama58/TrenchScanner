@@ -29,6 +29,16 @@ import { WalletTimeoutError } from "../wallet";
  */
 
 const LAMPORTS = 1_000_000_000;
+/**
+ * The trade limits the API enforces (proTrade.ts, user ask 2026-10-18), checked here first so the
+ * panel can say so without a round trip: 0.01 SOL at least, one trade every 5 seconds per wallet,
+ * and a sale of 100% (closing the position) exempt from both.
+ */
+const MIN_TRADE_SOL = 0.01;
+const TRADE_COOLDOWN_MS = 5_000;
+const TRADE_LIMITS_TEXT = "Trades start at 0.01 SOL, one every 5 seconds. Selling 100% is always allowed.";
+/** When each wallet last sent a trade from this page, across every open token. */
+const lastSentAt = new Map<string, number>();
 
 export function solText(sol: number, signed = false): string {
   const abs = Math.abs(sol);
@@ -158,18 +168,34 @@ export function TradePanel({
 
   const trade = async (side: "buy" | "sell", amount: bigint, what: string, all = false) => {
     if (busy || amount <= 0n || !accepted) return;
+    const refuse = (text: string) => setStatus({ kind: "error", text });
+    if (!all) {
+      if (side === "buy" && amount < BigInt(Math.round(MIN_TRADE_SOL * LAMPORTS)))
+        return refuse("The smallest buy is 0.01 SOL.");
+      const worth =
+        side === "sell" && summary?.valueSol != null && balance > 0n
+          ? (summary.valueSol * Number(amount)) / Number(balance)
+          : null;
+      if (worth !== null && worth < MIN_TRADE_SOL)
+        return refuse(
+          "That sale is worth under 0.01 SOL, the smallest trade. Sell 100% to close the position.",
+        );
+      const left = (lastSentAt.get(owner) ?? -Infinity) + TRADE_COOLDOWN_MS - Date.now();
+      if (left > 0) return refuse(`One trade every 5 seconds: try again in ${Math.ceil(left / 1_000)}s.`);
+    }
     // A big buy is one click from a preset or a typo: ask first.
     if (side === "buy" && amount >= CONFIRM_BUY_LAMPORTS && !window.confirm(`${what} of ${symbol}?`)) return;
     setStatus({ kind: "busy", stage: "building", what });
     try {
-      const signature = await runTrade({ owner, mint, side, amount, all, settings }, (stage, built) =>
+      const signature = await runTrade({ owner, mint, side, amount, all, settings }, (stage, built) => {
+        if (stage === "confirming") lastSentAt.set(owner, Date.now());
         setStatus({
           kind: "busy",
           stage,
           what,
           quote: built ? quoteText(built, side, position, symbol) : undefined,
-        }),
-      );
+        });
+      });
       setStatus({ kind: "done", text: `${what}: confirmed.`, signature });
     } catch (e) {
       setStatus({
@@ -450,12 +476,13 @@ export function TradePanel({
                 const list = e.target.value
                   .split(/[\s,]+/)
                   .map(Number)
-                  .filter((n) => n > 0 && n <= 100)
+                  .filter((n) => n >= MIN_TRADE_SOL && n <= 100)
                   .slice(0, 6);
                 if (list.length > 0) update({ buyPresets: list });
               }}
             />
           </label>
+          <p className="small muted">{TRADE_LIMITS_TEXT}</p>
         </div>
       )}
 

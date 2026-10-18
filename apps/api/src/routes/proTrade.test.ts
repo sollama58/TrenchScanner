@@ -15,7 +15,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
-import { plainRefusal } from "./proTrade.js";
+import { plainRefusal, TradeCooldown } from "./proTrade.js";
 
 describe("plainRefusal", () => {
   it("says the common refusals in the trader's words", () => {
@@ -27,6 +27,28 @@ describe("plainRefusal", () => {
     expect(plainRefusal("refused: a program this swap may not call")).toBe(
       "The trade was refused before signing: a program this swap may not call",
     );
+  });
+});
+
+describe("TradeCooldown", () => {
+  it("allows one trade every 5 seconds per wallet, and gives a refused send's slot back", () => {
+    let now = 1_000_000;
+    const cooldown = new TradeCooldown(5_000, () => now);
+    expect(cooldown.left("a")).toBe(0);
+    cooldown.take("a");
+    now += 2_000;
+    expect(cooldown.left("a")).toBe(3_000);
+    // Another wallet isn't held up.
+    expect(cooldown.left("b")).toBe(0);
+    now += 3_000;
+    expect(cooldown.left("a")).toBe(0);
+    // Sender refused it: nothing went out, so the earlier send's window stands again.
+    const giveBack = cooldown.take("a");
+    giveBack();
+    expect(cooldown.left("a")).toBe(0);
+    const fresh = new TradeCooldown(5_000, () => now);
+    fresh.take("c")();
+    expect(fresh.left("c")).toBe(0);
   });
 });
 
@@ -113,6 +135,18 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
       platformFeeLamports: "0",
     });
     expect((await as(ADMIN, "GET", `/pro/trade/fee?mint=nope&speed=eco`)).statusCode).toBe(400);
+  });
+
+  it("refuses a buy under 0.01 SOL before building anything", async () => {
+    const res = await as(ADMIN, "POST", "/pro/trade/build", {
+      mint: MINT,
+      side: "buy",
+      amount: "9999999",
+      slippageBps: 100,
+      speed: "eco",
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: "The smallest buy is 0.01 SOL." });
   });
 
   it("lets only admins grant it, and a grant turns it on", async () => {

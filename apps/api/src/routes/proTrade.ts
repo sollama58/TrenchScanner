@@ -87,6 +87,45 @@ const sendSchema = z.object({
   mevProtect: z.boolean(),
 });
 
+/**
+ * Trade limits (user ask 2026-10-18): no trade under 0.01 SOL (a buy's spend, a sale's quoted
+ * proceeds), and one trade sent every 5 seconds per wallet. A sale of the whole balance closes a
+ * position and is exempt from both: nobody is ever stuck holding dust or waiting to get out.
+ */
+export const MIN_TRADE_LAMPORTS = 10_000_000n;
+export const TRADE_COOLDOWN_MS = 5_000;
+
+/** When each wallet last sent a trade, for TRADE_COOLDOWN_MS. */
+export class TradeCooldown {
+  private readonly last = new Map<string, number>();
+  constructor(
+    private readonly ms = TRADE_COOLDOWN_MS,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** Ms until the wallet may send another trade; 0 when it may now. */
+  left(wallet: string): number {
+    const at = this.last.get(wallet);
+    return at === undefined ? 0 : Math.max(0, at + this.ms - this.now());
+  }
+
+  /**
+   * Starts the wallet's cooldown now, before the send, so two sends racing each other can't both
+   * pass; the function returned gives it back (the send didn't go out).
+   */
+  take(wallet: string): () => void {
+    const before = this.last.get(wallet);
+    const at = this.now();
+    if (this.last.size > 5_000) for (const [w, t] of this.last) if (at - t > this.ms) this.last.delete(w);
+    this.last.set(wallet, at);
+    return () => {
+      if (this.last.get(wallet) !== at) return;
+      if (before === undefined) this.last.delete(wallet);
+      else this.last.set(wallet, before);
+    };
+  }
+}
+
 /** One person clicking: generous for a scalper, tight for anything scripted. */
 const BUILD_RATE_LIMIT = { max: 40, timeWindow: "1 minute" };
 const SEND_RATE_LIMIT = { max: 40, timeWindow: "1 minute" };
@@ -161,10 +200,26 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       lastValidBlockHeight: number;
       at: number;
       side: "buy" | "sell";
+      /** A sale of the whole balance: exempt from the trade limits. */
+      closing: boolean;
       /** The built message: what the wallet sends must be it (signedMatchesBuild). */
       message: DecodedMessage;
     }[]
   >();
+
+  const cooldown = new TradeCooldown();
+  function tooSoon(reply: FastifyReply, leftMs: number) {
+    const seconds = Math.max(1, Math.ceil(leftMs / 1_000));
+    return reply.code(429).send({
+      error: `One trade every ${TRADE_COOLDOWN_MS / 1_000} seconds: try again in ${seconds}s. Nothing was sent.`,
+      retryAfterMs: leftMs,
+      notSent: true,
+    });
+  }
+  const tooSmall = (side: "buy" | "sell") =>
+    side === "buy"
+      ? "The smallest buy is 0.01 SOL."
+      : "That sale is worth under 0.01 SOL, the smallest trade. Sell 100% to close the position.";
 
   /** The wallet's builds still good for a send, oldest first. */
   function liveBuilds(wallet: string) {
@@ -199,6 +254,13 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const parsed = buildSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
+    const closing = body.side === "sell" && body.all === true;
+    if (!closing) {
+      const left = cooldown.left(wallet);
+      if (left > 0) return tooSoon(reply, left);
+      if (body.side === "buy" && BigInt(body.amount) < MIN_TRADE_LAMPORTS)
+        return reply.code(422).send({ error: tooSmall("buy") });
+    }
     try {
       let amount = BigInt(body.amount);
       if (body.side === "sell" && body.all) {
@@ -222,6 +284,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           ...(body.tipLamports !== undefined ? { tipLamports: BigInt(body.tipLamports) } : {}),
         },
       );
+      // A partial sale is measured by what the route quotes for it, in lamports.
+      if (!closing && body.side === "sell" && BigInt(built.quotedOut) < MIN_TRADE_LAMPORTS)
+        return reply.code(422).send({ error: tooSmall("sell") });
       const builtWire = parseWireTransaction(Buffer.from(built.transaction, "base64"));
       const message = decodeMessage(builtWire.message);
       const list = liveBuilds(wallet);
@@ -230,6 +295,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         lastValidBlockHeight: built.lastValidBlockHeight,
         at: Date.now(),
         side: body.side,
+        closing,
         message,
       });
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
@@ -324,6 +390,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           error: "Wait for your open trades to land before sending more. Nothing was sent.",
           notSent: true,
         });
+      if (!list[at]!.closing) {
+        const left = cooldown.left(wallet);
+        if (left > 0) return tooSoon(reply, left);
+      }
       list.splice(at, 1);
     } catch {
       return reply
@@ -335,8 +405,12 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       mevProtect,
       apiKey: env.HELIUS_API_KEY || undefined,
     });
+    // Given back when Sender refuses (nothing went out). Closing sales count too: a buy right
+    // after one still waits.
+    const giveBack = cooldown.take(wallet);
     const sent = await sendViaSender(url, transaction);
     if (!sent.ok && sent.refused) {
+      giveBack();
       request.log.warn(
         { wallet: walletTag(wallet), signature, error: sent.error },
         "sender refused a pro trade",
