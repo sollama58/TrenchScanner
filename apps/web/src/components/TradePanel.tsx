@@ -5,7 +5,8 @@ import {
   graceLeftText,
   MAX_CUSTOM_FEE_SOL,
   MIN_TIP_SOL,
-  readTradeSettings,
+  BUY_PRESETS_PER_ROW,
+  useTradeSettings,
   acceptDisclaimer,
   disclaimerAccepted,
   useFeeEstimate,
@@ -215,7 +216,13 @@ function FeeExplainer({
 }
 
 /** A row of up to four preset buttons, two rows of three for five or six. */
-function presetCols(n: number): React.CSSProperties {
+/** The buy buttons' grid: every button in one row, or split over two (Settings > Trading). */
+export function presetCols(n: number, rows: 1 | 2 = 1): React.CSSProperties {
+  return { "--cols": Math.max(rows === 2 ? Math.ceil(n / 2) : n, 1) } as React.CSSProperties;
+}
+
+/** The sell buttons keep their old grid: up to four in a row. */
+function sellCols(n: number): React.CSSProperties {
   return { "--cols": n <= 4 ? Math.max(n, 1) : 3 } as React.CSSProperties;
 }
 
@@ -256,7 +263,8 @@ export function TradePanel({
   /** Out of the top 250 holders: when Pro Mode ends (ms). */
   graceEndsAt?: number | null;
 }) {
-  const [settings, setSettings] = useState<TradeSettings>(readTradeSettings);
+  // Shared with Settings > Trading: a change there shows here at once, and the other way round.
+  const settings = useTradeSettings();
   const [custom, setCustom] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [showSettings, setShowSettings] = useState(false);
@@ -268,9 +276,7 @@ export function TradePanel({
   const solUsd = position?.solUsd ?? null;
 
   const update = (patch: Partial<TradeSettings>) => {
-    const next = { ...settings, ...patch };
-    setSettings(next);
-    saveTradeSettings(next);
+    saveTradeSettings({ ...settings, ...patch });
   };
 
   const trade = async (side: "buy" | "sell", amount: bigint, what: string, all = false) => {
@@ -460,7 +466,7 @@ export function TradePanel({
                 <span className="tm-side-title">Buy</span>
                 <span className="muted small">with SOL</span>
               </div>
-              <div className="tm-presets" style={presetCols(settings.buyPresets.length)}>
+              <div className="tm-presets" style={presetCols(settings.buyPresets.length, settings.buyRows)}>
                 {settings.buyPresets.map((sol) => (
                   <button
                     key={sol}
@@ -506,7 +512,7 @@ export function TradePanel({
                 {balance > 0n && summary ? `${tokensText(summary.held)} ${symbol} held` : "nothing held"}
               </span>
             </div>
-            <div className="tm-presets" style={presetCols(settings.sellPresets.length)}>
+            <div className="tm-presets" style={sellCols(settings.sellPresets.length)}>
               {settings.sellPresets.map((pct) => (
                 <button
                   key={pct}
@@ -618,7 +624,7 @@ export function TradePanel({
                     .split(/[\s,]+/)
                     .map(Number)
                     .filter((n) => n > 0 && n <= 100)
-                    .slice(0, 6);
+                    .slice(0, BUY_PRESETS_PER_ROW * settings.buyRows);
                   if (list.length > 0) update({ buyPresets: list });
                 }}
               />

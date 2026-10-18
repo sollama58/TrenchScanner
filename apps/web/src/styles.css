@@ -16706,3 +16706,154 @@ body:has(.util-toast) .bug-fab {
 .good-text {
   color: var(--good-ink);
 }
+
+/* Settings > Trading (TradingSettingsPanel). */
+.trading-sub {
+  margin: 18px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.trading-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+}
+.trading-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.trading-field input {
+  width: 100%;
+}
+.trading-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  grid-column: 1 / -1;
+}
+.segmented.wrap {
+  flex-wrap: wrap;
+}
+.qb-swatches {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.qb-swatch {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--qb);
+  box-shadow: inset 0 0 0 2px var(--surface-solid);
+}
+.qb-swatch.on {
+  border-color: var(--ink);
+}
+
+/* The quick-buy pill on alert and Stream cards (QuickBuyPill), off by default. The card makes room
+   for it on the picked edge so it never covers the card's own text or buttons. */
+.qb-green {
+  --qb: #16a34a;
+}
+.qb-blue {
+  --qb: #2563eb;
+}
+.qb-purple {
+  --qb: #7c3aed;
+}
+.qb-amber {
+  --qb: #d97706;
+}
+.qb-pink {
+  --qb: #db2777;
+}
+.qb-gray {
+  --qb: #52525b;
+}
+.quick-buy {
+  position: absolute;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--qb) 70%, #000);
+  border-radius: 999px;
+  background: var(--qb);
+  color: #fff;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 4px 12px -6px color-mix(in srgb, var(--qb) 80%, transparent);
+  transition:
+    filter 0.15s,
+    transform 0.15s;
+}
+.quick-buy:hover:not(:disabled) {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+.quick-buy:disabled {
+  cursor: progress;
+  opacity: 0.8;
+}
+.quick-buy.qb-s {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.quick-buy.qb-m {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.quick-buy.qb-l {
+  padding: 7px 14px;
+  font-size: 14px;
+}
+.quick-buy.qb-top-right {
+  top: 8px;
+  right: 8px;
+}
+.quick-buy.qb-top-left {
+  top: 8px;
+  left: 8px;
+}
+.quick-buy.qb-bottom-right {
+  bottom: 8px;
+  right: 8px;
+}
+.quick-buy.qb-bottom-left {
+  bottom: 8px;
+  left: 8px;
+}
+.quick-buy.qb-done {
+  --qb: #16a34a;
+}
+.quick-buy.qb-failed {
+  --qb: #dc2626;
+}
+.quick-buy.qb-inline {
+  position: static;
+  cursor: default;
+}
+.qb-preview {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+}
+.card:has(> .quick-buy.qb-top-right, > .quick-buy.qb-top-left) {
+  padding-top: 38px;
+}
+.card:has(> .quick-buy.qb-bottom-right, > .quick-buy.qb-bottom-left) {
+  padding-bottom: 38px;
+}
+.card:has(> .quick-buy.qb-l.qb-top-right, > .quick-buy.qb-l.qb-top-left) {
+  padding-top: 44px;
+}
+.card:has(> .quick-buy.qb-l.qb-bottom-right, > .quick-buy.qb-l.qb-bottom-left) {
+  padding-bottom: 44px;
+}

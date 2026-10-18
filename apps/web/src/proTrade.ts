@@ -4,7 +4,7 @@ import { SolanaSignTransaction, type SolanaSignTransactionFeature } from "@solan
 import type { WalletAccount } from "@wallet-standard/base";
 import bs58 from "bs58";
 import { ApiError, api, post } from "./api";
-import { readyBurnWallet } from "./burn";
+import { burnWallet, readyBurnWallet } from "./burn";
 import { postWithTwoFactor } from "./twoFactor";
 import { toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
@@ -117,7 +117,33 @@ export interface TradeSettings {
   customPrioritySol: number;
   /** Sender's tip, SOL; null is the speed's minimum (0.000005 Eco, 0.001 Turbo). */
   customTipSol: number | null;
+  /** The buy buttons under the chart in one row or two (user ask 2026-10-18: one by default). */
+  buyRows: 1 | 2;
+  /** The quick-buy pill on alert and stream cards (off by default). */
+  quickBuy: QuickBuySettings;
 }
+
+export interface QuickBuySettings {
+  enabled: boolean;
+  /** SOL per tap. */
+  amountSol: number;
+  position: "top-right" | "top-left" | "bottom-right" | "bottom-left";
+  size: "s" | "m" | "l";
+  color: (typeof QUICK_BUY_COLORS)[number];
+}
+
+export const QUICK_BUY_COLORS = ["green", "blue", "purple", "amber", "pink", "gray"] as const;
+export const QUICK_BUY_POSITIONS = ["top-right", "top-left", "bottom-right", "bottom-left"] as const;
+/** Most buy buttons per row. */
+export const BUY_PRESETS_PER_ROW = 5;
+
+export const DEFAULT_QUICK_BUY: QuickBuySettings = {
+  enabled: false,
+  amountSol: 0.1,
+  position: "top-right",
+  size: "m",
+  color: "green",
+};
 
 /** Each custom fee's ceiling, SOL (the API refuses more). */
 export const MAX_CUSTOM_FEE_SOL = 0.01;
@@ -133,22 +159,63 @@ export const DEFAULT_TRADE_SETTINGS: TradeSettings = {
   priorityMode: "auto",
   customPrioritySol: 0.0001,
   customTipSol: null,
+  buyRows: 1,
+  quickBuy: DEFAULT_QUICK_BUY,
 };
 
 const SETTINGS_KEY = "ts-pro-trade-settings";
 
+/** Read once per page, then kept here: every panel and card shares one copy (useTradeSettings). */
+let current: TradeSettings | null = null;
+const settingsListeners = new Set<() => void>();
+
 export function readTradeSettings(): TradeSettings {
+  current ??= parseTradeSettings(readStoredSettings());
+  return current;
+}
+
+function readStoredSettings(): string | null {
   try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
+    return localStorage.getItem(SETTINGS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** The settings as saved, with anything missing or out of range back at its default. */
+export function parseTradeSettings(raw: string | null): TradeSettings {
+  try {
     if (!raw) return DEFAULT_TRADE_SETTINGS;
     const s = JSON.parse(raw) as Partial<TradeSettings>;
-    const nums = (v: unknown, ok: (n: number) => boolean, fallback: number[]) =>
-      Array.isArray(v) && v.length > 0 && v.length <= 6 && v.every((n) => typeof n === "number" && ok(n))
+    const buyRows = s.buyRows === 2 ? 2 : 1;
+    const nums = (v: unknown, ok: (n: number) => boolean, fallback: number[], max: number) =>
+      Array.isArray(v) && v.length > 0 && v.length <= max && v.every((n) => typeof n === "number" && ok(n))
         ? (v as number[])
         : fallback;
+    const q = (s.quickBuy ?? {}) as Partial<QuickBuySettings>;
     return {
-      buyPresets: nums(s.buyPresets, (n) => n > 0 && n <= 100, DEFAULT_TRADE_SETTINGS.buyPresets),
-      sellPresets: nums(s.sellPresets, (n) => n > 0 && n <= 100, DEFAULT_TRADE_SETTINGS.sellPresets),
+      buyRows,
+      quickBuy: {
+        enabled: q.enabled === true,
+        amountSol:
+          typeof q.amountSol === "number" && q.amountSol > 0 && q.amountSol <= 100
+            ? q.amountSol
+            : DEFAULT_QUICK_BUY.amountSol,
+        position: QUICK_BUY_POSITIONS.includes(q.position as never)
+          ? (q.position as QuickBuySettings["position"])
+          : DEFAULT_QUICK_BUY.position,
+        size: q.size === "s" || q.size === "l" ? q.size : "m",
+        color: QUICK_BUY_COLORS.includes(q.color as never)
+          ? (q.color as QuickBuySettings["color"])
+          : DEFAULT_QUICK_BUY.color,
+      },
+      buyPresets: nums(
+        s.buyPresets,
+        (n) => n > 0 && n <= 100,
+        DEFAULT_TRADE_SETTINGS.buyPresets,
+        BUY_PRESETS_PER_ROW * buyRows,
+      ),
+      sellPresets: nums(s.sellPresets, (n) => n > 0 && n <= 100, DEFAULT_TRADE_SETTINGS.sellPresets, 6),
       slippagePct:
         typeof s.slippagePct === "number" && s.slippagePct >= 0.1 && s.slippagePct <= 50
           ? s.slippagePct
@@ -202,11 +269,31 @@ export function acceptDisclaimer(wallet: string): void {
 }
 
 export function saveTradeSettings(s: TradeSettings): void {
+  current = s;
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
   } catch {
     // Blocked storage: the settings hold for this page load.
   }
+  for (const l of settingsListeners) l();
+}
+
+/** The trading settings, re-rendering on any change (Settings tab, Trade panel, another tab). */
+export function useTradeSettings(): TradeSettings {
+  return useSyncExternalStore((l) => {
+    settingsListeners.add(l);
+    // Another browser tab saved: read it again.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== SETTINGS_KEY) return;
+      current = parseTradeSettings(e.newValue);
+      l();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      settingsListeners.delete(l);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, readTradeSettings);
 }
 
 /** The settings' custom fees as the API takes them: lamport strings, left out when not set. */
