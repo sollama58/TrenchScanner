@@ -255,7 +255,9 @@ describe.skipIf(!dbAvailable)("taking the Sacrifice at send", () => {
   });
 
   it("refunds a trade's Sacrifice once, however many times it is asked", async () => {
-    const sig = trade(1, "on").signature;
+    // Either send can win the race above: refund the one that was recorded.
+    const sig = (await prisma.platformTrade.findFirstOrThrow({ where: { wallet: W, sacrificeMode: "on" } }))
+      .signature;
     const before = (await creditPots(W, prisma, 100)).burnedRaw;
     const refunds = await Promise.all([refundSacrifice(sig), refundSacrifice(sig)]);
     expect(refunds.sort()).toEqual([0n, 1_000n * TOKENS]);
