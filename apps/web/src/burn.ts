@@ -31,6 +31,8 @@ export interface BurnBalance {
   totalRaw: string;
   /** The wallet's SOL in lamports; null when that read alone failed. */
   solLamports?: string | null;
+  /** Its place among the top 250 holders in the newest holder scan; null when that read failed. */
+  holder?: { rank: number | null; of: number; scannedAt: string | null; stale: boolean } | null;
   /** Accounts a burn can come from, largest first. */
   accounts: { address: string; rawAmount: string }[];
 }

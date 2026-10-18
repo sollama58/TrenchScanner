@@ -230,6 +230,7 @@ describe.skipIf(!dbAvailable)("subscription routes", () => {
     expect(res.json().accounts.map((a: { address: string }) => a.address)).toEqual(["big", "small"]);
     expect(res.json().totalRaw).toBe("160000000006");
     expect(res.json().solLamports).toBe("1500000000");
+    expect(res.json().holder).toMatchObject({ rank: null, of: 250 });
   });
 
   it("says so when the balance can't be read", async () => {

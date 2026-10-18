@@ -17416,7 +17416,7 @@ body:has(.util-toast) .bug-fab {
 }
 .sub-coins {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 8px;
 }
 .sub-coin {
@@ -17492,5 +17492,20 @@ body:has(.util-toast) .bug-fab {
   }
   .asdf-buy-modal .about-body {
     padding: 16px 14px 20px;
+  }
+}
+/* The top holder rank tile, when the wallet is in the top 250 (WalletHoldings). */
+.sub-coin.good .sub-coin-value {
+  color: var(--good-ink);
+}
+.privy-holdings {
+  margin: 4px 0 12px;
+}
+@media (max-width: 640px) {
+  .sub-coins {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .sub-coins > .sub-coin:nth-child(3) {
+    grid-column: 1 / -1;
   }
 }

@@ -7,6 +7,7 @@ import {
   loadEnv,
   prisma,
   refreshProHolders,
+  proHolderRank,
   proHolderStanding,
   resetProHolderCacheForTests,
   type Env,
@@ -334,6 +335,13 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     // The holder's run carried through the new scan: it keeps Pro Mode.
     const row = await prisma.proHolder.findUnique({ where: { walletAddress: HOLDER } });
     expect(Date.now() - row!.inTopSince.getTime()).toBeGreaterThan(1.9 * 3_600_000);
+  });
+
+  it("gives Settings each wallet's place in the newest scan, or none outside it", async () => {
+    expect(await proHolderRank(HOLDER)).toMatchObject({ rank: 1, of: 250, stale: false });
+    expect(await proHolderRank(NEWBIE)).toMatchObject({ rank: 2 });
+    expect(await proHolderRank(GRACE)).toMatchObject({ rank: null });
+    expect((await proHolderRank(LAPSED)).scannedAt).not.toBeNull();
   });
 
   it("turns stopped scans into a grace period instead of Pro Mode with no end", async () => {
