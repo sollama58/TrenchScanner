@@ -6,8 +6,8 @@ import {
   prisma,
   proHolderSummary,
   type Env,
+  walletTag,
 } from "@trenchscanner/core";
-import { walletTag } from "../walletTag.js";
 
 /**
  * Admin > Access > Pro Mode: which wallets see the token modal's Trade panel (proMode.ts). The

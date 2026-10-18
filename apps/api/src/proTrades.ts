@@ -1,5 +1,4 @@
-import { walletTag } from "./walletTag.js";
-import { createLogger, keysOf, prisma, STREAM_SETTLE_MS, type ChainTx } from "@trenchscanner/core";
+import { createLogger, keysOf, prisma, STREAM_SETTLE_MS, type ChainTx, walletTag } from "@trenchscanner/core";
 
 const logger = createLogger("pro-trades");
 

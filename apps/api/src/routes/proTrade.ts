@@ -22,10 +22,10 @@ import {
   walletTokenTrades,
   type Env,
   type WalletTrade,
+  walletTag,
 } from "@trenchscanner/core";
 import { proStatus } from "../proMode.js";
 import { SolPrice } from "../solPrice.js";
-import { walletTag } from "../walletTag.js";
 
 /**
  * Pro trades from the token modal (user decision 2026-10-17), for Pro Mode wallets only
