@@ -1111,6 +1111,13 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  // Pro trades for everyone Pro Mode covers (grants, top holders, grace, sell-only). "false"
+  // keeps the Trade panel to the admin wallets alone, and the pro-holders job off (user decision
+  // 2026-10-18: shipped admins-only until trading has been tried for real).
+  PRO_TRADING_PUBLIC: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   // Jupiter key for Pro trades' quotes and swap instructions. Empty: Jupiter's keyless host. Never
   // the bot's TRADING_JUPITER_API_KEY, so a burst of clicks can't rate-limit a stop-loss.
   PRO_TRADING_JUPITER_API_KEY: pastedKey,

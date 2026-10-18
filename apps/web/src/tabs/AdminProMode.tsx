@@ -12,6 +12,7 @@ import { Load, Panel, Table, Tag, Wallet, when } from "./adminShared";
 
 interface ProModeReport {
   enabled: boolean;
+  public?: boolean;
   admins: string[];
   holders: {
     scannedAt: string | null;
@@ -76,6 +77,12 @@ export function ProModeAdmin() {
             {!r.enabled && (
               <p className="small error">
                 PRO_TRADING_ENABLED is off: no one sees the Trade panel, admins included.
+              </p>
+            )}
+            {r.enabled && r.public === false && (
+              <p className="small error">
+                PRO_TRADING_PUBLIC is off: only admins see the Trade panel. Grants and holders below get it
+                once it is on.
               </p>
             )}
             <p className="small muted">

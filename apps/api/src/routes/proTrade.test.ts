@@ -143,6 +143,22 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
     });
   });
 
+  it("is admins only while PRO_TRADING_PUBLIC is off: no grant, holder or sell-only access", async () => {
+    const adminsOnly = await buildServer({ ...env, PRO_TRADING_PUBLIC: false });
+    try {
+      const me = (wallet: string) =>
+        adminsOnly.inject({
+          method: "GET",
+          url: "/auth/me",
+          cookies: { [SESSION_COOKIE_NAME]: cookies[wallet]! },
+        });
+      expect((await me(ADMIN)).json()).toMatchObject({ isPro: true });
+      expect((await me(TRADER)).json()).toMatchObject({ isPro: false, proMode: { canClose: false } });
+    } finally {
+      await adminsOnly.close();
+    }
+  });
+
   it("is off for everyone, admins included, when switched off", async () => {
     const off = await buildServer({ ...env, PRO_TRADING_ENABLED: false });
     try {

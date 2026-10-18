@@ -10,7 +10,7 @@ import { adminWalletSet, prisma, proHolderStanding, type Env } from "@trenchscan
  *
  * A wallet that has had Pro Mode and lost it can still sell what it holds (`canClose`): closing
  * a position is always allowed. Everything is off, closes included, while PRO_TRADING_ENABLED is
- * "false" - that is the kill switch.
+ * "false" - that is the kill switch. PRO_TRADING_PUBLIC "false" keeps it to the admins alone.
  */
 
 export interface ProStatus {
@@ -35,8 +35,10 @@ const SEEN_EVERY_MS = 60 * 60_000;
 
 export async function proStatus(env: Env, walletAddress: string): Promise<ProStatus> {
   if (!env.PRO_TRADING_ENABLED) return PRO_OFF;
+  if (adminWalletSet(env).has(walletAddress)) return { pro: true, source: "admin", canClose: true };
+  // Admins only (PRO_TRADING_PUBLIC "false"): no grant, holder or sell-only access yet.
+  if (!env.PRO_TRADING_PUBLIC) return PRO_OFF;
   let status: ProStatus | null = null;
-  if (adminWalletSet(env).has(walletAddress)) status = { pro: true, source: "admin", canClose: true };
   if (!status) {
     const grant = await prisma.proModeGrant.findUnique({
       where: { walletAddress },

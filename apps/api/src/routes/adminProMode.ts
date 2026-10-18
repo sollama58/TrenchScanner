@@ -31,6 +31,8 @@ export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { e
     const signedUp = new Set(users.map((u) => u.walletAddress));
     return {
       enabled: opts.env.PRO_TRADING_ENABLED,
+      /** False: admins only; grants and holders are listed but get no Trade panel yet. */
+      public: opts.env.PRO_TRADING_PUBLIC,
       admins: [...adminWalletSet(opts.env)],
       // The top 250 $ASDFASDFA holders' Pro Mode: the newest scan, and who is in their grace period.
       holders: await proHolderSummary(),

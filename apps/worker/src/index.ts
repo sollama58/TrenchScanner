@@ -542,8 +542,8 @@ async function main() {
     ),
   );
   // Pro Mode for the top 250 $ASDFASDFA holders (refreshProHolders in core): one Helius read of
-  // the mint's token accounts every 10 minutes. Off with the trade system.
-  if (env.PRO_TRADING_ENABLED)
+  // the mint's token accounts every 10 minutes. Off with the trade system, and while it is admins-only.
+  if (env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC)
     schedule("pro-holders", () =>
       scheduleInterval("pro-holders", () => refreshProHolders(deps.helius), 10, {
         deadlineMinutes: 10,
