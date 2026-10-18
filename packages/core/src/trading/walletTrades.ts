@@ -82,7 +82,8 @@ export function tradeOf(
 
 /**
  * The wallet's trades in `mint`, oldest first, from its token account(s) under both token
- * programs. `cache` keeps parsed transactions (a landed transaction never changes) across calls.
+ * programs. `cache` keeps each transaction's reading for this wallet and coin (a landed transaction
+ * never changes) across calls.
  * Null when the chain couldn't be read; `truncated` when older history was left out.
  */
 export async function walletTokenTrades(
@@ -97,19 +98,22 @@ export async function walletTokenTrades(
   if (lists.some((l) => l === null)) return null;
   const truncated = lists.some((l) => l!.length >= limit);
   const signatures = [...new Set(lists.flatMap((l) => l!.filter((s) => !s.failed).map((s) => s.signature)))];
-  const missing = signatures.filter((s) => !cache.has(s));
+  // Keyed by wallet and coin too: one transaction can move several wallets' tokens, or two coins.
+  const keyOf = (s: string) => `${wallet}:${mint}:${s}`;
+  const missing = signatures.filter((s) => !cache.has(keyOf(s)));
   // A few at a time: a first open of a busy wallet's coin shouldn't fire sixty reads at once.
   for (let i = 0; i < missing.length; i += 8) {
     const batch = missing.slice(i, i + 8);
     const txs = await Promise.all(batch.map((s) => rpc.getTransactionJson(s)));
     batch.forEach((s, j) => {
       const tx = txs[j];
-      // Not served yet (just landed): asked again next time rather than remembered as nothing.
-      if (tx) cache.set(s, tradeOf(s, tx, wallet, mint));
+      // Not served yet (just landed), or no block time yet: asked again next time rather than
+      // remembered as nothing.
+      if (tx && typeof tx.blockTime === "number") cache.set(keyOf(s), tradeOf(s, tx, wallet, mint));
     });
   }
   const trades = signatures
-    .map((s) => cache.get(s))
+    .map((s) => cache.get(keyOf(s)))
     .filter((t): t is WalletTrade => !!t)
     .sort((a, b) => a.t - b.t);
   return { trades, truncated };

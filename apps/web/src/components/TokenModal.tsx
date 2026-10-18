@@ -488,9 +488,9 @@ function SafetyPill({ verdict, onClick }: { verdict: SafetyVerdict; onClick?: ()
 }
 
 /** The chart's place while it loads, the height the chart will take. */
-function ChartSkeleton({ children }: { children: ReactNode }) {
+function ChartSkeleton({ children, height }: { children: ReactNode; height?: number }) {
   return (
-    <div className="tm-chart-skeleton" style={{ height: chartBoxHeight() }}>
+    <div className="tm-chart-skeleton" style={{ height: height ?? chartBoxHeight() }}>
       <LoadingNote className="tm-skel-note" slow="Still loading the chart…">
         {children}
       </LoadingNote>
@@ -1562,7 +1562,9 @@ export function ChartCard({
             height={height}
           />
         )}
-        {shownRange !== "first" && !data && !error && <ChartSkeleton>Loading the chart…</ChartSkeleton>}
+        {shownRange !== "first" && !data && !error && (
+          <ChartSkeleton height={height + CHART_CHROME_PX}>Loading the chart…</ChartSkeleton>
+        )}
         {locked && (
           <p className="tm-locked muted small">
             <LockIcon size={14} /> {locked}

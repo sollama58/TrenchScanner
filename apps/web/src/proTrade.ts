@@ -205,7 +205,8 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
       : held === 0
         ? 0
         : null;
-  const pnlSol = valueSol !== null && solIn > 0 ? valueSol + solOut - solIn : null;
+  // Without the whole history (older trades left out) the cost is unknown, and so is the PnL.
+  const pnlSol = valueSol !== null && solIn > 0 && !p.truncated ? valueSol + solOut - solIn : null;
   const pnlPct = pnlSol !== null && solIn > 0 ? pnlSol / solIn : null;
   // SOL per token paid across the buys, as a market cap: the line the chart draws as "Entry".
   const entryMcap =
@@ -317,8 +318,13 @@ export async function runTrade(
       mevProtect: input.settings.mevProtect,
     });
   } catch (e) {
-    // The API refused it before Sender, or Sender refused it: nothing went out.
-    if (e instanceof ApiError && [400, 422, 429, 502].includes(e.status)) throw e;
+    // The API refused it before Sender, or Sender refused it: nothing went out. Only the API's own
+    // word counts (a proxy's 502 during a restart could follow a send).
+    if (
+      e instanceof ApiError &&
+      ((e.body as { notSent?: unknown } | null)?.notSent === true || [401, 403, 404].includes(e.status))
+    )
+      throw e;
     // Anything else (the connection dropped, the API timed out) may have sent it.
     throw new TradeError(
       "Lost touch with the server while sending. It may still land: check your wallet before trading again.",

@@ -274,7 +274,8 @@ export function checkJupiterFloor(
     .filter((ix) => ix.programId === PROGRAM.jupiterV6)
     .map((ix) => ({ ix, route: readJupiterRoute(Uint8Array.from(ix.data)) }));
   const read = routes.filter((r) => r.route !== null);
-  if (read.length !== 1 || !JUPITER_EXACT_IN_ROUTES.has(read[0]!.route!.name))
+  // Every Jupiter instruction must be the one route read here: one it can't parse goes unchecked.
+  if (read.length !== 1 || routes.length !== 1 || !JUPITER_EXACT_IN_ROUTES.has(read[0]!.route!.name))
     throw new GuardRefusal("Jupiter returned a route this can't check");
   const data = read[0]!.ix.data;
   let onChainQuote = 0n;

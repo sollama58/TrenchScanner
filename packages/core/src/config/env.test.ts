@@ -89,6 +89,19 @@ describe("appDomainForOrigin", () => {
 });
 
 describe("loadEnv", () => {
+  it("takes HELIUS_SENDER_URL only on a Helius host (the api key goes with it)", () => {
+    resetEnvCacheForTests();
+    expect(loadEnv({ DATABASE_URL: "postgres://x" }).HELIUS_SENDER_URL).toBe("");
+    resetEnvCacheForTests();
+    const ok = "https://fra-sender.helius-rpc.com/fast";
+    expect(loadEnv({ DATABASE_URL: "postgres://x", HELIUS_SENDER_URL: ok }).HELIUS_SENDER_URL).toBe(ok);
+    for (const bad of ["http://sender.helius-rpc.com/fast", "https://evil.example/fast", "not a url"]) {
+      resetEnvCacheForTests();
+      expect(() => loadEnv({ DATABASE_URL: "postgres://x", HELIUS_SENDER_URL: bad })).toThrow();
+    }
+    resetEnvCacheForTests();
+  });
+
   it("cleans an API key pasted with spaces, quotes or a Bearer prefix", () => {
     for (const raw of ["  abc123 ", '"abc123"', "'abc123'", "Bearer abc123", " bearer  abc123\n"]) {
       resetEnvCacheForTests();

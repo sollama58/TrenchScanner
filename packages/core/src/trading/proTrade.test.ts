@@ -27,7 +27,7 @@ import {
   type ManualTradeJupiter,
   type ManualTradeRpc,
 } from "./manualTrade.js";
-import { tradeOf } from "./walletTrades.js";
+import { tradeOf, walletTokenTrades } from "./walletTrades.js";
 import type { RawTransaction } from "./rpc.js";
 import { PROGRAM, WSOL } from "./txGuard.js";
 
@@ -290,5 +290,35 @@ describe("checkJupiterFloor", () => {
       /can't check/,
     );
     expect(() => checkJupiterFloor([route(ok, 100), route(ok, 100)], ok, min, 100)).toThrow(/can't check/);
+  });
+});
+
+describe("walletTokenTrades", () => {
+  it("reads one transaction separately for each wallet it moved tokens for", async () => {
+    const other = key(90);
+    // Paid by WALLET, buying into both WALLET's and another wallet's token accounts.
+    const raw = {
+      blockTime: 1_700_000_000,
+      transaction: { message: { accountKeys: [WALLET, other] } },
+      meta: {
+        err: null,
+        preBalances: [2e9, 1e9],
+        postBalances: [1e9, 1e9],
+        preTokenBalances: [],
+        postTokenBalances: [
+          { owner: WALLET, mint: MINT, uiTokenAmount: { amount: "10" } },
+          { owner: other, mint: MINT, uiTokenAmount: { amount: "10" } },
+        ],
+      },
+    } as unknown as RawTransaction;
+    const rpc = {
+      getSignaturesForAddress: async () => [{ signature: "sig", blockTime: 1, failed: false }],
+      getTransactionJson: async () => raw,
+    };
+    const cache = new Map();
+    const mine = await walletTokenTrades(rpc, WALLET, MINT, cache);
+    const theirs = await walletTokenTrades(rpc, other, MINT, cache);
+    expect(mine!.trades.map((t) => t.side)).toEqual(["buy"]);
+    expect(theirs!.trades.map((t) => t.side)).toEqual(["in"]);
   });
 });

@@ -1116,7 +1116,23 @@ const envSchema = z.object({
   PRO_TRADING_JUPITER_API_KEY: pastedKey,
   // Helius Sender's endpoint; empty is the global one (https://sender.helius-rpc.com/fast). The
   // api adds HELIUS_API_KEY to it (50 sends a second instead of 1). Sender spends no credits.
-  HELIUS_SENDER_URL: z.string().optional().default(""),
+  // Only a Helius host: the api key goes along with it.
+  HELIUS_SENDER_URL: z
+    .string()
+    .optional()
+    .default("")
+    .refine((v) => {
+      if (!v) return true;
+      try {
+        const u = new URL(v);
+        return (
+          u.protocol === "https:" &&
+          (u.hostname === "helius-rpc.com" || u.hostname.endsWith(".helius-rpc.com"))
+        );
+      } catch {
+        return false;
+      }
+    }, "HELIUS_SENDER_URL must be an https URL on a helius-rpc.com host"),
 });
 
 /**

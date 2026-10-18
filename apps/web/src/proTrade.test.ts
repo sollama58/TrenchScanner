@@ -91,3 +91,20 @@ describe("summarizePosition", () => {
     expect(summarizePosition({ ...base }, null).valueSol).toBe(0);
   });
 });
+
+describe("summarizePosition without the whole history", () => {
+  it("shows no PnL when older trades were left out", () => {
+    const p: PositionResponse = {
+      wallet: "w",
+      mint: "m",
+      decimals: 6,
+      balance: "1000000",
+      supply: "1000000000000000",
+      solUsd: 200,
+      trades: [{ signature: "a", t: 1, side: "buy", lamports: "-1000000", tokens: "1000000" }],
+      historyUnavailable: false,
+      truncated: true,
+    };
+    expect(summarizePosition(p, 40_000).pnlSol).toBeNull();
+  });
+});

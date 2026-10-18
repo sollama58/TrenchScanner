@@ -81,6 +81,8 @@ const POSITION_TTL_MS = 4_000;
 const SUPPLY_TTL_MS = 10 * 60_000;
 /** Blocks past the blockhash's last valid height before "expired": RPC nodes lag each other. */
 const EXPIRY_MARGIN_BLOCKS = 10;
+/** How long a trade no longer resent stays answerable as expired. */
+const RETIRED_KEEP_MS = 5 * 60_000;
 /** Parsed transactions kept (they never change), across every wallet and coin. */
 const MAX_CACHED_TRADES = 20_000;
 
@@ -105,6 +107,24 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   const positions = new Map<string, { at: number; body: unknown }>();
   const supplies = new Map<string, { at: number; raw: bigint; decimals: number }>();
   const inFlight = new Map<string, InFlight>();
+  // Trades the resend loop has stopped resending, kept a while so their status can still say
+  // "expired" rather than pending forever.
+  const retired = new Map<string, { lastValidBlockHeight: number; at: number }>();
+  const positionReads = new Map<string, Promise<unknown>>();
+
+  function retire(signature: string, f: InFlight) {
+    inFlight.delete(signature);
+    const now = Date.now();
+    if (retired.size > 2_000)
+      for (const [s, r] of retired)
+        if (now - r.at > RETIRED_KEEP_MS || retired.size > 2_000) retired.delete(s);
+    retired.set(signature, { lastValidBlockHeight: f.lastValidBlockHeight, at: now });
+  }
+
+  /** Drops one wallet's cached positions (it just traded); everyone else's stay. */
+  function forgetPositions(wallet: string) {
+    for (const key of positions.keys()) if (key.startsWith(`${wallet}:`)) positions.delete(key);
+  }
   const builds = new Map<string, { blockhash: string; lastValidBlockHeight: number; at: number }[]>();
 
   /** The wallet's builds still good for a send, oldest first. */
@@ -184,7 +204,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const wallet = await proWallet(request, reply);
     if (!wallet) return;
     const parsed = sendSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
+    if (!parsed.success)
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid", notSent: true });
     const { transaction, speed, mevProtect } = parsed.data;
     const bytes = Uint8Array.from(Buffer.from(transaction, "base64"));
     let signature: string;
@@ -194,11 +215,17 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       const message = decodeMessage(wire.message);
       // Only the session's own wallet's transactions, signed by it alone, that pay Sender's tip.
       if (wire.requiredSignatures !== 1 || wire.accountKeys[0] !== wallet)
-        return reply.code(400).send({ error: "That transaction isn't from your wallet. Nothing was sent." });
+        return reply
+          .code(400)
+          .send({ error: "That transaction isn't from your wallet. Nothing was sent.", notSent: true });
       if (!verifyTransactionSignatures(bytes))
-        return reply.code(400).send({ error: "The wallet's signature doesn't verify. Nothing was sent." });
+        return reply
+          .code(400)
+          .send({ error: "The wallet's signature doesn't verify. Nothing was sent.", notSent: true });
       if (!message.staticKeys.some(isSenderTipAccount))
-        return reply.code(400).send({ error: "That transaction doesn't tip Sender. Nothing was sent." });
+        return reply
+          .code(400)
+          .send({ error: "That transaction doesn't tip Sender. Nothing was sent.", notSent: true });
       signature = bs58.encode(wire.signatures[0]!);
       // Sent already (a retried request): the resend loop has it.
       if (inFlight.has(signature)) return { signature };
@@ -206,17 +233,21 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       const list = liveBuilds(wallet);
       const at = list.findIndex((b) => b.blockhash === message.recentBlockhash);
       if (at < 0)
-        return reply
-          .code(400)
-          .send({ error: "That trade is too old or wasn't built here. Nothing was sent; try again." });
+        return reply.code(400).send({
+          error: "That trade is too old or wasn't built here. Nothing was sent; try again.",
+          notSent: true,
+        });
       lastValidBlockHeight = list[at]!.lastValidBlockHeight;
       if ([...inFlight.values()].filter((f) => f.wallet === wallet).length >= MAX_IN_FLIGHT_PER_WALLET)
-        return reply
-          .code(429)
-          .send({ error: "Wait for your open trades to land before sending more. Nothing was sent." });
+        return reply.code(429).send({
+          error: "Wait for your open trades to land before sending more. Nothing was sent.",
+          notSent: true,
+        });
       list.splice(at, 1);
     } catch {
-      return reply.code(400).send({ error: "That isn't a transaction this can send. Nothing was sent." });
+      return reply
+        .code(400)
+        .send({ error: "That isn't a transaction this can send. Nothing was sent.", notSent: true });
     }
     const url = senderUrl(env.HELIUS_SENDER_URL, {
       speed,
@@ -227,7 +258,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     if (!sent.ok && sent.refused) {
       request.log.warn({ wallet, signature, error: sent.error }, "sender refused a pro trade");
       // Refused by Sender: nothing went out under this signature (it is safe to build again).
-      return reply.code(502).send({ error: `Helius Sender refused the trade: ${sent.error}` });
+      // 409, not a 5xx: a proxy's 502 must never read as "nothing went out".
+      return reply.code(409).send({ error: `Helius Sender refused the trade: ${sent.error}`, notSent: true });
     }
     // No clear answer (a timeout): it may have gone out, so it is treated as sent and resent.
     if (!sent.ok)
@@ -242,7 +274,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       });
       scheduleResend();
     }
-    positions.clear();
+    forgetPositions(wallet);
     return { signature };
   });
 
@@ -259,12 +291,13 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (!status.seen) {
         // Past its blockhash's life and never seen: it won't land. The height is read first
         // and the status again after it, so a landing in between can't read as expired.
-        const flight = inFlight.get(signature);
+        const flight = inFlight.get(signature) ?? retired.get(signature);
         const height = flight ? await rpc.getBlockHeight() : null;
         if (flight && height !== null && height > flight.lastValidBlockHeight + EXPIRY_MARGIN_BLOCKS) {
           const again = await rpc.getSignatureStatus(signature);
           if (again && !again.seen) {
             inFlight.delete(signature);
+            retired.delete(signature);
             return { state: "expired" };
           }
         }
@@ -276,7 +309,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       }
       if (status.confirmed) {
         inFlight.delete(signature);
-        positions.clear();
+        forgetPositions(wallet);
         return { state: "confirmed" };
       }
       return { state: "pending" };
@@ -294,37 +327,50 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       const key = `${wallet}:${mint}`;
       const cached = positions.get(key);
       if (cached && Date.now() - cached.at < POSITION_TTL_MS) return cached.body;
-      const [balance, history, supply, solUsd] = await Promise.all([
-        rpc.getTokenBalance(wallet, mint),
-        walletTokenTrades(rpc, wallet, mint, tradeCache),
-        supplyOf(mint),
-        solPrice.get().catch(() => null),
-      ]);
-      if (!balance) return reply.code(503).send({ error: "Couldn't read your balance just now." });
-      if (tradeCache.size > MAX_CACHED_TRADES) tradeCache.clear();
-      const body = {
-        wallet,
-        mint,
-        decimals: balance.decimals ?? supply?.decimals ?? null,
-        balance: balance.raw.toString(),
-        supply: supply ? supply.raw.toString() : null,
-        solUsd,
-        trades: (history?.trades ?? []).map((t) => ({
-          signature: t.signature,
-          t: t.t,
-          side: t.side,
-          lamports: t.lamports.toString(),
-          tokens: t.tokens.toString(),
-        })),
-        // The history couldn't be read (the balance could): the chart shows the position without marks.
-        historyUnavailable: history === null,
-        truncated: history?.truncated ?? false,
-      };
-      if (positions.size > 1_000) positions.clear();
-      positions.set(key, { at: Date.now(), body });
+      // One read per wallet and coin at a time: a second request waits for the first's answer.
+      let read = positionReads.get(key);
+      if (!read) {
+        read = readPosition(wallet, mint).finally(() => positionReads.delete(key));
+        positionReads.set(key, read);
+      }
+      const body = await read;
+      if (!body) return reply.code(503).send({ error: "Couldn't read your balance just now." });
       return body;
     },
   );
+
+  async function readPosition(wallet: string, mint: string): Promise<unknown> {
+    const key = `${wallet}:${mint}`;
+    const [balance, history, supply, solUsd] = await Promise.all([
+      rpc.getTokenBalance(wallet, mint),
+      walletTokenTrades(rpc, wallet, mint, tradeCache),
+      supplyOf(mint),
+      solPrice.get().catch(() => null),
+    ]);
+    if (!balance) return null;
+    if (tradeCache.size > MAX_CACHED_TRADES) tradeCache.clear();
+    const body = {
+      wallet,
+      mint,
+      decimals: balance.decimals ?? supply?.decimals ?? null,
+      balance: balance.raw.toString(),
+      supply: supply ? supply.raw.toString() : null,
+      solUsd,
+      trades: (history?.trades ?? []).map((t) => ({
+        signature: t.signature,
+        t: t.t,
+        side: t.side,
+        lamports: t.lamports.toString(),
+        tokens: t.tokens.toString(),
+      })),
+      // The history couldn't be read (the balance could): the chart shows the position without marks.
+      historyUnavailable: history === null,
+      truncated: history?.truncated ?? false,
+    };
+    if (positions.size > 1_000) positions.clear();
+    positions.set(key, { at: Date.now(), body });
+    return body;
+  }
 
   async function supplyOf(mint: string) {
     const hit = supplies.get(mint);
@@ -354,13 +400,13 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     await Promise.all(
       [...inFlight].map(async ([signature, f]) => {
         if (now > f.until || (height !== null && height > f.lastValidBlockHeight)) {
-          inFlight.delete(signature);
+          retire(signature, f);
           return;
         }
         const status = await rpc.getSignatureStatus(signature).catch(() => null);
         if (status?.seen) {
           inFlight.delete(signature);
-          positions.clear();
+          forgetPositions(f.wallet);
           return;
         }
         await sendViaSender(f.url, f.base64);
@@ -370,6 +416,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   app.addHook("onClose", async () => {
     if (timer) clearTimeout(timer);
     inFlight.clear();
+    retired.clear();
   });
 }
 
