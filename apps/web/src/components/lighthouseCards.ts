@@ -6,7 +6,6 @@ import {
   BODY_BOTTOM,
   BODY_TOP,
   BRAND_A,
-  BRAND_B,
   CARD_W,
   FONT,
   INK,
@@ -136,10 +135,7 @@ function bars(
     ctx.fillStyle = TRACK;
     roundRect(ctx, x0, cy - 11, trackW, 22, 6);
     ctx.fill();
-    const g = ctx.createLinearGradient(x0, 0, x0 + trackW, 0);
-    g.addColorStop(0, BRAND_A);
-    g.addColorStop(1, BRAND_B);
-    ctx.fillStyle = g;
+    ctx.fillStyle = BRAND_A;
     roundRect(ctx, x0, cy - 11, Math.max(8, (r.value / top) * trackW), 22, 6);
     ctx.fill();
     ctx.textAlign = "right";
