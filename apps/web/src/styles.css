@@ -17892,6 +17892,15 @@ body:has(.util-toast) .bug-fab {
 .privy-holdings {
   margin: 4px 0 12px;
 }
+.privy-mfa {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin: 0 0 12px;
+}
+.privy-mfa p {
+  margin: 0;
+}
 @media (max-width: 640px) {
   .sub-coins {
     grid-template-columns: repeat(2, minmax(0, 1fr));
