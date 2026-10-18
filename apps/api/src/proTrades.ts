@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { walletTag } from "./walletTag.js";
 import { createLogger, keysOf, prisma, STREAM_SETTLE_MS, type ChainTx } from "@trenchscanner/core";
 
 const logger = createLogger("pro-trades");
@@ -192,12 +192,9 @@ export type OnEntry = (wallet: string, mint: string, at: Date) => Promise<void>;
 
 /**
  * Users' wallet addresses stay private (user rule 2026-10-18): never in a log line or a stream key
- * (the stream logs its keys). A wallet is named by a short one-way tag instead, and the watcher
- * keeps the tag-to-wallet map in memory only.
+ * (the stream logs its keys). A wallet is named by its one-way tag instead, and the watcher keeps
+ * the key-to-wallet map in memory only.
  */
-export function walletTag(wallet: string): string {
-  return createHash("sha256").update(wallet).digest("hex").slice(0, 12);
-}
 export const streamKey = (wallet: string) => `pro-trades:${walletTag(wallet)}`;
 /** Signatures the stream has already delivered, so the catch-up never reads them again. */
 const SEEN_MAX = 5_000;
