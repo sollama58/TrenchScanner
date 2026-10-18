@@ -5583,14 +5583,6 @@ html:has(dialog.about-modal[open]) {
   flex: 0 1000 auto;
   min-width: 0;
 }
-/* The coin's X and website ride the title row, after the name (which gives way first). */
-.title-row .pill-social {
-  flex: none;
-  align-self: center;
-}
-.title-row .pill-social + .pill-social {
-  margin-left: -3px;
-}
 /* The result, top right of the card: the title column shrinks for it, never the other way. */
 .card-head .card-result {
   align-self: flex-start;
@@ -7544,10 +7536,6 @@ html:has(dialog.about-modal[open]) {
   .cards[data-phone-cols="2"] .symbol {
     font-size: 14px;
     max-width: 100%;
-  }
-  /* Too narrow beside the ticker for the coin's X and website (wider cards show them). */
-  .cards[data-phone-cols="2"] .title-row .pill-social {
-    display: none;
   }
   /* The high-conviction mark takes the rate's place: both don't fit. */
   .cards[data-phone-cols="2"] .pill-conviction ~ .pill-rate {
@@ -10017,6 +10005,13 @@ html:has(dialog.about-modal[open]) {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: none;
+}
+/* The coin's X and website, beside the copy and Sage buttons. */
+.card-socials {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex: none;
 }
 /* Where the creator fee goes, in the theme's (or the reader's own) colors. */

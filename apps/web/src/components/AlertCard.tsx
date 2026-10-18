@@ -255,20 +255,6 @@ export function AlertCard({
                 {card.token.name}
               </span>
             )}
-            {/* Up here beside the name, so the model's pills below keep their room. */}
-            {socials.map((l) => (
-              <a
-                key={l.key}
-                className="pill pill-icon pill-social"
-                href={l.url}
-                target="_blank"
-                rel="noreferrer noopener"
-                title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
-                aria-label={`Open the coin's ${l.label}`}
-              >
-                <l.Icon size={11} />
-              </a>
-            ))}
           </div>
           <div className="meta-row">
             {styled ? (
@@ -715,7 +701,7 @@ export function AlertCard({
         </div>
       )}
 
-      {(show("mint") || show("sage") || fees || show("links") || trade.length > 0) && (
+      {(show("mint") || show("sage") || socials.length > 0 || fees || show("links") || trade.length > 0) && (
         <footer className="card-foot">
           {(show("mint") || show("sage")) && (
             <div className="card-foot-left">
@@ -736,6 +722,24 @@ export function AlertCard({
                 </button>
               )}
             </div>
+          )}
+          {/* The coin's X and website, beside the copy button (user ask 2026-10-18). */}
+          {socials.length > 0 && (
+            <span className="card-socials">
+              {socials.map((l) => (
+                <a
+                  key={l.key}
+                  className="pill pill-icon pill-social"
+                  href={l.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
+                  aria-label={`Open the coin's ${l.label}`}
+                >
+                  <l.Icon size={11} />
+                </a>
+              ))}
+            </span>
           )}
           {fees && (
             <span className={`fee-badge fee-${fees.kind}`} title={fees.title} aria-label={fees.title}>
