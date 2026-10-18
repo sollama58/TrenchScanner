@@ -18032,6 +18032,22 @@ body:has(.util-toast) .bug-fab {
   padding: 0;
   display: grid;
   gap: 6px;
+  /* Up to 250 labels: the list scrolls in place rather than pushing the page down. */
+  max-height: 520px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Import, export and the filter box, above the list. */
+.tw-io {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 8px;
+}
+.tw-filter {
+  flex: 1 1 180px;
+  min-width: 0;
 }
 .tw-row {
   display: flex;

@@ -15,8 +15,11 @@ import type { WalletName } from "./walletNames.js";
  * Labels are kept while an account loses Pro Mode and show again once it has it back.
  */
 
-/** Labeled wallets per account at most (user ask 2026-10-18: 25 for now). */
-export const TRACKED_WALLET_CAP = 25;
+/**
+ * Labeled wallets per account at most (user ask 2026-10-18: 25, raised to 250 the same day with
+ * JSON import). Labels cost no Helius calls; the hourly side run (trackedSidesJob.ts) batches them.
+ */
+export const TRACKED_WALLET_CAP = 250;
 /** A label's longest name. */
 export const TRACKED_NAME_MAX = 32;
 
@@ -100,6 +103,68 @@ export async function saveTracked(
       updatedAt: result.updatedAt.toISOString(),
     },
   };
+}
+
+export interface ImportEntry {
+  wallet: string;
+  name: string;
+  category: TrackedCategory;
+}
+
+export interface ImportResult {
+  /** New labels added. */
+  added: number;
+  /** Labels already held, renamed or re-kinded to the file's. */
+  updated: number;
+  /** New wallets left out because the account reached TRACKED_WALLET_CAP. */
+  overCap: number;
+}
+
+/**
+ * Adds or renames many labels at once (a JSON list import): one transaction under the same
+ * per-account lock as saveTracked. Labels already held take the file's name and kind; new ones are
+ * added in the file's order until the account holds TRACKED_WALLET_CAP, and the rest are counted.
+ * `entries` are already cleaned and unique by wallet.
+ */
+export async function importTracked(userId: string, entries: readonly ImportEntry[]): Promise<ImportResult> {
+  const result = await prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`tracked-wallets:${userId}`}))`;
+      const held = new Set(
+        (
+          await tx.userTrackedWallet.findMany({
+            where: { userId, wallet: { in: entries.map((e) => e.wallet) } },
+            select: { wallet: true },
+          })
+        ).map((r) => r.wallet),
+      );
+      let room = TRACKED_WALLET_CAP - (await tx.userTrackedWallet.count({ where: { userId } }));
+      const fresh: ImportEntry[] = [];
+      let overCap = 0;
+      for (const e of entries) {
+        if (held.has(e.wallet)) continue;
+        if (room > 0) {
+          fresh.push(e);
+          room -= 1;
+        } else overCap += 1;
+      }
+      const updates = entries.filter((e) => held.has(e.wallet));
+      for (const e of updates)
+        await tx.userTrackedWallet.update({
+          where: { userId_wallet: { userId, wallet: e.wallet } },
+          data: { name: e.name, category: e.category },
+        });
+      if (fresh.length)
+        await tx.userTrackedWallet.createMany({
+          data: fresh.map((e) => ({ userId, wallet: e.wallet, name: e.name, category: e.category })),
+          skipDuplicates: true,
+        });
+      return { added: fresh.length, updated: updates.length, overCap };
+    },
+    { maxWait: 10_000, timeout: 30_000 },
+  );
+  forgetTracked(userId);
+  return result;
 }
 
 /** Removes a label; whether there was one. */

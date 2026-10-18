@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { shortAddress } from "../format";
 import { openWallet } from "../walletModal";
+import { labelExport, parseLabelImport } from "../trackedImport";
 import {
+  importTrackedWallets,
   removeTrackedWallet,
   saveTrackedWallet,
   trackedError,
@@ -81,6 +83,28 @@ function LabelForm({
   );
 }
 
+/** Past this many labels the list gets a filter box. */
+const FILTER_FROM = 8;
+
+/** One import's outcome, as the reader reads it. */
+function importText(r: { added: number; updated: number; overCap: number; skipped: number }, cap: number) {
+  const parts = [`${r.added} added`];
+  if (r.updated) parts.push(`${r.updated} renamed`);
+  if (r.overCap) parts.push(`${r.overCap} left out past your ${cap} limit`);
+  if (r.skipped) parts.push(`${r.skipped} skipped with no valid address or name`);
+  return `Imported: ${parts.join(", ")}.`;
+}
+
+/** Hands the browser the reader's labels as a JSON file. */
+function saveExport(wallets: readonly TrackedWallet[]) {
+  const url = URL.createObjectURL(new Blob([labelExport(wallets)], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "trenchscanner-wallet-labels.json";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
 const kindText = (t: TrackedWallet) => (t.category === "kol" ? "KOL" : "User Tracked");
 
 /**
@@ -153,6 +177,10 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
   const [adding, setAdding] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [imported, setImported] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   if (!tracked) return null;
   if (!tracked.pro && tracked.wallets.length === 0)
     return upsell ? (
@@ -177,6 +205,33 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
   const full = tracked.wallets.length >= tracked.cap;
   const typed = address.trim();
   const valid = ADDRESS_RE.test(typed);
+  const q = filter.trim().toLowerCase();
+  const shown = q
+    ? tracked.wallets.filter((t) => t.name.toLowerCase().includes(q) || t.wallet.toLowerCase().includes(q))
+    : tracked.wallets;
+  const importFile = (file: File) => {
+    setImporting(true);
+    setError(null);
+    setImported(null);
+    file
+      .text()
+      .then(async (text) => {
+        const parsed = parseLabelImport(text);
+        if (parsed.entries.length === 0)
+          throw new Error("No wallets with a valid address and a name in that file.");
+        if (parsed.entries.length > tracked.cap)
+          throw new Error(
+            `That file lists ${parsed.entries.length} wallets; you can label up to ${tracked.cap}.`,
+          );
+        const r = await importTrackedWallets(parsed.entries);
+        setImported(importText({ ...r, skipped: parsed.skipped + r.unnamed }, tracked.cap));
+      })
+      .catch((e: unknown) => setError(trackedError(e)))
+      .finally(() => {
+        setImporting(false);
+        if (fileRef.current) fileRef.current.value = "";
+      });
+  };
   const remove = (wallet: string) => {
     setBusy(wallet);
     setError(null);
@@ -202,14 +257,57 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
         Your labels are private to your account: no one else sees them, and they never change the models,
         filters, alerts or the Side Wallet Checker&apos;s export.
       </p>
+      <div className="tw-io">
+        {tracked.pro && (
+          <>
+            <button
+              type="button"
+              className="ghost small"
+              disabled={importing}
+              title={
+                'A JSON list of wallets and names, such as [{"wallet": "…", "name": "…", "kol": false}] or {"<address>": "<name>"}'
+              }
+              onClick={() => fileRef.current?.click()}
+            >
+              {importing ? "Importing…" : "Import JSON"}
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json,.json"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) importFile(file);
+              }}
+            />
+          </>
+        )}
+        {tracked.wallets.length > 0 && (
+          <button type="button" className="ghost small" onClick={() => saveExport(tracked.wallets)}>
+            Export JSON
+          </button>
+        )}
+        {tracked.wallets.length > FILTER_FROM && (
+          <input
+            className="tw-filter"
+            aria-label="Filter labels"
+            placeholder="Filter by name or address"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+        )}
+      </div>
+      {imported && <p className="small muted">{imported}</p>}
       {!tracked.pro && (
         <p className="warn small">
           Your labels are kept, but show only while you have Pro Mode. You can still remove them.
         </p>
       )}
-      {tracked.wallets.length > 0 && (
+      {q && shown.length === 0 && <p className="small muted">No label matches that.</p>}
+      {shown.length > 0 && (
         <ul className="tw-list">
-          {tracked.wallets.map((t) =>
+          {shown.map((t) =>
             editing === t.wallet ? (
               <li key={t.wallet} className="tw-row editing">
                 <LabelForm

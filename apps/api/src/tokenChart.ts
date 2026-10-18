@@ -287,7 +287,10 @@ export function markedWallets(
   return rankAndCap(out);
 }
 
-/** Wallets withTrackedMarks adds past the shared list at most: the cap of labels, and some sides. */
+/**
+ * Wallets withTrackedMarks adds past the shared list at most, per coin: the reader's labeled wallets
+ * and their sides that traded it. Labels go to 250 a reader, but few of them trade any one coin.
+ */
 export const MAX_TRACKED_MARKED_WALLETS = 40;
 
 /**
