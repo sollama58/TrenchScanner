@@ -57,6 +57,9 @@ import {
   type Lane,
   type PrecisionTargets,
   type StoredEvalMetrics,
+  type ModelProfile,
+  modelProfile,
+  shownLaneName,
 } from "@trenchscanner/core";
 import { SharedCache } from "./sharedCache.js";
 import { baselineRates, type GradedRates } from "./routes/stats.js";
@@ -310,6 +313,8 @@ export interface LeaderboardEntry {
   description: string;
   /** The same in plain words, for the Models tab's front leaderboard. */
   summary: string;
+  /** What it aims for, reads and does, for the model window's picture (modelProfile). */
+  profile: ModelProfile;
   role: ContestantSpec["role"];
   /** In the default feed: one of the top models by 24h 2x hit rate. */
   isDefault: boolean;
@@ -721,6 +726,7 @@ export async function buildLeaderboard(
       name: spec.name,
       description: spec.description,
       summary: spec.summary ?? spec.description,
+      profile: modelProfile(spec, env.CURATOR_RECENCY_HALF_LIFE_DAYS),
       role: spec.role,
       isDefault: state.defaultModels.includes(spec.id),
       isBest: spec.id === state.bestModel,
@@ -737,7 +743,11 @@ export async function buildLeaderboard(
       lane: (() => {
         const lane = laneBySlot.get(spec.id);
         return lane
-          ? { generation: lane.generation, parentName: lane.parentName, bornAt: lane.bornAt }
+          ? {
+              generation: lane.generation,
+              parentName: lane.parentName && shownLaneName(lane.parentName),
+              bornAt: lane.bornAt,
+            }
           : null;
       })(),
       rules: (() => {
@@ -836,12 +846,17 @@ export async function buildLeaderboard(
       probation: probation
         ? {
             slot: probation.slot,
-            name: probation.name,
-            seatName: probation.laneName,
+            name: shownLaneName(probation.name),
+            seatName: shownLaneName(probation.laneName),
             startedAt: probation.startedAt,
           }
         : null,
-      history,
+      // Stored names, shown under the simpler names (shownLaneName).
+      history: history.map((h) => ({
+        ...h,
+        name: shownLaneName(h.name),
+        parentName: h.parentName && shownLaneName(h.parentName),
+      })),
     },
   };
 }

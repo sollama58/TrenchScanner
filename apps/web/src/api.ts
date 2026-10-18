@@ -1211,6 +1211,21 @@ export interface FeatureHealthReport {
   }[];
 }
 
+/** A model in plain words (core modelProfile): what the model window draws. */
+export interface ModelProfile {
+  goal: "2x" | "4x" | "10x" | "return" | "safe" | "moonshot" | "catch" | "team" | "rules";
+  goalText: string;
+  reads: string;
+  decides: string;
+  method:
+    "formula" | "trees" | "deep-trees" | "forest" | "two-step" | "regression" | "team" | "rules" | "story";
+  waitsFor: string | null;
+  /** The share of decision moments its cutoff aims to call, in percent. */
+  aimsToCallPct: number | null;
+  /** Older rows count half after this many days; null for seats that don't train on rows. */
+  memoryDays: number | null;
+}
+
 export interface LeaderboardEntry {
   rank: number;
   id: string;
@@ -1218,6 +1233,8 @@ export interface LeaderboardEntry {
   description: string;
   /** The same in plain words. Absent from older API builds. */
   summary?: string;
+  /** What it aims for, reads and does, for the model window's picture. Absent from older API builds. */
+  profile?: ModelProfile;
   role: ContestantRole;
   /** In the default feed (one of the top models). */
   isDefault: boolean;

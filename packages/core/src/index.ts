@@ -79,6 +79,7 @@ export * from "./curation/modelGateStore.js";
 export * from "./curation/stacking.js";
 export * from "./curation/leaderboard.js";
 export * from "./curation/evolution.js";
+export * from "./curation/modelProfile.js";
 export * from "./curation/probation.js";
 export * from "./curation/laneStore.js";
 export * from "./curation/champion.js";

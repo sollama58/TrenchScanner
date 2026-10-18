@@ -564,7 +564,7 @@ describe("two-stage model", () => {
     const recipe = normalizeRecipe({ learner: "gbdt", twoStage: true }, 14);
     expect(recipe.twoStage).toBe(true);
     expect(traitName(recipe, 14)).toBe("Survivor Trees");
-    expect(traitName({ learner: "logistic" }, 14)).toBe("Linear");
+    expect(traitName({ learner: "logistic" }, 14)).toBe("Formula");
   });
 });
 

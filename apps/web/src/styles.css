@@ -6829,6 +6829,220 @@ html:has(dialog.about-modal[open]) {
 .model-detail-foot .error {
   margin: 0 0 6px;
 }
+/* What a model does, drawn (ModelPortrait): goal, a looks-at / decides / calls flow, memory. */
+.mp {
+  --mp-tone: var(--brand-ink);
+  margin: 4px 0 6px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--mp-tone) 9%, var(--surface-2)),
+    var(--surface-2) 60%
+  );
+}
+.mp:has(.mp-goal-return) {
+  --mp-tone: var(--series-3);
+}
+.mp:has(.mp-goal-safe) {
+  --mp-tone: var(--series-1);
+}
+.mp:has(.mp-goal-moonshot),
+.mp:has(.mp-goal-10x) {
+  --mp-tone: var(--series-5);
+}
+.mp:has(.mp-goal-4x),
+.mp:has(.mp-goal-catch) {
+  --mp-tone: var(--series-4);
+}
+.mp:has(.mp-goal-2x) {
+  --mp-tone: var(--series-2);
+}
+.mp-goal {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.mp-goal-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  color: var(--mp-tone);
+  background: color-mix(in srgb, var(--mp-tone) 16%, transparent);
+}
+.mp-goal small {
+  display: block;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.mp-goal strong {
+  font-size: 15px;
+}
+.about-body .mp-summary {
+  margin: 10px 0 12px;
+  font-size: 14px;
+  color: var(--ink);
+}
+.mp-flow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mp-step {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-solid);
+}
+.mp-step-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  font-weight: 600;
+}
+.mp-step-text {
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--ink-2);
+}
+.mp-arrow {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.mp-glyph,
+.mp-dots {
+  width: 100%;
+  max-width: 120px;
+  height: 40px;
+}
+.mp-dots {
+  height: auto;
+  max-width: 132px;
+}
+.mp svg .on {
+  fill: var(--mp-tone);
+}
+.mp svg .off {
+  fill: var(--grid);
+}
+.mp svg .node {
+  fill: var(--ink-2);
+}
+.mp svg .edge {
+  stroke: var(--axis);
+  stroke-width: 1.6;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mp svg .edge.strong {
+  stroke: var(--mp-tone);
+  stroke-width: 2.2;
+}
+.mp svg .lbl {
+  font-size: 8px;
+  fill: var(--muted);
+  text-anchor: middle;
+}
+.about-body .mp-wait {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.mp-memory {
+  margin: 12px 0 0;
+}
+.mp-memory figcaption {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
+.mp-memory svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.mp-memory .mp-mem-area {
+  fill: color-mix(in srgb, var(--mp-tone) 18%, transparent);
+}
+.mp-memory .mp-mem-line {
+  fill: none;
+  stroke: var(--mp-tone);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.mp-memory .mp-mem-half {
+  stroke: var(--axis);
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+.mp-memory .lbl {
+  font-size: 14px;
+  fill: var(--muted);
+}
+.model-detail h4.model-sub {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.model-more {
+  margin-top: 22px;
+  border-top: 1px solid var(--border);
+}
+.model-more > summary {
+  cursor: pointer;
+  padding: 12px 0 2px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.model-more[open] > summary {
+  color: var(--ink);
+}
+@media (max-width: 640px) {
+  .mp-flow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mp-arrow {
+    transform: rotate(90deg);
+    height: 14px;
+  }
+  .mp-step {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: 10px;
+    row-gap: 2px;
+    align-items: center;
+  }
+  .mp-step-label {
+    grid-column: 1 / -1;
+  }
+}
 @media (max-width: 640px) {
   .model-modal {
     width: 100vw;
