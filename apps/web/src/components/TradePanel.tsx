@@ -10,9 +10,12 @@ import {
   acceptDisclaimer,
   disclaimerAccepted,
   useFeeEstimate,
+  useSwapCosts,
   runTrade,
   saveTradeSettings,
   TradeError,
+  type FeeEstimate,
+  type SwapCostEstimate,
   type PositionResponse,
   type PositionSummary,
   type TradeSettings,
@@ -150,36 +153,94 @@ function StageSteps({ stage }: { stage: TradeStage }) {
   );
 }
 
-/** What a trade costs: the Solana network's fee, broken down, and TrenchScanner's 0%. */
+/** "1%", "0.25%", "3%": basis points as a percent. */
+function bpsText(bps: number): string {
+  return `${Number((bps / 100).toFixed(2))}%`;
+}
+
+/**
+ * What a buy costs in all (user ask 2026-10-18): one bar for the whole swap cost, color coded,
+ * the network's fee, the pools' fees, the coin's own transfer tax and a first buy's account rent,
+ * with TrenchScanner's 0% up top. Sized on the typed amount, or the first buy button.
+ */
 function FeeExplainer({
   fee,
+  swap,
   solUsd,
+  sizeSol,
 }: {
-  fee: { priorityFeeLamports: string; tipLamports: string; baseFeeLamports: string } | null;
+  fee: FeeEstimate | null;
+  swap: SwapCostEstimate | null;
   solUsd: number | null;
+  sizeSol: number;
 }) {
-  const parts = fee
+  const network = fee
     ? [
         { key: "priority", label: "Priority fee", sol: Number(fee.priorityFeeLamports) / LAMPORTS },
         { key: "tip", label: "Helius Sender tip", sol: Number(fee.tipLamports) / LAMPORTS },
         { key: "base", label: "Base fee", sol: Number(fee.baseFeeLamports) / LAMPORTS },
       ]
     : [];
-  const total = fee ? feeTotalSol(fee) : null;
+  const swapParts = swap
+    ? [
+        ...(swap.poolFeeBps !== null
+          ? [
+              {
+                key: "pool",
+                label: `Pool and LP fees${swap.venues.length ? ` (${swap.venues.join(", ")})` : ""}`,
+                sol: (sizeSol * swap.poolFeeBps) / 10_000,
+                rate: bpsText(swap.poolFeeBps),
+              },
+            ]
+          : []),
+        ...(swap.transferFeeBps !== null && swap.transferFeeBps > 0
+          ? [
+              {
+                key: "tax",
+                label: "Token transfer tax",
+                sol: (sizeSol * (swap.transferFeeBps ?? 0)) / 10_000,
+                rate: bpsText(swap.transferFeeBps ?? 0),
+              },
+            ]
+          : []),
+        ...(Number(swap.accountRentLamports) > 0
+          ? [
+              {
+                key: "rent",
+                label: "Token account rent (first buy, refundable)",
+                sol: Number(swap.accountRentLamports) / LAMPORTS,
+                rate: "",
+              },
+            ]
+          : []),
+      ]
+    : [];
+  const parts = [...network.map((p) => ({ ...p, rate: "" })), ...swapParts];
+  const total = fee ? parts.reduce((sum, p) => sum + p.sol, 0) : null;
+  const usdText = (sol: number) => {
+    const v = sol * (solUsd ?? 0);
+    return v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(v < 0.1 ? 3 : 2)}`;
+  };
   return (
-    <div className="tm-fee" aria-live="polite">
+    <div className="tm-trade-fee" aria-live="polite">
+      <div className="tm-fee-zero-badge">
+        <CheckIcon size={16} />
+        <span>
+          <strong>0% platform fee.</strong> TrenchScanner takes nothing from your trade.
+        </span>
+      </div>
       <div className="tm-fee-head">
-        <span className="tm-fee-title">Expected fee per trade</span>
+        <span className="tm-fee-title">
+          Total cost of a <span className="num">{solText(sizeSol)}</span> buy
+        </span>
         <span className="tm-fee-total">
           {total !== null ? (
             <>
               <strong className="num">{solText(total)}</strong>
-              {solUsd ? (
-                <small className="num muted">
-                  {" "}
-                  ≈ ${(total * solUsd).toFixed(total * solUsd < 0.1 ? 3 : 2)}
-                </small>
-              ) : null}
+              <small className="num muted">
+                {sizeSol > 0 ? ` ${((total / sizeSol) * 100).toFixed(2)}% of the trade` : ""}
+                {solUsd ? ` · ≈ ${usdText(total)}` : ""}
+              </small>
             </>
           ) : (
             <span className="muted">Working it out…</span>
@@ -187,29 +248,83 @@ function FeeExplainer({
         </span>
       </div>
       {total !== null && total > 0 && (
-        <div className="tm-fee-bar" aria-hidden="true">
+        <div className="tm-fee-bar" role="img" aria-label="How the cost splits">
           {parts.map((p) => (
-            <span key={p.key} className={p.key} style={{ flexGrow: Math.max(p.sol / total, 0.03) }} />
+            <span
+              key={p.key}
+              className={p.key}
+              title={`${p.label}: ${solText(p.sol)}`}
+              style={{ flexGrow: Math.max(p.sol / total, 0.025) }}
+            />
           ))}
         </div>
       )}
-      <ul className="tm-fee-rows">
-        {parts.map((p) => (
-          <li key={p.key}>
-            <i className={`tm-fee-dot ${p.key}`} aria-hidden="true" />
-            <span>{p.label}</span>
-            <span className="num">{solText(p.sol)}</span>
-          </li>
-        ))}
-        <li className="tm-fee-zero">
-          <i className="tm-fee-dot zero" aria-hidden="true" />
-          <span>TrenchScanner platform fee</span>
-          <strong className="num">0%</strong>
-        </li>
-      </ul>
+      {fee && (
+        <div className="tm-fee-groups">
+          <div className="tm-fee-group">
+            <span className="tm-fee-group-title">Solana network</span>
+            <ul className="tm-fee-rows">
+              {network.map((p) => (
+                <li key={p.key}>
+                  <i className={`tm-fee-dot ${p.key}`} aria-hidden="true" />
+                  <span>{p.label}</span>
+                  <span className="num">{solText(p.sol)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="tm-fee-group">
+            <span className="tm-fee-group-title">The swap</span>
+            <ul className="tm-fee-rows">
+              {swapParts.map((p) => (
+                <li key={p.key}>
+                  <i className={`tm-fee-dot ${p.key}`} aria-hidden="true" />
+                  <span>
+                    {p.label}
+                    {p.rate && <em className="num"> {p.rate}</em>}
+                  </span>
+                  <span className="num">{solText(p.sol)}</span>
+                </li>
+              ))}
+              {swap && (swap.transferFeeBps === 0 || swap.transferFeeBps === null) && (
+                <li className="tm-fee-none">
+                  <i className="tm-fee-dot none" aria-hidden="true" />
+                  <span>Token transfer tax</span>
+                  <span className="num">{swap.transferFeeBps === 0 ? "none" : "couldn't read"}</span>
+                </li>
+              )}
+              {swap && swap.poolFeeBps === null && (
+                <li className="tm-fee-none">
+                  <i className="tm-fee-dot none" aria-hidden="true" />
+                  <span>Pool and LP fees</span>
+                  <span className="num">in the quote</span>
+                </li>
+              )}
+              {!swap && (
+                <li className="tm-fee-none">
+                  <i className="tm-fee-dot none" aria-hidden="true" />
+                  <span>Pool fees and taxes couldn&apos;t be read just now</span>
+                </li>
+              )}
+              <li className="tm-fee-zero">
+                <i className="tm-fee-dot zero" aria-hidden="true" />
+                <span>TrenchScanner platform fee</span>
+                <strong className="num">0%</strong>
+              </li>
+            </ul>
+          </div>
+        </div>
+      )}
+      {swap && swap.transferFeeBps !== null && swap.transferFeeBps > 0 && (
+        <p className="small tm-fee-warn" role="note">
+          This coin taxes every transfer {bpsText(swap.transferFeeBps)}, so a sale pays it again. The tax goes
+          to whoever set it up, not to TrenchScanner.
+        </p>
+      )}
       <p className="tm-fee-note">
-        The whole fee is a Solana blockchain fee, paid to the network and its validators.{" "}
-        <strong>TrenchScanner takes nothing from your trade.</strong>
+        Network fees go to Solana&apos;s validators; pool fees to the pool and its liquidity providers.
+        {swap?.priceImpactPct != null &&
+          ` Price impact on a ${solText(Number(swap.refLamports) / LAMPORTS)} buy is about ${swap.priceImpactPct.toFixed(2)}%, already in the quote and capped by your slippage.`}
       </p>
     </div>
   );
@@ -307,6 +422,7 @@ export function TradePanel({
 
   const customLamports = parseSol(custom);
   const fee = useFeeEstimate(mint, settings);
+  const swapCosts = useSwapCosts(mint, settings.buyPresets[0] ?? 0.1);
   const hasPosition = !!summary && (summary.held > 0 || summary.buys > 0 || summary.sells > 0);
   const open = !!summary && summary.held > 0;
   const tone = summary?.pnlSol == null ? "" : summary.pnlSol >= 0 ? "up" : "down";
@@ -680,7 +796,12 @@ export function TradePanel({
         </div>
       )}
 
-      <FeeExplainer fee={fee} solUsd={solUsd} />
+      <FeeExplainer
+        fee={fee}
+        swap={swapCosts}
+        solUsd={solUsd}
+        sizeSol={customLamports ? Number(customLamports) / LAMPORTS : (settings.buyPresets[0] ?? 0.1)}
+      />
 
       {accepted && (
         <details className="small tm-trade-about">

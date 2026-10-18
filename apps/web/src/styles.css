@@ -16362,7 +16362,7 @@ body:has(.util-toast) .bug-fab {
 }
 
 /* The fee explainer (user ask 2026-10-18): always the expected network fee, broken down, and 0% ours. */
-.tm-fee {
+.tm-trade-fee {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -16407,13 +16407,75 @@ body:has(.util-toast) .bug-fab {
 .tm-fee-dot.base {
   background: var(--series-3);
 }
+.tm-fee-bar .pool,
+.tm-fee-dot.pool {
+  background: var(--series-2);
+}
+.tm-fee-bar .tax,
+.tm-fee-dot.tax {
+  background: var(--warn);
+}
+.tm-fee-bar .rent,
+.tm-fee-dot.rent {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--muted) 0 3px,
+    color-mix(in srgb, var(--muted) 45%, transparent) 3px 6px
+  );
+}
 .tm-fee-dot.zero {
   background: var(--good);
 }
-.tm-fee-rows {
+.tm-fee-dot.none {
+  background: transparent;
+  border: 1.5px solid var(--border-strong);
+}
+.tm-fee-zero-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid color-mix(in srgb, var(--good) 45%, var(--border));
+  background: var(--good-wash);
+  color: var(--good-ink);
+  font-size: 13px;
+}
+.tm-fee-zero-badge > svg {
+  flex: none;
+  padding: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--good);
+}
+.tm-fee-zero-badge strong {
+  font-size: 15px;
+  font-weight: 800;
+}
+.tm-fee-groups {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 16px;
+  gap: 10px 20px;
+}
+.tm-fee-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.tm-fee-group-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tm-fee-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -16422,7 +16484,7 @@ body:has(.util-toast) .bug-fab {
 }
 .tm-fee-rows li {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 7px;
   min-width: 0;
 }
@@ -16430,8 +16492,13 @@ body:has(.util-toast) .bug-fab {
   flex: 1;
   min-width: 0;
 }
+.tm-fee-rows li > span.num,
+.tm-fee-rows li > strong {
+  flex: none;
+}
 .tm-fee-dot {
   flex: none;
+  align-self: center;
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -16439,6 +16506,21 @@ body:has(.util-toast) .bug-fab {
 .tm-fee-zero {
   color: var(--good-ink);
   font-weight: 650;
+}
+.tm-fee-rows em {
+  font-style: normal;
+  color: var(--muted);
+}
+.tm-fee-none {
+  color: var(--muted);
+}
+.tm-fee-warn {
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--warn-ink);
 }
 .tm-fee-note {
   margin: 0;
@@ -16484,7 +16566,7 @@ body:has(.util-toast) .bug-fab {
 }
 @media (max-width: 640px) {
   .tm-trade-sides,
-  .tm-fee-rows {
+  .tm-fee-groups {
     grid-template-columns: minmax(0, 1fr);
   }
   .tm-hold-stats {

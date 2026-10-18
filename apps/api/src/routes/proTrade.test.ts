@@ -117,6 +117,9 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
       platformFeeLamports: "0",
     });
     expect((await as(ADMIN, "GET", `/pro/trade/fee?mint=nope&speed=eco`)).statusCode).toBe(400);
+    // Swap costs: Pro wallets only too, and a bad mint is refused before any quote.
+    expect((await as(TRADER, "GET", `/pro/trade/costs?mint=${MINT}`)).statusCode).toBe(404);
+    expect((await as(ADMIN, "GET", `/pro/trade/costs?mint=nope`)).statusCode).toBe(400);
   });
 
   it("lets only admins grant it, and a grant turns it on", async () => {
