@@ -362,6 +362,18 @@ async function recordWindowedPeaksForTokens(
 const FIRST_PASS_WINDOW_MINUTES = 60;
 const WINDOW_SLACK_MINUTES = 2;
 
+/**
+ * Where a full sweep picks up and how it reports its progress. The sweep walks tokens in id order,
+ * so the last id of a finished batch is a cursor: the outcome job saves it after each batch, and a
+ * run a deploy cut short resumes after it rather than from the first token (outcomeTrackingJob.ts).
+ */
+export interface SweepResume {
+  /** Only tokens whose id sorts after this one are swept. */
+  afterTokenId?: string;
+  /** Called after each batch with the batch's last token id and the totals so far. */
+  onBatch?: (lastTokenId: string, totals: PeakRecordingResult & { failedBatches: number }) => Promise<void>;
+}
+
 /** Tokens per statement in the nightly full sweep - see recordMatchPeaksFullSweep. */
 const FULL_SWEEP_TOKENS_PER_BATCH = 100;
 
@@ -385,10 +397,13 @@ export async function recordMatchPeaksFullSweep(
    * every night is what made this sweep take most of half an hour. Omitted, it reads all of it.
    */
   snapshotsSince?: Date,
+  resume: SweepResume = {},
 ): Promise<PeakRecordingResult & { failedBatches: number }> {
+  const after = resume.afterTokenId ?? "";
   const tokens = await prisma.$queryRaw<{ tokenId: string }[]>`
     SELECT DISTINCT "tokenId" FROM "Match"
     WHERE "matchedAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
+      AND "tokenId" > ${after}
     ORDER BY "tokenId"`;
   const total = { fromSnapshots: 0, fromLivePings: 0, failedBatches: 0 };
   const add = (batch: PeakRecordingResult) => {
@@ -412,6 +427,7 @@ export async function recordMatchPeaksFullSweep(
         }
       }
     }
+    await resume.onBatch?.(tokenIds[tokenIds.length - 1]!, total);
   }
   logger.info("full peak sweep complete", { tokens: tokens.length, ...total });
   return total;

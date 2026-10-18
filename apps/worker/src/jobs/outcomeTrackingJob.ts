@@ -1,4 +1,5 @@
 import { prisma, createLogger, forEachWithConcurrency, type DexScreenerClient } from "@trenchscanner/core";
+import type { JobRunMeta } from "../scheduler.js";
 import { recordMatchPeaksFullSweep } from "./matchPeaks.js";
 import { recordCuratedPeaksFullSweep } from "./curatedPeaks.js";
 
@@ -124,12 +125,88 @@ const OUTCOME_WRITE_CONCURRENCY = 4;
 /** The furthest back the nightly peak sweep reads once it has ever succeeded - see below. */
 const SWEEP_MAX_LOOKBACK_DAYS = 3;
 
+/** Mints priced (and their matches written) per step of the live pass, each step saved when done. */
+const LIVE_MINTS_PER_STEP = 300;
+
+/**
+ * How long a cut-short run's progress stays worth resuming. A run takes about twenty minutes; a
+ * checkpoint older than this belongs to a slot long gone, and the run starts over.
+ */
+const RESUME_MAX_AGE_MS = 12 * 3_600_000;
+
+/** The heartbeat meta key a run's progress is saved under (see OutcomeCheckpoint). */
+const CHECKPOINT_KEY = "outcomeResume";
+
+/**
+ * How far a run in flight has got, saved on the job's heartbeat row after every batch.
+ *
+ * Why: the run takes about twenty minutes and each deploy restarts the trainer, killing it. On
+ * 2026-10-18 the merges landed at 05:00, 05:27 and 05:57 UTC, each one cut that morning's run
+ * short, and each catch-up started from the first token again - no run finished for a day. Saved
+ * progress means a deploy costs the batch in flight, not the run. The run's own end-of-run
+ * heartbeat replaces meta and so clears it; the shutdown's "interrupted" write and a lost
+ * process leave it in place for the next boot's catch-up to resume.
+ */
+export interface OutcomeCheckpoint {
+  /** When the run that wrote this started: the snapshot bound and the resume age come from it. */
+  runStartedAt: string;
+  /** The full sweep's snapshot bound, kept so a resumed sweep reads what the first part did. */
+  snapshotsSince: string | null;
+  stage: "match-peaks" | "curated-peaks" | "live";
+  /** The last token id (sweeps) or mint (live pass) done in `stage`. */
+  after?: string;
+  fromSnapshots: number;
+  fromLivePings: number;
+  failedBatches: number;
+  callPeaksRaised: number;
+  matchesChecked: number;
+  peaksUpdated: number;
+  missingLiveData: number;
+  /** How many times this run has been resumed. */
+  resumes: number;
+}
+
+/** A saved checkpoint from heartbeat meta, or null when there is none worth resuming. */
+export function readOutcomeCheckpoint(meta: unknown, now: number): OutcomeCheckpoint | null {
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) return null;
+  const raw = (meta as Record<string, unknown>)[CHECKPOINT_KEY];
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const c = raw as Partial<OutcomeCheckpoint>;
+  if (typeof c.runStartedAt !== "string") return null;
+  const startedAt = Date.parse(c.runStartedAt);
+  if (Number.isNaN(startedAt) || now - startedAt > RESUME_MAX_AGE_MS || startedAt > now) return null;
+  if (c.stage !== "match-peaks" && c.stage !== "curated-peaks" && c.stage !== "live") return null;
+  if (c.snapshotsSince !== null && typeof c.snapshotsSince !== "string") return null;
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    runStartedAt: c.runStartedAt,
+    snapshotsSince: c.snapshotsSince ?? null,
+    stage: c.stage,
+    ...(typeof c.after === "string" ? { after: c.after } : {}),
+    fromSnapshots: n(c.fromSnapshots),
+    fromLivePings: n(c.fromLivePings),
+    failedBatches: n(c.failedBatches),
+    callPeaksRaised: n(c.callPeaksRaised),
+    matchesChecked: n(c.matchesChecked),
+    peaksUpdated: n(c.peaksUpdated),
+    missingLiveData: n(c.missingLiveData),
+    resumes: n(c.resumes),
+  };
+}
+
+/** Merges the checkpoint into the heartbeat row's meta, as recordRunProgress does its stages. */
+async function saveCheckpoint(checkpoint: OutcomeCheckpoint): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE "SystemHeartbeat"
+    SET meta = COALESCE(meta, '{}'::jsonb) || jsonb_build_object(${CHECKPOINT_KEY}::text, ${JSON.stringify(checkpoint)}::jsonb)
+    WHERE job = 'outcome-tracking'`;
+}
+
 export async function runOutcomeTrackingJob(
   dexScreener: DexScreenerClient,
   snapshotRetentionDays: number,
-): Promise<void> {
+): Promise<JobRunMeta> {
   const startedAt = Date.now();
-  logger.info("outcome tracking job starting");
 
   // A full, unbounded peak sweep once a day. The scan cycle's own pass is scoped to tokens that
   // moved recently, which is right for a one-minute cadence but means a token whose history was
@@ -143,23 +220,94 @@ export async function runOutcomeTrackingJob(
   // failed for being too big (the statement timeout) only got bigger, a loop with no way out.
   // The frequent match-peaks pass covers the recent history regardless. A failed heartbeat read
   // fails the run rather than falling back to the whole 30 days, which is the hours-long sweep.
-  const lastRun = await prisma.systemHeartbeat.findUnique({
+  const row = await prisma.systemHeartbeat.findUnique({
     where: { job: "outcome-tracking" },
-    select: { lastSuccessAt: true },
+    select: { lastSuccessAt: true, meta: true },
   });
-  const snapshotsSince = lastRun?.lastSuccessAt
-    ? new Date(
-        Math.max(
-          lastRun.lastSuccessAt.getTime() - 86_400_000,
-          startedAt - SWEEP_MAX_LOOKBACK_DAYS * 86_400_000,
-        ),
-      )
-    : undefined;
-  const swept = await recordMatchPeaksFullSweep(snapshotRetentionDays, snapshotsSince);
-  // The model calls' highs, on the same bound: their cards' Peak, like a filter alert's ATH.
-  await recordCuratedPeaksFullSweep(snapshotRetentionDays, snapshotsSince);
+  const resumed = readOutcomeCheckpoint(row?.meta, startedAt);
+  const runStartedAt = resumed ? Date.parse(resumed.runStartedAt) : startedAt;
+  const snapshotsSince = resumed
+    ? resumed.snapshotsSince === null
+      ? undefined
+      : new Date(resumed.snapshotsSince)
+    : row?.lastSuccessAt
+      ? new Date(
+          Math.max(
+            row.lastSuccessAt.getTime() - 86_400_000,
+            runStartedAt - SWEEP_MAX_LOOKBACK_DAYS * 86_400_000,
+          ),
+        )
+      : undefined;
+  const checkpoint: OutcomeCheckpoint = resumed
+    ? { ...resumed, resumes: resumed.resumes + 1 }
+    : {
+        runStartedAt: new Date(startedAt).toISOString(),
+        snapshotsSince: snapshotsSince?.toISOString() ?? null,
+        stage: "match-peaks",
+        fromSnapshots: 0,
+        fromLivePings: 0,
+        failedBatches: 0,
+        callPeaksRaised: 0,
+        matchesChecked: 0,
+        peaksUpdated: 0,
+        missingLiveData: 0,
+        resumes: 0,
+      };
+  const stageOrder = ["match-peaks", "curated-peaks", "live"] as const;
+  const stageIndex = stageOrder.indexOf(checkpoint.stage);
+  /** The resume cursor for `stage`: the saved one if the run stopped in it, else from the start. */
+  const afterFor = (stage: (typeof stageOrder)[number]) =>
+    checkpoint.stage === stage ? checkpoint.after : undefined;
+  const save = (patch: Partial<OutcomeCheckpoint>) => {
+    Object.assign(checkpoint, patch);
+    // Best effort: a lost save costs a resume a batch or so, never the run.
+    return saveCheckpoint(checkpoint).catch((err) =>
+      logger.warn("could not save outcome tracking progress", { error: String(err) }),
+    );
+  };
+  const stagesMs: Record<string, number> = {};
+  let stageStartedAt = Date.now();
+  const endStage = (name: string) => {
+    stagesMs[name] = Date.now() - stageStartedAt;
+    stageStartedAt = Date.now();
+  };
+  logger.info(
+    "outcome tracking job starting",
+    resumed ? { resumingAt: resumed.stage, after: resumed.after } : {},
+  );
 
-  const cutoff = new Date(startedAt - OUTCOME_TRACKING_WINDOW_DAYS * 86_400_000);
+  if (stageIndex <= 0) {
+    const base = {
+      fromSnapshots: checkpoint.fromSnapshots,
+      fromLivePings: checkpoint.fromLivePings,
+      failedBatches: checkpoint.failedBatches,
+    };
+    await recordMatchPeaksFullSweep(snapshotRetentionDays, snapshotsSince, {
+      afterTokenId: afterFor("match-peaks"),
+      onBatch: (after, totals) =>
+        save({
+          stage: "match-peaks",
+          after,
+          fromSnapshots: base.fromSnapshots + totals.fromSnapshots,
+          fromLivePings: base.fromLivePings + totals.fromLivePings,
+          failedBatches: base.failedBatches + totals.failedBatches,
+        }),
+    });
+    await save({ stage: "curated-peaks", after: undefined });
+    endStage("matchPeaks");
+  }
+  // The model calls' highs, on the same bound: their cards' Peak, like a filter alert's ATH.
+  if (stageIndex <= 1) {
+    const base = checkpoint.callPeaksRaised;
+    await recordCuratedPeaksFullSweep(snapshotRetentionDays, snapshotsSince, {
+      afterTokenId: afterFor("curated-peaks"),
+      onBatch: (after, raised) => save({ stage: "curated-peaks", after, callPeaksRaised: base + raised }),
+    });
+    await save({ stage: "live", after: undefined });
+    endStage("callPeaks");
+  }
+
+  const cutoff = new Date(runStartedAt - OUTCOME_TRACKING_WINDOW_DAYS * 86_400_000);
   const matches = await prisma.match.findMany({
     where: { matchedAt: { gt: cutoff } },
     // Only what the reconcile reads - full token and snapshot rows for 30 days of matches is a
@@ -175,24 +323,34 @@ export async function runOutcomeTrackingJob(
       snapshot: { select: { marketCapUsd: true } },
     },
   });
+  type MatchRow = (typeof matches)[number];
+  const byMint = new Map<string, MatchRow[]>();
+  for (const m of matches) {
+    const list = byMint.get(m.token.mintAddress);
+    if (list) list.push(m);
+    else byMint.set(m.token.mintAddress, [m]);
+  }
+  // In a fixed order so the saved mint is a cursor; a resumed run skips the mints already done.
+  const liveAfter = afterFor("live");
+  const mints = [...byMint.keys()].sort().filter((mint) => liveAfter === undefined || mint > liveAfter);
 
-  let uniqueMints = 0;
-  let updated = 0;
-  let skipped = 0;
-
-  if (matches.length > 0) {
-    const mints = [...new Set(matches.map((m) => m.token.mintAddress))];
-    uniqueMints = mints.length;
+  // A step at a time, each saved when its writes are done, so a deploy partway through the
+  // minutes of price fetching costs one step rather than the whole pass.
+  for (let i = 0; i < mints.length; i += LIVE_MINTS_PER_STEP) {
+    const step = mints.slice(i, i + LIVE_MINTS_PER_STEP);
+    const stepMatches = step.flatMap((mint) => byMint.get(mint) ?? []);
+    let updated = 0;
+    let skipped = 0;
     // One request at a time: this is thousands of mints, and DexScreener's rate limit is shared
     // with the fast-match and scan lanes that alerts actually wait on.
-    const live = await dexScreener.getTokensByAddresses(mints, 1);
+    const live = await dexScreener.getTokensByAddresses(step, 1);
     const mcapByMint = new Map(live.map((c) => [c.mintAddress, c.marketCapUsd]));
-    // Read after the fetch, which takes minutes: a new high is dated to when it was seen.
+    // Read after the fetch, which takes a while: a new high is dated to when it was seen.
     const now = new Date();
 
     // Four writes in flight rather than one: thousands of matches, one round trip each, was a
     // large share of this job's runtime, and each write is a single-row update by primary key.
-    await forEachWithConcurrency(matches, OUTCOME_WRITE_CONCURRENCY, async (match) => {
+    await forEachWithConcurrency(stepMatches, OUTCOME_WRITE_CONCURRENCY, async (match) => {
       // Token not found in the live response (delisted, liquidity pulled, DexScreener hasn't
       // indexed it, ...) - `undefined` tells reconcileMatchOutcome to work from the recorded peak
       // alone rather than treating "no data this run" as "worth zero now". It can still stamp
@@ -213,11 +371,11 @@ export async function runOutcomeTrackingJob(
       );
       if (!update) return;
 
-      // The live prices above take minutes to fetch, and match-peaks keeps raising peaks the whole
+      // The live prices above take a while to fetch, and match-peaks keeps raising peaks the whole
       // time - so a new high from this run only lands if it is still higher than what is on the
       // row now. Overwriting unconditionally lost peaks seen only by the live-price pings for
       // good. Only the peak itself is written: the derived columns were worked out from the row as
-      // it was read minutes ago, so writing them lowered a peakReturnPct match-peaks had since
+      // it was read earlier, so writing them lowered a peakReturnPct match-peaks had since
       // raised and replaced a hitHundredPctAt it had since stamped (set once, shown on the
       // Leaderboard) with this run's later date. repairOutcomeBookkeeping below derives both from
       // the row as it is.
@@ -233,26 +391,40 @@ export async function runOutcomeTrackingJob(
       });
       updated += write.count;
     });
+    await save({
+      stage: "live",
+      after: step[step.length - 1],
+      matchesChecked: checkpoint.matchesChecked + stepMatches.length,
+      peaksUpdated: checkpoint.peaksUpdated + updated,
+      missingLiveData: checkpoint.missingLiveData + skipped,
+    });
   }
+  endStage("livePrices");
 
   const repaired = await repairOutcomeBookkeeping();
+  endStage("repair");
 
-  logger.info("outcome tracking job complete", {
-    durationMs: Date.now() - startedAt,
-    matchesChecked: matches.length,
-    uniqueMints,
-    peaksUpdated: updated,
-    missingLiveData: skipped,
-    peaksRecoveredInFullSweep: swept.fromSnapshots + swept.fromLivePings,
-    peakSweepBatchesFailed: swept.failedBatches,
+  const summary = {
+    matchesChecked: checkpoint.matchesChecked,
+    uniqueMints: byMint.size,
+    peaksUpdated: checkpoint.peaksUpdated,
+    missingLiveData: checkpoint.missingLiveData,
+    peaksRecoveredInFullSweep: checkpoint.fromSnapshots + checkpoint.fromLivePings,
+    callPeaksRaised: checkpoint.callPeaksRaised,
+    peakSweepBatchesFailed: checkpoint.failedBatches,
     bookkeepingRepaired: repaired,
-  });
+    resumes: checkpoint.resumes,
+  };
+  logger.info("outcome tracking job complete", { durationMs: Date.now() - startedAt, ...summary, stagesMs });
   // The next sweep reads only snapshots from a day before this run's success, so a batch that
   // failed here would never have its older snapshots read again. Failing the run keeps
   // lastSuccessAt where it was, and the next run reads far enough back to cover them.
-  if (swept.failedBatches > 0) {
-    throw new Error(`full peak sweep: ${swept.failedBatches} token(s) failed; next run re-reads them`);
+  if (checkpoint.failedBatches > 0) {
+    throw new Error(`full peak sweep: ${checkpoint.failedBatches} token(s) failed; next run re-reads them`);
   }
+  // On the heartbeat row (replacing meta, which also clears the checkpoint): the stages say where
+  // a slow night's time went, and resumes how many deploys this run outlived.
+  return { ...summary, stagesMs };
 }
 
 /**
