@@ -1,7 +1,10 @@
 import { describe, it, expect, afterAll, beforeEach } from "vitest";
 import { prisma } from "../db.js";
+import { creditBurnCredits, creditPots } from "./credits.js";
 import {
   creditsShort,
+  recordPlatformTrade,
+  refundSacrifice,
   freeBufferRank,
   resetSacrificeSettingsCacheForTests,
   sacrificeFor,
@@ -178,5 +181,82 @@ describe.skipIf(!dbAvailable)("the fee tier", () => {
       pays: true,
       reason: "below_cutoff",
     });
+  });
+});
+
+describe.skipIf(!dbAvailable)("taking the Sacrifice at send", () => {
+  const RUN = Date.now();
+  const W = `SacrificeSendWallet${RUN}`;
+  const TOKENS = 10n ** 6n;
+  const trade = (n: number, mode: "on" | "shadow" | "off", asdfRaw: bigint | null = 1_000n * TOKENS) => ({
+    signature: `SacrificeSendSig${RUN}-${n}`,
+    wallet: W,
+    mint: "So11111111111111111111111111111111111111112",
+    side: "buy" as const,
+    lamports: SOL,
+    networkFeeLamports: 10_000n,
+    sacrifice: {
+      mode,
+      tier: "below_cutoff" as const,
+      pays: true,
+      asdfRaw,
+      lamports: 2_000_000n,
+      asdfPerSol: 740_000,
+    },
+  });
+
+  afterAll(async () => {
+    await prisma.burnCreditEntry.deleteMany({ where: { wallet: W } });
+    await prisma.platformTrade.deleteMany({ where: { wallet: W } });
+  });
+
+  it("lets only one of two sends spend the same credits, and records each charge with its trade", async () => {
+    await creditBurnCredits(
+      `SacrificeSendBurn${RUN}`,
+      { burnerWallet: W, rawAmount: 1_500n * TOKENS },
+      "claim",
+    );
+    const outcomes = await Promise.all([
+      recordPlatformTrade(trade(1, "on")),
+      recordPlatformTrade(trade(2, "on")),
+    ]);
+    expect(outcomes.map((o) => o.status).sort()).toEqual(["recorded", "short"]);
+    expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(500n * TOKENS);
+    // The short one wrote nothing: no trade row, so nothing went on chain for it either.
+    expect(await prisma.platformTrade.count({ where: { wallet: W } })).toBe(1);
+    const row = await prisma.platformTrade.findFirst({ where: { wallet: W } });
+    expect(row).toMatchObject({
+      platformFeeLamports: 2_000_000n,
+      sacrificeAsdfRaw: 1_000n * TOKENS,
+      sacrificeMode: "on",
+      feeTier: "below_cutoff",
+      asdfPerSol: "740000",
+    });
+  });
+
+  it("records the Sacrifice in shadow mode but takes nothing", async () => {
+    const before = (await creditPots(W, prisma, 100)).burnedRaw;
+    expect(await recordPlatformTrade(trade(3, "shadow", 9_000n * TOKENS))).toEqual({
+      status: "recorded",
+      taken: 0n,
+    });
+    expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(before);
+    expect(
+      await prisma.platformTrade.findUnique({ where: { signature: trade(3, "shadow").signature } }),
+    ).toMatchObject({
+      platformFeeLamports: 0n,
+      sacrificeAsdfRaw: 9_000n * TOKENS,
+      sacrificeMode: "shadow",
+    });
+    expect(await refundSacrifice(trade(3, "shadow").signature)).toBe(0n);
+  });
+
+  it("refunds a trade's Sacrifice once, however many times it is asked", async () => {
+    const sig = trade(1, "on").signature;
+    const before = (await creditPots(W, prisma, 100)).burnedRaw;
+    const refunds = await Promise.all([refundSacrifice(sig), refundSacrifice(sig)]);
+    expect(refunds.sort()).toEqual([0n, 1_000n * TOKENS]);
+    expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(before + 1_000n * TOKENS);
+    expect(await refundSacrifice(sig)).toBe(0n);
   });
 });

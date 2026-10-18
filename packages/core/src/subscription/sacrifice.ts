@@ -1,5 +1,5 @@
-import { prisma } from "../db.js";
-import { rawPerCredit } from "./credits.js";
+import { Prisma, prisma } from "../db.js";
+import { creditPots, creditWalletLockKey, rawPerCredit } from "./credits.js";
 import { asdfRawPerSol } from "./asdfPrice.js";
 import { PRO_HOLDER_COUNT } from "./proHolders.js";
 
@@ -179,4 +179,108 @@ export function sacrificeFor(lamports: bigint, asdfPerSol: number, tokensPerCred
 export function creditsShort(asdfRaw: bigint, burnedRaw: bigint, tokensPerCredit: number): number {
   if (asdfRaw <= burnedRaw || tokensPerCredit <= 0) return 0;
   return Number(ceilDiv(asdfRaw - burnedRaw, rawPerCredit(tokensPerCredit)));
+}
+
+/** What the send records for one Pro trade, and the Sacrifice it takes. */
+export interface PlatformTradeRecord {
+  signature: string;
+  wallet: string;
+  mint: string;
+  side: "buy" | "sell";
+  lamports: bigint;
+  networkFeeLamports: bigint;
+  sacrifice: {
+    mode: SacrificeMode;
+    /** The tier's reason, null in "off" mode. */
+    tier: SacrificeTier["reason"] | null;
+    pays: boolean;
+    /** ASDF base units; null when nothing was priced (off, free, or a price refusal in shadow). */
+    asdfRaw: bigint | null;
+    lamports: bigint | null;
+    asdfPerSol: number | null;
+  };
+}
+
+export type RecordTradeOutcome =
+  | { status: "recorded"; taken: bigint }
+  /** "on", a fee payer, and the burned pot no longer covers it: nothing was written. */
+  | { status: "short"; burnedRaw: bigint; asdfRaw: bigint };
+
+/**
+ * The send's one database transaction (Build guide step 5), before the trade goes to Sender:
+ * under the wallet's credit lock, re-checks the burned pot, writes the "sacrifice" row (burned
+ * source, the trade's signature) and the PlatformTrade row with the Sacrifice. Two sends at once
+ * can't spend the same credits, and a charge is never unrecorded. "shadow" records the Sacrifice on
+ * the trade but takes nothing; "off" records the trade alone.
+ */
+export async function recordPlatformTrade(r: PlatformTradeRecord): Promise<RecordTradeOutcome> {
+  const s = r.sacrifice;
+  const take = s.mode === "on" && s.pays && s.asdfRaw !== null && s.asdfRaw > 0n ? s.asdfRaw : 0n;
+  return prisma.$transaction(async (tx) => {
+    if (take > 0n) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${creditWalletLockKey(r.wallet)}))`;
+      const pots = await creditPots(r.wallet, tx);
+      if (pots.burnedRaw < take)
+        return { status: "short" as const, burnedRaw: pots.burnedRaw, asdfRaw: take };
+      await tx.burnCreditEntry.create({
+        data: {
+          wallet: r.wallet,
+          delta: 0,
+          kind: "sacrifice",
+          source: "burned",
+          asdfRaw: -take,
+          tradeSignature: r.signature,
+          subject: r.mint,
+          note: r.side,
+        },
+      });
+    }
+    await tx.platformTrade.create({
+      data: {
+        signature: r.signature,
+        wallet: r.wallet,
+        mint: r.mint,
+        side: r.side,
+        lamports: r.lamports,
+        networkFeeLamports: r.networkFeeLamports,
+        platformFeeLamports: take > 0n ? (s.lamports ?? 0n) : 0n,
+        sacrificeAsdfRaw: s.pays && s.mode !== "off" ? (s.asdfRaw ?? 0n) : 0n,
+        asdfPerSol: s.asdfPerSol !== null ? String(s.asdfPerSol) : null,
+        feeTier: s.tier,
+        sacrificeMode: s.mode === "off" ? null : s.mode,
+      },
+    });
+    return { status: "recorded" as const, taken: take };
+  });
+}
+
+/**
+ * Puts a trade's Sacrifice back (it failed, expired, or never went out): one "sacrifice-refund"
+ * row for what its "sacrifice" row took. The unique (kind, tradeSignature) makes a second attempt
+ * a no-op, so the settlement job and the panel can race. Returns the ASDF base units refunded.
+ */
+export async function refundSacrifice(signature: string): Promise<bigint> {
+  const spent = await prisma.burnCreditEntry.findUnique({
+    where: { kind_tradeSignature: { kind: "sacrifice", tradeSignature: signature } },
+    select: { wallet: true, asdfRaw: true, subject: true, note: true },
+  });
+  if (!spent?.asdfRaw || spent.asdfRaw >= 0n) return 0n;
+  try {
+    await prisma.burnCreditEntry.create({
+      data: {
+        wallet: spent.wallet,
+        delta: 0,
+        kind: "sacrifice-refund",
+        source: "burned",
+        asdfRaw: -spent.asdfRaw,
+        tradeSignature: signature,
+        subject: spent.subject,
+        note: spent.note,
+      },
+    });
+    return -spent.asdfRaw;
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") return 0n;
+    throw err;
+  }
 }
