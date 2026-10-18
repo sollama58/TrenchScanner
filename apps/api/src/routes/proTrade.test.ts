@@ -15,7 +15,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
-import { plainRefusal } from "./proTrade.js";
+import { plainRefusal, TradeCooldown } from "./proTrade.js";
 
 describe("plainRefusal", () => {
   it("says the common refusals in the trader's words", () => {
@@ -27,6 +27,28 @@ describe("plainRefusal", () => {
     expect(plainRefusal("refused: a program this swap may not call")).toBe(
       "The trade was refused before signing: a program this swap may not call",
     );
+  });
+});
+
+describe("TradeCooldown", () => {
+  it("allows one trade every 5 seconds per wallet, and gives a refused send's slot back", () => {
+    let now = 1_000_000;
+    const cooldown = new TradeCooldown(5_000, () => now);
+    expect(cooldown.left("a")).toBe(0);
+    cooldown.take("a");
+    now += 2_000;
+    expect(cooldown.left("a")).toBe(3_000);
+    // Another wallet isn't held up.
+    expect(cooldown.left("b")).toBe(0);
+    now += 3_000;
+    expect(cooldown.left("a")).toBe(0);
+    // Sender refused it: nothing went out, so the earlier send's window stands again.
+    const giveBack = cooldown.take("a");
+    giveBack();
+    expect(cooldown.left("a")).toBe(0);
+    const fresh = new TradeCooldown(5_000, () => now);
+    fresh.take("c")();
+    expect(fresh.left("c")).toBe(0);
   });
 });
 
@@ -120,6 +142,18 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
     // Swap costs: Pro wallets only too, and a bad mint is refused before any quote.
     expect((await as(TRADER, "GET", `/pro/trade/costs?mint=${MINT}`)).statusCode).toBe(404);
     expect((await as(ADMIN, "GET", `/pro/trade/costs?mint=nope`)).statusCode).toBe(400);
+  });
+
+  it("refuses a buy under 0.01 SOL before building anything", async () => {
+    const res = await as(ADMIN, "POST", "/pro/trade/build", {
+      mint: MINT,
+      side: "buy",
+      amount: "9999999",
+      slippageBps: 100,
+      speed: "eco",
+    });
+    expect(res.statusCode).toBe(422);
+    expect(res.json()).toMatchObject({ error: "The smallest buy is 0.01 SOL." });
   });
 
   it("lets only admins grant it, and a grant turns it on", async () => {
@@ -366,6 +400,27 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     expect(await proHolderStanding(GRACE, at)).toMatchObject({ state: "top" });
     // The mover holds under half the 250th wallet's share: no grace for it.
     expect(await proHolderStanding(mover, at)).toEqual({ state: "none" });
+    resetProHolderCacheForTests();
+  });
+
+  it("gives the first scan's holders Pro Mode at once, then makes newcomers wait their hour", async () => {
+    await prisma.proHolder.deleteMany({});
+    resetProHolderCacheForTests();
+    const first = new Date();
+    const scan = (owners: string[], at: Date) =>
+      refreshProHolders(
+        {
+          getTopHoldersBatch: async (mints) =>
+            new Map(mints.map((m) => [m, { status: "found", holders: owners.map((owner) => ({ owner })) }])),
+        },
+        at,
+      );
+    await scan([HOLDER], first);
+    expect(await proHolderStanding(HOLDER, first)).toMatchObject({ state: "top", rank: 1 });
+    const next = new Date(first.getTime() + 5 * 60_000);
+    await scan([HOLDER, NEWBIE], next);
+    expect(await proHolderStanding(HOLDER, next)).toMatchObject({ state: "top" });
+    expect(await proHolderStanding(NEWBIE, next)).toMatchObject({ state: "pending" });
     resetProHolderCacheForTests();
   });
 });

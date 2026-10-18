@@ -32,9 +32,10 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every 5 minutes: cleans up after a Free Access period ends. Late, it leaves free accounts
   // standing a while longer; nothing else waits on it.
   "free-access": 30 * 60_000,
-  // Every 10 minutes: who of the top 250 $ASDFASDFA holders has Pro Mode. Late, a wallet that
-  // just bought in waits longer for it; nobody loses it (a missed scan changes no one's standing).
-  "pro-holders": 45 * 60_000,
+  // Every PRO_HOLDER_SCAN_MINUTES (5): who of the top 250 $ASDFASDFA holders has Pro Mode. Late, a
+  // wallet that just bought in waits longer for it; nobody loses it (a missed scan changes no
+  // one's standing), until an hour without scans turns holders into a grace period.
+  "pro-holders": 20 * 60_000,
   // Every minute, and while it's down every open training row's label window is silently
   // recording nothing - an hour of downtime is an hour of alerts whose outcomes read "flat".
   "candidate-watch": 10 * 60_000,

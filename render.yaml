@@ -106,10 +106,11 @@ envVarGroups:
         value: https://frontend-api-v3.pump.fun
       - key: NODE_ENV
         value: production
-      # Pro trades from the token modal for admins only (api), and no Pro holder job (worker): user
-      # decision 2026-10-18. Flip to "true" here to open it to grants and the top holders.
+      # Pro trades from the token modal for every Pro Mode wallet: grants and the top 250 holders
+      # (api), with the Pro holder scan running (worker). User ask 2026-10-18 04:09 UTC, after
+      # shipping admins-only at 02:17. "false" takes it back to the admin wallets alone.
       - key: PRO_TRADING_PUBLIC
-        value: "false"
+        value: "true"
 
 services:
   - type: web

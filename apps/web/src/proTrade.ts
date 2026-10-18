@@ -150,6 +150,9 @@ export const MAX_CUSTOM_FEE_SOL = 0.01;
 /** Sender's minimum tip per speed, SOL. */
 export const MIN_TIP_SOL = { eco: 0.000005, turbo: 0.001 } as const;
 
+/** The smallest Pro trade the API takes (sales of 100% aside). */
+export const MIN_TRADE_SOL = 0.01;
+
 export const DEFAULT_TRADE_SETTINGS: TradeSettings = {
   buyPresets: [0.1, 0.25, 0.5, 1],
   sellPresets: [25, 50, 100],
@@ -198,7 +201,7 @@ export function parseTradeSettings(raw: string | null): TradeSettings {
       quickBuy: {
         enabled: q.enabled === true,
         amountSol:
-          typeof q.amountSol === "number" && q.amountSol > 0 && q.amountSol <= 100
+          typeof q.amountSol === "number" && q.amountSol >= MIN_TRADE_SOL && q.amountSol <= 100
             ? q.amountSol
             : DEFAULT_QUICK_BUY.amountSol,
         position: QUICK_BUY_POSITIONS.includes(q.position as never)
@@ -211,7 +214,7 @@ export function parseTradeSettings(raw: string | null): TradeSettings {
       },
       buyPresets: nums(
         s.buyPresets,
-        (n) => n > 0 && n <= 100,
+        (n) => n >= MIN_TRADE_SOL && n <= 100,
         DEFAULT_TRADE_SETTINGS.buyPresets,
         BUY_PRESETS_PER_ROW * buyRows,
       ),

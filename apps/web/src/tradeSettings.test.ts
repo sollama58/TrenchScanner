@@ -36,6 +36,9 @@ describe("trade settings", () => {
         .quickBuy,
     ).toEqual(DEFAULT_QUICK_BUY);
     expect(parse({ quickBuy: { amountSol: 500 } }).quickBuy.amountSol).toBe(DEFAULT_QUICK_BUY.amountSol);
+    // Below the API's 0.01 SOL minimum.
+    expect(parse({ quickBuy: { amountSol: 0.005 } }).quickBuy.amountSol).toBe(DEFAULT_QUICK_BUY.amountSol);
+    expect(parse({ buyPresets: [0.005, 1] }).buyPresets).toEqual(DEFAULT_TRADE_SETTINGS.buyPresets);
   });
 
   it("splits buy buttons over one or two rows", () => {
@@ -50,5 +53,6 @@ describe("trade settings", () => {
     expect(parseAmounts("1 2 3 4 5 6", 100, 5)).toEqual([1, 2, 3, 4, 5]);
     expect(parseAmounts("-1 abc 0 150 50", 100, 5)).toEqual([50]);
     expect(parseAmounts("", 100, 5)).toEqual([]);
+    expect(parseAmounts("0.005 0.01 0.5", 100, 5, 0.01)).toEqual([0.01, 0.5]);
   });
 });

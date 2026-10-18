@@ -119,6 +119,9 @@ type Session =
   | { state: "linking"; error?: string }
   | { state: "signed-in"; user: User };
 
+/** How often an open, signed-in page re-reads its session for Pro Mode changes. */
+const PRO_RECHECK_MS = 2 * 60_000;
+
 export function App() {
   // A returning visitor starts signed in as last time (src/cache.ts keeps the answer), so their
   // feed paints at once; the check below signs them out if the session has since ended.
@@ -136,7 +139,14 @@ export function App() {
   const checkSession = (maxAgeMs: number) => {
     // index.html already started this request; cachedGet adopts it rather than sending another.
     cachedGet<User>("/auth/me", maxAgeMs)
-      .then((user) => setSession({ state: "signed-in", user }))
+      // The same answer as before keeps the session object, so a routine re-read redraws nothing.
+      .then((user) =>
+        setSession((prev) =>
+          prev.state === "signed-in" && JSON.stringify(prev.user) === JSON.stringify(user)
+            ? prev
+            : { state: "signed-in", user },
+        ),
+      )
       .catch((e: unknown) => {
         // Only a real "not signed in" answer ends the session and clears what this device kept.
         if (e instanceof ApiError && e.status === 401) {
@@ -286,14 +296,29 @@ export function App() {
   const pro = signedIn ? proStateOf(session.user) : null;
   // Every render: setProState ignores a state equal to the one it has.
   useEffect(() => setProState(pro));
-  // In a grace period, the session is re-read every few minutes: back in the top 250, the
-  // warnings go; out of time, the panel turns to selling only.
-  const inGrace = pro?.graceEndsAt != null;
+  // Pro Mode changes while a page stays open: a wallet that has just held its hour in the top 250
+  // (or was granted it) gets the Trade panel, one in its grace sees the warnings go or the panel
+  // close. So a signed-in session is re-read every few minutes, and when the tab comes back into
+  // view after a while.
   useEffect(() => {
-    if (!inGrace) return;
-    const timer = setInterval(() => checkSession(0), 5 * 60_000);
-    return () => clearInterval(timer);
-  }, [inGrace]);
+    if (!signedIn) return;
+    let lastRead = Date.now();
+    const reread = () => {
+      lastRead = Date.now();
+      checkSession(0);
+    };
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") reread();
+    }, PRO_RECHECK_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && Date.now() - lastRead > 60_000) reread();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [signedIn]);
   // The Stream tab only for a signed-in reader who switched it on in Settings.
   const appearance = useAppearance();
   const streamOn = appearance.streamTab && signedIn;

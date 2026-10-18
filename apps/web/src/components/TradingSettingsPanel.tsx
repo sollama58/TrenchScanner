@@ -3,6 +3,7 @@ import {
   BUY_PRESETS_PER_ROW,
   DEFAULT_TRADE_SETTINGS,
   MAX_CUSTOM_FEE_SOL,
+  MIN_TRADE_SOL,
   MIN_TIP_SOL,
   QUICK_BUY_COLORS,
   QUICK_BUY_POSITIONS,
@@ -29,12 +30,12 @@ const POSITION_LABEL: Record<QuickBuySettings["position"], string> = {
 };
 const SIZE_LABEL: Record<QuickBuySettings["size"], string> = { s: "Small", m: "Medium", l: "Large" };
 
-/** "0.1, 0.25 0.5" -> [0.1, 0.25, 0.5]: positive amounts up to `max`, at most `count` of them. */
-export function parseAmounts(text: string, max: number, count: number): number[] {
+/** "0.1, 0.25 0.5" -> [0.1, 0.25, 0.5]: amounts from `min` (above 0) up to `max`, at most `count` of them. */
+export function parseAmounts(text: string, max: number, count: number, min = 0): number[] {
   return text
     .split(/[\s,]+/)
     .map(Number)
-    .filter((n) => Number.isFinite(n) && n > 0 && n <= max)
+    .filter((n) => Number.isFinite(n) && n > 0 && n >= min && n <= max)
     .slice(0, count);
 }
 
@@ -57,7 +58,7 @@ function Panel({ settings }: { settings: TradeSettings }) {
   const maxBuys = BUY_PRESETS_PER_ROW * settings.buyRows;
 
   const saveBuys = (rows = settings.buyRows) => {
-    const list = parseAmounts(buys, 100, BUY_PRESETS_PER_ROW * rows);
+    const list = parseAmounts(buys, 100, BUY_PRESETS_PER_ROW * rows, MIN_TRADE_SOL);
     const next = list.length > 0 ? list : settings.buyPresets.slice(0, BUY_PRESETS_PER_ROW * rows);
     setBuys(next.join(", "));
     update({ buyPresets: next, buyRows: rows });
@@ -92,7 +93,9 @@ function Panel({ settings }: { settings: TradeSettings }) {
       <h3 className="trading-sub">Buy buttons under the chart</h3>
       <div className="trading-grid">
         <label className="trading-field">
-          <span className="small muted">Amounts, SOL (up to {maxBuys})</span>
+          <span className="small muted">
+            Amounts, SOL (from {MIN_TRADE_SOL}, up to {maxBuys})
+          </span>
           <input value={buys} onChange={(e) => setBuys(e.target.value)} onBlur={() => saveBuys()} />
         </label>
         <div className="trading-field">
@@ -236,18 +239,18 @@ function Panel({ settings }: { settings: TradeSettings }) {
       {q.enabled && (
         <div className="trading-grid">
           <label className="trading-field">
-            <span className="small muted">Amount per tap, SOL</span>
+            <span className="small muted">Amount per tap, SOL (from {MIN_TRADE_SOL})</span>
             <input
               type="number"
               inputMode="decimal"
-              min={0.001}
+              min={MIN_TRADE_SOL}
               max={100}
               step={0.05}
               value={quickAmount}
               onChange={(e) => setQuickAmount(e.target.value)}
               onBlur={() => {
                 const v = Number(quickAmount);
-                if (Number.isFinite(v) && v > 0 && v <= 100) updateQuick({ amountSol: v });
+                if (Number.isFinite(v) && v >= MIN_TRADE_SOL && v <= 100) updateQuick({ amountSol: v });
                 else setQuickAmount(String(q.amountSol));
               }}
             />
