@@ -13,6 +13,7 @@ import {
   type BubbleMoment,
 } from "../bubbleMap";
 import { cachedGet } from "../cache";
+import { createPortal } from "react-dom";
 import {
   createContext,
   useCallback,
@@ -74,6 +75,9 @@ import { CustomizeDrawer } from "./CustomizeDrawer";
 import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
 import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
+import { ExitPlanInfo } from "./ExitPlanInfo";
+import { PRO_MODE_PERKS } from "./ProModeCard";
+import { exitPlanSteps, useExitPlan } from "../exitPlan";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import { guessPath, pathFrom, type PathGuess, type PathStep } from "../pricePathing";
@@ -94,6 +98,7 @@ import {
 import { Skeleton } from "./Charts";
 import { LoadingNote, LoadSteps, SkelValue, Spinner, useElapsed } from "./Loading";
 import { openWallet } from "../walletModal";
+import { closeTokenModal } from "../tokenModal";
 import { BubbleMapPlaceholder, BubbleMapSection, reloadBubbleMaps, useBubbleMaps } from "./BubbleMap";
 import { TopHolders } from "./TopHolders";
 import type { HolderEntry } from "../holderEntry";
@@ -110,6 +115,7 @@ import {
   CopyIcon,
   ExternalIcon,
   ClockIcon,
+  CrownIcon,
   LockIcon,
   RobotIcon,
   SageIcon,
@@ -254,6 +260,22 @@ function useTokenApi(mint: string): string {
   return `${utility?.apiBase ?? "/tokens"}/${encodeURIComponent(mint)}`;
 }
 
+/** Wide enough for Scope's terminal layout: chart, bubble map and the trading rail side by side. */
+const TERMINAL_QUERY = "(min-width: 1200px)";
+
+function useMatches(query: string): boolean {
+  const [matches, setMatches] = useState(() => window.matchMedia?.(query).matches ?? false);
+  useEffect(() => {
+    const list = window.matchMedia?.(query);
+    if (!list) return;
+    const sync = () => setMatches(list.matches);
+    sync();
+    list.addEventListener("change", sync);
+    return () => list.removeEventListener("change", sync);
+  }, [query]);
+  return matches;
+}
+
 /**
  * Everything about one token on a feed card, in a native modal dialog (a centred panel on desktop,
  * a full page on phones, user ask 2026-10-18; the address bar stays as it was): its market-cap chart since launch with the alert marked, the
@@ -269,6 +291,7 @@ export function TokenModal({
   onClose,
   utility = null,
   opening,
+  scope = false,
 }: {
   /** Null while the view is still being fetched: `opening` then says for which coin. */
   card: Card | null;
@@ -276,8 +299,23 @@ export function TokenModal({
   onClose: () => void;
   utility?: UtilityMode | null;
   opening?: OpeningView;
+  /** Opened from the Scope board: a wide window gets the terminal layout (user ask 2026-10-18). */
+  scope?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  // Desktop only: a phone or a narrow window keeps the usual view whatever opened it.
+  const wide = useMatches(TERMINAL_QUERY);
+  const terminal = scope && !utility && wide && !!card;
+  // Full window under the site's bar (user pick 2026-10-18), which stays in view above it.
+  const [barH, setBarH] = useState(0);
+  useEffect(() => {
+    if (!terminal) return;
+    const bar = document.querySelector(".topbar");
+    const measure = () => setBarH(Math.max(0, Math.round(bar?.getBoundingClientRect().bottom ?? 0)));
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [terminal]);
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog || dialog.open) return;
@@ -288,7 +326,8 @@ export function TokenModal({
   return (
     <dialog
       ref={ref}
-      className="about-modal sheet-modal tm-modal"
+      className={`about-modal sheet-modal tm-modal${terminal ? " tm-terminal" : ""}`}
+      style={terminal ? ({ "--tm-bar-h": `${barH}px` } as React.CSSProperties) : undefined}
       aria-labelledby="tm-title"
       onClose={(e) => {
         // Only this dialog's own close: a nested dialog's close bubbles up through React.
@@ -304,7 +343,7 @@ export function TokenModal({
     >
       <UtilityContext.Provider value={utility}>
         {card ? (
-          <TokenBody card={card} now={now} onClose={() => ref.current?.close()} />
+          <TokenBody card={card} now={now} onClose={() => ref.current?.close()} terminal={terminal} />
         ) : (
           opening && <OpeningBody {...opening} onClose={() => ref.current?.close()} />
         )}
@@ -553,6 +592,10 @@ function chartHeight(expanded = false): number {
   // Pro Mode's bigger chart, while trading or holding the coin: room for the trade marks.
   return expanded ? 400 : 320;
 }
+/** The Scope terminal's chart: most of the window's height left over by the header and the tabs. */
+function terminalChartHeight(): number {
+  return Math.round(Math.min(560, Math.max(320, window.innerHeight - 440)));
+}
 function chartBoxHeight(): number {
   return chartHeight() + CHART_CHROME_PX + (window.innerWidth <= 640 ? CHART_READOUT_PX : 0);
 }
@@ -572,7 +615,18 @@ function HoldersPlaceholder({ children }: { children: ReactNode }) {
   );
 }
 
-function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: () => void }) {
+function TokenBody({
+  card,
+  now,
+  onClose,
+  terminal = false,
+}: {
+  card: Card;
+  now: number;
+  onClose: () => void;
+  /** Scope's desktop layout (TERMINAL_QUERY): chart beside the map, tabs below, a trading rail. */
+  terminal?: boolean;
+}) {
   const { hideSafetyPill } = useAppearance();
   const mint = card.token.mintAddress;
   const s = card.snapshot;
@@ -626,6 +680,9 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
   // A pass starts folded, a fail or a pending verdict open; the reader's own choice then holds.
   const [safetyOpenSet, setSafetyOpen] = useState<boolean | null>(null);
   const safetyOpen = safetyOpenSet ?? safety.state !== "passed";
+  // The terminal's tab under the chart, and the rail's slot the chart's Trade panel is drawn into.
+  const [tab, setTab] = useState<TermTab>("holders");
+  const [tradeSlot, setTradeSlot] = useState<HTMLDivElement | null>(null);
   const openSafety = () => {
     setSafetyOpen(true);
     goTo("safety");
@@ -650,6 +707,270 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
     wasScanning.current = scanning;
   }, [scanning, reloadChart, reloadSage]);
 
+  const headTop = (
+    <>
+      <div className="tm-token">
+        <BackButton onClose={onClose} />
+        <div className={`avatar-wrap tone-${badge.tone}`}>
+          <TokenImage
+            url={card.token.imageUrl}
+            size={160}
+            className="avatar tm-avatar"
+            width={56}
+            height={56}
+            eager
+            fallback={
+              <span className="avatar placeholder tm-avatar">{label.replace("$", "").slice(0, 2)}</span>
+            }
+          />
+        </div>
+        <div className="tm-title-block">
+          <div className="tm-title-row">
+            <h2 id="tm-title" className="tm-title" tabIndex={-1} autoFocus>
+              {label}
+              {card.token.name && card.token.symbol && <span className="token-name"> {card.token.name}</span>}
+            </h2>
+            <MintChip mint={mint} />
+          </div>
+          <div className="tm-sub">
+            {showVerdict && badge.tone !== "neutral" && (
+              <span className={`badge ${badge.tone}`}>{badge.text}</span>
+            )}
+            <span className="when">
+              {utility?.scan === "scanning" ? (
+                <span className="tm-scanning">Scanning now…</span>
+              ) : (
+                `${what} ${ago(new Date(alertAt), now)}`
+              )}
+            </span>
+            {card.kind === "match" && card.filter && (
+              <span
+                className={`pill ${card.filter.color ? "pill-filter" : "pill-mine"}`}
+                style={filterCardStyle(card.filter.color) as React.CSSProperties}
+              >
+                {card.filter.icon && <FilterGlyph icon={card.filter.icon} />}
+                {card.filter.name}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="tm-actions">
+        {!hideSafetyPill && <SafetyPill verdict={safety} onClick={openSafety} />}
+        <button
+          type="button"
+          className="sage-btn"
+          onClick={() => openSage(mint)}
+          title="Open TokenSage's full read of this coin"
+        >
+          <SageIcon size={13} />
+          Sage
+        </button>
+        <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
+          <CloseIcon size={16} />
+        </button>
+      </div>
+      <QuickLinks mint={mint} socials={profile.data?.socials} />
+    </>
+  );
+  const figs = (
+    <section className="tm-figs" aria-label="Market cap">
+      <div className="tm-fig">
+        <label>{utility ? "At scan" : what === "Passed screen" ? "At screen" : "At alert"}</label>
+        <span className="num">{usd(alertMcap)}</span>
+      </div>
+      <div className="tm-fig">
+        <label>Now</label>
+        <span className="num">{usd(nowMcap)}</span>
+        {move !== null && (
+          <small className={`num delta ${move >= 0 ? "up" : "down"}`}>
+            {move >= 0 ? "▲" : "▼"} {pct(Math.abs(move))}
+          </small>
+        )}
+      </div>
+      <div className={`tm-fig${hasPeak && peak >= 100 ? " hot" : ""}`}>
+        <label>Peak</label>
+        <span className={hasPeak ? "num" : "num none"}>{hasPeak ? multiple(peak) : "–"}</span>
+        {hasPeak && alertMcap > 0 && (
+          <small className="num muted">ATH {usd(alertMcap * (1 + peak / 100))}</small>
+        )}
+      </div>
+      <div className="tm-fig">
+        <label>{utility ? "Age" : "Age at alert"}</label>
+        <span className="num">
+          {s.ageMinutes == null && scanning ? <SkelValue width="2.6em" /> : minutes(s.ageMinutes)}
+        </span>
+        {s.liquidityUsd != null && <small className="num muted">Liq {usd(s.liquidityUsd)}</small>}
+      </div>
+    </section>
+  );
+
+  const holdersBar = (holders.canSwitch || (holders.reading && hasHolderList(holders.reading))) && (
+    <div className={`tm-holders-bar${holders.isKept ? " at-alert" : ""}`}>
+      {holders.canSwitch && (
+        <div className="segmented small tm-holders-switch" role="radiogroup" aria-label="Holders at">
+          {[...holders.options, { view: "now" as const, label: "Now", at: Infinity }].map((o) => (
+            <button
+              key={o.view}
+              type="button"
+              role="radio"
+              aria-checked={holders.view === o.view}
+              className={holders.view === o.view ? "on" : ""}
+              onClick={() => holders.setView(o.view)}
+            >
+              {o.view !== "now" && <ClockIcon size={12} />}
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+      {holders.kept ? (
+        <MomentHoldersWhen moment={holders.kept} />
+      ) : holders.atAlert ? (
+        <AlertHoldersWhen
+          alertAt={alertAt}
+          word={holders.word}
+          frozen={holders.frozen}
+          reading={holders.reading}
+        />
+      ) : (
+        linked &&
+        hasHolderList(linked) && (
+          <HolderFreshness
+            takenAt={linked.takenAt}
+            now={now}
+            moment={utility || holders.canSwitch ? undefined : holdersMoment(card, linked)}
+          />
+        )
+      )}
+    </div>
+  );
+  const bubbleMap = (
+    <BubbleMapSection
+      // A fresh map for each view: its picks, open lists and toggles belong to one reading.
+      key={holders.view}
+      token={card.token}
+      snapshot={holders.reading}
+      moment={holders.moment}
+      {...holders.wide}
+      pending={scanning}
+      flagged={flagged}
+      flags={flags}
+    />
+  );
+
+  if (terminal) {
+    const tabs: { id: TermTab; label: string; count?: number }[] = [
+      { id: "holders", label: "Holders", count: s.holderCount ?? undefined },
+      { id: "wallets", label: "Labeled wallets", count: flagged.length || undefined },
+      { id: "flow", label: "Order flow" },
+      { id: "market", label: "Market" },
+      { id: "dev", label: "Dev & socials" },
+      { id: "sage", label: "TokenSage" },
+    ];
+    return (
+      <div className="about-body tm-body tm-term" ref={bodyRef}>
+        <header className="tm-head">
+          {headTop}
+          {figs}
+        </header>
+        <div className="tm-term-grid">
+          <div className="tm-term-main">
+            <div className="tm-term-top">
+              <section className="tm-term-chart" aria-label="Chart">
+                <ChartCard
+                  card={card}
+                  chart={chart}
+                  alertAt={alertAt}
+                  alertMcap={alertMcap}
+                  what={what}
+                  tradeSlot={tradeSlot}
+                />
+              </section>
+              <section className={`tm-term-map${holders.isKept ? " at-alert" : ""}`} aria-label="Bubble map">
+                {/* Scrolls on its own, so the map never makes the row taller than the chart. */}
+                <div className="tm-term-map-in">
+                  {holdersBar}
+                  {bubbleMap}
+                </div>
+              </section>
+            </div>
+            <div className="tm-term-tabs" role="tablist" aria-label="Sections">
+              {tabs.map((x) => (
+                <button
+                  key={x.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === x.id}
+                  className={`tm-nav-btn${tab === x.id ? " on" : ""}`}
+                  onClick={() => setTab(x.id)}
+                >
+                  {x.label}
+                  {x.count != null && <span className="num muted"> {x.count.toLocaleString()}</span>}
+                </button>
+              ))}
+            </div>
+            <div className="tm-term-pane" role="tabpanel">
+              {tab === "holders" && (
+                <>
+                  <TopHolders
+                    snapshot={holders.listReading}
+                    flagged={flagged}
+                    entries={entries}
+                    pending={scanning}
+                    defaultOpen
+                  />
+                  <StonkFeesCard mint={mint} />
+                </>
+              )}
+              {tab === "wallets" &&
+                (flagged.length > 0 ? (
+                  <WalletsCard wallets={flagged} defaultOpen />
+                ) : (
+                  <p className="muted small tm-term-empty">
+                    {flags === "loading"
+                      ? "Reading the coin's wallets…"
+                      : "No KOLs or wallets you labeled have traded this coin."}
+                  </p>
+                ))}
+              {tab === "flow" &&
+                (profile.data?.flow ? (
+                  <FlowCard flow={profile.data.flow} now={now} />
+                ) : (
+                  <p className="muted small tm-term-empty">
+                    {profile.data || profile.error ? "No order flow read for this coin yet." : "Loading…"}
+                  </p>
+                ))}
+              {tab === "market" && <StatsCard card={card} />}
+              {tab === "dev" && (
+                <div className="tm-grid tm-dev-grid">
+                  <DevCard dev={profile.data ? profile.data.dev : undefined} />
+                  <SocialsCard socials={profile.data?.socials} x={sage.data?.read?.x} />
+                </div>
+              )}
+              {tab === "sage" && <SageSection mint={mint} sage={sage} />}
+            </div>
+          </div>
+          <aside className="tm-term-rail" aria-label="Trade and checks">
+            <div ref={setTradeSlot} className="tm-term-trade" />
+            <ExitPlanCard />
+            <div id={`${ids}-safety`} className="tm-term-safety">
+              {/* Open from the start here: the rail is where the checks are read at a glance. */}
+              <SafetyCard
+                verdict={safety}
+                scanning={scanning}
+                now={now}
+                open={safetyOpenSet ?? true}
+                onToggle={() => setSafetyOpen(!(safetyOpenSet ?? true))}
+              />
+            </div>
+            {!utility && <CallCard card={card} />}
+          </aside>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="about-body tm-body"
@@ -657,70 +978,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
       style={headH ? ({ "--tm-head-h": `${headH}px` } as React.CSSProperties) : undefined}
     >
       <header className="tm-head">
-        <div className="tm-token">
-          <BackButton onClose={onClose} />
-          <div className={`avatar-wrap tone-${badge.tone}`}>
-            <TokenImage
-              url={card.token.imageUrl}
-              size={160}
-              className="avatar tm-avatar"
-              width={56}
-              height={56}
-              eager
-              fallback={
-                <span className="avatar placeholder tm-avatar">{label.replace("$", "").slice(0, 2)}</span>
-              }
-            />
-          </div>
-          <div className="tm-title-block">
-            <div className="tm-title-row">
-              <h2 id="tm-title" className="tm-title" tabIndex={-1} autoFocus>
-                {label}
-                {card.token.name && card.token.symbol && (
-                  <span className="token-name"> {card.token.name}</span>
-                )}
-              </h2>
-              <MintChip mint={mint} />
-            </div>
-            <div className="tm-sub">
-              {showVerdict && badge.tone !== "neutral" && (
-                <span className={`badge ${badge.tone}`}>{badge.text}</span>
-              )}
-              <span className="when">
-                {utility?.scan === "scanning" ? (
-                  <span className="tm-scanning">Scanning now…</span>
-                ) : (
-                  `${what} ${ago(new Date(alertAt), now)}`
-                )}
-              </span>
-              {card.kind === "match" && card.filter && (
-                <span
-                  className={`pill ${card.filter.color ? "pill-filter" : "pill-mine"}`}
-                  style={filterCardStyle(card.filter.color) as React.CSSProperties}
-                >
-                  {card.filter.icon && <FilterGlyph icon={card.filter.icon} />}
-                  {card.filter.name}
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="tm-actions">
-          {!hideSafetyPill && <SafetyPill verdict={safety} onClick={openSafety} />}
-          <button
-            type="button"
-            className="sage-btn"
-            onClick={() => openSage(mint)}
-            title="Open TokenSage's full read of this coin"
-          >
-            <SageIcon size={13} />
-            Sage
-          </button>
-          <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
-            <CloseIcon size={16} />
-          </button>
-        </div>
-        <QuickLinks mint={mint} socials={profile.data?.socials} />
+        {headTop}
         <nav className="tm-nav" aria-label="Sections">
           {SECTIONS.map((x) => (
             <button
@@ -755,35 +1013,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
         />
       )}
 
-      <section className="tm-figs" aria-label="Market cap">
-        <div className="tm-fig">
-          <label>{utility ? "At scan" : what === "Passed screen" ? "At screen" : "At alert"}</label>
-          <span className="num">{usd(alertMcap)}</span>
-        </div>
-        <div className="tm-fig">
-          <label>Now</label>
-          <span className="num">{usd(nowMcap)}</span>
-          {move !== null && (
-            <small className={`num delta ${move >= 0 ? "up" : "down"}`}>
-              {move >= 0 ? "▲" : "▼"} {pct(Math.abs(move))}
-            </small>
-          )}
-        </div>
-        <div className={`tm-fig${hasPeak && peak >= 100 ? " hot" : ""}`}>
-          <label>Peak</label>
-          <span className={hasPeak ? "num" : "num none"}>{hasPeak ? multiple(peak) : "–"}</span>
-          {hasPeak && alertMcap > 0 && (
-            <small className="num muted">ATH {usd(alertMcap * (1 + peak / 100))}</small>
-          )}
-        </div>
-        <div className="tm-fig">
-          <label>{utility ? "Age" : "Age at alert"}</label>
-          <span className="num">
-            {s.ageMinutes == null && scanning ? <SkelValue width="2.6em" /> : minutes(s.ageMinutes)}
-          </span>
-          {s.liquidityUsd != null && <small className="num muted">Liq {usd(s.liquidityUsd)}</small>}
-        </div>
-      </section>
+      {figs}
 
       <section id={`${ids}-chart`} className="tm-group" aria-label="Chart">
         <ChartCard card={card} chart={chart} alertAt={alertAt} alertMcap={alertMcap} what={what} />
@@ -792,58 +1022,9 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
 
       <section id={`${ids}-holders`} className="tm-group" aria-labelledby={`${ids}-holders-h`}>
         <GroupLabel id={`${ids}-holders-h`}>Holders</GroupLabel>
-        {(holders.canSwitch || (holders.reading && hasHolderList(holders.reading))) && (
-          <div className={`tm-holders-bar${holders.isKept ? " at-alert" : ""}`}>
-            {holders.canSwitch && (
-              <div className="segmented small tm-holders-switch" role="radiogroup" aria-label="Holders at">
-                {[...holders.options, { view: "now" as const, label: "Now", at: Infinity }].map((o) => (
-                  <button
-                    key={o.view}
-                    type="button"
-                    role="radio"
-                    aria-checked={holders.view === o.view}
-                    className={holders.view === o.view ? "on" : ""}
-                    onClick={() => holders.setView(o.view)}
-                  >
-                    {o.view !== "now" && <ClockIcon size={12} />}
-                    {o.label}
-                  </button>
-                ))}
-              </div>
-            )}
-            {holders.kept ? (
-              <MomentHoldersWhen moment={holders.kept} />
-            ) : holders.atAlert ? (
-              <AlertHoldersWhen
-                alertAt={alertAt}
-                word={holders.word}
-                frozen={holders.frozen}
-                reading={holders.reading}
-              />
-            ) : (
-              linked &&
-              hasHolderList(linked) && (
-                <HolderFreshness
-                  takenAt={linked.takenAt}
-                  now={now}
-                  moment={utility || holders.canSwitch ? undefined : holdersMoment(card, linked)}
-                />
-              )
-            )}
-          </div>
-        )}
+        {holdersBar}
         <div className={`tm-holders${holders.isKept ? " at-alert" : ""}`}>
-          <BubbleMapSection
-            // A fresh map for each view: its picks, open lists and toggles belong to one reading.
-            key={holders.view}
-            token={card.token}
-            snapshot={holders.reading}
-            moment={holders.moment}
-            {...holders.wide}
-            pending={scanning}
-            flagged={flagged}
-            flags={flags}
-          />
+          {bubbleMap}
           <TopHolders snapshot={holders.listReading} flagged={flagged} entries={entries} pending={scanning} />
         </div>
         {flagged.length > 0 && <WalletsCard wallets={flagged} />}
@@ -933,6 +1114,8 @@ const SECTIONS = [
   { id: "sage", label: "TokenSage" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
+/** The Scope terminal's tabs under the chart (user picks 2026-10-18). */
+type TermTab = "holders" | "wallets" | "flow" | "market" | "dev" | "sage";
 
 /**
  * The section the reader is in: the last one whose top has passed under the sticky header, as the
@@ -1394,12 +1577,18 @@ export function ChartCard({
   alertAt,
   alertMcap,
   what,
+  tradeSlot,
 }: {
   card: Card;
   chart: { data: TokenChart | null; error: Error | null };
   alertAt: number;
   alertMcap: number;
   what: string;
+  /**
+   * The Scope terminal's rail: the Trade panel (or, without Pro Mode, what Pro Mode adds) is drawn
+   * there rather than under the chart. Null until the rail is on the page; absent elsewhere.
+   */
+  tradeSlot?: HTMLElement | null;
 }) {
   const utility = useContext(UtilityContext);
   const api = useTokenApi(card.token.mintAddress);
@@ -1436,7 +1625,8 @@ export function ChartCard({
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const height = chartHeight(expanded);
+  const inTerminal = tradeSlot !== undefined;
+  const height = inTerminal ? terminalChartHeight() : chartHeight(expanded);
 
   const events = useMemo<ChartEvent[]>(() => {
     const out: ChartEvent[] = [{ t: alertAt, label: what, mcap: alertMcap > 0 ? alertMcap : null }];
@@ -1676,6 +1866,22 @@ export function ChartCard({
   }, [pro, position.data]);
   const entry = summary && summary.held > 0 ? summary.entryMcap : null;
 
+  const tradePanel =
+    trading && pro ? (
+      <TradePanel
+        owner={pro}
+        mint={mint}
+        symbol={card.token.symbol ?? "tokens"}
+        name={card.token.name ?? null}
+        position={position.data}
+        summary={summary}
+        nowMcap={latestMcap}
+        onTraded={position.reload}
+        closeOnly={closeOnly}
+        graceEndsAt={graceEndsAt}
+        delayed={delayed}
+      />
+    ) : null;
   const streaming = shownRange !== "first" && isStreaming(tail);
   const locked = error && !data ? lockedText(error, "chart") : null;
   return (
@@ -1790,22 +1996,56 @@ export function ChartCard({
           </>
         )}
       </section>
-      {trading && pro && (
-        <TradePanel
-          owner={pro}
-          mint={mint}
-          symbol={card.token.symbol ?? "tokens"}
-          name={card.token.name ?? null}
-          position={position.data}
-          summary={summary}
-          nowMcap={latestMcap}
-          onTraded={position.reload}
-          closeOnly={closeOnly}
-          graceEndsAt={graceEndsAt}
-          delayed={delayed}
-        />
-      )}
+      {inTerminal
+        ? tradeSlot && createPortal(tradePanel ?? (proState ? null : <ProModePrompt />), tradeSlot)
+        : tradePanel}
     </>
+  );
+}
+
+/**
+ * The Scope terminal's exit plan (user ask 2026-10-18): the fixed plan every return on the site is
+ * graded on, step by step, with its full explainer a tap away. Nothing while it loads.
+ */
+function ExitPlanCard() {
+  const { plan } = useExitPlan();
+  if (!plan) return null;
+  return (
+    <section className="sage-card tm-term-plan" aria-label="Exit plan">
+      <h4>
+        Exit plan <span className="small muted">how returns are graded</span>
+        <ExitPlanInfo />
+      </h4>
+      <ol className="tm-term-steps">
+        {exitPlanSteps(plan).map((st) => (
+          <li key={st.title} title={st.body}>
+            {st.title}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+/** The rail's Trade place without Pro Mode (user pick 2026-10-18): what Pro Mode adds, and where to get it. */
+function ProModePrompt() {
+  return (
+    <section className="sage-card tm-term-pro" aria-label="Pro Mode">
+      <h4>
+        <CrownIcon size={14} /> Trade here with Pro Mode
+      </h4>
+      <ul>
+        {PRO_MODE_PERKS.slice(0, 3).map((p) => (
+          <li key={p.title}>
+            <b>{p.title}.</b> <span className="muted">{p.text}</span>
+          </li>
+        ))}
+      </ul>
+      {/* Opened from the Scope board only, so the host's close is this window's. */}
+      <a className="tm-term-pro-go" href="#settings" onClick={closeTokenModal}>
+        See Pro Mode in Settings
+      </a>
+    </section>
   );
 }
 
@@ -2052,10 +2292,11 @@ function StonkFeesCard({ mint }: { mint: string }) {
 }
 
 /** The flagged wallets in the coin: what each is, its score, and what it did in the coin. */
-function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
+function WalletsCard({ wallets, defaultOpen = false }: { wallets: FlaggedWallet[]; defaultOpen?: boolean }) {
   const [all, setAll] = useState(false);
-  // Folded to its heading until opened (user ask 2026-10-16); the map marks these wallets too.
-  const [open, setOpen] = useState(false);
+  // Folded to its heading until opened (user ask 2026-10-16); the map marks these wallets too. The
+  // Scope terminal's tab opens it, as the list is all the tab holds.
+  const [open, setOpen] = useState(defaultOpen);
   const bodyId = useId();
   const shown = all ? wallets : wallets.slice(0, 6);
   // One read names the whole list (and the funders its Linked tags mention).
