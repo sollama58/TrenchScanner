@@ -25,6 +25,7 @@ import { TokenModal } from "../components/TokenModal";
 import {
   ChartIcon,
   ClockIcon,
+  EditIcon,
   FlameIcon,
   SearchIcon,
   ToolsIcon,
@@ -33,6 +34,7 @@ import {
   type IconProps,
 } from "../components/Icons";
 import { WalletsToWatch } from "../components/WalletsToWatch";
+import { TrackedWalletsPanel } from "../components/TrackedWallets";
 import { SideWalletChecker } from "./SideWalletChecker";
 
 /** Why a lookup costs nothing (apps/api lookupGate.ts freeLookupReason), or "open" for a re-open. */
@@ -201,8 +203,8 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
             Each lookup costs Burn Credits, which you get by burning {SYMBOL} from this wallet. A credit is
             only taken once the lookup works, and you can re-open it free for an hour. Coins and wallets
             TrenchScanner already tracks are free to look up, and the form says so before you run it. The Side
-            Wallet Checker and Wallets to watch are free. Subscribers also get 5 free credits a day, used
-            before their balance.
+            Wallet Checker and Wallets to watch are free. With Pro Mode you can also label up to 25 wallets of
+            your own, seen by you alone. Subscribers also get 5 free credits a day, used before their balance.
           </p>
         </header>
 
@@ -225,6 +227,10 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
 
         <div id="util-watch" className="util-anchor">
           <WalletsToWatch />
+        </div>
+
+        <div id="util-labels" className="util-anchor">
+          <TrackedWalletsPanel upsell />
         </div>
 
         <div id="util-recent" className="util-anchor">
@@ -258,6 +264,7 @@ const TOOLS: { id: string; label: string; short: string; Icon: (p: IconProps) =>
   { id: "util-wallet", label: "Wallet lookup", short: "Wallet", Icon: SearchIcon },
   { id: "util-sides", label: "Side Wallet Checker", short: "Sides", Icon: UsersIcon },
   { id: "util-watch", label: "Wallets to watch", short: "Watch", Icon: WalletIcon },
+  { id: "util-labels", label: "Wallet labels", short: "Labels", Icon: EditIcon },
   { id: "util-recent", label: "Your lookups", short: "Recent", Icon: ClockIcon },
 ];
 

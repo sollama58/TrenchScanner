@@ -123,7 +123,7 @@ export function TrackedWalletEditor({ wallet }: { wallet: string }) {
           disabled={full}
           title={
             full
-              ? `You have labeled ${tracked.cap} wallets. Remove one in Settings to add another.`
+              ? `You have labeled ${tracked.cap} wallets. Remove one in Utilities › Wallet labels to add another.`
               : undefined
           }
           onClick={() => setEditing(true)}
@@ -139,18 +139,41 @@ export function TrackedWalletEditor({ wallet }: { wallet: string }) {
 }
 
 /**
- * Settings › Labeled wallets (user ask 2026-10-18): every wallet the reader labeled, to edit or
- * remove, and a box to label one by address. Shown to Pro Mode accounts, and to any account that
- * still holds labels from when it had Pro Mode (kept, but shown nowhere until it has it again).
+ * Settings › Wallet labels and Utilities › Wallet labels (user asks 2026-10-18): every wallet the
+ * reader labeled, to edit or remove, and a box to label one by address. Shown to Pro Mode accounts,
+ * and to any account that still holds labels from when it had Pro Mode (kept, but shown nowhere
+ * until it has it again). With `upsell` (Utilities), an account without Pro Mode or labels gets a
+ * short note on what the labels do and how to get Pro Mode instead of nothing. The list is the
+ * reader's own (GET /wallets/tracked, per account): nothing here is shared with anyone else.
  */
-export function TrackedWalletsPanel() {
+export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {}) {
   const tracked = useTrackedWallets();
   const [editing, setEditing] = useState<string | null>(null);
   const [address, setAddress] = useState("");
   const [adding, setAdding] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  if (!tracked || (!tracked.pro && tracked.wallets.length === 0)) return null;
+  if (!tracked) return null;
+  if (!tracked.pro && tracked.wallets.length === 0)
+    return upsell ? (
+      <section className="panel tw-panel">
+        <header className="section-head">
+          <div>
+            <span className="eyebrow">Pro Mode</span>
+            <h2>Wallet labels</h2>
+          </div>
+        </header>
+        <p className="muted small">
+          With Pro Mode you can name up to {tracked.cap} wallets. Each shows like a KOL wallet, for you alone:
+          its name in holder lists and on bubble maps, its probable side wallets tied to it, and its trades
+          marked on charts.
+        </p>
+        <p className="small tw-upsell">
+          To get Pro Mode, hold enough $ASDFASDFA to be one of the 250 largest wallets. We check every 5
+          minutes, or press Check now on the Pro Mode card in Settings, and it switches on by itself.
+        </p>
+      </section>
+    ) : null;
   const full = tracked.wallets.length >= tracked.cap;
   const typed = address.trim();
   const valid = ADDRESS_RE.test(typed);
@@ -166,7 +189,7 @@ export function TrackedWalletsPanel() {
       <header className="section-head">
         <div>
           <span className="eyebrow">Pro Mode</span>
-          <h2>Labeled wallets</h2>
+          <h2>Wallet labels</h2>
         </div>
         <span className="muted small num">
           {tracked.wallets.length} of {tracked.cap}
@@ -176,7 +199,8 @@ export function TrackedWalletsPanel() {
         Name any wallet and it shows like a KOL wallet, for you alone: its name in holder lists and on bubble
         maps, the wallets it funded and its probable sides tied to it, and its trades marked on charts. Mark
         it KOL to show it with the KOLs; otherwise it is User Tracked. Probable sides are worked out hourly.
-        Your labels never change the models, filters or alerts.
+        Your labels are private to your account: no one else sees them, and they never change the models,
+        filters, alerts or the Side Wallet Checker&apos;s export.
       </p>
       {!tracked.pro && (
         <p className="warn small">

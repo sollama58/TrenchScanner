@@ -17983,6 +17983,23 @@ body:has(.util-toast) .bug-fab {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* Utilities > Wallet labels for an account without Pro Mode: how to get it. */
+.tw-upsell {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+/* The utility panel's labels line, under its three columns (UtilityDrawer LabelsLine). */
+.util-drawer-labels {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 8px 18px;
+  border-top: 1px solid var(--border);
+}
 
 /* Settings > Trading: the Trade panel's buttons, edited in place (PresetButtonsEditor). */
 .preset-editor-head {
