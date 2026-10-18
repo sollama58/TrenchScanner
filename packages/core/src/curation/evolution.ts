@@ -482,7 +482,8 @@ export function goalNamed(lane: Pick<Lane, "name" | "recipe">): string {
  * from the stored lane name, so a seat's record matches either (laneStore.ts).
  */
 export function laneCallName(lane: Pick<Lane, "slot" | "name" | "recipe" | "generation">): string {
-  return lane.generation === 0 ? (contestantSpec(lane.slot)?.name ?? lane.name) : goalNamed(lane);
+  if (lane.generation === 0) return contestantSpec(lane.slot)?.name ?? lane.name;
+  return lane.recipe ? goalNamed(lane) : lane.name;
 }
 
 /** A lane as selection sees it: its blended leaderboard score, and this run's exam on its own. */
