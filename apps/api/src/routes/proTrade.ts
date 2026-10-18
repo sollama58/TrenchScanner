@@ -25,6 +25,7 @@ import {
 } from "@trenchscanner/core";
 import { proStatus } from "../proMode.js";
 import { SolPrice } from "../solPrice.js";
+import { walletTag } from "../walletTag.js";
 
 /**
  * Pro trades from the token modal (user decision 2026-10-17), for Pro Mode wallets only
@@ -244,12 +245,15 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (err instanceof GuardRefusal) {
         // The guard's simulation refused it: most often the wallet can't afford it or the price
         // moved past the slippage, which the simulation's error says.
-        request.log.warn({ wallet, mint: body.mint, side: body.side, error: message }, "pro trade refused");
+        request.log.warn(
+          { wallet: walletTag(wallet), mint: body.mint, side: body.side, error: message },
+          "pro trade refused",
+        );
         return reply.code(422).send({ error: plainRefusal(message, body.side) });
       }
       if (err instanceof TransientError || err instanceof RateLimitedError)
         return reply.code(503).send({ error: "Couldn't reach the chain or Jupiter just now. Try again." });
-      request.log.error({ err, wallet, mint: body.mint }, "pro trade build failed");
+      request.log.error({ err, wallet: walletTag(wallet), mint: body.mint }, "pro trade build failed");
       return reply.code(502).send({ error: `Couldn't build the trade: ${message}` });
     }
   });
@@ -340,14 +344,20 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     });
     const sent = await sendViaSender(url, transaction);
     if (!sent.ok && sent.refused) {
-      request.log.warn({ wallet, signature, error: sent.error }, "sender refused a pro trade");
+      request.log.warn(
+        { wallet: walletTag(wallet), signature, error: sent.error },
+        "sender refused a pro trade",
+      );
       // Refused by Sender: nothing went out under this signature (it is safe to build again).
       // 409, not a 5xx: a proxy's 502 must never read as "nothing went out".
       return reply.code(409).send({ error: `Helius Sender refused the trade: ${sent.error}`, notSent: true });
     }
     // No clear answer (a timeout): it may have gone out, so it is treated as sent and resent.
     if (!sent.ok)
-      request.log.warn({ wallet, signature, error: sent.error }, "sender send unclear; resending");
+      request.log.warn(
+        { wallet: walletTag(wallet), signature, error: sent.error },
+        "sender send unclear; resending",
+      );
     if (inFlight.size < MAX_IN_FLIGHT) {
       inFlight.set(signature, {
         base64: transaction,
