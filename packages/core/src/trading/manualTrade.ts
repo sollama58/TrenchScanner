@@ -71,6 +71,10 @@ export interface ManualTradeRequest {
   amount: bigint;
   slippageBps: number;
   speed: SenderSpeed;
+  /** The trader's own priority fee, in lamports (instead of the network's going rate). */
+  priorityFeeLamports?: bigint;
+  /** The trader's own Sender tip, in lamports: at least the speed's minimum. */
+  tipLamports?: bigint;
 }
 
 export interface ManualTrade {
@@ -91,6 +95,8 @@ export const MAX_MANUAL_SLIPPAGE_BPS = 5_000;
 export const MAX_MANUAL_BUY_LAMPORTS = 100_000_000_000n;
 /** The priority fee's ceiling on each tier, in lamports: eco is meant to cost next to nothing. */
 const PRIORITY_CAP_LAMPORTS: Record<SenderSpeed, bigint> = { eco: 50_000n, turbo: 1_000_000n };
+/** The most a trader may set as their own priority fee or tip, each (a typo guard): 0.01 SOL. */
+export const MAX_CUSTOM_FEE_LAMPORTS = 10_000_000n;
 /** The price floor per compute unit, so a quiet network still sees a priority fee (Sender needs one). */
 const MIN_MICROLAMPORTS = 10_000n;
 /** Room under a buy for rent (the token and wrapped-SOL accounts) and base fees. */
@@ -138,7 +144,19 @@ export async function buildManualTrade(
   if (mintInfo.program !== PROGRAM.token && mintInfo.program !== PROGRAM.token2022)
     throw new TradeRejected("not a token this can trade");
 
-  const tip = SENDER_MIN_TIP_LAMPORTS[req.speed];
+  if (
+    req.priorityFeeLamports !== undefined &&
+    (req.priorityFeeLamports < 0n || req.priorityFeeLamports > MAX_CUSTOM_FEE_LAMPORTS)
+  )
+    throw new TradeRejected("the priority fee must be between 0 and 0.01 SOL");
+  if (
+    req.tipLamports !== undefined &&
+    (req.tipLamports < SENDER_MIN_TIP_LAMPORTS[req.speed] || req.tipLamports > MAX_CUSTOM_FEE_LAMPORTS)
+  )
+    throw new TradeRejected(
+      `the tip must be between ${Number(SENDER_MIN_TIP_LAMPORTS[req.speed]) / 1e9} and 0.01 SOL on this speed`,
+    );
+  const tip = req.tipLamports ?? SENDER_MIN_TIP_LAMPORTS[req.speed];
   const tipIx = systemTransferInstruction(req.wallet, pickSenderTipAccount(deps.random), tip);
 
   // Jupiter first; the curve's own instructions when Jupiter has no route (or is unreachable).
@@ -211,11 +229,7 @@ export async function buildManualTrade(
     if (!data) throw new TransientError(`lookup table ${t} not found`);
     resolved.set(t, parseLookupTableAddresses(data));
   });
-  const cap = PRIORITY_CAP_LAMPORTS[req.speed];
-  const capPrice = (cap * 1_000_000n) / BigInt(units);
-  let price = estimate !== null && estimate > MIN_MICROLAMPORTS ? estimate : MIN_MICROLAMPORTS;
-  if (req.speed === "turbo") price *= 2n;
-  if (price > capPrice) price = capPrice;
+  const price = priorityPrice(units, req.speed, estimate, req.priorityFeeLamports);
   const priorityFee = priorityFeeOf(units, price);
 
   const tx = buildV0Transaction(
@@ -287,6 +301,46 @@ export function checkJupiterFloor(
   const floor = (quotedOut * BigInt(10_000 - slippageBps)) / 10_000n;
   if (minOut <= 0n || minOut < floor)
     throw new GuardRefusal("Jupiter's minimum is under the slippage asked for");
+}
+
+/**
+ * The compute-unit price for a trade of `units`: the trader's own fee spread over the units, or
+ * the network's going rate (with a floor, doubled on Turbo) capped at the speed's ceiling.
+ */
+function priorityPrice(units: number, speed: SenderSpeed, estimate: bigint | null, custom?: bigint): bigint {
+  // At least 1 micro-lamport: Sender only takes a transaction that sets a price at all.
+  if (custom !== undefined) {
+    const p = (custom * 1_000_000n) / BigInt(units);
+    return p > 0n ? p : 1n;
+  }
+  const capPrice = (PRIORITY_CAP_LAMPORTS[speed] * 1_000_000n) / BigInt(units);
+  let price = estimate !== null && estimate > MIN_MICROLAMPORTS ? estimate : MIN_MICROLAMPORTS;
+  if (speed === "turbo") price *= 2n;
+  return price > capPrice ? capPrice : price;
+}
+
+/** A typical trade's compute units, for the fee shown before one is built. */
+const TYPICAL_UNITS = 250_000;
+
+/**
+ * What a trade on `mint` would pay the network now, before it is built: the priority fee at the
+ * going rate (or the trader's own) and Sender's tip. The panel shows it under the buttons.
+ */
+export async function estimateManualFees(
+  rpc: Pick<ManualTradeRpc, "getPriorityFeeEstimate">,
+  input: { mint: string; speed: SenderSpeed; priorityFeeLamports?: bigint; tipLamports?: bigint },
+): Promise<{ priorityFeeLamports: bigint; tipLamports: bigint; baseFeeLamports: bigint }> {
+  const estimate =
+    input.priorityFeeLamports !== undefined
+      ? null
+      : await rpc.getPriorityFeeEstimate([input.mint, PROGRAM.jupiterV6, PROGRAM.pumpFun]);
+  const price = priorityPrice(TYPICAL_UNITS, input.speed, estimate, input.priorityFeeLamports);
+  return {
+    priorityFeeLamports: priorityFeeOf(TYPICAL_UNITS, price),
+    tipLamports: input.tipLamports ?? SENDER_MIN_TIP_LAMPORTS[input.speed],
+    // One signature.
+    baseFeeLamports: 5_000n,
+  };
 }
 
 /** The coin's bonding curve and the fee recipient its trades pay, as far as they can be read. */

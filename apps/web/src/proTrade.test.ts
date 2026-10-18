@@ -3,6 +3,7 @@ import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TRADE_SETTINGS,
+  feeParams,
   graceLeftText,
   proStateOf,
   readTradeSettings,
@@ -10,7 +11,7 @@ import {
   tradeProblem,
   type PositionResponse,
 } from "./proTrade";
-import { parseSol, shareOf, solText } from "./components/TradePanel";
+import { feeTotalSol, parseSol, shareOf, solText } from "./components/TradePanel";
 
 describe("parseSol", () => {
   it("reads a typed SOL amount as exact lamports", () => {
@@ -172,5 +173,27 @@ describe("tradeProblem", () => {
     const evil = Uint8Array.from(Buffer.from(hex.replace(jup, "ab".repeat(32)), "hex"));
     expect(tradeProblem(evil, owner)).toMatch(/program/);
     expect(tradeProblem(built.subarray(0, 120), owner)).toMatch(/couldn't be read|program/);
+  });
+});
+
+describe("trade fees", () => {
+  it("sends custom fees as lamports, and nothing in auto", () => {
+    expect(feeParams(DEFAULT_TRADE_SETTINGS)).toEqual({});
+    expect(
+      feeParams({ ...DEFAULT_TRADE_SETTINGS, priorityMode: "custom", customPrioritySol: 0.0002 }),
+    ).toEqual({
+      priorityFeeLamports: "200000",
+    });
+    // A tip under Turbo's minimum goes as that minimum.
+    expect(feeParams({ ...DEFAULT_TRADE_SETTINGS, speed: "turbo", customTipSol: 0.0001 })).toEqual({
+      tipLamports: "1000000",
+    });
+    expect(feeParams({ ...DEFAULT_TRADE_SETTINGS, customTipSol: 0.0001 })).toEqual({ tipLamports: "100000" });
+  });
+
+  it("adds up the network fee in SOL", () => {
+    expect(feeTotalSol({ priorityFeeLamports: "10000", tipLamports: "5000", baseFeeLamports: "5000" })).toBe(
+      0.00002,
+    );
   });
 });

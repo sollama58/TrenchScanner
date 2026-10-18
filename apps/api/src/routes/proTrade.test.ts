@@ -98,6 +98,20 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
     expect((await app.inject({ method: "GET", url: `/pro/trade/${MINT}/position` })).statusCode).toBe(401);
   });
 
+  it("quotes the network fee, with no platform fee, to Pro wallets only", async () => {
+    const url = `/pro/trade/fee?mint=${MINT}&speed=eco&priorityFeeLamports=100000&tipLamports=20000`;
+    expect((await as(TRADER, "GET", url)).statusCode).toBe(404);
+    const fee = await as(ADMIN, "GET", url);
+    expect(fee.statusCode).toBe(200);
+    expect(fee.json()).toEqual({
+      priorityFeeLamports: "100000",
+      tipLamports: "20000",
+      baseFeeLamports: "5000",
+      platformFeeLamports: "0",
+    });
+    expect((await as(ADMIN, "GET", `/pro/trade/fee?mint=nope&speed=eco`)).statusCode).toBe(400);
+  });
+
   it("lets only admins grant it, and a grant turns it on", async () => {
     expect((await as(TRADER, "POST", "/admin/pro-mode", { walletAddress: TRADER })).statusCode).toBe(403);
     expect((await as(ADMIN, "POST", "/admin/pro-mode", { walletAddress: "nope" })).statusCode).toBe(400);

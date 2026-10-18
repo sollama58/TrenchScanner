@@ -112,7 +112,18 @@ export interface TradeSettings {
   /** eco: Sender's SWQOS path, a 0.000005 SOL tip. turbo: every path, 0.001 SOL. */
   speed: "eco" | "turbo";
   mevProtect: boolean;
+  /** Priority fee: the network's going rate (capped per speed), or the trader's own amount. */
+  priorityMode: "auto" | "custom";
+  /** The custom priority fee, SOL per trade. */
+  customPrioritySol: number;
+  /** Sender's tip, SOL; null is the speed's minimum (0.000005 Eco, 0.001 Turbo). */
+  customTipSol: number | null;
 }
+
+/** Each custom fee's ceiling, SOL (the API refuses more). */
+export const MAX_CUSTOM_FEE_SOL = 0.01;
+/** Sender's minimum tip per speed, SOL. */
+export const MIN_TIP_SOL = { eco: 0.000005, turbo: 0.001 } as const;
 
 export const DEFAULT_TRADE_SETTINGS: TradeSettings = {
   buyPresets: [0.1, 0.25, 0.5, 1],
@@ -120,6 +131,9 @@ export const DEFAULT_TRADE_SETTINGS: TradeSettings = {
   slippagePct: 15,
   speed: "eco",
   mevProtect: true,
+  priorityMode: "auto",
+  customPrioritySol: 0.0001,
+  customTipSol: null,
 };
 
 const SETTINGS_KEY = "ts-pro-trade-settings";
@@ -142,6 +156,17 @@ export function readTradeSettings(): TradeSettings {
           : DEFAULT_TRADE_SETTINGS.slippagePct,
       speed: s.speed === "turbo" ? "turbo" : "eco",
       mevProtect: s.mevProtect !== false,
+      priorityMode: s.priorityMode === "custom" ? "custom" : "auto",
+      customPrioritySol:
+        typeof s.customPrioritySol === "number" &&
+        s.customPrioritySol >= 0 &&
+        s.customPrioritySol <= MAX_CUSTOM_FEE_SOL
+          ? s.customPrioritySol
+          : DEFAULT_TRADE_SETTINGS.customPrioritySol,
+      customTipSol:
+        typeof s.customTipSol === "number" && s.customTipSol > 0 && s.customTipSol <= MAX_CUSTOM_FEE_SOL
+          ? s.customTipSol
+          : null,
     };
   } catch {
     return DEFAULT_TRADE_SETTINGS;
@@ -154,6 +179,48 @@ export function saveTradeSettings(s: TradeSettings): void {
   } catch {
     // Blocked storage: the settings hold for this page load.
   }
+}
+
+/** The settings' custom fees as the API takes them: lamport strings, left out when not set. */
+export function feeParams(s: TradeSettings): { priorityFeeLamports?: string; tipLamports?: string } {
+  const lamports = (sol: number) => String(Math.round(sol * 1e9));
+  return {
+    ...(s.priorityMode === "custom" ? { priorityFeeLamports: lamports(s.customPrioritySol) } : {}),
+    // A tip under the speed's minimum goes as the minimum (Turbo's is higher than Eco's).
+    ...(s.customTipSol !== null
+      ? { tipLamports: lamports(Math.max(s.customTipSol, MIN_TIP_SOL[s.speed])) }
+      : {}),
+  };
+}
+
+/** GET /pro/trade/fee: what one trade would pay the network now, lamports. */
+export interface FeeEstimate {
+  priorityFeeLamports: string;
+  tipLamports: string;
+  baseFeeLamports: string;
+  platformFeeLamports: string;
+}
+
+/** The expected network fee for a trade on `mint` with these settings, re-read every 20s. */
+export function useFeeEstimate(mint: string, settings: TradeSettings): FeeEstimate | null {
+  const [fee, setFee] = useState<FeeEstimate | null>(null);
+  const params = new URLSearchParams({ mint, speed: settings.speed, ...feeParams(settings) }).toString();
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      api<FeeEstimate>(`/pro/trade/fee?${params}`)
+        .then((f) => live && setFee(f))
+        .catch(() => undefined);
+    void load();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 20_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [params]);
+  return fee;
 }
 
 // ---- The wallet's position in a coin ----
@@ -428,6 +495,7 @@ export async function runTrade(
     amount: input.amount.toString(),
     slippageBps: Math.round(input.settings.slippagePct * 100),
     speed: input.settings.speed,
+    ...feeParams(input.settings),
     ...(input.all ? { all: true } : {}),
   });
   const unsigned = fromBase64(built.transaction);

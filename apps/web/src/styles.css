@@ -15545,3 +15545,12 @@ body:has(.util-toast) .bug-fab {
   border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
   background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
+/* The trade panel's fee line (user ask 2026-10-18): the network fee, always shown, and 0% ours. */
+.tm-trade-fee {
+  margin: 0;
+  color: var(--ink-2);
+}
+.tm-trade-turbo.on {
+  color: var(--warn-ink);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--border));
+}

@@ -3,7 +3,10 @@ import { ApiError } from "../api";
 import { signedPct, usd } from "../format";
 import {
   graceLeftText,
+  MAX_CUSTOM_FEE_SOL,
+  MIN_TIP_SOL,
   readTradeSettings,
+  useFeeEstimate,
   runTrade,
   saveTradeSettings,
   TradeError,
@@ -55,6 +58,15 @@ export function shareOf(raw: bigint, pct: number): bigint {
   return (raw * BigInt(Math.round(pct * 100))) / 10_000n;
 }
 
+/** A fee estimate's total, SOL: the priority fee, Sender's tip and the base fee. */
+export function feeTotalSol(fee: {
+  priorityFeeLamports: string;
+  tipLamports: string;
+  baseFeeLamports: string;
+}): number {
+  return (Number(fee.priorityFeeLamports) + Number(fee.tipLamports) + Number(fee.baseFeeLamports)) / LAMPORTS;
+}
+
 /** Buys this size or more ask before they start. */
 const CONFIRM_BUY_LAMPORTS = 5n * BigInt(LAMPORTS);
 
@@ -65,11 +77,13 @@ export function quoteText(
   position: { decimals: number | null } | null,
   symbol: string,
 ): string {
-  const fees = (Number(BigInt(built.priorityFeeLamports)) + Number(BigInt(built.tipLamports))) / LAMPORTS;
+  // Network fees only (priority fee, Sender tip, base fee): there is no platform fee to add.
+  const fees =
+    (Number(BigInt(built.priorityFeeLamports)) + Number(BigInt(built.tipLamports)) + 5_000) / LAMPORTS;
   if (side === "sell")
-    return `About ${solText(Number(BigInt(built.quotedOut)) / LAMPORTS)}, at least ${solText(Number(BigInt(built.minOut)) / LAMPORTS)}; fees ${solText(fees)}.`;
+    return `About ${solText(Number(BigInt(built.quotedOut)) / LAMPORTS)}, at least ${solText(Number(BigInt(built.minOut)) / LAMPORTS)}; network fee ${solText(fees)}, no platform fee.`;
   const scale = 10 ** (position?.decimals ?? 6);
-  return `About ${tokensText(Number(BigInt(built.quotedOut)) / scale)} ${symbol}, at least ${tokensText(Number(BigInt(built.minOut)) / scale)}; fees ${solText(fees)}.`;
+  return `About ${tokensText(Number(BigInt(built.quotedOut)) / scale)} ${symbol}, at least ${tokensText(Number(BigInt(built.minOut)) / scale)}; network fee ${solText(fees)}, no platform fee.`;
 }
 
 const STAGE_TEXT: Record<TradeStage, string> = {
@@ -159,7 +173,7 @@ export function TradePanel({
   };
 
   const customLamports = parseSol(custom);
-  const tip = settings.speed === "turbo" ? 0.001 : 0.000005;
+  const fee = useFeeEstimate(mint, settings);
 
   return (
     <section className="sage-card tm-trade" aria-label="Trade">
@@ -281,11 +295,21 @@ export function TradePanel({
         ))}
         <button
           type="button"
+          className={`ghost small tm-trade-turbo${settings.speed === "turbo" ? " on" : ""}`}
+          aria-pressed={settings.speed === "turbo"}
+          title="Turbo sends through every Helius path for the fastest landing, for a 0.001 SOL tip instead of 0.000005"
+          onClick={() => update({ speed: settings.speed === "turbo" ? "eco" : "turbo" })}
+        >
+          Turbo {settings.speed === "turbo" ? "on" : "off"}
+        </button>
+        <button
+          type="button"
           className="ghost small tm-trade-gear"
           aria-expanded={showSettings}
           onClick={() => setShowSettings(!showSettings)}
         >
-          {settings.slippagePct}% slip · {settings.speed === "turbo" ? "Turbo" : "Eco"}
+          {settings.slippagePct}% slip
+          {settings.priorityMode === "custom" ? " · custom fee" : ""}
           {settings.mevProtect ? " · MEV shield" : ""}
         </button>
       </div>
@@ -326,6 +350,62 @@ export function TradePanel({
               </button>
             ))}
           </span>
+          <span className="segmented small" role="radiogroup" aria-label="Priority fee">
+            {(["auto", "custom"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={settings.priorityMode === m}
+                className={settings.priorityMode === m ? "on" : ""}
+                title={
+                  m === "auto"
+                    ? "The network's going rate, capped at 0.00005 SOL on Eco and 0.001 SOL on Turbo"
+                    : "Your own priority fee per trade"
+                }
+                onClick={() => update({ priorityMode: m })}
+              >
+                {m === "auto" ? "Auto fee" : "Custom fee"}
+              </button>
+            ))}
+          </span>
+          {settings.priorityMode === "custom" && (
+            <label>
+              Priority fee
+              <input
+                type="number"
+                min={0}
+                max={MAX_CUSTOM_FEE_SOL}
+                step={0.00001}
+                defaultValue={settings.customPrioritySol}
+                onBlur={(e) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v) && v >= 0 && v <= MAX_CUSTOM_FEE_SOL)
+                    update({ customPrioritySol: v });
+                }}
+              />
+              SOL
+            </label>
+          )}
+          <label
+            title={`At least ${MIN_TIP_SOL[settings.speed]} SOL on ${settings.speed === "turbo" ? "Turbo" : "Eco"}`}
+          >
+            Sender tip
+            <input
+              type="number"
+              min={MIN_TIP_SOL[settings.speed]}
+              max={MAX_CUSTOM_FEE_SOL}
+              step={0.000001}
+              placeholder={`${MIN_TIP_SOL[settings.speed]} (minimum)`}
+              defaultValue={settings.customTipSol ?? ""}
+              onBlur={(e) => {
+                if (e.target.value.trim() === "") return update({ customTipSol: null });
+                const v = Number(e.target.value);
+                if (Number.isFinite(v) && v > 0 && v <= MAX_CUSTOM_FEE_SOL) update({ customTipSol: v });
+              }}
+            />
+            SOL
+          </label>
           <label title="Keeps your trade away from validators known for sandwich attacks">
             <input
               type="checkbox"
@@ -375,8 +455,23 @@ export function TradePanel({
             )}
           </>
         )}
-        {status.kind === "idle" &&
-          `No TrenchScanner fee. Each trade pays the network about ${solText(tip + 0.00001)} (Sender tip and priority fee).`}
+      </p>
+      <p className="small tm-trade-fee" aria-live="polite">
+        {fee ? (
+          <>
+            Expected network fee <strong className="num">{solText(feeTotalSol(fee))}</strong>
+            <span className="muted num">
+              {" "}
+              (priority {solText(Number(fee.priorityFeeLamports) / LAMPORTS)} · Sender tip{" "}
+              {solText(Number(fee.tipLamports) / LAMPORTS)} · base{" "}
+              {solText(Number(fee.baseFeeLamports) / LAMPORTS)})
+            </span>
+            . This is a Solana blockchain fee, paid to the network.{" "}
+          </>
+        ) : (
+          "Working out the network fee… "
+        )}
+        <strong>TrenchScanner platform fee: 0%.</strong>
       </p>
     </section>
   );

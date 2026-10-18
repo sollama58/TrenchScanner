@@ -4,6 +4,7 @@ import bs58 from "bs58";
 import { z } from "zod";
 import {
   buildManualTrade,
+  estimateManualFees,
   decodeMessage,
   isSenderTipAccount,
   JupiterSwapClient,
@@ -51,6 +52,28 @@ const buildSchema = z.object({
   speed: z.enum(["eco", "turbo"]),
   /** A sale of the whole balance, read fresh here (the panel's copy can be seconds old). */
   all: z.boolean().optional(),
+  /** The trader's own priority fee and Sender tip, lamports; left out, the going rate and the minimum. */
+  priorityFeeLamports: z
+    .string()
+    .regex(/^\d{1,10}$/)
+    .optional(),
+  tipLamports: z
+    .string()
+    .regex(/^\d{1,10}$/)
+    .optional(),
+});
+
+const feeSchema = z.object({
+  mint: z.string().refine(looksLikeSolanaAddress, "not a token address"),
+  speed: z.enum(["eco", "turbo"]),
+  priorityFeeLamports: z
+    .string()
+    .regex(/^\d{1,10}$/)
+    .optional(),
+  tipLamports: z
+    .string()
+    .regex(/^\d{1,10}$/)
+    .optional(),
 });
 
 const sendSchema = z.object({
@@ -195,6 +218,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           amount,
           slippageBps: body.slippageBps,
           speed: body.speed,
+          ...(body.priorityFeeLamports !== undefined
+            ? { priorityFeeLamports: BigInt(body.priorityFeeLamports) }
+            : {}),
+          ...(body.tipLamports !== undefined ? { tipLamports: BigInt(body.tipLamports) } : {}),
         },
       );
       const builtWire = parseWireTransaction(Buffer.from(built.transaction, "base64"));
@@ -225,6 +252,28 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       request.log.error({ err, wallet, mint: body.mint }, "pro trade build failed");
       return reply.code(502).send({ error: `Couldn't build the trade: ${message}` });
     }
+  });
+
+  // What a trade would pay the network now (priority fee and Sender's tip), for the panel to show
+  // before anything is built. TrenchScanner itself takes nothing.
+  app.get("/trade/fee", { config: { rateLimit: READ_RATE_LIMIT } }, async (request, reply) => {
+    const who = await proWallet(request, reply);
+    if (!who) return;
+    const parsed = feeSchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
+    const q = parsed.data;
+    const fees = await estimateManualFees(rpc, {
+      mint: q.mint,
+      speed: q.speed,
+      ...(q.priorityFeeLamports !== undefined ? { priorityFeeLamports: BigInt(q.priorityFeeLamports) } : {}),
+      ...(q.tipLamports !== undefined ? { tipLamports: BigInt(q.tipLamports) } : {}),
+    });
+    return {
+      priorityFeeLamports: fees.priorityFeeLamports.toString(),
+      tipLamports: fees.tipLamports.toString(),
+      baseFeeLamports: fees.baseFeeLamports.toString(),
+      platformFeeLamports: "0",
+    };
   });
 
   app.post("/trade/send", { config: { rateLimit: SEND_RATE_LIMIT } }, async (request, reply) => {

@@ -23,6 +23,7 @@ import { HELIUS_SENDER_TIP_ACCOUNTS, isSenderTipAccount, pickSenderTipAccount, s
 import {
   buildManualTrade,
   checkJupiterFloor,
+  estimateManualFees,
   TradeRejected,
   type ManualTradeJupiter,
   type ManualTradeRpc,
@@ -214,6 +215,75 @@ describe("buildManualTrade refusals", () => {
     await expect(buildManualTrade({ rpc, jupiter }, { ...req, slippageBps: 5_001 })).rejects.toThrow(
       /slippage/,
     );
+  });
+});
+
+describe("custom fees", () => {
+  const rpc = {
+    getMintInfo: async () => ({ program: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", decimals: 6 }),
+  } as unknown as ManualTradeRpc;
+  const jupiter = {} as ManualTradeJupiter;
+  const req = {
+    wallet: WALLET,
+    mint: MINT,
+    side: "buy" as const,
+    amount: 1n,
+    slippageBps: 100,
+    speed: "eco" as const,
+  };
+
+  it("refuses a priority fee or tip outside its bounds", async () => {
+    await expect(
+      buildManualTrade({ rpc, jupiter }, { ...req, priorityFeeLamports: 10_000_001n }),
+    ).rejects.toThrow(/priority fee/);
+    await expect(buildManualTrade({ rpc, jupiter }, { ...req, priorityFeeLamports: -1n })).rejects.toThrow(
+      /priority fee/,
+    );
+    await expect(buildManualTrade({ rpc, jupiter }, { ...req, tipLamports: 4_999n })).rejects.toThrow(/tip/);
+    // Eco's minimum is under Turbo's.
+    await expect(
+      buildManualTrade({ rpc, jupiter }, { ...req, speed: "turbo", tipLamports: 5_000n }),
+    ).rejects.toThrow(/tip/);
+    await expect(buildManualTrade({ rpc, jupiter }, { ...req, tipLamports: 10_000_001n })).rejects.toThrow(
+      /tip/,
+    );
+  });
+
+  it("estimates the network fee at the going rate, or the trader's own", async () => {
+    let asked = 0;
+    const feeRpc = {
+      getPriorityFeeEstimate: async () => {
+        asked++;
+        return 40_000n;
+      },
+    };
+    // 40,000 micro-lamports a unit over 250K units: 10,000 lamports.
+    expect(await estimateManualFees(feeRpc, { mint: MINT, speed: "eco" })).toEqual({
+      priorityFeeLamports: 10_000n,
+      tipLamports: 5_000n,
+      baseFeeLamports: 5_000n,
+    });
+    // Turbo doubles the price and has the higher minimum tip.
+    expect(await estimateManualFees(feeRpc, { mint: MINT, speed: "turbo" })).toMatchObject({
+      priorityFeeLamports: 20_000n,
+      tipLamports: 1_000_000n,
+    });
+    expect(asked).toBe(2);
+    // The trader's own fee is what they pay, and the network isn't asked.
+    expect(
+      await estimateManualFees(feeRpc, {
+        mint: MINT,
+        speed: "eco",
+        priorityFeeLamports: 123_000n,
+        tipLamports: 50_000n,
+      }),
+    ).toMatchObject({ priorityFeeLamports: 123_000n, tipLamports: 50_000n });
+    expect(asked).toBe(2);
+  });
+
+  it("caps the going rate on Eco", async () => {
+    const busy = { getPriorityFeeEstimate: async () => 10_000_000n };
+    expect((await estimateManualFees(busy, { mint: MINT, speed: "eco" })).priorityFeeLamports).toBe(50_000n);
   });
 });
 
