@@ -75,7 +75,7 @@ export function pickChampion(
     return {
       id: fallback,
       qualified: false,
-      reason: `No model has ${rules.minLiveGraded} graded live calls yet, so the default stays on ${nameOf(fallback)}.`,
+      reason: `No model has ${rules.minLiveGraded} graded live alerts yet, so the default stays on ${nameOf(fallback)}.`,
     };
   }
   const pct = (s: ChampionStanding) => s.score ?? 0;
@@ -98,7 +98,7 @@ export function pickChampion(
     qualified: true,
     reason:
       `Best score on the full scorecard (${pct(top).toFixed(1)}, ${top.wins} of ${top.graded} doubled) over the last ` +
-      `${CHAMPION_WINDOW_HOURS} hours among models with at least ${rules.minLiveGraded} graded live calls.`,
+      `${CHAMPION_WINDOW_HOURS} hours among models with at least ${rules.minLiveGraded} graded live alerts.`,
   };
 }
 

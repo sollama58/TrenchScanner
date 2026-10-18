@@ -177,7 +177,7 @@ describe("lighthouse metrics", () => {
       "Coins read by flag raised",
     );
     expect(panelTitle({ id: "a", kind: "line", metrics: ["field2x", "calls2x"] })).toBe(
-      "2x rate, screened field · 2x rate, model calls",
+      "2x rate, screened field · 2x rate, model alerts",
     );
     const csv = historyCsv(history());
     const lines = csv.trim().split("\n");

@@ -66,7 +66,7 @@ export function ModelPortrait({
         </li>
         <li className="mp-step">
           <span className="mp-step-label">
-            <TargetIcon size={13} /> Calls
+            <TargetIcon size={13} /> Alerts
           </span>
           <CallDots pct={callsPct} />
           <span className="mp-step-text">

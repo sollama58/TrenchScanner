@@ -48,7 +48,7 @@ const GOAL_TEXT: Record<SeatGoal, string> = {
   "2x": "Coins that double",
   "4x": "Coins that go 4x",
   "10x": "Coins that go 10x",
-  return: "Most profit a call",
+  return: "Most profit per alert",
   safe: "Profit without the crashes",
   moonshot: "The biggest runs",
   catch: "Catch as many runners as it can",
@@ -67,7 +67,7 @@ export function modelProfile(spec: ContestantSpec, baseHalfLifeDays: number): Mo
         goal: "rules",
         goalText: "A simple, readable fallback",
         reads: "A few checks on the coin",
-        decides: "Adds up points and calls past a cutoff",
+        decides: "Adds up points and alerts past a cutoff",
         method: "rules",
       };
     case "stacked":
@@ -75,12 +75,12 @@ export function modelProfile(spec: ContestantSpec, baseHalfLifeDays: number): Mo
         ...base,
         goal: "team",
         goalText:
-          spec.id === TRADER_CONTESTANT ? "The surest calls, for the trading bot" : "Calls the team backs",
-        reads: "The other models' calls",
+          spec.id === TRADER_CONTESTANT ? "The surest alerts, for the trading bot" : "Alerts the team backs",
+        reads: "The other models' alerts",
         decides:
           spec.id === TRADER_CONTESTANT
             ? "Learns which models to trust"
-            : "Learns which models to trust, and needs three of them calling",
+            : "Learns which models to trust, and needs three of them alerting",
         method: "team",
         aimsToCallPct: spec.id === TRADER_CONTESTANT ? TRADER_CUTOFF_SHARE * 100 : null,
       };
@@ -88,7 +88,7 @@ export function modelProfile(spec: ContestantSpec, baseHalfLifeDays: number): Mo
       return {
         ...base,
         goal: "team",
-        goalText: "Calls the team backs",
+        goalText: "Alerts the team backs",
         reads: "The other models' confidence",
         decides: "Averages it, nothing learned",
         method: "team",
@@ -97,8 +97,8 @@ export function modelProfile(spec: ContestantSpec, baseHalfLifeDays: number): Mo
       return {
         ...base,
         goal: "team",
-        goalText: "Calls the team backs",
-        reads: "The other models' calls",
+        goalText: "Alerts the team backs",
+        reads: "The other models' alerts",
         decides: "Counts how many agree",
         method: "team",
       };
@@ -106,9 +106,9 @@ export function modelProfile(spec: ContestantSpec, baseHalfLifeDays: number): Mo
       return {
         ...base,
         goal: "team",
-        goalText: "Only the surest calls",
-        reads: "The tree models' calls",
-        decides: "Keeps a call one of them is most sure of",
+        goalText: "Only the surest alerts",
+        reads: "The tree models' alerts",
+        decides: "Keeps an alert one of them is most sure of",
         method: "team",
       };
   }
@@ -148,7 +148,7 @@ export function modelProfile(spec: ContestantSpec, baseHalfLifeDays: number): Mo
     decides = "Many independent trees vote";
   } else if (r?.boosting?.objective === "return") {
     method = "regression";
-    decides = "Predicts the profit a call makes";
+    decides = "Predicts the profit an alert makes";
   } else if (r?.boosting?.objective === "payoff") {
     method = "scales";
     decides = "Weighs the money coins like it won against what they lost";

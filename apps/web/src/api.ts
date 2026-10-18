@@ -1722,7 +1722,7 @@ export const TELEGRAM_ALERT_PARTS = [
   { key: "volume", label: "Volume 1h" },
   { key: "age", label: "Token age" },
   { key: "conviction", label: "Model conviction" },
-  { key: "calibrated", label: "2x rate of calls like it" },
+  { key: "calibrated", label: "2x rate of alerts like it" },
   { key: "reasons", label: "Reasons" },
   { key: "filters", label: "Filter and score" },
   { key: "mint", label: "Mint address" },

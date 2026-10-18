@@ -1892,7 +1892,7 @@ export async function gateOnAiVerdicts(
       continue;
     }
     if (review.decision !== "buy") {
-      outcomes.push({ signal, verdict: "skip", why: "the AI judge said no_buy" });
+      outcomes.push({ signal, verdict: "skip", why: "the AI judge rejected it" });
       continue;
     }
     const p2x = review.probability2x ?? 0;

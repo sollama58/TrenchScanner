@@ -202,13 +202,16 @@ export function recipeFacts(params: ContestantParams, metrics: Partial<StoredEva
       break;
     case AGREEMENT_MODEL_KIND:
       facts.push(
-        { label: "Shape", value: "Counts how many members call the coin at their own cutoff" },
+        { label: "Shape", value: "Counts how many members alert on the coin at their own cutoff" },
         { label: "Members", value: String(params.members.length) },
       );
       break;
     case TOP_SLICE_MODEL_KIND:
       facts.push(
-        { label: "Shape", value: "Calls a coin one tree seat ranks in the top quarter of its own calls" },
+        {
+          label: "Shape",
+          value: "Alerts on a coin one tree seat ranks in the top quarter of its own alerts",
+        },
         { label: "Members", value: String(params.members.length) },
       );
       break;
@@ -337,12 +340,12 @@ export function combinerRule(params: ContestantParams, memberCount: number): str
   switch (params.kind) {
     case AGREEMENT_MODEL_KIND: {
       const need = Math.max(1, agreeingFromScore(params.threshold, memberCount));
-      return `Calls when at least ${need} of ${memberCount} members call the coin at their own cutoff; ties go to the coin the members rank highest.`;
+      return `Alerts when at least ${need} of ${memberCount} members alert on the coin at their own cutoff; ties go to the coin the members rank highest.`;
     }
     case BLEND_MODEL_KIND:
-      return `Calls when the members' average rank (highest and lowest dropped) is at least ${params.threshold.toFixed(3)}, where 0.990 means "above 99% of decision moments".`;
+      return `Alerts when the members' average rank (highest and lowest dropped) is at least ${params.threshold.toFixed(3)}, where 0.990 means "above 99% of decision moments".`;
     case TOP_SLICE_MODEL_KIND:
-      return "Calls when any one member ranks the coin in the top quarter of its own calls.";
+      return "Alerts when any one member ranks the coin in the top quarter of its own alerts.";
     case STACKED_MODEL_KIND: {
       const reads = params.meta.featureNames.includes(RULES_GATE_SIGNAL)
         ? "every member's rank, Rules' score and how many members agree"
@@ -350,8 +353,8 @@ export function combinerRule(params: ContestantParams, memberCount: number): str
       const gate =
         params.minBackers === 0
           ? ""
-          : `, when at least ${consensusBackersNeeded(memberCount)} members call it too`;
-      return `A logistic model weighs ${reads}, then calls above its own cutoff${gate}.`;
+          : `, when at least ${consensusBackersNeeded(memberCount)} members alert on it too`;
+      return `A logistic model weighs ${reads}, then alerts above its own cutoff${gate}.`;
     }
     default:
       return null;
@@ -677,7 +680,7 @@ function explainCombiner(
     const labels: [string, string][] = [
       [RULES_RANK_SIGNAL, "Rules' score rank"],
       [RULES_GATE_SIGNAL, "Rules' checks pass"],
-      [AGREEMENT_SIGNAL, "Share of members calling"],
+      [AGREEMENT_SIGNAL, "Share of members alerting"],
     ];
     seat.otherSignals = labels
       .filter(([key]) => meta.has(key))
@@ -812,15 +815,15 @@ export async function explainCall(env: Env, alertId: string): Promise<CallExplai
   const features = asFeatures(alert.candidateOutcome?.features);
   if (!features) {
     out.note =
-      "This call's decision-moment inputs are no longer stored, so only its recorded reasons remain.";
+      "This alert's decision-moment inputs are no longer stored, so only its recorded reasons remain.";
     return out;
   }
   const params = await loadParams(alert.source);
   if (!params) {
     out.note =
       alert.model === "rules"
-        ? "Rules calls are explained by the checks they pass, listed in the reasons."
-        : "The model that made this call is no longer stored.";
+        ? "Rules alerts are explained by the checks they pass, listed in the reasons."
+        : "The model that raised this alert is no longer stored.";
     return out;
   }
   // Read on today's live scales, as the worker decides now (curation/liveScale.ts).
@@ -888,10 +891,10 @@ export async function explainCall(env: Env, alertId: string): Promise<CallExplai
       out.pushesAgainst = pushed.against;
     }
   } else {
-    out.note = "Rules calls are explained by the checks they pass, listed in the reasons.";
+    out.note = "Rules alerts are explained by the checks they pass, listed in the reasons.";
   }
   if (out.score !== null && Math.abs(out.score - alert.confidence) > 1 && out.note === null) {
-    out.note = `Recomputed at ${out.score.toFixed(1)} against ${alert.confidence.toFixed(1)} recorded: the coin was called on a later look than its decision moment, so its inputs had moved.`;
+    out.note = `Recomputed at ${out.score.toFixed(1)} against ${alert.confidence.toFixed(1)} recorded: the coin was alerted on a later look than its decision moment, so its inputs had moved.`;
   }
   return out;
 }

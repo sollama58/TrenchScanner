@@ -101,10 +101,12 @@ export function bestCost(b: Best): string {
 function bestTitle(b: Best): string {
   return (
     `Add ${b.name} to your feed: ${plural(b.adds, "more runner")} caught` +
-    (b.calls !== null ? ` for ${plural(b.calls, "more call")} in the window` : "") +
+    (b.calls !== null ? ` for ${plural(b.calls, "more alert")} in the window` : "") +
     (b.lift !== null ? `, its 2x rate ${b.lift.toFixed(1)}x the filtered market's` : "") +
-    (b.avgReturnPct !== null ? `, ${signedPct(b.avgReturnPct)} a call on average under the exit plan` : "") +
-    ". Only models that beat the filtered market and make money are suggested, the most runners per call first."
+    (b.avgReturnPct !== null
+      ? `, ${signedPct(b.avgReturnPct)} an alert on average under the exit plan`
+      : "") +
+    ". Only models that beat the filtered market and make money are suggested, the most runners per alert first."
   );
 }
 
@@ -159,7 +161,7 @@ export function CoverageMeter({
     }
   };
   const title =
-    `${coverageSentence(v, days, guest)} A runner counts as caught when any of your models called it at a ` +
+    `${coverageSentence(v, days, guest)} A runner counts as caught when any of your models flagged it at a ` +
     `winning moment. Goal ${v.goal}%` +
     (v.field !== null ? `; every model together caught ${pct(v.field)}.` : ".");
 

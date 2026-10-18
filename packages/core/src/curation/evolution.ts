@@ -386,9 +386,9 @@ export function plainSummary(recipe: CuratorRecipe, parentName?: string | null):
   } else if (recipe.learner === "gbdt" && recipe.boosting?.objective === "runSize") {
     what = "Predicts how big the run will be rather than whether it doubles";
   } else if (recipe.learner === "gbdt" && recipe.boosting?.objective === "return") {
-    what = "Predicts how much a call will make under the exit plan, rather than whether it doubles";
+    what = "Predicts how much an alert will make under the exit plan, rather than whether it doubles";
   } else if (recipe.learner === "gbdt" && recipe.boosting?.objective === "payoff") {
-    what = "Learns which coins win more money than they lose, each past call counted by what it made";
+    what = "Learns which coins win more money than they lose, each past alert counted by what it made";
   } else if (recipe.learner === "gbdt") {
     const depth = recipe.boosting?.maxDepth ?? DEFAULT_BOOSTING_OPTIONS.maxDepth;
     what =

@@ -799,13 +799,13 @@ export async function buildLeaderboard(
         `The score is how far a model has proven itself toward the goal, 0-100: ${Math.round(COMPOSITE_WEIGHTS.winRate * 100)} points ` +
         `for its 2x rate against ${env.CURATED_TARGET_WIN_RATE_PCT}%, ${Math.round(COMPOSITE_WEIGHTS.goalRate * 100)} for its 4x rate against ` +
         `${env.CURATED_TARGET_GOAL_RATE_PCT}%, ${Math.round(COMPOSITE_WEIGHTS.tenXRate * 100)} for its rate of 10x within an hour against ` +
-        `${TEN_X_TARGET_RATE * 100}%, ${Math.round(COMPOSITE_WEIGHTS.runSize * 100)} for run size: how far its calls ran over 24h, ` +
-        `in doublings per call, against ${RUN_SIZE_TARGET_DOUBLINGS} (a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average), ${Math.round(COMPOSITE_WEIGHTS.returnPct * 100)} for its average ` +
-        `return a call under the exit plan, from nothing at ${RETURN_FLOOR_PCT}% to full at +${RETURN_TARGET_PCT}%, and ${Math.round(COMPOSITE_WEIGHTS.catchRate * 100)} for catching runners: ` +
-        `the share of the tokens that doubled in its backtest that it called, against ${CATCH_TARGET_RATE * 100}%. ` +
-        `Rates, run size and return are proven, not raw: ${PRIOR_CALLS} extra calls count as misses (full stops for return), so a short streak ` +
-        `can't score like a long record. The backtest counts for at most ${BACKTEST_EVIDENCE_CAP} calls' worth; live calls take over from there. ` +
-        `Models with fewer than ${MIN_LIVE_CALLS_TO_RANK} graded live calls are still warming up and rank below the rest.`,
+        `${TEN_X_TARGET_RATE * 100}%, ${Math.round(COMPOSITE_WEIGHTS.runSize * 100)} for run size: how far its alerts ran over 24h, ` +
+        `in doublings per alert, against ${RUN_SIZE_TARGET_DOUBLINGS} (a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average), ${Math.round(COMPOSITE_WEIGHTS.returnPct * 100)} for its average ` +
+        `return per alert under the exit plan, from nothing at ${RETURN_FLOOR_PCT}% to full at +${RETURN_TARGET_PCT}%, and ${Math.round(COMPOSITE_WEIGHTS.catchRate * 100)} for catching runners: ` +
+        `the share of the tokens that doubled in its backtest that it alerted on, against ${CATCH_TARGET_RATE * 100}%. ` +
+        `Rates, run size and return are proven, not raw: ${PRIOR_CALLS} extra alerts count as misses (full stops for return), so a short streak ` +
+        `can't score like a long record. The backtest counts for at most ${BACKTEST_EVIDENCE_CAP} alerts' worth; live alerts take over from there. ` +
+        `Models with fewer than ${MIN_LIVE_CALLS_TO_RANK} graded live alerts are still warming up and rank below the rest.`,
     },
     exitPlan: describeExitPlan(),
     defaultModel: state.defaultModel,

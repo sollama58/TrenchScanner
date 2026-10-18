@@ -998,10 +998,10 @@ export async function buildHitRateReport(
       win: `2x on the alert price within ${WIN_WINDOW_MINUTES} minutes of the alert, without first falling 50% below it`,
       goal: `4x on the alert price within ${GOAL_WINDOW_MINUTES} minutes of the alert, same stop`,
       windowsNote:
-        "The windows were 1 hour each until 2026-10-05; older calls were re-graded under the current windows from their recorded price path.",
+        "The windows were 1 hour each until 2026-10-05; older alerts were re-graded under the current windows from their recorded price path.",
       runPeak: `clean winners stay watched for ${CANDIDATE_EXTENDED_WATCH_HOURS}h to record how far they ran (winnerRuns)`,
       fill: "the price the token was detected and alerted at (no delay, no slippage)",
-      note: "From 2026-10-03 to 2026-10-05 calls were graded from a fill a minute later plus slippage; those were re-graded from the alert price.",
+      note: "From 2026-10-03 to 2026-10-05 alerts were graded from a fill a minute later plus slippage; those were re-graded from the alert price.",
       exitPlan: describeExitPlan(),
     },
     targets,

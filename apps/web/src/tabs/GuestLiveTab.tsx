@@ -63,11 +63,11 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
       <div className="guest-banner panel" role="note">
         <ClockIcon size={16} />
         <p>
-          <strong>Guest mode: calls are delayed {delay} minutes.</strong>{" "}
+          <strong>Guest mode: alerts are delayed {delay} minutes.</strong>{" "}
           {/* The same length before and after the feed lands (the heading below names the models),
               so the banner doesn't grow and push the feed down as it loads. */}
           <span className="muted">
-            You see calls from {data && !many ? "the recommended model" : "the top models by proven 2x rate"},{" "}
+            You see alerts from {data && !many ? "the default model" : "the top models by proven 2x rate"},{" "}
             {delay} minutes after they are made. Connect a wallet to get them live, plus your own filters,
             model picks, alerts and stats.
           </span>
@@ -81,7 +81,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
           <div>
             <span className="eyebrow">Guest feed · {delay} min delay</span>
             <div className="heading-row">
-              <h2>Calls from {modelName}</h2>
+              <h2>Alerts from {modelName}</h2>
               <button
                 type="button"
                 className="ghost icon-btn"
@@ -98,7 +98,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
               <PaletteIcon size={14} />
               Customize
             </button>
-            <span className="delay-pill" title={`Guests see each call ${delay} minutes after it is made`}>
+            <span className="delay-pill" title={`Guests see each alert ${delay} minutes after it is made`}>
               <ClockIcon size={13} />
               Delayed {delay} min
             </span>
@@ -111,7 +111,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
           <div className="empty-state">
             <RadarIcon size={28} />
             <p>
-              Nothing from {modelName} yet. Calls land here {delay} minutes after they are made.
+              Nothing from {modelName} yet. Alerts land here {delay} minutes after they are made.
             </p>
           </div>
         )}
@@ -140,7 +140,7 @@ export function GuestLiveTab({ onConnect }: { onConnect: () => void }) {
           </nav>
         )}
         {page >= GUEST_MAX_PAGES && (
-          <p className="muted small center">Connect a wallet to see older calls.</p>
+          <p className="muted small center">Connect a wallet to see older alerts.</p>
         )}
       </section>
     </div>

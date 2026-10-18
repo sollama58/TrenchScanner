@@ -459,7 +459,7 @@ export async function renderTokenSageCard(d: MarketLighthouse, span: string): Pr
         label: "story confidence",
       },
       { value: pct(copies), label: "copy a recent coin" },
-      { value: pct(share(d.outcomes.described, d.outcomes.alerts)), label: "model calls with a read" },
+      { value: pct(share(d.outcomes.described, d.outcomes.alerts)), label: "model alerts with a read" },
     ],
     BODY_BOTTOM - 28,
   );
@@ -599,10 +599,10 @@ export async function renderNarrativesPayCard(
     ctx,
     icon,
     "Which narratives pay",
-    `Model calls by narrative: return and 2x rate against the average call.`,
+    `Model alerts by narrative: return and 2x rate against the average alert.`,
     {
       badge: windowBadge(`Last ${span}`),
-      footer: `${n(outcomes.graded)} graded model calls · 2x in 15 min before a 50% stop, rules 3-4`,
+      footer: `${n(outcomes.graded)} graded model alerts · 2x in 15 min before a 50% stop, rules 3-4`,
       link: LINK,
       time: true,
     },
@@ -632,9 +632,9 @@ export async function renderFeeRecipientsCard(
   if (!ctx) return canvas;
   const total = sum(d.feeRecipients);
   const graded = d.byFeeRecipient.reduce((s, r) => s + r.graded, 0);
-  frame(ctx, icon, "Fee recipients", "Who gets the creator fee on new coins, and how calls on them did.", {
+  frame(ctx, icon, "Fee recipients", "Who gets the creator fee on new coins, and how alerts on them did.", {
     badge: windowBadge(`Last ${span}`),
-    footer: `${n(total)} coins with a known fee recipient · ${n(graded)} graded model calls`,
+    footer: `${n(total)} coins with a known fee recipient · ${n(graded)} graded model alerts`,
     link: LINK,
     time: true,
   });
@@ -652,7 +652,7 @@ export async function renderFeeRecipientsCard(
   ctx.fillStyle = MUTED;
   ctx.font = `600 16px ${FONT}`;
   ctx.textAlign = "right";
-  ["Of coins", "Calls 2x", "Avg return", "Graded"].forEach((h, i) => ctx.fillText(h, cols[i]!, top));
+  ["Of coins", "Alerts 2x", "Avg return", "Graded"].forEach((h, i) => ctx.fillText(h, cols[i]!, top));
   d.feeRecipients.forEach((r, i) => {
     const cy = top + 26 + rowH * i + rowH / 2;
     const t = calls.get(r.label);
