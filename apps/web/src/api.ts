@@ -65,11 +65,33 @@ export function accessEnded(status: number, body: unknown): boolean {
   return status === 402 && (body as { error?: unknown } | null)?.error === "subscription_required";
 }
 
+/**
+ * Fired on `window` when a call outside /auth answers 401 unauthenticated: the session ended
+ * elsewhere (signed out on another device, or another tab signed in as someone else). App re-reads
+ * its session on it instead of leaving the page signed in until its next timed re-read.
+ */
+export const SESSION_ENDED_EVENT = "ts:session-ended";
+
+/** A 401 that means "no session", not a wrong two-factor code or a sign-in step refused. */
+export function sessionEnded(path: string, status: number, body: unknown): boolean {
+  return (
+    status === 401 &&
+    !path.startsWith("/auth/") &&
+    (body as { error?: unknown } | null)?.error === "unauthenticated"
+  );
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = authHeaders(new Headers(init.headers));
   if (init.body !== undefined && !headers.has("content-type"))
     headers.set("content-type", "application/json");
-  return parse<T>(await fetch(`${API_URL}${path}`, { ...init, headers, credentials: "include" }));
+  try {
+    return await parse<T>(await fetch(`${API_URL}${path}`, { ...init, headers, credentials: "include" }));
+  } catch (e) {
+    if (e instanceof ApiError && sessionEnded(path, e.status, e.body) && typeof window !== "undefined")
+      window.dispatchEvent(new Event(SESSION_ENDED_EVENT));
+    throw e;
+  }
 }
 
 /** Reads an API response: the JSON body, or an ApiError for a non-2xx status. */
