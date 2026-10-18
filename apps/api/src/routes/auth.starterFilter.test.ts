@@ -98,7 +98,7 @@ describe.skipIf(!dbAvailable)("the starter filter", () => {
 
   it("is the frozen Gemerald copy when one is stored, under the Default name", async () => {
     // The migration copies Gemerald once (StarterFilter); a new account gets those settings, not
-    // the built-in five, and never Gemerald's own name or styling.
+    // the built-in five, and never Gemerald's own name, styling or retired criteria.
     const stored = await prisma.starterFilter.findUnique({ where: { id: STARTER_FILTER_ID } });
     await prisma.starterFilter.upsert({
       where: { id: STARTER_FILTER_ID },
@@ -107,6 +107,7 @@ describe.skipIf(!dbAvailable)("the starter filter", () => {
         criteria: {
           mcapMin: 20_000,
           mcapMax: 300_000,
+          maxSniperTopHolderCount: 12,
           maxSniperTop10WalletPct: 30,
           launchpads: ["pump.fun"],
         },
@@ -117,6 +118,7 @@ describe.skipIf(!dbAvailable)("the starter filter", () => {
         criteria: {
           mcapMin: 20_000,
           mcapMax: 300_000,
+          maxSniperTopHolderCount: 12,
           maxSniperTop10WalletPct: 30,
           launchpads: ["pump.fun"],
         },
@@ -129,7 +131,9 @@ describe.skipIf(!dbAvailable)("the starter filter", () => {
       expect(filter.name).toBe("Default");
       expect(filter.mcapMin).toBe(20_000);
       expect(filter.mcapMax).toBe(300_000);
-      expect(filter.maxSniperTop10WalletPct).toBe(30);
+      expect(filter.maxSniperTopHolderCount).toBe(12);
+      // Retired criteria never reach a new account (RETIRED_STARTER_CRITERIA).
+      expect(filter.maxSniperTop10WalletPct).toBeNull();
       expect(filter.launchpads).toEqual(["pump.fun"]);
       expect(filter.maxRiskScore).toBeNull();
       expect(filter.isActive).toBe(true);
