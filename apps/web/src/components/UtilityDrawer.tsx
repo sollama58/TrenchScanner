@@ -52,6 +52,13 @@ function Drawer({ walletAddress, onMore }: { walletAddress: string; onMore: () =
     setOpen((o) => !o);
   };
 
+  // The Trades handle steps aside while this panel is out, so it never sits over it (styles.css).
+  useEffect(() => {
+    if (!open) return;
+    document.body.classList.add("util-open");
+    return () => document.body.classList.remove("util-open");
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const aside = ref.current;
