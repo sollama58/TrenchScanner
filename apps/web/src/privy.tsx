@@ -4,6 +4,7 @@ import {
   PrivyProvider,
   useDepositFunds,
   useLogin,
+  useMfaEnrollment,
   usePrivy,
   type PrivyClientConfig,
 } from "@privy-io/react-auth";
@@ -76,7 +77,8 @@ export default function PrivyRoot({ appId }: { appId: string }) {
 }
 
 function Bridge() {
-  const { ready, authenticated, getAccessToken, logout } = usePrivy();
+  const { ready, authenticated, getAccessToken, logout, user, mfaMethods } = usePrivy();
+  const { showMfaEnrollmentModal } = useMfaEnrollment();
   const { exportWallet } = useExportWallet();
   const { depositFunds } = useDepositFunds();
   const { wallets } = useStandardWallets();
@@ -118,6 +120,9 @@ function Bridge() {
     getAccessToken,
     connected,
     signTransaction,
+    user,
+    mfaMethods,
+    showMfaEnrollmentModal,
   });
   latest.current = {
     authenticated,
@@ -128,6 +133,9 @@ function Bridge() {
     getAccessToken,
     connected,
     signTransaction,
+    user,
+    mfaMethods,
+    showMfaEnrollmentModal,
   };
 
   useEffect(() => {
@@ -161,6 +169,11 @@ function Bridge() {
         }),
       logout: () => latest.current.logout(),
       exportWallet: (address) => latest.current.exportWallet({ address }),
+      mfa: () => ({
+        available: latest.current.mfaMethods.length > 0,
+        enrolled: (latest.current.user?.mfaMethods.length ?? 0) > 0,
+      }),
+      enrollMfa: () => latest.current.showMfaEnrollmentModal(),
       signQuietly: async (address, transaction) => {
         const wallet = latest.current.connected.find((w) => w.address === address);
         if (!wallet) throw new Error("Privy's wallet isn't ready yet. Try again in a moment.");

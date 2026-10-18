@@ -37,20 +37,25 @@ function u64(data: Uint8Array, offset: number): number {
   return Number(new DataView(data.buffer, data.byteOffset + offset, 8).getBigUint64(0, true));
 }
 
-/** A curve account's data (raw bytes or base64), or null when it isn't a BondingCurve. */
+/**
+ * A curve account's data (raw bytes or base64), or null when it isn't a BondingCurve. A graduated
+ * curve is emptied at migration: it reads as complete with zero reserves, which price nothing
+ * (`virtualToken` 0), so a reader of prices checks `complete` (or the reserves) before dividing.
+ */
 export function decodeCurve(raw: Uint8Array | string): CurveState | null {
   const data = typeof raw === "string" ? Uint8Array.from(Buffer.from(raw, "base64")) : raw;
   if (data.length < MIN_CURVE_LENGTH || BONDING_CURVE_DISCRIMINATOR.some((b, i) => data[i] !== b))
     return null;
   const virtualToken = u64(data, 8);
   const virtualQuote = u64(data, 16);
-  if (!(virtualToken > 0) || !(virtualQuote > 0)) return null;
+  const complete = data[48] === 1;
+  if (!complete && (!(virtualToken > 0) || !(virtualQuote > 0))) return null;
   const quote = data.subarray(QUOTE_MINT_OFFSET, QUOTE_MINT_OFFSET + 32);
   return {
     virtualToken,
     virtualQuote,
     realQuote: u64(data, 32),
-    complete: data[48] === 1,
+    complete,
     quoteIsSol: quote.length < 32 || quote.every((b) => b === 0),
   };
 }
@@ -167,6 +172,11 @@ export class CurveTape {
    */
   record(mint: string, at: number, state: CurveState, source: CurveSource): void {
     let tape = this.tapes.get(mint);
+    // Emptied at graduation: no price, only that it is over.
+    if (!(state.virtualToken > 0) || !(state.virtualQuote > 0)) {
+      if (tape) tape.complete = true;
+      return;
+    }
     const price = state.virtualQuote / state.virtualToken;
     if (!tape) {
       // The stream only speaks on a change, and the change it reports is the state after it: what

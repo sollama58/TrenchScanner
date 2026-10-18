@@ -30,6 +30,11 @@ export interface ScopeColumnFilter {
   socials: "any" | "x" | "website" | "either" | "both";
   /** Hide alerts that missed 2x or stopped out. */
   hideMissed: boolean;
+  /**
+   * Your filters and Models: keep alerts whose coin has graduated here too. Off, they show only in
+   * the Graduated column, with their filter or model marker (user ask 2026-10-18).
+   */
+  showGraduated: boolean;
   /** Models column: only high-conviction calls. */
   highOnly: boolean;
   /** Models column: only these models' calls (empty: every model you follow). */
@@ -92,6 +97,7 @@ export const DEFAULT_COLUMN_FILTER: ScopeColumnFilter = {
   minPeakPct: null,
   socials: "any",
   hideMissed: false,
+  showGraduated: false,
   highOnly: false,
   models: [],
   filters: [],
@@ -148,6 +154,7 @@ function normalizeFilter(raw: unknown): ScopeColumnFilter {
     minPeakPct: num(r.minPeakPct),
     socials: SOCIALS.includes(r.socials as never) ? (r.socials as ScopeColumnFilter["socials"]) : d.socials,
     hideMissed: bool(r.hideMissed, d.hideMissed),
+    showGraduated: bool(r.showGraduated, d.showGraduated),
     highOnly: bool(r.highOnly, d.highOnly),
     models: strings(r.models),
     filters: strings(r.filters),
@@ -271,6 +278,7 @@ export function activeFilterCount(f: ScopeColumnFilter): number {
     bounds +
     (f.socials !== "any" ? 1 : 0) +
     (f.hideMissed ? 1 : 0) +
+    (f.showGraduated ? 1 : 0) +
     (f.highOnly ? 1 : 0) +
     (f.models.length > 0 ? 1 : 0) +
     (f.filters.length > 0 ? 1 : 0)

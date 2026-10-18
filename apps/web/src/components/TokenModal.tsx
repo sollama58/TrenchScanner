@@ -197,11 +197,6 @@ const RANGES: { id: Range; label: string; title?: string }[] = [
 ];
 /** "First 15m" is offered while Pump.fun's 15-second candles still reach back to the launch. */
 const FIRST_VIEW_MAX_AGE_MS = 6 * 3_600_000;
-/**
- * The live tail follows coins this young, on their curve or after bonding in their PumpSwap pool
- * (user ask 2026-10-18): the day the scanner keeps watching a candidate.
- */
-const LIVE_MAX_AGE_MS = 24 * 3_600_000;
 /** The first-minutes view re-reads this often while the coin is inside them, else rarely. */
 const FIRST_LIVE_POLL_MS = 5_000;
 const FIRST_POLL_MS = 120_000;
@@ -1460,7 +1455,6 @@ export function ChartCard({
   // The coin's first trade, for whether its first minutes can still be drawn in fine detail.
   const firstTradeAt = data?.candles?.[0]?.t ?? data?.marketCap[0]?.t ?? null;
   const young = firstTradeAt !== null && Date.now() - firstTradeAt <= FIRST_VIEW_MAX_AGE_MS;
-  const liveAge = firstTradeAt !== null && Date.now() - firstTradeAt <= LIVE_MAX_AGE_MS;
   const shownRange: Range = range === "first" && !young ? "all" : range;
 
   // Labeled wallets' trades on the line (user ask 2026-10-18), as set in Customize › Chart wallet
@@ -1519,24 +1513,17 @@ export function ChartCard({
       : null,
     FINE_POLL_MS,
   );
-  // The live curve's (or after bonding, pool's) every price change, while the view runs to now on a
-  // coin under a day old.
-  const tail = useLiveTail(api, liveAge && shownRange !== "first" && !!bounds?.live);
-  // Whether the coin gets instant updates at all (user ask 2026-10-18): a Pump.fun coin under a day
-  // old, on its curve or in its PumpSwap pool, has a live tail. Once the tail says nothing live
-  // prices it, it stays so for this coin, so switching views doesn't bring the warning and the
-  // folded Trade back and forth.
+  // The live curve's (or after bonding, pool's) every price change, while the view runs to now. Any
+  // age (user ask 2026-10-18: too many charts were delayed): the API follows only open charts.
+  const tail = useLiveTail(api, shownRange !== "first" && !!bounds?.live);
+  // Whether the coin gets instant updates at all (user ask 2026-10-18): a Pump.fun coin on its curve
+  // or in its PumpSwap pool has a live tail. Once the tail says nothing live prices it, it stays so
+  // for this coin, so switching views doesn't bring the pill and the Trade note back and forth.
   const [offCurveFor, setOffCurveFor] = useState<string | null>(null);
   useEffect(() => {
     if (tail.done) setOffCurveFor(mint);
   }, [tail.done, mint]);
-  const delayed: DelayReason | null = !data
-    ? null
-    : !liveAge
-      ? "old"
-      : offCurveFor === mint
-        ? "off-curve"
-        : null;
+  const delayed = !!data && offCurveFor === mint;
   // When the chart last brought new prices, and how often it re-reads them without the live tail:
   // the 1-second candles every few seconds on a view of the last minutes, else the chart's own poll.
   const chartAt = useArrivedAt(data);
@@ -1675,7 +1662,7 @@ export function ChartCard({
           )}
           {streaming && <LiveBadge tail={tail} />}
           {delayed && !!bounds?.live && shownRange !== "first" && view && view.points.length >= 2 && (
-            <DelayBadge reason={delayed} updatedAt={updatedAt} everyMs={everyMs} />
+            <DelayBadge updatedAt={updatedAt} everyMs={everyMs} />
           )}
           <span className="tm-ranges" role="group" aria-label="Chart range">
             {RANGES.filter((r) => (!utility || r.id !== "model") && (young || r.id !== "first")).map((r) => (
@@ -1786,15 +1773,12 @@ export function ChartCard({
           onTraded={position.reload}
           closeOnly={closeOnly}
           graceEndsAt={graceEndsAt}
-          delayed={delayed !== null}
+          delayed={delayed}
         />
       )}
     </>
   );
 }
-
-/** Why a coin's chart isn't getting instant updates: launched over 6 hours ago, or off its curve. */
-type DelayReason = "old" | "off-curve";
 
 /** The moment `value` last changed (a poll's new answer), null before it has one. */
 function useArrivedAt(value: unknown): number | null {
@@ -1810,24 +1794,13 @@ function useArrivedAt(value: unknown): number | null {
  * its tooltip (a tap on a phone, touchTips.ts) says why, when the chart last brought new prices and
  * when it reads again. It ticks on its own, so the chart doesn't redraw every second.
  */
-function DelayBadge({
-  reason,
-  updatedAt,
-  everyMs,
-}: {
-  reason: DelayReason;
-  updatedAt: number | null;
-  everyMs: number;
-}) {
+function DelayBadge({ updatedAt, everyMs }: { updatedAt: number | null; everyMs: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, []);
-  const why =
-    reason === "old"
-      ? "it launched over 24 hours ago"
-      : "it isn't trading on a Pump.fun bonding curve or its PumpSwap pool";
+  const why = "it isn't trading on a Pump.fun bonding curve or its PumpSwap pool";
   const clock = (t: number) =>
     new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
   const next = updatedAt !== null ? Math.ceil((updatedAt + everyMs - now) / 1_000) : null;

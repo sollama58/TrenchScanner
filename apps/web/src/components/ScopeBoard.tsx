@@ -95,9 +95,13 @@ export function ScopeBoard({
         ? splitScope(
             visible.filter((c) => c.kind !== "stream"),
             visible.filter((c) => c.kind === "stream"),
+            {
+              filters: settings.columns.filters.showGraduated,
+              models: settings.columns.models.showGraduated,
+            },
           )
         : undefined,
-    [visible],
+    [visible, settings.columns.filters.showGraduated, settings.columns.models.showGraduated],
   );
   // Each column through its own filters (Scope's settings, not Customize's).
   const fresh = useMemo(() => {
@@ -289,7 +293,14 @@ export function ScopeBoard({
                 </p>
               ) : (
                 cols[c.id].map((card) => (
-                  <ScopeRow key={card.id} card={card} now={now} display={display} tiles={tiles} />
+                  <ScopeRow
+                    key={card.id}
+                    card={card}
+                    now={now}
+                    display={display}
+                    tiles={tiles}
+                    marker={c.id === "graduated"}
+                  />
                 ))
               )}
             </div>
@@ -330,6 +341,7 @@ export function ScopeRow({
   display: d,
   tiles,
   preview = false,
+  marker = false,
 }: {
   card: Card;
   now: number;
@@ -337,6 +349,8 @@ export function ScopeRow({
   tiles: TileMode;
   /** The settings window's example row: no token window, no quick buy. */
   preview?: boolean;
+  /** Show where an alert came from whatever the settings say: the Graduated column's alerts. */
+  marker?: boolean;
 }) {
   const open = () => {
     if (!preview) openTokenModal(card, now);
@@ -369,6 +383,7 @@ export function ScopeRow({
         ? [curated.modelName ?? "Model"]
         : [];
   const chips = rowChips(card, d.chips);
+  const showSource = d.showSource || marker;
   const img = d.imageSize === "s" ? 36 : d.imageSize === "l" ? 56 : 44;
 
   return (
@@ -411,12 +426,13 @@ export function ScopeRow({
               {shortAge(ageMs)}
             </span>
           )}
-          {filter && d.showSource && (
+          {filter && showSource && (
             <span className="scope-src mine" title={`Caught by your filter “${filter.name}”`}>
               {filter.icon ? <FilterGlyph icon={filter.icon} size={11} /> : <SlidersIcon size={11} />}
+              {marker && <span className="scope-src-text">{filter.name}</span>}
             </span>
           )}
-          {curated && d.showSource && (
+          {curated && showSource && (
             <span className="scope-src model" title={models.join(" + ")}>
               <BrainIcon size={11} />
               <span className="scope-src-text">
@@ -424,7 +440,7 @@ export function ScopeRow({
               </span>
             </span>
           )}
-          {high && d.showSource && (
+          {high && showSource && (
             <span
               className="scope-src model"
               title="High conviction: the model's top half-percent of moments"
