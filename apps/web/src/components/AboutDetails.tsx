@@ -1,4 +1,4 @@
-import { BrainIcon, SlidersIcon } from "./Icons";
+import { BoltIcon, BrainIcon, SlidersIcon } from "./Icons";
 
 type Targets = { hitRate2xPct: number; hitRate4xPct: number };
 
@@ -296,9 +296,15 @@ export function AboutDetails({ targets }: { targets: Targets }) {
             would have flagged it too. Toggle it in Customize. Until you do, it turns on by itself once the
             Narrative model doubles over 40% of its alerts across 7 days.
           </dd>
-          <dt>High conviction</dt>
+          <dt>
+            <span className="pill pill-icon pill-conviction" aria-hidden="true">
+              <BoltIcon size={12} />
+            </span>{" "}
+            High conviction
+          </dt>
           <dd>
-            From the model&apos;s top half-percent most confident moments. Tracked separately on Models.
+            The filled bolt beside the model&apos;s name: from the model&apos;s top half-percent most
+            confident moments. Tracked separately on Models.
           </dd>
           <dt>≈41% 2x</dt>
           <dd>

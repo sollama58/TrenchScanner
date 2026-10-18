@@ -15,6 +15,7 @@ import {
   usd,
 } from "../format";
 import {
+  BoltIcon,
   BrainIcon,
   ChefHatIcon,
   CheckIcon,
@@ -254,6 +255,20 @@ export function AlertCard({
                 {card.token.name}
               </span>
             )}
+            {/* Up here beside the name, so the model's pills below keep their room. */}
+            {socials.map((l) => (
+              <a
+                key={l.key}
+                className="pill pill-icon pill-social"
+                href={l.url}
+                target="_blank"
+                rel="noreferrer noopener"
+                title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
+                aria-label={`Open the coin's ${l.label}`}
+              >
+                <l.Icon size={11} />
+              </a>
+            ))}
           </div>
           <div className="meta-row">
             {styled ? (
@@ -299,8 +314,15 @@ export function AlertCard({
             {curated &&
               show("conviction") &&
               (calls.some((c) => c.tier === "high") || curated.tier === "high") && (
-                <span className="pill pill-model" title="In the model's top half-percent of decision moments">
-                  <span className="pill-text">High conviction</span>
+                // A mark, not a worded pill: beside the model pill, the words squeezed both to "Hi…"
+                // (user report 2026-10-18).
+                <span
+                  className="pill pill-icon pill-conviction"
+                  role="img"
+                  title="High conviction: in the model's top half-percent of decision moments"
+                  aria-label="High conviction"
+                >
+                  <BoltIcon size={12} />
                 </span>
               )}
             {curated?.narrative && showNarrative && show("modelPill") && (
@@ -317,7 +339,7 @@ export function AlertCard({
             )}
             {curated && show("calibrated") && cardCalibratedRate(curated, calls) !== null && (
               <span
-                className="pill"
+                className="pill pill-rate"
                 title={`Of recent out-of-sample alerts ranked like this one, the share that hit 2x within 15 min of the alert, before a 50% stop${
                   calls.length > 1 ? " (the middle of the alerting models' rates)" : ""
                 }`}
@@ -325,19 +347,6 @@ export function AlertCard({
                 <span className="pill-text">≈{cardCalibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
               </span>
             )}
-            {socials.map((l) => (
-              <a
-                key={l.key}
-                className="pill pill-icon pill-social"
-                href={l.url}
-                target="_blank"
-                rel="noreferrer noopener"
-                title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
-                aria-label={`Open the coin's ${l.label}`}
-              >
-                <l.Icon size={11} />
-              </a>
-            ))}
             {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
           </div>
         </div>
