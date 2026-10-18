@@ -223,12 +223,11 @@ function FeeExplainer({
   };
   return (
     <div className="tm-trade-fee" aria-live="polite">
-      <div className="tm-fee-zero-badge">
-        <CheckIcon size={16} />
-        <span>
-          <strong>0% platform fee.</strong> TrenchScanner takes nothing from your trade.
-        </span>
-      </div>
+      <span className="tm-fee-zero-badge">
+        <CheckIcon size={12} />
+        <strong>0% platform fee</strong>
+        <span className="tm-fee-zero-more">TrenchScanner takes nothing</span>
+      </span>
       <div className="tm-fee-head">
         <span className="tm-fee-title">
           Total cost of a <span className="num">{solText(sizeSol)}</span> buy
