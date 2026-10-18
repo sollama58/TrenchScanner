@@ -292,8 +292,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
           .code(409)
           .send({ error: "Your Privy wallet isn't ready yet. Wait a moment and try again." });
       // Admins sign in with their own wallet only (user decision 2026-10-18).
-      if (adminWalletSet(opts.env).has(wallet))
-        return reply.code(403).send({ error: "Sign in with your wallet." });
+      if (adminWalletSet(opts.env).has(wallet)) return reply.code(403).send({ error: ADMIN_PRIVY_REFUSAL });
       const outcome = await createPrivyUser(did, wallet, opts.env.PRIVY_SIGNUP_CAP);
       if (outcome === "full")
         return reply.code(403).send({
@@ -301,9 +300,10 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
           signupsFull: true,
         });
       if (outcome === "taken")
-        return reply
-          .code(409)
-          .send({ error: "That wallet already has an account here. Sign in with the wallet." });
+        return reply.code(409).send({
+          error:
+            "This Privy wallet already has its own wallet account here, so it signs in as a wallet. Pick that wallet above instead.",
+        });
       user = outcome.user;
       created = outcome.created;
       request.log.info(
@@ -314,7 +314,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     // Checked at every sign-in, not only the first: a wallet made admin later still signs in with
     // its own key, never through Privy.
     if (adminWalletSet(opts.env).has(user.walletAddress))
-      return reply.code(403).send({ error: "Sign in with your wallet." });
+      return reply.code(403).send({ error: ADMIN_PRIVY_REFUSAL });
     return finishSignIn(request, reply, user, created);
   });
 
@@ -501,6 +501,10 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
 export function accessSwapOpen(env: Env): boolean {
   return env.PRO_TRADING_ENABLED;
 }
+
+/** Admins sign in with their own wallet only (user decision 2026-10-18); the message says why. */
+const ADMIN_PRIVY_REFUSAL =
+  "This is an admin account, and admins sign in with their own wallet, not email, Google or X. Pick your wallet above instead.";
 
 const signInFactorSchema = z.object({ ticket: z.string().max(2048), ...factorFields });
 
