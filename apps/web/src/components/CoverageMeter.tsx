@@ -154,6 +154,14 @@ export function CoverageMeter({ board, guest = false }: { board: Leaderboard; gu
           <span className="cov-goal muted small num">goal {v.goal}%</span>
         )}
       </div>
+      <p className="cov-note faint small">
+        Coverage is the share of all tracked runners (tokens that doubled) your combined model picks would
+        have caught.
+        {v.field !== null &&
+          v.field > v.share &&
+          " The dot is every model together, the most any mix could catch."}
+        {` The line is the ${v.goal}% goal.`}
+      </p>
     </div>
   );
 }
