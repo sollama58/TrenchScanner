@@ -8,11 +8,11 @@ import {
   TradingRpc,
   withApiFeature,
   type Env,
+  walletTag,
   type WalletBalance,
 } from "@trenchscanner/core";
 import { proStatus } from "../proMode.js";
 import { SolPrice } from "../solPrice.js";
-import { walletTag } from "../walletTag.js";
 import { tokenView, type UtilityTokenView } from "./utilities.js";
 
 /**
