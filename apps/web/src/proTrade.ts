@@ -27,6 +27,8 @@ export interface ProState {
   pro: boolean;
   /** Dropped out of the top 250 holders: when Pro Mode ends (ms). */
   graceEndsAt: number | null;
+  /** The grace is because the holder scans stopped, not because the wallet left the top 250. */
+  graceUnconfirmed: boolean;
 }
 
 let proState: ProState | null = null;
@@ -39,7 +41,8 @@ export function setProState(next: ProState | null): void {
       proState &&
       next.wallet === proState.wallet &&
       next.pro === proState.pro &&
-      next.graceEndsAt === proState.graceEndsAt)
+      next.graceEndsAt === proState.graceEndsAt &&
+      next.graceUnconfirmed === proState.graceUnconfirmed)
   )
     return;
   proState = next;
@@ -50,12 +53,18 @@ export function setProState(next: ProState | null): void {
 export function proStateOf(user: {
   walletAddress: string;
   isPro?: boolean;
-  proMode?: { canClose: boolean; graceEndsAt?: string };
+  proMode?: { canClose: boolean; graceEndsAt?: string; graceReason?: string };
 }): ProState | null {
   const grace = user.proMode?.graceEndsAt ? Date.parse(user.proMode.graceEndsAt) : NaN;
   if (user.isPro)
-    return { wallet: user.walletAddress, pro: true, graceEndsAt: Number.isFinite(grace) ? grace : null };
-  if (user.proMode?.canClose) return { wallet: user.walletAddress, pro: false, graceEndsAt: null };
+    return {
+      wallet: user.walletAddress,
+      pro: true,
+      graceEndsAt: Number.isFinite(grace) ? grace : null,
+      graceUnconfirmed: Number.isFinite(grace) && user.proMode?.graceReason === "unconfirmed",
+    };
+  if (user.proMode?.canClose)
+    return { wallet: user.walletAddress, pro: false, graceEndsAt: null, graceUnconfirmed: false };
   return null;
 }
 
@@ -76,7 +85,7 @@ function useProStore(): ProState | null {
 export function useProState(): ProState | null {
   const s = useProStore();
   if (s?.pro && s.graceEndsAt !== null && s.graceEndsAt <= Date.now())
-    return { ...s, pro: false, graceEndsAt: null };
+    return { ...s, pro: false, graceEndsAt: null, graceUnconfirmed: false };
   return s;
 }
 
@@ -321,6 +330,76 @@ async function accountFor(owner: string): Promise<{
   return { account, sign: signer, name: w.name };
 }
 
+/** The programs a Pro trade may call at its top level (the API's guard allows the same). */
+const TRADE_PROGRAMS = new Set([
+  "ComputeBudget111111111111111111111111111111",
+  "11111111111111111111111111111111",
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+  "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P",
+]);
+/** Helius Sender's tip accounts (packages/core/src/trading/sender.ts). */
+const SENDER_TIP_ACCOUNTS = new Set([
+  "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE",
+  "D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7NZ",
+  "9bnz4RShgq1hAnLnZbP8kbgBg1kEmcJBYQq3gQbmnSta",
+  "5VY91ws6B2hMmBFRsXkoAAdsPHBJwRfBht4DXox3xkwn",
+  "2nyhqdwKcJZR2vcqCyrYsaPVdAnFoJjiksCXJ7hfEYgD",
+  "2q5pghRs6arqVjRvT5gfgWfWcHWmw1ZuCzphgd5KfWGJ",
+  "wyvPkWjVZz1M8fHQnMMCDTQDbkManefNNhweYk5WkcF",
+  "3KCKozbAaF75qEU33jtzozcJ29yJuaLJTy2jFdzUY8bT",
+  "4vieeGHPYPG2MmyPRcYjdiDmmhN3ww7hsFNap8pVN3Ey",
+  "4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or",
+]);
+
+/**
+ * A second look at the API's build before the wallet is asked to sign it, so a compromised API
+ * or a tampered response can't slip in something else: one signer and it is this wallet, only
+ * the swap's programs at the top level, and Sender's tip. Returns why it isn't, or null.
+ * (The wallet's own preview still shows what it does.)
+ */
+export function tradeProblem(tx: Uint8Array, owner: string): string | null {
+  try {
+    let at = 0;
+    const shortVec = () => {
+      let len = 0;
+      for (let shift = 0; ; shift += 7) {
+        const b = tx[at++];
+        if (b === undefined || shift > 14) throw new Error("bad length");
+        len |= (b & 0x7f) << shift;
+        if (!(b & 0x80)) return len;
+      }
+    };
+    const signatures = shortVec();
+    at += 64 * signatures;
+    if ((tx[at] ?? 0) & 0x80) at++; // versioned message
+    const required = tx[at];
+    at += 3;
+    const keyCount = shortVec();
+    const keys: string[] = [];
+    for (let i = 0; i < keyCount; i++, at += 32) keys.push(bs58.encode(tx.subarray(at, at + 32)));
+    at += 32; // blockhash
+    if (signatures !== 1 || required !== 1) return "it needs a signer besides your wallet";
+    if (keys[0] !== owner) return "your wallet isn't the one paying for it";
+    const ixCount = shortVec();
+    for (let i = 0; i < ixCount; i++) {
+      const program = keys[tx[at++]!];
+      if (!program || !TRADE_PROGRAMS.has(program)) return "it calls a program a swap doesn't need";
+      // Read each length first: `at += shortVec()` would add it to `at` as it was before the read.
+      const accounts = shortVec();
+      at += accounts;
+      const data = shortVec();
+      at += data;
+    }
+    if (!keys.some((k) => SENDER_TIP_ACCOUNTS.has(k))) return "it doesn't go through Helius Sender";
+    return null;
+  } catch {
+    return "it couldn't be read";
+  }
+}
+
 const STATUS_POLL_MS = 1_200;
 const CONFIRM_GIVE_UP_MS = 90_000;
 
@@ -351,9 +430,12 @@ export async function runTrade(
     speed: input.settings.speed,
     ...(input.all ? { all: true } : {}),
   });
+  const unsigned = fromBase64(built.transaction);
+  const problem = tradeProblem(unsigned, input.owner);
+  if (problem) throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
   onStage("signing", built);
   const [signed] = await withTimeout(
-    sign.signTransaction({ account, transaction: fromBase64(built.transaction), chain: "solana:mainnet" }),
+    sign.signTransaction({ account, transaction: unsigned, chain: "solana:mainnet" }),
     "sign",
   );
   if (!signed?.signedTransaction) throw new TradeError(`${name} returned no signed transaction`);

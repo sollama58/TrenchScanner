@@ -55,6 +55,23 @@ export function shareOf(raw: bigint, pct: number): bigint {
   return (raw * BigInt(Math.round(pct * 100))) / 10_000n;
 }
 
+/** Buys this size or more ask before they start. */
+const CONFIRM_BUY_LAMPORTS = 5n * BigInt(LAMPORTS);
+
+/** What the build quotes, said before the wallet asks to sign: "About 1.2M PEPE, at least 1.02M." */
+export function quoteText(
+  built: { quotedOut: string; minOut: string; priorityFeeLamports: string; tipLamports: string },
+  side: "buy" | "sell",
+  position: { decimals: number | null } | null,
+  symbol: string,
+): string {
+  const fees = (Number(BigInt(built.priorityFeeLamports)) + Number(BigInt(built.tipLamports))) / LAMPORTS;
+  if (side === "sell")
+    return `About ${solText(Number(BigInt(built.quotedOut)) / LAMPORTS)}, at least ${solText(Number(BigInt(built.minOut)) / LAMPORTS)}; fees ${solText(fees)}.`;
+  const scale = 10 ** (position?.decimals ?? 6);
+  return `About ${tokensText(Number(BigInt(built.quotedOut)) / scale)} ${symbol}, at least ${tokensText(Number(BigInt(built.minOut)) / scale)}; fees ${solText(fees)}.`;
+}
+
 const STAGE_TEXT: Record<TradeStage, string> = {
   building: "Building and checking the trade…",
   signing: "Approve it in your wallet…",
@@ -64,7 +81,7 @@ const STAGE_TEXT: Record<TradeStage, string> = {
 
 type Status =
   | { kind: "idle" }
-  | { kind: "busy"; stage: TradeStage; what: string }
+  | { kind: "busy"; stage: TradeStage; what: string; quote?: string }
   | { kind: "done"; text: string; signature: string }
   | { kind: "error"; text: string; signature?: string };
 
@@ -117,10 +134,17 @@ export function TradePanel({
 
   const trade = async (side: "buy" | "sell", amount: bigint, what: string, all = false) => {
     if (busy || amount <= 0n) return;
+    // A big buy is one click from a preset or a typo: ask first.
+    if (side === "buy" && amount >= CONFIRM_BUY_LAMPORTS && !window.confirm(`${what} of ${symbol}?`)) return;
     setStatus({ kind: "busy", stage: "building", what });
     try {
-      const signature = await runTrade({ owner, mint, side, amount, all, settings }, (stage) =>
-        setStatus({ kind: "busy", stage, what }),
+      const signature = await runTrade({ owner, mint, side, amount, all, settings }, (stage, built) =>
+        setStatus({
+          kind: "busy",
+          stage,
+          what,
+          quote: built ? quoteText(built, side, position, symbol) : undefined,
+        }),
       );
       setStatus({ kind: "done", text: `${what}: confirmed.`, signature });
     } catch (e) {
@@ -141,9 +165,8 @@ export function TradePanel({
     <section className="sage-card tm-trade" aria-label="Trade">
       {graceEndsAt !== null && !closeOnly && (
         <p className="small tm-trade-warn" role="alert">
-          Your wallet left the top 250 $ASDFASDFA holders. Pro Mode ends in{" "}
-          <strong className="num">{graceLeftText(graceEndsAt)}</strong> unless it&apos;s back in by then; you
-          can still sell after that.
+          Pro Mode ends in <strong className="num">{graceLeftText(graceEndsAt)}</strong> unless your wallet is
+          confirmed in the top 250 $ASDFASDFA holders by then. You can still sell after that.
         </p>
       )}
       {closeOnly && (
@@ -329,7 +352,8 @@ export function TradePanel({
       )}
 
       <p className={`small tm-trade-status ${status.kind}`} aria-live="polite">
-        {status.kind === "busy" && `${status.what}: ${STAGE_TEXT[status.stage]}`}
+        {status.kind === "busy" &&
+          `${status.what}: ${STAGE_TEXT[status.stage]}${status.quote ? ` ${status.quote}` : ""}`}
         {status.kind === "done" && (
           <>
             {status.text}{" "}

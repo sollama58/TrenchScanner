@@ -7,6 +7,7 @@ import {
   loadEnv,
   prisma,
   refreshProHolders,
+  proHolderStanding,
   resetProHolderCacheForTests,
   type Env,
 } from "@trenchscanner/core";
@@ -149,13 +150,14 @@ const walletKey = () =>
 const HOLDER = walletKey();
 const GRACE = walletKey();
 const LAPSED = walletKey();
+const NEWBIE = walletKey();
 
 describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
   const env: Env = dbAvailable ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMIN } : (undefined as never);
   let app: FastifyInstance;
   const cookies: Record<string, string> = {};
   const ids: string[] = [];
-  const wallets = [HOLDER, GRACE, LAPSED];
+  const wallets = [HOLDER, GRACE, LAPSED, NEWBIE];
   const me = async (w: string) =>
     (
       await app.inject({ method: "GET", url: "/auth/me", cookies: { [SESSION_COOKIE_NAME]: cookies[w]! } })
@@ -185,13 +187,28 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     await prisma.proHolder.createMany({
       data: [
         { walletAddress: LAPSED, rank: 250, lastInTopAt: new Date(now - 25 * 3_600_000) },
-        { walletAddress: GRACE, rank: 249, lastInTopAt: new Date(now - 3_600_000) },
+        // Held for hours until an hour ago.
+        {
+          walletAddress: GRACE,
+          rank: 249,
+          lastInTopAt: new Date(now - 3_600_000),
+          inTopSince: new Date(now - 5 * 3_600_000),
+        },
+        // In the previous scan (ten minutes ago) and every one for two hours before it.
+        {
+          walletAddress: HOLDER,
+          rank: 2,
+          lastInTopAt: new Date(now - 600_000),
+          inTopSince: new Date(now - 2 * 3_600_000),
+        },
       ],
     });
     await refreshProHolders(
       {
         getTopHoldersBatch: async (mints) =>
-          new Map(mints.map((m) => [m, { status: "found", holders: [{ owner: HOLDER }] }])),
+          new Map(
+            mints.map((m) => [m, { status: "found", holders: [{ owner: HOLDER }, { owner: NEWBIE }] }]),
+          ),
       },
       new Date(now),
     );
@@ -217,6 +234,23 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     const left = Date.parse(grace.proMode.graceEndsAt!) - Date.now();
     expect(left).toBeGreaterThan(22.9 * 3_600_000);
     expect(left).toBeLessThan(23.1 * 3_600_000);
+  });
+
+  it("waits an hour of scans before a new holder gets it, so one bag can't hop between wallets", async () => {
+    expect(await me(NEWBIE)).toMatchObject({ isPro: false, proMode: { source: null, canClose: false } });
+    // The holder's run carried through the new scan: it keeps Pro Mode.
+    const row = await prisma.proHolder.findUnique({ where: { walletAddress: HOLDER } });
+    expect(Date.now() - row!.inTopSince.getTime()).toBeGreaterThan(1.9 * 3_600_000);
+  });
+
+  it("turns stopped scans into a grace period instead of Pro Mode with no end", async () => {
+    const later = new Date(Date.now() + 2 * 3_600_000);
+    const standing = await proHolderStanding(HOLDER, later);
+    expect(standing).toMatchObject({ state: "grace", stale: true });
+    // A day from the last scan it was in.
+    expect((standing as { graceEndsAt: Date }).graceEndsAt.getTime() - Date.now()).toBeGreaterThan(
+      23.9 * 3_600_000,
+    );
   });
 
   it("lets a wallet that had Pro Mode sell, but not buy, after it ends", async () => {

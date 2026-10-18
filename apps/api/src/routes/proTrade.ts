@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { createHash } from "node:crypto";
 import bs58 from "bs58";
 import { z } from "zod";
 import {
@@ -127,7 +128,14 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   }
   const builds = new Map<
     string,
-    { blockhash: string; lastValidBlockHeight: number; at: number; side: "buy" | "sell" }[]
+    {
+      blockhash: string;
+      lastValidBlockHeight: number;
+      at: number;
+      side: "buy" | "sell";
+      /** sha256 of the built message: a close-only wallet must send exactly what was built. */
+      messageHash: string;
+    }[]
   >();
 
   /** The wallet's builds still good for a send, oldest first. */
@@ -189,13 +197,15 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           speed: body.speed,
         },
       );
-      const message = decodeMessage(parseWireTransaction(Buffer.from(built.transaction, "base64")).message);
+      const builtWire = parseWireTransaction(Buffer.from(built.transaction, "base64"));
+      const message = decodeMessage(builtWire.message);
       const list = liveBuilds(wallet);
       list.push({
         blockhash: message.recentBlockhash,
         lastValidBlockHeight: built.lastValidBlockHeight,
         at: Date.now(),
         side: body.side,
+        messageHash: sha256Hex(builtWire.message),
       });
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
       if (builds.size > 5_000) builds.clear();
@@ -249,9 +259,13 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (inFlight.has(signature)) return { signature };
       // One send per build, on the blockhash it was built with.
       const list = liveBuilds(wallet);
-      // Without Pro Mode any more, only a sale's build sends.
+      // Without Pro Mode any more, only a sale's build sends, exactly as it was built: a wallet
+      // could otherwise write its own buy on a sale's blockhash.
+      const hash = who.pro ? null : sha256Hex(wire.message);
       const at = list.findIndex(
-        (b) => b.blockhash === message.recentBlockhash && (who.pro || b.side === "sell"),
+        (b) =>
+          b.blockhash === message.recentBlockhash &&
+          (who.pro || (b.side === "sell" && b.messageHash === hash)),
       );
       if (at < 0)
         return reply.code(400).send({
@@ -442,6 +456,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     retired.clear();
   });
 }
+
+const sha256Hex = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 /** The guard's refusal in the trader's words, where it can be said plainly. */
 export function plainRefusal(message: string, side: "buy" | "sell" = "buy"): string {

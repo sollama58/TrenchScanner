@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS "ProHolder" (
     "walletAddress" TEXT NOT NULL,
     "rank" INTEGER NOT NULL,
     "lastInTopAt" TIMESTAMP(3) NOT NULL,
-    "firstInTopAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "inTopSince" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "ProHolder_pkey" PRIMARY KEY ("walletAddress")
 );

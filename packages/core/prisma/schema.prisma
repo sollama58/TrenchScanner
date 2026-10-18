@@ -2007,7 +2007,9 @@ model ProHolder {
   /// Its place in the last scan it was in (1 = largest).
   rank          Int
   lastInTopAt   DateTime
-  firstInTopAt  DateTime @default(now())
+  /// Since when it has been in every scan without a gap: Pro Mode starts an hour in, so a bag
+  /// moved from wallet to wallet between scans earns none.
+  inTopSince    DateTime @default(now())
 
   @@index([lastInTopAt])
 }

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TRADE_SETTINGS,
@@ -5,6 +7,7 @@ import {
   proStateOf,
   readTradeSettings,
   summarizePosition,
+  tradeProblem,
   type PositionResponse,
 } from "./proTrade";
 import { parseSol, shareOf, solText } from "./components/TradePanel";
@@ -117,6 +120,7 @@ describe("proStateOf", () => {
       wallet: "w",
       pro: true,
       graceEndsAt: null,
+      graceUnconfirmed: false,
     });
     expect(
       proStateOf({
@@ -124,11 +128,17 @@ describe("proStateOf", () => {
         isPro: true,
         proMode: { canClose: true, graceEndsAt: "2026-10-19T00:00:00Z" },
       }),
-    ).toEqual({ wallet: "w", pro: true, graceEndsAt: Date.parse("2026-10-19T00:00:00Z") });
+    ).toEqual({
+      wallet: "w",
+      pro: true,
+      graceEndsAt: Date.parse("2026-10-19T00:00:00Z"),
+      graceUnconfirmed: false,
+    });
     expect(proStateOf({ walletAddress: "w", isPro: false, proMode: { canClose: true } })).toEqual({
       wallet: "w",
       pro: false,
       graceEndsAt: null,
+      graceUnconfirmed: false,
     });
     // Never had it: the trade system stays hidden.
     expect(proStateOf({ walletAddress: "w", isPro: false, proMode: { canClose: false } })).toBeNull();
@@ -139,5 +149,28 @@ describe("proStateOf", () => {
     expect(graceLeftText(5 * 3_600_000 + 20 * 60_000, 0)).toBe("5h 20m");
     expect(graceLeftText(45 * 60_000, 0)).toBe("45m");
     expect(graceLeftText(-1, 0)).toBe("0m");
+  });
+});
+
+describe("tradeProblem", () => {
+  // A real Jupiter buy built by the API on mainnet (2026-10-18), unsigned.
+  const built = Uint8Array.from(
+    Buffer.from(readFileSync(new URL("./proTrade.fixture.b64.txt", import.meta.url), "utf8"), "base64"),
+  );
+  const owner = "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9";
+
+  it("passes a real build for its own wallet", () => {
+    expect(tradeProblem(built, owner)).toBeNull();
+  });
+  it("refuses a build for another wallet, an unknown program, or bytes it can't read", () => {
+    expect(tradeProblem(built, "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE")).toMatch(
+      /isn't the one paying/,
+    );
+    // The same build with its Jupiter program key swapped for another program.
+    const hex = Buffer.from(built).toString("hex");
+    const jup = Buffer.from(bs58.decode("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4")).toString("hex");
+    const evil = Uint8Array.from(Buffer.from(hex.replace(jup, "ab".repeat(32)), "hex"));
+    expect(tradeProblem(evil, owner)).toMatch(/program/);
+    expect(tradeProblem(built.subarray(0, 120), owner)).toMatch(/couldn't be read|program/);
   });
 });

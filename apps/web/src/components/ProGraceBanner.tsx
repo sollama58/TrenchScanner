@@ -24,9 +24,12 @@ export function ProGraceBanner() {
         <InfoIcon size={16} />
       </span>
       <p className="announcement-text">
-        Your wallet is no longer one of the top 250 $ASDFASDFA holders. Pro Mode ends in{" "}
-        <strong className="num">{graceLeftText(pro.graceEndsAt)}</strong> unless it&apos;s back in the top 250
-        by then. After that you can still sell what you hold.
+        {pro.graceUnconfirmed
+          ? "We can't confirm your place in the top 250 $ASDFASDFA holders right now. "
+          : "Your wallet is no longer one of the top 250 $ASDFASDFA holders. "}
+        Pro Mode ends in <strong className="num">{graceLeftText(pro.graceEndsAt)}</strong> unless{" "}
+        {pro.graceUnconfirmed ? "it's confirmed" : "it's back in the top 250"} by then. After that you can
+        still sell what you hold.
       </p>
     </aside>
   );

@@ -134,6 +134,8 @@ export interface User {
     rank?: number;
     /** Out of the top 250 holders: when Pro Mode ends (ISO), unless it's back in by then. */
     graceEndsAt?: string;
+    /** dropped: left the top 250. unconfirmed: the holder scans stopped and can't confirm it. */
+    graceReason?: "dropped" | "unconfirmed";
   };
 }
 

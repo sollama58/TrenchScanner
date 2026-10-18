@@ -21,6 +21,8 @@ export interface ProStatus {
   rank?: number;
   /** When a grace period ends (ISO). */
   graceEndsAt?: string;
+  /** Why: it dropped out of the top 250, or the holder scans have stopped and can't confirm it. */
+  graceReason?: "dropped" | "unconfirmed";
   /** May sell what it holds: has Pro Mode, or had it. */
   canClose: boolean;
 }
@@ -52,11 +54,13 @@ export async function proStatus(env: Env, walletAddress: string): Promise<ProSta
         source: "grace",
         rank: standing.rank,
         graceEndsAt: standing.graceEndsAt.toISOString(),
+        graceReason: standing.stale ? "unconfirmed" : "dropped",
         canClose: true,
       };
   }
   if (status) {
-    await markSeen(walletAddress);
+    // Recorded so it can always close later; a failed write never costs it the answer.
+    await markSeen(walletAddress).catch(() => undefined);
     return status;
   }
   const seen = await prisma.proModeSeen.findUnique({

@@ -15,6 +15,16 @@ import { SUBSCRIPTION_MINT } from "./constants.js";
 
 export const PRO_HOLDER_COUNT = 250;
 export const PRO_HOLDER_GRACE_MS = 24 * 60 * 60_000;
+/**
+ * How long a wallet must stay in the top 250, scan after scan, before it gets Pro Mode: without
+ * it one bag moved to a fresh wallet before each scan would hand out a day of Pro Mode to each.
+ */
+export const PRO_HOLDER_QUALIFY_MS = 60 * 60_000;
+/**
+ * A newest scan older than this means the scans have stopped (Helius down, the job off): its
+ * wallets then count down a grace period from it rather than keep Pro Mode with no end.
+ */
+export const PRO_HOLDER_STALE_MS = 60 * 60_000;
 
 /** One read of the mint's largest wallets, largest first. Null when the read didn't finish. */
 export interface ProHolderReader {
@@ -40,11 +50,16 @@ export async function refreshProHolders(
     .filter(isWalletAddress)
     .slice(0, PRO_HOLDER_COUNT);
   if (top.length === 0) throw new Error("the $ASDFASDFA holder read came back empty");
+  // A wallet in the previous scan too keeps its run going; anyone else starts one now.
+  const previous = (await prisma.proHolder.aggregate({ _max: { lastInTopAt: true } }))._max.lastInTopAt;
   const rows = top.map((wallet, i) => Prisma.sql`(${wallet}, ${i + 1}, ${now}, ${now})`);
   await prisma.$executeRaw`
-    INSERT INTO "ProHolder" ("walletAddress", "rank", "lastInTopAt", "firstInTopAt")
+    INSERT INTO "ProHolder" ("walletAddress", "rank", "lastInTopAt", "inTopSince")
     VALUES ${Prisma.join(rows)}
-    ON CONFLICT ("walletAddress") DO UPDATE SET "rank" = EXCLUDED."rank", "lastInTopAt" = EXCLUDED."lastInTopAt"`;
+    ON CONFLICT ("walletAddress") DO UPDATE SET
+      "rank" = EXCLUDED."rank",
+      "lastInTopAt" = EXCLUDED."lastInTopAt",
+      "inTopSince" = CASE WHEN "ProHolder"."lastInTopAt" = ${previous} THEN "ProHolder"."inTopSince" ELSE EXCLUDED."inTopSince" END`;
   latestCache = { at: Date.now(), latest: now };
   return { holders: top.length };
 }
@@ -66,7 +81,12 @@ export function resetProHolderCacheForTests(): void {
 }
 
 export type ProHolderStanding =
-  { state: "top"; rank: number } | { state: "grace"; rank: number; graceEndsAt: Date } | { state: "none" };
+  | { state: "top"; rank: number }
+  /** `stale`: still in the newest scan, but the scans have stopped, so it can't be confirmed. */
+  | { state: "grace"; rank: number; graceEndsAt: Date; stale: boolean }
+  /** In the top 250, but not for an hour yet: Pro Mode from `qualifiesAt`. */
+  | { state: "pending"; rank: number; qualifiesAt: Date }
+  | { state: "none" };
 
 /** Where a wallet stands among the top holders, now. */
 export async function proHolderStanding(wallet: string, now = new Date()): Promise<ProHolderStanding> {
@@ -75,9 +95,25 @@ export async function proHolderStanding(wallet: string, now = new Date()): Promi
     latestScan(),
   ]);
   if (!row || !latest) return { state: "none" };
-  if (row.lastInTopAt.getTime() >= latest.getTime()) return { state: "top", rank: row.rank };
+  const inLatest = row.lastInTopAt.getTime() >= latest.getTime();
+  // Held through an hour of scans in its latest run: what earns Pro Mode, and so the grace after.
+  const qualified = row.lastInTopAt.getTime() - row.inTopSince.getTime() >= PRO_HOLDER_QUALIFY_MS;
+  const stale = now.getTime() - latest.getTime() > PRO_HOLDER_STALE_MS;
+  if (inLatest && !qualified)
+    return stale
+      ? { state: "none" }
+      : {
+          state: "pending",
+          rank: row.rank,
+          qualifiesAt: new Date(row.inTopSince.getTime() + PRO_HOLDER_QUALIFY_MS),
+        };
+  if (!qualified) return { state: "none" };
+  if (inLatest && !stale) return { state: "top", rank: row.rank };
+  // Dropped out, or the scans have stopped: a day from the last scan it was in.
   const graceEndsAt = new Date(row.lastInTopAt.getTime() + PRO_HOLDER_GRACE_MS);
-  return graceEndsAt > now ? { state: "grace", rank: row.rank, graceEndsAt } : { state: "none" };
+  return graceEndsAt > now
+    ? { state: "grace", rank: row.rank, graceEndsAt, stale: inLatest }
+    : { state: "none" };
 }
 
 /** For Admin > Access: the newest scan, how many it holds, and who is in their grace period. */
@@ -86,7 +122,9 @@ export async function proHolderSummary(now = new Date()) {
   if (!latest)
     return { scannedAt: null, inTop: 0, grace: [] as { walletAddress: string; graceEndsAt: Date }[] };
   const [inTop, grace] = await Promise.all([
-    prisma.proHolder.count({ where: { lastInTopAt: latest } }),
+    prisma.proHolder.count({
+      where: { lastInTopAt: latest, inTopSince: { lte: new Date(latest.getTime() - PRO_HOLDER_QUALIFY_MS) } },
+    }),
     prisma.proHolder.findMany({
       where: { lastInTopAt: { lt: latest, gt: new Date(now.getTime() - PRO_HOLDER_GRACE_MS) } },
       orderBy: { lastInTopAt: "asc" },
@@ -95,6 +133,7 @@ export async function proHolderSummary(now = new Date()) {
   ]);
   return {
     scannedAt: latest,
+    /** In the newest scan and held for an hour: Pro Mode now. */
     inTop,
     grace: grace.map((g) => ({
       walletAddress: g.walletAddress,

@@ -151,7 +151,7 @@ async function toUserResponse(user: Pick<User, "id" | "walletAddress" | "created
       source: pro.source,
       canClose: pro.canClose,
       ...(pro.rank !== undefined ? { rank: pro.rank } : {}),
-      ...(pro.graceEndsAt ? { graceEndsAt: pro.graceEndsAt } : {}),
+      ...(pro.graceEndsAt ? { graceEndsAt: pro.graceEndsAt, graceReason: pro.graceReason } : {}),
     },
   };
 }
