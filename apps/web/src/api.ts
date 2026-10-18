@@ -1626,7 +1626,10 @@ export interface FeedAppearance {
    * alerts). Null follows the automatic default (GET /config/narrative-note).
    */
   narrativeNote: boolean | null;
-  /** The Stream tab, switched on in Settings (absent from older API builds: off). */
+  /**
+   * The old Stream tab's switch, still saved by the API. Unused since the Stream became Scope's
+   * Stream switch on the Live tab (user ask 2026-10-18).
+   */
   streamTab: boolean;
   /**
    * The Lighthouse tab, shown unless switched off in Settings (absent from older API builds: shown).

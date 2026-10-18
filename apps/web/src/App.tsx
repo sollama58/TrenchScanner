@@ -27,7 +27,6 @@ import {
   PulseIcon,
   ShieldIcon,
   SlidersIcon,
-  StreamIcon,
   WalletIcon,
 } from "./components/Icons";
 import {
@@ -49,7 +48,6 @@ import { useSageMint } from "./sage";
 import { useWalletAddress } from "./walletModal";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
-import { StreamView } from "./components/StreamView";
 import { useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
 import { closeTokenModal } from "./tokenModal";
@@ -100,8 +98,6 @@ const PrivyRoot = lazy(() => import("./privy"));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "live", label: "Live", Icon: PulseIcon },
-  // Hidden unless switched on in Settings (FeedAppearance.streamTab); see shownTabs below.
-  { id: "stream", label: "Stream", Icon: StreamIcon },
   // Filters sits right after Live: it is where the feed is tuned and where alerts are set up.
   { id: "filters", label: "Filters", Icon: SlidersIcon },
   { id: "model", label: "Models", Icon: BrainIcon },
@@ -403,26 +399,17 @@ export function App() {
       stopRecheck();
     };
   }, [signedIn]);
-  // The Stream tab only for a signed-in reader who switched it on in Settings.
   const appearance = useAppearance();
-  const streamOn = appearance.streamTab && signedIn;
   // The Lighthouse tab unless switched off, or while the reader is on it (a #lighthouse URL), so the
   // open page always has its tab highlighted.
   const lighthouseOn = !appearance.hideLighthouseTab || wantedTab === "lighthouse";
   // The Portfolio tab only for Pro Mode wallets (user decision 2026-10-18).
   const portfolioOn = !!pro?.pro;
-  const shownTabs = TABS.filter(
-    (t) => (t.id !== "stream" || streamOn) && (t.id !== "lighthouse" || lighthouseOn),
-  );
+  const shownTabs = TABS.filter((t) => t.id !== "lighthouse" || lighthouseOn);
   const tabs = isAdmin ? [...shownTabs, ADMIN_TAB] : shownTabs;
-  // #admin without an admin wallet, or #stream with the tab off, reads as the Live tab, so a tab
-  // is always the highlighted one.
+  // #admin without an admin wallet reads as the Live tab, so a tab is always the highlighted one.
   const tab: Tab =
-    (wantedTab === "admin" && !isAdmin) ||
-    (wantedTab === "stream" && !streamOn) ||
-    (wantedTab === "portfolio" && !portfolioOn)
-      ? "live"
-      : wantedTab;
+    (wantedTab === "admin" && !isAdmin) || (wantedTab === "portfolio" && !portfolioOn) ? "live" : wantedTab;
   // A new tab, or signing in or out, is a new page: its load gets the full loader.
   useEffect(markNavigation, [tab, session.state]);
   const tabLabel = [...TABS, ADMIN_TAB, PORTFOLIO_TAB].find((t) => t.id === tab)?.label ?? "";
@@ -450,7 +437,7 @@ export function App() {
   return (
     <div className="app">
       <div className="backdrop" aria-hidden />
-      <header className={`topbar${streamOn && lighthouseOn ? " packed" : ""}`}>
+      <header className={`topbar${portfolioOn && lighthouseOn ? " packed" : ""}`}>
         <div className="topbar-inner">
           <a className="brand" href="#" onClick={() => goTo("live")}>
             <LogoMark />
@@ -624,7 +611,6 @@ export function App() {
                 {tab === "live" && (
                   <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} isAdmin={isAdmin} />
                 )}
-                {tab === "stream" && <StreamView isAdmin={isAdmin} />}
                 {tab === "model" && <ModelTab />}
                 {tab === "lighthouse" && <LighthouseTab />}
                 {tab === "filters" && <FiltersTab />}

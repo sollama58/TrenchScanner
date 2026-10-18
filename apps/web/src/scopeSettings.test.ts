@@ -130,6 +130,14 @@ describe("normalizeScopeSettings", () => {
     });
   });
 
+  it("keeps a column on the Stream board too", () => {
+    const s = normalizeScopeSettings({
+      display: { hiddenColumns: ["new", "soon", "graduated"], stream: true },
+    });
+    expect(s.display.hiddenColumns).toEqual(["new", "soon"]);
+    expect(s.display.stream).toBe(true);
+  });
+
   it("never hides every column", () => {
     const s = normalizeScopeSettings({ display: { hiddenColumns: ["filters", "models", "graduated"] } });
     expect(s.display.hiddenColumns).toHaveLength(2);

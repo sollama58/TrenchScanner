@@ -3,6 +3,7 @@ import type { Card, LaunchPage, MatchPage } from "../api";
 import {
   passesColumnFilter,
   useScopeSettings,
+  setScopeDisplay,
   activeFilterCount,
   cardModelNames,
   type ScopeDisplay,
@@ -21,6 +22,8 @@ import {
   holdFrame,
   SCOPE_COLUMNS,
   SCOPE_PAGES,
+  SCOPE_STREAM_PAGES,
+  scopeColumnsFor,
   scopeTickIds,
   shortAge,
   splitScope,
@@ -44,6 +47,9 @@ const OWN_CLICK = "a, button, input, select, textarea, label, summary, [role='bu
 /** The graduated column's list: the Stream's graduated tokens, polled as often as the Stream. */
 const GRADUATED_PATH = "/launches?graduated=1";
 const GRADUATED_POLL_MS = 10_000;
+
+/** The Stream (GET /launches): Scope's New and About to graduate when its Stream switch is on. */
+const STREAM_PATH = "/launches";
 
 /**
  * Scope (user ask 2026-10-18): the Live feed's alerts as a dense three-column board of compact
@@ -78,30 +84,45 @@ export function ScopeBoard({
   useNudgeStream("/curated/stream", nudged, modelsOn);
   useNudgeStream("/matches/stream", nudged);
   const graduated = usePolling<LaunchPage>(GRADUATED_PATH, GRADUATED_POLL_MS);
-  const buffer = useMemo(
-    () =>
-      first.data
-        ? [...joinPages([first.data, ...more.data]), ...(graduated.data?.launches ?? [])]
-        : undefined,
-    [first.data, more.data, graduated.data],
-  );
+  // Stream on: the Stream's newest pages too, for New and About to graduate.
+  const streamOn = display.stream;
+  const streamPaths = streamOn
+    ? Array.from({ length: SCOPE_STREAM_PAGES }, (_, i) =>
+        i === 0 ? STREAM_PATH : `${STREAM_PATH}?page=${i + 1}`,
+      )
+    : [];
+  const streamPages = usePollingAll<LaunchPage>(streamPaths, GRADUATED_POLL_MS);
+  const buffer = useMemo(() => {
+    if (!first.data) return undefined;
+    const grad = graduated.data?.launches ?? [];
+    const gradIds = new Set(grad.map((c) => c.id));
+    const stream: Card[] = [];
+    // A page still loading ends the run, as on the feed.
+    for (const p of streamPages.data) {
+      if (!p) break;
+      for (const c of p.launches) if (!gradIds.has(c.id)) stream.push(c);
+    }
+    return [...joinPages([first.data, ...more.data]), ...grad, ...stream];
+  }, [first.data, more.data, graduated.data, streamPages.data]);
   const [tickIds, setTickIds] = useState<string[] | undefined>(undefined);
   const visible = useLiveMarketCaps(buffer, tickIds);
 
+  const gradIds = useMemo(() => new Set((graduated.data?.launches ?? []).map((c) => c.id)), [graduated.data]);
   // Every column before its filters: what the settings window offers to pick from.
   const unfiltered = useMemo(
     () =>
       visible
         ? splitScope(
             visible.filter((c) => c.kind !== "stream"),
-            visible.filter((c) => c.kind === "stream"),
+            visible.filter((c) => c.kind === "stream" && gradIds.has(c.id)),
             {
               filters: settings.columns.filters.showGraduated,
               models: settings.columns.models.showGraduated,
             },
+            visible.filter((c) => c.kind === "stream" && !gradIds.has(c.id)),
           )
         : undefined,
-    [visible, settings.columns.filters.showGraduated, settings.columns.models.showGraduated],
+    [visible, gradIds, settings.columns.filters.showGraduated, settings.columns.models.showGraduated],
   );
   // Each column through its own filters (Scope's settings, not Customize's).
   const fresh = useMemo(() => {
@@ -124,7 +145,9 @@ export function ScopeBoard({
     () => [...new Set((unfiltered?.filters ?? []).flatMap((c) => (c.filter ? [c.filter.name] : [])))],
     [unfiltered],
   );
-  const shownCols = SCOPE_COLUMNS.filter((c) => !display.hiddenColumns.includes(c.id));
+  const boardCols = scopeColumnsFor(streamOn);
+  const unhidden = boardCols.filter((c) => !display.hiddenColumns.includes(c.id));
+  const shownCols = unhidden.length > 0 ? unhidden : boardCols;
 
   // Holding still: the frame drawn when the board paused, refreshed in place.
   const [frame, setFrame] = useState<ScopeFrame | null>(null);
@@ -149,6 +172,8 @@ export function ScopeBoard({
   useEffect(() => {
     if (!holds) setFrame(null);
   }, [holds]);
+  // Stream on or off is a different board: start it live.
+  useEffect(() => setFrame(null), [streamOn]);
   const pause = useCallback(() => {
     if (!holds) return;
     window.clearTimeout(touchTimer.current);
@@ -256,6 +281,21 @@ export function ScopeBoard({
             </button>
           ))}
         </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={streamOn}
+          className={`scope-stream-switch${streamOn ? " on" : ""}`}
+          onClick={() => setScopeDisplay({ stream: !streamOn })}
+          title={
+            streamOn
+              ? "Showing the Stream's new tokens and the ones about to graduate. Switch off for your alerts."
+              : "Show the Stream's new tokens and the ones about to graduate in place of your alerts"
+          }
+        >
+          <span className="scope-switch-track" aria-hidden="true" />
+          Stream
+        </button>
         <span className="scope-bar-filter">
           {filterButton(activeCol, SCOPE_COLUMNS.find((c) => c.id === activeCol)!.label)}
         </span>
@@ -289,7 +329,7 @@ export function ScopeBoard({
                 <p className="muted small scope-empty">
                   {(unfiltered?.[c.id].length ?? 0) > 0
                     ? "Nothing here passes this column's filters right now."
-                    : emptyText(c.id, modelsOn, graduated.error)}
+                    : emptyText(c.id, modelsOn, graduated.error, streamPages.error)}
                 </p>
               ) : (
                 cols[c.id].map((card) => (
@@ -311,7 +351,16 @@ export function ScopeBoard({
   );
 }
 
-function emptyText(col: ScopeColumn, modelsOn: boolean, gradError: Error | null): string {
+function emptyText(
+  col: ScopeColumn,
+  modelsOn: boolean,
+  gradError: Error | null,
+  streamError: Error | null,
+): string {
+  if ((col === "new" || col === "soon") && streamError)
+    return `Couldn't load the Stream: ${streamError.message}`;
+  if (col === "new") return "Nothing has passed the safety screen in the band lately.";
+  if (col === "soon") return "Nothing on the Stream is close to graduating right now.";
   if (col === "filters") return "Nothing from your filters among the newest alerts.";
   if (col === "models")
     return modelsOn ? "No model calls among the newest alerts." : "Model alerts are off in Settings.";
