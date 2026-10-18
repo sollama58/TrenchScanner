@@ -717,10 +717,50 @@ describe("Jupiter swap client", () => {
     expect((await dexScreenerPricesUsd([OWNER], broken)).size).toBe(0);
   });
 
-  it("does not repeat a rate limit or a missing route", async () => {
+  it("moves a rate-limited call to the next host, and throws only when every host is limited", async () => {
+    const urls: string[] = [];
+    const keys: (string | null)[] = [];
+    const limitedKey = "mine";
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      const key = new Headers(init?.headers).get("x-api-key");
+      urls.push(new URL(url).host);
+      keys.push(key);
+      return key === limitedKey ? json({ error: "slow down" }, 429)() : json(quote)();
+    }) as typeof fetch;
+    const client = new JupiterSwapClient({ apiKey: "mine", fetchImpl });
+    const ask = { inputMint: OWNER, outputMint: quote.outputMint, amount: 1000n, slippageBps: 100 };
+    await expect(client.quote(ask)).resolves.toMatchObject({ outAmount: "10" });
+    expect(urls).toEqual(["api.jup.ag", "lite-api.jup.ag"]);
+    expect(keys).toEqual(["mine", null]);
+    // The limited host waits its turn on the next call.
+    await client.quote(ask);
+    expect(urls.slice(2)).toEqual(["lite-api.jup.ag"]);
+    // A backup key is tried before the keyless host.
+    urls.length = 0;
+    keys.length = 0;
+    const backed = new JupiterSwapClient({ apiKey: "mine", backupApiKey: "scan", fetchImpl });
+    await backed.quote(ask);
+    expect(keys).toEqual(["mine", "scan"]);
+    // Every host limited: a RateLimitedError, each host asked once.
+    const all = (async (url: string) => {
+      urls.push(new URL(url).host);
+      return json({ error: "slow down" }, 429)();
+    }) as typeof fetch;
+    urls.length = 0;
+    await expect(
+      new JupiterSwapClient({ apiKey: "mine", fetchImpl: all, backupPrices: null }).pricesUsd([OWNER]),
+    ).rejects.toBeInstanceOf(RateLimitedError);
+    expect(urls).toEqual(["api.jup.ag", "lite-api.jup.ag"]);
+  });
+
+  it("does not repeat a rate limit on one host, or a missing route", async () => {
     let s = scripted([json({ error: "slow down" }, 429)]);
     await expect(
-      new JupiterSwapClient({ fetchImpl: s.fetchImpl, backupPrices: null }).pricesUsd([OWNER]),
+      new JupiterSwapClient({
+        baseUrl: "https://jup.test",
+        fetchImpl: s.fetchImpl,
+        backupPrices: null,
+      }).pricesUsd([OWNER]),
     ).rejects.toBeInstanceOf(RateLimitedError);
     expect(s.calls()).toBe(1);
     s = scripted([json({ errorCode: "COULD_NOT_FIND_ANY_ROUTE", error: "no route" }, 400)]);
