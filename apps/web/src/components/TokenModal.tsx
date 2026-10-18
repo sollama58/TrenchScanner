@@ -104,6 +104,7 @@ import {
   BrainIcon,
   ChartIcon,
   CheckIcon,
+  ChevronLeftIcon,
   CloseIcon,
   CopyIcon,
   ExternalIcon,
@@ -243,7 +244,7 @@ function useTokenApi(mint: string): string {
 
 /**
  * Everything about one token on a feed card, in a native modal dialog (a centred panel on desktop,
- * a sheet from the bottom on phones): its market-cap chart since launch with the alert marked, the
+ * a full page on phones, user ask 2026-10-18; the address bar stays as it was): its market-cap chart since launch with the alert marked, the
  * card's numbers, why it was called, and TokenSage's read. Opened by clicking a card.
  *
  * The card's own data comes in as a prop and stays live (the card re-renders it); the chart
@@ -267,7 +268,10 @@ export function TokenModal({
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const dialog = ref.current;
-    if (dialog && !dialog.open) dialog.showModal();
+    if (!dialog || dialog.open) return;
+    dialog.showModal();
+    // The title, not the first button (on a phone, the back arrow), takes the focus.
+    dialog.querySelector<HTMLElement>("#tm-title")?.focus();
   }, []);
   return (
     <dialog
@@ -297,6 +301,15 @@ export function TokenModal({
   );
 }
 
+/** On phones the token view is a full page: a back arrow at the header's start closes it (styles.css). */
+function BackButton({ onClose }: { onClose: () => void }) {
+  return (
+    <button type="button" className="ghost icon-btn tm-back" onClick={onClose} aria-label="Back">
+      <ChevronLeftIcon size={20} />
+    </button>
+  );
+}
+
 /** A coin's view before its data has landed: what is known of it, and whether the fetch failed. */
 export interface OpeningView {
   mint: string;
@@ -320,6 +333,7 @@ function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { o
     <div className="about-body tm-body tm-opening" aria-busy={!failed}>
       <header className="tm-head">
         <div className="tm-token">
+          <BackButton onClose={onClose} />
           <div className="avatar-wrap tone-neutral">
             <TokenImage
               url={token?.imageUrl ?? null}
@@ -358,7 +372,7 @@ function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { o
         </div>
         <div className="tm-actions">
           {!failed && !hideSafetyPill && <SafetyPill verdict={PENDING_SAFETY} />}
-          <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
+          <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
             <CloseIcon size={16} />
           </button>
         </div>
@@ -517,18 +531,25 @@ function ChartSkeleton({ children, height }: { children: ReactNode; height?: num
 
 /** The chart's plot height for this window, and the whole box it draws (axis and volume lane included). */
 function chartHeight(expanded = false): number {
-  const phone = window.innerWidth <= 640;
+  // Larger by default (user ask 2026-10-18), trading or not. On a phone, where the token view is a
+  // full page, the chart takes a bit under half the screen's height: the screen's, not the window's,
+  // which grows and shrinks as the browser's address bar hides on scroll.
+  if (window.innerWidth <= 640) {
+    const tall = window.screen?.height || window.innerHeight;
+    return Math.round(Math.min(420, Math.max(280, tall * 0.44)));
+  }
   // Pro Mode's bigger chart, while trading or holding the coin: room for the trade marks.
-  if (expanded) return phone ? 260 : 380;
-  return phone ? 180 : 220;
+  return expanded ? 400 : 320;
 }
 function chartBoxHeight(): number {
-  return chartHeight() + CHART_CHROME_PX;
+  return chartHeight() + CHART_CHROME_PX + (window.innerWidth <= 640 ? CHART_READOUT_PX : 0);
 }
 /** The Line / Candles and zoom row under the chart. */
 const CHART_TOOLS_PX = 34;
 /** What PriceChart draws around its plot: the time axis, the volume lane and the row under it. */
 const CHART_CHROME_PX = 40 + CHART_TOOLS_PX;
+/** On a phone, the readout PriceChart docks under the chart (its .pc-readout min-height). */
+const CHART_READOUT_PX = 84;
 
 /** The Holders section's place while its reading is taken: the bubble map's frame, and the list's. */
 function HoldersPlaceholder({ children }: { children: ReactNode }) {
@@ -625,6 +646,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
     >
       <header className="tm-head">
         <div className="tm-token">
+          <BackButton onClose={onClose} />
           <div className={`avatar-wrap tone-${badge.tone}`}>
             <TokenImage
               url={card.token.imageUrl}
@@ -682,7 +704,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
             <SageIcon size={13} />
             Sage
           </button>
-          <button type="button" className="ghost icon-btn" onClick={onClose} aria-label="Close">
+          <button type="button" className="ghost icon-btn tm-close" onClick={onClose} aria-label="Close">
             <CloseIcon size={16} />
           </button>
         </div>

@@ -17175,3 +17175,155 @@ body:has(.util-toast) .bug-fab {
     display: inline-flex;
   }
 }
+
+/* ---------------------------------------------------------------------------------------------
+   Token view on phones (user ask 2026-10-18): a full page instead of a sheet, with a back arrow,
+   the chart edge to edge, and the chart's readout docked under it rather than floating over it.
+   The address bar is unchanged; only the presentation differs. */
+.tm-back {
+  display: none;
+}
+.pc-readout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-height: 78px;
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  font-size: 12px;
+}
+.pc-readout > * {
+  flex-basis: 100%;
+  min-width: 0;
+}
+/* The value and its change share the second line. */
+.pc-readout > strong,
+.pc-readout > .pc-chg {
+  flex-basis: auto;
+}
+.pc-readout > strong {
+  font-size: 17px;
+  letter-spacing: -0.01em;
+}
+.pc-readout .pc-mark-line,
+.pc-readout .pc-flow-line {
+  white-space: normal;
+}
+@media (max-width: 640px) {
+  dialog.tm-modal.sheet-modal {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding-bottom: 0;
+    animation: tm-page-in 0.2s ease-out;
+  }
+  /* A page, not a popup: nothing of the feed shows around it. */
+  .tm-modal::backdrop {
+    background: var(--surface-solid);
+  }
+  .tm-modal .tm-body {
+    min-height: 100%;
+    padding-bottom: calc(28px + env(safe-area-inset-bottom));
+  }
+  .tm-modal .tm-head {
+    padding-top: calc(10px + env(safe-area-inset-top));
+  }
+  /* A compact page header: the coin across the top, then one swipeable row of its safety, Sage
+     and links, then the section nav. */
+  .tm-modal .tm-head {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "token token"
+      "actions links"
+      "nav nav";
+    column-gap: 6px;
+    row-gap: 8px;
+  }
+  .tm-modal .tm-head > .tm-actions {
+    justify-self: start;
+    align-self: center;
+  }
+  .tm-modal .tm-head > .tm-quick {
+    align-self: center;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin-right: -16px;
+    padding-right: 16px;
+    scrollbar-width: none;
+  }
+  .tm-modal .tm-head > .tm-quick::-webkit-scrollbar {
+    display: none;
+  }
+  .tm-modal .tm-token {
+    gap: 8px;
+  }
+  .tm-modal .tm-avatar {
+    width: 40px;
+    height: 40px;
+  }
+  .tm-modal .tm-title-row {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+  .tm-modal .tm-title-row .tm-mint {
+    flex: none;
+    padding: 3px 8px;
+    font-size: 12px;
+  }
+  .tm-modal .tm-sub {
+    margin-top: 2px;
+  }
+  .tm-back {
+    display: inline-flex;
+    flex: none;
+    width: 36px;
+    height: 36px;
+    margin-left: -8px;
+  }
+  .tm-modal .tm-close {
+    display: none;
+  }
+  /* The chart runs the page's full width: every pixel goes to the plot. */
+  .tm-modal .sage-card.tm-chart {
+    margin-inline: -16px;
+    padding: 14px 6px 10px;
+    border-radius: 0;
+    border-inline: none;
+  }
+  .tm-modal .tm-chart > h4,
+  .tm-modal .tm-chart > p {
+    padding-inline: 10px;
+  }
+  .tm-modal .tm-chart .pc-readout {
+    margin-inline: 4px;
+  }
+  /* Bigger targets for the zoom buttons under the chart. */
+  .pc-zoom .tm-range {
+    min-width: 36px;
+    min-height: 30px;
+  }
+}
+@keyframes tm-page-in {
+  from {
+    transform: translateX(28px);
+    opacity: 0.6;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  dialog.tm-modal.sheet-modal {
+    animation: none;
+  }
+}
