@@ -35,4 +35,12 @@ describe("token modal", () => {
     expect(openTokenModalState()).toBeNull();
     off();
   });
+
+  it("keeps a Scope opening's layout as its card refreshes", () => {
+    const a = card("a");
+    openTokenModal(a, 100, true);
+    refreshTokenModal(card("a", 2), 200);
+    expect(openTokenModalState()?.scope).toBe(true);
+    closeTokenModal();
+  });
 });
