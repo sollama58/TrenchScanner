@@ -1,6 +1,7 @@
 {
   "name": "trenchscanner",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "version": "0.1.0",
   "description": "Solana memecoin ecosystem monitor - scans for tokens with breakout potential",
   "workspaces": [
