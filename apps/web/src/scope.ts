@@ -64,7 +64,13 @@ const MAX_TICK_TOKENS = 30;
 
 export type ScopeColumns = Record<ScopeColumn, Card[]>;
 
-const emptyColumns = (): ScopeColumns => ({ filters: [], models: [], new: [], soon: [], graduated: [] });
+export const emptyColumns = (): ScopeColumns => ({
+  filters: [],
+  models: [],
+  new: [],
+  soon: [],
+  graduated: [],
+});
 
 /** Whether an alert's coin has graduated, by its own scans or by a Graduated column entry. */
 export function cardGraduated(card: Card, gradTokens: ReadonlySet<string>): boolean {
@@ -153,7 +159,14 @@ export function holdFrame(
   const byId = new Map<string, Card>();
   for (const col of SCOPE_COLUMNS) for (const c of fresh[col.id]) byId.set(c.id, c);
   const cols = emptyColumns();
+  // A column the frame drew empty (its data hadn't arrived yet, say) fills in as it comes: there
+  // are no rows on screen to shift, so nothing to hold back.
+  const open = new Set(SCOPE_COLUMNS.filter((c) => frame[c.id].length === 0).map((c) => c.id));
   for (const { id: col } of SCOPE_COLUMNS) {
+    if (open.has(col)) {
+      cols[col] = [...fresh[col]];
+      continue;
+    }
     for (const id of frame[col]) {
       const card = byId.get(id) ?? last.get(id);
       if (card) cols[col].push(card);
@@ -162,6 +175,7 @@ export function holdFrame(
   // New rows: one a column hasn't drawn yet (a folded alert counts once).
   const waiting = new Set<string>();
   for (const { id: col } of SCOPE_COLUMNS) {
+    if (open.has(col)) continue;
     const drawn = new Set(frame[col]);
     for (const c of fresh[col]) if (!drawn.has(c.id)) waiting.add(c.id);
   }

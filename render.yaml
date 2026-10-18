@@ -686,7 +686,7 @@ services:
     headers:
       - path: /*
         name: Content-Security-Policy
-        value: "script-src 'self' https://challenges.cloudflare.com 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-vycBVWuudrh2dkf/7g6txbYoK5tXId+j0sqpxG8Hg7M=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com https://auth.privy.io https://*.rpc.privy.systems https://api.relay.link https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com; frame-src https://auth.privy.io https://challenges.cloudflare.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
+        value: "script-src 'self' https://challenges.cloudflare.com 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-Pc6p2V0C2FtigLvoWfEDwpeNwTCyJR4e9OUX4wVdC8c=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com https://auth.privy.io https://*.rpc.privy.systems https://api.relay.link https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com; frame-src https://auth.privy.io https://challenges.cloudflare.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
       # HTTPS only from the first visit on. No includeSubDomains: only this host's own redirect is
       # certain here, and preload would lock that in for every subdomain.
       - path: /*

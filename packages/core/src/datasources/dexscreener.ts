@@ -1174,6 +1174,8 @@ function toCandidateToken(pair: DexScreenerPair): CandidateToken {
     hasWebsite: info ? (info.websites?.length ?? 0) > 0 : undefined,
     imageUrl: info?.imageUrl,
     dexId: pair.dexId,
+    quoteMint: pair.quoteToken?.address || undefined,
+    quoteSymbol: pair.quoteToken?.symbol?.trim() || undefined,
     marketSource: MARKET_SOURCE.dexscreener,
   };
 }

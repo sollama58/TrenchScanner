@@ -48,6 +48,24 @@ describe("tokenChanges", () => {
     });
   });
 
+  it("writes the quote coin, its symbol going with its mint", () => {
+    const row = { ...existing, quoteMint: "USDCmint", quoteSymbol: "USDC" } as unknown as Token;
+    const base = { narrativeTags: ["animal"] };
+    // Unchanged, or a reading that doesn't say: nothing to write.
+    expect(tokenChanges(row, { ...base, quoteMint: "USDCmint", quoteSymbol: "USDC" })).toEqual({});
+    expect(tokenChanges(row, base)).toEqual({});
+    // A new quote with no symbol (GeckoTerminal) clears the old symbol rather than mislabel it.
+    expect(tokenChanges(row, { ...base, quoteMint: "OTHERmint" })).toEqual({
+      quoteMint: "OTHERmint",
+      quoteSymbol: null,
+    });
+    // The same quote, now named.
+    const unnamed = { ...row, quoteSymbol: null } as unknown as Token;
+    expect(tokenChanges(unnamed, { ...base, quoteMint: "USDCmint", quoteSymbol: "USDC" })).toEqual({
+      quoteSymbol: "USDC",
+    });
+  });
+
   it("with no row to compare, sets everything a re-scan may set", () => {
     const at = new Date();
     expect(

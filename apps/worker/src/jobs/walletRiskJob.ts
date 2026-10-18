@@ -83,6 +83,13 @@ export const ownMultipleSql = (multiple: number) => Prisma.sql`(a."solIn" >= ${O
 /** Bought before the tape's anchor, so a decision could have seen it buying. */
 /** Platform wallets (the Stonk fee wallet) aren't traders; tape rows stored before the tape
  * skipped them stop counting here. */
+/**
+ * A coin its profit or loss is read on (the wallet modal's median and average, user ask
+ * 2026-10-18): a clean trade that put SOL in and took some out. One it still holds unsold would
+ * read as -100% before it sold, and tokens sent in from elsewhere as a profit it never paid for.
+ */
+const pnlSql = Prisma.sql`(a."solIn" > 0 AND a."solOut" > 0 AND ${cleanSql})`;
+
 const traderSql = Prisma.sql`a."buys" > 0 AND a."wallet" <> ALL(${[...PLATFORM_WALLETS.keys()]})`;
 const earlySql = Prisma.sql`(a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."anchorAt")`;
 
@@ -155,6 +162,11 @@ const WALLET_RISK_TABLE: ReplaceRowsSpec = {
     { name: "walletScore", type: "double precision" },
     { name: "transferWins", type: "integer" },
     { name: "medianSupplyPct", type: "double precision" },
+    { name: "pnlCoins", type: "integer" },
+    { name: "medianPnlSol", type: "double precision" },
+    { name: "avgPnlSol", type: "double precision" },
+    { name: "medianPnlPct", type: "double precision" },
+    { name: "avgPnlPct", type: "double precision" },
     { name: "solIn", type: "double precision" },
     { name: "solOut", type: "double precision" },
     { name: "lastSeenAt", type: "timestamp(3)" },
@@ -172,7 +184,12 @@ interface Agg {
   wins: number;
   earlyWins: number;
   transferWins: number;
+  pnlCoins: number;
   medianSupplyPct: number | null;
+  medianPnlSol: number | null;
+  avgPnlSol: number | null;
+  medianPnlPct: number | null;
+  avgPnlPct: number | null;
   solIn: number;
   solOut: number;
   lastSeenAt: Date;
@@ -204,7 +221,10 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
   });
 
   const rows = await prisma.$queryRaw<
-    (Omit<Agg, "appearances" | "dumps" | "fastExits" | "snipes" | "wins" | "earlyWins" | "transferWins"> &
+    (Omit<
+      Agg,
+      "appearances" | "dumps" | "fastExits" | "snipes" | "wins" | "earlyWins" | "transferWins" | "pnlCoins"
+    > &
       ScoreCountRow & {
         appearances: bigint;
         dumps: bigint;
@@ -212,6 +232,7 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
         wins: bigint;
         earlyWins: bigint;
         transferWins: bigint;
+        pnlCoins: bigint;
       })[]
   >`
     SELECT a."wallet",
@@ -224,6 +245,13 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
                               AND a."firstBuyAt" IS NOT NULL AND a."firstBuyAt" < t."anchorAt") AS "earlyWins",
            COUNT(*) FILTER (WHERE ${transferFedSql()}) AS "transferWins",
            percentile_cont(0.5) WITHIN GROUP (ORDER BY a."boughtPct") AS "medianSupplyPct",
+           COUNT(*) FILTER (WHERE ${pnlSql}) AS "pnlCoins",
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY a."solOut" - a."solIn")
+             FILTER (WHERE ${pnlSql}) AS "medianPnlSol",
+           AVG((a."solOut" - a."solIn")::numeric) FILTER (WHERE ${pnlSql})::float8 AS "avgPnlSol",
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY (a."solOut" / a."solIn" - 1) * 100)
+             FILTER (WHERE ${pnlSql}) AS "medianPnlPct",
+           AVG(((a."solOut" / a."solIn" - 1) * 100)::numeric) FILTER (WHERE ${pnlSql})::float8 AS "avgPnlPct",
            -- Summed as numeric: float8 addition depends on the order the rows arrive in, so a
            -- plan change (an index walk one hour, a scan the next) moved the last bits of 13-25%
            -- of wallets' sums and replaceRows rewrote those rows for nothing.
@@ -268,6 +296,11 @@ export async function runWalletRiskJob(opts: { now?: () => number } = {}): Promi
       ),
       transferWins: Number(r.transferWins),
       medianSupplyPct: r.medianSupplyPct === null ? null : Number(r.medianSupplyPct),
+      pnlCoins: Number(r.pnlCoins),
+      medianPnlSol: r.medianPnlSol === null ? null : Number(r.medianPnlSol),
+      avgPnlSol: r.avgPnlSol === null ? null : Number(r.avgPnlSol),
+      medianPnlPct: r.medianPnlPct === null ? null : Number(r.medianPnlPct),
+      avgPnlPct: r.avgPnlPct === null ? null : Number(r.avgPnlPct),
       solIn: Number(r.solIn),
       solOut: Number(r.solOut),
       lastSeenAt: r.lastSeenAt,

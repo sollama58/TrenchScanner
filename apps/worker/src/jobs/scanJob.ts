@@ -2780,6 +2780,8 @@ interface TokenScanFields {
   symbol?: string;
   name?: string;
   pairAddress?: string;
+  quoteMint?: string;
+  quoteSymbol?: string;
   imageUrl?: string;
   hasTwitter?: boolean;
   hasTelegram?: boolean;
@@ -2819,6 +2821,16 @@ export function tokenChanges(existing: Token | null, f: TokenScanFields): Prisma
   if (f.name !== undefined && differs(existing?.name, f.name)) out.name = f.name;
   if (f.pairAddress !== undefined && differs(existing?.pairAddress, f.pairAddress))
     out.pairAddress = f.pairAddress;
+  // The quote's symbol goes with its mint: a new quote clears an old symbol a reading without one
+  // (GeckoTerminal) would otherwise leave beside it.
+  if (f.quoteMint !== undefined) {
+    if (differs(existing?.quoteMint, f.quoteMint)) {
+      out.quoteMint = f.quoteMint;
+      out.quoteSymbol = f.quoteSymbol ?? null;
+    } else if (f.quoteSymbol !== undefined && existing?.quoteSymbol !== f.quoteSymbol) {
+      out.quoteSymbol = f.quoteSymbol;
+    }
+  }
   if (f.imageUrl && differs(existing?.imageUrl, f.imageUrl)) out.imageUrl = f.imageUrl;
   const twitter = social(f.hasTwitter, existing?.hasTwitter);
   if (twitter !== undefined) out.hasTwitter = twitter;
@@ -3091,6 +3103,8 @@ async function processCandidate(
     symbol: candidate.symbol,
     name: candidate.name,
     pairAddress: candidate.pairAddress,
+    quoteMint: candidate.quoteMint,
+    quoteSymbol: candidate.quoteSymbol,
     imageUrl: candidate.imageUrl,
     hasTwitter: candidate.hasTwitter,
     hasTelegram: candidate.hasTelegram,
@@ -3110,6 +3124,8 @@ async function processCandidate(
             symbol: candidate.symbol,
             name: candidate.name,
             pairAddress: candidate.pairAddress,
+            quoteMint: candidate.quoteMint,
+            quoteSymbol: candidate.quoteSymbol,
             imageUrl: candidate.imageUrl,
             hasTwitter: candidate.hasTwitter,
             hasTelegram: candidate.hasTelegram ?? false,

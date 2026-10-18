@@ -59,6 +59,7 @@ import { registerStatsModelRoutes } from "./routes/statsModels.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerUtilityRoutes } from "./routes/utilities.js";
+import { registerXPreviewRoutes } from "./routes/xPreview.js";
 import { registerWalletRoutes } from "./routes/wallets.js";
 import { WalletLiveReader } from "./walletProfile.js";
 import { prismaIdentityStore, WalletIdentityReader } from "./walletIdentity.js";
@@ -650,6 +651,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     viewStamps,
     walletLive,
   });
+  // Hover previews of a coin's X link, read through FxTwitter so the browser never loads X.
+  await app.register(registerXPreviewRoutes, { prefix: "/x-preview" });
   await app.register(registerSettingsRoutes, { prefix: "/settings", env });
   // Telegram alerts: link codes and chats for the signed-in account, and the bot's webhook.
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
