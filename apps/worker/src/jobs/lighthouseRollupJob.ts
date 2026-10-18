@@ -391,6 +391,32 @@ async function writeHours(from: Date, to: Date, screenFrom: Date): Promise<numbe
 }
 
 /**
+ * Re-sums only the return columns (screened and alerts) of the hours in [from, to), on hours
+ * already written: for history whose returns were re-scored after it was summed
+ * (exitPlanRescore.ts). Every other column keeps what it was frozen with.
+ */
+export async function resumLighthouseReturns(from: Date, to: Date): Promise<number> {
+  const sums = await sumHours(from, to, to);
+  const writes: Prisma.PrismaPromise<unknown>[] = [];
+  for (let t = from.getTime(); t < to.getTime(); t += HOUR_MS) {
+    const row = sums.get(t) ?? emptyHour();
+    writes.push(
+      prisma.lighthouseHour.updateMany({
+        where: { hour: new Date(t) },
+        data: {
+          screenedReturnN: row.screenedReturnN,
+          screenedReturnSum: row.screenedReturnSum,
+          alertsReturnN: row.alertsReturnN,
+          alertsReturnSum: row.alertsReturnSum,
+        },
+      }),
+    );
+  }
+  if (writes.length) await prisma.$transaction(writes);
+  return writes.length;
+}
+
+/**
  * Re-sums the screened counts of the oldest CATCH_UP_HOURS_PER_RUN hours still below
  * LIGHTHOUSE_ROLLUP_VERSION, before `before` (where this run's own sums start), and stamps them
  * with it: after a change to the summing rules, the stored history follows them within a few

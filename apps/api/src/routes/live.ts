@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma } from "@trenchscanner/core";
+import { prisma, writeLiveMarketData } from "@trenchscanner/core";
+import { liveCurves } from "../liveCurve.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 
@@ -115,7 +116,12 @@ export function clearViewStampWindows(): void {
  */
 export async function registerLiveRoutes(
   app: FastifyInstance,
-  opts: { liveRefresher: OnDemandLiveRefresher; viewStamps: ViewStampBuffer },
+  opts: {
+    liveRefresher: OnDemandLiveRefresher;
+    viewStamps: ViewStampBuffer;
+    /** Where a curve reading raises the recorded peak of matches and calls - see writeLiveMarketData. */
+    peakWindowDays?: number;
+  },
 ) {
   // Same gate as the feeds these numbers belong to.
   app.addHook("preHandler", app.authenticateSubscriber);
@@ -154,15 +160,25 @@ export async function registerLiveRoutes(
     let rows = await read(true);
     const stampIds = rows.map((r) => r.id);
     opts.viewStamps.record(request.user ? allowViewStamps(request.user.userId, stampIds) : stampIds);
-    const refreshed = await opts.liveRefresher.refreshAndWait(rows, {
-      maxAgeMs: LIVE_TICK_MAX_AGE_MS,
-      timeoutMs: LIVE_TICK_WAIT_MS,
-      userKey: request.user?.userId,
-    });
+    // Coins still on their Pump.fun curve are priced from it, to the block, where DexScreener runs
+    // 45-60 s behind the market; they stay out of the DexScreener lookup once a read has found them
+    // there. The rest (graduated, not Pump.fun, not read yet) take DexScreener's figure as before.
+    const curves = liveCurves();
+    const [refreshed, quotes] = await Promise.all([
+      opts.liveRefresher.refreshAndWait(
+        rows.filter((r) => !curves.onCurve(r.mintAddress)),
+        { maxAgeMs: LIVE_TICK_MAX_AGE_MS, timeoutMs: LIVE_TICK_WAIT_MS, userKey: request.user?.userId },
+      ),
+      curves.quotes(
+        rows.map((r) => r.mintAddress),
+        LIVE_TICK_WAIT_MS,
+      ),
+    ]);
     if (refreshed) rows = await read(false);
+    const now = Date.now();
+    if (quotes.size > 0) rows = withCurveQuotes(rows, quotes, now, opts.peakWindowDays);
 
     reply.header("Cache-Control", "no-store");
-    const now = Date.now();
     const withReading = rows.filter((r) => r.liveDataAt !== null && r.liveMarketCapUsd !== null);
     if (withReading.length > 0) {
       opts.liveRefresher.noteServed(Math.max(...withReading.map((r) => now - r.liveDataAt!.getTime())));
@@ -174,7 +190,45 @@ export async function registerLiveRoutes(
         marketCapUsd: r.liveMarketCapUsd,
         priceUsd: r.livePriceUsd,
         at: r.liveDataAt,
+        ...(quotes.has(r.mintAddress) ? { source: "curve" as const } : {}),
       })),
     };
   });
+}
+
+/**
+ * The tick's rows with each curve-priced coin's reading laid over DexScreener's. A row whose stored
+ * reading is due (as old as the tick's bound) also has the curve's written to Token.live*, without
+ * holding the answer, so the feed, the worker and the peaks see it too; a row another viewer's tick
+ * wrote a moment ago is not written again.
+ */
+export function withCurveQuotes(
+  rows: LiveRow[],
+  quotes: ReadonlyMap<string, { marketCapUsd: number; priceUsd: number; at: number }>,
+  now: number,
+  peakWindowDays?: number,
+): LiveRow[] {
+  const due: { id: string; mintAddress: string }[] = [];
+  const live: { mintAddress: string; marketCapUsd: number; priceUsd: number }[] = [];
+  const seenAt = new Map<string, Date>();
+  const out = rows.map((r) => {
+    const q = quotes.get(r.mintAddress);
+    if (!q) return r;
+    if (r.liveDataAt === null || now - r.liveDataAt.getTime() >= LIVE_TICK_MAX_AGE_MS) {
+      due.push({ id: r.id, mintAddress: r.mintAddress });
+      live.push({ mintAddress: r.mintAddress, marketCapUsd: q.marketCapUsd, priceUsd: q.priceUsd });
+      seenAt.set(r.mintAddress, new Date(q.at));
+    }
+    return { ...r, liveMarketCapUsd: q.marketCapUsd, livePriceUsd: q.priceUsd, liveDataAt: new Date(q.at) };
+  });
+  if (due.length > 0) {
+    holdLiveRows(
+      out.filter((r) => seenAt.has(r.mintAddress)),
+      now,
+    );
+    void writeLiveMarketData(due, live, { seenAt, fetchedAt: new Date(now), peakWindowDays }).catch(
+      () => undefined,
+    );
+  }
+  return out;
 }

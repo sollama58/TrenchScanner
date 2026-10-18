@@ -47,7 +47,8 @@ import {
  * stopped out or never sold, at the trailing exit or the hold cap for one that sold
  * (candidateOutcomeJob.ts). It is copied onto any curated alert anchored to the row, like the
  * other verdicts. Changing the plan changes rows graded from then on; rows already graded keep
- * the number they were graded with.
+ * the number they were graded with, unless re-scored (the two weeks before the 2026-10-17 change
+ * were, from the coins' candles: apps/worker/src/jobs/exitPlanRescore.ts).
  */
 
 export interface TakeProfit {

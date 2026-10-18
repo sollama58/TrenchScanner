@@ -374,9 +374,28 @@ export class PumpFunClient {
    * Null when Pump.fun has no such coin; throws on a transport failure (a 429 included).
    */
   async minuteCandles(mintAddress: string, timeoutMs = 10_000): Promise<MinuteCandle[] | null> {
+    return this.candlePage(mintAddress, "1m", timeoutMs);
+  }
+
+  /**
+   * The same chart in five-minute candles, which reach about five times further back: for a coin
+   * that has traded past MINUTE_CANDLE_PAGE minutes since the moment wanted. Each candle is put on
+   * the minute grid as its last minute (start + 4 minutes), so its close counts only once the five
+   * minutes are over, the way a minute candle's does.
+   */
+  async fiveMinuteCandles(mintAddress: string, timeoutMs = 10_000): Promise<MinuteCandle[] | null> {
+    const candles = await this.candlePage(mintAddress, "5m", timeoutMs);
+    return candles?.map((c) => ({ ...c, startMs: c.startMs + 4 * 60_000 })) ?? null;
+  }
+
+  private async candlePage(
+    mintAddress: string,
+    interval: "1m" | "5m",
+    timeoutMs: number,
+  ): Promise<MinuteCandle[] | null> {
     try {
       const body = await fetchJson<unknown>(
-        `${this.swapBaseUrl}/v1/coins/${encodeURIComponent(mintAddress)}/candles?interval=1m&limit=${MINUTE_CANDLE_PAGE}&currency=USD`,
+        `${this.swapBaseUrl}/v1/coins/${encodeURIComponent(mintAddress)}/candles?interval=${interval}&limit=${MINUTE_CANDLE_PAGE}&currency=USD`,
         {
           gate: this.swapGate,
           timeoutMs,
