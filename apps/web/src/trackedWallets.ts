@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { ApiError, api, del, put } from "./api";
+import { ApiError, api, del, post, put } from "./api";
 import { invalidate } from "./cache";
 import { forgetPossibleSides } from "./possibleSides";
 import { forgetWalletNames } from "./walletNames";
@@ -93,6 +93,26 @@ export async function saveTrackedWallet(wallet: string, name: string, kol: boole
   } else void loadTracked(true);
   refreshViews(wallet);
   return res.wallet;
+}
+
+export interface ImportResult {
+  added: number;
+  updated: number;
+  /** New wallets left out because the list reached its cap. */
+  overCap: number;
+  /** Entries whose name was empty once cleaned. */
+  unnamed: number;
+}
+
+/** Adds or renames many labels at once (a JSON list, see trackedImport.ts), then re-reads the list. */
+export async function importTrackedWallets(
+  wallets: readonly { wallet: string; name: string; kol: boolean }[],
+): Promise<ImportResult> {
+  const res = await post<ImportResult>("/wallets/tracked/import", { wallets });
+  await loadTracked(true);
+  forgetWalletNames(wallets.map((w) => w.wallet));
+  forgetPossibleSides();
+  return res;
 }
 
 /** Removes a label. */
