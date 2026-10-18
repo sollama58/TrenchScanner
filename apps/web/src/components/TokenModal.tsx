@@ -65,6 +65,8 @@ import {
   WalletStat,
 } from "./AlertCard";
 import { PriceChart, type ChartEvent } from "./PriceChart";
+import { WalletMarksPicker } from "./WalletMarksPicker";
+import { loadMarkPrefs, saveMarkPrefs, walletMarks, type MarkPrefs, type WalletMark } from "../walletMarks";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import {
   categoryText,
@@ -132,7 +134,7 @@ interface TokenFirstMinutes {
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
 interface FlaggedWallet {
   wallet: string;
-  tags: ("risky" | "dumper" | "linked" | "creator" | "kol" | "winner")[];
+  tags: ("risky" | "dumper" | "linked" | "creator" | "kol" | "winner" | "side")[];
   score: number | null;
   dumps: number | null;
   coins: number | null;
@@ -141,6 +143,8 @@ interface FlaggedWallet {
   kol?: string | null;
   /** A KOL's Known Side: the KOL's main wallet (`kol` is then the KOL's name). */
   knownSideOf?: string;
+  /** A KOL's funded wallet or Probable Side (tag "side"). Absent from older API builds. */
+  side?: { kind: "funded" | "probable"; kolWallet: string; kolName: string | null };
   solIn: number;
   solOut: number;
   heldPct: number | null;
@@ -151,7 +155,7 @@ interface FlaggedWallet {
 function kindOf(w: FlaggedWallet): MarkerKind {
   if (w.tags.includes("creator")) return "dev";
   if (w.tags.includes("risky") || w.tags.includes("dumper")) return "risky";
-  if (w.tags.includes("kol")) return "kol";
+  if (w.tags.includes("kol") || w.tags.includes("side")) return "kol";
   if (w.tags.includes("winner")) return "winner";
   return "linked";
 }
@@ -1377,6 +1381,16 @@ export function ChartCard({
   const young = firstTradeAt !== null && Date.now() - firstTradeAt <= FIRST_VIEW_MAX_AGE_MS;
   const shownRange: Range = range === "first" && !young ? "all" : range;
 
+  // Labeled wallets' trades on the line (user ask 2026-10-18), as the reader set them.
+  const [markPrefs, setMarkPrefsState] = useState<MarkPrefs>(loadMarkPrefs);
+  const setMarkPrefs = (p: MarkPrefs) => {
+    setMarkPrefsState(p);
+    saveMarkPrefs(p);
+  };
+  const [marksOpen, setMarksOpen] = useState(false);
+  const labeled = data?.wallets ?? [];
+  const marks = useMemo(() => walletMarks(data?.wallets ?? [], markPrefs), [data?.wallets, markPrefs]);
+
   // The view's window over the minute data, before the finer reads that fill it in.
   const bounds = useMemo(
     () => (data ? viewBounds(data, shownRange, alertAt) : null),
@@ -1501,12 +1515,32 @@ export function ChartCard({
               </button>
             ))}
           </span>
+          {labeled.length > 0 && (
+            <button
+              type="button"
+              className={`tm-range cm-toggle${marksOpen ? " on" : ""}`}
+              aria-expanded={marksOpen}
+              title="Choose which labeled wallets' trades the chart marks"
+              onClick={() => setMarksOpen((o) => !o)}
+            >
+              Wallet trades{markPrefs.on ? ` · ${marks.length}` : " · off"}
+            </button>
+          )}
         </h4>
+        {marksOpen && labeled.length > 0 && (
+          <WalletMarksPicker
+            prefs={markPrefs}
+            onChange={setMarkPrefs}
+            wallets={labeled}
+            shown={marks.length}
+          />
+        )}
         {shownRange === "first" && (
           <FirstMinutesChart
             mint={card.token.mintAddress}
             label={tokenLabel(card.token)}
             events={events}
+            marks={marks}
             height={height}
           />
         )}
@@ -1536,6 +1570,7 @@ export function ChartCard({
               live={view.live}
               now={view.latest}
               scans={view.scans}
+              marks={marks}
               height={height}
               ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
             />
@@ -1617,11 +1652,13 @@ function FirstMinutesChart({
   mint,
   label,
   events,
+  marks,
   height,
 }: {
   mint: string;
   label: string;
   events: ChartEvent[];
+  marks: WalletMark[];
   height: number;
 }) {
   const api = useTokenApi(mint);
@@ -1684,6 +1721,7 @@ function FirstMinutesChart({
         candles={view.candles}
         live={data!.live}
         origin={view.start}
+        marks={marks}
         height={height}
         ariaLabel={`${label} market cap in its first 15 minutes, from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
       />
@@ -1701,6 +1739,7 @@ const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: stri
   linked: { text: "Linked", tone: "linked" },
   kol: { text: "KOL", tone: "kol" },
   winner: { text: "Winner", tone: "winner" },
+  side: { text: "KOL side", tone: "side" },
 };
 
 /** GET /tokens/:mint/stonk-fees (api routes/tokens.ts). */
@@ -1817,13 +1856,15 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                                     : undefined
                           }
                         >
-                          {t === "kol" && w.knownSideOf
-                            ? names[w.wallet]?.source === "kol-side" || !w.kol
-                              ? "Known Side"
-                              : `${w.kol} Known Side`
-                            : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
-                              ? `KOL: ${w.kol}`
-                              : TAG_TEXT[t].text}
+                          {t === "side" && w.side
+                            ? `${w.side.kolName ?? "KOL"} ${w.side.kind === "funded" ? "KOL Funded Wallet" : "Probable Side"}`
+                            : t === "kol" && w.knownSideOf
+                              ? names[w.wallet]?.source === "kol-side" || !w.kol
+                                ? "Known Side"
+                                : `${w.kol} Known Side`
+                              : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
+                                ? `KOL: ${w.kol}`
+                                : TAG_TEXT[t].text}
                         </span>
                       ))}
                     </span>

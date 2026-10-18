@@ -195,6 +195,31 @@ describe("markedWallets", () => {
     ]);
   });
 
+  it("marks a KOL's funded wallets and Probable Sides, but never relabels a KOL", () => {
+    const sides = new Map([
+      ["funded", { kind: "funded" as const, kolWallet: "K", kolName: "Cupsey" }],
+      ["probable", { kind: "probable" as const, kolWallet: "K", kolName: null }],
+      ["kol", { kind: "probable" as const, kolWallet: "K2", kolName: null }],
+    ]);
+    const out = markedWallets(
+      [row("linked"), row("probable"), row("funded"), row("kol"), row("nobody")],
+      new Map(),
+      [{ funder: "F", wallets: [{ wallet: "linked" }] }],
+      opts,
+      new Map<string, string | null>([["kol", "Ansem"]]),
+      new Map(),
+      sides,
+    );
+    expect(out.map((w) => [w.wallet, w.tags])).toEqual([
+      ["kol", ["kol"]],
+      ["probable", ["side"]],
+      ["funded", ["side"]],
+      ["linked", ["linked"]],
+    ]);
+    expect(out.find((w) => w.wallet === "funded")!.side).toEqual(sides.get("funded"));
+    expect(out.find((w) => w.wallet === "kol")!.side).toBeUndefined();
+  });
+
   it("reads stored trades, dropping malformed ones, else falls back to first buy and sell", () => {
     const risk = new Map([
       ["a", { score: 90, dumps: 0, appearances: 3 }],

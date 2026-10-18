@@ -20,6 +20,8 @@ const RISKY = address(`${TAG}-risky`);
 const LINKED = address(`${TAG}-linked`);
 const CALM = address(`${TAG}-calm`);
 const EARLY = address(`${TAG}-early`);
+const SIDE = address(`${TAG}-side`);
+const KOL = address(`${TAG}-kol`);
 
 describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
   let app: FastifyInstance;
@@ -88,6 +90,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
           ],
         },
         { tokenId: token.id, wallet: LINKED, solIn: 1, firstBuyAt: new Date(80_000) },
+        { tokenId: token.id, wallet: SIDE, solIn: 0.8, trades: [[95_000, 1, 0.8, 50]] },
         {
           tokenId: token.id,
           wallet: CALM,
@@ -118,6 +121,10 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
         computedAt: new Date(),
       })),
     });
+    await prisma.kolWallet.create({ data: { wallet: KOL, name: "Chartkol", seenAt: new Date() } });
+    await prisma.kolPossibleSide.create({
+      data: { wallet: SIDE, kolWallet: KOL, pct: 90, shared: 12, kolCoins: 13, computedAt: new Date() },
+    });
     app = await buildServer(env);
     cookie = await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
       userId,
@@ -127,6 +134,8 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
 
   afterAll(async () => {
     await prisma.walletRisk.deleteMany({ where: { wallet: { in: [RISKY, CALM] } } });
+    await prisma.kolPossibleSide.deleteMany({ where: { wallet: SIDE } });
+    await prisma.kolWallet.deleteMany({ where: { wallet: KOL } });
     await prisma.whitelist.deleteMany({ where: { walletAddress: `${TAG}-wallet` } });
     await app?.close();
     await prisma.token.deleteMany({ where: { mintAddress: MINT } });
@@ -144,7 +153,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
     expect(body.marketCap.map((p) => p.usd)).toEqual([10_000, 20_000]);
     expect(body.tape).toMatchObject({ status: "done", anchorAt: 90_000 });
     expect(body.live?.readAt).toBeGreaterThan(0);
-    expect(body.wallets.map((w) => w.wallet)).toEqual([RISKY, EARLY, LINKED]);
+    expect(body.wallets.map((w) => w.wallet)).toEqual([RISKY, EARLY, SIDE, LINKED]);
     expect(body.wallets[0]).toMatchObject({
       tags: ["risky", "dumper"],
       score: 88,
@@ -154,7 +163,12 @@ describe.skipIf(!dbAvailable)("GET /tokens/:mint/chart", () => {
       ],
     });
     expect(body.wallets[1]).toMatchObject({ tags: ["risky"], score: 72, trades: [[85_000, 1, 0.5]] });
-    expect(body.wallets[2]).toMatchObject({ tags: ["linked"], funder: "Fundr", trades: [[80_000, 1, null]] });
+    expect(body.wallets[2]).toMatchObject({
+      tags: ["side"],
+      side: { kind: "probable", kolWallet: KOL, kolName: "Chartkol" },
+      trades: [[95_000, 1, 0.8]],
+    });
+    expect(body.wallets[3]).toMatchObject({ tags: ["linked"], funder: "Fundr", trades: [[80_000, 1, null]] });
   });
 
   it("sends how each top holder got in: the newest list's and the largest at the anchor", async () => {
