@@ -108,7 +108,7 @@ export async function renderWalletWebCard(
   const big = web.total.toLocaleString("en-US");
   ctx.font = `800 92px ${FONT}`;
   const bigW = ctx.measureText(big).width;
-  ctx.fillStyle = "#ff9f66";
+  ctx.fillStyle = "#c4825f";
   ctx.fillText(big, PAD, 322);
   ctx.fillStyle = INK;
   ctx.font = `700 24px ${FONT}`;
@@ -304,7 +304,7 @@ function drawNode(ctx: CanvasRenderingContext2D, n: PlacedNode, layout: WebLayou
   ctx.fill();
   if (n.role === "hub") {
     // The brand's dashed ring round the hub.
-    ctx.strokeStyle = "#ff8a3d";
+    ctx.strokeStyle = "#ad4a22";
     ctx.lineWidth = 2.5;
     ctx.setLineDash([3, 4]);
     ctx.beginPath();

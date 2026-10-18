@@ -5,6 +5,8 @@ import { askBefore, TwoFactorCancelled } from "../twoFactor";
 import { useMe } from "../me";
 import { CheckIcon, CopyIcon, WalletIcon } from "./Icons";
 import { SETTINGS_WALLET_ID } from "./WalletMenu";
+import { WalletHoldings } from "./WalletHoldings";
+import { useWalletBalance } from "../walletBalance";
 
 /**
  * Settings card for an account that signs in with Privy (email or Google/X): its wallet, funding
@@ -19,6 +21,8 @@ export function PrivyWalletPanel({ compact = false }: { compact?: boolean }) {
   const [busy, setBusy] = useState<"fund" | "export" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const address = me?.walletAddress ?? "";
+  // Settings only: the access screen shows the burn panel's own balance.
+  const funds = useWalletBalance(!compact && me?.signInMethod === "privy");
   const qr = useMemo(() => {
     if (!showQr || !address) return "";
     const q = qrcode(0, "M");
@@ -77,6 +81,11 @@ export function PrivyWalletPanel({ compact = false }: { compact?: boolean }) {
             from the access screen. Only you see this address.
           </p>
         </>
+      )}
+      {!compact && (
+        <div className="privy-holdings">
+          <WalletHoldings funds={funds} />
+        </div>
       )}
       <div className="privy-address">
         <code className="num">{address}</code>

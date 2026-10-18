@@ -10,6 +10,7 @@ import {
   enrollInFreeAccess,
   parseBurnTransaction,
   prisma,
+  proHolderRank,
   resolveAccess,
   SolanaRpc,
   SPL_TOKEN_PROGRAM_ID,
@@ -175,13 +176,15 @@ export async function registerSubscriptionRoutes(
    * (a Token-2022 burn of this mint is not a subscription payment) and not frozen (the chain
    * refuses to burn from a frozen account, after the fee). Largest first, since the button burns
    * from one account. Also the wallet's SOL (null when that read alone failed), for Settings'
-   * balances and the network fee a burn or a buy needs.
+   * balances and the network fee a burn or a buy needs, and its place among the top 250 holders.
    */
   app.get("/balance", { config: { rateLimit: RPC_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const wallet = request.user!.walletAddress;
-    const [accounts, lamports] = await Promise.all([
+    const [accounts, lamports, holder] = await Promise.all([
       rpc.getTokenAccountsByOwner(wallet, SUBSCRIPTION_MINT),
       rpc.getBalance(wallet),
+      // From the pro-holders scan's table, not the chain: a wallet's place among the top 250.
+      proHolderRank(wallet).catch(() => null),
     ]);
     if (!accounts) {
       return reply
@@ -200,6 +203,12 @@ export async function registerSubscriptionRoutes(
       tokenProgram: SPL_TOKEN_PROGRAM_ID,
       totalRaw: total.toString(),
       solLamports: lamports === null ? null : lamports.toString(),
+      holder: holder && {
+        rank: holder.rank,
+        of: holder.of,
+        scannedAt: holder.scannedAt?.toISOString() ?? null,
+        stale: holder.stale,
+      },
       accounts: burnable.map((a) => ({ address: a.address, rawAmount: a.rawAmount })),
     };
   });

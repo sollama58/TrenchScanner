@@ -1053,11 +1053,33 @@ export class HeliusClient {
         if (methodMissing) break;
         pending = next;
       }
-      if (!methodMissing) return rows;
+      if (!methodMissing) {
+        // A mint with tokens has token accounts, so a walk that found none read nothing: V2 has
+        // answered an empty first page for an older classic SPL Token mint ($ASDFASDFA, whose
+        // holder scan read empty every time). Those mints are read again unpaged.
+        const empty = new Map([...programOf].filter(([mint]) => rows.get(mint)?.length === 0));
+        if (empty.size === 0) return rows;
+        logger.warn("getProgramAccountsV2 found no accounts - reading unpaged", { mints: [...empty.keys()] });
+        const unpaged = await this.unpagedTokenAccounts(empty, config);
+        for (const mint of empty.keys()) {
+          const again = unpaged.get(mint);
+          if (again) rows.set(mint, again);
+          else rows.delete(mint);
+        }
+        return rows;
+      }
       this.gpaV2Unavailable = true;
       logger.info("getProgramAccountsV2 not served by this endpoint - reading holder lists unpaged");
     }
+    return this.unpagedTokenAccounts(programOf, config);
+  }
 
+  /** tokenAccountsOfMints' unpaged read: one getProgramAccounts per mint. */
+  private async unpagedTokenAccounts(
+    programOf: ReadonlyMap<string, string>,
+    config: (mint: string) => object,
+  ): Promise<Map<string, GpaRow[]>> {
+    const out = new Map<string, GpaRow[]>();
     const calls: RpcCall[] = [...programOf].map(([mint, program]) => ({
       id: `gpa-${mint}`,
       method: "getProgramAccounts",

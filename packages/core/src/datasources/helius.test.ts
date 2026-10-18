@@ -881,6 +881,28 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     expect((await partial.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({ status: "failed" });
   });
 
+  it("reads a mint unpaged when V2 finds no accounts for it, without giving V2 up", async () => {
+    const seen: string[] = [];
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        seen.push(c.method);
+        if (c.method === "getMultipleAccounts") return mintAccount(c);
+        if (c.method === "getProgramAccountsV2")
+          return { jsonrpc: "2.0", id: c.id, result: { accounts: [], paginationKey: null } };
+        return { jsonrpc: "2.0", id: c.id, result: [row(CURVE, 800n), row(WALLET, 150n)] };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url, isHelius: true });
+    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
+      status: "found",
+      supply: "1000",
+      holders: [{ owner: WALLET, pct: 15, accounts: [`acct-${WALLET}`] }],
+    });
+    await client.getTopHoldersBatch(["mintA"], 25);
+    expect(seen.filter((m) => m === "getProgramAccountsV2")).toHaveLength(2);
+    expect(seen.filter((m) => m === "getProgramAccounts")).toHaveLength(2);
+  });
+
   it("falls back to the unpaged getProgramAccounts for good when the endpoint doesn't serve V2", async () => {
     const seen: string[] = [];
     const { url } = await startServer((calls) =>

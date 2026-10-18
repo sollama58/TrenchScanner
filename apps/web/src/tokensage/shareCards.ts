@@ -35,7 +35,7 @@ const TRACK = "rgba(255, 255, 255, 0.08)";
 /** The dashboard's dark-mode categorical slots (styles.css --series-1..5), and "other". */
 const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"];
 const OTHER = "#4a5163";
-const BRAND_A = "#e2581b";
+const BRAND_A = "#963a18";
 
 const PAD = 64;
 const BODY_TOP = 252;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { ApiError } from "../api";
 import { signedPct, usd } from "../format";
 import {
@@ -26,6 +26,7 @@ import { WalletTimeoutError } from "../wallet";
 import { renderPositionCard } from "../pnlCard";
 import { BoltIcon, CheckIcon, ChevronDownIcon, GearIcon, InfoIcon, ShareIcon, ShieldIcon } from "./Icons";
 import { ShareImageDialog } from "./ShareImageDialog";
+import { FoldHead } from "./Fold";
 
 /**
  * Pro Mode's Trade panel under the token modal's chart (user ask 2026-10-17): buy and sell the
@@ -438,6 +439,9 @@ export function TradePanel({
   closeOnly = false,
   graceEndsAt = null,
   buyOnly = false,
+  hidePosition = false,
+  maxBuySol = null,
+  delayed = false,
 }: {
   owner: string;
   mint: string;
@@ -454,6 +458,15 @@ export function TradePanel({
   graceEndsAt?: number | null;
   /** Buying only, no Sell side: the $ASDFASDFA buy for a wallet without Pro Mode (BuyAsdfDialog). */
   buyOnly?: boolean;
+  /** No position block (the Buy $ASDFASDFA popup, user ask 2026-10-18). */
+  hidePosition?: boolean;
+  /** The most one buy may spend here (the API's 5 SOL for a wallet without Pro Mode); null: no cap. */
+  maxBuySol?: number | null;
+  /**
+   * The coin isn't getting instant updates (TokenModal's delayed chart): the panel starts folded,
+   * and once opened says the figures may be behind while trades are priced live.
+   */
+  delayed?: boolean;
 }) {
   // Shared with Settings > Trading: a change there shows here at once, and the other way round.
   const settings = useTradeSettings();
@@ -462,6 +475,10 @@ export function TradePanel({
   const [showSettings, setShowSettings] = useState(false);
   const [accepted, setAccepted] = useState(() => disclaimerAccepted(owner));
   const [sharing, setSharing] = useState(false);
+  // Folded for a delayed coin until opened (user ask 2026-10-18); the reader's own choice then holds.
+  const [unfoldedSet, setUnfolded] = useState<boolean | null>(null);
+  const unfolded = unfoldedSet ?? !delayed;
+  const bodyId = useId();
   const [shareAmounts, setShareAmounts] = useState(true);
   const busy = status.kind === "busy";
   const balance = position ? BigInt(position.balance) : 0n;
@@ -477,6 +494,8 @@ export function TradePanel({
     if (!all) {
       if (side === "buy" && amount < BigInt(Math.round(MIN_TRADE_SOL * LAMPORTS)))
         return refuse("The smallest buy is 0.01 SOL.");
+      if (side === "buy" && maxBuySol !== null && amount > BigInt(Math.round(maxBuySol * LAMPORTS)))
+        return refuse(`Buy up to ${maxBuySol} SOL at a time here.`);
       const worth =
         side === "sell" && summary?.valueSol != null && balance > 0n
           ? (summary.valueSol * Number(amount)) / Number(balance)
@@ -523,12 +542,28 @@ export function TradePanel({
   const buyCustom = () =>
     customLamports && void trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`);
 
+  const title = (
+    <>
+      <BoltIcon size={14} /> Trade{symbol ? ` $${symbol}` : ""}
+    </>
+  );
+  const foldHead = (
+    <FoldHead open={unfolded} onToggle={() => setUnfolded(!unfolded)} controls={bodyId}>
+      <span>{title}</span>
+      {!unfolded && <span className="muted small tm-trade-fold-note">Delayed data · open to trade</span>}
+    </FoldHead>
+  );
+  if (!unfolded)
+    return (
+      <section className="sage-card tm-trade folded" aria-label="Trade" id={bodyId}>
+        <header className="tm-trade-head">{foldHead}</header>
+      </section>
+    );
+
   return (
-    <section className="sage-card tm-trade" aria-label="Trade">
+    <section className="sage-card tm-trade" aria-label="Trade" id={bodyId}>
       <header className="tm-trade-head">
-        <h4>
-          <BoltIcon size={14} /> Trade{symbol ? ` $${symbol}` : ""}
-        </h4>
+        {delayed ? foldHead : <h4>{title}</h4>}
         <span className="tm-trade-tools">
           <span className="segmented small tm-trade-speed" role="radiogroup" aria-label="Speed">
             {(["eco", "turbo"] as const).map((sp) => (
@@ -566,6 +601,12 @@ export function TradePanel({
         </span>
       </header>
 
+      {delayed && (
+        <p className="small tm-trade-warn" role="note">
+          This coin is no longer getting instant updates, so the chart and figures here may be behind. Your
+          trade is still priced live, at the coin&apos;s current on-chain price (within your slippage).
+        </p>
+      )}
       {graceEndsAt !== null && !closeOnly && (
         <p className="small tm-trade-warn" role="alert">
           Pro Mode ends in <strong className="num">{graceLeftText(graceEndsAt)}</strong> unless your wallet is
@@ -577,7 +618,7 @@ export function TradePanel({
         <p className="small tm-trade-warn">Pro Mode has ended for this wallet, so trading is off.</p>
       )}
 
-      {hasPosition && summary && (
+      {!hidePosition && hasPosition && summary && (
         <div className={`tm-hold ${tone}`}>
           <div className="tm-hold-hero">
             <div className="tm-hold-pnl">
@@ -682,7 +723,10 @@ export function TradePanel({
                     key={`${sol}-${i}`}
                     type="button"
                     className="tm-preset"
-                    disabled={busy}
+                    disabled={busy || (maxBuySol !== null && sol > maxBuySol)}
+                    title={
+                      maxBuySol !== null && sol > maxBuySol ? `Up to ${maxBuySol} SOL a buy here` : undefined
+                    }
                     onClick={() => trade("buy", BigInt(Math.round(sol * LAMPORTS)), `Buy ${solText(sol)}`)}
                   >
                     <span className="num">{sol}</span>

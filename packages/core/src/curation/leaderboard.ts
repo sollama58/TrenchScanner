@@ -10,29 +10,28 @@ import type { PrecisionTargets } from "./trainer.js";
  * runs these tokens make, and not letting the runners slip by: a model that has shown, with
  * confidence, that it meets all of them scores 100; one that has shown nothing scores 0.
  *
- *  - 30 points for the 2x rate: the share of the 2x target its PROVEN 2x rate covers.
- *  - 20 points for the 4x rate: the same against the 4x target.
- *  - 20 points for the average return (user decision 2026-10-17: "train and judge on return AND
+ * The parts (weights rebalanced 2026-10-18, COMPOSITE_WEIGHTS):
+ *  - 35 points for the 2x rate: the share of the 2x target its PROVEN 2x rate covers.
+ *  - 25 points for the average return (user decision 2026-10-17: "train and judge on return AND
  *    2x/4x/10x+ rate ... ALL of these are important"): the simulated return per call under the
  *    exit plan (profitSim.ts), proven with PRIOR_CALLS phantom stop-outs, scored from 0 at
- *    RETURN_FLOOR_PCT (every call a full stop) to full at RETURN_TARGET_PCT. A feed whose losers
- *    fall to the stop and one whose losers drift flat read the same on the rates; this tells them
- *    apart. A record without returns (older stored exams) is scored on the other parts, scaled.
+ *    RETURN_FLOOR_PCT to full at RETURN_TARGET_PCT, so break-even earns half. A record without
+ *    returns (older stored exams) is scored on the other parts, scaled.
+ *  - 15 points for the 4x rate: the same against the 4x target.
  *  - 15 points for catching runners (user ask 2026-10-12: "not only hit the % targets but also not
- *    let things slip through the cracks"): of the tokens that doubled at a moment the exam graded,
- *    the share it called at a winning moment, against CATCH_TARGET_RATE. The rates alone reward
- *    the narrowest slice that wins a little more often, however many runners it misses. Only an
- *    exam knows every runner a model could have called, so the live record carries none; a record
- *    without it (live-only, older stored exams) is scored on the other parts, scaled to 100.
+ *    let things slip through the cracks"): of the tokens that doubled, the share it called at a
+ *    winning moment, against CATCH_TARGET_RATE. The rates alone reward the narrowest slice that
+ *    wins a little more often, however many runners it misses. Since 2026-10-18 the live record
+ *    carries its live catch (withLiveCatch) and pools with the exam's like the rates do; before,
+ *    only the exam's counted, forever. A record without runners is scored on the other parts, scaled.
  *  - 10 points for the 10x rate (10x within an hour, the third tier, user decision 2026-10-06): the
- *    same against TEN_X_TARGET_RATE, proven over the calls whose 10x is settled (tenXGradedOf). A
- *    record that doesn't track it (older stored exams) adds no 10x evidence either way.
- *  - 5 points for run size: how far its calls ran, in doublings per call, against
- *    RUN_SIZE_TARGET_DOUBLINGS. A 2x, 4x or 4x-in-30-minutes call earns the same 2x/4x points
- *    whether it stops there or runs to 50x; this part is what tells them apart. A live call's run
- *    is its 24h run peak; an exam call's is the label window's peak, the 30-minute watch every
- *    decision row has (user decision 2026-10-07: a 24h peak existed only where an earlier champion
- *    had alerted the token, which tilted every exam toward the incumbent's picks).
+ *    same against TEN_X_TARGET_RATE, proven over the calls whose 10x is settled (tenXGradedOf).
+ *  - Run size (how far calls ran, in doublings) is still reported but scores nothing since
+ *    2026-10-18: the return under the exit plan already pays for a call that keeps running.
+ *
+ * The same number ranks models everywhere they are ranked (user decision 2026-10-18): the board,
+ * the champion (champion.ts), the Default models and the "best" model (topModels.ts), and the
+ * seats evolution breeds from and retires.
  *
  * "Proven" means the hit rate after PRIOR_CALLS extra calls are counted as misses: wins divided by
  * (graded calls + PRIOR_CALLS). Every model starts with the same handful of misses to call its
@@ -103,16 +102,27 @@ export interface CallRecord {
 /** labelValue is log2 of the peak multiple for clean wins: the 4x goal is labelValue >= 2. */
 export const GOAL_LABEL = Math.log2(GOAL_MULTIPLE);
 
+/**
+ * The parts' weights (user decision 2026-10-18: "include all the other categories: 2x/4x/10x/
+ * catch/profit, at a proper weighting that [models] closest to the goals we set score highest").
+ * The 2x rate is the headline goal, so it weighs most; profit next, since a feed that hits its
+ * rates and still loses money hasn't met the goal; then catch and 4x; 10x is the rarest tier.
+ * Run size no longer scores: the return under the exit plan already pays for calls that run.
+ */
 export const COMPOSITE_WEIGHTS = {
-  winRate: 0.3,
-  goalRate: 0.2,
+  winRate: 0.35,
+  goalRate: 0.15,
   tenXRate: 0.1,
-  returnPct: 0.2,
-  runSize: 0.05,
+  returnPct: 0.25,
+  runSize: 0,
   catchRate: 0.15,
 } as const;
-/** The return part's zero: every call a full stop-out under the exit plan. */
-export const RETURN_FLOOR_PCT = -50;
+/**
+ * The return part's zero: losing a quarter of the stake per call on average, as far below
+ * break-even as the target is above it, so break-even earns half the points (was -50%, every call a
+ * full stop, until 2026-10-18: a model losing 12% per call then earned half the points).
+ */
+export const RETURN_FLOOR_PCT = -25;
 /** The return part's target: a quarter of the stake made per call, on average. */
 export const RETURN_TARGET_PCT = 25;
 
@@ -121,7 +131,7 @@ export function tracksReturn(record: CallRecord): boolean {
   return (record.simCalls ?? 0) > 0 && record.sumSimReturnPct !== undefined;
 }
 
-/** The average return a record proves: its returns plus PRIOR_CALLS phantom stop-outs. */
+/** The average return a record proves: its returns plus PRIOR_CALLS phantom calls at RETURN_FLOOR_PCT. */
 export function provenReturnPct(record: CallRecord): number {
   const n = record.simCalls ?? 0;
   return ((record.sumSimReturnPct ?? 0) + PRIOR_CALLS * RETURN_FLOOR_PCT) / (n + PRIOR_CALLS);
@@ -148,7 +158,16 @@ export function tenXGradedOf(record: CallRecord): number {
   return record.tenX === undefined ? 0 : (record.tenXGraded ?? record.graded);
 }
 
-/** Whether a record tracks the runners it could have caught (exam records). */
+/**
+ * A live record with its live catch added (liveCatchRates in laneStore.ts): the runners since its
+ * start in the window and how many it called at a winning moment. Without runners it is unchanged.
+ */
+export function withLiveCatch(record: CallRecord, liveCatch: LiveCatch | null | undefined): CallRecord {
+  if (!liveCatch || liveCatch.runners <= 0) return record;
+  return { ...record, runnersSeen: liveCatch.runners, runnersCaught: liveCatch.caught };
+}
+
+/** Whether a record tracks the runners it could have caught (exams, and live records given withLiveCatch). */
 export function tracksCatch(record: CallRecord): boolean {
   return record.runnersSeen !== undefined && record.runnersSeen > 0;
 }
@@ -405,8 +424,8 @@ export function scoreBand(score: number | null): ScoreBand | null {
 /**
  * The one record the score is read off: the live record plus the backtest, the backtest scaled
  * down to at most `cap` calls' worth. `backtestCalls` is how many calls' worth it contributed.
- * The catch rate is the backtest's alone, unscaled: it is a share of the runners, not of calls,
- * and the live record has none.
+ * The catch rate pools the live runners (withLiveCatch) with the backtest's, the backtest's scaled
+ * down to at most `cap` runners the same way.
  */
 export function pooledRecord(
   live: CallRecord,
@@ -426,7 +445,16 @@ export function pooledRecord(
       sumRun: runSum(live) + runSum(exam) * k,
       tenX: (live.tenX ?? 0) + (exam.tenX ?? 0) * k,
       tenXGraded: tenXGradedOf(live) + tenXGradedOf(exam) * k,
-      ...(tracksCatch(exam) ? { runnersSeen: exam.runnersSeen, runnersCaught: exam.runnersCaught ?? 0 } : {}),
+      ...(tracksCatch(live) || tracksCatch(exam)
+        ? (() => {
+            const seen = tracksCatch(exam) ? exam.runnersSeen! : 0;
+            const kc = seen > 0 ? Math.min(seen, cap) / seen : 0;
+            return {
+              runnersSeen: (live.runnersSeen ?? 0) + seen * kc,
+              runnersCaught: (live.runnersCaught ?? 0) + (exam.runnersCaught ?? 0) * kc,
+            };
+          })()
+        : {}),
       ...(tracksReturn(live) || tracksReturn(exam)
         ? {
             simCalls: (live.simCalls ?? 0) + (tracksReturn(exam) ? exam.simCalls! * k : 0),
@@ -500,15 +528,15 @@ export function explainScore(composite: CompositeScore, targets: PrecisionTarget
   return (
     `Proven to hit 2x on at least ${b.proven2xPct.toFixed(0)}% of alerts (target ${Math.round(targets.winRate * 100)}%) ` +
     `4x on at least ${b.proven4xPct.toFixed(0)}% (target ${Math.round(targets.goalRate * 100)}%) ` +
-    `and 10x within an hour on at least ${b.proven10xPct.toFixed(0)}% (target ${Math.round(TEN_X_TARGET_RATE * 100)}%), ` +
-    `with runs worth ${b.provenRunDoublings.toFixed(2)} doublings per alert (target ${RUN_SIZE_TARGET_DOUBLINGS}, a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average)` +
+    `and 10x within an hour on at least ${b.proven10xPct.toFixed(0)}% (target ${Math.round(TEN_X_TARGET_RATE * 100)}%)` +
     (b.provenReturnPct === null
       ? ""
       : `, returning at least ${b.provenReturnPct.toFixed(0)}% per alert under the exit plan (target +${RETURN_TARGET_PCT}%)`) +
     (b.provenCatchPct === null
       ? ", "
-      : ` and catching at least ${b.provenCatchPct.toFixed(0)}% of the runners in its backtest (target ${Math.round(CATCH_TARGET_RATE * 100)}%), `) +
-    `from ${evidence}: ${b.points2x.toFixed(0)} + ${b.points4x.toFixed(0)} + ${b.points10x.toFixed(0)} + ${b.pointsRun.toFixed(0)}` +
+      : ` and catching at least ${b.provenCatchPct.toFixed(0)}% of the runners (target ${Math.round(CATCH_TARGET_RATE * 100)}%), `) +
+    `from ${evidence}: ${b.points2x.toFixed(0)} + ${b.points4x.toFixed(0)} + ${b.points10x.toFixed(0)}` +
+    (COMPOSITE_WEIGHTS.runSize > 0 ? ` + ${b.pointsRun.toFixed(0)}` : "") +
     (b.pointsReturn === null ? "" : ` + ${b.pointsReturn.toFixed(0)}`) +
     (b.pointsCatch === null ? "" : ` + ${b.pointsCatch.toFixed(0)}`) +
     (b.pointsCatch === null || b.pointsReturn === null

@@ -38,6 +38,8 @@ import { tokenView, type UtilityTokenView } from "./utilities.js";
 const HOLDINGS_TTL_MS = 5 * 60_000;
 /** Held coins listed (by value), each with a card that opens the token modal. */
 const HOLDINGS_SHOWN = 30;
+/** Held coins worth less than this many SOL are dust: left out of the list and the totals (user ask 2026-10-18). */
+const HOLDINGS_MIN_SOL = 0.01;
 /** Mints matched against Token from one wallet: a wallet full of dust can't make the read huge. */
 const HOLDINGS_MINTS_MAX = 500;
 /** Tracked coins valued from one wallet (two reads each). */
@@ -313,19 +315,27 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
         card: null as PortfolioHolding["card"],
       };
     });
-    rows.sort((a, b) => (b.valueUsd ?? -1) - (a.valueUsd ?? -1));
-    const shown = rows.slice(0, HOLDINGS_SHOWN);
+    // Unpriced coins can't be shown to clear the minimum, so they count as dust too. Without a SOL
+    // price the minimum can't be applied, so only unpriced coins are dropped.
+    const minUsd = sol ? HOLDINGS_MIN_SOL * sol : 0;
+    const kept = rows.filter((h) => h.valueUsd !== null && h.valueUsd >= minUsd);
+    kept.sort((a, b) => b.valueUsd! - a.valueUsd!);
+    const shown = kept.slice(0, HOLDINGS_SHOWN);
     const views = await Promise.all(shown.map((h) => tokenView(h.mint, new Date())));
     shown.forEach((h, i) => (h.card = views[i]?.card ?? null));
     const solHeld = r.lamports !== null ? Number(r.lamports) / LAMPORTS_PER_SOL : null;
-    const trackedUsd = rows.reduce((s, h) => s + (h.valueUsd ?? 0), 0);
+    const trackedUsd = kept.reduce((s, h) => s + (h.valueUsd ?? 0), 0);
     return {
       readAt: new Date(r.at),
       sol: solHeld,
       solValueUsd: solHeld !== null && sol ? solHeld * sol : null,
       coins: shown satisfies PortfolioHolding[],
-      trackedCoins: trackedAll.length,
+      /** Tracked coins worth at least HOLDINGS_MIN_SOL (past HOLDINGS_TRACKED_MAX, unvalued ones count too). */
+      trackedCoins: kept.length + (trackedAll.length - tracked.length),
       trackedValueUsd: trackedUsd,
+      /** Tracked coins held below HOLDINGS_MIN_SOL, or with no price: counted, not shown. */
+      dust: rows.length - kept.length,
+      minSol: HOLDINGS_MIN_SOL,
       /** Coins in the wallet the scanner doesn't track: counted, not shown. */
       untracked: balances.length - trackedAll.length,
     };

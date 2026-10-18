@@ -1,14 +1,20 @@
 import { prisma } from "../db.js";
 import type { ContestantSpec } from "./contestants.js";
 import type { Lane } from "./evolution.js";
-import { liveCallRecords } from "./laneStore.js";
-import { wilsonLowerBound } from "./trainer.js";
+import { liveCallRecords, liveCatchRates } from "./laneStore.js";
+import { emptyRecord, recordScore, withLiveCatch } from "./leaderboard.js";
+import type { PrecisionTargets } from "./trainer.js";
 
 /**
- * The default feed: the calls of the three models with the best 2x Wilson lower bound over the
- * last TOP_MODELS_RANK_WINDOW_HOURS of graded live calls, among models with at least
- * TOP_MODELS_RANK_MIN_GRADED of them, combined - user decision 2026-10-14 (full audit P9),
- * replacing the leaderboard's composite score. The score paid 15 points for catching runners, so
+ * The default feed: the calls of the three models with the best composite score (recordScore in
+ * leaderboard.ts, live catch included) over the last TOP_MODELS_RANK_WINDOW_HOURS of graded live
+ * calls, among models with at least TOP_MODELS_RANK_MIN_GRADED of them, combined - user decision
+ * 2026-10-18: "make sure this new composite score is the one used wherever we score models". The
+ * score is proven like the lower bound was (PRIOR_CALLS phantom misses), and the graded floor below
+ * still keeps a short record out.
+ *
+ * From 2026-10-14 to 10-18 it was the 2x Wilson lower bound (full audit P9), which replaced the
+ * leaderboard's composite score of the time. The score paid 15 points for catching runners, so
  * loose seats took the slots: on a replay of 10-08..10-14 its trio did no better than three random
  * seats (notes/full-audit-2026-10-14/lane4-models-training.md H-2). The lower bound ranks on the
  * goal's own outcome, the 2x, and discounts a short record for its noise, so a seat needs both a
@@ -51,8 +57,6 @@ export const TOP_MODELS_MIN_GRADED = 30;
 export const TOP_MODELS_RANK_WINDOW_HOURS = 72;
 /** Graded calls in the ranking window a model needs to take a slot: the 24h floor, per day. */
 export const TOP_MODELS_RANK_MIN_GRADED = TOP_MODELS_MIN_GRADED * (TOP_MODELS_RANK_WINDOW_HOURS / 24);
-/** The normal z of the 95% interval whose lower bound ranks the top models. */
-export const TOP_MODELS_RANK_Z = 1.96;
 export const TOP_MODELS_REFRESH_MINUTES = 360;
 /**
  * The window ends this long before the refresh slot starts. A call is graded about 30 minutes
@@ -70,6 +74,8 @@ export interface TopModelStanding {
   /** Graded calls with a simulated exit-plan return, and their sum in percent. */
   simCalls?: number;
   sumSimReturnPct?: number;
+  /** The record's composite score (recordScore, live catch included), 0-100; null with nothing graded. */
+  score?: number | null;
 }
 
 /** One model's record over the window, as the dropdown shows it. */
@@ -93,21 +99,18 @@ export function last24hOf(s: TopModelStanding, minGraded = TOP_MODELS_MIN_GRADED
 }
 
 export interface TopModels {
-  /** The top models, best lower bound first (up to TOP_MODELS_COUNT); null when none qualify. */
+  /** The top models, best score first (up to TOP_MODELS_COUNT); null when none qualify. */
   top: string[] | null;
-  /** The best average exit-plan return; null when no model qualifies. */
+  /** The best score over the 24h window; null when no model qualifies. */
   best: string | null;
   /** Every roster model's record over the 24h window. */
   last24h: Map<string, Last24h>;
 }
 
-/** A record's 2x Wilson lower bound, 0-1: what the top models are ranked on. */
-export function topModelsLowerBound(s: Pick<TopModelStanding, "wins" | "graded">): number {
-  return wilsonLowerBound(s.wins, s.graded, TOP_MODELS_RANK_Z);
-}
+const scoreOf = (s: TopModelStanding) => s.score ?? -1;
 
 /**
- * Every calling model with at least `minGraded` graded calls, best 2x lower bound first (ties:
+ * Every calling model with at least `minGraded` graded calls, best composite score first (ties:
  * more graded calls, then id). `standings` are records over the ranking window.
  */
 export function rankTopModels(
@@ -116,9 +119,8 @@ export function rankTopModels(
 ): string[] {
   return standings
     .filter((s) => s.calling && s.graded >= minGraded && s.graded > 0)
-    .map((s) => ({ s, lb: topModelsLowerBound(s) }))
-    .sort((a, b) => b.lb - a.lb || b.s.graded - a.s.graded || a.s.id.localeCompare(b.s.id))
-    .map(({ s }) => s.id);
+    .sort((a, b) => scoreOf(b) - scoreOf(a) || b.graded - a.graded || a.id.localeCompare(b.id))
+    .map((s) => s.id);
 }
 
 /** The first `count` of rankTopModels; null when fewer than `count` qualify. */
@@ -152,21 +154,15 @@ export function servableTopModels(
 }
 
 /**
- * The highest average exit-plan return among calling models with at least `minGraded` graded calls
- * that carry a return (ties: more such calls, then id). Null when none qualify.
+ * The "best" model: the best composite score among calling models with at least `minGraded`
+ * graded calls (ties: more graded calls, then id). Null when none qualify. It was the best average
+ * exit-plan return until 2026-10-18; the score now carries the return as its second-largest part.
  */
-export function pickBestReturnModel(
+export function pickBestModel(
   standings: readonly TopModelStanding[],
   minGraded = TOP_MODELS_MIN_GRADED,
 ): string | null {
-  const avg = (s: TopModelStanding) => (s.sumSimReturnPct ?? 0) / (s.simCalls ?? 1);
-  const eligible = standings.filter(
-    (s) => s.calling && s.graded >= minGraded && (s.simCalls ?? 0) >= Math.max(minGraded, 1),
-  );
-  if (eligible.length === 0) return null;
-  return [...eligible].sort(
-    (a, b) => avg(b) - avg(a) || (b.simCalls ?? 0) - (a.simCalls ?? 0) || a.id.localeCompare(b.id),
-  )[0]!.id;
+  return rankTopModels(standings, minGraded)[0] ?? null;
 }
 
 /**
@@ -211,7 +207,7 @@ export function resetTopModelsCache(): void {
 }
 
 /**
- * Today's top models (and best-return model) for this roster, read once per refresh slot per
+ * Today's top models (and best model) for this roster, read once per refresh slot per
  * process (and again when the roster, the lanes or who can call change). A failed read is not
  * kept, so the next caller retries it.
  */
@@ -219,6 +215,8 @@ export function loadTopModels(
   roster: readonly ContestantSpec[],
   lanes: readonly Lane[],
   canCall: (id: string) => boolean,
+  /** The hit-rate targets the score is read against (curatedTargets in champion.ts). */
+  targets: PrecisionTargets,
   now: Date = new Date(),
 ): Promise<TopModels> {
   const { since, rankSince, until, slot } = topModelsWindow(now);
@@ -230,14 +228,19 @@ export function loadTopModels(
   if (hit) return hit;
   // One slot's answers are all a reader needs; older slots are dropped as a new one fills.
   for (const k of cache.keys()) if (!k.startsWith(`${slot}|`)) cache.delete(k);
+  // The catch reads have no end bound: they run to now, and the grade lag's few minutes barely
+  // move a day's share. The pick is stored per slot (heldTopModels), so it can't drift with them.
   const read = Promise.all([
     liveCallRecords(ids, since, lanes, { until }),
     liveCallRecords(ids, rankSince, lanes, { until }),
-  ]).then(async ([day, rankWindow]) => {
-    const standingsOf = (records: typeof day): TopModelStanding[] =>
+    liveCatchRates(ids, since, lanes),
+    liveCatchRates(ids, rankSince, lanes),
+  ]).then(async ([day, rankWindow, dayCatch, rankCatch]) => {
+    const standingsOf = (records: typeof day, catches: typeof dayCatch): TopModelStanding[] =>
       ids.map((id) => {
         const r = records.get(id);
         return {
+          score: recordScore(withLiveCatch(r ?? emptyRecord(), catches.byModel.get(id)), targets),
           id,
           calling: calling.includes(id),
           graded: r?.graded ?? 0,
@@ -246,14 +249,14 @@ export function loadTopModels(
           sumSimReturnPct: r?.sumSimReturnPct ?? 0,
         };
       });
-    const daily = standingsOf(day);
-    const ranked = rankTopModels(standingsOf(rankWindow));
+    const daily = standingsOf(day, dayCatch);
+    const ranked = rankTopModels(standingsOf(rankWindow, rankCatch));
     // Fewer than TOP_MODELS_COUNT qualifying still makes a pick of the ones that do: before, two
     // proven models were dropped for the champion alone.
     const fresh = ranked.length > 0 ? ranked.slice(0, TOP_MODELS_COUNT) : null;
     return {
       top: await heldTopModels(new Date(slot), fresh, ranked, calling),
-      best: pickBestReturnModel(daily),
+      best: pickBestModel(daily),
       last24h: new Map(daily.map((s) => [s.id, last24hOf(s)])),
     };
   });

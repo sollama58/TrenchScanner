@@ -6,6 +6,7 @@ import {
   ORDER_FLOW_FEATURES,
   SHARP_TREES_CONTESTANT,
   TREES_NO_TOKENSAGE_CONTESTANT,
+  contestantSpec,
   enabledContestants,
 } from "./contestants.js";
 import { runContestTraining } from "./trainingRun.js";
@@ -49,13 +50,12 @@ describe("runContestTraining", () => {
       recencyHalfLifeDays: 14,
       cooldownHours: 24,
       heuristicPrecisionGate: true,
-      contestants: enabledContestants([
-        "consensus",
-        "blend",
-        "linear",
-        "trees",
-        TREES_NO_TOKENSAGE_CONTESTANT,
-      ]),
+      // Simple Trees is retired (2026-10-18), so the roster leaves it out; its spec still
+      // exercises the control path.
+      contestants: [
+        ...enabledContestants(["consensus", "blend", "linear", "trees"]),
+        contestantSpec(TREES_NO_TOKENSAGE_CONTESTANT)!,
+      ],
     });
     const control = results.find((r) => r.contestant === TREES_NO_TOKENSAGE_CONTESTANT)!;
     expect(control.metrics.exam).toBeDefined();

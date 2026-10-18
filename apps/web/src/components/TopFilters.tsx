@@ -127,7 +127,7 @@ export function TopFiltersPick({ onCopied }: { onCopied: () => void }) {
  * alerts have proven themselves toward the 75% / 50% targets (the model score), each with a copy.
  */
 /** A filter's score parts when the API doesn't send them: 30/20/10/5 scaled to 100. */
-const FILTER_POINTS_FALLBACK = { winRate: 46.2, goalRate: 30.8, tenXRate: 15.4, runSize: 7.7 };
+const FILTER_POINTS_FALLBACK = { winRate: 58.3, goalRate: 25, tenXRate: 16.7, runSize: 0 };
 const pts = (v: number) => Math.round(v).toString();
 
 function TopFiltersModal({
@@ -185,13 +185,21 @@ function TopFiltersModal({
             <p className="muted">
               Filters their owners chose to share, scored 0-100 on the models&apos; scorecard without its
               catch and return parts, the rest scaled to 100: {pts(points.winRate)} points for the proven 2x
-              rate, {pts(points.goalRate)} for the 4x rate, {pts(points.tenXRate)} for the 10x rate (targets{" "}
+              rate, {pts(points.goalRate)} for the 4x rate
+              {points.runSize > 0 ? ", " : " and "}
+              {pts(points.tenXRate)} for the 10x rate (targets{" "}
               {data
                 ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}% / ${data.targets.tenXPct ?? 25}%`
                 : "75% / 50% / 25%"}
-              ), and {pts(points.runSize)} for run size, how far the alerts ran over their 24h watch (target a{" "}
-              {data ? 2 ** data.targets.runDoublings : 4}x average, capped at 100x). A win is 2x on the alert
-              price within 15 minutes (4x within 30, 10x within an hour) before a 50% drop.
+              )
+              {points.runSize > 0 ? (
+                <>
+                  , and {pts(points.runSize)} for run size, how far the alerts ran over their 24h watch
+                  (target a {data ? 2 ** data.targets.runDoublings : 4}x average, capped at 100x)
+                </>
+              ) : null}
+              . A win is 2x on the alert price within 15 minutes (4x within 30, 10x within an hour) before a
+              50% drop.
             </p>
             {data && (
               <p className="muted small">

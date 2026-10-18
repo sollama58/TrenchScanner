@@ -1,7 +1,9 @@
 import type { Env } from "../config/env.js";
 
 /**
- * The filter every new account starts with.
+ * The built-in filter a new account starts with when no frozen starter filter is stored. Since
+ * 2026-10-18 new accounts get a frozen copy of Gemerald instead (filters/starterFilterStore.ts);
+ * this is the fallback when that row is missing or unreadable.
  *
  * An account with no filters produces no alerts, which is a bad first impression of a product
  * whose entire job is producing alerts: the Live Feed sits empty and nothing explains that you

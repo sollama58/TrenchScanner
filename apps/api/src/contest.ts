@@ -1,6 +1,8 @@
 import {
   prisma,
   compositeScore,
+  withLiveCatch,
+  curatedTargets,
   defaultContestant,
   loadChampion,
   loadTopModels,
@@ -24,7 +26,7 @@ import {
   feedCatch,
   mixCatch,
   loadCurrentLanes,
-  rankByMarketLift,
+  rankByComposite,
   withLanes,
   CONSENSUS_CONTESTANT,
   BACKTEST_EVIDENCE_CAP,
@@ -185,7 +187,7 @@ export function contestState(env: Env): Promise<ContestState> {
       canCall,
       defaultContestant(consensusEnabled ? current.get(CONSENSUS_CONTESTANT)?.threshold : null),
     );
-    const { top, best, last24h } = await loadTopModels(roster, lanes, canCall);
+    const { top, best, last24h } = await loadTopModels(roster, lanes, canCall, curatedTargets(env));
     return {
       roster,
       lanes,
@@ -405,23 +407,22 @@ export interface Leaderboard {
   defaultModel: string;
   /** The default feed's models, best first, and the rule that picks them. */
   defaultModels: string[];
-  /** The best average exit-plan return over the default rule's window; null when none qualify. */
+  /** The best composite score over the default rule's 24h window; null when none qualify. */
   bestModel: string | null;
   /**
-   * The default feed's rule: the top `count` models by 2x Wilson lower bound (at
-   * rankConfidencePct) over the last rankWindowHours, among those with rankMinGraded graded calls
-   * there, re-picked every refreshMinutes. windowHours and minGraded are the 24h records' window
-   * and floor (the dropdown's ranking and "best").
+   * The default feed's rule: the top `count` models by composite score over the last
+   * rankWindowHours, among those with rankMinGraded graded calls there, re-picked every
+   * refreshMinutes. windowHours and minGraded are the 24h records' window and floor (the
+   * dropdown's ranking and "best"). rankConfidencePct is gone with the lower bound (2026-10-18).
    */
   defaultRule: {
     count: number;
     windowHours: number;
     minGraded: number;
     refreshMinutes: number;
-    rankedBy: "2x-lower-bound";
+    rankedBy: "composite-score";
     rankWindowHours: number;
     rankMinGraded: number;
-    rankConfidencePct: number;
     /** The 24h window the current slot's top models and "best" were read on (topModelsWindow). */
     window: { since: Date; until: Date };
   };
@@ -603,7 +604,12 @@ export async function buildLeaderboard(
   const unranked = state.roster.map((spec) => {
     const model = state.current.get(spec.id) ?? null;
     const exam = model?.metrics.exam ?? emptyRecord();
-    const composite = compositeScore(live.get(spec.id) ?? emptyRecord(), exam, targets);
+    // The live record carries its live catch, so the catch part follows the window like the rates.
+    const composite = compositeScore(
+      withLiveCatch(live.get(spec.id) ?? emptyRecord(), catches.byModel.get(spec.id)),
+      exam,
+      targets,
+    );
     const status: LeaderboardEntry["status"] =
       spec.role === "rules"
         ? "calling"
@@ -688,14 +694,15 @@ export async function buildLeaderboard(
       bands: SCORE_BANDS,
       summary:
         `The score is how far a model has proven itself toward the goal, 0-100: ${Math.round(COMPOSITE_WEIGHTS.winRate * 100)} points ` +
-        `for its 2x rate against ${env.CURATED_TARGET_WIN_RATE_PCT}%, ${Math.round(COMPOSITE_WEIGHTS.goalRate * 100)} for its 4x rate against ` +
-        `${env.CURATED_TARGET_GOAL_RATE_PCT}%, ${Math.round(COMPOSITE_WEIGHTS.tenXRate * 100)} for its rate of 10x within an hour against ` +
-        `${TEN_X_TARGET_RATE * 100}%, ${Math.round(COMPOSITE_WEIGHTS.runSize * 100)} for run size: how far its alerts ran over 24h, ` +
-        `in doublings per alert, against ${RUN_SIZE_TARGET_DOUBLINGS} (a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average), ${Math.round(COMPOSITE_WEIGHTS.returnPct * 100)} for its average ` +
-        `return per alert under the exit plan, from nothing at ${RETURN_FLOOR_PCT}% to full at +${RETURN_TARGET_PCT}%, and ${Math.round(COMPOSITE_WEIGHTS.catchRate * 100)} for catching runners: ` +
-        `the share of the tokens that doubled in its backtest that it alerted on, against ${CATCH_TARGET_RATE * 100}%. ` +
-        `Rates, run size and return are proven, not raw: ${PRIOR_CALLS} extra alerts count as misses (full stops for return), so a short streak ` +
+        `for its 2x rate against ${env.CURATED_TARGET_WIN_RATE_PCT}%, ${Math.round(COMPOSITE_WEIGHTS.returnPct * 100)} for its average ` +
+        `return per alert under the exit plan, from nothing at ${RETURN_FLOOR_PCT}% to full at +${RETURN_TARGET_PCT}% (break-even earns half), ` +
+        `${Math.round(COMPOSITE_WEIGHTS.goalRate * 100)} for its 4x rate against ${env.CURATED_TARGET_GOAL_RATE_PCT}%, ` +
+        `${Math.round(COMPOSITE_WEIGHTS.catchRate * 100)} for catching runners: the share of the tokens that doubled that it alerted on, ` +
+        `against ${CATCH_TARGET_RATE * 100}%, and ${Math.round(COMPOSITE_WEIGHTS.tenXRate * 100)} for its rate of 10x within an hour against ` +
+        `${TEN_X_TARGET_RATE * 100}%. ` +
+        `Rates, catch and return are proven, not raw: ${PRIOR_CALLS} extra alerts count as misses (full stops for return), so a short streak ` +
         `can't score like a long record. The backtest counts for at most ${BACKTEST_EVIDENCE_CAP} alerts' worth; live alerts take over from there. ` +
+        `The same score picks the champion, the Default models and the best model. ` +
         `Models with fewer than ${MIN_LIVE_CALLS_TO_RANK} graded live alerts are still warming up and rank below the rest.`,
     },
     exitPlan: describeExitPlan(),
@@ -707,10 +714,9 @@ export async function buildLeaderboard(
       windowHours: TOP_MODELS_WINDOW_HOURS,
       minGraded: TOP_MODELS_MIN_GRADED,
       refreshMinutes: TOP_MODELS_REFRESH_MINUTES,
-      rankedBy: "2x-lower-bound" as const,
+      rankedBy: "composite-score" as const,
       rankWindowHours: TOP_MODELS_RANK_WINDOW_HOURS,
       rankMinGraded: TOP_MODELS_RANK_MIN_GRADED,
-      rankConfidencePct: 95,
       window: (({ since: from, until }) => ({ since: from, until }))(topModelsWindow(new Date())),
     },
     champion:
@@ -726,7 +732,9 @@ export async function buildLeaderboard(
             margin: env.CURATOR_CHAMPION_MARGIN,
           }
         : null,
-    entries: rankByMarketLift(unranked).map((entry, i) => ({ rank: i + 1, ...entry })),
+    // Ranked on the composite score, as the champion and the Default models are (user decision
+    // 2026-10-18; ranked on lift over the market 2026-10-09..18).
+    entries: rankByComposite(unranked).map((entry, i) => ({ rank: i + 1, ...entry })),
     evolution: {
       challengersPerRun: env.CURATOR_EVOLUTION_CHALLENGERS,
       minAgeHours: env.CURATOR_EVOLUTION_MIN_AGE_HOURS,

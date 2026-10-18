@@ -332,21 +332,44 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         if (balance.raw === 0n) return reply.code(422).send({ error: "You don't hold any of this coin." });
         amount = balance.raw;
       }
-      const built = await buildManualTrade(
-        { rpc, jupiter },
-        {
-          wallet,
-          mint: body.mint,
-          side: body.side,
-          amount,
-          slippageBps: body.slippageBps,
-          speed: body.speed,
-          ...(body.priorityFeeLamports !== undefined
-            ? { priorityFeeLamports: BigInt(body.priorityFeeLamports) }
-            : {}),
-          ...(body.tipLamports !== undefined ? { tipLamports: BigInt(body.tipLamports) } : {}),
-        },
-      );
+      // A buy the wallet plainly can't pay for, said plainly: a new wallet starts with no SOL, and
+      // some nodes won't simulate a transaction whose payer doesn't exist yet. Unread is no verdict.
+      if (body.side === "buy") {
+        const lamports = await rpc.getBalance(wallet);
+        if (lamports === 0n)
+          return reply.code(422).send({ error: "Your wallet has no SOL yet. Add some SOL to it, then buy." });
+        if (lamports !== null && lamports < amount)
+          return reply.code(422).send({
+            error: `Your wallet has ${solAmount(lamports)} SOL, less than this buy. Buy less, or add SOL first.`,
+          });
+      }
+      const build = () =>
+        buildManualTrade(
+          { rpc, jupiter },
+          {
+            wallet,
+            mint: body.mint,
+            side: body.side,
+            amount,
+            slippageBps: body.slippageBps,
+            speed: body.speed,
+            ...(body.priorityFeeLamports !== undefined
+              ? { priorityFeeLamports: BigInt(body.priorityFeeLamports) }
+              : {}),
+            ...(body.tipLamports !== undefined ? { tipLamports: BigInt(body.tipLamports) } : {}),
+          },
+        );
+      // One more go after a short pause when the chain or Jupiter didn't answer: most such misses
+      // are a moment's rate limit, and a second tap shouldn't be the trader's job.
+      const built = await build().catch(async (err) => {
+        if (!(err instanceof TransientError || err instanceof RateLimitedError)) throw err;
+        request.log.warn(
+          { wallet: walletTag(wallet), mint: body.mint, error: String(err) },
+          "pro trade build retried",
+        );
+        await new Promise((r) => setTimeout(r, BUILD_RETRY_MS));
+        return build();
+      });
       // A partial sale is measured by what the route quotes for it, in lamports.
       if (!closing && body.side === "sell" && BigInt(built.quotedOut) < MIN_TRADE_LAMPORTS)
         return reply.code(422).send({ error: tooSmall("sell") });
@@ -378,8 +401,18 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         );
         return reply.code(422).send({ error: plainRefusal(message, body.side) });
       }
-      if (err instanceof TransientError || err instanceof RateLimitedError)
-        return reply.code(503).send({ error: "Couldn't reach the chain or Jupiter just now. Try again." });
+      if (err instanceof TransientError || err instanceof RateLimitedError) {
+        request.log.warn(
+          { wallet: walletTag(wallet), mint: body.mint, side: body.side, error: message },
+          "pro trade build unavailable",
+        );
+        return reply.code(503).send({
+          error:
+            err instanceof RateLimitedError
+              ? "Jupiter is busy right now, so the trade couldn't be priced. Try again in a few seconds."
+              : "Couldn't reach the chain or Jupiter just now. Try again.",
+        });
+      }
       request.log.error({ err, wallet: walletTag(wallet), mint: body.mint }, "pro trade build failed");
       return reply.code(502).send({ error: `Couldn't build the trade: ${message}` });
     }
@@ -672,6 +705,14 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     inFlight.clear();
     retired.clear();
   });
+}
+
+/** The pause before a build's one retry, when the chain or Jupiter didn't answer the first. */
+const BUILD_RETRY_MS = 800;
+
+/** Lamports as SOL for a message, up to four decimals. */
+function solAmount(lamports: bigint): string {
+  return (Number(lamports) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 4 });
 }
 
 /** The most one access-token buy may spend, for a wallet without Pro Mode. */

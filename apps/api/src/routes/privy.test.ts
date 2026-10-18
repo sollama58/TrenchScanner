@@ -3,8 +3,8 @@ import "../bootstrap-env.js";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import bs58 from "bs58";
 import { SignJWT, errors, generateKeyPair, type KeyLike } from "jose";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { loadEnv, prisma, SUBSCRIPTION_MINT, type Env } from "@trenchscanner/core";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadEnv, prisma, SUBSCRIPTION_MINT, TradingRpc, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
@@ -502,6 +502,23 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
         ).not.toBe(200);
       } finally {
         env.PRO_TRADING_PUBLIC = was;
+      }
+    });
+
+    it("says plainly when a new wallet has no SOL, or too little for the buy, before building", async () => {
+      const { cookie } = await sessionFor(wallet());
+      const balance = vi.spyOn(TradingRpc.prototype, "getBalance");
+      try {
+        balance.mockResolvedValue(0n);
+        const empty = await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "100000000" });
+        expect(empty.statusCode).toBe(422);
+        expect(empty.json().error).toMatch(/no SOL yet/);
+        balance.mockResolvedValue(50_000_000n);
+        const short = await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "100000000" });
+        expect(short.statusCode).toBe(422);
+        expect(short.json().error).toMatch(/0\.05 SOL, less than this buy/);
+      } finally {
+        balance.mockRestore();
       }
     });
   });

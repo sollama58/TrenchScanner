@@ -788,6 +788,15 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The ns* writer's rules version (added 2026-10-16): a marker for maskKnownBadInputs, never
   // an input - a model that split on it would learn the deploy calendar.
   "nsRulesVersion",
+  // Zero on every decision row (model audit 2026-10-18, notes/model-audit-2026-10-18, section 4):
+  // nsHighFlagCount and nsLogoFood on 100% of reads from 10-15, nsLogoMeme and livestreamViewers
+  // on 99-100%, nsLogoRobot on 97-99%, with no lift on 2x or the stop. Still recorded, so any
+  // can come back by removing it here.
+  "nsHighFlagCount",
+  "nsLogoFood",
+  "nsLogoMeme",
+  "nsLogoRobot",
+  "livestreamViewers",
 ]);
 
 /** The inputs a learner reads unless its recipe names its own: every recorded input not retired. */

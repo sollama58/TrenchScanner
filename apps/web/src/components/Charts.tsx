@@ -527,6 +527,7 @@ export function MarkerBars({
   onOpen,
   columns,
   legend = "Hit rate",
+  unit = "%",
 }: {
   data: MarkerBarDatum[];
   markers: BarMarker[];
@@ -537,6 +538,8 @@ export function MarkerBars({
   columns?: { label: string; value: string; note?: string };
   /** The bars' legend key. */
   legend?: string;
+  /** The values' unit, printed on the track's end: "%" for rates, "" for a 0-100 score. */
+  unit?: string;
 }) {
   const values = [...data.map((d) => d.value ?? 0), ...markers.map((m) => m.value)];
   // Headroom past the furthest bar or marker, on a 10% step, never past 100%.
@@ -561,7 +564,10 @@ export function MarkerBars({
           </span>
         ))}
         {/* The scale follows the data, so say where the track ends: a full bar is this, not 100%. */}
-        <span className="key muted">Track 0–{top}%</span>
+        <span className="key muted">
+          Track 0–{top}
+          {unit}
+        </span>
       </div>
       <div className={`mbar${onOpen ? " opens" : ""}${toggles ? " toggles" : ""}`}>
         {columns && (
@@ -660,7 +666,7 @@ export function MarkerBars({
           <span className="mbar-track bare">
             {markers.map((m) => (
               <span key={m.kind} className={`mbar-tag ${m.kind}${nudge(m)}`} style={{ left: at(m.value) }}>
-                {m.value.toFixed(1)}%
+                {unit === "%" ? `${m.value.toFixed(1)}%` : `${m.value.toFixed(0)}${unit}`}
               </span>
             ))}
           </span>

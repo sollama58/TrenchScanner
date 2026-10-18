@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import type { Env } from "../config/env.js";
 import { prisma } from "../db.js";
-import { activeModelCutoffs, loadChampion, resolveDefaultModel } from "./champion.js";
+import { activeModelCutoffs, curatedTargets, loadChampion, resolveDefaultModel } from "./champion.js";
 import {
   COMBINER_ROLES,
   CONSENSUS_CONTESTANT,
@@ -225,7 +225,7 @@ export async function loadFeedModelState(env: Env): Promise<FeedModelState> {
     canCall,
     defaultContestant(consensusEnabled ? cutoffs.get(CONSENSUS_CONTESTANT)?.threshold : null),
   );
-  const { top, best } = await loadTopModels(roster, lanes, canCall);
+  const { top, best } = await loadTopModels(roster, lanes, canCall, curatedTargets(env));
   return {
     roster,
     defaultModel,

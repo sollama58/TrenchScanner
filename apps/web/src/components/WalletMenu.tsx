@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { User } from "../api";
 import { shortAddress } from "../format";
-import { ChevronDownIcon, LogoutIcon, ShieldIcon, WalletIcon } from "./Icons";
+import { ChartIcon, ChevronDownIcon, LogoutIcon, ShieldIcon, WalletIcon } from "./Icons";
 
 /** Where the menu's first item lands in Settings: the ids SettingsTab puts on those panels. */
 export const SETTINGS_WALLET_ID = "settings-wallet";
@@ -10,15 +10,22 @@ export const SETTINGS_ACCOUNT_ID = "settings-account";
 /**
  * The header's wallet pill (user ask 2026-10-18): a small menu instead of signing out on click.
  * Its first item opens Settings at the Privy wallet card for a Privy account, or at Account and
- * access for a wallet sign-in; the second signs out (Privy) or disconnects (a wallet).
+ * access for a wallet sign-in; the last signs out (Privy) or disconnects (a wallet). Pro Mode
+ * wallets also get Portfolio at the top, which left the tab bar for this menu (user ask 2026-10-18).
  */
 export function WalletMenu({
   user,
   onSettings,
+  onPortfolio,
+  portfolioOpen,
   onSignOut,
 }: {
   user: User;
   onSettings: (sectionId: string) => void;
+  /** Pro Mode only: opens the Portfolio page. */
+  onPortfolio?: () => void;
+  /** The Portfolio page is the one open. */
+  portfolioOpen?: boolean;
   onSignOut: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -48,7 +55,7 @@ export function WalletMenu({
     };
   }, [open]);
 
-  // Up and down move between the two items, as in any menu.
+  // Up and down move between the items, as in any menu.
   const onMenuKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
@@ -75,8 +82,26 @@ export function WalletMenu({
       </button>
       {open && (
         <div className="wallet-menu-list" role="menu" id={menuId} onKeyDown={onMenuKey}>
+          {onPortfolio && (
+            <button
+              ref={first}
+              role="menuitem"
+              className={portfolioOpen ? "current" : undefined}
+              aria-current={portfolioOpen ? "page" : undefined}
+              onClick={() => {
+                setOpen(false);
+                onPortfolio();
+              }}
+            >
+              <ChartIcon size={15} />
+              <span>
+                <strong>Portfolio</strong>
+                <small>Holdings, positions and trades</small>
+              </span>
+            </button>
+          )}
           <button
-            ref={first}
+            ref={onPortfolio ? undefined : first}
             role="menuitem"
             onClick={() => {
               setOpen(false);

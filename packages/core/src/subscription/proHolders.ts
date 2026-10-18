@@ -180,6 +180,31 @@ export async function proHolderStanding(wallet: string, now = new Date()): Promi
     : { state: "none" };
 }
 
+/**
+ * A wallet's place among the $ASDFASDFA holders in the newest scan, for Settings (user ask
+ * 2026-10-18): its rank when it is in the top 250, null when it isn't. `scannedAt` null: no scan
+ * has finished yet, so nobody's place is known; `stale`: the scans have stopped.
+ */
+export async function proHolderRank(
+  wallet: string,
+  now = new Date(),
+): Promise<{ rank: number | null; of: number; scannedAt: Date | null; stale: boolean }> {
+  const [row, latest] = await Promise.all([
+    prisma.proHolder.findUnique({
+      where: { walletAddress: wallet },
+      select: { rank: true, lastInTopAt: true },
+    }),
+    latestScan(),
+  ]);
+  const inLatest = !!row && !!latest && row.lastInTopAt.getTime() >= latest.getTime();
+  return {
+    rank: inLatest ? row!.rank : null,
+    of: PRO_HOLDER_COUNT,
+    scannedAt: latest,
+    stale: !!latest && now.getTime() - latest.getTime() > PRO_HOLDER_STALE_MS,
+  };
+}
+
 /** For Admin > Access: the newest scan, how many it holds, and who is in their grace period. */
 export async function proHolderSummary(now = new Date()) {
   const latest = await latestScan();

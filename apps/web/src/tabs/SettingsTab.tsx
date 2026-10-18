@@ -4,6 +4,7 @@ import { DEFAULT_ALERT_PREFS, loadSettings, saveAlertPrefs, useSettings } from "
 import { Skeleton } from "../components/Charts";
 import { BurnPanel } from "../components/BurnPanel";
 import { BuyAsdfDialog } from "../components/BuyAsdfDialog";
+import { WalletHoldings } from "../components/WalletHoldings";
 import { FeedPanel } from "../components/FeedPanel";
 import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
 import { TwoFactorPanel } from "../components/TwoFactorPanel";
@@ -32,7 +33,6 @@ import {
 } from "../chaosMode";
 import { setAppearance, useAppearance } from "../appearance";
 import { useNow, usePolling } from "../hooks";
-import { formatTokens } from "../burn";
 import { useWalletBalance } from "../walletBalance";
 import { ago, shortAddress } from "../format";
 
@@ -327,26 +327,6 @@ function date(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
-function solText(lamports: string): string {
-  const sol = Number(lamports) / 1e9;
-  return sol.toLocaleString("en-US", { maximumFractionDigits: sol >= 100 ? 2 : 4 });
-}
-
-/** One balance in the Subscription section's wallet card. */
-function Coin({ name, value, note }: { name: string; value: string | null; note?: string | null }) {
-  return (
-    <div className="sub-coin">
-      <span className="sub-coin-name">{name}</span>
-      {value === null ? (
-        <span className="sub-coin-value skeleton" aria-label="Loading" />
-      ) : (
-        <strong className="sub-coin-value num">{value}</strong>
-      )}
-      {note && <small className="muted">{note}</small>}
-    </div>
-  );
-}
-
 /**
  * Subscription (redrawn 2026-10-18, user ask): how long access lasts, the signed-in wallet's SOL
  * and $ASDFASDFA, a Buy $ASDFASDFA button that opens the site's own Trade panel for it (every
@@ -358,7 +338,7 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
   const sub = usePolling<Subscription>("/subscription", 300_000);
   const [buying, setBuying] = useState(false);
   const access = account?.access;
-  const { balance, error: balanceError } = funds;
+  const { balance } = funds;
   const mint = balance?.mint ?? sub.data?.price?.mint ?? null;
   const asdfRaw = balance ? BigInt(balance.totalRaw) : null;
   const price = sub.data?.price;
@@ -422,35 +402,16 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
                   Refresh
                 </button>
               </div>
-              {balanceError && !balance ? (
-                <p className="error small sub-coins-error">
-                  Couldn&apos;t read your balances: {balanceError}{" "}
-                  <button type="button" className="link" onClick={funds.reload}>
-                    Try again
-                  </button>
-                </p>
-              ) : (
-                <div className="sub-coins">
-                  <Coin
-                    name="SOL"
-                    value={
-                      balance ? (balance.solLamports != null ? solText(balance.solLamports) : "–") : null
-                    }
-                    note={balance && balance.solLamports == null ? "couldn't read it" : null}
-                  />
-                  <Coin
-                    name="$ASDFASDFA"
-                    value={balance && asdfRaw !== null ? formatTokens(asdfRaw, balance.decimals) : null}
-                    note={
-                      months === null
-                        ? null
-                        : months >= 1
-                          ? `enough for ${months} month${months === 1 ? "" : "s"}`
-                          : "under a month's worth"
-                    }
-                  />
-                </div>
-              )}
+              <WalletHoldings
+                funds={funds}
+                asdfNote={
+                  months === null
+                    ? null
+                    : months >= 1
+                      ? `enough for ${months} month${months === 1 ? "" : "s"}`
+                      : "under a month's worth"
+                }
+              />
               <button
                 type="button"
                 className="primary sub-buy"
@@ -531,6 +492,7 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
           mint={mint}
           onClose={() => setBuying(false)}
           onBought={funds.reload}
+          balance={balance}
         />
       )}
     </section>
