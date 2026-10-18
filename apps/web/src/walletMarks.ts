@@ -1,11 +1,14 @@
+import type { ChartMarkKind } from "./api";
+import { CHART_MARK_MAX_SOL, CHART_MARK_MIN_SOL } from "./appearance";
 import { shortAddress } from "./format";
 
 /**
  * Labeled-wallet trade marks on the token chart (user ask 2026-10-18): the trades of KOLs, their
  * side wallets and the other flagged wallets in the coin (apps/api/src/tokenChart.ts MarkedWallet),
  * drawn as lettered rings, apart from a Pro trader's own buy and sell arrows. The reader picks
- * which kinds of wallet show and the smallest trade that does; trades under MIN_SOL_FLOOR never
- * show (only the reader's own trades do, and those are drawn elsewhere).
+ * which kinds of wallet show and the smallest trade that does in Customize (saved with the feed's
+ * appearance, so every device marks the same); trades under MIN_SOL_FLOOR never show (only the
+ * reader's own trades do, and those are drawn elsewhere).
  */
 
 /** A flagged wallet as the chart answer sends it, the parts the marks read. */
@@ -19,7 +22,7 @@ export interface MarkSource {
 }
 
 /** The kinds of wallet a reader can show or hide, in the order the picker lists them. */
-export type MarkKind = "kol" | "known" | "funded" | "probable" | "dev" | "risky" | "winner" | "linked";
+export type MarkKind = ChartMarkKind;
 
 export const MARK_KINDS: readonly { kind: MarkKind; label: string; letter: string; title: string }[] = [
   { kind: "kol", label: "KOLs", letter: "K", title: "Wallets on the KOL roster" },
@@ -38,59 +41,31 @@ export const MARK_KINDS: readonly { kind: MarkKind; label: string; letter: strin
 ];
 
 /** Trades under this many SOL are never marked, whatever the setting. */
-export const MIN_SOL_FLOOR = 0.25;
+export const MIN_SOL_FLOOR = CHART_MARK_MIN_SOL;
 export const DEFAULT_MIN_SOL = 0.5;
+const MAX_SOL = CHART_MARK_MAX_SOL;
 
+/** What the reader chose in Customize (FeedAppearance's chartMarks, chartMarkKinds, chartMarkMinSol). */
 export interface MarkPrefs {
   on: boolean;
-  kinds: MarkKind[];
+  kinds: readonly MarkKind[];
   minSol: number;
 }
 
-export const DEFAULT_MARK_PREFS: MarkPrefs = {
-  on: true,
-  kinds: MARK_KINDS.map((k) => k.kind),
-  minSol: DEFAULT_MIN_SOL,
-};
+/** The reader's appearance as mark prefs. */
+export function markPrefsOf(look: {
+  chartMarks: boolean;
+  chartMarkKinds: readonly MarkKind[];
+  chartMarkMinSol: number;
+}): MarkPrefs {
+  return { on: look.chartMarks, kinds: look.chartMarkKinds, minSol: look.chartMarkMinSol };
+}
 
-const PREFS_KEY = "ts.chartWalletMarks.v1";
-
-/** A size setting held to the floor; anything unreadable is the default. */
+/** A typed size held to the floor (and the account's ceiling); anything unreadable is the default. */
 export function clampMinSol(v: unknown): number {
-  const n = typeof v === "number" ? v : typeof v === "string" ? Number(v) : Number.NaN;
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : Number.NaN;
   if (!Number.isFinite(n)) return DEFAULT_MIN_SOL;
-  return Math.max(MIN_SOL_FLOOR, Math.round(n * 100) / 100);
-}
-
-/** Exported for tests. Stored prefs, read leniently: unknown kinds dropped, the size clamped. */
-export function parseMarkPrefs(raw: unknown): MarkPrefs {
-  if (!raw || typeof raw !== "object") return DEFAULT_MARK_PREFS;
-  const r = raw as Record<string, unknown>;
-  const known = new Set<string>(MARK_KINDS.map((k) => k.kind));
-  return {
-    on: typeof r.on === "boolean" ? r.on : DEFAULT_MARK_PREFS.on,
-    kinds: Array.isArray(r.kinds)
-      ? MARK_KINDS.map((k) => k.kind).filter((k) => (r.kinds as unknown[]).includes(k) && known.has(k))
-      : DEFAULT_MARK_PREFS.kinds,
-    minSol: r.minSol === undefined ? DEFAULT_MIN_SOL : clampMinSol(r.minSol),
-  };
-}
-
-export function loadMarkPrefs(): MarkPrefs {
-  try {
-    const raw = localStorage.getItem(PREFS_KEY);
-    return raw ? parseMarkPrefs(JSON.parse(raw)) : DEFAULT_MARK_PREFS;
-  } catch {
-    return DEFAULT_MARK_PREFS;
-  }
-}
-
-export function saveMarkPrefs(p: MarkPrefs): void {
-  try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(p));
-  } catch {
-    // A private window or blocked storage: the setting lasts this visit only.
-  }
+  return Math.min(MAX_SOL, Math.max(MIN_SOL_FLOOR, Math.round(n * 100) / 100));
 }
 
 /** Every kind a wallet counts as, strongest first (the order of MARK_KINDS). */

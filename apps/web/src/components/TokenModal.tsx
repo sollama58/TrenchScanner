@@ -15,6 +15,7 @@ import {
 import { cachedGet } from "../cache";
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useId,
@@ -65,8 +66,9 @@ import {
   WalletStat,
 } from "./AlertCard";
 import { PriceChart, type ChartEvent } from "./PriceChart";
-import { WalletMarksPicker } from "./WalletMarksPicker";
-import { loadMarkPrefs, saveMarkPrefs, walletMarks, type MarkPrefs, type WalletMark } from "../walletMarks";
+import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
+import { CustomizeDrawer } from "./CustomizeDrawer";
+import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import {
   categoryText,
@@ -104,6 +106,7 @@ import {
   RobotIcon,
   SageIcon,
   ShieldIcon,
+  SlidersIcon,
 } from "./Icons";
 import { safetyChecks, safetyVerdict, type SafetyVerdict } from "../safetyScreen";
 
@@ -1381,13 +1384,12 @@ export function ChartCard({
   const young = firstTradeAt !== null && Date.now() - firstTradeAt <= FIRST_VIEW_MAX_AGE_MS;
   const shownRange: Range = range === "first" && !young ? "all" : range;
 
-  // Labeled wallets' trades on the line (user ask 2026-10-18), as the reader set them.
-  const [markPrefs, setMarkPrefsState] = useState<MarkPrefs>(loadMarkPrefs);
-  const setMarkPrefs = (p: MarkPrefs) => {
-    setMarkPrefsState(p);
-    saveMarkPrefs(p);
-  };
-  const [marksOpen, setMarksOpen] = useState(false);
+  // Labeled wallets' trades on the line (user ask 2026-10-18), as set in Customize › Chart wallet
+  // trades, which the header's link opens over the token view.
+  const look = useAppearance();
+  const markPrefs = useMemo(() => markPrefsOf(look), [look]);
+  const [customizing, setCustomizing] = useState(false);
+  const closeCustomize = useCallback(() => setCustomizing(false), []);
   const labeled = data?.wallets ?? [];
   const marks = useMemo(() => walletMarks(data?.wallets ?? [], markPrefs), [data?.wallets, markPrefs]);
 
@@ -1518,23 +1520,17 @@ export function ChartCard({
           {labeled.length > 0 && (
             <button
               type="button"
-              className={`tm-range cm-toggle${marksOpen ? " on" : ""}`}
-              aria-expanded={marksOpen}
-              title="Choose which labeled wallets' trades the chart marks"
-              onClick={() => setMarksOpen((o) => !o)}
+              className={`cm-link${customizing ? " on" : ""}`}
+              aria-expanded={customizing}
+              title="Choose which labeled wallets' trades the chart marks (Customize › Chart wallet trades)"
+              onClick={() => setCustomizing((o) => !o)}
             >
-              Wallet trades{markPrefs.on ? ` · ${marks.length}` : " · off"}
+              <SlidersIcon size={12} /> Wallet trades
+              <span className="num">{markPrefs.on ? marks.length : "off"}</span>
             </button>
           )}
         </h4>
-        {marksOpen && labeled.length > 0 && (
-          <WalletMarksPicker
-            prefs={markPrefs}
-            onChange={setMarkPrefs}
-            wallets={labeled}
-            shown={marks.length}
-          />
-        )}
+        <CustomizeDrawer open={customizing} onClose={closeCustomize} section={CHART_MARKS_SECTION} nested />
         {shownRange === "first" && (
           <FirstMinutesChart
             mint={card.token.mintAddress}

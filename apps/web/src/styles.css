@@ -11503,26 +11503,51 @@ img.tm-avatar {
 .pc-mark-dot.buy {
   background: var(--wk);
 }
-.tm-range.cm-toggle {
+/* The chart header's link to Customize › Chart wallet trades: small, but a gold-ringed pill so
+   it reads as the marks' own control. */
+.cm-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   margin-left: 6px;
-  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.cm-link:hover:not(:disabled),
+.cm-link.on {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.cm-link .num {
+  color: var(--warn-ink);
 }
 .cm-panel {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin: 2px 0 10px;
-  padding: 10px 12px;
+  scroll-margin-top: 12px;
+  margin: 0 -8px;
+  padding: 6px 8px;
   border-radius: var(--radius-s);
-  border: 1px solid var(--border);
-  background: var(--surface-3);
-  font-size: 12px;
+  transition: box-shadow 0.4s;
 }
-.cm-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 600;
+/* Opened from the chart's link: lit for a moment so the eye lands on it. */
+.cm-panel.lit {
+  animation: cm-lit 1.6s ease-out;
+}
+@keyframes cm-lit {
+  0%,
+  40% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 70%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 2px transparent;
+  }
 }
 .cm-kinds {
   display: flex;
@@ -11565,16 +11590,6 @@ img.tm-avatar {
   border-style: solid;
   background: var(--wk);
   color: var(--page);
-}
-.cm-count {
-  color: var(--muted);
-  font-weight: 500;
-}
-.cm-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 12px;
 }
 .cm-size {
   display: inline-flex;
