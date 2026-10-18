@@ -36,6 +36,8 @@ type CurveReader = Pick<HeliusClient, "getCurveStatesBatch">;
 
 export interface CurveTapeConfig {
   maxAgeMinutes: number;
+  /** Coins with an alert are followed this long after their newest alert, whatever their age. */
+  alertMinutes?: number;
   maxMints: number;
   streamCreditsPerDay: number;
   pollSeconds: number;
@@ -50,7 +52,10 @@ interface Followed {
   readAt: number | null;
 }
 
-const tape = new CurveTape();
+// Kept long enough for the price path recorder's alerted coins, launch to an hour past the alert
+// (the features still read 16 minutes). Memory follows the stream's update rate, which its daily
+// credit cap bounds, not the number of coins.
+const tape = new CurveTape({ keepMs: 90 * 60_000, maxTicks: 12_000 });
 const followed = new Map<string, Followed>();
 /** Mints whose curve address holds no curve (not Pump.fun) or a graduated one: not asked again. */
 const done = new Set<string>();
@@ -106,7 +111,9 @@ export function onCurveStreamUpdate(key: string, data: string, bytes: number, no
 
 /**
  * The scan's watchlist this cycle, in its order: the young Pump.fun coins in it are followed (up
- * to CURVE_TAPE_MAX_MINTS), and the ones that left it or aged out are dropped.
+ * to CURVE_TAPE_MAX_MINTS), and the ones that left it or aged out are dropped. `alerted` (newest
+ * alert per coin) go first and stay followed for CurveTapeConfig.alertMinutes after their alert,
+ * on the watchlist or not, so the price path recorder sees what came after a call.
  */
 export function followYoungCurves(
   tracked: readonly {
@@ -116,13 +123,21 @@ export function followYoungCurves(
     launchpad: string | null;
   }[],
   now = Date.now(),
+  alerted: readonly { mintAddress: string; alertedAt: Date; launchpad: string | null }[] = [],
 ): void {
   if (!cfg) return;
   const maxAgeMs = cfg.maxAgeMinutes * 60_000;
+  const alertMs = (cfg.alertMinutes ?? 0) * 60_000;
   const wanted = new Map<string, number>();
+  for (const a of alerted) {
+    if (wanted.size >= cfg.maxMints) break;
+    if (a.launchpad === STONKS_LAUNCHPAD || done.has(a.mintAddress)) continue;
+    if (now - a.alertedAt.getTime() > alertMs) continue;
+    if (!wanted.has(a.mintAddress)) wanted.set(a.mintAddress, wanted.size);
+  }
   for (const t of tracked) {
     if (wanted.size >= cfg.maxMints) break;
-    if (t.launchpad === STONKS_LAUNCHPAD || done.has(t.mintAddress)) continue;
+    if (t.launchpad === STONKS_LAUNCHPAD || done.has(t.mintAddress) || wanted.has(t.mintAddress)) continue;
     if (now - (t.launchedAt ?? t.firstSeenAt).getTime() > maxAgeMs) continue;
     wanted.set(t.mintAddress, wanted.size);
   }

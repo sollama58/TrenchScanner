@@ -103,6 +103,26 @@ describe("curve tape", () => {
     expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBeNull();
   });
 
+  it("keeps following an alerted coin past its age for alertMinutes after the alert", () => {
+    const reader = { getCurveStatesBatch: vi.fn(async () => new Map()) };
+    const stream = { watch: vi.fn(), unwatch: vi.fn(), coveredSince: vi.fn(() => null) };
+    stop = startCurveTape(reader, stream, {
+      maxAgeMinutes: 30,
+      alertMinutes: 60,
+      maxMints: 500,
+      streamCreditsPerDay: 100_000,
+      pollSeconds: 3_600,
+      pollMaxMints: 100,
+    });
+    const old = { ...young, launchedAt: new Date(NOW - 45 * 60_000) };
+    const alert = { mintAddress: MINT, alertedAt: new Date(NOW - 20 * 60_000), launchpad: null };
+    followYoungCurves([old], NOW, [alert]);
+    expect(stream.watch).toHaveBeenCalledWith(`curve:${MINT}`, [pumpCurveAddressOf(MINT)], NOW, "account");
+    // An hour past the alert, its age decides again: 45 minutes old is past 30.
+    followYoungCurves([old], NOW + 41 * 60_000, [alert]);
+    expect(stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+  });
+
   it("paces the stream's spend through the day", () => {
     expect(overStreamPace(9_000, 100_000, NOW - 12 * 3_600_000)).toBe(false);
     expect(overStreamPace(11_000, 100_000, NOW - 12 * 3_600_000)).toBe(true);

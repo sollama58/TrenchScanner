@@ -282,6 +282,11 @@ const envSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
   PRICE_PATH_RECORD_MAX_PER_DAY: z.coerce.number().int().nonnegative().default(1_500),
+  // While it is on, young coins are followed (and recorded) to PRICE_PATH_FOLLOW_MINUTES old
+  // instead of CURVE_TAPE_MAX_AGE_MINUTES, and a coin with a curated alert for
+  // PRICE_PATH_ALERT_MINUTES after its newest alert, whatever its age (user ask 2026-10-18).
+  PRICE_PATH_FOLLOW_MINUTES: z.coerce.number().positive().default(30),
+  PRICE_PATH_ALERT_MINUTES: z.coerce.number().nonnegative().default(60),
   PRICE_PATH_RETENTION_DAYS: z.coerce.number().int().positive().default(21),
   // The token chart's live tail (api's liveCurve.ts, user ask 2026-10-17: charts on the stream's
   // second-by-second updates): while a young coin's chart is open, the API follows its bonding curve
