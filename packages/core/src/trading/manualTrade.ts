@@ -16,6 +16,8 @@ import {
   parseLookupTableAddresses,
   priorityFeeOf,
   systemTransferInstruction,
+  type DecodedInstruction,
+  type DecodedMessage,
   type InstructionSpec,
 } from "./transaction.js";
 import {
@@ -351,4 +353,51 @@ async function readCurve(rpc: ManualTradeRpc, mint: string, random?: () => numbe
   const curve = data[0] ? parsePumpCurve(address, data[0]) : null;
   const buyback = data[1] ? pumpBuybackRecipient(data[1], random) : null;
   return { curve, buyback };
+}
+
+/** Lighthouse, whose assertion instructions Phantom and other wallets add to what they sign. */
+export const LIGHTHOUSE_PROGRAM = "L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95";
+
+/**
+ * Whether a transaction the wallet signed is the one built for it: same payer, signer and
+ * blockhash, and the same instructions in the same order, each with the same program, accounts
+ * and data. A wallet may set its own compute budget (within the custom-fee ceiling) and add
+ * Lighthouse's guard assertions, so those are the only differences allowed. Accounts compare by
+ * where they come from (a key in the message, or a lookup table's entry), so a wallet that
+ * re-indexes the message to add its own keys still matches. Returns why not, or null.
+ */
+export function signedMatchesBuild(built: DecodedMessage, signed: DecodedMessage): string | null {
+  if (signed.staticKeys[0] !== built.staticKeys[0]) return "a different fee payer";
+  if (signed.requiredSignatures !== 1) return "more than one signer";
+  if (signed.recentBlockhash !== built.recentBlockhash) return "a different blockhash";
+  const program = (m: DecodedMessage, ix: DecodedInstruction) => m.staticKeys[ix.programIdIndex];
+  const canonical = (m: DecodedMessage) => {
+    const loaded = [
+      ...m.lookups.flatMap((l) => l.writable.map((i) => `${l.table}#${i}`)),
+      ...m.lookups.flatMap((l) => l.readonly.map((i) => `${l.table}#${i}`)),
+    ];
+    const key = (index: number) =>
+      index < m.staticKeys.length ? m.staticKeys[index] : loaded[index - m.staticKeys.length];
+    return m.instructions
+      .filter((ix) => program(m, ix) !== PROGRAM.computeBudget && program(m, ix) !== LIGHTHOUSE_PROGRAM)
+      .map(
+        (ix) =>
+          `${program(m, ix)}|${ix.accountIndexes.map(key).join(",")}|${Buffer.from(ix.data).toString("hex")}`,
+      );
+  };
+  const a = canonical(built);
+  const b = canonical(signed);
+  if (a.length !== b.length || a.some((x, i) => x !== b[i])) return "different instructions";
+  // The wallet's own compute budget, if it set one, within the ceiling a trader may set.
+  let limit = 200_000n;
+  let price = 0n;
+  for (const ix of signed.instructions) {
+    if (program(signed, ix) !== PROGRAM.computeBudget) continue;
+    const d = ix.data;
+    const view = new DataView(d.buffer, d.byteOffset, d.byteLength);
+    if (d[0] === 2 && d.length >= 5) limit = BigInt(view.getUint32(1, true));
+    else if (d[0] === 3 && d.length >= 9) price = view.getBigUint64(1, true);
+  }
+  if ((price * limit) / 1_000_000n > MAX_CUSTOM_FEE_LAMPORTS) return "a priority fee over 0.01 SOL";
+  return null;
 }
