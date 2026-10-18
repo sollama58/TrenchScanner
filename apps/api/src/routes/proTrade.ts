@@ -4,6 +4,8 @@ import { z } from "zod";
 import {
   buildManualTrade,
   estimateManualFees,
+  estimateSwapCosts,
+  type SwapCosts,
   decodeMessage,
   isSenderTipAccount,
   JupiterSwapClient,
@@ -81,6 +83,15 @@ const feeSchema = z.object({
     .optional(),
 });
 
+const costsSchema = z.object({
+  mint: z.string().refine(looksLikeSolanaAddress, "not a token address"),
+  /** The buy the swap costs are quoted on, lamports (the panel's first buy button). */
+  refLamports: z
+    .string()
+    .regex(/^\d{1,12}$/)
+    .optional(),
+});
+
 const sendSchema = z.object({
   transaction: z.string().min(1).max(2_000),
   speed: z.enum(["eco", "turbo"]),
@@ -114,6 +125,12 @@ const EXPIRY_MARGIN_BLOCKS = 10;
 const RETIRED_KEEP_MS = 5 * 60_000;
 /** Parsed transactions kept (they never change), across every wallet and coin. */
 const MAX_CACHED_TRADES = 20_000;
+/** Swap costs (a Jupiter quote each) are reused this long: the panel re-reads its fee every 20s. */
+const SWAP_COSTS_TTL_MS = 60_000;
+const MAX_CACHED_SWAP_COSTS = 2_000;
+/** The reference buy when the panel names none: 0.1 SOL. */
+const DEFAULT_REF_LAMPORTS = 100_000_000n;
+const MAX_REF_LAMPORTS = 100_000_000_000n;
 
 interface InFlight {
   base64: string;
@@ -135,6 +152,19 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   const tradeCache = new Map<string, WalletTrade | null>();
   const positions = new Map<string, { at: number; body: unknown }>();
   const supplies = new Map<string, { at: number; raw: bigint; decimals: number }>();
+  const swapCosts = new Map<string, { at: number; costs: SwapCosts | null }>();
+  /** The swap costs for a wallet's buy of `ref` lamports of `mint`, cached; null when they can't be read. */
+  const swapCostsFor = async (wallet: string, mint: string, ref: bigint): Promise<SwapCosts | null> => {
+    const key = `${wallet}:${mint}:${ref}`;
+    const hit = swapCosts.get(key);
+    if (hit && Date.now() - hit.at < SWAP_COSTS_TTL_MS) return hit.costs;
+    const costs = await estimateSwapCosts({ rpc, jupiter }, { wallet, mint, referenceLamports: ref }).catch(
+      () => null,
+    );
+    if (swapCosts.size >= MAX_CACHED_SWAP_COSTS) swapCosts.delete(swapCosts.keys().next().value!);
+    swapCosts.set(key, { at: Date.now(), costs });
+    return costs;
+  };
   const inFlight = new Map<string, InFlight>();
   // Trades the resend loop has stopped resending, kept a while so their status can still say
   // "expired" rather than pending forever.
@@ -274,6 +304,30 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       tipLamports: fees.tipLamports.toString(),
       baseFeeLamports: fees.baseFeeLamports.toString(),
       platformFeeLamports: "0",
+    };
+  });
+
+  // The rest of what a buy costs (user ask 2026-10-18): the coin's transfer tax, the route's pool
+  // and LP fees, price impact and a first buy's account rent. Each part it can't read is null.
+  app.get("/trade/costs", { config: { rateLimit: READ_RATE_LIMIT } }, async (request, reply) => {
+    const who = await proWallet(request, reply);
+    if (!who) return;
+    const parsed = costsSchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
+    const q = parsed.data;
+    let ref = q.refLamports !== undefined ? BigInt(q.refLamports) : DEFAULT_REF_LAMPORTS;
+    if (ref <= 0n) ref = DEFAULT_REF_LAMPORTS;
+    if (ref > MAX_REF_LAMPORTS) ref = MAX_REF_LAMPORTS;
+    const costs = await swapCostsFor(who.wallet, q.mint, ref);
+    if (!costs) return reply.code(503).send({ error: "Couldn't read the swap's costs just now." });
+    return {
+      refLamports: ref.toString(),
+      transferFeeBps: costs.transferFeeBps,
+      poolFeeBps: costs.poolFeeBps,
+      venues: costs.venues,
+      priceImpactPct: costs.priceImpactPct,
+      accountRentLamports: costs.accountRentLamports.toString(),
+      platformFeeBps: 0,
     };
   });
 

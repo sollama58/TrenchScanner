@@ -127,6 +127,8 @@ export interface MintInfo {
   extensions: string[];
   /** Absent when the RPC didn't say. */
   decimals?: number;
+  /** A Token-2022 transfer fee, basis points (the higher of its current and scheduled rates); 0 without one. */
+  transferFeeBps?: number;
 }
 
 /** A transaction as getTransaction's "json" encoding returns it (the fields read here). */
@@ -306,7 +308,13 @@ export class TradingRpc implements GuardRpc {
               mintAuthority?: string | null;
               freezeAuthority?: string | null;
               decimals?: number;
-              extensions?: { extension?: string }[];
+              extensions?: {
+                extension?: string;
+                state?: {
+                  newerTransferFee?: { transferFeeBasisPoints?: number };
+                  olderTransferFee?: { transferFeeBasisPoints?: number };
+                };
+              }[];
             };
           };
         };
@@ -321,6 +329,7 @@ export class TradingRpc implements GuardRpc {
       freezeAuthority: info.freezeAuthority ?? null,
       extensions: (info.extensions ?? []).map((e) => e.extension ?? "unknown"),
       ...(typeof info.decimals === "number" ? { decimals: info.decimals } : {}),
+      transferFeeBps: transferFeeBpsOf(info.extensions ?? []),
     };
   }
 
@@ -572,4 +581,23 @@ export class RpcError extends Error {
   ) {
     super(`${method}: ${code} ${message}`);
   }
+}
+
+/** The transfer fee a mint's jsonParsed extensions set, basis points; 0 without one. */
+export function transferFeeBpsOf(
+  extensions: {
+    extension?: string;
+    state?: {
+      newerTransferFee?: { transferFeeBasisPoints?: number };
+      olderTransferFee?: { transferFeeBasisPoints?: number };
+    };
+  }[],
+): number {
+  const config = extensions.find((e) => e.extension === "transferFeeConfig")?.state;
+  if (!config) return 0;
+  const rates = [
+    config.newerTransferFee?.transferFeeBasisPoints,
+    config.olderTransferFee?.transferFeeBasisPoints,
+  ];
+  return Math.max(0, ...rates.filter((r): r is number => typeof r === "number" && Number.isFinite(r)));
 }

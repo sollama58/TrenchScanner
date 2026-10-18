@@ -228,6 +228,20 @@ export interface FeeEstimate {
   platformFeeLamports: string;
 }
 
+/** GET /pro/trade/costs: the rest of what a buy of refLamports costs, beyond the network. */
+export interface SwapCostEstimate {
+  refLamports: string;
+  /** The coin's own transfer tax (Token-2022), basis points of every buy and sell; null when unread. */
+  transferFeeBps: number | null;
+  /** The pools' LP, curve and protocol fees on the route, basis points; null when unknown. */
+  poolFeeBps: number | null;
+  venues: string[];
+  /** Price impact of the reference buy, percent. */
+  priceImpactPct: number | null;
+  /** The token account's rent on a first buy, refunded when it is closed; "0" when the wallet has one. */
+  accountRentLamports: string;
+}
+
 /** The expected network fee for a trade on `mint` with these settings, re-read every 20s. */
 export function useFeeEstimate(mint: string, settings: TradeSettings): FeeEstimate | null {
   const [fee, setFee] = useState<FeeEstimate | null>(null);
@@ -248,6 +262,31 @@ export function useFeeEstimate(mint: string, settings: TradeSettings): FeeEstima
     };
   }, [params]);
   return fee;
+}
+
+/**
+ * The swap costs of a buy of `refSol` on `mint` (GET /pro/trade/costs), re-read every minute: a
+ * Jupiter quote each, so quoted on the first buy button rather than every typed amount.
+ */
+export function useSwapCosts(mint: string, refSol: number): SwapCostEstimate | null {
+  const [costs, setCosts] = useState<SwapCostEstimate | null>(null);
+  const ref = String(Math.round(refSol * 1e9));
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      api<SwapCostEstimate>(`/pro/trade/costs?${new URLSearchParams({ mint, refLamports: ref })}`)
+        .then((c) => live && setCosts(c))
+        .catch(() => undefined);
+    void load();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 60_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [mint, ref]);
+  return costs;
 }
 
 // ---- The wallet's position in a coin ----
