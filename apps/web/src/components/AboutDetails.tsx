@@ -1,4 +1,5 @@
 import { BoltIcon, BrainIcon, SlidersIcon } from "./Icons";
+import { ExitPlanDetails } from "./ExitPlanInfo";
 
 type Targets = { hitRate2xPct: number; hitRate4xPct: number };
 
@@ -9,6 +10,7 @@ const SECTIONS = [
   { id: "fp-alerts", label: "Alerts" },
   { id: "fp-models", label: "Models" },
   { id: "fp-grading", label: "Grading" },
+  { id: "fp-exit-plan", label: "Exit plan" },
   { id: "fp-card", label: "Card terms" },
   { id: "fp-weather", label: "Weather" },
 ] as const;
@@ -244,6 +246,16 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           <dt>Grading</dt>
           <dd>The window has closed and the result is being worked out.</dd>
         </dl>
+      </section>
+
+      <section id="fp-exit-plan">
+        <h3>Profit and return: the exit plan</h3>
+        <p>
+          Every average profit and return on the site, on the Models tab, the feed&apos;s stats and the
+          Lighthouse, runs each graded alert through one fixed exit plan, the same for every model and every
+          feed, and averages what it made.
+        </p>
+        <ExitPlanDetails />
       </section>
 
       <section id="fp-card">

@@ -8,6 +8,7 @@ import { TrendChart } from "../components/TrendChart";
 import { bucketMsOf, pricingChangeSlot } from "../pricingChange";
 import { renderTrendCard, type TrendCardData } from "../components/lighthouseCards";
 import { ShareButton } from "../components/ShareImageDialog";
+import { ExitPlanInfo } from "../components/ExitPlanInfo";
 import { LighthouseBody, WINDOWS as NOW_WINDOWS, type Days } from "../components/MarketLighthouse";
 import {
   ArrowRightIcon,
@@ -285,7 +286,7 @@ export function LighthouseTab({ guest = false }: { guest?: boolean }) {
                   : "No history summed yet"}
                 {d.coverage.summedAt ? ` · last summed ${ago(d.coverage.summedAt)}` : ""}
                 {" · "}
-                exit plan: {d.exitPlan}
+                <ExitPlanInfo text="exit plan" />: {d.exitPlan}
               </p>
             )}
           </>

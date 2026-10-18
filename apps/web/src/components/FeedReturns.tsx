@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { FeedReturns as FeedReturnsData } from "../api";
 import { usePolling } from "../hooks";
 import { multiple, pct, signedPct } from "../format";
+import { ExitPlanInfo } from "./ExitPlanInfo";
+import { exitPlanShort, useExitPlan } from "../exitPlan";
 import { PnlShare } from "./PnlShare";
 
 const LABELS: Record<number, string> = { 1: "1h", 6: "6h", 24: "24h", 168: "7d" };
@@ -56,6 +58,7 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
   const { data, error } = usePolling<FeedReturnsData>(path, 60_000, pollKey);
   const [hours, setHours] = useState(24);
   const [hover, setHover] = useState<number | null>(null);
+  const { plan } = useExitPlan();
   // The shared row's token, not its rank: a poll can re-rank the list under an open preview.
   const [sharing, setSharing] = useState<string | null>(null);
   const [topBy, setTopBy] = useState<TopBy>("all");
@@ -67,7 +70,10 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
 
   return (
     <section className="panel feed-returns">
-      <span className="eyebrow">Average return</span>
+      <span className="eyebrow">
+        Average return
+        <ExitPlanInfo />
+      </span>
       <div className="returns-tiles" role="tablist" aria-label="Window">
         {(
           data?.windows ??
@@ -226,10 +232,11 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
         </>
       )}
       <p className="faint small stats-note">
-        Each alert&apos;s return under the fixed exit plan (35% sold at 2x, 30% at 4x, 25% at 10x, the rest on
-        a trailing stop, stop at −50%), averaged by when it alerted. An alert counts once its return settles,
-        from 30 minutes to 3 hours after it fires, so the last hour fills in late. The top 3 are the alerts
-        that passed (hit 2x before a 50% drop), ranked by Peak, the figure each feed card shows.
+        Each alert&apos;s return under the fixed <ExitPlanInfo text="exit plan" />
+        {plan ? ` (${exitPlanShort(plan)})` : ""}, averaged by when it alerted. An alert counts once its
+        return settles, from 30 minutes to 3 hours after it fires, so the last hour fills in late. The top 3
+        are the alerts that passed (hit 2x before a 50% drop), ranked by Peak, the figure each feed card
+        shows.
       </p>
     </section>
   );

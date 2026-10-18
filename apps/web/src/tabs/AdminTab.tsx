@@ -18,6 +18,7 @@ import { adminCall } from "../tradeConfirm";
 import { FeedSimAdmin } from "./AdminFeedSim";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
+import { ExitPlanInfo } from "../components/ExitPlanInfo";
 
 // The trading bot's section is its own chunk: most admin visits never open it.
 const TradingBot = lazy(() => import("./TradingTab").then((m) => ({ default: m.TradingTab })));
@@ -921,11 +922,9 @@ function Alerts() {
           {(h) => (
             <div className="stack">
               <p className="muted small">
-                Profit follows every graded alert with one fixed exit plan:{" "}
-                {h.rules?.exitPlan ??
-                  "sell 35% at 2x, 30% at 4x and 25% at 10x, ride what is still held on a trailing exit 40% off its high from the first sale, out at 3 hours, stop at -50% before the first sale, close an alert that never sold at 30 minutes."}{" "}
-                Total profit is in stakes, staking the same amount on every alert. Filter matches have no
-                simulated result.
+                Profit follows every graded alert with one fixed <ExitPlanInfo text="exit plan" />
+                {h.rules?.exitPlan ? `: ${h.rules.exitPlan}` : "."} Total profit is in stakes, staking the
+                same amount on every alert. Filter matches have no simulated result.
               </p>
               <h3>Model alerts by model</h3>
               <Table

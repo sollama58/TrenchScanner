@@ -8,6 +8,7 @@ import {
   loadNarrativeNoteReadiness,
   narrativeNoteReadiness,
   emptyRecord,
+  exitPlanView,
   currentFreeAccessPeriod,
   freeAccessPhase,
   recentScoreScale,
@@ -61,6 +62,11 @@ export async function registerConfigRoutes(app: FastifyInstance, opts: { env: En
     staleWhileRevalidateMs: SCORE_STALE_MS,
   });
   app.get("/score", () => scoreCache.get(buildScoreConfig));
+
+  // The fixed exit plan every simulated return is graded on (curation/profitSim.ts), for the web's
+  // exit plan popup beside average profit and return. Public and static: it changes with a deploy.
+  const exitPlan = exitPlanView();
+  app.get("/exit-plan", () => exitPlan);
 
   // Free Access, for the sign-in page: whether it is open (or coming) and until when. Public like
   // the rest - the times are what an admin announces anyway. Not cached: one indexed read of a

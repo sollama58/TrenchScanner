@@ -7950,6 +7950,26 @@ html:has(dialog.about-modal[open]) {
   padding: 2px;
 }
 
+/* The exit plan popup (ExitPlanInfo.tsx): its worked examples, label left and return right. */
+.exit-plan-examples {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 10px;
+  display: grid;
+  gap: 4px;
+}
+.exit-plan-examples li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+button.link.exit-plan-link {
+  font: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 /* Filter editor: the narrative theme pickers (one checkbox per TokenSage top-level theme). */
 .check-list {
   display: flex;
