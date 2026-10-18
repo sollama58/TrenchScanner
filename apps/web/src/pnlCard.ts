@@ -67,7 +67,7 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, W: number, H: number) {
   ctx.fillStyle = "#0c0d12";
   ctx.fillRect(0, 0, W, H);
   // A thin flame bar along the top edge: the brand, without glows.
-  ctx.fillStyle = "#e2581b";
+  ctx.fillStyle = "#963a18";
   ctx.fillRect(0, 0, W, 6);
   // Faint radar arcs, echoing the mark.
   ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";

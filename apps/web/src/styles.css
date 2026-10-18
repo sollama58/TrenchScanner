@@ -20,11 +20,11 @@
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.13);
   --highlight: rgba(255, 255, 255, 0.05);
-  /* Flame (user decision 2026-10-18): ember orange for fills, a lighter flame tip for rings and
-     accents, and a readable orange for text. */
-  --brand-a: #e2581b;
-  --brand-b: #ff8a3d;
-  --brand-ink: #ff9f66;
+  /* Dark flame (user decision 2026-10-18, toned down the same day): deep ember for fills, a
+     warmer ember for rings and accents, and a muted orange for text. */
+  --brand-a: #963a18;
+  --brand-b: #ad4a22;
+  --brand-ink: #c4825f;
   --series-1: #3987e5;
   --series-2: #d95926;
   /* Slots 3-5 of the categorical order, for charts with more than two series (Market Lighthouse). */
@@ -72,9 +72,9 @@
     --border: rgba(12, 14, 20, 0.08);
     --border-strong: rgba(12, 14, 20, 0.16);
     --highlight: rgba(255, 255, 255, 0.9);
-    --brand-a: #c84a14;
-    --brand-b: #d9531a;
-    --brand-ink: #a83c0a;
+    --brand-a: #9a3a15;
+    --brand-b: #a8431c;
+    --brand-ink: #8a3412;
     --series-1: #2a78d6;
     --series-2: #eb6834;
     --series-3: #1baf7a;
@@ -108,9 +108,9 @@
   --border: rgba(12, 14, 20, 0.08);
   --border-strong: rgba(12, 14, 20, 0.16);
   --highlight: rgba(255, 255, 255, 0.9);
-  --brand-a: #c84a14;
-  --brand-b: #d9531a;
-  --brand-ink: #a83c0a;
+  --brand-a: #9a3a15;
+  --brand-b: #a8431c;
+  --brand-ink: #8a3412;
   --series-1: #2a78d6;
   --series-2: #eb6834;
   --series-3: #1baf7a;

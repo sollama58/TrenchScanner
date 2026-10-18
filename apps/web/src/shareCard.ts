@@ -18,8 +18,8 @@ export const TRACK = "rgba(255, 255, 255, 0.08)";
 export const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"];
 export const OTHER = "#4a5163";
 /** The flame brand (styles.css --brand-a, --brand-b). */
-export const BRAND_A = "#e2581b";
-export const BRAND_B = "#ff8a3d";
+export const BRAND_A = "#963a18";
+export const BRAND_B = "#ad4a22";
 
 export const PAD = 64;
 export const BODY_TOP = 252;
