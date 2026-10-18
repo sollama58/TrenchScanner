@@ -16523,6 +16523,47 @@ body:has(.util-toast) .bug-fab {
 .tm-fee-none {
   color: var(--muted);
 }
+/* Everything under the bar folds away (user ask 2026-10-18), shut by default; a taxed coin's
+   chip stays on the toggle so the tax is never hidden. */
+.tm-fee-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink-2);
+}
+.tm-fee-more > summary::-webkit-details-marker {
+  display: none;
+}
+.tm-fee-more > summary:hover {
+  color: var(--ink);
+}
+.tm-fee-more > summary svg {
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+.tm-fee-more[open] > summary svg {
+  transform: none;
+}
+.tm-fee-more-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.tm-fee-tax-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
 /* A taxed coin: a warning card with an emoji-style triangle. */
 .tm-fee-warn {
   display: flex;

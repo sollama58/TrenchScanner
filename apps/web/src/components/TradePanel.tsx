@@ -23,7 +23,7 @@ import {
 } from "../proTrade";
 import { WalletTimeoutError } from "../wallet";
 import { renderPositionCard } from "../pnlCard";
-import { BoltIcon, CheckIcon, GearIcon, InfoIcon, ShareIcon, ShieldIcon } from "./Icons";
+import { BoltIcon, CheckIcon, ChevronDownIcon, GearIcon, InfoIcon, ShareIcon, ShieldIcon } from "./Icons";
 import { ShareImageDialog } from "./ShareImageDialog";
 
 /**
@@ -275,101 +275,113 @@ function FeeExplainer({
           ))}
         </div>
       )}
-      {fee && (
-        <div className="tm-fee-groups">
-          <div className="tm-fee-group">
-            <span className="tm-fee-group-title">Solana network</span>
-            <ul className="tm-fee-rows">
-              {network.map((p) => (
-                <li key={p.key}>
-                  <i className={`tm-fee-dot ${p.key}`} aria-hidden="true" />
-                  <span>{p.label}</span>
-                  <span className="num">{solText(p.sol)}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="tm-fee-group">
-            <span className="tm-fee-group-title">The swap</span>
-            <ul className="tm-fee-rows">
-              {swapParts.map((p) => (
-                <li key={p.key}>
-                  <i className={`tm-fee-dot ${p.key}`} aria-hidden="true" />
-                  <span>
-                    {p.label}
-                    {p.rate && <em className="num"> {p.rate}</em>}
-                  </span>
-                  <span className="num">{solText(p.sol)}</span>
-                </li>
-              ))}
-              {swap && (swap.transferFeeBps === 0 || swap.transferFeeBps === null) && (
-                <li className="tm-fee-none">
-                  <i className="tm-fee-dot none" aria-hidden="true" />
-                  <span>Token transfer tax</span>
-                  <span className="num">{swap.transferFeeBps === 0 ? "none" : "couldn't read"}</span>
-                </li>
-              )}
-              {swap && swap.poolFeeBps === null && (
-                <li className="tm-fee-none">
-                  <i className="tm-fee-dot none" aria-hidden="true" />
-                  <span>Pool and LP fees</span>
-                  <span className="num">in the quote</span>
-                </li>
-              )}
-              {!swap && (
-                <li className="tm-fee-none">
-                  <i className="tm-fee-dot none" aria-hidden="true" />
-                  <span>Pool fees and taxes couldn&apos;t be read just now</span>
-                </li>
-              )}
-              <li className="tm-fee-zero">
-                <i className="tm-fee-dot zero" aria-hidden="true" />
-                <span>TrenchScanner platform fee</span>
-                <strong className="num">0%</strong>
+      <details className="tm-fee-more">
+        <summary>
+          <ChevronDownIcon size={13} />
+          <span>Fee breakdown</span>
+          {swap && swap.transferFeeBps !== null && swap.transferFeeBps > 0 && (
+            <span className="tm-fee-tax-chip">⚠ {bpsText(swap.transferFeeBps ?? 0)} transfer tax</span>
+          )}
+        </summary>
+        <div className="tm-fee-more-body">
+          {fee && (
+            <div className="tm-fee-groups">
+              <div className="tm-fee-group">
+                <span className="tm-fee-group-title">Solana network</span>
+                <ul className="tm-fee-rows">
+                  {network.map((p) => (
+                    <li key={p.key}>
+                      <i className={`tm-fee-dot ${p.key}`} aria-hidden="true" />
+                      <span>{p.label}</span>
+                      <span className="num">{solText(p.sol)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="tm-fee-group">
+                <span className="tm-fee-group-title">The swap</span>
+                <ul className="tm-fee-rows">
+                  {swapParts.map((p) => (
+                    <li key={p.key}>
+                      <i className={`tm-fee-dot ${p.key}`} aria-hidden="true" />
+                      <span>
+                        {p.label}
+                        {p.rate && <em className="num"> {p.rate}</em>}
+                      </span>
+                      <span className="num">{solText(p.sol)}</span>
+                    </li>
+                  ))}
+                  {swap && (swap.transferFeeBps === 0 || swap.transferFeeBps === null) && (
+                    <li className="tm-fee-none">
+                      <i className="tm-fee-dot none" aria-hidden="true" />
+                      <span>Token transfer tax</span>
+                      <span className="num">{swap.transferFeeBps === 0 ? "none" : "couldn't read"}</span>
+                    </li>
+                  )}
+                  {swap && swap.poolFeeBps === null && (
+                    <li className="tm-fee-none">
+                      <i className="tm-fee-dot none" aria-hidden="true" />
+                      <span>Pool and LP fees</span>
+                      <span className="num">in the quote</span>
+                    </li>
+                  )}
+                  {!swap && (
+                    <li className="tm-fee-none">
+                      <i className="tm-fee-dot none" aria-hidden="true" />
+                      <span>Pool fees and taxes couldn&apos;t be read just now</span>
+                    </li>
+                  )}
+                  <li className="tm-fee-zero">
+                    <i className="tm-fee-dot zero" aria-hidden="true" />
+                    <span>TrenchScanner platform fee</span>
+                    <strong className="num">0%</strong>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          )}
+          {swap && swap.transferFeeBps !== null && swap.transferFeeBps > 0 && (
+            <div className="tm-fee-warn" role="note">
+              <WarnTriangle />
+              <div>
+                <strong>This coin has a {bpsText(swap.transferFeeBps)} transfer tax</strong>
+                <p>
+                  It comes off every buy and every sale, about{" "}
+                  <span className="num">
+                    {Number(((1 - (1 - swap.transferFeeBps / 10_000) ** 2) * 100).toFixed(2))}%
+                  </span>{" "}
+                  on a round trip before any other fee. It goes to whoever set the coin up, not to
+                  TrenchScanner.
+                </p>
+              </div>
+            </div>
+          )}
+          <ul className="tm-fee-notes">
+            <li>
+              <i className="tm-fee-dot priority" aria-hidden="true" />
+              <span>
+                <strong>Network fees</strong> go to Solana&apos;s validators.
+              </span>
+            </li>
+            <li>
+              <i className="tm-fee-dot pool" aria-hidden="true" />
+              <span>
+                <strong>Pool fees</strong> go to the pool and its liquidity providers.
+              </span>
+            </li>
+            {swap?.priceImpactPct != null && (
+              <li>
+                <InfoIcon size={12} />
+                <span>
+                  <strong>Price impact</strong> on a {solText(Number(swap.refLamports) / LAMPORTS)} buy is
+                  about <span className="num">{swap.priceImpactPct.toFixed(2)}%</span>, already in the quote
+                  and capped by your slippage.
+                </span>
               </li>
-            </ul>
-          </div>
+            )}
+          </ul>
         </div>
-      )}
-      {swap && swap.transferFeeBps !== null && swap.transferFeeBps > 0 && (
-        <div className="tm-fee-warn" role="note">
-          <WarnTriangle />
-          <div>
-            <strong>This coin has a {bpsText(swap.transferFeeBps)} transfer tax</strong>
-            <p>
-              It comes off every buy and every sale, about{" "}
-              <span className="num">
-                {Number(((1 - (1 - swap.transferFeeBps / 10_000) ** 2) * 100).toFixed(2))}%
-              </span>{" "}
-              on a round trip before any other fee. It goes to whoever set the coin up, not to TrenchScanner.
-            </p>
-          </div>
-        </div>
-      )}
-      <ul className="tm-fee-notes">
-        <li>
-          <i className="tm-fee-dot priority" aria-hidden="true" />
-          <span>
-            <strong>Network fees</strong> go to Solana&apos;s validators.
-          </span>
-        </li>
-        <li>
-          <i className="tm-fee-dot pool" aria-hidden="true" />
-          <span>
-            <strong>Pool fees</strong> go to the pool and its liquidity providers.
-          </span>
-        </li>
-        {swap?.priceImpactPct != null && (
-          <li>
-            <InfoIcon size={12} />
-            <span>
-              <strong>Price impact</strong> on a {solText(Number(swap.refLamports) / LAMPORTS)} buy is about{" "}
-              <span className="num">{swap.priceImpactPct.toFixed(2)}%</span>, already in the quote and capped
-              by your slippage.
-            </span>
-          </li>
-        )}
-      </ul>
+      </details>
       <span className="tm-fee-zero-badge">
         <CheckIcon size={12} />
         <strong>0% platform fee</strong>
