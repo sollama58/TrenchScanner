@@ -27,6 +27,7 @@ import {
   type VolumeCandle,
   type Zoom,
 } from "../priceChart";
+import type { PathStep } from "../pricePathing";
 import { markRadius, type WalletMark } from "../walletMarks";
 
 /** A moment marked on the time axis: an alert or a model's call. */
@@ -104,6 +105,7 @@ export function PriceChart({
   onZoom,
   kind = "line",
   onKind,
+  path = [],
 }: {
   points: Point[];
   /**
@@ -153,6 +155,11 @@ export function PriceChart({
   kind?: ChartKind;
   /** Shows the Line / Candles switch under the chart. */
   onKind?: (kind: ChartKind) => void;
+  /**
+   * Experimental (Customize › Token chart): the predicted price path from the latest reading,
+   * drawn dotted with its band past the line's end. The time axis makes room for it.
+   */
+  path?: PathStep[];
 }) {
   const id = useId().replace(/:/g, "");
   const boxRef = useRef<HTMLDivElement>(null);
@@ -188,7 +195,12 @@ export function PriceChart({
   }, []);
 
   const ext0 = extent?.t0 ?? points[0]?.t ?? 0;
-  const ext1 = extent?.t1 ?? points[points.length - 1]?.t ?? 0;
+  // A predicted path runs past the latest reading: the view's end makes room for it.
+  const pathShown = live && path.length > 1;
+  const ext1 = Math.max(
+    extent?.t1 ?? points[points.length - 1]?.t ?? 0,
+    pathShown ? path[path.length - 1]!.t : 0,
+  );
   const plotW = width - PAD.l - PAD.r;
 
   const geo = useMemo(() => {
@@ -248,8 +260,10 @@ export function PriceChart({
     // Zoomed, the axis fits what is in the window alone; the whole view also keeps the baseline
     // and the trader's entry (what their PnL is measured from) in sight.
     const extra = zoomed ? [] : [base, ...(entry !== null && entry > 0 ? [entry] : [])];
-    const lo = Math.min(...values, ...wicks, ...extra);
-    const hi = Math.max(...values, ...wicks, ...extra);
+    // The predicted line stays in sight; its band may run off the plot.
+    const guessed = pathShown ? path.filter((s) => s.t >= t0 && s.t <= t1).map((s) => s.v) : [];
+    const lo = Math.min(...values, ...wicks, ...extra, ...guessed);
+    const hi = Math.max(...values, ...wicks, ...extra, ...guessed);
     const axis = mcapAxis(lo, hi, PAD.t, height - PAD.b);
     const hiIdx = pts.reduce((best, p, i) => (p.v > pts[best]!.v ? i : best), 0);
     return {
@@ -270,7 +284,23 @@ export function PriceChart({
       tfWider,
       bars,
     };
-  }, [points, zoom, ext0, ext1, stepMs, plotW, height, events, entry, candles, kind, timeframe, origin]);
+  }, [
+    points,
+    zoom,
+    ext0,
+    ext1,
+    stepMs,
+    plotW,
+    height,
+    events,
+    entry,
+    candles,
+    kind,
+    timeframe,
+    origin,
+    path,
+    pathShown,
+  ]);
 
   const vols = useMemo(
     () =>
@@ -465,6 +495,29 @@ export function PriceChart({
   // The trader's own trades in view, and those by the hovered point.
   const shownTrades = trades.filter((tr) => tr.t >= geo.t0 && tr.t <= geo.t1);
   const hTrades = h ? shownTrades.filter((tr) => Math.abs(tr.t - h.t) <= Math.max(geo.step, 5_000)) : [];
+  // The predicted path in view, from the line's end: the dotted guess and its band, clipped to the plot.
+  const guess = (() => {
+    if (!pathShown || !atEnd) return null;
+    const steps = path.filter((s) => s.t > last.t && s.t <= geo.t1);
+    if (steps.length === 0) return null;
+    const clampY = (v: number) => Math.min(bottom, Math.max(PAD.t, axis.y(v)));
+    const at = (t: number, y: number) => `${x(t).toFixed(1)},${y.toFixed(1)}`;
+    const head = at(last.t, lastY);
+    const end = steps[steps.length - 1]!;
+    return {
+      line: `M${head} ${steps.map((s) => `L${at(s.t, axis.y(s.v))}`).join(" ")}`,
+      band: `M${head} ${steps.map((s) => `L${at(s.t, clampY(s.hi))}`).join(" ")} ${[...steps]
+        .reverse()
+        .map((s) => `L${at(s.t, clampY(s.lo))}`)
+        .join(" ")} Z`,
+      dots: steps.map((s) => ({ cx: x(s.t), cy: axis.y(s.v) })),
+      endX: x(end.t),
+      // The label sits under the band's end, or over it when the band runs to the plot's foot.
+      labelY: clampY(end.lo) + 14 <= bottom ? clampY(end.lo) + 14 : clampY(end.hi) - 6,
+      secs: Math.round((end.t - last.t) / 1_000),
+      change: end.v / last.v - 1,
+    };
+  })();
   const entryAt = entry !== null && entry > 0 ? axis.y(entry) : null;
   const entryY = entryAt !== null && entryAt >= PAD.t - 2 && entryAt <= bottom + 2 ? entryAt : null;
 
@@ -638,6 +691,30 @@ export function PriceChart({
           </g>
         ) : (
           <path d={line} className="pc-line" stroke={`url(#${id}-stroke)`} />
+        )}
+
+        {guess && (
+          <g className="pc-path">
+            <title>
+              {`Experimental predicted path: ${signedPct(guess.change * 100, 1)} over the next ${guess.secs}s in 5-second steps, with the band it usually lands in. A statistical guess from the last minute's trading, often wrong; not advice.`}
+            </title>
+            <path d={guess.band} className="pc-path-band" />
+            <path d={guess.line} className="pc-path-line" />
+            {guess.dots.map((d, i) => (
+              <circle key={i} cx={d.cx} cy={d.cy} r={1.6} className="pc-path-dot" />
+            ))}
+            {/* Too narrow to label without covering the line: the caption under the chart says it. */}
+            {guess.endX - x(last.t) >= 110 && (
+              <text
+                x={Math.min(width - PAD.r - 4, guess.endX)}
+                y={Math.max(PAD.t + 8, guess.labelY)}
+                textAnchor="end"
+                className="pc-path-label"
+              >
+                Predicted (experimental)
+              </text>
+            )}
+          </g>
         )}
 
         {shownScans.map((s) => (

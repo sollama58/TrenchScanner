@@ -132,6 +132,18 @@ const SECOND = 1_000;
 
 export class CurveTape {
   private readonly tapes = new Map<string, Tape>();
+  private readonly keepMs: number;
+  private readonly maxTicks: number;
+
+  /**
+   * `keepMs` / `maxTicks`: how far back and how many changes a mint's tape keeps (the features
+   * still read at most TAPE_MS of it). Longer for the worker's price path recorder, which saves the
+   * whole tape when a coin is let go.
+   */
+  constructor(opts: { keepMs?: number; maxTicks?: number } = {}) {
+    this.keepMs = Math.max(TAPE_MS, opts.keepMs ?? TAPE_MS);
+    this.maxTicks = Math.max(MAX_TICKS, opts.maxTicks ?? MAX_TICKS);
+  }
 
   get size(): number {
     return this.tapes.size;
@@ -190,11 +202,11 @@ export class CurveTape {
     if (!last || last.price !== price || last.realQuote !== state.realQuote) {
       tape.ticks.push({ at, price, realQuote: state.realQuote });
     }
-    const cutoff = at - TAPE_MS;
+    const cutoff = at - this.keepMs;
     let drop = 0;
     // Keep the newest tick at or before the cutoff: it is the price through the cutoff.
     while (drop + 1 < tape.ticks.length && tape.ticks[drop + 1]!.at <= cutoff) drop += 1;
-    if (tape.ticks.length - drop > MAX_TICKS) drop = tape.ticks.length - MAX_TICKS;
+    if (tape.ticks.length - drop > this.maxTicks) drop = tape.ticks.length - this.maxTicks;
     if (drop > 0) tape.ticks.splice(0, drop);
     tape.coveredFrom = Math.max(tape.coveredFrom, tape.ticks[0]!.at, cutoff);
     this.tapes.set(mint, tape);
@@ -296,6 +308,20 @@ export class CurveTape {
   /** Forgets a mint. */
   forget(mint: string): void {
     this.tapes.delete(mint);
+  }
+
+  /**
+   * A mint's tape as it stands: every change it holds (price, real quote reserve) since coveredFrom,
+   * oldest first, for the worker's price path recorder. Null when the mint has none.
+   */
+  snapshot(mint: string): {
+    coveredFrom: number;
+    quoteIsSol: boolean;
+    ticks: { at: number; price: number; realQuote: number }[];
+  } | null {
+    const t = this.tapes.get(mint);
+    if (!t || t.ticks.length === 0) return null;
+    return { coveredFrom: t.coveredFrom, quoteIsSol: t.quoteIsSol, ticks: t.ticks.map((k) => ({ ...k })) };
   }
 
   private evictOldest(): void {

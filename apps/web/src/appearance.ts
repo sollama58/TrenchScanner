@@ -79,6 +79,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   chartMarkMinSol: 0.5,
   // The token chart draws a line unless the reader picks candles (user ask 2026-10-18).
   chartStyle: "line",
+  // Experimental and off unless the reader turns it on (user ask 2026-10-18).
+  chartPathing: false,
   // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own), the header's
   // "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
@@ -328,6 +330,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
         ? Math.min(CHART_MARK_MAX_SOL, Math.max(CHART_MARK_MIN_SOL, r.chartMarkMinSol))
         : d.chartMarkMinSol,
     chartStyle: r.chartStyle === "candles" || r.chartStyle === "line" ? r.chartStyle : d.chartStyle,
+    chartPathing: typeof r.chartPathing === "boolean" ? r.chartPathing : d.chartPathing,
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
       : d.hidden,
@@ -370,6 +373,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartMarkKinds,
     chartMarkMinSol,
     chartStyle,
+    chartPathing,
   } = current;
   return normalizeAppearance({
     ...DEFAULT_APPEARANCE,
@@ -397,6 +401,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartMarkKinds,
     chartMarkMinSol,
     chartStyle,
+    chartPathing,
   });
 }
 
