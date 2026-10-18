@@ -2875,6 +2875,17 @@ legend {
   color: var(--brand-ink);
   background: color-mix(in srgb, var(--brand-a) 14%, transparent);
 }
+.util-cost-free {
+  color: var(--good-ink);
+  background: var(--good-wash);
+}
+.util-free-note {
+  color: var(--good-ink);
+}
+.util-free-rate {
+  color: var(--good-ink);
+  font-weight: 650;
+}
 .util-form {
   display: flex;
   gap: 8px;

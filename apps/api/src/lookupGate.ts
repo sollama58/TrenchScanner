@@ -65,6 +65,31 @@ export async function tradedMint(wallet: string, mint: string, now = Date.now())
   return row !== null;
 }
 
+/** Why a lookup costs nothing: the subject is one the dashboard already opens free for this reader. */
+export type FreeLookupReason = "tracked" | "traded" | "own";
+
+/**
+ * Whether looking `subject` up would cost TrenchScanner nothing it doesn't already spend: a coin
+ * the scanner tracks (or the reader traded with Pro Mode), a wallet it already knows, the reader's
+ * own wallet. The token and wallet modals open these free (allowLookupRead), so the Utilities tab
+ * doesn't charge for them either (user ask 2026-10-18). Null when the lookup is paid.
+ */
+export async function freeLookupReason(
+  reader: string,
+  utility: UtilityKind,
+  subject: string,
+): Promise<FreeLookupReason | null> {
+  if (utility === "wallet") {
+    if (subject === reader) return "own";
+    return (await walletOnFeed(subject)) ? "tracked" : null;
+  }
+  if (await mintOnFeed(subject)) return "tracked";
+  // A coin the reader traded with Pro Mode: the TRADES panel scanned it on the entry, and its
+  // card opens the token modal for as long as the trade is listed there (routes/proTrades.ts).
+  if (await tradedMint(reader, subject)) return "traded";
+  return null;
+}
+
 /**
  * Lets the request through (returns true), or answers 402 with code "lookup_required" and the
  * lookup's price, so the dashboard can point at the Utilities tab.
@@ -77,13 +102,8 @@ export async function allowLookupRead(
 ): Promise<boolean> {
   if (request.access?.reason === "admin") return true;
   const reader = request.user!.walletAddress;
-  if (utility === "wallet" && subject === reader) return true;
-  const onFeed = utility === "token" ? await mintOnFeed(subject) : await walletOnFeed(subject);
-  if (onFeed) return true;
+  if (await freeLookupReason(reader, utility, subject)) return true;
   if (await openLookup(reader, utility, subject)) return true;
-  // A coin the reader traded with Pro Mode: the TRADES panel scanned it on the entry, and its
-  // card opens the token modal for as long as the trade is listed there (routes/proTrades.ts).
-  if (utility === "token" && (await tradedMint(reader, subject))) return true;
   const cost = (await burnCreditPrices()).cost[utility];
   const what = utility === "token" ? "coin" : "wallet";
   await reply.code(402).send({
