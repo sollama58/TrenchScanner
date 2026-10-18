@@ -74,6 +74,7 @@ function useProStore(): ProState | null {
       return () => listeners.delete(cb);
     },
     () => proState,
+    () => proState,
   );
 }
 

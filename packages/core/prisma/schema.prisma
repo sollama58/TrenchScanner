@@ -2092,6 +2092,9 @@ model ProHolder {
   /// A scan found it holding under half the 250th wallet's share after it dropped out: it moved
   /// its bag, so its grace period ended here (one bag passed between wallets earns no grace each).
   bagMovedAt    DateTime?
+  /// What it held at that scan, in raw units (from its share of supply): the 250th row's is what
+  /// it takes to get in, shown in Settings' Pro Mode card. Null from scans before this was kept.
+  heldRaw       String?
 
   @@index([lastInTopAt])
 }

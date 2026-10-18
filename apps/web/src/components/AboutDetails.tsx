@@ -1,5 +1,7 @@
+import { Fragment } from "react";
 import { BoltIcon, BrainIcon, SlidersIcon } from "./Icons";
 import { ExitPlanDetails } from "./ExitPlanInfo";
+import { PRO_MODE_PERKS } from "./ProModeCard";
 
 type Targets = { hitRate2xPct: number; hitRate4xPct: number };
 
@@ -13,6 +15,7 @@ const SECTIONS = [
   { id: "fp-exit-plan", label: "Exit plan" },
   { id: "fp-card", label: "Card terms" },
   { id: "fp-weather", label: "Weather" },
+  { id: "fp-pro", label: "Pro Mode" },
 ] as const;
 
 /**
@@ -346,6 +349,39 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           With too few graded moments it says so instead of guessing. It&apos;s there to help you size or skip
           trades. It never changes or holds back an alert, and the models already factor the same reading in.
         </p>
+      </section>
+
+      <section id="fp-pro">
+        <h3>Pro Mode</h3>
+        <p>
+          Pro Mode opens trading on the site. The 250 largest $ASDFASDFA wallets have it, along with admin
+          wallets and any wallet an admin grants it to.
+        </p>
+        <ul>
+          <li>
+            We read every $ASDFASDFA wallet every 5 minutes. Pools and program accounts don&apos;t count.
+          </li>
+          <li>
+            A wallet has to stay in the top 250 through an hour of reads before Pro Mode starts, so one bag
+            passed between wallets can&apos;t switch it on for each of them.
+          </li>
+          <li>
+            A wallet that drops out keeps Pro Mode for 24 hours after the last read it was in, with a warning
+            across the top of the page. Moving the bag away ends that grace at once. After it, trading from
+            the coin window stops, sells included.
+          </li>
+          <li>
+            Settings › Subscription shows your rank, the countdown while you qualify, and what #250 holds.
+          </li>
+        </ul>
+        <dl className="about-terms">
+          {PRO_MODE_PERKS.map((p) => (
+            <Fragment key={p.title}>
+              <dt>{p.title}</dt>
+              <dd>{p.text}</dd>
+            </Fragment>
+          ))}
+        </dl>
       </section>
 
       <section>

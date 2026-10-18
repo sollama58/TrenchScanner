@@ -5,6 +5,7 @@ import { Skeleton } from "../components/Charts";
 import { BurnPanel } from "../components/BurnPanel";
 import { BuyAsdfDialog } from "../components/BuyAsdfDialog";
 import { WalletHoldings } from "../components/WalletHoldings";
+import { ProModeCard } from "../components/ProModeCard";
 import { FeedPanel } from "../components/FeedPanel";
 import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
 import { TwoFactorPanel } from "../components/TwoFactorPanel";
@@ -427,6 +428,7 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
               </button>
             </div>
           </div>
+          <ProModeCard funds={funds} onBuy={mint ? () => setBuying(true) : null} />
           <dl className="facts sub-facts">
             <div>
               <dt>{access.hasAccess ? "Access until" : "Access ended"}</dt>

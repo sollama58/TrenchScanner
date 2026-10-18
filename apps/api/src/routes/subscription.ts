@@ -208,7 +208,11 @@ export async function registerSubscriptionRoutes(
         of: holder.of,
         scannedAt: holder.scannedAt?.toISOString() ?? null,
         stale: holder.stale,
+        qualifiesAt: holder.qualifiesAt?.toISOString() ?? null,
+        cutoffRaw: holder.cutoffRaw,
       },
+      // Whether the top holders get Pro Mode at all: off with the kill switch or while admins-only.
+      proOpen: env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC,
       accounts: burnable.map((a) => ({ address: a.address, rawAmount: a.rawAmount })),
     };
   });

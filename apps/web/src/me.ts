@@ -22,5 +22,22 @@ export function useMe(): User | null {
       return () => listeners.delete(l);
     },
     () => me,
+    () => me,
   );
+}
+
+const RECHECK_EVENT = "ts:recheck-me";
+
+/**
+ * Asks App to read the session again now, rather than at its next two-minute re-read: Settings'
+ * Pro Mode card calls it once a qualifying wallet's hour is up, so Pro Mode shows at the scan
+ * that switches it on.
+ */
+export function recheckMe(): void {
+  window.dispatchEvent(new Event(RECHECK_EVENT));
+}
+
+export function onRecheckMe(fn: () => void): () => void {
+  window.addEventListener(RECHECK_EVENT, fn);
+  return () => window.removeEventListener(RECHECK_EVENT, fn);
 }

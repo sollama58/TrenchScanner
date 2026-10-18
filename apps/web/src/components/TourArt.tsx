@@ -411,6 +411,73 @@ export function YoursArt() {
   );
 }
 
+/** The top 250 holders, an hour's wait, and what Pro Mode opens. */
+export function ProArt() {
+  const rows: [string, string, boolean][] = [
+    ["#1", "4.1%", false],
+    ["#2", "2.7%", false],
+    ["#…", "", false],
+    ["#250", "You", true],
+  ];
+  const perks = ["Trade, no fee", "Quick buy", "Portfolio"];
+  return (
+    <Art label="Your wallet at #250 of the top $ASDFASDFA holders; after an hour in the top 250 Pro Mode switches on, with trading, quick buy and the Portfolio">
+      {rows.map(([rank, note, you], i) => (
+        <g key={rank} transform={`translate(16 ${22 + i * 40})`}>
+          <rect className={`box${you ? " mine" : ""}`} width="176" height="32" rx="10" />
+          <text x="14" y="21" className={`label${you ? " mine" : ""}`}>
+            {rank}
+          </text>
+          <rect
+            className={`line${you ? " strong" : ""}`}
+            x="66"
+            y="12"
+            width={you ? 40 : 70 - i * 12}
+            height="8"
+            rx="4"
+          />
+          <text x="164" y="21" className={`cap small${you ? " good" : ""}`} textAnchor="end">
+            {note}
+          </text>
+        </g>
+      ))}
+      <text x="104" y="206" className="cap" textAnchor="middle">
+        Top 250 holders
+      </text>
+
+      <path className="flow" d="M204 104 H236" markerEnd="url(#tour-arrow)" />
+      <circle className="lens" cx="280" cy="104" r="30" />
+      <path className="lens-handle" d="M280 104 V84 M280 104 L294 112" />
+      <text x="280" y="160" className="label" textAnchor="middle">
+        1 hour
+      </text>
+      <path className="flow" d="M324 104 H356" markerEnd="url(#tour-arrow)" />
+      <text x="280" y="206" className="cap" textAnchor="middle">
+        Stay in
+      </text>
+
+      <g transform="translate(372 22)">
+        <rect className="box model" width="176" height="160" rx="16" />
+        <text x="88" y="30" className="label model" textAnchor="middle">
+          Pro Mode
+        </text>
+        {perks.map((perk, i) => (
+          <g key={perk} transform={`translate(16 ${48 + i * 34})`}>
+            <rect className="card front" width="144" height="26" rx="8" />
+            <text x="72" y="18" className="cap small" textAnchor="middle">
+              {perk}
+            </text>
+          </g>
+        ))}
+      </g>
+      <text x="460" y="206" className="cap" textAnchor="middle">
+        Switches on by itself
+      </text>
+      <Defs />
+    </Art>
+  );
+}
+
 /** A clock and a wallet: guests see calls a few minutes late. */
 export function GuestArt({ delay }: { delay: number }) {
   return (

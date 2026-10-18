@@ -51,7 +51,7 @@ import { ProGraceBanner } from "./components/ProGraceBanner";
 import { BugButton } from "./components/BugButton";
 import { AdminReportsBadge } from "./components/AdminReportsBadge";
 import { TwoFactorPromptHost } from "./components/TwoFactorPrompt";
-import { setMe } from "./me";
+import { onRecheckMe, setMe } from "./me";
 import { WalletMenu } from "./components/WalletMenu";
 import { clearPasses } from "./twoFactor";
 import { loadedPrivyControls, privyConfig, usePrivyWanted, wantPrivy } from "./privyBridge";
@@ -330,9 +330,11 @@ export function App() {
       if (document.visibilityState === "visible" && Date.now() - lastRead > 60_000) reread();
     };
     document.addEventListener("visibilitychange", onVisible);
+    const stopRecheck = onRecheckMe(reread);
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
+      stopRecheck();
     };
   }, [signedIn]);
   // The Stream tab only for a signed-in reader who switched it on in Settings.

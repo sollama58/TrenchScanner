@@ -8,6 +8,7 @@ import {
   prisma,
   refreshProHolders,
   proHolderRank,
+  proHolderSummary,
   proHolderStanding,
   resetProHolderCacheForTests,
   type Env,
@@ -342,10 +343,23 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
   });
 
   it("gives Settings each wallet's place in the newest scan, or none outside it", async () => {
-    expect(await proHolderRank(HOLDER)).toMatchObject({ rank: 1, of: 250, stale: false });
-    expect(await proHolderRank(NEWBIE)).toMatchObject({ rank: 2 });
+    expect(await proHolderRank(HOLDER)).toMatchObject({ rank: 1, of: 250, stale: false, qualifiesAt: null });
+    // New in this scan: Pro Mode an hour from now.
+    const newbie = await proHolderRank(NEWBIE);
+    expect(newbie).toMatchObject({ rank: 2, cutoffRaw: null });
+    expect(newbie.qualifiesAt!.getTime() - Date.now()).toBeGreaterThan(55 * 60_000);
     expect(await proHolderRank(GRACE)).toMatchObject({ rank: null });
     expect((await proHolderRank(LAPSED)).scannedAt).not.toBeNull();
+  });
+
+  it("lists the newest scan for Admin by rank, with who has Pro Mode and who is still qualifying", async () => {
+    const summary = await proHolderSummary();
+    expect(summary).toMatchObject({ inTop: 1, qualifying: 1, stale: false });
+    expect(summary.top.map((h) => [h.walletAddress, h.qualifiesAt === null])).toEqual([
+      [HOLDER, true],
+      [NEWBIE, false],
+    ]);
+    expect(summary.grace.map((g) => g.walletAddress)).toEqual([GRACE]);
   });
 
   it("turns stopped scans into a grace period instead of Pro Mode with no end", async () => {
@@ -410,6 +424,7 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
                   ...fillers,
                   { owner: mover, pct: 0.01 },
                 ],
+                supply: "1000000000000000",
               },
             ]),
           ),
@@ -422,6 +437,8 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     expect(await proHolderStanding(GRACE, at)).toMatchObject({ state: "top" });
     // The mover holds under half the 250th wallet's share: no grace for it.
     expect(await proHolderStanding(mover, at)).toEqual({ state: "none" });
+    // The 250th wallet's 0.1% of supply is what it takes to get in.
+    expect((await proHolderRank(HOLDER, at)).cutoffRaw).toBe("1000000000000");
     resetProHolderCacheForTests();
   });
 
