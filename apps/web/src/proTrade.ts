@@ -450,13 +450,31 @@ const SENDER_TIP_ACCOUNTS = new Set([
   "4TQLFNWK8AovT1gFvda5jfw2oJeRMKEmw7aH6MGBJ3or",
 ]);
 
+const COMPUTE_BUDGET = "ComputeBudget111111111111111111111111111111";
+const SYSTEM = "11111111111111111111111111111111";
+const TOKEN_PROGRAMS = new Set([
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+]);
+const ATA = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+/** The runtime's unit limit when a transaction sets none. */
+const DEFAULT_UNIT_LIMIT = 200_000n;
+/** The most a build may pay in priority fee, and in Sender tips, each: the API's custom-fee ceiling. */
+const MAX_FEE_LAMPORTS = BigInt(Math.round(MAX_CUSTOM_FEE_SOL * 1e9));
+
 /**
  * A second look at the API's build before the wallet is asked to sign it, so a compromised API
- * or a tampered response can't slip in something else: one signer and it is this wallet, only
- * the swap's programs at the top level, and Sender's tip. Returns why it isn't, or null.
+ * or a tampered response can't slip in something else. The same static rules as the API's guard
+ * (packages/core/src/trading/txGuard.ts): one signer and it is this wallet; only the swap's
+ * programs; SOL leaves the wallet only as Sender's tip or into its own wrapped-SOL account; token
+ * instructions only wrap, unwrap to the wallet, or open the wallet's own accounts (never Approve,
+ * Transfer or SetAuthority); fees within their ceilings; and every account those instructions
+ * move funds with written in the message itself, not a lookup table. `ownWrappedSol` is the
+ * wallet's wrapped-SOL accounts (solanaPda.ts). Returns why it isn't fine, or null.
  * (The wallet's own preview still shows what it does.)
  */
-export function tradeProblem(tx: Uint8Array, owner: string): string | null {
+export function tradeProblem(tx: Uint8Array, owner: string, ownWrappedSol: Iterable<string>): string | null {
+  const own = new Set([owner, ...ownWrappedSol]);
   try {
     let at = 0;
     const shortVec = () => {
@@ -468,31 +486,88 @@ export function tradeProblem(tx: Uint8Array, owner: string): string | null {
         if (!(b & 0x80)) return len;
       }
     };
+    const take = (n: number) => {
+      if (at + n > tx.length) throw new Error("short");
+      const out = tx.subarray(at, at + n);
+      at += n;
+      return out;
+    };
     const signatures = shortVec();
-    at += 64 * signatures;
+    take(64 * signatures);
     if ((tx[at] ?? 0) & 0x80) at++; // versioned message
     const required = tx[at];
     at += 3;
     const keyCount = shortVec();
     const keys: string[] = [];
-    for (let i = 0; i < keyCount; i++, at += 32) keys.push(bs58.encode(tx.subarray(at, at + 32)));
-    at += 32; // blockhash
+    for (let i = 0; i < keyCount; i++) keys.push(bs58.encode(take(32)));
+    take(32); // blockhash
     if (signatures !== 1 || required !== 1) return "it needs a signer besides your wallet";
     if (keys[0] !== owner) return "your wallet isn't the one paying for it";
+
+    let tips = 0n;
+    let unitLimit = DEFAULT_UNIT_LIMIT;
+    let unitPrice = 0n;
     const ixCount = shortVec();
     for (let i = 0; i < ixCount; i++) {
       const program = keys[tx[at++]!];
       if (!program || !TRADE_PROGRAMS.has(program)) return "it calls a program a swap doesn't need";
-      // Read each length first: `at += shortVec()` would add it to `at` as it was before the read.
-      const accounts = shortVec();
-      at += accounts;
-      const data = shortVec();
-      at += data;
+      const accounts = Array.from(take(shortVec()));
+      const d = take(shortVec());
+      const view = new DataView(d.buffer, d.byteOffset, d.byteLength);
+      // An account it moves funds with: written in the message, never from a lookup table.
+      const acct = (n: number) => {
+        const index = accounts[n];
+        if (index === undefined || index >= keys.length) throw new Error("lookup");
+        return keys[index]!;
+      };
+      if (program === COMPUTE_BUDGET) {
+        if (d[0] === 2 && d.length >= 5) unitLimit = BigInt(view.getUint32(1, true));
+        else if (d[0] === 3 && d.length >= 9) unitPrice = view.getBigUint64(1, true);
+        continue;
+      }
+      if (program === SYSTEM) {
+        const tag = d.length >= 4 ? view.getUint32(0, true) : -1;
+        if (tag === 2 && d.length >= 12 && acct(0) === owner) {
+          const to = acct(1);
+          if (own.has(to)) continue;
+          if (SENDER_TIP_ACCOUNTS.has(to)) {
+            tips += view.getBigUint64(4, true);
+            continue;
+          }
+          return "it sends SOL from your wallet to an account that isn't yours";
+        }
+        if (
+          tag === 0 &&
+          d.length >= 52 &&
+          acct(0) === owner &&
+          TOKEN_PROGRAMS.has(bs58.encode(d.subarray(20, 52)))
+        )
+          continue;
+        return "it has a System instruction a swap doesn't need";
+      }
+      if (TOKEN_PROGRAMS.has(program)) {
+        const tag = d[0];
+        if (tag === 17) continue; // SyncNative
+        if (tag === 9 && acct(1) === owner && acct(2) === owner) continue; // CloseAccount, to the wallet
+        if (tag === 18 && d.length >= 33 && bs58.encode(d.subarray(1, 33)) === owner) continue; // InitializeAccount3
+        if (tag === 1 && acct(2) === owner) continue; // InitializeAccount
+        return "it has a token instruction a swap doesn't need (like an approval or a transfer)";
+      }
+      if (program === ATA) {
+        const tag = d.length === 0 ? 0 : d[0];
+        if ((tag === 0 || tag === 1) && acct(0) === owner && acct(2) === owner) continue;
+        return "it opens a token account that isn't yours";
+      }
+      // Jupiter and Pump.fun: their amounts are the API's guard's and the simulation's to check.
     }
-    if (!keys.some((k) => SENDER_TIP_ACCOUNTS.has(k))) return "it doesn't go through Helius Sender";
+    if (tips === 0n) return "it doesn't go through Helius Sender";
+    if (tips > MAX_FEE_LAMPORTS) return "its Sender tip is over 0.01 SOL";
+    if ((unitPrice * unitLimit) / 1_000_000n > MAX_FEE_LAMPORTS) return "its priority fee is over 0.01 SOL";
     return null;
-  } catch {
-    return "it couldn't be read";
+  } catch (e) {
+    return e instanceof Error && e.message === "lookup"
+      ? "an account it moves funds with comes from a lookup table"
+      : "it couldn't be read";
   }
 }
 
@@ -528,7 +603,8 @@ export async function runTrade(
     ...(input.all ? { all: true } : {}),
   });
   const unsigned = fromBase64(built.transaction);
-  const problem = tradeProblem(unsigned, input.owner);
+  const { ownWrappedSolAccounts } = await import("./solanaPda");
+  const problem = tradeProblem(unsigned, input.owner, ownWrappedSolAccounts(input.owner));
   if (problem) throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
   onStage("signing", built);
   const [signed] = await withTimeout(
