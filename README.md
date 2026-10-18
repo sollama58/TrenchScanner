@@ -423,3 +423,7 @@ happened, and tidying it would be falsifying it.
 - **The rug screen is a screen, not a guarantee.** The mandatory part catches unrenounced authorities and unlocked LP; holder concentration, dev wallet %, RugCheck's risk score, and a creator's rugging history are opt-in filters a user has to consciously turn on. Nothing here is a substitute for your own judgment.
 - **No social-signal provider yet** (Twitter/Telegram mention volume, follower growth) - deferred per the plan to stay in budget; the data model has room to add one later.
 - **`@solana/wallet-adapter-react`'s own dependency tree** carries some deep transitive vulnerabilities (mostly React Native/Metro mobile-bundler tooling that never executes in a browser). Not fixable without abandoning the standard wallet adapter library.
+
+## License
+
+Source-available under MIT with the Commons Clause and a paid-product condition: you may use, study and modify the code, but you may not sell it, or build it into any paid product or service, without our express written permission. See [LICENSE](LICENSE).
