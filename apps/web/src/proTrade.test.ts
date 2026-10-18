@@ -13,6 +13,7 @@ import {
   tradeProblem,
   type PositionResponse,
 } from "./proTrade";
+import { ownWrappedSolAccounts } from "./solanaPda";
 import { feeTotalSol, parseSol, shareOf, solText } from "./components/TradePanel";
 
 describe("parseSol", () => {
@@ -161,20 +162,70 @@ describe("tradeProblem", () => {
     Buffer.from(readFileSync(new URL("./proTrade.fixture.b64.txt", import.meta.url), "utf8"), "base64"),
   );
   const owner = "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9";
+  const own = ownWrappedSolAccounts(owner);
 
   it("passes a real build for its own wallet", () => {
-    expect(tradeProblem(built, owner)).toBeNull();
+    expect(tradeProblem(built, owner, own)).toBeNull();
   });
   it("refuses a build for another wallet, an unknown program, or bytes it can't read", () => {
-    expect(tradeProblem(built, "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE")).toMatch(
+    expect(tradeProblem(built, "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE", [])).toMatch(
       /isn't the one paying/,
     );
     // The same build with its Jupiter program key swapped for another program.
     const hex = Buffer.from(built).toString("hex");
     const jup = Buffer.from(bs58.decode("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4")).toString("hex");
     const evil = Uint8Array.from(Buffer.from(hex.replace(jup, "ab".repeat(32)), "hex"));
-    expect(tradeProblem(evil, owner)).toMatch(/program/);
-    expect(tradeProblem(built.subarray(0, 120), owner)).toMatch(/couldn't be read|program/);
+    expect(tradeProblem(evil, owner, own)).toMatch(/program/);
+    expect(tradeProblem(built.subarray(0, 120), owner, own)).toMatch(/couldn't be read|program/);
+  });
+
+  // A hand-built v0 transaction: static keys, then [program index, account indexes, data] each.
+  const SYSTEM = "11111111111111111111111111111111";
+  const TOKEN = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+  const BUDGET = "ComputeBudget111111111111111111111111111111";
+  const TIP = "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE";
+  const STRANGER = "D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7Nz";
+  const keys = [owner, STRANGER, TIP, own[0]!, SYSTEM, TOKEN, BUDGET];
+  const k = (key: string) => keys.indexOf(key);
+  const u32 = (n: number) => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
+  const u64 = (n: bigint) => Array.from({ length: 8 }, (_, i) => Number((n >> BigInt(8 * i)) & 255n));
+  const transfer = (to: string, lamports: bigint) => ({
+    program: SYSTEM,
+    accounts: [k(owner), to === "lookup" ? keys.length : k(to)],
+    data: [...u32(2), ...u64(lamports)],
+  });
+  const tx = (ixs: { program: string; accounts: number[]; data: number[] }[]) =>
+    Uint8Array.from([
+      1,
+      ...new Array<number>(64).fill(0),
+      0x80,
+      1,
+      0,
+      3,
+      keys.length,
+      ...keys.flatMap((key) => Array.from(bs58.decode(key))),
+      ...new Array<number>(32).fill(7),
+      ixs.length,
+      ...ixs.flatMap((ix) => [k(ix.program), ix.accounts.length, ...ix.accounts, ix.data.length, ...ix.data]),
+      0,
+    ]);
+  const tip = transfer(TIP, 5_000n);
+
+  it("passes a tip and wrapping SOL into the wallet's own account", () => {
+    expect(tradeProblem(tx([transfer(own[0]!, 1_000_000n), tip]), owner, own)).toBeNull();
+  });
+  it("refuses SOL sent to a stranger, a token approval, and fees past their ceiling", () => {
+    expect(tradeProblem(tx([transfer(STRANGER, 1_000_000_000n), tip]), owner, own)).toMatch(/isn't yours/);
+    // Token Approve (4) of one of the wallet's accounts to a stranger.
+    const approve = { program: TOKEN, accounts: [k(own[0]!), k(STRANGER), k(owner)], data: [4, ...u64(1n)] };
+    expect(tradeProblem(tx([approve, tip]), owner, own)).toMatch(/token instruction/);
+    expect(tradeProblem(tx([transfer(TIP, 10_000_001n)]), owner, own)).toMatch(/tip/);
+    // 1.4M units at 10 SOL-worth of micro-lamports: a priority fee that would drain the wallet.
+    const limit = { program: BUDGET, accounts: [], data: [2, ...u32(1_400_000)] };
+    const price = { program: BUDGET, accounts: [], data: [3, ...u64(10_000_000_000n)] };
+    expect(tradeProblem(tx([limit, price, tip]), owner, own)).toMatch(/priority fee/);
+    expect(tradeProblem(tx([transfer("lookup", 1n), tip]), owner, own)).toMatch(/lookup table/);
+    expect(tradeProblem(tx([transfer(own[0]!, 1n)]), owner, own)).toMatch(/Sender/);
   });
 });
 
