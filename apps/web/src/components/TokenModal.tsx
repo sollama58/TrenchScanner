@@ -70,7 +70,15 @@ import { CustomizeDrawer } from "./CustomizeDrawer";
 import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
 import { PriceChart, type ChartEvent, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
-import { graceLeftText, summarizePosition, usePosition, useProState } from "../proTrade";
+import {
+  graceLeftText,
+  rememberTradePanel,
+  summarizePosition,
+  tradeOpenAtStart,
+  tradePanelClosed,
+  usePosition,
+  useProState,
+} from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import {
   categoryText,
@@ -1369,7 +1377,15 @@ export function ChartCard({
   const graceEndsAt = proState?.pro ? proState.graceEndsAt : null;
   const mint = card.token.mintAddress;
   const position = usePosition(pro ? mint : null);
-  const [trading, setTrading] = useState(false);
+  // Open by default for full Pro Mode (tradeOpenAtStart); the trader's own click wins after that.
+  // Pro state can arrive after the view opens (the session check), so the default is derived.
+  const [tradingPicked, setTradingPicked] = useState<boolean | null>(null);
+  const [closedBefore] = useState(tradePanelClosed);
+  const trading = tradingPicked ?? tradeOpenAtStart(proState, closedBefore);
+  const setTrading = (open: boolean) => {
+    setTradingPicked(open);
+    if (!closeOnly) rememberTradePanel(open);
+  };
   const [tradeOpened, setTradeOpened] = useState(false);
   useEffect(() => {
     if (trading) setTradeOpened(true);
@@ -1566,7 +1582,7 @@ export function ChartCard({
               }
               onClick={() => setTrading(!trading)}
             >
-              {closeOnly ? "Sell" : "Trade"}
+              {closeOnly ? "Sell" : trading ? "Hide trade" : "Trade"}
               {graceEndsAt !== null && (
                 <span className="tm-trade-grace num"> · {graceLeftText(graceEndsAt)} left</span>
               )}

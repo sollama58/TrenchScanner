@@ -10,6 +10,9 @@ import {
   proStateOf,
   readTradeSettings,
   summarizePosition,
+  tradeOpenAtStart,
+  tradePanelClosed,
+  rememberTradePanel,
   tradeProblem,
   type PositionResponse,
   type TradeCheck,
@@ -297,5 +300,23 @@ describe("trading disclaimer", () => {
     // No storage in this test runner: never counted as accepted, and accepting doesn't throw.
     expect(disclaimerAccepted("w")).toBe(false);
     acceptDisclaimer("w");
+  });
+});
+
+describe("tradeOpenAtStart", () => {
+  const pro = { wallet: "w", pro: true, graceEndsAt: null, graceUnconfirmed: false };
+  it("opens the Trade panel for full Pro Mode (the admin case the toggle hid)", () => {
+    expect(tradeOpenAtStart(pro, false)).toBe(true);
+    expect(tradeOpenAtStart({ ...pro, graceEndsAt: Date.now() + 60_000 }, false)).toBe(true);
+  });
+  it("keeps it shut once the trader closed it, for sell-only wallets, and without Pro Mode", () => {
+    expect(tradeOpenAtStart(pro, true)).toBe(false);
+    expect(tradeOpenAtStart({ ...pro, pro: false }, false)).toBe(false);
+    expect(tradeOpenAtStart(null, false)).toBe(false);
+  });
+  it("defaults to open when storage is out of reach", () => {
+    // No storage in this test runner: nothing remembered, and remembering doesn't throw.
+    rememberTradePanel(false);
+    expect(tradePanelClosed()).toBe(false);
   });
 });
