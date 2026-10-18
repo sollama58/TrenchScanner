@@ -1647,11 +1647,13 @@ export interface FeedAppearance {
   outlineResult: boolean;
   /**
    * Hide Live feed alerts whose current market cap is below hideBelowMcapUsd. Display only: stats
-   * and grading still count them (absent from older API builds: off).
+   * and grading still count them (absent from older API builds: on).
    */
   hideBelowMcap: boolean;
-  /** USD, 3k-20k in 1k steps (absent from older API builds: 5k). */
+  /** USD, 3k-20k in 1k steps (absent from older API builds: 6k). */
   hideBelowMcapUsd: number;
+  /** Which default hideBelowMcap it was saved against (appearance.ts HIDE_BELOW_MCAP_REV). */
+  hideBelowMcapRev: number;
   /** Trading sites each card links to; Padre's Trading Terminal by default. */
   quickLinks: QuickLink[];
   /**
