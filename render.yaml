@@ -111,6 +111,10 @@ envVarGroups:
       # shipping admins-only at 02:17. "false" takes it back to the admin wallets alone.
       - key: PRO_TRADING_PUBLIC
         value: "true"
+      # Keys the wallet tags in logs (packages/core/src/walletTag.ts), in every service alike so
+      # one wallet's tag matches across them. Changing it changes every tag from then on.
+      - key: WALLET_TAG_SECRET
+        generateValue: true
 
 services:
   - type: web

@@ -1092,24 +1092,29 @@ const HOLD_CAP_PRICE_SLACK_MS = 30 * 60_000;
  *    at the label window's close (no trail state, not on the 24h watch), that close. Without one
  *    the return is left unknown: the stored return was priced under the plan of its day.
  */
-export function rowReturn(r: {
-  anchorAt: Date;
-  anchorPriceUsd: number;
-  low1hPriceUsd: number | null;
-  peak1hPriceUsd: number | null;
-  peakBeforeStopPriceUsd: number | null;
-  stoppedAt: Date | null;
-  trailHighPriceUsd: number | null;
-  trailExitAt: Date | null;
-  trailExitPriceUsd: number | null;
-  simReturnPct: number | null;
-  lastPriceUsd?: number | null;
-  lastCheckedAt?: Date | null;
-  extended24h?: boolean | null;
-}): { returnPct?: number; crashed?: boolean } {
+export function rowReturn(
+  r: {
+    anchorAt: Date;
+    anchorPriceUsd: number;
+    low1hPriceUsd: number | null;
+    peak1hPriceUsd: number | null;
+    peakBeforeStopPriceUsd: number | null;
+    stoppedAt: Date | null;
+    trailHighPriceUsd: number | null;
+    trailExitAt: Date | null;
+    trailExitPriceUsd: number | null;
+    simReturnPct: number | null;
+    lastPriceUsd?: number | null;
+    lastCheckedAt?: Date | null;
+    extended24h?: boolean | null;
+  },
+  /** The exit plan re-score's return for the row (ExitPlanRescore), which stands over a replay. */
+  rescoredReturnPct: number | null = null,
+): { returnPct?: number; crashed?: boolean } {
   const crashLine = (EXIT_PLAN.stopFraction - 1) * 100 + 1e-6;
   const known = (returnPct: number | null) =>
     returnPct === null || !Number.isFinite(returnPct) ? {} : { returnPct, crashed: returnPct <= crashLine };
+  if (rescoredReturnPct !== null && Number.isFinite(rescoredReturnPct)) return known(rescoredReturnPct);
   if (r.low1hPriceUsd === null || r.peak1hPriceUsd === null) return known(r.simReturnPct);
   const input = {
     anchorPriceUsd: r.anchorPriceUsd,
@@ -1182,6 +1187,8 @@ interface LoadedRow {
   rule3Grade: unknown;
   /** The token's launch time (Token.launchedAt), for the rebuilt age of an older graduated row. */
   launchedAt: Date | null;
+  /** The return the exit plan re-score replayed from candles (ExitPlanRescore), when it did. */
+  rescoredReturnPct: number | null;
 }
 
 /** The grade fields trainingGradeOf reads from a stored rule4Grade. */
@@ -1345,7 +1352,9 @@ async function loadRowsOfKind(
              "peak1hReturnPct", "peakBeforeStopPriceUsd", "hit10xIn1h", "low1hPriceUsd",
              "peak1hPriceUsd", "stoppedAt", "trailHighPriceUsd", "trailExitAt", "trailExitPriceUsd",
              "simReturnPct", "lastPriceUsd", "lastCheckedAt", "extended24h", "rule4Grade", "rule3Grade",
-             (${launchedAtSql}) AS "launchedAt"
+             (${launchedAtSql}) AS "launchedAt",
+             (SELECT x."simReturnPct" FROM "ExitPlanRescore" x
+               WHERE x."outcomeId" = "CandidateOutcome"."id" AND x."result" = 'rescored') AS "rescoredReturnPct"
       FROM "CandidateOutcome"
       WHERE "finalizedAt" IS NOT NULL
         AND "anchorAt" >= ${windowStart}
@@ -1414,8 +1423,10 @@ async function loadRowsOfKind(
         // The 10x tier, for the exam's 10x part of the score; unknown until the row's hour settles.
         ...(r.hit10xIn1h !== null ? { hit10x: r.hit10xIn1h } : {}),
         // The return under today's exit plan and whether it fell to the stop first: what the
-        // "return" and "safe" goals train on and every exam's average return (rowReturn).
-        ...rowReturn(r),
+        // "return" and "safe" goals train on and every exam's average return (rowReturn). A row
+        // the exit plan re-score replayed from candles takes that return (user ask 2026-10-18),
+        // when it is graded from the same price the re-score replayed from.
+        ...rowReturn(r, r.anchorPriceUsd === loaded.anchorPriceUsd ? loaded.rescoredReturnPct : null),
       };
       // The decision pre-gate's old-coin momentum test (#567) re-applied, as the exam does: the
       // 1,942 older rows that fail it today doubled 1.8% and held 9.6% of the training weight.
