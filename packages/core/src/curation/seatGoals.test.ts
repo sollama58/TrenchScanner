@@ -14,6 +14,7 @@ import {
   measurePayoffs,
   rowCrashed,
   rowReturnPct,
+  RETURN_WIN_GATE_SHARE,
   scoreCandidateWithModel,
   scoreWinOdds,
   trainCuratorModel,
@@ -144,6 +145,31 @@ describe("seat goals", () => {
   it("prices losses twice over for the safe goal", async () => {
     const safe = await trainCuratorModel(rows, { learner: "gbdt", goal: "safe" });
     expect(safe.returnRisk!.payoffs.crashPct).toBeCloseTo(-100, 6);
+  }, 60_000);
+
+  it("gates the return goal on its 2x odds, and leaves the safe goal ungated", async () => {
+    const ret = await trainCuratorModel(rows, { learner: "gbdt", goal: "return" });
+    const floor = ret.returnRisk!.winFloor!;
+    expect(floor).toBeGreaterThan(0);
+    const odds = rows.map((r) => scoreWinOdds(ret, r.features));
+    const passing = odds.filter((p) => p >= floor).length / odds.length;
+    expect(passing).toBeGreaterThan(RETURN_WIN_GATE_SHARE - 0.05);
+    expect(passing).toBeLessThan(RETURN_WIN_GATE_SHARE + 0.05);
+    // Every coin through the gate outranks every coin below it.
+    const scores = rows.map((r) => scoreCandidateWithModel(ret, r.features));
+    const lowestIn = Math.min(...scores.filter((_, i) => odds[i]! >= floor));
+    const highestOut = Math.max(...scores.filter((_, i) => odds[i]! < floor));
+    expect(lowestIn).toBeGreaterThanOrEqual(0.5);
+    expect(highestOut).toBeLessThan(0.5);
+    // A model stored before the gate scores as it did.
+    const { winFloor: _, ...ungated } = ret.returnRisk!;
+    const old = { ...ret, returnRisk: ungated };
+    const f = rows[0]!.features;
+    expect(scoreCandidateWithModel(old, f)).toBe(
+      expectedReturnScore(scoreWinOdds(old, f), scoreWinOdds({ ...ungated.crash }, f), ungated.payoffs),
+    );
+    const safe = await trainCuratorModel(rows, { learner: "gbdt", goal: "safe" });
+    expect(safe.returnRisk!.winFloor).toBeUndefined();
   }, 60_000);
 
   it("falls back to the 4x for the 10x goal when there are too few clean 10x rows", async () => {
