@@ -10,10 +10,13 @@ import {
   saveTradeSettings,
   useProState,
   useTradeSettings,
+  withSellAll,
   type QuickBuySettings,
   type TradeSettings,
 } from "../proTrade";
-import { parseAmounts, parseDecimal } from "../decimal";
+import { parseDecimal } from "../decimal";
+import { PresetButtonsEditor } from "./PresetButtonsEditor";
+import { presetCols, sellCols } from "./TradePanel";
 import { Switch } from "./AlertDeliveryPanels";
 import { BoltIcon } from "./Icons";
 
@@ -31,6 +34,17 @@ const POSITION_LABEL: Record<QuickBuySettings["position"], string> = {
 };
 const SIZE_LABEL: Record<QuickBuySettings["size"], string> = { s: "Small", m: "Medium", l: "Large" };
 
+/** A new buy button: double the biggest, rounded, within 0.01 to 100 SOL. */
+export function nextBuy(values: number[]): number {
+  const top = Math.max(0, ...values);
+  return top > 0 ? Math.min(100, Math.round(top * 2 * 100) / 100) : 0.1;
+}
+
+/** A new sell button: the first common share not there yet. */
+export function nextSell(values: number[]): number {
+  return [50, 25, 75, 10, 33, 90].find((p) => !values.includes(p)) ?? 20;
+}
+
 export function TradingSettingsPanel() {
   const pro = useProState();
   const settings = useTradeSettings();
@@ -43,18 +57,11 @@ function Panel({ settings }: { settings: TradeSettings }) {
   const updateQuick = (patch: Partial<QuickBuySettings>) =>
     update({ quickBuy: { ...settings.quickBuy, ...patch } });
   const q = settings.quickBuy;
-  // Typed text, so a half-typed list isn't rewritten under the cursor; saved on leaving the field.
-  const [buys, setBuys] = useState(settings.buyPresets.join(", "));
-  const [sells, setSells] = useState(settings.sellPresets.join(", "));
   const [quickAmount, setQuickAmount] = useState(String(q.amountSol));
   const maxBuys = BUY_PRESETS_PER_ROW * settings.buyRows;
-
-  const saveBuys = (rows = settings.buyRows) => {
-    const list = parseAmounts(buys, 100, BUY_PRESETS_PER_ROW * rows, MIN_TRADE_SOL);
-    const next = list.length > 0 ? list : settings.buyPresets.slice(0, BUY_PRESETS_PER_ROW * rows);
-    setBuys(next.join(", "));
-    update({ buyPresets: next, buyRows: rows });
-  };
+  // One row holds five: going back to one row keeps the first five.
+  const setRows = (rows: 1 | 2) =>
+    update({ buyRows: rows, buyPresets: settings.buyPresets.slice(0, BUY_PRESETS_PER_ROW * rows) });
 
   return (
     <section className="panel trading-settings">
@@ -70,8 +77,6 @@ function Panel({ settings }: { settings: TradeSettings }) {
           className="button ghost small"
           onClick={() => {
             saveTradeSettings(DEFAULT_TRADE_SETTINGS);
-            setBuys(DEFAULT_TRADE_SETTINGS.buyPresets.join(", "));
-            setSells(DEFAULT_TRADE_SETTINGS.sellPresets.join(", "));
             setQuickAmount(String(DEFAULT_TRADE_SETTINGS.quickBuy.amountSol));
           }}
         >
@@ -82,44 +87,53 @@ function Panel({ settings }: { settings: TradeSettings }) {
         Used by the Trade section under the token chart and by quick buy. Saved in this browser.
       </p>
 
-      <h3 className="trading-sub">Buy buttons under the chart</h3>
-      <div className="trading-grid">
-        <label className="trading-field">
-          <span className="small muted">
-            Amounts, SOL (from {MIN_TRADE_SOL}, up to {maxBuys})
-          </span>
-          <input value={buys} onChange={(e) => setBuys(e.target.value)} onBlur={() => saveBuys()} />
-        </label>
-        <div className="trading-field">
-          <span className="small muted">Rows</span>
-          <div className="segmented small" role="radiogroup" aria-label="Rows of buy buttons">
-            {([1, 2] as const).map((r) => (
-              <button
-                key={r}
-                type="button"
-                role="radio"
-                aria-checked={settings.buyRows === r}
-                className={settings.buyRows === r ? "on" : ""}
-                onClick={() => saveBuys(r)}
-              >
-                {r === 1 ? "1 row" : "2 rows"}
-              </button>
-            ))}
-          </div>
+      <div className="preset-editor-head">
+        <h3 className="trading-sub">Buttons under the chart</h3>
+        <div className="segmented small" role="radiogroup" aria-label="Rows of buy buttons">
+          {([1, 2] as const).map((r) => (
+            <button
+              key={r}
+              type="button"
+              role="radio"
+              aria-checked={settings.buyRows === r}
+              className={settings.buyRows === r ? "on" : ""}
+              onClick={() => setRows(r)}
+            >
+              {r === 1 ? "1 row" : "2 rows"}
+            </button>
+          ))}
         </div>
-        <label className="trading-field">
-          <span className="small muted">Sell buttons, % of the position (up to 6)</span>
-          <input
-            value={sells}
-            onChange={(e) => setSells(e.target.value)}
-            onBlur={() => {
-              const list = parseAmounts(sells, 100, 6);
-              const next = list.length > 0 ? list : settings.sellPresets;
-              setSells(next.join(", "));
-              update({ sellPresets: next });
-            }}
-          />
-        </label>
+      </div>
+      <p className="muted small">
+        As they look in the Trade section. Tap a button to change its amount, × to remove it.
+      </p>
+      <div className="tm-trade-sides preset-editors">
+        <PresetButtonsEditor
+          side="buy"
+          values={settings.buyPresets}
+          unit="SOL"
+          min={MIN_TRADE_SOL}
+          max={100}
+          maxCount={maxBuys}
+          grid={presetCols(settings.buyPresets.length, settings.buyRows)}
+          hint="with SOL"
+          suggest={(v) => nextBuy(v)}
+          onChange={(next) => update({ buyPresets: next })}
+        />
+        <PresetButtonsEditor
+          side="sell"
+          values={settings.sellPresets}
+          unit="%"
+          min={1}
+          max={99}
+          maxCount={6}
+          minCount={0}
+          grid={sellCols(settings.sellPresets.length)}
+          hint="% of the position"
+          locked={(v) => v >= 100}
+          suggest={(v) => nextSell(v)}
+          onChange={(next) => update({ sellPresets: withSellAll(next) })}
+        />
       </div>
 
       <h3 className="trading-sub">Execution</h3>
