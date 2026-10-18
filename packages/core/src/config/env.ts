@@ -272,6 +272,17 @@ const envSchema = z.object({
   CURVE_TAPE_STREAM_CREDITS_PER_DAY: z.coerce.number().nonnegative().default(100_000),
   CURVE_TAPE_POLL_SECONDS: z.coerce.number().min(1).default(5),
   CURVE_TAPE_POLL_MAX_MINTS: z.coerce.number().int().nonnegative().default(100),
+  // The price path recorder (worker's jobs/pricePathRecorder.ts, user ask 2026-10-18): when the curve
+  // tape lets go of a coin (aged out or graduated), its second-by-second path is saved, compressed,
+  // as training data for predictive price pathing. No upstream calls: it saves what the tape holds.
+  // At most PRICE_PATH_RECORD_MAX_PER_DAY coins a UTC day, kept PRICE_PATH_RETENTION_DAYS days.
+  // "false" turns it off.
+  PRICE_PATH_RECORD: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  PRICE_PATH_RECORD_MAX_PER_DAY: z.coerce.number().int().nonnegative().default(1_500),
+  PRICE_PATH_RETENTION_DAYS: z.coerce.number().int().positive().default(21),
   // The token chart's live tail (api's liveCurve.ts, user ask 2026-10-17: charts on the stream's
   // second-by-second updates): while a young coin's chart is open, the API follows its bonding curve
   // on its own Helius websocket (an update per changed block) and the chart draws every change,

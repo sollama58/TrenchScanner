@@ -2647,6 +2647,28 @@ model TradingWithdrawal {
 /// Every admin write (POST/PUT/PATCH/DELETE under /admin), who made it and how it ended: the
 /// lasting record Render's short-lived logs aren't (2026-10-18 admin panel audit). Written by the
 /// API's onResponse hook (apps/api/src/adminActionLog.ts) and read by Admin > Access.
+/// One young coin's second-by-second price path, saved by the worker's price path recorder
+/// (apps/worker/src/jobs/pricePathRecorder.ts) when the curve tape lets go of the coin: training
+/// data for predictive price pathing (user ask 2026-10-18). `data` is gzip of packed rows, one per
+/// second with a curve change (see packPath there). Deleted after PRICE_PATH_RETENTION_DAYS.
+model PricePathRecord {
+  id        String   @id @default(cuid())
+  mint      String
+  /// The first and last second the path covers.
+  startAt   DateTime
+  endAt     DateTime
+  /// Seconds with a change, and the bytes of `data`.
+  seconds   Int
+  bytes     Int
+  /// "aged" (past the tape's age limit or off the watchlist) or "graduated".
+  reason    String
+  data      Bytes
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([mint])
+}
+
 model AdminAction {
   id         String   @id @default(cuid())
   at         DateTime @default(now())

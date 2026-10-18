@@ -14,6 +14,7 @@ import {
   withPreset,
 } from "../appearance";
 import { useNarrativeNoteReadiness } from "../narrativeNote";
+import { useIsAdmin } from "../session";
 
 /** The bubble maps' names that can be shown or hidden kind by kind (user ask 2026-10-16). */
 const NAME_KINDS = [
@@ -29,6 +30,7 @@ const NAME_KINDS = [
  */
 export function AppearanceControls() {
   const look = useAppearance();
+  const admin = useIsAdmin();
   const narrative = useNarrativeNoteReadiness();
   const narrativeShown = look.narrativeNote ?? narrative?.ready ?? false;
   const namesSplit = NAME_KINDS.some(([key]) => look[key] !== null);
@@ -411,19 +413,24 @@ export function AppearanceControls() {
             ]}
             onChange={(chartStyle) => setAppearance({ chartStyle })}
           />
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={look.chartPathing}
-              onChange={() => setAppearance({ chartPathing: !look.chartPathing })}
-            />
-            Predicted price path <span className="sage-tag">Experimental</span>
-          </label>
-          <p className="faint small">
-            A dotted line for the next minute in 5-second steps, guessed from the last minute&apos;s
-            second-by-second price, with a shaded band for its usual miss. A statistical guess, not advice: in
-            backtests it is wrong often. Shown on a live chart only.
-          </p>
+          {/* Admins only while it is tried out (user ask 2026-10-18). */}
+          {admin && (
+            <>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={look.chartPathing}
+                  onChange={() => setAppearance({ chartPathing: !look.chartPathing })}
+                />
+                Predicted price path <span className="sage-tag">Experimental</span>
+              </label>
+              <p className="faint small">
+                A dotted line for the next minute in 5-second steps, guessed from the last minute&apos;s
+                second-by-second price, with a shaded band for its usual miss. A statistical guess, not
+                advice: in backtests it is wrong often. Shown on a live chart only.
+              </p>
+            </>
+          )}
         </div>
         <WalletMarksPicker />
         <div className="field-group">

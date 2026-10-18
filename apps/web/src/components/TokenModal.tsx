@@ -34,6 +34,7 @@ import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfil
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
+import { useIsAdmin } from "../session";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, useScoreWeights } from "../scoreWeights";
 import {
@@ -1442,6 +1443,8 @@ export function ChartCard({
   // Labeled wallets' trades on the line (user ask 2026-10-18), as set in Customize › Chart wallet
   // trades, which the header's link opens over the token view.
   const look = useAppearance();
+  // The predicted path is admins-only while it is tried out (user ask 2026-10-18).
+  const admin = useIsAdmin();
   const markPrefs = useMemo(() => markPrefsOf(look), [look]);
   // Line or candles: Customize › Token chart sets the default, the switch under the chart this view.
   const [kindPicked, setKind] = useState<ChartKind | null>(null);
@@ -1477,7 +1480,7 @@ export function ChartCard({
   // The experimental predicted path (Customize › Token chart, off by default) reads the last
   // minute second by second, so a live view with it on reads the 1-second page whatever its span;
   // the view itself still draws it only where it would anyway.
-  const pathing = look.chartPathing && fineOk && !!bounds?.live && shownRange !== "model";
+  const pathing = admin && look.chartPathing && fineOk && !!bounds?.live && shownRange !== "model";
   const secondRead = useFineCandles(
     api,
     wantSecond || pathing ? "1s" : null,

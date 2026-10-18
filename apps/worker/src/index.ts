@@ -87,6 +87,7 @@ import { PricePathSeeder } from "./jobs/pricePathSeed.js";
 import { PumpPortalStream } from "./discovery/pumpPortalStream.js";
 import { HeliusAccountStream } from "./discovery/heliusAccountStream.js";
 import { CURVE_STREAM_KEY_PREFIX, onCurveStreamUpdate, startCurveTape } from "./jobs/curveTape.js";
+import { startPricePathRecorder } from "./jobs/pricePathRecorder.js";
 import { onHolderStreamTx, setHolderTransferStream } from "./jobs/holderTransfers.js";
 import { JupiterLaunchPoller } from "./discovery/jupiterLaunchPoller.js";
 import { startNarrativePolling } from "./tokensage/prefetch.js";
@@ -333,6 +334,11 @@ async function main() {
         pollMaxMints: env.CURVE_TAPE_POLL_MAX_MINTS,
       })
     : undefined;
+  // Saves the paths the curve tape lets go of, for predictive price pathing (PRICE_PATH_RECORD).
+  const stopPricePaths =
+    curveTapeOn && env.PRICE_PATH_RECORD
+      ? startPricePathRecorder({ maxPerDay: env.PRICE_PATH_RECORD_MAX_PER_DAY })
+      : undefined;
 
   // Reads the chain for the subscription gate. Its own client rather than `deps.helius` because
   // it insists on `finalized` commitment - money depends on these answers, not enrichment quality.
@@ -918,6 +924,7 @@ async function main() {
     for (const { job } of jobs) job.stop();
     stream?.stop();
     stopCurveTape?.();
+    void stopPricePaths?.();
     heliusStream?.stop();
     launchPoller?.stop();
     stopNarrativePolling?.();

@@ -298,6 +298,20 @@ export class CurveTape {
     this.tapes.delete(mint);
   }
 
+  /**
+   * A mint's tape as it stands: every change it holds (price, real quote reserve) since coveredFrom,
+   * oldest first, for the worker's price path recorder. Null when the mint has none.
+   */
+  snapshot(mint: string): {
+    coveredFrom: number;
+    quoteIsSol: boolean;
+    ticks: { at: number; price: number; realQuote: number }[];
+  } | null {
+    const t = this.tapes.get(mint);
+    if (!t || t.ticks.length === 0) return null;
+    return { coveredFrom: t.coveredFrom, quoteIsSol: t.quoteIsSol, ticks: t.ticks.map((k) => ({ ...k })) };
+  }
+
   private evictOldest(): void {
     const oldest = this.tapes.keys().next().value;
     if (oldest !== undefined) this.tapes.delete(oldest);
