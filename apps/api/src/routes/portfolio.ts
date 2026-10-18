@@ -144,7 +144,10 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
       }),
       request.access ?? resolveAccess(wallet, admins),
       creditBalance(wallet),
-      prisma.burnCreditEntry.count({ where: { wallet, kind: "spend", createdAt: { gt: since30 } } }),
+      // Lookups, not rows: one that drew on two pots of credits is a row per pot at the same time.
+      prisma.$queryRaw<{ n: bigint }[]>`
+        SELECT COUNT(DISTINCT ("utility", "subject", "createdAt")) AS n FROM "BurnCreditEntry"
+        WHERE "wallet" = ${wallet} AND "kind" = 'spend' AND "createdAt" > ${since30}`,
       prisma.burnEvent.aggregate({
         where: { burnerWallet: wallet },
         _count: { _all: true },
@@ -203,7 +206,7 @@ export async function registerPortfolioRoutes(app: FastifyInstance, opts: { env:
           ? { source: pro.source, rank: pro.rank ?? null, graceEndsAt: pro.graceEndsAt ?? null }
           : null,
         burnCredits: credits,
-        lookups30d,
+        lookups30d: Number(lookups30d[0]?.n ?? 0),
         burns: { count: burns._count._all, months: burns._sum.monthsCredited ?? 0 },
         telegramChats: chats,
         linkedDevices: devices,

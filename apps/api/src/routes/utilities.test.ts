@@ -4,6 +4,7 @@ import bs58 from "bs58";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   BURN_CREDIT_MEMO,
+  DAILY_FREE_CREDITS,
   DexScreenerClient,
   loadEnv,
   prisma,
@@ -109,7 +110,16 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
   }
 
   async function grant(wallet: string, credits: number) {
-    await prisma.burnCreditEntry.create({ data: { wallet, delta: credits, kind: "grant", note: TAG } });
+    await prisma.burnCreditEntry.create({
+      data: { wallet, delta: credits, kind: "grant", source: "granted", note: TAG },
+    });
+  }
+
+  /** Uses up a subscriber's free daily credits, so a lookup is paid from the balance. */
+  async function useDailyFree(wallet: string) {
+    await prisma.burnCreditEntry.create({
+      data: { wallet, delta: -DAILY_FREE_CREDITS, kind: "spend", source: "daily", note: TAG },
+    });
   }
 
   it("sits behind the subscription", async () => {
@@ -189,6 +199,7 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
 
   it("charges a token lookup only once it succeeds, and lets it be re-opened free", async () => {
     const me = await signIn();
+    await useDailyFree(me.walletAddress);
     await grant(me.walletAddress, 1);
     const mint = random(32);
     mints.push(mint);
@@ -253,6 +264,7 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
     expect(missing.statusCode).toBe(404);
 
     const broke = await signIn();
+    await useDailyFree(broke.walletAddress);
     const res = await app.inject({
       method: "POST",
       url: "/utilities/token",
@@ -264,6 +276,31 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
 
     const overview = await app.inject({ method: "GET", url: "/utilities", cookies: me.cookies });
     expect(overview.json()).toMatchObject({ balance: 1, prices: { tokensPerCredit: 100 } });
+  });
+
+  it("pays a subscriber's lookups from the free daily credits first, and never past them", async () => {
+    const me = await signIn();
+    await grant(me.walletAddress, 1);
+    vi.spyOn(DexScreenerClient.prototype, "getTokensByAddresses").mockImplementation(async (mints) =>
+      mints.map(reading),
+    );
+    const lookUp = (mint: string) =>
+      app.inject({ method: "POST", url: "/utilities/token", cookies: me.cookies, payload: { mint } });
+    const first = await lookUp(random(32));
+    expect(first.json()).toMatchObject({ charged: 1, free: 1, freeLeft: DAILY_FREE_CREDITS - 1, balance: 1 });
+    const overview = await app.inject({ method: "GET", url: "/utilities", cookies: me.cookies });
+    expect(overview.json()).toMatchObject({
+      balance: 1,
+      daily: { allowance: DAILY_FREE_CREDITS, left: DAILY_FREE_CREDITS - 1 },
+    });
+    expect(overview.json().lookups[0]).toMatchObject({ cost: 1, free: 1 });
+
+    for (let i = 1; i < DAILY_FREE_CREDITS; i++) await lookUp(random(32));
+    // The allowance is spent: the next lookup takes the granted credit, the one after is refused.
+    expect((await lookUp(random(32))).json()).toMatchObject({ charged: 1, free: 0, freeLeft: 0, balance: 0 });
+    const broke = await lookUp(random(32));
+    expect(broke.statusCode).toBe(402);
+    expect(broke.json()).toMatchObject({ code: "not_enough_credits", balance: 0, freeLeft: 0 });
   });
 
   it("lets an admin award credits to any wallet, while the admin's own lookups still cost credits", async () => {
@@ -303,6 +340,7 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
 
   it("charges a wallet lookup once the profile loads, and re-opens it free", async () => {
     const me = await signIn();
+    await useDailyFree(me.walletAddress);
     await grant(me.walletAddress, 1);
     const target = random(32);
     const res = await app.inject({

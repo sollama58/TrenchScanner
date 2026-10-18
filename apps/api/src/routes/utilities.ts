@@ -4,6 +4,8 @@ import type { TokenSnapshot } from "@prisma/client";
 import {
   burnCreditPrices,
   creditBalance,
+  DAILY_FREE_CREDITS,
+  dailyFreeCredits,
   creditBurnCredits,
   describeCreditRejection,
   lastRebuiltAt,
@@ -156,14 +158,17 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
   app.get("/", async (request) => {
     const wallet = request.user!.walletAddress;
     const since = new Date(Date.now() - LOOKUP_REOPEN_MS);
-    const [balance, prices, spends, burns] = await Promise.all([
+    const subscriber = dailyFreeFor(request);
+    const [balance, prices, spendRows, burns, daily] = await Promise.all([
       creditBalance(wallet),
       burnCreditPrices(),
+      // A lookup that drew on two pots is a row per pot at the same createdAt (credits.ts), so a
+      // few more rows than lookups listed are read and merged.
       prisma.burnCreditEntry.findMany({
         where: { wallet, kind: "spend" },
         orderBy: { createdAt: "desc" },
-        take: 20,
-        select: { utility: true, subject: true, delta: true, createdAt: true },
+        take: 60,
+        select: { utility: true, subject: true, delta: true, source: true, createdAt: true },
       }),
       prisma.burnCreditEntry.findMany({
         where: { wallet, kind: { in: ["burn", "grant"] } },
@@ -171,7 +176,9 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
         take: 10,
         select: { kind: true, delta: true, burnSignature: true, rawAmount: true, createdAt: true },
       }),
+      subscriber ? dailyFreeCredits(wallet) : null,
     ]);
+    const spends = mergeSpends(spendRows).slice(0, 20);
     const mints = spends.filter((s) => s.utility === "token" && s.subject).map((s) => s.subject!);
     const tokens = mints.length
       ? await prisma.token.findMany({
@@ -185,10 +192,13 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       prices,
       burn: { mint: SUBSCRIPTION_MINT, decimals: SUBSCRIPTION_MINT_DECIMALS, memo: BURN_CREDIT_MEMO },
       reopenMinutes: LOOKUP_REOPEN_MS / 60_000,
+      // The subscriber's free daily credits (null without a live subscription).
+      daily: daily ? { allowance: DAILY_FREE_CREDITS, left: daily.left, nextAt: daily.nextAt } : null,
       lookups: spends.map((s) => ({
         utility: s.utility,
         subject: s.subject,
-        cost: -s.delta,
+        cost: s.cost,
+        free: s.free,
         at: s.createdAt,
         open: s.createdAt > since,
         token: s.utility === "token" && s.subject ? (tokenByMint.get(s.subject) ?? null) : null,
@@ -267,8 +277,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
 
     const open = await openLookup(wallet, "token", mint);
     if (!open) {
-      const balance = await creditBalance(wallet);
-      if (balance < cost) return notEnough(reply, balance, cost);
+      const short = await shortOf(request, wallet, cost);
+      if (short) return notEnough(reply, short.balance, cost, short.freeLeft);
     }
 
     const failed = new Set<string>();
@@ -290,8 +300,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     // Charged before the mint joins the scanner: the balance check above reserves nothing, so
     // concurrent lookups used to put every mint on the scan and charge only one of them
     // (security audit 2026-10-16, paywall F3).
-    const spent = await spendCredits(wallet, "token", mint, cost);
-    if (spent.status === "insufficient") return notEnough(reply, spent.balance, cost);
+    const spent = await spendCredits(wallet, "token", mint, cost, dailyFreeFor(request));
+    if (spent.status === "insufficient") return notEnough(reply, spent.balance, cost, spent.freeLeft);
 
     const now = new Date();
     keepReading(mint, reading, now);
@@ -299,7 +309,9 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     return {
       mint,
       charged: spent.status === "charged" ? spent.cost : 0,
+      free: spent.status === "charged" ? spent.free : 0,
       balance: spent.balance,
+      freeLeft: spent.freeLeft,
     };
   });
 
@@ -318,8 +330,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
 
     const open = await openLookup(wallet, "wallet", subject);
     if (!open) {
-      const balance = await creditBalance(wallet);
-      if (balance < cost) return notEnough(reply, balance, cost);
+      const short = await shortOf(request, wallet, cost);
+      if (short) return notEnough(reply, short.balance, cost, short.freeLeft);
     }
 
     try {
@@ -331,12 +343,14 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
         .send({ error: "Couldn't read that wallet just now. No credit was used; try again shortly." });
     }
 
-    const spent = await spendCredits(wallet, "wallet", subject, cost);
-    if (spent.status === "insufficient") return notEnough(reply, spent.balance, cost);
+    const spent = await spendCredits(wallet, "wallet", subject, cost, dailyFreeFor(request));
+    if (spent.status === "insufficient") return notEnough(reply, spent.balance, cost, spent.freeLeft);
     return {
       wallet: subject,
       charged: spent.status === "charged" ? spent.cost : 0,
+      free: spent.status === "charged" ? spent.free : 0,
       balance: spent.balance,
+      freeLeft: spent.freeLeft,
     };
   });
 
@@ -815,13 +829,72 @@ function notEnough(
   reply: { code: (c: number) => { send: (b: unknown) => unknown } },
   balance: number,
   cost: number,
+  freeLeft = 0,
 ) {
+  const have = freeLeft > 0 ? `${balance} plus ${freeLeft} free today` : `${balance}`;
   return reply.code(402).send({
-    error: `This lookup costs ${cost} Burn Credit${cost === 1 ? "" : "s"} and you have ${balance}. Burn $ASDFASDFA to get more.`,
+    error: `This lookup costs ${cost} Burn Credit${cost === 1 ? "" : "s"} and you have ${have}. Burn $ASDFASDFA to get more.`,
     code: "not_enough_credits",
     balance,
     cost,
+    freeLeft,
   });
+}
+
+/**
+ * Whether the reader gets the free daily credits: a live $ASDFASDFA subscription (user ask
+ * 2026-10-18). Admins, whitelist entries and Free Access wallets don't.
+ */
+function dailyFreeFor(request: { access?: { reason: string } }): boolean {
+  return request.access?.reason === "subscription";
+}
+
+/** The balance and free credits left when together they can't cover `cost`, else null. */
+async function shortOf(
+  request: { access?: { reason: string } },
+  wallet: string,
+  cost: number,
+): Promise<{ balance: number; freeLeft: number } | null> {
+  const [balance, daily] = await Promise.all([
+    creditBalance(wallet),
+    dailyFreeFor(request) ? dailyFreeCredits(wallet) : null,
+  ]);
+  const freeLeft = daily?.left ?? 0;
+  return balance + freeLeft < cost ? { balance, freeLeft } : null;
+}
+
+/** Spend rows, newest first, merged into one per lookup (its pots' rows share a createdAt). */
+export function mergeSpends(
+  rows: readonly {
+    utility: string | null;
+    subject: string | null;
+    delta: number;
+    source: string;
+    createdAt: Date;
+  }[],
+): { utility: string | null; subject: string | null; cost: number; free: number; createdAt: Date }[] {
+  const out: {
+    utility: string | null;
+    subject: string | null;
+    cost: number;
+    free: number;
+    createdAt: Date;
+  }[] = [];
+  for (const r of rows) {
+    const last = out[out.length - 1];
+    const same =
+      last &&
+      last.createdAt.getTime() === r.createdAt.getTime() &&
+      last.utility === r.utility &&
+      last.subject === r.subject;
+    const entry = same
+      ? last
+      : { utility: r.utility, subject: r.subject, cost: 0, free: 0, createdAt: r.createdAt };
+    entry.cost -= r.delta;
+    if (r.source === "daily") entry.free -= r.delta;
+    if (!same) out.push(entry);
+  }
+  return out;
 }
 
 /** The wallet's open lookup of the address in the route, or why there isn't one. */

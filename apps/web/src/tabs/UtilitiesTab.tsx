@@ -41,10 +41,14 @@ export interface UtilitiesOverview {
   prices: { tokensPerCredit: number; cost: { token: number; wallet: number } };
   burn: { mint: string; decimals: number; memo: string };
   reopenMinutes: number;
+  /** A subscriber's free daily credits, used before the balance; null without a subscription. */
+  daily: { allowance: number; left: number; nextAt: string | null } | null;
   lookups: {
     utility: "token" | "wallet" | null;
     subject: string | null;
     cost: number;
+    /** How much of `cost` the free daily credits paid. */
+    free: number;
     at: string;
     open: boolean;
     token: {
@@ -83,6 +87,30 @@ const STAGE_TEXT: Record<Stage, string> = {
 
 export const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
 
+/** A lookup's price, with the free daily credits left when the reader has them. */
+export function costLabel(cost: number, daily: UtilitiesOverview["daily"] | undefined): string {
+  const price = plural(cost, "credit");
+  return daily ? `${price} · ${daily.left} free left` : price;
+}
+
+/**
+ * The free daily credits beside the balance: how many are left of the allowance, and when the next
+ * one comes back once some are used (the allowance is a rolling 24 hours, so it never stacks).
+ */
+export function DailyFreeLine({ daily }: { daily: UtilitiesOverview["daily"] }) {
+  if (!daily) return null;
+  const back =
+    daily.nextAt && daily.left < daily.allowance
+      ? `, next back at ${new Date(daily.nextAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      : "";
+  return (
+    <p className="small muted util-daily">
+      + {daily.left} of {daily.allowance} free daily credits left{back}. They are used first and only pay for
+      lookups.
+    </p>
+  );
+}
+
 /** Why a lookup was refused, in words: the API's own message when it sent one. */
 function lookupError(e: unknown): string {
   if (e instanceof ApiError) {
@@ -117,8 +145,9 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
           <h1>Look up any coin or wallet</h1>
           <p className="muted">
             Each lookup costs Burn Credits, which you get by burning {SYMBOL} from this wallet. A credit is
-            only taken once the lookup works, and you can re-open it free for an hour. The Side Wallet Checker
-            and Wallets to watch are free.
+            only taken once the lookup works, and you can re-open it free for an hour. Subscribers also get 10
+            free credits a day, used before their balance. The Side Wallet Checker and Wallets to watch are
+            free.
           </p>
         </header>
 
@@ -276,6 +305,7 @@ function CreditsPanel({
           )}
         </div>
       </header>
+      {data && <DailyFreeLine daily={data.daily} />}
       {error && !data ? (
         <p className="error small">Couldn&apos;t load your credits: {error.message}</p>
       ) : !data ? (
@@ -649,7 +679,7 @@ export function LookupCard({
           <h3>
             <Icon size={14} /> {card.short}
           </h3>
-          <span className="util-cost num">{plural(cost, "credit")}</span>
+          <span className="util-cost num">{costLabel(cost, data?.daily)}</span>
         </header>
       ) : (
         <header className="section-head">
@@ -659,7 +689,7 @@ export function LookupCard({
             </span>
             <h2>{card.title}</h2>
           </div>
-          <span className="util-cost num">{plural(cost, "credit")}</span>
+          <span className="util-cost num">{costLabel(cost, data?.daily)}</span>
         </header>
       )}
       {!compact && <p className="muted small">{card.blurb}</p>}

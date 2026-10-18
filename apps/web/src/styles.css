@@ -18944,3 +18944,6 @@ body:has(.util-toast) .bug-fab {
 .scope-settings-intro {
   margin: 0;
 }
+.util-daily {
+  margin: 0 0 8px;
+}

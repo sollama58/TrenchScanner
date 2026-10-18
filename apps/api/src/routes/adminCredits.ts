@@ -39,9 +39,14 @@ const grantSchema = z.object({
 
 export async function registerAdminCreditRoutes(app: FastifyInstance) {
   app.get("/credits", async () => {
-    const [prices, byKind, wallets, recent] = await Promise.all([
+    const [prices, byKind, counts, wallets, recent] = await Promise.all([
       burnCreditPrices(),
-      prisma.burnCreditEntry.groupBy({ by: ["kind"], _sum: { delta: true }, _count: { _all: true } }),
+      prisma.burnCreditEntry.groupBy({ by: ["kind", "source"], _sum: { delta: true } }),
+      // Lookups, not rows: one that drew on two pots of credits is a row per pot at the same time.
+      prisma.$queryRaw<{ burns: bigint; lookups: bigint }[]>`
+        SELECT COUNT(*) FILTER (WHERE "kind" = 'burn') AS burns,
+               COUNT(DISTINCT ("wallet", "utility", "subject", "createdAt")) FILTER (WHERE "kind" = 'spend') AS lookups
+        FROM "BurnCreditEntry"`,
       // Counted in SQL: Prisma's `distinct` runs in memory here (no nativeDistinct), which read
       // every ledger row into the API on each load.
       prisma.$queryRaw<{ n: bigint }[]>`SELECT COUNT(DISTINCT "wallet") AS n FROM "BurnCreditEntry"`,
@@ -57,21 +62,26 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
           utility: true,
           subject: true,
           note: true,
+          source: true,
           createdAt: true,
         },
       }),
     ]);
-    const sum = (kind: string) => byKind.find((k) => k.kind === kind)?._sum.delta ?? 0;
-    const count = (kind: string) => byKind.find((k) => k.kind === kind)?._count._all ?? 0;
+    const sum = (kind: string, daily = false) =>
+      byKind
+        .filter((k) => k.kind === kind && (k.source === "daily") === daily)
+        .reduce((n, k) => n + (k._sum.delta ?? 0), 0);
     return {
       prices,
       totals: {
         wallets: Number(wallets[0]?.n ?? 0),
-        burns: count("burn"),
+        burns: Number(counts[0]?.burns ?? 0),
         earned: sum("burn"),
         granted: sum("grant"),
-        lookups: count("spend"),
+        lookups: Number(counts[0]?.lookups ?? 0),
         spent: -sum("spend"),
+        // Subscribers' free daily credits used: not part of any balance, so not in `outstanding`.
+        dailyFreeUsed: -sum("spend", true),
         outstanding: sum("burn") + sum("grant") + sum("spend"),
       },
       recent,

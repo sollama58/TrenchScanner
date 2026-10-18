@@ -2027,6 +2027,11 @@ model BurnCreditEntry {
   subject         String?
   /// A grant's reason, or which path found a burn ("claim" | "reconciler").
   note            String?
+  /// Which pot the row adds to or draws on: "burned" (a burn), "granted" (an admin grant) or
+  /// "daily" (a subscriber's free daily credits, credits.ts DAILY_FREE_CREDITS: spend rows only,
+  /// and not part of the balance). Lookups draw daily, then granted, then burned; trading draws
+  /// burned only. A lookup that draws on two pots is one spend row per pot, at the same createdAt.
+  source          String   @default("burned")
   createdAt       DateTime @default(now())
 
   @@index([wallet, createdAt])
