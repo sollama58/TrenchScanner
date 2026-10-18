@@ -1,4 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { ApiError, post } from "../api";
+import { ago } from "../format";
 import { recheckMe, useMe } from "../me";
 import { graceLeftText, useProState } from "../proTrade";
 import { useNow } from "../hooks";
@@ -55,6 +57,29 @@ export function ProModeCard({ funds, onBuy }: { funds: WalletBalance; onBuy: (()
   // session again each minute until it shows, so it does without a reload.
   const due = qualifying && !pending;
   const { reload } = funds;
+  // "Check now": a fresh holder scan, once a minute (the API holds to the same).
+  const [checking, setChecking] = useState(false);
+  const [checkNote, setCheckNote] = useState<string | null>(null);
+  const [nextCheckAt, setNextCheckAt] = useState(0);
+  const tick = useNow(1_000);
+  const waitSec = Math.max(0, Math.ceil((nextCheckAt - tick) / 1000));
+  const checkNow = () => {
+    setChecking(true);
+    setCheckNote(null);
+    post<{ scanned: boolean; nextCheckSec: number }>("/subscription/pro-check")
+      .then((r) => setNextCheckAt(Date.now() + r.nextCheckSec * 1000))
+      .catch((e: unknown) => {
+        const retry =
+          e instanceof ApiError ? (e.body as { retryAfterSec?: number } | null)?.retryAfterSec : undefined;
+        if (retry) setNextCheckAt(Date.now() + retry * 1000);
+        else setCheckNote(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        setChecking(false);
+        reload();
+        recheckMe();
+      });
+  };
   useEffect(() => {
     if (!due) return;
     const check = () => {
@@ -118,8 +143,8 @@ export function ProModeCard({ funds, onBuy }: { funds: WalletBalance; onBuy: (()
         <div className="pro-card-how">
           <h4>How to get it</h4>
           <p className="small">
-            Hold enough $ASDFASDFA to be one of the 250 largest wallets. We check every 5 minutes, and it
-            switches on by itself. If you drop out, you keep it for 24 hours.
+            Hold enough $ASDFASDFA to be one of the 250 largest wallets. We check every 5 minutes, or press
+            Check now, and it switches on by itself. If you drop out, you keep it for 24 hours.
           </p>
           {cutoff !== null && balance && (
             <p className="small pro-card-cutoff">
@@ -134,11 +159,28 @@ export function ProModeCard({ funds, onBuy }: { funds: WalletBalance; onBuy: (()
               .
             </p>
           )}
-          {!pro?.pro && onBuy && (
-            <button type="button" className="ghost pro-card-buy" onClick={onBuy}>
-              <FlameIcon size={14} /> Buy $ASDFASDFA
-            </button>
+          {(!pro?.pro || pro.graceEndsAt !== null) && (
+            <div className="pro-card-actions">
+              {onBuy && !pro?.pro && (
+                <button type="button" className="ghost pro-card-buy" onClick={onBuy}>
+                  <FlameIcon size={14} /> Buy $ASDFASDFA
+                </button>
+              )}
+              <button
+                type="button"
+                className="ghost"
+                disabled={checking || waitSec > 0}
+                onClick={checkNow}
+                title="Read the top holders again now, rather than at the next 5-minute check"
+              >
+                {checking ? "Checking…" : waitSec > 0 ? `Check again in ${waitSec}s` : "Check now"}
+              </button>
+              {holder?.scannedAt && (
+                <small className="muted">Last checked {ago(holder.scannedAt, tick)}</small>
+              )}
+            </div>
           )}
+          {checkNote && <p className="small error">{checkNote}</p>}
         </div>
       )}
       <div className="pro-card-perks">

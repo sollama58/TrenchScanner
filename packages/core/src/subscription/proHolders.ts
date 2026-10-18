@@ -1,5 +1,6 @@
 import { Prisma, prisma } from "../db.js";
 import { isWalletAddress } from "../solana.js";
+import { jobLockKey } from "../heartbeat.js";
 import { SUBSCRIPTION_MINT } from "./constants.js";
 
 /**
@@ -138,6 +139,44 @@ async function markMovedBags(
     .map((row) => row.walletAddress);
   if (moved.length > 0)
     await prisma.proHolder.updateMany({ where: { walletAddress: { in: moved } }, data: { bagMovedAt: now } });
+}
+
+/** Solana's public RPC: the scan's backup reader, as Helius won't list this classic SPL mint's accounts. */
+export const PRO_HOLDER_BACKUP_RPC = "https://api.mainnet-beta.solana.com";
+
+/**
+ * Site-wide floor between scans run from Settings' "Check now" (user ask 2026-10-18): however many
+ * people press it, the full read of the mint's accounts runs at most once a minute, so the public
+ * RPC it leans on isn't pushed into rate-limiting the worker's own scans.
+ */
+export const PRO_HOLDER_ON_DEMAND_MS = 60_000;
+
+/**
+ * A scan now, for "Check now", unless the newest one is under PRO_HOLDER_ON_DEMAND_MS old or
+ * another scan (the worker's or another press) is running: those answer the same question. Takes
+ * the worker job's own advisory lock, so two scans never overlap. `scanned`: whether this ran one.
+ */
+export async function refreshProHoldersOnDemand(
+  readers: ProHolderReader | readonly ProHolderReader[],
+  now = new Date(),
+): Promise<{ scanned: boolean }> {
+  latestCache = null;
+  const latest = await latestScan();
+  if (latest && now.getTime() - latest.getTime() < PRO_HOLDER_ON_DEMAND_MS) return { scanned: false };
+  return prisma.$transaction(
+    async (tx) => {
+      const [row] = await tx.$queryRaw<{ locked: boolean }[]>`
+        SELECT pg_try_advisory_xact_lock(hashtext(${jobLockKey("pro-holders")})) AS locked`;
+      if (!row?.locked) return { scanned: false };
+      // Another press may have scanned while this one waited for the lock.
+      latestCache = null;
+      const again = await latestScan();
+      if (again && Date.now() - again.getTime() < PRO_HOLDER_ON_DEMAND_MS) return { scanned: false };
+      await refreshProHolders(readers, new Date());
+      return { scanned: true };
+    },
+    { timeout: 60_000, maxWait: 10_000 },
+  );
 }
 
 /** Whether a wallet that dropped out moved its bag since (its grace then ended). */

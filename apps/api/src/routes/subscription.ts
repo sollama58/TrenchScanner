@@ -11,6 +11,11 @@ import {
   parseBurnTransaction,
   prisma,
   proHolderRank,
+  HeliusClient,
+  PRO_HOLDER_BACKUP_RPC,
+  PRO_HOLDER_ON_DEMAND_MS,
+  refreshProHoldersOnDemand,
+  type ProHolderReader,
   resolveAccess,
   SolanaRpc,
   SPL_TOKEN_PROGRAM_ID,
@@ -75,13 +80,21 @@ export function firstSignature(base64Transaction: string): string | null {
 export interface SubscriptionRouteOptions {
   env: Env;
   rpc: SolanaRpc;
+  /** "Check now"'s holder readers, in order; tests pass their own. Default: Helius, then Solana's public RPC. */
+  proHolderReaders?: ProHolderReader[];
 }
 
 export async function registerSubscriptionRoutes(
   app: FastifyInstance,
-  { env, rpc }: SubscriptionRouteOptions,
+  { env, rpc, proHolderReaders }: SubscriptionRouteOptions,
 ) {
   const admins = adminWalletSet(env);
+  const proReaders: ProHolderReader[] = proHolderReaders ?? [
+    ...(env.HELIUS_API_KEY ? [new HeliusClient({ apiKey: env.HELIUS_API_KEY })] : []),
+    new HeliusClient({ rpcUrl: PRO_HOLDER_BACKUP_RPC }),
+  ];
+  // "Check now" presses by wallet: one a minute each. In memory, as a press only costs a scan.
+  const lastProCheck = new Map<string, number>();
 
   // Everything here needs a session but must NOT need a subscription - this is where someone
   // without one comes to get one. Gating it behind the paywall would be a locked door with the
@@ -215,6 +228,35 @@ export async function registerSubscriptionRoutes(
       proOpen: env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC,
       accounts: burnable.map((a) => ({ address: a.address, rawAmount: a.rawAmount })),
     };
+  });
+
+  /**
+   * Settings' Pro Mode "Check now" (user ask 2026-10-18): reads the top holders again now rather
+   * than at the worker's next 5-minute scan, so a wallet that just bought in gets Pro Mode at once.
+   * Once a minute per wallet; the scan itself runs at most once a minute site-wide however many
+   * press it (refreshProHoldersOnDemand), and a press inside that minute reads the fresh scan.
+   */
+  app.post("/pro-check", async (request, reply) => {
+    if (!env.PRO_TRADING_ENABLED || !env.PRO_TRADING_PUBLIC)
+      return reply.code(404).send({ error: "not found" });
+    const wallet = request.user!.walletAddress;
+    const now = Date.now();
+    const last = lastProCheck.get(wallet);
+    if (last !== undefined && now - last < PRO_HOLDER_ON_DEMAND_MS) {
+      const retryAfterSec = Math.ceil((PRO_HOLDER_ON_DEMAND_MS - (now - last)) / 1000);
+      return reply.code(429).send({ error: `Check again in ${retryAfterSec} s.`, retryAfterSec });
+    }
+    lastProCheck.set(wallet, now);
+    // Old presses are forgotten, so the map stays the size of a minute's presses.
+    if (lastProCheck.size > 10_000)
+      for (const [w, at] of lastProCheck) if (now - at >= PRO_HOLDER_ON_DEMAND_MS) lastProCheck.delete(w);
+    try {
+      const { scanned } = await refreshProHoldersOnDemand(proReaders);
+      return { scanned, nextCheckSec: PRO_HOLDER_ON_DEMAND_MS / 1000 };
+    } catch (e) {
+      request.log.warn({ wallet: walletTag(wallet), error: String(e) }, "pro holder check failed");
+      return reply.code(503).send({ error: "Couldn't read the holders just now. Try again in a minute." });
+    }
   });
 
   /**

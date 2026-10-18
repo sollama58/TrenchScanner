@@ -18550,3 +18550,9 @@ body:has(.util-toast) .bug-fab {
   gap: 6px;
   margin: 4px 0 8px;
 }
+.pro-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}

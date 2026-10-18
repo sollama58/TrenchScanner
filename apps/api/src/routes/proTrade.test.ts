@@ -9,6 +9,7 @@ import {
   refreshProHolders,
   proHolderRank,
   proHolderSummary,
+  refreshProHoldersOnDemand,
   proHolderStanding,
   resetProHolderCacheForTests,
   type Env,
@@ -413,6 +414,27 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     expect(summary.grace.map((g) => g.walletAddress)).toEqual([GRACE]);
   });
 
+  it("lets Check now rescan at most once a minute, site-wide and per wallet", async () => {
+    let reads = 0;
+    const reader = {
+      getTopHoldersBatch: async (mints: string[]) => {
+        reads += 1;
+        return new Map(
+          mints.map((m) => [m, { status: "found", holders: [{ owner: HOLDER }, { owner: NEWBIE }] }]),
+        );
+      },
+    };
+    // The newest scan is seconds old: it answers the press, no new read.
+    expect(await refreshProHoldersOnDemand(reader)).toEqual({ scanned: false });
+    expect(reads).toBe(0);
+    const press = await as(NEWBIE, "POST", "/subscription/pro-check");
+    expect(press.statusCode).toBe(200);
+    expect(press.json()).toMatchObject({ scanned: false, nextCheckSec: 60 });
+    const again = await as(NEWBIE, "POST", "/subscription/pro-check");
+    expect(again.statusCode).toBe(429);
+    expect(again.json().retryAfterSec).toBeGreaterThan(55);
+  });
+
   it("turns stopped scans into a grace period instead of Pro Mode with no end", async () => {
     const later = new Date(Date.now() + 2 * 3_600_000);
     const standing = await proHolderStanding(HOLDER, later);
@@ -511,6 +533,25 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     await scan([HOLDER, NEWBIE], next);
     expect(await proHolderStanding(HOLDER, next)).toMatchObject({ state: "top" });
     expect(await proHolderStanding(NEWBIE, next)).toMatchObject({ state: "top", rank: 2 });
+    resetProHolderCacheForTests();
+  });
+
+  it("runs a Check now scan under the scan's lock when the newest scan is over a minute old", async () => {
+    await prisma.proHolder.deleteMany({});
+    resetProHolderCacheForTests();
+    let reads = 0;
+    const reader = {
+      getTopHoldersBatch: async (mints: string[]) => {
+        reads += 1;
+        return new Map(mints.map((m) => [m, { status: "found", holders: [{ owner: NEWBIE }] }]));
+      },
+    };
+    expect(await refreshProHoldersOnDemand(reader)).toEqual({ scanned: true });
+    expect(reads).toBe(1);
+    expect(await proHolderStanding(NEWBIE)).toMatchObject({ state: "top", rank: 1 });
+    // A second press straight after reads that scan.
+    expect(await refreshProHoldersOnDemand(reader)).toEqual({ scanned: false });
+    expect(reads).toBe(1);
     resetProHolderCacheForTests();
   });
 });
