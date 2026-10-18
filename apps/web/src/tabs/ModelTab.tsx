@@ -180,18 +180,27 @@ type BaselineProps = {
   refreshKey: string;
 };
 
-/** The chart's measures: the three hit rates, the share of the runners caught, and the average return. */
-type BaselineMetric = "2x" | "4x" | "10x" | "caught" | "profit";
+/**
+ * The chart's measures: the three hit rates, the share of the runners caught, the average return,
+ * and the composite score (leaderboard.ts in packages/core: the 0-100 the parts above make
+ * together, the window's live alerts pooled with the backtest).
+ */
+type BaselineMetric = "2x" | "4x" | "10x" | "caught" | "profit" | "score";
 const BASELINE_METRICS: readonly { id: BaselineMetric; label: string }[] = [
   { id: "2x", label: "2x" },
   { id: "4x", label: "4x" },
   { id: "10x", label: "10x" },
   { id: "caught", label: "Catch" },
   { id: "profit", label: "Profit" },
+  { id: "score", label: "Score" },
 ];
 
 /** The window the chart opens on. */
 const BASELINE_DEFAULT_DAYS: WindowDays = 3;
+/** The 3-day window opens on the composite score (user ask 2026-10-18); other windows keep the measure on. */
+const SCORE_DEFAULT_DAYS: WindowDays = 3;
+/** The score's reference line: where the "On target" band starts (SCORE_BANDS in leaderboard.ts). */
+const SCORE_ON_TARGET = 90;
 
 type BaselineView = {
   days: WindowDays;
@@ -206,16 +215,46 @@ type BaselineView = {
 
 function BaselinePanel(props: BaselineProps) {
   const [days, setDays] = useState<WindowDays>(BASELINE_DEFAULT_DAYS);
-  const [metric, setMetric] = useState<BaselineMetric>("2x");
+  const [metric, setMetric] = useState<BaselineMetric>(
+    BASELINE_DEFAULT_DAYS === SCORE_DEFAULT_DAYS ? "score" : "2x",
+  );
   const [picked, setPicked] = useState<string | null>(null);
   // The model whose detail dialog is open (it follows the board, so a window switch refreshes it).
   const [opened, setOpened] = useState<string | null>(null);
-  const view = { days, setDays, metric, setMetric, picked, setPicked, opened, setOpened };
+  const pickDays = (d: WindowDays) => {
+    setDays(d);
+    if (d === SCORE_DEFAULT_DAYS) setMetric("score");
+  };
+  const view = { days, setDays: pickDays, metric, setMetric, picked, setPicked, opened, setOpened };
   // The page's own board is the 7-day one; the 24h and 3-day boards are polled only while picked.
   return days === PAGE_DAYS ? (
     <BaselineChart {...props} {...view} loading={false} />
   ) : (
     <DayBaselineChart {...props} {...view} />
+  );
+}
+
+/** The Score measure's figures: the best seasoned score, how many models are seasoned, and the line. */
+function ScoreFigs({ board }: { board: Leaderboard }) {
+  const seasoned = board.entries.filter((e) => e.composite.score !== null && e.composite.warmingUp !== true);
+  const top = seasoned.reduce<number | null>((m, e) => Math.max(m ?? 0, e.composite.score ?? 0), null);
+  return (
+    <div className="family-figs">
+      <div>
+        <label>Best seasoned score</label>
+        <span className="num">{top === null ? "–" : top.toFixed(0)}</span>
+      </div>
+      <div>
+        <label>Seasoned models</label>
+        <span className="num">
+          {seasoned.length} of {board.entries.length}
+        </span>
+      </div>
+      <div>
+        <label>On target</label>
+        <span className="num">{SCORE_ON_TARGET}</span>
+      </div>
+    </div>
   );
 }
 
@@ -259,20 +298,24 @@ function BaselineChart({
   const t = board.targets;
   const caught = metric === "caught";
   const profit = metric === "profit";
+  const score = metric === "score";
   // The catch rate has no random-pick baseline (a random picker's share of the runners only grows
   // with how many it calls), so its reference line is the whole field's: the runners any model caught.
   const field = board.runners ?? null;
-  const baseRate = caught
-    ? (field?.pct ?? null)
-    : profit
-      ? (base?.avgSimReturnPct ?? null)
-      : base
-        ? metric === "2x"
-          ? base.hitRate2xPct
-          : metric === "4x"
-            ? base.hitRate4xPct
-            : (base.hitRate10xPct ?? null)
-        : null;
+  // The score has no random-pick baseline: its reference is the "On target" band.
+  const baseRate = score
+    ? null
+    : caught
+      ? (field?.pct ?? null)
+      : profit
+        ? (base?.avgSimReturnPct ?? null)
+        : base
+          ? metric === "2x"
+            ? base.hitRate2xPct
+            : metric === "4x"
+              ? base.hitRate4xPct
+              : (base.hitRate10xPct ?? null)
+          : null;
   const goal =
     metric === "2x"
       ? t.hitRate2xPct
@@ -282,7 +325,9 @@ function BaselineChart({
           ? (board.scoring.tenXTargetPct ?? 25)
           : caught
             ? (board.scoring.catchTargetPct ?? 75)
-            : null;
+            : score
+              ? SCORE_ON_TARGET
+              : null;
   const rateOf = (e: LeaderboardEntry) =>
     metric === "2x"
       ? e.composite.live.winRatePct
@@ -292,7 +337,9 @@ function BaselineChart({
           ? (e.composite.live.tenXRatePct ?? null)
           : caught
             ? (e.liveCatch?.pct ?? null)
-            : (e.composite.live.avgSimReturnPct ?? null);
+            : score
+              ? e.composite.score
+              : (e.composite.live.avgSimReturnPct ?? null);
   // Seasoned records first: a 33% on three calls shouldn't sit above a 15% on a hundred.
   const thin = (e: LeaderboardEntry) => e.composite.warmingUp === true || isEarly(e.composite.live.graded);
   const rows = [...board.entries].sort(
@@ -363,7 +410,14 @@ function BaselineChart({
           </span>
           <h3>Are the models beating a random pick?</h3>
           <p className="muted small">
-            {profit ? (
+            {score ? (
+              <>
+                Each model&apos;s composite score: how far it has proven itself toward the goal, 0 to 100,
+                from its 2x, 4x and 10x rates, average return, run size and catch. Its live alerts in the
+                window are pooled with its backtest, which counts for at most {board.scoring.livePivotCalls}{" "}
+                alerts. The line is where &quot;On target&quot; starts.
+              </>
+            ) : profit ? (
               <>
                 The average simulated return per alert, taking every alert with one fixed exit plan, next to
                 the same plan on a random pick from the moments the models choose from.
@@ -408,9 +462,11 @@ function BaselineChart({
                 title={
                   m.id === "caught"
                     ? "Share of the runners each model flagged"
-                    : m.id === "profit"
-                      ? "Average simulated return per alert"
-                      : undefined
+                    : m.id === "score"
+                      ? "Composite score, 0-100: how far each model has proven itself toward the goal"
+                      : m.id === "profit"
+                        ? "Average simulated return per alert"
+                        : undefined
                 }
                 onClick={() => setMetric(m.id)}
               >
@@ -426,34 +482,38 @@ function BaselineChart({
       )}
       {!failed && (
         <>
-          <div className="family-figs">
-            <div>
-              <label>
-                {caught
-                  ? "All models caught"
-                  : profit
-                    ? "Filtered baseline profit"
-                    : `Filtered baseline ${metric}`}
-              </label>
-              <span className="num">{profit ? signedPct(baseRate, 1) : pct(baseRate, 1)}</span>
+          {score ? (
+            <ScoreFigs board={board} />
+          ) : (
+            <div className="family-figs">
+              <div>
+                <label>
+                  {caught
+                    ? "All models caught"
+                    : profit
+                      ? "Filtered baseline profit"
+                      : `Filtered baseline ${metric}`}
+                </label>
+                <span className="num">{profit ? signedPct(baseRate, 1) : pct(baseRate, 1)}</span>
+              </div>
+              <div>
+                <label>{caught ? "Runners" : "Moments it covers"}</label>
+                <span className="num">
+                  {caught
+                    ? field
+                      ? field.runners.toLocaleString()
+                      : "–"
+                    : base
+                      ? base.graded.toLocaleString()
+                      : "–"}
+                </span>
+              </div>
+              <div>
+                <label>{profit ? "Break-even" : "Goal"}</label>
+                <span className="num">{goal === null ? "0%" : `${goal}%`}</span>
+              </div>
             </div>
-            <div>
-              <label>{caught ? "Runners" : "Moments it covers"}</label>
-              <span className="num">
-                {caught
-                  ? field
-                    ? field.runners.toLocaleString()
-                    : "–"
-                  : base
-                    ? base.graded.toLocaleString()
-                    : "–"}
-              </span>
-            </div>
-            <div>
-              <label>{profit ? "Break-even" : "Goal"}</label>
-              <span className="num">{goal === null ? "0%" : `${goal}%`}</span>
-            </div>
-          </div>
+          )}
 
           {!guest && (
             <div className="feed-pick-row">
@@ -515,9 +575,21 @@ function BaselineChart({
                       (caught && e.liveCatch
                         ? `${e.liveCatch.caught} of ${e.liveCatch.runners} runner${e.liveCatch.runners === 1 ? "" : "s"}`
                         : `${e.composite.live.graded} graded alert${e.composite.live.graded === 1 ? "" : "s"}`),
-                    display: rate === null ? "–" : profit ? signedPct(rate, 1) : `${rate.toFixed(1)}%`,
-                    note: profit ? `${pct(hit2x)} hit 2x` : `${signedPct(ret)} profit`,
-                    noteTone: profit || ret === null || ret === 0 ? undefined : ret > 0 ? "up" : "down",
+                    display:
+                      rate === null
+                        ? "–"
+                        : profit
+                          ? signedPct(rate, 1)
+                          : score
+                            ? rate.toFixed(0)
+                            : `${rate.toFixed(1)}%`,
+                    note: score
+                      ? (e.composite.band?.label ?? "")
+                      : profit
+                        ? `${pct(hit2x)} hit 2x`
+                        : `${signedPct(ret)} profit`,
+                    noteTone:
+                      score || profit || ret === null || ret === 0 ? undefined : ret > 0 ? "up" : "down",
                     thin: thin(e),
                     toggle: guest ? undefined : feedToggle(e),
                   };
@@ -532,53 +604,68 @@ function BaselineChart({
                         },
                       ]
                     : []),
-                  ...(goal !== null ? [{ label: "Goal", value: goal, kind: "goal" as const }] : []),
+                  ...(goal !== null
+                    ? [{ label: score ? "On target" : "Goal", value: goal, kind: "goal" as const }]
+                    : []),
                 ]}
                 selected={selected?.id ?? null}
                 onSelect={setPicked}
                 onOpen={setOpened}
-                legend={profit ? "Avg return" : "Hit rate"}
+                legend={score ? "Score" : profit ? "Avg return" : "Hit rate"}
+                unit={score ? "" : "%"}
                 columns={{
                   label: "Model",
-                  value: caught ? "runners caught" : profit ? "avg return per alert" : `${metric} hit rate`,
-                  note: profit ? "2x hit rate" : "avg return per alert",
+                  value: score
+                    ? "score of 100"
+                    : caught
+                      ? "runners caught"
+                      : profit
+                        ? "avg return per alert"
+                        : `${metric} hit rate`,
+                  note: score ? "band" : profit ? "2x hit rate" : "avg return per alert",
                 }}
               />
               {selected && (
                 <p className="baseline-readout">
                   <strong>{selected.name}</strong>:{" "}
-                  {profit
+                  {score
                     ? selRate === null
-                      ? `no simulated returns in the last ${windowLong(days)} yet.`
-                      : `taking every one of its ${selGraded} graded alerts${
-                          selSince ? ` since ${shortDate(selSince)}` : ""
-                        } averaged ${signedPct(selRate, 1)} per alert${
-                          baseRate === null
-                            ? "."
-                            : `, against the filtered baseline's ${signedPct(baseRate, 1)}.`
-                        }`
-                    : caught
-                      ? selCatch === null || selCatch.runners === 0 || selRate === null
-                        ? `no runners since it started alerting in the last ${windowLong(days)} yet.`
-                        : `flagged ${selCatch.caught} of the ${selCatch.runners} tokens that doubled since it started alerting in the last ${windowLong(days)}, ${pct(selRate, 1)} of the runners against the ${goal}% goal${
-                            baseRate === null ? "." : ` (every model together: ${pct(baseRate, 1)}).`
-                          }`
-                      : selRate === null
-                        ? `no graded alerts in the last ${windowLong(days)} yet.`
-                        : `${pct(selRate, 1)} of its ${selGraded} graded alerts${
+                      ? `no graded alerts or backtest to score yet.`
+                      : `${selRate.toFixed(0)} of 100${
+                          selected.composite.band ? `, ${selected.composite.band.label}` : ""
+                        }. ${selected.scoreExplained ?? ""}`
+                    : profit
+                      ? selRate === null
+                        ? `no simulated returns in the last ${windowLong(days)} yet.`
+                        : `taking every one of its ${selGraded} graded alerts${
                             selSince ? ` since ${shortDate(selSince)}` : ""
-                          } ${hit} (${intervalText(wilsonOfRate(selRate, selGraded))})${
-                            metric !== "2x"
-                              ? baseRate === null
-                                ? "."
-                                : `, against the filtered baseline's ${pct(baseRate, 1)}.`
-                              : selLift === null
-                                ? "."
-                                : selLift >= 1
-                                  ? `, ${selLift.toFixed(1)}x the filtered market's ${pct(selMarket, 1)} in the hours it was alerting.`
-                                  : `, below the filtered market's ${pct(selMarket, 1)} in the hours it was alerting: worse than picking at random.`
-                          }`}
-                  {!profit && selected.composite.live.avgSimReturnPct != null
+                          } averaged ${signedPct(selRate, 1)} per alert${
+                            baseRate === null
+                              ? "."
+                              : `, against the filtered baseline's ${signedPct(baseRate, 1)}.`
+                          }`
+                      : caught
+                        ? selCatch === null || selCatch.runners === 0 || selRate === null
+                          ? `no runners since it started alerting in the last ${windowLong(days)} yet.`
+                          : `flagged ${selCatch.caught} of the ${selCatch.runners} tokens that doubled since it started alerting in the last ${windowLong(days)}, ${pct(selRate, 1)} of the runners against the ${goal}% goal${
+                              baseRate === null ? "." : ` (every model together: ${pct(baseRate, 1)}).`
+                            }`
+                        : selRate === null
+                          ? `no graded alerts in the last ${windowLong(days)} yet.`
+                          : `${pct(selRate, 1)} of its ${selGraded} graded alerts${
+                              selSince ? ` since ${shortDate(selSince)}` : ""
+                            } ${hit} (${intervalText(wilsonOfRate(selRate, selGraded))})${
+                              metric !== "2x"
+                                ? baseRate === null
+                                  ? "."
+                                  : `, against the filtered baseline's ${pct(baseRate, 1)}.`
+                                : selLift === null
+                                  ? "."
+                                  : selLift >= 1
+                                    ? `, ${selLift.toFixed(1)}x the filtered market's ${pct(selMarket, 1)} in the hours it was alerting.`
+                                    : `, below the filtered market's ${pct(selMarket, 1)} in the hours it was alerting: worse than picking at random.`
+                            }`}
+                  {!profit && !score && selected.composite.live.avgSimReturnPct != null
                     ? ` Taking every alert averaged ${signedPct(selected.composite.live.avgSimReturnPct)} per alert.`
                     : ""}
                   {selected.composite.warmingUp || isEarly(selGraded)
@@ -587,11 +674,20 @@ function BaselineChart({
                 </p>
               )}
               <p className="faint small">
-                Live alerts over the last {windowLong(days)}, against{" "}
-                {caught ? "every model's catch together" : "the filtered baseline"} over the same window.{" "}
-                {profit
-                  ? "Under each return is the model's 2x hit rate."
-                  : "Under each rate is its average simulated return per alert, taking every alert with one fixed exit plan."}{" "}
+                {score ? (
+                  <>
+                    Scores from live alerts over the last {windowLong(days)} pooled with each model&apos;s
+                    backtest. Under each score is its band. Models still warming up rank below the rest.{" "}
+                  </>
+                ) : (
+                  <>
+                    Live alerts over the last {windowLong(days)}, against{" "}
+                    {caught ? "every model's catch together" : "the filtered baseline"} over the same window.{" "}
+                    {profit
+                      ? "Under each return is the model's 2x hit rate."
+                      : "Under each rate is its average simulated return per alert, taking every alert with one fixed exit plan."}{" "}
+                  </>
+                )}
                 Faded bars rest on too few alerts. <strong>Tap or click a model</strong> for its full record,
                 past versions and exam results.{" "}
                 {!guest && (
