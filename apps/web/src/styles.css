@@ -19084,3 +19084,212 @@ body:has(.util-toast) .bug-fab {
   outline-offset: 2px;
   border-radius: 6px;
 }
+
+/* ---------------------------------------------------------------------------------------------
+   Scope's token terminal (user ask 2026-10-18, desktop only: TERMINAL_QUERY in TokenModal.tsx):
+   the full window under the site's bar, the coin's header with its figures in one row, then the
+   chart beside the bubble map with tabs below, and a rail for Trade, the exit plan, the safety
+   checks and the alert. Phones and narrow windows never get the class. */
+dialog.tm-modal.tm-terminal {
+  position: fixed;
+  inset: var(--tm-bar-h, 0px) 0 0 0;
+  width: auto;
+  max-width: none;
+  height: calc(100dvh - var(--tm-bar-h, 0px));
+  max-height: none;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--border-strong);
+  border-radius: 0;
+  box-shadow: none;
+  overflow: hidden;
+}
+dialog.tm-modal.tm-terminal::backdrop {
+  background: transparent;
+}
+.tm-modal.tm-terminal .tm-term {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 0;
+}
+.tm-modal.tm-terminal .tm-head {
+  position: static;
+  margin: 0;
+  padding: 10px 16px;
+  grid-template-columns: minmax(240px, auto) minmax(0, 1fr) auto;
+  grid-template-areas:
+    "token figs actions"
+    "token figs links";
+  row-gap: 6px;
+  backdrop-filter: none;
+  background: var(--surface-solid);
+}
+.tm-modal.tm-terminal .tm-head > .tm-figs {
+  grid-area: figs;
+  grid-template-columns: repeat(4, minmax(0, 150px));
+  justify-content: center;
+  gap: 8px;
+  margin: 0;
+}
+.tm-modal.tm-terminal .tm-fig {
+  gap: 1px;
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+}
+.tm-modal.tm-terminal .tm-fig > span.num {
+  font-size: 17px;
+}
+.tm-modal.tm-terminal .tm-back {
+  display: none;
+}
+.tm-term-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+.tm-term-main {
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--border);
+}
+.tm-term-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(380px, 34%);
+  border-bottom: 1px solid var(--border);
+}
+.tm-term-chart {
+  min-width: 0;
+  padding: 10px 14px 6px;
+}
+.tm-modal.tm-terminal .tm-term-chart > .sage-card.tm-chart {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.tm-term-map {
+  position: relative;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+}
+.tm-term-map-in {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 12px;
+}
+.tm-term-map-in > .sage-card:first-child,
+.tm-term-map-in > .tm-holders-bar + .sage-card {
+  margin-top: 0;
+}
+.tm-term-map .bm-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.tm-term-map .bm-stats > div {
+  padding: 8px 10px;
+}
+.tm-term-map .bm-stage.compact .bm-svg,
+.tm-term-map .bm-svg {
+  height: 340px;
+}
+.tm-term-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 2px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-solid);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tm-term-pane {
+  padding: 4px 14px 18px;
+}
+.tm-term-empty {
+  margin: 16px 2px;
+}
+.tm-term-rail {
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 12px 16px;
+}
+.tm-term-rail > :first-child > .sage-card,
+.tm-term-rail > .tm-term-trade:empty + .sage-card {
+  margin-top: 12px;
+}
+.tm-term-rail .tm-safety-checks {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+.tm-term-rail .tm-safety-checks li {
+  padding: 5px 0;
+}
+.tm-term-rail .tm-safety-label small,
+.tm-term-rail .tm-safety-lead {
+  display: none;
+}
+.tm-term-steps {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+}
+.tm-term-pro ul {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.tm-term-pro-go {
+  display: block;
+  text-align: center;
+  padding: 9px 12px;
+  border-radius: var(--radius-s);
+  font-weight: 650;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+  text-decoration: none;
+}
+.tm-term-pro-go:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+/* The Trade panel in the rail is phone-width: its narrow-screen arrangement, whatever the window. */
+.tm-term-rail .tm-trade-sides,
+.tm-term-rail .tm-fee-groups {
+  grid-template-columns: minmax(0, 1fr);
+}
+.tm-term-rail .tm-hold-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.tm-term-rail .tm-trade-disclaimer,
+.tm-term-rail .tm-hold-hero {
+  flex-direction: column;
+  align-items: stretch;
+}
+.tm-term-rail .tm-trade-disclaimer button {
+  justify-content: center;
+}
+.tm-term-rail .tm-fee-zero-more {
+  display: none;
+}
+/* The map first in its column (user ask: the bubble map always shows), its figures and lists under it. */
+.tm-term-map .bm-section {
+  display: flex;
+  flex-direction: column;
+}
+.tm-term-map .bm-section > h4 {
+  order: -2;
+}
+.tm-term-map .bm-section > .bm-stage {
+  order: -1;
+}

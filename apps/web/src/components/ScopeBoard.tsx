@@ -402,7 +402,7 @@ export function ScopeRow({
   marker?: boolean;
 }) {
   const open = () => {
-    if (!preview) openTokenModal(card, now);
+    if (!preview) openTokenModal(card, now, true);
   };
   const onClick = (e: React.MouseEvent) => {
     if (e.defaultPrevented || e.button !== 0) return;
