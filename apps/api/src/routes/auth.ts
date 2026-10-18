@@ -261,7 +261,16 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     if (!privyEnabled(opts.env)) return reply.code(404).send({ error: "not found" });
     const parsed = z.object({ accessToken: z.string().min(20).max(4096) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid request" });
-    const did = await verifyPrivyToken(opts.env, parsed.data.accessToken);
+    let did: string | null;
+    try {
+      did = await verifyPrivyToken(opts.env, parsed.data.accessToken);
+    } catch (err) {
+      request.log.warn(
+        { err: err instanceof PrivyUnavailable ? err.message : err },
+        "privy keys fetch failed",
+      );
+      return reply.code(503).send({ error: "Privy isn't answering right now. Try again in a minute." });
+    }
     if (!did) return reply.code(401).send({ error: "That sign-in didn't check out. Try again." });
 
     let user = await prisma.user.findUnique({ where: { privyUserId: did } });
