@@ -15550,6 +15550,38 @@ body:has(.util-toast) .bug-fab {
   margin: 0;
   color: var(--ink-2);
 }
+.tm-trade-disclaimer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, transparent);
+}
+.tm-trade-disclaimer p {
+  margin: 0;
+  flex: 1;
+  color: var(--ink-2);
+}
+.tm-trade-disclaimer button {
+  flex: none;
+}
+@media (max-width: 520px) {
+  .tm-trade-disclaimer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+.tm-trade-about {
+  color: var(--muted);
+}
+.tm-trade-about summary {
+  cursor: pointer;
+}
+.tm-trade-about p {
+  margin: 4px 0 0;
+}
 .tm-trade-turbo.on {
   color: var(--warn-ink);
   border-color: color-mix(in srgb, var(--warn) 50%, var(--border));

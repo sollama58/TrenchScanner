@@ -173,6 +173,35 @@ export function readTradeSettings(): TradeSettings {
   }
 }
 
+/**
+ * The trading disclaimer (user ask 2026-10-18): each wallet accepts it once in this browser before
+ * its first trade. With storage blocked it is asked again on each page load, which still means at
+ * least once.
+ */
+const DISCLAIMER_KEY = "ts-pro-trade-disclaimer-v1";
+
+export function disclaimerAccepted(wallet: string): boolean {
+  try {
+    const raw = localStorage.getItem(DISCLAIMER_KEY);
+    const wallets: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(wallets) && wallets.includes(wallet);
+  } catch {
+    return false;
+  }
+}
+
+export function acceptDisclaimer(wallet: string): void {
+  try {
+    const raw = localStorage.getItem(DISCLAIMER_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    const wallets = Array.isArray(parsed) ? parsed.filter((w): w is string => typeof w === "string") : [];
+    if (!wallets.includes(wallet))
+      localStorage.setItem(DISCLAIMER_KEY, JSON.stringify([...wallets, wallet].slice(-20)));
+  } catch {
+    // Blocked storage: accepted for this page load only.
+  }
+}
+
 export function saveTradeSettings(s: TradeSettings): void {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));

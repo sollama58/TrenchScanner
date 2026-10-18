@@ -6,6 +6,8 @@ import {
   MAX_CUSTOM_FEE_SOL,
   MIN_TIP_SOL,
   readTradeSettings,
+  acceptDisclaimer,
+  disclaimerAccepted,
   useFeeEstimate,
   runTrade,
   saveTradeSettings,
@@ -66,6 +68,13 @@ export function feeTotalSol(fee: {
 }): number {
   return (Number(fee.priorityFeeLamports) + Number(fee.tipLamports) + Number(fee.baseFeeLamports)) / LAMPORTS;
 }
+
+/** Shown once before a wallet's first trade, and kept under the panel after (user ask 2026-10-18). */
+export const TRADE_DISCLAIMER =
+  "Trading here is non-custodial: TrenchScanner never holds your keys or funds and only sees your wallet's public address. " +
+  "Each trade is built by our server and signed by your own wallet, and once sent it can't be undone. " +
+  "TrenchScanner is open-source software created largely with machine learning models, so it may have bugs. " +
+  "Check every trade in your wallet before you sign it, trade only what you can afford to lose, and treat nothing here as financial advice.";
 
 /** Buys this size or more ask before they start. */
 const CONFIRM_BUY_LAMPORTS = 5n * BigInt(LAMPORTS);
@@ -137,6 +146,7 @@ export function TradePanel({
   const [custom, setCustom] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [showSettings, setShowSettings] = useState(false);
+  const [accepted, setAccepted] = useState(() => disclaimerAccepted(owner));
   const busy = status.kind === "busy";
   const balance = position ? BigInt(position.balance) : 0n;
 
@@ -147,7 +157,7 @@ export function TradePanel({
   };
 
   const trade = async (side: "buy" | "sell", amount: bigint, what: string, all = false) => {
-    if (busy || amount <= 0n) return;
+    if (busy || amount <= 0n || !accepted) return;
     // A big buy is one click from a preset or a typo: ask first.
     if (side === "buy" && amount >= CONFIRM_BUY_LAMPORTS && !window.confirm(`${what} of ${symbol}?`)) return;
     setStatus({ kind: "busy", stage: "building", what });
@@ -238,81 +248,100 @@ export function TradePanel({
         </div>
       )}
 
-      {!closeOnly && (
-        <div className="tm-trade-row" role="group" aria-label="Buy">
-          <span className="tm-trade-label up">Buy</span>
-          {settings.buyPresets.map((sol) => (
-            <button
-              key={sol}
-              type="button"
-              className="tm-trade-btn buy"
-              disabled={busy}
-              onClick={() => trade("buy", BigInt(Math.round(sol * LAMPORTS)), `Buy ${solText(sol)}`)}
-            >
-              {sol}
-            </button>
-          ))}
-          <span className="tm-trade-custom">
-            <input
-              inputMode="decimal"
-              placeholder="SOL"
-              aria-label="Buy amount in SOL"
-              value={custom}
-              onChange={(e) => setCustom(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && customLamports)
-                  void trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`);
-              }}
-            />
-            <button
-              type="button"
-              className="tm-trade-btn buy"
-              disabled={busy || !customLamports}
-              onClick={() =>
-                customLamports &&
-                trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`)
-              }
-            >
-              Buy
-            </button>
-          </span>
-        </div>
-      )}
-
-      <div className="tm-trade-row" role="group" aria-label="Sell">
-        <span className="tm-trade-label down">Sell</span>
-        {settings.sellPresets.map((pct) => (
+      {!accepted ? (
+        <div className="tm-trade-disclaimer" role="note" aria-label="Before you trade">
+          <p className="small">
+            <strong>Before your first trade.</strong> {TRADE_DISCLAIMER}
+          </p>
           <button
-            key={pct}
-            type="button"
-            className="tm-trade-btn sell"
-            disabled={busy || balance === 0n}
-            title={balance === 0n ? "Nothing to sell" : undefined}
-            onClick={() => trade("sell", shareOf(balance, pct), `Sell ${pct}%`, pct >= 100)}
+            className="small"
+            onClick={() => {
+              acceptDisclaimer(owner);
+              setAccepted(true);
+            }}
           >
-            {pct}%
+            I understand
           </button>
-        ))}
-        <button
-          type="button"
-          className={`ghost small tm-trade-turbo${settings.speed === "turbo" ? " on" : ""}`}
-          aria-pressed={settings.speed === "turbo"}
-          title="Turbo sends through every Helius path for the fastest landing, for a 0.001 SOL tip instead of 0.000005"
-          onClick={() => update({ speed: settings.speed === "turbo" ? "eco" : "turbo" })}
-        >
-          Turbo {settings.speed === "turbo" ? "on" : "off"}
-        </button>
-        <button
-          type="button"
-          className="ghost small tm-trade-gear"
-          aria-expanded={showSettings}
-          onClick={() => setShowSettings(!showSettings)}
-        >
-          {settings.slippagePct}% slip
-          {settings.priorityMode === "custom" ? " · custom fee" : ""}
-          {settings.mevProtect ? " · MEV shield" : ""}
-        </button>
-      </div>
+        </div>
+      ) : (
+        <>
+          {!closeOnly && (
+            <div className="tm-trade-row" role="group" aria-label="Buy">
+              <span className="tm-trade-label up">Buy</span>
+              {settings.buyPresets.map((sol) => (
+                <button
+                  key={sol}
+                  type="button"
+                  className="tm-trade-btn buy"
+                  disabled={busy}
+                  onClick={() => trade("buy", BigInt(Math.round(sol * LAMPORTS)), `Buy ${solText(sol)}`)}
+                >
+                  {sol}
+                </button>
+              ))}
+              <span className="tm-trade-custom">
+                <input
+                  inputMode="decimal"
+                  placeholder="SOL"
+                  aria-label="Buy amount in SOL"
+                  value={custom}
+                  onChange={(e) => setCustom(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && customLamports)
+                      void trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`);
+                  }}
+                />
+                <button
+                  type="button"
+                  className="tm-trade-btn buy"
+                  disabled={busy || !customLamports}
+                  onClick={() =>
+                    customLamports &&
+                    trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`)
+                  }
+                >
+                  Buy
+                </button>
+              </span>
+            </div>
+          )}
+
+          <div className="tm-trade-row" role="group" aria-label="Sell">
+            <span className="tm-trade-label down">Sell</span>
+            {settings.sellPresets.map((pct) => (
+              <button
+                key={pct}
+                type="button"
+                className="tm-trade-btn sell"
+                disabled={busy || balance === 0n}
+                title={balance === 0n ? "Nothing to sell" : undefined}
+                onClick={() => trade("sell", shareOf(balance, pct), `Sell ${pct}%`, pct >= 100)}
+              >
+                {pct}%
+              </button>
+            ))}
+            <button
+              type="button"
+              className={`ghost small tm-trade-turbo${settings.speed === "turbo" ? " on" : ""}`}
+              aria-pressed={settings.speed === "turbo"}
+              title="Turbo sends through every Helius path for the fastest landing, for a 0.001 SOL tip instead of 0.000005"
+              onClick={() => update({ speed: settings.speed === "turbo" ? "eco" : "turbo" })}
+            >
+              Turbo {settings.speed === "turbo" ? "on" : "off"}
+            </button>
+            <button
+              type="button"
+              className="ghost small tm-trade-gear"
+              aria-expanded={showSettings}
+              onClick={() => setShowSettings(!showSettings)}
+            >
+              {settings.slippagePct}% slip
+              {settings.priorityMode === "custom" ? " · custom fee" : ""}
+              {settings.mevProtect ? " · MEV shield" : ""}
+            </button>
+          </div>
+        </>
+      )}
 
       {showSettings && (
         <div className="tm-trade-settings">
@@ -473,6 +502,12 @@ export function TradePanel({
         )}
         <strong>TrenchScanner platform fee: 0%.</strong>
       </p>
+      {accepted && (
+        <details className="small tm-trade-about">
+          <summary>About trading here</summary>
+          <p>{TRADE_DISCLAIMER}</p>
+        </details>
+      )}
     </section>
   );
 }

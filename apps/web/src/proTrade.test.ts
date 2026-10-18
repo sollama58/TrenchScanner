@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import bs58 from "bs58";
 import { describe, expect, it } from "vitest";
 import {
+  acceptDisclaimer,
   DEFAULT_TRADE_SETTINGS,
+  disclaimerAccepted,
   feeParams,
   graceLeftText,
   proStateOf,
@@ -195,5 +197,13 @@ describe("trade fees", () => {
     expect(feeTotalSol({ priorityFeeLamports: "10000", tipLamports: "5000", baseFeeLamports: "5000" })).toBe(
       0.00002,
     );
+  });
+});
+
+describe("trading disclaimer", () => {
+  it("asks again when it can't remember an answer", () => {
+    // No storage in this test runner: never counted as accepted, and accepting doesn't throw.
+    expect(disclaimerAccepted("w")).toBe(false);
+    acceptDisclaimer("w");
   });
 });
