@@ -66,8 +66,10 @@ import {
 import { HAND_TUNED_RULE_LINES } from "./curator.js";
 import {
   gateCriteriaUncheckedOffline,
+  gateInputOnsets,
   passesModelGateOnFeatures,
   seatConsiders,
+  unrecordedGateInputs,
   type ModelGates,
 } from "./modelGate.js";
 
@@ -798,12 +800,19 @@ export interface ContestTrainingConfig extends Omit<CuratorTrainingConfig, "lear
  */
 export const GATED_MIN_ROWS = 300;
 
-/** A gated seat's rows: the run's rows that pass its gate on their stored inputs, any sample kind. */
+/**
+ * A gated seat's rows: the run's rows that pass its gate on their stored inputs, any sample kind.
+ * A criterion on an input the scan didn't record yet when a row was banked is skipped on that row
+ * (unrecordedGateInputs), with the onsets read from the same rows.
+ */
 export function gatedTrainingSet(
   rows: readonly TrainingRow[],
   gate: Parameters<typeof passesModelGateOnFeatures>[1],
 ): TrainingRow[] {
-  return rows.filter((r) => passesModelGateOnFeatures(r.features, gate));
+  const onsets = gateInputOnsets(rows);
+  return rows.filter((r) =>
+    passesModelGateOnFeatures(r.features, gate, unrecordedGateInputs(r.anchorAt, onsets)),
+  );
 }
 
 /** Fewest deep-read rows the Narrative seat's exam runs on: under this its cutoff would be a coin flip. */
@@ -1176,10 +1185,15 @@ export async function runEvolvingContest(
   // through (or, for Winners, the moments carrying its reading), so they share no fold with the
   // learners and feed no combiner. Skipped, with the running model kept, while the gate is missing
   // or lets through too few decision moments.
+  // A gate criterion on an input recorded only partway through the window skips the rows banked
+  // before it (unrecordedGateInputs) instead of failing them all.
+  const gateOnsets = gatedSpecs.length > 0 ? gateInputOnsets(rows) : new Map<string, number>();
   for (const spec of gatedSpecs) {
     const gate = spec.gate !== undefined ? cfg.gates?.[spec.gate] : undefined;
     if (spec.gate !== undefined && !gate) continue;
-    const seatRows = rows.filter((r) => seatConsiders(spec, r.features, gate));
+    const seatRows = rows.filter((r) =>
+      seatConsiders(spec, r.features, gate, unrecordedGateInputs(r.anchorAt, gateOnsets)),
+    );
     if (seatRows.filter((r) => isDecisionRow(r, cfg.mcapBand)).length < GATED_MIN_ROWS) continue;
     const ownFeatures = runFeatures(seatRows, cfg);
     examining(spec.name);
