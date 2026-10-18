@@ -1,5 +1,5 @@
 -- AlterTable
-ALTER TABLE "ProModeGrant" ADD COLUMN "expiresAt" TIMESTAMP(3);
+ALTER TABLE "ProModeGrant" ADD COLUMN IF NOT EXISTS "expiresAt" TIMESTAMP(3);
 
 -- AlterTable
-ALTER TABLE "ProHolder" ADD COLUMN "bagMovedAt" TIMESTAMP(3);
+ALTER TABLE "ProHolder" ADD COLUMN IF NOT EXISTS "bagMovedAt" TIMESTAMP(3);
