@@ -6,6 +6,8 @@ import type { Point } from "../priceChart";
 export interface LiveCurveAnswer {
   mint: string;
   source: LiveSource;
+  /** What prices it now; absent from older API builds (the curve). */
+  venue?: "curve" | "pool";
   complete: boolean;
   coveredFrom: number | null;
   readAt: number | null;
@@ -20,9 +22,11 @@ export interface LiveTail {
   ticks: Point[];
   /** Where the newest came from; null before the first answer. */
   source: LiveSource | null;
+  /** The curve, or after bonding the PumpSwap pool. */
+  venue: "curve" | "pool";
   /** The newest moment the price is known current (ms). */
   readAt: number | null;
-  /** The coin has no live curve (graduated, or not a Pump.fun coin): nothing more will come. */
+  /** Nothing live prices the coin (not a Pump.fun coin, or no pool to follow): nothing more will come. */
   done: boolean;
 }
 
@@ -39,17 +43,24 @@ const MAX_TICKS = 6_000;
 
 /**
  * The token chart's live tail (user ask 2026-10-17): while `enabled`, asks `base`/chart/live
- * for the coin's bonding-curve price changes since the last answer (the API follows the curve on
- * the Helius stream, apps/api/src/liveCurve.ts, and holds the ask until the next change) and
+ * for the coin's price changes since the last answer (the API follows its bonding curve, or after
+ * bonding its PumpSwap pool, on the Helius stream, apps/api/src/liveCurve.ts, and holds the ask
+ * until the next change) and
  * keeps them all. Only
  * while the tab is visible; a failure backs off and keeps trying, so the tail resumes on its own.
  */
 export function useLiveTail(base: string, enabled: boolean): LiveTail {
-  const [tail, setTail] = useState<LiveTail>({ ticks: [], source: null, readAt: null, done: false });
+  const [tail, setTail] = useState<LiveTail>({
+    ticks: [],
+    source: null,
+    venue: "curve",
+    readAt: null,
+    done: false,
+  });
   const after = useRef(0);
 
   useEffect(() => {
-    setTail({ ticks: [], source: null, readAt: null, done: false });
+    setTail({ ticks: [], source: null, venue: "curve", readAt: null, done: false });
     after.current = 0;
     if (!enabled) return;
     let stopped = false;
@@ -75,6 +86,7 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
         setTail((prev) => ({
           ticks: fresh.length > 0 ? prev.ticks.concat(fresh).slice(-MAX_TICKS) : prev.ticks,
           source: a.source,
+          venue: a.venue ?? "curve",
           readAt: a.readAt,
           done: a.complete,
         }));

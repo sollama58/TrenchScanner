@@ -197,6 +197,11 @@ const RANGES: { id: Range; label: string; title?: string }[] = [
 ];
 /** "First 15m" is offered while Pump.fun's 15-second candles still reach back to the launch. */
 const FIRST_VIEW_MAX_AGE_MS = 6 * 3_600_000;
+/**
+ * The live tail follows coins this young, on their curve or after bonding in their PumpSwap pool
+ * (user ask 2026-10-18): the day the scanner keeps watching a candidate.
+ */
+const LIVE_MAX_AGE_MS = 24 * 3_600_000;
 /** The first-minutes view re-reads this often while the coin is inside them, else rarely. */
 const FIRST_LIVE_POLL_MS = 5_000;
 const FIRST_POLL_MS = 120_000;
@@ -1455,6 +1460,7 @@ export function ChartCard({
   // The coin's first trade, for whether its first minutes can still be drawn in fine detail.
   const firstTradeAt = data?.candles?.[0]?.t ?? data?.marketCap[0]?.t ?? null;
   const young = firstTradeAt !== null && Date.now() - firstTradeAt <= FIRST_VIEW_MAX_AGE_MS;
+  const liveAge = firstTradeAt !== null && Date.now() - firstTradeAt <= LIVE_MAX_AGE_MS;
   const shownRange: Range = range === "first" && !young ? "all" : range;
 
   // Labeled wallets' trades on the line (user ask 2026-10-18), as set in Customize › Chart wallet
@@ -1513,18 +1519,20 @@ export function ChartCard({
       : null,
     FINE_POLL_MS,
   );
-  // The live curve's every price change, while the view runs to now on a young coin.
-  const tail = useLiveTail(api, young && shownRange !== "first" && !!bounds?.live);
-  // Whether the coin gets instant updates at all (user ask 2026-10-18): only a Pump.fun coin still on
-  // its curve and under 6 hours old has a live tail. Once the tail says the curve is gone it stays
-  // gone for this coin, so switching views doesn't bring the warning and the folded Trade back and forth.
+  // The live curve's (or after bonding, pool's) every price change, while the view runs to now on a
+  // coin under a day old.
+  const tail = useLiveTail(api, liveAge && shownRange !== "first" && !!bounds?.live);
+  // Whether the coin gets instant updates at all (user ask 2026-10-18): a Pump.fun coin under a day
+  // old, on its curve or in its PumpSwap pool, has a live tail. Once the tail says nothing live
+  // prices it, it stays so for this coin, so switching views doesn't bring the warning and the
+  // folded Trade back and forth.
   const [offCurveFor, setOffCurveFor] = useState<string | null>(null);
   useEffect(() => {
     if (tail.done) setOffCurveFor(mint);
   }, [tail.done, mint]);
   const delayed: DelayReason | null = !data
     ? null
-    : !young
+    : !liveAge
       ? "old"
       : offCurveFor === mint
         ? "off-curve"
@@ -1817,7 +1825,9 @@ function DelayBadge({
     return () => window.clearInterval(timer);
   }, []);
   const why =
-    reason === "old" ? "it launched over 6 hours ago" : "it's no longer on a Pump.fun bonding curve";
+    reason === "old"
+      ? "it launched over 24 hours ago"
+      : "it isn't trading on a Pump.fun bonding curve or its PumpSwap pool";
   const clock = (t: number) =>
     new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
   const next = updatedAt !== null ? Math.ceil((updatedAt + everyMs - now) / 1_000) : null;
@@ -1869,10 +1879,11 @@ function isStreaming(tail: LiveTail): boolean {
 
 /** The header's "Live" pill: the chart is drawing the coin's curve as it changes. */
 function LiveBadge({ tail }: { tail: LiveTail }) {
+  const where = tail.venue === "pool" ? "PumpSwap pool" : "bonding curve";
   const how =
     tail.source === "stream"
-      ? "every price change, block by block, from the Helius stream"
-      : `the bonding curve, read every ${LIVE_POLL_MS / 1_000} seconds (the stream is catching up)`;
+      ? `every price change in its ${where}, block by block, from the Helius stream`
+      : `the ${where}, read every ${LIVE_POLL_MS / 1_000} seconds (the stream is catching up)`;
   return (
     <span className="tm-live" title={`Live: ${how}`}>
       <i aria-hidden="true" /> Live
