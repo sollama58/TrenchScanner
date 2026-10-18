@@ -402,13 +402,13 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
         update: { totpSecret: sealSecret(env, user.id, randomBytes(20)), actions: ["buy"] },
         create: { userId: user.id, totpSecret: sealSecret(env, user.id, randomBytes(20)), actions: ["buy"] },
       });
-      const res = await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "1000000" });
+      const res = await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "10000000" });
       expect(res.statusCode).toBe(403);
       expect(res.json()).toMatchObject({ twoFactor: { action: "buy", totp: true, passkey: false } });
       const forged = await app.inject({
         method: "POST",
         url: "/pro/trade/build",
-        payload: { mint: SUBSCRIPTION_MINT, side: "buy", amount: "1000000", slippageBps: 100, speed: "eco" },
+        payload: { mint: SUBSCRIPTION_MINT, side: "buy", amount: "10000000", slippageBps: 100, speed: "eco" },
         headers: { "x-ts-2fa": "forged" },
         cookies: { [SESSION_COOKIE_NAME]: cookie },
       });
@@ -421,20 +421,20 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
       try {
         env.PRO_TRADING_PUBLIC = false;
         expect(
-          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "1000000" })).statusCode,
+          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "10000000" })).statusCode,
         ).toBe(404);
         env.PRO_TRADING_PUBLIC = true;
         // The kill switch closes it too.
         const enabled = env.PRO_TRADING_ENABLED;
         env.PRO_TRADING_ENABLED = false;
         expect(
-          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "1000000" })).statusCode,
+          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "10000000" })).statusCode,
         ).toBe(404);
         env.PRO_TRADING_ENABLED = enabled;
         const other = await build(cookie, {
           mint: "So11111111111111111111111111111111111111112",
           side: "buy",
-          amount: "1000000",
+          amount: "10000000",
         });
         expect([403, 404]).toContain(other.statusCode);
         expect(
