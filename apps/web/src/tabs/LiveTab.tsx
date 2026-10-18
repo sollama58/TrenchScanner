@@ -15,6 +15,7 @@ import { CustomizeDrawer } from "../components/CustomizeDrawer";
 import { CaSearchBox, SearchResults } from "../components/CaSearch";
 import { ScanStatus } from "../components/ScanStatus";
 import { parseSearch } from "../caSearch";
+import { ScopeBoard } from "../components/ScopeBoard";
 
 /** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
 const MIN_TEASER = 10;
@@ -35,6 +36,18 @@ const SHOW_HIGH_CONVICTION = false;
  * at once, from the cache where it has them, instead of growing one round trip at a time again.
  */
 const filledDepth = new Map<string, number>();
+
+/** This browser's pick of Cards or Scope for the Live feed (user decision 2026-10-18: a toggle, not a tab). */
+const VIEW_KEY = "ts-live-view";
+type FeedView = "cards" | "scope";
+
+function readView(): FeedView {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "scope" ? "scope" : "cards";
+  } catch {
+    return "cards";
+  }
+}
 
 function readHighConviction(): boolean {
   if (!SHOW_HIGH_CONVICTION) return false;
@@ -58,6 +71,16 @@ export function LiveTab({
 }) {
   const now = useNow(15_000);
   const [page, setPage] = useState(1);
+  const [view, setViewState] = useState<FeedView>(readView);
+  const setView = (next: FeedView) => {
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      // Private mode or blocked storage: the pick still applies for this visit.
+    }
+    setViewState(next);
+  };
+  const scope = view === "scope";
   // Model calls narrowed to every model's high-conviction tier instead of the followed models.
   const [highConviction, setHighConviction] = useState(readHighConviction);
   // The tour opens by itself the first time this wallet lands here.
@@ -233,6 +256,25 @@ export function LiveTab({
             </div>
           </div>
           <div className="feed-controls">
+            <div className="segmented small feed-view" role="radiogroup" aria-label="Feed view">
+              {(["cards", "scope"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  role="radio"
+                  aria-checked={view === v}
+                  className={view === v ? "on" : ""}
+                  onClick={() => setView(v)}
+                  title={
+                    v === "cards"
+                      ? "Your feed as full alert cards, a page at a time"
+                      : "Your feed as a dense board: your filters, models and graduated tokens side by side"
+                  }
+                >
+                  {v === "cards" ? "Cards" : "Scope"}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               className="ghost stats-btn"
@@ -300,10 +342,11 @@ export function LiveTab({
             labelSource
           />
         )}
-        {!searching && feedPage.error && !feedPage.data && (
+        {!searching && !scope && feedPage.error && !feedPage.data && (
           <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
         )}
-        {!searching && (
+        {!searching && scope && <ScopeBoard feedPath={feedPath} hide={hidden} modelsOn={modelsOn} />}
+        {!searching && !scope && (
           <>
             {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
             {feedPage.data && feedPage.data.matches.length === 0 && page === 1 && (
