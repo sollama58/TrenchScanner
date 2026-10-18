@@ -8,6 +8,7 @@ import {
   parseLiveTrades,
   parseMcapCandles,
   withLiveTrades,
+  withTrackedMarks,
   type ActivityRow,
   type McapCandle,
 } from "./tokenChart.js";
@@ -334,5 +335,52 @@ describe("withLiveTrades", () => {
     ]);
     expect(risky).toMatchObject({ solIn: 2, solOut: 3, heldPct: 1 });
     expect(out.find((w) => w.wallet === "Dumper")).toMatchObject({ score: 20, dumps: 5, coins: 9 });
+  });
+});
+
+describe("withTrackedMarks", () => {
+  const row = (wallet: string, over: Partial<ActivityRowForTest> = {}): ActivityRowForTest => ({
+    wallet,
+    isCreator: false,
+    solIn: 1,
+    solOut: 0,
+    heldPctAtAnchor: null,
+    firstBuyAt: new Date(1_000),
+    firstSellAt: null,
+    trades: [[1_000, 1, 1]],
+    ...over,
+  });
+  type ActivityRowForTest = Parameters<typeof withTrackedMarks>[1][number];
+  const shared = markedWallets(
+    [row("risky1")],
+    new Map([["risky1", { score: 90, dumps: 0, appearances: 3 }]]),
+    [],
+    {
+      riskyScore: 70,
+    },
+  );
+
+  it("lays the reader's labels and their sides over the shared marks without changing them", () => {
+    const before = JSON.stringify(shared);
+    const out = withTrackedMarks(
+      shared,
+      [row("risky1"), row("mine"), row("funded")],
+      [
+        { wallet: "risky1", name: "Pal", category: "kol" },
+        { wallet: "mine", name: "Mine", category: "tracked" },
+      ],
+      { funded: [{ kolWallet: "mine", kolName: "Mine", funded: true, tracked: "tracked" }] },
+    );
+    expect(JSON.stringify(shared)).toBe(before);
+    expect(out.find((w) => w.wallet === "risky1")).toMatchObject({ tags: ["risky", "kol"], kol: "Pal" });
+    expect(out.find((w) => w.wallet === "mine")).toMatchObject({ tags: ["tracked"], tracked: "Mine" });
+    expect(out.find((w) => w.wallet === "funded")).toMatchObject({
+      tags: ["side"],
+      side: { kind: "funded", kolWallet: "mine", kolName: "Mine", tracked: "tracked" },
+    });
+  });
+
+  it("adds nothing without labels", () => {
+    expect(withTrackedMarks(shared, [row("mine")], [], {})).toEqual(shared);
   });
 });

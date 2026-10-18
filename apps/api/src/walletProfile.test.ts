@@ -149,3 +149,19 @@ describe("WalletLiveReader", () => {
     expect(await reader.overview(W, 60_010)).toEqual({ status: "failed" });
   });
 });
+
+describe("walletLabels' side ties", () => {
+  const tie = { kolWallet: "K", kolName: "Ansem", pct: 0, shared: 0, kolCoins: 0, hours: 24 };
+  it("says what a transfer-only Probable Side did, not 0 of 0 coins", () => {
+    const [l] = walletLabels({ ...base, possibleSides: [{ ...tie, transfers: 7 }] });
+    expect(l!.text).toBe("Ansem Probable Side (7 transfers)");
+    expect(l!.detail).toBe(
+      "In the last 24 hours it traded coins with the KOL 7 times. Not confirmed as the KOL's wallet.",
+    );
+  });
+  it("names a tie to the reader's labeled wallet as theirs", () => {
+    const [l] = walletLabels({ ...base, possibleSides: [{ ...tie, funded: true, tracked: "tracked" }] });
+    expect(l).toMatchObject({ text: "Ansem Funded Wallet", source: "Your labeled wallets" });
+    expect(l!.detail).toMatch(/^The wallet you labeled paid for this wallet's first SOL/);
+  });
+});

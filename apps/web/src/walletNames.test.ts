@@ -49,3 +49,26 @@ describe("visibleNames", () => {
     ]);
   });
 });
+
+describe("publicNames and publicSides", () => {
+  it("leave the reader's own labels and their ties out of what is shared", async () => {
+    const { publicNames } = await import("./walletNames");
+    const { publicSides } = await import("./possibleSides");
+    const names = {
+      A: { name: "Mine", source: "tracked" as const, mine: true },
+      B: { name: "Cupsey", source: "kol" as const },
+    };
+    expect(publicNames(names)).toEqual({ B: names.B });
+    const plain = { B: names.B };
+    expect(publicNames(plain)).toBe(plain);
+    const tie = { kolWallet: "K", kolName: "Cupsey", pct: 90, shared: 9, kolCoins: 10 };
+    expect(
+      publicSides({
+        W: [tie, { ...tie, kolWallet: "A", tracked: "tracked" }],
+        X: [{ ...tie, tracked: "kol" }],
+      }),
+    ).toEqual({
+      W: [tie],
+    });
+  });
+});

@@ -6,6 +6,7 @@ import {
   type LabeledSide,
   type PossibleSide,
 } from "./possibleSides.js";
+import { loadTrackedSides, mergeSides, type TrackedWallet } from "./trackedWallets.js";
 import {
   prisma,
   isHotFunder,
@@ -114,6 +115,11 @@ export interface WalletProfile {
     /** On a Known Side: the KOL's main wallet and its name (KolWallet.mainWallet). */
     knownSideOf: { wallet: string; name: string | null } | null;
   } | null;
+  /**
+   * The reader's own label on this wallet (trackedWallets.ts): shown and editable for them alone,
+   * and only while they have Pro Mode. Null when they have none.
+   */
+  tracked?: { name: string; category: "kol" | "tracked" } | null;
   live: {
     readAt: string;
     balanceSol: number | null;
@@ -205,7 +211,10 @@ export function walletLabels(input: {
   possibleSides?: readonly PossibleSide[];
 }): WalletLabel[] {
   const out: WalletLabel[] = [];
-  for (const s of input.possibleSides ?? [])
+  for (const s of input.possibleSides ?? []) {
+    // A tie to a wallet the reader labeled (trackedWallets.ts) names it as theirs, not as a KOL.
+    const who = s.tracked ? "the wallet you labeled" : "the KOL";
+    const whose = s.tracked ? "the labeled wallet's" : "the KOL's";
     out.push(
       s.known
         ? {
@@ -219,16 +228,20 @@ export function walletLabels(input: {
           ? {
               text: possibleSideText(s),
               tone: "linked",
-              source: "TrenchScanner Side Wallet Checker",
-              detail: `The KOL paid for this wallet's first SOL${s.fundedSol != null ? ` (${Math.round(s.fundedSol * 1000) / 1000} SOL` : ""}${s.fundedAt ? `${s.fundedSol != null ? ", " : " ("}${s.fundedAt.toISOString().slice(0, 10)})` : s.fundedSol != null ? ")" : ""}.${s.shared > 0 ? ` It also bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it in the last ${s.hours} hours.` : ""}`,
+              source: s.tracked ? "Your labeled wallets" : "TrenchScanner Side Wallet Checker",
+              detail: `${s.tracked ? "The wallet you labeled" : "The KOL"} paid for this wallet's first SOL${s.fundedSol != null ? ` (${Math.round(s.fundedSol * 1000) / 1000} SOL` : ""}${s.fundedAt ? `${s.fundedSol != null ? ", " : " ("}${s.fundedAt.toISOString().slice(0, 10)})` : s.fundedSol != null ? ")" : ""}.${s.shared > 0 ? ` It also bought ${s.shared} of ${whose} ${s.kolCoins} tracked coins within minutes of it in the last ${s.hours} hours.` : ""}`,
             }
           : {
               text: possibleSideText(s),
               tone: "linked",
-              source: "TrenchScanner Side Wallet Checker",
-              detail: `In the last ${s.hours} hours it bought ${s.shared} of the KOL's ${s.kolCoins} tracked coins within minutes of it. Not confirmed as the KOL's wallet.`,
+              source: s.tracked ? "Your labeled wallets" : "TrenchScanner Side Wallet Checker",
+              detail:
+                s.shared > 0
+                  ? `In the last ${s.hours} hours it bought ${s.shared} of ${whose} ${s.kolCoins} tracked coins within minutes of it. Not confirmed as ${whose} wallet.`
+                  : `In the last ${s.hours} hours it traded coins with ${who} ${s.transfers ?? 0} times. Not confirmed as ${whose} wallet.`,
             },
     );
+  }
   const platform = PLATFORM_WALLETS.get(input.wallet);
   if (platform)
     out.push({
@@ -408,9 +421,14 @@ export async function loadWalletProfile(
   wallet: string,
   live: WalletLiveReader | null,
   identity: WalletIdentityReader | null = null,
+  /** The reader's labels (trackedWallets.ts activeTracked): their ties and their own label show. */
+  tracked: readonly TrackedWallet[] = [],
 ): Promise<WalletProfile> {
   const identityRead = identity ? identity.labels(wallet).catch(() => []) : Promise.resolve([]);
-  const sidesRead = loadPossibleSides([wallet]).catch(() => ({}) as Record<string, PossibleSide[]>);
+  const sidesRead = Promise.all([
+    loadPossibleSides([wallet]).catch(() => ({}) as Record<string, PossibleSide[]>),
+    loadTrackedSides(tracked, [wallet]).catch(() => ({}) as Record<string, PossibleSide[]>),
+  ]).then(([base, own]) => mergeSides(base, own, tracked));
   const kolSidesRead = loadKolLabeledSides(wallet).catch(() => [] as LabeledSide[]);
   const [risk, funderRow, activityCache, holdings, activity, fundedRows, overview, kol] = await Promise.all([
     // computedAt shown as the last rebuild: the job rewrites only rows whose figures changed.
@@ -591,6 +609,14 @@ export async function loadWalletProfile(
       source: "Solana Tracker KOL list",
       detail: kol.twitter ? `@${kol.twitter} on X` : undefined,
     });
+  const label = tracked.find((t) => t.wallet === wallet);
+  if (label)
+    ownLabels.unshift({
+      text: label.category === "kol" ? `KOL: ${label.name}` : `Tracked: ${label.name}`,
+      tone: "good",
+      source: "Your label",
+      detail: "Your own label: only you see it, and it changes nothing the models, filters or alerts read.",
+    });
   const ownTexts = new Set(ownLabels.map((l) => l.text.toLowerCase()));
 
   return {
@@ -691,5 +717,6 @@ export async function loadWalletProfile(
       })),
     ],
     kolSides,
+    tracked: label ? { name: label.name, category: label.category } : null,
   };
 }

@@ -3,6 +3,7 @@ import { allowLookupRead } from "../lookupGate.js";
 import { keepFilterMoment, readBubbleMoments, type BubbleMomentView } from "../bubbleMoments.js";
 import { readKolRows } from "../kolRoster.js";
 import { loadPossibleSides } from "../possibleSides.js";
+import { activeTracked, loadTrackedSides, trackedActivity, type TrackedWallet } from "../trackedWallets.js";
 import {
   isStonksCoin,
   NARRATIVE_CONTESTANT,
@@ -26,6 +27,7 @@ import {
   firstMinutes,
   type CandleFetcher,
   markedWallets,
+  withTrackedMarks,
   parseLiveTrades,
   pumpFunCandleFetcher,
   withLiveTrades,
@@ -522,7 +524,7 @@ export async function registerTokenRoutes(
     if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
     // The browser may reuse it for a few seconds; the candles themselves are cached here for 30.
     reply.header("Cache-Control", "private, max-age=15");
-    return readTokenChart(mintAddress);
+    return readTokenChart(mintAddress, await activeTracked(opts.env, request.user));
   });
 
   /** The token modal's "First 15m" view: the coin's first minutes, second by second while it is in them. */
@@ -699,7 +701,11 @@ export async function registerTokenRoutes(
  * The token modal's chart for one mint (GET /tokens/:mint/chart, and the Utilities tab's token
  * lookup): Pump.fun's minute candles, the scan's market caps, and the coin's flagged wallets.
  */
-export async function readTokenChart(mintAddress: string): Promise<TokenChart> {
+export async function readTokenChart(
+  mintAddress: string,
+  /** The reader's labels (trackedWallets.ts activeTracked), laid over the shared marks for them alone. */
+  tracked: readonly TrackedWallet[] = [],
+): Promise<TokenChart> {
   // Token first: Pump.fun's candles are read only for a coin on Token, so a loop over random mints
   // can't spend the shared candle budget everyone's token modal draws from.
   const token = await prisma.token.findUnique({ where: { mintAddress }, select: { id: true } });
@@ -715,6 +721,10 @@ export async function readTokenChart(mintAddress: string): Promise<TokenChart> {
         walletCache.get(token.id, () => chartWallets(token.id)),
       ])
     : [null, [], { tape: null, live: null, wallets: [], holderEntries: {} }];
+  const wallets =
+    token && tracked.length > 0
+      ? await trackedMarks(token.id, flagged.wallets, tracked).catch(() => flagged.wallets)
+      : flagged.wallets;
   return {
     mint: mintAddress,
     candles: candles && candles.length > 0 ? candles : null,
@@ -723,7 +733,23 @@ export async function readTokenChart(mintAddress: string): Promise<TokenChart> {
       .reverse()
       .map((s) => ({ t: s.takenAt.getTime(), usd: s.marketCapUsd, buys: s.buys5m, sells: s.sells5m })),
     ...flagged,
+    wallets,
   };
+}
+
+/** The shared marks with the reader's labeled wallets and their sides laid over them (withTrackedMarks). */
+async function trackedMarks(
+  tokenId: string,
+  shared: TokenChart["wallets"],
+  tracked: readonly TrackedWallet[],
+): Promise<TokenChart["wallets"]> {
+  const rows = await trackedActivity(tokenId, tracked);
+  if (rows.length === 0) return shared;
+  const sides = await loadTrackedSides(
+    tracked,
+    rows.map((r) => r.wallet),
+  );
+  return withTrackedMarks(shared, rows, tracked, sides);
 }
 
 /** The token modal's "First 15m" view (TokenFirstMinutes). */

@@ -17,7 +17,14 @@ export interface MarkSource {
   tags: readonly string[];
   kol?: string | null;
   knownSideOf?: string;
-  side?: { kind: "funded" | "probable"; kolWallet: string; kolName: string | null };
+  side?: {
+    kind: "funded" | "probable";
+    kolWallet: string;
+    kolName: string | null;
+    tracked?: "kol" | "tracked";
+  };
+  /** The name the reader gave it as a User Tracked wallet (tag "tracked"): marked with the KOLs, as "T". */
+  tracked?: string;
   trades: readonly (readonly [number, 1 | -1, number | null])[];
 }
 
@@ -25,7 +32,12 @@ export interface MarkSource {
 export type MarkKind = ChartMarkKind;
 
 export const MARK_KINDS: readonly { kind: MarkKind; label: string; letter: string; title: string }[] = [
-  { kind: "kol", label: "KOLs", letter: "K", title: "Wallets on the KOL roster" },
+  {
+    kind: "kol",
+    label: "KOLs",
+    letter: "K",
+    title: "Wallets on the KOL roster, and the wallets you labeled (User Tracked ones as T)",
+  },
   { kind: "known", label: "Known Sides", letter: "S", title: "Other wallets we know are a KOL's own" },
   { kind: "funded", label: "KOL Funded", letter: "F", title: "Wallets a KOL paid for (their first SOL)" },
   {
@@ -72,6 +84,8 @@ export function clampMinSol(v: unknown): number {
 export function kindsOf(w: MarkSource): MarkKind[] {
   const out = new Set<MarkKind>();
   if (w.tags.includes("kol")) out.add(w.knownSideOf ? "known" : "kol");
+  // A wallet the reader labeled User Tracked is marked with the KOLs (lettered T, markLetter).
+  if (w.tags.includes("tracked")) out.add("kol");
   if (w.side) out.add(w.side.kind);
   if (w.tags.includes("creator")) out.add("dev");
   if (w.tags.includes("risky") || w.tags.includes("dumper")) out.add("risky");
@@ -87,11 +101,14 @@ export function markName(w: MarkSource, kind: MarkKind): string {
   const short = shortAddress(w.wallet);
   switch (kind) {
     case "kol":
+      if (isTrackedOnly(w)) return `${w.tracked!.trim() || short} (Tracked)`;
       return kolName ? `${kolName} (KOL)` : `KOL ${short}`;
     case "known":
       return `${kolName || "KOL"} Known Side`;
     case "funded":
-      return `${sideKol} KOL Funded Wallet ${short}`;
+      return w.side?.tracked === "tracked"
+        ? `${sideKol} Funded Wallet ${short}`
+        : `${sideKol} KOL Funded Wallet ${short}`;
     case "probable":
       return `${sideKol} Probable Side ${short}`;
     case "dev":
@@ -103,6 +120,15 @@ export function markName(w: MarkSource, kind: MarkKind): string {
     case "linked":
       return `Linked wallet ${short}`;
   }
+}
+
+/** A wallet the reader tracks that isn't also a KOL: marked with the KOLs, but as User Tracked. */
+const isTrackedOnly = (w: MarkSource) => !!w.tracked && !w.tags.includes("kol");
+
+/** A mark's letter: its kind's, but T for a User Tracked wallet marked with the KOLs. */
+export function markLetter(w: MarkSource, kind: MarkKind): string {
+  if (kind === "kol" && isTrackedOnly(w)) return "T";
+  return MARK_KINDS.find((k) => k.kind === kind)!.letter;
 }
 
 /** One labeled wallet's trade, as the chart marks it. */
@@ -140,7 +166,7 @@ export function walletMarks(
     if (w.tags.includes("dumper") && !shown.has("risky") && !kinds.includes("dev")) continue;
     const kind = kinds.find((k) => shown.has(k));
     if (!kind) continue;
-    const meta = MARK_KINDS.find((k) => k.kind === kind)!;
+    const letter = markLetter(w, kind);
     const name = markName(w, kind);
     for (const [t, side, sol] of w.trades) {
       if (sol === null || !(sol >= min)) continue;
@@ -149,7 +175,7 @@ export function walletMarks(
         side: side === 1 ? "buy" : "sell",
         sol,
         kind,
-        letter: meta.letter,
+        letter,
         text: `${name} ${side === 1 ? "bought" : "sold"} ${solText(sol)} SOL`,
         wallet: w.wallet,
       });

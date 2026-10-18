@@ -877,7 +877,7 @@ export async function renderBubbleCard(
       const text = fit.lines;
       const w = Math.max(...text.map((l) => ctx.measureText(l).width));
       // A KOL's Known Side is the KOL's own wallet: gold too.
-      const kol = named.source === "kol" || named.source === "kol-side";
+      const kol = named.source === "kol" || named.source === "kol-side" || named.source === "tracked";
       // A KOL's name on gold, as in the dialog; any other gets a dark backing when it runs past the edge.
       const blockH = text.length * lineH + nameSize * 0.3;
       boxes.push({ x: cx, y: nameY - nameSize * 0.72 + blockH / 2, w: w + 10, h: blockH });
@@ -1032,6 +1032,7 @@ function nameLegend(graph: BubbleGraph, names: WalletNames, flagsRead: boolean):
   const dark = "rgba(12, 14, 20, 0.82)";
   const out: LegendItem[] = [];
   if (kinds.has("kol")) out.push({ text: "KOL", bg: SIDE, ink: "#1a1300" });
+  if (kinds.has("tracked")) out.push({ text: "User Tracked", bg: SIDE, ink: "#1a1300" });
   if (kinds.has("pumpfun")) out.push({ text: '"Pump.fun"', bg: dark, ink: "#4ade80" });
   if (kinds.has("fomo")) out.push({ text: '"FOMO"', bg: dark, ink: "#c4b5fd" });
   if (kinds.has("identity") || kinds.has("exchange"))
