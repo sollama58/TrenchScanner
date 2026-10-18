@@ -661,9 +661,10 @@ export function TradePanel({
             I understand
           </button>
         </div>
-      ) : (
-        <div className={`tm-trade-sides${closeOnly ? " one" : ""}`}>
-          {!closeOnly && (
+      ) : closeOnly ? null : (
+        // Pro Mode ended: no buttons at all, since the API refuses sells too (#717).
+        <div className="tm-trade-sides">
+          {
             <div className="tm-side buy" role="group" aria-label="Buy">
               <div className="tm-side-head">
                 <span className="tm-side-title">Buy</span>
@@ -707,7 +708,7 @@ export function TradePanel({
                 </button>
               </div>
             </div>
-          )}
+          }
           <div className="tm-side sell" role="group" aria-label="Sell">
             <div className="tm-side-head">
               <span className="tm-side-title">Sell</span>

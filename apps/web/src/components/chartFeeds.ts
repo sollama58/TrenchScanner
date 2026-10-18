@@ -55,6 +55,8 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
     let stopped = false;
     let timer: number | undefined;
     let failures = 0;
+    // A held ask lasts up to 8 s: a closed chart lets go of it at once, not of a browser connection.
+    const abort = new AbortController();
     const next = (ms: number) => {
       window.clearTimeout(timer);
       if (!stopped) timer = window.setTimeout(() => void poll(), ms);
@@ -63,7 +65,9 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
       if (document.visibilityState !== "visible") return next(LIVE_POLL_MS);
       const sent = Date.now();
       try {
-        const a = await api<LiveCurveAnswer>(`${base}/chart/live?after=${after.current}&wait=1`);
+        const a = await api<LiveCurveAnswer>(`${base}/chart/live?after=${after.current}&wait=1`, {
+          signal: abort.signal,
+        });
         if (stopped) return;
         failures = 0;
         const fresh = a.ticks.filter(([t]) => t > after.current).map(([t, v]) => ({ t, v }));
@@ -83,6 +87,7 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
     return () => {
       stopped = true;
       window.clearTimeout(timer);
+      abort.abort();
     };
   }, [base, enabled]);
 

@@ -355,16 +355,22 @@ export async function finishPasskeyRegistration(
   }
   if (!verified.verified || !verified.registrationInfo) return false;
   const { credential } = verified.registrationInfo;
-  await prisma.twoFactorPasskey.create({
-    data: {
-      userId,
-      credentialId: credential.id,
-      publicKey: Buffer.from(credential.publicKey),
-      counter: BigInt(credential.counter),
-      transports: credential.transports ?? [],
-      name: name.trim().slice(0, 60) || "Passkey",
-    },
-  });
+  try {
+    await prisma.twoFactorPasskey.create({
+      data: {
+        userId,
+        credentialId: credential.id,
+        publicKey: Buffer.from(credential.publicKey),
+        counter: BigInt(credential.counter),
+        transports: credential.transports ?? [],
+        name: name.trim().slice(0, 60) || "Passkey",
+      },
+    });
+  } catch (err) {
+    // The same passkey already added (here or on another account): refuse it, not a 500.
+    if ((err as { code?: unknown } | null)?.code === "P2002") return false;
+    throw err;
+  }
   return true;
 }
 

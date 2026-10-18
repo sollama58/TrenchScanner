@@ -81,7 +81,7 @@ export async function refreshProHolders(
           AND ("ProHolder"."bagMovedAt" IS NULL OR "ProHolder"."bagMovedAt" < "ProHolder"."lastInTopAt")
           THEN "ProHolder"."inTopSince"
         ELSE EXCLUDED."inTopSince" END`;
-  await markMovedBags(ranked, top.length, now, graceFloor);
+  await markMovedBags(ranked, top.length, now, graceFloor, read.holders.length >= PRO_HOLDER_READ);
   latestCache = { at: Date.now(), latest: now };
   return { holders: top.length };
 }
@@ -97,13 +97,16 @@ async function markMovedBags(
   inTop: number,
   now: Date,
   graceFloor: Date,
+  readFull: boolean,
 ): Promise<void> {
   const cutoff = ranked[PRO_HOLDER_COUNT - 1]?.pct;
   if (inTop < PRO_HOLDER_COUNT || cutoff === undefined) return;
   const threshold = cutoff * BAG_MOVED_SHARE;
   const shareOf = new Map(ranked.map((h) => [h.owner, h.pct]));
   // The read stops at PRO_HOLDER_READ wallets: one not in it holds at most the last one's share.
-  const smallestRead = ranked.length < PRO_HOLDER_READ ? 0 : ranked[ranked.length - 1]?.pct;
+  // Counted before pools are left out, or a full read with one pool in it would read as complete
+  // and every grace wallet outside it as holding nothing.
+  const smallestRead = readFull ? ranked[ranked.length - 1]?.pct : 0;
   const dropped = await prisma.proHolder.findMany({
     where: { lastInTopAt: { lt: now, gt: graceFloor } },
     select: { walletAddress: true, lastInTopAt: true, inTopSince: true, bagMovedAt: true },

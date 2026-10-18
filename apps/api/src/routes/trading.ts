@@ -29,6 +29,7 @@ import {
   type Env,
   walletTag,
 } from "@trenchscanner/core";
+import { recordAdminActions } from "../adminActionLog.js";
 import { registerPaperTradingRoutes } from "./paperTrading.js";
 
 /**
@@ -151,6 +152,8 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
   const status = tradingStatus(env, keys.provider ? null : keys.reason);
 
   app.addHook("preHandler", app.authenticate);
+  // The bot's writes (settings, sells, withdrawals, /paper) are admin writes too: in AdminAction.
+  recordAdminActions(app, admins);
   // Read-only, and the one route that exists while the bot is off.
   app.get("/status", async (request, reply) => {
     if (!admins.has(request.user!.walletAddress)) return reply.code(403).send({ error: "forbidden" });

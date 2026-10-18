@@ -7,6 +7,7 @@ import {
   manualRunJob,
   prisma,
   type HeartbeatJob,
+  walletTag,
 } from "@trenchscanner/core";
 import { summarizeHeartbeat } from "./health.js";
 import { RETRAIN_REQUEST_LOCK } from "./adminRetrain.js";
@@ -69,7 +70,10 @@ export async function registerAdminJobRunRoutes(app: FastifyInstance) {
         return null;
       });
       if (refused) return refused;
-      request.log.info({ by: requestedBy, job: entry.job }, "queued a run-now of a worker job");
+      request.log.info(
+        { by: requestedBy ? walletTag(requestedBy) : null, job: entry.job },
+        "queued a run-now of a worker job",
+      );
       return { queued: true, job: (await jobStates([entry.job]))[0]! };
     },
   );

@@ -553,12 +553,12 @@ export async function registerTokenRoutes(
 
   /**
    * The token chart's live tail: the coin's bonding-curve price changes since `after` (ms), read
-   * off the Helius stream (liveCurve.ts). Polled every couple of seconds while a chart is open, so
-   * its own limit sits above the global one's share.
+   * off the Helius stream (liveCurve.ts). Long-polled (about 80 asks a minute per open chart on a
+   * busy coin, #719), so its own limit leaves room for two charts open at once.
    */
   app.get(
     "/:mintAddress/chart/live",
-    { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+    { config: { rateLimit: { max: 240, timeWindow: "1 minute" } } },
     async (request, reply): Promise<LiveCurveAnswer | undefined> => {
       const { mintAddress } = request.params as { mintAddress: string };
       if (!MINT_RE.test(mintAddress)) {

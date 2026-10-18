@@ -30,7 +30,7 @@ const RAN = path(-3, [1, 1, 1, 1.5, 2, 3, 4, 5, 4.2, 2.8, ...Array(60).fill(2.6)
 
 async function seed(
   label: string,
-  extra: { anchorAt?: number; simReturnPct?: number | null; sold2x?: boolean } = {},
+  extra: { anchorAt?: number; simReturnPct?: number | null; sold2x?: boolean; open?: boolean } = {},
 ) {
   const token = await prisma.token.create({ data: { mintAddress: `${TAG}-${label}`, symbol: "T" } });
   const anchorAt = extra.anchorAt ?? ANCHOR;
@@ -51,7 +51,7 @@ async function seed(
       lowBefore2xPriceUsd: 1,
       peak24hPriceUsd: 5,
       finalizedAt: new Date(anchorAt + 30 * MIN),
-      finalized24hAt: new Date(anchorAt + 24 * 3_600_000),
+      finalized24hAt: extra.open ? null : new Date(anchorAt + 24 * 3_600_000),
       extended24h: true,
       hit2xIn1h: true,
       disqualified: false,
@@ -223,6 +223,20 @@ describe.skipIf(!dbAvailable)("exit plan re-score", () => {
     const summed = await prisma.lighthouseHour.findUniqueOrThrow({ where: { hour } });
     expect(summed.screenedReturnSum).not.toBe(999);
     expect(summed.screenAccepted).toBe(7);
+
+    // A row of the window still on its 24-hour watch holds the finish; once it closes it is
+    // re-scored and the re-sum goes back to its day.
+    resetExitPlanRescore();
+    const late = await seed("late", { anchorAt: ANCHOR + 5 * 3_600_000, open: true });
+    expect(await runExitPlanRescore(counting, window)).toEqual({ watching: 1 });
+    await prisma.candidateOutcome.update({
+      where: { id: late.row.id },
+      data: { finalized24hAt: new Date(NOW) },
+    });
+    expect(await runExitPlanRescore(counting, window)).toMatchObject({ rescored: 1 });
+    expect(
+      (await prisma.exitPlanRescore.findUniqueOrThrow({ where: { outcomeId: LIGHTHOUSE_MARKER } })).result,
+    ).toBe("2020-03-01T00:00:00.000Z");
     await prisma.lighthouseHour.delete({ where: { hour } });
   });
 });

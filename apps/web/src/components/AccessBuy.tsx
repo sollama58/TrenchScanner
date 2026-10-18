@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { privyConfig } from "../privyBridge";
-import { readTradeSettings, runTrade, type TradeStage } from "../proTrade";
+import { MIN_TRADE_SOL, readTradeSettings, runTrade, type TradeStage } from "../proTrade";
 import { TwoFactorCancelled } from "../twoFactor";
 
 /**
@@ -45,7 +45,7 @@ export function AccessBuy({
   if (!open) return null;
 
   const amount = Number(sol);
-  const valid = Number.isFinite(amount) && amount >= 0.001 && amount <= MAX_SOL;
+  const valid = Number.isFinite(amount) && amount >= MIN_TRADE_SOL && amount <= MAX_SOL;
 
   const buy = async () => {
     if (!valid || stage) return;
@@ -85,7 +85,7 @@ export function AccessBuy({
           id="access-buy-sol"
           type="number"
           inputMode="decimal"
-          min={0.001}
+          min={MIN_TRADE_SOL}
           max={MAX_SOL}
           step={0.01}
           value={sol}
@@ -96,7 +96,11 @@ export function AccessBuy({
           {stage ? STAGE_TEXT[stage] : "Buy $ASDFASDFA"}
         </button>
       </div>
-      {!valid && <p className="faint small">Between 0.001 and {MAX_SOL} SOL.</p>}
+      {!valid && (
+        <p className="faint small">
+          Between {MIN_TRADE_SOL} and {MAX_SOL} SOL.
+        </p>
+      )}
       {done && <p className="small good-text">Bought. Burn it below to get access.</p>}
       {error && (
         <p className="error small" role="alert">

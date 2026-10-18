@@ -1,4 +1,5 @@
 import { createLogger } from "../logger.js";
+import { walletTag } from "../walletTag.js";
 import {
   BURN_CREDIT_MEMO,
   MAX_MONTHS_PER_BURN,
@@ -260,9 +261,9 @@ export function largestBurn(
     if (owner !== authority) {
       logger.info("burn signed by a delegate - crediting the token account's owner", {
         signature: id ?? signature ?? null,
-        account,
-        owner,
-        signer: authority,
+        account: account === null ? null : walletTag(account),
+        owner: walletTag(owner),
+        signer: walletTag(authority),
       });
     }
     byOwner.set(owner, (byOwner.get(owner) ?? 0n) + amount);

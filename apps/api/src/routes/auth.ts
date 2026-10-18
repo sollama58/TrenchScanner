@@ -372,13 +372,16 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
 
     // While a Free Access sign-in window is open, signing in is what enrolls a wallet; `created`
     // marks the accounts this period made, the only ones its cleanup may delete. A failure costs
-    // the free access (the paywall shows), never the sign-in.
-    await enrollInFreeAccess(user, created, adminWalletSet(opts.env)).catch((err: unknown) =>
-      request.log.error(
-        { err, wallet: walletTag(walletAddress) },
-        "could not enroll the wallet in free access",
-      ),
-    );
+    // the free access (the paywall shows), never the sign-in. Privy accounts are left out: their
+    // sign-in promises no free start, and the window's cleanup must not delete them.
+    if (!user.privyUserId) {
+      await enrollInFreeAccess(user, created, adminWalletSet(opts.env)).catch((err: unknown) =>
+        request.log.error(
+          { err, wallet: walletTag(walletAddress) },
+          "could not enroll the wallet in free access",
+        ),
+      );
+    }
 
     // Settle any burns this wallet made before it had an account here. Burning first and signing
     // in afterwards is a completely ordinary order of events - and the one a first-time user is
