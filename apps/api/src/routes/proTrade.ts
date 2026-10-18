@@ -27,6 +27,7 @@ import {
   type Env,
   type WalletTrade,
   walletTag,
+  prisma,
 } from "@trenchscanner/core";
 import { proStatus } from "../proMode.js";
 import { requireTwoFactor } from "../twoFactor.js";
@@ -386,7 +387,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       });
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
       if (builds.size > 5_000) builds.clear();
-      return built;
+      return { ...built, quietSign: await quietSign(rpc, wallet, body.mint, body.side) };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof TradeRejected || err instanceof NoRouteError)
@@ -712,6 +713,41 @@ const BUILD_RETRY_MS = 800;
 /** Lamports as SOL for a message, up to four decimals. */
 function solAmount(lamports: bigint): string {
   return (Number(lamports) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 4 });
+}
+
+/**
+ * Whether a Privy wallet may sign this trade without Privy's confirm window (user rule 2026-10-18):
+ * a sale (the wallet holds the coin), or a buy of a coin the wallet already holds, whose latest scan
+ * passed the safety screen, or that any model has called. Anything else, or anything that can't be
+ * read, asks. The page still checks the transaction before signing it either way.
+ */
+export async function quietSign(
+  rpc: Pick<TradingRpc, "getTokenBalance">,
+  wallet: string,
+  mint: string,
+  side: "buy" | "sell",
+): Promise<boolean> {
+  if (side === "sell") return true;
+  try {
+    const token = await prisma.token.findUnique({
+      where: { mintAddress: mint },
+      select: { id: true, screenRejectedAt: true },
+    });
+    const [alerted, scan, balance] = await Promise.all([
+      token ? prisma.curatedAlert.findFirst({ where: { tokenId: token.id }, select: { id: true } }) : null,
+      token && !token.screenRejectedAt
+        ? prisma.tokenSnapshot.findFirst({
+            where: { tokenId: token.id },
+            orderBy: { takenAt: "desc" },
+            select: { rugScreenPassed: true },
+          })
+        : null,
+      rpc.getTokenBalance(wallet, mint).catch(() => null),
+    ]);
+    return !!alerted || scan?.rugScreenPassed === true || (balance?.raw ?? 0n) > 0n;
+  } catch {
+    return false;
+  }
 }
 
 /** The guard's refusal in the trader's words, where it can be said plainly. */

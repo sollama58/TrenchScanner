@@ -9,6 +9,7 @@ import { postWithTwoFactor } from "./twoFactor";
 import { toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
 import { onWalletsChanged, withTimeout } from "./wallet";
+import { PRIVY_WALLET_NAME, privyControls } from "./privyBridge";
 
 /**
  * Pro Mode trades from the token modal (user decision 2026-10-17): the API builds a swap for the
@@ -511,6 +512,11 @@ export interface BuiltTrade {
   minOut: string;
   tipLamports: string;
   priorityFeeLamports: string;
+  /**
+   * The coin is one the wallet holds, that passed the safety screen, or that a model called: a
+   * Privy wallet may sign it without Privy's confirm window (user rule 2026-10-18).
+   */
+  quietSign?: boolean;
 }
 
 export type TradeStage = "building" | "signing" | "sending" | "confirming";
@@ -862,12 +868,22 @@ export async function runTrade(
   });
   if (problem) throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
   onStage("signing", built);
-  const [signed] = await withTimeout(
-    sign.signTransaction({ account, transaction: unsigned, chain: "solana:mainnet" }),
-    "sign",
-  );
-  if (!signed?.signedTransaction) throw new TradeError(`${name} returned no signed transaction`);
-  const bytes = Uint8Array.from(signed.signedTransaction);
+  // Privy's confirm window shows for every trade but one the API marked quiet, and only after
+  // the check above passed: a coin the wallet holds, that passed the safety screen, or a model called.
+  const quiet = built.quietSign === true && name === PRIVY_WALLET_NAME;
+  const signedBytes = quiet
+    ? await withTimeout(
+        privyControls().then((privy) => privy.signQuietly(input.owner, unsigned)),
+        "sign",
+      )
+    : (
+        await withTimeout(
+          sign.signTransaction({ account, transaction: unsigned, chain: "solana:mainnet" }),
+          "sign",
+        )
+      )[0]?.signedTransaction;
+  if (!signedBytes) throw new TradeError(`${name} returned no signed transaction`);
+  const bytes = Uint8Array.from(signedBytes);
   // Its signature, known from here on (one signer: the 64 bytes after the count), so anything
   // that goes wrong past this point can say which transaction to check before trading again.
   const signature = bytes.length >= 65 && bytes[0] === 1 ? bs58.encode(bytes.subarray(1, 65)) : undefined;
