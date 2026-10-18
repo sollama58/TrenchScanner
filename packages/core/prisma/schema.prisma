@@ -2021,6 +2021,44 @@ model ProModeSeen {
   lastProAt     DateTime
 }
 
+/// The TRADES panel (user ask 2026-10-18): a Pro Mode wallet's own buys and sells, read from the
+/// chain while it is signed in (apps/api/src/proTrades.ts) - over the Helius stream, with a
+/// signature read to catch up on what it traded while away. One row per wallet, transaction and
+/// coin; the panel's per-coin figures and statistics are worked out from these rows.
+model ProTrade {
+  wallet    String
+  signature String
+  mint      String
+  /// "buy" (the coin in, SOL out) | "sell" (the coin out, SOL in).
+  side      String
+  /// The wallet's SOL change for it, lamports (wrapped SOL and fees included; negative on a buy).
+  /// Null when it paid or was paid in another coin (USDC, USDT).
+  lamports  BigInt?
+  /// The wallet's change in the coin, raw units (negative on a sale), and the coin's decimals.
+  tokens    BigInt
+  decimals  Int
+  /// When it landed (the block time), or when it was seen when the stream carried none.
+  at        DateTime
+  /// A buy from a flat position: the start of a trade, which put the coin through a scan.
+  entry     Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@id([wallet, signature, mint])
+  @@index([wallet, at])
+  @@index([wallet, mint, at])
+  @@index([entry, at])
+}
+
+/// How far back each Pro Mode wallet's trades have been read: the catch-up read stops at this
+/// signature, so a wallet's history is only ever read once.
+model ProTradeCursor {
+  wallet        String   @id
+  lastSignature String?
+  /// When the wallet's signatures were last read (the catch-up), and when it was first followed.
+  readAt        DateTime?
+  createdAt     DateTime @default(now())
+}
+
 /// A Free Access period, set from Admin > Access (packages/core/src/subscription/freeAccess.ts).
 /// Any wallet that signs in from signInStartsAt until signInEndsAt is enrolled (a FreeAccessGrant)
 /// and has full access until accessEndsAt, or until an admin switches it off (disabledAt). Then the

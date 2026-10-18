@@ -68,6 +68,9 @@ const WalletModalHost = lazy(() =>
   import("./components/WalletModal").then((m) => ({ default: m.WalletModalHost })),
 );
 // The pull-out utility panel on every tab (desktop only): loads once signed in with access.
+const TradesDrawer = lazy(() =>
+  import("./components/TradesDrawer").then((m) => ({ default: m.TradesDrawer })),
+);
 const UtilityDrawer = lazy(() =>
   import("./components/UtilityDrawer").then((m) => ({ default: m.UtilityDrawer })),
 );
@@ -477,6 +480,12 @@ export function App() {
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
             </div>
+            {/* Pro Mode's TRADES panel, above the Utility handle on every tab. */}
+            {proWallet && (
+              <Suspense fallback={null}>
+                <TradesDrawer key={proWallet} />
+              </Suspense>
+            )}
             {/* The Utilities tab has the same tools, with its own toolbar beside them. */}
             {tab !== "utilities" && (
               <Suspense fallback={null}>

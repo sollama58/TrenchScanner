@@ -62,6 +62,7 @@ import { WalletLiveReader } from "./walletProfile.js";
 import { WalletIdentityReader } from "./walletIdentity.js";
 import { registerTradingRoutes } from "./routes/trading.js";
 import { registerProTradeRoutes } from "./routes/proTrade.js";
+import { registerProTradesRoutes } from "./routes/proTrades.js";
 import { registerAdminProModeRoutes } from "./routes/adminProMode.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
@@ -632,6 +633,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerTradingRoutes, { prefix: "/trading", env });
   // Pro Mode trades from the token modal: the trader's own wallet signs; nothing custodial.
   await app.register(registerProTradeRoutes, { prefix: "/pro", env });
+  // The TRADES panel: a Pro Mode wallet's own trades, followed on the Helius stream (proTrades.ts).
+  await app.register(registerProTradesRoutes, { prefix: "/pro/trades", env, dexScreener, viewStamps });
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
   await app.register(registerStatsRoutes, { prefix: "/stats", env, timings, liveRefresher });
   await app.register(registerStatsModelRoutes, { prefix: "/stats", env });

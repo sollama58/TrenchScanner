@@ -120,7 +120,7 @@ const FRESH_SCAN_SLACK_MS = 60_000;
 /** The market data each lookup read, kept for the view until the scan's own snapshot lands. */
 const READINGS_MAX = 500;
 const readings = new Map<string, { at: Date; reading: CandidateToken }>();
-function keepReading(mint: string, reading: CandidateToken, at: Date): void {
+export function keepReading(mint: string, reading: CandidateToken, at: Date): void {
   readings.delete(mint);
   readings.set(mint, { at, reading });
   if (readings.size > READINGS_MAX) {
@@ -835,7 +835,7 @@ async function paidLookup(
  * next scan cycle scans it. A mint already there keeps its row: only the view stamp and the live
  * market data move.
  */
-async function upsertLookedUpToken(mint: string, reading: CandidateToken, now: Date): Promise<void> {
+export async function upsertLookedUpToken(mint: string, reading: CandidateToken, now: Date): Promise<void> {
   const live = {
     lastViewedAt: now,
     liveMarketCapUsd: reading.marketCapUsd,

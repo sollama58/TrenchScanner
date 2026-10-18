@@ -24,7 +24,18 @@ export async function noteUtilityLookups(env: Env, now = Date.now()): Promise<nu
     take: MAX_PER_CYCLE,
     select: { subject: true },
   });
-  const mints = lookups.flatMap((l) => (l.subject ? [l.subject] : []));
+  // Coins a Pro Mode wallet just bought into: the TRADES panel scans them like a lookup
+  // (apps/api routes/proTrades.ts), so they want the same read.
+  const entries = await prisma.proTrade.findMany({
+    where: { entry: true, at: { gt: new Date(now - UTILITY_READ_WINDOW_MS) } },
+    orderBy: { at: "desc" },
+    distinct: ["mint"],
+    take: MAX_PER_CYCLE,
+    select: { mint: true },
+  });
+  const mints = [
+    ...new Set([...lookups.flatMap((l) => (l.subject ? [l.subject] : [])), ...entries.map((e) => e.mint)]),
+  ];
   if (mints.length === 0) return 0;
   const tokens = await prisma.token.findMany({
     where: { mintAddress: { in: mints } },
