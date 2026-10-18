@@ -197,8 +197,8 @@ const BASELINE_METRICS: readonly { id: BaselineMetric; label: string }[] = [
 
 /** The window the chart opens on. */
 const BASELINE_DEFAULT_DAYS: WindowDays = 3;
-/** The 3-day window opens on the composite score (user ask 2026-10-18); other windows keep the measure on. */
-const SCORE_DEFAULT_DAYS: WindowDays = 3;
+/** The measure the chart opens on: the composite score (user ask 2026-10-18). */
+const BASELINE_DEFAULT_METRIC: BaselineMetric = "score";
 /** The score's reference line: where the "On target" band starts (SCORE_BANDS in leaderboard.ts). */
 const SCORE_ON_TARGET = 90;
 
@@ -215,17 +215,11 @@ type BaselineView = {
 
 function BaselinePanel(props: BaselineProps) {
   const [days, setDays] = useState<WindowDays>(BASELINE_DEFAULT_DAYS);
-  const [metric, setMetric] = useState<BaselineMetric>(
-    BASELINE_DEFAULT_DAYS === SCORE_DEFAULT_DAYS ? "score" : "2x",
-  );
+  const [metric, setMetric] = useState<BaselineMetric>(BASELINE_DEFAULT_METRIC);
   const [picked, setPicked] = useState<string | null>(null);
   // The model whose detail dialog is open (it follows the board, so a window switch refreshes it).
   const [opened, setOpened] = useState<string | null>(null);
-  const pickDays = (d: WindowDays) => {
-    setDays(d);
-    if (d === SCORE_DEFAULT_DAYS) setMetric("score");
-  };
-  const view = { days, setDays: pickDays, metric, setMetric, picked, setPicked, opened, setOpened };
+  const view = { days, setDays, metric, setMetric, picked, setPicked, opened, setOpened };
   // The page's own board is the 7-day one; the 24h and 3-day boards are polled only while picked.
   return days === PAGE_DAYS ? (
     <BaselineChart {...props} {...view} loading={false} />
