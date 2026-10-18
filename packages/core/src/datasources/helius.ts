@@ -225,7 +225,8 @@ export type TopHoldersResult =
       /** The coin's raw supply (base units), as a decimal string. */
       supply?: string;
     }
-  | { status: "failed" };
+  /** `reason`: which step failed, for the heartbeat's error (the Pro holder scan). */
+  | { status: "failed"; reason?: string };
 
 /** Whether a mint was launched in Pump.fun's Mayhem Mode. "failed" is kept distinct from a
  *  definitive false for the same reason as EarliestActivityResult: the rug screen treats an
@@ -904,7 +905,10 @@ export class HeliusClient {
         typeof supply !== "string" ||
         !/^\d+$/.test(supply)
       ) {
-        out.set(mint, { status: "failed" });
+        out.set(mint, {
+          status: "failed",
+          reason: account === "failed" ? "mint read failed" : "not a token mint",
+        });
         continue;
       }
       programOf.set(mint, value.owner);
@@ -914,7 +918,7 @@ export class HeliusClient {
     for (const mint of programOf.keys()) {
       const rows = rowsByMint.get(mint);
       if (!rows) {
-        out.set(mint, { status: "failed" });
+        out.set(mint, { status: "failed", reason: "token accounts unreadable" });
         continue;
       }
       const accounts: LargestAccount[] = [];
@@ -932,7 +936,12 @@ export class HeliusClient {
       }
       const supply = supplyOf.get(mint)!;
       const holders = topWalletsFromAccounts(accounts, supply, n, FEE_HOLDERS);
-      out.set(mint, holders ? { status: "found", holders, supply: supply.toString() } : { status: "failed" });
+      out.set(
+        mint,
+        holders
+          ? { status: "found", holders, supply: supply.toString() }
+          : { status: "failed", reason: "zero supply" },
+      );
     }
     return out;
   }
@@ -1008,6 +1017,8 @@ export class HeliusClient {
       const cursor = new Map<string, string>();
       let pending = [...programOf.keys()];
       let methodMissing = false;
+      // Mints V2 refused (an RPC error rather than a page): read again unpaged below.
+      const refused = new Set<string>();
       for (let page = 1; page <= GPA_V2_MAX_PAGES && pending.length > 0; page += 1) {
         const calls: RpcCall[] = pending.map((mint) => ({
           id: `gpa-${mint}`,
@@ -1037,6 +1048,7 @@ export class HeliusClient {
           if (!res || res.error || !Array.isArray(accounts)) {
             if (res?.error) logger.warn("rpc error on getProgramAccountsV2", { mint, error: res.error });
             rows.delete(mint);
+            if (res?.error && page === 1) refused.add(mint);
             continue;
           }
           rows.get(mint)!.push(...accounts);
@@ -1057,9 +1069,14 @@ export class HeliusClient {
         // A mint with tokens has token accounts, so a walk that found none read nothing: V2 has
         // answered an empty first page for an older classic SPL Token mint ($ASDFASDFA, whose
         // holder scan read empty every time). Those mints are read again unpaged.
-        const empty = new Map([...programOf].filter(([mint]) => rows.get(mint)?.length === 0));
+        // A mint V2 refused outright gets the same second read.
+        const empty = new Map(
+          [...programOf].filter(([mint]) => rows.get(mint)?.length === 0 || refused.has(mint)),
+        );
         if (empty.size === 0) return rows;
-        logger.warn("getProgramAccountsV2 found no accounts - reading unpaged", { mints: [...empty.keys()] });
+        logger.warn("getProgramAccountsV2 found no accounts or refused - reading unpaged", {
+          mints: [...empty.keys()],
+        });
         const unpaged = await this.unpagedTokenAccounts(empty, config);
         for (const mint of empty.keys()) {
           const again = unpaged.get(mint);

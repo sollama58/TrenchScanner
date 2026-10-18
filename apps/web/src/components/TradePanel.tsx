@@ -409,7 +409,7 @@ export function presetCols(n: number, rows: 1 | 2 = 1): React.CSSProperties {
 }
 
 /** The sell buttons keep their old grid: up to four in a row. */
-function sellCols(n: number): React.CSSProperties {
+export function sellCols(n: number): React.CSSProperties {
   return { "--cols": n <= 4 ? Math.max(n, 1) : 3 } as React.CSSProperties;
 }
 

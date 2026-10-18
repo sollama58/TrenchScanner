@@ -10,7 +10,7 @@ import {
 } from "../wallet";
 import { privyConfig, privyOAuthReturn, type PrivyConfig } from "../privyBridge";
 import { AlertCard } from "./AlertCard";
-import { ClockIcon } from "./Icons";
+import { ClockIcon, TrophyIcon } from "./Icons";
 import { usePolling, useNow } from "../hooks";
 import type { GuestPage } from "../tabs/GuestLiveTab";
 
@@ -121,7 +121,7 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
           Models scan every new Pump.fun token and flag a few. Each alert is scored against one goal: 2x
           within 15 minutes on 75% of alerts, 4x within 30 minutes on half, from the price at the alert.
         </p>
-        <LatestAlerts />
+        <ShowcaseAlert />
       </div>
       <div className="panel signin-box">
         <h2>Sign in</h2>
@@ -227,21 +227,37 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
  * The newest alerts as guests see them, a few minutes late: the product itself instead of a list of
  * features. The latest ones, whatever their outcome, so nothing is picked for looks.
  */
-function LatestAlerts() {
-  const feed = usePolling<GuestPage>("/guest/feed?page=1", 60_000);
+type GuestCard = GuestPage["matches"][number];
+
+/**
+ * The signed-out page's showcase: the default models' best call of the last 24 hours by its Peak,
+ * among calls that passed (user decision 2026-10-18). Falls back to the latest call, as guests see
+ * it, while no call has passed in that window.
+ */
+function ShowcaseAlert() {
+  const best = usePolling<{ match: GuestCard | null; windowHours: number }>("/guest/best", 60_000);
+  const latest = usePolling<GuestPage>("/guest/feed?page=1", 60_000);
   const now = useNow(15_000);
-  const cards = feed.data?.matches.slice(0, 1) ?? [];
-  if (cards.length === 0) return null;
-  const delay = feed.data?.delayMinutes ?? GUEST_DELAY_MINUTES;
+  // Waits for the showcase answer, so the latest call never flashes up before the best one.
+  const card = best.data ? (best.data.match ?? latest.data?.matches[0] ?? null) : null;
+  if (!card) return null;
+  const isBest = card === best.data?.match;
+  const delay = latest.data?.delayMinutes ?? GUEST_DELAY_MINUTES;
   return (
     <div className="signin-alerts">
       <p className="signin-alerts-head small muted">
-        <ClockIcon size={13} /> Latest alert, shown {delay} minutes late
+        {isBest ? (
+          <>
+            <TrophyIcon size={13} /> Best model alert of the last {best.data?.windowHours ?? 24} hours
+          </>
+        ) : (
+          <>
+            <ClockIcon size={13} /> Latest alert, shown {delay} minutes late
+          </>
+        )}
       </p>
       <div className="cards signin-cards">
-        {cards.map((card) => (
-          <AlertCard key={card.id} card={card} now={now} labelSource detail={false} />
-        ))}
+        <AlertCard card={card} now={now} labelSource detail={false} />
       </div>
     </div>
   );
