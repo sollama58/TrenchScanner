@@ -360,7 +360,8 @@ export function describeSignInError(e: unknown, walletName: string): string {
       : `${walletName} didn't sign. Look for its popup (it may be behind this window), approve the message, then try again.`;
   if (e instanceof ApiError) {
     // Privy's sign-in: the API's own words (a token that didn't check out, Privy not answering).
-    if ((e.status === 401 || e.status === 503) && walletName === "Privy")
+    // 403 and 409 say why Privy can't sign this account in (an admin, or a wallet account).
+    if ([401, 403, 409, 503].includes(e.status) && walletName === "Privy")
       return e.message || "That sign-in didn't check out. Try again.";
     if (e.status === 401)
       return "The signature didn't verify. Try again, and make sure the wallet shows this site's address.";
