@@ -1,3 +1,7 @@
+-- Privy sign-in and two-factor. User gains nullable columns only (no rewrite); the lock wait is
+-- capped so a busy User table fails the deploy instead of stalling sign-ins.
+SET LOCAL lock_timeout = '5s';
+
 -- AlterTable
 ALTER TABLE "User" ADD COLUMN     "privyUserId" TEXT;
 
