@@ -19084,3 +19084,44 @@ body:has(.util-toast) .bug-fab {
   outline-offset: 2px;
   border-radius: 6px;
 }
+
+/* Scope rows fade in as each column's data lands, a column's first rows one after another. */
+.scope-row {
+  animation: scope-row-in 0.28s ease-out both;
+  animation-delay: calc(var(--i, 0) * 30ms);
+}
+@keyframes scope-row-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+.scope-row.preview {
+  animation: none;
+}
+/* A column still waiting on its data. */
+.scope-row-skeleton {
+  display: grid;
+  grid-template-columns: var(--scope-img, 48px) minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 6px 10px;
+  padding: var(--scope-pad, 8px 10px);
+  border-bottom: 1px solid var(--border);
+}
+.scope-row-skeleton .round {
+  grid-row: 1 / 3;
+  width: var(--scope-img, 48px);
+  height: var(--scope-img, 48px);
+}
+.scope-row-skeleton .skeleton:not(.round) {
+  height: 12px;
+  align-self: center;
+}
+.scope-row-skeleton .skeleton:last-child {
+  width: 60%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .scope-row {
+    animation: none;
+  }
+}
