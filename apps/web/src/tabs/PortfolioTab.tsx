@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Card } from "../api";
 import { Skeleton } from "../components/Charts";
-import { ChartIcon, CloseIcon, InfoIcon, RobotIcon, TransferIcon, WalletIcon } from "../components/Icons";
+import {
+  ChartIcon,
+  CloseIcon,
+  GiftIcon,
+  InfoIcon,
+  RobotIcon,
+  TransferIcon,
+  WalletIcon,
+} from "../components/Icons";
 import { TokenImage } from "../components/TokenImage";
 import { sol, StatsStrip, TradeCard, type TradeCoin, type TradeStats } from "../components/TradesDrawer";
 import { useNow, usePolling } from "../hooks";
@@ -11,6 +19,7 @@ import { openTokenModal } from "../tokenModal";
 /** The API reads the wallet's holdings from the chain at most every 5 minutes; the rest is our own rows. */
 const PORTFOLIO_POLL_MS = 60_000;
 const TRADES_POLL_MS = 30_000;
+const FEES_POLL_MS = 60_000;
 
 interface Holding {
   mint: string;
@@ -95,6 +104,26 @@ interface PortfolioTrades {
   solUsd: number | null;
 }
 
+/** GET /pro/trade/fees (apps/api/src/tradeFees.ts). */
+interface FeesSaved {
+  trades: number;
+  buys: number;
+  sells: number;
+  volumeSol: number;
+  platformFeeSol: number;
+  networkFeeSol: number;
+  platforms: {
+    id: string;
+    name: string;
+    buyBps: number;
+    sellBps: number;
+    feeSol: number;
+    savedSol: number;
+  }[];
+  since: string | null;
+  solUsd: number | null;
+}
+
 function amount(n: number): string {
   if (n >= 999_995_000) return `${(n / 1e9).toFixed(2)}B`;
   if (n >= 999_950) return `${(n / 1e6).toFixed(2)}M`;
@@ -141,6 +170,7 @@ export function PortfolioTab() {
       </p>
       <HoldingsPanel holdings={data.holdings} now={now} />
       <TradesPanel now={now} />
+      <FeesPanel />
       {data.botPositions.length > 0 && <BotPanel positions={data.botPositions} now={now} />}
       <TapePanel tape={data.tape} now={now} />
     </div>
@@ -477,6 +507,112 @@ function TradesPanel({ now }: { now: number }) {
               {data.untracked === 1 ? "it isn't" : "they aren't"} shown.
             </p>
           )}
+        </>
+      )}
+    </section>
+  );
+}
+
+/** Fees are small: four decimals below 1 SOL, where sol() would round most of them to 0. */
+function feeSol(n: number): string {
+  return n >= 1 ? sol(n) : `${n.toFixed(4)} SOL`;
+}
+
+const pct = (bps: number) => (bps === 0 ? "none" : `${bps / 100}%`);
+
+/** Fees saved (user ask 2026-10-18): trades made here against other platforms' fees on the same trades. */
+function FeesPanel() {
+  const { data, error } = usePolling<FeesSaved>("/pro/trade/fees", FEES_POLL_MS);
+  const best = data?.platforms.reduce((a, b) => (b.savedSol > a.savedSol ? b : a), data.platforms[0]!);
+  const inUsd = (n: number) =>
+    data?.solUsd ? <span className="faint small"> · {usd(n * data.solUsd)}</span> : null;
+  return (
+    <section className="panel">
+      <header className="section-head">
+        <div>
+          <span className="eyebrow">
+            <GiftIcon size={13} /> Fees saved
+          </span>
+          <h2>What trading here saved you</h2>
+          <p className="muted small">
+            Trades you made from TrenchScanner&apos;s Trade panel, against what the same trades would have
+            paid in platform fees elsewhere. TrenchScanner charges no platform fee; every platform also pays
+            the network (priority fee and tip), so that part isn&apos;t counted as saved.
+            {data?.since && <> Counted since {new Date(data.since).toLocaleDateString()}.</>}
+          </p>
+        </div>
+      </header>
+      {error && !data && (
+        <p className="error small" role="alert">
+          Couldn&apos;t load your fees: {error.message}
+        </p>
+      )}
+      {!data ? (
+        !error && <Skeleton lines={3} />
+      ) : data.trades === 0 ? (
+        <p className="faint small portfolio-empty">
+          No trades from the Trade panel yet. Once you buy or sell here, your savings show up.
+        </p>
+      ) : (
+        <>
+          <dl className="facts portfolio-totals">
+            <div>
+              <dt>Trades</dt>
+              <dd className="num">
+                {data.buys} buys / {data.sells} sales
+              </dd>
+            </div>
+            <div>
+              <dt>Volume</dt>
+              <dd className="num">
+                {sol(data.volumeSol)}
+                {inUsd(data.volumeSol)}
+              </dd>
+            </div>
+            <div>
+              <dt>Fees paid here</dt>
+              <dd className="num">
+                {feeSol(data.platformFeeSol + data.networkFeeSol)}
+                <span className="faint small"> · {feeSol(data.networkFeeSol)} network</span>
+              </dd>
+            </div>
+            {best && (
+              <div>
+                <dt>Saved vs {best.name}</dt>
+                <dd className="num up">
+                  {feeSol(best.savedSol)}
+                  {inUsd(best.savedSol)}
+                </dd>
+              </div>
+            )}
+          </dl>
+          <div className="table-wrap">
+            <table className="portfolio-table">
+              <thead>
+                <tr>
+                  <th>Platform</th>
+                  <th className="num">Buy fee</th>
+                  <th className="num">Sell fee</th>
+                  <th className="num">Their fees</th>
+                  <th className="num">You saved</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.platforms.map((p) => (
+                  <tr key={p.id}>
+                    <td>{p.name}</td>
+                    <td className="num">{pct(p.buyBps)}</td>
+                    <td className="num">{pct(p.sellBps)}</td>
+                    <td className="num">{feeSol(p.feeSol)}</td>
+                    <td className={`num${tone(p.savedSol)}`}>
+                      {feeSol(p.savedSol)}
+                      {inUsd(p.savedSol)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
     </section>

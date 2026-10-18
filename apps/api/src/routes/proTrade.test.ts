@@ -145,6 +145,59 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
     expect((await as(ADMIN, "GET", `/pro/trade/costs?mint=nope`)).statusCode).toBe(400);
   });
 
+  it("shows a Pro wallet the fees its confirmed trades here saved, and no one else", async () => {
+    expect((await as(TRADER, "GET", "/pro/trade/fees")).statusCode).toBe(404);
+    await prisma.platformTrade.deleteMany({ where: { wallet: ADMIN } });
+    expect((await as(ADMIN, "GET", "/pro/trade/fees")).json()).toMatchObject({ trades: 0, since: null });
+    const sig = (n: number) => `fees-test-${n}`;
+    await prisma.platformTrade.createMany({
+      data: [
+        {
+          signature: sig(1),
+          wallet: ADMIN,
+          mint: MINT,
+          side: "buy",
+          lamports: 2_000_000_000n,
+          networkFeeLamports: 100_000n,
+          status: "confirmed",
+        },
+        {
+          signature: sig(2),
+          wallet: ADMIN,
+          mint: MINT,
+          side: "sell",
+          lamports: 4_000_000_000n,
+          networkFeeLamports: 100_000n,
+          status: "confirmed",
+        },
+        // Not landed: never counted.
+        {
+          signature: sig(3),
+          wallet: ADMIN,
+          mint: MINT,
+          side: "buy",
+          lamports: 9_000_000_000n,
+          networkFeeLamports: 100_000n,
+          status: "expired",
+        },
+      ],
+    });
+    try {
+      const body = (await as(ADMIN, "GET", "/pro/trade/fees")).json();
+      expect(body).toMatchObject({ trades: 2, volumeSol: 6, platformFeeSol: 0, networkFeeSol: 0.0002 });
+      expect(
+        Object.fromEntries(body.platforms.map((p: { id: string; savedSol: number }) => [p.id, p.savedSol])),
+      ).toEqual({
+        fomo: 0.03,
+        pumpfun: 0.014,
+        terminal: 0.03,
+        axiom: 0.06,
+      });
+    } finally {
+      await prisma.platformTrade.deleteMany({ where: { wallet: ADMIN } });
+    }
+  });
+
   it("refuses a buy under 0.01 SOL before building anything", async () => {
     const res = await as(ADMIN, "POST", "/pro/trade/build", {
       mint: MINT,
