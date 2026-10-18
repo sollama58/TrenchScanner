@@ -77,6 +77,16 @@ describe("parseFeedAppearance", () => {
       quickLinks: ["gmgn", "axiom"],
     });
     expect(parseFeedAppearance({ quickLinks: [] }).quickLinks).toEqual([]);
+    // The token chart's labeled-wallet trades: every kind at 0.5 SOL, never under 0.25 SOL.
+    expect(parseFeedAppearance({})).toMatchObject({ chartMarks: true, chartMarkMinSol: 0.5 });
+    expect(parseFeedAppearance({}).chartMarkKinds).toHaveLength(8);
+    expect(
+      parseFeedAppearance({
+        chartMarks: false,
+        chartMarkKinds: ["kol", "nope", "kol", "dev"],
+        chartMarkMinSol: 0.1,
+      }),
+    ).toMatchObject({ chartMarks: false, chartMarkKinds: ["kol", "dev"], chartMarkMinSol: 0.5 });
     // The card outline is the theme's neutral until picked, and colors by result by default.
     expect(parseFeedAppearance({})).toMatchObject({ outline: null, outlineResult: false });
     expect(parseFeedAppearance({ outline: "#AABBCC", outlineResult: false })).toMatchObject({

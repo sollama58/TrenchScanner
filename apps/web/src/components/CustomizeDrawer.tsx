@@ -9,7 +9,22 @@ import { CloseIcon, PaletteIcon } from "./Icons";
  * a drawer on the right on desktop (the page makes room for it), a short sheet along the bottom
  * on phones. Escape or the close button shuts it.
  */
-export function CustomizeDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function CustomizeDrawer({
+  open,
+  onClose,
+  section,
+  nested = false,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** A section's element id to open at (scrolled to and briefly lit), e.g. CHART_MARKS_SECTION. */
+  section?: string;
+  /**
+   * Opened from inside a popup (the token view's chart link): Escape closes the drawer and leaves
+   * the popup open.
+   */
+  nested?: boolean;
+}) {
   const look = useAppearance();
   const save = useAppearanceSave();
   const ref = useRef<HTMLElement>(null);
@@ -21,22 +36,35 @@ export function CustomizeDrawer({ open, onClose }: { open: boolean; onClose: () 
     // Whatever opened the drawer (the Customize button) gets focus back when it closes.
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const drawer = ref.current;
-    drawer?.focus();
+    const target = section ? document.getElementById(section) : null;
+    if (target && drawer?.contains(target)) {
+      target.scrollIntoView({ block: "start" });
+      target.classList.add("lit");
+      target.focus({ preventScroll: true });
+    } else drawer?.focus();
     const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (nested) {
+        // Before the popup's own Escape (which would close it), and only the drawer.
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+        return;
+      }
       // Escape in a popup opened over the drawer (How this works) closes that popup only.
-      if (e.key === "Escape" && !document.querySelector("dialog[open]")) onClose();
+      if (!document.querySelector("dialog[open]")) onClose();
     };
-    window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, nested);
     return () => {
       document.body.classList.remove("drawer-open");
-      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onKey, nested);
       // Only when focus went down with the drawer (Escape, the close button), not when the reader
       // has since moved on to something else on the page.
       const now = document.activeElement;
       const lost = !now || now === document.body || (drawer?.contains(now) ?? false);
       if (lost && opener?.isConnected) opener.focus();
     };
-  }, [open, onClose]);
+  }, [open, onClose, section, nested]);
 
   if (!open) return null;
   return (

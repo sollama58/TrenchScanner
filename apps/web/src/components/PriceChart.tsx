@@ -14,6 +14,7 @@ import {
   type VolumeBar,
   type VolumeCandle,
 } from "../priceChart";
+import { markRadius, type WalletMark } from "../walletMarks";
 
 /** A moment marked on the time axis: an alert or a model's call. */
 export interface ChartEvent {
@@ -48,6 +49,7 @@ export function PriceChart({
   origin,
   height,
   ariaLabel,
+  marks = [],
 }: {
   points: Point[];
   /**
@@ -76,6 +78,11 @@ export function PriceChart({
   origin?: number;
   height: number;
   ariaLabel: string;
+  /**
+   * Labeled wallets' trades (KOLs, their sides, flagged wallets): lettered rings on the line, filled
+   * for a buy and hollow for a sale, sized by SOL. Apart from a Pro trader's own arrows.
+   */
+  marks?: WalletMark[];
 }) {
   const id = useId().replace(/:/g, "");
   const boxRef = useRef<HTMLDivElement>(null);
@@ -227,6 +234,10 @@ export function PriceChart({
         .sort((a, b) => Math.abs(a.t - h.t) - Math.abs(b.t - h.t))[0] ?? null)
     : null;
 
+  // The labeled wallets' trades in view, and those by the hovered point.
+  const shownMarks = marks.filter((m) => m.t >= geo.t0 && m.t <= geo.t1);
+  const hMarks = h ? shownMarks.filter((m) => Math.abs(m.t - h.t) <= Math.max(geo.step, 5_000)) : [];
+
   return (
     <div className="pc" ref={boxRef}>
       <svg
@@ -331,6 +342,27 @@ export function PriceChart({
             className="pc-scan"
           />
         ))}
+
+        {shownMarks.length > 0 && (
+          <g className="pc-marks" aria-hidden="true">
+            {shownMarks.map((m, i) => {
+              const r = markRadius(m.sol);
+              const on = hMarks.includes(m);
+              return (
+                <g
+                  key={`mark-${m.t}-${m.wallet}-${i}`}
+                  className={`pc-mark wk-${m.kind} ${m.side}${on ? " on" : ""}`}
+                  transform={`translate(${x(m.t).toFixed(1)},${axis.y(valueAt(points, m.t) ?? last.v).toFixed(1)})`}
+                >
+                  <circle r={r} />
+                  <text dy="0.35em" textAnchor="middle" fontSize={r >= 8 ? 9.5 : 8}>
+                    {m.letter}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
+        )}
 
         {showPeak && (
           <g className="pc-peak">
@@ -464,12 +496,23 @@ export function PriceChart({
               {timeLabel(hScan.t, 0, true)}
             </span>
           )}
+          {hMarks.slice(0, MAX_TIP_MARKS).map((m, i) => (
+            <span key={`m-${i}`} className={`pc-mark-line wk-${m.kind}`}>
+              <i className={`pc-mark-dot ${m.side}`} aria-hidden="true" /> {m.text}
+            </span>
+          ))}
+          {hMarks.length > MAX_TIP_MARKS && (
+            <span className="faint small">+{hMarks.length - MAX_TIP_MARKS} more labeled trades here</span>
+          )}
           {hFlow && <FlowLine flow={hFlow} />}
         </div>
       )}
     </div>
   );
 }
+
+/** Labeled trades the readout lists by name at most; the rest are counted. */
+const MAX_TIP_MARKS = 6;
 
 /**
  * Where a readout goes beside the point at `hx`: on its far side from the nearer edge, and on a

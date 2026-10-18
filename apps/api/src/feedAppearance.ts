@@ -46,6 +46,25 @@ export const CARD_FIELDS = [
 /** Trading sites a card can link the token to (apps/web/src/appearance.ts has their URLs). */
 export const QUICK_LINKS = ["terminal", "axiom", "gmgn"] as const;
 
+/**
+ * Kinds of labeled wallet whose trades the token chart can mark (apps/web/src/walletMarks.ts):
+ * KOLs, Known Sides, KOL funded wallets, Probable Sides, the dev, risky wallets and dumpers,
+ * winners, linked holders.
+ */
+export const CHART_MARK_KINDS = [
+  "kol",
+  "known",
+  "funded",
+  "probable",
+  "dev",
+  "risky",
+  "winner",
+  "linked",
+] as const;
+/** The chart marks no trade under this many SOL, whatever the setting (user ask 2026-10-18). */
+export const CHART_MARK_MIN_SOL = 0.25;
+export const CHART_MARK_MAX_SOL = 1_000;
+
 /** The Live feed's "hide below this market cap" slider: its range and step, in USD. */
 export const HIDE_BELOW_MCAP_MIN = 3_000;
 export const HIDE_BELOW_MCAP_MAX = 20_000;
@@ -177,6 +196,16 @@ export const feedAppearanceSchema = z
       .max(QUICK_LINKS.length)
       .refine((l) => new Set(l).size === l.length, "quick links repeat")
       .default(["terminal"]),
+    /** The token chart marks labeled wallets' trades (user ask 2026-10-18); on by default. */
+    chartMarks: z.boolean().default(true),
+    /** Which kinds of labeled wallet it marks; every kind by default. */
+    chartMarkKinds: z
+      .array(z.enum(CHART_MARK_KINDS))
+      .max(CHART_MARK_KINDS.length)
+      .refine((k) => new Set(k).size === k.length, "chart mark kinds repeat")
+      .default([...CHART_MARK_KINDS]),
+    /** The smallest trade it marks, in SOL: 0.5 by default, never under CHART_MARK_MIN_SOL. */
+    chartMarkMinSol: z.number().min(CHART_MARK_MIN_SOL).max(CHART_MARK_MAX_SOL).default(0.5),
     /** Card fields not shown. */
     hidden: z
       .array(z.enum(CARD_FIELDS))
@@ -234,6 +263,9 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   hideBelowMcap: false,
   hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],
+  chartMarks: true,
+  chartMarkKinds: [...CHART_MARK_KINDS],
+  chartMarkMinSol: 0.5,
   // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own), the header's
   // "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
@@ -246,7 +278,7 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   const raw = typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(DEFAULT_FEED_APPEARANCE) as (keyof FeedAppearance)[]) {
-    if (key === "hidden" || key === "quickLinks") continue;
+    if (key === "hidden" || key === "quickLinks" || key === "chartMarkKinds") continue;
     const parsed = feedAppearanceSchema.shape[key].safeParse(raw[key]);
     out[key] = parsed.success ? parsed.data : DEFAULT_FEED_APPEARANCE[key];
   }
@@ -259,5 +291,9 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   out.quickLinks = Array.isArray(raw.quickLinks)
     ? [...new Set(raw.quickLinks.filter((l): l is string => typeof l === "string" && sites.has(l)))]
     : DEFAULT_FEED_APPEARANCE.quickLinks;
+  const markKinds = new Set<string>(CHART_MARK_KINDS);
+  out.chartMarkKinds = Array.isArray(raw.chartMarkKinds)
+    ? [...new Set(raw.chartMarkKinds.filter((k): k is string => typeof k === "string" && markKinds.has(k)))]
+    : DEFAULT_FEED_APPEARANCE.chartMarkKinds;
   return out as FeedAppearance;
 }

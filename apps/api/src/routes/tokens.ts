@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { allowLookupRead } from "../lookupGate.js";
 import { keepFilterMoment, readBubbleMoments, type BubbleMomentView } from "../bubbleMoments.js";
 import { readKolRows } from "../kolRoster.js";
+import { loadPossibleSides } from "../possibleSides.js";
 import {
   isStonksCoin,
   NARRATIVE_CONTESTANT,
@@ -29,6 +30,7 @@ import {
   pumpFunCandleFetcher,
   withLiveTrades,
   type MarkedWallet,
+  type SideLabel,
   type McapCandle,
 } from "../tokenChart.js";
 import {
@@ -301,6 +303,26 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
   const knownSides = new Map(
     [...kolRows.values()].flatMap((k) => (k.main ? [[k.wallet, k.main.wallet] as const] : [])),
   );
+  // A KOL's funded wallets and Probable Sides, by the strongest label each carries (Known Sides
+  // are named above, from the roster).
+  const sideRows = await loadPossibleSides(rows.map((r) => r.wallet).filter((w) => !kolRows.has(w)));
+  const sides = new Map<string, SideLabel>(
+    Object.entries(sideRows).flatMap(([wallet, entries]) => {
+      const top = entries.find((e) => !e.known);
+      return top
+        ? [
+            [
+              wallet,
+              {
+                kind: top.funded ? "funded" : "probable",
+                kolWallet: top.kolWallet,
+                kolName: top.kolName,
+              } satisfies SideLabel,
+            ] as const,
+          ]
+        : [];
+    }),
+  );
   const opts = { riskyScore: RISKY_WALLET_SCORE };
   const clusters = Array.isArray(clustered?.linkedClusters)
     ? (clustered.linkedClusters as { funder: string; wallets: { wallet: string }[] }[]).filter(
@@ -317,7 +339,12 @@ async function chartWallets(tokenId: string): Promise<ChartWallets> {
         }
       : null,
     live: liveSnaps[0] ? { readAt: liveSnaps[0].takenAt.getTime() } : null,
-    wallets: withLiveTrades(markedWallets(rows, risk, clusters, opts, kols, knownSides), live, risk, opts),
+    wallets: withLiveTrades(
+      markedWallets(rows, risk, clusters, opts, kols, knownSides, sides),
+      live,
+      risk,
+      opts,
+    ),
     holderEntries: holderEntries(rows, listedWallets(listed?.linkedHolders), tape),
   };
 }
