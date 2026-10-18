@@ -951,9 +951,8 @@ async function scanCycle(
   // 2. Re-check the active watchlist against live market data, and keep only the mints currently
   // sitting in (or near) the target band.
   const { tracked, alive } = await selectWatchlist(env);
-  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts), and
-  // while price paths are recorded, the coins called in the last PRICE_PATH_ALERT_MINUTES too.
-  followYoungCurves(tracked, Date.now(), await recentlyAlerted(env));
+  // The young Pump.fun coins in it have their curves followed change by change (curveTape.ts).
+  followYoungCurves(tracked);
   lap("watchlist");
 
   if (tracked.length === 0) {
@@ -2033,34 +2032,6 @@ async function scanDowntimeMs(env: Env, now: number): Promise<number> {
     // ordinary cutoff applies this cycle.
     logger.warn("could not read scan heartbeat for liveness horizon", { error: String(err) });
     return 0;
-  }
-}
-
-/**
- * The coins with a curated alert in the last PRICE_PATH_ALERT_MINUTES, newest alert per coin, for
- * the curve tape to keep following (pricePathRecorder.ts). Empty while recording is off or on a
- * failed read: the tape then follows the watchlist alone.
- */
-async function recentlyAlerted(
-  env: Env,
-): Promise<{ mintAddress: string; alertedAt: Date; launchpad: string | null }[]> {
-  if (!env.CURVE_TAPE || !env.PRICE_PATH_RECORD || env.PRICE_PATH_ALERT_MINUTES <= 0) return [];
-  try {
-    const rows = await prisma.curatedAlert.findMany({
-      where: { createdAt: { gte: new Date(Date.now() - env.PRICE_PATH_ALERT_MINUTES * 60_000) } },
-      orderBy: { createdAt: "desc" },
-      take: 500,
-      select: { createdAt: true, token: { select: { mintAddress: true, launchpad: true } } },
-    });
-    const seen = new Set<string>();
-    return rows.flatMap((r) => {
-      if (seen.has(r.token.mintAddress)) return [];
-      seen.add(r.token.mintAddress);
-      return [{ mintAddress: r.token.mintAddress, alertedAt: r.createdAt, launchpad: r.token.launchpad }];
-    });
-  } catch (err) {
-    logger.warn("could not read recent alerts for the curve tape", { error: String(err) });
-    return [];
   }
 }
 

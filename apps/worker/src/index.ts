@@ -327,11 +327,10 @@ async function main() {
   };
   const stopCurveTape = curveTapeOn
     ? startCurveTape(deps.helius, heliusStream, {
-        // Longer while paths are recorded (pricePathRecorder.ts), and alerted coins past their alert.
+        // Longer while paths are recorded (pricePathRecorder.ts).
         maxAgeMinutes: env.PRICE_PATH_RECORD
           ? Math.max(env.CURVE_TAPE_MAX_AGE_MINUTES, env.PRICE_PATH_FOLLOW_MINUTES)
           : env.CURVE_TAPE_MAX_AGE_MINUTES,
-        alertMinutes: env.PRICE_PATH_RECORD ? env.PRICE_PATH_ALERT_MINUTES : 0,
         maxMints: env.CURVE_TAPE_MAX_MINTS,
         streamCreditsPerDay: env.CURVE_TAPE_STREAM_CREDITS_PER_DAY,
         pollSeconds: env.CURVE_TAPE_POLL_SECONDS,

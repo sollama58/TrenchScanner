@@ -78,7 +78,8 @@ describe("recordPricePath", () => {
   it("skips quiet paths, caps the day, and writes the rest in one insert", async () => {
     const written: unknown[][] = [];
     startPricePathRecorder({ maxPerDay: 2 }, async (rows) => written.push(rows));
-    const now = Date.UTC(2026, 9, 18, 5);
+    // Late in the UTC day, so the pace allows the whole cap.
+    const now = Date.UTC(2026, 9, 18, 23, 30);
     recordPricePath("quiet", tape(MIN_ACTIVE_SECONDS - 1), "aged", now);
     recordPricePath("a", tape(120), "aged", now);
     recordPricePath("b", tape(120), "graduated", now);
@@ -94,6 +95,13 @@ describe("recordPricePath", () => {
     // A new UTC day has room again.
     recordPricePath("d", tape(120), "aged", now + 86_400_000);
     expect(takePricePathStats()).toMatchObject({ recorded: 1, pending: 1 });
+  });
+
+  it("paces the day's cap: an hour in, about two hours' share", () => {
+    startPricePathRecorder({ maxPerDay: 240 }, async () => undefined);
+    const now = Date.UTC(2026, 9, 18, 1);
+    for (let i = 0; i < 30; i++) recordPricePath(`m${i}`, tape(60), "aged", now);
+    expect(takePricePathStats()).toMatchObject({ recorded: 20, capped: 10 });
   });
 
   it("drops a batch the database refuses instead of holding it", async () => {

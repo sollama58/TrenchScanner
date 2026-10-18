@@ -153,7 +153,10 @@ export function recordPricePath(
     stats.skipped += 1;
     return;
   }
-  if (today >= cfg.maxPerDay || pending.length >= MAX_PENDING) {
+  // Paced through the UTC day (its share so far plus an hour's worth), so the cap doesn't fill with
+  // the day's first hours.
+  const share = (now - Date.parse(`${d}T00:00:00Z`)) / 86_400_000;
+  if (today >= cfg.maxPerDay * Math.min(1, share + 1 / 24) || pending.length >= MAX_PENDING) {
     stats.capped += 1;
     return;
   }
