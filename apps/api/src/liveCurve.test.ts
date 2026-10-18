@@ -295,6 +295,32 @@ describe("LiveCurves", () => {
     curves.stop();
   });
 
+  it("follows a graduated Stonks coin's Raydium CPMM pool", async () => {
+    const graduated: CurveState = { ...state(0), virtualToken: 0, virtualQuote: 0, complete: true };
+    const curves = new LiveCurves({
+      makeStream: null,
+      reader: {
+        getCurveStatesBatch: async (list: string[]) =>
+          new Map(list.map((c) => [c, c === "ll-pool" ? graduated : null])),
+        findLaunchLabPool: async () => "ll-pool",
+        findCpmmPoolVaults: async () => VAULTS,
+        getPoolVaultsBatch: async () => new Map(),
+        getTokenAmountsBatch: async (list: string[]) =>
+          new Map(list.map((a) => [a, a === VAULTS.base ? 2e14 : 8e10])),
+      },
+      solPrice: { get: async () => 100 },
+    });
+    await curves.read(MINT, 0);
+    await curves.round();
+    await curves.round();
+    const a = await curves.read(MINT, 0);
+    expect(a).toMatchObject({ venue: "pool", complete: false });
+    expect(a.ticks[a.ticks.length - 1]![1]).toBeCloseTo(
+      curveMcapSol({ virtualQuote: 8e10, virtualToken: 2e14 }) * 100,
+    );
+    curves.stop();
+  });
+
   it("reads a pool by RPC every READ_EVERY_MS off the stream", async () => {
     const t = setup({ states: [state(5e10, true)], pool: { vaults: VAULTS, amounts: [2e14, 8e10] } });
     expect(await t.curves.read(MINT, 0)).toMatchObject({ venue: "pool", complete: false, source: "rpc" });

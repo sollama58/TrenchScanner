@@ -5,6 +5,13 @@ import {
   LAUNCHLAB_POOL_SIZE,
   LAUNCHLAB_PROGRAM,
   LAUNCHLAB_READ_BYTES,
+  CPMM_MINT0_OFFSET,
+  CPMM_MINT1_OFFSET,
+  CPMM_POOL_SIZE,
+  CPMM_VAULTS_OFFSET,
+  CPMM_VAULTS_READ_BYTES,
+  RAYDIUM_CPMM_PROGRAM,
+  cpmmVaultsFor,
   decodeLaunchLab,
 } from "./launchLab.js";
 import {
@@ -1728,6 +1735,44 @@ export class HeliusClient {
     if (!res || res.error || !Array.isArray(res.result)) return "failed";
     const pool = res.result[0]?.pubkey;
     return typeof pool === "string" ? pool : null;
+  }
+
+  /**
+   * The Raydium CPMM pool a graduated LaunchLab coin trades in, against `quoteMint`: two program
+   * scans (the coin as token 0, then as token 1). Its vaults, null when there is none, or "failed".
+   */
+  async findCpmmPoolVaults(mint: string, quoteMint: string): Promise<PoolVaults | null | "failed"> {
+    const calls: RpcCall[] = [CPMM_MINT0_OFFSET, CPMM_MINT1_OFFSET].map((offset) => ({
+      id: `cpmm-${offset}`,
+      method: "getProgramAccounts",
+      params: [
+        RAYDIUM_CPMM_PROGRAM,
+        {
+          commitment: "confirmed",
+          encoding: "base64",
+          dataSlice: { offset: CPMM_VAULTS_OFFSET, length: CPMM_VAULTS_READ_BYTES },
+          filters: [{ dataSize: CPMM_POOL_SIZE }, { memcmp: { offset, bytes: mint } }],
+        },
+      ],
+    }));
+    const responses = await this.sendBatched<{ account?: { data?: unknown } }[]>(calls, 10_000, {
+      batchSize: 1,
+    });
+    let failed = false;
+    for (const call of calls) {
+      const res = responses.get(call.id);
+      if (!res || res.error || !Array.isArray(res.result)) {
+        failed = true;
+        continue;
+      }
+      for (const row of res.result) {
+        const data = row.account?.data;
+        const vaults =
+          Array.isArray(data) && typeof data[0] === "string" ? cpmmVaultsFor(data[0], mint, quoteMint) : null;
+        if (vaults) return vaults;
+      }
+    }
+    return failed ? "failed" : null;
   }
 
   /**

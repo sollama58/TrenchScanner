@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decodeLaunchLab } from "./launchLab.js";
+import bs58 from "bs58";
+import { cpmmVaultsFor, decodeLaunchLab } from "./launchLab.js";
 
 /** A Stonks coin's LaunchLab pool, read off mainnet 2026-10-18 (8fmggHx…eAvx, KM / ELON). */
 const POOL =
@@ -20,5 +21,23 @@ describe("decodeLaunchLab", () => {
     const done = Uint8Array.from(Buffer.from(POOL, "base64"));
     done[17] = 2;
     expect(decodeLaunchLab(done)).toMatchObject({ complete: true, virtualToken: 0 });
+  });
+});
+
+describe("cpmmVaultsFor", () => {
+  it("reads which vault holds the coin, whichever side of the pool it is on", () => {
+    const keys = [
+      "E7qAvoKmNsfpRZ8YUEvwoAWVs2J4QUgfmERu5cT9YiWv",
+      "7uEj6ZjkPgwmNaak6CdoCvEXXp1fkSbfT4okUwsnkwW3",
+    ];
+    const [coin, quote] = [
+      "Wr8xawXWMMBD6eWXPrf2t9kZzVwaMHLCJDRYc8zSTNK",
+      "ysPp2Bt2j2UQu2tZwtSJz7JxyrmQ8GJcNJE5NyDoS5a",
+    ];
+    const slice = new Uint8Array(160);
+    [keys[0]!, keys[1]!, keys[0]!, coin, quote].forEach((k, i) => slice.set(bs58.decode(k), i * 32));
+    expect(cpmmVaultsFor(slice, coin, quote)).toEqual({ base: keys[0], quote: keys[1] });
+    expect(cpmmVaultsFor(slice, quote, coin)).toEqual({ base: keys[1], quote: keys[0] });
+    expect(cpmmVaultsFor(slice, coin, "So11111111111111111111111111111111111111112")).toBeNull();
   });
 });
