@@ -17539,3 +17539,7 @@ body:has(.util-toast) .bug-fab {
     grid-column: 1 / -1;
   }
 }
+
+.asdf-buy-modal .notice code {
+  word-break: break-all;
+}

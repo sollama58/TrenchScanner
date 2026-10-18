@@ -94,6 +94,12 @@ export function BuyAsdfDialog({
             </span>
           </div>
         )}
+        {balance?.solLamports === "0" && (
+          <p className="notice small">
+            Your wallet has no SOL yet. Send SOL to <code className="num">{owner}</code> from another wallet
+            or an exchange, then buy.
+          </p>
+        )}
         {open === null ? (
           <p className="muted small">Loading…</p>
         ) : !open ? (
