@@ -14,7 +14,7 @@ import {
 } from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME, verifyRequestSessions } from "../auth/session.js";
-import { isProWallet } from "../proMode.js";
+import { proStatus } from "../proMode.js";
 
 // Length caps run before any base58 decode: bs58.decode is quadratic in input length, so an
 // uncapped field let one unauthenticated request (a ~1MB walletAddress) block the event loop for
@@ -138,13 +138,21 @@ async function findOrCreateUser(walletAddress: string): Promise<{ user: User; cr
 /** Shapes the public-facing user object - notably where isAdmin gets attached, since that's
  *  derived from config (ADMIN_WALLET_ADDRESSES) rather than stored on the User row itself. */
 async function toUserResponse(user: Pick<User, "id" | "walletAddress" | "createdAt">, env: Env) {
+  const pro = await proStatus(env, user.walletAddress);
   return {
     id: user.id,
     walletAddress: user.walletAddress,
     createdAt: user.createdAt,
     isAdmin: adminWalletSet(env).has(user.walletAddress),
-    // Pro Mode: whether the token modal shows its Trade panel (proMode.ts).
-    isPro: await isProWallet(env, user.walletAddress),
+    // Pro Mode: whether the token modal shows its Trade panel (proMode.ts), and the rest of it:
+    // where it comes from, a grace period's end, and whether a wallet without it may still sell.
+    isPro: pro.pro,
+    proMode: {
+      source: pro.source,
+      canClose: pro.canClose,
+      ...(pro.rank !== undefined ? { rank: pro.rank } : {}),
+      ...(pro.graceEndsAt ? { graceEndsAt: pro.graceEndsAt } : {}),
+    },
   };
 }
 

@@ -66,7 +66,7 @@ import {
 } from "./AlertCard";
 import { PriceChart, type ChartEvent, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
-import { summarizePosition, usePosition, useProWallet } from "../proTrade";
+import { graceLeftText, summarizePosition, usePosition, useProState } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import {
   categoryText,
@@ -1355,7 +1355,11 @@ export function ChartCard({
 
   // Pro Mode: the signed-in wallet's position in the coin and the Trade panel. Null for everyone
   // else, so nothing of it is fetched or drawn without Pro Mode.
-  const pro = useProWallet();
+  const proState = useProState();
+  const pro = proState?.wallet ?? null;
+  // Pro Mode ended: the panel only sells, and only shows for a coin the wallet holds.
+  const closeOnly = !!proState && !proState.pro;
+  const graceEndsAt = proState?.pro ? proState.graceEndsAt : null;
   const mint = card.token.mintAddress;
   const position = usePosition(pro ? mint : null);
   const [trading, setTrading] = useState(false);
@@ -1527,16 +1531,25 @@ export function ChartCard({
             </span>
           )}
           {streaming && <LiveBadge tail={tail} />}
-          {pro && (
+          {pro && (!closeOnly || holds || trading) && (
             <button
               type="button"
-              className={`tm-range tm-trade-toggle${trading ? " on" : ""}`}
+              className={`tm-range tm-trade-toggle${trading ? " on" : ""}${graceEndsAt !== null ? " grace" : ""}`}
               aria-pressed={trading}
               aria-expanded={trading}
-              title="Buy and sell this coin with your wallet (Pro Mode)"
+              title={
+                closeOnly
+                  ? "Pro Mode has ended: you can still sell what you hold"
+                  : graceEndsAt !== null
+                    ? `Pro Mode ends in ${graceLeftText(graceEndsAt)}: your wallet left the top 250 $ASDFASDFA holders`
+                    : "Buy and sell this coin with your wallet (Pro Mode)"
+              }
               onClick={() => setTrading(!trading)}
             >
-              Trade
+              {closeOnly ? "Sell" : "Trade"}
+              {graceEndsAt !== null && (
+                <span className="tm-trade-grace num"> · {graceLeftText(graceEndsAt)} left</span>
+              )}
             </button>
           )}
           <span className="tm-ranges" role="group" aria-label="Chart range">
@@ -1617,6 +1630,8 @@ export function ChartCard({
             position={position.data}
             summary={summary}
             onTraded={position.reload}
+            closeOnly={closeOnly}
+            graceEndsAt={graceEndsAt}
           />
         </div>
       )}
@@ -1634,7 +1649,7 @@ export function ChartCard({
           )}
           .{" "}
           <button type="button" className="link" onClick={() => setTrading(true)}>
-            Open Trade
+            {closeOnly ? "Sell" : "Open Trade"}
           </button>
         </p>
       )}

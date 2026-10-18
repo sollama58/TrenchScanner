@@ -4,3 +4,4 @@ export * from "./access.js";
 export * from "./solanaRpc.js";
 export * from "./credits.js";
 export * from "./freeAccess.js";
+export * from "./proHolders.js";

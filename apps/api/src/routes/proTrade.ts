@@ -21,7 +21,7 @@ import {
   type Env,
   type WalletTrade,
 } from "@trenchscanner/core";
-import { isProWallet } from "../proMode.js";
+import { proStatus } from "../proMode.js";
 import { SolPrice } from "../solPrice.js";
 
 /**
@@ -125,7 +125,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   function forgetPositions(wallet: string) {
     for (const key of positions.keys()) if (key.startsWith(`${wallet}:`)) positions.delete(key);
   }
-  const builds = new Map<string, { blockhash: string; lastValidBlockHeight: number; at: number }[]>();
+  const builds = new Map<
+    string,
+    { blockhash: string; lastValidBlockHeight: number; at: number; side: "buy" | "sell" }[]
+  >();
 
   /** The wallet's builds still good for a send, oldest first. */
   function liveBuilds(wallet: string) {
@@ -136,24 +139,37 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     return list;
   }
 
-  /** The session's wallet when it has Pro Mode; otherwise answers 404 and returns null. */
-  async function proWallet(request: FastifyRequest, reply: FastifyReply): Promise<string | null> {
+  /**
+   * The session's wallet, and whether it has full Pro Mode (`pro`) or may only close what it
+   * holds (it had Pro Mode once). Neither: answers 404 and returns null.
+   */
+  async function proWallet(
+    request: FastifyRequest,
+    reply: FastifyReply,
+  ): Promise<{ wallet: string; pro: boolean } | null> {
     const wallet = request.user!.walletAddress;
-    if (!(await isProWallet(env, wallet))) {
-      reply.code(404).send({ error: "not found" });
+    const status = await proStatus(env, wallet);
+    if (!status.pro && !status.canClose) {
+      reply.code(404).send({ error: "not found", notSent: true });
       return null;
     }
-    return wallet;
+    return { wallet, pro: status.pro };
   }
 
   app.addHook("preHandler", app.authenticate);
 
   app.post("/trade/build", { config: { rateLimit: BUILD_RATE_LIMIT } }, async (request, reply) => {
-    const wallet = await proWallet(request, reply);
-    if (!wallet) return;
+    const who = await proWallet(request, reply);
+    if (!who) return;
+    const { wallet } = who;
     const parsed = buildSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
+    // Without Pro Mode any more, only closing: a sale of what it holds.
+    if (!who.pro && body.side !== "sell")
+      return reply
+        .code(403)
+        .send({ error: "Pro Mode has ended for this wallet. You can still sell what you hold." });
     try {
       let amount = BigInt(body.amount);
       if (body.side === "sell" && body.all) {
@@ -179,6 +195,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         blockhash: message.recentBlockhash,
         lastValidBlockHeight: built.lastValidBlockHeight,
         at: Date.now(),
+        side: body.side,
       });
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
       if (builds.size > 5_000) builds.clear();
@@ -201,8 +218,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   });
 
   app.post("/trade/send", { config: { rateLimit: SEND_RATE_LIMIT } }, async (request, reply) => {
-    const wallet = await proWallet(request, reply);
-    if (!wallet) return;
+    const who = await proWallet(request, reply);
+    if (!who) return;
+    const { wallet } = who;
     const parsed = sendSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid", notSent: true });
@@ -231,7 +249,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       if (inFlight.has(signature)) return { signature };
       // One send per build, on the blockhash it was built with.
       const list = liveBuilds(wallet);
-      const at = list.findIndex((b) => b.blockhash === message.recentBlockhash);
+      // Without Pro Mode any more, only a sale's build sends.
+      const at = list.findIndex(
+        (b) => b.blockhash === message.recentBlockhash && (who.pro || b.side === "sell"),
+      );
       if (at < 0)
         return reply.code(400).send({
           error: "That trade is too old or wasn't built here. Nothing was sent; try again.",
@@ -282,8 +303,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     "/trade/status/:signature",
     { config: { rateLimit: READ_RATE_LIMIT } },
     async (request, reply) => {
-      const wallet = await proWallet(request, reply);
-      if (!wallet) return;
+      const who = await proWallet(request, reply);
+      if (!who) return;
+      const { wallet } = who;
       const { signature } = request.params;
       if (!SIGNATURE_RE.test(signature)) return reply.code(400).send({ error: "not a signature" });
       const status = await rpc.getSignatureStatus(signature);
@@ -320,8 +342,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     "/trade/:mint/position",
     { config: { rateLimit: READ_RATE_LIMIT } },
     async (request, reply) => {
-      const wallet = await proWallet(request, reply);
-      if (!wallet) return;
+      const who = await proWallet(request, reply);
+      if (!who) return;
+      const { wallet } = who;
       const { mint } = request.params;
       if (!looksLikeSolanaAddress(mint)) return reply.code(400).send({ error: "not a token address" });
       const key = `${wallet}:${mint}`;

@@ -15530,3 +15530,18 @@ body:has(.util-toast) .bug-fab {
     margin-left: 0;
   }
 }
+/* Pro Mode's grace period (2026-10-18): the Trade button's time left, and the panel's warning. */
+.tm-trade-toggle.grace {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+}
+.tm-trade-grace {
+  color: var(--warn-ink);
+  font-weight: 650;
+}
+.tm-trade-warn {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}

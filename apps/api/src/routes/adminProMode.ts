@@ -1,11 +1,18 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { adminWalletSet, looksLikeSolanaAddress, prisma, type Env } from "@trenchscanner/core";
+import {
+  adminWalletSet,
+  looksLikeSolanaAddress,
+  prisma,
+  proHolderSummary,
+  type Env,
+} from "@trenchscanner/core";
 
 /**
  * Admin > Access > Pro Mode: which wallets see the token modal's Trade panel (proMode.ts). The
- * admins have it always and are listed for completeness; everyone else is a ProModeGrant row,
- * added or removed here. Registered inside the admin block (authenticateAdmin).
+ * admins have it always and are listed for completeness; the top 250 $ASDFASDFA holders have it
+ * from the holder scan (counted, with who is in their 24-hour grace); anyone else is a
+ * ProModeGrant row, added or removed here. Registered inside the admin block (authenticateAdmin).
  */
 
 const grantSchema = z.object({
@@ -24,6 +31,8 @@ export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { e
     return {
       enabled: opts.env.PRO_TRADING_ENABLED,
       admins: [...adminWalletSet(opts.env)],
+      // The top 250 $ASDFASDFA holders' Pro Mode: the newest scan, and who is in their grace period.
+      holders: await proHolderSummary(),
       grants: grants.map((g) => ({ ...g, signedUp: signedUp.has(g.walletAddress) })),
     };
   });

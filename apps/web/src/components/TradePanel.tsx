@@ -2,6 +2,7 @@ import { useState } from "react";
 import { ApiError } from "../api";
 import { signedPct, usd } from "../format";
 import {
+  graceLeftText,
   readTradeSettings,
   runTrade,
   saveTradeSettings,
@@ -87,6 +88,8 @@ export function TradePanel({
   position,
   summary,
   onTraded,
+  closeOnly = false,
+  graceEndsAt = null,
 }: {
   owner: string;
   mint: string;
@@ -94,6 +97,10 @@ export function TradePanel({
   position: PositionResponse | null;
   summary: PositionSummary | null;
   onTraded: () => void;
+  /** Pro Mode has ended: selling what it holds only (closing a position is always allowed). */
+  closeOnly?: boolean;
+  /** Out of the top 250 holders: when Pro Mode ends (ms). */
+  graceEndsAt?: number | null;
 }) {
   const [settings, setSettings] = useState<TradeSettings>(readTradeSettings);
   const [custom, setCustom] = useState("");
@@ -132,6 +139,18 @@ export function TradePanel({
 
   return (
     <section className="sage-card tm-trade" aria-label="Trade">
+      {graceEndsAt !== null && !closeOnly && (
+        <p className="small tm-trade-warn" role="alert">
+          Your wallet left the top 250 $ASDFASDFA holders. Pro Mode ends in{" "}
+          <strong className="num">{graceLeftText(graceEndsAt)}</strong> unless it&apos;s back in by then; you
+          can still sell after that.
+        </p>
+      )}
+      {closeOnly && (
+        <p className="small tm-trade-warn">
+          Pro Mode has ended for this wallet, so buying is off. You can still sell what you hold.
+        </p>
+      )}
       {summary && (summary.held > 0 || summary.buys > 0 || summary.sells > 0) && (
         <div className="tm-trade-pos">
           <div className="tm-fig">
@@ -182,44 +201,46 @@ export function TradePanel({
         </div>
       )}
 
-      <div className="tm-trade-row" role="group" aria-label="Buy">
-        <span className="tm-trade-label up">Buy</span>
-        {settings.buyPresets.map((sol) => (
-          <button
-            key={sol}
-            type="button"
-            className="tm-trade-btn buy"
-            disabled={busy}
-            onClick={() => trade("buy", BigInt(Math.round(sol * LAMPORTS)), `Buy ${solText(sol)}`)}
-          >
-            {sol}
-          </button>
-        ))}
-        <span className="tm-trade-custom">
-          <input
-            inputMode="decimal"
-            placeholder="SOL"
-            aria-label="Buy amount in SOL"
-            value={custom}
-            onChange={(e) => setCustom(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && customLamports)
-                void trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`);
-            }}
-          />
-          <button
-            type="button"
-            className="tm-trade-btn buy"
-            disabled={busy || !customLamports}
-            onClick={() =>
-              customLamports &&
-              trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`)
-            }
-          >
-            Buy
-          </button>
-        </span>
-      </div>
+      {!closeOnly && (
+        <div className="tm-trade-row" role="group" aria-label="Buy">
+          <span className="tm-trade-label up">Buy</span>
+          {settings.buyPresets.map((sol) => (
+            <button
+              key={sol}
+              type="button"
+              className="tm-trade-btn buy"
+              disabled={busy}
+              onClick={() => trade("buy", BigInt(Math.round(sol * LAMPORTS)), `Buy ${solText(sol)}`)}
+            >
+              {sol}
+            </button>
+          ))}
+          <span className="tm-trade-custom">
+            <input
+              inputMode="decimal"
+              placeholder="SOL"
+              aria-label="Buy amount in SOL"
+              value={custom}
+              onChange={(e) => setCustom(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && customLamports)
+                  void trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`);
+              }}
+            />
+            <button
+              type="button"
+              className="tm-trade-btn buy"
+              disabled={busy || !customLamports}
+              onClick={() =>
+                customLamports &&
+                trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`)
+              }
+            >
+              Buy
+            </button>
+          </span>
+        </div>
+      )}
 
       <div className="tm-trade-row" role="group" aria-label="Sell">
         <span className="tm-trade-label down">Sell</span>

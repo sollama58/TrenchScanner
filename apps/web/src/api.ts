@@ -125,8 +125,16 @@ export interface User {
   id: string;
   walletAddress: string;
   isAdmin: boolean;
-  /** Pro Mode (admins have it by default; others by an admin's grant): the token modal's Trade panel. */
+  /** Pro Mode (admins, an admin's grant, or the top 250 $ASDFASDFA holders): the token modal's Trade panel. */
   isPro?: boolean;
+  proMode?: {
+    source: "admin" | "grant" | "holder" | "grace" | null;
+    /** May sell what it holds, Pro Mode or not (it had Pro Mode once). */
+    canClose: boolean;
+    rank?: number;
+    /** Out of the top 250 holders: when Pro Mode ends (ISO), unless it's back in by then. */
+    graceEndsAt?: string;
+  };
 }
 
 export interface Subscription {

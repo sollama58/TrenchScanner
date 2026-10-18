@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TRADE_SETTINGS,
+  graceLeftText,
+  proStateOf,
   readTradeSettings,
   summarizePosition,
   type PositionResponse,
@@ -106,5 +108,36 @@ describe("summarizePosition without the whole history", () => {
       truncated: true,
     };
     expect(summarizePosition(p, 40_000).pnlSol).toBeNull();
+  });
+});
+
+describe("proStateOf", () => {
+  it("reads full Pro Mode, a grace period, and selling only from the session", () => {
+    expect(proStateOf({ walletAddress: "w", isPro: true })).toEqual({
+      wallet: "w",
+      pro: true,
+      graceEndsAt: null,
+    });
+    expect(
+      proStateOf({
+        walletAddress: "w",
+        isPro: true,
+        proMode: { canClose: true, graceEndsAt: "2026-10-19T00:00:00Z" },
+      }),
+    ).toEqual({ wallet: "w", pro: true, graceEndsAt: Date.parse("2026-10-19T00:00:00Z") });
+    expect(proStateOf({ walletAddress: "w", isPro: false, proMode: { canClose: true } })).toEqual({
+      wallet: "w",
+      pro: false,
+      graceEndsAt: null,
+    });
+    // Never had it: the trade system stays hidden.
+    expect(proStateOf({ walletAddress: "w", isPro: false, proMode: { canClose: false } })).toBeNull();
+    expect(proStateOf({ walletAddress: "w" })).toBeNull();
+  });
+
+  it("counts a grace period down in hours and minutes", () => {
+    expect(graceLeftText(5 * 3_600_000 + 20 * 60_000, 0)).toBe("5h 20m");
+    expect(graceLeftText(45 * 60_000, 0)).toBe("45m");
+    expect(graceLeftText(-1, 0)).toBe("0m");
   });
 });

@@ -1999,6 +1999,26 @@ model ProModeGrant {
   createdAt     DateTime @default(now())
 }
 
+/// Pro Mode for the top $ASDFASDFA holders (packages/core/src/subscription/proHolders.ts): each
+/// wallet the pro-holders scan has seen in the top 250, with the last scan it was in. A wallet in
+/// the newest scan has Pro Mode; one that dropped out keeps it for 24 hours after its last.
+model ProHolder {
+  walletAddress String   @id
+  /// Its place in the last scan it was in (1 = largest).
+  rank          Int
+  lastInTopAt   DateTime
+  firstInTopAt  DateTime @default(now())
+
+  @@index([lastInTopAt])
+}
+
+/// Every wallet that has had Pro Mode, and when last: one that lost it can still sell what it
+/// holds from the token modal (user ask 2026-10-18: always allow closing positions).
+model ProModeSeen {
+  walletAddress String   @id
+  lastProAt     DateTime
+}
+
 /// A Free Access period, set from Admin > Access (packages/core/src/subscription/freeAccess.ts).
 /// Any wallet that signs in from signInStartsAt until signInEndsAt is enrolled (a FreeAccessGrant)
 /// and has full access until accessEndsAt, or until an admin switches it off (disabledAt). Then the

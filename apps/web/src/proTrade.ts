@@ -20,24 +20,76 @@ import { withTimeout } from "./wallet";
 
 // ---- Who is Pro (set by App from the session) ----
 
-let proWallet: string | null = null;
+/** The signed-in wallet's Pro Mode, as /auth/me said it. */
+export interface ProState {
+  wallet: string;
+  /** Full Pro Mode (buys too); false: it may only sell what it holds. */
+  pro: boolean;
+  /** Dropped out of the top 250 holders: when Pro Mode ends (ms). */
+  graceEndsAt: number | null;
+}
+
+let proState: ProState | null = null;
 const listeners = new Set<() => void>();
 
-export function setProWallet(wallet: string | null): void {
-  if (wallet === proWallet) return;
-  proWallet = wallet;
+export function setProState(next: ProState | null): void {
+  if (
+    next === proState ||
+    (next &&
+      proState &&
+      next.wallet === proState.wallet &&
+      next.pro === proState.pro &&
+      next.graceEndsAt === proState.graceEndsAt)
+  )
+    return;
+  proState = next;
   for (const l of listeners) l();
 }
 
-/** The signed-in wallet when it has Pro Mode, else null. */
-export function useProWallet(): string | null {
+/** The Pro state from a session's user, or null when the trade system stays hidden for it. */
+export function proStateOf(user: {
+  walletAddress: string;
+  isPro?: boolean;
+  proMode?: { canClose: boolean; graceEndsAt?: string };
+}): ProState | null {
+  const grace = user.proMode?.graceEndsAt ? Date.parse(user.proMode.graceEndsAt) : NaN;
+  if (user.isPro)
+    return { wallet: user.walletAddress, pro: true, graceEndsAt: Number.isFinite(grace) ? grace : null };
+  if (user.proMode?.canClose) return { wallet: user.walletAddress, pro: false, graceEndsAt: null };
+  return null;
+}
+
+function useProStore(): ProState | null {
   return useSyncExternalStore(
     (cb) => {
       listeners.add(cb);
       return () => listeners.delete(cb);
     },
-    () => proWallet,
+    () => proState,
   );
+}
+
+/**
+ * The signed-in wallet's Pro state, or null for a wallet that never had Pro Mode. A grace period
+ * that has run out here reads as close-only at once (the API decides the same on its own).
+ */
+export function useProState(): ProState | null {
+  const s = useProStore();
+  if (s?.pro && s.graceEndsAt !== null && s.graceEndsAt <= Date.now())
+    return { ...s, pro: false, graceEndsAt: null };
+  return s;
+}
+
+/** The signed-in wallet when it has, or had, Pro Mode; null otherwise. */
+export function useProWallet(): string | null {
+  return useProStore()?.wallet ?? null;
+}
+
+/** "5h 20m", "45m": what's left of a grace period. */
+export function graceLeftText(endsAt: number, now = Date.now()): string {
+  const mins = Math.max(0, Math.ceil((endsAt - now) / 60_000));
+  const h = Math.floor(mins / 60);
+  return h > 0 ? `${h}h ${mins % 60}m` : `${mins}m`;
 }
 
 // ---- The trader's settings (this browser only) ----

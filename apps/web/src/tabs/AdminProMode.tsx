@@ -13,6 +13,11 @@ import { Load, Panel, Table, Tag, Wallet, when } from "./adminShared";
 interface ProModeReport {
   enabled: boolean;
   admins: string[];
+  holders: {
+    scannedAt: string | null;
+    inTop: number;
+    grace: { walletAddress: string; rank: number; graceEndsAt: string }[];
+  };
   grants: {
     walletAddress: string;
     note: string | null;
@@ -63,7 +68,7 @@ export function ProModeAdmin() {
   return (
     <Panel
       title="Pro Mode"
-      note="Pro Mode shows the Trade panel in the token modal: buy and sell with the wallet, no fee. Admins have it always."
+      note="Pro Mode shows the Trade panel in the token modal: buy and sell with the wallet, no fee. Admins and the top 250 $ASDFASDFA holders have it automatically."
     >
       <Load q={q}>
         {(r) => (
@@ -72,6 +77,22 @@ export function ProModeAdmin() {
               <p className="small error">
                 PRO_TRADING_ENABLED is off: no one sees the Trade panel, admins included.
               </p>
+            )}
+            <p className="small muted">
+              Top 250 $ASDFASDFA holders: {r.holders.inTop} wallets with Pro Mode
+              {r.holders.scannedAt ? `, last read ${when(r.holders.scannedAt)}` : ", not read yet"}. Dropping
+              out leaves 24 hours of Pro Mode, with warnings; after that a wallet can still sell what it
+              holds.
+            </p>
+            {r.holders.grace.length > 0 && (
+              <Table
+                head={["In grace", "Last rank", "Pro Mode ends"]}
+                rows={r.holders.grace.map((g) => [
+                  <Wallet address={g.walletAddress} />,
+                  `#${g.rank}`,
+                  new Date(g.graceEndsAt).toLocaleString(),
+                ])}
+              />
             )}
             <div className="admin-form">
               <input
