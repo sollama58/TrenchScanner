@@ -396,9 +396,12 @@ export function ModelPanel({
   );
 }
 
-/** Returns stored before the exit plan changed on 17 October were simulated under the earlier one. */
+/**
+ * Returns stored before the exit plan changed on 17 October were simulated under the earlier one;
+ * the two weeks before it are re-scored from each coin's trades (exitPlanRescore.ts in the worker).
+ */
 const EARLIER_PLAN_NOTE =
-  " Returns on calls before 17 October follow the earlier exit plan (half at 2x, the rest trailing 35%).";
+  " Calls from 3 to 17 October are re-scored under this plan from each coin's own trades; calls the trades can't cover, and older ones, keep the earlier plan's return.";
 
 /** One row of the comparison: a figure for each feed and how yours differs. */
 const COMPARE_ROWS: {

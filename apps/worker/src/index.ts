@@ -70,6 +70,7 @@ import {
 import { registerShutdown } from "./processExit.js";
 import { withJobLock } from "./jobLock.js";
 import { runLabelRegradeJob } from "./jobs/labelRegradeJob.js";
+import { runExitPlanRescore } from "./jobs/exitPlanRescore.js";
 import { runCandlePeaksJob } from "./jobs/candlePeaks.js";
 import { runBundledSupplyBackfill } from "./jobs/bundledSupplyBackfill.js";
 import { runWalletScoreBackfill } from "./jobs/walletScoreBackfill.js";
@@ -596,6 +597,8 @@ async function main() {
           const meta = await runLabelRegradeJob(deps.pumpFun);
           // The one-time re-grade of coins paired with another coin (quoteRegrade.ts), same lock.
           const quote = await runQuoteRegrade(deps.pumpFun);
+          // The one-time re-score of returns under the 2026-10-17 exit plan (exitPlanRescore.ts), same lock.
+          const rescore = await runExitPlanRescore(deps.pumpFun);
           // The one-time Bundled % backfill (bundledSupplyBackfill.ts), same lock: database only.
           const bundled = await runBundledSupplyBackfill();
           // The one-time Wallet Score backfill (walletScoreBackfill.ts), same lock: database only.
@@ -605,6 +608,7 @@ async function main() {
           return {
             ...meta,
             ...(quote ? { quoteRegrade: quote } : {}),
+            ...(rescore ? { exitPlanRescore: rescore } : {}),
             ...(bundled ? { bundledSupplyBackfill: bundled } : {}),
             ...(walletScores ? { walletScoreBackfill: walletScores } : {}),
             ...(winnerFollow ? { winnerFollowBackfill: winnerFollow } : {}),

@@ -1642,8 +1642,8 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
             sales at 2x, 4x and 10x and the -50% stop are assumed to fill at the level itself; in a fast dump
             a real stop can fill lower. The trailing exit books the price actually seen under its level, since
             a trail fires on a sharp drop by construction. Calls whose last price is unknown are left out
-            rather than guessed. Calls graded before 17 October followed the earlier plan (half at 2x, the
-            rest trailing 35% off its high), so windows reaching back past then mix the two.
+            rather than guessed. Calls from 3 to 17 October are re-scored under this plan from each coin's own
+            trades; ones the trades can't cover, and older calls, keep the earlier plan's return.
           </li>
         </ol>
         {example && live && (

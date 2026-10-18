@@ -82,7 +82,10 @@ export function AlertCard({
   // Customize's Narrative toggle, else on once the Narrative model's 7-day hit rate reliably passes 40%.
   const showNarrative = useShowNarrativeNote();
   const trade = QUICK_LINK_SITES.filter((l) => quickLinks.includes(l.id));
-  const tone = scoreColor ? scoreTone(s.score ?? null, scale) : null;
+  // The stat tiles show the newest scan, the alert's value in the tooltip (user decision
+  // 2026-10-17: the result mark already says how the alert did).
+  const t = newestStats(card);
+  const tone = scoreColor ? scoreTone(t.score, scale) : null;
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   // The modal lives above the feed (TokenModalHost), so it stays open if this card leaves it.
@@ -91,6 +94,8 @@ export function AlertCard({
   const alertMcap = s.marketCapUsd;
   const nowMcap = nowReading(card);
   const move = change(alertMcap, nowMcap);
+  // How old "Now" is, once it is old enough to matter (the live tick keeps it seconds old).
+  const nowAge = nowReadingAge(card, nowMcap, now);
   const curated = card.curated;
   // Re-derived from the alert time, so a call whose window ran out by the clock stops reading as pending.
   const outcome = cardOutcome(card, now);
@@ -127,11 +132,14 @@ export function AlertCard({
     freshPct,
     freshOf,
     freshAtAlert,
+    freshFromScan,
     emptyPct,
     emptyOf,
     emptyAtAlert,
+    emptyFromScan,
     snipers,
     largestPct,
+    largestAtAlert,
     linkedPct,
     linkedCount: linkedN,
     linkedKols,
@@ -154,9 +162,21 @@ export function AlertCard({
     firstHoldingOld,
     firstSeenOld,
     devHolding,
+    devFromLatest,
     feeLine,
-  } = cardReadings(card);
+  } = cardReadings(card, "newest");
+  const devWhen = devFromLatest
+    ? `as of the scan ${ago(card.latestSnapshot!.takenAt, now)}`
+    : "at alert time";
 
+  // How a tile reading from after the alert is described: the newest scan's age.
+  const later = laterScanText(card, now);
+  // A wallet tile showing a later scan names the alert's own reading beside it.
+  const a = card.snapshot;
+  const pctOr = (v: number | null | undefined) => (v == null ? null : pct(v));
+  const laterWith = (atAlert: string | null, shown: string | null) =>
+    `${later}${atAlertNote(atAlert, shown)}`;
+  const alertFresh = freshTopShare(a) ?? a.freshTop10WalletPct ?? null;
   const figCount = (["alert", "now", "peak"] as const).filter(show).length;
   // The volume field is three tiles (5m / 1h / 24h).
   const statCount =
@@ -324,8 +344,11 @@ export function AlertCard({
             </div>
           )}
           {show("now") && (
-            <div className="fig">
-              <label>Now</label>
+            <div className={`fig${nowAge !== null ? " stale" : ""}`}>
+              <label>
+                Now
+                {nowAge !== null && <span className="fig-age"> · {nowAge}</span>}
+              </label>
               <span className="num" title={nowTitle(card, nowMcap, now)}>
                 {usd(nowMcap)}
               </span>
@@ -373,59 +396,67 @@ export function AlertCard({
           {show("score") && (
             <div
               className="stat-score"
-              title={scoreTooltip(s.score ?? null, weights, scoreColor ? scale : undefined)}
+              title={`${scoreTooltip(t.score, weights, scoreColor ? scale : undefined) ?? "Score"}${t.fromLatest ? `\n${cap(later)}${atAlertNote(s.score == null ? null : String(Math.round(s.score)), t.score == null ? null : String(Math.round(t.score)))}.` : ""}`}
             >
               <dt>Score</dt>
               <dd className="num" style={tone === null ? undefined : { color: scoreToneColor(tone) }}>
-                {s.score == null ? "–" : Math.round(s.score)}
+                {t.score == null ? "–" : Math.round(t.score)}
               </dd>
             </div>
           )}
           {show("vol") && (
             <>
-              <div title="Trading volume over the 5 minutes before the alert">
+              <div
+                title={`Trading volume over the last 5 minutes, ${t.fromLatest ? later : "at alert time"}${t.fromLatest ? atAlertNote(usd(s.volume5mUsd ?? null), usd(t.volume5mUsd)) : ""}`}
+              >
                 <dt>Vol 5m</dt>
-                <dd className="num">{usd(s.volume5mUsd ?? null)}</dd>
+                <dd className="num">{usd(t.volume5mUsd)}</dd>
               </div>
-              <div title="Trading volume over the hour before the alert">
+              <div
+                title={`Trading volume over the last hour, ${t.fromLatest ? later : "at alert time"}${t.fromLatest ? atAlertNote(usd(s.volume1hUsd ?? null), usd(t.volume1hUsd)) : ""}`}
+              >
                 <dt>Vol 1h</dt>
-                <dd className="num">{usd(s.volume1hUsd ?? null)}</dd>
+                <dd className="num">{usd(t.volume1hUsd)}</dd>
               </div>
-              <div title="Trading volume over the 24 hours before the alert (since launch, for a younger token)">
+              <div
+                title={`Trading volume over the last 24 hours (since launch, for a younger token), ${t.fromLatest ? later : "at alert time"}${t.fromLatest ? atAlertNote(usd(s.volume24hUsd), usd(t.volume24hUsd)) : ""}`}
+              >
                 <dt>Vol 24h</dt>
-                <dd className="num">{usd(s.volume24hUsd)}</dd>
+                <dd className="num">{usd(t.volume24hUsd)}</dd>
               </div>
             </>
           )}
           {show("holders") && (
             <div
-              title={
-                s.liveHolderCount != null
-                  ? "Holders: Jupiter's count seconds before the alert (the count the Min holders filter reads)"
-                  : "Holders: RugCheck's count (no live count was read for this alert)"
-              }
+              title={`${t.holdersLive ? "Holders: Jupiter's count (the count the Min holders filter reads)" : "Holders: RugCheck's count (no live count was read)"}, ${t.fromLatest ? later : "at alert time"}${t.fromLatest ? atAlertNote(fmtCount(s.liveHolderCount ?? s.holderCount), fmtCount(t.holders)) : ""}`}
             >
               <dt>Holders</dt>
-              <dd className="num">{s.liveHolderCount ?? s.holderCount ?? "–"}</dd>
+              <dd className="num">{t.holders ?? "–"}</dd>
             </div>
           )}
           {show("age") && (
-            <div>
+            <div
+              title={
+                s.ageMinutes == null
+                  ? undefined
+                  : `Age now. It was ${minutes(s.ageMinutes)} old at the alert.`
+              }
+            >
               <dt>Age</dt>
-              <dd className="num">{minutes(s.ageMinutes)}</dd>
+              <dd className="num">{minutes(ageNow(s, now))}</dd>
             </div>
           )}
           {show("top10") && (
             <div
               {...tileLook(
                 tiles,
-                tileTone(s.top10HolderPct, SAFETY_REJECT_TOP10_HOLDER_PCT),
-                s.top10HolderPct != null && s.top10HolderPct >= SAFETY_REJECT_TOP10_HOLDER_PCT,
+                tileTone(t.top10Pct, SAFETY_REJECT_TOP10_HOLDER_PCT),
+                t.top10Pct != null && t.top10Pct >= SAFETY_REJECT_TOP10_HOLDER_PCT,
               )}
-              title={`Top 10: share of supply the ten largest holders own (pool aside). The safety screen rejects ${SAFETY_REJECT_TOP10_HOLDER_PCT}% or more.`}
+              title={`Top 10: share of supply the ten largest holders own (pool aside), ${t.top10FromLatest ? `${later}${atAlertNote(s.top10HolderPct == null ? null : pct(s.top10HolderPct), pct(t.top10Pct))}` : "at alert time"}. The safety screen rejects ${SAFETY_REJECT_TOP10_HOLDER_PCT}% or more.`}
             >
               <dt>Top 10</dt>
-              <dd className="num">{pct(s.top10HolderPct)}</dd>
+              <dd className="num">{pct(t.top10Pct)}</dd>
             </div>
           )}
           {show("largest") && (
@@ -435,7 +466,7 @@ export function AlertCard({
                 tileTone(largestPct, SAFETY_MAX_LARGEST_HOLDER_PCT),
                 largestPct !== null && largestPct > SAFETY_MAX_LARGEST_HOLDER_PCT,
               )}
-              title={`Largest holder: one wallet's share of supply (pools aside, its accounts summed). The safety screen rejects over ${SAFETY_MAX_LARGEST_HOLDER_PCT}%.`}
+              title={`Largest holder: one wallet's share of supply (pools aside, its accounts summed)${largestPct === null ? "" : `, ${largestAtAlert ? "at alert time" : `${later}${atAlertNote(s.largestHolderPct == null ? null : pct(s.largestHolderPct), pct(largestPct))}`}`}. The safety screen rejects over ${SAFETY_MAX_LARGEST_HOLDER_PCT}%.`}
             >
               <dt>Largest</dt>
               <dd className={largestPct === null ? "muted" : "num"}>
@@ -451,6 +482,7 @@ export function AlertCard({
               failsAbove={SAFETY_MAX_FRESH_WALLET_PCT}
               atAlert={freshAtAlert !== null}
               tiles={tiles}
+              later={freshFromScan ? laterWith(pctOr(alertFresh), pctOr(freshPct)) : LATER_SCAN}
               explain="top-holder wallets first used, or used again after a week or more idle, in the last 24h"
             />
           )}
@@ -462,6 +494,7 @@ export function AlertCard({
               failsAt={SAFETY_REJECT_EMPTY_WALLET_PCT}
               atAlert={emptyAtAlert !== null}
               tiles={tiles}
+              later={emptyFromScan ? laterWith(pctOr(a.emptyTop10WalletPct), pctOr(emptyPct)) : LATER_SCAN}
               explain="top-10 holder wallets with under $25 of other tokens"
             />
           )}
@@ -483,7 +516,9 @@ export function AlertCard({
                     ? `First buyers holding: not recorded under the 0.1% count. ${oldFirstBuyersText(firstHoldingOld, firstSeenOld)}`
                     : "First buyers holding: not checked yet for this token"
                   : `First buyers holding: ${firstHolding} of the first ${firstSeen ?? 25} buyers after launch still hold 0.1% of the supply or more${
-                      buyersAtAlert ? ", at alert time" : ", from a scan after the alert"
+                      buyersAtAlert
+                        ? ", at alert time"
+                        : `, ${laterWith(a.firstBuyersHoldingCut == null ? null : `${a.firstBuyersHoldingCut}/${a.firstBuyersSeen ?? 25}`, `${firstHolding}/${firstSeen ?? 25}`)}`
                     }`
               }
             >
@@ -497,7 +532,18 @@ export function AlertCard({
               </dd>
             </div>
           )}
-          {show("sniperTop10") && <SniperTile reading={snipers} tiles={tiles} />}
+          {show("sniperTop10") && (
+            <SniperTile
+              reading={snipers}
+              tiles={tiles}
+              later={laterWith(
+                a.sniperTopHolderCount == null
+                  ? null
+                  : `${a.sniperTopHolderCount}/${a.sniperTopHoldersChecked ?? SAFETY_COUNT_CUT_HOLDERS}`,
+                snipers ? `${snipers.count}/${snipers.of}` : null,
+              )}
+            />
+          )}
           {show("linked") && (
             <LinkedTile
               pct={linkedPct}
@@ -508,6 +554,7 @@ export function AlertCard({
               creatorPct={linkedCreatorPct}
               atAlert={linkedAtAlert && linkedPct !== null}
               tiles={tiles}
+              later={laterWith(pctOr(a.linkedWalletPct), pctOr(linkedPct))}
             />
           )}
           {show("cexFunded") && (
@@ -521,7 +568,7 @@ export function AlertCard({
                 cexPct === null
                   ? "CEX-funded: not checked yet. Funder reads are limited per scan, and tokens closest to alerting go first."
                   : `CEX-funded: ${cexCount ?? "?"} of the ${cexHolders ?? 25} largest holders were opened from an exchange (or a busy service like a bridge), ${
-                      cexAtAlert ? "at alert time" : "from a scan after the alert"
+                      cexAtAlert ? "at alert time" : laterWith(pctOr(a.cexFundedPct), pctOr(cexPct))
                     }. The safety screen rejects ${countCutFor(SAFETY_REJECT_CEX_FUNDED_COUNT, cexHolders)} or more.`
               }
             >
@@ -538,7 +585,9 @@ export function AlertCard({
                 kolBundledPct === null
                   ? "KOL Bundled %: not checked yet. It comes with the linked-wallet reading."
                   : `KOL Bundled %: supply held by KOLs and the top holders tied to them (wallets a KOL funded, probable side wallets, and holders sharing a funder or funding minute with those), ${
-                      kolBundledAtAlert ? "at alert time" : "from a scan after the alert"
+                      kolBundledAtAlert
+                        ? "at alert time"
+                        : laterWith(pctOr(a.kolBundledPct), pctOr(kolBundledPct))
                     }.`
               }
             >
@@ -555,13 +604,15 @@ export function AlertCard({
                 transferredPct === null
                   ? "Transferred: not checked yet. Transfers between the top 25 holders are read for the coins closest to a call."
                   : transferredPct === 0
-                    ? `Transferred: none of the top ${transferCount?.of ?? 25} holders sent the coin to another, ${transferAtAlert ? "at alert time" : "from a scan after the alert"}.`
+                    ? `Transferred: none of the top ${transferCount?.of ?? 25} holders sent the coin to another, ${transferAtAlert ? "at alert time" : laterWith(pctOr(a.transferredSupplyPct), pctOr(transferredPct))}.`
                     : `Transferred Supply %: ${pct(transferredPct, 1)} of supply moved holder to holder${
                         transferCount
                           ? `, between ${transferCount.linked} of the top ${transferCount.of} holders`
                           : ""
                       } (the coin itself only; SOL and other coins are ignored), ${
-                        transferAtAlert ? "at alert time" : "from a scan after the alert"
+                        transferAtAlert
+                          ? "at alert time"
+                          : laterWith(pctOr(a.transferredSupplyPct), pctOr(transferredPct))
                       }. Not counted in Linked; the bubble map draws each transfer.`
               }
             >
@@ -588,8 +639,8 @@ export function AlertCard({
                 (devHolding === null
                   ? "Dev Holding / Dev Sold: not known for this token yet"
                   : devHolding
-                    ? "DH = Dev Holding: the creator's wallet still holds this token (as of the latest scan)"
-                    : "DS = Dev Sold: the creator's wallet holds none of this token (as of the latest scan)") +
+                    ? `DH = Dev Holding: the creator's wallet still holds this token (${devWhen})`
+                    : `DS = Dev Sold: the creator's wallet holds none of this token (${devWhen})`) +
                 (feeLine ? `\n${feeLine}` : "")
               }
             >
@@ -748,46 +799,47 @@ function freshTopShare(x: Pick<Snapshot, "freshTopHolderCount" | "freshTopHolder
  * made it in time, else from a later scan (both wallet checks are paid lookups with a per-scan
  * budget, so a token can go unchecked). Shared with the token modal.
  */
-export function cardReadings(card: Card) {
+export function cardReadings(card: Card, prefer: "alert" | "newest" = "alert") {
   const s = card.snapshot;
   const latest = card.latestSnapshot;
+  // The card reads the newest scan first (user decision 2026-10-17), the token view's "At the
+  // alert" section the alert's; each falls back to the other where its scan had no reading.
+  // A newest row that is the alert's own scan counts as the alert's.
+  const later = latest && latest.takenAt !== s.takenAt ? latest : null;
+  const order = prefer === "newest" ? [later, s] : [s, latest];
+  const pick = (has: (x: Snapshot) => boolean): Snapshot | null => order.find((x) => x && has(x)) ?? null;
   // Each wallet check with the size of the list it read, from the same scan as the share. Fresh
   // reads the top 25 where the scan counted them (user decision 2026-10-14, "N/25"), else the top 10.
-  const freshFrom =
-    [s, latest].find((x) => x && (freshTopShare(x) !== null || x.freshTop10WalletPct != null)) ?? null;
+  const freshFrom = pick((x) => freshTopShare(x) !== null || x.freshTop10WalletPct != null);
   const freshPct =
     (freshFrom && (freshTopShare(freshFrom) ?? freshFrom.freshTop10WalletPct)) ??
     card.token.lastFreshTop10WalletPct ??
     null;
   const freshAtAlert = freshFrom === s ? freshPct : null;
-  const emptyFrom = s.emptyTop10WalletPct != null ? s : latest?.emptyTop10WalletPct != null ? latest : null;
-  const emptyAtAlert = s.emptyTop10WalletPct ?? null;
+  const emptyFrom = pick((x) => x.emptyTop10WalletPct != null);
+  const emptyAtAlert = emptyFrom === s ? (s.emptyTop10WalletPct ?? null) : null;
   const emptyPct = emptyFrom?.emptyTop10WalletPct ?? card.token.lastEmptyTop10WalletPct ?? null;
   // Launch snipers among the top holders: the top-25 count where the scan kept it, else the top-10
   // share as a count; at alert time or from a later scan.
-  const sniperFrom =
-    s.sniperTopHolderCount != null || s.sniperTop10WalletPct != null
-      ? s
-      : latest?.sniperTopHolderCount != null || latest?.sniperTop10WalletPct != null
-        ? latest
-        : null;
+  const sniperFrom = pick((x) => x.sniperTopHolderCount != null || x.sniperTop10WalletPct != null);
   // Linked wallets: top holders one funder paid for (or that funded each other), at alert time or
   // from a later scan, with the clusters behind the share for the list under the tiles.
-  const linkedFrom = s.linkedWalletPct != null ? s : latest;
+  const linkedFrom = pick((x) => x.linkedWalletPct != null) ?? latest;
   // Exchange-funded share of the largest holders, the same way.
-  const cexFrom = s.cexFundedPct != null ? s : latest;
+  const cexFrom = pick((x) => x.cexFundedPct != null) ?? latest;
   // KOL Bundled %, the same way.
-  const kolFrom = s.kolBundledPct != null ? s : latest;
+  const kolFrom = pick((x) => x.kolBundledPct != null) ?? latest;
   // Transferred Supply %, the same way.
-  const transferFrom = s.transferredSupplyPct != null ? s : latest;
+  const transferFrom = pick((x) => x.transferredSupplyPct != null) ?? latest;
   // The same fallback for the first-buyers count, read from the launch's first transactions: the
   // buyers holding 0.1% of the supply or more (user decision 2026-10-16), kept since then.
-  const buyersFrom = s.firstBuyersHoldingCut != null ? s : latest;
+  const buyersFrom = pick((x) => x.firstBuyersHoldingCut != null) ?? latest;
   // Scans before then kept only the older count (any amount held): shown as that, labelled, on
   // tokens with no newer reading, rather than as "not checked yet".
-  const oldBuyersFrom = s.firstBuyersHolding != null ? s : latest;
+  const oldBuyersFrom = pick((x) => x.firstBuyersHolding != null) ?? latest;
   // Whether the dev still holds: the newest reading first, since a dev can sell after the alert.
   const devHolding = latest?.devHolding ?? s.devHolding ?? null;
+  const devFromLatest = latest?.devHolding != null;
   // Where the creator fee goes (TokenSage), under the Dev tile's tooltip: about 14% of coins
   // send it to holders, a charity, a GitHub account or other wallets instead of the dev.
   const fee = card.token.creatorFee;
@@ -804,8 +856,11 @@ export function cardReadings(card: Card) {
     emptyPct,
     emptyOf: emptyFrom?.top10WalletsChecked ?? null,
     emptyAtAlert,
+    emptyFromScan: emptyFrom !== null,
+    freshFromScan: freshFrom !== null,
     snipers: sniperFrom ? sniperReading(sniperFrom, sniperFrom === s) : null,
-    largestPct: s.largestHolderPct ?? latest?.largestHolderPct ?? null,
+    largestPct: pick((x) => x.largestHolderPct != null)?.largestHolderPct ?? null,
+    largestAtAlert: pick((x) => x.largestHolderPct != null) === s,
     ...linkedTileReading(linkedFrom),
     linkedAtAlert: linkedFrom === s,
     linkedClusters: linkedFrom?.linkedClusters ?? [],
@@ -828,8 +883,57 @@ export function cardReadings(card: Card) {
     firstHoldingOld: oldBuyersFrom?.firstBuyersHolding ?? null,
     firstSeenOld: oldBuyersFrom?.firstBuyersSeen ?? null,
     devHolding,
+    devFromLatest,
     feeLine,
   };
+}
+
+/**
+ * The card's stat tiles from the newest scan, each falling back to the alert's where the newest
+ * has none. `fromLatest`: the newest scan is a later row than the alert's.
+ */
+export function newestStats(card: Pick<Card, "snapshot" | "latestSnapshot">) {
+  const s = card.snapshot;
+  const l = card.latestSnapshot && card.latestSnapshot.takenAt !== s.takenAt ? card.latestSnapshot : null;
+  const lHolders = l ? (l.liveHolderCount ?? l.holderCount ?? null) : null;
+  return {
+    fromLatest: l !== null,
+    score: l?.score ?? s.score ?? null,
+    volume5mUsd: l?.volume5mUsd ?? s.volume5mUsd ?? null,
+    volume1hUsd: l?.volume1hUsd ?? s.volume1hUsd ?? null,
+    volume24hUsd: l?.volume24hUsd ?? s.volume24hUsd ?? null,
+    holders: lHolders ?? s.liveHolderCount ?? s.holderCount ?? null,
+    holdersLive: lHolders !== null ? l!.liveHolderCount != null : s.liveHolderCount != null,
+    top10Pct: l?.top10HolderPct ?? s.top10HolderPct ?? null,
+    top10FromLatest: l?.top10HolderPct != null,
+  };
+}
+
+/** A tooltip's note of the alert's value beside a newer one: " (at the alert: 42%)", or "" when the same. */
+export function atAlertNote(atAlert: string | null, shown: string | null): string {
+  return atAlert === null || atAlert === shown ? "" : ` (at the alert: ${atAlert})`;
+}
+
+const cap = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+const fmtCount = (n: number | null | undefined) => (n == null ? null : String(n));
+
+/** How a tile describes a reading from after the alert, before the card knows when it was taken. */
+export const LATER_SCAN = "from a scan after the alert";
+
+/** How a tile describes a reading from the card's newest scan: "from a scan 12m ago". */
+export function laterScanText(card: Pick<Card, "latestSnapshot">, now: number): string {
+  const at = card.latestSnapshot?.takenAt;
+  return at && Number.isFinite(Date.parse(at)) ? `from a scan ${ago(at, now)}` : LATER_SCAN;
+}
+
+/**
+ * The coin's age now: its age at the alert snapshot plus the time since that snapshot was taken.
+ * The snapshot's own age stays in the tile's tooltip.
+ */
+export function ageNow(s: Pick<Snapshot, "ageMinutes" | "takenAt">, now: number): number | null {
+  if (s.ageMinutes == null) return null;
+  const taken = Date.parse(s.takenAt);
+  return Number.isFinite(taken) ? s.ageMinutes + Math.max(0, now - taken) / 60_000 : s.ageMinutes;
 }
 
 /**
@@ -894,6 +998,7 @@ export function WalletStat({
   failsAbove,
   failsAt,
   tiles = "off",
+  later = LATER_SCAN,
 }: {
   label: string;
   value: number | null;
@@ -907,6 +1012,8 @@ export function WalletStat({
   failsAt?: number;
   /** How the tile takes its scale up to the cut (the alert card's, with tile colors on). */
   tiles?: TileMode;
+  /** How a reading from after the alert is described (see laterScanText). */
+  later?: string;
 }) {
   const risky =
     value !== null &&
@@ -914,7 +1021,7 @@ export function WalletStat({
   const title =
     value === null
       ? `${label}: not checked yet. Wallet checks are limited per scan, and tokens closest to alerting go first.`
-      : `${label}: ${walletCountText(value, of)} ${explain} (${pct(value)}), ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen rejects ${failsAbove !== undefined ? `over ${failsAbove}%` : `${failsAt ?? 0}% or more`}.`;
+      : `${label}: ${walletCountText(value, of)} ${explain} (${pct(value)}), ${atAlert ? "at alert time" : later}. The safety screen rejects ${failsAbove !== undefined ? `over ${failsAbove}%` : `${failsAt ?? 0}% or more`}.`;
   return (
     <div {...tileLook(tiles, tileTone(value, failsAbove ?? failsAt ?? 0), risky)} title={title}>
       <dt>{label}</dt>
@@ -971,10 +1078,13 @@ export function sniperReading(
 export function SniperTile({
   reading,
   tiles = "off",
+  later = LATER_SCAN,
 }: {
   reading: SniperReading | null;
   /** How the tile takes its scale up to the cut (the alert card's, with tile colors on). */
   tiles?: TileMode;
+  /** How a reading from after the alert is described (see laterScanText). */
+  later?: string;
 }) {
   const risky = reading?.top10Pct != null && reading.top10Pct >= SAFETY_REJECT_SNIPER_WALLET_PCT;
   // The cut reads the top ten; a scan without that share is placed by its top-25 share instead.
@@ -988,7 +1098,7 @@ export function SniperTile({
     reading === null
       ? "Snipers: not checked yet. The launch's first buyers are read a few tokens per scan."
       : `Snipers: ${reading.count} of the ${reading.of} largest holders${reading.top25 ? "" : " (top 10 only on this scan)"} were among the first 25 buyers after launch, ${
-          reading.atAlert ? "at alert time" : "from a scan after the alert"
+          reading.atAlert ? "at alert time" : later
         }.${top10} The safety screen rejects ${SAFETY_REJECT_SNIPER_WALLET_PCT / 10} or more of the top 10.`;
   return (
     <div {...tileLook(tiles, tileTone(share, SAFETY_REJECT_SNIPER_WALLET_PCT), risky)} title={title}>
@@ -1081,6 +1191,7 @@ function LinkedTile({
   creatorPct,
   atAlert,
   tiles,
+  later = LATER_SCAN,
 }: {
   pct: number | null;
   count: { linked: number; of: number } | null;
@@ -1092,6 +1203,8 @@ function LinkedTile({
   creatorPct: number | null;
   atAlert: boolean;
   tiles: TileMode;
+  /** How a reading from after the alert is described (see laterScanText). */
+  later?: string;
 }) {
   const cut = countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of);
   const summary = linkedSummary(clusters, creatorPct);
@@ -1099,8 +1212,8 @@ function LinkedTile({
     value === null
       ? "Linked: not checked yet. Who paid for each top-25 wallet is read a few tokens per scan."
       : value === 0
-        ? `Linked: no two top-25 wallets share a funder or a funding minute${bundled ? ", and no KOL bundles any" : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}.`
-        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${bundled ? ` (Bundled %), counting wallets in a funder's cluster, a funding minute or a KOL's bundle${kols ? " (KOLs' bundles add some)" : ""}` : ", KOLs' bundles not checked on this scan"}${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : "from a scan after the alert"}. The safety screen counts linked holders without KOLs' bundles and rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of)} or more.`;
+        ? `Linked: no two top-25 wallets share a funder or a funding minute${bundled ? ", and no KOL bundles any" : ""}, ${atAlert ? "at alert time" : later}.`
+        : `Linked: ${count ? `${count.linked} of the ${count.of} top holders, ` : ""}holding ${pct(value)} of supply${bundled ? ` (Bundled %), counting wallets in a funder's cluster, a funding minute or a KOL's bundle${kols ? " (KOLs' bundles add some)" : ""}` : ", KOLs' bundles not checked on this scan"}${summary ? `. ${summary}` : ""}, ${atAlert ? "at alert time" : later}. The safety screen counts linked holders without KOLs' bundles and rejects ${countCutFor(SAFETY_REJECT_LINKED_COUNT, count?.of)} or more.`;
   return (
     <div
       {...tileLook(tiles, tileTone(count?.linked, cut), count !== null && count.linked >= cut)}
@@ -1307,6 +1420,8 @@ export const CALL_READING_LAG_MS = 60_000;
 export function nowReading(card: Card): number | null {
   const mcap = card.currentMarketCapUsd;
   if (mcap === null) return mcap;
+  // Priced from the curve, to the block: it shows the market after the call at once.
+  if (card.currentMarketCapSource === "curve") return mcap;
   const pricedAt =
     card.kind === "match"
       ? card.alertMcapUsd != null
@@ -1341,6 +1456,24 @@ export function belowMcapLine(
   const mcap = nowReading(card);
   if (mcap === null) return wasHidden;
   return mcap < look.hideBelowMcapUsd * (wasHidden ? MCAP_RESHOW_MARGIN : 1);
+}
+
+/** "Now" readings this old or older say their age on the card, and dim. */
+export const NOW_STALE_MS = 2 * 60_000;
+
+/**
+ * The age of the "Now" reading as the card labels it ("3m", "2h"), or null while it is fresh or
+ * there is none. A coin nobody has open, or one past the live refresh's budget, keeps its last
+ * reading, and a figure minutes old must not read as the price now.
+ */
+export function nowReadingAge(
+  card: Pick<Card, "currentMarketCapAt">,
+  nowMcap: number | null,
+  now: number,
+): string | null {
+  const at = card.currentMarketCapAt ? Date.parse(card.currentMarketCapAt) : NaN;
+  if (nowMcap === null || !Number.isFinite(at) || now - at < NOW_STALE_MS) return null;
+  return minutes((now - at) / 60_000);
 }
 
 /** The "Now" figure's tooltip: why it is blank in a call's first minute, or how old it is. */

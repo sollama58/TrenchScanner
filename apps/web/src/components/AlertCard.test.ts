@@ -5,7 +5,12 @@ import {
   cardReadings,
   oldFirstBuyersText,
   countCutFor,
+  ageNow,
+  atAlertNote,
+  newestStats,
+  laterScanText,
   nowReading,
+  nowReadingAge,
   recordedPeakOf,
   sniperReading,
   walletCountText,
@@ -179,6 +184,34 @@ describe("nowReading", () => {
   it("shows the reading when it has no time (older API builds)", () => {
     expect(nowReading(call("curated", null))).toBe(47_500);
   });
+
+  it("shows a curve-priced reading from the first second: the curve is the market to the block", () => {
+    expect(nowReading({ ...call("curated", at(5)), currentMarketCapSource: "curve" })).toBe(47_500);
+  });
+});
+
+describe("reading ages", () => {
+  const now = Date.parse("2026-10-16T12:30:00.000Z");
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+
+  it("labels a Now reading once it is two minutes old", () => {
+    expect(nowReadingAge({ currentMarketCapAt: ago(90_000) }, 1, now)).toBeNull();
+    expect(nowReadingAge({ currentMarketCapAt: ago(3 * 60_000) }, 1, now)).toBe("3m");
+    expect(nowReadingAge({ currentMarketCapAt: ago(3 * 60_000) }, null, now)).toBeNull();
+    expect(nowReadingAge({ currentMarketCapAt: null }, 1, now)).toBeNull();
+  });
+
+  it("says how old the newest scan is", () => {
+    expect(
+      laterScanText({ latestSnapshot: { takenAt: ago(12 * 60_000) } as Card["latestSnapshot"] }, now),
+    ).toBe("from a scan 12m ago");
+    expect(laterScanText({ latestSnapshot: null }, now)).toBe("from a scan after the alert");
+  });
+
+  it("ages the coin from its alert snapshot to now", () => {
+    expect(ageNow({ ageMinutes: 4, takenAt: ago(3 * 3_600_000) }, now)).toBe(184);
+    expect(ageNow({ ageMinutes: null, takenAt: ago(0) }, now)).toBeNull();
+  });
 });
 
 describe("holder counts", () => {
@@ -250,5 +283,55 @@ describe("holder counts", () => {
     expect(shownValue({ scale: 10 }, 40)).toBe(4);
     expect(shownValue({ scale: 10 }, 45)).toBe(4);
     expect(shownValue({}, 45)).toBe(45);
+  });
+});
+
+describe("tiles read the newest scan (user decision 2026-10-17)", () => {
+  const alert = {
+    takenAt: "2026-10-16T12:00:00.000Z",
+    score: 80,
+    top10HolderPct: 30,
+    holderCount: 100,
+    largestHolderPct: 5,
+    cexFundedPct: 10,
+  };
+  const newest = {
+    takenAt: "2026-10-16T13:00:00.000Z",
+    score: 60,
+    top10HolderPct: null,
+    holderCount: 250,
+    largestHolderPct: 9,
+    cexFundedPct: null,
+  };
+  const c = { snapshot: alert, latestSnapshot: newest, token: {} } as unknown as Card;
+
+  it("shows the newest scan's stats, falling back to the alert's where it has none", () => {
+    const t = newestStats(c);
+    expect(t).toMatchObject({
+      fromLatest: true,
+      score: 60,
+      holders: 250,
+      top10Pct: 30,
+      top10FromLatest: false,
+    });
+    expect(newestStats({ ...c, latestSnapshot: { ...alert } as Card["latestSnapshot"] }).fromLatest).toBe(
+      false,
+    );
+  });
+
+  it("reads wallet tiles newest first on the card, alert first in the token view", () => {
+    expect(cardReadings(c, "newest")).toMatchObject({
+      largestPct: 9,
+      largestAtAlert: false,
+      cexPct: 10,
+      cexAtAlert: true,
+    });
+    expect(cardReadings(c)).toMatchObject({ largestPct: 5, largestAtAlert: true });
+  });
+
+  it("notes the alert's value only when it differs", () => {
+    expect(atAlertNote("30%", "42%")).toBe(" (at the alert: 30%)");
+    expect(atAlertNote("30%", "30%")).toBe("");
+    expect(atAlertNote(null, "30%")).toBe("");
   });
 });

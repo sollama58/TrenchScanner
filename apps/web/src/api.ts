@@ -377,7 +377,8 @@ export interface ModelCall {
 /** GET /live/market: current market data for the tokens on screen, seconds old. */
 export interface LiveMarket {
   at: string;
-  tokens: { id: string; marketCapUsd: number; priceUsd: number | null; at: string }[];
+  /** source "curve": priced from the coin's Pump.fun bonding curve, to the block (else DexScreener). */
+  tokens: { id: string; marketCapUsd: number; priceUsd: number | null; at: string; source?: "curve" }[];
 }
 
 /** One feed card - a filter match or a curated alert, which the API serializes alike. */
@@ -400,6 +401,11 @@ export interface Card {
   currentMarketCapUsd: number | null;
   /** When currentMarketCapUsd was read (absent from API builds before the live tick). */
   currentMarketCapAt?: string | null;
+  /**
+   * Set by the live tick (hooks.ts useLiveMarketCaps) when "Now" was priced from the coin's bonding
+   * curve, to the block, rather than DexScreener's 45-60 s late figure. Never sent by the feed.
+   */
+  currentMarketCapSource?: "curve";
   /** color and icon: the filter's own card style (absent from older API builds; null: Customize's). */
   filter: { id: string; name: string; color?: string | null; icon?: FilterIconId | null } | null;
   curated: CuratedMeta | null;

@@ -556,7 +556,12 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     matchStream,
     viewStamps,
   });
-  await app.register(registerLiveRoutes, { prefix: "/live", liveRefresher, viewStamps });
+  await app.register(registerLiveRoutes, {
+    prefix: "/live",
+    liveRefresher,
+    viewStamps,
+    peakWindowDays: env.SNAPSHOT_RETENTION_DAYS,
+  });
   // The dashboard's Stream: every new token that passed the safety screen inside the band.
   await app.register(registerLaunchRoutes, { prefix: "/launches", env });
   // Report caches warm themselves once the server is actually listening - so a real start pays
