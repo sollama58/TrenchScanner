@@ -25,11 +25,9 @@ import {
   GlobeIcon,
   HeartIcon,
   RobotIcon,
-  SageIcon,
   SlidersIcon,
   XLogoIcon,
 } from "./Icons";
-import { openSage } from "../sage";
 import { linkedCount, linkedCountText } from "../bubbleMap";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
@@ -701,26 +699,14 @@ export function AlertCard({
         </div>
       )}
 
-      {(show("mint") || show("sage") || socials.length > 0 || fees || show("links") || trade.length > 0) && (
+      {(show("mint") || socials.length > 0 || fees || show("links") || trade.length > 0) && (
         <footer className="card-foot">
-          {(show("mint") || show("sage")) && (
+          {show("mint") && (
             <div className="card-foot-left">
-              {show("mint") && (
-                <button className="mint" onClick={copy} title="Copy mint address">
-                  {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-                  {copied ? "Copied" : shortAddress(mint)}
-                </button>
-              )}
-              {show("sage") && (
-                <button
-                  className="sage-btn"
-                  onClick={() => openSage(mint)}
-                  title="Open TokenSage's read of this coin: what it's about, its lineage, X link and flags"
-                >
-                  <SageIcon size={13} />
-                  Sage
-                </button>
-              )}
+              <button className="mint" onClick={copy} title="Copy mint address">
+                {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+                {copied ? "Copied" : shortAddress(mint)}
+              </button>
             </div>
           )}
           {/* The coin's X and website, beside the copy button (user ask 2026-10-18). */}
