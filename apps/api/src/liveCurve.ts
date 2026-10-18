@@ -1,6 +1,7 @@
 import {
   createLogger,
   decodeCurve,
+  decodeLaunchLab,
   decodeTokenAmount,
   HeliusAccountStream,
   pumpCurveAddressOf,
@@ -8,8 +9,9 @@ import {
   type CurveState,
   type HeliusClient,
   type PoolVaults,
+  WRAPPED_SOL_MINT,
 } from "@trenchscanner/core";
-import type { SolPrice } from "./solPrice.js";
+import type { QuotePrice, SolPrice } from "./solPrice.js";
 
 const logger = createLogger("live-curve");
 
@@ -33,6 +35,10 @@ const logger = createLogger("live-curve");
  * Only for a chart's asks: the feed cards' quotes still let DexScreener price graduated coins.
  */
 
+/** A failed LaunchLab pool scan is tried again after this long. */
+const LAUNCHLAB_RETRY_MS = 10_000;
+/** Stonks coins' LaunchLab pools found so far (a scan each), kept across follows. */
+const MAX_LAUNCHLAB_POOLS = 2_000;
 /** A curve is let go once no chart has asked about it for this long. */
 const IDLE_MS = 30_000;
 /** Off the stream, a followed curve is read this often (1 credit per 100 curves a read). */
@@ -81,7 +87,7 @@ export interface LiveCurveStreamTotals {
   since: string;
 }
 type CurveReader = Pick<HeliusClient, "getCurveStatesBatch"> &
-  Partial<Pick<HeliusClient, "getPoolVaultsBatch" | "getTokenAmountsBatch">>;
+  Partial<Pick<HeliusClient, "getPoolVaultsBatch" | "getTokenAmountsBatch" | "findLaunchLabPool">>;
 
 /** Where the newest prices came from. "pending": asked, not read yet. "none": not a live curve. */
 export type LiveSource = "stream" | "rpc" | "pending" | "none";
@@ -130,14 +136,21 @@ interface Followed {
   confirmedAt: number | null;
   readAt: number | null;
   complete: boolean;
-  /** The address holds no curve (not a Pump.fun coin) or a curve not quoted in SOL. */
+  /** The address holds no curve (not a Pump.fun coin), or one quoted in a coin with no price. */
   none: boolean;
+  /**
+   * What the curve (and later its pool) is quoted in: null for SOL, else the coin it pairs with
+   * (USD1, a tokenized stock). Ticks are its market cap in that coin, read as if it had 9 decimals.
+   */
+  quoteMint: string | null;
   /** A chart asked (not only a feed card): once the curve completes, its pool is followed. */
   wantPool: boolean;
   /** After bonding: the pool once read, "none" with no SOL pool there, null not found yet. */
   pool: FollowedPool | "none" | null;
   /** When the pool was last looked for (ms), null never. */
   poolSoughtAt: number | null;
+  /** No Pump.fun curve there: when its Raydium LaunchLab pool (a Stonks coin) was looked for. */
+  launchLabSoughtAt: number | null;
 }
 
 interface FollowedPool {
@@ -176,6 +189,8 @@ export interface LiveCurvesDeps {
   makeStream: ((onAccount: (key: string, data: string, slot: number | null) => void) => Stream) | null;
   reader: CurveReader | null;
   solPrice: Pick<SolPrice, "get">;
+  /** Prices a coin-quoted curve's quote; without it such curves aren't followed. */
+  quotePrice?: Pick<QuotePrice, "get">;
   now?: () => number;
 }
 
@@ -188,6 +203,8 @@ export class LiveCurves {
   private readonly now: () => number;
   private readonly totals = { accountUpdates: 0, bytes: 0, credits: 0 };
   private readonly startedAt: number;
+  /** Each Stonks mint's LaunchLab pool (or null: none), so a coin is scanned for once. */
+  private readonly launchLabPools = new Map<string, string | null>();
   /** Charts' held asks, by mint: each woken by the curve's next change. */
   private readonly waiters = new Map<string, Set<() => void>>();
 
@@ -248,7 +265,7 @@ export class LiveCurves {
     const pool = poolOf(f);
     const readAt = pool ? pool.readAt : f.readAt;
     const streamed = this.confirm(mint, f, now);
-    const usd = await this.deps.solPrice.get();
+    const usd = await this.usdRate(f);
     const source: LiveSource = readAt === null ? "pending" : streamed ? "stream" : "rpc";
     return {
       mint,
@@ -282,12 +299,12 @@ export class LiveCurves {
     if (added) await this.seed(waitMs);
     const out = new Map<string, CurveQuote>();
     if (asked.length === 0) return out;
-    const usd = await this.deps.solPrice.get();
-    if (usd === null) return out;
     for (const [mint, f] of asked) {
       if (f.none || f.complete || f.readAt === null) continue;
       const last = f.ticks[f.ticks.length - 1];
       if (!last) continue;
+      const usd = await this.usdRate(f);
+      if (usd === null) continue;
       this.confirm(mint, f, now);
       const at = f.confirmedAt ?? f.readAt;
       // Reads failing and the stream not covering it: not current, DexScreener's figure stands.
@@ -295,6 +312,16 @@ export class LiveCurves {
       out.set(mint, { marketCapUsd: last[1] * usd, priceUsd: (last[1] * usd) / PUMP_SUPPLY, at });
     }
     return out;
+  }
+
+  /**
+   * USD per tick unit for `f`: SOL's price for a SOL curve, else its quote coin's, scaled from the
+   * 9 decimals the ticks are read at to the coin's own. Null while there is no price.
+   */
+  private async usdRate(f: Followed): Promise<number | null> {
+    if (f.quoteMint === null) return this.deps.solPrice.get();
+    const q = await this.deps.quotePrice?.get(f.quoteMint);
+    return q ? q.usd * 10 ** (9 - q.decimals) : null;
   }
 
   /**
@@ -327,9 +354,11 @@ export class LiveCurves {
         readAt: null,
         complete: false,
         none: false,
+        quoteMint: null,
         wantPool: false,
         pool: null,
         poolSoughtAt: null,
+        launchLabSoughtAt: null,
       };
       this.followed.set(mint, f);
       this.ensureRunning();
@@ -400,7 +429,7 @@ export class LiveCurves {
     }
     if (!key.startsWith(KEY_PREFIX)) return;
     const f = this.followed.get(key.slice(KEY_PREFIX.length));
-    const state = decodeCurve(data);
+    const state = decodeCurve(data) ?? decodeLaunchLab(data);
     // The stream only says what changed to, never what it was before: a curve not yet read
     // waits for its seed read to open the tape.
     if (!f || !state || f.readAt === null) return;
@@ -478,6 +507,7 @@ export class LiveCurves {
           due.push(mint);
       }
       if (!this.deps.reader) return;
+      const launchLab: string[] = [];
       for (let i = 0; i < due.length; i += 100) {
         const mints = due.slice(i, i + 100);
         const curves = mints.map((m) => this.followed.get(m)?.curve ?? "");
@@ -486,16 +516,29 @@ export class LiveCurves {
           const f = this.followed.get(mint);
           const state = states.get(curves[k]!);
           if (!f || state === undefined || state === "failed") return;
-          if (state === null || !state.quoteIsSol) {
+          const quoteMint = state === null || state.quoteIsSol ? null : (state.quoteMint ?? null);
+          // No Pump.fun curve: a chart's coin may be on Raydium LaunchLab (Stonks), looked for next.
+          if (
+            state === null &&
+            f.wantPool &&
+            f.curve === pumpCurveAddressOf(mint) &&
+            this.deps.reader?.findLaunchLabPool
+          ) {
+            launchLab.push(mint);
+            return;
+          }
+          if (state === null || (!state.quoteIsSol && (!quoteMint || !this.deps.quotePrice))) {
             f.none = true;
             this.stream?.unwatch(KEY_PREFIX + mint);
             return;
           }
+          f.quoteMint = quoteMint;
           // Stamped with when the read went out: a change the stream delivered meanwhile is newer.
           this.record(mint, f, state, now);
           f.readAt = now;
         });
       }
+      await this.launchLabRound(launchLab, now);
       await this.poolRound(this.deps.reader, now);
     } catch (err) {
       logger.warn("curve read failed", { error: String(err) });
@@ -505,23 +548,58 @@ export class LiveCurves {
   }
 
   /**
+   * The charts' coins with no Pump.fun curve: each one's Raydium LaunchLab pool (a Stonks coin),
+   * found by a program scan once per coin and followed as its curve from the next round on; a coin
+   * with none has no live price.
+   */
+  private async launchLabRound(mints: readonly string[], now: number): Promise<void> {
+    const find = this.deps.reader?.findLaunchLabPool?.bind(this.deps.reader);
+    for (const mint of mints) {
+      const f = this.followed.get(mint);
+      if (!f || !find) continue;
+      let pool = this.launchLabPools.get(mint);
+      if (pool === undefined) {
+        if (f.launchLabSoughtAt !== null && now - f.launchLabSoughtAt < LAUNCHLAB_RETRY_MS) continue;
+        f.launchLabSoughtAt = now;
+        const found = await find(mint);
+        if (found === "failed") continue;
+        pool = found;
+        if (this.launchLabPools.size >= MAX_LAUNCHLAB_POOLS) {
+          const oldest = this.launchLabPools.keys().next().value;
+          if (oldest !== undefined) this.launchLabPools.delete(oldest);
+        }
+        this.launchLabPools.set(mint, pool);
+      }
+      if (pool === null) {
+        f.none = true;
+        this.stream?.unwatch(KEY_PREFIX + mint);
+        this.wake(mint);
+        continue;
+      }
+      f.curve = pool;
+      this.stream?.watch(KEY_PREFIX + mint, [pool], now, "account");
+    }
+  }
+
+  /**
    * After bonding, for the charts' coins: finds each graduated curve's pool, then reads the vaults
    * the stream doesn't cover (once after their subscriptions begin, else every READ_EVERY_MS).
    */
   private async poolRound(reader: CurveReader, now: number): Promise<void> {
     const canRead = !!reader.getPoolVaultsBatch && !!reader.getTokenAmountsBatch;
-    const sought = new Map<string, string>();
+    const sought = new Map<string, { mint: string; quoteMint: string }>();
     for (const [mint, f] of this.followed) {
       if (f.none || !f.complete || !f.wantPool || f.pool !== null) continue;
       if (f.poolSoughtAt !== null && now - f.poolSoughtAt < READ_EVERY_MS) continue;
-      const pool = canRead ? pumpSwapPoolOf(mint) : undefined;
+      const quoteMint = f.quoteMint ?? WRAPPED_SOL_MINT;
+      const pool = canRead ? pumpSwapPoolOf(mint, quoteMint) : undefined;
       if (!pool) f.pool = "none";
-      else sought.set(pool, mint);
+      else sought.set(pool, { mint, quoteMint });
     }
     if (!reader.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
     if (sought.size > 0) {
       const found = await reader.getPoolVaultsBatch(sought);
-      for (const [pool, mint] of sought) {
+      for (const [pool, { mint }] of sought) {
         const f = this.followed.get(mint);
         const vaults = found.get(pool);
         if (!f || vaults === undefined) continue;
@@ -659,6 +737,7 @@ export function liveCurvesFor(
   enabled: boolean,
   reader: CurveReader | null,
   solPrice: Pick<SolPrice, "get">,
+  quotePrice?: Pick<QuotePrice, "get">,
 ): LiveCurves {
   return new LiveCurves({
     makeStream:
@@ -673,6 +752,7 @@ export function liveCurvesFor(
         : null,
     reader: enabled ? reader : null,
     solPrice,
+    quotePrice,
   });
 }
 

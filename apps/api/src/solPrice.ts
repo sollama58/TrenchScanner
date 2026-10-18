@@ -106,3 +106,75 @@ export class SolPrice {
     return this.value?.usd ?? null;
   }
 }
+
+/** A quote coin's USD price and decimals (QuotePrice.get). */
+export interface QuoteUsd {
+  usd: number;
+  decimals: number;
+}
+
+type QuoteReader = (mint: string) => Promise<QuoteUsd | null>;
+
+/** Jupiter's free price endpoint, which answers a coin's decimals with its price. */
+const jupiterQuote: QuoteReader = async (mint) => {
+  const body = await fetchJson<Record<string, { usdPrice?: unknown; decimals?: unknown }>>(
+    `https://lite-api.jup.ag/price/v3?ids=${mint}`,
+    { timeoutMs: 4_000, retries: 0 },
+  );
+  const usd = Number(body?.[mint]?.usdPrice);
+  const decimals = Number(body?.[mint]?.decimals);
+  return Number.isFinite(usd) && usd > 0 && Number.isInteger(decimals) && decimals >= 0 && decimals <= 18
+    ? { usd, decimals }
+    : null;
+};
+
+/**
+ * The USD price of what a coin-quoted curve or pool pairs with (USD1, a tokenized stock, another
+ * coin: user ask 2026-10-18, such charts went delayed), for the live chart, like SolPrice: reused
+ * for `ttlMs`, read single-flight per coin, the last good price kept through a failed read.
+ */
+export class QuotePrice {
+  private readonly values = new Map<string, { value: QuoteUsd; at: number }>();
+  private readonly inFlight = new Map<string, Promise<QuoteUsd | null>>();
+  private readonly nextTryAt = new Map<string, number>();
+
+  constructor(
+    private readonly read: QuoteReader = jupiterQuote,
+    private readonly ttlMs = 30_000,
+    private readonly retryMs = 10_000,
+    private readonly now: () => number = Date.now,
+    private readonly maxCoins = 200,
+  ) {}
+
+  /** The coin's price, or null before any read of it has answered. A stale one is served while it refreshes. */
+  async get(mint: string): Promise<QuoteUsd | null> {
+    const now = this.now();
+    const held = this.values.get(mint);
+    if (held && now - held.at < this.ttlMs) return held.value;
+    if (now < (this.nextTryAt.get(mint) ?? 0)) return held?.value ?? null;
+    let flight = this.inFlight.get(mint);
+    if (!flight) {
+      flight = this.refresh(mint).finally(() => this.inFlight.delete(mint));
+      this.inFlight.set(mint, flight);
+    }
+    return held ? held.value : flight;
+  }
+
+  private async refresh(mint: string): Promise<QuoteUsd | null> {
+    try {
+      const value = await this.read(mint);
+      if (value) {
+        if (!this.values.has(mint) && this.values.size >= this.maxCoins) {
+          const oldest = this.values.keys().next().value;
+          if (oldest !== undefined) this.values.delete(oldest);
+        }
+        this.values.set(mint, { value, at: this.now() });
+        return value;
+      }
+    } catch (err) {
+      logger.debug("quote price read failed", { mint, error: String(err) });
+    }
+    this.nextTryAt.set(mint, this.now() + this.retryMs);
+    return this.values.get(mint)?.value ?? null;
+  }
+}
