@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireTwoFactor } from "../twoFactor.js";
-import { prisma, type Env } from "@trenchscanner/core";
+import { adminWalletSet, prisma, type Env } from "@trenchscanner/core";
+import { requireTradeConfirmation } from "../tradeConfirm.js";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 import { sessionCookieAttrs } from "./auth.js";
 import { clientIp, ipRateLimitKey } from "../clientIp.js";
@@ -53,6 +54,15 @@ export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env
           .send({ error: "Phone pairing is for wallet sign-ins. Sign in with Privy on your phone." });
       }
       if (!(await requireTwoFactor(opts.env, request, reply, request.user!.userId, "pair"))) return;
+      // An admin's paired phone is a full admin that skips the wallet signatures the riskiest admin
+      // actions ask for (requireAdminConfirmation), so pairing one is signed for with the admin's
+      // wallet: a stolen browser session alone can't mint itself an unsigned admin phone
+      // (wallet security audit 2026-10-18, H1).
+      if (
+        adminWalletSet(opts.env).has(request.user!.walletAddress) &&
+        !(await requireTradeConfirmation(request, reply))
+      )
+        return;
       const { code, expiresAt } = await issueLinkCode(request.user!.userId);
       request.log.info({ userId: request.user!.userId }, "issued a mobile link code");
       // The raw code is returned exactly once, here. Nothing stores it - see hashCode.

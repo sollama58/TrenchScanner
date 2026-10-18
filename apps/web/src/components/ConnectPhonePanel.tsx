@@ -5,6 +5,7 @@ import { buildLinkUrl, describeDevice, type DeviceList, type IssuedLinkCode } fr
 import { ago } from "../format";
 import { CheckIcon, CopyIcon, PhoneIcon, TrashIcon } from "./Icons";
 import { postWithTwoFactor } from "../twoFactor";
+import { confirmedIfAsked } from "../tradeConfirm";
 
 /**
  * Settings card: sign a phone in by scanning a QR from this signed-in desktop, and see or switch
@@ -63,7 +64,10 @@ export function ConnectPhonePanel() {
     try {
       const known = (await load())?.devices ?? list?.devices ?? [];
       before.current = new Set(known.map((d) => d.id));
-      const issued = await postWithTwoFactor<IssuedLinkCode>("/auth/link/code");
+      // An admin wallet signs to pair a phone (the phone gets full admin); anyone else isn't asked.
+      const issued = await confirmedIfAsked("/auth/link/code", (body) =>
+        postWithTwoFactor<IssuedLinkCode>("/auth/link/code", body),
+      );
       // The deadline from the TTL, on this clock: a skewed desktop clock would misread the API's
       // absolute expiresAt, and a few minutes of skew is a lot against a two-minute window.
       const ttl = Number.isFinite(issued.ttlMs) && issued.ttlMs > 0 ? issued.ttlMs : 120_000;

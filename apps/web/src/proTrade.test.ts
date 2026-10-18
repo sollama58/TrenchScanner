@@ -221,7 +221,11 @@ describe("tradeProblem", () => {
   const TIP = "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE";
   const STRANGER = "D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7Nz";
   const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
-  const keys = [owner, STRANGER, TIP, own[0]!, SYSTEM, TOKEN, BUDGET, PUMP];
+  const JUP = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
+  const usdcAccount = ownTokenAccounts(owner, USDC)[0]!;
+  // The wallet's account for some other token it holds.
+  const otherAccount = ownTokenAccounts(owner, STRANGER)[0]!;
+  const keys = [owner, STRANGER, TIP, own[0]!, SYSTEM, TOKEN, BUDGET, PUMP, JUP, usdcAccount, otherAccount];
   const k = (key: string) => keys.indexOf(key);
   const u32 = (n: number) => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
   const u64 = (n: bigint) => Array.from({ length: 8 }, (_, i) => Number((n >> BigInt(8 * i)) & 255n));
@@ -271,6 +275,19 @@ describe("tradeProblem", () => {
     expect(tradeProblem(tx([limit, price, tip, buy]), owner, hand)).toMatch(/priority fee/);
     expect(tradeProblem(tx([transfer("lookup", 1n), tip, buy]), owner, hand)).toMatch(/lookup table/);
     expect(tradeProblem(tx([transfer(own[0]!, 1n), buy]), owner, hand)).toMatch(/Sender/);
+  });
+  it("refuses a Jupiter route that spends from another of the wallet's accounts", () => {
+    // Jupiter's `route`: token program, authority, source, destination; then in_amount, quoted_out,
+    // slippage and platform fee at the end of its arguments.
+    const route = (source: string) => ({
+      program: JUP,
+      accounts: [k(TOKEN), k(owner), k(source), k(usdcAccount)],
+      data: [229, 23, 203, 151, 122, 227, 173, 42, 0, 0, 0, 0, ...u64(1_000_000n), ...u64(5n), 100, 0, 0],
+    });
+    const jup: TradeCheck = { ...asked, amount: 1_000_000n };
+    expect(tradeProblem(tx([transfer(own[0]!, 1_000_000n), tip, route(own[0]!)]), owner, jup)).toBeNull();
+    // A "buy 0.001 SOL" that spends 1,000,000 raw units of the wallet's other token instead.
+    expect(tradeProblem(tx([tip, route(otherAccount)]), owner, jup)).toMatch(/spend from an account/);
   });
   it("refuses a Pump.fun build that isn't the trade asked for", () => {
     expect(tradeProblem(tx([tip, pumpBuy(100_000_000_000n, 1n)]), owner, hand)).toMatch(/amount/);
