@@ -174,10 +174,15 @@ export async function registerSubscriptionRoutes(
    * it. Only accounts the parser would credit are offered: owned by the classic SPL Token program
    * (a Token-2022 burn of this mint is not a subscription payment) and not frozen (the chain
    * refuses to burn from a frozen account, after the fee). Largest first, since the button burns
-   * from one account.
+   * from one account. Also the wallet's SOL (null when that read alone failed), for Settings'
+   * balances and the network fee a burn or a buy needs.
    */
   app.get("/balance", { config: { rateLimit: RPC_ROUTE_RATE_LIMIT } }, async (request, reply) => {
-    const accounts = await rpc.getTokenAccountsByOwner(request.user!.walletAddress, SUBSCRIPTION_MINT);
+    const wallet = request.user!.walletAddress;
+    const [accounts, lamports] = await Promise.all([
+      rpc.getTokenAccountsByOwner(wallet, SUBSCRIPTION_MINT),
+      rpc.getBalance(wallet),
+    ]);
     if (!accounts) {
       return reply
         .code(503)
@@ -194,6 +199,7 @@ export async function registerSubscriptionRoutes(
       decimals: SUBSCRIPTION_MINT_DECIMALS,
       tokenProgram: SPL_TOKEN_PROGRAM_ID,
       totalRaw: total.toString(),
+      solLamports: lamports === null ? null : lamports.toString(),
       accounts: burnable.map((a) => ({ address: a.address, rawAmount: a.rawAmount })),
     };
   });

@@ -29,6 +29,8 @@ export interface BurnBalance {
   decimals: number;
   tokenProgram: string;
   totalRaw: string;
+  /** The wallet's SOL in lamports; null when that read alone failed. */
+  solLamports?: string | null;
   /** Accounts a burn can come from, largest first. */
   accounts: { address: string; rawAmount: string }[];
 }

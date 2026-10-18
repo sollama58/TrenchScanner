@@ -351,6 +351,12 @@ export class SolanaRpc {
     return result?.value ?? null;
   }
 
+  /** The wallet's SOL, in lamports, at `confirmed`, for Settings' balances. Null when the RPC failed. */
+  async getBalance(owner: string): Promise<bigint | null> {
+    const result = await this.call<{ value?: number }>("getBalance", [owner, { commitment: "confirmed" }]);
+    return typeof result?.value === "number" && Number.isFinite(result.value) ? BigInt(result.value) : null;
+  }
+
   /**
    * The wallet's token accounts for one mint, with their balances, at `confirmed`.
    *

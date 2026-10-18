@@ -17175,3 +17175,159 @@ body:has(.util-toast) .bug-fab {
     display: inline-flex;
   }
 }
+
+/* Settings > Subscription (SettingsTab's AccountPanel, redrawn 2026-10-18): access left beside the
+   wallet's SOL and $ASDFASDFA, with Buy $ASDFASDFA opening the site's Trade panel (BuyAsdfDialog).
+   Side by side on a wide window, stacked on a phone. */
+.sub-panel .section-head {
+  align-items: flex-start;
+}
+.sub-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.sub-status,
+.sub-wallet {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.sub-status {
+  justify-content: center;
+}
+.sub-status.on {
+  border-color: color-mix(in srgb, var(--good) 35%, var(--border));
+  background: linear-gradient(160deg, var(--good-wash), transparent 70%), var(--surface-2);
+}
+.sub-status.off {
+  border-color: color-mix(in srgb, var(--bad) 35%, var(--border));
+  background: linear-gradient(160deg, var(--bad-wash), transparent 70%), var(--surface-2);
+}
+.sub-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.sub-big {
+  font-size: 30px;
+  line-height: 1.15;
+  font-weight: 700;
+  color: var(--ink);
+}
+.sub-status.on .sub-big {
+  color: var(--good-ink);
+}
+.sub-status.off .sub-big {
+  color: var(--bad-ink);
+}
+.sub-line {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.sub-wallet-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.sub-wallet-head code {
+  font-size: 12px;
+  color: var(--ink-2);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+.sub-refresh {
+  margin-left: auto;
+}
+.sub-coins {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.sub-coin {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  background: var(--surface-3);
+}
+.sub-coin-name {
+  font-size: 12px;
+  color: var(--muted);
+}
+.sub-coin-value {
+  font-size: 20px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.sub-coin-value.skeleton {
+  width: 70%;
+  height: 24px;
+}
+.sub-coins-error {
+  margin: 0;
+}
+.sub-buy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+  align-self: flex-start;
+}
+.sub-facts {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.sub-burn h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.asdf-buy-modal {
+  width: min(560px, calc(100vw - 32px));
+}
+.asdf-buy-modal .about-head h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+@media (max-width: 640px) {
+  .sub-top {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sub-status,
+  .sub-wallet {
+    padding: 14px;
+  }
+  .sub-big {
+    font-size: 26px;
+  }
+  .sub-buy {
+    align-self: stretch;
+  }
+  .sub-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 12px;
+  }
+  .asdf-buy-modal .about-body {
+    padding: 16px 14px 20px;
+  }
+}

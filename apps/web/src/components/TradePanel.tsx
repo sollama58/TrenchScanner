@@ -437,6 +437,7 @@ export function TradePanel({
   onTraded,
   closeOnly = false,
   graceEndsAt = null,
+  buyOnly = false,
 }: {
   owner: string;
   mint: string;
@@ -451,6 +452,8 @@ export function TradePanel({
   closeOnly?: boolean;
   /** Out of the top 250 holders: when Pro Mode ends (ms). */
   graceEndsAt?: number | null;
+  /** Buying only, no Sell side: the $ASDFASDFA buy for a wallet without Pro Mode (BuyAsdfDialog). */
+  buyOnly?: boolean;
 }) {
   // Shared with Settings > Trading: a change there shows here at once, and the other way round.
   const settings = useTradeSettings();
@@ -666,7 +669,7 @@ export function TradePanel({
         </div>
       ) : closeOnly ? null : (
         // Pro Mode ended: no buttons at all, since the API refuses sells too (#717).
-        <div className="tm-trade-sides">
+        <div className={`tm-trade-sides${buyOnly ? " one" : ""}`}>
           {
             <div className="tm-side buy" role="group" aria-label="Buy">
               <div className="tm-side-head">
@@ -712,29 +715,31 @@ export function TradePanel({
               </div>
             </div>
           }
-          <div className="tm-side sell" role="group" aria-label="Sell">
-            <div className="tm-side-head">
-              <span className="tm-side-title">Sell</span>
-              <span className="muted small num">
-                {balance > 0n && summary ? `${tokensText(summary.held)} ${symbol} held` : "nothing held"}
-              </span>
+          {!buyOnly && (
+            <div className="tm-side sell" role="group" aria-label="Sell">
+              <div className="tm-side-head">
+                <span className="tm-side-title">Sell</span>
+                <span className="muted small num">
+                  {balance > 0n && summary ? `${tokensText(summary.held)} ${symbol} held` : "nothing held"}
+                </span>
+              </div>
+              <div className="tm-presets" style={sellCols(settings.sellPresets.length)}>
+                {settings.sellPresets.map((pct, i) => (
+                  <button
+                    key={`${pct}-${i}`}
+                    type="button"
+                    className="tm-preset"
+                    disabled={busy || balance === 0n}
+                    title={balance === 0n ? "Nothing to sell" : undefined}
+                    onClick={() => trade("sell", shareOf(balance, pct), `Sell ${pct}%`, pct >= 100)}
+                  >
+                    <span className="num">{pct}%</span>
+                    {pct >= 100 && <small>all</small>}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="tm-presets" style={sellCols(settings.sellPresets.length)}>
-              {settings.sellPresets.map((pct, i) => (
-                <button
-                  key={`${pct}-${i}`}
-                  type="button"
-                  className="tm-preset"
-                  disabled={busy || balance === 0n}
-                  title={balance === 0n ? "Nothing to sell" : undefined}
-                  onClick={() => trade("sell", shareOf(balance, pct), `Sell ${pct}%`, pct >= 100)}
-                >
-                  <span className="num">{pct}%</span>
-                  {pct >= 100 && <small>all</small>}
-                </button>
-              ))}
-            </div>
-          </div>
+          )}
         </div>
       )}
 
