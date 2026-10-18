@@ -74,7 +74,7 @@ interface MintAccountValue {
 }
 
 /** getSignaturesForAddress - the standard Solana RPC method, newest-first, available everywhere. */
-type SignaturesResult = { signature: string; blockTime: number | null; err?: unknown }[];
+type SignaturesResult = WalletSignaturesPage;
 
 /** getTransactionsForAddress - Helius-only, supports sortOrder so the FIRST row is the earliest. */
 interface TransactionsForAddressResult {
@@ -206,8 +206,13 @@ export type WalletOverviewResult =
       complete: boolean;
       lastAt: Date | null;
       firstAt: Date | null;
+      /** The page itself, for getFundersBatch's `pagesOf`: the funder read reuses it, not re-reads it. */
+      signatures: WalletSignaturesPage;
     }
   | { status: "failed" };
+
+/** One newest-first getSignaturesForAddress page of a wallet, as getWalletOverview read it. */
+export type WalletSignaturesPage = { signature: string; blockTime: number | null; err?: unknown }[];
 
 /** A funder's newest page of signatures, for the hot-funder check (getFunderActivityBatch). */
 export type FunderActivityResult = { status: "found"; fullPageSpanMs: number | null } | { status: "failed" };
@@ -1279,21 +1284,32 @@ export class HeliusClient {
    */
   async getFundersBatch(
     wallets: string[],
-    opts: { nowMs?: number; knownOf?: ReadonlyMap<string, KnownFunder> } = {},
+    opts: {
+      nowMs?: number;
+      knownOf?: ReadonlyMap<string, KnownFunder>;
+      /** Pages already read (getWalletOverview's `signatures`): not read again, saving the credit. */
+      pagesOf?: ReadonlyMap<string, WalletSignaturesPage>;
+    } = {},
   ): Promise<Map<string, FunderResult>> {
     const nowMs = opts.nowMs ?? Date.now();
     const knownOf = opts.knownOf ?? new Map<string, KnownFunder>();
     const unique = [...new Set(wallets)];
     const out = new Map<string, FunderResult>();
     if (unique.length === 0) return out;
-    const pages = await this.sendBatched<SignaturesResult>(
-      unique.map((address) => ({
-        id: address,
-        method: "getSignaturesForAddress",
-        params: [address, { limit: FUNDER_SIGNATURES_LIMIT }],
-      })),
-      15_000,
-    );
+    const toRead = unique.filter((address) => !opts.pagesOf?.has(address));
+    const pages =
+      toRead.length > 0
+        ? await this.sendBatched<SignaturesResult>(
+            toRead.map((address) => ({
+              id: address,
+              method: "getSignaturesForAddress",
+              params: [address, { limit: FUNDER_SIGNATURES_LIMIT }],
+            })),
+            15_000,
+          )
+        : new Map<string, RpcResponse<SignaturesResult>>();
+    for (const [address, page] of opts.pagesOf ?? [])
+      if (unique.includes(address)) pages.set(address, { result: page });
     // Each wallet's oldest successful signatures, oldest first (a failed transaction moved no SOL),
     // or, for a wallet revived within REVIVED_FUNDING_WITHIN_MS, the oldest of its current stretch.
     const oldest = new Map<string, string[]>();
@@ -1607,6 +1623,7 @@ export class HeliusClient {
       complete,
       lastAt: at(page[0]?.blockTime),
       firstAt: complete ? at(page[page.length - 1]?.blockTime) : null,
+      signatures: page,
     };
   }
 
