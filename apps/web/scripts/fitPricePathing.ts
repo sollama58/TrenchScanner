@@ -64,6 +64,9 @@ const testCoins = new Set(test.map((r) => r.coin)).size;
 // and volume add.
 const priceOnly = (rows: typeof train) => rows.map((r) => ({ ...r, features: r.features.slice(0, 9) }));
 const plain = backtest(fitPathModel(priceOnly(train), HORIZONS), priceOnly(test));
+// The same model with one fixed band shape for every coin (version 1), to show what the band
+// fitted to the coin's state adds.
+const fixed = backtest({ ...model, bandLoW: undefined, bandHiW: undefined }, test);
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
 const lines = [
@@ -86,6 +89,14 @@ lines.push(
 lines.push(
   `Price path alone (no market cap or volume), skill vs flat by horizon: ${plain.map((r) => `${r.horizon}s ${(r.skill * 100).toFixed(1)}%`).join(", ")}.`,
 );
+lines.push(
+  `Band from the coin's state vs one fixed band, by horizon (10-90 pinball loss, lower is better; coverage; median width): ${report
+    .map(
+      (r, i) =>
+        `${r.horizon}s ${(r.bandLoss * 1e4).toFixed(0)} vs ${(fixed[i]!.bandLoss * 1e4).toFixed(0)}, ${pct(r.bandCoverage)} vs ${pct(fixed[i]!.bandCoverage)}, ${r.bandWidthPct.toFixed(1)}% vs ${fixed[i]!.bandWidthPct.toFixed(1)}%`,
+    )
+    .join("; ")}.`,
+);
 console.log(lines.join("\n"));
 
 if (args.includes("--write")) {
@@ -101,7 +112,7 @@ ${lines.map((l) => ` * ${l}`).join("\n")}
  */
 export const PATH_MODEL: PathModel = ${JSON.stringify(
     {
-      version: 1,
+      version: 2,
       stepSec: model.stepSec,
       horizons: model.horizons,
       mean: round(model.mean),
@@ -109,6 +120,8 @@ export const PATH_MODEL: PathModel = ${JSON.stringify(
       weights: model.weights.map(round),
       bandLo: round(model.bandLo),
       bandHi: round(model.bandHi),
+      bandLoW: model.bandLoW!.map(round),
+      bandHiW: model.bandHiW!.map(round),
     },
     null,
     2,

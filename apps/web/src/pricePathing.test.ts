@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bandUnits,
   pathFeatures,
   pathFrom,
   predictPath,
@@ -7,7 +8,15 @@ import {
   volumeBefore,
   type PathModel,
 } from "./pricePathing";
-import { backtest, coinSamples, fitPathModel, quantile, ridge, ridgeMedian } from "./pricePathingFit";
+import {
+  backtest,
+  coinSamples,
+  fitPathModel,
+  quantile,
+  ridge,
+  ridgeMedian,
+  ridgeQuantile,
+} from "./pricePathingFit";
 
 const flatModel = (h: number[], d = 11): PathModel => ({
   version: 1,
@@ -156,11 +165,41 @@ describe("pathFrom", () => {
       bandLo: [-1, -1],
       bandHi: [1, 1],
     };
-    const steps = pathFrom({ at: 0, ys: [0.1, 0.2], vol: 0.01 }, { t: 7_000, v: 100 }, model);
+    const steps = pathFrom(
+      { at: 0, ys: [0.1, 0.2], vol: 0.01, lo: [-1, -1], hi: [1, 1] },
+      { t: 7_000, v: 100 },
+      model,
+    );
     expect(steps.map((s) => s.t)).toEqual([7_000, 12_000, 17_000]);
     expect(steps[0]).toEqual({ t: 7_000, v: 100, lo: 100, hi: 100 });
     expect(steps[2]!.v).toBeCloseTo(100 * Math.exp(0.2));
     expect(steps[2]!.lo).toBeLessThan(steps[2]!.v);
     expect(steps[2]!.hi).toBeGreaterThan(steps[2]!.v);
+  });
+});
+
+describe("the band from the coin's state", () => {
+  it("fits a quantile: about a tenth of the points fall under the 10th percentile line", () => {
+    // y spreads wider as x grows: the 10th percentile falls with x.
+    const z: number[][] = [];
+    const y: number[] = [];
+    for (let i = 0; i < 2000; i++) {
+      const x = (i % 20) / 10 - 1;
+      const u = ((i * 7919) % 1000) / 1000 - 0.5;
+      z.push([x]);
+      y.push(u * (1.5 + x));
+    }
+    const w = ridgeQuantile(z, y, 0.1, 0);
+    const under = z.filter((row, i) => y[i]! < w[0]! * row[0]! + w[1]!).length / z.length;
+    expect(under).toBeGreaterThan(0.07);
+    expect(under).toBeLessThan(0.13);
+    expect(w[0]!).toBeLessThan(0);
+  });
+
+  it("reads the band from the features when the model has band weights", () => {
+    const m = { ...flatModel([5], 2), bandLoW: [[-0.5, 0, -1]], bandHiW: [[0.5, 0, 1]] };
+    expect(bandUnits([2, 0], m)).toEqual({ lo: [-2], hi: [2] });
+    // Without them, the fixed band.
+    expect(bandUnits([2, 0], flatModel([5], 2))).toEqual({ lo: [-1], hi: [1] });
   });
 });

@@ -39,6 +39,14 @@ export interface PathModel {
    */
   bandLo: number[];
   bandHi: number[];
+  /**
+   * Version 2: per horizon, quantile-regression weights (one per standardized feature, then the
+   * intercept) for the band's 10th and 90th percentile in the same units, so the band follows the
+   * coin's state (wider below after a run-up, say) instead of one shape for every coin. bandLo and
+   * bandHi stay as the fallback.
+   */
+  bandLoW?: number[][];
+  bandHiW?: number[][];
 }
 
 /**
@@ -125,12 +133,42 @@ export function pathFeatures(grid: readonly number[], volUsd30 = 0): number[] | 
 
 /** The expected log change at each of the model's horizons, from the features. */
 export function predictLogChanges(features: readonly number[], model: PathModel = PATH_MODEL): number[] {
-  const z = features.map((x, k) => (x - model.mean[k]!) / (model.scale[k]! || 1));
-  return model.weights.map((wts) => {
-    let y = wts[wts.length - 1]!;
-    for (let k = 0; k < z.length; k++) y += wts[k]! * z[k]!;
-    return y;
+  const z = standardize(features, model);
+  return model.weights.map((wts) => linear(wts, z));
+}
+
+/** The features standardized as the model was fitted on them. */
+function standardize(features: readonly number[], model: PathModel): number[] {
+  return features.map((x, k) => (x - model.mean[k]!) / (model.scale[k]! || 1));
+}
+
+/** Weights (one per input, then the intercept) applied to `z`. */
+function linear(w: readonly number[], z: readonly number[]): number {
+  let y = w[w.length - 1]!;
+  for (let k = 0; k < z.length; k++) y += w[k]! * z[k]!;
+  return y;
+}
+
+/**
+ * The band's 10th and 90th percentile at each horizon, in units of the recent one-second
+ * volatility times the square root of the seconds ahead: from the coin's state where the model has
+ * band weights, else the fixed ones. Ordered low to high.
+ */
+export function bandUnits(
+  features: readonly number[],
+  model: PathModel = PATH_MODEL,
+): { lo: number[]; hi: number[] } {
+  if (!model.bandLoW || !model.bandHiW) return { lo: [...model.bandLo], hi: [...model.bandHi] };
+  const z = standardize(features, model);
+  const lo: number[] = [];
+  const hi: number[] = [];
+  model.horizons.forEach((_, i) => {
+    const a = linear(model.bandLoW![i]!, z);
+    const b = linear(model.bandHiW![i]!, z);
+    lo.push(Math.min(a, b));
+    hi.push(Math.max(a, b));
   });
+  return { lo, hi };
 }
 
 /** One drawn step of the guessed path: its time, the guessed market cap, and the band around it. */
@@ -155,6 +193,9 @@ export interface PathGuess {
   ys: number[];
   /** Recent one-second volatility, floored so a quiet coin still shows some spread. */
   vol: number;
+  /** The band per horizon, in bandUnits' units. */
+  lo: number[];
+  hi: number[];
 }
 
 /**
@@ -171,7 +212,7 @@ export function guessPath(
   const grid = secondGrid(points, end - PATH_LOOKBACK_SEC * SECOND, end);
   const f = pathFeatures(grid, volumeBefore(candles, end));
   if (!f) return null;
-  return { at: end, ys: predictLogChanges(f, model), vol: Math.max(f[4]!, 0.002) };
+  return { at: end, ys: predictLogChanges(f, model), vol: Math.max(f[4]!, 0.002), ...bandUnits(f, model) };
 }
 
 /**
@@ -192,8 +233,8 @@ export function pathFrom(
     steps.push({
       t: start.t + h * SECOND,
       v: Math.exp(base + y),
-      lo: Math.exp(base + y + model.bandLo[i]! * spread),
-      hi: Math.exp(base + y + model.bandHi[i]! * spread),
+      lo: Math.exp(base + y + guess.lo[i]! * spread),
+      hi: Math.exp(base + y + guess.hi[i]! * spread),
     });
   });
   return steps;
