@@ -15,7 +15,7 @@ import {
   type TradeCheck,
 } from "./proTrade";
 import { ownTokenAccounts, ownWrappedSolAccounts } from "./solanaPda";
-import { feeTotalSol, parseSol, shareOf, solText } from "./components/TradePanel";
+import { feeTotalSol, parseSol, parseTokens, shareOf, solText, unitsText } from "./components/TradePanel";
 
 describe("parseSol", () => {
   it("reads a typed SOL amount as exact lamports", () => {
@@ -45,6 +45,25 @@ describe("parseSol", () => {
       "1234567",
     ])
       expect(parseSol(bad)).toBeNull();
+  });
+});
+
+describe("exact token amounts", () => {
+  it("fills a sell preset's share as the exact amount, and reads it back to the same units", () => {
+    const balance = 123_456_789_012n; // 123,456.789012 at 6 decimals
+    for (const pct of [10, 25, 33, 50, 100]) {
+      const raw = shareOf(balance, pct);
+      expect(parseTokens(unitsText(raw, 6), 6)).toBe(raw);
+    }
+    expect(unitsText(balance, 6)).toBe("123456.789012");
+    expect(unitsText(5_000_000n, 6)).toBe("5");
+    expect(unitsText(42n, 0)).toBe("42");
+  });
+  it("takes either decimal separator and refuses what isn't an amount", () => {
+    expect(parseTokens("1234,5", 6)).toBe(1_234_500_000n);
+    expect(parseTokens("0.0000001", 6)).toBeNull();
+    expect(parseTokens("0", 6)).toBeNull();
+    expect(parseTokens("1,000.5", 6)).toBeNull();
   });
 });
 
