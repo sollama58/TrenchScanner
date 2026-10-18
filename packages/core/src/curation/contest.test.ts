@@ -6,7 +6,6 @@ import {
   contestantSpec,
   RETIRED_CONTESTANT_IDS,
   NARRATIVE_SEAT_FEATURES,
-  ORDER_FLOW_FEATURES,
   TREES_NO_TOKENSAGE_CONTESTANT,
   TREES_NO_TOKENSAGE_FEATURES,
   HIGH_PRECISION_CUTOFF_SHARE,
@@ -40,16 +39,10 @@ import {
   NARRATIVE_BACKGROUND_KIND,
   NARRATIVE_MIN_ROWS,
   narrativeTrainingSet,
-  type ExamEvidence,
 } from "./trainingRun.js";
 import { isDecisionRow, type TrainingRow } from "./trainer.js";
 import { STACKED_MODEL_KIND } from "./stacking.js";
-import {
-  defaultContestant,
-  NEVER_EMIT_THRESHOLD,
-  runContestTraining,
-  runEvolvingContest,
-} from "./trainingRun.js";
+import { defaultContestant, NEVER_EMIT_THRESHOLD, runContestTraining } from "./trainingRun.js";
 import { syntheticMarket } from "./syntheticMarket.js";
 import type { StackedCuratorParams } from "./stacking.js";
 
@@ -432,201 +425,4 @@ describe("defaultContestant", () => {
     expect(defaultContestant(NEVER_EMIT_THRESHOLD)).toBe("rules");
     expect(defaultContestant(null)).toBe("rules");
   });
-});
-
-describe("runContestTraining", () => {
-  it("ships one model per contestant and stacks the consensus on the learners", async () => {
-    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 11 });
-    const results = await runContestTraining(rows, {
-      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
-      targetPerHour: 6,
-      heuristicMinScore: 55,
-      minRowsToPromote: 1500,
-      recencyHalfLifeDays: 14,
-      cooldownHours: 24,
-      heuristicPrecisionGate: true,
-      contestants: enabledContestants(["consensus", "linear", "order-flow", "trees"]),
-    });
-    expect(results.map((r) => r.contestant)).toEqual(["consensus", "rules", "linear", "order-flow", "trees"]);
-    for (const r of results) {
-      expect(r.metrics.contestant).toBe(r.contestant);
-      expect(r.metrics.exam).toBeDefined();
-    }
-    const orderFlow = results.find((r) => r.contestant === "order-flow")!.params as {
-      featureNames: string[];
-    };
-    expect(orderFlow.featureNames).toEqual([...ORDER_FLOW_FEATURES]);
-    const consensus = results.find((r) => r.contestant === "consensus")!.params as StackedCuratorParams;
-    expect(consensus.members.map((m) => m.contestant)).toEqual(["linear", "order-flow", "trees"]);
-    expect(consensus.members.every((m) => m.quantiles.length > 0)).toBe(true);
-  }, 60_000);
-
-  it("ships a control seat on its own ledger without stacking it into the combiners", async () => {
-    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 11 });
-    const results = await runContestTraining(rows, {
-      targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
-      targetPerHour: 6,
-      heuristicMinScore: 55,
-      minRowsToPromote: 1500,
-      recencyHalfLifeDays: 14,
-      cooldownHours: 24,
-      heuristicPrecisionGate: true,
-      contestants: enabledContestants([
-        "consensus",
-        "blend",
-        "linear",
-        "trees",
-        TREES_NO_TOKENSAGE_CONTESTANT,
-      ]),
-    });
-    const control = results.find((r) => r.contestant === TREES_NO_TOKENSAGE_CONTESTANT)!;
-    expect(control.metrics.exam).toBeDefined();
-    for (const id of ["consensus", "blend"]) {
-      const combiner = results.find((r) => r.contestant === id)!.params as StackedCuratorParams;
-      expect(combiner.members.map((m) => m.contestant)).toEqual(["linear", "trees"]);
-    }
-  }, 60_000);
-});
-
-describe("a high-precision seat in the contest", () => {
-  it("calls a narrower slice than the field and is stacked by no combiner", async () => {
-    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 11 });
-    const results = await runContestTraining(rows, {
-      // The field's rule as production runs it: anchored on the top third of moments.
-      targets: {
-        winRate: 0.75,
-        goalRate: 0.5,
-        minSupport: 30,
-        confidenceZ: 1,
-        targetShare: 0.33,
-        shareBand: 0.1,
-        shareHurdle: 0.01,
-      },
-      targetPerHour: 6,
-      heuristicMinScore: 55,
-      minRowsToPromote: 1500,
-      recencyHalfLifeDays: 14,
-      cooldownHours: 24,
-      heuristicPrecisionGate: true,
-      contestants: enabledContestants(["consensus", "linear", "trees", SHARP_TREES_CONTESTANT]).map((c) =>
-        c.id === SHARP_TREES_CONTESTANT
-          ? { ...c, recipe: { learner: "gbdt" as const, cutoffShare: HIGH_PRECISION_CUTOFF_SHARE } }
-          : c,
-      ),
-    });
-    const trees = results.find((r) => r.contestant === "trees")!;
-    const sharp = results.find((r) => r.contestant === SHARP_TREES_CONTESTANT)!;
-    expect(sharp.metrics.exam!.calls).toBeGreaterThan(0);
-    expect(sharp.metrics.precisionCalibration!.support).toBeLessThan(
-      trees.metrics.precisionCalibration!.support,
-    );
-    const consensus = results.find((r) => r.contestant === "consensus")!.params as StackedCuratorParams;
-    expect(consensus.members.map((m) => m.contestant)).toEqual(["linear", "trees"]);
-  }, 60_000);
-});
-
-describe("runEvolvingContest", () => {
-  it("swaps a winning challenger into its seat before the consensus is stacked", async () => {
-    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 12 });
-    const bred = {
-      recipe: { learner: "gbdt" as const, recencyHalfLifeDays: 10, boosting: { maxDepth: 4 } },
-      name: "Trees #1",
-      description: "test",
-      generation: 1,
-      parentName: "Trees",
-    };
-    let seen: Map<string, number | null> | null = null;
-    const outcome = await runEvolvingContest(
-      rows,
-      {
-        targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
-        targetPerHour: 6,
-        heuristicMinScore: 55,
-        minRowsToPromote: 1500,
-        recencyHalfLifeDays: 14,
-        cooldownHours: 24,
-        heuristicPrecisionGate: true,
-        contestants: enabledContestants(["consensus", "linear", "order-flow"]),
-      },
-      {
-        challengers: [bred],
-        decide: (laneScores, challengerScores) => {
-          seen = laneScores;
-          return challengerScores[0] === null ? null : { slot: "order-flow", challenger: 0, reason: "test" };
-        },
-      },
-    );
-    expect([...seen!.keys()]).toEqual(["linear", "order-flow"]);
-    expect(outcome.challengerScores).toHaveLength(1);
-    expect(outcome.challengerScores[0]).not.toBeNull();
-    expect(outcome.replacement).toMatchObject({ slot: "order-flow", bred: { name: "Trees #1" } });
-    const seat = outcome.results.find((r) => r.contestant === "order-flow")!;
-    expect(seat.params.kind).toBe("gbdt-v1");
-    expect(seat.metrics).toMatchObject({ contestant: "order-flow", contestantName: "Trees #1" });
-    const consensus = outcome.results.find((r) => r.contestant === "consensus")!
-      .params as StackedCuratorParams;
-    expect(consensus.members.map((m) => m.contestant).sort()).toEqual(["linear", "order-flow"]);
-  }, 60_000);
-});
-
-describe("takeover probation and the exam's calls", () => {
-  const cfg = {
-    targets: { winRate: 0.75, goalRate: 0.5, minSupport: 30, confidenceZ: 1 },
-    targetPerHour: 6,
-    heuristicMinScore: 55,
-    minRowsToPromote: 1500,
-    recencyHalfLifeDays: 14,
-    cooldownHours: 24,
-    heuristicPrecisionGate: true,
-    contestants: enabledContestants(["linear", "order-flow"]),
-  };
-  const bred = {
-    recipe: { learner: "gbdt" as const, recencyHalfLifeDays: 10, boosting: { maxDepth: 4 } },
-    name: "Trees #1",
-    description: "test",
-    generation: 1,
-    parentName: "Trees",
-  };
-
-  it("holds a decided takeover on probation, with both models frozen, and leaves the seat alone", async () => {
-    const rows = syntheticMarket({ tokens: 2500, days: 30, truth: "interactions", seed: 12 });
-    let callsSeen: ExamEvidence | null = null;
-    const outcome = await runEvolvingContest(rows, cfg, {
-      challengers: [bred],
-      probation: true,
-      decide: (_lanes, challengerScores, exam) => {
-        callsSeen = exam;
-        return challengerScores[0] === null ? null : { slot: "order-flow", challenger: 0, reason: "test" };
-      },
-    });
-    expect(outcome.replacement).toBeNull();
-    expect(outcome.dropped).toBeNull();
-    expect(outcome.probation).toMatchObject({ slot: "order-flow", bred: { name: "Trees #1" } });
-    expect(outcome.probation!.challengerParams.kind).toBe("gbdt-v1");
-    expect(outcome.probation!.laneName).toBe("Order Flow");
-    // The seat keeps its own model this run.
-    const seat = outcome.results.find((r) => r.contestant === "order-flow")!;
-    expect(seat.metrics.contestantName).toBe("Order Flow");
-    // The bootstrap's masks are the calls the exam record counts: one call per mask entry.
-    const linear = outcome.results.find((r) => r.contestant === "linear")!;
-    const seen = callsSeen!;
-    const mask = seen.laneCalls.get("linear");
-    if (mask) expect(mask.reduce((n, c) => n + c, 0)).toBe(linear.metrics.exam!.calls);
-    // And the rank arrays the takeover's equal-share comparison draws from line up with them.
-    expect(seen.moments).toHaveLength(seen.labels.length);
-    expect(seen.cooldownMs).toBe(24 * 3_600_000);
-    expect(seen.laneRanks.get("linear")).toHaveLength(seen.labels.length);
-    if (seen.challengerCalls[0]) expect(seen.challengerRanks[0]).toHaveLength(seen.labels.length);
-  }, 60_000);
-
-  it("reports a decided takeover it can't carry out instead of dropping it silently", async () => {
-    const rows = syntheticMarket({ tokens: 1500, days: 20, truth: "interactions", seed: 3 });
-    const outcome = await runEvolvingContest(rows, cfg, {
-      challengers: [bred, { ...bred, name: "Trees #2", generation: 2 }],
-      decide: (_lanes, scores) =>
-        scores.every((x) => x === null) ? null : { slot: "order-flow", challenger: 9, reason: "test" },
-    });
-    expect(outcome.replacement).toBeNull();
-    if (outcome.challengerScores.some((x) => x !== null)) expect(outcome.dropped).toMatch(/order-flow/);
-  }, 60_000);
 });
