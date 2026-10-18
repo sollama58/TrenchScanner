@@ -3,6 +3,7 @@ import { openSage } from "../sage";
 import { openWallet } from "../walletModal";
 import { useWalletNames } from "../walletNames";
 import { ExternalIcon, LinkIcon, SendIcon, WalletIcon, XLogoIcon } from "./Icons";
+import { XLinkPreview } from "./XLinkPreview";
 import type { SageRead } from "./SageView";
 import { WalletText } from "./WalletText";
 
@@ -311,10 +312,15 @@ export function SocialsCard({
             </span>
             <span className="tm-social-label">{r.label}</span>
             {r.url ? (
-              <a className="tm-social-link" href={r.url} target="_blank" rel="noopener noreferrer nofollow">
+              <XLinkPreview
+                className="tm-social-link"
+                href={r.url}
+                target="_blank"
+                rel="noopener noreferrer nofollow"
+              >
                 <span>{shown(r.url)}</span>
                 <ExternalIcon size={10} />
-              </a>
+              </XLinkPreview>
             ) : (
               <span className="faint small">{socials.unread ? "Not read yet" : "None linked"}</span>
             )}

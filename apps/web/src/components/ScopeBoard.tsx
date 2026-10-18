@@ -36,6 +36,7 @@ import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
 import { BrainIcon, FunnelIcon, SlidersIcon } from "./Icons";
+import { XLinkPreview } from "./XLinkPreview";
 import { SkeletonCards } from "./Charts";
 
 /** After a finger lifts, the board stays still this long before new rows drop in. */
@@ -498,7 +499,7 @@ export function ScopeRow({
             </span>
           )}
           {socials.map((l) => (
-            <a
+            <XLinkPreview
               key={l.key}
               className="scope-link"
               href={l.url}
@@ -508,7 +509,7 @@ export function ScopeRow({
               aria-label={`Open the coin's ${l.label}`}
             >
               <l.Icon size={11} />
-            </a>
+            </XLinkPreview>
           ))}
         </div>
       </div>

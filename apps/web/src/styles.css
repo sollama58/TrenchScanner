@@ -19084,3 +19084,254 @@ body:has(.util-toast) .bug-fab {
   outline-offset: 2px;
   border-radius: 6px;
 }
+
+/* X link previews (user ask 2026-10-18): the account or post behind a coin's X link, on hover
+   or a long press. Portaled to the body and placed by XLinkPreview.tsx. */
+.x-preview-link {
+  -webkit-touch-callout: none;
+}
+.x-preview {
+  position: fixed;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-s);
+  background: var(--surface-solid);
+  color: var(--ink);
+  box-shadow:
+    0 1px 0 var(--highlight) inset,
+    0 18px 40px -16px rgba(0, 0, 0, 0.55);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  cursor: auto;
+  animation: x-preview-in 0.14s ease-out;
+}
+.x-preview.above {
+  animation-name: x-preview-in-above;
+}
+@keyframes x-preview-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+@keyframes x-preview-in-above {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .x-preview {
+    animation: none;
+  }
+}
+.x-preview-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 10px;
+}
+.x-profile {
+  padding-top: 0;
+}
+.x-banner {
+  display: block;
+  width: calc(100% + 28px);
+  height: 84px;
+  margin: 0 -14px;
+  object-fit: cover;
+  background: var(--surface-3);
+}
+.x-banner-empty {
+  height: 52px;
+  background: linear-gradient(
+    120deg,
+    color-mix(in srgb, var(--brand-a) 35%, var(--surface-3)),
+    var(--surface-3)
+  );
+}
+.x-profile-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: -26px;
+}
+.x-avatar-ring {
+  flex: none;
+  display: inline-flex;
+  width: 56px;
+  height: 56px;
+  border: 3px solid var(--surface-solid);
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--surface-3);
+}
+.x-avatar-ring.small {
+  width: 36px;
+  height: 36px;
+  border-width: 0;
+}
+.x-avatar {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.x-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+.x-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-weight: 700;
+  font-size: 14px;
+}
+.x-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.x-verified {
+  flex: none;
+  color: #1d9bf0;
+}
+.x-handle,
+.x-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+.x-post-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.x-when {
+  margin-left: auto;
+  flex: none;
+}
+.x-text {
+  margin: 0;
+  color: var(--ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
+  overflow: hidden;
+}
+.x-profile .x-text {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}
+.x-media {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-3);
+}
+.x-media-img {
+  display: block;
+  width: 100%;
+  max-height: 180px;
+  object-fit: cover;
+}
+.x-media-tag {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.x-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.x-stat b {
+  color: var(--ink);
+  font-weight: 700;
+}
+.x-preview-note {
+  margin: 0;
+  padding: 14px;
+  color: var(--muted);
+}
+.x-preview-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.x-preview-open:hover,
+.x-preview-open:focus-visible {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.x-preview-skeleton {
+  display: flex;
+  gap: 10px;
+  padding: 14px;
+}
+.x-sk-avatar,
+.x-sk-lines span {
+  background: var(--surface-3);
+  animation: x-sk-pulse 1.2s ease-in-out infinite;
+}
+.x-sk-avatar {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+.x-sk-lines {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 3px;
+}
+.x-sk-lines span {
+  height: 9px;
+  border-radius: 5px;
+}
+.x-sk-lines span:nth-child(1) {
+  width: 45%;
+}
+.x-sk-lines span:nth-child(3) {
+  width: 70%;
+}
+@keyframes x-sk-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .x-sk-avatar,
+  .x-sk-lines span {
+    animation: none;
+  }
+}
