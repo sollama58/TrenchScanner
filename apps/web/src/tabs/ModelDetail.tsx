@@ -12,6 +12,7 @@ import type {
 import { IN_SAMPLE_LABEL, runExamRates } from "../api";
 import { CutoffCurve, HBarChart } from "../components/Charts";
 import { CloseIcon } from "../components/Icons";
+import { ModelPortrait } from "../components/ModelPortrait";
 import { cutoffPoints, perHourText } from "../cutoffCurve";
 import { toggledModels } from "../components/ModelPicker";
 import { ScoreBar } from "../components/ScoreBar";
@@ -198,14 +199,30 @@ function ModelDetail({
         {mine && <span className="badge">{guest ? "guest feed" : "in your feed"}</span>}
         {e.composite.warmingUp && <span className="badge">warming up</span>}
       </div>
-      <p className="muted small">{e.summary ?? e.description}</p>
+      {e.profile ? (
+        <ModelPortrait
+          profile={e.profile}
+          summary={e.summary ?? e.description}
+          liveCallsPct={weights.data?.cutoff.callsTopPct ?? null}
+        />
+      ) : (
+        <p className="muted small">{e.summary ?? e.description}</p>
+      )}
 
+      {e.rules && (
+        <>
+          <h3>The checks it runs</h3>
+          <RulesInUse rules={e.rules} now={now} />
+        </>
+      )}
+
+      <h3>How it&apos;s doing</h3>
       <div className="model-detail-score">
         <ScoreBar score={e.composite.score} band={e.composite.band ?? null} title="Score, 0 to 100" />
         {e.scoreExplained && <p className="faint small">{e.scoreExplained}</p>}
       </div>
 
-      <h3>Last {windowLong(days)}, live</h3>
+      <h4 className="model-sub">Last {windowLong(days)}, live</h4>
       <div className="model-figs">
         {/* The 2x lift is the board's hour-matched "vs market", the same figure the leaderboard
             ranks on; the 4x and 10x have no hour-matched market, so they show the window's
@@ -261,210 +278,210 @@ function ModelDetail({
       </p>
       {board.exitPlan && <p className="faint small">Profit follows one fixed exit plan: {board.exitPlan}</p>}
 
-      <h3>Every window</h3>
+      <h4 className="model-sub">Every window</h4>
       <WindowsTable entry={e} api={api} days={days} targets={t} />
-
-      <h3>Live against its exam</h3>
-      <div className="table-wrap">
-        <table className="model-compare">
-          <thead>
-            <tr>
-              <th />
-              <th className="r">Calls</th>
-              <th className="r">2x</th>
-              <th className="r">4x</th>
-              <th className="r">10x</th>
-              <th className="r">Avg profit</th>
-            </tr>
-          </thead>
-          <tbody>
-            <RecordRow name={`Live, ${windowShort(days)}`} r={live} t={t} />
-            <RecordRow name="Backtest exam" r={exam} t={t} />
-          </tbody>
-        </table>
-      </div>
-      {basis && (
-        <p className="faint small">
-          The score rests on {basis.evidenceCalls.toLocaleString()} calls&apos; worth of evidence:{" "}
-          {basis.liveCalls.toLocaleString()} graded live calls and {basis.backtestCalls.toLocaleString()} from
-          the backtest ({Math.round(e.composite.liveWeight * 100)}% live). Proven rates after the prior
-          misses: 2x {pct(basis.proven2xPct)}, 4x {pct(basis.proven4xPct)}
-          {basis.proven10xPct != null ? `, 10x ${pct(basis.proven10xPct, 1)}` : ""}.
-        </p>
-      )}
 
       <Weightings weights={weights.data} error={weights.error !== null} role={e.role} />
 
-      <h3>Its cutoffs</h3>
-      <CutoffSection run={latestRun} weights={weights.data} targets={t} />
+      <details className="model-more">
+        <summary>Under the hood: its exam, cutoffs and training history</summary>
 
-      {e.rules && (
-        <>
-          <h3>The checks it runs</h3>
-          <RulesInUse rules={e.rules} now={now} />
-        </>
-      )}
-
-      <h3>Latest exam</h3>
-      {latestRun ? (
-        <>
-          <p className="muted small">
-            Trained {ago(latestRun.createdAt, now)} as {LEARNER_NAME[latestRun.learner].toLowerCase()} on{" "}
-            {latestRun.trainingRows.toLocaleString()} graded moments.
-            {latestExam?.calls
-              ? latestExam.heldOut
-                ? ` At its live cutoff it made ${latestExam.calls} exam calls: ${pct(
-                    latestExam.winRatePct,
-                  )} doubled, ${pct(latestExam.goalRatePct)} hit 4x.`
-                : ` This run stored no held-out exam. At its live cutoff, ${IN_SAMPLE_LABEL}: ${latestExam.calls} calls, ${pct(
-                    latestExam.winRatePct,
-                  )} doubled, ${pct(latestExam.goalRatePct)} hit 4x, on the same calls the cutoff was picked on, so it reads high.`
-              : ""}
-            {latestRun.verdict ? ` ${latestRun.verdict.reason}` : ""}
+        <h3>Live against its exam</h3>
+        <div className="table-wrap">
+          <table className="model-compare">
+            <thead>
+              <tr>
+                <th />
+                <th className="r">Calls</th>
+                <th className="r">2x</th>
+                <th className="r">4x</th>
+                <th className="r">10x</th>
+                <th className="r">Avg profit</th>
+              </tr>
+            </thead>
+            <tbody>
+              <RecordRow name={`Live, ${windowShort(days)}`} r={live} t={t} />
+              <RecordRow name="Backtest exam" r={exam} t={t} />
+            </tbody>
+          </table>
+        </div>
+        {basis && (
+          <p className="faint small">
+            The score rests on {basis.evidenceCalls.toLocaleString()} calls&apos; worth of evidence:{" "}
+            {basis.liveCalls.toLocaleString()} graded live calls and {basis.backtestCalls.toLocaleString()}{" "}
+            from the backtest ({Math.round(e.composite.liveWeight * 100)}% live). Proven rates after the prior
+            misses: 2x {pct(basis.proven2xPct)}, 4x {pct(basis.proven4xPct)}
+            {basis.proven10xPct != null ? `, 10x ${pct(basis.proven10xPct, 1)}` : ""}.
           </p>
-          {latestRun.folds.length > 0 && (
+        )}
+
+        <h3>Its cutoffs</h3>
+        <CutoffSection run={latestRun} weights={weights.data} targets={t} />
+
+        <h3>Latest exam</h3>
+        {latestRun ? (
+          <>
+            <p className="muted small">
+              Trained {ago(latestRun.createdAt, now)} as {LEARNER_NAME[latestRun.learner].toLowerCase()} on{" "}
+              {latestRun.trainingRows.toLocaleString()} graded moments.
+              {latestExam?.calls
+                ? latestExam.heldOut
+                  ? ` At its live cutoff it made ${latestExam.calls} exam calls: ${pct(
+                      latestExam.winRatePct,
+                    )} doubled, ${pct(latestExam.goalRatePct)} hit 4x.`
+                  : ` This run stored no held-out exam. At its live cutoff, ${IN_SAMPLE_LABEL}: ${latestExam.calls} calls, ${pct(
+                      latestExam.winRatePct,
+                    )} doubled, ${pct(latestExam.goalRatePct)} hit 4x, on the same calls the cutoff was picked on, so it reads high.`
+                : ""}
+              {latestRun.verdict ? ` ${latestRun.verdict.reason}` : ""}
+            </p>
+            {latestRun.folds.length > 0 && (
+              <div className="table-wrap">
+                <table className="model-compare">
+                  <thead>
+                    <tr>
+                      <th>Test window</th>
+                      <th className="r">Random 2x</th>
+                      <th className="r">Calls</th>
+                      <th className="r">2x</th>
+                      <th className="r">4x</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {latestRun.folds.map((f) => {
+                      const side = latestRun.contestant === "rules" ? f.heuristic : f.model;
+                      return (
+                        <tr key={f.testFrom}>
+                          <td className="muted">
+                            {shortDate(f.testFrom)} – {shortDate(f.testTo)}
+                          </td>
+                          <td className="r num faint">{pct(f.baseWinRatePct, 1)}</td>
+                          <td className="r num">{side.emitted}</td>
+                          <td
+                            className={`r num ${rateTone(side.precisionPct, t.hitRate2xPct, side.emitted)}`}
+                            title={rateTitle(side.precisionPct, side.emitted)}
+                          >
+                            {pct(side.precisionPct)}
+                          </td>
+                          <td
+                            className={`r num ${rateTone(side.goalPrecisionPct, t.hitRate4xPct, side.emitted)}`}
+                          >
+                            {pct(side.goalPrecisionPct)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="faint small">
+            {e.model
+              ? `Trained ${ago(e.model.trainedAt, now)} on ${e.model.trainingRows.toLocaleString()} graded moments; that run is older than the history kept here.`
+              : e.role === "rules"
+                ? "Rules don't train; their checks are scored on the same exam as everyone else."
+                : "Not trained yet."}
+          </p>
+        )}
+
+        <h3>Previous iterations</h3>
+        {myRuns.length > 1 ? (
+          <>
+            <p className="faint small">
+              Every training run sits a fresh walk-forward exam; the active one is calling now. Hover a row
+              for its verdict.
+            </p>
             <div className="table-wrap">
               <table className="model-compare">
                 <thead>
                   <tr>
-                    <th>Test window</th>
-                    <th className="r">Random 2x</th>
-                    <th className="r">Calls</th>
+                    <th>Trained</th>
+                    <th className="r">Rows</th>
+                    <th>Status</th>
+                    <th className="r">Exam calls</th>
                     <th className="r">2x</th>
                     <th className="r">4x</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {latestRun.folds.map((f) => {
-                    const side = latestRun.contestant === "rules" ? f.heuristic : f.model;
-                    return (
-                      <tr key={f.testFrom}>
-                        <td className="muted">
-                          {shortDate(f.testFrom)} – {shortDate(f.testTo)}
-                        </td>
-                        <td className="r num faint">{pct(f.baseWinRatePct, 1)}</td>
-                        <td className="r num">{side.emitted}</td>
-                        <td
-                          className={`r num ${rateTone(side.precisionPct, t.hitRate2xPct, side.emitted)}`}
-                          title={rateTitle(side.precisionPct, side.emitted)}
-                        >
-                          {pct(side.precisionPct)}
-                        </td>
-                        <td
-                          className={`r num ${rateTone(side.goalPrecisionPct, t.hitRate4xPct, side.emitted)}`}
-                        >
-                          {pct(side.goalPrecisionPct)}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {(allRuns ? myRuns : myRuns.slice(0, RUN_ROWS)).map((r) => (
+                    <tr key={r.id} title={r.verdict?.reason}>
+                      <td className="muted">{ago(r.createdAt, now)}</td>
+                      <td className="r num">{r.trainingRows.toLocaleString()}</td>
+                      <td>
+                        <span className={`chip ${r.status === "active" ? "chip-model" : ""}`}>
+                          {r.status}
+                        </span>
+                      </td>
+                      <td className="r num">
+                        {runExamRates(r).calls ?? "–"}
+                        {runExamRates(r).calls != null && !runExamRates(r).heldOut && (
+                          <span className="faint" title={IN_SAMPLE_LABEL}>
+                            {" "}
+                            in-sample
+                          </span>
+                        )}
+                      </td>
+                      <td className="r num">{pct(runExamRates(r).winRatePct)}</td>
+                      <td className="r num">{pct(runExamRates(r).goalRatePct)}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
-          )}
-        </>
-      ) : (
-        <p className="faint small">
-          {e.model
-            ? `Trained ${ago(e.model.trainedAt, now)} on ${e.model.trainingRows.toLocaleString()} graded moments; that run is older than the history kept here.`
-            : e.role === "rules"
-              ? "Rules don't train; their checks are scored on the same exam as everyone else."
-              : "Not trained yet."}
-        </p>
-      )}
-
-      <h3>Previous iterations</h3>
-      {myRuns.length > 1 ? (
-        <>
+            {myRuns.length > RUN_ROWS && (
+              <button className="ghost small" onClick={() => setAllRuns((v) => !v)}>
+                {allRuns ? "Show fewer" : `Show all ${myRuns.length} runs`}
+              </button>
+            )}
+          </>
+        ) : (
           <p className="faint small">
-            Every training run sits a fresh walk-forward exam; the active one is calling now. Hover a row for
-            its verdict.
+            {myRuns.length === 1 ? "One training run so far." : "No training runs yet."}
           </p>
-          <div className="table-wrap">
-            <table className="model-compare">
-              <thead>
-                <tr>
-                  <th>Trained</th>
-                  <th className="r">Rows</th>
-                  <th>Status</th>
-                  <th className="r">Exam calls</th>
-                  <th className="r">2x</th>
-                  <th className="r">4x</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(allRuns ? myRuns : myRuns.slice(0, RUN_ROWS)).map((r) => (
-                  <tr key={r.id} title={r.verdict?.reason}>
-                    <td className="muted">{ago(r.createdAt, now)}</td>
-                    <td className="r num">{r.trainingRows.toLocaleString()}</td>
-                    <td>
-                      <span className={`chip ${r.status === "active" ? "chip-model" : ""}`}>{r.status}</span>
-                    </td>
-                    <td className="r num">
-                      {runExamRates(r).calls ?? "–"}
-                      {runExamRates(r).calls != null && !runExamRates(r).heldOut && (
-                        <span className="faint" title={IN_SAMPLE_LABEL}>
-                          {" "}
-                          in-sample
-                        </span>
-                      )}
-                    </td>
-                    <td className="r num">{pct(runExamRates(r).winRatePct)}</td>
-                    <td className="r num">{pct(runExamRates(r).goalRatePct)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {myRuns.length > RUN_ROWS && (
-            <button className="ghost small" onClick={() => setAllRuns((v) => !v)}>
-              {allRuns ? "Show fewer" : `Show all ${myRuns.length} runs`}
-            </button>
-          )}
-        </>
-      ) : (
-        <p className="faint small">
-          {myRuns.length === 1 ? "One training run so far." : "No training runs yet."}
-        </p>
-      )}
-      {seat.length > 0 ? (
-        <ol className="evo-list model-seat">
-          {seat.map((h) => (
-            <li
-              key={`${h.slot}:${h.generation}:${String(h.bornAt)}`}
-              className={h.retiredAt ? "retired" : ""}
-            >
-              <div className="row">
-                <strong>{h.name}</strong>
-                <span className={`chip ${h.retiredAt ? "" : "chip-model"}`}>
-                  {h.retiredAt
-                    ? `replaced ${ago(h.retiredAt, now)}`
-                    : h.generation === 0
-                      ? "founding recipe"
-                      : "in the seat now"}
-                </span>
-                <span className="faint small">
-                  {h.generation === 0 ? "founded" : `generation ${h.generation}, seated`} {ago(h.bornAt, now)}
-                </span>
-                {h.examScore !== null && (
-                  <span className="faint small num">exam {h.examScore.toFixed(0)}</span>
-                )}
-              </div>
-              <small className="muted">{h.description}</small>
-              {h.parentName && <small className="faint">Bred from {h.parentName}</small>}
-              {h.retiredReason && <small className="faint">{h.retiredReason}</small>}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        e.lane && (
-          <p className="faint small">
-            {e.lane.generation === 0
-              ? `The founding recipe, in its seat since ${ago(e.lane.bornAt, now)}.`
-              : `Generation ${e.lane.generation}${e.lane.parentName ? `, bred from ${e.lane.parentName}` : ""}, in its seat since ${ago(e.lane.bornAt, now)}.`}
-          </p>
-        )
-      )}
+        )}
+        {seat.length > 0 ? (
+          <ol className="evo-list model-seat">
+            {seat.map((h) => (
+              <li
+                key={`${h.slot}:${h.generation}:${String(h.bornAt)}`}
+                className={h.retiredAt ? "retired" : ""}
+              >
+                <div className="row">
+                  <strong>{h.name}</strong>
+                  <span className={`chip ${h.retiredAt ? "" : "chip-model"}`}>
+                    {h.retiredAt
+                      ? `replaced ${ago(h.retiredAt, now)}`
+                      : h.generation === 0
+                        ? "founding recipe"
+                        : "in the seat now"}
+                  </span>
+                  <span className="faint small">
+                    {h.generation === 0 ? "founded" : `generation ${h.generation}, seated`}{" "}
+                    {ago(h.bornAt, now)}
+                  </span>
+                  {h.examScore !== null && (
+                    <span className="faint small num">exam {h.examScore.toFixed(0)}</span>
+                  )}
+                </div>
+                <small className="muted">{h.description}</small>
+                {h.parentName && <small className="faint">Bred from {h.parentName}</small>}
+                {h.retiredReason && <small className="faint">{h.retiredReason}</small>}
+              </li>
+            ))}
+          </ol>
+        ) : (
+          e.lane && (
+            <p className="faint small">
+              {e.lane.generation === 0
+                ? `The founding recipe, in its seat since ${ago(e.lane.bornAt, now)}.`
+                : `Generation ${e.lane.generation}${e.lane.parentName ? `, bred from ${e.lane.parentName}` : ""}, in its seat since ${ago(e.lane.bornAt, now)}.`}
+            </p>
+          )
+        )}
+      </details>
 
       {!guest && <RecentCalls modelId={e.id} now={now} />}
 

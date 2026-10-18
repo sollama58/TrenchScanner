@@ -197,7 +197,7 @@ function mutateFeatures(
       have.add(pool[Math.floor(rng() * pool.length)]!);
     }
   }
-  // Every feature back in is the same as no subset - stored that way so names read "Linear".
+  // Every feature back in is the same as no subset - stored that way so names read "Formula".
   return have.size === all.length ? undefined : all.filter((f) => have.has(f));
 }
 
@@ -292,18 +292,21 @@ const sameSet = (names: readonly string[], set: readonly CandidateFeatureName[])
 const isOrderFlow = (names: readonly string[]) => sameSet(names, ORDER_FLOW_FEATURES);
 const isMomentum = (names: readonly string[]) => sameSet(names, MOMENTUM_FEATURES);
 
-/** The goal part of a bred lane's name, so an evolved seat still says what it trains for. */
+/**
+ * The goal part of a bred lane's name, so an evolved seat still says what it trains for. Return is
+ * the field's default goal, so it adds nothing (user ask 2026-10-17: simpler names).
+ */
 const GOAL_NAMES: Record<SeatGoal, string> = {
   "2x": "2x",
   "4x": "4x",
   "10x": "10x",
-  return: "Return",
+  return: "",
   safe: "Safe",
   moonshot: "Moonshot",
   catch: "Catcher",
 };
 
-/** The goal-family-and-traits part of a lane's name, e.g. "Return Deep Trees Recent". */
+/** The goal-family-and-traits part of a lane's name, e.g. "Deep Trees Recent" or "Safe Trees". */
 export function traitName(recipe: CuratorRecipe, baseHalfLifeDays: number): string {
   const r = normalizeRecipe(recipe, baseHalfLifeDays);
   let family: string;
@@ -322,11 +325,12 @@ export function traitName(recipe: CuratorRecipe, baseHalfLifeDays: number): stri
   } else if (r.featureNames && isMomentum(r.featureNames)) {
     family = "Momentum";
   } else {
-    family = r.featureNames ? "Lean Linear" : "Linear";
+    family = r.featureNames ? "Lean Formula" : "Formula";
   }
   const hl = r.recencyHalfLifeDays!;
   const memory = hl <= 4 ? " Recent" : hl >= 30 ? " Patient" : "";
-  return (r.goal ? `${GOAL_NAMES[r.goal]} ` : "") + (r.twoStage ? "Survivor " : "") + family + memory;
+  const goal = r.goal ? GOAL_NAMES[r.goal] : "";
+  return (goal ? `${goal} ` : "") + (r.twoStage ? "Survivor " : "") + family + memory;
 }
 
 const fmtDays = (d: number) => `${Number.isInteger(d) ? d : d.toFixed(1)} day${d === 1 ? "" : "s"}`;
@@ -438,22 +442,32 @@ export function withLanes(specs: readonly ContestantSpec[], lanes: readonly Lane
       ...s,
       name: goalNamed(lane),
       description: lane.description,
-      summary: plainSummary(lane.recipe, lane.parentName),
+      summary: plainSummary(lane.recipe, lane.parentName && shownLaneName(lane.parentName)),
       recipe: lane.recipe,
     };
   });
 }
 
 /**
- * A lane's name with its goal in front (GOAL_NAMES): lanes bred before goals existed (2026-10-17)
- * were stored as "Deep Trees #3", and keep that name in the table; they show as "Return Deep
- * Trees #3". A name that already starts with its goal is left as it is.
+ * A stored lane name (or a "parent × mate" pair of them) under the simpler names, without the goal
+ * prefix goalNamed adds: "Return Lean Linear #7" shows as "Lean Formula #7".
+ */
+export function shownLaneName(name: string): string {
+  return name.replace(/(^|× )Return /g, "$1").replace(/\bLinear\b/g, "Formula");
+}
+
+/**
+ * A lane's stored name as people see it, under the simpler names of 2026-10-17: a stored "Return "
+ * prefix is dropped (the default goal says nothing), "Linear" reads "Formula", and any other goal
+ * goes in front (GOAL_NAMES) when the stored name lacks it - lanes bred before goals existed were
+ * stored as "Deep Trees #3". The table keeps the stored name; only the shown one changes.
  */
 export function goalNamed(lane: Pick<Lane, "name" | "recipe">): string {
+  const name = shownLaneName(lane.name);
   const goal = lane.recipe.goal;
-  if (goal === undefined) return lane.name;
-  const prefix = GOAL_NAMES[goal];
-  return lane.name.startsWith(`${prefix} `) ? lane.name : `${prefix} ${lane.name}`;
+  const prefix = goal === undefined ? "" : GOAL_NAMES[goal];
+  if (!prefix) return name;
+  return name.startsWith(`${prefix} `) ? name : `${prefix} ${name}`;
 }
 
 /** A lane as selection sees it: its blended leaderboard score, and this run's exam on its own. */
