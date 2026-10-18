@@ -75,8 +75,7 @@ export function WalletMarksPicker() {
         SOL
       </label>
       <p className="faint small check-hint">
-        A filled ring is a buy, a hollow one a sale, bigger for more SOL. Never under {MIN_SOL_FLOOR} SOL;
-        your own trades always show.
+        A filled ring is a buy, a hollow one a sale, bigger for more SOL. Never under {MIN_SOL_FLOOR} SOL.
       </p>
     </div>
   );
