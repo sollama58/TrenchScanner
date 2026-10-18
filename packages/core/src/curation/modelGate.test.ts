@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   gateCriteriaUncheckedOffline,
+  gateInputOnsets,
   parseModelGate,
   passesModelGate,
   passesModelGateOnFeatures,
+  unrecordedGateInputs,
 } from "./modelGate.js";
 import { buildCandidateFeatures } from "./features.js";
 import { EMPTY_TRADE_FLOW } from "./tradeFlow.js";
@@ -84,6 +86,35 @@ describe("model gates", () => {
       const offline = passesModelGateOnFeatures(buildCandidateFeatures(scored), gate);
       expect([name, offline]).toEqual([name, passesModelGate(scored, gate)]);
     }
+  });
+
+  it("skips a criterion on an input not recorded yet when the row was banked", () => {
+    const stored = buildCandidateFeatures(passing);
+    // A row banked before the launchpad and the first buyers' holding were recorded.
+    const older = { ...stored, launchpadStonks: null, firstBuyersHoldingCut: null };
+    const newer = new Date("2026-10-17T00:00:00Z");
+    const rows = [
+      { anchorAt: new Date("2026-10-10T00:00:00Z"), features: older },
+      { anchorAt: newer, features: stored },
+    ];
+    const onsets = gateInputOnsets(rows);
+    const unrecorded = unrecordedGateInputs(rows[0]!.anchorAt, onsets);
+    expect([...unrecorded].sort()).toEqual(["firstBuyersHoldingCut", "launchpadStonks"]);
+    expect(passesModelGateOnFeatures(older, gate)).toBe(false);
+    expect(passesModelGateOnFeatures(older, gate, unrecorded)).toBe(true);
+    // A launchpad not recorded yet reads as Pump.fun, the only one scanned then.
+    expect(passesModelGateOnFeatures(older, { ...gate, launchpads: ["stonks"] }, unrecorded)).toBe(false);
+    // Once the input is recorded, an unknown reading fails again, as it does live.
+    expect(unrecordedGateInputs(newer, onsets).size).toBe(0);
+    expect(
+      passesModelGateOnFeatures(
+        { ...stored, firstBuyersHoldingCut: null },
+        gate,
+        unrecordedGateInputs(newer, onsets),
+      ),
+    ).toBe(false);
+    // The other criteria still hold on the older row.
+    expect(passesModelGateOnFeatures({ ...older, top10HolderPct: 50 }, gate, unrecorded)).toBe(false);
   });
 
   it("names the criteria a stored row can't be checked against", () => {
