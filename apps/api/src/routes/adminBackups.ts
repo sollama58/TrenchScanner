@@ -22,11 +22,19 @@ import {
   ModelBackupError,
   type Env,
 } from "@trenchscanner/core";
+import { requireAdminConfirmation } from "../tradeConfirm.js";
 
 const logger = createLogger("admin-backups");
 
 /** A backup is a few MB at most today; generous room for a much bigger model field. */
 const IMPORT_BODY_LIMIT = 64 * 1024 * 1024;
+
+/**
+ * Backups live in the same small Postgres, and pinned ones are never pruned: a cap on pins, and
+ * an hourly cap on taking and importing, keep a stuck button or a stolen session from filling it.
+ */
+const MAX_PINNED_BACKUPS = 10;
+const BACKUP_WRITE_LIMIT = { rateLimit: { max: 10, timeWindow: "1 hour" } };
 
 const createSchema = z.object({ note: z.string().trim().max(200).optional() });
 const patchSchema = z.object({
@@ -84,7 +92,7 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
     };
   });
 
-  app.post("/model-backups", async (request, reply) => {
+  app.post("/model-backups", { config: BACKUP_WRITE_LIMIT }, async (request, reply) => {
     const parsed = createSchema.safeParse(request.body ?? {});
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
@@ -153,7 +161,9 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
     };
   });
 
+  // Every user's wallet, Telegram chats and trading rows: a wallet signature, in the query.
   app.get("/table-backups/:id/download", async (request, reply) => {
+    if (!(await requireAdminConfirmation(request, reply))) return;
     const { id } = request.params as { id: string };
     try {
       const loaded = await loadTableBackupData(id);
@@ -195,41 +205,53 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
     }
   });
 
-  app.post("/model-backups/import", { bodyLimit: IMPORT_BODY_LIMIT }, async (request, reply) => {
-    const body = request.body;
-    const bytes = Buffer.isBuffer(body)
-      ? body
-      : typeof body === "object" && body !== null
-        ? Buffer.from(JSON.stringify(body), "utf8")
-        : null;
-    if (!bytes || bytes.length === 0)
-      return reply.code(400).send({ error: "send the backup file as the body" });
-    try {
-      const payload = decodeBackup(bytes);
-      const stored = await storeBackupPayload(
-        payload,
-        "imported",
-        `Imported from a ${payload.kind} backup of ${payload.createdAt.slice(0, 16).replace("T", " ")} UTC`,
-      );
-      logger.info("model backup imported", {
-        id: stored.id,
-        from: payload.createdAt,
-        by: request.user!.walletAddress,
-      });
-      return stored;
-    } catch (err) {
-      if (err instanceof ModelBackupError) return reply.code(422).send({ error: err.message });
-      throw err;
-    }
-  });
+  app.post(
+    "/model-backups/import",
+    { bodyLimit: IMPORT_BODY_LIMIT, config: BACKUP_WRITE_LIMIT },
+    async (request, reply) => {
+      const body = request.body;
+      const bytes = Buffer.isBuffer(body)
+        ? body
+        : typeof body === "object" && body !== null
+          ? Buffer.from(JSON.stringify(body), "utf8")
+          : null;
+      if (!bytes || bytes.length === 0)
+        return reply.code(400).send({ error: "send the backup file as the body" });
+      try {
+        const payload = decodeBackup(bytes);
+        const stored = await storeBackupPayload(
+          payload,
+          "imported",
+          `Imported from a ${payload.kind} backup of ${payload.createdAt.slice(0, 16).replace("T", " ")} UTC`,
+        );
+        logger.info("model backup imported", {
+          id: stored.id,
+          from: payload.createdAt,
+          by: request.user!.walletAddress,
+        });
+        return stored;
+      } catch (err) {
+        if (err instanceof ModelBackupError) return reply.code(422).send({ error: err.message });
+        throw err;
+      }
+    },
+  );
 
   app.patch("/model-backups/:id", async (request, reply) => {
     const { id } = request.params as { id: string };
     const parsed = patchSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
-    const found = await prisma.modelBackup.findUnique({ where: { id }, select: { id: true } });
+    const found = await prisma.modelBackup.findUnique({ where: { id }, select: { id: true, pinned: true } });
     if (!found) return reply.code(404).send({ error: "no such backup" });
+    if (parsed.data.pinned && !found.pinned) {
+      const pinned = await prisma.modelBackup.count({ where: { pinned: true } });
+      if (pinned >= MAX_PINNED_BACKUPS) {
+        return reply.code(409).send({
+          error: `${pinned} backups are pinned already: unpin one first (at most ${MAX_PINNED_BACKUPS}).`,
+        });
+      }
+    }
     return prisma.modelBackup.update({
       where: { id },
       data: {
@@ -246,6 +268,9 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
     if (!parsed.success) {
       return reply.code(400).send({ error: 'send {"confirm": true} to restore' });
     }
+    // A restore puts the backup's models and AI playbook in charge, and an imported file's hash
+    // is its own: so it takes the wallet's signature over this exact request.
+    if (!(await requireAdminConfirmation(request, reply))) return;
     try {
       const result = await restoreModelBackup(id, {
         actor: request.user!.walletAddress,

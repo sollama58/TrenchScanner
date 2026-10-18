@@ -2563,6 +2563,26 @@ model TradingWithdrawal {
 
 /// An admin's "retrain now" (Admin tab): the trainer polls for an unstarted row, stamps startedAt
 /// and runs curator training at once instead of waiting for its next interval slot.
+/// Every admin write (POST/PUT/PATCH/DELETE under /admin), who made it and how it ended: the
+/// lasting record Render's short-lived logs aren't (2026-10-18 admin panel audit). Written by the
+/// API's onResponse hook (apps/api/src/adminActionLog.ts) and read by Admin > Access.
+model AdminAction {
+  id         String   @id @default(cuid())
+  at         DateTime @default(now())
+  /// The admin wallet whose session made the request.
+  wallet     String
+  /// Set when the request came from a paired phone.
+  deviceId   String?
+  method     String
+  /// The route pattern, e.g. /admin/whitelist/:walletAddress.
+  route      String
+  /// The route's params and a capped copy of the JSON body (no confirmation signature).
+  detail     Json?
+  statusCode Int
+
+  @@index([at])
+}
+
 model CuratorRetrainRequest {
   id          String    @id @default(cuid())
   requestedAt DateTime  @default(now())

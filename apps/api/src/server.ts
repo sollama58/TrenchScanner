@@ -71,6 +71,7 @@ import { RouteTimings } from "./routeTimings.js";
 import { fastifyLogger } from "./fastifyLogger.js";
 import { liveCurves, liveCurvesFor, setLiveCurves } from "./liveCurve.js";
 import { SolPrice } from "./solPrice.js";
+import { recordAdminActions } from "./adminActionLog.js";
 
 const logger = createLogger("api");
 
@@ -631,12 +632,14 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
   await app.register(registerStatsRoutes, { prefix: "/stats", env, timings, liveRefresher });
   await app.register(registerStatsModelRoutes, { prefix: "/stats", env });
-  await app.register(registerAdminRoutes, { prefix: "/admin", env });
+  // Every admin write lands in AdminAction (adminActionLog.ts), in each /admin plugin below.
+  await app.register(registerAdminRoutes, { prefix: "/admin", env, admins });
   // Same /admin prefix and the same authenticateAdmin gate, registered separately only to keep
   // the subscription surface in its own readable block - see routes/admin.ts.
   await app.register(
     async (instance) => {
       instance.addHook("preHandler", instance.authenticateAdmin);
+      recordAdminActions(instance, admins);
       await registerAdminSubscriptionRoutes(instance);
       // Burn Credits: the ratio, each utility's cost, grants and the ledger.
       await registerAdminCreditRoutes(instance);
@@ -653,6 +656,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       instance.addHook("preHandler", instance.authenticateAdmin);
+      recordAdminActions(instance, admins);
       await registerAdminOpsRoutes(instance, { env, timings, liveRefresher });
       // TokenSage, the safety screen, training history, filters and outside lookups.
       await registerAdminInsightRoutes(instance);
@@ -675,6 +679,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(
     async (instance) => {
       instance.addHook("onRequest", instance.authenticateAdmin);
+      recordAdminActions(instance, admins);
       await registerAdminBackupRoutes(instance, { env });
     },
     { prefix: "/admin" },

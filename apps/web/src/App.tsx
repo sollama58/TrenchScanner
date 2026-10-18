@@ -211,6 +211,8 @@ export function App() {
     invalidate();
     resetSettings();
     closeTokenModal();
+    // The form is lazy-loaded; this fetches the same chunk the bug button does.
+    void import("./components/BugReportDialog").then((m) => m.clearBugReportDraft()).catch(() => undefined);
     setSession({ state: "signed-out" });
   };
 

@@ -5,7 +5,8 @@ import { prisma } from "@trenchscanner/core";
 /**
  * Admin announcements: a message an admin posts from the Admin tab to every visitor's dashboard.
  * One shows at a time - posting a new one ends the one before it - until it is ended by hand or
- * its expiry passes. Dismissal is the browser's business (it remembers the ids it closed), so a
+ * its expiry passes. Ending and replacing name the announcement the admin was looking at, so a
+ * newer one posted from another tab is never taken down unseen (409 instead). Dismissal is the browser's business (it remembers the ids it closed), so a
  * new announcement shows again to everyone.
  */
 
@@ -23,7 +24,13 @@ const createSchema = z.object({
     .positive()
     .max(90 * 24)
     .optional(),
+  // The id the admin's screen shows as current (null: none). Absent skips the check.
+  replaces: z.string().min(1).nullable().optional(),
 });
+
+const endSchema = z.object({ id: z.string().min(1, "id is required") });
+
+const STALE_ERROR = "The current announcement changed since you loaded this page. Reload and try again.";
 
 const historyQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -37,9 +44,11 @@ export interface PublicAnnouncement {
   expiresAt: Date | null;
 }
 
+type Db = Pick<typeof prisma, "announcement">;
+
 /** The announcement showing right now, if any. */
-async function currentAnnouncement(now = new Date()): Promise<PublicAnnouncement | null> {
-  return prisma.announcement.findFirst({
+async function currentAnnouncement(now = new Date(), db: Db = prisma): Promise<PublicAnnouncement | null> {
+  return db.announcement.findFirst({
     where: { endedAt: null, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
     orderBy: { createdAt: "desc" },
     select: { id: true, message: true, severity: true, createdAt: true, expiresAt: true },
@@ -88,9 +97,12 @@ export async function registerAdminAnnouncementRoutes(app: FastifyInstance) {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    const { message, severity, expiresInHours } = parsed.data;
+    const { message, severity, expiresInHours, replaces } = parsed.data;
     const now = new Date();
     const created = await prisma.$transaction(async (tx) => {
+      if (replaces !== undefined && ((await currentAnnouncement(now, tx))?.id ?? null) !== replaces) {
+        return null;
+      }
       await tx.announcement.updateMany({ where: { endedAt: null }, data: { endedAt: now } });
       return tx.announcement.create({
         data: {
@@ -101,19 +113,27 @@ export async function registerAdminAnnouncementRoutes(app: FastifyInstance) {
         },
       });
     });
+    if (!created) return reply.code(409).send({ error: STALE_ERROR });
     forgetCached();
     request.log.info({ id: created.id, by: request.user!.walletAddress }, "posted an announcement");
     return created;
   });
 
-  /** Ends whatever is showing. */
-  app.post("/announcements/end", async (request) => {
-    const result = await prisma.announcement.updateMany({
-      where: { endedAt: null },
-      data: { endedAt: new Date() },
+  /** Ends the announcement with this id, only while it is still the one showing. */
+  app.post("/announcements/end", async (request, reply) => {
+    const parsed = endSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { id } = parsed.data;
+    const result = await prisma.$transaction(async (tx) => {
+      const now = new Date();
+      if ((await currentAnnouncement(now, tx))?.id !== id) return null;
+      return tx.announcement.updateMany({ where: { id, endedAt: null }, data: { endedAt: now } });
     });
+    if (!result?.count) return reply.code(409).send({ error: STALE_ERROR });
     forgetCached();
-    request.log.info({ ended: result.count, by: request.user!.walletAddress }, "ended the announcement");
+    request.log.info({ id, by: request.user!.walletAddress }, "ended the announcement");
     return { ended: result.count };
   });
 }

@@ -19,6 +19,10 @@ import { prisma } from "@trenchscanner/core";
  * a signature for one request is worthless for any other, and spends the nonce.
  *
  * Paper trading signs nothing and needs none of this.
+ *
+ * The same flow guards the admin actions a stolen session could do the most harm with (user
+ * decision after the 2026-10-18 admin panel audit): the AI reviewer switch to "live", a model
+ * restore, and a table backup download. See requireAdminConfirmation.
  */
 
 /** How long a confirmation may sit between the challenge and the request it signs. */
@@ -31,8 +35,9 @@ export const confirmationSchema = z.object({
 });
 
 const challengeSchema = z.object({
-  method: z.enum(["POST", "PUT", "PATCH", "DELETE"]),
-  path: z.string().regex(/^\/trading\/[A-Za-z0-9/_-]{1,200}$/),
+  // GET only for a download (an admin table backup), whose confirmation rides in the query.
+  method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
+  path: z.string().regex(/^\/(trading|admin)\/[A-Za-z0-9/_-]{1,200}$/),
   body: z.record(z.string(), z.unknown()).default({}),
 });
 
@@ -58,6 +63,13 @@ export function requestDigest(method: string, path: string, body: Record<string,
 
 /** What the wallet is asked to approve, in words, from the route. */
 export function actionLabel(method: string, path: string): string {
+  if (path.startsWith("/admin/")) {
+    const rest = path.slice("/admin/".length);
+    if (rest === "ai/switch") return "Change the AI reviewer switch";
+    if (/^model-backups\/[^/]+\/restore$/.test(rest)) return "Restore models from a backup";
+    if (/^table-backups\/[^/]+\/download$/.test(rest)) return "Download a table backup (every user's data)";
+    return `${method.toUpperCase()} ${path}`;
+  }
   const server = path.startsWith("/trading/server/");
   const rest = path.replace(/^\/trading\/(server\/)?/, "");
   const whose = server ? " (server wallet)" : "";
@@ -80,7 +92,9 @@ export function confirmationMessage(input: {
   issuedAt: Date;
 }): string {
   return [
-    "TrenchScanner trading bot: confirm this action",
+    input.path.startsWith("/admin/")
+      ? "TrenchScanner admin: confirm this action"
+      : "TrenchScanner trading bot: confirm this action",
     "",
     actionLabel(input.method, input.path),
     "",
@@ -130,11 +144,15 @@ export async function requireTradeConfirmation(
   request: FastifyRequest,
   reply: FastifyReply,
 ): Promise<boolean> {
-  const body = (request.body ?? {}) as Record<string, unknown>;
-  const parsed = confirmationSchema.safeParse(body.confirmation);
+  // A GET (a download) has no body: its confirmation comes in the query and it signs an empty one.
+  const isGet = request.method === "GET";
+  const body = isGet ? {} : ((request.body ?? {}) as Record<string, unknown>);
+  const parsed = confirmationSchema.safeParse(isGet ? request.query : body.confirmation);
   if (!parsed.success) {
     await reply.code(428).send({
-      error: "Approve this in your wallet: every trading bot action needs a fresh signature.",
+      error: pathOf(request).startsWith("/admin/")
+        ? "Approve this in your wallet: this admin action needs a fresh signature."
+        : "Approve this in your wallet: every trading bot action needs a fresh signature.",
       code: "confirmation_required",
     });
     return false;
@@ -178,4 +196,17 @@ export async function requireTradeConfirmation(
   });
   if (spent.count !== 1) return refuse("already used");
   return true;
+}
+
+/**
+ * requireTradeConfirmation for the admin actions that need one, except from a paired phone: an
+ * admin's paired phone may do everything without signing (user decision, 2026-10-18), since it has
+ * no wallet to sign with. Its sessions last at most ADMIN_SESSION_MAX_AGE_MS.
+ */
+export async function requireAdminConfirmation(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<boolean> {
+  if (request.user?.deviceId) return true;
+  return requireTradeConfirmation(request, reply);
 }

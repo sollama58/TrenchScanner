@@ -92,6 +92,13 @@ export function CreditsAdmin() {
   );
 }
 
+/** The grant confirmation, naming the whole address: a short one can't show a mistyped middle. */
+export function grantCreditsText(wallet: string, count: number): string {
+  return count < 0
+    ? `Take ${n(-count)} credits back from ${wallet}?`
+    : `Award ${wallet} ${n(count)} Burn Credit${count === 1 ? "" : "s"}?`;
+}
+
 /** The Save prices confirmation: each setting as old → new, with the unchanged ones marked so. */
 export function pricesChangeText(prices: CreditsAdminView["prices"], next: number[]): string {
   const rows: [string, number, number | undefined][] = [
@@ -181,12 +188,7 @@ function Grant({ onDone }: { onDone: () => void }) {
   const [result, setResult] = useState<string | null>(null);
   const count = Number(credits);
   const grant = async () => {
-    const who = shortAddress(wallet.trim());
-    const question =
-      count < 0
-        ? `Take ${n(-count)} credits back from ${who}?`
-        : `Award ${who} ${n(count)} Burn Credit${count === 1 ? "" : "s"}?`;
-    if (!window.confirm(question)) return;
+    if (!window.confirm(grantCreditsText(wallet.trim(), count))) return;
     setBusy(true);
     setResult(null);
     try {

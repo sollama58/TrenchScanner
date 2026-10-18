@@ -4,7 +4,7 @@ import { invalidate } from "../cache";
 import { shortAddress } from "../format";
 import { usePolling } from "../hooks";
 import { BugIcon, StarIcon, TrashIcon } from "../components/Icons";
-import { REPORT_COUNTS_PATH, type ReportCounts } from "../components/AdminReportsBadge";
+import { REPORT_COUNTS_PATH, refreshReportCounts, type ReportCounts } from "../components/AdminReportsBadge";
 import { Load, Panel, Tag, Wallet, when } from "./adminShared";
 
 type Status = "new" | "seen" | "done";
@@ -109,6 +109,8 @@ export function FeedbackAdmin() {
     invalidate(REPORT_COUNTS_PATH);
     invalidate("/admin/feedback?");
     q.reload();
+    // The badges on the Admin tab button are already mounted: dropping the cache alone leaves them stale.
+    refreshReportCounts();
   };
 
   const filters: { id: StatusFilter; label: string }[] = [

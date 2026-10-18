@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { burnCreditPrices, grantCredits, prisma, saveBurnCreditPrices } from "@trenchscanner/core";
+import {
+  burnCreditPrices,
+  CreditGrantError,
+  grantCredits,
+  prisma,
+  saveBurnCreditPrices,
+} from "@trenchscanner/core";
 
 /**
  * Burn Credits in the Admin tab (routes registered behind authenticateAdmin, under /admin):
@@ -88,7 +94,13 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
     }
     const { wallet, delta, note } = parsed.data;
     const by = request.user!.walletAddress;
-    const balance = await grantCredits(wallet, delta, note ? `${note} (by ${by})` : `by ${by}`);
+    let balance: number;
+    try {
+      balance = await grantCredits(wallet, delta, note ? `${note} (by ${by})` : `by ${by}`);
+    } catch (err) {
+      if (err instanceof CreditGrantError) return reply.code(409).send({ error: err.message });
+      throw err;
+    }
     request.log.info({ wallet, delta, by }, "granted burn credits by hand");
     return { wallet, balance };
   });

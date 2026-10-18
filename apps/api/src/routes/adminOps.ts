@@ -17,6 +17,7 @@ import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
 import { SharedCache } from "../sharedCache.js";
 import { summarizeHeartbeat } from "./health.js";
+import { issueTradeConfirmation, requireAdminConfirmation } from "../tradeConfirm.js";
 import {
   buildDbReport,
   buildHitRateReport,
@@ -178,11 +179,21 @@ export async function registerAdminOpsRoutes(
    * admins only and never acting on the feed or a live bot) or "live" (AI_REVIEW_MODE in full).
    * The worker picks a change up within a minute, no redeploy.
    */
+  /** The text a wallet signs to approve a guarded admin action (tradeConfirm.ts). */
+  app.post(
+    "/confirm",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => issueTradeConfirmation(request, reply),
+  );
+
   app.put("/ai/switch", async (request, reply) => {
     const parsed = aiSwitchSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
+    // "live" lets a live trading bot buy on the AI's verdicts, so it takes the wallet's signature
+    // like every other bot action (tradeConfirm.ts). Turning it down never does.
+    if (parsed.data.state === "live" && !(await requireAdminConfirmation(request, reply))) return;
     const by = request.user!.walletAddress;
     const state = await setAiReviewerSwitch(parsed.data.state, by);
     request.log.info({ state, by }, "ai reviewer switch changed");
