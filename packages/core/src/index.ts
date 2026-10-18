@@ -32,6 +32,7 @@ export * from "./datasources/pumpLaunch.js";
 export * from "./datasources/pumpSwapPool.js";
 export * from "./datasources/walletIdentity.js";
 export * from "./datasources/solanaTracker.js";
+export * from "./datasources/xAvatar.js";
 export * from "./datasources/launchBuyers.js";
 export * from "./wallets/tradeTape.js";
 export * from "./wallets/riskScore.js";

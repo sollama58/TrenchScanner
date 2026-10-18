@@ -170,7 +170,14 @@ export function withTrackedNames(
   for (const t of tracked) {
     if (!asked.has(t.wallet)) continue;
     const before = names[t.wallet];
-    out[t.wallet] = before?.service ? { ...trackedName(t), service: true } : trackedName(t);
+    const own = trackedName(t);
+    // A wallet they labeled KOL keeps the roster's X picture, if it has one; a label alone never fetches one.
+    const avatar = own.source === "kol" ? before?.avatar : undefined;
+    out[t.wallet] = {
+      ...own,
+      ...(before?.service ? { service: true as const } : {}),
+      ...(avatar ? { avatar } : {}),
+    };
   }
   return out;
 }

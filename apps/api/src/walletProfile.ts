@@ -7,6 +7,7 @@ import {
   type PossibleSide,
 } from "./possibleSides.js";
 import { loadTrackedSides, mergeSides, type TrackedWallet } from "./trackedWallets.js";
+import { readKolAvatars } from "./kolRoster.js";
 import {
   prisma,
   isHotFunder,
@@ -110,6 +111,8 @@ export interface WalletProfile {
   kol: {
     name: string | null;
     twitter: string | null;
+    /** Its X picture, as a path on this API (kolRoster.ts); null shows none. */
+    avatar: string | null;
     realizedPnlUsd: number | null;
     winRate: number | null;
     /** On a Known Side: the KOL's main wallet and its name (KolWallet.mainWallet). */
@@ -595,7 +598,12 @@ export async function loadWalletProfile(
     firstSeenIsFloor = true;
   }
 
-  const [outside, sides, kolSides] = await Promise.all([identityRead, sidesRead, kolSidesRead]);
+  const [outside, sides, kolSides, avatars] = await Promise.all([
+    identityRead,
+    sidesRead,
+    kolSidesRead,
+    kol?.twitter ? readKolAvatars([kol.twitter]) : new Map<string, string>(),
+  ]);
   const ownLabels = walletLabels({
     wallet,
     risk,
@@ -632,6 +640,7 @@ export async function loadWalletProfile(
       ? {
           name: kol.name,
           twitter: kol.twitter,
+          avatar: [...avatars.values()][0] ?? null,
           realizedPnlUsd: kol.realizedPnlUsd,
           winRate: kol.winRate,
           knownSideOf: kol.mainWallet

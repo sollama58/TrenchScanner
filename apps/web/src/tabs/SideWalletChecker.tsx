@@ -9,6 +9,7 @@ import { SideMatch } from "./SideMatch";
 import { Skeleton } from "../components/Charts";
 import { LoadingNote } from "../components/Loading";
 import { WalletWebButton } from "../components/WalletWeb";
+import { KolAvatar } from "../components/KolAvatar";
 import {
   ChevronDownIcon,
   CheckIcon,
@@ -85,6 +86,8 @@ interface SideLeaderboard {
     wallet: string;
     name: string | null;
     twitter: string | null;
+    /** Its X picture's path on the API; null or absent (older API builds) shows its letter. */
+    avatar?: string | null;
     /** Another wallet of a KOL whose main wallet is set: that main wallet. Absent from older API builds. */
     knownSideOf?: { wallet: string; name: string | null } | null;
     coins: Record<SideWindow, number>;
@@ -340,9 +343,15 @@ export function SideWalletChecker() {
                     >
                       <span className={`side-rank num${rank <= 3 ? ` top top-${rank}` : ""}`}>{rank}</span>
                       <span className="side-who">
-                        <span className="side-avatar" aria-hidden="true">
-                          {initial(name)}
-                        </span>
+                        <KolAvatar
+                          src={k.avatar}
+                          className="side-avatar side-avatar-pic"
+                          fallback={
+                            <span className="side-avatar" aria-hidden="true">
+                              {initial(name)}
+                            </span>
+                          }
+                        />
                         <span className="side-who-text">
                           <strong>{name}</strong>
                           <span className="faint small num">

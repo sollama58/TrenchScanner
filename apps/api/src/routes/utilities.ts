@@ -467,6 +467,8 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
           wallet: r.wallet,
           name: names.get(r.wallet)?.name ?? null,
           twitter: names.get(r.wallet)?.twitter ?? null,
+          // Its X picture, served by this API (GET /kol-avatars/:handle); null shows its letter.
+          avatar: names.get(r.wallet)?.avatar ?? null,
           // A Known Side of another KOL on the roster (core's KOL_MAINS): its main wallet and name.
           knownSideOf: names.get(r.wallet)?.knownSideOf ?? null,
           coins: { "24h": r.coins24h, "7d": r.coins7d, "30d": r.coins30d },
@@ -891,12 +893,16 @@ async function kolNames(wallets: string[]): Promise<
       name: string | null;
       twitter: string | null;
       knownSideOf: { wallet: string; name: string | null } | null;
+      avatar: string | null;
     }
   >
 > {
   const rows = await readKolRows(wallets);
   return new Map(
-    [...rows.values()].map((r) => [r.wallet, { name: r.name, twitter: r.twitter, knownSideOf: r.main }]),
+    [...rows.values()].map((r) => [
+      r.wallet,
+      { name: r.name, twitter: r.twitter, knownSideOf: r.main, avatar: r.avatar },
+    ]),
   );
 }
 
