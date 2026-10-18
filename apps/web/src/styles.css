@@ -3812,6 +3812,12 @@ body.trades-open .util-drawer > * {
   color: #fff;
   background: var(--brand-a);
 }
+/* A KOL's X picture in place of its letter (user ask 2026-10-18). */
+.side-avatar-pic {
+  display: block;
+  object-fit: cover;
+  background: var(--surface-2);
+}
 .side-who-text {
   display: flex;
   flex-direction: column;
@@ -13666,6 +13672,28 @@ button.bm-same {
   vertical-align: bottom;
   font-family: var(--font);
   font-weight: 650;
+}
+/* A KOL's X picture ahead of its name (user ask 2026-10-18). */
+.wallet-named {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+.wallet-pic {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  object-fit: cover;
+}
+.wm-kol-pic {
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  object-fit: cover;
 }
 .wallet-name.src-kol,
 .wallet-name.src-kol-side {

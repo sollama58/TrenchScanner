@@ -37,6 +37,7 @@ import { createReportCaches, registerCuratedRoutes } from "./routes/curated.js";
 import { registerGuestRoutes } from "./routes/guest.js";
 import { registerTokenRoutes } from "./routes/tokens.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerKolAvatarRoutes } from "./routes/kolAvatars.js";
 import { registerAdminRoutes, registerAdminSubscriptionRoutes } from "./routes/admin.js";
 import { registerAdminOpsRoutes } from "./routes/adminOps.js";
 import { registerAdminCreditRoutes } from "./routes/adminCredits.js";
@@ -561,6 +562,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   let warming = false;
   await app.register(registerHealthRoutes, { prefix: "/health", env, warming: () => warming });
   await app.register(registerConfigRoutes, { prefix: "/config", env });
+  // KOLs' X pictures (user ask 2026-10-18): public, as on X, since an <img> sends no session.
+  await app.register(registerKolAvatarRoutes, { prefix: "/kol-avatars" });
   // Public like /config: the admin's banner shows to guests and the signed-out page too.
   await app.register(registerAnnouncementRoutes, { prefix: "/announcement" });
 

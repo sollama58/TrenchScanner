@@ -37,6 +37,8 @@ export interface WalletName {
   service?: true;
   /** The reader's own label (trackedWallets.ts), which they can edit; absent on every other name. */
   mine?: true;
+  /** A roster KOL's X picture, as a path on this API (kolRoster.ts); absent otherwise. */
+  avatar?: string;
 }
 
 /** The name a wallet goes by, highest priority first. Exported for tests. */
@@ -125,7 +127,13 @@ export async function loadWalletNames(
       exchange: KNOWN_EXCHANGE_WALLETS.get(w),
       platform: PLATFORM_WALLETS.get(w),
     });
-    if (name) names[w] = isServiceWallet(w) ? { ...name, service: true } : name;
+    const avatar = name && (name.source === "kol" || name.source === "kol-side") ? kols.get(w)?.avatar : null;
+    if (name)
+      names[w] = {
+        ...name,
+        ...(isServiceWallet(w) ? { service: true as const } : {}),
+        ...(avatar ? { avatar } : {}),
+      };
   }
   return { names, unread: ask.filter((w) => !identities.has(w)) };
 }
