@@ -9145,9 +9145,9 @@ html:has(dialog.about-modal[open]) {
   gap: 18px;
   align-items: stretch;
 }
-/* Telegram and the model side by side; the browser card, with its own two columns, underneath. */
-.delivery-grid > .browser-alerts {
-  grid-column: 1 / -1;
+/* Telegram and the browser card side by side; the browser card's sound and notification groups stack. */
+.delivery-grid > .browser-alerts .settings-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
 .settings .moved-note {
   display: flex;
