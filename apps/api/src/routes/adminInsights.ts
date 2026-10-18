@@ -6,6 +6,7 @@ import {
   notRetiredModelSql,
   HEARTBEAT_JOB_ROLE,
   type HeartbeatJob,
+  walletTag,
 } from "@trenchscanner/core";
 import { SharedCache } from "../sharedCache.js";
 import { screenReasonLabel } from "../screenReasons.js";
@@ -788,7 +789,7 @@ export async function registerAdminInsightRoutes(app: FastifyInstance) {
       filterLeaderboardCache.clear();
       clearReaderCaches(row.userId);
       request.log.info(
-        { by: request.user?.walletAddress ?? null, filterId: id, name: row.name },
+        { by: request.user ? walletTag(request.user.walletAddress) : null, filterId: id, name: row.name },
         "admin deleted a retired filter",
       );
       return reply.code(204).send();

@@ -129,7 +129,9 @@ function familyFacts(
           ? "how far a winner runs"
           : p.objective === "return"
             ? "the return under the exit plan, capped at +500%"
-            : "the chance of a clean 2x";
+            : p.objective === "payoff"
+              ? "whether an alert made money, weighted by how much it made or lost"
+              : "the chance of a clean 2x";
     facts.push(
       { label: `${prefix}Family`, value: family },
       { label: `${prefix}Fitted to`, value: objective },

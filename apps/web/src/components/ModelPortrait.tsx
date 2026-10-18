@@ -242,6 +242,22 @@ const METHOD_SHAPES: Record<ModelProfile["method"], React.JSX.Element> = {
       <path d="M6 32L72 6" className="edge strong" />
     </g>
   ),
+  // A balance tipping toward the wins: the money won against the money lost.
+  scales: (
+    <g>
+      <path d="M40 6v28M30 36h20" className="edge" />
+      <path d="M12 20L68 12" className="edge strong" />
+      <path d="M12 20l-7 12h14z" className="on" />
+      <path d="M68 12l-7 12h14z" className="off" />
+      <circle cx={40} cy={16} r={2.6} className="node" />
+      <text x={12} y={39} className="lbl">
+        won
+      </text>
+      <text x={68} y={39} className="lbl">
+        lost
+      </text>
+    </g>
+  ),
   // Many models feeding one.
   team: (
     <g>

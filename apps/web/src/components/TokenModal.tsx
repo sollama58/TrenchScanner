@@ -65,10 +65,12 @@ import {
   SniperTile,
   WalletStat,
 } from "./AlertCard";
-import { PriceChart, type ChartEvent } from "./PriceChart";
 import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
 import { CustomizeDrawer } from "./CustomizeDrawer";
 import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
+import { PriceChart, type ChartEvent, type ChartTrade } from "./PriceChart";
+import { TradePanel, solText, tokensText } from "./TradePanel";
+import { graceLeftText, summarizePosition, usePosition, useProState } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import {
   categoryText,
@@ -493,9 +495,9 @@ function SafetyPill({ verdict, onClick }: { verdict: SafetyVerdict; onClick?: ()
 }
 
 /** The chart's place while it loads, the height the chart will take. */
-function ChartSkeleton({ children }: { children: ReactNode }) {
+function ChartSkeleton({ children, height }: { children: ReactNode; height?: number }) {
   return (
-    <div className="tm-chart-skeleton" style={{ height: chartBoxHeight() }}>
+    <div className="tm-chart-skeleton" style={{ height: height ?? chartBoxHeight() }}>
       <LoadingNote className="tm-skel-note" slow="Still loading the chart…">
         {children}
       </LoadingNote>
@@ -504,8 +506,11 @@ function ChartSkeleton({ children }: { children: ReactNode }) {
 }
 
 /** The chart's plot height for this window, and the whole box it draws (axis and volume lane included). */
-function chartHeight(): number {
-  return window.innerWidth <= 640 ? 180 : 220;
+function chartHeight(expanded = false): number {
+  const phone = window.innerWidth <= 640;
+  // Pro Mode's bigger chart, while trading or holding the coin: room for the trade marks.
+  if (expanded) return phone ? 260 : 380;
+  return phone ? 180 : 220;
 }
 function chartBoxHeight(): number {
   return chartHeight() + CHART_CHROME_PX;
@@ -1354,12 +1359,32 @@ export function ChartCard({
   const api = useTokenApi(card.token.mintAddress);
   // Every token view opens on the coin's whole history; Model View is a click away.
   const [range, setRange] = useState<Range>("all");
-  const [height, setHeight] = useState(chartHeight);
+
+  // Pro Mode: the signed-in wallet's position in the coin and the Trade panel. Null for everyone
+  // else, so nothing of it is fetched or drawn without Pro Mode.
+  const proState = useProState();
+  const pro = proState?.wallet ?? null;
+  // Pro Mode ended: the panel only sells, and only shows for a coin the wallet holds.
+  const closeOnly = !!proState && !proState.pro;
+  const graceEndsAt = proState?.pro ? proState.graceEndsAt : null;
+  const mint = card.token.mintAddress;
+  const position = usePosition(pro ? mint : null);
+  const [trading, setTrading] = useState(false);
+  const [tradeOpened, setTradeOpened] = useState(false);
   useEffect(() => {
-    const onResize = () => setHeight(chartHeight());
+    if (trading) setTradeOpened(true);
+  }, [trading]);
+  const holds = !!position.data && BigInt(position.data.balance) > 0n;
+  const expanded = !!pro && (trading || holds);
+
+  // Read from the window on each render; a resize re-renders.
+  const [, setResized] = useState(0);
+  useEffect(() => {
+    const onResize = () => setResized((n) => n + 1);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+  const height = chartHeight(expanded);
 
   const events = useMemo<ChartEvent[]>(() => {
     const out: ChartEvent[] = [{ t: alertAt, label: what, mcap: alertMcap > 0 ? alertMcap : null }];
@@ -1391,7 +1416,11 @@ export function ChartCard({
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const labeled = data?.wallets ?? [];
-  const marks = useMemo(() => walletMarks(data?.wallets ?? [], markPrefs), [data?.wallets, markPrefs]);
+  // The trader's own wallet is drawn as their own arrows, whatever its labels.
+  const marks = useMemo(
+    () => walletMarks(data?.wallets ?? [], markPrefs, new Set(pro ? [pro] : [])),
+    [data?.wallets, markPrefs, pro],
+  );
 
   // The view's window over the minute data, before the finer reads that fill it in.
   const bounds = useMemo(
@@ -1490,6 +1519,25 @@ export function ChartCard({
     [data],
   );
 
+  const latestMcap = view?.live ? view.latest : (data?.marketCap.at(-1)?.usd ?? null);
+  const summary = useMemo(
+    () => (pro && position.data ? summarizePosition(position.data, latestMcap) : null),
+    [pro, position.data, latestMcap],
+  );
+  const chartTrades = useMemo<ChartTrade[]>(() => {
+    const p = position.data;
+    if (!pro || !p) return [];
+    const scale = 10 ** (p.decimals ?? 6);
+    return p.trades.flatMap((tr) => {
+      if (tr.side !== "buy" && tr.side !== "sell") return [];
+      const sol = Math.abs(Number(BigInt(tr.lamports))) / 1e9;
+      const tokens = Number(BigInt(tr.tokens)) / scale;
+      const what = tr.side === "buy" ? "You bought" : "You sold";
+      return [{ t: tr.t, side: tr.side, text: `${what} ${tokensText(tokens)} for ${solText(sol)}` }];
+    });
+  }, [pro, position.data]);
+  const entry = summary && summary.held > 0 ? summary.entryMcap : null;
+
   const streaming = shownRange !== "first" && isStreaming(tail);
   const locked = error && !data ? lockedText(error, "chart") : null;
   return (
@@ -1503,6 +1551,27 @@ export function ChartCard({
             </span>
           )}
           {streaming && <LiveBadge tail={tail} />}
+          {pro && (!closeOnly || holds || trading) && (
+            <button
+              type="button"
+              className={`tm-range tm-trade-toggle${trading ? " on" : ""}${graceEndsAt !== null ? " grace" : ""}`}
+              aria-pressed={trading}
+              aria-expanded={trading}
+              title={
+                closeOnly
+                  ? "Pro Mode has ended: you can still sell what you hold"
+                  : graceEndsAt !== null
+                    ? `Pro Mode ends in ${graceLeftText(graceEndsAt)}: your wallet left the top 250 $ASDFASDFA holders`
+                    : "Buy and sell this coin with your wallet (Pro Mode)"
+              }
+              onClick={() => setTrading(!trading)}
+            >
+              {closeOnly ? "Sell" : "Trade"}
+              {graceEndsAt !== null && (
+                <span className="tm-trade-grace num"> · {graceLeftText(graceEndsAt)} left</span>
+              )}
+            </button>
+          )}
           <span className="tm-ranges" role="group" aria-label="Chart range">
             {RANGES.filter((r) => (!utility || r.id !== "model") && (young || r.id !== "first")).map((r) => (
               <button
@@ -1540,7 +1609,9 @@ export function ChartCard({
             height={height}
           />
         )}
-        {shownRange !== "first" && !data && !error && <ChartSkeleton>Loading the chart…</ChartSkeleton>}
+        {shownRange !== "first" && !data && !error && (
+          <ChartSkeleton height={height + CHART_CHROME_PX}>Loading the chart…</ChartSkeleton>
+        )}
         {locked && (
           <p className="tm-locked muted small">
             <LockIcon size={14} /> {locked}
@@ -1568,6 +1639,8 @@ export function ChartCard({
               scans={view.scans}
               marks={marks}
               height={height}
+              trades={chartTrades}
+              entry={entry}
               ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
             />
             {shownRange === "model" && (
@@ -1582,6 +1655,39 @@ export function ChartCard({
           </>
         )}
       </section>
+      {/* Mounted once opened and only hidden after, so a trade still confirming keeps its status. */}
+      {pro && (trading || tradeOpened) && (
+        <div hidden={!trading}>
+          <TradePanel
+            owner={pro}
+            mint={mint}
+            symbol={card.token.symbol ?? "tokens"}
+            position={position.data}
+            summary={summary}
+            onTraded={position.reload}
+            closeOnly={closeOnly}
+            graceEndsAt={graceEndsAt}
+          />
+        </div>
+      )}
+      {pro && !trading && holds && summary && (
+        <p className="small muted tm-trade-held">
+          You hold this coin
+          {summary.pnlSol !== null && (
+            <>
+              {" "}
+              ·{" "}
+              <span className={`num ${summary.pnlSol >= 0 ? "up" : "down"}`}>
+                {solText(summary.pnlSol, true)}
+              </span>
+            </>
+          )}
+          .{" "}
+          <button type="button" className="link" onClick={() => setTrading(true)}>
+            {closeOnly ? "Sell" : "Open Trade"}
+          </button>
+        </p>
+      )}
     </>
   );
 }

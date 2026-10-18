@@ -11,6 +11,7 @@ import { WalletsAdmin } from "./AdminWallets";
 import { UsageAdmin } from "./AdminUsage";
 import { CreditsAdmin } from "./AdminCredits";
 import { FreeAccessAdmin } from "./AdminFreeAccess";
+import { ProModeAdmin } from "./AdminProMode";
 import { RunNow } from "./AdminRunNow";
 import { FeedSimAdmin } from "./AdminFeedSim";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
@@ -1173,6 +1174,7 @@ function Access() {
       </Load>
       <Levers onDone={reloadAll} />
       <FreeAccessAdmin />
+      <ProModeAdmin />
       <Panel title="Subscriptions">
         <Load q={subs}>
           {(rows) => (

@@ -106,6 +106,10 @@ envVarGroups:
         value: https://frontend-api-v3.pump.fun
       - key: NODE_ENV
         value: production
+      # Pro trades from the token modal for admins only (api), and no Pro holder job (worker): user
+      # decision 2026-10-18. Flip to "true" here to open it to grants and the top holders.
+      - key: PRO_TRADING_PUBLIC
+        value: "false"
 
 services:
   - type: web

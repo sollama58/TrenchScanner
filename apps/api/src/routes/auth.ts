@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import bs58 from "bs58";
 import { ipRateLimitKey } from "../clientIp.js";
@@ -9,11 +9,13 @@ import {
   claimHeldBurns,
   enrollInFreeAccess,
   starterFilterInput,
+  walletTag,
   type Env,
   type User,
 } from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME, verifyRequestSessions } from "../auth/session.js";
+import { PRO_OFF, proStatus } from "../proMode.js";
 
 // Length caps run before any base58 decode: bs58.decode is quadratic in input length, so an
 // uncapped field let one unauthenticated request (a ~1MB walletAddress) block the event loop for
@@ -136,18 +138,32 @@ async function findOrCreateUser(walletAddress: string): Promise<{ user: User; cr
 
 /** Shapes the public-facing user object - notably where isAdmin gets attached, since that's
  *  derived from config (ADMIN_WALLET_ADDRESSES) rather than stored on the User row itself. */
-function toUserResponse(user: Pick<User, "id" | "walletAddress" | "createdAt">, env: Env) {
+async function toUserResponse(user: Pick<User, "id" | "walletAddress" | "createdAt">, env: Env) {
+  // Sign-in never fails on Pro Mode: a hiccup on its tables reads as no Pro Mode, for this answer.
+  const pro = await proStatus(env, user.walletAddress).catch(() => PRO_OFF);
   return {
     id: user.id,
     walletAddress: user.walletAddress,
     createdAt: user.createdAt,
     isAdmin: adminWalletSet(env).has(user.walletAddress),
+    // Pro Mode: whether the token modal shows its Trade panel (proMode.ts), and the rest of it:
+    // where it comes from, a grace period's end, and whether a wallet without it may still sell.
+    isPro: pro.pro,
+    proMode: {
+      source: pro.source,
+      canClose: pro.canClose,
+      ...(pro.rank !== undefined ? { rank: pro.rank } : {}),
+      ...(pro.graceEndsAt ? { graceEndsAt: pro.graceEndsAt, graceReason: pro.graceReason } : {}),
+    },
   };
 }
 
 export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env }) {
-  app.get("/nonce", { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } }, async (request, reply) => {
-    const parsed = nonceQuerySchema.safeParse(request.query);
+  // POST with the wallet in the body is how the dashboard asks: a query string lands in hosting
+  // and proxy access logs, and this is every user's wallet at every sign-in (user ask 2026-10-18:
+  // our users' wallets are never exposed). GET stays for a dashboard tab loaded before the change.
+  const nonce = async (input: unknown, request: FastifyRequest, reply: FastifyReply) => {
+    const parsed = nonceQuerySchema.safeParse(input);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
@@ -156,7 +172,13 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
       appDomainForOrigin(opts.env, request.headers.origin),
     );
     return { nonce, message, signInInput, expiresAt };
-  });
+  };
+  app.post("/nonce", { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } }, (request, reply) =>
+    nonce(request.body, request, reply),
+  );
+  app.get("/nonce", { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } }, (request, reply) =>
+    nonce(request.query, request, reply),
+  );
 
   app.post("/verify", { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } }, async (request, reply) => {
     const parsed = verifyBodySchema.safeParse(request.body);
@@ -201,9 +223,9 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     if (created) {
       await prisma.userFilter
         .create({ data: { userId: user.id, ...starterFilterInput(opts.env) } })
-        .then(() => request.log.info({ walletAddress }, "seeded the starter filter"))
+        .then(() => request.log.info({ wallet: walletTag(walletAddress) }, "seeded the starter filter"))
         .catch((err: unknown) =>
-          request.log.error({ err, walletAddress }, "could not seed the starter filter"),
+          request.log.error({ err, wallet: walletTag(walletAddress) }, "could not seed the starter filter"),
         );
     }
 
@@ -211,7 +233,10 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     // marks the accounts this period made, the only ones its cleanup may delete. A failure costs
     // the free access (the paywall shows), never the sign-in.
     await enrollInFreeAccess(user, created, adminWalletSet(opts.env)).catch((err: unknown) =>
-      request.log.error({ err, walletAddress }, "could not enroll the wallet in free access"),
+      request.log.error(
+        { err, wallet: walletTag(walletAddress) },
+        "could not enroll the wallet in free access",
+      ),
     );
 
     // Settle any burns this wallet made before it had an account here. Burning first and signing
@@ -221,11 +246,14 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     const heldMonths = await claimHeldBurns(user.id, walletAddress).catch((err: unknown) => {
       // Never block a login on this. The reconciler and the /subscription/claim path both settle
       // the same rows, so a failure here costs a delay, not the access.
-      request.log.error({ err, walletAddress }, "failed to settle held burns on login");
+      request.log.error({ err, wallet: walletTag(walletAddress) }, "failed to settle held burns on login");
       return 0;
     });
     if (heldMonths > 0) {
-      request.log.info({ walletAddress, months: heldMonths }, "settled burns made before sign-up");
+      request.log.info(
+        { wallet: walletTag(walletAddress), months: heldMonths },
+        "settled burns made before sign-up",
+      );
     }
 
     const token = await app.sessionSigner.sign({
@@ -243,7 +271,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
 
     // The same token in the body, for a browser that drops the cookie as third-party (see
     // sessionTokens): the dashboard keeps it only if a cookie-only /auth/me then fails.
-    return { ...toUserResponse(user, opts.env), sessionToken: token };
+    return { ...(await toUserResponse(user, opts.env)), sessionToken: token };
   });
 
   app.post("/logout", async (request, reply) => {

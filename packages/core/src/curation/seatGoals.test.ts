@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { RETURN_TARGET_CAP_PCT, returnTarget } from "./boosting.js";
+import {
+  PAYOFF_MIN_WEIGHT_PCT,
+  payoffLabel,
+  payoffWeights,
+  RETURN_TARGET_CAP_PCT,
+  returnTarget,
+} from "./boosting.js";
 import {
   DEFAULT_RETURN_PAYOFFS,
   expectedReturnPct,
@@ -166,6 +172,49 @@ describe("seat goals", () => {
     expect(s).toBeGreaterThan(scoreCandidateWithModel(reg, riskyCoin));
     expect(s).toBeGreaterThan(scoreCandidateWithModel(reg, dull));
   }, 60_000);
+
+  it("weighs made-money-or-not by the money for the payoff objective, with no crash model on top", async () => {
+    const pf = await trainCuratorModel(rows, {
+      learner: "gbdt",
+      boosting: { objective: "payoff" },
+      goal: "return",
+    });
+    expect(pf.returnRisk).toBeUndefined();
+    expect(pf.kind === "gbdt-v1" && pf.objective).toBe("payoff");
+    const safeCoin = { buyRatio24h: 0.8, volume24hUsd: 1_000, ageMinutes: 60 };
+    const riskyCoin = { buyRatio24h: 0.8, volume24hUsd: 9_000, ageMinutes: 60 };
+    const dull = { buyRatio24h: 0.1, volume24hUsd: 1_000, ageMinutes: 60 };
+    const s = scoreCandidateWithModel(pf, safeCoin);
+    expect(s).toBeGreaterThan(0);
+    expect(s).toBeLessThan(1);
+    // The stop-outs weigh against the risky coin; the dull one wins too little to outweigh them.
+    expect(s).toBeGreaterThan(scoreCandidateWithModel(pf, riskyCoin));
+    expect(s).toBeGreaterThan(scoreCandidateWithModel(pf, dull));
+  }, 60_000);
+});
+
+describe("payoff objective", () => {
+  it("labels a row by whether it made money and weighs it by how much, at least the floor", () => {
+    const rs = [
+      row({ labelValue: 2, returnPct: 300 }),
+      row({ returnPct: -50 }),
+      row({ returnPct: 2 }),
+      row({ labelValue: 3, returnPct: 900 }),
+    ];
+    expect(rs.map(payoffLabel)).toEqual([1, 0, 1, 1]);
+    const w = payoffWeights(rs, new Float64Array(rs.length).fill(1));
+    // Mean 1; otherwise in proportion to |return| capped at +500%, floored at PAYOFF_MIN_WEIGHT_PCT.
+    expect(w.reduce((a, b) => a + b, 0)).toBeCloseTo(rs.length, 9);
+    expect(w[0]! / w[1]!).toBeCloseTo(6, 9);
+    expect(w[2]! / w[1]!).toBeCloseTo(PAYOFF_MIN_WEIGHT_PCT / 50, 9);
+    expect(w[3]! / w[0]!).toBeCloseTo(RETURN_TARGET_CAP_PCT / 300, 9);
+  });
+
+  it("keeps the given recency weights in the product", () => {
+    const rs = [row({ returnPct: 100 }), row({ returnPct: 100 })];
+    const w = payoffWeights(rs, Float64Array.from([1, 3]));
+    expect(w[1]! / w[0]!).toBeCloseTo(3, 9);
+  });
 });
 
 describe("returnTarget", () => {

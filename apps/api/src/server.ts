@@ -61,6 +61,9 @@ import { registerWalletRoutes } from "./routes/wallets.js";
 import { WalletLiveReader } from "./walletProfile.js";
 import { WalletIdentityReader } from "./walletIdentity.js";
 import { registerTradingRoutes } from "./routes/trading.js";
+import { registerProTradeRoutes } from "./routes/proTrade.js";
+import { registerProTradesRoutes } from "./routes/proTrades.js";
+import { registerAdminProModeRoutes } from "./routes/adminProMode.js";
 import { MatchStream } from "./matchStream.js";
 import { ViewStampBuffer } from "./viewStamps.js";
 import { OnDemandLiveRefresher } from "./liveRefresh.js";
@@ -136,11 +139,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // message (for Prisma, the database hostname). Details stay in the log; clients get a code.
   app.setErrorHandler((err: FastifyError, request, reply) => {
     const status = err.statusCode ?? 500;
+    // The route's pattern, not the URL: a URL can carry a user's wallet (a 429 on /wallets/<their
+    // own>), and logs never hold our users' wallets (user ask 2026-10-18). No route: the bare path.
+    const url = request.routeOptions.url ?? request.url.split("?")[0];
     // A 4xx here is the client's fault (a body over the cap, malformed JSON): one short line, no
     // stack, so a caller sending junk on a loop can't fill the log with stack traces.
-    if (status >= 500)
-      logger.error("unhandled route error", { url: request.url, error: err.message, stack: err.stack });
-    else logger.warn("rejected request", { url: request.url, status, error: err.message });
+    if (status >= 500) logger.error("unhandled route error", { url, error: err.message, stack: err.stack });
+    else logger.warn("rejected request", { url, status, error: err.message });
     reply.code(status).send({ error: status >= 500 ? "internal_error" : err.message });
   });
 
@@ -628,6 +633,10 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerTelegramRoutes, { prefix: "/telegram", env });
   // The trading bot (admin-only; nothing is registered without TRADING_BOT_ENABLED).
   await app.register(registerTradingRoutes, { prefix: "/trading", env });
+  // Pro Mode trades from the token modal: the trader's own wallet signs; nothing custodial.
+  await app.register(registerProTradeRoutes, { prefix: "/pro", env });
+  // The TRADES panel: a Pro Mode wallet's own trades, followed on the Helius stream (proTrades.ts).
+  await app.register(registerProTradesRoutes, { prefix: "/pro/trades", env, dexScreener, viewStamps });
   // Token-guarded (STATS_API_TOKEN), not session-guarded: read by scripts, not the dashboard.
   await app.register(registerStatsRoutes, { prefix: "/stats", env, timings, liveRefresher });
   await app.register(registerStatsModelRoutes, { prefix: "/stats", env });
@@ -645,6 +654,8 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       await registerAdminFeedbackRoutes(instance);
       // Free Access: open sign-in to everyone for a while, and clean up after it.
       await registerAdminFreeAccessRoutes(instance, { env });
+      // Pro Mode: who besides the admins sees the token modal's Trade panel.
+      await registerAdminProModeRoutes(instance, { env });
     },
     { prefix: "/admin" },
   );

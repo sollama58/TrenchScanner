@@ -45,6 +45,8 @@ import { StreamView } from "./components/StreamView";
 import { useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
 import { closeTokenModal } from "./tokenModal";
+import { setProState, proStateOf } from "./proTrade";
+import { ProGraceBanner } from "./components/ProGraceBanner";
 import { BugButton } from "./components/BugButton";
 import { AdminReportsBadge } from "./components/AdminReportsBadge";
 
@@ -66,6 +68,9 @@ const WalletModalHost = lazy(() =>
   import("./components/WalletModal").then((m) => ({ default: m.WalletModalHost })),
 );
 // The pull-out utility panel on every tab (desktop only): loads once signed in with access.
+const TradesDrawer = lazy(() =>
+  import("./components/TradesDrawer").then((m) => ({ default: m.TradesDrawer })),
+);
 const UtilityDrawer = lazy(() =>
   import("./components/UtilityDrawer").then((m) => ({ default: m.UtilityDrawer })),
 );
@@ -241,6 +246,18 @@ export function App() {
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
   const isAdmin = signedIn && session.user.isAdmin;
+  // Pro Mode, for the token modal's Trade panel (null hides all of it).
+  const pro = signedIn ? proStateOf(session.user) : null;
+  // Every render: setProState ignores a state equal to the one it has.
+  useEffect(() => setProState(pro));
+  // In a grace period, the session is re-read every few minutes: back in the top 250, the
+  // warnings go; out of time, the panel turns to selling only.
+  const inGrace = pro?.graceEndsAt != null;
+  useEffect(() => {
+    if (!inGrace) return;
+    const timer = setInterval(() => checkSession(0), 5 * 60_000);
+    return () => clearInterval(timer);
+  }, [inGrace]);
   // The Stream tab only for a signed-in reader who switched it on in Settings.
   const appearance = useAppearance();
   const streamOn = appearance.streamTab && signedIn;
@@ -360,6 +377,7 @@ export function App() {
         <PageLoader label={loaderLabel} />
         {/* The Admin tab's broadcast: for everyone, signed in, guest or signed out. */}
         {session.state !== "linking" && <AnnouncementBar />}
+        {signedIn && <ProGraceBanner />}
         {session.state === "loading" && <Boot />}
         {session.state === "linking" &&
           (session.error ? (
@@ -462,6 +480,12 @@ export function App() {
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>
             </div>
+            {/* Pro Mode's TRADES panel, above the Utility handle on every tab. */}
+            {pro?.pro && (
+              <Suspense fallback={null}>
+                <TradesDrawer key={pro.wallet} />
+              </Suspense>
+            )}
             {/* The Utilities tab has the same tools, with its own toolbar beside them. */}
             {tab !== "utilities" && (
               <Suspense fallback={null}>
