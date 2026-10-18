@@ -26,10 +26,13 @@ import { EXIT_REASON_TEXT, signedSol, solAmount, tokenLink, type TradeNote } fro
 import { saleEvent, type TradeAlertEvent } from "./tradeAlerts.js";
 import type { KeyProvider } from "./keyVault.js";
 import type { MintInfo, TradingRpc, TransactionFill } from "./rpc.js";
+import { checkJupiterFloor } from "./manualTrade.js";
 import {
   buildCloseTokenAccount,
   buildSolTransfer,
   CLOSE_COMPUTE_UNITS,
+  decodeMessage,
+  parseWireTransaction,
   priorityFeeOf,
   signTransaction,
   TRANSFER_COMPUTE_UNITS,
@@ -557,6 +560,36 @@ async function fallbackFloor(ctx: PassContext, req: SwapRequest): Promise<bigint
   return floor !== null && floor > none ? floor : none;
 }
 
+/**
+ * The limits a Jupiter-built swap carries ON CHAIN, read from its route instruction (wallet
+ * security audit 2026-10-18, trading F2). The guard's simulation sees the pool as it is now; what
+ * bounds the swap when it lands is the route's own arguments. So: exactly one exact-in route (no
+ * exact-out, whose quoted input is a ceiling only), spending exactly the amount asked, quoting at
+ * least what the quote did, with no more slippage than asked (checkJupiterFloor, as Pro trades do),
+ * and no Pump.fun or PumpSwap instruction of its own beside it, whose limits nothing here reads.
+ */
+export function checkBotJupiterSwap(
+  tx: Uint8Array,
+  quote: { outAmount: string; otherAmountThreshold: string },
+  amount: bigint,
+  slippageBps: number,
+): void {
+  const decoded = decodeMessage(parseWireTransaction(tx).message);
+  const ixs = decoded.instructions.map((ix) => ({
+    programId: decoded.staticKeys[ix.programIdIndex] ?? "",
+    accounts: [],
+    data: [...ix.data],
+  }));
+  if (ixs.some((ix) => ix.programId === PROGRAM.pumpFun || ix.programId === PROGRAM.pumpSwap))
+    throw new GuardRefusal("Jupiter's swap carries a Pump.fun instruction of its own");
+  checkJupiterFloor(ixs, BigInt(quote.outAmount), BigInt(quote.otherAmountThreshold), slippageBps);
+  const data = ixs.find((ix) => ix.programId === PROGRAM.jupiterV6)!.data;
+  let inAmount = 0n;
+  for (let i = 7; i >= 0; i--) inAmount = (inAmount << 8n) | BigInt(data[data.length - 19 + i]!);
+  if (inAmount !== amount)
+    throw new GuardRefusal(`Jupiter's route spends ${inAmount}, not the ${amount} asked for`);
+}
+
 /** Builds the swap on Jupiter, else (a Pump.fun token) PumpPortal, with what the guard must see. */
 async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Promise<BuiltSwap> {
   const buy = req.side === "buy";
@@ -606,6 +639,7 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
         req.priorityFeeLamports !== undefined ? Number(req.priorityFeeLamports) : undefined,
       jitoTipLamports: jitoTip !== null ? Number(jitoTip) : undefined,
     });
+    checkBotJupiterSwap(built.transaction, quote, req.amount, req.slippageBps);
     // Never under the independent floor, whatever minimum the quote names.
     const quotedMin = BigInt(quote.otherAmountThreshold);
     const minOut = independent !== null && independent > quotedMin ? independent : quotedMin;
@@ -633,7 +667,8 @@ async function buildSwap(ctx: PassContext, wallet: Wallet, req: SwapRequest): Pr
       !fallback ||
       !fallback.handles(req.mint) ||
       err instanceof PriceMovedError ||
-      err instanceof FairValueError
+      err instanceof FairValueError ||
+      err instanceof GuardRefusal
     )
       throw err;
     logger.info("jupiter could not build the swap; trying the fallback route", {
