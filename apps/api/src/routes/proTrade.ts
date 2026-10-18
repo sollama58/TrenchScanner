@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { createHash } from "node:crypto";
 import bs58 from "bs58";
 import { z } from "zod";
 import {
@@ -12,6 +11,7 @@ import {
   parseWireTransaction,
   senderUrl,
   sendViaSender,
+  signedMatchesBuild,
   TradeRejected,
   TradingRpc,
   TransientError,
@@ -20,6 +20,7 @@ import {
   RateLimitedError,
   verifyTransactionSignatures,
   walletTokenTrades,
+  type DecodedMessage,
   type Env,
   type WalletTrade,
   walletTag,
@@ -160,8 +161,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       lastValidBlockHeight: number;
       at: number;
       side: "buy" | "sell";
-      /** sha256 of the built message: a close-only wallet must send exactly what was built. */
-      messageHash: string;
+      /** The built message: what the wallet sends must be it (signedMatchesBuild). */
+      message: DecodedMessage;
     }[]
   >();
 
@@ -236,7 +237,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         lastValidBlockHeight: built.lastValidBlockHeight,
         at: Date.now(),
         side: body.side,
-        messageHash: sha256Hex(builtWire.message),
+        message,
       });
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
       if (builds.size > 5_000) builds.clear();
@@ -313,15 +314,15 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       signature = bs58.encode(wire.signatures[0]!);
       // Sent already (a retried request): the resend loop has it.
       if (inFlight.has(signature)) return { signature };
-      // One send per build, on the blockhash it was built with.
+      // One send per build, and only what was built (the wallet may add its own compute budget
+      // and Lighthouse guards): our Sender key relays nothing a build didn't make. Without Pro
+      // Mode any more, only a sale's build.
       const list = liveBuilds(wallet);
-      // Without Pro Mode any more, only a sale's build sends, exactly as it was built: a wallet
-      // could otherwise write its own buy on a sale's blockhash.
-      const hash = who.pro ? null : sha256Hex(wire.message);
       const at = list.findIndex(
         (b) =>
           b.blockhash === message.recentBlockhash &&
-          (who.pro || (b.side === "sell" && b.messageHash === hash)),
+          (who.pro || b.side === "sell") &&
+          signedMatchesBuild(b.message, message) === null,
       );
       if (at < 0)
         return reply.code(400).send({
@@ -518,8 +519,6 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     retired.clear();
   });
 }
-
-const sha256Hex = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 /** The guard's refusal in the trader's words, where it can be said plainly. */
 export function plainRefusal(message: string, side: "buy" | "sell" = "buy"): string {

@@ -5,7 +5,7 @@ import bs58 from "bs58";
 /**
  * The wallet's own wrapped-SOL accounts, worked out here rather than taken from the API, so the
  * trade check (tradeProblem in proTrade.ts) can tell wrapping SOL into them from sending it to a
- * stranger. Same derivation as packages/core/src/solana.ts. Loaded only when a trade is checked.
+ * stranger, and that a swap's output lands in the wallet. Same derivation as packages/core/src/solana.ts. Loaded only when a trade is checked.
  */
 
 const PDA_MARKER = new TextEncoder().encode("ProgramDerivedAddress");
@@ -41,9 +41,14 @@ function findProgramAddress(seeds: Uint8Array[], program: string): string {
   throw new Error("no program address");
 }
 
+/** The wallet's associated token accounts for `mint`, under either token program. */
+export function ownTokenAccounts(wallet: string, mint: string): string[] {
+  return TOKEN_PROGRAMS.map((p) =>
+    findProgramAddress([bs58.decode(wallet), bs58.decode(p), bs58.decode(mint)], ATA_PROGRAM),
+  );
+}
+
 /** The wallet's wrapped-SOL token accounts, under either token program. */
 export function ownWrappedSolAccounts(wallet: string): string[] {
-  return TOKEN_PROGRAMS.map((p) =>
-    findProgramAddress([bs58.decode(wallet), bs58.decode(p), bs58.decode(WSOL)], ATA_PROGRAM),
-  );
+  return ownTokenAccounts(wallet, WSOL);
 }

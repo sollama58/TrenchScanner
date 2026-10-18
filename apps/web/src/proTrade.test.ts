@@ -12,8 +12,9 @@ import {
   summarizePosition,
   tradeProblem,
   type PositionResponse,
+  type TradeCheck,
 } from "./proTrade";
-import { ownWrappedSolAccounts } from "./solanaPda";
+import { ownTokenAccounts, ownWrappedSolAccounts } from "./solanaPda";
 import { feeTotalSol, parseSol, shareOf, solText } from "./components/TradePanel";
 
 describe("parseSol", () => {
@@ -163,20 +164,41 @@ describe("tradeProblem", () => {
   );
   const owner = "5tzFkiKscXHK5ZXCGbXZxdw7gTjjD1mBwuoFbhUvuAi9";
   const own = ownWrappedSolAccounts(owner);
+  // The fixture spends 0.01 SOL on USDC.
+  const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const asked: TradeCheck = {
+    side: "buy",
+    amount: 10_000_000n,
+    slippageBps: 5_000,
+    ownWrappedSol: own,
+    ownCoinAccounts: ownTokenAccounts(owner, USDC),
+  };
 
   it("passes a real build for its own wallet", () => {
-    expect(tradeProblem(built, owner, own)).toBeNull();
+    expect(tradeProblem(built, owner, asked)).toBeNull();
+  });
+  it("refuses a real build that isn't the trade asked for", () => {
+    expect(tradeProblem(built, owner, { ...asked, amount: 1_000_000n })).toMatch(/amount/);
+    expect(tradeProblem(built, owner, { ...asked, slippageBps: 1 })).toMatch(/slippage/);
+    expect(tradeProblem(built, owner, { ...asked, ownCoinAccounts: own })).toMatch(/wallet/);
+    // A 100 SOL route in place of the 0.01 asked: in_amount sits 19 bytes from the end.
+    const big = Uint8Array.from(built);
+    const hex = Buffer.from(big).toString("hex");
+    const amount = Buffer.from(new BigUint64Array([10_000_000n]).buffer).toString("hex");
+    const at = hex.indexOf(amount, hex.indexOf(Buffer.from([229, 23, 203, 151]).toString("hex"))) / 2;
+    new DataView(big.buffer).setBigUint64(at, 100_000_000_000n, true);
+    expect(tradeProblem(big, owner, asked)).toMatch(/amount/);
   });
   it("refuses a build for another wallet, an unknown program, or bytes it can't read", () => {
-    expect(tradeProblem(built, "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE", [])).toMatch(
+    expect(tradeProblem(built, "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE", asked)).toMatch(
       /isn't the one paying/,
     );
     // The same build with its Jupiter program key swapped for another program.
     const hex = Buffer.from(built).toString("hex");
     const jup = Buffer.from(bs58.decode("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4")).toString("hex");
     const evil = Uint8Array.from(Buffer.from(hex.replace(jup, "ab".repeat(32)), "hex"));
-    expect(tradeProblem(evil, owner, own)).toMatch(/program/);
-    expect(tradeProblem(built.subarray(0, 120), owner, own)).toMatch(/couldn't be read|program/);
+    expect(tradeProblem(evil, owner, asked)).toMatch(/program/);
+    expect(tradeProblem(built.subarray(0, 120), owner, asked)).toMatch(/couldn't be read|program/);
   });
 
   // A hand-built v0 transaction: static keys, then [program index, account indexes, data] each.
@@ -185,7 +207,8 @@ describe("tradeProblem", () => {
   const BUDGET = "ComputeBudget111111111111111111111111111111";
   const TIP = "4ACfpUFoaSD9bfPdeu6DBt89gB6ENTeHBXCAi87NhDEE";
   const STRANGER = "D2L6yPZ2FmmmTKPgzaMKdhu6EWZcTpLy1Vhx8uvZe7Nz";
-  const keys = [owner, STRANGER, TIP, own[0]!, SYSTEM, TOKEN, BUDGET];
+  const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+  const keys = [owner, STRANGER, TIP, own[0]!, SYSTEM, TOKEN, BUDGET, PUMP];
   const k = (key: string) => keys.indexOf(key);
   const u32 = (n: number) => [n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >>> 24) & 255];
   const u64 = (n: bigint) => Array.from({ length: 8 }, (_, i) => Number((n >> BigInt(8 * i)) & 255n));
@@ -210,22 +233,40 @@ describe("tradeProblem", () => {
       0,
     ]);
   const tip = transfer(TIP, 5_000n);
+  const pumpBuy = (sol: bigint, minTokens: bigint) => ({
+    program: PUMP,
+    accounts: [],
+    data: [225, 247, 80, 30, 213, 179, 132, 136, ...u64(sol), ...u64(minTokens), 0],
+  });
+  const buy = pumpBuy(1_000_000n, 1n);
+  const hand: TradeCheck = { ...asked, amount: 1_000_000n, ownCoinAccounts: [] };
 
   it("passes a tip and wrapping SOL into the wallet's own account", () => {
-    expect(tradeProblem(tx([transfer(own[0]!, 1_000_000n), tip]), owner, own)).toBeNull();
+    expect(tradeProblem(tx([transfer(own[0]!, 1_000_000n), tip, buy]), owner, hand)).toBeNull();
   });
   it("refuses SOL sent to a stranger, a token approval, and fees past their ceiling", () => {
-    expect(tradeProblem(tx([transfer(STRANGER, 1_000_000_000n), tip]), owner, own)).toMatch(/isn't yours/);
+    expect(tradeProblem(tx([transfer(STRANGER, 1_000_000_000n), tip, buy]), owner, hand)).toMatch(
+      /isn't yours/,
+    );
     // Token Approve (4) of one of the wallet's accounts to a stranger.
     const approve = { program: TOKEN, accounts: [k(own[0]!), k(STRANGER), k(owner)], data: [4, ...u64(1n)] };
-    expect(tradeProblem(tx([approve, tip]), owner, own)).toMatch(/token instruction/);
-    expect(tradeProblem(tx([transfer(TIP, 10_000_001n)]), owner, own)).toMatch(/tip/);
+    expect(tradeProblem(tx([approve, tip, buy]), owner, hand)).toMatch(/token instruction/);
+    expect(tradeProblem(tx([transfer(TIP, 10_000_001n), buy]), owner, hand)).toMatch(/tip/);
     // 1.4M units at 10 SOL-worth of micro-lamports: a priority fee that would drain the wallet.
     const limit = { program: BUDGET, accounts: [], data: [2, ...u32(1_400_000)] };
     const price = { program: BUDGET, accounts: [], data: [3, ...u64(10_000_000_000n)] };
-    expect(tradeProblem(tx([limit, price, tip]), owner, own)).toMatch(/priority fee/);
-    expect(tradeProblem(tx([transfer("lookup", 1n), tip]), owner, own)).toMatch(/lookup table/);
-    expect(tradeProblem(tx([transfer(own[0]!, 1n)]), owner, own)).toMatch(/Sender/);
+    expect(tradeProblem(tx([limit, price, tip, buy]), owner, hand)).toMatch(/priority fee/);
+    expect(tradeProblem(tx([transfer("lookup", 1n), tip, buy]), owner, hand)).toMatch(/lookup table/);
+    expect(tradeProblem(tx([transfer(own[0]!, 1n), buy]), owner, hand)).toMatch(/Sender/);
+  });
+  it("refuses a Pump.fun build that isn't the trade asked for", () => {
+    expect(tradeProblem(tx([tip, pumpBuy(100_000_000_000n, 1n)]), owner, hand)).toMatch(/amount/);
+    expect(tradeProblem(tx([tip, pumpBuy(1_000_000n, 0n)]), owner, hand)).toMatch(/minimum/);
+    expect(tradeProblem(tx([tip, buy]), owner, { ...hand, side: "sell" })).toMatch(/different trade/);
+    expect(tradeProblem(tx([tip, buy, buy]), owner, hand)).toMatch(/exactly one swap/);
+    expect(tradeProblem(tx([tip]), owner, hand)).toMatch(/exactly one swap/);
+    // More SOL wrapped than the buy spends.
+    expect(tradeProblem(tx([transfer(own[0]!, 2_000_000n), tip, buy]), owner, hand)).toMatch(/more SOL/);
   });
 });
 

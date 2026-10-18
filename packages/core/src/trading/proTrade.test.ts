@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import bs58 from "bs58";
 import {
@@ -24,6 +25,8 @@ import {
   buildManualTrade,
   checkJupiterFloor,
   estimateManualFees,
+  LIGHTHOUSE_PROGRAM,
+  signedMatchesBuild,
   TradeRejected,
   type ManualTradeJupiter,
   type ManualTradeRpc,
@@ -390,5 +393,65 @@ describe("walletTokenTrades", () => {
     const theirs = await walletTokenTrades(rpc, other, MINT, cache);
     expect(mine!.trades.map((t) => t.side)).toEqual(["buy"]);
     expect(theirs!.trades.map((t) => t.side)).toEqual(["in"]);
+  });
+});
+
+describe("signedMatchesBuild", () => {
+  // A real Jupiter buy built by the API on mainnet (apps/web's fixture), as built.
+  const built = decodeMessage(
+    parseWireTransaction(
+      Uint8Array.from(
+        Buffer.from(
+          readFileSync(new URL("../../../../apps/web/src/proTrade.fixture.b64.txt", import.meta.url), "utf8"),
+          "base64",
+        ),
+      ),
+    ).message,
+  );
+  const budget = built.staticKeys.indexOf("ComputeBudget111111111111111111111111111111");
+  const price = (microLamports: bigint) => {
+    const d = new Uint8Array(9);
+    d[0] = 3;
+    new DataView(d.buffer).setBigUint64(1, microLamports, true);
+    return { programIdIndex: budget, accountIndexes: [], data: d };
+  };
+
+  it("matches what was built, and what a wallet adds of its own guards and fee", () => {
+    expect(signedMatchesBuild(built, built)).toBeNull();
+    // The wallet adds a key for Lighthouse (shifting every loaded account's index) and an
+    // assertion, and raises the priority fee within the ceiling.
+    const keys = [...built.staticKeys, LIGHTHOUSE_PROGRAM];
+    const shift = (i: number) => (i >= built.staticKeys.length ? i + 1 : i);
+    const signed = {
+      ...built,
+      staticKeys: keys,
+      instructions: [
+        ...built.instructions.map((ix) =>
+          ix.programIdIndex === budget && ix.data[0] === 3
+            ? price(1_000_000n)
+            : { ...ix, accountIndexes: ix.accountIndexes.map(shift) },
+        ),
+        { programIdIndex: keys.length - 1, accountIndexes: [0], data: Uint8Array.of(1, 2, 3) },
+      ],
+    };
+    expect(signedMatchesBuild(built, signed)).toBeNull();
+  });
+
+  it("refuses anything else", () => {
+    const changed = built.instructions.map((ix, i) =>
+      i === built.instructions.length - 1
+        ? { ...ix, data: Uint8Array.of(2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0) }
+        : ix,
+    );
+    expect(signedMatchesBuild(built, { ...built, instructions: changed })).toMatch(/instructions/);
+    expect(signedMatchesBuild(built, { ...built, instructions: built.instructions.slice(1, -1) })).toMatch(
+      /instructions/,
+    );
+    expect(signedMatchesBuild(built, { ...built, recentBlockhash: "x" })).toMatch(/blockhash/);
+    // A priority fee past 0.01 SOL: 10 SOL a unit-million over 1.4M units' worth.
+    const drained = built.instructions.map((ix) =>
+      ix.programIdIndex === budget && ix.data[0] === 3 ? price(10_000_000_000n) : ix,
+    );
+    expect(signedMatchesBuild(built, { ...built, instructions: drained })).toMatch(/priority fee/);
   });
 });
