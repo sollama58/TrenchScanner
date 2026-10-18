@@ -29,6 +29,39 @@ export const LAUNCHLAB_BASE_MINT_OFFSET = 205;
 const QUOTE_MINT_OFFSET = 237;
 /** How many bytes of the pool a reader needs: through the quote mint. */
 export const LAUNCHLAB_READ_BYTES = QUOTE_MINT_OFFSET + 32;
+/**
+ * Where a LaunchLab coin graduates: a Raydium CPMM pool (a PoolState too, of another program and
+ * size). Its two vaults' balances are its reserves, as GeckoTerminal reads them (the fees it holds
+ * back are a fraction of a percent). From the vaults: token 0's and 1's vaults, the LP mint, then
+ * token 0's and 1's mints.
+ */
+export const RAYDIUM_CPMM_PROGRAM = "CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C";
+export const CPMM_POOL_SIZE = 637;
+export const CPMM_VAULTS_OFFSET = 72;
+/** The slice a scan reads: both vaults, the LP mint and both mints. */
+export const CPMM_VAULTS_READ_BYTES = 160;
+/** Where token 0's and token 1's mints sit in the whole account, for the scan's filter. */
+export const CPMM_MINT0_OFFSET = 168;
+export const CPMM_MINT1_OFFSET = 200;
+
+/**
+ * A CPMM pool's vaults for `mint` against `quoteMint`, from the CPMM_VAULTS_OFFSET slice of its
+ * account (raw bytes or base64), or null when it pairs other coins.
+ */
+export function cpmmVaultsFor(
+  raw: Uint8Array | string,
+  mint: string,
+  quoteMint: string,
+): { base: string; quote: string } | null {
+  const data = typeof raw === "string" ? Uint8Array.from(Buffer.from(raw, "base64")) : raw;
+  if (data.length < CPMM_VAULTS_READ_BYTES) return null;
+  const key = (at: number) => bs58.encode(data.subarray(at, at + 32));
+  const [vault0, vault1, mint0, mint1] = [key(0), key(32), key(96), key(128)];
+  if (mint0 === mint && mint1 === quoteMint) return { base: vault0, quote: vault1 };
+  if (mint1 === mint && mint0 === quoteMint) return { base: vault1, quote: vault0 };
+  return null;
+}
+
 /** Status 0 is still on its curve; 1 (migrating) and 2 (migrated) are graduated. */
 const STATUS_TRADING = 0;
 

@@ -87,7 +87,12 @@ export interface LiveCurveStreamTotals {
   since: string;
 }
 type CurveReader = Pick<HeliusClient, "getCurveStatesBatch"> &
-  Partial<Pick<HeliusClient, "getPoolVaultsBatch" | "getTokenAmountsBatch" | "findLaunchLabPool">>;
+  Partial<
+    Pick<
+      HeliusClient,
+      "getPoolVaultsBatch" | "getTokenAmountsBatch" | "findLaunchLabPool" | "findCpmmPoolVaults"
+    >
+  >;
 
 /** Where the newest prices came from. "pending": asked, not read yet. "none": not a live curve. */
 export type LiveSource = "stream" | "rpc" | "pending" | "none";
@@ -151,6 +156,8 @@ interface Followed {
   poolSoughtAt: number | null;
   /** No Pump.fun curve there: when its Raydium LaunchLab pool (a Stonks coin) was looked for. */
   launchLabSoughtAt: number | null;
+  /** `curve` is the coin's LaunchLab pool, not a Pump.fun curve: it graduates into Raydium CPMM. */
+  launchLab: boolean;
 }
 
 interface FollowedPool {
@@ -359,6 +366,7 @@ export class LiveCurves {
         pool: null,
         poolSoughtAt: null,
         launchLabSoughtAt: null,
+        launchLab: false,
       };
       this.followed.set(mint, f);
       this.ensureRunning();
@@ -518,12 +526,7 @@ export class LiveCurves {
           if (!f || state === undefined || state === "failed") return;
           const quoteMint = state === null || state.quoteIsSol ? null : (state.quoteMint ?? null);
           // No Pump.fun curve: a chart's coin may be on Raydium LaunchLab (Stonks), looked for next.
-          if (
-            state === null &&
-            f.wantPool &&
-            f.curve === pumpCurveAddressOf(mint) &&
-            this.deps.reader?.findLaunchLabPool
-          ) {
+          if (state === null && f.wantPool && !f.launchLab && this.deps.reader?.findLaunchLabPool) {
             launchLab.push(mint);
             return;
           }
@@ -577,6 +580,7 @@ export class LiveCurves {
         continue;
       }
       f.curve = pool;
+      f.launchLab = true;
       this.stream?.watch(KEY_PREFIX + mint, [pool], now, "account");
     }
   }
@@ -588,15 +592,31 @@ export class LiveCurves {
   private async poolRound(reader: CurveReader, now: number): Promise<void> {
     const canRead = !!reader.getPoolVaultsBatch && !!reader.getTokenAmountsBatch;
     const sought = new Map<string, { mint: string; quoteMint: string }>();
+    const cpmm: [string, Followed][] = [];
     for (const [mint, f] of this.followed) {
       if (f.none || !f.complete || !f.wantPool || f.pool !== null) continue;
       if (f.poolSoughtAt !== null && now - f.poolSoughtAt < READ_EVERY_MS) continue;
+      // A LaunchLab (Stonks) coin graduates into a Raydium CPMM pool, not PumpSwap.
+      if (f.launchLab) {
+        cpmm.push([mint, f]);
+        continue;
+      }
       const quoteMint = f.quoteMint ?? WRAPPED_SOL_MINT;
       const pool = canRead ? pumpSwapPoolOf(mint, quoteMint) : undefined;
       if (!pool) f.pool = "none";
       else sought.set(pool, { mint, quoteMint });
     }
     if (!reader.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
+    for (const [mint, f] of cpmm) {
+      if (!reader.findCpmmPoolVaults) {
+        f.pool = "none";
+        continue;
+      }
+      f.poolSoughtAt = now;
+      const vaults = await reader.findCpmmPoolVaults(mint, f.quoteMint ?? WRAPPED_SOL_MINT);
+      if (vaults === "failed" || this.followed.get(mint) !== f) continue;
+      this.setPool(mint, f, vaults, now);
+    }
     if (sought.size > 0) {
       const found = await reader.getPoolVaultsBatch(sought);
       for (const [pool, { mint }] of sought) {
@@ -605,12 +625,7 @@ export class LiveCurves {
         if (!f || vaults === undefined) continue;
         f.poolSoughtAt = now;
         if (vaults === "failed") continue;
-        f.pool =
-          vaults === null
-            ? "none"
-            : { vaults, base: 0, quote: 0, baseSlot: null, quoteSlot: null, timer: null, readAt: null };
-        if (vaults === null) this.wake(mint);
-        else this.watchPool(mint, f.pool as FollowedPool, now);
+        this.setPool(mint, f, vaults, now);
       }
     }
     const due: [string, Followed, FollowedPool][] = [];
@@ -637,6 +652,16 @@ export class LiveCurves {
       this.recordPool(mint, f, pool, now);
       pool.readAt = now;
     }
+  }
+
+  /** `f`'s pool once found (null: it has none, and nothing live prices it any more). */
+  private setPool(mint: string, f: Followed, vaults: PoolVaults | null, now: number): void {
+    f.pool =
+      vaults === null
+        ? "none"
+        : { vaults, base: 0, quote: 0, baseSlot: null, quoteSlot: null, timer: null, readAt: null };
+    if (vaults === null) this.wake(mint);
+    else this.watchPool(mint, f.pool as FollowedPool, now);
   }
 
   private recordPool(mint: string, f: Followed, pool: FollowedPool, at: number): void {
