@@ -81,6 +81,7 @@ describe("walletLabels", () => {
       complete: true,
       lastAt: new Date(),
       firstAt: new Date(Date.now() - 3_600_000),
+      signatures: [],
     };
     expect(walletLabels({ ...base, live: fresh }).map((l) => l.text)).toEqual(["Fresh wallet"]);
     const busy = { ...fresh, complete: false, txCount: 1000, firstAt: null };
@@ -121,7 +122,21 @@ describe("WalletLiveReader", () => {
     complete: true,
     lastAt: null,
     firstAt: null,
+    signatures: [{ signature: "s1", blockTime: 1 }],
   };
+
+  it("hands the overview's page to the funder read instead of reading it again", async () => {
+    const getFundersBatch = vi.fn(async () => new Map());
+    const reader = new WalletLiveReader(
+      { getWalletOverview: vi.fn(async () => found), getFundersBatch },
+      { ttlMs: 1000, perMinute: 10 },
+    );
+    await reader.funder(W, 0);
+    expect(getFundersBatch).toHaveBeenLastCalledWith([W], { pagesOf: undefined });
+    await reader.overview(W, 0);
+    await reader.funder(W, 10);
+    expect(getFundersBatch).toHaveBeenLastCalledWith([W], { pagesOf: new Map([[W, found.signatures]]) });
+  });
 
   it("reads each wallet once per TTL", async () => {
     const getWalletOverview = vi.fn(async () => found);

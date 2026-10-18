@@ -54,8 +54,29 @@ export const HELIUS_CREDITS: Record<string, number> = {
   getValidityProof: 100,
 };
 const DEFAULT_RPC_CREDITS = 1;
-/** Helius's REST APIs (api.helius.xyz/v0: Enhanced Transactions and the like) bill 100 a request. */
+/**
+ * Helius's REST APIs bill 100 a request: api.helius.xyz/v0 (Enhanced Transactions and the like)
+ * and the v1 Wallet API (identity and batch-identity, one request for up to 100 wallets).
+ */
 const HELIUS_REST_CREDITS = 100;
+/**
+ * Helius's identity lookup answers 404 for a wallet nobody has named, its usual answer. That is a
+ * lookup done, not a failed call, so it is billed and not an error (inferred: Helius's credits page
+ * bills every Wallet API request and names no exception). Counted as an error it read as 0 credits,
+ * hiding most of the identity spend from the API usage panel.
+ */
+const HELIUS_IDENTITY_ENDPOINT = /^GET \/v1\/wallet\/:id\/identity$/;
+
+/** Whether a response counts as answered (billed, not an error) for `lines`. */
+export function answeredStatus(lines: readonly ApiCallLine[], status: number): boolean {
+  if (status >= 200 && status < 300) return true;
+  return (
+    status === 404 &&
+    lines.length === 1 &&
+    lines[0]!.provider === "helius" &&
+    HELIUS_IDENTITY_ENDPOINT.test(lines[0]!.endpoint)
+  );
+}
 /**
  * Jupiter's credits per call on a paid plan (developers.jup.ag/docs/portal/plans, checked
  * 2026-10-15), by route; any other route costs 1. The free plan has no credit cap, but the count
@@ -364,7 +385,7 @@ export function meteredFetch(inner: typeof fetch): typeof fetch {
       if (lines) {
         apiUsageMeter.record(lines, {
           requests: 1,
-          ok: res.ok,
+          ok: answeredStatus(lines, res.status),
           rateLimited: res.status === 429,
           ms: Date.now() - startedAt,
         });

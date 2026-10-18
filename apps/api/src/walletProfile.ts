@@ -407,10 +407,16 @@ export class WalletLiveReader {
     return result;
   }
 
-  /** The wallet's funder, read live when the linked-wallets job hasn't; null over budget. */
+  /**
+   * The wallet's funder, read live when the linked-wallets job hasn't; null over budget. The
+   * signatures page the overview already read (cached or in flight) is reused, not paid for again.
+   */
   async funder(wallet: string, now = Date.now()) {
     if (!this.spend(now)) return null;
-    return (await this.helius.getFundersBatch([wallet])).get(wallet) ?? null;
+    const hit = this.cache.get(wallet);
+    const overview = hit && now - hit.at < this.opts.ttlMs ? await hit.value.catch(() => null) : null;
+    const pagesOf = overview?.status === "found" ? new Map([[wallet, overview.signatures]]) : undefined;
+    return (await this.helius.getFundersBatch([wallet], { pagesOf })).get(wallet) ?? null;
   }
 }
 

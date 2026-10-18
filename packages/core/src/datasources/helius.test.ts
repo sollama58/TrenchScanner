@@ -1103,6 +1103,22 @@ describe("HeliusClient.getFundersBatch", () => {
     expect(asked.filter((c) => c.method === "getTransaction").map((c) => c.params[0])).toEqual(["s1", "s2"]);
   });
 
+  it("reuses a page it is handed instead of reading it again", async () => {
+    const txs: Record<string, unknown> = { s1: ataOpened, s2: funded };
+    const { url, requests } = await startServer((calls) =>
+      calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: txs[c.params[0] as string] ?? null })),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    const page = [
+      { signature: "s2", blockTime: SECONDS + 60 },
+      { signature: "s1", blockTime: SECONDS },
+    ];
+    const result = await client.getFundersBatch(["w"], { pagesOf: new Map([["w", page]]) });
+    expect(result.get("w")).toMatchObject({ status: "found", funder: "F", amountSol: 1 });
+    const asked = requests.flatMap((r) => r.body as { method: string }[]);
+    expect(asked.some((c) => c.method === "getSignaturesForAddress")).toBe(false);
+  });
+
   it("keeps a known funder on a re-read, paying only the page, unless the wallet revived", async () => {
     const now = (SECONDS + 200 * 86_400) * 1000;
     const nowS = now / 1000;
