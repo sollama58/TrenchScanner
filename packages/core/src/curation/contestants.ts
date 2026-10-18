@@ -674,7 +674,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
   {
     // User ask 2026-10-18 ("one new novel Profit-based model"). Profit's question asked another
     // way: not how much a coin will make, but whether its kind wins more money than it loses. Each
-    // training call counts by the money it made or lost (a +300% call 6x a stop-out), so the
+    // training call counts by the money it made or lost (a +500% call, the cap, 10x a stop-out), so the
     // score is gross gains over gross losses - the profit factor traders read a strategy by. A
     // classifier's gradient is bounded, so a few +500% runners can't own the fit as they can
     // Profit's squared error, and a flat coin that never sells barely counts (Profit learns
