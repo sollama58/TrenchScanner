@@ -7,7 +7,7 @@ import { ApiError, api, post } from "./api";
 import { burnWallet } from "./burn";
 import { toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
-import { withTimeout } from "./wallet";
+import { onWalletsChanged, withTimeout } from "./wallet";
 
 /**
  * Pro Mode trades from the token modal (user decision 2026-10-17): the API builds a swap for the
@@ -199,36 +199,6 @@ export function acceptDisclaimer(wallet: string): void {
       localStorage.setItem(DISCLAIMER_KEY, JSON.stringify([...wallets, wallet].slice(-20)));
   } catch {
     // Blocked storage: accepted for this page load only.
-  }
-}
-
-/**
- * Whether a token view opens with the Trade panel showing (user ask 2026-10-18: open by default,
- * as the small toggle was easy to miss). Full Pro Mode opens it unless this browser's trader
- * closed it last time; a wallet that may only sell keeps it shut until asked (or until it holds).
- */
-export function tradeOpenAtStart(state: ProState | null, closedBefore: boolean): boolean {
-  return !!state?.pro && !closedBefore;
-}
-
-const TRADE_CLOSED_KEY = "ts-pro-trade-closed";
-
-/** The trader closed the Trade panel last time, in this browser. */
-export function tradePanelClosed(): boolean {
-  try {
-    return localStorage.getItem(TRADE_CLOSED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-/** Remembers whether the trader left the Trade panel open, for the next token view. */
-export function rememberTradePanel(open: boolean): void {
-  try {
-    if (open) localStorage.removeItem(TRADE_CLOSED_KEY);
-    else localStorage.setItem(TRADE_CLOSED_KEY, "1");
-  } catch {
-    // Blocked storage: every token view opens it, the default.
   }
 }
 
@@ -454,6 +424,36 @@ async function accountFor(owner: string): Promise<{
   if (!account)
     throw new TradeError(`Switch ${w.name} to ${shortAddress(owner)}, the wallet you signed in with.`);
   return { account, sign: signer, name: w.name };
+}
+
+/** Whether this browser has a wallet that can sign `owner`'s trades (what accountFor will find). */
+export function canSignTrades(owner: string): boolean {
+  const w = burnWallet(owner);
+  return !!w && SolanaSignTransaction in w.wallet.features;
+}
+
+/**
+ * canSignTrades, kept current as wallet extensions load, register or come back from being unlocked.
+ * False on a venue that can't sign at all, such as a phone signed in by QR from a desktop (user ask
+ * 2026-10-18: no Trade section where a trade couldn't be signed).
+ */
+export function useCanSignTrades(owner: string | null): boolean {
+  const [can, setCan] = useState(() => !!owner && canSignTrades(owner));
+  useEffect(() => {
+    if (!owner) return setCan(false);
+    const refresh = () => setCan(canSignTrades(owner));
+    refresh();
+    const off = onWalletsChanged(refresh);
+    // Some extensions announce themselves a beat after the page.
+    const late = setTimeout(refresh, 2_000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      off();
+      clearTimeout(late);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [owner]);
+  return can;
 }
 
 /** The programs a Pro trade may call at its top level (the API's guard allows the same). */

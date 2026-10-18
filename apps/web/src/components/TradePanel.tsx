@@ -18,6 +18,9 @@ import {
   type TradeStage,
 } from "../proTrade";
 import { WalletTimeoutError } from "../wallet";
+import { renderPositionCard } from "../pnlCard";
+import { BoltIcon, CheckIcon, GearIcon, ShareIcon, ShieldIcon } from "./Icons";
+import { ShareImageDialog } from "./ShareImageDialog";
 
 /**
  * Pro Mode's Trade panel under the token modal's chart (user ask 2026-10-17): buy and sell the
@@ -25,7 +28,10 @@ import { WalletTimeoutError } from "../wallet";
  * chart above it grows and marks the trades while this is open or the wallet holds the coin.
  *
  * No TrenchScanner fee. What a trade costs beyond the swap is the network's: a priority fee and
- * Helius Sender's tip (0.000005 SOL on Eco, 0.001 SOL on Turbo), shown under the buttons.
+ * Helius Sender's tip (0.000005 SOL on Eco, 0.001 SOL on Turbo), broken down under the buttons.
+ *
+ * Redrawn 2026-10-18 (user ask): its own always-open section, Buy and Sell side by side (stacked
+ * on a phone), the position with a share card, and the fee explainer as a breakdown.
  */
 
 const LAMPORTS = 1_000_000_000;
@@ -121,12 +127,117 @@ function errorText(e: unknown): string {
   return message || "The trade stopped without saying why.";
 }
 
+const STAGES: { id: TradeStage; label: string }[] = [
+  { id: "building", label: "Build" },
+  { id: "signing", label: "Sign" },
+  { id: "sending", label: "Send" },
+  { id: "confirming", label: "Confirm" },
+];
+
+/** The four steps of a trade, the current one lit, the ones before it done. */
+function StageSteps({ stage }: { stage: TradeStage }) {
+  const at = STAGES.findIndex((s) => s.id === stage);
+  return (
+    <ol className="tm-trade-steps" aria-hidden="true">
+      {STAGES.map((s, i) => (
+        <li key={s.id} className={i < at ? "done" : i === at ? "on" : ""}>
+          <i />
+          {s.label}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+/** What a trade costs: the Solana network's fee, broken down, and TrenchScanner's 0%. */
+function FeeExplainer({
+  fee,
+  solUsd,
+}: {
+  fee: { priorityFeeLamports: string; tipLamports: string; baseFeeLamports: string } | null;
+  solUsd: number | null;
+}) {
+  const parts = fee
+    ? [
+        { key: "priority", label: "Priority fee", sol: Number(fee.priorityFeeLamports) / LAMPORTS },
+        { key: "tip", label: "Helius Sender tip", sol: Number(fee.tipLamports) / LAMPORTS },
+        { key: "base", label: "Base fee", sol: Number(fee.baseFeeLamports) / LAMPORTS },
+      ]
+    : [];
+  const total = fee ? feeTotalSol(fee) : null;
+  return (
+    <div className="tm-fee" aria-live="polite">
+      <div className="tm-fee-head">
+        <span className="tm-fee-title">Expected fee per trade</span>
+        <span className="tm-fee-total">
+          {total !== null ? (
+            <>
+              <strong className="num">{solText(total)}</strong>
+              {solUsd ? (
+                <small className="num muted">
+                  {" "}
+                  ≈ ${(total * solUsd).toFixed(total * solUsd < 0.1 ? 3 : 2)}
+                </small>
+              ) : null}
+            </>
+          ) : (
+            <span className="muted">Working it out…</span>
+          )}
+        </span>
+      </div>
+      {total !== null && total > 0 && (
+        <div className="tm-fee-bar" aria-hidden="true">
+          {parts.map((p) => (
+            <span key={p.key} className={p.key} style={{ flexGrow: Math.max(p.sol / total, 0.03) }} />
+          ))}
+        </div>
+      )}
+      <ul className="tm-fee-rows">
+        {parts.map((p) => (
+          <li key={p.key}>
+            <i className={`tm-fee-dot ${p.key}`} aria-hidden="true" />
+            <span>{p.label}</span>
+            <span className="num">{solText(p.sol)}</span>
+          </li>
+        ))}
+        <li className="tm-fee-zero">
+          <i className="tm-fee-dot zero" aria-hidden="true" />
+          <span>TrenchScanner platform fee</span>
+          <strong className="num">0%</strong>
+        </li>
+      </ul>
+      <p className="tm-fee-note">
+        The whole fee is a Solana blockchain fee, paid to the network and its validators.{" "}
+        <strong>TrenchScanner takes nothing from your trade.</strong>
+      </p>
+    </div>
+  );
+}
+
+/** A row of up to four preset buttons, two rows of three for five or six. */
+function presetCols(n: number): React.CSSProperties {
+  return { "--cols": n <= 4 ? Math.max(n, 1) : 3 } as React.CSSProperties;
+}
+
+/** One figure in the holdings grid. */
+function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }) {
+  return (
+    <div className="tm-hold-stat">
+      <span className="tm-hold-label">{label}</span>
+      <span className={`num tm-hold-value${tone ? ` ${tone}` : ""}`}>{value}</span>
+      {sub && <small className="num muted">{sub}</small>}
+    </div>
+  );
+}
+
 export function TradePanel({
   owner,
   mint,
   symbol,
+  name = null,
   position,
   summary,
+  nowMcap = null,
   onTraded,
   closeOnly = false,
   graceEndsAt = null,
@@ -134,8 +245,11 @@ export function TradePanel({
   owner: string;
   mint: string;
   symbol: string;
+  name?: string | null;
   position: PositionResponse | null;
   summary: PositionSummary | null;
+  /** The coin's market cap now (USD), for the holdings and the share card. */
+  nowMcap?: number | null;
   onTraded: () => void;
   /** Pro Mode has ended: selling what it holds only (closing a position is always allowed). */
   closeOnly?: boolean;
@@ -147,8 +261,11 @@ export function TradePanel({
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [showSettings, setShowSettings] = useState(false);
   const [accepted, setAccepted] = useState(() => disclaimerAccepted(owner));
+  const [sharing, setSharing] = useState(false);
+  const [shareAmounts, setShareAmounts] = useState(true);
   const busy = status.kind === "busy";
   const balance = position ? BigInt(position.balance) : 0n;
+  const solUsd = position?.solUsd ?? null;
 
   const update = (patch: Partial<TradeSettings>) => {
     const next = { ...settings, ...patch };
@@ -184,9 +301,56 @@ export function TradePanel({
 
   const customLamports = parseSol(custom);
   const fee = useFeeEstimate(mint, settings);
+  const hasPosition = !!summary && (summary.held > 0 || summary.buys > 0 || summary.sells > 0);
+  const open = !!summary && summary.held > 0;
+  const tone = summary?.pnlSol == null ? "" : summary.pnlSol >= 0 ? "up" : "down";
+  const canShare = !!summary && summary.pnlSol !== null && summary.pnlPct !== null;
+  const buyCustom = () =>
+    customLamports && void trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`);
 
   return (
     <section className="sage-card tm-trade" aria-label="Trade">
+      <header className="tm-trade-head">
+        <h4>
+          <BoltIcon size={14} /> Trade{symbol ? ` $${symbol}` : ""}
+        </h4>
+        <span className="tm-trade-tools">
+          <span className="segmented small tm-trade-speed" role="radiogroup" aria-label="Speed">
+            {(["eco", "turbo"] as const).map((sp) => (
+              <button
+                key={sp}
+                type="button"
+                role="radio"
+                aria-checked={settings.speed === sp}
+                className={`${settings.speed === sp ? "on" : ""} ${sp}`}
+                title={
+                  sp === "eco"
+                    ? "One fast path, a 0.000005 SOL tip"
+                    : "Every Helius path for the fastest landing, a 0.001 SOL tip: for launches where a slot matters"
+                }
+                onClick={() => update({ speed: sp })}
+              >
+                {sp === "eco" ? "Eco" : "Turbo"}
+              </button>
+            ))}
+          </span>
+          <button
+            type="button"
+            className={`ghost small tm-trade-gear${showSettings ? " on" : ""}`}
+            aria-expanded={showSettings}
+            onClick={() => setShowSettings(!showSettings)}
+          >
+            <GearIcon size={13} />
+            <span className="num">{settings.slippagePct}%</span>
+            <span className="tm-trade-gear-text">
+              slip
+              {settings.priorityMode === "custom" ? " · custom fee" : ""}
+              {settings.mevProtect ? " · MEV shield" : ""}
+            </span>
+          </button>
+        </span>
+      </header>
+
       {graceEndsAt !== null && !closeOnly && (
         <p className="small tm-trade-warn" role="alert">
           Pro Mode ends in <strong className="num">{graceLeftText(graceEndsAt)}</strong> unless your wallet is
@@ -198,63 +362,89 @@ export function TradePanel({
           Pro Mode has ended for this wallet, so buying is off. You can still sell what you hold.
         </p>
       )}
-      {summary && (summary.held > 0 || summary.buys > 0 || summary.sells > 0) && (
-        <div className="tm-trade-pos">
-          <div className="tm-fig">
-            <label>Holding</label>
-            <span className="num">
-              {tokensText(summary.held)} {symbol}
-            </span>
-            {summary.valueSol !== null && summary.held > 0 && (
-              <small className="num muted">
-                {solText(summary.valueSol)}
-                {position?.solUsd ? ` · ${usd(summary.valueSol * position.solUsd)}` : ""}
-              </small>
-            )}
-          </div>
-          <div className="tm-fig">
-            <label>Avg entry</label>
-            <span className={summary.entryMcap ? "num" : "num none"}>
-              {summary.entryMcap ? usd(summary.entryMcap) : "–"}
-            </span>
-            <small className="num muted">
-              {solText(summary.solIn)} in · {solText(summary.solOut)} out
-            </small>
-          </div>
-          <div className="tm-fig">
-            <label>PnL</label>
-            {summary.pnlSol !== null ? (
-              <>
-                <span className={`num ${summary.pnlSol >= 0 ? "up" : "down"}`}>
-                  {solText(summary.pnlSol, true)}
+
+      {hasPosition && summary && (
+        <div className={`tm-hold ${tone}`}>
+          <div className="tm-hold-hero">
+            <div className="tm-hold-pnl">
+              <span className="tm-hold-kicker">
+                Your position{" "}
+                <span className={`tm-hold-chip${open ? " open" : ""}`}>{open ? "Open" : "Closed"}</span>
+              </span>
+              {summary.pnlSol !== null ? (
+                <span className="tm-hold-big">
+                  <strong className={`num ${tone}`}>{solText(summary.pnlSol, true)}</strong>
+                  <span className={`num tm-hold-pct ${tone}`}>
+                    {signedPct((summary.pnlPct ?? 0) * 100, 1)}
+                  </span>
+                  {solUsd ? (
+                    <small className="num muted">
+                      {summary.pnlSol < 0 ? "-" : "+"}
+                      {usd(Math.abs(summary.pnlSol * solUsd))}
+                    </small>
+                  ) : null}
                 </span>
-                <small className={`num delta ${summary.pnlSol >= 0 ? "up" : "down"}`}>
-                  {signedPct((summary.pnlPct ?? 0) * 100, 1)}
-                </small>
-              </>
-            ) : (
-              <span className="num none">–</span>
-            )}
+              ) : (
+                <span className="tm-hold-big">
+                  <strong className="num none">PnL –</strong>
+                  <small className="muted">
+                    {position?.truncated ? "older trades aren't counted" : "can't price it just now"}
+                  </small>
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              className="tm-hold-share"
+              disabled={!canShare}
+              title={
+                canShare
+                  ? "Share this position as an image (your wallet is never on it)"
+                  : "Nothing to share yet"
+              }
+              onClick={() => setSharing(true)}
+            >
+              <ShareIcon size={14} /> Share PnL
+            </button>
           </div>
-          <div className="tm-fig">
-            <label>Trades</label>
-            <span className="num">
-              {summary.buys} buy{summary.buys === 1 ? "" : "s"} · {summary.sells} sell
-              {summary.sells === 1 ? "" : "s"}
-            </span>
-            {position?.truncated && <small className="muted">older trades not counted</small>}
-            {position?.historyUnavailable && <small className="muted">history unavailable just now</small>}
+          <div className="tm-hold-stats">
+            <Stat
+              label="Holding"
+              value={open ? `${tokensText(summary.held)}` : "0"}
+              sub={
+                open && summary.valueSol !== null
+                  ? `${solText(summary.valueSol)}${solUsd ? ` · ${usd(summary.valueSol * solUsd)}` : ""}`
+                  : open
+                    ? symbol
+                    : "sold out"
+              }
+            />
+            <Stat
+              label="Avg entry"
+              value={summary.entryMcap ? usd(summary.entryMcap) : "–"}
+              sub={nowMcap ? `now ${usd(nowMcap)}` : undefined}
+            />
+            <Stat label="Put in" value={solText(summary.solIn)} sub={`${solText(summary.solOut)} back`} />
+            <Stat
+              label="Trades"
+              value={`${summary.buys} / ${summary.sells}`}
+              sub={`buy${summary.buys === 1 ? "" : "s"} / sell${summary.sells === 1 ? "" : "s"}`}
+            />
           </div>
+          {position?.historyUnavailable && (
+            <p className="small muted tm-hold-note">Trade history is unavailable just now.</p>
+          )}
         </div>
       )}
 
       {!accepted ? (
         <div className="tm-trade-disclaimer" role="note" aria-label="Before you trade">
+          <ShieldIcon size={18} />
           <p className="small">
             <strong>Before your first trade.</strong> {TRADE_DISCLAIMER}
           </p>
           <button
-            className="small"
+            className="primary"
             onClick={() => {
               acceptDisclaimer(owner);
               setAccepted(true);
@@ -264,249 +454,271 @@ export function TradePanel({
           </button>
         </div>
       ) : (
-        <>
+        <div className={`tm-trade-sides${closeOnly ? " one" : ""}`}>
           {!closeOnly && (
-            <div className="tm-trade-row" role="group" aria-label="Buy">
-              <span className="tm-trade-label up">Buy</span>
-              {settings.buyPresets.map((sol) => (
+            <div className="tm-side buy" role="group" aria-label="Buy">
+              <div className="tm-side-head">
+                <span className="tm-side-title">Buy</span>
+                <span className="muted small">with SOL</span>
+              </div>
+              <div className="tm-presets" style={presetCols(settings.buyPresets.length)}>
+                {settings.buyPresets.map((sol) => (
+                  <button
+                    key={sol}
+                    type="button"
+                    className="tm-preset"
+                    disabled={busy}
+                    onClick={() => trade("buy", BigInt(Math.round(sol * LAMPORTS)), `Buy ${solText(sol)}`)}
+                  >
+                    <span className="num">{sol}</span>
+                    <small>SOL</small>
+                  </button>
+                ))}
+              </div>
+              <div className="tm-amount">
+                <span className="tm-amount-field">
+                  <input
+                    inputMode="decimal"
+                    placeholder="Amount"
+                    aria-label="Buy amount in SOL"
+                    value={custom}
+                    onChange={(e) => setCustom(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") buyCustom();
+                    }}
+                  />
+                  <span className="tm-amount-unit">SOL</span>
+                </span>
                 <button
-                  key={sol}
                   type="button"
-                  className="tm-trade-btn buy"
-                  disabled={busy}
-                  onClick={() => trade("buy", BigInt(Math.round(sol * LAMPORTS)), `Buy ${solText(sol)}`)}
-                >
-                  {sol}
-                </button>
-              ))}
-              <span className="tm-trade-custom">
-                <input
-                  inputMode="decimal"
-                  placeholder="SOL"
-                  aria-label="Buy amount in SOL"
-                  value={custom}
-                  onChange={(e) => setCustom(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && customLamports)
-                      void trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`);
-                  }}
-                />
-                <button
-                  type="button"
-                  className="tm-trade-btn buy"
+                  className="tm-go"
                   disabled={busy || !customLamports}
-                  onClick={() =>
-                    customLamports &&
-                    trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`)
-                  }
+                  onClick={buyCustom}
                 >
                   Buy
                 </button>
-              </span>
+              </div>
             </div>
           )}
-
-          <div className="tm-trade-row" role="group" aria-label="Sell">
-            <span className="tm-trade-label down">Sell</span>
-            {settings.sellPresets.map((pct) => (
-              <button
-                key={pct}
-                type="button"
-                className="tm-trade-btn sell"
-                disabled={busy || balance === 0n}
-                title={balance === 0n ? "Nothing to sell" : undefined}
-                onClick={() => trade("sell", shareOf(balance, pct), `Sell ${pct}%`, pct >= 100)}
-              >
-                {pct}%
-              </button>
-            ))}
-            <button
-              type="button"
-              className={`ghost small tm-trade-turbo${settings.speed === "turbo" ? " on" : ""}`}
-              aria-pressed={settings.speed === "turbo"}
-              title="Turbo sends through every Helius path for the fastest landing, for a 0.001 SOL tip instead of 0.000005"
-              onClick={() => update({ speed: settings.speed === "turbo" ? "eco" : "turbo" })}
-            >
-              Turbo {settings.speed === "turbo" ? "on" : "off"}
-            </button>
-            <button
-              type="button"
-              className="ghost small tm-trade-gear"
-              aria-expanded={showSettings}
-              onClick={() => setShowSettings(!showSettings)}
-            >
-              {settings.slippagePct}% slip
-              {settings.priorityMode === "custom" ? " · custom fee" : ""}
-              {settings.mevProtect ? " · MEV shield" : ""}
-            </button>
+          <div className="tm-side sell" role="group" aria-label="Sell">
+            <div className="tm-side-head">
+              <span className="tm-side-title">Sell</span>
+              <span className="muted small num">
+                {balance > 0n && summary ? `${tokensText(summary.held)} ${symbol} held` : "nothing held"}
+              </span>
+            </div>
+            <div className="tm-presets" style={presetCols(settings.sellPresets.length)}>
+              {settings.sellPresets.map((pct) => (
+                <button
+                  key={pct}
+                  type="button"
+                  className="tm-preset"
+                  disabled={busy || balance === 0n}
+                  title={balance === 0n ? "Nothing to sell" : undefined}
+                  onClick={() => trade("sell", shareOf(balance, pct), `Sell ${pct}%`, pct >= 100)}
+                >
+                  <span className="num">{pct}%</span>
+                  {pct >= 100 && <small>all</small>}
+                </button>
+              ))}
+            </div>
           </div>
-        </>
+        </div>
       )}
 
       {showSettings && (
         <div className="tm-trade-settings">
-          <label>
-            Slippage
-            <input
-              type="number"
-              min={0.1}
-              max={50}
-              step={0.5}
-              value={settings.slippagePct}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (v >= 0.1 && v <= 50) update({ slippagePct: v });
-              }}
-            />
-            %
-          </label>
-          <span className="segmented small" role="radiogroup" aria-label="Speed">
-            {(["eco", "turbo"] as const).map((s) => (
-              <button
-                key={s}
-                type="button"
-                role="radio"
-                aria-checked={settings.speed === s}
-                className={settings.speed === s ? "on" : ""}
-                title={
-                  s === "eco"
-                    ? "One fast path, a 0.000005 SOL tip"
-                    : "Every Helius path, a 0.001 SOL tip: for launches where a slot matters"
-                }
-                onClick={() => update({ speed: s })}
-              >
-                {s === "eco" ? "Eco" : "Turbo"}
-              </button>
-            ))}
-          </span>
-          <span className="segmented small" role="radiogroup" aria-label="Priority fee">
-            {(["auto", "custom"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                role="radio"
-                aria-checked={settings.priorityMode === m}
-                className={settings.priorityMode === m ? "on" : ""}
-                title={
-                  m === "auto"
-                    ? "The network's going rate, capped at 0.00005 SOL on Eco and 0.001 SOL on Turbo"
-                    : "Your own priority fee per trade"
-                }
-                onClick={() => update({ priorityMode: m })}
-              >
-                {m === "auto" ? "Auto fee" : "Custom fee"}
-              </button>
-            ))}
-          </span>
-          {settings.priorityMode === "custom" && (
-            <label>
-              Priority fee
+          <label className="tm-set">
+            <span>Slippage</span>
+            <span className="tm-set-input">
               <input
                 type="number"
-                min={0}
-                max={MAX_CUSTOM_FEE_SOL}
-                step={0.00001}
-                defaultValue={settings.customPrioritySol}
-                onBlur={(e) => {
+                min={0.1}
+                max={50}
+                step={0.5}
+                value={settings.slippagePct}
+                onChange={(e) => {
                   const v = Number(e.target.value);
-                  if (Number.isFinite(v) && v >= 0 && v <= MAX_CUSTOM_FEE_SOL)
-                    update({ customPrioritySol: v });
+                  if (v >= 0.1 && v <= 50) update({ slippagePct: v });
                 }}
               />
-              SOL
+              <i>%</i>
+            </span>
+          </label>
+          <div className="tm-set">
+            <span>Priority fee</span>
+            <span className="segmented small" role="radiogroup" aria-label="Priority fee">
+              {(["auto", "custom"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={settings.priorityMode === m}
+                  className={settings.priorityMode === m ? "on" : ""}
+                  title={
+                    m === "auto"
+                      ? "The network's going rate, capped at 0.00005 SOL on Eco and 0.001 SOL on Turbo"
+                      : "Your own priority fee per trade"
+                  }
+                  onClick={() => update({ priorityMode: m })}
+                >
+                  {m === "auto" ? "Auto" : "Custom"}
+                </button>
+              ))}
+            </span>
+          </div>
+          {settings.priorityMode === "custom" && (
+            <label className="tm-set">
+              <span>Your priority fee</span>
+              <span className="tm-set-input">
+                <input
+                  type="number"
+                  min={0}
+                  max={MAX_CUSTOM_FEE_SOL}
+                  step={0.00001}
+                  defaultValue={settings.customPrioritySol}
+                  onBlur={(e) => {
+                    const v = Number(e.target.value);
+                    if (Number.isFinite(v) && v >= 0 && v <= MAX_CUSTOM_FEE_SOL)
+                      update({ customPrioritySol: v });
+                  }}
+                />
+                <i>SOL</i>
+              </span>
             </label>
           )}
           <label
+            className="tm-set"
             title={`At least ${MIN_TIP_SOL[settings.speed]} SOL on ${settings.speed === "turbo" ? "Turbo" : "Eco"}`}
           >
-            Sender tip
-            <input
-              type="number"
-              min={MIN_TIP_SOL[settings.speed]}
-              max={MAX_CUSTOM_FEE_SOL}
-              step={0.000001}
-              placeholder={`${MIN_TIP_SOL[settings.speed]} (minimum)`}
-              defaultValue={settings.customTipSol ?? ""}
-              onBlur={(e) => {
-                if (e.target.value.trim() === "") return update({ customTipSol: null });
-                const v = Number(e.target.value);
-                if (Number.isFinite(v) && v > 0 && v <= MAX_CUSTOM_FEE_SOL) update({ customTipSol: v });
-              }}
-            />
-            SOL
+            <span>Sender tip</span>
+            <span className="tm-set-input">
+              <input
+                type="number"
+                min={MIN_TIP_SOL[settings.speed]}
+                max={MAX_CUSTOM_FEE_SOL}
+                step={0.000001}
+                placeholder={`${MIN_TIP_SOL[settings.speed]}`}
+                defaultValue={settings.customTipSol ?? ""}
+                onBlur={(e) => {
+                  if (e.target.value.trim() === "") return update({ customTipSol: null });
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v) && v > 0 && v <= MAX_CUSTOM_FEE_SOL) update({ customTipSol: v });
+                }}
+              />
+              <i>SOL</i>
+            </span>
           </label>
-          <label title="Keeps your trade away from validators known for sandwich attacks">
+          <label className="tm-set">
+            <span>Buy buttons</span>
+            <span className="tm-set-input">
+              <input
+                defaultValue={settings.buyPresets.join(", ")}
+                onBlur={(e) => {
+                  const list = e.target.value
+                    .split(/[\s,]+/)
+                    .map(Number)
+                    .filter((n) => n > 0 && n <= 100)
+                    .slice(0, 6);
+                  if (list.length > 0) update({ buyPresets: list });
+                }}
+              />
+              <i>SOL</i>
+            </span>
+          </label>
+          <label
+            className="tm-set tm-set-check"
+            title="Keeps your trade away from validators known for sandwich attacks"
+          >
             <input
               type="checkbox"
               checked={settings.mevProtect}
               onChange={(e) => update({ mevProtect: e.target.checked })}
             />
-            MEV shield
-          </label>
-          <label>
-            Buy buttons (SOL)
-            <input
-              defaultValue={settings.buyPresets.join(", ")}
-              onBlur={(e) => {
-                const list = e.target.value
-                  .split(/[\s,]+/)
-                  .map(Number)
-                  .filter((n) => n > 0 && n <= 100)
-                  .slice(0, 6);
-                if (list.length > 0) update({ buyPresets: list });
-              }}
-            />
+            <span>MEV shield</span>
           </label>
         </div>
       )}
 
-      <p className={`small tm-trade-status ${status.kind}`} aria-live="polite">
-        {status.kind === "busy" &&
-          `${status.what}: ${STAGE_TEXT[status.stage]}${status.quote ? ` ${status.quote}` : ""}`}
-        {status.kind === "done" && (
-          <>
-            {status.text}{" "}
-            <a href={`https://solscan.io/tx/${status.signature}`} target="_blank" rel="noreferrer">
-              View
-            </a>
-          </>
-        )}
-        {status.kind === "error" && (
-          <>
-            {status.text}
-            {status.signature && (
-              <>
-                {" "}
-                <a href={`https://solscan.io/tx/${status.signature}`} target="_blank" rel="noreferrer">
-                  Check it
-                </a>
-              </>
-            )}
-          </>
-        )}
-      </p>
-      <p className="small tm-trade-fee" aria-live="polite">
-        {fee ? (
-          <>
-            Expected network fee <strong className="num">{solText(feeTotalSol(fee))}</strong>
-            <span className="muted num">
-              {" "}
-              (priority {solText(Number(fee.priorityFeeLamports) / LAMPORTS)} · Sender tip{" "}
-              {solText(Number(fee.tipLamports) / LAMPORTS)} · base{" "}
-              {solText(Number(fee.baseFeeLamports) / LAMPORTS)})
-            </span>
-            . This is a Solana blockchain fee, paid to the network.{" "}
-          </>
-        ) : (
-          "Working out the network fee… "
-        )}
-        <strong>TrenchScanner platform fee: 0%.</strong>
-      </p>
+      {status.kind !== "idle" && (
+        <div className={`tm-trade-status ${status.kind}`} aria-live="polite">
+          {status.kind === "busy" && (
+            <>
+              <StageSteps stage={status.stage} />
+              <p className="small">
+                <strong>{status.what}:</strong> {STAGE_TEXT[status.stage]}
+                {status.quote ? <span className="muted"> {status.quote}</span> : null}
+              </p>
+            </>
+          )}
+          {status.kind === "done" && (
+            <p className="small">
+              <CheckIcon size={14} /> {status.text}{" "}
+              <a href={`https://solscan.io/tx/${status.signature}`} target="_blank" rel="noreferrer">
+                View on Solscan
+              </a>
+            </p>
+          )}
+          {status.kind === "error" && (
+            <p className="small">
+              {status.text}
+              {status.signature && (
+                <>
+                  {" "}
+                  <a href={`https://solscan.io/tx/${status.signature}`} target="_blank" rel="noreferrer">
+                    Check it
+                  </a>
+                </>
+              )}
+            </p>
+          )}
+        </div>
+      )}
+
+      <FeeExplainer fee={fee} solUsd={solUsd} />
+
       {accepted && (
         <details className="small tm-trade-about">
           <summary>About trading here</summary>
           <p>{TRADE_DISCLAIMER}</p>
         </details>
+      )}
+
+      {sharing && summary && summary.pnlSol !== null && summary.pnlPct !== null && (
+        <ShareImageDialog
+          title={`${symbol ? `$${symbol}` : "Position"} PnL`}
+          fileName={`trenchscanner-${symbol.replace(/[^a-z0-9]/gi, "").toLowerCase() || "token"}-pnl`}
+          caption={`${symbol ? `$${symbol}` : "A token"} ${signedPct(summary.pnlPct * 100, 1)} with TrenchScanner`}
+          link="trenchscanner.app"
+          drawKey={shareAmounts ? "amounts" : "pct"}
+          controls={
+            <label className="small tm-share-opt">
+              <input
+                type="checkbox"
+                checked={shareAmounts}
+                onChange={(e) => setShareAmounts(e.target.checked)}
+              />
+              Show SOL amounts (off shows percentages only)
+            </label>
+          }
+          render={() =>
+            renderPositionCard({
+              symbol: symbol || null,
+              name,
+              mintAddress: mint,
+              open,
+              pnlPct: summary.pnlPct!,
+              pnlSol: summary.pnlSol!,
+              solUsd,
+              solIn: summary.solIn,
+              solBack: summary.solOut + (summary.valueSol ?? 0),
+              entryMcap: summary.entryMcap,
+              nowMcap,
+              showAmounts: shareAmounts,
+            })
+          }
+          onClose={() => setSharing(false)}
+        />
       )}
     </section>
   );
