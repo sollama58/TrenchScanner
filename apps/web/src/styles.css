@@ -13198,16 +13198,65 @@ button.bm-same {
 }
 .bm-group-list {
   display: grid;
-  gap: 12px;
+  gap: 6px;
 }
+/* Beats .tm-modal .sage-card h4's bottom margin: the folded headings sit close together. */
 .bm-group-section h4 {
-  margin: 0 0 6px;
+  margin: 0 !important;
+}
+/* Each kind folds to its heading, one open at a time (user ask 2026-10-18): name, count, total %. */
+.bm-section-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  text-align: left;
   color: var(--ink-2);
-  opacity: 0.8;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.bm-section-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface-3);
+}
+.bm-group-section.open .bm-section-btn {
+  color: var(--ink);
+}
+.bm-section-btn.has-pick {
+  border-color: color-mix(in srgb, var(--brand-a) 45%, var(--border));
+}
+.bm-section-count {
+  padding: 1px 7px;
+  font-size: 10.5px;
+  letter-spacing: 0;
+  color: var(--ink-2);
+  background: var(--surface-3);
+  border-radius: 999px;
+}
+.bm-section-pct {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--ink);
+}
+.bm-section-chev {
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+.bm-section-btn[aria-expanded="true"] .bm-section-chev {
+  transform: rotate(180deg);
+}
+.bm-group-section > ul {
+  margin-top: 6px;
 }
 .about-body .bm-group-section ul {
   gap: 6px;
@@ -14141,28 +14190,21 @@ button.bm-same {
   vertical-align: 1px;
   margin-top: 0;
 }
-/* The chart's warning when the coin isn't getting instant updates (2026-10-18). */
+/* The chart's "Delayed" pill: the coin isn't getting instant updates (2026-10-18). */
 .tm-delay {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 0 0 8px;
-  padding: 7px 10px;
-  border-radius: var(--radius-s);
-  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-  color: var(--ink-2);
-}
-.tm-delay svg {
-  flex: none;
-  margin-top: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--warn-ink);
-}
-.tm-delay strong {
-  color: var(--warn-ink);
-}
-.tm-delay-when {
-  color: var(--muted);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  vertical-align: middle;
+  cursor: help;
 }
 /* The chart's "Live" pill: the coin's curve is drawn as it changes. */
 .tm-live {
@@ -15918,8 +15960,24 @@ body:has(.util-toast) .bug-fab {
 .th-mark svg {
   display: block;
 }
-.th-xfer {
-  color: var(--ink-2);
+/* A transfer with another top holder (user ask 2026-10-18): which way the coin went and that
+   holder's rank on the list; opens the other wallet. */
+.th-xfer-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: inherit;
+  cursor: pointer;
+}
+.th-xfer-tag:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--bm-xfer) 70%, transparent);
+  background: color-mix(in srgb, var(--bm-xfer) 22%, transparent);
+}
+.th-xfer-tag.got .bm-xfer-arrow {
+  transform: scaleX(-1);
 }
 /* How it got in, a line of its own under the name and labels. */
 .th-entry {
