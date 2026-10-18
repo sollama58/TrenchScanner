@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "./db.js";
 import {
+  answeredStatus,
   apiUsageMeter,
   classifyApiRequest,
   flushApiUsage,
@@ -144,6 +145,34 @@ describe("feature attribution", () => {
     expect(heliusRow.counter).toMatchObject({ calls: 2, requests: 1, credits: 2, errors: 0 });
     const rug = rows.find((r) => r.provider === "rugcheck")!;
     expect(rug.counter).toMatchObject({ calls: 2, requests: 2, errors: 2, rateLimited: 1 });
+  });
+
+  it("counts Helius identity lookups at 100 credits, a 404 (no name) included", async () => {
+    const wallet = "9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin";
+    const one = classifyApiRequest(`https://api.helius.xyz/v1/wallet/${wallet}/identity`, "GET", undefined);
+    expect(one).toEqual([
+      { provider: "helius", endpoint: "GET /v1/wallet/:id/identity", calls: 1, credits: 100 },
+    ]);
+    const batch = classifyApiRequest(
+      "https://api.helius.xyz/v1/wallet/batch-identity",
+      "POST",
+      JSON.stringify({ addresses: [wallet, wallet] }),
+    );
+    expect(batch).toEqual([
+      { provider: "helius", endpoint: "POST /v1/wallet/batch-identity", calls: 1, credits: 100 },
+    ]);
+    expect(answeredStatus(one, 404)).toBe(true);
+    expect(answeredStatus(one, 500)).toBe(false);
+    expect(answeredStatus(batch, 404)).toBe(false);
+    expect(answeredStatus(classifyApiRequest("https://api.rugcheck.xyz/v1/x", "GET", undefined), 404)).toBe(
+      false,
+    );
+
+    apiUsageMeter.take();
+    const f = meteredFetch((async () => new Response("{}", { status: 404 })) as typeof fetch);
+    await f(`https://api.helius.xyz/v1/wallet/${wallet}/identity`);
+    const row = apiUsageMeter.take().find((r) => r.provider === "helius")!;
+    expect(row.counter).toMatchObject({ calls: 1, credits: 100, errors: 0 });
   });
 
   it("charges credits only for answered calls, not errors or 429s", async () => {
