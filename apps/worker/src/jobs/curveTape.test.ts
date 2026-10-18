@@ -22,7 +22,10 @@ const state = (price: number): CurveState => ({
   quoteIsSol: true,
 });
 
-function setup(coveredSince: number | null) {
+function setup(
+  coveredSince: number | null,
+  ages: { maxAgeMinutes?: number; featureMaxAgeMinutes?: number } = {},
+) {
   const reads: string[][] = [];
   const reader = {
     getCurveStatesBatch: vi.fn(async (curves: string[]) => {
@@ -41,6 +44,7 @@ function setup(coveredSince: number | null) {
     streamCreditsPerDay: 100_000,
     pollSeconds: 3_600,
     pollMaxMints: 100,
+    ...ages,
   });
   return { reads, reader, stream, stop };
 }
@@ -100,6 +104,15 @@ describe("curve tape", () => {
     expect(s.reads).toHaveLength(2);
     followYoungCurves([], NOW + 6_000);
     expect(s.stream.unwatch).toHaveBeenCalledWith(`curve:${MINT}`);
+    expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBeNull();
+  });
+
+  it("follows coins past the features' age for the recorder, with their features still null", () => {
+    const s = setup(NOW - 1_000, { maxAgeMinutes: 30, featureMaxAgeMinutes: 15 });
+    stop = s.stop;
+    followYoungCurves([{ ...young, launchedAt: new Date(NOW - 20 * 60_000) }], NOW);
+    expect(s.stream.watch).toHaveBeenCalledTimes(1);
+    onCurveStreamUpdate(`curve:${MINT}`, Buffer.alloc(10).toString("base64"), 500, NOW + 6_000);
     expect(curvePathOf(MINT, NOW + 6_000).curveCoveredSec).toBeNull();
   });
 

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { CONTESTANTS, enabledContestants, CONTESTANT_IDS, type CuratorRecipe } from "./contestants.js";
+import {
+  CONTESTANTS,
+  enabledContestants,
+  CONTESTANT_IDS,
+  isMemberLearner,
+  type CuratorRecipe,
+} from "./contestants.js";
 import {
   breedChallengers,
   chooseReplacement,
@@ -14,6 +20,7 @@ import {
   withLanes,
   goalNamed,
   shownLaneName,
+  laneCallName,
   type Lane,
   type LaneFitness,
 } from "./evolution.js";
@@ -357,5 +364,20 @@ describe("the forest and objective families", () => {
     // An unset goal is the 2x goal, on both sides.
     expect(chooseReplacement({ ...base, challengerGoals: [undefined] })?.slot).toBe("plain");
     expect(chooseReplacement({ ...base, challengerGoals: ["safe"] })).toBeNull();
+  });
+});
+
+describe("laneCallName", () => {
+  it("names a founding lane by its roster name, whatever name it was stored under", () => {
+    const recipe = { learner: "linear" } as unknown as Lane["recipe"];
+    const spec = CONTESTANTS.find((c) => c.recipe && c.name !== "Formula" && isMemberLearner(c))!;
+    expect(laneCallName({ slot: spec.id, name: "Old Stored Name", recipe, generation: 0 })).toBe(spec.name);
+  });
+
+  it("names a bred lane as goalNamed shows it", () => {
+    const recipe = { learner: "linear", goal: "return" } as unknown as Lane["recipe"];
+    expect(laneCallName({ slot: "x", name: "Return Lean Linear #7", recipe, generation: 3 })).toBe(
+      "Lean Formula #7",
+    );
   });
 });

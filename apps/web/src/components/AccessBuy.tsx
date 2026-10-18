@@ -101,7 +101,11 @@ export function AccessBuy({
           {stage ? STAGE_TEXT[stage] : "Buy $ASDFASDFA"}
         </button>
       </div>
-      {!valid && <p className="faint small">Between 0.001 and {MAX_SOL} SOL.</p>}
+      {!valid && (
+        <p className="faint small">
+          Between {MIN_TRADE_SOL} and {MAX_SOL} SOL.
+        </p>
+      )}
       {done && <p className="small good-text">Bought. Burn it below to get access.</p>}
       {error && (
         <p className="error small" role="alert">

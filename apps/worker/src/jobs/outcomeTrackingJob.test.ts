@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { reconcileMatchOutcome, type MatchOutcomeState } from "./outcomeTrackingJob.js";
+import {
+  readOutcomeCheckpoint,
+  reconcileMatchOutcome,
+  type MatchOutcomeState,
+} from "./outcomeTrackingJob.js";
 
 const NOW = new Date("2026-08-27T05:00:00.000Z");
 const PEAKED_AT = new Date("2026-08-01T12:00:00.000Z");
@@ -124,5 +128,53 @@ describe("reconcileMatchOutcome", () => {
   it("falls back to now when a recorded peak has no timestamp", () => {
     const state = pristine({ peakMcapUsd: 300_000, peakMcapAt: null, peakReturnPct: 200 });
     expect(reconcileMatchOutcome(state, undefined, NOW)).toEqual({ hitHundredPctAt: NOW });
+  });
+});
+
+describe("readOutcomeCheckpoint", () => {
+  const saved = {
+    runStartedAt: "2026-10-18T05:36:00.000Z",
+    snapshotsSince: "2026-10-16T05:56:00.000Z",
+    stage: "live",
+    after: "Mint123",
+    fromSnapshots: 4,
+    fromLivePings: 1,
+    failedBatches: 0,
+    callPeaksRaised: 2,
+    matchesChecked: 900,
+    peaksUpdated: 7,
+    missingLiveData: 30,
+    resumes: 1,
+  };
+  const at = (iso: string) => Date.parse(iso);
+
+  it("resumes a run a deploy cut short", () => {
+    // What 2026-10-18 needed: three deploys in an hour each killed the run, and each catch-up
+    // started from the first token again.
+    const meta = { runningSince: "2026-10-18T05:36:00.000Z", outcomeResume: saved };
+    expect(readOutcomeCheckpoint(meta, at("2026-10-18T06:06:00.000Z"))).toEqual(saved);
+  });
+
+  it("starts over when the saved run belongs to a slot long gone", () => {
+    expect(readOutcomeCheckpoint({ outcomeResume: saved }, at("2026-10-18T18:00:00.000Z"))).toBeNull();
+  });
+
+  it("starts over with nothing saved, or a meta it can't read", () => {
+    const now = at("2026-10-18T06:06:00.000Z");
+    expect(readOutcomeCheckpoint(null, now)).toBeNull();
+    expect(readOutcomeCheckpoint({ durationMs: 1000, dailyAtHourUtc: 5 }, now)).toBeNull();
+    expect(readOutcomeCheckpoint({ outcomeResume: { ...saved, stage: "nope" } }, now)).toBeNull();
+    expect(readOutcomeCheckpoint({ outcomeResume: { ...saved, runStartedAt: "garbage" } }, now)).toBeNull();
+  });
+
+  it("keeps a sweep with no snapshot bound unbounded, and fills missing counts with zero", () => {
+    const { matchesChecked: _m, ...rest } = saved;
+    void _m;
+    const read = readOutcomeCheckpoint(
+      { outcomeResume: { ...rest, snapshotsSince: null, stage: "match-peaks" } },
+      at("2026-10-18T06:06:00.000Z"),
+    );
+    expect(read?.snapshotsSince).toBeNull();
+    expect(read?.matchesChecked).toBe(0);
   });
 });

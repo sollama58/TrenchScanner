@@ -52,6 +52,22 @@ describe.skipIf(!dbAvailable)("browser session revocation", () => {
     expect((await me(fresh)).statusCode).toBe(200);
   });
 
+  it("a Privy account's session re-read still says Privy", async () => {
+    // Regression (2026-10-18): the session check's row lacked privyUserId, so every /auth/me after
+    // sign-in answered "wallet" and Settings swapped the Privy wallet card out.
+    const privy = await prisma.user.create({
+      data: { walletAddress: `${TAG}-privy`, privyUserId: `${TAG}-did` },
+    });
+    const cookie = await signer.sign({
+      userId: privy.id,
+      walletAddress: privy.walletAddress,
+      sessionVersion: 0,
+    });
+    const res = await me(cookie);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().signInMethod).toBe("privy");
+  });
+
   it("a stale cookie's logout can't sign out the user's newer sessions", async () => {
     const stale = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
     await app.inject({ method: "POST", url: "/auth/logout", cookies: { [SESSION_COOKIE_NAME]: stale } });

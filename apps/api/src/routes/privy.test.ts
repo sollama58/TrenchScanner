@@ -2,13 +2,13 @@
 import "../bootstrap-env.js";
 import { generateKeyPairSync, randomBytes } from "node:crypto";
 import bs58 from "bs58";
-import { SignJWT, generateKeyPair, type KeyLike } from "jose";
+import { SignJWT, errors, generateKeyPair, type KeyLike } from "jose";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { loadEnv, prisma, SUBSCRIPTION_MINT, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
-import { privyTestDoubles, verifyPrivyToken } from "../privy.js";
+import { PrivyUnavailable, privyTestDoubles, verifyPrivyToken } from "../privy.js";
 import { openSecret, resetTwoFactorFailuresForTests, sealSecret, totpCode } from "../twoFactor.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -59,6 +59,27 @@ describe("verifyPrivyToken", () => {
     expect(await verifyPrivyToken(env, await privyToken("did:privy:abc", { key: otherKey }))).toBeNull();
     expect(await verifyPrivyToken(env, await privyToken("someone-else"))).toBeNull();
     expect(await verifyPrivyToken(env, "not-a-token")).toBeNull();
+  });
+
+  it("reads Privy's keys out of reach as an outage, not a bad token", async () => {
+    const keys = privyTestDoubles.keys;
+    const token = await privyToken("did:privy:abc");
+    try {
+      privyTestDoubles.keys = async () => {
+        throw new errors.JWKSTimeout();
+      };
+      await expect(verifyPrivyToken(env, token)).rejects.toBeInstanceOf(PrivyUnavailable);
+      privyTestDoubles.keys = async () => {
+        throw new errors.JOSEError("Expected 200 OK from the JSON Web Key Set HTTP response");
+      };
+      await expect(verifyPrivyToken(env, token)).rejects.toBeInstanceOf(PrivyUnavailable);
+      privyTestDoubles.keys = async () => {
+        throw Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+      };
+      await expect(verifyPrivyToken(env, token)).rejects.toBeInstanceOf(PrivyUnavailable);
+    } finally {
+      privyTestDoubles.keys = keys;
+    }
   });
 });
 

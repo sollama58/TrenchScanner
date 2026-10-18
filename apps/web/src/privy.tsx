@@ -9,7 +9,13 @@ import {
 } from "@privy-io/react-auth";
 import { useExportWallet, useStandardWallets } from "@privy-io/react-auth/solana";
 import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
-import { PRIVY_WALLET_NAME, PrivyCancelled, privyOAuthReturn, setPrivyControls } from "./privyBridge";
+import {
+  PRIVY_WALLET_NAME,
+  PrivyCancelled,
+  privyOAuthReturn,
+  rememberPlace,
+  setPrivyControls,
+} from "./privyBridge";
 
 /**
  * Privy's half of email sign-in: a lazy chunk (see privyBridge.ts), mounted once someone picks
@@ -101,25 +107,27 @@ function Bridge() {
         new Promise<string>((resolve, reject) => {
           pending.current?.reject(new PrivyCancelled("cancelled"));
           pending.current = { resolve, reject };
-          // Already signed in with Privy on this browser: its token is all the API needs.
-          if (latest.current.authenticated) void finish();
-          // Back from Google or X: Privy is finishing that sign-in on its own, and onComplete (or
-          // onError) settles this. Opening its window again would start over.
-          else if (oauthReturning) {
+          // Back from Google or X: Privy is finishing that sign-in on its own (a new account's
+          // wallet is made first), and onComplete or onError settles this. Checked before
+          // `authenticated`, which is already true while the wallet is still being made.
+          if (oauthReturning) {
             setTimeout(() => {
               if (pending.current?.resolve !== resolve) return;
               oauthReturning = false;
               pending.current = null;
               reject(new PrivyCancelled("Google or X didn't finish signing you in. Try again."));
             }, OAUTH_RETURN_WAIT_MS);
-          } else {
-            // Google and X come back to the address this starts from, and Privy only takes the
-            // exact ones on its dashboard list (a 401 "Redirect URL is not allowed" otherwise): start
-            // from the bare site root, without a tab hash, query or path.
-            if (window.location.pathname !== "/" || window.location.search || window.location.hash)
-              window.history.replaceState(window.history.state, "", "/");
-            latest.current.login();
+            return;
           }
+          // Always Privy's window, never a Privy session left in this browser: that may be the
+          // wrong Google account, or someone else's on a shared computer.
+          void (async () => {
+            if (latest.current.authenticated) await latest.current.logout().catch(() => undefined);
+            // Google and X come back to the address this starts from, and Privy only takes the
+            // exact ones on its dashboard list (a 401 "Redirect URL is not allowed" otherwise).
+            rememberPlace();
+            latest.current.login();
+          })();
         }),
       logout: () => latest.current.logout(),
       exportWallet: (address) => latest.current.exportWallet({ address }),

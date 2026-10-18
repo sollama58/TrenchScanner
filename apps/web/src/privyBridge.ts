@@ -41,6 +41,40 @@ export function privyOAuthReturn(search = window.location.search): boolean {
   return /[?&]privy_oauth_(?:code|state)=/.test(search);
 }
 
+const PLACE_KEY = "ts:privy-place";
+
+/**
+ * Privy's sign-in starts from the bare site root (its redirect list is exact-match), so the page's
+ * own address (a tab, a Telegram alert's ?sage= link) is kept here first, across Google's or X's
+ * full-page redirect too, and put back once the sign-in ends either way.
+ */
+export function rememberPlace(): void {
+  const place = window.location.pathname + window.location.search + window.location.hash;
+  try {
+    // At the root already: nothing to keep, and nothing older left to put back.
+    if (place === "/") sessionStorage.removeItem(PLACE_KEY);
+    else sessionStorage.setItem(PLACE_KEY, place);
+  } catch {
+    // Storage blocked: the sign-in still works, it just lands on the Live tab.
+  }
+  if (place !== "/") window.history.replaceState(window.history.state, "", "/");
+}
+
+/** Puts back the address rememberPlace kept, telling the tab, token and wallet views. */
+export function restorePlace(): void {
+  let place: string | null;
+  try {
+    place = sessionStorage.getItem(PLACE_KEY);
+    sessionStorage.removeItem(PLACE_KEY);
+  } catch {
+    return;
+  }
+  if (!place || !place.startsWith("/") || place.startsWith("//")) return;
+  window.history.replaceState(window.history.state, "", place);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+}
+
 /** What privy.tsx can do, once Privy has loaded and is ready. */
 export interface PrivyControls {
   /** Opens Privy's window; resolves with Privy's login token for /auth/privy. */
@@ -88,7 +122,10 @@ export function usePrivyWanted(): boolean {
 }
 
 /** Privy's actions, loading it first if needed. Rejects when it doesn't come up in time. */
-export function privyControls(timeoutMs = 20_000): Promise<PrivyControls> {
+export function privyControls(
+  // Back from Google or X, Privy also finishes that sign-in before it is ready: give it longer.
+  timeoutMs = privyOAuthReturn() ? 60_000 : 20_000,
+): Promise<PrivyControls> {
   if (controls) return Promise.resolve(controls);
   wantPrivy();
   return new Promise((resolve, reject) => {

@@ -332,6 +332,8 @@ async function main() {
         maxAgeMinutes: env.PRICE_PATH_RECORD
           ? Math.max(env.CURVE_TAPE_MAX_AGE_MINUTES, env.PRICE_PATH_FOLLOW_MINUTES)
           : env.CURVE_TAPE_MAX_AGE_MINUTES,
+        // The scoring features keep their 15 minutes: coins past it read null, as in training.
+        featureMaxAgeMinutes: env.CURVE_TAPE_MAX_AGE_MINUTES,
         maxMints: env.CURVE_TAPE_MAX_MINTS,
         streamCreditsPerDay: env.CURVE_TAPE_STREAM_CREDITS_PER_DAY,
         pollSeconds: env.CURVE_TAPE_POLL_SECONDS,

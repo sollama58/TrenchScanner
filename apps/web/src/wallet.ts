@@ -11,7 +11,7 @@ import {
 import bs58 from "bs58";
 import { ApiError, post, type User } from "./api";
 import { adoptSession } from "./sessionCheck";
-import { PRIVY_WALLET_NAME, PrivyCancelled, privyControls } from "./privyBridge";
+import { PRIVY_WALLET_NAME, PrivyCancelled, privyControls, restorePlace } from "./privyBridge";
 import { askSecondFactor, TwoFactorCancelled } from "./twoFactor";
 
 /**
@@ -209,6 +209,15 @@ async function finishSignIn(answer: VerifyResponse, what = "Your wallet signed")
 
 /** Sign-in with Privy's window: email or Google/X, with a wallet Privy holds. */
 export async function signInWithPrivy(): Promise<User> {
+  try {
+    return await privySignIn();
+  } finally {
+    // Back to the tab or link the sign-in started from (Privy's starts from the site root).
+    restorePlace();
+  }
+}
+
+async function privySignIn(): Promise<User> {
   const privy = await privyControls();
   const accessToken = await privy.login();
   // Privy makes the wallet right after its login; the API says 409 until Privy reports it.
@@ -350,6 +359,9 @@ export function describeSignInError(e: unknown, walletName: string): string {
       ? `${walletName} didn't answer. Its popup may be hidden behind this window, or the extension may be locked: open it from the toolbar, unlock it, then try again.`
       : `${walletName} didn't sign. Look for its popup (it may be behind this window), approve the message, then try again.`;
   if (e instanceof ApiError) {
+    // Privy's sign-in: the API's own words (a token that didn't check out, Privy not answering).
+    if ((e.status === 401 || e.status === 503) && walletName === "Privy")
+      return e.message || "That sign-in didn't check out. Try again.";
     if (e.status === 401)
       return "The signature didn't verify. Try again, and make sure the wallet shows this site's address.";
     if (e.status === 429) return "Too many sign-in attempts. Wait a minute, then try again.";

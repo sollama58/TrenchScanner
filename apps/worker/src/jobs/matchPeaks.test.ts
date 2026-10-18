@@ -298,6 +298,23 @@ describe.skipIf(!dbAvailable)("recordMatchPeaks", () => {
     expect((await reload(match.id)).peakMcapUsd).toBe(640_000);
   });
 
+  it("the nightly sweep resumes after a saved token and reports each batch it finishes", async () => {
+    const a = await seedMatch("resume-a", 80_000, [640_000]);
+    const b = await seedMatch("resume-b", 80_000, [640_000]);
+    const [first, second] = [a, b].sort((x, y) => (x.token.id < y.token.id ? -1 : 1));
+    const seen: string[] = [];
+    await recordMatchPeaksFullSweep(RETENTION_DAYS, new Date(0), {
+      afterTokenId: first!.token.id,
+      onBatch: async (lastTokenId) => {
+        seen.push(lastTokenId);
+      },
+    });
+    // The token at the cursor was done before the restart: left alone. The one after it is swept.
+    expect((await reload(first!.match.id)).peakMcapUsd).toBeNull();
+    expect((await reload(second!.match.id)).peakMcapUsd).toBe(640_000);
+    expect(seen.at(-1)).toBe(second!.token.id);
+  });
+
   describe("createMatchPeaksRunner", () => {
     it("looks back an hour first, then over the gap since its previous pass", async () => {
       const windows: number[] = [];

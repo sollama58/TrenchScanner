@@ -8,6 +8,7 @@ import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
 import { TwoFactorPanel } from "../components/TwoFactorPanel";
 import { PrivyWalletPanel } from "../components/PrivyWalletPanel";
 import { TradingSettingsPanel } from "../components/TradingSettingsPanel";
+import { SETTINGS_ACCOUNT_ID } from "../components/WalletMenu";
 import { useMe } from "../me";
 import { BoltIcon, ShieldIcon, SlidersIcon, StreamIcon } from "../components/Icons";
 import { Switch } from "../components/AlertDeliveryPanels";
@@ -319,7 +320,7 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
   const now = useNow(60_000);
   const access = account?.access;
   return (
-    <section className="panel">
+    <section className="panel" id={SETTINGS_ACCOUNT_ID}>
       <header className="section-head">
         <div>
           <span className="eyebrow">

@@ -499,6 +499,10 @@ export interface MarkerBarDatum {
   sub?: string;
   /** Drawn dimmer: a rate on too few calls to lean on. */
   thin?: boolean;
+  /** Draws the bar as a loss: the value is then the loss's size. */
+  down?: boolean;
+  /** Highlights the row with a small tag after its label, e.g. the model worth adding to a feed. */
+  badge?: { text: string; title?: string };
   /** A small switch before the row (e.g. this model's calls in your live feed), outside the row's button. */
   toggle?: { on: boolean; disabled?: boolean; title: string; label: string; onChange: () => void };
 }
@@ -522,6 +526,7 @@ export function MarkerBars({
   onSelect,
   onOpen,
   columns,
+  legend = "Hit rate",
 }: {
   data: MarkerBarDatum[];
   markers: BarMarker[];
@@ -530,6 +535,8 @@ export function MarkerBars({
   onOpen?: (id: string) => void;
   /** Headings over the label and value columns. */
   columns?: { label: string; value: string; note?: string };
+  /** The bars' legend key. */
+  legend?: string;
 }) {
   const values = [...data.map((d) => d.value ?? 0), ...markers.map((m) => m.value)];
   // Headroom past the furthest bar or marker, on a 10% step, never past 100%.
@@ -546,7 +553,7 @@ export function MarkerBars({
     <figure className="chart">
       <div className="legend">
         <span className="key">
-          <i className="swatch s1" /> Hit rate
+          <i className="swatch s1" /> {legend}
         </span>
         {markers.map((m) => (
           <span className="key" key={m.kind}>
@@ -572,7 +579,7 @@ export function MarkerBars({
           const row = (
             <button
               type="button"
-              className={`mbar-row${selected === d.id ? " on" : ""}${d.thin ? " thin" : ""}`}
+              className={`mbar-row${selected === d.id ? " on" : ""}${d.thin ? " thin" : ""}${d.badge ? " badged" : ""}`}
               key={d.id}
               onMouseEnter={() => onSelect(d.id)}
               onFocus={() => onSelect(d.id)}
@@ -585,10 +592,17 @@ export function MarkerBars({
             >
               <span className="mbar-label">
                 {d.label}
+                {d.badge && (
+                  <span className="mbar-badge" title={d.badge.title}>
+                    {d.badge.text}
+                  </span>
+                )}
                 {d.sub && <small>{d.sub}</small>}
               </span>
               <span className="mbar-track">
-                {d.value !== null && <span className="mbar-fill" style={{ width: at(d.value) }} />}
+                {d.value !== null && (
+                  <span className={`mbar-fill${d.down ? " down" : ""}`} style={{ width: at(d.value) }} />
+                )}
                 {markers.map((m) => (
                   <i key={m.kind} className={`mbar-marker ${m.kind}`} style={{ left: at(m.value) }} />
                 ))}

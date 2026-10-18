@@ -11,8 +11,27 @@ import { seenWallets } from "./walletNames.js";
  * for anything else. Admins are never asked.
  */
 
+/**
+ * Mints found on the feed lately: a coin on it stays on it, and the live chart's long-poll asks
+ * about once a second per viewer (#719), so a yes is kept a minute rather than read every time.
+ */
+const ON_FEED_MS = 60_000;
+const ON_FEED_MAX = 5_000;
+const onFeedAt = new Map<string, number>();
+
 /** Whether the scanner tracks the mint on its own: on Token, and not only because someone looked it up. */
-export async function mintOnFeed(mint: string): Promise<boolean> {
+export async function mintOnFeed(mint: string, now = Date.now()): Promise<boolean> {
+  const seen = onFeedAt.get(mint);
+  if (seen !== undefined && now - seen < ON_FEED_MS) return true;
+  const yes = await readMintOnFeed(mint);
+  if (yes) {
+    if (onFeedAt.size >= ON_FEED_MAX) onFeedAt.clear();
+    onFeedAt.set(mint, now);
+  }
+  return yes;
+}
+
+async function readMintOnFeed(mint: string): Promise<boolean> {
   const token = await prisma.token.findUnique({
     where: { mintAddress: mint },
     select: { id: true, discoverySource: true },

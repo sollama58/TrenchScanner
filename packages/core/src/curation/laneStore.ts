@@ -1,6 +1,6 @@
 import { Prisma, prisma } from "../db.js";
 import { contestantSpec, type CuratorRecipe } from "./contestants.js";
-import type { Lane } from "./evolution.js";
+import { laneCallName, type Lane } from "./evolution.js";
 import { REPORTED_LABEL_RULE, LABEL_LOG2_CAP } from "./labels.js";
 import {
   liveCatch,
@@ -149,6 +149,7 @@ export async function liveCallRecords(
   const until = opts.until?.toISOString() ?? null;
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
   const laneName = new Map(lanes.map((l) => [l.slot, l.name]));
+  const callName = new Map(lanes.map((l) => [l.slot, laneCallName(l)]));
   const out = new Map<string, CallRecord>();
   if (models.length === 0) return out;
   const froms = models.map((model) => {
@@ -163,8 +164,9 @@ export async function liveCallRecords(
       SELECT * FROM unnest(
         ${[...models]}::text[],
         ${froms.map((d) => d.toISOString())}::timestamp(3)[],
-        ${models.map((m) => laneName.get(m) ?? "-")}::text[]
-      ) AS s(model, since, lane)
+        ${models.map((m) => laneName.get(m) ?? "-")}::text[],
+        ${models.map((m) => callName.get(m) ?? "-")}::text[]
+      ) AS s(model, since, lane, shown)
     ),
     calls AS (
       SELECT a."model" AS model,
@@ -182,7 +184,7 @@ export async function liveCallRecords(
       -- roster can still call a few minutes under the retired lane's name and recipe. ('-' = a seat
       -- with no lane: a null inside a bound array trips Prisma's binary encoding, 22P03.)
       JOIN seats ON seats.model = a."model" AND a."createdAt" >= seats.since
-        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" = seats.lane)
+        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" IN (seats.lane, seats.shown))
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
       WHERE a."createdAt" >= ${earliest}
         AND (${tier}::text IS NULL OR a."tier" = ${tier}::text)
@@ -302,6 +304,7 @@ export async function liveCatchRates(
 ): Promise<{ byModel: Map<string, LiveCatch>; field: LiveCatch; ledger: CatchLedger }> {
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
   const laneName = new Map(lanes.map((l) => [l.slot, l.name]));
+  const callName = new Map(lanes.map((l) => [l.slot, laneCallName(l)]));
   const froms = new Map(
     models.map((model) => {
       const born = bornAt.get(model);
@@ -316,13 +319,14 @@ export async function liveCatchRates(
         SELECT * FROM unnest(
           ${[...models]}::text[],
           ${models.map((m) => froms.get(m)!.toISOString())}::timestamp(3)[],
-          ${models.map((m) => laneName.get(m) ?? "-")}::text[]
-        ) AS s(model, since, lane)
+          ${models.map((m) => laneName.get(m) ?? "-")}::text[],
+          ${models.map((m) => callName.get(m) ?? "-")}::text[]
+        ) AS s(model, since, lane, shown)
       )
       SELECT a."model" AS model, a."tokenId" AS token, max(a."createdAt") AS at
       FROM "CuratedAlert" a
       JOIN seats ON seats.model = a."model" AND a."createdAt" >= seats.since
-        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" = seats.lane)
+        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" IN (seats.lane, seats.shown))
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
       WHERE a."createdAt" >= ${since}
         AND COALESCE(a."hit2xIn1h", co."hit2xIn1h")
@@ -347,6 +351,7 @@ export async function liveMarketLift(
   if (models.length === 0) return new Map();
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
   const laneName = new Map(lanes.map((l) => [l.slot, l.name]));
+  const callName = new Map(lanes.map((l) => [l.slot, laneCallName(l)]));
   const froms = models.map((model) => {
     const born = bornAt.get(model);
     return born && born > since ? born : since;
@@ -358,8 +363,9 @@ export async function liveMarketLift(
         SELECT * FROM unnest(
           ${[...models]}::text[],
           ${froms.map((d) => d.toISOString())}::timestamp(3)[],
-          ${models.map((m) => laneName.get(m) ?? "-")}::text[]
-        ) AS s(model, since, lane)
+          ${models.map((m) => laneName.get(m) ?? "-")}::text[],
+          ${models.map((m) => callName.get(m) ?? "-")}::text[]
+        ) AS s(model, since, lane, shown)
       )
       SELECT a."model" AS model,
              to_char(date_trunc('hour', a."createdAt"), 'YYYY-MM-DD"T"HH24') AS hour,
@@ -368,7 +374,7 @@ export async function liveMarketLift(
                                 AND NOT COALESCE(a."disqualified", co."disqualified", false)) AS wins
       FROM "CuratedAlert" a
       JOIN seats ON seats.model = a."model" AND a."createdAt" >= seats.since
-        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" = seats.lane)
+        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" IN (seats.lane, seats.shown))
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
       WHERE a."createdAt" >= ${earliest}
       GROUP BY 1, 2`,

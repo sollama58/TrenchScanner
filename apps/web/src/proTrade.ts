@@ -218,7 +218,9 @@ export function parseTradeSettings(raw: string | null): TradeSettings {
         DEFAULT_TRADE_SETTINGS.buyPresets,
         BUY_PRESETS_PER_ROW * buyRows,
       ),
-      sellPresets: nums(s.sellPresets, (n) => n > 0 && n <= 100, DEFAULT_TRADE_SETTINGS.sellPresets, 6),
+      sellPresets: withSellAll(
+        nums(s.sellPresets, (n) => n > 0 && n <= 100, DEFAULT_TRADE_SETTINGS.sellPresets, 6),
+      ),
       slippagePct:
         typeof s.slippagePct === "number" && s.slippagePct >= 0.1 && s.slippagePct <= 50
           ? s.slippagePct
@@ -891,4 +893,13 @@ export async function runTrade(
         sent.signature,
       );
   }
+}
+
+/**
+ * The sell presets always end with 100%: the Trade panel has no other way to close a position, and
+ * a partial sale under 0.01 SOL is refused, so a list without it could strand a small position.
+ */
+export function withSellAll(presets: number[]): number[] {
+  if (presets.some((p) => p >= 100)) return presets;
+  return [...presets.slice(0, 5), 100];
 }

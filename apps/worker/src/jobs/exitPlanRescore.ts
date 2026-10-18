@@ -48,6 +48,8 @@ export const RESCORE_UNTIL = new Date("2026-10-17T22:45:00Z");
 export const RESCORE_COINS_PER_RUN = 60;
 const CALL_SPACING_MS = 400;
 const DAY_MS = 86_400_000;
+/** The 24-hour watch plus slack: how long a row of the window may stay open. */
+const WATCH_MAX_MS = 26 * 3_600_000;
 /** The ExitPlanRescore row that tracks the Lighthouse re-sum. */
 export const LIGHTHOUSE_MARKER = "lighthouse";
 
@@ -103,6 +105,21 @@ type Row = {
   simReturnPct: number | null;
 };
 
+/**
+ * Rows re-scored after the Lighthouse re-sum passed their day (or finished): it goes back to that
+ * day, so their returns are summed too. Nothing to do before the re-sum has started.
+ */
+async function rewindLighthouse(anchorAt: Date, since: Date): Promise<void> {
+  const marker = await prisma.exitPlanRescore.findUnique({ where: { outcomeId: LIGHTHOUSE_MARKER } });
+  if (!marker) return;
+  const day = new Date(Math.max(Math.floor(anchorAt.getTime() / DAY_MS) * DAY_MS, since.getTime()));
+  if (marker.result !== "done" && new Date(marker.result) <= day) return;
+  await prisma.exitPlanRescore.update({
+    where: { outcomeId: LIGHTHOUSE_MARKER },
+    data: { result: day.toISOString(), rescoredAt: new Date() },
+  });
+}
+
 /** The next day of Lighthouse history to re-sum, a day per run; null once it is all done. */
 async function resumLighthouse(
   since: Date,
@@ -142,12 +159,13 @@ export async function runExitPlanRescore(
   const until = opts.until ?? RESCORE_UNTIL;
   // Rows of the window that sold at 2x (the trail starts on the first sale; hit2xAt before any stop
   // covers a row whose trail state is missing), with a return, past their watch, not yet looked at.
-  const pendingSql = Prisma.sql`
+  const soldAt2xSql = Prisma.sql`
     co."anchorAt" >= ${since} AND co."anchorAt" < ${until}
-    AND co."simReturnPct" IS NOT NULL AND co."finalized24hAt" IS NOT NULL
     AND (co."trailHighPriceUsd" IS NOT NULL
       OR (co."hit2xAt" IS NOT NULL AND (co."stoppedAt" IS NULL OR co."hit2xAt" <= co."stoppedAt")))
     AND NOT EXISTS (SELECT 1 FROM "ExitPlanRescore" r WHERE r."outcomeId" = co."id")`;
+  const pendingSql = Prisma.sql`${soldAt2xSql}
+    AND co."simReturnPct" IS NOT NULL AND co."finalized24hAt" IS NOT NULL`;
 
   // The oldest pending rows name the next coins; each coin's pending rows are then done together
   // from one candle read.
@@ -156,6 +174,14 @@ export async function runExitPlanRescore(
     ORDER BY co."anchorAt" ASC LIMIT ${coinsPerRun * 20}`;
   const tokenIds = [...new Set(next.map((r) => r.tokenId))].slice(0, coinsPerRun);
   if (tokenIds.length === 0) {
+    // The window's last rows sit on their 24-hour watch until a day after it ends: the Lighthouse
+    // re-sum and the finish wait for them, or their returns would never be re-scored or summed.
+    // A row still open more than WATCH_MAX_MS after its call is stuck, not watched: not waited on.
+    const [watching] = await prisma.$queryRaw<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM "CandidateOutcome" co
+      WHERE ${soldAt2xSql} AND co."finalized24hAt" IS NULL
+        AND co."anchorAt" > ${new Date(now() - WATCH_MAX_MS)}`;
+    if ((watching?.n ?? 0) > 0) return { watching: watching!.n };
     const lighthouse = await resumLighthouse(since, until);
     if (!lighthouse) {
       finished = true;
@@ -165,6 +191,7 @@ export async function runExitPlanRescore(
   }
 
   const counts: Record<string, number> = { coins: 0, fiveMinuteReads: 0, rescored: 0, alerts: 0, skipped: 0 };
+  let earliestRescored: Date | null = null;
   let throttled = false;
   for (const [i, tokenId] of tokenIds.entries()) {
     if (i > 0) await sleep(spacingMs);
@@ -230,8 +257,10 @@ export async function runExitPlanRescore(
       ]);
       counts.rescored! += 1;
       counts.alerts! += alerts.count;
+      if (!earliestRescored || row.anchorAt < earliestRescored) earliestRescored = row.anchorAt;
     }
   }
+  if (earliestRescored) await rewindLighthouse(earliestRescored, since);
   const [counted] = await prisma.$queryRaw<{ remaining: number }[]>`
     SELECT count(*)::int AS remaining FROM "CandidateOutcome" co WHERE ${pendingSql}`;
   const remaining = counted?.remaining ?? 0;
