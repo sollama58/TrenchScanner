@@ -15847,15 +15847,27 @@ body:has(.util-toast) .bug-fab {
 
 /* Pro Mode (2026-10-17): the token modal's Trade panel under the chart, and the trader's own
    entry line and trade marks on the chart. */
+/* A real button, not one of the range pills (user ask 2026-10-18: the pill was easy to miss):
+   solid green while the panel is shut, outlined while it is open. */
 .tm-trade-toggle {
-  margin-left: 8px;
-  border: 1px solid color-mix(in srgb, var(--good) 45%, var(--border));
-  color: var(--good-ink);
+  margin-left: 10px;
+  padding: 4px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  border: 1px solid var(--good);
+  color: #fff;
+  background: var(--good);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.tm-trade-toggle:hover:not(:disabled) {
+  color: #fff;
+  background: color-mix(in srgb, var(--good) 85%, #000);
 }
 .tm-trade-toggle.on,
 .tm-trade-toggle.on:hover:not(:disabled) {
-  color: #fff;
-  background: var(--good);
+  color: var(--good-ink);
+  background: transparent;
+  box-shadow: none;
 }
 .tm-trade {
   display: flex;
