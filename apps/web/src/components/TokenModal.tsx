@@ -72,15 +72,7 @@ import { CustomizeDrawer } from "./CustomizeDrawer";
 import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
 import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
-import {
-  graceLeftText,
-  rememberTradePanel,
-  summarizePosition,
-  tradeOpenAtStart,
-  tradePanelClosed,
-  usePosition,
-  useProState,
-} from "../proTrade";
+import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import {
   categoryText,
@@ -1387,21 +1379,12 @@ export function ChartCard({
   const graceEndsAt = proState?.pro ? proState.graceEndsAt : null;
   const mint = card.token.mintAddress;
   const position = usePosition(pro ? mint : null);
-  // Open by default for full Pro Mode (tradeOpenAtStart); the trader's own click wins after that.
-  // Pro state can arrive after the view opens (the session check), so the default is derived.
-  const [tradingPicked, setTradingPicked] = useState<boolean | null>(null);
-  const [closedBefore] = useState(tradePanelClosed);
-  const trading = tradingPicked ?? tradeOpenAtStart(proState, closedBefore);
-  const setTrading = (open: boolean) => {
-    setTradingPicked(open);
-    if (!closeOnly) rememberTradePanel(open);
-  };
-  const [tradeOpened, setTradeOpened] = useState(false);
-  useEffect(() => {
-    if (trading) setTradeOpened(true);
-  }, [trading]);
   const holds = !!position.data && BigInt(position.data.balance) > 0n;
-  const expanded = !!pro && (trading || holds);
+  // Trade is its own section, always open (user ask 2026-10-18), for Pro Mode wallets (admins
+  // included). Never where no wallet here could sign a trade (a phone signed in by QR, say).
+  const canSign = useCanSignTrades(pro);
+  const trading = !!pro && canSign && (!closeOnly || holds);
+  const expanded = trading || (!!pro && holds);
 
   // Read from the window on each render; a resize re-renders.
   const [, setResized] = useState(0);
@@ -1607,27 +1590,6 @@ export function ChartCard({
             </span>
           )}
           {streaming && <LiveBadge tail={tail} />}
-          {pro && (!closeOnly || holds || trading) && (
-            <button
-              type="button"
-              className={`tm-range tm-trade-toggle${trading ? " on" : ""}${graceEndsAt !== null ? " grace" : ""}`}
-              aria-pressed={trading}
-              aria-expanded={trading}
-              title={
-                closeOnly
-                  ? "Pro Mode has ended: trading is off for this wallet"
-                  : graceEndsAt !== null
-                    ? `Pro Mode ends in ${graceLeftText(graceEndsAt)}: your wallet left the top 250 $ASDFASDFA holders`
-                    : "Buy and sell this coin with your wallet (Pro Mode)"
-              }
-              onClick={() => setTrading(!trading)}
-            >
-              {closeOnly ? "Sell" : trading ? "Hide trade" : "Trade"}
-              {graceEndsAt !== null && (
-                <span className="tm-trade-grace num"> · {graceLeftText(graceEndsAt)} left</span>
-              )}
-            </button>
-          )}
           <span className="tm-ranges" role="group" aria-label="Chart range">
             {RANGES.filter((r) => (!utility || r.id !== "model") && (young || r.id !== "first")).map((r) => (
               <button
@@ -1718,38 +1680,19 @@ export function ChartCard({
           </>
         )}
       </section>
-      {/* Mounted once opened and only hidden after, so a trade still confirming keeps its status. */}
-      {pro && (trading || tradeOpened) && (
-        <div hidden={!trading}>
-          <TradePanel
-            owner={pro}
-            mint={mint}
-            symbol={card.token.symbol ?? "tokens"}
-            position={position.data}
-            summary={summary}
-            onTraded={position.reload}
-            closeOnly={closeOnly}
-            graceEndsAt={graceEndsAt}
-          />
-        </div>
-      )}
-      {pro && !trading && holds && summary && (
-        <p className="small muted tm-trade-held">
-          You hold this coin
-          {summary.pnlSol !== null && (
-            <>
-              {" "}
-              ·{" "}
-              <span className={`num ${summary.pnlSol >= 0 ? "up" : "down"}`}>
-                {solText(summary.pnlSol, true)}
-              </span>
-            </>
-          )}
-          .{" "}
-          <button type="button" className="link" onClick={() => setTrading(true)}>
-            {closeOnly ? "Sell" : "Open Trade"}
-          </button>
-        </p>
+      {trading && pro && (
+        <TradePanel
+          owner={pro}
+          mint={mint}
+          symbol={card.token.symbol ?? "tokens"}
+          name={card.token.name ?? null}
+          position={position.data}
+          summary={summary}
+          nowMcap={latestMcap}
+          onTraded={position.reload}
+          closeOnly={closeOnly}
+          graceEndsAt={graceEndsAt}
+        />
       )}
     </>
   );

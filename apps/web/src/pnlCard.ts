@@ -1,4 +1,4 @@
-import { multiple, signedPct } from "./format";
+import { multiple, signedPct, usd } from "./format";
 
 /** What a PnL share card shows: one of the feed's best alerts and what it returned. */
 export interface PnlCardData {
@@ -62,26 +62,8 @@ function fitText(
   return s;
 }
 
-/**
- * Draws the branded PnL card: the TrenchScanner mark, the token, and its return as a multiple
- * of the stake. Drawn on a canvas in the browser, so sharing one costs the server nothing.
- */
-export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElement> {
-  const [icon] = await Promise.all([
-    loadIcon(),
-    // The canvas only draws with a font already loaded; wait for the app's own.
-    document.fonts?.load(`800 100px ${FONT}`).catch(() => undefined),
-    document.fonts?.load(`500 20px ${MONO}`).catch(() => undefined),
-  ]);
-  const W = PNL_CARD_WIDTH;
-  const H = PNL_CARD_HEIGHT;
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return canvas;
-
-  // Background: deep night with the brand's violet-to-blue glow.
+/** The cards' backdrop: deep night with the brand's violet-to-blue glow and faint radar arcs. */
+function drawBackdrop(ctx: CanvasRenderingContext2D, W: number, H: number) {
   ctx.fillStyle = "#0b0b1a";
   ctx.fillRect(0, 0, W, H);
   const glowA = ctx.createRadialGradient(W * 0.15, H * 0.1, 0, W * 0.15, H * 0.1, W * 0.7);
@@ -102,9 +84,10 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
     ctx.arc(W - 120, H + 40, r, Math.PI, Math.PI * 1.5);
     ctx.stroke();
   }
+}
 
-  const pad = 64;
-  // Brand row: the icon, the wordmark.
+/** The brand row, top left: the icon and the wordmark. */
+function drawBrand(ctx: CanvasRenderingContext2D, icon: HTMLImageElement | null, pad: number) {
   const iconSize = 64;
   if (icon) {
     ctx.save();
@@ -117,6 +100,30 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
   ctx.fillStyle = "#ffffff";
   ctx.font = `700 34px ${FONT}`;
   ctx.fillText("TrenchScanner", pad + iconSize + 18, pad + iconSize / 2);
+}
+
+/**
+ * Draws the branded PnL card: the TrenchScanner mark, the token, and its return as a multiple
+ * of the stake. Drawn on a canvas in the browser, so sharing one costs the server nothing.
+ */
+export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElement> {
+  const [icon] = await Promise.all([
+    loadIcon(),
+    // The canvas only draws with a font already loaded; wait for the app's own.
+    document.fonts?.load(`800 100px ${FONT}`).catch(() => undefined),
+    document.fonts?.load(`500 20px ${MONO}`).catch(() => undefined),
+  ]);
+  const W = PNL_CARD_WIDTH;
+  const H = PNL_CARD_HEIGHT;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+
+  drawBackdrop(ctx, W, H);
+  const pad = 64;
+  drawBrand(ctx, icon, pad);
 
   // What alerted it, top right: the model or the reader's own filter.
   if (data.source) {
@@ -188,4 +195,162 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
 
 export function canvasToPng(canvas: HTMLCanvasElement): Promise<Blob | null> {
   return new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/png"));
+}
+
+/**
+ * What a position share card shows (user ask 2026-10-18): the trader's own result in one coin.
+ * Never the wallet: nothing here can lead back to it. SOL amounts are the trader's choice.
+ */
+export interface PositionCardData {
+  symbol: string | null;
+  name: string | null;
+  mintAddress: string;
+  /** Still holding some, or sold out. */
+  open: boolean;
+  /** PnL as a share of what went in (0.5 = +50%). */
+  pnlPct: number;
+  pnlSol: number;
+  /** SOL in USD, for the PnL's dollar figure; null leaves it out. */
+  solUsd: number | null;
+  solIn: number;
+  /** What came back plus what's still held, SOL. */
+  solBack: number;
+  entryMcap: number | null;
+  nowMcap: number | null;
+  /** Show the SOL and dollar amounts, or only the percentages. */
+  showAmounts: boolean;
+}
+
+function solFigure(sol: number, signed = false): string {
+  const abs = Math.abs(sol);
+  const text = `${abs.toFixed(abs >= 100 ? 1 : abs >= 1 ? 2 : 3).replace(/\.?0+$/, "")} SOL`;
+  return signed ? `${sol > 0 ? "+" : sol < 0 ? "-" : ""}${text}` : text;
+}
+
+/** The position card: the coin, the PnL as big as it goes, and its entry and now. */
+export async function renderPositionCard(data: PositionCardData): Promise<HTMLCanvasElement> {
+  const [icon] = await Promise.all([
+    loadIcon(),
+    document.fonts?.load(`800 100px ${FONT}`).catch(() => undefined),
+    document.fonts?.load(`500 20px ${MONO}`).catch(() => undefined),
+  ]);
+  const W = PNL_CARD_WIDTH;
+  const H = PNL_CARD_HEIGHT;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+  drawBackdrop(ctx, W, H);
+  const pad = 64;
+  drawBrand(ctx, icon, pad);
+  const up = data.pnlPct >= 0;
+  const tone = up ? UP : DOWN;
+
+  // Open or closed, top right, as a pill.
+  const pill = data.open ? "OPEN POSITION" : "CLOSED POSITION";
+  ctx.font = `700 18px ${FONT}`;
+  const pillW = ctx.measureText(pill).width + 36;
+  roundRect(ctx, W - pad - pillW, pad + 12, pillW, 40, 20);
+  ctx.fillStyle = up ? "rgba(52, 211, 153, 0.14)" : "rgba(248, 113, 113, 0.14)";
+  ctx.fill();
+  ctx.strokeStyle = up ? "rgba(52, 211, 153, 0.5)" : "rgba(248, 113, 113, 0.5)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = tone;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(pill, W - pad - pillW / 2, pad + 33);
+  ctx.textAlign = "left";
+
+  // The token.
+  const ticker = data.symbol ? `$${data.symbol}` : "Unnamed token";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#ffffff";
+  fitText(ctx, ticker, 700, 54, W * 0.55);
+  ctx.fillText(ticker, pad, 222);
+  if (data.name && data.name !== data.symbol) {
+    ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+    fitText(ctx, data.name, 500, 24, W * 0.55);
+    ctx.fillText(data.name, pad, 260);
+  }
+
+  // The PnL, as big as it can be.
+  const pct = signedPct(data.pnlPct * 100, Math.abs(data.pnlPct) >= 10 ? 0 : 1);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+  ctx.font = `700 20px ${FONT}`;
+  ctx.fillText("PNL", pad, 318);
+  ctx.fillStyle = tone;
+  const size = fitText(ctx, pct, 800, 168, W * 0.56);
+  ctx.shadowColor = up ? "rgba(52, 211, 153, 0.45)" : "rgba(248, 113, 113, 0.4)";
+  ctx.shadowBlur = 40;
+  ctx.fillText(pct, pad - 4, 318 + size * 0.86);
+  ctx.shadowBlur = 0;
+  if (data.showAmounts) {
+    const money =
+      solFigure(data.pnlSol, true) +
+      (data.solUsd ? `  ·  ${data.pnlSol < 0 ? "-" : "+"}${usd(Math.abs(data.pnlSol * data.solUsd))}` : "");
+    ctx.fillStyle = tone;
+    fitText(ctx, money, 700, 36, W * 0.56, MONO);
+    ctx.fillText(money, pad, 318 + size * 0.86 + 58);
+  }
+
+  // The figures, a column of tiles on the right.
+  const rows: [string, string][] = [
+    ["Entry mcap", usd(data.entryMcap)],
+    ["Mcap now", usd(data.nowMcap)],
+  ];
+  if (data.showAmounts)
+    rows.push(
+      ["Put in", solFigure(data.solIn)],
+      [data.open ? "Value + sold" : "Got back", solFigure(data.solBack)],
+    );
+  else if (data.entryMcap && data.nowMcap)
+    rows.push(["Entry to now", multiple((data.nowMcap / data.entryMcap - 1) * 100)]);
+  const colX = W * 0.66;
+  const colW = W - pad - colX;
+  const tileH = 76;
+  const gap = 12;
+  let y = 150 + Math.max(0, (4 - rows.length) * (tileH + gap)) / 2;
+  for (const [label, value] of rows) {
+    roundRect(ctx, colX, y, colW, tileH, 14);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(255, 255, 255, 0.6)";
+    ctx.font = `600 18px ${FONT}`;
+    ctx.fillText(label.toUpperCase(), colX + 20, y + tileH / 2);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "#ffffff";
+    fitText(ctx, value, 700, 28, colW * 0.55, MONO);
+    ctx.fillText(value, colX + colW - 20, y + tileH / 2);
+    ctx.textAlign = "left";
+    y += tileH + gap;
+  }
+
+  // Footer: when, the coin's mint (never the wallet), where.
+  const when = new Date().toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+  ctx.fillRect(pad, H - 120, W - pad * 2, 1);
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+  ctx.font = `500 22px ${FONT}`;
+  ctx.fillText(`Traded with TrenchScanner alerts · ${when}`, pad, H - 84);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.45)";
+  ctx.font = `500 18px ${MONO}`;
+  ctx.fillText(`${data.mintAddress.slice(0, 6)}…${data.mintAddress.slice(-6)}`, pad, H - 50);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#ffffff";
+  ctx.font = `700 24px ${FONT}`;
+  ctx.fillText("trenchscanner.app", W - pad, H - 66);
+  ctx.textAlign = "left";
+  return canvas;
 }
