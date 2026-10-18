@@ -32,7 +32,7 @@ describe("pickChampion", () => {
   it("falls back when nothing qualifies", () => {
     const pick = pickChampion([standing("trees", 55, 4), standing("rules", 0, 0)], null, rules, "consensus");
     expect(pick).toMatchObject({ id: "consensus", qualified: false });
-    expect(pick.reason).toContain("10 graded live calls");
+    expect(pick.reason).toContain("10 graded live alerts");
   });
 
   it("keeps the sitting champion unless a challenger's score leads by the margin", () => {

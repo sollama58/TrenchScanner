@@ -46,7 +46,7 @@ export async function registerAdminModelRoutes(
     const hit = explained.get(parsed.data.id);
     if (hit) return hit;
     const out = await explainCall(opts.env, parsed.data.id);
-    if (!out) return reply.code(404).send({ error: "no such call" });
+    if (!out) return reply.code(404).send({ error: "no such alert" });
     if (explained.size >= EXPLAIN_CACHE_MAX) explained.delete(explained.keys().next().value as string);
     explained.set(parsed.data.id, out);
     return out;

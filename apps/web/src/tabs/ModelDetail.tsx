@@ -256,20 +256,22 @@ function ModelDetail({
           digits={1}
         />
         <div className="model-fig">
-          <label>Avg profit per call</label>
+          <label>Avg return per alert</label>
           <span className={`num ${profitTone(live.avgSimReturnPct)}`}>{signedPct(live.avgSimReturnPct)}</span>
           <small className="faint">
             {live.totalSimReturnPct != null
-              ? `${stakes(live.totalSimReturnPct)} over ${live.simCalls ?? live.graded} calls`
-              : "No settled calls yet"}
+              ? `${stakes(live.totalSimReturnPct)} over ${live.simCalls ?? live.graded} alerts`
+              : "No settled alerts yet"}
           </small>
         </div>
       </div>
       <p className="faint small">
-        {live.calls} call{live.calls === 1 ? "" : "s"}, {live.graded} graded
-        {live.avgReturnDoublings != null ? ` · ${doublings(live.avgReturnDoublings)} doublings per call` : ""}
+        {live.calls} alert{live.calls === 1 ? "" : "s"}, {live.graded} graded
+        {live.avgReturnDoublings != null
+          ? ` · ${doublings(live.avgReturnDoublings)} doublings per alert`
+          : ""}
         {e.highConviction
-          ? ` · high-conviction calls doubled ${pct(e.highConviction.winRatePct)} of ${e.highConviction.graded}`
+          ? ` · high-conviction alerts doubled ${pct(e.highConviction.winRatePct)} of ${e.highConviction.graded}`
           : ""}
         {recordSince(e, board) ? `, since it took its seat on ${shortMonthDay(recordSince(e, board)!)}` : ""}.
         The 2x tile&apos;s small figure is its lift, the board&apos;s &quot;vs filtered market&quot;: how many
@@ -292,7 +294,7 @@ function ModelDetail({
             <thead>
               <tr>
                 <th />
-                <th className="r">Calls</th>
+                <th className="r">Alerts</th>
                 <th className="r">2x</th>
                 <th className="r">4x</th>
                 <th className="r">10x</th>
@@ -307,8 +309,8 @@ function ModelDetail({
         </div>
         {basis && (
           <p className="faint small">
-            The score rests on {basis.evidenceCalls.toLocaleString()} calls&apos; worth of evidence:{" "}
-            {basis.liveCalls.toLocaleString()} graded live calls and {basis.backtestCalls.toLocaleString()}{" "}
+            The score rests on {basis.evidenceCalls.toLocaleString()} alerts&apos; worth of evidence:{" "}
+            {basis.liveCalls.toLocaleString()} graded live alerts and {basis.backtestCalls.toLocaleString()}{" "}
             from the backtest ({Math.round(e.composite.liveWeight * 100)}% live). Proven rates after the prior
             misses: 2x {pct(basis.proven2xPct)}, 4x {pct(basis.proven4xPct)}
             {basis.proven10xPct != null ? `, 10x ${pct(basis.proven10xPct, 1)}` : ""}.
@@ -326,12 +328,12 @@ function ModelDetail({
               {latestRun.trainingRows.toLocaleString()} graded moments.
               {latestExam?.calls
                 ? latestExam.heldOut
-                  ? ` At its live cutoff it made ${latestExam.calls} exam calls: ${pct(
+                  ? ` At its live cutoff it made ${latestExam.calls} exam alerts: ${pct(
                       latestExam.winRatePct,
                     )} doubled, ${pct(latestExam.goalRatePct)} hit 4x.`
-                  : ` This run stored no held-out exam. At its live cutoff, ${IN_SAMPLE_LABEL}: ${latestExam.calls} calls, ${pct(
+                  : ` This run stored no held-out exam. At its live cutoff, ${IN_SAMPLE_LABEL}: ${latestExam.calls} alerts, ${pct(
                       latestExam.winRatePct,
-                    )} doubled, ${pct(latestExam.goalRatePct)} hit 4x, on the same calls the cutoff was picked on, so it reads high.`
+                    )} doubled, ${pct(latestExam.goalRatePct)} hit 4x, on the same alerts the cutoff was picked on, so it reads high.`
                 : ""}
               {latestRun.verdict ? ` ${latestRun.verdict.reason}` : ""}
             </p>
@@ -342,7 +344,7 @@ function ModelDetail({
                     <tr>
                       <th>Test window</th>
                       <th className="r">Random 2x</th>
-                      <th className="r">Calls</th>
+                      <th className="r">Alerts</th>
                       <th className="r">2x</th>
                       <th className="r">4x</th>
                     </tr>
@@ -390,7 +392,7 @@ function ModelDetail({
         {myRuns.length > 1 ? (
           <>
             <p className="faint small">
-              Every training run sits a fresh walk-forward exam; the active one is calling now. Hover a row
+              Every training run sits a fresh walk-forward exam; the active one is alerting now. Hover a row
               for its verdict.
             </p>
             <div className="table-wrap">
@@ -400,7 +402,7 @@ function ModelDetail({
                     <th>Trained</th>
                     <th className="r">Rows</th>
                     <th>Status</th>
-                    <th className="r">Exam calls</th>
+                    <th className="r">Exam alerts</th>
                     <th className="r">2x</th>
                     <th className="r">4x</th>
                   </tr>
@@ -495,7 +497,7 @@ function ModelDetail({
               disabled={busy || refreshing || onlyOne}
               onChange={() => void toggle()}
             />
-            Show its calls in my feed
+            Show its alerts in my feed
           </label>
         </footer>
       )}
@@ -538,8 +540,8 @@ function Weightings({
           Each signal&apos;s share of the push on its score over the last{" "}
           {(w.inputSample?.rows ?? 0).toLocaleString()} decision moments.{" "}
           {linear
-            ? "▲ more of it pushes toward a call, ▼ less of it does."
-            : "▲ it pushed toward a call on the coins it called, ▼ against."}
+            ? "▲ more of it pushes toward an alert, ▼ less of it does."
+            : "▲ it pushed toward an alert on the coins it flagged, ▼ against."}
         </p>
         <HBarChart
           data={w.inputs.map((f) => {
@@ -560,7 +562,7 @@ function Weightings({
       ...w.members.map((m) => ({
         label: `${weighted ? (m.direction === 1 ? "▲ " : m.direction === -1 ? "▼ " : "") : ""}${m.name}`,
         value: (weighted ? m.weightPct : m.backingPct) ?? 0,
-        detail: m.callsTopPct !== null ? `calls the top ${m.callsTopPct}% on its own` : undefined,
+        detail: m.callsTopPct !== null ? `alerts on the top ${m.callsTopPct}% on its own` : undefined,
       })),
       ...(w.otherSignals ?? []).map((o) => ({
         label: `${o.direction === 1 ? "▲ " : "▼ "}${o.label}`,
@@ -577,8 +579,8 @@ function Weightings({
           <>
             <p className="faint small">
               {weighted
-                ? "Each signal's share of the weight in its combining model; ▲ a higher rank pushes toward a call."
-                : `How often each member was calling too, on the ${w.inputSample?.calls ?? 0} recent moments it called.`}
+                ? "Each signal's share of the weight in its combining model; ▲ a higher rank pushes toward an alert."
+                : `How often each member was alerting too, on the ${w.inputSample?.calls ?? 0} recent moments it alerted on.`}
             </p>
             <HBarChart
               data={rows.map((r) => ({
@@ -591,7 +593,7 @@ function Weightings({
           </>
         ) : (
           <p className="faint small">
-            It hasn&apos;t called any of the recent moments its weightings are read on.
+            It hasn&apos;t alerted on any of the recent moments its weightings are read on.
           </p>
         )}
       </>
@@ -623,7 +625,7 @@ function CutoffSection({
     return (
       <p className="faint small">
         {run
-          ? "Its latest exam had too few calls to draw the curve."
+          ? "Its latest exam had too few alerts to draw the curve."
           : "Appears after its first training run."}
       </p>
     );
@@ -635,8 +637,8 @@ function CutoffSection({
   return (
     <>
       <p className="muted small">
-        Calling only its most confident slice of decision moments trades volume for hit rate. Each point is
-        its latest exam, out of sample; the figure under it is about how many calls an hour that cutoff would
+        Keeping only its most confident slice of decision moments trades volume for hit rate. Each point is
+        its latest exam, out of sample; the figure under it is about how many alerts an hour that cutoff would
         send at today&apos;s {w ? `${w.momentsPerHour.toLocaleString()} moments an hour` : "flow"}.
       </p>
       <CutoffCurve points={points} aTarget={t.hitRate2xPct} bTarget={t.hitRate4xPct} live={live} />
@@ -645,8 +647,8 @@ function CutoffSection({
           <thead>
             <tr>
               <th>Cutoff</th>
-              <th className="r">Calls/hour</th>
-              <th className="r">Exam calls</th>
+              <th className="r">Alerts/hour</th>
+              <th className="r">Exam alerts</th>
               <th className="r">2x</th>
               <th className="r">4x</th>
             </tr>
@@ -703,12 +705,12 @@ function CutoffSection({
         <p className="faint small model-cutoff-note">
           The live row is its cutoff now and what it actually sent an hour over the last day, with its exam
           {exam?.heldOut === false
-            ? ` figure ${IN_SAMPLE_LABEL}: picked on the same calls, so it reads high.`
+            ? ` figure ${IN_SAMPLE_LABEL}: picked on the same alerts, so it reads high.`
             : " graded at cutoffs set on other parts of the exam."}
         </p>
       )}
       <p className="faint small">
-        Slices on fewer than {MIN_GRADED_FOR_RATE} exam calls are muted as early, never green; hover a rate
+        Slices on fewer than {MIN_GRADED_FOR_RATE} exam alerts are muted as early, never green; hover a rate
         for its 90% range.
       </p>
     </>
@@ -859,11 +861,11 @@ function RecentCalls({ modelId, now }: { modelId: string; now: number }) {
   const calls = page.data?.alerts.slice(0, RECENT_CALLS) ?? [];
   return (
     <>
-      <h3>Latest calls</h3>
+      <h3>Latest alerts</h3>
       {page.data === null ? (
-        <p className="faint small">{page.error ? "Couldn't load its calls." : "Loading…"}</p>
+        <p className="faint small">{page.error ? "Couldn't load its alerts." : "Loading…"}</p>
       ) : calls.length === 0 ? (
-        <p className="faint small">No calls yet.</p>
+        <p className="faint small">No alerts yet.</p>
       ) : (
         <ul className="model-calls">
           {calls.map((c) => {
@@ -880,7 +882,7 @@ function RecentCalls({ modelId, now }: { modelId: string; now: number }) {
                     {meta?.tier === "high" ? " · high conviction" : ""}
                   </small>
                 </span>
-                <span className="num model-call-peak" title="Highest it went above the call price">
+                <span className="num model-call-peak" title="Highest it went above the alert price">
                   {peak != null && peak > 0 ? `peak ${multiple(peak)}` : ""}
                 </span>
                 <span className={`badge ${badge.tone}`}>{badge.text}</span>

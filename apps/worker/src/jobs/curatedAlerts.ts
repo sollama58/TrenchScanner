@@ -578,7 +578,7 @@ function decideCurations(
       if (curate) {
         const callers = topSliceCallers(params, probabilities);
         const named = callers.map((c) => names.get(c)).filter((b): b is string => b !== undefined);
-        if (named.length > 0) reasons.push(`top of its calls for ${named.join(", ")}`);
+        if (named.length > 0) reasons.push(`top of its alerts for ${named.join(", ")}`);
         const strongest = callers[0] ? learners.get(callers[0]) : undefined;
         if (strongest) reasons = [...reasons, ...topModelReasons(strongest.params, features, 3)];
       }
@@ -608,7 +608,7 @@ function decideCurations(
           .map((r) => names.get(r.m.contestant))
           .filter((b): b is string => b !== undefined);
         reasons.push(
-          `${agreeingFromScore(probability, params.members.length)} of ${params.members.length} models call it` +
+          `${agreeingFromScore(probability, params.members.length)} of ${params.members.length} models alert on it` +
             (named.length > 0 ? `: ${named.join(", ")}` : ""),
         );
         const strongest = callers[0] ? learners.get(callers[0].m.contestant) : undefined;

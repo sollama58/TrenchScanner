@@ -490,12 +490,12 @@ function ChartPanel({
             <p className="faint small">
               The biggest five labels get their own series; the rest are &quot;other&quot;. The menu beside
               the chart type picks what to break down by. A label&apos;s 2x rate shows once it has{" "}
-              {MIN_GRADED_FOR_RATE} graded calls in a bucket. {RULE_NOTE_UNFILTERED}
+              {MIN_GRADED_FOR_RATE} graded alerts in a bucket. {RULE_NOTE_UNFILTERED}
             </p>
           </div>
         ) : (
           <div className="lht-picker">
-            {(["Screened field", "Model calls", "TokenSage"] as const).map((group) => (
+            {(["Screened field", "Model alerts", "TokenSage"] as const).map((group) => (
               <div key={group} className="lht-picker-row">
                 <span className="lht-picker-group">{group}</span>
                 <div className="lht-chips">

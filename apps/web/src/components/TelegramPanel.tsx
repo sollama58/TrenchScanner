@@ -217,7 +217,7 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
           </span>
           <h2>Telegram alerts</h2>
           <p className="muted small">
-            Each new alert in your feed as a message: your filter&apos;s matches and the calls of the models
+            Each new alert in your feed as a message: your filter&apos;s matches and the alerts of the models
             you follow, with the market cap, the reasons and the mint. Works in a private chat and in groups.
           </p>
         </div>
@@ -314,7 +314,7 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
                 <div className="tg-models-head">
                   <Switch
                     on={models.highConvictionOnly === true}
-                    label="High-conviction calls only"
+                    label="High-conviction alerts only"
                     disabled={busy !== null}
                     onToggle={() =>
                       void run("models", () => saveModels({ highConvictionOnly: !models.highConvictionOnly }))
@@ -324,7 +324,7 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
               )}
               {models.highConvictionOnly && (
                 <p className="muted small">
-                  Telegram gets only high-conviction calls, from any model. The model choice below applies
+                  Telegram gets only high-conviction alerts, from any model. The model choice below applies
                   again when this is off.
                 </p>
               )}
@@ -332,12 +332,12 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
                 <p className="muted small">
                   {board && board.showModelAlerts === false ? (
                     <>
-                      Your Live Feed shows no model calls, so Telegram gets none either. Switch this off to
-                      send Telegram calls from models of its own.
+                      Your Live Feed shows no model alerts, so Telegram gets none either. Switch this off to
+                      send Telegram alerts from models of its own.
                     </>
                   ) : (
                     <>
-                      Telegram gets calls from the models in your Live Feed
+                      Telegram gets alerts from the models in your Live Feed
                       {feedNames.length > 0 ? (
                         <>
                           : <strong>{feedNames.join(", ")}</strong>
@@ -350,7 +350,7 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
               ) : (
                 <>
                   <p className="muted small">
-                    Telegram gets calls from the models picked here. Your Live Feed keeps its own.
+                    Telegram gets alerts from the models picked here. Your Live Feed keeps its own.
                   </p>
                   {board ? (
                     <ModelPicker
@@ -426,8 +426,8 @@ export function TelegramPanel({ board = null }: { board?: Leaderboard | null }) 
                           onChange={() => void change(c, { modelCalls: !c.modelCalls })}
                         />
                         {models.sameAsFeed
-                          ? "Calls from the models in my feed"
-                          : "Calls from my Telegram models"}
+                          ? "Alerts from the models in my feed"
+                          : "Alerts from my Telegram models"}
                       </label>
                     </div>
                     <div className="tg-chat-parts">

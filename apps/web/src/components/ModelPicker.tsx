@@ -143,7 +143,7 @@ export function ModelPicker({
     <div className={`model-picker${disabled ? " off" : ""}`}>
       <span className="eyebrow">Models</span>
       <details className="checklist" ref={ref}>
-        <summary aria-label="Which models' calls to show" aria-disabled={disabled}>
+        <summary aria-label="Which models' alerts to show" aria-disabled={disabled}>
           <span className="checklist-summary">{summary}</span>
           <span className="chev">▾</span>
         </summary>
@@ -185,7 +185,7 @@ export function ModelPicker({
                       <span className="checklist-name">
                         <span
                           className={`mp-rank num${e.isDefault ? " top" : ""}`}
-                          title={`${ranked ? `#${i + 1} by 2x rate over the 24h to ${dayEnd}` : "Too few graded calls in the 24h to rank"}${
+                          title={`${ranked ? `#${i + 1} by 2x rate over the 24h to ${dayEnd}` : "Too few graded alerts in the 24h to rank"}${
                             e.isDefault ? "; one of the top models: the default feed" : ""
                           }`}
                         >
@@ -208,10 +208,10 @@ export function ModelPicker({
                       </span>
                       <span className="mp-sub">
                         {day === null || day.graded === 0
-                          ? "no graded calls today"
+                          ? "no graded alerts today"
                           : ranked
-                            ? `${day.graded} graded calls`
-                            : `${day.graded} of ${minGraded} calls to rank`}
+                            ? `${day.graded} graded alerts`
+                            : `${day.graded} of ${minGraded} alerts to rank`}
                       </span>
                     </span>
                     <span className="mp-rate num">{rate === null ? "–" : `${rate.toFixed(0)}%`}</span>
@@ -239,10 +239,10 @@ export function ModelPicker({
               Rows are numbered by 2x rate over the 24h to {dayEnd}.{" "}
               <span className="mp-rank top mp-key">1</span> The top {board.defaultRule?.count ?? 3} by 2x rate
               at the low end of its range, over the last {board.defaultRule?.rankWindowHours ?? 72}h with{" "}
-              {board.defaultRule?.rankMinGraded ?? 90} graded calls, make up the default feed, with the
+              {board.defaultRule?.rankMinGraded ?? 90} graded alerts, make up the default feed, with the
               champion added when it isn&apos;t among them.{" "}
               <span className="mp-badge best">★ best 24h return</span> has the highest average return under
-              the exit plan, with {minGraded} graded calls in that window. Both are picked every{" "}
+              the exit plan, with {minGraded} graded alerts in that window. Both are picked every{" "}
               {Math.round((board.defaultRule?.refreshMinutes ?? 360) / 60)} hours (00, 06, 12 and 18 UTC).
             </p>
           )}

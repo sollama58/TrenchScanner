@@ -185,13 +185,13 @@ function Lineup({
       title="How the models decide"
       note={
         <>
-          Every seat's recipe, cutoff and call rate, read from what training stored. Inputs are averaged over
+          Every seat's recipe, cutoff and alert rate, read from what training stored. Inputs are averaged over
           the {n(data.sample.rows)} newest decision moments ({when(data.sample.from)} to{" "}
           {when(data.sample.to)}). Built {when(data.builtAt)}; pick a model to see inside it.
         </>
       }
     >
-      <ol className="pipeline model-flow" aria-label="How a call is made">
+      <ol className="pipeline model-flow" aria-label="How an alert is made">
         <FlowStage
           Icon={RadarIcon}
           title="Scanner"
@@ -202,19 +202,19 @@ function Lineup({
           Icon={BrainIcon}
           title={`${learners.length} learners`}
           value={perHour(learnerCalls)}
-          caption="calls / hour between them"
+          caption="alerts / hour between them"
         />
         <FlowStage
           Icon={BrainIcon}
           title={`${combiners.length} combiners`}
           value={perHour(combinerCalls)}
-          caption={`calls / hour: ${combiners.map((c) => c.name).join(", ")}`}
+          caption={`alerts / hour: ${combiners.map((c) => c.name).join(", ")}`}
         />
         <FlowStage
           Icon={TargetIcon}
           title={`Default feed: ${def?.name ?? data.defaultModel}`}
           value={def ? perHour(def.calls.perHour24h) : "–"}
-          caption="calls / hour"
+          caption="alerts / hour"
         />
         <li className="stage">
           <span className="stage-icon">
@@ -231,7 +231,9 @@ function Lineup({
           </span>
         </li>
       </ol>
-      <p className="faint small">Calls per hour over the last 24 hours. Each seat calls on its own ledger.</p>
+      <p className="faint small">
+        Alerts per hour over the last 24 hours. Each seat alerts on its own ledger.
+      </p>
       <div className="table-wrap">
         <table className="model-lineup">
           <thead>
@@ -240,16 +242,16 @@ function Lineup({
               <th>Kind</th>
               <th
                 className="r"
-                title="The share of decision moments its cutoff calls: as its exam set it, or (≈) the share of recent moments it clears, for a seat whose cutoff is a score"
+                title="The share of decision moments its cutoff alerts on: as its exam set it, or (≈) the share of recent moments it clears, for a seat whose cutoff is a score"
               >
                 Cutoff
               </th>
               <th className="r" title="Its exam's 2x rate at that cutoff">
                 Exam 2x
               </th>
-              <th className="r">Calls / h</th>
-              <th className="r">7d calls</th>
-              <th>Last call</th>
+              <th className="r">Alerts / h</th>
+              <th className="r">7d alerts</th>
+              <th>Last alert</th>
               <th>Leans on most</th>
             </tr>
           </thead>
@@ -400,7 +402,7 @@ function CutoffView({ seat }: { seat: Seat }) {
       <h3>Where it draws the line</h3>
       <div className="model-kpis">
         <Stat
-          label="Calls"
+          label="Alerts"
           value={topShare(c.callsTopPct)}
           sub={
             c.callsTopPct === null
@@ -415,12 +417,12 @@ function CutoffView({ seat }: { seat: Seat }) {
           value={pct(c.examWinRatePct, 1)}
           sub={
             c.examCalls !== null
-              ? `${n(c.examCalls)} exam calls${c.meetsTargets ? ", meets targets" : ", best effort"}`
+              ? `${n(c.examCalls)} exam alerts${c.meetsTargets ? ", meets targets" : ", best effort"}`
               : undefined
           }
         />
         <Stat
-          label="Calls / hour"
+          label="Alerts / hour"
           value={seat.calls.perHour24h.toFixed(1)}
           sub={`${n(seat.calls.last24h)} in 24h · ${n(seat.calls.lastHour)} last hour`}
         />
@@ -461,7 +463,7 @@ function CutoffStrip({ calls, high }: { calls: number; high: number | null }) {
   const zoom = Math.max(10, calls * 1.5);
   const at = (share: number) => `${Math.max(0.8, (share / zoom) * 100)}%`;
   return (
-    <div className="cutoff-strip" aria-label={`Calls the top ${calls}% of decision moments`}>
+    <div className="cutoff-strip" aria-label={`Alerts on the top ${calls}% of decision moments`}>
       <div className="cutoff-row">
         <span className="faint small">All moments</span>
         <span className="cutoff-track">
@@ -477,7 +479,7 @@ function CutoffStrip({ calls, high }: { calls: number; high: number | null }) {
       </div>
       <div className="model-legend small">
         <span>
-          <i className="legend-dot cutoff-zone" /> calls ({topShare(calls)})
+          <i className="legend-dot cutoff-zone" /> alerts ({topShare(calls)})
         </span>
         {high !== null && (
           <span>
@@ -537,10 +539,10 @@ function CalibrationChart({
   }, setHover);
   return (
     <div className="model-chart">
-      <h3>What a call's rank means</h3>
+      <h3>What an alert's rank means</h3>
       <p className="muted small">
-        The card's calibrated %: how often recent out-of-sample calls at each rank doubled (
-        {n(calibration.calls)} calls). The dashed lines are its cutoff and high-conviction tier.
+        The card's calibrated %: how often recent out-of-sample alerts at each rank doubled (
+        {n(calibration.calls)} alerts). The dashed lines are its cutoff and high-conviction tier.
       </p>
       <div ref={boxRef}>
         <svg viewBox={`0 0 ${W} ${H}`} height={H} role="img" aria-label="2x rate by rank" {...pick}>
@@ -594,7 +596,7 @@ function CalibrationChart({
       </div>
       <p className="faint small model-readout">
         {shown
-          ? `From the top ${((1 - shown.rank) * 100).toFixed(1)}%: ${pct(shown.rate * 100, 1)} doubled (${n(shown.n)} calls in this step)`
+          ? `From the top ${((1 - shown.rank) * 100).toFixed(1)}%: ${pct(shown.rate * 100, 1)} doubled (${n(shown.n)} alerts in this step)`
           : "Hover or tap a step for its rate."}
       </p>
     </div>
@@ -615,7 +617,7 @@ function InputsView({ seat, sample }: { seat: Seat; sample: Lineup["sample"] }) 
           ? `the ${n(sample.deepReadRows)} recent moments with TokenSage's deep read`
           : "recent decision moments"}
         . The right column is its average push on the {n(seat.inputSample?.calls ?? 0)} of them it would have
-        called: blue pushed toward the call, orange against.{" "}
+        alerted on: blue pushed toward the alert, orange against.{" "}
         {seat.inputs!.some((i) => i.direction !== null) ? "▲ more is better, ▼ less is better." : ""}
       </p>
       <div className="input-bars" role="table">
@@ -623,7 +625,7 @@ function InputsView({ seat, sample }: { seat: Seat; sample: Lineup["sample"] }) 
           <span role="columnheader">Input</span>
           <span role="columnheader">Share of influence</span>
           <span role="columnheader" className="r">
-            On its calls
+            On its alerts
           </span>
         </div>
         {inputs.map((i) => (
@@ -644,7 +646,7 @@ function InputsView({ seat, sample }: { seat: Seat; sample: Lineup["sample"] }) 
             <span
               className="input-push"
               role="cell"
-              title="Average push on the log-odds of a 2x, on its calls"
+              title="Average push on the log-odds of a 2x, on its alerts"
             >
               {i.onCalls === null ? (
                 <span className="faint small">–</span>
@@ -689,13 +691,13 @@ function MembersView({ seat }: { seat: Seat }) {
         {consensus
           ? "Bars are the meta model's share of weight on each member's rank."
           : members.some((m) => m.backingPct !== null)
-            ? "Bars are how often each member was calling too, on the recent moments it would have called."
+            ? "Bars are how often each member was alerting too, on the recent moments it would have alerted on."
             : ""}
       </p>
       <div className="input-bars" role="table">
         <div className="input-row input-head" role="row">
           <span role="columnheader">Member</span>
-          <span role="columnheader">{consensus ? "Weight" : "Calling too on its calls"}</span>
+          <span role="columnheader">{consensus ? "Weight" : "Alerting too on its alerts"}</span>
           <span role="columnheader" className="r">
             Member cutoff
           </span>
@@ -739,7 +741,8 @@ function AgreementView({ seat }: { seat: Seat }) {
     <div>
       <h3>Does agreement pay?</h3>
       <p className="muted small">
-        Its exam: how often coins doubled by how many members called them. Darker bars are where it calls.
+        Its exam: how often coins doubled by how many members alerted on them. Darker bars are where it
+        alerts.
       </p>
       <div className="agree-chart" role="table">
         {curve.map((p) => (
@@ -747,7 +750,7 @@ function AgreementView({ seat }: { seat: Seat }) {
             key={p.agreeing}
             className={`agree-col${p.agreeing >= need ? " on" : ""}`}
             role="row"
-            title={`${p.agreeing} calling: ${pct(p.winRatePct, 1)} of ${n(p.rows)} moments doubled`}
+            title={`${p.agreeing} alerting: ${pct(p.winRatePct, 1)} of ${n(p.rows)} moments doubled`}
           >
             <span className="num small">{pct(p.winRatePct, 0)}</span>
             {/* No rate is no bar (the label above says "–"), not a sliver that reads as near 0%. */}
@@ -759,7 +762,7 @@ function AgreementView({ seat }: { seat: Seat }) {
           </div>
         ))}
       </div>
-      <p className="faint small">Members calling (bottom) and the moments behind each bar.</p>
+      <p className="faint small">Members alerting (bottom) and the moments behind each bar.</p>
     </div>
   );
 }
@@ -778,13 +781,13 @@ function CallsPanel({ seat }: { seat: Seat }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <Panel
-      title={`Why ${seat.name} called`}
-      note="Its newest calls with the reasons recorded when they sent. Explain runs the call's stored inputs back through the exact model that made it."
+      title={`Why ${seat.name} alerted`}
+      note="Its newest alerts with the reasons recorded when they sent. Explain runs the alert's stored inputs back through the exact model that made it."
     >
       <Load q={q}>
         {(calls) =>
           calls.length === 0 ? (
-            <p className="muted small">No calls yet.</p>
+            <p className="muted small">No alerts yet.</p>
           ) : (
             <ul className="seat-calls">
               {calls.map((c) => (
@@ -845,7 +848,7 @@ function CallExplainView({ id }: { id: string }) {
               {x.note && <p className="muted small">{x.note}</p>}
               {x.members && (
                 <Table
-                  head={["Member", "Rank", "Cutoff", "Calls"]}
+                  head={["Member", "Rank", "Cutoff", "Alerting"]}
                   rows={x.members.map((m) => [
                     m.name,
                     <span className="num">{m.rank !== null ? rankText(m.rank) : "–"}</span>,

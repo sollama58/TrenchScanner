@@ -602,7 +602,7 @@ function verdictWithCutoff(exam: RecipeExam): PromotionVerdict {
   return verdict.promote && exam.deployedThreshold === null
     ? {
         promote: false,
-        reason: `${verdict.reason.replace(" - promoting", "")}, but too few out-of-sample calls to set a cutoff - keeping current curator`,
+        reason: `${verdict.reason.replace(" - promoting", "")}, but too few out-of-sample alerts to set a cutoff - keeping current curator`,
       }
     : verdict;
 }
@@ -1348,7 +1348,7 @@ export async function runEvolvingContest(
           folds: [],
           verdict: {
             promote: false,
-            reason: `${stackedSpec.name}: stacked on ${stacked.params.members.length} models, judged on ${stacked.examChunks} later chunk(s) of their out-of-sample calls`,
+            reason: `${stackedSpec.name}: stacked on ${stacked.params.members.length} models, judged on ${stacked.examChunks} later chunk(s) of their out-of-sample alerts`,
           },
           targets: cfg.targets,
           precisionCalibration: stacked.precisionCalibration,
@@ -1398,7 +1398,7 @@ export async function runEvolvingContest(
           folds: [],
           verdict: {
             promote: false,
-            reason: `${blendSpec.name}: ${blend.params.members.length} models' ranks averaged, judged on ${blend.examChunks} chunk(s) of their out-of-sample calls`,
+            reason: `${blendSpec.name}: ${blend.params.members.length} models' ranks averaged, judged on ${blend.examChunks} chunk(s) of their out-of-sample alerts`,
           },
           targets: cfg.targets,
           precisionCalibration: blend.precisionCalibration,
@@ -1455,7 +1455,7 @@ export async function runEvolvingContest(
           folds: [],
           verdict: {
             promote: false,
-            reason: `${agreementSpec.name}: ${agreement.params.members.length} models' calls counted, judged on ${agreement.examChunks} chunk(s) of their out-of-sample calls; wins by models agreeing - ${curveText}`,
+            reason: `${agreementSpec.name}: ${agreement.params.members.length} models' alerts counted, judged on ${agreement.examChunks} chunk(s) of their out-of-sample alerts; wins by models agreeing - ${curveText}`,
           },
           targets: cfg.targets,
           precisionCalibration: agreement.precisionCalibration,
@@ -1494,7 +1494,7 @@ export async function runEvolvingContest(
           folds: [],
           verdict: {
             promote: false,
-            reason: `${topSliceSpec.name}: the top quarter of ${names.join(", ")}'s own calls, judged on their out-of-sample calls - ${topSlice.exam.wins}/${topSlice.exam.graded} doubled`,
+            reason: `${topSliceSpec.name}: the top quarter of ${names.join(", ")}'s own alerts, judged on their out-of-sample alerts - ${topSlice.exam.wins}/${topSlice.exam.graded} doubled`,
           },
           targets: cfg.targets,
           precisionCalibration: topSlice.precisionCalibration,
@@ -1685,11 +1685,11 @@ function rulesSeatResult(
   }
   const options = [incumbent, ...challengers].map((o) => ({ label: o.label, examScore: o.examScore }));
   const fmt = (bound: number | null) =>
-    bound === null ? "no graded calls" : `2x lower bound ${(bound * 100).toFixed(1)}%`;
+    bound === null ? "no graded alerts" : `2x lower bound ${(bound * 100).toFixed(1)}%`;
   const reason =
     chosen === incumbent
       ? cfg.currentRules && !current
-        ? `The learned rules found nowhere to call this run, so Rules went back to the hand-tuned gates (exam ${fmt(handOption.examBound)}).`
+        ? `The learned rules found nowhere to alert this run, so Rules went back to the hand-tuned gates (exam ${fmt(handOption.examBound)}).`
         : `Kept the ${incumbent.label} (exam ${fmt(incumbent.examBound)})` +
           (challengers.length > 0
             ? `: ${challengers.map((c) => `${c.label} scored ${fmt(c.examBound)}`).join(", ")}.`

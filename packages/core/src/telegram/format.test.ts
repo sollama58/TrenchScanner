@@ -58,17 +58,17 @@ describe("telegram alert text", () => {
       reasons: ["r1", "r2", "r3", "r4"],
       narrativeVerdict: "warns",
     };
-    expect(headline(card({ calls: [call] }))).toBe("Forest called it");
+    expect(headline(card({ calls: [call] }))).toBe("Forest flagged it");
     expect(headline(card({ calls: [call], filters: [{ name: "Mine", score: 1 }] }))).toBe(
-      "Forest called it and your filter caught it",
+      "Forest flagged it and your filter caught it",
     );
     const text = formatAlert(card({ calls: [call] }), links);
     expect(text).toContain(
-      "🟢 <b>$DOGE</b>  ·  Doge &lt;b&gt;Coin&lt;/b&gt;\n<i>Forest called it</i>\n━━━━━━━━━━━━━━\n💰 MC",
+      "🟢 <b>$DOGE</b>  ·  Doge &lt;b&gt;Coin&lt;/b&gt;\n<i>Forest flagged it</i>\n━━━━━━━━━━━━━━\n💰 MC",
     );
     expect(text).toContain(
       "🤖 <b>Forest</b>  ▰▰▰▰▰▰▰▱▱▱  <b>72%</b> conviction  🔥 high\n" +
-        "     41% of calls like it 2x'd\n" +
+        "     41% of alerts like it 2x'd\n" +
         "     ⚠️ Narrative warns\n" +
         "<blockquote>▸ r1\n▸ r2\n▸ r3</blockquote>",
     );
@@ -122,8 +122,8 @@ describe("telegram alert text", () => {
     expect(cardRank(strongCall)).toBeGreaterThan(cardRank(weakCall));
     expect(cardRank(weakCall)).toBeGreaterThan(cardRank(bigFilter));
     expect(sortCards([bigFilter, weakCall, strongCall]).map((c) => headline(c))).toEqual([
-      "Forest called it",
-      "Rules called it",
+      "Forest flagged it",
+      "Rules flagged it",
       "caught by “Big”",
     ]);
     const text = formatAlert(

@@ -257,8 +257,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             <li>
               <b>On the map</b>, each bubble is a holder, sized and labelled with its share down to 0.1%. One
               colour means one funder, a red ring marks a risky wallet or known dumper, and a dotted ring
-              means funded within the same minute. A coin a model called also brings in known wallets from its
-              top 50.
+              means funded within the same minute. A coin a model alerted on also brings in known wallets from
+              its top 50.
             </li>
             <li>
               <b>Under the map</b>, tap a cluster, KOL, exchange or funding minute to list its wallets with
@@ -354,9 +354,9 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             body: (
               <>
                 <p className="tour-lead">
-                  You see the top models&apos; calls {GUEST_DELAY_MINUTES} minutes after it makes them.
-                  Connect a wallet to get them live, plus your own filters, model picks, alerts and stats, the
-                  bubble map and the free Side Wallet Checker.
+                  You see the top models&apos; alerts {GUEST_DELAY_MINUTES} minutes after they raise them.
+                  Connect a wallet to get them live, plus your own filters, model selection, alerts and stats,
+                  the bubble map and the free Side Wallet Checker.
                 </p>
                 <p className="tour-note">Tap the ⓘ by the feed title to see this tour again.</p>
               </>

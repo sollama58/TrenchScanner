@@ -164,7 +164,7 @@ export function DevCard({ dev }: { dev: TokenProfile["dev"] | undefined }) {
         {dev && dev.risk !== null && (
           <span
             className={`sage-tag ${riskTone(dev.risk)}`}
-            title="Trading risk, 0-100: how the dev wallet trades, from selling into earlier calls' stops"
+            title="Trading risk, 0-100: how the dev wallet trades, from selling into earlier alerts' stops"
           >
             Trading risk {Math.round(dev.risk)}
           </span>

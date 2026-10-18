@@ -279,7 +279,7 @@ function describe(card: Card): { title: string; body: string } {
   const at = mcap !== null ? ` at ${usd(mcap)} mcap` : "";
   if (card.kind === "curated") {
     const model = card.curated?.modelName ?? "A model";
-    return { title: `${name}: ${model} call`, body: `${model} called ${name}${at}.` };
+    return { title: `${name}: ${model} alert`, body: `${model} alerted on ${name}${at}.` };
   }
   return {
     title: `${name}: filter match`,

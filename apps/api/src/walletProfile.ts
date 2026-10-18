@@ -261,7 +261,7 @@ export function walletLabels(input: {
       text: "Known dumper",
       tone: "risky",
       source: "TrenchScanner risk score",
-      detail: `Sold into the stop on ${r.dumps} of the ${r.appearances} called coins it bought`,
+      detail: `Sold into the stop on ${r.dumps} of the ${r.appearances} alerted coins it bought`,
     });
   if (r?.winner)
     out.push({

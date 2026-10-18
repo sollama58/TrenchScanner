@@ -130,8 +130,8 @@ function ScoreExplainerModal({ open, onClose }: { open: boolean; onClose: () => 
           </p>
         )}
         <p>
-          It is a quick screen, not the models&apos; call: the models read the raw numbers themselves. A min
-          score in a filter drops tokens below it.
+          It is a quick screen, not the models&apos; verdict: the models read the raw numbers themselves. A
+          min score in a filter drops tokens below it.
         </p>
       </div>
     </dialog>

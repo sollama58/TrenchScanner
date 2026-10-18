@@ -35,7 +35,7 @@ export function PnlShare({ data, onClose }: { data: PnlCardData; onClose: () => 
   const canShare =
     !!file && typeof navigator.canShare === "function" && navigator.canShare({ files: [file] });
   const canCopy = typeof ClipboardItem !== "undefined" && !!navigator.clipboard?.write;
-  const caption = `${data.symbol ? `$${data.symbol}` : "A token"} called by TrenchScanner`;
+  const caption = `${data.symbol ? `$${data.symbol}` : "A token"} flagged by TrenchScanner`;
 
   const share = async () => {
     if (!file) return;

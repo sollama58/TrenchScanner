@@ -278,10 +278,10 @@ describe("compositeScore", () => {
   it("explains itself in a sentence", () => {
     const c = compositeScore(record(40, 20, 8, 0.7), record(100, 60, 30, 1), targets);
     const text = explainScore(c, targets);
-    expect(text).toContain("40 graded live calls plus the backtest counting as 30");
+    expect(text).toContain("40 graded live alerts plus the backtest counting as 30");
     expect(text).toContain(`= ${c.score!.toFixed(0)} of 100`);
     expect(explainScore(compositeScore(emptyRecord(), emptyRecord(), targets), targets)).toContain(
-      "No graded calls",
+      "No graded alerts",
     );
   });
 });

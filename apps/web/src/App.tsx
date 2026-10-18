@@ -617,9 +617,9 @@ function GuestLocked({ label, onConnect }: { label: string; onConnect: () => voi
       </span>
       <h2>Connect a wallet to use {label}</h2>
       <p className="muted">
-        You&apos;re in guest mode: the Live tab shows the top models&apos; calls {GUEST_DELAY_MINUTES} minutes
-        late, and the Models tab shows how every model is doing. Your own filters, model picks, alerts and
-        settings are saved to your wallet.
+        You&apos;re in guest mode: the Live tab shows the top models&apos; alerts {GUEST_DELAY_MINUTES}{" "}
+        minutes late, and the Models tab shows how every model is doing. Your own filters, model choices,
+        alerts and settings are saved to your wallet.
       </p>
       <button className="button primary" onClick={onConnect}>
         Connect wallet

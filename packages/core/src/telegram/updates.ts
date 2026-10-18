@@ -267,7 +267,7 @@ export async function handleTelegramUpdate(
         );
         return { action: "status" };
       }
-      const what = [row.filterMatches ? "filter matches" : null, row.modelCalls ? "model calls" : null]
+      const what = [row.filterMatches ? "filter matches" : null, row.modelCalls ? "model alerts" : null]
         .filter(Boolean)
         .join(" and ");
       await api.sendMessage(
@@ -698,7 +698,7 @@ async function link(
     chatId,
     `✅ Linked to wallet <code>${escapeHtml(shortWallet(result.walletAddress))}</code>. ` +
       (isGroup ? "This group" : "This chat") +
-      " now gets that account's alerts: its filter matches and the calls of the models it picked for Telegram " +
+      " now gets that account's alerts: its filter matches and the alerts from the models it picked for Telegram " +
       "(the Live Feed's, unless it chose others). Choose which, pause, or unlink from the Filters tab.",
   );
   return { action: "linked" };

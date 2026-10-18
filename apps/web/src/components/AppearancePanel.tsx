@@ -111,7 +111,7 @@ export function AppearanceControls() {
           onChange={(loss) => setAppearance({ loss })}
         />
         <ColorRow
-          label="Model calls"
+          label="Model alerts"
           hint="Model pills and reasons"
           value={look.accent}
           onChange={(accent) => setAppearance({ accent })}
@@ -313,7 +313,7 @@ export function AppearanceControls() {
             checked={narrativeShown}
             onChange={() => setAppearance({ narrativeNote: !narrativeShown })}
           />
-          Narrative model&rsquo;s &ldquo;agrees&rdquo; / &ldquo;warns&rdquo; on other models&rsquo; calls
+          Narrative model&rsquo;s &ldquo;agrees&rdquo; / &ldquo;warns&rdquo; on other models&rsquo; alerts
         </label>
         <p className="faint small check-hint">
           {look.narrativeNote === null ? (
@@ -621,14 +621,14 @@ function McapLine({ value, on, onCommit }: { value: number; on: boolean; onCommi
 /** What the automatic Narrative default is doing, and why. */
 function narrativeAutoHint(n: NarrativeNoteReadiness | null): string {
   if (!n) return "off until the Narrative model's record loads.";
-  const rule = `turns on once the Narrative model's ${n.windowDays}-day 2x hit rate is reliably above ${n.minRatePct}% (the bottom of its 90% range, on at least ${n.minGraded} graded calls), and off once it is reliably below`;
+  const rule = `turns on once the Narrative model's ${n.windowDays}-day 2x hit rate is reliably above ${n.minRatePct}% (the bottom of its 90% range, on at least ${n.minGraded} graded alerts), and off once it is reliably below`;
   const range =
     n.lowerPct != null && n.upperPct != null
       ? ` (range ${n.lowerPct.toFixed(0)}-${n.upperPct.toFixed(0)}%)`
       : "";
   const record =
     n.winRatePct === null
-      ? "no graded calls yet"
-      : `${n.winRatePct.toFixed(0)}%${range} over ${n.graded} graded call${n.graded === 1 ? "" : "s"}`;
+      ? "no graded alerts yet"
+      : `${n.winRatePct.toFixed(0)}%${range} over ${n.graded} graded alert${n.graded === 1 ? "" : "s"}`;
   return n.ready ? `on, ${record}. It ${rule}.` : `off for now, ${record}. It ${rule}.`;
 }

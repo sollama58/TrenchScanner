@@ -97,7 +97,7 @@ Worker and API share a `packages/core` (Prisma/Drizzle schema, scoring logic, da
 
 ## 7b. Curated Alerts (self-learning feed)
 
-A subscriber-facing "Curated" tab: one global feed of high-conviction calls, curated first by a
+A subscriber-facing "Curated" tab: one global feed of high-conviction alerts, curated first by a
 hand-tuned heuristic and eventually by a model trained on the system's own recorded outcomes.
 Three shipping phases, each useful on its own:
 
@@ -110,19 +110,19 @@ Three shipping phases, each useful on its own:
   from their recorded price path. The training target is log2 of the 30-minute peak multiple,
   capped at a 100x, awarded only to clean wins. Labels are recorded for ALL candidates, not just
   curated/matched ones: full-population outcomes are what let any future gate be evaluated
-  offline, and they remove the explore/exploit problem entirely. Winners (and curated picks) stay
+  offline, and they remove the explore/exploit problem entirely. Winners (and curated alerts) stay
   watched to 24h for their run peak - how far and how fast they ultimately went - which the
   stats, the Models tab and each training run's runner-traits report read. Sampling is minutely, so intra-minute wicks are invisible - accepted; the label
   describes what a human at the same cadence could have traded.
 - **Phase B — the feed** (`CuratedAlert`, `/curated` routes, the Curated tab): a strict
   quality-floor gate (see `curator.ts`) nominates alerts, and an **emission governor**
   (`curation/governor.ts`) can pace them. Since 2026-10-05 it is off by default
-  (`CURATED_TARGET_PER_HOUR=0`): every call that clears a curator's cutoff goes out, once per
+  (`CURATED_TARGET_PER_HOUR=0`): every alert that clears a curator's cutoff goes out, once per
   token per cooldown. With a target set, it is a per-model ceiling counted from the actual alerts table, with a
   small burst allowance so a hot minute can put two out back-to-back. When a scan cycle brings
   more gate-passing contenders than the pace allows, the strongest conviction wins the slot and
   the rest re-contend next cycle. Quality comes from each curator's hit-rate cutoff (the
-  conviction at which its out-of-sample calls met 75% at 2x and 50% at 4x), not from the pace.
+  conviction at which its out-of-sample alerts met 75% at 2x and 50% at 4x), not from the pace.
   A ceiling, never a quota — a dead hour still emits nothing.
   Every alert card publicly grades itself (watching / won / missed / disqualified, peak
   returns), and the tab's learning panel shows the training-set size, the base win rate, the

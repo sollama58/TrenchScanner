@@ -96,7 +96,7 @@ export function assessTrainingRun(input: RunGuardInput): RunGuardVerdict {
   const wasCalling = input.incumbents.filter((m) => calling(m.kind, m.threshold)).length;
   const nowCalling = input.results.filter((r) => calling(r.kind, thresholdOf(r.params))).length;
   if (wasCalling > 0 && nowCalling === 0) {
-    problems.push(`every seat would go silent (${wasCalling} calling now, none after this run)`);
+    problems.push(`every seat would go silent (${wasCalling} alerting now, none after this run)`);
   }
   if (problems.length === 0) return { accept: true, reason: null };
 
@@ -226,7 +226,7 @@ export function liveShareAlarms(
     const [lo] = wilsonBounds(Math.min(s.calls, decisions), decisions);
     if (lo > targetShare * LIVE_SHARE_ALARM_RATIO) {
       out.push(
-        `${s.contestant}: called ${pct(s.calls / decisions)} of ${decisions} decision moments against a ${pct(targetShare)} share`,
+        `${s.contestant}: alerted on ${pct(s.calls / decisions)} of ${decisions} decision moments against a ${pct(targetShare)} share`,
       );
     }
   }
@@ -234,7 +234,7 @@ export function liveShareAlarms(
   const quiet = active.filter((s) => s.calls === 0);
   if (active.length >= 4 && quiet.length * 2 > active.length) {
     out.push(
-      `${quiet.length} of ${active.length} calling seats made no call in ${decisions} decision moments`,
+      `${quiet.length} of ${active.length} alerting seats raised no alert in ${decisions} decision moments`,
     );
   }
   return out;

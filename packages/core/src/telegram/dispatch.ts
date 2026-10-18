@@ -954,7 +954,7 @@ async function dispatchPass(
 /** Sent once when every model a chat's account picked for Telegram has left the roster. */
 export const PICKS_FALLBACK_TEXT =
   "ℹ️ The models this account picked for Telegram are no longer running, so this chat now gets the " +
-  "<b>top models'</b> calls instead. Pick again under <b>Filters → Telegram alerts</b>.";
+  "<b>top models'</b> alerts instead. Pick again under <b>Filters → Telegram alerts</b>.";
 
 type DigestCard = AlertCard & { digest: AlertCard[] };
 function isDigest(card: AlertCard): card is DigestCard {

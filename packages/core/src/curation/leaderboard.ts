@@ -380,19 +380,19 @@ export const SCORE_BANDS: readonly ScoreBand[] = [
     id: "closing-in",
     min: 60,
     label: "Closing in",
-    meaning: "Well over halfway to the targets: a feed worth trading from with care.",
+    meaning: "Well over halfway to the targets, with real evidence behind it.",
   },
   {
     id: "getting-there",
     min: 30,
     label: "Getting there",
-    meaning: "Its calls beat chance, but its proven hit rates are still far below the targets.",
+    meaning: "Its alerts beat chance, but its proven hit rates are still far below the targets.",
   },
   {
     id: "far-off",
     min: 0,
     label: "Far off",
-    meaning: "Little proven yet: few graded calls, or a low hit rate on the ones it has.",
+    meaning: "Little proven yet: few graded alerts, or a low hit rate on the ones it has.",
   },
 ];
 
@@ -492,19 +492,19 @@ export function compositeScore(
  */
 export function explainScore(composite: CompositeScore, targets: PrecisionTargets): string {
   const b = composite.basis;
-  if (b === null || composite.score === null) return "No graded calls yet, so no score.";
+  if (b === null || composite.score === null) return "No graded alerts yet, so no score.";
   const evidence =
     b.backtestCalls > 0
-      ? `${b.liveCalls} graded live call${b.liveCalls === 1 ? "" : "s"} plus the backtest counting as ${b.backtestCalls}`
-      : `${b.liveCalls} graded live call${b.liveCalls === 1 ? "" : "s"}`;
+      ? `${b.liveCalls} graded live alert${b.liveCalls === 1 ? "" : "s"} plus the backtest counting as ${b.backtestCalls}`
+      : `${b.liveCalls} graded live alert${b.liveCalls === 1 ? "" : "s"}`;
   return (
-    `Proven to hit 2x on at least ${b.proven2xPct.toFixed(0)}% of calls (target ${Math.round(targets.winRate * 100)}%) ` +
+    `Proven to hit 2x on at least ${b.proven2xPct.toFixed(0)}% of alerts (target ${Math.round(targets.winRate * 100)}%) ` +
     `4x on at least ${b.proven4xPct.toFixed(0)}% (target ${Math.round(targets.goalRate * 100)}%) ` +
     `and 10x within an hour on at least ${b.proven10xPct.toFixed(0)}% (target ${Math.round(TEN_X_TARGET_RATE * 100)}%), ` +
-    `with runs worth ${b.provenRunDoublings.toFixed(2)} doublings a call (target ${RUN_SIZE_TARGET_DOUBLINGS}, a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average)` +
+    `with runs worth ${b.provenRunDoublings.toFixed(2)} doublings per alert (target ${RUN_SIZE_TARGET_DOUBLINGS}, a ${2 ** RUN_SIZE_TARGET_DOUBLINGS}x average)` +
     (b.provenReturnPct === null
       ? ""
-      : `, returning at least ${b.provenReturnPct.toFixed(0)}% a call under the exit plan (target +${RETURN_TARGET_PCT}%)`) +
+      : `, returning at least ${b.provenReturnPct.toFixed(0)}% per alert under the exit plan (target +${RETURN_TARGET_PCT}%)`) +
     (b.provenCatchPct === null
       ? ", "
       : ` and catching at least ${b.provenCatchPct.toFixed(0)}% of the runners in its backtest (target ${Math.round(CATCH_TARGET_RATE * 100)}%), `) +

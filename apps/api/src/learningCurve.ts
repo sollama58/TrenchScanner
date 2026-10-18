@@ -343,15 +343,15 @@ export function buildLearningTrend(days: LearningDay[]): LearningTrend | null {
   let verdict: LearningTrend["verdict"] = "too-early";
   let reason: string;
   if (recent.lift2x === null || recent.feed.graded < MIN_GRADED_FOR_VERDICT) {
-    reason = `Fewer than ${MIN_GRADED_FOR_VERDICT} graded calls in the last ${TREND_SPAN_DAYS} days - no verdict yet.`;
+    reason = `Fewer than ${MIN_GRADED_FOR_VERDICT} graded alerts in the last ${TREND_SPAN_DAYS} days - no verdict yet.`;
   } else if (!prior || prior.lift2x === null || prior.feed.graded < MIN_GRADED_FOR_VERDICT) {
-    reason = `The last ${TREND_SPAN_DAYS} days hold a lift of ${recent.lift2x.toFixed(2)}x over the filtered market; the ${TREND_SPAN_DAYS} before them have too few graded calls to compare.`;
+    reason = `The last ${TREND_SPAN_DAYS} days hold a lift of ${recent.lift2x.toFixed(2)}x over the filtered market; the ${TREND_SPAN_DAYS} before them have too few graded alerts to compare.`;
   } else {
     const delta = recent.lift2x - prior.lift2x;
     verdict = delta > TREND_FLAT_BAND ? "improving" : delta < -TREND_FLAT_BAND ? "worsening" : "flat";
     reason = `Lift over the filtered market went from ${prior.lift2x.toFixed(2)}x to ${recent.lift2x.toFixed(2)}x between the two ${TREND_SPAN_DAYS}-day spans (${
       recent.feed.graded
-    } graded calls lately, ${prior.feed.graded} before).`;
+    } graded alerts lately, ${prior.feed.graded} before).`;
   }
   return { recent, prior, verdict, reason };
 }

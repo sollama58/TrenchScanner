@@ -75,7 +75,7 @@ export function FeedStatsModal({
                       ? "No alerts yet"
                       : fs.bothOnly
                         ? `Caught by both your filter and your models`
-                        : `${fs.fromFilter} from your filter${fs.showModelAlerts ? `, ${fs.fromModels} model calls` : ""}`
+                        : `${fs.fromFilter} from your filter${fs.showModelAlerts ? `, ${fs.fromModels} model alerts` : ""}`
                     : "Loading…"}
                 </small>
                 {fs && fs.pending > 0 && <small className="faint">{fs.pending} still grading</small>}
@@ -176,7 +176,7 @@ function FeedCatchMeter({ pollKey }: { pollKey: string }) {
   return (
     <div
       className="coverage feed-catch"
-      title={`${sentence} A runner counts as caught when one of your models called it, ${both ? "and" : "or"} one of your filters alerted on it, at a moment that went on to double. Goal ${goal}%.`}
+      title={`${sentence} A runner counts as caught when one of your models flagged it, ${both ? "and" : "or"} one of your filters alerted on it, at a moment that went on to double. Goal ${goal}%.`}
     >
       <div className="cov-head">
         <span className="cov-label">

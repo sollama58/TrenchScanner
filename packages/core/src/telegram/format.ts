@@ -92,8 +92,8 @@ export const ALERT_PART_LABELS: Record<AlertPart, string> = {
   volume: "the last hour's volume",
   age: "how old the token is",
   conviction: "each model's conviction line",
-  calibrated: "how often calls like it 2x'd",
-  reasons: "the strongest call's reasons",
+  calibrated: "how often alerts like it 2x'd",
+  reasons: "the strongest alert's reasons",
   filters: "which filter caught it, with the score",
   mint: "the mint address",
   links: "the trade links",
@@ -313,10 +313,10 @@ export function headline(card: AlertCard): string {
   const models = card.calls.map((c) => c.modelName);
   const filters = card.filters.map((f) => f.name);
   if (models.length > 0 && filters.length > 0) {
-    return `${models.join(" + ")} called it and your filter caught it`;
+    return `${models.join(" + ")} flagged it and your filter caught it`;
   }
-  if (models.length === 1) return `${models[0]} called it`;
-  if (models.length > 1) return `${models.join(" + ")} called it`;
+  if (models.length === 1) return `${models[0]} flagged it`;
+  if (models.length > 1) return `${models.join(" + ")} flagged it`;
   if (filters.length === 1) return `caught by “${filters[0]}”`;
   return `caught by ${filters.length} of your filters`;
 }
@@ -362,7 +362,7 @@ function callLines(call: AlertCall, withReasons: boolean, parts: AlertParts, com
   if (call.tier === "high") head += "  🔥 high";
   const lines = [head];
   if (parts.calibrated && call.calibratedPct !== null)
-    lines.push(`     ${Math.round(call.calibratedPct)}% of calls like it 2x'd`);
+    lines.push(`     ${Math.round(call.calibratedPct)}% of alerts like it 2x'd`);
   if (call.narrativeVerdict === "agrees") lines.push("     📝 Narrative agrees");
   if (call.narrativeVerdict === "warns") lines.push("     ⚠️ Narrative warns");
   const reasons = withReasons ? call.reasons.slice(0, MAX_REASONS).map((r) => `▸ ${escapeHtml(r)}`) : [];

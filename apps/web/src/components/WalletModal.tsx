@@ -666,7 +666,7 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
             <dt>Wins (sold at 2x+, {MIN_WIN_SOL}+ SOL profit)</dt>
             <dd className="num">
               {risk.wins}
-              {risk.earlyWins !== undefined ? ` (${risk.earlyWins} bought before the call)` : ""}
+              {risk.earlyWins !== undefined ? ` (${risk.earlyWins} bought before the alert)` : ""}
             </dd>
           </div>
         )}
@@ -678,9 +678,9 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
         </div>
       </dl>
       <p className="faint small wm-note">
-        How often it sold into a call&apos;s stop, against the market&apos;s rate, nudged up by fast exits and
-        launch snipes. The win score is the mirror: how often it sold a coin for twice what it paid and{" "}
-        {MIN_WIN_SOL}+ SOL profit, against the market, nudged up by being in before the call. Labels need 10+
+        How often it sold into an alert&apos;s stop, against the market&apos;s rate, nudged up by fast exits
+        and launch snipes. The win score is the mirror: how often it sold a coin for twice what it paid and{" "}
+        {MIN_WIN_SOL}+ SOL profit, against the market, nudged up by being in before the alert. Labels need 10+
         coins on record: Known dumper is 4+ sold into the stop and three quarters of its coins, Winner is 3+
         such wins at a rate that holds at twice the market&apos;s, and a wallet never carries both. Updated{" "}
         {ago(risk.computedAt)}.
@@ -746,7 +746,7 @@ function Coins({
                     className={`small num ${o.cls}`}
                     title={
                       c.peakPct !== null
-                        ? `Peak in the hour after the call: ${signedPct(c.peakPct)}`
+                        ? `Peak in the hour after the alert: ${signedPct(c.peakPct)}`
                         : undefined
                     }
                   >

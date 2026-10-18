@@ -157,8 +157,8 @@ function Hero({ data }: { data: TokenSageShowcase | null }) {
         <p className="tsg-lede">
           TokenSage looks at a fresh Solana launch the way a seasoned trader would: its name and logo, the X
           account behind it, the news, and every coin that came before it. Then it says what the coin is
-          about, whether it is a copy, and what to be wary of. TrenchScanner's models weigh it when they make
-          a call.
+          about, whether it is a copy, and what to be wary of. TrenchScanner's models weigh it when they raise
+          an alert.
         </p>
         <div className="tsg-hero-figure">
           <span className="tsg-hero-num">{data ? compact(data.totals.reads) : "…"}</span>
@@ -245,9 +245,9 @@ function Tiles({ data }: { data: TokenSageShowcase | null }) {
       note: t ? `of ${compact(t.copiesAnswered)} coins checked for a lineage` : "",
     },
     {
-      label: "Model calls with a read",
+      label: "Model alerts with a read",
       value: t ? share(t.alertsDescribed, t.alerts) : "…",
-      note: t ? `${compact(t.alertsDescribed)} of ${compact(t.alerts)} calls` : "",
+      note: t ? `${compact(t.alertsDescribed)} of ${compact(t.alerts)} alerts` : "",
     },
   ];
   return (
@@ -430,8 +430,8 @@ function Sections({
                     <span className="tsg-tile-value">{compact(r.count)}</span>
                     <span className="tsg-tile-note">
                       {rate === null
-                        ? `model calls on them: ${r.graded} graded, too few to rate`
-                        : `${rate.toFixed(0)}% (${intervalText(wilson(r.won2x, r.graded))}) of ${compact(r.graded)} graded model calls doubled`}
+                        ? `model alerts on them: ${r.graded} graded, too few to rate`
+                        : `${rate.toFixed(0)}% (${intervalText(wilson(r.won2x, r.graded))}) of ${compact(r.graded)} graded model alerts doubled`}
                     </span>
                   </div>
                 );
@@ -500,14 +500,14 @@ function Sections({
 
       <Section
         id="models"
-        kicker="Into the call"
-        title="How the read reaches a buy call"
+        kicker="Into the alert"
+        title="How the read reaches an alert"
         lede="The read is an input to TrenchScanner's models, the Narrative model decides on the deep read, and filters and Telegram alerts can screen on it."
       >
         <div className="tsg-card tsg-ring-card">
           <Ring
             value={t.alerts > 0 ? (t.alertsDescribed / t.alerts) * 100 : null}
-            label="of model calls' coins have a read"
+            label="of alerted coins have a read"
           />
           <ol className="tsg-steps">
             <li>
@@ -522,7 +522,7 @@ function Sections({
             </li>
             <li>
               <span>
-                <b>Models</b> weigh the read with the market data and make the call
+                <b>Models</b> weigh the read with the market data and decide whether to alert
               </span>
             </li>
             <li>
@@ -538,8 +538,8 @@ function Sections({
         id="narratives"
         share="models"
         kicker="Which narratives pay"
-        title="What the calls on each theme returned"
-        lede={`Model calls in the last ${PAY_SPAN[payDays]} by their coin's narrative, against the average of every call: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Thin narratives stay faded.`}
+        title="What the alerts on each theme returned"
+        lede={`Model alerts in the last ${PAY_SPAN[payDays]} by their coin's narrative, against the average of every alert: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Thin narratives stay faded.`}
       >
         <div className="tsg-card">
           <div className="tsg-card-head tsg-pay-head">
@@ -578,10 +578,10 @@ function NarrativesPay({ pay, days }: { pay: LighthouseSignals | null; days: Pay
     <div className={stale ? "stale" : undefined} aria-busy={stale}>
       <HitRates rows={rows} cls={cls} baseline={base} />
       <p className="tsg-card-sub tsg-pay-foot">
-        {o.described.toLocaleString()} of {o.alerts.toLocaleString()} calls had a TokenSage read ·{" "}
+        {o.described.toLocaleString()} of {o.alerts.toLocaleString()} alerts had a TokenSage read ·{" "}
         {o.graded.toLocaleString()} graded
-        {base.rate2x !== null ? `, ${base.rate2x.toFixed(0)}% reached 2x` : ""}. TokenSage can answer after a
-        call, so this shows what wins, not what a model knew.
+        {base.rate2x !== null ? `, ${base.rate2x.toFixed(0)}% reached 2x` : ""}. TokenSage can answer after an
+        alert, so this shows what wins, not what a model knew.
       </p>
     </div>
   );

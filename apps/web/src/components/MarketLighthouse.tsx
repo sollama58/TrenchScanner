@@ -198,14 +198,14 @@ function TokenSageSections({
             render={() => renderNarrativesPayCard(d.outcomes, span)}
           />
         }
-        note={`Model calls in the last ${span} by their coin's narrative, against the average of every call: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Narratives under ${MIN_GRADED} graded calls stay faded; hover one for its 2x rate's 90% range. TokenSage can answer after a call, so this shows what wins, not what a model knew. ${RULE_NOTE_UNFILTERED}`}
+        note={`Model alerts in the last ${span} by their coin's narrative, against the average of every alert: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Narratives under ${MIN_GRADED} graded alerts stay faded; hover one for its 2x rate's 90% range. TokenSage can answer after an alert, so this shows what wins, not what a model knew. ${RULE_NOTE_UNFILTERED}`}
       >
         <HitRates rows={narratives(d.outcomes.byCategory)} cls={cls} baseline={base} />
         <p className="faint small lh-foot">
-          {d.outcomes.described.toLocaleString()} of {d.outcomes.alerts.toLocaleString()} calls had a
+          {d.outcomes.described.toLocaleString()} of {d.outcomes.alerts.toLocaleString()} alerts had a
           TokenSage read · {d.outcomes.graded.toLocaleString()} graded overall
           {d.outcomes.graded > 0 ? <>, {pct(share(d.outcomes.won2x, d.outcomes.graded))} reached 2x</> : null}
-          . The average each narrative is read against is every call with a read: {signedPct(base.avgReturn)}{" "}
+          . The average each narrative is read against is every alert with a read: {signedPct(base.avgReturn)}{" "}
           return, {pct(base.rate2x)} reached 2x, over {base.graded.toLocaleString()} graded.
         </p>
       </Section>
@@ -327,7 +327,7 @@ function Signals({
       </div>
       {s.outcomes.byCopy.length > 0 && (
         <div className="lh-mini">
-          <h4>Calls on originals vs copies</h4>
+          <h4>Alerts on originals vs copies</h4>
           <HitRates rows={s.outcomes.byCopy} />
         </div>
       )}
@@ -346,7 +346,7 @@ function FeeRecipients({ d, days, span }: { d: MarketLighthouse; days: Days; spa
   return (
     <Section
       title="Fee recipients"
-      note={`Who gets the creator fee on the coins read in the last ${span}: a charity, the holders or other wallets, a GitHub account, or the dev. Below, how model calls on each group's coins did under the exit plan; groups under ${MIN_GRADED} graded calls stay faded.`}
+      note={`Who gets the creator fee on the coins read in the last ${span}: a charity, the holders or other wallets, a GitHub account, or the dev. Below, how model alerts on each group's coins did under the exit plan; groups under ${MIN_GRADED} graded alerts stay faded.`}
       share={
         <ShareButton
           title={`Fee recipients, last ${span}`}
@@ -360,7 +360,7 @@ function FeeRecipients({ d, days, span }: { d: MarketLighthouse; days: Days; spa
       <Split title="Coins read" rows={rows} empty="No fee recipients read yet" />
       {known > 0 && (
         <div className="lh-mini">
-          <h4>Calls by fee recipient</h4>
+          <h4>Alerts by fee recipient</h4>
           <HitRates rows={bestFirst(byFeeRecipient)} />
         </div>
       )}
@@ -622,7 +622,7 @@ export function HitRates({
   baseline?: NarrativeBaseline;
 }) {
   if (!rows.length)
-    return <p className="muted small">No model calls on described coins in this window yet.</p>;
+    return <p className="muted small">No model alerts on described coins in this window yet.</p>;
   const base = baseline?.avgReturn ?? null;
   const relative = baseline !== undefined && base !== null;
   const gapOf = (r: LighthouseTally) => {
@@ -662,7 +662,7 @@ export function HitRates({
         const tone = gap === null ? "" : gap < 0 ? "loss" : "gain";
         const valueTone = gap === null ? "" : relative && early ? "muted" : gap < 0 ? "lh-down" : "lh-up";
         const title = relative
-          ? `${words(r.label)}: average return ${signedPct(ret)} against ${signedPct(base)} for all narratives (${signedPts(gap)}); 2x rate ${pct(r2x)} (${intervalText(wilson(r.won2x, r.graded))}) against ${pct(baseline.rate2x)}; 10x rate ${tier(r.won10x, tenXOver)}.${early ? " Too few graded calls to call it yet." : ""}`
+          ? `${words(r.label)}: average return ${signedPct(ret)} against ${signedPct(base)} for all narratives (${signedPts(gap)}); 2x rate ${pct(r2x)} (${intervalText(wilson(r.won2x, r.graded))}) against ${pct(baseline.rate2x)}; 10x rate ${tier(r.won10x, tenXOver)}.${early ? " Too few graded alerts to judge yet." : ""}`
           : undefined;
         return (
           <div key={r.label} className={`lh-hit${early ? " early" : ""}`} title={title}>
@@ -828,7 +828,7 @@ function Screened({ s, span, days, since }: { s: ScreenedData; span: string; day
       </div>
       <p className="faint small">
         Every token that passed our pre-checks in the last {span}, graded from the price when it first looked
-        ready. This is the whole field the models pick from, not their calls.
+        ready. This is the whole field the models choose from, not their alerts.
       </p>
       {explain && <PreChecks s={s} />}
 

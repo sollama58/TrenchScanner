@@ -158,7 +158,7 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
           <div className="returns-top-head">
             <span className="eyebrow">Top 3 · last 7 days</span>
             {data.topBySource && (
-              <div className="segmented small" role="tablist" aria-label="Calls from">
+              <div className="segmented small" role="tablist" aria-label="Alerts from">
                 {TOP_BY.map((o) => (
                   <button
                     key={o.id}
@@ -182,9 +182,9 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
               {topBy === "model"
                 ? data.showModelAlerts
                   ? data.bothOnly
-                    ? "No AI KOL call your filter also caught has hit 2x this week."
-                    : "No AI KOL call in your feed has hit 2x this week."
-                  : "Model alerts are off on your feed, so it has no AI KOL calls."
+                    ? "No AI KOL alert your filter also caught has hit 2x this week."
+                    : "No AI KOL alert in your feed has hit 2x this week."
+                  : "Model alerts are off on your feed, so it has no AI KOL alerts."
                 : "No alert from your filters has hit 2x this week."}
             </p>
           )}
@@ -228,7 +228,7 @@ export function FeedReturns({ pollKey, highConviction }: { pollKey: string; high
       <p className="faint small stats-note">
         Each alert&apos;s return under the fixed exit plan (35% sold at 2x, 30% at 4x, 25% at 10x, the rest on
         a trailing stop, stop at −50%), averaged by when it alerted. An alert counts once its return settles,
-        from 30 minutes to 3 hours after it fires, so the last hour fills in late. The top 3 are the calls
+        from 30 minutes to 3 hours after it fires, so the last hour fills in late. The top 3 are the alerts
         that passed (hit 2x before a 50% drop), ranked by Peak, the figure each feed card shows.
       </p>
     </section>

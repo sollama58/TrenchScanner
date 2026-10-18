@@ -154,7 +154,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const { code } = await issueTelegramLinkCode(userId);
     await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
     await handleTelegramUpdate(api, message(chatId, "/status"), { now: tick });
-    expect(api.sent()[2]!.text).toContain("Sending filter matches and model calls");
+    expect(api.sent()[2]!.text).toContain("Sending filter matches and model alerts");
     expect((await handleTelegramUpdate(api, message(chatId, "/stop"), { now: tick })).action).toBe(
       "unlinked",
     );
