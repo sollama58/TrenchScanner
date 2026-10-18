@@ -79,6 +79,10 @@ const envSchema = z.object({
     .min(32, "JWT_SECRET must be at least 32 characters")
     .default("dev-insecure-default-jwt-secret-change-me"),
   SESSION_TTL_HOURS: z.coerce.number().positive().default(168),
+  // Keys walletTag's hash (walletTag.ts), so a log tag can't be reversed by hashing on-chain
+  // wallets (user ask 2026-10-18). Shared by every service, so one wallet's tag matches across
+  // them; changing it changes every tag. Unset (local runs, tests): an unkeyed hash.
+  WALLET_TAG_SECRET: z.string().min(32).optional(),
 
   HELIUS_API_KEY: pastedKey,
   DEXSCREENER_BASE_URL: z.string().default("https://api.dexscreener.com"),

@@ -340,7 +340,7 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
           .pendingTotpSecret!,
       );
       const step = Math.floor(Date.now() / 30_000);
-      await app.inject({
+      const confirmed = await app.inject({
         method: "POST",
         url: "/auth/2fa/totp/confirm",
         headers: auth,
@@ -383,12 +383,41 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
         payload: { ticket: body.ticket, backupCode: "AAAA-AAAA" },
       });
       expect(reused.statusCode).toBe(401);
-      // This browser is known now: no second ask.
+      // The browser that passed is remembered only until a sign-out (the bump above): it is
+      // asked again.
       const device = ok.cookies.find((c) => c.name === "ts_2fa_device");
       expect(device).toBeDefined();
-      const known = await signIn(await privyToken(did), { ts_2fa_device: device!.value });
+      const afterSignOut = await signIn(await privyToken(did), { ts_2fa_device: device!.value });
+      expect(afterSignOut.json()).toMatchObject({ twoFactorRequired: true });
+      // Passing again remembers it: no second ask.
+      const again = await app.inject({
+        method: "POST",
+        url: "/auth/2fa/signin",
+        payload: { ticket: afterSignOut.json().ticket, backupCode: confirmed.json().backupCodes[0] },
+      });
+      expect(again.statusCode).toBe(200);
+      const fresh = again.cookies.find((c) => c.name === "ts_2fa_device");
+      const known = await signIn(await privyToken(did), { ts_2fa_device: fresh!.value });
       expect(known.json()).toMatchObject({ walletAddress: privyWallet });
       expect(known.json().twoFactorRequired).toBeUndefined();
+    });
+
+    it("keeps a paired phone from turning two-factor on", async () => {
+      const did = newDid();
+      privyWallets.set(did, wallet());
+      const created = (await signIn(await privyToken(did))).json() as { id: string };
+      const device = await prisma.linkedDevice.create({ data: { userId: created.id } });
+      const token = await app.sessionSigner.sign({
+        userId: created.id,
+        walletAddress: (await prisma.user.findUniqueOrThrow({ where: { id: created.id } })).walletAddress,
+        deviceId: device.id,
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/auth/2fa/totp/setup",
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.statusCode).toBe(403);
     });
   });
 

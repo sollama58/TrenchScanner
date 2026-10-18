@@ -346,7 +346,8 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     // A sign-out everywhere since the ticket was given (sessionVersion moved on) ends it too.
     if (!user || user.sessionVersion !== ticket.sessionVersion)
       return reply.code(401).send({ error: "That sign-in has expired. Start again." });
-    reply.setCookie(KNOWN_DEVICE_COOKIE, await issueKnownDevice(opts.env, user.id), {
+    const { epoch } = await twoFactorState(user.id);
+    reply.setCookie(KNOWN_DEVICE_COOKIE, await issueKnownDevice(opts.env, user.id, epoch), {
       httpOnly: true,
       ...sessionCookieAttrs(request.hostname, opts.env.PUBLIC_APP_DOMAIN, request.protocol),
       maxAge: KNOWN_DEVICE_TTL_SECONDS,
@@ -410,7 +411,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     }
 
     const twoFactor = await twoFactorState(user.id);
-    if (asksFor(twoFactor, "signin") && !(await isKnownDevice(opts.env, request, user.id))) {
+    if (asksFor(twoFactor, "signin") && !(await isKnownDevice(opts.env, request, user.id, twoFactor.epoch))) {
       return {
         twoFactorRequired: true,
         ticket: await issueSignInTicket(opts.env, user.id, user.sessionVersion),
