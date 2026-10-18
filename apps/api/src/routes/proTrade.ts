@@ -29,6 +29,7 @@ import {
   walletTag,
   prisma,
   recordPlatformTrade,
+  sacrificeSettings,
   settlePlatformTrade,
   tradeOutcome,
 } from "@trenchscanner/core";
@@ -779,7 +780,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       }),
       solPrice.get().catch(() => null),
     ]);
-    return { ...feeSummary(trades), since: first?.sentAt ?? null, solUsd };
+    const { mode, freeRank } = await sacrificeSettings();
+    return { ...feeSummary(trades), since: first?.sentAt ?? null, solUsd, sacrifice: { mode, freeRank } };
   });
 
   app.get<{ Params: { mint: string } }>(

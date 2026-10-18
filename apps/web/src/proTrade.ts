@@ -320,7 +320,65 @@ export interface FeeEstimate {
   priorityFeeLamports: string;
   tipLamports: string;
   baseFeeLamports: string;
+  /** The Sacrifice's SOL value while it is on and the wallet pays, else "0". */
   platformFeeLamports: string;
+  sacrifice?: SacrificeView;
+}
+
+/**
+ * The Sacrifice on a trade (apps/api/src/sacrificeQuote.ts sacrificeView): a 0.2% fee paid from
+ * burned credits by wallets below the free cut-off. "off": nothing worked out; "shadow": worked
+ * out, never taken; "on": taken.
+ */
+export interface SacrificeView {
+  mode: "off" | "shadow" | "on";
+  pays: boolean;
+  reason: "admin" | "grant" | "access" | "holder" | "below_cutoff" | "moved_bag" | null;
+  rank: number | null;
+  /** Credits it costs, rounded up to hundredths; null when it pays nothing or can't be priced. */
+  credits: number | null;
+  lamports: string | null;
+  asdfRaw: string | null;
+  asdfPerSol: number | null;
+  /** Why the ASDF price can't be used just now. */
+  priceRefusal: string | null;
+  burnedCredits: number | null;
+  needCredits: number;
+  tokensPerCredit: number | null;
+  freeRank: number;
+  bps: number;
+}
+
+const FREE_REASON: Record<string, (freeRank: number) => string> = {
+  holder: (n) => `top ${n} holder`,
+  admin: () => "admin",
+  grant: () => "Pro Mode grant",
+  access: () => "ASDF buy",
+};
+
+/** Credits, to two decimals. */
+const creditsText = (n: number) => n.toFixed(2);
+
+/**
+ * The Sacrifice's line for the confirm step and the cost box, or null while it is off: "Sacrifice:
+ * 14.80 credits (0.2% fee, paid in burned ASDF, about 0.002 SOL)", or "Sacrifice: none (top 250
+ * holder)". `sizeSol` re-sizes a quote made on another amount (the fee read's 0.1 SOL) to the
+ * trade's own; a build's quote is already the trade's.
+ */
+export function sacrificeLine(v: SacrificeView | null | undefined, sizeSol?: number): string | null {
+  if (!v || v.mode === "off") return null;
+  const preview = v.mode === "shadow" ? " Not charged yet." : "";
+  if (!v.pays) return `Sacrifice: none (${FREE_REASON[v.reason ?? ""]?.(v.freeRank) ?? "free"}).${preview}`;
+  if (v.priceRefusal)
+    return `Sacrifice: 0.2% in burned credits, but ${v.priceRefusal.charAt(0).toLowerCase()}${v.priceRefusal.slice(1)}`;
+  let credits = v.credits;
+  let sol = v.lamports !== null ? Number(v.lamports) / 1e9 : null;
+  if (sizeSol !== undefined && v.asdfPerSol && v.tokensPerCredit) {
+    sol = (sizeSol * v.bps) / 10_000;
+    credits = Math.ceil(((sol * v.asdfPerSol) / v.tokensPerCredit) * 100) / 100;
+  }
+  if (credits === null || sol === null) return null;
+  return `Sacrifice: ${creditsText(credits)} credits (0.2% fee, paid in burned ASDF, about ${Number(sol.toPrecision(2))} SOL).${preview}`;
 }
 
 /** GET /pro/trade/costs: the rest of what a buy of refLamports costs, beyond the network. */
@@ -335,6 +393,9 @@ export interface SwapCostEstimate {
   priceImpactPct: number | null;
   /** The token account's rent on a first buy, refunded when it is closed; "0" when the wallet has one. */
   accountRentLamports: string;
+  /** The Sacrifice's rate while it is on and the wallet pays (20), else 0. */
+  platformFeeBps?: number;
+  sacrifice?: SacrificeView;
 }
 
 /** The expected network fee for a trade on `mint` with these settings, re-read every 20s. */
@@ -518,6 +579,8 @@ export interface BuiltTrade {
    * Privy wallet may sign it without Privy's confirm window (user rule 2026-10-18).
    */
   quietSign?: boolean;
+  /** The Sacrifice this trade takes (or would, in shadow mode): the send takes exactly this. */
+  sacrifice?: SacrificeView;
 }
 
 export type TradeStage = "building" | "signing" | "sending" | "confirming";
@@ -841,6 +904,8 @@ export async function runTrade(
     /** A sale of the whole balance, as the chain has it when the trade is built. */
     all?: boolean;
     settings: TradeSettings;
+    /** The trade's Sacrifice line, for the two-factor prompt (sacrificeLine). */
+    sacrificeNote?: string | null;
   },
   onStage: (stage: TradeStage, built?: BuiltTrade) => void,
 ): Promise<string> {
@@ -848,15 +913,19 @@ export async function runTrade(
   const { account, sign, name } = await accountFor(input.owner);
   onStage("building");
   // Two-factor, when the user chose it for this side (or this size): the API asks, we prompt.
-  const built = await postWithTwoFactor<BuiltTrade>("/pro/trade/build", {
-    mint: input.mint,
-    side: input.side,
-    amount: input.amount.toString(),
-    slippageBps: Math.round(input.settings.slippagePct * 100),
-    speed: input.settings.speed,
-    ...feeParams(input.settings),
-    ...(input.all ? { all: true } : {}),
-  });
+  const built = await postWithTwoFactor<BuiltTrade>(
+    "/pro/trade/build",
+    {
+      mint: input.mint,
+      side: input.side,
+      amount: input.amount.toString(),
+      slippageBps: Math.round(input.settings.slippagePct * 100),
+      speed: input.settings.speed,
+      ...feeParams(input.settings),
+      ...(input.all ? { all: true } : {}),
+    },
+    input.sacrificeNote ?? undefined,
+  );
   const unsigned = fromBase64(built.transaction);
   const { ownTokenAccounts, ownWrappedSolAccounts } = await import("./solanaPda");
   const problem = tradeProblem(unsigned, input.owner, {

@@ -16538,6 +16538,29 @@ body:has(.util-toast) .bug-fab {
 .tm-fee-dot.zero {
   background: var(--good);
 }
+.tm-fee-bar .sacrifice,
+.tm-fee-dot.sacrifice {
+  background: var(--brand-b);
+}
+/* The Sacrifice in place of the 0% pill, while it is on and the wallet pays (ASDF fee plan). */
+.tm-fee-sacrifice-badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  font-size: 12px;
+}
+.tm-fee-sacrifice-badge strong {
+  font-weight: 750;
+  white-space: nowrap;
+}
+.tm-fee-sacrifice-line {
+  margin: 4px 0 0;
+  text-align: center;
+}
 .tm-fee-dot.none {
   background: transparent;
   border: 1.5px solid var(--border-strong);

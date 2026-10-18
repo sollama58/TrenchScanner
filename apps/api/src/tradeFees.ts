@@ -5,6 +5,11 @@
  * Other platforms are compared on their platform fee alone, on the same trade's SOL value: every
  * one of them also pays the network (priority fee, tip, base fee), as we do, so that part is
  * shown as ours but never counted as saved. Rates as the user gave them (2026-10-18).
+ *
+ * Our own fee is the Sacrifice (ASDF fee plan): 0% for holders above the free cut-off, 0.2% in
+ * burned credits for everyone else once it is on, recorded per trade as its SOL value in
+ * platformFeeLamports. A saving can go negative (a paying wallet's buys against Pump.fun App's 0%
+ * buy fee): it is reported as it is, never clamped to zero.
  */
 
 export interface PlatformFeeRate {

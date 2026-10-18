@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import bs58 from "bs58";
 import { z } from "zod";
 import { burnsMint } from "../burnWire.js";
+import { proStatus } from "../proMode.js";
 import {
   adminWalletSet,
   claimHeldBurns,
@@ -11,6 +12,8 @@ import {
   parseBurnTransaction,
   prisma,
   proHolderRank,
+  sacrificeSettings,
+  sacrificeTier,
   HeliusClient,
   PRO_HOLDER_BACKUP_RPC,
   PRO_HOLDER_ON_DEMAND_MS,
@@ -210,6 +213,17 @@ export async function registerSubscriptionRoutes(
         BigInt(b.rawAmount) > BigInt(a.rawAmount) ? 1 : BigInt(b.rawAmount) < BigInt(a.rawAmount) ? -1 : 0,
       );
     const total = accounts.reduce((sum, a) => sum + BigInt(a.rawAmount), 0n);
+    // The Sacrifice's tier next to the holder rank (ASDF fee plan): null while it is off.
+    const sacrificeSet = await sacrificeSettings();
+    const sacrifice =
+      sacrificeSet.mode === "off"
+        ? null
+        : await proStatus(env, wallet)
+            .then((status) =>
+              sacrificeTier({ wallet, source: status.source, liveBalance: async () => total }),
+            )
+            .then((tier) => ({ mode: sacrificeSet.mode, freeRank: sacrificeSet.freeRank, ...tier }))
+            .catch(() => null);
     return {
       mint: SUBSCRIPTION_MINT,
       decimals: SUBSCRIPTION_MINT_DECIMALS,
@@ -226,6 +240,7 @@ export async function registerSubscriptionRoutes(
       },
       // Whether the top holders get Pro Mode at all: off with the kill switch or while admins-only.
       proOpen: env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC,
+      sacrifice,
       accounts: burnable.map((a) => ({ address: a.address, rawAmount: a.rawAmount })),
     };
   });

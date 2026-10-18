@@ -39,6 +39,23 @@ function compactTokens(raw: bigint, decimals: number): string {
 }
 
 /**
+ * The wallet's Sacrifice tier for the card, under the rank (ASDF fee plan), or null while it is
+ * off: free for the top holders down to the buffer, else a 0.2% fee paid from burned credits.
+ */
+export function sacrificeText(s: NonNullable<WalletBalance["balance"]>["sacrifice"] | null): string | null {
+  if (!s) return null;
+  const buffer = Math.min(s.freeRank + 10, 250);
+  const preview = s.mode === "shadow" ? " (not charged yet)" : "";
+  if (!s.pays)
+    return s.reason === "holder"
+      ? `Trades are Sacrifice-free: you're in the top ${s.freeRank}, and stay free down to #${buffer} while you keep your bag.`
+      : "Trades are Sacrifice-free for this wallet.";
+  return s.reason === "moved_bag"
+    ? `Trades pay a 0.2% Sacrifice in burned credits${preview}: you hold less than #${s.freeRank} did at the last scan.`
+    : `Trades pay a 0.2% Sacrifice in burned credits${preview}. The top ${s.freeRank} holders trade free, down to #${buffer} once in.`;
+}
+
+/**
  * Settings' Pro Mode card (user ask 2026-10-18): whether the wallet has Pro Mode and why, the
  * countdown while it qualifies, what it takes to get in (the 250th holder's bag, from the holder
  * scan), and what Pro Mode unlocks. Reads the same GET /subscription/balance as the wallet tiles.
@@ -138,6 +155,9 @@ export function ProModeCard({ funds, onBuy }: { funds: WalletBalance; onBuy: (()
         </span>
         <strong className="pro-card-big num">{status.big}</strong>
         <span className="sub-line">{status.line}</span>
+        {sacrificeText(balance?.sacrifice ?? null) && (
+          <span className="sub-line small muted">{sacrificeText(balance?.sacrifice ?? null)}</span>
+        )}
       </div>
       {!(pro?.pro && (source === "admin" || source === "grant")) && balance?.proOpen !== false && (
         <div className="pro-card-how">

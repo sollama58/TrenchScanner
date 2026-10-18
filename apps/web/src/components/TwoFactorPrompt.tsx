@@ -81,6 +81,7 @@ function TwoFactorPrompt({ req }: { req: PromptRequest }) {
             <CloseIcon size={16} />
           </button>
         </header>
+        {req.note && <p className="small muted">{req.note}</p>}
         {req.hint.passkey && (
           <button className="button primary tf-passkey" disabled={busy} onClick={() => void usePasskey()}>
             Use a passkey

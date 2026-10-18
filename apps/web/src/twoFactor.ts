@@ -54,6 +54,8 @@ export interface PromptRequest {
   /** Unique per ask. */
   id: number;
   title: string;
+  /** A line under the title: what is being confirmed (a trade's Sacrifice). */
+  note?: string;
   hint: FactorHint;
   /** Passkey options from the API, when the user picks a passkey. */
   passkeyOptions: () => Promise<{ options: unknown; token: string }>;
@@ -129,7 +131,7 @@ const TITLES: Record<TwoFactorAction, string> = {
 };
 
 /** A pass for `action` (from the last few minutes, or asked for now). */
-export async function passFor(action: TwoFactorAction, hint?: FactorHint): Promise<string> {
+export async function passFor(action: TwoFactorAction, hint?: FactorHint, note?: string): Promise<string> {
   const kept = passes.get(action);
   if (kept && Date.now() - kept.at < PASS_REUSE_MS) return kept.pass;
   let factors: FactorHint;
@@ -141,6 +143,7 @@ export async function passFor(action: TwoFactorAction, hint?: FactorHint): Promi
   let pass = "";
   await askSecondFactor({
     title: TITLES[action],
+    ...(note ? { note } : {}),
     hint: factors,
     passkeyOptions: () => post("/auth/2fa/passkey-options"),
     submit: async (factor) => {
@@ -160,22 +163,27 @@ export function clearPasses(): void {
  * Runs an API call, and when the API asks for two-factor, prompts and runs it again with the
  * pass. `call` gets the headers to send (empty the first time).
  */
-export async function withTwoFactor<T>(call: (headers: Record<string, string>) => Promise<T>): Promise<T> {
+export async function withTwoFactor<T>(
+  call: (headers: Record<string, string>) => Promise<T>,
+  note?: string,
+): Promise<T> {
   try {
     return await call({});
   } catch (e) {
     const needed = twoFactorNeeded(e);
     if (!needed) throw e;
     passes.delete(needed.action);
-    const pass = await passFor(needed.action, needed.hint);
+    const pass = await passFor(needed.action, needed.hint, note);
     return call({ "x-ts-2fa": pass });
   }
 }
 
 /** POST with withTwoFactor. */
-export function postWithTwoFactor<T>(path: string, body?: unknown): Promise<T> {
-  return withTwoFactor((headers) =>
-    api<T>(path, { method: "POST", headers, body: body === undefined ? undefined : JSON.stringify(body) }),
+export function postWithTwoFactor<T>(path: string, body?: unknown, note?: string): Promise<T> {
+  return withTwoFactor(
+    (headers) =>
+      api<T>(path, { method: "POST", headers, body: body === undefined ? undefined : JSON.stringify(body) }),
+    note,
   );
 }
 

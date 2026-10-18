@@ -112,6 +112,8 @@ interface FeesSaved {
   volumeSol: number;
   platformFeeSol: number;
   networkFeeSol: number;
+  /** The Sacrifice's mode and free cut-off (ASDF fee plan); absent from older APIs. */
+  sacrifice?: { mode: "off" | "shadow" | "on"; freeRank: number };
   platforms: {
     id: string;
     name: string;
@@ -536,8 +538,18 @@ function FeesPanel() {
           <h2>What trading here saved you</h2>
           <p className="muted small">
             Trades you made from TrenchScanner&apos;s Trade panel, against what the same trades would have
-            paid in platform fees elsewhere. TrenchScanner charges no platform fee; every platform also pays
-            the network (priority fee and tip), so that part isn&apos;t counted as saved.
+            paid in platform fees elsewhere.{" "}
+            {data?.sacrifice?.mode === "on" ? (
+              <>
+                TrenchScanner&apos;s fee is 0% for the top {data.sacrifice.freeRank} $ASDFASDFA holders and a
+                0.2% Sacrifice in burned credits on every trade for everyone else, counted here at its SOL
+                value. A negative saving means the Sacrifice cost more than that platform&apos;s fee.
+              </>
+            ) : (
+              <>TrenchScanner charges no platform fee.</>
+            )}{" "}
+            Every platform also pays the network (priority fee and tip), so that part isn&apos;t counted as
+            saved.
             {data?.since && <> Counted since {new Date(data.since).toLocaleDateString()}.</>}
           </p>
         </div>
@@ -579,7 +591,7 @@ function FeesPanel() {
             {best && (
               <div>
                 <dt>Saved vs {best.name}</dt>
-                <dd className="num up">
+                <dd className={`num${tone(best.savedSol)}`}>
                   {feeSol(best.savedSol)}
                   {inUsd(best.savedSol)}
                 </dd>

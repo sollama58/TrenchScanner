@@ -9,9 +9,11 @@ import {
   graceLeftText,
   proStateOf,
   readTradeSettings,
+  sacrificeLine,
   summarizePosition,
   tradeProblem,
   type PositionResponse,
+  type SacrificeView,
   type TradeCheck,
 } from "./proTrade";
 import { ownTokenAccounts, ownWrappedSolAccounts } from "./solanaPda";
@@ -346,5 +348,49 @@ describe("trading disclaimer", () => {
     // No storage in this test runner: never counted as accepted, and accepting doesn't throw.
     expect(disclaimerAccepted("w")).toBe(false);
     acceptDisclaimer("w");
+  });
+});
+
+describe("sacrificeLine", () => {
+  const view: SacrificeView = {
+    mode: "on",
+    pays: true,
+    reason: "below_cutoff",
+    rank: 400,
+    credits: 14.8,
+    lamports: "2000000",
+    asdfRaw: "1480000000",
+    asdfPerSol: 74_000,
+    priceRefusal: null,
+    burnedCredits: 20,
+    needCredits: 0,
+    tokensPerCredit: 100,
+    freeRank: 250,
+    bps: 20,
+  };
+
+  it("says nothing while the Sacrifice is off", () => {
+    expect(sacrificeLine({ ...view, mode: "off" })).toBeNull();
+    expect(sacrificeLine(null)).toBeNull();
+  });
+
+  it("names the free tier and the cut-off", () => {
+    expect(sacrificeLine({ ...view, pays: false, reason: "holder", rank: 12 })).toBe(
+      "Sacrifice: none (top 250 holder).",
+    );
+  });
+
+  it("prices a fee payer's trade, and says when it is only a preview", () => {
+    expect(sacrificeLine(view)).toBe(
+      "Sacrifice: 14.80 credits (0.2% fee, paid in burned ASDF, about 0.002 SOL).",
+    );
+    expect(sacrificeLine({ ...view, mode: "shadow" })).toMatch(/Not charged yet\.$/);
+  });
+
+  it("resizes to the trade being confirmed", () => {
+    // 2 SOL × 0.2% = 0.004 SOL = 296 ASDF = 2.96 credits.
+    expect(sacrificeLine(view, 2)).toBe(
+      "Sacrifice: 2.96 credits (0.2% fee, paid in burned ASDF, about 0.004 SOL).",
+    );
   });
 });
