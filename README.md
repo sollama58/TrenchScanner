@@ -356,7 +356,7 @@ Per the plan in `PLANNING.md`: ~$21–31/mo (Render Starter web service + Starte
 
 ## Trenches subscription (burn gate)
 
-Access to the dashboard is paid for by burning **55,200 $ASDFASDFA**
+Access to the dashboard is paid for by burning **30,000 $ASDFASDFA**
 (`9zB5wRarXMj86MymwLumSKA1Dx35zPqqKfcZtK1Spump`, 6 decimals) for 30 days. Burning a multiple buys
 the multiple, up to 12 months. Renewing early stacks onto the remaining time rather than replacing
 it.

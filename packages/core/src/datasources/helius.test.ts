@@ -878,7 +878,10 @@ describe("HeliusClient.getTopHoldersBatch", () => {
       }),
     );
     const partial = new HeliusClient({ rpcUrl: failing.url, isHelius: true });
-    expect((await partial.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({ status: "failed" });
+    expect((await partial.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
+      status: "failed",
+      reason: "token accounts unreadable",
+    });
   });
 
   it("reads a mint unpaged when V2 finds no accounts for it, without giving V2 up", async () => {
@@ -901,6 +904,31 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     await client.getTopHoldersBatch(["mintA"], 25);
     expect(seen.filter((m) => m === "getProgramAccountsV2")).toHaveLength(2);
     expect(seen.filter((m) => m === "getProgramAccounts")).toHaveLength(2);
+  });
+
+  it("reads a mint unpaged when V2 refuses it with an error, and names a read that still fails", async () => {
+    let unpaged = 0;
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        if (c.method === "getMultipleAccounts") return mintAccount(c);
+        if (c.method === "getProgramAccountsV2")
+          return { jsonrpc: "2.0", id: c.id, error: { code: -32602, message: "refused" } };
+        unpaged += 1;
+        return unpaged === 1
+          ? { jsonrpc: "2.0", id: c.id, result: [row(CURVE, 800n), row(WALLET, 150n)] }
+          : { jsonrpc: "2.0", id: c.id, error: { code: -32000, message: "busy" } };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url, isHelius: true });
+    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
+      status: "found",
+      supply: "1000",
+      holders: [{ owner: WALLET, pct: 15, accounts: [`acct-${WALLET}`] }],
+    });
+    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
+      status: "failed",
+      reason: "token accounts unreadable",
+    });
   });
 
   it("falls back to the unpaged getProgramAccounts for good when the endpoint doesn't serve V2", async () => {
@@ -1002,7 +1030,10 @@ describe("HeliusClient.getTopHoldersBatch", () => {
       ),
     );
     const client = new HeliusClient({ rpcUrl: url });
-    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({ status: "failed" });
+    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
+      status: "failed",
+      reason: "not a token mint",
+    });
   });
 });
 
