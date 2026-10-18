@@ -32,6 +32,8 @@ import {
  *
  *   GET /pro/trades          the wallet's last coins traded (cards), and its trade statistics
  *   GET /pro/trades?brief=1  the last three coins' pictures, for the panel's closed handle
+ *   GET /pro/trades?view=portfolio  the Portfolio tab's trades: open positions, closed ones, and
+ *                            the statistics over a day, a week and 30 days
  *
  * Every call keeps the wallet followed on the Helius stream and, when due, catches up on what it
  * traded while it wasn't (proTrades.ts says what that costs). Each coin the wallet buys from a
@@ -54,6 +56,10 @@ const CATCH_UP_WAIT_MS = 2_500;
 const FRESH_MARKET_MS = 2 * 60_000;
 /** Open coins are stamped as viewed (kept on the scan) only while the panel is open, at most this often. */
 const STAMP_EVERY_MS = 5 * 60_000;
+/** The Portfolio tab's lists, and the days of trades it covers (all readRows keeps). */
+const PORTFOLIO_OPEN_COINS = 40;
+const PORTFOLIO_CLOSED_COINS = 20;
+const PORTFOLIO_DAYS = 30;
 
 export interface TradeCoin {
   mint: string;
@@ -138,16 +144,21 @@ export async function registerProTradesRoutes(
   app.get("/", async (request, reply) => {
     const wallet = request.user!.walletAddress;
     if (!(await isProWallet(env, wallet))) return reply.code(404).send({ error: "not found" });
-    const query = request.query as { brief?: string; open?: string };
+    const query = request.query as { brief?: string; open?: string; view?: string };
     const brief = query.brief === "1";
+    const portfolio = !brief && query.view === "portfolio";
     // Without a node of our own (tests, a local run) nothing is read: the public RPC would be asked.
     const due = canRead ? watcher.touch(wallet) : Promise.resolve();
-    const key = `${wallet}:${brief ? "brief" : "full"}`;
+    const key = `${wallet}:${brief ? "brief" : portfolio ? "portfolio" : "full"}`;
     const cached = answers.get(key);
     reply.header("Cache-Control", "no-store");
     if (cached && Date.now() - cached.at < ANSWER_TTL_MS) return cached.body;
     await Promise.race([due, new Promise((r) => setTimeout(r, CATCH_UP_WAIT_MS))]);
-    const body = brief ? await handleView(wallet) : await fullView(wallet, query.open === "1");
+    const body = brief
+      ? await handleView(wallet)
+      : portfolio
+        ? await portfolioView(wallet)
+        : await fullView(wallet, query.open === "1");
     answers.set(key, { at: Date.now(), body });
     if (answers.size > 2_000) answers.delete(answers.keys().next().value!);
     return body;
@@ -197,9 +208,82 @@ export async function registerProTradesRoutes(
     const since = new Date(Date.now() - STATS_HOURS * 3_600_000);
     const windowRows = rows.filter((r) => r.at > since);
     const windowPositions = positions.filter((p) => p.entryAt > since || p.lastTradeAt > since);
-    const mints = [
-      ...new Set([...shown.map((p) => p.mint), ...windowRows.filter((r) => r.entry).map((r) => r.mint)]),
-    ];
+    const built = await coinsFor(
+      shown,
+      windowRows.filter((r) => r.entry).map((r) => r.mint),
+    );
+
+    // While the panel is open, its open coins stay on the scan (their Now and PnL move with it).
+    if (panelOpen) {
+      const now = Date.now();
+      const ids = shown.flatMap((p) => {
+        const t = built.tokenByMint.get(p.mint);
+        if (!t || p.closed) return [];
+        const k = `${wallet}:${t.id}`;
+        if (now - (stamped.get(k) ?? 0) < STAMP_EVERY_MS) return [];
+        stamped.set(k, now);
+        return [t.id];
+      });
+      if (stamped.size > 10_000) stamped.clear();
+      if (ids.length > 0) opts.viewStamps.record(ids);
+    }
+
+    const stats: TradeStats = tradeStats(
+      windowRows,
+      windowPositions,
+      built.priceSol,
+      (mint, at) => built.callBefore(mint, at) !== null,
+      STATS_HOURS,
+    );
+    return { coins: built.coins, stats, solUsd: built.sol, following: true };
+  }
+
+  /**
+   * The Portfolio tab's trades (user ask 2026-10-18): every open position, the latest closed ones,
+   * and the statistics over a day, a week and the 30 days of trades kept. Only coins on Token are
+   * listed - each one the wallet bought was put through a scan on the entry, so a coin missing
+   * here had no market to scan - and `untracked` counts the rest.
+   */
+  async function portfolioView(wallet: string) {
+    const rows = await readRows(wallet);
+    const positions = positionsOf(rows);
+    const onToken = new Set(
+      (
+        await prisma.token.findMany({
+          where: { mintAddress: { in: [...new Set(positions.map((p) => p.mint))] } },
+          select: { mintAddress: true },
+        })
+      ).map((t) => t.mintAddress),
+    );
+    const listed = positions.filter((p) => onToken.has(p.mint));
+    const open = listed.filter((p) => !p.closed).slice(0, PORTFOLIO_OPEN_COINS);
+    const closed = listed.filter((p) => p.closed).slice(0, PORTFOLIO_CLOSED_COINS);
+    const built = await coinsFor([...open, ...closed], []);
+    const statsOver = (hours: number) => {
+      const since = new Date(Date.now() - hours * 3_600_000);
+      return tradeStats(
+        rows.filter((r) => r.at > since && onToken.has(r.mint)),
+        listed.filter((p) => p.entryAt > since || p.lastTradeAt > since),
+        built.priceSol,
+        (mint, at) => built.callBefore(mint, at) !== null,
+        hours,
+      );
+    };
+    return {
+      open: built.coins.slice(0, open.length),
+      closed: built.coins.slice(open.length),
+      stats: [statsOver(24), statsOver(7 * 24), statsOver(PORTFOLIO_DAYS * 24)],
+      untracked: positions.length - listed.length,
+      openTotal: listed.filter((p) => !p.closed).length,
+      closedTotal: listed.filter((p) => p.closed).length,
+      days: PORTFOLIO_DAYS,
+      solUsd: built.sol,
+    };
+  }
+
+  /** The cards for `shown`, priced, with the calls before each entry (also asked for `alsoMints`). */
+  async function coinsFor(shown: Position[], alsoMints: string[]) {
+    const mints = [...new Set([...shown.map((p) => p.mint), ...alsoMints])];
     const [tokens, sol] = await Promise.all([
       prisma.token.findMany({
         where: { mintAddress: { in: mints } },
@@ -264,21 +348,6 @@ export async function registerProTradesRoutes(
       if (Number.isFinite(mcap) && mcap > 0) entryMcaps.set(p.mint, mcap);
     });
 
-    // While the panel is open, its open coins stay on the scan (their Now and PnL move with it).
-    if (panelOpen) {
-      const now = Date.now();
-      const ids = shown.flatMap((p) => {
-        const t = tokenByMint.get(p.mint);
-        if (!t || p.closed) return [];
-        const k = `${wallet}:${t.id}`;
-        if (now - (stamped.get(k) ?? 0) < STAMP_EVERY_MS) return [];
-        stamped.set(k, now);
-        return [t.id];
-      });
-      if (stamped.size > 10_000) stamped.clear();
-      if (ids.length > 0) opts.viewStamps.record(ids);
-    }
-
     const coins: TradeCoin[] = shown.map((p: Position, i) => {
       const t = tokenByMint.get(p.mint);
       const pnl = positionPnl(p, priceSol(p.mint));
@@ -307,14 +376,7 @@ export async function registerProTradesRoutes(
         scan: view ? view.scan : "none",
       };
     });
-    const stats: TradeStats = tradeStats(
-      windowRows,
-      windowPositions,
-      priceSol,
-      (mint, at) => callBefore(mint, at) !== null,
-      STATS_HOURS,
-    );
-    return { coins, stats, solUsd: sol ?? null, following: true };
+    return { coins, tokenByMint, priceSol, callBefore, sol: sol ?? null };
   }
 }
 

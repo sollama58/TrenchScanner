@@ -32,6 +32,11 @@ const draft: { kind: Kind; message: string; contact: string; screenshot: string 
   screenshot: null,
 };
 
+/** Forgets the unsent draft, so the next person on this browser doesn't see it (on sign-out). */
+export function clearBugReportDraft() {
+  Object.assign(draft, { kind: "bug", message: "", contact: "", screenshot: null });
+}
+
 /** A JPEG data URL of the image, scaled down until it fits under the API's cap. */
 function shrink(source: CanvasImageSource, width: number, height: number): string | null {
   const canvas = document.createElement("canvas");
@@ -171,7 +176,7 @@ export function BugReportDialog({ onClose, ...where }: ReportWhere & { onClose: 
         screenshot: screenshot ?? undefined,
         website: honeypot || undefined,
       });
-      Object.assign(draft, { kind: "bug", message: "", contact: "", screenshot: null });
+      clearBugReportDraft();
       setSent(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

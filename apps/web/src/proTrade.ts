@@ -203,6 +203,36 @@ export function acceptDisclaimer(wallet: string): void {
   }
 }
 
+/**
+ * Whether a token view opens with the Trade panel showing (user ask 2026-10-18: open by default,
+ * as the small toggle was easy to miss). Full Pro Mode opens it unless this browser's trader
+ * closed it last time; a wallet that may only sell keeps it shut until asked (or until it holds).
+ */
+export function tradeOpenAtStart(state: ProState | null, closedBefore: boolean): boolean {
+  return !!state?.pro && !closedBefore;
+}
+
+const TRADE_CLOSED_KEY = "ts-pro-trade-closed";
+
+/** The trader closed the Trade panel last time, in this browser. */
+export function tradePanelClosed(): boolean {
+  try {
+    return localStorage.getItem(TRADE_CLOSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** Remembers whether the trader left the Trade panel open, for the next token view. */
+export function rememberTradePanel(open: boolean): void {
+  try {
+    if (open) localStorage.removeItem(TRADE_CLOSED_KEY);
+    else localStorage.setItem(TRADE_CLOSED_KEY, "1");
+  } catch {
+    // Blocked storage: every token view opens it, the default.
+  }
+}
+
 export function saveTradeSettings(s: TradeSettings): void {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));

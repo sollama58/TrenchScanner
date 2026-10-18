@@ -12,6 +12,10 @@ import { summarizeHeartbeat } from "./health.js";
  * checks for one every minute mid-run too, and when it finds one it ends the run, restarts, and
  * the row starts a fresh run as it comes back (apps/worker/src/index.ts, stopWhileRunning).
  */
+/** Shared with adminJobRuns' "Run now" of curator-training, which queues the same row. */
+export const RETRAIN_REQUEST_LOCK = "curator-retrain-request";
+const STOP_COOLDOWN_MS = 10 * 60_000;
+
 export async function registerAdminRetrainRoutes(app: FastifyInstance) {
   /** Whether a retrain is queued or running, and when the training job last ran and runs next. */
   app.get("/curator/retrain", async () => retrainState());
@@ -22,20 +26,33 @@ export async function registerAdminRetrainRoutes(app: FastifyInstance) {
    */
   app.post<{ Body: { stop?: unknown } | null }>("/curator/retrain", async (request) => {
     const stop = request.body?.stop === true;
+    // The check and the insert under one lock, so two presses at once can't both queue a request.
+    const refused = await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${RETRAIN_REQUEST_LOCK}))`;
+      const state = await retrainState();
+      const running = state.job?.runningForMs != null;
+      if (state.pending || (running && !stop)) {
+        return {
+          reason: state.pending
+            ? running
+              ? "a stop is already requested"
+              : "already queued"
+            : "a training run is already going",
+          state,
+        };
+      }
+      // A stop restarts the trainer, so stopping every run as it starts would keep training from
+      // ever finishing: a run that started from a request gets STOP_COOLDOWN_MS first, unless hung.
+      const startedAt = state.last?.startedAt?.getTime() ?? null;
+      if (running && !state.job?.hung && startedAt !== null && Date.now() - startedAt < STOP_COOLDOWN_MS) {
+        return { reason: "this run only just started: let it go a few minutes before stopping it", state };
+      }
+      await tx.curatorRetrainRequest.create({ data: { requestedBy: request.user?.walletAddress ?? null } });
+      return null;
+    });
+    if (refused) return { queued: false, reason: refused.reason, ...refused.state };
     const state = await retrainState();
     const running = state.job?.runningForMs != null;
-    if (state.pending || (running && !stop)) {
-      return {
-        queued: false,
-        reason: state.pending
-          ? running
-            ? "a stop is already requested"
-            : "already queued"
-          : "a training run is already going",
-        ...state,
-      };
-    }
-    await prisma.curatorRetrainRequest.create({ data: { requestedBy: request.user?.walletAddress ?? null } });
     request.log.info(
       {
         by: request.user ? walletTag(request.user.walletAddress) : null,
@@ -43,7 +60,7 @@ export async function registerAdminRetrainRoutes(app: FastifyInstance) {
       },
       running ? "asked the trainer to stop its run and retrain" : "queued a curator retrain",
     );
-    return { queued: true, stopping: running, ...(await retrainState()) };
+    return { queued: true, stopping: running, ...state };
   });
 }
 

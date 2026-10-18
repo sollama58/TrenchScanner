@@ -217,7 +217,7 @@ function PanelBody({ open, onClose }: { open: boolean; onClose: () => void }) {
   );
 }
 
-function sol(n: number | null | undefined, signed = false): string {
+export function sol(n: number | null | undefined, signed = false): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "–";
   const abs = Math.abs(n);
   const text = abs >= 100 ? abs.toFixed(0) : abs >= 10 ? abs.toFixed(1) : abs.toFixed(2);
@@ -238,7 +238,7 @@ const tone = (n: number | null | undefined) =>
   n === null || n === undefined || n === 0 ? "" : n > 0 ? " up" : " down";
 
 /** The last 24 hours' figures across every trade, open and closed. */
-function StatsStrip({ stats, solUsd }: { stats: TradeStats; solUsd: number | null }) {
+export function StatsStrip({ stats, solUsd }: { stats: TradeStats; solUsd: number | null }) {
   const usdOf = (n: number | null) => (n !== null && solUsd ? usd(n * solUsd) : null);
   const tiles: { label: string; value: string; sub?: string | null; tone?: string; title: string }[] = [
     {
@@ -300,7 +300,7 @@ function StatsStrip({ stats, solUsd }: { stats: TradeStats; solUsd: number | nul
 }
 
 /** One coin traded, as a small alert card: entry, now, the trade's result, and the scan. */
-function TradeCard({ coin, now }: { coin: TradeCoin; now: number }) {
+export function TradeCard({ coin, now }: { coin: TradeCoin; now: number }) {
   const card = coin.card;
   const nowMcap = card?.currentMarketCapUsd ?? null;
   const move = change(coin.entryMcapUsd, nowMcap);

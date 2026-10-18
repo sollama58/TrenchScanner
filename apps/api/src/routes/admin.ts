@@ -1,6 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma, AccessSource, readWorkerConfig, type Env, walletTag } from "@trenchscanner/core";
+import {
+  prisma,
+  AccessSource,
+  DUPLICATE_GRANT_WINDOW_MS,
+  readWorkerConfig,
+  type Env,
+  walletTag,
+} from "@trenchscanner/core";
+import { recordAdminActions } from "../adminActionLog.js";
 
 const DAY_MS = 86_400_000;
 
@@ -35,8 +43,12 @@ const grantSchema = z.object({
  * writes anything the worker depends on, and there's no cross-process way to reach into the
  * worker from the API anyway (Render background workers have no inbound HTTP) - these are read/moderate-only tools, not remote job control.
  */
-export async function registerAdminRoutes(app: FastifyInstance, opts: { env: Env }) {
+export async function registerAdminRoutes(
+  app: FastifyInstance,
+  opts: { env: Env; admins: ReadonlySet<string> },
+) {
   app.addHook("preHandler", app.authenticateAdmin);
+  recordAdminActions(app, opts.admins);
 
   /** Top-line counts for the admin overview. */
   app.get("/stats", async () => {
@@ -368,6 +380,22 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
     }));
   });
 
+  /** The admin action log (adminActionLog.ts), newest first; ?before=<ISO time> pages back. */
+  app.get("/actions", async (request) => {
+    const q = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).default(50),
+        before: z.coerce.date().optional(),
+      })
+      .safeParse(request.query);
+    const { limit, before } = q.success ? q.data : { limit: 50, before: undefined };
+    return prisma.adminAction.findMany({
+      where: before ? { at: { lt: before } } : {},
+      orderBy: { at: "desc" },
+      take: limit,
+    });
+  });
+
   app.get("/whitelist", async () => {
     return prisma.whitelist.findMany({ orderBy: { createdAt: "desc" } });
   });
@@ -380,7 +408,8 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
     const { walletAddress, note, expiresAt } = parsed.data;
     const entry = await prisma.whitelist.upsert({
       where: { walletAddress },
-      update: { note: note ?? null, expiresAt: expiresAt ?? null },
+      // A note left out keeps the one already there; the panel sends none when its field is blank.
+      update: { ...(note !== undefined && { note }), expiresAt: expiresAt ?? null },
       create: {
         walletAddress,
         note: note ?? null,
@@ -432,8 +461,15 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${user.id}))`;
       const existing = await tx.subscription.findUnique({
         where: { userId: user.id },
-        select: { expiresAt: true },
+        select: { expiresAt: true, source: true, updatedAt: true },
       });
+      // A double click (or a retried request) would add the days twice.
+      if (
+        existing?.source === AccessSource.ADMIN_GRANT &&
+        Date.now() - existing.updatedAt.getTime() < DUPLICATE_GRANT_WINDOW_MS
+      ) {
+        return null;
+      }
 
       const current = existing?.expiresAt ?? null;
       const now = new Date();
@@ -447,6 +483,11 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
       });
       return next;
     });
+    if (!expiresAt) {
+      return reply
+        .code(409)
+        .send({ error: "This wallet was granted access seconds ago. Wait a few seconds to grant again." });
+    }
 
     request.log.info(
       { walletAddress: walletTag(walletAddress), days, by: walletTag(request.user!.walletAddress) },

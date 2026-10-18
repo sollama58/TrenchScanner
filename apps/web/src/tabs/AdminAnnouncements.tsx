@@ -79,6 +79,8 @@ export function AnnouncementsAdmin() {
         message: trimmed,
         severity,
         expiresInHours: hours || undefined,
+        // What this screen showed as current; the server refuses if another post beat it.
+        replaces: live?.id ?? null,
       });
       setMessage("");
       setResult("Posted. Visitors see it within a couple of minutes.");
@@ -91,11 +93,13 @@ export function AnnouncementsAdmin() {
   };
 
   const end = async () => {
+    if (!live) return;
     if (!window.confirm("Take the announcement down for everyone?")) return;
     setBusy(true);
     setResult(null);
     try {
-      await post("/admin/announcements/end");
+      // Ends only the one shown here, never a newer one posted since.
+      await post("/admin/announcements/end", { id: live.id });
       setResult("Ended.");
       refresh();
     } catch (e) {

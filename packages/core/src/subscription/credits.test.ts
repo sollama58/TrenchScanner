@@ -5,6 +5,7 @@ import {
   creditBurnCredits,
   creditsFor,
   grantCredits,
+  CreditGrantError,
   openLookup,
   parseCreditBurnTransaction,
   spendCredits,
@@ -102,5 +103,11 @@ describe.skipIf(!dbAvailable)("the credit ledger", () => {
 
   it("records an admin grant like any other row", async () => {
     expect(await grantCredits(WALLET, 3, "test")).toBe(3);
+  });
+
+  it("refuses the same grant again within seconds, and a take-back past zero", async () => {
+    await expect(grantCredits(WALLET, 3, "test")).rejects.toThrow(CreditGrantError);
+    await expect(grantCredits(WALLET, -4, "fix")).rejects.toThrow(/at most that many/);
+    expect(await grantCredits(WALLET, -3, "fix")).toBe(0);
   });
 });
