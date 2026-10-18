@@ -65,7 +65,7 @@ export function AboutDetails({ targets }: { targets: Targets }) {
         </div>
         <p className="fp-note">
           Targets for the share of alerts that hit each mark, and for the share of all runners the models
-          call.
+          flag.
         </p>
       </section>
 
@@ -172,12 +172,12 @@ export function AboutDetails({ targets }: { targets: Targets }) {
               <BrainIcon size={12} /> Model
             </span>
             <p>
-              A call from a model you follow, with its name and its score (&quot;Score 87&quot;): a 0-100 rank
-              score in that model&apos;s own units, not a probability, so it doesn&apos;t compare across
+              An alert from a model you follow, with its name and its score (&quot;Score 87&quot;): a 0-100
+              rank score in that model&apos;s own units, not a probability, so it doesn&apos;t compare across
               models. The &quot;≈NN% 2x&quot; beside it is the share of the model&apos;s recent out-of-sample
-              calls ranked like this one that hit 2x within 15 minutes of the alert, before a 50% stop (the
-              middle of the calling models&apos; rates when several call it). If several models call the same
-              token, it shows once with all of them. Each model calls a token at most once a day.
+              alerts ranked like this one that hit 2x within 15 minutes of the alert, before a 50% stop (the
+              middle of the alerting models&apos; rates when several flag it). If several models flag the same
+              token, it shows once with all of them. Each model alerts on a token at most once a day.
             </p>
           </div>
         </div>
@@ -191,16 +191,17 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           </li>
           <li>
             <b>Exam.</b> It&apos;s tested on later weeks it never saw, and sets its cutoff: the loosest one
-            that met the targets there, or its best slice if none did. It only calls tokens above that cutoff.
+            that met the targets there, or its best slice if none did. It only alerts on tokens above that
+            cutoff.
           </li>
           <li>
-            <b>Rank.</b> Live calls are graded and scored 0 to 100 on the Models tab. 100 means the record
-            meets the 2x, 4x and 10x targets and the run-size target (how far calls run over the next day). A
+            <b>Rank.</b> Live alerts are graded and scored 0 to 100 on the Models tab. 100 means the record
+            meets the 2x, 4x and 10x targets and the run-size target (how far alerts run over the next day). A
             few phantom misses are counted first, so a short lucky streak can&apos;t beat a long good record.
           </li>
           <li>
             <b>Evolve.</b> New variants are bred from the leaders. One that beats the weakest model takes its
-            seat. Consensus learns which models to trust, and calls only when at least three of them agree.
+            seat. Consensus learns which models to trust, and alerts only when at least three of them agree.
           </li>
         </ol>
         <p>
@@ -291,9 +292,9 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           <dd>Dev Holding: the creator still holds the token. Dev Sold: they hold none.</dd>
           <dt>Narrative: agrees · warns</dt>
           <dd>
-            On other models&apos; calls: whether the Narrative model&apos;s read of the coin&apos;s story
-            would have called it too. Toggle it in Customize. Until you do, it turns on by itself once the
-            Narrative model doubles over 40% of its calls across 7 days.
+            On other models&apos; alerts: whether the Narrative model&apos;s read of the coin&apos;s story
+            would have flagged it too. Toggle it in Customize. Until you do, it turns on by itself once the
+            Narrative model doubles over 40% of its alerts across 7 days.
           </dd>
           <dt>High conviction</dt>
           <dd>
@@ -301,7 +302,7 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           </dd>
           <dt>≈41% 2x</dt>
           <dd>
-            Of the model&apos;s recent calls ranked like this one, on data it wasn&apos;t trained on, the
+            Of the model&apos;s recent alerts ranked like this one, on data it wasn&apos;t trained on, the
             share that doubled within 15 minutes. With several models, the middle of their rates. Off by
             default: turn it on in Customize.
           </dd>
@@ -333,8 +334,8 @@ export function AboutDetails({ targets }: { targets: Targets }) {
         <h3>Staying current</h3>
         <p>
           New alerts arrive the moment they fire while the dot by the feed says Live, and every 30 seconds
-          otherwise. The Model alerts switch in Settings and the switches on the Models tab choose whose calls
-          you see. Your own alerts always show.
+          otherwise. The Model alerts switch in Settings and the switches on the Models tab choose whose
+          alerts you see. Your own alerts always show.
         </p>
       </section>
     </div>

@@ -134,16 +134,16 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
               )}
             </h2>
             <p className="muted">
-              {lb.entries.length} models compete to spot tokens that double within 15 minutes. Every call is
-              graded the same way, and the goal is a 2x within 15 minutes on {t.hitRate2xPct}% of calls and a
+              {lb.entries.length} models compete to spot tokens that double within 15 minutes. Every alert is
+              graded the same way, and the goal is a 2x within 15 minutes on {t.hitRate2xPct}% of alerts and a
               4x within 30 minutes on {t.hitRate4xPct}%, with 10x within an hour on{" "}
               {lb.scoring.tenXTargetPct ?? 25}% as the big-run tier, while catching{" "}
               {lb.scoring.catchTargetPct ?? 75}% of all the tokens that double.{" "}
-              {guest ? "As a guest you see calls from" : "Your feed shows calls from"}{" "}
+              {guest ? "As a guest you see alerts from" : "Your feed shows alerts from"}{" "}
               <strong>{following.map((e) => e.name).join(", ") || "–"}</strong>
               {lb.followBest ? " (whichever model is doing best; it switches automatically)" : ""}
               {guest
-                ? `, ${GUEST_DELAY_MINUTES} minutes after each call. Connect a wallet to pick models`
+                ? `, ${GUEST_DELAY_MINUTES} minutes after each alert. Connect a wallet to pick models`
                 : ""}
               {lb.showModelAlerts ? "" : ", though Model alerts are switched off in Settings"}.
             </p>
@@ -158,7 +158,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
             <span className="glance-value">{leader?.name ?? "–"}</span>
             <span className="muted small">
               {leader?.vsMarket?.lift != null
-                ? `${leader.vsMarket.lift.toFixed(1)}x the filtered market's 2x rate in the hours it called`
+                ? `${leader.vsMarket.lift.toFixed(1)}x the filtered market's 2x rate in the hours it was alerting`
                 : "No lift yet"}
               {leadLive && leadLive.graded > 0
                 ? ` · its own 2x ${pct(leadLive.winRatePct)} on ${leadLive.graded} graded${
@@ -178,8 +178,8 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
           >
             <label>
               {feed
-                ? `${guest ? "Guest" : "Default"} feed's calls that doubled`
-                : `${leader?.name ?? "Top model"}'s calls that doubled`}
+                ? `${guest ? "Guest" : "Default"} feed's alerts that doubled`
+                : `${leader?.name ?? "Top model"}'s alerts that doubled`}
             </label>
             <span
               className={`glance-value num ${
@@ -196,7 +196,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
               {feed ? (
                 <>
                   {feedRange ? `${intervalText(feedRange)} · ` : ""}
-                  {feed.graded.toLocaleString()} graded calls{" "}
+                  {feed.graded.toLocaleString()} graded alerts{" "}
                   {feedYoung ? `since ${shortDate(feed.since)}` : `in ${days} days`}, each token once · goal{" "}
                   {t.hitRate2xPct}%
                   {feedRule4 !== null
@@ -205,7 +205,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
                   {feed.fallbackSlots > 0
                     ? ` · ${feed.fallbackSlots} slot${feed.fallbackSlots === 1 ? "" : "s"} on the single champion not counted`
                     : ""}
-                  {!guest && !lb.followsDefault ? " · your feed follows your own picks" : ""}
+                  {!guest && !lb.followsDefault ? " · your feed shows the models you chose" : ""}
                 </>
               ) : (
                 <>
@@ -214,7 +214,7 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
                     : ""}
                   Goal {t.hitRate2xPct}%
                   {leadLive
-                    ? ` · ${leadLive.graded} graded calls${leadSince ? ` since ${shortDate(leadSince)}` : ` in ${days} days`}`
+                    ? ` · ${leadLive.graded} graded alerts${leadSince ? ` since ${shortDate(leadSince)}` : ` in ${days} days`}`
                     : ""}
                 </>
               )}
@@ -227,15 +227,15 @@ export function ModelTab({ guest = false }: { guest?: boolean }) {
             </span>
             <span className="muted small">
               {trend?.recent.lift2x != null
-                ? `Lately the models' picks double ${trend.recent.lift2x.toFixed(1)}x as often as the average token they could have picked${
+                ? `Lately the models' alerts double ${trend.recent.lift2x.toFixed(1)}x as often as the average token they could have flagged${
                     trend.prior?.lift2x != null ? ` (${trend.prior.lift2x.toFixed(1)}x before)` : ""
                   }.`
-                : "Needs a few days of graded calls to tell."}
+                : "Needs a few days of graded alerts to tell."}
             </span>
           </div>
         </div>
         <p className="faint small rule-note">
-          {RULE_NOTE} Ranges are 90% Wilson intervals; rates on fewer than {MIN_GRADED_FOR_RATE} graded calls
+          {RULE_NOTE} Ranges are 90% Wilson intervals; rates on fewer than {MIN_GRADED_FOR_RATE} graded alerts
           are muted as early.
         </p>
       </section>
@@ -436,8 +436,8 @@ function BaselineChart({
       title: onlyOne
         ? "Your feed needs at least one model"
         : on
-          ? `Showing ${e.name}'s calls on your live feed. Switch off to hide them.`
-          : `Show ${e.name}'s calls on your live feed`,
+          ? `Showing ${e.name}'s alerts on your live feed. Switch off to hide them.`
+          : `Show ${e.name}'s alerts on your live feed`,
       onChange: () => void saveFeed(toggledModels(board, e.id)),
     };
   };
@@ -453,7 +453,7 @@ function BaselineChart({
           <p className="muted small">
             {caught ? (
               <>
-                Of the tokens that doubled cleanly, the share each model called at a winning moment: the
+                Of the tokens that doubled cleanly, the share each model flagged at a winning moment: the
                 runners it didn&apos;t let slip. The line is every model together; the goal is {goal}% of the
                 runners.
               </>
@@ -488,7 +488,7 @@ function BaselineChart({
                 key={m.id}
                 className={metric === m.id ? "on" : ""}
                 aria-pressed={metric === m.id}
-                title={m.id === "caught" ? "Share of the runners each model called" : undefined}
+                title={m.id === "caught" ? "Share of the runners each model flagged" : undefined}
                 onClick={() => setMetric(m.id)}
               >
                 {m.label}
@@ -533,12 +533,13 @@ function BaselineChart({
                   <>
                     Your Live feed follows <strong>the default</strong>: the {board.defaultRule?.count ?? 3}{" "}
                     models with the best proven 2x rate plus the champion (marked default below), updated as
-                    the ranking changes. Switching a model on or off switches you to your own picks.
+                    the ranking changes. Switching a model on or off switches you to your own choice of
+                    models.
                   </>
                 ) : (
                   <>
-                    Your Live feed shows <strong>your own picks</strong>, switched on below. It won&apos;t
-                    change when the top models do.
+                    Your Live feed shows <strong>the models you chose</strong>, switched on below. It
+                    won&apos;t change when the top models do.
                   </>
                 )}
               </p>
@@ -578,7 +579,7 @@ function BaselineChart({
                       (e.isDefault ? "default · " : "") +
                       (caught && e.liveCatch
                         ? `${e.liveCatch.caught} of ${e.liveCatch.runners} runner${e.liveCatch.runners === 1 ? "" : "s"}`
-                        : `${e.composite.live.graded} graded call${e.composite.live.graded === 1 ? "" : "s"}`),
+                        : `${e.composite.live.graded} graded alert${e.composite.live.graded === 1 ? "" : "s"}`),
                     display: rate === null ? "–" : `${rate.toFixed(1)}%`,
                     note: `${signedPct(profit)} profit`,
                     noteTone: profit === null || profit === 0 ? undefined : profit > 0 ? "up" : "down",
@@ -604,7 +605,7 @@ function BaselineChart({
                 columns={{
                   label: "Model",
                   value: caught ? "runners caught" : `${metric} hit rate`,
-                  note: "avg profit per call",
+                  note: "avg return per alert",
                 }}
               />
               {selected && (
@@ -612,13 +613,13 @@ function BaselineChart({
                   <strong>{selected.name}</strong>:{" "}
                   {caught
                     ? selCatch === null || selCatch.runners === 0 || selRate === null
-                      ? `no runners since it started calling in the last ${windowLong(days)} yet.`
-                      : `called ${selCatch.caught} of the ${selCatch.runners} tokens that doubled since it started calling in the last ${windowLong(days)}, ${pct(selRate, 1)} of the runners against the ${goal}% goal${
+                      ? `no runners since it started alerting in the last ${windowLong(days)} yet.`
+                      : `flagged ${selCatch.caught} of the ${selCatch.runners} tokens that doubled since it started alerting in the last ${windowLong(days)}, ${pct(selRate, 1)} of the runners against the ${goal}% goal${
                           baseRate === null ? "." : ` (every model together: ${pct(baseRate, 1)}).`
                         }`
                     : selRate === null
-                      ? `no graded calls in the last ${windowLong(days)} yet.`
-                      : `${pct(selRate, 1)} of its ${selGraded} graded calls${
+                      ? `no graded alerts in the last ${windowLong(days)} yet.`
+                      : `${pct(selRate, 1)} of its ${selGraded} graded alerts${
                           selSince ? ` since ${shortDate(selSince)}` : ""
                         } ${hit} (${intervalText(wilsonOfRate(selRate, selGraded))})${
                           metric !== "2x"
@@ -628,25 +629,25 @@ function BaselineChart({
                             : selLift === null
                               ? "."
                               : selLift >= 1
-                                ? `, ${selLift.toFixed(1)}x the filtered market's ${pct(selMarket, 1)} in the hours it called.`
-                                : `, below the filtered market's ${pct(selMarket, 1)} in the hours it called: worse than picking at random.`
+                                ? `, ${selLift.toFixed(1)}x the filtered market's ${pct(selMarket, 1)} in the hours it was alerting.`
+                                : `, below the filtered market's ${pct(selMarket, 1)} in the hours it was alerting: worse than picking at random.`
                         }`}
                   {selected.composite.live.avgSimReturnPct != null
-                    ? ` Following every call averaged ${signedPct(selected.composite.live.avgSimReturnPct)} a call.`
+                    ? ` Taking every alert averaged ${signedPct(selected.composite.live.avgSimReturnPct)} per alert.`
                     : ""}
                   {selected.composite.warmingUp || isEarly(selGraded)
-                    ? " Still too few calls to lean on."
+                    ? " Still too few alerts to lean on."
                     : ""}
                 </p>
               )}
               <p className="faint small">
-                Live calls over the last {windowLong(days)}, against{" "}
+                Live alerts over the last {windowLong(days)}, against{" "}
                 {caught ? "every model's catch together" : "the filtered baseline"} over the same window.
-                Under each rate is its average profit per call, following every call with one fixed exit plan.
-                Faded bars rest on too few calls. <strong>Tap or click a model</strong> for its full record,
-                past versions and exam results.{" "}
+                Under each rate is its average simulated return per alert, taking every alert with one fixed
+                exit plan. Faded bars rest on too few alerts. <strong>Tap or click a model</strong> for its
+                full record, past versions and exam results.{" "}
                 {!guest && (
-                  <>The switch beside each name shows or hides that model&apos;s calls on your live feed. </>
+                  <>The switch beside each name shows or hides that model&apos;s alerts on your live feed. </>
                 )}{" "}
                 {RULE_NOTE}
               </p>
@@ -728,10 +729,10 @@ function WinnerRunsPanel({ data, days }: { data: ModelInsights; days: number }) 
       <span className="eyebrow">After the win</span>
       <h3>How far the winners ran</h3>
       <p className="muted small">
-        Every call that doubles inside 15 minutes is watched for another day to see how high it goes.
+        Every alert that doubles inside 15 minutes is watched for another day to see how high it goes.
         {shown === samples && samples
           ? " The models have no finished runs yet in this window, so these are all the winning moments the models learn from."
-          : ` All models' winners over the last ${days} days, every model's calls pooled, not just your feed's.`}{" "}
+          : ` All models' winners over the last ${days} days, every model's alerts pooled, not just your feed's.`}{" "}
         The 4x and 10x figures are shares of those winners, by their peak within 24 hours, not hit rates.
       </p>
       {shown && shown.finished > 0 ? (
@@ -860,15 +861,15 @@ export function ModelUnderTheHood() {
 
       <section className="panel">
         <span className="eyebrow">The contest</span>
-        <h3>How a call is made</h3>
+        <h3>How an alert is made</h3>
         <p className="muted small">
-          Each model trains on the same graded history every few hours, makes its own calls on its own feed,
+          Each model trains on the same graded history every few hours, raises its own alerts on its own feed,
           and is graded the same way: {data.rules.win}. The field evolves: every run breeds new variants of
           the leaders, and a variant that clearly beats the weakest model takes its seat. The{" "}
           <strong>Consensus</strong> doesn&apos;t read the market directly; it learns how far to trust each of
-          the others, and calls a token only when at least three of them call it too.
+          the others, and alerts on a token only when at least three of them flag it too.
         </p>
-        <ol className="pipeline" aria-label="How a call is made">
+        <ol className="pipeline" aria-label="How an alert is made">
           <PipelineStage
             Icon={RadarIcon}
             title="Scanner"
@@ -890,7 +891,7 @@ export function ModelUnderTheHood() {
           <PipelineStage
             Icon={BrainIcon}
             title="Consensus"
-            caption="calls"
+            caption="alerts"
             count={consensus?.composite.live.calls}
             rate={consensus?.composite.live.winRatePct}
           />
@@ -1116,7 +1117,7 @@ function LeaderboardPanel({
       <header className="section-head">
         <div>
           <span className="eyebrow">{detailed ? "Full leaderboard" : "Leaderboard"}</span>
-          <h3>{detailed ? "Every figure, model by model" : `Who's calling it best, last ${days} days`}</h3>
+          <h3>{detailed ? "Every figure, model by model" : `Which model alerts best, last ${days} days`}</h3>
           {detailed ? (
             <p className="muted small">
               Score = how far a model has proven itself toward the goal, 0 to 100. Hover a score for its
@@ -1124,10 +1125,11 @@ function LeaderboardPanel({
             </p>
           ) : (
             <p className="muted small">
-              Ranked by <strong>vs filtered market</strong>: how much more often a model&apos;s calls doubled
+              Ranked by <strong>vs filtered market</strong>: how much more often a model&apos;s alerts doubled
               than the average coin in the same hours, so models that started on different days compare
-              fairly. The score runs from 0 to 100: 100 means a model&apos;s calls have reliably hit the goal.
-              Profit is what following every call with one fixed exit plan would have returned. {RULE_NOTE}{" "}
+              fairly. The score runs from 0 to 100: 100 means a model&apos;s alerts have reliably hit the
+              goal. Profit is the simulated return from taking every alert with one fixed exit plan.{" "}
+              {RULE_NOTE}{" "}
               {guest ? (
                 <>
                   Connect a wallet to pick which models&apos; alerts you get with <strong>In feed</strong>.
@@ -1154,7 +1156,7 @@ function LeaderboardPanel({
       {board.runners && board.runners.runners > 0 && (
         <p className="muted small">
           <strong>Caught</strong> counts the runners: of the {board.runners.runners} tokens that doubled
-          cleanly in the last {days} days, the share a model called at a winning moment. All models together
+          cleanly in the last {days} days, the share a model flagged at a winning moment. All models together
           caught {board.runners.caught} ({pct(board.runners.pct)}); the other{" "}
           {board.runners.runners - board.runners.caught} slipped by every model.
         </p>
@@ -1168,47 +1170,47 @@ function LeaderboardPanel({
               </th>
               <th>Model</th>
               <th title="How far the model has proven itself toward the goal, 0-100">Score</th>
-              <th className="r">{detailed ? "Live calls" : "Calls"}</th>
+              <th className="r">{detailed ? "Live alerts" : "Alerts"}</th>
               <th className="r">{detailed ? "2x" : "Doubled"}</th>
               <th
                 className="r"
-                title="Its 2x rate over the filtered market's 2x rate in the same hours: 2.0x means its calls doubled twice as often as a random pick then. The board ranks by this."
+                title="Its 2x rate over the filtered market's 2x rate in the same hours: 2.0x means its alerts doubled twice as often as a random pick then. The board ranks by this."
               >
                 vs filtered market
               </th>
               <th
                 className="r"
-                title="Of the tokens that doubled cleanly in the window, the share it called at a winning moment: the runners it didn't let slip"
+                title="Of the tokens that doubled cleanly in the window, the share it flagged at a winning moment: the runners it didn't let slip"
               >
                 Caught
               </th>
               <th className="r">{detailed ? "4x" : "Hit 4x"}</th>
               <th
                 className="r"
-                title="Share of graded live calls that reached 10x within an hour, before a 50% drop"
+                title="Share of graded live alerts that reached 10x within an hour, before a 50% drop"
               >
                 {detailed ? "10x" : "Hit 10x"}
               </th>
               {detailed && (
-                <th className="r" title="Average doublings per call">
+                <th className="r" title="Average doublings per alert">
                   Avg doublings
                 </th>
               )}
-              <th className="r" title="Average simulated return per live call under the fixed exit plan">
+              <th className="r" title="Average simulated return per live alert under the fixed exit plan">
                 Avg profit
               </th>
               {detailed && (
                 <>
                   <th
                     className="r"
-                    title="Total simulated return over its live calls, staking the same amount on each"
+                    title="Total simulated return over its live alerts, staking the same amount on each"
                   >
                     Total profit
                   </th>
                   <th className="r">Backtest 2x / 4x / 10x</th>
                   <th
                     className="r"
-                    title="Live 2x rate of its high-conviction calls alone (its top half-percent of moments)"
+                    title="Live 2x rate of its high-conviction alerts alone (its top half-percent of moments)"
                   >
                     High-conv 2x
                   </th>
@@ -1279,7 +1281,7 @@ function LeaderboardPanel({
                       </small>
                     )}
                   </td>
-                  <td className="r num" data-label={detailed ? "Live calls" : "Calls"}>
+                  <td className="r num" data-label={detailed ? "Live alerts" : "Alerts"}>
                     {live.calls}
                     {live.calls > live.graded && <span className="faint"> ({live.graded} graded)</span>}
                   </td>
@@ -1295,7 +1297,7 @@ function LeaderboardPanel({
                     data-label="vs filtered market"
                     title={
                       e.vsMarket?.marketRatePct != null
-                        ? `The filtered market doubled ${pct(e.vsMarket.marketRatePct, 1)} in the hours it called`
+                        ? `The filtered market doubled ${pct(e.vsMarket.marketRatePct, 1)} in the hours it was alerting`
                         : undefined
                     }
                   >
@@ -1306,7 +1308,7 @@ function LeaderboardPanel({
                     data-label="Caught"
                     title={
                       e.liveCatch && e.liveCatch.runners > 0
-                        ? `Called ${e.liveCatch.caught} of the ${e.liveCatch.runners} tokens that doubled since it started calling in this window`
+                        ? `Flagged ${e.liveCatch.caught} of the ${e.liveCatch.runners} tokens that doubled since it started alerting in this window`
                         : undefined
                     }
                   >
@@ -1337,7 +1339,7 @@ function LeaderboardPanel({
                         data-label="Total profit"
                         title={
                           live.simCalls
-                            ? `${live.simCalls} graded call${live.simCalls === 1 ? "" : "s"} with a simulated result`
+                            ? `${live.simCalls} graded alert${live.simCalls === 1 ? "" : "s"} with a simulated result`
                             : undefined
                         }
                       >
@@ -1365,7 +1367,7 @@ function LeaderboardPanel({
                         {e.composite.warmingUp && e.status === "calling" && (
                           <span
                             className="badge neutral"
-                            title={`Fewer than ${board.scoring.minLiveCallsToRank ?? 50} graded live calls: ranked behind seasoned models until then`}
+                            title={`Fewer than ${board.scoring.minLiveCallsToRank ?? 50} graded live alerts: ranked behind seasoned models until then`}
                           >
                             warming up
                           </span>
@@ -1382,7 +1384,7 @@ function LeaderboardPanel({
                             ? "Connect a wallet to pick models"
                             : onlyOne
                               ? "Your feed needs at least one model"
-                              : "Show this model's calls in your feed"
+                              : "Show this model's alerts in your feed"
                         }
                       >
                         <input
@@ -1404,12 +1406,12 @@ function LeaderboardPanel({
       {detailed && (
         <>
           <p className="faint small">
-            Avg doublings is the average return per call: a 2x counts 1, a 4x counts 2, a miss or a stop-out
-            0. It is shown for context and not scored. Avg and total profit follow every live call with one
+            Avg doublings is the average return per alert: a 2x counts 1, a 4x counts 2, a miss or a stop-out
+            0. It is shown for context and not scored. Avg and total profit take every live alert through one
             fixed exit plan, so a feed whose losers lose a lot shows it even when its hit rate looks fine; see{" "}
             <GuideLink id="profit-guide">what profit means</GuideLink>. Backtest figures are the latest
-            training run's walk-forward exam, with the number of calls it made. {RULE_NOTE} Rates on fewer
-            than {MIN_GRADED_FOR_RATE} graded calls are muted as early; hover one for its 90% range.
+            training run's walk-forward exam, with the number of alerts it raised. {RULE_NOTE} Rates on fewer
+            than {MIN_GRADED_FOR_RATE} graded alerts are muted as early; hover one for its 90% range.
           </p>
           <ScoreGuide board={board} />
           <ProfitGuide board={board} />
@@ -1442,7 +1444,7 @@ function GuideLink({ id, children }: { id: string; children: ReactNode }) {
 }
 
 function scoreTitle(liveWeight: number): string {
-  return `${Math.round(liveWeight * 100)}% from live calls, ${Math.round((1 - liveWeight) * 100)}% from the backtest`;
+  return `${Math.round(liveWeight * 100)}% from live alerts, ${Math.round((1 - liveWeight) * 100)}% from the backtest`;
 }
 
 /**
@@ -1463,9 +1465,9 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
       <div className="score-guide-body">
         <p className="muted small">
           A model's score is how far it has <strong>proven</strong> itself toward the goal: 2x on{" "}
-          {t.hitRate2xPct}% of its calls and 4x on {t.hitRate4xPct}%, catching the big runs these tokens make,
-          and calling {board.scoring.catchTargetPct ?? 75}% of the runners rather than letting them slip by.
-          100 means its record meets every target. 0 means it has proven nothing yet.
+          {t.hitRate2xPct}% of its alerts and 4x on {t.hitRate4xPct}%, catching the big runs these tokens
+          make, and flagging {board.scoring.catchTargetPct ?? 75}% of the runners rather than letting them
+          slip by. 100 means its record meets every target. 0 means it has proven nothing yet.
         </p>
         {bands.length > 0 && (
           <ul className="score-bands">
@@ -1493,25 +1495,26 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
           </li>
           {w.tenXRate != null && (
             <li>
-              <strong>{Math.round(w.tenXRate * 100)} points for hitting 10x.</strong> The share of calls that
+              <strong>{Math.round(w.tenXRate * 100)} points for hitting 10x.</strong> The share of alerts that
               reached 10x within an hour of the alert (before a 50% drop), against a {sc.tenXTargetPct ?? 25}%
               target.
             </li>
           )}
           {w.runSize != null && (
             <li>
-              <strong>{Math.round(w.runSize * 100)} points for run size.</strong> How far its calls went over
-              the 24 hours after the call, counted in doublings (a 4x is 2, a 32x is 5, capped at 100x),
-              averaged over every call against a target of {runTarget} (a {2 ** runTarget}x average). A call
-              scores 0 if it fell 50% before running or never doubled. A 2x that stops there and one that runs
-              to 50x earn the same points above; this is what tells them apart.
+              <strong>{Math.round(w.runSize * 100)} points for run size.</strong> How far its alerts went over
+              the 24 hours after the alert, counted in doublings (a 4x is 2, a 32x is 5, capped at 100x),
+              averaged over every alert against a target of {runTarget} (a {2 ** runTarget}x average). An
+              alert scores 0 if it fell 50% before running or never doubled. A 2x that stops there and one
+              that runs to 50x earn the same points above; this is what tells them apart.
             </li>
           )}
           {w.returnPct != null && (
             <li>
-              <strong>{Math.round(w.returnPct * 100)} points for average return.</strong> What a call returns
-              when traded under the fixed exit plan, averaged over every call: nothing at{" "}
-              {sc.returnFloorPct ?? -50}% (every call a full stop), full points at +{sc.returnTargetPct ?? 25}
+              <strong>{Math.round(w.returnPct * 100)} points for average return.</strong> What an alert
+              returns when traded under the fixed exit plan, averaged over every alert: nothing at{" "}
+              {sc.returnFloorPct ?? -50}% (every alert a full stop), full points at +
+              {sc.returnTargetPct ?? 25}
               %. The hit rates count a coin that fell to the stop the same as one that went nowhere; this part
               tells them apart. A record without simulated returns is scored on the other parts, scaled to
               100.
@@ -1520,34 +1523,34 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
           {w.catchRate != null && (
             <li>
               <strong>{Math.round(w.catchRate * 100)} points for catching runners.</strong> Of the tokens that
-              doubled in its backtest, the share it called at a winning moment, against a{" "}
-              {sc.catchTargetPct ?? 75}% target. The hit rates alone reward a model for calling only its
+              doubled in its backtest, the share it flagged at a winning moment, against a{" "}
+              {sc.catchTargetPct ?? 75}% target. The hit rates alone reward a model for flagging only its
               surest few; this part counts the runners it let slip by. Only the backtest knows every runner a
-              model could have called, so a model without one is scored on the other parts, scaled to 100.
+              model could have flagged, so a model without one is scored on the other parts, scaled to 100.
             </li>
           )}
           <li>
             <strong>Proven, not raw.</strong> Before a rate or the run size is worked out,{" "}
-            {sc.priorCalls ?? 10} extra calls are counted as misses. Three wins from three calls proves{" "}
-            {pct((3 / (3 + (sc.priorCalls ?? 10))) * 100)}, not 100%; 150 wins from 200 calls proves{" "}
+            {sc.priorCalls ?? 10} extra alerts are counted as misses. Three wins from three alerts proves{" "}
+            {pct((3 / (3 + (sc.priorCalls ?? 10))) * 100)}, not 100%; 150 wins from 200 alerts proves{" "}
             {pct((150 / (200 + (sc.priorCalls ?? 10))) * 100)}. A short hot streak can't outscore a long good
             record.
           </li>
           <li>
-            <strong>Live calls first.</strong> A new model is scored on its backtest, which counts for at most{" "}
-            {sc.livePivotCalls} calls' worth. Its live calls add to that one by one, so by {sc.livePivotCalls}{" "}
-            graded live calls the two weigh the same, and from there the live record takes over. Models with
-            fewer than {sc.minLiveCallsToRank ?? 50} graded live calls are "warming up": their score shows,
-            but they rank below every seasoned model.
+            <strong>Live alerts first.</strong> A new model is scored on its backtest, which counts for at
+            most {sc.livePivotCalls} alerts' worth. Its live alerts add to that one by one, so by{" "}
+            {sc.livePivotCalls} graded live alerts the two weigh the same, and from there the live record
+            takes over. Models with fewer than {sc.minLiveCallsToRank ?? 50} graded live alerts are "warming
+            up": their score shows, but they rank below every seasoned model.
           </li>
           <li>
             <strong>Beating a target earns nothing extra.</strong> Two models that both meet the goal tie at
-            100; the one with more graded live calls ranks first.
+            100; the one with more graded live alerts ranks first.
           </li>
         </ol>
         {example && b && example.composite.score !== null && (
           <p className="muted small score-example">
-            <strong>Worked example, {example.name}:</strong> {b.liveCalls} graded live call
+            <strong>Worked example, {example.name}:</strong> {b.liveCalls} graded live alert
             {b.liveCalls === 1 ? "" : "s"}
             {b.backtestCalls > 0 ? ` plus a backtest counting as ${b.backtestCalls}` : ""} prove a 2x rate of{" "}
             <span className="num">{b.proven2xPct.toFixed(0)}%</span> ({Math.round(w.winRate * 100)} ×{" "}
@@ -1565,16 +1568,17 @@ function ScoreGuide({ board }: { board: Leaderboard }) {
             {b.pointsRun != null && b.provenRunDoublings != null && w.runSize != null && (
               <>
                 {" "}
-                and a run size of <span className="num">{b.provenRunDoublings.toFixed(2)}</span> doublings a
-                call ({Math.round(w.runSize * 100)} × {b.provenRunDoublings.toFixed(2)}/{runTarget} ={" "}
+                and a run size of <span className="num">{b.provenRunDoublings.toFixed(2)}</span> doublings per
+                alert ({Math.round(w.runSize * 100)} × {b.provenRunDoublings.toFixed(2)}/{runTarget} ={" "}
                 <span className="num">{b.pointsRun.toFixed(0)}</span> points)
               </>
             )}
             {b.pointsReturn != null && b.provenReturnPct != null && w.returnPct != null && (
               <>
                 {" "}
-                and an average return of <span className="num">{b.provenReturnPct.toFixed(0)}%</span> a call (
-                {Math.round(w.returnPct * 100)} × ({b.provenReturnPct.toFixed(0)} − {sc.returnFloorPct ?? -50}
+                and an average return of <span className="num">{b.provenReturnPct.toFixed(0)}%</span> per
+                alert ({Math.round(w.returnPct * 100)} × ({b.provenReturnPct.toFixed(0)} −{" "}
+                {sc.returnFloorPct ?? -50}
                 )/(
                 {sc.returnTargetPct ?? 25} − {sc.returnFloorPct ?? -50}) ={" "}
                 <span className="num">{b.pointsReturn.toFixed(0)}</span> points)
@@ -1611,14 +1615,14 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
       <summary>What the profit columns mean</summary>
       <div className="score-guide-body">
         <p className="muted small">
-          A hit rate counts each call as a win or a loss, so it can't tell a feed whose misses drift 10% lower
-          from one whose misses fall 50%. The profit columns put a return on every graded call by following it
-          with one fixed plan, the same for every model:
+          A hit rate counts each alert as a win or a loss, so it can't tell a feed whose misses drift 10%
+          lower from one whose misses fall 50%. The profit columns put a return on every graded alert by
+          running it through one fixed plan, the same for every model:
         </p>
         <p className="small">
           <strong>
             {board.exitPlan ??
-              "Buy at the alert price, sell 35% at 2x, sell 30% at 4x, sell 25% at 10x, from the first sale, let what is still held ride with a trailing exit 40% off its high, out at 3 hours, stop out at -50% before the first sale, and close a call that never sold at 30 minutes."}
+              "Enter at the alert price, sell 35% at 2x, sell 30% at 4x, sell 25% at 10x, from the first sale, let what is still held ride with a trailing exit 40% off its high, out at 3 hours, stop out at -50% before the first sale, and close a trade that never sold at 30 minutes."}
           </strong>
         </p>
         <ol className="steps small">
@@ -1627,28 +1631,28 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
             detected and alerted.
           </li>
           <li>
-            <strong>Some worked calls.</strong> One that runs to 5x and then trails out at 3x returns +195%
+            <strong>Some worked examples.</strong> One that runs to 5x and then trails out at 3x returns +195%
             (35% sold at 2x, 30% at 4x, the rest at 3x). One that doubles and then falls straight back returns
             +48% (the trail sells the rest at 1.2x). One that drops to the stop first returns -50%. One that
             ends its 30 minutes 20% up without reaching 2x returns +20%.
           </li>
           <li>
-            <strong>Avg profit</strong> is the average return per graded live call.{" "}
-            <strong>Total profit</strong> adds them up in stakes: staking the same amount on every call, +3.0
-            stakes means the model's calls made three times that amount over the window, after the losers.
+            <strong>Avg profit</strong> is the average return per graded live alert.{" "}
+            <strong>Total profit</strong> adds them up in stakes: staking the same amount on every alert, +3.0
+            stakes means the model's alerts made three times that amount over the window, after the losers.
           </li>
           <li>
             <strong>It is a simulation, not a promise.</strong> Prices are checked about once a minute. The
             sales at 2x, 4x and 10x and the -50% stop are assumed to fill at the level itself; in a fast dump
             a real stop can fill lower. The trailing exit books the price actually seen under its level, since
-            a trail fires on a sharp drop by construction. Calls whose last price is unknown are left out
-            rather than guessed. Calls from 3 to 17 October are re-scored under this plan from each coin's own
-            trades; ones the trades can't cover, and older calls, keep the earlier plan's return.
+            a trail fires on a sharp drop by construction. Alerts whose last price is unknown are left out
+            rather than guessed. Alerts from 3 to 17 October are re-scored under this plan from each coin's
+            own trades; ones the trades can't cover, and older alerts, keep the earlier plan's return.
           </li>
         </ol>
         {example && live && (
           <p className="muted small score-example">
-            <strong>Example, {example.name}:</strong> {live.simCalls} graded live call
+            <strong>Example, {example.name}:</strong> {live.simCalls} graded live alert
             {live.simCalls === 1 ? "" : "s"} averaged{" "}
             <span className="num">{signedPct(live.avgSimReturnPct, 1)}</span> each, a total of{" "}
             <span className="num">{stakes(live.totalSimReturnPct)}</span> over the last {board.window.days}{" "}
@@ -1666,7 +1670,7 @@ function HowItWorks({ board }: { board: Leaderboard }) {
   return (
     <section className="panel">
       <span className="eyebrow">How it works</span>
-      <h3>From graded history to a call</h3>
+      <h3>From graded history to an alert</h3>
       <ol className="steps">
         <li>
           <strong>Train.</strong> Every few hours each model refits on the last weeks of graded decision
@@ -1679,27 +1683,27 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           graded on later weeks it never saw, the way it would have traded them.
         </li>
         <li>
-          <strong>Cutoff.</strong> Each model only calls its most confident slice: the loosest one whose exam
-          calls reached {board.targets.hitRate2xPct}% 2x and {board.targets.hitRate4xPct}% 4x, or its best
-          slice when none did. A model with no slice to judge stays silent until the next run.
+          <strong>Cutoff.</strong> Each model only alerts on its most confident slice: the loosest one whose
+          exam alerts reached {board.targets.hitRate2xPct}% 2x and {board.targets.hitRate4xPct}% 4x, or its
+          best slice when none did. A model with no slice to judge stays silent until the next run.
         </li>
         <li>
-          <strong>Battle.</strong> Every model calls on its own feed, graded the same way. The leaderboard
+          <strong>Battle.</strong> Every model alerts on its own feed, graded the same way. The leaderboard
           score is how far each has proven itself toward the goal, 0-100: {Math.round(w.winRate * 100)} points
           for its 2x rate against the {board.targets.hitRate2xPct}% target, {Math.round(w.goalRate * 100)} for
           its 4x rate against {board.targets.hitRate4xPct}%
           {w.tenXRate != null
-            ? `, ${Math.round(w.tenXRate * 100)} for how often its calls hit 10x within an hour`
+            ? `, ${Math.round(w.tenXRate * 100)} for how often its alerts hit 10x within an hour`
             : ""}
           {w.runSize != null
-            ? `, ${Math.round(w.runSize * 100)} for run size, how far its calls run over the day after`
+            ? `, ${Math.round(w.runSize * 100)} for run size, how far its alerts run over the day after`
             : ""}
           {w.returnPct != null
             ? `, ${Math.round(w.returnPct * 100)} for its average return under the exit plan`
             : ""}
           {w.catchRate != null ? `, and ${Math.round(w.catchRate * 100)} for catching the runners` : ""}, with
           a few phantom misses added so a short streak proves little. It starts from the backtest and shifts
-          to live calls as they're graded (half and half at {board.scoring.livePivotCalls}).
+          to live alerts as they're graded (half and half at {board.scoring.livePivotCalls}).
         </li>
         <li>
           <strong>Evolve.</strong> Every run also breeds {board.evolution.challengersPerRun} challenger
@@ -1708,16 +1712,16 @@ function HowItWorks({ board }: { board: Leaderboard }) {
           another leader. They sit the same exam. When the best one beats the weakest model's exam by{" "}
           {board.evolution.margin} points (by a wider bar the more challengers there are)
           {board.evolution.probationHours
-            ? `, it waits ${board.evolution.probationHours} hours and must beat that model again on the calls that came in since. Then it takes`
+            ? `, it waits ${board.evolution.probationHours} hours and must beat that model again on the alerts that came in since. Then it takes`
             : ", it takes"}{" "}
           that seat under a new name and starts a fresh live record. A model holds its seat at least{" "}
           {board.evolution.minAgeHours} hours first.
         </li>
         <li>
-          <strong>Consensus.</strong> A second-order model trained on the others' out-of-sample calls: it
+          <strong>Consensus.</strong> A second-order model trained on the others' out-of-sample alerts: it
           learns which models to trust and when they agree, and gets its own exam on later weeks than it
-          trained on. It calls a token only when at least three of the models it learns from call it at their
-          own cutoffs, so the Rules checks it also reads can&apos;t carry a call on their own.
+          trained on. It alerts on a token only when at least three of the models it learns from flag it at
+          their own cutoffs, so the Rules checks it also reads can&apos;t carry an alert on their own.
         </li>
         <li>
           <strong>The default.</strong>{" "}
@@ -1726,19 +1730,19 @@ function HowItWorks({ board }: { board: Leaderboard }) {
               The default feed is the {board.defaultRule.count} models with the best 2x rate at the low end of
               its {board.defaultRule.rankConfidencePct ?? 95}% range (so a short record counts for less),
               among those with at least {board.defaultRule.rankMinGraded ?? board.defaultRule.minGraded}{" "}
-              graded calls over the last {board.defaultRule.rankWindowHours ?? board.defaultRule.windowHours}
+              graded alerts over the last {board.defaultRule.rankWindowHours ?? board.defaultRule.windowHours}
               h, picked every {Math.round(board.defaultRule.refreshMinutes / 60)} hours (00, 06, 12 and 18
               UTC) and held until the next pick. The champion joins them when it did not rank in, so the
-              default is 4 models at most. Everyone who follows the default sees their calls combined. With
+              default is 4 models at most. Everyone who follows the default sees their alerts combined. With
               fewer qualifying it is the ones that do plus the champion; with none, the best performer alone.
             </>
           ) : (
             <>
               After each run the model with the best score on the full scorecard (2x, 4x and 10x rates,
               average return and run size) over the last 72 hours (with at least{" "}
-              {board.champion?.minLiveGraded ?? 10} graded live calls) becomes the default feed, and everyone
+              {board.champion?.minLiveGraded ?? 10} graded live alerts) becomes the default feed, and everyone
               who follows the best switches to it. Until a model qualifies, the default is the Consensus when
-              it can call, else Rules.
+              it is alerting, else Rules.
             </>
           )}
         </li>
@@ -1770,7 +1774,7 @@ function EvolutionPanel({ board, now }: { board: Leaderboard; now: number }) {
           {ev.probation && (
             <p className="muted small">
               On probation: <strong>{ev.probation.name}</strong> beat {ev.probation.seatName} on the exam{" "}
-              {ago(ev.probation.startedAt, now)} and takes its seat only if it beats it again on the calls
+              {ago(ev.probation.startedAt, now)} and takes its seat only if it beats it again on the alerts
               since.
             </p>
           )}
@@ -1858,7 +1862,7 @@ const LEARNING_METRICS = {
     series: "10x rate",
     hit: "reached 10x",
     of: (r: LearningRates) => r.rate10xPct ?? null,
-    note: "A 10x is reached within an hour, before the 50% stop; calls still inside their hour wait.",
+    note: "A 10x is reached within an hour, before the 50% stop; alerts still inside their hour wait.",
   },
   ret: {
     tab: "Avg return",
@@ -1866,7 +1870,7 @@ const LEARNING_METRICS = {
     series: "avg return",
     hit: "",
     of: (r: LearningRates) => r.avgReturnPct ?? null,
-    note: "Average return per call, following every call with one fixed exit plan; the filtered market line is a random pick under the same plan.",
+    note: "Average return per alert, taking every alert through one fixed exit plan; the filtered market line is a random pick under the same plan.",
   },
   catch: {
     tab: "Catch",
@@ -1874,7 +1878,7 @@ const LEARNING_METRICS = {
     series: "catch",
     hit: "caught",
     of: (r: LearningRates) => r.catchPct ?? null,
-    note: "Catch is the share of the day's runners (tokens that doubled cleanly from any moment or call) a line called at a winning moment; the dashed line is the catch goal, not the filtered market.",
+    note: "Catch is the share of the day's runners (tokens that doubled cleanly from any moment or alert) a line flagged at a winning moment; the dashed line is the catch goal, not the filtered market.",
   },
 } as const;
 type LearningMetric = keyof typeof LEARNING_METRICS;
@@ -2045,8 +2049,8 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
           <h3>Is it getting better?</h3>
           <p className="muted small">
             Up to {WEEK_MAX_MODELS} models day by day, next to the filtered market (a random pick from the
-            moments the models choose from) and every model&apos;s calls pooled, each token counted once
-            however many models called it. A model that is learning pulls further above the dashed filtered
+            moments the models choose from) and every model&apos;s alerts pooled, each token counted once
+            however many models flagged it. A model that is learning pulls further above the dashed filtered
             market line over the days. If every line rises together, that&apos;s the filtered market, not the
             models.
           </p>
@@ -2083,7 +2087,7 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
                     ? `Up to ${WEEK_MAX_MODELS} models; drop one to add another`
                     : has
                       ? undefined
-                      : `No graded calls in these ${WEEK_DAYS} days`
+                      : `No graded alerts in these ${WEEK_DAYS} days`
                 }
               >
                 {on && <i className={`swatch s${at + 1}`} />}
@@ -2141,11 +2145,11 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
             if (!d) return "No data";
             return isCatch
               ? `${d.feed.caught ?? 0} of ${d.market.runners ?? 0} runners caught across all models`
-              : `${d.feed.graded} graded calls across all models; ${d.market.graded.toLocaleString()} moments`;
+              : `${d.feed.graded} graded alerts across all models; ${d.market.graded.toLocaleString()} moments`;
           })}
         />
       ) : (
-        <p className="empty">No graded calls in these {WEEK_DAYS} days yet.</p>
+        <p className="empty">No graded alerts in these {WEEK_DAYS} days yet.</p>
       )}
 
       <div className="table-wrap">
@@ -2182,8 +2186,8 @@ function WeekPanel({ learning, board, now }: { learning: LearningCurve; board: L
         </table>
       </div>
       <p className="faint small">
-        {m.note} A model&apos;s day shows once it has {MIN_CALLS_PER_POINT} graded calls; fewer leave a gap.
-        The table pools each line&apos;s calls over the {WEEK_DAYS} days. For the filtered market,
+        {m.note} A model&apos;s day shows once it has {MIN_CALLS_PER_POINT} graded alerts; fewer leave a gap.
+        The table pools each line&apos;s alerts over the {WEEK_DAYS} days. For the filtered market,
         &quot;graded&quot; counts decision moments.
         {isCatch &&
           " Caught counts each day's runners once per day, so a token that ran on two days counts on both."}{" "}
@@ -2263,18 +2267,18 @@ function TrainingPanel({
         <>
           <h4>Hit rate vs how picky the cutoff is</h4>
           <p className="muted small">
-            Calling only the top slice by confidence trades volume for hit rate. This is the out-of-sample
+            Keeping only the top slice by confidence trades volume for hit rate. This is the out-of-sample
             record of each slice
             {examRates?.calls
               ? examRates.heldOut
-                ? `; graded at cutoffs set on other parts of the exam, the model made ${examRates.calls} exam calls at ${pct(
+                ? `; graded at cutoffs set on other parts of the exam, the model made ${examRates.calls} exam alerts at ${pct(
                     examRates.winRatePct,
                   )} / ${pct(examRates.goalRatePct)}`
-                : `; this run stored no held-out exam, so its cutoff's figure is ${IN_SAMPLE_LABEL}: ${examRates.calls} calls at ${pct(
+                : `; this run stored no held-out exam, so its cutoff's figure is ${IN_SAMPLE_LABEL}: ${examRates.calls} alerts at ${pct(
                     examRates.winRatePct,
-                  )} / ${pct(examRates.goalRatePct)}, picked on those same calls, so it reads high`
+                  )} / ${pct(examRates.goalRatePct)}, picked on those same alerts, so it reads high`
               : ""}
-            . Slices on fewer than {MIN_GRADED_FOR_RATE} calls are faded as early; hover a slice for its 90%
+            . Slices on fewer than {MIN_GRADED_FOR_RATE} alerts are faded as early; hover a slice for its 90%
             range.
           </p>
           {run.precisionCurve.length > 0 ? (
@@ -2289,14 +2293,14 @@ function TrainingPanel({
                 shortLabel: `${CURVE_SLICES[CURVE_SLICES.length - run.precisionCurve.length + i] ?? "?"}%`,
                 a: p.winRatePct,
                 b: p.goalRatePct,
-                sub: `${p.alerts} calls${isEarly(p.alerts) ? " · early" : ""}`,
+                sub: `${p.alerts} alerts${isEarly(p.alerts) ? " · early" : ""}`,
                 shortSub: `${p.alerts}`,
                 thin: isEarly(p.alerts),
                 note: `2x ${intervalText(wilsonOfRate(p.winRatePct, p.alerts))}`,
               }))}
             />
           ) : (
-            <p className="empty">Not enough out-of-sample calls to draw yet.</p>
+            <p className="empty">Not enough out-of-sample alerts to draw yet.</p>
           )}
 
           {run.folds.length > 0 && (
@@ -2309,7 +2313,7 @@ function TrainingPanel({
                       <th>Test window</th>
                       <th className="r">Rows</th>
                       <th className="r">Base 2x</th>
-                      <th className="r">Calls</th>
+                      <th className="r">Alerts</th>
                       <th className="r">2x</th>
                       <th className="r">4x</th>
                     </tr>
@@ -2349,7 +2353,7 @@ function TrainingPanel({
                     <th>Status</th>
                     <th className="r">Cutoff 2x</th>
                     <th className="r">Cutoff 4x</th>
-                    <th className="r">Exam calls</th>
+                    <th className="r">Exam alerts</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2430,23 +2434,23 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
           </span>
           <span className="muted small">
             {buys.calls > 0
-              ? `${buys.calls} buy calls · ${pct(buys.hitRate2xPct)} 2x · ${pct(buys.hitRate4xPct)} 4x`
-              : "no calls in this window"}
+              ? `${buys.calls} passed alerts · ${pct(buys.hitRate2xPct)} 2x · ${pct(buys.hitRate4xPct)} 4x`
+              : "no passed alerts in this window"}
           </span>
         </summary>
         <p className="muted small">
-          A second opinion from Claude on each high-conviction call, from any model, once per coin. In shadow
-          mode it records a buy / no-buy without blocking anything; in gate mode it holds back its no-buys
-          only once {data.curator.aiReviewMinGradedBuys} of its buys under the current playbook are graded and
-          their 2x rate beats its passes' with the lift's 95% range above 0.
+          A second opinion from Claude on each high-conviction alert, from any model, once per coin. In shadow
+          mode it records a pass / reject without blocking anything; in gate mode it holds back its rejects
+          only once {data.curator.aiReviewMinGradedBuys} of its passes under the current playbook are graded
+          and their 2x rate beats its rejects' with the lift's 95% range above 0.
           {!running &&
-            " It is off: it runs only with an API key set, and it has made no calls in this window."}
+            " It is off: it runs only with an API key set, and it has made no reviews in this window."}
         </p>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Calls</th>
+                <th>Alerts</th>
                 <th className="r">Made</th>
                 <th className="r">Graded</th>
                 <th className="r">2x</th>
@@ -2455,17 +2459,17 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
               </tr>
             </thead>
             <tbody>
-              <RateRow name="Buy calls" r={buys} />
+              <RateRow name="Passed alerts" r={buys} />
               {data.aiReviewer.byDecision
                 .filter((d) => d.decision === "no_buy")
                 .map((d) => (
-                  <RateRow key={`nb-${d.mode}`} name={`No-buy calls (${d.mode})`} r={d} />
+                  <RateRow key={`nb-${d.mode}`} name={`Rejected alerts (${d.mode})`} r={d} />
                 ))}
             </tbody>
           </table>
         </div>
         <p className="muted small">
-          Lift of its buys over its passes:{" "}
+          Lift of its passes over its rejects:{" "}
           <strong>
             {data.aiReviewer.liftPts === null
               ? "–"
@@ -2515,7 +2519,7 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
                 <tr>
                   <th>Token</th>
                   <th>When</th>
-                  <th>Call</th>
+                  <th>Verdict</th>
                   <th className="r">P(2x)</th>
                   <th className="r">Mcap</th>
                   <th>Outcome</th>
@@ -2538,7 +2542,7 @@ function AiReviewerPanel({ data, now }: { data: ModelInsights; now: number }) {
                       <span
                         className={`badge ${r.decision === "buy" ? "good" : r.decision === "no_buy" ? "bad" : "neutral"}`}
                       >
-                        {r.decision === "buy" ? "BUY" : r.decision === "no_buy" ? "NO BUY" : "error"}
+                        {r.decision === "buy" ? "PASS" : r.decision === "no_buy" ? "REJECT" : "error"}
                       </span>
                     </td>
                     <td className="r num">
@@ -2577,7 +2581,7 @@ function AiJudgeLoop({ judge, now }: { judge: AiJudgeState; now: number }) {
     <>
       <h4>How it is learning</h4>
       <p className="muted small">
-        Once a day Claude reviews its graded calls into new playbooks, and a new one takes over only if it
+        Once a day Claude reviews its graded verdicts into new playbooks, and a new one takes over only if it
         beats the current one on a replay of recent alerts it never saw.
         {pending && ` A ${pending.purpose} replay is running (started ${ago(pending.createdAt, now)}).`}
       </p>
@@ -2588,7 +2592,7 @@ function AiJudgeLoop({ judge, now }: { judge: AiJudgeState; now: number }) {
               <tr>
                 <th>Playbook</th>
                 <th>Status</th>
-                <th className="r">Replay buys</th>
+                <th className="r">Replay passes</th>
                 <th className="r">2x</th>
                 <th className="r">4x</th>
                 <th className="r">Lift</th>

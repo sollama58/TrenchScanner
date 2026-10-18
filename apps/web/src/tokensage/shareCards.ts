@@ -377,7 +377,7 @@ function drawHeadline(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
       { value: compact(d.last24h.reads), label: "read in the last 24 hours" },
       { value: compact(t.deep), label: "deep reads" },
       { value: pctOf(t.copiesRecent, t.copiesAnswered), label: "copy a recent coin" },
-      { value: pctOf(t.alertsDescribed, t.alerts), label: "of model calls' coins have a read" },
+      { value: pctOf(t.alertsDescribed, t.alerts), label: "of alerted coins have a read" },
     ],
     BODY_BOTTOM - 28,
   );
@@ -413,7 +413,7 @@ function drawLineage(ctx: CanvasRenderingContext2D, d: TokenSageShowcase) {
             ? r.label === "original"
               ? "originals read"
               : "copies read"
-            : `of model calls on ${r.label === "original" ? "originals" : "copies"} hit 2x`,
+            : `of model alerts on ${r.label === "original" ? "originals" : "copies"} hit 2x`,
       };
     });
   if (items.length) stats(ctx, items.slice(0, 2), BODY_BOTTOM - 28);
@@ -592,7 +592,7 @@ function subtitle(kind: ShareCardKind, span: string): string {
     case "fees":
       return "Where pump.fun's creator fee is set to go on new coins.";
     case "models":
-      return `Model calls in the last ${span} by narrative: return and 2x rate against the average.`;
+      return `Model alerts in the last ${span} by narrative: return and 2x rate against the average.`;
   }
 }
 
@@ -626,7 +626,7 @@ export async function renderShareCard(
   const span = days === 1 ? "24 hours" : `${days} days`;
   const source =
     kind === "models"
-      ? `TrenchScanner model calls, last ${span}`
+      ? `TrenchScanner model alerts, last ${span}`
       : "Counts across every coin TokenSage has read";
   frame(ctx, icon, TITLES[kind], subtitle(kind, span), source);
   DRAW[kind](ctx, d, lh);

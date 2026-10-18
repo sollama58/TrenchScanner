@@ -736,7 +736,7 @@ export function CutoffCurve({
           viewBox={`0 0 ${width} ${height}`}
           height={height}
           role="img"
-          aria-label="2x and 4x hit rate at each cutoff, by share of decision moments called"
+          aria-label="2x and 4x hit rate at each cutoff, by share of decision moments flagged"
           {...pick}
         >
           {[0, 25, 50, 75, 100].map((t) => (
@@ -807,7 +807,7 @@ export function CutoffCurve({
               <i className="swatch s2" /> Reached 4x: {hovered.goalRatePct.toFixed(1)}%
             </span>
             <span className="muted">
-              {hovered.calls.toLocaleString()} exam calls
+              {hovered.calls.toLocaleString()} exam alerts
               {hovered.perHour !== null ? ` · about ${perHourText(hovered.perHour)} live` : ""}
             </span>
           </div>

@@ -12,6 +12,7 @@
  */
 
 import { TransientError } from "./errors.js";
+import type { InstructionSpec } from "./transaction.js";
 
 export const WSOL_MINT = "So11111111111111111111111111111111111111112";
 
@@ -191,6 +192,24 @@ async function request(
   }
 }
 
+/** An instruction as Jupiter's swap-instructions endpoint returns it. */
+interface JupiterInstruction {
+  programId: string;
+  accounts: { pubkey: string; isSigner: boolean; isWritable: boolean }[];
+  /** Base64. */
+  data: string;
+}
+
+function fromJupiterInstruction(ix: JupiterInstruction): InstructionSpec {
+  if (typeof ix?.programId !== "string" || !Array.isArray(ix.accounts) || typeof ix.data !== "string")
+    throw new Error("Jupiter swap instructions: malformed instruction");
+  return {
+    programId: ix.programId,
+    accounts: ix.accounts.map((a) => ({ pubkey: a.pubkey, writable: !!a.isWritable, signer: !!a.isSigner })),
+    data: [...Buffer.from(ix.data, "base64")],
+  };
+}
+
 export class JupiterSwapClient implements SwapClient {
   private readonly baseUrl: string;
   private readonly headers: Record<string, string>;
@@ -278,6 +297,61 @@ export class JupiterSwapClient implements SwapClient {
     return {
       transaction: Uint8Array.from(Buffer.from(out.swapTransaction, "base64")),
       lastValidBlockHeight: typeof out.lastValidBlockHeight === "number" ? out.lastValidBlockHeight : null,
+    };
+  }
+
+  /**
+   * The quote's swap as separate instructions (/swap/v1/swap-instructions) rather than a whole
+   * transaction, for a caller that assembles its own: the Pro trades add their own priority fee
+   * and a Helius Sender tip, which Jupiter's built transaction has no room for. Jupiter's own
+   * compute-budget instructions are left out (the caller sets the price); its unit limit, from
+   * its own simulation, is returned.
+   */
+  async swapInstructions(input: { quote: SwapQuote; userPublicKey: string }): Promise<{
+    instructions: InstructionSpec[];
+    lookupTables: string[];
+    computeUnitLimit: number | null;
+  }> {
+    const res = await request(
+      this.fetchImpl,
+      `${this.baseUrl}/swap/v1/swap-instructions`,
+      {
+        method: "POST",
+        headers: { ...this.headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          quoteResponse: input.quote,
+          userPublicKey: input.userPublicKey,
+          wrapAndUnwrapSol: true,
+          dynamicComputeUnitLimit: true,
+          dynamicSlippage: false,
+        }),
+      },
+      "Jupiter swap instructions",
+    );
+    const out = (await res.json()) as {
+      setupInstructions?: JupiterInstruction[];
+      swapInstruction?: JupiterInstruction;
+      cleanupInstruction?: JupiterInstruction | null;
+      otherInstructions?: JupiterInstruction[];
+      tokenLedgerInstruction?: JupiterInstruction | null;
+      addressLookupTableAddresses?: string[];
+      computeUnitLimit?: number;
+      error?: string;
+    };
+    if (!out.swapInstruction) throw new Error(`Jupiter swap instructions: ${out.error ?? "none returned"}`);
+    if (out.tokenLedgerInstruction)
+      throw new Error("Jupiter swap instructions: token ledger routes aren't used");
+    const list = [
+      ...(out.otherInstructions ?? []),
+      ...(out.setupInstructions ?? []),
+      out.swapInstruction,
+      ...(out.cleanupInstruction ? [out.cleanupInstruction] : []),
+    ];
+    return {
+      instructions: list.map(fromJupiterInstruction),
+      lookupTables: Array.isArray(out.addressLookupTableAddresses) ? out.addressLookupTableAddresses : [],
+      computeUnitLimit:
+        typeof out.computeUnitLimit === "number" && out.computeUnitLimit > 0 ? out.computeUnitLimit : null,
     };
   }
 

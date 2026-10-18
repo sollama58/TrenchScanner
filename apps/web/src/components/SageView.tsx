@@ -473,16 +473,16 @@ const NARRATIVE_VERDICT: Record<
   SageNarrative["verdict"],
   { text: string; tone: "good" | "warn"; line: string }
 > = {
-  calls: { text: "Calls it", tone: "good", line: "The Narrative model called this coin." },
+  calls: { text: "Flags it", tone: "good", line: "The Narrative model alerted on this coin." },
   agrees: {
     text: "Agrees",
     tone: "good",
-    line: "Another model called this coin, and the Narrative model would have called it too.",
+    line: "Another model alerted on this coin, and the Narrative model would have flagged it too.",
   },
   warns: {
     text: "Warns",
     tone: "warn",
-    line: "Another model called this coin; the Narrative model would not have.",
+    line: "Another model alerted on this coin; the Narrative model would not have.",
   },
 };
 
@@ -502,12 +502,12 @@ export function NarrativeCard({ narrative: n }: { narrative: SageNarrative }) {
       <p className="small">
         {v.line}{" "}
         {n.calibratedPct !== null
-          ? `Its past calls ranked like this one doubled ${Math.round(n.calibratedPct)}% of the time.`
+          ? `Its past alerts ranked like this one doubled ${Math.round(n.calibratedPct)}% of the time.`
           : `It gave it a ${Math.round(n.probabilityPct)}% chance to double.`}
       </p>
       <div className="sage-why">
         <div>
-          <span className="sage-why-head tone-good">Pushed toward a call</span>
+          <span className="sage-why-head tone-good">Pushed toward an alert</span>
           {n.for.length > 0 ? (
             <ul>
               {n.for.map((f) => (
@@ -1180,19 +1180,19 @@ function TrackChart({ track }: { track: SageTrack }) {
         {name} coins this week
         {mine.g > 0 && (
           <span className="sage-tag tone-neutral">
-            {pct0(mine.w / mine.g)} of {mine.g} calls 2x&apos;d
-            {all.g > 0 ? ` · all calls ${pct0(all.w / all.g)}` : ""}
+            {pct0(mine.w / mine.g)} of {mine.g} alerts 2x&apos;d
+            {all.g > 0 ? ` · all alerts ${pct0(all.w / all.g)}` : ""}
           </span>
         )}
       </h4>
       <p className="small muted">
         {count(mine.n)} {name.toLowerCase()} coins read this week. Each day: the share of the models&apos;
-        graded calls that doubled, on {name.toLowerCase()} coins and on all coins.
+        graded alerts that doubled, on {name.toLowerCase()} coins and on all coins.
       </p>
       <div
         className="sage-track"
         role="img"
-        aria-label={`Daily 2x rate of calls on ${name} coins and all coins`}
+        aria-label={`Daily 2x rate of alerts on ${name} coins and all coins`}
       >
         <div className="sage-track-axis faint small">
           <span>{pct0(top)}</span>
@@ -1205,12 +1205,12 @@ function TrackChart({ track }: { track: SageTrack }) {
                 <span
                   className="sage-track-fill s1"
                   style={{ height: r.a === null ? 0 : `${Math.max(2, (r.a / top) * 100)}%` }}
-                  title={`${dayText(r.day)} · ${name}: ${r.d.graded ? `${r.d.won2x} of ${r.d.graded} graded calls doubled (${pct0(r.a!)})` : "no graded calls"}`}
+                  title={`${dayText(r.day)} · ${name}: ${r.d.graded ? `${r.d.won2x} of ${r.d.graded} graded alerts doubled (${pct0(r.a!)})` : "no graded alerts"}`}
                 />
                 <span
                   className="sage-track-fill s2"
                   style={{ height: r.b === null ? 0 : `${Math.max(2, (r.b / top) * 100)}%` }}
-                  title={`${dayText(r.day)} · all coins: ${r.all.graded ? `${r.all.won2x} of ${r.all.graded} graded calls doubled (${pct0(r.b!)})` : "no graded calls"}`}
+                  title={`${dayText(r.day)} · all coins: ${r.all.graded ? `${r.all.won2x} of ${r.all.graded} graded alerts doubled (${pct0(r.b!)})` : "no graded alerts"}`}
                 />
               </div>
               <span className="sage-track-x faint small">{dayText(r.day)}</span>

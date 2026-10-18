@@ -154,7 +154,7 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     const { code } = await issueTelegramLinkCode(userId);
     await handleTelegramUpdate(api, message(chatId, `/start ${code}`), { now: tick });
     await handleTelegramUpdate(api, message(chatId, "/status"), { now: tick });
-    expect(api.sent()[2]!.text).toContain("Sending filter matches and model calls");
+    expect(api.sent()[2]!.text).toContain("Sending filter matches and model alerts");
     expect((await handleTelegramUpdate(api, message(chatId, "/stop"), { now: tick })).action).toBe(
       "unlinked",
     );
@@ -574,7 +574,9 @@ describe.skipIf(!dbAvailable)("telegram updates", () => {
     expect(
       (await handleTelegramUpdate(api, message(superId, "/status", "supergroup"), { now: tick })).action,
     ).toBe("status");
-    expect(api.sent().at(-1)!.text).toContain("Linked to wallet");
+    // A group is never shown whose wallet it is linked to: its members are anyone.
+    expect(api.sent().at(-1)!.text).toContain("Linked to a TrenchScanner account");
+    expect(api.sent().some((m) => m.text.includes("Linked to wallet"))).toBe(false);
   });
 
   it("lets only a group admin change /settings in a group, by button or /mincap", async () => {

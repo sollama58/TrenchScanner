@@ -15,6 +15,7 @@ export * from "./venueAccounts.js";
 export * from "./stonksFees.js";
 export * from "./liveMarketData.js";
 export * from "./notify.js";
+export * from "./walletTag.js";
 
 export * from "./datasources/httpClient.js";
 export * from "./datasources/dexscreener.js";

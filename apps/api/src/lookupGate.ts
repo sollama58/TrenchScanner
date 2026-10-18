@@ -34,6 +34,18 @@ export async function walletOnFeed(wallet: string): Promise<boolean> {
   return (await seenWallets([wallet])).has(wallet);
 }
 
+/** How long the TRADES panel lists a trade (routes/proTrades.ts), and so how long it opens the coin. */
+const TRADED_MINT_MS = 30 * 86_400_000;
+
+/** Whether the wallet's own trades (ProTrade, the TRADES panel) include the mint lately. */
+export async function tradedMint(wallet: string, mint: string, now = Date.now()): Promise<boolean> {
+  const row = await prisma.proTrade.findFirst({
+    where: { wallet, mint, at: { gt: new Date(now - TRADED_MINT_MS) } },
+    select: { at: true },
+  });
+  return row !== null;
+}
+
 /**
  * Lets the request through (returns true), or answers 402 with code "lookup_required" and the
  * lookup's price, so the dashboard can point at the Utilities tab.
@@ -50,6 +62,9 @@ export async function allowLookupRead(
   const onFeed = utility === "token" ? await mintOnFeed(subject) : await walletOnFeed(subject);
   if (onFeed) return true;
   if (await openLookup(reader, utility, subject)) return true;
+  // A coin the reader traded with Pro Mode: the TRADES panel scanned it on the entry, and its
+  // card opens the token modal for as long as the trade is listed there (routes/proTrades.ts).
+  if (utility === "token" && (await tradedMint(reader, subject))) return true;
   const cost = (await burnCreditPrices()).cost[utility];
   const what = utility === "token" ? "coin" : "wallet";
   await reply.code(402).send({

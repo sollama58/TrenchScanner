@@ -884,7 +884,7 @@ function SideRows({ kol, kolName, period, items, coins, transfers, bundle, pinne
               {s?.risk?.winner && (
                 <span
                   className="pill"
-                  title="Winner: 60%+ of the called coins it bought doubled. Presence only, not a buy signal."
+                  title="Winner: 60%+ of the alerted coins it bought doubled. Presence only, not a buy signal."
                 >
                   Winner
                 </span>

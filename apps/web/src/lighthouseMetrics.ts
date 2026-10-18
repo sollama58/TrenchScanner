@@ -21,7 +21,7 @@ export interface Metric {
   id: MetricId;
   label: string;
   /** The group the picker lists it under. */
-  group: "Screened field" | "Model calls" | "TokenSage";
+  group: "Screened field" | "Model alerts" | "TokenSage";
   unit: Unit;
   /** A goal line drawn with it: the 2x and 4x targets. */
   target?: "2x" | "4x";
@@ -78,24 +78,24 @@ export const METRICS = [
   },
   {
     id: "calls2x",
-    label: "2x rate, model calls",
-    group: "Model calls",
+    label: "2x rate, model alerts",
+    group: "Model alerts",
     unit: "pct",
     target: "2x",
     value: (s) => rate(s.alerts.won2x, s.alerts.graded),
   },
   {
     id: "calls4x",
-    label: "4x rate, model calls",
-    group: "Model calls",
+    label: "4x rate, model alerts",
+    group: "Model alerts",
     unit: "pct",
     target: "4x",
     value: (s) => rate(s.alerts.won4x, s.alerts.graded),
   },
   {
     id: "calls10x",
-    label: "10x rate, model calls",
-    group: "Model calls",
+    label: "10x rate, model alerts",
+    group: "Model alerts",
     unit: "pct",
     // Over the calls whose 10x verdict is in, like the screened side: a clean 2x winner whose
     // 10x hour is still open is not a miss yet. Older sums without the count fall back to graded.
@@ -103,16 +103,16 @@ export const METRICS = [
   },
   {
     id: "callsReturn",
-    label: "Avg return, model calls",
-    group: "Model calls",
+    label: "Avg return, model alerts",
+    group: "Model alerts",
     unit: "ret",
     value: (s) => mean(s.alerts.returnSum, s.alerts.returnN),
   },
-  { id: "calls", label: "Model calls", group: "Model calls", unit: "count", value: (s) => s.alerts.total },
+  { id: "calls", label: "Model alerts", group: "Model alerts", unit: "count", value: (s) => s.alerts.total },
   {
     id: "callsGraded",
-    label: "Model calls graded",
-    group: "Model calls",
+    label: "Model alerts graded",
+    group: "Model alerts",
     unit: "count",
     value: (s) => s.alerts.graded,
   },
@@ -187,8 +187,8 @@ export type Panel =
 export const BREAKDOWN_MODES: { id: BreakdownMode; label: string; unit: Unit; kind: ChartKind }[] = [
   { id: "count", label: "Coins read", unit: "count", kind: "bars" },
   { id: "share", label: "Share of coins read", unit: "pct", kind: "line" },
-  { id: "calls", label: "Model calls", unit: "count", kind: "bars" },
-  { id: "rate2x", label: "2x rate of model calls", unit: "pct", kind: "line" },
+  { id: "calls", label: "Model alerts", unit: "count", kind: "bars" },
+  { id: "rate2x", label: "2x rate of model alerts", unit: "pct", kind: "line" },
 ];
 
 export const DIMENSIONS: { id: LighthouseDimension; label: string }[] = [
@@ -249,15 +249,15 @@ export const PRESETS: { label: string; make: () => Panel }[] = [
     make: () => ({ id: panelId(), kind: "bars", metrics: ["fieldReturn", "callsReturn"] }),
   },
   {
-    label: "Model calls against the field",
+    label: "Model alerts against the field",
     make: () => ({ id: panelId(), kind: "line", metrics: ["calls2x", "field2x"] }),
   },
   {
-    label: "How many calls the models make",
+    label: "How many alerts the models raise",
     make: () => ({ id: panelId(), kind: "bars", metrics: ["calls", "fieldCalls"] }),
   },
   {
-    label: "Coins read and model calls",
+    label: "Coins read and model alerts",
     make: () => ({ id: panelId(), kind: "bars", metrics: ["coinsRead", "calls"] }),
   },
   {
@@ -277,11 +277,11 @@ export const PRESETS: { label: string; make: () => Panel }[] = [
     make: () => ({ id: panelId(), kind: "line", breakdown: "share", dimension: "category" }),
   },
   {
-    label: "Breakdown: model calls",
+    label: "Breakdown: model alerts",
     make: () => ({ id: panelId(), kind: "bars", breakdown: "calls", dimension: "category" }),
   },
   {
-    label: "Breakdown: 2x rate of model calls",
+    label: "Breakdown: 2x rate of model alerts",
     make: () => ({ id: panelId(), kind: "line", breakdown: "rate2x", dimension: "category" }),
   },
   { label: "Empty chart", make: () => ({ id: panelId(), kind: "line", metrics: [] }) },
@@ -506,10 +506,10 @@ export function historyCsv(h: LighthouseHistory): string {
     "screened_won10x",
     "coins_read",
     "failed_reads",
-    "model_calls",
-    "model_calls_graded",
-    "model_calls_won2x",
-    "model_calls_won4x",
+    "model_alerts",
+    "model_alerts_graded",
+    "model_alerts_won2x",
+    "model_alerts_won4x",
   ];
   const cell = (v: number | null) => (v === null ? "" : Number.isInteger(v) ? String(v) : v.toFixed(2));
   const rows = h.series.map((s) =>

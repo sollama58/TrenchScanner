@@ -112,7 +112,7 @@ describe("alert style", () => {
   it("lays a compact card out in a few lines", () => {
     const html = formatAlert(card, links, NOW, undefined, alertStyle({ layout: "compact" }));
     expect(html.split("\n").slice(0, 4)).toEqual([
-      "🟢 <b>$DOGE</b>  ·  <i>Atlas called it and your filter caught it</i>",
+      "🟢 <b>$DOGE</b>  ·  <i>Atlas flagged it and your filter caught it</i>",
       "💰 MC <b>$45.2k</b>  ·  👥 <b>130</b> holders  ·  📊 Vol 1h <b>$22.0k</b>  ·  ⏱ 9m old",
       "🤖 <b>Atlas</b> <b>72%</b> 🔥  ·  58% like it 2x'd",
       "🎯 “Mine” <b>74</b>",

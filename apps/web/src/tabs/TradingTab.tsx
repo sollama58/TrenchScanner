@@ -310,7 +310,7 @@ function BotOff({ status }: { status: TradingStatus }) {
           <div>
             <dt>AI judge</dt>
             <dd className="small">
-              {d.sources.requireAiBuy ? "Buys only on its buy verdict" : "Not consulted"}
+              {d.sources.requireAiBuy ? "Buys only on its pass verdict" : "Not consulted"}
             </dd>
           </div>
           <div>
@@ -710,7 +710,7 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
               edit({ ...draft, sources: { ...draft.sources, highConvictionOnly: e.target.checked } })
             }
           />
-          Only high-conviction model calls
+          Only high-conviction model alerts
         </label>
         <label className="check">
           <input
@@ -720,7 +720,7 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
               edit({ ...draft, sources: { ...draft.sources, requireAiBuy: e.target.checked } })
             }
           />
-          Only buy what the AI judge calls a buy
+          Only buy what the AI judge passes
         </label>
         {draft.sources.requireAiBuy && (
           <label className="field">
@@ -739,7 +739,7 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
               }
             />
             <small className="faint">
-              A signal waits for its review while it is fresh. The judge reviews high-conviction picks, so
+              A signal waits for its review while it is fresh. The judge reviews high-conviction alerts, so
               filter matches it never reviews are not bought.
             </small>
           </label>
@@ -1352,10 +1352,10 @@ interface BacktestRow {
 }
 
 const BACKTEST_SLICES = [
-  ["all", "Every call"],
+  ["all", "Every alert"],
   ["high", "High conviction"],
-  ["aiBuy", "AI buy"],
-  ["highAiBuy", "High + AI buy"],
+  ["aiBuy", "AI pass"],
+  ["highAiBuy", "High + AI pass"],
 ] as const;
 
 /**
@@ -1401,7 +1401,7 @@ function BacktestPanel() {
           </span>
           <h2>Hit rate on 2x</h2>
           <p className="muted small">
-            Each model&apos;s graded calls: the share that doubled in the win window, and the average return
+            Each model&apos;s graded alerts: the share that doubled in the win window, and the average return
             under the default exit plan. The goal is 75% or better.
           </p>
         </div>
@@ -1418,7 +1418,7 @@ function BacktestPanel() {
       ) : !rows ? (
         <Skeleton lines={3} />
       ) : rows.length === 0 ? (
-        <p className="muted small">No graded model calls in this window yet.</p>
+        <p className="muted small">No graded model alerts in this window yet.</p>
       ) : (
         <div style={{ overflowX: "auto" }}>
           <table className="small">
@@ -1792,7 +1792,7 @@ function PaperStrategyCard({
             {following.length > 0
               ? `Follows ${following.join(", ")}`
               : "Follows nothing yet: pick sources in Settings"}
-            {s.config.sources.requireAiBuy ? ", AI buys only" : ""}. {s.config.buySol} SOL a buy.{" "}
+            {s.config.sources.requireAiBuy ? ", AI-passed signals only" : ""}. {s.config.buySol} SOL a buy.{" "}
             {s.lastRunAt ? `Last pass ${ago(s.lastRunAt, now)}.` : ""}
           </p>
           {s.lastError && <p className="error small">{s.lastError}</p>}

@@ -188,7 +188,7 @@ export function TopHolders({
                         className="tm-tag k-risky"
                         title={
                           h.dumps !== null
-                            ? `Sold into the stop on ${h.dumps} of its called coins`
+                            ? `Sold into the stop on ${h.dumps} of its alerted coins`
                             : undefined
                         }
                       >
@@ -260,7 +260,7 @@ export function TopHolders({
               ? "Pool aside. Who funded these holders isn't checked yet, so none are grouped into clusters."
               : "Pool aside. The dot is the holder's cluster in the bubble map; grey is linked to no other holder."}
             {Object.keys(entries).length === 0 &&
-              " How each holder got in shows once the coin's trades are read, which happens for called coins."}
+              " How each holder got in shows once the coin's trades are read, which happens for alerted coins."}
             {total > 0 &&
               graph.linkedPct !== null &&
               (graph.linkedCount

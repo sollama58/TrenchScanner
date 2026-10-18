@@ -226,7 +226,7 @@ export function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
                 : permission === "denied"
                   ? "Notifications are blocked for this site. Allow them in your browser's site settings, then come back."
                   : notifyLive
-                    ? "On. Each new alert pops up with the token and who called it; click it to come back here."
+                    ? "On. Each new alert pops up with the token and what flagged it; click it to come back here."
                     : permission === "granted"
                       ? "Off. Allowed by your browser; turn this on to get one for each new alert."
                       : "Your browser will ask for permission when you turn this on."}
@@ -247,7 +247,7 @@ export function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
                 checked={prefs.notifyOn.modelCalls}
                 onChange={() => save({ notifyOn: { modelCalls: !prefs.notifyOn.modelCalls } })}
               />
-              Calls from the models in my feed
+              Alerts from the models in my feed
             </label>
           </fieldset>
         </div>
@@ -303,7 +303,7 @@ export function ModelPanel({
           <span className="eyebrow">
             <BrainIcon size={13} /> Preferred model
           </span>
-          <h2>Which model&apos;s calls you get</h2>
+          <h2>Which model&apos;s alerts you get</h2>
         </div>
       </header>
       {!board ? (
@@ -366,7 +366,7 @@ export function ModelPanel({
                     <small className="faint num">
                       {pct(e.composite.live.winRatePct, 1)} 2x ·{" "}
                       {signedPct(e.composite.live.avgSimReturnPct, 1)} avg return · {e.composite.live.graded}{" "}
-                      graded calls over {board.window.days} days
+                      graded alerts over {board.window.days} days
                     </small>
                   </li>
                 ))}
@@ -375,7 +375,7 @@ export function ModelPanel({
             <small className="faint">
               {board.champion
                 ? `Best performer chosen ${ago(board.champion.chosenAt, now)}. ${board.champion.reason}`
-                : "Best performer not chosen from live results yet: until a model has enough graded live calls, the default is the Consensus when it can call, else Rules."}
+                : "Best performer not chosen from live results yet: until a model has enough graded live alerts, the default is the Consensus when it can alert, else Rules."}
             </small>
           </div>
           <FeedCompareBox board={board} />
@@ -384,9 +384,9 @@ export function ModelPanel({
               The top models are the {rule.count} with the best{" "}
               {rule.rankedBy === "2x-lower-bound" ? "2x lower bound" : "ranking"} over the last{" "}
               {rule.rankWindowHours} hours among those with {rule.rankMinGraded ?? rule.minGraded} graded
-              calls there, plus the best performer when it isn&apos;t among them.
+              alerts there, plus the best performer when it isn&apos;t among them.
               {board.champion &&
-                ` The best performer is the model with the best score on the full scorecard (2x, 4x and 10x rates, average return and run size) over the last 72 hours. It needs ${board.champion.minLiveGraded} graded live calls there, and has to beat the current one by ${board.champion.margin} scorecard points (out of 100) to take over.`}
+                ` The best performer is the model with the best score on the full scorecard (2x, 4x and 10x rates, average return and run size) over the last 72 hours. It needs ${board.champion.minLiveGraded} graded live alerts there, and has to beat the current one by ${board.champion.margin} scorecard points (out of 100) to take over.`}
             </p>
           )}
         </div>
@@ -401,7 +401,7 @@ export function ModelPanel({
  * the two weeks before it are re-scored from each coin's trades (exitPlanRescore.ts in the worker).
  */
 const EARLIER_PLAN_NOTE =
-  " Calls from 3 to 17 October are re-scored under this plan from each coin's own trades; calls the trades can't cover, and older ones, keep the earlier plan's return.";
+  " Alerts from 3 to 17 October are re-scored under this plan from each coin's own trades; alerts the trades can't cover, and older ones, keep the earlier plan's return.";
 
 /** One row of the comparison: a figure for each feed and how yours differs. */
 const COMPARE_ROWS: {
@@ -414,7 +414,7 @@ const COMPARE_ROWS: {
   neutral?: boolean;
 }[] = [
   {
-    label: "Calls a day",
+    label: "Alerts a day",
     value: (r, days) => (days > 0 ? r.calls / days : null),
     show: (v) => (v === null ? "–" : v.toFixed(v < 10 ? 1 : 0)),
     diff: (d) => `${d > 0 ? "+" : ""}${d.toFixed(Math.abs(d) < 10 ? 1 : 0)}`,
@@ -475,7 +475,7 @@ function FeedCompareBox({ board }: { board: Leaderboard }) {
           <small className="faint">
             {data.same
               ? `Your feed is the top models, so this is what it delivered over the last ${data.days} days, each token once.${EARLIER_PLAN_NOTE}`
-              : `Each side as one feed over the last ${data.days} days, each token once, so overlapping calls aren't counted twice. Differences are yours minus the top models', in points for rates.${EARLIER_PLAN_NOTE}`}
+              : `Each side as one feed over the last ${data.days} days, each token once, so overlapping alerts aren't counted twice. Differences are yours minus the top models', in points for rates.${EARLIER_PLAN_NOTE}`}
           </small>
           <table className="feed-compare-table num">
             <thead>
@@ -511,7 +511,7 @@ function FeedCompareBox({ board }: { board: Leaderboard }) {
                 );
               })}
               <tr className="feed-compare-graded">
-                <th scope="row">Graded calls</th>
+                <th scope="row">Graded alerts</th>
                 <td>{data.best.graded}</td>
                 {!data.same && <td>{data.mine.graded}</td>}
                 {!data.same && <td />}

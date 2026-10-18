@@ -1,7 +1,7 @@
 // Must precede the @trenchscanner/core import - constructing PrismaClient reads DATABASE_URL.
 import "../bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
-import { prisma, loadEnv, type ScoredToken } from "@trenchscanner/core";
+import { prisma, loadEnv, WALLET_RISK_PERCENTILE_SINCE, type ScoredToken } from "@trenchscanner/core";
 import type { MessageBatchIndividualResponse } from "@anthropic-ai/sdk/resources/messages/batches";
 import { loadReplayItems, replayedMarket, replayVerdictRow } from "./replay.js";
 import { recordCandidateSample } from "../jobs/candidateOutcomeJob.js";
@@ -167,8 +167,11 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
   });
 
   it("prints the wallet figures the live brief printed: funding-only bundles, no raw risk score as a percentile", async () => {
-    // Banked before walletRiskTop10Max became a percentile (no walletRiskScoredTop10).
-    const alertId = await gradedRow("wallets", 30 * 60, 1, true, 150_000);
+    // Banked before walletRiskTop10Max became a percentile (no walletRiskScoredTop10): an hour
+    // before the switch, however long ago that is now (a fixed 30 hours stopped being "before"
+    // at 2026-10-18 01:30 UTC).
+    const minutesAgo = Math.ceil((Date.now() - WALLET_RISK_PERCENTILE_SINCE.getTime()) / 60_000) + 60;
+    const alertId = await gradedRow("wallets", minutesAgo, 1, true, 150_000);
     const row = await prisma.candidateOutcome.findUniqueOrThrow({ where: { id: alertId } });
     await prisma.candidateOutcome.update({
       where: { id: alertId },
@@ -186,7 +189,7 @@ describe.skipIf(!dbAvailable)("loadReplayItems", () => {
       },
     });
     const items = await loadReplayItems(env, {
-      from: new Date(Date.now() - 31 * 60 * 60_000),
+      from: new Date(Date.now() - (minutesAgo + 60) * 60_000),
       to: new Date(),
       take: 50,
     });

@@ -434,9 +434,10 @@ export async function trainCuratorModel(
     return trainWinModel(rows, { ...opts, runWeightPerDoubling: CATCH_RUN_WEIGHT_PER_DOUBLING });
   const base = await trainWinModel(rows, opts);
   if (goal !== "return" && goal !== "safe") return base;
-  // A model fitted to the return itself already prices the crash: a second, crash-risk model on
-  // top would count it twice.
-  if (opts.learner === "gbdt" && opts.boosting?.objective === "return") return base;
+  // A model fitted to the return itself (or weighted by it) already prices the crash: a second,
+  // crash-risk model on top would count it twice.
+  const objective = opts.boosting?.objective;
+  if (opts.learner === "gbdt" && (objective === "return" || objective === "payoff")) return base;
   const returnRisk = await trainReturnRisk(rows, opts, goal === "safe" ? SAFE_LOSS_AVERSION : 1);
   return returnRisk ? { ...base, returnRisk } : base;
 }

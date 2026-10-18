@@ -65,10 +65,12 @@ import {
   SniperTile,
   WalletStat,
 } from "./AlertCard";
-import { PriceChart, type ChartEvent } from "./PriceChart";
 import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
 import { CustomizeDrawer } from "./CustomizeDrawer";
 import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
+import { PriceChart, type ChartEvent, type ChartTrade } from "./PriceChart";
+import { TradePanel, solText, tokensText } from "./TradePanel";
+import { graceLeftText, summarizePosition, usePosition, useProState } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
 import {
   categoryText,
@@ -168,7 +170,7 @@ const RANGES: { id: Range; label: string; title?: string }[] = [
   {
     id: "model",
     label: "Model View",
-    title: "Up to 5 minutes either side of the call: what the model had to go on, and what came next",
+    title: "Up to 5 minutes either side of the alert: what the model had to go on, and what came next",
   },
   {
     id: "first",
@@ -493,9 +495,9 @@ function SafetyPill({ verdict, onClick }: { verdict: SafetyVerdict; onClick?: ()
 }
 
 /** The chart's place while it loads, the height the chart will take. */
-function ChartSkeleton({ children }: { children: ReactNode }) {
+function ChartSkeleton({ children, height }: { children: ReactNode; height?: number }) {
   return (
-    <div className="tm-chart-skeleton" style={{ height: chartBoxHeight() }}>
+    <div className="tm-chart-skeleton" style={{ height: height ?? chartBoxHeight() }}>
       <LoadingNote className="tm-skel-note" slow="Still loading the chart…">
         {children}
       </LoadingNote>
@@ -504,8 +506,11 @@ function ChartSkeleton({ children }: { children: ReactNode }) {
 }
 
 /** The chart's plot height for this window, and the whole box it draws (axis and volume lane included). */
-function chartHeight(): number {
-  return window.innerWidth <= 640 ? 180 : 220;
+function chartHeight(expanded = false): number {
+  const phone = window.innerWidth <= 640;
+  // Pro Mode's bigger chart, while trading or holding the coin: room for the trade marks.
+  if (expanded) return phone ? 260 : 380;
+  return phone ? 180 : 220;
 }
 function chartBoxHeight(): number {
   return chartHeight() + CHART_CHROME_PX;
@@ -548,7 +553,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
     : card.kind === "stream"
       ? "Passed screen"
       : card.kind === "curated"
-        ? "Called"
+        ? "Model alert"
         : "Alert";
   // One poll for the chart and the wallet sections that read the same answer.
   /** The lookup's fresh scan (holders, safety checks) is still on its way. */
@@ -800,7 +805,7 @@ function TokenBody({ card, now, onClose }: { card: Card; now: number; onClose: (
       </section>
 
       <section id={`${ids}-call`} className="tm-group" aria-labelledby={`${ids}-call-h`}>
-        <GroupLabel id={`${ids}-call-h`}>{utility ? "Market" : "The call"}</GroupLabel>
+        <GroupLabel id={`${ids}-call-h`}>{utility ? "Market" : "The alert"}</GroupLabel>
         {utility ? (
           // A lookup has no call to explain: the numbers take the full width.
           <StatsCard card={card} />
@@ -876,7 +881,7 @@ function ScanProgress({ steps, since }: { steps: { label: string; done: boolean 
 const SECTIONS = [
   { id: "chart", label: "Chart" },
   { id: "holders", label: "Holders" },
-  { id: "call", label: "The call" },
+  { id: "call", label: "The alert" },
   { id: "dev", label: "Dev" },
   { id: "safety", label: "Safety" },
   { id: "sage", label: "TokenSage" },
@@ -1091,12 +1096,12 @@ function holdersMoment(card: Card, reading: Snapshot | null | undefined) {
     ? {
         label: "At the alert",
         title:
-          "The alert's reading, the same one The call shows. Counts are over the top holders it read (the /25 or /10).",
+          "The reading at the alert, the same one The alert section shows. Counts are over the top holders it read (the /25 or /10).",
       }
     : {
         label: "Now",
         title:
-          "The latest scan's reading, not the alert's: The call below shows the holders at the alert. Counts are over the top holders this scan read (the /25 or /10), which can be a different set.",
+          "The latest scan's reading, not the alert's: The alert section below shows the holders at the alert. Counts are over the top holders this scan read (the /25 or /10), which can be a different set.",
       };
 }
 
@@ -1153,8 +1158,8 @@ interface HoldersOption {
  * (alertWideMap). A kept moment draws its own top 25 alone. A coin with none of them has only Now.
  */
 function useHoldersView(card: Card, linked: Snapshot | null | undefined, alertAt: number, utility: boolean) {
-  /** What the moment is called: a model's call, or a filter's alert. */
-  const word: "call" | "alert" = card.kind === "curated" ? "call" : "alert";
+  /** What the moment is named in the holders text: a model's alert and a filter's both read "alert". */
+  const word = "alert";
   const maps = useBubbleMaps(card.token.mintAddress);
   const [picked, setPicked] = useState<HoldersView>(lastHoldersView);
   const s = card.snapshot;
@@ -1202,8 +1207,8 @@ function useHoldersView(card: Card, linked: Snapshot | null | undefined, alertAt
         ? {
             label: `At the ${word}`,
             title: frozen
-              ? `The holders as they stood at the ${word}: the top 50 read ${fromAlertText(Date.parse(frozen.readAt), alertAt, word)}, kept and never updated. Counts are the ${word}'s own scan (the /25), the same numbers The call shows.`
-              : `The holders the ${word}'s scan read, kept as they stood: the same reading The call shows.`,
+              ? `The holders as they stood at the ${word}: the top 50 read ${fromAlertText(Date.parse(frozen.readAt), alertAt, word)}, kept and never updated. Counts are the ${word}'s own scan (the /25), the same numbers The alert section shows.`
+              : `The holders the ${word}'s scan read, kept as they stood: the same reading The alert section shows.`,
           }
         : canSwitch
           ? {
@@ -1270,7 +1275,7 @@ function AlertHoldersWhen({
   reading,
 }: {
   alertAt: number;
-  word: "call" | "alert";
+  word: string;
   frozen: AlertWideMap | null;
   reading: Snapshot | null | undefined;
 }) {
@@ -1283,7 +1288,7 @@ function AlertHoldersWhen({
   return (
     <p className="tm-holders-when">
       <b>
-        {word === "call" ? "Called" : "Alerted"} {day}
+        Alerted {day}
         {hm(alertAt)}
       </b>{" "}
       ·{" "}
@@ -1354,12 +1359,32 @@ export function ChartCard({
   const api = useTokenApi(card.token.mintAddress);
   // Every token view opens on the coin's whole history; Model View is a click away.
   const [range, setRange] = useState<Range>("all");
-  const [height, setHeight] = useState(chartHeight);
+
+  // Pro Mode: the signed-in wallet's position in the coin and the Trade panel. Null for everyone
+  // else, so nothing of it is fetched or drawn without Pro Mode.
+  const proState = useProState();
+  const pro = proState?.wallet ?? null;
+  // Pro Mode ended: the panel only sells, and only shows for a coin the wallet holds.
+  const closeOnly = !!proState && !proState.pro;
+  const graceEndsAt = proState?.pro ? proState.graceEndsAt : null;
+  const mint = card.token.mintAddress;
+  const position = usePosition(pro ? mint : null);
+  const [trading, setTrading] = useState(false);
+  const [tradeOpened, setTradeOpened] = useState(false);
   useEffect(() => {
-    const onResize = () => setHeight(chartHeight());
+    if (trading) setTradeOpened(true);
+  }, [trading]);
+  const holds = !!position.data && BigInt(position.data.balance) > 0n;
+  const expanded = !!pro && (trading || holds);
+
+  // Read from the window on each render; a resize re-renders.
+  const [, setResized] = useState(0);
+  useEffect(() => {
+    const onResize = () => setResized((n) => n + 1);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+  const height = chartHeight(expanded);
 
   const events = useMemo<ChartEvent[]>(() => {
     const out: ChartEvent[] = [{ t: alertAt, label: what, mcap: alertMcap > 0 ? alertMcap : null }];
@@ -1391,7 +1416,11 @@ export function ChartCard({
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const labeled = data?.wallets ?? [];
-  const marks = useMemo(() => walletMarks(data?.wallets ?? [], markPrefs), [data?.wallets, markPrefs]);
+  // The trader's own wallet is drawn as their own arrows, whatever its labels.
+  const marks = useMemo(
+    () => walletMarks(data?.wallets ?? [], markPrefs, new Set(pro ? [pro] : [])),
+    [data?.wallets, markPrefs, pro],
+  );
 
   // The view's window over the minute data, before the finer reads that fill it in.
   const bounds = useMemo(
@@ -1490,6 +1519,25 @@ export function ChartCard({
     [data],
   );
 
+  const latestMcap = view?.live ? view.latest : (data?.marketCap.at(-1)?.usd ?? null);
+  const summary = useMemo(
+    () => (pro && position.data ? summarizePosition(position.data, latestMcap) : null),
+    [pro, position.data, latestMcap],
+  );
+  const chartTrades = useMemo<ChartTrade[]>(() => {
+    const p = position.data;
+    if (!pro || !p) return [];
+    const scale = 10 ** (p.decimals ?? 6);
+    return p.trades.flatMap((tr) => {
+      if (tr.side !== "buy" && tr.side !== "sell") return [];
+      const sol = Math.abs(Number(BigInt(tr.lamports))) / 1e9;
+      const tokens = Number(BigInt(tr.tokens)) / scale;
+      const what = tr.side === "buy" ? "You bought" : "You sold";
+      return [{ t: tr.t, side: tr.side, text: `${what} ${tokensText(tokens)} for ${solText(sol)}` }];
+    });
+  }, [pro, position.data]);
+  const entry = summary && summary.held > 0 ? summary.entryMcap : null;
+
   const streaming = shownRange !== "first" && isStreaming(tail);
   const locked = error && !data ? lockedText(error, "chart") : null;
   return (
@@ -1503,6 +1551,27 @@ export function ChartCard({
             </span>
           )}
           {streaming && <LiveBadge tail={tail} />}
+          {pro && (!closeOnly || holds || trading) && (
+            <button
+              type="button"
+              className={`tm-range tm-trade-toggle${trading ? " on" : ""}${graceEndsAt !== null ? " grace" : ""}`}
+              aria-pressed={trading}
+              aria-expanded={trading}
+              title={
+                closeOnly
+                  ? "Pro Mode has ended: you can still sell what you hold"
+                  : graceEndsAt !== null
+                    ? `Pro Mode ends in ${graceLeftText(graceEndsAt)}: your wallet left the top 250 $ASDFASDFA holders`
+                    : "Buy and sell this coin with your wallet (Pro Mode)"
+              }
+              onClick={() => setTrading(!trading)}
+            >
+              {closeOnly ? "Sell" : "Trade"}
+              {graceEndsAt !== null && (
+                <span className="tm-trade-grace num"> · {graceLeftText(graceEndsAt)} left</span>
+              )}
+            </button>
+          )}
           <span className="tm-ranges" role="group" aria-label="Chart range">
             {RANGES.filter((r) => (!utility || r.id !== "model") && (young || r.id !== "first")).map((r) => (
               <button
@@ -1540,7 +1609,9 @@ export function ChartCard({
             height={height}
           />
         )}
-        {shownRange !== "first" && !data && !error && <ChartSkeleton>Loading the chart…</ChartSkeleton>}
+        {shownRange !== "first" && !data && !error && (
+          <ChartSkeleton height={height + CHART_CHROME_PX}>Loading the chart…</ChartSkeleton>
+        )}
         {locked && (
           <p className="tm-locked muted small">
             <LockIcon size={14} /> {locked}
@@ -1568,6 +1639,8 @@ export function ChartCard({
               scans={view.scans}
               marks={marks}
               height={height}
+              trades={chartTrades}
+              entry={entry}
               ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
             />
             {shownRange === "model" && (
@@ -1576,12 +1649,45 @@ export function ChartCard({
                 {view.scans.length > 0
                   ? `${view.scans.length} scan${view.scans.length === 1 ? "" : "s"} the model read · `
                   : ""}
-                5 minutes either side of the call; shaded is after it, which the model never saw.
+                5 minutes either side of the alert; shaded is after it, which the model never saw.
               </p>
             )}
           </>
         )}
       </section>
+      {/* Mounted once opened and only hidden after, so a trade still confirming keeps its status. */}
+      {pro && (trading || tradeOpened) && (
+        <div hidden={!trading}>
+          <TradePanel
+            owner={pro}
+            mint={mint}
+            symbol={card.token.symbol ?? "tokens"}
+            position={position.data}
+            summary={summary}
+            onTraded={position.reload}
+            closeOnly={closeOnly}
+            graceEndsAt={graceEndsAt}
+          />
+        </div>
+      )}
+      {pro && !trading && holds && summary && (
+        <p className="small muted tm-trade-held">
+          You hold this coin
+          {summary.pnlSol !== null && (
+            <>
+              {" "}
+              ·{" "}
+              <span className={`num ${summary.pnlSol >= 0 ? "up" : "down"}`}>
+                {solText(summary.pnlSol, true)}
+              </span>
+            </>
+          )}
+          .{" "}
+          <button type="button" className="link" onClick={() => setTrading(true)}>
+            {closeOnly ? "Sell" : "Open Trade"}
+          </button>
+        </p>
+      )}
     </>
   );
 }
@@ -1844,7 +1950,7 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                             t === "linked" && w.funder
                               ? `Funded by ${walletText(w.funder, names)}, like other top holders`
                               : t === "dumper" && w.dumps !== null
-                                ? `Sold into the stop on ${w.dumps} of its called coins (4+, three quarters of them, 10+ coins on record)`
+                                ? `Sold into the stop on ${w.dumps} of its alerted coins (4+, three quarters of them, 10+ coins on record)`
                                 : t === "winner"
                                   ? `Sold 3 or more of the coins it bought at 2x or better for ${MIN_WIN_SOL}+ SOL profit, at least twice as often as the market, with 10+ coins on record`
                                   : t === "kol" && w.knownSideOf
@@ -1900,7 +2006,7 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
             </button>
           )}
           <p className="faint small tm-wallets-note">
-            Risky: a score of 70+ from selling into earlier calls&apos; stops. Linked: funded by the same
+            Risky: a score of 70+ from selling into earlier alerts&apos; stops. Linked: funded by the same
             wallet as other top holders. KOL: a known KOL&apos;s wallet. Winner: sells its coins at 2x or
             better for {MIN_WIN_SOL}+ SOL profit at least twice as often as the market. KOL and Winner mark
             presence only, not a buy signal. SOL is what each wallet put into and took out of this coin.
@@ -2139,7 +2245,7 @@ function ModelsRead({ mint, at }: { mint: string; at: number | null }) {
         How the models read it
         <span className="faint">
           {" "}
-          · {at !== null ? "at the call" : `scored ${ago(new Date(data.moment.at), Date.now())}`}
+          · {at !== null ? "at the alert" : `scored ${ago(new Date(data.moment.at), Date.now())}`}
         </span>
       </p>
       <ul className="tm-why-seats">
@@ -2148,12 +2254,12 @@ function ModelsRead({ mint, at }: { mint: string; at: number | null }) {
             <span className="tm-why-name">{x.name}</span>
             <span
               className="tm-why-rank small"
-              title="Where this coin ranked among the model's own scores of the last day, against the share it calls"
+              title="Where this coin ranked among the model's own scores of the last day, against the share it alerts on"
             >
               {x.topPct !== null && x.callsTopPct !== null ? (
                 <>
                   {x.calls ? "Over its line," : "Ranked it"} {topText(x.topPct)}
-                  <span className="faint"> · calls {topText(x.callsTopPct)}</span>
+                  <span className="faint"> · alerts on {topText(x.callsTopPct)}</span>
                 </>
               ) : x.calls ? (
                 "Over its line"
@@ -2202,10 +2308,10 @@ function CallCard({ card }: { card: Card }) {
         <h4>Why it&apos;s here</h4>
         <p className="small muted">
           {card.kind === "stream"
-            ? "It passed the safety screen inside the market-cap band. No model has called it."
+            ? "It passed the safety screen inside the market-cap band. No model has flagged it."
             : card.filter
-              ? `Your filter "${card.filter.name}" caught it. No model has called it.`
-              : "Your filter caught it. No model has called it."}
+              ? `Your filter "${card.filter.name}" caught it. No model has flagged it.`
+              : "Your filter caught it. No model has flagged it."}
         </p>
         <ModelsRead mint={card.token.mintAddress} at={null} />
       </section>
@@ -2227,7 +2333,7 @@ function CallCard({ card }: { card: Card }) {
   const ai = curated.aiReview;
   return (
     <section className="sage-card">
-      <h4>Why it was called</h4>
+      <h4>Why it was flagged</h4>
       <ul className="tm-calls">
         {calls.map((c, i) => (
           <li key={`${c.model ?? "m"}-${i}`}>
@@ -2238,7 +2344,7 @@ function CallCard({ card }: { card: Card }) {
             {typeof c.calibratedPct === "number" && (
               <span
                 className="muted small"
-                title="Of recent out-of-sample calls ranked like this one, the share that doubled within 15 minutes"
+                title="Of recent out-of-sample alerts ranked like this one, the share that doubled within 15 minutes"
               >
                 ≈{c.calibratedPct.toFixed(0)}% 2x
               </span>
@@ -2265,7 +2371,7 @@ function CallCard({ card }: { card: Card }) {
         <div className={`tm-ai ${ai.decision === "buy" ? "buy" : ai.decision === "no_buy" ? "nobuy" : ""}`}>
           <span className="tm-ai-head">
             <RobotIcon size={13} /> AI reviewer:{" "}
-            <strong>{ai.decision === "buy" ? "BUY" : ai.decision === "no_buy" ? "NO BUY" : "error"}</strong>
+            <strong>{ai.decision === "buy" ? "PASS" : ai.decision === "no_buy" ? "REJECT" : "error"}</strong>
             {ai.probability2x !== null && (
               <span className="muted"> · {(ai.probability2x * 100).toFixed(0)}% to 2x</span>
             )}

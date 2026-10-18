@@ -66,9 +66,9 @@ describe.skipIf(!dbAvailable)("free access", () => {
     await prisma.user.deleteMany({ where: { walletAddress: { in: wallets } } });
   });
 
-  /** A real sign-in: GET /auth/nonce, sign the message with the wallet's key, POST /auth/verify. */
+  /** A real sign-in: POST /auth/nonce, sign the message with the wallet's key, POST /auth/verify. */
   async function signIn(who: { kp: nacl.SignKeyPair; wallet: string }) {
-    const nonce = await app.inject({ method: "GET", url: `/auth/nonce?wallet=${who.wallet}` });
+    const nonce = await app.inject({ method: "POST", url: "/auth/nonce", payload: { wallet: who.wallet } });
     expect(nonce.statusCode).toBe(200);
     const { nonce: value, message } = nonce.json() as { nonce: string; message: string };
     const signature = bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), who.kp.secretKey));

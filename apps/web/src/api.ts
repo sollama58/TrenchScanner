@@ -125,6 +125,18 @@ export interface User {
   id: string;
   walletAddress: string;
   isAdmin: boolean;
+  /** Pro Mode (admins, an admin's grant, or the top 250 $ASDFASDFA holders): the token modal's Trade panel. */
+  isPro?: boolean;
+  proMode?: {
+    source: "admin" | "grant" | "holder" | "grace" | null;
+    /** May sell what it holds, Pro Mode or not (it had Pro Mode once). */
+    canClose: boolean;
+    rank?: number;
+    /** Out of the top 250 holders: when Pro Mode ends (ISO), unless it's back in by then. */
+    graceEndsAt?: string;
+    /** dropped: left the top 250. unconfirmed: the holder scans stopped and can't confirm it. */
+    graceReason?: "dropped" | "unconfirmed";
+  };
 }
 
 export interface Subscription {
@@ -1218,7 +1230,16 @@ export interface ModelProfile {
   reads: string;
   decides: string;
   method:
-    "formula" | "trees" | "deep-trees" | "forest" | "two-step" | "regression" | "team" | "rules" | "story";
+    | "formula"
+    | "trees"
+    | "deep-trees"
+    | "forest"
+    | "two-step"
+    | "regression"
+    | "scales"
+    | "team"
+    | "rules"
+    | "story";
   waitsFor: string | null;
   /** The share of decision moments its cutoff aims to call, in percent. */
   aimsToCallPct: number | null;
@@ -1701,7 +1722,7 @@ export const TELEGRAM_ALERT_PARTS = [
   { key: "volume", label: "Volume 1h" },
   { key: "age", label: "Token age" },
   { key: "conviction", label: "Model conviction" },
-  { key: "calibrated", label: "2x rate of calls like it" },
+  { key: "calibrated", label: "2x rate of alerts like it" },
   { key: "reasons", label: "Reasons" },
   { key: "filters", label: "Filter and score" },
   { key: "mint", label: "Mint address" },

@@ -79,6 +79,16 @@ function shortWallet(address: string): string {
   return address.length > 12 ? `${address.slice(0, 4)}…${address.slice(-4)}` : address;
 }
 
+/**
+ * Whose account a chat is linked to, as the bot says it in that chat. Only a private chat (the
+ * account holder's own) is shown the wallet, shortened: a group's members are anyone, and even
+ * 4+4 characters single out a subscriber among the wallets that burn the subscription mint (user
+ * ask 2026-10-18: our users' wallets are never exposed).
+ */
+function linkedAccount(address: string, isPrivate: boolean): string {
+  return isPrivate ? `wallet <code>${escapeHtml(shortWallet(address))}</code>` : "a TrenchScanner account";
+}
+
 /** "/start code" | "/start@Bot code" | "/link code" -> { command, arg, bot? }. */
 export function parseCommand(
   text: string | undefined,
@@ -267,12 +277,12 @@ export async function handleTelegramUpdate(
         );
         return { action: "status" };
       }
-      const what = [row.filterMatches ? "filter matches" : null, row.modelCalls ? "model calls" : null]
+      const what = [row.filterMatches ? "filter matches" : null, row.modelCalls ? "model alerts" : null]
         .filter(Boolean)
         .join(" and ");
       await api.sendMessage(
         chatId,
-        `Linked to wallet <code>${escapeHtml(shortWallet(row.user.walletAddress))}</code>. ` +
+        `Linked to ${linkedAccount(row.user.walletAddress, isPrivate)}. ` +
           (row.enabled ? `Sending ${what || "nothing (both switched off)"}.` : "Paused from the dashboard."),
       );
       return { action: "status" };
@@ -696,9 +706,9 @@ async function link(
   });
   await api.sendMessage(
     chatId,
-    `✅ Linked to wallet <code>${escapeHtml(shortWallet(result.walletAddress))}</code>. ` +
+    `✅ Linked to ${linkedAccount(result.walletAddress, !isGroup)}. ` +
       (isGroup ? "This group" : "This chat") +
-      " now gets that account's alerts: its filter matches and the calls of the models it picked for Telegram " +
+      " now gets that account's alerts: its filter matches and the alerts from the models it picked for Telegram " +
       "(the Live Feed's, unless it chose others). Choose which, pause, or unlink from the Filters tab.",
   );
   return { action: "linked" };
