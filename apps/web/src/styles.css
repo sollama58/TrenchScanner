@@ -5629,12 +5629,24 @@ html:has(dialog.about-modal[open]) {
 .meta-row > * {
   flex: 0 1 auto;
 }
-.meta-row > .pill-icon,
-.meta-row > .when {
+.meta-row > .pill-icon {
   flex: none;
 }
 .meta-row > .pill-calls {
   flex-shrink: 100;
+}
+/* "≈61% 2x" is short and means nothing cut. */
+.meta-row > .pill-rate {
+  flex: none;
+}
+.meta-row > .when {
+  flex: none;
+}
+/* High conviction: a filled mark beside the model pill, so neither is cut short. */
+.pill-conviction {
+  color: #fff;
+  border-color: var(--brand-a);
+  background: var(--brand-a);
 }
 .card-foot,
 .card-links {
@@ -7525,11 +7537,24 @@ html:has(dialog.about-modal[open]) {
     font-size: 14px;
     max-width: 100%;
   }
+  /* The high-conviction mark takes the rate's place: both don't fit. */
+  .cards[data-phone-cols="2"] .pill-conviction ~ .pill-rate {
+    display: none;
+  }
   .cards[data-phone-cols="2"] .token-name {
     display: none;
   }
   .cards[data-phone-cols="2"] .meta-row {
     gap: 4px;
+    overflow: hidden;
+  }
+  /* The time gives way at the card's edge rather than running past it. */
+  .cards[data-phone-cols="2"] .meta-row > .when {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .cards[data-phone-cols="2"] .pill {
     font-size: 10px;
@@ -9980,6 +10005,13 @@ html:has(dialog.about-modal[open]) {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: none;
+}
+/* The coin's X and website, beside the copy and Sage buttons. */
+.card-socials {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   flex: none;
 }
 /* Where the creator fee goes, in the theme's (or the reader's own) colors. */

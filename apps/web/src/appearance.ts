@@ -82,10 +82,9 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   // Experimental and off unless the reader turns it on (user ask 2026-10-18).
   chartPathing: false,
   // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
-  // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own), the header's
-  // "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
+  // fill a clean 4 x 2 grid, the header's "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
   // An account that saved its own field list keeps that list.
-  hidden: ["score", "sage", "calibrated", "snipers"],
+  hidden: ["score", "calibrated", "snipers"],
 };
 
 /** Trading sites a card can open the token in, as Settings lists them. */
@@ -153,7 +152,6 @@ export const CARD_FIELD_GROUPS: { title: string; fields: { id: CardField; label:
       { id: "mint", label: "Copy mint button" },
       { id: "links", label: "Dex / Pump links" },
       { id: "socials", label: "Website / X pills" },
-      { id: "sage", label: "TokenSage button" },
       { id: "fees", label: "Fees badge" },
     ],
   },
@@ -207,18 +205,7 @@ export const PRESETS: { id: string; label: string; hint: string; look: Partial<F
     hint: "Price boxes and the key wallet checks",
     look: {
       density: "compact",
-      hidden: [
-        "tokenName",
-        "calibrated",
-        "ath",
-        "score",
-        "holders",
-        "age",
-        "top10",
-        "snipers",
-        "mint",
-        "sage",
-      ],
+      hidden: ["tokenName", "calibrated", "ath", "score", "holders", "age", "top10", "snipers", "mint"],
       learningNote: false,
     },
   },
@@ -238,7 +225,7 @@ export const PRESETS: { id: string; label: string; hint: string; look: Partial<F
       phoneColumns: 2,
       textSize: 90,
       corners: "square",
-      hidden: ["tokenName", "calibrated", "score", "sage"],
+      hidden: ["tokenName", "calibrated", "score"],
     },
   },
 ];

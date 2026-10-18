@@ -15,6 +15,7 @@ import {
   usd,
 } from "../format";
 import {
+  BoltIcon,
   BrainIcon,
   ChefHatIcon,
   CheckIcon,
@@ -24,11 +25,9 @@ import {
   GlobeIcon,
   HeartIcon,
   RobotIcon,
-  SageIcon,
   SlidersIcon,
   XLogoIcon,
 } from "./Icons";
-import { openSage } from "../sage";
 import { linkedCount, linkedCountText } from "../bubbleMap";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
@@ -299,8 +298,15 @@ export function AlertCard({
             {curated &&
               show("conviction") &&
               (calls.some((c) => c.tier === "high") || curated.tier === "high") && (
-                <span className="pill pill-model" title="In the model's top half-percent of decision moments">
-                  <span className="pill-text">High conviction</span>
+                // A mark, not a worded pill: beside the model pill, the words squeezed both to "Hi…"
+                // (user report 2026-10-18).
+                <span
+                  className="pill pill-icon pill-conviction"
+                  role="img"
+                  title="High conviction: in the model's top half-percent of decision moments"
+                  aria-label="High conviction"
+                >
+                  <BoltIcon size={12} />
                 </span>
               )}
             {curated?.narrative && showNarrative && show("modelPill") && (
@@ -317,7 +323,7 @@ export function AlertCard({
             )}
             {curated && show("calibrated") && cardCalibratedRate(curated, calls) !== null && (
               <span
-                className="pill"
+                className="pill pill-rate"
                 title={`Of recent out-of-sample alerts ranked like this one, the share that hit 2x within 15 min of the alert, before a 50% stop${
                   calls.length > 1 ? " (the middle of the alerting models' rates)" : ""
                 }`}
@@ -325,19 +331,6 @@ export function AlertCard({
                 <span className="pill-text">≈{cardCalibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
               </span>
             )}
-            {socials.map((l) => (
-              <a
-                key={l.key}
-                className="pill pill-icon pill-social"
-                href={l.url}
-                target="_blank"
-                rel="noreferrer noopener"
-                title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
-                aria-label={`Open the coin's ${l.label}`}
-              >
-                <l.Icon size={11} />
-              </a>
-            ))}
             {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
           </div>
         </div>
@@ -706,27 +699,33 @@ export function AlertCard({
         </div>
       )}
 
-      {(show("mint") || show("sage") || fees || show("links") || trade.length > 0) && (
+      {(show("mint") || socials.length > 0 || fees || show("links") || trade.length > 0) && (
         <footer className="card-foot">
-          {(show("mint") || show("sage")) && (
+          {show("mint") && (
             <div className="card-foot-left">
-              {show("mint") && (
-                <button className="mint" onClick={copy} title="Copy mint address">
-                  {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-                  {copied ? "Copied" : shortAddress(mint)}
-                </button>
-              )}
-              {show("sage") && (
-                <button
-                  className="sage-btn"
-                  onClick={() => openSage(mint)}
-                  title="Open TokenSage's read of this coin: what it's about, its lineage, X link and flags"
-                >
-                  <SageIcon size={13} />
-                  Sage
-                </button>
-              )}
+              <button className="mint" onClick={copy} title="Copy mint address">
+                {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+                {copied ? "Copied" : shortAddress(mint)}
+              </button>
             </div>
+          )}
+          {/* The coin's X and website, beside the copy button (user ask 2026-10-18). */}
+          {socials.length > 0 && (
+            <span className="card-socials">
+              {socials.map((l) => (
+                <a
+                  key={l.key}
+                  className="pill pill-icon pill-social"
+                  href={l.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
+                  aria-label={`Open the coin's ${l.label}`}
+                >
+                  <l.Icon size={11} />
+                </a>
+              ))}
+            </span>
           )}
           {fees && (
             <span className={`fee-badge fee-${fees.kind}`} title={fees.title} aria-label={fees.title}>
@@ -758,7 +757,7 @@ export function AlertCard({
 }
 
 /**
- * The coin's own X and website as the title row's link pills (user ask 2026-10-18): only the
+ * The coin's own X and website as the card footer's link pills (user ask 2026-10-18): only the
  * links it has, and only https ones, whatever the source stored.
  */
 export function socialLinks(token: Pick<Card["token"], "twitterUrl" | "websiteUrl">) {
