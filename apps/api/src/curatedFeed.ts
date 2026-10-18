@@ -240,6 +240,9 @@ export const TOKEN_CARD_SELECT = {
   hasTwitter: true,
   hasTelegram: true,
   hasWebsite: true,
+  // The coin's own X and website, for the card's link pills (Settings › Feed appearance).
+  twitterUrl: true,
+  websiteUrl: true,
   narrativeTags: true,
   description: true,
   discoverySource: true,

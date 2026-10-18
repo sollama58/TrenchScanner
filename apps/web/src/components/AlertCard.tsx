@@ -21,10 +21,12 @@ import {
   CopyIcon,
   ExternalIcon,
   GiftIcon,
+  GlobeIcon,
   HeartIcon,
   RobotIcon,
   SageIcon,
   SlidersIcon,
+  XLogoIcon,
 } from "./Icons";
 import { openSage } from "../sage";
 import { linkedCount, linkedCountText } from "../bubbleMap";
@@ -201,6 +203,7 @@ export function AlertCard({
     ).filter(show).length + (show("vol") ? 3 : 0);
 
   const fees = show("fees") ? feeBadge(card.token.creatorFee) : null;
+  const socials = show("socials") ? socialLinks(card.token) : [];
 
   const copy = () => {
     void navigator.clipboard?.writeText(mint).then(() => {
@@ -322,6 +325,19 @@ export function AlertCard({
                 <span className="pill-text">≈{cardCalibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
               </span>
             )}
+            {socials.map((l) => (
+              <a
+                key={l.key}
+                className="pill pill-icon pill-social"
+                href={l.url}
+                target="_blank"
+                rel="noreferrer noopener"
+                title={`${l.label}: ${l.url.replace(/^https:\/\//, "").replace(/\/$/, "")}`}
+                aria-label={`Open the coin's ${l.label}`}
+              >
+                <l.Icon size={11} />
+              </a>
+            ))}
             {show("time") && <span className="when">{ago(card.matchedAt, now)}</span>}
           </div>
         </div>
@@ -739,6 +755,25 @@ export function AlertCard({
       )}
     </article>
   );
+}
+
+/**
+ * The coin's own X and website as the title row's link pills (user ask 2026-10-18): only the
+ * links it has, and only https ones, whatever the source stored.
+ */
+export function socialLinks(token: Pick<Card["token"], "twitterUrl" | "websiteUrl">) {
+  const https = (u: string | null | undefined) => {
+    if (!u) return null;
+    try {
+      return new URL(u).protocol === "https:" ? u : null;
+    } catch {
+      return null;
+    }
+  };
+  return [
+    { key: "x", label: "X", Icon: XLogoIcon, url: https(token.twitterUrl) },
+    { key: "web", label: "Website", Icon: GlobeIcon, url: https(token.websiteUrl) },
+  ].filter((l): l is typeof l & { url: string } => l.url !== null);
 }
 
 const FEE_BADGES = {

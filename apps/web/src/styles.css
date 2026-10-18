@@ -4899,6 +4899,15 @@ button.small-btn {
 .pill-icon {
   padding: 3px 6px;
 }
+/* The coin's own X and website on a card's title row: quiet until hovered. */
+a.pill-social {
+  text-decoration: none;
+}
+a.pill-social:hover,
+a.pill-social:focus-visible {
+  color: var(--brand-ink);
+  border-color: color-mix(in srgb, var(--brand-a) 40%, transparent);
+}
 
 /* Model alerts on/off */
 .switch {
