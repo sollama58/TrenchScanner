@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useState } from "react";
 import { ApiError } from "../api";
 import { signedPct, usd } from "../format";
 import {
@@ -26,9 +26,17 @@ import {
 import { WalletTimeoutError } from "../wallet";
 import { decimalUnits, parseAmounts, parseDecimal } from "../decimal";
 import { renderPositionCard } from "../pnlCard";
-import { BoltIcon, CheckIcon, ChevronDownIcon, GearIcon, InfoIcon, ShareIcon, ShieldIcon } from "./Icons";
+import {
+  BoltIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ClockIcon,
+  GearIcon,
+  InfoIcon,
+  ShareIcon,
+  ShieldIcon,
+} from "./Icons";
 import { ShareImageDialog } from "./ShareImageDialog";
-import { FoldHead } from "./Fold";
 
 /**
  * Pro Mode's Trade panel under the token modal's chart (user ask 2026-10-17): buy and sell the
@@ -500,8 +508,8 @@ export function TradePanel({
   /** The most one buy may spend here; null: no cap. */
   maxBuySol?: number | null;
   /**
-   * The coin isn't getting instant updates (TokenModal's delayed chart): the panel starts folded,
-   * and once opened says the figures may be behind while trades are priced live.
+   * The coin isn't getting instant updates (TokenModal's delayed chart): a one-line note says the
+   * figures may be behind while trades are priced live (user ask 2026-10-18: open, and minimal).
    */
   delayed?: boolean;
 }) {
@@ -515,10 +523,6 @@ export function TradePanel({
   const [showSettings, setShowSettings] = useState(false);
   const [accepted, setAccepted] = useState(() => disclaimerAccepted(owner));
   const [sharing, setSharing] = useState(false);
-  // Folded for a delayed coin until opened (user ask 2026-10-18); the reader's own choice then holds.
-  const [unfoldedSet, setUnfolded] = useState<boolean | null>(null);
-  const unfolded = unfoldedSet ?? !delayed;
-  const bodyId = useId();
   const [shareAmounts, setShareAmounts] = useState(true);
   const busy = status.kind === "busy";
   const balance = position ? BigInt(position.balance) : 0n;
@@ -607,23 +611,10 @@ export function TradePanel({
       <BoltIcon size={14} /> Trade{symbol ? ` $${symbol}` : ""}
     </>
   );
-  const foldHead = (
-    <FoldHead open={unfolded} onToggle={() => setUnfolded(!unfolded)} controls={bodyId}>
-      <span>{title}</span>
-      {!unfolded && <span className="muted small tm-trade-fold-note">Delayed data · open to trade</span>}
-    </FoldHead>
-  );
-  if (!unfolded)
-    return (
-      <section className="sage-card tm-trade folded" aria-label="Trade" id={bodyId}>
-        <header className="tm-trade-head">{foldHead}</header>
-      </section>
-    );
-
   return (
-    <section className="sage-card tm-trade" aria-label="Trade" id={bodyId}>
+    <section className="sage-card tm-trade" aria-label="Trade">
       <header className="tm-trade-head">
-        {delayed ? foldHead : <h4>{title}</h4>}
+        <h4>{title}</h4>
         <span className="tm-trade-tools">
           <span className="segmented small tm-trade-speed" role="radiogroup" aria-label="Speed">
             {(["eco", "turbo"] as const).map((sp) => (
@@ -662,9 +653,12 @@ export function TradePanel({
       </header>
 
       {delayed && (
-        <p className="small tm-trade-warn" role="note">
-          This coin is no longer getting instant updates, so the chart and figures here may be behind. Your
-          trade is still priced live, at the coin&apos;s current on-chain price (within your slippage).
+        <p
+          className="muted small tm-trade-delay"
+          role="note"
+          title="The chart and figures here may be behind; your trade is priced at the coin's current on-chain price, within your slippage."
+        >
+          <ClockIcon size={11} /> Delayed chart · trades priced live
         </p>
       )}
       {graceEndsAt !== null && !closeOnly && (

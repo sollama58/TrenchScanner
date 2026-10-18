@@ -2875,6 +2875,17 @@ legend {
   color: var(--brand-ink);
   background: color-mix(in srgb, var(--brand-a) 14%, transparent);
 }
+.util-cost-free {
+  color: var(--good-ink);
+  background: var(--good-wash);
+}
+.util-free-note {
+  color: var(--good-ink);
+}
+.util-free-rate {
+  color: var(--good-ink);
+  font-weight: 650;
+}
 .util-form {
   display: flex;
   gap: 8px;
@@ -16824,20 +16835,12 @@ body:has(.util-toast) .bug-fab {
     justify-content: center;
   }
 }
-/* A delayed coin's Trade panel (2026-10-18): folded to its heading until opened. */
-.tm-trade-head .tm-fold-h {
+/* A delayed coin's Trade panel (2026-10-18): one quiet line under the heading. */
+.tm-trade-delay {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin: 0;
-}
-.tm-trade-head .tm-fold-btn {
-  width: auto;
-}
-.tm-trade.folded .tm-trade-head .tm-fold-h,
-.tm-trade.folded .tm-trade-head .tm-fold-btn {
-  flex: 1;
-  width: 100%;
-}
-.tm-trade-fold-note {
-  font-weight: 400;
 }
 /* Pro Mode's grace period (2026-10-18): the panel's warning. */
 .tm-trade-warn {
@@ -17891,6 +17894,15 @@ body:has(.util-toast) .bug-fab {
 }
 .privy-holdings {
   margin: 4px 0 12px;
+}
+.privy-mfa {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  margin: 0 0 12px;
+}
+.privy-mfa p {
+  margin: 0;
 }
 @media (max-width: 640px) {
   .sub-coins {

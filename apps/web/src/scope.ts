@@ -18,7 +18,7 @@ export const SCOPE_COLUMNS: { id: ScopeColumn; label: string; short: string; hin
     id: "graduated",
     label: "Graduated",
     short: "Graduated",
-    hint: "Every token that graduated and passes the safety screen, whatever the filters or models think",
+    hint: "Every token that graduated and passes the safety screen, and your alerts once their coin graduates",
   },
 ];
 
@@ -30,17 +30,52 @@ const MAX_TICK_TOKENS = 30;
 
 export type ScopeColumns = Record<ScopeColumn, Card[]>;
 
+/** Whether an alert's coin has graduated, by its own scans or by a Graduated column entry. */
+export function cardGraduated(card: Card, gradTokens: ReadonlySet<string>): boolean {
+  return (
+    card.latestSnapshot?.graduated === true ||
+    card.snapshot.graduated === true ||
+    gradTokens.has(card.tokenId)
+  );
+}
+
 /**
  * The Live feed's cards in their columns, each keeping the feed's newest-first order, next to the
  * graduated tokens. A filter alert a model call folded into is in both: it is your alert and the
- * model's call.
+ * model's call. An alert whose coin has graduated moves to the Graduated column (user ask
+ * 2026-10-18), in its coin's place there or by its alert time, keeping its filter or model marker;
+ * `keepGraduated` leaves it in its own column too.
  */
-export function splitScope(feed: readonly Card[], graduated: readonly Card[]): ScopeColumns {
-  const out: ScopeColumns = { filters: [], models: [], graduated: [...graduated] };
+export function splitScope(
+  feed: readonly Card[],
+  graduated: readonly Card[],
+  keepGraduated: { filters: boolean; models: boolean } = { filters: false, models: false },
+): ScopeColumns {
+  const out: ScopeColumns = { filters: [], models: [], graduated: [] };
+  const gradTokens = new Set(graduated.map((c) => c.tokenId));
+  const moved = new Map<string, Card>();
   for (const card of feed) {
-    if (card.kind === "match") out.filters.push(card);
-    if (card.curated) out.models.push(card);
+    const grad = cardGraduated(card, gradTokens);
+    if (grad && !moved.has(card.tokenId)) moved.set(card.tokenId, card);
+    if (card.kind === "match" && (!grad || keepGraduated.filters)) out.filters.push(card);
+    if (card.curated && (!grad || keepGraduated.models)) out.models.push(card);
   }
+  if (moved.size === 0) {
+    out.graduated = [...graduated];
+    return out;
+  }
+  // Each row with the time it sorts by: an entry's own, which its alert takes over in place.
+  const rows = graduated.map((c) => {
+    const alert = moved.get(c.tokenId);
+    moved.delete(c.tokenId);
+    return { card: alert ?? c, at: Date.parse(c.matchedAt) };
+  });
+  for (const card of moved.values())
+    rows.push({
+      card,
+      at: Date.parse(card.curated && card.kind !== "match" ? card.curated.alertedAt : card.matchedAt),
+    });
+  out.graduated = rows.sort((a, b) => (b.at || 0) - (a.at || 0)).map((r) => r.card);
   return out;
 }
 

@@ -92,6 +92,14 @@ export interface PrivyControls {
    * which shows the window. Resolves with the signed transaction's bytes.
    */
   signQuietly(address: string, transaction: Uint8Array): Promise<Uint8Array>;
+  /**
+   * Privy's own security step for the wallet (MFA: an authenticator app or passkey), which Privy then
+   * asks for before the wallet signs or exports. Optional, only encouraged (user rule 2026-10-18).
+   * `available` is false when no method is switched on in Privy's dashboard.
+   */
+  mfa(): { available: boolean; enrolled: boolean };
+  /** Opens Privy's window for setting that step up. */
+  enrollMfa(): void;
 }
 
 /** Closed Privy's window, or the login didn't finish. */

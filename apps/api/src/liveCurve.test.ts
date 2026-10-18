@@ -227,6 +227,22 @@ describe("LiveCurves", () => {
     t.curves.stop();
   });
 
+  it("goes on to the pool from a curve emptied at graduation, as Pump.fun leaves it", async () => {
+    const emptied: CurveState = {
+      virtualToken: 0,
+      virtualQuote: 0,
+      realQuote: 0,
+      complete: true,
+      quoteIsSol: true,
+    };
+    const t = setup({ states: [emptied], pool: { vaults: VAULTS, amounts: [2e14, 8e10] } });
+    const a = await t.curves.read(MINT, 0);
+    expect(a).toMatchObject({ venue: "pool", complete: false });
+    expect(a.ticks).toHaveLength(1);
+    expect(a.ticks[0]![1]).toBeCloseTo(curveMcapSol({ virtualQuote: 8e10, virtualToken: 2e14 }) * 100);
+    t.curves.stop();
+  });
+
   it("reads a pool by RPC every READ_EVERY_MS off the stream", async () => {
     const t = setup({ states: [state(5e10, true)], pool: { vaults: VAULTS, amounts: [2e14, 8e10] } });
     expect(await t.curves.read(MINT, 0)).toMatchObject({ venue: "pool", complete: false, source: "rpc" });

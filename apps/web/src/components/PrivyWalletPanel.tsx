@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import qrcode from "qrcode-generator";
-import { privyControls } from "../privyBridge";
+import { loadedPrivyControls, privyControls } from "../privyBridge";
 import { askBefore, TwoFactorCancelled } from "../twoFactor";
 import { useMe } from "../me";
 import { CheckIcon, CopyIcon, WalletIcon } from "./Icons";
@@ -23,6 +23,24 @@ export function PrivyWalletPanel({ compact = false }: { compact?: boolean }) {
   const address = me?.walletAddress ?? "";
   // Settings only: the access screen shows the burn panel's own balance.
   const funds = useWalletBalance(!compact && me?.signInMethod === "privy");
+  // Privy's own security step for this wallet: encouraged, never required (user rule 2026-10-18).
+  // Re-read every few seconds until it's on, so the note goes once Privy's window finishes.
+  const [mfa, setMfa] = useState<{ available: boolean; enrolled: boolean } | null>(null);
+  const isPrivy = me?.signInMethod === "privy";
+  useEffect(() => {
+    if (!isPrivy || mfa?.enrolled) return;
+    const read = () => {
+      const privy = loadedPrivyControls();
+      if (privy)
+        setMfa((was) => {
+          const now = privy.mfa();
+          return was && was.available === now.available && was.enrolled === now.enrolled ? was : now;
+        });
+    };
+    read();
+    const timer = setInterval(read, 4_000);
+    return () => clearInterval(timer);
+  }, [isPrivy, mfa?.enrolled]);
   const qr = useMemo(() => {
     if (!showQr || !address) return "";
     const q = qrcode(0, "M");
@@ -97,6 +115,18 @@ export function PrivyWalletPanel({ compact = false }: { compact?: boolean }) {
           {copied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
         </button>
       </div>
+      {mfa?.available && !mfa.enrolled && (
+        <div className="notice small privy-mfa">
+          <p>
+            <strong>Protect this wallet.</strong> If someone gets into your email or social account, they
+            could sign in and move your funds. Add an authenticator app or passkey in Privy, and Privy will
+            ask for it before this wallet signs or exports.
+          </p>
+          <button className="button" onClick={() => loadedPrivyControls()?.enrollMfa()}>
+            Add wallet protection
+          </button>
+        </div>
+      )}
       <div className="row-actions">
         <button className="button primary" disabled={busy !== null} onClick={() => void act("fund")}>
           {busy === "fund" ? "Opening…" : "Buy SOL with a card"}
