@@ -30,6 +30,7 @@ export * from "./datasources/onChainHolders.js";
 export * from "./datasources/helius.js";
 export * from "./datasources/pumpLaunch.js";
 export * from "./datasources/pumpSwapPool.js";
+export * from "./datasources/launchLab.js";
 export * from "./datasources/walletIdentity.js";
 export * from "./datasources/solanaTracker.js";
 export * from "./datasources/xAvatar.js";
