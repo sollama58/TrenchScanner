@@ -23,7 +23,7 @@ import { withTimeout } from "./wallet";
 /** The signed-in wallet's Pro Mode, as /auth/me said it. */
 export interface ProState {
   wallet: string;
-  /** Full Pro Mode (buys too); false: it may only sell what it holds. */
+  /** Full Pro Mode. Always true now: a wallet without it gets no Pro state (no sell-only access). */
   pro: boolean;
   /** Dropped out of the top 250 holders: when Pro Mode ends (ms). */
   graceEndsAt: number | null;
@@ -63,8 +63,6 @@ export function proStateOf(user: {
       graceEndsAt: Number.isFinite(grace) ? grace : null,
       graceUnconfirmed: Number.isFinite(grace) && user.proMode?.graceReason === "unconfirmed",
     };
-  if (user.proMode?.canClose)
-    return { wallet: user.walletAddress, pro: false, graceEndsAt: null, graceUnconfirmed: false };
   return null;
 }
 

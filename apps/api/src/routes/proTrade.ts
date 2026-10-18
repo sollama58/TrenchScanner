@@ -176,20 +176,18 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   }
 
   /**
-   * The session's wallet, and whether it has full Pro Mode (`pro`) or may only close what it
-   * holds (it had Pro Mode once). Neither: answers 404 and returns null.
+   * The session's wallet, when it has Pro Mode. Without it (even one that had it once): answers
+   * 404 and returns null.
    */
-  async function proWallet(
-    request: FastifyRequest,
-    reply: FastifyReply,
-  ): Promise<{ wallet: string; pro: boolean } | null> {
+  async function proWallet(request: FastifyRequest, reply: FastifyReply): Promise<{ wallet: string } | null> {
     const wallet = request.user!.walletAddress;
     const status = await proStatus(env, wallet);
-    if (!status.pro && !status.canClose) {
+    // Pro Mode or nothing: a wallet without it can't sell either (user decision 2026-10-18).
+    if (!status.pro) {
       reply.code(404).send({ error: "not found", notSent: true });
       return null;
     }
-    return { wallet, pro: status.pro };
+    return { wallet };
   }
 
   app.addHook("preHandler", app.authenticate);
@@ -201,11 +199,6 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const parsed = buildSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
-    // Without Pro Mode any more, only closing: a sale of what it holds.
-    if (!who.pro && body.side !== "sell")
-      return reply
-        .code(403)
-        .send({ error: "Pro Mode has ended for this wallet. You can still sell what you hold." });
     try {
       let amount = BigInt(body.amount);
       if (body.side === "sell" && body.all) {
@@ -315,14 +308,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       // Sent already (a retried request): the resend loop has it.
       if (inFlight.has(signature)) return { signature };
       // One send per build, and only what was built (the wallet may add its own compute budget
-      // and Lighthouse guards): our Sender key relays nothing a build didn't make. Without Pro
-      // Mode any more, only a sale's build.
+      // and Lighthouse guards): our Sender key relays nothing a build didn't make.
       const list = liveBuilds(wallet);
       const at = list.findIndex(
-        (b) =>
-          b.blockhash === message.recentBlockhash &&
-          (who.pro || b.side === "sell") &&
-          signedMatchesBuild(b.message, message) === null,
+        (b) => b.blockhash === message.recentBlockhash && signedMatchesBuild(b.message, message) === null,
       );
       if (at < 0)
         return reply.code(400).send({
