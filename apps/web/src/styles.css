@@ -6842,6 +6842,9 @@ html:has(dialog.about-modal[open]) {
   color: var(--good-ink);
   background: var(--good-wash);
 }
+.cov-note {
+  margin: 0;
+}
 @media (prefers-reduced-motion: reduce) {
   .cov-fill {
     transition: none;
