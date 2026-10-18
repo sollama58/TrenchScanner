@@ -84,10 +84,14 @@ export interface UtilitiesOverview {
   prices: { tokensPerCredit: number; cost: { token: number; wallet: number } };
   burn: { mint: string; decimals: number; memo: string };
   reopenMinutes: number;
+  /** A subscriber's free daily credits, used before the balance; null without a subscription. */
+  daily: { allowance: number; left: number; nextAt: string | null } | null;
   lookups: {
     utility: "token" | "wallet" | null;
     subject: string | null;
     cost: number;
+    /** How much of `cost` the free daily credits paid. */
+    freeCredits: number;
     at: string;
     open: boolean;
     /** Why looking it up again would be free right now, or null when it costs credits. */
@@ -128,6 +132,30 @@ const STAGE_TEXT: Record<Stage, string> = {
 
 export const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
 
+/** A lookup's price, with the free daily credits left when the reader has them. */
+export function costLabel(cost: number, daily: UtilitiesOverview["daily"] | undefined): string {
+  const price = plural(cost, "credit");
+  return daily ? `${price} · ${daily.left} free left` : price;
+}
+
+/**
+ * The free daily credits beside the balance: how many are left of the allowance, and when the next
+ * one comes back once some are used (the allowance is a rolling 24 hours, so it never stacks).
+ */
+export function DailyFreeLine({ daily }: { daily: UtilitiesOverview["daily"] }) {
+  if (!daily) return null;
+  const back =
+    daily.nextAt && daily.left < daily.allowance
+      ? `, next back at ${new Date(daily.nextAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+      : "";
+  return (
+    <p className="small muted util-daily">
+      + {daily.left} of {daily.allowance} free daily credits left{back}. They are used first and only pay for
+      lookups.
+    </p>
+  );
+}
+
 /** Why a lookup was refused, in words: the API's own message when it sent one. */
 function lookupError(e: unknown): string {
   if (e instanceof ApiError) {
@@ -164,7 +192,8 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
             Each lookup costs Burn Credits, which you get by burning {SYMBOL} from this wallet. A credit is
             only taken once the lookup works, and you can re-open it free for an hour. Coins and wallets
             TrenchScanner already tracks are free to look up, and the form says so before you run it. The Side
-            Wallet Checker and Wallets to watch are free.
+            Wallet Checker and Wallets to watch are free. Subscribers also get 5 free credits a day, used
+            before their balance.
           </p>
         </header>
 
@@ -322,6 +351,7 @@ function CreditsPanel({
           )}
         </div>
       </header>
+      {data && <DailyFreeLine daily={data.daily} />}
       {error && !data ? (
         <p className="error small">Couldn&apos;t load your credits: {error.message}</p>
       ) : !data ? (
@@ -715,7 +745,7 @@ export function LookupCard({
           <h3>
             <Icon size={14} /> {card.short}
           </h3>
-          <CostPill free={free} cost={cost} />
+          <CostPill free={free} cost={cost} daily={data?.daily} />
         </header>
       ) : (
         <header className="section-head">
@@ -725,7 +755,7 @@ export function LookupCard({
             </span>
             <h2>{card.title}</h2>
           </div>
-          <CostPill free={free} cost={cost} />
+          <CostPill free={free} cost={cost} daily={data?.daily} />
         </header>
       )}
       {!compact && <p className="muted small">{card.blurb}</p>}
@@ -776,9 +806,17 @@ export function LookupCard({
 }
 
 /** The price beside a lookup form: its credits, or why the address in it is free. */
-function CostPill({ free, cost }: { free: FreeReason | null; cost: number }) {
+function CostPill({
+  free,
+  cost,
+  daily,
+}: {
+  free: FreeReason | null;
+  cost: number;
+  daily: UtilitiesOverview["daily"] | undefined;
+}) {
   if (free) return <span className="util-cost util-cost-free">{freeLabel(free)}</span>;
-  return <span className="util-cost num">{plural(cost, "credit")}</span>;
+  return <span className="util-cost num">{costLabel(cost, daily)}</span>;
 }
 
 type Lookup = UtilitiesOverview["lookups"][number];

@@ -4,6 +4,7 @@ import { shortAddress } from "../format";
 import { openWallet } from "../walletModal";
 import {
   CreditBurn,
+  DailyFreeLine,
   LookupCard,
   LookupWhat,
   plural,
@@ -307,6 +308,7 @@ function CreditsColumn({ data, onRefill }: { data: UtilitiesOverview | null; onR
           <span className="num muted">–</span>
         )}
       </div>
+      {data && <DailyFreeLine daily={data.daily} />}
       {data && (
         <dl className="util-drawer-rates">
           <div>

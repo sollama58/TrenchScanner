@@ -10,7 +10,12 @@ import { carriesCreditMemo, largestBurn, type BurnRejection, type ParsedTransact
  * The ledger (BurnCreditEntry) is append-only and the chain is the only source of credits: a burn
  * is read back from the chain by its signature, never from an amount the client reports, and its
  * signature is unique in the ledger, so it is credited exactly once whether the dashboard claims it
- * or the burn reconciler finds it. A wallet's balance is the sum of its rows.
+ * or the burn reconciler finds it. A wallet's balance is the sum of its rows outside the daily pot.
+ *
+ * Each row belongs to a pot (BurnCreditEntry.source, user ask 2026-10-18): "burned" credits were
+ * bought with a burn, "granted" ones an admin gave, and "daily" is a subscriber's free allowance
+ * (DAILY_FREE_CREDITS a rolling day, never stacking, so it has spend rows only). A lookup draws on
+ * daily first, then granted, then burned; trading may draw on burned only.
  */
 
 export type UtilityKind = "token" | "wallet";
@@ -131,6 +136,7 @@ export async function creditBurnCredits(
         wallet: burn.burnerWallet,
         delta: credits,
         kind: "burn",
+        source: "burned",
         burnSignature: signature,
         rawAmount: burn.rawAmount.toString(),
         tokensPerCredit,
@@ -146,13 +152,71 @@ export async function creditBurnCredits(
   }
 }
 
-/** A wallet's credit balance. */
+export type CreditSource = "burned" | "granted" | "daily";
+
+/** A wallet's credit balance: its burned and granted credits, not the daily allowance. */
 export async function creditBalance(
   wallet: string,
   db: Pick<Prisma.TransactionClient, "burnCreditEntry"> = prisma,
 ): Promise<number> {
-  const sum = await db.burnCreditEntry.aggregate({ where: { wallet }, _sum: { delta: true } });
+  const sum = await db.burnCreditEntry.aggregate({
+    where: { wallet, source: { not: "daily" } },
+    _sum: { delta: true },
+  });
   return sum._sum.delta ?? 0;
+}
+
+/**
+ * The balance split by pot. Granted is never below 0 here (a take-back can run past the grants a
+ * wallet has left and into its burned credits, since grantCredits checks the whole balance), so
+ * burned is what the balance holds beyond it: what trading may spend.
+ */
+export async function creditPots(
+  wallet: string,
+  db: Pick<Prisma.TransactionClient, "burnCreditEntry"> = prisma,
+): Promise<{ balance: number; granted: number; burned: number }> {
+  const rows = await db.burnCreditEntry.groupBy({
+    by: ["source"],
+    where: { wallet, source: { not: "daily" } },
+    _sum: { delta: true },
+  });
+  const sum = (source: CreditSource) => rows.find((r) => r.source === source)?._sum.delta ?? 0;
+  const balance = sum("burned") + sum("granted");
+  const granted = Math.max(0, Math.min(sum("granted"), balance));
+  return { balance, granted, burned: balance - granted };
+}
+
+/** Free credits a subscriber gets each rolling day, for lookups only. Unused ones don't carry over. */
+export const DAILY_FREE_CREDITS = 5;
+export const DAILY_FREE_WINDOW_MS = 24 * 60 * 60_000;
+
+export interface DailyFree {
+  /** Free credits left now: DAILY_FREE_CREDITS less what the last 24 hours used. */
+  left: number;
+  /** When the oldest free credit used in the window comes back, or null when none is used. */
+  nextAt: Date | null;
+}
+
+/** A subscriber's free daily credits left. Call only for a wallet that has a live subscription. */
+export async function dailyFreeCredits(
+  wallet: string,
+  db: Pick<Prisma.TransactionClient, "burnCreditEntry"> = prisma,
+  now: Date = new Date(),
+): Promise<DailyFree> {
+  const since = new Date(now.getTime() - DAILY_FREE_WINDOW_MS);
+  const where = { wallet, source: "daily", createdAt: { gt: since } };
+  const [used, oldest] = await Promise.all([
+    db.burnCreditEntry.aggregate({ where, _sum: { delta: true } }),
+    db.burnCreditEntry.findFirst({
+      where: { ...where, delta: { lt: 0 } },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
+  ]);
+  return {
+    left: Math.max(0, DAILY_FREE_CREDITS + (used._sum.delta ?? 0)),
+    nextAt: oldest ? new Date(oldest.createdAt.getTime() + DAILY_FREE_WINDOW_MS) : null,
+  };
 }
 
 /** How long a paid lookup stays open for free: re-opening it inside this costs nothing. */
@@ -185,10 +249,11 @@ export function creditWalletLockKey(wallet: string): string {
 }
 
 export type SpendOutcome =
-  | { status: "charged"; balance: number; cost: number }
+  /** `free` of `cost` came from the daily allowance; `balance` is the burned and granted left. */
+  | { status: "charged"; balance: number; cost: number; free: number; freeLeft: number }
   /** Already paid for inside the re-open window: nothing taken. */
-  | { status: "reopened"; balance: number }
-  | { status: "insufficient"; balance: number; cost: number };
+  | { status: "reopened"; balance: number; freeLeft: number }
+  | { status: "insufficient"; balance: number; cost: number; freeLeft: number };
 
 /**
  * The note on a spend that was free because the subject was already tracked (apps/api
@@ -202,35 +267,72 @@ export const FREE_LOOKUP_NOTE = "free:tracked";
  * before, so a lookup that fails costs nothing. The balance is read and the spend written under a
  * per-wallet lock, so two lookups finishing together can't both spend the last credit; and the
  * re-open window is checked under the same lock, so a double click is charged once.
+ *
+ * `dailyFree` is whether the wallet gets the subscriber allowance (a live subscription): the
+ * charge comes out of it first, then out of granted credits, then burned ones, one spend row for
+ * each pot it touches, all at the same time.
  */
 export async function spendCredits(
   wallet: string,
   utility: UtilityKind,
   subject: string,
   cost: number,
+  dailyFree = false,
   note?: string,
 ): Promise<SpendOutcome> {
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${creditWalletLockKey(wallet)}))`;
-    const balance = await creditBalance(wallet, tx);
+    const now = new Date();
+    const [pots, daily] = await Promise.all([
+      creditPots(wallet, tx),
+      dailyFree ? dailyFreeCredits(wallet, tx, now) : Promise.resolve({ left: 0, nextAt: null }),
+    ]);
     const open = await tx.burnCreditEntry.findFirst({
       where: {
         wallet,
         kind: "spend",
         utility,
         subject,
-        createdAt: { gt: new Date(Date.now() - LOOKUP_REOPEN_MS) },
+        createdAt: { gt: new Date(now.getTime() - LOOKUP_REOPEN_MS) },
       },
       select: { id: true },
     });
-    if (open) return { status: "reopened" as const, balance };
+    if (open) return { status: "reopened" as const, balance: pots.balance, freeLeft: daily.left };
     const charge = Math.max(0, cost);
-    if (balance < charge) return { status: "insufficient" as const, balance, cost: charge };
+    const free = Math.min(charge, daily.left);
+    const fromGranted = Math.min(charge - free, pots.granted);
+    const fromBurned = charge - free - fromGranted;
+    if (fromBurned > pots.burned) {
+      return { status: "insufficient" as const, balance: pots.balance, cost: charge, freeLeft: daily.left };
+    }
+    const parts = (
+      [
+        ["daily", free],
+        ["granted", fromGranted],
+        ["burned", fromBurned],
+      ] as const
+    ).filter(([, n]) => n > 0);
     // Written even when a free utility charges 0: the row is what opens the lookup's view.
-    await tx.burnCreditEntry.create({
-      data: { wallet, delta: -charge, kind: "spend", utility, subject, note },
+    const rows = parts.length > 0 ? parts : ([["burned", 0]] as const);
+    await tx.burnCreditEntry.createMany({
+      data: rows.map(([source, n]) => ({
+        wallet,
+        delta: -n,
+        kind: "spend",
+        utility,
+        subject,
+        source,
+        note,
+        createdAt: now,
+      })),
     });
-    return { status: "charged" as const, balance: balance - charge, cost: charge };
+    return {
+      status: "charged" as const,
+      balance: pots.balance - fromGranted - fromBurned,
+      cost: charge,
+      free,
+      freeLeft: daily.left - free,
+    };
   });
 }
 
@@ -266,7 +368,7 @@ export async function grantCredits(wallet: string, delta: number, note: string):
         throw new CreditGrantError(`The wallet has ${balance} credits: you can take back at most that many.`);
       }
     }
-    await tx.burnCreditEntry.create({ data: { wallet, delta, kind: "grant", note } });
+    await tx.burnCreditEntry.create({ data: { wallet, delta, kind: "grant", source: "granted", note } });
     return creditBalance(wallet, tx);
   });
 }

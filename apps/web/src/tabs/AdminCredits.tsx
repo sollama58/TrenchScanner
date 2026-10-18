@@ -14,6 +14,7 @@ interface CreditsAdminView {
     granted: number;
     lookups: number;
     spent: number;
+    dailyFreeUsed: number;
     outstanding: number;
   };
   recent: {
@@ -25,6 +26,7 @@ interface CreditsAdminView {
     utility: string | null;
     subject: string | null;
     note: string | null;
+    source: "burned" | "granted" | "daily";
     createdAt: string;
   }[];
 }
@@ -48,14 +50,21 @@ export function CreditsAdmin() {
               value={n(d.totals.earned)}
               sub={`${n(d.totals.granted)} granted by hand`}
             />
-            <Kpi label="Credits spent" value={n(d.totals.spent)} sub={`${n(d.totals.lookups)} lookups`} />
+            <Kpi
+              label="Credits spent"
+              value={n(d.totals.spent)}
+              sub={`${n(d.totals.lookups)} lookups, ${n(d.totals.dailyFreeUsed)} free daily`}
+            />
             <Kpi label="Outstanding" value={n(d.totals.outstanding)} sub="unspent, all wallets" />
           </div>
         )}
       </Load>
       {q.data && <Prices prices={q.data.prices} onDone={q.reload} />}
       <Grant onDone={q.reload} />
-      <Panel title="Credit ledger" note="Newest 50 rows. Burns add, lookups take, grants either.">
+      <Panel
+        title="Credit ledger"
+        note="Newest 50 rows. Burns add, lookups take (free daily credits first, then granted, then burned), grants either."
+      >
         <Load q={q}>
           {(d) => (
             <Table
@@ -72,7 +81,7 @@ export function CreditsAdmin() {
                 ) : r.kind === "grant" ? (
                   <Tag tone="warn">grant</Tag>
                 ) : (
-                  `${r.utility ?? "?"} lookup`
+                  `${r.utility ?? "?"} lookup${r.source === "burned" ? "" : `, ${r.source === "daily" ? "free daily" : "granted"}`}`
                 ),
                 r.burnSignature ? (
                   <a href={`https://solscan.io/tx/${r.burnSignature}`} target="_blank" rel="noreferrer">

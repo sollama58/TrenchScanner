@@ -3,7 +3,10 @@ import { prisma } from "../db.js";
 import {
   creditBalance,
   creditBurnCredits,
+  creditPots,
   creditsFor,
+  DAILY_FREE_CREDITS,
+  dailyFreeCredits,
   grantCredits,
   CreditGrantError,
   openLookup,
@@ -109,5 +112,55 @@ describe.skipIf(!dbAvailable)("the credit ledger", () => {
     await expect(grantCredits(WALLET, 3, "test")).rejects.toThrow(CreditGrantError);
     await expect(grantCredits(WALLET, -4, "fix")).rejects.toThrow(/at most that many/);
     expect(await grantCredits(WALLET, -3, "fix")).toBe(0);
+  });
+});
+
+describe.skipIf(!dbAvailable)("credit pots and the free daily credits", () => {
+  const SUB = `CreditPotsWallet${RUN}`;
+  afterAll(async () => {
+    await prisma.burnCreditEntry.deleteMany({ where: { wallet: SUB } });
+  });
+
+  it("spends the free daily credits first, then granted, then burned", async () => {
+    await creditBurnCredits(`PotsSig${RUN}`, { burnerWallet: SUB, rawAmount: 300n * TOKENS }, "claim");
+    await grantCredits(SUB, 2, "test");
+    expect(await creditPots(SUB)).toEqual({ balance: 5, granted: 2, burned: 3 });
+
+    const first = await spendCredits(SUB, "token", `PotsMint${RUN}`, DAILY_FREE_CREDITS - 1, true);
+    expect(first).toMatchObject({ status: "charged", free: DAILY_FREE_CREDITS - 1, freeLeft: 1, balance: 5 });
+    // One free credit left, then the two granted: four credits draw on three pots.
+    const split = await spendCredits(SUB, "wallet", `PotsW${RUN}`, 4, true);
+    expect(split).toMatchObject({ status: "charged", free: 1, freeLeft: 0, balance: 2 });
+    expect(await creditPots(SUB)).toEqual({ balance: 2, granted: 0, burned: 2 });
+    const rows = await prisma.burnCreditEntry.findMany({
+      where: { wallet: SUB, subject: `PotsW${RUN}` },
+      select: { source: true, delta: true },
+      orderBy: { source: "asc" },
+    });
+    expect(rows).toEqual([
+      { source: "burned", delta: -1 },
+      { source: "daily", delta: -1 },
+      { source: "granted", delta: -2 },
+    ]);
+
+    // The allowance doesn't stack or reach the balance: none left today, and 2 burned can't pay 3.
+    const daily = await dailyFreeCredits(SUB);
+    expect(daily.left).toBe(0);
+    expect(daily.nextAt).not.toBeNull();
+    expect(await spendCredits(SUB, "token", `PotsMint2${RUN}`, 3, true)).toMatchObject({
+      status: "insufficient",
+      balance: 2,
+      freeLeft: 0,
+    });
+    expect(await creditBalance(SUB)).toBe(2);
+  });
+
+  it("gives no free credits without a subscription", async () => {
+    expect(await spendCredits(SUB, "token", `PotsMint3${RUN}`, 1, false)).toMatchObject({
+      status: "charged",
+      free: 0,
+      freeLeft: 0,
+      balance: 1,
+    });
   });
 });
