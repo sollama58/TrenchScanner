@@ -8,7 +8,7 @@ import {
   walletOptions,
   type WalletOption,
 } from "../wallet";
-import { privyConfig, type PrivyConfig } from "../privyBridge";
+import { privyConfig, privyOAuthReturn, wantPrivy, type PrivyConfig } from "../privyBridge";
 import { BrainIcon, RobotIcon, TargetIcon } from "./Icons";
 
 /**
@@ -107,6 +107,15 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
       setBusy(null);
     }
   };
+
+  // Back from Google or X. In Privy's popup, loading Privy is all it takes: Privy hands the sign-in
+  // to the window that opened it and closes this one. On a page the sign-in came back to, finish it.
+  useEffect(() => {
+    if (!privyOAuthReturn()) return;
+    if (window.opener) wantPrivy();
+    else void emailSignIn();
+    // Once per page load: the return is in the address it was opened with.
+  }, []);
 
   const connect = async (wallet: WalletOption) => {
     setBusy(wallet.key);
