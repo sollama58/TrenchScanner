@@ -2099,6 +2099,23 @@ g:hover > .hit,
 .mbar-row.thin .mbar-fill {
   opacity: 0.45;
 }
+/* The model worth adding to the reader's feed (the Coverage suggestion). */
+.mbar-row.badged {
+  border-color: color-mix(in srgb, var(--brand-b) 45%, transparent);
+  background: var(--info-wash);
+}
+.mbar-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  vertical-align: 1px;
+  color: var(--brand-ink);
+  background: color-mix(in srgb, var(--brand-b) 18%, transparent);
+}
 .mbar-label {
   display: block;
   min-width: 0;
@@ -2134,6 +2151,9 @@ g:hover > .hit,
   height: 100%;
   border-radius: 0 4px 4px 0;
   background: var(--series-1);
+}
+.mbar-fill.down {
+  background: var(--bad);
 }
 .mbar-marker {
   position: absolute;
@@ -2298,6 +2318,8 @@ g:hover > .hit,
 }
 .baseline-controls {
   flex-shrink: 0;
+  flex-wrap: wrap;
+  max-width: 100%;
 }
 .baseline-controls button {
   white-space: nowrap;
@@ -6662,34 +6684,6 @@ html:has(dialog.about-modal[open]) {
 }
 
 /* ---------- Model tab: at a glance, under the hood ---------- */
-.kpis.glance {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin-top: 18px;
-  position: relative;
-  z-index: 1;
-}
-.glance-tile {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 14px 16px;
-  border-radius: 12px;
-  background: var(--surface-2);
-  min-width: 0;
-}
-.glance-tile label {
-  color: var(--muted);
-  font-size: 12.5px;
-}
-.glance-value {
-  font-size: 24px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  overflow-wrap: anywhere;
-}
-.glance-value.state {
-  font-size: 22px;
-}
 .under-hood > summary {
   list-style: none;
   cursor: pointer;
@@ -6714,12 +6708,6 @@ html:has(dialog.about-modal[open]) {
 }
 .under-hood[open] > summary {
   margin-bottom: 18px;
-}
-@media (max-width: 640px) {
-  .kpis.glance {
-    grid-template-columns: 1fr;
-    gap: 10px;
-  }
 }
 
 /* ---------- Coverage Meter: the share of runners a reader's models would have caught ---------- */
@@ -6821,51 +6809,6 @@ html:has(dialog.about-modal[open]) {
   font-weight: 600;
   color: var(--good-ink);
   background: var(--good-wash);
-}
-.cov-note {
-  margin: 0;
-}
-.cov-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px 12px;
-}
-.cov-members {
-  min-width: 0;
-}
-.cov-add {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  border-radius: 14px;
-  border: 1px dashed var(--border-strong);
-  text-align: left;
-  background: transparent;
-  color: var(--brand-ink);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.cov-add-cost {
-  margin-left: 4px;
-  color: var(--muted);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-}
-.cov-add-cost::before {
-  content: "·";
-  margin-right: 4px;
-}
-.cov-add:hover:not(:disabled) {
-  border-style: solid;
-  background: var(--info-wash);
-}
-.cov-add:disabled {
-  opacity: 0.6;
-  cursor: default;
 }
 @media (prefers-reduced-motion: reduce) {
   .cov-fill {
@@ -10937,8 +10880,7 @@ html:has(dialog.about-modal[open]) {
 /* Chart legend and tooltip keys. The appearance picker's round .swatch buttons share the class
    name and are declared later, so the charts' small squares are restated here, last. */
 .chart .swatch,
-.model-pick .swatch,
-.week-table .swatch {
+.model-pick .swatch {
   position: static;
   width: 10px;
   height: 10px;
@@ -10966,30 +10908,11 @@ html:has(dialog.about-modal[open]) {
   opacity: 0.4;
   cursor: not-allowed;
 }
-.model-pick button .swatch,
-.week-table td .swatch {
+.model-pick button .swatch {
   display: inline-block;
   margin-right: 6px;
   vertical-align: 0;
 }
-@media (max-width: 640px) {
-  .week-table th,
-  .week-table td {
-    padding-left: 6px;
-    padding-right: 6px;
-    font-size: 12.5px;
-  }
-  .week-table th:first-child,
-  .week-table td:first-child {
-    padding-left: 0;
-  }
-  /* "7-day total" and "Vs market" over two lines, so all four columns fit a phone unscrolled. */
-  .week-table th {
-    white-space: normal;
-    vertical-align: bottom;
-  }
-}
-
 /* ---------- Lighthouse: safety screen scale ---------- */
 .lh-safety-figures {
   display: flex;
