@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createLogger, keysOf, prisma, STREAM_SETTLE_MS, type ChainTx } from "@trenchscanner/core";
 
 const logger = createLogger("pro-trades");
@@ -189,7 +190,15 @@ export class LazyTradeStream implements TradeStream {
 /** Called once per new entry (a buy from a flat position): the coin's scan. */
 export type OnEntry = (wallet: string, mint: string, at: Date) => Promise<void>;
 
-const streamKey = (wallet: string) => `pro-trades:${wallet}`;
+/**
+ * Users' wallet addresses stay private (user rule 2026-10-18): never in a log line or a stream key
+ * (the stream logs its keys). A wallet is named by a short one-way tag instead, and the watcher
+ * keeps the tag-to-wallet map in memory only.
+ */
+export function walletTag(wallet: string): string {
+  return createHash("sha256").update(wallet).digest("hex").slice(0, 12);
+}
+export const streamKey = (wallet: string) => `pro-trades:${walletTag(wallet)}`;
 /** Signatures the stream has already delivered, so the catch-up never reads them again. */
 const SEEN_MAX = 5_000;
 
@@ -198,6 +207,8 @@ export class ProTradeWatcher {
   private readonly running = new Map<string, Promise<void>>();
   private readonly seen = new Set<string>();
   private readonly scans = new Map<string, number[]>();
+  /** Stream keys to the wallets they follow (the keys carry only a tag). */
+  private readonly walletOfKey = new Map<string, string>();
 
   constructor(
     private readonly deps: {
@@ -215,13 +226,13 @@ export class ProTradeWatcher {
 
   /** What the stream delivers for a followed wallet. */
   onStreamTx(key: string, signature: string, tx: ChainTx): void {
-    if (!key.startsWith("pro-trades:")) return;
-    const wallet = key.slice("pro-trades:".length);
+    const wallet = this.walletOfKey.get(key);
+    if (!wallet) return;
     this.remember(signature);
     const trades = walletSwaps(signature, tx as WalletTx, wallet, this.now());
     if (trades.length === 0) return;
     void this.record(wallet, trades).catch((err: unknown) =>
-      logger.warn("failed to record a streamed trade", { wallet, error: String(err) }),
+      logger.warn("failed to record a streamed trade", { wallet: walletTag(wallet), error: String(err) }),
     );
   }
 
@@ -231,7 +242,12 @@ export class ProTradeWatcher {
    */
   touch(wallet: string): Promise<void> {
     const now = this.now();
-    this.deps.stream?.watch(streamKey(wallet), [wallet], now);
+    const key = streamKey(wallet);
+    if (!this.walletOfKey.has(key)) {
+      if (this.walletOfKey.size > 10_000) this.walletOfKey.clear();
+      this.walletOfKey.set(key, wallet);
+    }
+    this.deps.stream?.watch(key, [wallet], now);
     const inFlight = this.running.get(wallet);
     if (inFlight) return inFlight;
     const last = this.lastCatchUp.get(wallet);
@@ -243,7 +259,9 @@ export class ProTradeWatcher {
     if (last !== undefined && now - last < every) return Promise.resolve();
     this.lastCatchUp.set(wallet, now);
     const run = this.catchUp(wallet)
-      .catch((err: unknown) => logger.warn("trade catch-up failed", { wallet, error: String(err) }))
+      .catch((err: unknown) =>
+        logger.warn("trade catch-up failed", { wallet: walletTag(wallet), error: String(err) }),
+      )
       .finally(() => this.running.delete(wallet));
     this.running.set(wallet, run);
     return run;
@@ -331,11 +349,13 @@ export class ProTradeWatcher {
         skipDuplicates: true,
       });
       if (written.count > 0 && entry && this.mayScan(wallet)) {
-        await this.deps
-          .onEntry(wallet, t.mint, t.at)
-          .catch((err: unknown) =>
-            logger.warn("failed to scan a traded coin", { wallet, mint: t.mint, error: String(err) }),
-          );
+        await this.deps.onEntry(wallet, t.mint, t.at).catch((err: unknown) =>
+          logger.warn("failed to scan a traded coin", {
+            wallet: walletTag(wallet),
+            mint: t.mint,
+            error: String(err),
+          }),
+        );
       }
     }
   }
@@ -470,8 +490,8 @@ export function positionPnl(p: Position, priceSol: number | null): { sol: number
 }
 
 export interface TradeStats {
-  /** The window the figures cover, days. */
-  days: number;
+  /** The window the figures cover, hours (24: user decision 2026-10-18). */
+  hours: number;
   trades: number;
   buys: number;
   sells: number;
@@ -500,7 +520,7 @@ export function tradeStats(
   positions: readonly Position[],
   priceSol: (mint: string) => number | null,
   calledBefore: (mint: string, at: Date) => boolean,
-  days: number,
+  hours: number,
 ): TradeStats {
   const closed = positions.filter((p) => p.closed && p.spentSol > 0);
   const open = positions.filter((p) => !p.closed);
@@ -521,7 +541,7 @@ export function tradeStats(
     .sort((a, b) => a - b);
   const entries = rows.filter((r) => r.entry);
   return {
-    days,
+    hours,
     trades: rows.length,
     buys: rows.filter((r) => r.side === "buy").length,
     sells: rows.filter((r) => r.side === "sell").length,

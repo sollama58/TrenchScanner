@@ -50,7 +50,7 @@ export interface TradeCoin {
 }
 
 export interface TradeStats {
-  days: number;
+  hours: number;
   trades: number;
   buys: number;
   sells: number;
@@ -77,7 +77,7 @@ interface PanelView {
  * The TRADES panel (user ask 2026-10-18): for a Pro Mode wallet, a "TRADES" handle on the right
  * edge above the Utility one, showing the last three coins it bought, that pulls out its last ten
  * trades as small cards - each coin already scanned, so its token modal opens with the bubble map
- * ready - and its week's trade figures. Its trades are read from the chain wherever they were made
+ * ready - and its last 24 hours' trade figures. Its trades are read from the chain wherever they were made
  * (routes/proTrades.ts in the API). Desktop only, as the Utility panel is.
  */
 export function TradesDrawer() {
@@ -237,7 +237,7 @@ function minutes(m: number | null): string {
 const tone = (n: number | null | undefined) =>
   n === null || n === undefined || n === 0 ? "" : n > 0 ? " up" : " down";
 
-/** The week's figures across every trade, open and closed. */
+/** The last 24 hours' figures across every trade, open and closed. */
 function StatsStrip({ stats, solUsd }: { stats: TradeStats; solUsd: number | null }) {
   const usdOf = (n: number | null) => (n !== null && solUsd ? usd(n * solUsd) : null);
   const tiles: { label: string; value: string; sub?: string | null; tone?: string; title: string }[] = [
@@ -245,7 +245,7 @@ function StatsStrip({ stats, solUsd }: { stats: TradeStats; solUsd: number | nul
       label: "Trades",
       value: String(stats.trades),
       sub: `${stats.coins} coin${stats.coins === 1 ? "" : "s"} · ${stats.buys} buys`,
-      title: `${stats.buys} buys and ${stats.sells} sales in ${stats.coins} coins: what this wallet traded in the last ${stats.days} days, wherever it traded`,
+      title: `${stats.buys} buys and ${stats.sells} sales in ${stats.coins} coins: what this wallet traded in the last ${stats.hours} hours, wherever it traded`,
     },
     {
       label: "Win rate",
@@ -286,7 +286,7 @@ function StatsStrip({ stats, solUsd }: { stats: TradeStats; solUsd: number | nul
     },
   ];
   return (
-    <dl className="trades-stats" aria-label={`Your trades, last ${stats.days} days`}>
+    <dl className="trades-stats" aria-label={`Your trades, last ${stats.hours} hours`}>
       {tiles.map((t) => (
         <div key={t.label} className="trades-stat" title={t.title}>
           <dt>{t.label}</dt>
@@ -294,7 +294,7 @@ function StatsStrip({ stats, solUsd }: { stats: TradeStats; solUsd: number | nul
           {t.sub && <dd className="faint trades-stat-sub">{t.sub}</dd>}
         </div>
       ))}
-      <div className="trades-stat trades-stat-window faint">{stats.days} days</div>
+      <div className="trades-stat trades-stat-window faint">{stats.hours}h</div>
     </dl>
   );
 }

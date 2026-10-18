@@ -2,7 +2,7 @@
 import "./bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma } from "@trenchscanner/core";
-import { ProTradeWatcher, type WalletTx } from "./proTrades.js";
+import { ProTradeWatcher, streamKey, type WalletTx } from "./proTrades.js";
 import { tradedMint } from "./lookupGate.js";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -64,7 +64,8 @@ describe.skipIf(!dbAvailable)("ProTradeWatcher on the database", () => {
       now: () => now,
     });
 
-    await watcher.catchUp(W);
+    // The first touch follows the wallet (mapping its stream key back to it) and catches up.
+    await watcher.touch(W);
     const rows = await prisma.proTrade.findMany({ where: { wallet: W }, orderBy: { at: "asc" } });
     expect(rows.map((r) => [r.signature, r.side, r.entry])).toEqual([
       ["s1", "buy", true],
@@ -78,7 +79,7 @@ describe.skipIf(!dbAvailable)("ProTradeWatcher on the database", () => {
     // A new transaction: only it is read; the stream had already delivered it, so not even that.
     txs.set("s4", swap("s4", "sell", t0 + 200, ["500", "0"]));
     signatures = [{ signature: "s4", blockTime: t0 + 200, failed: false }, ...signatures];
-    watcher.onStreamTx(`pro-trades:${W}`, "s4", txs.get("s4")!);
+    watcher.onStreamTx(streamKey(W), "s4", txs.get("s4")!);
     await new Promise((r) => setTimeout(r, 200));
     reads.length = 0;
     await watcher.catchUp(W);

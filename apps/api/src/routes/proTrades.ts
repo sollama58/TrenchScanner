@@ -44,7 +44,7 @@ import {
 const PANEL_COINS = 10;
 const HANDLE_COINS = 3;
 /** The statistics' window, and how far back trades are read for them. */
-const STATS_DAYS = 7;
+const STATS_HOURS = 24;
 const ROWS_MAX = 2_000;
 /** An answer is reused this long per wallet and shape (the panel polls; the stream fills in between). */
 const ANSWER_TTL_MS = 8_000;
@@ -194,7 +194,7 @@ export async function registerProTradesRoutes(
     const rows = await readRows(wallet);
     const positions = positionsOf(rows);
     const shown = positions.slice(0, PANEL_COINS);
-    const since = new Date(Date.now() - STATS_DAYS * 86_400_000);
+    const since = new Date(Date.now() - STATS_HOURS * 3_600_000);
     const windowRows = rows.filter((r) => r.at > since);
     const windowPositions = positions.filter((p) => p.entryAt > since || p.lastTradeAt > since);
     const mints = [
@@ -312,7 +312,7 @@ export async function registerProTradesRoutes(
       windowPositions,
       priceSol,
       (mint, at) => callBefore(mint, at) !== null,
-      STATS_DAYS,
+      STATS_HOURS,
     );
     return { coins, stats, solUsd: sol ?? null, following: true };
   }

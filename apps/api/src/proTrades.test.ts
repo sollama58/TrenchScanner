@@ -3,6 +3,7 @@ import {
   CATCH_UP_COVERED_MS,
   CATCH_UP_UNCOVERED_MS,
   LazyTradeStream,
+  streamKey,
   positionPnl,
   positionsOf,
   ProTradeWatcher,
@@ -203,7 +204,7 @@ describe("positionsOf and positionPnl", () => {
 });
 
 describe("tradeStats", () => {
-  it("adds the week up", () => {
+  it("adds the window up", () => {
     const rows = [
       row({ side: "buy", tokens: 10n, lamports: -1_000_000_000n, entry: true }, 0),
       row({ side: "sell", tokens: -10n, lamports: 3_000_000_000n }, 30),
@@ -216,7 +217,7 @@ describe("tradeStats", () => {
       positions,
       () => null,
       (mint) => mint === MINT,
-      7,
+      24,
     );
     expect(stats).toMatchObject({
       trades: 4,
@@ -260,7 +261,9 @@ describe("ProTradeWatcher.touch", () => {
     now += CATCH_UP_UNCOVERED_MS;
     await w.touch(W);
     expect(w.calls).toBe(2);
-    expect(watched).toEqual([`pro-trades:${W}`, `pro-trades:${W}`, `pro-trades:${W}`]);
+    // The key names the wallet by a tag, never its address (wallet privacy rule).
+    expect(watched).toEqual([streamKey(W), streamKey(W), streamKey(W)]);
+    expect(watched[0]).not.toContain(W);
   });
 
   it("reads far less often once the stream covers the wallet", async () => {
