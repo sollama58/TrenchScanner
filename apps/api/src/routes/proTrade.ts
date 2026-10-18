@@ -300,7 +300,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const who = await proWallet(request, reply, { access: true });
     if (!who) return;
     const { wallet } = who;
-    // Without Pro Mode, only the access-token buy: $ASDFASDFA, buys only, up to 5 SOL. Anything
+    // Without Pro Mode, only the access-token buy: $ASDFASDFA, buys only, any size (the 5 SOL cap
+    // was lifted by the user on 2026-10-18). Anything
     // else gets the same 404 as before, malformed or not, so the route still looks absent.
     const asked = (request.body ?? {}) as { side?: unknown; mint?: unknown };
     const accessBuy = asked.side === "buy" && asked.mint === SUBSCRIPTION_MINT && accessSwapOpen();
@@ -308,8 +309,6 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const parsed = buildSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
-    if (accessBuy && !who.pro && BigInt(body.amount) > ACCESS_BUY_MAX_LAMPORTS)
-      return reply.code(422).send({ error: "Buy up to 5 SOL of $ASDFASDFA at a time here." });
     const closing = body.side === "sell" && body.all === true;
     if (!closing) {
       const left = cooldown.left(wallet);
@@ -714,9 +713,6 @@ const BUILD_RETRY_MS = 800;
 function solAmount(lamports: bigint): string {
   return (Number(lamports) / 1e9).toLocaleString("en-US", { maximumFractionDigits: 4 });
 }
-
-/** The most one access-token buy may spend, for a wallet without Pro Mode. */
-const ACCESS_BUY_MAX_LAMPORTS = 5_000_000_000n;
 
 /** The guard's refusal in the trader's words, where it can be said plainly. */
 export function plainRefusal(message: string, side: "buy" | "sell" = "buy"): string {

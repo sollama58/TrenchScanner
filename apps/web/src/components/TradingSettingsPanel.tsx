@@ -13,6 +13,7 @@ import {
   type QuickBuySettings,
   type TradeSettings,
 } from "../proTrade";
+import { parseAmounts, parseDecimal } from "../decimal";
 import { Switch } from "./AlertDeliveryPanels";
 import { BoltIcon } from "./Icons";
 
@@ -29,15 +30,6 @@ const POSITION_LABEL: Record<QuickBuySettings["position"], string> = {
   "bottom-left": "Bottom left",
 };
 const SIZE_LABEL: Record<QuickBuySettings["size"], string> = { s: "Small", m: "Medium", l: "Large" };
-
-/** "0.1, 0.25 0.5" -> [0.1, 0.25, 0.5]: amounts from `min` (above 0) up to `max`, at most `count` of them. */
-export function parseAmounts(text: string, max: number, count: number, min = 0): number[] {
-  return text
-    .split(/[\s,]+/)
-    .map(Number)
-    .filter((n) => Number.isFinite(n) && n > 0 && n >= min && n <= max)
-    .slice(0, count);
-}
 
 export function TradingSettingsPanel() {
   const pro = useProState();
@@ -135,16 +127,14 @@ function Panel({ settings }: { settings: TradeSettings }) {
         <label className="trading-field">
           <span className="small muted">Slippage, %</span>
           <input
-            type="number"
             inputMode="decimal"
-            min={0.1}
-            max={50}
-            step={0.5}
+            autoComplete="off"
             defaultValue={settings.slippagePct}
             onBlur={(e) => {
-              const v = Number(e.target.value);
-              if (Number.isFinite(v) && v >= 0.1 && v <= 50) update({ slippagePct: v });
-              else e.target.value = String(settings.slippagePct);
+              const v = parseDecimal(e.target.value);
+              const ok = v !== null && v >= 0.1 && v <= 50;
+              if (ok) update({ slippagePct: v });
+              e.target.value = String(ok ? v : settings.slippagePct);
             }}
           />
         </label>
@@ -186,16 +176,14 @@ function Panel({ settings }: { settings: TradeSettings }) {
           <label className="trading-field">
             <span className="small muted">Custom priority fee, SOL (up to {MAX_CUSTOM_FEE_SOL})</span>
             <input
-              type="number"
               inputMode="decimal"
-              min={0}
-              max={MAX_CUSTOM_FEE_SOL}
-              step={0.00001}
+              autoComplete="off"
               defaultValue={settings.customPrioritySol}
               onBlur={(e) => {
-                const v = Number(e.target.value);
-                if (Number.isFinite(v) && v >= 0 && v <= MAX_CUSTOM_FEE_SOL) update({ customPrioritySol: v });
-                else e.target.value = String(settings.customPrioritySol);
+                const v = parseDecimal(e.target.value);
+                const ok = v !== null && v >= 0 && v <= MAX_CUSTOM_FEE_SOL;
+                if (ok) update({ customPrioritySol: v });
+                e.target.value = String(ok ? v : settings.customPrioritySol);
               }}
             />
           </label>
@@ -203,18 +191,20 @@ function Panel({ settings }: { settings: TradeSettings }) {
         <label className="trading-field">
           <span className="small muted">Tip, SOL (blank for the minimum, {MIN_TIP_SOL[settings.speed]})</span>
           <input
-            type="number"
             inputMode="decimal"
-            min={MIN_TIP_SOL[settings.speed]}
-            max={MAX_CUSTOM_FEE_SOL}
-            step={0.00001}
+            autoComplete="off"
             placeholder={String(MIN_TIP_SOL[settings.speed])}
             defaultValue={settings.customTipSol ?? ""}
             onBlur={(e) => {
               if (e.target.value.trim() === "") return update({ customTipSol: null });
-              const v = Number(e.target.value);
-              if (Number.isFinite(v) && v > 0 && v <= MAX_CUSTOM_FEE_SOL) update({ customTipSol: v });
-              else e.target.value = settings.customTipSol === null ? "" : String(settings.customTipSol);
+              const v = parseDecimal(e.target.value);
+              const ok = v !== null && v > 0 && v <= MAX_CUSTOM_FEE_SOL;
+              if (ok) update({ customTipSol: v });
+              e.target.value = ok
+                ? String(v)
+                : settings.customTipSol === null
+                  ? ""
+                  : String(settings.customTipSol);
             }}
           />
         </label>
@@ -241,17 +231,15 @@ function Panel({ settings }: { settings: TradeSettings }) {
           <label className="trading-field">
             <span className="small muted">Amount per tap, SOL (from {MIN_TRADE_SOL})</span>
             <input
-              type="number"
               inputMode="decimal"
-              min={MIN_TRADE_SOL}
-              max={100}
-              step={0.05}
+              autoComplete="off"
               value={quickAmount}
               onChange={(e) => setQuickAmount(e.target.value)}
               onBlur={() => {
-                const v = Number(quickAmount);
-                if (Number.isFinite(v) && v >= MIN_TRADE_SOL && v <= 100) updateQuick({ amountSol: v });
-                else setQuickAmount(String(q.amountSol));
+                const v = parseDecimal(quickAmount);
+                const ok = v !== null && v >= MIN_TRADE_SOL && v <= 100;
+                if (ok) updateQuick({ amountSol: v });
+                setQuickAmount(String(ok ? v : q.amountSol));
               }}
             />
           </label>

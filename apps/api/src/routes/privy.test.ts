@@ -465,14 +465,14 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
       expect(forged.statusCode).toBe(403);
     });
 
-    it("lets a wallet without Pro Mode buy only the access token, up to 5 SOL, even while trading is admins only", async () => {
+    it("lets a wallet without Pro Mode buy only the access token, even while trading is admins only", async () => {
       const { cookie } = await sessionFor(wallet());
       const was = env.PRO_TRADING_PUBLIC;
       try {
         env.PRO_TRADING_PUBLIC = false;
-        // Past the gate: the 5 SOL cap answers, not the route's 404 (no chain read is made).
+        // Past the gate: the 0.01 SOL minimum answers, not the route's 404 (no chain read is made).
         expect(
-          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: String(6e9) })).statusCode,
+          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "1000" })).statusCode,
         ).toBe(422);
         // Its Trade panel's reads answer for the access token only.
         const read = (url: string) =>
@@ -495,7 +495,7 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
         });
         expect([403, 404]).toContain(other.statusCode);
         expect(
-          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: String(6e9) })).statusCode,
+          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "1000" })).statusCode,
         ).toBe(422);
         expect(
           (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "sell", amount: "1000" })).statusCode,
@@ -517,6 +517,10 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
         const short = await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "100000000" });
         expect(short.statusCode).toBe(422);
         expect(short.json().error).toMatch(/0\.05 SOL, less than this buy/);
+        // No size cap on the access buy (user, 2026-10-18): 6 SOL reaches the balance check.
+        balance.mockResolvedValue(1_000_000_000n);
+        const big = await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: String(6e9) });
+        expect(big.json().error).toMatch(/has 1 SOL, less than this buy/);
       } finally {
         balance.mockRestore();
       }

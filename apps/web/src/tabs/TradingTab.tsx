@@ -13,6 +13,8 @@ import {
 import { Skeleton } from "../components/Charts";
 import { useNow } from "../hooks";
 import { ago, shortAddress } from "../format";
+import { decimalText, decimalUnits } from "../decimal";
+import { DecimalInput } from "../components/DecimalInput";
 
 /**
  * The trading bot (admin-only while it is new). A wallet the server holds for you - its key sealed
@@ -442,10 +444,16 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
   };
 
   const withdraw = async (max: boolean) => {
-    const lamports = max ? "max" : String(Math.round(Number(amount) * LAMPORTS));
-    if (!max && !(Number(amount) > 0)) return setMsg("Enter an amount in SOL.");
+    // "0.5" or "0,5", to the lamport, no float on the way.
+    const units = decimalUnits(amount, 9);
+    if (!max && !(units && units > 0n)) return setMsg("Enter an amount in SOL, like 0.5.");
+    const lamports = max ? "max" : units!.toString();
     if (!state.withdrawTo) return setMsg("Withdrawals are not set up for this wallet.");
-    if (!confirm(`Withdraw ${max ? "everything" : `${amount} SOL`} to ${shortAddress(state.withdrawTo)}?`))
+    if (
+      !confirm(
+        `Withdraw ${max ? "everything" : `${decimalText(amount)} SOL`} to ${shortAddress(state.withdrawTo)}?`,
+      )
+    )
       return;
     setBusy(true);
     setMsg(null);
@@ -535,10 +543,8 @@ function WalletPanel({ state, reload }: { state: TradingState; reload: () => Pro
           </dl>
           <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 12 }}>
             <input
-              type="number"
               inputMode="decimal"
-              min={0}
-              step="any"
+              autoComplete="off"
               placeholder="SOL"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
@@ -633,7 +639,6 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
   const editPlan = (next: Partial<ExitPlan>) => edit({ ...draft, exitPlan: { ...plan, ...next } });
   const toggle = (list: string[], id: string) =>
     list.includes(id) ? list.filter((x) => x !== id) : [...list, id];
-  const num = (v: string) => (v === "" ? 0 : Number(v));
 
   const submit = async () => {
     setBusy(true);
@@ -725,16 +730,14 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
         {draft.sources.requireAiBuy && (
           <label className="field">
             <span>Least AI 2x estimate (%)</span>
-            <input
-              type="number"
-              step="any"
+            <DecimalInput
               min={0}
               max={100}
               value={pct(draft.sources.minAiProbability2x)}
-              onChange={(e) =>
+              onValue={(n) =>
                 edit({
                   ...draft,
-                  sources: { ...draft.sources, minAiProbability2x: num(e.target.value) / 100 },
+                  sources: { ...draft.sources, minAiProbability2x: n / 100 },
                 })
               }
             />
@@ -751,13 +754,11 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
         <div className="grid2">
           <label className="field">
             <span>Buy size (SOL)</span>
-            <input
-              type="number"
-              step="any"
+            <DecimalInput
               min={0}
               max={defaults.maxBuySol ?? undefined}
               value={draft.buySol}
-              onChange={(e) => edit({ ...draft, buySol: num(e.target.value) })}
+              onValue={(n) => edit({ ...draft, buySol: n })}
             />
             {defaults.maxBuySol !== null && (
               <small className="faint">Capped at {defaults.maxBuySol} SOL by the server.</small>
@@ -765,23 +766,19 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
           </label>
           <label className="field">
             <span>Max open positions</span>
-            <input
-              type="number"
-              step={1}
+            <DecimalInput
               min={1}
               value={draft.maxOpenPositions}
-              onChange={(e) => edit({ ...draft, maxOpenPositions: num(e.target.value) })}
+              onValue={(n) => edit({ ...draft, maxOpenPositions: n })}
             />
           </label>
           <label className="field">
             <span>Max spend per 24h (SOL)</span>
-            <input
-              type="number"
-              step="any"
+            <DecimalInput
               min={0}
               max={defaults.maxDailySpendSol ?? undefined}
               value={draft.maxDailySpendSol}
-              onChange={(e) => edit({ ...draft, maxDailySpendSol: num(e.target.value) })}
+              onValue={(n) => edit({ ...draft, maxDailySpendSol: n })}
             />
             {defaults.maxDailySpendSol !== null && (
               <small className="faint">Capped at {defaults.maxDailySpendSol} SOL by the server.</small>
@@ -789,25 +786,21 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
           </label>
           <label className="field">
             <span>Skip signals older than (s)</span>
-            <input
-              type="number"
-              step={1}
+            <DecimalInput
               min={5}
               max={86400}
               value={draft.maxSignalAgeSeconds}
-              onChange={(e) => edit({ ...draft, maxSignalAgeSeconds: num(e.target.value) })}
+              onValue={(n) => edit({ ...draft, maxSignalAgeSeconds: n })}
             />
           </label>
           {paper ? (
             <label className="field">
               <span>Fill penalty (%)</span>
-              <input
-                type="number"
-                step="any"
+              <DecimalInput
                 min={0}
                 max={100}
                 value={(draft.fillPenaltyBps ?? 100) / 100}
-                onChange={(e) => edit({ ...draft, fillPenaltyBps: Math.round(num(e.target.value) * 100) })}
+                onValue={(n) => edit({ ...draft, fillPenaltyBps: Math.round(n * 100) })}
               />
               <small className="faint">
                 Taken off every simulated fill at the live quote, for what a real swap loses to latency and
@@ -818,13 +811,11 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
             <>
               <label className="field">
                 <span>Slippage (%)</span>
-                <input
-                  type="number"
-                  step="any"
+                <DecimalInput
                   min={0.01}
                   max={(defaults.maxSlippageBps ?? 10_000) / 100}
                   value={draft.slippageBps / 100}
-                  onChange={(e) => edit({ ...draft, slippageBps: Math.round(num(e.target.value) * 100) })}
+                  onValue={(n) => edit({ ...draft, slippageBps: Math.round(n * 100) })}
                 />
                 {defaults.maxSlippageBps !== null && (
                   <small className="faint">At most {defaults.maxSlippageBps / 100}% on this server.</small>
@@ -832,13 +823,11 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
               </label>
               <label className="field">
                 <span>Exit slippage (%)</span>
-                <input
-                  type="number"
-                  step="any"
+                <DecimalInput
                   min={0.01}
                   max={(defaults.maxExitSlippageBps ?? 10_000) / 100}
                   value={draft.exitSlippageBps / 100}
-                  onChange={(e) => edit({ ...draft, exitSlippageBps: Math.round(num(e.target.value) * 100) })}
+                  onValue={(n) => edit({ ...draft, exitSlippageBps: Math.round(n * 100) })}
                 />
                 <small className="faint">
                   The least a stop, trail or timed exit sells with, so it gets out.
@@ -848,40 +837,32 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
               </label>
               <label className="field">
                 <span>Exit slippage when retrying, up to (%)</span>
-                <input
-                  type="number"
-                  step="any"
+                <DecimalInput
                   min={0.01}
                   max={(defaults.maxExitSlippageBps ?? 10_000) / 100}
                   value={draft.exitSlippageMaxBps / 100}
-                  onChange={(e) =>
-                    edit({ ...draft, exitSlippageMaxBps: Math.round(num(e.target.value) * 100) })
-                  }
+                  onValue={(n) => edit({ ...draft, exitSlippageMaxBps: Math.round(n * 100) })}
                 />
                 <small className="faint">Each failed protective exit widens by 5 points up to this.</small>
               </label>
               <label className="field">
                 <span>Tries per entry</span>
-                <input
-                  type="number"
-                  step={1}
+                <DecimalInput
                   min={1}
                   max={20}
                   value={draft.maxEntryTries}
-                  onChange={(e) => edit({ ...draft, maxEntryTries: num(e.target.value) })}
+                  onValue={(n) => edit({ ...draft, maxEntryTries: n })}
                 />
               </label>
             </>
           )}
           <label className="field">
             <span>Max priority fee (SOL)</span>
-            <input
-              type="number"
-              step="any"
+            <DecimalInput
               min={0}
               max={defaults.maxPriorityFeeSol ?? undefined}
               value={draft.maxPriorityFeeSol}
-              onChange={(e) => edit({ ...draft, maxPriorityFeeSol: num(e.target.value) })}
+              onValue={(n) => edit({ ...draft, maxPriorityFeeSol: n })}
             />
             <small className="faint">
               {paper
@@ -891,12 +872,10 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
           </label>
           <label className="field">
             <span>Jito tip (SOL)</span>
-            <input
-              type="number"
-              step="any"
+            <DecimalInput
               min={0}
               value={draft.jitoTipSol}
-              onChange={(e) => edit({ ...draft, jitoTipSol: num(e.target.value) })}
+              onValue={(n) => edit({ ...draft, jitoTipSol: n })}
             />
             <small className="faint">
               Swaps go through Jito with this tip, out of reach of sandwich bots. 0 sends them normally.
@@ -904,12 +883,10 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
           </label>
           <label className="field">
             <span>Keep in reserve (SOL)</span>
-            <input
-              type="number"
-              step="any"
+            <DecimalInput
               min={0}
               value={draft.reserveSol}
-              onChange={(e) => edit({ ...draft, reserveSol: num(e.target.value) })}
+              onValue={(n) => edit({ ...draft, reserveSol: n })}
             />
             <small className="faint">
               Fees and token-account rent come out of this. Too little, and a sale can&apos;t pay its fee.
@@ -923,12 +900,10 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
         <div className="grid2">
           <label className="field">
             <span>{paper ? "Stop" : "Pause"} after losing in 24h (SOL)</span>
-            <input
-              type="number"
-              step="any"
+            <DecimalInput
               min={0}
               value={draft.dailyLossLimitSol}
-              onChange={(e) => edit({ ...draft, dailyLossLimitSol: num(e.target.value) })}
+              onValue={(n) => edit({ ...draft, dailyLossLimitSol: n })}
             />
             <small className="faint">
               Counts trades closed in the last 24 hours since it was last started. 0 is off. Open positions
@@ -968,32 +943,26 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
               <div className="row" key={i} style={{ gap: 8, marginBottom: 6 }}>
                 <label className="field">
                   <span>At (x)</span>
-                  <input
-                    type="number"
-                    step="any"
+                  <DecimalInput
                     min={1.01}
                     value={tp.multiple}
-                    onChange={(e) =>
+                    onValue={(n) =>
                       editPlan({
-                        takeProfits: plan.takeProfits.map((t, j) =>
-                          j === i ? { ...t, multiple: num(e.target.value) } : t,
-                        ),
+                        takeProfits: plan.takeProfits.map((t, j) => (j === i ? { ...t, multiple: n } : t)),
                       })
                     }
                   />
                 </label>
                 <label className="field">
                   <span>Sell (%)</span>
-                  <input
-                    type="number"
-                    step="any"
+                  <DecimalInput
                     min={1}
                     max={100}
                     value={pct(tp.sellFraction)}
-                    onChange={(e) =>
+                    onValue={(n) =>
                       editPlan({
                         takeProfits: plan.takeProfits.map((t, j) =>
-                          j === i ? { ...t, sellFraction: num(e.target.value) / 100 } : t,
+                          j === i ? { ...t, sellFraction: n / 100 } : t,
                         ),
                       })
                     }
@@ -1020,24 +989,20 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
             <div className="grid2" style={{ marginTop: 10 }}>
               <label className="field">
                 <span>Stop loss (% drop)</span>
-                <input
-                  type="number"
-                  step="any"
+                <DecimalInput
                   min={1}
                   max={100}
                   value={pct(1 - plan.stopFraction)}
-                  onChange={(e) => editPlan({ stopFraction: 1 - num(e.target.value) / 100 })}
+                  onValue={(n) => editPlan({ stopFraction: 1 - n / 100 })}
                 />
                 <small className="faint">Before the first sale (and after it, when there is no trail).</small>
               </label>
               <label className="field">
                 <span>Close if never sold after (min)</span>
-                <input
-                  type="number"
-                  step="any"
+                <DecimalInput
                   min={1}
                   value={plan.maxHoldMinutes}
-                  onChange={(e) => editPlan({ maxHoldMinutes: num(e.target.value) })}
+                  onValue={(n) => editPlan({ maxHoldMinutes: n })}
                 />
               </label>
             </div>
@@ -1046,33 +1011,25 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
               <div className="row" key={i} style={{ gap: 8, marginBottom: 6 }}>
                 <label className="field">
                   <span>From (x)</span>
-                  <input
-                    type="number"
-                    step="any"
+                  <DecimalInput
                     min={0}
                     value={t.fromMultiple}
-                    onChange={(e) =>
+                    onValue={(n) =>
                       editPlan({
-                        trail: plan.trail.map((x, j) =>
-                          j === i ? { ...x, fromMultiple: num(e.target.value) } : x,
-                        ),
+                        trail: plan.trail.map((x, j) => (j === i ? { ...x, fromMultiple: n } : x)),
                       })
                     }
                   />
                 </label>
                 <label className="field">
                   <span>Off the high (%)</span>
-                  <input
-                    type="number"
-                    step="any"
+                  <DecimalInput
                     min={1}
                     max={99}
                     value={pct(t.fraction)}
-                    onChange={(e) =>
+                    onValue={(n) =>
                       editPlan({
-                        trail: plan.trail.map((x, j) =>
-                          j === i ? { ...x, fraction: num(e.target.value) / 100 } : x,
-                        ),
+                        trail: plan.trail.map((x, j) => (j === i ? { ...x, fraction: n / 100 } : x)),
                       })
                     }
                   />
@@ -1097,12 +1054,10 @@ function ConfigForm({ config, defaults, sources, paper = false, onSave, onDirtyC
             )}
             <label className="field" style={{ marginTop: 10 }}>
               <span>Sell what the trail holds after (min)</span>
-              <input
-                type="number"
-                step="any"
+              <DecimalInput
                 min={1}
                 value={plan.trailMaxHoldMinutes}
-                onChange={(e) => editPlan({ trailMaxHoldMinutes: num(e.target.value) })}
+                onValue={(n) => editPlan({ trailMaxHoldMinutes: n })}
               />
             </label>
           </>

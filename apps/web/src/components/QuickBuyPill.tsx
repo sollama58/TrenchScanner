@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   disclaimerAccepted,
   runTrade,
+  tradeCooldownLeft,
   useCanSignTrades,
   useProState,
   useTradeSettings,
@@ -59,6 +60,15 @@ export function QuickBuyPill({
     if (state.kind === "busy") return;
     if (!disclaimerAccepted(owner)) {
       onNeedsPanel();
+      return;
+    }
+    // The API's one trade per 5 seconds per wallet, said here without a round trip.
+    const left = tradeCooldownLeft(owner);
+    if (left > 0) {
+      setState({
+        kind: "failed",
+        message: `One trade every 5 seconds: try again in ${Math.ceil(left / 1_000)}s.`,
+      });
       return;
     }
     if (q.amountSol >= CONFIRM_BUY_SOL && !window.confirm(`Buy ${q.amountSol} SOL of ${symbol}?`)) return;

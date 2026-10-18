@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_QUICK_BUY, DEFAULT_TRADE_SETTINGS, parseTradeSettings } from "./proTrade";
 import { presetCols } from "./components/TradePanel";
-import { parseAmounts } from "./components/TradingSettingsPanel";
+import { parseAmounts } from "./decimal";
 
 const parse = (v: object) => parseTradeSettings(JSON.stringify(v));
 
