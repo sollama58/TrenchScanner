@@ -118,8 +118,8 @@ export function ProModeCard({ funds, onBuy }: { funds: WalletBalance; onBuy: (()
         <div className="pro-card-how">
           <h4>How to get it</h4>
           <p className="small">
-            Hold enough $ASDFASDFA to be one of the 250 largest wallets and stay there for an hour. We check
-            every 5 minutes, and it switches on by itself. If you drop out, you keep it for 24 hours.
+            Hold enough $ASDFASDFA to be one of the 250 largest wallets. We check every 5 minutes, and it
+            switches on by itself. If you drop out, you keep it for 24 hours.
           </p>
           {cutoff !== null && balance && (
             <p className="small pro-card-cutoff">

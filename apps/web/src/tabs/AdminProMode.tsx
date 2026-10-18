@@ -115,9 +115,9 @@ export function ProModeAdmin() {
             )}
             <p className="small muted">
               Top 250 $ASDFASDFA holders: {r.holders.inTop} wallets with Pro Mode
-              {r.holders.qualifying ? `, ${r.holders.qualifying} still in their qualifying hour` : ""}
+              {r.holders.qualifying ? `, ${r.holders.qualifying} still qualifying` : ""}
               {r.holders.scannedAt ? <>, last read {when(r.holders.scannedAt)}</> : ", not read yet"}. A new
-              holder gets Pro Mode at the first scan after an hour in the top 250. Dropping out leaves 24
+              holder gets Pro Mode at the first scan that finds it in the top 250. Dropping out leaves 24
               hours of Pro Mode, with warnings, unless the wallet moved its bag away. After that it can&apos;t
               trade at all, sells included.
             </p>

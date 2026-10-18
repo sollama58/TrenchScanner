@@ -411,7 +411,7 @@ export function YoursArt() {
   );
 }
 
-/** The top 250 holders, an hour's wait, and what Pro Mode opens. */
+/** The top 250 holders, the 5-minute scan, and what Pro Mode opens. */
 export function ProArt() {
   const rows: [string, string, boolean][] = [
     ["#1", "4.1%", false],
@@ -421,7 +421,7 @@ export function ProArt() {
   ];
   const perks = ["Trade, no fee", "Quick buy", "Portfolio"];
   return (
-    <Art label="Your wallet at #250 of the top $ASDFASDFA holders; after an hour in the top 250 Pro Mode switches on, with trading, quick buy and the Portfolio">
+    <Art label="Your wallet at #250 of the top $ASDFASDFA holders; at the next 5-minute scan Pro Mode switches on, with trading, quick buy and the Portfolio">
       {rows.map(([rank, note, you], i) => (
         <g key={rank} transform={`translate(16 ${22 + i * 40})`}>
           <rect className={`box${you ? " mine" : ""}`} width="176" height="32" rx="10" />
@@ -449,11 +449,11 @@ export function ProArt() {
       <circle className="lens" cx="280" cy="104" r="30" />
       <path className="lens-handle" d="M280 104 V84 M280 104 L294 112" />
       <text x="280" y="160" className="label" textAnchor="middle">
-        1 hour
+        Every 5 min
       </text>
       <path className="flow" d="M324 104 H356" markerEnd="url(#tour-arrow)" />
       <text x="280" y="206" className="cap" textAnchor="middle">
-        Stay in
+        Next scan
       </text>
 
       <g transform="translate(372 22)">

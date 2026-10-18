@@ -15,14 +15,17 @@ import { SUBSCRIPTION_MINT } from "./constants.js";
  */
 
 export const PRO_HOLDER_COUNT = 250;
-/** The worker's scan cadence: a qualifying wallet gets Pro Mode within this of its hour. */
+/** The worker's scan cadence: a wallet gets Pro Mode within this of entering the top 250. */
 export const PRO_HOLDER_SCAN_MINUTES = 5;
 export const PRO_HOLDER_GRACE_MS = 24 * 60 * 60_000;
 /**
- * How long a wallet must stay in the top 250, scan after scan, before it gets Pro Mode: without
- * it one bag moved to a fresh wallet before each scan would hand out a day of Pro Mode to each.
+ * How long a wallet must stay in the top 250, scan after scan, before it gets Pro Mode. Zero (user
+ * decision 2026-10-18, "Instant"): Pro Mode at the first scan that sees it. The trade-off accepted
+ * with it: one bag moved to a fresh wallet before each scan can earn each a day's grace, unless a
+ * later scan finds the bag gone from it (markMovedBags). Raising it brings the wait back, with the
+ * Settings countdown and Admin's qualifying count.
  */
-export const PRO_HOLDER_QUALIFY_MS = 60 * 60_000;
+export const PRO_HOLDER_QUALIFY_MS = 0;
 /**
  * A newest scan older than this means the scans have stopped (Helius down, the job off): its
  * wallets then count down a grace period from it rather than keep Pro Mode with no end.

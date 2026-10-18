@@ -361,10 +361,7 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           <li>
             We read every $ASDFASDFA wallet every 5 minutes. Pools and program accounts don&apos;t count.
           </li>
-          <li>
-            A wallet has to stay in the top 250 through an hour of reads before Pro Mode starts, so one bag
-            passed between wallets can&apos;t switch it on for each of them.
-          </li>
+          <li>Pro Mode starts at the first read that finds the wallet in the top 250.</li>
           <li>
             A wallet that drops out keeps Pro Mode for 24 hours after the last read it was in, with a warning
             across the top of the page. Moving the bag away ends that grace at once. After it, trading from

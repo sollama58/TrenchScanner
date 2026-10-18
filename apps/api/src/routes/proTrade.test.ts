@@ -388,8 +388,8 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     expect(left).toBeLessThan(23.1 * 3_600_000);
   });
 
-  it("waits an hour of scans before a new holder gets it, so one bag can't hop between wallets", async () => {
-    expect(await me(NEWBIE)).toMatchObject({ isPro: false, proMode: { source: null, canClose: false } });
+  it("gives a new holder Pro Mode at the first scan that finds it (user decision: no wait)", async () => {
+    expect(await me(NEWBIE)).toMatchObject({ isPro: true, proMode: { source: "holder", rank: 2 } });
     // The holder's run carried through the new scan: it keeps Pro Mode.
     const row = await prisma.proHolder.findUnique({ where: { walletAddress: HOLDER } });
     expect(Date.now() - row!.inTopSince.getTime()).toBeGreaterThan(1.9 * 3_600_000);
@@ -397,20 +397,18 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
 
   it("gives Settings each wallet's place in the newest scan, or none outside it", async () => {
     expect(await proHolderRank(HOLDER)).toMatchObject({ rank: 1, of: 250, stale: false, qualifiesAt: null });
-    // New in this scan: Pro Mode an hour from now.
-    const newbie = await proHolderRank(NEWBIE);
-    expect(newbie).toMatchObject({ rank: 2, cutoffRaw: null });
-    expect(newbie.qualifiesAt!.getTime() - Date.now()).toBeGreaterThan(55 * 60_000);
+    // New in this scan, with Pro Mode already: nothing left to wait for.
+    expect(await proHolderRank(NEWBIE)).toMatchObject({ rank: 2, cutoffRaw: null, qualifiesAt: null });
     expect(await proHolderRank(GRACE)).toMatchObject({ rank: null });
     expect((await proHolderRank(LAPSED)).scannedAt).not.toBeNull();
   });
 
-  it("lists the newest scan for Admin by rank, with who has Pro Mode and who is still qualifying", async () => {
+  it("lists the newest scan for Admin by rank, with who has Pro Mode", async () => {
     const summary = await proHolderSummary();
-    expect(summary).toMatchObject({ inTop: 1, qualifying: 1, stale: false });
+    expect(summary).toMatchObject({ inTop: 2, qualifying: 0, stale: false });
     expect(summary.top.map((h) => [h.walletAddress, h.qualifiesAt === null])).toEqual([
       [HOLDER, true],
-      [NEWBIE, false],
+      [NEWBIE, true],
     ]);
     expect(summary.grace.map((g) => g.walletAddress)).toEqual([GRACE]);
   });
@@ -495,7 +493,7 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     resetProHolderCacheForTests();
   });
 
-  it("gives the first scan's holders Pro Mode at once, then makes newcomers wait their hour", async () => {
+  it("gives the first scan's holders Pro Mode at once, and newcomers at their first scan", async () => {
     await prisma.proHolder.deleteMany({});
     resetProHolderCacheForTests();
     const first = new Date();
@@ -512,7 +510,7 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     const next = new Date(first.getTime() + 5 * 60_000);
     await scan([HOLDER, NEWBIE], next);
     expect(await proHolderStanding(HOLDER, next)).toMatchObject({ state: "top" });
-    expect(await proHolderStanding(NEWBIE, next)).toMatchObject({ state: "pending" });
+    expect(await proHolderStanding(NEWBIE, next)).toMatchObject({ state: "top", rank: 2 });
     resetProHolderCacheForTests();
   });
 });

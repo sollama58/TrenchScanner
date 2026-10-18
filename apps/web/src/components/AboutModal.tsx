@@ -339,8 +339,8 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
       body: (
         <>
           <p className="tour-lead">
-            The 250 largest $ASDFASDFA holders get Pro Mode. Stay in the top 250 for an hour and it switches
-            on by itself; drop out and you keep it for 24 hours.
+            The 250 largest $ASDFASDFA holders get Pro Mode. It switches on by itself within minutes of
+            getting into the top 250; drop out and you keep it for 24 hours.
           </p>
           <ul className="tour-keys">
             {PRO_MODE_PERKS.map((p) => (
