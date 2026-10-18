@@ -62,20 +62,13 @@ function fitText(
   return s;
 }
 
-/** The cards' backdrop: deep night with the brand's violet-to-blue glow and faint radar arcs. */
+/** The cards' backdrop: flat near-black with a flame bar on top and faint radar arcs. */
 function drawBackdrop(ctx: CanvasRenderingContext2D, W: number, H: number) {
-  ctx.fillStyle = "#0b0b1a";
+  ctx.fillStyle = "#0c0d12";
   ctx.fillRect(0, 0, W, H);
-  const glowA = ctx.createRadialGradient(W * 0.15, H * 0.1, 0, W * 0.15, H * 0.1, W * 0.7);
-  glowA.addColorStop(0, "rgba(139, 92, 246, 0.55)");
-  glowA.addColorStop(1, "rgba(139, 92, 246, 0)");
-  ctx.fillStyle = glowA;
-  ctx.fillRect(0, 0, W, H);
-  const glowB = ctx.createRadialGradient(W * 0.95, H, 0, W * 0.95, H, W * 0.6);
-  glowB.addColorStop(0, "rgba(59, 130, 246, 0.5)");
-  glowB.addColorStop(1, "rgba(59, 130, 246, 0)");
-  ctx.fillStyle = glowB;
-  ctx.fillRect(0, 0, W, H);
+  // A thin flame bar along the top edge: the brand, without glows.
+  ctx.fillStyle = "#e2581b";
+  ctx.fillRect(0, 0, W, 6);
   // Faint radar arcs, echoing the mark.
   ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
   ctx.lineWidth = 2;
@@ -155,10 +148,7 @@ export async function renderPnlCard(data: PnlCardData): Promise<HTMLCanvasElemen
   const x = multiple(data.peakPct);
   ctx.fillStyle = up ? UP : DOWN;
   const xSize = fitText(ctx, x, 800, 200, W * 0.62);
-  ctx.shadowColor = up ? "rgba(52, 211, 153, 0.45)" : "rgba(248, 113, 113, 0.4)";
-  ctx.shadowBlur = 40;
   ctx.fillText(x, pad - 6, 300 + xSize * 0.82);
-  ctx.shadowBlur = 0;
   const xWidth = ctx.measureText(x).width;
   ctx.fillStyle = up ? UP : DOWN;
   ctx.font = `700 44px ${FONT}`;
@@ -282,10 +272,7 @@ export async function renderPositionCard(data: PositionCardData): Promise<HTMLCa
   ctx.fillText("PNL", pad, 318);
   ctx.fillStyle = tone;
   const size = fitText(ctx, pct, 800, 168, W * 0.56);
-  ctx.shadowColor = up ? "rgba(52, 211, 153, 0.45)" : "rgba(248, 113, 113, 0.4)";
-  ctx.shadowBlur = 40;
   ctx.fillText(pct, pad - 4, 318 + size * 0.86);
-  ctx.shadowBlur = 0;
   if (data.showAmounts) {
     const money =
       solFigure(data.pnlSol, true) +

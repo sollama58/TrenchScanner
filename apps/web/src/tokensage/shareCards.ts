@@ -35,8 +35,7 @@ const TRACK = "rgba(255, 255, 255, 0.08)";
 /** The dashboard's dark-mode categorical slots (styles.css --series-1..5), and "other". */
 const SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"];
 const OTHER = "#4a5163";
-const BRAND_A = "#8b5cf6";
-const BRAND_B = "#3b82f6";
+const BRAND_A = "#e2581b";
 
 const PAD = 64;
 const BODY_TOP = 252;
@@ -107,18 +106,11 @@ function frame(
 ) {
   const W = CARD_W;
   const H = CARD_H;
-  ctx.fillStyle = "#0b0b1a";
+  ctx.fillStyle = "#0c0d12";
   ctx.fillRect(0, 0, W, H);
-  const glowA = ctx.createRadialGradient(W * 0.1, 0, 0, W * 0.1, 0, W * 0.65);
-  glowA.addColorStop(0, "rgba(139, 92, 246, 0.42)");
-  glowA.addColorStop(1, "rgba(139, 92, 246, 0)");
-  ctx.fillStyle = glowA;
-  ctx.fillRect(0, 0, W, H);
-  const glowB = ctx.createRadialGradient(W, H, 0, W, H, W * 0.6);
-  glowB.addColorStop(0, "rgba(59, 130, 246, 0.36)");
-  glowB.addColorStop(1, "rgba(59, 130, 246, 0)");
-  ctx.fillStyle = glowB;
-  ctx.fillRect(0, 0, W, H);
+  // A thin flame bar along the top edge: the brand, without glows.
+  ctx.fillStyle = BRAND_A;
+  ctx.fillRect(0, 0, W, 6);
   ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
   ctx.lineWidth = 2;
   for (let r = 160; r <= 640; r += 120) {
@@ -175,10 +167,7 @@ function sagePill(ctx: CanvasRenderingContext2D, right: number, cy: number) {
   const tw = ctx.measureText(label).width;
   const w = tw + 74;
   const x = right - w;
-  const g = ctx.createLinearGradient(x, cy - 22, x + w, cy + 22);
-  g.addColorStop(0, BRAND_A);
-  g.addColorStop(1, BRAND_B);
-  ctx.fillStyle = g;
+  ctx.fillStyle = BRAND_A;
   roundRect(ctx, x, cy - 22, w, 44, 22);
   ctx.fill();
   // The eye (SageIcon), drawn on a 24px grid.
@@ -234,10 +223,7 @@ function bars(
     roundRect(ctx, x0, cy - 11, trackW, 22, 4);
     ctx.fill();
     const w = Math.max(6, (r.value / top) * trackW);
-    const g = ctx.createLinearGradient(x0, 0, x0 + trackW, 0);
-    g.addColorStop(0, BRAND_A);
-    g.addColorStop(1, BRAND_B);
-    ctx.fillStyle = g;
+    ctx.fillStyle = BRAND_A;
     roundRect(ctx, x0, cy - 11, w, 22, 4);
     ctx.fill();
     ctx.textAlign = "right";
