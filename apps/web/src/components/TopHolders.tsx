@@ -1,20 +1,12 @@
 import { Fragment, useId, useMemo, useState } from "react";
 import type { Snapshot } from "../api";
-import {
-  buildGraph,
-  CLOCK_ICON,
-  nodeSlot,
-  sameTimeSlot,
-  transfersOfNode,
-  type FlaggedHolder,
-} from "../bubbleMap";
+import { buildGraph, CLOCK_ICON, nodeSlot, sameTimeSlot, type FlaggedHolder } from "../bubbleMap";
 import { entryParts, entryTitle, type HolderEntry } from "../holderEntry";
 import { possibleSideText, usePossibleSides } from "../possibleSides";
 import { openWallet } from "../walletModal";
 import { useWalletNames, walletText } from "../walletNames";
-import { TRAIT_WORDS, TraitIcon, transferWords } from "./BubbleMap";
+import { TRAIT_WORDS, TraitIcon, TransferArrow, xferPctText } from "./BubbleMap";
 import { FoldHead } from "./Fold";
-import { TransferIcon } from "./Icons";
 import { WalletText } from "./WalletText";
 
 /** Holders listed before "Show all". */
@@ -28,8 +20,8 @@ const SHOWN = 12;
  * (user ask 2026-10-16): the bubble map above already shows who holds what.
  *
  * Each row also carries the bubble map's marks (user ask 2026-10-17): the wallet type (sniper,
- * fresh, empty), the same-minute clock in its group's colour, a transfer mark when it moved the
- * coin to or from another top holder, the KOL, side and Winner labels, and a line on how it got in
+ * fresh, empty), the same-minute clock in its group's colour, a tag for each transfer with
+ * another top holder naming which way the coin went and that holder's rank, the KOL, side and Winner labels, and a line on how it got in
  * from the trade tape (holder entries, on coins whose trades were read).
  */
 export function TopHolders({
@@ -63,6 +55,8 @@ export function TopHolders({
   // The bubble map reads the same wallets: one read, kept for the session, serves both.
   const sides = usePossibleSides(useMemo(() => holders.map((h) => h.wallet), [holders]));
   const byWallet = useMemo(() => new Map(flagged.map((w) => [w.wallet, w])), [flagged]);
+  // Each holder's place on the list, so a transfer can name the other holder by its rank.
+  const rankOf = useMemo(() => new Map(holders.map((h, i) => [h.id, i + 1])), [holders]);
   if (!graph || holders.length === 0) {
     if (!pending) return null;
     return (
@@ -106,7 +100,10 @@ export function TopHolders({
               const slot = nodeSlot(h, graph);
               const colour = slot === null ? "var(--bm-none)" : `var(--bm-${slot})`;
               const same = h.sameTime === null ? null : graph.sameTimeGroups[h.sameTime];
-              const moved = transferWords(transfersOfNode(graph, h.id));
+              // Who this holder sent the coin to and got it from (user ask 2026-10-18), largest first.
+              const moved = graph.transferLinks
+                .filter((l) => l.from === h.id || l.to === h.id)
+                .sort((a, b) => b.pct - a.pct);
               const f = h.wallet ? byWallet.get(h.wallet) : undefined;
               const named = h.wallet ? names[h.wallet] : undefined;
               const side = !!f?.knownSideOf || named?.source === "kol-side";
@@ -138,7 +135,7 @@ export function TopHolders({
                     >
                       <WalletText wallet={h.wallet} names={names} />
                     </button>
-                    {(h.trait || same || moved.length > 0) && (
+                    {(h.trait || same) && (
                       <span className="th-marks">
                         {h.trait && (
                           <span className="th-mark" title={TRAIT_WORDS[h.trait]}>
@@ -166,16 +163,29 @@ export function TopHolders({
                             </svg>
                           </span>
                         )}
-                        {moved.length > 0 && (
-                          <span
-                            className="th-mark th-xfer"
-                            title={`Transfers with other top holders: ${moved.join(", ")}`}
-                          >
-                            <TransferIcon size={14} />
-                          </span>
-                        )}
                       </span>
                     )}
+                    {moved.map((l) => {
+                      const sent = l.from === h.id;
+                      const other = graph.nodes.find((n) => n.id === (sent ? l.to : l.from));
+                      const rank = rankOf.get(sent ? l.to : l.from);
+                      const who = other?.wallet ? walletText(other.wallet, names) : "another holder";
+                      return (
+                        <button
+                          key={`${l.from}>${l.to}`}
+                          type="button"
+                          className={`tm-tag k-xfer th-xfer-tag${sent ? " sent" : " got"}`}
+                          onClick={() => other?.wallet && openWallet(other.wallet)}
+                          title={`${sent ? "Sent" : "Got"} ${xferPctText(l.pct)} of supply ${sent ? "to" : "from"} ${who}${
+                            rank ? ` (#${rank} on this list)` : ""
+                          } in ${l.count} transfer${l.count === 1 ? "" : "s"}. Opens that wallet.`}
+                        >
+                          {sent ? "Sent" : "Got"} {xferPctText(l.pct)}
+                          <TransferArrow />
+                          {rank ? `#${rank}` : who}
+                        </button>
+                      );
+                    })}
                     {h.flags.includes("creator") && <span className="tm-tag k-dev">Dev</span>}
                     {h.flags.includes("risky") && (
                       <span
