@@ -461,6 +461,32 @@ const ATA = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 const DEFAULT_UNIT_LIMIT = 200_000n;
 /** The most a build may pay in priority fee, and in Sender tips, each: the API's custom-fee ceiling. */
 const MAX_FEE_LAMPORTS = BigInt(Math.round(MAX_CUSTOM_FEE_SOL * 1e9));
+const JUPITER = "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4";
+const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
+/**
+ * Jupiter's exact-in routes the API builds, and where each keeps the account the output lands in.
+ * Their arguments end in in_amount (u64), quoted_out (u64), slippage_bps (u16), platform_fee_bps (u8).
+ */
+const JUPITER_ROUTES = new Map([
+  ["229,23,203,151,122,227,173,42", 3], // route: user_destination_token_account
+  ["193,32,155,51,65,214,156,129", 6], // shared_accounts_route: destination_token_account
+]);
+/** Pump.fun v3: buy_exact_quote_in_v3 (sol in, min tokens) and sell_v3 (tokens, min sol). */
+const PUMP_BUY = "225,247,80,30,213,179,132,136";
+const PUMP_SELL = "28,146,222,119,38,196,105,213";
+
+/** The trade the wallet asked for, which the build must be. */
+export interface TradeCheck {
+  side: "buy" | "sell";
+  /** Lamports to spend (buy) or raw tokens to sell. */
+  amount: bigint;
+  /** Selling the whole balance: the API reads it fresh, so the amount may differ. */
+  all?: boolean;
+  slippageBps: number;
+  /** The wallet's wrapped-SOL accounts and its accounts for the coin (solanaPda.ts). */
+  ownWrappedSol: string[];
+  ownCoinAccounts: string[];
+}
 
 /**
  * A second look at the API's build before the wallet is asked to sign it, so a compromised API
@@ -469,12 +495,16 @@ const MAX_FEE_LAMPORTS = BigInt(Math.round(MAX_CUSTOM_FEE_SOL * 1e9));
  * programs; SOL leaves the wallet only as Sender's tip or into its own wrapped-SOL account; token
  * instructions only wrap, unwrap to the wallet, or open the wallet's own accounts (never Approve,
  * Transfer or SetAuthority); fees within their ceilings; and every account those instructions
- * move funds with written in the message itself, not a lookup table. `ownWrappedSol` is the
- * wallet's wrapped-SOL accounts (solanaPda.ts). Returns why it isn't fine, or null.
- * (The wallet's own preview still shows what it does.)
+ * move funds with written in the message itself, not a lookup table.
+ *
+ * And it must be the trade asked for (`trade`): exactly one swap, on the side asked, for the
+ * amount asked, with no platform fee, no wider slippage than set, a minimum above zero, its
+ * output landing in the wallet's own account, and no more SOL wrapped than a buy spends. What a
+ * route's quote should be the browser can't know: the API's guard and simulation check that.
+ * Returns why it isn't fine, or null. (The wallet's own preview still shows what it does.)
  */
-export function tradeProblem(tx: Uint8Array, owner: string, ownWrappedSol: Iterable<string>): string | null {
-  const own = new Set([owner, ...ownWrappedSol]);
+export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): string | null {
+  const own = new Set([owner, ...trade.ownWrappedSol]);
   try {
     let at = 0;
     const shortVec = () => {
@@ -505,6 +535,8 @@ export function tradeProblem(tx: Uint8Array, owner: string, ownWrappedSol: Itera
     if (keys[0] !== owner) return "your wallet isn't the one paying for it";
 
     let tips = 0n;
+    let wrapped = 0n;
+    let swaps = 0;
     let unitLimit = DEFAULT_UNIT_LIMIT;
     let unitPrice = 0n;
     const ixCount = shortVec();
@@ -529,7 +561,10 @@ export function tradeProblem(tx: Uint8Array, owner: string, ownWrappedSol: Itera
         const tag = d.length >= 4 ? view.getUint32(0, true) : -1;
         if (tag === 2 && d.length >= 12 && acct(0) === owner) {
           const to = acct(1);
-          if (own.has(to)) continue;
+          if (own.has(to)) {
+            wrapped += view.getBigUint64(4, true);
+            continue;
+          }
           if (SENDER_TIP_ACCOUNTS.has(to)) {
             tips += view.getBigUint64(4, true);
             continue;
@@ -540,7 +575,8 @@ export function tradeProblem(tx: Uint8Array, owner: string, ownWrappedSol: Itera
           tag === 0 &&
           d.length >= 52 &&
           acct(0) === owner &&
-          TOKEN_PROGRAMS.has(bs58.encode(d.subarray(20, 52)))
+          TOKEN_PROGRAMS.has(bs58.encode(d.subarray(20, 52))) &&
+          view.getBigUint64(4, true) <= MAX_FEE_LAMPORTS // rent for a token account, returned on close
         )
           continue;
         return "it has a System instruction a swap doesn't need";
@@ -558,8 +594,39 @@ export function tradeProblem(tx: Uint8Array, owner: string, ownWrappedSol: Itera
         if ((tag === 0 || tag === 1) && acct(0) === owner && acct(2) === owner) continue;
         return "it opens a token account that isn't yours";
       }
-      // Jupiter and Pump.fun: their amounts are the API's guard's and the simulation's to check.
+      const u64At = (offset: number) => view.getBigUint64(offset, true);
+      const discriminator = Array.from(d.subarray(0, 8)).join(",");
+      if (program === JUPITER) {
+        const destAt = JUPITER_ROUTES.get(discriminator);
+        if (destAt === undefined || d.length < 8 + 19) return "it has a Jupiter step this trade doesn't need";
+        swaps++;
+        if (d[d.length - 1] !== 0) return "Jupiter would take a platform fee";
+        if (view.getUint16(d.length - 3, true) > trade.slippageBps)
+          return "it allows more slippage than you set";
+        const inAmount = u64At(d.length - 19);
+        if (trade.all ? inAmount <= 0n : inAmount !== trade.amount)
+          return "its amount isn't the one you asked for";
+        const dest = acct(destAt);
+        if (!(trade.side === "buy" ? trade.ownCoinAccounts : trade.ownWrappedSol).includes(dest))
+          return "what it buys wouldn't land in your wallet";
+        continue;
+      }
+      if (program === PUMP) {
+        const side = discriminator === PUMP_BUY ? "buy" : discriminator === PUMP_SELL ? "sell" : null;
+        if (!side || d.length < 24) return "it has a Pump.fun step this trade doesn't need";
+        swaps++;
+        if (side !== trade.side) return "it's a different trade from the one you asked for";
+        const amount = u64At(8);
+        if (trade.all && side === "sell" ? amount <= 0n : amount !== trade.amount)
+          return "its amount isn't the one you asked for";
+        if (u64At(16) <= 0n) return "it has no minimum, so any price would do";
+        continue;
+      }
     }
+    if (swaps !== 1) return "it isn't exactly one swap";
+    // SOL wrapped for the swap: no more than a buy spends, none at all for a sale.
+    if (wrapped > (trade.side === "buy" ? trade.amount : 0n))
+      return "it moves more SOL than you asked to spend";
     if (tips === 0n) return "it doesn't go through Helius Sender";
     if (tips > MAX_FEE_LAMPORTS) return "its Sender tip is over 0.01 SOL";
     if ((unitPrice * unitLimit) / 1_000_000n > MAX_FEE_LAMPORTS) return "its priority fee is over 0.01 SOL";
@@ -603,8 +670,15 @@ export async function runTrade(
     ...(input.all ? { all: true } : {}),
   });
   const unsigned = fromBase64(built.transaction);
-  const { ownWrappedSolAccounts } = await import("./solanaPda");
-  const problem = tradeProblem(unsigned, input.owner, ownWrappedSolAccounts(input.owner));
+  const { ownTokenAccounts, ownWrappedSolAccounts } = await import("./solanaPda");
+  const problem = tradeProblem(unsigned, input.owner, {
+    side: input.side,
+    amount: input.amount,
+    all: input.all,
+    slippageBps: Math.round(input.settings.slippagePct * 100),
+    ownWrappedSol: ownWrappedSolAccounts(input.owner),
+    ownCoinAccounts: ownTokenAccounts(input.owner, input.mint),
+  });
   if (problem) throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
   onStage("signing", built);
   const [signed] = await withTimeout(
