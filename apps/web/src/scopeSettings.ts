@@ -78,6 +78,8 @@ export interface ScopeDisplay {
   pauseOnHover: boolean;
   /** Columns left off the board. */
   hiddenColumns: ScopeColumn[];
+  /** The Stream's New and About to graduate columns in place of Your filters and Models. */
+  stream: boolean;
 }
 
 export interface ScopeSettings {
@@ -122,16 +124,19 @@ export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
     highlightNew: true,
     pauseOnHover: true,
     hiddenColumns: [],
+    stream: false,
   },
   columns: {
     filters: DEFAULT_COLUMN_FILTER,
     models: DEFAULT_COLUMN_FILTER,
+    new: DEFAULT_COLUMN_FILTER,
+    soon: DEFAULT_COLUMN_FILTER,
     graduated: DEFAULT_COLUMN_FILTER,
   },
 };
 
 const SCOPE_SETTINGS_KEY = "ts-scope-settings";
-const COLUMNS: ScopeColumn[] = ["filters", "models", "graduated"];
+const COLUMNS: ScopeColumn[] = ["filters", "models", "new", "soon", "graduated"];
 const SOCIALS = ["any", "x", "website", "either", "both"] as const;
 
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null);
@@ -195,17 +200,30 @@ export function normalizeScopeSettings(raw: unknown): ScopeSettings {
       colorMcap: bool(disp.colorMcap, d.colorMcap),
       highlightNew: bool(disp.highlightNew, d.highlightNew),
       pauseOnHover: bool(disp.pauseOnHover, d.pauseOnHover),
-      // Never every column: the board would be empty with no way to tell why.
       hiddenColumns: Array.isArray(disp.hiddenColumns)
-        ? COLUMNS.filter((c) => (disp.hiddenColumns as unknown[]).includes(c)).slice(0, COLUMNS.length - 1)
+        ? keepOneColumn(COLUMNS.filter((c) => (disp.hiddenColumns as unknown[]).includes(c)))
         : d.hiddenColumns,
+      stream: bool(disp.stream, d.stream),
     },
     columns: {
       filters: normalizeFilter(cols.filters),
       models: normalizeFilter(cols.models),
+      new: normalizeFilter(cols.new),
+      soon: normalizeFilter(cols.soon),
       graduated: normalizeFilter(cols.graduated),
     },
   };
+}
+
+/**
+ * Never every column of a board, with Stream off or on: it would be empty with no way to tell
+ * why. Graduated, on both boards, comes back.
+ */
+function keepOneColumn(hidden: ScopeColumn[]): ScopeColumn[] {
+  const all = (ids: ScopeColumn[]) => ids.every((c) => hidden.includes(c));
+  return all(["filters", "models", "graduated"]) || all(["new", "soon", "graduated"])
+    ? hidden.filter((c) => c !== "graduated")
+    : hidden;
 }
 
 let current: ScopeSettings = load();

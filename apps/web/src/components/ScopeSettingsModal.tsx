@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { SCOPE_COLUMNS, type ScopeColumn } from "../scope";
+import { SCOPE_COLUMNS, scopeColumnsFor, type ScopeColumn } from "../scope";
 import {
   activeFilterCount,
   resetColumnFilter,
@@ -75,7 +75,12 @@ export function ScopeSettingsModal({
           </button>
         </header>
         <div className="segmented small scope-settings-tabs" role="tablist" aria-label="Scope settings">
-          {(["display", ...SCOPE_COLUMNS.map((c) => c.id)] as ScopeSettingsSection[]).map((id) => {
+          {(
+            [
+              "display",
+              ...scopeColumnsFor(settings.display.stream).map((c) => c.id),
+            ] as ScopeSettingsSection[]
+          ).map((id) => {
             const col = SCOPE_COLUMNS.find((c) => c.id === id);
             const count = col ? activeFilterCount(settings.columns[col.id]) : 0;
             return (
@@ -213,6 +218,11 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
       <section className="scope-section">
         <h3>Board</h3>
         {sw(
+          "stream",
+          "Stream",
+          "New and About to graduate, from every token that passes the safety screen, in place of Your filters and Models",
+        )}
+        {sw(
           "pauseOnHover",
           "Hold still while I'm reading",
           "New rows wait behind a pill while your pointer or finger is on the board",
@@ -220,9 +230,9 @@ function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: 
         <div className="scope-pick-group">
           <span className="scope-pick-label">Columns</span>
           <div className="scope-pills">
-            {SCOPE_COLUMNS.map((c) => {
+            {scopeColumnsFor(d.stream).map((c, _, board) => {
               const shown = !d.hiddenColumns.includes(c.id);
-              const last = shown && d.hiddenColumns.length >= SCOPE_COLUMNS.length - 1;
+              const last = shown && board.filter((b) => !d.hiddenColumns.includes(b.id)).length <= 1;
               return (
                 <button
                   key={c.id}
@@ -429,7 +439,7 @@ function ColumnFilters({
             ))}
           </div>
         </div>
-        {col !== "graduated" && (
+        {(col === "filters" || col === "models") && (
           <Switch
             label="Show graduated alerts here too"
             hint="Alerts whose coin graduated move to the Graduated column, marked with their source"
@@ -437,7 +447,7 @@ function ColumnFilters({
             onChange={() => set({ showGraduated: !f.showGraduated })}
           />
         )}
-        {col !== "graduated" && (
+        {(col === "filters" || col === "models") && (
           <Switch
             label="Hide alerts that missed"
             hint="Missed 2x or stopped out"

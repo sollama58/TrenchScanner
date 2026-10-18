@@ -1,6 +1,6 @@
 /** The dashboard's tabs, and the code-split chunks behind them. */
 export type Tab =
-  "live" | "stream" | "model" | "lighthouse" | "filters" | "utilities" | "portfolio" | "settings" | "admin";
+  "live" | "model" | "lighthouse" | "filters" | "utilities" | "portfolio" | "settings" | "admin";
 
 export function tabFromHash(): Tab {
   const h = window.location.hash.replace("#", "");
@@ -8,8 +8,8 @@ export function tabFromHash(): Tab {
   if (h === "top") return "filters";
   // The trading bot was its own tab; it is a section of Admin now (opened by AdminTab).
   if (h === "trading") return "admin";
-  return h === "stream" ||
-    h === "model" ||
+  // The Stream was its own tab; it is Scope's Stream switch on the Live tab now (user ask 2026-10-18).
+  return h === "model" ||
     h === "lighthouse" ||
     h === "filters" ||
     h === "utilities" ||
@@ -19,9 +19,6 @@ export function tabFromHash(): Tab {
     ? h
     : "live";
 }
-
-/** The Stream tab's own data (components/StreamView.tsx), for index.html's boot prefetch and the warm-up. */
-export const STREAM_DATA = "/launches";
 
 type ModelTabModule = typeof import("./tabs/ModelTab");
 type LighthouseTabModule = typeof import("./tabs/LighthouseTab");
@@ -79,8 +76,6 @@ export const TAB_DATA: Record<Tab, string[]> = {
     "/curated/stats",
     "/curated/models?days=30",
   ],
-  // Nothing warmed: the tab is off unless switched on in Settings.
-  stream: [],
   model: ["/curated/insights?days=7", "/curated/models?days=7"],
   lighthouse: [
     "/curated/lighthouse/history?days=30&bucket=day&dimension=category",

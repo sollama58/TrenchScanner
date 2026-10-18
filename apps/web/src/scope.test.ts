@@ -61,6 +61,30 @@ describe("graduated alerts", () => {
   });
 });
 
+describe("the Stream's columns", () => {
+  const priced = (c: Card, mcap: number): Card =>
+    ({ ...c, snapshot: { marketCapUsd: mcap }, currentMarketCapUsd: null }) as Card;
+
+  it("puts tokens near graduating in About to graduate, closest first, the rest in New", () => {
+    const stream = [
+      priced(card("s1", "stream"), 12_000),
+      priced(card("s2", "stream"), 50_000),
+      priced(card("s3", "stream"), 61_000),
+    ];
+    const cols = splitScope([], [], undefined, stream);
+    expect(cols.new.map((c) => c.id)).toEqual(["s1"]);
+    expect(cols.soon.map((c) => c.id)).toEqual(["s3", "s2"]);
+  });
+
+  it("leaves a graduated token to the Graduated column", () => {
+    const entry = card("g1", "stream", false, "tok");
+    const cols = splitScope([], [entry], undefined, [priced(card("s1", "stream", false, "tok"), 80_000)]);
+    expect(cols.new).toEqual([]);
+    expect(cols.soon).toEqual([]);
+    expect(cols.graduated.map((c) => c.id)).toEqual(["g1"]);
+  });
+});
+
 describe("holdFrame", () => {
   it("keeps rows in place while paused and counts the new ones once", () => {
     const before = splitScope([card("m1", "match"), card("c1", "curated", true)], []);
@@ -87,7 +111,7 @@ describe("scopeTickIds", () => {
   it("takes each column's top rows in turn, within the tick's limit", () => {
     const filters = Array.from({ length: 20 }, (_, i) => card(`m${i}`, "match"));
     const models = Array.from({ length: 20 }, (_, i) => card(`c${i}`, "curated", true));
-    const ids = scopeTickIds({ filters, models, graduated: [card("g0", "stream")] });
+    const ids = scopeTickIds({ filters, models, new: [], soon: [], graduated: [card("g0", "stream")] });
     expect(ids.slice(0, 4)).toEqual(["t-m0", "t-c0", "t-g0", "t-m1"]);
     expect(ids).toHaveLength(30);
   });
