@@ -3034,6 +3034,15 @@ model WalletRisk {
   transferWins    Int?
   /// Median % of supply it bought.
   medianSupplyPct Float?
+  /// Profit or loss per coin over the same rows as medianSupplyPct, on its clean trades that sold
+  /// something (pnlCoins of them): SOL out less SOL in, and that as a % of SOL in. A coin it still
+  /// holds unsold isn't counted; a part-sold one counts what it took out so far. Median and mean
+  /// (user ask 2026-10-18). Null until the first rebuild after they were added, or with no such coin.
+  pnlCoins        Int?
+  medianPnlSol    Float?
+  avgPnlSol       Float?
+  medianPnlPct    Float?
+  avgPnlPct       Float?
   solIn           Float
   solOut          Float
   lastSeenAt      DateTime

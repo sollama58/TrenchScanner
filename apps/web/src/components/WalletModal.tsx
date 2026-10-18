@@ -75,6 +75,14 @@ export interface WalletProfile {
     winner?: boolean;
     sniper?: boolean;
     medianSupplyPct: number | null;
+    /** Per-coin profit or loss on clean trades that sold something. Absent from older API builds. */
+    pnl?: {
+      coins: number;
+      medianSol: number | null;
+      avgSol: number | null;
+      medianPct: number | null;
+      avgPct: number | null;
+    } | null;
     lastSeenAt: string;
     computedAt: string;
   } | null;
@@ -686,6 +694,12 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
             {risk.medianSupplyPct === null ? "–" : `${risk.medianSupplyPct.toFixed(1)}%`}
           </dd>
         </div>
+        {risk.pnl && (
+          <>
+            <PnlFact label="Median profit/loss" sol={risk.pnl.medianSol} pct={risk.pnl.medianPct} />
+            <PnlFact label="Average profit/loss" sol={risk.pnl.avgSol} pct={risk.pnl.avgPct} />
+          </>
+        )}
       </dl>
       <p className="faint small wm-note">
         How often it sold into an alert&apos;s stop, against the market&apos;s rate, nudged up by fast exits
@@ -694,8 +708,28 @@ function Risk({ risk }: { risk: NonNullable<WalletProfile["risk"]> }) {
         coins on record: Known dumper is 4+ sold into the stop and three quarters of its coins, Winner is 3+
         such wins at a rate that holds at twice the market&apos;s, and a wallet never carries both. Updated{" "}
         {ago(risk.computedAt)}.
+        {risk.pnl && (
+          <>
+            {" "}
+            Profit/loss is per coin, SOL out less SOL in and as a % of SOL in, over the {risk.pnl.coins} of
+            these coins it sold some of on a clean trade: one it still holds unsold isn&apos;t counted, and a
+            part-sold one counts only what it took out so far.
+          </>
+        )}
       </p>
     </section>
+  );
+}
+
+/** One of the risk card's per-coin profit/loss figures, green in profit and red at a loss. */
+function PnlFact({ label, sol, pct }: { label: string; sol: number | null; pct: number | null }) {
+  return (
+    <div className="wm-fact-wide">
+      <dt>{label}</dt>
+      <dd className={`num ${sol === null ? "" : sol >= 0 ? "up" : "down"}`}>
+        {sol === null ? "–" : `${signedSol(sol)} SOL · ${signedPct(pct)}`}
+      </dd>
+    </div>
   );
 }
 

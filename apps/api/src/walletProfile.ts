@@ -161,6 +161,17 @@ export interface WalletProfile {
     winner: boolean;
     sniper: boolean;
     medianSupplyPct: number | null;
+    /**
+     * Profit or loss per coin over the same coins, on its clean trades that sold something:
+     * median and mean, in SOL and as a % of SOL in. Null before the rebuild that added them.
+     */
+    pnl: {
+      coins: number;
+      medianSol: number | null;
+      avgSol: number | null;
+      medianPct: number | null;
+      avgPct: number | null;
+    } | null;
     lastSeenAt: string;
     computedAt: string;
   } | null;
@@ -196,6 +207,11 @@ interface RiskRow {
   winner: boolean;
   sniper: boolean;
   medianSupplyPct: number | null;
+  pnlCoins: number | null;
+  medianPnlSol: number | null;
+  avgPnlSol: number | null;
+  medianPnlPct: number | null;
+  avgPnlPct: number | null;
   lastSeenAt: Date;
   computedAt: Date;
 }
@@ -691,6 +707,16 @@ export async function loadWalletProfile(
           winner: risk.winner,
           sniper: risk.sniper,
           medianSupplyPct: risk.medianSupplyPct,
+          pnl:
+            risk.pnlCoins === null
+              ? null
+              : {
+                  coins: risk.pnlCoins,
+                  medianSol: risk.medianPnlSol,
+                  avgSol: risk.avgPnlSol,
+                  medianPct: risk.medianPnlPct,
+                  avgPct: risk.avgPnlPct,
+                },
           lastSeenAt: risk.lastSeenAt.toISOString(),
           computedAt: risk.computedAt.toISOString(),
         }

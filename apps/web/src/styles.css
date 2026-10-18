@@ -13589,6 +13589,13 @@ button.bm-same {
   font-weight: 650;
   font-size: 14px;
 }
+/* The profit/loss tiles: green in profit, red at a loss. */
+.wm-facts dd.up {
+  color: var(--good-ink) !important;
+}
+.wm-facts dd.down {
+  color: var(--bad-ink) !important;
+}
 .wm-note {
   margin: 6px 0 4px !important;
 }
