@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_QUICK_BUY, DEFAULT_TRADE_SETTINGS, parseTradeSettings } from "./proTrade";
 import { presetCols } from "./components/TradePanel";
 import { parseAmounts } from "./decimal";
+import { nextBuy, nextSell } from "./components/TradingSettingsPanel";
 
 const parse = (v: object) => parseTradeSettings(JSON.stringify(v));
 
@@ -54,5 +55,17 @@ describe("trade settings", () => {
     expect(parseAmounts("-1 abc 0 150 50", 100, 5)).toEqual([50]);
     expect(parseAmounts("", 100, 5)).toEqual([]);
     expect(parseAmounts("0.005 0.01 0.5", 100, 5, 0.01)).toEqual([0.01, 0.5]);
+  });
+});
+
+describe("new preset buttons", () => {
+  it("starts a buy at double the biggest, within 100 SOL", () => {
+    expect(nextBuy([0.1, 0.25, 0.5, 1])).toBe(2);
+    expect(nextBuy([80])).toBe(100);
+    expect(nextBuy([])).toBe(0.1);
+  });
+  it("starts a sale at the first common share not there yet", () => {
+    expect(nextSell([25, 50, 100])).toBe(75);
+    expect(nextSell([100])).toBe(50);
   });
 });
