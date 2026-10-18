@@ -3,11 +3,15 @@ import { z } from "zod";
 import {
   backupFileName,
   createLogger,
+  dbDumpConfig,
+  dbDumpDownload,
+  DbDumpError,
   decodeBackup,
   describeBackupSeats,
   encodeBackup,
   exportRunningModels,
   selectSeats,
+  listDbDumps,
   listModelBackups,
   listTableBackups,
   loadBackupData,
@@ -176,6 +180,58 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
         .send(loaded.data);
     } catch (err) {
       if (err instanceof TableBackupError) return reply.code(422).send({ error: err.message });
+      throw err;
+    }
+  });
+
+  /**
+   * The full database dumps (backup/dbDumps.ts): the nightly pg_dumps the trenchscanner-db-backup
+   * cron writes to the dumps bucket, and any "Dump now" waiting for it. Taking one is Admin >
+   * Worker's run-now of the db-dump job (POST /admin/jobs/db-dump/run-now), which this panel calls.
+   */
+  app.get("/db-dumps", async (_request, reply) => {
+    const cfg = dbDumpConfig(opts.env);
+    const [heartbeat, pending, lastRequest] = await Promise.all([
+      prisma.systemHeartbeat.findUnique({ where: { job: "db-dump" } }),
+      prisma.jobRunRequest.findFirst({
+        where: { job: "db-dump", startedAt: null },
+        orderBy: { requestedAt: "asc" },
+      }),
+      prisma.jobRunRequest.findFirst({ where: { job: "db-dump" }, orderBy: { requestedAt: "desc" } }),
+    ]);
+    const meta = (heartbeat?.meta ?? null) as { runningSince?: unknown; sizeBytes?: unknown } | null;
+    const state = {
+      lastRunAt: heartbeat?.lastRunAt ?? null,
+      lastSuccessAt: heartbeat?.lastSuccessAt ?? null,
+      lastError: heartbeat?.lastError ?? null,
+      runningSince: typeof meta?.runningSince === "string" ? meta.runningSince : null,
+      pending: pending ? { requestedAt: pending.requestedAt } : null,
+      lastRequest: lastRequest
+        ? { requestedAt: lastRequest.requestedAt, startedAt: lastRequest.startedAt }
+        : null,
+    };
+    if (!cfg) return { configured: false, dumps: [], ...state };
+    try {
+      return { configured: true, dumps: await listDbDumps(cfg), ...state };
+    } catch (err) {
+      logger.warn("could not list the database dumps", { error: (err as Error).message });
+      return reply.code(502).send({ error: `Could not read the dumps bucket: ${(err as Error).message}` });
+    }
+  });
+
+  // The whole database, every user's data included: a wallet signature, in the query. The answer
+  // is a short-lived link to the bucket, so the file never passes through the API.
+  app.get("/db-dumps/:name/download", async (request, reply) => {
+    if (!(await requireAdminConfirmation(request, reply))) return;
+    const cfg = dbDumpConfig(opts.env);
+    if (!cfg) return reply.code(409).send({ error: "The dumps bucket isn't set on the API (DB_DUMP_S3_*)." });
+    const { name } = request.params as { name: string };
+    try {
+      const link = await dbDumpDownload(cfg, name);
+      if (!link) return reply.code(404).send({ error: "no such dump" });
+      return reply.header("cache-control", "no-store").send(link);
+    } catch (err) {
+      if (err instanceof DbDumpError) return reply.code(422).send({ error: err.message });
       throw err;
     }
   });

@@ -13,7 +13,7 @@ import { CreditsAdmin } from "./AdminCredits";
 import { FreeAccessAdmin } from "./AdminFreeAccess";
 import { ProModeAdmin, SacrificeAdmin } from "./AdminProMode";
 import { RunNow } from "./AdminRunNow";
-import { AdminActionLog, TableBackups } from "./AdminSecurity";
+import { AdminActionLog, DbDumps, TableBackups } from "./AdminSecurity";
 import { adminCall } from "../tradeConfirm";
 import { FeedSimAdmin } from "./AdminFeedSim";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
@@ -547,6 +547,7 @@ function Backups() {
           )}
         </Load>
       </Panel>
+      <DbDumps />
       <TableBackups />
     </div>
   );

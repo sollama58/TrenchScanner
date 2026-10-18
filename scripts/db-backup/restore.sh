@@ -1,31 +1,44 @@
 #!/usr/bin/env bash
-# Restores a full dump taken by backup.sh. Every command reads the bucket; only "restore" writes,
-# and only to the database named by --target.
+# Restores a full dump taken by backup.sh, from the bucket or from a downloaded file (Admin >
+# Backups > Full database backups, or "download" below). Only "restore" writes, and only to the
+# database named by --target. Commands on a local FILE need no bucket keys.
 #
-#   restore.sh list                       the complete dumps, newest last
+#   restore.sh list                       the complete dumps in the bucket, newest last
 #   restore.sh verify   [DUMP]            sha256 and table of contents of one dump (default latest)
-#   restore.sh download [DUMP] FILE       copy one dump to a local file (sha256 checked)
+#   restore.sh verify-file FILE [--sha256 HEX]
+#                                         the same for a downloaded file
+#   restore.sh download [DUMP] FILE       copy one dump to a local file, and FILE.sha256 beside it
 #   restore.sh restore  [DUMP] --target URL [options]
+#   restore.sh restore  --from-file FILE --target URL [options]
 #
 # DUMP is "latest" (default), a file name from "list", or a full key.
+#
+# A downloaded FILE is checked against its sha256 before anything is written: --sha256 HEX, or the
+# .sha256 file saved beside it (trenchscanner-<stamp>.sha256 or FILE.sha256). Without either the
+# restore refuses unless --unverified is given.
 #
 # restore options:
 #   --target URL          the database to restore into (required; never defaulted)
 #   --table NAME          only this table, with its data (repeatable); into an empty database only
-#   --from-file FILE      restore a local copy (from "download") instead of streaming the bucket
+#   --from-file FILE      restore a local copy instead of streaming the bucket
+#   --sha256 HEX          with --from-file: the sha256 the file must have
+#   --unverified          with --from-file: restore although no sha256 is known for it
+#   --safety-file PATH    with --replace and no bucket keys: where the undo copy of the target goes
+#                         (default ./pre-restore-<database>-<UTC stamp>.dump)
 #   --replace             the target may hold data: its public schema is dropped and rebuilt from
 #                         the dump in ONE transaction, so a failed restore leaves it as it was
 #   --allow-connections   go ahead although other sessions are connected to the target
 #   --skip-safety-dump    with --replace: do not first copy the target to the bucket
 #   --confirm NAME        with --replace on the live database: its name, instead of typing it
 #   --disk-gb N           with --replace: the target's disk, to check it can hold old and new data
-#   --keep-sessions       do not sign everyone out after the restore (see step 3)
 #                         at once until the transaction commits (default $DB_DISK_GB, else 30)
+#   --keep-sessions       do not sign everyone out after the restore (see step 3)
 #
 # Restoring into a NEW, empty database and pointing the services at it is the safe way: nothing
 # live is touched until you switch DATABASE_URL. --replace on the live database is for when that
 # is not possible; it refuses while the services are connected, and it first copies the database
-# as it stands to the bucket (db-dumps-pre-restore/), so the restore itself can be undone.
+# as it stands to the bucket (db-dumps-pre-restore/), or with no bucket keys to a local file
+# (--safety-file), so the restore itself can be undone.
 
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -36,8 +49,56 @@ source "$here/common.sh"
 export PGOPTIONS="${PGOPTIONS:-} -c statement_timeout=0 -c lock_timeout=0 -c idle_in_transaction_session_timeout=0"
 
 usage() {
-  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
+}
+
+# The sha256 a downloaded FILE should have: $2 when given, else the .sha256 saved beside it.
+# Prints nothing when neither is there.
+expected_file_sha() {
+  local file="$1" given="${2:-}" side
+  if [ -n "$given" ]; then
+    printf '%s\n' "$given"
+    return
+  fi
+  for side in "${file%.dump}.sha256" "$file.sha256"; do
+    if [ -f "$side" ]; then
+      cut -d' ' -f1 <"$side"
+      return
+    fi
+  done
+}
+
+# Checks a downloaded FILE: its sha256 ($2, or the .sha256 beside it; refused when neither is
+# there unless $3 is 1) and that pg_restore reads its table of contents.
+verify_file() {
+  local file="$1" want got
+  [ -f "$file" ] || die "$file does not exist"
+  want="$(expected_file_sha "$file" "${2:-}")"
+  if [ -n "$want" ]; then
+    [[ "$want" =~ ^[0-9a-f]{64}$ ]] || die "the expected sha256 \"$want\" is not a sha256"
+    log "checking $file against sha256 $want"
+    got="$(sha256sum "$file" | cut -d' ' -f1)"
+    [ "$got" = "$want" ] || die "$file does not match its sha256 (got $got, expected $want): a partial or altered download"
+  elif [ "${3:-0}" -eq 1 ]; then
+    log "WARNING: no sha256 for $file (--unverified): only its table of contents is checked"
+  else
+    die "no sha256 for $file: keep the .sha256 file downloaded with it beside it, pass --sha256 HEX, or --unverified"
+  fi
+  pg_restore --list "$file" >/dev/null || die "pg_restore cannot read $file"
+  log "verified: $file$([ -z "$want" ] || echo ' matches its sha256 and') is a dump pg_restore reads"
+}
+
+cmd_verify_file() {
+  local file="" sha=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --sha256) sha="${2:?--sha256 needs a hash}"; shift 2 ;;
+      *) file="$1"; shift ;;
+    esac
+  done
+  [ -n "$file" ] || die "usage: restore.sh verify-file FILE [--sha256 HEX]"
+  verify_file "$file" "$sha" 0
 }
 
 cmd_list() {
@@ -76,7 +137,8 @@ cmd_download() {
     die "downloaded file does not match its sha256 (got $got, recorded $want_sha); removed it"
   fi
   pg_restore --list "$file" >/dev/null || die "pg_restore cannot read $file"
-  log "saved $file ($(du -h "$file" | cut -f1)), sha256 matches"
+  printf '%s  %s\n' "$want_sha" "${key##*/}" >"$file.sha256"
+  log "saved $file ($(du -h "$file" | cut -f1)), sha256 matches; its sha256 is in $file.sha256"
 }
 
 # Tables in the target's public schema.
@@ -89,7 +151,7 @@ other_sessions() {
 }
 
 cmd_restore() {
-  local want="latest" target="" from_file="" replace=0 allow_conn=0 safety=1 keep_sessions=0 confirm="" disk_gb="${DB_DISK_GB:-30}"
+  local want="latest" target="" from_file="" file_sha="" unverified=0 safety_file="" replace=0 allow_conn=0 safety=1 keep_sessions=0 confirm="" disk_gb="${DB_DISK_GB:-30}"
   local -a tables=()
   if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
     want="$1"
@@ -100,6 +162,9 @@ cmd_restore() {
       --target) target="${2:?--target needs a URL}"; shift 2 ;;
       --table) tables+=("${2:?--table needs a name}"); shift 2 ;;
       --from-file) from_file="${2:?--from-file needs a file}"; shift 2 ;;
+      --sha256) file_sha="${2:?--sha256 needs a hash}"; shift 2 ;;
+      --unverified) unverified=1; shift ;;
+      --safety-file) safety_file="${2:?--safety-file needs a path}"; shift 2 ;;
       --replace) replace=1; shift ;;
       --keep-sessions) keep_sessions=1; shift ;;
       --allow-connections) allow_conn=1; shift ;;
@@ -119,11 +184,11 @@ cmd_restore() {
   # 1. The dump, checked before anything is written.
   local source key=""
   if [ -n "$from_file" ]; then
-    [ -f "$from_file" ] || die "$from_file does not exist"
-    pg_restore --list "$from_file" >/dev/null || die "pg_restore cannot read $from_file"
+    verify_file "$from_file" "$file_sha" "$unverified"
     source="$from_file"
     log "restoring the local file $from_file"
   else
+    need_bucket
     key="$(resolve_dump "$want")"
     verify_dump "$key"
     source="$(s3_url "$key")"
@@ -169,12 +234,25 @@ cmd_restore() {
       fi
       [ "$confirm" = "$dbname" ] || die "confirmation did not match \"$dbname\"; nothing was changed"
     fi
-    if [ "$safety" -eq 1 ]; then
+    if [ "$safety" -eq 1 ] && bucket_configured; then
       log "copying the target as it stands to the bucket first (undo point)"
       local undo
       undo="$(DATABASE_URL="$target" DB_DUMP_KIND=pre-restore "$here/backup.sh" | tail -n1)"
       [ -n "$undo" ] || die "the safety copy did not finish; nothing was changed"
       log "undo point: $undo (restore.sh restore ${undo##*/} --target ... --replace)"
+    elif [ "$safety" -eq 1 ]; then
+      # No bucket here (a downloaded file restored from a laptop): the undo copy is a local file.
+      [ -n "$safety_file" ] || safety_file="./pre-restore-${dbname}-$(date -u +%Y%m%dT%H%M%SZ).dump"
+      [ ! -e "$safety_file" ] || die "$safety_file already exists"
+      log "copying the target as it stands to $safety_file first (undo point)"
+      if ! pg_dump --dbname="$target" --format=custom --compress="${DB_DUMP_COMPRESS:-zstd:3}" \
+        --no-owner --no-privileges --file="$safety_file"; then
+        rm -f "$safety_file"
+        die "the safety copy did not finish; nothing was changed"
+      fi
+      pg_restore --list "$safety_file" >/dev/null || die "the safety copy $safety_file does not read back; nothing was changed"
+      sha256sum "$safety_file" | sed "s|  .*|  ${safety_file##*/}|" >"${safety_file%.dump}.sha256"
+      log "undo point: $safety_file (restore.sh restore --from-file $safety_file --target ... --replace)"
     fi
   fi
 
@@ -212,14 +290,15 @@ cmd_restore() {
       # made. So everyone is signed out once, in the same transaction (security audit
       # 2026-10-16, backups F4). --keep-sessions skips it.
       if [ "$keep_sessions" -eq 0 ]; then
+        # Schema-qualified: pg_restore's script empties search_path, so a bare "User" is not found.
         cat <<'SQL'
 DO $$
 BEGIN
   IF to_regclass('public."User"') IS NOT NULL THEN
-    UPDATE "User" SET "sessionVersion" = "sessionVersion" + 1;
+    UPDATE public."User" SET "sessionVersion" = "sessionVersion" + 1;
   END IF;
   IF to_regclass('public."LinkedDevice"') IS NOT NULL THEN
-    UPDATE "LinkedDevice" SET "revokedAt" = now() WHERE "revokedAt" IS NULL;
+    UPDATE public."LinkedDevice" SET "revokedAt" = now() WHERE "revokedAt" IS NULL;
   END IF;
 END $$;
 SQL
@@ -244,9 +323,10 @@ SQL
 }
 
 case "${1:-}" in
-  list) shift; cmd_list "$@" ;;
-  verify) shift; cmd_verify "$@" ;;
-  download) shift; cmd_download "$@" ;;
+  list) shift; need_bucket; cmd_list "$@" ;;
+  verify) shift; need_bucket; cmd_verify "$@" ;;
+  verify-file) shift; cmd_verify_file "$@" ;;
+  download) shift; need_bucket; cmd_download "$@" ;;
   restore) shift; cmd_restore "$@" ;;
   "" | -h | --help | help) usage ;;
   *) log "unknown command $1"; usage 1 ;;
