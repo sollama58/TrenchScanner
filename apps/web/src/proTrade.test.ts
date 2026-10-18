@@ -139,13 +139,8 @@ describe("proStateOf", () => {
       graceEndsAt: Date.parse("2026-10-19T00:00:00Z"),
       graceUnconfirmed: false,
     });
-    expect(proStateOf({ walletAddress: "w", isPro: false, proMode: { canClose: true } })).toEqual({
-      wallet: "w",
-      pro: false,
-      graceEndsAt: null,
-      graceUnconfirmed: false,
-    });
-    // Never had it: the trade system stays hidden.
+    // Without Pro Mode the trade system stays hidden, even for a wallet that had it (no sell-only).
+    expect(proStateOf({ walletAddress: "w", isPro: false, proMode: { canClose: true } })).toBeNull();
     expect(proStateOf({ walletAddress: "w", isPro: false, proMode: { canClose: false } })).toBeNull();
     expect(proStateOf({ walletAddress: "w" })).toBeNull();
   });

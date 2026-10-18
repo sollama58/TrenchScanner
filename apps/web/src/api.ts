@@ -129,7 +129,7 @@ export interface User {
   isPro?: boolean;
   proMode?: {
     source: "admin" | "grant" | "holder" | "grace" | null;
-    /** May sell what it holds, Pro Mode or not (it had Pro Mode once). */
+    /** May sell what it holds: the same as isPro now (no sell-only access). */
     canClose: boolean;
     rank?: number;
     /** Out of the top 250 holders: when Pro Mode ends (ISO), unless it's back in by then. */
@@ -1643,6 +1643,8 @@ export interface FeedAppearance {
   chartMarks: boolean;
   chartMarkKinds: ChartMarkKind[];
   chartMarkMinSol: number;
+  /** The token chart's default: a line or candles (absent from older API builds: line). */
+  chartStyle: "line" | "candles";
   hidden: CardField[];
 }
 

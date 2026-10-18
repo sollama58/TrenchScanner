@@ -28,8 +28,8 @@ export function ProGraceBanner() {
           ? "We can't confirm your place in the top 250 $ASDFASDFA holders right now. "
           : "Your wallet is no longer one of the top 250 $ASDFASDFA holders. "}
         Pro Mode ends in <strong className="num">{graceLeftText(pro.graceEndsAt)}</strong> unless{" "}
-        {pro.graceUnconfirmed ? "it's confirmed" : "it's back in the top 250"} by then. After that you can
-        still sell what you hold.
+        {pro.graceUnconfirmed ? "it's confirmed" : "it's back in the top 250"} by then. After that you can't
+        trade from the token window, sells included.
       </p>
     </aside>
   );

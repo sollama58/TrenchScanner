@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "ProModeGrant" ADD COLUMN IF NOT EXISTS "expiresAt" TIMESTAMP(3);
+
+-- AlterTable
+ALTER TABLE "ProHolder" ADD COLUMN IF NOT EXISTS "bagMovedAt" TIMESTAMP(3);
