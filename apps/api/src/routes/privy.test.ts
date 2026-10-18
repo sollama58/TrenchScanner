@@ -465,15 +465,22 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
       expect(forged.statusCode).toBe(403);
     });
 
-    it("lets a wallet without Pro Mode buy only the access token, up to 5 SOL, once trading is public", async () => {
+    it("lets a wallet without Pro Mode buy only the access token, up to 5 SOL, even while trading is admins only", async () => {
       const { cookie } = await sessionFor(wallet());
       const was = env.PRO_TRADING_PUBLIC;
       try {
         env.PRO_TRADING_PUBLIC = false;
+        // Past the gate: the 5 SOL cap answers, not the route's 404 (no chain read is made).
         expect(
-          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "10000000" })).statusCode,
-        ).toBe(404);
-        env.PRO_TRADING_PUBLIC = true;
+          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: String(6e9) })).statusCode,
+        ).toBe(422);
+        // Its Trade panel's reads answer for the access token only.
+        const read = (url: string) =>
+          app.inject({ method: "GET", url, cookies: { [SESSION_COOKIE_NAME]: cookie } });
+        const sol = "So11111111111111111111111111111111111111112";
+        expect((await read(`/pro/trade/fee?mint=${sol}&speed=eco`)).statusCode).toBe(404);
+        expect((await read(`/pro/trade/costs?mint=${sol}`)).statusCode).toBe(404);
+        expect((await read(`/pro/trade/${sol}/position`)).statusCode).toBe(404);
         // The kill switch closes it too.
         const enabled = env.PRO_TRADING_ENABLED;
         env.PRO_TRADING_ENABLED = false;

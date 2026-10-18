@@ -273,7 +273,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
    * The signed-in wallet and whether it has Pro Mode. Pro Mode or nothing: a wallet without it
    * can't sell either (user decision 2026-10-18). The one carve-out, `access`: routes that also
    * serve the access-token buy (anyone signed in may swap SOL for $ASDFASDFA here to burn for
-   * access, Privy accounts above all), open while trading is on and public. It buys only.
+   * access, Privy accounts above all), open while trading is on. It buys only; the read routes
+   * (fee, costs, position) let it through for that one coin, so the Trade panel can show them.
    */
   async function proWallet(
     request: FastifyRequest,
@@ -290,6 +291,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   }
   // The kill switch (PRO_TRADING_ENABLED) stops the access buy too.
   const accessSwapOpen = () => accessSwapOpenFor(env);
+  /** A read about the access token itself, which the access buy's Trade panel needs. */
+  const accessMint = (query: unknown) => (query as { mint?: unknown } | null)?.mint === SUBSCRIPTION_MINT;
 
   app.addHook("preHandler", app.authenticate);
 
@@ -385,7 +388,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   // What a trade would pay the network now (priority fee and Sender's tip), for the panel to show
   // before anything is built. TrenchScanner itself takes nothing.
   app.get("/trade/fee", { config: { rateLimit: READ_RATE_LIMIT } }, async (request, reply) => {
-    const who = await proWallet(request, reply);
+    const who = await proWallet(request, reply, { access: accessMint(request.query) });
     if (!who) return;
     const parsed = feeSchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
@@ -407,7 +410,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   // The rest of what a buy costs (user ask 2026-10-18): the coin's transfer tax, the route's pool
   // and LP fees, price impact and a first buy's account rent. Each part it can't read is null.
   app.get("/trade/costs", { config: { rateLimit: READ_RATE_LIMIT } }, async (request, reply) => {
-    const who = await proWallet(request, reply);
+    const who = await proWallet(request, reply, { access: accessMint(request.query) });
     if (!who) return;
     const parsed = costsSchema.safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
@@ -570,7 +573,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     "/trade/:mint/position",
     { config: { rateLimit: READ_RATE_LIMIT } },
     async (request, reply) => {
-      const who = await proWallet(request, reply);
+      const who = await proWallet(request, reply, { access: request.params.mint === SUBSCRIPTION_MINT });
       if (!who) return;
       const { wallet } = who;
       const { mint } = request.params;

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { type AlertPrefs, type ChaosSite, type Settings } from "../api";
+import { type AlertPrefs, type ChaosSite, type Settings, type Subscription } from "../api";
 import { DEFAULT_ALERT_PREFS, loadSettings, saveAlertPrefs, useSettings } from "../alerts";
 import { Skeleton } from "../components/Charts";
 import { BurnPanel } from "../components/BurnPanel";
+import { BuyAsdfDialog } from "../components/BuyAsdfDialog";
 import { FeedPanel } from "../components/FeedPanel";
 import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
 import { TwoFactorPanel } from "../components/TwoFactorPanel";
@@ -10,7 +11,15 @@ import { PrivyWalletPanel } from "../components/PrivyWalletPanel";
 import { TradingSettingsPanel } from "../components/TradingSettingsPanel";
 import { SETTINGS_ACCOUNT_ID } from "../components/WalletMenu";
 import { useMe } from "../me";
-import { BoltIcon, ShieldIcon, SlidersIcon, StreamIcon } from "../components/Icons";
+import {
+  BoltIcon,
+  ClockIcon,
+  FlameIcon,
+  ShieldIcon,
+  SlidersIcon,
+  StreamIcon,
+  WalletIcon,
+} from "../components/Icons";
 import { Switch } from "../components/AlertDeliveryPanels";
 import {
   CHAOS_PER_MINUTE,
@@ -22,12 +31,14 @@ import {
   useChaosStatus,
 } from "../chaosMode";
 import { setAppearance, useAppearance } from "../appearance";
-import { useNow } from "../hooks";
+import { useNow, usePolling } from "../hooks";
+import { formatTokens } from "../burn";
+import { useWalletBalance } from "../walletBalance";
 import { ago, shortAddress } from "../format";
 
 /**
- * Settings: your feed's Model alerts switch, extra tabs, your phones, and
- * your account and access. How alerts reach you (sound, browser notifications, Telegram) lives on
+ * Settings: your subscription and wallet balances (first, user ask 2026-10-18), your feed's Model
+ * alerts switch, extra tabs, and your phones. How alerts reach you (sound, browser notifications, Telegram) lives on
  * the Filters tab, next to the filters they apply to; which models' calls you get is picked on the
  * Models tab; how the feed looks is the Live feed's Customize button.
  */
@@ -55,6 +66,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
           .
         </span>
       </p>
+      <AccountPanel account={settings?.account ?? null} />
       <FeedPanel goTo={goTo} />
       <ChaosPanel prefs={settings?.alerts ?? null} />
       <TabsPanel />
@@ -63,7 +75,6 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
       {/* Phone pairing by QR is for wallet sign-ins only (user rule 2026-10-18). */}
       {me?.signInMethod === "privy" ? <PrivyWalletPanel /> : <ConnectPhonePanel />}
       <TwoFactorPanel />
-      <AccountPanel account={settings?.account ?? null} />
     </div>
   );
 }
@@ -316,78 +327,177 @@ function date(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+function solText(lamports: string): string {
+  const sol = Number(lamports) / 1e9;
+  return sol.toLocaleString("en-US", { maximumFractionDigits: sol >= 100 ? 2 : 4 });
+}
+
+/** One balance in the Subscription section's wallet card. */
+function Coin({ name, value, note }: { name: string; value: string | null; note?: string | null }) {
+  return (
+    <div className="sub-coin">
+      <span className="sub-coin-name">{name}</span>
+      {value === null ? (
+        <span className="sub-coin-value skeleton" aria-label="Loading" />
+      ) : (
+        <strong className="sub-coin-value num">{value}</strong>
+      )}
+      {note && <small className="muted">{note}</small>}
+    </div>
+  );
+}
+
+/**
+ * Subscription (redrawn 2026-10-18, user ask): how long access lasts, the signed-in wallet's SOL
+ * and $ASDFASDFA, a Buy $ASDFASDFA button that opens the site's own Trade panel for it (every
+ * signed-in wallet, Pro or not), and the burn that turns it into access.
+ */
 function AccountPanel({ account }: { account: Settings["account"] | null }) {
   const now = useNow(60_000);
+  const funds = useWalletBalance();
+  const sub = usePolling<Subscription>("/subscription", 300_000);
+  const [buying, setBuying] = useState(false);
   const access = account?.access;
+  const { balance, error: balanceError } = funds;
+  const mint = balance?.mint ?? sub.data?.price?.mint ?? null;
+  const asdfRaw = balance ? BigInt(balance.totalRaw) : null;
+  const price = sub.data?.price;
+  const months =
+    asdfRaw !== null && price
+      ? Number(asdfRaw / (BigInt(price.tokensPerMonth) * 10n ** BigInt(price.decimals)))
+      : null;
+
+  const status = !access
+    ? null
+    : access.hasAccess
+      ? access.expiresAt === null
+        ? { big: "Unlimited", line: access.level === "admin" ? "Admin wallet, no end date" : "No end date" }
+        : {
+            big: `${daysLeft(access.expiresAt, now)} day${daysLeft(access.expiresAt, now) === 1 ? "" : "s"}`,
+            line: `left, until ${date(access.expiresAt)}`,
+          }
+      : access.expiresAt
+        ? { big: "Ended", line: `Access ended ${ago(access.expiresAt, now)}` }
+        : { big: "No access", line: "Burn $ASDFASDFA below to subscribe" };
+
   return (
-    <section className="panel" id={SETTINGS_ACCOUNT_ID}>
+    <section className="panel sub-panel" id={SETTINGS_ACCOUNT_ID}>
       <header className="section-head">
         <div>
           <span className="eyebrow">
-            <ShieldIcon size={13} /> Account
+            <ShieldIcon size={13} /> Subscription
           </span>
           <h2>Your access</h2>
         </div>
+        {access && (
+          <span className={`badge ${access.hasAccess ? "good" : "bad"}`}>{LEVEL_TEXT[access.level]}</span>
+        )}
       </header>
-      {!account || !access ? (
+      {!account || !access || !status ? (
         <Skeleton lines={3} />
       ) : (
-        <dl className="facts">
-          <div>
-            <dt>Access level</dt>
-            <dd>
-              <span className={`badge ${access.hasAccess ? "good" : "bad"}`}>{LEVEL_TEXT[access.level]}</span>
-            </dd>
+        <>
+          <div className="sub-top">
+            <div className={`sub-status ${access.hasAccess ? "on" : "off"}`}>
+              <span className="sub-kicker">
+                <ClockIcon size={13} /> {access.hasAccess ? "Access" : "Status"}
+              </span>
+              <strong className="sub-big num">{status.big}</strong>
+              <span className="sub-line">{status.line}</span>
+            </div>
+            <div className="sub-wallet">
+              <div className="sub-wallet-head">
+                <span className="sub-kicker">
+                  <WalletIcon size={13} /> Wallet
+                </span>
+                <code className="num" title={account.walletAddress}>
+                  {shortAddress(account.walletAddress)}
+                </code>
+                <button
+                  type="button"
+                  className="link small sub-refresh"
+                  onClick={funds.reload}
+                  aria-label="Read the balances again"
+                >
+                  Refresh
+                </button>
+              </div>
+              {balanceError && !balance ? (
+                <p className="error small sub-coins-error">
+                  Couldn&apos;t read your balances: {balanceError}{" "}
+                  <button type="button" className="link" onClick={funds.reload}>
+                    Try again
+                  </button>
+                </p>
+              ) : (
+                <div className="sub-coins">
+                  <Coin
+                    name="SOL"
+                    value={
+                      balance ? (balance.solLamports != null ? solText(balance.solLamports) : "–") : null
+                    }
+                    note={balance && balance.solLamports == null ? "couldn't read it" : null}
+                  />
+                  <Coin
+                    name="$ASDFASDFA"
+                    value={balance && asdfRaw !== null ? formatTokens(asdfRaw, balance.decimals) : null}
+                    note={
+                      months === null
+                        ? null
+                        : months >= 1
+                          ? `enough for ${months} month${months === 1 ? "" : "s"}`
+                          : "under a month's worth"
+                    }
+                  />
+                </div>
+              )}
+              <button
+                type="button"
+                className="primary sub-buy"
+                disabled={!mint}
+                onClick={() => setBuying(true)}
+              >
+                <FlameIcon size={14} /> Buy $ASDFASDFA
+              </button>
+            </div>
           </div>
-          <div>
-            <dt>{access.hasAccess ? "Access until" : "Access ended"}</dt>
-            <dd className="num">
-              {access.expiresAt === null ? (access.hasAccess ? "No end date" : "–") : date(access.expiresAt)}
-            </dd>
-          </div>
-          <div>
-            <dt>Time left</dt>
-            <dd className="num">
-              {access.expiresAt === null
-                ? access.hasAccess
-                  ? "Unlimited"
-                  : "–"
-                : access.hasAccess
-                  ? `${daysLeft(access.expiresAt, now)} days`
-                  : `ended ${ago(access.expiresAt, now)}`}
-            </dd>
-          </div>
-          <div>
-            <dt>Subscriber since</dt>
-            <dd className="num">{access.subscription ? date(access.subscription.since) : "–"}</dd>
-          </div>
-          <div>
-            <dt>Paid by</dt>
-            <dd>
-              {access.subscription
-                ? access.subscription.source === "BURN"
-                  ? `Burning (${access.burns} burn${access.burns === 1 ? "" : "s"})`
-                  : "Granted by an admin"
-                : access.level === "free_access"
-                  ? "Free access"
-                  : access.level === "whitelist"
-                    ? "Whitelist"
-                    : access.level === "admin"
-                      ? "Admin wallet"
-                      : "–"}
-            </dd>
-          </div>
-          <div>
-            <dt>Wallet</dt>
-            <dd className="num" title={account.walletAddress}>
-              {shortAddress(account.walletAddress)}
-            </dd>
-          </div>
-          <div>
-            <dt>Signed up</dt>
-            <dd className="num">{date(account.memberSince)}</dd>
-          </div>
-        </dl>
+          <dl className="facts sub-facts">
+            <div>
+              <dt>{access.hasAccess ? "Access until" : "Access ended"}</dt>
+              <dd className="num">
+                {access.expiresAt === null
+                  ? access.hasAccess
+                    ? "No end date"
+                    : "–"
+                  : date(access.expiresAt)}
+              </dd>
+            </div>
+            <div>
+              <dt>Subscriber since</dt>
+              <dd className="num">{access.subscription ? date(access.subscription.since) : "–"}</dd>
+            </div>
+            <div>
+              <dt>Paid by</dt>
+              <dd>
+                {access.subscription
+                  ? access.subscription.source === "BURN"
+                    ? `Burning (${access.burns} burn${access.burns === 1 ? "" : "s"})`
+                    : "Granted by an admin"
+                  : access.level === "free_access"
+                    ? "Free access"
+                    : access.level === "whitelist"
+                      ? "Whitelist"
+                      : access.level === "admin"
+                        ? "Admin wallet"
+                        : "–"}
+              </dd>
+            </div>
+            <div>
+              <dt>Signed up</dt>
+              <dd className="num">{date(account.memberSince)}</dd>
+            </div>
+          </dl>
+        </>
       )}
       {access?.level === "free_access" && access.expiresAt && (
         <p className="small muted">
@@ -398,17 +508,31 @@ function AccountPanel({ account }: { account: Settings["account"] | null }) {
       )}
       {account &&
         (access?.level === "subscription" || access?.level === "none" || access?.level === "free_access") && (
-          <div className="burn-section">
+          <div className="burn-section sub-burn">
             <h3>
+              <FlameIcon size={15} />{" "}
               {access.level === "subscription"
                 ? "Extend your access"
                 : access.level === "free_access"
                   ? "Subscribe to keep your account"
                   : "Subscribe"}
             </h3>
-            <BurnPanel walletAddress={account.walletAddress} onCredited={() => void loadSettings(true)} />
+            <BurnPanel
+              walletAddress={account.walletAddress}
+              funds={funds}
+              onGetAsdf={mint ? () => setBuying(true) : undefined}
+              onCredited={() => void loadSettings(true)}
+            />
           </div>
         )}
+      {buying && account && mint && (
+        <BuyAsdfDialog
+          owner={account.walletAddress}
+          mint={mint}
+          onClose={() => setBuying(false)}
+          onBought={funds.reload}
+        />
+      )}
     </section>
   );
 }

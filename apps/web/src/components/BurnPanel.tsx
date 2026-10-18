@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, type Subscription } from "../api";
+import { type Subscription } from "../api";
 import {
   BurnUncertainError,
   burnWallet,
@@ -9,13 +9,13 @@ import {
   formatTokens,
   readPendingBurn,
   sendBurn,
-  type BurnBalance,
   type BurnWallet,
   type PendingBurn,
 } from "../burn";
 import { usePolling } from "../hooks";
 import { shortAddress } from "../format";
 import { onWalletsChanged } from "../wallet";
+import { useWalletBalance, type WalletBalance } from "../walletBalance";
 
 /** Most months one burn buys (the API's MAX_MONTHS_PER_BURN); more than that is lost. */
 const MAX_MONTHS = 12;
@@ -44,16 +44,21 @@ function date(d: Date): string {
 export function BurnPanel({
   walletAddress,
   onCredited,
+  funds,
+  onGetAsdf,
 }: {
   /** The signed-in wallet. The burn has to come from it. */
   walletAddress: string;
   onCredited?: () => void;
+  /** A balance reading shared with the page (Settings); without one, this reads its own. */
+  funds?: WalletBalance;
+  /** Opens the site's own $ASDFASDFA buy; without it, "Get $ASDFASDFA" links to Pump.fun. */
+  onGetAsdf?: () => void;
 }) {
   const sub = usePolling<Subscription>("/subscription", 300_000);
   const price = sub.data?.price;
-  const [balance, setBalance] = useState<BurnBalance | null>(null);
-  const [balanceError, setBalanceError] = useState<string | null>(null);
-  const [balanceKey, setBalanceKey] = useState(0);
+  const own = useWalletBalance(!funds);
+  const { balance, error: balanceError, reload: reloadBalance } = funds ?? own;
   const [months, setMonths] = useState(1);
   const [wallet, setWallet] = useState<BurnWallet | null>(() => burnWallet(walletAddress));
   const [stage, setStage] = useState<{ wallet: string; stage: Stage } | null>(null);
@@ -81,17 +86,6 @@ export function BurnPanel({
     };
   }, [walletAddress]);
 
-  useEffect(() => {
-    let live = true;
-    setBalanceError(null);
-    api<BurnBalance>("/subscription/balance")
-      .then((b) => live && setBalance(b))
-      .catch((e: unknown) => live && setBalanceError(e instanceof Error ? e.message : String(e)));
-    return () => {
-      live = false;
-    };
-  }, [balanceKey]);
-
   // While a sent burn is waiting to be credited, keep asking. The reconciler credits it anyway if
   // this page closes; this is only so the person sees it land.
   useEffect(() => {
@@ -107,7 +101,7 @@ export function BurnPanel({
         setPendingNote(null);
         setPendingSlow(false);
         setDone({ expiresAt: r.expiresAt, months: pending.months });
-        setBalanceKey((k) => k + 1);
+        reloadBalance();
         sub.reload();
         onCreditedRef.current?.();
         return;
@@ -118,7 +112,7 @@ export function BurnPanel({
         setPendingNote(null);
         setPendingSlow(false);
         setError(r.message);
-        setBalanceKey((k) => k + 1);
+        reloadBalance();
         return;
       }
       const slow = Date.now() - pending.at > CLAIM_SLOW_AFTER_MS;
@@ -218,7 +212,7 @@ export function BurnPanel({
                 setPending(null);
                 setPendingNote(null);
                 setPendingSlow(false);
-                setBalanceKey((k) => k + 1);
+                reloadBalance();
               }}
             >
               Dismiss
@@ -246,7 +240,7 @@ export function BurnPanel({
       {balanceError ? (
         <p className="error small">
           Couldn&apos;t read your balance: {balanceError}{" "}
-          <button type="button" className="link" onClick={() => setBalanceKey((k) => k + 1)}>
+          <button type="button" className="link" onClick={() => reloadBalance()}>
             Try again
           </button>
         </p>
@@ -257,11 +251,17 @@ export function BurnPanel({
           This wallet holds {formatTokens(total, decimals)} {symbol}
           {total > largest && largest > 0n ? ` (${formatTokens(largest, decimals)} in one account)` : ""}. One
           month needs {Number(price.tokensPerMonth).toLocaleString("en-US")}.{" "}
-          <a href={`https://pump.fun/coin/${price.mint}`} target="_blank" rel="noreferrer">
-            Get {symbol}
-          </a>
+          {onGetAsdf ? (
+            <button type="button" className="link" onClick={onGetAsdf}>
+              Buy {symbol} here
+            </button>
+          ) : (
+            <a href={`https://pump.fun/coin/${price.mint}`} target="_blank" rel="noreferrer">
+              Get {symbol}
+            </a>
+          )}
           {" · "}
-          <button type="button" className="link" onClick={() => setBalanceKey((k) => k + 1)}>
+          <button type="button" className="link" onClick={() => reloadBalance()}>
             Check again
           </button>
         </p>

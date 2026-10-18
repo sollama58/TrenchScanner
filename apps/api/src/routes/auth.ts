@@ -481,9 +481,13 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
   });
 }
 
-/** The in-app $ASDFASDFA buy (routes/proTrade.ts): with Pro trading on and open to everyone. */
+/**
+ * The in-app $ASDFASDFA buy (routes/proTrade.ts): open to every signed-in wallet whenever Pro
+ * trading is on at all (user ask 2026-10-18: always let people buy the access token here, even
+ * while the rest of trading is admins only). PRO_TRADING_ENABLED stays the kill switch.
+ */
 export function accessSwapOpen(env: Env): boolean {
-  return env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC;
+  return env.PRO_TRADING_ENABLED;
 }
 
 const signInFactorSchema = z.object({ ticket: z.string().max(2048), ...factorFields });
