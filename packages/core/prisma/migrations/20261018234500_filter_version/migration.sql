@@ -1,6 +1,9 @@
 -- Earlier versions of a filter's criteria, written when they change, so the filter leaderboard can
 -- keep each version's record as its own entry (user decision 2026-10-18). A new empty table: no
--- backfill (criteria replaced before this were not kept) and no lock on existing rows. Safe to re-run.
+-- backfill (criteria replaced before this were not kept). Safe to re-run.
+-- The foreign key locks UserFilter briefly; the lock timeout keeps it from stalling the scanner
+-- behind a long read (scripts/migrate-deploy.sh retries it).
+SET LOCAL lock_timeout = '5s';
 CREATE TABLE IF NOT EXISTS "FilterVersion" (
     "id" TEXT NOT NULL,
     "filterId" TEXT NOT NULL,
