@@ -14,7 +14,7 @@ import {
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { contestState, resetContestStateCache } from "../contest.js";
-import { GUEST_DELAY_MINUTES, loadGuestRows } from "./guest.js";
+import { GUEST_DELAY_MINUTES, loadGuestBest, loadGuestRows } from "./guest.js";
 
 /**
  * GET /guest/feed: the default model's calls, 5 minutes late, for a visitor with no wallet - no session needed,
@@ -268,5 +268,69 @@ describe.skipIf(!dbAvailable)("top-models default feed", () => {
     expect(rows.filter((r) => r.alert.tokenId === shared)).toHaveLength(1);
     expect(card.alert.model).toBe(b);
     expect(card.calledBy.map((x) => x.model)).toEqual([b, a]);
+  });
+});
+
+/** The signed-out page's showcase: the best passed call of the last 24 hours, by its Peak. */
+describe.skipIf(!dbAvailable)("guest showcase", () => {
+  const tag = `guest-best-test-${Date.now()}`;
+  const shown = `${tag}-shown`;
+  const other = `${tag}-other`;
+
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.token.deleteMany({ where: { mintAddress: { startsWith: tag } } });
+  });
+
+  it("picks the highest Peak among calls that passed, skipping stop-outs, other models and old calls", async () => {
+    expect(await loadGuestBest([shown])).toBeNull();
+    const token = async (key: string) =>
+      (await prisma.token.create({ data: { mintAddress: `${tag}-${key}` } })).id;
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000);
+    const base = {
+      source: "test",
+      confidence: 70,
+      anchorPriceUsd: 0.0001,
+      anchorMcapUsd: 50_000,
+      model: shown,
+    };
+    const won = { hit2xIn1h: true, disqualified: false };
+    await prisma.curatedAlert.createMany({
+      data: [
+        { ...base, ...won, tokenId: await token("a"), createdAt: hoursAgo(3), peak24hReturnPct: 400 },
+        { ...base, ...won, tokenId: await token("b"), createdAt: hoursAgo(5), peak24hReturnPct: 900 },
+        // Stopped out after a bigger run: not a win to show off.
+        {
+          ...base,
+          hit2xIn1h: true,
+          disqualified: true,
+          tokenId: await token("c"),
+          createdAt: hoursAgo(2),
+          peak24hReturnPct: 5_000,
+        },
+        // A miss.
+        {
+          ...base,
+          hit2xIn1h: false,
+          disqualified: false,
+          tokenId: await token("d"),
+          createdAt: hoursAgo(2),
+          peak24hReturnPct: 80,
+        },
+        // Too old, and another model's.
+        { ...base, ...won, tokenId: await token("e"), createdAt: hoursAgo(30), peak24hReturnPct: 9_000 },
+        {
+          ...base,
+          ...won,
+          model: other,
+          tokenId: await token("f"),
+          createdAt: hoursAgo(1),
+          peak24hReturnPct: 9_000,
+        },
+      ],
+    });
+    const best = await loadGuestBest([shown]);
+    expect(best?.token.mintAddress).toBe(`${tag}-b`);
+    expect(best?.peakReturnPct).toBe(900);
   });
 });

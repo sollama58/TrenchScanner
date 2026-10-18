@@ -5,11 +5,14 @@ import { currentMarketCap } from "./matches.js";
 import { ipRateLimitKey } from "../clientIp.js";
 import {
   CURATED_MATCH_LINK_WINDOW_MS,
+  callPeakPct,
   curatedAlertInclude,
   groupSameTokenCalls,
+  resolveOutcome,
   serializeCuratedAlert,
   withLatestSnapshots,
 } from "../curatedFeed.js";
+import { callPassed, topReturns } from "../feedStats.js";
 import { contestState, modelLabel, readerBoard } from "../contest.js";
 import {
   leaderboardDaysSchema,
@@ -69,6 +72,12 @@ const querySchema = z.object({
 
 type GuestPage = { rows: Awaited<ReturnType<typeof loadGuestRows>>; hasMore: boolean };
 
+/** How far back the signed-out page looks for its showcase alert (user decision 2026-10-18). */
+export const GUEST_BEST_WINDOW_HOURS = 24;
+
+/** The showcase changes slowly (a Peak only climbs), so one read a minute serves every guest. */
+const BEST_CACHE_TTL_MS = 60_000;
+
 /** Just what grouping needs; only the page's lead calls are then loaded in full. */
 const CALL_SELECT = {
   id: true,
@@ -109,6 +118,44 @@ export async function loadGuestRows(models: readonly string[], page: number) {
   });
 }
 
+/**
+ * The signed-out page's showcase: the default models' best call of the last 24 hours, by the Peak
+ * its card shows, among calls that passed (a stopped-out or missed call's later run is not a win to
+ * show off, as on the feed's Top 3). Only calls past the guest delay count. Null when none passed.
+ */
+export async function loadGuestBest(models: readonly string[], now = Date.now()) {
+  const cutoff = new Date(now - GUEST_DELAY_MINUTES * 60_000);
+  const since = new Date(now - GUEST_BEST_WINDOW_HOURS * 3_600_000);
+  // Outcome and Peak need the call's own columns and its grading row, not the scan snapshot; only
+  // the winner is then loaded in full for its card.
+  const calls = await prisma.curatedAlert.findMany({
+    where: { model: { in: [...models] }, createdAt: { gt: since, lte: cutoff } },
+    include: { candidateOutcome: curatedAlertInclude.candidateOutcome },
+  });
+  const [best] = topReturns(
+    calls.map((c) => {
+      const outcome = resolveOutcome(c);
+      return {
+        id: c.id,
+        at: c.createdAt,
+        tokenId: c.tokenId,
+        peakPct: callPeakPct(outcome.peak24hReturnPct, c),
+        passed: callPassed(outcome),
+      };
+    }),
+    now,
+    1,
+  );
+  if (!best) return null;
+  const alert = await prisma.curatedAlert.findUnique({
+    where: { id: best.id },
+    include: curatedAlertInclude,
+  });
+  if (!alert) return null;
+  const [full] = await withLatestSnapshots([alert]);
+  return full ? serializeCuratedAlert(full, currentMarketCap) : null;
+}
+
 export async function registerGuestRoutes(
   app: FastifyInstance,
   opts: { env: Env; viewStamps: ViewStampBuffer; reports: ReportCaches },
@@ -118,6 +165,7 @@ export async function registerGuestRoutes(
   // when the set changes. A new alert needs no invalidation: guests only see it once its
   // delay has run out, and the short TTL picks it up then.
   const pageCache = new Map<string, SharedCache<GuestPage>>();
+  const bestCache = new Map<string, SharedCache<Awaited<ReturnType<typeof loadGuestBest>>>>();
 
   app.get("/feed", { config: { rateLimit: GUEST_RATE_LIMIT } }, async (request, reply) => {
     const parsed = querySchema.safeParse(request.query);
@@ -160,6 +208,22 @@ export async function registerGuestRoutes(
       models: models.map((id) => modelLabel(state, id)),
       delayMinutes: GUEST_DELAY_MINUTES,
     };
+  });
+
+  /** The signed-out page's showcase alert (loadGuestBest); `match` is null when none passed. */
+  app.get("/best", { config: { rateLimit: GUEST_RATE_LIMIT } }, async () => {
+    const state = await contestState(opts.env);
+    const models = state.defaultModels;
+    const key = models.join(",");
+    let cache = bestCache.get(key);
+    if (!cache) {
+      bestCache.clear();
+      cache = new SharedCache(BEST_CACHE_TTL_MS);
+      bestCache.set(key, cache);
+    }
+    const match = await cache.get(() => loadGuestBest(models));
+    if (match) opts.viewStamps.record([match.tokenId]);
+    return { match, windowHours: GUEST_BEST_WINDOW_HOURS, delayMinutes: GUEST_DELAY_MINUTES };
   });
 
   /**
