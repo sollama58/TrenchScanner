@@ -1,6 +1,7 @@
 import {
   createCipheriv,
   createDecipheriv,
+  createHash,
   createHmac,
   hkdfSync,
   randomBytes,
@@ -147,10 +148,23 @@ export interface TwoFactorState {
   actions: string[];
   buyOverLamports: bigint | null;
   backupCodesLeft: number;
+  /**
+   * Changes with every sign-out (sessionVersion) and every factor added, replaced or removed:
+   * passes and the known-device cookie carry it and die with it (user ask 2026-10-18).
+   */
+  epoch: string;
+}
+
+/** The account's two-factor epoch (TwoFactorState.epoch) from its parts. */
+export function twoFactorEpoch(sessionVersion: number, totpSecret: string | null, passkeyIds: string[]) {
+  return createHash("sha256")
+    .update(`${sessionVersion}|${totpSecret ?? ""}|${[...passkeyIds].sort().join(",")}`)
+    .digest("base64url")
+    .slice(0, 16);
 }
 
 export async function twoFactorState(userId: string): Promise<TwoFactorState> {
-  const [settings, passkeys, backupCodesLeft] = await Promise.all([
+  const [settings, passkeys, backupCodesLeft, user] = await Promise.all([
     prisma.twoFactorSettings.findUnique({ where: { userId } }),
     prisma.twoFactorPasskey.findMany({
       where: { userId },
@@ -158,6 +172,7 @@ export async function twoFactorState(userId: string): Promise<TwoFactorState> {
       orderBy: { createdAt: "asc" },
     }),
     prisma.twoFactorBackupCode.count({ where: { userId, usedAt: null } }),
+    prisma.user.findUnique({ where: { id: userId }, select: { sessionVersion: true } }),
   ]);
   const totp = Boolean(settings?.totpSecret);
   return {
@@ -167,6 +182,11 @@ export async function twoFactorState(userId: string): Promise<TwoFactorState> {
     actions: settings?.actions ?? ["signin", "pair", "export"],
     buyOverLamports: settings?.buyOverLamports ?? null,
     backupCodesLeft,
+    epoch: twoFactorEpoch(
+      user?.sessionVersion ?? 0,
+      settings?.totpSecret ?? null,
+      passkeys.map((p) => p.id),
+    ),
   };
 }
 
@@ -228,15 +248,23 @@ async function spend(jti: unknown): Promise<boolean> {
   }
 }
 
-export function issuePass(env: Env, userId: string, action: TwoFactorAction): Promise<string> {
-  return sign(env, { kind: "pass", sub: userId, act: action }, PASS_TTL_SECONDS);
+export function issuePass(env: Env, userId: string, action: TwoFactorAction, epoch: string): Promise<string> {
+  return sign(env, { kind: "pass", sub: userId, act: action, ep: epoch }, PASS_TTL_SECONDS);
 }
 
-export async function hasPass(env: Env, request: FastifyRequest, userId: string, action: TwoFactorAction) {
+/** Whether the request carries a pass for this action, from the account's current epoch. */
+export async function hasPass(
+  env: Env,
+  request: FastifyRequest,
+  userId: string,
+  action: TwoFactorAction,
+  epoch?: string,
+) {
   const header = request.headers["x-ts-2fa"];
   if (typeof header !== "string" || header.length > 2048) return false;
   const claims = await read(env, header, "pass");
-  return claims?.sub === userId && claims.act === action;
+  if (claims?.sub !== userId || claims.act !== action) return false;
+  return claims.ep === (epoch ?? (await twoFactorState(userId)).epoch);
 }
 
 /** A sign-in that passed its first step and now needs the second (see /auth/2fa/signin). */
@@ -269,7 +297,7 @@ export async function requireTwoFactor(
 ): Promise<boolean> {
   const state = await twoFactorState(userId);
   if (!asksFor(state, action, opts)) return true;
-  if (await hasPass(env, request, userId, action)) return true;
+  if (await hasPass(env, request, userId, action, state.epoch)) return true;
   void reply.code(403).send({
     error: "Two-factor check needed",
     twoFactor: { action, totp: state.totp, passkey: state.passkeys.length > 0 },
@@ -278,18 +306,27 @@ export async function requireTwoFactor(
   return false;
 }
 
-/** The pass a device cookie carries: this browser passed a sign-in check for this user. */
+/**
+ * The pass a device cookie carries: this browser passed a sign-in check for this user, since the
+ * last sign-out and the last change to the account's factors (its epoch).
+ */
 export const KNOWN_DEVICE_COOKIE = "ts_2fa_device";
 const KNOWN_DEVICE_TTL_SECONDS = 180 * 24 * 60 * 60;
 
-export function issueKnownDevice(env: Env, userId: string): Promise<string> {
-  return sign(env, { kind: "device", sub: userId }, KNOWN_DEVICE_TTL_SECONDS);
+export function issueKnownDevice(env: Env, userId: string, epoch: string): Promise<string> {
+  return sign(env, { kind: "device", sub: userId, ep: epoch }, KNOWN_DEVICE_TTL_SECONDS);
 }
 
-export async function isKnownDevice(env: Env, request: FastifyRequest, userId: string): Promise<boolean> {
+export async function isKnownDevice(
+  env: Env,
+  request: FastifyRequest,
+  userId: string,
+  epoch: string,
+): Promise<boolean> {
   const cookie = request.cookies?.[KNOWN_DEVICE_COOKIE];
   if (!cookie) return false;
-  return (await read(env, cookie, "device"))?.sub === userId;
+  const claims = await read(env, cookie, "device");
+  return claims?.sub === userId && claims.ep === epoch;
 }
 
 export { KNOWN_DEVICE_TTL_SECONDS };

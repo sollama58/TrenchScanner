@@ -9,7 +9,10 @@ import {
   type WalletOption,
 } from "../wallet";
 import { privyConfig, privyOAuthReturn, type PrivyConfig } from "../privyBridge";
-import { BrainIcon, RobotIcon, TargetIcon } from "./Icons";
+import { AlertCard } from "./AlertCard";
+import { ClockIcon } from "./Icons";
+import { usePolling, useNow } from "../hooks";
+import type { GuestPage } from "../tabs/GuestLiveTab";
 
 /**
  * How long to look for wallets before saying there are none. Extensions can announce themselves
@@ -17,24 +20,6 @@ import { BrainIcon, RobotIcon, TargetIcon } from "./Icons";
  * window.solana-style providers send no event at all, so the list is also re-read once this ends.
  */
 const WALLET_SEARCH_MS = 2_000;
-
-const FEATURES = [
-  {
-    Icon: TargetIcon,
-    title: "Curated alerts",
-    body: "A curator scans every new Pump.fun token and flags the few that match its checks.",
-  },
-  {
-    Icon: BrainIcon,
-    title: "Models that grade themselves",
-    body: "Several models retrain on what actually doubled, and a public leaderboard ranks their live alerts.",
-  },
-  {
-    Icon: RobotIcon,
-    title: "AI second opinion",
-    body: "An AI reviewer is being trained to give a pass / reject on alerts, scored against real outcomes.",
-  },
-];
 
 interface FreeAccessNotice {
   phase: "scheduled" | "open" | null;
@@ -131,27 +116,12 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
   return (
     <section className="signin">
       <div className="signin-copy">
-        <span className="eyebrow brand-eyebrow">Solana memecoin scanner</span>
-        <h1>
-          Pump.fun alerts, <span className="grad">flagged by a model</span> that grades itself.
-        </h1>
+        <h1>Pump.fun alerts, graded in public.</h1>
         <p className="lead muted">
-          Every alert is measured against one goal in public: 2x within 15 minutes on 75% of alerts, 4x within
-          30 minutes on half, and 10x within an hour on a quarter, from the price at the alert.
+          Models scan every new Pump.fun token and flag a few. Each alert is scored against one goal: 2x
+          within 15 minutes on 75% of alerts, 4x within 30 minutes on half, from the price at the alert.
         </p>
-        <div className="features">
-          {FEATURES.map(({ Icon, title, body }) => (
-            <div key={title} className="feature">
-              <span className="feature-icon">
-                <Icon size={18} />
-              </span>
-              <div>
-                <strong>{title}</strong>
-                <p className="muted small">{body}</p>
-              </div>
-            </div>
-          ))}
-        </div>
+        <LatestAlerts />
       </div>
       <div className="panel signin-box">
         <h2>Sign in</h2>
@@ -250,5 +220,29 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * The newest alerts as guests see them, a few minutes late: the product itself instead of a list of
+ * features. The latest ones, whatever their outcome, so nothing is picked for looks.
+ */
+function LatestAlerts() {
+  const feed = usePolling<GuestPage>("/guest/feed?page=1", 60_000);
+  const now = useNow(15_000);
+  const cards = feed.data?.matches.slice(0, 1) ?? [];
+  if (cards.length === 0) return null;
+  const delay = feed.data?.delayMinutes ?? GUEST_DELAY_MINUTES;
+  return (
+    <div className="signin-alerts">
+      <p className="signin-alerts-head small muted">
+        <ClockIcon size={13} /> Latest alert, shown {delay} minutes late
+      </p>
+      <div className="cards signin-cards">
+        {cards.map((card) => (
+          <AlertCard key={card.id} card={card} now={now} labelSource detail={false} />
+        ))}
+      </div>
+    </div>
   );
 }

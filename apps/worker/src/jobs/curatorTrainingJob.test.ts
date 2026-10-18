@@ -654,6 +654,13 @@ describe("rowReturn", () => {
     expect(r.returnPct).toBeCloseTo((0.35 * 2 + 0.65 * 1.2 - 1) * 100, 6);
   });
 
+  it("takes the exit plan re-score's return over the replay", () => {
+    expect(rowReturn({ ...sold, lastPriceUsd: 1.5, lastCheckedAt: at(183) }, 42)).toEqual({
+      returnPct: 42,
+      crashed: false,
+    });
+  });
+
   it("leaves a sold row's return unknown without a price at the cap, never the stored one", () => {
     expect(rowReturn({ ...sold, lastPriceUsd: 3, lastCheckedAt: at(24 * 60) })).toEqual({ crashed: false });
     expect(rowReturn({ ...sold, lastPriceUsd: null, lastCheckedAt: null })).toEqual({ crashed: false });

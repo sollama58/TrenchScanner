@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import { ipRateLimitKey } from "../clientIp.js";
@@ -36,10 +36,27 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
   const { env } = opts;
   app.addHook("preHandler", app.authenticate);
 
-  /** Asks for a "manage" pass once two-factor is on; true when the change may go ahead. */
-  async function mayManage(request: Parameters<typeof hasPass>[1], userId: string): Promise<boolean> {
+  /**
+   * Asks for a "manage" pass once two-factor is on; true when the change may go ahead. A paired
+   * phone (a device session, which can't sign with the wallet) changes it only by passing the
+   * check itself: with two-factor off it can't turn it on (user ask 2026-10-18), the browser where
+   * the wallet signs does that.
+   */
+  async function mayManage(
+    request: Parameters<typeof hasPass>[1],
+    reply: FastifyReply,
+    userId: string,
+  ): Promise<boolean> {
     const state = await twoFactorState(userId);
-    return !state.enabled || (await hasPass(env, request, userId, "manage"));
+    if (!state.enabled && request.user?.deviceId) {
+      void reply.code(403).send({
+        error: "Turn on two-factor from a browser signed in with your wallet, not from a paired phone.",
+      });
+      return false;
+    }
+    if (!state.enabled || (await hasPass(env, request, userId, "manage", state.epoch))) return true;
+    void reply.code(403).send(manageRefusal);
+    return false;
   }
   const manageRefusal = { error: "Two-factor check needed", twoFactor: { action: "manage" } };
 
@@ -66,7 +83,12 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
     const result = await checkSecondFactor(env, userId, parsed.data, request.headers.origin);
     if (!result.ok) return reply.code(401).send({ error: result.reason });
     return {
-      pass: await issuePass(env, userId, parsed.data.action as TwoFactorAction),
+      pass: await issuePass(
+        env,
+        userId,
+        parsed.data.action as TwoFactorAction,
+        (await twoFactorState(userId)).epoch,
+      ),
       ttlSeconds: PASS_TTL_SECONDS,
     };
   });
@@ -74,7 +96,7 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
   // ── Authenticator app ──
   app.post("/totp/setup", { config: { rateLimit: RATE_LIMIT } }, async (request, reply) => {
     const userId = request.user!.userId;
-    if (!(await mayManage(request, userId))) return reply.code(403).send(manageRefusal);
+    if (!(await mayManage(request, reply, userId))) return;
     const secret = randomBytes(20);
     await prisma.twoFactorSettings.upsert({
       where: { userId },
@@ -90,7 +112,7 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
     const parsed = z.object({ code: z.string().max(12) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid request" });
     const userId = request.user!.userId;
-    if (!(await mayManage(request, userId))) return reply.code(403).send(manageRefusal);
+    if (!(await mayManage(request, reply, userId))) return;
     const settings = await prisma.twoFactorSettings.findUnique({ where: { userId } });
     if (!settings?.pendingTotpSecret) return reply.code(400).send({ error: "Start the setup again." });
     const step = matchTotp(openSecret(env, userId, settings.pendingTotpSecret), parsed.data.code.trim());
@@ -107,7 +129,7 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
 
   app.delete("/totp", async (request, reply) => {
     const userId = request.user!.userId;
-    if (!(await mayManage(request, userId))) return reply.code(403).send(manageRefusal);
+    if (!(await mayManage(request, reply, userId))) return;
     await prisma.twoFactorSettings.updateMany({
       where: { userId },
       data: { totpSecret: null, pendingTotpSecret: null, lastTotpStep: null },
@@ -119,7 +141,7 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
   // ── Passkeys ──
   app.post("/passkey/register-options", { config: { rateLimit: RATE_LIMIT } }, async (request, reply) => {
     const userId = request.user!.userId;
-    if (!(await mayManage(request, userId))) return reply.code(403).send(manageRefusal);
+    if (!(await mayManage(request, reply, userId))) return;
     const out = await passkeyRegistrationOptions(
       env,
       userId,
@@ -140,7 +162,7 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
       .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid request" });
     const userId = request.user!.userId;
-    if (!(await mayManage(request, userId))) return reply.code(403).send(manageRefusal);
+    if (!(await mayManage(request, reply, userId))) return;
     if ((await prisma.twoFactorPasskey.count({ where: { userId } })) >= 10)
       return reply.code(400).send({ error: "That's the most passkeys an account can have." });
     const wasOn = (await twoFactorState(userId)).enabled;
@@ -159,7 +181,7 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
 
   app.delete("/passkey/:id", async (request, reply) => {
     const userId = request.user!.userId;
-    if (!(await mayManage(request, userId))) return reply.code(403).send(manageRefusal);
+    if (!(await mayManage(request, reply, userId))) return;
     const { id } = request.params as { id: string };
     await prisma.twoFactorPasskey.deleteMany({ where: { id: String(id).slice(0, 64), userId } });
     await clearCodesIfOff(userId);
@@ -177,7 +199,7 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
       .safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid request" });
     const userId = request.user!.userId;
-    if (!(await mayManage(request, userId))) return reply.code(403).send(manageRefusal);
+    if (!(await mayManage(request, reply, userId))) return;
     const actions = [...new Set([...parsed.data.actions, "export"])];
     if (actions.includes("buyOver") && parsed.data.buyOverSol === null)
       return reply.code(400).send({ error: "Set the buy size that asks." });
@@ -195,7 +217,8 @@ export async function registerTwoFactorRoutes(app: FastifyInstance, opts: { env:
     const userId = request.user!.userId;
     const state = await twoFactorState(userId);
     if (!state.enabled) return reply.code(400).send({ error: "Turn on two-factor first." });
-    if (!(await hasPass(env, request, userId, "manage"))) return reply.code(403).send(manageRefusal);
+    if (!(await hasPass(env, request, userId, "manage", state.epoch)))
+      return reply.code(403).send(manageRefusal);
     return { backupCodes: await newBackupCodes(env, userId) };
   });
 

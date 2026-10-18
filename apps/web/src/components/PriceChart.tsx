@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { change, signedPct, usd } from "../format";
 import {
   candleTimeframe,
@@ -76,6 +76,21 @@ const PAD = { l: 8, r: 62, t: 24, b: 24 };
 
 /** The height of the volume lane under the plot, when there are candles to sum. */
 const LANE = 40;
+/** A finger held this long on a zoomed chart reads it out instead of panning it. */
+const HOLD_MS = 320;
+/** A finger moved this far (px) on a zoomed chart pans it; less is a tap. */
+const DRAG_PX = 6;
+
+/** The site's phone breakpoint (styles.css): the readout docks under the chart there. */
+const PHONE_QUERY = "(max-width: 640px)";
+function subscribePhone(cb: () => void): () => void {
+  const mq = window.matchMedia?.(PHONE_QUERY);
+  mq?.addEventListener("change", cb);
+  return () => mq?.removeEventListener("change", cb);
+}
+function isPhone(): boolean {
+  return window.matchMedia?.(PHONE_QUERY).matches ?? false;
+}
 
 /**
  * The token modal's market-cap chart: one line, green above its baseline and red below it, with
@@ -83,6 +98,8 @@ const LANE = 40;
  * else where the view starts, so the colour always answers "up or down since then?". Sized to its
  * box in real pixels (a ResizeObserver), so text stays crisp at any width. Hover (or drag on a touch
  * screen) reads one point out; hovering (or tapping) a bar in the volume lane reads out its minutes.
+ * On a phone the readout sits under the chart instead of over it (user ask 2026-10-18), showing the
+ * latest reading until a finger picks another; a finger drags a zoomed chart along, and a hold reads it.
  */
 export function PriceChart({
   points,
@@ -175,14 +192,27 @@ export function PriceChart({
   const [timeframe, setTimeframe] = useState<number | null>(readTimeframe);
   const zoom = onZoom ? (zoomProp ?? null) : ownZoom;
   const setZoom = onZoom ?? setOwnZoom;
-  /** A drag panning the zoomed window, or a two-finger pinch: where it started. */
+  /** Phones dock the readout under the chart. */
+  const docked = useSyncExternalStore(subscribePhone, isPhone, () => false);
+  /**
+   * A drag panning the zoomed window, or a two-finger pinch: where it started. "touch" is one finger
+   * down on a zoomed chart, not yet a pan (it moves), a tap (it lifts) or a read (it holds).
+   */
   const gesture = useRef<
     | { kind: "pan"; x: number; win: { from: number; to: number } }
+    | { kind: "touch"; x: number; win: { from: number; to: number } }
     | { kind: "pinch"; dist: number; mid: number; win: { from: number; to: number } }
     | null
   >(null);
   /** The touches down on the chart, by pointer, for a pinch. */
   const touches = useRef(new Map<number, { x: number; y: number }>());
+  /** The hold that turns a finger on a zoomed chart into a read. */
+  const hold = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const endHold = () => {
+    if (hold.current !== null) clearTimeout(hold.current);
+    hold.current = null;
+  };
+  useEffect(() => endHold, []);
 
   useEffect(() => {
     const el = boxRef.current;
@@ -519,6 +549,49 @@ export function PriceChart({
     };
   })();
   const entryAt = entry !== null && entry > 0 ? axis.y(entry) : null;
+  // What the point under the pointer reads: in a box beside it, or on a phone, under the chart.
+  const hoverLines =
+    h && !mark ? (
+      <>
+        <span className="faint">
+          {origin !== undefined && <span className="num">{sinceLabel(h.t - origin)} after launch · </span>}
+          {hb
+            ? `${timeLabel(hb.from, span > 36 * 3_600_000 ? span : 0, fine)}–${timeLabel(hb.to, 0, fine)}`
+            : timeLabel(h.t, span > 36 * 3_600_000 ? span : 0, fine)}
+        </span>
+        <strong className="num">{usd(hv)}</strong>
+        {lead?.mcap ? (
+          <span className={`num pc-chg ${hv >= lead.mcap ? "up" : "down"}`}>
+            {signedPct(change(lead.mcap, hv))} vs {lead.label.toLowerCase()}
+          </span>
+        ) : null}
+        {hb && (
+          <span className="num faint">
+            O {axisUsd(hb.o)} · H {axisUsd(hb.h)} · L {axisUsd(hb.l)} · C {axisUsd(hb.c)}
+          </span>
+        )}
+        {hScan && (
+          <span className="pc-scan-line">
+            <i className="tm-scan-dot" aria-hidden="true" /> Scan the model read: {usd(hScan.v)} at{" "}
+            {timeLabel(hScan.t, 0, true)}
+          </span>
+        )}
+        {hMarks.slice(0, MAX_TIP_MARKS).map((m, i) => (
+          <span key={`m-${i}`} className={`pc-mark-line wk-${m.kind}`}>
+            <i className={`pc-mark-dot ${m.side}`} aria-hidden="true" /> {m.text}
+          </span>
+        ))}
+        {hMarks.length > MAX_TIP_MARKS && (
+          <span className="faint small">+{hMarks.length - MAX_TIP_MARKS} more labeled trades here</span>
+        )}
+        {hTrades.map((tr, i) => (
+          <span key={i} className={`num pc-trade-line ${tr.side === "buy" ? "up" : "down"}`}>
+            {tr.text}
+          </span>
+        ))}
+        {hFlow && <FlowLine flow={hFlow} />}
+      </>
+    ) : null;
   const entryY = entryAt !== null && entryAt >= PAD.t - 2 && entryAt <= bottom + 2 ? entryAt : null;
 
   return (
@@ -532,7 +605,14 @@ export function PriceChart({
         role="img"
         aria-label={ariaLabel}
         onPointerMove={(e) => {
-          const g = gesture.current;
+          let g = gesture.current;
+          if (g?.kind === "touch") {
+            // Still a tap until the finger moves: then it drags the window along.
+            if (Math.abs(e.clientX - g.x) < DRAG_PX) return;
+            endHold();
+            g = gesture.current = { kind: "pan", x: g.x, win: g.win };
+            setHover(null);
+          }
           if (g?.kind === "pan") {
             const dt = -((e.clientX - g.x) / plotW) * (g.win.to - g.win.from);
             setZoom(panBy(g.win, ext0, ext1, dt));
@@ -560,6 +640,7 @@ export function PriceChart({
             touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
             const [a, b] = [...touches.current.values()];
             if (a && b && touches.current.size === 2) {
+              endHold();
               gesture.current = {
                 kind: "pinch",
                 dist: Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)),
@@ -567,6 +648,19 @@ export function PriceChart({
                 win,
               };
               setHover(null);
+              return;
+            }
+            if (zoomed && touches.current.size === 1) {
+              // One finger on a zoomed chart drags it along; held still, it reads the chart instead.
+              const at = e.clientX;
+              gesture.current = { kind: "touch", x: at, win };
+              endHold();
+              hold.current = setTimeout(() => {
+                hold.current = null;
+                if (gesture.current?.kind !== "touch") return;
+                gesture.current = null;
+                pick(at);
+              }, HOLD_MS);
               return;
             }
           } else if (e.button === 0 && zoomed) {
@@ -580,10 +674,14 @@ export function PriceChart({
         }}
         onPointerUp={(e) => {
           touches.current.delete(e.pointerId);
-          if (gesture.current?.kind === "pan" || touches.current.size < 2) gesture.current = null;
+          endHold();
+          // A finger lifted before it moved or held: a tap, which reads the point under it.
+          if (gesture.current?.kind === "touch") pick(e.clientX);
+          if (gesture.current?.kind !== "pinch" || touches.current.size < 2) gesture.current = null;
         }}
         onPointerCancel={(e) => {
           touches.current.delete(e.pointerId);
+          endHold();
           gesture.current = null;
         }}
         onDoubleClick={() => winTo(null)}
@@ -881,7 +979,7 @@ export function PriceChart({
         </span>
       ))}
 
-      {mark && bar !== null && (
+      {!docked && mark && bar !== null && (
         <BarTip
           bar={mark}
           flow={flowAt(flow, mark.from, mark.to)}
@@ -891,45 +989,37 @@ export function PriceChart({
         />
       )}
 
-      {h && !mark && (
+      {!docked && hoverLines && (
         <div className="pc-tip" style={tipPlace(hx, width)}>
-          <span className="faint">
-            {origin !== undefined && <span className="num">{sinceLabel(h.t - origin)} after launch · </span>}
-            {hb
-              ? `${timeLabel(hb.from, span > 36 * 3_600_000 ? span : 0, fine)}–${timeLabel(hb.to, 0, fine)}`
-              : timeLabel(h.t, span > 36 * 3_600_000 ? span : 0, fine)}
-          </span>
-          <strong className="num">{usd(hv)}</strong>
-          {hb && (
-            <span className="num faint">
-              O {axisUsd(hb.o)} · H {axisUsd(hb.h)} · L {axisUsd(hb.l)} · C {axisUsd(hb.c)}
-            </span>
+          {hoverLines}
+        </div>
+      )}
+
+      {docked && (
+        <div className="pc-readout">
+          {mark && bar !== null ? (
+            <BarLines bar={mark} flow={flowAt(flow, mark.from, mark.to)} />
+          ) : (
+            (hoverLines ?? (
+              <>
+                <span className="faint">
+                  {ended ? "End of view" : "Latest"} ·{" "}
+                  {timeLabel(last.t, span > 36 * 3_600_000 ? span : 0, fine)}
+                </span>
+                <strong className="num">{usd(last.v)}</strong>
+                {lead?.mcap ? (
+                  <span className={`num pc-chg ${last.v >= lead.mcap ? "up" : "down"}`}>
+                    {signedPct(change(lead.mcap, last.v))} vs {lead.label.toLowerCase()}
+                  </span>
+                ) : null}
+                <span className="faint small pc-readout-hint">
+                  {zoomed
+                    ? "Drag to move along · hold a finger still to read a point · pinch to zoom"
+                    : "Drag across the chart to read any point · pinch to zoom"}
+                </span>
+              </>
+            ))
           )}
-          {lead?.mcap ? (
-            <span className={`num ${hv >= lead.mcap ? "up" : "down"}`}>
-              {signedPct(change(lead.mcap, hv))} vs {lead.label.toLowerCase()}
-            </span>
-          ) : null}
-          {hScan && (
-            <span className="pc-scan-line">
-              <i className="tm-scan-dot" aria-hidden="true" /> Scan the model read: {usd(hScan.v)} at{" "}
-              {timeLabel(hScan.t, 0, true)}
-            </span>
-          )}
-          {hMarks.slice(0, MAX_TIP_MARKS).map((m, i) => (
-            <span key={`m-${i}`} className={`pc-mark-line wk-${m.kind}`}>
-              <i className={`pc-mark-dot ${m.side}`} aria-hidden="true" /> {m.text}
-            </span>
-          ))}
-          {hMarks.length > MAX_TIP_MARKS && (
-            <span className="faint small">+{hMarks.length - MAX_TIP_MARKS} more labeled trades here</span>
-          )}
-          {hTrades.map((tr, i) => (
-            <span key={i} className={`num pc-trade-line ${tr.side === "buy" ? "up" : "down"}`}>
-              {tr.text}
-            </span>
-          ))}
-          {hFlow && <FlowLine flow={hFlow} />}
         </div>
       )}
 
@@ -1064,23 +1154,32 @@ function BarTip({
   bottom: number;
   width: number;
 }) {
+  return (
+    <div className="pc-tip" style={{ top: "auto", bottom, ...tipPlace(x, width) }}>
+      <BarLines bar={bar} flow={flow} />
+    </div>
+  );
+}
+
+/** A volume bar's readout lines: in BarTip's box, or docked under the chart on a phone. */
+function BarLines({ bar, flow }: { bar: VolumeBar; flow: ScanFlow | null }) {
   const ms = bar.to - bar.from;
   // A bar of seconds reads in seconds; one of minutes, as before.
   const secs = ms < 60_000;
   const over = secs ? `${Math.round(ms / 1_000)}s` : `${Math.round(ms / 60_000)} min`;
   const many = secs ? ms > 1_000 : ms > 60_000;
   return (
-    <div className="pc-tip" style={{ top: "auto", bottom, ...tipPlace(x, width) }}>
+    <>
       <span className="faint">
         {timeLabel(bar.from, 0, secs)}
         {many ? `–${timeLabel(bar.to, 0, secs)}` : ""}
       </span>
       <strong className="num">{usd(bar.usd)} volume</strong>
-      <span className={`num ${bar.c >= bar.o ? "up" : "down"}`}>
+      <span className={`num pc-chg ${bar.c >= bar.o ? "up" : "down"}`}>
         {signedPct(change(bar.o, bar.c))} market cap{many ? ` over ${over}` : ""}
       </span>
       {flow ? <FlowLine flow={flow} /> : <span className="faint">No buy/sell count from a scan here</span>}
-    </div>
+    </>
   );
 }
 
