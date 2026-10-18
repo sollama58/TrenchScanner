@@ -17,6 +17,7 @@ import {
   SUBSCRIPTION_MINT,
   SUBSCRIPTION_MINT_DECIMALS,
   SUBSCRIPTION_TOKENS_PER_MONTH,
+  walletTag,
   type Env,
 } from "@trenchscanner/core";
 
@@ -221,7 +222,7 @@ export async function registerSubscriptionRoutes(
     const wire = burnsMint(parsed.data.transaction, SUBSCRIPTION_MINT);
     if (!wire.ok) {
       request.log.warn(
-        { wallet: request.user!.walletAddress, reason: wire.reason },
+        { wallet: walletTag(request.user!.walletAddress), reason: wire.reason },
         "refused to relay a non-burn transaction",
       );
       return reply.code(400).send({ error: "That transaction doesn't burn $ASDFASDFA. Nothing was sent." });
@@ -231,7 +232,12 @@ export async function registerSubscriptionRoutes(
     const result = await rpc.sendRawTransaction(parsed.data.transaction);
     if ("error" in result) {
       request.log.warn(
-        { error: result.error, rejected: result.rejected, signature, wallet: request.user!.walletAddress },
+        {
+          error: result.error,
+          rejected: result.rejected,
+          signature,
+          wallet: walletTag(request.user!.walletAddress),
+        },
         "burn relay failed",
       );
       if (result.rejected) {
@@ -251,7 +257,7 @@ export async function registerSubscriptionRoutes(
     }
 
     request.log.info(
-      { signature: result.signature, wallet: request.user!.walletAddress },
+      { signature: result.signature, wallet: walletTag(request.user!.walletAddress) },
       "burn transaction relayed",
     );
     return { signature: result.signature };

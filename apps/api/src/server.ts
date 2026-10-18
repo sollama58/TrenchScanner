@@ -139,11 +139,13 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   // message (for Prisma, the database hostname). Details stay in the log; clients get a code.
   app.setErrorHandler((err: FastifyError, request, reply) => {
     const status = err.statusCode ?? 500;
+    // The route's pattern, not the URL: a URL can carry a user's wallet (a 429 on /wallets/<their
+    // own>), and logs never hold our users' wallets (user ask 2026-10-18). No route: the bare path.
+    const url = request.routeOptions.url ?? request.url.split("?")[0];
     // A 4xx here is the client's fault (a body over the cap, malformed JSON): one short line, no
     // stack, so a caller sending junk on a loop can't fill the log with stack traces.
-    if (status >= 500)
-      logger.error("unhandled route error", { url: request.url, error: err.message, stack: err.stack });
-    else logger.warn("rejected request", { url: request.url, status, error: err.message });
+    if (status >= 500) logger.error("unhandled route error", { url, error: err.message, stack: err.stack });
+    else logger.warn("rejected request", { url, status, error: err.message });
     reply.code(status).send({ error: status >= 500 ? "internal_error" : err.message });
   });
 

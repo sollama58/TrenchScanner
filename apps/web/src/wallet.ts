@@ -9,7 +9,7 @@ import {
   type SolanaSignMessageFeature,
 } from "@solana/wallet-standard-features";
 import bs58 from "bs58";
-import { api, ApiError, post, type User } from "./api";
+import { ApiError, post, type User } from "./api";
 import { adoptSession } from "./sessionCheck";
 
 /**
@@ -135,7 +135,7 @@ export async function signInWithWallet(wallet: Wallet): Promise<User> {
   if (!account)
     throw new Error(`${wallet.name} shared no account. Unlock it, pick an account, and try again.`);
 
-  const issued = await api<NonceResponse>(`/auth/nonce?wallet=${encodeURIComponent(account.address)}`);
+  const issued = await post<NonceResponse>("/auth/nonce", { wallet: account.address });
 
   const signIn = (wallet.features as Partial<SolanaSignInFeature>)[SolanaSignIn];
   if (signIn) {
@@ -216,7 +216,7 @@ async function signInWithLegacy(name: string, provider: LegacyProvider): Promise
   const address = (connected?.publicKey ?? provider.publicKey)?.toString();
   if (!address) throw new Error(`${name} shared no account. Unlock it, pick an account, and try again.`);
 
-  const issued = await api<NonceResponse>(`/auth/nonce?wallet=${encodeURIComponent(address)}`);
+  const issued = await post<NonceResponse>("/auth/nonce", { wallet: address });
   const signed = await withTimeout(
     provider.signMessage(new TextEncoder().encode(issued.message), "utf8"),
     "sign",
