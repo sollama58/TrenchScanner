@@ -457,7 +457,7 @@ export function TradePanel({
   buyOnly?: boolean;
   /** No position block (the Buy $ASDFASDFA popup, user ask 2026-10-18). */
   hidePosition?: boolean;
-  /** The most one buy may spend here (the API's 5 SOL for a wallet without Pro Mode); null: no cap. */
+  /** The most one buy may spend here; null: no cap. */
   maxBuySol?: number | null;
   /**
    * The coin isn't getting instant updates (TokenModal's delayed chart): the panel starts folded,

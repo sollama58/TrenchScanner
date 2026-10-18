@@ -9,11 +9,9 @@ import { CloseIcon, FlameIcon } from "./Icons";
 /**
  * Buying $ASDFASDFA on the site (user ask 2026-10-18): the token modal's Trade panel for the access
  * token, in its own popup, for every signed-in wallet. A wallet without Pro Mode gets the Buy side
- * only (the API lets it buy this one coin, up to 5 SOL at a time, and nothing else). Opened from
+ * only (the API lets it buy this one coin, any size, and nothing else). Opened from
  * Settings' Subscription section and the burn panel's "Buy $ASDFASDFA here".
  */
-/** The API's ACCESS_BUY_MAX_LAMPORTS, in SOL: one buy's cap for a wallet without Pro Mode. */
-const ACCESS_BUY_MAX_SOL = 5;
 
 export function BuyAsdfDialog({
   owner,
@@ -76,7 +74,7 @@ export function BuyAsdfDialog({
         </header>
         <p className="small">
           Swap SOL from your wallet ({shortAddress(owner)}) for $ASDFASDFA, then burn it in Settings for
-          access. TrenchScanner takes no fee.{buyOnly ? " Up to 5 SOL a buy." : ""}
+          access. TrenchScanner takes no fee.
         </p>
         {balance && (
           <div className="asdf-buy-wallet">
@@ -125,7 +123,6 @@ export function BuyAsdfDialog({
             summary={summary}
             buyOnly={buyOnly}
             hidePosition
-            maxBuySol={buyOnly ? ACCESS_BUY_MAX_SOL : null}
             onTraded={() => {
               position.reload();
               onBought();

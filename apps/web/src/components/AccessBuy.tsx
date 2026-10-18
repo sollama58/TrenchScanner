@@ -8,13 +8,10 @@ import { decimalUnits } from "../decimal";
  * The paywall's in-app $ASDFASDFA buy (user decision 2026-10-18): SOL in the signed-in wallet
  * swapped for the access token through Jupiter, at no TrenchScanner fee, then burned with the
  * burn button below. Open only while Pro trading is open to everyone; the API refuses any other
- * coin, and more than 5 SOL, for a wallet without Pro Mode.
+ * coin for a wallet without Pro Mode (no size cap since 2026-10-18, user decision).
  */
 
-/** The API's ACCESS_BUY_MAX_LAMPORTS, in SOL. */
-const MAX_SOL = 5;
 const MIN_LAMPORTS = BigInt(Math.round(MIN_TRADE_SOL * 1e9));
-const MAX_LAMPORTS = BigInt(MAX_SOL * 1e9);
 
 const STAGE_TEXT: Record<TradeStage, string> = {
   building: "Getting a price…",
@@ -50,7 +47,7 @@ export function AccessBuy({
 
   // "0.5" or "0,5" (decimal.ts), to the lamport.
   const lamports = decimalUnits(sol, 9, 6);
-  const valid = lamports !== null && lamports >= MIN_LAMPORTS && lamports <= MAX_LAMPORTS;
+  const valid = lamports !== null && lamports >= MIN_LAMPORTS;
 
   const buy = async () => {
     // A ref, not the stage: the stage is first set only after the wallet's connect prompt, so a
@@ -102,11 +99,7 @@ export function AccessBuy({
           {stage ? STAGE_TEXT[stage] : "Buy $ASDFASDFA"}
         </button>
       </div>
-      {!valid && (
-        <p className="faint small">
-          Between {MIN_TRADE_SOL} and {MAX_SOL} SOL.
-        </p>
-      )}
+      {!valid && <p className="faint small">At least {MIN_TRADE_SOL} SOL.</p>}
       {done && <p className="small good-text">Bought. Burn it below to get access.</p>}
       {error && (
         <p className="error small" role="alert">
