@@ -153,7 +153,10 @@ export function WalletModalHost({
       ref={ref}
       className="about-modal sheet-modal bm-modal wm-modal"
       aria-labelledby="wm-title"
-      onClose={closeWallet}
+      onClose={(e) => {
+        // Only this dialog's own close: a nested dialog's close bubbles up through React.
+        if (e.target === e.currentTarget) closeWallet();
+      }}
       onClick={(e) => {
         e.stopPropagation();
         if (e.target === e.currentTarget) close();

@@ -745,6 +745,7 @@ function SegmentBar({ rows, order = [] }: { rows: ShowcaseCount[]; order?: strin
             key={p.label}
             className={`tsg-seg-part ${p.slot ? `lh-s${p.slot}` : "lh-other"}${hover && hover !== p.label ? " is-dim" : ""}`}
             style={{ flexGrow: p.count }}
+            onClick={() => setHover((h) => (h === p.label ? null : p.label))}
             onMouseEnter={() => setHover(p.label)}
             onMouseLeave={() => setHover(null)}
           />
@@ -759,6 +760,7 @@ function SegmentBar({ rows, order = [] }: { rows: ShowcaseCount[]; order?: strin
         {parts.map((p) => (
           <li
             key={p.label}
+            onClick={() => setHover((h) => (h === p.label ? null : p.label))}
             onMouseEnter={() => setHover(p.label)}
             onMouseLeave={() => setHover(null)}
             className={hover === p.label ? "is-hover" : undefined}

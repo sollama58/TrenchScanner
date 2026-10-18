@@ -48,7 +48,10 @@ export function FeedStatsModal({
       ref={ref}
       className="about-modal sheet-modal stats-modal"
       aria-labelledby="feed-stats-title"
-      onClose={onClose}
+      onClose={(e) => {
+        // Only this dialog's own close: a nested dialog's close bubbles up through React.
+        if (e.target === e.currentTarget) onClose();
+      }}
       // A click on the backdrop lands on the dialog element itself; clicks inside land on its content.
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();

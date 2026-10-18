@@ -313,7 +313,10 @@ export function SageHost({
       ref={ref}
       className="about-modal sheet-modal sage-modal"
       aria-labelledby="sage-title"
-      onClose={closeSage}
+      onClose={(e) => {
+        // Only this dialog's own close: a nested dialog's close bubbles up through React.
+        if (e.target === e.currentTarget) closeSage();
+      }}
       onClick={(e) => {
         if (e.target === e.currentTarget) ref.current?.close();
       }}

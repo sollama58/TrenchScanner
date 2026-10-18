@@ -93,7 +93,10 @@ export function ModelDetailModal({
       ref={ref}
       className="about-modal sheet-modal model-modal"
       aria-labelledby="model-detail-title"
-      onClose={onClose}
+      onClose={(e) => {
+        // Only this dialog's own close: a nested dialog's close bubbles up through React.
+        if (e.target === e.currentTarget) onClose();
+      }}
       // A click on the backdrop lands on the dialog element itself; clicks inside land on its content.
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { Card } from "../api";
 import { usePolling } from "../hooks";
 import { ago, change, pct, shortAddress, signedPct, usd } from "../format";
@@ -314,6 +314,15 @@ export function TradeCard({ coin, now }: { coin: TradeCoin; now: number }) {
     <article
       className={`card compact trade-card${card ? " opens" : ""}${coin.closed ? " closed" : ""}`}
       onClick={openIt}
+      {...(card && {
+        role: "button",
+        tabIndex: 0,
+        onKeyDown: (e: ReactKeyboardEvent) => {
+          if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+          e.preventDefault();
+          openIt();
+        },
+      })}
       title={card ? `${label}: open the chart, bubble map and details` : "This coin had no market to scan"}
     >
       <header className="card-head">

@@ -8,10 +8,12 @@ export function usd(value: number | null | undefined): string {
   // The unit is picked on the value as it will be shown: $999.6K rounds to "1000K", which reads
   // as $1.00M.
   const abs = Math.abs(value);
-  if (abs >= 999_500_000) return `$${trim(value / 1_000_000_000)}B`;
-  if (abs >= 999_500) return `$${trim(value / 1_000_000)}M`;
-  if (abs >= 999.5) return `$${trim(value / 1_000)}K`;
-  return `$${Math.round(value)}`;
+  // "-$150K", not "$-150.00K": trim() picks its decimals on the size, so it gets the magnitude.
+  const sign = value < 0 && Math.round(abs) > 0 ? "-" : "";
+  if (abs >= 999_500_000) return `${sign}$${trim(abs / 1_000_000_000)}B`;
+  if (abs >= 999_500) return `${sign}$${trim(abs / 1_000_000)}M`;
+  if (abs >= 999.5) return `${sign}$${trim(abs / 1_000)}K`;
+  return `${sign}$${Math.round(abs)}`;
 }
 
 function trim(n: number): string {

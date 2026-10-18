@@ -86,7 +86,7 @@ export async function parse<T>(res: Response): Promise<T> {
     const message =
       typeof body === "object" && body !== null && "error" in body
         ? String((body as { error: unknown }).error)
-        : res.statusText;
+        : res.statusText || `HTTP ${res.status}`;
     if (accessEnded(res.status, body) && typeof window !== "undefined") {
       window.dispatchEvent(new Event(ACCESS_ENDED_EVENT));
     }

@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { privyConfig } from "../privyBridge";
-import { readTradeSettings, runTrade, type TradeStage } from "../proTrade";
+import { MIN_TRADE_SOL, readTradeSettings, runTrade, type TradeStage } from "../proTrade";
 import { TwoFactorCancelled } from "../twoFactor";
 
 /**
@@ -34,6 +34,7 @@ export function AccessBuy({
   const [stage, setStage] = useState<TradeStage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const busy = useRef(false);
 
   useEffect(() => {
     let live = true;
@@ -45,10 +46,13 @@ export function AccessBuy({
   if (!open) return null;
 
   const amount = Number(sol);
-  const valid = Number.isFinite(amount) && amount >= 0.001 && amount <= MAX_SOL;
+  const valid = Number.isFinite(amount) && amount >= MIN_TRADE_SOL && amount <= MAX_SOL;
 
   const buy = async () => {
-    if (!valid || stage) return;
+    // A ref, not the stage: the stage is first set only after the wallet's connect prompt, so a
+    // double click used to build two swaps.
+    if (!valid || stage || busy.current) return;
+    busy.current = true;
     setError(null);
     setDone(false);
     try {
@@ -67,6 +71,7 @@ export function AccessBuy({
     } catch (e) {
       if (!(e instanceof TwoFactorCancelled)) setError(e instanceof Error ? e.message : String(e));
     } finally {
+      busy.current = false;
       setStage(null);
     }
   };
@@ -85,7 +90,7 @@ export function AccessBuy({
           id="access-buy-sol"
           type="number"
           inputMode="decimal"
-          min={0.001}
+          min={MIN_TRADE_SOL}
           max={MAX_SOL}
           step={0.01}
           value={sol}

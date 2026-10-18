@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { UpdateBanner } from "./components/UpdateBanner";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import {
   loadAdminTab,
   loadFiltersTab,
@@ -38,7 +39,9 @@ void window.__boot?.["/auth/me"]?.then(
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
     <UpdateBanner />
   </StrictMode>,
 );

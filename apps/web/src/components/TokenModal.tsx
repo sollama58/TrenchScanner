@@ -274,7 +274,10 @@ export function TokenModal({
       ref={ref}
       className="about-modal sheet-modal tm-modal"
       aria-labelledby="tm-title"
-      onClose={onClose}
+      onClose={(e) => {
+        // Only this dialog's own close: a nested dialog's close bubbles up through React.
+        if (e.target === e.currentTarget) onClose();
+      }}
       // A click on the backdrop lands on the dialog element itself; clicks inside land on its content.
       // Rendered through a portal, so React would bubble the click on to whatever rendered it (a
       // Utilities panel, or the app around a feed card's modal); it stops here.

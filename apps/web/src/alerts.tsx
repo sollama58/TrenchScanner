@@ -75,6 +75,8 @@ export function useSettings(): Settings | null {
   return s;
 }
 
+let saveSeq = 0;
+
 /** Saves a change to the alert settings; shown at once, rolled back if the save fails. */
 export async function saveAlertPrefs(
   change: Partial<Omit<AlertPrefs, "notifyOn">> & {
@@ -93,15 +95,37 @@ export async function saveAlertPrefs(
     };
     emit();
   }
+  const seq = ++saveSeq;
   try {
     const res = await put<{ alerts: AlertPrefs }>(`${SETTINGS_PATH}/alerts`, change);
-    if (settings) {
+    // Only the latest save's answer: an older one landing late would flip a newer toggle back.
+    if (settings && seq === saveSeq) {
       settings = { ...settings, alerts: res.alerts };
       emit();
     }
   } catch (e) {
-    settings = before;
-    emit();
+    // Undo only this change, keeping any made since.
+    if (settings && before) {
+      const { notifyOn, ...rest } = change;
+      const undo = Object.fromEntries(
+        Object.keys(rest).map((k) => [k, before.alerts[k as keyof typeof rest]]),
+      ) as Partial<AlertPrefs>;
+      const undoNotify = Object.fromEntries(
+        Object.keys(notifyOn ?? {}).map((k) => [
+          k,
+          before.alerts.notifyOn[k as keyof AlertPrefs["notifyOn"]],
+        ]),
+      );
+      settings = {
+        ...settings,
+        alerts: {
+          ...settings.alerts,
+          ...undo,
+          notifyOn: { ...settings.alerts.notifyOn, ...undoNotify },
+        },
+      };
+      emit();
+    }
     throw e;
   }
 }

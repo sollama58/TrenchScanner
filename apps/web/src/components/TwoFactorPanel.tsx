@@ -147,7 +147,19 @@ export function TwoFactorPanel({ onChanged }: { onChanged?: () => void }) {
         wallet key and changing these settings always ask once it&apos;s on.
       </p>
       {!state ? (
-        <p className="muted small">Loading…</p>
+        error ? (
+          <button
+            className="small"
+            onClick={() => {
+              setError(null);
+              void load();
+            }}
+          >
+            Try again
+          </button>
+        ) : (
+          <p className="muted small">Loading…</p>
+        )
       ) : (
         <>
           {setup.step === "scan" && <TotpSetup secret={setup.secret} url={setup.url} />}
@@ -314,13 +326,20 @@ function TotpSetup({ secret, url }: { secret: string; url: string }) {
         aria-label="QR code for your authenticator app"
         dangerouslySetInnerHTML={{ __html: svg }}
       />
+      {/* On a phone the app is usually on this same phone, where a QR code can't be scanned. */}
+      <a className="button tf-open-app" href={url}>
+        Open in authenticator app
+      </a>
       <p className="small muted">
         Or type this key: <code className="num tf-secret">{secret.replace(/(.{4})/g, "$1 ").trim()}</code>{" "}
         <button
           className="ghost icon-btn"
           aria-label="Copy the key"
           onClick={() => {
-            void navigator.clipboard?.writeText(secret).then(() => setCopied(true));
+            void navigator.clipboard?.writeText(secret).then(
+              () => setCopied(true),
+              () => {},
+            );
           }}
         >
           {copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
