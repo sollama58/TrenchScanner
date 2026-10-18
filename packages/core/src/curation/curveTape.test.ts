@@ -37,6 +37,16 @@ describe("decodeCurve", () => {
     expect(decodeCurve(curveBytes(1n, 1n, 0n, true))!.complete).toBe(true);
   });
 
+  it("reads a graduated curve, emptied at migration, as complete with no price", () => {
+    expect(decodeCurve(curveBytes(0n, 0n, 0n, true))).toMatchObject({ complete: true, virtualToken: 0 });
+    // Empty and not graduated is no curve to price.
+    expect(decodeCurve(curveBytes(0n, 0n, 0n))).toBeNull();
+    const tape = new CurveTape();
+    tape.record("m", 1_000, state(3e-5), "read");
+    tape.record("m", 2_000, { ...state(0), virtualToken: 0, virtualQuote: 0, complete: true }, "read");
+    expect(tape.isComplete("m")).toBe(true);
+  });
+
   it("is null for anything that isn't a curve", () => {
     const bad = curveBytes(1n, 1n, 0n);
     bad[0] = 0;
