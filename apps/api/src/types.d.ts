@@ -37,6 +37,6 @@ declare module "fastify" {
      * browser session - so that route does not read the User row a second time. Undefined when
      * the session was validated some other way (device sessions, the subscriber gate's joined read).
      */
-    sessionUser?: Pick<User, "id" | "walletAddress" | "createdAt">;
+    sessionUser?: Pick<User, "id" | "walletAddress" | "createdAt" | "privyUserId">;
   }
 }

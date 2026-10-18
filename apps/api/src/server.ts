@@ -324,11 +324,25 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     // The columns /auth/me returns ride along too: that route used to read the row again.
     const user = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: { sessionVersion: true, id: true, walletAddress: true, createdAt: true, ...SAVED_FEED_SELECT },
+      select: {
+        sessionVersion: true,
+        id: true,
+        walletAddress: true,
+        createdAt: true,
+        privyUserId: true,
+        ...SAVED_FEED_SELECT,
+      },
     });
     if (!user || user.sessionVersion !== (session.sessionVersion ?? 0)) return false;
     request.savedFeed = toSavedFeed(user);
-    request.sessionUser = { id: user.id, walletAddress: user.walletAddress, createdAt: user.createdAt };
+    // privyUserId is how /auth/me tells a Privy account from a wallet one: without it every re-read
+    // answered "wallet" and Settings dropped the Privy wallet card after the first check.
+    request.sessionUser = {
+      id: user.id,
+      walletAddress: user.walletAddress,
+      createdAt: user.createdAt,
+      privyUserId: user.privyUserId,
+    };
     return true;
   }
 

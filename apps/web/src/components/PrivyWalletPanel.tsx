@@ -4,6 +4,7 @@ import { privyControls } from "../privyBridge";
 import { askBefore, TwoFactorCancelled } from "../twoFactor";
 import { useMe } from "../me";
 import { CheckIcon, CopyIcon, WalletIcon } from "./Icons";
+import { SETTINGS_WALLET_ID } from "./WalletMenu";
 
 /**
  * Settings card for an account that signs in with Privy (email or Google/X): its wallet, funding
@@ -51,7 +52,10 @@ export function PrivyWalletPanel({ compact = false }: { compact?: boolean }) {
   };
 
   return (
-    <section className={compact ? "privy-wallet compact" : "panel privy-wallet"}>
+    <section
+      className={compact ? "privy-wallet compact" : "panel privy-wallet"}
+      id={compact ? undefined : SETTINGS_WALLET_ID}
+    >
       {compact ? (
         <p className="small">
           <strong>Your wallet.</strong> Send SOL here from another wallet or an exchange (Solana network
