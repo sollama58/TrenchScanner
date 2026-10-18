@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Card, CardField, LaunchPage, MatchPage } from "../api";
+import {
+  passesColumnFilter,
+  scopeHideSet,
+  useScopeSettings,
+  activeFilterCount,
+  cardModelNames,
+} from "../scopeSettings";
+import { ScopeSettingsModal, type ScopeSettingsSection } from "./ScopeSettingsModal";
 import { usePolling, usePollingAll, useLiveMarketCaps, useNow, useNudgeStream } from "../hooks";
 import { joinPages } from "../feedFill";
 import { change, pct, tokenLabel, usd } from "../format";
@@ -20,7 +28,6 @@ import {
   type ScopeFrame,
 } from "../scope";
 import {
-  belowMcapLine,
   cardReadings,
   countCutFor,
   newestStats,
@@ -35,7 +42,7 @@ import {
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
-import { BrainIcon, SlidersIcon } from "./Icons";
+import { BrainIcon, FunnelIcon, SlidersIcon } from "./Icons";
 import { SkeletonCards } from "./Charts";
 
 /** After a finger lifts, the board stays still this long before new rows drop in. */
@@ -51,23 +58,30 @@ const GRADUATED_POLL_MS = 10_000;
 /**
  * Scope (user ask 2026-10-18): the Live feed's alerts as a dense three-column board of compact
  * rows - your filters' alerts, the models' calls, and every graduated token that passes the
- * safety screen - with the Live feed's card settings and token window. The board
+ * safety screen - with its own settings (scopeSettings.ts: each column's filters and how the rows
+ * look, apart from the Cards view's Customize) and the Live feed's token window. The board
  * holds still while a pointer or finger is on it; new alerts wait behind a "N new" pill.
  * On phones the columns sit side by side in a strip you swipe, with tabs above.
  */
 export function ScopeBoard({
   feedPath,
-  hide,
   modelsOn,
+  settingsSection,
+  onSettings,
 }: {
   /** The Live feed's page `n`, so Scope reads exactly what the cards view does. */
   feedPath: (n: number) => string;
-  hide: ReadonlySet<CardField>;
   modelsOn: boolean;
+  /** The Scope settings window's open section (the Live header's Customize opens Display), or null. */
+  settingsSection: ScopeSettingsSection | null;
+  onSettings: (section: ScopeSettingsSection | null) => void;
 }) {
   // Rows say their age in seconds at first, so the board ticks faster than the cards view.
   const now = useNow(5_000);
   const look = useAppearance();
+  const settings = useScopeSettings();
+  const display = settings.display;
+  const hide = useMemo(() => scopeHideSet(display), [display]);
   const first = usePolling<MatchPage>(feedPath(1), 30_000);
   const morePaths = Array.from({ length: SCOPE_PAGES - 1 }, (_, i) => feedPath(i + 2));
   const more = usePollingAll<MatchPage>(morePaths, 30_000);
@@ -83,23 +97,10 @@ export function ScopeBoard({
     [first.data, more.data, graduated.data],
   );
   const [tickIds, setTickIds] = useState<string[] | undefined>(undefined);
-  const cards = useLiveMarketCaps(buffer, tickIds);
+  const visible = useLiveMarketCaps(buffer, tickIds);
 
-  // Customize's "hide below this market cap", with the Live feed's margin so a coin at the line
-  // doesn't flicker.
-  const wasHidden = useRef<ReadonlySet<string>>(new Set());
-  const visible = useMemo(() => {
-    if (!cards) return undefined;
-    const hiddenNow = new Set<string>();
-    const out = cards.filter((c) => {
-      const below = belowMcapLine(c, look, wasHidden.current.has(c.id));
-      if (below) hiddenNow.add(c.id);
-      return !below;
-    });
-    wasHidden.current = hiddenNow;
-    return out;
-  }, [cards, look]);
-  const fresh = useMemo(
+  // Every column before its filters: what the settings window offers to pick from.
+  const unfiltered = useMemo(
     () =>
       visible
         ? splitScope(
@@ -109,6 +110,28 @@ export function ScopeBoard({
         : undefined,
     [visible],
   );
+  // Each column through its own filters (Scope's settings, not Customize's).
+  const fresh = useMemo(() => {
+    if (!unfiltered) return undefined;
+    const out = { ...unfiltered };
+    for (const { id } of SCOPE_COLUMNS) {
+      const f = settings.columns[id];
+      out[id] =
+        activeFilterCount(f) > 0
+          ? unfiltered[id].filter((c) => passesColumnFilter(c, f, id, now))
+          : unfiltered[id];
+    }
+    return out;
+  }, [unfiltered, settings.columns, now]);
+  const modelNames = useMemo(
+    () => [...new Set((unfiltered?.models ?? []).flatMap(cardModelNames))],
+    [unfiltered],
+  );
+  const filterNames = useMemo(
+    () => [...new Set((unfiltered?.filters ?? []).flatMap((c) => (c.filter ? [c.filter.name] : [])))],
+    [unfiltered],
+  );
+  const shownCols = SCOPE_COLUMNS.filter((c) => !display.hiddenColumns.includes(c.id));
 
   // Holding still: the frame drawn when the board paused, refreshed in place.
   const [frame, setFrame] = useState<ScopeFrame | null>(null);
@@ -129,10 +152,15 @@ export function ScopeBoard({
   const freshRef = useRef(fresh);
   freshRef.current = fresh;
   const touchTimer = useRef<number | undefined>(undefined);
+  const holds = display.pauseOnHover;
+  useEffect(() => {
+    if (!holds) setFrame(null);
+  }, [holds]);
   const pause = useCallback(() => {
+    if (!holds) return;
     window.clearTimeout(touchTimer.current);
     setFrame((f) => f ?? (freshRef.current ? frameOf(freshRef.current) : null));
-  }, []);
+  }, [holds]);
   const resume = useCallback(() => {
     window.clearTimeout(touchTimer.current);
     setFrame(null);
@@ -142,6 +170,11 @@ export function ScopeBoard({
     touchTimer.current = window.setTimeout(() => setFrame(null), TOUCH_HOLD_MS);
   }, []);
   useEffect(() => () => window.clearTimeout(touchTimer.current), []);
+  // New filters show at once, even on a held board: it holds still from the filtered rows.
+  const columnFilters = settings.columns;
+  useEffect(() => {
+    setFrame((f) => (f && freshRef.current ? frameOf(freshRef.current) : f));
+  }, [columnFilters]);
   // "N new": show them now, and keep holding still if the pointer is still on the board.
   const showNew = () => {
     if (!fresh) return;
@@ -155,45 +188,83 @@ export function ScopeBoard({
     const el = strip.current;
     if (!el || el.clientWidth === 0) return;
     const i = Math.round(el.scrollLeft / el.clientWidth);
-    const col = SCOPE_COLUMNS[Math.min(SCOPE_COLUMNS.length - 1, Math.max(0, i))];
+    const col = shownCols[Math.min(shownCols.length - 1, Math.max(0, i))];
     if (col && col.id !== active) setActive(col.id);
   };
   const goToColumn = (id: ScopeColumn) => {
     const el = strip.current;
-    const i = SCOPE_COLUMNS.findIndex((c) => c.id === id);
+    const i = shownCols.findIndex((c) => c.id === id);
     setActive(id);
     el?.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
   };
 
+  // A hidden column can't stay the phone's active tab.
+  const activeCol = shownCols.some((c) => c.id === active) ? active : (shownCols[0]?.id ?? "filters");
+  const filterButton = (id: ScopeColumn, label: string) => {
+    const count = activeFilterCount(settings.columns[id]);
+    return (
+      <button
+        type="button"
+        className={`ghost icon-btn scope-filter-btn${count > 0 ? " on" : ""}`}
+        onClick={() => onSettings(id)}
+        title={`Filter what shows in ${label}${count > 0 ? ` (${count} on)` : ""}`}
+        aria-label={`Filter ${label}${count > 0 ? `, ${count} filters on` : ""}`}
+      >
+        <FunnelIcon size={14} />
+        {count > 0 && <span className="scope-filter-count num">{count}</span>}
+      </button>
+    );
+  };
+  const modal = (
+    <ScopeSettingsModal
+      open={settingsSection !== null}
+      section={settingsSection ?? "display"}
+      onClose={() => onSettings(null)}
+      modelNames={modelNames}
+      filterNames={filterNames}
+    />
+  );
+
   if (first.error && !first.data)
     return <p className="error">Couldn&apos;t load your feed: {first.error.message}</p>;
-  if (!cols) return <SkeletonCards count={3} />;
+  if (!cols)
+    return (
+      <>
+        {modal}
+        <SkeletonCards count={3} />
+      </>
+    );
 
   const tiles = tileMode(look);
   return (
     <div
-      className={`scope${frame ? " held" : ""}${first.stale ? " stale" : ""}`}
+      className={`scope${frame ? " held" : ""}${first.stale ? " stale" : ""}${display.compact ? " compact" : ""}`}
+      style={{ "--scope-cols": shownCols.length } as React.CSSProperties}
       onPointerEnter={(e) => e.pointerType === "mouse" && pause()}
       onPointerLeave={(e) => e.pointerType === "mouse" && resume()}
       onTouchStart={pause}
       onTouchEnd={resumeSoon}
       onTouchCancel={resumeSoon}
     >
+      {modal}
       <div className="scope-bar">
         <div className="segmented small scope-tabs" role="tablist" aria-label="Scope columns">
-          {SCOPE_COLUMNS.map((c) => (
+          {shownCols.map((c) => (
             <button
               key={c.id}
               type="button"
               role="tab"
-              aria-selected={active === c.id}
-              className={active === c.id ? "on" : ""}
+              aria-selected={activeCol === c.id}
+              className={activeCol === c.id ? "on" : ""}
               onClick={() => goToColumn(c.id)}
             >
               {c.short} <span className="num muted">{cols[c.id].length}</span>
             </button>
           ))}
         </div>
+        <span className="scope-bar-filter">
+          {filterButton(activeCol, SCOPE_COLUMNS.find((c) => c.id === activeCol)!.label)}
+        </span>
         <span
           className="scope-hold muted small"
           aria-live="polite"
@@ -212,15 +283,20 @@ export function ScopeBoard({
         )}
       </div>
       <div className="scope-strip" ref={strip} onScroll={onStripScroll}>
-        {SCOPE_COLUMNS.map((c) => (
+        {shownCols.map((c) => (
           <section key={c.id} className={`scope-col scope-col-${c.id}`} aria-label={c.label}>
-            <header className="scope-col-head" title={c.hint}>
-              <h3>{c.label}</h3>
+            <header className="scope-col-head">
+              <h3 title={c.hint}>{c.label}</h3>
               <span className="num muted">{cols[c.id].length}</span>
+              {filterButton(c.id, c.label)}
             </header>
             <div className="scope-rows">
               {cols[c.id].length === 0 ? (
-                <p className="muted small scope-empty">{emptyText(c.id, modelsOn, graduated.error)}</p>
+                <p className="muted small scope-empty">
+                  {(unfiltered?.[c.id].length ?? 0) > 0
+                    ? "Nothing here passes this column's filters right now."
+                    : emptyText(c.id, modelsOn, graduated.error)}
+                </p>
               ) : (
                 cols[c.id].map((card) => (
                   <ScopeRow key={card.id} card={card} now={now} hide={hide} tiles={tiles} />
@@ -380,7 +456,7 @@ export function ScopeRow({
         </div>
         <div className="scope-meta">
           {show("time") && <span className="scope-age num">{age}</span>}
-          {filter ? (
+          {filter && show("modelPill") ? (
             <span className="scope-src mine" title={`Caught by your filter “${filter.name}”`}>
               {filter.icon ? <FilterGlyph icon={filter.icon} size={11} /> : <SlidersIcon size={11} />}
             </span>

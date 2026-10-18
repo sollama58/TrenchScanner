@@ -16,6 +16,7 @@ import { CaSearchBox, SearchResults } from "../components/CaSearch";
 import { ScanStatus } from "../components/ScanStatus";
 import { parseSearch } from "../caSearch";
 import { ScopeBoard } from "../components/ScopeBoard";
+import type { ScopeSettingsSection } from "../components/ScopeSettingsModal";
 
 /** Graded alerts below which the Stats button doesn't show a 2x rate (too early to mean much). */
 const MIN_TEASER = 10;
@@ -79,8 +80,13 @@ export function LiveTab({
       // Private mode or blocked storage: the pick still applies for this visit.
     }
     setViewState(next);
+    // Each view has its own settings; the other's shouldn't stay open over it.
+    setCustomizing(false);
+    setScopeSettings(null);
   };
   const scope = view === "scope";
+  // Scope has its own settings window (user ask 2026-10-18): Customize opens it while in Scope.
+  const [scopeSettings, setScopeSettings] = useState<ScopeSettingsSection | null>(null);
   // Model calls narrowed to every model's high-conviction tier instead of the followed models.
   const [highConviction, setHighConviction] = useState(readHighConviction);
   // The tour opens by itself the first time this wallet lands here.
@@ -289,10 +295,16 @@ export function LiveTab({
             </button>
             <button
               type="button"
-              className={`ghost stats-btn${customizing ? " on" : ""}`}
-              aria-expanded={customizing}
-              onClick={() => setCustomizing((o) => !o)}
-              title="Colors, spacing, columns and what each card shows, changed right here on your feed"
+              className={`ghost stats-btn${(scope ? scopeSettings !== null : customizing) ? " on" : ""}`}
+              aria-expanded={scope ? scopeSettings !== null : customizing}
+              onClick={() =>
+                scope ? setScopeSettings((o) => (o === null ? "display" : null)) : setCustomizing((o) => !o)
+              }
+              title={
+                scope
+                  ? "Scope's own settings: how the rows look and what each column shows"
+                  : "Colors, spacing, columns and what each card shows, changed right here on your feed"
+              }
             >
               <PaletteIcon size={14} />
               Customize
@@ -345,7 +357,14 @@ export function LiveTab({
         {!searching && !scope && feedPage.error && !feedPage.data && (
           <p className="error">Couldn&apos;t load your feed: {feedPage.error.message}</p>
         )}
-        {!searching && scope && <ScopeBoard feedPath={feedPath} hide={hidden} modelsOn={modelsOn} />}
+        {!searching && scope && (
+          <ScopeBoard
+            feedPath={feedPath}
+            modelsOn={modelsOn}
+            settingsSection={scopeSettings}
+            onSettings={setScopeSettings}
+          />
+        )}
         {!searching && !scope && (
           <>
             {!feedPage.data && !feedPage.error && <SkeletonCards count={4} />}
