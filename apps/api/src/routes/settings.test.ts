@@ -77,9 +77,19 @@ describe("parseFeedAppearance", () => {
       quickLinks: ["gmgn", "axiom"],
     });
     expect(parseFeedAppearance({ quickLinks: [] }).quickLinks).toEqual([]);
-    // The token chart's labeled-wallet trades: every kind at 0.5 SOL, never under 0.25 SOL.
+    // The token chart's labeled-wallet trades: every kind but risky wallets at 0.5 SOL, never under 0.25 SOL.
     expect(parseFeedAppearance({})).toMatchObject({ chartMarks: true, chartMarkMinSol: 0.5 });
-    expect(parseFeedAppearance({}).chartMarkKinds).toHaveLength(8);
+    expect(parseFeedAppearance({}).chartMarkKinds).toHaveLength(7);
+    expect(parseFeedAppearance({}).chartMarkKinds).not.toContain("risky");
+    // A list saved before that with every kind on was the old default: it reads without risky.
+    const all = ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"];
+    expect(parseFeedAppearance({ chartMarkKinds: all }).chartMarkKinds).not.toContain("risky");
+    // Turned back on since (saved with the new revision), or kept with another kind off, it stays.
+    expect(parseFeedAppearance({ chartMarkKinds: all, chartMarksRev: 2 }).chartMarkKinds).toContain("risky");
+    expect(parseFeedAppearance({ chartMarkKinds: ["kol", "risky"] }).chartMarkKinds).toEqual([
+      "kol",
+      "risky",
+    ]);
     expect(
       parseFeedAppearance({
         chartMarks: false,

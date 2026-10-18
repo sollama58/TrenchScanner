@@ -112,6 +112,43 @@ describe("LiveCurves", () => {
     t.curves.stop();
   });
 
+  it("holds a waiting ask until the stream's next change, and answers at once with one ready", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at());
+    const seed = await t.curves.read(MINT, 0, 5_000);
+    expect(seed).toMatchObject({ held: true });
+    expect(seed.ticks).toHaveLength(1);
+    const after = seed.ticks[0]![0];
+    let answered = false;
+    const held = t.curves.read(MINT, after, 5_000).then((a) => {
+      answered = true;
+      return a;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(answered).toBe(false);
+    t.tick(400);
+    t.push(curveData(1_000_000_000_000_000n, 70_000_000_000n));
+    const a = await held;
+    expect(a.held).toBe(true);
+    expect(a.ticks).toEqual([[t.at(), 7_000]]);
+    t.curves.stop();
+  });
+
+  it("lets a held ask go when its wait runs out or the reader leaves", async () => {
+    const t = setup({ stream: true });
+    t.cover(t.at());
+    const seed = await t.curves.read(MINT, 0);
+    const after = seed.ticks[0]![0];
+    expect(seed.held).toBeUndefined();
+    const timedOut = await t.curves.read(MINT, after, 30);
+    expect(timedOut).toMatchObject({ held: true, ticks: [] });
+    const ctl = new AbortController();
+    const left = t.curves.read(MINT, after, 5_000, ctl.signal);
+    ctl.abort();
+    expect(await left).toMatchObject({ held: true, ticks: [] });
+    t.curves.stop();
+  });
+
   it("ignores stream updates before the seed read", async () => {
     const t = setup({ stream: true, states: [state(5e10)] });
     t.cover(t.at());

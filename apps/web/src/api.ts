@@ -1646,6 +1646,8 @@ export interface FeedAppearance {
    */
   chartMarks: boolean;
   chartMarkKinds: ChartMarkKind[];
+  /** Which default chartMarkKinds it was saved against (appearance.ts CHART_MARKS_REV). */
+  chartMarksRev: number;
   chartMarkMinSol: number;
   /** The token chart's default: a line or candles (absent from older API builds: line). */
   chartStyle: "line" | "candles";

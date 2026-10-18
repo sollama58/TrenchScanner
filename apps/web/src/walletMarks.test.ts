@@ -81,6 +81,21 @@ describe("chart mark settings", () => {
     expect(markPrefsOf(look)).toEqual({ on: false, kinds: ["kol"], minSol: 0.25 });
     expect(markPrefsOf(normalizeAppearance({}))).toEqual(defaults);
     expect(defaults).toMatchObject({ on: true, minSol: 0.5 });
-    expect(defaults.kinds).toHaveLength(8);
+    expect(defaults.kinds).toHaveLength(7);
+    expect(defaults.kinds).not.toContain("risky");
+  });
+
+  it("turns risky wallets off for a look saved with every kind still on, and only then", () => {
+    const all = ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"];
+    expect(normalizeAppearance({ chartMarkKinds: all }).chartMarkKinds).not.toContain("risky");
+    // Switched back on since: saved against the new default, it stays on.
+    const back = normalizeAppearance({ ...normalizeAppearance({}), chartMarkKinds: all });
+    expect(back.chartMarkKinds).toContain("risky");
+    expect(normalizeAppearance(back).chartMarkKinds).toContain("risky");
+    // A list the reader changed otherwise keeps risky wallets as they left them.
+    expect(normalizeAppearance({ chartMarkKinds: ["kol", "risky"] }).chartMarkKinds).toEqual([
+      "kol",
+      "risky",
+    ]);
   });
 });

@@ -42,6 +42,11 @@ const SOCKET_IDLE_MS = 2 * 60_000;
 /** An unconfirmed stretch longer than this is a hole: the cover starts again after it. */
 const GAP_MS = 15_000;
 const KEY_PREFIX = "chart:";
+/**
+ * The longest a chart's ask with `waitMs` is held open for a new price change (user ask 2026-10-18:
+ * the chart trailed by seconds when it only asked every couple of them).
+ */
+export const MAX_WAIT_MS = 8_000;
 /** How long a chart's first ask waits on the seed read before answering "pending". */
 const SEED_WAIT_MS = 2_500;
 
@@ -76,6 +81,11 @@ export interface LiveCurveAnswer {
   readAt: number | null;
   /** Each price change after `after`: [ms, market cap in USD], oldest first. */
   ticks: [number, number][];
+  /**
+   * Asked with a wait: the answer was held until a change came (or the wait ran out), so the chart
+   * can ask again at once (absent from older API builds, which answer at once).
+   */
+  held?: boolean;
 }
 
 /** One curve's current price for a feed card - see LiveCurves.quotes. */
@@ -127,14 +137,54 @@ export class LiveCurves {
   private readonly now: () => number;
   private readonly totals = { accountUpdates: 0, bytes: 0, credits: 0 };
   private readonly startedAt: number;
+  /** Charts' held asks, by mint: each woken by the curve's next change. */
+  private readonly waiters = new Map<string, Set<() => void>>();
 
   constructor(private readonly deps: LiveCurvesDeps) {
     this.now = deps.now ?? Date.now;
     this.startedAt = this.now();
   }
 
-  /** The changes after `after` (ms) of `mint`'s curve, following it from now on if it wasn't. */
-  async read(mint: string, after: number): Promise<LiveCurveAnswer> {
+  /**
+   * The changes after `after` (ms) of `mint`'s curve, following it from now on if it wasn't. With
+   * `waitMs` (at most MAX_WAIT_MS), an ask with no change yet is held until the next one lands, so
+   * the chart draws it the moment it does; `signal` lets go of it early (the reader left).
+   */
+  async read(mint: string, after: number, waitMs = 0, signal?: AbortSignal): Promise<LiveCurveAnswer> {
+    const first = await this.answer(mint, after);
+    if (waitMs <= 0) return first;
+    if (first.ticks.length > 0 || first.complete || first.source === "none" || signal?.aborted)
+      return { ...first, held: true };
+    await this.nextChange(mint, Math.min(waitMs, MAX_WAIT_MS), signal);
+    return { ...(await this.answer(mint, after)), held: true };
+  }
+
+  /** Resolves on `mint`'s next recorded change, after `ms`, or when `signal` aborts. */
+  private nextChange(mint: string, ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve) => {
+      let set = this.waiters.get(mint);
+      if (!set) this.waiters.set(mint, (set = new Set()));
+      const done = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", done);
+        const s = this.waiters.get(mint);
+        s?.delete(done);
+        if (s && s.size === 0) this.waiters.delete(mint);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      signal?.addEventListener("abort", done, { once: true });
+      set.add(done);
+    });
+  }
+
+  /** Wakes the held asks on `mint`. */
+  private wake(mint: string): void {
+    const set = this.waiters.get(mint);
+    if (set) for (const done of [...set]) done();
+  }
+
+  private async answer(mint: string, after: number): Promise<LiveCurveAnswer> {
     const now = this.now();
     const followed = this.follow(mint, now);
     if (!followed) return none(mint);
@@ -284,6 +334,7 @@ export class LiveCurves {
   }
 
   stop(): void {
+    for (const mint of [...this.waiters.keys()]) this.wake(mint);
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.drainStreamStats();
@@ -351,7 +402,8 @@ export class LiveCurves {
     if (f.confirmedAt === null || at - f.confirmedAt > GAP_MS) f.coveredFrom = at;
     f.confirmedAt = Math.max(f.confirmedAt ?? at, at);
     const mcap = curveMcapSol(state);
-    if (!last || last[1] !== mcap) f.ticks.push([at, mcap]);
+    const changed = !last || last[1] !== mcap;
+    if (changed) f.ticks.push([at, mcap]);
     let cut = 0;
     while (cut < f.ticks.length - 1 && f.ticks[cut]![0] < at - KEEP_MS) cut += 1;
     if (f.ticks.length - cut > MAX_TICKS) cut = f.ticks.length - MAX_TICKS;
@@ -360,6 +412,7 @@ export class LiveCurves {
       f.complete = true;
       this.stream?.unwatch(KEY_PREFIX + mint);
     }
+    if (changed || state.complete) this.wake(mint);
   }
 
   private streamCovers(mint: string, f: Followed): boolean {
@@ -389,6 +442,7 @@ export class LiveCurves {
   }
 
   private drop(mint: string): void {
+    this.wake(mint);
     this.stream?.unwatch(KEY_PREFIX + mint);
     this.followed.delete(mint);
   }

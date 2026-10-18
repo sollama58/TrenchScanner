@@ -40,6 +40,8 @@ import { currentMarketCap } from "./matches.js";
 import {
   fineRes,
   liveAfter,
+  liveWait,
+  closedSignal,
   readTokenChart,
   readTokenFine,
   readTokenFirstMinutes,
@@ -599,7 +601,12 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
       const lookup = await paidLookup(request.params, request.user!.walletAddress, "token");
       if ("error" in lookup) return reply.code(lookup.code).send({ error: lookup.error });
       reply.header("Cache-Control", "no-store");
-      return readTokenLive(lookup.subject, liveAfter(request.query));
+      return readTokenLive(
+        lookup.subject,
+        liveAfter(request.query),
+        liveWait(request.query),
+        closedSignal(reply),
+      );
     },
   );
 
