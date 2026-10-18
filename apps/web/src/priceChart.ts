@@ -69,10 +69,16 @@ export function timeTicks(
   max: number,
   origin?: number,
 ): { ticks: number[]; step: number } {
-  const span = Math.max(1, t1 - t0);
-  const step = TIME_STEPS.find((s) => span / s <= max) ?? TIME_STEPS[TIME_STEPS.length - 1]!;
   // The grid's zero: the origin, else UTC midnight moved to local midnight.
   const zero = origin ?? new Date(t0).getTimezoneOffset() * MINUTE;
+  // The finest step whose round times in the window number `max` or fewer. Counting the times
+  // themselves, not the span over the step, keeps a 19-hour view on 6-hour ticks (three labels)
+  // rather than one 12-hour tick.
+  const count = (s: number) => {
+    const first = zero + Math.ceil((t0 - zero) / s) * s;
+    return first > t1 ? 0 : Math.floor((t1 - first) / s) + 1;
+  };
+  const step = TIME_STEPS.find((s) => count(s) <= max) ?? TIME_STEPS[TIME_STEPS.length - 1]!;
   const ticks: number[] = [];
   for (let t = zero + Math.ceil((t0 - zero) / step) * step; t <= t1; t += step) ticks.push(t);
   return { ticks, step };

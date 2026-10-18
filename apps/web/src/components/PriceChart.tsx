@@ -521,6 +521,7 @@ export function PriceChart({
   // The volume lane: a bar per slice rising from its floor, green where the price rose across it.
   const laneTop = bottom + 8;
   const laneBottom = laneTop + LANE - 10;
+  const tickFloor = vols ? laneBottom : bottom;
   const volMax = vols ? Math.max(1e-9, ...vols.map((b) => b?.usd ?? 0)) : 1;
   const mark = bar !== null && vols ? (vols[bar] ?? undefined) : undefined;
   const hFlow = h ? flowAt(flow, h.t - 60_000, h.t) : null;
@@ -752,7 +753,9 @@ export function PriceChart({
         ))}
         {axisTicks.map((k) => (
           <g key={k.t}>
-            <line x1={k.x} x2={k.x} y1={bottom} y2={bottom + 4} className="pc-grid" />
+            {/* The tick mark sits on the floor its label hangs under: the volume lane's when
+                there is one, else the plot's, so it isn't left floating above the bars. */}
+            <line x1={k.x} x2={k.x} y1={tickFloor} y2={tickFloor + 4} className="pc-grid" />
             <text
               x={k.anchor === "start" ? Math.max(0, k.x - 4) : k.x}
               y={fullH - 6}

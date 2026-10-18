@@ -104,6 +104,14 @@ describe("timeTicks", () => {
   it("goes down to seconds on a short span", () => {
     expect(timeTicks(0, 40_000, 5).step).toBe(10_000);
   });
+
+  it("counts the round times that land, so a long view keeps several labels", () => {
+    // 4:05 to 23:30 with room for three labels: 6-hour ticks (three of them), not one 12-hour one.
+    const t0 = Date.UTC(2026, 9, 18, 4, 5);
+    const { ticks, step } = timeTicks(t0, Date.UTC(2026, 9, 18, 23, 30), 3, t0 - 5 * M);
+    expect(step).toBe(6 * 60 * M);
+    expect(ticks).toHaveLength(3);
+  });
 });
 
 describe("sinceLabel", () => {

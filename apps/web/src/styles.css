@@ -14140,6 +14140,16 @@ button.bm-same {
     padding-top: 2px;
   }
 }
+/* Narrow phones: two tiles a row, so every label fits on one line ("CEX-FUNDED" split at its
+   hyphen, "First buyers holding" ran to three lines) and the figures line up across the grid. */
+@media (max-width: 420px) {
+  .tm-modal .tm-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .tm-modal .tm-stats dt {
+    white-space: nowrap;
+  }
+}
 
 @media (max-width: 640px) {
   .tm-modal .tm-head {
@@ -17666,13 +17676,53 @@ body:has(.util-toast) .bug-fab {
   .tm-modal .tm-chart > p {
     padding-inline: 10px;
   }
+  /* The readout and the tools under the chart line up with the page's 16px edge, like the
+     heading above and the cards below. */
   .tm-modal .tm-chart .pc-readout {
-    margin-inline: 4px;
+    margin-inline: 10px;
   }
-  /* Bigger targets for the zoom buttons under the chart. */
+  .tm-modal .tm-chart .pc-tools {
+    margin-top: 8px;
+    padding-inline: 10px;
+  }
+  .tm-modal .tm-chart > .pc + p {
+    margin-top: 10px;
+  }
+  /* Bigger targets for the zoom buttons under the chart, as tall as Line / Candles beside them,
+     with glyphs big enough to read. */
   .pc-zoom .tm-range {
-    min-width: 36px;
-    min-height: 30px;
+    min-width: 40px;
+    min-height: 34px;
+    font-size: 18px;
+    line-height: 1;
+    color: var(--ink);
+  }
+  .pc-zoom .tm-range:disabled {
+    opacity: 0.3;
+  }
+  /* The candle timeframe picker keeps its 16px text (iOS zooms into smaller fields) and matches
+     the height of Line / Candles beside it. */
+  .tm-modal .pc-tf select {
+    height: 42px;
+    padding: 0 12px;
+    font-weight: 600;
+  }
+  /* Reset is a word, not a glyph. */
+  .pc-zoom .tm-range:not([aria-label]) {
+    font-size: 12px;
+  }
+  /* The header's link row and the section nav scroll sideways: fade their right edge so a cut-off
+     pill reads as "more this way". */
+  .tm-modal .tm-head > .tm-quick,
+  .tm-modal .tm-head > .tm-nav {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+    mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  }
+  .tm-modal .tm-head > .tm-quick {
+    padding-right: 28px;
+  }
+  .tm-modal .tm-head > .tm-nav {
+    padding-right: 24px;
   }
 }
 @keyframes tm-page-in {

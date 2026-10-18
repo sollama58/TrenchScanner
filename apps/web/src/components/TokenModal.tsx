@@ -673,6 +673,8 @@ function TokenBody({
   const ids = useId().replace(/:/g, "");
   const bodyRef = useRef<HTMLDivElement>(null);
   const active = useActiveSection(bodyRef, ids);
+  const navRef = useRef<HTMLElement>(null);
+  useNavFollows(navRef, active);
   const headH = useHeadHeight(bodyRef);
   const goTo = (id: SectionId) =>
     document.getElementById(`${ids}-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -979,7 +981,7 @@ function TokenBody({
     >
       <header className="tm-head">
         {headTop}
-        <nav className="tm-nav" aria-label="Sections">
+        <nav className="tm-nav" aria-label="Sections" ref={navRef}>
           {SECTIONS.map((x) => (
             <button
               key={x.id}
@@ -1148,6 +1150,26 @@ function useActiveSection(bodyRef: RefObject<HTMLDivElement | null>, ids: string
     };
   }, [bodyRef, ids]);
   return active;
+}
+
+/**
+ * On a phone the section nav scrolls sideways: the section being read is brought into view as the
+ * page scrolls, so "TokenSage" isn't lit up off the edge of the screen. Only the nav moves, never
+ * the page.
+ */
+function useNavFollows(navRef: RefObject<HTMLElement | null>, active: SectionId): void {
+  useEffect(() => {
+    const nav = navRef.current;
+    const btn = nav?.querySelector<HTMLElement>(".tm-nav-btn.on");
+    if (!nav || !btn || nav.scrollWidth <= nav.clientWidth) return;
+    const pad = 24;
+    const box = btn.getBoundingClientRect();
+    const left = box.left - nav.getBoundingClientRect().left + nav.scrollLeft;
+    const right = left + box.width;
+    if (left - pad < nav.scrollLeft) nav.scrollTo({ left: Math.max(0, left - pad), behavior: "smooth" });
+    else if (right + pad > nav.scrollLeft + nav.clientWidth)
+      nav.scrollTo({ left: right + pad - nav.clientWidth, behavior: "smooth" });
+  }, [navRef, active]);
 }
 
 /**
