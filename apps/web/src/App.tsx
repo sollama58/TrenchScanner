@@ -100,10 +100,10 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "lighthouse", label: "Lighthouse", Icon: LighthouseIcon },
   // Lookups paid for with Burn Credits, on top of a subscription.
   { id: "utilities", label: "Utilities", Icon: ToolsIcon },
-  // Pro Mode only (see portfolioOn below): the wallet's own holdings, positions, trades and alerts.
-  { id: "portfolio", label: "Portfolio", Icon: WalletIcon },
   { id: "settings", label: "Settings", Icon: GearIcon },
 ];
+/** Pro Mode only (see portfolioOn below), opened from the wallet menu rather than the tab bar (user ask 2026-10-18). */
+const PORTFOLIO_TAB = { id: "portfolio" as Tab, label: "Portfolio", Icon: WalletIcon };
 /** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
 const ADMIN_TAB = { id: "admin" as Tab, label: "Admin", Icon: ShieldIcon };
 /** The open tab's view, which the selected tab button controls. */
@@ -341,10 +341,7 @@ export function App() {
   // The Portfolio tab only for Pro Mode wallets (user decision 2026-10-18).
   const portfolioOn = !!pro?.pro;
   const shownTabs = TABS.filter(
-    (t) =>
-      (t.id !== "stream" || streamOn) &&
-      (t.id !== "lighthouse" || lighthouseOn) &&
-      (t.id !== "portfolio" || portfolioOn),
+    (t) => (t.id !== "stream" || streamOn) && (t.id !== "lighthouse" || lighthouseOn),
   );
   const tabs = isAdmin ? [...shownTabs, ADMIN_TAB] : shownTabs;
   // #admin without an admin wallet, or #stream with the tab off, reads as the Live tab, so a tab
@@ -357,13 +354,13 @@ export function App() {
       : wantedTab;
   // A new tab, or signing in or out, is a new page: its load gets the full loader.
   useEffect(markNavigation, [tab, session.state]);
+  const tabLabel = [...TABS, ADMIN_TAB, PORTFOLIO_TAB].find((t) => t.id === tab)?.label ?? "";
   const loaderLabel =
     session.state === "signed-in" || session.state === "guest"
-      ? `Loading ${tabs.find((t) => t.id === tab)?.label ?? "TrenchScanner"}`
+      ? `Loading ${tabLabel || "TrenchScanner"}`
       : "Loading TrenchScanner";
-  const tabLabel = TABS.find((t) => t.id === tab)?.label ?? (tab === "admin" ? ADMIN_TAB.label : "");
   // The tab bar's button for this view, when it shows one (a hidden Lighthouse tab opened from a
-  // link has none): it names the tab panel.
+  // link, and Portfolio, which the wallet menu opens, have none): it names the tab panel.
   const tabButtonShown = (guest ? shownTabs : tabs).some((t) => t.id === tab);
   const panelProps = {
     role: "tabpanel",
@@ -443,7 +440,15 @@ export function App() {
                 Connect wallet
               </button>
             )}
-            {signedIn && <WalletMenu user={session.user} onSettings={openSettingsAt} onSignOut={signOut} />}
+            {signedIn && (
+              <WalletMenu
+                user={session.user}
+                onSettings={openSettingsAt}
+                onPortfolio={portfolioOn ? () => goTo("portfolio") : undefined}
+                portfolioOpen={tab === "portfolio"}
+                onSignOut={signOut}
+              />
+            )}
           </div>
         </div>
       </header>
@@ -552,7 +557,7 @@ export function App() {
                 {tab === "lighthouse" && <LighthouseTab />}
                 {tab === "filters" && <FiltersTab />}
                 {tab === "utilities" && <UtilitiesTab walletAddress={session.user.walletAddress} />}
-                {tab === "portfolio" && <PortfolioTab goTo={goTo} />}
+                {tab === "portfolio" && <PortfolioTab />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>

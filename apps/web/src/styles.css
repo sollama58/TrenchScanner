@@ -3410,12 +3410,8 @@ body.drawer-open .trades-drawer {
   gap: 8px;
   align-items: flex-start;
 }
-.portfolio-wallet {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.portfolio-totals {
+/* .facts comes later and zeroes the margin, so this needs both classes. */
+.facts.portfolio-totals {
   margin-bottom: 16px;
 }
 .portfolio-grid {
@@ -3428,8 +3424,17 @@ body.drawer-open .trades-drawer {
 .portfolio-empty {
   margin: 4px 0 8px;
 }
-.portfolio-link {
-  margin-left: 8px;
+.portfolio-more {
+  display: block;
+  margin: 4px auto 8px;
+}
+/* Holdings' Show all: every listed coin, wider than the usual popup so a row holds three or four. */
+.holdings-modal {
+  width: min(900px, calc(100vw - 32px));
+}
+.holdings-modal .trades-grid {
+  margin: 12px 0 8px;
+  padding: 0;
 }
 .portfolio-stats {
   margin: 0 -20px;
@@ -16961,7 +16966,7 @@ body:has(.util-toast) .bug-fab {
   font-size: 12px;
 }
 
-/* The header's wallet pill opens a two-item menu: Settings (wallet or access) and sign out. */
+/* The header's wallet pill opens a small menu: Portfolio (Pro Mode), Settings (wallet or access) and sign out. */
 .wallet-menu {
   position: relative;
 }
@@ -17047,6 +17052,12 @@ body:has(.util-toast) .bug-fab {
 .wallet-menu-list button:focus-visible {
   background: var(--surface-2);
   outline: none;
+}
+.wallet-menu-list button.current {
+  background: var(--surface-2);
+}
+.wallet-menu-list button.current svg {
+  color: var(--brand-a);
 }
 .wallet-menu-list button.danger strong,
 .wallet-menu-list button.danger svg {
