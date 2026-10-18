@@ -78,7 +78,16 @@ export function fillPage(
   return { shown, hiddenHere: hiddenIds.length, moreLoaded, visible, tickTokenIds, hidden: hiddenNow };
 }
 
-/** The feed's pages read so far as one list, newest first, each alert once. */
+/**
+ * How close a model call and one of the reader's filter alerts on the same token must be to read as
+ * one event: the API's CURATED_MATCH_LINK_WINDOW_MS (apps/api/src/curatedFeed.ts).
+ */
+export const CURATED_MATCH_LINK_WINDOW_MS = 6 * 3_600_000;
+
+/**
+ * The feed's pages read so far as one list, newest first, each alert once, with a model call folded
+ * into the reader's own alert on the same token when the two landed on different pages.
+ */
 export function joinPages(pages: readonly ({ matches: Card[] } | null)[]): Card[] {
   const seen = new Set<string>();
   const out: Card[] = [];
@@ -91,7 +100,46 @@ export function joinPages(pages: readonly ({ matches: Card[] } | null)[]): Card[
       out.push(c);
     }
   }
-  return out;
+  return foldAcrossPages(out);
+}
+
+/**
+ * The API folds a model call into the reader's filter alert on the same token only within one page
+ * (foldCuratedIntoPage), so a call on one page and its twin alert on the next both showed once the
+ * pages were joined: one token, two cards, a model pill on one and the filter's icon on the other.
+ * The same rule over the joined run: each call folds into the first alert on its token within
+ * the window that wears no call yet, which keeps its own place; each alert takes at most one call.
+ */
+function foldAcrossPages(cards: Card[]): Card[] {
+  const open = new Map<string, Card[]>();
+  for (const c of cards) {
+    if (c.kind !== "match" || c.curated !== null) continue;
+    const list = open.get(c.tokenId);
+    if (list) list.push(c);
+    else open.set(c.tokenId, [c]);
+  }
+  if (open.size === 0) return cards;
+  const folded = new Map<string, Card["curated"]>();
+  const absorbed = new Set<string>();
+  for (const c of cards) {
+    if (c.kind !== "curated" || !c.curated) continue;
+    const at = Date.parse(c.matchedAt);
+    const twin = open
+      .get(c.tokenId)
+      ?.find(
+        (m) => !folded.has(m.id) && Math.abs(Date.parse(m.matchedAt) - at) <= CURATED_MATCH_LINK_WINDOW_MS,
+      );
+    if (!twin) continue;
+    folded.set(twin.id, c.curated);
+    absorbed.add(c.id);
+  }
+  if (absorbed.size === 0) return cards;
+  return cards
+    .filter((c) => !absorbed.has(c.id))
+    .map((c) => {
+      const meta = folded.get(c.id);
+      return meta ? { ...c, curated: meta } : c;
+    });
 }
 
 /**
