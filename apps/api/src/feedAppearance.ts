@@ -66,6 +66,12 @@ export const CHART_MARK_KINDS = [
 export const DEFAULT_CHART_MARK_KINDS = CHART_MARK_KINDS.filter((k) => k !== "risky");
 /** apps/web/src/appearance.ts has the same. */
 export const CHART_MARKS_REV = 2;
+/**
+ * Which hideBelowMcap default a look was saved against (apps/web/src/appearance.ts has the same): a
+ * look from before it went on at 6k that still holds the old default (off at 5k) was never changed,
+ * and reads as the new one (user ask 2026-10-18).
+ */
+export const HIDE_BELOW_MCAP_REV = 2;
 /** The chart marks no trade under this many SOL, whatever the setting (user ask 2026-10-18). */
 export const CHART_MARK_MIN_SOL = 0.25;
 export const CHART_MARK_MAX_SOL = 1_000;
@@ -184,9 +190,9 @@ export const feedAppearanceSchema = z
     outlineResult: z.boolean().default(false),
     /**
      * Hide Live feed alerts whose current market cap has fallen below hideBelowMcapUsd. Display only:
-     * stats, grading and every count still include them. Off by default.
+     * stats, grading and every count still include them. On at 6k by default (user ask 2026-10-18).
      */
-    hideBelowMcap: z.boolean().default(false),
+    hideBelowMcap: z.boolean().default(true),
     /** The market cap, in USD, below which an alert is hidden when hideBelowMcap is on (3k-20k, 1k steps). */
     hideBelowMcapUsd: z
       .number()
@@ -194,7 +200,9 @@ export const feedAppearanceSchema = z
       .min(HIDE_BELOW_MCAP_MIN)
       .max(HIDE_BELOW_MCAP_MAX)
       .refine((v) => v % HIDE_BELOW_MCAP_STEP === 0, "not a whole step")
-      .default(5_000),
+      .default(6_000),
+    /** Which default hideBelowMcap was saved against; see HIDE_BELOW_MCAP_REV and parseFeedAppearance. */
+    hideBelowMcapRev: z.literal(HIDE_BELOW_MCAP_REV).default(HIDE_BELOW_MCAP_REV),
     /** Trading sites each card links to, in this order; Padre's Trading Terminal by default. */
     quickLinks: z
       .array(z.enum(QUICK_LINKS))
@@ -275,8 +283,9 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   hideSafetyPill: false,
   outline: null,
   outlineResult: false,
-  hideBelowMcap: false,
-  hideBelowMcapUsd: 5_000,
+  hideBelowMcap: true,
+  hideBelowMcapUsd: 6_000,
+  hideBelowMcapRev: HIDE_BELOW_MCAP_REV,
   quickLinks: ["terminal"],
   chartMarks: true,
   chartMarkKinds: [...DEFAULT_CHART_MARK_KINDS],
@@ -296,7 +305,13 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   const raw = typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(DEFAULT_FEED_APPEARANCE) as (keyof FeedAppearance)[]) {
-    if (key === "hidden" || key === "quickLinks" || key === "chartMarkKinds" || key === "chartMarksRev")
+    if (
+      key === "hidden" ||
+      key === "quickLinks" ||
+      key === "chartMarkKinds" ||
+      key === "chartMarksRev" ||
+      key === "hideBelowMcapRev"
+    )
       continue;
     const parsed = feedAppearanceSchema.shape[key].safeParse(raw[key]);
     out[key] = parsed.success ? parsed.data : DEFAULT_FEED_APPEARANCE[key];
@@ -320,5 +335,15 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
       ? kinds.filter((k) => k !== "risky")
       : kinds;
   out.chartMarksRev = CHART_MARKS_REV;
+  // Saved before low market caps were hidden by default, still off at 5k: the old default, unchanged.
+  if (
+    raw.hideBelowMcapRev !== HIDE_BELOW_MCAP_REV &&
+    out.hideBelowMcap === false &&
+    out.hideBelowMcapUsd === 5_000
+  ) {
+    out.hideBelowMcap = DEFAULT_FEED_APPEARANCE.hideBelowMcap;
+    out.hideBelowMcapUsd = DEFAULT_FEED_APPEARANCE.hideBelowMcapUsd;
+  }
+  out.hideBelowMcapRev = HIDE_BELOW_MCAP_REV;
   return out as FeedAppearance;
 }

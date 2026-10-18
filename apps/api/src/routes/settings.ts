@@ -98,14 +98,19 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const look = withAdminOnly(parsed.data, admins.has(request.user!.walletAddress));
-    // A tab from before chartMarksRev sends none: stored without one, so reading it still drops
-    // the risky kind it never chose (parseFeedAppearance), rather than the default stamping rev 2.
-    const sentRev =
-      typeof request.body === "object" && request.body !== null && "chartMarksRev" in request.body;
-    const { chartMarksRev: _rev, ...unstamped } = look;
+    // A tab from before a revision sends none: stored without one, so reading it still gives the
+    // new default it never saw (parseFeedAppearance), rather than the schema's default stamping it.
+    const sent = (key: string) =>
+      typeof request.body === "object" && request.body !== null && key in request.body;
+    const { chartMarksRev, hideBelowMcapRev, ...unstamped } = look;
+    const stored = {
+      ...unstamped,
+      ...(sent("chartMarksRev") ? { chartMarksRev } : {}),
+      ...(sent("hideBelowMcapRev") ? { hideBelowMcapRev } : {}),
+    };
     const { count } = await prisma.user.updateMany({
       where: { id: request.user!.userId },
-      data: { feedAppearance: (sentRev ? look : unstamped) as unknown as Prisma.InputJsonValue },
+      data: { feedAppearance: stored as unknown as Prisma.InputJsonValue },
     });
     if (count === 0) return reply.code(401).send({ error: "unauthenticated" });
     return { appearance: look };
