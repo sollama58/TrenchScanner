@@ -22,7 +22,7 @@ import {
 } from "../proTrade";
 import { WalletTimeoutError } from "../wallet";
 import { renderPositionCard } from "../pnlCard";
-import { BoltIcon, CheckIcon, GearIcon, ShareIcon, ShieldIcon } from "./Icons";
+import { BoltIcon, CheckIcon, GearIcon, InfoIcon, ShareIcon, ShieldIcon } from "./Icons";
 import { ShareImageDialog } from "./ShareImageDialog";
 
 /**
@@ -152,6 +152,28 @@ function StageSteps({ stage }: { stage: TradeStage }) {
   );
 }
 
+/** A warning sign, drawn like the emoji: an amber triangle with a dark exclamation mark. */
+function WarnTriangle() {
+  return (
+    <svg className="tm-warn-tri" width="26" height="24" viewBox="0 0 26 24" aria-hidden="true">
+      <defs>
+        <linearGradient id="tm-warn-tri-fill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#ffd34d" />
+          <stop offset="1" stopColor="#f5a00b" />
+        </linearGradient>
+      </defs>
+      <path
+        d="M11.27 2.1a2 2 0 0 1 3.46 0l10 17.3A2 2 0 0 1 23 22.4H3a2 2 0 0 1-1.73-3l10-17.3Z"
+        fill="url(#tm-warn-tri-fill)"
+        stroke="#c97a00"
+        strokeWidth="0.8"
+      />
+      <rect x="11.6" y="7.5" width="2.8" height="8.2" rx="1.4" fill="#2b1d00" />
+      <circle cx="13" cy="18.6" r="1.55" fill="#2b1d00" />
+    </svg>
+  );
+}
+
 /** "1%", "0.25%", "3%": basis points as a percent. */
 function bpsText(bps: number): string {
   return `${Number((bps / 100).toFixed(2))}%`;
@@ -222,11 +244,6 @@ function FeeExplainer({
   };
   return (
     <div className="tm-trade-fee" aria-live="polite">
-      <span className="tm-fee-zero-badge">
-        <CheckIcon size={12} />
-        <strong>0% platform fee</strong>
-        <span className="tm-fee-zero-more">TrenchScanner takes nothing</span>
-      </span>
       <div className="tm-fee-head">
         <span className="tm-fee-title">
           Total cost of a <span className="num">{solText(sizeSol)}</span> buy
@@ -314,16 +331,49 @@ function FeeExplainer({
         </div>
       )}
       {swap && swap.transferFeeBps !== null && swap.transferFeeBps > 0 && (
-        <p className="small tm-fee-warn" role="note">
-          This coin taxes every transfer {bpsText(swap.transferFeeBps)}, so a sale pays it again. The tax goes
-          to whoever set it up, not to TrenchScanner.
-        </p>
+        <div className="tm-fee-warn" role="note">
+          <WarnTriangle />
+          <div>
+            <strong>This coin has a {bpsText(swap.transferFeeBps)} transfer tax</strong>
+            <p>
+              It comes off every buy and every sale, about{" "}
+              <span className="num">
+                {Number(((1 - (1 - swap.transferFeeBps / 10_000) ** 2) * 100).toFixed(2))}%
+              </span>{" "}
+              on a round trip before any other fee. It goes to whoever set the coin up, not to TrenchScanner.
+            </p>
+          </div>
+        </div>
       )}
-      <p className="tm-fee-note">
-        Network fees go to Solana&apos;s validators; pool fees to the pool and its liquidity providers.
-        {swap?.priceImpactPct != null &&
-          ` Price impact on a ${solText(Number(swap.refLamports) / LAMPORTS)} buy is about ${swap.priceImpactPct.toFixed(2)}%, already in the quote and capped by your slippage.`}
-      </p>
+      <ul className="tm-fee-notes">
+        <li>
+          <i className="tm-fee-dot priority" aria-hidden="true" />
+          <span>
+            <strong>Network fees</strong> go to Solana&apos;s validators.
+          </span>
+        </li>
+        <li>
+          <i className="tm-fee-dot pool" aria-hidden="true" />
+          <span>
+            <strong>Pool fees</strong> go to the pool and its liquidity providers.
+          </span>
+        </li>
+        {swap?.priceImpactPct != null && (
+          <li>
+            <InfoIcon size={12} />
+            <span>
+              <strong>Price impact</strong> on a {solText(Number(swap.refLamports) / LAMPORTS)} buy is about{" "}
+              <span className="num">{swap.priceImpactPct.toFixed(2)}%</span>, already in the quote and capped
+              by your slippage.
+            </span>
+          </li>
+        )}
+      </ul>
+      <span className="tm-fee-zero-badge">
+        <CheckIcon size={12} />
+        <strong>0% platform fee</strong>
+        <span className="tm-fee-zero-more">TrenchScanner takes nothing</span>
+      </span>
     </div>
   );
 }
