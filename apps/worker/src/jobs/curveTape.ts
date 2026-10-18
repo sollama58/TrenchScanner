@@ -9,6 +9,7 @@ import {
   type HeliusClient,
 } from "@trenchscanner/core";
 import { streamCredits, type HeliusAccountStream } from "../discovery/heliusAccountStream.js";
+import { recordPricePath } from "./pricePathRecorder.js";
 
 const logger = createLogger("curve-tape");
 
@@ -49,7 +50,9 @@ interface Followed {
   readAt: number | null;
 }
 
-const tape = new CurveTape();
+// Kept long enough for the price path recorder's 30 minutes (the features still read 16). Memory
+// follows the stream's update rate, which its daily credit cap bounds, not the number of coins.
+const tape = new CurveTape({ keepMs: 31 * 60_000, maxTicks: 6_000 });
 const followed = new Map<string, Followed>();
 /** Mints whose curve address holds no curve (not Pump.fun) or a graduated one: not asked again. */
 const done = new Set<string>();
@@ -167,6 +170,8 @@ export function takeCurveTapeStats(now = Date.now()) {
 
 function drop(mint: string, forGood: boolean): void {
   if (followed.delete(mint)) stream?.unwatch(keyOf(mint));
+  // The path the tape held is saved as training data for predictive price pathing (when it is on).
+  recordPricePath(mint, tape.snapshot(mint), forGood ? "graduated" : "aged");
   tape.forget(mint);
   if (forGood) {
     if (done.size >= MAX_DONE) done.clear();

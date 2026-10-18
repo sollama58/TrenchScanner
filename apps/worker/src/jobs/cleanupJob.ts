@@ -747,6 +747,13 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     ),
   );
 
+  // Recorded price paths (pricePathRecorder.ts): training data, kept PRICE_PATH_RETENTION_DAYS.
+  const deletedPricePaths = await stage("pricePaths", { count: 0 }, () =>
+    prisma.pricePathRecord.deleteMany({
+      where: { createdAt: { lt: new Date(startedAt - env.PRICE_PATH_RETENTION_DAYS * DAY_MS) } },
+    }),
+  );
+
   // Bug reports: the screenshot goes first (a week after the report is done, or a month after it
   // was filed), the done report after a quarter. See FEEDBACK_SCREENSHOT_DONE_DAYS above.
   const screenshotDoneCutoff = new Date(startedAt - FEEDBACK_SCREENSHOT_DONE_DAYS * DAY_MS);
@@ -1027,6 +1034,7 @@ export async function runCleanupJob(env: Env, opts: CleanupOptions = {}): Promis
     deletedTradeTapes,
     strippedFeedbackScreenshots,
     deletedFeedbackReports: deletedFeedbackReports.count,
+    deletedPricePaths: deletedPricePaths.count,
     deletedAiReviews: deletedAiReviews.count,
     deletedCuratorModels: deletedCuratorModels.count,
     strippedCuratorModels,

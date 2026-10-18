@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { ACCESS_ENDED_EVENT, ApiError, post, type Subscription, type User } from "./api";
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
-import { GUEST_DELAY_MINUTES, isGuest, setGuest, setSessionToken } from "./session";
+import { GUEST_DELAY_MINUTES, isGuest, setAdmin, setGuest, setSessionToken } from "./session";
 import { usePolling } from "./hooks";
 import { ago, shortAddress } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
@@ -292,6 +292,7 @@ export function App() {
     if (!privyWanted) return;
     void privyConfig().then((c) => setPrivyAppId(c.enabled && c.appId ? c.appId : null));
   }, [privyWanted]);
+  useEffect(() => setAdmin(isAdmin));
   // Pro Mode, for the token modal's Trade panel (null hides all of it).
   const pro = signedIn ? proStateOf(session.user) : null;
   // Every render: setProState ignores a state equal to the one it has.

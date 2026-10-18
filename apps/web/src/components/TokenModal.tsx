@@ -34,6 +34,7 @@ import { DevCard, FlowCard, SocialsCard, type TokenProfile } from "./TokenProfil
 import { cardOutcome, outcomeBadge } from "../outcome";
 import { openSage } from "../sage";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
+import { useIsAdmin } from "../session";
 import { useShowNarrativeNote } from "../narrativeNote";
 import { scoreTone, scoreToneColor, useScoreWeights } from "../scoreWeights";
 import {
@@ -74,6 +75,7 @@ import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
+import { predictPath, type PathStep } from "../pricePathing";
 import {
   categoryText,
   count,
@@ -1424,6 +1426,8 @@ export function ChartCard({
   // Labeled wallets' trades on the line (user ask 2026-10-18), as set in Customize › Chart wallet
   // trades, which the header's link opens over the token view.
   const look = useAppearance();
+  // The predicted path is admins-only while it is tried out (user ask 2026-10-18).
+  const admin = useIsAdmin();
   const markPrefs = useMemo(() => markPrefsOf(look), [look]);
   // Line or candles: Customize › Token chart sets the default, the switch under the chart this view.
   const [kindPicked, setKind] = useState<ChartKind | null>(null);
@@ -1456,11 +1460,16 @@ export function ChartCard({
     !!shownBounds &&
     span <= SECOND_VIEW_MAX_MS &&
     shownBounds.from >= Date.now() - SECOND_VIEW_MAX_MS;
-  const second = useFineCandles(
+  // The experimental predicted path (Customize › Token chart, off by default) reads the last
+  // minute second by second, so a live view with it on reads the 1-second page whatever its span;
+  // the view itself still draws it only where it would anyway.
+  const pathing = admin && look.chartPathing && fineOk && !!bounds?.live && shownRange !== "model";
+  const secondRead = useFineCandles(
     api,
-    wantSecond ? "1s" : null,
+    wantSecond || pathing ? "1s" : null,
     bounds?.live ? FINE_LIVE_POLL_MS : FINE_POLL_MS,
   );
+  const second = wantSecond ? secondRead : null;
   const secondReaches =
     !!second?.candles?.length && !!shownBounds && second.candles[0]!.t <= shownBounds.from + 60_000;
   const quarter = useFineCandles(
@@ -1520,7 +1529,15 @@ export function ChartCard({
     const line = win
       ? linePoints(source, Math.max(from, win.from - step), step, Math.min(to, win.to + step))
       : full;
+    // The predicted path, from the finest reading of the last minute: the 1-second candles and
+    // the live curve's changes after them.
+    let path: PathStep[] = [];
+    if (pathing && secondRead?.candles?.length) {
+      const fine = stitch([...runs, runOf(secondRead.candles, 1_000)], bounds.live ? tail.ticks : []);
+      path = predictPath(fine, fine[fine.length - 1]!.t, secondRead.candles);
+    }
     return {
+      path,
       // A call is priced from a fresh quote (its anchor), so its price goes on the line at its
       // time: the "Called" marker then sits on the price the call and its grade start from.
       points: callPriced ? withCallPoint(line, { t: alertAt, v: alertMcap }) : line,
@@ -1543,6 +1560,8 @@ export function ChartCard({
     bounds,
     quarter,
     second,
+    secondRead,
+    pathing,
     tail.ticks,
     tail.source,
     shownRange,
@@ -1669,8 +1688,15 @@ export function ChartCard({
               onZoom={setZoom}
               kind={kind}
               onKind={setKind}
+              path={view.path}
               ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
             />
+            {view.path.length > 1 && (
+              <p className="faint small tm-chart-src">
+                Dotted: predicted price path for the next minute (experimental). A statistical guess with its
+                usual range shaded, often wrong; not advice.
+              </p>
+            )}
             {shownRange === "model" && (
               <p className="faint small tm-chart-src">
                 <i className="tm-scan-dot" aria-hidden="true" />{" "}

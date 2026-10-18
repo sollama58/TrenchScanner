@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from "react";
+
 /**
  * The session token, kept here only for browsers that refuse the API's session cookie.
  *
@@ -68,3 +70,26 @@ export function setGuest(on: boolean): void {
 
 /** How late guests see each call; the API's GUEST_DELAY_MINUTES (routes/guest.ts) sets the real delay. */
 export const GUEST_DELAY_MINUTES = 5;
+
+/**
+ * Whether the signed-in account is an admin, for features still being tried out on admins only
+ * (the predicted price path, user ask 2026-10-18). Set by App on every render; false for guests.
+ */
+let admin = false;
+const adminListeners = new Set<() => void>();
+
+export function setAdmin(on: boolean): void {
+  if (on === admin) return;
+  admin = on;
+  for (const l of adminListeners) l();
+}
+
+export function useIsAdmin(): boolean {
+  return useSyncExternalStore(
+    (l) => {
+      adminListeners.add(l);
+      return () => adminListeners.delete(l);
+    },
+    () => admin,
+  );
+}
