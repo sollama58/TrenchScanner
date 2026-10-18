@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CurveState } from "@trenchscanner/core";
 import { curveMcapSol, LiveCurves, READ_EVERY_MS } from "./liveCurve.js";
-import { SolPrice } from "./solPrice.js";
+import { QuotePrice, SolPrice } from "./solPrice.js";
 
 const MINT = "BfWF6DxxfjdZPqjc2dPQvMd4CJh8Xr7ZPeP3iLh2pump";
 const DISC = [23, 183, 248, 55, 96, 216, 172, 96];
@@ -40,6 +40,8 @@ function setup(
     states?: (CurveState | null)[];
     /** After bonding: the pool's vaults (null: no pool) and their balances [base, quote]. */
     pool?: { vaults: typeof VAULTS | null; amounts: [number, number] };
+    /** Prices a coin-quoted curve's quote. */
+    quotePrice?: { get: (mint: string) => Promise<{ usd: number; decimals: number } | null> };
   } = {},
 ) {
   let now = 1_000_000;
@@ -70,7 +72,7 @@ function setup(
       },
       ...(opts.pool
         ? {
-            getPoolVaultsBatch: async (pools: ReadonlyMap<string, string>) =>
+            getPoolVaultsBatch: async (pools: ReadonlyMap<string, { mint: string; quoteMint: string }>) =>
               new Map([...pools.keys()].map((p) => [p, opts.pool!.vaults])),
             getTokenAmountsBatch: async (list: string[]) => {
               poolReads.push(list);
@@ -82,6 +84,7 @@ function setup(
         : {}),
     },
     solPrice: { get: async () => 100 },
+    quotePrice: opts.quotePrice,
     now: () => now,
   });
   return {
@@ -243,6 +246,55 @@ describe("LiveCurves", () => {
     t.curves.stop();
   });
 
+  it("prices a curve paired with another coin at that coin's USD price", async () => {
+    const SPCX = "SPCXxcqXj6e5dJDVNovHN8744zkbhM2bYudU45BimGb";
+    // 52.6 SPCX (6 decimals) against 465M tokens, SPCX at $145.
+    const paired: CurveState = {
+      virtualToken: 465_090_932_988_809,
+      virtualQuote: 52_637_853,
+      realQuote: 0,
+      complete: false,
+      quoteIsSol: false,
+      quoteMint: SPCX,
+    };
+    const priced = setup({
+      states: [paired],
+      quotePrice: { get: async (mint) => (mint === SPCX ? { usd: 145, decimals: 6 } : null) },
+    });
+    const a = await priced.curves.read(MINT, 0);
+    expect(a).toMatchObject({ source: "rpc", complete: false });
+    expect(a.ticks[0]![1]).toBeCloseTo((52_637_853 / 465_090_932_988_809) * 1e9 * 145, 0);
+    priced.curves.stop();
+    // With nothing to price its quote, it isn't followed.
+    const unpriced = setup({ states: [paired] });
+    expect((await unpriced.curves.read(MINT, 0)).source).toBe("none");
+    unpriced.curves.stop();
+  });
+
+  it("follows a Stonks coin's LaunchLab pool where there is no Pump.fun curve", async () => {
+    const onPool: CurveState = { ...state(6e10), quoteIsSol: true };
+    let scans = 0;
+    const curves = new LiveCurves({
+      makeStream: null,
+      reader: {
+        getCurveStatesBatch: async (list: string[]) =>
+          new Map(list.map((c) => [c, c === "ll-pool" ? onPool : null])),
+        findLaunchLabPool: async () => {
+          scans += 1;
+          return "ll-pool";
+        },
+      },
+      solPrice: { get: async () => 100 },
+    });
+    expect((await curves.read(MINT, 0)).source).toBe("pending");
+    await curves.round();
+    const a = await curves.read(MINT, 0);
+    expect(a).toMatchObject({ source: "rpc", complete: false });
+    expect(a.ticks[0]![1]).toBeCloseTo(curveMcapSol(onPool) * 100);
+    expect(scans).toBe(1);
+    curves.stop();
+  });
+
   it("reads a pool by RPC every READ_EVERY_MS off the stream", async () => {
     const t = setup({ states: [state(5e10, true)], pool: { vaults: VAULTS, amounts: [2e14, 8e10] } });
     expect(await t.curves.read(MINT, 0)).toMatchObject({ venue: "pool", complete: false, source: "rpc" });
@@ -339,5 +391,31 @@ describe("LiveCurves.quotes (the feed cards' Now)", () => {
     const q = await t.curves.quotes([MINT], 2_500);
     expect(q.get(MINT)?.at).toBe(t.at());
     t.curves.stop();
+  });
+});
+
+describe("QuotePrice", () => {
+  it("reuses a price for its ttl, and keeps the last one through a failed read", async () => {
+    let now = 0;
+    let calls = 0;
+    let fail = false;
+    const q = new QuotePrice(
+      async () => {
+        calls += 1;
+        if (fail) throw new Error("down");
+        return { usd: 145, decimals: 6 };
+      },
+      30_000,
+      10_000,
+      () => now,
+    );
+    expect(await q.get("SPCX")).toEqual({ usd: 145, decimals: 6 });
+    await q.get("SPCX");
+    expect(calls).toBe(1);
+    now = 31_000;
+    fail = true;
+    expect(await q.get("SPCX")).toEqual({ usd: 145, decimals: 6 });
+    await Promise.resolve();
+    expect(await q.get("SPCX")).toEqual({ usd: 145, decimals: 6 });
   });
 });

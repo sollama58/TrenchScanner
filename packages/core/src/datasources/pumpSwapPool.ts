@@ -29,11 +29,17 @@ export interface PoolVaults {
   quote: string;
 }
 
-/** The canonical SOL pool `mintAddress` graduates into, or undefined for a string that isn't a mint. */
-export function pumpSwapPoolOf(mintAddress: string): string | undefined {
+/**
+ * The canonical pool `mintAddress` graduates into, quoted in what its curve was (SOL unless
+ * `quoteMint` says otherwise), or undefined for a string that isn't a mint.
+ */
+export function pumpSwapPoolOf(
+  mintAddress: string,
+  quoteMint: string = WRAPPED_SOL_MINT,
+): string | undefined {
   try {
     const mint = bs58.decode(mintAddress);
-    return mint.length === 32 ? pumpSwapPoolAddress(mint, WRAPPED_SOL_MINT) : undefined;
+    return mint.length === 32 ? pumpSwapPoolAddress(mint, quoteMint) : undefined;
   } catch {
     return undefined;
   }
@@ -44,14 +50,18 @@ function toBytes(raw: Uint8Array | string): Uint8Array {
 }
 
 /**
- * A pool account's vaults, or null when it isn't a PumpSwap pool of `mintAddress` quoted in SOL
- * (the mints on the account itself are checked, so a misread layout reads as no pool).
+ * A pool account's vaults, or null when it isn't a PumpSwap pool of `mintAddress` quoted in
+ * `quoteMint` (the mints on the account itself are checked, so a misread layout reads as no pool).
  */
-export function decodePoolVaults(raw: Uint8Array | string, mintAddress: string): PoolVaults | null {
+export function decodePoolVaults(
+  raw: Uint8Array | string,
+  mintAddress: string,
+  quoteMint: string = WRAPPED_SOL_MINT,
+): PoolVaults | null {
   const data = toBytes(raw);
   if (data.length < POOL_READ_BYTES || POOL_DISCRIMINATOR.some((b, i) => data[i] !== b)) return null;
   const key = (at: number) => bs58.encode(data.subarray(at, at + 32));
-  if (key(BASE_MINT_OFFSET) !== mintAddress || key(QUOTE_MINT_OFFSET) !== WRAPPED_SOL_MINT) return null;
+  if (key(BASE_MINT_OFFSET) !== mintAddress || key(QUOTE_MINT_OFFSET) !== quoteMint) return null;
   return { base: key(BASE_VAULT_OFFSET), quote: key(QUOTE_VAULT_OFFSET) };
 }
 
