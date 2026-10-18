@@ -32,6 +32,15 @@ export function privyConfig(): Promise<PrivyConfig> {
   return configPromise;
 }
 
+/**
+ * Back from Google or X: Privy's sign-in return is in this page's address. Privy's code has to be
+ * on the page to finish it (in the popup it closes, or on the page a redirect came back to), and
+ * it only loads on demand, so the page asks for it as soon as it sees this.
+ */
+export function privyOAuthReturn(search = window.location.search): boolean {
+  return /[?&]privy_oauth_(?:code|state)=/.test(search);
+}
+
 /** What privy.tsx can do, once Privy has loaded and is ready. */
 export interface PrivyControls {
   /** Opens Privy's window; resolves with Privy's login token for /auth/privy. */
