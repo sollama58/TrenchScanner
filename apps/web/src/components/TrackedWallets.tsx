@@ -169,8 +169,8 @@ export function TrackedWalletsPanel({ upsell = false }: { upsell?: boolean } = {
           marked on charts.
         </p>
         <p className="small tw-upsell">
-          To get Pro Mode, be one of the top 250 $ASDFASDFA holders for an hour, and it switches on at the
-          next holder scan. Settings › Pro Mode shows where you stand.
+          To get Pro Mode, hold enough $ASDFASDFA to be one of the 250 largest wallets. We check every 5
+          minutes, or press Check now on the Pro Mode card in Settings, and it switches on by itself.
         </p>
       </section>
     ) : null;
