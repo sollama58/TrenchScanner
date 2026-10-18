@@ -481,9 +481,9 @@ export function App() {
               </Suspense>
             </div>
             {/* Pro Mode's TRADES panel, above the Utility handle on every tab. */}
-            {proWallet && (
+            {pro?.pro && (
               <Suspense fallback={null}>
-                <TradesDrawer key={proWallet} />
+                <TradesDrawer key={pro.wallet} />
               </Suspense>
             )}
             {/* The Utilities tab has the same tools, with its own toolbar beside them. */}
