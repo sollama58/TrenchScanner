@@ -40,6 +40,10 @@ import { FoldHead } from "./Fold";
  *
  * Redrawn 2026-10-18 (user ask): its own always-open section, Buy and Sell side by side (stacked
  * on a phone), the position with a share card, and the fee explainer as a breakdown.
+ *
+ * Presets fill, they don't trade (user ask 2026-10-18): a buy button fills the SOL amount, a sell
+ * button fills the token amount (any exact amount can be typed too), and the fee breakdown follows
+ * the side last filled, so the cost reads before Buy or Sell is pressed.
  */
 
 const LAMPORTS = 1_000_000_000;
@@ -73,6 +77,20 @@ export function tokensText(n: number): string {
 export function parseSol(text: string): bigint | null {
   const lamports = decimalUnits(text, 9, 6);
   return lamports !== null && lamports > 0n ? lamports : null;
+}
+
+/** A typed token amount in raw units at `decimals` ("1234.5" or "1234,5"), or null when it isn't one. */
+export function parseTokens(text: string, decimals: number): bigint | null {
+  const raw = decimalUnits(text, decimals, 20);
+  return raw !== null && raw > 0n ? raw : null;
+}
+
+/** Raw token units as a plain decimal for an input, exact, no trailing zeros: "1234.5". */
+export function unitsText(raw: bigint, decimals: number): string {
+  if (decimals <= 0) return raw.toString();
+  const scale = 10n ** BigInt(decimals);
+  const frac = (raw % scale).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return frac ? `${raw / scale}.${frac}` : `${raw / scale}`;
 }
 
 /** `pct` percent of a raw balance; all of it at 100. */
@@ -194,18 +212,25 @@ function bpsText(bps: number): string {
 /**
  * What a buy costs in all (user ask 2026-10-18): one bar for the whole swap cost, color coded,
  * the network's fee, the pools' fees, the coin's own transfer tax and a first buy's account rent,
- * with TrenchScanner's 0% up top. Sized on the typed amount, or the first buy button.
+ * with TrenchScanner's 0% up top. Sized on the amount in the box last filled (a buy's SOL, or a
+ * sale's tokens priced at the position's value), or the first buy button.
  */
 function FeeExplainer({
   fee,
   swap,
   solUsd,
   sizeSol,
+  side = "buy",
+  sizeLabel = null,
 }: {
   fee: FeeEstimate | null;
   swap: SwapCostEstimate | null;
   solUsd: number | null;
+  /** The trade's size in SOL: what a buy spends, or what a sale is worth (0 when unpriced). */
   sizeSol: number;
+  side?: "buy" | "sell";
+  /** A sale's size in tokens, "1.2M PEPE", for the heading. */
+  sizeLabel?: string | null;
 }) {
   const network = fee
     ? [
@@ -236,7 +261,8 @@ function FeeExplainer({
               },
             ]
           : []),
-        ...(Number(swap.accountRentLamports) > 0
+        // Rent is opening the token account, so only a buy pays it.
+        ...(side === "buy" && Number(swap.accountRentLamports) > 0
           ? [
               {
                 key: "rent",
@@ -258,7 +284,21 @@ function FeeExplainer({
     <div className="tm-trade-fee" aria-live="polite">
       <div className="tm-fee-head">
         <span className="tm-fee-title">
-          Total cost of a <span className="num">{solText(sizeSol)}</span> buy
+          {side === "sell" && sizeLabel ? (
+            <>
+              Total cost of selling <span className="num">{sizeLabel}</span>
+              {sizeSol > 0 && (
+                <>
+                  {" "}
+                  (<span className="num">≈ {solText(sizeSol)}</span>)
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              Total cost of a <span className="num">{solText(sizeSol)}</span> {side}
+            </>
+          )}
         </span>
         <span className="tm-fee-total">
           {total !== null ? (
@@ -468,6 +508,9 @@ export function TradePanel({
   // Shared with Settings > Trading: a change there shows here at once, and the other way round.
   const settings = useTradeSettings();
   const [custom, setCustom] = useState("");
+  const [sellText, setSellText] = useState("");
+  // The side last filled or typed in: the fee breakdown sizes on it.
+  const [side, setSide] = useState<"buy" | "sell">("buy");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [showSettings, setShowSettings] = useState(false);
   const [accepted, setAccepted] = useState(() => disclaimerAccepted(owner));
@@ -517,6 +560,8 @@ export function TradePanel({
         });
       });
       setStatus({ kind: "done", text: `${what}: confirmed.`, signature });
+      // The balance has moved, so a filled sale amount is stale.
+      if (side === "sell") setSellText("");
     } catch (e) {
       setStatus({
         kind: "error",
@@ -537,6 +582,25 @@ export function TradePanel({
   const canShare = !!summary && summary.pnlSol !== null && summary.pnlPct !== null;
   const buyCustom = () =>
     customLamports && void trade("buy", customLamports, `Buy ${solText(Number(customLamports) / LAMPORTS)}`);
+  // Exact token amounts need the coin's decimals; without them the field stays off.
+  const decimals = position?.decimals ?? null;
+  const sellUnits = decimals !== null ? parseTokens(sellText, decimals) : null;
+  const sellTooMuch = sellUnits !== null && sellUnits > balance;
+  const sellTokens = sellUnits !== null && decimals !== null ? Number(sellUnits) / 10 ** decimals : null;
+  const sellWorthSol =
+    sellUnits !== null && !sellTooMuch && summary?.valueSol != null && balance > 0n
+      ? (summary.valueSol * Number(sellUnits)) / Number(balance)
+      : null;
+  const sellCustom = () => {
+    if (sellUnits === null || sellTooMuch || sellTokens === null) return;
+    const all = sellUnits === balance;
+    void trade(
+      "sell",
+      sellUnits,
+      all ? `Sell all ${symbol}`.trim() : `Sell ${tokensText(sellTokens)} ${symbol}`.trim(),
+      all,
+    );
+  };
 
   const title = (
     <>
@@ -718,12 +782,16 @@ export function TradePanel({
                   <button
                     key={`${sol}-${i}`}
                     type="button"
-                    className="tm-preset"
+                    className={`tm-preset${customLamports === BigInt(Math.round(sol * LAMPORTS)) ? " on" : ""}`}
+                    aria-pressed={customLamports === BigInt(Math.round(sol * LAMPORTS))}
                     disabled={busy || (maxBuySol !== null && sol > maxBuySol)}
                     title={
                       maxBuySol !== null && sol > maxBuySol ? `Up to ${maxBuySol} SOL a buy here` : undefined
                     }
-                    onClick={() => trade("buy", BigInt(Math.round(sol * LAMPORTS)), `Buy ${solText(sol)}`)}
+                    onClick={() => {
+                      setCustom(String(sol));
+                      setSide("buy");
+                    }}
                   >
                     <span className="num">{sol}</span>
                     <small>SOL</small>
@@ -737,7 +805,11 @@ export function TradePanel({
                     placeholder="Amount"
                     aria-label="Buy amount in SOL"
                     value={custom}
-                    onChange={(e) => setCustom(e.target.value)}
+                    onChange={(e) => {
+                      setCustom(e.target.value);
+                      setSide("buy");
+                    }}
+                    onFocus={() => setSide("buy")}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") buyCustom();
                     }}
@@ -768,16 +840,51 @@ export function TradePanel({
                   <button
                     key={`${pct}-${i}`}
                     type="button"
-                    className="tm-preset"
-                    disabled={busy || balance === 0n}
+                    className={`tm-preset${balance > 0n && sellUnits === shareOf(balance, pct) ? " on" : ""}`}
+                    aria-pressed={balance > 0n && sellUnits === shareOf(balance, pct)}
+                    disabled={busy || balance === 0n || decimals === null}
                     title={balance === 0n ? "Nothing to sell" : undefined}
-                    onClick={() => trade("sell", shareOf(balance, pct), `Sell ${pct}%`, pct >= 100)}
+                    onClick={() => {
+                      if (decimals === null) return;
+                      setSellText(unitsText(shareOf(balance, pct), decimals));
+                      setSide("sell");
+                    }}
                   >
                     <span className="num">{pct}%</span>
                     {pct >= 100 && <small>all</small>}
                   </button>
                 ))}
               </div>
+              <div className="tm-amount">
+                <span className="tm-amount-field">
+                  <input
+                    inputMode="decimal"
+                    placeholder="Amount"
+                    aria-label={`Sell amount in ${symbol || "tokens"}`}
+                    aria-invalid={sellTooMuch || undefined}
+                    disabled={balance === 0n || decimals === null}
+                    value={sellText}
+                    onChange={(e) => {
+                      setSellText(e.target.value);
+                      setSide("sell");
+                    }}
+                    onFocus={() => setSide("sell")}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") sellCustom();
+                    }}
+                  />
+                  <span className="tm-amount-unit">{symbol || "tokens"}</span>
+                </span>
+                <button
+                  type="button"
+                  className="tm-go sell"
+                  disabled={busy || sellUnits === null || sellTooMuch}
+                  onClick={sellCustom}
+                >
+                  Sell
+                </button>
+              </div>
+              {sellTooMuch && <p className="small tm-amount-note">That&apos;s more than you hold.</p>}
             </div>
           )}
         </div>
@@ -944,7 +1051,16 @@ export function TradePanel({
         fee={fee}
         swap={swapCosts}
         solUsd={solUsd}
-        sizeSol={customLamports ? Number(customLamports) / LAMPORTS : (settings.buyPresets[0] ?? 0.1)}
+        {...(side === "sell" && !buyOnly && sellTokens !== null && !sellTooMuch
+          ? {
+              side: "sell" as const,
+              sizeSol: sellWorthSol ?? 0,
+              sizeLabel: `${tokensText(sellTokens)} ${symbol}`.trim(),
+            }
+          : {
+              side: "buy" as const,
+              sizeSol: customLamports ? Number(customLamports) / LAMPORTS : (settings.buyPresets[0] ?? 0.1),
+            })}
       />
 
       {accepted && (

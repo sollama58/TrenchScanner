@@ -16317,6 +16317,34 @@ body:has(.util-toast) .bug-fab {
   border-color: transparent;
   background: color-mix(in srgb, var(--good) 85%, #000);
 }
+/* A preset fills the amount box rather than trading; the one matching the box stays lit. */
+.tm-side.buy .tm-preset.on {
+  border-color: var(--good);
+  box-shadow: inset 0 0 0 1px var(--good);
+}
+.tm-side.sell .tm-preset.on {
+  border-color: var(--bad);
+  box-shadow: inset 0 0 0 1px var(--bad);
+}
+.tm-side.sell .tm-amount-field input {
+  padding-right: 76px;
+}
+.tm-side.sell .tm-amount-unit {
+  max-width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tm-go.sell {
+  background: var(--bad);
+}
+.tm-go.sell:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 85%, #000);
+}
+.tm-amount-note {
+  margin: 0;
+  color: var(--bad-ink);
+}
 
 /* Settings: a tidy grid of fields, labels above. */
 .tm-trade-settings {
