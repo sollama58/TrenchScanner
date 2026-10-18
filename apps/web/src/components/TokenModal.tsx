@@ -47,6 +47,7 @@ import {
   zoomWindow,
   type CloseRun,
   type MarkerKind,
+  type Point,
   type ScanFlow,
   type VolumeCandle,
   type Zoom,
@@ -75,7 +76,7 @@ import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { summarizePosition, useCanSignTrades, usePosition, useProState } from "../proTrade";
 import { LIVE_POLL_MS, useFineCandles, useLiveTail, type LiveTail } from "./chartFeeds";
-import { predictPath, type PathStep } from "../pricePathing";
+import { guessPath, pathFrom, type PathGuess, type PathStep } from "../pricePathing";
 import {
   categoryText,
   count,
@@ -211,6 +212,8 @@ const SECOND_VIEW_MAX_MS = 20 * 60_000;
 const QUARTER_VIEW_MAX_MS = 6 * 3_600_000;
 /** The fine candles are re-read this often: 1-second ones on a view running to now, others rarely. */
 const FINE_LIVE_POLL_MS = 5_000;
+/** How often the predicted path is read afresh: its 5-second steps. */
+const PATH_EVERY_MS = 5_000;
 const FINE_POLL_MS = 60_000;
 /**
  * The live tail counts as live while its price was confirmed this recently: past the API's
@@ -1531,6 +1534,8 @@ export function ChartCard({
   const updatedAt = Math.max(chartAt ?? 0, second ? (secondAt ?? 0) : 0) || null;
   const everyMs = second ? FINE_LIVE_POLL_MS : CHART_POLL_MS;
 
+  // The predicted path's last read, kept across renders so it is re-read only every PATH_EVERY_MS.
+  const guessRef = useRef<{ mint: string; slot: number; guess: PathGuess | null } | null>(null);
   // A call card's alert price is the call's own anchor; a filter alert's can be a scan's reading.
   const callPriced = card.kind === "curated" && alertMcap > 0;
   const view = useMemo(() => {
@@ -1554,7 +1559,16 @@ export function ChartCard({
       ? [runOf(data.candles!, 60_000), ...fines]
       : [{ points: data.marketCap.map((p) => ({ t: p.t, v: p.usd })), stepMs: 0, candles: [] }];
     const candled = stitch(runs);
-    const source = stitch(runs, bounds.live ? tail.ticks : []);
+    // The live tail says when the price was last known current: with no change since, the price
+    // held, so the line runs on flat to then rather than stopping at the last change.
+    const held = (pts: Point[]) => {
+      const end = pts[pts.length - 1];
+      const at = tail.readAt === null ? null : Math.min(tail.readAt, now);
+      return bounds.live && end && tail.ticks.length > 0 && at !== null && at > end.t + 1_000
+        ? [...pts, { t: at, v: end.v }]
+        : pts;
+    };
+    const source = held(stitch(runs, bounds.live ? tail.ticks : []));
     if (source.length < 2) return null;
     const last = source[source.length - 1]!.t;
     const from = bounds.from;
@@ -1580,10 +1594,21 @@ export function ChartCard({
       : full;
     // The predicted path, from the finest reading of the last minute: the 1-second candles and
     // the live curve's changes after them.
+    // It is read afresh every PATH_EVERY_MS, not on every tick, so its shape holds steady between
+    // reads instead of twitching with each trade; in between it runs from the line's latest point.
     let path: PathStep[] = [];
     if (pathing && secondRead?.candles?.length) {
-      const fine = stitch([...runs, runOf(secondRead.candles, 1_000)], bounds.live ? tail.ticks : []);
-      path = predictPath(fine, fine[fine.length - 1]!.t, secondRead.candles);
+      const fine = held(stitch([...runs, runOf(secondRead.candles, 1_000)], bounds.live ? tail.ticks : []));
+      const end = fine[fine.length - 1]!;
+      const slot = Math.floor(end.t / PATH_EVERY_MS);
+      const kept = guessRef.current;
+      const guess =
+        kept && kept.mint === mint && kept.slot === slot
+          ? kept.guess
+          : guessPath(fine, end.t, secondRead.candles);
+      guessRef.current = { mint, slot, guess };
+      const start = source[source.length - 1]!;
+      if (guess) path = pathFrom(guess, start);
     }
     return {
       path,
@@ -1618,6 +1643,8 @@ export function ChartCard({
     alertMcap,
     callPriced,
     zoom,
+    tail.readAt,
+    mint,
   ]);
 
   // The scans' buy and sell counts, for the buy share in the chart's readouts.

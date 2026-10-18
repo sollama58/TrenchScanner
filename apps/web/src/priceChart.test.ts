@@ -21,6 +21,8 @@ import {
   volumeBars,
   withCallPoint,
   candleTimeframe,
+  fillFlat,
+  liveCandles,
   timeframeLabel,
   timeframeSlots,
 } from "./priceChart";
@@ -411,5 +413,52 @@ describe("candle timeframes", () => {
     expect(timeframeLabel(15_000)).toBe("15s");
     expect(timeframeLabel(3_600_000)).toBe("1h");
     expect(timeframeLabel(20_000)).toBe("20s");
+  });
+});
+
+describe("the live candle view", () => {
+  const k = (t: number, o: number, c: number) => ({ t, o, c, h: Math.max(o, c), l: Math.min(o, c), vol: 1 });
+
+  it("keeps each candle in place as the window's end moves on (user ask 2026-10-18)", () => {
+    const candles = Array.from({ length: 30 }, (_, i) => k(i * M, 100 + i, 101 + i));
+    const at = (t1: number) => {
+      const { start, n } = timeframeSlots(0, t1, candleTimeframe(M, M, t1, 20));
+      return ohlcBars(candles, start, start + n * 5 * M, n);
+    };
+    // A few seconds later only the forming candle can change: the closed ones are the same.
+    const a = at(29 * M + 10_000);
+    const b = at(29 * M + 14_000);
+    expect(b.slice(0, -1)).toEqual(a.slice(0, -1));
+  });
+
+  it("moves the forming candle's close, high and low with the live ticks", () => {
+    const out = liveCandles(
+      [k(0, 10, 11), k(M, 11, 12)],
+      [
+        { t: M + 5_000, v: 15 },
+        { t: M + 9_000, v: 9 },
+        { t: M + 20_000, v: 13 },
+      ],
+    );
+    expect(out).toHaveLength(2);
+    expect(out[1]).toMatchObject({ o: 11, c: 13, h: 15, l: 9 });
+    // The closed candle is left alone.
+    expect(out[0]).toEqual(k(0, 10, 11));
+  });
+
+  it("runs ticks past the newest candle's end on as candles of their own", () => {
+    const out = liveCandles([k(0, 10, 11)], [{ t: M + 5_000, v: 14 }]);
+    expect(out).toHaveLength(2);
+    expect(out[1]).toMatchObject({ t: M, w: 5_000, o: 11, c: 14 });
+  });
+
+  it("holds quiet slots flat at the close before them, between the first and the last", () => {
+    const bar = (c: number) => ({ from: 0, to: 1, o: c, h: c, l: c, c });
+    const out = fillFlat([null, bar(5), null, null, bar(7), null], 0, 10);
+    expect(out[0]).toBeNull();
+    expect(out[2]).toMatchObject({ from: 20, to: 30, c: 5, flat: true });
+    expect(out[3]).toMatchObject({ c: 5, flat: true });
+    // Nothing after the last candle: the slot isn't made up.
+    expect(out[5]).toBeNull();
   });
 });

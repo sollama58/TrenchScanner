@@ -11797,6 +11797,15 @@ img.tm-avatar {
 .pc-candle.down rect {
   fill: var(--bad);
 }
+/* A slot with no trades, held at the close before it: a faint dash, so the row runs unbroken. */
+.pc-candle.flat line {
+  stroke: var(--muted);
+  opacity: 0.5;
+}
+.pc-candle.flat rect {
+  fill: var(--muted);
+  opacity: 0.5;
+}
 .pc-candle.on rect {
   stroke: var(--ink);
   stroke-width: 1;
@@ -16757,6 +16766,12 @@ body:has(.util-toast) .bug-fab {
   stroke-width: 1.6;
   stroke-dasharray: 2 4;
   stroke-linecap: round;
+}
+/* Where the view's history ends and the predicted path's zone begins. */
+.pc-path-edge {
+  stroke: var(--muted);
+  opacity: 0.5;
+  stroke-dasharray: 2 3;
 }
 .pc-path-dot {
   fill: var(--muted);

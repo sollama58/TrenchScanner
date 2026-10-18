@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { pathFeatures, predictPath, secondGrid, volumeBefore, type PathModel } from "./pricePathing";
+import {
+  pathFeatures,
+  pathFrom,
+  predictPath,
+  secondGrid,
+  volumeBefore,
+  type PathModel,
+} from "./pricePathing";
 import { backtest, coinSamples, fitPathModel, quantile, ridge, ridgeMedian } from "./pricePathingFit";
 
 const flatModel = (h: number[], d = 11): PathModel => ({
@@ -134,5 +141,26 @@ describe("fitting", () => {
     expect(report[0]!.bandCoverage).toBeGreaterThan(0.5);
     // A smooth wave is predictable: the fit beats a flat guess on it.
     expect(report[0]!.skill).toBeGreaterThan(0);
+  });
+});
+
+describe("pathFrom", () => {
+  it("draws a guess from the line's latest point, its band around it", () => {
+    const model = {
+      version: 1,
+      stepSec: 5,
+      horizons: [5, 10],
+      mean: [],
+      scale: [],
+      weights: [],
+      bandLo: [-1, -1],
+      bandHi: [1, 1],
+    };
+    const steps = pathFrom({ at: 0, ys: [0.1, 0.2], vol: 0.01 }, { t: 7_000, v: 100 }, model);
+    expect(steps.map((s) => s.t)).toEqual([7_000, 12_000, 17_000]);
+    expect(steps[0]).toEqual({ t: 7_000, v: 100, lo: 100, hi: 100 });
+    expect(steps[2]!.v).toBeCloseTo(100 * Math.exp(0.2));
+    expect(steps[2]!.lo).toBeLessThan(steps[2]!.v);
+    expect(steps[2]!.hi).toBeGreaterThan(steps[2]!.v);
   });
 });
