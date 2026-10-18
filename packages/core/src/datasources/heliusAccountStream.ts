@@ -108,8 +108,12 @@ export class HeliusAccountStream {
     private readonly onTx: (key: string, signature: string, tx: ChainTx) => void,
     private readonly ctor: WebSocketCtor | null = (globalThis as { WebSocket?: WebSocketCtor }).WebSocket ??
       null,
-    /** Each account update delivered for an "account" key: its base64 data and the message's size. */
-    private readonly onAccount: ((key: string, data: string, bytes: number) => void) | null = null,
+    /**
+     * Each account update delivered for an "account" key: its base64 data, the message's size and
+     * the slot it was read at (pairs two accounts changed by one transaction: liveCurve.ts's pools).
+     */
+    private readonly onAccount:
+      ((key: string, data: string, bytes: number, slot: number | null) => void) | null = null,
   ) {}
 
   static urlFor(apiKey: string): string {
@@ -243,11 +247,14 @@ export class HeliusAccountStream {
     if (msg.method === "accountNotification") {
       const subId = msg.params?.subscription;
       const key = typeof subId === "number" ? this.keyOfSub.get(subId) : undefined;
-      const data = (msg.params?.result as { value?: { data?: unknown } } | undefined)?.value?.data;
+      const result = msg.params?.result as
+        { context?: { slot?: unknown }; value?: { data?: unknown } } | undefined;
+      const data = result?.value?.data;
       if (key === undefined || !Array.isArray(data) || typeof data[0] !== "string") return;
       this.stats.accountUpdates += 1;
+      const slot = typeof result?.context?.slot === "number" ? result.context.slot : null;
       try {
-        this.onAccount?.(key, data[0], raw.length);
+        this.onAccount?.(key, data[0], raw.length, slot);
       } catch (err) {
         logger.warn("stream account handler failed", { key, error: String(err) });
       }
