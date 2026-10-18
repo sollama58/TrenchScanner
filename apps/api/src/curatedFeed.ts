@@ -235,6 +235,9 @@ export const TOKEN_CARD_SELECT = {
   symbol: true,
   name: true,
   pairAddress: true,
+  // The coin it trades against, for the card's quote pill when that isn't SOL.
+  quoteMint: true,
+  quoteSymbol: true,
   imageUrl: true,
   firstSeenAt: true,
   hasTwitter: true,

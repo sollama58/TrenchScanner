@@ -492,6 +492,12 @@ model Token {
   symbol                  String?
   name                    String?
   pairAddress             String? // primary DexScreener pair used for pricing
+  /// The coin that pair trades against (DexScreener's quoteToken): wrapped SOL for nearly every
+  /// launch, else USDC, USD1, another launch. The cards show a pill when it isn't SOL. Written by
+  /// the scan whenever a reading names it; a reading that doesn't (Jupiter, GeckoTerminal) leaves
+  /// it as it is. Null = no reading has said yet.
+  quoteMint               String?
+  quoteSymbol             String?
   /// The token's logo, as hosted by DexScreener. Read from the pair response the scan already
   /// fetches rather than derived from the mint address: CDN URL shapes are undocumented and
   /// change, and a guessed one 404s silently for every mint that has no artwork - which is a lot
