@@ -86,10 +86,7 @@
   font-weight: 750;
 }
 .tsg-grad {
-  background: linear-gradient(90deg, var(--brand-a), var(--brand-b));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  color: var(--brand-ink);
 }
 .tsg-lede {
   color: var(--ink-2);
@@ -760,6 +757,7 @@
 .tsg-modal-box {
   width: min(760px, 100%);
   max-height: calc(100vh - 32px);
+  max-height: calc(100dvh - 32px);
   overflow: auto;
   background: var(--surface-solid);
   border: 1px solid var(--border-strong);

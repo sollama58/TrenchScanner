@@ -588,9 +588,10 @@ export function PriceChart({
         }}
         onDoubleClick={() => winTo(null)}
         onPointerLeave={(e) => {
+          // A tapped readout (price or bar) stays up after the finger lifts, until the next tap.
+          if (e.pointerType !== "mouse") return;
           setHover(null);
-          // A tapped bar's readout stays up after the finger lifts, until the next tap.
-          if (e.pointerType === "mouse") setBar(null);
+          setBar(null);
         }}
       >
         <defs>

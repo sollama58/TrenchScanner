@@ -25,6 +25,9 @@ describe("format", () => {
     expect(usd(999_400)).toBe("$999K");
     expect(usd(999.7)).toBe("$1.00K");
     expect(usd(null)).toBe("–");
+    expect(usd(-150_000)).toBe("-$150K");
+    expect(usd(-42)).toBe("-$42");
+    expect(usd(-0.2)).toBe("$0");
   });
 
   it("turns a return into a price multiple", () => {

@@ -60,10 +60,13 @@ export function solText(sol: number, signed = false): string {
 /** Whole tokens, shortened: 1.23M, 456K, 12.3. */
 export function tokensText(n: number): string {
   const abs = Math.abs(n);
-  if (abs >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-  return n.toFixed(abs >= 1 ? 2 : 4);
+  // Units picked on the rounded value, so 999,999 reads 1.00M and not 1000.0K.
+  if (abs >= 999_995_000) return `${(n / 1e9).toFixed(2)}B`;
+  if (abs >= 999_950) return `${(n / 1e6).toFixed(2)}M`;
+  if (abs >= 999.995) return `${(n / 1e3).toFixed(1)}K`;
+  if (n === 0) return "0";
+  // A dust balance reads as a tiny number, not as "0.0000".
+  return abs >= 1 ? n.toFixed(2) : abs >= 0.0001 ? n.toFixed(4) : n.toPrecision(2);
 }
 
 /** A typed SOL amount as lamports, or null when it isn't one. */
@@ -671,9 +674,9 @@ export function TradePanel({
                 <span className="muted small">with SOL</span>
               </div>
               <div className="tm-presets" style={presetCols(settings.buyPresets.length, settings.buyRows)}>
-                {settings.buyPresets.map((sol) => (
+                {settings.buyPresets.map((sol, i) => (
                   <button
-                    key={sol}
+                    key={`${sol}-${i}`}
                     type="button"
                     className="tm-preset"
                     disabled={busy}
@@ -717,9 +720,9 @@ export function TradePanel({
               </span>
             </div>
             <div className="tm-presets" style={sellCols(settings.sellPresets.length)}>
-              {settings.sellPresets.map((pct) => (
+              {settings.sellPresets.map((pct, i) => (
                 <button
-                  key={pct}
+                  key={`${pct}-${i}`}
                   type="button"
                   className="tm-preset"
                   disabled={busy || balance === 0n}
@@ -745,10 +748,14 @@ export function TradePanel({
                 min={0.1}
                 max={50}
                 step={0.5}
-                value={settings.slippagePct}
-                onChange={(e) => {
+                inputMode="decimal"
+                defaultValue={settings.slippagePct}
+                // On blur, like the fields below: checked on every keystroke, "0.5" could never be
+                // typed (its "0" was refused) and the field couldn't be cleared.
+                onBlur={(e) => {
                   const v = Number(e.target.value);
-                  if (v >= 0.1 && v <= 50) update({ slippagePct: v });
+                  if (e.target.value.trim() !== "" && v >= 0.1 && v <= 50) update({ slippagePct: v });
+                  else e.target.value = String(settings.slippagePct);
                 }}
               />
               <i>%</i>
@@ -785,6 +792,7 @@ export function TradePanel({
                   min={0}
                   max={MAX_CUSTOM_FEE_SOL}
                   step={0.00001}
+                  inputMode="decimal"
                   defaultValue={settings.customPrioritySol}
                   onBlur={(e) => {
                     const v = Number(e.target.value);
@@ -807,6 +815,7 @@ export function TradePanel({
                 min={MIN_TIP_SOL[settings.speed]}
                 max={MAX_CUSTOM_FEE_SOL}
                 step={0.000001}
+                inputMode="decimal"
                 placeholder={`${MIN_TIP_SOL[settings.speed]}`}
                 defaultValue={settings.customTipSol ?? ""}
                 onBlur={(e) => {

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import type { Card } from "../api";
 import { Skeleton } from "../components/Charts";
 import {
@@ -149,9 +149,10 @@ function date(iso: string): string {
 }
 
 function amount(n: number): string {
-  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  if (n >= 999_995_000) return `${(n / 1e9).toFixed(2)}B`;
+  if (n >= 999_950) return `${(n / 1e6).toFixed(2)}M`;
+  if (n >= 999.95) return `${(n / 1e3).toFixed(1)}K`;
+  if (n === 0) return "0";
   return n >= 1 ? n.toFixed(0) : n.toPrecision(2);
 }
 
@@ -381,6 +382,15 @@ function HoldingCard({ holding: h, now }: { holding: Holding; now: number }) {
     <article
       className={`card compact trade-card${card ? " opens" : ""}`}
       onClick={() => card && openTokenModal(card, now)}
+      {...(card && {
+        role: "button",
+        tabIndex: 0,
+        onKeyDown: (e: KeyboardEvent) => {
+          if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+          e.preventDefault();
+          openTokenModal(card, now);
+        },
+      })}
       title={card ? `${label}: open the chart, bubble map and details` : label}
     >
       <header className="card-head">

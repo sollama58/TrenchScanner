@@ -360,7 +360,10 @@ function RefillModal({
       ref={ref}
       className="about-modal sheet-modal util-refill-modal"
       aria-labelledby="util-refill-title"
-      onClose={onClose}
+      onClose={(e) => {
+        // Only this dialog's own close: a nested dialog's close bubbles up through React.
+        if (e.target === e.currentTarget) onClose();
+      }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}

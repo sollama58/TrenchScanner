@@ -58,6 +58,16 @@ describe("walletMarks", () => {
     expect(walletMarks([kol], defaults, new Set([kol.wallet]))).toEqual([]);
   });
 
+  it("keeps a known dumper hidden while dumpers are off, whatever else it is", () => {
+    const linkedDumper: MarkSource = {
+      wallet: "Dump111111111111111111111111111111111111111",
+      tags: ["linked", "dumper"],
+      trades: [[700, -1, 3]],
+    };
+    expect(walletMarks([linkedDumper], defaults)).toEqual([]);
+    expect(walletMarks([linkedDumper], { ...defaults, kinds: [...defaults.kinds, "risky"] })).toHaveLength(1);
+  });
+
   it("reads a Known Side as one, not as a KOL", () => {
     expect(kindsOf({ ...kol, knownSideOf: "Main" })).toEqual(["known"]);
     expect(kindsOf(devRisky)).toEqual(["dev", "risky"]);

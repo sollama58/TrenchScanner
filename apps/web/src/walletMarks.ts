@@ -134,7 +134,11 @@ export function walletMarks(
   const out: WalletMark[] = [];
   for (const w of wallets) {
     if (exclude.has(w.wallet)) continue;
-    const kind = kindsOf(w).find((k) => shown.has(k));
+    const kinds = kindsOf(w);
+    // A known dumper stays hidden while dumpers are off, even when it is also linked or a KOL (the
+    // coin's own dev still shows as the dev).
+    if (w.tags.includes("dumper") && !shown.has("risky") && !kinds.includes("dev")) continue;
+    const kind = kinds.find((k) => shown.has(k));
     if (!kind) continue;
     const meta = MARK_KINDS.find((k) => k.kind === kind)!;
     const name = markName(w, kind);

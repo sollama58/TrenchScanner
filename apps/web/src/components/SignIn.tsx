@@ -22,7 +22,7 @@ const FEATURES = [
   {
     Icon: TargetIcon,
     title: "Curated alerts",
-    body: "A curator scans every new Pump.fun token and sends only the few worth a look.",
+    body: "A curator scans every new Pump.fun token and flags the few that match its checks.",
   },
   {
     Icon: BrainIcon,

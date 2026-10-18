@@ -67,7 +67,10 @@ function TwoFactorPrompt({ req }: { req: PromptRequest }) {
       ref={ref}
       className="about-modal sheet-modal tf-modal"
       aria-labelledby="tf-title"
-      onClose={() => req.done(false)}
+      onClose={(e) => {
+        // Only this dialog's own close: a nested dialog's close bubbles up through React.
+        if (e.target === e.currentTarget) req.done(false);
+      }}
     >
       <div className="about-body">
         <header className="about-head">
