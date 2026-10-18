@@ -1507,6 +1507,26 @@ export function ChartCard({
   );
   // The live curve's every price change, while the view runs to now on a young coin.
   const tail = useLiveTail(api, young && shownRange !== "first" && !!bounds?.live);
+  // Whether the coin gets instant updates at all (user ask 2026-10-18): only a Pump.fun coin still on
+  // its curve and under 6 hours old has a live tail. Once the tail says the curve is gone it stays
+  // gone for this coin, so switching views doesn't bring the warning and the folded Trade back and forth.
+  const [offCurveFor, setOffCurveFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (tail.done) setOffCurveFor(mint);
+  }, [tail.done, mint]);
+  const delayed: DelayReason | null = !data
+    ? null
+    : !young
+      ? "old"
+      : offCurveFor === mint
+        ? "off-curve"
+        : null;
+  // When the chart last brought new prices, and how often it re-reads them without the live tail:
+  // the 1-second candles every few seconds on a view of the last minutes, else the chart's own poll.
+  const chartAt = useArrivedAt(data);
+  const secondAt = useArrivedAt(second);
+  const updatedAt = Math.max(chartAt ?? 0, second ? (secondAt ?? 0) : 0) || null;
+  const everyMs = second ? FINE_LIVE_POLL_MS : CHART_POLL_MS;
 
   // A call card's alert price is the call's own anchor; a filter alert's can be a scan's reading.
   const callPriced = card.kind === "curated" && alertMcap > 0;
@@ -1666,6 +1686,9 @@ export function ChartCard({
           )}
         </h4>
         <CustomizeDrawer open={customizing} onClose={closeCustomize} section={CHART_MARKS_SECTION} nested />
+        {delayed && !!bounds?.live && shownRange !== "first" && view && view.points.length >= 2 && (
+          <DelayNote reason={delayed} updatedAt={updatedAt} everyMs={everyMs} />
+        )}
         {shownRange === "first" && (
           <FirstMinutesChart
             mint={card.token.mintAddress}
@@ -1747,9 +1770,63 @@ export function ChartCard({
           onTraded={position.reload}
           closeOnly={closeOnly}
           graceEndsAt={graceEndsAt}
+          delayed={delayed !== null}
         />
       )}
     </>
+  );
+}
+
+/** Why a coin's chart isn't getting instant updates: launched over 6 hours ago, or off its curve. */
+type DelayReason = "old" | "off-curve";
+
+/** The moment `value` last changed (a poll's new answer), null before it has one. */
+function useArrivedAt(value: unknown): number | null {
+  const [at, setAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (value != null) setAt(Date.now());
+  }, [value]);
+  return at;
+}
+
+/**
+ * The chart's warning when the coin isn't getting instant updates (user ask 2026-10-18): why, when
+ * it last brought new prices and when it reads again. It ticks on its own, so the chart doesn't
+ * redraw every second.
+ */
+function DelayNote({
+  reason,
+  updatedAt,
+  everyMs,
+}: {
+  reason: DelayReason;
+  updatedAt: number | null;
+  everyMs: number;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const why =
+    reason === "old" ? "it launched over 6 hours ago" : "it's no longer on a Pump.fun bonding curve";
+  const clock = (t: number) =>
+    new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+  const next = updatedAt !== null ? Math.ceil((updatedAt + everyMs - now) / 1_000) : null;
+  return (
+    <p className="small tm-delay" role="note">
+      <ClockIcon size={13} />
+      <span>
+        <strong>Delayed chart.</strong> This coin isn&apos;t getting instant updates ({why}), so the chart
+        refreshes about every {everyMs / 1_000} seconds.
+        {updatedAt !== null && (
+          <span className="num tm-delay-when">
+            {" "}
+            Updated {clock(updatedAt)} · {next !== null && next > 0 ? `next in ~${next}s` : "updating…"}
+          </span>
+        )}
+      </span>
+    </p>
   );
 }
 
