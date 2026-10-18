@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   BURN_CREDIT_MEMO,
   DexScreenerClient,
+  FREE_LOOKUP_NOTE,
   loadEnv,
   prisma,
   SolanaRpc,
@@ -238,6 +239,55 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
       1,
       expect.objectContaining({ priority: true, fallbackIfUnlisted: [mint] }),
     );
+  });
+
+  it("looks a coin the scanner already tracks up free, and says so before it runs", async () => {
+    const me = await signIn();
+    const mint = random(32);
+    mints.push(mint);
+    // On the feed: found by the scanner itself, not by a lookup.
+    await prisma.token.create({
+      data: {
+        mintAddress: mint,
+        symbol: "TRK",
+        name: "Tracked coin",
+        firstSeenAt: new Date(),
+        discoverySource: "pumpfun",
+      },
+    });
+    vi.spyOn(DexScreenerClient.prototype, "getTokensByAddresses").mockResolvedValue([reading(mint)]);
+
+    const quote = await app.inject({
+      method: "GET",
+      url: `/utilities/quote?utility=token&subject=${mint}`,
+      cookies: me.cookies,
+    });
+    expect(quote.statusCode).toBe(200);
+    expect(quote.json()).toMatchObject({ cost: 0, free: "tracked" });
+
+    // No credits at all, and the lookup still opens.
+    const res = await app.inject({
+      method: "POST",
+      url: "/utilities/token",
+      cookies: me.cookies,
+      payload: { mint },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ mint, charged: 0, balance: 0, free: "tracked" });
+    const entry = await prisma.burnCreditEntry.findFirstOrThrow({
+      where: { wallet: me.walletAddress, kind: "spend" },
+    });
+    expect(entry).toMatchObject({ delta: 0, note: FREE_LOOKUP_NOTE });
+    const view = await app.inject({ method: "GET", url: `/utilities/token/${mint}`, cookies: me.cookies });
+    expect(view.statusCode).toBe(200);
+
+    // An untracked coin still quotes its price.
+    const other = await app.inject({
+      method: "GET",
+      url: `/utilities/quote?utility=token&subject=${random(32)}`,
+      cookies: me.cookies,
+    });
+    expect(other.json()).toMatchObject({ cost: 1, free: null });
   });
 
   it("takes nothing for an address no market knows, and refuses a lookup it can't pay for", async () => {

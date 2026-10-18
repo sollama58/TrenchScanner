@@ -318,6 +318,10 @@ function CreditsColumn({ data, onRefill }: { data: UtilitiesOverview | null; onR
             <dd className="num">{plural(data.prices.cost.wallet, "credit")}</dd>
           </div>
           <div>
+            <dt>Tracked coin or wallet</dt>
+            <dd className="util-free-rate">Free</dd>
+          </div>
+          <div>
             <dt>1 credit</dt>
             <dd className="num">
               {data.prices.tokensPerCredit.toLocaleString("en-US")} {SYMBOL}

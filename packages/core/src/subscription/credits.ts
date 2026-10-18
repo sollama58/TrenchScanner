@@ -191,6 +191,13 @@ export type SpendOutcome =
   | { status: "insufficient"; balance: number; cost: number };
 
 /**
+ * The note on a spend that was free because the subject was already tracked (apps/api
+ * lookupGate.ts freeLookupReason): the worker skips these when it asks TokenSage for the reads a
+ * paid lookup buys, so a free lookup adds no outside calls.
+ */
+export const FREE_LOOKUP_NOTE = "free:tracked";
+
+/**
  * Takes `cost` credits for a lookup that has just succeeded. Called after the lookup, never
  * before, so a lookup that fails costs nothing. The balance is read and the spend written under a
  * per-wallet lock, so two lookups finishing together can't both spend the last credit; and the
@@ -201,6 +208,7 @@ export async function spendCredits(
   utility: UtilityKind,
   subject: string,
   cost: number,
+  note?: string,
 ): Promise<SpendOutcome> {
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${creditWalletLockKey(wallet)}))`;
@@ -220,7 +228,7 @@ export async function spendCredits(
     if (balance < charge) return { status: "insufficient" as const, balance, cost: charge };
     // Written even when a free utility charges 0: the row is what opens the lookup's view.
     await tx.burnCreditEntry.create({
-      data: { wallet, delta: -charge, kind: "spend", utility, subject },
+      data: { wallet, delta: -charge, kind: "spend", utility, subject, note },
     });
     return { status: "charged" as const, balance: balance - charge, cost: charge };
   });
