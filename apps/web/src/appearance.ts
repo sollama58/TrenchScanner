@@ -8,6 +8,14 @@ import { put, type CardField, type FeedAppearance, type QuickLink } from "./api"
  * a save fails. apps/api/src/feedAppearance.ts holds the same names and bounds.
  */
 
+/**
+ * Which default chartMarkKinds a look was saved against (apps/api/src/feedAppearance.ts has the
+ * same): a list from before risky wallets went off by default with every kind on is the old
+ * default, never changed, and reads without them.
+ */
+export const CHART_MARKS_REV = 2;
+const ALL_MARK_KINDS = ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"] as const;
+
 export const DEFAULT_APPEARANCE: FeedAppearance = {
   // Dark until the user picks (user ask 2026-10-14); "auto" (Match device) stays a choice.
   theme: "dark",
@@ -63,9 +71,11 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   hideBelowMcap: false,
   hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],
-  // The token chart's labeled-wallet trades (user ask 2026-10-18): every kind, 0.5 SOL and up.
+  // The token chart's labeled-wallet trades (user ask 2026-10-18): 0.5 SOL and up, every kind but
+  // risky wallets and dumpers, which are off by default (user ask 2026-10-18).
   chartMarks: true,
-  chartMarkKinds: ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"],
+  chartMarkKinds: ["kol", "known", "funded", "probable", "dev", "winner", "linked"],
+  chartMarksRev: CHART_MARKS_REV,
   chartMarkMinSol: 0.5,
   // The token chart draws a line unless the reader picks candles (user ask 2026-10-18).
   chartStyle: "line",
@@ -311,9 +321,8 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
         ]
       : d.quickLinks,
     chartMarks: typeof r.chartMarks === "boolean" ? r.chartMarks : d.chartMarks,
-    chartMarkKinds: Array.isArray(r.chartMarkKinds)
-      ? d.chartMarkKinds.filter((k) => (r.chartMarkKinds as unknown[]).includes(k))
-      : d.chartMarkKinds,
+    chartMarkKinds: chartMarkKindsOf(r),
+    chartMarksRev: CHART_MARKS_REV,
     chartMarkMinSol:
       typeof r.chartMarkMinSol === "number" && Number.isFinite(r.chartMarkMinSol)
         ? Math.min(CHART_MARK_MAX_SOL, Math.max(CHART_MARK_MIN_SOL, r.chartMarkMinSol))
@@ -323,6 +332,16 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
       : d.hidden,
   };
+}
+
+/** A saved look's chart mark kinds, in MARK_KINDS order; see CHART_MARKS_REV. */
+function chartMarkKindsOf(r: Record<string, unknown>): FeedAppearance["chartMarkKinds"] {
+  if (!Array.isArray(r.chartMarkKinds)) return DEFAULT_APPEARANCE.chartMarkKinds;
+  const saved = r.chartMarkKinds as unknown[];
+  const kinds = ALL_MARK_KINDS.filter((k) => saved.includes(k));
+  return r.chartMarksRev !== CHART_MARKS_REV && kinds.length === ALL_MARK_KINDS.length
+    ? kinds.filter((k) => k !== "risky")
+    : kinds;
 }
 
 /** A preset applied on top of the default, keeping the user's theme and colors. */
