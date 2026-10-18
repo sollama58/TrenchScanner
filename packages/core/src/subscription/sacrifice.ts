@@ -284,3 +284,83 @@ export async function refundSacrifice(signature: string): Promise<bigint> {
     throw err;
   }
 }
+
+export type TradeSettlement = "confirmed" | "failed" | "expired";
+
+/** A trade unseen this long after it was sent never landed: its blockhash lives about 90 seconds. */
+export const TRADE_EXPIRE_AFTER_MS = 5 * 60_000;
+
+/**
+ * What a sent trade's signature status says it came to, or null while it is still open (the
+ * rules GET /pro/trade/fees and the settlement job share). `status` null: the read failed.
+ */
+export function tradeOutcome(
+  status: { seen: false } | { seen: true; confirmed: boolean; error: string | null } | null,
+  sentAt: Date,
+  now = new Date(),
+): TradeSettlement | null {
+  if (!status) return null;
+  if (status.seen && status.error) return "failed";
+  if (status.seen && status.confirmed) return "confirmed";
+  if (!status.seen && now.getTime() - sentAt.getTime() > TRADE_EXPIRE_AFTER_MS) return "expired";
+  return null;
+}
+
+/**
+ * Settles a recorded trade (Build guide step 6): marks a "sent" row with its outcome and, for a
+ * failed or expired one, refunds its Sacrifice (refundSacrifice: once per signature, so the panel,
+ * the fees read and the settlement job can all race). A row another path already marked failed or
+ * expired is refunded too, in case that path stopped between the two writes. Returns whether this
+ * call changed the row.
+ */
+export async function settlePlatformTrade(signature: string, status: TradeSettlement): Promise<boolean> {
+  const changed = await prisma.platformTrade.updateMany({
+    where: { signature, status: "sent" },
+    data: { status, settledAt: new Date() },
+  });
+  let refund = changed.count > 0 && status !== "confirmed";
+  if (changed.count === 0) {
+    const row = await prisma.platformTrade.findUnique({ where: { signature }, select: { status: true } });
+    refund = row?.status === "failed" || row?.status === "expired";
+  }
+  if (refund) await refundSacrifice(signature);
+  return changed.count > 0;
+}
+
+/** How often the worker's settlement job runs. */
+export const TRADE_SETTLEMENT_INTERVAL_MS = 30_000;
+/** The settlement job's pass: trades still "sent" this long after sending are looked up. */
+export const TRADE_SETTLE_AFTER_MS = 2 * 60_000;
+const TRADE_SETTLE_BATCH = 50;
+
+/**
+ * Settles every trade still "sent" TRADE_SETTLE_AFTER_MS after it went out, whether or not a panel
+ * is watching it (worker job "trade-settlement"), so a closed tab never leaves a Sacrifice taken
+ * for a trade that failed. Oldest first, TRADE_SETTLE_BATCH a pass.
+ */
+export async function settleOpenTrades(
+  rpc: {
+    getSignatureStatus(
+      signature: string,
+    ): Promise<{ seen: false } | { seen: true; confirmed: boolean; error: string | null } | null>;
+  },
+  now = new Date(),
+): Promise<{ checked: number; settled: number; refunded: number }> {
+  const open = await prisma.platformTrade.findMany({
+    where: { status: "sent", sentAt: { lt: new Date(now.getTime() - TRADE_SETTLE_AFTER_MS) } },
+    orderBy: { sentAt: "asc" },
+    take: TRADE_SETTLE_BATCH,
+    select: { signature: true, sentAt: true },
+  });
+  let settled = 0;
+  let refunded = 0;
+  for (const t of open) {
+    const outcome = tradeOutcome(await rpc.getSignatureStatus(t.signature).catch(() => null), t.sentAt, now);
+    if (!outcome) continue;
+    if (await settlePlatformTrade(t.signature, outcome)) {
+      settled++;
+      if (outcome !== "confirmed") refunded++;
+    }
+  }
+  return { checked: open.length, settled, refunded };
+}

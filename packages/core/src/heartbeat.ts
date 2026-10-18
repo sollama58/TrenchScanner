@@ -33,7 +33,8 @@ export type HeartbeatJob =
   | "pipeline-watch"
   | "trading-bot"
   | "paper-trading"
-  | "asdf-price";
+  | "asdf-price"
+  | "trade-settlement";
 
 /**
  * Which worker process runs a job. The worker is deployed as two processes (render.yaml): the
@@ -58,6 +59,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "pro-holders": "scanner",
   // The Sacrifice's ASDF price samples (asdfPrice.ts), beside the holder scan it prices for.
   "asdf-price": "scanner",
+  // Settles Pro trades no panel is watching and refunds failed ones' Sacrifice (sacrifice.ts).
+  "trade-settlement": "scanner",
   "match-peaks": "scanner",
   "telegram-dispatch": "scanner",
   // Holds the Telegram bot token and the admin wallets it notifies (the trainer has neither).

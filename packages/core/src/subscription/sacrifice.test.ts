@@ -5,6 +5,9 @@ import {
   creditsShort,
   recordPlatformTrade,
   refundSacrifice,
+  settleOpenTrades,
+  settlePlatformTrade,
+  tradeOutcome,
   freeBufferRank,
   resetSacrificeSettingsCacheForTests,
   sacrificeFor,
@@ -258,5 +261,97 @@ describe.skipIf(!dbAvailable)("taking the Sacrifice at send", () => {
     expect(refunds.sort()).toEqual([0n, 1_000n * TOKENS]);
     expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(before + 1_000n * TOKENS);
     expect(await refundSacrifice(sig)).toBe(0n);
+  });
+});
+
+describe("tradeOutcome", () => {
+  const sent = new Date("2026-10-18T21:00:00Z");
+  const at = (ms: number) => new Date(sent.getTime() + ms);
+  it("follows the chain, and calls a trade unseen past 5 minutes expired", () => {
+    expect(tradeOutcome({ seen: true, confirmed: true, error: null }, sent, at(1_000))).toBe("confirmed");
+    expect(tradeOutcome({ seen: true, confirmed: false, error: "{}" }, sent, at(1_000))).toBe("failed");
+    expect(tradeOutcome({ seen: true, confirmed: false, error: null }, sent, at(10 * 60_000))).toBeNull();
+    expect(tradeOutcome({ seen: false }, sent, at(4 * 60_000))).toBeNull();
+    expect(tradeOutcome({ seen: false }, sent, at(5 * 60_000 + 1))).toBe("expired");
+    expect(tradeOutcome(null, sent, at(60 * 60_000))).toBeNull();
+  });
+});
+
+describe.skipIf(!dbAvailable)("settling trades", () => {
+  const RUN = Date.now();
+  const W = `SacrificeSettleWallet${RUN}`;
+  const TOKENS = 10n ** 6n;
+  const sig = (n: number) => `SacrificeSettleSig${RUN}-${n}`;
+  const send = (n: number) =>
+    recordPlatformTrade({
+      signature: sig(n),
+      wallet: W,
+      mint: "So11111111111111111111111111111111111111112",
+      side: "sell",
+      lamports: SOL,
+      networkFeeLamports: 10_000n,
+      sacrifice: {
+        mode: "on",
+        tier: "below_cutoff",
+        pays: true,
+        asdfRaw: 100n * TOKENS,
+        lamports: 2_000_000n,
+        asdfPerSol: 740_000,
+      },
+    });
+
+  afterAll(async () => {
+    await prisma.burnCreditEntry.deleteMany({ where: { wallet: W } });
+    await prisma.platformTrade.deleteMany({ where: { wallet: W } });
+  });
+
+  it("refunds a failed trade once and leaves a confirmed one charged", async () => {
+    await creditBurnCredits(
+      `SacrificeSettleBurn${RUN}`,
+      { burnerWallet: W, rawAmount: 1_000n * TOKENS },
+      "claim",
+    );
+    await send(1);
+    await send(2);
+    expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(800n * TOKENS);
+    // The panel and the job race on the failed one: one settles it, the refund lands once.
+    const raced = await Promise.all([
+      settlePlatformTrade(sig(1), "failed"),
+      settlePlatformTrade(sig(1), "failed"),
+    ]);
+    expect(raced.sort()).toEqual([false, true]);
+    expect(await settlePlatformTrade(sig(2), "confirmed")).toBe(true);
+    // A later "expired" can't move a confirmed trade or refund it.
+    expect(await settlePlatformTrade(sig(2), "expired")).toBe(false);
+    expect((await creditPots(W, prisma, 100)).burnedRaw).toBe(900n * TOKENS);
+  });
+
+  it("settles open trades nobody watched, only once they're 2 minutes old", async () => {
+    await send(3);
+    await send(4);
+    const old = new Date(Date.now() - 10 * 60_000);
+    await prisma.platformTrade.updateMany({
+      where: { signature: { in: [sig(3), sig(4)] } },
+      data: { sentAt: old },
+    });
+    await send(5);
+    const looked: string[] = [];
+    const rpc = {
+      getSignatureStatus: async (s: string) => {
+        looked.push(s);
+        return s === sig(3)
+          ? ({ seen: true, confirmed: true, error: null } as const)
+          : ({ seen: false } as const);
+      },
+    };
+    const result = await settleOpenTrades(rpc);
+    expect(looked).not.toContain(sig(5));
+    expect(result).toMatchObject({ settled: 2, refunded: 1 });
+    const rows = await prisma.platformTrade.findMany({
+      where: { signature: { in: [sig(3), sig(4), sig(5)] } },
+      orderBy: { signature: "asc" },
+      select: { status: true },
+    });
+    expect(rows.map((r) => r.status)).toEqual(["confirmed", "expired", "sent"]);
   });
 });

@@ -29,7 +29,8 @@ import {
   walletTag,
   prisma,
   recordPlatformTrade,
-  refundSacrifice,
+  settlePlatformTrade,
+  tradeOutcome,
 } from "@trenchscanner/core";
 import { proStatus, type ProStatus } from "../proMode.js";
 import { requireTwoFactor } from "../twoFactor.js";
@@ -190,10 +191,9 @@ const DEFAULT_REF_LAMPORTS = 100_000_000n;
 const MAX_REF_LAMPORTS = 100_000_000_000n;
 /** The network's base fee on a one-signature trade, lamports. */
 const BASE_FEE_LAMPORTS = 5_000n;
-/** The fees read settles trades still "sent" this old, this many per read, and expires the unseen past FEES_EXPIRE_AFTER_MS. */
+/** The fees read settles trades still "sent" this old, this many per read (expiry: tradeOutcome in core). */
 const FEES_SETTLE_AFTER_MS = 60_000;
 const FEES_SETTLE_PER_READ = 20;
-const FEES_EXPIRE_AFTER_MS = 5 * 60_000;
 
 interface InFlight {
   base64: string;
@@ -693,21 +693,17 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     return { signature };
   });
 
-  /** A trade Sender refused (nothing went out): failed, with its Sacrifice refunded. */
-  const settleRefused = async (signature: string) => {
-    await prisma.platformTrade
-      .updateMany({ where: { signature, status: "sent" }, data: { status: "failed", settledAt: new Date() } })
-      .catch(() => undefined);
-    await refundSacrifice(signature).catch((err) =>
-      app.log.error({ signature, err: String(err) }, "sacrifice refund failed"),
-    );
-  };
-
-  /** A recorded trade's outcome, once known (only "sent" rows change). */
+  /**
+   * A recorded trade's outcome, once known (only "sent" rows change), with its Sacrifice refunded
+   * when it failed or expired (settlePlatformTrade in core). The worker's settlement job settles
+   * whatever no panel is watching.
+   */
   const settle = (signature: string, status: "confirmed" | "failed" | "expired") =>
-    prisma.platformTrade
-      .updateMany({ where: { signature, status: "sent" }, data: { status, settledAt: new Date() } })
-      .catch(() => undefined);
+    settlePlatformTrade(signature, status).catch((err) =>
+      app.log.error({ signature, status, err: String(err) }, "platform trade not settled"),
+    );
+  /** A trade Sender refused (nothing went out): failed, with its Sacrifice refunded at once. */
+  const settleRefused = (signature: string) => settle(signature, "failed");
 
   app.get<{ Params: { signature: string } }>(
     "/trade/status/:signature",
@@ -766,13 +762,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     });
     await Promise.all(
       open.map(async (t) => {
-        const status = await rpc.getSignatureStatus(t.signature).catch(() => null);
-        if (!status) return;
-        if (status.seen && status.error) return settle(t.signature, "failed");
-        if (status.seen && status.confirmed) return settle(t.signature, "confirmed");
-        // A blockhash lives about a minute and a half: unseen well past that, it never landed.
-        if (!status.seen && Date.now() - t.sentAt.getTime() > FEES_EXPIRE_AFTER_MS)
-          return settle(t.signature, "expired");
+        // Unseen well past its blockhash's life, it never landed (tradeOutcome in core).
+        const outcome = tradeOutcome(await rpc.getSignatureStatus(t.signature).catch(() => null), t.sentAt);
+        if (outcome) return settle(t.signature, outcome);
       }),
     );
     const [trades, first, solUsd] = await Promise.all([

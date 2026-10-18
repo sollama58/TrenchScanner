@@ -39,6 +39,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // Every 15 seconds: the ASDF price the Sacrifice is charged at. While it is down, fee-paying
   // Pro trades are refused once the newest sample is a minute old (asdfPrice.ts guards).
   "asdf-price": 5 * 60_000,
+  // Every 30 seconds: settles Pro trades no panel watched, refunding a failed one's Sacrifice.
+  // Late, a refund waits; nothing is lost (it settles on the next run).
+  "trade-settlement": 10 * 60_000,
   // Every minute, and while it's down every open training row's label window is silently
   // recording nothing - an hour of downtime is an hour of alerts whose outcomes read "flat".
   "candidate-watch": 10 * 60_000,

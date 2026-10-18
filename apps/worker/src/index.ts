@@ -38,8 +38,11 @@ import {
   workerConfigMeta,
   type HeartbeatJob,
   ASDF_PRICE_SAMPLE_MS,
+  TRADE_SETTLEMENT_INTERVAL_MS,
   JupiterSwapClient,
   sampleAsdfPrice,
+  settleOpenTrades,
+  TradingRpc,
 } from "@trenchscanner/core";
 import { BAND_ENTRY_CHECK_MS, BandEntryWatch } from "./bandEntryWatch.js";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
@@ -589,6 +592,25 @@ async function main() {
         async () => ({ ...(await sampleAsdfPrice(asdfPriceReader)) }),
         ASDF_PRICE_SAMPLE_MS / 60_000,
         { deadlineMinutes: 1 },
+      ),
+    );
+  }
+  // Settles Pro trades still "sent" two minutes on, whether or not a panel watches them, and
+  // refunds the Sacrifice of one that failed or expired (settleOpenTrades in core). Off with the
+  // trade system.
+  if (env.PRO_TRADING_ENABLED) {
+    const settlementRpc = new TradingRpc({
+      rpcUrl: env.SOLANA_RPC_URL || undefined,
+      apiKey: env.HELIUS_API_KEY || undefined,
+    });
+    schedule("trade-settlement", () =>
+      scheduleInterval(
+        "trade-settlement",
+        // No job lock: two workers side by side during a deploy only repeat each other's reads,
+        // and settling and refunding are each once per trade whoever gets there first.
+        async () => ({ ...(await settleOpenTrades(settlementRpc)) }),
+        TRADE_SETTLEMENT_INTERVAL_MS / 60_000,
+        { deadlineMinutes: 2 },
       ),
     );
   }
