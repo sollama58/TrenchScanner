@@ -375,6 +375,15 @@ export const LinkIcon = (p: IconProps) => (
   </Svg>
 );
 
+/** A globe: a coin's own website. */
+export const GlobeIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M3 12h18" />
+    <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18" />
+  </Svg>
+);
+
 /** Two opposed arrows: coins moved between two wallets. */
 export const TransferIcon = (p: IconProps) => (
   <Svg {...p}>
