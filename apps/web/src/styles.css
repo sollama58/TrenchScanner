@@ -5707,6 +5707,28 @@ html:has(dialog.about-modal[open]) {
 .editor-form {
   scroll-margin-top: 80px;
 }
+/* A filter-editor section that folds (Narrative): the legend is its toggle. */
+.fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.fold-caret {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+.fold-toggle[aria-expanded="true"] .fold-caret {
+  transform: rotate(90deg);
+}
+.fold-set.closed > p {
+  margin: 0;
+}
 
 /* ---------- Phones ---------- */
 @media (max-width: 640px) {
@@ -6820,6 +6842,9 @@ html:has(dialog.about-modal[open]) {
   color: var(--good-ink);
   background: var(--good-wash);
 }
+.cov-note {
+  margin: 0;
+}
 @media (prefers-reduced-motion: reduce) {
   .cov-fill {
     transition: none;
@@ -7923,6 +7948,26 @@ html:has(dialog.about-modal[open]) {
   vertical-align: middle;
   margin-left: 4px;
   padding: 2px;
+}
+
+/* The exit plan popup (ExitPlanInfo.tsx): its worked examples, label left and return right. */
+.exit-plan-examples {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 10px;
+  display: grid;
+  gap: 4px;
+}
+.exit-plan-examples li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+button.link.exit-plan-link {
+  font: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }
 
 /* Filter editor: the narrative theme pickers (one checkbox per TokenSage top-level theme). */
@@ -12838,7 +12883,8 @@ button.bm-same {
   color: #fff;
   font-weight: 650;
 }
-.bm-legend-chip.kol {
+.bm-legend-chip.kol,
+.bm-legend-chip.tracked {
   background: var(--bm-side);
   color: #1a1300;
 }
@@ -13564,6 +13610,10 @@ button.bm-same {
 .wallet-name.src-kol,
 .wallet-name.src-kol-side {
   color: color-mix(in srgb, var(--series-3) 70%, var(--ink));
+}
+/* A wallet the reader labeled as User Tracked (Settings > Labeled wallets): its own tint. */
+.wallet-name.src-tracked {
+  color: color-mix(in srgb, var(--series-2) 70%, var(--ink));
 }
 /* A Pump.fun username, wherever a wallet name shows: in quotes (walletNameText), shaded light green. */
 .pumpfun-name {
@@ -17650,6 +17700,73 @@ body:has(.util-toast) .bug-fab {
   word-break: break-all;
 }
 
+/* Labeled wallets (Settings > Labeled wallets, the wallet view's own-label line; user ask
+   2026-10-18): a User Tracked label in its own tint, the KOL one as the KOLs'. */
+.k-tracked {
+  --mk: var(--ink-2);
+}
+.tm-tag.k-tracked {
+  color: color-mix(in srgb, var(--series-2) 75%, var(--ink));
+  border-color: color-mix(in srgb, var(--series-2) 45%, transparent);
+  background: color-mix(in srgb, var(--series-2) 12%, transparent);
+}
+.tw-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 6px 0;
+}
+.tw-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  flex: 1 1 100%;
+}
+.tw-form input:not([type="checkbox"]) {
+  flex: 1 1 180px;
+  min-width: 0;
+}
+.tw-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.tw-list {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.tw-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+}
+.tw-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 24ch;
+}
+.tw-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.tw-add input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* Settings > Trading: the Trade panel's buttons, edited in place (PresetButtonsEditor). */
 .preset-editor-head {
   display: flex;
@@ -17737,4 +17854,383 @@ body:has(.util-toast) .bug-fab {
   align-items: center;
   justify-content: space-between;
   gap: 6px 10px;
+}
+
+/* Scope (user ask 2026-10-18): the Live feed as a dense three-column board of compact rows - your
+   filters, models, graduated - side by side on wide screens, a sideways-swiped strip on phones. */
+.feed-view {
+  flex: none;
+}
+.scope {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.scope.stale {
+  opacity: 0.85;
+}
+.scope-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+}
+.scope-tabs {
+  display: none;
+}
+.scope-tabs .num {
+  margin-left: 2px;
+}
+.scope-hold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.scope-hold::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+}
+.scope.held .scope-hold {
+  color: var(--warn-ink);
+}
+.scope.held .scope-hold::before {
+  background: var(--warn);
+}
+.scope-new {
+  margin-left: auto;
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 12px;
+  background: var(--link);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.scope-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.scope-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  overflow: hidden;
+}
+.scope-col-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.scope-col-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.scope-rows {
+  min-height: 320px;
+  max-height: calc(100dvh - 250px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.scope-empty {
+  padding: 16px 12px;
+  margin: 0;
+}
+.scope-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.scope-row:hover {
+  background: var(--highlight);
+}
+.scope-row.tone-good {
+  box-shadow: inset 2px 0 var(--good);
+}
+.scope-row.tone-bad {
+  box-shadow: inset 2px 0 var(--bad);
+}
+.scope-avatar {
+  position: relative;
+  width: 48px;
+  height: 48px;
+}
+.scope-img {
+  display: block;
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: var(--surface-3);
+}
+.scope-img.placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.scope-mark {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  padding: 1px 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-solid);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.scope-mark.good {
+  color: var(--good-ink);
+}
+.scope-mark.bad {
+  color: var(--bad-ink);
+}
+.scope-main {
+  min-width: 0;
+}
+.scope-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.scope-symbol {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.scope-symbol:hover {
+  text-decoration: underline;
+}
+.scope-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  font-size: 12px;
+}
+.scope-age {
+  color: var(--good-ink);
+  font-weight: 600;
+}
+.scope-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 130px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+.scope-src.model {
+  color: var(--brand-ink);
+  border-color: color-mix(in srgb, var(--brand-a) 40%, transparent);
+  background: color-mix(in srgb, var(--brand-a) 12%, transparent);
+}
+.scope-src-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-figs {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  font-size: 12px;
+}
+.scope-fig {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.scope-fig-label {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.scope-now .num {
+  color: var(--link);
+  font-size: 15px;
+  font-weight: 700;
+}
+.scope-fig .up,
+.scope-now .num.up {
+  color: var(--good-ink);
+}
+.scope-now .num.down {
+  color: var(--bad-ink);
+}
+.scope-chips {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.scope-row:has(> .quick-buy) .scope-chips {
+  padding-right: 84px;
+}
+.scope-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--ink-2);
+  font-size: 11px;
+}
+.scope-chip-label {
+  color: var(--muted);
+}
+.scope-chip.risky {
+  color: var(--bad-ink);
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+}
+.scope-chip.toned .num {
+  color: var(--tile-c);
+}
+.scope-chip.toned-box {
+  background: color-mix(in srgb, var(--tile-c) 14%, transparent);
+}
+.scope-row > .quick-buy {
+  top: auto;
+  left: auto;
+  right: 8px;
+  bottom: 6px;
+}
+@media (max-width: 899px) {
+  .scope-tabs {
+    display: inline-flex;
+  }
+  .scope-hold {
+    font-size: 11px;
+  }
+  .scope-strip {
+    display: flex;
+    gap: 0;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+  .scope-strip::-webkit-scrollbar {
+    display: none;
+  }
+  .scope-col {
+    flex: 0 0 100%;
+    scroll-snap-align: start;
+  }
+  .scope-col-head {
+    display: none;
+  }
+  .scope-rows {
+    max-height: calc(100dvh - 220px);
+  }
+}
+@media (max-width: 420px) {
+  .scope-row {
+    grid-template-columns: 42px minmax(0, 1fr) auto;
+    gap: 3px 8px;
+    padding: 8px;
+  }
+  .scope-avatar,
+  .scope-img {
+    width: 42px;
+    height: 42px;
+  }
+  .scope-src {
+    max-width: 96px;
+  }
+}
+@media (max-width: 899px) {
+  .scope-bar {
+    flex-wrap: wrap;
+  }
+  .scope-tabs button {
+    white-space: nowrap;
+  }
+  .scope-chips {
+    flex-wrap: nowrap;
+    gap: 3px;
+    overflow: hidden;
+  }
+  .scope-chip {
+    padding: 1px 4px;
+    font-size: 10.5px;
+    gap: 3px;
+  }
+}
+
+/* ---------- Install the app (phones and tablets) ---------- */
+.install-app {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0 4px;
+}
+.install-btn {
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  font-weight: 600;
+}
+.install-steps {
+  margin: 0;
+  padding: 12px 14px 12px 32px;
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+.install-steps strong {
+  color: var(--ink);
+}
+.install-steps svg {
+  vertical-align: -2px;
+}
+.install-panel .install-app {
+  margin-top: 4px;
+}
+.install-panel > p.faint {
+  margin: 8px 0 0;
 }

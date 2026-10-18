@@ -3,6 +3,7 @@ import {
   EXIT_PLAN,
   applyTrailTick,
   describeExitPlan,
+  exitPlanView,
   exitPlanPositionOpen,
   simulateExitPlan,
   trailLevelPriceUsd,
@@ -299,6 +300,23 @@ describe("applyTrailTick", () => {
     expect(applyTrailTick(state({ trailHighPriceUsd: 12 }), 8.9, at, plan)).toEqual({
       trailExitAt: at,
       trailExitPriceUsd: 8.9,
+    });
+  });
+});
+
+describe("exitPlanView", () => {
+  it("sends the default plan as whole percents, lowest rung first", () => {
+    expect(exitPlanView()).toEqual({
+      summary: describeExitPlan(),
+      takeProfits: [
+        { multiple: 2, sellPct: 35 },
+        { multiple: 4, sellPct: 30 },
+        { multiple: 10, sellPct: 25 },
+      ],
+      trail: [{ fromMultiple: 2, offHighPct: 40 }],
+      trailMaxHoldMinutes: 180,
+      stopPct: 50,
+      maxHoldMinutes: 30,
     });
   });
 });

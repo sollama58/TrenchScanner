@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { Env } from "../config/env.js";
+import { clampToSafetyBounds } from "./filterBounds.js";
 import { STARTER_FILTER_NAME, starterFilterInput } from "./starterFilter.js";
 
 /**
@@ -46,7 +47,8 @@ export function parseStarterCriteria(
   if (typeof c.mcapMin !== "number" || typeof c.mcapMax !== "number") return null;
   const data: Record<string, unknown> = {};
   for (const col of CRITERIA_COLUMNS) if (col in c) data[col] = c[col];
-  return { ...data, name: STARTER_FILTER_NAME, mcapMin: c.mcapMin, mcapMax: c.mcapMax };
+  // Inside the screen's bounds (filterBounds.ts) whatever the frozen copy says.
+  return clampToSafetyBounds({ ...data, name: STARTER_FILTER_NAME, mcapMin: c.mcapMin, mcapMax: c.mcapMax });
 }
 
 /** What a new account's first filter is created with (without its userId). */

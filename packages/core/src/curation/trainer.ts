@@ -312,6 +312,22 @@ export interface ServedCuratorExtras {
 export interface ReturnRisk {
   crash: Omit<BoostedCuratorParams, "threshold">;
   payoffs: ReturnPayoffs;
+  /**
+   * The 2x gate (model audit 2026-10-18, notes/model-audit-2026-10-18): the win model's odds at
+   * the RETURN_WIN_GATE_SHARE quantile of the training decision rows. A coin below it ranks under
+   * every coin above it, whatever its expected return. Without it, E ranked mostly on "won't
+   * crash", which on these coins means "won't move": after the first return-ranked run (10-18
+   * 06:31) the return seats' scores read 2x AUC 0.39-0.49 on fresh decision rows, below a coin
+   * flip, and the feed doubled less often than the screened market. Gated at 60% in a
+   * walk-forward replica (10-15..18), the top fifth doubled 21.9% (P(2x) alone 22.6%, ungated E
+   * 17.1%, market 17.5%) at the ungated return (-5.2% vs -5.0%; P(2x) alone -10.8%). The floor
+   * is read on the rows the model was fitted on, where it scores winners higher than on coins it
+   * hasn't seen, so live it lets through more: 66-75% in the replica, with the same result (21.9-
+   * 22.0% 2x, -4.5% return); nothing reads the floor's share, as the seat's cutoff is a rank
+   * among its own live scores (liveScale.ts) and sits well inside the gated half. Absent on
+   * models trained before it, which score as before.
+   */
+  winFloor?: number;
 }
 
 /** The average return, in percent of the stake, of a clean win, a crash and anything else. */
@@ -439,7 +455,27 @@ export async function trainCuratorModel(
   const objective = opts.boosting?.objective;
   if (opts.learner === "gbdt" && (objective === "return" || objective === "payoff")) return base;
   const returnRisk = await trainReturnRisk(rows, opts, goal === "safe" ? SAFE_LOSS_AVERSION : 1);
-  return returnRisk ? { ...base, returnRisk } : base;
+  if (!returnRisk) return base;
+  // The safe goal keeps ranking on avoiding the stop alone: that is the seat's point.
+  const winFloor = goal === "return" ? returnWinFloor(base, rows) : undefined;
+  return { ...base, returnRisk: winFloor === undefined ? returnRisk : { ...returnRisk, winFloor } };
+}
+
+/** Share of decision rows a return-ranked model's 2x gate lets through - see ReturnRisk.winFloor. */
+export const RETURN_WIN_GATE_SHARE = 0.6;
+
+/** The win odds at the gate's quantile of the decision rows; undefined with too few rows. */
+export function returnWinFloor(
+  win: UnthresholdedCuratorParams,
+  rows: readonly TrainingRow[],
+): number | undefined {
+  const odds = rows
+    .filter((r) => r.sampleKind === undefined || r.sampleKind === "event")
+    .map((r) => scoreWinOdds(win, r.features))
+    .filter((p) => Number.isFinite(p))
+    .sort((a, b) => a - b);
+  if (odds.length < MIN_CRASH_ROWS) return undefined;
+  return odds[Math.min(odds.length - 1, Math.floor(odds.length * (1 - RETURN_WIN_GATE_SHARE)))];
 }
 
 /** The rows with every miss of `won` (a 2x that fell short of the goal included) as a loss. */
@@ -980,7 +1016,10 @@ export function scoreCandidateWithModel(
   const pWin = scoreWinOdds(params, features);
   const risk = params.returnRisk;
   if (risk === undefined) return pWin;
-  return expectedReturnScore(pWin, scoreBoosted(risk.crash, features), risk.payoffs);
+  const e = expectedReturnScore(pWin, scoreBoosted(risk.crash, features), risk.payoffs);
+  if (risk.winFloor === undefined) return e;
+  // Gated coins take the upper half of [0, 1], the rest the lower half, each in E's order.
+  return pWin >= risk.winFloor ? 0.5 + e / 2 : e / 2;
 }
 
 /** E (see ReturnRisk) rescaled to [0, 1] between the crash and win payoffs. */

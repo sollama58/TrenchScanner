@@ -633,6 +633,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     : null;
   await app.register(registerWalletRoutes, {
     prefix: "/wallets",
+    env,
     live: walletLive,
     identity: walletIdentity,
   });

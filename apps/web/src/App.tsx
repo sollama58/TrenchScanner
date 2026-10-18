@@ -46,6 +46,7 @@ import { useAppearance } from "./appearance";
 import { TokenModalHost } from "./components/TokenModalHost";
 import { closeTokenModal } from "./tokenModal";
 import { setProState, proStateOf } from "./proTrade";
+import { setTrackedAccount } from "./trackedWallets";
 import { ProGraceBanner } from "./components/ProGraceBanner";
 import { BugButton } from "./components/BugButton";
 import { AdminReportsBadge } from "./components/AdminReportsBadge";
@@ -309,6 +310,8 @@ export function App() {
   const pro = signedIn ? proStateOf(session.user) : null;
   // Every render: setProState ignores a state equal to the one it has.
   useEffect(() => setProState(pro));
+  // Labeled wallets are the account's own: another account (or a change of Pro Mode) reads afresh.
+  useEffect(() => setTrackedAccount(pro?.wallet ?? null, !!pro?.pro));
   // Pro Mode changes while a page stays open: a wallet that has just held its hour in the top 250
   // (or was granted it) gets the Trade panel, one in its grace sees the warnings go or the panel
   // close. So a signed-in session is re-read every few minutes, and when the tab comes back into

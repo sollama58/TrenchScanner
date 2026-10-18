@@ -1191,6 +1191,8 @@ export function cexLayout(graph: BubbleGraph): BubbleGraph {
 export interface SideGroup {
   kolWallet: string;
   kolName: string | null;
+  /** A wallet the reader labeled as User Tracked, not a KOL (Settings > Labeled wallets). */
+  tracked?: boolean;
   wallets: readonly { wallet: string; pct: number; funded?: boolean; known?: boolean }[];
 }
 
@@ -1222,6 +1224,8 @@ export const BUNDLE_TRANSFER_MIN_SHARE = 0.1;
 export interface KolControl {
   kolWallet: string;
   kolName: string | null;
+  /** A wallet the reader labeled as User Tracked: drawn as a KOL's bundle, named as tracked. */
+  tracked?: boolean;
   /** Whether the KOL's own wallet is a holder on the map. */
   holds: boolean;
   /** Holders on the map, largest first, each with how it ties to the KOL. */
@@ -1246,7 +1250,7 @@ export interface KolControl {
 export function kolControl(
   graph: Pick<BubbleGraph, "nodes">,
   groups: readonly SideGroup[],
-  kols: readonly { wallet: string; name: string | null }[] = [],
+  kols: readonly { wallet: string; name: string | null; tracked?: boolean }[] = [],
   transfers: readonly Pick<TransferLink, "from" | "to" | "pct">[] = [],
   kolClusters?: readonly Pick<Cluster, "wallets">[],
   isService: (wallet: string) => boolean = () => false,
@@ -1273,15 +1277,18 @@ export function kolControl(
     if (t.pct < BUNDLE_TRANSFER_MIN_PCT && !(held > 0 && t.pct >= held * BUNDLE_TRANSFER_MIN_SHARE)) continue;
     sentTo.set(from, [...(sentTo.get(from) ?? []), to]);
   }
-  const seeds = new Map<string, { kolName: string | null; ties: Map<string, KolTie> }>();
+  const seeds = new Map<string, { kolName: string | null; tracked: boolean; ties: Map<string, KolTie> }>();
   for (const g of groups) {
     const ties = new Map<string, KolTie>();
     for (const w of g.wallets)
       if (w.wallet !== g.kolWallet) ties.set(w.wallet, w.known ? "known" : w.funded ? "funded" : "side");
-    seeds.set(g.kolWallet, { kolName: g.kolName, ties });
+    seeds.set(g.kolWallet, { kolName: g.kolName, tracked: !!g.tracked, ties });
   }
   for (const k of kols) {
-    if (!seeds.has(k.wallet)) seeds.set(k.wallet, { kolName: k.name, ties: new Map() });
+    const seed = seeds.get(k.wallet);
+    if (!seed) seeds.set(k.wallet, { kolName: k.name, tracked: !!k.tracked, ties: new Map() });
+    // The reader's own label names the wallet over the roster's, and says which kind it is.
+    else if (k.tracked !== undefined) seeds.set(k.wallet, { ...seed, kolName: k.name, tracked: k.tracked });
   }
   const out: KolControl[] = [];
   for (const [kolWallet, seed] of seeds) {
@@ -1314,6 +1321,7 @@ export function kolControl(
     out.push({
       kolWallet,
       kolName: seed.kolName,
+      ...(seed.tracked ? { tracked: true } : {}),
       holds: tie.has(kolWallet),
       wallets,
       pct: Math.round(wallets.reduce((t, w) => t + w.pct, 0) * 100) / 100,
@@ -1322,9 +1330,14 @@ export function kolControl(
   return out.sort((a, b) => b.pct - a.pct);
 }
 
-/** KOL Bundled % as the map draws it: every KOL group's holders, each counted once (core's kolBundledPct). */
+/**
+ * KOL Bundled % as the map draws it: every KOL group's holders, each counted once (core's
+ * kolBundledPct). A User Tracked wallet's bundle is no KOL's, so it isn't counted.
+ */
 export function kolBundledShare(kols: readonly KolControl[]): number {
-  const pct = new Map(kols.flatMap((k) => k.wallets.map((w) => [w.wallet, w.pct] as const)));
+  const pct = new Map(
+    kols.filter((k) => !k.tracked).flatMap((k) => k.wallets.map((w) => [w.wallet, w.pct] as const)),
+  );
   return Math.round([...pct.values()].reduce((t, p) => t + p, 0) * 100) / 100;
 }
 

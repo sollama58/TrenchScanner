@@ -31,6 +31,11 @@ export const launchQuerySchema = z.object({
     .optional(),
   /** A name, ticker or part of an address: the Stream narrowed to the tokens that hold it. */
   q: tokenSearchParam,
+  /**
+   * "1": only graduated tokens, each at its first passing in-band scan after it graduated - Scope's
+   * "All screened graduated" column (user ask 2026-10-18).
+   */
+  graduated: z.enum(["0", "1"]).optional(),
 });
 
 /** `text` as an ILIKE pattern that matches it anywhere, its own % and _ taken literally. */
@@ -71,10 +76,11 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
   );
 
   /** Page `page` of the Stream (or, with `mint`, that token's card alone), and whether an older page has any. */
-  const readLaunches = async (page: number, mint: string | undefined, q?: string) => {
+  const readLaunches = async (page: number, mint: string | undefined, q?: string, graduated = false) => {
     const since = new Date(Date.now() - LAUNCH_STREAM_HORIZON_MS);
-    // A page deeper needs that many more passes, so it looks at that many more band entries.
-    const candidates = mint ? 1 : LAUNCH_STREAM_CANDIDATES * page;
+    // A page deeper needs that many more passes, so it looks at that many more band entries. Fewer
+    // entries graduate, and later than they enter the band, so graduated pages look further back.
+    const candidates = mint ? 1 : LAUNCH_STREAM_CANDIDATES * page * (graduated ? 3 : 1);
     const offset = mint ? 0 : (page - 1) * LAUNCH_STREAM_SIZE;
     // The newest band entries by Token(firstInBandAt), then each one's first passing in-band scan
     // snapshot down its own (tokenId, takenAt) index. One past the page says whether there is another.
@@ -98,6 +104,7 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
         WHERE "tokenId" = t.id
           AND "source" = 'scan'
           AND "rugScreenPassed"
+          ${graduated ? Prisma.sql`AND "graduated"` : Prisma.empty}
           AND "marketCapUsd" BETWEEN ${opts.env.MCAP_FILTER_MIN} AND ${opts.env.MCAP_FILTER_MAX}
         ORDER BY "takenAt" ASC
         LIMIT 1
@@ -162,12 +169,16 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const { mint, q } = parsed.data;
+    const graduated = parsed.data.graduated === "1";
     const page = mint ? 1 : parsed.data.page;
+    const g = graduated ? "grad:" : "";
     // A typed search isn't cached: a run of keystrokes would push the Stream's own pages out.
     const answer =
       q && !mint
-        ? await readLaunches(page, undefined, q)
-        : await cache.for(mint ? `mint:${mint}` : `page:${page}`).get(() => readLaunches(page, mint));
+        ? await readLaunches(page, undefined, q, graduated)
+        : await cache
+            .for(`${g}${mint ? `mint:${mint}` : `page:${page}`}`)
+            .get(() => readLaunches(page, mint, undefined, graduated));
     return { ...answer, page };
   });
 }

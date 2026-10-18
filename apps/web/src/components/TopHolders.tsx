@@ -110,7 +110,9 @@ export function TopHolders({
               const f = h.wallet ? byWallet.get(h.wallet) : undefined;
               const named = h.wallet ? names[h.wallet] : undefined;
               const side = !!f?.knownSideOf || named?.source === "kol-side";
-              const kol = !side && (typeof h.kol === "string" || named?.source === "kol");
+              const kol =
+                !side &&
+                (typeof h.kol === "string" || named?.source === "kol" || named?.source === "tracked");
               const possible = (h.wallet ? (sides[h.wallet] ?? []) : []).filter((p) => !(side && p.known));
               const entry = h.wallet ? entries[h.wallet] : undefined;
               return (
@@ -203,7 +205,9 @@ export function TopHolders({
                         Tied to dev
                       </span>
                     )}
-                    {kol && <span className="tm-tag k-kol">KOL</span>}
+                    {kol && (
+                      <span className="tm-tag k-kol">{named?.source === "tracked" ? "Tracked" : "KOL"}</span>
+                    )}
                     {side && <span className="tm-tag k-side">Known Side</span>}
                     {possible.map((p) => (
                       <span key={p.kolWallet} className="tm-tag k-side">

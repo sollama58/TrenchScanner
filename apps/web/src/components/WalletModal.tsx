@@ -5,6 +5,7 @@ import { MIN_WIN_SOL, ago, shortAddress, signedPct, usd } from "../format";
 import { closeWallet, openWallet, WALLET_LINKS, walletLink, xSearchLink } from "../walletModal";
 import { useWalletNames, type WalletNames } from "../walletNames";
 import { WalletText } from "./WalletText";
+import { TrackedWalletEditor } from "./TrackedWallets";
 import { LoadingNote, Reveal, SkelValue } from "./Loading";
 import { Skeleton } from "./Charts";
 import { bundleRead, KolSideWallets, SideLabelsExport, WalletBundle } from "../tabs/SideWalletChecker";
@@ -375,12 +376,15 @@ function Profile({ p }: { p: WalletProfile }) {
   const names = useWalletNames(
     useMemo(() => [p.funder?.wallet ?? null, ...p.linked.map((l) => l.wallet)], [p]),
   );
+  // The reader's own label shows in its editor (TrackedWalletEditor), kept up to date as it changes.
+  const labels = p.labels.filter((l) => l.source !== "Your label");
   return (
     <>
       {p.kol && <Kol kol={p.kol} />}
-      {p.labels.length > 0 && (
+      <TrackedWalletEditor wallet={p.wallet} />
+      {labels.length > 0 && (
         <ul className="tm-tags wm-labels" aria-label="Labels">
-          {p.labels.map((l) => (
+          {labels.map((l) => (
             <li
               key={l.text}
               className={`tm-tag wm-tone-${l.tone}`}

@@ -12,10 +12,15 @@ import { shortAddress } from "./format";
 
 export interface WalletName {
   name: string;
-  /** "kol-side": a KOL's Known Side, named "<KOL> Known Side". */
-  source: "kol" | "kol-side" | "identity" | "pumpfun" | "fomo" | "exchange";
+  /**
+   * "kol-side": a KOL's Known Side, named "<KOL> Known Side". "tracked": a wallet the reader
+   * labeled as User Tracked (a label marked KOL comes as "kol"), for them alone.
+   */
+  source: "kol" | "kol-side" | "identity" | "pumpfun" | "fomo" | "exchange" | "tracked";
   /** An exchange or launchpad wallet, whatever name it goes by (absent from older API builds). */
   service?: boolean;
+  /** The reader's own label (Settings > Labeled wallets), which they can edit. */
+  mine?: boolean;
 }
 
 /** Wallet to name, for the wallets that have one. */
@@ -151,6 +156,32 @@ export function visibleNames(
   for (const w of hidden) delete kept[w];
   return kept;
 }
+
+/**
+ * Forgets the answers for `wallets` (the reader just labeled, renamed or unlabeled them), so every
+ * open list asks again; null forgets every answer.
+ */
+export function forgetWalletNames(wallets: readonly string[] | null): void {
+  if (wallets === null) known.clear();
+  else for (const w of wallets) known.delete(w);
+  notify();
+}
+
+/**
+ * `names` without the reader's own labels, for anything that leaves their screen (share images):
+ * labels are private to the reader (user ask 2026-10-18). Returns `names` itself when none is theirs.
+ */
+export function publicNames(names: WalletNames): WalletNames {
+  const mine = Object.keys(names).filter((w) => names[w]!.mine);
+  if (mine.length === 0) return names;
+  const kept: Record<string, WalletName> = { ...names };
+  for (const w of mine) delete kept[w];
+  return kept;
+}
+
+/** Whether a name stands with the KOLs on the map: a KOL, or a wallet the reader tracks. */
+export const isKolLike = (n: WalletName | null | undefined): boolean =>
+  n?.source === "kol" || n?.source === "tracked";
 
 /** For tests: forget every answer. */
 export function resetWalletNames() {

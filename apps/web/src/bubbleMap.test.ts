@@ -7,6 +7,7 @@ import {
   mapLinked,
   showsPct,
   kolControl,
+  kolBundledShare,
   bubbleNameLines,
   NAME_MAX_W,
   placeLabels,
@@ -716,6 +717,16 @@ describe("kolControl", () => {
       ["min", "same-minute"],
     ]);
     expect(k!.pct).toBe(5.3);
+  });
+  it("draws the reader's User Tracked wallet as a KOL's bundle, named theirs, out of KOL Bundled %", () => {
+    const groups = [{ kolWallet: "kol", kolName: "Roster", wallets: [{ wallet: "side", pct: 92 }] }];
+    const [k] = kolControl(graph, groups, [{ wallet: "kol", name: "Mine", tracked: true }]);
+    expect(k).toMatchObject({ kolWallet: "kol", kolName: "Mine", tracked: true });
+    expect(kolBundledShare([k!])).toBe(0);
+    // A roster KOL's name from the list keeps the group's own name and kind.
+    const [r] = kolControl(graph, groups, [{ wallet: "kol", name: "Roster" }]);
+    expect(r!.tracked).toBeUndefined();
+    expect(kolBundledShare([r!])).toBe(r!.pct);
   });
   it("lists a KOL with no side wallets only when another holder is tied to it", () => {
     expect(kolControl(graph, [], [{ wallet: "x", name: "Solo" }])).toEqual([]);

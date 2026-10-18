@@ -1,6 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { type Env, prisma, scanBand, loadFilterTrackRecords, SCANNED_LAUNCHPADS } from "@trenchscanner/core";
+import {
+  type Env,
+  clampToSafetyBounds,
+  FILTER_SAFETY_CEILINGS as CAP,
+  prisma,
+  scanBand,
+  loadFilterTrackRecords,
+  SCANNED_LAUNCHPADS,
+} from "@trenchscanner/core";
 import {
   boardFor,
   buildFilterLeaderboard,
@@ -49,8 +57,10 @@ function buildFilterInputSchema(env: Env) {
     mcapMax: z.number().positive().default(env.MCAP_FILTER_MAX),
     minVolumeMcapRatio: z.number().nonnegative().nullable().optional(),
     minHolderGrowthPct: z.number().nullable().optional(),
-    maxTop10HolderPct: z.number().min(0).max(100).nullable().optional(),
-    maxLargestHolderPct: z.number().min(0).max(100).nullable().optional(),
+    // Capped at the most the safety screen lets through (core's filterBounds.ts): a looser value
+    // only promises tokens the screen never alerts.
+    maxTop10HolderPct: z.number().min(0).max(CAP.maxTop10HolderPct).nullable().optional(),
+    maxLargestHolderPct: z.number().min(0).max(CAP.maxLargestHolderPct).nullable().optional(),
     maxDevWalletPct: z.number().min(0).max(100).nullable().optional(),
     maxRiskScore: z.number().min(0).max(100).nullable().optional(),
     excludeCriticalRiskFlags: z.boolean().default(false),
@@ -64,20 +74,20 @@ function buildFilterInputSchema(env: Env) {
       .max(20)
       .default([]),
     minScore: z.number().min(0).max(100).nullable().optional(),
-    maxFreshTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
-    maxEmptyTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
-    maxSniperTop10WalletPct: z.number().min(0).max(100).nullable().optional(),
-    maxSniperTopHolderCount: z.number().int().min(0).max(25).nullable().optional(),
+    maxFreshTop10WalletPct: z.number().min(0).max(CAP.maxFreshTop10WalletPct).nullable().optional(),
+    maxEmptyTop10WalletPct: z.number().min(0).max(CAP.maxEmptyTop10WalletPct).nullable().optional(),
+    maxSniperTop10WalletPct: z.number().min(0).max(CAP.maxSniperTop10WalletPct).nullable().optional(),
+    maxSniperTopHolderCount: z.number().int().min(0).max(CAP.maxSniperTopHolderCount).nullable().optional(),
     maxLinkedWalletPct: z.number().min(0).max(100).nullable().optional(),
-    maxLinkedWalletCount: z.number().int().min(0).max(25).nullable().optional(),
+    maxLinkedWalletCount: z.number().int().min(0).max(CAP.maxLinkedWalletCount).nullable().optional(),
     maxFlaggedBuySol: z.number().min(0).max(10_000).nullable().optional(),
-    minCexFundedCount: z.number().int().min(0).max(25).nullable().optional(),
-    maxCexFundedCount: z.number().int().min(0).max(25).nullable().optional(),
+    minCexFundedCount: z.number().int().min(0).max(CAP.minCexFundedCount).nullable().optional(),
+    maxCexFundedCount: z.number().int().min(0).max(CAP.maxCexFundedCount).nullable().optional(),
     maxSameTimeFundedPct: z.number().min(0).max(100).nullable().optional(),
     maxSameTimeFundedCount: z.number().int().min(0).max(25).nullable().optional(),
     maxLinkedCreatorPct: z.number().min(0).max(100).nullable().optional(),
     maxKolBundledPct: z.number().min(0).max(100).nullable().optional(),
-    maxBundledSupplyPct: z.number().min(0).max(100).nullable().optional(),
+    maxBundledSupplyPct: z.number().min(0).max(CAP.maxBundledSupplyPct).nullable().optional(),
     maxTransferredSupplyPct: z.number().min(0).max(100).nullable().optional(),
     minLiveHolderCount: z.number().int().min(0).max(100_000).nullable().optional(),
     // Empty means any launchpad. Only the ones discovery takes (core's SCANNED_LAUNCHPADS).
@@ -357,7 +367,8 @@ export async function registerFilterRoutes(app: FastifyInstance, opts: { env: En
       } = source;
       const created = await tx.userFilter.create({
         data: {
-          ...criteria,
+          // A source saved before the screen's bounds can't hand a copy values the API refuses.
+          ...clampToSafetyBounds(criteria),
           name: copyName(name),
           isActive: false,
           shareOnLeaderboard: false,

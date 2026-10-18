@@ -12,6 +12,7 @@ import type {
 import { IN_SAMPLE_LABEL, runExamRates } from "../api";
 import { CutoffCurve, HBarChart } from "../components/Charts";
 import { CloseIcon } from "../components/Icons";
+import { ExitPlanInfo } from "../components/ExitPlanInfo";
 import { ModelPortrait } from "../components/ModelPortrait";
 import { cutoffPoints, perHourText } from "../cutoffCurve";
 import { toggledModels } from "../components/ModelPicker";
@@ -259,7 +260,10 @@ function ModelDetail({
           digits={1}
         />
         <div className="model-fig">
-          <label>Avg return per alert</label>
+          <label>
+            Avg return per alert
+            <ExitPlanInfo />
+          </label>
           <span className={`num ${profitTone(live.avgSimReturnPct)}`}>{signedPct(live.avgSimReturnPct)}</span>
           <small className="faint">
             {live.totalSimReturnPct != null
@@ -281,7 +285,10 @@ function ModelDetail({
         times the filtered market&apos;s 2x rate in the same hours it hit. The 4x and 10x show the random-pick
         rate over the window. {RULE_NOTE}
       </p>
-      {board.exitPlan && <p className="faint small">Profit follows one fixed exit plan: {board.exitPlan}</p>}
+      <p className="faint small">
+        Profit follows one fixed <ExitPlanInfo text="exit plan" />
+        {board.exitPlan ? `: ${board.exitPlan}` : "."}
+      </p>
 
       <h4 className="model-sub">Every window</h4>
       <WindowsTable entry={e} api={api} days={days} targets={t} />
@@ -301,7 +308,10 @@ function ModelDetail({
                 <th className="r">2x</th>
                 <th className="r">4x</th>
                 <th className="r">10x</th>
-                <th className="r">Avg profit</th>
+                <th className="r">
+                  Avg profit
+                  <ExitPlanInfo />
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -815,7 +825,10 @@ function WindowsTable({
             <th className="r">2x</th>
             <th className="r">4x</th>
             <th className="r">10x</th>
-            <th className="r">Avg profit</th>
+            <th className="r">
+              Avg profit
+              <ExitPlanInfo />
+            </th>
             <th className="r">Rank</th>
           </tr>
         </thead>

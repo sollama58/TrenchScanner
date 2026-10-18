@@ -300,6 +300,8 @@ const RPC_METHOD_NOT_FOUND = -32601;
 type GpaRow = { pubkey?: string; account?: { data?: unknown } };
 /** The owner (bytes 32-63) and amount (64-71) of a token account; both token programs lay out the first 165 bytes alike. */
 const TOKEN_ACCOUNT_OWNER_AMOUNT_SLICE = { offset: 32, length: 40 };
+/** A classic SPL Token account's size in bytes. */
+const SPL_TOKEN_ACCOUNT_SIZE = 165;
 /** getProgramAccountsV2's page: Helius allows up to 10,000, and a page is 1 credit whatever it holds. */
 const GPA_V2_PAGE_LIMIT = 10_000;
 /** Pages read per mint before its holder list is given up as too long (a mint in the band holds far fewer). */
@@ -564,6 +566,8 @@ export function parseTokenAccountSlice(entry: TokenAccountSlice): { mint: string
 export class HeliusClient {
   private readonly rpcUrl: string;
   readonly usingHelius: boolean;
+  /** Each mint's last token-account read error, for getTopHoldersBatch's failure reason. */
+  private readonly gpaErrors = new Map<string, string>();
   /** The endpoint's shared 429 pause - see rpcPauseFor. */
   private readonly pause: RateGate;
 
@@ -914,11 +918,13 @@ export class HeliusClient {
       programOf.set(mint, value.owner);
       supplyOf.set(mint, BigInt(supply));
     }
+    for (const mint of programOf.keys()) this.gpaErrors.delete(mint);
     const rowsByMint = await this.tokenAccountsOfMints(programOf);
     for (const mint of programOf.keys()) {
       const rows = rowsByMint.get(mint);
       if (!rows) {
-        out.set(mint, { status: "failed", reason: "token accounts unreadable" });
+        const why = this.gpaErrors.get(mint);
+        out.set(mint, { status: "failed", reason: `token accounts unreadable${why ? ` (${why})` : ""}` });
         continue;
       }
       const accounts: LargestAccount[] = [];
@@ -943,6 +949,7 @@ export class HeliusClient {
           : { status: "failed", reason: "zero supply" },
       );
     }
+    for (const mint of programOf.keys()) this.gpaErrors.delete(mint);
     return out;
   }
 
@@ -1005,11 +1012,16 @@ export class HeliusClient {
   private async tokenAccountsOfMints(programOf: ReadonlyMap<string, string>): Promise<Map<string, GpaRow[]>> {
     const out = new Map<string, GpaRow[]>();
     if (programOf.size === 0) return out;
+    // A classic SPL Token account is always 165 bytes (Token-2022's grow with extensions), and some
+    // endpoints refuse an SPL Token program scan without that size filter.
     const config = (mint: string) => ({
       commitment: "confirmed",
       encoding: "base64",
       dataSlice: TOKEN_ACCOUNT_OWNER_AMOUNT_SLICE,
-      filters: [{ memcmp: { offset: 0, bytes: mint } }],
+      filters: [
+        ...(programOf.get(mint) === TOKEN_PROGRAM_IDS[0] ? [{ dataSize: SPL_TOKEN_ACCOUNT_SIZE }] : []),
+        { memcmp: { offset: 0, bytes: mint } },
+      ],
     });
 
     if (this.usingHelius && !this.gpaV2Unavailable) {
@@ -1046,7 +1058,10 @@ export class HeliusClient {
           }
           const accounts = res?.result?.accounts;
           if (!res || res.error || !Array.isArray(accounts)) {
-            if (res?.error) logger.warn("rpc error on getProgramAccountsV2", { mint, error: res.error });
+            if (res?.error) {
+              logger.warn("rpc error on getProgramAccountsV2", { mint, error: res.error });
+              this.gpaErrors.set(mint, `getProgramAccountsV2: ${res.error.message}`);
+            }
             rows.delete(mint);
             if (res?.error && page === 1) refused.add(mint);
             continue;
@@ -1107,7 +1122,10 @@ export class HeliusClient {
       const res = responses.get(`gpa-${mint}`);
       const rows = res?.result;
       if (!res || res.error || !Array.isArray(rows)) {
-        if (res?.error) logger.warn("rpc error on getProgramAccounts", { mint, error: res.error });
+        if (res?.error) {
+          logger.warn("rpc error on getProgramAccounts", { mint, error: res.error });
+          this.gpaErrors.set(mint, `getProgramAccounts: ${res.error.message}`);
+        } else if (!res) this.gpaErrors.set(mint, "getProgramAccounts: no answer");
         continue;
       }
       out.set(mint, rows);

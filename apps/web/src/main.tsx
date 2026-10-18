@@ -14,6 +14,7 @@ import {
 } from "./routes";
 import { startVersionWatch } from "./version";
 import { installTouchTips } from "./touchTips";
+import { captureInstallPrompt } from "./installApp";
 import "./fonts.css";
 import "./styles.css";
 
@@ -21,6 +22,8 @@ import "./styles.css";
 startVersionWatch();
 // Phones and tablets: a tap shows what a desktop shows on hover.
 installTouchTips();
+// Chrome offers its install dialog once, early: hold it for the "Install the app" buttons.
+captureInstallPrompt();
 
 // index.html has already started this screen's API calls (window.__boot); start its code too.
 const tab = tabFromHash();

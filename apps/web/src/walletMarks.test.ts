@@ -109,3 +109,27 @@ describe("chart mark settings", () => {
     ]);
   });
 });
+
+describe("labeled wallets' marks", () => {
+  const prefs = { on: true, kinds: ["kol", "funded"] as const, minSol: 0.25 };
+  it("marks a User Tracked wallet with the KOLs as T, and its funded wallets without KOL", () => {
+    const mine: MarkSource = {
+      wallet: "Mine111111111111111111111111111111111111111",
+      tags: ["tracked"],
+      tracked: "Whale",
+      trades: [[1_000, 1, 2]],
+    };
+    const funded: MarkSource = {
+      wallet: "Fund111111111111111111111111111111111111111",
+      tags: ["side"],
+      side: { kind: "funded", kolWallet: mine.wallet, kolName: "Whale", tracked: "tracked" },
+      trades: [[2_000, 1, 1]],
+    };
+    expect(kindsOf(mine)).toEqual(["kol"]);
+    const marks = walletMarks([mine, funded], { ...prefs, kinds: [...prefs.kinds] });
+    expect(marks.map((m) => [m.letter, m.text])).toEqual([
+      ["T", "Whale (Tracked) bought 2.00 SOL"],
+      ["F", "Whale Funded Wallet Fund…1111 bought 1.00 SOL"],
+    ]);
+  });
+});

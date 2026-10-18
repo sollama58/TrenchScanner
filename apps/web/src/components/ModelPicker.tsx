@@ -3,6 +3,7 @@ import { put, type Leaderboard, type LeaderboardEntry } from "../api";
 import { invalidate } from "../cache";
 import { utcClock } from "../rates";
 import { bestReturnTitle, lastDayEnd } from "../tabs/modelShared";
+import { ExitPlanInfo } from "./ExitPlanInfo";
 
 /**
  * Saves the combined feed's settings (which models' calls it shows, and whether it shows model
@@ -243,7 +244,8 @@ export function ModelPicker({
               champion added when it isn&apos;t among them.{" "}
               <span className="mp-badge best">★ best 24h score</span> has the highest leaderboard score over
               the last 24h, with {minGraded} graded alerts in that window. Both are picked every{" "}
-              {Math.round((board.defaultRule?.refreshMinutes ?? 360) / 60)} hours (00, 06, 12 and 18 UTC).
+              {Math.round((board.defaultRule?.refreshMinutes ?? 360) / 60)} hours (00, 06, 12 and 18 UTC). Avg
+              return is each alert&apos;s return on the fixed <ExitPlanInfo text="exit plan" />, averaged.
             </p>
           )}
           {board.followBest === false && (

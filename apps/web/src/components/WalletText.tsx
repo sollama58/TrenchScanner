@@ -8,6 +8,7 @@ const SOURCE_TEXT = {
   pumpfun: "Pump.fun",
   fomo: "FOMO",
   exchange: "Exchange",
+  tracked: "User Tracked",
 } as const;
 
 /**
@@ -22,7 +23,7 @@ export function WalletText({ wallet, names }: { wallet: string | null | undefine
   return (
     <span
       className={`wallet-name src-${n.source}${isPumpfunName(n) ? " pumpfun-name" : ""}${isFomoName(n) ? " fomo-name" : ""}`}
-      title={`${SOURCE_TEXT[n.source]}: ${n.name} · ${wallet}`}
+      title={`${n.mine ? `Your label (${n.source === "kol" ? "KOL" : "User Tracked"})` : SOURCE_TEXT[n.source]}: ${n.name} · ${wallet}`}
     >
       {walletNameText(n)}
     </span>

@@ -26,6 +26,7 @@ import {
 import { ShareImageDialog } from "../components/ShareImageDialog";
 import { saveFeedSettings, toggledModels } from "../components/ModelPicker";
 import { CoverageMeter, bestCost, coverageView } from "../components/CoverageMeter";
+import { ExitPlanDetails, ExitPlanInfo } from "../components/ExitPlanInfo";
 import { BAND_TONE, ScoreBar } from "../components/ScoreBar";
 import { prefetch } from "../cache";
 import { CURVE_SLICES } from "../cutoffCurve";
@@ -407,14 +408,16 @@ function BaselineChart({
             {score ? (
               <>
                 Each model&apos;s composite score: how far it has proven itself toward the goal, 0 to 100,
-                from its 2x, 4x and 10x rates, average return, run size and catch. Its live alerts in the
-                window are pooled with its backtest, which counts for at most {board.scoring.livePivotCalls}{" "}
-                alerts. The line is where &quot;On target&quot; starts.
+                from its 2x, 4x and 10x rates, average return (on the <ExitPlanInfo text="exit plan" />
+                ), run size and catch. Its live alerts in the window are pooled with its backtest, which
+                counts for at most {board.scoring.livePivotCalls} alerts. The line is where &quot;On
+                target&quot; starts.
               </>
             ) : profit ? (
               <>
-                The average simulated return per alert, taking every alert with one fixed exit plan, next to
-                the same plan on a random pick from the moments the models choose from.
+                The average simulated return per alert, taking every alert with one fixed{" "}
+                <ExitPlanInfo text="exit plan" />, next to the same plan on a random pick from the moments the
+                models choose from.
               </>
             ) : caught ? (
               <>
@@ -1165,8 +1168,8 @@ function LeaderboardPanel({
               Ranked by <strong>vs filtered market</strong>: how much more often a model&apos;s alerts doubled
               than the average coin in the same hours, so models that started on different days compare
               fairly. The score runs from 0 to 100: 100 means a model&apos;s alerts have reliably hit the
-              goal. Profit is the simulated return from taking every alert with one fixed exit plan.{" "}
-              {RULE_NOTE}{" "}
+              goal. Profit is the simulated return from taking every alert with one fixed{" "}
+              <ExitPlanInfo text="exit plan" />. {RULE_NOTE}{" "}
               {guest ? (
                 <>
                   Connect a wallet to pick which models&apos; alerts you get with <strong>In feed</strong>.
@@ -1206,7 +1209,10 @@ function LeaderboardPanel({
                 #
               </th>
               <th>Model</th>
-              <th title="How far the model has proven itself toward the goal, 0-100">Score</th>
+              <th title="How far the model has proven itself toward the goal, 0-100, average return on the exit plan included">
+                Score
+                <ExitPlanInfo />
+              </th>
               <th className="r">{detailed ? "Live alerts" : "Alerts"}</th>
               <th className="r">{detailed ? "2x" : "Doubled"}</th>
               <th
@@ -1235,6 +1241,7 @@ function LeaderboardPanel({
               )}
               <th className="r" title="Average simulated return per live alert under the fixed exit plan">
                 Avg profit
+                <ExitPlanInfo />
               </th>
               {detailed && (
                 <>
@@ -1656,37 +1663,14 @@ function ProfitGuide({ board }: { board: Leaderboard }) {
           lower from one whose misses fall 50%. The profit columns put a return on every graded alert by
           running it through one fixed plan, the same for every model:
         </p>
+        <ExitPlanDetails />
         <p className="small">
-          <strong>
-            {board.exitPlan ??
-              "Enter at the alert price, sell 35% at 2x, sell 30% at 4x, sell 25% at 10x, from the first sale, let what is still held ride with a trailing exit 40% off its high, out at 3 hours, stop out at -50% before the first sale, and close a trade that never sold at 30 minutes."}
-          </strong>
+          <strong>Avg profit</strong> is the average return per graded live alert.{" "}
+          <strong>Total profit</strong> adds them up in stakes: staking the same amount on every alert, +3.0
+          stakes means the model&apos;s alerts made three times that amount over the window, after the losers.
+          Alerts from 3 to 17 October are re-scored under this plan from each coin&apos;s own trades; ones the
+          trades can&apos;t cover, and older alerts, keep the earlier plan&apos;s return.
         </p>
-        <ol className="steps small">
-          <li>
-            <strong>The entry is the one the hit rates use:</strong> the price the token was at when it was
-            detected and alerted.
-          </li>
-          <li>
-            <strong>Some worked examples.</strong> One that runs to 5x and then trails out at 3x returns +195%
-            (35% sold at 2x, 30% at 4x, the rest at 3x). One that doubles and then falls straight back returns
-            +48% (the trail sells the rest at 1.2x). One that drops to the stop first returns -50%. One that
-            ends its 30 minutes 20% up without reaching 2x returns +20%.
-          </li>
-          <li>
-            <strong>Avg profit</strong> is the average return per graded live alert.{" "}
-            <strong>Total profit</strong> adds them up in stakes: staking the same amount on every alert, +3.0
-            stakes means the model's alerts made three times that amount over the window, after the losers.
-          </li>
-          <li>
-            <strong>It is a simulation, not a promise.</strong> Prices are checked about once a minute. The
-            sales at 2x, 4x and 10x and the -50% stop are assumed to fill at the level itself; in a fast dump
-            a real stop can fill lower. The trailing exit books the price actually seen under its level, since
-            a trail fires on a sharp drop by construction. Alerts whose last price is unknown are left out
-            rather than guessed. Alerts from 3 to 17 October are re-scored under this plan from each coin's
-            own trades; ones the trades can't cover, and older alerts, keep the earlier plan's return.
-          </li>
-        </ol>
         {example && live && (
           <p className="muted small score-example">
             <strong>Example, {example.name}:</strong> {live.simCalls} graded live alert

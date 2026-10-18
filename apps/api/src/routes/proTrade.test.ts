@@ -297,13 +297,17 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
         },
       ],
     });
+    // The first reader fails, so the backup's read is the scan.
     await refreshProHolders(
-      {
-        getTopHoldersBatch: async (mints) =>
-          new Map(
-            mints.map((m) => [m, { status: "found", holders: [{ owner: HOLDER }, { owner: NEWBIE }] }]),
-          ),
-      },
+      [
+        { getTopHoldersBatch: async (mints) => new Map(mints.map((m) => [m, { status: "failed" }])) },
+        {
+          getTopHoldersBatch: async (mints) =>
+            new Map(
+              mints.map((m) => [m, { status: "found", holders: [{ owner: HOLDER }, { owner: NEWBIE }] }]),
+            ),
+        },
+      ],
       new Date(now),
     );
     resetProHolderCacheForTests();
@@ -364,6 +368,16 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
 
   it("changes no one's standing when a scan fails", async () => {
     await expect(refreshProHolders({ getTopHoldersBatch: async () => new Map() })).rejects.toThrow();
+    // Each reader's reason, in order.
+    await expect(
+      refreshProHolders([
+        {
+          getTopHoldersBatch: async (mints) =>
+            new Map(mints.map((m) => [m, { status: "failed", reason: "token accounts unreadable" }])),
+        },
+        { getTopHoldersBatch: async () => new Map() },
+      ]),
+    ).rejects.toThrow("(token accounts unreadable; no answer)");
     resetProHolderCacheForTests();
     expect(await me(HOLDER)).toMatchObject({ isPro: true, proMode: { source: "holder" } });
   });

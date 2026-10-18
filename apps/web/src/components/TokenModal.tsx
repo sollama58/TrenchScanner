@@ -144,7 +144,7 @@ interface TokenFirstMinutes {
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
 interface FlaggedWallet {
   wallet: string;
-  tags: ("risky" | "dumper" | "linked" | "creator" | "kol" | "winner" | "side")[];
+  tags: ("risky" | "dumper" | "linked" | "creator" | "kol" | "winner" | "side" | "tracked")[];
   score: number | null;
   dumps: number | null;
   coins: number | null;
@@ -154,7 +154,15 @@ interface FlaggedWallet {
   /** A KOL's Known Side: the KOL's main wallet (`kol` is then the KOL's name). */
   knownSideOf?: string;
   /** A KOL's funded wallet or Probable Side (tag "side"). Absent from older API builds. */
-  side?: { kind: "funded" | "probable"; kolWallet: string; kolName: string | null };
+  side?: {
+    kind: "funded" | "probable";
+    kolWallet: string;
+    kolName: string | null;
+    /** A tie to a wallet the reader labeled: its kind. */
+    tracked?: "kol" | "tracked";
+  };
+  /** Tagged "tracked": the name the reader gave it as a User Tracked wallet. */
+  tracked?: string;
   solIn: number;
   solOut: number;
   heldPct: number | null;
@@ -165,7 +173,7 @@ interface FlaggedWallet {
 function kindOf(w: FlaggedWallet): MarkerKind {
   if (w.tags.includes("creator")) return "dev";
   if (w.tags.includes("risky") || w.tags.includes("dumper")) return "risky";
-  if (w.tags.includes("kol") || w.tags.includes("side")) return "kol";
+  if (w.tags.includes("kol") || w.tags.includes("side") || w.tags.includes("tracked")) return "kol";
   if (w.tags.includes("winner")) return "winner";
   return "linked";
 }
@@ -1986,6 +1994,7 @@ const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: stri
   kol: { text: "KOL", tone: "kol" },
   winner: { text: "Winner", tone: "winner" },
   side: { text: "KOL side", tone: "side" },
+  tracked: { text: "Tracked", tone: "kol" },
 };
 
 /** GET /tokens/:mint/stonk-fees (api routes/tokens.ts). */
@@ -2103,14 +2112,16 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                           }
                         >
                           {t === "side" && w.side
-                            ? `${w.side.kolName ?? "KOL"} ${w.side.kind === "funded" ? "KOL Funded Wallet" : "Probable Side"}`
-                            : t === "kol" && w.knownSideOf
-                              ? names[w.wallet]?.source === "kol-side" || !w.kol
-                                ? "Known Side"
-                                : `${w.kol} Known Side`
-                              : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
-                                ? `KOL: ${w.kol}`
-                                : TAG_TEXT[t].text}
+                            ? `${w.side.kolName ?? "KOL"} ${w.side.kind === "funded" ? (w.side.tracked === "tracked" ? "Funded Wallet" : "KOL Funded Wallet") : "Probable Side"}`
+                            : t === "tracked" && w.tracked && names[w.wallet]?.name !== w.tracked
+                              ? `Tracked: ${w.tracked}`
+                              : t === "kol" && w.knownSideOf
+                                ? names[w.wallet]?.source === "kol-side" || !w.kol
+                                  ? "Known Side"
+                                  : `${w.kol} Known Side`
+                                : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
+                                  ? `KOL: ${w.kol}`
+                                  : TAG_TEXT[t].text}
                         </span>
                       ))}
                     </span>

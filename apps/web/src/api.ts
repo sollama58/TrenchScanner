@@ -1656,6 +1656,19 @@ export interface NarrativeNoteReadiness {
   windowDays: number;
 }
 
+/**
+ * The fixed exit plan every simulated return is graded on (GET /config/exit-plan, from EXIT_PLAN in
+ * packages/core/src/curation/profitSim.ts). Percents are whole: sellPct 35 is 35% of the position.
+ */
+export interface ExitPlanView {
+  summary: string;
+  takeProfits: { multiple: number; sellPct: number }[];
+  trail: { fromMultiple: number; offHighPct: number }[];
+  trailMaxHoldMinutes: number;
+  stopPct: number;
+  maxHoldMinutes: number;
+}
+
 /** The composite score's current weights (GET /config/score). */
 export interface ScoreWeightsInfo {
   weights: { momentum: number; freshness: number; holderQuality: number; narrative: number };
