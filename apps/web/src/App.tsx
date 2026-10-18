@@ -550,7 +550,7 @@ export function App() {
                 {tab === "stream" && <StreamView isAdmin={isAdmin} />}
                 {tab === "model" && <ModelTab />}
                 {tab === "lighthouse" && <LighthouseTab />}
-                {tab === "filters" && <FiltersTab goTo={goTo} />}
+                {tab === "filters" && <FiltersTab />}
                 {tab === "utilities" && <UtilitiesTab walletAddress={session.user.walletAddress} />}
                 {tab === "portfolio" && <PortfolioTab goTo={goTo} />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
