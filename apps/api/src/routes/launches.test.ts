@@ -30,7 +30,7 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
   const token = async (
     name: string,
     ago: number,
-    snaps: { at: number; mcap: number; passed: boolean; source?: string }[],
+    snaps: { at: number; mcap: number; passed: boolean; source?: string; graduated?: boolean }[],
   ) => {
     const now = Date.now();
     const t = await prisma.token.create({
@@ -45,6 +45,7 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
           marketCapUsd: s.mcap,
           rugScreenPassed: s.passed,
           source: s.source ?? "scan",
+          graduated: s.graduated ?? null,
         },
       });
     ids[name] = t.id;
@@ -77,6 +78,11 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
     await token("under", 60_000, [{ at: 60_000, mcap: 8_000, passed: true }]);
     // A fast-pass row restates a verdict; it doesn't make one.
     await token("fastOnly", 60_000, [{ at: 60_000, mcap: 20_000, passed: true, source: "fast" }]);
+    // Passed on its curve, then graduated and passed again: on the graduated list from that pass.
+    await token("grad", 300_000, [
+      { at: 300_000, mcap: 30_000, passed: true, graduated: false },
+      { at: 50_000, mcap: 90_000, passed: true, graduated: true },
+    ]);
     app = await buildServer(env);
   });
 
@@ -105,7 +111,7 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
       }[];
     };
     const mine = body.launches.filter((c) => Object.values(ids).includes(c.tokenId));
-    expect(mine.map((c) => c.tokenId)).toEqual([ids.newer, ids.older]);
+    expect(mine.map((c) => c.tokenId)).toEqual([ids.newer, ids.older, ids.grad]);
     // The card's Alert figure is the market cap it passed at; Now comes from the newest scan.
     expect(mine[1]).toMatchObject({
       kind: "stream",
@@ -160,6 +166,19 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
     expect(found.launches.map((c) => c.tokenId)).toEqual([ids.newer]);
     // A % in the text is a character, not a wildcard.
     expect(((await get("/launches?q=%25%25")).json() as { launches: unknown[] }).launches).toEqual([]);
+  });
+
+  it("lists only graduated tokens, from their first pass after graduating", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/launches?graduated=1",
+      cookies: { [SESSION_COOKIE_NAME]: cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { launches: { tokenId: string; snapshot: { marketCapUsd: number } }[] };
+    const mine = body.launches.filter((c) => Object.values(ids).includes(c.tokenId));
+    expect(mine.map((c) => c.tokenId)).toEqual([ids.grad]);
+    expect(mine[0]?.snapshot.marketCapUsd).toBe(90_000);
   });
 
   it("is behind sign-in like the feeds", async () => {
