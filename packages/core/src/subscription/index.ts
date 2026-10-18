@@ -5,3 +5,4 @@ export * from "./solanaRpc.js";
 export * from "./credits.js";
 export * from "./freeAccess.js";
 export * from "./proHolders.js";
+export * from "./asdfPrice.js";

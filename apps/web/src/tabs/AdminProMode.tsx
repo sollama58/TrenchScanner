@@ -250,3 +250,75 @@ export function ProModeAdmin() {
     </Panel>
   );
 }
+
+/** Mirrors apps/api/src/routes/adminProMode.ts GET /admin/pro-mode/sacrifice. */
+interface SacrificeReport {
+  price: {
+    asdfPerSol: number | null;
+    refusal: "few_samples" | "stale" | "source_down" | "sources_apart" | null;
+    shortMedian: number | null;
+    longMedian: number | null;
+    spot: Record<"quote" | "price", { asdfPerSol: number; at: string } | null>;
+    samples: number;
+    newestAt: string | null;
+  };
+}
+
+const PRICE_REFUSAL: Record<NonNullable<SacrificeReport["price"]["refusal"]>, string> = {
+  few_samples: "fewer than 10 samples in the last 5 minutes",
+  stale: "no sample in the last minute",
+  source_down: "one source has no sample in the last minute",
+  sources_apart: "the two sources are more than 5% apart",
+};
+
+const asdf = (v: number | null) =>
+  v === null ? "–" : `${v.toLocaleString("en-US", { maximumFractionDigits: 0 })} ASDF`;
+
+/**
+ * The Sacrifice (ASDF fee plan): the 0.2% fee on Pro trades below the free cut-off, paid from
+ * burned credits at a smoothed ASDF price. Shows that price and whether its guards pass.
+ */
+export function SacrificeAdmin() {
+  const q = usePolling<SacrificeReport>("/admin/pro-mode/sacrifice", 30_000);
+  return (
+    <Panel
+      title="Sacrifice price"
+      note="ASDF per SOL the Sacrifice is charged at: the higher of the 5-minute and 24-hour medians (the lower ASDF price), sampled every 15 seconds from a Jupiter quote and the price API."
+    >
+      <Load q={q}>
+        {({ price: p }) => (
+          <Table
+            head={["Reading", "ASDF per SOL"]}
+            rows={[
+              [
+                "Charged at",
+                p.asdfPerSol !== null ? (
+                  <span className="num">{asdf(p.asdfPerSol)}</span>
+                ) : (
+                  <Tag tone="bad">refused: {p.refusal ? PRICE_REFUSAL[p.refusal] : "no price"}</Tag>
+                ),
+              ],
+              ["5-minute median", <span className="num">{asdf(p.shortMedian)}</span>],
+              ["24-hour median", <span className="num">{asdf(p.longMedian)}</span>],
+              [
+                "Spot, Jupiter quote of 1 SOL",
+                <span className="num">
+                  {asdf(p.spot.quote?.asdfPerSol ?? null)}
+                  {p.spot.quote ? <> · {when(p.spot.quote.at)}</> : null}
+                </span>,
+              ],
+              [
+                "Spot, price API ratio",
+                <span className="num">
+                  {asdf(p.spot.price?.asdfPerSol ?? null)}
+                  {p.spot.price ? <> · {when(p.spot.price.at)}</> : null}
+                </span>,
+              ],
+              ["Samples, last 5 minutes", <span className="num">{p.samples}</span>],
+            ]}
+          />
+        )}
+      </Load>
+    </Panel>
+  );
+}

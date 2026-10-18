@@ -32,7 +32,8 @@ export type HeartbeatJob =
   | "telegram-dispatch"
   | "pipeline-watch"
   | "trading-bot"
-  | "paper-trading";
+  | "paper-trading"
+  | "asdf-price";
 
 /**
  * Which worker process runs a job. The worker is deployed as two processes (render.yaml): the
@@ -55,6 +56,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "free-access": "scanner",
   // The top $ASDFASDFA holders' Pro Mode: a Helius read of the mint's accounts (the scanner has the key).
   "pro-holders": "scanner",
+  // The Sacrifice's ASDF price samples (asdfPrice.ts), beside the holder scan it prices for.
+  "asdf-price": "scanner",
   "match-peaks": "scanner",
   "telegram-dispatch": "scanner",
   // Holds the Telegram bot token and the admin wallets it notifies (the trainer has neither).

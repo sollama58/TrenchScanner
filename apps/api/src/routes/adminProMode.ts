@@ -5,6 +5,7 @@ import {
   isWalletAddress,
   prisma,
   proHolderSummary,
+  smoothedAsdfPerSol,
   SUBSCRIPTION_MINT_DECIMALS,
   type Env,
   walletTag,
@@ -26,6 +27,13 @@ const grantSchema = z.object({
 });
 
 export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { env: Env }) {
+  // The Sacrifice's ASDF price on Admin > Pro Mode (asdfPrice.ts): the smoothed price, each
+  // source's spot price and whether the guards pass.
+  app.get("/pro-mode/sacrifice", async () => {
+    const price = await smoothedAsdfPerSol();
+    return { price };
+  });
+
   app.get("/pro-mode", async () => {
     const [grants, holders] = await Promise.all([
       prisma.proModeGrant.findMany({ orderBy: { createdAt: "desc" } }),

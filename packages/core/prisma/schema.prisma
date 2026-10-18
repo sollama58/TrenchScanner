@@ -3408,3 +3408,18 @@ model PeakWatch {
 
   @@index([nextCheckAt])
 }
+
+/// The $ASDFASDFA price the Sacrifice is charged at (ASDF fee plan, Build guide step 2): the worker
+/// samples ASDF per SOL every 15 seconds from a Jupiter quote of 1 SOL ("quote") and the Price
+/// API ratio ("price", DexScreener backing it up). asdfPrice.ts smoothedAsdfPerSol takes the
+/// higher of the 5-minute and 24-hour medians. Pruned after 25 hours.
+model AsdfPriceSample {
+  id         BigInt   @id @default(autoincrement())
+  at         DateTime
+  /// "quote" | "price"
+  source     String
+  /// Whole ASDF one SOL buys.
+  asdfPerSol Float
+
+  @@index([at])
+}
