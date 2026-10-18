@@ -63,6 +63,10 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   hideBelowMcap: false,
   hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],
+  // The token chart's labeled-wallet trades (user ask 2026-10-18): every kind, 0.5 SOL and up.
+  chartMarks: true,
+  chartMarkKinds: ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"],
+  chartMarkMinSol: 0.5,
   // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own), the header's
   // "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).
@@ -79,6 +83,9 @@ export const QUICK_LINK_SITES: { id: QuickLink; label: string; href: (mint: stri
   { id: "axiom", label: "Axiom", href: (m) => `https://axiom.trade/t/${m}` },
   { id: "gmgn", label: "GMGN", href: (m) => `https://gmgn.ai/sol/token/${m}` },
 ];
+/** The token chart's labeled-wallet trade size bounds, in SOL (apps/api/src/feedAppearance.ts has the same). */
+export const CHART_MARK_MIN_SOL = 0.25;
+export const CHART_MARK_MAX_SOL = 1_000;
 /** The Live feed's "hide below this market cap" slider, in USD (apps/api/src/feedAppearance.ts has the same). */
 export const HIDE_BELOW_MCAP = { min: 3_000, max: 20_000, step: 1_000 } as const;
 
@@ -301,6 +308,14 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
           ),
         ]
       : d.quickLinks,
+    chartMarks: typeof r.chartMarks === "boolean" ? r.chartMarks : d.chartMarks,
+    chartMarkKinds: Array.isArray(r.chartMarkKinds)
+      ? d.chartMarkKinds.filter((k) => (r.chartMarkKinds as unknown[]).includes(k))
+      : d.chartMarkKinds,
+    chartMarkMinSol:
+      typeof r.chartMarkMinSol === "number" && Number.isFinite(r.chartMarkMinSol)
+        ? Math.min(CHART_MARK_MAX_SOL, Math.max(CHART_MARK_MIN_SOL, r.chartMarkMinSol))
+        : d.chartMarkMinSol,
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
       : d.hidden,
@@ -329,6 +344,9 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     hideSafetyPill,
     hideBelowMcap,
     hideBelowMcapUsd,
+    chartMarks,
+    chartMarkKinds,
+    chartMarkMinSol,
   } = current;
   return normalizeAppearance({
     ...DEFAULT_APPEARANCE,
@@ -352,6 +370,9 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     hideSafetyPill,
     hideBelowMcap,
     hideBelowMcapUsd,
+    chartMarks,
+    chartMarkKinds,
+    chartMarkMinSol,
   });
 }
 

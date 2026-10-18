@@ -15,6 +15,7 @@ import {
 import { cachedGet } from "../cache";
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useId,
@@ -64,6 +65,9 @@ import {
   SniperTile,
   WalletStat,
 } from "./AlertCard";
+import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
+import { CustomizeDrawer } from "./CustomizeDrawer";
+import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
 import { PriceChart, type ChartEvent, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { graceLeftText, summarizePosition, usePosition, useProState } from "../proTrade";
@@ -104,6 +108,7 @@ import {
   RobotIcon,
   SageIcon,
   ShieldIcon,
+  SlidersIcon,
 } from "./Icons";
 import { safetyChecks, safetyVerdict, type SafetyVerdict } from "../safetyScreen";
 
@@ -134,7 +139,7 @@ interface TokenFirstMinutes {
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
 interface FlaggedWallet {
   wallet: string;
-  tags: ("risky" | "dumper" | "linked" | "creator" | "kol" | "winner")[];
+  tags: ("risky" | "dumper" | "linked" | "creator" | "kol" | "winner" | "side")[];
   score: number | null;
   dumps: number | null;
   coins: number | null;
@@ -143,6 +148,8 @@ interface FlaggedWallet {
   kol?: string | null;
   /** A KOL's Known Side: the KOL's main wallet (`kol` is then the KOL's name). */
   knownSideOf?: string;
+  /** A KOL's funded wallet or Probable Side (tag "side"). Absent from older API builds. */
+  side?: { kind: "funded" | "probable"; kolWallet: string; kolName: string | null };
   solIn: number;
   solOut: number;
   heldPct: number | null;
@@ -153,7 +160,7 @@ interface FlaggedWallet {
 function kindOf(w: FlaggedWallet): MarkerKind {
   if (w.tags.includes("creator")) return "dev";
   if (w.tags.includes("risky") || w.tags.includes("dumper")) return "risky";
-  if (w.tags.includes("kol")) return "kol";
+  if (w.tags.includes("kol") || w.tags.includes("side")) return "kol";
   if (w.tags.includes("winner")) return "winner";
   return "linked";
 }
@@ -1402,6 +1409,19 @@ export function ChartCard({
   const young = firstTradeAt !== null && Date.now() - firstTradeAt <= FIRST_VIEW_MAX_AGE_MS;
   const shownRange: Range = range === "first" && !young ? "all" : range;
 
+  // Labeled wallets' trades on the line (user ask 2026-10-18), as set in Customize › Chart wallet
+  // trades, which the header's link opens over the token view.
+  const look = useAppearance();
+  const markPrefs = useMemo(() => markPrefsOf(look), [look]);
+  const [customizing, setCustomizing] = useState(false);
+  const closeCustomize = useCallback(() => setCustomizing(false), []);
+  const labeled = data?.wallets ?? [];
+  // The trader's own wallet is drawn as their own arrows, whatever its labels.
+  const marks = useMemo(
+    () => walletMarks(data?.wallets ?? [], markPrefs, new Set(pro ? [pro] : [])),
+    [data?.wallets, markPrefs, pro],
+  );
+
   // The view's window over the minute data, before the finer reads that fill it in.
   const bounds = useMemo(
     () => (data ? viewBounds(data, shownRange, alertAt) : null),
@@ -1566,12 +1586,26 @@ export function ChartCard({
               </button>
             ))}
           </span>
+          {labeled.length > 0 && (
+            <button
+              type="button"
+              className={`cm-link${customizing ? " on" : ""}`}
+              aria-expanded={customizing}
+              title="Choose which labeled wallets' trades the chart marks (Customize › Chart wallet trades)"
+              onClick={() => setCustomizing((o) => !o)}
+            >
+              <SlidersIcon size={12} /> Wallet trades
+              <span className="num">{markPrefs.on ? marks.length : "off"}</span>
+            </button>
+          )}
         </h4>
+        <CustomizeDrawer open={customizing} onClose={closeCustomize} section={CHART_MARKS_SECTION} nested />
         {shownRange === "first" && (
           <FirstMinutesChart
             mint={card.token.mintAddress}
             label={tokenLabel(card.token)}
             events={events}
+            marks={marks}
             height={height}
           />
         )}
@@ -1603,6 +1637,7 @@ export function ChartCard({
               live={view.live}
               now={view.latest}
               scans={view.scans}
+              marks={marks}
               height={height}
               trades={chartTrades}
               entry={entry}
@@ -1719,11 +1754,13 @@ function FirstMinutesChart({
   mint,
   label,
   events,
+  marks,
   height,
 }: {
   mint: string;
   label: string;
   events: ChartEvent[];
+  marks: WalletMark[];
   height: number;
 }) {
   const api = useTokenApi(mint);
@@ -1786,6 +1823,7 @@ function FirstMinutesChart({
         candles={view.candles}
         live={data!.live}
         origin={view.start}
+        marks={marks}
         height={height}
         ariaLabel={`${label} market cap in its first 15 minutes, from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
       />
@@ -1803,6 +1841,7 @@ const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: stri
   linked: { text: "Linked", tone: "linked" },
   kol: { text: "KOL", tone: "kol" },
   winner: { text: "Winner", tone: "winner" },
+  side: { text: "KOL side", tone: "side" },
 };
 
 /** GET /tokens/:mint/stonk-fees (api routes/tokens.ts). */
@@ -1919,13 +1958,15 @@ function WalletsCard({ wallets }: { wallets: FlaggedWallet[] }) {
                                     : undefined
                           }
                         >
-                          {t === "kol" && w.knownSideOf
-                            ? names[w.wallet]?.source === "kol-side" || !w.kol
-                              ? "Known Side"
-                              : `${w.kol} Known Side`
-                            : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
-                              ? `KOL: ${w.kol}`
-                              : TAG_TEXT[t].text}
+                          {t === "side" && w.side
+                            ? `${w.side.kolName ?? "KOL"} ${w.side.kind === "funded" ? "KOL Funded Wallet" : "Probable Side"}`
+                            : t === "kol" && w.knownSideOf
+                              ? names[w.wallet]?.source === "kol-side" || !w.kol
+                                ? "Known Side"
+                                : `${w.kol} Known Side`
+                              : t === "kol" && w.kol && names[w.wallet]?.name !== w.kol
+                                ? `KOL: ${w.kol}`
+                                : TAG_TEXT[t].text}
                         </span>
                       ))}
                     </span>

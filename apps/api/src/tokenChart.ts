@@ -158,7 +158,15 @@ export function firstMinutes(candles: readonly McapCandle[], startAt: number | n
 }
 
 /** Why a wallet's trades are marked on the chart. */
-export type WalletTag = "risky" | "dumper" | "linked" | "creator" | "kol" | "winner";
+export type WalletTag = "risky" | "dumper" | "linked" | "creator" | "kol" | "winner" | "side";
+
+/** A KOL side label short of a Known Side (possibleSides.ts): a wallet a KOL funded, or a Probable Side. */
+export interface SideLabel {
+  kind: "funded" | "probable";
+  /** The KOL's main wallet, and its roster name (null when it has none). */
+  kolWallet: string;
+  kolName: string | null;
+}
 
 /** One marked trade: [time in ms, 1 buy / -1 sell, SOL (null when only the time is known)]. */
 export type MarkedTrade = [atMs: number, side: 1 | -1, sol: number | null];
@@ -179,6 +187,8 @@ export interface MarkedWallet {
   kol?: string | null;
   /** A KOL's Known Side (KolWallet.mainWallet): the KOL's main wallet. Tagged "kol", named as a side. */
   knownSideOf?: string;
+  /** Tagged "side": the KOL side label it carries (a funded wallet or a Probable Side). */
+  side?: SideLabel;
   solIn: number;
   solOut: number;
   /** % of supply it held at the call. */
@@ -221,7 +231,8 @@ export const MAX_MARKED_TRADES = 2_000;
  * Exported for tests. The wallets in a coin's trade tape worth marking on its chart: a risk score
  * of RISKY_WALLET_SCORE or more, a known dumper or a winner (the labels the wallet book carries,
  * walletLabels in core), a member of one of the coin's linked clusters, the coin's creator, or a
- * known KOL (`kols`: wallet to name; `knownSides`: a Known Side to its KOL's main wallet). Riskiest first (creator, KOL and linked wallets ahead of
+ * known KOL (`kols`: wallet to name; `knownSides`: a Known Side to its KOL's main wallet), or a KOL's
+ * funded wallet or Probable Side (`sides`). Riskiest first (creator, KOL and linked wallets ahead of
  * unscored ones), capped at MAX_MARKED_WALLETS and MAX_MARKED_TRADES.
  */
 export function markedWallets(
@@ -231,6 +242,7 @@ export function markedWallets(
   opts: MarkOpts,
   kols: ReadonlyMap<string, string | null> = new Map(),
   knownSides: ReadonlyMap<string, string> = new Map(),
+  sides: ReadonlyMap<string, SideLabel> = new Map(),
 ): MarkedWallet[] {
   const funderOf = new Map<string, string>();
   for (const c of clusters) for (const w of c.wallets) funderOf.set(w.wallet, c.funder);
@@ -246,6 +258,9 @@ export function markedWallets(
     if (funder) tags.push("linked");
     const kol = kols.has(r.wallet) ? (kols.get(r.wallet) ?? "") : null;
     if (kol !== null) tags.push("kol");
+    // A KOL (or Known Side) is already named as one; a side label only adds to other wallets.
+    const side = kol === null ? sides.get(r.wallet) : undefined;
+    if (side) tags.push("side");
     if (tags.length === 0) continue;
     const trades = storedTrades(r.trades) ?? firstTrades(r);
     if (trades.length === 0) continue;
@@ -258,6 +273,7 @@ export function markedWallets(
       funder,
       kol,
       ...(kol !== null && knownSides.has(r.wallet) ? { knownSideOf: knownSides.get(r.wallet) } : {}),
+      ...(side ? { side } : {}),
       solIn: r.solIn,
       solOut: r.solOut,
       heldPct: r.heldPctAtAnchor,
@@ -271,7 +287,14 @@ export function markedWallets(
 function rankAndCap(wallets: MarkedWallet[]): MarkedWallet[] {
   const weight = (w: MarkedWallet) =>
     (w.tags.includes("creator") ? 1_000 : 0) +
-    (w.score ?? (w.tags.includes("kol") || w.tags.includes("winner") ? 60 : w.funder ? 50 : 0)) +
+    (w.score ??
+      (w.tags.includes("kol") || w.tags.includes("winner")
+        ? 60
+        : w.tags.includes("side")
+          ? 55
+          : w.funder
+            ? 50
+            : 0)) +
     w.solIn / 1_000;
   wallets.sort((a, b) => weight(b) - weight(a));
   const kept = wallets.slice(0, MAX_MARKED_WALLETS);

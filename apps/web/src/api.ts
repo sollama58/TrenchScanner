@@ -1534,6 +1534,8 @@ export type CardField =
 
 /** Trading sites a card can link the token to (the API's QUICK_LINKS). */
 export type QuickLink = "terminal" | "axiom" | "gmgn";
+/** Kinds of labeled wallet the token chart can mark (apps/api/src/feedAppearance.ts CHART_MARK_KINDS). */
+export type ChartMarkKind = "kol" | "known" | "funded" | "probable" | "dev" | "risky" | "winner" | "linked";
 
 /** How the Live feed looks for this user (apps/api/src/feedAppearance.ts). */
 export interface FeedAppearance {
@@ -1625,6 +1627,13 @@ export interface FeedAppearance {
   hideBelowMcapUsd: number;
   /** Trading sites each card links to; Padre's Trading Terminal by default. */
   quickLinks: QuickLink[];
+  /**
+   * The token chart marks labeled wallets' trades (walletMarks.ts; absent from older API builds: on),
+   * of these kinds, of at least chartMarkMinSol SOL (never under 0.25).
+   */
+  chartMarks: boolean;
+  chartMarkKinds: ChartMarkKind[];
+  chartMarkMinSol: number;
   hidden: CardField[];
 }
 

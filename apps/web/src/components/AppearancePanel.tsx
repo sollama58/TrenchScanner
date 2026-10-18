@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { WalletMarksPicker } from "./WalletMarksPicker";
 import type { CardField, NarrativeNoteReadiness, QuickLink } from "../api";
 import {
   CARD_FIELD_GROUPS,
@@ -399,6 +400,7 @@ export function AppearanceControls() {
             </button>
           )}
         </div>
+        <WalletMarksPicker />
         <div className="field-group">
           <h4>Quick links</h4>
           {QUICK_LINK_SITES.map((l) => (
