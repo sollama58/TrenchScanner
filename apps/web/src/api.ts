@@ -163,6 +163,9 @@ export interface Token {
   lastFreshTop10WalletPct?: number | null;
   /** Where the coin's creator fee goes, from its TokenSage read; null when the read doesn't say. */
   creatorFee?: { destination: string; summary: string | null } | null;
+  /** The coin's own X and website links as found at discovery (https only); null when it has none. */
+  twitterUrl?: string | null;
+  websiteUrl?: string | null;
 }
 
 export interface Snapshot {
@@ -1524,6 +1527,7 @@ export type CardField =
   | "reasons"
   | "mint"
   | "links"
+  | "socials"
   | "sage"
   | "fees";
 

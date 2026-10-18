@@ -39,6 +39,7 @@ export const CARD_FIELDS = [
   "reasons",
   "mint",
   "links",
+  "socials",
   "sage",
   "fees",
 ] as const;
