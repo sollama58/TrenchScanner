@@ -60,3 +60,14 @@ ALTER TABLE "TwoFactorPasskey" ADD CONSTRAINT "TwoFactorPasskey_userId_fkey" FOR
 -- AddForeignKey
 ALTER TABLE "TwoFactorBackupCode" ADD CONSTRAINT "TwoFactorBackupCode_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
+
+-- CreateTable
+CREATE TABLE "TwoFactorSpentToken" (
+    "jti" TEXT NOT NULL,
+    "expiresAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "TwoFactorSpentToken_pkey" PRIMARY KEY ("jti")
+);
+
+-- CreateIndex
+CREATE INDEX "TwoFactorSpentToken_expiresAt_idx" ON "TwoFactorSpentToken"("expiresAt");

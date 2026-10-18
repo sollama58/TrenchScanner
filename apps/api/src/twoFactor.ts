@@ -210,14 +210,22 @@ async function read(env: Env, token: string, kind: string): Promise<Record<strin
   }
 }
 
-/** Tokens used once already (passkey challenges and sign-in tickets), until they expire. */
-const spent = new Map<string, number>();
-function spend(jti: unknown): boolean {
-  const now = Date.now();
-  for (const [k, until] of spent) if (until < now) spent.delete(k);
-  if (typeof jti !== "string" || spent.has(jti)) return false;
-  spent.set(jti, now + CHALLENGE_TTL_SECONDS * 1000 + 60_000);
-  return true;
+/**
+ * Marks a single-use token (a passkey challenge or a sign-in ticket) used. True only for the first
+ * use: the row's primary key makes a second insert fail, on any instance and across restarts.
+ */
+async function spend(jti: unknown): Promise<boolean> {
+  if (typeof jti !== "string" || jti.length > 64) return false;
+  const now = new Date();
+  await prisma.twoFactorSpentToken.deleteMany({ where: { expiresAt: { lt: now } } }).catch(() => undefined);
+  try {
+    await prisma.twoFactorSpentToken.create({
+      data: { jti, expiresAt: new Date(now.getTime() + CHALLENGE_TTL_SECONDS * 1000 + 60_000) },
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function issuePass(env: Env, userId: string, action: TwoFactorAction): Promise<string> {
@@ -238,10 +246,12 @@ export function issueSignInTicket(env: Env, userId: string, sessionVersion: numb
 
 export async function readSignInTicket(env: Env, ticket: string) {
   const claims = await read(env, ticket, "ticket");
-  return claims && typeof claims.sub === "string" ? { userId: claims.sub, jti: claims.jti } : null;
+  return claims && typeof claims.sub === "string" && typeof claims.sv === "number"
+    ? { userId: claims.sub, jti: claims.jti, sessionVersion: claims.sv }
+    : null;
 }
 
-export function spendTicket(jti: unknown): boolean {
+export function spendTicket(jti: unknown): Promise<boolean> {
   return spend(jti);
 }
 
@@ -330,7 +340,7 @@ export async function finishPasskeyRegistration(
 ): Promise<boolean> {
   const rp = relyingParty(env, origin);
   const claims = await read(env, token, "reg");
-  if (!rp || claims?.sub !== userId || !spend(claims.jti)) return false;
+  if (!rp || claims?.sub !== userId || !(await spend(claims.jti))) return false;
   let verified;
   try {
     verified = await verifyRegistrationResponse({
@@ -427,7 +437,6 @@ function fail(userId: string): void {
 /** Tests: forget failed attempts. */
 export function resetTwoFactorFailuresForTests(): void {
   failures.clear();
-  spent.clear();
 }
 
 export type CheckResult = { ok: true } | { ok: false; reason: string };
@@ -472,7 +481,7 @@ async function check(env: Env, userId: string, factor: SecondFactor, origin?: st
   if (factor.passkey) {
     const rp = relyingParty(env, origin);
     const claims = await read(env, factor.passkey.token, "auth");
-    if (!rp || claims?.sub !== userId || !spend(claims.jti)) return false;
+    if (!rp || claims?.sub !== userId || !(await spend(claims.jti))) return false;
     const passkey = await prisma.twoFactorPasskey.findUnique({
       where: { credentialId: factor.passkey.response.id },
     });

@@ -70,21 +70,30 @@ describe("withTwoFactor", () => {
 });
 
 describe("askBefore", () => {
-  it("asks for burns only when chosen, and for exports always once two-factor is on", async () => {
-    await expect(
-      askBefore("burn", { enabled: true, actions: ["sell"], buyOverLamports: null }),
-    ).resolves.toBeUndefined();
-    await expect(
-      askBefore("export", { enabled: false, actions: [], buyOverLamports: null }),
-    ).resolves.toBeUndefined();
-    expect(promptRequest()).toBeNull();
+  const state = (enabled: boolean, actions: string[]) =>
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => Response.json({ totp: true, passkeys: [] })),
+      vi.fn(async () => Response.json({ enabled, totp: true, passkeys: [], actions })),
     );
-    const asked = askBefore("export", { enabled: true, actions: [], buyOverLamports: null });
+
+  it("goes ahead without asking while two-factor is off, or for a burn the user didn't pick", async () => {
+    state(false, ["burn"]);
+    await expect(askBefore("export")).resolves.toBeUndefined();
+    state(true, ["sell"]);
+    await expect(askBefore("burn")).resolves.toBeUndefined();
+    expect(promptRequest()).toBeNull();
+  });
+
+  it("asks before exports always, and burns when picked, reading the choices fresh", async () => {
+    state(true, []);
+    const exporting = askBefore("export");
     await vi.waitFor(() => expect(promptRequest()).not.toBeNull());
     promptRequest()!.done(false);
-    await expect(asked).rejects.toBeInstanceOf(TwoFactorCancelled);
+    await expect(exporting).rejects.toBeInstanceOf(TwoFactorCancelled);
+    state(true, ["burn"]);
+    const burning = askBefore("burn");
+    await vi.waitFor(() => expect(promptRequest()).not.toBeNull());
+    promptRequest()!.done(false);
+    await expect(burning).rejects.toBeInstanceOf(TwoFactorCancelled);
   });
 });

@@ -179,19 +179,16 @@ export function postWithTwoFactor<T>(path: string, body?: unknown): Promise<T> {
   );
 }
 
-/** What the signed-in user's choices are, as /auth/me reports them. */
-export interface UserTwoFactor {
-  enabled: boolean;
-  actions: string[];
-  buyOverLamports: string | null;
-}
-
 /**
  * For the actions the API can't stop (burns, exports): asks here first when the user's choices
- * say so. Resolves when it may go ahead; rejects with TwoFactorCancelled when the user backs out.
+ * say so, read fresh from /auth/2fa (a choice just changed in Settings counts at once). Resolves
+ * when it may go ahead; rejects with TwoFactorCancelled when the user backs out.
  */
-export async function askBefore(action: "burn" | "export", tf: UserTwoFactor | undefined): Promise<void> {
-  if (!tf?.enabled) return;
-  if (action !== "export" && !tf.actions.includes(action)) return;
-  await passFor(action);
+export async function askBefore(action: "burn" | "export"): Promise<void> {
+  const state = await api<{ enabled: boolean; totp: boolean; passkeys: unknown[]; actions: string[] }>(
+    "/auth/2fa",
+  );
+  if (!state.enabled) return;
+  if (action !== "export" && !state.actions.includes(action)) return;
+  await passFor(action, { totp: state.totp, passkey: state.passkeys.length > 0 });
 }

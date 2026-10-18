@@ -244,7 +244,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
 
   /** Privy sign-in: on when PRIVY_APP_ID, its secret and its verification key are all set. */
   app.get("/privy/config", async () => {
-    if (!privyEnabled(opts.env)) return { enabled: false, accessSwap: opts.env.PRO_TRADING_PUBLIC };
+    if (!privyEnabled(opts.env)) return { enabled: false, accessSwap: accessSwapOpen(opts.env) };
     const accounts = await prisma.user.count({ where: { privyUserId: { not: null } } });
     return {
       enabled: true,
@@ -253,7 +253,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
       // Privy counts everyone who logs in there as a monthly user, even one we then turn away.
       signupsOpen: accounts < opts.env.PRIVY_SIGNUP_CAP,
       // The in-app $ASDFASDFA buy (routes/proTrade.ts), open with Pro trading for everyone.
-      accessSwap: opts.env.PRO_TRADING_PUBLIC,
+      accessSwap: accessSwapOpen(opts.env),
     };
   });
 
@@ -302,6 +302,10 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
         created ? "privy account created" : "privy account found",
       );
     }
+    // Checked at every sign-in, not only the first: a wallet made admin later still signs in with
+    // its own key, never through Privy.
+    if (adminWalletSet(opts.env).has(user.walletAddress))
+      return reply.code(403).send({ error: "Sign in with your wallet." });
     return finishSignIn(request, reply, user, created);
   });
 
@@ -327,10 +331,12 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     const result = await checkSecondFactor(opts.env, ticket.userId, parsed.data, request.headers.origin);
     if (!result.ok) return reply.code(401).send({ error: result.reason });
     // The ticket works once, and only after a factor matched (a wrong code can be retried).
-    if (!spendTicket(ticket.jti))
+    if (!(await spendTicket(ticket.jti)))
       return reply.code(401).send({ error: "That sign-in has expired. Start again." });
     const user = await prisma.user.findUnique({ where: { id: ticket.userId } });
-    if (!user) return reply.code(401).send({ error: "That sign-in has expired. Start again." });
+    // A sign-out everywhere since the ticket was given (sessionVersion moved on) ends it too.
+    if (!user || user.sessionVersion !== ticket.sessionVersion)
+      return reply.code(401).send({ error: "That sign-in has expired. Start again." });
     reply.setCookie(KNOWN_DEVICE_COOKIE, await issueKnownDevice(opts.env, user.id), {
       httpOnly: true,
       ...sessionCookieAttrs(request.hostname, opts.env.PUBLIC_APP_DOMAIN, request.protocol),
@@ -462,6 +468,11 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
   });
 }
 
+/** The in-app $ASDFASDFA buy (routes/proTrade.ts): with Pro trading on and open to everyone. */
+export function accessSwapOpen(env: Env): boolean {
+  return env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC;
+}
+
 const signInFactorSchema = z.object({ ticket: z.string().max(2048), ...factorFields });
 
 /**
@@ -474,14 +485,20 @@ async function createPrivyUser(
   walletAddress: string,
   cap: number,
 ): Promise<{ user: User; created: boolean } | "full" | "taken"> {
-  return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('privy-signup'))`;
-    const again = await tx.user.findUnique({ where: { privyUserId } });
-    if (again) return { user: again, created: false };
-    if (await tx.user.findUnique({ where: { walletAddress }, select: { id: true } })) return "taken";
-    if ((await tx.user.count({ where: { privyUserId: { not: null } } })) >= cap) return "full";
-    return { user: await tx.user.create({ data: { walletAddress, privyUserId } }), created: true };
-  });
+  return prisma
+    .$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('privy-signup'))`;
+      const again = await tx.user.findUnique({ where: { privyUserId } });
+      if (again) return { user: again, created: false };
+      if (await tx.user.findUnique({ where: { walletAddress }, select: { id: true } })) return "taken";
+      if ((await tx.user.count({ where: { privyUserId: { not: null } } })) >= cap) return "full";
+      return { user: await tx.user.create({ data: { walletAddress, privyUserId } }), created: true };
+    })
+    .catch((err: unknown) => {
+      // A wallet sign-in made the same wallet's account at the same moment (it takes no lock).
+      if ((err as { code?: unknown } | null)?.code === "P2002") return "taken" as const;
+      throw err;
+    });
 }
 
 function isValidSolanaAddress(value: string): boolean {

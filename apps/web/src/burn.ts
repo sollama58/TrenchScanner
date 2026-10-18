@@ -12,7 +12,6 @@ import { buildBurnTransaction, toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
 import { signedInWalletName, solanaWallets, withTimeout, WalletTimeoutError } from "./wallet";
 import { askBefore, TwoFactorCancelled } from "./twoFactor";
-import { currentMe } from "./me";
 import { PRIVY_WALLET_NAME, privyControls } from "./privyBridge";
 
 /**
@@ -191,7 +190,7 @@ async function accountFor(wallet: BurnWallet, owner: string): Promise<WalletAcco
 export async function sendBurn(req: BurnRequest): Promise<string> {
   // A burn never passes through the API before the wallet signs it, so two-factor is asked here
   // (when the user chose it for burns).
-  await askBefore("burn", currentMe()?.twoFactor);
+  await askBefore("burn");
   req.onStage?.("connecting");
   const account = await accountFor(req.wallet, req.owner);
 

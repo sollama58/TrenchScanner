@@ -31,7 +31,7 @@ export function PrivyWalletPanel({ compact = false }: { compact?: boolean }) {
     setBusy(what);
     setError(null);
     try {
-      if (what === "export") await askBefore("export", me.twoFactor);
+      if (what === "export") await askBefore("export");
       const privy = await privyControls();
       if (what === "fund") await privy.addFunds(address);
       else await privy.exportWallet(address);

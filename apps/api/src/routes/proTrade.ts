@@ -28,6 +28,7 @@ import {
 } from "@trenchscanner/core";
 import { proStatus } from "../proMode.js";
 import { requireTwoFactor } from "../twoFactor.js";
+import { accessSwapOpen as accessSwapOpenFor } from "./auth.js";
 import { SolPrice } from "../solPrice.js";
 
 /**
@@ -201,7 +202,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     }
     return { wallet, pro: status.pro, canClose: status.canClose };
   }
-  const accessSwapOpen = () => env.PRO_TRADING_PUBLIC;
+  // The kill switch (PRO_TRADING_ENABLED) stops the access buy too.
+  const accessSwapOpen = () => accessSwapOpenFor(env);
 
   app.addHook("preHandler", app.authenticate);
 

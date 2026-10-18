@@ -155,6 +155,15 @@ model TwoFactorBackupCode {
   @@index([userId])
 }
 
+/// Single-use two-factor tokens (sign-in tickets, passkey challenges) already used, until they
+/// expire. In the database so a restart or a second instance can't make one usable again.
+model TwoFactorSpentToken {
+  jti       String   @id
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
 /// A single-use code, shown as a QR on a signed-in desktop, that mints a session on a phone.
 ///
 /// Only the SHA-256 of the code is stored. The raw value exists in the desktop's response and in

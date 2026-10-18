@@ -183,7 +183,8 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
             ))}
           </div>
         )}
-        {privy?.enabled && privy.signupsOpen !== false && (
+        {/* Always there once it's on: at the sign-up cap, returning accounts still sign in. */}
+        {privy?.enabled && (
           <div className="privy-entry">
             <span className="guest-or faint small">or</span>
             <button
@@ -196,8 +197,9 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
               <span className="wallet-go">→</span>
             </button>
             <p className="faint small">
-              No wallet? Privy makes you one. It&apos;s a separate account from any wallet sign-in, and
-              there&apos;s no free start: add SOL, buy $ASDFASDFA in the app and burn it for access.
+              {privy.signupsOpen === false
+                ? "New email sign-ups are full for now; accounts made before still sign in here."
+                : "No wallet? Privy makes you one. It's a separate account from any wallet sign-in, and there's no free start: add SOL, buy $ASDFASDFA in the app and burn it for access."}
             </p>
           </div>
         )}

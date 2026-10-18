@@ -171,6 +171,20 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
     expect(await prisma.user.findUnique({ where: { id: existing.id } })).toMatchObject({ privyUserId: null });
   });
 
+  it("refuses a Privy account whose wallet was made an admin later", async () => {
+    const did = newDid();
+    const address = wallet();
+    privyWallets.set(did, address);
+    expect((await signIn(await privyToken(did))).statusCode).toBe(200);
+    const was = env.ADMIN_WALLET_ADDRESSES;
+    try {
+      env.ADMIN_WALLET_ADDRESSES = `${ADMIN},${address}`;
+      expect((await signIn(await privyToken(did))).statusCode).toBe(403);
+    } finally {
+      env.ADMIN_WALLET_ADDRESSES = was;
+    }
+  });
+
   it("stops new Privy accounts at the cap, but not existing ones", async () => {
     const existing = newDid();
     privyWallets.set(existing, wallet());
@@ -332,6 +346,15 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
       });
       expect(ok.statusCode).toBe(200);
       expect(ok.json()).toMatchObject({ walletAddress: privyWallet });
+      // A ticket from before a sign-out everywhere no longer works.
+      const before = (await signIn(await privyToken(did))).json() as { ticket?: string };
+      await prisma.user.update({ where: { id: created.id }, data: { sessionVersion: { increment: 1 } } });
+      const stale = await app.inject({
+        method: "POST",
+        url: "/auth/2fa/signin",
+        payload: { ticket: before.ticket, code: totpCode(secret, step + 1) },
+      });
+      expect(stale.statusCode).toBe(401);
       // The ticket is spent.
       const reused = await app.inject({
         method: "POST",
@@ -401,6 +424,13 @@ describe.skipIf(!dbAvailable)("Privy sign-in and two-factor", () => {
           (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "1000000" })).statusCode,
         ).toBe(404);
         env.PRO_TRADING_PUBLIC = true;
+        // The kill switch closes it too.
+        const enabled = env.PRO_TRADING_ENABLED;
+        env.PRO_TRADING_ENABLED = false;
+        expect(
+          (await build(cookie, { mint: SUBSCRIPTION_MINT, side: "buy", amount: "1000000" })).statusCode,
+        ).toBe(404);
+        env.PRO_TRADING_ENABLED = enabled;
         const other = await build(cookie, {
           mint: "So11111111111111111111111111111111111111112",
           side: "buy",
