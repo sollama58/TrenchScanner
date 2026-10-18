@@ -14091,28 +14091,21 @@ button.bm-same {
   vertical-align: 1px;
   margin-top: 0;
 }
-/* The chart's warning when the coin isn't getting instant updates (2026-10-18). */
+/* The chart's "Delayed" pill: the coin isn't getting instant updates (2026-10-18). */
 .tm-delay {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 0 0 8px;
-  padding: 7px 10px;
-  border-radius: var(--radius-s);
-  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-  color: var(--ink-2);
-}
-.tm-delay svg {
-  flex: none;
-  margin-top: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--warn-ink);
-}
-.tm-delay strong {
-  color: var(--warn-ink);
-}
-.tm-delay-when {
-  color: var(--muted);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  vertical-align: middle;
+  cursor: help;
 }
 /* The chart's "Live" pill: the coin's curve is drawn as it changes. */
 .tm-live {

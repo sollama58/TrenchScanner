@@ -1658,6 +1658,9 @@ export function ChartCard({
             </span>
           )}
           {streaming && <LiveBadge tail={tail} />}
+          {delayed && !!bounds?.live && shownRange !== "first" && view && view.points.length >= 2 && (
+            <DelayBadge reason={delayed} updatedAt={updatedAt} everyMs={everyMs} />
+          )}
           <span className="tm-ranges" role="group" aria-label="Chart range">
             {RANGES.filter((r) => (!utility || r.id !== "model") && (young || r.id !== "first")).map((r) => (
               <button
@@ -1686,9 +1689,6 @@ export function ChartCard({
           )}
         </h4>
         <CustomizeDrawer open={customizing} onClose={closeCustomize} section={CHART_MARKS_SECTION} nested />
-        {delayed && !!bounds?.live && shownRange !== "first" && view && view.points.length >= 2 && (
-          <DelayNote reason={delayed} updatedAt={updatedAt} everyMs={everyMs} />
-        )}
         {shownRange === "first" && (
           <FirstMinutesChart
             mint={card.token.mintAddress}
@@ -1790,11 +1790,11 @@ function useArrivedAt(value: unknown): number | null {
 }
 
 /**
- * The chart's warning when the coin isn't getting instant updates (user ask 2026-10-18): why, when
- * it last brought new prices and when it reads again. It ticks on its own, so the chart doesn't
- * redraw every second.
+ * The header's "Delayed" pill when the coin isn't getting instant updates (user ask 2026-10-18):
+ * its tooltip (a tap on a phone, touchTips.ts) says why, when the chart last brought new prices and
+ * when it reads again. It ticks on its own, so the chart doesn't redraw every second.
  */
-function DelayNote({
+function DelayBadge({
   reason,
   updatedAt,
   everyMs,
@@ -1813,20 +1813,15 @@ function DelayNote({
   const clock = (t: number) =>
     new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
   const next = updatedAt !== null ? Math.ceil((updatedAt + everyMs - now) / 1_000) : null;
+  const when =
+    updatedAt !== null
+      ? ` Updated ${clock(updatedAt)} · ${next !== null && next > 0 ? `next in ~${next}s` : "updating now"}.`
+      : "";
+  const text = `Delayed chart: this coin isn't getting instant updates (${why}), so the chart refreshes about every ${everyMs / 1_000} seconds.${when}`;
   return (
-    <p className="small tm-delay" role="note">
-      <ClockIcon size={13} />
-      <span>
-        <strong>Delayed chart.</strong> This coin isn&apos;t getting instant updates ({why}), so the chart
-        refreshes about every {everyMs / 1_000} seconds.
-        {updatedAt !== null && (
-          <span className="num tm-delay-when">
-            {" "}
-            Updated {clock(updatedAt)} · {next !== null && next > 0 ? `next in ~${next}s` : "updating…"}
-          </span>
-        )}
-      </span>
-    </p>
+    <span className="tm-delay" title={text} aria-label={text}>
+      <ClockIcon size={11} /> Delayed
+    </span>
   );
 }
 
