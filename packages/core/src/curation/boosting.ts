@@ -82,11 +82,17 @@ export interface BoostedCuratorParams {
  *    RETURN_TARGET_CAP_PCT - by squared error. The money a call makes, learned directly: no
  *    split into 2x and crash odds and no fixed payoffs, so a 2x that lands after the 15-minute
  *    win window, or a winner that runs further, counts for what it paid (returnTarget).
- * Either non-default objective leaves the tree sum on its own scale; trainBoostedCurator then
+ *  - "payoff": whether the call made money under the exit plan (log loss), each row weighted by
+ *    how much it made or lost (|returnTarget|, at least PAYOFF_MIN_WEIGHT_PCT). The optimum of a
+ *    leaf is the money won's share of all the money moved there, so the score orders coins by
+ *    profit factor (gross gains over gross losses) rather than by an average. A classifier's
+ *    bounded gradient: one +500% runner moves a leaf like ten stop-outs, but never owns the fit
+ *    the way it can a squared error (payoffWeights).
+ * Any non-default objective leaves the tree sum on its own scale; trainBoostedCurator then
  * fits a one-dimensional logistic map from that sum to the clean-2x label (Platt scaling) and
  * folds it into the trees, so every stored model still scores as a probability of a clean 2x.
  */
-export type BoostingObjective = "logistic" | "lambdarank" | "runSize" | "return";
+export type BoostingObjective = "logistic" | "lambdarank" | "runSize" | "return" | "payoff";
 
 /** Squared-error objectives: the trees fit a number per row (regressionTarget), not a class. */
 const isRegression = (objective: BoostingObjective) => objective === "runSize" || objective === "return";
@@ -102,7 +108,7 @@ export interface BoostingRow {
   runPeakMultiple?: number;
   /** Same meaning as TrainingRow.hit10x: the "lambdarank" objective's top relevance tier. */
   hit10x?: boolean;
-  /** Same meanings as on TrainingRow: the "return" objective's target (returnTarget). */
+  /** Same meanings as on TrainingRow: the "return" and "payoff" objectives' target (returnTarget). */
   returnPct?: number;
   crashed?: boolean;
   survived?: boolean;
@@ -503,6 +509,33 @@ export function returnTarget(row: BoostingRow): number {
   return Math.min(RETURN_TARGET_CAP_PCT, Math.max(RETURN_TARGET_FLOOR_PCT, r));
 }
 
+/**
+ * The least a row weighs under "payoff", in return points: a call that closed near flat still
+ * says which side of zero coins like it land on, at a fifth of a stop-out's say (the stop weighs 50).
+ */
+export const PAYOFF_MIN_WEIGHT_PCT = 10;
+
+/** Whether a row made money under the exit plan - the "payoff" objective's label. */
+export function payoffLabel(row: BoostingRow): number {
+  return returnTarget(row) > 0 ? 1 : 0;
+}
+
+/**
+ * The "payoff" objective's weights: the given ones (recency, legacy label) times the money each
+ * row made or lost, rescaled to mean 1 so minLeafHessian keeps meaning "about this many rows".
+ */
+export function payoffWeights(rows: BoostingRow[], base: Float64Array): Float64Array {
+  const w = new Float64Array(rows.length);
+  let sum = 0;
+  for (let i = 0; i < rows.length; i++) {
+    w[i] = base[i]! * Math.max(PAYOFF_MIN_WEIGHT_PCT, Math.abs(returnTarget(rows[i]!)));
+    sum += w[i]!;
+  }
+  if (!(sum > 0)) return base;
+  for (let i = 0; i < w.length; i++) w[i] = (w[i]! * rows.length) / sum;
+  return w;
+}
+
 function regressionTarget(objective: BoostingObjective): ((row: BoostingRow) => number) | null {
   return objective === "runSize" ? runSizeTarget : objective === "return" ? returnTarget : null;
 }
@@ -610,11 +643,17 @@ async function boost(
   const objective = opts.objective;
   const cols = featureColumns(fit, featureNames, transform);
   const binned = cols.map((c) => binColumn(c, opts.maxBins));
-  const ys = Float64Array.from(fit, (r) => (r.labelValue > 0 ? 1 : 0));
-  // The ranking and return objectives already pay for how far each row ran; the run weight
-  // would count that twice.
-  const runWeight = objective === "lambdarank" || objective === "return" ? 0 : runWeightPerDoubling;
-  const weights = recencyWeights(fit, halfLifeDays, legacyLabelWeight, runWeight);
+  const payoff = objective === "payoff";
+  const labelOf = (r: BoostingRow) => (payoff ? payoffLabel(r) : r.labelValue > 0 ? 1 : 0);
+  const ys = Float64Array.from(fit, labelOf);
+  // The ranking, return and payoff objectives already pay for how far each row ran; the run
+  // weight would count that twice.
+  const runWeight = objective === "lambdarank" || objective === "return" || payoff ? 0 : runWeightPerDoubling;
+  const weightsOf = (rs: BoostingRow[]) => {
+    const w = recencyWeights(rs, halfLifeDays, legacyLabelWeight, runWeight);
+    return payoff ? payoffWeights(rs, w) : w;
+  };
+  const weights = weightsOf(fit);
   const target = regressionTarget(objective);
   const targets = target ? Float64Array.from(fit, target) : null;
   const gains = objective === "lambdarank" ? Float64Array.from(fit, (r) => 2 ** relevanceTier(r) - 1) : null;
@@ -664,8 +703,8 @@ async function boost(
 
   const validCols = valid.length > 0 ? featureColumns(valid, featureNames, transform) : [];
   const validX = valid.map((_, i) => validCols.map((c) => c[i]!));
-  const validY = valid.map((r) => (r.labelValue > 0 ? 1 : 0));
-  const validW = recencyWeights(valid, halfLifeDays, legacyLabelWeight, runWeight);
+  const validY = valid.map(labelOf);
+  const validW = weightsOf(valid);
   const validTargets = target ? Float64Array.from(valid, target) : null;
   const validGains =
     objective === "lambdarank" ? Float64Array.from(valid, (r) => 2 ** relevanceTier(r) - 1) : null;

@@ -1218,7 +1218,16 @@ export interface ModelProfile {
   reads: string;
   decides: string;
   method:
-    "formula" | "trees" | "deep-trees" | "forest" | "two-step" | "regression" | "team" | "rules" | "story";
+    | "formula"
+    | "trees"
+    | "deep-trees"
+    | "forest"
+    | "two-step"
+    | "regression"
+    | "scales"
+    | "team"
+    | "rules"
+    | "story";
   waitsFor: string | null;
   /** The share of decision moments its cutoff aims to call, in percent. */
   aimsToCallPct: number | null;
