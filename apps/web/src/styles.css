@@ -18292,3 +18292,121 @@ body:has(.util-toast) .bug-fab {
 .install-panel > p.faint {
   margin: 8px 0 0;
 }
+
+/* Scope's own settings (user ask 2026-10-18): a filter icon on each column, a Scope-only window. */
+.scope-strip {
+  grid-template-columns: repeat(var(--scope-cols, 3), minmax(0, 1fr));
+}
+.scope-col-head h3 {
+  flex: 1;
+  min-width: 0;
+}
+.scope-col-head {
+  align-items: center;
+}
+.scope-filter-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 6px;
+}
+.scope-filter-btn.on {
+  color: var(--link);
+}
+.scope-filter-count {
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--link);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  text-align: center;
+}
+.scope-settings-tabs .scope-filter-count {
+  margin-left: 4px;
+}
+.scope-bar-filter {
+  display: none;
+}
+.scope.compact .scope-row {
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  padding: 5px 8px;
+}
+.scope.compact .scope-avatar,
+.scope.compact .scope-img {
+  width: 36px;
+  height: 36px;
+}
+.scope.compact .scope-now .num {
+  font-size: 13px;
+}
+.scope-settings {
+  width: min(560px, 100vw);
+}
+.scope-settings-tabs {
+  margin: 4px 0 12px;
+  flex-wrap: wrap;
+}
+.scope-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.scope-settings-body > p {
+  margin: 0;
+}
+.scope-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+}
+.scope-fieldset legend {
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.scope-fieldset.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+.scope-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.scope-num {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.scope-num-box {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.scope-num-box input {
+  width: 100%;
+  min-width: 0;
+}
+@media (max-width: 899px) {
+  .scope-bar-filter {
+    display: inline-flex;
+  }
+}
+@media (max-width: 340px) {
+  .scope-fieldset.scope-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
