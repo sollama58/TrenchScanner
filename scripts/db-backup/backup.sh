@@ -3,6 +3,11 @@
 # oldest dumps past DB_DUMP_KEEP removed. Run by the trenchscanner-db-backup cron (render.yaml);
 # restore with restore.sh (README -> Backups and restore).
 #
+# The cron starts this every 10 minutes, and most starts end at once: a dump is taken only when
+# one is due - the nightly one (the first start at or after 02:30 UTC with no dump attempted since
+# then), or an admin's "Dump now" (Admin > Backups, or Admin > Worker's run-now of db-dump), which
+# leaves a JobRunRequest row for the job "db-dump". DB_DUMP_NOW=1 takes one regardless (a shell).
+#
 # It only reads the database (one connection, one repeatable-read snapshot, ACCESS SHARE locks,
 # which block nothing but a migration's ALTER until the dump ends) and writes one heartbeat row.
 #
@@ -12,6 +17,7 @@
 #   DB_DUMP_COMPRESS      pg_dump --compress (default zstd:3)
 #   DB_DUMP_KIND          "nightly" (default) or "pre-restore": restore.sh's copy of a database
 #                         it is about to replace, kept apart (PRE_DIR), never pruned, no heartbeat
+#   DB_DUMP_NOW           "1": dump now even when nothing is due (nightly kind only)
 
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -28,6 +34,8 @@ fi
 
 # shellcheck source=common.sh
 source "$here/common.sh"
+# Some keys set but not all is a mistake: fail rather than dump into nowhere.
+need_bucket
 
 : "${DATABASE_URL:?DATABASE_URL is not set}"
 KEEP="${DB_DUMP_KEEP:-14}"
@@ -41,6 +49,44 @@ case "$KIND" in
 esac
 # The heartbeat speaks for the nightly run only.
 heartbeat() { [ "$KIND" != nightly ] || write_heartbeat "$@"; }
+
+# Is a dump due? Only the nightly kind asks; restore.sh's pre-restore copy always runs. Asked
+# before the exit trap is set, so a start that finds nothing due (or can't reach the database)
+# writes no heartbeat: the heartbeat speaks for dumps, not for the 10-minute checks.
+if [ "$KIND" = nightly ] && [ "${DB_DUMP_NOW:-}" != 1 ]; then
+  # Three booleans: a dump already running (begun in the last 3 hours and not finished: the
+  # next start after it takes any request), an admin's request waiting, and tonight's dump not yet
+  # attempted. The heartbeat stores UTC (Prisma's timestamp(3) without a time zone), read as UTC.
+  due="$(psql "$DATABASE_URL" -XAtq -F ' ' -v ON_ERROR_STOP=1 <<'SQL'
+WITH slot AS (
+  SELECT date_trunc('day', now() AT TIME ZONE 'UTC') + interval '2 hours 30 minutes' AS at,
+         now() AT TIME ZONE 'UTC' AS now
+), beat AS (
+  SELECT "lastRunAt", ((meta->>'runningSince')::timestamptz AT TIME ZONE 'UTC') AS running_since
+  FROM "SystemHeartbeat" WHERE job = 'db-dump'
+)
+SELECT
+  COALESCE((SELECT running_since > "lastRunAt" AND running_since > (SELECT now FROM slot) - interval '3 hours'
+            FROM beat), false),
+  EXISTS (SELECT 1 FROM "JobRunRequest" WHERE job = 'db-dump' AND "startedAt" IS NULL),
+  (SELECT now >= at FROM slot)
+    AND COALESCE((SELECT "lastRunAt" FROM "SystemHeartbeat" WHERE job = 'db-dump'), 'epoch'::timestamp)
+        < (SELECT at FROM slot);
+SQL
+  )" || die "could not read whether a dump is due"
+  case "$due" in
+    "t "*) log "a dump is already running" && exit 0 ;;
+    "f t "*) log "an admin asked for a dump" ;;
+    "f f t") log "tonight's dump is due" ;;
+    "f f f") exit 0 ;;
+    *) die "unexpected answer to whether a dump is due: $due" ;;
+  esac
+fi
+# Whatever started this run, it does what a waiting request asked: mark them all taken.
+if [ "$KIND" = nightly ]; then
+  psql "$DATABASE_URL" -XAtq -c "UPDATE \"JobRunRequest\" SET \"startedAt\" = now() WHERE job = 'db-dump' AND \"startedAt\" IS NULL" >/dev/null ||
+    log "warning: could not mark the dump requests taken"
+fi
 
 started=$(date -u +%s)
 stamp=$(date -u +%Y%m%dT%H%M%SZ)

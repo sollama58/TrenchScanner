@@ -269,6 +269,17 @@ services:
         sync: false
       - key: TRADING_SERVER_WALLET_WITHDRAW_TO
         sync: false
+      # Admin > Backups' full database dumps (packages/core/src/backup/dbDumps.ts): the dumps
+      # bucket the trenchscanner-db-backup cron writes, with a READ-ONLY R2 token for that bucket
+      # only (README -> Backups and restore). Unset, the panel lists nothing and says so.
+      - key: DB_DUMP_S3_ENDPOINT
+        sync: false
+      - key: DB_DUMP_S3_BUCKET
+        sync: false
+      - key: DB_DUMP_S3_ACCESS_KEY_ID
+        sync: false
+      - key: DB_DUMP_S3_SECRET_ACCESS_KEY
+        sync: false
 
   - type: worker
     name: trenchscanner-worker
@@ -601,19 +612,23 @@ services:
 
   # The nightly full-database backup (scripts/db-backup, README -> Backups and restore): pg_dump of
   # the whole database at 02:30 UTC, between the hourly jobs and well before the 04:00 cleanup,
+  # and on an admin's "Dump now" (Admin > Backups). The cron starts every 10 minutes for that;
+  # backup.sh ends at once unless the nightly dump or a requested one is due, so a start costs a
+  # few seconds and one query. Render runs one start at a time.
   # streamed to the same bucket as the model backups (Cloudflare R2), checked by sha256 and by
   # reading it back, and the oldest past DB_DUMP_KEEP removed. It only reads: one connection
   # (count it with the pools above) and one snapshot for the few minutes the dump takes. Until
   # the four bucket keys are set it logs that no bucket is configured and exits cleanly.
   # restore.sh in the same image restores a dump: open this service's Shell on Render (a fresh
   # instance with this image and these settings) and run /app/restore.sh.
-  # backup.sh's heartbeat says dailyAtHourUtc 2: move it with the schedule.
+  # The nightly time (02:30 UTC) is in backup.sh's due check, and its heartbeat says
+  # dailyAtHourUtc 2: move both together.
   - type: cron
     name: trenchscanner-db-backup
     runtime: docker
     plan: starter
     region: oregon
-    schedule: "30 2 * * *"
+    schedule: "*/10 * * * *"
     dockerfilePath: ./scripts/db-backup/Dockerfile
     dockerContext: ./scripts/db-backup
     autoDeployTrigger: checksPass

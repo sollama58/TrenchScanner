@@ -817,6 +817,17 @@ const envSchema = z.object({
   MODEL_BACKUP_S3_ACCESS_KEY_ID: z.string().optional().default(""),
   MODEL_BACKUP_S3_SECRET_ACCESS_KEY: z.string().optional().default(""),
   MODEL_BACKUP_S3_PREFIX: z.string().optional().default("trenchscanner/"),
+  // Admin > Backups' full database dumps (backup/dbDumps.ts): the API lists the nightly pg_dumps
+  // in the dumps bucket (scripts/db-backup) and hands an admin a short-lived signed link to one.
+  // Give the API a READ-ONLY token for that bucket only (R2: "Object Read only"), never the
+  // cron's read-and-write one. Unset, the panel says where to set them and lists nothing. The
+  // prefix must match the cron's MODEL_BACKUP_S3_PREFIX (default "trenchscanner/").
+  DB_DUMP_S3_ENDPOINT: z.string().optional().default(""),
+  DB_DUMP_S3_BUCKET: z.string().optional().default(""),
+  DB_DUMP_S3_REGION: z.string().optional().default("auto"),
+  DB_DUMP_S3_ACCESS_KEY_ID: z.string().optional().default(""),
+  DB_DUMP_S3_SECRET_ACCESS_KEY: z.string().optional().default(""),
+  DB_DUMP_S3_PREFIX: z.string().optional().default("trenchscanner/"),
   // Holds the hand-tuned heuristic to the same cutoff rule while it is the live curator: it only
   // sends picks whose rank score is at or above the cutoff its own out-of-sample record earned in
   // the newest training run (the target-meeting one, else the best one). Without a record the

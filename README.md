@@ -243,7 +243,11 @@ Backup files hold every user's wallet, Telegram chat ids and the trading wallets
 
 ### Nightly full dumps (Cloudflare R2)
 
-The `trenchscanner-db-backup` cron (render.yaml, `scripts/db-backup`) runs `pg_dump` of the whole database at 02:30 UTC and streams it, compressed, to `<bucket>/trenchscanner/db-dumps/trenchscanner-<UTC stamp>.dump`. The dump's sha256 is taken from the bytes on their way up; the dump is then read back from the bucket and checked against it, and only then is its `.sha256` written beside it. A dump with no `.sha256` is incomplete and is never listed, restored or kept. The newest `DB_DUMP_KEEP` (14) are kept. Each run writes the `db-dump` row of `SystemHeartbeat`, so a failed or missed night reaches the admins' Telegram through pipeline-watch like any trainer job, and `/health/worker` shows it. The dump only reads: one connection and one snapshot for the minutes it takes.
+The `trenchscanner-db-backup` cron (render.yaml, `scripts/db-backup`) runs `pg_dump` of the whole database at 02:30 UTC, and whenever an admin presses **Dump now**, and streams it, compressed, to `<bucket>/trenchscanner/db-dumps/trenchscanner-<UTC stamp>.dump`. The dump's sha256 is taken from the bytes on their way up; the dump is then read back from the bucket and checked against it, and only then is its `.sha256` written beside it. A dump with no `.sha256` is incomplete and is never listed, restored or kept. The newest `DB_DUMP_KEEP` (14) are kept. Each run writes the `db-dump` row of `SystemHeartbeat`, so a failed or missed night reaches the admins' Telegram through pipeline-watch like any trainer job, and `/health/worker` shows it. The dump only reads: one connection and one snapshot for the minutes it takes.
+
+The cron starts every 10 minutes; `backup.sh` ends at once unless tonight's dump (the first start at or after 02:30 UTC with no dump attempted since) or a requested one is due. A request is a `JobRunRequest` row for the job `db-dump`, left by **Dump now** in Admin → Backups or by the db-dump row of Admin → Worker's "Run now". From the cron's Shell, `DB_DUMP_NOW=1 /app/backup.sh` takes one regardless.
+
+**Downloading one (Admin → Backups → Full database backups).** The panel lists every complete dump with its size. **Download** asks your wallet to sign, then the API answers with a link to the bucket that works for 15 minutes, so the file (several GB) goes from R2 straight to your disk without passing through the API. A small `trenchscanner-<stamp>.sha256` file is saved with it; keep the two side by side, and `restore.sh` checks the dump against it before restoring. The download is recorded in the admin action log. The panel needs the `DB_DUMP_S3_*` keys on `trenchscanner-api` (setup step 7 below).
 
 **Setting it up (once):**
 
@@ -254,7 +258,8 @@ Two buckets and two tokens, so a leaked trainer key can neither delete nor repla
 3. On Render, set `MODEL_BACKUP_S3_ENDPOINT`, `MODEL_BACKUP_S3_BUCKET`, `MODEL_BACKUP_S3_ACCESS_KEY_ID` and `MODEL_BACKUP_S3_SECRET_ACCESS_KEY` on `trenchscanner-trainer` with the backups bucket and its token, and on `trenchscanner-db-backup` with the dumps bucket and its token. Until they are set the cron logs "no bucket configured" and exits cleanly.
 4. `trenchscanner-db-dumps` → **Settings** → **Bucket lock rules** → add a rule for prefix `trenchscanner/db-dumps/`, retention **14 days** (matching `DB_DUMP_KEEP`). Nothing can delete a dump inside that window, the cron's own pruning included: it leaves a locked dump for a later night.
 5. Object lifecycle rules (bucket → **Settings** → **Object lifecycle rules**), so deleted accounts don't live on off-site: on `trenchscanner-backups`, delete objects under `trenchscanner/table-backups/` after **90 days**; on `trenchscanner-db-dumps`, delete objects under `trenchscanner/db-dumps-pre-restore/` after **30 days**.
-6. On `trenchscanner-db-backup`, **Trigger Run** once and read its log: it ends with `done: ... kept, ... pruned`.
+6. Admin → Backups → **Dump now**, then read the next `trenchscanner-db-backup` run's log (within 10 minutes): it ends with `done: ... kept, ... pruned`. (A **Trigger Run** on Render takes no dump unless one is due.)
+7. For Admin's dump list and downloads: R2 → **Manage API tokens** → **Create API token**, _Object Read only_, limited to `trenchscanner-db-dumps`. On `trenchscanner-api` set `DB_DUMP_S3_ENDPOINT`, `DB_DUMP_S3_BUCKET` (`trenchscanner-db-dumps`), `DB_DUMP_S3_ACCESS_KEY_ID` and `DB_DUMP_S3_SECRET_ACCESS_KEY` from it. Never give the API the cron's read-and-write token: a read-only one can't delete or replace a dump even if the API leaks it.
 
 **Restoring.** `restore.sh` lives in the same image. Open `trenchscanner-db-backup` on Render → **Shell** (a fresh instance with this image and the service's settings, including the live `DATABASE_URL`), or run the image anywhere with Docker and the same variables. Every command reads the bucket; only `restore` writes, and only to the database given by `--target`.
 
@@ -268,6 +273,19 @@ Two buckets and two tokens, so a leaked trainer key can neither delete nor repla
 The safe way to restore is into a **new, empty database**: create one on Render (same plan and Postgres version), restore into its external URL, check it, then point `DATABASE_URL` on the api, worker, trainer and this cron at it. Nothing live changes until that switch. `--table NAME` (repeatable) restores only some tables into an empty database, for inspecting or copying rows back by hand.
 
 When a new database is not an option, `--replace` rebuilds a database that holds data. It refuses while other sessions are connected (suspend the api, worker and trainer first), refuses when the disk could not hold the old and new data together (`--disk-gb`, default 30), asks you to type the database's name when the target is the live one (`--confirm <name>` to pass it non-interactively), and first dumps the database as it stands to `db-dumps-pre-restore/` so the restore itself can be undone with that dump. The whole restore, the drop of the old schema included, is one transaction committed only once the dump has been read to its end: a failure at any point leaves the target exactly as it was. After a replace, resume the services. If the dump predates the code's latest migration (restore.sh prints the restored one), redeploy the api first: its pre-deploy step applies the missing migrations.
+
+**Restoring a downloaded file.** A dump downloaded from Admin restores the same way, with `--from-file`, and needs no bucket keys. It must run with Postgres 18 tools, so use the backup image (any machine with Docker, from a checkout):
+
+```
+docker build -t trenchscanner-db-tools scripts/db-backup
+cd ~/Downloads   # the folder holding trenchscanner-<stamp>.dump and its .sha256
+docker run --rm -it -v "$PWD:/work" -w /work trenchscanner-db-tools \
+  /app/restore.sh verify-file trenchscanner-<stamp>.dump
+docker run --rm -it -v "$PWD:/work" -w /work trenchscanner-db-tools \
+  /app/restore.sh restore --from-file trenchscanner-<stamp>.dump --target "<new database's external URL>"
+```
+
+The file is checked against the `.sha256` beside it (or `--sha256 <hex>`, shown in Admin after the download) before anything is written; without either it refuses unless `--unverified`. Everything else is the same as a bucket restore: one transaction, everyone signed out, `--table` for single tables into an empty database, and `--replace` for a database that holds data. With no bucket keys, `--replace` writes its undo copy to a local file (`--safety-file`, default `./pre-restore-<database>-<stamp>.dump`, with its `.sha256`), restorable the same way. You can also upload the file to the Render Shell of `trenchscanner-db-backup` and run `/app/restore.sh` there.
 
 A restore drill is worth doing now and then: `restore latest` into a throwaway database, which proves the dumps restore and shows how long a real restore takes.
 

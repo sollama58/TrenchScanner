@@ -88,6 +88,18 @@ export async function confirmedIfAsked<T>(
   return call({ confirmation: { nonce: challenge.nonce, signature } });
 }
 
+/** A GET the API may want approved, answered with JSON: the signature goes in the query. */
+export async function adminGet<T>(path: string): Promise<T> {
+  try {
+    return await api<T>(path);
+  } catch (err) {
+    if (!needsConfirmation(err)) throw err;
+  }
+  const { nonce, signature } = await signAdminChallenge(path, "GET", {});
+  const sep = path.includes("?") ? "&" : "?";
+  return api<T>(`${path}${sep}nonce=${encodeURIComponent(nonce)}&signature=${encodeURIComponent(signature)}`);
+}
+
 /** A download the API may want approved: the same, with the signature in the query. */
 export async function adminDownload(path: string, fallbackName: string): Promise<void> {
   try {
