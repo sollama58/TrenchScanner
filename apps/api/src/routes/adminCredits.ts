@@ -35,7 +35,9 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
     const [prices, byKind, wallets, recent] = await Promise.all([
       burnCreditPrices(),
       prisma.burnCreditEntry.groupBy({ by: ["kind"], _sum: { delta: true }, _count: { _all: true } }),
-      prisma.burnCreditEntry.findMany({ distinct: ["wallet"], select: { wallet: true } }),
+      // Counted in SQL: Prisma's `distinct` runs in memory here (no nativeDistinct), which read
+      // every ledger row into the API on each load.
+      prisma.$queryRaw<{ n: bigint }[]>`SELECT COUNT(DISTINCT "wallet") AS n FROM "BurnCreditEntry"`,
       prisma.burnCreditEntry.findMany({
         orderBy: { createdAt: "desc" },
         take: 50,
@@ -57,7 +59,7 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
     return {
       prices,
       totals: {
-        wallets: wallets.length,
+        wallets: Number(wallets[0]?.n ?? 0),
         burns: count("burn"),
         earned: sum("burn"),
         granted: sum("grant"),

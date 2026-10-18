@@ -380,7 +380,8 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
     const { walletAddress, note, expiresAt } = parsed.data;
     const entry = await prisma.whitelist.upsert({
       where: { walletAddress },
-      update: { note: note ?? null, expiresAt: expiresAt ?? null },
+      // A note left out keeps the one already there; the panel sends none when its field is blank.
+      update: { ...(note !== undefined && { note }), expiresAt: expiresAt ?? null },
       create: {
         walletAddress,
         note: note ?? null,

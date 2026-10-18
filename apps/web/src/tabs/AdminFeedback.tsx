@@ -181,6 +181,13 @@ function ReportItem({ report: r, onChanged }: { report: Report; onChanged: () =>
   const [error, setError] = useState<string | null>(null);
   const [shot, setShot] = useState<string | null>(null);
   const [note, setNote] = useState(r.adminNote ?? "");
+  // Another admin's saved note replaces the field unless this admin has typed over it, so a
+  // poll never leaves the old text one Enter away from overwriting theirs.
+  const [savedNote, setSavedNote] = useState(r.adminNote ?? "");
+  if ((r.adminNote ?? "") !== savedNote) {
+    setSavedNote(r.adminNote ?? "");
+    if (note === savedNote) setNote(r.adminNote ?? "");
+  }
   const c = r.context ?? {};
   const browser = browserName(c.userAgent);
   const link = safePageUrl(c.url);
@@ -295,7 +302,7 @@ function ReportItem({ report: r, onChanged }: { report: Report; onChanged: () =>
           aria-label="Admin note"
           onChange={(e) => setNote(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void saveNote();
+            if (e.key === "Enter" && !busy) void saveNote();
           }}
         />
         {note.trim() !== (r.adminNote ?? "") && (

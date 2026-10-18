@@ -105,6 +105,8 @@ const winTag = (score: number, winner: boolean) => (
 const labelsOf = (w: { dumper?: boolean; winner?: boolean; sniper?: boolean }) =>
   [w.dumper && "dumper", w.winner && "winner", w.sniper && "sniper"].filter(Boolean).join(", ") || "–";
 
+const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
 export function WalletsAdmin() {
   const q = usePolling<Overview>("/admin/wallets?limit=50", 120_000);
   const [search, setSearch] = useState("");
@@ -117,7 +119,9 @@ export function WalletsAdmin() {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const v = search.trim();
-    if (v) setOpen(v);
+    // Only a Solana address: anything else ("bots", "coin/...") would hit another admin route
+    // and crash the view on a response of the wrong shape.
+    if (SOLANA_ADDRESS.test(v)) setOpen(v);
   };
   return (
     <div className="stack">
@@ -270,8 +274,8 @@ export function WalletsAdmin() {
 }
 
 function Lookup({ address, risky }: { address: string; risky: number }) {
-  const wallet = usePolling<WalletDetail>(`/admin/wallets/${address}`, 600_000);
-  const coin = usePolling<CoinDetail>(`/admin/wallets/coin/${address}`, 600_000);
+  const wallet = usePolling<WalletDetail>(`/admin/wallets/${encodeURIComponent(address)}`, 600_000);
+  const coin = usePolling<CoinDetail>(`/admin/wallets/coin/${encodeURIComponent(address)}`, 600_000);
   if (coin.data) return <CoinView c={coin.data} risky={risky} />;
   return (
     <Load q={wallet}>
