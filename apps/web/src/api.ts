@@ -1403,7 +1403,7 @@ export interface Leaderboard {
     windowHours: number;
     minGraded: number;
     refreshMinutes: number;
-    rankedBy?: "2x-lower-bound";
+    rankedBy?: "2x-lower-bound" | "composite-score";
     rankWindowHours?: number;
     rankMinGraded?: number;
     rankConfidencePct?: number;

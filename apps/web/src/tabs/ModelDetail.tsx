@@ -195,7 +195,7 @@ function ModelDetail({
         <span className={`badge ${STATUS_TEXT[e.status].tone}`}>{STATUS_TEXT[e.status].text}</span>
         {e.isBest && (
           <span className="badge info" title={bestReturnTitle(board, now)}>
-            best 24h return
+            best 24h score
           </span>
         )}
         {e.isDefault && <span className="badge info">default feed</span>}

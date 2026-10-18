@@ -194,7 +194,7 @@ export function ModelPicker({
                         <span className="mp-name">{e.name}</span>
                         {e.isBest && (
                           <span className="mp-badge best" title={bestReturnTitle(board, Date.now())}>
-                            ★<span className="mp-word"> best 24h return</span>
+                            ★<span className="mp-word"> best 24h score</span>
                           </span>
                         )}
                       </span>
@@ -237,12 +237,12 @@ export function ModelPicker({
           {daily && (
             <p className="mp-foot faint small">
               Rows are numbered by 2x rate over the 24h to {dayEnd}.{" "}
-              <span className="mp-rank top mp-key">1</span> The top {board.defaultRule?.count ?? 3} by 2x rate
-              at the low end of its range, over the last {board.defaultRule?.rankWindowHours ?? 72}h with{" "}
+              <span className="mp-rank top mp-key">1</span> The top {board.defaultRule?.count ?? 3} by
+              leaderboard score over the last {board.defaultRule?.rankWindowHours ?? 72}h with{" "}
               {board.defaultRule?.rankMinGraded ?? 90} graded alerts, make up the default feed, with the
               champion added when it isn&apos;t among them.{" "}
-              <span className="mp-badge best">★ best 24h return</span> has the highest average return under
-              the exit plan, with {minGraded} graded alerts in that window. Both are picked every{" "}
+              <span className="mp-badge best">★ best 24h score</span> has the highest leaderboard score over
+              the last 24h, with {minGraded} graded alerts in that window. Both are picked every{" "}
               {Math.round((board.defaultRule?.refreshMinutes ?? 360) / 60)} hours (00, 06, 12 and 18 UTC).
             </p>
           )}

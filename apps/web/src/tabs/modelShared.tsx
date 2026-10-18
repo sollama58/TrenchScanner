@@ -86,7 +86,7 @@ export function recordSince(e: LeaderboardEntry, board: Pick<Leaderboard, "windo
 }
 
 /**
- * The end of the 24h window the top models and "best 24h return" are read on: fixed per 6-hour
+ * The end of the 24h window the top models and "best 24h score" are read on: fixed per 6-hour
  * slot, so it can be hours old. From the API when it sends it, else worked out the same way.
  */
 export function lastDayEnd(board: Pick<Leaderboard, "defaultRule">, now: number): Date {
@@ -97,7 +97,7 @@ export function lastDayEnd(board: Pick<Leaderboard, "defaultRule">, now: number)
 /** The ★ best chip's tooltip: what it ranks on and over which window. */
 export function bestReturnTitle(board: Pick<Leaderboard, "defaultRule">, now: number): string {
   const min = board.defaultRule?.minGraded ?? MIN_GRADED_FOR_RATE;
-  return `Best average return under the exit plan over the 24h to ${utcClock(lastDayEnd(board, now))}, among models with ${min}+ graded alerts in it`;
+  return `Best leaderboard score over the 24h to ${utcClock(lastDayEnd(board, now))}, among models with ${min}+ graded alerts in it`;
 }
 
 /** "Oct 12". */

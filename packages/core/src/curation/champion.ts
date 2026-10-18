@@ -1,8 +1,8 @@
 import { prisma } from "../db.js";
 import { CONSENSUS_CONTESTANT, RULES_CONTESTANT, type ContestantSpec } from "./contestants.js";
 import type { Lane } from "./evolution.js";
-import { liveCallRecords } from "./laneStore.js";
-import { emptyRecord, recordScore } from "./leaderboard.js";
+import { liveCallRecords, liveCatchRates } from "./laneStore.js";
+import { emptyRecord, recordScore, withLiveCatch } from "./leaderboard.js";
 import { TOP_MODELS_GRADE_LAG_MINUTES, TOP_MODELS_RANK_WINDOW_HOURS } from "./topModels.js";
 import type { Env } from "../config/env.js";
 import type { PrecisionTargets } from "./trainer.js";
@@ -16,10 +16,12 @@ import { defaultContestant, NEVER_EMIT_THRESHOLD, type StoredEvalMetrics } from 
  * pick is stored (CuratorChampion) so the worker and the API read the same answer and the
  * dashboard can say when it last changed.
  *
- * It is ranked on the full scorecard of its live record over the last TOP_MODELS_RANK_WINDOW_HOURS
+ * It is ranked on the composite score of its live record over the last TOP_MODELS_RANK_WINDOW_HOURS
  * of graded calls (recordScore in leaderboard.ts: the 2x, 4x and 10x rates, the average return
- * under the exit plan and run size; a live record has no catch part), since 2026-10-17 (user
- * decision: "train and judge on return AND 2x/4x/10x+ rate ... ALL of these are important").
+ * under the exit plan, and its live catch), the same score the board, the Default models and the
+ * "best" model are ranked on (user decision 2026-10-18: "make sure this new composite score is the
+ * one used wherever we score models"). From 2026-10-17 it was the same scorecard without catch
+ * (user decision: "train and judge on return AND 2x/4x/10x+ rate ... ALL of these are important").
  * From 2026-10-14 to then it was the 2x Wilson lower bound alone, as the Default trio still is
  * (topModels.ts, full audit P9).
  * It used to be the leaderboard's composite score, which pays 15 points for catching runners, so
@@ -193,10 +195,13 @@ export async function rechooseChampion(input: {
   // Ending the grade lag before now, so every call in the window has been graded.
   const until = new Date(now.getTime() - TOP_MODELS_GRADE_LAG_MINUTES * 60_000);
   const since = new Date(until.getTime() - CHAMPION_WINDOW_HOURS * 3_600_000);
-  const [current, live, incumbent] = await Promise.all([
+  const [current, live, incumbent, catches] = await Promise.all([
     activeModelCutoffs(ids),
     liveCallRecords(ids, since, input.lanes, { until }),
     loadChampion(),
+    // Runners up to now, not `until`: the catch read has no end bound, and the grade lag's few
+    // minutes barely move a 72-hour share.
+    liveCatchRates(ids, since, input.lanes),
   ]);
   const standings: ChampionStanding[] = input.roster.map((spec) => {
     const model = current.get(spec.id);
@@ -210,7 +215,10 @@ export async function rechooseChampion(input: {
           (model !== undefined && model.threshold !== null && model.threshold < NEVER_EMIT_THRESHOLD)),
       graded: (live.get(spec.id) ?? emptyRecord()).graded,
       wins: (live.get(spec.id) ?? emptyRecord()).wins,
-      score: recordScore(live.get(spec.id) ?? emptyRecord(), input.targets),
+      score: recordScore(
+        withLiveCatch(live.get(spec.id) ?? emptyRecord(), catches.byModel.get(spec.id)),
+        input.targets,
+      ),
     };
   });
   const consensusEnabled = ids.includes(CONSENSUS_CONTESTANT);

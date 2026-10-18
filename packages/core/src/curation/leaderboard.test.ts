@@ -17,6 +17,7 @@ import {
   scoreBand,
   scoreParts,
   tenXGradedOf,
+  withLiveCatch,
   type CallRecord,
   type CompositeScore,
 } from "./leaderboard.js";
@@ -56,12 +57,8 @@ describe("recordScore", () => {
     expect(streak).toBeLessThan(steady);
     // 3 of 3 proves 3 / (3 + 10) = 23% of each rate.
     expect(scoreParts(record(3, 3, 3, 3), targets)).toMatchObject({ proven2xPct: 23.1, proven4xPct: 23.1 });
-    // 3 of 3 averaging 3 doublings proves 9 / 13 = 0.69 doublings a call. No catch rate or
-    // return tracked: the other parts are scaled to 100.
-    expect(streak).toBeCloseTo(
-      (30 * (23.1 / 75) + 20 * (23.1 / 50) + 10 * (23.1 / 25) + 5 * (0.69 / 2)) / 0.65,
-      0,
-    );
+    // No catch rate or return tracked: the other parts are scaled to 100.
+    expect(streak).toBeCloseTo((35 * (23.1 / 75) + 15 * (23.1 / 50) + 10 * (23.1 / 25)) / 0.6, 0);
     expect(steady).toBeGreaterThan(90);
   });
 
@@ -71,13 +68,10 @@ describe("recordScore", () => {
     expect(better).toBeGreaterThan(weak);
   });
 
-  it("ranks the record whose calls ran further higher when the hit rates are the same", () => {
+  it("no longer scores run size: the return pays for calls that keep running", () => {
     const short = recordScore(record(100, 40, 20, 0.5), targets)!;
     const long = recordScore(record(100, 40, 20, 1.5), targets)!;
-    expect(long).toBeGreaterThan(short);
-    // 0.5 vs 1.5 doublings a call over 110 proven calls: 5 × (1 / 1.1) / 2 ≈ 2.3 points apart,
-    // scaled by 1 / 0.65 without a catch rate or return.
-    expect(long - short).toBeCloseTo(2.27 / 0.65, 0);
+    expect(long).toBe(short);
   });
 
   it("reads run size from sumRun when the record tracks it, sumLabel otherwise", () => {
@@ -85,27 +79,27 @@ describe("recordScore", () => {
     const runner = { ...base, sumRun: 150 };
     expect(scoreParts(base, targets)!.provenRunDoublings).toBeCloseTo(50 / 110, 2);
     expect(scoreParts(runner, targets)!.provenRunDoublings).toBeCloseTo(150 / 110, 2);
-    expect(recordScore(runner, targets)!).toBeGreaterThan(recordScore(base, targets)!);
+    expect(recordScore(runner, targets)!).toBe(recordScore(base, targets)!);
   });
 
-  it("caps run size at its target like the rates", () => {
-    expect(scoreParts({ ...record(1000, 0, 0, 0), sumRun: 6000 }, targets)!.pointsRun).toBe(5);
+  it("gives run size no points", () => {
+    expect(scoreParts({ ...record(1000, 0, 0, 0), sumRun: 6000 }, targets)!.pointsRun).toBe(0);
   });
 
-  it("is 30 points of 2x rate, 20 of 4x rate, 10 of 10x rate, 5 of run size, 20 of return and 15 of catch rate, each the proven share of its target", () => {
+  it("is 35 points of 2x rate, 15 of 4x rate, 10 of 10x rate, 25 of return and 15 of catch rate, each the proven share of its target", () => {
     const exam = simmed(examined(record(400, 300, 100, 1, 20), 100, 40), 10);
     const parts = scoreParts(exam, targets)!;
     // 75% raw on 400 calls proves 300/410 = 73%; 25% raw proves 24%; 1 doubling a call proves 0.98.
     expect(parts.proven2xPct).toBeGreaterThan(70);
     expect(parts.proven2xPct).toBeLessThan(75);
-    expect(parts.points2x).toBeCloseTo(30 * (parts.proven2xPct / 75), 0);
-    expect(parts.points4x).toBeCloseTo(20 * (parts.proven4xPct / 50), 0);
+    expect(parts.points2x).toBeCloseTo(35 * (parts.proven2xPct / 75), 0);
+    expect(parts.points4x).toBeCloseTo(15 * (parts.proven4xPct / 50), 0);
     expect(parts.provenRunDoublings).toBeCloseTo(400 / 410, 2);
-    expect(parts.pointsRun).toBeCloseTo(5 * (parts.provenRunDoublings / 2), 0);
-    // +10% a call on 400 calls, with 10 phantom full stops: (4000 - 500) / 410 = +8.5%, on the
-    // way from -50% (nothing) to +25% (full).
-    expect(parts.provenReturnPct).toBeCloseTo(8.5, 1);
-    expect(parts.pointsReturn!).toBeCloseTo(20 * ((8.54 + 50) / 75), 0);
+    expect(parts.pointsRun).toBe(0);
+    // +10% a call on 400 calls, with 10 phantom calls at the floor: (4000 - 250) / 410 = +9.1%,
+    // on the way from -25% (nothing) to +25% (full).
+    expect(parts.provenReturnPct).toBeCloseTo(9.1, 1);
+    expect(parts.pointsReturn!).toBeCloseTo(25 * ((9.15 + 25) / 50), 0);
     // 20 of 400 proves 20/410 = 4.9% against the 25% target.
     expect(parts.proven10xPct).toBeCloseTo(4.9, 1);
     expect(parts.points10x).toBeCloseTo(10 * (parts.proven10xPct / 25), 0);
@@ -128,8 +122,10 @@ describe("recordScore", () => {
     const losing = recordScore(simmed(base, -30), targets)!;
     const paying = recordScore(simmed(base, 15), targets)!;
     expect(paying).toBeGreaterThan(losing + 10);
-    expect(scoreParts(simmed(base, -50), targets)!.pointsReturn).toBe(0);
-    expect(scoreParts(simmed(base, 200), targets)!.pointsReturn).toBe(20);
+    expect(scoreParts(simmed(base, -25), targets)!.pointsReturn).toBe(0);
+    expect(scoreParts(simmed(base, 200), targets)!.pointsReturn).toBe(25);
+    // Break-even earns about half, less the phantom calls at the floor.
+    expect(scoreParts(simmed(base, 0), targets)!.pointsReturn).toBeCloseTo(12.5 * (400 / 410) + 0, 0);
   });
 
   it("scores letting runners slip by: the same hit rates catching more runners score higher", () => {
@@ -144,7 +140,7 @@ describe("recordScore", () => {
     const parts = scoreParts(record(400, 300, 100, 1, 20), targets)!;
     expect(parts.pointsCatch).toBeNull();
     expect(recordScore(record(400, 300, 100, 1, 20), targets)).toBeCloseTo(
-      (parts.points2x + parts.points4x + parts.points10x + parts.pointsRun) / 0.65,
+      (parts.points2x + parts.points4x + parts.points10x) / 0.6,
       1,
     );
   });
@@ -170,12 +166,18 @@ describe("noteRunners", () => {
 });
 
 describe("pooledRecord and the catch rate", () => {
-  it("carries the backtest's catch rate unscaled, since live records have none", () => {
+  it("pools live runners with the backtest's, the backtest's capped like its calls", () => {
     const live = record(200, 60, 20, 0.6, 5);
     const exam = examined(record(600, 180, 60, 0.6, 15), 150, 75);
-    const { record: pooled } = pooledRecord(live, exam);
-    expect(pooled).toMatchObject({ runnersSeen: 150, runnersCaught: 75 });
+    // Without live runners: the backtest's 150 runners count as 30, its catch rate unchanged.
+    expect(pooledRecord(live, exam).record).toMatchObject({ runnersSeen: 30, runnersCaught: 15 });
     expect(pooledRecord(live, record(600, 180, 60, 0.6)).record.runnersSeen).toBeUndefined();
+    // With 100 live runners, 10 caught: (10 + 15) / (100 + 30).
+    const withLive = withLiveCatch(live, { runners: 100, caught: 10, pct: 10 });
+    expect(pooledRecord(withLive, exam).record).toMatchObject({ runnersSeen: 130, runnersCaught: 25 });
+    // A live record alone scores its own catch.
+    expect(scoreParts(withLive, targets)!.provenCatchPct).toBeCloseTo((10 / 110) * 100, 1);
+    expect(withLiveCatch(live, { runners: 0, caught: 0, pct: null })).toBe(live);
   });
 });
 

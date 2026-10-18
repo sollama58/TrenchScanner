@@ -9,10 +9,12 @@ import {
   breedChallengers,
   recipeFamily,
   compositeScore,
+  withLiveCatch,
   emptyRecord,
   enabledContestants,
   foundingLanes,
   liveCallRecords,
+  liveCatchRates,
   loadCurrentLanes,
   rechooseChampion,
   seededRng,
@@ -820,7 +822,7 @@ async function evolutionPlan(
  */
 async function laneFitness(lanes: Lane[], targets: PrecisionTargets, now: Date): Promise<LaneFitness[]> {
   const since = new Date(now.getTime() - FITNESS_WINDOW_DAYS * 86_400_000);
-  const [live, active] = await Promise.all([
+  const [live, active, catches] = await Promise.all([
     liveCallRecords(
       lanes.map((l) => l.slot),
       since,
@@ -830,6 +832,12 @@ async function laneFitness(lanes: Lane[], targets: PrecisionTargets, now: Date):
       where: { status: "active", contestant: { in: lanes.map((l) => l.slot) } },
       select: { contestant: true, evalMetrics: true },
     }),
+    // Live catch, as the board scores it (withLiveCatch).
+    liveCatchRates(
+      lanes.map((l) => l.slot),
+      since,
+      lanes,
+    ),
   ]);
   const lastExam = new Map(
     active.map((r) => [
@@ -842,7 +850,7 @@ async function laneFitness(lanes: Lane[], targets: PrecisionTargets, now: Date):
     // A seat whose lane is newer than its active model (it just took over) has no exam of its own
     // yet in storage - its live record alone, or nothing, judges it.
     composite: compositeScore(
-      live.get(lane.slot) ?? emptyRecord(),
+      withLiveCatch(live.get(lane.slot) ?? emptyRecord(), catches.byModel.get(lane.slot)),
       lastExam.get(lane.slot) ?? emptyRecord(),
       targets,
     ).score,
