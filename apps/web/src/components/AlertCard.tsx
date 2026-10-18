@@ -771,7 +771,7 @@ export function AlertCard({
 }
 
 /**
- * The coin's own X and website as the title row's link pills (user ask 2026-10-18): only the
+ * The coin's own X and website as the card footer's link pills (user ask 2026-10-18): only the
  * links it has, and only https ones, whatever the source stored.
  */
 export function socialLinks(token: Pick<Card["token"], "twitterUrl" | "websiteUrl">) {
