@@ -116,6 +116,7 @@ import {
   ShieldIcon,
   SlidersIcon,
 } from "./Icons";
+import { XLinkPreview } from "./XLinkPreview";
 import { safetyChecks, safetyVerdict, type SafetyVerdict } from "../safetyScreen";
 
 /** Mirrors apps/api/src/routes/tokens.ts TokenChart. */
@@ -2664,10 +2665,10 @@ function ReferentCard({ read: r }: { read: SageRead }) {
       )}
       {x && (
         <p className="small tm-referent-x">
-          <a href={x.url!} target="_blank" rel="noreferrer">
+          <XLinkPreview href={x.url!} target="_blank" rel="noreferrer">
             {x.author?.handle ? `@${x.author.handle}` : "X post"}
             <ExternalIcon size={11} />
-          </a>
+          </XLinkPreview>
           <span className="muted">
             {x.relation && ` · ${RELATION[x.relation] ?? words(x.relation)}`}
             {x.author?.followers != null && ` · ${count(x.author.followers)} followers`}

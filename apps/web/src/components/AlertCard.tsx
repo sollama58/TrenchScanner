@@ -29,6 +29,7 @@ import {
   SlidersIcon,
   XLogoIcon,
 } from "./Icons";
+import { XLinkPreview } from "./XLinkPreview";
 import { linkedCount, linkedCountText } from "../bubbleMap";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
@@ -731,7 +732,7 @@ export function AlertCard({
           {socials.length > 0 && (
             <span className="card-socials">
               {socials.map((l) => (
-                <a
+                <XLinkPreview
                   key={l.key}
                   className="pill pill-icon pill-social"
                   href={l.url}
@@ -741,7 +742,7 @@ export function AlertCard({
                   aria-label={`Open the coin's ${l.label}`}
                 >
                   <l.Icon size={11} />
-                </a>
+                </XLinkPreview>
               ))}
             </span>
           )}
