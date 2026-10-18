@@ -31,7 +31,10 @@ describe("plainRefusal", () => {
 });
 
 const ADMIN = "ProModeAdmin1111111111111111111111111111111";
-const TRADER = "ProModeTrader111111111111111111111111111111";
+const walletKey = () =>
+  bs58.encode(generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).subarray(-32));
+// A real key: grants take only addresses on the curve.
+const TRADER = walletKey();
 const MINT = "So11111111111111111111111111111111111111112";
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
@@ -139,15 +142,36 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
         .statusCode,
     ).toBe(400);
 
+    // A grant with an end date in the past no longer counts, and a re-grant replaces it.
+    await prisma.proModeGrant.update({
+      where: { walletAddress: TRADER },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    expect((await as(TRADER, "GET", "/auth/me")).json()).toMatchObject({ isPro: false });
+    const regrant = await as(ADMIN, "POST", "/admin/pro-mode", { walletAddress: TRADER, days: 2 });
+    expect(regrant.statusCode).toBe(200);
+    const ends = Date.parse((regrant.json() as { expiresAt: string }).expiresAt) - Date.now();
+    expect(ends).toBeGreaterThan(47.9 * 3_600_000);
+    expect((await as(TRADER, "GET", "/auth/me")).json()).toMatchObject({ isPro: true });
+    expect(
+      // A program-derived address passes the old shape check but no one holds its key.
+      (
+        await as(ADMIN, "POST", "/admin/pro-mode", {
+          walletAddress: "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1",
+        })
+      ).statusCode,
+    ).toBe(400);
+
     expect((await as(ADMIN, "DELETE", `/admin/pro-mode/${TRADER}`)).statusCode).toBe(200);
-    // Pro Mode gone, but it had it: it may still sell what it holds.
+    // Pro Mode gone: no trading at all, sells included.
     expect((await as(TRADER, "GET", "/auth/me")).json()).toMatchObject({
       isPro: false,
-      proMode: { canClose: true },
+      proMode: { canClose: false },
     });
+    expect((await as(TRADER, "POST", "/pro/trade/build", { mint: MINT, side: "sell" })).statusCode).toBe(404);
   });
 
-  it("is admins only while PRO_TRADING_PUBLIC is off: no grant, holder or sell-only access", async () => {
+  it("is admins only while PRO_TRADING_PUBLIC is off: no grant or holder access", async () => {
     const adminsOnly = await buildServer({ ...env, PRO_TRADING_PUBLIC: false });
     try {
       const me = (wallet: string) =>
@@ -179,8 +203,6 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
 });
 
 /** A real wallet address (on the curve): the holder scan leaves program-owned ones out. */
-const walletKey = () =>
-  bs58.encode(generateKeyPairSync("ed25519").publicKey.export({ format: "der", type: "spki" }).subarray(-32));
 const HOLDER = walletKey();
 const GRACE = walletKey();
 const LAPSED = walletKey();
@@ -287,30 +309,60 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     );
   });
 
-  it("lets a wallet that had Pro Mode sell, but not buy, after it ends", async () => {
-    // Never seen with Pro Mode: nothing at all.
+  it("lets a wallet whose Pro Mode ended trade nothing, sells included", async () => {
+    // Even one recorded with Pro Mode under the old sell-only rule.
+    await prisma.proModeSeen.create({ data: { walletAddress: LAPSED, lastProAt: new Date() } });
     expect(await me(LAPSED)).toMatchObject({ isPro: false, proMode: { canClose: false } });
     expect((await as(LAPSED, "GET", `/pro/trade/${MINT}/position`)).statusCode).toBe(404);
-    // Seen with it once (any wallet that had it is recorded): selling stays open.
-    await prisma.proModeSeen.create({ data: { walletAddress: LAPSED, lastProAt: new Date() } });
-    expect(await me(LAPSED)).toMatchObject({ isPro: false, proMode: { canClose: true } });
-    const buy = await as(LAPSED, "POST", "/pro/trade/build", {
-      mint: MINT,
-      side: "buy",
-      amount: "1000",
-      slippageBps: 100,
-      speed: "eco",
-    });
-    expect(buy.statusCode).toBe(403);
-    // A sale gets past the gate (this one then fails validation: no amount).
-    expect((await as(LAPSED, "POST", "/pro/trade/build", { mint: MINT, side: "sell" })).statusCode).toBe(400);
-    // And the grace wallet was recorded when it had Pro Mode, so it can close later too.
-    expect(await prisma.proModeSeen.findUnique({ where: { walletAddress: GRACE } })).not.toBeNull();
+    expect((await as(LAPSED, "POST", "/pro/trade/build", { mint: MINT, side: "sell" })).statusCode).toBe(404);
   });
 
   it("changes no one's standing when a scan fails", async () => {
     await expect(refreshProHolders({ getTopHoldersBatch: async () => new Map() })).rejects.toThrow();
     resetProHolderCacheForTests();
     expect(await me(HOLDER)).toMatchObject({ isPro: true, proMode: { source: "holder" } });
+  });
+
+  it("keeps a returning holder's run, and ends the grace of one that moved its bag", async () => {
+    const mover = walletKey();
+    const at = new Date(Date.now() + 10 * 60_000);
+    // Held for hours until twenty minutes ago, and now holds next to nothing.
+    await prisma.proHolder.create({
+      data: {
+        walletAddress: mover,
+        rank: 200,
+        lastInTopAt: new Date(at.getTime() - 20 * 60_000),
+        inTopSince: new Date(at.getTime() - 5 * 3_600_000),
+      },
+    });
+    const before = await prisma.proHolder.findUnique({ where: { walletAddress: GRACE } });
+    const fillers = Array.from({ length: 248 }, () => ({ owner: walletKey(), pct: 0.1 }));
+    await refreshProHolders(
+      {
+        getTopHoldersBatch: async (mints) =>
+          new Map(
+            mints.map((m) => [
+              m,
+              {
+                status: "found",
+                holders: [
+                  { owner: HOLDER, pct: 5 },
+                  { owner: GRACE, pct: 1 },
+                  ...fillers,
+                  { owner: mover, pct: 0.01 },
+                ],
+              },
+            ]),
+          ),
+      },
+      at,
+    );
+    // The grace wallet is back in the top 250: its qualifying run carries on, no new hour.
+    const after = await prisma.proHolder.findUnique({ where: { walletAddress: GRACE } });
+    expect(after!.inTopSince.getTime()).toBe(before!.inTopSince.getTime());
+    expect(await proHolderStanding(GRACE, at)).toMatchObject({ state: "top" });
+    // The mover holds under half the 250th wallet's share: no grace for it.
+    expect(await proHolderStanding(mover, at)).toEqual({ state: "none" });
+    resetProHolderCacheForTests();
   });
 });

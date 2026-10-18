@@ -176,7 +176,7 @@ async function toUserResponse(
       : { enabled: false, actions: [], buyOverLamports: null },
     isAdmin: adminWalletSet(env).has(user.walletAddress),
     // Pro Mode: whether the token modal shows its Trade panel (proMode.ts), and the rest of it:
-    // where it comes from, a grace period's end, and whether a wallet without it may still sell.
+    // where it comes from, and a grace period's end. canClose matches isPro: no sells without Pro Mode.
     isPro: pro.pro,
     proMode: {
       source: pro.source,

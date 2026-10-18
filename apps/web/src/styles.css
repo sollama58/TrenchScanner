@@ -11776,6 +11776,63 @@ img.tm-avatar {
   touch-action: pan-y;
   overflow: visible;
 }
+/* Zoomed in, a drag pans the window. */
+.pc-svg.zoomed {
+  cursor: grab;
+}
+.pc-svg.zoomed:active {
+  cursor: grabbing;
+}
+/* The candle view: a wick from high to low, a body from open to close. */
+.pc-candle line {
+  stroke-width: 1;
+}
+.pc-candle.up line {
+  stroke: var(--good);
+}
+.pc-candle.up rect {
+  fill: var(--good);
+}
+.pc-candle.down line {
+  stroke: var(--bad);
+}
+.pc-candle.down rect {
+  fill: var(--bad);
+}
+.pc-candle.on rect {
+  stroke: var(--ink);
+  stroke-width: 1;
+}
+/* Under the chart: Line / Candles and the zoom buttons. */
+.pc-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  height: 28px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+.pc-zoom {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+}
+.pc-zoom .tm-range {
+  min-width: 28px;
+}
+.pc-zoom .tm-range:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+@media (max-width: 640px) {
+  .pc-zoom-hint {
+    display: none;
+  }
+}
 .pc-grid {
   stroke: var(--grid);
   stroke-width: 1;

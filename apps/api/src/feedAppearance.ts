@@ -206,6 +206,8 @@ export const feedAppearanceSchema = z
       .default([...CHART_MARK_KINDS]),
     /** The smallest trade it marks, in SOL: 0.5 by default, never under CHART_MARK_MIN_SOL. */
     chartMarkMinSol: z.number().min(CHART_MARK_MIN_SOL).max(CHART_MARK_MAX_SOL).default(0.5),
+    /** The token chart draws a line or candles (user ask 2026-10-18); a line by default. */
+    chartStyle: z.enum(["line", "candles"]).default("line"),
     /** Card fields not shown. */
     hidden: z
       .array(z.enum(CARD_FIELDS))
@@ -266,6 +268,7 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   chartMarks: true,
   chartMarkKinds: [...CHART_MARK_KINDS],
   chartMarkMinSol: 0.5,
+  chartStyle: "line",
   // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
   // fill a clean 4 x 2 grid, the TokenSage button (the token view keeps its own), the header's
   // "≈N% 2x" pill and the 1st Buyers Holding tile, which Snipers replaced (user asks 2026-10-14).

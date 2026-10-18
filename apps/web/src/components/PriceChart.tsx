@@ -1,18 +1,27 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { change, signedPct, usd } from "../format";
 import {
+  clipPoints,
   FLOW_WINDOW_MS,
   flowAt,
+  MIN_ZOOM_MS,
   mcapAxis,
+  ohlcBars,
+  panBy,
+  pointCandles,
+  zoomBy,
+  zoomWindow,
   sinceLabel,
   timeLabel,
   timeTicks,
   valueAt,
   volumeBars,
+  type OhlcBar,
   type Point,
   type ScanFlow,
   type VolumeBar,
   type VolumeCandle,
+  type Zoom,
 } from "../priceChart";
 import { markRadius, type WalletMark } from "../walletMarks";
 
@@ -31,6 +40,9 @@ export interface ChartTrade {
   /** The readout's line for it ("Bought 0.5 SOL"). */
   text: string;
 }
+
+/** How the chart draws the market cap: a line (the default) or candles. */
+export type ChartKind = "line" | "candles";
 
 const PAD = { l: 8, r: 62, t: 24, b: 24 };
 
@@ -60,6 +72,11 @@ export function PriceChart({
   marks = [],
   trades = [],
   entry = null,
+  extent,
+  zoom: zoomProp,
+  onZoom,
+  kind = "line",
+  onKind,
 }: {
   points: Point[];
   /**
@@ -97,13 +114,39 @@ export function PriceChart({
   trades?: ChartTrade[];
   /** Pro Mode: the average market cap the held position was bought at, drawn as a dashed line. */
   entry?: number | null;
+  /**
+   * The whole view's span, when `points` cover only the zoomed window of it (the token view reads
+   * them finer as it zooms); the points' own span without it.
+   */
+  extent?: { t0: number; t1: number };
+  /** The zoomed window, when the caller keeps it (with onZoom); else the chart keeps its own. */
+  zoom?: Zoom | null;
+  onZoom?: (zoom: Zoom | null) => void;
+  /** A line, or candles from the candles' highs and lows (user ask 2026-10-18). */
+  kind?: ChartKind;
+  /** Shows the Line / Candles switch under the chart. */
+  onKind?: (kind: ChartKind) => void;
 }) {
   const id = useId().replace(/:/g, "");
   const boxRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const [width, setWidth] = useState(640);
-  const [hover, setHover] = useState<number | null>(null);
+  /** The point under the pointer, and the pointer's x in the box (the candle view reads the candle there). */
+  const [hover, setHover] = useState<{ i: number; cx: number } | null>(null);
   /** The volume bar under the pointer (or last tapped): its slice. */
   const [bar, setBar] = useState<number | null>(null);
+  // Zoom (user ask 2026-10-18): the wheel, a drag, a pinch or the buttons under the chart.
+  const [ownZoom, setOwnZoom] = useState<Zoom | null>(null);
+  const zoom = onZoom ? (zoomProp ?? null) : ownZoom;
+  const setZoom = onZoom ?? setOwnZoom;
+  /** A drag panning the zoomed window, or a two-finger pinch: where it started. */
+  const gesture = useRef<
+    | { kind: "pan"; x: number; win: { from: number; to: number } }
+    | { kind: "pinch"; dist: number; mid: number; win: { from: number; to: number } }
+    | null
+  >(null);
+  /** The touches down on the chart, by pointer, for a pinch. */
+  const touches = useRef(new Map<number, { x: number; y: number }>());
 
   useEffect(() => {
     const el = boxRef.current;
@@ -115,55 +158,142 @@ export function PriceChart({
     return () => ro.disconnect();
   }, []);
 
+  const ext0 = extent?.t0 ?? points[0]?.t ?? 0;
+  const ext1 = extent?.t1 ?? points[points.length - 1]?.t ?? 0;
+  const plotW = width - PAD.l - PAD.r;
+
   const geo = useMemo(() => {
     if (points.length < 2) return null;
-    const t0 = points[0]!.t;
-    const t1 = points[points.length - 1]!.t;
-    const step = stepMs ?? Math.max(1, (t1 - t0) / (points.length - 1));
-    const plotW = width - PAD.l - PAD.r;
+    const { from: t0, to: t1 } = zoomWindow(zoom, ext0, ext1);
+    const pts = clipPoints(points, t0, t1);
+    if (pts.length < 2) return null;
+    const zoomed = zoom !== null;
+    const step = stepMs ?? Math.max(1, (t1 - t0) / (pts.length - 1));
     const x = (t: number) => PAD.l + ((t - t0) / Math.max(1, t1 - t0)) * plotW;
     const lead = events[0];
     const leadShown = lead !== undefined && lead.t >= t0 && lead.t <= t1;
-    const base = leadShown && lead.mcap ? lead.mcap : points[0]!.v;
-    const values = points.map((p) => p.v);
-    // The trader's entry stays in view: it is what their PnL is measured from.
-    const extra = entry !== null && entry > 0 ? [entry] : [];
-    const lo = Math.min(...values, base, ...extra);
-    const hi = Math.max(...values, base, ...extra);
+    const base = leadShown && lead.mcap ? lead.mcap : pts[0]!.v;
+    // About one bar per 6px of plot (8px for candles, which need the room), and no more bars than
+    // the window has candles' widths (a minute, 15 seconds or one, the narrowest in view). The
+    // candles and the volume lane share the slices, so each candle sits over its volume.
+    const narrowest = candles.reduce((w, k) => Math.min(w, k.w ?? 60_000), 60_000);
+    const slices = Math.max(
+      1,
+      Math.min(Math.round(plotW / (kind === "candles" ? 8 : 6)), Math.round((t1 - t0) / narrowest)),
+    );
+    // Candles: the real ones, then the line's own readings past the newest (the live curve's
+    // ticks); without real ones (scan readings), the readings alone.
+    let bars: (OhlcBar | null)[] | null = null;
+    if (kind === "candles") {
+      const newest = candles.reduce<VolumeCandle | null>(
+        (a, k) => (!a || k.t + (k.w ?? 60_000) > a.t + (a.w ?? 60_000) ? k : a),
+        null,
+      );
+      const newestEnd = newest ? newest.t + (newest.w ?? 60_000) : -Infinity;
+      const after = pts.filter((p) => p.t > newestEnd);
+      const src = newest
+        ? [...candles, ...pointCandles(after, { t: newestEnd, v: newest.c })]
+        : pointCandles(pts);
+      bars = ohlcBars(src, t0, t1, slices);
+    }
+    const values = pts.map((p) => p.v);
+    const wicks = bars ? bars.flatMap((b) => (b ? [b.h, b.l] : [])) : [];
+    // Zoomed, the axis fits what is in the window alone; the whole view also keeps the baseline
+    // and the trader's entry (what their PnL is measured from) in sight.
+    const extra = zoomed ? [] : [base, ...(entry !== null && entry > 0 ? [entry] : [])];
+    const lo = Math.min(...values, ...wicks, ...extra);
+    const hi = Math.max(...values, ...wicks, ...extra);
     const axis = mcapAxis(lo, hi, PAD.t, height - PAD.b);
-    const hiIdx = points.reduce((best, p, i) => (p.v > points[best]!.v ? i : best), 0);
-    return { t0, t1, step, x, axis, base, fromAlert: leadShown && !!lead.mcap, hiIdx };
-  }, [points, stepMs, width, height, events, entry]);
+    const hiIdx = pts.reduce((best, p, i) => (p.v > pts[best]!.v ? i : best), 0);
+    return {
+      t0,
+      t1,
+      pts,
+      zoomed,
+      step,
+      x,
+      axis,
+      base,
+      fromAlert: leadShown && !!lead.mcap,
+      hiIdx,
+      slices,
+      bars,
+    };
+  }, [points, zoom, ext0, ext1, stepMs, plotW, height, events, entry, candles, kind]);
 
-  // About one bar per 6px of plot, and no more bars than the view has candles' widths (a minute,
-  // 15 seconds or one, the narrowest in view).
-  const plotW = width - PAD.l - PAD.r;
-  const narrowest = candles.reduce((w, k) => Math.min(w, k.w ?? 60_000), 60_000);
-  const slices = geo
-    ? Math.max(1, Math.min(Math.round(plotW / 6), Math.round((geo.t1 - geo.t0) / narrowest)))
-    : 1;
   const vols = useMemo(
-    () => (geo && candles.some((k) => k.vol > 0) ? volumeBars(candles, geo.t0, geo.t1, slices) : null),
-    [geo, candles, slices],
+    () => (geo && candles.some((k) => k.vol > 0) ? volumeBars(candles, geo.t0, geo.t1, geo.slices) : null),
+    [geo, candles],
   );
 
+  // The window as the wheel handler reads it: set on each render, and by the handler itself, so
+  // wheel events between renders build on each other.
+  const winRef = useRef({ from: 0, to: 0, t0: 0, t1: 0 });
+  const setZoomRef = useRef(setZoom);
+  useEffect(() => {
+    setZoomRef.current = setZoom;
+    if (geo) winRef.current = { from: geo.t0, to: geo.t1, t0: ext0, t1: ext1 };
+  });
+  const hasGeo = geo !== null;
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const w = winRef.current;
+      const box = el.getBoundingClientRect();
+      const pw = box.width - PAD.l - PAD.r;
+      if (pw <= 0 || w.t1 <= w.t0) return;
+      const zoomed = w.to - w.from < w.t1 - w.t0 - 1;
+      const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
+      let next: Zoom | null;
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        // A sideways swipe on a trackpad pans a zoomed window.
+        if (!zoomed) return;
+        next = panBy(w, w.t0, w.t1, ((e.deltaX * unit) / pw) * (w.to - w.from));
+      } else {
+        // Zoomed all the way out, scrolling down scrolls the page as before.
+        if (e.deltaY === 0 || (e.deltaY > 0 && !zoomed)) return;
+        const at = Math.min(1, Math.max(0, (e.clientX - box.left - PAD.l) / pw));
+        const factor = Math.exp(Math.max(-1, Math.min(1, (e.deltaY * unit) / 300)));
+        next = zoomBy(w, w.t0, w.t1, factor, at);
+      }
+      e.preventDefault();
+      winRef.current = { ...w, from: next?.from ?? w.t0, to: next?.to ?? w.t1 };
+      setHover(null);
+      setZoomRef.current(next);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [hasGeo]);
+
   if (!geo) return null;
-  const { x, axis } = geo;
+  const { x, axis, pts } = geo;
   const span = geo.t1 - geo.t0;
+  const win = { from: geo.t0, to: geo.t1 };
+  const zoomed = geo.zoomed;
+  const atMin = span <= Math.min(MIN_ZOOM_MS, ext1 - ext0) + 1;
+  // Whether the window runs to the view's end: zoomed off it, the end tag is the window's last
+  // reading and the latest goes under it as "NOW:".
+  const atEnd = geo.t1 >= ext1 - 1;
   const bottom = height - PAD.b;
   const lane = vols ? LANE : 0;
   const fullH = height + lane;
   const px = (p: Point) => x(p.t);
   const py = (p: Point) => axis.y(p.v);
-  const line = points.map((p, i) => `${i ? "L" : "M"}${px(p).toFixed(1)},${py(p).toFixed(1)}`).join(" ");
+  const line = pts.map((p, i) => `${i ? "L" : "M"}${px(p).toFixed(1)},${py(p).toFixed(1)}`).join(" ");
   const baseY = axis.y(geo.base);
-  const first = points[0]!;
-  const last = points[points.length - 1]!;
-  const area = `${line} L${px(last).toFixed(1)},${baseY.toFixed(1)} L${px(first).toFixed(1)},${baseY.toFixed(1)} Z`;
+  // Zoomed in, the baseline can sit outside the window: the area then runs to the plot's edge.
+  const baseIn = baseY >= PAD.t - 2 && baseY <= bottom + 2;
+  const areaY = Math.min(bottom, Math.max(PAD.t, baseY));
+  const first = pts[0]!;
+  const last = pts[pts.length - 1]!;
+  const area = `${line} L${px(last).toFixed(1)},${areaY.toFixed(1)} L${px(first).toFixed(1)},${areaY.toFixed(1)} Z`;
   // Where the baseline falls in the plot's height, for the colour split of the line and the area.
   const split = Math.min(1, Math.max(0, (baseY - PAD.t) / (bottom - PAD.t)));
   const up = last.v >= geo.base;
   const lastY = py(last);
+  const ended = !live || !atEnd;
+
   const shown = events.filter((e) => e.t >= geo.t0 && e.t <= geo.t1);
   const lead = shown[0];
   // Round times along the axis (on the minute, the quarter hour...), as many as fit their labels:
@@ -199,7 +329,7 @@ export function PriceChart({
   // Model View cut off before now: the latest reading goes under the end tag, or over it when
   // the baseline's tag sits below.
   const nowTag =
-    !live && now !== undefined && now > 0
+    ended && now !== undefined && now > 0
       ? (() => {
           const text = `NOW: ${axisUsd(now)}`;
           const w = Math.max(PAD.r - 4, Math.round(text.length * 6.1 + 14));
@@ -209,16 +339,17 @@ export function PriceChart({
           return { text, w, y, up: now >= geo.base };
         })()
       : null;
-  const tags = [lastY, ...(geo.fromAlert ? [baseY] : []), ...(nowTag ? [nowTag.y] : [])];
+  const tags = [lastY, ...(geo.fromAlert && baseIn ? [baseY] : []), ...(nowTag ? [nowTag.y] : [])];
   const ticks = axis.ticks.filter((v) => tags.every((y) => Math.abs(axis.y(v) - y) > 18));
-  const h = hover !== null ? points[hover] : undefined;
-  const peak = points[geo.hiIdx]!;
+  const h = hover !== null ? pts[hover.i] : undefined;
+  const peak = pts[geo.hiIdx]!;
   // The peak gets a label unless it is the latest point (its tag already says it) or right by it,
   // and not in Model View, where the window's high isn't the coin's peak.
   const showPeak =
     seenUntil === undefined &&
-    points.length > 2 &&
-    geo.hiIdx < points.length - 1 &&
+    !zoomed &&
+    pts.length > 2 &&
+    geo.hiIdx < pts.length - 1 &&
     Math.abs(py(peak) - lastY) > 16;
   // Above its point the label would sit under a flag along the top ("Called"), so it goes below.
   const peakBelow = py(peak) - 9 < PAD.t + 6 && shown.some((e) => Math.abs(x(e.t) - px(peak)) < 70);
@@ -228,18 +359,29 @@ export function PriceChart({
     if (!box) return;
     const cx = clientX - box.left;
     let best = 0;
-    for (let i = 1; i < points.length; i++) {
-      if (Math.abs(px(points[i]!) - cx) < Math.abs(px(points[best]!) - cx)) best = i;
+    for (let i = 1; i < pts.length; i++) {
+      if (Math.abs(px(pts[i]!) - cx) < Math.abs(px(pts[best]!) - cx)) best = i;
     }
-    setHover(best);
+    setHover({ i: best, cx });
   };
-  const hx = h ? px(h) : 0;
-  const hUp = h ? h.v >= geo.base : true;
+  const sliceW = plotW / geo.slices;
+  // The candle view reads out the candle under the pointer: its open, high, low and close.
+  const hBarIdx =
+    hover && geo.bars ? Math.min(geo.slices - 1, Math.max(0, Math.floor((hover.cx - PAD.l) / sliceW))) : null;
+  const hb = hBarIdx !== null ? (geo.bars?.[hBarIdx] ?? null) : null;
+  const hx = hb && hBarIdx !== null ? PAD.l + (hBarIdx + 0.5) * sliceW : h ? px(h) : 0;
+  const hv = hb ? hb.c : (h?.v ?? 0);
+  const hUp = h ? hv >= geo.base : true;
+  const winTo = (z: Zoom | null) => {
+    setHover(null);
+    setZoom(z);
+  };
+  // The buttons zoom about the middle, or hold the latest reading in view when the window ends on it.
+  const anchorAt = atEnd && live ? 1 : 0.5;
   // The volume lane: a bar per slice rising from its floor, green where the price rose across it.
   const laneTop = bottom + 8;
   const laneBottom = laneTop + LANE - 10;
   const volMax = vols ? Math.max(1e-9, ...vols.map((b) => b?.usd ?? 0)) : 1;
-  const sliceW = plotW / slices;
   const mark = bar !== null && vols ? (vols[bar] ?? undefined) : undefined;
   const hFlow = h ? flowAt(flow, h.t - 60_000, h.t) : null;
   // The model's scans in view, and the one nearest the hovered point (within a point's width or so).
@@ -256,22 +398,75 @@ export function PriceChart({
   // The trader's own trades in view, and those by the hovered point.
   const shownTrades = trades.filter((tr) => tr.t >= geo.t0 && tr.t <= geo.t1);
   const hTrades = h ? shownTrades.filter((tr) => Math.abs(tr.t - h.t) <= Math.max(geo.step, 5_000)) : [];
-  const entryY = entry !== null && entry > 0 ? axis.y(entry) : null;
+  const entryAt = entry !== null && entry > 0 ? axis.y(entry) : null;
+  const entryY = entryAt !== null && entryAt >= PAD.t - 2 && entryAt <= bottom + 2 ? entryAt : null;
 
   return (
     <div className="pc" ref={boxRef}>
       <svg
+        ref={svgRef}
         width={width}
         height={fullH}
         viewBox={`0 0 ${width} ${fullH}`}
-        className="pc-svg"
+        className={`pc-svg${zoomed ? " zoomed" : ""}`}
         role="img"
         aria-label={ariaLabel}
-        onPointerMove={(e) => pick(e.clientX)}
-        onPointerDown={(e) => {
-          setBar(null);
+        onPointerMove={(e) => {
+          const g = gesture.current;
+          if (g?.kind === "pan") {
+            const dt = -((e.clientX - g.x) / plotW) * (g.win.to - g.win.from);
+            setZoom(panBy(g.win, ext0, ext1, dt));
+            return;
+          }
+          if (touches.current.has(e.pointerId))
+            touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (g?.kind === "pinch") {
+            const [a, b] = [...touches.current.values()];
+            const box = boxRef.current?.getBoundingClientRect();
+            if (!a || !b || !box) return;
+            // The moment under the fingers' first middle stays under their middle as they move.
+            const mid = (a.x + b.x) / 2;
+            const at = Math.min(1, Math.max(0, (g.mid - box.left - PAD.l) / plotW));
+            const z = zoomBy(g.win, ext0, ext1, g.dist / Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)), at);
+            const w = z ?? { from: ext0, to: ext1 };
+            setZoom(z && panBy(w, ext0, ext1, -((mid - g.mid) / plotW) * (w.to - w.from)));
+            return;
+          }
           pick(e.clientX);
         }}
+        onPointerDown={(e) => {
+          setBar(null);
+          if (e.pointerType === "touch") {
+            touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            const [a, b] = [...touches.current.values()];
+            if (a && b && touches.current.size === 2) {
+              gesture.current = {
+                kind: "pinch",
+                dist: Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)),
+                mid: (a.x + b.x) / 2,
+                win,
+              };
+              setHover(null);
+              return;
+            }
+          } else if (e.button === 0 && zoomed) {
+            // A mouse drag on a zoomed chart pans it.
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+            gesture.current = { kind: "pan", x: e.clientX, win };
+            setHover(null);
+            return;
+          }
+          pick(e.clientX);
+        }}
+        onPointerUp={(e) => {
+          touches.current.delete(e.pointerId);
+          if (gesture.current?.kind === "pan" || touches.current.size < 2) gesture.current = null;
+        }}
+        onPointerCancel={(e) => {
+          touches.current.delete(e.pointerId);
+          gesture.current = null;
+        }}
+        onDoubleClick={() => winTo(null)}
         onPointerLeave={(e) => {
           setHover(null);
           // A tapped bar's readout stays up after the finger lifts, until the next tap.
@@ -338,26 +533,49 @@ export function PriceChart({
           />
         ))}
 
-        {seenUntil !== undefined && seenUntil >= geo.t0 && seenUntil < geo.t1 && (
+        {seenUntil !== undefined && seenUntil < geo.t1 && (
           <g className="pc-unseen" aria-hidden="true">
             <rect
-              x={x(seenUntil)}
+              x={Math.max(PAD.l, x(seenUntil))}
               y={PAD.t - 6}
-              width={width - PAD.r - x(seenUntil)}
+              width={width - PAD.r - Math.max(PAD.l, x(seenUntil))}
               height={bottom - PAD.t + 6}
             />
           </g>
         )}
 
-        <path d={area} fill={`url(#${id}-area)`} />
-        <line x1={PAD.l} x2={width - PAD.r} y1={baseY} y2={baseY} className="pc-base" />
-        <path d={line} className="pc-line" stroke={`url(#${id}-stroke)`} />
+        {!geo.bars && <path d={area} fill={`url(#${id}-area)`} />}
+        {baseIn && <line x1={PAD.l} x2={width - PAD.r} y1={baseY} y2={baseY} className="pc-base" />}
+        {geo.bars ? (
+          <g className="pc-candles" aria-hidden="true">
+            {geo.bars.map((b, i) => {
+              if (!b) return null;
+              const cx = PAD.l + (i + 0.5) * sliceW;
+              const bw = Math.min(12, Math.max(1, sliceW * 0.66));
+              const yo = axis.y(b.o);
+              const yc = axis.y(b.c);
+              return (
+                <g key={i} className={`pc-candle ${b.c >= b.o ? "up" : "down"}${hBarIdx === i ? " on" : ""}`}>
+                  <line x1={cx} x2={cx} y1={axis.y(b.h)} y2={axis.y(b.l)} />
+                  <rect
+                    x={cx - bw / 2}
+                    y={Math.min(yo, yc)}
+                    width={bw}
+                    height={Math.max(1, Math.abs(yo - yc))}
+                  />
+                </g>
+              );
+            })}
+          </g>
+        ) : (
+          <path d={line} className="pc-line" stroke={`url(#${id}-stroke)`} />
+        )}
 
         {shownScans.map((s) => (
           <circle
             key={`scan-${s.t}`}
             cx={x(s.t)}
-            cy={axis.y(valueAt(points, s.t) ?? s.v)}
+            cy={axis.y(valueAt(pts, s.t) ?? s.v)}
             r={hScan === s ? 3.5 : 2.5}
             className="pc-scan"
           />
@@ -372,7 +590,7 @@ export function PriceChart({
                 <g
                   key={`mark-${m.t}-${m.wallet}-${i}`}
                   className={`pc-mark wk-${m.kind} ${m.side}${on ? " on" : ""}`}
-                  transform={`translate(${x(m.t).toFixed(1)},${axis.y(valueAt(points, m.t) ?? last.v).toFixed(1)})`}
+                  transform={`translate(${x(m.t).toFixed(1)},${axis.y(valueAt(pts, m.t) ?? last.v).toFixed(1)})`}
                 >
                   <circle r={r} />
                   <text dy="0.35em" textAnchor="middle" fontSize={r >= 8 ? 9.5 : 8}>
@@ -395,7 +613,7 @@ export function PriceChart({
 
         {shownTrades.map((tr, i) => {
           const cx = x(tr.t);
-          const cy = axis.y(valueAt(points, tr.t) ?? last.v);
+          const cy = axis.y(valueAt(pts, tr.t) ?? last.v);
           const buy = tr.side === "buy";
           // A buy's arrow points up at the line from below it, a sale's down at it from above.
           const tip = buy ? cy + 4 : cy - 4;
@@ -470,8 +688,8 @@ export function PriceChart({
 
         {/* The latest reading: a dot on the line's end and its value on the axis. A view that ends
             before the latest reading (Model View) tags its end plainly, so it doesn't read as now. */}
-        <g className={`pc-last ${up ? "up" : "down"}${live ? "" : " end"}`}>
-          {live && <circle cx={px(last)} cy={lastY} r={8} className="pc-halo" />}
+        <g className={`pc-last ${up ? "up" : "down"}${ended ? " end" : ""}`}>
+          {!ended && <circle cx={px(last)} cy={lastY} r={8} className="pc-halo" />}
           <circle cx={px(last)} cy={lastY} r={3.5} />
           <rect x={width - PAD.r + 3} y={lastY - 10} width={PAD.r - 4} height={20} rx={5} />
           <text x={width - PAD.r + 10} y={lastY} dy="0.35em">
@@ -486,7 +704,7 @@ export function PriceChart({
             </text>
           </g>
         )}
-        {geo.fromAlert && Math.abs(baseY - lastY) > 14 && (
+        {geo.fromAlert && baseIn && Math.abs(baseY - lastY) > 14 && (
           <g className="pc-base-tag">
             <rect x={width - PAD.r + 3} y={baseY - 10} width={PAD.r - 4} height={20} rx={5} />
             <text x={width - PAD.r + 10} y={baseY} dy="0.35em">
@@ -498,7 +716,7 @@ export function PriceChart({
         {h && !mark && (
           <g className={`pc-cross ${hUp ? "up" : "down"}`}>
             <line x1={hx} x2={hx} y1={PAD.t - 6} y2={bottom} />
-            <circle cx={hx} cy={py(h)} r={4.5} />
+            {!hb && <circle cx={hx} cy={py(h)} r={4.5} />}
           </g>
         )}
       </svg>
@@ -528,12 +746,19 @@ export function PriceChart({
         <div className="pc-tip" style={tipPlace(hx, width)}>
           <span className="faint">
             {origin !== undefined && <span className="num">{sinceLabel(h.t - origin)} after launch · </span>}
-            {timeLabel(h.t, span > 36 * 3_600_000 ? span : 0, fine)}
+            {hb
+              ? `${timeLabel(hb.from, span > 36 * 3_600_000 ? span : 0, fine)}–${timeLabel(hb.to, 0, fine)}`
+              : timeLabel(h.t, span > 36 * 3_600_000 ? span : 0, fine)}
           </span>
-          <strong className="num">{usd(h.v)}</strong>
+          <strong className="num">{usd(hv)}</strong>
+          {hb && (
+            <span className="num faint">
+              O {axisUsd(hb.o)} · H {axisUsd(hb.h)} · L {axisUsd(hb.l)} · C {axisUsd(hb.c)}
+            </span>
+          )}
           {lead?.mcap ? (
-            <span className={`num ${h.v >= lead.mcap ? "up" : "down"}`}>
-              {signedPct(change(lead.mcap, h.v))} vs {lead.label.toLowerCase()}
+            <span className={`num ${hv >= lead.mcap ? "up" : "down"}`}>
+              {signedPct(change(lead.mcap, hv))} vs {lead.label.toLowerCase()}
             </span>
           ) : null}
           {hScan && (
@@ -558,6 +783,65 @@ export function PriceChart({
           {hFlow && <FlowLine flow={hFlow} />}
         </div>
       )}
+
+      <div className="pc-tools">
+        {onKind && (
+          <div className="segmented small" role="radiogroup" aria-label="Chart type">
+            {(
+              [
+                ["line", "Line"],
+                ["candles", "Candles"],
+              ] as const
+            ).map(([k, text]) => (
+              <button
+                key={k}
+                type="button"
+                role="radio"
+                aria-checked={kind === k}
+                className={kind === k ? "on" : ""}
+                onClick={() => onKind(k)}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+        )}
+        <span className="pc-zoom" role="group" aria-label="Zoom">
+          <button
+            type="button"
+            className="tm-range"
+            aria-label="Zoom out"
+            title="Zoom out"
+            disabled={!zoomed}
+            onClick={() => winTo(zoomBy(win, ext0, ext1, 2, anchorAt))}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="tm-range"
+            aria-label="Zoom in"
+            title="Zoom in"
+            disabled={atMin}
+            onClick={() => winTo(zoomBy(win, ext0, ext1, 0.5, anchorAt))}
+          >
+            +
+          </button>
+          {zoomed && (
+            <button
+              type="button"
+              className="tm-range"
+              title="Show the whole range"
+              onClick={() => winTo(null)}
+            >
+              Reset
+            </button>
+          )}
+        </span>
+        <span className="faint small pc-zoom-hint">
+          {zoomed ? "Drag or swipe with two fingers to move along" : "Scroll or pinch on the chart to zoom"}
+        </span>
+      </div>
     </div>
   );
 }

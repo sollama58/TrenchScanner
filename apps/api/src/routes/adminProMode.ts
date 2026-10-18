@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   adminWalletSet,
-  looksLikeSolanaAddress,
+  isWalletAddress,
   prisma,
   proHolderSummary,
   type Env,
@@ -13,12 +13,15 @@ import {
  * Admin > Access > Pro Mode: which wallets see the token modal's Trade panel (proMode.ts). The
  * admins have it always and are listed for completeness; the top 250 $ASDFASDFA holders have it
  * from the holder scan (counted, with who is in their 24-hour grace); anyone else is a
- * ProModeGrant row, added or removed here. Registered inside the admin block (authenticateAdmin).
+ * ProModeGrant row, added or removed here, with an optional end date. Registered inside the admin
+ * block (authenticateAdmin), so each change also lands in the admin action log.
  */
 
 const grantSchema = z.object({
-  walletAddress: z.string().trim().refine(looksLikeSolanaAddress, "not a wallet address"),
+  walletAddress: z.string().trim().refine(isWalletAddress, "not a wallet address"),
   note: z.string().trim().max(200).optional(),
+  /** Days until it ends; left out for no end date. */
+  days: z.number().int().min(1).max(3650).optional(),
 });
 
 export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { env: Env }) {
@@ -44,14 +47,17 @@ export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { e
     const parsed = grantSchema.safeParse(request.body);
     if (!parsed.success)
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
-    const { walletAddress, note } = parsed.data;
+    const { walletAddress, note, days } = parsed.data;
+    const expiresAt = days ? new Date(Date.now() + days * 24 * 60 * 60_000) : null;
+    // A re-grant is a new grant: who gave it, its note and its end date all replace the old ones.
+    const fields = { note: note || null, grantedBy: request.user!.walletAddress, expiresAt };
     const grant = await prisma.proModeGrant.upsert({
       where: { walletAddress },
-      update: { note: note || null },
-      create: { walletAddress, note: note || null, grantedBy: request.user!.walletAddress },
+      update: { ...fields, createdAt: new Date() },
+      create: { walletAddress, ...fields },
     });
     request.log.info(
-      { wallet: walletTag(walletAddress), by: walletTag(request.user!.walletAddress) },
+      { wallet: walletTag(walletAddress), by: walletTag(request.user!.walletAddress), days: days ?? null },
       "granted Pro Mode",
     );
     return grant;

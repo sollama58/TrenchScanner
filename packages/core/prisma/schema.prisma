@@ -2054,30 +2054,35 @@ model Whitelist {
 /// added and removed from Admin > Access. Keyed by wallet so it can be granted before the wallet
 /// has ever signed in.
 model ProModeGrant {
-  walletAddress String   @id
+  walletAddress String    @id
   note          String?
   /// Wallet address of the admin who granted it, for the audit trail.
   grantedBy     String
-  createdAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
+  /// When it stops counting; null is no end date.
+  expiresAt     DateTime?
 }
 
 /// Pro Mode for the top $ASDFASDFA holders (packages/core/src/subscription/proHolders.ts): each
 /// wallet the pro-holders scan has seen in the top 250, with the last scan it was in. A wallet in
 /// the newest scan has Pro Mode; one that dropped out keeps it for 24 hours after its last.
 model ProHolder {
-  walletAddress String   @id
+  walletAddress String    @id
   /// Its place in the last scan it was in (1 = largest).
   rank          Int
   lastInTopAt   DateTime
   /// Since when it has been in every scan without a gap: Pro Mode starts an hour in, so a bag
   /// moved from wallet to wallet between scans earns none.
-  inTopSince    DateTime @default(now())
+  inTopSince    DateTime  @default(now())
+  /// A scan found it holding under half the 250th wallet's share after it dropped out: it moved
+  /// its bag, so its grace period ended here (one bag passed between wallets earns no grace each).
+  bagMovedAt    DateTime?
 
   @@index([lastInTopAt])
 }
 
-/// Every wallet that has had Pro Mode, and when last: one that lost it can still sell what it
-/// holds from the token modal (user ask 2026-10-18: always allow closing positions).
+/// Every wallet that has had Pro Mode, and when last. No longer read or written (user decision
+/// 2026-10-18: no sell-only access after Pro Mode ends); kept so the old rows stay readable.
 model ProModeSeen {
   walletAddress String   @id
   lastProAt     DateTime

@@ -181,26 +181,27 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   }
 
   /**
-   * The session's wallet, and whether it has full Pro Mode (`pro`) or may only close what it
-   * holds (it had Pro Mode once). Neither: answers 404 and returns null.
+   * The session's wallet, when it has Pro Mode. Without it (even one that had it once): answers
+   * 404 and returns null.
    */
   /**
-   * The signed-in wallet and what it may trade here. `access`: routes that also serve the
-   * access-token buy (user decision 2026-10-18: anyone signed in may swap SOL for $ASDFASDFA here
-   * to burn for access, Privy accounts above all), open once trading is public.
+   * The signed-in wallet and whether it has Pro Mode. Pro Mode or nothing: a wallet without it
+   * can't sell either (user decision 2026-10-18). The one carve-out, `access`: routes that also
+   * serve the access-token buy (anyone signed in may swap SOL for $ASDFASDFA here to burn for
+   * access, Privy accounts above all), open while trading is on and public. It buys only.
    */
   async function proWallet(
     request: FastifyRequest,
     reply: FastifyReply,
     opts: { access?: boolean } = {},
-  ): Promise<{ wallet: string; pro: boolean; canClose: boolean } | null> {
+  ): Promise<{ wallet: string; pro: boolean } | null> {
     const wallet = request.user!.walletAddress;
     const status = await proStatus(env, wallet);
-    if (!status.pro && !status.canClose && !(opts.access && accessSwapOpen())) {
+    if (!status.pro && !(opts.access && accessSwapOpen())) {
       reply.code(404).send({ error: "not found", notSent: true });
       return null;
     }
-    return { wallet, pro: status.pro, canClose: status.canClose };
+    return { wallet, pro: status.pro };
   }
   // The kill switch (PRO_TRADING_ENABLED) stops the access buy too.
   const accessSwapOpen = () => accessSwapOpenFor(env);
@@ -211,19 +212,14 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const who = await proWallet(request, reply, { access: true });
     if (!who) return;
     const { wallet } = who;
+    // Without Pro Mode, only the access-token buy: $ASDFASDFA, buys only, up to 5 SOL. Anything
+    // else gets the same 404 as before, malformed or not, so the route still looks absent.
+    const asked = (request.body ?? {}) as { side?: unknown; mint?: unknown };
+    const accessBuy = asked.side === "buy" && asked.mint === SUBSCRIPTION_MINT && accessSwapOpen();
+    if (!who.pro && !accessBuy) return reply.code(404).send({ error: "not found", notSent: true });
     const parsed = buildSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
-    // Buying the access token, open to everyone signed in once trading is public, up to 5 SOL.
-    const accessBuy = body.side === "buy" && body.mint === SUBSCRIPTION_MINT && accessSwapOpen();
-    if (!who.pro && !accessBuy) {
-      // Without Pro Mode any more, only closing: a sale of what it holds.
-      if (!who.canClose) return reply.code(404).send({ error: "not found", notSent: true });
-      if (body.side !== "sell")
-        return reply
-          .code(403)
-          .send({ error: "Pro Mode has ended for this wallet. You can still sell what you hold." });
-    }
     if (accessBuy && !who.pro && BigInt(body.amount) > ACCESS_BUY_MAX_LAMPORTS)
       return reply.code(422).send({ error: "Buy up to 5 SOL of $ASDFASDFA at a time here." });
     // The account's own two-factor choices: every buy, buys over a size, or sales.
@@ -343,13 +339,12 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       // Sent already (a retried request): the resend loop has it.
       if (inFlight.has(signature)) return { signature };
       // One send per build, and only what was built (the wallet may add its own compute budget
-      // and Lighthouse guards): our Sender key relays nothing a build didn't make. Without Pro
-      // Mode any more, only a sale's build.
+      // and Lighthouse guards): our Sender key relays nothing a build didn't make.
       const list = liveBuilds(wallet);
       const at = list.findIndex(
         (b) =>
           b.blockhash === message.recentBlockhash &&
-          (who.pro || b.side === "sell" || b.access) &&
+          (who.pro || b.access) &&
           signedMatchesBuild(b.message, message) === null,
       );
       if (at < 0)

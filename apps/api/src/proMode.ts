@@ -8,9 +8,10 @@ import { adminWalletSet, prisma, proHolderStanding, type Env } from "@trenchscan
  *   holder   one of the top 250 $ASDFASDFA holders in the newest scan (proHolders.ts in core)
  *   grace    dropped out of the top 250 within the last 24 hours: Pro Mode still, with warnings
  *
- * A wallet that has had Pro Mode and lost it can still sell what it holds (`canClose`): closing
- * a position is always allowed. Everything is off, closes included, while PRO_TRADING_ENABLED is
- * "false" - that is the kill switch. PRO_TRADING_PUBLIC "false" keeps it to the admins alone.
+ * A wallet that has lost Pro Mode can no longer trade at all, sells included (user decision
+ * 2026-10-18: no sell-only access); `canClose` is true only while it has Pro Mode. Everything is
+ * off while PRO_TRADING_ENABLED is "false" - that is the kill switch. PRO_TRADING_PUBLIC "false"
+ * keeps it to the admins alone.
  */
 
 export interface ProStatus {
@@ -23,28 +24,26 @@ export interface ProStatus {
   graceEndsAt?: string;
   /** Why: it dropped out of the top 250, or the holder scans have stopped and can't confirm it. */
   graceReason?: "dropped" | "unconfirmed";
-  /** May sell what it holds: has Pro Mode, or had it. */
+  /** May sell what it holds: only while it has Pro Mode. */
   canClose: boolean;
 }
 
 export const PRO_OFF: ProStatus = { pro: false, source: null, canClose: false };
 
-/** When each wallet was last recorded in ProModeSeen by this process, to write it at most hourly. */
-const seenWritten = new Map<string, number>();
-const SEEN_EVERY_MS = 60 * 60_000;
-
 export async function proStatus(env: Env, walletAddress: string): Promise<ProStatus> {
   if (!env.PRO_TRADING_ENABLED) return PRO_OFF;
   if (adminWalletSet(env).has(walletAddress)) return { pro: true, source: "admin", canClose: true };
-  // Admins only (PRO_TRADING_PUBLIC "false"): no grant, holder or sell-only access yet.
+  // Admins only (PRO_TRADING_PUBLIC "false"): no grant or holder access yet.
   if (!env.PRO_TRADING_PUBLIC) return PRO_OFF;
   let status: ProStatus | null = null;
   if (!status) {
     const grant = await prisma.proModeGrant.findUnique({
       where: { walletAddress },
-      select: { walletAddress: true },
+      select: { expiresAt: true },
     });
-    if (grant) status = { pro: true, source: "grant", canClose: true };
+    // A grant with an end date stops counting at it.
+    if (grant && (grant.expiresAt === null || grant.expiresAt > new Date()))
+      status = { pro: true, source: "grant", canClose: true };
   }
   if (!status) {
     const standing = await proHolderStanding(walletAddress);
@@ -60,29 +59,7 @@ export async function proStatus(env: Env, walletAddress: string): Promise<ProSta
         canClose: true,
       };
   }
-  if (status) {
-    // Recorded so it can always close later; a failed write never costs it the answer.
-    await markSeen(walletAddress).catch(() => undefined);
-    return status;
-  }
-  const seen = await prisma.proModeSeen.findUnique({
-    where: { walletAddress },
-    select: { walletAddress: true },
-  });
-  return { ...PRO_OFF, canClose: seen !== null };
-}
-
-async function markSeen(walletAddress: string): Promise<void> {
-  const last = seenWritten.get(walletAddress);
-  if (last !== undefined && Date.now() - last < SEEN_EVERY_MS) return;
-  const now = new Date();
-  await prisma.proModeSeen.upsert({
-    where: { walletAddress },
-    update: { lastProAt: now },
-    create: { walletAddress, lastProAt: now },
-  });
-  if (seenWritten.size > 10_000) seenWritten.clear();
-  seenWritten.set(walletAddress, Date.now());
+  return status ?? PRO_OFF;
 }
 
 /** Whether the wallet has full Pro Mode now. */

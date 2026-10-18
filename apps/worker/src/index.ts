@@ -545,9 +545,16 @@ async function main() {
   // the mint's token accounts every 10 minutes. Off with the trade system, and while it is admins-only.
   if (env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC)
     schedule("pro-holders", () =>
-      scheduleInterval("pro-holders", () => refreshProHolders(deps.helius), 10, {
-        deadlineMinutes: 10,
-      }),
+      scheduleInterval(
+        "pro-holders",
+        // One scan at a time across workers: two side by side during a deploy could each see the
+        // other's scan as the previous one and restart every holder's qualifying hour.
+        () => withJobLock("pro-holders", () => refreshProHolders(deps.helius)),
+        10,
+        {
+          deadlineMinutes: 10,
+        },
+      ),
     );
   // Rolls match peaks forward from data already banked - no upstream calls. Off the scan cycle on
   // purpose: see createMatchPeaksRunner.
