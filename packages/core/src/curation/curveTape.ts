@@ -1,3 +1,5 @@
+import bs58 from "bs58";
+
 /**
  * The price path of a young Pump.fun coin read off its bonding curve, change by change. The scan's
  * own tape (pricePath.ts) holds one price every 30 seconds and only from when the scan first
@@ -31,6 +33,8 @@ export interface CurveState {
   complete: boolean;
   /** Quoted in SOL (most launches); a coin-quoted curve's realQuote is not SOL. */
   quoteIsSol: boolean;
+  /** What a coin-quoted curve is paired with (USD1, a tokenized stock, ...); null for SOL. */
+  quoteMint?: string | null;
 }
 
 function u64(data: Uint8Array, offset: number): number {
@@ -51,12 +55,14 @@ export function decodeCurve(raw: Uint8Array | string): CurveState | null {
   const complete = data[48] === 1;
   if (!complete && (!(virtualToken > 0) || !(virtualQuote > 0))) return null;
   const quote = data.subarray(QUOTE_MINT_OFFSET, QUOTE_MINT_OFFSET + 32);
+  const quoteIsSol = quote.length < 32 || quote.every((b) => b === 0);
   return {
     virtualToken,
     virtualQuote,
     realQuote: u64(data, 32),
     complete,
-    quoteIsSol: quote.length < 32 || quote.every((b) => b === 0),
+    quoteIsSol,
+    quoteMint: quoteIsSol ? null : bs58.encode(quote),
   };
 }
 
