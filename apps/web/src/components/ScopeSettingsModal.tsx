@@ -1,17 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SCOPE_COLUMNS, type ScopeColumn } from "../scope";
 import {
   activeFilterCount,
   resetColumnFilter,
   resetScopeDisplay,
-  SCOPE_CHIPS,
   setColumnFilter,
   setScopeDisplay,
   useScopeSettings,
   type ScopeColumnFilter,
   type ScopeDisplay,
+  type ScopeSize,
 } from "../scopeSettings";
+import { SCOPE_CHIP_DEFS } from "../scopeChips";
+import { scopeSampleCard } from "../scopeSample";
+import { useNow } from "../hooks";
+import type { TileMode } from "../tileTone";
 import { CloseIcon } from "./Icons";
+import { ScopeRow, scopeLookClass } from "./ScopeBoard";
 
 export type ScopeSettingsSection = "display" | ScopeColumn;
 
@@ -25,6 +30,7 @@ export function ScopeSettingsModal({
   onClose,
   modelNames,
   filterNames,
+  tiles,
 }: {
   open: boolean;
   section: ScopeSettingsSection;
@@ -33,6 +39,8 @@ export function ScopeSettingsModal({
   modelNames: string[];
   /** Your filters seen on the board, for the Your filters column's pick list. */
   filterNames: string[];
+  /** How the board colors its chips, for the example row. */
+  tiles: TileMode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [tab, setTab] = useState<ScopeSettingsSection>(section);
@@ -87,7 +95,7 @@ export function ScopeSettingsModal({
         </div>
         {open &&
           (tab === "display" ? (
-            <DisplaySettings display={settings.display} />
+            <DisplaySettings display={settings.display} tiles={tiles} />
           ) : (
             <ColumnFilters
               col={tab}
@@ -101,79 +109,220 @@ export function ScopeSettingsModal({
   );
 }
 
-function DisplaySettings({ display: d }: { display: ScopeDisplay }) {
-  const toggle = (key: keyof ScopeDisplay, label: string, hint?: string) => (
-    <label className="scope-check" title={hint}>
-      <input
-        type="checkbox"
-        checked={d[key] as boolean}
-        onChange={() => setScopeDisplay({ [key]: !d[key] })}
-      />
-      {label}
-    </label>
+function DisplaySettings({ display: d, tiles }: { display: ScopeDisplay; tiles: TileMode }) {
+  const now = useNow(5_000);
+  const sample = useMemo(() => scopeSampleCard(Date.now()), []);
+  const flip = (key: BoolKey) => setScopeDisplay({ [key]: !d[key] });
+  const sw = (key: BoolKey, label: string, hint?: string) => (
+    <Switch label={label} hint={hint} on={d[key]} onChange={() => flip(key)} />
   );
   return (
     <div className="scope-settings-body">
-      <fieldset className="scope-fieldset">
-        <legend>Rows</legend>
-        {toggle("compact", "Compact rows", "Tighter rows with a smaller image, so more fit on screen")}
-        {toggle("showName", "Token name")}
-        {toggle("showSource", "Where it came from (filter, model, HC)")}
-        {toggle("showSocials", "X and website links")}
-        {toggle("showAt", "Market cap at the alert")}
-        {toggle("showPeak", "Peak since the alert")}
-        {toggle("showResult", "Result mark (2x hit, missed)")}
-      </fieldset>
-      <fieldset className="scope-fieldset">
-        <legend>Chips under each row</legend>
-        {SCOPE_CHIPS.map((c) => (
-          <label key={c.id} className="scope-check">
-            <input
-              type="checkbox"
-              checked={d.chips.includes(c.id)}
-              onChange={() =>
-                setScopeDisplay({
-                  chips: d.chips.includes(c.id) ? d.chips.filter((x) => x !== c.id) : [...d.chips, c.id],
-                })
-              }
-            />
-            {c.label}
-          </label>
+      <div className="scope-preview">
+        <span className="scope-preview-label">Preview</span>
+        <div className={`scope scope-preview-board ${scopeLookClass(d)}`}>
+          <div className="scope-rows">
+            <ScopeRow card={sample} now={now} display={d} tiles={tiles} preview />
+          </div>
+        </div>
+      </div>
+      <section className="scope-section">
+        <h3>Look</h3>
+        <Seg
+          label="Spacing"
+          value={d.density}
+          options={[
+            ["compact", "Compact"],
+            ["cozy", "Cozy"],
+            ["roomy", "Roomy"],
+          ]}
+          onChange={(density) => setScopeDisplay({ density })}
+        />
+        <Seg
+          label="Rows as"
+          value={d.layout}
+          options={[
+            ["cards", "Cards"],
+            ["list", "List"],
+          ]}
+          onChange={(layout) => setScopeDisplay({ layout })}
+        />
+        <Seg
+          label="Image"
+          value={d.imageSize}
+          options={SIZES}
+          onChange={(imageSize) => setScopeDisplay({ imageSize })}
+        />
+        <Seg
+          label="Text"
+          value={d.textSize}
+          options={SIZES}
+          onChange={(textSize) => setScopeDisplay({ textSize })}
+        />
+        <Seg
+          label="Chips"
+          value={d.chipStyle}
+          options={[
+            ["soft", "Soft"],
+            ["outline", "Outline"],
+            ["plain", "Plain"],
+          ]}
+          onChange={(chipStyle) => setScopeDisplay({ chipStyle })}
+        />
+        <p className="muted small">Phones keep rows a little tighter so more fit.</p>
+      </section>
+      <section className="scope-section">
+        <h3>On each row</h3>
+        {sw("showName", "Token name")}
+        {sw("showAge", "Age")}
+        {sw("showSocials", "X and website links")}
+        {sw("showSource", "Where it came from", "Your filter's icon, the model's name, HC")}
+        {sw("showAt", "Market cap at the alert")}
+        {sw("showPeak", "Peak since the alert")}
+        {sw("showResult", "Result mark", "2x hit or missed, on the image")}
+        {sw("colorMcap", "Color the market cap", "Green when up since the alert, red when down")}
+        {sw("highlightNew", "Highlight new alerts", "The age shows green for the first minute")}
+      </section>
+      <section className="scope-section">
+        <h3>Data chips</h3>
+        <p className="muted small">Readings under each row, colored like the alert card&apos;s tiles.</p>
+        {CHIP_GROUPS.map((g) => (
+          <div key={g} className="scope-pick-group">
+            <span className="scope-pick-label">{g}</span>
+            <div className="scope-pills">
+              {SCOPE_CHIP_DEFS.filter((c) => c.group === g).map((c) => {
+                const on = d.chips.includes(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className={`scope-pill${on ? " on" : ""}`}
+                    aria-pressed={on}
+                    onClick={() =>
+                      setScopeDisplay({ chips: on ? d.chips.filter((x) => x !== c.id) : [...d.chips, c.id] })
+                    }
+                  >
+                    {c.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         ))}
-      </fieldset>
-      <fieldset className="scope-fieldset">
-        <legend>Board</legend>
-        {toggle(
+      </section>
+      <section className="scope-section">
+        <h3>Board</h3>
+        {sw(
           "pauseOnHover",
           "Hold still while I'm reading",
           "New rows wait behind a pill while your pointer or finger is on the board",
         )}
-        {SCOPE_COLUMNS.map((c) => {
-          const shown = !d.hiddenColumns.includes(c.id);
-          const last = shown && d.hiddenColumns.length >= SCOPE_COLUMNS.length - 1;
-          return (
-            <label key={c.id} className="scope-check">
-              <input
-                type="checkbox"
-                checked={shown}
-                disabled={last}
-                onChange={() =>
-                  setScopeDisplay({
-                    hiddenColumns: shown
-                      ? [...d.hiddenColumns, c.id]
-                      : d.hiddenColumns.filter((x) => x !== c.id),
-                  })
-                }
-              />
-              Show the {c.label} column
-            </label>
-          );
-        })}
-      </fieldset>
-      <button type="button" className="ghost small-btn" onClick={resetScopeDisplay}>
-        Back to defaults
-      </button>
+        <div className="scope-pick-group">
+          <span className="scope-pick-label">Columns</span>
+          <div className="scope-pills">
+            {SCOPE_COLUMNS.map((c) => {
+              const shown = !d.hiddenColumns.includes(c.id);
+              const last = shown && d.hiddenColumns.length >= SCOPE_COLUMNS.length - 1;
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  className={`scope-pill${shown ? " on" : ""}`}
+                  aria-pressed={shown}
+                  disabled={last}
+                  title={last ? "One column always shows" : undefined}
+                  onClick={() =>
+                    setScopeDisplay({
+                      hiddenColumns: shown
+                        ? [...d.hiddenColumns, c.id]
+                        : d.hiddenColumns.filter((x) => x !== c.id),
+                    })
+                  }
+                >
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+      <div className="scope-settings-foot">
+        <button type="button" className="ghost small-btn" onClick={resetScopeDisplay}>
+          Back to defaults
+        </button>
+      </div>
     </div>
+  );
+}
+
+type BoolKey = {
+  [K in keyof ScopeDisplay]: ScopeDisplay[K] extends boolean ? K : never;
+}[keyof ScopeDisplay];
+
+const SIZES: [ScopeSize, string][] = [
+  ["s", "Small"],
+  ["m", "Medium"],
+  ["l", "Large"],
+];
+
+const CHIP_GROUPS = [...new Set(SCOPE_CHIP_DEFS.map((c) => c.group))];
+
+/** A labelled row of segmented choices. */
+function Seg<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: [T, string][];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="scope-seg-row">
+      <span className="scope-seg-label">{label}</span>
+      <div className="segmented small" role="radiogroup" aria-label={label}>
+        {options.map(([v, text]) => (
+          <button
+            key={v}
+            type="button"
+            role="radio"
+            aria-checked={value === v}
+            className={value === v ? "on" : ""}
+            onClick={() => onChange(v)}
+          >
+            {text}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** An on/off switch with its label and an optional line under it. */
+function Switch({
+  label,
+  hint,
+  on,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  on: boolean;
+  disabled?: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <label className={`scope-switch${disabled ? " disabled" : ""}`}>
+      <span className="scope-switch-text">
+        {label}
+        {hint && <span className="muted small">{hint}</span>}
+      </span>
+      <input type="checkbox" role="switch" checked={on} disabled={disabled} onChange={onChange} />
+      <span className="scope-switch-track" aria-hidden="true" />
+    </label>
   );
 }
 
@@ -197,7 +346,7 @@ function ColumnFilters({
     list.includes(name) ? list.filter((n) => n !== name) : [...list, name];
   return (
     <div className="scope-settings-body">
-      <p className="muted small">
+      <p className="muted small scope-settings-intro">
         Only what passes these shows in {label}. A coin with no reading for a filter isn&apos;t hidden by it.
         These apply to Scope only, on top of your feed.
       </p>
@@ -281,38 +430,40 @@ function ColumnFilters({
           </div>
         </div>
         {col !== "graduated" && (
-          <label className="scope-check">
-            <input
-              type="checkbox"
-              checked={f.hideMissed}
-              onChange={() => set({ hideMissed: !f.hideMissed })}
-            />
-            Hide alerts that missed 2x or stopped out
-          </label>
+          <Switch
+            label="Hide alerts that missed"
+            hint="Missed 2x or stopped out"
+            on={f.hideMissed}
+            onChange={() => set({ hideMissed: !f.hideMissed })}
+          />
         )}
       </fieldset>
       {col === "models" && (
         <fieldset className="scope-fieldset">
           <legend>Models</legend>
-          <label className="scope-check">
-            <input type="checkbox" checked={f.highOnly} onChange={() => set({ highOnly: !f.highOnly })} />
-            High-conviction calls only
-          </label>
+          <Switch
+            label="High-conviction calls only"
+            on={f.highOnly}
+            onChange={() => set({ highOnly: !f.highOnly })}
+          />
           {models.length === 0 ? (
             <p className="muted small">No model calls on the board yet to pick from.</p>
           ) : (
             <>
-              <span className="small muted">Only these models (none picked: all of them)</span>
-              {models.map((m) => (
-                <label key={m} className="scope-check">
-                  <input
-                    type="checkbox"
-                    checked={f.models.includes(m)}
-                    onChange={() => set({ models: pick(f.models, m) })}
-                  />
-                  {m}
-                </label>
-              ))}
+              <span className="scope-pick-label">Only these models (none picked: all of them)</span>
+              <div className="scope-pills">
+                {models.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`scope-pill${f.models.includes(m) ? " on" : ""}`}
+                    aria-pressed={f.models.includes(m)}
+                    onClick={() => set({ models: pick(f.models, m) })}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
             </>
           )}
         </fieldset>
@@ -324,25 +475,30 @@ function ColumnFilters({
             <p className="muted small">No filter alerts on the board yet to pick from.</p>
           ) : (
             <>
-              <span className="small muted">Only these filters (none picked: all of them)</span>
-              {filters.map((n) => (
-                <label key={n} className="scope-check">
-                  <input
-                    type="checkbox"
-                    checked={f.filters.includes(n)}
-                    onChange={() => set({ filters: pick(f.filters, n) })}
-                  />
-                  {n}
-                </label>
-              ))}
+              <span className="scope-pick-label">Only these filters (none picked: all of them)</span>
+              <div className="scope-pills">
+                {filters.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    className={`scope-pill${f.filters.includes(n) ? " on" : ""}`}
+                    aria-pressed={f.filters.includes(n)}
+                    onClick={() => set({ filters: pick(f.filters, n) })}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
             </>
           )}
         </fieldset>
       )}
       {activeFilterCount(f) > 0 && (
-        <button type="button" className="ghost small-btn" onClick={() => resetColumnFilter(col)}>
-          Clear {label} filters
-        </button>
+        <div className="scope-settings-foot">
+          <button type="button" className="ghost small-btn" onClick={() => resetColumnFilter(col)}>
+            Clear {label} filters
+          </button>
+        </div>
       )}
     </div>
   );

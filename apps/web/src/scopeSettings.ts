@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
-import type { Card, CardField } from "./api";
+import type { Card } from "./api";
+import { DEFAULT_SCOPE_CHIPS, SCOPE_CHIP_IDS, type ScopeChip } from "./scopeChips";
 import { cardReadings, newestStats, nowReading, recordedPeakOf, socialLinks } from "./components/AlertCard";
 import { cardOutcome, outcomeResult } from "./outcome";
 import { change } from "./format";
@@ -37,15 +38,17 @@ export interface ScopeColumnFilter {
   filters: string[];
 }
 
-export type ScopeChip = "holders" | "top10" | "fresh" | "snipers" | "linked";
+export type { ScopeChip };
 
-export const SCOPE_CHIPS: { id: ScopeChip; label: string }[] = [
-  { id: "holders", label: "Holders" },
-  { id: "top10", label: "Top 10 %" },
-  { id: "fresh", label: "Fresh wallets" },
-  { id: "snipers", label: "Snipers" },
-  { id: "linked", label: "Linked wallets" },
-];
+const SCOPE_CHIPS_ALL: readonly ScopeChip[] = SCOPE_CHIP_IDS;
+
+/** How tightly rows sit: padding, gaps and the space between rows. */
+export type ScopeDensity = "compact" | "cozy" | "roomy";
+/** Rows as separate cards with space between them, or one flat list. */
+export type ScopeLayout = "cards" | "list";
+export type ScopeSize = "s" | "m" | "l";
+/** How the data chips are drawn. */
+export type ScopeChipStyle = "soft" | "outline" | "plain";
 
 export interface ScopeDisplay {
   /** Chips under each row. */
@@ -56,8 +59,16 @@ export interface ScopeDisplay {
   showAt: boolean;
   showPeak: boolean;
   showResult: boolean;
-  /** Tighter rows with a smaller image. */
-  compact: boolean;
+  showAge: boolean;
+  density: ScopeDensity;
+  layout: ScopeLayout;
+  imageSize: ScopeSize;
+  textSize: ScopeSize;
+  chipStyle: ScopeChipStyle;
+  /** Market cap green when up from the alert, red when down; plain otherwise. */
+  colorMcap: boolean;
+  /** Ages under a minute in green, so the newest rows stand out. */
+  highlightNew: boolean;
   /** Hold the board still while a pointer or finger is on it. */
   pauseOnHover: boolean;
   /** Columns left off the board. */
@@ -88,14 +99,21 @@ export const DEFAULT_COLUMN_FILTER: ScopeColumnFilter = {
 
 export const DEFAULT_SCOPE_SETTINGS: ScopeSettings = {
   display: {
-    chips: SCOPE_CHIPS.map((c) => c.id),
+    chips: DEFAULT_SCOPE_CHIPS,
     showName: true,
-    showSource: true,
+    showSource: false,
     showSocials: true,
-    showAt: true,
-    showPeak: true,
-    showResult: true,
-    compact: false,
+    showAt: false,
+    showPeak: false,
+    showResult: false,
+    showAge: true,
+    density: "roomy",
+    layout: "cards",
+    imageSize: "m",
+    textSize: "m",
+    chipStyle: "soft",
+    colorMcap: true,
+    highlightNew: true,
     pauseOnHover: true,
     hiddenColumns: [],
   },
@@ -142,7 +160,9 @@ export function normalizeScopeSettings(raw: unknown): ScopeSettings {
   const disp = (r.display && typeof r.display === "object" ? r.display : {}) as Record<string, unknown>;
   const cols = (r.columns && typeof r.columns === "object" ? r.columns : {}) as Record<string, unknown>;
   const d = DEFAULT_SCOPE_SETTINGS.display;
-  const chipIds = SCOPE_CHIPS.map((c) => c.id);
+  const chipIds = SCOPE_CHIPS_ALL;
+  const pickOf = <T extends string>(v: unknown, opts: readonly T[], fallback: T): T =>
+    opts.includes(v as T) ? (v as T) : fallback;
   return {
     display: {
       chips: Array.isArray(disp.chips)
@@ -154,7 +174,19 @@ export function normalizeScopeSettings(raw: unknown): ScopeSettings {
       showAt: bool(disp.showAt, d.showAt),
       showPeak: bool(disp.showPeak, d.showPeak),
       showResult: bool(disp.showResult, d.showResult),
-      compact: bool(disp.compact, d.compact),
+      showAge: bool(disp.showAge, d.showAge),
+      // Saved before densities: "Compact rows" on reads as compact.
+      density: pickOf(
+        disp.density,
+        ["compact", "cozy", "roomy"],
+        disp.compact === true ? "compact" : d.density,
+      ),
+      layout: pickOf(disp.layout, ["cards", "list"], d.layout),
+      imageSize: pickOf(disp.imageSize, ["s", "m", "l"], d.imageSize),
+      textSize: pickOf(disp.textSize, ["s", "m", "l"], d.textSize),
+      chipStyle: pickOf(disp.chipStyle, ["soft", "outline", "plain"], d.chipStyle),
+      colorMcap: bool(disp.colorMcap, d.colorMcap),
+      highlightNew: bool(disp.highlightNew, d.highlightNew),
       pauseOnHover: bool(disp.pauseOnHover, d.pauseOnHover),
       // Never every column: the board would be empty with no way to tell why.
       hiddenColumns: Array.isArray(disp.hiddenColumns)
@@ -299,20 +331,4 @@ export function passesColumnFilter(card: Card, f: ScopeColumnFilter, col: ScopeC
     if (!card.filter || !f.filters.includes(card.filter.name)) return false;
   }
   return true;
-}
-
-/** Scope's display settings as the row's hidden-field set (the same shape as Customize's). */
-export function scopeHideSet(d: ScopeDisplay): ReadonlySet<CardField> {
-  const out = new Set<CardField>();
-  if (!d.showName) out.add("tokenName");
-  if (!d.showSource) {
-    out.add("modelPill");
-    out.add("conviction");
-  }
-  if (!d.showSocials) out.add("socials");
-  if (!d.showAt) out.add("alert");
-  if (!d.showPeak) out.add("peak");
-  if (!d.showResult) out.add("result");
-  for (const c of SCOPE_CHIPS) if (!d.chips.includes(c.id)) out.add(c.id);
-  return out;
 }

@@ -6,9 +6,9 @@ import {
   DEFAULT_SCOPE_SETTINGS,
   normalizeScopeSettings,
   passesColumnFilter,
-  scopeHideSet,
   type ScopeColumnFilter,
 } from "./scopeSettings";
+import { rowChips } from "./scopeChips";
 
 const NOW = Date.parse("2026-10-18T18:00:00Z");
 
@@ -117,10 +117,10 @@ describe("normalizeScopeSettings", () => {
   it("falls back to the defaults for missing or broken fields", () => {
     expect(normalizeScopeSettings(null)).toEqual(DEFAULT_SCOPE_SETTINGS);
     const s = normalizeScopeSettings({
-      display: { compact: "yes", chips: ["top10", "nope"] },
+      display: { density: "huge", chips: ["top10", "nope"] },
       columns: { models: { mcapMin: -5, maxAgeMin: 30, socials: "weird", models: ["Atlas", 3] } },
     });
-    expect(s.display.compact).toBe(false);
+    expect(s.display.density).toBe("roomy");
     expect(s.display.chips).toEqual(["top10"]);
     expect(s.columns.models).toMatchObject({
       mcapMin: null,
@@ -136,16 +136,21 @@ describe("normalizeScopeSettings", () => {
   });
 });
 
-describe("activeFilterCount and scopeHideSet", () => {
+describe("activeFilterCount", () => {
   it("counts the filters that are on", () => {
     expect(activeFilterCount(DEFAULT_COLUMN_FILTER)).toBe(0);
     expect(activeFilterCount(f({ mcapMin: 1, socials: "x", models: ["A"] }))).toBe(3);
   });
 
-  it("turns display toggles into the row's hidden fields", () => {
-    const hide = scopeHideSet({ ...DEFAULT_SCOPE_SETTINGS.display, showAt: false, chips: ["top10"] });
-    expect(hide.has("alert")).toBe(true);
-    expect(hide.has("top10")).toBe(false);
-    expect(hide.has("holders")).toBe(true);
+  it("reads an old saved compact setting as compact density", () => {
+    expect(normalizeScopeSettings({ display: { compact: true } }).display.density).toBe("compact");
+  });
+});
+
+describe("rowChips", () => {
+  it("shows the picked chips the card has readings for, in the window's order", () => {
+    const chips = rowChips(card({ holders: 120, top10: 22 }), ["top10", "holders", "vol5m"]);
+    expect(chips.map((c) => c.id)).toEqual(["holders", "top10"]);
+    expect(chips[0]?.value).toBe("120");
   });
 });
