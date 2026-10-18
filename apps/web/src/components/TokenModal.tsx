@@ -1391,7 +1391,9 @@ export function ChartCard({
   // Trade is its own section, always open (user ask 2026-10-18), for Pro Mode wallets (admins
   // included). Never where no wallet here could sign a trade (a phone signed in by QR, say).
   const canSign = useCanSignTrades(pro);
-  const trading = !!pro && canSign && (!closeOnly || holds);
+  // No trading at all once Pro Mode has ended, selling included (user decision, #717): the API
+  // refuses every trade without Pro. Export Wallet stays in Settings.
+  const trading = !!pro && canSign && !closeOnly;
   const expanded = trading || (!!pro && holds);
 
   // Read from the window on each render; a resize re-renders.
