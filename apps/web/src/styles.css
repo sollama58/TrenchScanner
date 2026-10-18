@@ -16317,6 +16317,34 @@ body:has(.util-toast) .bug-fab {
   border-color: transparent;
   background: color-mix(in srgb, var(--good) 85%, #000);
 }
+/* A preset fills the amount box rather than trading; the one matching the box stays lit. */
+.tm-side.buy .tm-preset.on {
+  border-color: var(--good);
+  box-shadow: inset 0 0 0 1px var(--good);
+}
+.tm-side.sell .tm-preset.on {
+  border-color: var(--bad);
+  box-shadow: inset 0 0 0 1px var(--bad);
+}
+.tm-side.sell .tm-amount-field input {
+  padding-right: 76px;
+}
+.tm-side.sell .tm-amount-unit {
+  max-width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tm-go.sell {
+  background: var(--bad);
+}
+.tm-go.sell:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 85%, #000);
+}
+.tm-amount-note {
+  margin: 0;
+  color: var(--bad-ink);
+}
 
 /* Settings: a tidy grid of fields, labels above. */
 .tm-trade-settings {
@@ -17688,6 +17716,110 @@ body:has(.util-toast) .bug-fab {
   border-radius: var(--radius-s);
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
 }
+/* Settings' Pro Mode card (ProModeCard): its state up top, how to get it, then what it unlocks. */
+.pro-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px 20px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  background: var(--surface-2);
+}
+.pro-card.on {
+  border-color: color-mix(in srgb, var(--good) 35%, var(--border));
+  background: linear-gradient(160deg, var(--good-wash), transparent 60%), var(--surface-2);
+}
+.pro-card.pending {
+  border-color: color-mix(in srgb, var(--series-1) 40%, var(--border));
+  background: linear-gradient(160deg, var(--info-wash), transparent 60%), var(--surface-2);
+}
+.pro-card.warn {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--warn) 12%, transparent), transparent 60%),
+    var(--surface-2);
+}
+.pro-card-head,
+.pro-card-how {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.pro-card-head {
+  grid-column: 1;
+}
+.pro-card-how {
+  grid-column: 1;
+}
+.pro-card-perks {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-width: 0;
+}
+.pro-card h4 {
+  margin: 0 0 4px;
+  font-size: 13px;
+}
+.pro-card p {
+  margin: 0;
+}
+.pro-card-big {
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 700;
+  color: var(--ink);
+}
+.pro-card.on .pro-card-big {
+  color: var(--good-ink);
+}
+.pro-card.warn .pro-card-big {
+  color: var(--warn-ink);
+}
+.pro-card-cutoff strong {
+  color: var(--ink);
+}
+.pro-card-buy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+}
+.pro-card-perks ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pro-card-perks li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-s);
+  background: var(--surface-3);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.pro-card-perks li b {
+  font-size: 13px;
+  color: var(--ink);
+}
+@media (max-width: 640px) {
+  .pro-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .pro-card-head,
+  .pro-card-how,
+  .pro-card-perks {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}
 .sub-burn h3 {
   display: flex;
   align-items: center;
@@ -18409,4 +18541,18 @@ body:has(.util-toast) .bug-fab {
   .scope-fieldset.scope-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* Admin > Access > Pro Mode: the holder list's "show all" switch. */
+.admin-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+.pro-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }

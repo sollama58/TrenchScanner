@@ -2092,6 +2092,9 @@ model ProHolder {
   /// A scan found it holding under half the 250th wallet's share after it dropped out: it moved
   /// its bag, so its grace period ended here (one bag passed between wallets earns no grace each).
   bagMovedAt    DateTime?
+  /// What it held at that scan, in raw units (from its share of supply): the 250th row's is what
+  /// it takes to get in, shown in Settings' Pro Mode card. Null from scans before this was kept.
+  heldRaw       String?
 
   @@index([lastInTopAt])
 }
@@ -2142,6 +2145,29 @@ model ProTradeCursor {
   /// When the wallet's signatures were last read (the catch-up), and when it was first followed.
   readAt        DateTime?
   createdAt     DateTime @default(now())
+}
+
+/// A trade sent through TrenchScanner's own Trade panel (POST /pro/trade/send), for the fees it
+/// cost and what the same trade would have cost elsewhere (apps/api/src/tradeFees.ts; user ask
+/// 2026-10-18). Unlike ProTrade (every trade the wallet makes, read from the chain), only ours.
+model PlatformTrade {
+  signature           String    @id
+  wallet              String
+  mint                String
+  /// "buy" | "sell".
+  side                String
+  /// The trade's SOL value, lamports: a buy's spend, a sale's quoted proceeds.
+  lamports            BigInt
+  /// What we charged on top of the swap, lamports (0: no platform fee, owner decision 2026-10-17).
+  platformFeeLamports BigInt    @default(0)
+  /// What the network took: the priority fee, Sender's tip and the base fee, lamports.
+  networkFeeLamports  BigInt
+  /// "sent" until it settles: "confirmed", "failed" or "expired". Only confirmed trades count.
+  status              String    @default("sent")
+  sentAt              DateTime  @default(now())
+  settledAt           DateTime?
+
+  @@index([wallet, status])
 }
 
 /// A Free Access period, set from Admin > Access (packages/core/src/subscription/freeAccess.ts).

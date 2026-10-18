@@ -68,11 +68,35 @@ describe.skipIf(!dbAvailable)("browser session revocation", () => {
     expect(res.json().signInMethod).toBe("privy");
   });
 
+  it("signing out in a browser signs out the account's paired phones too", async () => {
+    const { sessionVersion } = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const phone = await prisma.linkedDevice.create({ data: { userId } });
+    const phoneToken = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, deviceId: phone.id });
+    expect((await me(phoneToken)).statusCode).toBe(200);
+
+    const browser = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion });
+    await app.inject({ method: "POST", url: "/auth/logout", cookies: { [SESSION_COOKIE_NAME]: browser } });
+
+    expect((await me(phoneToken)).statusCode).toBe(401);
+    expect(
+      (await prisma.linkedDevice.findUniqueOrThrow({ where: { id: phone.id } })).revokedAt,
+    ).not.toBeNull();
+  });
+
+  it("a stale cookie's logout can't sign out the user's paired phones", async () => {
+    const phone = await prisma.linkedDevice.create({ data: { userId } });
+    const stale = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
+    await app.inject({ method: "POST", url: "/auth/logout", cookies: { [SESSION_COOKIE_NAME]: stale } });
+    expect((await prisma.linkedDevice.findUniqueOrThrow({ where: { id: phone.id } })).revokedAt).toBeNull();
+    await prisma.linkedDevice.delete({ where: { id: phone.id } });
+  });
+
   it("a stale cookie's logout can't sign out the user's newer sessions", async () => {
     const stale = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
     await app.inject({ method: "POST", url: "/auth/logout", cookies: { [SESSION_COOKIE_NAME]: stale } });
     const { sessionVersion } = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    expect(sessionVersion).toBe(1);
+    // Signed out once by the first test and once by the paired-phones one; the stale cookie adds none.
+    expect(sessionVersion).toBe(2);
   });
 
   it("refuses a state-changing request from an origin outside CORS_ORIGINS", async () => {

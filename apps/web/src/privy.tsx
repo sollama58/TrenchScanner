@@ -7,7 +7,12 @@ import {
   usePrivy,
   type PrivyClientConfig,
 } from "@privy-io/react-auth";
-import { useExportWallet, useStandardWallets } from "@privy-io/react-auth/solana";
+import {
+  useExportWallet,
+  useSignTransaction,
+  useStandardWallets,
+  useWallets,
+} from "@privy-io/react-auth/solana";
 import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
 import {
   PRIVY_WALLET_NAME,
@@ -44,10 +49,11 @@ export default function PrivyRoot({ appId }: { appId: string }) {
       loginMethods: ["email", "google", "twitter"],
       appearance: { theme: "dark", walletChainType: "solana-only", showWalletLoginFirst: false },
       embeddedWallets: {
-        // No Privy confirm window on each signature (user ask 2026-10-18: it asked too often, and
-        // failed for new wallets). The site's own Buy or Burn button is the approval, and every
-        // trade is checked before it's signed (proTrade.ts tradeProblem). Export still asks.
-        showWalletUIs: false,
+        // Privy's confirm window on every signature by default (user decision 2026-10-18, after the
+        // wallet security audit): burns, and anything the site didn't build, always ask. A Pro trade
+        // skips it only on a coin the wallet holds, that passed the safety screen, or that a model
+        // called (the API's `quietSign`), and only once the page's own check passed (signQuietly).
+        showWalletUIs: true,
         solana: { createOnLogin: "all-users" },
         ethereum: { createOnLogin: "off" },
       },
@@ -74,6 +80,8 @@ function Bridge() {
   const { exportWallet } = useExportWallet();
   const { depositFunds } = useDepositFunds();
   const { wallets } = useStandardWallets();
+  const { wallets: connected } = useWallets();
+  const { signTransaction } = useSignTransaction();
   const pending = useRef<{ resolve: (t: string) => void; reject: (e: unknown) => void } | null>(null);
 
   const finish = async () => {
@@ -101,8 +109,26 @@ function Bridge() {
   });
 
   // The latest of each in a ref, so the controls handed out once keep working across renders.
-  const latest = useRef({ authenticated, login, logout, exportWallet, depositFunds, getAccessToken });
-  latest.current = { authenticated, login, logout, exportWallet, depositFunds, getAccessToken };
+  const latest = useRef({
+    authenticated,
+    login,
+    logout,
+    exportWallet,
+    depositFunds,
+    getAccessToken,
+    connected,
+    signTransaction,
+  });
+  latest.current = {
+    authenticated,
+    login,
+    logout,
+    exportWallet,
+    depositFunds,
+    getAccessToken,
+    connected,
+    signTransaction,
+  };
 
   useEffect(() => {
     if (!ready) return;
@@ -135,6 +161,17 @@ function Bridge() {
         }),
       logout: () => latest.current.logout(),
       exportWallet: (address) => latest.current.exportWallet({ address }),
+      signQuietly: async (address, transaction) => {
+        const wallet = latest.current.connected.find((w) => w.address === address);
+        if (!wallet) throw new Error("Privy's wallet isn't ready yet. Try again in a moment.");
+        const { signedTransaction } = await latest.current.signTransaction({
+          transaction,
+          wallet,
+          chain: "solana:mainnet",
+          options: { uiOptions: { showWalletUIs: false } },
+        });
+        return signedTransaction;
+      },
       addFunds: async (address) => {
         // Card or bank, through Privy's onramp. Crypto deposits stay off: people send SOL from
         // another wallet or exchange straight to the address the dashboard shows.

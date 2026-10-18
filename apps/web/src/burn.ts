@@ -32,7 +32,18 @@ export interface BurnBalance {
   /** The wallet's SOL in lamports; null when that read alone failed. */
   solLamports?: string | null;
   /** Its place among the top 250 holders in the newest holder scan; null when that read failed. */
-  holder?: { rank: number | null; of: number; scannedAt: string | null; stale: boolean } | null;
+  holder?: {
+    rank: number | null;
+    of: number;
+    scannedAt: string | null;
+    stale: boolean;
+    /** In the top 250 but not for its hour yet: when Pro Mode starts (ISO). */
+    qualifiesAt?: string | null;
+    /** What the 250th wallet held in the newest scan (raw): what it takes to get in. */
+    cutoffRaw?: string | null;
+  } | null;
+  /** Whether the top holders get Pro Mode at all (false while it is admins-only or switched off). */
+  proOpen?: boolean;
   /** Accounts a burn can come from, largest first. */
   accounts: { address: string; rawAmount: string }[];
 }

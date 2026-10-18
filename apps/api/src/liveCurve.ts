@@ -1,10 +1,13 @@
 import {
   createLogger,
   decodeCurve,
+  decodeTokenAmount,
   HeliusAccountStream,
   pumpCurveAddressOf,
+  pumpSwapPoolOf,
   type CurveState,
   type HeliusClient,
+  type PoolVaults,
 } from "@trenchscanner/core";
 import type { SolPrice } from "./solPrice.js";
 
@@ -23,6 +26,11 @@ const logger = createLogger("live-curve");
  * subscription) is read by RPC every READ_EVERY_MS instead, and SOL's price comes from three
  * providers (solPrice.ts). A curve nobody has asked about for IDLE_MS is let go, and the socket
  * closes once nothing is followed, so it costs nothing while no one is looking. Nothing is stored.
+ *
+ * Bonding doesn't end it (user ask 2026-10-18: charts went delayed after bonding): once a chart's
+ * curve completes, the API follows the coin's PumpSwap pool instead, its two vaults on the same
+ * socket (two subscriptions, ~0.4 KB an update each), read by RPC off the stream the same way.
+ * Only for a chart's asks: the feed cards' quotes still let DexScreener price graduated coins.
  */
 
 /** A curve is let go once no chart has asked about it for this long. */
@@ -42,6 +50,14 @@ const SOCKET_IDLE_MS = 2 * 60_000;
 /** An unconfirmed stretch longer than this is a hole: the cover starts again after it. */
 const GAP_MS = 15_000;
 const KEY_PREFIX = "chart:";
+/** The stream keys of a followed pool's base and quote vaults. */
+const POOL_BASE_PREFIX = "pool-base:";
+const POOL_QUOTE_PREFIX = "pool-quote:";
+/**
+ * A swap changes both vaults in one slot, delivered as two updates: the price is recorded once
+ * both sides of a slot are in, or this long after one side came alone (a plain transfer in).
+ */
+const PAIR_WAIT_MS = 400;
 /**
  * The longest a chart's ask with `waitMs` is held open for a new price change (user ask 2026-10-18:
  * the chart trailed by seconds when it only asked every couple of them).
@@ -64,7 +80,8 @@ export interface LiveCurveStreamTotals {
   credits: number;
   since: string;
 }
-type CurveReader = Pick<HeliusClient, "getCurveStatesBatch">;
+type CurveReader = Pick<HeliusClient, "getCurveStatesBatch"> &
+  Partial<Pick<HeliusClient, "getPoolVaultsBatch" | "getTokenAmountsBatch">>;
 
 /** Where the newest prices came from. "pending": asked, not read yet. "none": not a live curve. */
 export type LiveSource = "stream" | "rpc" | "pending" | "none";
@@ -73,7 +90,12 @@ export type LiveSource = "stream" | "rpc" | "pending" | "none";
 export interface LiveCurveAnswer {
   mint: string;
   source: LiveSource;
-  /** The curve graduated, or the coin has none: the chart stops asking and reads candles. */
+  /** What prices it now: the bonding curve, or after bonding the PumpSwap pool. */
+  venue?: "curve" | "pool";
+  /**
+   * Nothing live prices the coin any more (no curve, or graduated with no SOL PumpSwap pool to
+   * follow): the chart stops asking and reads candles.
+   */
   complete: boolean;
   /** The ticks run without a break from here (ms), null with none. */
   coveredFrom: number | null;
@@ -110,6 +132,35 @@ interface Followed {
   complete: boolean;
   /** The address holds no curve (not a Pump.fun coin) or a curve not quoted in SOL. */
   none: boolean;
+  /** A chart asked (not only a feed card): once the curve completes, its pool is followed. */
+  wantPool: boolean;
+  /** After bonding: the pool once read, "none" with no SOL pool there, null not found yet. */
+  pool: FollowedPool | "none" | null;
+  /** When the pool was last looked for (ms), null never. */
+  poolSoughtAt: number | null;
+}
+
+interface FollowedPool {
+  vaults: PoolVaults;
+  /** The vaults' balances (base units) and the slot each was delivered at (null: an RPC read). */
+  base: number;
+  quote: number;
+  baseSlot: number | null;
+  quoteSlot: number | null;
+  /** Waiting on the other side of a slot (PAIR_WAIT_MS). */
+  timer: ReturnType<typeof setTimeout> | null;
+  /** When the vaults were last read by RPC (ms), null before the first. */
+  readAt: number | null;
+}
+
+/** The pool `f` is priced by now, or null while it is still on its curve (or has no pool). */
+function poolOf(f: Followed): FollowedPool | null {
+  return f.complete && f.wantPool && f.pool !== null && f.pool !== "none" ? f.pool : null;
+}
+
+/** Nothing live prices `f` any more. */
+function isDone(f: Followed): boolean {
+  return f.none || (f.complete && (!f.wantPool || f.pool === "none"));
 }
 
 /**
@@ -122,7 +173,7 @@ export function curveMcapSol(state: Pick<CurveState, "virtualQuote" | "virtualTo
 
 export interface LiveCurvesDeps {
   /** Opens the websocket on first use; null: RPC reads only. */
-  makeStream: ((onAccount: (key: string, data: string) => void) => Stream) | null;
+  makeStream: ((onAccount: (key: string, data: string, slot: number | null) => void) => Stream) | null;
   reader: CurveReader | null;
   solPrice: Pick<SolPrice, "get">;
   now?: () => number;
@@ -151,12 +202,12 @@ export class LiveCurves {
    * the chart draws it the moment it does; `signal` lets go of it early (the reader left).
    */
   async read(mint: string, after: number, waitMs = 0, signal?: AbortSignal): Promise<LiveCurveAnswer> {
-    const first = await this.answer(mint, after);
+    const first = await this.answer(mint, after, true);
     if (waitMs <= 0) return first;
     if (first.ticks.length > 0 || first.complete || first.source === "none" || signal?.aborted)
       return { ...first, held: true };
     await this.nextChange(mint, Math.min(waitMs, MAX_WAIT_MS), signal);
-    return { ...(await this.answer(mint, after)), held: true };
+    return { ...(await this.answer(mint, after, false)), held: true };
   }
 
   /** Resolves on `mint`'s next recorded change, after `ms`, or when `signal` aborts. */
@@ -184,21 +235,26 @@ export class LiveCurves {
     if (set) for (const done of [...set]) done();
   }
 
-  private async answer(mint: string, after: number): Promise<LiveCurveAnswer> {
+  /** `seed`: may wait on a seed read (a held ask's second look doesn't). */
+  private async answer(mint: string, after: number, seed: boolean): Promise<LiveCurveAnswer> {
     const now = this.now();
-    const followed = this.follow(mint, now);
+    const followed = this.follow(mint, now, true);
     if (!followed) return none(mint);
-    // The first answer waits for its seed read (briefly), rather than a round later.
-    if (followed.added) await this.seed(SEED_WAIT_MS);
     const f = followed.f;
+    // The first answer waits for its seed read (briefly), rather than a round later; so does the
+    // first after bonding, for its pool.
+    if (followed.added || (seed && f.complete && !f.none && f.pool === null)) await this.seed(SEED_WAIT_MS);
     if (f.none) return none(mint);
+    const pool = poolOf(f);
+    const readAt = pool ? pool.readAt : f.readAt;
     const streamed = this.confirm(mint, f, now);
     const usd = await this.deps.solPrice.get();
-    const source: LiveSource = f.readAt === null ? "pending" : streamed ? "stream" : "rpc";
+    const source: LiveSource = readAt === null ? "pending" : streamed ? "stream" : "rpc";
     return {
       mint,
       source: usd === null && source !== "pending" ? "pending" : source,
-      complete: f.complete,
+      venue: f.complete ? "pool" : "curve",
+      complete: isDone(f),
       coveredFrom: f.coveredFrom,
       readAt: f.confirmedAt,
       ticks: usd === null ? [] : f.ticks.filter(([t]) => t > after).map(([t, sol]) => [t, sol * usd]),
@@ -251,8 +307,11 @@ export class LiveCurves {
     return !!f && !f.none && !f.complete && f.confirmedAt !== null && this.now() - f.confirmedAt <= GAP_MS;
   }
 
-  /** Starts following `mint`'s curve if it wasn't; null when it can't be followed. */
-  private follow(mint: string, now: number): { f: Followed; added: boolean } | null {
+  /**
+   * Starts following `mint`'s curve if it wasn't; null when it can't be followed. `chart`: a
+   * chart's ask, which follows the pool after bonding too.
+   */
+  private follow(mint: string, now: number, chart = false): { f: Followed; added: boolean } | null {
     let f = this.followed.get(mint);
     let added = false;
     if (!f) {
@@ -268,13 +327,19 @@ export class LiveCurves {
         readAt: null,
         complete: false,
         none: false,
+        wantPool: false,
+        pool: null,
+        poolSoughtAt: null,
       };
       this.followed.set(mint, f);
       this.ensureRunning();
       added = true;
     }
     f.askedAt = now;
+    f.wantPool ||= chart;
     if (!f.none && !f.complete) this.stream?.watch(KEY_PREFIX + mint, [f.curve], now, "account");
+    const pool = poolOf(f);
+    if (pool) this.watchPool(mint, pool, now);
     return { f, added };
   }
 
@@ -290,8 +355,49 @@ export class LiveCurves {
     return streamed;
   }
 
-  /** An account update the stream delivered. */
-  onAccount(key: string, data: string): void {
+  private watchPool(mint: string, pool: FollowedPool, now: number): void {
+    this.stream?.watch(POOL_BASE_PREFIX + mint, [pool.vaults.base], now, "account");
+    this.stream?.watch(POOL_QUOTE_PREFIX + mint, [pool.vaults.quote], now, "account");
+  }
+
+  private unwatchPool(mint: string): void {
+    this.stream?.unwatch(POOL_BASE_PREFIX + mint);
+    this.stream?.unwatch(POOL_QUOTE_PREFIX + mint);
+  }
+
+  /** From when the stream has covered both of `pool`'s vaults without a break, or null. */
+  private poolCoveredSince(mint: string, pool: FollowedPool): number | null {
+    const base = this.stream?.coveredSince(POOL_BASE_PREFIX + mint, pool.vaults.base) ?? null;
+    const quote = this.stream?.coveredSince(POOL_QUOTE_PREFIX + mint, pool.vaults.quote) ?? null;
+    return base === null || quote === null ? null : Math.max(base, quote);
+  }
+
+  /** An account update the stream delivered (`slot`: when it was read, to pair a pool's vaults). */
+  onAccount(key: string, data: string, slot: number | null = null): void {
+    if (key.startsWith(POOL_BASE_PREFIX) || key.startsWith(POOL_QUOTE_PREFIX)) {
+      const isBase = key.startsWith(POOL_BASE_PREFIX);
+      const mint = key.slice((isBase ? POOL_BASE_PREFIX : POOL_QUOTE_PREFIX).length);
+      const f = this.followed.get(mint);
+      const pool = f ? poolOf(f) : null;
+      const amount = decodeTokenAmount(data);
+      // Like a curve's, a pool's tape opens on its seed read: both sides known at once.
+      if (!f || !pool || pool.readAt === null || amount === null) return;
+      if (isBase) [pool.base, pool.baseSlot] = [amount, slot];
+      else [pool.quote, pool.quoteSlot] = [amount, slot];
+      const other = isBase ? pool.quoteSlot : pool.baseSlot;
+      if (slot !== null && other === slot) {
+        if (pool.timer) clearTimeout(pool.timer);
+        pool.timer = null;
+        this.recordPool(mint, f, pool, this.now());
+      } else if (!pool.timer) {
+        pool.timer = setTimeout(() => {
+          pool.timer = null;
+          if (this.followed.get(mint) === f) this.recordPool(mint, f, pool, this.now());
+        }, PAIR_WAIT_MS);
+        pool.timer.unref?.();
+      }
+      return;
+    }
     if (!key.startsWith(KEY_PREFIX)) return;
     const f = this.followed.get(key.slice(KEY_PREFIX.length));
     const state = decodeCurve(data);
@@ -335,6 +441,7 @@ export class LiveCurves {
 
   stop(): void {
     for (const mint of [...this.waiters.keys()]) this.wake(mint);
+    for (const f of this.followed.values()) clearPoolTimer(f);
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.drainStreamStats();
@@ -370,7 +477,7 @@ export class LiveCurves {
         )
           due.push(mint);
       }
-      if (due.length === 0 || !this.deps.reader) return;
+      if (!this.deps.reader) return;
       for (let i = 0; i < due.length; i += 100) {
         const mints = due.slice(i, i + 100);
         const curves = mints.map((m) => this.followed.get(m)?.curve ?? "");
@@ -389,6 +496,7 @@ export class LiveCurves {
           f.readAt = now;
         });
       }
+      await this.poolRound(this.deps.reader, now);
     } catch (err) {
       logger.warn("curve read failed", { error: String(err) });
     } finally {
@@ -396,33 +504,106 @@ export class LiveCurves {
     }
   }
 
+  /**
+   * After bonding, for the charts' coins: finds each graduated curve's pool, then reads the vaults
+   * the stream doesn't cover (once after their subscriptions begin, else every READ_EVERY_MS).
+   */
+  private async poolRound(reader: CurveReader, now: number): Promise<void> {
+    const canRead = !!reader.getPoolVaultsBatch && !!reader.getTokenAmountsBatch;
+    const sought = new Map<string, string>();
+    for (const [mint, f] of this.followed) {
+      if (f.none || !f.complete || !f.wantPool || f.pool !== null) continue;
+      if (f.poolSoughtAt !== null && now - f.poolSoughtAt < READ_EVERY_MS) continue;
+      const pool = canRead ? pumpSwapPoolOf(mint) : undefined;
+      if (!pool) f.pool = "none";
+      else sought.set(pool, mint);
+    }
+    if (!reader.getPoolVaultsBatch || !reader.getTokenAmountsBatch) return;
+    if (sought.size > 0) {
+      const found = await reader.getPoolVaultsBatch(sought);
+      for (const [pool, mint] of sought) {
+        const f = this.followed.get(mint);
+        const vaults = found.get(pool);
+        if (!f || vaults === undefined) continue;
+        f.poolSoughtAt = now;
+        if (vaults === "failed") continue;
+        f.pool =
+          vaults === null
+            ? "none"
+            : { vaults, base: 0, quote: 0, baseSlot: null, quoteSlot: null, timer: null, readAt: null };
+        if (vaults === null) this.wake(mint);
+        else this.watchPool(mint, f.pool as FollowedPool, now);
+      }
+    }
+    const due: [string, Followed, FollowedPool][] = [];
+    for (const [mint, f] of this.followed) {
+      const pool = poolOf(f);
+      if (!pool) continue;
+      const since = this.poolCoveredSince(mint, pool);
+      if (
+        since !== null
+          ? pool.readAt === null || pool.readAt < since
+          : pool.readAt === null || now - pool.readAt >= READ_EVERY_MS
+      )
+        due.push([mint, f, pool]);
+    }
+    if (due.length === 0) return;
+    const amounts = await reader.getTokenAmountsBatch(
+      due.flatMap(([, , p]) => [p.vaults.base, p.vaults.quote]),
+    );
+    for (const [mint, f, pool] of due) {
+      const base = amounts.get(pool.vaults.base);
+      const quote = amounts.get(pool.vaults.quote);
+      if (typeof base !== "number" || typeof quote !== "number") continue;
+      Object.assign(pool, { base, quote, baseSlot: null, quoteSlot: null });
+      this.recordPool(mint, f, pool, now);
+      pool.readAt = now;
+    }
+  }
+
+  private recordPool(mint: string, f: Followed, pool: FollowedPool, at: number): void {
+    if (!(pool.base > 0) || !(pool.quote > 0)) return;
+    this.recordMcap(mint, f, curveMcapSol({ virtualQuote: pool.quote, virtualToken: pool.base }), at);
+  }
+
   private record(mint: string, f: Followed, state: CurveState, at: number): void {
+    const changed = this.recordMcap(mint, f, curveMcapSol(state), at);
+    if (state.complete) {
+      f.complete = true;
+      this.stream?.unwatch(KEY_PREFIX + mint);
+      if (!changed) this.wake(mint);
+    }
+  }
+
+  /** Adds a price at `at` to `f`'s tape (if it changed); whether it did. */
+  private recordMcap(mint: string, f: Followed, mcap: number, at: number): boolean {
     const last = f.ticks[f.ticks.length - 1];
-    if (last && at < last[0]) return;
+    if (last && at < last[0]) return false;
     if (f.confirmedAt === null || at - f.confirmedAt > GAP_MS) f.coveredFrom = at;
     f.confirmedAt = Math.max(f.confirmedAt ?? at, at);
-    const mcap = curveMcapSol(state);
     const changed = !last || last[1] !== mcap;
     if (changed) f.ticks.push([at, mcap]);
     let cut = 0;
     while (cut < f.ticks.length - 1 && f.ticks[cut]![0] < at - KEEP_MS) cut += 1;
     if (f.ticks.length - cut > MAX_TICKS) cut = f.ticks.length - MAX_TICKS;
     if (cut > 0) f.ticks.splice(0, cut);
-    if (state.complete) {
-      f.complete = true;
-      this.stream?.unwatch(KEY_PREFIX + mint);
-    }
-    if (changed || state.complete) this.wake(mint);
+    if (changed) this.wake(mint);
+    return changed;
   }
 
   private streamCovers(mint: string, f: Followed): boolean {
+    const pool = poolOf(f);
+    if (pool) {
+      const since = this.poolCoveredSince(mint, pool);
+      return since !== null && pool.readAt !== null && pool.readAt >= since;
+    }
     const since = this.stream?.coveredSince(KEY_PREFIX + mint, f.curve) ?? null;
     return since !== null && f.readAt !== null && f.readAt >= since;
   }
 
   private ensureRunning(): void {
     if (!this.stream && this.deps.makeStream) {
-      this.stream = this.deps.makeStream((key, data) => this.onAccount(key, data));
+      this.stream = this.deps.makeStream((key, data, slot) => this.onAccount(key, data, slot));
       this.stream.start();
     }
     if (!this.timer) {
@@ -444,6 +625,9 @@ export class LiveCurves {
   private drop(mint: string): void {
     this.wake(mint);
     this.stream?.unwatch(KEY_PREFIX + mint);
+    this.unwatchPool(mint);
+    const f = this.followed.get(mint);
+    if (f) clearPoolTimer(f);
     this.followed.delete(mint);
   }
 
@@ -457,6 +641,10 @@ export class LiveCurves {
       }
     if (oldest !== null) this.drop(oldest);
   }
+}
+
+function clearPoolTimer(f: Followed): void {
+  if (f.pool && f.pool !== "none" && f.pool.timer) clearTimeout(f.pool.timer);
 }
 
 function none(mint: string): LiveCurveAnswer {
@@ -478,7 +666,7 @@ export function liveCurvesFor(
               HeliusAccountStream.urlFor(heliusApiKey),
               () => {},
               undefined,
-              (key, data) => onAccount(key, data),
+              (key, data, _bytes, slot) => onAccount(key, data, slot),
             )
         : null,
     reader: enabled ? reader : null,

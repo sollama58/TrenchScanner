@@ -445,8 +445,9 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
   app.post("/logout", async (request, reply) => {
     // Revoke, not just forget: clearing the cookie alone left a copied token valid for the rest
     // of SESSION_TTL_HOURS. Bumping sessionVersion invalidates every browser session this user
-    // holds; a paired phone signing out switches off its own device row, the one thing that
-    // revokes a device session (its token is good for a year otherwise). Every verified token on
+    // holds, and its paired phones are switched off with it; a paired phone signing out switches
+    // off only its own device row, the one thing that revokes a device session (its token is good
+    // for a year otherwise). Every verified token on
     // the request counts - the cookie and a header can both be present, and the live one may be
     // either. A stale browser token matches no row, so it can't sign out newer sessions.
     for (const session of await verifyRequestSessions(app.sessionSigner, request)) {
@@ -456,10 +457,20 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
           data: { revokedAt: new Date() },
         });
       } else {
-        await prisma.user.updateMany({
+        const bumped = await prisma.user.updateMany({
           where: { id: session.userId, sessionVersion: session.sessionVersion ?? 0 },
           data: { sessionVersion: { increment: 1 } },
         });
+        // Signing out in a browser signs out the account's paired phones too (user decision
+        // 2026-10-18: sign out everywhere, the safest choice). A phone's session lasts a year and
+        // isn't tied to sessionVersion, so without this a phone paired from a stolen session
+        // outlived the owner's sign-out. Only a live session does it, like the bump above.
+        if (bumped.count === 1) {
+          await prisma.linkedDevice.updateMany({
+            where: { userId: session.userId, revokedAt: null },
+            data: { revokedAt: new Date() },
+          });
+        }
       }
     }
 

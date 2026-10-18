@@ -1,5 +1,6 @@
 import { Prisma, prisma } from "../db.js";
 import { isWalletAddress } from "../solana.js";
+import { jobLockKey } from "../heartbeat.js";
 import { SUBSCRIPTION_MINT } from "./constants.js";
 
 /**
@@ -15,14 +16,17 @@ import { SUBSCRIPTION_MINT } from "./constants.js";
  */
 
 export const PRO_HOLDER_COUNT = 250;
-/** The worker's scan cadence: a qualifying wallet gets Pro Mode within this of its hour. */
+/** The worker's scan cadence: a wallet gets Pro Mode within this of entering the top 250. */
 export const PRO_HOLDER_SCAN_MINUTES = 5;
 export const PRO_HOLDER_GRACE_MS = 24 * 60 * 60_000;
 /**
- * How long a wallet must stay in the top 250, scan after scan, before it gets Pro Mode: without
- * it one bag moved to a fresh wallet before each scan would hand out a day of Pro Mode to each.
+ * How long a wallet must stay in the top 250, scan after scan, before it gets Pro Mode. Zero (user
+ * decision 2026-10-18, "Instant"): Pro Mode at the first scan that sees it. The trade-off accepted
+ * with it: one bag moved to a fresh wallet before each scan can earn each a day's grace, unless a
+ * later scan finds the bag gone from it (markMovedBags). Raising it brings the wait back, with the
+ * Settings countdown and Admin's qualifying count.
  */
-export const PRO_HOLDER_QUALIFY_MS = 60 * 60_000;
+export const PRO_HOLDER_QUALIFY_MS = 0;
 /**
  * A newest scan older than this means the scans have stopped (Helius down, the job off): its
  * wallets then count down a grace period from it rather than keep Pro Mode with no end.
@@ -37,7 +41,8 @@ const PRO_HOLDER_READ = PRO_HOLDER_COUNT * 4;
 const BAG_MOVED_SHARE = 0.5;
 
 type ProHolderRead =
-  { status: "found"; holders: { owner: string; pct?: number }[] } | { status: string; reason?: string };
+  | { status: "found"; holders: { owner: string; pct?: number }[]; supply?: string }
+  | { status: string; reason?: string };
 
 /** One read of the mint's largest wallets, largest first. Null when the read didn't finish. */
 export interface ProHolderReader {
@@ -62,6 +67,12 @@ export async function refreshProHolders(
     throw new Error(`couldn't read the $ASDFASDFA holders (${reasons.join("; ")})`);
   const ranked = read.holders.filter((h) => isWalletAddress(h.owner));
   const top = ranked.slice(0, PRO_HOLDER_COUNT).map((h) => h.owner);
+  const supply = "supply" in read && read.supply && /^\d+$/.test(read.supply) ? BigInt(read.supply) : null;
+  // Each wallet's holding from its share (to 0.0001% of supply), for the Pro Mode card's "it takes".
+  const heldOf = (pct: number | undefined): string | null =>
+    supply !== null && pct !== undefined && Number.isFinite(pct)
+      ? ((BigInt(Math.round(pct * 10_000)) * supply) / 1_000_000n).toString()
+      : null;
   if (top.length === 0) throw new Error("the $ASDFASDFA holder read came back empty");
   const graceFloor = new Date(now.getTime() - PRO_HOLDER_GRACE_MS);
   const qualifyMinutes = PRO_HOLDER_QUALIFY_MS / 60_000;
@@ -72,13 +83,16 @@ export async function refreshProHolders(
   // wallets already in the top 250 count as having held for the hour, so Pro Mode starts with it
   // rather than an hour after launch. Every later newcomer waits its hour.
   const since = previous ? now : new Date(now.getTime() - PRO_HOLDER_QUALIFY_MS);
-  const rows = top.map((wallet, i) => Prisma.sql`(${wallet}, ${i + 1}, ${now}, ${since})`);
+  const rows = top.map(
+    (wallet, i) => Prisma.sql`(${wallet}, ${i + 1}, ${now}, ${since}, ${heldOf(ranked[i]!.pct)})`,
+  );
   await prisma.$executeRaw`
-    INSERT INTO "ProHolder" ("walletAddress", "rank", "lastInTopAt", "inTopSince")
+    INSERT INTO "ProHolder" ("walletAddress", "rank", "lastInTopAt", "inTopSince", "heldRaw")
     VALUES ${Prisma.join(rows)}
     ON CONFLICT ("walletAddress") DO UPDATE SET
       "rank" = EXCLUDED."rank",
       "lastInTopAt" = EXCLUDED."lastInTopAt",
+      "heldRaw" = EXCLUDED."heldRaw",
       "inTopSince" = CASE
         WHEN "ProHolder"."lastInTopAt" = ${previous} THEN "ProHolder"."inTopSince"
         WHEN "ProHolder"."lastInTopAt" > ${graceFloor}
@@ -125,6 +139,44 @@ async function markMovedBags(
     .map((row) => row.walletAddress);
   if (moved.length > 0)
     await prisma.proHolder.updateMany({ where: { walletAddress: { in: moved } }, data: { bagMovedAt: now } });
+}
+
+/** Solana's public RPC: the scan's backup reader, as Helius won't list this classic SPL mint's accounts. */
+export const PRO_HOLDER_BACKUP_RPC = "https://api.mainnet-beta.solana.com";
+
+/**
+ * Site-wide floor between scans run from Settings' "Check now" (user ask 2026-10-18): however many
+ * people press it, the full read of the mint's accounts runs at most once a minute, so the public
+ * RPC it leans on isn't pushed into rate-limiting the worker's own scans.
+ */
+export const PRO_HOLDER_ON_DEMAND_MS = 60_000;
+
+/**
+ * A scan now, for "Check now", unless the newest one is under PRO_HOLDER_ON_DEMAND_MS old or
+ * another scan (the worker's or another press) is running: those answer the same question. Takes
+ * the worker job's own advisory lock, so two scans never overlap. `scanned`: whether this ran one.
+ */
+export async function refreshProHoldersOnDemand(
+  readers: ProHolderReader | readonly ProHolderReader[],
+  now = new Date(),
+): Promise<{ scanned: boolean }> {
+  latestCache = null;
+  const latest = await latestScan();
+  if (latest && now.getTime() - latest.getTime() < PRO_HOLDER_ON_DEMAND_MS) return { scanned: false };
+  return prisma.$transaction(
+    async (tx) => {
+      const [row] = await tx.$queryRaw<{ locked: boolean }[]>`
+        SELECT pg_try_advisory_xact_lock(hashtext(${jobLockKey("pro-holders")})) AS locked`;
+      if (!row?.locked) return { scanned: false };
+      // Another press may have scanned while this one waited for the lock.
+      latestCache = null;
+      const again = await latestScan();
+      if (again && Date.now() - again.getTime() < PRO_HOLDER_ON_DEMAND_MS) return { scanned: false };
+      await refreshProHolders(readers, new Date());
+      return { scanned: true };
+    },
+    { timeout: 60_000, maxWait: 10_000 },
+  );
 }
 
 /** Whether a wallet that dropped out moved its bag since (its grace then ended). */
@@ -186,38 +238,74 @@ export async function proHolderStanding(wallet: string, now = new Date()): Promi
 }
 
 /**
- * A wallet's place among the $ASDFASDFA holders in the newest scan, for Settings (user ask
+ * A wallet's place among the $ASDFASDFA holders in the newest scan, for Settings (user asks
  * 2026-10-18): its rank when it is in the top 250, null when it isn't. `scannedAt` null: no scan
- * has finished yet, so nobody's place is known; `stale`: the scans have stopped.
+ * has finished yet, so nobody's place is known; `stale`: the scans have stopped. `qualifiesAt`:
+ * in the top 250 but not for its hour yet, when Pro Mode starts. `cutoffRaw`: what the 250th
+ * wallet held in that scan (raw units), so what it takes to get in; null when the scan has fewer
+ * than 250 wallets or didn't keep amounts.
  */
 export async function proHolderRank(
   wallet: string,
   now = new Date(),
-): Promise<{ rank: number | null; of: number; scannedAt: Date | null; stale: boolean }> {
-  const [row, latest] = await Promise.all([
+): Promise<{
+  rank: number | null;
+  of: number;
+  scannedAt: Date | null;
+  stale: boolean;
+  qualifiesAt: Date | null;
+  cutoffRaw: string | null;
+}> {
+  const latest = await latestScan();
+  const [row, cutoff] = await Promise.all([
     prisma.proHolder.findUnique({
       where: { walletAddress: wallet },
-      select: { rank: true, lastInTopAt: true },
+      select: { rank: true, lastInTopAt: true, inTopSince: true },
     }),
-    latestScan(),
+    latest
+      ? prisma.proHolder.findFirst({
+          where: { lastInTopAt: latest, rank: PRO_HOLDER_COUNT },
+          select: { heldRaw: true },
+        })
+      : null,
   ]);
   const inLatest = !!row && !!latest && row.lastInTopAt.getTime() >= latest.getTime();
+  const stale = !!latest && now.getTime() - latest.getTime() > PRO_HOLDER_STALE_MS;
+  const qualifiesAt =
+    inLatest && !stale && row!.lastInTopAt.getTime() - row!.inTopSince.getTime() < PRO_HOLDER_QUALIFY_MS
+      ? new Date(row!.inTopSince.getTime() + PRO_HOLDER_QUALIFY_MS)
+      : null;
   return {
     rank: inLatest ? row!.rank : null,
     of: PRO_HOLDER_COUNT,
     scannedAt: latest,
-    stale: !!latest && now.getTime() - latest.getTime() > PRO_HOLDER_STALE_MS,
+    stale,
+    qualifiesAt,
+    cutoffRaw: cutoff?.heldRaw ?? null,
   };
 }
 
-/** For Admin > Access: the newest scan, how many it holds, and who is in their grace period. */
+/**
+ * For Admin > Access: the newest scan, how many of its wallets have Pro Mode and how many are
+ * still qualifying, every wallet in it by rank (with when a qualifying one gets Pro Mode), and who
+ * is in their grace period.
+ */
 export async function proHolderSummary(now = new Date()) {
   const latest = await latestScan();
   if (!latest)
-    return { scannedAt: null, inTop: 0, grace: [] as { walletAddress: string; graceEndsAt: Date }[] };
-  const [inTop, grace] = await Promise.all([
-    prisma.proHolder.count({
-      where: { lastInTopAt: latest, inTopSince: { lte: new Date(latest.getTime() - PRO_HOLDER_QUALIFY_MS) } },
+    return {
+      scannedAt: null,
+      stale: false,
+      inTop: 0,
+      qualifying: 0,
+      top: [] as { walletAddress: string; rank: number; heldRaw: string | null; qualifiesAt: Date | null }[],
+      grace: [] as { walletAddress: string; rank: number; graceEndsAt: Date }[],
+    };
+  const [scan, grace] = await Promise.all([
+    prisma.proHolder.findMany({
+      where: { lastInTopAt: latest },
+      orderBy: { rank: "asc" },
+      take: PRO_HOLDER_COUNT,
     }),
     prisma.proHolder.findMany({
       where: { lastInTopAt: { lt: latest, gt: new Date(now.getTime() - PRO_HOLDER_GRACE_MS) } },
@@ -225,14 +313,29 @@ export async function proHolderSummary(now = new Date()) {
       take: 500,
     }),
   ]);
+  const stale = now.getTime() - latest.getTime() > PRO_HOLDER_STALE_MS;
+  // In the newest scan and held for an hour: Pro Mode now (while the scans run).
+  const top = scan.map((h) => ({
+    walletAddress: h.walletAddress,
+    rank: h.rank,
+    heldRaw: h.heldRaw,
+    qualifiesAt:
+      latest.getTime() - h.inTopSince.getTime() >= PRO_HOLDER_QUALIFY_MS
+        ? null
+        : new Date(h.inTopSince.getTime() + PRO_HOLDER_QUALIFY_MS),
+  }));
   // Only the ones that had qualified and kept their bag are in a grace period.
   const inGrace = grace
     .filter((g) => g.lastInTopAt.getTime() - g.inTopSince.getTime() >= PRO_HOLDER_QUALIFY_MS && !movedBag(g))
     .slice(0, 200);
   return {
     scannedAt: latest,
-    /** In the newest scan and held for an hour: Pro Mode now. */
-    inTop,
+    /** The scans have stopped: the newest one's wallets are counting down a grace period. */
+    stale,
+    inTop: top.filter((h) => h.qualifiesAt === null).length,
+    /** In the newest scan, not for an hour yet. */
+    qualifying: top.filter((h) => h.qualifiesAt !== null).length,
+    top,
     grace: inGrace.map((g) => ({
       walletAddress: g.walletAddress,
       rank: g.rank,

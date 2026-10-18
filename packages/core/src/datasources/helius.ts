@@ -1,5 +1,12 @@
 import { CURVE_READ_BYTES, decodeCurve, type CurveState } from "../curation/curveTape.js";
 import { fetchJson } from "./httpClient.js";
+import {
+  POOL_READ_BYTES,
+  TOKEN_AMOUNT_READ_BYTES,
+  decodePoolVaults,
+  decodeTokenAmount,
+  type PoolVaults,
+} from "./pumpSwapPool.js";
 import { RateGate } from "./rateGate.js";
 import { createLogger } from "../logger.js";
 import { forEachWithConcurrency } from "../concurrency.js";
@@ -1656,6 +1663,59 @@ export class HeliusClient {
       }
       const data = account.value?.data;
       out.set(curve, Array.isArray(data) && typeof data[0] === "string" ? decodeCurve(data[0]) : null);
+    }
+    return out;
+  }
+
+  /**
+   * Graduated coins' PumpSwap pools (pumpSwapPool.ts), batched like the curves: per pool, its two
+   * vaults, null when there is no SOL pool of that mint there, or "failed". `pools` maps each pool
+   * address to its coin's mint.
+   */
+  async getPoolVaultsBatch(
+    pools: ReadonlyMap<string, string>,
+  ): Promise<Map<string, PoolVaults | null | "failed">> {
+    const out = new Map<string, PoolVaults | null | "failed">();
+    if (pools.size === 0) return out;
+    const accounts = await this.getMultipleAccounts<{ data?: unknown }>([...pools.keys()], {
+      encoding: "base64",
+      dataSlice: { offset: 0, length: POOL_READ_BYTES },
+    });
+    for (const [pool, mint] of pools) {
+      const account = accounts.get(pool);
+      if (!account || account === "failed") {
+        out.set(pool, "failed");
+        continue;
+      }
+      const data = account.value?.data;
+      out.set(
+        pool,
+        Array.isArray(data) && typeof data[0] === "string" ? decodePoolVaults(data[0], mint) : null,
+      );
+    }
+    return out;
+  }
+
+  /** Token accounts' balances in base units, batched: null where there is no token account. */
+  async getTokenAmountsBatch(accounts: string[]): Promise<Map<string, number | null | "failed">> {
+    const unique = [...new Set(accounts)];
+    const out = new Map<string, number | null | "failed">();
+    if (unique.length === 0) return out;
+    const read = await this.getMultipleAccounts<{ data?: unknown }>(unique, {
+      encoding: "base64",
+      dataSlice: { offset: 0, length: TOKEN_AMOUNT_READ_BYTES },
+    });
+    for (const address of unique) {
+      const account = read.get(address);
+      if (!account || account === "failed") {
+        out.set(address, "failed");
+        continue;
+      }
+      const data = account.value?.data;
+      out.set(
+        address,
+        Array.isArray(data) && typeof data[0] === "string" ? decodeTokenAmount(data[0]) : null,
+      );
     }
     return out;
   }

@@ -8,6 +8,8 @@ import {
   prisma,
   refreshProHolders,
   proHolderRank,
+  proHolderSummary,
+  refreshProHoldersOnDemand,
   proHolderStanding,
   resetProHolderCacheForTests,
   type Env,
@@ -16,7 +18,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
-import { plainRefusal, TradeCooldown } from "./proTrade.js";
+import { plainRefusal, quietSign, TradeCooldown } from "./proTrade.js";
 
 describe("plainRefusal", () => {
   it("says the common refusals in the trader's words", () => {
@@ -143,6 +145,59 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
     // Swap costs: Pro wallets only too, and a bad mint is refused before any quote.
     expect((await as(TRADER, "GET", `/pro/trade/costs?mint=${MINT}`)).statusCode).toBe(404);
     expect((await as(ADMIN, "GET", `/pro/trade/costs?mint=nope`)).statusCode).toBe(400);
+  });
+
+  it("shows a Pro wallet the fees its confirmed trades here saved, and no one else", async () => {
+    expect((await as(TRADER, "GET", "/pro/trade/fees")).statusCode).toBe(404);
+    await prisma.platformTrade.deleteMany({ where: { wallet: ADMIN } });
+    expect((await as(ADMIN, "GET", "/pro/trade/fees")).json()).toMatchObject({ trades: 0, since: null });
+    const sig = (n: number) => `fees-test-${n}`;
+    await prisma.platformTrade.createMany({
+      data: [
+        {
+          signature: sig(1),
+          wallet: ADMIN,
+          mint: MINT,
+          side: "buy",
+          lamports: 2_000_000_000n,
+          networkFeeLamports: 100_000n,
+          status: "confirmed",
+        },
+        {
+          signature: sig(2),
+          wallet: ADMIN,
+          mint: MINT,
+          side: "sell",
+          lamports: 4_000_000_000n,
+          networkFeeLamports: 100_000n,
+          status: "confirmed",
+        },
+        // Not landed: never counted.
+        {
+          signature: sig(3),
+          wallet: ADMIN,
+          mint: MINT,
+          side: "buy",
+          lamports: 9_000_000_000n,
+          networkFeeLamports: 100_000n,
+          status: "expired",
+        },
+      ],
+    });
+    try {
+      const body = (await as(ADMIN, "GET", "/pro/trade/fees")).json();
+      expect(body).toMatchObject({ trades: 2, volumeSol: 6, platformFeeSol: 0, networkFeeSol: 0.0002 });
+      expect(
+        Object.fromEntries(body.platforms.map((p: { id: string; savedSol: number }) => [p.id, p.savedSol])),
+      ).toEqual({
+        fomo: 0.03,
+        pumpfun: 0.014,
+        terminal: 0.03,
+        axiom: 0.06,
+      });
+    } finally {
+      await prisma.platformTrade.deleteMany({ where: { wallet: ADMIN } });
+    }
   });
 
   it("refuses a buy under 0.01 SOL before building anything", async () => {
@@ -334,18 +389,50 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     expect(left).toBeLessThan(23.1 * 3_600_000);
   });
 
-  it("waits an hour of scans before a new holder gets it, so one bag can't hop between wallets", async () => {
-    expect(await me(NEWBIE)).toMatchObject({ isPro: false, proMode: { source: null, canClose: false } });
+  it("gives a new holder Pro Mode at the first scan that finds it (user decision: no wait)", async () => {
+    expect(await me(NEWBIE)).toMatchObject({ isPro: true, proMode: { source: "holder", rank: 2 } });
     // The holder's run carried through the new scan: it keeps Pro Mode.
     const row = await prisma.proHolder.findUnique({ where: { walletAddress: HOLDER } });
     expect(Date.now() - row!.inTopSince.getTime()).toBeGreaterThan(1.9 * 3_600_000);
   });
 
   it("gives Settings each wallet's place in the newest scan, or none outside it", async () => {
-    expect(await proHolderRank(HOLDER)).toMatchObject({ rank: 1, of: 250, stale: false });
-    expect(await proHolderRank(NEWBIE)).toMatchObject({ rank: 2 });
+    expect(await proHolderRank(HOLDER)).toMatchObject({ rank: 1, of: 250, stale: false, qualifiesAt: null });
+    // New in this scan, with Pro Mode already: nothing left to wait for.
+    expect(await proHolderRank(NEWBIE)).toMatchObject({ rank: 2, cutoffRaw: null, qualifiesAt: null });
     expect(await proHolderRank(GRACE)).toMatchObject({ rank: null });
     expect((await proHolderRank(LAPSED)).scannedAt).not.toBeNull();
+  });
+
+  it("lists the newest scan for Admin by rank, with who has Pro Mode", async () => {
+    const summary = await proHolderSummary();
+    expect(summary).toMatchObject({ inTop: 2, qualifying: 0, stale: false });
+    expect(summary.top.map((h) => [h.walletAddress, h.qualifiesAt === null])).toEqual([
+      [HOLDER, true],
+      [NEWBIE, true],
+    ]);
+    expect(summary.grace.map((g) => g.walletAddress)).toEqual([GRACE]);
+  });
+
+  it("lets Check now rescan at most once a minute, site-wide and per wallet", async () => {
+    let reads = 0;
+    const reader = {
+      getTopHoldersBatch: async (mints: string[]) => {
+        reads += 1;
+        return new Map(
+          mints.map((m) => [m, { status: "found", holders: [{ owner: HOLDER }, { owner: NEWBIE }] }]),
+        );
+      },
+    };
+    // The newest scan is seconds old: it answers the press, no new read.
+    expect(await refreshProHoldersOnDemand(reader)).toEqual({ scanned: false });
+    expect(reads).toBe(0);
+    const press = await as(NEWBIE, "POST", "/subscription/pro-check");
+    expect(press.statusCode).toBe(200);
+    expect(press.json()).toMatchObject({ scanned: false, nextCheckSec: 60 });
+    const again = await as(NEWBIE, "POST", "/subscription/pro-check");
+    expect(again.statusCode).toBe(429);
+    expect(again.json().retryAfterSec).toBeGreaterThan(55);
   });
 
   it("turns stopped scans into a grace period instead of Pro Mode with no end", async () => {
@@ -410,6 +497,7 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
                   ...fillers,
                   { owner: mover, pct: 0.01 },
                 ],
+                supply: "1000000000000000",
               },
             ]),
           ),
@@ -422,10 +510,12 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     expect(await proHolderStanding(GRACE, at)).toMatchObject({ state: "top" });
     // The mover holds under half the 250th wallet's share: no grace for it.
     expect(await proHolderStanding(mover, at)).toEqual({ state: "none" });
+    // The 250th wallet's 0.1% of supply is what it takes to get in.
+    expect((await proHolderRank(HOLDER, at)).cutoffRaw).toBe("1000000000000");
     resetProHolderCacheForTests();
   });
 
-  it("gives the first scan's holders Pro Mode at once, then makes newcomers wait their hour", async () => {
+  it("gives the first scan's holders Pro Mode at once, and newcomers at their first scan", async () => {
     await prisma.proHolder.deleteMany({});
     resetProHolderCacheForTests();
     const first = new Date();
@@ -442,7 +532,96 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     const next = new Date(first.getTime() + 5 * 60_000);
     await scan([HOLDER, NEWBIE], next);
     expect(await proHolderStanding(HOLDER, next)).toMatchObject({ state: "top" });
-    expect(await proHolderStanding(NEWBIE, next)).toMatchObject({ state: "pending" });
+    expect(await proHolderStanding(NEWBIE, next)).toMatchObject({ state: "top", rank: 2 });
     resetProHolderCacheForTests();
+  });
+
+  it("runs a Check now scan under the scan's lock when the newest scan is over a minute old", async () => {
+    await prisma.proHolder.deleteMany({});
+    resetProHolderCacheForTests();
+    let reads = 0;
+    const reader = {
+      getTopHoldersBatch: async (mints: string[]) => {
+        reads += 1;
+        return new Map(mints.map((m) => [m, { status: "found", holders: [{ owner: NEWBIE }] }]));
+      },
+    };
+    expect(await refreshProHoldersOnDemand(reader)).toEqual({ scanned: true });
+    expect(reads).toBe(1);
+    expect(await proHolderStanding(NEWBIE)).toMatchObject({ state: "top", rank: 1 });
+    // A second press straight after reads that scan.
+    expect(await refreshProHoldersOnDemand(reader)).toEqual({ scanned: false });
+    expect(reads).toBe(1);
+    resetProHolderCacheForTests();
+  });
+});
+
+/**
+ * Privy's confirm window is skipped only on a coin the wallet holds, that passed the safety
+ * screen, or that a model called (user rule 2026-10-18); anything else asks.
+ */
+describe.skipIf(!dbAvailable)("quietSign", () => {
+  const tag = `quiet-sign-${Date.now()}`;
+  const wallet = `${tag}-wallet`;
+  const mints = {
+    unknown: `${tag}-unknown`,
+    screened: `${tag}-screened`,
+    failed: `${tag}-failed`,
+    called: `${tag}-called`,
+    held: `${tag}-held`,
+    rejected: `${tag}-rejected`,
+  };
+  const rpc = {
+    getTokenBalance: async (_owner: string, mint: string) =>
+      mint === mints.held ? { raw: 5n, decimals: 6, accounts: [] } : { raw: 0n, decimals: 6, accounts: [] },
+  };
+
+  beforeAll(async () => {
+    const token = (mint: string, data: Record<string, unknown> = {}) =>
+      prisma.token.create({ data: { mintAddress: mint, ...data }, select: { id: true } });
+    const screened = await token(mints.screened);
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: screened.id, priceUsd: 1, marketCapUsd: 1, rugScreenPassed: true },
+    });
+    // Passed once, failed on its latest scan.
+    const failed = await token(mints.failed);
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: failed.id,
+        priceUsd: 1,
+        marketCapUsd: 1,
+        rugScreenPassed: true,
+        takenAt: new Date(Date.now() - 60_000),
+      },
+    });
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: failed.id, priceUsd: 1, marketCapUsd: 1, rugScreenPassed: false },
+    });
+    const rejected = await token(mints.rejected, { screenRejectedAt: new Date() });
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: rejected.id, priceUsd: 1, marketCapUsd: 1, rugScreenPassed: true },
+    });
+    const called = await token(mints.called);
+    await prisma.curatedAlert.create({
+      data: { tokenId: called.id, source: "test", confidence: 50, anchorPriceUsd: 1, anchorMcapUsd: 1 },
+    });
+  });
+  afterAll(async () => {
+    if (dbAvailable) await prisma.token.deleteMany({ where: { mintAddress: { startsWith: tag } } });
+  });
+
+  it("skips the window only for held, screened or called coins", async () => {
+    expect(await quietSign(rpc, wallet, mints.unknown, "buy")).toBe(false);
+    expect(await quietSign(rpc, wallet, mints.failed, "buy")).toBe(false);
+    expect(await quietSign(rpc, wallet, mints.rejected, "buy")).toBe(false);
+    expect(await quietSign(rpc, wallet, mints.screened, "buy")).toBe(true);
+    expect(await quietSign(rpc, wallet, mints.called, "buy")).toBe(true);
+    expect(await quietSign(rpc, wallet, mints.held, "buy")).toBe(true);
+    // A sale is of a coin the wallet holds.
+    expect(await quietSign(rpc, wallet, mints.unknown, "sell")).toBe(true);
+  });
+  it("asks when the balance can't be read", async () => {
+    const down = { getTokenBalance: async () => Promise.reject(new Error("down")) };
+    expect(await quietSign(down, wallet, mints.unknown, "buy")).toBe(false);
   });
 });

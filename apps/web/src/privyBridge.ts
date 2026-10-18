@@ -85,6 +85,13 @@ export interface PrivyControls {
   exportWallet(address: string): Promise<void>;
   /** Privy's funding window: card, exchange or another wallet, into this wallet as SOL. */
   addFunds(address: string): Promise<void>;
+  /**
+   * Signs a Pro trade without Privy's confirm window: only for a trade the API marked quiet (a coin
+   * the wallet holds, that passed the safety screen, or that a model called) and that passed the
+   * page's own check (proTrade.ts). Everything else goes through the wallet's standard signing,
+   * which shows the window. Resolves with the signed transaction's bytes.
+   */
+  signQuietly(address: string, transaction: Uint8Array): Promise<Uint8Array>;
 }
 
 /** Closed Privy's window, or the login didn't finish. */

@@ -25,13 +25,30 @@ const state = (vSol: number, complete = false): CurveState => ({
   quoteIsSol: true,
 });
 
-function setup(opts: { stream?: boolean; states?: (CurveState | null)[] } = {}) {
+/** A token account's data, base64, cut to its amount as the stream's slice would carry it. */
+function vaultData(amount: bigint): string {
+  const data = new Uint8Array(165);
+  new DataView(data.buffer).setBigUint64(64, amount, true);
+  return Buffer.from(data).toString("base64");
+}
+
+const VAULTS = { base: "base-vault", quote: "quote-vault" };
+
+function setup(
+  opts: {
+    stream?: boolean;
+    states?: (CurveState | null)[];
+    /** After bonding: the pool's vaults (null: no pool) and their balances [base, quote]. */
+    pool?: { vaults: typeof VAULTS | null; amounts: [number, number] };
+  } = {},
+) {
   let now = 1_000_000;
   const reads: string[][] = [];
   const states = [...(opts.states ?? [state(5e10)])];
   const watched = new Set<string>();
   let covered: number | null = null;
-  let onAccount: ((key: string, data: string) => void) | null = null;
+  let onAccount: ((key: string, data: string, slot: number | null) => void) | null = null;
+  const poolReads: string[][] = [];
   const curves = new LiveCurves({
     makeStream: opts.stream
       ? (cb) => {
@@ -51,6 +68,18 @@ function setup(opts: { stream?: boolean; states?: (CurveState | null)[] } = {}) 
         const s = states.length > 1 ? states.shift()! : states[0]!;
         return new Map(list.map((c) => [c, s]));
       },
+      ...(opts.pool
+        ? {
+            getPoolVaultsBatch: async (pools: ReadonlyMap<string, string>) =>
+              new Map([...pools.keys()].map((p) => [p, opts.pool!.vaults])),
+            getTokenAmountsBatch: async (list: string[]) => {
+              poolReads.push(list);
+              return new Map(
+                list.map((a) => [a, a === VAULTS.base ? opts.pool!.amounts[0] : opts.pool!.amounts[1]]),
+              );
+            },
+          }
+        : {}),
     },
     solPrice: { get: async () => 100 },
     now: () => now,
@@ -62,7 +91,10 @@ function setup(opts: { stream?: boolean; states?: (CurveState | null)[] } = {}) 
     tick: (ms: number) => (now += ms),
     at: () => now,
     cover: (since: number | null) => (covered = since),
-    push: (data: string) => onAccount!(`chart:${MINT}`, data),
+    poolReads,
+    push: (data: string) => onAccount!(`chart:${MINT}`, data, null),
+    pushVault: (side: "base" | "quote", amount: bigint, slot: number) =>
+      onAccount!(`pool-${side}:${MINT}`, vaultData(amount), slot),
   };
 }
 
@@ -166,6 +198,48 @@ describe("LiveCurves", () => {
     expect(a.source).toBe("none");
     expect(a.complete).toBe(true);
     gone.curves.stop();
+  });
+
+  it("follows the PumpSwap pool after bonding, pairing both vaults of a slot into one price", async () => {
+    const t = setup({
+      stream: true,
+      states: [state(5e10, true)],
+      pool: { vaults: VAULTS, amounts: [2e14, 8e10] },
+    });
+    t.cover(t.at());
+    const a = await t.curves.read(MINT, 0);
+    expect(a).toMatchObject({ venue: "pool", complete: false, source: "stream" });
+    expect(t.watched).toEqual(new Set([`pool-base:${MINT}`, `pool-quote:${MINT}`]));
+    const poolMcap = (quote: number, base: number) =>
+      curveMcapSol({ virtualQuote: quote, virtualToken: base }) * 100;
+    expect(a.ticks[a.ticks.length - 1]![1]).toBeCloseTo(poolMcap(8e10, 2e14));
+    // A buy: SOL in, coins out, in one slot: one new price, not a half-made one in between.
+    t.tick(400);
+    t.pushVault("quote", 90_000_000_000n, 7);
+    t.pushVault("base", 190_000_000_000_000n, 7);
+    const b = await t.curves.read(MINT, t.at() - 1);
+    expect(b.ticks).toHaveLength(1);
+    expect(b.ticks[0]![1]).toBeCloseTo(poolMcap(9e10, 1.9e14));
+    // Covered by the stream: no more vault reads.
+    t.tick(READ_EVERY_MS * 3);
+    await t.curves.round();
+    expect(t.poolReads).toHaveLength(1);
+    t.curves.stop();
+  });
+
+  it("reads a pool by RPC every READ_EVERY_MS off the stream", async () => {
+    const t = setup({ states: [state(5e10, true)], pool: { vaults: VAULTS, amounts: [2e14, 8e10] } });
+    expect(await t.curves.read(MINT, 0)).toMatchObject({ venue: "pool", complete: false, source: "rpc" });
+    t.tick(READ_EVERY_MS);
+    await t.curves.round();
+    expect(t.poolReads).toHaveLength(2);
+    t.curves.stop();
+  });
+
+  it("stops after bonding when there is no SOL pool to follow", async () => {
+    const t = setup({ states: [state(5e10, true)], pool: { vaults: null, amounts: [0, 0] } });
+    expect(await t.curves.read(MINT, 0)).toMatchObject({ complete: true });
+    t.curves.stop();
   });
 
   it("lets a curve go once nobody asks", async () => {

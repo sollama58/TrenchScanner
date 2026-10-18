@@ -1,7 +1,15 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
-import { ACCESS_ENDED_EVENT, ApiError, post, type Subscription, type User } from "./api";
+import { ACCESS_ENDED_EVENT, ApiError, post, SESSION_ENDED_EVENT, type Subscription, type User } from "./api";
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
-import { GUEST_DELAY_MINUTES, isGuest, setAdmin, setGuest, setSessionToken } from "./session";
+import {
+  GUEST_DELAY_MINUTES,
+  isGuest,
+  reloadSessionToken,
+  setAdmin,
+  setGuest,
+  setSessionToken,
+} from "./session";
+import { announceAuthChange, onAuthChange } from "./authSync";
 import { usePolling } from "./hooks";
 import { ago } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
@@ -51,7 +59,7 @@ import { ProGraceBanner } from "./components/ProGraceBanner";
 import { BugButton } from "./components/BugButton";
 import { AdminReportsBadge } from "./components/AdminReportsBadge";
 import { TwoFactorPromptHost } from "./components/TwoFactorPrompt";
-import { setMe } from "./me";
+import { onRecheckMe, setMe } from "./me";
 import { WalletMenu } from "./components/WalletMenu";
 import { clearPasses } from "./twoFactor";
 import { loadedPrivyControls, privyConfig, usePrivyWanted, wantPrivy } from "./privyBridge";
@@ -122,6 +130,20 @@ type Session =
 
 /** How often an open, signed-in page re-reads its session for Pro Mode changes. */
 const PRO_RECHECK_MS = 2 * 60_000;
+/** A burst of 401s (every open view polling at once) re-reads the session once. */
+const SESSION_ENDED_RECHECK_MS = 5_000;
+
+/**
+ * Forgets everything this page holds for one account, when it signs out or another takes its
+ * place: two-factor passes, cached answers, settings and the open token view (which sits above
+ * the feed, so it would outlive the session it was read in).
+ */
+function resetAccountState(): void {
+  clearPasses();
+  invalidate();
+  resetSettings();
+  closeTokenModal();
+}
 
 export function App() {
   // A returning visitor starts signed in as last time (src/cache.ts keeps the answer), so their
@@ -136,28 +158,42 @@ export function App() {
   const [wantedTab, setTab] = useState<Tab>(tabFromHash);
   const sageMint = useSageMint();
   const walletAddress = useWalletAddress();
+  // The session as last rendered, for the cross-tab and session-ended handlers below.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
   const checkSession = (maxAgeMs: number) => {
     // index.html already started this request; cachedGet adopts it rather than sending another.
     cachedGet<User>("/auth/me", maxAgeMs)
-      // The same answer as before keeps the session object, so a routine re-read redraws nothing.
-      .then((user) =>
-        setSession((prev) =>
-          prev.state === "signed-in" && JSON.stringify(prev.user) === JSON.stringify(user)
-            ? prev
+      .then((user) => {
+        const prev = sessionRef.current;
+        // Another account now holds this browser's session (another tab signed in as it): nothing
+        // read for the old one may stay on screen. Likewise a guest or signed-out page that
+        // another tab signed in. A page still loading has nothing of anyone's to drop.
+        if (
+          (prev.state === "signed-in" && prev.user.id !== user.id) ||
+          prev.state === "guest" ||
+          prev.state === "signed-out"
+        ) {
+          setGuest(false);
+          resetAccountState();
+        }
+        // The same answer as before keeps the session object, so a routine re-read redraws nothing.
+        setSession((p) =>
+          p.state === "signed-in" && JSON.stringify(p.user) === JSON.stringify(user)
+            ? p
             : { state: "signed-in", user },
-        ),
-      )
+        );
+      })
       .catch((e: unknown) => {
         // Only a real "not signed in" answer ends the session and clears what this device kept.
         if (e instanceof ApiError && e.status === 401) {
+          const wasSignedIn = sessionRef.current.state === "signed-in";
           setSessionToken(null);
-          clearPasses();
-          invalidate();
-          resetSettings();
-          // The open token view is above the feed, so it would outlive the session it was read in.
-          closeTokenModal();
+          resetAccountState();
           setSession({ state: "signed-out" });
+          // The other tabs share the session that just ended.
+          if (wasSignedIn) announceAuthChange({ kind: "signed-out" });
           return;
         }
         // The API is down or restarting (a network error, a 502 or 503 during a deploy): a
@@ -183,6 +219,39 @@ export function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
 
+  // Another tab of this browser signed in or out: the cookie (and any fallback token) it changed is
+  // this page's too, so follow it rather than show one account while sending requests as another.
+  useEffect(
+    () =>
+      onAuthChange((change) => {
+        reloadSessionToken();
+        const s = sessionRef.current;
+        if (s.state === "linking") return;
+        if (change.kind === "signed-out") {
+          if (s.state !== "signed-in") return;
+          resetAccountState();
+          setSession({ state: "signed-out" });
+          return;
+        }
+        if (s.state === "signed-in" && s.user.id === change.userId) return;
+        checkSession(-1);
+      }),
+    [],
+  );
+
+  // A call answered "not signed in" (signed out on another device, say): re-read the session now.
+  useEffect(() => {
+    let lastAt = 0;
+    const onEnded = () => {
+      if (sessionRef.current.state !== "signed-in") return;
+      if (Date.now() - lastAt < SESSION_ENDED_RECHECK_MS) return;
+      lastAt = Date.now();
+      checkSession(-1);
+    };
+    window.addEventListener(SESSION_ENDED_EVENT, onEnded);
+    return () => window.removeEventListener(SESSION_ENDED_EVENT, onEnded);
+  }, []);
+
   /** Phone side of pairing: the code from the desktop's QR becomes this phone's own session. */
   const redeem = (code: string | null) => {
     const failed =
@@ -205,10 +274,9 @@ export function App() {
       .then((user) => {
         if (!user) return;
         setGuest(false);
-        invalidate();
-        resetSettings();
-        closeTokenModal();
+        resetAccountState();
         setSession({ state: "signed-in", user });
+        announceAuthChange({ kind: "signed-in", userId: user.id });
       })
       .catch((e: unknown) => {
         setSession({
@@ -255,11 +323,9 @@ export function App() {
     await loadedPrivyControls()
       ?.logout()
       .catch(() => undefined);
-    clearPasses();
     setSessionToken(null);
-    invalidate();
-    resetSettings();
-    closeTokenModal();
+    resetAccountState();
+    announceAuthChange({ kind: "signed-out" });
     // The form is lazy-loaded; this fetches the same chunk the bug button does.
     void import("./components/BugReportDialog").then((m) => m.clearBugReportDraft()).catch(() => undefined);
     setSession({ state: "signed-out" });
@@ -330,9 +396,11 @@ export function App() {
       if (document.visibilityState === "visible" && Date.now() - lastRead > 60_000) reread();
     };
     document.addEventListener("visibilitychange", onVisible);
+    const stopRecheck = onRecheckMe(reread);
     return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
+      stopRecheck();
     };
   }, [signedIn]);
   // The Stream tab only for a signed-in reader who switched it on in Settings.
@@ -513,6 +581,7 @@ export function App() {
                 invalidate();
                 resetSettings();
                 setSession({ state: "signed-in", user });
+                announceAuthChange({ kind: "signed-in", userId: user.id });
               }}
             />
           </Suspense>

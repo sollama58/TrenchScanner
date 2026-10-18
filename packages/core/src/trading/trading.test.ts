@@ -14,6 +14,8 @@ import {
   signTransaction,
   verifyTransactionSignatures,
   SYSTEM_PROGRAM_ID,
+  systemTransferInstruction,
+  type InstructionSpec,
 } from "./transaction.js";
 import {
   createKeyProvider,
@@ -25,7 +27,15 @@ import {
 } from "./keyVault.js";
 import { TradingRpc, tipsJito } from "./rpc.js";
 import { decideExit, ladderSoldFraction, sellAmount } from "./exitEngine.js";
-import { associatedTokenAddress, checkInstructions, PROGRAM } from "./txGuard.js";
+import {
+  associatedTokenAddress,
+  checkInstructions,
+  guardSwapTransaction,
+  PROGRAM,
+  type GuardRpc,
+  type TradeExpectation,
+} from "./txGuard.js";
+import { HELIUS_SENDER_TIP_ACCOUNTS } from "./sender.js";
 import {
   dexScreenerPricesUsd,
   JupiterSwapClient,
@@ -517,6 +527,65 @@ describe("instruction guard", () => {
   });
 });
 
+describe("swap guard (wallet security audit 2026-10-18)", () => {
+  const wallet = generateWalletKeypair().publicKey;
+  const mint = generateWalletKeypair().publicKey;
+  const tip = HELIUS_SENDER_TIP_ACCOUNTS[0]!;
+  // The chain as the guard reads it: the wallet loses `spent` lamports, nothing else changes.
+  const rpc = (spent: bigint): GuardRpc => ({
+    getAccountsData: async (a) => a.map(() => null),
+    getParsedAccounts: async (a) =>
+      a.map((k) =>
+        k === wallet ? { lamports: 1_000_000_000n, owner: SYSTEM_PROGRAM_ID, token: null } : null,
+      ),
+    simulateParsed: async (_b64, a) => ({
+      error: null,
+      logs: [],
+      accounts: a.map((k) =>
+        k === wallet ? { lamports: 1_000_000_000n - spent, owner: SYSTEM_PROGRAM_ID, token: null } : null,
+      ),
+    }),
+  });
+  const sale: TradeExpectation = {
+    kind: "sell",
+    mint,
+    amount: 1_000n,
+    minSolOut: 0n,
+    feeAllowance: 1_000_000n,
+    maxExternalLamports: 1_000_000n,
+    maxPriorityFeeLamports: 100_000n,
+  };
+  const jupiter = { programId: PROGRAM.jupiterV6, accounts: [], data: [1, 2, 3] };
+  const tx = (...ixs: InstructionSpec[]) => buildLegacyTransaction(wallet, BLOCKHASH, ixs);
+
+  it("refuses a sale that sells nothing, however small its fees", async () => {
+    await expect(
+      guardSwapTransaction(
+        rpc(500_000n),
+        tx(jupiter, systemTransferInstruction(wallet, tip, 500_000n)),
+        wallet,
+        sale,
+      ),
+    ).rejects.toThrow(/sell no tokens/);
+  });
+  it("refuses a transaction with no swap in it", async () => {
+    await expect(
+      guardSwapTransaction(rpc(500_000n), tx(systemTransferInstruction(wallet, tip, 500_000n)), wallet, sale),
+    ).rejects.toThrow(/no swap instruction/);
+  });
+  it("refuses SOL sent to anyone but a tip account", async () => {
+    const stranger = generateWalletKeypair().publicKey;
+    await expect(
+      guardSwapTransaction(
+        rpc(500_000n),
+        tx(jupiter, systemTransferInstruction(wallet, stranger, 500_000n)),
+        wallet,
+        sale,
+      ),
+    ).rejects.toThrow(/isn't a tip account/);
+  });
+});
+
 describe("mint risk", () => {
   const pumpLike = {
     program: PROGRAM.token2022,
@@ -648,10 +717,50 @@ describe("Jupiter swap client", () => {
     expect((await dexScreenerPricesUsd([OWNER], broken)).size).toBe(0);
   });
 
-  it("does not repeat a rate limit or a missing route", async () => {
+  it("moves a rate-limited call to the next host, and throws only when every host is limited", async () => {
+    const urls: string[] = [];
+    const keys: (string | null)[] = [];
+    const limitedKey = "mine";
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      const key = new Headers(init?.headers).get("x-api-key");
+      urls.push(new URL(url).host);
+      keys.push(key);
+      return key === limitedKey ? json({ error: "slow down" }, 429)() : json(quote)();
+    }) as typeof fetch;
+    const client = new JupiterSwapClient({ apiKey: "mine", fetchImpl });
+    const ask = { inputMint: OWNER, outputMint: quote.outputMint, amount: 1000n, slippageBps: 100 };
+    await expect(client.quote(ask)).resolves.toMatchObject({ outAmount: "10" });
+    expect(urls).toEqual(["api.jup.ag", "lite-api.jup.ag"]);
+    expect(keys).toEqual(["mine", null]);
+    // The limited host waits its turn on the next call.
+    await client.quote(ask);
+    expect(urls.slice(2)).toEqual(["lite-api.jup.ag"]);
+    // A backup key is tried before the keyless host.
+    urls.length = 0;
+    keys.length = 0;
+    const backed = new JupiterSwapClient({ apiKey: "mine", backupApiKey: "scan", fetchImpl });
+    await backed.quote(ask);
+    expect(keys).toEqual(["mine", "scan"]);
+    // Every host limited: a RateLimitedError, each host asked once.
+    const all = (async (url: string) => {
+      urls.push(new URL(url).host);
+      return json({ error: "slow down" }, 429)();
+    }) as typeof fetch;
+    urls.length = 0;
+    await expect(
+      new JupiterSwapClient({ apiKey: "mine", fetchImpl: all, backupPrices: null }).pricesUsd([OWNER]),
+    ).rejects.toBeInstanceOf(RateLimitedError);
+    expect(urls).toEqual(["api.jup.ag", "lite-api.jup.ag"]);
+  });
+
+  it("does not repeat a rate limit on one host, or a missing route", async () => {
     let s = scripted([json({ error: "slow down" }, 429)]);
     await expect(
-      new JupiterSwapClient({ fetchImpl: s.fetchImpl, backupPrices: null }).pricesUsd([OWNER]),
+      new JupiterSwapClient({
+        baseUrl: "https://jup.test",
+        fetchImpl: s.fetchImpl,
+        backupPrices: null,
+      }).pricesUsd([OWNER]),
     ).rejects.toBeInstanceOf(RateLimitedError);
     expect(s.calls()).toBe(1);
     s = scripted([json({ errorCode: "COULD_NOT_FIND_ANY_ROUTE", error: "no route" }, 400)]);

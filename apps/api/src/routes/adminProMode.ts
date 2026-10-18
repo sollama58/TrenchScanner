@@ -5,6 +5,7 @@ import {
   isWalletAddress,
   prisma,
   proHolderSummary,
+  SUBSCRIPTION_MINT_DECIMALS,
   type Env,
   walletTag,
 } from "@trenchscanner/core";
@@ -26,9 +27,20 @@ const grantSchema = z.object({
 
 export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { env: Env }) {
   app.get("/pro-mode", async () => {
-    const grants = await prisma.proModeGrant.findMany({ orderBy: { createdAt: "desc" } });
+    const [grants, holders] = await Promise.all([
+      prisma.proModeGrant.findMany({ orderBy: { createdAt: "desc" } }),
+      proHolderSummary(),
+    ]);
     const users = await prisma.user.findMany({
-      where: { walletAddress: { in: grants.map((g) => g.walletAddress) } },
+      where: {
+        walletAddress: {
+          in: [
+            ...grants.map((g) => g.walletAddress),
+            ...holders.top.map((h) => h.walletAddress),
+            ...holders.grace.map((g) => g.walletAddress),
+          ],
+        },
+      },
       select: { walletAddress: true },
     });
     const signedUp = new Set(users.map((u) => u.walletAddress));
@@ -38,7 +50,13 @@ export async function registerAdminProModeRoutes(app: FastifyInstance, opts: { e
       public: opts.env.PRO_TRADING_PUBLIC,
       admins: [...adminWalletSet(opts.env)],
       // The top 250 $ASDFASDFA holders' Pro Mode: the newest scan, and who is in their grace period.
-      holders: await proHolderSummary(),
+      // Each holder marked with whether it has an account here: Pro Mode shows only to those.
+      holders: {
+        ...holders,
+        decimals: SUBSCRIPTION_MINT_DECIMALS,
+        top: holders.top.map((h) => ({ ...h, signedUp: signedUp.has(h.walletAddress) })),
+        grace: holders.grace.map((g) => ({ ...g, signedUp: signedUp.has(g.walletAddress) })),
+      },
       grants: grants.map((g) => ({ ...g, signedUp: signedUp.has(g.walletAddress) })),
     };
   });

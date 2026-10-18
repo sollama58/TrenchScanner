@@ -72,6 +72,9 @@ describe("buildBurnTransaction", () => {
     expect(() => buildBurnTransaction({ ...base, rawAmount: 1n << 64n })).toThrow();
     expect(() => buildBurnTransaction({ ...base, tokenAccount: OWNER, rawAmount: 1n })).toThrow();
     expect(() => buildBurnTransaction({ ...base, owner: "not-an-address", rawAmount: 1n })).toThrow();
+    // Only $ASDFASDFA: a mint from a compromised API would burn the wallet's other tokens.
+    const usdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    expect(() => buildBurnTransaction({ ...base, mint: usdc, rawAmount: 1n })).toThrow(/ASDFASDFA/);
   });
 });
 

@@ -71,7 +71,7 @@ describe("HeliusAccountStream", () => {
       params: { subscription: 5, result: { context: { slot: 1 }, value: { data: ["AAAA", "base64"] } } },
     });
     stream.handleMessage(note);
-    expect(onAccount).toHaveBeenCalledWith("curve:m", "AAAA", note.length);
+    expect(onAccount).toHaveBeenCalledWith("curve:m", "AAAA", note.length, 1);
     expect(stream.takeStats()).toMatchObject({
       accountSubscriptions: 1,
       subscriptions: 0,

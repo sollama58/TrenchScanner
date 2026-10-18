@@ -62,6 +62,32 @@ export async function adminCall<T>(
   return api<T>(path, { method, body: JSON.stringify({ ...body, confirmation: { nonce, signature } }) });
 }
 
+/**
+ * A call the API may want the wallet to approve first (428 "confirmation_required"): made as it
+ * is, and only when asked, signed for and made again with `{ confirmation }` as its body. Pairing a
+ * phone is one (deviceLink.ts), for every wallet account; the text to sign comes from
+ * `confirmPath`, that route's own challenge (/auth/link/confirm), and `call` makes the request
+ * with the body given.
+ */
+export async function confirmedIfAsked<T>(
+  confirmPath: string,
+  call: (body?: Record<string, unknown>) => Promise<T>,
+): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    if (!needsConfirmation(err)) throw err;
+  }
+  const challenge = await post<{ nonce: string; message: string; walletAddress: string }>(confirmPath);
+  let signature: string;
+  try {
+    signature = await signMessageAs(challenge.walletAddress, challenge.message);
+  } catch (err) {
+    throw new Error(describeConfirmError(err), { cause: err });
+  }
+  return call({ confirmation: { nonce: challenge.nonce, signature } });
+}
+
 /** A download the API may want approved: the same, with the signature in the query. */
 export async function adminDownload(path: string, fallbackName: string): Promise<void> {
   try {

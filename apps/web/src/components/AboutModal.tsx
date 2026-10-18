@@ -7,11 +7,13 @@ import {
   FunnelArt,
   GuestArt,
   KolArt,
+  ProArt,
   TwoWaysArt,
   WeatherArt,
   YoursArt,
 } from "./TourArt";
 import { GUEST_DELAY_MINUTES } from "../session";
+import { PRO_MODE_PERKS } from "./ProModeCard";
 
 type Targets = { hitRate2xPct: number; hitRate4xPct: number };
 
@@ -331,6 +333,28 @@ function tourSlides(t: Targets, guest: boolean): Slide[] {
             ),
           },
         ]),
+    {
+      title: "Pro Mode for the top holders",
+      art: <ProArt />,
+      body: (
+        <>
+          <p className="tour-lead">
+            The 250 largest $ASDFASDFA holders get Pro Mode. It switches on by itself within minutes of
+            getting into the top 250; drop out and you keep it for 24 hours.
+          </p>
+          <ul className="tour-keys">
+            {PRO_MODE_PERKS.map((p) => (
+              <li key={p.title}>
+                <b>{p.title}</b>: {p.text}
+              </li>
+            ))}
+          </ul>
+          <p className="tour-note">
+            Settings › Subscription shows where you stand, how much it takes to get in, and a Buy button.
+          </p>
+        </>
+      ),
+    },
     {
       title: "Check the weather in the Lighthouse",
       art: <WeatherArt />,

@@ -1,6 +1,8 @@
 import bs58 from "bs58";
 import { findProgramAddress } from "../solana.js";
 import { TransientError } from "./errors.js";
+import { JITO_TIP_ACCOUNTS } from "./jitoTips.js";
+import { isSenderTipAccount } from "./sender.js";
 import {
   decodeMessage,
   parseLookupTableAddresses,
@@ -143,6 +145,10 @@ export interface InstructionTotals {
   priorityFeeLamports: bigint;
   /** Jupiter route instructions whose slippage and platform fee were read (preflight reports it). */
   jupiterRoutesChecked: number;
+  /** Top-level instructions of the swap programs (Jupiter, Pump.fun, PumpSwap). */
+  swapInstructions: number;
+  /** Who the System transfers to anyone but the wallet pay. */
+  externalRecipients: Set<string>;
 }
 
 /**
@@ -196,6 +202,8 @@ export function checkInstructions(
   let unitLimit: bigint | null = null;
   let microLamportsPerUnit = 0n;
   let jupiterRoutesChecked = 0;
+  let swapInstructions = 0;
+  const externalRecipients = new Set<string>();
   decoded.instructions.forEach((ix, n) => {
     if (ix.programIdIndex >= decoded.staticKeys.length)
       throw new GuardRefusal(`instruction ${n}: bad program index`);
@@ -218,6 +226,7 @@ export function checkInstructions(
       else if (d[0] === 3 && d.length >= 9) microLamportsPerUnit = u64(d, 1); // SetComputeUnitPrice
       return;
     }
+    if (SWAP_PROGRAMS.has(program)) swapInstructions++;
     if (program === PROGRAM.jupiterV6) {
       // Its own route arguments, read rather than trusted: a hostile build can't widen the
       // slippage past the bot's or take a platform fee. Other Jupiter instructions (and any newer
@@ -242,7 +251,10 @@ export function checkInstructions(
       // Transfer (2): to the wallet's own wrapped-SOL account (wrapping), or a fee/tip, which is
       // counted and bounded by the caller.
       if (tag === 2 && acct(0) === wallet && d.length >= 12) {
-        if (!own.has(acct(1))) externalLamports += u64(d, 4);
+        const to = acct(1);
+        if (own.has(to)) return;
+        externalRecipients.add(to);
+        externalLamports += u64(d, 4);
         return;
       }
       // CreateAccount (0), funded by the wallet, for a new token account (wSOL wrapping).
@@ -273,6 +285,8 @@ export function checkInstructions(
     externalLamports,
     priorityFeeLamports: (microLamportsPerUnit * limit) / 1_000_000n,
     jupiterRoutesChecked,
+    swapInstructions,
+    externalRecipients,
   };
 }
 
@@ -306,6 +320,13 @@ export async function guardSwapTransaction(
   }
   const keys = resolveAccountKeys(decoded, tables);
   const totals = checkInstructions(decoded, keys, wallet, { maxSlippageBps: expect.maxSlippageBps });
+  // A "swap" with no swap in it can only be paying fees and tips: never worth signing.
+  if (totals.swapInstructions === 0) throw new GuardRefusal("it has no swap instruction");
+  // SOL to anyone but the wallet only as a tip, to Jito's or Helius Sender's own fixed accounts: a
+  // hostile route can't pay itself out of the fee allowance (wallet security audit 2026-10-18, F3).
+  for (const to of totals.externalRecipients)
+    if (!JITO_TIP_ACCOUNTS.has(to) && !isSenderTipAccount(to))
+      throw new GuardRefusal(`it sends SOL to ${to}, which isn't a tip account`);
   if (totals.externalLamports > expect.maxExternalLamports)
     throw new GuardRefusal(
       `it would send ${totals.externalLamports} lamports to others, more than the ${expect.maxExternalLamports} allowed`,
@@ -410,6 +431,9 @@ export async function guardSwapTransaction(
   } else {
     if (-tokenDelta > expect.amount)
       throw new GuardRefusal(`it would sell ${-tokenDelta} tokens, more than ${expect.amount}`);
+    // A sale that sells nothing leaves the position open and due, so the next pass would sign
+    // another: refused, or a hostile route could take a fee each time (audit 2026-10-18, F1).
+    if (tokenDelta >= 0n) throw new GuardRefusal("it would sell no tokens");
     // Whatever the quote says, a sale never costs the wallet SOL beyond fees and temporary rent.
     if (solDelta < -(expect.maxPriorityFeeLamports + MAX_SALE_SOL_COST_LAMPORTS))
       throw new GuardRefusal(`a sale would cost the wallet ${-solDelta} lamports`);
