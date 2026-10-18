@@ -11,7 +11,7 @@ import { WalletsAdmin } from "./AdminWallets";
 import { UsageAdmin } from "./AdminUsage";
 import { CreditsAdmin } from "./AdminCredits";
 import { FreeAccessAdmin } from "./AdminFreeAccess";
-import { ProModeAdmin } from "./AdminProMode";
+import { ProModeAdmin, SacrificeAdmin } from "./AdminProMode";
 import { RunNow } from "./AdminRunNow";
 import { AdminActionLog, TableBackups } from "./AdminSecurity";
 import { adminCall } from "../tradeConfirm";
@@ -1179,6 +1179,7 @@ function Access() {
       <Levers onDone={reloadAll} />
       <FreeAccessAdmin onChanged={reloadAll} />
       <ProModeAdmin />
+      <SacrificeAdmin />
       <Panel title="Subscriptions">
         <Load q={subs}>
           {(rows) => (

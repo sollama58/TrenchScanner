@@ -2,6 +2,7 @@ import { Prisma, prisma } from "../db.js";
 import { isWalletAddress } from "../solana.js";
 import { jobLockKey } from "../heartbeat.js";
 import { SUBSCRIPTION_MINT } from "./constants.js";
+import { updateFreeTiers } from "./sacrifice.js";
 
 /**
  * Pro Mode for the top $ASDFASDFA holders (user ask 2026-10-18): the 250 largest wallets have it
@@ -101,6 +102,7 @@ export async function refreshProHolders(
           THEN "ProHolder"."inTopSince"
         ELSE EXCLUDED."inTopSince" END`;
   await markMovedBags(ranked, top.length, now, graceFloor, read.holders.length >= PRO_HOLDER_READ);
+  await updateFreeTiers(now);
   latestCache = { at: Date.now(), latest: now };
   return { holders: top.length };
 }

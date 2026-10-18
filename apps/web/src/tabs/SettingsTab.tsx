@@ -232,7 +232,7 @@ function ChaosPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
 
 /** Optional tabs, off until switched on here. Saved with the feed appearance, so it follows the wallet. */
 function TabsPanel() {
-  const { streamTab, hideLighthouseTab } = useAppearance();
+  const { hideLighthouseTab } = useAppearance();
   return (
     <section className="panel">
       <header className="section-head">
@@ -243,24 +243,6 @@ function TabsPanel() {
           <h2>Extra tabs</h2>
         </div>
       </header>
-      <div className="tab-option">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={streamTab}
-          className={`switch${streamTab ? " on" : ""}`}
-          onClick={() => setAppearance({ streamTab: !streamTab })}
-        >
-          <span className="switch-track">
-            <span className="switch-thumb" />
-          </span>
-          Stream
-        </button>
-        <p className="muted small">
-          A tab showing every new token the moment it passes the safety screen inside the band, newest first,
-          on the same cards as your Live feed.
-        </p>
-      </div>
       <div className="tab-option">
         <button
           type="button"

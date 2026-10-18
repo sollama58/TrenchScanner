@@ -130,7 +130,7 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
     expect((await app.inject({ method: "GET", url: `/pro/trade/${MINT}/position` })).statusCode).toBe(401);
   });
 
-  it("quotes the network fee, with no platform fee, to Pro wallets only", async () => {
+  it("quotes the network fee, with no platform fee while the Sacrifice is off, to Pro wallets only", async () => {
     const url = `/pro/trade/fee?mint=${MINT}&speed=eco&priorityFeeLamports=100000&tipLamports=20000`;
     expect((await as(TRADER, "GET", url)).statusCode).toBe(404);
     const fee = await as(ADMIN, "GET", url);
@@ -140,6 +140,7 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
       tipLamports: "20000",
       baseFeeLamports: "5000",
       platformFeeLamports: "0",
+      sacrifice: expect.objectContaining({ mode: "off", pays: false, credits: null }),
     });
     expect((await as(ADMIN, "GET", `/pro/trade/fee?mint=nope&speed=eco`)).statusCode).toBe(400);
     // Swap costs: Pro wallets only too, and a bad mint is refused before any quote.

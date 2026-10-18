@@ -1,10 +1,23 @@
 import type { Card } from "./api";
+import { nowReading } from "./components/AlertCard";
 
 /**
  * Scope: the Live feed as a three-column board of compact rows (user ask 2026-10-18): your own
  * filters' alerts, the models' calls, and every graduated token that passes the safety screen.
+ * Its Stream switch (user ask 2026-10-18, in place of the old Stream tab) swaps the first two for
+ * the Stream's new tokens and the ones about to graduate.
  */
-export type ScopeColumn = "filters" | "models" | "graduated";
+export type ScopeColumn = "filters" | "models" | "new" | "soon" | "graduated";
+
+/**
+ * About to graduate: a Stream token at this market cap or more, still on its curve. Pump.fun
+ * curves complete at about $70-90K depending on SOL's price, so this is roughly half way and up.
+ */
+export const SOON_MCAP_USD = 45_000;
+const SOON_LABEL = "$45K";
+
+/** A card's market cap now, else at its scan. */
+const mcapOf = (card: Card): number => nowReading(card) ?? card.snapshot.marketCapUsd ?? 0;
 
 export const SCOPE_COLUMNS: { id: ScopeColumn; label: string; short: string; hint: string }[] = [
   {
@@ -15,12 +28,33 @@ export const SCOPE_COLUMNS: { id: ScopeColumn; label: string; short: string; hin
   },
   { id: "models", label: "Models", short: "Models", hint: "Calls from the models you follow, newest first" },
   {
+    id: "new",
+    label: "New",
+    short: "New",
+    hint: "New tokens the moment they pass the safety screen in the band, newest first",
+  },
+  {
+    id: "soon",
+    label: "About to graduate",
+    short: "Soon",
+    hint: `Tokens on the Stream at ${SOON_LABEL} or more, still on their bonding curve, closest to graduating first`,
+  },
+  {
     id: "graduated",
     label: "Graduated",
     short: "Graduated",
     hint: "Every token that graduated and passes the safety screen, and your alerts once their coin graduates",
   },
 ];
+
+/** The columns on the board: the Stream's two in place of the alerts' two when Stream is on. */
+export function scopeColumnsFor(stream: boolean): typeof SCOPE_COLUMNS {
+  const ids: ScopeColumn[] = stream ? ["new", "soon", "graduated"] : ["filters", "models", "graduated"];
+  return SCOPE_COLUMNS.filter((c) => ids.includes(c.id));
+}
+
+/** API pages of the Stream Scope reads when Stream is on, for New and About to graduate. */
+export const SCOPE_STREAM_PAGES = 3;
 
 /** API pages of the Live feed Scope reads: the newest alerts, enough to fill both its columns. */
 export const SCOPE_PAGES = 5;
@@ -29,6 +63,8 @@ export const SCOPE_PAGES = 5;
 const MAX_TICK_TOKENS = 30;
 
 export type ScopeColumns = Record<ScopeColumn, Card[]>;
+
+const emptyColumns = (): ScopeColumns => ({ filters: [], models: [], new: [], soon: [], graduated: [] });
 
 /** Whether an alert's coin has graduated, by its own scans or by a Graduated column entry. */
 export function cardGraduated(card: Card, gradTokens: ReadonlySet<string>): boolean {
@@ -50,9 +86,20 @@ export function splitScope(
   feed: readonly Card[],
   graduated: readonly Card[],
   keepGraduated: { filters: boolean; models: boolean } = { filters: false, models: false },
+  stream: readonly Card[] = [],
 ): ScopeColumns {
-  const out: ScopeColumns = { filters: [], models: [], graduated: [] };
+  const out = emptyColumns();
   const gradTokens = new Set(graduated.map((c) => c.tokenId));
+  // The Stream's tokens still on their curve: About to graduate from SOON_MCAP_USD up, closest
+  // first, the rest in New as the Stream has them, newest first.
+  const seen = new Set<string>();
+  for (const card of stream) {
+    if (seen.has(card.tokenId) || cardGraduated(card, gradTokens)) continue;
+    seen.add(card.tokenId);
+    if (mcapOf(card) >= SOON_MCAP_USD) out.soon.push(card);
+    else out.new.push(card);
+  }
+  out.soon.sort((a, b) => mcapOf(b) - mcapOf(a));
   const moved = new Map<string, Card>();
   for (const card of feed) {
     const grad = cardGraduated(card, gradTokens);
@@ -83,10 +130,13 @@ export function splitScope(
 export type ScopeFrame = Record<ScopeColumn, string[]>;
 
 export function frameOf(cols: ScopeColumns): ScopeFrame {
+  const ids = (col: ScopeColumn) => cols[col].map((c) => c.id);
   return {
-    filters: cols.filters.map((c) => c.id),
-    models: cols.models.map((c) => c.id),
-    graduated: cols.graduated.map((c) => c.id),
+    filters: ids("filters"),
+    models: ids("models"),
+    new: ids("new"),
+    soon: ids("soon"),
+    graduated: ids("graduated"),
   };
 }
 
@@ -102,7 +152,7 @@ export function holdFrame(
 ): { cols: ScopeColumns; pending: number } {
   const byId = new Map<string, Card>();
   for (const col of SCOPE_COLUMNS) for (const c of fresh[col.id]) byId.set(c.id, c);
-  const cols: ScopeColumns = { filters: [], models: [], graduated: [] };
+  const cols = emptyColumns();
   for (const { id: col } of SCOPE_COLUMNS) {
     for (const id of frame[col]) {
       const card = byId.get(id) ?? last.get(id);

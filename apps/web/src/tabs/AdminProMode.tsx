@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { formatTokens } from "../burn";
-import { del, post } from "../api";
+import { del, post, put } from "../api";
 import { usePolling } from "../hooks";
 import { shortAddress } from "../format";
 import { Load, Panel, Table, Tag, Wallet, when } from "./adminShared";
@@ -245,6 +245,177 @@ export function ProModeAdmin() {
               ]}
             />
           </>
+        )}
+      </Load>
+    </Panel>
+  );
+}
+
+type SacrificeMode = "off" | "shadow" | "on";
+
+const MODE_TEXT: Record<SacrificeMode, string> = {
+  off: "Off: nothing is worked out, shown or taken.",
+  shadow: "Shadow: worked out and recorded on each trade, never taken.",
+  on: "On: taken from burned credits on every trade below the cut-off.",
+};
+
+/** Mirrors apps/api/src/routes/adminProMode.ts GET /admin/pro-mode/sacrifice. */
+interface SacrificeReport {
+  settings: { mode: SacrificeMode; freeRank: number };
+  price: {
+    asdfPerSol: number | null;
+    refusal: "few_samples" | "stale" | "source_down" | "sources_apart" | null;
+    shortMedian: number | null;
+    longMedian: number | null;
+    spot: Record<"quote" | "price", { asdfPerSol: number; at: string } | null>;
+    samples: number;
+    newestAt: string | null;
+  };
+}
+
+const PRICE_REFUSAL: Record<NonNullable<SacrificeReport["price"]["refusal"]>, string> = {
+  few_samples: "fewer than 10 samples in the last 5 minutes",
+  stale: "no sample in the last minute",
+  source_down: "one source has no sample in the last minute",
+  sources_apart: "the two sources are more than 5% apart",
+};
+
+const asdf = (v: number | null) =>
+  v === null ? "–" : `${v.toLocaleString("en-US", { maximumFractionDigits: 0 })} ASDF`;
+
+/**
+ * The Sacrifice (ASDF fee plan): the 0.2% fee on Pro trades below the free cut-off, paid from
+ * burned credits at a smoothed ASDF price. Shows that price and whether its guards pass.
+ */
+export function SacrificeAdmin() {
+  const q = usePolling<SacrificeReport>("/admin/pro-mode/sacrifice", 30_000);
+  return (
+    <>
+      {q.data && <SacrificeSettingsForm settings={q.data.settings} onDone={q.reload} />}
+      <SacrificePrice q={q} />
+    </>
+  );
+}
+
+/** The Sacrifice's switch and free cut-off. Each save asks first: both change what traders pay. */
+function SacrificeSettingsForm({
+  settings,
+  onDone,
+}: {
+  settings: SacrificeReport["settings"];
+  onDone: () => void;
+}) {
+  const [mode, setMode] = useState<SacrificeMode>(settings.mode);
+  const [rank, setRank] = useState(String(settings.freeRank));
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+  const freeRank = Number(rank);
+  const valid = Number.isInteger(freeRank) && freeRank >= 1 && freeRank <= 250;
+  const changed = mode !== settings.mode || freeRank !== settings.freeRank;
+  const buffer = Math.min(freeRank + 10, 250);
+
+  const save = async () => {
+    if (!valid) {
+      setResult("The free cut-off must be a whole number from 1 to 250.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Set the Sacrifice to ${mode} with the top ${freeRank} trading free (kept to rank ${buffer} once reached)?`,
+      )
+    )
+      return;
+    setBusy(true);
+    setResult(null);
+    try {
+      await put("/admin/pro-mode/sacrifice", { mode, freeRank });
+      setResult("Saved. Other servers pick it up within 30 seconds.");
+      onDone();
+    } catch (e) {
+      setResult(`Failed: ${errorText(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel
+      title="Sacrifice"
+      note="A 0.2% fee on Pro trades, buys and sells, paid from burned credits by holders below the free cut-off and wallets in their grace. Admins, Pro Mode grants and the ASDF access buy never pay."
+    >
+      <p className="small muted">{MODE_TEXT[settings.mode]}</p>
+      <div className="admin-form">
+        <select
+          aria-label="Sacrifice mode"
+          value={mode}
+          onChange={(e) => setMode(e.target.value as SacrificeMode)}
+          disabled={busy}
+        >
+          <option value="off">Mode: off</option>
+          <option value="shadow">Mode: shadow</option>
+          <option value="on">Mode: on</option>
+        </select>
+        <input
+          aria-label="Free for the top N holders"
+          placeholder="Free for the top N holders"
+          inputMode="numeric"
+          value={rank}
+          onChange={(e) => setRank(e.target.value)}
+          disabled={busy}
+        />
+        <button className="button primary" disabled={busy || !changed} onClick={() => void save()}>
+          Save
+        </button>
+      </div>
+      {valid && (
+        <p className="small muted">
+          A holder reaching rank {freeRank} trades free, and keeps it down to rank {buffer} while it still
+          holds at least what the cut-off wallet held in the newest scan.
+        </p>
+      )}
+      {result && <p className="small muted">{result}</p>}
+    </Panel>
+  );
+}
+
+function SacrificePrice({ q }: { q: ReturnType<typeof usePolling<SacrificeReport>> }) {
+  return (
+    <Panel
+      title="Sacrifice price"
+      note="ASDF per SOL the Sacrifice is charged at: the higher of the 5-minute and 24-hour medians (the lower ASDF price), sampled every 15 seconds from a Jupiter quote and the price API."
+    >
+      <Load q={q}>
+        {({ price: p }) => (
+          <Table
+            head={["Reading", "ASDF per SOL"]}
+            rows={[
+              [
+                "Charged at",
+                p.asdfPerSol !== null ? (
+                  <span className="num">{asdf(p.asdfPerSol)}</span>
+                ) : (
+                  <Tag tone="bad">refused: {p.refusal ? PRICE_REFUSAL[p.refusal] : "no price"}</Tag>
+                ),
+              ],
+              ["5-minute median", <span className="num">{asdf(p.shortMedian)}</span>],
+              ["24-hour median", <span className="num">{asdf(p.longMedian)}</span>],
+              [
+                "Spot, Jupiter quote of 1 SOL",
+                <span className="num">
+                  {asdf(p.spot.quote?.asdfPerSol ?? null)}
+                  {p.spot.quote ? <> · {when(p.spot.quote.at)}</> : null}
+                </span>,
+              ],
+              [
+                "Spot, price API ratio",
+                <span className="num">
+                  {asdf(p.spot.price?.asdfPerSol ?? null)}
+                  {p.spot.price ? <> · {when(p.spot.price.at)}</> : null}
+                </span>,
+              ],
+              ["Samples, last 5 minutes", <span className="num">{p.samples}</span>],
+            ]}
+          />
         )}
       </Load>
     </Panel>

@@ -16,6 +16,12 @@ import { carriesCreditMemo, largestBurn, type BurnRejection, type ParsedTransact
  * bought with a burn, "granted" ones an admin gave, and "daily" is a subscriber's free allowance
  * (DAILY_FREE_CREDITS a rolling day, never stacking, so it has spend rows only). A lookup draws on
  * daily first, then granted, then burned; trading may draw on burned only.
+ *
+ * The burned pot is held in $ASDFASDFA (owner decision 2026-10-18, "Hold in ASDF"): each burned row
+ * carries the signed base units it adds or takes (asdfRaw), and the burned credits a wallet sees
+ * are that sum over the current tokensPerCredit, to two decimals. Repricing changes the credits
+ * shown, never the ASDF a wallet holds, and a Sacrifice smaller than a credit is taken exactly.
+ * Granted and daily credits stay whole credits.
  */
 
 export type UtilityKind = "token" | "wallet";
@@ -139,6 +145,7 @@ export async function creditBurnCredits(
         source: "burned",
         burnSignature: signature,
         rawAmount: burn.rawAmount.toString(),
+        asdfRaw: burn.rawAmount,
         tokensPerCredit,
         note: discoveredBy,
       },
@@ -159,31 +166,58 @@ export async function creditBalance(
   wallet: string,
   db: Pick<Prisma.TransactionClient, "burnCreditEntry"> = prisma,
 ): Promise<number> {
-  const sum = await db.burnCreditEntry.aggregate({
-    where: { wallet, source: { not: "daily" } },
-    _sum: { delta: true },
-  });
-  return sum._sum.delta ?? 0;
+  return (await creditPots(wallet, db)).balance;
+}
+
+/** Burned credits shown for `raw` base units at `tokensPerCredit`: rounded down to hundredths. */
+export function creditsOfRaw(raw: bigint, tokensPerCredit: number): number {
+  if (tokensPerCredit <= 0) return 0;
+  return Number((raw * 100n) / rawPerCredit(tokensPerCredit)) / 100;
+}
+
+export interface CreditPots {
+  /** Granted plus burned credits (burned to two decimals). */
+  balance: number;
+  /** Whole credits an admin gave and the wallet hasn't spent. */
+  granted: number;
+  /** The burned pot as credits at the current price, rounded down to hundredths. */
+  burned: number;
+  /** The burned pot in $ASDFASDFA base units: what a Sacrifice is checked against and taken from. */
+  burnedRaw: bigint;
+  /** The price the burned credits were worked out at. */
+  tokensPerCredit: number;
 }
 
 /**
- * The balance split by pot. Granted is never below 0 here (a take-back can run past the grants a
- * wallet has left and into its burned credits, since grantCredits checks the whole balance), so
- * burned is what the balance holds beyond it: what trading may spend.
+ * The balance split by pot. The burned pot is the sum of its rows' ASDF. Granted is never below 0
+ * here: a take-back can run past the grants a wallet has left (grantCredits checks the whole
+ * balance), and the credits it takes beyond them come out of the burned pot at the current price.
  */
 export async function creditPots(
   wallet: string,
   db: Pick<Prisma.TransactionClient, "burnCreditEntry"> = prisma,
-): Promise<{ balance: number; granted: number; burned: number }> {
-  const rows = await db.burnCreditEntry.groupBy({
-    by: ["source"],
-    where: { wallet, source: { not: "daily" } },
-    _sum: { delta: true },
-  });
-  const sum = (source: CreditSource) => rows.find((r) => r.source === source)?._sum.delta ?? 0;
-  const balance = sum("burned") + sum("granted");
-  const granted = Math.max(0, Math.min(sum("granted"), balance));
-  return { balance, granted, burned: balance - granted };
+  tokensPerCredit?: number,
+): Promise<CreditPots> {
+  const [rows, rate] = await Promise.all([
+    db.burnCreditEntry.groupBy({
+      by: ["source"],
+      where: { wallet, source: { not: "daily" } },
+      _sum: { delta: true, asdfRaw: true },
+    }),
+    tokensPerCredit ?? burnCreditPrices().then((p) => p.tokensPerCredit),
+  ]);
+  const grantedSum = rows.find((r) => r.source === "granted")?._sum.delta ?? 0;
+  let burnedRaw = rows.find((r) => r.source === "burned")?._sum.asdfRaw ?? 0n;
+  if (grantedSum < 0) burnedRaw += BigInt(grantedSum) * rawPerCredit(rate);
+  const granted = Math.max(0, grantedSum);
+  const burned = creditsOfRaw(burnedRaw, rate);
+  return {
+    balance: Math.round((granted + burned) * 100) / 100,
+    granted,
+    burned,
+    burnedRaw,
+    tokensPerCredit: rate,
+  };
 }
 
 /** Free credits a subscriber gets each rolling day, for lookups only. Unused ones don't carry over. */
@@ -283,8 +317,9 @@ export async function spendCredits(
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${creditWalletLockKey(wallet)}))`;
     const now = new Date();
+    const { tokensPerCredit } = await burnCreditPrices();
     const [pots, daily] = await Promise.all([
-      creditPots(wallet, tx),
+      creditPots(wallet, tx, tokensPerCredit),
       dailyFree ? dailyFreeCredits(wallet, tx, now) : Promise.resolve({ left: 0, nextAt: null }),
     ]);
     const open = await tx.burnCreditEntry.findFirst({
@@ -302,7 +337,9 @@ export async function spendCredits(
     const free = Math.min(charge, daily.left);
     const fromGranted = Math.min(charge - free, pots.granted);
     const fromBurned = charge - free - fromGranted;
-    if (fromBurned > pots.burned) {
+    // Burned credits are taken as their ASDF at the current price, so a part-credit is never lost.
+    const burnedTake = BigInt(fromBurned) * rawPerCredit(tokensPerCredit);
+    if (burnedTake > pots.burnedRaw) {
       return { status: "insufficient" as const, balance: pots.balance, cost: charge, freeLeft: daily.left };
     }
     const parts = (
@@ -322,13 +359,17 @@ export async function spendCredits(
         utility,
         subject,
         source,
+        asdfRaw: source === "burned" ? -BigInt(n) * rawPerCredit(tokensPerCredit) : null,
         note,
         createdAt: now,
       })),
     });
     return {
       status: "charged" as const,
-      balance: pots.balance - fromGranted - fromBurned,
+      balance:
+        Math.round(
+          (pots.granted - fromGranted + creditsOfRaw(pots.burnedRaw - burnedTake, tokensPerCredit)) * 100,
+        ) / 100,
       cost: charge,
       free,
       freeLeft: daily.left - free,

@@ -25,6 +25,7 @@ import { TokenModal } from "../components/TokenModal";
 import {
   ChartIcon,
   ClockIcon,
+  EditIcon,
   FlameIcon,
   SearchIcon,
   ToolsIcon,
@@ -33,6 +34,7 @@ import {
   type IconProps,
 } from "../components/Icons";
 import { WalletsToWatch } from "../components/WalletsToWatch";
+import { TrackedWalletsPanel } from "../components/TrackedWallets";
 import { SideWalletChecker } from "./SideWalletChecker";
 
 /** Why a lookup costs nothing (apps/api lookupGate.ts freeLookupReason), or "open" for a re-open. */
@@ -130,7 +132,16 @@ const STAGE_TEXT: Record<Stage, string> = {
   sending: "Sending…",
 };
 
-export const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
+/**
+ * A credit count: whole credits as they are, a balance with burned credits in it to two decimals
+ * (the burned pot is held in ASDF, so it can hold part of a credit).
+ */
+export const creditCount = (n: number) =>
+  n.toLocaleString(
+    "en-US",
+    Number.isInteger(n) ? {} : { minimumFractionDigits: 2, maximumFractionDigits: 2 },
+  );
+export const plural = (n: number, one: string) => `${creditCount(n)} ${one}${n === 1 ? "" : "s"}`;
 
 /** A lookup's price, with the free daily credits left when the reader has them. */
 export function costLabel(cost: number, daily: UtilitiesOverview["daily"] | undefined): string {
@@ -192,8 +203,8 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
             Each lookup costs Burn Credits, which you get by burning {SYMBOL} from this wallet. A credit is
             only taken once the lookup works, and you can re-open it free for an hour. Coins and wallets
             TrenchScanner already tracks are free to look up, and the form says so before you run it. The Side
-            Wallet Checker and Wallets to watch are free. Subscribers also get 5 free credits a day, used
-            before their balance.
+            Wallet Checker and Wallets to watch are free. With Pro Mode you can also label up to 25 wallets of
+            your own, seen by you alone. Subscribers also get 5 free credits a day, used before their balance.
           </p>
         </header>
 
@@ -216,6 +227,10 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
 
         <div id="util-watch" className="util-anchor">
           <WalletsToWatch />
+        </div>
+
+        <div id="util-labels" className="util-anchor">
+          <TrackedWalletsPanel upsell />
         </div>
 
         <div id="util-recent" className="util-anchor">
@@ -249,6 +264,7 @@ const TOOLS: { id: string; label: string; short: string; Icon: (p: IconProps) =>
   { id: "util-wallet", label: "Wallet lookup", short: "Wallet", Icon: SearchIcon },
   { id: "util-sides", label: "Side Wallet Checker", short: "Sides", Icon: UsersIcon },
   { id: "util-watch", label: "Wallets to watch", short: "Watch", Icon: WalletIcon },
+  { id: "util-labels", label: "Wallet labels", short: "Labels", Icon: EditIcon },
   { id: "util-recent", label: "Your lookups", short: "Recent", Icon: ClockIcon },
 ];
 
@@ -343,7 +359,7 @@ function CreditsPanel({
         <div className="util-balance" aria-live="polite">
           {data ? (
             <>
-              <span className="num">{data.balance.toLocaleString("en-US")}</span>
+              <span className="num">{creditCount(data.balance)}</span>
               <small className="muted">credit{data.balance === 1 ? "" : "s"}</small>
             </>
           ) : (

@@ -36,6 +36,9 @@ const STALE_THRESHOLD_MS: Record<string, number> = {
   // wallet that just bought in waits longer for it; nobody loses it (a missed scan changes no
   // one's standing), until an hour without scans turns holders into a grace period.
   "pro-holders": 20 * 60_000,
+  // Every 15 seconds: the ASDF price the Sacrifice is charged at. While it is down, fee-paying
+  // Pro trades are refused once the newest sample is a minute old (asdfPrice.ts guards).
+  "asdf-price": 5 * 60_000,
   // Every minute, and while it's down every open training row's label window is silently
   // recording nothing - an hour of downtime is an hour of alerts whose outcomes read "flat".
   "candidate-watch": 10 * 60_000,

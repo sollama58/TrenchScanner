@@ -1,4 +1,5 @@
 import type { ModelProfile } from "../api";
+import { useIsAdmin } from "../session";
 import {
   ArrowRightIcon,
   BookIcon,
@@ -15,8 +16,8 @@ import {
 /**
  * What a model does, drawn (user ask 2026-10-17: "better explanations / graphics of what they
  * do"): its goal, then a three-step picture - what it looks at, how it decides, how much of what
- * it sees it calls - and how long it remembers. Everything comes from the API's profile, so a bred
- * recipe taking a seat redraws it.
+ * it sees it calls - and, for admins, how long it remembers. Everything comes from the API's
+ * profile, so a bred recipe taking a seat redraws it.
  */
 export function ModelPortrait({
   profile: p,
@@ -30,6 +31,7 @@ export function ModelPortrait({
 }) {
   const callsPct = liveCallsPct !== null && liveCallsPct > 0 ? liveCallsPct : p.aimsToCallPct;
   const GoalIcon = GOAL_ICON[p.goal];
+  const isAdmin = useIsAdmin();
   return (
     <section className="mp" aria-label="What it does">
       <div className={`mp-goal mp-goal-${p.goal}`}>
@@ -84,7 +86,8 @@ export function ModelPortrait({
           <ClockIcon size={14} /> Decides only once it has {p.waitsFor}.
         </p>
       )}
-      {p.memoryDays !== null && <MemoryBar halfLifeDays={p.memoryDays} />}
+      {/* How fast it forgets is a tuning detail, shown to admins only (user ask 2026-10-18). */}
+      {isAdmin && p.memoryDays !== null && <MemoryBar halfLifeDays={p.memoryDays} />}
     </section>
   );
 }
