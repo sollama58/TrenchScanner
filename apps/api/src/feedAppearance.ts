@@ -61,6 +61,10 @@ export const CHART_MARK_KINDS = [
   "winner",
   "linked",
 ] as const;
+/** The kinds marked by default: all but risky wallets and dumpers (user ask 2026-10-18). */
+export const DEFAULT_CHART_MARK_KINDS = CHART_MARK_KINDS.filter((k) => k !== "risky");
+/** apps/web/src/appearance.ts has the same. */
+export const CHART_MARKS_REV = 2;
 /** The chart marks no trade under this many SOL, whatever the setting (user ask 2026-10-18). */
 export const CHART_MARK_MIN_SOL = 0.25;
 export const CHART_MARK_MAX_SOL = 1_000;
@@ -198,12 +202,18 @@ export const feedAppearanceSchema = z
       .default(["terminal"]),
     /** The token chart marks labeled wallets' trades (user ask 2026-10-18); on by default. */
     chartMarks: z.boolean().default(true),
-    /** Which kinds of labeled wallet it marks; every kind by default. */
+    /** Which kinds of labeled wallet it marks; every kind but risky wallets and dumpers by default. */
     chartMarkKinds: z
       .array(z.enum(CHART_MARK_KINDS))
       .max(CHART_MARK_KINDS.length)
       .refine((k) => new Set(k).size === k.length, "chart mark kinds repeat")
-      .default([...CHART_MARK_KINDS]),
+      .default([...DEFAULT_CHART_MARK_KINDS]),
+    /**
+     * Which default chartMarkKinds was saved against: 2 from the build that turned risky wallets
+     * off by default (user ask 2026-10-18). A list saved before it with every kind still on was
+     * never changed, so reading it drops "risky" (parseFeedAppearance).
+     */
+    chartMarksRev: z.literal(CHART_MARKS_REV).default(CHART_MARKS_REV),
     /** The smallest trade it marks, in SOL: 0.5 by default, never under CHART_MARK_MIN_SOL. */
     chartMarkMinSol: z.number().min(CHART_MARK_MIN_SOL).max(CHART_MARK_MAX_SOL).default(0.5),
     /** The token chart draws a line or candles (user ask 2026-10-18); a line by default. */
@@ -266,7 +276,8 @@ export const DEFAULT_FEED_APPEARANCE: FeedAppearance = {
   hideBelowMcapUsd: 5_000,
   quickLinks: ["terminal"],
   chartMarks: true,
-  chartMarkKinds: [...CHART_MARK_KINDS],
+  chartMarkKinds: [...DEFAULT_CHART_MARK_KINDS],
+  chartMarksRev: CHART_MARKS_REV,
   chartMarkMinSol: 0.5,
   chartStyle: "line",
   // Off by default, all switchable back on in Customize: the composite score tile, so the stat tiles
@@ -281,7 +292,8 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
   const raw = typeof stored === "object" && stored !== null ? (stored as Record<string, unknown>) : {};
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(DEFAULT_FEED_APPEARANCE) as (keyof FeedAppearance)[]) {
-    if (key === "hidden" || key === "quickLinks" || key === "chartMarkKinds") continue;
+    if (key === "hidden" || key === "quickLinks" || key === "chartMarkKinds" || key === "chartMarksRev")
+      continue;
     const parsed = feedAppearanceSchema.shape[key].safeParse(raw[key]);
     out[key] = parsed.success ? parsed.data : DEFAULT_FEED_APPEARANCE[key];
   }
@@ -295,8 +307,14 @@ export function parseFeedAppearance(stored: unknown): FeedAppearance {
     ? [...new Set(raw.quickLinks.filter((l): l is string => typeof l === "string" && sites.has(l)))]
     : DEFAULT_FEED_APPEARANCE.quickLinks;
   const markKinds = new Set<string>(CHART_MARK_KINDS);
-  out.chartMarkKinds = Array.isArray(raw.chartMarkKinds)
+  const kinds = Array.isArray(raw.chartMarkKinds)
     ? [...new Set(raw.chartMarkKinds.filter((k): k is string => typeof k === "string" && markKinds.has(k)))]
     : DEFAULT_FEED_APPEARANCE.chartMarkKinds;
+  // Saved before risky wallets went off by default, with every kind on: the old default, unchanged.
+  out.chartMarkKinds =
+    raw.chartMarksRev !== CHART_MARKS_REV && kinds.length === CHART_MARK_KINDS.length
+      ? kinds.filter((k) => k !== "risky")
+      : kinds;
+  out.chartMarksRev = CHART_MARKS_REV;
   return out as FeedAppearance;
 }

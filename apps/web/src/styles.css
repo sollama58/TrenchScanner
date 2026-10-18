@@ -16166,3 +16166,20 @@ body:has(.util-toast) .bug-fab {
   color: var(--warn-ink);
   border-color: color-mix(in srgb, var(--warn) 50%, var(--border));
 }
+/* The candle view's timeframe picker, beside Line / Candles. */
+.pc-tf {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.pc-tf select {
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-3);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}

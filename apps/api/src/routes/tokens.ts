@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { allowLookupRead } from "../lookupGate.js";
 import { keepFilterMoment, readBubbleMoments, type BubbleMomentView } from "../bubbleMoments.js";
 import { readKolRows } from "../kolRoster.js";
@@ -18,7 +18,7 @@ import {
 import { SharedCache } from "../sharedCache.js";
 import { readTokenWhy, type TokenWhy } from "../tokenWhy.js";
 import { readTokenProfile, type TokenProfile } from "../tokenProfile.js";
-import { liveCurves, type LiveCurveAnswer } from "../liveCurve.js";
+import { liveCurves, MAX_WAIT_MS, type LiveCurveAnswer } from "../liveCurve.js";
 import {
   CandleCache,
   FIRST_MINUTES_MS,
@@ -567,7 +567,12 @@ export async function registerTokenRoutes(
       }
       if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
       reply.header("Cache-Control", "no-store");
-      return readTokenLive(mintAddress, liveAfter(request.query));
+      return readTokenLive(
+        mintAddress,
+        liveAfter(request.query),
+        liveWait(request.query),
+        closedSignal(reply),
+      );
     },
   );
 
@@ -775,10 +780,30 @@ export async function readTokenFine(mintAddress: string, res: "1s" | "15s"): Pro
 }
 
 /** The token chart's live tail (LiveCurveAnswer); only a coin on Token has its curve followed. */
-export async function readTokenLive(mintAddress: string, after: number): Promise<LiveCurveAnswer> {
+/** `wait=1`: hold the ask open for the next price change (LiveCurves.read), up to MAX_WAIT_MS. */
+export function liveWait(query: unknown): number {
+  return (query as { wait?: unknown } | null)?.wait === "1" ? MAX_WAIT_MS : 0;
+}
+
+/**
+ * Aborts once the reader's connection closes, so a held ask lets go of its wait. The response's
+ * "close" (the request's fires as soon as its body is read).
+ */
+export function closedSignal(reply: FastifyReply): AbortSignal {
+  const ctl = new AbortController();
+  reply.raw.once("close", () => ctl.abort());
+  return ctl.signal;
+}
+
+export async function readTokenLive(
+  mintAddress: string,
+  after: number,
+  waitMs = 0,
+  signal?: AbortSignal,
+): Promise<LiveCurveAnswer> {
   if (!(await isTracked(mintAddress)))
     return { mint: mintAddress, source: "none", complete: true, coveredFrom: null, readAt: null, ticks: [] };
-  return liveCurves().read(mintAddress, after);
+  return liveCurves().read(mintAddress, after, waitMs, signal);
 }
 
 const weekLabels = new SharedCache<DayLabelRow[]>(TRACK_CACHE_MS);

@@ -10,6 +10,8 @@ export interface LiveCurveAnswer {
   coveredFrom: number | null;
   readAt: number | null;
   ticks: [number, number][];
+  /** The API held the ask for the next change (wait=1); absent from older API builds. */
+  held?: boolean;
 }
 export type LiveSource = "stream" | "rpc" | "pending" | "none";
 
@@ -24,15 +26,22 @@ export interface LiveTail {
   done: boolean;
 }
 
-/** How often an open chart asks for its curve's changes. */
+/** How often an open chart asks for its curve's changes, from an API that answers at once. */
 export const LIVE_POLL_MS = 2_000;
+/**
+ * The API holds each ask until the curve's next change (user ask 2026-10-18: the chart trailed
+ * by seconds), so the next ask goes out at once, but no sooner than this after the last one went:
+ * a busy coin changes every block, and the route allows 120 asks a minute.
+ */
+const HELD_GAP_MS = 750;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_TICKS = 6_000;
 
 /**
  * The token chart's live tail (user ask 2026-10-17): while `enabled`, asks `base`/chart/live
- * every LIVE_POLL_MS for the coin's bonding-curve price changes since the last answer (the API
- * follows the curve on the Helius stream, apps/api/src/liveCurve.ts) and keeps them all. Only
+ * for the coin's bonding-curve price changes since the last answer (the API follows the curve on
+ * the Helius stream, apps/api/src/liveCurve.ts, and holds the ask until the next change) and
+ * keeps them all. Only
  * while the tab is visible; a failure backs off and keeps trying, so the tail resumes on its own.
  */
 export function useLiveTail(base: string, enabled: boolean): LiveTail {
@@ -52,8 +61,9 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
     };
     const poll = async () => {
       if (document.visibilityState !== "visible") return next(LIVE_POLL_MS);
+      const sent = Date.now();
       try {
-        const a = await api<LiveCurveAnswer>(`${base}/chart/live?after=${after.current}`);
+        const a = await api<LiveCurveAnswer>(`${base}/chart/live?after=${after.current}&wait=1`);
         if (stopped) return;
         failures = 0;
         const fresh = a.ticks.filter(([t]) => t > after.current).map(([t, v]) => ({ t, v }));
@@ -64,7 +74,7 @@ export function useLiveTail(base: string, enabled: boolean): LiveTail {
           readAt: a.readAt,
           done: a.complete,
         }));
-        if (!a.complete) next(LIVE_POLL_MS);
+        if (!a.complete) next(a.held ? Math.max(0, HELD_GAP_MS - (Date.now() - sent)) : LIVE_POLL_MS);
       } catch {
         if (!stopped) next(Math.min(MAX_BACKOFF_MS, LIVE_POLL_MS * 2 ** ++failures));
       }
