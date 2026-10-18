@@ -34,15 +34,15 @@ export const LEARNER_NAME = {
 export const ROLE_LABEL: Record<LeaderboardEntry["role"], string> = {
   stacked: "Stacked on the others",
   blend: "The others' ranks averaged",
-  agreement: "How many of the others call it",
-  topslice: "The tree models' most sure calls",
+  agreement: "How many of the others flag it",
+  topslice: "The tree models' surest alerts",
   rules: "Hand-tuned rules",
   learner: "Trained model",
   narrative: "Trained model, waits for the deep narrative read",
 };
 
 export const STATUS_TEXT: Record<LeaderboardEntry["status"], { text: string; tone: string }> = {
-  calling: { text: "calling", tone: "good" },
+  calling: { text: "alerting", tone: "good" },
   silent: { text: "no cutoff yet", tone: "neutral" },
   untrained: { text: "not trained yet", tone: "neutral" },
 };
@@ -65,7 +65,7 @@ export function rateTone(value: number | null, target: number, graded?: number |
 /** A rate's 90% Wilson range as a tooltip, with the rule it is graded on. */
 export function rateTitle(ratePct: number | null | undefined, graded: number): string {
   const range = intervalText(wilsonOfRate(ratePct, graded));
-  const early = isEarly(graded) ? ` Early: under ${MIN_GRADED_FOR_RATE} graded calls.` : "";
+  const early = isEarly(graded) ? ` Early: under ${MIN_GRADED_FOR_RATE} graded alerts.` : "";
   return `${range ? `${range} on ${graded.toLocaleString()} graded.` : ""}${early} ${RULE_NOTE}`.trim();
 }
 
@@ -97,7 +97,7 @@ export function lastDayEnd(board: Pick<Leaderboard, "defaultRule">, now: number)
 /** The ★ best chip's tooltip: what it ranks on and over which window. */
 export function bestReturnTitle(board: Pick<Leaderboard, "defaultRule">, now: number): string {
   const min = board.defaultRule?.minGraded ?? MIN_GRADED_FOR_RATE;
-  return `Best average return under the exit plan over the 24h to ${utcClock(lastDayEnd(board, now))}, among models with ${min}+ graded calls in it`;
+  return `Best average return under the exit plan over the 24h to ${utcClock(lastDayEnd(board, now))}, among models with ${min}+ graded alerts in it`;
 }
 
 /** "Oct 12". */
@@ -126,9 +126,9 @@ export function RulesInUse({ rules, now }: { rules: NonNullable<LeaderboardEntry
       </ul>
       <small className="faint">
         {learned
-          ? `Calls when a token's points clear the cutoff its backtest earned. Learned ${rules.derivedAt ? ago(rules.derivedAt, now) : ""}` +
+          ? `Alerts when a token's points clear the cutoff its backtest earned. Learned ${rules.derivedAt ? ago(rules.derivedAt, now) : ""}` +
             (rules.agreementPct != null
-              ? `; agrees with ${rules.teacherName ?? "its teacher"} on ${rules.agreementPct}% of its top picks.`
+              ? `; agrees with ${rules.teacherName ?? "its teacher"} on ${rules.agreementPct}% of its top alerts.`
               : ".")
           : "Each training run also tries checks learned from the best model, and switches if they test better."}{" "}
         {rules.reason}

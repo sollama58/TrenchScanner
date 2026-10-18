@@ -14,18 +14,18 @@ const WALLET_SEARCH_MS = 2_000;
 const FEATURES = [
   {
     Icon: TargetIcon,
-    title: "Curated picks",
+    title: "Curated alerts",
     body: "A curator scans every new Pump.fun token and sends only the few worth a look.",
   },
   {
     Icon: BrainIcon,
     title: "Models that grade themselves",
-    body: "Several models retrain on what actually doubled, and a public leaderboard ranks their live calls.",
+    body: "Several models retrain on what actually doubled, and a public leaderboard ranks their live alerts.",
   },
   {
     Icon: RobotIcon,
     title: "AI second opinion",
-    body: "An AI reviewer is being trained to give a buy / no-buy on picks, scored against real outcomes.",
+    body: "An AI reviewer is being trained to give a pass / reject on alerts, scored against real outcomes.",
   },
 ];
 
@@ -97,10 +97,10 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
       <div className="signin-copy">
         <span className="eyebrow brand-eyebrow">Solana memecoin scanner</span>
         <h1>
-          Pump.fun alerts, <span className="grad">picked by a model</span> that grades itself.
+          Pump.fun alerts, <span className="grad">flagged by a model</span> that grades itself.
         </h1>
         <p className="lead muted">
-          Every pick is measured against one goal in public: 2x within 15 minutes on 75% of alerts, 4x within
+          Every alert is measured against one goal in public: 2x within 15 minutes on 75% of alerts, 4x within
           30 minutes on half, and 10x within an hour on a quarter, from the price at the alert.
         </p>
         <div className="features">
@@ -186,9 +186,9 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
               Continue as guest
             </button>
             <p className="faint small">
-              Look around without a wallet: you see the top models&apos; calls {GUEST_DELAY_MINUTES} minutes
-              late, and the model leaderboard. Live calls, filters, model picks, alerts and settings need a
-              connected wallet.
+              Look around without a wallet: you see the top models&apos; alerts {GUEST_DELAY_MINUTES} minutes
+              late, and the model leaderboard. Live alerts, filters, model selection, alert delivery and
+              settings need a connected wallet.
             </p>
           </div>
         )}

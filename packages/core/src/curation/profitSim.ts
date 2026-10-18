@@ -150,7 +150,7 @@ export function describeExitPlan(plan: ExitPlan = EXIT_PLAN): string {
     return `sell ${what} at ${tp.multiple}x`;
   });
   const stopPct = Math.round((1 - plan.stopFraction) * 100);
-  const parts = [`Buy at the alert price`, ...steps];
+  const parts = [`Enter at the alert price`, ...steps];
   if (left > 1e-9 && plan.trail.length > 0) {
     const tiers = sortedTrail(plan);
     const first = tiers[0]!;
@@ -167,7 +167,7 @@ export function describeExitPlan(plan: ExitPlan = EXIT_PLAN): string {
         `, out at ${holdLabel(plan.trailMaxHoldMinutes)}`,
     );
     parts.push(`stop out at -${stopPct}% before the first sale`);
-    parts.push(`and close a call that never sold at ${holdLabel(plan.maxHoldMinutes)}.`);
+    parts.push(`and close any position that never sold at ${holdLabel(plan.maxHoldMinutes)}.`);
   } else {
     parts.push(`stop out at -${stopPct}%`);
     parts.push(`and close whatever is left at ${holdLabel(plan.maxHoldMinutes)}.`);

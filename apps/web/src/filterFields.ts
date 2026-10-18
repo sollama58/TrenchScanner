@@ -245,7 +245,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
         min: 0,
         max: 100,
         label: "Max SOL bought by flagged wallets",
-        hint: "risky wallets and known dumpers in the coin's newest trades, read before the call; tokens not read yet wait",
+        hint: "risky wallets and known dumpers in the coin's newest trades, read before the alert; tokens not read yet wait",
         unit: "SOL",
         step: 0.1,
       },

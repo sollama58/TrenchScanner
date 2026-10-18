@@ -69,12 +69,12 @@ export function FeedPanel({ goTo }: { goTo: (tab: "model" | "filters") => void }
         <p className="muted small">
           {modelsOn && bothOn ? (
             <>
-              The models&apos; calls ({chosen.join(", ") || "–"}) show on your Live feed only where your
+              The models&apos; alerts ({chosen.join(", ") || "–"}) show on your Live feed only where your
               filter caught the same token (see below).{" "}
             </>
           ) : modelsOn ? (
             <>
-              The models&apos; calls ({chosen.join(", ") || "–"}) show on your Live feed beside your
+              The models&apos; alerts ({chosen.join(", ") || "–"}) show on your Live feed beside your
               filter&apos;s alerts.{" "}
             </>
           ) : (
@@ -121,7 +121,8 @@ export function FeedPanel({ goTo }: { goTo: (tab: "model" | "filters") => void }
           ) : bothOn ? (
             <>
               Your Live feed and its Stats show only tokens one of your active filters alerted on that one of
-              your models also called within 6 hours, one card each. Tokens only one side caught are left out.
+              your models also flagged within 6 hours, one card each. Tokens only one side caught are left
+              out.
             </>
           ) : (
             <>

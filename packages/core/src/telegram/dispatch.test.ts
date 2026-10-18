@@ -231,7 +231,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     const sent = api.sent();
     expect(sent).toHaveLength(1);
     expect(sent[0]!.chatId).toBe(String(chatId));
-    expect(sent[0]!.text).toContain("Rules called it and your filter caught it");
+    expect(sent[0]!.text).toContain("Rules flagged it and your filter caught it");
     expect(sent[0]!.text).toContain("<b>“Mine”</b>  ·  score <b>71</b>");
     expect(sent[0]!.text).not.toContain("Trees");
     // The token has artwork, so the alert went out as a photo with the text as its caption.

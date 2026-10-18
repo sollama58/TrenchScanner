@@ -219,7 +219,7 @@ export function LiveTab({
               <h2>
                 {bothOn
                   ? "Alerts your filter and models both caught"
-                  : `Your alerts${modelsOn ? (highConviction ? " and high-conviction calls" : " and model calls") : ""}`}
+                  : `Your alerts${modelsOn ? (highConviction ? " and high-conviction alerts" : " and model alerts") : ""}`}
               </h2>
               <button
                 type="button"
@@ -265,8 +265,8 @@ export function LiveTab({
                 onClick={toggleHighConviction}
                 title={
                   modelsOn
-                    ? "Show only the calls that cleared each model's high-conviction line, from every model, in place of the models you follow. Your filter's alerts still show."
-                    : "Turn on model alerts to narrow them to the high-conviction calls"
+                    ? "Show only the alerts that cleared each model's high-conviction line, from every model, in place of the models you follow. Your filter's alerts still show."
+                    : "Turn on model alerts to narrow them to the high-conviction tier"
                 }
               >
                 <span className="switch-track">
@@ -313,8 +313,8 @@ export function LiveTab({
                   {bothOn
                     ? `Nothing yet that your filter and ${chosenNames} both caught. Only alerts both caught is on in Settings, so tokens only one side caught are left out.`
                     : modelsOn
-                      ? `Nothing yet from your filter or ${highConviction ? "the high-conviction calls" : chosenNames}. Alerts land here the moment one comes in.`
-                      : "Nothing caught by your filter yet. Turn on Model alerts in Settings to see the models' calls here too."}
+                      ? `Nothing yet from your filter or ${highConviction ? "the high-conviction alerts" : chosenNames}. Alerts land here the moment one comes in.`
+                      : "Nothing caught by your filter yet. Turn on Model alerts in Settings to see the models' alerts here too."}
                 </p>
                 <button className="ghost" onClick={() => goTo("filters")}>
                   Tune your filter <ArrowRightIcon size={13} />

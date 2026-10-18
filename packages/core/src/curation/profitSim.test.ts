@@ -306,19 +306,19 @@ describe("applyTrailTick", () => {
 describe("describeExitPlan", () => {
   it("reads the default plan as a sentence", () => {
     expect(describeExitPlan()).toBe(
-      "Buy at the alert price, sell 35% at 2x, sell 30% at 4x, sell 25% at 10x, from the first sale, let what is still " +
+      "Enter at the alert price, sell 35% at 2x, sell 30% at 4x, sell 25% at 10x, from the first sale, let what is still " +
         "held ride with a trailing exit 40% off its high, out at 3 hours, stop out at -50% before the first sale, and " +
-        "close a call that never sold at 30 minutes.",
+        "close any position that never sold at 30 minutes.",
     );
     expect(describeExitPlan(TRAIL_PLAN)).toBe(
-      "Buy at the alert price, sell half at 2x, let the rest ride with a trailing exit 35% off its high, out at 3 hours, " +
-        "stop out at -50% before the first sale, and close a call that never sold at 30 minutes.",
+      "Enter at the alert price, sell half at 2x, let the rest ride with a trailing exit 35% off its high, out at 3 hours, " +
+        "stop out at -50% before the first sale, and close any position that never sold at 30 minutes.",
     );
   });
 
   it("reads a ladder with no trail the old way", () => {
     expect(describeExitPlan(LADDER_PLAN)).toBe(
-      "Buy at the alert price, sell half at 2x, sell the rest at 4x, stop out at -50%, and close whatever is left at 30 minutes.",
+      "Enter at the alert price, sell half at 2x, sell the rest at 4x, stop out at -50%, and close whatever is left at 30 minutes.",
     );
   });
 });

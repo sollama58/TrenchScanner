@@ -51,6 +51,43 @@ describe("joinPages", () => {
     ];
     expect(ids(joinPages(pages))).toEqual(["a", "b", "c"]);
   });
+
+  it("folds a model call into the reader's alert on the same token when they landed on different pages", () => {
+    // 95zV...pump showed twice: the call on one page, the filter alert on the next, each its own card.
+    const call = {
+      ...card("call", 1),
+      kind: "curated",
+      tokenId: "t-oui",
+      matchedAt: "2026-10-18T01:00:00Z",
+      curated: { alertId: "call" },
+    } as Card;
+    const alert = {
+      ...card("alert", 1),
+      tokenId: "t-oui",
+      matchedAt: "2026-10-18T01:00:05Z",
+      curated: null,
+    } as Card;
+    const joined = joinPages([{ matches: [call, card("a", 1)] }, { matches: [alert, card("b", 1)] }]);
+    expect(ids(joined)).toEqual(["a", "alert", "b"]);
+    expect(joined[1]!.curated).toBe(call.curated);
+  });
+
+  it("keeps a call apart from an alert outside the window or already wearing a call", () => {
+    const call = (id: string, at: string) =>
+      ({ ...card(id, 1), kind: "curated", tokenId: "t-x", matchedAt: at, curated: { alertId: id } }) as Card;
+    const alert = (id: string, at: string, curated: Card["curated"] = null) =>
+      ({ ...card(id, 1), tokenId: "t-x", matchedAt: at, curated }) as Card;
+    const far = joinPages([
+      { matches: [call("c1", "2026-10-18T08:00:00Z")] },
+      { matches: [alert("m1", "2026-10-18T01:00:00Z")] },
+    ]);
+    expect(ids(far)).toEqual(["c1", "m1"]);
+    const worn = joinPages([
+      { matches: [call("c2", "2026-10-18T01:00:00Z")] },
+      { matches: [alert("m2", "2026-10-18T01:00:00Z", { alertId: "other" } as Card["curated"])] },
+    ]);
+    expect(ids(worn)).toEqual(["c2", "m2"]);
+  });
 });
 
 describe("fillPage at the line", () => {

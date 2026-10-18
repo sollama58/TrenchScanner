@@ -3,7 +3,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import bs58 from "bs58";
 import nacl from "tweetnacl";
 import { z } from "zod";
-import { prisma } from "@trenchscanner/core";
+import { prisma, walletTag } from "@trenchscanner/core";
 
 /**
  * A fresh wallet signature for every trading bot action (user decision after the 2026-10-16
@@ -160,7 +160,7 @@ export async function requireTradeConfirmation(
   const { nonce, signature } = parsed.data;
   const walletAddress = request.user!.walletAddress;
   const refuse = async (why: string) => {
-    request.log.warn({ walletAddress, why }, "trading confirmation refused");
+    request.log.warn({ wallet: walletTag(walletAddress), why }, "trading confirmation refused");
     await reply.code(403).send({ error: `The wallet confirmation didn't check out (${why}). Try again.` });
     return false;
   };

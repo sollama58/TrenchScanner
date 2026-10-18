@@ -11,6 +11,7 @@ export type HeartbeatJob =
   | "live-price"
   | "burn-scan"
   | "free-access"
+  | "pro-holders"
   | "fast-match"
   | "candidate-watch"
   | "curator-training"
@@ -52,6 +53,8 @@ export const HEARTBEAT_JOB_ROLE: Record<HeartbeatJob, JobRole> = {
   "burn-scan": "scanner",
   // Beside the burn reconciler: the other job that keeps the access tables true.
   "free-access": "scanner",
+  // The top $ASDFASDFA holders' Pro Mode: a Helius read of the mint's accounts (the scanner has the key).
+  "pro-holders": "scanner",
   "match-peaks": "scanner",
   "telegram-dispatch": "scanner",
   // Holds the Telegram bot token and the admin wallets it notifies (the trainer has neither).

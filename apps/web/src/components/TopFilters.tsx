@@ -186,7 +186,7 @@ function TopFiltersModal({
               {data
                 ? `${data.targets.hitRate2xPct}% / ${data.targets.hitRate4xPct}% / ${data.targets.tenXPct ?? 25}%`
                 : "75% / 50% / 25%"}
-              ), and {pts(points.runSize)} for run size, how far the calls ran over their 24h watch (target a{" "}
+              ), and {pts(points.runSize)} for run size, how far the alerts ran over their 24h watch (target a{" "}
               {data ? 2 ** data.targets.runDoublings : 4}x average, capped at 100x). A win is 2x on the alert
               price within 15 minutes (4x within 30, 10x within an hour) before a 50% drop.
             </p>
@@ -306,7 +306,7 @@ function BoardEntry({
               <strong className="num">{pct(e.tenXRatePct)}</strong> 10x ·{" "}
             </>
           )}
-          <span title="How far the alerts ran on average over their 24h watch (stopped-out calls count as 0)">
+          <span title="How far the alerts ran on average over their 24h watch (stopped-out alerts count as 0)">
             runs avg <strong className="num">{runMultiple(e.avgRunDoublings)}</strong>
           </span>{" "}
           {e.catch && e.catch.runners > 0 && (

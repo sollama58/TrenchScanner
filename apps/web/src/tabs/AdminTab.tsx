@@ -11,6 +11,7 @@ import { WalletsAdmin } from "./AdminWallets";
 import { UsageAdmin } from "./AdminUsage";
 import { CreditsAdmin } from "./AdminCredits";
 import { FreeAccessAdmin } from "./AdminFreeAccess";
+import { ProModeAdmin } from "./AdminProMode";
 import { RunNow } from "./AdminRunNow";
 import { AdminActionLog, TableBackups } from "./AdminSecurity";
 import { adminCall } from "../tradeConfirm";
@@ -861,8 +862,11 @@ interface AdminAlert {
   ai: { decision: string | null; probability2x: number | null } | null;
 }
 
+/** The AI reviewer's decision as shown: the stored values stay "buy" / "no_buy". */
+const decisionText = (d: string) => (d === "buy" ? "pass" : d === "no_buy" ? "reject" : d);
+
 const rateHead = [
-  "Calls",
+  "Alerts",
   "Graded",
   "Pending",
   "2x",
@@ -917,10 +921,10 @@ function Alerts() {
           {(h) => (
             <div className="stack">
               <p className="muted small">
-                Profit follows every graded call with one fixed exit plan:{" "}
+                Profit follows every graded alert with one fixed exit plan:{" "}
                 {h.rules?.exitPlan ??
-                  "sell 35% at 2x, 30% at 4x and 25% at 10x, ride what is still held on a trailing exit 40% off its high from the first sale, out at 3 hours, stop at -50% before the first sale, close a call that never sold at 30 minutes."}{" "}
-                Total profit is in stakes, staking the same amount on every call. Filter matches have no
+                  "sell 35% at 2x, 30% at 4x and 25% at 10x, ride what is still held on a trailing exit 40% off its high from the first sale, out at 3 hours, stop at -50% before the first sale, close an alert that never sold at 30 minutes."}{" "}
+                Total profit is in stakes, staking the same amount on every alert. Filter matches have no
                 simulated result.
               </p>
               <h3>Model alerts by model</h3>
@@ -977,7 +981,7 @@ function Alerts() {
           )}
         </Load>
       </Panel>
-      <Panel title="Recent model alerts" note="Every model's last 50 calls, newest first.">
+      <Panel title="Recent model alerts" note="Every model's last 50 alerts, newest first.">
         <Load q={recent}>
           {(rows) => (
             <Table
@@ -1034,7 +1038,7 @@ function Alerts() {
                   <Tag tone="muted">open</Tag>
                 ),
                 a.ai
-                  ? `${a.ai.decision ?? "error"}${a.ai.probability2x !== null ? ` ${Math.round(a.ai.probability2x * 100)}%` : ""}`
+                  ? `${a.ai.decision ? decisionText(a.ai.decision) : "error"}${a.ai.probability2x !== null ? ` ${Math.round(a.ai.probability2x * 100)}%` : ""}`
                   : "–",
               ])}
             />
@@ -1175,6 +1179,7 @@ function Access() {
       </Load>
       <Levers onDone={reloadAll} />
       <FreeAccessAdmin onChanged={reloadAll} />
+      <ProModeAdmin />
       <Panel title="Subscriptions">
         <Load q={subs}>
           {(rows) => (
@@ -1427,7 +1432,7 @@ function budgetLine(b: AiBudget): string {
 
 const SOURCE_LABELS: Record<string, string> = {
   review: "Reviews (high conviction)",
-  "review-spare": "Reviews (standard picks)",
+  "review-spare": "Reviews (standard alerts)",
   text: "Text reads",
   playbook: "Playbook reviews",
   replay: "Playbook tests (replays)",
@@ -1486,8 +1491,8 @@ const AI_SWITCH_OPTIONS: [AiSwitchState, string][] = [
 const AI_SWITCH_TEXT: Record<AiSwitchState, string> = {
   off: "Off: no Claude calls at all, whatever the key and mode say.",
   admins:
-    "Testing: the reviewer judges high-conviction picks in shadow. Its verdicts show to admins only, and it never holds back an alert or moves a live trading bot. Paper strategies can follow it.",
-  live: "Live: AI_REVIEW_MODE applies in full. A qualified gate can hold picks back from the feed, and live bots set to follow the AI judge act on its verdicts.",
+    "Testing: the reviewer judges high-conviction alerts in shadow. Its verdicts show to admins only, and it never holds back an alert or moves a live trading bot. Paper strategies can follow it.",
+  live: "Live: AI_REVIEW_MODE applies in full. A qualified gate can hold alerts back from the feed, and live bots set to follow the AI judge act on its verdicts.",
 };
 
 /** The Admin switch over the whole AI reviewer (core's curation/aiSwitch.ts). */
@@ -1571,7 +1576,7 @@ function Ai() {
           )}
           <Panel
             title="Daily AI budget"
-            note={`${dollars(a.budget.spentUsd)} of ${dollars(a.budget.capUsd)} spent today (UTC) · ${budgetLine(a.budget)}. The last ${a.budget.reservePct}% is kept for reviews of high-conviction picks; standard picks are reviewed ${a.config.standardPicks === "never" ? "never" : "only from what is left above it"}.`}
+            note={`${dollars(a.budget.spentUsd)} of ${dollars(a.budget.capUsd)} spent today (UTC) · ${budgetLine(a.budget)}. The last ${a.budget.reservePct}% is kept for reviews of high-conviction alerts; standard alerts are reviewed ${a.config.standardPicks === "never" ? "never" : "only from what is left above it"}.`}
           >
             {a.budget.stopped && (
               <p className="notice">
@@ -1616,8 +1621,8 @@ function Ai() {
               head={[
                 "Window",
                 "Reviews",
-                "Buy",
-                "No buy",
+                "Pass",
+                "Reject",
                 "Errors",
                 "Avg latency",
                 "Input tokens",
@@ -1648,10 +1653,10 @@ function Ai() {
             />
             {hits.data && (
               <p className="small muted">
-                Last 30 days: buys hit 2x {pct(hits.data.aiReviewer.buys.hitRate2xPct, 1)} of{" "}
+                Last 30 days: its passes hit 2x {pct(hits.data.aiReviewer.buys.hitRate2xPct, 1)} of{" "}
                 {hits.data.aiReviewer.buys.graded} graded, against{" "}
-                {pct(hits.data.aiReviewer.allReviewed.hitRate2xPct, 1)} for everything it reviewed (lift over
-                its passes {hits.data.aiReviewer.liftPts?.toFixed(1) ?? "–"} pts
+                {pct(hits.data.aiReviewer.allReviewed.hitRate2xPct, 1)} for everything it reviewed (lift{" "}
+                {hits.data.aiReviewer.liftPts?.toFixed(1) ?? "–"} pts
                 {liftRange(hits.data.aiReviewer)}). Brier {hits.data.aiReviewer.brier?.toFixed(3) ?? "–"} vs
                 the model's {hits.data.aiReviewer.curatorBrier?.toFixed(3) ?? "–"} (lower is better).
               </p>
@@ -1664,7 +1669,7 @@ function Ai() {
                 when(r.createdAt),
                 r.symbol ?? shortAddress(r.mint),
                 r.mode,
-                r.decision ?? <Tag tone="bad">error</Tag>,
+                r.decision ? decisionText(r.decision) : <Tag tone="bad">error</Tag>,
                 r.probability2x === null ? "–" : `${Math.round(r.probability2x * 100)}%`,
                 ms(r.latencyMs),
                 r.error ? <span className="admin-error">{r.error}</span> : "–",

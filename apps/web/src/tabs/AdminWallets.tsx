@@ -168,7 +168,7 @@ export function WalletsAdmin() {
             </div>
             <Panel
               title="What led the stops, last 24 hours"
-              note="Who sold between the call and the stop, by SOL. Each seller counts under one role, the first that fits in this order."
+              note="Who sold between the alert and the stop, by SOL. Each seller counts under one role, the first that fits in this order."
             >
               <Table
                 head={["Role", "Led the stop", "Mean share of the selling"]}
@@ -179,7 +179,7 @@ export function WalletsAdmin() {
                     : "–",
                   pct(r.stopCauses.meanShare[role] * 100),
                 ])}
-                empty="No stopped calls read yet."
+                empty="No stopped alerts read yet."
               />
             </Panel>
             <Panel
@@ -219,7 +219,7 @@ export function WalletsAdmin() {
             </Panel>
             <Panel
               title="Winning wallets"
-              note={`Labelled winners seen in 3+ coins, by win score: how often its own trades came out at 2x+ for ${MIN_WIN_SOL}+ SOL profit, against the market, nudged up by buying before the call. Tap a wallet for its coins.`}
+              note={`Labelled winners seen in 3+ coins, by win score: how often its own trades came out at 2x+ for ${MIN_WIN_SOL}+ SOL profit, against the market, nudged up by buying before the alert. Tap a wallet for its coins.`}
             >
               <Table
                 head={[
@@ -227,7 +227,7 @@ export function WalletsAdmin() {
                   "Win score",
                   "Coins",
                   "Wins",
-                  "Bought before the call",
+                  "Bought before the alert",
                   "Risk",
                   "SOL in / out",
                   "Last seen",
@@ -295,7 +295,7 @@ function Lookup({ address, risky }: { address: string; risky: number }) {
           actions={<Wallet address={address} />}
         >
           <Table
-            head={["Coin", "Called", "Outcome", "What it did", "SOL in / out", "Bought", "Sold into stop"]}
+            head={["Coin", "Alerted", "Outcome", "What it did", "SOL in / out", "Bought", "Sold into stop"]}
             rows={w.coins.map((c) => [
               c.symbol ?? c.mint.slice(0, 6),
               when(c.anchorAt),
@@ -342,7 +342,7 @@ function CoinView({ c, risky }: { c: CoinDetail; risky: number }) {
       }
     >
       <Table
-        head={["Wallet", "Score", "Coins", "Held at call", "Roles", "SOL in / out"]}
+        head={["Wallet", "Score", "Coins", "Held at alert", "Roles", "SOL in / out"]}
         rows={c.wallets.map((w) => [
           <Wallet key="w" address={w.wallet} names={names} />,
           scoreTag(w.score, risky),

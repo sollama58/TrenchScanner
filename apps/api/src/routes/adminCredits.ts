@@ -6,6 +6,7 @@ import {
   grantCredits,
   prisma,
   saveBurnCreditPrices,
+  walletTag,
 } from "@trenchscanner/core";
 
 /**
@@ -83,7 +84,7 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const prices = await saveBurnCreditPrices(parsed.data, request.user!.walletAddress);
-    request.log.info({ prices, by: request.user!.walletAddress }, "burn credit prices changed");
+    request.log.info({ prices, by: walletTag(request.user!.walletAddress) }, "burn credit prices changed");
     return { prices };
   });
 
@@ -101,7 +102,7 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
       if (err instanceof CreditGrantError) return reply.code(409).send({ error: err.message });
       throw err;
     }
-    request.log.info({ wallet, delta, by }, "granted burn credits by hand");
+    request.log.info({ wallet: walletTag(wallet), delta, by: walletTag(by) }, "granted burn credits by hand");
     return { wallet, balance };
   });
 }

@@ -21,6 +21,7 @@ import {
   BACKUP_SUMMARY_SELECT,
   ModelBackupError,
   type Env,
+  walletTag,
 } from "@trenchscanner/core";
 import { requireAdminConfirmation } from "../tradeConfirm.js";
 
@@ -101,7 +102,7 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
       parsed.data.note || `Taken by ${request.user!.walletAddress}`,
     );
     if (!backup) return reply.code(409).send({ error: "There are no trained models to back up yet." });
-    logger.info("manual model backup taken", { id: backup.id, by: request.user!.walletAddress });
+    logger.info("manual model backup taken", { id: backup.id, by: walletTag(request.user!.walletAddress) });
     return backup;
   });
 
@@ -227,7 +228,7 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
         logger.info("model backup imported", {
           id: stored.id,
           from: payload.createdAt,
-          by: request.user!.walletAddress,
+          by: walletTag(request.user!.walletAddress),
         });
         return stored;
       } catch (err) {
@@ -276,7 +277,7 @@ export async function registerAdminBackupRoutes(app: FastifyInstance, opts: { en
         actor: request.user!.walletAddress,
         seats: parsed.data.seats ?? [],
       });
-      logger.warn("models restored from a backup", { ...result, by: request.user!.walletAddress });
+      logger.warn("models restored from a backup", { ...result, by: walletTag(request.user!.walletAddress) });
       return result;
     } catch (err) {
       if (err instanceof ModelBackupError) {

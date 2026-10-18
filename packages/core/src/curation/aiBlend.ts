@@ -320,7 +320,7 @@ export function fitAiBlend(
     return unusable(
       lift.liftLowPts === null
         ? "on the held-out rows its cutoff kept everything or nothing"
-        : "on the held-out rows the picks it would keep did not clearly beat the ones it would drop",
+        : "on the held-out rows the alerts it would keep did not clearly beat the ones it would drop",
       { ...scores, ...kept },
     );
   }
@@ -331,7 +331,7 @@ export function fitAiBlend(
       ...scores,
       ...kept,
       reason:
-        "beats the model's odds walking forward and on held-out rows, and its kept picks beat the dropped ones",
+        "beats the model's odds walking forward and on held-out rows, and its kept alerts beat the dropped ones",
     },
   };
 }

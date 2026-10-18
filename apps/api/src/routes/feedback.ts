@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma, type Env } from "@trenchscanner/core";
+import { prisma, walletTag, type Env } from "@trenchscanner/core";
 import { clientIp } from "../clientIp.js";
 
 /**
@@ -184,7 +184,10 @@ export async function registerFeedbackRoutes(app: FastifyInstance, opts: { env: 
         },
         select: { id: true },
       });
-      request.log.info({ id: created.id, kind, wallet }, "received a feedback report");
+      request.log.info(
+        { id: created.id, kind, wallet: wallet && walletTag(wallet) },
+        "received a feedback report",
+      );
       return { ok: true, id: created.id };
     },
   );
@@ -302,7 +305,10 @@ export async function registerAdminFeedbackRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "invalid id" });
     const result = await prisma.feedbackReport.deleteMany({ where: { id: parsed.data.id } });
     if (result.count === 0) return reply.code(404).send({ error: "not found" });
-    request.log.info({ id: parsed.data.id, by: request.user!.walletAddress }, "deleted a feedback report");
+    request.log.info(
+      { id: parsed.data.id, by: walletTag(request.user!.walletAddress) },
+      "deleted a feedback report",
+    );
     return { ok: true };
   });
 }

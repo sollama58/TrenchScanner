@@ -375,7 +375,7 @@ export function Training() {
                   {new Date(r.trainingTo).toLocaleDateString()}
                 </span>,
                 r.exam ? (
-                  <span className="num" title={`${r.exam.graded} graded of ${r.exam.calls} calls`}>
+                  <span className="num" title={`${r.exam.graded} graded of ${r.exam.calls} alerts`}>
                     {rate(r.exam.wins, r.exam.graded)} / {rate(r.exam.goals, r.exam.graded)}{" "}
                     <span className="faint">({n(r.exam.graded)})</span>
                   </span>
@@ -383,7 +383,7 @@ export function Training() {
                   "–"
                 ),
                 r.calibration ? (
-                  <span className="num" title={`${r.calibration.support ?? 0} calls at the cutoff`}>
+                  <span className="num" title={`${r.calibration.support ?? 0} alerts at the cutoff`}>
                     {pct(r.calibration.winRatePct, 1)} / {pct(r.calibration.goalRatePct, 1)}{" "}
                     {r.calibration.meetsTargets ? <Tag tone="ok">meets</Tag> : null}
                   </span>
@@ -422,7 +422,7 @@ export function Training() {
           </Panel>
           <Panel
             title="Probation"
-            note="Challengers that won a seat on the exam and had to win again on fresh calls."
+            note="Challengers that won a seat on the exam and had to win again on fresh alerts."
           >
             <Table
               head={["Started", "Challenger", "Against", "Gen", "Exam score", "Outcome", "Resolved", "Why"]}

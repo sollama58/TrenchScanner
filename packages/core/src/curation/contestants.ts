@@ -183,6 +183,8 @@ export const TEN_X_CONTESTANT = "ten-x";
 export const CATCHER_CONTESTANT = "catcher";
 /** Boosted trees fitted to the return itself (the "return" objective) - user decision 2026-10-17. */
 export const RETURN_REGRESSION_CONTESTANT = "return-regression";
+/** Boosted trees on made-money-or-not, each call weighted by what it made (the "payoff" objective). */
+export const PROFIT_FACTOR_CONTESTANT = "profit-factor";
 /** Catcher's cutoff anchor: a wider slice than the field's 20%, for the runners outside it. */
 export const CATCHER_CUTOFF_SHARE = 0.35;
 
@@ -388,18 +390,18 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: CONSENSUS_CONTESTANT,
     name: "Consensus",
     description:
-      "Learns how far to trust each other model, and calls only when at least three of them call the token at their own cutoffs",
+      "Learns how far to trust each other model, and alerts only when at least three of them alert on the token at their own cutoffs",
     summary:
-      "Doesn't read tokens itself: it learns which of the other models to trust, and calls only when at least three of them call it too.",
+      "Doesn't read tokens itself: it learns which of the other models to trust, and alerts only when at least three of them alert on it too.",
     role: "stacked",
   },
   {
     id: TRADER_CONTESTANT,
     name: "Trader",
     description:
-      "Learns how far to trust every other trained model, Sharp seats included, and calls only its surest tenth of decision moments - built for the trading bot",
+      "Learns how far to trust every other trained model, Sharp seats included, and alerts only on its surest tenth of decision moments - built for the trading bot",
     summary:
-      "Built for trading: learns which of the other models to trust and calls only the tokens it is surest of, about a tenth of what it sees.",
+      "Built for trading: learns which of the other models to trust and alerts only on the tokens it is surest of, about a tenth of what it sees.",
     role: "stacked",
   },
   {
@@ -413,26 +415,26 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: AGREEMENT_CONTESTANT,
     name: "Agreement",
     description:
-      "Calls the tokens the most trained models call at their own cutoffs, most agreed first - nothing fitted",
+      "Alerts on the tokens the most trained models alert on at their own cutoffs, most agreed first - nothing fitted",
     summary:
-      "Counts how many of the other models would call a token, and calls the ones most of them agree on.",
+      "Counts how many of the other models would alert on a token, and alerts on the ones most of them agree on.",
     role: "agreement",
   },
   {
     id: TOP_SLICE_CONTESTANT,
     name: "Top Slice",
     description:
-      "Calls only what a tree model ranks in the top quarter of its own calls - fixed cutoff, nothing fitted",
-    summary: "Waits for one of the tree models to be at its most sure, and sends only those calls.",
+      "Alerts only on what a tree model ranks in the top quarter of its own alerts - fixed cutoff, nothing fitted",
+    summary: "Waits for one of the tree models to be at its most sure, and sends only those alerts.",
     role: "topslice",
   },
   {
     id: RULES_CONTESTANT,
     name: "Rules",
     description:
-      "A short points table copied from the best model's picks each training run (kept only when it tests better), else the hand-tuned gates",
+      "A short points table copied from the best model's alerts each training run (kept only when it tests better), else the hand-tuned gates",
     summary:
-      "A few simple checks, refreshed from the best model's picks whenever they test better. It's also the fallback.",
+      "A few simple checks, refreshed from the best model's alerts whenever they test better. It's also the fallback.",
     role: "rules",
   },
   {
@@ -558,9 +560,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: SHARP_TREES_CONTESTANT,
     name: "Sharp",
     description:
-      "Slow, coarse boosted trees (depth 4, 100 rows a leaf) calling only their surest tokens: about the top 12% of decision moments, moved by 2x record",
+      "Slow, coarse boosted trees (depth 4, 100 rows a leaf) alerting only on their surest tokens: about the top 12% of decision moments, moved by 2x record",
     summary:
-      "Calls only the tokens it is surest of, about 6-8 an hour, for the best hit rate rather than catching every runner.",
+      "Alerts only on the tokens it is surest of, about 6-8 an hour, for the best hit rate rather than catching every runner.",
     role: "learner",
     recipe: {
       learner: "gbdt",
@@ -574,9 +576,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: SHARP_DEEP_TREES_CONTESTANT,
     name: "Sharp Deep Trees",
     description:
-      "Deep Trees' boosted trees, trained on a clean 2x, calling only their surest tokens: about the top 12% of decision moments, moved by 2x record",
+      "Deep Trees' boosted trees, trained on a clean 2x, alerting only on their surest tokens: about the top 12% of decision moments, moved by 2x record",
     summary:
-      "Calls only the tokens Deep Trees' trees are surest of, about 6-8 an hour, for the best hit rate rather than catching every runner.",
+      "Alerts only on the tokens Deep Trees' trees are surest of, about 6-8 an hour, for the best hit rate rather than catching every runner.",
     role: "learner",
     recipe: {
       learner: "gbdt",
@@ -598,9 +600,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: SHARP_SURVIVOR_CONTESTANT,
     name: "Sharp Survivor",
     description:
-      "Survivor's two boosted-tree stages (first whether it holds above the stop, then whether it doubles), trained on a clean 2x, calling only their surest tokens: about the top 12% of decision moments, moved by 2x record",
+      "Survivor's two boosted-tree stages (first whether it holds above the stop, then whether it doubles), trained on a clean 2x, alerting only on their surest tokens: about the top 12% of decision moments, moved by 2x record",
     summary:
-      "Asks first whether a token will avoid a 50% drop, then whether it will double, and calls only the ones it is surest of, about 6-8 an hour.",
+      "Asks first whether a token will avoid a 50% drop, then whether it will double, and alerts only on the ones it is surest of, about 6-8 an hour.",
     role: "learner",
     recipe: { learner: "gbdt", twoStage: true, cutoffShare: HIGH_PRECISION_CUTOFF_SHARE, goal: "2x" },
     standalone: true,
@@ -610,7 +612,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     name: "Safe",
     description:
       "Boosted trees ranked on expected return under the exit plan with every loss counted twice: a 2x model beside a model of falling to the stop before the first sale; judged on that loss-averse return",
-    summary: "Steers clear of coins likely to crash 50%, and calls the ones that can still pay.",
+    summary: "Steers clear of coins likely to crash 50%, and alerts on the ones that can still pay.",
     role: "learner",
     recipe: { learner: "gbdt", goal: "safe" },
     standalone: true,
@@ -639,7 +641,7 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: CATCHER_CONTESTANT,
     name: "Catcher",
     description:
-      "Boosted trees on a clean 2x leaning toward the runners, calling a wider slice (about the top 35% of decision moments); judged on how many runners it catches",
+      "Boosted trees on a clean 2x leaning toward the runners, alerting on a wider slice (about the top 35% of decision moments); judged on how many runners it catches",
     summary: "Casts the widest net: catches as many of the runners as it can while its hit rate holds.",
     role: "learner",
     recipe: { learner: "gbdt", goal: "catch", cutoffShare: CATCHER_CUTOFF_SHARE },
@@ -657,13 +659,39 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: RETURN_REGRESSION_CONTESTANT,
     name: "Profit",
     description:
-      "Boosted trees fitted straight to each call's return under the exit plan (capped at +500%), with no split into 2x and crash odds, calling only the coins it expects to pay most: about the top 12% of decision moments; judged on return",
+      "Boosted trees fitted straight to each alert's return under the exit plan (capped at +500%), with no split into 2x and crash odds, alerting only on the coins it expects to pay most: about the top 12% of decision moments; judged on return",
     summary:
-      "Learns how much a call makes under the exit plan, and calls only the coins it expects to pay most.",
+      "Learns how much an alert makes under the exit plan, and alerts only on the coins it expects to pay most.",
     role: "learner",
     recipe: {
       learner: "gbdt",
       boosting: { objective: "return" },
+      cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+      goal: "return",
+    },
+    standalone: true,
+  },
+  {
+    // User ask 2026-10-18 ("one new novel Profit-based model"). Profit's question asked another
+    // way: not how much a coin will make, but whether its kind wins more money than it loses. Each
+    // training call counts by the money it made or lost (a +500% call, the cap, 10x a stop-out), so the
+    // score is gross gains over gross losses - the profit factor traders read a strategy by. A
+    // classifier's gradient is bounded, so a few +500% runners can't own the fit as they can
+    // Profit's squared error, and a flat coin that never sells barely counts (Profit learns
+    // those are safe and leans to them). Walk-forward 10-11..10-17 on the 6,559 rule-4 rows
+    // replayed under EXIT_PLAN, top 12% a day, two seeds: 2x 14.5% / 10.9%, stop 40%, -3.1% /
+    // -8.0% a call, against Profit's 9.9% / 7.8%, 23-29%, -4.2% / -0.9% (market 14.4%, 54%,
+    // -11.1%). Inside noise on return; it finds more doubles. The exam and live record decide.
+    id: PROFIT_FACTOR_CONTESTANT,
+    name: "Profit Factor",
+    description:
+      "Boosted trees on whether an alert made money under the exit plan, each training alert weighted by how much it made or lost (capped at +500%), so the score is the money won against the money lost by coins like it; alerting on about the top 12% of decision moments; judged on return",
+    summary:
+      "Learns which kinds of coins win more money than they lose, counting every past alert by what it actually made or lost, and alerts on the ones where the wins outweigh the losses most.",
+    role: "learner",
+    recipe: {
+      learner: "gbdt",
+      boosting: { objective: "payoff" },
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
       goal: "return",
     },
@@ -675,9 +703,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: GEMS_CONTESTANT,
     name: "Gems",
     description:
-      "Only tokens that pass the Gemerald filter (a frozen copy): Survivor's two boosted-tree stages on every input but TokenSage's, mostly the last few days, calling only its surest tokens - about the top 12% of Gemerald's moments, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
+      "Only tokens that pass the Gemerald filter (a frozen copy): Survivor's two boosted-tree stages on every input but TokenSage's, mostly the last few days, alerting only on its surest tokens - about the top 12% of Gemerald's moments, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
-      "Looks only at coins the Gemerald filter lets through, asks whether each will avoid a 50% drop and then double, and calls only the ones it is surest of.",
+      "Looks only at coins the Gemerald filter lets through, asks whether each will avoid a 50% drop and then double, and alerts only on the ones it is surest of.",
     role: "learner",
     recipe: GEMS_RECIPE,
     standalone: true,
@@ -689,9 +717,9 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     id: WINNERS_CONTESTANT,
     name: "Winners",
     description:
-      "Who is buying and how, read through the best wallets' records: the clean Winner wallets' (no win fed by tokens transferred in) share of the newest buyers and of the SOL, the buyers' own 2x record, how hard the winners are buying against their usual stake and whether they are buying in or getting out, beside every input but TokenSage's. Survivor's two boosted-tree stages, mostly the last few days, calling only its surest tokens - about the top 12% of the moments the newest trades were read on, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
+      "Who is buying and how, read through the best wallets' records: the clean Winner wallets' (no win fed by tokens transferred in) share of the newest buyers and of the SOL, the buyers' own 2x record, how hard the winners are buying against their usual stake and whether they are buying in or getting out, beside every input but TokenSage's. Survivor's two boosted-tree stages, mostly the last few days, alerting only on its surest tokens - about the top 12% of the moments the newest trades were read on, moved by 2x record, ranked on expected return under the exit plan (its 2x odds weighed against a separate crash-risk model)",
     summary:
-      "Watches which proven winning wallets are trading a coin right now and how (how big they are buying, whether they are getting in or out), leaving out wallets whose wins came from tokens sent to them, weighs that with the rest of the coin's picture, and calls only the ones it is surest of.",
+      "Watches which proven winning wallets are trading a coin right now and how (how big they are buying, whether they are getting in or out), leaving out wallets whose wins came from tokens sent to them, weighs that with the rest of the coin's picture, and alerts only on the ones it is surest of.",
     role: "learner",
     recipe: WINNERS_RECIPE,
     standalone: true,

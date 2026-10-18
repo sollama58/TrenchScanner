@@ -198,7 +198,7 @@ describe("run alarms", () => {
     });
     // 1,000 decision moments at a 20% share: 450 calls is far over, 230 is not.
     expect(liveShareAlarms([seat("loose", 450), seat("tight", 230)], 1000, 0.2)).toEqual([
-      "loose: called 45.0% of 1000 decision moments against a 20.0% share",
+      "loose: alerted on 45.0% of 1000 decision moments against a 20.0% share",
     ]);
     expect(
       liveShareAlarms(
@@ -206,7 +206,7 @@ describe("run alarms", () => {
         1000,
         0.2,
       ),
-    ).toEqual(["3 of 4 calling seats made no call in 1000 decision moments"]);
+    ).toEqual(["3 of 4 alerting seats raised no alert in 1000 decision moments"]);
     expect(liveShareAlarms([seat("loose", 90)], 150, 0.2)).toEqual([]);
   });
 

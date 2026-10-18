@@ -27,6 +27,7 @@ import {
   tradeAlertsPatchSchema,
   type BacktestRow,
   type Env,
+  walletTag,
 } from "@trenchscanner/core";
 import { registerPaperTradingRoutes } from "./paperTrading.js";
 
@@ -454,7 +455,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
       update: data,
     });
     request.log.info(
-      { scope, by: request.user!.walletAddress, enabled: bot.enabled },
+      { scope, by: walletTag(request.user!.walletAddress), enabled: bot.enabled },
       "trading bot settings saved",
     );
     return { enabled: bot.enabled, config: readTradingBotConfig(bot.config) };
@@ -544,7 +545,7 @@ export async function registerTradingRoutes(app: FastifyInstance, { env }: { env
     });
     if (!created) return reply.code(409).send({ error: "a withdrawal is already in progress" });
     request.log.info(
-      { scope, by: request.user!.walletAddress, amount: parsed.data.amount },
+      { scope, by: walletTag(request.user!.walletAddress), amount: parsed.data.amount },
       "trading withdrawal requested",
     );
     return { id: created.id, destination: created.destination, status: created.status };

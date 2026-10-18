@@ -4,7 +4,7 @@ import nacl from "tweetnacl";
 import { createSignInMessageText, verifySignIn } from "@solana/wallet-standard-util";
 import type { SolanaSignInInput, SolanaSignInOutput } from "@solana/wallet-standard-features";
 import type { WalletAccount } from "@wallet-standard/base";
-import { prisma, createLogger } from "@trenchscanner/core";
+import { prisma, createLogger, walletTag } from "@trenchscanner/core";
 
 const logger = createLogger("siws");
 
@@ -203,7 +203,7 @@ export async function verifySignInAndConsumeNonce(params: {
 
     valid = verifySignIn(input, signInOutput);
   } catch (err) {
-    logger.warn("signIn verification threw", { walletAddress, error: String(err) });
+    logger.warn("signIn verification threw", { wallet: walletTag(walletAddress), error: String(err) });
     valid = false;
   }
 
@@ -243,7 +243,7 @@ function verifySignature(walletAddress: string, message: string, signatureBase58
     const messageBytes = new TextEncoder().encode(message);
     return nacl.sign.detached.verify(messageBytes, signatureBytes, publicKeyBytes);
   } catch (err) {
-    logger.warn("signature verification threw", { walletAddress, error: String(err) });
+    logger.warn("signature verification threw", { wallet: walletTag(walletAddress), error: String(err) });
     return false;
   }
 }

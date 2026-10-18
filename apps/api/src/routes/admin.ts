@@ -6,6 +6,7 @@ import {
   DUPLICATE_GRANT_WINDOW_MS,
   readWorkerConfig,
   type Env,
+  walletTag,
 } from "@trenchscanner/core";
 import { recordAdminActions } from "../adminActionLog.js";
 
@@ -416,7 +417,10 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
         addedBy: request.user!.walletAddress,
       },
     });
-    request.log.info({ walletAddress, by: request.user!.walletAddress }, "whitelisted a wallet");
+    request.log.info(
+      { walletAddress: walletTag(walletAddress), by: walletTag(request.user!.walletAddress) },
+      "whitelisted a wallet",
+    );
     return entry;
   });
 
@@ -424,7 +428,7 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
     const { walletAddress } = request.params as { walletAddress: string };
     const result = await prisma.whitelist.deleteMany({ where: { walletAddress } });
     request.log.info(
-      { walletAddress, by: request.user!.walletAddress },
+      { walletAddress: walletTag(walletAddress), by: walletTag(request.user!.walletAddress) },
       "removed a wallet from the whitelist",
     );
     return { ok: true, removed: result.count > 0 };
@@ -485,7 +489,10 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
         .send({ error: "This wallet was granted access seconds ago. Wait a few seconds to grant again." });
     }
 
-    request.log.info({ walletAddress, days, by: request.user!.walletAddress }, "granted access by hand");
+    request.log.info(
+      { walletAddress: walletTag(walletAddress), days, by: walletTag(request.user!.walletAddress) },
+      "granted access by hand",
+    );
     return { walletAddress, expiresAt };
   });
 
@@ -545,7 +552,10 @@ export async function registerAdminSubscriptionRoutes(app: FastifyInstance) {
     const user = await prisma.user.findUnique({ where: { walletAddress }, select: { id: true } });
     if (!user) return { ok: true, revoked: false };
     const result = await prisma.subscription.deleteMany({ where: { userId: user.id } });
-    request.log.info({ walletAddress, by: request.user!.walletAddress }, "revoked access");
+    request.log.info(
+      { walletAddress: walletTag(walletAddress), by: walletTag(request.user!.walletAddress) },
+      "revoked access",
+    );
     return { ok: true, revoked: result.count > 0 };
   });
 }

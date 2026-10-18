@@ -8,6 +8,7 @@ import {
   prisma,
   SolanaRpc,
   SUBSCRIPTION_MINT,
+  walletTag,
   type Env,
 } from "@trenchscanner/core";
 
@@ -482,7 +483,7 @@ async function processSignatures(
             result.creditBurns += 1;
             logger.info("credited an unclaimed Burn Credits burn", {
               signature,
-              wallet: outcome.wallet,
+              wallet: walletTag(outcome.wallet),
               credits: outcome.credits,
             });
           }
@@ -504,14 +505,14 @@ async function processSignatures(
         result.credited += 1;
         logger.info("credited an unclaimed burn", {
           signature,
-          wallet: verdict.credit.burnerWallet,
+          wallet: walletTag(verdict.credit.burnerWallet),
           months: verdict.credit.months,
         });
       } else if (outcome.status === "held") {
         result.held += 1;
         logger.info("recorded a burn from a wallet with no account yet", {
           signature,
-          wallet: verdict.credit.burnerWallet,
+          wallet: walletTag(verdict.credit.burnerWallet),
         });
       } else {
         result.alreadyCredited += 1;

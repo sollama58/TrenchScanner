@@ -302,8 +302,8 @@ export function AlertCard({
                 className={`pill ${curated.narrative.verdict === "agrees" ? "pill-model" : "pill-warn"}`}
                 title={
                   curated.narrative.verdict === "agrees"
-                    ? "The Narrative seat's deep read would have called this coin too"
-                    : "The Narrative seat's deep read would not have called this coin"
+                    ? "The Narrative seat's deep read would have flagged this coin too"
+                    : "The Narrative seat's deep read would not have flagged this coin"
                 }
               >
                 <span className="pill-text">Narrative: {curated.narrative.verdict}</span>
@@ -312,8 +312,8 @@ export function AlertCard({
             {curated && show("calibrated") && cardCalibratedRate(curated, calls) !== null && (
               <span
                 className="pill"
-                title={`Of recent out-of-sample calls ranked like this one, the share that hit 2x within 15 min of the alert, before a 50% stop${
-                  calls.length > 1 ? " (the middle of the calling models' rates)" : ""
+                title={`Of recent out-of-sample alerts ranked like this one, the share that hit 2x within 15 min of the alert, before a 50% stop${
+                  calls.length > 1 ? " (the middle of the alerting models' rates)" : ""
                 }`}
               >
                 <span className="pill-text">≈{cardCalibratedRate(curated, calls)!.toFixed(0)}% 2x</span>
@@ -602,7 +602,7 @@ export function AlertCard({
               {...tileLook(tiles, tileTone(transferredPct, TILE_RED_TRANSFERRED_PCT), false)}
               title={
                 transferredPct === null
-                  ? "Transferred: not checked yet. Transfers between the top 25 holders are read for the coins closest to a call."
+                  ? "Transferred: not checked yet. Transfers between the top 25 holders are read for the coins closest to an alert."
                   : transferredPct === 0
                     ? `Transferred: none of the top ${transferCount?.of ?? 25} holders sent the coin to another, ${transferAtAlert ? "at alert time" : laterWith(pctOr(a.transferredSupplyPct), pctOr(transferredPct))}.`
                     : `Transferred Supply %: ${pct(transferredPct, 1)} of supply moved holder to holder${
@@ -667,7 +667,9 @@ export function AlertCard({
             <RobotIcon size={14} />
             <span>
               AI reviewer:{" "}
-              <strong>{ai.decision === "buy" ? "BUY" : ai.decision === "no_buy" ? "NO BUY" : "error"}</strong>
+              <strong>
+                {ai.decision === "buy" ? "PASS" : ai.decision === "no_buy" ? "REJECT" : "error"}
+              </strong>
               {ai.probability2x !== null && (
                 <span className="muted"> · {(ai.probability2x * 100).toFixed(0)}% to 2x</span>
               )}
@@ -1479,7 +1481,7 @@ export function nowReadingAge(
 /** The "Now" figure's tooltip: why it is blank in a call's first minute, or how old it is. */
 function nowTitle(card: Card, nowMcap: number | null, now: number): string | undefined {
   if (nowMcap === null && card.currentMarketCapUsd !== null) {
-    return "Shows from the first reading a minute after the call: earlier ones lag the market";
+    return "Shows from the first reading a minute after the alert: earlier ones lag the market";
   }
   const at = card.currentMarketCapAt ? Date.parse(card.currentMarketCapAt) : NaN;
   if (nowMcap === null || !Number.isFinite(at)) return undefined;

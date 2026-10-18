@@ -84,7 +84,7 @@ describe("combinerRule", () => {
     }));
     // (6 calling + 0.3 of rank) / 9: six of eight must call.
     const params: AgreementCuratorParams = { kind: AGREEMENT_MODEL_KIND, members, threshold: 6.3 / 9 };
-    expect(combinerRule(params, 8)).toMatch(/^Calls when at least 6 of 8 members call/);
+    expect(combinerRule(params, 8)).toMatch(/^Alerts when at least 6 of 8 members alert/);
   });
 
   it("has nothing to say for a learner", () => {

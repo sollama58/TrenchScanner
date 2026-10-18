@@ -353,7 +353,7 @@ export function YoursArt() {
     ["Big volume", false],
   ];
   return (
-    <Art label="Three saved filters, two switched on and one off; a slider hiding alerts below a market cap; Telegram sending its own models' picks">
+    <Art label="Three saved filters, two switched on and one off; a slider hiding alerts below a market cap; Telegram sending its own models' alerts">
       {filters.map(([name, on], i) => (
         <g key={name} transform={`translate(16 ${28 + i * 44})`}>
           <rect className="box mine" width="172" height="34" rx="10" />
@@ -414,7 +414,7 @@ export function YoursArt() {
 /** A clock and a wallet: guests see calls a few minutes late. */
 export function GuestArt({ delay }: { delay: number }) {
   return (
-    <Art label={`As a guest you see each call ${delay} minutes late; connect a wallet to get them live`}>
+    <Art label={`As a guest you see each alert ${delay} minutes late; connect a wallet to get them live`}>
       <g transform="translate(150 110)">
         <circle className="clock" r="70" />
         <path className="clock-hand" d="M0 0 V-46 M0 0 L30 16" />

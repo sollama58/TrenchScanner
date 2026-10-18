@@ -120,7 +120,7 @@ export function signTransaction(
   return { signed, signature: bs58.encode(signature) };
 }
 
-function u64le(value: bigint): number[] {
+export function u64le(value: bigint): number[] {
   if (value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new Error("u64 out of range");
   const out: number[] = [];
   let rest = value;
@@ -133,7 +133,8 @@ function u64le(value: bigint): number[] {
 
 export interface InstructionSpec {
   programId: string;
-  accounts: { pubkey: string; writable: boolean }[];
+  /** `signer` only where an instruction says so (a swap API's own metas); the payer signs alone. */
+  accounts: { pubkey: string; writable: boolean; signer?: boolean }[];
   data: number[];
 }
 
@@ -188,6 +189,120 @@ export function buildLegacyTransaction(
   return Uint8Array.from([...encodeShortVec(1), ...new Array<number>(SIGNATURE_LENGTH).fill(0), ...message]);
 }
 
+/** The most a serialized transaction may weigh (the packet size less its headers). */
+export const MAX_TRANSACTION_BYTES = 1232;
+
+/**
+ * An unsigned v0 transaction running `ixs` in order, paid and signed by `payer` alone, with
+ * account keys loaded from `tables` (address lookup table -> its addresses) wherever that is
+ * allowed - a swap names dozens of accounts, more than a legacy transaction has room for.
+ *
+ * Never loaded from a table: the signer, every program invoked, and every account of the
+ * instructions in `staticPrograms` (the System, Token and ATA instructions the guard reads: it
+ * refuses one whose accounts come from a table, since a hostile RPC serves the table). Keys run
+ * as the runtime orders them - signer, writable then read-only static keys, then each table's
+ * writable entries, then each table's read-only ones.
+ */
+export function buildV0Transaction(
+  payer: string,
+  recentBlockhash: string,
+  ixs: InstructionSpec[],
+  tables: Map<string, string[]> = new Map(),
+  staticPrograms: ReadonlySet<string> = new Set(),
+): Uint8Array {
+  if (ixs.length === 0) throw new Error("no instructions");
+  const writable = new Set<string>();
+  const seen = new Set<string>();
+  const mustStatic = new Set<string>([payer]);
+  for (const ix of ixs) {
+    mustStatic.add(ix.programId);
+    seen.add(ix.programId);
+    for (const a of ix.accounts) {
+      seen.add(a.pubkey);
+      if (a.writable) writable.add(a.pubkey);
+      if (staticPrograms.has(ix.programId)) mustStatic.add(a.pubkey);
+    }
+  }
+  seen.delete(payer);
+  // Each key from the first table that has it, unless it must stay static.
+  const loaded = new Map<string, { table: string; index: number }>();
+  for (const [table, entries] of tables) {
+    entries.forEach((k, index) => {
+      if (seen.has(k) && !mustStatic.has(k) && !loaded.has(k)) loaded.set(k, { table, index });
+    });
+  }
+  const staticRest = [...seen].filter((k) => !loaded.has(k));
+  const staticWritable = staticRest.filter((k) => writable.has(k));
+  const staticReadonly = staticRest.filter((k) => !writable.has(k));
+  const staticKeys = [payer, ...staticWritable, ...staticReadonly];
+  const lookups: { table: string; writable: number[]; readonly: number[] }[] = [];
+  const loadedWritable: string[] = [];
+  const loadedReadonly: string[] = [];
+  for (const table of tables.keys()) {
+    const mine = [...loaded].filter(([, at]) => at.table === table);
+    const w = mine.filter(([k]) => writable.has(k));
+    const r = mine.filter(([k]) => !writable.has(k));
+    if (w.length + r.length === 0) continue;
+    lookups.push({ table, writable: w.map(([, at]) => at.index), readonly: r.map(([, at]) => at.index) });
+    loadedWritable.push(...w.map(([k]) => k));
+    loadedReadonly.push(...r.map(([k]) => k));
+  }
+  const order = [...staticKeys, ...loadedWritable, ...loadedReadonly];
+  if (order.length > 256) throw new Error("too many accounts for one transaction");
+  const indexOf = new Map(order.map((k, i) => [k, i]));
+  const index = (k: string) => {
+    const i = indexOf.get(k);
+    if (i === undefined) throw new Error(`account ${k} missing from the message`);
+    return i;
+  };
+  for (const ix of ixs) {
+    for (const a of ix.accounts) {
+      if (a.signer && a.pubkey !== payer)
+        throw new Error("an instruction needs a signer other than the payer");
+    }
+  }
+  const key = (k: string) => {
+    const bytes = bs58.decode(k);
+    if (bytes.length !== PUBKEY_LENGTH) throw new Error(`not a public key: ${k}`);
+    return [...bytes];
+  };
+  const blockhash = bs58.decode(recentBlockhash);
+  if (blockhash.length !== 32) throw new Error("bad blockhash");
+  const message = [
+    0x80, // v0
+    1, // one signature: the payer
+    0, // no read-only signed accounts
+    staticReadonly.length,
+    ...encodeShortVec(staticKeys.length),
+    ...staticKeys.flatMap(key),
+    ...blockhash,
+    ...encodeShortVec(ixs.length),
+    ...ixs.flatMap((ix) => [
+      index(ix.programId),
+      ...encodeShortVec(ix.accounts.length),
+      ...ix.accounts.map((a) => index(a.pubkey)),
+      ...encodeShortVec(ix.data.length),
+      ...ix.data,
+    ]),
+    ...encodeShortVec(lookups.length),
+    ...lookups.flatMap((l) => [
+      ...key(l.table),
+      ...encodeShortVec(l.writable.length),
+      ...l.writable,
+      ...encodeShortVec(l.readonly.length),
+      ...l.readonly,
+    ]),
+  ];
+  const tx = Uint8Array.from([
+    ...encodeShortVec(1),
+    ...new Array<number>(SIGNATURE_LENGTH).fill(0),
+    ...message,
+  ]);
+  if (tx.length > MAX_TRANSACTION_BYTES)
+    throw new Error(`transaction too large (${tx.length} bytes, ${MAX_TRANSACTION_BYTES} at most)`);
+  return tx;
+}
+
 export const COMPUTE_BUDGET_PROGRAM_ID = "ComputeBudget111111111111111111111111111111";
 
 /**
@@ -210,6 +325,20 @@ export function computeBudgetInstructions(
     { programId: COMPUTE_BUDGET_PROGRAM_ID, accounts: [], data: [2, ...limit] }, // SetComputeUnitLimit
     { programId: COMPUTE_BUDGET_PROGRAM_ID, accounts: [], data: [3, ...u64le(microLamportsPerUnit)] }, // SetComputeUnitPrice
   ];
+}
+
+/** A System Program transfer of `lamports` from `from` (which signs) to `to`. */
+export function systemTransferInstruction(from: string, to: string, lamports: bigint): InstructionSpec {
+  if (lamports <= 0n) throw new Error("transfer amount must be positive");
+  // SystemInstruction::Transfer is index 2, little-endian u32, then the u64 amount.
+  return {
+    programId: SYSTEM_PROGRAM_ID,
+    accounts: [
+      { pubkey: from, writable: true, signer: true },
+      { pubkey: to, writable: true },
+    ],
+    data: [2, 0, 0, 0, ...u64le(lamports)],
+  };
 }
 
 /** Compute units a SOL transfer is given when it pays a priority fee (measured: 450, budget included). */
