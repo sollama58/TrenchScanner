@@ -6,6 +6,7 @@ import {
   BURN_CREDIT_MEMO,
   DAILY_FREE_CREDITS,
   DexScreenerClient,
+  FREE_LOOKUP_NOTE,
   loadEnv,
   prisma,
   SolanaRpc,
@@ -251,6 +252,55 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
     );
   });
 
+  it("looks a coin the scanner already tracks up free, and says so before it runs", async () => {
+    const me = await signIn();
+    const mint = random(32);
+    mints.push(mint);
+    // On the feed: found by the scanner itself, not by a lookup.
+    await prisma.token.create({
+      data: {
+        mintAddress: mint,
+        symbol: "TRK",
+        name: "Tracked coin",
+        firstSeenAt: new Date(),
+        discoverySource: "pumpfun",
+      },
+    });
+    vi.spyOn(DexScreenerClient.prototype, "getTokensByAddresses").mockResolvedValue([reading(mint)]);
+
+    const quote = await app.inject({
+      method: "GET",
+      url: `/utilities/quote?utility=token&subject=${mint}`,
+      cookies: me.cookies,
+    });
+    expect(quote.statusCode).toBe(200);
+    expect(quote.json()).toMatchObject({ cost: 0, free: "tracked" });
+
+    // No credits at all, and the lookup still opens.
+    const res = await app.inject({
+      method: "POST",
+      url: "/utilities/token",
+      cookies: me.cookies,
+      payload: { mint },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ mint, charged: 0, balance: 0, free: "tracked" });
+    const entry = await prisma.burnCreditEntry.findFirstOrThrow({
+      where: { wallet: me.walletAddress, kind: "spend" },
+    });
+    expect(entry).toMatchObject({ delta: 0, note: FREE_LOOKUP_NOTE });
+    const view = await app.inject({ method: "GET", url: `/utilities/token/${mint}`, cookies: me.cookies });
+    expect(view.statusCode).toBe(200);
+
+    // An untracked coin still quotes its price.
+    const other = await app.inject({
+      method: "GET",
+      url: `/utilities/quote?utility=token&subject=${random(32)}`,
+      cookies: me.cookies,
+    });
+    expect(other.json()).toMatchObject({ cost: 1, free: null });
+  });
+
   it("takes nothing for an address no market knows, and refuses a lookup it can't pay for", async () => {
     const me = await signIn();
     await grant(me.walletAddress, 1);
@@ -287,17 +337,27 @@ describe.skipIf(!dbAvailable)("utility routes", () => {
     const lookUp = (mint: string) =>
       app.inject({ method: "POST", url: "/utilities/token", cookies: me.cookies, payload: { mint } });
     const first = await lookUp(random(32));
-    expect(first.json()).toMatchObject({ charged: 1, free: 1, freeLeft: DAILY_FREE_CREDITS - 1, balance: 1 });
+    expect(first.json()).toMatchObject({
+      charged: 1,
+      freeCredits: 1,
+      freeLeft: DAILY_FREE_CREDITS - 1,
+      balance: 1,
+    });
     const overview = await app.inject({ method: "GET", url: "/utilities", cookies: me.cookies });
     expect(overview.json()).toMatchObject({
       balance: 1,
       daily: { allowance: DAILY_FREE_CREDITS, left: DAILY_FREE_CREDITS - 1 },
     });
-    expect(overview.json().lookups[0]).toMatchObject({ cost: 1, free: 1 });
+    expect(overview.json().lookups[0]).toMatchObject({ cost: 1, freeCredits: 1 });
 
     for (let i = 1; i < DAILY_FREE_CREDITS; i++) await lookUp(random(32));
     // The allowance is spent: the next lookup takes the granted credit, the one after is refused.
-    expect((await lookUp(random(32))).json()).toMatchObject({ charged: 1, free: 0, freeLeft: 0, balance: 0 });
+    expect((await lookUp(random(32))).json()).toMatchObject({
+      charged: 1,
+      freeCredits: 0,
+      freeLeft: 0,
+      balance: 0,
+    });
     const broke = await lookUp(random(32));
     expect(broke.statusCode).toBe(402);
     expect(broke.json()).toMatchObject({ code: "not_enough_credits", balance: 0, freeLeft: 0 });

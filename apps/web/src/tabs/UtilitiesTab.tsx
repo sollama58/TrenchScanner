@@ -35,6 +35,49 @@ import {
 import { WalletsToWatch } from "../components/WalletsToWatch";
 import { SideWalletChecker } from "./SideWalletChecker";
 
+/** Why a lookup costs nothing (apps/api lookupGate.ts freeLookupReason), or "open" for a re-open. */
+export type FreeReason = "tracked" | "traded" | "own" | "open";
+
+/** Mirrors apps/api/src/routes/utilities.ts GET /utilities/quote. */
+interface LookupQuote {
+  utility: "token" | "wallet";
+  subject: string;
+  cost: number;
+  free: FreeReason | null;
+}
+
+/** The short label for a free lookup, shown in place of its price. */
+export function freeLabel(reason: FreeReason): string {
+  switch (reason) {
+    case "tracked":
+      return "Free, already tracked";
+    case "traded":
+      return "Free, you traded it";
+    case "own":
+      return "Free, your wallet";
+    case "open":
+      return "Free, already open";
+  }
+}
+
+/** Why it's free, in a sentence under the form. */
+function freeNote(reason: FreeReason, utility: "token" | "wallet"): string {
+  const what = utility === "token" ? "coin" : "wallet";
+  switch (reason) {
+    case "tracked":
+      return `TrenchScanner already tracks this ${what}, so looking it up costs no credits.`;
+    case "traded":
+      return "You traded this coin with Pro Mode, so looking it up costs no credits.";
+    case "own":
+      return "This is your own wallet, so looking it up costs no credits.";
+    case "open":
+      return "You looked this up within the last hour, so it opens again free.";
+  }
+}
+
+/** How long the form waits after the address changes before asking what it would cost. */
+const QUOTE_DEBOUNCE_MS = 250;
+
 /** Mirrors apps/api/src/routes/utilities.ts GET /utilities. */
 export interface UtilitiesOverview {
   balance: number;
@@ -48,9 +91,11 @@ export interface UtilitiesOverview {
     subject: string | null;
     cost: number;
     /** How much of `cost` the free daily credits paid. */
-    free: number;
+    freeCredits: number;
     at: string;
     open: boolean;
+    /** Why looking it up again would be free right now, or null when it costs credits. */
+    free: FreeReason | null;
     token: {
       mintAddress: string;
       symbol: string | null;
@@ -145,9 +190,10 @@ export function UtilitiesTab({ walletAddress }: { walletAddress: string }) {
           <h1>Look up any coin or wallet</h1>
           <p className="muted">
             Each lookup costs Burn Credits, which you get by burning {SYMBOL} from this wallet. A credit is
-            only taken once the lookup works, and you can re-open it free for an hour. Subscribers also get 10
-            free credits a day, used before their balance. The Side Wallet Checker and Wallets to watch are
-            free.
+            only taken once the lookup works, and you can re-open it free for an hour. Coins and wallets
+            TrenchScanner already tracks are free to look up, and the form says so before you run it. The Side
+            Wallet Checker and Wallets to watch are free. Subscribers also get 10 free credits a day, used
+            before their balance.
           </p>
         </header>
 
@@ -649,10 +695,30 @@ export function LookupCard({
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const cost = data?.prices.cost[utility] ?? 1;
+  const price = data?.prices.cost[utility] ?? 1;
   const value = address.trim();
   const valid = ADDRESS_RE.test(value);
   const open = data?.lookups.some((l) => l.utility === utility && l.subject === value && l.open) ?? false;
+  // What this address would cost, asked of the server once it is pasted. The server decides the
+  // charge again when the lookup runs; this only lets the form say "Free" first.
+  const [quote, setQuote] = useState<LookupQuote | null>(null);
+  useEffect(() => {
+    if (!valid) return;
+    let live = true;
+    const id = setTimeout(() => {
+      const q = new URLSearchParams({ utility, subject: value });
+      api<LookupQuote>(`/utilities/quote?${q.toString()}`)
+        .then((r) => live && setQuote(r))
+        .catch(() => live && setQuote(null));
+    }, QUOTE_DEBOUNCE_MS);
+    return () => {
+      live = false;
+      clearTimeout(id);
+    };
+  }, [utility, value, valid]);
+  const known = valid && quote?.subject === value ? quote : null;
+  const free: FreeReason | null = known?.free ?? (open ? "open" : null);
+  const cost = known ? known.cost : price;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -679,7 +745,7 @@ export function LookupCard({
           <h3>
             <Icon size={14} /> {card.short}
           </h3>
-          <span className="util-cost num">{costLabel(cost, data?.daily)}</span>
+          <CostPill free={free} cost={cost} daily={data?.daily} />
         </header>
       ) : (
         <header className="section-head">
@@ -689,7 +755,7 @@ export function LookupCard({
             </span>
             <h2>{card.title}</h2>
           </div>
-          <span className="util-cost num">{costLabel(cost, data?.daily)}</span>
+          <CostPill free={free} cost={cost} daily={data?.daily} />
         </header>
       )}
       {!compact && <p className="muted small">{card.blurb}</p>}
@@ -715,12 +781,21 @@ export function LookupCard({
               : "Looking up…"
             : open
               ? "Open (free)"
-              : compact
-                ? "Scan"
-                : "Look up"}
+              : free
+                ? compact
+                  ? "Scan (free)"
+                  : "Look up (free)"
+                : compact
+                  ? "Scan"
+                  : "Look up"}
         </button>
       </form>
       {value !== "" && !valid && <p className="muted small">That doesn&apos;t look like a Solana address.</p>}
+      {free && free !== "open" && (
+        <p className="util-free-note small" role="status">
+          {freeNote(free, utility)}
+        </p>
+      )}
       {error && (
         <p className="error small" role="alert">
           {error}
@@ -728,6 +803,20 @@ export function LookupCard({
       )}
     </Wrap>
   );
+}
+
+/** The price beside a lookup form: its credits, or why the address in it is free. */
+function CostPill({
+  free,
+  cost,
+  daily,
+}: {
+  free: FreeReason | null;
+  cost: number;
+  daily: UtilitiesOverview["daily"] | undefined;
+}) {
+  if (free) return <span className="util-cost util-cost-free">{freeLabel(free)}</span>;
+  return <span className="util-cost num">{costLabel(cost, daily)}</span>;
 }
 
 type Lookup = UtilitiesOverview["lookups"][number];
@@ -827,7 +916,9 @@ function RecentLookups({
                   >
                     {busy === subject
                       ? "Looking up…"
-                      : `Look up again (${plural(data.prices.cost[l.utility], "credit")})`}
+                      : l.free
+                        ? `Look up again (${freeLabel(l.free)})`
+                        : `Look up again (${plural(data.prices.cost[l.utility], "credit")})`}
                   </button>
                 ))}
             </li>

@@ -8,6 +8,7 @@ import {
   dailyFreeCredits,
   creditBurnCredits,
   describeCreditRejection,
+  FREE_LOOKUP_NOTE,
   lastRebuiltAt,
   LOOKUP_REOPEN_MS,
   openLookup,
@@ -51,6 +52,7 @@ import {
   readTokenSage,
 } from "./tokens.js";
 import { readTokenProfile } from "../tokenProfile.js";
+import { freeLookupReason, type FreeLookupReason } from "../lookupGate.js";
 import type { ViewStampBuffer } from "../viewStamps.js";
 import { loadWalletProfile, type WalletLiveReader } from "../walletProfile.js";
 import { loadWalletBundle } from "../walletBundle.js";
@@ -62,6 +64,7 @@ import { loadSideWeb } from "../sideWeb.js";
  *
  * - GET  /utilities             the wallet's balance, the prices, and its recent lookups
  * - POST /utilities/claim       credit a Burn Credits burn, read back from the chain
+ * - GET  /utilities/quote       what looking an address up would cost this wallet, and why it's free
  * - POST /utilities/token       look up any mint: 1 credit, taken only once the lookup succeeds
  * - GET  /utilities/token/:mint the token view of a paid lookup, plus its chart and TokenSage read
  * - POST /utilities/wallet      look up any wallet: 1 credit, taken once its profile loads; the
@@ -77,6 +80,11 @@ import { loadSideWeb } from "../sideWeb.js";
  * - GET  /utilities/side-web/:wallet     the bubble map of the wallets labeled for a KOL (or a
  *                               bundle would label), tied by what labeled each (free)
  *
+ * A lookup of a coin or wallet the dashboard already opens free (lookupGate.ts freeLookupReason: a
+ * tracked coin, one the reader traded with Pro Mode, a known wallet, the reader's own) costs
+ * nothing: it adds no outside calls the scanner doesn't already make (user ask 2026-10-18). The
+ * server decides; the quote only lets the dashboard say so before the lookup runs.
+ *
  * A lookup stays open for LOOKUP_REOPEN_MS after it is paid for: the view's own reads, and
  * looking the same thing up again, are free inside it and refused (402) outside it.
  *
@@ -91,10 +99,17 @@ const ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{80,90}$/;
 const mintSchema = z.object({ mint: z.string().regex(ADDRESS_RE, "That isn't a Solana address.") });
 const walletSchema = z.object({ wallet: z.string().regex(ADDRESS_RE, "That isn't a Solana address.") });
+const quoteSchema = z.object({
+  utility: z.enum(["token", "wallet"]),
+  subject: z.string().regex(ADDRESS_RE, "That isn't a Solana address."),
+});
 const claimSchema = z.object({ signature: z.string().regex(SIGNATURE_RE, "invalid transaction signature") });
 
 /** Lookups and claims each spend outside calls (DexScreener, the RPC); a person needs a handful. */
 const LOOKUP_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
+
+/** The lookup forms ask once per address pasted; each is a database read or two. */
+const QUOTE_RATE_LIMIT = { max: 60, timeWindow: "1 minute" };
 
 /** One read per wallet modal opened; each is a database query (no outside calls), cached an hour. */
 const BUNDLE_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
@@ -187,6 +202,23 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
         })
       : [];
     const tokenByMint = new Map(tokens.map((t) => [t.mintAddress, t]));
+    // Whether looking each one up again would be free (a coin or wallet the dashboard tracks).
+    const subjects = [
+      ...new Map(
+        spends.flatMap((s) => (s.utility && s.subject ? [[`${s.utility}:${s.subject}`, s] as const] : [])),
+      ).values(),
+    ];
+    const freeBy = new Map(
+      await Promise.all(
+        subjects.map(
+          async (s) =>
+            [
+              `${s.utility}:${s.subject}`,
+              await freeLookupReason(wallet, s.utility as UtilityKind, s.subject!),
+            ] as const,
+        ),
+      ),
+    );
     return {
       balance,
       prices,
@@ -198,9 +230,10 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
         utility: s.utility,
         subject: s.subject,
         cost: s.cost,
-        free: s.free,
+        freeCredits: s.free,
         at: s.createdAt,
         open: s.createdAt > since,
+        free: s.utility && s.subject ? (freeBy.get(`${s.utility}:${s.subject}`) ?? null) : null,
         token: s.utility === "token" && s.subject ? (tokenByMint.get(s.subject) ?? null) : null,
       })),
       credits: burns,
@@ -261,6 +294,28 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
   });
 
   /**
+   * What looking an address up would cost the caller right now, read before the lookup runs so the
+   * form can say "Free, already tracked". Advisory only: POST /token and /wallet decide the charge
+   * again themselves.
+   */
+  app.get("/quote", { config: { rateLimit: QUOTE_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = quoteSchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
+    }
+    const { utility, subject } = parsed.data;
+    const wallet = request.user!.walletAddress;
+    const [free, open, prices] = await Promise.all([
+      freeLookupReason(wallet, utility, subject),
+      openLookup(wallet, utility, subject),
+      burnCreditPrices(),
+    ]);
+    const reason: FreeLookupReason | "open" | null = free ?? (open ? "open" : null);
+    reply.header("Cache-Control", "no-store");
+    return { utility, subject, cost: reason ? 0 : prices.cost[utility], free: reason };
+  });
+
+  /**
    * Look a token up. The credit is taken only after DexScreener (or its fallback) has priced the
    * mint: an address nothing trades costs nothing. Looking the same mint up again inside the
    * re-open window is free.
@@ -272,11 +327,11 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     }
     const { mint } = parsed.data;
     const wallet = request.user!.walletAddress;
-    const prices = await burnCreditPrices();
-    const cost = prices.cost.token;
+    const [prices, free] = await Promise.all([burnCreditPrices(), freeLookupReason(wallet, "token", mint)]);
+    const cost = free ? 0 : prices.cost.token;
 
     const open = await openLookup(wallet, "token", mint);
-    if (!open) {
+    if (!open && cost > 0) {
       const short = await shortOf(request, wallet, cost);
       if (short) return notEnough(reply, short.balance, cost, short.freeLeft);
     }
@@ -300,7 +355,14 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     // Charged before the mint joins the scanner: the balance check above reserves nothing, so
     // concurrent lookups used to put every mint on the scan and charge only one of them
     // (security audit 2026-10-16, paywall F3).
-    const spent = await spendCredits(wallet, "token", mint, cost, dailyFreeFor(request));
+    const spent = await spendCredits(
+      wallet,
+      "token",
+      mint,
+      cost,
+      dailyFreeFor(request),
+      free ? FREE_LOOKUP_NOTE : undefined,
+    );
     if (spent.status === "insufficient") return notEnough(reply, spent.balance, cost, spent.freeLeft);
 
     const now = new Date();
@@ -309,9 +371,10 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     return {
       mint,
       charged: spent.status === "charged" ? spent.cost : 0,
-      free: spent.status === "charged" ? spent.free : 0,
+      freeCredits: spent.status === "charged" ? spent.free : 0,
       balance: spent.balance,
       freeLeft: spent.freeLeft,
+      free,
     };
   });
 
@@ -326,10 +389,14 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     }
     const subject = parsed.data.wallet;
     const wallet = request.user!.walletAddress;
-    const cost = (await burnCreditPrices()).cost.wallet;
+    const [prices, free] = await Promise.all([
+      burnCreditPrices(),
+      freeLookupReason(wallet, "wallet", subject),
+    ]);
+    const cost = free ? 0 : prices.cost.wallet;
 
     const open = await openLookup(wallet, "wallet", subject);
-    if (!open) {
+    if (!open && cost > 0) {
       const short = await shortOf(request, wallet, cost);
       if (short) return notEnough(reply, short.balance, cost, short.freeLeft);
     }
@@ -343,14 +410,22 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
         .send({ error: "Couldn't read that wallet just now. No credit was used; try again shortly." });
     }
 
-    const spent = await spendCredits(wallet, "wallet", subject, cost, dailyFreeFor(request));
+    const spent = await spendCredits(
+      wallet,
+      "wallet",
+      subject,
+      cost,
+      dailyFreeFor(request),
+      free ? FREE_LOOKUP_NOTE : undefined,
+    );
     if (spent.status === "insufficient") return notEnough(reply, spent.balance, cost, spent.freeLeft);
     return {
       wallet: subject,
       charged: spent.status === "charged" ? spent.cost : 0,
-      free: spent.status === "charged" ? spent.free : 0,
+      freeCredits: spent.status === "charged" ? spent.free : 0,
       balance: spent.balance,
       freeLeft: spent.freeLeft,
+      free,
     };
   });
 

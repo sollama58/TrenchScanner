@@ -1,4 +1,11 @@
-import { createLogger, prisma, tokenSageEnabled, tokenSageHints, type Env } from "@trenchscanner/core";
+import {
+  createLogger,
+  FREE_LOOKUP_NOTE,
+  prisma,
+  tokenSageEnabled,
+  tokenSageHints,
+  type Env,
+} from "@trenchscanner/core";
 import { noteNarrativeWanted } from "./prefetch.js";
 
 const logger = createLogger("utility-lookups");
@@ -14,11 +21,18 @@ const MAX_PER_CYCLE = 50;
  * read when a coin passes the rug screen on the watchlist; a looked-up coin was paid for and its
  * view shows TokenSage's read, so it is asked for at full depth whatever the screen says. A mint
  * already read at full depth is skipped by noteNarrativeWanted, so calling this every cycle is free.
+ * A lookup that was free because the coin was already tracked (FREE_LOOKUP_NOTE) is left out.
  */
 export async function noteUtilityLookups(env: Env, now = Date.now()): Promise<number> {
   if (!tokenSageEnabled(env)) return 0;
   const lookups = await prisma.burnCreditEntry.findMany({
-    where: { kind: "spend", utility: "token", createdAt: { gt: new Date(now - UTILITY_READ_WINDOW_MS) } },
+    where: {
+      kind: "spend",
+      utility: "token",
+      createdAt: { gt: new Date(now - UTILITY_READ_WINDOW_MS) },
+      // A free lookup of a coin already tracked buys no extra read: the scan already decides it.
+      OR: [{ note: null }, { note: { not: FREE_LOOKUP_NOTE } }],
+    },
     orderBy: { createdAt: "desc" },
     distinct: ["subject"],
     take: MAX_PER_CYCLE,
