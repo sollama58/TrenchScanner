@@ -14059,6 +14059,29 @@ button.bm-same {
   vertical-align: 1px;
   margin-top: 0;
 }
+/* The chart's warning when the coin isn't getting instant updates (2026-10-18). */
+.tm-delay {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 7px 10px;
+  border-radius: var(--radius-s);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--ink-2);
+}
+.tm-delay svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warn-ink);
+}
+.tm-delay strong {
+  color: var(--warn-ink);
+}
+.tm-delay-when {
+  color: var(--muted);
+}
 /* The chart's "Live" pill: the coin's curve is drawn as it changes. */
 .tm-live {
   display: inline-flex;
@@ -16632,6 +16655,21 @@ body:has(.util-toast) .bug-fab {
   .tm-hold-share {
     justify-content: center;
   }
+}
+/* A delayed coin's Trade panel (2026-10-18): folded to its heading until opened. */
+.tm-trade-head .tm-fold-h {
+  margin: 0;
+}
+.tm-trade-head .tm-fold-btn {
+  width: auto;
+}
+.tm-trade.folded .tm-trade-head .tm-fold-h,
+.tm-trade.folded .tm-trade-head .tm-fold-btn {
+  flex: 1;
+  width: 100%;
+}
+.tm-trade-fold-note {
+  font-weight: 400;
 }
 /* Pro Mode's grace period (2026-10-18): the panel's warning. */
 .tm-trade-warn {
