@@ -4,7 +4,14 @@ import { frameOf, holdFrame, scopeTickIds, shortAge, splitScope } from "./scope"
 
 /** Just the fields Scope's columns read. */
 function card(id: string, kind: Card["kind"], curated = false, tokenId = `t-${id}`): Card {
-  return { id, kind, tokenId, curated: curated ? ({ alertId: id } as Card["curated"]) : null } as Card;
+  return {
+    id,
+    kind,
+    tokenId,
+    snapshot: {},
+    latestSnapshot: null,
+    curated: curated ? ({ alertId: id } as Card["curated"]) : null,
+  } as Card;
 }
 
 describe("splitScope", () => {
@@ -20,6 +27,37 @@ describe("splitScope", () => {
     const cols = splitScope([card("m1", "match", true)], []);
     expect(cols.filters.map((c) => c.id)).toEqual(["m1"]);
     expect(cols.models.map((c) => c.id)).toEqual(["m1"]);
+  });
+});
+
+describe("graduated alerts", () => {
+  const grad = (c: Card): Card => ({ ...c, snapshot: { graduated: true }, latestSnapshot: null }) as Card;
+  const at = (c: Card, iso: string): Card => ({ ...c, matchedAt: iso }) as Card;
+
+  it("moves an alert whose coin graduated to the Graduated column, in its coin's place", () => {
+    const alert = at(card("m1", "match", true, "tok"), "2026-10-18T10:00:00Z");
+    const entry = at(card("g1", "stream", false, "tok"), "2026-10-18T11:00:00Z");
+    const other = at(card("g2", "stream"), "2026-10-18T12:00:00Z");
+    const cols = splitScope([alert], [other, entry]);
+    expect(cols.filters).toEqual([]);
+    expect(cols.models).toEqual([]);
+    expect(cols.graduated.map((c) => c.id)).toEqual(["g2", "m1"]);
+  });
+
+  it("moves one its own scans call graduated, by its alert time", () => {
+    const alert = grad(at(card("m1", "match"), "2026-10-18T11:30:00Z"));
+    const older = at(card("g1", "stream"), "2026-10-18T11:00:00Z");
+    const cols = splitScope([alert, at(card("m2", "match"), "2026-10-18T11:40:00Z")], [older]);
+    expect(cols.filters.map((c) => c.id)).toEqual(["m2"]);
+    expect(cols.graduated.map((c) => c.id)).toEqual(["m1", "g1"]);
+  });
+
+  it("keeps it in its own column too when the column shows graduated alerts", () => {
+    const alert = grad(at(card("m1", "match", true), "2026-10-18T11:30:00Z"));
+    const cols = splitScope([alert], [], { filters: true, models: false });
+    expect(cols.filters.map((c) => c.id)).toEqual(["m1"]);
+    expect(cols.models).toEqual([]);
+    expect(cols.graduated.map((c) => c.id)).toEqual(["m1"]);
   });
 });
 

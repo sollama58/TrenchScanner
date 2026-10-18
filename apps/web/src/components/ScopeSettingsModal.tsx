@@ -431,6 +431,14 @@ function ColumnFilters({
         </div>
         {col !== "graduated" && (
           <Switch
+            label="Show graduated alerts here too"
+            hint="Alerts whose coin graduated move to the Graduated column, marked with their source"
+            on={f.showGraduated}
+            onChange={() => set({ showGraduated: !f.showGraduated })}
+          />
+        )}
+        {col !== "graduated" && (
+          <Switch
             label="Hide alerts that missed"
             hint="Missed 2x or stopped out"
             on={f.hideMissed}
