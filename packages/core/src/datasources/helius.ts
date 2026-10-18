@@ -1,6 +1,20 @@
 import { CURVE_READ_BYTES, decodeCurve, type CurveState } from "../curation/curveTape.js";
 import { fetchJson } from "./httpClient.js";
 import {
+  LAUNCHLAB_BASE_MINT_OFFSET,
+  LAUNCHLAB_POOL_SIZE,
+  LAUNCHLAB_PROGRAM,
+  LAUNCHLAB_READ_BYTES,
+  CPMM_MINT0_OFFSET,
+  CPMM_MINT1_OFFSET,
+  CPMM_POOL_SIZE,
+  CPMM_VAULTS_OFFSET,
+  CPMM_VAULTS_READ_BYTES,
+  RAYDIUM_CPMM_PROGRAM,
+  cpmmVaultsFor,
+  decodeLaunchLab,
+} from "./launchLab.js";
+import {
   POOL_READ_BYTES,
   TOKEN_AMOUNT_READ_BYTES,
   decodePoolVaults,
@@ -1668,9 +1682,10 @@ export class HeliusClient {
     const unique = [...new Set(curves)];
     const out = new Map<string, CurveState | null | "failed">();
     if (unique.length === 0) return out;
+    // A Raydium LaunchLab pool (launchLab.ts) reads as a curve too, from a longer slice.
     const accounts = await this.getMultipleAccounts<{ data?: unknown }>(unique, {
       encoding: "base64",
-      dataSlice: { offset: 0, length: CURVE_READ_BYTES },
+      dataSlice: { offset: 0, length: Math.max(CURVE_READ_BYTES, LAUNCHLAB_READ_BYTES) },
     });
     for (const curve of unique) {
       const account = accounts.get(curve);
@@ -1679,18 +1694,94 @@ export class HeliusClient {
         continue;
       }
       const data = account.value?.data;
-      out.set(curve, Array.isArray(data) && typeof data[0] === "string" ? decodeCurve(data[0]) : null);
+      out.set(
+        curve,
+        Array.isArray(data) && typeof data[0] === "string"
+          ? (decodeCurve(data[0]) ?? decodeLaunchLab(data[0]))
+          : null,
+      );
     }
     return out;
   }
 
   /**
+   * A Stonks coin's Raydium LaunchLab pool (launchLab.ts): one program scan for the pool account
+   * whose base mint is `mint` (its address also depends on the quote the creator picked). The pool,
+   * null when there is none, or "failed".
+   */
+  async findLaunchLabPool(mint: string): Promise<string | null | "failed"> {
+    const responses = await this.sendBatched<{ pubkey?: unknown }[]>(
+      [
+        {
+          id: "launchlab",
+          method: "getProgramAccounts",
+          params: [
+            LAUNCHLAB_PROGRAM,
+            {
+              commitment: "confirmed",
+              encoding: "base64",
+              dataSlice: { offset: 0, length: 0 },
+              filters: [
+                { dataSize: LAUNCHLAB_POOL_SIZE },
+                { memcmp: { offset: LAUNCHLAB_BASE_MINT_OFFSET, bytes: mint } },
+              ],
+            },
+          ],
+        },
+      ],
+      10_000,
+    );
+    const res = responses.get("launchlab");
+    if (!res || res.error || !Array.isArray(res.result)) return "failed";
+    const pool = res.result[0]?.pubkey;
+    return typeof pool === "string" ? pool : null;
+  }
+
+  /**
+   * The Raydium CPMM pool a graduated LaunchLab coin trades in, against `quoteMint`: two program
+   * scans (the coin as token 0, then as token 1). Its vaults, null when there is none, or "failed".
+   */
+  async findCpmmPoolVaults(mint: string, quoteMint: string): Promise<PoolVaults | null | "failed"> {
+    const calls: RpcCall[] = [CPMM_MINT0_OFFSET, CPMM_MINT1_OFFSET].map((offset) => ({
+      id: `cpmm-${offset}`,
+      method: "getProgramAccounts",
+      params: [
+        RAYDIUM_CPMM_PROGRAM,
+        {
+          commitment: "confirmed",
+          encoding: "base64",
+          dataSlice: { offset: CPMM_VAULTS_OFFSET, length: CPMM_VAULTS_READ_BYTES },
+          filters: [{ dataSize: CPMM_POOL_SIZE }, { memcmp: { offset, bytes: mint } }],
+        },
+      ],
+    }));
+    const responses = await this.sendBatched<{ account?: { data?: unknown } }[]>(calls, 10_000, {
+      batchSize: 1,
+    });
+    let failed = false;
+    for (const call of calls) {
+      const res = responses.get(call.id);
+      if (!res || res.error || !Array.isArray(res.result)) {
+        failed = true;
+        continue;
+      }
+      for (const row of res.result) {
+        const data = row.account?.data;
+        const vaults =
+          Array.isArray(data) && typeof data[0] === "string" ? cpmmVaultsFor(data[0], mint, quoteMint) : null;
+        if (vaults) return vaults;
+      }
+    }
+    return failed ? "failed" : null;
+  }
+
+  /**
    * Graduated coins' PumpSwap pools (pumpSwapPool.ts), batched like the curves: per pool, its two
-   * vaults, null when there is no SOL pool of that mint there, or "failed". `pools` maps each pool
-   * address to its coin's mint.
+   * vaults, null when there is no pool of that mint and quote there, or "failed". `pools` maps each
+   * pool address to its coin's mint and the quote mint it pairs with.
    */
   async getPoolVaultsBatch(
-    pools: ReadonlyMap<string, string>,
+    pools: ReadonlyMap<string, { mint: string; quoteMint: string }>,
   ): Promise<Map<string, PoolVaults | null | "failed">> {
     const out = new Map<string, PoolVaults | null | "failed">();
     if (pools.size === 0) return out;
@@ -1698,7 +1789,7 @@ export class HeliusClient {
       encoding: "base64",
       dataSlice: { offset: 0, length: POOL_READ_BYTES },
     });
-    for (const [pool, mint] of pools) {
+    for (const [pool, { mint, quoteMint }] of pools) {
       const account = accounts.get(pool);
       if (!account || account === "failed") {
         out.set(pool, "failed");
@@ -1707,7 +1798,9 @@ export class HeliusClient {
       const data = account.value?.data;
       out.set(
         pool,
-        Array.isArray(data) && typeof data[0] === "string" ? decodePoolVaults(data[0], mint) : null,
+        Array.isArray(data) && typeof data[0] === "string"
+          ? decodePoolVaults(data[0], mint, quoteMint)
+          : null,
       );
     }
     return out;

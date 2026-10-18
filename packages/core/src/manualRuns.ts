@@ -72,6 +72,13 @@ export const MANUAL_RUN_JOBS: readonly ManualRunJob[] = [
     heavy: false,
   },
   {
+    job: "db-dump",
+    // Not a worker job: the trenchscanner-db-backup cron checks for a request every 10 minutes
+    // (scripts/db-backup/backup.sh) and takes the dump then, besides its nightly one.
+    does: "Takes a full compressed pg_dump of the database to the dumps bucket (picked up within 10 minutes).",
+    heavy: true,
+  },
+  {
     job: "model-backup",
     does: "Takes the weekly model backup if one is due and copies new ones off-site.",
     heavy: false,

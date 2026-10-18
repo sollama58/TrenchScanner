@@ -10,20 +10,22 @@
 
 set -euo pipefail
 
-: "${MODEL_BACKUP_S3_ENDPOINT:?MODEL_BACKUP_S3_ENDPOINT is not set (the R2 S3 API endpoint)}"
-: "${MODEL_BACKUP_S3_BUCKET:?MODEL_BACKUP_S3_BUCKET is not set}"
-: "${MODEL_BACKUP_S3_ACCESS_KEY_ID:?MODEL_BACKUP_S3_ACCESS_KEY_ID is not set}"
-: "${MODEL_BACKUP_S3_SECRET_ACCESS_KEY:?MODEL_BACKUP_S3_SECRET_ACCESS_KEY is not set}"
+# The bucket keys are needed only by what touches the bucket: restore.sh can verify and restore a
+# downloaded dump file (Admin > Backups) on any machine without them. s3() checks on first use.
+bucket_configured() {
+  [ -n "${MODEL_BACKUP_S3_ENDPOINT:-}" ] && [ -n "${MODEL_BACKUP_S3_BUCKET:-}" ] &&
+    [ -n "${MODEL_BACKUP_S3_ACCESS_KEY_ID:-}" ] && [ -n "${MODEL_BACKUP_S3_SECRET_ACCESS_KEY:-}" ]
+}
+need_bucket() {
+  : "${MODEL_BACKUP_S3_ENDPOINT:?MODEL_BACKUP_S3_ENDPOINT is not set (the R2 S3 API endpoint)}"
+  : "${MODEL_BACKUP_S3_BUCKET:?MODEL_BACKUP_S3_BUCKET is not set}"
+  : "${MODEL_BACKUP_S3_ACCESS_KEY_ID:?MODEL_BACKUP_S3_ACCESS_KEY_ID is not set}"
+  : "${MODEL_BACKUP_S3_SECRET_ACCESS_KEY:?MODEL_BACKUP_S3_SECRET_ACCESS_KEY is not set}"
+}
 
-export AWS_ACCESS_KEY_ID="$MODEL_BACKUP_S3_ACCESS_KEY_ID"
-export AWS_SECRET_ACCESS_KEY="$MODEL_BACKUP_S3_SECRET_ACCESS_KEY"
-export AWS_DEFAULT_REGION="${MODEL_BACKUP_S3_REGION:-auto}"
-# R2 and other S3-compatible stores do not all take the checksums newer aws-cli sends by default.
-export AWS_REQUEST_CHECKSUM_CALCULATION=when_required
-export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
-export AWS_PAGER=""
-
-BUCKET="$MODEL_BACKUP_S3_BUCKET"
+export AWS_ACCESS_KEY_ID="${MODEL_BACKUP_S3_ACCESS_KEY_ID:-}"
+export AWS_SECRET_ACCESS_KEY="${MODEL_BACKUP_S3_SECRET_ACCESS_KEY:-}"
+BUCKET="${MODEL_BACKUP_S3_BUCKET:-}"
 PREFIX="${MODEL_BACKUP_S3_PREFIX-trenchscanner/}"
 DUMP_DIR="${PREFIX}db-dumps/"
 # Where restore.sh puts the copy of a database it takes just before replacing it: apart from the
@@ -31,7 +33,10 @@ DUMP_DIR="${PREFIX}db-dumps/"
 PRE_DIR="${PREFIX}db-dumps-pre-restore/"
 DUMP_STEM="trenchscanner-"
 
-s3() { aws --endpoint-url "$MODEL_BACKUP_S3_ENDPOINT" "$@"; }
+s3() {
+  need_bucket
+  aws --endpoint-url "$MODEL_BACKUP_S3_ENDPOINT" "$@"
+}
 s3_url() { printf 's3://%s/%s' "$BUCKET" "$1"; }
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die() {

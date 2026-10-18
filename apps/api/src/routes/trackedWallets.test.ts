@@ -13,9 +13,10 @@ const MEMBER = "TrackedMember1111111111111111111111111111111";
 const LABELED = "TrackedLabeLed11111111111111111111111111111";
 const FUNDED = "TrackedFunded111111111111111111111111111111";
 const PROBABLE = "TrackedProbabLe1111111111111111111111111111";
-/** Base58 addresses for the cap: 25 more than the one above. */
+/** Base58 addresses for the cap: TRACKED_WALLET_CAP more than the ones above. */
 const B58 = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-const extra = (i: number) => `TrackedExtra${B58[i]}${"1".repeat(31)}`;
+const extra = (i: number) =>
+  `TrackedExtra${B58[Math.floor(i / B58.length)]}${B58[i % B58.length]}${"1".repeat(30)}`;
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
 
 describe.skipIf(!dbAvailable)("labeled wallets", () => {
@@ -143,10 +144,16 @@ describe.skipIf(!dbAvailable)("labeled wallets", () => {
   });
 
   it(`holds an account to ${TRACKED_WALLET_CAP} labels`, async () => {
-    for (let i = 0; i < TRACKED_WALLET_CAP - 1; i += 1) {
-      const r = await as(ADMIN, "PUT", `/wallets/tracked/${extra(i)}`, { name: `W${i}` });
-      expect(r.statusCode).toBe(200);
-    }
+    // Filled straight in the table: the edit route's rate limit is for people, not this loop.
+    await prisma.userTrackedWallet.createMany({
+      data: Array.from({ length: TRACKED_WALLET_CAP - 1 }, (_, i) => ({
+        userId: ids[0]!,
+        wallet: extra(i),
+        name: `W${i}`,
+        category: "tracked",
+      })),
+    });
+    resetTrackedCache();
     const over = await as(ADMIN, "PUT", `/wallets/tracked/${extra(TRACKED_WALLET_CAP - 1)}`, {
       name: "One more",
     });
@@ -155,7 +162,58 @@ describe.skipIf(!dbAvailable)("labeled wallets", () => {
     expect((await as(ADMIN, "PUT", `/wallets/tracked/${extra(0)}`, { name: "Renamed" })).statusCode).toBe(
       200,
     );
+    // An import past the cap renames what is held and leaves the new ones out.
+    const imported = await as(ADMIN, "POST", "/wallets/tracked/import", {
+      wallets: [
+        { wallet: extra(1), name: "From file", kol: true },
+        { wallet: extra(TRACKED_WALLET_CAP - 1), name: "Past the cap" },
+      ],
+    });
+    expect(imported.json()).toMatchObject({ added: 0, updated: 1, overCap: 1 });
     expect(await prisma.userTrackedWallet.count({ where: { userId: ids[0] } })).toBe(TRACKED_WALLET_CAP);
+    expect(
+      await prisma.userTrackedWallet.findUnique({
+        where: { userId_wallet: { userId: ids[0]!, wallet: extra(1) } },
+      }),
+    ).toMatchObject({ name: "From file", category: "kol" });
+    await prisma.userTrackedWallet.deleteMany({ where: { userId: ids[0], wallet: { not: LABELED } } });
+    resetTrackedCache();
+  });
+
+  it("imports a list for a Pro Mode account: adds, renames, skips empty names, refuses others", async () => {
+    const list = {
+      wallets: [
+        { wallet: extra(0), name: "  First  " },
+        { wallet: extra(1), name: "\u200b" },
+        { wallet: extra(0), name: "First again", kol: true },
+        { wallet: LABELED, name: "Big Fish" },
+        { wallet: extra(2), name: `x'); DROP TABLE "User";--` },
+      ],
+    };
+    expect((await as(MEMBER, "POST", "/wallets/tracked/import", list)).statusCode).toBe(403);
+    expect(
+      (await as(ADMIN, "POST", "/wallets/tracked/import", { wallets: [{ wallet: "nope", name: "x" }] }))
+        .statusCode,
+    ).toBe(400);
+    const res = await as(ADMIN, "POST", "/wallets/tracked/import", list);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      added: 2,
+      updated: 1,
+      overCap: 0,
+      unnamed: 1,
+      cap: TRACKED_WALLET_CAP,
+    });
+    // Names are data: stored and read back exactly, never run.
+    expect((await as(ADMIN, "GET", "/wallets/tracked")).json().wallets).toContainEqual(
+      expect.objectContaining({ wallet: extra(2), name: `x'); DROP TABLE "User";--` }),
+    );
+    const names = (await as(ADMIN, "POST", "/wallets/names", { wallets: [extra(0)] })).json().names;
+    expect(names[extra(0)]).toEqual({ name: "First again", source: "kol", mine: true });
+    // The import never reaches the shared side export.
+    expect((await as(MEMBER, "GET", "/utilities/side-labels")).body).not.toContain(extra(0));
+    await as(ADMIN, "DELETE", `/wallets/tracked/${extra(0)}`);
+    await as(ADMIN, "DELETE", `/wallets/tracked/${extra(2)}`);
   });
 
   it("removes a label, and its names and sides go with it", async () => {

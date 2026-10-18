@@ -5,7 +5,12 @@ import { Prisma, prisma } from "@trenchscanner/core";
 const MAX_DETAIL_CHARS = 4_000;
 
 /** Reads that hand out every user's data: recorded like writes (the query is left out). */
-const AUDITED_READS = ["/table-backups/:id/download", "/model-backups/:id/download", "/subscriptions/export"];
+const AUDITED_READS = [
+  "/table-backups/:id/download",
+  "/db-dumps/:name/download",
+  "/model-backups/:id/download",
+  "/subscriptions/export",
+];
 
 /** The route's params and a capped copy of its JSON body, without the wallet signature. */
 export function actionDetail(

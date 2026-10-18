@@ -104,14 +104,30 @@ describe("parseFeedAppearance", () => {
       outlineResult: false,
     });
     expect(parseFeedAppearance({ outline: "grey" }).outline).toBe(null);
-    // Hiding low market caps is off by default, at 5k; the slider runs 3k-20k in whole 1k steps.
-    expect(parseFeedAppearance({})).toMatchObject({ hideBelowMcap: false, hideBelowMcapUsd: 5_000 });
+    // Hiding low market caps is on by default, at 6k; the slider runs 3k-20k in whole 1k steps.
+    expect(parseFeedAppearance({})).toMatchObject({ hideBelowMcap: true, hideBelowMcapUsd: 6_000 });
+    // A look saved before that with the old default (off at 5k) reads as the new one...
+    expect(parseFeedAppearance({ hideBelowMcap: false, hideBelowMcapUsd: 5_000 })).toMatchObject({
+      hideBelowMcap: true,
+      hideBelowMcapUsd: 6_000,
+    });
+    // ...but one the user changed, or switched off since (saved with the new revision), stays.
+    expect(parseFeedAppearance({ hideBelowMcap: false, hideBelowMcapUsd: 8_000 })).toMatchObject({
+      hideBelowMcap: false,
+      hideBelowMcapUsd: 8_000,
+    });
+    expect(parseFeedAppearance({ hideBelowMcap: true, hideBelowMcapUsd: 5_000 }).hideBelowMcapUsd).toBe(
+      5_000,
+    );
+    expect(
+      parseFeedAppearance({ hideBelowMcap: false, hideBelowMcapUsd: 5_000, hideBelowMcapRev: 2 }),
+    ).toMatchObject({ hideBelowMcap: false, hideBelowMcapUsd: 5_000 });
     expect(parseFeedAppearance({ hideBelowMcap: true, hideBelowMcapUsd: 12_000 })).toMatchObject({
       hideBelowMcap: true,
       hideBelowMcapUsd: 12_000,
     });
     for (const bad of [2_000, 21_000, 4_500, "8000"])
-      expect(parseFeedAppearance({ hideBelowMcapUsd: bad }).hideBelowMcapUsd).toBe(5_000);
+      expect(parseFeedAppearance({ hideBelowMcapUsd: bad }).hideBelowMcapUsd).toBe(6_000);
     // The score tile and TokenSage button are hidden by default; a saved field list is kept as is.
     expect(parseFeedAppearance({}).hidden).toEqual(["score", "sage", "calibrated", "snipers"]);
     // Dark until the user picks a theme; a saved "auto" keeps following the device.
@@ -135,6 +151,7 @@ describe("parseFeedAppearance", () => {
       outlineResult,
       hideBelowMcap,
       hideBelowMcapUsd,
+      hideBelowMcapRev,
       ...older
     } = DEFAULT_FEED_APPEARANCE;
     const parsed = feedAppearanceSchema.safeParse(older);
@@ -153,6 +170,7 @@ describe("parseFeedAppearance", () => {
       outlineResult,
       hideBelowMcap,
       hideBelowMcapUsd,
+      hideBelowMcapRev,
     });
   });
 });

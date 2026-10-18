@@ -10,6 +10,7 @@ import { proStatus } from "../proMode.js";
 import {
   activeTracked,
   cleanTrackedName,
+  importTracked,
   listTracked,
   loadTrackedSides,
   mergeSides,
@@ -29,8 +30,8 @@ import {
  * account's own share of the budget. See walletNames.ts.
  * The bubble map's possible KOL side wallets (POST /wallets/possible-sides): which of a list's
  * wallets the Side Wallet Checker marks as a KOL's possible side wallet. See possibleSides.ts.
- * The reader's own labels (GET /wallets/tracked, PUT and DELETE /wallets/tracked/:wallet): Pro
- * Mode only, at most TRACKED_WALLET_CAP. The names, possible sides and wallet reads lay them over
+ * The reader's own labels (GET /wallets/tracked, PUT and DELETE /wallets/tracked/:wallet, and
+ * POST /wallets/tracked/import for a JSON list): Pro Mode only, at most TRACKED_WALLET_CAP. The names, possible sides and wallet reads lay them over
  * their answers for that reader alone. See trackedWallets.ts.
  */
 
@@ -53,6 +54,14 @@ const trackedSchema = z.object({
 });
 /** Label edits: a person adds or renames a handful at a time. */
 const TRACKED_ROUTE_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
+/** A whole list at once (the web app reads the JSON file and sends its entries). */
+const importSchema = z.object({
+  wallets: z
+    .array(trackedSchema.extend({ wallet: address }))
+    .min(1)
+    .max(TRACKED_WALLET_CAP),
+});
+const IMPORT_ROUTE_RATE_LIMIT = { max: 6, timeWindow: "1 minute" };
 
 export async function registerWalletRoutes(
   app: FastifyInstance,
@@ -99,6 +108,29 @@ export async function registerWalletRoutes(
         .code(409)
         .send({ error: `You can label up to ${TRACKED_WALLET_CAP} wallets. Remove one to add another.` });
     return { wallet: saved.row };
+  });
+
+  app.post("/tracked/import", { config: { rateLimit: IMPORT_ROUTE_RATE_LIMIT } }, async (request, reply) => {
+    const body = importSchema.safeParse(request.body);
+    if (!body.success)
+      return reply.code(400).send({ error: body.error.issues[0]?.message ?? "invalid request" });
+    if (!(await isPro(request))) return reply.code(403).send({ error: "Labeling wallets needs Pro Mode" });
+    // A wallet listed twice takes its last entry; one whose name cleans to nothing is skipped.
+    const byWallet = new Map<string, { wallet: string; name: string; category: "kol" | "tracked" }>();
+    let unnamed = 0;
+    for (const e of body.data.wallets) {
+      const name = cleanTrackedName(e.name);
+      if (!name) {
+        unnamed += 1;
+        continue;
+      }
+      byWallet.delete(e.wallet);
+      byWallet.set(e.wallet, { wallet: e.wallet, name, category: e.kol ? "kol" : "tracked" });
+    }
+    const result = byWallet.size
+      ? await importTracked(request.user!.userId, [...byWallet.values()])
+      : { added: 0, updated: 0, overCap: 0 };
+    return { ...result, unnamed, cap: TRACKED_WALLET_CAP };
   });
 
   // Removing is allowed without Pro Mode: a lapsed account can still clear its own list.

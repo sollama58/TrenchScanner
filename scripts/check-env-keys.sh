@@ -83,6 +83,11 @@ REQUIRED=(
   "trenchscanner-db-backup MODEL_BACKUP_S3_BUCKET"
   "trenchscanner-db-backup MODEL_BACKUP_S3_ACCESS_KEY_ID"
   "trenchscanner-db-backup MODEL_BACKUP_S3_SECRET_ACCESS_KEY"
+  # Admin > Backups lists and links the nightly dumps (backup/dbDumps.ts, read-only token).
+  "trenchscanner-api DB_DUMP_S3_ENDPOINT"
+  "trenchscanner-api DB_DUMP_S3_BUCKET"
+  "trenchscanner-api DB_DUMP_S3_ACCESS_KEY_ID"
+  "trenchscanner-api DB_DUMP_S3_SECRET_ACCESS_KEY"
 )
 
 failed=0
