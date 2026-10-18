@@ -567,7 +567,9 @@ export class LiveCurves {
   }
 
   private record(mint: string, f: Followed, state: CurveState, at: number): void {
-    const changed = this.recordMcap(mint, f, curveMcapSol(state), at);
+    // A graduated curve is emptied at migration: no price, only that it is over (the pool's next).
+    const priced = state.virtualToken > 0 && state.virtualQuote > 0;
+    const changed = priced && this.recordMcap(mint, f, curveMcapSol(state), at);
     if (state.complete) {
       f.complete = true;
       this.stream?.unwatch(KEY_PREFIX + mint);
