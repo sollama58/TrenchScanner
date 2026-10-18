@@ -26,7 +26,16 @@ export interface ModelProfile {
   decides: string;
   /** The shape the window draws for the method. */
   method:
-    "formula" | "trees" | "deep-trees" | "forest" | "two-step" | "regression" | "team" | "rules" | "story";
+    | "formula"
+    | "trees"
+    | "deep-trees"
+    | "forest"
+    | "two-step"
+    | "regression"
+    | "scales"
+    | "team"
+    | "rules"
+    | "story";
   /** What it waits for before it decides, to follow "Decides only once it has"; null when it decides on every coin. */
   waitsFor: string | null;
   /** The share of decision moments its cutoff aims to call, in percent; null when its cutoff is set by the exam alone. */
@@ -140,6 +149,9 @@ export function modelProfile(spec: ContestantSpec, baseHalfLifeDays: number): Mo
   } else if (r?.boosting?.objective === "return") {
     method = "regression";
     decides = "Predicts the profit a call makes";
+  } else if (r?.boosting?.objective === "payoff") {
+    method = "scales";
+    decides = "Weighs the money coins like it won against what they lost";
   } else if (r?.boosting?.objective === "runSize") {
     method = "trees";
     decides = "Predicts how far the coin runs";

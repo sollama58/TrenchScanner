@@ -26,6 +26,7 @@ describe("modelProfile", () => {
     expect(profile("sharp-survivor")).toMatchObject({ goal: "2x", method: "two-step", aimsToCallPct: 12 });
     expect(profile("catcher")).toMatchObject({ goal: "catch", aimsToCallPct: 35 });
     expect(profile("return-regression")).toMatchObject({ method: "regression", aimsToCallPct: 12 });
+    expect(profile("profit-factor")).toMatchObject({ goal: "return", method: "scales", aimsToCallPct: 12 });
     expect(profile("runner").goal).toBe("moonshot");
     expect(profile("trees-no-tokensage").reads).toBe("Every signal except TokenSage's read");
     expect(profile("gems").waitsFor).toBe("the Gemerald filter's go-ahead");

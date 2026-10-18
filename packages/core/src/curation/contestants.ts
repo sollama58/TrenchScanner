@@ -183,6 +183,8 @@ export const TEN_X_CONTESTANT = "ten-x";
 export const CATCHER_CONTESTANT = "catcher";
 /** Boosted trees fitted to the return itself (the "return" objective) - user decision 2026-10-17. */
 export const RETURN_REGRESSION_CONTESTANT = "return-regression";
+/** Boosted trees on made-money-or-not, each call weighted by what it made (the "payoff" objective). */
+export const PROFIT_FACTOR_CONTESTANT = "profit-factor";
 /** Catcher's cutoff anchor: a wider slice than the field's 20%, for the runners outside it. */
 export const CATCHER_CUTOFF_SHARE = 0.35;
 
@@ -664,6 +666,32 @@ export const CONTESTANTS: readonly ContestantSpec[] = [
     recipe: {
       learner: "gbdt",
       boosting: { objective: "return" },
+      cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
+      goal: "return",
+    },
+    standalone: true,
+  },
+  {
+    // User ask 2026-10-18 ("one new novel Profit-based model"). Profit's question asked another
+    // way: not how much a coin will make, but whether its kind wins more money than it loses. Each
+    // training call counts by the money it made or lost (a +500% call, the cap, 10x a stop-out), so the
+    // score is gross gains over gross losses - the profit factor traders read a strategy by. A
+    // classifier's gradient is bounded, so a few +500% runners can't own the fit as they can
+    // Profit's squared error, and a flat coin that never sells barely counts (Profit learns
+    // those are safe and leans to them). Walk-forward 10-11..10-17 on the 6,559 rule-4 rows
+    // replayed under EXIT_PLAN, top 12% a day, two seeds: 2x 14.5% / 10.9%, stop 40%, -3.1% /
+    // -8.0% a call, against Profit's 9.9% / 7.8%, 23-29%, -4.2% / -0.9% (market 14.4%, 54%,
+    // -11.1%). Inside noise on return; it finds more doubles. The exam and live record decide.
+    id: PROFIT_FACTOR_CONTESTANT,
+    name: "Profit Factor",
+    description:
+      "Boosted trees on whether a call made money under the exit plan, each training call weighted by how much it made or lost (capped at +500%), so the score is the money won against the money lost by coins like it; calling about the top 12% of decision moments; judged on return",
+    summary:
+      "Learns which kinds of coins win more money than they lose, counting every past call by what it actually made or lost, and calls the ones where the wins outweigh the losses most.",
+    role: "learner",
+    recipe: {
+      learner: "gbdt",
+      boosting: { objective: "payoff" },
       cutoffShare: HIGH_PRECISION_CUTOFF_SHARE,
       goal: "return",
     },
