@@ -53,6 +53,7 @@ export * from "./scoring/scoreWeightsStore.js";
 export * from "./scoring/matchFilters.js";
 export * from "./scoring/alertGuard.js";
 
+export * from "./filters/filterBounds.js";
 export * from "./filters/starterFilter.js";
 export * from "./filters/starterFilterStore.js";
 export * from "./filters/trackRecord.js";

@@ -18,7 +18,10 @@ export interface FieldSpec {
   hint: string;
   unit?: string;
   step?: number;
-  /** The API's bounds (apps/api/src/routes/filters.ts), so the browser stops a value it would reject. */
+  /**
+   * The API's bounds (apps/api/src/routes/filters.ts), in shown units, so the browser stops a value
+   * it would reject. On the screen's own fields, the screen's ceiling (SAFETY_CEILINGS).
+   */
   min?: number;
   max?: number;
   /** Shows the composite-score explainer (components/ScoreExplainer.tsx) beside the label. */
@@ -32,6 +35,24 @@ export interface FieldSpec {
    */
   scale?: number;
 }
+
+/**
+ * The most a filter may set each field the safety screen also cuts on, in saved units: the loosest
+ * value the screen still lets through (user ask 2026-10-18). Mirrors core's FILTER_SAFETY_CEILINGS
+ * (filters/filterBounds.ts), which the API enforces; new filters open on them (FILTER_SAFETY_DEFAULTS).
+ */
+export const SAFETY_CEILINGS = {
+  maxTop10HolderPct: 40,
+  maxLargestHolderPct: 10,
+  maxFreshTop10WalletPct: 70,
+  maxEmptyTop10WalletPct: 70,
+  maxSniperTop10WalletPct: 70,
+  maxLinkedWalletCount: 19,
+  minCexFundedCount: 20,
+  maxCexFundedCount: 20,
+  maxSniperTopHolderCount: 19,
+  maxBundledSupplyPct: 40,
+} as const satisfies Partial<Record<NumberField, number>>;
 
 /** A field's saved value as the editor and the lists show it. */
 export function shownValue(f: Pick<FieldSpec, "scale">, saved: number): number;
@@ -82,7 +103,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxTop10HolderPct",
         min: 0,
-        max: 100,
+        max: SAFETY_CEILINGS.maxTop10HolderPct,
         label: "Max top-10 holders",
         hint: "share of supply the ten largest holders own, pool aside; 40% and over is always rejected",
         unit: "%",
@@ -90,7 +111,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxLargestHolderPct",
         min: 0,
-        max: 100,
+        max: SAFETY_CEILINGS.maxLargestHolderPct,
         label: "Max largest holder",
         hint: "one wallet's share of supply, pools aside; over 10% is always rejected",
         unit: "%",
@@ -107,7 +128,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxFreshTop10WalletPct",
         min: 0,
-        max: 25,
+        max: Math.floor(SAFETY_CEILINGS.maxFreshTop10WalletPct / 4),
         label: "Max fresh wallets",
         hint: "of the top-25 holders, how many are on wallets first used, or used again after a week idle, in the last day (the same share of the top 10 where only those were read); 18 and over is always rejected",
         unit: "of 25",
@@ -117,7 +138,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxEmptyTop10WalletPct",
         min: 0,
-        max: 10,
+        max: SAFETY_CEILINGS.maxEmptyTop10WalletPct / 10,
         label: "Max empty holder wallets",
         hint: "of the top-10 holders, how many hold nothing else; 8 and over is always rejected",
         unit: "of 10",
@@ -127,16 +148,16 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxSniperTopHolderCount",
         min: 0,
-        max: 25,
+        max: SAFETY_CEILINGS.maxSniperTopHolderCount,
         label: "Max snipers in the top holders",
-        hint: "of the 25 largest holders (pool aside), how many were among the launch's first 25 buyers; tokens not checked yet wait",
+        hint: "of the 25 largest holders (pool aside), how many were among the launch's first 25 buyers; 19 at most; tokens not checked yet wait",
         unit: "of 25",
         step: 1,
       },
       {
         key: "maxSniperTop10WalletPct",
         min: 0,
-        max: 10,
+        max: SAFETY_CEILINGS.maxSniperTop10WalletPct / 10,
         label: "Max snipers in the top 10 (old)",
         hint: "replaced by Max snipers in the top holders above, which reads the top 25 (user decision 2026-10-15); this saved value still applies until you clear it",
         retired: true,
@@ -147,7 +168,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxLinkedWalletCount",
         min: 0,
-        max: 25,
+        max: SAFETY_CEILINGS.maxLinkedWalletCount,
         label: "Max linked top holders (old)",
         hint: "replaced by Max Bundled % (user decision 2026-10-15), which counts these holders and KOL bundles together; this saved value still applies until you clear it",
         unit: "of 25",
@@ -202,9 +223,9 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxBundledSupplyPct",
         min: 0,
-        max: 100,
+        max: SAFETY_CEILINGS.maxBundledSupplyPct,
         label: "Max Bundled %",
-        hint: "supply held by the top-25 holders that are linked (a shared funder or funding minute) or in a KOL's bundle, each counted once: the % on the Linked tile; 20 linked top holders and over is always rejected; tokens not checked yet wait",
+        hint: "supply held by the top-25 holders that are linked (a shared funder or funding minute) or in a KOL's bundle, each counted once: the % on the Linked tile; 40% at most, and 20 linked top holders and over is always rejected; tokens not checked yet wait",
         unit: "%",
       },
       {
@@ -225,7 +246,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "minCexFundedCount",
         min: 0,
-        max: 20,
+        max: SAFETY_CEILINGS.minCexFundedCount,
         label: "Min top holders funded from an exchange",
         hint: "of the 25 largest holders (pool aside), how many were opened from an exchange withdrawal, the way retail arrives; tokens not checked yet wait",
         unit: "of 25",
@@ -234,7 +255,7 @@ export const GROUPS: { title: string; blurb: string; fields: FieldSpec[] }[] = [
       {
         key: "maxCexFundedCount",
         min: 0,
-        max: 20,
+        max: SAFETY_CEILINGS.maxCexFundedCount,
         label: "Max top holders funded from an exchange",
         hint: "of the 25 largest holders (pool aside), how many were opened from an exchange withdrawal; 21 and over is always rejected; tokens not checked yet wait",
         unit: "of 25",

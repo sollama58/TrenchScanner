@@ -12,7 +12,13 @@ import {
 import { usePolling } from "../hooks";
 import { invalidate } from "../cache";
 import { pct, usd } from "../format";
-import { GROUPS, LAUNCHPAD_CHOICES, shownValue } from "../filterFields";
+import {
+  GROUPS,
+  LAUNCHPAD_CHOICES,
+  narrativeCriteriaLines,
+  SAFETY_CEILINGS,
+  shownValue,
+} from "../filterFields";
 import { useSettings } from "../alerts";
 import { ScoreExplainer } from "../components/ScoreExplainer";
 import { BellIcon, EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
@@ -36,8 +42,9 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     mcapMax: config?.mcapFilterMax ?? 1_000_000,
     minVolumeMcapRatio: null,
     minHolderGrowthPct: null,
-    maxTop10HolderPct: null,
-    maxLargestHolderPct: null,
+    // The screen's own fields open on its ceilings (user ask 2026-10-18).
+    maxTop10HolderPct: SAFETY_CEILINGS.maxTop10HolderPct,
+    maxLargestHolderPct: SAFETY_CEILINGS.maxLargestHolderPct,
     maxDevWalletPct: null,
     maxRiskScore: null,
     excludeCriticalRiskFlags: true,
@@ -45,20 +52,20 @@ function blankFilter(config: AppConfig | null, count: number): FilterInput {
     maxTokenAgeMinutes: null,
     narrativeKeywords: [],
     minScore: null,
-    maxFreshTop10WalletPct: 40,
-    maxEmptyTop10WalletPct: 60,
+    maxFreshTop10WalletPct: SAFETY_CEILINGS.maxFreshTop10WalletPct,
+    maxEmptyTop10WalletPct: SAFETY_CEILINGS.maxEmptyTop10WalletPct,
     maxSniperTop10WalletPct: null,
-    maxSniperTopHolderCount: null,
+    maxSniperTopHolderCount: SAFETY_CEILINGS.maxSniperTopHolderCount,
     maxLinkedWalletPct: null,
     maxLinkedWalletCount: null,
     maxFlaggedBuySol: null,
     minCexFundedCount: null,
-    maxCexFundedCount: null,
+    maxCexFundedCount: SAFETY_CEILINGS.maxCexFundedCount,
     maxSameTimeFundedPct: null,
     maxSameTimeFundedCount: null,
     maxLinkedCreatorPct: null,
     maxKolBundledPct: null,
-    maxBundledSupplyPct: null,
+    maxBundledSupplyPct: SAFETY_CEILINGS.maxBundledSupplyPct,
     maxTransferredSupplyPct: null,
     minLiveHolderCount: null,
     minFirstBuyersHolding: null,
@@ -377,6 +384,11 @@ function FilterEditor({
 }) {
   const [keywords, setKeywords] = useState(draft.narrativeKeywords.join(", "));
   const themes = config?.narrativeCategories ?? [];
+  const [narrativeOpen, setNarrativeOpen] = useState(false);
+  const narrativeSummary = [
+    ...(draft.narrativeKeywords.length > 0 ? [`Keywords: ${draft.narrativeKeywords.join(", ")}`] : []),
+    ...narrativeCriteriaLines(draft),
+  ];
   const set = <K extends keyof FilterInput>(key: K, value: FilterInput[K]) =>
     onChange({ ...draft, [key]: value });
   const num = (v: string): number | null => (v.trim() === "" ? null : Number(v));
@@ -563,96 +575,119 @@ function FilterEditor({
         </fieldset>
       ))}
 
-      <fieldset>
-        <legend>Narrative</legend>
-        <label className="field">
-          <span>Keywords (comma-separated, any match)</span>
-          <input
-            value={keywords}
-            placeholder="e.g. ai, cat, trump"
-            onChange={(e) => {
-              setKeywords(e.target.value);
-              set(
-                "narrativeKeywords",
-                e.target.value
-                  .split(",")
-                  .map((k) => k.trim())
-                  .filter(Boolean)
-                  .slice(0, 20),
-              );
-            }}
-          />
-        </label>
-        <p className="muted small">
-          The settings below use TokenSage&apos;s read of what each coin is about. They only match coins that
-          have been read: a coin without a read yet is skipped, and the X-post and trend settings wait for the
-          deep read.
-        </p>
-        {themes.length > 0 && (
-          <div className="grid2">
-            <ThemePicker
-              title="Only these themes"
-              themes={themes}
-              chosen={draft.narrativeCategories}
-              onChange={(v) => set("narrativeCategories", v)}
-            />
-            <ThemePicker
-              title="Never these themes"
-              themes={themes}
-              chosen={draft.excludeNarrativeCategories}
-              onChange={(v) => set("excludeNarrativeCategories", v)}
-            />
-          </div>
+      <fieldset className={narrativeOpen ? "fold-set" : "fold-set closed"}>
+        {/* Collapsed by default (user ask 2026-10-18); a closed section still says what it sets. */}
+        <legend>
+          <button
+            type="button"
+            className="fold-toggle"
+            aria-expanded={narrativeOpen}
+            aria-controls="filter-narrative"
+            onClick={() => setNarrativeOpen((o) => !o)}
+          >
+            <span className="fold-caret" aria-hidden="true">
+              ▸
+            </span>
+            Narrative
+          </button>
+        </legend>
+        {!narrativeOpen && (
+          <p className="muted small">
+            {narrativeSummary.length > 0
+              ? narrativeSummary.join(" · ")
+              : "Nothing set: any narrative matches."}
+          </p>
         )}
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={draft.excludeCopycats}
-            onChange={(e) => set("excludeCopycats", e.target.checked)}
-          />
-          Skip copycats and reused names
-        </label>
-        {/* Merged away (user decision 2026-10-15, notes/overlap-audit-2026-10-15/report.md): shown only
+        <div id="filter-narrative" hidden={!narrativeOpen}>
+          <label className="field">
+            <span>Keywords (comma-separated, any match)</span>
+            <input
+              value={keywords}
+              placeholder="e.g. ai, cat, trump"
+              onChange={(e) => {
+                setKeywords(e.target.value);
+                set(
+                  "narrativeKeywords",
+                  e.target.value
+                    .split(",")
+                    .map((k) => k.trim())
+                    .filter(Boolean)
+                    .slice(0, 20),
+                );
+              }}
+            />
+          </label>
+          <p className="muted small">
+            The settings below use TokenSage&apos;s read of what each coin is about. They only match coins
+            that have been read: a coin without a read yet is skipped, and the X-post and trend settings wait
+            for the deep read.
+          </p>
+          {themes.length > 0 && (
+            <div className="grid2">
+              <ThemePicker
+                title="Only these themes"
+                themes={themes}
+                chosen={draft.narrativeCategories}
+                onChange={(v) => set("narrativeCategories", v)}
+              />
+              <ThemePicker
+                title="Never these themes"
+                themes={themes}
+                chosen={draft.excludeNarrativeCategories}
+                onChange={(v) => set("excludeNarrativeCategories", v)}
+              />
+            </div>
+          )}
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={draft.excludeCopycats}
+              onChange={(e) => set("excludeCopycats", e.target.checked)}
+            />
+            Skip copycats and reused names
+          </label>
+          {/* Merged away (user decision 2026-10-15, notes/overlap-audit-2026-10-15/report.md): shown only
             on a filter that still has them on, so they can be cleared. 98% of late copies are
             copycats, and Spoofed X, the only red flag TokenSage raised, no longer counts. */}
-        {draft.excludeLateCopies && (
+          {draft.excludeLateCopies && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={draft.excludeLateCopies}
+                onChange={(e) => set("excludeLateCopies", e.target.checked)}
+              />
+              Skip late copies (old: replaced by Skip copycats above, which takes in almost every late copy;
+              still applies until you untick it)
+            </label>
+          )}
+          {draft.excludeNarrativeRedFlags && (
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={draft.excludeNarrativeRedFlags}
+                onChange={(e) => set("excludeNarrativeRedFlags", e.target.checked)}
+              />
+              Skip coins with a narrative red flag (old: its only flag was a spoofed X post, which no longer
+              counts; untick to clear it)
+            </label>
+          )}
           <label className="check">
             <input
               type="checkbox"
-              checked={draft.excludeLateCopies}
-              onChange={(e) => set("excludeLateCopies", e.target.checked)}
+              checked={draft.excludeUnrelatedX}
+              onChange={(e) => set("excludeUnrelatedX", e.target.checked)}
             />
-            Skip late copies (old: replaced by Skip copycats above, which takes in almost every late copy;
-            still applies until you untick it)
+            Skip coins whose linked X post is unrelated (needs the deep read)
           </label>
-        )}
-        {draft.excludeNarrativeRedFlags && (
           <label className="check">
             <input
               type="checkbox"
-              checked={draft.excludeNarrativeRedFlags}
-              onChange={(e) => set("excludeNarrativeRedFlags", e.target.checked)}
+              checked={draft.requireTrendMatch}
+              onChange={(e) => set("requireTrendMatch", e.target.checked)}
             />
-            Skip coins with a narrative red flag (old: its only flag was a spoofed X post, which no longer
-            counts; untick to clear it)
+            Only coins whose name is trending on Wikipedia or in the news (needs the deep read)
           </label>
-        )}
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={draft.excludeUnrelatedX}
-            onChange={(e) => set("excludeUnrelatedX", e.target.checked)}
-          />
-          Skip coins whose linked X post is unrelated (needs the deep read)
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={draft.requireTrendMatch}
-            onChange={(e) => set("requireTrendMatch", e.target.checked)}
-          />
-          Only coins whose name is trending on Wikipedia or in the news (needs the deep read)
-        </label>
+        </div>
       </fieldset>
 
       <label className="check">

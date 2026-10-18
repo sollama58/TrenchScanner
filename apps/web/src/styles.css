@@ -5707,6 +5707,28 @@ html:has(dialog.about-modal[open]) {
 .editor-form {
   scroll-margin-top: 80px;
 }
+/* A filter-editor section that folds (Narrative): the legend is its toggle. */
+.fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.fold-caret {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+.fold-toggle[aria-expanded="true"] .fold-caret {
+  transform: rotate(90deg);
+}
+.fold-set.closed > p {
+  margin: 0;
+}
 
 /* ---------- Phones ---------- */
 @media (max-width: 640px) {
