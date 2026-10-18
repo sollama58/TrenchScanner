@@ -3398,3 +3398,14 @@ model PeakWatch {
 
   @@index([nextCheckAt])
 }
+
+/// Helius's identity answer for a wallet (apps/api walletIdentity.ts), kept WALLET_IDENTITY_TTL_MS
+/// (7 days) so a deploy or a second API process doesn't pay its 100 credits again (user decision
+/// 2026-10-18). `identity` null: Helius names nobody (its 404). Rows past the TTL are pruned.
+model WalletIdentity {
+  wallet   String   @id
+  identity Json?
+  readAt   DateTime @default(now())
+
+  @@index([readAt])
+}

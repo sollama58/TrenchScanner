@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HeliusIdentity, IdentityRead } from "@trenchscanner/core";
-import { identityLabels, WalletIdentityReader } from "./walletIdentity.js";
+import { identityLabels, type IdentityStore, WalletIdentityReader } from "./walletIdentity.js";
 
 describe("identityLabels", () => {
   it("turns Helius's name and tags into the modal's labels", () => {
@@ -110,5 +110,48 @@ describe("WalletIdentityReader", () => {
     batch.mockClear();
     await reader.identities(["a", "b", "c"], 3);
     expect(batch).toHaveBeenCalledWith(["b"]);
+  });
+
+  it("answers from the database before asking Helius, and keeps what Helius says", async () => {
+    const okx: HeliusIdentity = { type: "exchange", name: "OKX", category: null, tags: [] };
+    const kept = new Map<string, { at: number; value: HeliusIdentity | null }>([
+      ["a", { at: 0, value: okx }],
+    ]);
+    const store: IdentityStore = {
+      read: vi.fn(async (wallets: readonly string[], since: Date) => {
+        const out = new Map<string, { at: number; value: HeliusIdentity | null }>();
+        for (const w of wallets) {
+          const hit = kept.get(w);
+          if (hit && hit.at >= since.getTime()) out.set(w, hit);
+        }
+        return out;
+      }),
+      write: vi.fn(async (answers: ReadonlyMap<string, HeliusIdentity | null>, at: Date) => {
+        for (const [w, value] of answers) kept.set(w, { at: at.getTime(), value });
+      }),
+    };
+    const batch = vi.fn(async (wallets: readonly string[]) => ({
+      status: "found" as const,
+      value: new Map<string, HeliusIdentity | null>(wallets.map((w) => [w, null])),
+    }));
+    const single = vi.fn(async (): Promise<IdentityRead<HeliusIdentity>> => ({ status: "none" }));
+    const reader = new WalletIdentityReader({ identity: single, batchIdentity: batch }, {}, store);
+
+    expect((await reader.labels("a", 1_000)).map((l) => l.text)).toEqual(["OKX"]);
+    expect(single).not.toHaveBeenCalled();
+
+    const names = await reader.identities(["a", "b"], 1_000);
+    expect([...names.entries()]).toEqual([
+      ["a", okx],
+      ["b", null],
+    ]);
+    expect(batch).toHaveBeenCalledWith(["b"]);
+    expect(store.write).toHaveBeenCalledWith(new Map([["b", null]]), new Date(1_000));
+
+    // A new process (a deploy) reads "b" from the database, not from Helius.
+    const after = new WalletIdentityReader({ identity: single, batchIdentity: batch }, {}, store);
+    expect(await after.labels("b", 2_000)).toEqual([]);
+    expect(single).not.toHaveBeenCalled();
+    expect(batch).toHaveBeenCalledTimes(1);
   });
 });

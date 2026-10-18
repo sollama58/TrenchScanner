@@ -60,7 +60,7 @@ import { registerTelegramRoutes } from "./routes/telegram.js";
 import { registerUtilityRoutes } from "./routes/utilities.js";
 import { registerWalletRoutes } from "./routes/wallets.js";
 import { WalletLiveReader } from "./walletProfile.js";
-import { WalletIdentityReader } from "./walletIdentity.js";
+import { prismaIdentityStore, WalletIdentityReader } from "./walletIdentity.js";
 import { registerTradingRoutes } from "./routes/trading.js";
 import { registerProTradeRoutes } from "./routes/proTrade.js";
 import { registerPortfolioRoutes } from "./routes/portfolio.js";
@@ -629,7 +629,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   const walletLive = walletHelius ? new WalletLiveReader(walletHelius) : null;
   // Helius's name for it (exchanges, protocols, services): its identity API, on paid plans.
   const walletIdentity = env.HELIUS_API_KEY
-    ? new WalletIdentityReader(new HeliusIdentityClient(env.HELIUS_API_KEY))
+    ? new WalletIdentityReader(new HeliusIdentityClient(env.HELIUS_API_KEY), {}, prismaIdentityStore())
     : null;
   await app.register(registerWalletRoutes, {
     prefix: "/wallets",

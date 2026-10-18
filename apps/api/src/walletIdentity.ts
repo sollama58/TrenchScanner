@@ -1,13 +1,68 @@
-import { IDENTITY_BATCH_MAX } from "@trenchscanner/core";
+import { Prisma } from "@prisma/client";
+import { createLogger, IDENTITY_BATCH_MAX, prisma } from "@trenchscanner/core";
 import type { HeliusIdentity, HeliusIdentityClient, IdentityRead } from "@trenchscanner/core";
 import type { WalletLabel } from "./walletProfile.js";
 
 /**
  * Who a wallet is, from Helius's identity list (exchanges, protocols, known services), for the
  * wallet modal and the holder lists' names. Read when someone opens the wallet (or a list, in
- * batches of up to 100) and cached here, so a wallet seen again (or by someone else) costs nothing:
- * each read bills Helius credits.
+ * batches of up to 100) and cached here and in the database, so a wallet seen again (or by someone
+ * else, or after a deploy) costs nothing: each read bills 100 Helius credits.
  */
+
+const logger = createLogger("wallet-identity");
+
+/**
+ * How long an answer is kept, in memory and in the database (user decision 2026-10-18, was 12
+ * hours in memory only): exchange and protocol names don't change, and a username rarely does.
+ */
+export const WALLET_IDENTITY_TTL_MS = 7 * 24 * 3_600_000;
+
+/** Where answers outlive the process: the WalletIdentity table, or a stand-in in tests. */
+export interface IdentityStore {
+  /** Kept answers read at or after `since`, with when each was read. */
+  read(
+    wallets: readonly string[],
+    since: Date,
+  ): Promise<Map<string, { at: number; value: HeliusIdentity | null }>>;
+  write(answers: ReadonlyMap<string, HeliusIdentity | null>, at: Date): Promise<void>;
+}
+
+/** How often the database's expired answers are deleted, at most. */
+const PRUNE_EVERY_MS = 60 * 60_000;
+
+export function prismaIdentityStore(ttlMs = WALLET_IDENTITY_TTL_MS): IdentityStore {
+  let lastPrune = 0;
+  return {
+    async read(wallets, since) {
+      const rows = await prisma.walletIdentity.findMany({
+        where: { wallet: { in: [...wallets] }, readAt: { gte: since } },
+      });
+      return new Map(
+        rows.map((r) => [
+          r.wallet,
+          { at: r.readAt.getTime(), value: (r.identity as HeliusIdentity | null) ?? null },
+        ]),
+      );
+    },
+    async write(answers, at) {
+      if (answers.size === 0) return;
+      const rows = [...answers].map(
+        ([wallet, value]) =>
+          Prisma.sql`(${wallet}, ${value === null ? null : JSON.stringify(value)}::jsonb, ${at})`,
+      );
+      await prisma.$executeRaw`
+        INSERT INTO "WalletIdentity" ("wallet", "identity", "readAt")
+        VALUES ${Prisma.join(rows)}
+        ON CONFLICT ("wallet") DO UPDATE SET "identity" = EXCLUDED."identity", "readAt" = EXCLUDED."readAt"
+      `;
+      if (at.getTime() - lastPrune > PRUNE_EVERY_MS) {
+        lastPrune = at.getTime();
+        await prisma.walletIdentity.deleteMany({ where: { readAt: { lt: new Date(at.getTime() - ttlMs) } } });
+      }
+    },
+  };
+}
 
 /** Helius's name and tags for a wallet as the modal's labels. Exported for tests. */
 export function identityLabels(identity: HeliusIdentity | null): WalletLabel[] {
@@ -52,7 +107,7 @@ export interface WalletIdentityOptions {
 }
 
 const DEFAULT_OPTIONS: WalletIdentityOptions = {
-  ttlMs: 12 * 3_600_000,
+  ttlMs: WALLET_IDENTITY_TTL_MS,
   perMinute: 20,
   maxEntries: 5_000,
   perUserPerMinute: 4,
@@ -79,6 +134,8 @@ export class WalletIdentityReader {
   constructor(
     private readonly helius: Pick<HeliusIdentityClient, "identity" | "batchIdentity">,
     opts: Partial<WalletIdentityOptions> = {},
+    /** Answers kept across deploys and API processes; none in tests. */
+    private readonly store: IdentityStore | null = null,
   ) {
     this.opts = { ...DEFAULT_OPTIONS, ...opts };
   }
@@ -120,6 +177,32 @@ export class WalletIdentityReader {
     return hit;
   }
 
+  /** Answers the database kept for `wallets`, moved into memory. A failed read is no answer. */
+  private async fromStore(
+    wallets: readonly string[],
+    now: number,
+  ): Promise<Map<string, HeliusIdentity | null>> {
+    const out = new Map<string, HeliusIdentity | null>();
+    if (!this.store || wallets.length === 0) return out;
+    const kept = await this.store.read(wallets, new Date(now - this.opts.ttlMs)).catch((err: unknown) => {
+      logger.warn("wallet identity store read failed", { error: String(err) });
+      return new Map<string, { at: number; value: HeliusIdentity | null }>();
+    });
+    for (const [w, { at, value }] of kept) {
+      this.remember(w, value, at);
+      out.set(w, value);
+    }
+    return out;
+  }
+
+  /** Keeps fresh answers in the database too; a failed write only costs a later re-read. */
+  private keep(answers: ReadonlyMap<string, HeliusIdentity | null>, now: number) {
+    if (!this.store || answers.size === 0) return;
+    void this.store
+      .write(answers, new Date(now))
+      .catch((err: unknown) => logger.warn("wallet identity store write failed", { error: String(err) }));
+  }
+
   private remember(wallet: string, value: HeliusIdentity | null, now: number) {
     this.cache.delete(wallet);
     while (this.cache.size >= this.opts.maxEntries) {
@@ -133,6 +216,8 @@ export class WalletIdentityReader {
   async labels(wallet: string, now = Date.now()): Promise<WalletLabel[]> {
     const hit = this.cached(wallet, now);
     if (hit) return identityLabels(hit.value);
+    const kept = await this.fromStore([wallet], now);
+    if (kept.has(wallet)) return identityLabels(kept.get(wallet)!);
     if (!this.take(now)) return [];
     const res = await this.helius
       .identity(wallet)
@@ -144,6 +229,7 @@ export class WalletIdentityReader {
     if (res.status === "failed") return [];
     const value = res.status === "found" ? res.value : null;
     this.remember(wallet, value, now);
+    this.keep(new Map([[wallet, value]]), now);
     return identityLabels(value);
   }
 
@@ -158,12 +244,14 @@ export class WalletIdentityReader {
     user?: IdentityUserKey,
   ): Promise<Map<string, HeliusIdentity | null>> {
     const out = new Map<string, HeliusIdentity | null>();
-    const misses: string[] = [];
+    const unread: string[] = [];
     for (const w of new Set(wallets)) {
       const hit = this.cached(w, now);
       if (hit) out.set(w, hit.value);
-      else misses.push(w);
+      else unread.push(w);
     }
+    for (const [w, value] of await this.fromStore(unread, now)) out.set(w, value);
+    const misses = unread.filter((w) => !out.has(w));
     for (let i = 0; i < misses.length; i += IDENTITY_BATCH_MAX) {
       if (!this.take(now, user)) break;
       const res = await this.helius
@@ -178,6 +266,7 @@ export class WalletIdentityReader {
         this.remember(w, value, now);
         out.set(w, value);
       }
+      this.keep(res.value, now);
     }
     return out;
   }
