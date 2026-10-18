@@ -18,6 +18,13 @@ export const COMPUTE_BUDGET_PROGRAM = "ComputeBudget1111111111111111111111111111
 /** SPL Memo v2: tags a Burn Credits burn (BURN_CREDIT_MEMO in core) so it buys credits, not months. */
 export const MEMO_PROGRAM = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 
+/**
+ * $ASDFASDFA, the access token (SUBSCRIPTION_MINT in core): the only mint this ever burns. The mint
+ * comes to the burn panels from the API, so it is pinned here as well: a compromised API or a
+ * tampered response can't turn "Burn for 1 month" into a burn of the wallet's USDC.
+ */
+export const ACCESS_MINT = "9zB5wRarXMj86MymwLumSKA1Dx35zPqqKfcZtK1Spump";
+
 /** A burnChecked costs ~4.5k compute units; this leaves room without paying for a 200k default. */
 export const BURN_COMPUTE_UNITS = 20_000;
 /** Priority fee per compute unit, in micro-lamports: 20k CU x 100k = 2,000 lamports (0.000002 SOL). */
@@ -87,6 +94,7 @@ function u64le(n: bigint): number[] {
 /** The message a wallet signs: the header, accounts, blockhash and instructions. */
 export function burnMessage(input: BurnTransactionInput): Uint8Array {
   if (input.rawAmount <= 0n) throw new Error("Nothing to burn");
+  if (input.mint !== ACCESS_MINT) throw new Error("That isn't the $ASDFASDFA mint, so nothing was burned");
   if (!Number.isInteger(input.decimals) || input.decimals < 0 || input.decimals > 255)
     throw new Error("Bad decimals");
   const owner = key(input.owner, "wallet");

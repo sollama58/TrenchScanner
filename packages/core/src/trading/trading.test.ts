@@ -14,6 +14,8 @@ import {
   signTransaction,
   verifyTransactionSignatures,
   SYSTEM_PROGRAM_ID,
+  systemTransferInstruction,
+  type InstructionSpec,
 } from "./transaction.js";
 import {
   createKeyProvider,
@@ -25,7 +27,15 @@ import {
 } from "./keyVault.js";
 import { TradingRpc, tipsJito } from "./rpc.js";
 import { decideExit, ladderSoldFraction, sellAmount } from "./exitEngine.js";
-import { associatedTokenAddress, checkInstructions, PROGRAM } from "./txGuard.js";
+import {
+  associatedTokenAddress,
+  checkInstructions,
+  guardSwapTransaction,
+  PROGRAM,
+  type GuardRpc,
+  type TradeExpectation,
+} from "./txGuard.js";
+import { HELIUS_SENDER_TIP_ACCOUNTS } from "./sender.js";
 import {
   dexScreenerPricesUsd,
   JupiterSwapClient,
@@ -514,6 +524,65 @@ describe("instruction guard", () => {
     expect(parseLookupTableAddresses(Uint8Array.from([...header, ...bs58.decode(loaded[0]!)]))).toEqual([
       loaded[0],
     ]);
+  });
+});
+
+describe("swap guard (wallet security audit 2026-10-18)", () => {
+  const wallet = generateWalletKeypair().publicKey;
+  const mint = generateWalletKeypair().publicKey;
+  const tip = HELIUS_SENDER_TIP_ACCOUNTS[0]!;
+  // The chain as the guard reads it: the wallet loses `spent` lamports, nothing else changes.
+  const rpc = (spent: bigint): GuardRpc => ({
+    getAccountsData: async (a) => a.map(() => null),
+    getParsedAccounts: async (a) =>
+      a.map((k) =>
+        k === wallet ? { lamports: 1_000_000_000n, owner: SYSTEM_PROGRAM_ID, token: null } : null,
+      ),
+    simulateParsed: async (_b64, a) => ({
+      error: null,
+      logs: [],
+      accounts: a.map((k) =>
+        k === wallet ? { lamports: 1_000_000_000n - spent, owner: SYSTEM_PROGRAM_ID, token: null } : null,
+      ),
+    }),
+  });
+  const sale: TradeExpectation = {
+    kind: "sell",
+    mint,
+    amount: 1_000n,
+    minSolOut: 0n,
+    feeAllowance: 1_000_000n,
+    maxExternalLamports: 1_000_000n,
+    maxPriorityFeeLamports: 100_000n,
+  };
+  const jupiter = { programId: PROGRAM.jupiterV6, accounts: [], data: [1, 2, 3] };
+  const tx = (...ixs: InstructionSpec[]) => buildLegacyTransaction(wallet, BLOCKHASH, ixs);
+
+  it("refuses a sale that sells nothing, however small its fees", async () => {
+    await expect(
+      guardSwapTransaction(
+        rpc(500_000n),
+        tx(jupiter, systemTransferInstruction(wallet, tip, 500_000n)),
+        wallet,
+        sale,
+      ),
+    ).rejects.toThrow(/sell no tokens/);
+  });
+  it("refuses a transaction with no swap in it", async () => {
+    await expect(
+      guardSwapTransaction(rpc(500_000n), tx(systemTransferInstruction(wallet, tip, 500_000n)), wallet, sale),
+    ).rejects.toThrow(/no swap instruction/);
+  });
+  it("refuses SOL sent to anyone but a tip account", async () => {
+    const stranger = generateWalletKeypair().publicKey;
+    await expect(
+      guardSwapTransaction(
+        rpc(500_000n),
+        tx(jupiter, systemTransferInstruction(wallet, stranger, 500_000n)),
+        wallet,
+        sale,
+      ),
+    ).rejects.toThrow(/isn't a tip account/);
   });
 });
 

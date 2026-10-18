@@ -9,6 +9,7 @@ import { postWithTwoFactor } from "./twoFactor";
 import { toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
 import { onWalletsChanged, withTimeout } from "./wallet";
+import { PRIVY_WALLET_NAME, privyControls } from "./privyBridge";
 
 /**
  * Pro Mode trades from the token modal (user decision 2026-10-17): the API builds a swap for the
@@ -512,6 +513,11 @@ export interface BuiltTrade {
   minOut: string;
   tipLamports: string;
   priorityFeeLamports: string;
+  /**
+   * The coin is one the wallet holds, that passed the safety screen, or that a model called: a
+   * Privy wallet may sign it without Privy's confirm window (user rule 2026-10-18).
+   */
+  quietSign?: boolean;
 }
 
 export type TradeStage = "building" | "signing" | "sending" | "confirming";
@@ -629,8 +635,8 @@ const PUMP = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P";
  * Their arguments end in in_amount (u64), quoted_out (u64), slippage_bps (u16), platform_fee_bps (u8).
  */
 const JUPITER_ROUTES = new Map([
-  ["229,23,203,151,122,227,173,42", 3], // route: user_destination_token_account
-  ["193,32,155,51,65,214,156,129", 6], // shared_accounts_route: destination_token_account
+  ["229,23,203,151,122,227,173,42", { source: 2, dest: 3 }], // route: user_source/destination_token_account
+  ["193,32,155,51,65,214,156,129", { source: 3, dest: 6 }], // shared_accounts_route: source/destination_token_account
 ]);
 /** Pump.fun v3: buy_exact_quote_in_v3 (sol in, min tokens) and sell_v3 (tokens, min sol). */
 const PUMP_BUY = "225,247,80,30,213,179,132,136";
@@ -660,7 +666,8 @@ export interface TradeCheck {
  *
  * And it must be the trade asked for (`trade`): exactly one swap, on the side asked, for the
  * amount asked, with no platform fee, no wider slippage than set, a minimum above zero, its
- * output landing in the wallet's own account, and no more SOL wrapped than a buy spends. What a
+ * output landing in the wallet's own account, its input taken from the wallet's own account for
+ * that side (wrapped SOL for a buy, the coin for a sale), and no more SOL wrapped than a buy spends. What a
  * route's quote should be the browser can't know: the API's guard and simulation check that.
  * Returns why it isn't fine, or null. (The wallet's own preview still shows what it does.)
  */
@@ -758,8 +765,8 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
       const u64At = (offset: number) => view.getBigUint64(offset, true);
       const discriminator = Array.from(d.subarray(0, 8)).join(",");
       if (program === JUPITER) {
-        const destAt = JUPITER_ROUTES.get(discriminator);
-        if (destAt === undefined || d.length < 8 + 19) return "it has a Jupiter step this trade doesn't need";
+        const at = JUPITER_ROUTES.get(discriminator);
+        if (at === undefined || d.length < 8 + 19) return "it has a Jupiter step this trade doesn't need";
         swaps++;
         if (d[d.length - 1] !== 0) return "Jupiter would take a platform fee";
         if (view.getUint16(d.length - 3, true) > trade.slippageBps)
@@ -767,9 +774,15 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
         const inAmount = u64At(d.length - 19);
         if (trade.all ? inAmount <= 0n : inAmount !== trade.amount)
           return "its amount isn't the one you asked for";
-        const dest = acct(destAt);
+        const dest = acct(at.dest);
         if (!(trade.side === "buy" ? trade.ownCoinAccounts : trade.ownWrappedSol).includes(dest))
           return "what it buys wouldn't land in your wallet";
+        // What it spends must come from the account the trade names: a buy's wrapped SOL, a sale's
+        // coin. Without this, a "buy 0.1 SOL" could spend 100,000,000 raw units of any other token
+        // the wallet holds (its USDC, say), since only the amount was compared.
+        const source = acct(at.source);
+        if (!(trade.side === "buy" ? trade.ownWrappedSol : trade.ownCoinAccounts).includes(source))
+          return "it would spend from an account other than the one this trade uses";
         continue;
       }
       if (program === PUMP) {
@@ -856,12 +869,22 @@ export async function runTrade(
   });
   if (problem) throw new TradeError(`The trade built for you looks wrong (${problem}), so it wasn't signed.`);
   onStage("signing", built);
-  const [signed] = await withTimeout(
-    sign.signTransaction({ account, transaction: unsigned, chain: "solana:mainnet" }),
-    "sign",
-  );
-  if (!signed?.signedTransaction) throw new TradeError(`${name} returned no signed transaction`);
-  const bytes = Uint8Array.from(signed.signedTransaction);
+  // Privy's confirm window shows for every trade but one the API marked quiet, and only after
+  // the check above passed: a coin the wallet holds, that passed the safety screen, or a model called.
+  const quiet = built.quietSign === true && name === PRIVY_WALLET_NAME;
+  const signedBytes = quiet
+    ? await withTimeout(
+        privyControls().then((privy) => privy.signQuietly(input.owner, unsigned)),
+        "sign",
+      )
+    : (
+        await withTimeout(
+          sign.signTransaction({ account, transaction: unsigned, chain: "solana:mainnet" }),
+          "sign",
+        )
+      )[0]?.signedTransaction;
+  if (!signedBytes) throw new TradeError(`${name} returned no signed transaction`);
+  const bytes = Uint8Array.from(signedBytes);
   // Its signature, known from here on (one signer: the 64 bytes after the count), so anything
   // that goes wrong past this point can say which transaction to check before trading again.
   const signature = bytes.length >= 65 && bytes[0] === 1 ? bs58.encode(bytes.subarray(1, 65)) : undefined;

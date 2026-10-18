@@ -17,7 +17,7 @@ import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 import { resetContestStateCache } from "../contest.js";
-import { plainRefusal, TradeCooldown } from "./proTrade.js";
+import { plainRefusal, quietSign, TradeCooldown } from "./proTrade.js";
 
 describe("plainRefusal", () => {
   it("says the common refusals in the trader's words", () => {
@@ -461,5 +461,75 @@ describe.skipIf(!dbAvailable)("Pro Mode for the top holders", () => {
     expect(await proHolderStanding(HOLDER, next)).toMatchObject({ state: "top" });
     expect(await proHolderStanding(NEWBIE, next)).toMatchObject({ state: "pending" });
     resetProHolderCacheForTests();
+  });
+});
+
+/**
+ * Privy's confirm window is skipped only on a coin the wallet holds, that passed the safety
+ * screen, or that a model called (user rule 2026-10-18); anything else asks.
+ */
+describe.skipIf(!dbAvailable)("quietSign", () => {
+  const tag = `quiet-sign-${Date.now()}`;
+  const wallet = `${tag}-wallet`;
+  const mints = {
+    unknown: `${tag}-unknown`,
+    screened: `${tag}-screened`,
+    failed: `${tag}-failed`,
+    called: `${tag}-called`,
+    held: `${tag}-held`,
+    rejected: `${tag}-rejected`,
+  };
+  const rpc = {
+    getTokenBalance: async (_owner: string, mint: string) =>
+      mint === mints.held ? { raw: 5n, decimals: 6, accounts: [] } : { raw: 0n, decimals: 6, accounts: [] },
+  };
+
+  beforeAll(async () => {
+    const token = (mint: string, data: Record<string, unknown> = {}) =>
+      prisma.token.create({ data: { mintAddress: mint, ...data }, select: { id: true } });
+    const screened = await token(mints.screened);
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: screened.id, priceUsd: 1, marketCapUsd: 1, rugScreenPassed: true },
+    });
+    // Passed once, failed on its latest scan.
+    const failed = await token(mints.failed);
+    await prisma.tokenSnapshot.create({
+      data: {
+        tokenId: failed.id,
+        priceUsd: 1,
+        marketCapUsd: 1,
+        rugScreenPassed: true,
+        takenAt: new Date(Date.now() - 60_000),
+      },
+    });
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: failed.id, priceUsd: 1, marketCapUsd: 1, rugScreenPassed: false },
+    });
+    const rejected = await token(mints.rejected, { screenRejectedAt: new Date() });
+    await prisma.tokenSnapshot.create({
+      data: { tokenId: rejected.id, priceUsd: 1, marketCapUsd: 1, rugScreenPassed: true },
+    });
+    const called = await token(mints.called);
+    await prisma.curatedAlert.create({
+      data: { tokenId: called.id, source: "test", confidence: 50, anchorPriceUsd: 1, anchorMcapUsd: 1 },
+    });
+  });
+  afterAll(async () => {
+    if (dbAvailable) await prisma.token.deleteMany({ where: { mintAddress: { startsWith: tag } } });
+  });
+
+  it("skips the window only for held, screened or called coins", async () => {
+    expect(await quietSign(rpc, wallet, mints.unknown, "buy")).toBe(false);
+    expect(await quietSign(rpc, wallet, mints.failed, "buy")).toBe(false);
+    expect(await quietSign(rpc, wallet, mints.rejected, "buy")).toBe(false);
+    expect(await quietSign(rpc, wallet, mints.screened, "buy")).toBe(true);
+    expect(await quietSign(rpc, wallet, mints.called, "buy")).toBe(true);
+    expect(await quietSign(rpc, wallet, mints.held, "buy")).toBe(true);
+    // A sale is of a coin the wallet holds.
+    expect(await quietSign(rpc, wallet, mints.unknown, "sell")).toBe(true);
+  });
+  it("asks when the balance can't be read", async () => {
+    const down = { getTokenBalance: async () => Promise.reject(new Error("down")) };
+    expect(await quietSign(down, wallet, mints.unknown, "buy")).toBe(false);
   });
 });

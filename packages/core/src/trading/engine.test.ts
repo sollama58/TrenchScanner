@@ -30,6 +30,7 @@ import {
   decodeMessage,
   parseWireTransaction,
   SYSTEM_PROGRAM_ID,
+  systemTransferInstruction,
   verifyTransactionSignatures,
 } from "./transaction.js";
 import { associatedTokenAddress, checkInstructions, PROGRAM, type ParsedAccountState } from "./txGuard.js";
@@ -40,6 +41,7 @@ const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() =
 const BLOCKHASH = bs58.encode(new Uint8Array(32).fill(3));
 const keys = createLocalKeyProvider("ab".repeat(32));
 const LAMPORTS = 1_000_000_000n;
+const u64le = (n: bigint) => Array.from({ length: 8 }, (_, i) => Number((n >> BigInt(8 * i)) & 255n));
 
 type Effect = {
   wallet: string;
@@ -71,7 +73,9 @@ class FakeChain {
   price = new Map<string, number>();
   solUsd = 200;
   /** "dust": the build delivers a thousandth of what it quotes (a thin pool it routes through). */
-  hostile: "none" | "drain-sol" | "steal-other" | "reassign" | "skim" | "dust" = "none";
+  hostile:
+    "none" | "drain-sol" | "steal-other" | "reassign" | "skim" | "dust" | "sell-nothing" | "tip-stranger" =
+    "none";
   /** The independent price feed (SOL per whole token); null follows `price`, as a fair feed would. */
   independent: Map<string, number> | null = null;
   /** Jupiter's quote names a minimum of 1 (a compromised quote). */
@@ -242,6 +246,7 @@ class FakeChain {
     inAmount: bigint,
     outAmount: bigint,
     feeLamports: bigint = this.estimateFee,
+    route?: { quotedOut: bigint; slippageBps: number },
   ) {
     // Shaped like a real swap: one call to the aggregator listing the token accounts it moves.
     // A hostile "skim" instead sends the trade's worth to a stranger with a System transfer.
@@ -257,6 +262,10 @@ class FakeChain {
             recentBlockhash: BLOCKHASH,
           })
         : buildLegacyTransaction(userPublicKey, BLOCKHASH, [
+            // A route that also pays a stranger a little, inside the fee allowance.
+            ...(this.hostile === "tip-stranger"
+              ? [systemTransferInstruction(userPublicKey, generateWalletKeypair().publicKey, 100_000n)]
+              : []),
             // The priority fee as a route sets it: 100,000 units at fee x 10 micro-lamports.
             ...computeBudgetInstructions(100_000, feeLamports * 10n),
             {
@@ -266,7 +275,19 @@ class FakeChain {
                 ...(other ? [{ pubkey: this.ata(userPublicKey, other.split(":")[1]!), writable: true }] : []),
                 { pubkey: generateWalletKeypair().publicKey, writable: true },
               ],
-              data: [Number(this.nonce++ % 256n)],
+              // Jupiter's `route` instruction (empty route plan), its arguments ending in in_amount,
+              // quoted_out_amount, slippage_bps and platform_fee_bps as the guards read them.
+              data: route
+                ? [
+                    ...[229, 23, 203, 151, 122, 227, 173, 42],
+                    ...[0, 0, 0, 0],
+                    ...u64le(inAmount),
+                    ...u64le(route.quotedOut),
+                    route.slippageBps & 255,
+                    route.slippageBps >> 8,
+                    0,
+                  ]
+                : [Number(this.nonce++ % 256n)],
             },
           ]);
     const fee = 10_000n;
@@ -277,6 +298,12 @@ class FakeChain {
       solDelta: buying ? -inAmount - fee : outAmount - fee,
       tokenDelta: buying ? outAmount : -inAmount,
     };
+    // A "sale" that keeps the tokens and only pays fees: the position stays open and due.
+    if (this.hostile === "sell-nothing" && !buying) {
+      effect.tokenDelta = 0n;
+      effect.solDelta = -fee;
+    }
+    if (this.hostile === "tip-stranger") effect.solDelta -= 100_000n;
     if (this.hostile === "drain-sol") effect.solDelta = -(this.sol.get(userPublicKey) ?? 0n);
     if (this.hostile === "reassign") effect.reassign = true;
     if (this.hostile === "steal-other") {
@@ -307,8 +334,11 @@ class FakeChain {
         outputMint,
         inAmount: amount.toString(),
         outAmount: out.toString(),
-        otherAmountThreshold: this.lowballThreshold ? "1" : ((out * 85n) / 100n).toString(),
+        otherAmountThreshold: this.lowballThreshold
+          ? "1"
+          : ((out * BigInt(10_000 - (slippageBps ?? 1_500))) / 10_000n).toString(),
         priceImpactPct: "0",
+        slippageBps: slippageBps ?? 1_500,
       } satisfies SwapQuote;
     },
     swapTransaction: async ({ quote, userPublicKey, priorityFeeLamports, jitoTipLamports }) => {
@@ -324,6 +354,7 @@ class FakeChain {
           BigInt(quote.inAmount),
           BigInt(quote.outAmount),
           priorityFeeLamports !== undefined ? BigInt(priorityFeeLamports) : this.estimateFee,
+          { quotedOut: BigInt(quote.outAmount), slippageBps: Number(quote.slippageBps) },
         ),
         lastValidBlockHeight: this.height + 150,
       };
@@ -597,15 +628,15 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     expect(chain.sol.get(walletKey)).toBe(LAMPORTS);
   });
 
-  it("raises a quote's lowball minimum to the independent floor, so a thin route's dust is refused", async () => {
+  it("refuses a Jupiter route whose minimum is a lowball, so a thin route's dust is refused", async () => {
     await freshSignal();
     chain.lowballThreshold = true;
     chain.hostile = "dust";
     expect((await tick()).buys).toBe(0);
     const p = await position();
     expect(p.status).toBe("failed");
-    // 0.05 SOL is 1,000 tokens at the independent price: the floor is that less 15% and a tenth.
-    expect(p.error).toMatch(/under the quoted minimum 765000000/);
+    // The route's own floor must be its quote less the slippage asked (checkBotJupiterSwap).
+    expect(p.error).toMatch(/minimum is under the slippage asked for/);
     expect(chain.sent).toHaveLength(0);
   });
 
@@ -697,8 +728,28 @@ describe.skipIf(!dbAvailable)("trading engine", () => {
     expect((await tick()).buys).toBe(0);
     const p = await position();
     expect(p.status).toBe("failed");
-    expect(p.error).toMatch(/to others/);
+    // A transfer and no swap at all.
+    expect(p.error).toMatch(/no swap instruction/);
     expect(chain.sent).toHaveLength(0);
+  });
+
+  it("refuses a swap that pays SOL to anyone but a tip account", async () => {
+    await freshSignal();
+    chain.hostile = "tip-stranger";
+    expect((await tick()).buys).toBe(0);
+    const p = await position();
+    expect(p.status).toBe("failed");
+    expect(p.error).toMatch(/isn't a tip account/);
+    expect(chain.sent).toHaveLength(0);
+  });
+
+  it("refuses a sale that would sell nothing, so a route can't take fees on every pass", async () => {
+    await opened();
+    const sent = chain.sent.length;
+    chain.hostile = "sell-nothing";
+    chain.price.set(mint, 0.02); // under the stop
+    expect((await tick(1)).sells).toBe(0);
+    expect(chain.sent).toHaveLength(sent);
   });
 
   it("does not count a missing price toward stuck, and still closes at the hold cap", async () => {
@@ -1335,7 +1386,7 @@ describe("a legacy transaction", () => {
       SYSTEM_PROGRAM_ID,
     ]);
     // 2,000 units at 500,000 micro-lamports: 1,000 lamports.
-    expect(checkInstructions(decoded, decoded.staticKeys, payer)).toEqual({
+    expect(checkInstructions(decoded, decoded.staticKeys, payer)).toMatchObject({
       externalLamports: 1_000n,
       priorityFeeLamports: 1_000n,
       jupiterRoutesChecked: 0,

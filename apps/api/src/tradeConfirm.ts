@@ -37,7 +37,9 @@ export const confirmationSchema = z.object({
 const challengeSchema = z.object({
   // GET only for a download (an admin table backup), whose confirmation rides in the query.
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]),
-  path: z.string().regex(/^\/(trading|admin)\/[A-Za-z0-9/_-]{1,200}$/),
+  // Or pairing a phone to an admin wallet (/auth/link/code): the phone gets full admin with no
+  // signatures of its own, so minting one is signed for like the admin actions it could then do.
+  path: z.string().regex(/^\/((trading|admin)\/[A-Za-z0-9/_-]{1,200}|auth\/link\/code)$/),
   body: z.record(z.string(), z.unknown()).default({}),
 });
 
@@ -63,6 +65,7 @@ export function requestDigest(method: string, path: string, body: Record<string,
 
 /** What the wallet is asked to approve, in words, from the route. */
 export function actionLabel(method: string, path: string): string {
+  if (path === "/auth/link/code") return "Pair a phone with this admin wallet (full admin access)";
   if (path.startsWith("/admin/")) {
     const rest = path.slice("/admin/".length);
     if (rest === "ai/switch") return "Change the AI reviewer switch";
@@ -92,7 +95,7 @@ export function confirmationMessage(input: {
   issuedAt: Date;
 }): string {
   return [
-    input.path.startsWith("/admin/")
+    input.path.startsWith("/admin/") || input.path.startsWith("/auth/")
       ? "TrenchScanner admin: confirm this action"
       : "TrenchScanner trading bot: confirm this action",
     "",
@@ -150,7 +153,7 @@ export async function requireTradeConfirmation(
   const parsed = confirmationSchema.safeParse(isGet ? request.query : body.confirmation);
   if (!parsed.success) {
     await reply.code(428).send({
-      error: pathOf(request).startsWith("/admin/")
+      error: /^\/(admin|auth)\//.test(pathOf(request))
         ? "Approve this in your wallet: this admin action needs a fresh signature."
         : "Approve this in your wallet: every trading bot action needs a fresh signature.",
       code: "confirmation_required",

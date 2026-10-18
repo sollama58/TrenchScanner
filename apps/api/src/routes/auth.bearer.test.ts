@@ -5,6 +5,8 @@ import { prisma, loadEnv } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME, sessionTokens } from "../auth/session.js";
+import bs58 from "bs58";
+import nacl from "tweetnacl";
 
 describe("sessionTokens", () => {
   it("reads the cookie first, then a Bearer header, without repeating one token", () => {
@@ -158,5 +160,59 @@ describe.skipIf(!dbAvailable)("session token in an Authorization header", () => 
     });
     expect(out.statusCode).toBe(200);
     expect((await me({ authorization: `Bearer ${token}` })).statusCode).toBe(401);
+  });
+});
+
+/**
+ * An admin's paired phone is a full admin that skips the wallet signatures the riskiest admin
+ * actions ask for, so minting the code that makes one needs the admin wallet's own signature
+ * (wallet security audit 2026-10-18, H1): a stolen browser session alone can't pair itself a phone.
+ */
+describe.skipIf(!dbAvailable)("pairing a phone to an admin wallet", () => {
+  const base = loadEnv();
+  const signer = createSessionSigner(base.JWT_SECRET, base.SESSION_TTL_HOURS);
+  const keys = nacl.sign.keyPair();
+  const wallet = bs58.encode(keys.publicKey);
+  let app: FastifyInstance;
+  let token = "";
+
+  beforeAll(async () => {
+    app = await buildServer({ ...base, ADMIN_WALLET_ADDRESSES: wallet });
+    const id = (await prisma.user.create({ data: { walletAddress: wallet } })).id;
+    token = await signer.sign({ userId: id, walletAddress: wallet, sessionVersion: 0 });
+  });
+  afterAll(async () => {
+    await app?.close();
+    if (dbAvailable) await prisma.user.deleteMany({ where: { walletAddress: wallet } });
+  });
+
+  const mint = (payload?: Record<string, unknown>) =>
+    app.inject({
+      method: "POST",
+      url: "/auth/link/code",
+      headers: { authorization: `Bearer ${token}` },
+      ...(payload ? { payload } : {}),
+    });
+
+  it("needs the admin wallet's signature, once", async () => {
+    const unsigned = await mint();
+    expect(unsigned.statusCode).toBe(428);
+    expect(unsigned.json().code).toBe("confirmation_required");
+
+    const challenge = await app.inject({
+      method: "POST",
+      url: "/admin/confirm",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { method: "POST", path: "/auth/link/code", body: {} },
+    });
+    expect(challenge.statusCode).toBe(200);
+    const { nonce, message } = challenge.json<{ nonce: string; message: string }>();
+    expect(message).toMatch(/Pair a phone/);
+    const signature = bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), keys.secretKey));
+    const signed = await mint({ confirmation: { nonce, signature } });
+    expect(signed.statusCode).toBe(200);
+    expect(typeof signed.json().code).toBe("string");
+    // Single use.
+    expect((await mint({ confirmation: { nonce, signature } })).statusCode).toBe(403);
   });
 });
