@@ -3423,6 +3423,58 @@ body.drawer-open .trades-drawer {
   padding-right: 18px;
   font-size: 11.5px;
 }
+/* The Portfolio tab (tabs/PortfolioTab.tsx): the TRADES panel's cards and figures, in panels. */
+.portfolio-scope {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+.portfolio-wallet {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.portfolio-totals {
+  margin-bottom: 16px;
+}
+.portfolio-grid {
+  margin-bottom: 8px;
+}
+.portfolio-sub {
+  margin: 18px 0 10px;
+  font-size: 14px;
+}
+.portfolio-empty {
+  margin: 4px 0 8px;
+}
+.portfolio-link {
+  margin-left: 8px;
+}
+.portfolio-stats {
+  margin: 0 -20px;
+  border-top: 1px solid var(--border);
+}
+.portfolio-stats .trades-stats {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+.portfolio-stats .trades-stat-window {
+  display: none;
+}
+.portfolio-table td,
+.portfolio-table th {
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .trades-grid.portfolio-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .portfolio-stats {
+    margin: 0 -16px;
+  }
+  .portfolio-stats .trades-stat:first-child {
+    padding-left: 16px;
+  }
+}
 .trades-grid-wrap {
   flex: 1;
   min-height: 0;

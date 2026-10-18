@@ -1,6 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { burnCreditPrices, grantCredits, prisma, saveBurnCreditPrices, walletTag } from "@trenchscanner/core";
+import {
+  burnCreditPrices,
+  CreditGrantError,
+  grantCredits,
+  prisma,
+  saveBurnCreditPrices,
+  walletTag,
+} from "@trenchscanner/core";
 
 /**
  * Burn Credits in the Admin tab (routes registered behind authenticateAdmin, under /admin):
@@ -35,7 +42,9 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
     const [prices, byKind, wallets, recent] = await Promise.all([
       burnCreditPrices(),
       prisma.burnCreditEntry.groupBy({ by: ["kind"], _sum: { delta: true }, _count: { _all: true } }),
-      prisma.burnCreditEntry.findMany({ distinct: ["wallet"], select: { wallet: true } }),
+      // Counted in SQL: Prisma's `distinct` runs in memory here (no nativeDistinct), which read
+      // every ledger row into the API on each load.
+      prisma.$queryRaw<{ n: bigint }[]>`SELECT COUNT(DISTINCT "wallet") AS n FROM "BurnCreditEntry"`,
       prisma.burnCreditEntry.findMany({
         orderBy: { createdAt: "desc" },
         take: 50,
@@ -57,7 +66,7 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
     return {
       prices,
       totals: {
-        wallets: wallets.length,
+        wallets: Number(wallets[0]?.n ?? 0),
         burns: count("burn"),
         earned: sum("burn"),
         granted: sum("grant"),
@@ -86,7 +95,13 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
     }
     const { wallet, delta, note } = parsed.data;
     const by = request.user!.walletAddress;
-    const balance = await grantCredits(wallet, delta, note ? `${note} (by ${by})` : `by ${by}`);
+    let balance: number;
+    try {
+      balance = await grantCredits(wallet, delta, note ? `${note} (by ${by})` : `by ${by}`);
+    } catch (err) {
+      if (err instanceof CreditGrantError) return reply.code(409).send({ error: err.message });
+      throw err;
+    }
     request.log.info({ wallet: walletTag(wallet), delta, by: walletTag(by) }, "granted burn credits by hand");
     return { wallet, balance };
   });

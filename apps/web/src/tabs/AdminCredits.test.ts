@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pricesChangeText } from "./AdminCredits";
+import { grantCreditsText, pricesChangeText } from "./AdminCredits";
 
 describe("the Burn Credit price confirmation", () => {
   const prices = { tokensPerCredit: 100_000, cost: { token: 1, wallet: 2 } };
@@ -14,5 +14,14 @@ describe("the Burn Credit price confirmation", () => {
 
   it("calls out a lookup made free", () => {
     expect(pricesChangeText(prices, [100_000, 0, 2])).toMatch(/A cost of 0 makes that lookup free/);
+  });
+});
+
+describe("the Burn Credit grant confirmation", () => {
+  const wallet = "AnnounceAdmin1111111111111111111111111111111";
+
+  it("names the whole address", () => {
+    expect(grantCreditsText(wallet, 10)).toBe(`Award ${wallet} 10 Burn Credits?`);
+    expect(grantCreditsText(wallet, -1)).toBe(`Take 1 credits back from ${wallet}?`);
   });
 });

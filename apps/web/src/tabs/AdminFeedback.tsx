@@ -4,7 +4,7 @@ import { invalidate } from "../cache";
 import { shortAddress } from "../format";
 import { usePolling } from "../hooks";
 import { BugIcon, StarIcon, TrashIcon } from "../components/Icons";
-import { REPORT_COUNTS_PATH, type ReportCounts } from "../components/AdminReportsBadge";
+import { REPORT_COUNTS_PATH, refreshReportCounts, type ReportCounts } from "../components/AdminReportsBadge";
 import { Load, Panel, Tag, Wallet, when } from "./adminShared";
 
 type Status = "new" | "seen" | "done";
@@ -109,6 +109,8 @@ export function FeedbackAdmin() {
     invalidate(REPORT_COUNTS_PATH);
     invalidate("/admin/feedback?");
     q.reload();
+    // The badges on the Admin tab button are already mounted: dropping the cache alone leaves them stale.
+    refreshReportCounts();
   };
 
   const filters: { id: StatusFilter; label: string }[] = [
@@ -181,6 +183,13 @@ function ReportItem({ report: r, onChanged }: { report: Report; onChanged: () =>
   const [error, setError] = useState<string | null>(null);
   const [shot, setShot] = useState<string | null>(null);
   const [note, setNote] = useState(r.adminNote ?? "");
+  // Another admin's saved note replaces the field unless this admin has typed over it, so a
+  // poll never leaves the old text one Enter away from overwriting theirs.
+  const [savedNote, setSavedNote] = useState(r.adminNote ?? "");
+  if ((r.adminNote ?? "") !== savedNote) {
+    setSavedNote(r.adminNote ?? "");
+    if (note === savedNote) setNote(r.adminNote ?? "");
+  }
   const c = r.context ?? {};
   const browser = browserName(c.userAgent);
   const link = safePageUrl(c.url);
@@ -295,7 +304,7 @@ function ReportItem({ report: r, onChanged }: { report: Report; onChanged: () =>
           aria-label="Admin note"
           onChange={(e) => setNote(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void saveNote();
+            if (e.key === "Enter" && !busy) void saveNote();
           }}
         />
         {note.trim() !== (r.adminNote ?? "") && (

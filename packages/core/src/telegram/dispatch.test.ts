@@ -1039,10 +1039,14 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch fan-out", () => {
       now: () => t,
       // Each sleep yields for a moment of real time before the clock moves, so the database
       // writes keep pace (each send claims its row first) and a send already under way isn't
-      // stamped as if it had waited out a wait that was only racing it.
+      // stamped as if it had waited out a wait that was only racing it. The clock moves TO the
+      // sleep's end, not BY its length, as a real one does: the pass races a sleep against its
+      // sends and starts a new one each time a send wins, and on a loaded machine those losing
+      // 10 s sleeps used to add up past the pass budget before the limited chat's turn came.
       sleep: async (ms) => {
+        const until = t + ms;
         await new Promise((resolve) => setTimeout(resolve, ms >= 1_000 ? 100 : 5));
-        t += ms;
+        t = Math.max(t, until);
       },
       hasAccess: async () => true,
       oldestOpenTransaction: async () => null,

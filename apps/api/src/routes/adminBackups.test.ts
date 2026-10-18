@@ -11,10 +11,14 @@ import {
   sealBackupPayload,
   type Env,
 } from "@trenchscanner/core";
+import bs58 from "bs58";
+import nacl from "tweetnacl";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
 
-const ADMIN_WALLET = "AdminBackups1111111111111111111111111111111";
+/** A real keypair: a restore and a table download take the admin wallet's signature. */
+const adminKeys = nacl.sign.keyPair();
+const ADMIN_WALLET = bs58.encode(adminKeys.publicKey);
 const OTHER_WALLET = "NotAdminBackups111111111111111111111111111";
 
 const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() => false);
@@ -22,9 +26,15 @@ const dbAvailable = await prisma.$queryRaw`SELECT 1`.then(() => true).catch(() =
 const SEAT = "backup-test-seat";
 const userIds: Record<"admin" | "other", string> = { admin: "", other: "" };
 
+/**
+ * One request as `as`. A restore is signed by the admin wallet as the dashboard does (asks
+ * /admin/confirm for the text and sends the signature), unless `unsigned`; `deviceId` makes it a
+ * paired phone's session.
+ */
 async function call(
   as: "admin" | "other",
   req: { method: "GET" | "POST" | "PATCH"; url: string; payload?: unknown; headers?: Record<string, string> },
+  opts: { unsigned?: boolean; deviceId?: string } = {},
 ) {
   const env: Env = { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMIN_WALLET };
   const app = await buildServer(env);
@@ -32,15 +42,40 @@ async function call(
     const cookie = await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
       userId: userIds[as],
       walletAddress: as === "admin" ? ADMIN_WALLET : OTHER_WALLET,
+      ...(opts.deviceId ? { deviceId: opts.deviceId } : {}),
     });
-    return await app.inject({
-      ...req,
-      payload: req.payload as string | Buffer | object | undefined,
-      cookies: { [SESSION_COOKIE_NAME]: cookie },
-    });
+    const cookies = { [SESSION_COOKIE_NAME]: cookie };
+    let payload = req.payload as string | Buffer | object | undefined;
+    if (as === "admin" && !opts.unsigned && !opts.deviceId && /\/restore$/.test(req.url)) {
+      const body = (payload ?? {}) as Record<string, unknown>;
+      const confirmation = await signed(app, cookies, req.method, req.url, body);
+      if (confirmation) payload = { ...body, confirmation };
+    }
+    return await app.inject({ ...req, payload, cookies });
   } finally {
     await app.close();
   }
+}
+
+async function signed(
+  app: Awaited<ReturnType<typeof buildServer>>,
+  cookies: Record<string, string>,
+  method: string,
+  path: string,
+  body: Record<string, unknown>,
+) {
+  const challenge = await app.inject({
+    method: "POST",
+    url: "/admin/confirm",
+    cookies,
+    payload: { method, path, body },
+  });
+  if (challenge.statusCode !== 200) return null;
+  const { nonce, message } = challenge.json<{ nonce: string; message: string }>();
+  return {
+    nonce,
+    signature: bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), adminKeys.secretKey)),
+  };
 }
 
 describe.skipIf(!dbAvailable)("admin model backups", () => {
@@ -56,6 +91,7 @@ describe.skipIf(!dbAvailable)("admin model backups", () => {
     if (!dbAvailable) return;
     await prisma.modelBackup.deleteMany({});
     await prisma.curatorModel.deleteMany({ where: { contestant: SEAT } });
+    await prisma.adminAction.deleteMany({ where: { wallet: { in: [ADMIN_WALLET, OTHER_WALLET] } } });
     await prisma.user.deleteMany({ where: { walletAddress: { in: [ADMIN_WALLET, OTHER_WALLET] } } });
   });
 
@@ -225,5 +261,111 @@ describe.skipIf(!dbAvailable)("admin model backups", () => {
       payload: { confirm: true, seats: [SEAT] },
     });
     expect(partial.json()).toMatchObject({ seats: [SEAT] });
+  });
+  it("asks a browser session for the wallet's signature to restore or download table data, not a paired phone", async () => {
+    const restore = {
+      method: "POST" as const,
+      url: "/admin/model-backups/no-such-backup/restore",
+      payload: { confirm: true },
+    };
+    const unsigned = await call("admin", restore, { unsigned: true });
+    expect(unsigned.statusCode).toBe(428);
+    expect(unsigned.json().code).toBe("confirmation_required");
+    // Signed, it gets as far as the lookup.
+    expect((await call("admin", restore)).statusCode).toBe(404);
+    // A signature for another request is worthless for this one.
+    const env: Env = { ...loadEnv(), ADMIN_WALLET_ADDRESSES: ADMIN_WALLET };
+    const app = await buildServer(env);
+    try {
+      const cookies = {
+        [SESSION_COOKIE_NAME]: await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
+          userId: userIds.admin,
+          walletAddress: ADMIN_WALLET,
+        }),
+      };
+      const other = await signed(app, cookies, "POST", "/admin/model-backups/another/restore", {
+        confirm: true,
+      });
+      const misused = await app.inject({
+        ...restore,
+        cookies,
+        payload: { confirm: true, confirmation: other },
+      });
+      expect(misused.statusCode).toBe(403);
+      // The table download signs an empty body, its confirmation in the query.
+      const url = "/admin/table-backups/no-such-backup/download";
+      expect((await app.inject({ method: "GET", url, cookies })).statusCode).toBe(428);
+      const c = await signed(app, cookies, "GET", url, {});
+      const ok = await app.inject({
+        method: "GET",
+        url: `${url}?nonce=${encodeURIComponent(c!.nonce)}&signature=${encodeURIComponent(c!.signature)}`,
+        cookies,
+      });
+      expect(ok.statusCode).toBe(404);
+    } finally {
+      await app.close();
+    }
+
+    // A paired phone may do everything without signing (user decision, 2026-10-18).
+    const device = await prisma.linkedDevice.create({ data: { userId: userIds.admin } });
+    expect((await call("admin", restore, { deviceId: device.id })).statusCode).toBe(404);
+    expect(
+      (
+        await call(
+          "admin",
+          { method: "GET", url: "/admin/table-backups/no-such-backup/download" },
+          { deviceId: device.id },
+        )
+      ).statusCode,
+    ).toBe(404);
+
+    // Each admin write lands in the action log, refused ones too, with the phone marked; a
+    // non-admin's never does.
+    await call("other", restore);
+    const log = (
+      await prisma.adminAction.findMany({
+        where: { route: "/admin/model-backups/:id/restore", wallet: { in: [ADMIN_WALLET, OTHER_WALLET] } },
+        orderBy: { at: "asc" },
+      })
+    ).filter((r) => (r.detail as { params?: { id?: string } } | null)?.params?.id === "no-such-backup");
+    expect(log.map((r) => [r.statusCode, r.deviceId !== null])).toEqual([
+      [428, false],
+      [404, false],
+      [403, false],
+      [404, true],
+    ]);
+    expect(log[0]!.detail).toMatchObject({ params: { id: "no-such-backup" }, body: { confirm: true } });
+    expect(JSON.stringify(log.map((r) => r.detail))).not.toContain("signature");
+  });
+
+  it("caps pinned backups", async () => {
+    const ids = await Promise.all(
+      Array.from(
+        { length: 11 },
+        async (_, i) =>
+          (
+            await prisma.modelBackup.create({
+              data: {
+                kind: "manual",
+                note: `pin cap ${i}`,
+                data: Buffer.from("x"),
+                sha256: "x",
+                sizeBytes: 1,
+                modelCount: 0,
+              },
+              select: { id: true },
+            })
+          ).id,
+      ),
+    );
+    for (const id of ids.slice(0, 10)) {
+      await prisma.modelBackup.update({ where: { id }, data: { pinned: true } });
+    }
+    const refused = await call("admin", {
+      method: "PATCH",
+      url: `/admin/model-backups/${ids[10]}`,
+      payload: { pinned: true },
+    });
+    expect(refused.statusCode).toBe(409);
   });
 });

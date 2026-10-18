@@ -226,10 +226,38 @@ export async function spendCredits(
   });
 }
 
-/** An admin's grant (or, with a negative amount, a correction), recorded like any other row. */
+/** Why grantCredits refused: a take-back past zero, or the same grant again within seconds. */
+export class CreditGrantError extends Error {}
+
+/** The same grant to the same wallet this soon after the last one is a double click, not a second grant. */
+export const DUPLICATE_GRANT_WINDOW_MS = 20_000;
+
+/**
+ * An admin's grant (or, with a negative amount, a correction), recorded like any other row.
+ * Refused (CreditGrantError) when it would take the balance below zero, or when the same amount
+ * with the same note was granted to the wallet in the last DUPLICATE_GRANT_WINDOW_MS.
+ */
 export async function grantCredits(wallet: string, delta: number, note: string): Promise<number> {
   return prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${creditWalletLockKey(wallet)}))`;
+    const repeat = await tx.burnCreditEntry.findFirst({
+      where: {
+        wallet,
+        kind: "grant",
+        delta,
+        note,
+        createdAt: { gte: new Date(Date.now() - DUPLICATE_GRANT_WINDOW_MS) },
+      },
+      select: { id: true },
+    });
+    if (repeat)
+      throw new CreditGrantError("That exact grant was just made. Wait a few seconds to make it again.");
+    if (delta < 0) {
+      const balance = await creditBalance(wallet, tx);
+      if (balance + delta < 0) {
+        throw new CreditGrantError(`The wallet has ${balance} credits: you can take back at most that many.`);
+      }
+    }
     await tx.burnCreditEntry.create({ data: { wallet, delta, kind: "grant", note } });
     return creditBalance(wallet, tx);
   });
