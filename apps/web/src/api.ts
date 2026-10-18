@@ -125,6 +125,10 @@ export interface User {
   id: string;
   walletAddress: string;
   isAdmin: boolean;
+  /** "privy": signed in with email or Google/X, a wallet Privy holds. Older APIs leave it out. */
+  signInMethod?: "privy" | "wallet";
+  /** Two-factor: on or off, and the actions that ask for it (twoFactor.ts). */
+  twoFactor?: { enabled: boolean; actions: string[]; buyOverLamports: string | null };
   /** Pro Mode (admins, an admin's grant, or the top 250 $ASDFASDFA holders): the token modal's Trade panel. */
   isPro?: boolean;
   proMode?: {

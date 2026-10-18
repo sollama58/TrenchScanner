@@ -4,7 +4,8 @@ import { SolanaSignTransaction, type SolanaSignTransactionFeature } from "@solan
 import type { WalletAccount } from "@wallet-standard/base";
 import bs58 from "bs58";
 import { ApiError, api, post } from "./api";
-import { burnWallet } from "./burn";
+import { readyBurnWallet } from "./burn";
+import { postWithTwoFactor } from "./twoFactor";
 import { toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
 import { withTimeout } from "./wallet";
@@ -407,7 +408,7 @@ async function accountFor(owner: string): Promise<{
   sign: SolanaSignTransactionFeature[typeof SolanaSignTransaction];
   name: string;
 }> {
-  const w = burnWallet(owner);
+  const w = await readyBurnWallet(owner);
   const signer = w
     ? (w.wallet.features as Partial<SolanaSignTransactionFeature>)[SolanaSignTransaction]
     : undefined;
@@ -660,7 +661,8 @@ export async function runTrade(
   // The wallet first: if it isn't here there's no point building anything.
   const { account, sign, name } = await accountFor(input.owner);
   onStage("building");
-  const built = await post<BuiltTrade>("/pro/trade/build", {
+  // Two-factor, when the user chose it for this side (or this size): the API asks, we prompt.
+  const built = await postWithTwoFactor<BuiltTrade>("/pro/trade/build", {
     mint: input.mint,
     side: input.side,
     amount: input.amount.toString(),

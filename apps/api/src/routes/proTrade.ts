@@ -20,12 +20,14 @@ import {
   RateLimitedError,
   verifyTransactionSignatures,
   walletTokenTrades,
+  SUBSCRIPTION_MINT,
   type DecodedMessage,
   type Env,
   type WalletTrade,
   walletTag,
 } from "@trenchscanner/core";
 import { proStatus } from "../proMode.js";
+import { requireTwoFactor } from "../twoFactor.js";
 import { SolPrice } from "../solPrice.js";
 
 /**
@@ -161,6 +163,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       lastValidBlockHeight: number;
       at: number;
       side: "buy" | "sell";
+      /** An access-token buy by a wallet without Pro Mode: sends without Pro Mode too. */
+      access: boolean;
       /** The built message: what the wallet sends must be it (signedMatchesBuild). */
       message: DecodedMessage;
     }[]
@@ -179,33 +183,54 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
    * The session's wallet, and whether it has full Pro Mode (`pro`) or may only close what it
    * holds (it had Pro Mode once). Neither: answers 404 and returns null.
    */
+  /**
+   * The signed-in wallet and what it may trade here. `access`: routes that also serve the
+   * access-token buy (user decision 2026-10-18: anyone signed in may swap SOL for $ASDFASDFA here
+   * to burn for access, Privy accounts above all), open once trading is public.
+   */
   async function proWallet(
     request: FastifyRequest,
     reply: FastifyReply,
-  ): Promise<{ wallet: string; pro: boolean } | null> {
+    opts: { access?: boolean } = {},
+  ): Promise<{ wallet: string; pro: boolean; canClose: boolean } | null> {
     const wallet = request.user!.walletAddress;
     const status = await proStatus(env, wallet);
-    if (!status.pro && !status.canClose) {
+    if (!status.pro && !status.canClose && !(opts.access && accessSwapOpen())) {
       reply.code(404).send({ error: "not found", notSent: true });
       return null;
     }
-    return { wallet, pro: status.pro };
+    return { wallet, pro: status.pro, canClose: status.canClose };
   }
+  const accessSwapOpen = () => env.PRO_TRADING_PUBLIC;
 
   app.addHook("preHandler", app.authenticate);
 
   app.post("/trade/build", { config: { rateLimit: BUILD_RATE_LIMIT } }, async (request, reply) => {
-    const who = await proWallet(request, reply);
+    const who = await proWallet(request, reply, { access: true });
     if (!who) return;
     const { wallet } = who;
     const parsed = buildSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
-    // Without Pro Mode any more, only closing: a sale of what it holds.
-    if (!who.pro && body.side !== "sell")
-      return reply
-        .code(403)
-        .send({ error: "Pro Mode has ended for this wallet. You can still sell what you hold." });
+    // Buying the access token, open to everyone signed in once trading is public, up to 5 SOL.
+    const accessBuy = body.side === "buy" && body.mint === SUBSCRIPTION_MINT && accessSwapOpen();
+    if (!who.pro && !accessBuy) {
+      // Without Pro Mode any more, only closing: a sale of what it holds.
+      if (!who.canClose) return reply.code(404).send({ error: "not found", notSent: true });
+      if (body.side !== "sell")
+        return reply
+          .code(403)
+          .send({ error: "Pro Mode has ended for this wallet. You can still sell what you hold." });
+    }
+    if (accessBuy && !who.pro && BigInt(body.amount) > ACCESS_BUY_MAX_LAMPORTS)
+      return reply.code(422).send({ error: "Buy up to 5 SOL of $ASDFASDFA at a time here." });
+    // The account's own two-factor choices: every buy, buys over a size, or sales.
+    if (
+      !(await requireTwoFactor(env, request, reply, request.user!.userId, body.side, {
+        lamports: body.side === "buy" ? BigInt(body.amount) : undefined,
+      }))
+    )
+      return;
     try {
       let amount = BigInt(body.amount);
       if (body.side === "sell" && body.all) {
@@ -237,6 +262,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         lastValidBlockHeight: built.lastValidBlockHeight,
         at: Date.now(),
         side: body.side,
+        access: accessBuy && !who.pro,
         message,
       });
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
@@ -285,7 +311,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   });
 
   app.post("/trade/send", { config: { rateLimit: SEND_RATE_LIMIT } }, async (request, reply) => {
-    const who = await proWallet(request, reply);
+    const who = await proWallet(request, reply, { access: true });
     if (!who) return;
     const { wallet } = who;
     const parsed = sendSchema.safeParse(request.body);
@@ -321,7 +347,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       const at = list.findIndex(
         (b) =>
           b.blockhash === message.recentBlockhash &&
-          (who.pro || b.side === "sell") &&
+          (who.pro || b.side === "sell" || b.access) &&
           signedMatchesBuild(b.message, message) === null,
       );
       if (at < 0)
@@ -380,7 +406,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     "/trade/status/:signature",
     { config: { rateLimit: READ_RATE_LIMIT } },
     async (request, reply) => {
-      const who = await proWallet(request, reply);
+      const who = await proWallet(request, reply, { access: true });
       if (!who) return;
       const { wallet } = who;
       const { signature } = request.params;
@@ -519,6 +545,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     retired.clear();
   });
 }
+
+/** The most one access-token buy may spend, for a wallet without Pro Mode. */
+const ACCESS_BUY_MAX_LAMPORTS = 5_000_000_000n;
 
 /** The guard's refusal in the trader's words, where it can be said plainly. */
 export function plainRefusal(message: string, side: "buy" | "sell" = "buy"): string {

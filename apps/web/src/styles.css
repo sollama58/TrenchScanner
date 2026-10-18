@@ -16045,3 +16045,142 @@ body:has(.util-toast) .bug-fab {
   color: var(--warn-ink);
   border-color: color-mix(in srgb, var(--warn) 50%, var(--border));
 }
+
+/* ---- Two-factor prompt and settings, Privy wallet, the access buy ---- */
+.tf-modal {
+  width: min(420px, calc(100vw - 32px));
+}
+.tf-modal h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+}
+.tf-passkey {
+  width: 100%;
+  margin: 4px 0 12px;
+}
+.tf-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.tf-form label {
+  flex-basis: 100%;
+}
+.tf-form input {
+  flex: 1 1 140px;
+  min-width: 0;
+  letter-spacing: 0.12em;
+}
+.tf-factors {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.tf-factor,
+.tf-passkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.tf-passkey-row {
+  padding-left: 12px;
+}
+.tf-passkey-row .faint {
+  flex: 1;
+}
+.tf-actions {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: 10px 12px;
+  margin: 12px 0;
+  display: grid;
+  gap: 6px;
+}
+.tf-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tf-buyover input {
+  width: 90px;
+  padding: 4px 8px;
+}
+.tf-setup {
+  margin: 8px 0;
+}
+.tf-qr,
+.privy-qr {
+  width: 180px;
+  max-width: 100%;
+  background: #fff;
+  border-radius: var(--radius-s);
+  padding: 6px;
+  margin: 8px 0;
+}
+.tf-secret,
+.privy-address code {
+  word-break: break-all;
+}
+.tf-codes {
+  margin: 10px 0;
+  padding: 12px;
+}
+.tf-code-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 4px 12px;
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+.privy-address {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+}
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.privy-entry {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.privy-btn {
+  width: 100%;
+}
+.access-buy {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: 12px;
+  margin: 12px 0;
+  text-align: left;
+}
+.access-buy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.access-buy-row label {
+  flex-basis: 100%;
+}
+.access-buy-row input {
+  flex: 1 1 100px;
+  min-width: 0;
+}
+.good-text {
+  color: var(--good-ink);
+}

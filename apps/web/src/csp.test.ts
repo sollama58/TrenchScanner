@@ -69,6 +69,17 @@ describe("dashboard Content-Security-Policy", () => {
     for (const url of Object.values(SAME_SITE_APIS)) expect(connectSrc).toContain(new URL(url).origin);
   });
 
+  it("lets Privy's email sign-in run, and nothing else from outside", () => {
+    const csp = webCsp();
+    const connectSrc = csp.get("connect-src") ?? [];
+    for (const host of ["https://auth.privy.io", "https://*.rpc.privy.systems"])
+      expect(connectSrc).toContain(host);
+    expect(csp.get("frame-src")).toContain("https://auth.privy.io");
+    // The only outside script: Privy's captcha (Cloudflare Turnstile).
+    const scripts = (csp.get("script-src") ?? []).filter((s) => !s.startsWith("'sha256-"));
+    expect(scripts.sort()).toEqual(["'self'", "https://challenges.cloudflare.com"]);
+  });
+
   it("keeps the HolDEX frame allowance and the lockdown directives", () => {
     const csp = webCsp();
     expect(csp.get("frame-ancestors")).toEqual(["'self'", "https://holdex.live", "https://www.holdex.live"]);

@@ -1140,6 +1140,33 @@ const envSchema = z.object({
         return false;
       }
     }, "HELIUS_SENDER_URL must be an https URL on a helius-rpc.com host"),
+
+  // Privy sign-in (user decision 2026-10-18): email or Google/X accounts with a Solana wallet Privy
+  // holds, alongside wallet sign-in (apps/api/src/privy.ts). Off until all three are set: the app's
+  // id, its secret (the api reads each account's wallet from Privy with it) and the JWKS endpoint
+  // whose keys check a Privy login token (Dashboard > App settings).
+  PRIVY_APP_ID: pastedKey,
+  PRIVY_APP_SECRET: pastedKey,
+  // The app's JWKS URL (user decision 2026-10-18, in place of a pasted verification key), such as
+  // https://auth.privy.io/api/v1/apps/<app id>/jwks.json. Only https on a privy.io host: whoever
+  // serves these keys decides who can sign in, so a typo can't hand that to another site.
+  PRIVY_JWKS_ENDPOINT: z
+    .string()
+    .optional()
+    .default("")
+    .transform((v) => v.trim())
+    .refine((v) => {
+      if (!v) return true;
+      try {
+        const u = new URL(v);
+        return u.protocol === "https:" && (u.hostname === "privy.io" || u.hostname.endsWith(".privy.io"));
+      } catch {
+        return false;
+      }
+    }, "PRIVY_JWKS_ENDPOINT must be an https URL on a privy.io host"),
+  // How many Privy accounts may be made (user decision 2026-10-18: 400, under the free plan's 499
+  // monthly users with room to spare). At the cap the sign-in screen hides email sign-in.
+  PRIVY_SIGNUP_CAP: z.coerce.number().int().min(0).max(100_000).default(400),
 });
 
 /**

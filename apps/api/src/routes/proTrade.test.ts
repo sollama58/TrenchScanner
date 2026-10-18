@@ -90,10 +90,14 @@ describe.skipIf(!dbAvailable)("Pro Mode", () => {
         })
       ).statusCode,
     ).toBe(404);
-    expect(
-      (await as(TRADER, "POST", "/pro/trade/send", { transaction: "AA==", lastValidBlockHeight: 1 }))
-        .statusCode,
-    ).toBe(404);
+    // Send stays reachable for the in-app $ASDFASDFA buy (anyone signed in, once trading is
+    // public), but relays only what a build made for this wallet: this is refused, unsent.
+    const send = await as(TRADER, "POST", "/pro/trade/send", {
+      transaction: "AA==",
+      lastValidBlockHeight: 1,
+    });
+    expect(env.PRO_TRADING_PUBLIC ? 400 : 404).toBe(send.statusCode);
+    expect(send.json()).toMatchObject({ notSent: true });
     // Signed out: no session at all.
     expect((await app.inject({ method: "GET", url: `/pro/trade/${MINT}/position` })).statusCode).toBe(401);
   });

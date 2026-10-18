@@ -11,6 +11,8 @@ import {
 import bs58 from "bs58";
 import { ApiError, post, type User } from "./api";
 import { adoptSession } from "./sessionCheck";
+import { PRIVY_WALLET_NAME, PrivyCancelled, privyControls } from "./privyBridge";
+import { askSecondFactor, TwoFactorCancelled } from "./twoFactor";
 
 /**
  * Wallet sign-in over the Wallet Standard - the registry Phantom, Solflare, Backpack and the rest
@@ -38,7 +40,8 @@ export function solanaWallets(): Wallet[] {
 
 /** Every wallet this browser offers: Wallet Standard ones first, then legacy-only providers. */
 export function walletOptions(): WalletOption[] {
-  const standard = solanaWallets();
+  // Privy's wallet signs in through email sign-in (signInWithPrivy), never as a wallet here.
+  const standard = solanaWallets().filter((w) => w.name !== PRIVY_WALLET_NAME);
   const options: WalletOption[] = standard.map((w, i) => ({
     key: `std:${w.name}:${i}`,
     name: w.name,
@@ -108,7 +111,9 @@ interface NonceResponse {
   signInInput: SolanaSignInInput;
 }
 
-type VerifyResponse = User & { sessionToken?: string };
+type VerifyResponse =
+  | (User & { sessionToken?: string; twoFactorRequired?: undefined })
+  | { twoFactorRequired: true; ticket: string; totp: boolean; passkey: boolean };
 
 /**
  * How long to wait on the wallet before saying so. Long enough to read and approve a prompt, short
@@ -172,10 +177,54 @@ export async function signInWithWallet(wallet: Wallet): Promise<User> {
   );
 }
 
-/** Makes sure the session actually sticks before calling sign-in done (sessionCheck.ts). */
-async function finishSignIn({ sessionToken, ...user }: VerifyResponse): Promise<User> {
-  await adoptSession(sessionToken, "Your wallet signed");
+/**
+ * Makes sure the session actually sticks before calling sign-in done (sessionCheck.ts). An
+ * account that asks for two-factor at sign-in gets the prompt first, with the ticket the first
+ * step gave.
+ */
+async function finishSignIn(answer: VerifyResponse, what = "Your wallet signed"): Promise<User> {
+  let done: User & { sessionToken?: string };
+  if (answer.twoFactorRequired) {
+    const { ticket } = answer;
+    let signedIn: (User & { sessionToken?: string }) | null = null;
+    await askSecondFactor({
+      title: "Confirm it's you to sign in",
+      hint: { totp: answer.totp, passkey: answer.passkey },
+      passkeyOptions: () => post("/auth/2fa/signin/passkey-options", { ticket }),
+      submit: async (factor) => {
+        signedIn = await post<User & { sessionToken?: string }>("/auth/2fa/signin", { ticket, ...factor });
+      },
+    });
+    if (!signedIn) throw new TwoFactorCancelled();
+    done = signedIn;
+  } else {
+    done = answer;
+  }
+  const { sessionToken, ...user } = done;
+  await adoptSession(sessionToken, what);
   return user;
+}
+
+// ---- Email sign-in (Privy) ----
+
+/** Sign-in with Privy's window: email or Google/X, with a wallet Privy holds. */
+export async function signInWithPrivy(): Promise<User> {
+  const privy = await privyControls();
+  const accessToken = await privy.login();
+  // Privy makes the wallet right after its login; the API says 409 until Privy reports it.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const answer = await post<VerifyResponse>("/auth/privy", { accessToken });
+      const user = await finishSignIn(answer, "Privy signed you in");
+      return remembered(user, PRIVY_WALLET_NAME);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409 && /isn't ready/.test(e.message) && attempt < 5) {
+        await new Promise((r) => setTimeout(r, 1_500));
+        continue;
+      }
+      throw e;
+    }
+  }
 }
 
 // ---- Legacy injected providers (window.solana and friends) ----
@@ -290,6 +339,12 @@ export async function signMessageAs(address: string, message: string): Promise<s
 
 /** A plain-language reason for a failed sign-in, never an empty or bare technical one. */
 export function describeSignInError(e: unknown, walletName: string): string {
+  if (e instanceof TwoFactorCancelled)
+    return "Sign-in stopped at the two-factor check. Start again when you're ready.";
+  if (e instanceof PrivyCancelled)
+    return e.message === "cancelled"
+      ? "You closed the sign-in window. Press the button again when you're ready."
+      : e.message;
   if (e instanceof WalletTimeoutError)
     return e.message === "connect"
       ? `${walletName} didn't answer. Its popup may be hidden behind this window, or the extension may be locked: open it from the toolbar, unlock it, then try again.`

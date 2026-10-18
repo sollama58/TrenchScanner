@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import qrcode from "qrcode-generator";
-import { api, del, post } from "../api";
+import { api, del } from "../api";
 import { buildLinkUrl, describeDevice, type DeviceList, type IssuedLinkCode } from "../deviceLink";
 import { ago } from "../format";
 import { CheckIcon, CopyIcon, PhoneIcon, TrashIcon } from "./Icons";
+import { postWithTwoFactor } from "../twoFactor";
 
 /**
  * Settings card: sign a phone in by scanning a QR from this signed-in desktop, and see or switch
@@ -62,7 +63,7 @@ export function ConnectPhonePanel() {
     try {
       const known = (await load())?.devices ?? list?.devices ?? [];
       before.current = new Set(known.map((d) => d.id));
-      const issued = await post<IssuedLinkCode>("/auth/link/code");
+      const issued = await postWithTwoFactor<IssuedLinkCode>("/auth/link/code");
       // The deadline from the TTL, on this clock: a skewed desktop clock would misread the API's
       // absolute expiresAt, and a few minutes of skew is a lot against a two-minute window.
       const ttl = Number.isFinite(issued.ttlMs) && issued.ttlMs > 0 ? issued.ttlMs : 120_000;

@@ -30,6 +30,7 @@ import {
 import { deviceIsActive, touchDevice } from "./auth/deviceLink.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerDeviceLinkRoutes } from "./routes/deviceLink.js";
+import { registerTwoFactorRoutes } from "./routes/twoFactor.js";
 import { registerFilterRoutes } from "./routes/filters.js";
 import { registerMatchRoutes } from "./routes/matches.js";
 import { createReportCaches, registerCuratedRoutes } from "./routes/curated.js";
@@ -553,6 +554,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   await app.register(registerAuthRoutes, { prefix: "/auth", env });
 
   await app.register(registerDeviceLinkRoutes, { prefix: "/auth", env });
+  await app.register(registerTwoFactorRoutes, { prefix: "/auth/2fa", env });
   await app.register(registerFilterRoutes, { prefix: "/filters", env });
   await app.register(registerMatchRoutes, {
     prefix: "/matches",

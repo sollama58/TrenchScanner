@@ -338,6 +338,17 @@ export function AboutDetails({ targets }: { targets: Targets }) {
           alerts you see. Your own alerts always show.
         </p>
       </section>
+
+      <section>
+        <h3>Your account and your data</h3>
+        <p>
+          Your wallet address is your account, and it stays private: it isn&apos;t shown to other users, and
+          our logs keep only a short fingerprint of it. If you sign in with email, Google or X, that sign-in
+          and the wallet it comes with are run by Privy (privy.io), which holds your email and your
+          wallet&apos;s key; we keep only Privy&apos;s account id and the wallet address. Two-factor secrets
+          are stored encrypted, and backup codes only as hashes.
+        </p>
+      </section>
     </div>
   );
 }

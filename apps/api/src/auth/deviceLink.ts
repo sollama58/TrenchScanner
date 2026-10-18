@@ -94,9 +94,12 @@ export async function redeemLinkCode(
 
       const row = await tx.mobileLinkCode.findUnique({
         where: { codeHash: hashCode(code) },
-        include: { user: { select: { id: true, walletAddress: true } } },
+        include: { user: { select: { id: true, walletAddress: true, privyUserId: true } } },
       });
       if (!row) return { ok: false };
+      // Phone pairing is for wallet sign-ins only (user rule 2026-10-18); /link/code refuses a
+      // Privy account too, so this is the second lock on the same door.
+      if (row.user.privyUserId) return { ok: false };
 
       // The owner's row locked first, so two codes redeemed at once for one account count in turn
       // instead of both seeing room under the cap.
