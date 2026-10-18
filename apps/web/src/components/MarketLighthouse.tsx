@@ -7,6 +7,7 @@ import { narrativeBaseline, relativeScale, signedPts, type NarrativeBaseline } f
 import { intervalText, MIN_GRADED_FOR_RATE, RULE_NOTE_UNFILTERED, wilson } from "../rates";
 import { HBarChart, Skeleton } from "./Charts";
 import { InfoIcon, LighthouseIcon } from "./Icons";
+import { ExitPlanInfo } from "./ExitPlanInfo";
 import {
   renderFeeRecipientsCard,
   renderNarrativeMixCard,
@@ -198,6 +199,7 @@ function TokenSageSections({
             render={() => renderNarrativesPayCard(d.outcomes, span)}
           />
         }
+        planInfo
         note={`Model alerts in the last ${span} by their coin's narrative, against the average of every alert: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Narratives under ${MIN_GRADED} graded alerts stay faded; hover one for its 2x rate's 90% range. TokenSage can answer after an alert, so this shows what wins, not what a model knew. ${RULE_NOTE_UNFILTERED}`}
       >
         <HitRates rows={narratives(d.outcomes.byCategory)} cls={cls} baseline={base} />
@@ -346,6 +348,7 @@ function FeeRecipients({ d, days, span }: { d: MarketLighthouse; days: Days; spa
   return (
     <Section
       title="Fee recipients"
+      planInfo
       note={`Who gets the creator fee on the coins read in the last ${span}: a charity, the holders or other wallets, a GitHub account, or the dev. Below, how model alerts on each group's coins did under the exit plan; groups under ${MIN_GRADED} graded alerts stay faded.`}
       share={
         <ShareButton
@@ -436,11 +439,14 @@ function Kpi({
 function Section({
   title,
   note,
+  planInfo = false,
   share,
   children,
 }: {
   title: string;
   note?: string;
+  /** Its note speaks of returns on the exit plan: an info button after it opens the plan. */
+  planInfo?: boolean;
   /** The section's Share button, beside its title. */
   share?: React.ReactNode;
   children: React.ReactNode;
@@ -455,7 +461,12 @@ function Section({
       ) : (
         <h3>{title}</h3>
       )}
-      {note && <p className="faint small">{note}</p>}
+      {note && (
+        <p className="faint small">
+          {note}
+          {planInfo && <ExitPlanInfo />}
+        </p>
+      )}
       {children}
     </section>
   );
@@ -851,8 +862,8 @@ function Screened({ s, span, days, since }: { s: ScreenedData; span: string; day
           <span className={`lh-kpi-value num ${retTone(s.avgReturnPct)}`}>
             {signedPct(s.avgReturnPct, 1)}
           </span>
-          <span className="muted small" title={`Exit plan: ${s.exitPlan}`}>
-            on the exit plan · {s.returnGraded.toLocaleString()} graded
+          <span className="muted small">
+            on the <ExitPlanInfo text="exit plan" /> · {s.returnGraded.toLocaleString()} graded
           </span>
         </div>
       </div>
@@ -1045,8 +1056,9 @@ function HourOfDay({ h }: { h: NonNullable<ScreenedData["byHourOfDay"]> }) {
       </h4>
       <p className="faint small">
         Every screened token in our history by the hour it was decided on, in your local time zone (
-        {clock.name}): how many tokens each hour brings, how often they doubled, and what they returned on the
-        exit plan. Hours with fewer than {MIN_HOUR_GRADED} graded tokens are faded. {RULE_NOTE_UNFILTERED}
+        {clock.name}): how many tokens each hour brings, how often they doubled, and what they returned on the{" "}
+        <ExitPlanInfo text="exit plan" />. Hours with fewer than {MIN_HOUR_GRADED} graded tokens are faded.{" "}
+        {RULE_NOTE_UNFILTERED}
       </p>
       <div className="lh-readout" aria-live="polite">
         <strong>
@@ -1203,7 +1215,8 @@ function PreChecks({ s }: { s: ScreenedData }) {
         </ul>
       </div>
       <p className="faint small lh-checks-foot">
-        Average return is what each token would have made on our fixed exit plan. {s.exitPlan}
+        Average return is what each token would have made on our fixed <ExitPlanInfo text="exit plan" />.{" "}
+        {s.exitPlan}
       </p>
     </div>
   );

@@ -175,6 +175,36 @@ export function describeExitPlan(plan: ExitPlan = EXIT_PLAN): string {
   return parts.join(", ");
 }
 
+/**
+ * The plan as plain numbers, for GET /config/exit-plan: the web's exit plan popup reads it so its
+ * wording can't drift from the plan grading uses. Shares and fractions are whole percents.
+ */
+export interface ExitPlanView {
+  /** describeExitPlan(), for hover titles. */
+  summary: string;
+  /** Lowest multiple first; sellPct is the share of the original position sold there. */
+  takeProfits: { multiple: number; sellPct: number }[];
+  /** Lowest fromMultiple first; offHighPct is how far under its running high the trail sells. */
+  trail: { fromMultiple: number; offHighPct: number }[];
+  trailMaxHoldMinutes: number;
+  /** The stop, as a loss: 50 for -50%. */
+  stopPct: number;
+  /** A position that never sold is closed after this long. */
+  maxHoldMinutes: number;
+}
+
+export function exitPlanView(plan: ExitPlan = EXIT_PLAN): ExitPlanView {
+  const pct = (v: number) => Math.round(v * 1000) / 10;
+  return {
+    summary: describeExitPlan(plan),
+    takeProfits: sortedLadder(plan).map((tp) => ({ multiple: tp.multiple, sellPct: pct(tp.sellFraction) })),
+    trail: sortedTrail(plan).map((t) => ({ fromMultiple: t.fromMultiple, offHighPct: pct(t.fraction) })),
+    trailMaxHoldMinutes: plan.trailMaxHoldMinutes,
+    stopPct: pct(1 - plan.stopFraction),
+    maxHoldMinutes: plan.maxHoldMinutes,
+  };
+}
+
 /** What the simulation reads off a row. */
 export type SimulationInput = Pick<
   OutcomeAggregates,

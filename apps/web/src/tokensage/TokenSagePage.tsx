@@ -4,6 +4,7 @@ import { HitRates, narratives, seriesClassFor } from "../components/MarketLighth
 import { narrativeBaseline } from "../lighthouseMetrics";
 import { intervalText, RULE_NOTE_UNFILTERED, wilson } from "../rates";
 import { LogoMark, SageIcon, SendIcon } from "../components/Icons";
+import { ExitPlanInfo } from "../components/ExitPlanInfo";
 import { ShareDialog } from "./ShareDialog";
 import type { ShareCardKind } from "./shareCards";
 import {
@@ -539,7 +540,14 @@ function Sections({
         share="models"
         kicker="Which narratives pay"
         title="What the alerts on each theme returned"
-        lede={`Model alerts in the last ${PAY_SPAN[payDays]} by their coin's narrative, against the average of every alert: how many points each narrative's average return under the exit plan sits above or below it, with its own return and 2x rate (and that rate's gap to the average). Thin narratives stay faded.`}
+        lede={
+          <>
+            Model alerts in the last {PAY_SPAN[payDays]} by their coin&apos;s narrative, against the average
+            of every alert: how many points each narrative&apos;s average return under the{" "}
+            <ExitPlanInfo text="exit plan" /> sits above or below it, with its own return and 2x rate (and
+            that rate&apos;s gap to the average). Thin narratives stay faded.
+          </>
+        }
       >
         <div className="tsg-card">
           <div className="tsg-card-head tsg-pay-head">
@@ -631,7 +639,7 @@ function Section({
   id: string;
   kicker: string;
   title: string;
-  lede: string;
+  lede: ReactNode;
   /** The share image this section offers, if any. */
   share?: ShareCardKind;
   children: ReactNode;
