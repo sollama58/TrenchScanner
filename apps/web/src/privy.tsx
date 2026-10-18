@@ -9,7 +9,7 @@ import {
 } from "@privy-io/react-auth";
 import { useExportWallet, useStandardWallets } from "@privy-io/react-auth/solana";
 import { createSolanaRpc, createSolanaRpcSubscriptions } from "@solana/kit";
-import { PRIVY_WALLET_NAME, PrivyCancelled, setPrivyControls } from "./privyBridge";
+import { PRIVY_WALLET_NAME, PrivyCancelled, privyOAuthReturn, setPrivyControls } from "./privyBridge";
 
 /**
  * Privy's half of email sign-in: a lazy chunk (see privyBridge.ts), mounted once someone picks
@@ -27,6 +27,10 @@ const RPC_WS = "wss://api.mainnet-beta.solana.com";
 
 /** Solana mainnet (CAIP-2), as Privy's funding window names it; SOL by its alias. */
 const SOLANA_MAINNET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
+/** How long a sign-in waits for Privy to finish a Google or X return before giving up. */
+const OAUTH_RETURN_WAIT_MS = 30_000;
+/** This page load came back from Google or X, and Privy hasn't finished that sign-in yet. */
+let oauthReturning = privyOAuthReturn();
 
 export default function PrivyRoot({ appId }: { appId: string }) {
   const config = useMemo<PrivyClientConfig>(
@@ -75,8 +79,12 @@ function Bridge() {
     }
   };
   const { login } = useLogin({
-    onComplete: () => void finish(),
+    onComplete: () => {
+      oauthReturning = false;
+      void finish();
+    },
     onError: (err) => {
+      oauthReturning = false;
       pending.current?.reject(new PrivyCancelled(err === "exited_auth_flow" ? "cancelled" : String(err)));
       pending.current = null;
     },
@@ -95,7 +103,23 @@ function Bridge() {
           pending.current = { resolve, reject };
           // Already signed in with Privy on this browser: its token is all the API needs.
           if (latest.current.authenticated) void finish();
-          else latest.current.login();
+          // Back from Google or X: Privy is finishing that sign-in on its own, and onComplete (or
+          // onError) settles this. Opening its window again would start over.
+          else if (oauthReturning) {
+            setTimeout(() => {
+              if (pending.current?.resolve !== resolve) return;
+              oauthReturning = false;
+              pending.current = null;
+              reject(new PrivyCancelled("Google or X didn't finish signing you in. Try again."));
+            }, OAUTH_RETURN_WAIT_MS);
+          } else {
+            // Google and X come back to the address this starts from, and Privy only takes the
+            // exact ones on its dashboard list (a 401 "Redirect URL is not allowed" otherwise): start
+            // from the bare site root, without a tab hash, query or path.
+            if (window.location.pathname !== "/" || window.location.search || window.location.hash)
+              window.history.replaceState(window.history.state, "", "/");
+            latest.current.login();
+          }
         }),
       logout: () => latest.current.logout(),
       exportWallet: (address) => latest.current.exportWallet({ address }),
