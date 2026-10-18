@@ -99,6 +99,18 @@
                           "/curated/models?days=30",
                         ],
         );
+        // Scope (the Live tab's board, src/components/LiveTab.tsx) also asks for its Graduated
+        // column and, with Stream on, the Stream's first page: started here, they fill in with the feed.
+        try {
+          if (
+            paths.indexOf("/matches?page=1&includeCurated=saved") >= 0 &&
+            localStorage.getItem("ts-live-view") === "scope"
+          ) {
+            paths.push("/launches?graduated=1");
+            var scope = JSON.parse(localStorage.getItem("ts-scope-settings") || "null");
+            if (scope && scope.display && scope.display.stream) paths.push("/launches");
+          }
+        } catch (e) {}
         var boot = (window.__boot = {});
         if (!window.fetch) return;
         // The session token src/session.ts keeps for browsers that drop the third-party cookie.

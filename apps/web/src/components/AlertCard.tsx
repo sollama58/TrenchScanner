@@ -29,6 +29,7 @@ import {
   SlidersIcon,
   XLogoIcon,
 } from "./Icons";
+import { XLinkPreview } from "./XLinkPreview";
 import { linkedCount, linkedCountText } from "../bubbleMap";
 import { cardOutcome, outcomeBadge, outcomeResult } from "../outcome";
 import { QUICK_LINK_SITES, pumpFunHref, useAppearance } from "../appearance";
@@ -36,6 +37,7 @@ import { useShowNarrativeNote } from "../narrativeNote";
 import { cardCalibratedRate } from "../rates";
 import { scoreTone, scoreToneColor, scoreTooltip, useScoreWeights } from "../scoreWeights";
 import { filterCardStyle } from "../filterStyle";
+import { quoteToken } from "../quoteToken";
 import {
   TILE_FIRST_BUYERS_OF,
   TILE_RED_FIRST_BUYERS,
@@ -261,6 +263,7 @@ export function AlertCard({
                 {tokenLabel(card.token)}
               </strong>
             )}
+            <QuotePill token={card.token} />
             {quickBuy("top-left")}
             {show("tokenName") && card.token.name && card.token.symbol && (
               <span className="token-name" title={card.token.name}>
@@ -729,7 +732,7 @@ export function AlertCard({
           {socials.length > 0 && (
             <span className="card-socials">
               {socials.map((l) => (
-                <a
+                <XLinkPreview
                   key={l.key}
                   className="pill pill-icon pill-social"
                   href={l.url}
@@ -739,7 +742,7 @@ export function AlertCard({
                   aria-label={`Open the coin's ${l.label}`}
                 >
                   <l.Icon size={11} />
-                </a>
+                </XLinkPreview>
               ))}
             </span>
           )}
@@ -790,6 +793,33 @@ export function socialLinks(token: Pick<Card["token"], "twitterUrl" | "websiteUr
     { key: "x", label: "X", Icon: XLogoIcon, url: https(token.twitterUrl) },
     { key: "web", label: "Website", Icon: GlobeIcon, url: https(token.websiteUrl) },
   ].filter((l): l is typeof l & { url: string } => l.url !== null);
+}
+
+/**
+ * The coin the token trades against, beside its ticker, when that isn't SOL (user ask
+ * 2026-10-18): "$FOO /USDC" reads as the pair. Nothing for SOL or an unknown quote.
+ */
+export function QuotePill({
+  token,
+  className = "",
+}: {
+  token: Pick<Card["token"], "quoteMint" | "quoteSymbol">;
+  className?: string;
+}) {
+  const quote = quoteToken(token);
+  if (!quote) return null;
+  return (
+    <span
+      className={`quote-pill ${className}`}
+      title={quote.title}
+      aria-label={`Trades against ${quote.label}`}
+    >
+      <span className="quote-slash" aria-hidden="true">
+        /
+      </span>
+      {quote.label}
+    </span>
+  );
 }
 
 const FEE_BADGES = {

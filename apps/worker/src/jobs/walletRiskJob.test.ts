@@ -177,6 +177,45 @@ describe.skipIf(!dbAvailable)("wallet risk job", () => {
     expect(row.walletScore).not.toBeNull();
   });
 
+  it("reads per-coin profit or loss on clean trades that sold something", async () => {
+    const pnl = `${TAG}-pnl`;
+    const anchorAt = new Date("2026-10-14T10:00:00Z");
+    const sold = new Date("2026-10-14T10:05:00Z");
+    // Per coin: [solIn, solOut, tokensSold]
+    const coins: [number, number, number][] = [
+      [1, 2, 100], // +1 SOL, +100%
+      [2, 1, 100], // -1 SOL, -50%
+      [1, 1.5, 50], // part-sold: +0.5 SOL, +50%
+      [1, 0, 0], // still held, nothing sold: not counted
+      [0.01, 5, 5_000], // sold tokens sent in from elsewhere: not counted
+    ];
+    for (const [i, [solIn, solOut, tokensSold]] of coins.entries()) {
+      const token = await prisma.token.create({ data: { mintAddress: `${TAG}-pnl-${i}` } });
+      await prisma.tokenTradeTape.create({
+        data: { tokenId: token.id, anchorAt, reason: "called", status: "done", windowEnd: anchorAt },
+      });
+      await prisma.tokenWalletActivity.create({
+        data: {
+          tokenId: token.id,
+          wallet: pnl,
+          buys: 1,
+          sells: tokensSold > 0 ? 1 : 0,
+          solIn,
+          solOut,
+          tokensBought: 100,
+          tokensSold,
+          firstBuyAt: anchorAt,
+          firstSellAt: tokensSold > 0 ? sold : null,
+        },
+      });
+    }
+    await runWalletRiskJob();
+    const row = await prisma.walletRisk.findUniqueOrThrow({ where: { wallet: pnl } });
+    expect(row).toMatchObject({ appearances: 5, pnlCoins: 3, medianPnlSol: 0.5, medianPnlPct: 50 });
+    expect(row.avgPnlSol).toBeCloseTo(0.5 / 3, 9);
+    expect(row.avgPnlPct).toBeCloseTo(100 / 3, 9);
+  });
+
   it("counts a win-sized trade on a coin a holder transfer sent it as fed by transfers", async () => {
     const fed = `${TAG}-fed`;
     const anchorAt = new Date("2026-10-14T10:00:00Z");

@@ -18,6 +18,7 @@ import { useAppearance } from "../appearance";
 import { tileLook, tileMode, type TileMode } from "../tileTone";
 import { openTokenModal } from "../tokenModal";
 import {
+  emptyColumns,
   frameOf,
   holdFrame,
   SCOPE_COLUMNS,
@@ -31,12 +32,12 @@ import {
   type ScopeColumns,
   type ScopeFrame,
 } from "../scope";
-import { nowReading, recordedPeakOf, socialLinks } from "./AlertCard";
+import { nowReading, QuotePill, recordedPeakOf, socialLinks } from "./AlertCard";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
 import { BrainIcon, FunnelIcon, SlidersIcon } from "./Icons";
-import { SkeletonCards } from "./Charts";
+import { XLinkPreview } from "./XLinkPreview";
 
 /** After a finger lifts, the board stays still this long before new rows drop in. */
 const TOUCH_HOLD_MS = 4_000;
@@ -92,8 +93,11 @@ export function ScopeBoard({
       )
     : [];
   const streamPages = usePollingAll<LaunchPage>(streamPaths, GRADUATED_POLL_MS);
+  // Each column fills in as its own source answers: the feed, the graduated list and the Stream
+  // are three requests, and none waits on the others (user ask 2026-10-18).
+  const streamFirst = streamPages.data[0];
   const buffer = useMemo(() => {
-    if (!first.data) return undefined;
+    if (!first.data && !graduated.data && !streamFirst) return undefined;
     const grad = graduated.data?.launches ?? [];
     const gradIds = new Set(grad.map((c) => c.id));
     const stream: Card[] = [];
@@ -102,8 +106,9 @@ export function ScopeBoard({
       if (!p) break;
       for (const c of p.launches) if (!gradIds.has(c.id)) stream.push(c);
     }
-    return [...joinPages([first.data, ...more.data]), ...grad, ...stream];
-  }, [first.data, more.data, graduated.data, streamPages.data]);
+    const feed = first.data ? joinPages([first.data, ...more.data]) : [];
+    return [...feed, ...grad, ...stream];
+  }, [first.data, more.data, graduated.data, streamPages.data, streamFirst]);
   const [tickIds, setTickIds] = useState<string[] | undefined>(undefined);
   const visible = useLiveMarketCaps(buffer, tickIds);
 
@@ -159,10 +164,17 @@ export function ScopeBoard({
     () => (fresh && frame ? holdFrame(frame, fresh, lastCards.current) : null),
     [fresh, frame],
   );
-  const cols: ScopeColumns | undefined = held?.cols ?? fresh;
+  const cols: ScopeColumns = held?.cols ?? fresh ?? emptyColumns();
+  // Columns whose source hasn't answered yet show placeholder rows, not "nothing here".
+  const loading = (id: ScopeColumn) =>
+    id === "graduated"
+      ? !graduated.data && !graduated.error
+      : id === "new" || id === "soon"
+        ? !streamFirst && !streamPages.error
+        : !first.data && !first.error;
   const pending = held?.pending ?? 0;
 
-  const tickKey = cols ? scopeTickIds(cols).join(",") : "";
+  const tickKey = scopeTickIds(cols).join(",");
   useEffect(() => setTickIds(tickKey ? tickKey.split(",") : undefined), [tickKey]);
 
   const freshRef = useRef(fresh);
@@ -245,15 +257,8 @@ export function ScopeBoard({
     />
   );
 
-  if (first.error && !first.data)
+  if (first.error && !first.data && !graduated.data && !streamFirst)
     return <p className="error">Couldn&apos;t load your feed: {first.error.message}</p>;
-  if (!cols)
-    return (
-      <>
-        {modal}
-        <SkeletonCards count={3} />
-      </>
-    );
 
   return (
     <div
@@ -325,16 +330,19 @@ export function ScopeBoard({
               {filterButton(c.id, c.label)}
             </header>
             <div className="scope-rows">
-              {cols[c.id].length === 0 ? (
+              {cols[c.id].length === 0 && loading(c.id) ? (
+                <ScopeRowSkeletons />
+              ) : cols[c.id].length === 0 ? (
                 <p className="muted small scope-empty">
                   {(unfiltered?.[c.id].length ?? 0) > 0
                     ? "Nothing here passes this column's filters right now."
-                    : emptyText(c.id, modelsOn, graduated.error, streamPages.error)}
+                    : emptyText(c.id, modelsOn, graduated.error, streamPages.error, first.error)}
                 </p>
               ) : (
-                cols[c.id].map((card) => (
+                cols[c.id].map((card, i) => (
                   <ScopeRow
                     key={card.id}
+                    index={i}
                     card={card}
                     now={now}
                     display={display}
@@ -356,7 +364,10 @@ function emptyText(
   modelsOn: boolean,
   gradError: Error | null,
   streamError: Error | null,
+  feedError: Error | null,
 ): string {
+  if ((col === "filters" || col === "models") && feedError)
+    return `Couldn't load your feed: ${feedError.message}`;
   if ((col === "new" || col === "soon") && streamError)
     return `Couldn't load the Stream: ${streamError.message}`;
   if (col === "new") return "Nothing has passed the safety screen in the band lately.";
@@ -367,6 +378,21 @@ function emptyText(
   return gradError
     ? `Couldn't load graduated tokens: ${gradError.message}`
     : "No graduated token has passed the safety screen in the last day.";
+}
+
+/** Placeholder rows for a column whose data is still on its way. */
+function ScopeRowSkeletons() {
+  return (
+    <div className="scope-row-skeletons" aria-label="Loading" role="status">
+      {Array.from({ length: 4 }, (_, i) => (
+        <div key={i} className="scope-row-skeleton">
+          <span className="skeleton round" />
+          <span className="skeleton" />
+          <span className="skeleton" />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /** The board's look as classes: Scope settings' density, layout, sizes and chip style. */
@@ -391,6 +417,7 @@ export function ScopeRow({
   tiles,
   preview = false,
   marker = false,
+  index = 0,
 }: {
   card: Card;
   now: number;
@@ -400,6 +427,8 @@ export function ScopeRow({
   preview?: boolean;
   /** Show where an alert came from whatever the settings say: the Graduated column's alerts. */
   marker?: boolean;
+  /** Its place in the column: a column's first rows fade in one after another as they land. */
+  index?: number;
 }) {
   const open = () => {
     if (!preview) openTokenModal(card, now);
@@ -436,7 +465,11 @@ export function ScopeRow({
   const img = d.imageSize === "s" ? 36 : d.imageSize === "l" ? 56 : 44;
 
   return (
-    <article className={`scope-row tone-${badge.tone}${preview ? " preview" : ""}`} onClick={onClick}>
+    <article
+      className={`scope-row tone-${badge.tone}${preview ? " preview" : ""}`}
+      style={{ "--i": Math.min(index, 10) } as React.CSSProperties}
+      onClick={onClick}
+    >
       {!preview && <QuickBuyPill mint={card.token.mintAddress} symbol={label} onNeedsPanel={open} />}
       <div className="scope-avatar">
         <TokenImage
@@ -463,6 +496,7 @@ export function ScopeRow({
           >
             {label}
           </button>
+          <QuotePill token={card.token} className="scope-quote" />
           {d.showName && card.token.name && card.token.symbol && (
             <span className="scope-name" title={card.token.name}>
               {card.token.name}
@@ -498,7 +532,7 @@ export function ScopeRow({
             </span>
           )}
           {socials.map((l) => (
-            <a
+            <XLinkPreview
               key={l.key}
               className="scope-link"
               href={l.url}
@@ -508,7 +542,7 @@ export function ScopeRow({
               aria-label={`Open the coin's ${l.label}`}
             >
               <l.Icon size={11} />
-            </a>
+            </XLinkPreview>
           ))}
         </div>
       </div>

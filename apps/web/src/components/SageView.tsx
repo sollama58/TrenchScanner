@@ -4,6 +4,7 @@ import { usePolling } from "../hooks";
 import { ago, shortAddress, usd } from "../format";
 import { TokenImage } from "./TokenImage";
 import { CheckIcon, CloseIcon, CopyIcon, ExternalIcon, LockIcon, SageIcon } from "./Icons";
+import { XLinkPreview } from "./XLinkPreview";
 import { Skeleton } from "./Charts";
 import { closeSage, SAGE_PARAM } from "../sage";
 import { useShowNarrativeNote } from "../narrativeNote";
@@ -1043,9 +1044,9 @@ function XCard({ x }: { x: NonNullable<SageRead["x"]> }) {
         </div>
       )}
       {x.url && (
-        <a className="sage-x-link small" href={x.url} target="_blank" rel="noopener noreferrer">
+        <XLinkPreview className="sage-x-link small" href={x.url} target="_blank" rel="noopener noreferrer">
           Open on X <ExternalIcon size={11} />
-        </a>
+        </XLinkPreview>
       )}
     </section>
   );

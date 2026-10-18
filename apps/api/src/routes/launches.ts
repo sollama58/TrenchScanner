@@ -58,6 +58,19 @@ const LAUNCH_STREAM_CANDIDATES = 300;
 const LAUNCH_STREAM_CACHE_MS = 5_000;
 
 /**
+ * Past its TTL, a page is still answered at once for this long while it refills behind the
+ * reader (Scope's load, user ask 2026-10-18: nobody waits out a fill they didn't need to).
+ */
+const LAUNCH_STREAM_STALE_MS = 30_000;
+
+/**
+ * The graduated list (Scope's Graduated column) moves only when a token graduates and passes,
+ * a few an hour, and its read looks three times as far back: kept longer, refilled behind readers.
+ */
+const LAUNCH_GRADUATED_CACHE_MS = 30_000;
+const LAUNCH_GRADUATED_STALE_MS = 5 * 60_000;
+
+/**
  * GET /launches - the dashboard's Stream: every new token the moment it has passed the safety
  * screen inside the curated mcap band (MCAP_FILTER_MIN to MAX), newest first, whatever anyone's
  * filter or the models make of it. A card sits at its first scan snapshot that both passed the rug
@@ -73,6 +86,12 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
   const cache = new SharedCacheMap<Awaited<ReturnType<typeof readLaunches>>>(
     LAUNCH_STREAM_CACHE_MS,
     LAUNCH_STREAM_CACHE_KEYS,
+    LAUNCH_STREAM_STALE_MS,
+  );
+  const gradCache = new SharedCacheMap<Awaited<ReturnType<typeof readLaunches>>>(
+    LAUNCH_GRADUATED_CACHE_MS,
+    LAUNCH_STREAM_CACHE_KEYS,
+    LAUNCH_GRADUATED_STALE_MS,
   );
 
   /** Page `page` of the Stream (or, with `mint`, that token's card alone), and whether an older page has any. */
@@ -99,6 +118,19 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
         ORDER BY "firstInBandAt" DESC
         LIMIT ${candidates}
       ) t
+      ${
+        // Graduated only: first each candidate's newest graduation reading, one row down its index,
+        // so the walk below runs only for the few that have graduated instead of reading every
+        // snapshot of every token that never did (most of them) - what made the list slow.
+        graduated
+          ? Prisma.sql`JOIN LATERAL (
+              SELECT "graduated" FROM "TokenSnapshot"
+              WHERE "tokenId" = t.id AND "graduated" IS NOT NULL
+              ORDER BY "takenAt" DESC
+              LIMIT 1
+            ) g ON g."graduated"`
+          : Prisma.empty
+      }
       CROSS JOIN LATERAL (
         SELECT id, "takenAt" FROM "TokenSnapshot"
         WHERE "tokenId" = t.id
@@ -176,7 +208,7 @@ export async function registerLaunchRoutes(app: FastifyInstance, opts: { env: En
     const answer =
       q && !mint
         ? await readLaunches(page, undefined, q, graduated)
-        : await cache
+        : await (graduated ? gradCache : cache)
             .for(`${g}${mint ? `mint:${mint}` : `page:${page}`}`)
             .get(() => readLaunches(page, mint, undefined, graduated));
     return { ...answer, page };

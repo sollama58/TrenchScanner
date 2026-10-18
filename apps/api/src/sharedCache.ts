@@ -210,8 +210,9 @@ export class SharedCache<T> {
  *
  * Bounded because the keys come from requests: left unbounded, a map keyed by user and window
  * is a slow leak driven by whoever asks. Past `maxEntries` the least recently used key goes;
- * losing one costs that reader a single refill. Each entry's TTL is `ttlMs`, strict (no
- * stale-while-revalidate): these are the feed caches, cleared the moment a new alert lands.
+ * losing one costs that reader a single refill. Each entry's TTL is `ttlMs`, strict by default
+ * (the feed caches, cleared the moment a new alert lands); a list nothing clears by hand, such as
+ * the Stream's pages, can pass a stale-while-revalidate window.
  */
 export class SharedCacheMap<T> {
   private readonly caches = new Map<string, SharedCache<T>>();
@@ -219,6 +220,8 @@ export class SharedCacheMap<T> {
   constructor(
     private readonly ttlMs: number,
     private readonly maxEntries: number,
+    /** Each key's cache's stale-while-revalidate window (SharedCacheOptions); unnamed. */
+    private readonly staleWhileRevalidateMs = 0,
   ) {}
 
   /** The cache for `key`, created on first use. Marks it most recently used. */
@@ -230,7 +233,7 @@ export class SharedCacheMap<T> {
       this.caches.set(key, existing);
       return existing;
     }
-    const cache = new SharedCache<T>(this.ttlMs);
+    const cache = new SharedCache<T>(this.ttlMs, { staleWhileRevalidateMs: this.staleWhileRevalidateMs });
     this.caches.set(key, cache);
     if (this.caches.size > this.maxEntries) {
       const oldest = this.caches.keys().next().value;

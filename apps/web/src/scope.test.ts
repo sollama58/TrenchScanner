@@ -94,9 +94,10 @@ describe("holdFrame", () => {
     const { cols, pending } = holdFrame(frame, fresh, new Map());
     expect(cols.filters.map((c) => c.id)).toEqual(["m1"]);
     expect(cols.models.map((c) => c.id)).toEqual(["c1"]);
-    expect(cols.graduated).toEqual([]);
-    // m0 is new in two columns but one alert; g1 is new.
-    expect(pending).toBe(2);
+    // Graduated was empty when paused (not loaded yet): it fills in rather than waiting.
+    expect(cols.graduated.map((c) => c.id)).toEqual(["g1"]);
+    // m0 is new in two columns but one alert.
+    expect(pending).toBe(1);
   });
 
   it("keeps a row whose alert left the feed, from its last card", () => {

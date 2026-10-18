@@ -492,6 +492,12 @@ model Token {
   symbol                  String?
   name                    String?
   pairAddress             String? // primary DexScreener pair used for pricing
+  /// The coin that pair trades against (DexScreener's quoteToken): wrapped SOL for nearly every
+  /// launch, else USDC, USD1, another launch. The cards show a pill when it isn't SOL. Written by
+  /// the scan whenever a reading names it; a reading that doesn't (Jupiter, GeckoTerminal) leaves
+  /// it as it is. Null = no reading has said yet.
+  quoteMint               String?
+  quoteSymbol             String?
   /// The token's logo, as hosted by DexScreener. Read from the pair response the scan already
   /// fetches rather than derived from the mint address: CDN URL shapes are undocumented and
   /// change, and a guessed one 404s silently for every mint that has no artwork - which is a lot
@@ -3034,6 +3040,15 @@ model WalletRisk {
   transferWins    Int?
   /// Median % of supply it bought.
   medianSupplyPct Float?
+  /// Profit or loss per coin over the same rows as medianSupplyPct, on its clean trades that sold
+  /// something (pnlCoins of them): SOL out less SOL in, and that as a % of SOL in. A coin it still
+  /// holds unsold isn't counted; a part-sold one counts what it took out so far. Median and mean
+  /// (user ask 2026-10-18). Null until the first rebuild after they were added, or with no such coin.
+  pnlCoins        Int?
+  medianPnlSol    Float?
+  avgPnlSol       Float?
+  medianPnlPct    Float?
+  avgPnlPct       Float?
   solIn           Float
   solOut          Float
   lastSeenAt      DateTime
