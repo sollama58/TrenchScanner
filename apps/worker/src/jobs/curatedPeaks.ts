@@ -111,10 +111,14 @@ export async function recordCuratedPeaksFullSweep(
   snapshotRetentionDays: number,
   /** As recordMatchPeaksFullSweep's: a recorded high already covers the readings before it. */
   snapshotsSince?: Date,
+  /** As recordMatchPeaksFullSweep's; `onBatch` gets the high count raised so far. */
+  resume: { afterTokenId?: string; onBatch?: (lastTokenId: string, raised: number) => Promise<void> } = {},
 ): Promise<number> {
+  const after = resume.afterTokenId ?? "";
   const tokens = await prisma.$queryRaw<{ tokenId: string }[]>`
     SELECT DISTINCT "tokenId" FROM "CuratedAlert"
     WHERE "createdAt" > NOW() - MAKE_INTERVAL(days => ${snapshotRetentionDays}::int)
+      AND "tokenId" > ${after}
     ORDER BY "tokenId"`;
   let raised = 0;
   for (let i = 0; i < tokens.length; i += SWEEP_TOKENS_PER_BATCH) {
@@ -129,6 +133,7 @@ export async function recordCuratedPeaksFullSweep(
     } catch (err) {
       logger.warn("call peak sweep batch failed, moving on", { tokens: ids.length, error: String(err) });
     }
+    await resume.onBatch?.(ids[ids.length - 1]!, raised);
   }
   logger.info("call peak sweep complete", { tokens: tokens.length, raised });
   return raised;
