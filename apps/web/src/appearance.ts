@@ -14,6 +14,12 @@ import { put, type CardField, type FeedAppearance, type QuickLink } from "./api"
  * default, never changed, and reads without them.
  */
 export const CHART_MARKS_REV = 2;
+/**
+ * Which hideBelowMcap default a look was saved against (apps/api/src/feedAppearance.ts has the
+ * same): a look from before it went on at 6k that still holds the old default (off at 5k) was never
+ * changed, and reads as the new one (user ask 2026-10-18).
+ */
+export const HIDE_BELOW_MCAP_REV = 2;
 const ALL_MARK_KINDS = ["kol", "known", "funded", "probable", "dev", "risky", "winner", "linked"] as const;
 
 export const DEFAULT_APPEARANCE: FeedAppearance = {
@@ -68,8 +74,10 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   outline: null,
   // Off by default (user ask 2026-10-14); an account that saved it on keeps it on.
   outlineResult: false,
-  hideBelowMcap: false,
-  hideBelowMcapUsd: 5_000,
+  // On at 6k by default (user ask 2026-10-18); an account that changed it keeps its choice.
+  hideBelowMcap: true,
+  hideBelowMcapUsd: 6_000,
+  hideBelowMcapRev: HIDE_BELOW_MCAP_REV,
   quickLinks: ["terminal"],
   // The token chart's labeled-wallet trades (user ask 2026-10-18): 0.5 SOL and up, every kind but
   // risky wallets and dumpers, which are off by default (user ask 2026-10-18).
@@ -298,11 +306,7 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     hideSafetyPill: typeof r.hideSafetyPill === "boolean" ? r.hideSafetyPill : d.hideSafetyPill,
     outline: hex(r.outline),
     outlineResult: typeof r.outlineResult === "boolean" ? r.outlineResult : d.outlineResult,
-    hideBelowMcap: typeof r.hideBelowMcap === "boolean" ? r.hideBelowMcap : d.hideBelowMcap,
-    hideBelowMcapUsd:
-      typeof r.hideBelowMcapUsd === "number" && r.hideBelowMcapUsd % HIDE_BELOW_MCAP.step === 0
-        ? intIn(r.hideBelowMcapUsd, HIDE_BELOW_MCAP.min, HIDE_BELOW_MCAP.max, d.hideBelowMcapUsd)
-        : d.hideBelowMcapUsd,
+    ...hideBelowMcapOf(r),
     quickLinks: Array.isArray(r.quickLinks)
       ? [
           ...new Set(
@@ -322,6 +326,24 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     hidden: Array.isArray(r.hidden)
       ? [...new Set(r.hidden.filter((f): f is CardField => typeof f === "string" && CARD_FIELDS.has(f)))]
       : d.hidden,
+  };
+}
+
+/** A saved look's low market cap hiding; see HIDE_BELOW_MCAP_REV. */
+function hideBelowMcapOf(
+  r: Record<string, unknown>,
+): Pick<FeedAppearance, "hideBelowMcap" | "hideBelowMcapUsd" | "hideBelowMcapRev"> {
+  const d = DEFAULT_APPEARANCE;
+  const on = typeof r.hideBelowMcap === "boolean" ? r.hideBelowMcap : d.hideBelowMcap;
+  const usd =
+    typeof r.hideBelowMcapUsd === "number" && r.hideBelowMcapUsd % HIDE_BELOW_MCAP.step === 0
+      ? intIn(r.hideBelowMcapUsd, HIDE_BELOW_MCAP.min, HIDE_BELOW_MCAP.max, d.hideBelowMcapUsd)
+      : d.hideBelowMcapUsd;
+  const oldDefault = r.hideBelowMcapRev !== HIDE_BELOW_MCAP_REV && !on && usd === 5_000;
+  return {
+    hideBelowMcap: oldDefault ? d.hideBelowMcap : on,
+    hideBelowMcapUsd: oldDefault ? d.hideBelowMcapUsd : usd,
+    hideBelowMcapRev: HIDE_BELOW_MCAP_REV,
   };
 }
 
