@@ -13,7 +13,7 @@ import {
  * still lets a token through the screen (user ask 2026-10-18, "set the floor/ceiling we allow
  * users to set as the safety screen's max/min"). A looser value would only promise tokens the
  * screen never lets out, so the API refuses it, new filters open on these values, and existing
- * filters above them were clamped once (migration 20261018170000_filter_safety_bounds).
+ * filters above them were clamped once (migration 20261018171000_filter_safety_bounds).
  *
  * In saved units. The screen's "at or above" cuts on top-10 shares come in steps of one holder in
  * ten, so they sit one holder under the cut (8 of 10 is rejected: 7 of 10, 70%); its count cuts
