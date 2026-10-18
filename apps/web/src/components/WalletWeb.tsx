@@ -4,7 +4,7 @@ import { useAppearance } from "../appearance";
 import { cachedGet } from "../cache";
 import { shortAddress } from "../format";
 import { openWallet } from "../walletModal";
-import { useWalletNames, visibleNames, walletNameText, type WalletNames } from "../walletNames";
+import { publicNames, useWalletNames, visibleNames, walletNameText, type WalletNames } from "../walletNames";
 import {
   layoutWeb,
   TIE_LABEL,
@@ -273,7 +273,7 @@ function WebView({
                 }`}
                 caption={`${hubName}: ${walletCount(web.total)} used, mapped on TrenchScanner`}
                 wide
-                render={() => renderWalletWebCard(web, layout, names, hubName, hidden)}
+                render={() => renderWalletWebCard(web, layout, publicNames(names), hubName, hidden)}
               />
             </span>
           )}

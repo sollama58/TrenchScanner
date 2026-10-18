@@ -10,6 +10,7 @@ import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
 import { TwoFactorPanel } from "../components/TwoFactorPanel";
 import { PrivyWalletPanel } from "../components/PrivyWalletPanel";
 import { TradingSettingsPanel } from "../components/TradingSettingsPanel";
+import { TrackedWalletsPanel } from "../components/TrackedWallets";
 import { SETTINGS_ACCOUNT_ID } from "../components/WalletMenu";
 import { useMe } from "../me";
 import {
@@ -72,6 +73,7 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
       <TabsPanel />
       <TokenViewPanel />
       <TradingSettingsPanel />
+      <TrackedWalletsPanel />
       {/* Phone pairing by QR is for wallet sign-ins only (user rule 2026-10-18). */}
       {me?.signInMethod === "privy" ? <PrivyWalletPanel /> : <ConnectPhonePanel />}
       <TwoFactorPanel />

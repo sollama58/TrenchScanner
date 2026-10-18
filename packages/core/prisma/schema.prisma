@@ -3161,6 +3161,41 @@ model KolPossibleSide {
   @@index([kolWallet])
 }
 
+/// A wallet a Pro Mode user labeled (user ask 2026-10-18): from then on, for that user alone, it
+/// reads as a KOL ("kol") or as a User Tracked wallet ("tracked") in names, bubble maps, side ties
+/// and chart marks (apps/api/src/trackedWallets.ts). Never read by the models, the scan, the
+/// filters, alerts or another user's views. At most TRACKED_WALLET_CAP per user, held by the API.
+model UserTrackedWallet {
+  userId    String
+  wallet    String
+  name      String
+  /// "kol" (shown with the KOLs) or "tracked" (the User Tracked kind).
+  category  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([userId, wallet])
+  @@index([wallet])
+}
+
+/// Probable sides of the wallets users labeled (UserTrackedWallet), by the same rules and hourly run
+/// as KolPossibleSide (the worker's trackedSidesJob.ts, after kolSideWalletsJob.ts), kept apart from
+/// it so nothing that reads KOL sides (the scan's KOL Bundled %, the models) ever sees them. Shown
+/// only to the users who labeled `trackedWallet`. Rebuilt whole every hour.
+model TrackedWalletSide {
+  wallet        String
+  trackedWallet String
+  pct           Float
+  shared        Int
+  kolCoins      Int
+  hours         Int
+  transfers     Int      @default(0)
+  computedAt    DateTime
+
+  @@id([wallet, trackedWallet])
+  @@index([trackedWallet])
+}
+
 /// A wallet the Side Wallet Checker reads as a bot (user ask 2026-10-17: the Admin Wallets section's
 /// "Bots and removed sides" view), written each hour by the worker's kolSideWalletsJob.ts: marked by
 /// hand (core's MARKED_BOT_WALLETS), a bot by its share of every tracked coin (SIDE_BOT_MIN_COINS,

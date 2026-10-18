@@ -39,6 +39,11 @@ export interface PossibleSide {
    * alongside earned it alone.
    */
   transfers?: number;
+  /**
+   * The tie is to a wallet the reader labeled (trackedWallets.ts), shown to that reader alone: its
+   * kind, "kol" or "tracked". Absent on the roster's ties.
+   */
+  tracked?: "kol" | "tracked";
 }
 
 const shortAddress = (a: string) => (a.length > 10 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a);
@@ -49,11 +54,13 @@ export function possibleSideText(
     funded?: boolean;
     known?: boolean;
     transfers?: number;
+    tracked?: "kol" | "tracked";
   },
 ): string {
   const who = s.kolName ?? shortAddress(s.kolWallet);
   if (s.known) return `${who} Known Side`;
-  if (s.funded) return `${who} KOL Funded Wallet`;
+  // A User Tracked wallet is no KOL: its funded wallets read "<name> Funded Wallet".
+  if (s.funded) return s.tracked === "tracked" ? `${who} Funded Wallet` : `${who} KOL Funded Wallet`;
   // A label transfers alone earned has no buying-alongside share to show.
   return s.pct > 0
     ? `${who} Probable Side (${Math.round(s.pct)}%)`

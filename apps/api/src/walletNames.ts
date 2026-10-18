@@ -21,9 +21,11 @@ import { knownSideName, readKolRows } from "./kolRoster.js";
 
 /**
  * "pumpfun": Helius's name is a Pump.fun username, which the dashboard quotes and tints green;
- * "fomo": a FOMO app username, quoted and tinted purple; "kol-side": a KOL's Known Side.
+ * "fomo": a FOMO app username, quoted and tinted purple; "kol-side": a KOL's Known Side;
+ * "tracked": a wallet the reader labeled as User Tracked (trackedWallets.ts; a label marked KOL is
+ * "kol"), for that reader alone.
  */
-export type WalletNameSource = "kol" | "kol-side" | "identity" | "pumpfun" | "fomo" | "exchange";
+export type WalletNameSource = "kol" | "kol-side" | "identity" | "pumpfun" | "fomo" | "exchange" | "tracked";
 
 export interface WalletName {
   name: string;
@@ -33,6 +35,8 @@ export interface WalletName {
    * person, so the bubble map's KOL bundles skip its transfers. Absent otherwise.
    */
   service?: true;
+  /** The reader's own label (trackedWallets.ts), which they can edit; absent on every other name. */
+  mine?: true;
 }
 
 /** The name a wallet goes by, highest priority first. Exported for tests. */

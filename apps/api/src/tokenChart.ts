@@ -158,7 +158,7 @@ export function firstMinutes(candles: readonly McapCandle[], startAt: number | n
 }
 
 /** Why a wallet's trades are marked on the chart. */
-export type WalletTag = "risky" | "dumper" | "linked" | "creator" | "kol" | "winner" | "side";
+export type WalletTag = "risky" | "dumper" | "linked" | "creator" | "kol" | "winner" | "side" | "tracked";
 
 /** A KOL side label short of a Known Side (possibleSides.ts): a wallet a KOL funded, or a Probable Side. */
 export interface SideLabel {
@@ -166,6 +166,8 @@ export interface SideLabel {
   /** The KOL's main wallet, and its roster name (null when it has none). */
   kolWallet: string;
   kolName: string | null;
+  /** A tie to a wallet the reader labeled (withTrackedMarks): its kind. Absent on the roster's. */
+  tracked?: "kol" | "tracked";
 }
 
 /** One marked trade: [time in ms, 1 buy / -1 sell, SOL (null when only the time is known)]. */
@@ -189,6 +191,8 @@ export interface MarkedWallet {
   knownSideOf?: string;
   /** Tagged "side": the KOL side label it carries (a funded wallet or a Probable Side). */
   side?: SideLabel;
+  /** Tagged "tracked": the name the reader gave it as a User Tracked wallet (withTrackedMarks). */
+  tracked?: string;
   solIn: number;
   solOut: number;
   /** % of supply it held at the call. */
@@ -281,6 +285,97 @@ export function markedWallets(
     });
   }
   return rankAndCap(out);
+}
+
+/** Wallets withTrackedMarks adds past the shared list at most: the cap of labels, and some sides. */
+export const MAX_TRACKED_MARKED_WALLETS = 40;
+
+/**
+ * The shared marked wallets (the cached markedWallets answer, never changed in place) with the
+ * reader's labels laid over them (user ask 2026-10-18, apps/api/src/trackedWallets.ts): a wallet
+ * they labeled KOL is a KOL by their name, one labeled User Tracked is tagged "tracked", and a
+ * wallet one of them funded or that is its Probable Side (`sides`, as loadTrackedSides answers)
+ * carries that side label when it has no KOL tie of its own. `rows`: the coin's trade-tape rows of
+ * those wallets (trackedActivity). Wallets the shared list left out are added after it, within
+ * MAX_TRACKED_MARKED_WALLETS and what is left of MAX_MARKED_TRADES.
+ */
+export function withTrackedMarks(
+  wallets: readonly MarkedWallet[],
+  rows: readonly ActivityRow[],
+  tracked: readonly { wallet: string; name: string; category: "kol" | "tracked" }[],
+  sides: Readonly<
+    Record<
+      string,
+      readonly { kolWallet: string; kolName: string | null; funded?: boolean; tracked?: "kol" | "tracked" }[]
+    >
+  >,
+): MarkedWallet[] {
+  const out = [...wallets];
+  if (tracked.length === 0 || rows.length === 0) return out;
+  const label = new Map(tracked.map((t) => [t.wallet, t]));
+  const at = new Map(out.map((w, i) => [w.wallet, i]));
+  let budget = MAX_MARKED_TRADES - out.reduce((n, w) => n + w.trades.length, 0);
+  let added = 0;
+  for (const r of rows) {
+    const t = label.get(r.wallet);
+    const s = t ? undefined : sides[r.wallet]?.find((e) => e.tracked);
+    if (!t && !s) continue;
+    const patch = (w: MarkedWallet): MarkedWallet => {
+      const tags = new Set(w.tags);
+      if (t?.category === "kol") {
+        // Named as the reader's KOL: not a Known Side or someone else's side for them.
+        tags.add("kol");
+        tags.delete("side");
+        const { knownSideOf: _k, side: _s, ...rest } = w;
+        return { ...rest, tags: [...tags], kol: t.name };
+      }
+      if (t) {
+        tags.add("tracked");
+        return { ...w, tags: [...tags], tracked: t.name };
+      }
+      if (s && !tags.has("kol") && !w.side) {
+        tags.add("side");
+        return {
+          ...w,
+          tags: [...tags],
+          side: {
+            kind: s.funded ? "funded" : "probable",
+            kolWallet: s.kolWallet,
+            kolName: s.kolName,
+            ...(s.tracked ? { tracked: s.tracked } : {}),
+          },
+        };
+      }
+      return w;
+    };
+    const i = at.get(r.wallet);
+    if (i !== undefined) {
+      out[i] = patch(out[i]!);
+      continue;
+    }
+    if (added >= MAX_TRACKED_MARKED_WALLETS || budget <= 0) continue;
+    const trades = (storedTrades(r.trades) ?? firstTrades(r)).slice(0, budget);
+    if (trades.length === 0) continue;
+    budget -= trades.length;
+    added += 1;
+    at.set(r.wallet, out.length);
+    out.push(
+      patch({
+        wallet: r.wallet,
+        tags: r.isCreator ? ["creator"] : [],
+        score: null,
+        dumps: null,
+        coins: null,
+        funder: null,
+        kol: null,
+        solIn: r.solIn,
+        solOut: r.solOut,
+        heldPct: r.heldPctAtAnchor,
+        trades,
+      }),
+    );
+  }
+  return out;
 }
 
 /** Riskiest first (creator, KOL and linked wallets ahead of unscored ones), within the caps. */

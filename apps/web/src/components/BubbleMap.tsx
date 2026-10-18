@@ -74,7 +74,9 @@ import { laneD } from "../linkLanes";
 import { openWallet } from "../walletModal";
 import {
   isFomoName,
+  isKolLike,
   isPumpfunName,
+  publicNames,
   isUsername,
   SWITCHABLE_NAMES,
   useWalletNames,
@@ -91,7 +93,13 @@ import {
   SAFETY_REJECT_LINKED_COUNT,
 } from "./AlertCard";
 import { useAppearance } from "../appearance";
-import { possibleSideText, sideGroups, usePossibleSides, type PossibleSides } from "../possibleSides";
+import {
+  possibleSideText,
+  publicSides,
+  sideGroups,
+  usePossibleSides,
+  type PossibleSides,
+} from "../possibleSides";
 import { ShareButton } from "./ShareImageDialog";
 import { BubblesIcon } from "./Icons";
 
@@ -249,24 +257,60 @@ function useKols(
   names: WalletNames,
   transfers: boolean,
 ): KolControl[] {
-  return useMemo(
-    () =>
-      graph
-        ? kolControl(
-            graph,
-            groups,
-            graph.nodes.flatMap((n) =>
-              n.kind === "holder" && n.wallet && names[n.wallet]?.source === "kol"
-                ? [{ wallet: n.wallet, name: names[n.wallet]!.name }]
-                : [],
-            ),
-            transfers ? graph.transferLinks : [],
-            transfers ? graph.fundingClusters : undefined,
-            (w) => names[w]?.service === true,
-          )
-        : [],
-    [graph, groups, names, transfers],
-  );
+  return useMemo(() => kolsOn(graph, groups, names, transfers), [graph, groups, names, transfers]);
+}
+
+/**
+ * The share image's view of the map with none of the reader's own labels (user ask 2026-10-18:
+ * labels stay private to the reader): their names, their side ties and the bundles drawn for them
+ * left out, the roster's KOLs as everyone sees them.
+ */
+function publicShare(
+  graph: BubbleGraph,
+  names: WalletNames,
+  allNames: WalletNames,
+  side: SideToggle,
+  transfers: boolean,
+): { names: WalletNames; shown: readonly SideGroup[]; kols: KolControl[]; drawn: readonly KolControl[] } {
+  const holders = graph.nodes.flatMap((n) => (n.kind === "holder" && n.wallet ? [n.wallet] : []));
+  const groups = sideGroups(holders, publicSides(side.sides));
+  const kols = kolsOn(graph, groups, publicNames(allNames), transfers);
+  return {
+    names: publicNames(names),
+    shown: side.showSides ? groups : NO_SIDES,
+    kols,
+    drawn: side.groups.length > 0 && !side.showSides ? NO_KOLS : kols,
+  };
+}
+
+function kolsOn(
+  graph: BubbleGraph | null,
+  groups: readonly SideGroup[],
+  names: WalletNames,
+  transfers: boolean,
+): KolControl[] {
+  return graph
+    ? kolControl(
+        graph,
+        groups,
+        graph.nodes.flatMap((n) => {
+          const named = n.kind === "holder" && n.wallet ? names[n.wallet] : undefined;
+          // A wallet the reader labeled is one of the KOLs for them, KOL or User Tracked.
+          return n.wallet && isKolLike(named)
+            ? [
+                {
+                  wallet: n.wallet,
+                  name: named!.name,
+                  ...(named!.mine ? { tracked: named!.source === "tracked" } : {}),
+                },
+              ]
+            : [];
+        }),
+        transfers ? graph.transferLinks : [],
+        transfers ? graph.fundingClusters : undefined,
+        (w) => names[w]?.service === true,
+      )
+    : [];
 }
 
 /**
@@ -697,7 +741,7 @@ function GroupPanel({
         key: `k:${k.kolWallet}`,
         title: (
           <>
-            KOL <WalletText wallet={k.kolWallet} names={names} />
+            {k.tracked ? "Tracked" : "KOL"} <WalletText wallet={k.kolWallet} names={names} />
             {!names[k.kolWallet] && k.kolName ? ` ${k.kolName}` : ""}
           </>
         ),
@@ -925,6 +969,7 @@ function NameLegend({ graph, names }: { graph: BubbleGraph; names: WalletNames }
   // Each kind's own name, written the way its names are (user ask 2026-10-14): KOL, "Pump.fun", "FOMO".
   const items: { cls: string; text: string }[] = [];
   if (kinds.has("kol")) items.push({ cls: "kol", text: "KOL" });
+  if (kinds.has("tracked")) items.push({ cls: "tracked", text: "User Tracked" });
   if (kinds.has("pumpfun")) items.push({ cls: "pumpfun", text: '"Pump.fun"' });
   if (kinds.has("fomo")) items.push({ cls: "fomo", text: '"FOMO"' });
   if (kinds.has("identity") || kinds.has("exchange")) items.push({ cls: "", text: "Helius / exchange" });
@@ -1480,7 +1525,7 @@ function Bubble({
   const pumpfun = isPumpfunName(named);
   // A KOL's name always gets its gold backing, so it stands out (user ask 2026-10-14); so does a
   // Known Side's, one of the KOL's own wallets.
-  const kol = named?.source === "kol" || named?.source === "kol-side";
+  const kol = named?.source === "kol" || named?.source === "kol-side" || named?.source === "tracked";
   const fomo = isFomoName(named);
   const fit = named ? bubbleNameLines(n.r, named.name, isUsername(named)) : null;
   // The % moves up to make room for the name under it.
@@ -2002,18 +2047,20 @@ export function BubbleMapSection({
             caption={`${label} ${graph && graph.clusters.length > 0 ? "linked wallets" : "top holders"} on TrenchScanner`}
             iconOnly
             wide
-            render={() =>
-              renderBubbleCard(graph, token, names, {
+            render={() => {
+              // Shared outside the dashboard: none of the reader's private labels go with it.
+              const pub = publicShare(graph, names, graphNames, side, showTransfers);
+              return renderBubbleCard(graph, token, pub.names, {
                 cex: showCex,
                 transfers: showTransfers,
-                sides: side.shown,
+                sides: pub.shown,
                 flags,
-                kolBundled: kolBundledFor(shown, kols),
-                kols: drawnKolsFor(side, kols),
-                linkedKols: kols,
+                kolBundled: kolBundledFor(shown, pub.kols),
+                kols: pub.drawn,
+                linkedKols: pub.kols,
                 funderLabels: bubbleFunderLabels,
-              })
-            }
+              });
+            }}
           />
         </span>
       </h4>

@@ -27,6 +27,7 @@ import {
 } from "@trenchscanner/core";
 import type { JobRunMeta } from "../scheduler.js";
 import { replaceRows, type ReplaceRowsSpec } from "./replaceRows.js";
+import { rebuildTrackedSides, type TrackedSidesMeta } from "./trackedSidesJob.js";
 
 const logger = createLogger("kol-side-wallets");
 
@@ -435,7 +436,18 @@ export async function runKolSideWalletsJob(opts: { now?: () => number } = {}): P
     { maxWait: 30_000, timeout: 60_000 },
   );
 
+  // The users' labeled wallets next, by the same rules (trackedSidesJob.ts). Its own write: a failure
+  // there never undoes or fails the KOLs' run.
+  const tracked: TrackedSidesMeta | { trackedError: string } = await rebuildTrackedSides(
+    now,
+    new Set([...bots, ...botLike, ...HOT_FUNDER_DENYLIST]),
+  ).catch((err: unknown) => {
+    logger.warn("tracked wallet sides not rebuilt", { error: String(err) });
+    return { trackedError: String(err).slice(0, 200) };
+  });
+
   const meta: JobRunMeta = {
+    ...tracked,
     kols: data.length,
     written,
     withSides: data.filter((d) => (d.sides as Record<SideWindow, SideWallet[]>)["30d"].length > 0).length,
