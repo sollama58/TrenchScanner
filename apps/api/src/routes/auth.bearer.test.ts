@@ -35,29 +35,53 @@ describe.skipIf(!dbAvailable)("session token in an Authorization header", () => 
   let userId: string;
   const env = loadEnv();
   const signer = createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS);
+  // A real key: pairing a phone is signed for with the wallet (deviceLink.ts).
+  const keys = nacl.sign.keyPair();
+  const WALLET = bs58.encode(keys.publicKey);
 
   beforeAll(async () => {
     app = await buildServer(env);
-    userId = (await prisma.user.create({ data: { walletAddress: `${TAG}-wallet` } })).id;
+    userId = (await prisma.user.create({ data: { walletAddress: WALLET } })).id;
   });
 
   afterAll(async () => {
     await app?.close();
-    if (dbAvailable) await prisma.user.deleteMany({ where: { walletAddress: { startsWith: TAG } } });
+    if (dbAvailable)
+      await prisma.user.deleteMany({
+        where: { OR: [{ walletAddress: WALLET }, { walletAddress: { startsWith: TAG } }] },
+      });
   });
 
   const me = (headers: Record<string, string>, cookies: Record<string, string> = {}) =>
     app.inject({ method: "GET", url: "/auth/me", headers, cookies });
 
+  /** POST /auth/link/code as `session`, signed for with the wallet as the dashboard does. */
+  async function mintCode(session: string) {
+    const headers = { authorization: `Bearer ${session}` };
+    const challenge = await app.inject({
+      method: "POST",
+      url: "/auth/link/confirm",
+      headers,
+    });
+    const { nonce, message } = challenge.json<{ nonce: string; message: string }>();
+    const signature = bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), keys.secretKey));
+    return app.inject({
+      method: "POST",
+      url: "/auth/link/code",
+      headers,
+      payload: { confirmation: { nonce, signature } },
+    });
+  }
+
   it("signs a request in with no cookie at all", async () => {
-    const token = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
+    const token = await signer.sign({ userId, walletAddress: WALLET, sessionVersion: 0 });
     const res = await me({ authorization: `Bearer ${token}` });
     expect(res.statusCode).toBe(200);
-    expect(res.json().walletAddress).toBe(`${TAG}-wallet`);
+    expect(res.json().walletAddress).toBe(WALLET);
   });
 
   it("is not shadowed by a stale or garbage cookie", async () => {
-    const token = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
+    const token = await signer.sign({ userId, walletAddress: WALLET, sessionVersion: 0 });
     expect(
       (await me({ authorization: `Bearer ${token}` }, { [SESSION_COOKIE_NAME]: "garbage" })).statusCode,
     ).toBe(200);
@@ -65,8 +89,8 @@ describe.skipIf(!dbAvailable)("session token in an Authorization header", () => 
 
   it("is not shadowed by a signed-out cookie that still verifies", async () => {
     // Signed and unexpired, but behind the user's sessionVersion: dead, yet it verifies.
-    const signedOut = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: -1 });
-    const token = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
+    const signedOut = await signer.sign({ userId, walletAddress: WALLET, sessionVersion: -1 });
+    const token = await signer.sign({ userId, walletAddress: WALLET, sessionVersion: 0 });
     expect(
       (await me({ authorization: `Bearer ${token}` }, { [SESSION_COOKIE_NAME]: signedOut })).statusCode,
     ).toBe(200);
@@ -93,7 +117,7 @@ describe.skipIf(!dbAvailable)("session token in an Authorization header", () => 
 
   it("signing out on a paired phone switches its device off", async () => {
     const device = await prisma.linkedDevice.create({ data: { userId } });
-    const token = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, deviceId: device.id });
+    const token = await signer.sign({ userId, walletAddress: WALLET, deviceId: device.id });
     expect((await me({ authorization: `Bearer ${token}` })).statusCode).toBe(200);
     const out = await app.inject({
       method: "POST",
@@ -108,12 +132,8 @@ describe.skipIf(!dbAvailable)("session token in an Authorization header", () => 
   });
 
   it("pairing a phone hands back the token for browsers that drop the cookie", async () => {
-    const code = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
-    const issued = await app.inject({
-      method: "POST",
-      url: "/auth/link/code",
-      headers: { authorization: `Bearer ${code}` },
-    });
+    const code = await signer.sign({ userId, walletAddress: WALLET, sessionVersion: 0 });
+    const issued = await mintCode(code);
     expect(issued.statusCode).toBe(200);
     const redeemed = await app.inject({
       method: "POST",
@@ -126,13 +146,20 @@ describe.skipIf(!dbAvailable)("session token in an Authorization header", () => 
     expect((await me({ authorization: `Bearer ${sessionToken}` })).statusCode).toBe(200);
   });
 
-  it("a paired phone can't mint a link code for another device", async () => {
-    const code = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
-    const issued = await app.inject({
+  it("pairing a phone needs the wallet's signature, for every wallet account", async () => {
+    const session = await signer.sign({ userId, walletAddress: WALLET, sessionVersion: 0 });
+    const unsigned = await app.inject({
       method: "POST",
       url: "/auth/link/code",
-      headers: { authorization: `Bearer ${code}` },
+      headers: { authorization: `Bearer ${session}` },
     });
+    expect(unsigned.statusCode).toBe(428);
+    expect(unsigned.json().code).toBe("confirmation_required");
+  });
+
+  it("a paired phone can't mint a link code for another device", async () => {
+    const code = await signer.sign({ userId, walletAddress: WALLET, sessionVersion: 0 });
+    const issued = await mintCode(code);
     const redeemed = await app.inject({
       method: "POST",
       url: "/auth/link/redeem",
@@ -152,7 +179,7 @@ describe.skipIf(!dbAvailable)("session token in an Authorization header", () => 
   });
 
   it("signing out with the header revokes that token", async () => {
-    const token = await signer.sign({ userId, walletAddress: `${TAG}-wallet`, sessionVersion: 0 });
+    const token = await signer.sign({ userId, walletAddress: WALLET, sessionVersion: 0 });
     const out = await app.inject({
       method: "POST",
       url: "/auth/logout",
@@ -201,9 +228,8 @@ describe.skipIf(!dbAvailable)("pairing a phone to an admin wallet", () => {
 
     const challenge = await app.inject({
       method: "POST",
-      url: "/admin/confirm",
+      url: "/auth/link/confirm",
       headers: { authorization: `Bearer ${token}` },
-      payload: { method: "POST", path: "/auth/link/code", body: {} },
     });
     expect(challenge.statusCode).toBe(200);
     const { nonce, message } = challenge.json<{ nonce: string; message: string }>();

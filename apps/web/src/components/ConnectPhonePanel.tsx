@@ -64,8 +64,8 @@ export function ConnectPhonePanel() {
     try {
       const known = (await load())?.devices ?? list?.devices ?? [];
       before.current = new Set(known.map((d) => d.id));
-      // An admin wallet signs to pair a phone (the phone gets full admin); anyone else isn't asked.
-      const issued = await confirmedIfAsked("/auth/link/code", (body) =>
+      // The wallet signs to pair a phone (a year-long sign-in there; full admin for an admin).
+      const issued = await confirmedIfAsked("/auth/link/confirm", (body) =>
         postWithTwoFactor<IssuedLinkCode>("/auth/link/code", body),
       );
       // The deadline from the TTL, on this clock: a skewed desktop clock would misread the API's

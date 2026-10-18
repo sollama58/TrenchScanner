@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireTwoFactor } from "../twoFactor.js";
-import { adminWalletSet, prisma, type Env } from "@trenchscanner/core";
-import { requireTradeConfirmation } from "../tradeConfirm.js";
+import { prisma, type Env } from "@trenchscanner/core";
+import { issueTradeConfirmation, requireTradeConfirmation } from "../tradeConfirm.js";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 import { sessionCookieAttrs } from "./auth.js";
 import { clientIp, ipRateLimitKey } from "../clientIp.js";
@@ -27,6 +27,18 @@ const LINK_ROUTE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 const REDEEM_RATE_LIMIT = { ...LINK_ROUTE_RATE_LIMIT, keyGenerator: ipRateLimitKey };
 
 export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env: Env }) {
+  /**
+   * The text the wallet signs to mint a code (tradeConfirm.ts). Its own route, not /trading/confirm
+   * (registered only with the trading bot on) or /admin/confirm (admins only): every wallet account
+   * signs to pair a phone.
+   */
+  app.post(
+    "/link/confirm",
+    { preHandler: app.authenticate, config: { rateLimit: LINK_ROUTE_RATE_LIMIT } },
+    async (request, reply) =>
+      issueTradeConfirmation(request, reply, { method: "POST", path: "/auth/link/code", body: {} }),
+  );
+
   /**
    * Mint a code. Authenticated: only a desktop that is already signed in may hand out something
    * that becomes a session, and it can only ever mint one for ITSELF - the user id comes from the
@@ -54,15 +66,11 @@ export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env
           .send({ error: "Phone pairing is for wallet sign-ins. Sign in with Privy on your phone." });
       }
       if (!(await requireTwoFactor(opts.env, request, reply, request.user!.userId, "pair"))) return;
-      // An admin's paired phone is a full admin that skips the wallet signatures the riskiest admin
-      // actions ask for (requireAdminConfirmation), so pairing one is signed for with the admin's
-      // wallet: a stolen browser session alone can't mint itself an unsigned admin phone
-      // (wallet security audit 2026-10-18, H1).
-      if (
-        adminWalletSet(opts.env).has(request.user!.walletAddress) &&
-        !(await requireTradeConfirmation(request, reply))
-      )
-        return;
+      // Signed for with the wallet, every account (user decision 2026-10-18): a paired phone is a
+      // year-long session, and an admin's is a full admin that skips the wallet signatures the
+      // riskiest admin actions ask for (requireAdminConfirmation), so a stolen browser session
+      // alone must not be able to mint itself one (wallet security audit 2026-10-18, H1).
+      if (!(await requireTradeConfirmation(request, reply))) return;
       const { code, expiresAt } = await issueLinkCode(request.user!.userId);
       request.log.info({ userId: request.user!.userId }, "issued a mobile link code");
       // The raw code is returned exactly once, here. Nothing stores it - see hashCode.
