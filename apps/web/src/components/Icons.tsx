@@ -456,3 +456,10 @@ export const BugIcon = (p: IconProps) => (
     <path d="M6.5 9C4.6 8.8 3 7.1 3 5M6 13H2M3 21c0-2.1 1.7-3.9 3.8-4M21 5c0 2.1-1.6 3.8-3.5 4M22 13h-4M17.2 17c2.1.1 3.8 1.9 3.8 4" />
   </Svg>
 );
+
+/** A funnel: a column's own filters (Scope). */
+export const FunnelIcon = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M3 5h18l-7 8v6l-4 2v-8z" />
+  </Svg>
+);
