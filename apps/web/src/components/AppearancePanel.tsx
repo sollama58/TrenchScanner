@@ -411,6 +411,19 @@ export function AppearanceControls() {
             ]}
             onChange={(chartStyle) => setAppearance({ chartStyle })}
           />
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={look.chartPathing}
+              onChange={() => setAppearance({ chartPathing: !look.chartPathing })}
+            />
+            Predicted price path <span className="sage-tag">Experimental</span>
+          </label>
+          <p className="faint small">
+            A dotted line for the next minute in 5-second steps, guessed from the last minute&apos;s
+            second-by-second price, with a shaded band for its usual miss. A statistical guess, not advice: in
+            backtests it is wrong often. Shown on a live chart only.
+          </p>
         </div>
         <WalletMarksPicker />
         <div className="field-group">

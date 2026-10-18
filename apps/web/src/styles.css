@@ -16069,6 +16069,28 @@ body:has(.util-toast) .bug-fab {
 .tm-trade-held {
   margin: 6px 0 0;
 }
+/* The experimental predicted path: a dotted guess past the line's end and its shaded band, in one
+   neutral colour whichever way it leans, so it never reads as a signal. */
+.pc-path-line {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.6;
+  stroke-dasharray: 2 4;
+  stroke-linecap: round;
+}
+.pc-path-dot {
+  fill: var(--muted);
+}
+.pc-path-band {
+  fill: var(--muted);
+  opacity: 0.12;
+}
+.pc-path-label {
+  fill: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  font-family: var(--font);
+}
 .pc-entry line {
   stroke: var(--good-ink);
   stroke-width: 1;
