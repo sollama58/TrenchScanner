@@ -86,6 +86,13 @@ export interface CandidateToken {
    */
   graduatedAt?: Date;
   /**
+   * The coin the pricing pair trades against (DexScreener's quoteToken): wrapped SOL for nearly
+   * every launch, else USDC, USD1, another launch... Shown as a pill on the cards when it isn't
+   * SOL. Undefined when the source doesn't say (Jupiter, GeckoTerminal).
+   */
+  quoteMint?: string;
+  quoteSymbol?: string;
+  /**
    * Which source the market figures above came from (marketSource.ts): DexScreener's pair, that
    * pair with Jupiter's live price, Jupiter outright, or GeckoTerminal. Set by each client's
    * parser and by the band refresh's merge; undefined on a reading built without one.

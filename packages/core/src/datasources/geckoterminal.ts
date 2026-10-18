@@ -39,6 +39,7 @@ interface GeckoPool {
   };
   relationships?: {
     base_token?: { data?: { id: string } };
+    quote_token?: { data?: { id: string } };
     dex?: { data?: { id: string } };
   };
 }
@@ -246,6 +247,8 @@ export function parseGeckoTokens(body: GeckoMultiResponse, requested: Set<string
       sells1h: p?.transactions?.h1?.sells,
       pairCreatedAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : undefined,
       dexId,
+      // "solana_<mint>"; the symbol isn't in the response, so the cards name it from the mint.
+      quoteMint: pool?.relationships?.quote_token?.data?.id.replace(`${SOLANA}_`, "") || undefined,
       marketSource: MARKET_SOURCE.gecko,
     });
   }

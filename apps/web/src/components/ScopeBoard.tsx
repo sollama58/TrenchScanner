@@ -32,7 +32,7 @@ import {
   type ScopeColumns,
   type ScopeFrame,
 } from "../scope";
-import { nowReading, recordedPeakOf, socialLinks } from "./AlertCard";
+import { nowReading, QuotePill, recordedPeakOf, socialLinks } from "./AlertCard";
 import { QuickBuyPill } from "./QuickBuyPill";
 import { TokenImage } from "./TokenImage";
 import { FilterGlyph } from "./FilterBadge";
@@ -495,6 +495,7 @@ export function ScopeRow({
           >
             {label}
           </button>
+          <QuotePill token={card.token} className="scope-quote" />
           {d.showName && card.token.name && card.token.symbol && (
             <span className="scope-name" title={card.token.name}>
               {card.token.name}
