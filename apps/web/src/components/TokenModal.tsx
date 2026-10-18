@@ -209,8 +209,11 @@ const QUARTER_VIEW_MAX_MS = 6 * 3_600_000;
 /** The fine candles are re-read this often: 1-second ones on a view running to now, others rarely. */
 const FINE_LIVE_POLL_MS = 5_000;
 const FINE_POLL_MS = 60_000;
-/** The live tail counts as live while its price was confirmed this recently. */
-const LIVE_STALE_MS = 10_000;
+/**
+ * The live tail counts as live while its price was confirmed this recently: past the API's
+ * longest hold of a quiet coin's ask (apps/api/src/liveCurve.ts MAX_WAIT_MS, 8 seconds).
+ */
+const LIVE_STALE_MS = 15_000;
 /** The First 15m view's span. */
 const FIRST_MINUTES_MS = 15 * 60_000;
 const CHART_POLL_MS = 30_000;

@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { change, signedPct, usd } from "../format";
 import {
+  candleTimeframe,
   clipPoints,
   FLOW_WINDOW_MS,
   flowAt,
@@ -12,6 +13,9 @@ import {
   zoomBy,
   zoomWindow,
   sinceLabel,
+  TIMEFRAMES,
+  timeframeLabel,
+  timeframeSlots,
   timeLabel,
   timeTicks,
   valueAt,
@@ -43,6 +47,29 @@ export interface ChartTrade {
 
 /** How the chart draws the market cap: a line (the default) or candles. */
 export type ChartKind = "line" | "candles";
+
+/** The candle view's picked timeframe in ms, or null for Auto (as many as fit), kept on this device. */
+const TIMEFRAME_KEY = "ts.chartTimeframe";
+function readTimeframe(): number | null {
+  try {
+    const ms = Number(localStorage.getItem(TIMEFRAME_KEY));
+    return TIMEFRAMES.some((f) => f.ms === ms) ? ms : null;
+  } catch {
+    return null;
+  }
+}
+function keepTimeframe(ms: number | null): void {
+  try {
+    if (ms === null) localStorage.removeItem(TIMEFRAME_KEY);
+    else localStorage.setItem(TIMEFRAME_KEY, String(ms));
+  } catch {
+    // Private windows: the pick holds for this view only.
+  }
+}
+/** A timeframe picked draws candles this wide on screen, about; the window zooms to fit them. */
+const PICKED_CANDLE_PX = 8;
+/** Candles thinner than this would smear together: the view draws a wider timeframe instead. */
+const MIN_CANDLE_PX = 3;
 
 const PAD = { l: 8, r: 62, t: 24, b: 24 };
 
@@ -137,6 +164,8 @@ export function PriceChart({
   const [bar, setBar] = useState<number | null>(null);
   // Zoom (user ask 2026-10-18): the wheel, a drag, a pinch or the buttons under the chart.
   const [ownZoom, setOwnZoom] = useState<Zoom | null>(null);
+  // Candle timeframes (user ask 2026-10-18): null draws as many candles as fit (Auto).
+  const [timeframe, setTimeframe] = useState<number | null>(readTimeframe);
   const zoom = onZoom ? (zoomProp ?? null) : ownZoom;
   const setZoom = onZoom ?? setOwnZoom;
   /** A drag panning the zoomed window, or a two-finger pinch: where it started. */
@@ -177,10 +206,28 @@ export function PriceChart({
     // the window has candles' widths (a minute, 15 seconds or one, the narrowest in view). The
     // candles and the volume lane share the slices, so each candle sits over its volume.
     const narrowest = candles.reduce((w, k) => Math.min(w, k.w ?? 60_000), 60_000);
-    const slices = Math.max(
+    let slices = Math.max(
       1,
       Math.min(Math.round(plotW / (kind === "candles" ? 8 : 6)), Math.round((t1 - t0) / narrowest)),
     );
+    // Even slices from the window's start, unless a timeframe is picked: then slots of it on round
+    // times, as wide as the finest real candles in view allow.
+    let slot0 = t0;
+    let slotMs = (t1 - t0) / slices;
+    let tfMs: number | null = null;
+    /** Why the drawn timeframe is wider than the one picked: coarser data in view, or too many. */
+    let tfWider: "data" | "fit" | null = null;
+    if (kind === "candles" && timeframe !== null) {
+      const inView = candles.filter((k) => k.t + (k.w ?? 60_000) > t0 && k.t < t1);
+      const finest = inView.reduce((w, k) => Math.min(w, k.w ?? 60_000), inView.length ? 60_000 : 1_000);
+      tfMs = candleTimeframe(timeframe, finest, t1 - t0, Math.max(1, Math.floor(plotW / MIN_CANDLE_PX)));
+      if (tfMs > timeframe)
+        tfWider = finest > timeframe && tfMs === candleTimeframe(finest, 0, 0, 1) ? "data" : "fit";
+      const slots = timeframeSlots(t0, t1, tfMs, origin);
+      slot0 = slots.start;
+      slotMs = tfMs;
+      slices = slots.n;
+    }
     // Candles: the real ones, then the line's own readings past the newest (the live curve's
     // ticks); without real ones (scan readings), the readings alone.
     let bars: (OhlcBar | null)[] | null = null;
@@ -194,7 +241,7 @@ export function PriceChart({
       const src = newest
         ? [...candles, ...pointCandles(after, { t: newestEnd, v: newest.c })]
         : pointCandles(pts);
-      bars = ohlcBars(src, t0, t1, slices);
+      bars = ohlcBars(src, slot0, slot0 + slices * slotMs, slices);
     }
     const values = pts.map((p) => p.v);
     const wicks = bars ? bars.flatMap((b) => (b ? [b.h, b.l] : [])) : [];
@@ -217,12 +264,19 @@ export function PriceChart({
       fromAlert: leadShown && !!lead.mcap,
       hiIdx,
       slices,
+      slot0,
+      slotMs,
+      tfMs,
+      tfWider,
       bars,
     };
-  }, [points, zoom, ext0, ext1, stepMs, plotW, height, events, entry, candles, kind]);
+  }, [points, zoom, ext0, ext1, stepMs, plotW, height, events, entry, candles, kind, timeframe, origin]);
 
   const vols = useMemo(
-    () => (geo && candles.some((k) => k.vol > 0) ? volumeBars(candles, geo.t0, geo.t1, geo.slices) : null),
+    () =>
+      geo && candles.some((k) => k.vol > 0)
+        ? volumeBars(candles, geo.slot0, geo.slot0 + geo.slices * geo.slotMs, geo.slices)
+        : null,
     [geo, candles],
   );
 
@@ -364,12 +418,16 @@ export function PriceChart({
     }
     setHover({ i: best, cx });
   };
-  const sliceW = plotW / geo.slices;
+  // A slot's width on screen, and where slot i starts (the volume lane and the candles share them).
+  const sliceW = (geo.slotMs / Math.max(1, span)) * plotW;
+  const slotX = (i: number) => x(geo.slot0 + i * geo.slotMs);
   // The candle view reads out the candle under the pointer: its open, high, low and close.
   const hBarIdx =
-    hover && geo.bars ? Math.min(geo.slices - 1, Math.max(0, Math.floor((hover.cx - PAD.l) / sliceW))) : null;
+    hover && geo.bars
+      ? Math.min(geo.slices - 1, Math.max(0, Math.floor((hover.cx - slotX(0)) / sliceW)))
+      : null;
   const hb = hBarIdx !== null ? (geo.bars?.[hBarIdx] ?? null) : null;
-  const hx = hb && hBarIdx !== null ? PAD.l + (hBarIdx + 0.5) * sliceW : h ? px(h) : 0;
+  const hx = hb && hBarIdx !== null ? slotX(hBarIdx + 0.5) : h ? px(h) : 0;
   const hv = hb ? hb.c : (h?.v ?? 0);
   const hUp = h ? hv >= geo.base : true;
   const winTo = (z: Zoom | null) => {
@@ -378,6 +436,15 @@ export function PriceChart({
   };
   // The buttons zoom about the middle, or hold the latest reading in view when the window ends on it.
   const anchorAt = atEnd && live ? 1 : 0.5;
+  // A picked timeframe zooms the window to fit its candles, about PICKED_CANDLE_PX wide, holding
+  // the latest in view when the window ends on it.
+  const pickTimeframe = (ms: number | null) => {
+    setTimeframe(ms);
+    keepTimeframe(ms);
+    if (ms === null) return;
+    const target = Math.max(MIN_ZOOM_MS, ms * Math.max(8, Math.round(plotW / PICKED_CANDLE_PX)));
+    winTo(zoomBy(win, ext0, ext1, target / Math.max(1, span), atEnd ? 1 : 0.5));
+  };
   // The volume lane: a bar per slice rising from its floor, green where the price rose across it.
   const laneTop = bottom + 8;
   const laneBottom = laneTop + LANE - 10;
@@ -550,7 +617,9 @@ export function PriceChart({
           <g className="pc-candles" aria-hidden="true">
             {geo.bars.map((b, i) => {
               if (!b) return null;
-              const cx = PAD.l + (i + 0.5) * sliceW;
+              const cx = slotX(i + 0.5);
+              // A timeframe's first or last slot can start before the window or end after it.
+              if (cx < PAD.l || cx > width - PAD.r) return null;
               const bw = Math.min(12, Math.max(1, sliceW * 0.66));
               const yo = axis.y(b.o);
               const yc = axis.y(b.c);
@@ -646,6 +715,8 @@ export function PriceChart({
             <line x1={PAD.l} x2={width - PAD.r} y1={laneBottom} y2={laneBottom} className="pc-vol-floor" />
             {vols.map((b, i) => {
               if (!b || b.usd <= 0) return null;
+              const sx = slotX(i);
+              if (sx + sliceW / 2 < PAD.l || sx + sliceW / 2 > width - PAD.r) return null;
               const hb = Math.max(2, (b.usd / volMax) * (laneBottom - laneTop));
               // Thin bars even when a short view has few minutes: a wide block reads as a level, not a bar.
               const bw = Math.min(14, Math.max(1.5, sliceW - 1.5));
@@ -653,7 +724,7 @@ export function PriceChart({
                 <g key={i}>
                   <rect
                     className={`pc-vol-bar ${b.c >= b.o ? "up" : "down"}${bar === i ? " on" : ""}`}
-                    x={PAD.l + i * sliceW + (sliceW - bw) / 2}
+                    x={sx + (sliceW - bw) / 2}
                     width={bw}
                     y={laneBottom - hb}
                     height={hb}
@@ -662,7 +733,7 @@ export function PriceChart({
                   {/* The hit target spans the whole lane, so a short bar is as easy to find as a tall one. */}
                   <rect
                     className="pc-vol-hit"
-                    x={PAD.l + i * sliceW}
+                    x={sx}
                     width={sliceW}
                     y={laneTop - 4}
                     height={LANE - 4}
@@ -736,7 +807,7 @@ export function PriceChart({
         <BarTip
           bar={mark}
           flow={flowAt(flow, mark.from, mark.to)}
-          x={PAD.l + (bar + 0.5) * sliceW}
+          x={slotX(bar + 0.5)}
           bottom={fullH - laneTop + 6}
           width={width}
         />
@@ -805,6 +876,35 @@ export function PriceChart({
               </button>
             ))}
           </div>
+        )}
+        {onKind && kind === "candles" && (
+          <label className="pc-tf" title="Each candle's width. Zooms to fit; Auto draws as many as fit">
+            <span className="sr-only">Candle timeframe</span>
+            <select
+              value={timeframe ?? "auto"}
+              onChange={(e) => pickTimeframe(e.target.value === "auto" ? null : Number(e.target.value))}
+            >
+              <option value="auto">Auto</option>
+              {TIMEFRAMES.map((f) => (
+                <option key={f.ms} value={f.ms}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+            {geo.tfMs !== null && geo.tfWider && (
+              <span
+                className="faint small"
+                title={
+                  geo.tfWider === "data"
+                    ? "Pump.fun's finest candles this far back"
+                    : "Too many candles for this window: zoom in for the timeframe picked"
+                }
+              >
+                {" "}
+                showing {timeframeLabel(geo.tfMs)}
+              </span>
+            )}
+          </label>
         )}
         <span className="pc-zoom" role="group" aria-label="Zoom">
           <button

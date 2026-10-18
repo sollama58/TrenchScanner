@@ -20,6 +20,9 @@ import {
   valueAt,
   volumeBars,
   withCallPoint,
+  candleTimeframe,
+  timeframeLabel,
+  timeframeSlots,
 } from "./priceChart";
 
 const M = 60_000;
@@ -383,5 +386,30 @@ describe("candles", () => {
       { t: 0, w: 10, o: 4, h: 5, l: 4, c: 5, vol: 0 },
       { t: 10, w: 10, o: 5, h: 5, l: 3, c: 3, vol: 0 },
     ]);
+  });
+});
+
+describe("candle timeframes", () => {
+  it("draws the picked one, or the next wider when the data is coarser or too many would fit", () => {
+    // 5s picked over 1-second candles, a 5-minute window, room for 200: 60 candles of 5s.
+    expect(candleTimeframe(5_000, 1_000, 300_000, 200)).toBe(5_000);
+    // Only minute candles in view: a minute is the finest.
+    expect(candleTimeframe(5_000, 60_000, 300_000, 200)).toBe(60_000);
+    // 1s over an hour would be 3,600 candles: 30s is the narrowest under 200.
+    expect(candleTimeframe(1_000, 1_000, 3_600_000, 200)).toBe(30_000);
+    // Past the widest, the widest.
+    expect(candleTimeframe(60_000, 60_000, 1e12, 10)).toBe(4 * 3_600_000);
+  });
+
+  it("puts slots on round times, from the epoch or an origin", () => {
+    expect(timeframeSlots(65_000, 245_000, 60_000)).toEqual({ start: 60_000, n: 4 });
+    expect(timeframeSlots(60_000, 120_000, 60_000)).toEqual({ start: 60_000, n: 1 });
+    expect(timeframeSlots(7_000, 20_000, 5_000, 2_000)).toEqual({ start: 7_000, n: 3 });
+  });
+
+  it("labels them", () => {
+    expect(timeframeLabel(15_000)).toBe("15s");
+    expect(timeframeLabel(3_600_000)).toBe("1h");
+    expect(timeframeLabel(20_000)).toBe("20s");
   });
 });

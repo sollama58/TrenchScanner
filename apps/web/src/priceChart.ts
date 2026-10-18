@@ -487,3 +487,47 @@ export function clipPoints(points: readonly Point[], t0: number, t1: number): Po
     ...(b !== null && t1 > t0 ? [{ t: t1, v: b }] : []),
   ];
 }
+
+/** The candle view's timeframes (user ask 2026-10-18), narrowest first. */
+export const TIMEFRAMES: { ms: number; label: string }[] = [
+  { ms: SECOND, label: "1s" },
+  { ms: 5 * SECOND, label: "5s" },
+  { ms: 15 * SECOND, label: "15s" },
+  { ms: 30 * SECOND, label: "30s" },
+  { ms: MINUTE, label: "1m" },
+  { ms: 5 * MINUTE, label: "5m" },
+  { ms: 15 * MINUTE, label: "15m" },
+  { ms: 30 * MINUTE, label: "30m" },
+  { ms: HOUR, label: "1h" },
+  { ms: 4 * HOUR, label: "4h" },
+];
+
+/** A timeframe's label ("15s", "1h"); a width between them reads in seconds or minutes. */
+export function timeframeLabel(ms: number): string {
+  const tf = TIMEFRAMES.find((f) => f.ms === ms);
+  if (tf) return tf.label;
+  return ms < MINUTE ? `${Math.round(ms / SECOND)}s` : `${Math.round(ms / MINUTE)}m`;
+}
+
+/**
+ * Exported for tests. The timeframe the candle view draws for a picked one: the picked one, or the
+ * next wider one when the data in view is coarser (a minute candle can't be split into seconds) or
+ * when the window holds more than `maxBars` of them (thinner than the screen can show).
+ */
+export function candleTimeframe(pickedMs: number, finestMs: number, spanMs: number, maxBars: number): number {
+  const need = Math.max(pickedMs, finestMs);
+  return (
+    TIMEFRAMES.find((f) => f.ms >= need && spanMs / f.ms <= maxBars)?.ms ??
+    TIMEFRAMES[TIMEFRAMES.length - 1]!.ms
+  );
+}
+
+/**
+ * Exported for tests. Slots `ms` wide over [t0, t1], on round multiples of it since `origin` (the
+ * epoch, or the First 15m view's launch), so a 5-minute candle covers :00 to :05 and keeps its
+ * place as the window moves: where the first starts, and how many there are.
+ */
+export function timeframeSlots(t0: number, t1: number, ms: number, origin = 0): { start: number; n: number } {
+  const start = origin + Math.floor((t0 - origin) / ms) * ms;
+  return { start, n: Math.max(1, Math.ceil((t1 - start) / ms)) };
+}
