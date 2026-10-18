@@ -1,6 +1,7 @@
 import { DEFAULT_BOOSTING_OPTIONS, type BoostingObjective, type BoostingOptions } from "./boosting.js";
 import { DEFAULT_FOREST_OPTIONS, type ForestOptions } from "./forest.js";
 import {
+  contestantSpec,
   isMemberLearner,
   MOMENTUM_FEATURES,
   ORDER_FLOW_FEATURES,
@@ -473,6 +474,16 @@ export function goalNamed(lane: Pick<Lane, "name" | "recipe">): string {
   const prefix = goal === undefined ? "" : GOAL_NAMES[goal];
   if (!prefix) return name;
   return name.startsWith(`${prefix} `) ? name : `${prefix} ${name}`;
+}
+
+/**
+ * The name a lane's calls carry (CuratedAlert.modelName), as withLanes names the seat: the roster
+ * name for a founding lane, goalNamed for a bred one. Since the simpler names (#712) it differs
+ * from the stored lane name, so a seat's record matches either (laneStore.ts).
+ */
+export function laneCallName(lane: Pick<Lane, "slot" | "name" | "recipe" | "generation">): string {
+  if (lane.generation === 0) return contestantSpec(lane.slot)?.name ?? lane.name;
+  return lane.recipe ? goalNamed(lane) : lane.name;
 }
 
 /** A lane as selection sees it: its blended leaderboard score, and this run's exam on its own. */

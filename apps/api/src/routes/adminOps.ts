@@ -12,6 +12,7 @@ import {
   setAiReviewerSwitch,
   AI_REVIEWER_STATES,
   type Env,
+  walletTag,
 } from "@trenchscanner/core";
 import type { RouteTimings } from "../routeTimings.js";
 import type { OnDemandLiveRefresher } from "../liveRefresh.js";
@@ -196,7 +197,7 @@ export async function registerAdminOpsRoutes(
     if (parsed.data.state === "live" && !(await requireAdminConfirmation(request, reply))) return;
     const by = request.user!.walletAddress;
     const state = await setAiReviewerSwitch(parsed.data.state, by);
-    request.log.info({ state, by }, "ai reviewer switch changed");
+    request.log.info({ state, by: walletTag(by) }, "ai reviewer switch changed");
     return { switch: await readAiReviewerSwitch() };
   });
 

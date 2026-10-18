@@ -17,7 +17,7 @@ import { useSettings } from "../alerts";
 import { ScoreExplainer } from "../components/ScoreExplainer";
 import { BellIcon, EditIcon, PlusIcon, SlidersIcon, TrashIcon } from "../components/Icons";
 import { TopFiltersPick } from "../components/TopFilters";
-import { AlertsPanel, ModelPanel } from "../components/AlertDeliveryPanels";
+import { AlertsPanel } from "../components/AlertDeliveryPanels";
 import { TelegramPanel } from "../components/TelegramPanel";
 import { FilterGlyph } from "../components/FilterBadge";
 import { FILTER_COLORS, FILTER_ICONS, filterCardStyle } from "../filterStyle";
@@ -99,15 +99,14 @@ function toInput(f: Filter): FilterInput {
 
 /**
  * The Filters tab: up to ten saved setups, each switched on or off on its own; then how the alerts they raise
- * reach you (Telegram, your preferred model, sound and browser notifications); then the
+ * reach you (Telegram, sound and browser notifications); then the
  * shared-filter leaderboard (Top filters).
  */
-export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) {
+export function FiltersTab() {
   const filters = usePolling<Filter[]>("/filters", 120_000);
   const config = usePolling<AppConfig>("/config", 600_000);
   const settings = useSettings();
-  const [pick, setPick] = useState(0);
-  const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000, String(pick));
+  const board = usePolling<Leaderboard>("/curated/models?days=30", 120_000);
   // `opened` tells apart two editors for the same filter (or two new ones), so opening again starts
   // the form over instead of keeping the last one's keyword text.
   const [editing, setEditing] = useState<{ id: string | null; draft: FilterInput; opened: number } | null>(
@@ -343,19 +342,13 @@ export function FiltersTab({ goTo }: { goTo: (tab: "live" | "model") => void }) 
             </span>
             <h2 id="alerts-band-title">How your alerts reach you</h2>
             <p className="muted">
-              The filters you have on and your preferred model decide what alerts you; this is where they go.
-              Everything here is saved to your wallet.
+              The filters you have on and the models you pick on the Models tab decide what alerts you; this
+              is where they go. Everything here is saved to your wallet.
             </p>
           </div>
         </header>
         <div className="delivery-grid">
           <TelegramPanel board={board.data} />
-          <ModelPanel
-            board={board.data}
-            stale={board.stale}
-            onChanged={() => setPick((n) => n + 1)}
-            goTo={goTo}
-          />
           <AlertsPanel prefs={settings?.alerts ?? null} />
         </div>
       </section>

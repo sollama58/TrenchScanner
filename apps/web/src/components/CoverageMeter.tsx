@@ -1,7 +1,6 @@
-import { useState } from "react";
 import type { Leaderboard, MixCoverage } from "../api";
 import { pct, signedPct } from "../format";
-import { CheckIcon, PlusIcon, TargetIcon } from "./Icons";
+import { CheckIcon, TargetIcon } from "./Icons";
 
 /** Runners below which the meter's share reads as early rather than as a verdict. */
 export const MIN_RUNNERS_FOR_COVERAGE = 10;
@@ -98,18 +97,6 @@ export function bestCost(b: Best): string {
   return parts.join(" · ");
 }
 
-function bestTitle(b: Best): string {
-  return (
-    `Add ${b.name} to your feed: ${plural(b.adds, "more runner")} caught` +
-    (b.calls !== null ? ` for ${plural(b.calls, "more alert")} in the window` : "") +
-    (b.lift !== null ? `, its 2x rate ${b.lift.toFixed(1)}x the filtered market's` : "") +
-    (b.avgReturnPct !== null
-      ? `, ${signedPct(b.avgReturnPct)} an alert on average under the exit plan`
-      : "") +
-    ". Only models that beat the filtered market and make money are suggested, the most runners per alert first."
-  );
-}
-
 function Track({ v }: { v: CoverageView }) {
   return (
     <span className="cov-track" aria-hidden>
@@ -128,42 +115,18 @@ function Track({ v }: { v: CoverageView }) {
 /**
  * The Coverage Meter on the Models tab: of the tokens that doubled in the window, the share the
  * models in this reader's feed would have caught between them, against the catch goal and against
- * every model together. One quiet row; the model that would lift it most is a tap away.
+ * every model together. One quiet row; the model that would lift it most is marked on the board.
  */
-export function CoverageMeter({
-  board,
-  onAdd,
-  disabled = false,
-  guest = false,
-}: {
-  board: Leaderboard;
-  guest?: boolean;
-  /** Adds a model to the feed; absent for guests, who can't pick. */
-  onAdd?: (id: string) => Promise<void>;
-  disabled?: boolean;
-}) {
-  const [adding, setAdding] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+export function CoverageMeter({ board, guest = false }: { board: Leaderboard; guest?: boolean }) {
   const v = coverageView(board);
   if (!v) return null;
   const c = v.coverage;
   const days = board.window.days;
-  const add = async (id: string) => {
-    if (!onAdd) return;
-    setAdding(id);
-    setError(null);
-    try {
-      await onAdd(id);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setAdding(null);
-    }
-  };
   const title =
     `${coverageSentence(v, days, guest)} A runner counts as caught when any of your models flagged it at a ` +
     `winning moment. Goal ${v.goal}%` +
-    (v.field !== null ? `; every model together caught ${pct(v.field)}.` : ".");
+    (v.field !== null ? `; every model together caught ${pct(v.field)}.` : ".") +
+    (v.early && c.runners > 0 ? " Still early: too few runners to judge." : "");
 
   return (
     <div className="coverage" title={title}>
@@ -191,53 +154,6 @@ export function CoverageMeter({
           <span className="cov-goal muted small num">goal {v.goal}%</span>
         )}
       </div>
-      <p className="cov-note muted small">
-        {coverageSentence(v, days, guest)}
-        {v.field !== null && c.runners > 0 && ` Every model together: ${pct(v.field)}.`}
-        {v.early && c.runners > 0 && " Still early: too few runners to judge."}
-      </p>
-      {(v.members.length > 1 || v.best) && (
-        <div className="cov-foot">
-          {v.members.length > 1 && (
-            <span className="cov-members faint small">
-              {v.members.map((m, i) => (
-                <span key={m.id}>
-                  {i > 0 && " · "}
-                  {m.name} <span className="num">{m.caught}</span>
-                  {m.only > 0 && (
-                    <span title={`Runners only ${m.name} caught among your models`}> ({m.only} only it)</span>
-                  )}
-                </span>
-              ))}
-            </span>
-          )}
-          {v.best &&
-            (onAdd ? (
-              <button
-                type="button"
-                className="cov-add"
-                disabled={disabled || adding !== null}
-                onClick={() => void add(v.best!.id)}
-                title={bestTitle(v.best)}
-              >
-                <PlusIcon size={12} />
-                {adding ? (
-                  "Adding…"
-                ) : (
-                  <span>
-                    {v.best.name} lifts it to {pct(v.best.pct)}
-                    <span className="cov-add-cost">{bestCost(v.best)}</span>
-                  </span>
-                )}
-              </button>
-            ) : (
-              <span className="faint small" title={bestTitle(v.best)}>
-                Adding {v.best.name} would lift it to {pct(v.best.pct)} · {bestCost(v.best)}
-              </span>
-            ))}
-        </div>
-      )}
-      {error && <small className="error">Couldn&apos;t add the model: {error}</small>}
     </div>
   );
 }

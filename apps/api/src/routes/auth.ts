@@ -261,7 +261,16 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     if (!privyEnabled(opts.env)) return reply.code(404).send({ error: "not found" });
     const parsed = z.object({ accessToken: z.string().min(20).max(4096) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid request" });
-    const did = await verifyPrivyToken(opts.env, parsed.data.accessToken);
+    let did: string | null;
+    try {
+      did = await verifyPrivyToken(opts.env, parsed.data.accessToken);
+    } catch (err) {
+      request.log.warn(
+        { err: err instanceof PrivyUnavailable ? err.message : err },
+        "privy keys fetch failed",
+      );
+      return reply.code(503).send({ error: "Privy isn't answering right now. Try again in a minute." });
+    }
     if (!did) return reply.code(401).send({ error: "That sign-in didn't check out. Try again." });
 
     let user = await prisma.user.findUnique({ where: { privyUserId: did } });
@@ -372,13 +381,16 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
 
     // While a Free Access sign-in window is open, signing in is what enrolls a wallet; `created`
     // marks the accounts this period made, the only ones its cleanup may delete. A failure costs
-    // the free access (the paywall shows), never the sign-in.
-    await enrollInFreeAccess(user, created, adminWalletSet(opts.env)).catch((err: unknown) =>
-      request.log.error(
-        { err, wallet: walletTag(walletAddress) },
-        "could not enroll the wallet in free access",
-      ),
-    );
+    // the free access (the paywall shows), never the sign-in. Privy accounts are left out: their
+    // sign-in promises no free start, and the window's cleanup must not delete them.
+    if (!user.privyUserId) {
+      await enrollInFreeAccess(user, created, adminWalletSet(opts.env)).catch((err: unknown) =>
+        request.log.error(
+          { err, wallet: walletTag(walletAddress) },
+          "could not enroll the wallet in free access",
+        ),
+      );
+    }
 
     // Settle any burns this wallet made before it had an account here. Burning first and signing
     // in afterwards is a completely ordinary order of events - and the one a first-time user is

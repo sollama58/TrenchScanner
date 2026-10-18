@@ -36,6 +36,12 @@ type CurveReader = Pick<HeliusClient, "getCurveStatesBatch">;
 
 export interface CurveTapeConfig {
   maxAgeMinutes: number;
+  /**
+   * Age past which a followed coin's curve path reads as null (CURVE_TAPE_MAX_AGE_MINUTES). The
+   * price path recorder follows coins longer than that, but the scoring features stay as trained:
+   * null for coins past it. Defaults to maxAgeMinutes.
+   */
+  featureMaxAgeMinutes?: number;
   maxMints: number;
   streamCreditsPerDay: number;
   pollSeconds: number;
@@ -48,6 +54,8 @@ interface Followed {
   rank: number;
   /** When the tape was last read by RPC (ms epoch), null before the first read. */
   readAt: number | null;
+  /** The coin's launch (or first sighting), ms epoch. */
+  bornAt: number;
 }
 
 // Kept long enough for the price path recorder's 30 minutes (the features still read 16). Memory
@@ -122,11 +130,13 @@ export function followYoungCurves(
   if (!cfg) return;
   const maxAgeMs = cfg.maxAgeMinutes * 60_000;
   const wanted = new Map<string, number>();
+  const bornAtOf = new Map<string, number>();
   for (const t of tracked) {
     if (wanted.size >= cfg.maxMints) break;
     if (t.launchpad === STONKS_LAUNCHPAD || done.has(t.mintAddress)) continue;
     if (now - (t.launchedAt ?? t.firstSeenAt).getTime() > maxAgeMs) continue;
     wanted.set(t.mintAddress, wanted.size);
+    bornAtOf.set(t.mintAddress, (t.launchedAt ?? t.firstSeenAt).getTime());
   }
   for (const mint of followed.keys()) if (!wanted.has(mint)) drop(mint, false);
   for (const [mint, rank] of wanted) {
@@ -134,7 +144,7 @@ export function followYoungCurves(
     if (!f) {
       const curve = pumpCurveAddressOf(mint);
       if (!curve) continue;
-      f = { curve, rank, readAt: null };
+      f = { curve, rank, readAt: null, bornAt: bornAtOf.get(mint) ?? now };
       followed.set(mint, f);
     }
     f.rank = rank;
@@ -143,9 +153,14 @@ export function followYoungCurves(
   }
 }
 
-/** The curve path features for a mint as of `now`: all null when its curve isn't followed. */
+/**
+ * The curve path features for a mint as of `now`: all null when its curve isn't followed, or when
+ * the coin is past the features' age (followed longer only for the price path recorder).
+ */
 export function curvePathOf(mint: string, now = Date.now()): CurvePathFeatures {
-  return followed.has(mint) ? tape.features(mint, now) : { ...EMPTY_CURVE_PATH };
+  const f = followed.get(mint);
+  const maxAgeMs = (cfg?.featureMaxAgeMinutes ?? cfg?.maxAgeMinutes ?? Infinity) * 60_000;
+  return f && now - f.bornAt <= maxAgeMs ? tape.features(mint, now) : { ...EMPTY_CURVE_PATH };
 }
 
 /** Counts since the last call, for the scan's heartbeat; null while the tape is off. */

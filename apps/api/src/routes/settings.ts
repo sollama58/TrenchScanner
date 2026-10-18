@@ -39,7 +39,8 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
         : null;
     return {
       alerts: parseAlertPrefs(user.alertPrefs),
-      appearance: parseFeedAppearance(user.feedAppearance),
+      // Predictive price pathing is admins-only (#721): never on for anyone else.
+      appearance: withAdminOnly(parseFeedAppearance(user.feedAppearance), access.reason === "admin"),
       account: {
         walletAddress,
         memberSince: user.createdAt,
@@ -96,11 +97,22 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
+    const look = withAdminOnly(parsed.data, admins.has(request.user!.walletAddress));
+    // A tab from before chartMarksRev sends none: stored without one, so reading it still drops
+    // the risky kind it never chose (parseFeedAppearance), rather than the default stamping rev 2.
+    const sentRev =
+      typeof request.body === "object" && request.body !== null && "chartMarksRev" in request.body;
+    const { chartMarksRev: _rev, ...unstamped } = look;
     const { count } = await prisma.user.updateMany({
       where: { id: request.user!.userId },
-      data: { feedAppearance: parsed.data as unknown as Prisma.InputJsonValue },
+      data: { feedAppearance: (sentRev ? look : unstamped) as unknown as Prisma.InputJsonValue },
     });
     if (count === 0) return reply.code(401).send({ error: "unauthenticated" });
-    return { appearance: parsed.data };
+    return { appearance: look };
   });
+}
+
+/** The appearance with its admins-only parts (predictive price pathing) off for anyone else. */
+function withAdminOnly<T extends { chartPathing: boolean }>(look: T, admin: boolean): T {
+  return admin || !look.chartPathing ? look : { ...look, chartPathing: false };
 }

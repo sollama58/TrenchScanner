@@ -2704,11 +2704,6 @@ model TradingWithdrawal {
   @@index([userId, createdAt])
 }
 
-/// An admin's "retrain now" (Admin tab): the trainer polls for an unstarted row, stamps startedAt
-/// and runs curator training at once instead of waiting for its next interval slot.
-/// Every admin write (POST/PUT/PATCH/DELETE under /admin), who made it and how it ended: the
-/// lasting record Render's short-lived logs aren't (2026-10-18 admin panel audit). Written by the
-/// API's onResponse hook (apps/api/src/adminActionLog.ts) and read by Admin > Access.
 /// One young coin's second-by-second price path, saved by the worker's price path recorder
 /// (apps/worker/src/jobs/pricePathRecorder.ts) when the curve tape lets go of the coin: training
 /// data for predictive price pathing (user ask 2026-10-18). `data` is gzip of packed rows, one per
@@ -2731,6 +2726,9 @@ model PricePathRecord {
   @@index([mint])
 }
 
+/// Every admin write (POST/PUT/PATCH/DELETE under /admin), who made it and how it ended: the
+/// lasting record Render's short-lived logs aren't (2026-10-18 admin panel audit). Written by the
+/// API's onResponse hook (apps/api/src/adminActionLog.ts) and read by Admin > Access.
 model AdminAction {
   id         String   @id @default(cuid())
   at         DateTime @default(now())
@@ -2748,6 +2746,8 @@ model AdminAction {
   @@index([at])
 }
 
+/// An admin's "retrain now" (Admin tab): the trainer polls for an unstarted row, stamps startedAt
+/// and runs curator training at once instead of waiting for its next interval slot.
 model CuratorRetrainRequest {
   id          String    @id @default(cuid())
   requestedAt DateTime  @default(now())

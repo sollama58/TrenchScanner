@@ -1,4 +1,4 @@
-import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
+import { createRemoteJWKSet, errors, jwtVerify, type JWTVerifyGetKey } from "jose";
 import { isWalletAddress, type Env } from "@trenchscanner/core";
 
 /**
@@ -49,7 +49,17 @@ export async function verifyPrivyToken(env: Env, accessToken: string): Promise<s
       algorithms: ["ES256"],
     });
     return typeof payload.sub === "string" && payload.sub.startsWith("did:privy:") ? payload.sub : null;
-  } catch {
+  } catch (err) {
+    // Privy's keys out of reach (a timeout or a failed fetch) is an outage, not a bad token.
+    // jose's own failures name what was wrong with the token; the generic one is a bad key fetch.
+    const code = (err as { code?: unknown } | null)?.code;
+    if (
+      err instanceof errors.JWKSTimeout ||
+      code === "ERR_JOSE_GENERIC" ||
+      err instanceof TypeError ||
+      (typeof code === "string" && /^E[A-Z]+$/.test(code))
+    )
+      throw new PrivyUnavailable(err instanceof Error ? err.message : "Privy's keys are out of reach");
     return null;
   }
 }

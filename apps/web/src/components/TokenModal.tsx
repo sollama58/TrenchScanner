@@ -1379,7 +1379,7 @@ export function ChartCard({
   // else, so nothing of it is fetched or drawn without Pro Mode.
   const proState = useProState();
   const pro = proState?.wallet ?? null;
-  // Pro Mode ended: the panel only sells, and only shows for a coin the wallet holds.
+  // Pro Mode ended: the panel only says trading is off (no sells: #717), for a coin the wallet holds.
   const closeOnly = !!proState && !proState.pro;
   const graceEndsAt = proState?.pro ? proState.graceEndsAt : null;
   const mint = card.token.mintAddress;
@@ -1389,7 +1389,8 @@ export function ChartCard({
   // included). Never where no wallet here could sign a trade (a phone signed in by QR, say).
   const canSign = useCanSignTrades(pro);
   const trading = !!pro && canSign && (!closeOnly || holds);
-  const expanded = trading || (!!pro && holds);
+  // Only where the panel shows: a phone signed in by QR gets no empty space.
+  const expanded = trading;
 
   // Read from the window on each render; a resize re-renders.
   const [, setResized] = useState(0);

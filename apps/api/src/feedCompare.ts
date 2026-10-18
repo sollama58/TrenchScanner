@@ -1,5 +1,6 @@
 import {
   prisma,
+  laneCallName,
   mixCatch,
   RUN_DOUBLINGS,
   type CatchLedger,
@@ -91,6 +92,7 @@ export async function mixFeedRecord(
   }
   const bornAt = new Map(lanes.map((l) => [l.slot, l.bornAt]));
   const laneName = new Map(lanes.map((l) => [l.slot, l.name]));
+  const callName = new Map(lanes.map((l) => [l.slot, laneCallName(l)]));
   const froms = ids.map((m) => {
     const born = bornAt.get(m);
     return born && born > since ? born : since;
@@ -100,8 +102,9 @@ export async function mixFeedRecord(
       SELECT * FROM unnest(
         ${ids}::text[],
         ${froms.map((d) => d.toISOString())}::timestamp(3)[],
-        ${ids.map((m) => laneName.get(m) ?? "-")}::text[]
-      ) AS s(model, since, lane)
+        ${ids.map((m) => laneName.get(m) ?? "-")}::text[],
+        ${ids.map((m) => callName.get(m) ?? "-")}::text[]
+      ) AS s(model, since, lane, shown)
     ),
     calls AS (
       SELECT DISTINCT ON (a."tokenId")
@@ -116,7 +119,7 @@ export async function mixFeedRecord(
              COALESCE(a."simReturnPct", co."simReturnPct") AS sim
       FROM "CuratedAlert" a
       JOIN seats ON seats.model = a."model" AND a."createdAt" >= seats.since
-        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" = seats.lane)
+        AND (seats.lane = '-' OR a."modelName" IS NULL OR a."modelName" IN (seats.lane, seats.shown))
       LEFT JOIN "CandidateOutcome" co ON co."id" = a."candidateOutcomeId"
       WHERE a."createdAt" >= ${since} AND a."model" = ANY(${ids}::text[])
       ORDER BY a."tokenId", a."createdAt", a."id"

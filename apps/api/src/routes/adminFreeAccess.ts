@@ -13,6 +13,7 @@ import {
   type Env,
   type FreeAccessPeriod,
   type FreeAccessPlanEntry,
+  walletTag,
 } from "@trenchscanner/core";
 
 /**
@@ -102,7 +103,7 @@ export async function registerAdminFreeAccessRoutes(app: FastifyInstance, { env 
     const by = request.user!.walletAddress;
     const result = await saveFreeAccessPeriod(times, by);
     if (!result.ok) return reply.code(409).send({ error: result.error });
-    request.log.info({ ...times, by, created: result.created }, "free access set");
+    request.log.info({ ...times, by: walletTag(by), created: result.created }, "free access set");
     return { period: withPhase(result.period) };
   });
 
@@ -119,7 +120,7 @@ export async function registerAdminFreeAccessRoutes(app: FastifyInstance, { env 
     const by = request.user!.walletAddress;
     const result = await disableFreeAccess(by, admins, parsed.data.digest);
     if (!result.ok) return reply.code(409).send({ error: result.error, deletes: result.deletes });
-    request.log.info({ periodId: result.period.id, by }, "free access switched off");
+    request.log.info({ periodId: result.period.id, by: walletTag(by) }, "free access switched off");
     return { period: withPhase(result.period) };
   });
 }
