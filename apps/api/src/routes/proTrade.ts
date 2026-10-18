@@ -33,6 +33,7 @@ import { proStatus } from "../proMode.js";
 import { requireTwoFactor } from "../twoFactor.js";
 import { accessSwapOpen as accessSwapOpenFor } from "./auth.js";
 import { SolPrice } from "../solPrice.js";
+import { feeSummary } from "../tradeFees.js";
 
 /**
  * Pro trades from the token modal (user decision 2026-10-17), for Pro Mode wallets only
@@ -43,6 +44,8 @@ import { SolPrice } from "../solPrice.js";
  *                                    it until it lands or its blockhash expires
  *   GET  /pro/trade/status/:sig      whether it landed
  *   GET  /pro/trade/:mint/position   the wallet's balance and trades in the coin, for the chart
+ *   GET  /pro/trade/fees             what the wallet's trades here cost in fees, against other
+ *                                    platforms' fees (tradeFees.ts), for the Portfolio page
  *
  * Non-custodial: the API never sees a key. It builds bytes the guard has simulated, the wallet
  * signs them in the browser, and /send relays only a transaction the session's own wallet signed
@@ -174,6 +177,12 @@ const MAX_CACHED_SWAP_COSTS = 2_000;
 /** The reference buy when the panel names none: 0.1 SOL. */
 const DEFAULT_REF_LAMPORTS = 100_000_000n;
 const MAX_REF_LAMPORTS = 100_000_000_000n;
+/** The network's base fee on a one-signature trade, lamports. */
+const BASE_FEE_LAMPORTS = 5_000n;
+/** The fees read settles trades still "sent" this old, this many per read, and expires the unseen past FEES_EXPIRE_AFTER_MS. */
+const FEES_SETTLE_AFTER_MS = 60_000;
+const FEES_SETTLE_PER_READ = 20;
+const FEES_EXPIRE_AFTER_MS = 5 * 60_000;
 
 interface InFlight {
   base64: string;
@@ -245,6 +254,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       closing: boolean;
       /** The built message: what the wallet sends must be it (signedMatchesBuild). */
       message: DecodedMessage;
+      /** For the fees record (PlatformTrade): the coin, the SOL value and the network's fees. */
+      mint: string;
+      lamports: bigint;
+      networkFeeLamports: bigint;
     }[]
   >();
 
@@ -396,6 +409,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         access: accessBuy && !who.pro,
         closing,
         message,
+        mint: body.mint,
+        lamports: body.side === "buy" ? amount : BigInt(built.quotedOut),
+        networkFeeLamports: BigInt(built.priorityFeeLamports) + BigInt(built.tipLamports) + BASE_FEE_LAMPORTS,
       });
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
       if (builds.size > 5_000) builds.clear();
@@ -487,6 +503,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     const bytes = Uint8Array.from(Buffer.from(transaction, "base64"));
     let signature: string;
     let lastValidBlockHeight: number;
+    let sentBuild: ReturnType<typeof liveBuilds>[number];
     try {
       const wire = parseWireTransaction(bytes);
       const message = decodeMessage(wire.message);
@@ -520,7 +537,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           error: "That trade is too old or wasn't built here. Nothing was sent; try again.",
           notSent: true,
         });
-      lastValidBlockHeight = list[at]!.lastValidBlockHeight;
+      sentBuild = list[at]!;
+      lastValidBlockHeight = sentBuild.lastValidBlockHeight;
       if ([...inFlight.values()].filter((f) => f.wallet === wallet).length >= MAX_IN_FLIGHT_PER_WALLET)
         return reply.code(429).send({
           error: "Wait for your open trades to land before sending more. Nothing was sent.",
@@ -572,8 +590,27 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       scheduleResend();
     }
     forgetPositions(wallet);
+    // Recorded for the fees saved (tradeFees.ts); it counts once it confirms. A miss loses one row.
+    void prisma.platformTrade
+      .create({
+        data: {
+          signature,
+          wallet,
+          mint: sentBuild.mint,
+          side: sentBuild.side,
+          lamports: sentBuild.lamports,
+          networkFeeLamports: sentBuild.networkFeeLamports,
+        },
+      })
+      .catch((err) => request.log.warn({ signature, err: String(err) }, "platform trade not recorded"));
     return { signature };
   });
+
+  /** A recorded trade's outcome, once known (only "sent" rows change). */
+  const settle = (signature: string, status: "confirmed" | "failed" | "expired") =>
+    prisma.platformTrade
+      .updateMany({ where: { signature, status: "sent" }, data: { status, settledAt: new Date() } })
+      .catch(() => undefined);
 
   app.get<{ Params: { signature: string } }>(
     "/trade/status/:signature",
@@ -596,6 +633,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           if (again && !again.seen) {
             inFlight.delete(signature);
             retired.delete(signature);
+            void settle(signature, "expired");
             return { state: "expired" };
           }
         }
@@ -603,16 +641,57 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       }
       if (status.error) {
         inFlight.delete(signature);
+        void settle(signature, "failed");
         return { state: "failed", error: status.error };
       }
       if (status.confirmed) {
         inFlight.delete(signature);
+        void settle(signature, "confirmed");
         forgetPositions(wallet);
         return { state: "confirmed" };
       }
       return { state: "pending" };
     },
   );
+
+  // Fees saved (user ask 2026-10-18): Pro Mode only, the session's own wallet's trades. Trades
+  // the panel stopped watching before they settled are settled here, a few per read.
+  app.get("/trade/fees", { config: { rateLimit: READ_RATE_LIMIT } }, async (request, reply) => {
+    const who = await proWallet(request, reply);
+    if (!who) return;
+    const { wallet } = who;
+    reply.header("Cache-Control", "private, no-store");
+    const open = await prisma.platformTrade.findMany({
+      where: { wallet, status: "sent", sentAt: { lt: new Date(Date.now() - FEES_SETTLE_AFTER_MS) } },
+      orderBy: { sentAt: "asc" },
+      take: FEES_SETTLE_PER_READ,
+      select: { signature: true, sentAt: true },
+    });
+    await Promise.all(
+      open.map(async (t) => {
+        const status = await rpc.getSignatureStatus(t.signature).catch(() => null);
+        if (!status) return;
+        if (status.seen && status.error) return settle(t.signature, "failed");
+        if (status.seen && status.confirmed) return settle(t.signature, "confirmed");
+        // A blockhash lives about a minute and a half: unseen well past that, it never landed.
+        if (!status.seen && Date.now() - t.sentAt.getTime() > FEES_EXPIRE_AFTER_MS)
+          return settle(t.signature, "expired");
+      }),
+    );
+    const [trades, first, solUsd] = await Promise.all([
+      prisma.platformTrade.findMany({
+        where: { wallet, status: "confirmed" },
+        select: { side: true, lamports: true, platformFeeLamports: true, networkFeeLamports: true },
+      }),
+      prisma.platformTrade.findFirst({
+        where: { wallet },
+        orderBy: { sentAt: "asc" },
+        select: { sentAt: true },
+      }),
+      solPrice.get().catch(() => null),
+    ]);
+    return { ...feeSummary(trades), since: first?.sentAt ?? null, solUsd };
+  });
 
   app.get<{ Params: { mint: string } }>(
     "/trade/:mint/position",
