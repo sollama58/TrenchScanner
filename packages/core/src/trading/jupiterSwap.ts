@@ -34,6 +34,12 @@ export class RateLimitedError extends Error {}
 
 export interface SwapClientOptions {
   apiKey?: string;
+  /**
+   * Another Jupiter key to fall back on when the first host answers 429 (the Pro trades borrow the
+   * scan's JUPITER_API_KEY this way). Each key is its own account's limit.
+   */
+  backupApiKey?: string;
+  /** One host only, with no fallback (tests, a proxy). */
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   /**
@@ -210,23 +216,69 @@ function fromJupiterInstruction(ix: JupiterInstruction): InstructionSpec {
   };
 }
 
+/** One way into Jupiter: a host and the key (if any) it is called with. */
+interface JupiterRoute {
+  baseUrl: string;
+  headers: Record<string, string>;
+  /** Rate limited until then (epoch ms): the other routes go first. */
+  coolUntil: number;
+}
+
+const KEYED_HOST = "https://api.jup.ag";
+const KEYLESS_HOST = "https://lite-api.jup.ag";
+/** How long a host that answered 429 is tried last: Jupiter's limits are per second or per minute. */
+const RATE_LIMIT_COOLDOWN_MS = 10_000;
+
 export class JupiterSwapClient implements SwapClient {
-  private readonly baseUrl: string;
-  private readonly headers: Record<string, string>;
+  private readonly routes: JupiterRoute[];
   private readonly fetchImpl: typeof fetch;
   private readonly backupPrices: ((mints: string[]) => Promise<Map<string, number>>) | null;
 
   constructor(options: SwapClientOptions = {}) {
-    this.baseUrl = (
-      options.baseUrl ?? (options.apiKey ? "https://api.jup.ag" : "https://lite-api.jup.ag")
-    ).replace(/\/$/, "");
-    this.headers = { accept: "application/json", ...(options.apiKey ? { "x-api-key": options.apiKey } : {}) };
+    const route = (baseUrl: string, apiKey?: string): JupiterRoute => ({
+      baseUrl: baseUrl.replace(/\/$/, ""),
+      headers: { accept: "application/json", ...(apiKey ? { "x-api-key": apiKey } : {}) },
+      coolUntil: 0,
+    });
+    // A 429 on one route moves the call to the next: the key's own account, a backup key's, then
+    // the keyless host, whose limit is per IP (and the api's IP is shared with other services).
+    const keys = [...new Set([options.apiKey, options.backupApiKey].filter((k): k is string => !!k))];
+    this.routes = options.baseUrl
+      ? [route(options.baseUrl, options.apiKey)]
+      : [...keys.map((k) => route(KEYED_HOST, k)), route(KEYLESS_HOST)];
     this.fetchImpl = options.fetchImpl ?? fetch;
     const fetchImpl = this.fetchImpl;
     this.backupPrices =
       options.backupPrices !== undefined
         ? options.backupPrices
         : (mints) => dexScreenerPricesUsd(mints, fetchImpl);
+  }
+
+  /**
+   * One Jupiter call, on the first route that isn't rate limited; a 429 sends it on to the next
+   * route right away, and only when every route answered 429 is it a RateLimitedError.
+   */
+  private async call(path: string, init: RequestInit, what: string): Promise<Response> {
+    const now = Date.now();
+    const order = [...this.routes].sort((a, b) => Number(a.coolUntil > now) - Number(b.coolUntil > now));
+    let limited: unknown = null;
+    for (const r of order) {
+      try {
+        const res = await request(
+          this.fetchImpl,
+          `${r.baseUrl}${path}`,
+          { ...init, headers: { ...r.headers, ...(init.headers as Record<string, string> | undefined) } },
+          what,
+        );
+        r.coolUntil = 0;
+        return res;
+      } catch (err) {
+        if (!(err instanceof RateLimitedError)) throw err;
+        r.coolUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+        limited = err;
+      }
+    }
+    throw limited;
   }
 
   async quote(input: { inputMint: string; outputMint: string; amount: bigint; slippageBps: number }) {
@@ -238,12 +290,7 @@ export class JupiterSwapClient implements SwapClient {
       // Fewer hops through thin intermediate tokens: fewer ways for a memecoin route to fail.
       restrictIntermediateTokens: "true",
     });
-    const res = await request(
-      this.fetchImpl,
-      `${this.baseUrl}/swap/v1/quote?${params}`,
-      { headers: this.headers },
-      "Jupiter quote",
-    );
+    const res = await this.call(`/swap/v1/quote?${params}`, {}, "Jupiter quote");
     const quote = (await res.json()) as SwapQuote & { error?: string };
     if (quote.error) throw new NoRouteError(`Jupiter quote: ${quote.error}`);
     if (typeof quote.outAmount !== "string" || typeof quote.otherAmountThreshold !== "string") {
@@ -257,12 +304,11 @@ export class JupiterSwapClient implements SwapClient {
       input.priorityFeeLamports !== undefined && input.priorityFeeLamports > 0
         ? Math.min(input.priorityFeeLamports, input.maxPriorityFeeLamports)
         : null;
-    const res = await request(
-      this.fetchImpl,
-      `${this.baseUrl}/swap/v1/swap`,
+    const res = await this.call(
+      "/swap/v1/swap",
       {
         method: "POST",
-        headers: { ...this.headers, "content-type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           quoteResponse: input.quote,
           userPublicKey: input.userPublicKey,
@@ -312,12 +358,11 @@ export class JupiterSwapClient implements SwapClient {
     lookupTables: string[];
     computeUnitLimit: number | null;
   }> {
-    const res = await request(
-      this.fetchImpl,
-      `${this.baseUrl}/swap/v1/swap-instructions`,
+    const res = await this.call(
+      "/swap/v1/swap-instructions",
       {
         method: "POST",
-        headers: { ...this.headers, "content-type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           quoteResponse: input.quote,
           userPublicKey: input.userPublicKey,
@@ -382,12 +427,7 @@ export class JupiterSwapClient implements SwapClient {
     const unique = [...new Set(mints)];
     for (let i = 0; i < unique.length; i += 50) {
       const batch = unique.slice(i, i + 50);
-      const res = await request(
-        this.fetchImpl,
-        `${this.baseUrl}/price/v3?ids=${batch.join(",")}`,
-        { headers: this.headers },
-        "Jupiter price",
-      );
+      const res = await this.call(`/price/v3?ids=${batch.join(",")}`, {}, "Jupiter price");
       const out = (await res.json()) as Record<string, { usdPrice?: number } | null>;
       for (const mint of batch) {
         const price = out?.[mint]?.usdPrice;

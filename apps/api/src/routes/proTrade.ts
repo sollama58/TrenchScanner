@@ -189,7 +189,12 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     apiKey: env.HELIUS_API_KEY || undefined,
     backupUrl: env.TRADING_BACKUP_RPC_URL || undefined,
   });
-  const jupiter = new JupiterSwapClient({ apiKey: env.PRO_TRADING_JUPITER_API_KEY || undefined });
+  // Keyless, Jupiter limits by IP, and the api's IP is shared with other services on its host: the
+  // scan's key is the fallback when this one (or none) is rate limited.
+  const jupiter = new JupiterSwapClient({
+    apiKey: env.PRO_TRADING_JUPITER_API_KEY || undefined,
+    backupApiKey: env.JUPITER_API_KEY || undefined,
+  });
   const solPrice = new SolPrice();
   const tradeCache = new Map<string, WalletTrade | null>();
   const positions = new Map<string, { at: number; body: unknown }>();
@@ -358,17 +363,24 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
             ...(body.tipLamports !== undefined ? { tipLamports: BigInt(body.tipLamports) } : {}),
           },
         );
-      // One more go after a short pause when the chain or Jupiter didn't answer: most such misses
-      // are a moment's rate limit, and a second tap shouldn't be the trader's job.
-      const built = await build().catch(async (err) => {
-        if (!(err instanceof TransientError || err instanceof RateLimitedError)) throw err;
-        request.log.warn(
-          { wallet: walletTag(wallet), mint: body.mint, error: String(err) },
-          "pro trade build retried",
-        );
-        await new Promise((r) => setTimeout(r, BUILD_RETRY_MS));
-        return build();
-      });
+      // More goes after a pause when the chain or Jupiter didn't answer: most such misses are a
+      // moment's rate limit, and tapping again shouldn't be the trader's job.
+      const built = await (async () => {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            return await build();
+          } catch (err) {
+            const wait = BUILD_RETRY_MS[attempt];
+            if (!(err instanceof TransientError || err instanceof RateLimitedError) || wait === undefined)
+              throw err;
+            request.log.warn(
+              { wallet: walletTag(wallet), mint: body.mint, attempt, error: String(err) },
+              "pro trade build retried",
+            );
+            await new Promise((r) => setTimeout(r, wait));
+          }
+        }
+      })();
       // A partial sale is measured by what the route quotes for it, in lamports.
       if (!closing && body.side === "sell" && BigInt(built.quotedOut) < MIN_TRADE_LAMPORTS)
         return reply.code(422).send({ error: tooSmall("sell") });
@@ -706,8 +718,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   });
 }
 
-/** The pause before a build's one retry, when the chain or Jupiter didn't answer the first. */
-const BUILD_RETRY_MS = 800;
+/** The pauses before a build's retries, when the chain or Jupiter didn't answer. */
+const BUILD_RETRY_MS = [800, 2_000];
 
 /** Lamports as SOL for a message, up to four decimals. */
 function solAmount(lamports: bigint): string {

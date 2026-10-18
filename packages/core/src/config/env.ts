@@ -1136,8 +1136,9 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
-  // Jupiter key for Pro trades' quotes and swap instructions. Empty: Jupiter's keyless host. Never
-  // the bot's TRADING_JUPITER_API_KEY, so a burst of clicks can't rate-limit a stop-loss.
+  // Jupiter key for Pro trades' quotes and swap instructions. Empty: the scan's JUPITER_API_KEY, then
+  // Jupiter's keyless host, each the next one's fallback on a 429. Never the bot's
+  // TRADING_JUPITER_API_KEY, so a burst of clicks can't rate-limit a stop-loss.
   PRO_TRADING_JUPITER_API_KEY: pastedKey,
   // Helius Sender's endpoint; empty is the global one (https://sender.helius-rpc.com/fast). The
   // api adds HELIUS_API_KEY to it (50 sends a second instead of 1). Sender spends no credits.
