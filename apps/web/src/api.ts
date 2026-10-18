@@ -1643,6 +1643,8 @@ export interface FeedAppearance {
   chartMarks: boolean;
   chartMarkKinds: ChartMarkKind[];
   chartMarkMinSol: number;
+  /** The token chart's default: a line or candles (absent from older API builds: line). */
+  chartStyle: "line" | "candles";
   hidden: CardField[];
 }
 
