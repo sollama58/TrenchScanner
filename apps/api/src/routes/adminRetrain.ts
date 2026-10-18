@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { prisma } from "@trenchscanner/core";
+import { prisma, walletTag } from "@trenchscanner/core";
 import { summarizeHeartbeat } from "./health.js";
 
 /**
@@ -37,7 +37,10 @@ export async function registerAdminRetrainRoutes(app: FastifyInstance) {
     }
     await prisma.curatorRetrainRequest.create({ data: { requestedBy: request.user?.walletAddress ?? null } });
     request.log.info(
-      { by: request.user?.walletAddress, runningForMs: state.job?.runningForMs ?? null },
+      {
+        by: request.user ? walletTag(request.user.walletAddress) : null,
+        runningForMs: state.job?.runningForMs ?? null,
+      },
       running ? "asked the trainer to stop its run and retrain" : "queued a curator retrain",
     );
     return { queued: true, stopping: running, ...(await retrainState()) };

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { prisma } from "@trenchscanner/core";
+import { prisma, walletTag } from "@trenchscanner/core";
 
 /**
  * Admin announcements: a message an admin posts from the Admin tab to every visitor's dashboard.
@@ -102,7 +102,10 @@ export async function registerAdminAnnouncementRoutes(app: FastifyInstance) {
       });
     });
     forgetCached();
-    request.log.info({ id: created.id, by: request.user!.walletAddress }, "posted an announcement");
+    request.log.info(
+      { id: created.id, by: walletTag(request.user!.walletAddress) },
+      "posted an announcement",
+    );
     return created;
   });
 
@@ -113,7 +116,10 @@ export async function registerAdminAnnouncementRoutes(app: FastifyInstance) {
       data: { endedAt: new Date() },
     });
     forgetCached();
-    request.log.info({ ended: result.count, by: request.user!.walletAddress }, "ended the announcement");
+    request.log.info(
+      { ended: result.count, by: walletTag(request.user!.walletAddress) },
+      "ended the announcement",
+    );
     return { ended: result.count };
   });
 }

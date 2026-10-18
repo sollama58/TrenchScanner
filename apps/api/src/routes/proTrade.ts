@@ -48,7 +48,10 @@ const buildSchema = z.object({
   mint: z.string().refine(looksLikeSolanaAddress, "not a token address"),
   side: z.enum(["buy", "sell"]),
   /** Buy: lamports. Sell: raw token units. Decimal strings (u64s never go through a float). */
-  amount: z.string().regex(/^\d{1,20}$/),
+  amount: z
+    .string()
+    .regex(/^\d{1,20}$/)
+    .refine((v) => BigInt(v) <= 18_446_744_073_709_551_615n, "amount too large"),
   slippageBps: z.number().int().min(10).max(5_000),
   speed: z.enum(["eco", "turbo"]),
   /** A sale of the whole balance, read fresh here (the panel's copy can be seconds old). */

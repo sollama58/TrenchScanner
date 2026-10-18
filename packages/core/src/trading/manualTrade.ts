@@ -200,7 +200,14 @@ export async function buildManualTrade(
       buybackFeeRecipient: curve.buyback,
     };
     if (buy) {
-      const b = pumpBuyInstructions({ ...accounts, solIn: req.amount, slippageBps: req.slippageBps });
+      const b = (() => {
+        try {
+          return pumpBuyInstructions({ ...accounts, solIn: req.amount, slippageBps: req.slippageBps });
+        } catch (err) {
+          // Too small a buy for the curve to give a token: the trader's input, not a build failure.
+          throw new TradeRejected(err instanceof Error ? err.message : String(err));
+        }
+      })();
       swapIxs = b.instructions;
       minOut = b.minTokens;
       units = PUMP_BUY_UNITS;

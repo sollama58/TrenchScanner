@@ -34,9 +34,15 @@ export async function walletOnFeed(wallet: string): Promise<boolean> {
   return (await seenWallets([wallet])).has(wallet);
 }
 
-/** Whether the wallet's own trades (ProTrade, the TRADES panel) include the mint. */
-export async function tradedMint(wallet: string, mint: string): Promise<boolean> {
-  const row = await prisma.proTrade.findFirst({ where: { wallet, mint }, select: { at: true } });
+/** How long the TRADES panel lists a trade (routes/proTrades.ts), and so how long it opens the coin. */
+const TRADED_MINT_MS = 30 * 86_400_000;
+
+/** Whether the wallet's own trades (ProTrade, the TRADES panel) include the mint lately. */
+export async function tradedMint(wallet: string, mint: string, now = Date.now()): Promise<boolean> {
+  const row = await prisma.proTrade.findFirst({
+    where: { wallet, mint, at: { gt: new Date(now - TRADED_MINT_MS) } },
+    select: { at: true },
+  });
   return row !== null;
 }
 

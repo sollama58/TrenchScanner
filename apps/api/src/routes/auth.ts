@@ -15,7 +15,7 @@ import {
 } from "@trenchscanner/core";
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME, verifyRequestSessions } from "../auth/session.js";
-import { proStatus } from "../proMode.js";
+import { PRO_OFF, proStatus } from "../proMode.js";
 
 // Length caps run before any base58 decode: bs58.decode is quadratic in input length, so an
 // uncapped field let one unauthenticated request (a ~1MB walletAddress) block the event loop for
@@ -139,7 +139,8 @@ async function findOrCreateUser(walletAddress: string): Promise<{ user: User; cr
 /** Shapes the public-facing user object - notably where isAdmin gets attached, since that's
  *  derived from config (ADMIN_WALLET_ADDRESSES) rather than stored on the User row itself. */
 async function toUserResponse(user: Pick<User, "id" | "walletAddress" | "createdAt">, env: Env) {
-  const pro = await proStatus(env, user.walletAddress);
+  // Sign-in never fails on Pro Mode: a hiccup on its tables reads as no Pro Mode, for this answer.
+  const pro = await proStatus(env, user.walletAddress).catch(() => PRO_OFF);
   return {
     id: user.id,
     walletAddress: user.walletAddress,

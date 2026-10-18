@@ -305,7 +305,10 @@ export async function registerAdminFeedbackRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "invalid id" });
     const result = await prisma.feedbackReport.deleteMany({ where: { id: parsed.data.id } });
     if (result.count === 0) return reply.code(404).send({ error: "not found" });
-    request.log.info({ id: parsed.data.id, by: request.user!.walletAddress }, "deleted a feedback report");
+    request.log.info(
+      { id: parsed.data.id, by: walletTag(request.user!.walletAddress) },
+      "deleted a feedback report",
+    );
     return { ok: true };
   });
 }

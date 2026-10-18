@@ -73,6 +73,8 @@ describe.skipIf(!dbAvailable)("ProTradeWatcher on the database", () => {
       ["s3", "buy", true],
     ]);
     expect(entries).toEqual([`${MINT}@${t0}`, `${MINT}@${t0 + 120}`]);
+    // Scanned entries are marked, so the worker's TokenSage read follows the same hourly cap.
+    expect(rows.map((r) => r.scanned)).toEqual([true, false, true]);
     expect(reads.sort()).toEqual(["s1", "s2", "s3"]);
     expect((await prisma.proTradeCursor.findUnique({ where: { wallet: W } }))?.lastSignature).toBe("s3");
 
@@ -91,6 +93,8 @@ describe.skipIf(!dbAvailable)("ProTradeWatcher on the database", () => {
     // The trader's coin opens in the token modal for them, and only for them.
     expect(await tradedMint(W, MINT)).toBe(true);
     expect(await tradedMint(`${W}-other`, MINT)).toBe(false);
+    // ...for as long as the panel lists it.
+    expect(await tradedMint(W, MINT, now + 31 * 86_400_000)).toBe(false);
   });
 
   it("waits for a transaction the node hasn't served yet before moving the cursor past it", async () => {
@@ -134,6 +138,68 @@ describe.skipIf(!dbAvailable)("ProTradeWatcher on the database", () => {
       await watcher.catchUp(wallet);
       expect(await prisma.proTrade.count({ where: { wallet } })).toBe(1);
       expect((await prisma.proTradeCursor.findUnique({ where: { wallet } }))?.lastSignature).toBe("late1");
+    } finally {
+      await prisma.proTrade.deleteMany({ where: { wallet } });
+      await prisma.proTradeCursor.deleteMany({ where: { wallet } });
+    }
+  });
+
+  it("pages back to its cursor when more than a page of signatures landed since", async () => {
+    const wallet = `${W}-paged`;
+    const now = Date.now();
+    const t0 = Math.floor(now / 1000) - 5_000;
+    // Newest first: 60 dust transfers on top of a buy, on top of the cursor's signature.
+    const all = [
+      ...Array.from({ length: 60 }, (_, i) => ({
+        signature: `dust${60 - i}`,
+        blockTime: t0 + 100 + 60 - i,
+        failed: false,
+      })),
+      { signature: "buy1", blockTime: t0 + 50, failed: false },
+      { signature: "old", blockTime: t0, failed: false },
+    ];
+    const buy = swap("buy1", "buy", t0 + 50, ["0", "9"]);
+    const watcher = new ProTradeWatcher({
+      stream: null,
+      rpc: {
+        getSignaturesForAddress: async (_a, limit, before) => {
+          const from = before ? all.findIndex((s) => s.signature === before) + 1 : 0;
+          return all.slice(from, from + limit);
+        },
+        getTransactionJson: async (s) =>
+          s === "buy1"
+            ? {
+                ...buy,
+                transaction: { message: { accountKeys: [wallet] } },
+                meta: {
+                  ...buy.meta!,
+                  preTokenBalances: [],
+                  postTokenBalances: [
+                    {
+                      accountIndex: 1,
+                      mint: MINT,
+                      owner: wallet,
+                      uiTokenAmount: { amount: "9", decimals: 6 },
+                    },
+                  ],
+                },
+              }
+            : {
+                blockTime: t0,
+                meta: { err: null, preBalances: [1], postBalances: [1] },
+                transaction: { message: { accountKeys: [wallet] } },
+              },
+      },
+      onEntry: async () => {},
+      now: () => now,
+    });
+    try {
+      await prisma.proTradeCursor.create({ data: { wallet, lastSignature: "old" } });
+      await watcher.catchUp(wallet);
+      expect((await prisma.proTrade.findMany({ where: { wallet } })).map((r) => r.signature)).toEqual([
+        "buy1",
+      ]);
+      expect((await prisma.proTradeCursor.findUnique({ where: { wallet } }))?.lastSignature).toBe("dust60");
     } finally {
       await prisma.proTrade.deleteMany({ where: { wallet } });
       await prisma.proTradeCursor.deleteMany({ where: { wallet } });

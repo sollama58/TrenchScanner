@@ -36,6 +36,16 @@ export const CATCH_UP_UNCOVERED_MS = 60_000;
 export const CATCH_UP_COVERED_MS = 15 * 60_000;
 /** Coins put through a scan for one wallet in an hour at most: a bot's churn can't run up the scan. */
 export const ENTRY_SCANS_PER_HOUR = 20;
+/**
+ * Pages of CATCH_UP_SIGNATURES a catch-up reads back at most to find its cursor: a wallet away
+ * for a while (or one sprayed with dust transfers) has more than one page of new signatures, and
+ * reading only the newest page would skip the trades between it and the cursor for good.
+ */
+export const CATCH_UP_PAGES = 4;
+/** Reads of a transaction the RPC won't serve before the catch-up stops waiting on it. */
+const UNSERVED_TRIES = 3;
+/** Wallets' in-memory pacing entries this stale are dropped (lastCatchUp, scans). */
+const PACING_STALE_MS = 3_600_000;
 
 export interface SeenTrade {
   signature: string;
@@ -131,6 +141,7 @@ export interface TradeRpc {
   getSignaturesForAddress(
     address: string,
     limit: number,
+    before?: string,
   ): Promise<{ signature: string; blockTime: number | null; failed: boolean }[] | null>;
   getTransactionJson(signature: string): Promise<unknown>;
 }
@@ -205,6 +216,11 @@ export class ProTradeWatcher {
   private readonly scans = new Map<string, number[]>();
   /** Stream keys to the wallets they follow (the keys carry only a tag). */
   private readonly walletOfKey = new Map<string, string>();
+  /** Reads of a signature the RPC returned nothing for, so one it never serves can't hold the cursor. */
+  private readonly unserved = new Map<string, number>();
+  /** Each wallet's writes, one at a time: an entry is decided from the trades written before it. */
+  private readonly writes = new Map<string, Promise<void>>();
+  private lastPrune = 0;
 
   constructor(
     private readonly deps: {
@@ -239,10 +255,11 @@ export class ProTradeWatcher {
   touch(wallet: string): Promise<void> {
     const now = this.now();
     const key = streamKey(wallet);
-    if (!this.walletOfKey.has(key)) {
-      if (this.walletOfKey.size > 10_000) this.walletOfKey.clear();
-      this.walletOfKey.set(key, wallet);
-    }
+    // Re-set on every touch, so the oldest key in the map is the least recently followed one.
+    this.walletOfKey.delete(key);
+    this.walletOfKey.set(key, wallet);
+    if (this.walletOfKey.size > 10_000) this.walletOfKey.delete(this.walletOfKey.keys().next().value!);
+    this.prune(now);
     this.deps.stream?.watch(key, [wallet], now);
     const inFlight = this.running.get(wallet);
     if (inFlight) return inFlight;
@@ -265,13 +282,29 @@ export class ProTradeWatcher {
 
   /** Reads the wallet's signatures newer than its cursor, and records the trades among them. */
   async catchUp(wallet: string): Promise<void> {
-    const list = await this.deps.rpc.getSignaturesForAddress(wallet, CATCH_UP_SIGNATURES);
-    if (!list) return;
+    const first = await this.deps.rpc.getSignaturesForAddress(wallet, CATCH_UP_SIGNATURES);
+    if (!first) return;
     const cursor = await prisma.proTradeCursor.findUnique({ where: { wallet } });
     const now = this.now();
+    let list = first;
     let fresh = list;
     if (cursor?.lastSignature) {
-      const at = list.findIndex((s) => s.signature === cursor.lastSignature);
+      let at = list.findIndex((s) => s.signature === cursor.lastSignature);
+      // Page back until the cursor turns up (or the pages run out, or the wallet's history does).
+      for (
+        let page = 1;
+        at < 0 && page < CATCH_UP_PAGES && list.length === page * CATCH_UP_SIGNATURES;
+        page++
+      ) {
+        const older = await this.deps.rpc.getSignaturesForAddress(
+          wallet,
+          CATCH_UP_SIGNATURES,
+          list[list.length - 1]!.signature,
+        );
+        if (!older || older.length === 0) break;
+        list = [...list, ...older];
+        at = list.findIndex((s) => s.signature === cursor.lastSignature);
+      }
       if (at >= 0) fresh = list.slice(0, at);
     } else {
       fresh = list.filter((s) => s.blockTime === null || s.blockTime * 1000 >= now - FIRST_LOOK_BACK_MS);
@@ -297,10 +330,20 @@ export class ProTradeWatcher {
           continue;
         }
         // Not served yet (it just landed): read again next time, and the cursor waits for it.
+        // One the RPC still won't serve after a few reads is left behind rather than re-read forever.
         if (!tx || typeof tx !== "object") {
-          blocked = true;
+          const tries = (this.unserved.get(s.signature) ?? 0) + 1;
+          if (tries < UNSERVED_TRIES) {
+            this.unserved.set(s.signature, tries);
+            blocked = true;
+          } else {
+            this.unserved.delete(s.signature);
+            logger.warn("gave up on a transaction the RPC won't serve", { wallet: walletTag(wallet) });
+            if (!blocked) newest = s.signature;
+          }
           continue;
         }
+        this.unserved.delete(s.signature);
         this.remember(s.signature);
         const trades = walletSwaps(s.signature, tx as WalletTx, wallet, (s.blockTime ?? now / 1000) * 1000);
         if (trades.length > 0) await this.record(wallet, trades);
@@ -309,6 +352,7 @@ export class ProTradeWatcher {
     }
     // A failed transaction is never read, but it still moves the cursor when it is the newest.
     if (!blocked && fresh.length > 0) newest = fresh[0]!.signature;
+    if (this.unserved.size > SEEN_MAX) this.unserved.clear();
     else if (!cursor && newest === null && list.length > 0 && fresh.length === 0) newest = list[0]!.signature;
     await prisma.proTradeCursor.upsert({
       where: { wallet },
@@ -317,8 +361,23 @@ export class ProTradeWatcher {
     });
   }
 
-  /** Writes new trades; a buy from a flat position is an entry, and its coin is scanned. */
-  async record(wallet: string, trades: SeenTrade[]): Promise<void> {
+  /**
+   * Writes new trades; a buy from a flat position is an entry, and its coin is scanned. One
+   * wallet's writes run one after another (the stream and a catch-up can both be writing), so two
+   * buys of one coin can't each see the other unwritten and both count as the entry.
+   */
+  record(wallet: string, trades: SeenTrade[]): Promise<void> {
+    const prev = this.writes.get(wallet) ?? Promise.resolve();
+    const run = prev.catch(() => undefined).then(() => this.write(wallet, trades));
+    const tail = run.catch(() => undefined);
+    this.writes.set(wallet, tail);
+    void tail.then(() => {
+      if (this.writes.get(wallet) === tail) this.writes.delete(wallet);
+    });
+    return run;
+  }
+
+  private async write(wallet: string, trades: SeenTrade[]): Promise<void> {
     for (const t of trades) {
       let entry = false;
       if (t.side === "buy") {
@@ -345,13 +404,18 @@ export class ProTradeWatcher {
         skipDuplicates: true,
       });
       if (written.count > 0 && entry && this.mayScan(wallet)) {
-        await this.deps.onEntry(wallet, t.mint, t.at).catch((err: unknown) =>
-          logger.warn("failed to scan a traded coin", {
-            wallet: walletTag(wallet),
-            mint: t.mint,
-            error: String(err),
-          }),
-        );
+        // Marked first: the worker's TokenSage read follows only scanned entries, so the hourly
+        // cap here holds for it too (apps/worker tokensage/utilityLookups.ts).
+        await prisma.proTrade.updateMany({
+          where: { wallet, signature: t.signature, mint: t.mint },
+          data: { scanned: true },
+        });
+        // No mint beside the tag: a coin and a time would name the wallet from the chain.
+        await this.deps
+          .onEntry(wallet, t.mint, t.at)
+          .catch((err: unknown) =>
+            logger.warn("failed to scan a traded coin", { wallet: walletTag(wallet), error: String(err) }),
+          );
       }
     }
   }
@@ -366,6 +430,17 @@ export class ProTradeWatcher {
     recent.push(now);
     this.scans.set(wallet, recent);
     return true;
+  }
+
+  /** Drops the pacing of wallets nobody has followed for an hour (at most once a minute). */
+  private prune(now: number): void {
+    if (now - this.lastPrune < 60_000) return;
+    this.lastPrune = now;
+    for (const [wallet, at] of this.lastCatchUp)
+      if (now - at > PACING_STALE_MS) this.lastCatchUp.delete(wallet);
+    for (const [wallet, times] of this.scans) {
+      if (times.every((t) => now - t > PACING_STALE_MS)) this.scans.delete(wallet);
+    }
   }
 
   private remember(signature: string): void {

@@ -2041,6 +2041,9 @@ model ProTrade {
   at        DateTime
   /// A buy from a flat position: the start of a trade, which put the coin through a scan.
   entry     Boolean  @default(false)
+  /// An entry that went through the scan (the hourly per-wallet cap let it); the worker's
+  /// TokenSage read follows these only.
+  scanned   Boolean  @default(false)
   createdAt DateTime @default(now())
 
   @@id([wallet, signature, mint])

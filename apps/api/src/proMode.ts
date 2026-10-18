@@ -27,14 +27,14 @@ export interface ProStatus {
   canClose: boolean;
 }
 
-const OFF: ProStatus = { pro: false, source: null, canClose: false };
+export const PRO_OFF: ProStatus = { pro: false, source: null, canClose: false };
 
 /** When each wallet was last recorded in ProModeSeen by this process, to write it at most hourly. */
 const seenWritten = new Map<string, number>();
 const SEEN_EVERY_MS = 60 * 60_000;
 
 export async function proStatus(env: Env, walletAddress: string): Promise<ProStatus> {
-  if (!env.PRO_TRADING_ENABLED) return OFF;
+  if (!env.PRO_TRADING_ENABLED) return PRO_OFF;
   let status: ProStatus | null = null;
   if (adminWalletSet(env).has(walletAddress)) status = { pro: true, source: "admin", canClose: true };
   if (!status) {
@@ -67,7 +67,7 @@ export async function proStatus(env: Env, walletAddress: string): Promise<ProSta
     where: { walletAddress },
     select: { walletAddress: true },
   });
-  return { ...OFF, canClose: seen !== null };
+  return { ...PRO_OFF, canClose: seen !== null };
 }
 
 async function markSeen(walletAddress: string): Promise<void> {

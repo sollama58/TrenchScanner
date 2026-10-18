@@ -446,14 +446,18 @@ export class TradingRpc implements GuardRpc {
     };
   }
 
-  /** The newest signatures that touched `address` (at most `limit`); null when unknown. */
+  /**
+   * The newest signatures that touched `address` (at most `limit`), older than `before` when it
+   * is given; null when unknown.
+   */
   async getSignaturesForAddress(
     address: string,
     limit: number,
+    before?: string,
   ): Promise<{ signature: string; blockTime: number | null; failed: boolean }[] | null> {
     const out = await this.read<{ signature?: string; blockTime?: number | null; err?: unknown }[]>(
       "getSignaturesForAddress",
-      [address, { limit, commitment: "confirmed" }],
+      [address, { limit, commitment: "confirmed", ...(before ? { before } : {}) }],
     );
     if (!Array.isArray(out)) return null;
     return out.flatMap((e) =>

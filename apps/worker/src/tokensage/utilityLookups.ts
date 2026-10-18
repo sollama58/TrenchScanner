@@ -27,7 +27,8 @@ export async function noteUtilityLookups(env: Env, now = Date.now()): Promise<nu
   // Coins a Pro Mode wallet just bought into: the TRADES panel scans them like a lookup
   // (apps/api routes/proTrades.ts), so they want the same read.
   const entries = await prisma.proTrade.findMany({
-    where: { entry: true, at: { gt: new Date(now - UTILITY_READ_WINDOW_MS) } },
+    // Scanned entries only: the API's per-wallet hourly scan cap decides which entries those are.
+    where: { entry: true, scanned: true, at: { gt: new Date(now - UTILITY_READ_WINDOW_MS) } },
     orderBy: { at: "desc" },
     distinct: ["mint"],
     take: MAX_PER_CYCLE,

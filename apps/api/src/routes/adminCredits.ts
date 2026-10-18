@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { burnCreditPrices, grantCredits, prisma, saveBurnCreditPrices } from "@trenchscanner/core";
+import { burnCreditPrices, grantCredits, prisma, saveBurnCreditPrices, walletTag } from "@trenchscanner/core";
 
 /**
  * Burn Credits in the Admin tab (routes registered behind authenticateAdmin, under /admin):
@@ -75,7 +75,7 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
     const prices = await saveBurnCreditPrices(parsed.data, request.user!.walletAddress);
-    request.log.info({ prices, by: request.user!.walletAddress }, "burn credit prices changed");
+    request.log.info({ prices, by: walletTag(request.user!.walletAddress) }, "burn credit prices changed");
     return { prices };
   });
 
@@ -87,7 +87,7 @@ export async function registerAdminCreditRoutes(app: FastifyInstance) {
     const { wallet, delta, note } = parsed.data;
     const by = request.user!.walletAddress;
     const balance = await grantCredits(wallet, delta, note ? `${note} (by ${by})` : `by ${by}`);
-    request.log.info({ wallet, delta, by }, "granted burn credits by hand");
+    request.log.info({ wallet: walletTag(wallet), delta, by: walletTag(by) }, "granted burn credits by hand");
     return { wallet, balance };
   });
 }

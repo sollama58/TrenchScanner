@@ -25,6 +25,7 @@ import {
   type DexScreenerClient,
   type SolanaRpc,
   type UtilityKind,
+  walletTag,
 } from "@trenchscanner/core";
 import { creatorFeesByMint, TOKEN_CARD_SELECT, withCarriedHolderList } from "../curatedFeed.js";
 import { readKolRows } from "../kolRoster.js";
@@ -322,7 +323,7 @@ export async function registerUtilityRoutes(app: FastifyInstance, opts: UtilityR
     try {
       await withApiFeature("utility-wallet", () => loadWalletProfile(subject, opts.walletLive));
     } catch (err) {
-      request.log.warn({ err, subject }, "utility wallet lookup failed");
+      request.log.warn({ err, subject: walletTag(subject) }, "utility wallet lookup failed");
       return reply
         .code(503)
         .send({ error: "Couldn't read that wallet just now. No credit was used; try again shortly." });

@@ -106,6 +106,10 @@ envVarGroups:
         value: https://frontend-api-v3.pump.fun
       - key: NODE_ENV
         value: production
+      # Pro trades from the token modal (api) and the Pro holder job (worker). Shipped off (user
+      # decision 2026-10-18, pending): flip to "true" here once trading has been tried for real.
+      - key: PRO_TRADING_ENABLED
+        value: "false"
 
 services:
   - type: web
