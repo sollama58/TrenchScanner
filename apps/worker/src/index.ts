@@ -27,6 +27,7 @@ import {
   recordHeartbeat,
   runsJob,
   runDueFreeAccessCleanup,
+  PRO_HOLDER_SCAN_MINUTES,
   refreshProHolders,
   adminWalletSet,
   runTelegramDispatch,
@@ -551,7 +552,9 @@ async function main() {
     ),
   );
   // Pro Mode for the top 250 $ASDFASDFA holders (refreshProHolders in core): one Helius read of
-  // the mint's token accounts every 10 minutes. Off with the trade system, and while it is admins-only.
+  // the mint's token accounts every PRO_HOLDER_SCAN_MINUTES (one or two credits a scan), so a new
+  // top-250 wallet gets Pro Mode within that of its qualifying hour. Off with the trade system,
+  // and while it is admins-only.
   if (env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC)
     schedule("pro-holders", () =>
       scheduleInterval(
@@ -559,9 +562,9 @@ async function main() {
         // One scan at a time across workers: two side by side during a deploy could each see the
         // other's scan as the previous one and restart every holder's qualifying hour.
         () => withJobLock("pro-holders", () => refreshProHolders(deps.helius)),
-        10,
+        PRO_HOLDER_SCAN_MINUTES,
         {
-          deadlineMinutes: 10,
+          deadlineMinutes: PRO_HOLDER_SCAN_MINUTES,
         },
       ),
     );

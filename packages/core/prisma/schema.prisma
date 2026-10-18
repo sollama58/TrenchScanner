@@ -87,6 +87,10 @@ model User {
   /// paper strategies reach their private Telegram chats - see trading/tradeAlerts.ts in core for
   /// the shape. Null = all of them, as before the setting existed.
   tradeAlerts     Json?
+  /// Set for an account made by signing in with Privy (email or Google/X): its Privy DID. The
+  /// account's walletAddress is then the Privy wallet Privy made for it. Privy accounts and wallet
+  /// accounts stay separate (user decision 2026-10-18), and Privy accounts can't pair a phone.
+  privyUserId     String?  @unique
 
   filters           UserFilter[]
   matches           Match[]
@@ -100,6 +104,64 @@ model User {
   tradingWallet     TradingWallet?
   tradingBot        TradingBot?
   paperStrategies   PaperStrategy[]
+  twoFactor         TwoFactorSettings?
+  passkeys          TwoFactorPasskey[]
+  backupCodes       TwoFactorBackupCode[]
+}
+
+/// Optional two-factor (user ask 2026-10-18): an authenticator app, passkeys, or both, and which
+/// actions ask for it (apps/api/src/twoFactor.ts). No row = two-factor off.
+model TwoFactorSettings {
+  userId          String    @id
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The authenticator app's secret, sealed (AES-256-GCM, bound to the user); null = no app.
+  totpSecret      String?
+  /// A secret being set up, until its first code confirms it.
+  pendingTotpSecret String?
+  /// The last 30-second step a code was accepted for: a code works once.
+  lastTotpStep    Int?
+  /// The actions that ask for it: signin, buy, buyOver, sell, burn, pair, export.
+  actions         String[]  @default(["signin", "pair", "export"])
+  /// With "buyOver": buys of this many lamports or more ask.
+  buyOverLamports BigInt?
+  updatedAt       DateTime  @updatedAt
+}
+
+/// A passkey (WebAuthn credential) registered as a second factor.
+model TwoFactorPasskey {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// base64url credential id.
+  credentialId String    @unique
+  publicKey    Bytes
+  counter      BigInt    @default(0)
+  transports   String[]  @default([])
+  name         String
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+
+  @@index([userId])
+}
+
+/// One-time backup codes, for a lost authenticator or passkey. Only their hashes are kept.
+model TwoFactorBackupCode {
+  id       String    @id @default(cuid())
+  userId   String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash String
+  usedAt   DateTime?
+
+  @@index([userId])
+}
+
+/// Single-use two-factor tokens (sign-in tickets, passkey challenges) already used, until they
+/// expire. In the database so a restart or a second instance can't make one usable again.
+model TwoFactorSpentToken {
+  jti       String   @id
+  expiresAt DateTime
+
+  @@index([expiresAt])
 }
 
 /// A single-use code, shown as a QR on a signed-in desktop, that mints a session on a phone.

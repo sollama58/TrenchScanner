@@ -5,6 +5,10 @@ import { Skeleton } from "../components/Charts";
 import { BurnPanel } from "../components/BurnPanel";
 import { FeedPanel } from "../components/FeedPanel";
 import { ConnectPhonePanel } from "../components/ConnectPhonePanel";
+import { TwoFactorPanel } from "../components/TwoFactorPanel";
+import { PrivyWalletPanel } from "../components/PrivyWalletPanel";
+import { TradingSettingsPanel } from "../components/TradingSettingsPanel";
+import { useMe } from "../me";
 import { BoltIcon, ShieldIcon, SlidersIcon, StreamIcon } from "../components/Icons";
 import { Switch } from "../components/AlertDeliveryPanels";
 import {
@@ -28,6 +32,7 @@ import { ago, shortAddress } from "../format";
  */
 export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live") => void }) {
   const settings = useSettings();
+  const me = useMe();
 
   return (
     <div className="stack settings">
@@ -53,7 +58,10 @@ export function SettingsTab({ goTo }: { goTo: (tab: "filters" | "model" | "live"
       <ChaosPanel prefs={settings?.alerts ?? null} />
       <TabsPanel />
       <TokenViewPanel />
-      <ConnectPhonePanel />
+      <TradingSettingsPanel />
+      {/* Phone pairing by QR is for wallet sign-ins only (user rule 2026-10-18). */}
+      {me?.signInMethod === "privy" ? <PrivyWalletPanel /> : <ConnectPhonePanel />}
+      <TwoFactorPanel />
       <AccountPanel account={settings?.account ?? null} />
     </div>
   );

@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { api, type User } from "../api";
 import { GUEST_DELAY_MINUTES } from "../session";
-import { describeSignInError, onWalletsChanged, walletOptions, type WalletOption } from "../wallet";
+import {
+  describeSignInError,
+  onWalletsChanged,
+  signInWithPrivy,
+  walletOptions,
+  type WalletOption,
+} from "../wallet";
+import { privyConfig, type PrivyConfig } from "../privyBridge";
 import { BrainIcon, RobotIcon, TargetIcon } from "./Icons";
 
 /**
@@ -79,6 +86,28 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
     };
   }, []);
 
+  // Email sign-in (Privy): shown when the API has it on and sign-ups aren't full.
+  const [privy, setPrivy] = useState<PrivyConfig | null>(null);
+  useEffect(() => {
+    let live = true;
+    void privyConfig().then((c) => live && setPrivy(c));
+    return () => {
+      live = false;
+    };
+  }, []);
+  const emailSignIn = async () => {
+    setBusy("privy");
+    setError(null);
+    try {
+      onSignedIn(await signInWithPrivy());
+    } catch (e) {
+      console.error("Email sign-in failed", e);
+      setError(describeSignInError(e, "Privy"));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const connect = async (wallet: WalletOption) => {
     setBusy(wallet.key);
     setError(null);
@@ -154,6 +183,26 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
             ))}
           </div>
         )}
+        {/* Always there once it's on: at the sign-up cap, returning accounts still sign in. */}
+        {privy?.enabled && (
+          <div className="privy-entry">
+            <span className="guest-or faint small">or</span>
+            <button
+              type="button"
+              className="button wallet privy-btn"
+              disabled={busy !== null}
+              onClick={() => void emailSignIn()}
+            >
+              <span>{busy === "privy" ? "Waiting for sign-in…" : "Sign in with email, Google or X"}</span>
+              <span className="wallet-go">→</span>
+            </button>
+            <p className="faint small">
+              {privy.signupsOpen === false
+                ? "New email sign-ups are full for now; accounts made before still sign in here."
+                : "No wallet? Privy makes you one. It's a separate account from any wallet sign-in, and there's no free start: add SOL, buy $ASDFASDFA in the app and burn it for access."}
+            </p>
+          </div>
+        )}
         {error && (
           <p className="error small" role="alert">
             {error}
@@ -172,7 +221,7 @@ export function SignIn({ onSignedIn, onGuest }: { onSignedIn: (u: User) => void;
         </p>
         <p className="faint small signin-phone">
           On your phone? Open Settings on your signed-in desktop, choose &quot;Show QR code&quot; and scan it.
-          No wallet needed on the phone.
+          No wallet needed on the phone. (For wallet sign-ins; with email, sign in on the phone too.)
         </p>
         {onGuest && (
           <div className="guest-entry">

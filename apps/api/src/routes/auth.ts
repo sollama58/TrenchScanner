@@ -16,6 +16,21 @@ import {
 import { issueNonce, verifyAndConsumeNonce, verifySignInAndConsumeNonce } from "../auth/siws.js";
 import { SESSION_COOKIE_NAME, verifyRequestSessions } from "../auth/session.js";
 import { PRO_OFF, proStatus } from "../proMode.js";
+import { PrivyUnavailable, privyEmbeddedSolanaWallet, privyEnabled, verifyPrivyToken } from "../privy.js";
+import {
+  KNOWN_DEVICE_COOKIE,
+  KNOWN_DEVICE_TTL_SECONDS,
+  asksFor,
+  checkSecondFactor,
+  factorFields,
+  issueKnownDevice,
+  issueSignInTicket,
+  isKnownDevice,
+  passkeyAuthenticationOptions,
+  readSignInTicket,
+  spendTicket,
+  twoFactorState,
+} from "../twoFactor.js";
 
 // Length caps run before any base58 decode: bs58.decode is quadratic in input length, so an
 // uncapped field let one unauthenticated request (a ~1MB walletAddress) block the event loop for
@@ -138,13 +153,27 @@ async function findOrCreateUser(walletAddress: string): Promise<{ user: User; cr
 
 /** Shapes the public-facing user object - notably where isAdmin gets attached, since that's
  *  derived from config (ADMIN_WALLET_ADDRESSES) rather than stored on the User row itself. */
-async function toUserResponse(user: Pick<User, "id" | "walletAddress" | "createdAt">, env: Env) {
+async function toUserResponse(
+  user: Pick<User, "id" | "walletAddress" | "createdAt"> & { privyUserId?: string | null },
+  env: Env,
+) {
   // Sign-in never fails on Pro Mode: a hiccup on its tables reads as no Pro Mode, for this answer.
   const pro = await proStatus(env, user.walletAddress).catch(() => PRO_OFF);
+  const twoFactor = await twoFactorState(user.id).catch(() => null);
   return {
     id: user.id,
     walletAddress: user.walletAddress,
     createdAt: user.createdAt,
+    // How the account signs in: its own wallet, or Privy (email or Google/X, a wallet Privy holds).
+    signInMethod: user.privyUserId ? ("privy" as const) : ("wallet" as const),
+    // Two-factor on, and which actions ask for it (the dashboard asks before burns and exports).
+    twoFactor: twoFactor
+      ? {
+          enabled: twoFactor.enabled,
+          actions: twoFactor.actions,
+          buyOverLamports: twoFactor.buyOverLamports?.toString() ?? null,
+        }
+      : { enabled: false, actions: [], buyOverLamports: null },
     isAdmin: adminWalletSet(env).has(user.walletAddress),
     // Pro Mode: whether the token modal shows its Trade panel (proMode.ts), and the rest of it:
     // where it comes from, and a grace period's end. canClose matches isPro: no sells without Pro Mode.
@@ -210,7 +239,119 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
 
     const { walletAddress } = body;
     const { user, created } = await findOrCreateUser(walletAddress);
+    return finishSignIn(request, reply, user, created);
+  });
 
+  /** Privy sign-in: on when PRIVY_APP_ID, its secret and its verification key are all set. */
+  app.get("/privy/config", async () => {
+    if (!privyEnabled(opts.env)) return { enabled: false, accessSwap: accessSwapOpen(opts.env) };
+    const accounts = await prisma.user.count({ where: { privyUserId: { not: null } } });
+    return {
+      enabled: true,
+      appId: opts.env.PRIVY_APP_ID,
+      // At the cap the sign-in screen hides email sign-in before anyone opens Privy's window:
+      // Privy counts everyone who logs in there as a monthly user, even one we then turn away.
+      signupsOpen: accounts < opts.env.PRIVY_SIGNUP_CAP,
+      // The in-app $ASDFASDFA buy (routes/proTrade.ts), open with Pro trading for everyone.
+      accessSwap: accessSwapOpen(opts.env),
+    };
+  });
+
+  app.post("/privy", { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } }, async (request, reply) => {
+    if (!privyEnabled(opts.env)) return reply.code(404).send({ error: "not found" });
+    const parsed = z.object({ accessToken: z.string().min(20).max(4096) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid request" });
+    const did = await verifyPrivyToken(opts.env, parsed.data.accessToken);
+    if (!did) return reply.code(401).send({ error: "That sign-in didn't check out. Try again." });
+
+    let user = await prisma.user.findUnique({ where: { privyUserId: did } });
+    let created = false;
+    if (!user) {
+      // The wallet comes from Privy's API, never from the browser.
+      let wallet: string | null;
+      try {
+        wallet = await privyEmbeddedSolanaWallet(opts.env, did);
+      } catch (err) {
+        request.log.warn(
+          { err: err instanceof PrivyUnavailable ? err.message : err },
+          "privy user read failed",
+        );
+        return reply.code(503).send({ error: "Privy isn't answering right now. Try again in a minute." });
+      }
+      if (!wallet)
+        return reply
+          .code(409)
+          .send({ error: "Your Privy wallet isn't ready yet. Wait a moment and try again." });
+      // Admins sign in with their own wallet only (user decision 2026-10-18).
+      if (adminWalletSet(opts.env).has(wallet))
+        return reply.code(403).send({ error: "Sign in with your wallet." });
+      const outcome = await createPrivyUser(did, wallet, opts.env.PRIVY_SIGNUP_CAP);
+      if (outcome === "full")
+        return reply.code(403).send({
+          error: "Email sign-ups are full for now. You can still sign in with a Solana wallet.",
+          signupsFull: true,
+        });
+      if (outcome === "taken")
+        return reply
+          .code(409)
+          .send({ error: "That wallet already has an account here. Sign in with the wallet." });
+      user = outcome.user;
+      created = outcome.created;
+      request.log.info(
+        { wallet: walletTag(wallet) },
+        created ? "privy account created" : "privy account found",
+      );
+    }
+    // Checked at every sign-in, not only the first: a wallet made admin later still signs in with
+    // its own key, never through Privy.
+    if (adminWalletSet(opts.env).has(user.walletAddress))
+      return reply.code(403).send({ error: "Sign in with your wallet." });
+    return finishSignIn(request, reply, user, created);
+  });
+
+  /** The second step of a sign-in that asks for two-factor: the ticket the first step gave, and a factor. */
+  app.post(
+    "/2fa/signin/passkey-options",
+    { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } },
+    async (request, reply) => {
+      const parsed = z.object({ ticket: z.string().max(2048) }).safeParse(request.body);
+      const ticket = parsed.success ? await readSignInTicket(opts.env, parsed.data.ticket) : null;
+      if (!ticket) return reply.code(401).send({ error: "That sign-in has expired. Start again." });
+      const out = await passkeyAuthenticationOptions(opts.env, ticket.userId, request.headers.origin);
+      if (!out) return reply.code(404).send({ error: "No passkey on this account" });
+      return out;
+    },
+  );
+
+  app.post("/2fa/signin", { config: { rateLimit: AUTH_ROUTE_RATE_LIMIT } }, async (request, reply) => {
+    const parsed = signInFactorSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid request" });
+    const ticket = await readSignInTicket(opts.env, parsed.data.ticket);
+    if (!ticket) return reply.code(401).send({ error: "That sign-in has expired. Start again." });
+    const result = await checkSecondFactor(opts.env, ticket.userId, parsed.data, request.headers.origin);
+    if (!result.ok) return reply.code(401).send({ error: result.reason });
+    // The ticket works once, and only after a factor matched (a wrong code can be retried).
+    if (!(await spendTicket(ticket.jti)))
+      return reply.code(401).send({ error: "That sign-in has expired. Start again." });
+    const user = await prisma.user.findUnique({ where: { id: ticket.userId } });
+    // A sign-out everywhere since the ticket was given (sessionVersion moved on) ends it too.
+    if (!user || user.sessionVersion !== ticket.sessionVersion)
+      return reply.code(401).send({ error: "That sign-in has expired. Start again." });
+    reply.setCookie(KNOWN_DEVICE_COOKIE, await issueKnownDevice(opts.env, user.id), {
+      httpOnly: true,
+      ...sessionCookieAttrs(request.hostname, opts.env.PUBLIC_APP_DOMAIN, request.protocol),
+      maxAge: KNOWN_DEVICE_TTL_SECONDS,
+    });
+    return issueSession(request, reply, user);
+  });
+
+  /**
+   * After the first step of any sign-in (wallet or Privy): the new-account steps, then the
+   * session, or a ticket for the second step when this account asks for two-factor at sign-in
+   * on a browser it hasn't passed it on before.
+   */
+  async function finishSignIn(request: FastifyRequest, reply: FastifyReply, user: User, created: boolean) {
+    const { walletAddress } = user;
     /**
      * A brand-new account gets one working filter, so the Live Feed has something to show
      * instead of an empty page that never explains you have to build something first.
@@ -256,6 +397,19 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
       );
     }
 
+    const twoFactor = await twoFactorState(user.id);
+    if (asksFor(twoFactor, "signin") && !(await isKnownDevice(opts.env, request, user.id))) {
+      return {
+        twoFactorRequired: true,
+        ticket: await issueSignInTicket(opts.env, user.id, user.sessionVersion),
+        totp: twoFactor.totp,
+        passkey: twoFactor.passkeys.length > 0,
+      };
+    }
+    return issueSession(request, reply, user);
+  }
+
+  async function issueSession(request: FastifyRequest, reply: FastifyReply, user: User) {
     const token = await app.sessionSigner.sign({
       userId: user.id,
       walletAddress: user.walletAddress,
@@ -272,7 +426,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
     // The same token in the body, for a browser that drops the cookie as third-party (see
     // sessionTokens): the dashboard keeps it only if a cookie-only /auth/me then fails.
     return { ...(await toUserResponse(user, opts.env)), sessionToken: token };
-  });
+  }
 
   app.post("/logout", async (request, reply) => {
     // Revoke, not just forget: clearing the cookie alone left a copied token valid for the rest
@@ -312,6 +466,39 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: { env: Env 
       request.sessionUser ?? (await prisma.user.findUniqueOrThrow({ where: { id: request.user!.userId } }));
     return toUserResponse(user, opts.env);
   });
+}
+
+/** The in-app $ASDFASDFA buy (routes/proTrade.ts): with Pro trading on and open to everyone. */
+export function accessSwapOpen(env: Env): boolean {
+  return env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC;
+}
+
+const signInFactorSchema = z.object({ ticket: z.string().max(2048), ...factorFields });
+
+/**
+ * A new account for a Privy sign-in, under the cap. The count and the create run under one lock,
+ * so two sign-ins at the 399th account can't both get in. "taken": the Privy wallet already has a
+ * wallet account here (its key was exported and signed in with), which stays as it is.
+ */
+async function createPrivyUser(
+  privyUserId: string,
+  walletAddress: string,
+  cap: number,
+): Promise<{ user: User; created: boolean } | "full" | "taken"> {
+  return prisma
+    .$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('privy-signup'))`;
+      const again = await tx.user.findUnique({ where: { privyUserId } });
+      if (again) return { user: again, created: false };
+      if (await tx.user.findUnique({ where: { walletAddress }, select: { id: true } })) return "taken";
+      if ((await tx.user.count({ where: { privyUserId: { not: null } } })) >= cap) return "full";
+      return { user: await tx.user.create({ data: { walletAddress, privyUserId } }), created: true };
+    })
+    .catch((err: unknown) => {
+      // A wallet sign-in made the same wallet's account at the same moment (it takes no lock).
+      if ((err as { code?: unknown } | null)?.code === "P2002") return "taken" as const;
+      throw err;
+    });
 }
 
 function isValidSolanaAddress(value: string): boolean {

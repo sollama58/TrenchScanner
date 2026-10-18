@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { QuickBuyPill } from "./QuickBuyPill";
 import { createPortal } from "react-dom";
 import type { Card, CardField, FeedAppearance, Snapshot } from "../api";
 import {
@@ -222,6 +223,8 @@ export function AlertCard({
       style={filter?.color ? (filterCardStyle(filter.color) as React.CSSProperties) : undefined}
       onClick={openDetail}
     >
+      {/* Settings > Trading's quick buy, for Pro wallets that switched it on. */}
+      {detail && <QuickBuyPill mint={mint} symbol={tokenLabel(card.token)} onNeedsPanel={openDetailModal} />}
       <header className="card-head">
         <div className={`avatar-wrap tone-${badge.tone}`}>
           <TokenAvatar url={card.token.imageUrl} symbol={card.token.symbol} />

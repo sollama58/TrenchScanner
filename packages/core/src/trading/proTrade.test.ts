@@ -25,12 +25,16 @@ import {
   buildManualTrade,
   checkJupiterFloor,
   estimateManualFees,
+  estimateSwapCosts,
+  routeFeeBps,
+  TOKEN_2022_ACCOUNT_RENT_LAMPORTS,
   LIGHTHOUSE_PROGRAM,
   signedMatchesBuild,
   TradeRejected,
   type ManualTradeJupiter,
   type ManualTradeRpc,
 } from "./manualTrade.js";
+import { transferFeeBpsOf } from "./rpc.js";
 import { tradeOf, walletTokenTrades } from "./walletTrades.js";
 import type { RawTransaction } from "./rpc.js";
 import { PROGRAM, WSOL } from "./txGuard.js";
@@ -453,5 +457,192 @@ describe("signedMatchesBuild", () => {
       ix.programIdIndex === budget && ix.data[0] === 3 ? price(10_000_000_000n) : ix,
     );
     expect(signedMatchesBuild(built, { ...built, instructions: drained })).toMatch(/priority fee/);
+  });
+});
+
+describe("swap costs", () => {
+  const plan = (steps: unknown[]) =>
+    ({
+      inputMint: "a",
+      outputMint: "b",
+      inAmount: "1",
+      outAmount: "1",
+      otherAmountThreshold: "1",
+      priceImpactPct: "0.012",
+      routePlan: steps,
+    }) as never;
+  it("reads each hop's fee as a share of its side, weighted by the hop's share", () => {
+    // 1% of what goes in on Pump.fun, then 0.25% of what comes out of a pool.
+    expect(
+      routeFeeBps(
+        plan([
+          {
+            percent: 100,
+            swapInfo: {
+              label: "Pump.fun",
+              inputMint: "S",
+              outputMint: "T",
+              inAmount: "1000",
+              outAmount: "5",
+              feeAmount: "10",
+              feeMint: "S",
+            },
+          },
+          {
+            percent: 100,
+            swapInfo: {
+              label: "Meteora",
+              inputMint: "T",
+              outputMint: "U",
+              inAmount: "5",
+              outAmount: "3990",
+              feeAmount: "10",
+              feeMint: "U",
+            },
+          },
+        ]),
+      ),
+    ).toEqual({ bps: 125, venues: ["Pump.fun", "Meteora"] });
+    // Split routes count each half by its share.
+    expect(
+      routeFeeBps(
+        plan([
+          {
+            percent: 50,
+            swapInfo: {
+              label: "A",
+              inputMint: "S",
+              outputMint: "T",
+              inAmount: "100",
+              outAmount: "1",
+              feeAmount: "1",
+              feeMint: "S",
+            },
+          },
+          {
+            percent: 50,
+            swapInfo: {
+              label: "B",
+              inputMint: "S",
+              outputMint: "T",
+              inAmount: "100",
+              outAmount: "1",
+              feeAmount: "3",
+              feeMint: "S",
+            },
+          },
+        ]),
+      ),
+    ).toEqual({ bps: 200, venues: ["A", "B"] });
+  });
+  it("says nothing rather than guess", () => {
+    expect(routeFeeBps(plan([]))).toBeNull();
+    expect(
+      routeFeeBps(
+        plan([
+          {
+            swapInfo: {
+              inputMint: "S",
+              outputMint: "T",
+              inAmount: "1",
+              outAmount: "1",
+              feeMint: "S",
+              feeAmount: "0",
+            },
+          },
+        ]),
+      ),
+    ).toBeNull();
+    expect(
+      routeFeeBps(
+        plan([
+          {
+            swapInfo: {
+              inputMint: "S",
+              outputMint: "T",
+              inAmount: "1",
+              outAmount: "1",
+              feeMint: "X",
+              feeAmount: "1",
+            },
+          },
+        ]),
+      ),
+    ).toBeNull();
+    expect(
+      routeFeeBps(
+        plan([
+          { swapInfo: { inputMint: "S", outputMint: "T", inAmount: "1", outAmount: "1", feeMint: "S" } },
+        ]),
+      ),
+    ).toBeNull();
+  });
+  it("reads a Token-2022 transfer fee, the higher of its two rates", () => {
+    expect(transferFeeBpsOf([{ extension: "metadataPointer" }])).toBe(0);
+    expect(
+      transferFeeBpsOf([
+        {
+          extension: "transferFeeConfig",
+          state: {
+            newerTransferFee: { transferFeeBasisPoints: 300 },
+            olderTransferFee: { transferFeeBasisPoints: 100 },
+          },
+        },
+      ]),
+    ).toBe(300);
+  });
+  it("adds a first buy's rent, and leaves out what it can't read", async () => {
+    const quote = plan([
+      {
+        percent: 100,
+        swapInfo: {
+          label: "PumpSwap",
+          inputMint: "S",
+          outputMint: "T",
+          inAmount: "10000",
+          outAmount: "5",
+          feeAmount: "25",
+          feeMint: "S",
+        },
+      },
+    ]);
+    const costs = await estimateSwapCosts(
+      {
+        rpc: {
+          getMintInfo: async () => ({
+            program: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+            transferFeeBps: 300,
+          }),
+          getAccountsData: async () => [null],
+        },
+        jupiter: { quote: async () => quote },
+      },
+      { wallet: WALLET, mint: MINT, referenceLamports: 100_000_000n },
+    );
+    expect(costs).toEqual({
+      transferFeeBps: 300,
+      poolFeeBps: 25,
+      venues: ["PumpSwap"],
+      priceImpactPct: 1.2,
+      accountRentLamports: TOKEN_2022_ACCOUNT_RENT_LAMPORTS,
+    });
+    const blind = await estimateSwapCosts(
+      {
+        rpc: { getMintInfo: async () => null, getAccountsData: async () => null },
+        jupiter: {
+          quote: async () => {
+            throw new Error("down");
+          },
+        },
+      },
+      { wallet: WALLET, mint: MINT, referenceLamports: 100_000_000n },
+    );
+    expect(blind).toEqual({
+      transferFeeBps: null,
+      poolFeeBps: null,
+      venues: [],
+      priceImpactPct: null,
+      accountRentLamports: 0n,
+    });
   });
 });

@@ -51,5 +51,19 @@
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.67.0",
     "vitest": "^2.1.4"
+  },
+  "overrides": {
+    "@reown/appkit": {
+      "ws": "^8.22.0"
+    },
+    "@reown/appkit-controllers": {
+      "ws": "^8.22.0"
+    },
+    "@reown/appkit-utils": {
+      "ws": "^8.22.0"
+    },
+    "@wagmi/connectors": {
+      "ws": "^8.22.0"
+    }
   }
 }

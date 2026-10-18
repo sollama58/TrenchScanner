@@ -106,10 +106,11 @@ envVarGroups:
         value: https://frontend-api-v3.pump.fun
       - key: NODE_ENV
         value: production
-      # Pro trades from the token modal for admins only (api), and no Pro holder job (worker): user
-      # decision 2026-10-18. Flip to "true" here to open it to grants and the top holders.
+      # Pro trades from the token modal for every Pro Mode wallet: grants and the top 250 holders
+      # (api), with the Pro holder scan running (worker). User ask 2026-10-18 04:09 UTC, after
+      # shipping admins-only at 02:17. "false" takes it back to the admin wallets alone.
       - key: PRO_TRADING_PUBLIC
-        value: "false"
+        value: "true"
 
 services:
   - type: web
@@ -194,6 +195,19 @@ services:
       # only needs a value to point at a different paid RPC.
       - key: SOLANA_RPC_URL
         sync: false
+      # Email sign-in through Privy (apps/api/src/privy.ts): on only when all three are set, from the
+      # Privy dashboard (App settings: App ID, App secret, and the JWKS endpoint, an https URL on
+      # auth.privy.io). JWT_SECRET also keeps two-factor secrets sealed, so rotating it
+      # turns everyone's authenticator app off.
+      - key: PRIVY_APP_ID
+        sync: false
+      - key: PRIVY_APP_SECRET
+        sync: false
+      - key: PRIVY_JWKS_ENDPOINT
+        sync: false
+      # Privy accounts allowed in all (user decision 2026-10-18).
+      - key: PRIVY_SIGNUP_CAP
+        value: "400"
       - key: JWT_SECRET
         generateValue: true
       - key: SESSION_TTL_HOURS
@@ -660,13 +674,15 @@ services:
     # and boot prefetch) and tokensage/index.html (theme), allowed by their sha256. Editing one of
     # those scripts, or VITE_API_URL below (the boot prefetch has it baked in), changes its hash:
     # apps/web/src/csp.test.ts fails until the new hash is pasted here. connect-src is the API on
-    # both hosts (SAME_SITE_APIS in apps/web/src/api.ts and VITE_API_URL); burns are sent by the
-    # wallet extension, so no RPC host is needed. Images (token art from any https host, IPFS,
+    # both hosts (SAME_SITE_APIS in apps/web/src/api.ts and VITE_API_URL), plus Privy for email
+    # sign-in (its API, its RPC, its funding bridge, and Solana's public RPC it reads with), from
+    # Privy's CSP guide. Privy's window is a frame on auth.privy.io; its captcha is Cloudflare
+    # Turnstile (script and frame). No other site may be framed. Images (token art from any https host, IPFS,
     # data: and blob: share images), styles (React style attributes) and fonts stay unrestricted.
     headers:
       - path: /*
         name: Content-Security-Policy
-        value: "script-src 'self' 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-3nD+ydCS3TwKmSUuD7/+O2kAwuQFvvhpDs2d4nuTEkI=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
+        value: "script-src 'self' https://challenges.cloudflare.com 'sha256-KYIyUYVTuGOUtwgz6C9xzns4oKDzv4LdZ6BVTGNVmlU=' 'sha256-3nD+ydCS3TwKmSUuD7/+O2kAwuQFvvhpDs2d4nuTEkI=' 'sha256-eO6WnxT1VOAqTBWNmFSlQhMN2SWrCT/WzqtXBsogR0k='; connect-src 'self' https://api.trenchscanner.app https://trenchscanner-api.onrender.com https://auth.privy.io https://*.rpc.privy.systems https://api.relay.link https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com; frame-src https://auth.privy.io https://challenges.cloudflare.com; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'self' https://holdex.live https://www.holdex.live"
       # HTTPS only from the first visit on. No includeSubDomains: only this host's own redirect is
       # certain here, and preload would lock that in for every subdomain.
       - path: /*

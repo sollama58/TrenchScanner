@@ -15954,121 +15954,689 @@ body:has(.util-toast) .bug-fab {
   align-self: stretch;
 }
 
-/* Pro Mode (2026-10-17): the token modal's Trade panel under the chart, and the trader's own
-   entry line and trade marks on the chart. */
-/* A real button, not one of the range pills (user ask 2026-10-18: the pill was easy to miss):
-   solid green while the panel is shut, outlined while it is open. */
-.tm-trade-toggle {
-  margin-left: 10px;
-  padding: 4px 16px;
-  font-size: 13px;
-  font-weight: 700;
-  border: 1px solid var(--good);
-  color: #fff;
-  background: var(--good);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-}
-.tm-trade-toggle:hover:not(:disabled) {
-  color: #fff;
-  background: color-mix(in srgb, var(--good) 85%, #000);
-}
-.tm-trade-toggle.on,
-.tm-trade-toggle.on:hover:not(:disabled) {
-  color: var(--good-ink);
-  background: transparent;
-  box-shadow: none;
-}
+/* Pro Mode (2026-10-17): the token modal's Trade section under the chart, and the trader's own
+   entry line and trade marks on the chart. Redrawn 2026-10-18 (user ask): its own always-open
+   section, Buy and Sell side by side (stacked on a phone), the position, the fee breakdown. */
 .tm-trade {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+  border-color: color-mix(in srgb, var(--good) 22%, var(--border));
+  background:
+    radial-gradient(120% 80% at 0% 0%, color-mix(in srgb, var(--good) 7%, transparent), transparent 60%),
+    var(--surface);
 }
-.tm-trade-pos {
+.tm-trade-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tm-trade-head h4 {
+  margin: 0;
+}
+.tm-trade-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tm-trade-speed button.turbo.on {
+  color: var(--warn-ink);
+  border-color: color-mix(in srgb, var(--warn) 50%, var(--border));
+}
+.tm-trade-gear {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.tm-trade-gear.on {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+
+/* The position: PnL up top, as big as it goes, and four figures under it. */
+.tm-hold {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.tm-hold.up {
+  border-color: color-mix(in srgb, var(--good) 35%, var(--border));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--good) 12%, var(--surface-2)),
+    var(--surface-2) 70%
+  );
+}
+.tm-hold.down {
+  border-color: color-mix(in srgb, var(--bad) 35%, var(--border));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--bad) 12%, var(--surface-2)),
+    var(--surface-2) 70%
+  );
+}
+/* The box's own up/down tone tints its border only; the figures pick their own colour. */
+.tm-hold.up,
+.tm-hold.down {
+  color: var(--ink);
+}
+.tm-hold-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tm-hold-pnl {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.tm-hold-kicker,
+.tm-hold-label,
+.tm-side-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tm-hold-chip {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+}
+.tm-hold-chip.open {
+  color: var(--good-ink);
+  border-color: color-mix(in srgb, var(--good) 45%, var(--border));
+}
+.tm-hold-big {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.tm-hold-big strong {
+  font-size: 28px;
+  font-weight: 750;
+  line-height: 1.1;
+}
+.tm-hold-big strong.none {
+  color: var(--muted);
+}
+.tm-hold-pct {
+  font-size: 15px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 999px;
+}
+.tm-hold-pct.up {
+  background: var(--good-wash);
+}
+.tm-hold-pct.down {
+  background: var(--bad-wash);
+}
+.tm-hold .up {
+  color: var(--good-ink);
+}
+.tm-hold .down {
+  color: var(--bad-ink);
+}
+.tm-hold-share {
+  flex: none;
+  font-size: 13px;
+  font-weight: 650;
+  padding: 7px 12px;
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+}
+.tm-hold-share:hover:not(:disabled) {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--brand-a), var(--brand-b));
+  filter: brightness(1.1);
+}
+.tm-hold-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
 }
-.tm-trade-pos .tm-fig > span.num {
-  font-size: 16px;
-}
-.tm-trade-row {
+.tm-hold-stat {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-solid) 55%, transparent);
+  border: 1px solid var(--border);
 }
-.tm-trade-label {
-  width: 34px;
-  font-size: 11.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.tm-trade-btn {
-  min-width: 52px;
-  padding: 5px 10px;
-  border-radius: var(--radius-s);
+.tm-hold-value {
+  font-size: 15px;
   font-weight: 650;
-  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tm-hold-stat small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tm-hold-note {
+  margin: 0;
+}
+
+/* Buy and Sell, side by side. */
+.tm-trade-sides {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.tm-trade-sides.one {
+  grid-template-columns: minmax(0, 1fr);
+}
+.tm-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-s);
   border: 1px solid var(--border);
   background: var(--surface-2);
-  color: var(--ink);
 }
-.tm-trade-btn.buy {
-  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
-  background: var(--good-wash);
+.tm-side.buy {
+  border-color: color-mix(in srgb, var(--good) 30%, var(--border));
+}
+.tm-side.sell {
+  border-color: color-mix(in srgb, var(--bad) 30%, var(--border));
+}
+.tm-side-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.tm-side.buy .tm-side-title {
   color: var(--good-ink);
 }
-.tm-trade-btn.sell {
-  border-color: color-mix(in srgb, var(--bad) 40%, var(--border));
-  background: var(--bad-wash);
+.tm-side.sell .tm-side-title {
   color: var(--bad-ink);
 }
-.tm-trade-btn:disabled {
-  opacity: 0.5;
+.tm-presets {
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+  gap: 6px;
 }
-.tm-trade-custom {
-  display: inline-flex;
+.tm-preset {
+  justify-content: center;
   gap: 4px;
+  min-height: 40px;
+  padding: 6px 8px;
+  font-weight: 700;
+  font-size: 14px;
 }
-.tm-trade-custom input {
-  width: 80px;
+.tm-preset small {
+  font-size: 10.5px;
+  font-weight: 600;
+  opacity: 0.75;
 }
-.tm-trade-gear {
-  margin-left: auto;
+.tm-side.buy .tm-preset {
+  color: var(--good-ink);
+  border-color: color-mix(in srgb, var(--good) 35%, var(--border));
+  background: var(--good-wash);
 }
-.tm-trade-settings {
+.tm-side.buy .tm-preset:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--good) 20%, transparent);
+  border-color: var(--good);
+}
+.tm-side.sell .tm-preset {
+  color: var(--bad-ink);
+  border-color: color-mix(in srgb, var(--bad) 35%, var(--border));
+  background: var(--bad-wash);
+}
+.tm-side.sell .tm-preset:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bad) 20%, transparent);
+  border-color: var(--bad);
+}
+.tm-amount {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: 6px;
+}
+.tm-amount-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.tm-amount-field input {
+  padding-right: 46px;
+  font-family: var(--mono);
+}
+.tm-amount-unit {
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  pointer-events: none;
+}
+.tm-go {
+  flex: none;
+  justify-content: center;
+  min-width: 84px;
+  font-weight: 750;
+  color: #fff;
+  border-color: transparent;
+  background: var(--good);
+}
+.tm-go:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--good) 85%, #000);
+}
+
+/* Settings: a tidy grid of fields, labels above. */
+.tm-trade-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px 12px;
+  padding: 12px;
   border-radius: var(--radius-s);
   border: 1px solid var(--border);
   background: var(--surface-2);
   font-size: 12.5px;
 }
-.tm-trade-settings label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+.tm-set {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--ink-2);
+  font-weight: 600;
 }
-.tm-trade-settings input[type="number"] {
-  width: 64px;
+.tm-set-input {
+  position: relative;
+  display: block;
 }
-.tm-trade-status {
-  margin: 0;
+.tm-set-input input {
+  padding: 7px 40px 7px 10px;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.tm-set-input i {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-style: normal;
+  font-size: 11.5px;
   color: var(--muted);
+  pointer-events: none;
+}
+.tm-set-check {
+  flex-direction: row;
+  align-items: center;
+  align-self: end;
+  min-height: 34px;
+}
+
+/* A trade under way: four steps, the current one pulsing. */
+.tm-trade-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.tm-trade-status p {
+  margin: 0;
 }
 .tm-trade-status.done {
   color: var(--good-ink);
+  border-color: color-mix(in srgb, var(--good) 40%, var(--border));
+  background: var(--good-wash);
+}
+.tm-trade-status.done svg {
+  vertical-align: -2px;
 }
 .tm-trade-status.error {
   color: var(--bad-ink);
+  border-color: color-mix(in srgb, var(--bad) 40%, var(--border));
+  background: var(--bad-wash);
 }
-.tm-trade-held {
-  margin: 6px 0 0;
+.tm-trade-steps {
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
 }
+.tm-trade-steps li {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tm-trade-steps i {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+}
+.tm-trade-steps li.done {
+  color: var(--ink-2);
+}
+.tm-trade-steps li.done i {
+  background: var(--good);
+}
+.tm-trade-steps li.on {
+  color: var(--ink);
+}
+.tm-trade-steps li.on i {
+  background: var(--brand-b);
+  animation: tm-step-pulse 1.1s ease-in-out infinite;
+}
+@keyframes tm-step-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tm-trade-steps li.on i {
+    animation: none;
+  }
+}
+
+/* The fee explainer (user ask 2026-10-18): always the expected network fee, broken down, and 0% ours. */
+.tm-trade-fee {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-s);
+  border: 1px dashed var(--border-strong);
+}
+.tm-fee-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+}
+.tm-fee-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink-2);
+}
+.tm-fee-total strong {
+  font-size: 16px;
+}
+.tm-fee-bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.tm-fee-bar span {
+  flex-basis: 0;
+}
+.tm-fee-bar .priority,
+.tm-fee-dot.priority {
+  background: var(--series-1);
+}
+.tm-fee-bar .tip,
+.tm-fee-dot.tip {
+  background: var(--brand-a);
+}
+.tm-fee-bar .base,
+.tm-fee-dot.base {
+  background: var(--series-3);
+}
+.tm-fee-bar .pool,
+.tm-fee-dot.pool {
+  background: var(--series-2);
+}
+.tm-fee-bar .tax,
+.tm-fee-dot.tax {
+  background: var(--warn);
+}
+.tm-fee-bar .rent,
+.tm-fee-dot.rent {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--muted) 0 3px,
+    color-mix(in srgb, var(--muted) 45%, transparent) 3px 6px
+  );
+}
+.tm-fee-dot.zero {
+  background: var(--good);
+}
+.tm-fee-dot.none {
+  background: transparent;
+  border: 1.5px solid var(--border-strong);
+}
+/* Small but unmissable: a green pill at the top of the cost box. */
+.tm-fee-zero-badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--good) 40%, transparent);
+  background: var(--good-wash);
+  color: var(--good-ink);
+  font-size: 12px;
+}
+.tm-fee-zero-badge strong {
+  font-weight: 750;
+  letter-spacing: 0.01em;
+}
+.tm-fee-zero-badge strong,
+.tm-fee-zero-more {
+  white-space: nowrap;
+}
+.tm-fee-zero-more {
+  color: var(--muted);
+}
+@media (max-width: 420px) {
+  .tm-fee-zero-more {
+    display: none;
+  }
+}
+.tm-fee-zero-more::before {
+  content: "·";
+  margin-right: 6px;
+}
+.tm-fee-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 20px;
+}
+.tm-fee-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.tm-fee-group-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.tm-fee-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.tm-fee-rows li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+.tm-fee-rows li > span:first-of-type {
+  flex: 1;
+  min-width: 0;
+}
+.tm-fee-rows li > span.num,
+.tm-fee-rows li > strong {
+  flex: none;
+}
+.tm-fee-dot {
+  flex: none;
+  align-self: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.tm-fee-zero {
+  color: var(--good-ink);
+  font-weight: 650;
+}
+.tm-fee-rows em {
+  font-style: normal;
+  color: var(--muted);
+}
+.tm-fee-none {
+  color: var(--muted);
+}
+/* Everything under the bar folds away (user ask 2026-10-18), shut by default; a taxed coin's
+   chip stays on the toggle so the tax is never hidden. */
+.tm-fee-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink-2);
+}
+.tm-fee-more > summary::-webkit-details-marker {
+  display: none;
+}
+.tm-fee-more > summary:hover {
+  color: var(--ink);
+}
+.tm-fee-more > summary svg {
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+.tm-fee-more[open] > summary svg {
+  transform: none;
+}
+.tm-fee-more-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.tm-fee-tax-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn-ink);
+  font-size: 11px;
+  font-weight: 700;
+}
+/* A taxed coin: a warning card with an emoji-style triangle. */
+.tm-fee-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-s);
+  border: 1px solid color-mix(in srgb, var(--warn) 50%, var(--border));
+  border-left-width: 3px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--warn) 16%, transparent),
+    color-mix(in srgb, var(--warn) 5%, transparent)
+  );
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.tm-warn-tri {
+  flex: none;
+  margin-top: 1px;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25));
+}
+.tm-fee-warn strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 750;
+  color: var(--warn-ink);
+}
+.tm-fee-warn p {
+  margin: 2px 0 0;
+}
+.tm-fee-warn .num {
+  font-weight: 700;
+  color: var(--ink);
+}
+/* Where the money goes: a quiet footnote list. */
+.tm-fee-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 9px 11px;
+  list-style: none;
+  border-radius: 8px;
+  background: var(--highlight);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.tm-fee-notes li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.tm-fee-notes .tm-fee-dot {
+  width: 6px;
+  height: 6px;
+  transform: translateY(-1px);
+}
+.tm-fee-notes svg {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 3px;
+  margin-left: -3px;
+  margin-right: -3px;
+  color: var(--muted);
+}
+.tm-fee-notes strong {
+  font-weight: 650;
+  color: var(--ink-2);
+}
+
 /* The experimental predicted path: a dotted guess past the line's end and its shaded band, in one
    neutral colour whichever way it leans, so it never reads as a signal. */
 .pc-path-line {
@@ -16125,21 +16693,37 @@ body:has(.util-toast) .bug-fab {
   font-weight: 650;
 }
 @media (max-width: 640px) {
-  .tm-trade-pos {
+  .tm-trade-sides,
+  .tm-fee-groups {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .tm-hold-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .tm-trade-gear {
-    margin-left: 0;
+  .tm-hold-big strong {
+    font-size: 24px;
+  }
+  .tm-trade-gear-text {
+    display: none;
+  }
+  /* Thumb-sized targets on a phone. */
+  .tm-preset,
+  .tm-go,
+  .tm-amount-field input {
+    min-height: 46px;
+    font-size: 16px;
   }
 }
-/* Pro Mode's grace period (2026-10-18): the Trade button's time left, and the panel's warning. */
-.tm-trade-toggle.grace {
-  border-color: color-mix(in srgb, var(--warn) 55%, var(--border));
+@media (max-width: 420px) {
+  .tm-hold-hero {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .tm-hold-share {
+    justify-content: center;
+  }
 }
-.tm-trade-grace {
-  color: var(--warn-ink);
-  font-weight: 650;
-}
+/* Pro Mode's grace period (2026-10-18): the panel's warning. */
 .tm-trade-warn {
   margin: 0;
   padding: 8px 10px;
@@ -16147,19 +16731,18 @@ body:has(.util-toast) .bug-fab {
   border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border));
   background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
-/* The trade panel's fee line (user ask 2026-10-18): the network fee, always shown, and 0% ours. */
-.tm-trade-fee {
-  margin: 0;
-  color: var(--ink-2);
-}
 .tm-trade-disclaimer {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface-2, transparent);
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--brand-b) 35%, var(--border));
+  border-radius: var(--radius-s);
+  background: var(--info-wash);
+}
+.tm-trade-disclaimer > svg {
+  flex: none;
+  color: var(--brand-ink);
 }
 .tm-trade-disclaimer p {
   margin: 0;
@@ -16174,6 +16757,9 @@ body:has(.util-toast) .bug-fab {
     flex-direction: column;
     align-items: stretch;
   }
+  .tm-trade-disclaimer button {
+    justify-content: center;
+  }
 }
 .tm-trade-about {
   color: var(--muted);
@@ -16184,9 +16770,302 @@ body:has(.util-toast) .bug-fab {
 .tm-trade-about p {
   margin: 4px 0 0;
 }
-.tm-trade-turbo.on {
-  color: var(--warn-ink);
-  border-color: color-mix(in srgb, var(--warn) 50%, var(--border));
+.tm-share-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  color: var(--ink-2);
+}
+
+/* ---- Two-factor prompt and settings, Privy wallet, the access buy ---- */
+.tf-modal {
+  width: min(420px, calc(100vw - 32px));
+}
+.tf-modal h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+}
+.tf-passkey {
+  width: 100%;
+  margin: 4px 0 12px;
+}
+.tf-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.tf-form label {
+  flex-basis: 100%;
+}
+.tf-form input {
+  flex: 1 1 140px;
+  min-width: 0;
+  letter-spacing: 0.12em;
+}
+.tf-factors {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.tf-factor,
+.tf-passkey-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.tf-passkey-row {
+  padding-left: 12px;
+}
+.tf-passkey-row .faint {
+  flex: 1;
+}
+.tf-actions {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: 10px 12px;
+  margin: 12px 0;
+  display: grid;
+  gap: 6px;
+}
+.tf-action {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tf-buyover input {
+  width: 90px;
+  padding: 4px 8px;
+}
+.tf-setup {
+  margin: 8px 0;
+}
+.tf-qr,
+.privy-qr {
+  width: 180px;
+  max-width: 100%;
+  background: #fff;
+  border-radius: var(--radius-s);
+  padding: 6px;
+  margin: 8px 0;
+}
+.tf-secret,
+.privy-address code {
+  word-break: break-all;
+}
+.tf-codes {
+  margin: 10px 0;
+  padding: 12px;
+}
+.tf-code-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 4px 12px;
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+.privy-address {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+}
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.privy-entry {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+.privy-btn {
+  width: 100%;
+}
+.access-buy {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-s);
+  padding: 12px;
+  margin: 12px 0;
+  text-align: left;
+}
+.access-buy-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.access-buy-row label {
+  flex-basis: 100%;
+}
+.access-buy-row input {
+  flex: 1 1 100px;
+  min-width: 0;
+}
+.good-text {
+  color: var(--good-ink);
+}
+
+/* Settings > Trading (TradingSettingsPanel). */
+.trading-sub {
+  margin: 18px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.trading-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+}
+.trading-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.trading-field input {
+  width: 100%;
+}
+.trading-check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  grid-column: 1 / -1;
+}
+.segmented.wrap {
+  flex-wrap: wrap;
+}
+.qb-swatches {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.qb-swatch {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--qb);
+  box-shadow: inset 0 0 0 2px var(--surface-solid);
+}
+.qb-swatch.on {
+  border-color: var(--ink);
+}
+
+/* The quick-buy pill on alert and Stream cards (QuickBuyPill), off by default. The card makes room
+   for it on the picked edge so it never covers the card's own text or buttons. */
+.qb-green {
+  --qb: #16a34a;
+}
+.qb-blue {
+  --qb: #2563eb;
+}
+.qb-purple {
+  --qb: #7c3aed;
+}
+.qb-amber {
+  --qb: #d97706;
+}
+.qb-pink {
+  --qb: #db2777;
+}
+.qb-gray {
+  --qb: #52525b;
+}
+.quick-buy {
+  position: absolute;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--qb) 70%, #000);
+  border-radius: 999px;
+  background: var(--qb);
+  color: #fff;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 4px 12px -6px color-mix(in srgb, var(--qb) 80%, transparent);
+  transition:
+    filter 0.15s,
+    transform 0.15s;
+}
+.quick-buy:hover:not(:disabled) {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+.quick-buy:disabled {
+  cursor: progress;
+  opacity: 0.8;
+}
+.quick-buy.qb-s {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.quick-buy.qb-m {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.quick-buy.qb-l {
+  padding: 7px 14px;
+  font-size: 14px;
+}
+.quick-buy.qb-top-right {
+  top: 8px;
+  right: 8px;
+}
+.quick-buy.qb-top-left {
+  top: 8px;
+  left: 8px;
+}
+.quick-buy.qb-bottom-right {
+  bottom: 8px;
+  right: 8px;
+}
+.quick-buy.qb-bottom-left {
+  bottom: 8px;
+  left: 8px;
+}
+.quick-buy.qb-done {
+  --qb: #16a34a;
+}
+.quick-buy.qb-failed {
+  --qb: #dc2626;
+}
+.quick-buy.qb-inline {
+  position: static;
+  cursor: default;
+}
+.qb-preview {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+}
+.card:has(> .quick-buy.qb-top-right, > .quick-buy.qb-top-left) {
+  padding-top: 38px;
+}
+.card:has(> .quick-buy.qb-bottom-right, > .quick-buy.qb-bottom-left) {
+  padding-bottom: 38px;
+}
+.card:has(> .quick-buy.qb-l.qb-top-right, > .quick-buy.qb-l.qb-top-left) {
+  padding-top: 44px;
+}
+.card:has(> .quick-buy.qb-l.qb-bottom-right, > .quick-buy.qb-l.qb-bottom-left) {
+  padding-bottom: 44px;
 }
 /* The candle view's timeframe picker, beside Line / Candles. */
 .pc-tf {

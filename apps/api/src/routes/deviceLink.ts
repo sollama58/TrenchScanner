@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { requireTwoFactor } from "../twoFactor.js";
 import { prisma, type Env } from "@trenchscanner/core";
 import { SESSION_COOKIE_NAME } from "../auth/session.js";
 import { sessionCookieAttrs } from "./auth.js";
@@ -40,6 +41,18 @@ export async function registerDeviceLinkRoutes(app: FastifyInstance, opts: { env
       if (request.user!.deviceId) {
         return reply.code(403).send({ error: "sign in on a desktop browser to pair a device" });
       }
+      // The QR code phone login is for wallet sign-ins only, never Privy accounts (user rule
+      // 2026-10-18): a Privy account's phone signs in with Privy instead.
+      const owner = await prisma.user.findUnique({
+        where: { id: request.user!.userId },
+        select: { privyUserId: true },
+      });
+      if (!owner || owner.privyUserId) {
+        return reply
+          .code(403)
+          .send({ error: "Phone pairing is for wallet sign-ins. Sign in with Privy on your phone." });
+      }
+      if (!(await requireTwoFactor(opts.env, request, reply, request.user!.userId, "pair"))) return;
       const { code, expiresAt } = await issueLinkCode(request.user!.userId);
       request.log.info({ userId: request.user!.userId }, "issued a mobile link code");
       // The raw code is returned exactly once, here. Nothing stores it - see hashCode.

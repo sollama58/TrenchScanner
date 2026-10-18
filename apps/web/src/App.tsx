@@ -50,6 +50,10 @@ import { setProState, proStateOf } from "./proTrade";
 import { ProGraceBanner } from "./components/ProGraceBanner";
 import { BugButton } from "./components/BugButton";
 import { AdminReportsBadge } from "./components/AdminReportsBadge";
+import { TwoFactorPromptHost } from "./components/TwoFactorPrompt";
+import { setMe } from "./me";
+import { clearPasses } from "./twoFactor";
+import { loadedPrivyControls, privyConfig, usePrivyWanted, wantPrivy } from "./privyBridge";
 
 // Only the Live tab ships in the first bundle. The others, and the wallet sign-in code (which a
 // returning, signed-in visitor never needs), load on demand; main.tsx warms them once idle.
@@ -78,6 +82,12 @@ const UtilityDrawer = lazy(() =>
   import("./components/UtilityDrawer").then((m) => ({ default: m.UtilityDrawer })),
 );
 const BurnPanel = lazy(() => import("./components/BurnPanel").then((m) => ({ default: m.BurnPanel })));
+const PrivyWalletPanel = lazy(() =>
+  import("./components/PrivyWalletPanel").then((m) => ({ default: m.PrivyWalletPanel })),
+);
+const AccessBuy = lazy(() => import("./components/AccessBuy").then((m) => ({ default: m.AccessBuy })));
+// Privy (email sign-in): only for someone choosing it, or already signed in with it.
+const PrivyRoot = lazy(() => import("./privy"));
 
 const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "live", label: "Live", Icon: PulseIcon },
@@ -109,6 +119,9 @@ type Session =
   | { state: "linking"; error?: string }
   | { state: "signed-in"; user: User };
 
+/** How often an open, signed-in page re-reads its session for Pro Mode changes. */
+const PRO_RECHECK_MS = 2 * 60_000;
+
 export function App() {
   // A returning visitor starts signed in as last time (src/cache.ts keeps the answer), so their
   // feed paints at once; the check below signs them out if the session has since ended.
@@ -126,11 +139,19 @@ export function App() {
   const checkSession = (maxAgeMs: number) => {
     // index.html already started this request; cachedGet adopts it rather than sending another.
     cachedGet<User>("/auth/me", maxAgeMs)
-      .then((user) => setSession({ state: "signed-in", user }))
+      // The same answer as before keeps the session object, so a routine re-read redraws nothing.
+      .then((user) =>
+        setSession((prev) =>
+          prev.state === "signed-in" && JSON.stringify(prev.user) === JSON.stringify(user)
+            ? prev
+            : { state: "signed-in", user },
+        ),
+      )
       .catch((e: unknown) => {
         // Only a real "not signed in" answer ends the session and clears what this device kept.
         if (e instanceof ApiError && e.status === 401) {
           setSessionToken(null);
+          clearPasses();
           invalidate();
           resetSettings();
           // The open token view is above the feed, so it would outlive the session it was read in.
@@ -217,6 +238,11 @@ export function App() {
 
   const signOut = async () => {
     await post("/auth/logout").catch(() => undefined);
+    // Privy's own session too, so the next email sign-in asks again (only if it's loaded).
+    await loadedPrivyControls()
+      ?.logout()
+      .catch(() => undefined);
+    clearPasses();
     setSessionToken(null);
     invalidate();
     resetSettings();
@@ -253,19 +279,47 @@ export function App() {
   const SettingsTab = loaded.settings?.SettingsTab ?? LazySettingsTab;
   const AdminTab = loaded.admin?.AdminTab ?? LazyAdminTab;
   const isAdmin = signedIn && session.user.isAdmin;
+  // Every render, like setProState: panels deep in a tab read the user from here (me.ts).
+  useEffect(() => setMe(signedIn ? session.user : null));
+  // A Privy account's wallet lives in Privy's code: load it so burns and trades can sign.
+  const privyAccount = signedIn && session.user.signInMethod === "privy";
+  useEffect(() => {
+    if (privyAccount) wantPrivy();
+  }, [privyAccount]);
+  const privyWanted = usePrivyWanted();
+  const [privyAppId, setPrivyAppId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!privyWanted) return;
+    void privyConfig().then((c) => setPrivyAppId(c.enabled && c.appId ? c.appId : null));
+  }, [privyWanted]);
   useEffect(() => setAdmin(isAdmin));
   // Pro Mode, for the token modal's Trade panel (null hides all of it).
   const pro = signedIn ? proStateOf(session.user) : null;
   // Every render: setProState ignores a state equal to the one it has.
   useEffect(() => setProState(pro));
-  // In a grace period, the session is re-read every few minutes: back in the top 250, the
-  // warnings go; out of time, the panel turns to selling only.
-  const inGrace = pro?.graceEndsAt != null;
+  // Pro Mode changes while a page stays open: a wallet that has just held its hour in the top 250
+  // (or was granted it) gets the Trade panel, one in its grace sees the warnings go or the panel
+  // close. So a signed-in session is re-read every few minutes, and when the tab comes back into
+  // view after a while.
   useEffect(() => {
-    if (!inGrace) return;
-    const timer = setInterval(() => checkSession(0), 5 * 60_000);
-    return () => clearInterval(timer);
-  }, [inGrace]);
+    if (!signedIn) return;
+    let lastRead = Date.now();
+    const reread = () => {
+      lastRead = Date.now();
+      checkSession(0);
+    };
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") reread();
+    }, PRO_RECHECK_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && Date.now() - lastRead > 60_000) reread();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [signedIn]);
   // The Stream tab only for a signed-in reader who switched it on in Settings.
   const appearance = useAppearance();
   const streamOn = appearance.streamTab && signedIn;
@@ -556,6 +610,12 @@ export function App() {
         </span>
       </footer>
       <TokenModalHost />
+      <TwoFactorPromptHost />
+      {privyAppId && (
+        <Suspense fallback={null}>
+          <PrivyRoot appId={privyAppId} />
+        </Suspense>
+      )}
       {/* On every screen, signed in or not: bug reports and suggestions, read in Admin > Reports. */}
       <BugButton
         tab={signedIn || guest ? tab : session.state}
@@ -578,6 +638,8 @@ function AccessGate({
   onSignedOut: () => void;
 }) {
   const { data, error, reload } = usePolling<Subscription>("/subscription", 300_000);
+  // A finished access buy remounts the burn panel, so it reads the new balance at once.
+  const [buys, setBuys] = useState(0);
   const hasAccess = data?.hasAccess === true;
   // A gated route said access has ended (api.ts): look again now rather than at the next poll,
   // so the paywall replaces the failing tabs. At most every 10 s, as every open tab's poll says so.
@@ -635,7 +697,16 @@ function AccessGate({
           Burn $ASDFASDFA below to subscribe. Access follows your wallet.
         </p>
         <Suspense fallback={<p className="muted small">Loading…</p>}>
-          <BurnPanel walletAddress={walletAddress} onCredited={reload} />
+          {/* A Privy wallet starts empty: where to send SOL comes first. */}
+          <PrivyWalletPanel compact />
+          {data.price && (
+            <AccessBuy
+              walletAddress={walletAddress}
+              mint={data.price.mint}
+              onBought={() => setBuys((n) => n + 1)}
+            />
+          )}
+          <BurnPanel key={buys} walletAddress={walletAddress} onCredited={reload} />
         </Suspense>
         <p className="faint small">
           You can also burn on the{" "}

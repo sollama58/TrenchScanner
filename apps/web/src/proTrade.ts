@@ -4,10 +4,11 @@ import { SolanaSignTransaction, type SolanaSignTransactionFeature } from "@solan
 import type { WalletAccount } from "@wallet-standard/base";
 import bs58 from "bs58";
 import { ApiError, api, post } from "./api";
-import { burnWallet } from "./burn";
+import { burnWallet, readyBurnWallet } from "./burn";
+import { postWithTwoFactor } from "./twoFactor";
 import { toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
-import { withTimeout } from "./wallet";
+import { onWalletsChanged, withTimeout } from "./wallet";
 
 /**
  * Pro Mode trades from the token modal (user decision 2026-10-17): the API builds a swap for the
@@ -116,12 +117,41 @@ export interface TradeSettings {
   customPrioritySol: number;
   /** Sender's tip, SOL; null is the speed's minimum (0.000005 Eco, 0.001 Turbo). */
   customTipSol: number | null;
+  /** The buy buttons under the chart in one row or two (user ask 2026-10-18: one by default). */
+  buyRows: 1 | 2;
+  /** The quick-buy pill on alert and stream cards (off by default). */
+  quickBuy: QuickBuySettings;
 }
+
+export interface QuickBuySettings {
+  enabled: boolean;
+  /** SOL per tap. */
+  amountSol: number;
+  position: "top-right" | "top-left" | "bottom-right" | "bottom-left";
+  size: "s" | "m" | "l";
+  color: (typeof QUICK_BUY_COLORS)[number];
+}
+
+export const QUICK_BUY_COLORS = ["green", "blue", "purple", "amber", "pink", "gray"] as const;
+export const QUICK_BUY_POSITIONS = ["top-right", "top-left", "bottom-right", "bottom-left"] as const;
+/** Most buy buttons per row. */
+export const BUY_PRESETS_PER_ROW = 5;
+
+export const DEFAULT_QUICK_BUY: QuickBuySettings = {
+  enabled: false,
+  amountSol: 0.1,
+  position: "top-right",
+  size: "m",
+  color: "green",
+};
 
 /** Each custom fee's ceiling, SOL (the API refuses more). */
 export const MAX_CUSTOM_FEE_SOL = 0.01;
 /** Sender's minimum tip per speed, SOL. */
 export const MIN_TIP_SOL = { eco: 0.000005, turbo: 0.001 } as const;
+
+/** The smallest Pro trade the API takes (sales of 100% aside). */
+export const MIN_TRADE_SOL = 0.01;
 
 export const DEFAULT_TRADE_SETTINGS: TradeSettings = {
   buyPresets: [0.1, 0.25, 0.5, 1],
@@ -132,22 +162,63 @@ export const DEFAULT_TRADE_SETTINGS: TradeSettings = {
   priorityMode: "auto",
   customPrioritySol: 0.0001,
   customTipSol: null,
+  buyRows: 1,
+  quickBuy: DEFAULT_QUICK_BUY,
 };
 
 const SETTINGS_KEY = "ts-pro-trade-settings";
 
+/** Read once per page, then kept here: every panel and card shares one copy (useTradeSettings). */
+let current: TradeSettings | null = null;
+const settingsListeners = new Set<() => void>();
+
 export function readTradeSettings(): TradeSettings {
+  current ??= parseTradeSettings(readStoredSettings());
+  return current;
+}
+
+function readStoredSettings(): string | null {
   try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
+    return localStorage.getItem(SETTINGS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** The settings as saved, with anything missing or out of range back at its default. */
+export function parseTradeSettings(raw: string | null): TradeSettings {
+  try {
     if (!raw) return DEFAULT_TRADE_SETTINGS;
     const s = JSON.parse(raw) as Partial<TradeSettings>;
-    const nums = (v: unknown, ok: (n: number) => boolean, fallback: number[]) =>
-      Array.isArray(v) && v.length > 0 && v.length <= 6 && v.every((n) => typeof n === "number" && ok(n))
+    const buyRows = s.buyRows === 2 ? 2 : 1;
+    const nums = (v: unknown, ok: (n: number) => boolean, fallback: number[], max: number) =>
+      Array.isArray(v) && v.length > 0 && v.length <= max && v.every((n) => typeof n === "number" && ok(n))
         ? (v as number[])
         : fallback;
+    const q = (s.quickBuy ?? {}) as Partial<QuickBuySettings>;
     return {
-      buyPresets: nums(s.buyPresets, (n) => n > 0 && n <= 100, DEFAULT_TRADE_SETTINGS.buyPresets),
-      sellPresets: nums(s.sellPresets, (n) => n > 0 && n <= 100, DEFAULT_TRADE_SETTINGS.sellPresets),
+      buyRows,
+      quickBuy: {
+        enabled: q.enabled === true,
+        amountSol:
+          typeof q.amountSol === "number" && q.amountSol >= MIN_TRADE_SOL && q.amountSol <= 100
+            ? q.amountSol
+            : DEFAULT_QUICK_BUY.amountSol,
+        position: QUICK_BUY_POSITIONS.includes(q.position as never)
+          ? (q.position as QuickBuySettings["position"])
+          : DEFAULT_QUICK_BUY.position,
+        size: q.size === "s" || q.size === "l" ? q.size : "m",
+        color: QUICK_BUY_COLORS.includes(q.color as never)
+          ? (q.color as QuickBuySettings["color"])
+          : DEFAULT_QUICK_BUY.color,
+      },
+      buyPresets: nums(
+        s.buyPresets,
+        (n) => n >= MIN_TRADE_SOL && n <= 100,
+        DEFAULT_TRADE_SETTINGS.buyPresets,
+        BUY_PRESETS_PER_ROW * buyRows,
+      ),
+      sellPresets: nums(s.sellPresets, (n) => n > 0 && n <= 100, DEFAULT_TRADE_SETTINGS.sellPresets, 6),
       slippagePct:
         typeof s.slippagePct === "number" && s.slippagePct >= 0.1 && s.slippagePct <= 50
           ? s.slippagePct
@@ -200,42 +271,32 @@ export function acceptDisclaimer(wallet: string): void {
   }
 }
 
-/**
- * Whether a token view opens with the Trade panel showing (user ask 2026-10-18: open by default,
- * as the small toggle was easy to miss). Full Pro Mode opens it unless this browser's trader
- * closed it last time; a wallet that may only sell keeps it shut until asked (or until it holds).
- */
-export function tradeOpenAtStart(state: ProState | null, closedBefore: boolean): boolean {
-  return !!state?.pro && !closedBefore;
-}
-
-const TRADE_CLOSED_KEY = "ts-pro-trade-closed";
-
-/** The trader closed the Trade panel last time, in this browser. */
-export function tradePanelClosed(): boolean {
-  try {
-    return localStorage.getItem(TRADE_CLOSED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-/** Remembers whether the trader left the Trade panel open, for the next token view. */
-export function rememberTradePanel(open: boolean): void {
-  try {
-    if (open) localStorage.removeItem(TRADE_CLOSED_KEY);
-    else localStorage.setItem(TRADE_CLOSED_KEY, "1");
-  } catch {
-    // Blocked storage: every token view opens it, the default.
-  }
-}
-
 export function saveTradeSettings(s: TradeSettings): void {
+  current = s;
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
   } catch {
     // Blocked storage: the settings hold for this page load.
   }
+  for (const l of settingsListeners) l();
+}
+
+/** The trading settings, re-rendering on any change (Settings tab, Trade panel, another tab). */
+export function useTradeSettings(): TradeSettings {
+  return useSyncExternalStore((l) => {
+    settingsListeners.add(l);
+    // Another browser tab saved: read it again.
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== SETTINGS_KEY) return;
+      current = parseTradeSettings(e.newValue);
+      l();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      settingsListeners.delete(l);
+      window.removeEventListener("storage", onStorage);
+    };
+  }, readTradeSettings);
 }
 
 /** The settings' custom fees as the API takes them: lamport strings, left out when not set. */
@@ -258,6 +319,20 @@ export interface FeeEstimate {
   platformFeeLamports: string;
 }
 
+/** GET /pro/trade/costs: the rest of what a buy of refLamports costs, beyond the network. */
+export interface SwapCostEstimate {
+  refLamports: string;
+  /** The coin's own transfer tax (Token-2022), basis points of every buy and sell; null when unread. */
+  transferFeeBps: number | null;
+  /** The pools' LP, curve and protocol fees on the route, basis points; null when unknown. */
+  poolFeeBps: number | null;
+  venues: string[];
+  /** Price impact of the reference buy, percent. */
+  priceImpactPct: number | null;
+  /** The token account's rent on a first buy, refunded when it is closed; "0" when the wallet has one. */
+  accountRentLamports: string;
+}
+
 /** The expected network fee for a trade on `mint` with these settings, re-read every 20s. */
 export function useFeeEstimate(mint: string, settings: TradeSettings): FeeEstimate | null {
   const [fee, setFee] = useState<FeeEstimate | null>(null);
@@ -278,6 +353,31 @@ export function useFeeEstimate(mint: string, settings: TradeSettings): FeeEstima
     };
   }, [params]);
   return fee;
+}
+
+/**
+ * The swap costs of a buy of `refSol` on `mint` (GET /pro/trade/costs), re-read every minute: a
+ * Jupiter quote each, so quoted on the first buy button rather than every typed amount.
+ */
+export function useSwapCosts(mint: string, refSol: number): SwapCostEstimate | null {
+  const [costs, setCosts] = useState<SwapCostEstimate | null>(null);
+  const ref = String(Math.round(refSol * 1e9));
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      api<SwapCostEstimate>(`/pro/trade/costs?${new URLSearchParams({ mint, refLamports: ref })}`)
+        .then((c) => live && setCosts(c))
+        .catch(() => undefined);
+    void load();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 60_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [mint, ref]);
+  return costs;
 }
 
 // ---- The wallet's position in a coin ----
@@ -435,7 +535,7 @@ async function accountFor(owner: string): Promise<{
   sign: SolanaSignTransactionFeature[typeof SolanaSignTransaction];
   name: string;
 }> {
-  const w = burnWallet(owner);
+  const w = await readyBurnWallet(owner);
   const signer = w
     ? (w.wallet.features as Partial<SolanaSignTransactionFeature>)[SolanaSignTransaction]
     : undefined;
@@ -452,6 +552,36 @@ async function accountFor(owner: string): Promise<{
   if (!account)
     throw new TradeError(`Switch ${w.name} to ${shortAddress(owner)}, the wallet you signed in with.`);
   return { account, sign: signer, name: w.name };
+}
+
+/** Whether this browser has a wallet that can sign `owner`'s trades (what accountFor will find). */
+export function canSignTrades(owner: string): boolean {
+  const w = burnWallet(owner);
+  return !!w && SolanaSignTransaction in w.wallet.features;
+}
+
+/**
+ * canSignTrades, kept current as wallet extensions load, register or come back from being unlocked.
+ * False on a venue that can't sign at all, such as a phone signed in by QR from a desktop (user ask
+ * 2026-10-18: no Trade section where a trade couldn't be signed).
+ */
+export function useCanSignTrades(owner: string | null): boolean {
+  const [can, setCan] = useState(() => !!owner && canSignTrades(owner));
+  useEffect(() => {
+    if (!owner) return setCan(false);
+    const refresh = () => setCan(canSignTrades(owner));
+    refresh();
+    const off = onWalletsChanged(refresh);
+    // Some extensions announce themselves a beat after the page.
+    const late = setTimeout(refresh, 2_000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      off();
+      clearTimeout(late);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [owner]);
+  return can;
 }
 
 /** The programs a Pro trade may call at its top level (the API's guard allows the same). */
@@ -688,7 +818,8 @@ export async function runTrade(
   // The wallet first: if it isn't here there's no point building anything.
   const { account, sign, name } = await accountFor(input.owner);
   onStage("building");
-  const built = await post<BuiltTrade>("/pro/trade/build", {
+  // Two-factor, when the user chose it for this side (or this size): the API asks, we prompt.
+  const built = await postWithTwoFactor<BuiltTrade>("/pro/trade/build", {
     mint: input.mint,
     side: input.side,
     amount: input.amount.toString(),

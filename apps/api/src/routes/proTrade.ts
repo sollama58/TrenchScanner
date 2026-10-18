@@ -4,6 +4,8 @@ import { z } from "zod";
 import {
   buildManualTrade,
   estimateManualFees,
+  estimateSwapCosts,
+  type SwapCosts,
   decodeMessage,
   isSenderTipAccount,
   JupiterSwapClient,
@@ -20,12 +22,15 @@ import {
   RateLimitedError,
   verifyTransactionSignatures,
   walletTokenTrades,
+  SUBSCRIPTION_MINT,
   type DecodedMessage,
   type Env,
   type WalletTrade,
   walletTag,
 } from "@trenchscanner/core";
 import { proStatus } from "../proMode.js";
+import { requireTwoFactor } from "../twoFactor.js";
+import { accessSwapOpen as accessSwapOpenFor } from "./auth.js";
 import { SolPrice } from "../solPrice.js";
 
 /**
@@ -81,11 +86,59 @@ const feeSchema = z.object({
     .optional(),
 });
 
+const costsSchema = z.object({
+  mint: z.string().refine(looksLikeSolanaAddress, "not a token address"),
+  /** The buy the swap costs are quoted on, lamports (the panel's first buy button). */
+  refLamports: z
+    .string()
+    .regex(/^\d{1,12}$/)
+    .optional(),
+});
+
 const sendSchema = z.object({
   transaction: z.string().min(1).max(2_000),
   speed: z.enum(["eco", "turbo"]),
   mevProtect: z.boolean(),
 });
+
+/**
+ * Trade limits (user ask 2026-10-18): no trade under 0.01 SOL (a buy's spend, a sale's quoted
+ * proceeds), and one trade sent every 5 seconds per wallet. A sale of the whole balance closes a
+ * position and is exempt from both: nobody is ever stuck holding dust or waiting to get out.
+ */
+export const MIN_TRADE_LAMPORTS = 10_000_000n;
+export const TRADE_COOLDOWN_MS = 5_000;
+
+/** When each wallet last sent a trade, for TRADE_COOLDOWN_MS. */
+export class TradeCooldown {
+  private readonly last = new Map<string, number>();
+  constructor(
+    private readonly ms = TRADE_COOLDOWN_MS,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** Ms until the wallet may send another trade; 0 when it may now. */
+  left(wallet: string): number {
+    const at = this.last.get(wallet);
+    return at === undefined ? 0 : Math.max(0, at + this.ms - this.now());
+  }
+
+  /**
+   * Starts the wallet's cooldown now, before the send, so two sends racing each other can't both
+   * pass; the function returned gives it back (the send didn't go out).
+   */
+  take(wallet: string): () => void {
+    const before = this.last.get(wallet);
+    const at = this.now();
+    if (this.last.size > 5_000) for (const [w, t] of this.last) if (at - t > this.ms) this.last.delete(w);
+    this.last.set(wallet, at);
+    return () => {
+      if (this.last.get(wallet) !== at) return;
+      if (before === undefined) this.last.delete(wallet);
+      else this.last.set(wallet, before);
+    };
+  }
+}
 
 /** One person clicking: generous for a scalper, tight for anything scripted. */
 const BUILD_RATE_LIMIT = { max: 40, timeWindow: "1 minute" };
@@ -114,6 +167,12 @@ const EXPIRY_MARGIN_BLOCKS = 10;
 const RETIRED_KEEP_MS = 5 * 60_000;
 /** Parsed transactions kept (they never change), across every wallet and coin. */
 const MAX_CACHED_TRADES = 20_000;
+/** Swap costs (a Jupiter quote each) are reused this long: the panel re-reads its fee every 20s. */
+const SWAP_COSTS_TTL_MS = 60_000;
+const MAX_CACHED_SWAP_COSTS = 2_000;
+/** The reference buy when the panel names none: 0.1 SOL. */
+const DEFAULT_REF_LAMPORTS = 100_000_000n;
+const MAX_REF_LAMPORTS = 100_000_000_000n;
 
 interface InFlight {
   base64: string;
@@ -135,6 +194,19 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
   const tradeCache = new Map<string, WalletTrade | null>();
   const positions = new Map<string, { at: number; body: unknown }>();
   const supplies = new Map<string, { at: number; raw: bigint; decimals: number }>();
+  const swapCosts = new Map<string, { at: number; costs: SwapCosts | null }>();
+  /** The swap costs for a wallet's buy of `ref` lamports of `mint`, cached; null when they can't be read. */
+  const swapCostsFor = async (wallet: string, mint: string, ref: bigint): Promise<SwapCosts | null> => {
+    const key = `${wallet}:${mint}:${ref}`;
+    const hit = swapCosts.get(key);
+    if (hit && Date.now() - hit.at < SWAP_COSTS_TTL_MS) return hit.costs;
+    const costs = await estimateSwapCosts({ rpc, jupiter }, { wallet, mint, referenceLamports: ref }).catch(
+      () => null,
+    );
+    if (swapCosts.size >= MAX_CACHED_SWAP_COSTS) swapCosts.delete(swapCosts.keys().next().value!);
+    swapCosts.set(key, { at: Date.now(), costs });
+    return costs;
+  };
   const inFlight = new Map<string, InFlight>();
   // Trades the resend loop has stopped resending, kept a while so their status can still say
   // "expired" rather than pending forever.
@@ -161,10 +233,28 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       lastValidBlockHeight: number;
       at: number;
       side: "buy" | "sell";
+      /** An access-token buy by a wallet without Pro Mode: sends without Pro Mode too. */
+      access: boolean;
+      /** A sale of the whole balance: exempt from the trade limits. */
+      closing: boolean;
       /** The built message: what the wallet sends must be it (signedMatchesBuild). */
       message: DecodedMessage;
     }[]
   >();
+
+  const cooldown = new TradeCooldown();
+  function tooSoon(reply: FastifyReply, leftMs: number) {
+    const seconds = Math.max(1, Math.ceil(leftMs / 1_000));
+    return reply.code(429).send({
+      error: `One trade every ${TRADE_COOLDOWN_MS / 1_000} seconds: try again in ${seconds}s. Nothing was sent.`,
+      retryAfterMs: leftMs,
+      notSent: true,
+    });
+  }
+  const tooSmall = (side: "buy" | "sell") =>
+    side === "buy"
+      ? "The smallest buy is 0.01 SOL."
+      : "That sale is worth under 0.01 SOL, the smallest trade. Sell 100% to close the position.";
 
   /** The wallet's builds still good for a send, oldest first. */
   function liveBuilds(wallet: string) {
@@ -179,26 +269,58 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
    * The session's wallet, when it has Pro Mode. Without it (even one that had it once): answers
    * 404 and returns null.
    */
-  async function proWallet(request: FastifyRequest, reply: FastifyReply): Promise<{ wallet: string } | null> {
+  /**
+   * The signed-in wallet and whether it has Pro Mode. Pro Mode or nothing: a wallet without it
+   * can't sell either (user decision 2026-10-18). The one carve-out, `access`: routes that also
+   * serve the access-token buy (anyone signed in may swap SOL for $ASDFASDFA here to burn for
+   * access, Privy accounts above all), open while trading is on and public. It buys only.
+   */
+  async function proWallet(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    opts: { access?: boolean } = {},
+  ): Promise<{ wallet: string; pro: boolean } | null> {
     const wallet = request.user!.walletAddress;
     const status = await proStatus(env, wallet);
-    // Pro Mode or nothing: a wallet without it can't sell either (user decision 2026-10-18).
-    if (!status.pro) {
+    if (!status.pro && !(opts.access && accessSwapOpen())) {
       reply.code(404).send({ error: "not found", notSent: true });
       return null;
     }
-    return { wallet };
+    return { wallet, pro: status.pro };
   }
+  // The kill switch (PRO_TRADING_ENABLED) stops the access buy too.
+  const accessSwapOpen = () => accessSwapOpenFor(env);
 
   app.addHook("preHandler", app.authenticate);
 
   app.post("/trade/build", { config: { rateLimit: BUILD_RATE_LIMIT } }, async (request, reply) => {
-    const who = await proWallet(request, reply);
+    const who = await proWallet(request, reply, { access: true });
     if (!who) return;
     const { wallet } = who;
+    // Without Pro Mode, only the access-token buy: $ASDFASDFA, buys only, up to 5 SOL. Anything
+    // else gets the same 404 as before, malformed or not, so the route still looks absent.
+    const asked = (request.body ?? {}) as { side?: unknown; mint?: unknown };
+    const accessBuy = asked.side === "buy" && asked.mint === SUBSCRIPTION_MINT && accessSwapOpen();
+    if (!who.pro && !accessBuy) return reply.code(404).send({ error: "not found", notSent: true });
     const parsed = buildSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
     const body = parsed.data;
+    if (accessBuy && !who.pro && BigInt(body.amount) > ACCESS_BUY_MAX_LAMPORTS)
+      return reply.code(422).send({ error: "Buy up to 5 SOL of $ASDFASDFA at a time here." });
+    const closing = body.side === "sell" && body.all === true;
+    if (!closing) {
+      const left = cooldown.left(wallet);
+      if (left > 0) return tooSoon(reply, left);
+      if (body.side === "buy" && BigInt(body.amount) < MIN_TRADE_LAMPORTS)
+        return reply.code(422).send({ error: tooSmall("buy") });
+    }
+    // The account's own two-factor choices: every buy, buys over a size, or sales.
+    if (
+      !(await requireTwoFactor(env, request, reply, request.user!.userId, body.side, {
+        lamports: body.side === "buy" ? BigInt(body.amount) : undefined,
+      }))
+    )
+      return;
     try {
       let amount = BigInt(body.amount);
       if (body.side === "sell" && body.all) {
@@ -222,6 +344,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           ...(body.tipLamports !== undefined ? { tipLamports: BigInt(body.tipLamports) } : {}),
         },
       );
+      // A partial sale is measured by what the route quotes for it, in lamports.
+      if (!closing && body.side === "sell" && BigInt(built.quotedOut) < MIN_TRADE_LAMPORTS)
+        return reply.code(422).send({ error: tooSmall("sell") });
       const builtWire = parseWireTransaction(Buffer.from(built.transaction, "base64"));
       const message = decodeMessage(builtWire.message);
       const list = liveBuilds(wallet);
@@ -230,6 +355,8 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
         lastValidBlockHeight: built.lastValidBlockHeight,
         at: Date.now(),
         side: body.side,
+        access: accessBuy && !who.pro,
+        closing,
         message,
       });
       builds.set(wallet, list.slice(-MAX_BUILDS_PER_WALLET));
@@ -277,8 +404,32 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     };
   });
 
-  app.post("/trade/send", { config: { rateLimit: SEND_RATE_LIMIT } }, async (request, reply) => {
+  // The rest of what a buy costs (user ask 2026-10-18): the coin's transfer tax, the route's pool
+  // and LP fees, price impact and a first buy's account rent. Each part it can't read is null.
+  app.get("/trade/costs", { config: { rateLimit: READ_RATE_LIMIT } }, async (request, reply) => {
     const who = await proWallet(request, reply);
+    if (!who) return;
+    const parsed = costsSchema.safeParse(request.query);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid" });
+    const q = parsed.data;
+    let ref = q.refLamports !== undefined ? BigInt(q.refLamports) : DEFAULT_REF_LAMPORTS;
+    if (ref <= 0n) ref = DEFAULT_REF_LAMPORTS;
+    if (ref > MAX_REF_LAMPORTS) ref = MAX_REF_LAMPORTS;
+    const costs = await swapCostsFor(who.wallet, q.mint, ref);
+    if (!costs) return reply.code(503).send({ error: "Couldn't read the swap's costs just now." });
+    return {
+      refLamports: ref.toString(),
+      transferFeeBps: costs.transferFeeBps,
+      poolFeeBps: costs.poolFeeBps,
+      venues: costs.venues,
+      priceImpactPct: costs.priceImpactPct,
+      accountRentLamports: costs.accountRentLamports.toString(),
+      platformFeeBps: 0,
+    };
+  });
+
+  app.post("/trade/send", { config: { rateLimit: SEND_RATE_LIMIT } }, async (request, reply) => {
+    const who = await proWallet(request, reply, { access: true });
     if (!who) return;
     const { wallet } = who;
     const parsed = sendSchema.safeParse(request.body);
@@ -311,7 +462,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       // and Lighthouse guards): our Sender key relays nothing a build didn't make.
       const list = liveBuilds(wallet);
       const at = list.findIndex(
-        (b) => b.blockhash === message.recentBlockhash && signedMatchesBuild(b.message, message) === null,
+        (b) =>
+          b.blockhash === message.recentBlockhash &&
+          (who.pro || b.access) &&
+          signedMatchesBuild(b.message, message) === null,
       );
       if (at < 0)
         return reply.code(400).send({
@@ -324,6 +478,10 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
           error: "Wait for your open trades to land before sending more. Nothing was sent.",
           notSent: true,
         });
+      if (!list[at]!.closing) {
+        const left = cooldown.left(wallet);
+        if (left > 0) return tooSoon(reply, left);
+      }
       list.splice(at, 1);
     } catch {
       return reply
@@ -335,8 +493,12 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
       mevProtect,
       apiKey: env.HELIUS_API_KEY || undefined,
     });
+    // Given back when Sender refuses (nothing went out). Closing sales count too: a buy right
+    // after one still waits.
+    const giveBack = cooldown.take(wallet);
     const sent = await sendViaSender(url, transaction);
     if (!sent.ok && sent.refused) {
+      giveBack();
       request.log.warn(
         { wallet: walletTag(wallet), signature, error: sent.error },
         "sender refused a pro trade",
@@ -369,7 +531,7 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     "/trade/status/:signature",
     { config: { rateLimit: READ_RATE_LIMIT } },
     async (request, reply) => {
-      const who = await proWallet(request, reply);
+      const who = await proWallet(request, reply, { access: true });
       if (!who) return;
       const { wallet } = who;
       const { signature } = request.params;
@@ -508,6 +670,9 @@ export async function registerProTradeRoutes(app: FastifyInstance, opts: { env: 
     retired.clear();
   });
 }
+
+/** The most one access-token buy may spend, for a wallet without Pro Mode. */
+const ACCESS_BUY_MAX_LAMPORTS = 5_000_000_000n;
 
 /** The guard's refusal in the trader's words, where it can be said plainly. */
 export function plainRefusal(message: string, side: "buy" | "sell" = "buy"): string {

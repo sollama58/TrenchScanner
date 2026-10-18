@@ -21,6 +21,7 @@ import {
   type InstructionSpec,
 } from "./transaction.js";
 import {
+  associatedTokenAddress,
   GuardRefusal,
   guardSwapTransaction,
   PROGRAM,
@@ -47,7 +48,7 @@ import {
 
 export interface ManualTradeRpc extends GuardRpc {
   getLatestBlockhash(): Promise<{ blockhash: string; lastValidBlockHeight: number } | null>;
-  getMintInfo(mint: string): Promise<{ program: string; decimals?: number } | null>;
+  getMintInfo(mint: string): Promise<{ program: string; decimals?: number; transferFeeBps?: number } | null>;
   getPriorityFeeEstimate(accounts: string[]): Promise<bigint | null>;
 }
 
@@ -407,4 +408,92 @@ export function signedMatchesBuild(built: DecodedMessage, signed: DecodedMessage
   }
   if ((price * limit) / 1_000_000n > MAX_CUSTOM_FEE_LAMPORTS) return "a priority fee over 0.01 SOL";
   return null;
+}
+
+/** A new token account's rent, lamports: the classic program's 165 bytes, Token-2022's with its fee extension. */
+export const TOKEN_ACCOUNT_RENT_LAMPORTS = 2_039_280n;
+export const TOKEN_2022_ACCOUNT_RENT_LAMPORTS = 2_074_080n;
+
+/**
+ * What a route's pools charge, basis points of what goes through them: each hop's fee as a share
+ * of its own side of the swap, weighted by the hop's share of the route. Null when the quote
+ * doesn't say (no route plan, a hop without its fee, or no fee at all).
+ */
+export function routeFeeBps(quote: SwapQuote): { bps: number; venues: string[] } | null {
+  const plan = quote.routePlan;
+  if (!Array.isArray(plan) || plan.length === 0) return null;
+  let bps = 0;
+  const venues: string[] = [];
+  for (const step of plan as { percent?: unknown; swapInfo?: Record<string, unknown> }[]) {
+    const info = step.swapInfo;
+    if (!info) return null;
+    const fee = Number(info.feeAmount);
+    const feeMint = info.feeMint;
+    const inAmount = Number(info.inAmount);
+    const outAmount = Number(info.outAmount);
+    if (!Number.isFinite(fee) || fee < 0) return null;
+    // A fee taken in what goes in is a share of it; one taken from what comes out, of out plus fee.
+    const base = feeMint === info.inputMint ? inAmount : feeMint === info.outputMint ? outAmount + fee : NaN;
+    if (!Number.isFinite(base) || base <= 0) return null;
+    const share = typeof step.percent === "number" ? step.percent / 100 : 1;
+    bps += (fee / base) * 10_000 * share;
+    if (typeof info.label === "string" && info.label && !venues.includes(info.label)) venues.push(info.label);
+  }
+  // Pools nearly always charge something: a route reporting none is read as not saying.
+  if (bps <= 0) return null;
+  return { bps: Math.round(bps * 10) / 10, venues };
+}
+
+export interface SwapCosts {
+  /** The coin's own transfer fee (Token-2022), basis points of every transfer; 0 without one, null unread. */
+  transferFeeBps: number | null;
+  /** The pools' fees on the route Jupiter would take now (LP, curve and protocol fees); null when unknown. */
+  poolFeeBps: number | null;
+  /** Where the route goes (Pump.fun, PumpSwap, Raydium...). */
+  venues: string[];
+  /** Price impact of the reference buy, percent; null when unknown. */
+  priceImpactPct: number | null;
+  /** Rent for the wallet's token account on its first buy (refunded when the account is closed); 0 when it has one. */
+  accountRentLamports: bigint;
+}
+
+/**
+ * What a swap costs beyond the network fee, for the panel to show before anything is built: the
+ * coin's transfer tax, the pools' fees and price impact on a reference buy, and the token
+ * account's rent on a first buy. Each part that can't be read is left out, never guessed.
+ */
+export async function estimateSwapCosts(
+  deps: {
+    rpc: Pick<ManualTradeRpc, "getMintInfo" | "getAccountsData">;
+    jupiter: Pick<ManualTradeJupiter, "quote">;
+  },
+  input: { wallet: string; mint: string; referenceLamports: bigint },
+): Promise<SwapCosts> {
+  const mintInfo = await deps.rpc.getMintInfo(input.mint);
+  const program = mintInfo?.program ?? PROGRAM.token;
+  const [quote, accounts] = await Promise.all([
+    deps.jupiter
+      .quote({
+        inputMint: WSOL_MINT,
+        outputMint: input.mint,
+        amount: input.referenceLamports,
+        slippageBps: 500,
+      })
+      .catch(() => null),
+    deps.rpc.getAccountsData([associatedTokenAddress(input.wallet, input.mint, program)]).catch(() => null),
+  ]);
+  const route = quote ? routeFeeBps(quote) : null;
+  const impact = quote ? Number(quote.priceImpactPct) * 100 : NaN;
+  return {
+    transferFeeBps: mintInfo ? (mintInfo.transferFeeBps ?? 0) : null,
+    poolFeeBps: route?.bps ?? null,
+    venues: route?.venues ?? [],
+    priceImpactPct: Number.isFinite(impact) ? impact : null,
+    accountRentLamports:
+      accounts && accounts[0] === null
+        ? program === PROGRAM.token2022
+          ? TOKEN_2022_ACCOUNT_RENT_LAMPORTS
+          : TOKEN_ACCOUNT_RENT_LAMPORTS
+        : 0n,
+  };
 }

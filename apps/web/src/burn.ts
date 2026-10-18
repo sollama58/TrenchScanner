@@ -11,6 +11,8 @@ import { api, ApiError, post } from "./api";
 import { buildBurnTransaction, toBase64 } from "./burnTx";
 import { shortAddress } from "./format";
 import { signedInWalletName, solanaWallets, withTimeout, WalletTimeoutError } from "./wallet";
+import { askBefore, TwoFactorCancelled } from "./twoFactor";
+import { PRIVY_WALLET_NAME, privyControls } from "./privyBridge";
 
 /**
  * Burning $ASDFASDFA for access, from the dashboard.
@@ -64,6 +66,22 @@ export function burnWallet(owner: string): BurnWallet | null {
   const holds = (w: Wallet) => w.accounts.some((a) => a.address === owner);
   const wallet = named.find(holds) ?? named[0] ?? signers.find(holds);
   return wallet ? { key: `std:${wallet.name}`, name: wallet.name, icon: wallet.icon, wallet } : null;
+}
+
+/**
+ * burnWallet, waiting for Privy's wallet when this session signed in with Privy: it joins the
+ * browser's wallet list only once Privy has loaded (privy.tsx).
+ */
+export async function readyBurnWallet(owner: string): Promise<BurnWallet | null> {
+  const now = burnWallet(owner);
+  if (now || signedInWalletName(owner) !== PRIVY_WALLET_NAME) return now;
+  await privyControls();
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 250));
+    const w = burnWallet(owner);
+    if (w) return w;
+  }
+  return null;
 }
 
 // ---- A burn sent but not yet credited, kept across reloads ----
@@ -170,6 +188,9 @@ async function accountFor(wallet: BurnWallet, owner: string): Promise<WalletAcco
  * signature once it has been sent; crediting is a separate step (claimBurn).
  */
 export async function sendBurn(req: BurnRequest): Promise<string> {
+  // A burn never passes through the API before the wallet signs it, so two-factor is asked here
+  // (when the user chose it for burns).
+  await askBefore("burn");
   req.onStage?.("connecting");
   const account = await accountFor(req.wallet, req.owner);
 
@@ -306,6 +327,7 @@ export async function claimCreditBurn(signature: string): Promise<CreditClaimRes
 
 /** A plain-language reason a burn didn't start, never an empty or bare technical one. */
 export function describeBurnError(e: unknown, walletName: string): string {
+  if (e instanceof TwoFactorCancelled) return "The two-factor check was cancelled, so nothing was burned.";
   if (e instanceof WalletTimeoutError)
     return e.message === "connect"
       ? `${walletName} didn't answer. Its popup may be hidden behind this window, or it may be locked. Nothing was burned.`

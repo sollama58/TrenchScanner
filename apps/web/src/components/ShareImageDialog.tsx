@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { canvasToPng } from "../pnlCard";
 import { CloseIcon, ShareIcon } from "./Icons";
 
@@ -15,6 +15,8 @@ export function ShareImageDialog({
   render,
   onClose,
   wide = false,
+  drawKey = "",
+  controls = null,
 }: {
   title: string;
   /** Without the extension. */
@@ -27,6 +29,10 @@ export function ShareImageDialog({
   onClose: () => void;
   /** Preview near full size (a detailed image, such as the bubble map's). */
   wide?: boolean;
+  /** Redraws the image when it changes (a choice made in `controls`). */
+  drawKey?: string;
+  /** Choices about the image, shown under the preview. */
+  controls?: ReactNode;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [png, setPng] = useState<{ blob: Blob; url: string } | null>(null);
@@ -36,6 +42,8 @@ export function ShareImageDialog({
   useEffect(() => {
     const dialog = ref.current;
     if (dialog && !dialog.open) dialog.showModal();
+    setPng(null);
+    setNote(null);
     let url: string | null = null;
     let live = true;
     void render()
@@ -53,8 +61,8 @@ export function ShareImageDialog({
       live = false;
       if (url) URL.revokeObjectURL(url);
     };
-    // Drawn once per opening: a poll redraws nothing.
-  }, []);
+    // Drawn once per opening and per drawKey: a poll redraws nothing.
+  }, [drawKey]);
 
   const file = png ? new File([png.blob], name, { type: "image/png" }) : null;
   const canShare =
@@ -102,6 +110,7 @@ export function ShareImageDialog({
         ) : (
           <div className="pnl-preview pnl-loading">{note ?? "Drawing the image…"}</div>
         )}
+        {controls}
         <div className="pnl-actions">
           {canShare && (
             <button type="button" onClick={() => void share()}>
