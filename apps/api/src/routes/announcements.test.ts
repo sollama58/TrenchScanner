@@ -69,8 +69,53 @@ describe.skipIf(!dbAvailable)("announcements", () => {
     expect(live).toBe(1);
   });
 
+  it("ends and replaces only the announcement the admin was shown", async () => {
+    const shown = (await current())!.id;
+    const newer = await app.inject({
+      method: "POST",
+      url: "/admin/announcements",
+      cookies: as("admin"),
+      payload: { message: "Posted from another tab", replaces: shown },
+    });
+    expect(newer.statusCode).toBe(200);
+    const newerId = (newer.json() as { id: string }).id;
+
+    // The first tab still shows `shown`: neither its end nor its replace touches the newer one.
+    const end = await app.inject({
+      method: "POST",
+      url: "/admin/announcements/end",
+      cookies: as("admin"),
+      payload: { id: shown },
+    });
+    expect(end.statusCode).toBe(409);
+    expect(end.json()).toMatchObject({ error: expect.stringContaining("changed") });
+    const replace = await app.inject({
+      method: "POST",
+      url: "/admin/announcements",
+      cookies: as("admin"),
+      payload: { message: "Stale replace", replaces: shown },
+    });
+    expect(replace.statusCode).toBe(409);
+    const noneExpected = await app.inject({
+      method: "POST",
+      url: "/admin/announcements",
+      cookies: as("admin"),
+      payload: { message: "Thought nothing was live", replaces: null },
+    });
+    expect(noneExpected.statusCode).toBe(409);
+    expect(await current()).toMatchObject({ id: newerId });
+
+    const noId = await app.inject({ method: "POST", url: "/admin/announcements/end", cookies: as("admin") });
+    expect(noId.statusCode).toBe(400);
+  });
+
   it("stops showing once ended", async () => {
-    const res = await app.inject({ method: "POST", url: "/admin/announcements/end", cookies: as("admin") });
+    const res = await app.inject({
+      method: "POST",
+      url: "/admin/announcements/end",
+      cookies: as("admin"),
+      payload: { id: (await current())!.id },
+    });
     expect(res.statusCode).toBe(200);
     expect(await current()).toBeNull();
     const history = await app.inject({ method: "GET", url: "/admin/announcements", cookies: as("admin") });
@@ -79,9 +124,21 @@ describe.skipIf(!dbAvailable)("announcements", () => {
   });
 
   it("does not show an expired announcement", async () => {
-    // Ending through the route clears the public route's short cache, so the read below hits the
-    // database.
-    await app.inject({ method: "POST", url: "/admin/announcements/end", cookies: as("admin") });
+    // Posting and ending through the routes clears the public route's short cache, so the read
+    // below hits the database. Nothing is live, which a replace of null confirms.
+    const posted = await app.inject({
+      method: "POST",
+      url: "/admin/announcements",
+      cookies: as("admin"),
+      payload: { message: "brief", replaces: null },
+    });
+    expect(posted.statusCode).toBe(200);
+    await app.inject({
+      method: "POST",
+      url: "/admin/announcements/end",
+      cookies: as("admin"),
+      payload: { id: (posted.json() as { id: string }).id },
+    });
     await prisma.announcement.create({
       data: { message: "old news", expiresAt: new Date(Date.now() - 60_000) },
     });

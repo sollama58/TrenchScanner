@@ -21,6 +21,7 @@ import {
   ShieldIcon,
   SlidersIcon,
   StreamIcon,
+  WalletIcon,
 } from "./components/Icons";
 import {
   TAB_DATA,
@@ -63,6 +64,8 @@ const SignIn = lazy(() => loadSignIn().then((m) => ({ default: m.SignIn })));
 const SageHost = lazy(() => import("./components/SageView").then((m) => ({ default: m.SageHost })));
 // Utilities: its own chunk, loaded the first time the tab opens.
 const UtilitiesTab = lazy(() => import("./tabs/UtilitiesTab").then((m) => ({ default: m.UtilitiesTab })));
+// Portfolio: its own chunk too.
+const PortfolioTab = lazy(() => import("./tabs/PortfolioTab").then((m) => ({ default: m.PortfolioTab })));
 // The wallet detail modal loads the first time a wallet or a ?wallet= link opens it.
 const WalletModalHost = lazy(() =>
   import("./components/WalletModal").then((m) => ({ default: m.WalletModalHost })),
@@ -87,6 +90,8 @@ const TABS: { id: Tab; label: string; Icon: typeof PulseIcon }[] = [
   { id: "lighthouse", label: "Lighthouse", Icon: LighthouseIcon },
   // Lookups paid for with Burn Credits, on top of a subscription.
   { id: "utilities", label: "Utilities", Icon: ToolsIcon },
+  // Pro Mode only (see portfolioOn below): the wallet's own holdings, positions, trades and alerts.
+  { id: "portfolio", label: "Portfolio", Icon: WalletIcon },
   { id: "settings", label: "Settings", Icon: GearIcon },
 ];
 /** Only shown to admin wallets; the /admin routes behind it check the wallet again server-side. */
@@ -216,6 +221,8 @@ export function App() {
     invalidate();
     resetSettings();
     closeTokenModal();
+    // The form is lazy-loaded; this fetches the same chunk the bug button does.
+    void import("./components/BugReportDialog").then((m) => m.clearBugReportDraft()).catch(() => undefined);
     setSession({ state: "signed-out" });
   };
 
@@ -264,14 +271,23 @@ export function App() {
   // The Lighthouse tab unless switched off, or while the reader is on it (a #lighthouse URL), so the
   // open page always has its tab highlighted.
   const lighthouseOn = !appearance.hideLighthouseTab || wantedTab === "lighthouse";
+  // The Portfolio tab only for Pro Mode wallets (user decision 2026-10-18).
+  const portfolioOn = !!pro?.pro;
   const shownTabs = TABS.filter(
-    (t) => (t.id !== "stream" || streamOn) && (t.id !== "lighthouse" || lighthouseOn),
+    (t) =>
+      (t.id !== "stream" || streamOn) &&
+      (t.id !== "lighthouse" || lighthouseOn) &&
+      (t.id !== "portfolio" || portfolioOn),
   );
   const tabs = isAdmin ? [...shownTabs, ADMIN_TAB] : shownTabs;
   // #admin without an admin wallet, or #stream with the tab off, reads as the Live tab, so a tab
   // is always the highlighted one.
   const tab: Tab =
-    (wantedTab === "admin" && !isAdmin) || (wantedTab === "stream" && !streamOn) ? "live" : wantedTab;
+    (wantedTab === "admin" && !isAdmin) ||
+    (wantedTab === "stream" && !streamOn) ||
+    (wantedTab === "portfolio" && !portfolioOn)
+      ? "live"
+      : wantedTab;
   // A new tab, or signing in or out, is a new page: its load gets the full loader.
   useEffect(markNavigation, [tab, session.state]);
   const loaderLabel =
@@ -476,6 +492,7 @@ export function App() {
                 {tab === "lighthouse" && <LighthouseTab />}
                 {tab === "filters" && <FiltersTab goTo={goTo} />}
                 {tab === "utilities" && <UtilitiesTab walletAddress={session.user.walletAddress} />}
+                {tab === "portfolio" && <PortfolioTab goTo={goTo} />}
                 {tab === "settings" && <SettingsTab goTo={goTo} />}
                 {tab === "admin" && <AdminTab goTo={goTo} />}
               </Suspense>

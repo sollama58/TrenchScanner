@@ -1,5 +1,5 @@
 import { lazy, Suspense, useState } from "react";
-import { ApiError, api, del, downloadFile, patch, post, put } from "../api";
+import { ApiError, api, del, downloadFile, patch, post } from "../api";
 import { ShieldIcon } from "../components/Icons";
 import { usePolling } from "../hooks";
 import { Kpi, Load, Panel, Table, Tag, Wallet, dollars, ms, n, when } from "./adminShared";
@@ -13,6 +13,8 @@ import { CreditsAdmin } from "./AdminCredits";
 import { FreeAccessAdmin } from "./AdminFreeAccess";
 import { ProModeAdmin } from "./AdminProMode";
 import { RunNow } from "./AdminRunNow";
+import { AdminActionLog, TableBackups } from "./AdminSecurity";
+import { adminCall } from "../tradeConfirm";
 import { FeedSimAdmin } from "./AdminFeedSim";
 import { FiltersAdmin, Lookups, SafetyScreen, TokenSageAdmin, Training } from "./AdminInsights";
 import { ago, multiple, pct, shortAddress, signedPct, stakes, until, usd } from "../format";
@@ -315,8 +317,10 @@ function Backups() {
     )
       return;
     void run(async () => {
-      const r = await post<{ models: number; lanesRestored: number; seats: string[] }>(
+      // Asks the wallet to approve the restore (a paired phone isn't asked).
+      const r = await adminCall<{ models: number; lanesRestored: number; seats: string[] }>(
         `/admin/model-backups/${b.id}/restore`,
+        "POST",
         { confirm: true, ...(seats.length > 0 ? { seats } : {}) },
       );
       running.reload();
@@ -542,6 +546,7 @@ function Backups() {
           )}
         </Load>
       </Panel>
+      <TableBackups />
     </div>
   );
 }
@@ -1173,7 +1178,7 @@ function Access() {
         )}
       </Load>
       <Levers onDone={reloadAll} />
-      <FreeAccessAdmin />
+      <FreeAccessAdmin onChanged={reloadAll} />
       <ProModeAdmin />
       <Panel title="Subscriptions">
         <Load q={subs}>
@@ -1217,6 +1222,7 @@ function Access() {
           )}
         </Load>
       </Panel>
+      <AdminActionLog />
       <Panel title="Burn ledger" note="Newest 100 burns.">
         <Load q={burns}>
           {(rows) => (
@@ -1298,8 +1304,8 @@ function Levers({ onDone }: { onDone: () => void }) {
   const [result, setResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const act = async (what: "grant" | "whitelist") => {
-    // A pasted wrong address would get free access: name the wallet and what it gets first.
-    const who = shortAddress(wallet.trim());
+    // A pasted wrong address would get free access: name the whole wallet and what it gets first.
+    const who = wallet.trim();
     const question =
       what === "grant"
         ? `Grant ${who} ${dayCount} days of access?`
@@ -1505,7 +1511,8 @@ function AiSwitch({ report, onChange }: { report: AiReport; onChange: () => void
     }
     setBusy(true);
     try {
-      await put("/admin/ai/switch", { state });
+      // Going live asks the wallet to approve it (a paired phone isn't asked).
+      await adminCall("/admin/ai/switch", "PUT", { state });
       onChange();
     } catch (e) {
       window.alert(errorText(e));

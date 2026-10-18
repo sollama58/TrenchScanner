@@ -9,6 +9,7 @@ import {
   type HeartbeatJob,
 } from "@trenchscanner/core";
 import { summarizeHeartbeat } from "./health.js";
+import { RETRAIN_REQUEST_LOCK } from "./adminRetrain.js";
 
 /**
  * Admin > Worker's "Run now": starts a scheduled worker job early. The API can't reach into the
@@ -42,24 +43,32 @@ export async function registerAdminJobRunRoutes(app: FastifyInstance) {
       if (entry.heavy && request.body?.confirm !== true) {
         return reply.code(400).send({ error: `${entry.job} is a heavy job: confirm the run` });
       }
-      const state = (await jobStates([entry.job]))[0]!;
-      if (!state.lastRunAt) {
-        // No heartbeat row: the job has never run, so no worker schedules it (kol-wallets without
-        // a Solana Tracker key) and a request would wait for good.
-        return { queued: false, reason: "this job has never run - no worker schedules it", job: state };
-      }
-      if (state.pending) return { queued: false, reason: "already queued", job: state };
-      // A run lost with its process (orphaned) is not going: refusing it locked "Run now" out
-      // until the job's next slot, up to a day for a daily job.
-      if (state.runningForMs !== null && !state.orphaned)
-        return { queued: false, reason: "a run is already going", job: state };
-
       const requestedBy = request.user?.walletAddress ?? null;
-      if (entry.job === "curator-training") {
-        await prisma.curatorRetrainRequest.create({ data: { requestedBy } });
-      } else {
-        await prisma.jobRunRequest.create({ data: { job: entry.job, requestedBy } });
-      }
+      // The checks and the insert under one lock (the retrain button's for curator-training), so
+      // two presses at once can't both queue a run.
+      const lockKey =
+        entry.job === "curator-training" ? RETRAIN_REQUEST_LOCK : `job-run-request:${entry.job}`;
+      const refused = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+        const state = (await jobStates([entry.job]))[0]!;
+        if (!state.lastRunAt) {
+          // No heartbeat row: the job has never run, so no worker schedules it (kol-wallets without
+          // a Solana Tracker key) and a request would wait for good.
+          return { queued: false, reason: "this job has never run - no worker schedules it", job: state };
+        }
+        if (state.pending) return { queued: false, reason: "already queued", job: state };
+        // A run lost with its process (orphaned) is not going: refusing it locked "Run now" out
+        // until the job's next slot, up to a day for a daily job.
+        if (state.runningForMs !== null && !state.orphaned)
+          return { queued: false, reason: "a run is already going", job: state };
+        if (entry.job === "curator-training") {
+          await tx.curatorRetrainRequest.create({ data: { requestedBy } });
+        } else {
+          await tx.jobRunRequest.create({ data: { job: entry.job, requestedBy } });
+        }
+        return null;
+      });
+      if (refused) return refused;
       request.log.info({ by: requestedBy, job: entry.job }, "queued a run-now of a worker job");
       return { queued: true, job: (await jobStates([entry.job]))[0]! };
     },
