@@ -241,8 +241,8 @@ describe.skipIf(!dbAvailable)("curator model lifecycle", () => {
     const hot = await prisma.token.create({ data: { mintAddress: `${TAG}-lane-name` } });
     expect(await collectAndEmit(loadEnv(), hot, scoredWithTotal(hot.mintAddress, 90))).toBe(true);
     const alert = await prisma.curatedAlert.findFirstOrThrow({ where: { tokenId: hot.id } });
-    // A lane stored before goals were named shows with its seat's goal in front (goalNamed).
-    expect(alert).toMatchObject({ model: "linear", modelName: "Return Lean Linear #7" });
+    // A stored lane name shows under the simpler names (goalNamed): no Return prefix, Formula for Linear.
+    expect(alert).toMatchObject({ model: "linear", modelName: "Lean Formula #7" });
   });
 
   it("writes the consensus after its members, pointing at their new rows", async () => {

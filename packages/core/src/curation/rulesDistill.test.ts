@@ -192,7 +192,7 @@ describe("the Rules seat in a training run", () => {
   it("learns from the named teacher, adopts the table when it tests better, and keeps it on a tie", async () => {
     const first = await rulesOf({ rulesFromBest: true, rulesTeachers: ["linear"] });
     const params = first.params as RulesCuratorParams;
-    expect(params.derived?.teacher).toEqual({ contestant: "linear", name: "Return Linear" });
+    expect(params.derived?.teacher).toEqual({ contestant: "linear", name: "Formula" });
     expect(params.rankCutoff).not.toBeNull();
     expect(first.metrics.rulesInUse).toMatchObject({ source: "learned", changed: true });
     expect(first.metrics.rulesInUse!.lines.length).toBe(params.derived!.conditions.length);

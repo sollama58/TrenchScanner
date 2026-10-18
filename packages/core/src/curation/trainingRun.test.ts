@@ -116,10 +116,10 @@ describe("runEvolvingContest's challengers", () => {
     };
     const twin = {
       recipe: { learner: "logistic" as const, goal: "return" as const },
-      name: "Return Linear",
+      name: "Formula",
       description: "test",
       generation: 1,
-      parentName: "Return Linear",
+      parentName: "Formula",
     };
     const run = (takeover: boolean, probation = false) =>
       runEvolvingContest(rows, cfg, {

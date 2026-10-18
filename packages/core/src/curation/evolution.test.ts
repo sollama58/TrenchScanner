@@ -13,6 +13,7 @@ import {
   traitName,
   withLanes,
   goalNamed,
+  shownLaneName,
   type Lane,
   type LaneFitness,
 } from "./evolution.js";
@@ -72,17 +73,17 @@ describe("mutateRecipe", () => {
 
 describe("names", () => {
   it("names a recipe by family, depth, signals and memory", () => {
-    expect(traitName({ learner: "logistic" }, BASE_HL)).toBe("Linear");
+    expect(traitName({ learner: "logistic" }, BASE_HL)).toBe("Formula");
     expect(traitName({ learner: "gbdt", recencyHalfLifeDays: 3 }, BASE_HL)).toBe("Trees Recent");
     expect(traitName({ learner: "gbdt", boosting: { maxDepth: 5 } }, BASE_HL)).toBe("Deep Trees");
     const orderFlow = CONTESTANTS.find((c) => c.id === "order-flow")!.recipe!;
-    expect(traitName(orderFlow, BASE_HL)).toBe("Return Order Flow");
+    expect(traitName(orderFlow, BASE_HL)).toBe("Order Flow");
     expect(
       traitName({ learner: "gbdt", boosting: { objective: "runSize" }, goal: "moonshot" }, BASE_HL),
     ).toBe("Moonshot Trees");
     expect(
       traitName({ learner: "logistic", featureNames: ["mcapUsd"], recencyHalfLifeDays: 40 }, BASE_HL),
-    ).toBe("Lean Linear Patient");
+    ).toBe("Lean Formula Patient");
     expect(describeRecipe({ learner: "logistic" }, BASE_HL, "Linear")).toContain("Bred from Linear.");
   });
 });
@@ -223,11 +224,11 @@ describe("withLanes", () => {
       summary:
         "Learns if-then rules from every signal, mostly remembering the last few days. A variant bred from Trees.",
     });
-    expect(out.find((s) => s.id === "trees")?.name).toBe("Return Trees");
+    expect(out.find((s) => s.id === "trees")?.name).toBe("Trees");
     expect(out.map((s) => s.id)).toEqual(specs.map((s) => s.id));
   });
 
-  it("puts the goal in front of a lane name stored before goals, once", () => {
+  it("shows stored names under the simpler names: no Return prefix, other goals in front once", () => {
     const specs = enabledContestants(CONTESTANT_IDS);
     const old: Lane = {
       slot: "trees",
@@ -246,10 +247,17 @@ describe("withLanes", () => {
       recipe: { learner: "gbdt", goal: "moonshot" },
     };
     const out = withLanes(specs, [old, fresh, moon]);
-    expect(out.find((s) => s.id === "trees")?.name).toBe("Return Deep Trees #3");
-    expect(out.find((s) => s.id === "deep-trees")?.name).toBe("Return Deep Trees #5");
+    expect(out.find((s) => s.id === "trees")?.name).toBe("Deep Trees #3");
+    expect(out.find((s) => s.id === "deep-trees")?.name).toBe("Deep Trees #5");
     expect(out.find((s) => s.id === "runner")?.name).toBe("Moonshot Trees #2");
     expect(goalNamed({ name: "Trees #1", recipe: { learner: "gbdt" } })).toBe("Trees #1");
+    expect(
+      goalNamed({ name: "Return Lean Linear #7", recipe: { learner: "logistic", goal: "return" } }),
+    ).toBe("Lean Formula #7");
+    expect(goalNamed({ name: "Safe Trees #2", recipe: { learner: "gbdt", goal: "safe" } })).toBe(
+      "Safe Trees #2",
+    );
+    expect(shownLaneName("Return Trees × Return Forest")).toBe("Trees × Forest");
   });
 });
 

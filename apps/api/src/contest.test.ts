@@ -257,12 +257,12 @@ describe.skipIf(!dbAvailable)("curator contest API state", () => {
     });
 
     const state = await contestState(env);
-    // Stored before goals were named: shown with its seat's goal in front (goalNamed).
-    expect(state.roster.find((c) => c.id === "trees")?.name).toBe("Return Deep Trees #3");
+    // Return is the default goal, so it adds nothing to the shown name (goalNamed).
+    expect(state.roster.find((c) => c.id === "trees")?.name).toBe("Deep Trees #3");
     const board = await buildLeaderboard(env, 30);
     const trees = board.entries.find((e) => e.id === "trees")!;
     expect(trees).toMatchObject({
-      name: "Return Deep Trees #3",
+      name: "Deep Trees #3",
       lane: { generation: 3, parentName: "Trees" },
     });
     expect(trees.composite.live).toMatchObject({ calls: 1, graded: 1, winRatePct: 0 });
