@@ -36,30 +36,30 @@ const PRO_HOLDER_READ = PRO_HOLDER_COUNT * 4;
 /** A dropped-out wallet holding under this part of the 250th wallet's share moved its bag. */
 const BAG_MOVED_SHARE = 0.5;
 
+type ProHolderRead =
+  { status: "found"; holders: { owner: string; pct?: number }[] } | { status: string; reason?: string };
+
 /** One read of the mint's largest wallets, largest first. Null when the read didn't finish. */
 export interface ProHolderReader {
-  getTopHoldersBatch(
-    mints: string[],
-    n: number,
-  ): Promise<
-    Map<
-      string,
-      { status: "found"; holders: { owner: string; pct?: number }[] } | { status: string; reason?: string }
-    >
-  >;
+  getTopHoldersBatch(mints: string[], n: number): Promise<Map<string, ProHolderRead>>;
 }
 
 /** Reads the top holders and records them. Throws when the read fails, so the heartbeat says so. */
 export async function refreshProHolders(
-  reader: ProHolderReader,
+  /** Asked in order until one reads the list: the main RPC first, then any backups. */
+  readers: ProHolderReader | readonly ProHolderReader[],
   now = new Date(),
 ): Promise<{ holders: number }> {
   // Pools and other program-owned accounts are left out after the read.
-  const read = (await reader.getTopHoldersBatch([SUBSCRIPTION_MINT], PRO_HOLDER_READ)).get(SUBSCRIPTION_MINT);
+  const reasons: string[] = [];
+  let read: ProHolderRead | undefined;
+  for (const reader of Array.isArray(readers) ? readers : [readers]) {
+    read = (await reader.getTopHoldersBatch([SUBSCRIPTION_MINT], PRO_HOLDER_READ)).get(SUBSCRIPTION_MINT);
+    if (read?.status === "found" && "holders" in read) break;
+    reasons.push((read && "reason" in read && read.reason) || "no answer");
+  }
   if (!read || read.status !== "found" || !("holders" in read))
-    throw new Error(
-      `couldn't read the $ASDFASDFA holders${read && "reason" in read && read.reason ? ` (${read.reason})` : ""}`,
-    );
+    throw new Error(`couldn't read the $ASDFASDFA holders (${reasons.join("; ")})`);
   const ranked = read.holders.filter((h) => isWalletAddress(h.owner));
   const top = ranked.slice(0, PRO_HOLDER_COUNT).map((h) => h.owner);
   if (top.length === 0) throw new Error("the $ASDFASDFA holder read came back empty");

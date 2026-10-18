@@ -114,6 +114,8 @@ const CHAMPION_REFRESH_MINUTES = 60;
  * it waits for its next run - one indexed count per job.
  */
 const MANUAL_RUN_CHECK_MS = 30_000;
+/** Solana's own public RPC: the Pro holder scan's backup read of the $ASDFASDFA token accounts. */
+const SOLANA_PUBLIC_RPC = "https://api.mainnet-beta.solana.com";
 
 /** The check that starts `job` early on an admin's "Run now" (see adminJobRuns.ts in the API). */
 function onRunNow(job: HeartbeatJob) {
@@ -557,13 +559,16 @@ async function main() {
   // the mint's token accounts every PRO_HOLDER_SCAN_MINUTES (one or two credits a scan), so a new
   // top-250 wallet gets Pro Mode within that of its qualifying hour. Off with the trade system,
   // and while it is admins-only.
+  const proHolderBackup = new HeliusClient({ rpcUrl: SOLANA_PUBLIC_RPC });
   if (env.PRO_TRADING_ENABLED && env.PRO_TRADING_PUBLIC)
     schedule("pro-holders", () =>
       scheduleInterval(
         "pro-holders",
         // One scan at a time across workers: two side by side during a deploy could each see the
         // other's scan as the previous one and restart every holder's qualifying hour.
-        () => withJobLock("pro-holders", () => refreshProHolders(deps.helius)),
+        // Solana's public RPC backs Helius up: it lists the mint's token accounts when Helius
+        // won't (the scan read nothing from Helius for this classic SPL mint, 2026-10-18).
+        () => withJobLock("pro-holders", () => refreshProHolders([deps.helius, proHolderBackup])),
         PRO_HOLDER_SCAN_MINUTES,
         {
           deadlineMinutes: PRO_HOLDER_SCAN_MINUTES,

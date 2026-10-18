@@ -880,7 +880,7 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     const partial = new HeliusClient({ rpcUrl: failing.url, isHelius: true });
     expect((await partial.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
       status: "failed",
-      reason: "token accounts unreadable",
+      reason: "token accounts unreadable (getProgramAccountsV2: busy)",
     });
   });
 
@@ -927,7 +927,7 @@ describe("HeliusClient.getTopHoldersBatch", () => {
     });
     expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")).toEqual({
       status: "failed",
-      reason: "token accounts unreadable",
+      reason: "token accounts unreadable (getProgramAccounts: busy)",
     });
   });
 
@@ -969,6 +969,30 @@ describe("HeliusClient.getTopHoldersBatch", () => {
       holders: [{ owner: WALLET, pct: 15, accounts: [`acct-${WALLET}`] }],
     });
     expect(seen).toEqual(["getMultipleAccounts", "getProgramAccounts"]);
+  });
+
+  it("asks for a classic SPL Token mint's accounts with the 165-byte size filter, and a Token-2022 mint's without", async () => {
+    const filters: unknown[] = [];
+    let program = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+    const { url } = await startServer((calls) =>
+      calls.map((c) => {
+        if (c.method === "getMultipleAccounts") {
+          const res = mintAccount(c);
+          res.result.value[0]!.owner = program;
+          return res;
+        }
+        filters.push((c.params[1] as { filters: unknown[] }).filters);
+        return { jsonrpc: "2.0", id: c.id, result: [row(WALLET, 150n)] };
+      }),
+    );
+    const client = new HeliusClient({ rpcUrl: url });
+    expect((await client.getTopHoldersBatch(["mintA"], 25)).get("mintA")?.status).toBe("found");
+    program = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+    await client.getTopHoldersBatch(["mintA"], 25);
+    expect(filters).toEqual([
+      [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: "mintA" } }],
+      [{ memcmp: { offset: 0, bytes: "mintA" } }],
+    ]);
   });
 
   it("leaves Stonks' fee wallet out of any coin's top holders, whatever its fee authority", async () => {
