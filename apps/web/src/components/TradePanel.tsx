@@ -14,6 +14,7 @@ import {
   runTrade,
   saveTradeSettings,
   TradeError,
+  tradeCooldownLeft,
   type FeeEstimate,
   type SwapCostEstimate,
   type PositionResponse,
@@ -23,6 +24,7 @@ import {
   MIN_TRADE_SOL,
 } from "../proTrade";
 import { WalletTimeoutError } from "../wallet";
+import { decimalUnits, parseAmounts, parseDecimal } from "../decimal";
 import { renderPositionCard } from "../pnlCard";
 import { BoltIcon, CheckIcon, ChevronDownIcon, GearIcon, InfoIcon, ShareIcon, ShieldIcon } from "./Icons";
 import { ShareImageDialog } from "./ShareImageDialog";
@@ -46,10 +48,7 @@ const LAMPORTS = 1_000_000_000;
  * panel can say so without a round trip: 0.01 SOL at least, one trade every 5 seconds per wallet,
  * and a sale of 100% (closing the position) exempt from both.
  */
-const TRADE_COOLDOWN_MS = 5_000;
 const TRADE_LIMITS_TEXT = "Trades start at 0.01 SOL, one every 5 seconds. Selling 100% is always allowed.";
-/** When each wallet last sent a trade from this page, across every open token. */
-const lastSentAt = new Map<string, number>();
 
 export function solText(sol: number, signed = false): string {
   const abs = Math.abs(sol);
@@ -70,12 +69,10 @@ export function tokensText(n: number): string {
   return abs >= 1 ? n.toFixed(2) : abs >= 0.0001 ? n.toFixed(4) : n.toPrecision(2);
 }
 
-/** A typed SOL amount as lamports, or null when it isn't one. */
+/** A typed SOL amount as lamports ("0.5" or "0,5"), or null when it isn't one. */
 export function parseSol(text: string): bigint | null {
-  const m = /^\s*(\d{0,6})(?:\.(\d{0,9}))?\s*$/.exec(text);
-  if (!m || (!m[1] && !m[2])) return null;
-  const lamports = BigInt(m[1] || "0") * BigInt(LAMPORTS) + BigInt((m[2] ?? "").padEnd(9, "0") || "0");
-  return lamports > 0n ? lamports : null;
+  const lamports = decimalUnits(text, 9, 6);
+  return lamports !== null && lamports > 0n ? lamports : null;
 }
 
 /** `pct` percent of a raw balance; all of it at 100. */
@@ -504,7 +501,7 @@ export function TradePanel({
         return refuse(
           "That sale is worth under 0.01 SOL, the smallest trade. Sell 100% to close the position.",
         );
-      const left = (lastSentAt.get(owner) ?? -Infinity) + TRADE_COOLDOWN_MS - Date.now();
+      const left = tradeCooldownLeft(owner);
       if (left > 0) return refuse(`One trade every 5 seconds: try again in ${Math.ceil(left / 1_000)}s.`);
     }
     // A big buy is one click from a preset or a typo: ask first.
@@ -512,7 +509,6 @@ export function TradePanel({
     setStatus({ kind: "busy", stage: "building", what });
     try {
       const signature = await runTrade({ owner, mint, side, amount, all, settings }, (stage, built) => {
-        if (stage === "confirming") lastSentAt.set(owner, Date.now());
         setStatus({
           kind: "busy",
           stage,
@@ -793,18 +789,16 @@ export function TradePanel({
             <span>Slippage</span>
             <span className="tm-set-input">
               <input
-                type="number"
-                min={0.1}
-                max={50}
-                step={0.5}
                 inputMode="decimal"
+                autoComplete="off"
                 defaultValue={settings.slippagePct}
                 // On blur, like the fields below: checked on every keystroke, "0.5" could never be
-                // typed (its "0" was refused) and the field couldn't be cleared.
+                // typed (its "0" was refused) and the field couldn't be cleared. Text, not a number
+                // field, so "0,5" works too (decimal.ts).
                 onBlur={(e) => {
-                  const v = Number(e.target.value);
-                  if (e.target.value.trim() !== "" && v >= 0.1 && v <= 50) update({ slippagePct: v });
-                  else e.target.value = String(settings.slippagePct);
+                  const v = parseDecimal(e.target.value);
+                  if (v !== null && v >= 0.1 && v <= 50) update({ slippagePct: v });
+                  e.target.value = String(v !== null && v >= 0.1 && v <= 50 ? v : settings.slippagePct);
                 }}
               />
               <i>%</i>
@@ -837,16 +831,14 @@ export function TradePanel({
               <span>Your priority fee</span>
               <span className="tm-set-input">
                 <input
-                  type="number"
-                  min={0}
-                  max={MAX_CUSTOM_FEE_SOL}
-                  step={0.00001}
                   inputMode="decimal"
+                  autoComplete="off"
                   defaultValue={settings.customPrioritySol}
                   onBlur={(e) => {
-                    const v = Number(e.target.value);
-                    if (Number.isFinite(v) && v >= 0 && v <= MAX_CUSTOM_FEE_SOL)
-                      update({ customPrioritySol: v });
+                    const v = parseDecimal(e.target.value);
+                    const ok = v !== null && v >= 0 && v <= MAX_CUSTOM_FEE_SOL;
+                    if (ok) update({ customPrioritySol: v });
+                    e.target.value = String(ok ? v : settings.customPrioritySol);
                   }}
                 />
                 <i>SOL</i>
@@ -860,17 +852,20 @@ export function TradePanel({
             <span>Sender tip</span>
             <span className="tm-set-input">
               <input
-                type="number"
-                min={MIN_TIP_SOL[settings.speed]}
-                max={MAX_CUSTOM_FEE_SOL}
-                step={0.000001}
                 inputMode="decimal"
+                autoComplete="off"
                 placeholder={`${MIN_TIP_SOL[settings.speed]}`}
                 defaultValue={settings.customTipSol ?? ""}
                 onBlur={(e) => {
                   if (e.target.value.trim() === "") return update({ customTipSol: null });
-                  const v = Number(e.target.value);
-                  if (Number.isFinite(v) && v > 0 && v <= MAX_CUSTOM_FEE_SOL) update({ customTipSol: v });
+                  const v = parseDecimal(e.target.value);
+                  const ok = v !== null && v > 0 && v <= MAX_CUSTOM_FEE_SOL;
+                  if (ok) update({ customTipSol: v });
+                  e.target.value = ok
+                    ? String(v)
+                    : settings.customTipSol === null
+                      ? ""
+                      : String(settings.customTipSol);
                 }}
               />
               <i>SOL</i>
@@ -882,12 +877,14 @@ export function TradePanel({
               <input
                 defaultValue={settings.buyPresets.join(", ")}
                 onBlur={(e) => {
-                  const list = e.target.value
-                    .split(/[\s,]+/)
-                    .map(Number)
-                    .filter((n) => n >= MIN_TRADE_SOL && n <= 100)
-                    .slice(0, BUY_PRESETS_PER_ROW * settings.buyRows);
+                  const list = parseAmounts(
+                    e.target.value,
+                    100,
+                    BUY_PRESETS_PER_ROW * settings.buyRows,
+                    MIN_TRADE_SOL,
+                  );
                   if (list.length > 0) update({ buyPresets: list });
+                  e.target.value = (list.length > 0 ? list : settings.buyPresets).join(", ");
                 }}
               />
               <i>SOL</i>

@@ -24,8 +24,26 @@ describe("parseSol", () => {
     expect(parseSol(".000000001")).toBe(1n);
     expect(parseSol("2.")).toBe(2_000_000_000n);
   });
+  it("takes a comma as the decimal separator too", () => {
+    expect(parseSol("1,5")).toBe(1_500_000_000n);
+    expect(parseSol("0,05")).toBe(50_000_000n);
+    expect(parseSol(",5")).toBe(500_000_000n);
+  });
   it("refuses what isn't a positive amount", () => {
-    for (const bad of ["", ".", "0", "0.0", "-1", "1e3", "1,5", "0.0000000001", "abc"])
+    for (const bad of [
+      "",
+      ".",
+      ",",
+      "0",
+      "0,0",
+      "-1",
+      "1e3",
+      "1,000.5",
+      "1.000,5",
+      "0.0000000001",
+      "abc",
+      "1234567",
+    ])
       expect(parseSol(bad)).toBeNull();
   });
 });

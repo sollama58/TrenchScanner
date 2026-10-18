@@ -798,6 +798,19 @@ export function tradeProblem(tx: Uint8Array, owner: string, trade: TradeCheck): 
   }
 }
 
+/** The API's one trade per 5 seconds per wallet (sales of 100% exempt), checked here first. */
+export const TRADE_COOLDOWN_MS = 5_000;
+/**
+ * When each wallet last sent a trade from this page: the Trade panels, quick buy and the access
+ * buy alike, so a quick buy straight after a panel trade says "wait" instead of a round trip.
+ */
+const lastSentAt = new Map<string, number>();
+
+/** Milliseconds until `owner` may trade again here; 0 when it may now. */
+export function tradeCooldownLeft(owner: string, now = Date.now()): number {
+  return Math.max(0, (lastSentAt.get(owner) ?? -Infinity) + TRADE_COOLDOWN_MS - now);
+}
+
 const STATUS_POLL_MS = 1_200;
 const CONFIRM_GIVE_UP_MS = 90_000;
 
@@ -873,6 +886,7 @@ export async function runTrade(
       signature,
     );
   }
+  lastSentAt.set(input.owner, Date.now());
   onStage("confirming", built);
   const started = Date.now();
   for (;;) {

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { privyConfig } from "../privyBridge";
 import { MIN_TRADE_SOL, readTradeSettings, runTrade, type TradeStage } from "../proTrade";
 import { TwoFactorCancelled } from "../twoFactor";
+import { decimalUnits } from "../decimal";
 
 /**
  * The paywall's in-app $ASDFASDFA buy (user decision 2026-10-18): SOL in the signed-in wallet
@@ -12,6 +13,8 @@ import { TwoFactorCancelled } from "../twoFactor";
 
 /** The API's ACCESS_BUY_MAX_LAMPORTS, in SOL. */
 const MAX_SOL = 5;
+const MIN_LAMPORTS = BigInt(Math.round(MIN_TRADE_SOL * 1e9));
+const MAX_LAMPORTS = BigInt(MAX_SOL * 1e9);
 
 const STAGE_TEXT: Record<TradeStage, string> = {
   building: "Getting a price…",
@@ -45,8 +48,9 @@ export function AccessBuy({
   }, []);
   if (!open) return null;
 
-  const amount = Number(sol);
-  const valid = Number.isFinite(amount) && amount >= MIN_TRADE_SOL && amount <= MAX_SOL;
+  // "0.5" or "0,5" (decimal.ts), to the lamport.
+  const lamports = decimalUnits(sol, 9, 6);
+  const valid = lamports !== null && lamports >= MIN_LAMPORTS && lamports <= MAX_LAMPORTS;
 
   const buy = async () => {
     // A ref, not the stage: the stage is first set only after the wallet's connect prompt, so a
@@ -61,7 +65,7 @@ export function AccessBuy({
           owner: walletAddress,
           mint,
           side: "buy",
-          amount: BigInt(Math.round(amount * 1e9)),
+          amount: lamports!,
           settings: readTradeSettings(),
         },
         (s) => setStage(s),
@@ -88,11 +92,8 @@ export function AccessBuy({
         </label>
         <input
           id="access-buy-sol"
-          type="number"
           inputMode="decimal"
-          min={MIN_TRADE_SOL}
-          max={MAX_SOL}
-          step={0.01}
+          autoComplete="off"
           value={sol}
           disabled={stage !== null}
           onChange={(e) => setSol(e.target.value)}
