@@ -3,7 +3,7 @@ import { ACCESS_ENDED_EVENT, ApiError, post, type Subscription, type User } from
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
 import { GUEST_DELAY_MINUTES, isGuest, setAdmin, setGuest, setSessionToken } from "./session";
 import { usePolling } from "./hooks";
-import { ago, shortAddress } from "./format";
+import { ago } from "./format";
 import { LiveTab } from "./tabs/LiveTab";
 import { GuestLiveTab } from "./tabs/GuestLiveTab";
 import {
@@ -15,7 +15,6 @@ import {
   ToolsIcon,
   LogoMark,
   LockIcon,
-  LogoutIcon,
   PhoneIcon,
   PulseIcon,
   ShieldIcon,
@@ -52,6 +51,7 @@ import { BugButton } from "./components/BugButton";
 import { AdminReportsBadge } from "./components/AdminReportsBadge";
 import { TwoFactorPromptHost } from "./components/TwoFactorPrompt";
 import { setMe } from "./me";
+import { WalletMenu } from "./components/WalletMenu";
 import { clearPasses } from "./twoFactor";
 import { loadedPrivyControls, privyConfig, usePrivyWanted, wantPrivy } from "./privyBridge";
 
@@ -234,6 +234,18 @@ export function App() {
     window.location.hash = t === "live" ? "" : t;
     setTab(t);
     window.scrollTo({ top: 0 });
+  };
+
+  /** Settings, scrolled to one of its panels once the (lazy) tab has drawn it. */
+  const openSettingsAt = (sectionId: string) => {
+    goTo("settings");
+    const until = Date.now() + 5_000;
+    const find = () => {
+      const el = document.getElementById(sectionId);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+      else if (Date.now() < until) requestAnimationFrame(find);
+    };
+    requestAnimationFrame(find);
   };
 
   const signOut = async () => {
@@ -431,14 +443,7 @@ export function App() {
                 Connect wallet
               </button>
             )}
-            {signedIn && (
-              <button className="wallet-pill" onClick={signOut} title="Sign out">
-                <span className="wallet-dot" />
-                {session.user.isAdmin && <span className="admin-tag">admin</span>}
-                <span className="num">{shortAddress(session.user.walletAddress)}</span>
-                <LogoutIcon size={14} />
-              </button>
-            )}
+            {signedIn && <WalletMenu user={session.user} onSettings={openSettingsAt} onSignOut={signOut} />}
           </div>
         </div>
       </header>
