@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { User } from "../api";
 import { shortAddress } from "../format";
-import { ChartIcon, ChevronDownIcon, LogoutIcon, ShieldIcon, WalletIcon } from "./Icons";
+import { useInstallApp } from "../installApp";
+import { SETTINGS_INSTALL_ID } from "./InstallApp";
+import { ChartIcon, ChevronDownIcon, DownloadIcon, LogoutIcon, ShieldIcon, WalletIcon } from "./Icons";
 
 /** Where the menu's first item lands in Settings: the ids SettingsTab puts on those panels. */
 export const SETTINGS_WALLET_ID = "settings-wallet";
@@ -12,6 +14,8 @@ export const SETTINGS_ACCOUNT_ID = "settings-account";
  * Its first item opens Settings at the Privy wallet card for a Privy account, or at Account and
  * access for a wallet sign-in; the last signs out (Privy) or disconnects (a wallet). Pro Mode
  * wallets also get Portfolio at the top, which left the tab bar for this menu (user ask 2026-10-18).
+ * On a phone or tablet without the app installed, "Install the app" sits above sign out: it opens
+ * the browser's install dialog, or Settings at the steps where there is none (iPhone, iPad).
  */
 export function WalletMenu({
   user,
@@ -34,6 +38,7 @@ export function WalletMenu({
   const pill = useRef<HTMLButtonElement>(null);
   const menuId = useId();
   const privy = user.signInMethod === "privy";
+  const app = useInstallApp();
 
   useEffect(() => {
     if (!open) return;
@@ -114,6 +119,23 @@ export function WalletMenu({
               <small>{privy ? "Address, funding and key export" : "Access level and time left"}</small>
             </span>
           </button>
+          {app.show && (
+            <button
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                void (async () => {
+                  if (!app.canPrompt || !(await app.install())) onSettings(SETTINGS_INSTALL_ID);
+                })();
+              }}
+            >
+              <DownloadIcon size={15} />
+              <span>
+                <strong>Install the app</strong>
+                <small>Add TrenchScanner to your home screen</small>
+              </span>
+            </button>
+          )}
           <button
             role="menuitem"
             className="danger"
