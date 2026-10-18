@@ -43,10 +43,12 @@ import {
   stitchVolume,
   withCallPoint,
   pointWidthMs,
+  zoomWindow,
   type CloseRun,
   type MarkerKind,
   type ScanFlow,
   type VolumeCandle,
+  type Zoom,
 } from "../priceChart";
 import {
   cardReadings,
@@ -68,7 +70,7 @@ import {
 import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
 import { CustomizeDrawer } from "./CustomizeDrawer";
 import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
-import { PriceChart, type ChartEvent, type ChartTrade } from "./PriceChart";
+import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import {
   graceLeftText,
@@ -523,8 +525,10 @@ function chartHeight(expanded = false): number {
 function chartBoxHeight(): number {
   return chartHeight() + CHART_CHROME_PX;
 }
-/** What PriceChart draws around its plot: the time axis and the volume lane. */
-const CHART_CHROME_PX = 40;
+/** The Line / Candles and zoom row under the chart. */
+const CHART_TOOLS_PX = 34;
+/** What PriceChart draws around its plot: the time axis, the volume lane and the row under it. */
+const CHART_CHROME_PX = 40 + CHART_TOOLS_PX;
 
 /** The Holders section's place while its reading is taken: the bubble map's frame, and the list's. */
 function HoldersPlaceholder({ children }: { children: ReactNode }) {
@@ -1367,6 +1371,12 @@ export function ChartCard({
   const api = useTokenApi(card.token.mintAddress);
   // Every token view opens on the coin's whole history; Model View is a click away.
   const [range, setRange] = useState<Range>("all");
+  // Zoomed into the view (user ask 2026-10-18); a new range starts from the whole of it.
+  const [zoom, setZoom] = useState<Zoom | null>(null);
+  const pickRange = (r: Range) => {
+    setRange(r);
+    setZoom(null);
+  };
 
   // Pro Mode: the signed-in wallet's position in the coin and the Trade panel. Null for everyone
   // else, so nothing of it is fetched or drawn without Pro Mode.
@@ -1429,6 +1439,9 @@ export function ChartCard({
   // trades, which the header's link opens over the token view.
   const look = useAppearance();
   const markPrefs = useMemo(() => markPrefsOf(look), [look]);
+  // Line or candles: Customize › Token chart sets the default, the switch under the chart this view.
+  const [kindPicked, setKind] = useState<ChartKind | null>(null);
+  const kind = kindPicked ?? look.chartStyle;
   const [customizing, setCustomizing] = useState(false);
   const closeCustomize = useCallback(() => setCustomizing(false), []);
   const labeled = data?.wallets ?? [];
@@ -1446,18 +1459,24 @@ export function ChartCard({
   // Finer candles where they add detail: 1-second ones for a view of minutes, 15-second ones for
   // hours - and for a short view the 1-second page doesn't reach back across (Pump.fun sends the
   // most recent 1,000 with a trade, minutes of a busy coin).
-  const span = bounds ? bounds.to - bounds.from : Infinity;
+  // Zoomed in, the window decides: zooming into minutes reads them finer.
+  const shownBounds = bounds && zoom ? zoomWindow(zoom, bounds.from, bounds.to) : bounds;
+  const span = shownBounds ? shownBounds.to - shownBounds.from : Infinity;
   const fineOk = shownRange !== "first" && !!data?.candles?.length;
   // Only for a view of the last minutes: the 1-second page never reaches back further, and each
   // read spends the shared Pump.fun budget.
   const wantSecond =
-    fineOk && !!bounds && span <= SECOND_VIEW_MAX_MS && bounds.from >= Date.now() - SECOND_VIEW_MAX_MS;
+    fineOk &&
+    !!shownBounds &&
+    span <= SECOND_VIEW_MAX_MS &&
+    shownBounds.from >= Date.now() - SECOND_VIEW_MAX_MS;
   const second = useFineCandles(
     api,
     wantSecond ? "1s" : null,
     bounds?.live ? FINE_LIVE_POLL_MS : FINE_POLL_MS,
   );
-  const secondReaches = !!second?.candles?.length && !!bounds && second.candles[0]!.t <= bounds.from + 60_000;
+  const secondReaches =
+    !!second?.candles?.length && !!shownBounds && second.candles[0]!.t <= shownBounds.from + 60_000;
   const quarter = useFineCandles(
     api,
     fineOk && span <= QUARTER_VIEW_MAX_MS && (!wantSecond || (second !== null && !secondReaches))
@@ -1505,12 +1524,21 @@ export function ChartCard({
     const candledTo = candled.length > 0 ? candled[candled.length - 1]!.t : -Infinity;
     const usesTail = bounds.live && tail.ticks.some((p) => p.t >= from && p.t > candledTo);
     const finest = usesTail ? 1_000 : Math.min(...used.map((r) => r.stepMs || 30_000), 60_000);
-    const step = pointWidthMs(Math.max(1_000, Math.min(to, last) - from), maxPoints(), finest);
-    const line = linePoints(source, from, step, to);
+    const fullStep = pointWidthMs(Math.max(1_000, Math.min(to, last) - from), maxPoints(), finest);
+    const full = linePoints(source, from, fullStep, to);
+    if (full.length < 2) return null;
+    const extent = { t0: full[0]!.t, t1: full[full.length - 1]!.t };
+    // Zoomed in, the window is thinned on its own, a step past each edge, so it keeps its detail.
+    const win = zoom ? zoomWindow(zoom, extent.t0, extent.t1) : null;
+    const step = win ? pointWidthMs(Math.max(1_000, win.to - win.from), maxPoints(), finest) : fullStep;
+    const line = win
+      ? linePoints(source, Math.max(from, win.from - step), step, Math.min(to, win.to + step))
+      : full;
     return {
       // A call is priced from a fresh quote (its anchor), so its price goes on the line at its
       // time: the "Called" marker then sits on the price the call and its grade start from.
       points: callPriced ? withCallPoint(line, { t: alertAt, v: alertMcap }) : line,
+      extent,
       fromCandles,
       step,
       // Whether the view runs to the latest reading (Model View's window can end before it).
@@ -1524,7 +1552,19 @@ export function ChartCard({
       // The candles in view for the volume lane, each stretch from one width only.
       candles: stitchVolume(runs).filter((k) => k.t + (k.w ?? 60_000) >= from && k.t <= to),
     };
-  }, [data, bounds, quarter, second, tail.ticks, tail.source, shownRange, alertAt, alertMcap, callPriced]);
+  }, [
+    data,
+    bounds,
+    quarter,
+    second,
+    tail.ticks,
+    tail.source,
+    shownRange,
+    alertAt,
+    alertMcap,
+    callPriced,
+    zoom,
+  ]);
 
   // The scans' buy and sell counts, for the buy share in the chart's readouts.
   const flow = useMemo<ScanFlow[]>(
@@ -1596,7 +1636,7 @@ export function ChartCard({
                 className={`tm-range${shownRange === r.id ? " on" : ""}`}
                 aria-pressed={shownRange === r.id}
                 title={r.title}
-                onClick={() => setRange(r.id)}
+                onClick={() => pickRange(r.id)}
               >
                 {utility && r.id === "alert" ? "From scan" : r.label}
               </button>
@@ -1623,6 +1663,8 @@ export function ChartCard({
             events={events}
             marks={marks}
             height={height}
+            kind={kind}
+            onKind={setKind}
           />
         )}
         {shownRange !== "first" && !data && !error && (
@@ -1657,6 +1699,11 @@ export function ChartCard({
               height={height}
               trades={chartTrades}
               entry={entry}
+              extent={view.extent}
+              zoom={zoom}
+              onZoom={setZoom}
+              kind={kind}
+              onKind={setKind}
               ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
             />
             {shownRange === "model" && (
@@ -1772,12 +1819,16 @@ function FirstMinutesChart({
   events,
   marks,
   height,
+  kind,
+  onKind,
 }: {
   mint: string;
   label: string;
   events: ChartEvent[];
   marks: WalletMark[];
   height: number;
+  kind: ChartKind;
+  onKind: (kind: ChartKind) => void;
 }) {
   const api = useTokenApi(mint);
   const [live, setLive] = useState(true);
@@ -1841,6 +1892,8 @@ function FirstMinutesChart({
         origin={view.start}
         marks={marks}
         height={height}
+        kind={kind}
+        onKind={onKind}
         ariaLabel={`${label} market cap in its first 15 minutes, from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
       />
       <p className="faint small tm-chart-src">

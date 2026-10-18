@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   candleCloses,
+  clipPoints,
+  ohlcBars,
+  panBy,
+  pointCandles,
+  zoomBy,
+  zoomWindow,
   flowAt,
   linearTicks,
   linePoints,
@@ -284,5 +290,98 @@ describe("valueAt", () => {
     expect(valueAt(line, -1)).toBeNull();
     expect(valueAt(line, 21)).toBeNull();
     expect(valueAt([], 0)).toBeNull();
+  });
+});
+
+describe("zoom", () => {
+  const t0 = 0;
+  const t1 = 100 * M;
+
+  it("shows the whole view without a zoom", () => {
+    expect(zoomWindow(null, t0, t1)).toEqual({ from: t0, to: t1 });
+  });
+
+  it("zooms in about the pointer, keeping the moment under it in place", () => {
+    const z = zoomBy({ from: t0, to: t1 }, t0, t1, 0.5, 0.25)!;
+    expect(z.to - z.from).toBe(50 * M);
+    // 25 minutes in sat a quarter of the way across, and still does.
+    expect((25 * M - z.from) / (z.to - z.from)).toBeCloseTo(0.25);
+    expect(z.end).toBe(false);
+  });
+
+  it("holds a window zoomed onto the end to the end, so a live view follows new readings", () => {
+    const z = zoomBy({ from: t0, to: t1 }, t0, t1, 0.1, 1)!;
+    expect(z).toEqual({ from: 90 * M, to: t1, end: true });
+    expect(zoomWindow(z, t0, t1 + 5 * M)).toEqual({ from: 95 * M, to: t1 + 5 * M });
+  });
+
+  it("never zooms narrower than the floor, and zoomed back out it is gone", () => {
+    const z = zoomBy({ from: t0, to: t1 }, t0, t1, 0.000001, 0.5, 30_000)!;
+    expect(z.to - z.from).toBe(30_000);
+    expect(zoomBy({ from: 40 * M, to: 60 * M }, t0, t1, 10)).toBeNull();
+  });
+
+  it("pans inside the view", () => {
+    expect(panBy({ from: 10 * M, to: 20 * M }, t0, t1, 5 * M)).toEqual({
+      from: 15 * M,
+      to: 25 * M,
+      end: false,
+    });
+    expect(panBy({ from: 10 * M, to: 20 * M }, t0, t1, -50 * M)).toEqual({ from: 0, to: 10 * M, end: false });
+    expect(panBy({ from: 10 * M, to: 20 * M }, t0, t1, 500 * M)).toEqual({ from: 90 * M, to: t1, end: true });
+  });
+
+  it("clips the line to the window with its value at each edge", () => {
+    const pts = [
+      { t: 0, v: 10 },
+      { t: 10, v: 20 },
+      { t: 20, v: 40 },
+    ];
+    expect(clipPoints(pts, 5, 15)).toEqual([
+      { t: 5, v: 15 },
+      { t: 10, v: 20 },
+      { t: 15, v: 30 },
+    ]);
+    expect(clipPoints(pts, 0, 20)).toEqual(pts);
+  });
+});
+
+describe("candles", () => {
+  it("merges candles into slices with their highs and lows", () => {
+    const bars = ohlcBars(
+      [
+        { t: 0, o: 10, h: 14, l: 9, c: 12, vol: 1 },
+        { t: M, o: 12, h: 20, l: 11, c: 18, vol: 1 },
+        { t: 2 * M, o: 18, h: 19, l: 7, c: 8, vol: 1 },
+      ],
+      0,
+      4 * M,
+      2,
+    );
+    expect(bars).toEqual([
+      { from: 0, to: 2 * M, o: 10, h: 20, l: 9, c: 18 },
+      { from: 2 * M, to: 3 * M, o: 18, h: 19, l: 7, c: 8 },
+    ]);
+  });
+
+  it("bounds a candle without a high and low by its open and close", () => {
+    expect(ohlcBars([{ t: 0, o: 10, c: 12, vol: 0 }], 0, M, 1)).toEqual([
+      { from: 0, to: M, o: 10, h: 12, l: 10, c: 12 },
+    ]);
+  });
+
+  it("makes candles from readings, each step from one to the next", () => {
+    expect(
+      pointCandles(
+        [
+          { t: 10, v: 5 },
+          { t: 20, v: 3 },
+        ],
+        { t: 0, v: 4 },
+      ),
+    ).toEqual([
+      { t: 0, w: 10, o: 4, h: 5, l: 4, c: 5, vol: 0 },
+      { t: 10, w: 10, o: 5, h: 5, l: 3, c: 3, vol: 0 },
+    ]);
   });
 });

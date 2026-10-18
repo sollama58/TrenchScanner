@@ -400,6 +400,18 @@ export function AppearanceControls() {
             </button>
           )}
         </div>
+        <div className="field-group">
+          <h4>Token chart</h4>
+          <Choice
+            label="Chart type"
+            value={look.chartStyle}
+            options={[
+              ["line", "Line"],
+              ["candles", "Candles"],
+            ]}
+            onChange={(chartStyle) => setAppearance({ chartStyle })}
+          />
+        </div>
         <WalletMarksPicker />
         <div className="field-group">
           <h4>Quick links</h4>

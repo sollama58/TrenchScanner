@@ -266,6 +266,9 @@ export interface VolumeCandle {
   t: number;
   o: number;
   c: number;
+  /** Its high and low, for the candle view; absent, the open and close bound it. */
+  h?: number;
+  l?: number;
   vol: number;
   /** Its width in ms; a minute when absent (Pump.fun's minute candles). */
   w?: number;
@@ -352,4 +355,135 @@ export function flowAt(flow: readonly ScanFlow[], from: number, to: number): Sca
     if (!best || Math.abs(f.t - to) < Math.abs(best.t - to)) best = f;
   }
   return best;
+}
+
+/** One candle of the candle view: the slice it spans and its open, high, low and close. */
+export interface OhlcBar {
+  from: number;
+  to: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+}
+
+/**
+ * Exported for tests. The candles merged into `n` even slices of [t0, t1], as volumeBars slices
+ * them (so a candle sits over its volume bar): each candle by the middle of its width, the slice's
+ * open its first candle's open, its close its last one's close, and its high and low theirs. A
+ * slice with no candles is null; overlapping candles of different widths count once.
+ */
+export function ohlcBars(
+  candles: readonly VolumeCandle[],
+  t0: number,
+  t1: number,
+  n: number,
+): (OhlcBar | null)[] {
+  const span = Math.max(1, t1 - t0);
+  const out: (OhlcBar | null)[] = Array.from({ length: n }, () => null);
+  let covered = -Infinity;
+  for (const k of [...candles].sort((a, b) => a.t - b.t)) {
+    const w = k.w ?? MINUTE;
+    const mid = k.t + w / 2;
+    if (mid < t0 || mid > t1 || k.t < covered) continue;
+    covered = k.t + w;
+    const h = Math.max(k.h ?? -Infinity, k.o, k.c);
+    const l = Math.min(k.l ?? Infinity, k.o, k.c);
+    const i = Math.min(n - 1, Math.max(0, Math.floor(((mid - t0) / span) * n)));
+    const b = out[i];
+    if (!b) out[i] = { from: k.t, to: k.t + w, o: k.o, h, l, c: k.c };
+    else {
+      b.to = k.t + w;
+      b.c = k.c;
+      b.h = Math.max(b.h, h);
+      b.l = Math.min(b.l, l);
+    }
+  }
+  return out;
+}
+
+/**
+ * Exported for tests. Line readings as candles, for where there are no real ones (scan readings,
+ * the live curve's ticks after the newest candle): one per step from a reading to the next, the
+ * first from `start` (the reading before them) when given.
+ */
+export function pointCandles(points: readonly Point[], start?: Point): VolumeCandle[] {
+  const out: VolumeCandle[] = [];
+  let prev = start;
+  for (const p of points) {
+    if (prev && p.t > prev.t) {
+      const o = prev.v;
+      out.push({ t: prev.t, w: p.t - prev.t, o, h: Math.max(o, p.v), l: Math.min(o, p.v), c: p.v, vol: 0 });
+    }
+    prev = p;
+  }
+  return out;
+}
+
+/**
+ * A zoomed chart's window: where it starts and ends, and whether it is held to the view's end, so
+ * a live view zoomed on its latest minutes follows the new readings.
+ */
+export interface Zoom {
+  from: number;
+  to: number;
+  end: boolean;
+}
+
+/** The narrowest window the chart zooms to. */
+export const MIN_ZOOM_MS = 30 * SECOND;
+
+/** Exported for tests. The window a zoom shows inside the view [t0, t1]: the whole view without one. */
+export function zoomWindow(zoom: Zoom | null, t0: number, t1: number): { from: number; to: number } {
+  if (!zoom || t1 <= t0) return { from: t0, to: t1 };
+  const span = Math.min(Math.max(1, zoom.to - zoom.from), t1 - t0);
+  const to = zoom.end ? t1 : Math.min(t1, Math.max(t0 + span, zoom.to));
+  return { from: Math.max(t0, to - span), to };
+}
+
+/** A window clamped into the view; null once it covers all of it (zoomed back out). */
+function clampZoom(from: number, span: number, t0: number, t1: number): Zoom | null {
+  const full = t1 - t0;
+  if (span >= full - 1) return null;
+  const start = Math.min(Math.max(t0, from), t1 - span);
+  return { from: start, to: start + span, end: start + span >= t1 - 1 };
+}
+
+/**
+ * Exported for tests. The window scaled by `factor` (under 1 zooms in) about the moment `at` of
+ * the way across it (0 the left edge, 1 the right), which stays where it is on screen; never
+ * narrower than `minMs` and never past the view [t0, t1]. Null when it would cover the whole view.
+ */
+export function zoomBy(
+  win: { from: number; to: number },
+  t0: number,
+  t1: number,
+  factor: number,
+  at = 0.5,
+  minMs = MIN_ZOOM_MS,
+): Zoom | null {
+  const span = win.to - win.from;
+  const next = Math.min(t1 - t0, Math.max(Math.min(minMs, t1 - t0), span * factor));
+  const anchor = win.from + at * span;
+  return clampZoom(anchor - at * next, next, t0, t1);
+}
+
+/** Exported for tests. The window moved by `dt` ms (later when positive), kept inside the view. */
+export function panBy(win: { from: number; to: number }, t0: number, t1: number, dt: number): Zoom | null {
+  return clampZoom(win.from + dt, win.to - win.from, t0, t1);
+}
+
+/**
+ * Exported for tests. The line inside [t0, t1]: its points there, with its value at each edge
+ * added (as the line draws it), so a zoomed window's line runs edge to edge.
+ */
+export function clipPoints(points: readonly Point[], t0: number, t1: number): Point[] {
+  const inside = points.filter((p) => p.t > t0 && p.t < t1);
+  const a = valueAt(points, t0);
+  const b = valueAt(points, t1);
+  return [
+    ...(a !== null ? [{ t: t0, v: a }] : []),
+    ...inside,
+    ...(b !== null && t1 > t0 ? [{ t: t1, v: b }] : []),
+  ];
 }
