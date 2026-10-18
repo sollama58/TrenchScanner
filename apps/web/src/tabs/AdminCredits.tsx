@@ -16,6 +16,8 @@ interface CreditsAdminView {
     spent: number;
     dailyFreeUsed: number;
     outstanding: number;
+    /** The burned pot across all wallets, in $ASDFASDFA base units. */
+    burnedRaw: string;
   };
   recent: {
     wallet: string;
@@ -27,6 +29,7 @@ interface CreditsAdminView {
     subject: string | null;
     note: string | null;
     source: "burned" | "granted" | "daily";
+    asdfRaw: string | null;
     createdAt: string;
   }[];
 }
@@ -165,7 +168,7 @@ function Prices({ prices, onDone }: { prices: CreditsAdminView["prices"]; onDone
   return (
     <Panel
       title="Prices"
-      note="The ratio applies to burns credited after a change; credits already earned stay as they are."
+      note="Burned credits are held as the ASDF they were bought with, so a new ratio changes how many burned credits every wallet sees, never the ASDF it holds. Granted credits stay as they are."
     >
       <div className="admin-form">
         <label className="field">

@@ -130,7 +130,16 @@ const STAGE_TEXT: Record<Stage, string> = {
   sending: "Sending…",
 };
 
-export const plural = (n: number, one: string) => `${n.toLocaleString("en-US")} ${one}${n === 1 ? "" : "s"}`;
+/**
+ * A credit count: whole credits as they are, a balance with burned credits in it to two decimals
+ * (the burned pot is held in ASDF, so it can hold part of a credit).
+ */
+export const creditCount = (n: number) =>
+  n.toLocaleString(
+    "en-US",
+    Number.isInteger(n) ? {} : { minimumFractionDigits: 2, maximumFractionDigits: 2 },
+  );
+export const plural = (n: number, one: string) => `${creditCount(n)} ${one}${n === 1 ? "" : "s"}`;
 
 /** A lookup's price, with the free daily credits left when the reader has them. */
 export function costLabel(cost: number, daily: UtilitiesOverview["daily"] | undefined): string {
@@ -343,7 +352,7 @@ function CreditsPanel({
         <div className="util-balance" aria-live="polite">
           {data ? (
             <>
-              <span className="num">{data.balance.toLocaleString("en-US")}</span>
+              <span className="num">{creditCount(data.balance)}</span>
               <small className="muted">credit{data.balance === 1 ? "" : "s"}</small>
             </>
           ) : (
