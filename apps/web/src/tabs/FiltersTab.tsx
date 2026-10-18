@@ -704,7 +704,10 @@ function FilterEditor({
         Share on the filter leaderboard (shows the name and settings, never your wallet)
       </label>
       {!isNew && draft.shareOnLeaderboard && (
-        <p className="muted small">Changing any setting starts this filter's leaderboard record over.</p>
+        <p className="muted small">
+          Changing any setting starts a new version with a fresh leaderboard record. The current version keeps
+          its record as its own entry on the board once it has enough graded alerts.
+        </p>
       )}
 
       {saveError && <p className="error small">Couldn&apos;t save: {saveError}</p>}

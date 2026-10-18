@@ -467,8 +467,33 @@ model UserFilter {
   matches         Match[]
   archivedMatches MatchArchive[]
   baselines       FilterBaseline[]
+  /// Its earlier criteria, one row per change (the current criteria are version count + 1).
+  versions        FilterVersion[]
 
   @@index([userId])
+}
+
+/// An earlier version of a filter: the criteria it had until they changed, written by the edit
+/// that changed them (apps/api/src/routes/filters.ts PATCH). Its alerts are the filter's Matches
+/// raised in [startedAt, endedAt), so a shared filter's earlier versions keep their own records
+/// and rank as entries of their own on the filter leaderboard once they earned it (user decision
+/// 2026-10-18, apps/api/src/filterLeaderboard.ts).
+model FilterVersion {
+  id        String     @id @default(cuid())
+  filterId  String
+  filter    UserFilter @relation(fields: [filterId], references: [id], onDelete: Cascade)
+  /// 1 for the filter's first settings, counting up with each change.
+  version   Int
+  /// The criteria columns as they were (what "Copy" hands out for this version).
+  criteria  Json
+  /// When these criteria took effect (the filter's criteriaChangedAt at the time).
+  startedAt DateTime
+  /// When they were replaced.
+  endedAt   DateTime
+  /// The best leaderboard rank this version ever held (null: never ranked), like UserFilter.bestRank.
+  bestRank  Int?
+
+  @@unique([filterId, version])
 }
 
 /// Tokens that already matched a filter when it was armed (see UserFilter.armedAt). Counts as the
