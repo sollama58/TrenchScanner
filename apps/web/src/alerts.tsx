@@ -279,10 +279,19 @@ export function wantedBy(c: Card, notifyOn: AlertPrefs["notifyOn"]): boolean {
 }
 
 /**
- * Claims `keys` for this browser tab, so two open tabs don't both ping for the same alert.
- * Returns the keys no other tab has claimed.
+ * Claims `keys` for this browser tab, so two open tabs don't both ping for the same alert, and
+ * calls `then` with the ones no other tab had claimed. Under a cross-tab lock where the browser
+ * has one: the same alert nudges every open tab at once, and without it two tabs could both read
+ * the list before either wrote it, and both ping (chaosMode.ts does the same for its tabs).
  */
-function claim(keys: string[]): string[] {
+function claimThen(keys: string[], then: (mine: string[]) => void): void {
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+  if (locks) void locks.request("ts-notified", () => then(claim(keys)));
+  else then(claim(keys));
+}
+
+/** claimThen without the lock: the keys no other tab has claimed, now claimed for this one. */
+export function claim(keys: string[]): string[] {
   try {
     const stored: string[] = JSON.parse(localStorage.getItem(NOTIFIED_KEY) ?? "[]");
     const taken = new Set(stored);
@@ -374,29 +383,14 @@ export function AlertNotifier() {
           openChaosTabs(shown, raisedAt, p, lookRef.current.quickLinks, now);
         }
         const news = raised.filter((c) => wantedBy(c, p.notifyOn));
-        const mine = new Set(claim(news.map(cardKey)));
-        const toAnnounce = news.filter((c) => mine.has(cardKey(c)));
-        if (toAnnounce.length === 0) return;
-        if (p.soundEnabled) playAlertSound(p.sound, p.volume);
-        if (p.browserNotifications) {
-          if (toAnnounce.length > MAX_NOTIFICATIONS) {
-            void showNotification(
-              `${toAnnounce.length} new alerts`,
-              toAnnounce.map((c) => describe(c).title).join(" · "),
-              undefined,
-              "ts-batch",
-            );
-          } else {
-            for (const c of toAnnounce) {
-              const d = describe(c);
-              // The same gate as the card's avatar: https only, and the thumbnail, not the original.
-              const icon = c.token.imageUrl?.startsWith("https://")
-                ? tokenThumb(c.token.imageUrl, 128)
-                : undefined;
-              void showNotification(d.title, d.body, icon, cardKey(c));
-            }
-          }
-        }
+        if (news.length === 0) return;
+        claimThen(news.map(cardKey), (claimed) => {
+          const mine = new Set(claimed);
+          announce(
+            p,
+            news.filter((c) => mine.has(cardKey(c))),
+          );
+        });
       })
       .catch(() => undefined)
       .finally(() => {
@@ -432,4 +426,27 @@ export function AlertNotifier() {
   }, [active, listens, matchesLive, callsLive, check, lookAt]);
 
   return null;
+}
+
+/** Pings and notifies for `toAnnounce`, the new alerts this tab claimed. */
+function announce(p: AlertPrefs, toAnnounce: Card[]): void {
+  if (toAnnounce.length === 0) return;
+  if (p.soundEnabled) playAlertSound(p.sound, p.volume);
+  if (p.browserNotifications) {
+    if (toAnnounce.length > MAX_NOTIFICATIONS) {
+      void showNotification(
+        `${toAnnounce.length} new alerts`,
+        toAnnounce.map((c) => describe(c).title).join(" · "),
+        undefined,
+        "ts-batch",
+      );
+    } else {
+      for (const c of toAnnounce) {
+        const d = describe(c);
+        // The same gate as the card's avatar: https only, and the thumbnail, not the original.
+        const icon = c.token.imageUrl?.startsWith("https://") ? tokenThumb(c.token.imageUrl, 128) : undefined;
+        void showNotification(d.title, d.body, icon, cardKey(c));
+      }
+    }
+  }
 }

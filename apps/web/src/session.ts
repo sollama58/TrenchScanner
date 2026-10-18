@@ -38,6 +38,11 @@ export function setSessionToken(value: string | null): void {
   }
 }
 
+/** Reads the token again, after another tab signed in or out (authSync.ts) and may have changed it. */
+export function reloadSessionToken(): void {
+  token = read();
+}
+
 /** Headers that carry the fallback token, when this browser needs it. */
 export function authHeaders(headers: Headers): Headers {
   if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
