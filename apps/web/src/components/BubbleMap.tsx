@@ -101,7 +101,7 @@ import {
   type PossibleSides,
 } from "../possibleSides";
 import { ShareButton } from "./ShareImageDialog";
-import { BubblesIcon } from "./Icons";
+import { BubblesIcon, ChevronDownIcon } from "./Icons";
 
 /** How many cluster colours there are (styles.css --bm-0..4); more clusters reuse them. */
 export const CLUSTER_COLOURS = MAP_COLOURS;
@@ -715,6 +715,9 @@ function GroupPanel({
   onSelect: (key: string, cluster?: number) => void;
 }) {
   const detail = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  // Each kind folds to its heading and only one opens at a time (user ask 2026-10-18).
+  const [openSection, setOpenSection] = useState<string | null>(null);
   const all: { title: string; groups: PanelGroup[] }[] = [
     {
       title: "Clusters",
@@ -843,6 +846,7 @@ function GroupPanel({
     .filter((sec) => sec.groups.length > 0);
   if (sections.length === 0) return null;
   const picked = sections.flatMap((sec) => sec.groups).find((g) => g.key === listed) ?? null;
+  const pickedIn = picked ? sections.find((sec) => sec.groups.includes(picked))!.title : null;
   const pick = (g: PanelGroup) => {
     onSelect(g.key, g.cluster);
     // Stacked on a phone, the wallets sit under the list: bring them into view.
@@ -852,45 +856,83 @@ function GroupPanel({
   return (
     <div className="bm-groups">
       <div className="bm-group-list">
-        {sections.map((sec) => (
-          <section key={sec.title} className="bm-group-section">
-            <h4>{sec.title}</h4>
-            <ul>
-              {sec.groups.map((g) => {
-                const on = listed === g.key || (g.cluster !== undefined && lit === g.cluster);
-                return (
-                  <li key={g.key}>
-                    <button
-                      type="button"
-                      className={`bm-cluster${on ? " on" : ""}`}
-                      style={g.style}
-                      aria-pressed={listed === g.key}
-                      onClick={() => pick(g)}
-                    >
-                      {g.dot}
-                      <span className="bm-cluster-name">{g.title}</span>
-                      <span className="muted small">{g.sub}</span>
-                      <span className="num bm-cluster-pct">{pct(g.pct, 1)}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        ))}
+        {sections.map((sec, si) => {
+          const open = openSection === sec.title;
+          const total = sectionTotal(sec.title, sec.groups);
+          return (
+            <section key={sec.title} className={`bm-group-section${open ? " open" : ""}`}>
+              <h4>
+                <button
+                  type="button"
+                  className={`bm-section-btn${pickedIn === sec.title && !open ? " has-pick" : ""}`}
+                  aria-expanded={open}
+                  aria-controls={`${listId}-${si}`}
+                  onClick={() => setOpenSection(open ? null : sec.title)}
+                >
+                  <span className="bm-section-title">{sec.title}</span>
+                  <span className="bm-section-count num">{sec.groups.length}</span>
+                  <span
+                    className="num bm-section-pct"
+                    title={
+                      sec.title === TRANSFERS
+                        ? "Supply moved holder to holder across these pairs"
+                        : "Combined share of supply held by these wallets, each wallet counted once"
+                    }
+                  >
+                    {pct(total, 1)}
+                  </span>
+                  <ChevronDownIcon size={15} className="bm-section-chev" />
+                </button>
+              </h4>
+              {open && (
+                <ul id={`${listId}-${si}`}>
+                  {sec.groups.map((g) => {
+                    const on = listed === g.key || (g.cluster !== undefined && lit === g.cluster);
+                    return (
+                      <li key={g.key}>
+                        <button
+                          type="button"
+                          className={`bm-cluster${on ? " on" : ""}`}
+                          style={g.style}
+                          aria-pressed={listed === g.key}
+                          onClick={() => pick(g)}
+                        >
+                          {g.dot}
+                          <span className="bm-cluster-name">{g.title}</span>
+                          <span className="muted small">{g.sub}</span>
+                          <span className="num bm-cluster-pct">{pct(g.pct, 1)}</span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+          );
+        })}
       </div>
       <div className="bm-group-detail" ref={detail} aria-live="polite">
         {picked ? (
           <GroupWallets group={picked} names={names} />
         ) : (
           <p className="muted small bm-group-hint">
-            Pick a cluster or KOL to list its wallets and their share of supply. Each wallet opens its own
-            view.
+            Open a list and pick a cluster or KOL to list its wallets and their share of supply. Each wallet
+            opens its own view.
           </p>
         )}
       </div>
     </div>
   );
+}
+
+/**
+ * A kind's total beside its folded heading: the supply its wallets hold, each wallet counted once
+ * (a KOL's bundle can share wallets with another's), or for transfers the supply moved.
+ */
+function sectionTotal(title: string, groups: readonly PanelGroup[]): number {
+  if (title === TRANSFERS) return groups.reduce((t, g) => t + g.pct, 0);
+  const held = new Map(groups.flatMap((g) => g.wallets.map((w) => [w.wallet, w.pct] as const)));
+  return [...held.values()].reduce((t, p) => t + p, 0);
 }
 
 /** A picked group's wallets, largest first, each opening its wallet modal; the funder last. */
@@ -1378,7 +1420,7 @@ function BubbleSvg({
 }
 
 /** How much moved in one transfer pair, in words fit for a tag: "<0.1%" for dust. */
-function xferPctText(v: number): string {
+export function xferPctText(v: number): string {
   return v > 0 && v < 0.1 ? "<0.1%" : pctText(v);
 }
 
@@ -1391,7 +1433,7 @@ function agoText(atMs: number, nowMs = Date.now()): string {
 }
 
 /** The small arrow between a transfer's sender and receiver in the list under the map. */
-function TransferArrow() {
+export function TransferArrow() {
   return (
     <svg className="bm-xfer-arrow" viewBox="0 0 16 10" width="16" height="10" aria-label="sent to">
       <path d="M1 5h11" />
