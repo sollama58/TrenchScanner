@@ -113,12 +113,18 @@ let cfg: RecorderConfig | null = null;
 let write: Writer = (rows) => prisma.pricePathRecord.createMany({ data: rows });
 let pending: Pending[] = [];
 let timer: ReturnType<typeof setInterval> | null = null;
-let flushing = false;
+/** The write in flight, if any. */
+let flushing: Promise<boolean> | null = null;
 let day = "";
 let today = 0;
 let stats = { recorded: 0, skipped: 0, capped: 0, written: 0, bytes: 0, failed: 0 };
 
-/** Starts the recorder (the flush timer); returns its stop, which writes what is left. */
+/**
+ * Starts the recorder (the flush timer); returns its stop, which writes what is left: it waits out
+ * a write in flight, then writes the queue FLUSH_MAX rows at a time until it is empty or a write
+ * fails. The worker's shutdown awaits it before disconnecting (a deploy used to drop the queue: the
+ * stop wrote one batch at most, unawaited, and none at all while the timer's write was in flight).
+ */
 export function startPricePathRecorder(config: RecorderConfig, writer?: Writer) {
   cfg = config;
   if (writer) write = writer;
@@ -127,7 +133,10 @@ export function startPricePathRecorder(config: RecorderConfig, writer?: Writer) 
   return async () => {
     if (timer) clearInterval(timer);
     timer = null;
-    await flushPricePaths();
+    if (flushing) await flushing;
+    while (pending.length > 0) {
+      if (!(await flushPricePaths())) break;
+    }
     cfg = null;
   };
 }
@@ -174,22 +183,31 @@ export function recordPricePath(
   stats.recorded += 1;
 }
 
-/** Writes up to FLUSH_MAX queued paths in one insert. A failure drops them (training data, not records). */
-export async function flushPricePaths(): Promise<void> {
-  if (flushing || pending.length === 0) return;
-  flushing = true;
+/**
+ * Writes up to FLUSH_MAX queued paths in one insert. A failure drops them (training data, not
+ * records). Answers whether the write went through; with one already in flight, that one's answer.
+ */
+export function flushPricePaths(): Promise<boolean> {
+  if (flushing) return flushing;
+  if (pending.length === 0) return Promise.resolve(true);
   const batch = pending.slice(0, FLUSH_MAX);
   pending = pending.slice(batch.length);
-  try {
-    await write(batch);
-    stats.written += batch.length;
-    stats.bytes += batch.reduce((s, r) => s + r.bytes, 0);
-  } catch (err) {
-    stats.failed += batch.length;
-    logger.warn("price path write failed", { rows: batch.length, error: String(err) });
-  } finally {
-    flushing = false;
-  }
+  const run = (async () => {
+    try {
+      await write(batch);
+      stats.written += batch.length;
+      stats.bytes += batch.reduce((s, r) => s + r.bytes, 0);
+      return true;
+    } catch (err) {
+      stats.failed += batch.length;
+      logger.warn("price path write failed", { rows: batch.length, error: String(err) });
+      return false;
+    } finally {
+      flushing = null;
+    }
+  })();
+  flushing = run;
+  return run;
 }
 
 /** Counts since the last call, for the scan's heartbeat; null while the recorder is off. */
@@ -206,7 +224,7 @@ export function resetPricePathRecorder(): void {
   timer = null;
   cfg = null;
   pending = [];
-  flushing = false;
+  flushing = null;
   day = "";
   today = 0;
   write = (rows) => prisma.pricePathRecord.createMany({ data: rows });

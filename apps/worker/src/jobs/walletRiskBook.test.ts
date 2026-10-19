@@ -3,7 +3,16 @@ import "../bootstrap-env.js";
 import { afterAll, describe, expect, it } from "vitest";
 import { prisma, walletRiskScore } from "@trenchscanner/core";
 import { withWalletSignals } from "./scanJob.js";
-import { ownTapesOf, setWalletRiskBook, walletRiskLookup, walletRiskScale } from "./walletRiskBook.js";
+import {
+  ownTapesOf,
+  refreshWalletRiskBook,
+  resetWalletRiskBook,
+  setWalletRiskBook,
+  takeWalletRiskBookReloads,
+  walletRiskBookLoaded,
+  walletRiskLookup,
+  walletRiskScale,
+} from "./walletRiskBook.js";
 
 describe("wallet risk readings on the scan", () => {
   const profile = {
@@ -127,5 +136,79 @@ describe.skipIf(!dbAvailable)("ownTapesOf", () => {
       [`${TAG}-sniper`, { dumpedIntoStop: false, fastExit: true, launchSniper: true }],
     ]);
     expect(await ownTapesOf([{ mintAddress: "fresh", wallets }], builtAt)).toEqual(new Map());
+  });
+});
+
+// Performance audit 2026-10-19 (F7): the table changes only with the hourly rebuild, so a due reload
+// keeps the copy while the rebuild's heartbeat row is unchanged.
+describe.skipIf(!dbAvailable)("refreshWalletRiskBook", () => {
+  const wallet = `${TAG}-book`;
+  const MIN = 60_000;
+  let saved: Awaited<ReturnType<typeof prisma.systemHeartbeat.findUnique>> = null;
+
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    await prisma.walletRisk.deleteMany({ where: { wallet } });
+    await prisma.systemHeartbeat.deleteMany({ where: { job: "wallet-risk" } });
+    if (saved) await prisma.systemHeartbeat.create({ data: { ...saved, meta: saved.meta ?? undefined } });
+    resetWalletRiskBook();
+  });
+
+  it("reads the table again only when the rebuild's heartbeat row changed, or an hour on", async () => {
+    saved = await prisma.systemHeartbeat.findUnique({ where: { job: "wallet-risk" } });
+    resetWalletRiskBook();
+    takeWalletRiskBookReloads();
+    await prisma.walletRisk.create({
+      data: {
+        wallet,
+        score: 70,
+        appearances: 3,
+        dumps: 2,
+        fastExits: 0,
+        snipes: 0,
+        solIn: 1,
+        solOut: 0,
+        lastSeenAt: new Date(),
+        computedAt: new Date(),
+      },
+    });
+    const at = new Date("2026-10-19T10:00:00Z");
+    await prisma.systemHeartbeat.upsert({
+      where: { job: "wallet-risk" },
+      create: { job: "wallet-risk", lastRunAt: at, lastSuccessAt: at, meta: { marketDumpRate: 0.2 } },
+      update: { lastRunAt: at, lastSuccessAt: at, meta: { marketDumpRate: 0.2 } },
+    });
+    const t0 = Date.now();
+
+    refreshWalletRiskBook(t0);
+    await walletRiskBookLoaded();
+    expect(walletRiskLookup()?.(wallet)?.score).toBe(70);
+    expect(takeWalletRiskBookReloads()).toEqual({ full: 1, skipped: 0 });
+
+    // Due again, nothing rebuilt: the copy stands, even with a row changed behind the heartbeat's back.
+    await prisma.walletRisk.update({ where: { wallet }, data: { score: 80 } });
+    refreshWalletRiskBook(Date.now() + 11 * MIN);
+    await walletRiskBookLoaded();
+    expect(takeWalletRiskBookReloads()).toEqual({ full: 0, skipped: 1 });
+    expect(walletRiskLookup()?.(wallet)?.score).toBe(70);
+
+    // A rebuild wrote its heartbeat: read in full.
+    const later = new Date("2026-10-19T11:00:00Z");
+    await prisma.systemHeartbeat.update({
+      where: { job: "wallet-risk" },
+      data: { lastRunAt: later, lastSuccessAt: later },
+    });
+    refreshWalletRiskBook(Date.now() + 22 * MIN);
+    await walletRiskBookLoaded();
+    expect(takeWalletRiskBookReloads()).toEqual({ full: 1, skipped: 0 });
+    expect(walletRiskLookup()?.(wallet)?.score).toBe(80);
+    expect(walletRiskScale()?.builtAt.toISOString()).toBe(later.toISOString());
+
+    // An hour without a full read: read in full however quiet the heartbeat.
+    await prisma.walletRisk.update({ where: { wallet }, data: { score: 90 } });
+    refreshWalletRiskBook(Date.now() + 61 * MIN);
+    await walletRiskBookLoaded();
+    expect(takeWalletRiskBookReloads()).toEqual({ full: 1, skipped: 0 });
+    expect(walletRiskLookup()?.(wallet)?.score).toBe(90);
   });
 });

@@ -26,7 +26,37 @@ interface Entry {
 
 let requests = 0;
 
+/**
+ * In least-recently-read order (each read moves its path to the end), so the oldest can go: every
+ * coin, wallet and page a long-open tab ever read stayed here for the page's life, a token window's
+ * scans, chart and maps included (each several hundred KB), and a tab left open for a day of
+ * opening coins grew by hundreds of MB.
+ */
 const entries = new Map<string, Entry>();
+
+/**
+ * The most paths kept. About twenty coins' windows' worth: whatever is on screen re-reads its own
+ * paths each poll and so stays near the end. Answers kept between visits (PERSIST) and requests
+ * still in flight are never dropped.
+ */
+export const MAX_ENTRIES = 200;
+
+/** `path`'s entry, moved to the newest end, then the oldest dropped past MAX_ENTRIES. */
+function touch(path: string, e: Entry): void {
+  entries.delete(path);
+  entries.set(path, e);
+  if (entries.size <= MAX_ENTRIES) return;
+  for (const [key, old] of entries) {
+    if (entries.size <= MAX_ENTRIES) break;
+    if (old === e || old.inflight || persisted(key)) continue;
+    entries.delete(key);
+  }
+}
+
+/** How many paths the cache holds now. Exported for tests. */
+export function cacheSize(): number {
+  return entries.size;
+}
 
 /** Answers worth keeping between visits: everything a tab paints on open. */
 const PERSIST = new Set([
@@ -111,7 +141,9 @@ function adoptBoot<T>(path: string): Promise<T> | null {
 /** The last good response for `path`, if any. */
 export function peek<T>(path: string): { data: T; at: number; restored: boolean } | null {
   const e = entries.get(path);
-  return e && e.data !== undefined ? { data: e.data as T, at: e.at, restored: e.restored === true } : null;
+  if (!e || e.data === undefined) return null;
+  touch(path, e);
+  return { data: e.data as T, at: e.at, restored: e.restored === true };
 }
 
 /**
@@ -131,7 +163,7 @@ const NUDGE_SHARE_MS = 250;
  */
 export function cachedGet<T>(path: string, maxAgeMs = 0): Promise<T> {
   const e = entries.get(path) ?? { at: 0 };
-  entries.set(path, e);
+  touch(path, e);
   if (e.inflight && (maxAgeMs >= 0 || Date.now() - (e.inflightAt ?? 0) < NUDGE_SHARE_MS))
     return e.inflight as Promise<T>;
   // An answer kept from an earlier visit is never fresh enough: it is only for painting early.

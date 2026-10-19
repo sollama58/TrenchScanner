@@ -628,6 +628,42 @@ export async function readStonkFees(
   return { ...out, stonks, pct: stonks && read ? read.pct : null };
 }
 
+/** GET /tokens/:mint/why asks one reader may make a minute: far more token views than anyone opens. */
+export const WHY_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
+
+/**
+ * GET /tokens/:mint's answer, shared by every reader of the coin for this long. Every open token
+ * view polls it (its safety flip, holder reading and fresh card, every 30-60 s) for 50 full
+ * snapshots, and it was read again for each reader and each poll (API audit 2026-10-19). The scan
+ * writes a coin's snapshot about once a minute, so a few seconds' sharing shows nobody anything older.
+ */
+const TOKEN_DETAIL_CACHE_MS = 10_000;
+const tokenDetails = new KeyedCache<Awaited<ReturnType<typeof readTokenDetail>>>(TOKEN_DETAIL_CACHE_MS, 500);
+
+/** Test seam: forget the shared token details. */
+export function clearTokenDetailCache(): void {
+  tokenDetails.clear();
+}
+
+/** The token row and its 50 newest snapshots, as GET /tokens/:mint answers; null for a mint not on Token. */
+export async function readTokenDetail(mintAddress: string) {
+  const row = await prisma.token.findUnique({ where: { mintAddress } });
+  if (!row) return null;
+  // Its own query rather than a nested `snapshots: { take: 50 }` include: Prisma doesn't
+  // reliably push a nested take down as SQL LIMIT, and TokenSnapshot is the largest table.
+  // A direct take on the (tokenId, takenAt) index is a bounded index walk.
+  // Everything but the AI text scores: model inputs, not display data (the cards omit them too).
+  const { aiTextScores: _scores, aiTextScoredAt: _scoredAt, ...token } = row;
+  const snapshots = await prisma.tokenSnapshot.findMany({
+    where: { tokenId: token.id },
+    orderBy: { takenAt: "desc" },
+    take: 50,
+  });
+  // Each snapshot's flagged trades stay out: the dashboard never reads them here (the chart has
+  // its own, GET /chart), and they were a large share of every answer, as on the feed's cards.
+  return { ...token, snapshots: snapshots.map(({ flaggedTrades: _trades, ...s }) => s) };
+}
+
 /**
  * Token detail is not user-specific (it's the same underlying market data for
  * everyone), but still requires auth since it's part of the product surface
@@ -676,21 +712,13 @@ export async function registerTokenRoutes(
     if (!MINT_RE.test(mintAddress)) return reply.code(400).send({ error: "not a valid mint" });
     // A coin the scanner doesn't track on its own needs the reader's paid lookup (lookupGate.ts).
     if (!(await allowLookupRead(request, reply, "token", mintAddress))) return reply;
-    const row = await prisma.token.findUnique({ where: { mintAddress } });
-    if (!row) {
+    const detail = await tokenDetails.get(mintAddress, () => readTokenDetail(mintAddress));
+    if (!detail) {
+      // Not kept: the coin may land on Token with its next scan.
+      tokenDetails.forget(mintAddress);
       return reply.code(404).send({ error: "token not found" });
     }
-    // Its own query rather than a nested `snapshots: { take: 50 }` include: Prisma doesn't
-    // reliably push a nested take down as SQL LIMIT, and TokenSnapshot is the largest table.
-    // A direct take on the (tokenId, takenAt) index is a bounded index walk.
-    // Everything but the AI text scores: model inputs, not display data (the cards omit them too).
-    const { aiTextScores: _scores, aiTextScoredAt: _scoredAt, ...token } = row;
-    const snapshots = await prisma.tokenSnapshot.findMany({
-      where: { tokenId: token.id },
-      orderBy: { takenAt: "desc" },
-      take: 50,
-    });
-    return { ...token, snapshots };
+    return detail;
   });
 
   /** The token modal's chart: Pump.fun's minute candles, with the scan's market caps behind them. */
@@ -858,27 +886,35 @@ export async function registerTokenRoutes(
    * Why the models did or didn't call the coin (tokenWhy.ts), at its decision moment at or before
    * `at` (ms; a call's time), else its newest one. Asked for when the reader opens it.
    */
-  app.get("/:mintAddress/why", async (request, reply): Promise<TokenWhy | undefined> => {
-    const { mintAddress } = request.params as { mintAddress: string };
-    const raw = (request.query as { at?: string } | undefined)?.at;
-    const at = raw === undefined ? null : Number(raw);
-    if (!MINT_RE.test(mintAddress) || (at !== null && !(Number.isFinite(at) && at > 0))) {
-      reply.code(400).send({ error: "needs a mint and, optionally, a time in ms" });
-      return;
-    }
-    if (!opts.env) {
-      reply.code(404).send({ error: "not available" });
-      return;
-    }
-    if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
-    const why = await readTokenWhy(opts.env, mintAddress, at);
-    if (!why) {
-      reply.code(404).send({ error: "token not found" });
-      return;
-    }
-    reply.header("Cache-Control", "private, max-age=60");
-    return why;
-  });
+  app.get(
+    "/:mintAddress/why",
+    // Each new (coin, minute of `at`) is a build of its own, loading model weights megabytes in
+    // size, and builds queue one at a time behind each other: unlimited, one reader stepping `at`
+    // a minute per ask held everyone's "How the models read it" behind theirs (API audit
+    // 2026-10-19). A token view asks once when it opens, then every five minutes.
+    { config: { rateLimit: WHY_RATE_LIMIT } },
+    async (request, reply): Promise<TokenWhy | undefined> => {
+      const { mintAddress } = request.params as { mintAddress: string };
+      const raw = (request.query as { at?: string } | undefined)?.at;
+      const at = raw === undefined ? null : Number(raw);
+      if (!MINT_RE.test(mintAddress) || (at !== null && !(Number.isFinite(at) && at > 0))) {
+        reply.code(400).send({ error: "needs a mint and, optionally, a time in ms" });
+        return;
+      }
+      if (!opts.env) {
+        reply.code(404).send({ error: "not available" });
+        return;
+      }
+      if (!(await allowLookupRead(request, reply, "token", mintAddress))) return;
+      const why = await readTokenWhy(opts.env, mintAddress, at);
+      if (!why) {
+        reply.code(404).send({ error: "token not found" });
+        return;
+      }
+      reply.header("Cache-Control", "private, max-age=60");
+      return why;
+    },
+  );
 
   /** The token modal's Dev, Socials and Order flow cards (tokenProfile.ts). */
   app.get("/:mintAddress/profile", async (request, reply): Promise<TokenProfile | undefined> => {

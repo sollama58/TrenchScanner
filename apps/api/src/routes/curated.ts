@@ -35,6 +35,7 @@ import {
 import { createMarketRows } from "../marketRows.js";
 import { buildLearningCurve, type LearningCurve } from "../learningCurve.js";
 import { postgresTimeZone, readerZoneSchema } from "../readerZone.js";
+import { CallerKeyBudget, FillGate, FillQueueFull } from "../fillGuard.js";
 import { buildModelLineup, seatWeights, type ModelLineup, type SeatWeights } from "../modelExplain.js";
 import {
   createLighthouseCache,
@@ -150,6 +151,13 @@ const insightsQuerySchema = z.object({ days: reportDaysSchema });
 export const learningQuerySchema = z.object({ days: reportDaysSchema, tz: readerZoneSchema });
 /** Zones whose learning curves are held at once; past it the least recently read goes. */
 const LEARNING_ZONES_MAX = 48;
+/** Zone fills run at once; each is several aggregates side by side on the API's small pool. */
+const LEARNING_ZONE_FILLS_AT_ONCE = 1;
+/** Zone fills waiting their turn; past it a reader gets the UTC copy rather than queueing. */
+const LEARNING_ZONE_FILLS_QUEUED = 16;
+/** Zones (per window) one caller may start fills for in LEARNING_ZONE_BUDGET_WINDOW_MS: a reader has one. */
+const LEARNING_ZONES_PER_CALLER = 4;
+const LEARNING_ZONE_BUDGET_WINDOW_MS = 10 * 60_000;
 
 /**
  * The leaderboard also serves 24h and 3-day windows: the Models vs baseline chart switches between
@@ -272,23 +280,44 @@ export function createReportCaches(env: Env) {
     LEARNING_ZONES_MAX,
     ON_DEMAND_STALE_MS,
   );
-  const learning = async (days: number, zone: string): Promise<LearningCurve & { computedAt: string }> => {
+  // A zone's fill is a handful of aggregates over the window's calls, and the zone is the caller's
+  // to choose, open to guests: cycling through zones made every request a fill of its own (API
+  // audit 2026-10-19). One fill at a time, and a caller may start fills for a few zones a window;
+  // past either, the UTC copy answers, as it does for a zone this server doesn't know.
+  const zoneFills = new FillGate(LEARNING_ZONE_FILLS_AT_ONCE, LEARNING_ZONE_FILLS_QUEUED);
+  const zoneCallers = new CallerKeyBudget(LEARNING_ZONES_PER_CALLER, LEARNING_ZONE_BUDGET_WINDOW_MS);
+  const learning = async (
+    days: number,
+    zone: string,
+    /** Who is asking (an IP or a user), for the per-caller zone budget; none for the server's own reads. */
+    caller?: string,
+  ): Promise<LearningCurve & { computedAt: string }> => {
     const tz = await postgresTimeZone(zone);
-    if (tz === "UTC") {
+    const utc = async () => {
       const { data, computedAt } = await insightsFor(days).getStamped(fillInsights(days));
       return withComputedAt({ data: data.learning, computedAt });
+    };
+    if (tz === "UTC") return utc();
+    const key = `${days}:${tz}`;
+    if (!zoneLearning.has(key) && caller !== undefined && !zoneCallers.allow(caller, key)) return utc();
+    try {
+      return withComputedAt(
+        await zoneLearning.for(key).getStamped(() =>
+          zoneFills.run(() => {
+            const until = new Date();
+            const since = new Date(until.getTime() - days * 86_400_000);
+            const targets = {
+              hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
+              hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
+            };
+            return buildLearningCurve(since, until, targets, days, market, tz);
+          }),
+        ),
+      );
+    } catch (err) {
+      if (err instanceof FillQueueFull) return utc();
+      throw err;
     }
-    return withComputedAt(
-      await zoneLearning.for(`${days}:${tz}`).getStamped(() => {
-        const until = new Date();
-        const since = new Date(until.getTime() - days * 86_400_000);
-        const targets = {
-          hitRate2xPct: env.CURATED_TARGET_WIN_RATE_PCT,
-          hitRate4xPct: env.CURATED_TARGET_GOAL_RATE_PCT,
-        };
-        return buildLearningCurve(since, until, targets, days, market, tz);
-      }),
-    );
   };
 
   const runHistoryCache = new Map<string, SharedCache<ModelRunHistory>>();
@@ -988,7 +1017,7 @@ export async function registerCuratedRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    return opts.reports.learning(parsed.data.days, parsed.data.tz);
+    return opts.reports.learning(parsed.data.days, parsed.data.tz, `user:${request.user!.userId}`);
   });
 
   /** The Market Lighthouse on the Models tab: TokenSage's reads in aggregate (marketLighthouse.ts). */

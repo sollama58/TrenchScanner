@@ -96,6 +96,42 @@ describe.skipIf(!dbAvailable)("linked wallets", () => {
     expect(linkedReadingOf(group, cached)).toMatchObject({ linkedWalletPct: 25 });
   });
 
+  it("stores the cycle's hot verdicts in one write, replacing a stale one", async () => {
+    // A verdict past its week: checked again, and the row takes the new answer.
+    await prisma.funderActivity.create({
+      data: {
+        address: w("STALE"),
+        hot: false,
+        fullPageSpanMs: null,
+        checkedAt: new Date(Date.now() - 8 * 86_400_000),
+      },
+    });
+    const group = {
+      mintAddress: w("m-hot"),
+      holders: [
+        { owner: w("h1"), pct: 10 },
+        { owner: w("h2"), pct: 6 },
+      ],
+    };
+    const helius = fakeHelius(
+      { [w("h1")]: found(w("STALE")), [w("h2")]: found(w("QUIET")) },
+      { [w("STALE")]: true },
+    );
+    await resolveLinkedWallets([group], helius, { maxNewLookups: 10 });
+    expect(helius.getFunderActivityBatch).toHaveBeenCalledWith(
+      expect.arrayContaining([w("STALE"), w("QUIET")]),
+    );
+    const stored = await prisma.funderActivity.findMany({
+      where: { address: { in: [w("STALE"), w("QUIET")] } },
+      orderBy: { address: "asc" },
+    });
+    expect(stored.map((r) => [r.address, r.hot, r.fullPageSpanMs])).toEqual([
+      [w("QUIET"), false, null],
+      [w("STALE"), true, 60_000],
+    ]);
+    expect(Date.now() - stored[1]!.checkedAt.getTime()).toBeLessThan(60_000);
+  });
+
   it("reads the exchange-funded share from the same holders", async () => {
     const group = {
       mintAddress: w("m3"),
