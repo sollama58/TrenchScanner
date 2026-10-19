@@ -596,7 +596,7 @@ export function CreditBurn({
       ) : !balance ? (
         <p className="muted small">Reading your {SYMBOL}…</p>
       ) : affordable < 1 ? (
-        <GetAsdfCard mint={overview.burn.mint} onBuy={(sol) => setBuying({ sol })}>
+        <GetAsdfCard mint={overview.burn.mint} onBuy={(sol) => setBuying({ sol })} picks>
           This wallet holds {formatTokens(total, decimals)} {SYMBOL}
           {total > largest && largest > 0n ? ` (${formatTokens(largest, decimals)} in one account)` : ""}. One
           credit needs {overview.prices.tokensPerCredit.toLocaleString("en-US")}.{" "}
@@ -670,6 +670,7 @@ export function CreditBurn({
           initialSol={buying.sol}
           onClose={() => setBuying(null)}
           onBought={() => setBalanceKey((k) => k + 1)}
+          picks
         />
       )}
     </div>

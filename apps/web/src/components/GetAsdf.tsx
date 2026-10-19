@@ -1,29 +1,33 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { type Subscription } from "../api";
-import { usePolling } from "../hooks";
+import { api } from "../api";
 import { privyConfig } from "../privyBridge";
-import { MIN_TRADE_SOL, useSwapCosts, type SwapCostEstimate } from "../proTrade";
+import { MIN_TRADE_SOL } from "../proTrade";
 import { FlameIcon } from "./Icons";
 
 /**
  * The site's "Get $ASDFASDFA" sections (user ask 2026-10-19): buy the access token right here
  * with SOL, no TrenchScanner fee for any account, Pro Mode or not, with quick picks sized in burn
- * credits at the current rate. A pick opens the Buy $ASDFASDFA popup (BuyAsdfDialog) with its SOL
+ * credits, each quoted by the API to land at least that many credits at the current price (in the
+ * credit reload areas only). A pick opens the Buy $ASDFASDFA popup (BuyAsdfDialog) with its SOL
  * filled in; the popup's own quote then shows exactly what the buy gets.
  */
 
-/** The quick picks, in burn credits. */
-export const CREDIT_BUCKETS = [10, 50, 100, 250, 500, 1000] as const;
-
-/** The reference buy the rate is read from, SOL. */
-const RATE_REF_SOL = 0.1;
+/** The API's credit picks (GET /pro/trade/credit-picks). */
+export interface CreditPicksResponse {
+  mint: string;
+  decimals: number;
+  tokensPerCredit: number;
+  picks: { credits: number; units: string; lamports: string | null }[];
+}
 
 export interface CreditBucket {
   credits: number;
   /** The $ASDFASDFA those credits burn, whole tokens. */
   tokens: number;
-  /** About what that costs in SOL at the current rate; null until the rate is read. */
+  /** The SOL that buys at least that much now (quoted per pick); null without a quote. */
   sol: number | null;
+  /** The quote was under the smallest trade, so the buy is the minimum and lands more credits. */
+  atMinimum: boolean;
 }
 
 /** SOL rounded up to the thousandth, never under the smallest trade the API takes. */
@@ -31,27 +35,24 @@ export function roundBuySol(sol: number): number {
   return Math.max(MIN_TRADE_SOL, Math.ceil(sol * 1000) / 1000);
 }
 
-/** Each pick's tokens and SOL, from the credit price and a quote for RATE_REF_SOL. */
-export function creditBuckets(
-  tokensPerCredit: number | null,
-  quote: Pick<SwapCostEstimate, "outAmount" | "decimals" | "refLamports"> | null,
-): CreditBucket[] {
-  if (!tokensPerCredit || tokensPerCredit <= 0) return [];
-  let tokensPerSol: number | null = null;
-  if (quote?.outAmount && typeof quote.decimals === "number" && BigInt(quote.outAmount) > 0n) {
-    const refSol = Number(quote.refLamports) / 1e9;
-    if (refSol > 0) tokensPerSol = Number(BigInt(quote.outAmount)) / 10 ** quote.decimals / refSol;
-  }
-  return CREDIT_BUCKETS.map((credits) => {
-    const tokens = credits * tokensPerCredit;
-    return { credits, tokens, sol: tokensPerSol ? roundBuySol(tokens / tokensPerSol) : null };
+/** Each pick's tokens and SOL from the API's quotes. */
+export function creditBuckets(r: CreditPicksResponse | null): CreditBucket[] {
+  if (!r || r.tokensPerCredit <= 0) return [];
+  return r.picks.map((p) => {
+    const exact = p.lamports !== null ? Number(p.lamports) / 1e9 : null;
+    return {
+      credits: p.credits,
+      tokens: Number(BigInt(p.units)) / 10 ** r.decimals,
+      sol: exact !== null ? roundBuySol(exact) : null,
+      atMinimum: exact !== null && exact < MIN_TRADE_SOL,
+    };
   });
 }
 
-/** The picks for `mint`, and whether buying here is open (null while asking). */
-export function useCreditBuckets(mint: string | null): { open: boolean | null; buckets: CreditBucket[] } {
-  const sub = usePolling<Subscription>("/subscription", 300_000);
+/** The picks, and whether buying here is open (null while asking). Picks are only read when wanted. */
+export function useCreditBuckets(wanted = true): { open: boolean | null; buckets: CreditBucket[] } {
   const [open, setOpen] = useState<boolean | null>(null);
+  const [picks, setPicks] = useState<CreditPicksResponse | null>(null);
   useEffect(() => {
     let live = true;
     void privyConfig().then((c) => live && setOpen(c.accessSwap === true));
@@ -59,8 +60,23 @@ export function useCreditBuckets(mint: string | null): { open: boolean | null; b
       live = false;
     };
   }, []);
-  const quote = useSwapCosts(open && mint ? mint : null, RATE_REF_SOL);
-  return { open, buckets: creditBuckets(sub.data?.price?.tokensPerCredit ?? null, quote) };
+  useEffect(() => {
+    if (!open || !wanted) return;
+    let live = true;
+    const load = () =>
+      api<CreditPicksResponse>("/pro/trade/credit-picks")
+        .then((r) => live && setPicks(r))
+        .catch(() => undefined);
+    void load();
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 60_000);
+    return () => {
+      live = false;
+      clearInterval(timer);
+    };
+  }, [open, wanted]);
+  return { open, buckets: creditBuckets(picks) };
 }
 
 export const solText = (sol: number) =>
@@ -97,7 +113,9 @@ export function CreditBucketPicks({
           <span className="get-asdf-pick-credits">
             <strong className="num">{b.credits.toLocaleString("en-US")}</strong> credits
           </span>
-          <span className="get-asdf-pick-sol num">{b.sol !== null ? `≈ ${solText(b.sol)} SOL` : "–"}</span>
+          <span className="get-asdf-pick-sol num">
+            {b.sol === null ? "–" : b.atMinimum ? `${solText(b.sol)} SOL min` : `≈ ${solText(b.sol)} SOL`}
+          </span>
           <span className="get-asdf-pick-tokens num">{compact(b.tokens)} $ASDFASDFA</span>
         </button>
       ))}
@@ -106,20 +124,24 @@ export function CreditBucketPicks({
 }
 
 /**
- * A "Get $ASDFASDFA" section: what it is, the credit picks, and a button to buy any amount.
- * `onBuy` opens the site's buy, with a pick's SOL when one was chosen.
+ * A "Get $ASDFASDFA" section: what it is, the credit picks (`picks`, the credit reload areas
+ * only), and a button to buy any amount. `onBuy` opens the site's buy, with a pick's SOL when one
+ * was chosen.
  */
 export function GetAsdfCard({
   mint,
   onBuy,
+  picks = false,
   children,
 }: {
   mint: string;
   onBuy: (sol?: number) => void;
+  /** Show the burn-credit picks (user ask 2026-10-19: only where credits are reloaded). */
+  picks?: boolean;
   /** A line above the picks, such as what the wallet holds now. */
   children?: ReactNode;
 }) {
-  const { open, buckets } = useCreditBuckets(mint);
+  const { open, buckets } = useCreditBuckets(picks);
   return (
     <section className="get-asdf" aria-label="Get $ASDFASDFA">
       <header className="get-asdf-head">
@@ -150,7 +172,7 @@ export function GetAsdfCard({
             </button>
             <small className="faint">
               {buckets.length > 0
-                ? "Picks are priced at the current rate. TrenchScanner takes no fee on this buy."
+                ? "Each pick is quoted now to get at least that many credits, with 1% room for the price moving. No TrenchScanner fee."
                 : "TrenchScanner takes no fee on this buy."}
             </small>
           </div>
