@@ -219,7 +219,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
     if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;
     const origin = request.headers.origin;
     if (origin === undefined || allowedOrigins.has(origin)) return;
-    reply.code(403).send({ error: "origin_not_allowed" });
+    return reply.code(403).send({ error: "origin_not_allowed" });
   });
 
   /**
@@ -375,8 +375,7 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   app.decorate("authenticate", async (request, reply) => {
     const session = await resolveSession(request);
     if (!session) {
-      reply.code(401).send({ error: "unauthenticated" });
-      return;
+      return reply.code(401).send({ error: "unauthenticated" });
     }
     request.user = session;
   });
@@ -389,13 +388,11 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
   app.decorate("authenticateAdmin", async (request, reply) => {
     const session = await resolveSession(request);
     if (!session) {
-      reply.code(401).send({ error: "unauthenticated" });
-      return;
+      return reply.code(401).send({ error: "unauthenticated" });
     }
     request.user = session;
     if (!admins.has(session.walletAddress)) {
-      reply.code(403).send({ error: "forbidden" });
-      return;
+      return reply.code(403).send({ error: "forbidden" });
     }
   });
 
@@ -422,17 +419,15 @@ export async function buildServer(env: Env): Promise<FastifyInstance> {
       }
     }
     if (!session || !access) {
-      reply.code(401).send({ error: "unauthenticated" });
-      return;
+      return reply.code(401).send({ error: "unauthenticated" });
     }
     request.user = session;
 
     if (!access.hasAccess) {
-      reply.code(402).send({
+      return reply.code(402).send({
         error: "subscription_required",
         expiresAt: access.expiresAt,
       });
-      return;
     }
     request.access = access;
   });
