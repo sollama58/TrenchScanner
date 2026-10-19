@@ -64,7 +64,7 @@ describe("parseJupiterLaunches", () => {
       {
         id: "graduate",
         usdPrice: 0.00005,
-        // Counted on the supply left after burns: the cap is read on Pump.fun's 1B instead.
+        // Counted on the supply left after burns, which is the cap (mintSupply.ts).
         mcap: 45_500,
         liquidity: 10_000,
         launchpad: "pump.fun",
@@ -94,7 +94,7 @@ describe("parseJupiterLaunches", () => {
       marketSource: "jupiter",
     });
     expect(graduate).toMatchObject({
-      marketCapUsd: 50_000,
+      marketCapUsd: 45_500,
       dexId: "pumpswap",
       marketSource: "jupiter",
       graduatedAt: new Date("2026-10-12T20:50:00Z"),
@@ -364,7 +364,7 @@ describe("JupiterFirstLookup", () => {
 });
 
 describe("parseJupiterMovingLaunches", () => {
-  it("keeps Pump.fun and Stonks launches, priced on the 1B supply, with no socials claimed", () => {
+  it("keeps Pump.fun and Stonks launches, priced on the supply after burns, with no socials claimed", () => {
     const coins = parseJupiterMovingLaunches([
       {
         id: "pumpMint",
@@ -387,7 +387,7 @@ describe("parseJupiterMovingLaunches", () => {
     expect(coins[0]).toMatchObject({
       mintAddress: "pumpMint",
       symbol: "DOG",
-      marketCapUsd: 50_000,
+      marketCapUsd: 46_000,
       graduated: true,
       imageUrl: "https://ipfs.io/ipfs/x",
       createdAt: new Date("2026-10-15T12:00:00Z"),

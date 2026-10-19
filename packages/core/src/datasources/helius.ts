@@ -836,6 +836,30 @@ export class HeliusClient {
   }
 
   /**
+   * Each mint's supply now, in whole tokens, off its mint account (jsonParsed, batched): what a
+   * burn has taken out is gone from it. A mint without a usable answer is left out (mintSupply.ts).
+   */
+  async getMintSupplies(mintAddresses: string[]): Promise<Map<string, number>> {
+    const unique = [...new Set(mintAddresses)];
+    const out = new Map<string, number>();
+    if (unique.length === 0) return out;
+    const accounts = await this.getMultipleAccounts<{
+      data?: { parsed?: { type?: string; info?: { supply?: unknown; decimals?: unknown } } };
+    }>(unique, { encoding: "jsonParsed" });
+    for (const mint of unique) {
+      const account = accounts.get(mint);
+      const parsed = account && account !== "failed" ? account.value?.data?.parsed : undefined;
+      const info = parsed?.type === "mint" ? parsed.info : undefined;
+      const raw = info?.supply;
+      const decimals = info?.decimals;
+      if (typeof raw !== "string" || !/^\d+$/.test(raw) || typeof decimals !== "number") continue;
+      const supply = Number(raw) / 10 ** decimals;
+      if (Number.isFinite(supply) && supply > 0) out.set(mint, supply);
+    }
+    return out;
+  }
+
+  /**
    * The ten largest wallets of each mint and their share of supply, straight from the chain: the
    * backup for a mint RugCheck has no report for. Per mint, getTokenLargestAccounts (its 20
    * largest token accounts) and getTokenSupply in one batch, then one getMultipleAccounts over

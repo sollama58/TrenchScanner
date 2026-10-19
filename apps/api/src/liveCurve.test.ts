@@ -42,6 +42,8 @@ function setup(
     pool?: { vaults: typeof VAULTS | null; amounts: [number, number] };
     /** Prices a coin-quoted curve's quote. */
     quotePrice?: { get: (mint: string) => Promise<{ usd: number; decimals: number } | null> };
+    /** The coins' supply now (mintSupply.ts); none known by default. */
+    supplies?: Record<string, number>;
   } = {},
 ) {
   let now = 1_000_000;
@@ -85,6 +87,10 @@ function setup(
     },
     solPrice: { get: async () => 100 },
     quotePrice: opts.quotePrice,
+    supplies: {
+      get: async (mints) =>
+        new Map(mints.flatMap((m) => (opts.supplies?.[m] ? [[m, opts.supplies[m]]] : []))),
+    },
     now: () => now,
   });
   return {
@@ -389,6 +395,17 @@ describe("SolPrice", () => {
 });
 
 describe("LiveCurves.quotes (the feed cards' Now)", () => {
+  it("puts the cap on the supply now once burns have taken some of the billion", async () => {
+    const t = setup({ supplies: { [MINT]: 950_000_000 } });
+    const q = await t.curves.quotes([MINT], 2_500);
+    const mcap = curveMcapSol(state(5e10)) * 100;
+    expect(q.get(MINT)!.marketCapUsd).toBeCloseTo(mcap * 0.95);
+    // The price is the curve's, whatever the supply.
+    expect(q.get(MINT)!.priceUsd).toBeCloseTo(mcap / 1e9);
+    const live = await t.curves.read(MINT, 0);
+    expect(live.ticks.at(-1)![1]).toBeCloseTo(mcap * 0.95);
+  });
+
   it("prices a coin still on its curve in USD, and marks it on the curve", async () => {
     const t = setup();
     expect(t.curves.onCurve(MINT)).toBe(false);

@@ -28,7 +28,7 @@ describe("LiveLaunchQuotes", () => {
       {
         getTokensByAddresses: async (mints: string[]) => {
           backupAsked.push(mints);
-          // CoinGecko's cap counted a smaller supply: read on Pump.fun's 1B instead.
+          // The backup's cap is taken as it is: GeckoTerminalClient puts it on the supply now.
           return [{ ...token("failed", 0.000012), marketCapUsd: 11_000, dexId: "pumpfun" }];
         },
       },
@@ -37,7 +37,7 @@ describe("LiveLaunchQuotes", () => {
     expect(backupAsked).toEqual([["failed"]]);
     expect(Object.fromEntries(got.map((t) => [t.mintAddress, t.marketCapUsd]))).toEqual({
       jupiter: 10_000,
-      failed: 12_000,
+      failed: 11_000,
     });
     expect(quotes.takeStats()).toEqual({ asked: 3, jupiter: 1, backupAsked: 1, backup: 1, unpriced: 0 });
     expect(quotes.takeStats().asked).toBe(0);

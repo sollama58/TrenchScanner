@@ -45,6 +45,8 @@ import {
   sampleAsdfPrice,
   settleOpenTrades,
   TradingRpc,
+  configureMintSupplies,
+  MintSupplies,
 } from "@trenchscanner/core";
 import { BAND_ENTRY_CHECK_MS, BandEntryWatch } from "./bandEntryWatch.js";
 import { runScanCycle, scanFailureMeta } from "./jobs/scanJob.js";
@@ -346,6 +348,8 @@ async function main() {
     // Puts the last hour of that tape back from the scan's snapshots after a deploy.
     pricePathSeeder: new PricePathSeeder(pricePath),
   };
+  // Every market cap read on Pump.fun's launch billion is put on the coin's supply now (mintSupply.ts).
+  configureMintSupplies(new MintSupplies(deps.helius));
   const stopCurveTape = curveTapeOn
     ? startCurveTape(deps.helius, heliusStream, {
         // Longer while paths are recorded (pricePathRecorder.ts).
