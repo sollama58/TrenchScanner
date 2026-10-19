@@ -80,15 +80,22 @@ describe("the Stream's columns", () => {
   const priced = (c: Card, mcap: number): Card =>
     ({ ...c, snapshot: { marketCapUsd: mcap }, currentMarketCapUsd: null }) as Card;
 
-  it("puts tokens near graduating in About to graduate, closest first, the rest in New", () => {
+  it("shows New's tokens in About to graduate too, closest to graduating first", () => {
     const stream = [
       priced(card("s1", "stream"), 12_000),
       priced(card("s2", "stream"), 50_000),
-      priced(card("s3", "stream"), 61_000),
+      priced(card("s3", "stream"), 6_000),
+      priced(card("s4", "stream"), 61_000),
     ];
     const cols = splitScope([], [], undefined, stream);
-    expect(cols.new.map((c) => c.id)).toEqual(["s1"]);
-    expect(cols.soon.map((c) => c.id)).toEqual(["s3", "s2"]);
+    expect(cols.new.map((c) => c.id)).toEqual(["s1", "s2", "s3", "s4"]);
+    expect(cols.soon.map((c) => c.id)).toEqual(["s4", "s2", "s1", "s3"]);
+  });
+
+  it("ranks About to graduate by the live market cap over the scan's", () => {
+    const live = { ...priced(card("s1", "stream"), 10_000), currentMarketCapUsd: 70_000 } as Card;
+    const cols = splitScope([], [], undefined, [priced(card("s2", "stream"), 40_000), live]);
+    expect(cols.soon.map((c) => c.id)).toEqual(["s1", "s2"]);
   });
 
   it("leaves a graduated token to the Graduated column", () => {
@@ -140,23 +147,5 @@ describe("shortAge", () => {
     expect(shortAge(2 * 3_600_000)).toBe("2h");
     expect(shortAge(3 * 86_400_000)).toBe("3d");
     expect(shortAge(-5)).toBe("0s");
-  });
-});
-
-describe("About to graduate", () => {
-  const at = (id: string, mcap: number) =>
-    ({ ...card(id, "stream"), currentMarketCapUsd: mcap, snapshot: { marketCapUsd: 20_000 } }) as Card;
-
-  it("takes the Stream's about-to-graduate list, still at the mark, biggest first", () => {
-    const cols = splitScope(
-      [],
-      [],
-      undefined,
-      [at("n1", 12_000)],
-      [at("s1", 50_000), at("s2", 80_000), at("s3", 30_000)],
-    );
-    expect(cols.soon.map((c) => c.id)).toEqual(["s2", "s1"]);
-    // One that dropped under the mark since isn't new: it goes nowhere.
-    expect(cols.new.map((c) => c.id)).toEqual(["n1"]);
   });
 });
