@@ -2247,31 +2247,41 @@ model ProTradeCursor {
 /// cost and what the same trade would have cost elsewhere (apps/api/src/tradeFees.ts; user ask
 /// 2026-10-18). Unlike ProTrade (every trade the wallet makes, read from the chain), only ours.
 model PlatformTrade {
-  signature           String    @id
-  wallet              String
-  mint                String
+  signature            String    @id
+  wallet               String
+  mint                 String
   /// "buy" | "sell".
-  side                String
+  side                 String
   /// The trade's SOL value, lamports: a buy's spend, a sale's quoted proceeds.
-  lamports            BigInt
+  lamports             BigInt
   /// What we charged on top of the swap, lamports: the Sacrifice's SOL value when it was taken
   /// ("on" mode, a fee payer), else 0. The swap itself never carries a fee.
-  platformFeeLamports BigInt    @default(0)
+  platformFeeLamports  BigInt    @default(0)
   /// The Sacrifice (ASDF fee plan): the ASDF base units it took from the burned pot, or would have
   /// in "shadow" mode (exact: the pot is held in ASDF, so no whole-credit column).
-  sacrificeAsdfRaw    BigInt    @default(0)
+  sacrificeAsdfRaw     BigInt    @default(0)
   /// Whole ASDF per SOL it was priced at, as a decimal string; null when nothing was worked out.
-  asdfPerSol          String?
+  asdfPerSol           String?
   /// The wallet's tier at build (sacrifice.ts SacrificeTier reason: "admin", "grant", "access",
   /// "holder", "below_cutoff" or "moved_bag"), and the mode it was worked out in ("shadow" | "on").
-  feeTier             String?
-  sacrificeMode       String?
+  feeTier              String?
+  sacrificeMode        String?
   /// What the network took: the priority fee, Sender's tip and the base fee, lamports.
-  networkFeeLamports  BigInt
+  networkFeeLamports   BigInt
   /// "sent" until it settles: "confirmed", "failed" or "expired". Only confirmed trades count.
-  status              String    @default("sent")
-  sentAt              DateTime  @default(now())
-  settledAt           DateTime?
+  status               String    @default("sent")
+  sentAt               DateTime  @default(now())
+  settledAt            DateTime?
+  /// What the API resends until it lands or expires, so any instance (after a deploy or a restart)
+  /// can pick it up and answer "expired" (apps/api/src/routes/proTrade.ts): the signed transaction
+  /// (base64), the last block height its blockhash is good for, and the Sender tier it went out on
+  /// ("eco" | "turbo", MEV protection). Never the Sender URL: it carries the API key.
+  transaction          String?
+  lastValidBlockHeight BigInt?
+  senderSpeed          String?
+  senderMevProtect     Boolean?
+  /// The build it was sent from (the build token's id): one send per build, on any instance.
+  buildId              String?   @unique
 
   @@index([wallet, status])
 }

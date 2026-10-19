@@ -829,6 +829,8 @@ export interface BuiltTrade {
   quietSign?: boolean;
   /** The Sacrifice this trade takes (or would, in shadow mode): the send takes exactly this. */
   sacrifice?: SacrificeView;
+  /** The build, signed by the API: sent back with the signed trade, so any API instance takes it. */
+  buildToken?: string;
 }
 
 export type TradeStage = "building" | "signing" | "sending" | "confirming";
@@ -1215,6 +1217,7 @@ export async function runTrade(
       transaction: toBase64(bytes),
       speed: input.settings.speed,
       mevProtect: input.settings.mevProtect,
+      ...(built.buildToken ? { buildToken: built.buildToken } : {}),
     });
   } catch (e) {
     // The API refused it before Sender, or Sender refused it: nothing went out. Only the API's own

@@ -10,8 +10,12 @@ import { buildServer } from "./server.js";
 
 const logger = createLogger("api");
 
-/** Under Render's default 30-second grace period between SIGTERM and SIGKILL. */
-const SHUTDOWN_DEADLINE_MS = 20_000;
+/**
+ * Under the 90-second grace period between SIGTERM and SIGKILL (render.yaml's
+ * maxShutdownDelaySeconds): Pro trades in flight are resent for up to DRAIN_MAX_MS (75s,
+ * routes/proTrade.ts) before the process goes, and the other onClose hooks get the rest.
+ */
+const SHUTDOWN_DEADLINE_MS = 85_000;
 
 const INSECURE_DEFAULT_JWT_SECRET = "dev-insecure-default-jwt-secret-change-me";
 /** .env.example's placeholder: long enough to pass the schema's 32-character minimum. */
