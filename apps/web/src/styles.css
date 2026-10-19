@@ -11522,6 +11522,106 @@ img.tm-avatar {
   }
 }
 
+/* More order flow in the Scope terminal's tab (user ask 2026-10-19). */
+.tm-flow-more {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.tm-flow-more > .sage-card {
+  margin: 0;
+}
+.tm-fm-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 96px;
+  padding: 4px 0;
+}
+.tm-fm-bar {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-width: 4px;
+  height: 100%;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.tm-fm-bar .buy {
+  background: var(--good);
+}
+.tm-fm-bar .sell {
+  background: var(--bad);
+  opacity: 0.85;
+}
+.tm-fm-axis {
+  display: flex;
+  justify-content: space-between;
+}
+.tm-fm-table {
+  display: grid;
+  font-size: 12.5px;
+}
+.tm-fm-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 2.2fr) repeat(4, minmax(0, 1fr));
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  white-space: nowrap;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.tm-fm-row > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tm-fm-row > span:not(:first-child) {
+  text-align: right;
+}
+.tm-fm-row.head {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.tm-fm-row .up {
+  color: var(--good-ink);
+}
+.tm-fm-row .down,
+.tm-fm-stats .down {
+  color: var(--bad-ink);
+}
+.tm-fm-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 6px;
+  margin: 0;
+}
+.tm-fm-stats > div {
+  padding: 6px 9px;
+  border-radius: 10px;
+  background: var(--surface-3);
+}
+.tm-fm-stats dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.tm-fm-stats dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+.tm-fm-stats dd .muted {
+  font-size: 12px;
+  font-weight: 600;
+}
+
 /* Dev and socials. */
 .tm-dev-grid > .sage-card {
   align-self: start;

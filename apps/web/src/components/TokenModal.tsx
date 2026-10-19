@@ -984,12 +984,22 @@ function TokenBody({
             </p>
           );
         case "flow":
-          return profile.data?.flow ? (
-            <FlowCard flow={profile.data.flow} now={now} />
-          ) : (
-            <p className="muted small tm-term-empty">
-              {profile.data || profile.error ? "No order flow read for this coin yet." : "Loading…"}
-            </p>
+          return (
+            <>
+              {profile.data?.flow ? (
+                <FlowCard flow={profile.data.flow} now={now} />
+              ) : (
+                <p className="muted small tm-term-empty">
+                  {profile.data || profile.error ? "No scan counts read for this coin yet." : "Loading…"}
+                </p>
+              )}
+              <FlowMore
+                points={chart.data?.marketCap ?? []}
+                flagged={flagged}
+                entries={entries}
+                snap={card.latestSnapshot ?? card.snapshot}
+              />
+            </>
           );
         case "market":
           return <StatsCard card={card} />;
@@ -2658,6 +2668,218 @@ function WalletsCard({
         </div>
       )}
     </section>
+  );
+}
+
+/** The labeled wallets' groups in the Order flow tab, in the order they list. */
+const FLOW_GROUPS: readonly { kind: MarkerKind; label: string }[] = [
+  { kind: "kol", label: "KOLs & sides" },
+  { kind: "dev", label: "Dev" },
+  { kind: "risky", label: "Risky & dumpers" },
+  { kind: "winner", label: "Winners" },
+  { kind: "linked", label: "Linked" },
+];
+
+/** Scan points the flow-over-time bars show at most, the newest. */
+const FLOW_BARS = 24;
+
+const solShort = (v: number) => (v >= 100 ? v.toFixed(0) : v >= 10 ? v.toFixed(1) : v.toFixed(2));
+
+/**
+ * More of the coin's order flow for the Scope terminal's tab (user ask 2026-10-19), from what the
+ * page already read: buys against sells at each scan, where the labeled wallets' SOL went, how the
+ * top holders got in and what they've sold, and whether the launch's first buyers and the dev hold.
+ */
+function FlowMore({
+  points,
+  flagged,
+  entries,
+  snap,
+}: {
+  points: TokenChart["marketCap"];
+  flagged: readonly FlaggedWallet[];
+  entries: Readonly<Record<string, HolderEntry>>;
+  snap: Pick<
+    Card["snapshot"],
+    "firstBuyersHolding" | "firstBuyersSeen" | "firstBuyersHoldingCut" | "devHolding"
+  > | null;
+}) {
+  const bars = useMemo(
+    () =>
+      points
+        .filter((p) => typeof p.buys === "number" && typeof p.sells === "number" && p.buys + p.sells > 0)
+        .slice(-FLOW_BARS) as { t: number; buys: number; sells: number }[],
+    [points],
+  );
+  const groups = useMemo(
+    () =>
+      FLOW_GROUPS.flatMap((g) => {
+        const ws = flagged.filter((w) => kindOf(w) === g.kind);
+        if (ws.length === 0) return [];
+        const solIn = ws.reduce((t, w) => t + w.solIn, 0);
+        const solOut = ws.reduce((t, w) => t + w.solOut, 0);
+        return [{ ...g, count: ws.length, holding: ws.filter((w) => w.solOut === 0).length, solIn, solOut }];
+      }),
+    [flagged],
+  );
+  const holders = useMemo(() => {
+    const es = Object.values(entries);
+    if (es.length === 0) return null;
+    const bought = es.filter((e) => e.buys > 0);
+    return {
+      read: es.length,
+      firstMinute: bought.filter((e) => e.afterLaunchS !== null && e.afterLaunchS < 60).length,
+      firstBuyers: bought.filter((e) => e.firstBuyerRank !== null && e.firstBuyerRank <= 25).length,
+      transfer: es.filter((e) => e.buys === 0).length,
+      holdingAll: bought.filter((e) => e.sells === 0 || (e.soldShare ?? 0) <= 0).length,
+      soldAll: bought.filter((e) => (e.soldShare ?? 0) >= 0.995).length,
+      solIn: es.reduce((t, e) => t + e.solIn, 0),
+      solOut: es.reduce((t, e) => t + e.solOut, 0),
+    };
+  }, [entries]);
+  const peak = Math.max(1, ...bars.map((b) => b.buys + b.sells));
+  const firstHolding = snap?.firstBuyersHoldingCut ?? snap?.firstBuyersHolding ?? null;
+  const hm = (t: number) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  return (
+    <div className="tm-flow-more">
+      {bars.length >= 2 && (
+        <section className="sage-card" aria-label="Buys and sells over time">
+          <h4>
+            Buys and sells over time
+            <span className="tm-h4-meta small muted">5-minute counts at each scan</span>
+          </h4>
+          <div className="tm-fm-bars" role="img" aria-label="Buys and sells at each scan">
+            {bars.map((b) => (
+              <span
+                key={b.t}
+                className="tm-fm-bar"
+                title={`${hm(b.t)}: ${b.buys} buys, ${b.sells} sells (${pct((b.buys / (b.buys + b.sells)) * 100)} buys)`}
+              >
+                <span className="sell" style={{ height: `${(b.sells / peak) * 100}%` }} />
+                <span className="buy" style={{ height: `${(b.buys / peak) * 100}%` }} />
+              </span>
+            ))}
+          </div>
+          <div className="tm-fm-axis small muted num">
+            <span>{hm(bars[0]!.t)}</span>
+            <span>{hm(bars[bars.length - 1]!.t)}</span>
+          </div>
+        </section>
+      )}
+      {groups.length > 0 && (
+        <section className="sage-card" aria-label="Labeled wallets' SOL">
+          <h4>
+            Labeled wallets&apos; SOL
+            <span className="tm-h4-meta small muted">in and out of this coin</span>
+          </h4>
+          <div className="tm-fm-table" role="table">
+            <div className="tm-fm-row head" role="row">
+              <span role="columnheader">Wallets</span>
+              <span role="columnheader">Holding</span>
+              <span role="columnheader">SOL in</span>
+              <span role="columnheader">SOL out</span>
+              <span role="columnheader">Net</span>
+            </div>
+            {groups.map((g) => {
+              const net = g.solOut - g.solIn;
+              return (
+                <div key={g.kind} className="tm-fm-row" role="row">
+                  <span role="cell">
+                    <i className={`pc-swatch k-${g.kind}`} aria-hidden="true" /> {g.label}{" "}
+                    <span className="muted num">{g.count}</span>
+                  </span>
+                  <span role="cell" className="num" title="Bought in and haven't sold">
+                    {g.holding}
+                  </span>
+                  <span role="cell" className="num">
+                    {solShort(g.solIn)}
+                  </span>
+                  <span role="cell" className="num">
+                    {solShort(g.solOut)}
+                  </span>
+                  <span
+                    role="cell"
+                    className={`num ${g.solOut > 0 ? (net >= 0 ? "up" : "down") : "faint"}`}
+                    title={g.solOut > 0 ? "SOL out less SOL in" : "Nothing sold yet"}
+                  >
+                    {g.solOut > 0 ? `${net >= 0 ? "+" : "-"}${solShort(Math.abs(net))}` : "holding"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+      {(holders || firstHolding !== null || (snap?.devHolding ?? null) !== null) && (
+        <section className="sage-card" aria-label="How the holders got in">
+          <h4>How the holders got in</h4>
+          <dl className="tm-fm-stats">
+            {holders && (
+              <>
+                <div title="Top holders whose first buy came within a minute of the launch">
+                  <dt>First-minute buyers</dt>
+                  <dd className="num">
+                    {holders.firstMinute}
+                    <span className="muted">/{holders.read}</span>
+                  </dd>
+                </div>
+                <div title="Top holders among the launch's first 25 buyers">
+                  <dt>First 25 buyers</dt>
+                  <dd className="num">
+                    {holders.firstBuyers}
+                    <span className="muted">/{holders.read}</span>
+                  </dd>
+                </div>
+                <div title="Top holders that got the coin by transfer, never buying it">
+                  <dt>By transfer</dt>
+                  <dd className="num">
+                    {holders.transfer}
+                    <span className="muted">/{holders.read}</span>
+                  </dd>
+                </div>
+                <div title="Top holders that bought and haven't sold any">
+                  <dt>Holding all</dt>
+                  <dd className="num">
+                    {holders.holdingAll}
+                    <span className="muted">/{holders.read}</span>
+                  </dd>
+                </div>
+                <div title="Top holders that bought and have sold all of it">
+                  <dt>Sold all</dt>
+                  <dd className="num">
+                    {holders.soldAll}
+                    <span className="muted">/{holders.read}</span>
+                  </dd>
+                </div>
+                <div title="What the top holders put into the coin and took out, from its trade tape">
+                  <dt>Holders&apos; SOL</dt>
+                  <dd className="num">
+                    {solShort(holders.solIn)} in{" "}
+                    <span className="muted">/ {solShort(holders.solOut)} out</span>
+                  </dd>
+                </div>
+              </>
+            )}
+            {firstHolding !== null && snap?.firstBuyersSeen ? (
+              <div title="Of the launch's first buyers, how many still hold 0.1% of the supply or more">
+                <dt>Launch buyers holding</dt>
+                <dd className="num">
+                  {firstHolding}
+                  <span className="muted">/{snap.firstBuyersSeen}</span>
+                </dd>
+              </div>
+            ) : null}
+            {(snap?.devHolding ?? null) !== null && (
+              <div>
+                <dt>Dev</dt>
+                <dd className={snap!.devHolding ? "" : "down"}>{snap!.devHolding ? "Holding" : "Sold"}</dd>
+              </div>
+            )}
+          </dl>
+        </section>
+      )}
+    </div>
   );
 }
 
