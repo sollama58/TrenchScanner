@@ -1402,6 +1402,57 @@ export function kolBundleNodes(
   return { kol: members.find((n) => n.wallet === k.kolWallet) ?? null, members };
 }
 
+/** Where each bubble stands on a laid-out map, by node id. */
+export type MapPositions = ReadonlyMap<string, { x: number; y: number }>;
+
+export function positionsOf(graph: Pick<BubbleGraph, "nodes">): MapPositions {
+  return new Map(graph.nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
+}
+
+/**
+ * How far into the layout's run a refresh starts (warmStart): the late, cool steps only, which
+ * part what overlaps and keep lines clear without moving the groups.
+ */
+const WARM_START_AT = 0.7;
+/** The share of a refreshed map's bubbles that must have stood on the last one to start from it. */
+const WARM_START_MIN_KEPT = 0.6;
+
+/**
+ * Puts each bubble where it stood on the last drawing, and a new one beside a bubble of its own
+ * group (else where the fresh layout put it), when most of the map was there before. Answers
+ * whether it did: false leaves the fresh layout's start, for a map that changed too much.
+ */
+function warmStart(
+  nodes: MapNode[],
+  prev: MapPositions | null | undefined,
+  groupOf: (n: MapNode) => number,
+): boolean {
+  if (!prev || prev.size === 0) return false;
+  const kept = nodes.filter((n) => prev.has(n.id)).length;
+  if (kept < nodes.length * WARM_START_MIN_KEPT) return false;
+  const anchorOf = new Map<number, MapNode>();
+  for (const n of nodes) {
+    const p = prev.get(n.id);
+    if (!p) continue;
+    n.x = p.x;
+    n.y = p.y;
+    const g = groupOf(n);
+    const a = anchorOf.get(g);
+    if (!a || n.hub || (!a.hub && n.r > a.r)) anchorOf.set(g, n);
+  }
+  let added = 0;
+  for (const n of nodes) {
+    if (prev.has(n.id)) continue;
+    const a = anchorOf.get(groupOf(n));
+    if (!a) continue;
+    const angle = 0.9 + added * 2.4;
+    added += 1;
+    n.x = a.x + Math.cos(angle) * (a.r + n.r + 16);
+    n.y = a.y + Math.sin(angle) * (a.r + n.r + 16);
+  }
+  return true;
+}
+
 /**
  * The map laid out again with the ties that are switched on pulled together (each exchange's
  * holders; each KOL and its possible side wallets), on copies of the nodes: the original layout
@@ -1410,7 +1461,14 @@ export function kolBundleNodes(
  */
 export function regroupLayout(
   graph: BubbleGraph,
-  opts: { cex?: boolean; sides?: readonly SideGroup[]; kols?: readonly KolControl[]; transfers?: boolean },
+  opts: {
+    cex?: boolean;
+    sides?: readonly SideGroup[];
+    kols?: readonly KolControl[];
+    transfers?: boolean;
+    /** The last regrouped drawing with the same ties on, to settle from (layoutGraph's prev). */
+    prev?: MapPositions | null;
+  },
 ): BubbleGraph {
   const copy = { ...graph, nodes: graph.nodes.map((n) => ({ ...n })) };
   const kolTies: { from: string; to: string }[] = [];
@@ -1428,6 +1486,7 @@ export function regroupLayout(
     kolTies,
     kolHubs,
     transferTies: opts.transfers ? graph.transferLinks : undefined,
+    prev: opts.prev,
   });
 }
 
@@ -1544,6 +1603,11 @@ export function layoutGraph(
     kolHubs?: readonly { id: string; anchor: string | null; members: readonly string[] }[];
     /** Holders that sent the coin to each other, pulled gently together (the map's transfers toggle). */
     transferTies?: readonly { from: string; to: string }[];
+    /**
+     * Where the bubbles stood on the map's last drawing (positionsOf): a refresh starts from there
+     * and only settles, so the map moves gently rather than laying out anew (user ask 2026-10-19).
+     */
+    prev?: MapPositions | null;
   } = {},
 ): BubbleGraph {
   const { nodes, links } = graph;
@@ -1611,7 +1675,8 @@ export function layoutGraph(
     });
   }
 
-  for (let it = 0; it < iterations; it += 1) {
+  const settleFrom = warmStart(nodes, opts.prev, groupOf) ? Math.round(iterations * WARM_START_AT) : 0;
+  for (let it = settleFrom; it < iterations; it += 1) {
     const cool = 1 - it / iterations;
     // Springs: a funded holder toward its funder.
     for (const l of links) {

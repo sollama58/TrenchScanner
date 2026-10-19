@@ -6,6 +6,7 @@ import {
   HIDE_BELOW_MCAP,
   PRESETS,
   QUICK_LINK_SITES,
+  BUBBLE_REFRESH_CHOICES,
   SWATCHES,
   sameAppearance,
   setAppearance,
@@ -268,6 +269,20 @@ export function AppearanceControls() {
             onChange={() => setAppearance({ bubbleTransferLinks: !look.bubbleTransferLinks })}
           />
           Bubble maps: draw arrows between holders that sent the coin to each other
+        </label>
+        <label className="check">
+          Bubble maps: redraw an open map every{" "}
+          <select
+            value={look.bubbleRefreshSeconds}
+            onChange={(e) => setAppearance({ bubbleRefreshSeconds: Number(e.target.value) })}
+          >
+            {BUBBLE_REFRESH_CHOICES.map((c) => (
+              <option key={c.seconds} value={c.seconds}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+          <span className="faint small"> (the top holders list moves with each trade)</span>
         </label>
         {/* One switch for the three kinds of name, or each on its own; any set on its own hides the
             one switch here and on the map (user ask 2026-10-16). */}

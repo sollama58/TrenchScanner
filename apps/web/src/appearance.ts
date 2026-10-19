@@ -67,6 +67,8 @@ export const DEFAULT_APPEARANCE: FeedAppearance = {
   bubbleFunderLabels: false,
   bubbleSideLinks: true,
   bubbleTransferLinks: true,
+  // Every 5 seconds by default (user ask 2026-10-19); the holder list beside it moves with each trade.
+  bubbleRefreshSeconds: 5,
   // Off by default (user ask 2026-10-16); KOLs' and exchanges' names always show.
   bubbleNameLabels: false,
   bubbleNamesPumpfun: null,
@@ -114,6 +116,25 @@ export const QUICK_LINK_SITES: { id: QuickLink; label: string; href: (mint: stri
   { id: "terminal", label: "Terminal", href: (m) => `https://trade.padre.gg/trade/solana/${m}` },
   { id: "axiom", label: "Axiom", href: (m) => `https://axiom.trade/t/${m}` },
   { id: "gmgn", label: "GMGN", href: (m) => `https://gmgn.ai/sol/token/${m}` },
+];
+/**
+ * How often an open bubble map may redraw (user ask 2026-10-19): 5 seconds to a day, as Customize
+ * offers them (apps/api/src/feedAppearance.ts BUBBLE_REFRESH_SECONDS has the same seconds).
+ */
+export const BUBBLE_REFRESH_CHOICES: readonly { seconds: number; label: string }[] = [
+  { seconds: 5, label: "5 seconds" },
+  { seconds: 10, label: "10 seconds" },
+  { seconds: 15, label: "15 seconds" },
+  { seconds: 30, label: "30 seconds" },
+  { seconds: 60, label: "1 minute" },
+  { seconds: 120, label: "2 minutes" },
+  { seconds: 300, label: "5 minutes" },
+  { seconds: 900, label: "15 minutes" },
+  { seconds: 1800, label: "30 minutes" },
+  { seconds: 3600, label: "1 hour" },
+  { seconds: 21600, label: "6 hours" },
+  { seconds: 43200, label: "12 hours" },
+  { seconds: 86400, label: "1 day" },
 ];
 /** The token chart's labeled-wallet trade size bounds, in SOL (apps/api/src/feedAppearance.ts has the same). */
 export const CHART_MARK_MIN_SOL = 0.25;
@@ -312,6 +333,9 @@ export function normalizeAppearance(raw: unknown): FeedAppearance {
     bubbleSideLinks: typeof r.bubbleSideLinks === "boolean" ? r.bubbleSideLinks : d.bubbleSideLinks,
     bubbleTransferLinks:
       typeof r.bubbleTransferLinks === "boolean" ? r.bubbleTransferLinks : d.bubbleTransferLinks,
+    bubbleRefreshSeconds: BUBBLE_REFRESH_CHOICES.some((c) => c.seconds === r.bubbleRefreshSeconds)
+      ? (r.bubbleRefreshSeconds as number)
+      : d.bubbleRefreshSeconds,
     bubbleNameLabels: typeof r.bubbleNameLabels === "boolean" ? r.bubbleNameLabels : d.bubbleNameLabels,
     bubbleNamesPumpfun: typeof r.bubbleNamesPumpfun === "boolean" ? r.bubbleNamesPumpfun : null,
     bubbleNamesFomo: typeof r.bubbleNamesFomo === "boolean" ? r.bubbleNamesFomo : null,
@@ -404,6 +428,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartStyle,
     chartView,
     chartPathing,
+    bubbleRefreshSeconds,
   } = current;
   return normalizeAppearance({
     ...DEFAULT_APPEARANCE,
@@ -434,6 +459,7 @@ export function withPreset(current: FeedAppearance, look: Partial<FeedAppearance
     chartStyle,
     chartView,
     chartPathing,
+    bubbleRefreshSeconds,
   });
 }
 

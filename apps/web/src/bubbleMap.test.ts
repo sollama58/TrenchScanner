@@ -34,6 +34,7 @@ import {
   hasHolderList,
   holderFreshness,
   layoutGraph,
+  positionsOf,
   pickReading,
   liveWideFor,
   withWideMap,
@@ -167,6 +168,23 @@ describe("bubble map graph", () => {
     const box = graphBounds(one);
     expect(box.w).toBeGreaterThan(0);
     expect(box.h).toBeGreaterThan(0);
+  });
+
+  it("redraws from the last layout without moving the bubbles far", () => {
+    const first = layoutGraph(buildGraph(snapshot));
+    const prev = positionsOf(first);
+    const again = layoutGraph(buildGraph(snapshot), 320, { prev });
+    for (const n of again.nodes) {
+      const was = prev.get(n.id)!;
+      expect(Math.hypot(n.x - was.x, n.y - was.y)).toBeLessThan(n.r);
+    }
+    for (let i = 0; i < again.nodes.length; i += 1) {
+      for (let j = i + 1; j < again.nodes.length; j += 1) {
+        const a = again.nodes[i]!;
+        const b = again.nodes[j]!;
+        expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(a.r + b.r);
+      }
+    }
   });
 
   it("picks the newest reading with clusters", () => {

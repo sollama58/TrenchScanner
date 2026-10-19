@@ -18,6 +18,8 @@ import {
   centreOf,
   exchangeName,
   regroupLayout,
+  positionsOf,
+  type MapPositions,
   needsRegroup,
   bundleOutline,
   kolBundleNodes,
@@ -152,6 +154,37 @@ export function reloadBubbleMaps(mint: string): void {
   invalidate(bubbleMapsPath(mint));
   mapsVersion.set(mint, (mapsVersion.get(mint) ?? 0) + 1);
   for (const l of mapsListeners) l();
+}
+
+const hasReading = (v: { reading: unknown }) => v.reading != null;
+
+/**
+ * `value`, taking each change at most once every `ms`: the newest when it comes due, so a run of
+ * changes redraws once (user ask 2026-10-19). A value without data (`hasData` false), or the first
+ * with it, shows at once.
+ */
+function useEvery<T>(value: T, ms: number, hasData: (v: T) => boolean): T {
+  const [shown, setShown] = useState(value);
+  const latest = useRef(value);
+  latest.current = value;
+  const lastAt = useRef(Date.now());
+  useEffect(() => {
+    if (value === shown) return;
+    if (!hasData(shown) || !hasData(value)) {
+      lastAt.current = Date.now();
+      setShown(value);
+      return;
+    }
+    const t = window.setTimeout(
+      () => {
+        lastAt.current = Date.now();
+        setShown(latest.current);
+      },
+      Math.max(0, lastAt.current + ms - Date.now()),
+    );
+    return () => window.clearTimeout(t);
+  }, [value, shown, ms, hasData]);
+  return shown;
 }
 
 /** The names of every wallet on the map (holders and funders), in one read. */
@@ -407,9 +440,16 @@ function MapView({
   // The KOL side wallets switch off: no KOL bundle is gathered, ringed or labelled on the map, its
   // list or its share image (user ask 2026-10-16); the KOL Bundled and Linked figures stay.
   const drawnKols = drawnKolsFor(side, kols);
+  // A refresh with the same ties on settles from the last regrouped drawing (layoutGraph's prev).
+  const lastRegrouped = useRef<{ key: string; at: MapPositions } | null>(null);
   const regrouped = useMemo(() => {
     const opts = { cex: showCex, sides: side.shown, kols: drawnKols, transfers: showTransfers };
-    return needsRegroup(opts) ? regroupLayout(graph, opts) : null;
+    if (!needsRegroup(opts)) return null;
+    const key = JSON.stringify([showCex, showTransfers, side.shown.length > 0, drawnKols.length > 0]);
+    const last = lastRegrouped.current;
+    const laid = regroupLayout(graph, { ...opts, prev: last?.key === key ? last.at : null });
+    lastRegrouped.current = { key, at: positionsOf(laid) };
+    return laid;
   }, [graph, showCex, side.shown, drawnKols, showTransfers]);
   const xfer = graph.transferPct;
   const cex = graph.cexCount;
@@ -2290,25 +2330,36 @@ export function BubbleMapSection({
 }) {
   const mint = token.mintAddress;
   const liveWide = liveWideFor(snapshotIn, useWideMap(mint));
-  const wideIn = chosenWide !== undefined ? chosenWide : liveWide;
+  // The map redraws on the reader's interval (Customize, every 5 s by default, user ask
+  // 2026-10-19): the reading, the top 50 and the trades since, held together until it is due.
+  const { bubbleRefreshSeconds } = useAppearance();
+  const inputs = useMemo(
+    () => ({ reading: snapshotIn, wide: chosenWide !== undefined ? chosenWide : liveWide, live }),
+    [snapshotIn, chosenWide, liveWide, live],
+  );
+  const held = useEvery(inputs, bubbleRefreshSeconds * 1000, hasReading);
+  const { reading: heldReading, wide: wideIn, live: heldLive } = held;
   // Trades move shares from each reading's own read time: the scan's for its lists and figures,
   // the top 50's for its map.
   const snapshot = useMemo(
     () =>
-      snapshotIn && live
+      heldReading && heldLive
         ? withLiveShares(
-            snapshotIn,
-            liveShareDeltas(live.trades, live.supply, Date.parse(snapshotIn.takenAt)),
+            heldReading,
+            liveShareDeltas(heldLive.trades, heldLive.supply, Date.parse(heldReading.takenAt)),
           )
-        : snapshotIn,
-    [snapshotIn, live],
+        : heldReading,
+    [heldReading, heldLive],
   );
   const wide = useMemo(
     () =>
-      wideIn && live
-        ? wideWithLiveShares(wideIn, liveShareDeltas(live.trades, live.supply, Date.parse(wideIn.readAt)))
+      wideIn && heldLive
+        ? wideWithLiveShares(
+            wideIn,
+            liveShareDeltas(heldLive.trades, heldLive.supply, Date.parse(wideIn.readAt)),
+          )
         : wideIn,
-    [wideIn, live],
+    [wideIn, heldLive],
   );
   const { showTransfers, setTransfersOn } = useTransferToggle(snapshot);
   const { bubbleFunderLabels } = useAppearance();
@@ -2318,11 +2369,18 @@ export function BubbleMapSection({
     () => (snapshot && !showTransfers ? withoutTransfers(snapshot) : snapshot),
     [snapshot, showTransfers],
   );
+  // Each refresh settles from where the bubbles last stood, so the map moves gently (user ask
+  // 2026-10-19); switching the transfers lays it out afresh.
+  const lastDrawn = useRef<{ transfers: boolean; at: MapPositions } | null>(null);
   const graph = useMemo(() => {
     if (!shown) return null;
+    const last = lastDrawn.current;
     const drawn = layoutGraph(
       buildGraph(withWideMap(shown, showTransfers ? wide : wideWithoutTransfers(wide)), flagged),
+      undefined,
+      { prev: last && last.transfers === showTransfers ? last.at : null },
     );
+    lastDrawn.current = { transfers: showTransfers, at: positionsOf(drawn) };
     if (!showTransfers || !snapshot) return drawn;
     // The clusters funding alone forms, for each KOL's step out (user decision 2026-10-16: a send
     // into a KOL's bundle doesn't pull the sender in).
@@ -2372,7 +2430,8 @@ export function BubbleMapSection({
             }
           >
             {moment.at !== undefined && Number.isFinite(moment.at) ? (
-              <SecondsAgo at={moment.at} />
+              // The reading drawn, which waits for the map's next redraw.
+              <SecondsAgo at={heldReading ? Date.parse(heldReading.takenAt) : moment.at} />
             ) : (
               moment.label
             )}
