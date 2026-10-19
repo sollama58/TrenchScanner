@@ -17867,6 +17867,40 @@ body:has(.util-toast) .bug-fab {
   justify-content: center;
   flex-wrap: wrap;
 }
+/* One card, tab or window that hit a render error (SectionBoundary); the rest of the page keeps working. */
+.section-crash {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bad-wash);
+  color: var(--ink);
+  font-size: 13px;
+}
+.section-crash .row {
+  display: flex;
+  gap: 8px;
+}
+.section-crash.is-card {
+  margin: 0;
+  padding: 8px 10px;
+}
+.section-crash.is-modal {
+  position: fixed;
+  z-index: 1000;
+  left: 50%;
+  top: 20vh;
+  transform: translateX(-50%);
+  width: min(440px, calc(100vw - 32px));
+  margin: 0;
+  background: var(--surface-solid);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
 /* Two-factor setup: the authenticator link is for touch screens, where the app is on this device. */
 .tf-open-app {
   display: none;
@@ -20478,18 +20512,40 @@ dialog.tm-modal.tm-terminal::backdrop {
 }
 
 /* ---- Hidden tokens (user ask 2026-10-19): hide a token from Cards and Scope, and bring it back ---- */
-.card-head .card-hide {
-  flex: none;
-  align-self: flex-start;
-  margin: -4px -6px 0 -4px;
-  padding: 5px;
+/* A bare eye in the Alert square's top-right corner: quiet until pointed at. */
+.card-hide {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   color: var(--muted);
-  opacity: 0.55;
-  transition: opacity 0.15s;
+  opacity: 0.7;
+  transition:
+    opacity 0.15s,
+    color 0.15s,
+    background-color 0.15s;
 }
-.card:hover .card-hide,
+.card-hide:hover,
 .card-hide:focus-visible {
   opacity: 1;
+  color: var(--ink);
+  background: var(--highlight);
+}
+.fig:has(> .card-hide) {
+  position: relative;
+}
+.fig > .card-hide {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+}
+.card-head > .card-hide {
+  flex: none;
+  align-self: flex-start;
 }
 .scope-hide {
   position: absolute;
@@ -20516,9 +20572,6 @@ dialog.tm-modal.tm-terminal::backdrop {
   color: var(--ink);
 }
 @media (hover: none) {
-  .card-head .card-hide {
-    opacity: 1;
-  }
   .scope-hide {
     opacity: 0.85;
   }

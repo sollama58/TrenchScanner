@@ -1,3 +1,4 @@
+import { SectionBoundary } from "./SectionBoundary";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Card, LaunchPage, MatchPage } from "../api";
 import {
@@ -390,16 +391,17 @@ export function ScopeBoard({
                 </p>
               ) : (
                 cols[c.id].map((card, i) => (
-                  <ScopeRow
-                    key={card.id}
-                    index={i}
-                    card={card}
-                    now={now}
-                    display={display}
-                    tiles={tiles}
-                    marker={c.id === "graduated"}
-                    onHide={onHide}
-                  />
+                  <SectionBoundary key={card.id} label="This row" size="card" resetKey={card}>
+                    <ScopeRow
+                      index={i}
+                      card={card}
+                      now={now}
+                      display={display}
+                      tiles={tiles}
+                      marker={c.id === "graduated"}
+                      onHide={onHide}
+                    />
+                  </SectionBoundary>
                 ))
               )}
             </div>

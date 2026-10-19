@@ -1,3 +1,4 @@
+import { SectionBoundary } from "./components/SectionBoundary";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { ACCESS_ENDED_EVENT, ApiError, post, SESSION_ENDED_EVENT, type Subscription, type User } from "./api";
 import { cachedGet, invalidate, peek, prefetch } from "./cache";
@@ -44,8 +45,8 @@ import {
 import { AlertNotifier, resetSettings } from "./alerts";
 import { AnnouncementBar } from "./components/AnnouncementBar";
 import { currentSignIn, hasPendingLink, mayReplaceSignIn, redeemLinkCode, takeLinkCode } from "./deviceLink";
-import { useSageMint } from "./sage";
-import { useWalletAddress } from "./walletModal";
+import { closeSage, useSageMint } from "./sage";
+import { closeWallet, useWalletAddress } from "./walletModal";
 import { PageLoader } from "./components/PageLoader";
 import { beginWait, markNavigation } from "./loadTracker";
 import { useAppearance } from "./appearance";
@@ -578,76 +579,95 @@ export function App() {
         )}
         {guest && (
           <div className="tab-view" key={tab} {...panelProps}>
-            {tab === "live" ? (
-              <GuestLiveTab onConnect={connectWallet} />
-            ) : tab === "model" ? (
-              <Suspense fallback={<Boot />}>
-                <ModelTab guest />
-              </Suspense>
-            ) : tab === "lighthouse" ? (
-              <Suspense fallback={<Boot />}>
-                <LighthouseTab guest />
-              </Suspense>
-            ) : (
-              <GuestLocked
-                label={TABS.find((t) => t.id === tab)?.label ?? "this"}
-                onConnect={connectWallet}
-              />
-            )}
+            <SectionBoundary label="This tab" resetKey={tab}>
+              {tab === "live" ? (
+                <GuestLiveTab onConnect={connectWallet} />
+              ) : tab === "model" ? (
+                <Suspense fallback={<Boot />}>
+                  <ModelTab guest />
+                </Suspense>
+              ) : tab === "lighthouse" ? (
+                <Suspense fallback={<Boot />}>
+                  <LighthouseTab guest />
+                </Suspense>
+              ) : (
+                <GuestLocked
+                  label={TABS.find((t) => t.id === tab)?.label ?? "this"}
+                  onConnect={connectWallet}
+                />
+              )}
+            </SectionBoundary>
           </div>
         )}
         {guest && sageMint && (
           <Suspense fallback={null}>
-            <SageHost key={sageMint} mint={sageMint} guest onConnect={connectWallet} />
+            <SectionBoundary label="TokenSage's read" resetKey={sageMint} onClose={closeSage}>
+              <SageHost key={sageMint} mint={sageMint} guest onConnect={connectWallet} />
+            </SectionBoundary>
           </Suspense>
         )}
         {guest && walletAddress && (
           <Suspense fallback={null}>
-            <WalletModalHost key={walletAddress} wallet={walletAddress} guest onConnect={connectWallet} />
+            <SectionBoundary label="This wallet's window" resetKey={walletAddress} onClose={closeWallet}>
+              <WalletModalHost key={walletAddress} wallet={walletAddress} guest onConnect={connectWallet} />
+            </SectionBoundary>
           </Suspense>
         )}
         {signedIn && (
           <AccessGate walletAddress={session.user.walletAddress} onSignedOut={signOut}>
             <AlertNotifier />
             <div className="tab-view" key={tab} {...panelProps}>
-              <Suspense fallback={<Boot />}>
-                {tab === "live" && (
-                  <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} isAdmin={isAdmin} />
-                )}
-                {tab === "model" && <ModelTab />}
-                {tab === "lighthouse" && <LighthouseTab />}
-                {tab === "filters" && <FiltersTab />}
-                {tab === "utilities" && <UtilitiesTab walletAddress={session.user.walletAddress} />}
-                {tab === "portfolio" && <PortfolioTab />}
-                {tab === "settings" && <SettingsTab goTo={goTo} />}
-                {tab === "admin" && <AdminTab goTo={goTo} />}
-              </Suspense>
+              <SectionBoundary label="This tab" resetKey={tab}>
+                <Suspense fallback={<Boot />}>
+                  {tab === "live" && (
+                    <LiveTab goTo={goTo} walletAddress={session.user.walletAddress} isAdmin={isAdmin} />
+                  )}
+                  {tab === "model" && <ModelTab />}
+                  {tab === "lighthouse" && <LighthouseTab />}
+                  {tab === "filters" && <FiltersTab />}
+                  {tab === "utilities" && <UtilitiesTab walletAddress={session.user.walletAddress} />}
+                  {tab === "portfolio" && <PortfolioTab />}
+                  {tab === "settings" && <SettingsTab goTo={goTo} />}
+                  {tab === "admin" && <AdminTab goTo={goTo} />}
+                </Suspense>
+              </SectionBoundary>
             </div>
             {/* Pro Mode's TRADES panel, above the Utility handle on every tab. */}
             {pro?.pro && (
               <Suspense fallback={null}>
-                <TradesDrawer key={pro.wallet} />
+                <SectionBoundary label="The trades panel" resetKey={pro.wallet}>
+                  <TradesDrawer key={pro.wallet} />
+                </SectionBoundary>
               </Suspense>
             )}
             {/* The Utilities tab has the same tools, with its own toolbar beside them. */}
             {tab !== "utilities" && (
               <Suspense fallback={null}>
-                <UtilityDrawer walletAddress={session.user.walletAddress} onMore={() => goTo("utilities")} />
+                <SectionBoundary label="The utilities drawer">
+                  <UtilityDrawer
+                    walletAddress={session.user.walletAddress}
+                    onMore={() => goTo("utilities")}
+                  />
+                </SectionBoundary>
               </Suspense>
             )}
             {sageMint && (
               <Suspense fallback={null}>
-                <SageHost key={sageMint} mint={sageMint} guest={false} onConnect={connectWallet} />
+                <SectionBoundary label="TokenSage's read" resetKey={sageMint} onClose={closeSage}>
+                  <SageHost key={sageMint} mint={sageMint} guest={false} onConnect={connectWallet} />
+                </SectionBoundary>
               </Suspense>
             )}
             {walletAddress && (
               <Suspense fallback={null}>
-                <WalletModalHost
-                  key={walletAddress}
-                  wallet={walletAddress}
-                  guest={false}
-                  onConnect={connectWallet}
-                />
+                <SectionBoundary label="This wallet's window" resetKey={walletAddress} onClose={closeWallet}>
+                  <WalletModalHost
+                    key={walletAddress}
+                    wallet={walletAddress}
+                    guest={false}
+                    onConnect={connectWallet}
+                  />
+                </SectionBoundary>
               </Suspense>
             )}
           </AccessGate>

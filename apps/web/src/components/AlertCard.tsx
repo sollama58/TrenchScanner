@@ -231,6 +231,21 @@ export function AlertCard({
     });
   };
 
+  // In the Alert square's corner (user ask 2026-10-19), else at the end of the header when the
+  // Alert figure is hidden.
+  const hideButton = onHide && (
+    <button
+      type="button"
+      className="card-hide"
+      onClick={onHide}
+      title={`Hide ${tokenLabel(card.token)} from your feed. Hidden tokens are listed under Hidden, where you can bring them back.`}
+      aria-label={`Hide ${tokenLabel(card.token)}`}
+    >
+      <EyeOffIcon size={13} />
+    </button>
+  );
+  const hideInAlert = figCount > 0 && show("alert");
+
   // A click anywhere on the card that isn't a button or link, and isn't the end of a text selection.
   const openDetail = (e: React.MouseEvent) => {
     if (!detail || e.defaultPrevented || e.button !== 0) return;
@@ -366,17 +381,7 @@ export function AlertCard({
             {resultMark === "⊘" ? <span className="result-stop">⊘</span> : resultMark}
           </span>
         )}
-        {onHide && (
-          <button
-            type="button"
-            className="ghost icon-btn card-hide"
-            onClick={onHide}
-            title={`Hide ${tokenLabel(card.token)} from your feed. Hidden tokens are listed under Hidden, where you can bring them back.`}
-            aria-label={`Hide ${tokenLabel(card.token)}`}
-          >
-            <EyeOffIcon size={14} />
-          </button>
-        )}
+        {!hideInAlert && hideButton}
       </header>
 
       {figCount > 0 && (
@@ -384,6 +389,7 @@ export function AlertCard({
           {show("alert") && (
             <div className="fig">
               <label>Alert</label>
+              {hideButton}
               <span className="num">{usd(alertMcap)}</span>
             </div>
           )}

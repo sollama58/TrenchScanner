@@ -1,3 +1,4 @@
+import { SectionBoundary } from "./SectionBoundary";
 import { lazy, Suspense, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useNow } from "../hooks";
@@ -13,16 +14,18 @@ export function TokenModalHost() {
   const tick = useNow(15_000);
   if (!open) return null;
   return createPortal(
-    <Suspense fallback={null}>
-      {/* Keyed by card, so opening another card's modal starts it fresh. */}
-      <TokenModal
-        key={open.card.id}
-        card={open.card}
-        now={Math.max(open.now, tick)}
-        onClose={closeTokenModal}
-        scope={open.scope}
-      />
-    </Suspense>,
+    <SectionBoundary label="This token's window" resetKey={open.card.id} onClose={closeTokenModal}>
+      <Suspense fallback={null}>
+        {/* Keyed by card, so opening another card's modal starts it fresh. */}
+        <TokenModal
+          key={open.card.id}
+          card={open.card}
+          now={Math.max(open.now, tick)}
+          onClose={closeTokenModal}
+          scope={open.scope}
+        />
+      </Suspense>
+    </SectionBoundary>,
     document.body,
   );
 }

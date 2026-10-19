@@ -1975,16 +1975,18 @@ export function ChartCard({
     let path: PathStep[] = [];
     if (pathing && secondRead?.candles?.length) {
       const fine = held(stitch([...runs, runOf(secondRead.candles, 1_000)], bounds.live ? tail.ticks : []));
-      const end = fine[fine.length - 1]!;
-      const slot = Math.floor(end.t / PATH_EVERY_MS);
-      const kept = guessRef.current;
-      const guess =
-        kept && kept.mint === mint && kept.slot === slot
-          ? kept.guess
-          : guessPath(fine, end.t, secondRead.candles);
-      guessRef.current = { mint, slot, guess };
-      const start = source[source.length - 1]!;
-      if (guess) path = pathFrom(guess, start);
+      const end = fine[fine.length - 1];
+      if (end) {
+        const slot = Math.floor(end.t / PATH_EVERY_MS);
+        const kept = guessRef.current;
+        const guess =
+          kept && kept.mint === mint && kept.slot === slot
+            ? kept.guess
+            : guessPath(fine, end.t, secondRead.candles);
+        guessRef.current = { mint, slot, guess };
+        const start = source[source.length - 1]!;
+        if (guess) path = pathFrom(guess, start);
+      }
     }
     return {
       path,
@@ -2033,9 +2035,9 @@ export function ChartCard({
     [data],
   );
 
-  const latestMcap = view?.live ? view.latest : (data?.marketCap.at(-1)?.usd ?? null);
+  const latestMcap = view?.live ? view.latest : (data?.marketCap[data.marketCap.length - 1]?.usd ?? null);
   // When that market cap was read: the share card stamps this, not the moment it is drawn.
-  const latestMcapAt = view?.live ? view.latestAt : (data?.marketCap.at(-1)?.t ?? null);
+  const latestMcapAt = view?.live ? view.latestAt : (data?.marketCap[data.marketCap.length - 1]?.t ?? null);
   const summary = useMemo(
     () => (pro && position.data ? summarizePosition(position.data, latestMcap) : null),
     [pro, position.data, latestMcap],
