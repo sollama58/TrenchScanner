@@ -296,6 +296,11 @@ export class SharedCacheMap<T> {
     for (const [key, cache] of this.caches) if (test(key)) cache.clear();
   }
 
+  /** Whether `key` has a cache held, without creating one or marking it used. */
+  has(key: string): boolean {
+    return this.caches.has(key);
+  }
+
   /** Test seam: how many keys are held. */
   get size(): number {
     return this.caches.size;

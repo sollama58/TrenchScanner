@@ -29,16 +29,18 @@ export class RecentlyAllowed {
     }
   }
 
-  has(key: string): boolean {
+  has(key: string, withinMs = this.ttlMs): boolean {
     const at = this.at.get(key);
-    return at !== undefined && this.now() - at < this.ttlMs;
+    return at !== undefined && this.now() - at < Math.min(withinMs, this.ttlMs);
   }
 
   /**
    * `check`'s answer, remembering a yes. When it throws (the database), a key let through within
-   * the TTL is let through again and the error is logged; otherwise the error stands.
+   * the TTL is let through again and the error is logged; otherwise the error stands. With
+   * `reuseMs`, a yes that recent is answered again without running `check` at all.
    */
-  async pass(key: string, check: () => Promise<boolean>, what: string): Promise<boolean> {
+  async pass(key: string, check: () => Promise<boolean>, what: string, reuseMs = 0): Promise<boolean> {
+    if (reuseMs > 0 && this.has(key, reuseMs)) return true;
     try {
       const yes = await check();
       if (yes) this.remember(key);
@@ -53,6 +55,15 @@ export class RecentlyAllowed {
 
 /** allowLookupRead's recent passes, by reader, utility and subject. */
 const recentReads = new RecentlyAllowed();
+
+/**
+ * How long allowLookupRead reuses a yes without asking the database again. The token view's live
+ * tail and Live trades long-poll about once a second each, and every ask ran the whole gate: for a
+ * coin opened as a Pro trade or a paid lookup (not on the feed, so mintOnFeed's cache never holds
+ * it) that was four or five queries per ask (API audit 2026-10-19). A minute is mintOnFeed's own
+ * reuse; a lookup's re-open window or a trade's listing ends at most that much late.
+ */
+const LOOKUP_PASS_REUSE_MS = 60_000;
 
 /**
  * The paid lookups' free twins (P17, 2026-10-14): the wallet modal's read (GET /wallets/:wallet)
@@ -159,6 +170,7 @@ export async function allowLookupRead(
     async () =>
       !!(await freeLookupReason(reader, utility, subject)) || !!(await openLookup(reader, utility, subject)),
     "lookup read",
+    LOOKUP_PASS_REUSE_MS,
   );
   if (allowed) return true;
   const cost = (await burnCreditPrices()).cost[utility];

@@ -301,7 +301,7 @@ export async function registerGuestRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.issues[0]?.message ?? "invalid request" });
     }
-    return opts.reports.learning(parsed.data.days, parsed.data.tz);
+    return opts.reports.learning(parsed.data.days, parsed.data.tz, ipRateLimitKey(request));
   });
 
   /**

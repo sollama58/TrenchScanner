@@ -705,6 +705,11 @@ export class KeyedCache<T> {
   forget(key: string): void {
     this.entries.delete(key);
   }
+
+  /** Drops every answer (tests). */
+  clear(): void {
+    this.entries.clear();
+  }
 }
 
 /**
