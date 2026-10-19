@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   disclaimerAccepted,
+  quickBuyShown,
   runTrade,
   tradeCooldownLeft,
   useCanSignTrades,
@@ -15,7 +16,8 @@ import { BoltIcon } from "./Icons";
 /**
  * The quick-buy pill on alert and stream cards (user ask 2026-10-18): one tap buys the amount set
  * in Settings > Trading, with the same settings, checks and wallet as the Trade panel. Off by
- * default, and only for a Pro Mode wallet this device can sign for. A wallet that hasn't accepted
+ * default, hidden while the amount is blank or 0, and only for a Pro Mode wallet this device can
+ * sign for. A wallet that hasn't accepted
  * the trading disclaimer yet is sent to the token window, where it is shown.
  *
  * Without `slot` it floats in the picked corner of its card (Stream rows). With `slot`, the card
@@ -50,9 +52,10 @@ export function QuickBuyPill({
   const q = settings.quickBuy;
   const owner = pro?.pro ? pro.wallet : null;
   const here = !slot || slot === q.position;
-  // Only while it's switched on (and in this spot): a feed of cards shouldn't each watch the wallet
-  // list for nothing.
-  const canSign = useCanSignTrades(q.enabled && here ? owner : null);
+  // Only while it's switched on with an amount (and in this spot): a feed of cards shouldn't each
+  // watch the wallet list for nothing.
+  const shown = quickBuyShown(q) && here;
+  const canSign = useCanSignTrades(shown ? owner : null);
   const [state, setState] = useState<State>({ kind: "idle" });
 
   // A result shows for a moment, then the pill is ready again.
@@ -62,7 +65,7 @@ export function QuickBuyPill({
     return () => clearTimeout(t);
   }, [state]);
 
-  if (!owner || !q.enabled || !here || !canSign) return null;
+  if (!owner || !shown || !canSign) return null;
 
   const buy = async (e: React.MouseEvent) => {
     e.preventDefault();

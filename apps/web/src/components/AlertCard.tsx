@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { QuickBuyPill } from "./QuickBuyPill";
-import { useProState, useTradeSettings, type QuickBuySettings } from "../proTrade";
+import { quickBuyShown, useProState, useTradeSettings, type QuickBuySettings } from "../proTrade";
 import type { Card, CardField, FeedAppearance, Snapshot } from "../api";
 import {
   ago,
@@ -236,7 +236,7 @@ export function AlertCard({
   const quickBuyFoot =
     !!detail &&
     !!pro?.pro &&
-    tradeSettings.quickBuy.enabled &&
+    quickBuyShown(tradeSettings.quickBuy) &&
     tradeSettings.quickBuy.position.startsWith("bottom");
 
   const copy = () => {

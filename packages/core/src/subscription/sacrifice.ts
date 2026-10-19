@@ -199,6 +199,18 @@ export interface PlatformTradeRecord {
     lamports: bigint | null;
     asdfPerSol: number | null;
   };
+  /**
+   * What any API instance needs to keep resending it and to call it expired: the signed
+   * transaction (base64), its blockhash's last valid height and the Sender tier, never the Sender
+   * URL (it carries the API key); and the build it came from, for one send per build.
+   */
+  inFlight?: {
+    transaction: string;
+    lastValidBlockHeight: number;
+    senderSpeed: "eco" | "turbo";
+    senderMevProtect: boolean;
+    buildId: string | null;
+  };
 }
 
 export type RecordTradeOutcome =
@@ -248,6 +260,15 @@ export async function recordPlatformTrade(r: PlatformTradeRecord): Promise<Recor
         asdfPerSol: s.asdfPerSol !== null ? String(s.asdfPerSol) : null,
         feeTier: s.tier,
         sacrificeMode: s.mode === "off" ? null : s.mode,
+        ...(r.inFlight
+          ? {
+              transaction: r.inFlight.transaction,
+              lastValidBlockHeight: BigInt(r.inFlight.lastValidBlockHeight),
+              senderSpeed: r.inFlight.senderSpeed,
+              senderMevProtect: r.inFlight.senderMevProtect,
+              buildId: r.inFlight.buildId,
+            }
+          : {}),
       },
     });
     return { status: "recorded" as const, taken: take };

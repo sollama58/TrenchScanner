@@ -17,6 +17,7 @@ import {
   runTrade,
   saveTradeSettings,
   TradeError,
+  TradeExpiredError,
   tradeCooldownLeft,
   type FeeEstimate,
   type SwapCostEstimate,
@@ -173,7 +174,8 @@ type Status =
   | { kind: "idle" }
   | { kind: "busy"; stage: TradeStage; what: string; quote?: string }
   | { kind: "done"; text: string; signature: string }
-  | { kind: "error"; text: string; signature?: string }
+  /** retryTurbo: the trade expired before it landed, and one tap sends it again at Turbo. */
+  | { kind: "error"; text: string; signature?: string; retryTurbo?: () => void }
   /** The Sacrifice is short of burned credits: one tap burns ASDF for them and retries. */
   | {
       kind: "topup";
@@ -642,7 +644,8 @@ export function TradePanel({
     saveTradeSettings({ ...settings, ...patch });
   };
 
-  const trade = async (side: "buy" | "sell", amount: bigint, what: string, all = false) => {
+  /** `turbo`: this one trade at Turbo whatever the speed setting (the retry after an expiry). */
+  const trade = async (side: "buy" | "sell", amount: bigint, what: string, all = false, turbo = false) => {
     if (busy || amount <= 0n || !accepted) return;
     const refuse = (text: string) => setStatus({ kind: "error", text });
     if (!all) {
@@ -681,7 +684,15 @@ export function TradePanel({
     setStatus({ kind: "busy", stage: "building", what });
     try {
       const signature = await runTrade(
-        { owner, mint, side, amount, all, settings, sacrificeNote },
+        {
+          owner,
+          mint,
+          side,
+          amount,
+          all,
+          settings: turbo ? { ...settings, speed: "turbo" } : settings,
+          sacrificeNote,
+        },
         (stage, built) => {
           setStatus({
             kind: "busy",
@@ -711,6 +722,8 @@ export function TradePanel({
         kind: "error",
         text: errorText(e),
         signature: e instanceof TradeError ? e.signature : undefined,
+        retryTurbo:
+          e instanceof TradeExpiredError ? () => void trade(side, amount, what, all, true) : undefined,
       });
     } finally {
       onTraded();
@@ -1296,6 +1309,16 @@ export function TradePanel({
                 </>
               )}
             </p>
+          )}
+          {status.kind === "error" && status.retryTurbo && (
+            <button
+              type="button"
+              className="primary small"
+              title="The same trade again on every Helius path, a 0.001 SOL tip"
+              onClick={status.retryTurbo}
+            >
+              <BoltIcon size={13} /> Retry at Turbo
+            </button>
           )}
         </div>
       )}

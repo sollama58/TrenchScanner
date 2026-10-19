@@ -81,16 +81,62 @@ export function sessionEnded(path: string, status: number, body: unknown): boole
   );
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = authHeaders(new Headers(init.headers));
-  if (init.body !== undefined && !headers.has("content-type"))
+/**
+ * How long a read (GET) may take before it is given up as failed (user ask 2026-10-19: the charts
+ * can't have downtime). A request that never settles (a half-open connection after a laptop
+ * sleeps, a stuck proxy) otherwise left its poll waiting on it for good. Generous, for the reads
+ * that go to the chain (a wallet never seen before); the chart's own feeds ask for less
+ * (FEED_TIMEOUT_MS). Writes have none: a trade's answer is never given up on while it may still land.
+ */
+export const READ_TIMEOUT_MS = 45_000;
+/** The live chart feeds' reads: the API holds a live ask (wait=1) for 8 seconds at most. */
+export const FEED_TIMEOUT_MS = 20_000;
+
+/** `signal`, also aborted after `ms`; the cleanup clears the timer. */
+export function withTimeout(
+  signal: AbortSignal | null | undefined,
+  ms: number,
+): {
+  signal: AbortSignal;
+  done: () => void;
+} {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(new DOMException("The request timed out", "TimeoutError")), ms);
+  const onAbort = () => ctl.abort(signal?.reason);
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
+  return {
+    signal: ctl.signal,
+    done: () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    },
+  };
+}
+
+export async function api<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
+  const { timeoutMs, ...rest } = init;
+  const headers = authHeaders(new Headers(rest.headers));
+  if (rest.body !== undefined && !headers.has("content-type"))
     headers.set("content-type", "application/json");
+  const read = (rest.method ?? "GET").toUpperCase() === "GET";
+  const limit = timeoutMs ?? (read ? READ_TIMEOUT_MS : 0);
+  const timed = limit > 0 ? withTimeout(rest.signal, limit) : null;
   try {
-    return await parse<T>(await fetch(`${API_URL}${path}`, { ...init, headers, credentials: "include" }));
+    return await parse<T>(
+      await fetch(`${API_URL}${path}`, {
+        ...rest,
+        signal: timed?.signal ?? rest.signal,
+        headers,
+        credentials: "include",
+      }),
+    );
   } catch (e) {
     if (e instanceof ApiError && sessionEnded(path, e.status, e.body) && typeof window !== "undefined")
       window.dispatchEvent(new Event(SESSION_ENDED_EVENT));
     throw e;
+  } finally {
+    timed?.done();
   }
 }
 

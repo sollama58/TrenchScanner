@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_QUICK_BUY, DEFAULT_TRADE_SETTINGS, parseTradeSettings } from "./proTrade";
+import { DEFAULT_QUICK_BUY, DEFAULT_TRADE_SETTINGS, parseTradeSettings, quickBuyShown } from "./proTrade";
 import { presetCols } from "./components/TradePanel";
 import { parseAmounts } from "./decimal";
-import { nextBuy, nextSell } from "./components/TradingSettingsPanel";
+import { nextBuy, nextSell, quickAmountText } from "./components/TradingSettingsPanel";
 
 const parse = (v: object) => parseTradeSettings(JSON.stringify(v));
 
@@ -46,6 +46,19 @@ describe("trade settings", () => {
     // Below the API's 0.01 SOL minimum.
     expect(parse({ quickBuy: { amountSol: 0.005 } }).quickBuy.amountSol).toBe(DEFAULT_QUICK_BUY.amountSol);
     expect(parse({ buyPresets: [0.005, 1] }).buyPresets).toEqual(DEFAULT_TRADE_SETTINGS.buyPresets);
+  });
+
+  it("hides quick buy by default and while the amount is blank or zero", () => {
+    expect(DEFAULT_QUICK_BUY.amountSol).toBe(0);
+    expect(quickBuyShown(DEFAULT_QUICK_BUY)).toBe(false);
+    expect(quickBuyShown({ ...DEFAULT_QUICK_BUY, enabled: true })).toBe(false);
+    expect(quickBuyShown({ ...DEFAULT_QUICK_BUY, enabled: true, amountSol: 0.1 })).toBe(true);
+    expect(quickBuyShown({ ...DEFAULT_QUICK_BUY, enabled: false, amountSol: 0.1 })).toBe(false);
+    // A cleared amount is saved as 0 and stays hidden after a reload.
+    expect(quickBuyShown(parse({ quickBuy: { enabled: true, amountSol: 0 } }).quickBuy)).toBe(false);
+    expect(quickBuyShown(parse({ quickBuy: { enabled: true, amountSol: null } }).quickBuy)).toBe(false);
+    expect(quickAmountText(0)).toBe("");
+    expect(quickAmountText(0.25)).toBe("0.25");
   });
 
   it("splits buy buttons over one or two rows", () => {
