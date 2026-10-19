@@ -668,6 +668,8 @@ describe("swap costs", () => {
       venues: ["PumpSwap"],
       priceImpactPct: 1.2,
       accountRentLamports: TOKEN_2022_ACCOUNT_RENT_LAMPORTS,
+      outAmount: 1n,
+      decimals: null,
     });
     const blind = await estimateSwapCosts(
       {
@@ -686,6 +688,8 @@ describe("swap costs", () => {
       venues: [],
       priceImpactPct: null,
       accountRentLamports: 0n,
+      outAmount: null,
+      decimals: null,
     });
   });
 });

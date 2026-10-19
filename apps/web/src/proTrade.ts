@@ -393,6 +393,10 @@ export interface SwapCostEstimate {
   priceImpactPct: number | null;
   /** The token account's rent on a first buy, refunded when it is closed; "0" when the wallet has one. */
   accountRentLamports: string;
+  /** The coins the reference buy would get, raw units, by the route's quote; null without one. Absent from older API builds. */
+  outAmount?: string | null;
+  /** The coin's decimals; null when unread. */
+  decimals?: number | null;
   /** The Sacrifice's rate while it is on and the wallet pays (20), else 0. */
   platformFeeBps?: number;
   sacrifice?: SacrificeView;
@@ -420,14 +424,25 @@ export function useFeeEstimate(mint: string, settings: TradeSettings): FeeEstima
   return fee;
 }
 
+/** How long the buy amount must sit still before it is quoted: typing doesn't quote every keystroke. */
+const QUOTE_SETTLE_MS = 500;
+
 /**
  * The swap costs of a buy of `refSol` on `mint` (GET /pro/trade/costs), re-read every minute: a
- * Jupiter quote each, so quoted on the first buy button rather than every typed amount.
+ * Jupiter quote each, so a typed amount is quoted only once it has settled. Null `mint`: none.
  */
-export function useSwapCosts(mint: string, refSol: number): SwapCostEstimate | null {
+export function useSwapCosts(mint: string | null, refSol: number): SwapCostEstimate | null {
   const [costs, setCosts] = useState<SwapCostEstimate | null>(null);
-  const ref = String(Math.round(refSol * 1e9));
+  const wanted = String(Math.round(refSol * 1e9));
+  const [ref, setRef] = useState(wanted);
   useEffect(() => {
+    if (wanted === ref) return;
+    const t = setTimeout(() => setRef(wanted), QUOTE_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [wanted, ref]);
+  useEffect(() => {
+    // No coin: nothing to quote (the caller isn't showing a buy).
+    if (!mint) return;
     let live = true;
     const load = () =>
       api<SwapCostEstimate>(`/pro/trade/costs?${new URLSearchParams({ mint, refLamports: ref })}`)
@@ -443,6 +458,27 @@ export function useSwapCosts(mint: string, refSol: number): SwapCostEstimate | n
     };
   }, [mint, ref]);
   return costs;
+}
+
+/**
+ * The coins a buy of `lamports` is expected to get, whole coins: the route's quote when it was made
+ * on this amount; else the price that quote filled at (or, without one, today's price `priceSol`,
+ * SOL per coin) scaled to it, while the amount waits to be quoted. Null when nothing is known.
+ */
+export function expectedTokens(
+  lamports: bigint | null,
+  quote: SwapCostEstimate | null,
+  priceSol: number | null,
+): { tokens: number; quoted: boolean } | null {
+  if (lamports === null || lamports <= 0n) return null;
+  const sol = Number(lamports) / 1e9;
+  if (quote?.outAmount && typeof quote.decimals === "number" && BigInt(quote.outAmount) > 0n) {
+    const out = Number(BigInt(quote.outAmount)) / 10 ** quote.decimals;
+    if (quote.refLamports === lamports.toString()) return { tokens: out, quoted: true };
+    const ref = Number(quote.refLamports) / 1e9;
+    if (ref > 0) return { tokens: (sol / ref) * out, quoted: false };
+  }
+  return priceSol !== null && priceSol > 0 ? { tokens: sol / priceSol, quoted: false } : null;
 }
 
 // ---- The wallet's position in a coin ----
@@ -543,6 +579,14 @@ export interface PositionSummary {
   unrealizedSol: number | null;
   /** The average market cap the position's coins were bought at (USD), by the buys' own prices. */
   entryMcap: number | null;
+  /**
+   * The market cap (USD) at which the coins still held would bring the position back to even,
+   * sales included: 0 when the sales already covered what it cost. Null with nothing held at a cost.
+   */
+  breakEvenMcap: number | null;
+  /** When the position's first and latest trades landed (ms); null without trades. */
+  firstAt: number | null;
+  lastAt: number | null;
   buys: number;
   sells: number;
 }
@@ -554,6 +598,7 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
   const held = Number(balance) / scale;
   const supply = p.supply ? Number(BigInt(p.supply)) / scale : null;
   const trades = p.trades.map((t) => ({
+    t: t.t,
     side: t.side,
     lamports: BigInt(t.lamports),
     tokens: BigInt(t.tokens),
@@ -642,6 +687,13 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
   // SOL per token paid across the buys, as a market cap: the line the chart draws as "Entry".
   const entryMcap =
     costedBought > 0 && supply && p.solUsd ? (solIn / (costedBought / scale)) * supply * p.solUsd : null;
+  const mine = start === null ? [] : trades.slice(start);
+  // The held coins' price that makes realized + their value - their cost = 0.
+  const costedCoins = costed / scale;
+  const evenSol =
+    known && costedCoins > 0 && balance > 0n ? (Math.max(0, cost) - realized) / costedCoins : null;
+  const breakEvenMcap =
+    evenSol !== null && supply && p.solUsd ? Math.max(0, evenSol) * supply * p.solUsd : null;
   return {
     held,
     share,
@@ -654,6 +706,9 @@ export function summarizePosition(p: PositionResponse, nowMcapUsd: number | null
     realizedSol: known ? realized : null,
     unrealizedSol,
     entryMcap,
+    breakEvenMcap,
+    firstAt: mine[0]?.t ?? null,
+    lastAt: mine[mine.length - 1]?.t ?? null,
     buys,
     sells,
   };
