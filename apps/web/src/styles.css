@@ -11796,15 +11796,15 @@ img.tm-avatar {
   stroke: var(--ink);
   stroke-width: 1;
 }
-/* Under the chart: Line / Candles and the zoom buttons. */
+/* Under the chart: Line / Candles, Linear / Log and the zoom buttons. Wraps to a second row on a
+   narrow chart rather than cutting the zoom buttons off. */
 .pc-tools {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px 10px;
-  height: 28px;
+  min-height: 28px;
   margin-top: 6px;
-  overflow: hidden;
 }
 .pc-zoom {
   display: inline-flex;

@@ -176,11 +176,19 @@ export interface Axis {
 }
 
 /**
- * The market-cap axis over [lo, hi], drawn from `top` to `bottom` px. A coin that moved more than
- * 4x in view gets a log axis, so a run from $8K to $400K doesn't flatten everything before it;
- * ticks then sit on 1, 2 and 5 times a power of ten. A calmer one stays linear on round steps.
+ * The market-cap axis over [lo, hi], drawn from `top` to `bottom` px: linear on round steps, never
+ * below zero (user ask 2026-10-19: linear by default everywhere). With `log` (the chart's Log
+ * switch) a coin that moved more than 4x in view gets a log axis instead, ticks on 1, 2 and 5
+ * times a power of ten, so a run from $8K to $400K doesn't flatten everything before it.
  */
-export function mcapAxis(lo: number, hi: number, top: number, bottom: number, maxTicks = 5): Axis {
+export function mcapAxis(
+  lo: number,
+  hi: number,
+  top: number,
+  bottom: number,
+  maxTicks = 5,
+  logScale = false,
+): Axis {
   if (!(lo > 0) || !(hi > 0)) {
     lo = 1;
     hi = 10;
@@ -190,7 +198,7 @@ export function mcapAxis(lo: number, hi: number, top: number, bottom: number, ma
     hi = lo * 1.05;
     lo = lo * 0.95;
   }
-  const log = hi / lo > 4;
+  const log = logScale && hi / lo > 4;
   if (log) {
     // A little headroom either side, in log terms.
     const pad = (Math.log(hi) - Math.log(lo)) * 0.06;
@@ -200,7 +208,7 @@ export function mcapAxis(lo: number, hi: number, top: number, bottom: number, ma
     return { y, ticks: logTicks(Math.exp(a), Math.exp(b), maxTicks), log };
   }
   const span = hi - lo;
-  const a = lo - span * 0.08;
+  const a = Math.max(0, lo - span * 0.08);
   const b = hi + span * 0.08;
   const y = (v: number) => bottom - ((v - a) / (b - a)) * (bottom - top);
   return { y, ticks: linearTicks(a, b, maxTicks), log };

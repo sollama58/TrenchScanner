@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { signedPct } from "../format";
 import { PricingChangeMark } from "./PricingChangeMark";
-import { offScale, perHourText, shareAt, type CutoffPoint } from "../cutoffCurve";
+import { CURVE_SLICES, offScale, perHourText, shareAt, type CutoffPoint } from "../cutoffCurve";
 import { lineScale, tickIndices, tickTextWidth, tipCenter } from "../chartScale";
 import { pickHandlers, pointerX, useChartWidth } from "./useChartWidth";
 
@@ -582,10 +582,14 @@ export function MarkerBars({
   );
 }
 
+/** The cutoff curve's linear axis runs to its last slice. */
+const CURVE_TOP = CURVE_SLICES.at(-1)!;
+
 /**
- * The cutoff curve: hit rate (2x, 4x) against how picky the cutoff is, on a log axis of the share
- * of decision moments called, with what each cutoff would send per hour under it and the live
- * cutoff marked.
+ * The cutoff curve: hit rate (2x, 4x) against how picky the cutoff is, on an axis of the share of
+ * decision moments called (linear by default, log behind a switch), with what each cutoff would
+ * send per hour under it and the live cutoff marked. Slice labels that would collide on the linear
+ * axis are left out from the left; the readout still gives every slice.
  */
 export function CutoffCurve({
   points,
@@ -602,6 +606,7 @@ export function CutoffCurve({
   height?: number;
 }) {
   const [hover, setHover] = useState<number | null>(null);
+  const [log, setLog] = useState(false);
   const [boxRef, width] = useChartWidth();
   const padL = 40;
   const padR = 22;
@@ -609,7 +614,7 @@ export function CutoffCurve({
   const padB = 38;
   const plotW = width - padL - padR;
   const plotH = height - padT - padB;
-  const x = (share: number) => padL + shareAt(share) * plotW;
+  const x = (share: number) => padL + shareAt(share, log) * plotW;
   const y = (v: number) => padT + plotH - (Math.min(100, Math.max(0, v)) / 100) * plotH;
   const narrow = plotW < 420;
   const line = (key: "winRatePct" | "goalRatePct") =>
@@ -634,7 +639,21 @@ export function CutoffCurve({
   const liveX = live ? x(live.sharePct) : null;
   // A live cutoff outside the curve's 1-50% is pinned to the edge it ran past with an arrow
   // pointing off the scale and a dotted line, rather than drawn as if it sat on the end slice.
-  const liveOff = live ? offScale(live.sharePct) : null;
+  const liveOff = !live ? null : log ? offScale(live.sharePct) : live.sharePct > CURVE_TOP ? "above" : null;
+  const shareText = (p: CutoffPoint) => (narrow ? `${p.sharePct}%` : `Top ${p.sharePct}%`);
+  // The slices that get labels: from the right, each one whose label clears the last kept one's.
+  const labeled = new Set<number>();
+  let leftEdge = Infinity;
+  for (let i = points.length - 1; i >= 0; i--) {
+    const p = points[i]!;
+    const w = Math.max(tickTextWidth(shareText(p)), tickTextWidth(perHourText(p.perHour)));
+    const cx = x(p.sharePct);
+    const [l, r] = i === 0 ? [cx, cx + w] : i === points.length - 1 ? [cx - w, cx] : [cx - w / 2, cx + w / 2];
+    if (r + 6 <= leftEdge) {
+      labeled.add(i);
+      leftEdge = l;
+    }
+  }
   const flip = liveX !== null && liveX > width - 130;
 
   return (
@@ -654,6 +673,25 @@ export function CutoffCurve({
             <i className="marker-key live" /> Live cutoff
           </span>
         )}
+        <span className="segmented small" role="radiogroup" aria-label="Share scale">
+          {(
+            [
+              [false, "Linear"],
+              [true, "Log"],
+            ] as const
+          ).map(([on, text]) => (
+            <button
+              key={text}
+              type="button"
+              role="radio"
+              aria-checked={log === on}
+              className={log === on ? "on" : ""}
+              onClick={() => setLog(on)}
+            >
+              {text}
+            </button>
+          ))}
+        </span>
       </div>
       <div className="chart-box" ref={boxRef}>
         <svg
@@ -710,12 +748,16 @@ export function CutoffCurve({
                   cy={y(p.goalRatePct)}
                   r={hover === i ? 4.5 : 3}
                 />
-                <text className="tick" x={x(p.sharePct)} y={height - 20} textAnchor={anchor}>
-                  {narrow ? `${p.sharePct}%` : `Top ${p.sharePct}%`}
-                </text>
-                <text className="tick faint" x={x(p.sharePct)} y={height - 6} textAnchor={anchor}>
-                  {perHourText(p.perHour)}
-                </text>
+                {labeled.has(i) && (
+                  <>
+                    <text className="tick" x={x(p.sharePct)} y={height - 20} textAnchor={anchor}>
+                      {shareText(p)}
+                    </text>
+                    <text className="tick faint" x={x(p.sharePct)} y={height - 6} textAnchor={anchor}>
+                      {perHourText(p.perHour)}
+                    </text>
+                  </>
+                )}
               </g>
             );
           })}

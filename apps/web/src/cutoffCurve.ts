@@ -34,10 +34,18 @@ export function cutoffPoints(curve: CurvePoint[], momentsPerHour: number | null)
   });
 }
 
-/** Where a share sits on the curve's log axis, 0 (the first slice) to 1 (the last), clamped. */
-export function shareAt(sharePct: number, lo = CURVE_SLICES[0]!, hi = CURVE_SLICES.at(-1)!): number {
+/**
+ * Where a share sits on the curve's axis, 0 to 1, clamped: linear from 0% to the last slice by
+ * default (user ask 2026-10-19), or with `log` on a log axis from the first slice to the last.
+ */
+export function shareAt(
+  sharePct: number,
+  log = false,
+  lo = CURVE_SLICES[0]!,
+  hi = CURVE_SLICES.at(-1)!,
+): number {
   if (!(sharePct > 0)) return 0;
-  const t = (Math.log(sharePct) - Math.log(lo)) / (Math.log(hi) - Math.log(lo));
+  const t = log ? (Math.log(sharePct) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)) : sharePct / hi;
   return Math.min(1, Math.max(0, t));
 }
 
