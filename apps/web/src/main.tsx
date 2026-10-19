@@ -15,6 +15,7 @@ import {
 import { startVersionWatch } from "./version";
 import { installTouchTips } from "./touchTips";
 import { captureInstallPrompt } from "./installApp";
+import { warmLivePanels } from "./livePanels";
 import "./fonts.css";
 import "./styles.css";
 
@@ -52,13 +53,15 @@ createRoot(document.getElementById("root")!).render(
   </StrictMode>,
 );
 
-// Once the first screen is up, fetch the other tabs' code in the background so switching is instant.
+// Once the first screen is up, fetch the other tabs' code (and the Live tab's windows) in the
+// background so switching, or opening one, is instant.
 const warm = () => {
   void loadModelTab();
   void loadLighthouseTab();
   void loadFiltersTab();
   void loadSettingsTab();
   void loadSignIn();
+  warmLivePanels();
 };
 if ("requestIdleCallback" in window) window.requestIdleCallback(warm, { timeout: 4000 });
 else setTimeout(warm, 2000);

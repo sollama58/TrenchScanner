@@ -1,4 +1,5 @@
 import { SectionBoundary } from "./SectionBoundary";
+import { ScopeRowSkeletons } from "./Skeleton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Card, LaunchPage, MatchPage } from "../api";
 import {
@@ -521,21 +522,6 @@ function emptyText(
   return gradError
     ? `Couldn't load graduated tokens: ${gradError.message}`
     : "No graduated token has passed the safety screen in the last day.";
-}
-
-/** Placeholder rows for a column whose data is still on its way. */
-function ScopeRowSkeletons() {
-  return (
-    <div className="scope-row-skeletons" aria-label="Loading" role="status">
-      {Array.from({ length: 4 }, (_, i) => (
-        <div key={i} className="scope-row-skeleton">
-          <span className="skeleton round" />
-          <span className="skeleton" />
-          <span className="skeleton" />
-        </div>
-      ))}
-    </div>
-  );
 }
 
 /** The board's look as classes: Scope settings' density, layout, sizes and chip style. */
