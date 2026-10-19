@@ -249,13 +249,20 @@ const envSchema = z.object({
   HOLDER_TRANSFER_TX_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(30),
   // A coin whose bubble map someone has open right now (Token.holdersViewedAt, user ask
   // 2026-10-19) has its top holders re-read every WATCHED_HOLDERS_REFRESH_SECONDS instead of every
-  // 10 minutes, so the "Now" map, its stats and the top holders keep updating while watched: one
+  // 10 minutes (and its holder list written at that pace, changed or not), so the "Now" map, its
+  // stats and the top holders keep updating while watched: one
   // getProgramAccountsV2 page each (1 credit), at most WATCHED_HOLDER_READS_PER_CYCLE coins a cycle,
   // on top of LINKED_HOLDER_READS_PER_CYCLE. New holders' funders come from the cached funder reads
   // and LINKED_WALLET_LOOKUPS_PER_CYCLE. About 60 credits an hour for each coin kept open. 0 turns
   // the faster re-read off (watched coins then refresh like any other).
   WATCHED_HOLDER_READS_PER_CYCLE: z.coerce.number().int().nonnegative().default(10),
   WATCHED_HOLDERS_REFRESH_SECONDS: z.coerce.number().int().min(30).default(60),
+  // Such a coin whose holders' token accounts the Helius stream already follows (HELIUS_HOLDER_STREAM)
+  // has every balance move of theirs put on its list as it lands (user ask 2026-10-19: the top
+  // holders live, to the second), so its list is re-read from the chain only this often, for the
+  // wallets that bought in from outside it. Falls back to WATCHED_HOLDERS_REFRESH_SECONDS whenever the
+  // stream isn't covering the coin (not yet subscribed, a dropped connection).
+  WATCHED_HOLDERS_STREAMED_REFRESH_SECONDS: z.coerce.number().int().min(30).default(300),
   // Follows those holders' token accounts on Helius's enhanced websocket (worker's
   // heliusAccountStream.ts, user ask 2026-10-17: credits) instead of re-reading their signatures
   // every 10 minutes. Streaming bills by size, and holder accounts are quiet, so it costs a small

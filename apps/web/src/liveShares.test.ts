@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { liveShareDeltas, wideWithLiveShares, withLiveShares } from "./liveShares";
+import { liveShareDeltas, wideShareDeltas, wideWithLiveShares, withLiveShares } from "./liveShares";
 import type { WideMap } from "./bubbleMap";
 
 const SUPPLY = 1_000_000_000;
@@ -31,6 +31,20 @@ describe("liveShareDeltas", () => {
 
   it("moves nothing without a supply", () => {
     expect(liveShareDeltas([buy("a", 1)], null, T).size).toBe(0);
+  });
+});
+
+describe("wideShareDeltas", () => {
+  it("moves the scan's top holders from the list's time and the rest from the top 50's read", () => {
+    // The top 50 was read at T; the list, kept current by the holder stream, was written at T + 10.
+    const trades = [
+      buy("listed", 10_000_000, T + 5),
+      buy("listed", 1_000_000, T + 20),
+      buy("extra", 2_000_000, T + 5),
+    ];
+    const d = wideShareDeltas(trades, SUPPLY, new Set(["listed"]), T + 10, T);
+    expect(d.get("listed")).toBeCloseTo(0.1);
+    expect(d.get("extra")).toBeCloseTo(0.2);
   });
 });
 

@@ -2,9 +2,11 @@
 import "../bootstrap-env.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccountSignaturesResult, ChainTx, TopHoldersResult } from "@trenchscanner/core";
-import { readTopHolders, resetLinkedWallets } from "./linkedWallets.js";
+import { cachedTopHolders, readTopHolders, resetLinkedWallets, type LinkedGroup } from "./linkedWallets.js";
 import {
   ACCOUNT_REREAD_MS,
+  balanceMovesOf,
+  holderListStreamed,
   holderTransfersOf,
   onHolderStreamTx,
   resetHolderTransfers,
@@ -216,6 +218,110 @@ describe("holder transfers", () => {
       await readTopHolders([group], helius, { maxReads: 1, nowMs: after });
       await resolveHolderTransfers([group], helius, { maxSignatureReads: 3, maxTxReads: 10, nowMs: after });
       expect(helius.getAccountSignaturesBatch).toHaveBeenCalledTimes(3);
+    });
+    it("moves the top-holder list by the balances a streamed transaction left", async () => {
+      setHolderTransferStream(fakeStream(NOW - 60_000));
+      const helius = fakeHelius({}, {});
+      const group = { mintAddress: MINT, holders: [], creator: null };
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
+      expect(balanceMovesOf(MINT, streamed)).toEqual([
+        { account: "acc-a", owner: A, pre: 50_000_000n, post: 20_000_000n },
+        { account: "acc-b", owner: B, pre: 0n, post: 30_000_000n },
+      ]);
+
+      onHolderStreamTx(MINT, "live-send", streamed, NOW + 5_000);
+      // One account each: each takes its new balance outright (B's 3% was already counted).
+      expect(cachedTopHolders(MINT, NOW + 5_000)).toEqual([
+        { owner: B, pct: 3 },
+        { owner: A, pct: 2 },
+        { owner: C, pct: 1 },
+      ]);
+      // The same transaction again changes nothing; a failed one is left out.
+      onHolderStreamTx(MINT, "live-send", streamed, NOW + 6_000);
+      const failed = {
+        ...streamed,
+        meta: { ...streamed.meta, err: { InstructionError: [0, "x"] } },
+      } as ChainTx;
+      onHolderStreamTx(MINT, "failed", failed, NOW + 7_000);
+      expect(cachedTopHolders(MINT, NOW + 7_000)?.map((h) => h.pct)).toEqual([3, 2, 1]);
+    });
+
+    it("moves a holder with several token accounts by the difference, and only holders on the list", async () => {
+      setHolderTransferStream(fakeStream(NOW - 60_000));
+      const helius = {
+        ...fakeHelius({}, {}),
+        getTopHoldersBatch: vi.fn(
+          async (mints: string[]): Promise<Map<string, TopHoldersResult>> =>
+            new Map(
+              mints.map((m) => [
+                m,
+                {
+                  status: "found",
+                  supply: SUPPLY.toString(),
+                  holders: [
+                    { owner: A, pct: 5, accounts: ["acc-a", "acc-a2"] },
+                    { owner: B, pct: 3, accounts: ["acc-b"] },
+                  ],
+                },
+              ]),
+            ),
+        ),
+      };
+      const group = { mintAddress: MINT, holders: [], creator: null };
+      await readTopHolders([group], helius, { maxReads: 1, nowMs: NOW });
+      // A sells 1% from its second account to a wallet off the list.
+      const sell = {
+        meta: {
+          err: null,
+          preTokenBalances: [
+            { accountIndex: 1, mint: MINT, owner: A, uiTokenAmount: { amount: "20000000" } },
+          ],
+          postTokenBalances: [
+            { accountIndex: 1, mint: MINT, owner: A, uiTokenAmount: { amount: "10000000" } },
+            { accountIndex: 2, mint: MINT, owner: C, uiTokenAmount: { amount: "10000000" } },
+          ],
+        },
+        transaction: { signatures: ["sell"], message: { accountKeys: [A, "acc-a2", "acc-c"] } },
+      } as unknown as ChainTx;
+      onHolderStreamTx(MINT, "sell", sell, NOW + 5_000);
+      expect(cachedTopHolders(MINT, NOW + 5_000)).toEqual([
+        { owner: A, pct: 4 },
+        { owner: B, pct: 3 },
+      ]);
+    });
+
+    it("re-reads a watched coin's list less often while the stream has followed all its holders", async () => {
+      const stream = fakeStream(NOW - 60_000);
+      setHolderTransferStream(stream);
+      const helius = fakeHelius({}, {});
+      const group: LinkedGroup = { mintAddress: MINT, holders: [], creator: null };
+      const opts = (nowMs: number) => ({
+        maxReads: 1,
+        nowMs,
+        watched: new Set([MINT]),
+        maxWatchedReads: 1,
+        watchedRefreshMs: 60_000,
+        streamedRefreshMs: 300_000,
+        streamed: (g: LinkedGroup, listAtMs: number) => holderListStreamed(g, listAtMs, nowMs),
+      });
+      await readTopHolders([group], helius, opts(NOW));
+      expect(holderListStreamed(group, NOW, NOW)).toBe(true);
+      expect(await readTopHolders([group], helius, opts(NOW + 61_000))).toEqual({
+        reads: 0,
+        watchedReads: 0,
+      });
+      expect(await readTopHolders([group], helius, opts(NOW + 300_000))).toEqual({
+        reads: 0,
+        watchedReads: 1,
+      });
+
+      // Followed only since just before the list was read: back to the watched pace.
+      stream.since = NOW + 300_000 - 10_000;
+      expect(holderListStreamed(group, NOW + 300_000, NOW + 300_000)).toBe(false);
+      expect(await readTopHolders([group], helius, opts(NOW + 360_000))).toEqual({
+        reads: 0,
+        watchedReads: 1,
+      });
     });
   });
 });
