@@ -5,11 +5,15 @@ import {
   DEFAULT_ALERT_PREFS,
   notificationState,
   previewAlert,
+  pushSupported,
   requestNotifications,
   sendTestAlert,
   saveAlertPrefs,
+  syncPush,
+  useSettings,
   type NotificationState,
 } from "../alerts";
+import { mobilePlatform, runningInstalled } from "../installApp";
 import { Skeleton } from "./Charts";
 import { BellIcon, VolumeIcon } from "./Icons";
 
@@ -50,6 +54,14 @@ export function Switch({
 
 export function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
   const prefs = saved ?? DEFAULT_ALERT_PREFS;
+  const publicKey = useSettings()?.push?.publicKey ?? null;
+  // Push reaches this device with the page closed; without it notifications need the page open.
+  const push = publicKey !== null && pushSupported();
+  // iPhone and iPad Safari only notify from the Home Screen app (iOS 16.4+).
+  const iosBrowser =
+    typeof navigator !== "undefined" &&
+    mobilePlatform(navigator.userAgent, navigator.maxTouchPoints) === "ios" &&
+    !runningInstalled();
   const [error, setError] = useState<string | null>(null);
   // The slider moves freely; the value is saved when it is let go.
   const [volume, setVolume] = useState(prefs.volume);
@@ -75,7 +87,10 @@ export function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
     if (state === "default") {
       state = await requestNotifications();
       setPermission(state);
-      if (state === "granted" && !prefs.browserNotifications) save({ browserNotifications: true });
+      if (state === "granted" && !prefs.browserNotifications) {
+        save({ browserNotifications: true });
+        void syncPush(publicKey, true);
+      }
     }
     const result = await sendTestAlert({ ...prefs, volume });
     const sound = prefs.soundEnabled ? "Played your sound. " : "";
@@ -131,11 +146,16 @@ export function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
     // turning the pref off for every device.
     if (prefs.browserNotifications && permission === "granted") {
       save({ browserNotifications: false });
+      void syncPush(publicKey, false);
       return;
     }
     const state = permission === "granted" ? permission : await requestNotifications();
     setPermission(state);
-    if (state === "granted") save({ browserNotifications: true });
+    if (state === "granted") {
+      save({ browserNotifications: true });
+      // Subscribed here, inside the tap: Safari refuses a push subscription made outside one.
+      void syncPush(publicKey, true);
+    }
   };
 
   const notifyLive = prefs.browserNotifications && permission === "granted";
@@ -149,8 +169,10 @@ export function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
           </span>
           <h2>Sound and browser notifications</h2>
           <p className="muted small">
-            Works on every tab while this page is open, including in the background. Saved to your account, so
-            it follows you to other devices.
+            {push
+              ? "Notifications reach this device even with TrenchScanner closed or the phone locked; the sound plays while the page is open."
+              : "Works on every tab while this page is open, including in the background."}{" "}
+            Saved to your account, so it follows you to other devices.
           </p>
         </div>
         <button className="ghost" disabled={saved === null} onClick={() => void test()}>
@@ -218,15 +240,19 @@ export function AlertsPanel({ prefs: saved }: { prefs: AlertPrefs | null }) {
               onToggle={() => void toggleNotifications()}
             />
             <p className="muted small">
-              {permission === "unsupported"
-                ? "This browser can't show notifications from a page."
-                : permission === "denied"
-                  ? "Notifications are blocked for this site. Allow them in your browser's site settings, then come back."
-                  : notifyLive
-                    ? "On. Each new alert pops up with the token and what flagged it; click it to come back here."
-                    : permission === "granted"
-                      ? "Off. Allowed by your browser; turn this on to get one for each new alert."
-                      : "Your browser will ask for permission when you turn this on."}
+              {permission === "unsupported" && iosBrowser
+                ? "On iPhone and iPad, notifications only work from the Home Screen app: tap Share, then Add to Home Screen, open TrenchScanner from there and turn this on."
+                : permission === "unsupported"
+                  ? "This browser can't show notifications from a page."
+                  : permission === "denied"
+                    ? "Notifications are blocked for this site. Allow them in your browser's site settings, then come back."
+                    : notifyLive
+                      ? push
+                        ? "On. Each new alert pops up with the token and what flagged it, even with TrenchScanner closed; tap it to come back here."
+                        : "On. Each new alert pops up with the token and what flagged it; click it to come back here."
+                      : permission === "granted"
+                        ? "Off. Allowed by your browser; turn this on to get one for each new alert."
+                        : "Your browser will ask for permission when you turn this on."}
             </p>
 
             <h4>Alert me for</h4>

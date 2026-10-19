@@ -1,8 +1,12 @@
 import type { Card } from "./api";
 import {
+  ageNow,
   cardReadings,
+  feeBadge,
   countCutFor,
   newestStats,
+  nowReading,
+  recordedPeakOf,
   SAFETY_MAX_FRESH_WALLET_PCT,
   SAFETY_MAX_LARGEST_HOLDER_PCT,
   SAFETY_REJECT_EMPTY_WALLET_PCT,
@@ -10,7 +14,9 @@ import {
   SAFETY_REJECT_SNIPER_WALLET_PCT,
   SAFETY_REJECT_TOP10_HOLDER_PCT,
 } from "./components/AlertCard";
-import { pct, usd } from "./format";
+import { change, minutes, pct, shortAddress, usd } from "./format";
+import { cardOutcome, outcomeBadge } from "./outcome";
+import { cardCalibratedRate } from "./rates";
 import {
   TILE_FIRST_BUYERS_OF,
   TILE_RED_FIRST_BUYERS,
@@ -38,7 +44,20 @@ export type ScopeChip =
   | "transferred"
   | "vol5m"
   | "vol1h"
-  | "liquidity";
+  | "liquidity"
+  | "vol24h"
+  | "age"
+  | "fees"
+  | "score"
+  | "modelScore"
+  | "conviction"
+  | "rate2x"
+  | "narrative"
+  | "alertMcap"
+  | "peak"
+  | "ath"
+  | "result"
+  | "mint";
 
 export interface ChipReading {
   value: string;
@@ -47,6 +66,8 @@ export interface ChipReading {
   tone: number | null;
   /** Fails the safety screen's cut (or the tile's red bound). */
   risky: boolean;
+  /** Text the chip copies when clicked (the contract address) instead of opening the coin. */
+  copy?: string;
 }
 
 type Readings = ReturnType<typeof cardReadings>;
@@ -58,8 +79,8 @@ export const SCOPE_CHIP_DEFS: {
   label: string;
   /** On the chip. */
   short: string;
-  group: "Holders" | "Wallets" | "Market";
-  read: (card: Card, r: Readings, t: Stats) => ChipReading | null;
+  group: "Holders" | "Wallets" | "Market" | "Alert" | "Token";
+  read: (card: Card, r: Readings, t: Stats, now: number) => ChipReading | null;
 }[] = [
   {
     id: "holders",
@@ -275,7 +296,208 @@ export const SCOPE_CHIP_DEFS: {
       return liq == null ? null : { value: usd(liq), title: "Pool liquidity", tone: null, risky: false };
     },
   },
+  {
+    id: "vol24h",
+    label: "Volume 24h",
+    short: "V24h",
+    group: "Market",
+    read: (_c, _r, t) =>
+      t.volume24hUsd == null
+        ? null
+        : {
+            value: usd(t.volume24hUsd),
+            title: "Trading volume over the last 24 hours (since launch, for a younger token)",
+            tone: null,
+            risky: false,
+          },
+  },
+  {
+    id: "score",
+    label: "Score",
+    short: "Score",
+    group: "Market",
+    read: (_c, _r, t) =>
+      t.score == null
+        ? null
+        : { value: String(Math.round(t.score)), title: "The scan's score", tone: null, risky: false },
+  },
+  {
+    id: "age",
+    label: "Token age",
+    short: "Age",
+    group: "Token",
+    read: (c, _r, _t, now) => {
+      const age = ageNow(c.snapshot, now);
+      return age == null
+        ? null
+        : { value: minutes(age), title: "How old the coin is now", tone: null, risky: false };
+    },
+  },
+  {
+    id: "fees",
+    label: "Creator fees",
+    short: "Fees",
+    group: "Token",
+    read: (c) => {
+      const fee = feeBadge(c.token.creatorFee);
+      return fee ? { value: FEE_WORDS[fee.kind], title: fee.title, tone: null, risky: false } : null;
+    },
+  },
+  {
+    id: "mint",
+    label: "Contract address",
+    short: "CA",
+    group: "Token",
+    read: (c) => ({
+      value: shortAddress(c.token.mintAddress),
+      title: "Copy the contract address",
+      tone: null,
+      risky: false,
+      copy: c.token.mintAddress,
+    }),
+  },
+  {
+    id: "alertMcap",
+    label: "Market cap at alert",
+    short: "At",
+    group: "Alert",
+    read: (c) =>
+      c.snapshot.marketCapUsd == null
+        ? null
+        : { value: usd(c.snapshot.marketCapUsd), title: "Market cap at the alert", tone: null, risky: false },
+  },
+  {
+    id: "peak",
+    label: "Peak",
+    short: "Peak",
+    group: "Alert",
+    read: (c) => {
+      const peak = peakOf(c);
+      return peak == null || peak <= 0
+        ? null
+        : { value: `+${pct(peak)}`, title: "Highest since the alert", tone: null, risky: false };
+    },
+  },
+  {
+    id: "ath",
+    label: "ATH market cap",
+    short: "ATH",
+    group: "Alert",
+    read: (c) => {
+      const peak = peakOf(c);
+      const at = c.snapshot.marketCapUsd;
+      return peak == null || peak <= 0 || !at
+        ? null
+        : {
+            value: usd(at * (1 + peak / 100)),
+            title: "Highest market cap since the alert",
+            tone: null,
+            risky: false,
+          };
+    },
+  },
+  {
+    id: "result",
+    label: "Result",
+    short: "Result",
+    group: "Alert",
+    read: (c, _r, _t, now) => {
+      const outcome = cardOutcome(c, now);
+      if (!outcome) return null;
+      const badge = outcomeBadge(outcome);
+      return { value: badge.text, title: badge.text, tone: null, risky: false };
+    },
+  },
+  {
+    id: "modelScore",
+    label: "Model score",
+    short: "Model",
+    group: "Alert",
+    read: (c) => {
+      const calls = c.curated?.calledBy ?? [];
+      if (!c.curated) return null;
+      const top = calls.length > 0 ? Math.max(...calls.map((x) => x.confidence)) : c.curated.confidence;
+      return {
+        value: top.toFixed(0),
+        title:
+          calls.length > 1
+            ? calls.map((x) => `${x.modelName ?? "Model"}: score ${x.confidence.toFixed(0)}`).join("\n")
+            : `${c.curated.modelName ?? "Model"}: score ${c.curated.confidence.toFixed(0)}`,
+        tone: null,
+        risky: false,
+      };
+    },
+  },
+  {
+    id: "conviction",
+    label: "High conviction",
+    short: "HC",
+    group: "Alert",
+    read: (c) =>
+      c.curated && (c.curated.tier === "high" || (c.curated.calledBy ?? []).some((x) => x.tier === "high"))
+        ? {
+            value: "high",
+            title: "High conviction: in the model's top half-percent of decision moments",
+            tone: null,
+            risky: false,
+          }
+        : null,
+  },
+  {
+    id: "rate2x",
+    label: "Calibrated 2x rate",
+    short: "2x",
+    group: "Alert",
+    read: (c) => {
+      if (!c.curated) return null;
+      const rate = cardCalibratedRate(c.curated, c.curated.calledBy ?? []);
+      return rate == null
+        ? null
+        : {
+            value: `≈${rate.toFixed(0)}%`,
+            title:
+              "Of recent out-of-sample alerts ranked like this one, the share that hit 2x within 15 min of the alert, before a 50% stop",
+            tone: null,
+            risky: false,
+          };
+    },
+  },
+  {
+    id: "narrative",
+    label: "Narrative read",
+    short: "Narr",
+    group: "Alert",
+    read: (c) => {
+      const n = c.curated?.narrative;
+      return n
+        ? {
+            value: n.verdict,
+            title:
+              n.verdict === "agrees"
+                ? "The Narrative seat's deep read would have flagged this coin too"
+                : "The Narrative seat's deep read would not have flagged this coin",
+            tone: null,
+            risky: n.verdict !== "agrees",
+          }
+        : null;
+    },
+  },
 ];
+
+/** The peak since the alert as the row reads it: the recorded peak, or the move now if higher. */
+function peakOf(c: Card): number | null {
+  const move = change(c.snapshot.marketCapUsd, nowReading(c));
+  const { pct: recorded } = recordedPeakOf(c);
+  return move !== null && move > 0 ? Math.max(recorded ?? 0, move) : recorded;
+}
+
+/** The fee chip's word for where the creator fee goes (feeBadge's kinds). */
+const FEE_WORDS: Record<NonNullable<ReturnType<typeof feeBadge>>["kind"], string> = {
+  charity: "charity",
+  rewards: "holders",
+  github: "GitHub",
+  dev: "dev",
+};
 
 export const SCOPE_CHIP_IDS: ScopeChip[] = SCOPE_CHIP_DEFS.map((c) => c.id);
 
@@ -286,13 +508,14 @@ export const DEFAULT_SCOPE_CHIPS: ScopeChip[] = ["holders", "top10", "fresh"];
 export function rowChips(
   card: Card,
   chips: readonly ScopeChip[],
+  now = Date.now(),
 ): ({ id: ScopeChip; short: string } & ChipReading)[] {
   if (chips.length === 0) return [];
   const r = cardReadings(card, "newest");
   const t = newestStats(card);
   return SCOPE_CHIP_DEFS.flatMap((d) => {
     if (!chips.includes(d.id)) return [];
-    const reading = d.read(card, r, t);
+    const reading = d.read(card, r, t, now);
     return reading ? [{ id: d.id, short: d.short, ...reading }] : [];
   });
 }

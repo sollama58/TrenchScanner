@@ -14,6 +14,7 @@ import {
 } from "../bubbleMap";
 import { cachedGet } from "../cache";
 import { createPortal } from "react-dom";
+import { LiveTradesCard } from "./LiveTrades";
 import {
   createContext,
   useCallback,
@@ -680,15 +681,19 @@ function TokenBody({
   // A pass starts folded, a fail or a pending verdict open; the reader's own choice then holds.
   const [safetyOpenSet, setSafetyOpen] = useState<boolean | null>(null);
   const safetyOpen = safetyOpenSet ?? safety.state !== "passed";
-  // The terminal's tab under the chart, and the rail's slot the chart's Trade panel is drawn into.
-  const [tab, setTab] = useState<TermTab>("holders");
+  // The terminal's column view and tab under the chart, and the rail's slot the chart's Trade panel
+  // is drawn into. A tab that is now the column's shows the first of the others instead.
+  const [side, setSide] = useTermSide();
+  const [tabPicked, setTab] = useState<TermTab>("holders");
+  const tab = tabPicked === side ? TERM_VIEWS.find((x) => x.id !== side)!.id : tabPicked;
   const [tradeSlot, setTradeSlot] = useState<HTMLDivElement | null>(null);
   const openSafety = () => {
     setSafetyOpen(true);
     goTo("safety");
   };
   // A lookup asks TokenSage for a fresh read, which lands within minutes: check more often.
-  const sage = usePolling<SageView>(`${useTokenApi(mint)}/sage`, utility ? 20_000 : 120_000);
+  const tokenApi = useTokenApi(mint);
+  const sage = usePolling<SageView>(`${tokenApi}/sage`, utility ? 20_000 : 120_000);
   // The Dev, Socials and Order flow cards' read (user ask 2026-10-16); the flow moves with each scan.
   const profile = usePolling<TokenProfile>(
     `${useTokenApi(mint)}/profile`,
@@ -845,7 +850,7 @@ function TokenBody({
       )}
     </div>
   );
-  const bubbleMap = (
+  const bubbleMapIn = (column: boolean) => (
     <BubbleMapSection
       // A fresh map for each view: its picks, open lists and toggles belong to one reading.
       key={holders.view}
@@ -856,19 +861,74 @@ function TokenBody({
       pending={scanning}
       flagged={flagged}
       flags={flags}
-      column={terminal}
+      column={column}
     />
   );
+  const bubbleMap = bubbleMapIn(false);
 
   if (terminal) {
-    const tabs: { id: TermTab; label: string; count?: number }[] = [
-      { id: "holders", label: "Holders", count: s.holderCount ?? undefined },
-      { id: "wallets", label: "Labeled wallets", count: flagged.length || undefined },
-      { id: "flow", label: "Order flow" },
-      { id: "market", label: "Market" },
-      { id: "dev", label: "Dev & socials" },
-      { id: "sage", label: "TokenSage" },
-    ];
+    const counts: Partial<Record<TermTab, number>> = {
+      holders: s.holderCount ?? undefined,
+      wallets: flagged.length || undefined,
+    };
+    const tabs = TERM_VIEWS.filter((x) => x.id !== side);
+    // A view's content, in the column (fit to it) or in the tabs' wide pane.
+    const view = (id: TermTab, column: boolean) => {
+      switch (id) {
+        case "map":
+          return (
+            <>
+              {holdersBar}
+              {bubbleMapIn(column)}
+            </>
+          );
+        case "trades":
+          return <LiveTradesCard base={tokenApi} />;
+        case "holders":
+          return (
+            <>
+              <TopHolders
+                snapshot={holders.listReading}
+                flagged={flagged}
+                entries={entries}
+                pending={scanning}
+                defaultOpen
+              />
+              <StonkFeesCard mint={mint} />
+            </>
+          );
+        case "wallets":
+          return flagged.length > 0 ? (
+            <WalletsCard wallets={flagged} defaultOpen />
+          ) : (
+            <p className="muted small tm-term-empty">
+              {flags === "loading"
+                ? "Reading the coin's wallets…"
+                : "No KOLs or wallets you labeled have traded this coin."}
+            </p>
+          );
+        case "flow":
+          return profile.data?.flow ? (
+            <FlowCard flow={profile.data.flow} now={now} />
+          ) : (
+            <p className="muted small tm-term-empty">
+              {profile.data || profile.error ? "No order flow read for this coin yet." : "Loading…"}
+            </p>
+          );
+        case "market":
+          return <StatsCard card={card} />;
+        case "dev":
+          return (
+            <div className="tm-grid tm-dev-grid">
+              <DevCard dev={profile.data ? profile.data.dev : undefined} />
+              <SocialsCard socials={profile.data?.socials} x={sage.data?.read?.x} />
+            </div>
+          );
+        case "sage":
+          return <SageSection mint={mint} sage={sage} />;
+      }
+    };
+    const sideLabel = TERM_VIEWS.find((x) => x.id === side)!.label;
     return (
       <div className="about-body tm-body tm-term" ref={bodyRef}>
         <header className="tm-head">
@@ -888,12 +948,27 @@ function TokenBody({
                   tradeSlot={tradeSlot}
                 />
               </section>
-              <section className={`tm-term-map${holders.isKept ? " at-alert" : ""}`} aria-label="Bubble map">
-                {/* Scrolls on its own, so the map never makes the row taller than the chart. */}
-                <div className="tm-term-map-in">
-                  {holdersBar}
-                  {bubbleMap}
+              <section
+                className={`tm-term-map tm-side-${side}${side === "map" && holders.isKept ? " at-alert" : ""}`}
+                aria-label={sideLabel}
+              >
+                {/* The reader picks what sits beside the chart (user ask 2026-10-19); the rest go
+                    to the tabs under it. The map fits the column; any other view scrolls in it. */}
+                <div className="tm-term-pick">
+                  <label htmlFor={`${ids}-side`}>Beside the chart</label>
+                  <select
+                    id={`${ids}-side`}
+                    value={side}
+                    onChange={(e) => setSide(e.target.value as TermTab)}
+                  >
+                    {TERM_VIEWS.map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
+                <div className="tm-term-map-in">{view(side, true)}</div>
               </section>
             </div>
             <div className="tm-term-tabs" role="tablist" aria-label="Sections">
@@ -907,49 +982,14 @@ function TokenBody({
                   onClick={() => setTab(x.id)}
                 >
                   {x.label}
-                  {x.count != null && <span className="num muted"> {x.count.toLocaleString()}</span>}
+                  {counts[x.id] != null && (
+                    <span className="num muted"> {counts[x.id]!.toLocaleString()}</span>
+                  )}
                 </button>
               ))}
             </div>
             <div className="tm-term-pane" role="tabpanel">
-              {tab === "holders" && (
-                <>
-                  <TopHolders
-                    snapshot={holders.listReading}
-                    flagged={flagged}
-                    entries={entries}
-                    pending={scanning}
-                    defaultOpen
-                  />
-                  <StonkFeesCard mint={mint} />
-                </>
-              )}
-              {tab === "wallets" &&
-                (flagged.length > 0 ? (
-                  <WalletsCard wallets={flagged} defaultOpen />
-                ) : (
-                  <p className="muted small tm-term-empty">
-                    {flags === "loading"
-                      ? "Reading the coin's wallets…"
-                      : "No KOLs or wallets you labeled have traded this coin."}
-                  </p>
-                ))}
-              {tab === "flow" &&
-                (profile.data?.flow ? (
-                  <FlowCard flow={profile.data.flow} now={now} />
-                ) : (
-                  <p className="muted small tm-term-empty">
-                    {profile.data || profile.error ? "No order flow read for this coin yet." : "Loading…"}
-                  </p>
-                ))}
-              {tab === "market" && <StatsCard card={card} />}
-              {tab === "dev" && (
-                <div className="tm-grid tm-dev-grid">
-                  <DevCard dev={profile.data ? profile.data.dev : undefined} />
-                  <SocialsCard socials={profile.data?.socials} x={sage.data?.read?.x} />
-                </div>
-              )}
-              {tab === "sage" && <SageSection mint={mint} sage={sage} />}
+              {view(tab, false)}
             </div>
           </div>
           <aside className="tm-term-rail" aria-label="Trade and checks">
@@ -1114,8 +1154,46 @@ const SECTIONS = [
   { id: "sage", label: "TokenSage" },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]["id"];
-/** The Scope terminal's tabs under the chart (user picks 2026-10-18). */
-type TermTab = "holders" | "wallets" | "flow" | "market" | "dev" | "sage";
+/**
+ * The Scope terminal's views (user picks 2026-10-18): one in the column beside the chart, the
+ * reader's pick (user ask 2026-10-19), and every other in the tabs under it.
+ */
+type TermTab = "map" | "trades" | "holders" | "wallets" | "flow" | "market" | "dev" | "sage";
+const TERM_VIEWS: readonly { id: TermTab; label: string }[] = [
+  { id: "map", label: "Bubble map" },
+  { id: "trades", label: "Live trades" },
+  { id: "holders", label: "Holders" },
+  { id: "wallets", label: "Labeled wallets" },
+  { id: "flow", label: "Order flow" },
+  { id: "market", label: "Market" },
+  { id: "dev", label: "Dev & socials" },
+  { id: "sage", label: "TokenSage" },
+];
+/** The column's view, kept in this browser for every coin. */
+const TERM_SIDE_KEY = "ts-scope-side";
+
+function readTermSide(): TermTab {
+  try {
+    const v = localStorage.getItem(TERM_SIDE_KEY);
+    return TERM_VIEWS.some((x) => x.id === v) ? (v as TermTab) : "map";
+  } catch {
+    return "map";
+  }
+}
+
+/** The column's view, the reader's pick: the bubble map until they choose another. */
+function useTermSide(): [TermTab, (v: TermTab) => void] {
+  const [side, setSide] = useState<TermTab>(readTermSide);
+  const pick = (v: TermTab) => {
+    setSide(v);
+    try {
+      localStorage.setItem(TERM_SIDE_KEY, v);
+    } catch {
+      // Private mode: the pick holds for this window only.
+    }
+  };
+  return [side, pick];
+}
 
 /**
  * The section the reader is in: the last one whose top has passed under the sticky header, as the

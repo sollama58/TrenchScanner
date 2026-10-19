@@ -25,6 +25,9 @@ export function scopeSampleCard(now: number): Card {
     transferredSupplyPct: 2.4,
     volume5mUsd: 9_800,
     volume1hUsd: 61_000,
+    volume24hUsd: 184_000,
+    score: 71,
+    ageMinutes: 9,
   };
   return {
     id: "scope-sample",
@@ -41,11 +44,25 @@ export function scopeSampleCard(now: number): Card {
       imageUrl: null,
       twitterUrl: "https://x.com/example",
       websiteUrl: "https://example.com",
+      creatorFee: { destination: "holder_rewards", summary: "Creator fees go to holders" },
     },
     snapshot,
     latestSnapshot: null,
     currentMarketCapUsd: 52_300,
     filter: { id: "scope-sample", name: "Example filter" },
-    curated: null,
+    // A model call folded in too, so the Alert chips (model score, conviction, 2x rate) show.
+    curated: {
+      alertId: "scope-sample",
+      source: "model",
+      modelName: "Example model",
+      confidence: 84,
+      tier: "high",
+      calibratedPct: 38,
+      reasons: [],
+      alertedAt: at,
+      calledBy: [],
+      narrative: { verdict: "agrees" },
+      outcome: null,
+    },
   } as unknown as Card;
 }

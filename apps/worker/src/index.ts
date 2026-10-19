@@ -32,6 +32,7 @@ import {
   PRO_HOLDER_BACKUP_RPC,
   adminWalletSet,
   runTelegramDispatch,
+  runWebPushDispatch,
   takeManualRunRequests,
   onAlertWritten,
   COMMIT_GRACE_MS,
@@ -458,6 +459,39 @@ async function main() {
         return summary;
       },
       env.TELEGRAM_DISPATCH_INTERVAL_SECONDS / 60,
+      {
+        deadlineMinutes: 10,
+        runEarly: {
+          everyMs: 100,
+          quiet: true,
+          due: async () =>
+            written.length > 0 && Date.now() >= Math.max(written[0]! + COMMIT_GRACE_MS, retryAt),
+        },
+      },
+    );
+  });
+  // Pushes each subscribed browser or installed app (a phone's home-screen app) the alerts its
+  // account's settings ask for - see packages/core/src/webPush/dispatch.ts. Nothing to do until
+  // the VAPID keys (WEB_PUSH_PUBLIC_KEY, WEB_PUSH_PRIVATE_KEY) are set. Woken by a written alert
+  // like the Telegram dispatcher above, so a push goes out within a second or two.
+  schedule("web-push-dispatch", () => {
+    const written: number[] = [];
+    let retryAt = 0;
+    onAlertWritten(() => {
+      if (written.length < 1_000) written.push(Date.now());
+    });
+    return scheduleInterval(
+      "web-push-dispatch",
+      async () => {
+        const startedAt = Date.now();
+        retryAt = startedAt + 1_000;
+        const { horizon, ...summary } = await runWebPushDispatch(env);
+        const covered = horizon ? horizon.getTime() : startedAt - COMMIT_GRACE_MS;
+        while (written.length > 0 && written[0]! <= covered) written.shift();
+        retryAt = written.length > 0 ? Date.now() + 1_000 : 0;
+        return summary;
+      },
+      env.WEB_PUSH_DISPATCH_INTERVAL_SECONDS / 60,
       {
         deadlineMinutes: 10,
         runEarly: {
