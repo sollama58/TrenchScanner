@@ -19968,12 +19968,23 @@ dialog.tm-modal.tm-terminal::backdrop {
   top: 0;
   z-index: 2;
   display: flex;
-  gap: 2px;
+  align-items: center;
+  gap: 12px;
   padding: 0 10px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-solid);
+}
+.tm-term-tablist {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+}
+/* With nothing beside it, the chart takes the whole row (user ask 2026-10-19). */
+.tm-term-top.solo {
+  grid-template-columns: minmax(0, 1fr);
 }
 .tm-term-pane {
   padding: 4px 14px 18px;
@@ -20305,13 +20316,13 @@ dialog.tm-modal.tm-terminal::backdrop {
 .tm-modal.tm-terminal .tm-fig > :first-child {
   white-space: nowrap;
 }
-/* What sits beside the chart, the reader's pick (user ask 2026-10-19): a slim row over the column. */
+/* What sits beside the chart, the reader's pick (user asks 2026-10-19): at the tab row's end. */
 .tm-term-pick {
   display: flex;
   flex: none;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px 0;
+  padding: 4px 0;
 }
 .tm-term-pick label {
   color: var(--muted);
@@ -20324,8 +20335,8 @@ dialog.tm-modal.tm-terminal::backdrop {
 .tm-term-pick select {
   width: auto;
   min-width: 0;
-  padding: 4px 8px;
-  font-size: 13px;
+  padding: 3px 8px;
+  font-size: 12.5px;
   font-weight: 600;
 }
 /* Any view but the map scrolls in the column, so the chart sets the row's height. */

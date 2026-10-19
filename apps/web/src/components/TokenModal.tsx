@@ -749,8 +749,10 @@ function TokenBody({
   // The terminal's column view and tab under the chart, and the rail's slot the chart's Trade panel
   // is drawn into. A tab that is now the column's shows the first of the others instead.
   const [side, setSide] = useTermSide();
-  const [tabPicked, setTab] = useState<TermTab>("holders");
-  const tab = tabPicked === side ? TERM_VIEWS.find((x) => x.id !== side)!.id : tabPicked;
+  // The bubble map's tab opens first when the map is down in the tabs, else Holders: never Live
+  // trades on its own, whose feed only runs while someone chose to watch it.
+  const [tabPicked, setTab] = useState<TermTab>(side === "map" ? "holders" : "map");
+  const tab = tabPicked === side ? (side === "holders" ? "map" : "holders") : tabPicked;
   const [tradeSlot, setTradeSlot] = useState<HTMLDivElement | null>(null);
   const openSafety = () => {
     setSafetyOpen(true);
@@ -929,6 +931,8 @@ function TokenBody({
       flagged={flagged}
       flags={flags}
       column={column}
+      // Scope's wide tab: the map spreads across it (user ask 2026-10-19).
+      spread={terminal && !column ? 2.6 : undefined}
     />
   );
   const bubbleMap = bubbleMapIn(false);
@@ -995,7 +999,7 @@ function TokenBody({
           return <SageSection mint={mint} sage={sage} />;
       }
     };
-    const sideLabel = TERM_VIEWS.find((x) => x.id === side)!.label;
+    const sideLabel = TERM_VIEWS.find((x) => x.id === side)?.label ?? "";
     return (
       <div className="about-body tm-body tm-term" ref={bodyRef}>
         <header className="tm-head">
@@ -1004,7 +1008,7 @@ function TokenBody({
         </header>
         <div className="tm-term-grid">
           <div className="tm-term-main">
-            <div className="tm-term-top">
+            <div className={`tm-term-top${side === "none" ? " solo" : ""}`}>
               <section className="tm-term-chart" aria-label="Chart">
                 <ChartCard
                   card={card}
@@ -1015,45 +1019,55 @@ function TokenBody({
                   tradeSlot={tradeSlot}
                 />
               </section>
-              <section
-                className={`tm-term-map tm-side-${side}${side === "map" && holders.isKept ? " at-alert" : ""}`}
-                aria-label={sideLabel}
-              >
-                {/* The reader picks what sits beside the chart (user ask 2026-10-19); the rest go
-                    to the tabs under it. The map fits the column; any other view scrolls in it. */}
-                <div className="tm-term-pick">
-                  <label htmlFor={`${ids}-side`}>Beside the chart</label>
-                  <select
-                    id={`${ids}-side`}
-                    value={side}
-                    onChange={(e) => setSide(e.target.value as TermTab)}
-                  >
-                    {TERM_VIEWS.map((x) => (
-                      <option key={x.id} value={x.id}>
-                        {x.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="tm-term-map-in">{view(side, true)}</div>
-              </section>
-            </div>
-            <div className="tm-term-tabs" role="tablist" aria-label="Sections">
-              {tabs.map((x) => (
-                <button
-                  key={x.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={tab === x.id}
-                  className={`tm-nav-btn${tab === x.id ? " on" : ""}`}
-                  onClick={() => setTab(x.id)}
+              {side !== "none" && (
+                <section
+                  className={`tm-term-map tm-side-${side}${side === "map" && holders.isKept ? " at-alert" : ""}`}
+                  aria-label={sideLabel}
                 >
-                  {x.label}
-                  {counts[x.id] != null && (
-                    <span className="num muted"> {counts[x.id]!.toLocaleString()}</span>
-                  )}
-                </button>
-              ))}
+                  <div className="tm-term-map-in">{view(side, true)}</div>
+                </section>
+              )}
+            </div>
+            <div className="tm-term-tabs">
+              <div className="tm-term-tablist" role="tablist" aria-label="Sections">
+                {tabs.map((x) => (
+                  <button
+                    key={x.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === x.id}
+                    className={`tm-nav-btn${tab === x.id ? " on" : ""}`}
+                    onClick={() => setTab(x.id)}
+                  >
+                    {x.label}
+                    {counts[x.id] != null && (
+                      <span className="num muted"> {counts[x.id]!.toLocaleString()}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              {/* What sits beside the chart, the reader's pick (user asks 2026-10-19): the bubble
+                  map at first; a view put there leaves the tabs, and None gives the chart the row. */}
+              <div className="tm-term-pick">
+                <label htmlFor={`${ids}-side`}>Beside the chart</label>
+                <select
+                  id={`${ids}-side`}
+                  value={side}
+                  onChange={(e) => {
+                    const next = e.target.value as TermSide;
+                    // The map moved down to the tabs opens there, so it doesn't seem to vanish.
+                    if (side === "map" && next !== "map") setTab("map");
+                    setSide(next);
+                  }}
+                >
+                  <option value="none">None</option>
+                  {TERM_VIEWS.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="tm-term-pane" role="tabpanel">
               {view(tab, false)}
@@ -1236,22 +1250,27 @@ const TERM_VIEWS: readonly { id: TermTab; label: string }[] = [
   { id: "dev", label: "Dev & socials" },
   { id: "sage", label: "TokenSage" },
 ];
+/** What sits beside the chart: a view, or none so the chart takes the row. */
+type TermSide = TermTab | "none";
 /** The column's view, kept in this browser for every coin. */
 const TERM_SIDE_KEY = "ts-scope-side";
 
-function readTermSide(): TermTab {
+function readTermSide(): TermSide {
   try {
     const v = localStorage.getItem(TERM_SIDE_KEY);
-    return TERM_VIEWS.some((x) => x.id === v) ? (v as TermTab) : "map";
+    return v === "none" || TERM_VIEWS.some((x) => x.id === v) ? (v as TermSide) : "map";
   } catch {
     return "map";
   }
 }
 
-/** The column's view, the reader's pick: the bubble map until they choose another. */
-function useTermSide(): [TermTab, (v: TermTab) => void] {
-  const [side, setSide] = useState<TermTab>(readTermSide);
-  const pick = (v: TermTab) => {
+/**
+ * What sits beside the chart, the reader's pick: the bubble map until they choose another view,
+ * or none so the chart takes the full row and the map is one of the tabs (user asks 2026-10-19).
+ */
+function useTermSide(): [TermSide, (v: TermSide) => void] {
+  const [side, setSide] = useState<TermSide>(readTermSide);
+  const pick = (v: TermSide) => {
     setSide(v);
     try {
       localStorage.setItem(TERM_SIDE_KEY, v);
