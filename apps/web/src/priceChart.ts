@@ -609,9 +609,10 @@ export function zoomBy(
   factor: number,
   at = 0.5,
   minMs = MIN_ZOOM_MS,
+  maxMs = Infinity,
 ): Zoom | null {
   const span = win.to - win.from;
-  const next = Math.min(t1 - t0, Math.max(Math.min(minMs, t1 - t0), span * factor));
+  const next = Math.min(t1 - t0, maxMs, Math.max(Math.min(minMs, t1 - t0), span * factor));
   const anchor = win.from + at * span;
   return clampZoom(anchor - at * next, next, t0, t1);
 }

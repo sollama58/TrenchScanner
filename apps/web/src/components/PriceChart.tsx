@@ -152,6 +152,7 @@ export function PriceChart({
   onZoom,
   kind = "line",
   onKind,
+  pinEnd = false,
   path = [],
 }: {
   points: Point[];
@@ -202,6 +203,11 @@ export function PriceChart({
   kind?: ChartKind;
   /** Shows the Line / Candles switch under the chart. */
   onKind?: (kind: ChartKind) => void;
+  /**
+   * The Trading view (user ask 2026-10-19): zooming holds the latest at the right edge while the
+   * window runs to it, wherever the pointer or fingers are.
+   */
+  pinEnd?: boolean;
   /**
    * Experimental (Customize › Token chart): the predicted price path from the latest reading,
    * drawn dotted with its band past the line's end. The time axis makes room for it.
@@ -275,13 +281,23 @@ export function PriceChart({
   const tfFits = (ms: number) => ms * 3 <= ext1 - ext0;
   const timeframe = savedTf !== null && tfFits(savedTf) ? savedTf : null;
   const plotW = width - PAD.l - PAD.r;
+  /**
+   * A picked candle size holds while zooming (user ask 2026-10-19): the window never grows past as
+   * many of its candles as fit, MIN_CANDLE_PX each, rather than the chart drawing wider ones.
+   */
+  const maxSpan =
+    kind === "candles" && timeframe !== null
+      ? timeframe * Math.max(3, Math.floor(plotW / MIN_CANDLE_PX))
+      : Infinity;
 
   const geo = useMemo(() => {
     if (points.length < 2) return null;
-    const { from: t0, to: t1 } = zoomWindow(zoom, ext0, ext1);
+    const shownWin = zoomWindow(zoom, ext0, ext1);
+    const t1 = shownWin.to;
+    const t0 = Math.max(shownWin.from, t1 - maxSpan);
     const pts = clipPoints(points, t0, t1);
     if (pts.length < 2) return null;
-    const zoomed = zoom !== null;
+    const zoomed = zoom !== null || t0 > ext0 + 1;
     const step = stepMs ?? Math.max(1, (t1 - t0) / (pts.length - 1));
     const lead = events[0];
     const leadShown = lead !== undefined && lead.t >= t0 && lead.t <= t1;
@@ -381,6 +397,7 @@ export function PriceChart({
     candles,
     kind,
     timeframe,
+    maxSpan,
     logScale,
     vZoom,
     origin,
@@ -398,11 +415,11 @@ export function PriceChart({
 
   // The window as the wheel handler reads it: set on each render, and by the handler itself, so
   // wheel events between renders build on each other.
-  const winRef = useRef({ from: 0, to: 0, t0: 0, t1: 0 });
+  const winRef = useRef({ from: 0, to: 0, t0: 0, t1: 0, pin: false, max: Infinity });
   const setZoomRef = useRef(setZoom);
   useEffect(() => {
     setZoomRef.current = setZoom;
-    if (geo) winRef.current = { from: geo.t0, to: geo.t1, t0: ext0, t1: ext1 };
+    if (geo) winRef.current = { from: geo.t0, to: geo.t1, t0: ext0, t1: ext1, pin: pinEnd, max: maxSpan };
   });
   const hasGeo = geo !== null;
   useEffect(() => {
@@ -423,9 +440,10 @@ export function PriceChart({
       } else {
         // Zoomed all the way out, scrolling down scrolls the page as before.
         if (e.deltaY === 0 || (e.deltaY > 0 && !zoomed)) return;
-        const at = Math.min(1, Math.max(0, (e.clientX - box.left - PAD.l) / pw));
+        const at =
+          w.pin && w.to >= w.t1 - 1 ? 1 : Math.min(1, Math.max(0, (e.clientX - box.left - PAD.l) / pw));
         const factor = Math.exp(Math.max(-1, Math.min(1, (e.deltaY * unit) / 300)));
-        next = zoomBy(w, w.t0, w.t1, factor, at);
+        next = zoomBy(w, w.t0, w.t1, factor, at, MIN_ZOOM_MS, w.max);
       }
       e.preventDefault();
       winRef.current = { ...w, from: next?.from ?? w.t0, to: next?.to ?? w.t1 };
@@ -735,10 +753,19 @@ export function PriceChart({
             if (!a || !b || !box) return;
             // The moment under the fingers' first middle stays under their middle as they move.
             const mid = (a.x + b.x) / 2;
-            const at = Math.min(1, Math.max(0, (g.mid - box.left - PAD.l) / plotW));
-            const z = zoomBy(g.win, ext0, ext1, g.dist / Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)), at);
+            const pinned = pinEnd && g.win.to >= ext1 - 1;
+            const at = pinned ? 1 : Math.min(1, Math.max(0, (g.mid - box.left - PAD.l) / plotW));
+            const z = zoomBy(
+              g.win,
+              ext0,
+              ext1,
+              g.dist / Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)),
+              at,
+              MIN_ZOOM_MS,
+              maxSpan,
+            );
             const w = z ?? { from: ext0, to: ext1 };
-            setZoom(z && panBy(w, ext0, ext1, -((mid - g.mid) / plotW) * (w.to - w.from)));
+            setZoom(pinned ? z : z && panBy(w, ext0, ext1, -((mid - g.mid) / plotW) * (w.to - w.from)));
             return;
           }
           pick(e.clientX);
@@ -1265,8 +1292,8 @@ export function PriceChart({
             className="tm-range"
             aria-label="Zoom out"
             title="Zoom out"
-            disabled={!zoomed}
-            onClick={() => winTo(zoomBy(win, ext0, ext1, 2, anchorAt))}
+            disabled={!zoomed || span >= maxSpan - 1}
+            onClick={() => winTo(zoomBy(win, ext0, ext1, 2, anchorAt, MIN_ZOOM_MS, maxSpan))}
           >
             −
           </button>

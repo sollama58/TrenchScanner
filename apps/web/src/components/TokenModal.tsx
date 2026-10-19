@@ -74,7 +74,7 @@ import {
 } from "./AlertCard";
 import { CHART_MARKS_SECTION } from "./WalletMarksPicker";
 import { CustomizeDrawer } from "./CustomizeDrawer";
-import { markPrefsOf, walletMarks, type WalletMark } from "../walletMarks";
+import { markPrefsOf, walletMarks } from "../walletMarks";
 import { PriceChart, type ChartEvent, type ChartKind, type ChartTrade } from "./PriceChart";
 import { TradePanel, solText, tokensText } from "./TradePanel";
 import { PRO_MODE_PERKS } from "./ProModeCard";
@@ -142,14 +142,6 @@ interface TokenChart {
   holderEntries?: Record<string, HolderEntry>;
 }
 
-/** Mirrors apps/api/src/routes/tokens.ts TokenFirstMinutes. */
-interface TokenFirstMinutes {
-  startAt: number | null;
-  stepSec: 1 | 15;
-  live: boolean;
-  candles: { t: number; o: number; h: number; l: number; c: number; vol?: number }[] | null;
-}
-
 /** Mirrors apps/api/src/tokenChart.ts MarkedWallet. */
 interface FlaggedWallet {
   wallet: string;
@@ -187,32 +179,17 @@ function kindOf(w: FlaggedWallet): MarkerKind {
   return "linked";
 }
 
-type Range = "model" | "first" | "alert" | "1h" | "all";
-const RANGES: { id: Range; label: string; title?: string }[] = [
-  {
-    id: "model",
-    label: "Model View",
-    title: "Up to 5 minutes either side of the alert: what the model had to go on, and what came next",
-  },
-  {
-    id: "first",
-    label: "First 15m",
-    title:
-      "The coin's first 15 minutes from launch: second by second while it is in them, then in 15-second steps",
-  },
-  { id: "alert", label: "From alert" },
-  { id: "1h", label: "1h" },
-  { id: "all", label: "All" },
+/**
+ * The chart's two views (user ask 2026-10-19): Trading, the last minutes with the latest at the
+ * right edge, and All, the coin's whole history. Customize › Token chart sets which one opens.
+ */
+type Range = "trading" | "all";
+const RANGES: { id: Range; label: string; title: string }[] = [
+  { id: "trading", label: "Trading", title: "The last 15 minutes, the latest candle at the right edge" },
+  { id: "all", label: "All", title: "The coin's whole history" },
 ];
-/** "First 15m" is offered while Pump.fun's 15-second candles still reach back to the launch. */
-const FIRST_VIEW_MAX_AGE_MS = 6 * 3_600_000;
-/** The first-minutes view re-reads this often while the coin is inside them, else rarely. */
-const FIRST_LIVE_POLL_MS = 5_000;
-const FIRST_POLL_MS = 120_000;
-/** How much of the run-up the "From alert" view shows before the alert. */
-const LEAD_IN_MS = 10 * 60_000;
-/** How far either side of the call "Model View" reaches (never before the first trade). */
-const MODEL_SPAN_MS = 5 * 60_000;
+/** How far back the Trading view reaches (never before the first trade). */
+const TRADING_SPAN_MS = 15 * 60_000;
 /** Points drawn at most: enough for a smooth line, few enough that each one stays hoverable. */
 const MAX_POINTS = 240;
 /** Views this short read Pump.fun's 1-second candles, and up to QUARTER_VIEW_MAX_MS its 15-second ones. */
@@ -228,8 +205,6 @@ const FINE_POLL_MS = 60_000;
  * longest hold of a quiet coin's ask (apps/api/src/liveCurve.ts MAX_WAIT_MS, 8 seconds).
  */
 const LIVE_STALE_MS = 15_000;
-/** The First 15m view's span. */
-const FIRST_MINUTES_MS = 15 * 60_000;
 const CHART_POLL_MS = 30_000;
 /** While a lookup's scan is still landing, its chart (and the flagged wallets on it) is re-read faster. */
 const SCANNING_POLL_MS = 8_000;
@@ -469,8 +444,13 @@ function OpeningBody({ mint, token, error, onRetry, onClose }: OpeningView & { o
               <h4>
                 <ChartIcon size={14} /> Market cap
                 <span className="tm-ranges" aria-hidden="true">
-                  {["From scan", "1h", "All"].map((r) => (
-                    <button key={r} type="button" className={`tm-range${r === "All" ? " on" : ""}`} disabled>
+                  {["Trading", "All"].map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      className={`tm-range${r === "Trading" ? " on" : ""}`}
+                      disabled
+                    >
                       {r}
                     </button>
                   ))}
@@ -1809,10 +1789,11 @@ export function ChartCard({
    */
   tradeSlot?: HTMLElement | null;
 }) {
-  const utility = useContext(UtilityContext);
   const api = useTokenApi(card.token.mintAddress);
-  // Every token view opens on the coin's whole history; Model View is a click away.
-  const [range, setRange] = useState<Range>("all");
+  // Customize › Token chart sets the view it opens on; the switch over the chart this one.
+  const look = useAppearance();
+  const [rangePicked, setRange] = useState<Range | null>(null);
+  const shownRange: Range = rangePicked ?? look.chartView;
   // Zoomed into the view (user ask 2026-10-18); a new range starts from the whole of it.
   const [zoom, setZoom] = useState<Zoom | null>(null);
   const pickRange = (r: Range) => {
@@ -1865,17 +1846,8 @@ export function ChartCard({
     return out;
   }, [alertAt, alertMcap, what, card.kind, card.curated]);
 
-  // The coin's first trade, for whether its first minutes can still be drawn in fine detail.
-  const firstTradeAt = data?.candles?.[0]?.t ?? data?.marketCap[0]?.t ?? null;
-  const young = firstTradeAt !== null && Date.now() - firstTradeAt <= FIRST_VIEW_MAX_AGE_MS;
-  const shownRange: Range = range === "first" && !young ? "all" : range;
-  // A range longer than the coin has traded draws the same as All (user ask 2026-10-19: no
-  // timeframes older than the token).
-  const underHour = firstTradeAt !== null && Date.now() - firstTradeAt < 3_600_000;
-
   // Labeled wallets' trades on the line (user ask 2026-10-18), as set in Customize › Chart wallet
   // trades, which the header's link opens over the token view.
-  const look = useAppearance();
   // The predicted path is admins-only while it is tried out (user ask 2026-10-18).
   const admin = useIsAdmin();
   const markPrefs = useMemo(() => markPrefsOf(look), [look]);
@@ -1892,17 +1864,14 @@ export function ChartCard({
   );
 
   // The view's window over the minute data, before the finer reads that fill it in.
-  const bounds = useMemo(
-    () => (data ? viewBounds(data, shownRange, alertAt) : null),
-    [data, shownRange, alertAt],
-  );
+  const bounds = useMemo(() => (data ? viewBounds(data, shownRange) : null), [data, shownRange]);
   // Finer candles where they add detail: 1-second ones for a view of minutes, 15-second ones for
   // hours - and for a short view the 1-second page doesn't reach back across (Pump.fun sends the
   // most recent 1,000 with a trade, minutes of a busy coin).
   // Zoomed in, the window decides: zooming into minutes reads them finer.
   const shownBounds = bounds && zoom ? zoomWindow(zoom, bounds.from, bounds.to) : bounds;
   const span = shownBounds ? shownBounds.to - shownBounds.from : Infinity;
-  const fineOk = shownRange !== "first" && !!data?.candles?.length;
+  const fineOk = !!data?.candles?.length;
   // Only for a view of the last minutes: the 1-second page never reaches back further, and each
   // read spends the shared Pump.fun budget.
   const wantSecond =
@@ -1913,7 +1882,7 @@ export function ChartCard({
   // The experimental predicted path (Customize › Token chart, off by default) reads the last
   // minute second by second, so a live view with it on reads the 1-second page whatever its span;
   // the view itself still draws it only where it would anyway.
-  const pathing = admin && look.chartPathing && fineOk && !!bounds?.live && shownRange !== "model";
+  const pathing = admin && look.chartPathing && fineOk && !!bounds?.live;
   const secondRead = useFineCandles(
     api,
     wantSecond || pathing ? "1s" : null,
@@ -1931,7 +1900,7 @@ export function ChartCard({
   );
   // The live curve's (or after bonding, pool's) every price change, while the view runs to now. Any
   // age (user ask 2026-10-18: too many charts were delayed): the API follows only open charts.
-  const tail = useLiveTail(api, shownRange !== "first" && !!bounds?.live);
+  const tail = useLiveTail(api, !!bounds?.live);
   // Whether the coin gets instant updates at all (user ask 2026-10-18): a Pump.fun coin on its curve
   // or in its PumpSwap pool has a live tail. Once the tail says nothing live prices it, it stays so
   // for this coin, so switching views doesn't bring the pill and the Trade note back and forth.
@@ -2037,11 +2006,6 @@ export function ChartCard({
       live: bounds.live,
       latest: source[source.length - 1]!.v,
       latestAt: source[source.length - 1]!.t,
-      // The scans the model read before calling it, drawn as dots in Model View.
-      scans:
-        shownRange === "model"
-          ? data.marketCap.filter((p) => p.t >= from && p.t <= alertAt).map((p) => ({ t: p.t, v: p.usd }))
-          : [],
       // The candles in view for the volume lane, each stretch from one width only.
       candles: stitchVolume(runs).filter((k) => k.t + (k.w ?? 60_000) >= from && k.t <= to),
     };
@@ -2054,7 +2018,6 @@ export function ChartCard({
     pathing,
     tail.ticks,
     tail.source,
-    shownRange,
     alertAt,
     alertMcap,
     callPriced,
@@ -2111,7 +2074,7 @@ export function ChartCard({
         delayed={delayed}
       />
     ) : null;
-  const streaming = shownRange !== "first" && isStreaming(tail);
+  const streaming = isStreaming(tail);
   const locked = error && !data ? lockedText(error, "chart") : null;
   return (
     <>
@@ -2124,23 +2087,20 @@ export function ChartCard({
             </span>
           )}
           {streaming && <LiveBadge tail={tail} />}
-          {delayed && !!bounds?.live && shownRange !== "first" && view && view.points.length >= 2 && (
+          {delayed && !!bounds?.live && view && view.points.length >= 2 && (
             <DelayBadge updatedAt={updatedAt} everyMs={everyMs} />
           )}
           <span className="tm-ranges" role="group" aria-label="Chart range">
-            {RANGES.filter((r) => (!utility || r.id !== "model") && (young || r.id !== "first")).map((r) => (
+            {RANGES.map((r) => (
               <button
                 key={r.id}
                 type="button"
                 className={`tm-range${shownRange === r.id ? " on" : ""}`}
                 aria-pressed={shownRange === r.id}
-                title={
-                  r.id === "1h" && underHour ? "The coin is under an hour old: All shows the same" : r.title
-                }
-                disabled={r.id === "1h" && underHour && shownRange !== "1h"}
+                title={r.title}
                 onClick={() => pickRange(r.id)}
               >
-                {utility && r.id === "alert" ? "From scan" : r.label}
+                {r.label}
               </button>
             ))}
           </span>
@@ -2158,18 +2118,7 @@ export function ChartCard({
           )}
         </h4>
         <CustomizeDrawer open={customizing} onClose={closeCustomize} section={CHART_MARKS_SECTION} nested />
-        {shownRange === "first" && (
-          <FirstMinutesChart
-            mint={card.token.mintAddress}
-            label={tokenLabel(card.token)}
-            events={events}
-            marks={marks}
-            height={height}
-            kind={kind}
-            onKind={setKind}
-          />
-        )}
-        {shownRange !== "first" && !data && !error && (
+        {!data && !error && (
           <ChartSkeleton height={height + CHART_CHROME_PX}>Loading the chart…</ChartSkeleton>
         )}
         {locked && (
@@ -2180,12 +2129,12 @@ export function ChartCard({
         {error && !data && !locked && (
           <p className="error small">Couldn&apos;t load the chart: {error.message}</p>
         )}
-        {shownRange !== "first" && data && (!view || view.points.length < 2) && (
+        {data && (!view || view.points.length < 2) && (
           <p className="muted small tm-chart-empty">
-            No trades to chart yet{shownRange !== "all" ? " in this range" : ""}.
+            No trades to chart yet{shownRange !== "all" ? " in this view" : ""}.
           </p>
         )}
-        {shownRange !== "first" && view && view.points.length >= 2 && (
+        {view && view.points.length >= 2 && (
           <>
             <PriceChart
               points={view.points}
@@ -2193,10 +2142,8 @@ export function ChartCard({
               events={events}
               candles={view.candles}
               flow={flow}
-              seenUntil={shownRange === "model" ? alertAt : undefined}
               live={view.live}
               now={view.latest}
-              scans={view.scans}
               marks={marks}
               height={height}
               trades={chartTrades}
@@ -2206,6 +2153,7 @@ export function ChartCard({
               onZoom={setZoom}
               kind={kind}
               onKind={setKind}
+              pinEnd={shownRange === "trading"}
               path={view.path}
               ariaLabel={`${tokenLabel(card.token)} market cap from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
             />
@@ -2214,15 +2162,6 @@ export function ChartCard({
                 Right of the dashed line: the next minute (experimental). Shaded is where the price landed
                 about 8 times in 10 in testing, read from the last minute&apos;s trading; the dotted middle is
                 a rough guess. Not advice.
-              </p>
-            )}
-            {shownRange === "model" && (
-              <p className="faint small tm-chart-src">
-                <i className="tm-scan-dot" aria-hidden="true" />{" "}
-                {view.scans.length > 0
-                  ? `${view.scans.length} scan${view.scans.length === 1 ? "" : "s"} the model read · `
-                  : ""}
-                5 minutes either side of the alert; shaded is after it, which the model never saw.
               </p>
             )}
           </>
@@ -2293,28 +2232,18 @@ function DelayBadge({ updatedAt, everyMs }: { updatedAt: number | null; everyMs:
   );
 }
 
-/** A view's window over the minute data: where it starts and ends, and whether it runs to now. */
-function viewBounds(
-  data: TokenChart,
-  range: Range,
-  alertAt: number,
-): { from: number; to: number; live: boolean } | null {
+/**
+ * A view's window over the minute data, running to now: the whole history for All, the last
+ * TRADING_SPAN_MS for Trading (all of it for a coin younger than that).
+ */
+function viewBounds(data: TokenChart, range: Range): { from: number; to: number; live: boolean } | null {
   const times = data.candles?.length ? data.candles.map((k) => k.t + 60_000) : data.marketCap.map((p) => p.t);
   if (times.length === 0) return null;
   const first = Math.min(times[0]!, data.candles?.[0]?.t ?? Infinity);
   const last = times[times.length - 1]!;
-  const from =
-    range === "all"
-      ? first
-      : range === "1h"
-        ? Math.max(first, last - 3_600_000)
-        : range === "model"
-          ? Math.max(first, alertAt - MODEL_SPAN_MS)
-          : // From the alert: unless the data starts after it (then all of it).
-            Math.max(first, alertAt - LEAD_IN_MS);
-  // Model View's window can end before the latest reading; every other view runs to it.
-  const to = range === "model" ? alertAt + MODEL_SPAN_MS : Math.max(last, Date.now());
-  return { from, to, live: range !== "model" || to >= Date.now() };
+  const to = Math.max(last, Date.now());
+  const from = range === "all" ? first : Math.max(first, to - TRADING_SPAN_MS);
+  return { from, to, live: true };
 }
 
 /** Whether the live tail is current: its price confirmed within the last few polls. */
@@ -2344,102 +2273,6 @@ function LiveBadge({ tail }: { tail: LiveTail }) {
 /** Points drawn at most: fewer on a phone, where each still needs room to be hovered. */
 function maxPoints(): number {
   return window.innerWidth <= 640 ? 160 : MAX_POINTS;
-}
-
-/**
- * The "First 15m" view (user ask 2026-10-17): the coin's first 15 minutes from Pump.fun's candles
- * (GET /tokens/:mint/chart/first), every second while the coin is inside them and re-read every
- * few seconds, then in 15-second steps. While it is inside them the live curve's changes run on
- * past the newest candle. The axis counts from the launch. Read only while the view is open.
- */
-function FirstMinutesChart({
-  mint,
-  label,
-  events,
-  marks,
-  height,
-  kind,
-  onKind,
-}: {
-  mint: string;
-  label: string;
-  events: ChartEvent[];
-  marks: WalletMark[];
-  height: number;
-  kind: ChartKind;
-  onKind: (kind: ChartKind) => void;
-}) {
-  const api = useTokenApi(mint);
-  const [live, setLive] = useState(true);
-  const { data, error } = usePolling<TokenFirstMinutes>(
-    `${api}/chart/first`,
-    live ? FIRST_LIVE_POLL_MS : FIRST_POLL_MS,
-  );
-  useEffect(() => {
-    if (data && !data.live) setLive(false);
-  }, [data]);
-  const tail = useLiveTail(api, live && !!data?.live);
-  const view = useMemo(() => {
-    const candles = data?.candles;
-    if (!data || !candles || candles.length === 0) return null;
-    const step = data.stepSec * 1_000;
-    const start = data.startAt ?? candles[0]!.t;
-    const end = start + FIRST_MINUTES_MS;
-    // From the first trade's open, then each candle's close at its end, when that price held, then
-    // the curve's own changes after the newest candle, inside the 15 minutes.
-    const points = stitch(
-      [{ points: [{ t: candles[0]!.t, v: candles[0]!.o }, ...candleCloses(candles, step)], stepMs: step }],
-      data.live ? tail.ticks.filter((p) => p.t <= end) : [],
-    );
-    return {
-      points: linePoints(points, start, pointWidthMs(FIRST_MINUTES_MS, maxPoints() * 2, step)),
-      step,
-      start,
-      candles: candles.map((k) => ({ ...k, vol: k.vol ?? 0, w: step })),
-    };
-  }, [data, tail.ticks]);
-
-  if (!data && !error) return <ChartSkeleton>Loading the first minutes…</ChartSkeleton>;
-  if (error && !data) {
-    const locked = lockedText(error, "chart");
-    return locked ? (
-      <p className="tm-locked muted small">
-        <LockIcon size={14} /> {locked}
-      </p>
-    ) : (
-      <p className="error small">Couldn&apos;t load the first minutes: {error.message}</p>
-    );
-  }
-  if (!view || view.points.length < 2) {
-    return (
-      <p className="muted small tm-chart-empty">
-        {data?.live
-          ? "No trades to chart yet."
-          : "Pump.fun no longer has this coin's first minutes in fine detail."}
-      </p>
-    );
-  }
-  const streaming = isStreaming(tail);
-  return (
-    <>
-      <PriceChart
-        points={view.points}
-        stepMs={view.step}
-        events={events}
-        candles={view.candles}
-        live={data!.live}
-        origin={view.start}
-        marks={marks}
-        height={height}
-        kind={kind}
-        onKind={onKind}
-        ariaLabel={`${label} market cap in its first 15 minutes, from ${usd(view.points[0]!.v)} to ${usd(view.points[view.points.length - 1]!.v)}`}
-      />
-      <p className="faint small tm-chart-src">
-        {streaming && <LiveBadge tail={tail} />} Time since launch, over the first 15 minutes.
-      </p>
-    </>
-  );
 }
 
 const TAG_TEXT: Record<FlaggedWallet["tags"][number], { text: string; tone: string }> = {
