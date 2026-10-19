@@ -81,6 +81,12 @@ export function cardGraduated(card: Card, gradTokens: ReadonlySet<string>): bool
   );
 }
 
+/** An alert time in ms; a missing or bad one counts as latest. */
+function timeOf(iso: string | null | undefined): number {
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(t) ? t : Infinity;
+}
+
 /**
  * The Live feed's cards in their columns, each keeping the feed's newest-first order, next to the
  * graduated tokens. A filter alert a model call folded into is in both: it is your alert and the
@@ -116,11 +122,28 @@ export function splitScope(
   }
   out.soon.sort((a, b) => mcapOf(b) - mcapOf(a));
   const moved = new Map<string, Card>();
+  // A token both a filter and a model alerted on sits only in the column that alerted first (user
+  // ask 2026-10-19); a tie, or no times to go by, goes to Your filters.
+  const inFilters = (card: Card, grad: boolean) => card.kind === "match" && (!grad || keepGraduated.filters);
+  const inModels = (card: Card, grad: boolean) => card.curated !== null && (!grad || keepGraduated.models);
+  const first = new Map<string, { filters: number | null; models: number | null }>();
+  for (const card of feed) {
+    const grad = cardGraduated(card, gradTokens);
+    const t = first.get(card.tokenId) ?? { filters: null, models: null };
+    if (inFilters(card, grad)) t.filters = Math.min(t.filters ?? Infinity, timeOf(card.matchedAt));
+    if (inModels(card, grad)) t.models = Math.min(t.models ?? Infinity, timeOf(card.curated?.alertedAt));
+    first.set(card.tokenId, t);
+  }
+  const filtersFirst = (tokenId: string) => {
+    const t = first.get(tokenId);
+    return t?.filters != null && (t.models == null || t.filters <= t.models);
+  };
   for (const card of feed) {
     const grad = cardGraduated(card, gradTokens);
     if (grad && !moved.has(card.tokenId)) moved.set(card.tokenId, card);
-    if (card.kind === "match" && (!grad || keepGraduated.filters)) out.filters.push(card);
-    if (card.curated && (!grad || keepGraduated.models)) out.models.push(card);
+    if (filtersFirst(card.tokenId)) {
+      if (inFilters(card, grad)) out.filters.push(card);
+    } else if (inModels(card, grad)) out.models.push(card);
   }
   if (moved.size === 0) {
     out.graduated = [...graduated];
