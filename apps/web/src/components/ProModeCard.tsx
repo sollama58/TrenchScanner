@@ -21,7 +21,7 @@ export const PRO_MODE_PERKS: { title: string; text: string }[] = [
     title: "TRADES panel",
     text: "Your last ten trades and the past day's figures, from a handle on every tab (desktop).",
   },
-  { title: "Portfolio tab", text: "Everything you hold and have traded, in one place." },
+  { title: "Portfolio tab", text: "Your positions, trades and alerts, in one place." },
   {
     title: "Bigger chart",
     text: "A larger chart in the coin window, with your buys and sells marked on it.",

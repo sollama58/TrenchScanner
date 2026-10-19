@@ -118,8 +118,8 @@ describe.skipIf(!dbAvailable)("GET /portfolio", () => {
     expect(mine.headers["cache-control"]).toContain("no-store");
     const body = mine.json();
     expect(body.account).toMatchObject({ walletAddress: ADMIN, admin: true, pro: { source: "admin" } });
-    // No node to read the chain from in tests: the holdings are left out, not guessed.
-    expect(body.holdings).toBeNull();
+    // The Holdings list left the tab: nothing reads the chain for it.
+    expect(body.holdings).toBeUndefined();
     expect(body.tape).toMatchObject({ coins: 1, buys: 2, sells: 1, solIn: 1.5, solOut: 2, noBuyCoins: 1 });
     // The sell-only coin stays listed, just out of the totals.
     expect(body.tape.recent.map((r: { mint: string }) => r.mint).sort()).toEqual(

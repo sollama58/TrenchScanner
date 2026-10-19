@@ -101,7 +101,7 @@ export function WalletMenu({
               <ChartIcon size={15} />
               <span>
                 <strong>Portfolio</strong>
-                <small>Holdings, positions and trades</small>
+                <small>Positions, trades and alerts</small>
               </span>
             </button>
           )}
