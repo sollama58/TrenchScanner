@@ -2,7 +2,7 @@ import bs58 from "bs58";
 import { findProgramAddress } from "../solana.js";
 import { pumpSwapPoolAddress } from "../venueAccounts.js";
 import { TransientError } from "./errors.js";
-import { PUMP_FEE_PROGRAM } from "./pumpCurve.js";
+import { PUMP_FEE_CONFIG, PUMP_FEE_PROGRAM, parsePumpCurve, pumpCurveAddress } from "./pumpCurve.js";
 import { SYSTEM_PROGRAM_ID, systemTransferInstruction, u64le, type InstructionSpec } from "./transaction.js";
 import { PROGRAM, WSOL, associatedTokenAddress, type GuardRpc } from "./txGuard.js";
 
@@ -194,6 +194,13 @@ export function effectiveQuoteReserves(state: PumpSwapState): bigint {
   return state.quoteVaultAmount + state.pool.virtualQuoteReserves;
 }
 
+/** The fees of the highest tier `marketCap` (lamports) reaches; the first tier's below them all. */
+function feeTierAt(feeConfig: PumpSwapFeeConfig, marketCap: bigint): PumpSwapFees {
+  const tiers = feeConfig.feeTiers;
+  for (const tier of [...tiers].reverse()) if (marketCap >= tier.marketCapLamports) return tier.fees;
+  return tiers[0]!.fees;
+}
+
 /**
  * The fees a trade on `pool` pays now, as the program works them out (pump-fees `get_fees`, the
  * pump-swap SDK's computeFeesBps): a canonical pool on a SOL-like quote pays the tier its market
@@ -217,15 +224,7 @@ export function pumpSwapFees(input: {
     input.baseReserve > 0n
   ) {
     const supply = pool.mayhem ? MAYHEM_SUPPLY : input.supply;
-    const marketCap = (input.effectiveQuote * supply) / input.baseReserve;
-    const tiers = feeConfig.feeTiers;
-    fees = tiers[0]!.fees;
-    if (marketCap >= tiers[0]!.marketCapLamports)
-      for (const tier of [...tiers].reverse())
-        if (marketCap >= tier.marketCapLamports) {
-          fees = tier.fees;
-          break;
-        }
+    fees = feeTierAt(feeConfig, (input.effectiveQuote * supply) / input.baseReserve);
   }
   if (global.creatorFeeConfigurable && pool.creatorFeeBps > 0n)
     fees = { ...fees, creatorFeeBps: pool.creatorFeeBps };
@@ -459,4 +458,54 @@ export async function readPumpSwap(
     state: { pool, baseReserve, quoteVaultAmount, fees },
     buyback: open[Math.floor(random() * open.length)]!,
   };
+}
+
+/**
+ * What Pump.fun charges a trade on `mint` now, basis points, read from the chain for the cost
+ * breakdown when Jupiter's quote doesn't say: a SOL-quoted coin still on its curve pays the curve
+ * tier its market cap is in (protocol, and creator once the curve has one; the pump SDK's
+ * computeFeesBps), a graduated coin its canonical PumpSwap pool's (pumpSwapFees). Null for
+ * anything else or anything unreadable: never a guess.
+ */
+export async function pumpFeeBps(
+  rpc: Pick<GuardRpc, "getAccountsData">,
+  mint: string,
+): Promise<{ bps: number; venue: string } | null> {
+  const curveAddress = pumpCurveAddress(mint);
+  const poolAddress = pumpSwapPoolOfMint(mint);
+  const first = await rpc
+    .getAccountsData([
+      curveAddress,
+      PUMP_FEE_CONFIG,
+      poolAddress,
+      PUMP_SWAP_GLOBAL_CONFIG,
+      PUMP_SWAP_FEE_CONFIG,
+      mint,
+    ])
+    .catch(() => null);
+  if (!first) return null;
+  const supply = mintSupply(first[5]);
+  if (supply === null) return null;
+  const curve = first[0] ? parsePumpCurve(curveAddress, first[0]) : null;
+  if (curve && !curve.complete) {
+    const feeConfig = first[1] ? parsePumpSwapFeeConfig(first[1]) : null;
+    if (!feeConfig || curve.quoteMint !== null || curve.virtualTokenReserves <= 0n) return null;
+    const marketCap =
+      (curve.virtualQuoteReserves * (curve.mayhem ? MAYHEM_SUPPLY : supply)) / curve.virtualTokenReserves;
+    const fees = feeTierAt(feeConfig, marketCap);
+    const creator = curve.creator === SYSTEM_PROGRAM_ID ? 0n : fees.creatorFeeBps;
+    return { bps: Number(fees.protocolFeeBps + creator), venue: "Pump.fun" };
+  }
+  const pool = first[2] ? parsePumpSwapPool(poolAddress, first[2]) : null;
+  const global = first[3] ? parsePumpSwapGlobal(first[3]) : null;
+  const feeConfig = first[4] ? parsePumpSwapFeeConfig(first[4]) : null;
+  if (!pool || !global || !feeConfig || pool.baseMint !== mint) return null;
+  const vaults = await rpc.getAccountsData([pool.baseVault, pool.quoteVault]).catch(() => null);
+  const baseReserve = tokenAmount(vaults?.[0]);
+  const quoteVaultAmount = tokenAmount(vaults?.[1]);
+  if (baseReserve === null || quoteVaultAmount === null || baseReserve <= 0n) return null;
+  const effectiveQuote = quoteVaultAmount + pool.virtualQuoteReserves;
+  if (effectiveQuote <= 0n) return null;
+  const fees = pumpSwapFees({ pool, global, feeConfig, supply, baseReserve, effectiveQuote });
+  return { bps: Number(fees.lpFeeBps + fees.protocolFeeBps + fees.creatorFeeBps), venue: "PumpSwap" };
 }

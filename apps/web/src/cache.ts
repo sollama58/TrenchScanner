@@ -131,6 +131,22 @@ declare global {
 /** A boot request older than this (the page sat on sign-in, say) is too old to adopt. */
 const BOOT_TTL_MS = 30_000;
 
+/** Longest the background work waits on the boot requests below, should one hang. */
+const FIRST_SCREEN_WAIT_MS = 8_000;
+
+/**
+ * Settles once every request index.html started has finished downloading (or failed), or after
+ * FIRST_SCREEN_WAIT_MS. Reads a clone of each, so the app's own read of the body is untouched.
+ */
+export function firstScreenLoaded(): Promise<void> {
+  const boot = Object.values(window.__boot ?? {}).filter((p): p is Promise<Response> => p !== undefined);
+  const bodies = Promise.allSettled(boot.map((p) => p.then((res) => res.clone().arrayBuffer())));
+  return Promise.race([
+    bodies.then(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, FIRST_SCREEN_WAIT_MS)),
+  ]);
+}
+
 function adoptBoot<T>(path: string): Promise<T> | null {
   const boot = window.__boot?.[path];
   if (!boot || performance.now() > BOOT_TTL_MS) return null;
@@ -215,11 +231,19 @@ function recentlyInvalidated(path: string): boolean {
   return invalidations.some((i) => path.startsWith(i.prefix));
 }
 
+/**
+ * Boot requests that read the same for every visitor (the sign-in page's showcase, feed and
+ * notices). A session check that comes back 401 drops everything for the old account, but these
+ * stay: dropping them made the sign-in page ask for them all over again (2026-10-19).
+ */
+const PUBLIC_BOOT = /^\/(guest|config)\/|^\/auth\/privy\/config$/;
+
 /** Drops cached responses (all, or those whose path starts with `prefix`), e.g. on sign-out. */
 export function invalidate(prefix = ""): void {
   invalidations.push({ prefix, at: Date.now() });
   if (window.__boot)
-    for (const key of Object.keys(window.__boot)) if (key.startsWith(prefix)) delete window.__boot[key];
+    for (const key of Object.keys(window.__boot))
+      if (key.startsWith(prefix) && !(prefix === "" && PUBLIC_BOOT.test(key))) delete window.__boot[key];
   for (const key of entries.keys()) if (key.startsWith(prefix)) entries.delete(key);
   if (prefix === "") {
     // Sign-out or a new session: nothing from this wallet stays on the device.

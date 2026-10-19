@@ -12,6 +12,7 @@ import {
   loadSignIn,
   tabFromHash,
 } from "./routes";
+import { firstScreenLoaded } from "./cache";
 import { startVersionWatch } from "./version";
 import { installTouchTips } from "./touchTips";
 import { captureInstallPrompt } from "./installApp";
@@ -55,6 +56,8 @@ createRoot(document.getElementById("root")!).render(
 
 // Once the first screen is up, fetch the other tabs' code (and the Live tab's windows) in the
 // background so switching, or opening one, is instant.
+// Not before the first screen's own API answers are in: on a phone link the ~150 KB of tab code
+// otherwise shares the line with the feed and holds it back by most of a second (2026-10-19).
 const warm = () => {
   void loadModelTab();
   void loadLighthouseTab();
@@ -63,5 +66,8 @@ const warm = () => {
   void loadSignIn();
   warmLivePanels();
 };
-if ("requestIdleCallback" in window) window.requestIdleCallback(warm, { timeout: 4000 });
-else setTimeout(warm, 2000);
+const warmWhenIdle = () => {
+  if ("requestIdleCallback" in window) window.requestIdleCallback(warm, { timeout: 4000 });
+  else setTimeout(warm, 2000);
+};
+void firstScreenLoaded().then(warmWhenIdle);
