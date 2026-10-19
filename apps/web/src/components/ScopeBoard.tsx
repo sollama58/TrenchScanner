@@ -407,6 +407,32 @@ function emptyText(
     : "No graduated token has passed the safety screen in the last day.";
 }
 
+/** A chip that copies `text` (the contract address) and says so for a moment. */
+function CopyChip({
+  text,
+  className,
+  title,
+  children,
+}: {
+  text: string;
+  className: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    });
+  };
+  return (
+    <button type="button" className={`${className} scope-chip-copy`} title={title} onClick={copy}>
+      {copied ? <span className="scope-chip-label">Copied</span> : children}
+    </button>
+  );
+}
+
 /** Placeholder rows for a column whose data is still on its way. */
 function ScopeRowSkeletons() {
   return (
@@ -490,7 +516,7 @@ export function ScopeRow({
       : curated
         ? [curated.modelName ?? "Model"]
         : [];
-  const chips = rowChips(card, d.chips);
+  const chips = rowChips(card, d.chips, now);
   const showSource = d.showSource || marker;
   const img = d.imageSize === "s" ? 36 : d.imageSize === "l" ? 56 : 44;
 
@@ -610,6 +636,18 @@ export function ScopeRow({
         <div className="scope-chips">
           {chips.map((c) => {
             const tl = tileLook(tiles, c.tone, c.risky);
+            if (c.copy)
+              return (
+                <CopyChip
+                  key={c.id}
+                  text={c.copy}
+                  className={`scope-chip ${tl.className ?? ""}`}
+                  title={c.title}
+                >
+                  <span className="scope-chip-label">{c.short}</span>
+                  <span className="num">{c.value}</span>
+                </CopyChip>
+              );
             return (
               <span
                 key={c.id}

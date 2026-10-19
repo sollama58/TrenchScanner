@@ -20015,3 +20015,8 @@ dialog.tm-modal.tm-terminal::backdrop {
 .hidden-tokens-all {
   margin-top: 10px;
 }
+/* Scope's contract-address chip copies the address instead of opening the coin. */
+.scope-chip-copy {
+  font-family: inherit;
+  cursor: copy;
+}
