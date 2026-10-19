@@ -62,6 +62,7 @@ import {
   type NarrativeAlertRow,
   type SageView,
 } from "../tokenSageView.js";
+import type { ViewStampBuffer } from "../viewStamps.js";
 
 const logger = createLogger("token-routes");
 
@@ -591,7 +592,12 @@ export async function readStonkFees(
  */
 export async function registerTokenRoutes(
   app: FastifyInstance,
-  opts: { env?: Env; stonkFees?: StonkFeesReader | null } = {},
+  opts: {
+    env?: Env;
+    stonkFees?: StonkFeesReader | null;
+    /** Token.holdersViewedAt, stamped by the bubble map's poll (viewStamps.ts). */
+    holderStamps?: ViewStampBuffer;
+  } = {},
 ) {
   // Token detail is reached from the paid feed. Behind the paywall - see authenticateSubscriber in server.ts.
   app.addHook("preHandler", app.authenticateSubscriber);
@@ -738,6 +744,10 @@ export async function registerTokenRoutes(
    * A model-alerted coin's bubble map over its top 50 holders (BubbleMapHolders): the top 25 and
    * every known wallet past them, clustered alike, now and as it stood at the coin's first call.
    * Null for either the coin has none of.
+   *
+   * Every token view polls this while it is open and the page visible, so it also stamps the coin
+   * as having its bubble map watched (Token.holdersViewedAt): the scan then re-reads its top
+   * holders every minute, and the "Now" map and its stats keep updating (user ask 2026-10-19).
    */
   app.get("/:mintAddress/bubble-holders", async (request, reply): Promise<BubbleHolders | undefined> => {
     const { mintAddress } = request.params as { mintAddress: string };
@@ -745,7 +755,9 @@ export async function registerTokenRoutes(
       reply.code(400).send({ error: "not a valid mint" });
       return;
     }
-    reply.header("Cache-Control", "private, max-age=30");
+    opts.holderStamps?.record([mintAddress]);
+    // Shorter than the view's 30-second poll, so each poll reaches here (and stamps the coin).
+    reply.header("Cache-Control", "private, max-age=15");
     const [row, frozen, moments] = await Promise.all([
       prisma.bubbleMapHolders.findUnique({ where: { mintAddress } }),
       prisma.bubbleMapAtAlert.findUnique({ where: { mintAddress } }),

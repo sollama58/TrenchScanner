@@ -2469,9 +2469,17 @@ export function hasHolderList(s: Pick<Snapshot, "linkedClusters" | "linkedHolder
  */
 export const HOLDER_SCAN_MS = 60_000;
 /**
+ * How often an open token view re-reads its holder reading and bubble maps: half the scan's pace,
+ * so a reading saved by the scan shows within half a minute. The bubble map's read also tells the
+ * worker the map is open (Token.holdersViewedAt), which re-reads the coin's top holders every
+ * minute instead of every ten (user ask 2026-10-19), so "Now" and its stats keep updating.
+ */
+export const HOLDER_POLL_MS = 30_000;
+/**
  * No reading for this long means the worker has stopped scanning the coin (out of band, unviewed).
  * A list that hasn't changed is written again only every HOLDER_LIST_REWRITE_MS (10 min, worker
- * holderListWrites.ts), so a coin still being scanned can go that long plus a cycle between rows.
+ * holderListWrites.ts; every minute while someone has the map open), so a coin still being scanned
+ * can go that long plus a cycle between rows.
  */
 export const HOLDER_STALE_MS = 12 * 60_000;
 
