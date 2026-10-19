@@ -63,6 +63,7 @@ import { AdminReportsBadge } from "./components/AdminReportsBadge";
 import { TwoFactorPromptHost } from "./components/TwoFactorPrompt";
 import { onRecheckMe, setMe } from "./me";
 import { WalletMenu } from "./components/WalletMenu";
+import { HeaderBalances } from "./components/HeaderBalances";
 import { clearPasses } from "./twoFactor";
 import { loadedPrivyControls, privyConfig, usePrivyWanted, wantPrivy } from "./privyBridge";
 
@@ -522,6 +523,7 @@ export function App() {
                 Connect wallet
               </button>
             )}
+            {signedIn && <HeaderBalances />}
             {signedIn && (
               <WalletMenu
                 user={session.user}

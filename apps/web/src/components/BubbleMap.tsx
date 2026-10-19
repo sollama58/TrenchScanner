@@ -1202,7 +1202,7 @@ const PILL_BOOST_MAX = 1.25;
 
 /**
  * Zoom and move around the map (user ask 2026-10-18), as the chart does: scroll or pinch to zoom
- * (scrolling down at the whole map scrolls the page as before), drag or swipe sideways to move once
+ * (never the page, even at the whole map or zoomed all the way in), drag or swipe sideways to move once
  * zoomed. A drag never opens the bubble it ends on.
  */
 function useMapZoom(svg: React.RefObject<SVGSVGElement | null>, box: MapBox) {
@@ -1237,6 +1237,9 @@ function useMapZoom(svg: React.RefObject<SVGSVGElement | null>, box: MapBox) {
     const el = svg.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      // Scrolling over the map never scrolls the page (user ask 2026-10-19), even zoomed all the
+      // way in or out: it does nothing there.
+      e.preventDefault();
       const zoomed = live.current.zoom !== null;
       const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
       if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
@@ -1248,7 +1251,6 @@ function useMapZoom(svg: React.RefObject<SVGSVGElement | null>, box: MapBox) {
         const factor = Math.exp(-Math.max(-1, Math.min(1, (e.deltaY * unit) / 400)));
         handlers.current.zoomBy(factor, handlers.current.toMap(e.clientX, e.clientY));
       }
-      e.preventDefault();
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);

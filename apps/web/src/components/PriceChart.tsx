@@ -1,7 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { change, signedPct, usd } from "../format";
 import {
-  AUTO_TIMEFRAMES_MS,
+  autoTimeframe,
+  barOver,
   candleTimeframe,
   clipPoints,
   FLOW_WINDOW_MS,
@@ -10,6 +11,7 @@ import {
   mcapAxis,
   fillFlat,
   liveCandles,
+  lockedSpans,
   ohlcBars,
   panBy,
   panValue,
@@ -122,17 +124,19 @@ function centeredWindow(
   log: boolean,
 ): { lo: number; hi: number } {
   if (!(c > 0)) c = Math.max(hi, 1);
+  // At least 0.3% either side (it was 2%): zoomed into seconds, a coin's moves are often that
+  // small, and drew as flat dashes on a mostly empty axis.
   if (log && lo > 0) {
     const l = Math.log(c);
-    const h = Math.max(Math.log(hi) - l, l - Math.log(lo), 0.02);
+    const h = Math.max(Math.log(hi) - l, l - Math.log(lo), 0.003);
     return { lo: Math.exp(l - h + 2 * h * vz.a), hi: Math.exp(l - h + 2 * h * vz.b) };
   }
-  const h = Math.max(hi - c, c - lo, c * 0.02);
+  const h = Math.max(hi - c, c - lo, c * 0.003);
   return { lo: c - h + 2 * h * vz.a, hi: c - h + 2 * h * vz.b };
 }
 
 /** The widest a candle's body draws, however few share the plot. */
-const MAX_CANDLE_PX = 22;
+const MAX_CANDLE_PX = 40;
 
 const PAD = { l: 8, r: 62, t: 24, b: 24 };
 
@@ -347,24 +351,40 @@ export function PriceChart({
   const timeframe = savedTf !== null && tfFits(savedTf) ? savedTf : null;
   const plotW = width - PAD.l - PAD.r;
   /**
-   * A picked candle size holds while zooming (user asks 2026-10-19): zooming out thins its candles
-   * rather than stopping or drawing wider ones, and zooming in never shrinks under three of them
-   * (MIN_ZOOM_MS at the least).
+   * A picked candle size locks while zooming (user asks 2026-10-19): zooming out thins its candles
+   * down to about a pixel each and stops there, rather than drawing wider ones, and zooming in
+   * widens them up to MAX_SLOT_PX (three of them at the fewest) and stops there.
    */
-  const minSpan = Math.min(
-    Math.max(1, ext1 - ext0),
-    kind === "candles" && timeframe !== null ? Math.max(MIN_ZOOM_MS, timeframe * 3) : MIN_ZOOM_MS,
-  );
+  const locked = kind === "candles" && timeframe !== null ? lockedSpans(timeframe, plotW, ext1 - ext0) : null;
+  // Auto zooms in until the finest candles in the window draw MAX_SLOT_PX wide (three at the
+  // fewest): past that it would only draw one candle ever fatter.
+  const finestShown = useMemo(() => {
+    if (kind !== "candles" || timeframe !== null) return null;
+    const w = zoomWindow(zoom, ext0, ext1);
+    let f = Infinity;
+    for (const k of candles) if (k.t + (k.w ?? 60_000) > w.from && k.t < w.to) f = Math.min(f, k.w ?? 60_000);
+    return Number.isFinite(f) ? Math.min(f, 60_000) : null;
+  }, [kind, timeframe, candles, zoom, ext0, ext1]);
+  const minSpan = locked
+    ? locked.min
+    : Math.min(
+        Math.max(1, ext1 - ext0),
+        Math.max(MIN_ZOOM_MS, finestShown ? lockedSpans(finestShown, plotW, ext1 - ext0).min : 0),
+      );
+  const maxSpan = locked ? locked.max : Infinity;
+  /** The width Auto drew last, which it keeps while the reader zooms (autoTimeframe). */
+  const autoRef = useRef<number | null>(null);
 
   const geo = useMemo(() => {
     if (points.length < 2) return null;
     const shownWin = zoomWindow(zoom, ext0, ext1);
     const t1 = shownWin.to;
-    // Unzoomed, a picked size opens on its openingSpanMs, as picking it zooms to.
+    // Unzoomed, a picked size opens on its openingSpanMs, as picking it zooms to; it never shows
+    // more than its widest window.
     const cap =
       opening && zoom === null && kind === "candles" && timeframe !== null
-        ? openingSpanMs(timeframe, plotW)
-        : Infinity;
+        ? Math.min(maxSpan, openingSpanMs(timeframe, plotW))
+        : maxSpan;
     const t0 = Math.max(Math.min(shownWin.from, t1 - minSpan), t1 - cap, ext0);
     const pts = clipPoints(points, t0, t1);
     if (pts.length < 2) return null;
@@ -395,8 +415,15 @@ export function PriceChart({
     // draws as itself unless the data or the screen can't.
     const inView = candles.filter((k) => k.t + (k.w ?? 60_000) > t0 && k.t < t1);
     const finest = inView.reduce((w, k) => Math.min(w, k.w ?? 60_000), inView.length ? 60_000 : 1_000);
-    const maxBars = Math.max(1, Math.floor(plotW / (kind === "candles" ? AUTO_CANDLE_PX : 6)));
-    let tfMs = candleTimeframe(finest, finest, t1 - t0, maxBars, AUTO_TIMEFRAMES_MS);
+    // Auto keeps the width it drew while the reader zooms; the whole view picks afresh.
+    let tfMs = autoTimeframe(
+      zoom !== null && kind === "candles" ? autoRef.current : null,
+      finest,
+      t1 - t0,
+      plotW,
+      kind === "candles" ? AUTO_CANDLE_PX : 6,
+    );
+    autoRef.current = tfMs;
     /** Why the drawn timeframe is wider than the one picked: coarser data in view, or too many. */
     let tfWider: "data" | "fit" | null = null;
     if (kind === "candles" && timeframe !== null) {
@@ -491,6 +518,7 @@ export function PriceChart({
     timeframe,
     opening,
     minSpan,
+    maxSpan,
     logScale,
     vZoom,
     pinEnd,
@@ -509,7 +537,7 @@ export function PriceChart({
 
   // The window as the wheel handler reads it: set on each render, and by the handler itself, so
   // wheel events between renders build on each other.
-  const winRef = useRef({ from: 0, to: 0, t0: 0, t1: 0, pin: false, min: MIN_ZOOM_MS });
+  const winRef = useRef({ from: 0, to: 0, t0: 0, t1: 0, pin: false, min: MIN_ZOOM_MS, max: Infinity });
   const setZoomRef = useRef(setZoom);
   useEffect(() => {
     setZoomRef.current = setZoom;
@@ -521,9 +549,17 @@ export function PriceChart({
         t1: ext1,
         pin: pinEnd,
         min: minSpan,
+        max: maxSpan,
       };
   });
   const hasGeo = geo !== null;
+  // A capped window with no zoom (a picked timeframe's widest, or its opening one) is handed to a
+  // caller that keeps the zoom, so it reads the finer candles for the window shown, not the view.
+  const capFrom = geo && zoom === null && geo.t0 > ext0 + 1 ? geo.t0 : null;
+  const capTo = geo?.t1 ?? 0;
+  useEffect(() => {
+    if (capFrom !== null && onZoom) onZoom({ from: capFrom, to: capTo, end: capTo >= ext1 - 1 });
+  }, [capFrom, capTo, ext1, onZoom]);
   useEffect(() => {
     const el = svgRef.current;
     if (!el) return;
@@ -534,20 +570,23 @@ export function PriceChart({
       if (pw <= 0 || w.t1 <= w.t0) return;
       const zoomed = w.to - w.from < w.t1 - w.t0 - 1;
       const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
+      // Scrolling over the chart never scrolls the page (user ask 2026-10-19), even zoomed all the
+      // way in or out: it does nothing there.
+      e.preventDefault();
       let next: Zoom | null;
       if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
         // A sideways swipe on a trackpad pans a zoomed window.
         if (!zoomed) return;
         next = panBy(w, w.t0, w.t1, ((e.deltaX * unit) / pw) * (w.to - w.from));
       } else {
-        // Zoomed all the way out, scrolling down scrolls the page as before.
-        if (e.deltaY === 0 || (e.deltaY > 0 && !zoomed)) return;
+        if (e.deltaY === 0) return;
+        const span = w.to - w.from;
+        if ((e.deltaY > 0 && (!zoomed || span >= w.max - 1)) || (e.deltaY < 0 && span <= w.min + 1)) return;
         const at =
           w.pin && w.to >= w.t1 - 1 ? 1 : Math.min(1, Math.max(0, (e.clientX - box.left - PAD.l) / pw));
         const factor = Math.exp(Math.max(-1, Math.min(1, (e.deltaY * unit) / 300)));
-        next = zoomBy(w, w.t0, w.t1, factor, at, w.min);
+        next = zoomBy(w, w.t0, w.t1, factor, at, w.min, w.max);
       }
-      e.preventDefault();
       winRef.current = { ...w, from: next?.from ?? w.t0, to: next?.to ?? w.t1 };
       setHover(null);
       setZoomRef.current(next);
@@ -560,9 +599,9 @@ export function PriceChart({
     const el = yAxisRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
       const box = el.getBoundingClientRect();
       if (box.height <= 0 || e.deltaY === 0) return;
-      e.preventDefault();
       const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
       const at = pinRef.current ? 0.5 : Math.min(1, Math.max(0, (box.bottom - e.clientY) / box.height));
       const factor = Math.exp(Math.max(-1, Math.min(1, (e.deltaY * unit) / 300)));
@@ -579,6 +618,8 @@ export function PriceChart({
   const win = { from: geo.t0, to: geo.t1 };
   const zoomed = geo.zoomed;
   const atMin = span <= minSpan + 1;
+  // Zoomed out as far as it goes: the whole view, or a picked timeframe's widest window.
+  const atMax = !geo.zoomed || span >= maxSpan - 1;
   // Whether the window runs to the view's end: zoomed off it, the end tag is the window's last
   // reading and the latest goes under it as "NOW:".
   const atEnd = geo.t1 >= ext1 - 1;
@@ -685,12 +726,15 @@ export function PriceChart({
   const sliceW = (geo.slotMs / Math.max(1, geo.d1 - geo.d0)) * geo.histW;
   const slotX = (i: number) => x(geo.slot0 + i * geo.slotMs);
   // The candle view reads out the candle under the pointer: its open, high, low and close.
-  const hBarIdx =
+  const hSlot =
     hover && geo.bars
       ? Math.min(geo.slices - 1, Math.max(0, Math.floor((hover.cx - slotX(0)) / sliceW)))
       : null;
-  const hb = hBarIdx !== null ? (geo.bars?.[hBarIdx] ?? null) : null;
-  const hx = hb && hBarIdx !== null ? slotX(hBarIdx + 0.5) : h ? px(h) : 0;
+  // A wider candle running over the slot (a minute candle among 1-second ones) reads as itself.
+  const hOver = hSlot !== null && geo.bars ? barOver(geo.bars, hSlot) : null;
+  const hBarIdx = hOver ? hOver.at : hSlot;
+  const hb = hOver?.bar ?? null;
+  const hx = hb && hBarIdx !== null ? slotX(hBarIdx + (hb.span ?? 1) / 2) : h ? px(h) : 0;
   const hv = hb ? hb.c : (h?.v ?? 0);
   const hUp = h ? hv >= geo.base : true;
   const winTo = (z: Zoom | null) => {
@@ -714,7 +758,9 @@ export function PriceChart({
     keepTimeframe(tfKey, ms);
     if (ms === null) return;
     const target = openingSpanMs(ms, plotW);
-    winTo(zoomBy(win, ext0, ext1, target / Math.max(1, span), atEnd ? 1 : 0.5));
+    const { min, max } =
+      kind === "candles" ? lockedSpans(ms, plotW, ext1 - ext0) : { min: minSpan, max: Infinity };
+    winTo(zoomBy(win, ext0, ext1, target / Math.max(1, span), atEnd ? 1 : 0.5, min, max));
   };
   // The volume lane: a bar per slice rising from its floor, green where the price rose across it.
   const laneTop = bottom + 8;
@@ -869,6 +915,7 @@ export function PriceChart({
               g.dist / Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)),
               at,
               minSpan,
+              maxSpan,
             );
             const w = z ?? { from: ext0, to: ext1 };
             setZoom(pinned ? z : z && panBy(w, ext0, ext1, -((mid - g.mid) / plotW) * (w.to - w.from)));
@@ -1031,10 +1078,11 @@ export function PriceChart({
             <g className="pc-candles" aria-hidden="true">
               {geo.bars.map((b, i) => {
                 if (!b) return null;
-                const cx = slotX(i + 0.5);
+                const n = b.span ?? 1;
+                const cx = slotX(i + n / 2);
                 // A timeframe's first or last slot can start before the window or end after it.
                 if (cx < PAD.l || cx > width - PAD.r) return null;
-                const bw = candleBodyW(sliceW);
+                const bw = candleBodyW(sliceW * n, n === 1);
                 const yo = axis.y(b.o);
                 const yc = axis.y(b.c);
                 const dir = b.flat ? "flat" : b.c >= b.o ? "up" : "down";
@@ -1162,16 +1210,19 @@ export function PriceChart({
             {vols.map((b, i) => {
               if (!b || b.usd <= 0) return null;
               const sx = slotX(i);
-              if (sx + sliceW / 2 < PAD.l || sx + sliceW / 2 > width - PAD.r) return null;
+              const sw = sliceW * (b.span ?? 1);
+              if (sx + sw / 2 < PAD.l || sx + sw / 2 > width - PAD.r) return null;
               const hb = Math.max(2, (b.usd / volMax) * (laneBottom - laneTop));
               // Thin bars even when a short view has few minutes: a wide block reads as a level, not a bar.
               // As wide as the candle over it in the candle view; thin bars under a line.
-              const bw = geo.bars ? candleBodyW(sliceW) : Math.min(14, Math.max(1.5, sliceW - 1.5));
+              const bw = geo.bars
+                ? candleBodyW(sw, (b.span ?? 1) === 1)
+                : Math.min(14, Math.max(1.5, sw - 1.5));
               return (
                 <g key={i}>
                   <rect
                     className={`pc-vol-bar ${b.c >= b.o ? "up" : "down"}${bar === i ? " on" : ""}`}
-                    x={sx + (sliceW - bw) / 2}
+                    x={sx + (sw - bw) / 2}
                     width={bw}
                     y={laneBottom - hb}
                     height={hb}
@@ -1181,7 +1232,7 @@ export function PriceChart({
                   <rect
                     className="pc-vol-hit"
                     x={sx}
-                    width={sliceW}
+                    width={sw}
                     y={laneTop - 4}
                     height={LANE - 4}
                     onPointerEnter={(e) => e.pointerType === "mouse" && setBar(i)}
@@ -1400,8 +1451,8 @@ export function PriceChart({
             className="tm-range"
             aria-label="Zoom out"
             title="Zoom out"
-            disabled={!zoomed}
-            onClick={() => winTo(zoomBy(win, ext0, ext1, 2, anchorAt, minSpan))}
+            disabled={atMax}
+            onClick={() => winTo(zoomBy(win, ext0, ext1, 2, anchorAt, minSpan, maxSpan))}
           >
             −
           </button>
@@ -1411,7 +1462,7 @@ export function PriceChart({
             aria-label="Zoom in"
             title="Zoom in"
             disabled={atMin}
-            onClick={() => winTo(zoomBy(win, ext0, ext1, 0.5, anchorAt, minSpan))}
+            onClick={() => winTo(zoomBy(win, ext0, ext1, 0.5, anchorAt, minSpan, maxSpan))}
           >
             +
           </button>
@@ -1437,14 +1488,16 @@ export function PriceChart({
 }
 
 /**
- * A candle's body width in a slot `sliceW` px wide: the slot less a gap of about a sixth (1 to 4
- * px), so neighbours sit close and the row fills the plot, as an exchange chart's do; slots too
- * thin for a gap draw edge to edge.
+ * A candle's body width in a slot `sliceW` px wide: the slot less a gap of about a fifth (at least
+ * 1 px), so neighbours sit close and the row fills the plot, as an exchange chart's do; slots too
+ * thin for a gap draw edge to edge. `capped` false for a candle wider than the slots around it (a
+ * minute among seconds), which draws across its whole width.
  */
-export function candleBodyW(sliceW: number): number {
-  const gap = sliceW >= 3 ? Math.min(4, Math.max(1, sliceW / 6)) : 0;
+export function candleBodyW(sliceW: number, capped = true): number {
+  const gap = sliceW >= 3 ? Math.max(1, sliceW / 5) : 0;
+  const w = Math.max(0.6, sliceW - gap);
   // Capped, so a handful of candles across a wide plot read as candles, not blocks.
-  return Math.min(MAX_CANDLE_PX, Math.max(0.6, sliceW - gap));
+  return capped ? Math.min(MAX_CANDLE_PX, w) : w;
 }
 
 /** Labeled trades the readout lists by name at most; the rest are counted. */
