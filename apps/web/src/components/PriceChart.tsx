@@ -12,7 +12,11 @@ import {
   liveCandles,
   ohlcBars,
   panBy,
+  panValue,
+  valueWindow,
+  windowAxis,
   zoomBy,
+  zoomValue,
   zoomWindow,
   sinceLabel,
   TIMEFRAMES,
@@ -26,6 +30,7 @@ import {
   type ScanFlow,
   type VolumeBar,
   type VolumeCandle,
+  type ValueZoom,
   type Zoom,
 } from "../priceChart";
 import type { PathStep } from "../pricePathing";
@@ -94,6 +99,8 @@ const PICKED_CANDLE_PX = 8;
 const MIN_CANDLE_PX = 3;
 /** Auto draws candles about this wide, at least: the narrowest timeframe that leaves them room. */
 const AUTO_CANDLE_PX = 8;
+/** The widest a candle's body draws, however few share the plot. */
+const MAX_CANDLE_PX = 22;
 
 const PAD = { l: 8, r: 62, t: 24, b: 24 };
 
@@ -212,8 +219,13 @@ export function PriceChart({
   // Zoom (user ask 2026-10-18): the wheel, a drag, a pinch or the buttons under the chart.
   const [ownZoom, setOwnZoom] = useState<Zoom | null>(null);
   // Candle timeframes (user ask 2026-10-18): null draws as many candles as fit (Auto).
-  const [timeframe, setTimeframe] = useState<number | null>(readTimeframe);
+  const [savedTf, setTimeframe] = useState<number | null>(readTimeframe);
   const [logScale, setLogScale] = useState(readLogScale);
+  /**
+   * The value axis zoomed by hand (user ask 2026-10-19): scroll or drag on the price axis, or pinch
+   * up and down on the chart. Null fits the data.
+   */
+  const [vZoom, setVZoom] = useState<ValueZoom | null>(null);
   const zoom = onZoom ? (zoomProp ?? null) : ownZoom;
   const setZoom = onZoom ?? setOwnZoom;
   /** Phones dock the readout under the chart. */
@@ -223,11 +235,16 @@ export function PriceChart({
    * down on a zoomed chart, not yet a pan (it moves), a tap (it lifts) or a read (it holds).
    */
   const gesture = useRef<
-    | { kind: "pan"; x: number; win: { from: number; to: number } }
-    | { kind: "touch"; x: number; win: { from: number; to: number } }
+    | { kind: "pan"; x: number; y: number; win: { from: number; to: number }; vz: ValueZoom | null }
+    | { kind: "touch"; x: number; y: number; win: { from: number; to: number }; vz: ValueZoom | null }
     | { kind: "pinch"; dist: number; mid: number; win: { from: number; to: number } }
+    /** Two fingers pinching up and down: the value axis, about their middle. */
+    | { kind: "vpinch"; dist: number; at: number; vz: ValueZoom | null }
     | null
   >(null);
+  /** A drag on the price axis scaling it: where it started. */
+  const scaleDrag = useRef<{ y: number; vz: ValueZoom | null } | null>(null);
+  const yAxisRef = useRef<HTMLDivElement>(null);
   /** The touches down on the chart, by pointer, for a pinch. */
   const touches = useRef(new Map<number, { x: number; y: number }>());
   /** The hold that turns a finger on a zoomed chart into a read. */
@@ -251,6 +268,12 @@ export function PriceChart({
   const ext0 = extent?.t0 ?? points[0]?.t ?? 0;
   const pathShown = live && path.length > 1;
   const ext1 = extent?.t1 ?? points[points.length - 1]?.t ?? 0;
+  /**
+   * Whether a timeframe fits the view at least three times (user ask 2026-10-19): a wider one, as
+   * on a coin younger than it, is greyed out in the picker, and a saved one draws as Auto.
+   */
+  const tfFits = (ms: number) => ms * 3 <= ext1 - ext0;
+  const timeframe = savedTf !== null && tfFits(savedTf) ? savedTf : null;
   const plotW = width - PAD.l - PAD.r;
 
   const geo = useMemo(() => {
@@ -314,7 +337,12 @@ export function PriceChart({
     const guessed = future ? path.map((s) => s.v) : [];
     const lo = Math.min(...values, ...wicks, ...extra, ...guessed);
     const hi = Math.max(...values, ...wicks, ...extra, ...guessed);
-    const axis = mcapAxis(lo, hi, PAD.t, height - PAD.b, 5, logScale);
+    // A hand-zoomed value axis shows its window exactly, on the scale the fitted one would use.
+    const fitLog = logScale && lo > 0 && hi / lo > 4;
+    const vw = vZoom ? valueWindow(lo, hi, vZoom, fitLog) : null;
+    const axis = vw
+      ? windowAxis(vw.lo, vw.hi, fitLog, PAD.t, height - PAD.b)
+      : mcapAxis(lo, hi, PAD.t, height - PAD.b, 5, logScale);
     const hiIdx = pts.reduce((best, p, i) => (p.v > pts[best]!.v ? i : best), 0);
     return {
       t0,
@@ -354,6 +382,7 @@ export function PriceChart({
     kind,
     timeframe,
     logScale,
+    vZoom,
     origin,
     path,
     pathShown,
@@ -406,6 +435,23 @@ export function PriceChart({
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [hasGeo]);
+  // Scrolling over the price axis zooms it about the value under the pointer.
+  useEffect(() => {
+    const el = yAxisRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      const box = el.getBoundingClientRect();
+      if (box.height <= 0 || e.deltaY === 0) return;
+      e.preventDefault();
+      const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
+      const at = Math.min(1, Math.max(0, (box.bottom - e.clientY) / box.height));
+      const factor = Math.exp(Math.max(-1, Math.min(1, (e.deltaY * unit) / 300)));
+      setHover(null);
+      setVZoom((vz) => zoomValue(vz, factor, at));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [hasGeo]);
 
   if (!geo) return null;
   const { x, axis, pts } = geo;
@@ -433,6 +479,9 @@ export function PriceChart({
   const split = Math.min(1, Math.max(0, (baseY - PAD.t) / (bottom - PAD.t)));
   const up = last.v >= geo.base;
   const lastY = py(last);
+  // Zoomed in on the value axis, the latest reading can sit off the plot: its tag stays on the edge.
+  const lastIn = lastY >= PAD.t - 2 && lastY <= bottom + 2;
+  const lastTagY = Math.min(bottom, Math.max(PAD.t, lastY));
   const ended = !live || !atEnd;
 
   const shown = events.filter((e) => e.t >= geo.t0 && e.t <= geo.t1);
@@ -488,7 +537,7 @@ export function PriceChart({
           return { text, w, y, up: now >= geo.base };
         })()
       : null;
-  const tags = [lastY, ...(geo.fromAlert && baseIn ? [baseY] : []), ...(nowTag ? [nowTag.y] : [])];
+  const tags = [lastTagY, ...(geo.fromAlert && baseIn ? [baseY] : []), ...(nowTag ? [nowTag.y] : [])];
   const ticks = axis.ticks.filter((v) => tags.every((y) => Math.abs(axis.y(v) - y) > 18));
   const h = hover !== null ? pts[hover.i] : undefined;
   const peak = pts[geo.hiIdx]!;
@@ -529,6 +578,12 @@ export function PriceChart({
     setHover(null);
     setZoom(z);
   };
+  /** Both axes back to the whole range, fitted. */
+  const resetZoom = () => {
+    winTo(null);
+    setVZoom(null);
+  };
+  const plotH = bottom - PAD.t;
   // The buttons zoom about the middle, or hold the latest reading in view when the window ends on it.
   const anchorAt = atEnd && live ? 1 : 0.5;
   // A picked timeframe zooms the window to fit its candles, about PICKED_CANDLE_PX wide, holding
@@ -647,25 +702,33 @@ export function PriceChart({
         width={width}
         height={fullH}
         viewBox={`0 0 ${width} ${fullH}`}
-        className={`pc-svg${zoomed ? " zoomed" : ""}`}
+        className={`pc-svg${zoomed || vZoom ? " zoomed" : ""}`}
         role="img"
         aria-label={ariaLabel}
         onPointerMove={(e) => {
           let g = gesture.current;
           if (g?.kind === "touch") {
             // Still a tap until the finger moves: then it drags the window along.
-            if (Math.abs(e.clientX - g.x) < DRAG_PX) return;
+            if (Math.hypot(e.clientX - g.x, e.clientY - g.y) < DRAG_PX) return;
             endHold();
-            g = gesture.current = { kind: "pan", x: g.x, win: g.win };
+            g = gesture.current = { kind: "pan", x: g.x, y: g.y, win: g.win, vz: g.vz };
             setHover(null);
           }
           if (g?.kind === "pan") {
-            const dt = -((e.clientX - g.x) / plotW) * (g.win.to - g.win.from);
-            setZoom(panBy(g.win, ext0, ext1, dt));
+            // Along time when zoomed in on it; up and down too when the value axis is.
+            if (zoomed)
+              setZoom(panBy(g.win, ext0, ext1, -((e.clientX - g.x) / plotW) * (g.win.to - g.win.from)));
+            if (g.vz) setVZoom(panValue(g.vz, (e.clientY - g.y) / plotH));
             return;
           }
           if (touches.current.has(e.pointerId))
             touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (g?.kind === "vpinch") {
+            const [a, b] = [...touches.current.values()];
+            if (!a || !b) return;
+            setVZoom(zoomValue(g.vz, g.dist / Math.max(10, Math.abs(a.y - b.y)), g.at));
+            return;
+          }
           if (g?.kind === "pinch") {
             const [a, b] = [...touches.current.values()];
             const box = boxRef.current?.getBoundingClientRect();
@@ -687,19 +750,29 @@ export function PriceChart({
             const [a, b] = [...touches.current.values()];
             if (a && b && touches.current.size === 2) {
               endHold();
-              gesture.current = {
-                kind: "pinch",
-                dist: Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)),
-                mid: (a.x + b.x) / 2,
-                win,
-              };
+              const box = e.currentTarget.getBoundingClientRect();
+              // Fingers set one above the other pinch the value axis; side by side (or aslant), time.
+              gesture.current =
+                Math.abs(a.y - b.y) > 2 * Math.abs(a.x - b.x)
+                  ? {
+                      kind: "vpinch",
+                      dist: Math.max(10, Math.abs(a.y - b.y)),
+                      at: Math.min(1, Math.max(0, (box.top + bottom - (a.y + b.y) / 2) / plotH)),
+                      vz: vZoom,
+                    }
+                  : {
+                      kind: "pinch",
+                      dist: Math.max(10, Math.hypot(a.x - b.x, a.y - b.y)),
+                      mid: (a.x + b.x) / 2,
+                      win,
+                    };
               setHover(null);
               return;
             }
-            if (zoomed && touches.current.size === 1) {
+            if ((zoomed || vZoom) && touches.current.size === 1) {
               // One finger on a zoomed chart drags it along; held still, it reads the chart instead.
               const at = e.clientX;
-              gesture.current = { kind: "touch", x: at, win };
+              gesture.current = { kind: "touch", x: at, y: e.clientY, win, vz: vZoom };
               endHold();
               hold.current = setTimeout(() => {
                 hold.current = null;
@@ -709,10 +782,10 @@ export function PriceChart({
               }, HOLD_MS);
               return;
             }
-          } else if (e.button === 0 && zoomed) {
+          } else if (e.button === 0 && (zoomed || vZoom)) {
             // A mouse drag on a zoomed chart pans it.
             e.currentTarget.setPointerCapture?.(e.pointerId);
-            gesture.current = { kind: "pan", x: e.clientX, win };
+            gesture.current = { kind: "pan", x: e.clientX, y: e.clientY, win, vz: vZoom };
             setHover(null);
             return;
           }
@@ -723,14 +796,15 @@ export function PriceChart({
           endHold();
           // A finger lifted before it moved or held: a tap, which reads the point under it.
           if (gesture.current?.kind === "touch") pick(e.clientX);
-          if (gesture.current?.kind !== "pinch" || touches.current.size < 2) gesture.current = null;
+          const k = gesture.current?.kind;
+          if ((k !== "pinch" && k !== "vpinch") || touches.current.size < 2) gesture.current = null;
         }}
         onPointerCancel={(e) => {
           touches.current.delete(e.pointerId);
           endHold();
           gesture.current = null;
         }}
-        onDoubleClick={() => winTo(null)}
+        onDoubleClick={resetZoom}
         onPointerLeave={(e) => {
           // A tapped readout (price or bar) stays up after the finger lifts, until the next tap.
           if (e.pointerType !== "mouse") return;
@@ -763,6 +837,9 @@ export function PriceChart({
             <stop offset={split} stopColor="var(--bad)" stopOpacity="0.03" />
             <stop offset="1" stopColor="var(--bad)" stopOpacity="0.2" />
           </linearGradient>
+          <clipPath id={`${id}-plot`}>
+            <rect x={0} y={PAD.t - 6} width={width - PAD.r} height={bottom - PAD.t + 6} />
+          </clipPath>
         </defs>
 
         {ticks.map((v) => (
@@ -811,133 +888,138 @@ export function PriceChart({
           </g>
         )}
 
-        {!geo.bars && <path d={area} fill={`url(#${id}-area)`} />}
-        {baseIn && <line x1={PAD.l} x2={width - PAD.r} y1={baseY} y2={baseY} className="pc-base" />}
-        {geo.bars ? (
-          <g className="pc-candles" aria-hidden="true">
-            {geo.bars.map((b, i) => {
-              if (!b) return null;
-              const cx = slotX(i + 0.5);
-              // A timeframe's first or last slot can start before the window or end after it.
-              if (cx < PAD.l || cx > width - PAD.r) return null;
-              const bw = candleBodyW(sliceW);
-              const yo = axis.y(b.o);
-              const yc = axis.y(b.c);
-              const dir = b.flat ? "flat" : b.c >= b.o ? "up" : "down";
-              return (
-                <g key={i} className={`pc-candle ${dir}${hBarIdx === i ? " on" : ""}`}>
-                  <line x1={cx} x2={cx} y1={axis.y(b.h)} y2={axis.y(b.l)} />
-                  <rect
-                    x={cx - bw / 2}
-                    y={Math.min(yo, yc)}
-                    width={bw}
-                    height={Math.max(1, Math.abs(yo - yc))}
-                  />
-                </g>
-              );
-            })}
-          </g>
-        ) : (
-          <path d={line} className="pc-line" stroke={`url(#${id}-stroke)`} />
-        )}
+        {/* Zoomed in on the value axis, what runs past the plot is cut at its edges. */}
+        <g clipPath={vZoom ? `url(#${id}-plot)` : undefined}>
+          {!geo.bars && <path d={area} fill={`url(#${id}-area)`} />}
+          {baseIn && <line x1={PAD.l} x2={width - PAD.r} y1={baseY} y2={baseY} className="pc-base" />}
+          {geo.bars ? (
+            <g className="pc-candles" aria-hidden="true">
+              {geo.bars.map((b, i) => {
+                if (!b) return null;
+                const cx = slotX(i + 0.5);
+                // A timeframe's first or last slot can start before the window or end after it.
+                if (cx < PAD.l || cx > width - PAD.r) return null;
+                const bw = candleBodyW(sliceW);
+                const yo = axis.y(b.o);
+                const yc = axis.y(b.c);
+                const dir = b.flat ? "flat" : b.c >= b.o ? "up" : "down";
+                return (
+                  <g key={i} className={`pc-candle ${dir}${hBarIdx === i ? " on" : ""}`}>
+                    <line x1={cx} x2={cx} y1={axis.y(b.h)} y2={axis.y(b.l)} />
+                    <rect
+                      x={cx - bw / 2}
+                      y={Math.min(yo, yc)}
+                      width={bw}
+                      height={Math.max(1, Math.abs(yo - yc))}
+                    />
+                  </g>
+                );
+              })}
+            </g>
+          ) : (
+            <path d={line} className="pc-line" stroke={`url(#${id}-stroke)`} />
+          )}
 
-        {guess && (
-          <g className="pc-path">
-            <title>
-              {`Experimental predicted path: ${signedPct(guess.change * 100, 1)} over the next ${guess.secs}s in 5-second steps, with the band the price landed in about 8 times in 10 in testing. A statistical guess from the last minute's trading, often wrong; not advice.`}
-            </title>
-            <line x1={guess.zx} x2={guess.zx} y1={PAD.t - 6} y2={bottom} className="pc-path-edge" />
-            <text x={(guess.zx + guess.endX) / 2} y={fullH - 6} textAnchor="middle" className="pc-tick">
-              {plotW - geo.histW >= 90 ? `next ${guess.secs}s` : `+${guess.secs}s`}
-            </text>
-            <path d={guess.band} className="pc-path-band" />
-            <path d={guess.line} className="pc-path-line" />
-            {guess.dots.map((d, i) => (
-              <circle key={i} cx={d.cx} cy={d.cy} r={1.6} className="pc-path-dot" />
-            ))}
-            {/* Too narrow to label without covering the line: the caption under the chart says it. */}
-            {guess.endX - guess.zx >= 110 && (
-              <text
-                x={Math.min(width - PAD.r - 4, guess.endX)}
-                y={Math.max(PAD.t + 8, guess.labelY)}
-                textAnchor="end"
-                className="pc-path-label"
-              >
-                Predicted (experimental)
+          {guess && (
+            <g className="pc-path">
+              <title>
+                {`Experimental predicted path: ${signedPct(guess.change * 100, 1)} over the next ${guess.secs}s in 5-second steps, with the band the price landed in about 8 times in 10 in testing. A statistical guess from the last minute's trading, often wrong; not advice.`}
+              </title>
+              <line x1={guess.zx} x2={guess.zx} y1={PAD.t - 6} y2={bottom} className="pc-path-edge" />
+              <text x={(guess.zx + guess.endX) / 2} y={fullH - 6} textAnchor="middle" className="pc-tick">
+                {plotW - geo.histW >= 90 ? `next ${guess.secs}s` : `+${guess.secs}s`}
               </text>
-            )}
-          </g>
-        )}
-
-        {shownScans.map((s) => (
-          <circle
-            key={`scan-${s.t}`}
-            cx={x(s.t)}
-            cy={axis.y(valueAt(pts, s.t) ?? s.v)}
-            r={hScan === s ? 3.5 : 2.5}
-            className="pc-scan"
-          />
-        ))}
-
-        {shownMarks.length > 0 && (
-          <g className="pc-marks" aria-hidden="true">
-            {shownMarks.map((m, i) => {
-              const r = markRadius(m.sol);
-              const on = hMarks.includes(m);
-              return (
-                <g
-                  key={`mark-${m.t}-${m.wallet}-${i}`}
-                  className={`pc-mark wk-${m.kind} ${m.side}${on ? " on" : ""}`}
-                  transform={`translate(${x(m.t).toFixed(1)},${axis.y(valueAt(pts, m.t) ?? last.v).toFixed(1)})`}
+              <path d={guess.band} className="pc-path-band" />
+              <path d={guess.line} className="pc-path-line" />
+              {guess.dots.map((d, i) => (
+                <circle key={i} cx={d.cx} cy={d.cy} r={1.6} className="pc-path-dot" />
+              ))}
+              {/* Too narrow to label without covering the line: the caption under the chart says it. */}
+              {guess.endX - guess.zx >= 110 && (
+                <text
+                  x={Math.min(width - PAD.r - 4, guess.endX)}
+                  y={Math.max(PAD.t + 8, guess.labelY)}
+                  textAnchor="end"
+                  className="pc-path-label"
                 >
-                  <circle r={r} />
-                  <text dy="0.35em" textAnchor="middle" fontSize={r >= 8 ? 9.5 : 8}>
-                    {m.letter}
-                  </text>
-                </g>
-              );
-            })}
-          </g>
-        )}
+                  Predicted (experimental)
+                </text>
+              )}
+            </g>
+          )}
 
-        {entryY !== null && (
-          <g className="pc-entry">
-            <line x1={PAD.l} x2={width - PAD.r} y1={entryY} y2={entryY} />
-            <text x={PAD.l + 4} y={entryY - 5}>
-              Your entry {axisUsd(entry!)}
-            </text>
-          </g>
-        )}
+          {shownScans.map((s) => (
+            <circle
+              key={`scan-${s.t}`}
+              cx={x(s.t)}
+              cy={axis.y(valueAt(pts, s.t) ?? s.v)}
+              r={hScan === s ? 3.5 : 2.5}
+              className="pc-scan"
+            />
+          ))}
 
-        {shownTrades.map((tr, i) => {
-          const cx = x(tr.t);
-          const cy = axis.y(valueAt(pts, tr.t) ?? last.v);
-          const buy = tr.side === "buy";
-          // A buy's arrow points up at the line from below it, a sale's down at it from above.
-          const tip = buy ? cy + 4 : cy - 4;
-          const base = buy ? cy + 13 : cy - 13;
-          return (
-            <g key={`trade-${tr.t}-${i}`} className={`pc-trade ${buy ? "buy" : "sell"}`}>
-              <path d={`M${cx},${tip} L${cx - 5.5},${base} L${cx + 5.5},${base} Z`} />
-              <text x={cx} y={buy ? base + 10 : base - 4} textAnchor="middle">
-                {buy ? "B" : "S"}
+          {shownMarks.length > 0 && (
+            <g className="pc-marks" aria-hidden="true">
+              {shownMarks.map((m, i) => {
+                const r = markRadius(m.sol);
+                const on = hMarks.includes(m);
+                return (
+                  <g
+                    key={`mark-${m.t}-${m.wallet}-${i}`}
+                    className={`pc-mark wk-${m.kind} ${m.side}${on ? " on" : ""}`}
+                    transform={`translate(${x(m.t).toFixed(1)},${axis.y(valueAt(pts, m.t) ?? last.v).toFixed(1)})`}
+                  >
+                    <circle r={r} />
+                    <text dy="0.35em" textAnchor="middle" fontSize={r >= 8 ? 9.5 : 8}>
+                      {m.letter}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          )}
+
+          {entryY !== null && (
+            <g className="pc-entry">
+              <line x1={PAD.l} x2={width - PAD.r} y1={entryY} y2={entryY} />
+              <text x={PAD.l + 4} y={entryY - 5}>
+                Your entry {axisUsd(entry!)}
               </text>
             </g>
-          );
-        })}
+          )}
 
-        {showPeak && (
-          <g className="pc-peak">
-            <circle cx={px(peak)} cy={py(peak)} r={3.5} />
-            <text
-              x={Math.min(width - PAD.r - 4, Math.max(PAD.l + 4, px(peak)))}
-              y={peakBelow ? py(peak) + 17 : py(peak) - 9}
-              textAnchor={px(peak) > width - PAD.r - 50 ? "end" : px(peak) < PAD.l + 50 ? "start" : "middle"}
-            >
-              Peak {usd(peak.v)}
-            </text>
-          </g>
-        )}
+          {shownTrades.map((tr, i) => {
+            const cx = x(tr.t);
+            const cy = axis.y(valueAt(pts, tr.t) ?? last.v);
+            const buy = tr.side === "buy";
+            // A buy's arrow points up at the line from below it, a sale's down at it from above.
+            const tip = buy ? cy + 4 : cy - 4;
+            const base = buy ? cy + 13 : cy - 13;
+            return (
+              <g key={`trade-${tr.t}-${i}`} className={`pc-trade ${buy ? "buy" : "sell"}`}>
+                <path d={`M${cx},${tip} L${cx - 5.5},${base} L${cx + 5.5},${base} Z`} />
+                <text x={cx} y={buy ? base + 10 : base - 4} textAnchor="middle">
+                  {buy ? "B" : "S"}
+                </text>
+              </g>
+            );
+          })}
+
+          {showPeak && (
+            <g className="pc-peak">
+              <circle cx={px(peak)} cy={py(peak)} r={3.5} />
+              <text
+                x={Math.min(width - PAD.r - 4, Math.max(PAD.l + 4, px(peak)))}
+                y={peakBelow ? py(peak) + 17 : py(peak) - 9}
+                textAnchor={
+                  px(peak) > width - PAD.r - 50 ? "end" : px(peak) < PAD.l + 50 ? "start" : "middle"
+                }
+              >
+                Peak {usd(peak.v)}
+              </text>
+            </g>
+          )}
+        </g>
 
         {vols && (
           <g className="pc-vol">
@@ -990,10 +1072,10 @@ export function PriceChart({
         {/* The latest reading: a dot on the line's end and its value on the axis. A view that ends
             before the latest reading (Model View) tags its end plainly, so it doesn't read as now. */}
         <g className={`pc-last ${up ? "up" : "down"}${ended ? " end" : ""}`}>
-          {!ended && <circle cx={px(last)} cy={lastY} r={8} className="pc-halo" />}
-          <circle cx={px(last)} cy={lastY} r={3.5} />
-          <rect x={width - PAD.r + 3} y={lastY - 10} width={PAD.r - 4} height={20} rx={5} />
-          <text x={width - PAD.r + 10} y={lastY} dy="0.35em">
+          {lastIn && !ended && <circle cx={px(last)} cy={lastY} r={8} className="pc-halo" />}
+          {lastIn && <circle cx={px(last)} cy={lastY} r={3.5} />}
+          <rect x={width - PAD.r + 3} y={lastTagY - 10} width={PAD.r - 4} height={20} rx={5} />
+          <text x={width - PAD.r + 10} y={lastTagY} dy="0.35em">
             {axisUsd(last.v)}
           </text>
         </g>
@@ -1017,10 +1099,33 @@ export function PriceChart({
         {h && !mark && (
           <g className={`pc-cross ${hUp ? "up" : "down"}`}>
             <line x1={hx} x2={hx} y1={PAD.t - 6} y2={bottom} />
-            {!hb && <circle cx={hx} cy={py(h)} r={4.5} />}
+            {!hb && py(h) >= PAD.t - 2 && py(h) <= bottom + 2 && <circle cx={hx} cy={py(h)} r={4.5} />}
           </g>
         )}
       </svg>
+
+      {/* The price axis: scroll over it or drag it up and down to zoom the price; double-click fits it. */}
+      <div
+        ref={yAxisRef}
+        className="pc-yaxis"
+        style={{ top: PAD.t, height: bottom - PAD.t, width: PAD.r }}
+        title="Scroll or drag up and down to zoom the price; double-click to fit"
+        aria-hidden="true"
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture?.(e.pointerId);
+          scaleDrag.current = { y: e.clientY, vz: vZoom };
+          setHover(null);
+        }}
+        onPointerMove={(e) => {
+          const d = scaleDrag.current;
+          if (!d) return;
+          // Dragging down squeezes the price into less room (zooms out), up stretches it.
+          setVZoom(zoomValue(d.vz, Math.exp((e.clientY - d.y) / 150)));
+        }}
+        onPointerUp={() => (scaleDrag.current = null)}
+        onPointerCancel={() => (scaleDrag.current = null)}
+        onDoubleClick={() => setVZoom(null)}
+      />
 
       {shown.map((e, i) => (
         <span
@@ -1132,8 +1237,9 @@ export function PriceChart({
               <option value="auto">
                 {timeframe === null ? `Auto · ${timeframeLabel(geo.autoMs)}` : "Auto"}
               </option>
+              {/* Timeframes that would draw under three candles over the whole view are greyed out. */}
               {TIMEFRAMES.map((f) => (
-                <option key={f.ms} value={f.ms}>
+                <option key={f.ms} value={f.ms} disabled={!tfFits(f.ms)}>
                   {f.label}
                 </option>
               ))}
@@ -1174,19 +1280,21 @@ export function PriceChart({
           >
             +
           </button>
-          {zoomed && (
+          {(zoomed || vZoom) && (
             <button
               type="button"
               className="tm-range"
-              title="Show the whole range"
-              onClick={() => winTo(null)}
+              title="Show the whole range, on both axes"
+              onClick={resetZoom}
             >
               Reset
             </button>
           )}
         </span>
         <span className="faint small pc-zoom-hint">
-          {zoomed ? "Drag or swipe with two fingers to move along" : "Scroll or pinch on the chart to zoom"}
+          {zoomed || vZoom
+            ? "Drag or swipe with two fingers to move along"
+            : "Scroll or pinch to zoom; scroll or drag the price axis to zoom the price"}
         </span>
       </div>
     </div>
@@ -1200,7 +1308,8 @@ export function PriceChart({
  */
 export function candleBodyW(sliceW: number): number {
   const gap = sliceW >= 3 ? Math.min(4, Math.max(1, sliceW / 6)) : 0;
-  return Math.max(0.6, sliceW - gap);
+  // Capped, so a handful of candles across a wide plot read as candles, not blocks.
+  return Math.min(MAX_CANDLE_PX, Math.max(0.6, sliceW - gap));
 }
 
 /** Labeled trades the readout lists by name at most; the rest are counted. */

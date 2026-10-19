@@ -214,6 +214,80 @@ export function mcapAxis(
   return { y, ticks: linearTicks(a, b, maxTicks), log };
 }
 
+/**
+ * The value axis zoomed by hand (user ask 2026-10-19: zoom either axis): its bottom and top as
+ * fractions of the fitted range, 0 at the data's low and 1 at its high (in log terms on a log
+ * axis). Null fits the data, as before.
+ */
+export interface ValueZoom {
+  a: number;
+  b: number;
+}
+
+/** The fitted axis's own reach, in ValueZoom terms: about its padding either side. */
+const FIT_ZOOM: ValueZoom = { a: -0.08, b: 1.08 };
+
+/** Exported for tests. The value window a zoom shows over data from `lo` to `hi`, never below zero. */
+export function valueWindow(lo: number, hi: number, vz: ValueZoom, log: boolean): { lo: number; hi: number } {
+  if (!(lo > 0) || !(hi > 0)) {
+    lo = 1;
+    hi = 10;
+  }
+  if (hi <= lo) {
+    hi = lo * 1.05;
+    lo = lo * 0.95;
+  }
+  if (log) {
+    const l = Math.log(lo);
+    const s = Math.log(hi) - l;
+    return { lo: Math.exp(l + s * vz.a), hi: Math.exp(l + s * vz.b) };
+  }
+  const s = hi - lo;
+  const top = lo + s * vz.b;
+  return { lo: Math.min(Math.max(0, lo + s * vz.a), top * 0.999), hi: top };
+}
+
+/**
+ * Exported for tests. The value zoom scaled by `factor` (under 1 zooms in) about `at` of its
+ * height (0 the bottom, 1 the top), between a fiftieth of the data's range and twenty times it.
+ */
+export function zoomValue(vz: ValueZoom | null, factor: number, at = 0.5): ValueZoom {
+  const w = vz ?? FIT_ZOOM;
+  const span = w.b - w.a;
+  const next = Math.min(20, Math.max(0.02, span * factor));
+  const pivot = w.a + at * span;
+  const a = pivot - at * next;
+  return { a, b: a + next };
+}
+
+/** Exported for tests. The value zoom moved by `frac` of its height (up when positive). */
+export function panValue(vz: ValueZoom | null, frac: number): ValueZoom {
+  const w = vz ?? FIT_ZOOM;
+  const d = frac * (w.b - w.a);
+  return { a: w.a + d, b: w.b + d };
+}
+
+/** The value axis over exactly [lo, hi], unpadded, for a hand-zoomed window. */
+export function windowAxis(
+  lo: number,
+  hi: number,
+  log: boolean,
+  top: number,
+  bottom: number,
+  maxTicks = 5,
+): Axis {
+  if (log) {
+    const a = Math.log(lo);
+    const b = Math.log(hi);
+    const y = (v: number) => bottom - ((Math.log(Math.max(v, 1e-9)) - a) / (b - a)) * (bottom - top);
+    // Zoomed in close, a log axis can hold no 1-2-5 value: round linear ones read as well there.
+    const ticks = logTicks(lo, hi, maxTicks);
+    return { y, ticks: ticks.length >= 2 ? ticks : linearTicks(lo, hi, maxTicks), log };
+  }
+  const y = (v: number) => bottom - ((v - lo) / (hi - lo)) * (bottom - top);
+  return { y, ticks: linearTicks(lo, hi, maxTicks), log };
+}
+
 /** 1-2-5 ticks inside [lo, hi], thinned to at most `max`. */
 export function logTicks(lo: number, hi: number, max = 5): number[] {
   const all: number[] = [];

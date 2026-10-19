@@ -12,6 +12,10 @@ import {
   linePoints,
   logTicks,
   mcapAxis,
+  panValue,
+  valueWindow,
+  windowAxis,
+  zoomValue,
   pointWidthMs,
   sinceLabel,
   stitch,
@@ -224,6 +228,38 @@ describe("mcapAxis", () => {
   it("handles a flat line and missing values", () => {
     expect(mcapAxis(5_000, 5_000, 0, 100).ticks.length).toBeGreaterThan(0);
     expect(Number.isFinite(mcapAxis(0, 0, 0, 100).y(5))).toBe(true);
+  });
+});
+
+describe("value zoom", () => {
+  it("zooms in about the anchor and back out, within limits", () => {
+    const z = zoomValue(null, 0.5, 0);
+    expect(z.a).toBeCloseTo(-0.08);
+    expect(z.b - z.a).toBeCloseTo(0.58);
+    expect(zoomValue(z, 1e-6).b - zoomValue(z, 1e-6).a).toBeCloseTo(0.02);
+    expect(zoomValue(z, 1e6).b - zoomValue(z, 1e6).a).toBeCloseTo(20);
+  });
+
+  it("pans by a share of the window", () => {
+    const z = panValue({ a: 0, b: 0.5 }, 0.5);
+    expect(z.a).toBeCloseTo(0.25);
+    expect(z.b).toBeCloseTo(0.75);
+  });
+
+  it("maps the zoom onto the data, never below zero on a linear axis", () => {
+    expect(valueWindow(10_000, 20_000, { a: 0, b: 0.5 }, false)).toEqual({ lo: 10_000, hi: 15_000 });
+    expect(valueWindow(10_000, 20_000, { a: -5, b: 1 }, false).lo).toBe(0);
+    const w = valueWindow(10_000, 1_000_000, { a: 0, b: 0.5 }, true);
+    expect(w.lo).toBeCloseTo(10_000);
+    expect(w.hi).toBeCloseTo(100_000);
+  });
+
+  it("draws the window edge to edge with ticks inside it", () => {
+    const a = windowAxis(10_000, 20_000, false, 0, 100);
+    expect(a.y(10_000)).toBe(100);
+    expect(a.y(20_000)).toBe(0);
+    for (const t of a.ticks) expect(t >= 10_000 && t <= 20_000).toBe(true);
+    expect(windowAxis(21_000, 24_000, true, 0, 100).ticks.length).toBeGreaterThanOrEqual(2);
   });
 });
 
