@@ -197,6 +197,12 @@ export interface DispatchSummary {
   sent: number;
   digests: number;
   failed: number;
+  /**
+   * Of failed: sends Telegram refused for that one chat or message (the bot blocked or kicked, the
+   * chat gone or moved, a message it wouldn't take). A broken chat, not a broken dispatcher, so
+   * these never fail the pass on their own (dispatchFailure).
+   */
+  chatErrors: number;
   skipped: number;
   /** Chats left for the next pass because their account's access couldn't be read. */
   accessErrors: number;
@@ -455,7 +461,9 @@ const PASS_TRANSACTION_TIMEOUT_MS = 120_000;
  * until the chats' cursors fell 15 minutes behind.
  */
 export function dispatchFailure(summary: DispatchSummary): string | null {
-  if (summary.failed === 0 || summary.sent + summary.digests > 0) return null;
+  // A subscriber who blocked the bot fails only their own chat: with no other alert in the pass,
+  // counting it would report the whole dispatcher down.
+  if (summary.failed - summary.chatErrors <= 0 || summary.sent + summary.digests > 0) return null;
   return `every Telegram send failed (${summary.failed} of ${summary.failed} this pass)`;
 }
 
@@ -465,6 +473,7 @@ export async function runTelegramDispatch(env: Env, deps: DispatchDeps = {}): Pr
     sent: 0,
     digests: 0,
     failed: 0,
+    chatErrors: 0,
     skipped: 0,
     accessErrors: 0,
     unconfirmed: 0,
@@ -823,6 +832,7 @@ async function dispatchPass(
     summary.failed += 1;
     const what = `${result.code}: ${result.description}`.slice(0, 300);
     if (result.migrateToChatId !== undefined) {
+      summary.chatErrors += 1;
       // The group became a supergroup with a new id; the same chat, so the row follows it.
       const followed = await prisma.telegramChat
         .updateMany({
@@ -855,6 +865,7 @@ async function dispatchPass(
       (result.code === 400 && /chat not found|group chat was deleted/i.test(result.description))
     ) {
       // Blocked, kicked, or the chat is gone: nothing will ever land here again.
+      summary.chatErrors += 1;
       logger.info("telegram chat unreachable, unlinking", { chat: q.chat.id, what });
       await prisma.telegramChat.updateMany({
         where: { id: q.chat.id },
@@ -878,6 +889,7 @@ async function dispatchPass(
       // The message itself was refused (a parse problem, a message too long): skipping it is
       // the only way forward, and the cursor moves past it so the next pass doesn't repeat it.
       logger.warn("telegram refused a message, skipping it", { chat: q.chat.id, what });
+      summary.chatErrors += 1;
       q.pending.shift();
       q.nextAt = now() + spacing;
       await prisma.telegramChat.updateMany({

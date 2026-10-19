@@ -194,6 +194,9 @@ const EXTERNAL_CACHE_MS = 60_000;
 const EXTERNAL_CACHE_MAX = 300;
 const externalCache = new Map<string, { at: number; tokens: Promise<CandidateToken[]> }>();
 
+/** The outside search couldn't be read (DexScreener down or refusing): not the same as no coins. */
+export class ExternalSearchUnavailable extends Error {}
+
 /** An untracked token the outside search found: the tracked hit's shape, with only market data. */
 export type ExternalSearchHit = TokenSearchHit;
 
@@ -211,7 +214,12 @@ export async function searchUntrackedTokens(
   const key = "mint" in query ? query.mint : query.text.toLowerCase();
   let entry = externalCache.get(key);
   if (!entry || now - entry.at > EXTERNAL_CACHE_MS) {
-    entry = { at: now, tokens: search(key).catch(() => []) };
+    // A failed search isn't kept: the next reader asks again rather than being told "nothing".
+    const tokens = search(key).catch((err: unknown) => {
+      if (externalCache.get(key)?.tokens === tokens) externalCache.delete(key);
+      throw new ExternalSearchUnavailable(String(err));
+    });
+    entry = { at: now, tokens };
     externalCache.delete(key);
     externalCache.set(key, entry);
     while (externalCache.size > EXTERNAL_CACHE_MAX) {

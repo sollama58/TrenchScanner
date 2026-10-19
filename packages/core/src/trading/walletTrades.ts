@@ -116,14 +116,27 @@ export function tradeOf(
   const paid = at === 0 ? lamports + tokenAccountRent(meta, wallet) : lamports;
   // Only a transaction the wallet paid for can be its trade; one paid by someone else that moved
   // its tokens was a transfer. And SOL out that is no more than fees is a transfer it paid for.
-  // A sale is told by the SOL as it landed (a dust sale's rent back is what shows it was paid).
+  // A sale is told by the SOL as it landed (a dust sale's rent back is what shows it was paid),
+  // but the rent back alone is not a sale: tokens sent away and their account closed bring the
+  // rent back too. A sale has SOL beyond the rent, or SOL some other account (a pool, a bonding
+  // curve) paid out, however little.
   const payer = at === 0;
+  const own = new Set<number>();
+  for (const e of [...(meta.preTokenBalances ?? []), ...(meta.postTokenBalances ?? [])])
+    if (e.owner === wallet && typeof e.accountIndex === "number") own.add(e.accountIndex);
+  const paidByOthers = keys.some((k, i) => {
+    const before = meta.preBalances?.[i];
+    const after = meta.postBalances?.[i];
+    return (
+      k !== wallet && !own.has(i) && typeof before === "number" && typeof after === "number" && after < before
+    );
+  });
   const side: WalletTrade["side"] =
     tokens > 0n
       ? payer && -paid > FEE_ONLY_LAMPORTS
         ? "buy"
         : "in"
-      : payer && lamports > 0n
+      : payer && lamports > 0n && (paid > 0n || paidByOthers)
         ? "sell"
         : "out";
   return { signature, t: tx.blockTime * 1000, side, lamports: paid, tokens };

@@ -3,9 +3,16 @@ import "../bootstrap-env.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadEnv, prisma, type Env } from "@trenchscanner/core";
 import type { FastifyInstance } from "fastify";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { buildServer } from "../server.js";
 import { createSessionSigner, SESSION_COOKIE_NAME } from "../auth/session.js";
-import { clearExternalSearchCache, matchRank, searchUntrackedTokens } from "../tokenSearch.js";
+import {
+  clearExternalSearchCache,
+  ExternalSearchUnavailable,
+  matchRank,
+  searchUntrackedTokens,
+} from "../tokenSearch.js";
 
 /** GET /tokens/search and /tokens/:mint/card - the Live feed's search window. */
 
@@ -29,16 +36,24 @@ describe("matchRank", () => {
 });
 
 describe.skipIf(!dbAvailable)("GET /tokens/search", () => {
-  // Nothing listens there: the outside search answers nothing, at once.
+  // A stand-in DexScreener (started in beforeAll): it lists nothing, or refuses while `dexDown`.
   const env: Env = dbAvailable
     ? { ...loadEnv(), ADMIN_WALLET_ADDRESSES: WALLET, DEXSCREENER_BASE_URL: "http://127.0.0.1:9" }
     : (undefined as never);
+  let dexDown = false;
+  let dex: Server | null = null;
   let app: FastifyInstance;
   let cookie = "";
   let userId = "";
   const tokenIds: Record<string, string> = {};
 
   beforeAll(async () => {
+    dex = createServer((_req, res) => {
+      res.writeHead(dexDown ? 404 : 200, { "content-type": "application/json" });
+      res.end(dexDown ? "{}" : JSON.stringify({ pairs: [] }));
+    });
+    await new Promise<void>((resolve) => dex!.listen(0, "127.0.0.1", resolve));
+    env.DEXSCREENER_BASE_URL = `http://127.0.0.1:${(dex.address() as AddressInfo).port}`;
     userId = (await prisma.user.create({ data: { walletAddress: WALLET } })).id;
     cookie = await createSessionSigner(env.JWT_SECRET, env.SESSION_TTL_HOURS).sign({
       userId,
@@ -75,6 +90,7 @@ describe.skipIf(!dbAvailable)("GET /tokens/search", () => {
   afterAll(async () => {
     if (!dbAvailable) return;
     await app?.close();
+    await new Promise((resolve) => dex?.close(resolve));
     await prisma.token.deleteMany({ where: { id: { in: Object.values(tokenIds) } } });
     await prisma.user.deleteMany({ where: { id: userId } });
   });
@@ -162,5 +178,37 @@ describe.skipIf(!dbAvailable)("GET /tokens/search", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ hits: [], cost: expect.any(Number), balance: expect.any(Number) });
     expect((await get("/utilities/search")).statusCode).toBe(400);
+  });
+
+  it("tells a DexScreener failure apart from no coins, and doesn't keep it", async () => {
+    clearExternalSearchCache();
+    dexDown = true;
+    try {
+      const down = await get("/utilities/search?q=zqdown");
+      expect(down.statusCode).toBe(502);
+      expect((down.json() as { error: string }).error).toMatch(/DexScreener/);
+    } finally {
+      dexDown = false;
+    }
+    // Back up: the next search asks again rather than answering the failure from the cache.
+    const up = await get("/utilities/search?q=zqdown");
+    expect(up.statusCode).toBe(200);
+    expect(up.json()).toMatchObject({ hits: [] });
+  });
+
+  it("throws on a failed outside search, and asks again next time", async () => {
+    clearExternalSearchCache();
+    let calls = 0;
+    const failing = async () => {
+      calls += 1;
+      throw new Error("503");
+    };
+    await expect(searchUntrackedTokens(failing, { text: "zqfail" })).rejects.toBeInstanceOf(
+      ExternalSearchUnavailable,
+    );
+    await expect(searchUntrackedTokens(failing, { text: "zqfail" })).rejects.toBeInstanceOf(
+      ExternalSearchUnavailable,
+    );
+    expect(calls).toBe(2);
   });
 });

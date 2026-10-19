@@ -9,6 +9,16 @@ import { TradePanel } from "./TradePanel";
 import { CheckIcon, CloseIcon, CopyIcon, CrownIcon } from "./Icons";
 
 /**
+ * What the window says in place of the coin's figures when DexScreener gave none: still asking,
+ * couldn't be asked (worth another try), or lists no market for it.
+ */
+export function marketNote(searching: boolean, searchError: string | null): string {
+  if (searching) return "Reading its market on DexScreener…";
+  if (searchError !== null) return `Couldn't read its market on DexScreener: ${searchError}`;
+  return "DexScreener has no market for this address yet. A coin minutes old can still be bought; anything that isn't a token is refused when the trade is built.";
+}
+
+/**
  * A coin TrenchScanner doesn't track, opened to trade it (user ask 2026-10-19: someone pasting a
  * CA we don't track most likely wants to trade it). Free and quick: the Trade panel for a Pro Mode
  * wallet, what DexScreener's search already said about the coin, and links to trade it elsewhere.
@@ -22,6 +32,8 @@ export function QuickTrade({
   mint,
   hit,
   searching,
+  searchError,
+  onSearchAgain,
   scanPrice,
   scanning,
   scanError,
@@ -34,6 +46,9 @@ export function QuickTrade({
   hit: ExternalSearchHit | null;
   /** DexScreener is still being asked. */
   searching: boolean;
+  /** Why DexScreener couldn't be asked (not the same as it listing nothing); null when it answered. */
+  searchError: string | null;
+  onSearchAgain: () => void;
   /** What the full lookup costs this wallet ("1 credit", "Free, you traded it"). */
   scanPrice: string;
   scanning: boolean;
@@ -139,9 +154,15 @@ export function QuickTrade({
           </dl>
         ) : (
           <p className="muted small">
-            {searching
-              ? "Reading its market on DexScreener…"
-              : "DexScreener has no market for this address yet. A coin minutes old can still be bought; anything that isn't a token is refused when the trade is built."}
+            {marketNote(searching, searchError)}
+            {!searching && searchError !== null && (
+              <>
+                {" "}
+                <button type="button" className="link small" onClick={onSearchAgain}>
+                  Try again
+                </button>
+              </>
+            )}
           </p>
         )}
         <p className="muted small">Not tracked by TrenchScanner: no alerts or model calls on it.</p>

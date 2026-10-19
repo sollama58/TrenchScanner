@@ -211,6 +211,14 @@ export interface OutcomeCheckpoint {
   resumes: number;
   /** Tokens the sweep could not read so far, comma-separated (see RetryTokens). */
   failedTokens?: string;
+  /**
+   * The earlier nights' retry list has been read again in this run: a resumed run doesn't read it
+   * a second time, and carries `retryFailing` (what still failed, comma-separated) to its end.
+   * Without these a run cut short after that read dropped the list: the resume skipped it and
+   * ended with nothing to carry.
+   */
+  retryDone?: boolean;
+  retryFailing?: string;
 }
 
 /** A saved checkpoint from heartbeat meta, or null when there is none worth resuming. */
@@ -239,7 +247,24 @@ export function readOutcomeCheckpoint(meta: unknown, now: number): OutcomeCheckp
     missingLiveData: n(c.missingLiveData),
     resumes: n(c.resumes),
     ...(typeof c.failedTokens === "string" && c.failedTokens !== "" ? { failedTokens: c.failedTokens } : {}),
+    ...(c.retryDone === true ? { retryDone: true } : {}),
+    ...(typeof c.retryFailing === "string" && c.retryFailing !== "" ? { retryFailing: c.retryFailing } : {}),
   };
+}
+
+/**
+ * The earlier nights' retry list as this run (perhaps a resumed one) stands with it: `read`, the
+ * list still to read again (null once this run has, or when there is none), and `stillFailing`,
+ * what an earlier part of this run found still failing.
+ */
+export function retryState(
+  retry: RetryTokens | null,
+  checkpoint: Pick<OutcomeCheckpoint, "retryDone" | "retryFailing">,
+): { read: RetryTokens | null; stillFailing: string[] } {
+  if (checkpoint.retryDone) {
+    return { read: null, stillFailing: checkpoint.retryFailing?.split(",").filter(Boolean) ?? [] };
+  }
+  return { read: retry, stillFailing: [] };
 }
 
 /** Merges the checkpoint into the heartbeat row's meta, as recordRunProgress does its stages. */
@@ -335,21 +360,28 @@ export async function runOutcomeTrackingJob(
 
   // Tokens an earlier night could not read, first: from the bound they missed, which this run's own
   // sweep (from a day before the last success) no longer reaches.
+  // A resumed run that already read them carries what still failed from its checkpoint (the list
+  // stays on the row's meta beside it until the run ends).
   const retry = readRetryTokens(row?.meta);
-  let retryStillFailing: string[] = [];
-  if (retry && stageIndex <= 0 && checkpoint.after === undefined) {
-    const result = await recordMatchPeaksFullSweep(snapshotRetentionDays, retry.since ?? undefined, {
-      onlyTokenIds: retry.ids,
+  const retryNow = retryState(retry, checkpoint);
+  let retryStillFailing = retryNow.stillFailing;
+  if (retryNow.read) {
+    const result = await recordMatchPeaksFullSweep(snapshotRetentionDays, retryNow.read.since ?? undefined, {
+      onlyTokenIds: retryNow.read.ids,
     });
     retryStillFailing = result.failedTokenIds;
-    if (retry.nights >= RETRY_MAX_NIGHTS && retryStillFailing.length > 0) {
+    if (retryNow.read.nights >= RETRY_MAX_NIGHTS && retryStillFailing.length > 0) {
       logger.error("full peak sweep: giving up on tokens that failed every night", {
-        nights: retry.nights + 1,
+        nights: retryNow.read.nights + 1,
         tokens: retryStillFailing.length,
         sample: retryStillFailing.slice(0, 5),
       });
       retryStillFailing = [];
     }
+    await save({
+      retryDone: true,
+      retryFailing: retryStillFailing.slice(0, RETRY_TOKENS_MAX).join(","),
+    });
     endStage("retryTokens");
   }
 

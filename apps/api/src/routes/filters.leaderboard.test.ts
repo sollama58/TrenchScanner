@@ -201,6 +201,11 @@ describe.skipIf(!dbAvailable)("filter leaderboard and copy", () => {
     expect((await call(readerCookie, "POST", `/filters/leaderboard/${strong.id}-v9/copy`)).statusCode).toBe(
       404,
     );
+    // A version past an Int's range is a missing one, not a database error.
+    for (const v of ["2147483648", "99999999999999999999"]) {
+      const huge = await call(readerCookie, "POST", `/filters/leaderboard/${strong.id}-v${v}/copy`);
+      expect(huge.statusCode).toBe(404);
+    }
   });
 
   it("leaves an earlier version off the board until it has a rankable record", async () => {

@@ -58,6 +58,7 @@ describe("dispatchFailure", () => {
     sent: 0,
     digests: 0,
     failed: 0,
+    chatErrors: 0,
     skipped: 0,
     accessErrors: 0,
     unconfirmed: 0,
@@ -70,6 +71,14 @@ describe("dispatchFailure", () => {
     expect(dispatchFailure(pass({ failed: 1, digests: 1 }))).toBeNull();
     // Nothing to send is a quiet pass, not a failed one.
     expect(dispatchFailure(pass())).toBeNull();
+  });
+  it("doesn't fail a pass for chats that refused it (a blocked bot, a chat gone)", () => {
+    expect(dispatchFailure(pass({ failed: 1, chatErrors: 1 }))).toBeNull();
+    expect(dispatchFailure(pass({ failed: 2, chatErrors: 2 }))).toBeNull();
+    // A systemic failure alongside one still fails it.
+    expect(dispatchFailure(pass({ failed: 3, chatErrors: 1 }))).toBe(
+      "every Telegram send failed (3 of 3 this pass)",
+    );
   });
 });
 
@@ -208,6 +217,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       sent: 0,
       digests: 0,
       failed: 0,
+      chatErrors: 0,
       skipped: 0,
       accessErrors: 0,
       unconfirmed: 0,
@@ -887,7 +897,11 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
     const blocked = { ok: false as const, code: 403, description: "Forbidden: bot was blocked by the user" };
     api.answers.set("sendPhoto", blocked);
     api.answers.set("sendMessage", blocked);
-    expect((await run(api)).failed).toBe(1);
+    const blockedPass = await run(api);
+    expect(blockedPass.failed).toBe(1);
+    // One subscriber blocking the bot is their chat's problem, not a failed dispatch.
+    expect(blockedPass.chatErrors).toBe(1);
+    expect(dispatchFailure(blockedPass)).toBeNull();
     row = await prisma.telegramChat.findUnique({ where: { id: chatRowId } });
     expect(row?.revokedAt).not.toBeNull();
     expect(row?.lastError).toContain("blocked");
@@ -944,6 +958,7 @@ describe.skipIf(!dbAvailable)("runTelegramDispatch", () => {
       sent: 0,
       digests: 0,
       failed: 0,
+      chatErrors: 0,
       skipped: 0,
       accessErrors: 0,
       unconfirmed: 0,
