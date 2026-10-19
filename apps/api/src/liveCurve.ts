@@ -8,6 +8,8 @@ import {
   pumpSwapPoolOf,
   type CurveState,
   type HeliusClient,
+  launchSupplyFactors,
+  type MintSupplySource,
   type PoolVaults,
   WRAPPED_SOL_MINT,
 } from "@trenchscanner/core";
@@ -112,7 +114,7 @@ export interface LiveCurveAnswer {
   coveredFrom: number | null;
   /** The newest moment the price is known current (ms): a change, a read, or the stream's word. */
   readAt: number | null;
-  /** Each price change after `after`: [ms, market cap in USD], oldest first. */
+  /** Each price change after `after`: [ms, market cap in USD on the supply now], oldest first. */
   ticks: [number, number][];
   /**
    * Asked with a wait: the answer was held until a change came (or the wait ran out), so the chart
@@ -129,7 +131,7 @@ export interface CurveQuote {
   at: number;
 }
 
-/** Pump.fun's fixed supply: one billion tokens. */
+/** Pump.fun's launch supply, one billion tokens: what the curve's ticks are read on. */
 const PUMP_SUPPLY = 1e9;
 
 interface Followed {
@@ -198,6 +200,8 @@ export interface LiveCurvesDeps {
   solPrice: Pick<SolPrice, "get">;
   /** Prices a coin-quoted curve's quote; without it such curves aren't followed. */
   quotePrice?: Pick<QuotePrice, "get">;
+  /** Each coin's supply now, which burns can have taken under the launch billion (the process's, by default). */
+  supplies?: MintSupplySource;
   now?: () => number;
 }
 
@@ -272,7 +276,7 @@ export class LiveCurves {
     const pool = poolOf(f);
     const readAt = pool ? pool.readAt : f.readAt;
     const streamed = this.confirm(mint, f, now);
-    const usd = await this.usdRate(f);
+    const [usd, factor] = await Promise.all([this.usdRate(f), this.supplyFactor(mint)]);
     const source: LiveSource = readAt === null ? "pending" : streamed ? "stream" : "rpc";
     return {
       mint,
@@ -281,7 +285,8 @@ export class LiveCurves {
       complete: isDone(f),
       coveredFrom: f.coveredFrom,
       readAt: f.confirmedAt,
-      ticks: usd === null ? [] : f.ticks.filter(([t]) => t > after).map(([t, sol]) => [t, sol * usd]),
+      ticks:
+        usd === null ? [] : f.ticks.filter(([t]) => t > after).map(([t, sol]) => [t, sol * usd * factor]),
     };
   }
 
@@ -306,6 +311,10 @@ export class LiveCurves {
     if (added) await this.seed(waitMs);
     const out = new Map<string, CurveQuote>();
     if (asked.length === 0) return out;
+    const factors = await launchSupplyFactors(
+      asked.map(([mint]) => mint),
+      this.deps.supplies,
+    );
     for (const [mint, f] of asked) {
       if (f.none || f.complete || f.readAt === null) continue;
       const last = f.ticks[f.ticks.length - 1];
@@ -316,9 +325,19 @@ export class LiveCurves {
       const at = f.confirmedAt ?? f.readAt;
       // Reads failing and the stream not covering it: not current, DexScreener's figure stands.
       if (now - at > GAP_MS) continue;
-      out.set(mint, { marketCapUsd: last[1] * usd, priceUsd: (last[1] * usd) / PUMP_SUPPLY, at });
+      // The ticks are on the launch billion; the cap is put on the supply now, the price isn't one.
+      out.set(mint, {
+        marketCapUsd: last[1] * usd * (factors.get(mint) ?? 1),
+        priceUsd: (last[1] * usd) / PUMP_SUPPLY,
+        at,
+      });
     }
     return out;
+  }
+
+  /** What `mint`'s launch-billion ticks are multiplied by to read on its supply now (mintSupply.ts). */
+  private async supplyFactor(mint: string): Promise<number> {
+    return (await launchSupplyFactors([mint], this.deps.supplies)).get(mint) ?? 1;
   }
 
   /**

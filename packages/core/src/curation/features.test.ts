@@ -17,6 +17,7 @@ import {
   HOURLY_ROWS_WAIT_SINCE,
   BUNDLED_SUPPLY_POINT_IN_TIME_FROM,
   HOLDER_TRANSFER_LINKS_WINDOW,
+  HOLDER_TRANSFER_LINKS_READ_SINCE,
   STONKS_FEE_WALLET_EXCLUDED_SINCE,
   isPreFeeWalletStonksRow,
   NARRATIVE_READ_AT_DECISION_SINCE,
@@ -313,8 +314,10 @@ describe("scoredFromFeatures - replay round trip", () => {
     const none = buildCandidateFeatures(scored());
     for (const name of LAUNCH_FACT_FEATURES) {
       expect(none[name]).toBeNull();
-      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(true);
+      // The 0.1% count is read in place of the above-dust one (user decision 2026-10-16).
+      expect(RETIRED_LEARNER_INPUTS.has(name)).toBe(name !== "firstBuyersHoldingCut");
     }
+    expect(RETIRED_LEARNER_INPUTS.has("firstBuyersHolding")).toBe(true);
   });
 
   it("records the newest buyers' Wallet Score, unread by the learners, unknown without it", () => {
@@ -359,7 +362,7 @@ describe("scoredFromFeatures - replay round trip", () => {
     }
   });
 
-  it("the models read the funding-only creator share and the pre-follow bundles, unknown without them", () => {
+  it("the models read the creator share and the bundles with transfers counted, as the snapshot does", () => {
     const f = buildCandidateFeatures(
       scored({
         linkedCreatorPct: 9,
@@ -372,15 +375,15 @@ describe("scoredFromFeatures - replay round trip", () => {
         bundledSupplyPctExTransfers: 7,
       }),
     );
-    expect(f).toMatchObject({ linkedCreatorPct: 2, kolBundledPct: 5, bundledSupplyPct: 7 });
-    // The Model copies still step through transfer-linked clusters: never read in their place.
+    expect(f).toMatchObject({ linkedCreatorPct: 9, kolBundledPct: 12, bundledSupplyPct: 14 });
+    // No fallback to the funding-only or Model copies: unknown without the figure itself.
     const bare = buildCandidateFeatures(
       scored({
-        linkedCreatorPct: 9,
-        kolBundledPct: 12,
+        linkedCreatorPctExTransfers: 2,
         kolBundledPctModel: 10,
-        bundledSupplyPct: 14,
+        kolBundledPctExTransfers: 5,
         bundledSupplyPctModel: 11,
+        bundledSupplyPctExTransfers: 7,
       }),
     );
     expect(bare).toMatchObject({ linkedCreatorPct: null, kolBundledPct: null, bundledSupplyPct: null });
@@ -584,7 +587,7 @@ describe("withLaunchAge", () => {
 });
 
 describe("maskKnownBadInputs", () => {
-  it("reads the creator share and the bundle figures as missing while transfers counted as links", () => {
+  it("reads the creator share and the bundle figures as missing on every row banked before they counted transfers", () => {
     const row = {
       linkedCreatorPct: 4,
       kolBundledPct: 0,
@@ -594,42 +597,28 @@ describe("maskKnownBadInputs", () => {
     };
     const masked = { ...row, linkedCreatorPct: null, kolBundledPct: null, bundledSupplyPct: null };
     const { from, until } = HOLDER_TRANSFER_LINKS_WINDOW;
-    // Past every older mask, so the window alone decides.
-    const late = new Date(Math.max(from.getTime(), BUNDLED_SUPPLY_POINT_IN_TIME_FROM.getTime()));
+    // Funding only before the window, transfer-linked without the KOL sends in it, funding only after.
+    expect(maskKnownBadInputs(new Date(from.getTime() - 1), row)).toEqual(masked);
     expect(maskKnownBadInputs(from, row)).toEqual(masked);
-    expect(maskKnownBadInputs(late, row)).toEqual(masked);
-    expect(maskKnownBadInputs(new Date(until.getTime() - 1), row)).toEqual(masked);
-    expect(maskKnownBadInputs(until, row)).toBe(row);
+    expect(maskKnownBadInputs(until, row)).toEqual(masked);
+    expect(maskKnownBadInputs(new Date(HOLDER_TRANSFER_LINKS_READ_SINCE.getTime() - 1), row)).toEqual(masked);
+    expect(maskKnownBadInputs(HOLDER_TRANSFER_LINKS_READ_SINCE, row)).toBe(row);
     expect(row.linkedCreatorPct).toBe(4);
   });
-  it("reads a backfilled bundledSupplyPct as missing on rows with KOL bundles banked before the point-in-time backfill", () => {
-    // Before the transfer-links window, which masks the figure on its own (its own test).
-    const before = new Date(HOLDER_TRANSFER_LINKS_WINDOW.from.getTime() - 1);
+  it("reads a backfilled bundledSupplyPct as missing with the rest, alongside the older masks", () => {
     const rebuilt = { bundledSupplyPct: 6, kolBundledPct: 3, linkedWalletPct: 3, mcapUsd: 50_000 };
-    expect(maskKnownBadInputs(before, rebuilt)).toEqual({ ...rebuilt, bundledSupplyPct: null });
-    expect(rebuilt.bundledSupplyPct).toBe(6);
-    // From then on only the transfer-links window (its own test) touches the figure.
     expect(maskKnownBadInputs(BUNDLED_SUPPLY_POINT_IN_TIME_FROM, rebuilt)).toEqual({
       ...rebuilt,
       bundledSupplyPct: null,
       kolBundledPct: null,
     });
-    expect(maskKnownBadInputs(HOLDER_TRANSFER_LINKS_WINDOW.until, rebuilt)).toBe(rebuilt);
-    // No KOL bundled anyone: Bundled % is the linked share itself, exact at any time.
-    const exact = { bundledSupplyPct: 3, kolBundledPct: 0, linkedWalletPct: 3, mcapUsd: 50_000 };
-    expect(maskKnownBadInputs(before, exact)).toBe(exact);
-    // Without a KOL Bundled % the row isn't the exact case either.
-    expect(maskKnownBadInputs(before, { bundledSupplyPct: 3, mcapUsd: 50_000 }).bundledSupplyPct).toBeNull();
-    expect(maskKnownBadInputs(before, { kolBundledPct: 3, mcapUsd: 50_000 })).toEqual({
-      kolBundledPct: 3,
-      mcapUsd: 50_000,
-    });
-    // Older rows get it masked alongside the other masks.
+    expect(rebuilt.bundledSupplyPct).toBe(6);
     expect(maskKnownBadInputs(new Date("2026-10-04T12:00:00Z"), { ...rebuilt, hasTwitter: 1 })).toMatchObject(
       {
         bundledSupplyPct: null,
+        kolBundledPct: null,
         hasTwitter: null,
-        kolBundledPct: 3,
+        linkedWalletPct: 3,
       },
     );
   });

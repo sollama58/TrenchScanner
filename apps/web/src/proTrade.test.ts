@@ -11,6 +11,7 @@ import {
   readTradeSettings,
   sacrificeLine,
   summarizePosition,
+  feeSavedSol,
   expectedTokens,
   tradeProblem,
   type PositionResponse,
@@ -182,6 +183,52 @@ describe("summarizePosition", () => {
     expect(summarizePosition({ ...p, supply: null }, 40_000).valueSol).toBeNull();
     // Nothing held is worth nothing, whatever the price.
     expect(summarizePosition({ ...base }, null).valueSol).toBe(0);
+  });
+});
+
+describe("summarizePosition fees saved", () => {
+  it("counts only the position's trades made from our Trade panel, against a 1% fee", () => {
+    const p: PositionResponse = {
+      wallet: "w",
+      mint: "m",
+      decimals: 6,
+      balance: "0",
+      supply: "1000000000000000",
+      solUsd: 200,
+      trades: [
+        // An earlier round trip, from the panel: not this position.
+        {
+          signature: "a",
+          t: 1,
+          side: "buy",
+          lamports: "-1000000000",
+          tokens: "1000000",
+          panel: { lamports: "1000000000", platformFeeLamports: "0" },
+        },
+        {
+          signature: "b",
+          t: 2,
+          side: "sell",
+          lamports: "900000000",
+          tokens: "-1000000",
+          panel: { lamports: "900000000", platformFeeLamports: "0" },
+        },
+        // This position: a 2 SOL buy here (0.004 SOL Sacrifice), a sale made elsewhere.
+        {
+          signature: "c",
+          t: 3,
+          side: "buy",
+          lamports: "-2000000000",
+          tokens: "2000000",
+          panel: { lamports: "2000000000", platformFeeLamports: "4000000" },
+        },
+        { signature: "d", t: 4, side: "sell", lamports: "3000000000", tokens: "-2000000", panel: null },
+      ],
+      historyUnavailable: false,
+      truncated: false,
+    };
+    expect(summarizePosition(p, null).feesSavedSol).toBeCloseTo(0.016);
+    expect(feeSavedSol(0.1)).toBeCloseTo(0.001);
   });
 });
 

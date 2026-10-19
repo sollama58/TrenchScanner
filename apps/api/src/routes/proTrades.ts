@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   HeliusAccountStream,
   JupiterSwapClient,
+  mintSupplies,
   prisma,
   TradingRpc,
   withApiFeature,
@@ -377,13 +378,18 @@ export async function registerProTradesRoutes(
     // the tick is written only while someone views the coin, so it freezes once nobody does while
     // the scans go on (as portfolio.ts and the feed already compare them).
     const held = shown.filter((p) => !p.closed && tokenByMint.has(p.mint)).map((p) => p.mint);
-    const [views, live] = await Promise.all([
+    const [views, live, supplies] = await Promise.all([
       Promise.all(shown.map((p) => (tokenByMint.has(p.mint) ? tokenView(p.mint, p.entryAt) : null))),
       livePricesFor(held),
+      mintSupplies()
+        .get(shown.map((p) => p.mint))
+        .catch(() => new Map<string, number>()),
     ]);
-    // The coin's supply, for turning a price into a market cap: a scan's market cap over its
-    // price, else the live tick's.
+    // The coin's supply, for turning a price into a market cap: its mint's supply now (after
+    // burns, mintSupply.ts), else a scan's market cap over its price, else the live tick's.
     const supplyOf = (i: number): number | null => {
+      const read = supplies.get(shown[i]!.mint);
+      if (read !== undefined) return read;
       const snap = views[i]?.card.latestSnapshot as { priceUsd?: number; marketCapUsd?: number } | undefined;
       if (snap?.priceUsd && snap.marketCapUsd) return snap.marketCapUsd / snap.priceUsd;
       const t = tokenByMint.get(shown[i]!.mint);

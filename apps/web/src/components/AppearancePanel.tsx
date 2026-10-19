@@ -59,13 +59,6 @@ export function AppearanceControls() {
           hidden: look.hidden.filter((x) => x !== f),
         })
       : setAppearance({ hidden: hidden.has(f) ? look.hidden.filter((x) => x !== f) : [...look.hidden, f] });
-  const toggleQuickLink = (id: QuickLink) =>
-    setAppearance({
-      // Kept in the listed order, so the card's links don't shuffle as they're switched.
-      quickLinks: QUICK_LINK_SITES.map((l) => l.id).filter((x) =>
-        x === id ? !look.quickLinks.includes(id) : look.quickLinks.includes(x),
-      ),
-    });
 
   return (
     <div className="appearance-controls">
@@ -90,93 +83,7 @@ export function AppearanceControls() {
 
       <fieldset>
         <legend>Theme and colors</legend>
-        <Choice
-          label="Theme"
-          value={look.theme}
-          options={[
-            ["auto", "Match device"],
-            ["dark", "Dark"],
-            ["light", "Light"],
-          ]}
-          onChange={(theme) => setAppearance({ theme })}
-        />
-        <ColorRow
-          label="Wins"
-          hint="Won cards, Peak and up moves"
-          value={look.win}
-          onChange={(win) => setAppearance({ win })}
-        />
-        <ColorRow
-          label="Losses"
-          hint="Missed cards, down moves and risky wallet tiles"
-          value={look.loss}
-          onChange={(loss) => setAppearance({ loss })}
-        />
-        <ColorRow
-          label="Model alerts"
-          hint="Model pills and reasons"
-          value={look.accent}
-          onChange={(accent) => setAppearance({ accent })}
-        />
-        <ColorRow
-          label="Your filter"
-          hint="Your filter's pill"
-          value={look.mine}
-          onChange={(mine) => setAppearance({ mine })}
-        />
-        <ColorRow
-          label="Card outline"
-          hint="Around each card while its alert is still grading (A is a neutral grey)"
-          value={look.outline}
-          onChange={(outline) => setAppearance({ outline })}
-        />
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.outlineResult}
-            onChange={() => setAppearance({ outlineResult: !look.outlineResult })}
-          />
-          Mark graded cards: a thin green or red line along the top when an alert passes or fails
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={look.tileColors}
-            onChange={() => setAppearance({ tileColors: !look.tileColors })}
-          />
-          Color the stat tiles&apos; readings: from the lower color, through the median, to the upper color at
-          the safety screen&apos;s cutoff
-        </label>
-        {look.tileColors && (
-          <>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={look.tileFill}
-                onChange={() => setAppearance({ tileFill: !look.tileFill })}
-              />
-              Color the whole tile, not only the reading
-            </label>
-            <ColorRow
-              label="Tiles: lower"
-              hint="Well inside the cutoff (A is your Wins color)"
-              value={look.tileLow}
-              onChange={(tileLow) => setAppearance({ tileLow })}
-            />
-            <ColorRow
-              label="Tiles: median"
-              hint="Halfway to the cutoff (A is amber)"
-              value={look.tileMid}
-              onChange={(tileMid) => setAppearance({ tileMid })}
-            />
-            <ColorRow
-              label="Tiles: upper"
-              hint="At the safety screen's cutoff (A is your Losses color)"
-              value={look.tileHigh}
-              onChange={(tileHigh) => setAppearance({ tileHigh })}
-            />
-          </>
-        )}
+        <ThemeAndColors />
       </fieldset>
 
       <fieldset>
@@ -444,16 +351,7 @@ export function AppearanceControls() {
         <WalletMarksPicker />
         <div className="field-group">
           <h4>Quick links</h4>
-          {QUICK_LINK_SITES.map((l) => (
-            <label key={l.id} className="check">
-              <input
-                type="checkbox"
-                checked={look.quickLinks.includes(l.id)}
-                onChange={() => toggleQuickLink(l.id)}
-              />
-              {l.id === "terminal" ? "Trading Terminal (Padre)" : l.label}
-            </label>
-          ))}
+          <QuickLinkChecks />
         </div>
         {look.hidden.length > 0 && (
           <button type="button" className="ghost small-btn" onClick={() => setAppearance({ hidden: [] })}>
@@ -462,6 +360,136 @@ export function AppearanceControls() {
         )}
       </fieldset>
     </div>
+  );
+}
+
+/**
+ * Theme, colors and the stat tiles' coloring: one look for Cards and Scope, so both Customize
+ * windows show these same controls (user ask 2026-10-19), saved to the account.
+ */
+export function ThemeAndColors({ cards = true }: { cards?: boolean }) {
+  const look = useAppearance();
+  return (
+    <>
+      <Choice
+        label="Theme"
+        value={look.theme}
+        options={[
+          ["auto", "Match device"],
+          ["dark", "Dark"],
+          ["light", "Light"],
+        ]}
+        onChange={(theme) => setAppearance({ theme })}
+      />
+      <ColorRow
+        label="Wins"
+        hint="Won cards, Peak and up moves"
+        value={look.win}
+        onChange={(win) => setAppearance({ win })}
+      />
+      <ColorRow
+        label="Losses"
+        hint="Missed cards, down moves and risky wallet tiles"
+        value={look.loss}
+        onChange={(loss) => setAppearance({ loss })}
+      />
+      <ColorRow
+        label="Model alerts"
+        hint="Model pills and reasons"
+        value={look.accent}
+        onChange={(accent) => setAppearance({ accent })}
+      />
+      <ColorRow
+        label="Your filter"
+        hint="Your filter's pill"
+        value={look.mine}
+        onChange={(mine) => setAppearance({ mine })}
+      />
+      {/* The outline is the cards' own; Scope's rows have none. */}
+      {cards && (
+        <>
+          <ColorRow
+            label="Card outline"
+            hint="Around each card while its alert is still grading (A is a neutral grey)"
+            value={look.outline}
+            onChange={(outline) => setAppearance({ outline })}
+          />
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={look.outlineResult}
+              onChange={() => setAppearance({ outlineResult: !look.outlineResult })}
+            />
+            Mark graded cards: a thin green or red line along the top when an alert passes or fails
+          </label>
+        </>
+      )}
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={look.tileColors}
+          onChange={() => setAppearance({ tileColors: !look.tileColors })}
+        />
+        Color the stat tiles&apos; readings: from the lower color, through the median, to the upper color at
+        the safety screen&apos;s cutoff
+      </label>
+      {look.tileColors && (
+        <>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={look.tileFill}
+              onChange={() => setAppearance({ tileFill: !look.tileFill })}
+            />
+            Color the whole tile, not only the reading
+          </label>
+          <ColorRow
+            label="Tiles: lower"
+            hint="Well inside the cutoff (A is your Wins color)"
+            value={look.tileLow}
+            onChange={(tileLow) => setAppearance({ tileLow })}
+          />
+          <ColorRow
+            label="Tiles: median"
+            hint="Halfway to the cutoff (A is amber)"
+            value={look.tileMid}
+            onChange={(tileMid) => setAppearance({ tileMid })}
+          />
+          <ColorRow
+            label="Tiles: upper"
+            hint="At the safety screen's cutoff (A is your Losses color)"
+            value={look.tileHigh}
+            onChange={(tileHigh) => setAppearance({ tileHigh })}
+          />
+        </>
+      )}
+    </>
+  );
+}
+
+/** Which quick-link sites show, on the cards and on Scope's rows (both Customize windows). */
+export function QuickLinkChecks() {
+  const look = useAppearance();
+  const toggleQuickLink = (id: QuickLink) =>
+    setAppearance({
+      // Kept in the listed order, so the card's links don't shuffle as they're switched.
+      quickLinks: QUICK_LINK_SITES.map((l) => l.id).filter((x) =>
+        x === id ? !look.quickLinks.includes(id) : look.quickLinks.includes(x),
+      ),
+    });
+  return (
+    <>
+      {QUICK_LINK_SITES.map((l) => (
+        <label key={l.id} className="check">
+          <input
+            type="checkbox"
+            checked={look.quickLinks.includes(l.id)}
+            onChange={() => toggleQuickLink(l.id)}
+          />
+          {l.id === "terminal" ? "Trading Terminal (Padre)" : l.label}
+        </label>
+      ))}
+    </>
   );
 }
 

@@ -2,6 +2,7 @@ import {
   createLogger,
   HeliusAccountStream,
   PUMP_SUPPLY_TOKENS,
+  launchSupplyFactors,
   pumpCurveAddressOf,
   pumpSwapPoolOf,
   tradesFromLogs,
@@ -181,6 +182,8 @@ export class LiveTrades {
     const from = after > this.seq ? 0 : after;
     const fresh = f.trades.filter((t) => t.seq > from);
     const usd = fresh.some((t) => t.priceSol !== null || t.quote) ? await this.deps.solPrice.get() : null;
+    // The trades' caps are on the launch billion; each is put on the coin's supply now (mintSupply.ts).
+    const factor = fresh.length > 0 ? ((await launchSupplyFactors([mint])).get(mint) ?? 1) : 1;
     const quotes = new Map<string, { usd: number; decimals: number } | null>();
     for (const t of fresh)
       if (t.quote && !quotes.has(t.quote.mint))
@@ -200,9 +203,11 @@ export class LiveTrades {
           tokens: t.tokens,
           atMs: t.atMs,
           mcapUsd: t.quote
-            ? (priced?.mcapUsd ?? null)
+            ? priced?.mcapUsd != null
+              ? priced.mcapUsd * factor
+              : null
             : t.priceSol !== null && usd !== null
-              ? t.priceSol * PUMP_SUPPLY_TOKENS * usd
+              ? t.priceSol * PUMP_SUPPLY_TOKENS * usd * factor
               : null,
         };
       }),

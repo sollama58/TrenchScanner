@@ -1,5 +1,4 @@
 import { createLogger } from "../logger.js";
-import { PUMP_TOTAL_SUPPLY } from "../curation/tradeFlow.js";
 import type { TokenLookupOptions } from "../datasources/dexscreener.js";
 import type { GeckoTerminalClient } from "../datasources/geckoterminal.js";
 import type { JupiterClient } from "../datasources/jupiter.js";
@@ -97,7 +96,8 @@ export class LiveLaunchQuotes implements LaunchQuoteSource {
         });
       for (const t of fromBackup) {
         if (!(t.priceUsd > 0) || priced.has(t.mintAddress)) continue;
-        priced.set(t.mintAddress, onPumpSupply(t));
+        // GeckoTerminal's cap is already on the supply now (GeckoTerminalClient, mintSupply.ts).
+        priced.set(t.mintAddress, t);
       }
     }
 
@@ -109,13 +109,4 @@ export class LiveLaunchQuotes implements LaunchQuoteSource {
     this.stats.unpriced += unique.filter((m) => jupiterFailed.has(m) && !priced.has(m)).length;
     return [...priced.values()];
   }
-}
-
-/**
- * A Pump.fun coin's cap on the 1B supply DexScreener, Pump.fun and the Jupiter reading quote it
- * on, whatever supply the backup counted (notes/price-sourcing-audit-2026-10-12.md).
- */
-function onPumpSupply(t: CandidateToken): CandidateToken {
-  const pump = t.dexId === "pumpfun" || t.dexId === "pumpswap";
-  return pump ? { ...t, marketCapUsd: t.priceUsd * PUMP_TOTAL_SUPPLY } : t;
 }

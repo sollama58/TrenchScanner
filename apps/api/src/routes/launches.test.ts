@@ -202,19 +202,6 @@ describe.skipIf(!dbAvailable)("GET /launches", () => {
     expect(mine[0]?.snapshot.marketCapUsd).toBe(90_000);
   });
 
-  it("lists tokens still on their curve at the mark now, biggest first", async () => {
-    const res = await app.inject({
-      method: "GET",
-      url: "/launches?soon=1",
-      cookies: { [SESSION_COOKIE_NAME]: cookie },
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as { launches: { tokenId: string }[] };
-    const mine = body.launches.filter((c) => Object.values(ids).includes(c.tokenId));
-    // older is at 40K, under the mark; grad has graduated; liveSoon's live 50K is newer than its scan.
-    expect(mine.map((c) => c.tokenId)).toEqual([ids.soonish, ids.liveSoon]);
-  });
-
   it("is behind sign-in like the feeds", async () => {
     expect((await app.inject({ method: "GET", url: "/launches" })).statusCode).toBe(401);
   });

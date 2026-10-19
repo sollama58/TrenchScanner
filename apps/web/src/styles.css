@@ -17180,6 +17180,32 @@ body:has(.util-toast) .bug-fab {
   border: 1.5px solid var(--border-strong);
 }
 /* Small but unmissable: a green pill at the top of the cost box. */
+/* The badge and, beside it, what the trade saves against a 1% fee elsewhere (user ask 2026-10-19). */
+.tm-fee-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.tm-fee-saved {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px dashed color-mix(in srgb, var(--good) 40%, transparent);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.tm-fee-saved strong {
+  color: var(--good);
+  font-weight: 750;
+}
+.tm-fee-saved-label,
+.tm-fee-saved-vs {
+  color: var(--muted);
+}
 .tm-fee-zero-badge {
   display: inline-flex;
   align-items: center;
@@ -19739,45 +19765,6 @@ body:has(.util-toast) .bug-fab {
 }
 .util-daily {
   margin: 0 0 8px;
-}
-
-/* Scope's Stream switch (user ask 2026-10-18): New and About to graduate in place of the alerts. */
-.scope-stream-switch {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 2px 4px;
-  border: 0;
-  background: none;
-  color: var(--ink-2);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.scope-stream-switch .scope-switch-track {
-  width: 32px;
-  height: 18px;
-}
-.scope-stream-switch .scope-switch-track::after {
-  width: 12px;
-  height: 12px;
-}
-.scope-stream-switch.on {
-  color: var(--ink);
-}
-.scope-stream-switch.on .scope-switch-track {
-  background: var(--link);
-  border-color: transparent;
-}
-.scope-stream-switch.on .scope-switch-track::after {
-  transform: translateX(14px);
-  background: #fff;
-}
-.scope-stream-switch:focus-visible {
-  outline: 2px solid var(--link);
-  outline-offset: 2px;
-  border-radius: 6px;
 }
 
 /* Scope rows fade in as each column's data lands, a column's first rows one after another. */

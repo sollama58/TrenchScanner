@@ -12,6 +12,7 @@ import {
   isStonksCoin,
   NARRATIVE_CONTESTANT,
   Prisma,
+  launchSupplyFactors,
   prisma,
   RISKY_WALLET_SCORE,
   STONKS_FEE_WALLET,
@@ -30,6 +31,7 @@ import {
   FIRST_MINUTES_MS,
   KeyedCache,
   firstMinutes,
+  onSupply,
   type CandleFetcher,
   markedWallets,
   withTrackedMarks,
@@ -769,7 +771,7 @@ export async function readTokenChart(
   // Token first: Pump.fun's candles are read only for a coin on Token, so a loop over random mints
   // can't spend the shared candle budget everyone's token modal draws from.
   const token = await prisma.token.findUnique({ where: { mintAddress }, select: { id: true } });
-  const [candles, snapshots, flagged] = token
+  const [rawCandles, snapshots, flagged, factors] = token
     ? await Promise.all([
         candleCache.get(mintAddress),
         prisma.tokenSnapshot.findMany({
@@ -779,8 +781,11 @@ export async function readTokenChart(
           select: { takenAt: true, marketCapUsd: true, buys5m: true, sells5m: true },
         }),
         walletCache.get(token.id, () => chartWallets(token.id)),
+        launchSupplyFactors([mintAddress]),
       ])
-    : [null, [], { tape: null, live: null, wallets: [], holderEntries: {} }];
+    : [null, [], { tape: null, live: null, wallets: [], holderEntries: {} }, new Map<string, number>()];
+  // Pump.fun's candles count the launch billion; the chart reads on the supply now (mintSupply.ts).
+  const candles = rawCandles ? onSupply(rawCandles, factors.get(mintAddress)) : null;
   const wallets =
     token && tracked.length > 0
       ? await trackedMarks(token.id, flagged.wallets, tracked).catch(() => flagged.wallets)
@@ -827,7 +832,11 @@ export async function readTokenFirstMinutes(
   const live = age <= FIRST_MINUTES_LIVE_MS;
   const none = { mint: mintAddress, startAt, stepSec: live ? 1 : 15, live, candles: null } as const;
   if (!token || age > FIRST_MINUTES_MAX_AGE_MS) return none;
-  const candles = await (live ? secondCache : quarterCache).get(mintAddress);
+  const [raw, factors] = await Promise.all([
+    (live ? secondCache : quarterCache).get(mintAddress),
+    launchSupplyFactors([mintAddress]),
+  ]);
+  const candles = raw ? onSupply(raw, factors.get(mintAddress)) : null;
   // A launch time from the coin's first scan can be a little late; the first candle is the start then.
   const start = candles?.[0] && startAt !== null ? Math.min(startAt, candles[0].t) : startAt;
   return { ...none, startAt: start, candles: candles ? firstMinutes(candles, start) : null };
@@ -861,8 +870,15 @@ export async function readTokenFine(mintAddress: string, res: "1s" | "15s"): Pro
   const stepSec = res === "1s" ? 1 : 15;
   // Token first, as readTokenChart does: Pump.fun is only asked about a coin on Token.
   if (!(await isTracked(mintAddress))) return { mint: mintAddress, stepSec, candles: null };
-  const candles = await (res === "1s" ? fineSecondCache : quarterCache).get(mintAddress);
-  return { mint: mintAddress, stepSec, candles: candles && candles.length > 0 ? candles : null };
+  const [candles, factors] = await Promise.all([
+    (res === "1s" ? fineSecondCache : quarterCache).get(mintAddress),
+    launchSupplyFactors([mintAddress]),
+  ]);
+  return {
+    mint: mintAddress,
+    stepSec,
+    candles: candles && candles.length > 0 ? onSupply(candles, factors.get(mintAddress)) : null,
+  };
 }
 
 /** The token chart's live tail (LiveCurveAnswer); only a coin on Token has its curve followed. */

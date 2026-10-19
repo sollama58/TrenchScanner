@@ -12,7 +12,6 @@ import { forEachWithConcurrency } from "../concurrency.js";
 import { RateGate, RateGateDeadlineError, type RateGateStats } from "./rateGate.js";
 import type { DexScreenerClient, TokenLookupOptions } from "./dexscreener.js";
 import type { CandidateToken, FreshQuote, FreshQuoteStats } from "../types.js";
-import { PUMP_TOTAL_SUPPLY } from "../curation/tradeFlow.js";
 import type { DiscoveredCoin } from "./pumpfun.js";
 
 const logger = createLogger("jupiter");
@@ -315,8 +314,8 @@ const finite = (v: number | null | undefined): number | undefined =>
 /**
  * Exported for tests. The launches in one of Jupiter's lists from a launchpad the scan takes
  * (SCANNED_LAUNCHPADS: Pump.fun and Stonks), as discovered coins: no description or socials (the
- * lists carry none - left unknown, not "none"), the market cap on Pump.fun's 1B supply for a
- * Pump.fun coin and on Jupiter's full-supply fdv for the rest.
+ * lists carry none - left unknown, not "none"), the market cap on the coin's supply now
+ * (Jupiter's fdv, after burns).
  */
 export function parseJupiterMovingLaunches(body: unknown): DiscoveredCoin[] {
   if (!Array.isArray(body)) return [];
@@ -337,13 +336,8 @@ export function parseJupiterMovingLaunches(body: unknown): DiscoveredCoin[] {
           ? created
           : undefined,
       graduated: Boolean(t.graduatedPool || t.graduatedAt),
-      // Pump.fun's on its fixed 1B; another launchpad's on Jupiter's full-supply fdv.
-      marketCapUsd:
-        priceUsd === undefined || priceUsd <= 0
-          ? undefined
-          : launchpad === PUMPFUN_LAUNCHPAD
-            ? priceUsd * PUMP_TOTAL_SUPPLY
-            : (finite(t.fdv) ?? finite(t.mcap)),
+      // On the coin's supply now (fdv: its price on the mint's supply, after burns - mintSupply.ts).
+      marketCapUsd: priceUsd === undefined || priceUsd <= 0 ? undefined : (finite(t.fdv) ?? finite(t.mcap)),
       launchpad,
       // No socials on the list: left undefined (unknown), never false. The scan stored a false
       // here until 2026-10-16 and the models read "0 = unread" as a signal (data audit).
@@ -407,11 +401,9 @@ export function parseJupiterLaunches(body: unknown, requested: Set<string>): Can
     const priceUsd = finite(t.usdPrice);
     const launchpad = normalizeLaunchpad(t.launchpad);
     const pump = launchpad === PUMPFUN_LAUNCHPAD;
-    // On the 1B supply DexScreener and Pump.fun quote a Pump.fun coin on: Jupiter's `mcap` counts
-    // supply after burns, up to ~9% lower (notes/price-sourcing-audit-2026-10-12.md), which would
-    // move the band floor and every market-cap input. Other coins take the full-supply fdv.
-    const marketCapUsd =
-      pump && priceUsd !== undefined ? priceUsd * PUMP_TOTAL_SUPPLY : (finite(t.fdv) ?? finite(t.mcap));
+    // On the coin's supply now, after burns, as DexScreener counts it too (mintSupply.ts): fdv is
+    // the price on the mint's whole supply, which burns take out of.
+    const marketCapUsd = finite(t.fdv) ?? finite(t.mcap);
     if (priceUsd === undefined || priceUsd <= 0 || marketCapUsd === undefined || marketCapUsd <= 0) continue;
     // A Stonks coin's LaunchLab curve is "stonkfun" (GeckoTerminal's name: DexScreener lists no
     // curve), and it graduates into a Raydium pool.

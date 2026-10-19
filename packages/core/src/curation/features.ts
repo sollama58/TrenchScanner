@@ -253,12 +253,12 @@ export const MARKET_SOURCE_FEATURES = ["mktSource"] as const;
  * holder-wallet readings separate nothing. Of the launch's first 25 buyers, how many exist yet
  * (tradeFlow.firstBuyersSeen; under 25 only while the launch has had fewer) and how many hold
  * 0.1% of the supply or more (tradeFlow.firstBuyersHoldingCut, the card's figure, which the models
- * are to read in place of firstBuyersHolding at the pending retrain, notes/model-retrain-pending.md);
+ * read in place of firstBuyersHolding from 2026-10-19, notes/model-retrain-pending.md);
  * seconds a graduated coin spent on its curve (preBondSeconds, null on the curve or when either
  * end is unknown); and same-ticker launches in the 15 minutes before it, with the highest market
  * cap any of them reached (relaunchSiblings, relaunchSiblingPeakMcapUsd; the relaunch-farm block
  * reads them). Null on every row banked before; never backfilled. Recorded only
- * (RETIRED_LEARNER_INPUTS) until they hold up on later days.
+ * (RETIRED_LEARNER_INPUTS) until they hold up on later days, firstBuyersHoldingCut aside.
  */
 export const LAUNCH_FACT_FEATURES = [
   "firstBuyersSeen",
@@ -440,10 +440,9 @@ export const CANDIDATE_FEATURE_NAMES = [
   "devSoldShare",
   // Added 2026-10-04: of the launch's first 25 buyers, how many still hold it (null until the
   // launch has been read - from the chain since 2026-10-05, the worker's launchSnipers.ts).
-  // Pending (user decision 2026-10-16): at the retrain that adds the waiting wallet metrics, swap
-  // this for tradeFlow.firstBuyersHoldingCut (buyers holding 0.1% of the supply or more, the
-  // figure the card shows), left null on rows banked before 2026-10-16 rather than backfilled.
-  // The rows carry it as firstBuyersHoldingCut from 2026-10-16 on (LAUNCH_FACT_FEATURES).
+  // Recorded only since 2026-10-19 (user decision 2026-10-16, applied before the 10-19 retrain): the
+  // learners read firstBuyersHoldingCut instead (LAUNCH_FACT_FEATURES), buyers holding 0.1% of the
+  // supply or more, the figure the card shows.
   "firstBuyersHolding",
   // Added 2026-10-04: Claude's read of the launch's own name and description, 0-1 each
   // (curation/textFeatures.ts). Null until the mint has been read, and on rows banked before.
@@ -663,7 +662,7 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   "devInitialBuySol",
   // The trade-by-trade order flow (user decision 2026-10-08): dead since 2026-10-04, as PumpPortal
   // only streams trades to a funded API key and none is set. Still recorded, so they come back by
-  // removing them here once a key is funded. firstBuyersHolding stays: the chain fills it.
+  // removing them here once a key is funded.
   "uniqueBuyers5m",
   "buysPerBuyer5m",
   "avgBuySol5m",
@@ -741,8 +740,12 @@ export const RETIRED_LEARNER_INPUTS: ReadonlySet<CandidateFeatureName> = new Set
   // The scored top-10 count behind walletRiskTop10Max (added 2026-10-16, data-correctness
   // audit): recorded first, on the same terms.
   ...WALLET_RISK_COVERAGE_FEATURES,
-  // The launch facts (added 2026-10-16, user ask): recorded first, on the same terms.
-  ...LAUNCH_FACT_FEATURES,
+  // The launch facts (added 2026-10-16, user ask): recorded first, on the same terms. All but
+  // firstBuyersHoldingCut, which the learners read in place of firstBuyersHolding from 2026-10-19
+  // (user decision 2026-10-16, notes/model-retrain-pending.md); null on rows banked before 10-16,
+  // which the onset guard and the trainer's missing indicator cover.
+  ...LAUNCH_FACT_FEATURES.filter((name) => name !== "firstBuyersHoldingCut"),
+  "firstBuyersHolding",
   // The hidden Wallet Score of the newest buyers (added 2026-10-16, user ask): recorded first, on
   // the same terms (notes/wallet-score-2026-10-16/report.md).
   ...WALLET_SCORE_FEATURES,
@@ -857,7 +860,7 @@ export const SAFETY_FEATURES: readonly CandidateFeatureName[] = learnerSubset([
   "launchBundledBuyers",
   "devBuySupplyPct",
   "freshLaunchBuyerPct",
-  "firstBuyersHolding",
+  "firstBuyersHoldingCut",
 ]);
 
 /** The order-flow features, in vector order - each is a TradeFlowFeatures field of the same name. */
@@ -1076,15 +1079,24 @@ export const NS_RULES_VERSION_MARKER_SINCE = new Date("2026-10-16T19:30:00Z");
  * copies included: the `...Model` bundles leave out a KOL's sends but still step through the
  * transfer-linked clusters, and linkedCreatorPct read the counted share until #679. Decision
  * rows with creator-tied supply went from 1.3% to 4.0% of rows and Bundled %'s 90th percentile
- * from 15.5 to 18.0 (pre-retrain check 2026-10-16). The learners keep the funding-only
- * definitions until the retrain that switches them (notes/model-retrain-pending.md), read live
- * from the `...ExTransfers` figures, so in this window the three read as missing. The end is the
- * deploy of the change that moved the bundles to those figures, with slack on the late side.
+ * from 15.5 to 18.0 (pre-retrain check 2026-10-16). The rows after it banked the funding-only
+ * definitions (the `...ExTransfers` figures) until HOLDER_TRANSFER_LINKS_READ_SINCE.
  */
 export const HOLDER_TRANSFER_LINKS_WINDOW = {
   from: new Date("2026-10-16T03:55:00Z"),
   until: new Date("2026-10-16T21:00:00Z"),
 } as const;
+
+/**
+ * When the rows started banking the creator share, KOL Bundled % and Bundled % with holder
+ * transfers counted, as the snapshot, the filters and the cards read them (user decision
+ * 2026-10-16, applied before the 2026-10-19 retrain, notes/model-retrain-pending.md): the deploy
+ * of that change, with slack on the late side. Every row banked before carries another definition
+ * (funding only, or the transfer-linked window above with the KOL sends left out), so the three
+ * read as missing there and the two definitions never mix; the onset guard (featureOnset.ts) keeps
+ * the learners off them until the rows since cover enough of the exam's span.
+ */
+export const HOLDER_TRANSFER_LINKS_READ_SINCE = new Date("2026-10-19T06:00:00Z");
 const HOLDER_TRANSFER_LINKED_FEATURES = [
   "linkedCreatorPct",
   "kolBundledPct",
@@ -1246,8 +1258,7 @@ export function maskKnownBadInputs<T extends Record<string, number | null | unde
     at < NS_RULES_VERSION_MARKER_SINCE.getTime() &&
     features.nsRulesVersion == null &&
     ALL_NARRATIVE_FEATURES.some((name) => features[name] != null);
-  const transferLinked =
-    at >= HOLDER_TRANSFER_LINKS_WINDOW.from.getTime() && at < HOLDER_TRANSFER_LINKS_WINDOW.until.getTime();
+  const transferLinked = at < HOLDER_TRANSFER_LINKS_READ_SINCE.getTime();
   const rawWalletRisk = isRawWalletRiskRow(anchorAt, features);
   const unreadSocials = at < SOCIALS_UNREAD_NULL_SINCE.getTime();
   const unpricedEmpty = at < EMPTY_WALLETS_UNPRICED_NULL_SINCE.getTime();
@@ -1642,7 +1653,9 @@ export function scoredFromFeatures(
     hasWebsite: bool("hasWebsite"),
     narrativeTags: (num("narrativeTagCount") ?? 0) > 0 ? ["(replayed)"] : [],
     tradeFlow: Object.fromEntries(
-      [...TRADE_FLOW_FEATURES, ...LAUNCH_SHAPE_FEATURES].map((k) => [k, num(k) ?? null]),
+      [...TRADE_FLOW_FEATURES, ...LAUNCH_SHAPE_FEATURES, "firstBuyersSeen", "firstBuyersHoldingCut"].map(
+        (k) => [k, num(k as CandidateFeatureName) ?? null],
+      ),
     ) as unknown as TradeFlowFeatures,
     pricePath: Object.fromEntries(
       PRICE_PATH_FEATURES.map((k) => [k, num(k) ?? null]),
@@ -1782,11 +1795,9 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     linkedWalletPct: scored.linkedWalletPct ?? null,
     linkedClusterCount: scored.linkedClusterCount ?? null,
     linkedLargestClusterPct: scored.linkedLargestClusterPct ?? null,
-    // Funding links only (user ask 2026-10-16): since #643 a holder-to-holder transfer links holders
-    // too, and the share of decision rows with supply tied to the creator went from 1.3% to 4.0%
-    // (notes/held-inputs-2026-10-16/report.md). The models keep the definition they were trained
-    // on until the retrain switches it (notes/model-retrain-pending.md); unknown without the copy.
-    linkedCreatorPct: scored.linkedCreatorPctExTransfers ?? null,
+    // Transfers count as links (#643), as on the snapshot and the cards, since
+    // HOLDER_TRANSFER_LINKS_READ_SINCE; rows banked before read it as missing.
+    linkedCreatorPct: scored.linkedCreatorPct ?? null,
     linkedWalletCount:
       scored.linkedWalletCount ??
       (scored.linkedClusters === undefined
@@ -1802,13 +1813,11 @@ export function buildCandidateFeatures(scored: ScoredToken, now: Date = new Date
     top10WalletsChecked: scored.top10WalletsChecked ?? null,
     freshTopHolderCount: scored.freshTopHolderCount ?? null,
     freshTopHoldersChecked: scored.freshTopHoldersChecked ?? null,
-    // The models keep the figures from before transfers counted (in Linked since #643, in KOL
-    // bundles since #667) until the next retrain (notes/model-retrain-pending.md); the snapshot and
-    // the filters read the new ones. The funding-only reading, not the `...Model` copies: those
-    // leave out a KOL's sends but still step through transfer-linked clusters
-    // (HOLDER_TRANSFER_LINKS_WINDOW). Unknown without it, so the two definitions never mix.
-    kolBundledPct: scored.kolBundledPctExTransfers ?? null,
-    bundledSupplyPct: scored.bundledSupplyPctExTransfers ?? null,
+    // With transfers counted (in Linked since #643, in KOL bundles since #667), as the snapshot and
+    // the filters read them, since HOLDER_TRANSFER_LINKS_READ_SINCE; rows banked before read them as
+    // missing (maskKnownBadInputs).
+    kolBundledPct: scored.kolBundledPct ?? null,
+    bundledSupplyPct: scored.bundledSupplyPct ?? null,
     launchpadStonks:
       scored.launchpad === STONKS_LAUNCHPAD ? 1 : scored.launchpad === PUMPFUN_LAUNCHPAD ? 0 : null,
     mktSource: marketSourceCode(scored.marketSource),
@@ -1952,7 +1961,7 @@ export function freshQuoteFeatures(
     jup5mSellVolumeUsd: n(sellVol),
     // No trades is no share, not an even split.
     jup5mBuyVolumeShare: totalVol !== undefined && totalVol > 0 ? buyVol! / totalVol : null,
-    // On DexScreener's supply, like the anchor (freshQuoteMcapUsd), not Jupiter's post-burn one.
+    // On the scan reading's supply, like the anchor (freshQuoteMcapUsd).
     jup5mVolumeToMcap:
       totalVol !== undefined && quoteMcap !== null && quoteMcap > 0 ? totalVol / quoteMcap : null,
     // A window Jupiter reports at all with no trades in it has counts of zero; one it left out
