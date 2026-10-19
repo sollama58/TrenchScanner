@@ -158,7 +158,9 @@ function v3Accounts({ wallet, mint, tokenProgram, curve, buybackFeeRecipient }: 
 export function curveRefusal(curve: PumpCurve | null): string | null {
   if (!curve) return "no Pump.fun bonding curve for this coin";
   if (curve.complete) return "the bonding curve is complete (the coin has graduated)";
-  if (curve.quoteMint !== null && curve.quoteMint !== WSOL) return "the curve isn't quoted in SOL";
+  // Bought with SOL through Jupiter once it routes through the curve's quote token (manualTrade.ts).
+  if (curve.quoteMint !== null && curve.quoteMint !== WSOL)
+    return "it trades against another coin, and Jupiter has no route through it yet: try again in a moment";
   // v3 trades refuse a cashback coin (CashbackCoinNotSupported); cashback is deprecated.
   if (curve.cashback) return "a cashback coin (not supported here)";
   return null;

@@ -44,6 +44,7 @@ import {
   ShieldIcon,
 } from "./Icons";
 import { ShareImageDialog } from "./ShareImageDialog";
+import { knownQuoteSymbol } from "../quoteToken";
 
 /**
  * Pro Mode's Trade panel under the token modal's chart (user ask 2026-10-17): buy and sell the
@@ -239,6 +240,17 @@ function WarnTriangle() {
   );
 }
 
+/**
+ * The route a swap takes when it hops through other tokens: "SOL → USDC → PUMP → coin", or how many
+ * when one isn't a token this knows by name. Null for a direct swap.
+ */
+export function routeText(via: string[] | undefined): string | null {
+  if (!via || via.length === 0) return null;
+  const names = via.map(knownQuoteSymbol);
+  if (names.every((n): n is string => n !== null)) return ["SOL", ...names, "coin"].join(" → ");
+  return `through ${via.length} token${via.length === 1 ? "" : "s"}`;
+}
+
 /** "1%", "0.25%", "3%": basis points as a percent. */
 function bpsText(bps: number): string {
   return `${Number((bps / 100).toFixed(2))}%`;
@@ -301,7 +313,9 @@ function FeeExplainer({
           ? [
               {
                 key: "rent",
-                label: "Token account rent (first buy, refundable)",
+                label: swap.routeVia?.length
+                  ? "Token account rent (first buy and the route's tokens, refundable)"
+                  : "Token account rent (first buy, refundable)",
                 sol: Number(swap.accountRentLamports) / LAMPORTS,
                 rate: "",
               },
@@ -420,6 +434,16 @@ function FeeExplainer({
                       <i className="tm-fee-dot none" aria-hidden="true" />
                       <span>Pool and LP fees</span>
                       <span className="num">in the quote</span>
+                    </li>
+                  )}
+                  {swap && routeText(swap.routeVia) && (
+                    <li
+                      className="tm-fee-none"
+                      title="One swap: you pay and receive SOL, the route trades through these"
+                    >
+                      <i className="tm-fee-dot none" aria-hidden="true" />
+                      <span>Route</span>
+                      <span className="num">{routeText(swap.routeVia)}</span>
                     </li>
                   )}
                   {!swap && (

@@ -19,7 +19,15 @@ import {
   type TradeCheck,
 } from "./proTrade";
 import { ownTokenAccounts, ownWrappedSolAccounts } from "./solanaPda";
-import { feeTotalSol, parseSol, parseTokens, shareOf, solText, unitsText } from "./components/TradePanel";
+import {
+  feeTotalSol,
+  parseSol,
+  parseTokens,
+  routeText,
+  shareOf,
+  solText,
+  unitsText,
+} from "./components/TradePanel";
 
 describe("parseSol", () => {
   it("reads a typed SOL amount as exact lamports", () => {
@@ -525,5 +533,16 @@ describe("expectedTokens", () => {
     expect(expectedTokens(1_000_000_000n, null, 0.0001)).toEqual({ tokens: 10_000, quoted: false });
     expect(expectedTokens(null, quote, 1)).toBeNull();
     expect(expectedTokens(1n, null, null)).toBeNull();
+  });
+});
+
+describe("routeText", () => {
+  const USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+  const PUMP = "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn";
+  it("names a multi-hop route's tokens, or counts them when one isn't known", () => {
+    expect(routeText([USDC, PUMP])).toBe("SOL → USDC → PUMP → coin");
+    expect(routeText([USDC, "Abcd1234567890wxyz"])).toBe("through 2 tokens");
+    expect(routeText([])).toBeNull();
+    expect(routeText(undefined)).toBeNull();
   });
 });
