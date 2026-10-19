@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { labelExport, parseLabelImport } from "./trackedImport";
+import { knownText, labelExport, parseLabelImport } from "./trackedImport";
 
 const A = "So11111111111111111111111111111111111111112";
 const B = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU";
@@ -80,5 +80,16 @@ describe("parseLabelImport limits", () => {
     const { entries } = parseLabelImport(text);
     expect(entries[0]!.name).toBe("<img src=x onerror=alert(1)>");
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe("knownText", () => {
+  it("names the label TrenchScanner already shows for a rejected entry", () => {
+    expect(knownText({ wallet: "w", label: "Cupsey", kind: "kol" })).toBe("KOL: Cupsey");
+    expect(knownText({ wallet: "w", label: "Cupsey Known Side", kind: "kol-side" })).toBe(
+      "Cupsey Known Side",
+    );
+    expect(knownText({ wallet: "w", label: "Binance", kind: "exchange" })).toBe("Exchange: Binance");
+    expect(knownText({ wallet: "w", label: null, kind: "bot" })).toBe("Marked bot");
   });
 });

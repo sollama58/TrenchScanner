@@ -13,6 +13,8 @@ const MEMBER = "TrackedMember1111111111111111111111111111111";
 const LABELED = "TrackedLabeLed11111111111111111111111111111";
 const FUNDED = "TrackedFunded111111111111111111111111111111";
 const PROBABLE = "TrackedProbabLe1111111111111111111111111111";
+const ROSTER_KOL = "TrackedRosterKoL111111111111111111111111111";
+const ROSTER_SIDE = "TrackedRosterSide11111111111111111111111111";
 /** Base58 addresses for the cap: TRACKED_WALLET_CAP more than the ones above. */
 const B58 = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 const extra = (i: number) =>
@@ -68,6 +70,13 @@ describe.skipIf(!dbAvailable)("labeled wallets", () => {
         computedAt: new Date(),
       },
     });
+    await prisma.kolWallet.createMany({
+      data: [
+        { wallet: ROSTER_KOL, name: "Roster Kol", seenAt: new Date() },
+        { wallet: ROSTER_SIDE, name: null, mainWallet: ROSTER_KOL, seenAt: new Date() },
+      ],
+      skipDuplicates: true,
+    });
     app = await buildServer(env);
   });
 
@@ -78,6 +87,7 @@ describe.skipIf(!dbAvailable)("labeled wallets", () => {
     await prisma.walletFunder.deleteMany({ where: { wallet: { in: wallets } } });
     await prisma.trackedWalletSide.deleteMany({ where: { trackedWallet: LABELED } });
     await prisma.whitelist.deleteMany({ where: { walletAddress: MEMBER } });
+    await prisma.kolWallet.deleteMany({ where: { wallet: { in: [ROSTER_KOL, ROSTER_SIDE] } } });
     await prisma.user.deleteMany({ where: { id: { in: ids } } });
   });
 
@@ -214,6 +224,51 @@ describe.skipIf(!dbAvailable)("labeled wallets", () => {
     expect((await as(MEMBER, "GET", "/utilities/side-labels")).body).not.toContain(extra(0));
     await as(ADMIN, "DELETE", `/wallets/tracked/${extra(0)}`);
     await as(ADMIN, "DELETE", `/wallets/tracked/${extra(2)}`);
+  });
+
+  it("rejects imported labels on wallets TrenchScanner already labels, outside the cap", async () => {
+    const known = await as(ADMIN, "POST", "/wallets/tracked/known", {
+      wallets: [ROSTER_KOL, ROSTER_SIDE, extra(0), "5KXDF6QnqhBj72hDtJNkkpFaQVUfbFXNybMsp3DiK6tD"],
+    });
+    expect(known.statusCode).toBe(200);
+    expect(known.json().known).toEqual([
+      { wallet: ROSTER_KOL, label: "Roster Kol", kind: "kol" },
+      { wallet: ROSTER_SIDE, label: "Roster Kol Known Side", kind: "kol-side" },
+      { wallet: "5KXDF6QnqhBj72hDtJNkkpFaQVUfbFXNybMsp3DiK6tD", label: "Stonk_Fees", kind: "launchpad" },
+    ]);
+    // One place left under the cap: the roster wallets take none of it.
+    await prisma.userTrackedWallet.createMany({
+      data: Array.from({ length: TRACKED_WALLET_CAP - 2 }, (_, i) => ({
+        userId: ids[0]!,
+        wallet: extra(i + 10),
+        name: `W${i}`,
+        category: "tracked",
+      })),
+    });
+    resetTrackedCache();
+    const res = await as(ADMIN, "POST", "/wallets/tracked/import", {
+      wallets: [
+        { wallet: ROSTER_KOL, name: "My name for them", kol: true },
+        { wallet: ROSTER_SIDE, name: "Side" },
+        { wallet: extra(0), name: "Fresh" },
+      ],
+    });
+    expect(res.json()).toMatchObject({
+      added: 1,
+      updated: 0,
+      overCap: 0,
+      rejected: [
+        { wallet: ROSTER_KOL, label: "Roster Kol", kind: "kol", name: "My name for them" },
+        { wallet: ROSTER_SIDE, label: "Roster Kol Known Side", kind: "kol-side", name: "Side" },
+      ],
+    });
+    expect(
+      await prisma.userTrackedWallet.count({
+        where: { userId: ids[0], wallet: { in: [ROSTER_KOL, ROSTER_SIDE] } },
+      }),
+    ).toBe(0);
+    await prisma.userTrackedWallet.deleteMany({ where: { userId: ids[0], wallet: { not: LABELED } } });
+    resetTrackedCache();
   });
 
   it("removes a label, and its names and sides go with it", async () => {

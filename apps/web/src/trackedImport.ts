@@ -9,6 +9,8 @@
  *   such a list may also sit under a "wallets", "labels" or "data" key.
  */
 
+import type { KnownLabel } from "./trackedWallets";
+
 const ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const ADDRESS_KEYS = ["wallet", "address", "walletAddress", "trackedWalletAddress", "wallet_address"];
 const NAME_KEYS = ["name", "label", "alias", "nickname", "tag"];
@@ -100,4 +102,19 @@ export function labelExport(
     null,
     2,
   )}\n`;
+}
+
+const KNOWN_KIND: Record<KnownLabel["kind"], string> = {
+  kol: "KOL",
+  "kol-side": "KOL Known Side",
+  exchange: "Exchange",
+  launchpad: "Launchpad",
+  bot: "Marked bot",
+};
+
+/** How a rejected import entry names our label: "KOL: Cupsey", or "Marked bot" for a wallet with no name of ours. */
+export function knownText(k: KnownLabel): string {
+  return k.label && k.kind !== "kol-side"
+    ? `${KNOWN_KIND[k.kind]}: ${k.label}`
+    : (k.label ?? KNOWN_KIND[k.kind]);
 }

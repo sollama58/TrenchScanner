@@ -14,6 +14,7 @@ import {
   listTracked,
   loadTrackedSides,
   mergeSides,
+  platformLabels,
   removeTracked,
   saveTracked,
   TRACKED_NAME_MAX,
@@ -32,7 +33,9 @@ import {
  * wallets the Side Wallet Checker marks as a KOL's possible side wallet. See possibleSides.ts.
  * The reader's own labels (GET /wallets/tracked, PUT and DELETE /wallets/tracked/:wallet, and
  * POST /wallets/tracked/import for a JSON list): Pro Mode only, at most TRACKED_WALLET_CAP. The names, possible sides and wallet reads lay them over
- * their answers for that reader alone. See trackedWallets.ts.
+ * their answers for that reader alone. See trackedWallets.ts. An import leaves out the wallets
+ * TrenchScanner already labels (platformLabels), and POST /wallets/tracked/known names them first,
+ * so the web app can drop them from a file before holding it to the cap.
  */
 
 const address = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, "not a Solana address");
@@ -62,6 +65,12 @@ const importSchema = z.object({
     .max(TRACKED_WALLET_CAP),
 });
 const IMPORT_ROUTE_RATE_LIMIT = { max: 6, timeWindow: "1 minute" };
+/**
+ * The most addresses checked before an import: a file may list our labeled wallets beside a full
+ * 250, and these leave it out of the cap. 1000 addresses stay under the 64 KB body limit.
+ */
+const MAX_KNOWN_CHECK = 1000;
+const knownSchema = z.object({ wallets: z.array(address).min(1).max(MAX_KNOWN_CHECK) });
 
 export async function registerWalletRoutes(
   app: FastifyInstance,
@@ -127,10 +136,22 @@ export async function registerWalletRoutes(
       byWallet.delete(e.wallet);
       byWallet.set(e.wallet, { wallet: e.wallet, name, category: e.kol ? "kol" : "tracked" });
     }
-    const result = byWallet.size
-      ? await importTracked(request.user!.userId, [...byWallet.values()])
+    // Wallets TrenchScanner already labels are refused, and take no place under the cap.
+    const ours = await platformLabels([...byWallet.keys()]);
+    const rejected = [...ours.values()].map((p) => ({ ...p, name: byWallet.get(p.wallet)!.name }));
+    const entries = [...byWallet.values()].filter((e) => !ours.has(e.wallet));
+    const result = entries.length
+      ? await importTracked(request.user!.userId, entries)
       : { added: 0, updated: 0, overCap: 0 };
-    return { ...result, unnamed, cap: TRACKED_WALLET_CAP };
+    return { ...result, unnamed, rejected, cap: TRACKED_WALLET_CAP };
+  });
+
+  /** Which of a file's wallets TrenchScanner already labels, read before an import. */
+  app.post("/tracked/known", { config: { rateLimit: IMPORT_ROUTE_RATE_LIMIT } }, async (request, reply) => {
+    const body = knownSchema.safeParse(request.body);
+    if (!body.success)
+      return reply.code(400).send({ error: body.error.issues[0]?.message ?? "invalid request" });
+    return { known: [...(await platformLabels(body.data.wallets)).values()] };
   });
 
   // Removing is allowed without Pro Mode: a lapsed account can still clear its own list.
