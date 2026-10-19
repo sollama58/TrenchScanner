@@ -458,6 +458,49 @@ describe("checkJupiterFloor", () => {
       /can't check/,
     );
   });
+
+  // V2 (Jupiter's on-chain IDL): discriminator, [id for a shared route], in_amount, quoted_out,
+  // slippage (u16), platform fee (u16), positive slippage (u16), then the route plan: one step,
+  // Whirlpool a_to_b (variant 17, bool), 10,000 bps, token 0 to 1.
+  const routeV2 = (shared: boolean, quotedOut: bigint, slippage: number) => ({
+    programId: PROGRAM.jupiterV6,
+    accounts: [],
+    data: [
+      ...(shared ? [209, 152, 83, 147, 124, 254, 216, 233, 3] : [187, 100, 250, 204, 49, 196, 175, 20]),
+      ...u64(10_000_000n),
+      ...u64(quotedOut),
+      slippage & 0xff,
+      slippage >> 8,
+      0,
+      0,
+      0,
+      0,
+      ...[1, 0, 0, 0, 17, 1, 16, 39, 0, 1],
+    ],
+  });
+  it.each([false, true])("reads a V2 route's quote and slippage (shared accounts: %s)", (shared) => {
+    expect(() => checkJupiterFloor([routeV2(shared, ok, 100)], ok, min, 100)).not.toThrow();
+    expect(() => checkJupiterFloor([routeV2(shared, 1n, 100)], ok, min, 100)).toThrow(/quotes less/);
+    expect(() => checkJupiterFloor([routeV2(shared, ok, 500)], ok, min, 100)).toThrow(/slippage/);
+    expect(() => checkJupiterFloor([routeV2(shared, ok, 100)], ok, 1n, 100)).toThrow(/minimum/);
+  });
+  it("refuses a V2 exact-out route, or one cut short", () => {
+    const exactOut = { ...routeV2(false, ok, 100) };
+    exactOut.data = [157, 138, 184, 82, 21, 244, 243, 36, ...exactOut.data.slice(8)];
+    expect(() => checkJupiterFloor([exactOut], ok, min, 100)).toThrow(/can't check/);
+    const short = { ...routeV2(false, ok, 100) };
+    short.data = short.data.slice(0, 33);
+    expect(() => checkJupiterFloor([short], ok, min, 100)).toThrow(/can't check/);
+    // A V2 route isn't a ledger route.
+    const setLedger = {
+      programId: PROGRAM.jupiterV6,
+      accounts: [],
+      data: [228, 85, 185, 112, 78, 79, 77, 2],
+    };
+    expect(() =>
+      checkJupiterFloor([setLedger, routeV2(false, ok, 100)], ok, min, 100, { ledger: true }),
+    ).toThrow(/can't check/);
+  });
 });
 
 describe("walletTokenTrades", () => {

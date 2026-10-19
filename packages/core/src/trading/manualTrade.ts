@@ -141,9 +141,14 @@ const DEFAULT_JUPITER_UNITS = 400_000;
 /** The unit limit's bounds: Jupiter's number is untrusted, and the runtime allows 1.4M at most. */
 const MIN_UNITS = 100_000;
 const MAX_UNITS = 1_400_000;
-/** Jupiter's exact-in route variants, whose arguments end in quoted_out (u64), slippage (u16), fee (u8). */
-const JUPITER_EXACT_IN_ROUTES = new Set(["route", "shared_accounts_route"]);
-/** The same, swapping what a token ledger measured (a curve sale's quote coin), with the same tail. */
+/** Jupiter's exact-in route variants, V1 and V2: their quoted amount is what they quote out. */
+const JUPITER_EXACT_IN_ROUTES = new Set([
+  "route",
+  "shared_accounts_route",
+  "route_v2",
+  "shared_accounts_route_v2",
+]);
+/** V1's exact-in routes swapping what a token ledger measured (a curve sale's quote coin). */
 const JUPITER_LEDGER_ROUTES = new Set(["route_with_token_ledger", "shared_accounts_route_with_token_ledger"]);
 /** Jupiter's set_token_ledger: records the input account's balance for the ledger route. */
 export const JUPITER_SET_TOKEN_LEDGER = [228, 85, 185, 112, 78, 79, 77, 2];
@@ -418,9 +423,7 @@ export function checkJupiterFloor(
     !names.has(read[0]!.route!.name)
   )
     throw new GuardRefusal("Jupiter returned a route this can't check");
-  const data = read[0]!.ix.data;
-  let onChainQuote = 0n;
-  for (let i = 7; i >= 0; i--) onChainQuote = (onChainQuote << 8n) | BigInt(data[data.length - 11 + i]!);
+  const onChainQuote = read[0]!.route!.quoted;
   if (quotedOut <= 0n || onChainQuote < quotedOut)
     throw new GuardRefusal("Jupiter's route quotes less than its own quote");
   if (read[0]!.route!.slippageBps > slippageBps)

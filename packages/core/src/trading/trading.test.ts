@@ -467,6 +467,36 @@ describe("instruction guard", () => {
     expect(jup([1, 2, 3], 1500)()).toMatchObject({ jupiterRoutesChecked: 0 });
   });
 
+  it.each([
+    ["route_v2", [187, 100, 250, 204, 49, 196, 175, 20]],
+    ["shared_accounts_route_v2", [209, 152, 83, 147, 124, 254, 216, 233, 0]],
+    ["exact_out_route_v2", [157, 138, 184, 82, 21, 244, 243, 36]],
+    ["shared_accounts_exact_out_route_v2", [53, 96, 229, 202, 216, 187, 250, 24, 0]],
+  ])("reads Jupiter's %s slippage and fees from its leading arguments", (name, head) => {
+    // V2: discriminator [, id], amount (u64), quoted (u64), slippage, platform fee and positive
+    // slippage (u16 each), then the route plan (one Whirlpool step).
+    const route = (slippage: number, fee: number, positive = 0) => [
+      ...head,
+      ...new Array(16).fill(7),
+      slippage & 0xff,
+      slippage >> 8,
+      fee & 0xff,
+      fee >> 8,
+      positive & 0xff,
+      positive >> 8,
+      ...[1, 0, 0, 0, 17, 1, 16, 39, 0, 1],
+    ];
+    const jup = (data: number[], maxSlippageBps?: number) => {
+      const decoded = decodeMessage(parseWireTransaction(ix(PROGRAM.jupiterV6, [wallet], data)).message);
+      return () => checkInstructions(decoded, decoded.staticKeys, wallet, { maxSlippageBps });
+    };
+    expect(jup(route(1500, 0), 1500)()).toMatchObject({ jupiterRoutesChecked: 1 });
+    expect(jup(route(1501, 0), 1500)).toThrow(new RegExp(`${name} allows 1501bps slippage`));
+    // A fee past V1's 255bps cap, which V2 allows.
+    expect(jup(route(1500, 300), 5000)).toThrow(/300bps platform fee/);
+    expect(jup(route(1500, 0, 50), 5000)).toThrow(/positive slippage/);
+  });
+
   it("counts SOL sent to others and the priority fee, for the caller to bound", () => {
     const wsolAta = associatedTokenAddress(
       wallet,
