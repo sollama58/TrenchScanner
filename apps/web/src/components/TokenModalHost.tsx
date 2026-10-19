@@ -22,7 +22,6 @@ export function TokenModalHost() {
           card={open.card}
           now={Math.max(open.now, tick)}
           onClose={closeTokenModal}
-          scope={open.scope}
         />
       </Suspense>
     </SectionBoundary>,

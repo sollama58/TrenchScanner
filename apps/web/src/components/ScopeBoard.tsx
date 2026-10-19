@@ -472,7 +472,7 @@ export function ScopeRow({
   onHide?: (card: Card) => void;
 }) {
   const open = () => {
-    if (!preview) openTokenModal(card, now, true);
+    if (!preview) openTokenModal(card, now);
   };
   const [copied, setCopied] = useState(false);
   const copyCa = () => {

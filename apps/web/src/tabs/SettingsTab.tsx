@@ -264,9 +264,12 @@ function TabsPanel() {
   );
 }
 
-/** The token view's header (user ask 2026-10-16). Saved with the feed appearance, so it follows the wallet. */
+/**
+ * The token view: its desktop layout (user ask 2026-10-19) and its header (user ask 2026-10-16).
+ * Saved with the feed appearance, so it follows the wallet.
+ */
 function TokenViewPanel() {
-  const { hideSafetyPill } = useAppearance();
+  const { hideSafetyPill, tokenView } = useAppearance();
   return (
     <section className="panel">
       <header className="section-head">
@@ -274,9 +277,39 @@ function TokenViewPanel() {
           <span className="eyebrow">
             <ShieldIcon size={13} /> Token view
           </span>
-          <h2>Coin header</h2>
+          <h2>Coin window</h2>
         </div>
       </header>
+      <div className="tab-option">
+        <div className="choice-row">
+          <span className="small">Opens in</span>
+          <div className="segmented small" role="radiogroup" aria-label="Coin window opens in">
+            {(
+              [
+                ["pro", "Pro"],
+                ["classic", "Classic"],
+              ] as const
+            ).map(([v, text]) => (
+              <button
+                key={v}
+                type="button"
+                role="radio"
+                aria-checked={tokenView === v}
+                className={tokenView === v ? "on" : ""}
+                onClick={() => setAppearance({ tokenView: v })}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="muted small">
+          {tokenView === "pro"
+            ? "Pro lays the chart, bubble map and Trade panel side by side, with the rest in tabs below."
+            : "Classic is one page you scroll through, section by section."}{" "}
+          On a desktop-wide window only: phones and narrow windows always get the Classic page.
+        </p>
+      </div>
       <div className="tab-option">
         <button
           type="button"
