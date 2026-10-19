@@ -127,6 +127,10 @@ describe("parseFeedAppearance", () => {
       hideBelowMcap: true,
       hideBelowMcapUsd: 12_000,
     });
+    // The fees badge shows by default; a look saved off before that reads on, one switched off since stays off.
+    expect(parseFeedAppearance({}).feesBadge).toBe(true);
+    expect(parseFeedAppearance({ feesBadge: false }).feesBadge).toBe(true);
+    expect(parseFeedAppearance({ feesBadge: false, feesBadgeRev: 2 }).feesBadge).toBe(false);
     for (const bad of [2_000, 21_000, 4_500, "8000"])
       expect(parseFeedAppearance({ hideBelowMcapUsd: bad }).hideBelowMcapUsd).toBe(6_000);
     // The score tile and TokenSage button are hidden by default; a saved field list is kept as is.

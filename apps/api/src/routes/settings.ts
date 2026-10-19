@@ -159,11 +159,12 @@ export async function registerSettingsRoutes(app: FastifyInstance, { env }: { en
     // new default it never saw (parseFeedAppearance), rather than the schema's default stamping it.
     const sent = (key: string) =>
       typeof request.body === "object" && request.body !== null && key in request.body;
-    const { chartMarksRev, hideBelowMcapRev, ...unstamped } = look;
+    const { chartMarksRev, hideBelowMcapRev, feesBadgeRev, ...unstamped } = look;
     const stored = {
       ...unstamped,
       ...(sent("chartMarksRev") ? { chartMarksRev } : {}),
       ...(sent("hideBelowMcapRev") ? { hideBelowMcapRev } : {}),
+      ...(sent("feesBadgeRev") ? { feesBadgeRev } : {}),
     };
     const { count } = await prisma.user.updateMany({
       where: { id: request.user!.userId },
