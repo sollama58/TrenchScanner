@@ -872,7 +872,7 @@ export function feeBadge(fee: Card["token"]["creatorFee"]): {
 }
 
 /** TokenSage's fee destination as a badge kind (packages/core/src/datasources/tokensage.ts). */
-function feeKind(destination: string | null | undefined): keyof typeof FEE_BADGES | null {
+export function feeKind(destination: string | null | undefined): keyof typeof FEE_BADGES | null {
   switch (destination) {
     case "charity":
       return "charity";

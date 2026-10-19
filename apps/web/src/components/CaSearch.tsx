@@ -12,15 +12,123 @@ import { ago, multiple, shortAddress, usd } from "../format";
 import { parseSearch, searchParam } from "../caSearch";
 import { openTokenModal } from "../tokenModal";
 import {
+  ANY_FACETS,
   arrangeHits,
+  facetOptions,
   filterCounts,
+  REWARDS_KINDS,
   SEARCH_FILTERS,
   SEARCH_SORTS,
+  sortCoverage,
+  type RewardsKind,
+  type SearchFacets,
   type SearchFilter,
   type SearchSort,
 } from "../tokenSearch";
 import { TokenImage } from "./TokenImage";
-import { CloseIcon, SearchIcon } from "./Icons";
+import {
+  CheckIcon,
+  ChefHatIcon,
+  ChevronDownIcon,
+  CloseIcon,
+  GiftIcon,
+  HeartIcon,
+  RobotIcon,
+  SearchIcon,
+} from "./Icons";
+
+/** Results each section shows until its Show all is pressed (user ask 2026-10-19). */
+const SECTION_LIMIT = 6;
+
+const REWARDS_ICON: Partial<Record<RewardsKind, typeof GiftIcon>> = {
+  dev: ChefHatIcon,
+  rewards: GiftIcon,
+  charity: HeartIcon,
+  github: RobotIcon,
+};
+
+/**
+ * The sort, as a menu rather than the browser's own select: each choice says how many of the
+ * results have that figure, a choice none has is off, and the menu says the rest go last.
+ */
+function SortMenu({
+  sort,
+  onSort,
+  coverage,
+  total,
+}: {
+  sort: SearchSort;
+  onSort: (sort: SearchSort) => void;
+  coverage: Record<SearchSort, number>;
+  total: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [open]);
+  const current = SEARCH_SORTS.find((s) => s.id === sort)!;
+  return (
+    <div
+      className="search-sort"
+      ref={ref}
+      onKeyDown={(e) => {
+        // Escape closes the menu, not the whole window.
+        if (e.key === "Escape" && open) {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen(false);
+        }
+      }}
+    >
+      <button
+        type="button"
+        className={`search-sort-btn${open ? " open" : ""}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="muted">Sort</span>
+        <strong>{current.label}</strong>
+        <ChevronDownIcon size={13} />
+      </button>
+      {open && (
+        <div className="search-sort-menu" role="listbox" aria-label="Sort by">
+          {SEARCH_SORTS.map((s) => {
+            const have = coverage[s.id];
+            const none = total > 0 && have === 0 && s.id !== "match";
+            return (
+              <button
+                key={s.id}
+                type="button"
+                role="option"
+                aria-selected={s.id === sort}
+                className={`search-sort-option${s.id === sort ? " on" : ""}`}
+                disabled={none}
+                onClick={() => {
+                  onSort(s.id);
+                  setOpen(false);
+                }}
+              >
+                <span className="search-sort-check">{s.id === sort && <CheckIcon size={13} />}</span>
+                <span>{s.label}</span>
+                <span className="search-sort-have num">
+                  {s.id === "match" || total === 0 ? "" : none ? "no data" : `${have} of ${total}`}
+                </span>
+              </button>
+            );
+          })}
+          <p className="search-sort-note">Sorts by the data each token has. Tokens without it go last.</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // A paid lookup's view is the Utilities tab's own, loaded the first time one is opened from here.
 const UtilityTokenModal = lazy(() =>
@@ -279,6 +387,9 @@ export function SearchModal({
   const [text, setText] = useState("");
   const [filter, setFilter] = useState<SearchFilter>("all");
   const [sort, setSort] = useState<SearchSort>("match");
+  const [facets, setFacets] = useState<SearchFacets>(ANY_FACETS);
+  // Each section's Show all, undone by a new search.
+  const [expanded, setExpanded] = useState({ tracked: false, outside: false });
   const [active, setActive] = useState(0);
   const [opening, setOpening] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
@@ -305,10 +416,25 @@ export function SearchModal({
   const extra = answerOf(outside);
   const hits = useMemo(() => answer?.hits ?? [], [answer]);
   const extraHits = useMemo(() => extra?.hits ?? [], [extra]);
-  const counts = useMemo(() => filterCounts([...hits, ...extraHits]), [hits, extraHits]);
-  const shown = useMemo(() => arrangeHits(hits, filter, sort), [hits, filter, sort]);
-  const extraShown = useMemo(() => arrangeHits(extraHits, filter, sort), [extraHits, filter, sort]);
-  const rows = useMemo(() => [...shown, ...extraShown], [shown, extraShown]);
+  const allHits = useMemo(() => [...hits, ...extraHits], [hits, extraHits]);
+  const counts = useMemo(() => filterCounts(allHits, facets), [allHits, facets]);
+  const options = useMemo(() => facetOptions(allHits, filter), [allHits, filter]);
+  const coverage = useMemo(() => sortCoverage(allHits), [allHits]);
+  const shown = useMemo(() => arrangeHits(hits, filter, sort, facets), [hits, filter, sort, facets]);
+  const extraShown = useMemo(
+    () => arrangeHits(extraHits, filter, sort, facets),
+    [extraHits, filter, sort, facets],
+  );
+  const trackedRows = useMemo(
+    () => (expanded.tracked ? shown : shown.slice(0, SECTION_LIMIT)),
+    [shown, expanded.tracked],
+  );
+  const outsideRows = useMemo(
+    () => (expanded.outside ? extraShown : extraShown.slice(0, SECTION_LIMIT)),
+    [extraShown, expanded.outside],
+  );
+  const rows = useMemo(() => [...trackedRows, ...outsideRows], [trackedRows, outsideRows]);
+  useEffect(() => setExpanded({ tracked: false, outside: false }), [search]);
   // A new list starts at its top, with nothing waiting for a yes.
   useEffect(() => {
     setActive(0);
@@ -360,12 +486,12 @@ export function SearchModal({
   };
 
   const openRow = (i: number) => {
-    if (i < shown.length) {
-      const hit = shown[i];
+    if (i < trackedRows.length) {
+      const hit = trackedRows[i];
       if (hit) void openTracked(hit);
       return;
     }
-    const hit = extraShown[i - shown.length];
+    const hit = outsideRows[i - trackedRows.length];
     if (!hit) return;
     if (confirming === hit.mint) void lookUp(hit);
     else openExternal(hit);
@@ -486,17 +612,83 @@ export function SearchModal({
               </button>
             ))}
           </div>
-          <label className="search-sort">
-            <span className="muted small">Sort</span>
-            <select value={sort} onChange={(e) => setSort(e.target.value as SearchSort)}>
-              {SEARCH_SORTS.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SortMenu sort={sort} onSort={setSort} coverage={coverage} total={allHits.length} />
         </div>
+
+        {allHits.length > 0 && (
+          <div className="search-facets">
+            <div className="search-facet" role="group" aria-label="Rewards type">
+              <span className="search-facet-label">Rewards</span>
+              <div className="search-seg">
+                <button
+                  type="button"
+                  className={facets.rewards === "any" ? "on" : ""}
+                  aria-pressed={facets.rewards === "any"}
+                  onClick={() => setFacets((f) => ({ ...f, rewards: "any" }))}
+                >
+                  Any
+                </button>
+                {REWARDS_KINDS.filter(
+                  (k) => k.id === facets.rewards || options.rewards.some((o) => o.id === k.id),
+                ).map((k) => {
+                  const Icon = REWARDS_ICON[k.id];
+                  return (
+                    <button
+                      key={k.id}
+                      type="button"
+                      className={facets.rewards === k.id ? "on" : ""}
+                      aria-pressed={facets.rewards === k.id}
+                      title={k.title}
+                      onClick={() => setFacets((f) => ({ ...f, rewards: f.rewards === k.id ? "any" : k.id }))}
+                    >
+                      {Icon && <Icon size={13} />}
+                      {k.label}
+                      <span className="search-chip-count num">
+                        {options.rewards.find((o) => o.id === k.id)?.count ?? 0}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="search-facet" role="group" aria-label="Pairing">
+              <span className="search-facet-label">Pairing</span>
+              <div className="search-seg">
+                <button
+                  type="button"
+                  className={facets.pairing === "any" ? "on" : ""}
+                  aria-pressed={facets.pairing === "any"}
+                  onClick={() => setFacets((f) => ({ ...f, pairing: "any" }))}
+                >
+                  Any
+                </button>
+                {[
+                  ...options.pairing,
+                  ...(facets.pairing !== "any" && !options.pairing.some((p) => p.label === facets.pairing)
+                    ? [{ label: facets.pairing, count: 0 }]
+                    : []),
+                ].map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    className={facets.pairing === p.label ? "on" : ""}
+                    aria-pressed={facets.pairing === p.label}
+                    title={`Trades against ${p.label}`}
+                    onClick={() =>
+                      setFacets((f) => ({ ...f, pairing: f.pairing === p.label ? "any" : p.label }))
+                    }
+                  >
+                    <span className="search-pair-slash" aria-hidden="true">
+                      /
+                    </span>
+                    {p.label}
+                    <span className="search-chip-count num">{p.count}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="search-results" aria-live="polite" aria-busy={busy || outsideBusy}>
           {found.state === "idle" && (
@@ -522,7 +714,19 @@ export function SearchModal({
                     None of these match that filter.
                   </li>
                 )}
-                {shown.map((hit, i) => row(hit, i))}
+                {trackedRows.map((hit, i) => row(hit, i))}
+                {shown.length > SECTION_LIMIT && (
+                  <li role="presentation" className="search-more">
+                    <button
+                      type="button"
+                      className="search-more-btn"
+                      onClick={() => setExpanded((x) => ({ ...x, tracked: !x.tracked }))}
+                    >
+                      {expanded.tracked ? "Show fewer" : `Show all ${shown.length} tracked`}
+                      <ChevronDownIcon size={13} className={expanded.tracked ? "flip" : ""} />
+                    </button>
+                  </li>
+                )}
                 {answer.truncated && (
                   <li className="muted small center" role="presentation">
                     Showing the closest tracked matches. Type more to narrow it down.
@@ -557,8 +761,8 @@ export function SearchModal({
                         : "Searching DexScreener…"}
                   </span>
                 </li>
-                {extraShown.map((hit, j) => {
-                  const i = shown.length + j;
+                {outsideRows.map((hit, j) => {
+                  const i = trackedRows.length + j;
                   return row(
                     hit,
                     i,
@@ -574,6 +778,18 @@ export function SearchModal({
                       : undefined,
                   );
                 })}
+                {extraShown.length > SECTION_LIMIT && (
+                  <li role="presentation" className="search-more">
+                    <button
+                      type="button"
+                      className="search-more-btn"
+                      onClick={() => setExpanded((x) => ({ ...x, outside: !x.outside }))}
+                    >
+                      {expanded.outside ? "Show fewer" : `Show all ${extraShown.length} not tracked`}
+                      <ChevronDownIcon size={13} className={expanded.outside ? "flip" : ""} />
+                    </button>
+                  </li>
+                )}
               </>
             )}
           </ul>
